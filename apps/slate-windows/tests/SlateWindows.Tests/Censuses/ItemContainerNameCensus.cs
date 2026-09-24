@@ -13,7 +13,16 @@
 // name).
 //
 // So every items host whose ItemsSource is set — in authored XAML or in
-// code — is PINNED here to how it names its containers: an
+// code; EVERY ItemsControl derivative: ListBox, ComboBox, TreeView,
+// TabControl, DataGrid, a plain ItemsControl and the shell's own
+// subclasses (the spec review, round 22) — is PINNED here, none silently
+// exempt, to how it names its containers and why two siblings never read
+// alike (R-4; the spec review, round 21). A host whose names CAN collide
+// names through SiblingNames — the one collision-aware rule: the item's
+// name, a distinguisher (a path, a folder) where namesakes meet, else an
+// ordinal — declared on the host and read by its container style; every
+// other host records, in the table, why its names cannot collide. Beneath
+// that: an
 // ItemContainerStyle whose AutomationProperties.Name setter binds the
 // item's speakable property (path and converter exact; a literal or an
 // unrelated binding fails — codex PR 3 round 1), or a layout host
@@ -52,11 +61,19 @@ using uniffi.slate_uniffi;
 
 namespace SlateWindows.Tests.Censuses;
 
+/// <summary>The sibling rule a host declares (<see cref="SiblingNames"/>):
+/// the property each item is read by ("" = the item itself), the one that
+/// tells namesakes apart, and an ordinal's noun.</summary>
+internal sealed record SiblingRule(string NamePath, string? DistinguisherPath, string Noun);
+
 /// <summary>How an items host names its containers — the R-4 pin.</summary>
 internal abstract record ContainerNaming
 {
-    /// <summary>A LayoutItemsControl: containers leave the control view.</summary>
-    internal sealed record Layout : ContainerNaming;
+    /// <summary>A LayoutItemsControl: containers leave the control view.
+    /// <paramref name="Stops"/> says how the stops its items hold are told
+    /// apart; with a <paramref name="Rule"/>, each container carries its
+    /// item's name under the sibling rule and the stop inside binds it.</summary>
+    internal sealed record Layout(string Stops, SiblingRule? Rule = null) : ContainerNaming;
 
     /// <summary>An AutomationPresentationItemsControl: no container peers.</summary>
     internal sealed record Presentation : ContainerNaming;
@@ -70,8 +87,21 @@ internal abstract record ContainerNaming
     /// <paramref name="ItemType"/>, through <paramref name="Converter"/>
     /// (a resource key) when one is named — and, in each of
     /// <see cref="Triggers"/>, exactly the pinned variant (codex PR 3 round
-    /// 2: a state's name is pinned as tightly as the resting one).</summary>
+    /// 2: a state's name is pinned as tightly as the resting one). Allowed
+    /// only where names cannot collide: <see cref="Distinct"/> says
+    /// why.</summary>
     internal sealed record Bound(Type ItemType, string Path, string? Converter = null) : ContainerNaming
+    {
+        public string Distinct { get; init; } = string.Empty;
+
+        public IReadOnlyList<TriggerNaming> Triggers { get; init; } = [];
+    }
+
+    /// <summary>Names through the sibling rule: the host declares
+    /// <paramref name="Rule"/> over <paramref name="ItemType"/>, and its
+    /// container style's Name reads <see cref="SiblingNames.Converter"/>
+    /// — in each of <see cref="Triggers"/> too.</summary>
+    internal sealed record Sibling(Type ItemType, SiblingRule Rule) : ContainerNaming
     {
         public IReadOnlyList<TriggerNaming> Triggers { get; init; } = [];
     }
@@ -91,88 +121,161 @@ public sealed class ItemContainerNameCensus
 
     private const string ClrNamespacePrefix = "clr-namespace:";
 
-    private static ContainerNaming.Bound Named(Type itemType, string path) => new(itemType, path);
+    /// <summary>The converter a container style's Name reads the sibling
+    /// rule through, as authored.</summary>
+    internal const string SiblingConverter = "{x:Static local:SiblingNames.Converter}";
 
-    private static ContainerNaming.Bound Self(Type itemType) => new(itemType, string.Empty);
+    private static ContainerNaming.Bound Distinct(Type itemType, string path, string reason) =>
+        new(itemType, path) { Distinct = reason };
+
+    private static ContainerNaming.Sibling Sibling(
+        Type itemType, string namePath, string? distinguisherPath, string noun) =>
+        new(itemType, new SiblingRule(namePath, distinguisherPath, noun));
 
     /// <summary>
     /// Every items host, by label — its AutomationId, else x:Name, else its
     /// accessible name, else "{file}#{ItemsSource}" — and how it names its
-    /// containers. Paths come from <c>nameof</c>, so a renamed property
-    /// breaks this build, and the binding must name exactly that property.
+    /// containers, with no host exempt (the spec review, rounds 21 and 22):
+    /// each is on the sibling rule, or says why its names cannot collide.
+    /// Paths come from <c>nameof</c>, so a renamed property breaks this
+    /// build, and the binding must name exactly that property.
     /// </summary>
     internal static readonly IReadOnlyDictionary<string, ContainerNaming> ExpectedNaming =
         new Dictionary<string, ContainerNaming>(StringComparer.Ordinal)
         {
             // --- authored XAML: MainWindow.xaml ---
-            ["Recent vaults"] = new ContainerNaming.Layout(),
+            ["Recent vaults"] = new ContainerNaming.Layout(
+                "each button's name carries its vault's path when another recent vault shares its display name (RecentVault.SpokenName)"),
             ["SidebarSortOrder"] = new ContainerNaming.Bound(
-                typeof(SidebarSortMode), string.Empty, "SidebarSortModeLabelConverter"),
-            ["SidebarTagTree"] = Named(typeof(SidebarTagViewModel), nameof(SidebarTagViewModel.AutomationName)),
-            ["SidebarShortcuts"] = Named(typeof(SidebarShortcutViewModel), nameof(SidebarShortcutViewModel.AutomationName)),
-            ["FilesTree"] = Named(typeof(FileTreeNodeViewModel), nameof(FileTreeNodeViewModel.AutomationName)),
-            ["SidebarFilterResults"] = Named(typeof(FileTreeNodeViewModel), nameof(FileTreeNodeViewModel.AutomationName)),
-            ["SidebarDualPane"] = Named(typeof(FileTreeNodeViewModel), nameof(FileTreeNodeViewModel.AutomationName)),
-            ["PanelBacklinksList"] = Named(typeof(BacklinkRowViewModel), nameof(BacklinkRowViewModel.AutomationName)),
-            ["PanelOutgoingLinksList"] = Named(typeof(OutgoingLinkRowViewModel), nameof(OutgoingLinkRowViewModel.AutomationName)),
-            ["PanelOutlineList"] = Named(typeof(OutlineRowViewModel), nameof(OutlineRowViewModel.AutomationName)),
-            ["PanelEmbedsList"] = new ContainerNaming.Layout(),
-            ["PanelTasksOpenList"] = Named(typeof(NoteTaskRowViewModel), nameof(NoteTaskRowViewModel.AutomationName)),
-            ["PanelTasksDoneList"] = Named(typeof(NoteTaskRowViewModel), nameof(NoteTaskRowViewModel.AutomationName)),
-            ["PanelReviewList"] = Named(typeof(ReviewTaskRowViewModel), nameof(ReviewTaskRowViewModel.AutomationName)),
-            ["PanelCitationsList"] = Named(typeof(CitationRowViewModel), nameof(CitationRowViewModel.AutomationName)),
-            ["BibliographyNotices"] = new ContainerNaming.Layout(),
-            ["QueriesSavedList"] = Named(typeof(SavedQuerySummary), nameof(SavedQuerySummary.Name)),
-            ["QueriesBaseFilesList"] = Named(typeof(BaseFileSummary), nameof(BaseFileSummary.Path)),
-            ["QueriesDashboardsList"] = Named(typeof(DashboardSummary), nameof(DashboardSummary.Name)),
-            ["RightPaneLeaves"] = Named(typeof(WorkspaceLeafOption), nameof(WorkspaceLeafOption.Title)),
-            ["QuickSwitcherResults"] = Named(typeof(QuickSwitcherRowViewModel), nameof(QuickSwitcherRowViewModel.DisplayName)),
-            ["SearchOverlayResults"] = Named(typeof(SearchResultRowViewModel), nameof(SearchResultRowViewModel.AccessibleName)),
+                typeof(SidebarSortMode), string.Empty, "SidebarSortModeLabelConverter")
+            {
+                Distinct = "each sort mode has its own label (SidebarSortModeLabelConverter)",
+            },
+            ["SidebarTagTree"] = Distinct(
+                typeof(SidebarTagViewModel), nameof(SidebarTagViewModel.AutomationName),
+                "a tag tree's siblings are distinct tag segments, each with its file count"),
+            ["SidebarShortcuts"] = Sibling(
+                typeof(SidebarShortcutViewModel), nameof(SidebarShortcutViewModel.AutomationName),
+                nameof(SidebarShortcutViewModel.Path), "shortcut"),
+            ["FilesTree"] = Sibling(
+                typeof(FileTreeNodeViewModel), nameof(FileTreeNodeViewModel.AutomationName),
+                nameof(FileTreeNodeViewModel.Path), "item"),
+            ["SidebarFilterResults"] = Sibling(
+                typeof(FileTreeNodeViewModel), nameof(FileTreeNodeViewModel.AutomationName),
+                nameof(FileTreeNodeViewModel.Path), "result"),
+            ["SidebarDualPane"] = Sibling(
+                typeof(FileTreeNodeViewModel), nameof(FileTreeNodeViewModel.AutomationName),
+                nameof(FileTreeNodeViewModel.Path), "file"),
+            ["PanelBacklinksList"] = Sibling(
+                typeof(BacklinkRowViewModel), nameof(BacklinkRowViewModel.AutomationName),
+                nameof(BacklinkRowViewModel.SourcePath), "backlink"),
+            ["PanelOutgoingLinksList"] = Sibling(
+                typeof(OutgoingLinkRowViewModel), nameof(OutgoingLinkRowViewModel.AutomationName), null, "link"),
+            ["PanelOutlineList"] = Sibling(
+                typeof(OutlineRowViewModel), nameof(OutlineRowViewModel.AutomationName), null, "heading"),
+            ["PanelEmbedsList"] = new ContainerNaming.Layout(
+                "each embed is ONE named group, named by its source among its siblings",
+                new SiblingRule(nameof(EmbedRowViewModel.Title), null, "embed")),
+            ["PanelTasksOpenList"] = Sibling(
+                typeof(NoteTaskRowViewModel), nameof(NoteTaskRowViewModel.AutomationName), null, "task"),
+            ["PanelTasksDoneList"] = Sibling(
+                typeof(NoteTaskRowViewModel), nameof(NoteTaskRowViewModel.AutomationName), null, "task"),
+            ["PanelReviewList"] = Sibling(
+                typeof(ReviewTaskRowViewModel), nameof(ReviewTaskRowViewModel.AutomationName),
+                nameof(ReviewTaskRowViewModel.Path), "task"),
+            ["PanelCitationsList"] = Sibling(
+                typeof(CitationRowViewModel), nameof(CitationRowViewModel.AutomationName), null, "citation"),
+            ["BibliographyNotices"] = new ContainerNaming.Layout(
+                "each notice's focusable text is named among its siblings",
+                new SiblingRule(string.Empty, null, "notice")),
+            ["QueriesSavedList"] = Sibling(typeof(SavedQuerySummary), nameof(SavedQuerySummary.Name), null, "query"),
+            ["QueriesBaseFilesList"] = Distinct(
+                typeof(BaseFileSummary), nameof(BaseFileSummary.Path), "a vault path names one file"),
+            ["QueriesDashboardsList"] = Sibling(typeof(DashboardSummary), nameof(DashboardSummary.Name), null, "dashboard"),
+            ["RightPaneLeaves"] = Distinct(
+                typeof(WorkspaceLeafOption), nameof(WorkspaceLeafOption.Title),
+                "one row per leaf kind of WorkspaceViewModel.Leaves, each titled apart"),
+            ["QuickSwitcherResults"] = Sibling(
+                typeof(QuickSwitcherRowViewModel), nameof(QuickSwitcherRowViewModel.DisplayName),
+                nameof(QuickSwitcherRowViewModel.Path), "result"),
+            ["SearchOverlayResults"] = Sibling(
+                typeof(SearchResultRowViewModel), nameof(SearchResultRowViewModel.AccessibleName),
+                nameof(SearchResultRowViewModel.Path), "result"),
             ["MainWindow.xaml#{Binding SnippetSegments}"] = new ContainerNaming.Presentation(),
-            ["Recent searches"] = new ContainerNaming.Layout(),
-            ["CommandPaletteResults"] = Named(typeof(CommandPaletteRowViewModel), nameof(CommandPaletteRowViewModel.AccessibleName)),
+            ["Recent searches"] = new ContainerNaming.Layout(
+                "each button is named among its siblings (recents are kept once each, but only ordinally)",
+                new SiblingRule(string.Empty, null, "search")),
+            ["CommandPaletteResults"] = Distinct(
+                typeof(CommandPaletteRowViewModel), nameof(CommandPaletteRowViewModel.AccessibleName),
+                "every command has its own label (chords.json)"),
             ["MainWindow.xaml#{Binding LabelSegments}"] = new ContainerNaming.Presentation(),
-            ["AddPropertyType"] = Self(typeof(string)),
-            ["BulkRenameOldKeyType"] = Named(typeof(BulkRenameViewModel.KeyTypeChoice), nameof(BulkRenameViewModel.KeyTypeChoice.Label)),
-            ["CitationDetailsFields"] = Named(typeof(CitationField), nameof(CitationField.AutomationName)),
-            ["FilesCitingList"] = Self(typeof(string)),
-            ["DashboardEditorQueryPicker"] = Named(typeof(SavedQuerySummary), nameof(SavedQuerySummary.Name)),
-            ["DashboardEditorSections"] = Named(typeof(DashboardEditorSection), nameof(DashboardEditorSection.AutomationName)),
-            ["BuilderConditions"] = new ContainerNaming.Layout(),
-            ["MainWindow.xaml#{Binding GroupMembers}"] = new ContainerNaming.Layout(),
-            ["TemplatePickerList"] = Named(typeof(TemplatePickerRowViewModel), nameof(TemplatePickerRowViewModel.AccessibleName)),
-            ["TemplateFlowPromptsList"] = new ContainerNaming.Layout(),
-            ["MoveToList"] = Named(typeof(MoveToRowViewModel), nameof(MoveToRowViewModel.AccessibleName)),
-            ["CanvasCardPickerRows"] = Named(typeof(CanvasCardPickerRow), nameof(CanvasCardPickerRow.Label)),
-            ["CanvasPromptChoices"] = Named(typeof(CanvasPromptChoice), nameof(CanvasPromptChoice.Name)),
+            ["AddPropertyType"] = Distinct(typeof(string), string.Empty, "the property kinds are fixed and distinct"),
+            ["BulkRenameOldKeyType"] = Distinct(
+                typeof(BulkRenameViewModel.KeyTypeChoice), nameof(BulkRenameViewModel.KeyTypeChoice.Label),
+                "the key-type choices are fixed and distinct"),
+            ["CitationDetailsFields"] = Distinct(
+                typeof(CitationField), nameof(CitationField.AutomationName),
+                "one row per citation field, each field labelled once"),
+            ["FilesCitingList"] = Distinct(typeof(string), string.Empty, "a vault path names one file"),
+            ["DashboardEditorQueryPicker"] = Sibling(typeof(SavedQuerySummary), nameof(SavedQuerySummary.Name), null, "query"),
+            ["DashboardEditorSections"] = Distinct(
+                typeof(DashboardEditorSection), nameof(DashboardEditorSection.AutomationName),
+                "each section's name carries its place, renumbered on every change (DashboardEditorViewModel)"),
+            ["BuilderConditions"] = new ContainerNaming.Layout(
+                "each row's controls carry the row's place (BuilderConditionRow.Number)"),
+            ["MainWindow.xaml#{Binding GroupMembers}"] = new ContainerNaming.Layout(
+                "each member's box carries its group's and its own place (BuilderConditionRow.Number)"),
+            ["TemplatePickerList"] = Sibling(
+                typeof(TemplatePickerRowViewModel), nameof(TemplatePickerRowViewModel.AccessibleName), null, "template"),
+            ["TemplateFlowPromptsList"] = new ContainerNaming.Layout(
+                "each prompt's box is named by its label among its siblings",
+                new SiblingRule("Label", null, "field")),
+            ["MoveToList"] = Distinct(
+                typeof(MoveToRowViewModel), nameof(MoveToRowViewModel.AccessibleName),
+                "a nested folder's row carries its full path; top-level folders and the pinned rows are distinct"),
+            ["CanvasCardPickerRows"] = Sibling(
+                typeof(CanvasCardPickerRow), nameof(CanvasCardPickerRow.Label), null, "card"),
+            ["CanvasPromptChoices"] = Sibling(typeof(CanvasPromptChoice), nameof(CanvasPromptChoice.Name), null, "choice"),
 
             // --- authored XAML: WorkspaceTemplates.xaml ---
-            ["WorkspaceTemplates.xaml#{Binding Items}"] = new ContainerNaming.Layout(),
-            ["PropertiesRows"] = new ContainerNaming.Layout(),
-            ["WorkspaceTabs"] = Named(typeof(WorkspaceTabViewModel), nameof(WorkspaceTabViewModel.Title)) with
+            ["WorkspaceTemplates.xaml#{Binding Items}"] = new ContainerNaming.Layout(
+                "each list item's controls carry its index (PropertyPhrase.ListItemLabel)"),
+            ["PropertiesRows"] = new ContainerNaming.Layout(
+                "each row's controls carry its property's key, unique in a note's frontmatter"),
+            ["WorkspaceTabs"] = Sibling(
+                typeof(WorkspaceTabViewModel), nameof(WorkspaceTabViewModel.Title),
+                nameof(WorkspaceTabViewModel.RelativeDirectory), "tab") with
             {
                 Triggers =
                 [
                     new($"{nameof(WorkspaceTabViewModel.IsDirty)}=True",
-                        nameof(WorkspaceTabViewModel.Title), null, "{}{0}, unsaved changes"),
+                        string.Empty, SiblingConverter, "{}{0}, unsaved changes"),
                     new($"{nameof(WorkspaceTabViewModel.IsMissingFromDisk)}=True",
-                        nameof(WorkspaceTabViewModel.Title), null, "{}{0}, missing from disk"),
+                        string.Empty, SiblingConverter, "{}{0}, missing from disk"),
                     new($"{nameof(WorkspaceTabViewModel.IsDirty)}=True & {nameof(WorkspaceTabViewModel.IsMissingFromDisk)}=True",
-                        nameof(WorkspaceTabViewModel.Title), null, "{}{0}, missing from disk, unsaved changes"),
+                        string.Empty, SiblingConverter, "{}{0}, missing from disk, unsaved changes"),
                 ],
             },
-            ["Editor panes"] = new ContainerNaming.Layout(),
+            ["Editor panes"] = new ContainerNaming.Layout(
+                "its panes are unnamed structural panes; each tab strip is its own sibling set"),
 
             // --- built in code (codex PR 3 round 1) ---
-            ["BaseViewPicker"] = Named(typeof(BaseViewSummary), nameof(BaseViewSummary.Name)),
-            ["BaseWarningBanners"] = new ContainerNaming.Layout(),
-            ["BaseTabList"] = Named(typeof(BaseListItemViewModel), nameof(BaseListItemViewModel.AccessibleName)),
-            ["CanvasWarningRows"] = Self(typeof(string)),
-            ["ConnectionsDepth"] = Self(typeof(string)),
-            ["GraphInspectorGroupRing:"] = Named(typeof(GraphRingStyleSpec), nameof(GraphRingStyleSpec.Title)),
-            ["GraphInspectorGroupColour:"] = Named(typeof(GraphColorTokenSpec), nameof(GraphColorTokenSpec.Title)),
-            ["CanvasOutlineTree"] = Named(typeof(CanvasOutlineRowViewModel), nameof(CanvasOutlineRowViewModel.Name)),
-            ["ConnectionsTree"] = Named(typeof(ConnectionsRowViewModel), nameof(ConnectionsRowViewModel.Name)),
+            ["BaseViewPicker"] = Sibling(typeof(BaseViewSummary), nameof(BaseViewSummary.Name), null, "view"),
+            ["BaseWarningBanners"] = new ContainerNaming.Layout(
+                "each warning's focusable text is named among its siblings",
+                new SiblingRule(string.Empty, null, "warning")),
+            ["BaseTabList"] = Sibling(
+                typeof(BaseListItemViewModel), nameof(BaseListItemViewModel.AccessibleName), null, "row"),
+            ["CanvasWarningRows"] = Sibling(typeof(string), string.Empty, null, "warning"),
+            ["ConnectionsDepth"] = Distinct(typeof(string), string.Empty, "the three depth tags are fixed and distinct"),
+            ["GraphInspectorGroupRing:"] = Distinct(
+                typeof(GraphRingStyleSpec), nameof(GraphRingStyleSpec.Title), "the ring styles are fixed and titled apart"),
+            ["GraphInspectorGroupColour:"] = Distinct(
+                typeof(GraphColorTokenSpec), nameof(GraphColorTokenSpec.Title), "the colour tokens are fixed and titled apart"),
+            ["CanvasOutlineTree"] = Sibling(
+                typeof(CanvasOutlineRowViewModel), nameof(CanvasOutlineRowViewModel.Name), null, "item"),
+            ["ConnectionsTree"] = Sibling(
+                typeof(ConnectionsRowViewModel), nameof(ConnectionsRowViewModel.Name), null, "item"),
             ["AccessibleDataGrid"] = new ContainerNaming.Grid(),
         };
 
@@ -207,6 +310,26 @@ public sealed class ItemContainerNameCensus
                 && bound.ItemType.GetProperty(bound.Path) is null)
             {
                 offenders.Add($"{label}: {bound.ItemType.Name} has no property {bound.Path}");
+            }
+            // No host silently exempt: a plain binding says why its names
+            // cannot collide, and a layout host how its stops are told apart.
+            if (naming is ContainerNaming.Bound { Distinct.Length: 0 })
+            {
+                offenders.Add($"{label}: a plain Name binding with no reason its names cannot collide — put it on SiblingNames");
+            }
+            if (naming is ContainerNaming.Layout { Stops.Length: 0 })
+            {
+                offenders.Add($"{label}: a layout host that does not say how its stops are told apart");
+            }
+            if (naming is ContainerNaming.Sibling sibling)
+            {
+                foreach (string? path in new[] { sibling.Rule.NamePath, sibling.Rule.DistinguisherPath })
+                {
+                    if (path is { Length: > 0 } && sibling.ItemType.GetProperty(path) is null)
+                    {
+                        offenders.Add($"{label}: {sibling.ItemType.Name} has no property {path}");
+                    }
+                }
             }
         }
 
@@ -358,18 +481,95 @@ public sealed class ItemContainerNameCensus
         }
         string? problem = expected switch
         {
-            ContainerNaming.Layout => typeof(LayoutItemsControl).IsAssignableFrom(type)
-                ? null : "must be a LayoutItemsControl",
+            ContainerNaming.Layout when !typeof(LayoutItemsControl).IsAssignableFrom(type) =>
+                "must be a LayoutItemsControl",
+            ContainerNaming.Layout { Rule: { } rule } =>
+                XamlSiblingProblem(host, rule, ContainerStyle(host, keyedStyles), [], keyedStyles),
+            ContainerNaming.Layout => null,
             ContainerNaming.Presentation => typeof(AutomationPresentationItemsControl).IsAssignableFrom(type)
                 ? null : "must be an AutomationPresentationItemsControl",
-            ContainerNaming.Bound when !ContainersAreStops(type) => WrapperIsASecondStop,
+            ContainerNaming.Bound or ContainerNaming.Sibling when !ContainersAreStops(type) => WrapperIsASecondStop,
             ContainerNaming.Bound bound => BoundProblem(ContainerStyle(host, keyedStyles), bound, keyedStyles),
+            ContainerNaming.Sibling sibling => XamlSiblingProblem(
+                host, sibling.Rule, ContainerStyle(host, keyedStyles), sibling.Triggers, keyedStyles),
             _ => $"pinned as {expected}, which a XAML host cannot be",
         };
         if (problem is not null)
         {
             offenders.Add($"{site}: {problem}");
         }
+    }
+
+    /// <summary>Why a XAML host does not name through the sibling rule
+    /// <paramref name="rule"/>, or null: it declares the rule's name path,
+    /// distinguisher and noun exactly, and its container style's Name — at
+    /// rest and in each pinned trigger state — reads the rule's converter
+    /// from the container itself.</summary>
+    private static string? XamlSiblingProblem(
+        XElement host,
+        SiblingRule rule,
+        XElement? style,
+        IReadOnlyList<TriggerNaming> triggers,
+        Dictionary<string, List<XElement>> keyedStyles)
+    {
+        foreach ((string property, string? expected) in new[]
+        {
+            ("SiblingNames.NamePath", (string?)rule.NamePath),
+            ("SiblingNames.DistinguisherPath", rule.DistinguisherPath),
+            ("SiblingNames.Noun", (string?)rule.Noun),
+        })
+        {
+            string? declared = (string?)host.Attributes().FirstOrDefault(attribute => attribute.Name.LocalName == property);
+            if (!string.Equals(declared, expected, StringComparison.Ordinal))
+            {
+                return $"declares {property}={(declared is null ? "(none)" : $"\"{declared}\"")} but R-4 pins "
+                    + (expected is null ? "none" : $"\"{expected}\"");
+            }
+        }
+        if (style is null)
+        {
+            return "declares the sibling rule but has no container style to read it";
+        }
+        XElement? setter = TopLevelNameSetter(style, keyedStyles, depth: 0);
+        if (setter is null || !IsSiblingBinding(setter, out string? format) || format is not null)
+        {
+            return $"its container style's Name (`{(setter is null ? "none" : SetterValueText(setter))}`) does not read "
+                + $"{{Binding RelativeSource={{RelativeSource Self}}, Converter={SiblingConverter}}}";
+        }
+        var states = new List<TriggerNaming>();
+        foreach ((string when, XElement triggered) in TriggerNameSetters(style))
+        {
+            if (!IsSiblingBinding(triggered, out string? stateFormat))
+            {
+                return $"the Name setter when {when} (`{SetterValueText(triggered)}`) does not read the sibling rule";
+            }
+            states.Add(new TriggerNaming(when, string.Empty, SiblingConverter, stateFormat));
+        }
+        return states.SequenceEqual(triggers)
+            ? null
+            : "its triggers name "
+                + (states.Count == 0 ? "no state" : string.Join("; ", states.Select(Describe)))
+                + " but R-4 pins "
+                + (triggers.Count == 0 ? "none" : string.Join("; ", triggers.Select(Describe)));
+    }
+
+    /// <summary>Whether a Name setter is the sibling rule's binding —
+    /// <c>{Binding RelativeSource={RelativeSource Self}, Converter={x:Static
+    /// local:SiblingNames.Converter}}</c>, a StringFormat allowed — and its
+    /// format.</summary>
+    private static bool IsSiblingBinding(XElement setter, out string? format)
+    {
+        format = null;
+        if (SetterBinding(setter) is not { } binding
+            || binding.Path.Length != 0
+            || binding.Converter != SiblingConverter
+            || binding.Extras.Any(extra => extra is not ("RelativeSource" or "StringFormat"))
+            || !SetterValueText(setter).Contains("RelativeSource={RelativeSource Self}", StringComparison.Ordinal))
+        {
+            return false;
+        }
+        format = binding.Format;
+        return true;
     }
 
     private const string WrapperIsASecondStop =
@@ -718,15 +918,19 @@ public sealed class ItemContainerNameCensus
                     : (host as IFieldSymbol)?.Type ?? (host as ILocalSymbol)?.Type;
                 string? problem2 = expected switch
                 {
-                    ContainerNaming.Layout => InheritsFrom(type, "SlateWindows.LayoutItemsControl")
-                        ? null : $"is a {type?.Name ?? "(unknown)"}, but must be a LayoutItemsControl",
+                    ContainerNaming.Layout when !InheritsFrom(type, "SlateWindows.LayoutItemsControl") =>
+                        $"is a {type?.Name ?? "(unknown)"}, but must be a LayoutItemsControl",
+                    ContainerNaming.Layout { Rule: { } rule } => CodeSiblingProblem(host, creation, source.Root, model, rule),
+                    ContainerNaming.Layout => null,
                     ContainerNaming.Presentation => InheritsFrom(type, "SlateWindows.AutomationPresentationItemsControl")
                         ? null : $"is a {type?.Name ?? "(unknown)"}, but must be an AutomationPresentationItemsControl",
                     ContainerNaming.Grid => InheritsFrom(type, "System.Windows.Controls.DataGrid")
                         ? null : $"is a {type?.Name ?? "(unknown)"}, but is pinned as the grid substrate's DataGrid",
-                    ContainerNaming.Bound when !InheritsFrom(type, "System.Windows.Controls.Primitives.Selector")
+                    ContainerNaming.Bound or ContainerNaming.Sibling
+                        when !InheritsFrom(type, "System.Windows.Controls.Primitives.Selector")
                         && !InheritsFrom(type, "System.Windows.Controls.TreeView") => WrapperIsASecondStop,
                     ContainerNaming.Bound bound => CodeBoundProblem(host, creation, source.Root, model, bound),
+                    ContainerNaming.Sibling sibling => CodeSiblingProblem(host, creation, source.Root, model, sibling.Rule),
                     _ => $"pinned as {expected}",
                 };
                 if (problem2 is not null)
@@ -811,6 +1015,106 @@ public sealed class ItemContainerNameCensus
             ? null
             : $"{method.Name} binds Name to `{(path.Length == 0 ? "(the item)" : path)}` but R-4 pins {Describe(expected)}";
     }
+
+    /// <summary>Why a code-built host does not name through the sibling
+    /// rule, or null: the view declares the rule's name path, distinguisher
+    /// and noun on the host (<c>SiblingNames.SetNamePath</c> and its
+    /// siblings, literal or nameof), and the host's container style is
+    /// <c>SiblingNames.ContainerStyle</c> or a style-building method whose
+    /// one Name setter is <c>SiblingNames.ContainerNameBinding()</c>.</summary>
+    private static string? CodeSiblingProblem(
+        ISymbol host,
+        ObjectCreationExpressionSyntax? creation,
+        CompilationUnitSyntax root,
+        SemanticModel model,
+        SiblingRule rule)
+    {
+        foreach ((string setter, string? expected) in new[]
+        {
+            ("SetNamePath", (string?)rule.NamePath),
+            ("SetDistinguisherPath", rule.DistinguisherPath),
+            ("SetNoun", (string?)rule.Noun),
+        })
+        {
+            string?[] declared =
+            [
+                .. root.DescendantNodes()
+                    .OfType<InvocationExpressionSyntax>()
+                    .Where(invocation => invocation.Expression is MemberAccessExpressionSyntax
+                        {
+                            Expression: IdentifierNameSyntax { Identifier.ValueText: "SiblingNames" },
+                        } access
+                        && access.Name.Identifier.ValueText == setter
+                        && invocation.ArgumentList.Arguments.Count == 2
+                        && SymbolEqualityComparer.Default.Equals(
+                            model.GetSymbolInfo(invocation.ArgumentList.Arguments[0].Expression).Symbol, host))
+                    .Select(invocation => ConstantText(invocation.ArgumentList.Arguments[1].Expression, model)),
+            ];
+            if (expected is null ? declared.Length != 0 : declared is not [{ } value] || value != expected)
+            {
+                return $"declares SiblingNames.{setter} as [{string.Join(", ", declared)}] but R-4 pins "
+                    + (expected is null ? "none" : $"\"{expected}\"");
+            }
+        }
+        ExpressionSyntax? styleExpression = creation?.Initializer?.Expressions
+            .OfType<AssignmentExpressionSyntax>()
+            .FirstOrDefault(assignment => MemberName(assignment.Left) == "ItemContainerStyle")
+            ?.Right;
+        styleExpression ??= root.DescendantNodes()
+            .OfType<AssignmentExpressionSyntax>()
+            .Where(assignment => assignment.Left is MemberAccessExpressionSyntax { Name.Identifier.ValueText: "ItemContainerStyle" } access
+                && SymbolEqualityComparer.Default.Equals(model.GetSymbolInfo(access.Expression).Symbol, host))
+            .Select(assignment => assignment.Right)
+            .FirstOrDefault();
+        if (styleExpression is not InvocationExpressionSyntax invocation
+            || model.GetSymbolInfo(invocation).Symbol is not IMethodSymbol method)
+        {
+            return $"its ItemContainerStyle (`{styleExpression}`) is not a style the census can read";
+        }
+        if (method.ContainingType.Name == "SiblingNames" && method.Name == "ContainerStyle")
+        {
+            return null;
+        }
+        if (method.DeclaringSyntaxReferences.FirstOrDefault()?.GetSyntax() is not MethodDeclarationSyntax declaration)
+        {
+            return $"its ItemContainerStyle (`{styleExpression}`) is not a style-building method the census can read";
+        }
+        SemanticModel methodModel = ShellCompilation.Compilation.GetSemanticModel(declaration.SyntaxTree);
+        ExpressionSyntax[] values =
+        [
+            .. declaration.DescendantNodes()
+                .OfType<ObjectCreationExpressionSyntax>()
+                .Where(setter => setter.Type.ToString() == "Setter"
+                    && setter.ArgumentList is { Arguments.Count: 2 } arguments
+                    && methodModel.GetSymbolInfo(arguments.Arguments[0].Expression).Symbol is IFieldSymbol
+                    {
+                        Name: "NameProperty",
+                        ContainingType.Name: "AutomationProperties",
+                    })
+                .Select(setter => setter.ArgumentList!.Arguments[1].Expression),
+        ];
+        return values is [InvocationExpressionSyntax nameBinding]
+            && methodModel.GetSymbolInfo(nameBinding).Symbol is IMethodSymbol
+            {
+                Name: "ContainerNameBinding",
+                ContainingType.Name: "SiblingNames",
+            }
+                ? null
+                : $"{method.Name}'s Name setter does not read SiblingNames.ContainerNameBinding()";
+    }
+
+    /// <summary>A literal, nameof or <c>string.Empty</c> argument's text;
+    /// null for anything else.</summary>
+    private static string? ConstantText(ExpressionSyntax expression, SemanticModel model) =>
+        model.GetConstantValue(expression) is { HasValue: true, Value: string text }
+            ? text
+            : model.GetSymbolInfo(expression).Symbol is IFieldSymbol
+            {
+                Name: "Empty",
+                ContainingType.SpecialType: SpecialType.System_String,
+            }
+                ? string.Empty
+                : null;
 
     /// <summary>When <paramref name="field"/> is only ever assigned a
     /// constructor parameter of its type, the one symbol every construction

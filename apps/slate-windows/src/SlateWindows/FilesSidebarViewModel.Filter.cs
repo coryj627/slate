@@ -382,11 +382,6 @@ internal sealed partial class FilesSidebarViewModel
                 hasChildren: false,
                 summary: summary));
         }
-        // R-4 (#1246; codex PR 3 round 2): the results are flat, so two
-        // files with one name in two folders are told apart by path. The
-        // list is only ever filled here, once per outcome.
-        SharedNames.Mark(
-            FilterResults, node => node.BaseAutomationName, (node, shared) => node.NameIsShared = shared);
 
         if (outcome.Error is not null)
         {

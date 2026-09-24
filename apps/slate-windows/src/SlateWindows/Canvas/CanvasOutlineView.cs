@@ -387,6 +387,10 @@ internal sealed class CanvasOutlineView : UserControl
         VirtualizingStackPanel.SetVirtualizationMode(
             _tree, VirtualizationMode.Standard);
         AutomationProperties.SetAutomationId(_tree, "CanvasOutlineTree");
+        // R-4 (#1246; the spec review, round 21): two cards may read
+        // alike; each tree level tells its own rows apart.
+        SiblingNames.SetNamePath(_tree, nameof(CanvasOutlineRowViewModel.Name));
+        SiblingNames.SetNoun(_tree, "item");
         AutomationProperties.SetName(_tree, CanvasPhrase.OutlineName);
         _tree.ItemContainerGenerator.StatusChanged += (_, _) =>
         {
@@ -1106,7 +1110,7 @@ internal sealed class CanvasOutlineView : UserControl
             }));
         style.Setters.Add(new Setter(
             AutomationProperties.NameProperty,
-            new Binding(nameof(CanvasOutlineRowViewModel.Name))));
+            SiblingNames.ContainerNameBinding()));
         style.Setters.Add(new Setter(
             AutomationProperties.ItemStatusProperty,
             new Binding(nameof(CanvasOutlineRowViewModel.Status))));
