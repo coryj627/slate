@@ -543,10 +543,32 @@ internal sealed class CanvasOutlineView : UserControl
 
     internal bool HasKeyboardFocus => _tree.IsKeyboardFocusWithin;
 
-    /// <summary>Put the reader on the tree, reporting whether it took
-    /// the keys — a collapsed projection cannot, and a caller with
-    /// nowhere else to go needs to know that (contract C6).</summary>
-    internal bool FocusTree() => _tree.Focus();
+    /// <summary>Put the reader on a ROW of the tree — the seated card's,
+    /// else the first — reporting whether one took the keys: a collapsed
+    /// projection cannot, and a caller with nowhere else to go needs to
+    /// know that (contract C6).</summary>
+    /// <remarks>
+    /// W7-7 PR 4 (#1247, R-5; spec review round 23): this focused the bare
+    /// tree. WPF hands a tree's keys to its selected row only when there is
+    /// one, so with no card seated the tree kept them and Left and Right
+    /// left the outline; with one seated WPF forwarded them, but the tree's
+    /// own Focus() answered false and FocusProjection went on past a landing
+    /// that had happened (the W7-6 #1240 shape; OutlineLandingTests measures
+    /// both). The landing is the delivery's — realized, silent, and
+    /// reported truthfully — and a seat that cannot be delivered (filtered
+    /// out) gives way to the first row.
+    /// </remarks>
+    internal bool FocusTree()
+    {
+        if (_selectedRow is { IsConnection: false } seated && DeliverFocus(seated.Id) is not null)
+        {
+            return true;
+        }
+
+        return _roots.FirstOrDefault() is { IsConnection: false } first
+            && !ReferenceEquals(first, _selectedRow)
+            && DeliverFocus(first.Id) is not null;
+    }
 
     /// <summary>The container for a row at any depth, realized if it
     /// can be. Null when the panel would not make it.</summary>
