@@ -2931,14 +2931,23 @@ impl VaultSession {
     }
 
     /// One bounded, removal-first page of the Pending generation. Reading
-    /// never moves the generation's stored cursor.
+    /// never moves the generation's stored cursor; a cancelled read fails
+    /// closed (`Cancelled`) before it reads, so the cursor stays where the
+    /// host's last applied page left it.
     pub fn scan_delta_page(
         &self,
         generation: u64,
         paging: Paging,
+        cancel: &CancelToken,
     ) -> Result<ScanDeltaPage, VaultError> {
         let conn = self.conn.lock().expect("session connection mutex");
-        crate::scan_delta::page(&conn, self.directory_cursor_nonce, generation, &paging)
+        crate::scan_delta::page(
+            &conn,
+            self.directory_cursor_nonce,
+            generation,
+            &paging,
+            cancel,
+        )
     }
 
     /// The host applied the effects of every entry before `next_cursor`
@@ -9606,6 +9615,10 @@ fn scan_vault(
     // cannot snapshot an empty cache and then lose the deferred lock
     // upgrade while indexing, returning a misleading partial scan.
     let tx = db::begin_fenced(conn)?;
+    // W7-7 PR 7 (R-9): this transaction's index writes ARE the delta, not
+    // Slate-owned writes, so the supersede triggers stand down inside it
+    // (rolled back with it on any failure; resumed before the commit).
+    crate::scan_delta::suspend_supersede(&tx)?;
 
     // Snapshot vault-relative paths for link resolution. Built once
     // up-front so per-file scanning doesn't re-query SQLite for every
@@ -9855,14 +9868,15 @@ fn scan_vault(
     // above and before the commit, so a rescan's retained generation is
     // written in THIS transaction: the index and the delta the host
     // reconciles it through commit together or not at all.
-    let delta = match crate::scan_delta::diff_against_index(&tx, prior_hashes).and_then(|delta| {
-        match delta_generation {
+    let delta = match crate::scan_delta::diff_against_index(&tx, prior_hashes)
+        .and_then(|delta| match delta_generation {
             Some(generation) => {
                 crate::scan_delta::insert_pending(&tx, generation, &delta).map(|()| delta)
             }
             None => Ok(delta),
-        }
-    }) {
+        })
+        .and_then(|delta| crate::scan_delta::resume_supersede(&tx).map(|()| delta))
+    {
         Ok(delta) => delta,
         Err(e) => {
             // `Started` was emitted; the stream owes a terminal event.

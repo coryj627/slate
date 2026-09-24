@@ -46,6 +46,7 @@ fn apply_pending(session: &VaultSession, limit: u32) -> Vec<Entry> {
                     cursor: cursor.clone(),
                     limit,
                 },
+                &CancelToken::new(),
             )
             .unwrap();
         seen.extend(page.entries.iter().map(|e| (e.kind, e.path.clone())));
@@ -635,7 +636,7 @@ fn delta_pages_are_bounded_progress_and_terminate() {
     for limit in [0, MAX_SCAN_DELTA_PAGE_LIMIT + 1] {
         assert!(
             matches!(
-                session.scan_delta_page(generation, Paging::first(limit)),
+                session.scan_delta_page(generation, Paging::first(limit), &CancelToken::new()),
                 Err(VaultError::InvalidArgument { .. })
             ),
             "limit {limit} was accepted"
@@ -653,6 +654,7 @@ fn delta_pages_are_bounded_progress_and_terminate() {
                     cursor: cursor.clone(),
                     limit: 2,
                 },
+                &CancelToken::new(),
             )
             .unwrap();
         assert!(page.entries.len() <= 2, "a page exceeded its limit");
@@ -687,7 +689,7 @@ fn delta_pages_are_bounded_progress_and_terminate() {
         "the last page's report made the generation Applied"
     );
     assert!(matches!(
-        session.scan_delta_page(generation, Paging::first(2)),
+        session.scan_delta_page(generation, Paging::first(2), &CancelToken::new()),
         Err(VaultError::InvalidArgument { .. })
     ));
 }
@@ -703,7 +705,7 @@ fn a_cursor_from_another_generation_fails_closed() {
     }
     let first = rescan(&session).delta_generation.unwrap();
     let stale = session
-        .scan_delta_page(first, Paging::first(1))
+        .scan_delta_page(first, Paging::first(1), &CancelToken::new())
         .unwrap()
         .next_cursor
         .unwrap();
@@ -713,7 +715,7 @@ fn a_cursor_from_another_generation_fails_closed() {
     let second = rescan(&session).delta_generation.unwrap();
 
     assert!(matches!(
-        session.scan_delta_page(second, Paging::after(stale.clone(), 1)),
+        session.scan_delta_page(second, Paging::after(stale.clone(), 1), &CancelToken::new()),
         Err(VaultError::InvalidArgument { .. })
     ));
     assert!(matches!(
@@ -868,7 +870,9 @@ fn the_ledger_never_holds_more_than_one_pending_and_one_applied_generation() {
     std::fs::write(tmp.path().join("n1.md"), b"n1\n").unwrap();
     edit_same_size(&tmp, "a.md", b"h1h1\n");
     let a = rescan(&session).delta_generation.unwrap();
-    let page = session.scan_delta_page(a, Paging::first(1)).unwrap();
+    let page = session
+        .scan_delta_page(a, Paging::first(1), &CancelToken::new())
+        .unwrap();
     session
         .scan_delta_page_applied(a, page.next_cursor.as_deref())
         .unwrap();
@@ -883,7 +887,9 @@ fn the_ledger_never_holds_more_than_one_pending_and_one_applied_generation() {
     std::fs::remove_file(tmp.path().join("b.md")).unwrap();
     edit_same_size(&tmp, "a.md", b"h2h2\n");
     let b = rescan(&session).delta_generation.unwrap();
-    let page = session.scan_delta_page(b, Paging::first(1)).unwrap();
+    let page = session
+        .scan_delta_page(b, Paging::first(1), &CancelToken::new())
+        .unwrap();
     session
         .scan_delta_page_applied(b, page.next_cursor.as_deref())
         .unwrap();
@@ -1016,7 +1022,7 @@ fn the_applied_mark_and_the_coalesce_commit_together() {
         }
         let generation = rescan(&session).delta_generation.unwrap();
         let first = session
-            .scan_delta_page(generation, Paging::first(2))
+            .scan_delta_page(generation, Paging::first(2), &CancelToken::new())
             .unwrap();
         session
             .scan_delta_page_applied(generation, first.next_cursor.as_deref())
@@ -1029,6 +1035,7 @@ fn the_applied_mark_and_the_coalesce_commit_together() {
                     cursor: last_page_cursor.clone(),
                     limit: 2,
                 },
+                &CancelToken::new(),
             )
             .unwrap();
         assert!(
@@ -1241,7 +1248,7 @@ fn the_ledger_is_created_by_the_first_rescan_not_at_open() {
         ScanDeltaOutcome::default()
     );
     assert!(matches!(
-        session.scan_delta_page(1, Paging::first(1)),
+        session.scan_delta_page(1, Paging::first(1), &CancelToken::new()),
         Err(VaultError::InvalidArgument { .. })
     ));
     assert!(matches!(
@@ -1361,5 +1368,289 @@ fn the_open_scan_reports_changed_and_removed_too() {
             after_delete.files_removed
         ),
         (1, 0, 1)
+    );
+}
+
+// --- Slate-owned writes supersede (round 23) ----------------------------------------
+
+/// `(path, superseded)` for every retained row, straight from the TEMP
+/// table, ordered by path then generation.
+fn raw_flags(session: &VaultSession) -> Vec<(String, bool)> {
+    let conn = session.conn.lock().unwrap();
+    let mut stmt = conn
+        .prepare("SELECT path, superseded FROM temp.scan_delta_row ORDER BY path, generation")
+        .unwrap();
+    stmt.query_map([], |row| Ok((row.get(0)?, row.get(1)?)))
+        .unwrap()
+        .collect::<Result<Vec<_>, _>>()
+        .unwrap()
+}
+
+fn write_external(tmp: &tempfile::TempDir, path: &str, text: &str) {
+    std::fs::write(tmp.path().join(path), text.as_bytes()).unwrap();
+}
+
+/// A Slate-owned write to a path — a save, a create, a rename (BOTH
+/// paths), a move, a delete, a trash, and a folder rename's every file —
+/// supersedes EVERY retained row for that path, in the Applied generation
+/// and the Pending one alike; a path no Slate write touched keeps its rows
+/// live. The superseded rows stay in their page, flagged (the page and its
+/// row count do not move), and are never spoken.
+#[test]
+fn a_slate_owned_write_supersedes_every_retained_row_for_its_path() {
+    let (tmp, session) = make_vault(|p| {
+        for name in [
+            "save.md", "gone.md", "ren.md", "mv.md", "del.md", "trash.md", "keep.md",
+        ] {
+            p.write_file(name, format!("{name} v0\n").as_bytes())
+                .unwrap();
+        }
+        p.create_dir("dir").unwrap();
+        p.write_file("dir/f.md", b"f v0\n").unwrap();
+        p.create_dir("sub").unwrap();
+        p.write_file("sub/x.md", b"x\n").unwrap();
+    });
+    session.scan_initial(&CancelToken::new()).unwrap();
+    let touched = [
+        "save.md", "ren.md", "mv.md", "del.md", "trash.md", "keep.md", "dir/f.md",
+    ];
+
+    // The Applied generation: every touched file modified, gone.md
+    // removed, ren-to.md created.
+    for path in touched {
+        write_external(&tmp, path, &format!("{path} v1 x\n"));
+    }
+    std::fs::remove_file(tmp.path().join("gone.md")).unwrap();
+    write_external(&tmp, "ren-to.md", "squatter\n");
+    rescan(&session);
+    apply_pending(&session, 100);
+    // The Pending generation: every touched file modified again, ren-to.md
+    // removed again.
+    for path in touched {
+        write_external(&tmp, path, &format!("{path} v2, longer\n"));
+    }
+    std::fs::remove_file(tmp.path().join("ren-to.md")).unwrap();
+    rescan(&session);
+    let before = raw_flags(&session);
+    assert_eq!(before.len(), 17, "{before:?}");
+    assert!(
+        before.iter().all(|(_, superseded)| !superseded),
+        "a row was superseded before any Slate-owned write: {before:?}"
+    );
+
+    session.save_text("save.md", "slate\n", None).unwrap();
+    session.create_exclusive("gone.md", "back\n").unwrap();
+    session.rename_file("ren.md", "ren-to.md").unwrap();
+    session.move_file("mv.md", "sub").unwrap();
+    session.delete_file("del.md").unwrap();
+    session
+        .batch_trash(crate::BatchTrashRequest {
+            items: vec![crate::StructuralBatchItem {
+                path: "trash.md".into(),
+                is_directory: false,
+            }],
+        })
+        .unwrap();
+    session.rename_folder("dir", "dir2").unwrap();
+
+    let after = raw_flags(&session);
+    assert_eq!(
+        after.len(),
+        17,
+        "a Slate-owned write dropped a row: {after:?}"
+    );
+    for (path, superseded) in &after {
+        assert_eq!(
+            *superseded,
+            path != "keep.md",
+            "{path}: superseded = {superseded}"
+        );
+    }
+
+    // Flagged in place: the Pending page still holds every row.
+    let pending = session.scan_delta_pending().unwrap().unwrap();
+    let page = session
+        .scan_delta_page(pending.generation, Paging::first(100), &CancelToken::new())
+        .unwrap();
+    assert_eq!(page.entries.len() as u64, pending.rows);
+    for entry in &page.entries {
+        assert_eq!(entry.superseded, entry.path != "keep.md", "{entry:?}");
+    }
+    session
+        .scan_delta_page_applied(pending.generation, None)
+        .unwrap();
+    // Only keep.md, the one path no Slate write touched, is spoken.
+    assert_eq!(
+        session.scan_delta_release().unwrap(),
+        ScanDeltaOutcome {
+            changed: 1,
+            removed: 0
+        }
+    );
+}
+
+/// The flag commits in the write's own transaction: a fault injected into
+/// the flagging rolls the write's index commit back with it (the index
+/// keeps the scan's hash and no row is flagged), and the same write,
+/// unfaulted, lands both.
+#[test]
+fn the_supersede_commits_with_its_write() {
+    let (tmp, session) = make_vault(|p| {
+        p.write_file("p.md", b"p0\n").unwrap();
+    });
+    session.scan_initial(&CancelToken::new()).unwrap();
+    write_external(&tmp, "p.md", "p1 external\n");
+    rescan(&session);
+    let scanned = indexed_hash(&session, "p.md");
+    {
+        let conn = session.conn.lock().unwrap();
+        conn.execute_batch(
+            "CREATE TEMP TRIGGER fault_the_supersede
+                 BEFORE UPDATE OF superseded ON scan_delta_row
+             BEGIN
+                 SELECT RAISE(ABORT, 'injected supersede fault');
+             END;",
+        )
+        .unwrap();
+    }
+
+    assert!(session.save_text("p.md", "slate bytes\n", None).is_err());
+    assert_eq!(
+        indexed_hash(&session, "p.md"),
+        scanned,
+        "the index commit landed without its flag"
+    );
+    assert_eq!(raw_flags(&session), vec![("p.md".to_string(), false)]);
+
+    {
+        let conn = session.conn.lock().unwrap();
+        conn.execute_batch("DROP TRIGGER temp.fault_the_supersede")
+            .unwrap();
+    }
+    session.save_text("p.md", "slate bytes\n", None).unwrap();
+    assert_ne!(indexed_hash(&session, "p.md"), scanned);
+    assert_eq!(raw_flags(&session), vec![("p.md".to_string(), true)]);
+}
+
+/// The scan's own index writes are the delta, never a Slate-owned write:
+/// a rescan that changes a path the Applied generation retains flags
+/// nothing, in the Applied row or its own new one.
+#[test]
+fn a_scan_never_supersedes_what_it_retains() {
+    let (tmp, session) = make_vault(|p| {
+        p.write_file("a.md", b"a0\n").unwrap();
+    });
+    session.scan_initial(&CancelToken::new()).unwrap();
+    write_external(&tmp, "a.md", "a1 x\n");
+    rescan(&session);
+    apply_pending(&session, 10);
+    write_external(&tmp, "a.md", "a2, longer\n");
+    rescan(&session);
+    assert_eq!(
+        raw_flags(&session),
+        vec![("a.md".to_string(), false), ("a.md".to_string(), false)]
+    );
+    // And the next scan after a Slate-owned write compares against the
+    // index that write updated: nothing to record.
+    settle(&session);
+    session.save_text("a.md", "slate\n", None).unwrap();
+    rescan(&session);
+    assert_eq!(session.scan_delta_pending().unwrap().unwrap().rows, 0);
+}
+
+/// A path whose older row was superseded restarts, at the coalesce, from
+/// the newer row alone: only what changed AFTER the Slate-owned write is
+/// spoken. x.md went h0 to h1 outside Slate (applied), was saved through
+/// Slate (hS), then reverted to h0 outside Slate. Composing through the
+/// superseded row would net h0 to h0 into nothing; the truth since the
+/// save is hS to h0, one modification.
+#[test]
+fn a_superseded_path_speaks_only_what_changed_after_the_write() {
+    let (tmp, session) = make_vault(|p| {
+        p.write_file("x.md", b"h0\n").unwrap();
+        p.write_file("y.md", b"y0\n").unwrap();
+    });
+    session.scan_initial(&CancelToken::new()).unwrap();
+    write_external(&tmp, "x.md", "h1 external\n");
+    rescan(&session);
+    apply_pending(&session, 10);
+    let saved = session.save_text("x.md", "hS slate\n", None).unwrap();
+    assert_eq!(raw_flags(&session), vec![("x.md".to_string(), true)]);
+
+    write_external(&tmp, "x.md", "h0\n");
+    write_external(&tmp, "y.md", "y1 x\n");
+    rescan(&session);
+    apply_pending(&session, 10);
+    assert_eq!(
+        retained_hashes(&session, "x.md"),
+        Some((Some(saved.new_content_hash), indexed_hash(&session, "x.md")))
+    );
+    assert_eq!(
+        raw_flags(&session),
+        vec![("x.md".to_string(), false), ("y.md".to_string(), false)]
+    );
+    assert_eq!(
+        session.scan_delta_release().unwrap(),
+        ScanDeltaOutcome {
+            changed: 2,
+            removed: 0
+        }
+    );
+}
+
+// --- cancellation (round 23) ---------------------------------------------------------
+
+/// A page read takes the rescan's cancel token: a cancelled read fails
+/// closed BEFORE it reads (before the first page, and between pages) and
+/// the generation keeps the cursor its last applied page left; a later
+/// read with a live token resumes exactly there.
+#[test]
+fn a_cancelled_page_read_fails_closed_and_moves_nothing() {
+    let (tmp, session) = make_vault(|_| {});
+    session.scan_initial(&CancelToken::new()).unwrap();
+    for name in ["a.md", "b.md", "c.md"] {
+        write_external(&tmp, name, "new\n");
+    }
+    let generation = rescan(&session).delta_generation.unwrap();
+    let cancelled = CancelToken::new();
+    cancelled.cancel();
+
+    assert!(matches!(
+        session.scan_delta_page(generation, Paging::first(1), &cancelled),
+        Err(VaultError::Cancelled)
+    ));
+    assert_eq!(session.scan_delta_pending().unwrap().unwrap().cursor, None);
+
+    let first = session
+        .scan_delta_page(generation, Paging::first(1), &CancelToken::new())
+        .unwrap();
+    session
+        .scan_delta_page_applied(generation, first.next_cursor.as_deref())
+        .unwrap();
+    let after_one = session.scan_delta_pending().unwrap().unwrap().cursor;
+    assert_eq!(after_one, first.next_cursor);
+    assert!(matches!(
+        session.scan_delta_page(
+            generation,
+            Paging {
+                cursor: after_one.clone(),
+                limit: 1
+            },
+            &cancelled
+        ),
+        Err(VaultError::Cancelled)
+    ));
+    assert_eq!(
+        session.scan_delta_pending().unwrap().unwrap().cursor,
+        after_one
+    );
+
+    let rest = apply_pending(&session, 1);
+    assert_eq!(
+        rest,
+        vec![
+            entry(ScanDeltaKind::Created, "b.md"),
+            entry(ScanDeltaKind::Created, "c.md")
+        ]
     );
 }
