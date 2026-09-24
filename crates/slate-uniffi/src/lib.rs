@@ -1336,10 +1336,11 @@ impl VaultSession {
         &self,
         generation: u64,
         paging: Paging,
+        cancel: Arc<CancelToken>,
     ) -> Result<ScanDeltaPage, VaultError> {
         Ok(self
             .inner
-            .scan_delta_page(generation, paging.into())?
+            .scan_delta_page(generation, paging.into(), &cancel.inner)?
             .into())
     }
 
@@ -6333,11 +6334,14 @@ impl From<core::ScanDeltaKind> for ScanDeltaKind {
     }
 }
 
-/// One entry of a rescan delta page.
+/// One entry of a rescan delta page. A `superseded` entry was overtaken
+/// by a Slate-owned write to its path after the scan recorded it: the
+/// host applies nothing for it and it is never spoken.
 #[derive(Debug, Clone, PartialEq, Eq, uniffi::Record)]
 pub struct ScanDeltaEntry {
     pub kind: ScanDeltaKind,
     pub path: String,
+    pub superseded: bool,
 }
 
 /// A bounded, removal-first page of the Pending delta generation.
@@ -6358,6 +6362,7 @@ impl From<core::ScanDeltaPage> for ScanDeltaPage {
                 .map(|e| ScanDeltaEntry {
                     kind: e.kind.into(),
                     path: e.path,
+                    superseded: e.superseded,
                 })
                 .collect(),
             next_cursor: p.next_cursor,

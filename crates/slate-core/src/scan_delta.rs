@@ -50,6 +50,30 @@
 //!
 //! Effects are never netted; only speech is.
 //!
+//! ## Slate-owned writes supersede
+//!
+//! A Slate-owned write to a path — a save, a create, both paths of a
+//! rename or move, a delete or trash — reconciles the host itself, through
+//! the file-change channel (locked decision 05). It therefore SUPERSEDES
+//! every retained row for that path: the row is flagged, in the same
+//! transaction that commits the write, by TEMP triggers on the index's
+//! `files` table (so no write path can forget, and a fault in the flagging
+//! rolls the write back with it). A superseded row stays in its page — page
+//! bounds and cursors never move — but yields no host effect and nothing
+//! to speech; the next scan compares against the index the write updated.
+//! When a Pending generation coalesces into the Applied one, a path whose
+//! older row was superseded restarts from the newer row alone: only what
+//! changed after the Slate-owned write is spoken. The scan's own index
+//! writes ARE the delta, so the triggers stand down for the scan's
+//! transaction ([`suspend_supersede`]).
+//!
+//! ## Cancellation
+//!
+//! A page read takes the rescan's cancel token (locked decision 05: every
+//! vault query accepts one). A cancelled read fails closed before it
+//! reads, so the generation keeps its cursor; effects already applied stay
+//! applied and a later rescan resumes from the cursor.
+//!
 //! ## Where the ledger lives
 //!
 //! In TEMP tables on the session's one connection: session-side SQLite,
@@ -72,7 +96,7 @@ use rusqlite::{Connection, OptionalExtension, params};
 
 use crate::VaultError;
 use crate::db;
-use crate::session::Paging;
+use crate::session::{CancelToken, Paging};
 
 /// The largest page a host may request. Pages are read on the host's UI
 /// thread, so a page is kept small enough to apply in one turn.
@@ -120,10 +144,15 @@ impl ScanDeltaKind {
 }
 
 /// One entry of a delta page: what happened to one vault-relative path.
+/// A `superseded` entry was overtaken by a Slate-owned write to its path
+/// after the scan recorded it: the host applies nothing for it (the
+/// write's own file-change event already reconciled the host), and it is
+/// never spoken.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct ScanDeltaEntry {
     pub kind: ScanDeltaKind,
     pub path: String,
+    pub superseded: bool,
 }
 
 /// A bounded page of the Pending generation (the `ListDirChildrenPage`
@@ -198,8 +227,16 @@ fn tables_exist(conn: &Connection) -> Result<bool, VaultError> {
     )?)
 }
 
-/// Create the ledger's TEMP tables on the session connection. Idempotent;
-/// the rescan calls it before its scan transaction opens.
+/// Create the ledger's TEMP tables — and the supersede triggers on the
+/// index's `files` table — on the session connection. Idempotent; the
+/// rescan calls it before its scan transaction opens.
+///
+/// The triggers flag every retained row for a path whose index row a
+/// Slate-owned write inserts, deletes, re-paths (both the old and the new
+/// path) or re-hashes, inside the statement — and so the transaction —
+/// that commits the write. TEMP triggers resolve their unqualified names
+/// against the temp schema first; the suppression row stands them down for
+/// the scan's own transaction.
 pub(crate) fn ensure_tables(conn: &Connection) -> Result<(), VaultError> {
     conn.execute_batch(
         "CREATE TEMP TABLE IF NOT EXISTS scan_delta_generation (
@@ -214,11 +251,61 @@ pub(crate) fn ensure_tables(conn: &Connection) -> Result<(), VaultError> {
              path       TEXT NOT NULL,
              prior_hash TEXT,
              new_hash   TEXT,
+             superseded INTEGER NOT NULL DEFAULT 0,
              PRIMARY KEY (generation, seq)
          );
          CREATE UNIQUE INDEX IF NOT EXISTS temp.scan_delta_row_path
-             ON scan_delta_row (generation, path);",
+             ON scan_delta_row (generation, path);
+         CREATE INDEX IF NOT EXISTS temp.scan_delta_row_by_path
+             ON scan_delta_row (path);
+         CREATE TEMP TABLE IF NOT EXISTS scan_delta_suppress (
+             one INTEGER PRIMARY KEY CHECK (one = 1)
+         );
+         CREATE TEMP TRIGGER IF NOT EXISTS scan_delta_supersede_on_insert
+             AFTER INSERT ON main.files
+             WHEN NOT EXISTS (SELECT 1 FROM scan_delta_suppress)
+         BEGIN
+             UPDATE scan_delta_row SET superseded = 1
+              WHERE path = NEW.path AND superseded = 0;
+         END;
+         CREATE TEMP TRIGGER IF NOT EXISTS scan_delta_supersede_on_delete
+             AFTER DELETE ON main.files
+             WHEN NOT EXISTS (SELECT 1 FROM scan_delta_suppress)
+         BEGIN
+             UPDATE scan_delta_row SET superseded = 1
+              WHERE path = OLD.path AND superseded = 0;
+         END;
+         CREATE TEMP TRIGGER IF NOT EXISTS scan_delta_supersede_on_update
+             AFTER UPDATE OF path, content_hash ON main.files
+             WHEN NOT EXISTS (SELECT 1 FROM scan_delta_suppress)
+         BEGIN
+             UPDATE scan_delta_row SET superseded = 1
+              WHERE path IN (OLD.path, NEW.path) AND superseded = 0;
+         END;",
     )?;
+    Ok(())
+}
+
+/// The scan's own index writes are the delta, not Slate-owned writes: the
+/// supersede triggers stand down inside the scan's transaction. The row
+/// lives in that transaction, so a failed scan's rollback removes it too;
+/// [`resume_supersede`] removes it before a successful commit. A no-op
+/// before the first rescan created the ledger (no triggers exist yet).
+pub(crate) fn suspend_supersede(conn: &Connection) -> Result<(), VaultError> {
+    if tables_exist(conn)? {
+        conn.execute(
+            "INSERT OR IGNORE INTO temp.scan_delta_suppress (one) VALUES (1)",
+            [],
+        )?;
+    }
+    Ok(())
+}
+
+/// The triggers stand back up before the scan's transaction commits.
+pub(crate) fn resume_supersede(conn: &Connection) -> Result<(), VaultError> {
+    if tables_exist(conn)? {
+        conn.execute("DELETE FROM temp.scan_delta_suppress", [])?;
+    }
     Ok(())
 }
 
@@ -443,13 +530,18 @@ pub(crate) fn ledger(conn: &Connection, session_nonce: u64) -> Result<ScanDeltaL
 
 /// One bounded page of the Pending generation, in stored (removal-first)
 /// order. Reading never moves the stored cursor: only [`page_applied`]
-/// does, after the page's effects.
+/// does, after the page's effects. A cancelled read fails closed before it
+/// reads anything.
 pub(crate) fn page(
     conn: &Connection,
     session_nonce: u64,
     generation: u64,
     paging: &Paging,
+    cancel: &CancelToken,
 ) -> Result<ScanDeltaPage, VaultError> {
+    if cancel.is_cancelled() {
+        return Err(VaultError::Cancelled);
+    }
     if paging.limit == 0 || paging.limit > MAX_SCAN_DELTA_PAGE_LIMIT {
         return Err(invalid(&format!(
             "scan delta page limit must be between 1 and {MAX_SCAN_DELTA_PAGE_LIMIT}"
@@ -472,9 +564,9 @@ pub(crate) fn page(
         None => 0,
         Some(cursor) => decode_cursor(cursor, session_nonce, generation)?,
     };
-    let fetched: Vec<(i64, i64, String)> = {
+    let fetched: Vec<(i64, i64, String, bool)> = {
         let mut stmt = conn.prepare(
-            "SELECT seq, kind, path FROM temp.scan_delta_row
+            "SELECT seq, kind, path, superseded FROM temp.scan_delta_row
              WHERE generation = ?1 AND seq >= ?2
              ORDER BY seq
              LIMIT ?3",
@@ -485,21 +577,22 @@ pub(crate) fn page(
                 start,
                 i64::from(paging.limit) + 1
             ],
-            |row| Ok((row.get(0)?, row.get(1)?, row.get(2)?)),
+            |row| Ok((row.get(0)?, row.get(1)?, row.get(2)?, row.get(3)?)),
         )?
         .collect::<Result<Vec<_>, _>>()?
     };
     let limit = paging.limit as usize;
     let next_cursor = fetched
         .get(limit)
-        .map(|(seq, _, _)| encode_cursor(session_nonce, generation, *seq));
+        .map(|(seq, _, _, _)| encode_cursor(session_nonce, generation, *seq));
     let entries = fetched
         .into_iter()
         .take(limit)
-        .map(|(_, kind, path)| {
+        .map(|(_, kind, path, superseded)| {
             Ok(ScanDeltaEntry {
                 kind: ScanDeltaKind::from_code(kind)?,
                 path,
+                superseded,
             })
         })
         .collect::<Result<Vec<_>, VaultError>>()?;
@@ -561,6 +654,15 @@ thread_local! {
         const { std::cell::Cell::new(false) };
 }
 
+/// One row of the generation being coalesced, as stored.
+struct NewerRow {
+    path: String,
+    kind: i64,
+    prior: Option<String>,
+    new: Option<String>,
+    superseded: bool,
+}
+
 /// Pending → Applied: the applied mark, then the coalesce into the one
 /// retained Applied generation (see the module doc) — both inside the
 /// caller's fenced transaction, so a fault between them leaves the
@@ -591,13 +693,19 @@ fn coalesce_into_applied(conn: &Connection, generation: u64) -> Result<(), Vault
     let Some(sql_applied) = applied else {
         return Ok(());
     };
-    let newer: Vec<(String, Option<String>, Option<String>)> = {
+    let newer: Vec<NewerRow> = {
         let mut stmt = conn.prepare(
-            "SELECT path, prior_hash, new_hash FROM temp.scan_delta_row
+            "SELECT path, kind, prior_hash, new_hash, superseded FROM temp.scan_delta_row
              WHERE generation = ?1 ORDER BY seq",
         )?;
         stmt.query_map(params![sql_generation], |row| {
-            Ok((row.get(0)?, row.get(1)?, row.get(2)?))
+            Ok(NewerRow {
+                path: row.get(0)?,
+                kind: row.get(1)?,
+                prior: row.get(2)?,
+                new: row.get(3)?,
+                superseded: row.get(4)?,
+            })
         })?
         .collect::<Result<Vec<_>, _>>()?
     };
@@ -606,18 +714,44 @@ fn coalesce_into_applied(conn: &Connection, generation: u64) -> Result<(), Vault
         params![sql_applied],
         |row| row.get(0),
     )?;
-    for (path, newer_prior, newer_new) in newer {
-        let older: Option<(i64, Option<String>)> = conn
+    for NewerRow {
+        path,
+        kind: newer_kind,
+        prior: newer_prior,
+        new: newer_new,
+        superseded: newer_superseded,
+    } in newer
+    {
+        let older: Option<(i64, Option<String>, bool)> = conn
             .query_row(
-                "SELECT seq, prior_hash FROM temp.scan_delta_row
+                "SELECT seq, prior_hash, superseded FROM temp.scan_delta_row
                  WHERE generation = ?1 AND path = ?2",
                 params![sql_applied, path],
-                |row| Ok((row.get(0)?, row.get(1)?)),
+                |row| Ok((row.get(0)?, row.get(1)?, row.get(2)?)),
             )
             .optional()?;
         match older {
+            // A Slate-owned write re-based the path between (or after)
+            // the two scans: its own event reconciled the host, so the
+            // newer row alone — flag and all — is what the path has done
+            // since.
+            Some((seq, _, older_superseded)) if older_superseded || newer_superseded => {
+                conn.execute(
+                    "UPDATE temp.scan_delta_row
+                        SET kind = ?1, prior_hash = ?2, new_hash = ?3, superseded = ?4
+                      WHERE generation = ?5 AND seq = ?6",
+                    params![
+                        newer_kind,
+                        newer_prior,
+                        newer_new,
+                        newer_superseded,
+                        sql_applied,
+                        seq
+                    ],
+                )?;
+            }
             // Prior from the older row, new from the newer one.
-            Some((seq, older_prior)) => {
+            Some((seq, older_prior, _)) => {
                 match ScanDeltaKind::of(older_prior.as_deref(), newer_new.as_deref()) {
                     Some(kind) => {
                         conn.execute(
@@ -637,23 +771,21 @@ fn coalesce_into_applied(conn: &Connection, generation: u64) -> Result<(), Vault
                 }
             }
             None => {
-                if let Some(kind) = ScanDeltaKind::of(newer_prior.as_deref(), newer_new.as_deref())
-                {
-                    conn.execute(
-                        "INSERT INTO temp.scan_delta_row
-                             (generation, seq, kind, path, prior_hash, new_hash)
-                         VALUES (?1, ?2, ?3, ?4, ?5, ?6)",
-                        params![
-                            sql_applied,
-                            next_seq,
-                            kind.code(),
-                            path,
-                            newer_prior,
-                            newer_new
-                        ],
-                    )?;
-                    next_seq += 1;
-                }
+                conn.execute(
+                    "INSERT INTO temp.scan_delta_row
+                         (generation, seq, kind, path, prior_hash, new_hash, superseded)
+                     VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7)",
+                    params![
+                        sql_applied,
+                        next_seq,
+                        newer_kind,
+                        path,
+                        newer_prior,
+                        newer_new,
+                        newer_superseded
+                    ],
+                )?;
+                next_seq += 1;
             }
         }
     }
@@ -685,11 +817,13 @@ pub(crate) fn release(conn: &Connection) -> Result<ScanDeltaOutcome, VaultError>
         return Ok(ScanDeltaOutcome::default());
     };
     let sql_applied = to_sql_generation(applied)?;
+    // A superseded row is never spoken: the Slate-owned write that
+    // overtook it announced itself.
     let (changed, removed): (i64, i64) = tx.query_row(
         "SELECT
              COALESCE(SUM(CASE WHEN kind IN (?2, ?3) THEN 1 ELSE 0 END), 0),
              COALESCE(SUM(CASE WHEN kind = ?4 THEN 1 ELSE 0 END), 0)
-         FROM temp.scan_delta_row WHERE generation = ?1",
+         FROM temp.scan_delta_row WHERE generation = ?1 AND superseded = 0",
         params![
             sql_applied,
             ScanDeltaKind::Created.code(),
