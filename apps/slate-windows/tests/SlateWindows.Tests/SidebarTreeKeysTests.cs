@@ -296,6 +296,111 @@ public sealed class SidebarTreeKeysTests : IDisposable
         Assert.Same(explicitTab, workspace.ActiveGroup.Tabs[0]);
     }
 
+    /// <summary>
+    /// R-2 transient tab (spec review rounds 21–22): the flag clears for good
+    /// on the tab's FIRST dirty transition. Arrow onto A, edit it, save it —
+    /// clean again — then arrow onto B: A is kept, permanent, and B shows in
+    /// a new transient tab. Driven through the workspace's own selection
+    /// route (<c>OpenPath(fromSelection: true)</c>, what a Files selection
+    /// calls), where a save runs without the vault lifecycle's refresh.
+    /// </summary>
+    [Fact]
+    public void ArrowEditSaveArrow_KeepsTheSavedNote()
+    {
+        (VaultSession session, WorkspaceViewModel workspace) = NewWorkspace("transient-save");
+        using VaultSession ownedSession = session;
+        using WorkspaceViewModel ownedWorkspace = workspace;
+
+        workspace.OpenPath("alpha.md", fromSelection: true);
+        WorkspaceTabViewModel alpha = Assert.Single(workspace.ActiveGroup.Tabs);
+        Assert.True(alpha.IsTransient);
+        alpha.EditorDocument!.Insert(alpha.EditorDocument.TextLength, "Edited, then saved.\n");
+        Assert.True(alpha.IsDirty);
+        Assert.True(alpha.Save());
+        Assert.False(alpha.IsDirty);
+
+        workspace.OpenPath("beta.md", fromSelection: true);
+
+        Assert.Equal(new[] { "alpha.md", "beta.md" }, workspace.ActiveGroup.Tabs.Select(tab => tab.Path));
+        Assert.Same(alpha, workspace.ActiveGroup.Tabs[0]);
+        Assert.False(alpha.IsTransient);
+        Assert.True(workspace.ActiveGroup.Tabs[1].IsTransient);
+    }
+
+    /// <summary>
+    /// R-2 transient tab (spec review round 22): promotion happens at the
+    /// first dirty transition, period. Arrow onto A, type into it, undo back
+    /// to clean, arrow onto B: A is kept, permanent — the undo does not
+    /// make it transient again — and B shows in a new transient tab.
+    /// </summary>
+    [Fact]
+    public void ArrowEditUndoArrow_KeepsTheNote()
+    {
+        (VaultSession session, WorkspaceViewModel workspace) = NewWorkspace("transient-undo");
+        using VaultSession ownedSession = session;
+        using WorkspaceViewModel ownedWorkspace = workspace;
+
+        workspace.OpenPath("alpha.md", fromSelection: true);
+        WorkspaceTabViewModel alpha = Assert.Single(workspace.ActiveGroup.Tabs);
+        Assert.True(alpha.IsTransient);
+        alpha.EditorDocument!.Insert(alpha.EditorDocument.TextLength, "typed");
+        Assert.True(alpha.IsDirty);
+        Assert.True(alpha.EditorDocument.UndoStack.CanUndo);
+        alpha.EditorDocument.UndoStack.Undo();
+        Assert.False(alpha.IsDirty);
+
+        workspace.OpenPath("beta.md", fromSelection: true);
+
+        Assert.Equal(new[] { "alpha.md", "beta.md" }, workspace.ActiveGroup.Tabs.Select(tab => tab.Path));
+        Assert.Same(alpha, workspace.ActiveGroup.Tabs[0]);
+        Assert.False(alpha.IsTransient);
+        Assert.True(workspace.ActiveGroup.Tabs[1].IsTransient);
+    }
+
+    private (VaultSession Session, WorkspaceViewModel Workspace) NewWorkspace(string label)
+    {
+        string root = NewVault(label);
+        VaultSession session = VaultSession.OpenFilesystem(root);
+        using (var cancel = new CancelToken())
+        {
+            session.ScanInitial(cancel);
+        }
+
+        return (session, new WorkspaceViewModel(
+            session,
+            root,
+            () => [],
+            Record,
+            startInteractionBackgroundWork: false));
+    }
+
+    /// <summary>
+    /// R-2 transient tab (spec review round 21): with A in a tab of its own
+    /// and B in the transient tab, selecting A activates A's tab — B stays
+    /// where it is, still transient, and A still has exactly one tab.
+    /// </summary>
+    [Fact]
+    public async Task SelectingAPermanentNote_ActivatesItsTab()
+    {
+        (VaultLifecycleViewModel lifecycle, WorkspaceViewModel workspace, FilesSidebarViewModel sidebar) =
+            await OpenAsync("transient-reselect");
+        using VaultLifecycleViewModel owned = lifecycle;
+        sidebar.SelectedNode = Node(sidebar, "alpha.md");
+        Assert.True(sidebar.OpenNode(Node(sidebar, "alpha.md"), WorkspaceOpenTarget.NewTab));
+        sidebar.SelectedNode = Node(sidebar, "beta.md");
+        WorkspaceTabViewModel alpha = workspace.ActiveGroup.Tabs[0];
+        WorkspaceTabViewModel beta = workspace.ActiveGroup.Tabs[1];
+        Assert.True(beta.IsTransient);
+
+        sidebar.SelectedNode = Node(sidebar, "alpha.md");
+
+        Assert.Same(alpha, workspace.ActiveGroup.ActiveTab);
+        Assert.Equal(new[] { "alpha.md", "beta.md" }, workspace.ActiveGroup.Tabs.Select(tab => tab.Path));
+        Assert.Same(beta, workspace.ActiveGroup.Tabs[1]);
+        Assert.True(beta.IsTransient);
+        Assert.Single(workspace.ActiveGroup.Tabs, tab => tab.Path == "alpha.md");
+    }
+
     private async Task<(VaultLifecycleViewModel Lifecycle, WorkspaceViewModel Workspace, FilesSidebarViewModel Sidebar)>
         OpenAsync(string label)
     {
@@ -553,66 +658,132 @@ public sealed class SidebarTreeKeysTests : IDisposable
     });
 
     /// <summary>
-    /// R-3 (codex PR 2 round 4): Escape in the focused filter field and the
-    /// Clear filter button — invoked the way UI Automation does — are the
-    /// promised clear routes. With a whitespace tag's scope active (the
-    /// field empty, the scope otherwise invisible) and with a typed filter
-    /// alike: the scope and text go, the results go, the status line says
-    /// "Filter cleared." and exactly that is spoken, once.
+    /// R-3 (codex PR 2 round 4; spec review round 21): Escape in the focused
+    /// filter field is a promised clear route. With a whitespace tag's scope
+    /// active (the field empty, the scope otherwise invisible) and with a
+    /// typed filter alike: the scope and text go, the results go, the status
+    /// line says "Filter cleared.", and the one thing posted is core's typed
+    /// SidebarFilterCleared — no host-composed copy at all.
     /// </summary>
     [Fact]
-    public void EscapeAndTheClearButton_ClearAnActiveFilter() => RunSta(() =>
+    public void Escape_ClearsAnActiveFilter() => RunSta(() =>
     {
-        string root = NewVault("clear-routes");
-        File.WriteAllText(Path.Combine(root, "spaced.md"), "---\ntags: [\"two words\"]\n---\n\n# Spaced\n");
-        using var host = new TreeHost(root);
+        using var host = new TreeHost(NewVaultWithSpacedTag("clear-escape"));
         host.Initialize();
-        var routes = new (string Name, Action<TreeHost> Clear)[]
+        foreach (Action<FilesSidebarViewModel> activate in Activations())
         {
-            ("Escape", h =>
-            {
-                Assert.True(h.FilterField.Focus());
-                Assert.True(h.Press(h.FilterField, Key.Escape), "Escape in the filter field went unhandled.");
-            }),
-            ("the Clear filter button", h =>
-            {
-                Assert.True(h.ClearButton.IsEnabled);
-                var invoke = (System.Windows.Automation.Provider.IInvokeProvider)
-                    new System.Windows.Automation.Peers.ButtonAutomationPeer(h.ClearButton)
-                        .GetPattern(System.Windows.Automation.Peers.PatternInterface.Invoke);
-                invoke.Invoke();
-                PumpedDispatcher.Drain();
-            }),
-        };
+            int before = ActivateFilter(host, activate);
 
-        foreach ((string name, Action<TreeHost> clear) in routes)
-        {
-            foreach (Action<FilesSidebarViewModel> activate in new Action<FilesSidebarViewModel>[]
-            {
-                sidebar => sidebar.ActivateTag("two words"),
-                sidebar => sidebar.FilterText = "alpha",
-            })
-            {
-                activate(host.Sidebar);
-                PumpedDispatcher.PumpUntilDrained(host.Sidebar.FilterCompletion);
-                Assert.True(host.Sidebar.IsFilterActive);
-                Assert.NotEmpty(host.Sidebar.FilterResults);
-                int before = host.AnnouncementCount;
+            Assert.True(host.FilterField.Focus());
+            Assert.True(host.Press(host.FilterField, Key.Escape), "Escape in the filter field went unhandled.");
+            PumpedDispatcher.PumpUntilDrained(host.Sidebar.FilterCompletion);
 
-                clear(host);
-                PumpedDispatcher.PumpUntilDrained(host.Sidebar.FilterCompletion);
-
-                Assert.False(host.Sidebar.IsFilterActive, $"{name} left the filter active.");
-                Assert.Null(host.Sidebar.ScopeTag);
-                Assert.Equal(string.Empty, host.Sidebar.FilterText);
-                Assert.Empty(host.Sidebar.FilterResults);
-                Assert.Equal("Filter cleared.", host.Sidebar.Status);
-                A11yEvent spoken = Assert.Single(host.Announcements.Skip(before));
-                Assert.IsType<A11yEvent.SidebarFilterCleared>(spoken);
-                Assert.False(host.ClearButton.IsEnabled);
-            }
+            AssertClearedOnce(host, before);
+            Assert.Same(host.FilterField, Keyboard.FocusedElement);
         }
     });
+
+    /// <summary>
+    /// R-3 (codex PR 2 round 4; spec review round 21): the Clear filter
+    /// button, invoked the way UI Automation does, clears exactly as Escape
+    /// does — and, having disabled itself, hands the keys to the filter
+    /// field instead of keeping them on a disabled control.
+    /// </summary>
+    [Fact]
+    public void ClearButton_ClearsAnActiveFilterAndKeepsTheKeysInTheField() => RunSta(() =>
+    {
+        using var host = new TreeHost(NewVaultWithSpacedTag("clear-button"));
+        host.Initialize();
+        foreach (Action<FilesSidebarViewModel> activate in Activations())
+        {
+            int before = ActivateFilter(host, activate);
+            Assert.True(host.ClearButton.IsEnabled);
+            Assert.True(host.ClearButton.Focus());
+
+            var invoke = (System.Windows.Automation.Provider.IInvokeProvider)
+                new System.Windows.Automation.Peers.ButtonAutomationPeer(host.ClearButton)
+                    .GetPattern(System.Windows.Automation.Peers.PatternInterface.Invoke);
+            invoke.Invoke();
+            PumpedDispatcher.Drain();
+            PumpedDispatcher.PumpUntilDrained(host.Sidebar.FilterCompletion);
+
+            AssertClearedOnce(host, before);
+            Assert.Same(host.FilterField, Keyboard.FocusedElement);
+        }
+    });
+
+    /// <summary>
+    /// R-3 (spec review round 22): the field emptied by the user — select-all
+    /// (Ctrl+A's command) and Delete through the focused field's own key
+    /// route — is the third clear route, witnessed like Escape and the
+    /// button: with a typed query narrowing a whitespace tag's scope, and
+    /// with a typed filter alone, the text and the scope reset together in
+    /// one change, the results go, the status says "Filter cleared.", and
+    /// the one thing posted is core's typed SidebarFilterCleared.
+    /// </summary>
+    [Fact]
+    public void EmptyingTheField_ClearsLikeEscape() => RunSta(() =>
+    {
+        using var host = new TreeHost(NewVaultWithSpacedTag("clear-emptied"));
+        host.Initialize();
+        foreach (Action<FilesSidebarViewModel> activate in new Action<FilesSidebarViewModel>[]
+        {
+            sidebar =>
+            {
+                sidebar.ActivateTag("two words");
+                sidebar.FilterText = "spaced";
+            },
+            sidebar => sidebar.FilterText = "alpha",
+        })
+        {
+            int before = ActivateFilter(host, activate);
+            Assert.True(host.FilterField.Focus());
+            ApplicationCommands.SelectAll.Execute(null, host.FilterField);
+            Assert.Equal(host.FilterField.Text.Length, host.FilterField.SelectionLength);
+
+            Assert.True(host.PressThrough(host.FilterField, Key.Delete), "Delete in the filter field went unhandled.");
+            PumpedDispatcher.PumpUntilDrained(host.Sidebar.FilterCompletion);
+
+            AssertClearedOnce(host, before);
+            Assert.Equal(string.Empty, host.FilterField.Text);
+        }
+    });
+
+    private string NewVaultWithSpacedTag(string label)
+    {
+        string root = NewVault(label);
+        File.WriteAllText(Path.Combine(root, "spaced.md"), "---\ntags: [\"two words\"]\n---\n\n# Spaced\n");
+        return root;
+    }
+
+    /// <summary>A whitespace tag's out-of-band scope, then a typed filter.</summary>
+    private static Action<FilesSidebarViewModel>[] Activations() =>
+    [
+        sidebar => sidebar.ActivateTag("two words"),
+        sidebar => sidebar.FilterText = "alpha",
+    ];
+
+    private static int ActivateFilter(TreeHost host, Action<FilesSidebarViewModel> activate)
+    {
+        activate(host.Sidebar);
+        PumpedDispatcher.PumpUntilDrained(host.Sidebar.FilterCompletion);
+        Assert.True(host.Sidebar.IsFilterActive);
+        Assert.NotEmpty(host.Sidebar.FilterResults);
+        return host.AnnouncementCount;
+    }
+
+    private static void AssertClearedOnce(TreeHost host, int before)
+    {
+        Assert.False(host.Sidebar.IsFilterActive);
+        Assert.Null(host.Sidebar.ScopeTag);
+        Assert.Equal(string.Empty, host.Sidebar.FilterText);
+        Assert.Empty(host.Sidebar.FilterResults);
+        Assert.Equal("Filter cleared.", host.Sidebar.Status);
+        A11yEvent[] spoken = [.. host.Announcements.Skip(before)];
+        Assert.DoesNotContain(spoken, announcement => announcement is A11yEvent.HostComposed);
+        Assert.IsType<A11yEvent.SidebarFilterCleared>(Assert.Single(spoken));
+        Assert.False(host.ClearButton.IsEnabled);
+    }
 
     /// <summary>
     /// R-3 (codex PR 2 round 4): with nothing filtering there is nothing to
@@ -893,6 +1064,33 @@ public sealed class SidebarTreeKeysTests : IDisposable
             target.RaiseEvent(args);
             PumpedDispatcher.Drain();
             return args.Handled;
+        }
+
+        /// <summary>The key through its whole route, as the input manager
+        /// delivers it: the tunnelling preview and — unless that was
+        /// handled — the bubbling KeyDown, which runs the focused control's
+        /// own key bindings (a text box's Delete).</summary>
+        public bool PressThrough(UIElement target, Key key)
+        {
+            PresentationSource source = PresentationSource.FromVisual(target)!;
+            var preview = new KeyEventArgs(Keyboard.PrimaryDevice, source, Environment.TickCount, key)
+            {
+                RoutedEvent = Keyboard.PreviewKeyDownEvent,
+            };
+            target.RaiseEvent(preview);
+            bool handled = preview.Handled;
+            if (!handled)
+            {
+                var down = new KeyEventArgs(Keyboard.PrimaryDevice, source, Environment.TickCount, key)
+                {
+                    RoutedEvent = Keyboard.KeyDownEvent,
+                };
+                target.RaiseEvent(down);
+                handled = down.Handled;
+            }
+
+            PumpedDispatcher.Drain();
+            return handled;
         }
 
         public void Dispose()

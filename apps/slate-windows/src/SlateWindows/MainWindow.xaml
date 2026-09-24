@@ -893,6 +893,7 @@
                                             Content="Clear"
                                             AutomationProperties.AutomationId="SidebarFilterClear"
                                             AutomationProperties.Name="Clear filter"
+                                            Click="SidebarFilterClear_Click"
                                             Command="{Binding ClearFilterCommand}" />
                                 </Grid>
                                 <StackPanel Orientation="Horizontal" Margin="0,6,0,6">

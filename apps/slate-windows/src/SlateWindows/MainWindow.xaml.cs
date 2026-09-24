@@ -1341,6 +1341,14 @@ public partial class MainWindow : Window
         }
     }
 
+    /// <summary>W7-7 (R-3, spec review round 21): the Clear filter button
+    /// disables itself once the filter is cleared, so its own invocation
+    /// hands the keys to the filter field — focus never stays on a disabled
+    /// control. Click is raised before the button's command runs, so the
+    /// field already has focus when the button turns disabled.</summary>
+    private void SidebarFilterClear_Click(object sender, RoutedEventArgs e) =>
+        _ = SidebarFilterTextBox.Focus();
+
     private void Tags_SelectedItemChanged(
         object sender,
         RoutedPropertyChangedEventArgs<object> e)

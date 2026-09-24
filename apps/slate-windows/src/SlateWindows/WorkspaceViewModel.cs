@@ -386,8 +386,8 @@ internal sealed partial class WorkspaceTabViewModel : BindableBase, IDisposable
                 OnPropertyChanged(nameof(DirtyMarker));
                 if (value)
                 {
-                    // An edited note is kept: the transient tab stops being
-                    // one the moment it is edited, saved later or not.
+                    // The first dirty transition ends a transient tab for
+                    // good: saved or undone back to clean later, it is kept.
                     IsTransient = false;
                 }
             }
@@ -396,11 +396,13 @@ internal sealed partial class WorkspaceTabViewModel : BindableBase, IDisposable
 
     public string DirtyMarker => IsDirty ? " •" : string.Empty;
 
-    /// <summary>W7-7 (R-2, codex PR 2 round 4): the group's transient tab —
-    /// VS Code's preview tab — which a Files selection shows its note in and
-    /// the next selection replaces while it stays clean. Editing the note, an
-    /// explicit open into the tab, or "open in a new tab" keeps it (the flag
-    /// clears); a restored tab is never transient.</summary>
+    /// <summary>W7-7 (R-2, codex PR 2 round 4; spec review round 21): the
+    /// group's transient tab — VS Code's preview tab — which a Files
+    /// selection shows its note in and the next selection replaces. The flag
+    /// clears permanently on the tab's first dirty transition (its own edit,
+    /// or a peer's unsaved state it takes on), on an explicit open into the
+    /// tab and on "open in a new tab"; nothing sets it again, and a restored
+    /// tab is never transient. The selection never reads IsDirty.</summary>
     public bool IsTransient
     {
         get => _isTransient;
@@ -549,6 +551,11 @@ internal sealed partial class WorkspaceTabViewModel : BindableBase, IDisposable
         _contentHash = source._contentHash;
         IsExternallyStale = source.IsExternallyStale;
         _isDirty = source._isDirty;
+        if (_isDirty)
+        {
+            IsTransient = false;
+        }
+
         _isMissingFromDisk = source._isMissingFromDisk;
         _status = source._status;
         AvalonDocumentBufferSession? sourceSession = source._editorSession;
@@ -590,6 +597,11 @@ internal sealed partial class WorkspaceTabViewModel : BindableBase, IDisposable
                 session.EndPeerUpdate();
                 _contentHash = source._contentHash;
                 _isDirty = source._isDirty;
+                if (_isDirty)
+                {
+                    IsTransient = false;
+                }
+
                 _isMissingFromDisk = source._isMissingFromDisk;
                 _status = source._status;
                 if (!_isDirty)

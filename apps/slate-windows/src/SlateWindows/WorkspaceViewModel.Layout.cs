@@ -130,15 +130,17 @@ internal sealed partial class WorkspaceViewModel
         }
     }
 
-    /// <summary>W7-7 (R-2, codex PR 2 round 4): a Files selection shows its
-    /// note in the group's ONE transient tab — VS Code's preview tab. A note
-    /// already open in the group is simply activated. Otherwise the clean
-    /// transient tab takes the note in place; a dirty one is never
-    /// replaced — it stops being transient and a new transient tab takes
-    /// the note; with none, a transient tab is created. No other tab is
-    /// ever replaced by a selection, so an explicitly opened tab survives
-    /// arrowing, and no tab is ever duplicated. Focus stays on the row and
-    /// the modal dirty-navigation gate never rises.</summary>
+    /// <summary>W7-7 (R-2, codex PR 2 round 4; spec review round 21): a
+    /// Files selection shows its note in the group's ONE transient tab —
+    /// VS Code's preview tab. A note already open in the group, in any
+    /// tab, is simply activated. Otherwise the transient tab takes the note
+    /// in place, or, with none, a transient tab is created. A tab stops
+    /// being transient for good on its first dirty transition (see
+    /// <see cref="WorkspaceTabViewModel.IsTransient"/>), so an edited note
+    /// — saved or undone since, or not — is never replaced, and no other
+    /// tab is ever replaced by a selection: an explicitly opened tab
+    /// survives arrowing. Focus stays on the row and the modal
+    /// dirty-navigation gate never rises.</summary>
     private bool ShowSelectionInTransientTab(WorkspaceItemState item)
     {
         WorkspaceGroupViewModel group = ActiveGroup;
@@ -151,7 +153,7 @@ internal sealed partial class WorkspaceViewModel
         }
 
         WorkspaceTabViewModel? transient = group.Tabs.FirstOrDefault(tab => tab.IsTransient);
-        if (transient is { IsDirty: false })
+        if (transient is not null)
         {
             ReplaceTabItem(transient, item);
             group.ActiveTab = transient;
@@ -159,12 +161,10 @@ internal sealed partial class WorkspaceViewModel
             return true;
         }
 
-        if (transient is not null)
-        {
-            transient.IsTransient = false;
-        }
-
-        AddTab(group, item, activate: true).IsTransient = true;
+        WorkspaceTabViewModel created = AddTab(group, item, activate: true);
+        // A tab that opens onto another pane's unsaved document is born
+        // dirty, and a dirty tab is never transient.
+        created.IsTransient = !created.IsDirty;
         return true;
     }
 
@@ -195,9 +195,10 @@ internal sealed partial class WorkspaceViewModel
                 {
                     // W7-7 (R-2, codex PR 2 round 4): "open in a new tab" gives
                     // the note a tab of its own that later selections never
-                    // replace — the transient tab showing it is kept as that
-                    // tab, not duplicated (two editors on one document would
-                    // collide with the save and conflict model).
+                    // replace — the transient tab showing it becomes that tab;
+                    // a permanent tab showing it is simply activated
+                    // (DuplicateActiveTab is the deliberate route to a second
+                    // tab of one note).
                     existing.IsTransient = false;
                 }
 
