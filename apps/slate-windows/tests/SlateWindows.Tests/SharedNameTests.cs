@@ -90,6 +90,132 @@ public sealed class SharedNameTests
             names.Order(StringComparer.Ordinal)));
     });
 
+    /// <summary>The spec review, rounds 21-23: Quick Open speaks a row by
+    /// core's DISPLAY name — the extension stripped — so note.md and
+    /// note.markdown in two folders both read "note". Namesakes are found
+    /// over that final label, never the raw file name, and each adds the
+    /// path its row shows; a label no sibling shares reads bare.</summary>
+    [Fact]
+    public void QuickOpenRowsSharingADisplayNameReadTheirVisiblePath() => RunSta(() =>
+    {
+        using FixtureVault fixture = FixtureVault.Create(0, "quick-open-namesakes");
+        using VaultSession session = VaultSession.OpenFilesystem(fixture.Root);
+        using QuickSwitcherViewModel quick = OpenQuickSwitcher(
+            session,
+            fixture.Root,
+            new SwitcherFile("A/note.md", "note.md"),
+            new SwitcherFile("B/note.markdown", "note.markdown"),
+            new SwitcherFile("C/other.md", "other.md"));
+        // The premise: two raw names, ONE spoken label.
+        Assert.Equal(
+            ["note", "note", "other"],
+            quick.Results.Select(row => row.DisplayName).Order(StringComparer.Ordinal));
+        Assert.Equal(
+            ["note.markdown", "note.md", "other.md"],
+            quick.Results.Select(row => row.Name).Order(StringComparer.Ordinal));
+        HostedNames("QuickSwitcherResults", quick, names => Assert.Equal(
+            ["note, A/note.md", "note, B/note.markdown", "other"],
+            names.Order(StringComparer.Ordinal)));
+    });
+
+    /// <summary>...and rows whose labels differ read bare, whatever their
+    /// folders: the path tells namesakes apart, it is not a
+    /// decoration.</summary>
+    [Fact]
+    public void QuickOpenRowsWithLabelsOfTheirOwnReadBare() => RunSta(() =>
+    {
+        using FixtureVault fixture = FixtureVault.Create(0, "quick-open-distinct");
+        using VaultSession session = VaultSession.OpenFilesystem(fixture.Root);
+        using QuickSwitcherViewModel quick = OpenQuickSwitcher(
+            session,
+            fixture.Root,
+            new SwitcherFile("A/alpha.md", "alpha.md"),
+            new SwitcherFile("A/deep/beta.md", "beta.md"));
+        HostedNames("QuickSwitcherResults", quick, names => Assert.Equal(
+            ["alpha", "beta"],
+            names.Order(StringComparer.Ordinal)));
+    });
+
+    private static QuickSwitcherViewModel OpenQuickSwitcher(
+        VaultSession session, string root, params SwitcherFile[] files)
+    {
+        var quick = new QuickSwitcherViewModel(
+            session,
+            root,
+            _ => { },
+            files,
+            Path.Combine(root, "device-state"),
+            debounceRanking: false);
+        quick.Open();
+        Assert.Equal(files.Length, quick.Results.Count);
+        return quick;
+    }
+
+    /// <summary>The spec review, round 21: two tabs of one title read their
+    /// folders; two tabs of one FILE (Duplicate Tab) share the folder too,
+    /// so they read their places — and every state a tab can be in
+    /// (unsaved, missing from disk, both) is spoken over the tab's own
+    /// told-apart name.</summary>
+    [Fact]
+    public void WorkspaceTabsSharingATitleReadTheirFolderElseTheirPlaceInEveryState() => RunSta(() =>
+    {
+        using FixtureVault fixture = FixtureVault.Create(0, "shared-tab-titles");
+        foreach (string path in new[] { "A/note.md", "B/note.md" })
+        {
+            string full = Path.Combine(fixture.Root, path.Replace('/', Path.DirectorySeparatorChar));
+            Directory.CreateDirectory(Path.GetDirectoryName(full)!);
+            File.WriteAllText(full, "plain body\n");
+        }
+        using VaultSession session = VaultSession.OpenFilesystem(fixture.Root);
+        using (var cancel = new CancelToken())
+        {
+            session.ScanInitial(cancel);
+        }
+        using var workspace = new WorkspaceViewModel(
+            session, fixture.Root, () => [], _ => { }, startInteractionBackgroundWork: false);
+        workspace.OpenPath("A/note.md");
+        workspace.OpenPath("B/note.md", WorkspaceOpenTarget.NewTab);
+        ((System.Windows.Input.ICommand)workspace.DuplicateTabCommand).Execute(null);
+        WorkspaceTabViewModel[] tabs = [.. workspace.ActiveGroup.Tabs];
+        Assert.Equal(["A/note.md", "B/note.md", "B/note.md"], tabs.Select(tab => tab.Path));
+        // A tab is titled by its display name, the extension stripped.
+        Assert.All(tabs, tab => Assert.Equal("note", tab.Title));
+
+        (ItemsControl host, _) = ItemContainerNameBindingTests.AuthoredHost("WorkspaceTabs");
+        host.ItemsSource = workspace.ActiveGroup.Tabs;
+        string[] told = ["note, A", "note, tab 2", "note, tab 3"];
+        static string Stated(string name, WorkspaceTabViewModel tab) => (tab.IsDirty, tab.IsMissingFromDisk) switch
+        {
+            (false, false) => name,
+            (true, false) => $"{name}, unsaved changes",
+            (false, true) => $"{name}, missing from disk",
+            (true, true) => $"{name}, missing from disk, unsaved changes",
+        };
+        ItemContainerNameBindingTests.Hosted(host, () =>
+        {
+            void Expect(string state)
+            {
+                string[] expected = [.. tabs.Select((tab, index) => Stated(told[index], tab))];
+                string[] read = ItemContainerNameBindingTests.ItemNames(host);
+                Assert.True(
+                    expected.SequenceEqual(read),
+                    $"{state}: expected [{string.Join(" | ", expected)}], read [{string.Join(" | ", read)}]");
+            }
+
+            Assert.All(tabs, tab => Assert.False(tab.IsDirty || tab.IsMissingFromDisk));
+            Expect("at rest");
+            tabs[0].Text = "edited body\n";
+            Assert.True(tabs[0].IsDirty);
+            Expect("the first unsaved");
+            tabs[1].InvalidatePath();
+            Assert.True(tabs[1].IsMissingFromDisk);
+            Expect("the second missing");
+            tabs[0].InvalidatePath();
+            Assert.True(tabs[0].IsDirty && tabs[0].IsMissingFromDisk);
+            Expect("the first unsaved and missing");
+        });
+    });
+
     /// <summary>Add section takes one saved query twice: each section reads
     /// its place, and follows it through a move and a removal.</summary>
     [Fact]
