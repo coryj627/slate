@@ -222,7 +222,6 @@ internal sealed class QuickSwitcherViewModel : BindableBase, IDisposable
 
     public void ApplyFileChange(FileChangeEvent change)
     {
-        _replacementJournal?.Add(change);
         _files = Applied(_files, change);
         if (IsOpen)
         {
@@ -270,47 +269,31 @@ internal sealed class QuickSwitcherViewModel : BindableBase, IDisposable
     }
 
     /// <summary>
-    /// W7-7 PR 7 (#1252, R-9): a rescan replaces the whole list with the
-    /// index's openable documents (the same paged <c>ListFiles</c> read the
-    /// open does), so a file created or deleted outside Slate is found — or
-    /// gone — after one Refresh. An open switcher re-ranks at once.
+    /// W7-7 PR 7 (#1252, R-9, round 25): a rescan page's changes, in page
+    /// order, in one pass — the funnel's per-event
+    /// <see cref="ApplyFileChange"/> batched, and the rescan's ONLY path into
+    /// Quick Open: a list reloaded in keyset pages could overwrite a newer
+    /// Slate-owned event with a stale page. An open switcher re-ranks once.
     /// </summary>
-    /// <remarks>
-    /// The list is read on the session-load worker, so a Slate-owned write
-    /// whose own event this switcher applied AFTER that read would be undone
-    /// by it (round 24). The rescan opens a journal before its scan
-    /// (<see cref="BeginReplacementJournal"/>): every change applied since
-    /// is replayed over the replacement, in order — each is idempotent, so
-    /// one the read already reflects changes nothing, and each path ends
-    /// where its latest event put it.
-    /// </remarks>
-    public void ReplaceFiles(IEnumerable<SwitcherFile> files)
+    public void ApplyFileChanges(IReadOnlyCollection<FileChangeEvent> changes)
     {
-        SwitcherFile[] replaced = [.. files];
-        foreach (FileChangeEvent change in _replacementJournal ?? [])
+        if (changes.Count == 0)
         {
-            replaced = Applied(replaced, change);
+            return;
         }
 
-        _replacementJournal = null;
-        _files = replaced;
+        SwitcherFile[] files = _files;
+        foreach (FileChangeEvent change in changes)
+        {
+            files = Applied(files, change);
+        }
+
+        _files = files;
         if (IsOpen)
         {
             ScheduleRefresh();
         }
     }
-
-    /// <summary>Journal every change applied from now until the next
-    /// <see cref="ReplaceFiles"/> — a rescan opens it before its scan, so
-    /// its replacement is re-based on the Slate-owned writes handled while
-    /// it ran.</summary>
-    internal void BeginReplacementJournal() => _replacementJournal = [];
-
-    /// <summary>Drop the journal of a rescan that ended without replacing
-    /// the list (cancelled, or its scan threw).</summary>
-    internal void EndReplacementJournal() => _replacementJournal = null;
-
-    private List<FileChangeEvent>? _replacementJournal;
 
     /// <summary>The paths Quick Open ranks over — for the rescan facts.</summary>
     internal IReadOnlyList<string> FilePathsForTests => [.. _files.Select(file => file.Path)];

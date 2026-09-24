@@ -63,6 +63,7 @@ internal sealed partial class VaultLifecycleViewModel
     // W7-7 PR 7 (R-9): the rescan's clock, its delta channel and page size.
     private readonly Func<DateTimeOffset> _scanClock;
     private readonly Func<VaultSession, IScanDeltaChannel> _scanDeltaChannel;
+    private readonly Func<Func<RescanReport>, Task<RescanReport>> _runRescan;
     private readonly uint _scanDeltaPageLimit;
 
     /// <summary>
@@ -157,7 +158,8 @@ internal sealed partial class VaultLifecycleViewModel
         TimeSpan? syncMarkerDebounce = null,
         Action<RenderedAnnouncement>? announceRendered = null,
         Func<VaultSession, IScanDeltaChannel>? scanDeltaChannel = null,
-        uint scanDeltaPageLimit = DefaultScanDeltaPageLimit)
+        uint scanDeltaPageLimit = DefaultScanDeltaPageLimit,
+        Func<Func<RescanReport>, Task<RescanReport>>? rescanWorker = null)
     {
         _pickVault = pickVault;
         _enqueueUi = enqueueUi;
@@ -182,6 +184,7 @@ internal sealed partial class VaultLifecycleViewModel
         _scanClock = scanClock ?? (() => DateTimeOffset.UtcNow);
         _scanDeltaChannel = scanDeltaChannel ?? (session => new SessionScanDeltaChannel(session));
         _scanDeltaPageLimit = scanDeltaPageLimit;
+        _runRescan = rescanWorker ?? (work => Task.Run(work));
         _filterUiContext = filterUiContext;
         SynchronizationContext? currentUiContext = SynchronizationContext.Current;
         _lifecycleDispatcher = currentUiContext is DispatcherSynchronizationContext
@@ -744,6 +747,14 @@ internal sealed partial class VaultLifecycleViewModel
     {
         if (generation == _generation)
         {
+            // W7-7 PR 7 (round 25): this event reconciles its path(s); a
+            // rescan's page read before it must not undo that.
+            NoteSlateOwnedChange(@event.Path);
+            if (@event.PreviousPath is string movedFrom)
+            {
+                NoteSlateOwnedChange(movedFrom);
+            }
+
             if (@event.Kind == FileChangeKind.Renamed
                 && @event.PreviousPath is string previousPath)
             {
