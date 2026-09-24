@@ -1307,9 +1307,9 @@ impl VaultSession {
         &self,
         cancel: Arc<CancelToken>,
         listener: Arc<dyn ScanProgressListener>,
-    ) -> Result<RescanReport, VaultError> {
+    ) -> Result<ScanReport, VaultError> {
         let adapter: Arc<dyn core::ScanProgressListener> =
-            Arc::new(RescanProgressListenerAdapter { foreign: listener });
+            Arc::new(ScanProgressListenerAdapter { foreign: listener });
         let report = self
             .inner
             .rescan_with_progress(&cancel.inner, Some(adapter))?;
@@ -1317,7 +1317,7 @@ impl VaultSession {
     }
 
     /// The listener-less rescan (a foreground rescan shows no progress).
-    pub fn rescan(&self, cancel: Arc<CancelToken>) -> Result<RescanReport, VaultError> {
+    pub fn rescan(&self, cancel: Arc<CancelToken>) -> Result<ScanReport, VaultError> {
         Ok(self.inner.rescan_with_progress(&cancel.inner, None)?.into())
     }
 
@@ -3636,27 +3636,6 @@ struct ScanProgressListenerAdapter {
 
 impl core::ScanProgressListener for ScanProgressListenerAdapter {
     fn on_progress(&self, event: core::ScanProgress) {
-        self.foreign.on_progress(event.into());
-    }
-}
-
-/// A RESCAN's progress bridge (W7-7 PR 7, round 25): the stream the open
-/// scan uses, except that its `Finished` report carries at most
-/// [`RESCAN_ERROR_SAMPLES`] error messages — a rescan's error list never
-/// crosses the FFI unbounded, on either of its two paths out.
-struct RescanProgressListenerAdapter {
-    foreign: Arc<dyn ScanProgressListener>,
-}
-
-impl core::ScanProgressListener for RescanProgressListenerAdapter {
-    fn on_progress(&self, event: core::ScanProgress) {
-        let event = match event {
-            core::ScanProgress::Finished { mut report } => {
-                report.errors.truncate(RESCAN_ERROR_SAMPLES);
-                core::ScanProgress::Finished { report }
-            }
-            other => other,
-        };
         self.foreign.on_progress(event.into());
     }
 }
@@ -6300,7 +6279,14 @@ impl From<core::Page<core::TaskWithLocation>> for TaskWithLocationPage {
     }
 }
 
-/// Summary of a scan operation.
+/// The most error messages a scan report carries across the FFI (W7-7
+/// PR 7, rounds 25-26; locked decision 05's memory-bounded rule): a
+/// degraded provider can fail every file of the vault, at open and on
+/// every rescan. The count crosses in full, the messages only as samples;
+/// core's log keeps the whole list.
+pub const SCAN_ERROR_SAMPLES: usize = 5;
+
+/// Summary of a scan operation — the open scan's and every rescan's.
 #[derive(uniffi::Record)]
 pub struct ScanReport {
     pub files_seen: u64,
@@ -6309,7 +6295,11 @@ pub struct ScanReport {
     pub files_indexed: u64,
     pub files_skipped: u64,
     pub bytes_processed: u64,
-    pub errors: Vec<String>,
+    /// Every error the scan recorded, counted (what
+    /// `VaultRescanIncomplete` speaks).
+    pub error_count: u64,
+    /// The first of them, never more than [`SCAN_ERROR_SAMPLES`].
+    pub error_samples: Vec<String>,
     /// New rows plus rows whose committed content hash differs (R-9).
     pub files_changed: u64,
     /// Rows removed because their files left the disk.
@@ -6327,62 +6317,26 @@ impl From<core::ScanReport> for ScanReport {
             files_indexed: r.files_indexed,
             files_skipped: r.files_skipped,
             bytes_processed: r.bytes_processed,
-            errors: r.errors,
-            files_changed: r.files_changed,
-            files_removed: r.files_removed,
-            complete: r.complete,
-            delta_generation: r.delta_generation,
-        }
-    }
-}
-
-/// The most error messages a rescan carries across the FFI (W7-7 PR 7,
-/// round 25; locked decision 05's memory-bounded rule). A degraded provider
-/// can fail every file of the vault on every rescan; the count and
-/// completeness cross in full, the messages only as samples, and core's
-/// log keeps the whole list.
-pub const RESCAN_ERROR_SAMPLES: usize = 5;
-
-/// A rescan's result across the FFI (W7-7 PR 7, R-9, round 25): the
-/// counts and completeness of [`ScanReport`] with the errors bounded —
-/// their exact count (what `VaultRescanIncomplete` speaks) and at most
-/// [`RESCAN_ERROR_SAMPLES`] sample messages.
-#[derive(Debug, Clone, PartialEq, Eq, uniffi::Record)]
-pub struct RescanReport {
-    pub files_seen: u64,
-    /// Files read and hashed this pass — a READ count, never copy.
-    pub files_indexed: u64,
-    pub files_skipped: u64,
-    pub bytes_processed: u64,
-    /// New rows plus rows whose committed content hash differs.
-    pub files_changed: u64,
-    /// Rows removed because their files left the disk.
-    pub files_removed: u64,
-    /// False when the walk was partial or any error was recorded.
-    pub complete: bool,
-    /// The retained delta generation the host reconciles.
-    pub delta_generation: Option<u64>,
-    /// Every error the rescan recorded, counted.
-    pub error_count: u64,
-    /// The first of them, never more than [`RESCAN_ERROR_SAMPLES`].
-    pub error_samples: Vec<String>,
-}
-
-impl From<core::ScanReport> for RescanReport {
-    fn from(r: core::ScanReport) -> Self {
-        Self {
-            files_seen: r.files_seen,
-            files_indexed: r.files_indexed,
-            files_skipped: r.files_skipped,
-            bytes_processed: r.bytes_processed,
-            files_changed: r.files_changed,
-            files_removed: r.files_removed,
-            complete: r.complete,
-            delta_generation: r.delta_generation,
             error_count: u64::try_from(r.errors.len()).unwrap_or(u64::MAX),
-            error_samples: r.errors.into_iter().take(RESCAN_ERROR_SAMPLES).collect(),
+            error_samples: r.errors.into_iter().take(SCAN_ERROR_SAMPLES).collect(),
+            files_changed: r.files_changed,
+            files_removed: r.files_removed,
+            complete: r.complete,
+            delta_generation: r.delta_generation,
         }
     }
+}
+
+/// The extensions of core's openable documents (W7-7 PR 7, round 26):
+/// the set `FileFilter::OpenableDocuments` lists and every delta row's
+/// `openable` flag classifies by, lowercase and without the dot. A host's
+/// own list is pinned equal to it.
+#[uniffi::export]
+pub fn openable_document_extensions() -> Vec<String> {
+    core::OPENABLE_DOCUMENT_EXTENSIONS
+        .iter()
+        .map(|extension| (*extension).to_string())
+        .collect()
 }
 
 /// What one delta entry did to its path (W7-7 PR 7, R-9). No `Renamed`:
@@ -6412,6 +6366,9 @@ pub struct ScanDeltaEntry {
     pub kind: ScanDeltaKind,
     pub path: String,
     pub superseded: bool,
+    /// Core's document classification (round 26): whether the path is
+    /// one of the openable documents Quick Open lists.
+    pub openable: bool,
 }
 
 /// A bounded, removal-first page of the Pending delta generation.
@@ -6433,6 +6390,7 @@ impl From<core::ScanDeltaPage> for ScanDeltaPage {
                     kind: e.kind.into(),
                     path: e.path,
                     superseded: e.superseded,
+                    openable: e.openable,
                 })
                 .collect(),
             next_cursor: p.next_cursor,
@@ -13243,18 +13201,32 @@ impl VaultSession {
 mod tests {
     use super::*;
 
-    /// W7-7 PR 7 (round 25; locked decision 05's memory-bounded rule): a
-    /// rescan over thousands of failing files crosses the FFI with the
-    /// EXACT error count and at most five sample messages, on both of its
-    /// paths out: the returned report and its progress stream's Finished
-    /// report.
+    /// W7-7 PR 7 (rounds 25-26; locked decision 05's memory-bounded rule):
+    /// thousands of failing files cross the FFI as the EXACT error count
+    /// and at most five sample messages — at the initial open scan and at a
+    /// rescan, on both paths out of each (the returned report and the
+    /// progress stream's Finished report).
     #[test]
-    fn a_rescan_carries_an_exact_error_count_and_at_most_five_samples_across_the_ffi() {
+    fn every_scan_carries_an_exact_error_count_and_at_most_five_samples_across_the_ffi() {
         struct Recorder(std::sync::Mutex<Vec<ScanProgress>>);
         impl ScanProgressListener for Recorder {
             fn on_progress(&self, event: ScanProgress) {
                 self.0.lock().unwrap().push(event);
             }
+        }
+        fn finished_samples(recorder: &Recorder) -> (u64, usize) {
+            recorder
+                .0
+                .lock()
+                .unwrap()
+                .iter()
+                .find_map(|event| match event {
+                    ScanProgress::Finished { report } => {
+                        Some((report.error_count, report.error_samples.len()))
+                    }
+                    _ => None,
+                })
+                .expect("a Finished event")
         }
         fn settle(session: &VaultSession) {
             let pending = session.scan_delta_pending().unwrap().expect("pending");
@@ -13280,11 +13252,19 @@ mod tests {
             }
             session.scan_delta_release().unwrap();
         }
+        fn write_failing(root: &std::path::Path, fill: u8, len: usize) {
+            for n in 0..FAILING {
+                std::fs::write(root.join(format!("big-{n:04}.md")), vec![fill; len]).unwrap();
+            }
+        }
 
         const FAILING: usize = 3000;
         let tmp = tempfile::tempdir().expect("tempdir");
         std::fs::write(tmp.path().join("ok.md"), "ok\n").unwrap();
-        // Every file past the refuse threshold is recorded as an error.
+        // Every file past the refuse threshold is recorded as an error; a
+        // refused file keeps its (mtime, size) row, so a later scan re-reads
+        // (and refuses) it only once it changes.
+        write_failing(tmp.path(), b'x', 64);
         let mut config = core::SessionConfig::new(tmp.path().join(".slate"));
         config.large_file_refuse_bytes = 32;
         let session = VaultSession {
@@ -13295,41 +13275,92 @@ mod tests {
             .expect("open vault"),
             _census: census_live::Marker::count(&census_live::SESSIONS),
         };
-        session.scan_initial(CancelToken::new()).unwrap();
-        for n in 0..FAILING {
-            std::fs::write(tmp.path().join(format!("big-{n:04}.md")), [b'x'; 64]).unwrap();
-        }
 
+        // The initial open scan.
+        let opened = Arc::new(Recorder(std::sync::Mutex::new(Vec::new())));
+        let report = session
+            .scan_initial_with_progress(CancelToken::new(), opened.clone())
+            .unwrap();
+        assert_eq!(report.error_count, FAILING as u64);
+        assert!(!report.complete);
+        assert_eq!(report.error_samples.len(), SCAN_ERROR_SAMPLES);
+        assert_eq!(
+            finished_samples(&opened),
+            (FAILING as u64, SCAN_ERROR_SAMPLES)
+        );
+
+        // A rescan, listener-less.
+        write_failing(tmp.path(), b'y', 65);
         let report = session.rescan(CancelToken::new()).unwrap();
         assert_eq!(report.error_count, FAILING as u64);
         assert!(!report.complete);
-        assert_eq!(report.error_samples.len(), RESCAN_ERROR_SAMPLES);
+        assert_eq!(report.error_samples.len(), SCAN_ERROR_SAMPLES);
         settle(&session);
-        // A refused file keeps its (mtime, size) row, so the next scan
-        // re-reads it only once it changes.
-        for n in 0..FAILING {
-            std::fs::write(tmp.path().join(format!("big-{n:04}.md")), [b'y'; 65]).unwrap();
-        }
 
-        let recorder = Arc::new(Recorder(std::sync::Mutex::new(Vec::new())));
+        // A rescan with progress.
+        write_failing(tmp.path(), b'z', 66);
+        let rescanned = Arc::new(Recorder(std::sync::Mutex::new(Vec::new())));
         let report = session
-            .rescan_with_progress(CancelToken::new(), recorder.clone())
+            .rescan_with_progress(CancelToken::new(), rescanned.clone())
             .unwrap();
         assert_eq!(report.error_count, FAILING as u64);
-        assert_eq!(report.error_samples.len(), RESCAN_ERROR_SAMPLES);
-        let events = recorder.0.lock().unwrap();
-        let finished = events
-            .iter()
-            .find_map(|event| match event {
-                ScanProgress::Finished { report } => Some(report),
-                _ => None,
-            })
-            .expect("a Finished event");
-        assert!(
-            finished.errors.len() <= RESCAN_ERROR_SAMPLES,
-            "the progress stream carried {} error messages",
-            finished.errors.len()
+        assert_eq!(report.error_samples.len(), SCAN_ERROR_SAMPLES);
+        assert_eq!(
+            finished_samples(&rescanned),
+            (FAILING as u64, SCAN_ERROR_SAMPLES)
         );
+    }
+
+    /// Round 26: core exports its openable set, and a delta row carries the
+    /// classification that set implies — for the four Markdown extensions,
+    /// canvas and base (any case), and not for anything else.
+    #[test]
+    fn the_openable_set_and_the_delta_rows_classification_agree() {
+        assert_eq!(
+            openable_document_extensions(),
+            ["md", "markdown", "mdown", "mkd", "canvas", "base"]
+        );
+        let tmp = tempfile::tempdir().expect("tempdir");
+        let session = VaultSession::open_filesystem(tmp.path().to_string_lossy().into_owned())
+            .expect("open vault");
+        session.scan_initial(CancelToken::new()).unwrap();
+        let files = [
+            ("a.md", true),
+            ("b.markdown", true),
+            ("c.mdown", true),
+            ("d.mkd", true),
+            ("e.canvas", true),
+            ("f.base", true),
+            ("G.MKD", true),
+            ("h.txt", false),
+            ("i.png", false),
+        ];
+        for (path, _) in files {
+            std::fs::write(tmp.path().join(path), "x\n").unwrap();
+        }
+        let generation = session
+            .rescan(CancelToken::new())
+            .unwrap()
+            .delta_generation
+            .unwrap();
+        let page = session
+            .scan_delta_page(
+                generation,
+                Paging {
+                    cursor: None,
+                    limit: 100,
+                },
+                CancelToken::new(),
+            )
+            .unwrap();
+        for (path, openable) in files {
+            let entry = page
+                .entries
+                .iter()
+                .find(|entry| entry.path == path)
+                .unwrap_or_else(|| panic!("{path} is not in the delta"));
+            assert_eq!(entry.openable, openable, "{path}");
+        }
     }
 
     #[test]

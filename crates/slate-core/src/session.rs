@@ -265,6 +265,25 @@ pub enum FileFilter {
     OpenableDocuments,
 }
 
+/// The extensions of the openable-document set
+/// ([`FileFilter::OpenableDocuments`]: the four Markdown extensions
+/// `is_markdown` recognizes plus `.canvas` and `.base`), lowercase and
+/// without the dot. Exported so hosts classify exactly as core does
+/// (W7-7 PR 7, round 26).
+pub const OPENABLE_DOCUMENT_EXTENSIONS: &[&str] =
+    &["md", "markdown", "mdown", "mkd", "canvas", "base"];
+
+/// Whether `path` names an openable document — the classification
+/// [`FileFilter::OpenableDocuments`] applies to indexed rows, from the
+/// path alone (its extension, case-folded), so a removed path classifies
+/// the same as a present one.
+pub fn is_openable_document(path: &str) -> bool {
+    let (_, extension, _) = classify_path(path);
+    extension
+        .as_deref()
+        .is_some_and(|extension| OPENABLE_DOCUMENT_EXTENSIONS.contains(&extension))
+}
+
 // --- Summary type ---
 
 /// Light-weight per-file row returned by `list_files`. The full per-file
@@ -2913,16 +2932,7 @@ impl VaultSession {
         cancel: &CancelToken,
         listener: Option<Arc<dyn ScanProgressListener>>,
     ) -> Result<ScanReport, VaultError> {
-        let report = self.scan_session(cancel, listener, ScanMode::Rescan)?;
-        // Round 25: hosts receive a count and a few samples; the whole
-        // list stays here.
-        if !report.errors.is_empty() {
-            log::warn!("rescan recorded {} errors", report.errors.len());
-            for error in &report.errors {
-                log::debug!("rescan error: {error}");
-            }
-        }
-        Ok(report)
+        self.scan_session(cancel, listener, ScanMode::Rescan)
     }
 
     /// The Pending delta generation and the cursor its effects have
@@ -3065,6 +3075,14 @@ impl VaultSession {
             &mut graph_sink,
             capture,
         )?;
+        // W7-7 PR 7 (rounds 25-26): hosts receive the error count and a
+        // few samples across the FFI; the whole list stays in this log.
+        if !report.errors.is_empty() {
+            log::warn!("scan recorded {} errors", report.errors.len());
+            for error in &report.errors {
+                log::debug!("scan error: {error}");
+            }
+        }
         self.graph_apply(graph_sink);
         self.bump_bases_generation();
         // Re-attach op logs to live files and surface deleted-file
