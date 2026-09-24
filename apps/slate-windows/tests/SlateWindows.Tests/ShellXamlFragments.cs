@@ -35,7 +35,7 @@ internal static class ShellXamlFragments
         XElement root = Root("Grid", authored);
         XElement host = Prepare(authored);
         var resources = new XElement(Presentation + "Grid.Resources");
-        foreach (XElement resource in ResourcesFor(host, file))
+        foreach (XElement resource in ResourcesFor(host, file, authored))
         {
             resources.Add(resource);
         }
@@ -50,7 +50,7 @@ internal static class ShellXamlFragments
         XElement root = Root("ResourceDictionary", authored);
         XElement style = Prepare(authored);
         style.SetAttributeValue(Xaml + "Key", "__pinned");
-        foreach (XElement resource in ResourcesFor(style, file))
+        foreach (XElement resource in ResourcesFor(style, file, authored))
         {
             root.Add(resource);
         }
@@ -108,7 +108,7 @@ internal static class ShellXamlFragments
     /// <paramref name="fragment"/> names, each after those it names: a
     /// StaticResource resolves while the markup loads, so a resource must
     /// precede its users.</summary>
-    private static List<XElement> ResourcesFor(XElement fragment, string user)
+    private static List<XElement> ResourcesFor(XElement fragment, string user, XElement authored)
     {
         var ordered = new List<XElement>();
         var placed = new HashSet<string>(StringComparer.Ordinal);
@@ -118,7 +118,7 @@ internal static class ShellXamlFragments
             {
                 if (placed.Add(key))
                 {
-                    XElement resource = Prepare(Declared(key, user));
+                    XElement resource = Prepare(Declared(key, user, authored));
                     Visit(resource);
                     ordered.Add(resource);
                 }
@@ -133,10 +133,23 @@ internal static class ShellXamlFragments
             .Select(match => match.Groups[1].Value)
             .Distinct(StringComparer.Ordinal);
 
-    private static XElement Declared(string key, string user) =>
-        TemplatesDocument().Root!.Elements()
+    private static XElement Declared(string key, string user, XElement? authored = null) =>
+        ScopedResource(key, authored)
+        ?? TemplatesDocument().Root!.Elements()
             .FirstOrDefault(element => (string?)element.Attribute(Xaml + "Key") == key)
-        ?? throw new Xunit.Sdk.XunitException($"{user}: {key} is not declared in WorkspaceTemplates.xaml");
+        ?? throw new Xunit.Sdk.XunitException(
+            $"{user}: {key} is declared neither around the fragment nor in WorkspaceTemplates.xaml");
+
+    /// <summary>A resource an ancestor of the authored fragment declares in
+    /// its own dictionary (<c>&lt;Border.Resources&gt;</c>), nearest first —
+    /// where a StaticResource looks before the application's.</summary>
+    private static XElement? ScopedResource(string key, XElement? authored) =>
+        authored?.Ancestors()
+            .SelectMany(ancestor => ancestor.Elements()
+                .Where(child => child.Name.LocalName.EndsWith(".Resources", StringComparison.Ordinal)))
+            .SelectMany(resources => resources.Elements()
+                .SelectMany(entry => entry.Name.LocalName == "ResourceDictionary" ? entry.Elements() : [entry]))
+            .FirstOrDefault(entry => (string?)entry.Attribute(Xaml + "Key") == key);
 
     private static XDocument TemplatesDocument() =>
         XDocument.Load(Path.Combine(SourceText.ShellSourceRoot(), "WorkspaceTemplates.xaml"));
