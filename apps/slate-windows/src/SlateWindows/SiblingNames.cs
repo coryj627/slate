@@ -6,9 +6,11 @@ using System.Collections.Specialized;
 using System.ComponentModel;
 using System.Globalization;
 using System.Reflection;
+using System.Runtime.CompilerServices;
 using System.Windows;
 using System.Windows.Automation;
 using System.Windows.Controls;
+using System.Windows.Controls.Primitives;
 using System.Windows.Data;
 
 namespace SlateWindows;
@@ -211,17 +213,32 @@ internal static class SiblingNames
     /// <summary>One host's names: recomputed when its items or their names
     /// change, and pushed to its realized containers (their binding re-reads
     /// through <see cref="Converter"/>); a container realized later reads
-    /// them when its binding first evaluates.</summary>
+    /// them when its binding first evaluates, and a container a recycling
+    /// panel hands to another item reads again once that pass ends.</summary>
     private sealed class Scope
     {
         private readonly ItemsControl _host;
         private readonly HashSet<INotifyPropertyChanged> _observed = new(ReferenceEqualityComparer.Instance);
+        private readonly ConditionalWeakTable<DependencyObject, object?> _known = new();
+        private readonly List<WeakReference<DependencyObject>> _readers = [];
         private string[]? _names;
 
         internal Scope(ItemsControl host)
         {
             _host = host;
             ((INotifyCollectionChanged)host.Items).CollectionChanged += (_, _) => Invalidate();
+            // A recycling panel (the Files tree, the filter results) re-links
+            // a container to another item without re-applying its style, and
+            // the name binding's source is the container itself, which never
+            // changes: every container that has read a name reads again once
+            // the generation pass completes, at its new place.
+            host.ItemContainerGenerator.StatusChanged += (_, _) =>
+            {
+                if (_host.ItemContainerGenerator.Status == GeneratorStatus.ContainersGenerated)
+                {
+                    RefreshReaders();
+                }
+            };
         }
 
         internal void Invalidate()
@@ -239,8 +256,31 @@ internal static class SiblingNames
             }
         }
 
+        /// <summary>Every container that has read a name reads again — by
+        /// container, never by item: two equal items are two
+        /// containers.</summary>
+        private void RefreshReaders()
+        {
+            for (int index = _readers.Count - 1; index >= 0; index--)
+            {
+                if (_readers[index].TryGetTarget(out DependencyObject? container))
+                {
+                    BindingOperations.GetBindingExpression(container, AutomationProperties.NameProperty)?.UpdateTarget();
+                }
+                else
+                {
+                    _readers.RemoveAt(index);
+                }
+            }
+        }
+
         internal string? NameFor(DependencyObject container)
         {
+            if (!_known.TryGetValue(container, out _))
+            {
+                _known.Add(container, null);
+                _readers.Add(new WeakReference<DependencyObject>(container));
+            }
             int index = _host.ItemContainerGenerator.IndexFromContainer(container);
             if (index < 0)
             {

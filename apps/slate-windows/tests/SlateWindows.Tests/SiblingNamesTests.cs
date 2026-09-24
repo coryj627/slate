@@ -5,6 +5,7 @@ using System.Collections.ObjectModel;
 using System.Dynamic;
 using System.Runtime.ExceptionServices;
 using System.Windows;
+using System.Windows.Automation;
 using System.Windows.Automation.Peers;
 using System.Windows.Controls;
 
@@ -101,6 +102,64 @@ public sealed class SiblingNamesTests
         SiblingNames.SetNoun(warnings, "warning");
         warnings.ItemsSource = new[] { Row("Missing file", null), Row("Missing file", null) };
         Hosted(warnings, () => Assert.Equal(["Missing file, warning 1", "Missing file, warning 2"], Names(warnings)));
+    });
+
+    /// <summary>A RECYCLING list hands a container that scrolled away to
+    /// another item without re-applying its style, and the name binding's
+    /// source — the container itself — never changes: every reused
+    /// container must still read its new item's name. (The Files tree, the
+    /// filter results and the dual pane recycle.)</summary>
+    [Fact]
+    public void ARecyclingListNamesEachReusedContainerForItsNewItem() => RunSta(() =>
+    {
+        var items = new ObservableCollection<object>();
+        for (int index = 0; index < 300; index++)
+        {
+            items.Add(Row(index % 3 == 0 ? "shared.md" : $"note {index}.md", $"folder {index}"));
+        }
+        string[] expected = SiblingNames.Compose(
+            [.. items.Select(item => (string?)((IDictionary<string, object?>)item)["Name"])],
+            [.. items.Select(item => (string?)((IDictionary<string, object?>)item)["Path"])],
+            "item");
+        var host = new ListBox
+        {
+            ItemContainerStyle = SiblingNames.ContainerStyle(typeof(ListBoxItem)),
+            Height = 150,
+        };
+        VirtualizingPanel.SetIsVirtualizing(host, true);
+        VirtualizingPanel.SetVirtualizationMode(host, VirtualizationMode.Recycling);
+        SiblingNames.SetNamePath(host, "Name");
+        SiblingNames.SetDistinguisherPath(host, "Path");
+        host.ItemsSource = items;
+        Hosted(host, () =>
+        {
+            void Expect(string where)
+            {
+                host.UpdateLayout();
+                PumpedDispatcher.Drain();
+                int realized = 0;
+                for (int index = 0; index < items.Count; index++)
+                {
+                    if (host.ItemContainerGenerator.ContainerFromIndex(index) is ListBoxItem container)
+                    {
+                        realized++;
+                        string read = AutomationProperties.GetName(container);
+                        Assert.True(
+                            read == expected[index],
+                            $"{where}: row {index} reads \"{read}\", not \"{expected[index]}\"");
+                    }
+                }
+                Assert.True(realized is > 0 and < 100, $"{where}: {realized} rows realized — the list does not virtualize");
+            }
+
+            Expect("at the top");
+            host.ScrollIntoView(items[150]);
+            Expect("mid-way");
+            host.ScrollIntoView(items[^1]);
+            Expect("at the end");
+            host.ScrollIntoView(items[0]);
+            Expect("back at the top");
+        });
     });
 
     /// <summary>A tree scopes per level: each tree item names its own
