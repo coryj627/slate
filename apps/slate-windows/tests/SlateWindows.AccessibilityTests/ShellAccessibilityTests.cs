@@ -99,7 +99,11 @@ public sealed partial class ShellAccessibilityTests
             Path.Combine(vaultRoot, "note.md"),
             "---\ntags:\n  - accessibility\n---\n\n![[Folder/child]]\n\n[@doe]\n\n# Accessible note\n");
         Directory.CreateDirectory(Path.Combine(vaultRoot, "Folder"));
-        File.WriteAllText(Path.Combine(vaultRoot, "Folder", "child.md"), "# Child note\n");
+        // Two lines, so the embed preview's two-line read (W7-7 R-8) has a
+        // second line for Down to reach.
+        File.WriteAllText(
+            Path.Combine(vaultRoot, "Folder", "child.md"),
+            "# Child note\nSecond line of the child note.\n");
 
         Process? process = null;
         try
@@ -386,6 +390,50 @@ public sealed partial class ShellAccessibilityTests
                 popoverClose,
                 "Shift+Tab from Open source did not wrap to Close.");
             AssertAxeClean(process, "editor-embed-popover");
+
+            // ---- TODO(#1244): the preview's outcome announcement ----
+            // W7-7 PR 6 (#1251, R-8) posts EmbedPreviewShown when the
+            // result lands. Asserting that a screen reader RECEIVES it needs
+            // PR 1's desktop-scoped notification listener
+            // (ShellAccessibilityTests.Announcements.cs), which is not on
+            // this branch; PR 6 deliberately builds no listener of its own.
+            // Once PR 1 merges, assert here that the listener received
+            // "Embed preview for Folder/child. Embedded note: Folder/child.md."
+            // with ImportantMostRecent processing.
+
+            // W7-7 (#1251, R-8): the preview text is readable line by line.
+            // WPF disables caret navigation in a read-only TextBox that hides
+            // its caret, so Down scrolled the host and a reader heard line 1
+            // again. Reached by keyboard (Shift+Tab from Close), then the
+            // caret line must follow Down through the TextPattern.
+            AutomationElement embeddedContent = interactionPopover.FindFirstDescendant(
+                automation.ConditionFactory.ByName("Embedded content"))
+                ?? throw new Xunit.Sdk.XunitException(
+                    "The embed preview has no Embedded content text.");
+            Assert.Equal(ControlType.Edit, embeddedContent.ControlType);
+            Assert.True(
+                embeddedContent.Patterns.Text.IsSupported,
+                "The embedded content does not expose TextPattern.");
+            bool contentReached = false;
+            for (int press = 0; press < 5 && !contentReached; press++)
+            {
+                PressChord(VirtualKeyShort.SHIFT, VirtualKeyShort.TAB);
+                contentReached = SpinWait.SpinUntil(
+                    () => embeddedContent.Properties.HasKeyboardFocus.ValueOrDefault,
+                    TimeSpan.FromMilliseconds(500));
+            }
+            Assert.True(
+                contentReached,
+                "Shift+Tab from Close never reached the embedded content.");
+            Assert.Equal("# Child note", CaretLine(embeddedContent));
+            PressKey(VirtualKeyShort.DOWN);
+            string secondLine = string.Empty;
+            Assert.True(
+                SpinWait.SpinUntil(
+                    () => (secondLine = CaretLine(embeddedContent))
+                        == "Second line of the child note.",
+                    TimeSpan.FromSeconds(5)),
+                $"Down did not move the preview caret to the second line: '{secondLine}'.");
             popoverClose.Patterns.Invoke.Pattern.Invoke();
             Assert.True(
                 SpinWait.SpinUntil(
@@ -420,6 +468,12 @@ public sealed partial class ShellAccessibilityTests
                 citationClose,
                 "The citation popover did not focus its Close button.");
             AssertAxeClean(process, "editor-citation-popover");
+            // W7-7 (#1251, R-8): the popover's name is core's rendering of
+            // the same CitationPopoverShown event the activation posts.
+            Assert.Equal("Citation: doe", citationPopover.Name);
+            // TODO(#1244): with PR 1's desktop-scoped listener on this
+            // branch, assert here that Ctrl+Enter delivered "Citation: doe"
+            // (ImportantMostRecent). No listener is built in PR 6.
             Keyboard.Press(VirtualKeyShort.ESCAPE);
             Assert.True(
                 SpinWait.SpinUntil(
@@ -2899,6 +2953,9 @@ public sealed partial class ShellAccessibilityTests
             PressKey(VirtualKeyShort.RETURN);
             AutomationElement details = WaitForElement(
                 window, "CitationDetailsSheet", TimeSpan.FromSeconds(10));
+            // TODO(#1244): W7-7 R-8 (#1251) posts CitationDetailsShown here
+            // ("Citation expanded. {title}."); assert its delivery through
+            // PR 1's desktop-scoped listener once that is on this branch.
             // D-1: the sheet is inside THIS window's subtree. A Popup
             // would make it a sibling HWND and this lookup would miss.
             Assert.NotNull(window.FindFirstDescendant(
@@ -3127,6 +3184,11 @@ public sealed partial class ShellAccessibilityTests
             // ---- Ctrl+Shift+J: the summary sheet ------------------
             PressChord(VirtualKeyShort.SHIFT, VirtualKeyShort.CONTROL, VirtualKeyShort.KEY_J);
             WaitForElement(window, "CitationSummarySheet", TimeSpan.FromSeconds(10));
+            // TODO(#1244): W7-7 R-8 (#1251) posts CitationSummaryShown here
+            // ("Citation summary. N citations referencing M unique
+            // sources."). Asserting delivery needs PR 1's desktop-scoped
+            // notification listener, which is not on this branch; once it
+            // is, assert the line here (spec §7.5). No listener in PR 6.
             AssertAxeClean(process, "citation-summary-sheet");
             WaitForElement(window, "CitationSummaryDismiss", TimeSpan.FromSeconds(10))
                 .Patterns.Invoke.Pattern.Invoke();
@@ -11411,6 +11473,21 @@ public sealed partial class ShellAccessibilityTests
     {
         Keyboard.Type(key);
         Wait.UntilInputIsProcessed(TimeSpan.FromMilliseconds(250));
+    }
+
+    /// <summary>The line holding the caret, read through the element's own
+    /// TextPattern — what a screen reader re-reads after an arrow key
+    /// (W7-7 R-8's two-line read).</summary>
+    private static string CaretLine(AutomationElement element)
+    {
+        var selections = element.Patterns.Text.Pattern.GetSelection();
+        if (selections.Length == 0)
+        {
+            return string.Empty;
+        }
+        var line = selections[0].Clone();
+        line.ExpandToEnclosingUnit(TextUnit.Line);
+        return line.GetText(-1).Trim();
     }
     private static AutomationElement WaitForElement(
         Window window,

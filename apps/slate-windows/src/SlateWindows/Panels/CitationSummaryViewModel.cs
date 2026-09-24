@@ -53,10 +53,18 @@ internal sealed class CitationSummaryViewModel
     public string Body =>
         IsEmpty ? CitationPhrase.SummaryEmptyBody : CitationPhrase.SummaryLine(Total, Unique);
 
-    /// <summary>The sheet's container name — read on appear, so the
-    /// user hears the statistic without navigating to the body. The
-    /// sheet itself announces nothing (§2.6).</summary>
+    /// <summary>The sheet's container name, for a reader that asks where
+    /// it is. It is not what the user hears on open: the sheet opens on
+    /// its Walk/Done button, and a screen reader does not read a pane's
+    /// name when focus lands inside it — <see cref="SheetShown"/> speaks
+    /// the counts instead (W7-7 R-8, reversing §2.6's silent open).</summary>
     public string AutomationName => CitationPhrase.SummarySheetName(Body);
+
+    /// <summary>W7-7 R-8 (#1251): called by the workspace once the sheet
+    /// is shown, the AddPropertySheet shape; the counts are spoken in
+    /// core's sentence.</summary>
+    public void SheetShown() =>
+        _announce(new A11yEvent.CitationSummaryShown((uint)Total, (uint)Unique));
 
     public string WalkActionText => CitationPhrase.SummaryWalkAction;
 

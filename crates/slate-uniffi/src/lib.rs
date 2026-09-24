@@ -5595,7 +5595,9 @@ impl From<core::NestedEmbed> for NestedEmbed {
     }
 }
 
-#[derive(Debug, Clone, uniffi::Enum)]
+// PartialEq/Eq: the reason rides inside `A11yEvent` (W7-7, #1251),
+// which derives both.
+#[derive(Debug, Clone, PartialEq, Eq, uniffi::Enum)]
 pub enum EmbedUnresolvedReason {
     TargetNotFound {
         target: String,
@@ -5640,6 +5642,34 @@ impl From<core::EmbedUnresolvedReason> for EmbedUnresolvedReason {
             core::EmbedUnresolvedReason::ReadError { message } => {
                 EmbedUnresolvedReason::ReadError { message }
             }
+        }
+    }
+}
+
+/// The host hands a resolution's reason BACK to core when it announces
+/// an unavailable embed preview (W7-7, #1251: `A11yEvent::
+/// EmbedPreviewUnavailable`), so core renders the sentence from the
+/// reason rather than wrapping the host's card text.
+impl From<EmbedUnresolvedReason> for core::EmbedUnresolvedReason {
+    fn from(r: EmbedUnresolvedReason) -> Self {
+        match r {
+            EmbedUnresolvedReason::TargetNotFound { target } => Self::TargetNotFound { target },
+            EmbedUnresolvedReason::HeadingNotFound {
+                target_path,
+                heading,
+            } => Self::HeadingNotFound {
+                target_path,
+                heading,
+            },
+            EmbedUnresolvedReason::BlockNotFound {
+                target_path,
+                block_id,
+            } => Self::BlockNotFound {
+                target_path,
+                block_id,
+            },
+            EmbedUnresolvedReason::DepthLimitReached => Self::DepthLimitReached,
+            EmbedUnresolvedReason::ReadError { message } => Self::ReadError { message },
         }
     }
 }
@@ -8396,6 +8426,27 @@ pub enum A11yEvent {
     ShowingNote {
         display_name: String,
     },
+    CitationPopoverShown {
+        speech: String,
+    },
+    EmbedPreviewShown {
+        target: String,
+        title: String,
+    },
+    EmbedPreviewUnavailable {
+        target: String,
+        reason: EmbedUnresolvedReason,
+    },
+    CitationSummaryShown {
+        citations: u32,
+        sources: u32,
+    },
+    CitationDetailsShown {
+        title: String,
+    },
+    CitationDetailsUnresolved {
+        key: String,
+    },
     TaskToggleUnsaved {
         filename: String,
     },
@@ -8417,6 +8468,9 @@ pub enum A11yEvent {
     NoteSaveBlocked {
         filename: String,
         detail: String,
+    },
+    NoteSaveConflict {
+        filename: String,
     },
     RestoredVersionFrom {
         formatted_date: String,
@@ -10219,6 +10273,17 @@ impl From<A11yEvent> for core::a11y::A11yEvent {
             F::OpenedAtLine { filename, line } => C::OpenedAtLine { filename, line },
             F::OpenedFile { filename } => C::OpenedFile { filename },
             F::ShowingNote { display_name } => C::ShowingNote { display_name },
+            F::CitationPopoverShown { speech } => C::CitationPopoverShown { speech },
+            F::EmbedPreviewShown { target, title } => C::EmbedPreviewShown { target, title },
+            F::EmbedPreviewUnavailable { target, reason } => C::EmbedPreviewUnavailable {
+                target,
+                reason: reason.into(),
+            },
+            F::CitationSummaryShown { citations, sources } => {
+                C::CitationSummaryShown { citations, sources }
+            }
+            F::CitationDetailsShown { title } => C::CitationDetailsShown { title },
+            F::CitationDetailsUnresolved { key } => C::CitationDetailsUnresolved { key },
             F::TaskToggleUnsaved { filename } => C::TaskToggleUnsaved { filename },
             F::TaskToggleConflict { filename } => C::TaskToggleConflict { filename },
             F::TasksReviewShown { filter_name } => C::TasksReviewShown { filter_name },
@@ -10226,6 +10291,7 @@ impl From<A11yEvent> for core::a11y::A11yEvent {
             F::NoteSaved { filename } => C::NoteSaved { filename },
             F::SaveConflict { filename } => C::SaveConflict { filename },
             F::NoteSaveBlocked { filename, detail } => C::NoteSaveBlocked { filename, detail },
+            F::NoteSaveConflict { filename } => C::NoteSaveConflict { filename },
             F::RestoredVersionFrom { formatted_date } => C::RestoredVersionFrom { formatted_date },
             F::RestoredFile { filename } => C::RestoredFile { filename },
             F::RestoredFileAs {
@@ -10499,6 +10565,66 @@ impl From<A11yEvent> for core::a11y::A11yEvent {
 pub struct RenderedAnnouncement {
     pub text: String,
     pub priority: A11yPriority,
+}
+
+/// Core's detail for an error a host caught (W7-7, #1249): the text a
+/// host speaks or shows for it, rendered by `slate_core::a11y::
+/// vault_error_detail` — never the binding's own message, which is a
+/// field dump ("@message=…"; a write conflict's is two content hashes and
+/// a modification time). `Io` and `Db` were flattened at the boundary to
+/// the inner error's text, which is that detail verbatim.
+#[uniffi::export]
+pub fn vault_error_detail(error: VaultError) -> String {
+    use core::VaultError as C;
+    let error = match error {
+        VaultError::Io { message } | VaultError::Db { message } => return message,
+        VaultError::InvalidPath { path, reason } => C::InvalidPath { path, reason },
+        VaultError::Trash { message } => C::Trash { message },
+        VaultError::Cancelled => C::Cancelled,
+        VaultError::InvalidUtf8 { path } => C::InvalidUtf8 { path },
+        VaultError::FileTooLarge { path, size } => C::FileTooLarge { path, size },
+        VaultError::InvalidQuery { message } => C::InvalidQuery { message },
+        VaultError::Unsupported { feature } => C::Unsupported { feature },
+        VaultError::InvalidArgument { message } => C::InvalidArgument { message },
+        VaultError::TrashConfirmationChanged { message } => C::TrashConfirmationChanged { message },
+        VaultError::StructuralMutationIncomplete { path, message } => {
+            C::StructuralMutationIncomplete { path, message }
+        }
+        VaultError::DestinationExists { path } => C::DestinationExists { path },
+        VaultError::WriteConflict {
+            current_content_hash,
+            expected_content_hash,
+            current_mtime_ms,
+        } => C::WriteConflict {
+            current_content_hash,
+            expected_content_hash,
+            current_mtime_ms,
+        },
+        VaultError::SavedButUnindexed {
+            new_content_hash,
+            detail,
+        } => C::SavedButUnindexed {
+            new_content_hash,
+            detail,
+        },
+        VaultError::HistoryUnavailable { path, reason } => C::HistoryUnavailable { path, reason },
+        VaultError::MalformedFrontmatter { path, reason } => {
+            C::MalformedFrontmatter { path, reason }
+        }
+        VaultError::BibSourceUnreadable { path, reason } => C::BibSourceUnreadable { path, reason },
+        VaultError::CslStyleUnreadable { path, reason } => C::CslStyleUnreadable { path, reason },
+        VaultError::PrefsUnreadable { path, reason } => C::PrefsUnreadable { path, reason },
+    };
+    core::a11y::vault_error_detail(&error)
+}
+
+/// Core's detail for a save the host refused because its editor produced
+/// no verified snapshot of the text (W7-7, #1249), rendered by
+/// `slate_core::a11y::editor_integrity_detail` so the host words none of
+/// it: it passes this to `NoteSaveBlocked` instead of an exception's text.
+#[uniffi::export]
+pub fn editor_integrity_detail() -> String {
+    core::a11y::editor_integrity_detail()
 }
 
 /// Render an accessibility event to its canonical spoken form
@@ -13003,6 +13129,119 @@ mod tests {
         assert_eq!(properties[2].key, "tags");
         assert_eq!(properties[2].kind, "tag_list");
         assert_eq!(properties[2].value_json, "[\"one\",\"two\"]");
+    }
+
+    /// W7-7 (#1249): the error detail a host gets through the FFI is the
+    /// detail core renders for the same error, variant by variant — the
+    /// boundary's flattening and `vault_error_detail`'s re-mapping lose
+    /// nothing and mis-route nothing. A mapping that swapped two arms, or
+    /// passed a structured variant's field dump through, fails here.
+    #[test]
+    fn vault_error_detail_crosses_the_ffi_as_core_renders_it() {
+        fn witnesses() -> Vec<core::VaultError> {
+            type C = core::VaultError;
+            vec![
+                C::Io(std::io::Error::other("Access is denied. (os error 5)")),
+                C::Db(core::db::DbError::UnsupportedVersion {
+                    db_version: 9,
+                    runner_max: 8,
+                }),
+                C::InvalidPath {
+                    path: "../out.md".into(),
+                    reason: "escapes the vault".into(),
+                },
+                C::Trash {
+                    message: "refused".into(),
+                },
+                C::Cancelled,
+                C::InvalidUtf8 {
+                    path: "notes.md".into(),
+                },
+                C::FileTooLarge {
+                    path: "notes.md".into(),
+                    size: 7,
+                },
+                C::InvalidQuery {
+                    message: "bad query".into(),
+                },
+                C::Unsupported {
+                    feature: "Tag scope".into(),
+                },
+                C::InvalidArgument {
+                    message: "out of range".into(),
+                },
+                C::TrashConfirmationChanged {
+                    message: "changed".into(),
+                },
+                C::StructuralMutationIncomplete {
+                    path: "a.md".into(),
+                    message: "incomplete".into(),
+                },
+                C::DestinationExists {
+                    path: "notes.md".into(),
+                },
+                C::WriteConflict {
+                    current_content_hash: "a".repeat(64),
+                    expected_content_hash: "b".repeat(64),
+                    current_mtime_ms: 1_790_116_253_121,
+                },
+                C::SavedButUnindexed {
+                    new_content_hash: "c".repeat(64),
+                    detail: "locked.".into(),
+                },
+                C::HistoryUnavailable {
+                    path: "notes.md".into(),
+                    reason: "mismatch".into(),
+                },
+                C::MalformedFrontmatter {
+                    path: "notes.md".into(),
+                    reason: "bad yaml".into(),
+                },
+                C::BibSourceUnreadable {
+                    path: "library.bib".into(),
+                    reason: "missing".into(),
+                },
+                C::CslStyleUnreadable {
+                    path: "ieee.csl".into(),
+                    reason: "not xml".into(),
+                },
+                C::PrefsUnreadable {
+                    path: "prefs.json".into(),
+                    reason: "not json".into(),
+                },
+            ]
+        }
+        let mut seen = std::collections::BTreeSet::new();
+        for (crossed, direct) in witnesses().into_iter().zip(witnesses()) {
+            let variant: String = format!("{direct:?}")
+                .chars()
+                .take_while(char::is_ascii_alphanumeric)
+                .collect();
+            let expected = core::a11y::vault_error_detail(&direct);
+            assert_eq!(
+                vault_error_detail(VaultError::from(crossed)),
+                expected,
+                "{variant}"
+            );
+            assert!(!expected.contains('@'), "{variant}: {expected}");
+            seen.insert(variant);
+        }
+        assert_eq!(
+            seen.len(),
+            20,
+            "one witness per VaultError variant: {seen:?}"
+        );
+    }
+
+    /// W7-7 (#1249): the integrity detail a host gets through the FFI is
+    /// core's sentence, byte for byte.
+    #[test]
+    fn editor_integrity_detail_crosses_the_ffi_as_core_renders_it() {
+        assert_eq!(
+            editor_integrity_detail(),
+            core::a11y::editor_integrity_detail()
+        );
+        assert!(!editor_integrity_detail().trim().is_empty());
     }
 
     /// The mac corpus mirror must stay in lockstep with `corpus()`.

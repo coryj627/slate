@@ -35,6 +35,9 @@ internal enum EditorInteractionWorkerKind
     Math,
     Artifact,
     Citation,
+    /// <summary>The embed preview resolve (W7-7 R-8): a fault injected
+    /// here is the resolver throwing.</summary>
+    EmbedPreview,
 }
 
 internal sealed class EditorPreferencesViewModel : BindableBase, IDisposable
@@ -1302,12 +1305,24 @@ internal sealed class EditorInteractionCoordinator : BindableBase, IDisposable
             link));
         return true;
     }
+
     private sealed record EmbedPreviewContent(
         string Title,
         string Body,
         string? SourcePath,
         ImageSource? Image,
         EditorEmbedPreviewNode Root);
+
+    /// <summary>What one preview resolve produced (W7-7 R-8): a card to
+    /// show, or the reason there is none. Never neither — the reason is the
+    /// resolver's own, or, when the resolver threw, a ReadError carrying
+    /// the error's detail as core renders it.</summary>
+    private abstract record EmbedPreviewOutcome
+    {
+        internal sealed record Shown(EmbedPreviewContent Content) : EmbedPreviewOutcome;
+
+        internal sealed record Unavailable(EmbedUnresolvedReason Reason) : EmbedPreviewOutcome;
+    }
 
     private void ResolveEmbedPreview(
         int generation,
@@ -1319,20 +1334,41 @@ internal sealed class EditorInteractionCoordinator : BindableBase, IDisposable
         int sourceLine,
         OutgoingLink link)
     {
-        EmbedPreviewContent? content = null;
+        EmbedPreviewOutcome outcome;
         try
         {
+            if (_backgroundFaultForTests?.Invoke(
+                    EditorInteractionWorkerKind.EmbedPreview) is Exception injected)
+            {
+                throw injected;
+            }
             EmbedPreviewResolution preview = _session.ResolveEmbedPreview(
                 path,
                 ComposeAnchoredTarget(link),
                 link.DisplayText);
-            content = BuildEmbedPreview(preview.Resolution, preview.Truncated);
+            outcome = preview.Resolution is EmbedResolution.Unresolved unresolved
+                ? new EmbedPreviewOutcome.Unavailable(unresolved.Reason)
+                : new EmbedPreviewOutcome.Shown(
+                    BuildEmbedPreview(preview.Resolution, preview.Truncated));
+        }
+        catch (VaultException error)
+        {
+            // A resolver that throws (a corrupt or unavailable index fails
+            // core's first lookup) still has a reason, as on mac's preview
+            // (AppState.requestEmbedPreview): ReadError with the error's
+            // detail — core's rendering, never the binding's field dump.
+            outcome = new EmbedPreviewOutcome.Unavailable(
+                new EmbedUnresolvedReason.ReadError(SlateUniffiMethods.VaultErrorDetail(error)));
         }
         catch (Exception exception) when (
             exception is not OutOfMemoryException
                 and not StackOverflowException
                 and not AccessViolationException)
         {
+            // Anything else is not core's error to word: its own message
+            // is the detail, mac's localizedDescription arm.
+            outcome = new EmbedPreviewOutcome.Unavailable(
+                new EmbedUnresolvedReason.ReadError(exception.Message));
         }
 
         if (_dispatcher.HasShutdownStarted || _dispatcher.HasShutdownFinished)
@@ -1351,7 +1387,7 @@ internal sealed class EditorInteractionCoordinator : BindableBase, IDisposable
                 sessionGeneration,
                 sourceLine,
                 link.TargetRaw,
-                content)));
+                outcome)));
     }
 
     private void PublishEmbedPreview(
@@ -1363,7 +1399,7 @@ internal sealed class EditorInteractionCoordinator : BindableBase, IDisposable
         ulong sessionGeneration,
         int sourceLine,
         string targetRaw,
-        EmbedPreviewContent? content)
+        EmbedPreviewOutcome outcome)
     {
         if (_disposed
             || generation != _embedGeneration
@@ -1378,15 +1414,17 @@ internal sealed class EditorInteractionCoordinator : BindableBase, IDisposable
 
         _embedRequestKey = null;
         _activeEmbedRequestKey = requestKey;
-        if (content is null)
+        // W7-7 R-8 (#1251): the outcome is announced here, when the result
+        // lands — focus has sat on Close since the open, where the pane's
+        // name is not read, and announcing at open would have said
+        // "Loading". A superseded result returned above, unspoken.
+        if (outcome is EmbedPreviewOutcome.Unavailable { Reason: var reason })
         {
-            PopoverTitle = $"Embed preview unavailable — source line {sourceLine}";
-            PopoverBody = "The embedded content could not be resolved.";
-            PopoverAutomationName =
-                $"Embed preview for {targetRaw}, source line {sourceLine}, unavailable.";
-            PopoverImage = null;
-            PopoverEmbedRoot = null;
-            PopoverSourcePath = null;
+            PresentUnavailableEmbed(targetRaw, sourceLine, reason);
+            return;
+        }
+        if (outcome is not EmbedPreviewOutcome.Shown { Content: var content })
+        {
             return;
         }
 
@@ -1397,6 +1435,42 @@ internal sealed class EditorInteractionCoordinator : BindableBase, IDisposable
         PopoverImage = content.Image;
         PopoverEmbedRoot = content.Root;
         PopoverSourcePath = content.SourcePath;
+        _announce(new A11yEvent.EmbedPreviewShown(targetRaw, content.Title));
+    }
+
+    /// <summary>The whole unavailable outcome (W7-7 R-8): core words it
+    /// from the resolver's semantic reason, and the popover's body and
+    /// name ARE that rendering. The text a reader lands on, the name a
+    /// reader asks for and the announcement cannot drift apart, and none
+    /// of them is host copy — the card's Describe wording stays on the
+    /// embeds leaf and nested cards, off this surface.</summary>
+    private void PresentUnavailableEmbed(
+        string targetRaw,
+        int sourceLine,
+        EmbedUnresolvedReason reason)
+    {
+        var unavailable = new A11yEvent.EmbedPreviewUnavailable(targetRaw, reason);
+        string sentence = SlateUniffiMethods.A11yRender(unavailable).Text;
+        PopoverTitle = $"Embed preview unavailable — source line {sourceLine}";
+        PopoverBody = sentence;
+        PopoverAutomationName = sentence;
+        PopoverImage = null;
+        PopoverEmbedRoot = null;
+        PopoverSourcePath = null;
+        _announce(unavailable);
+    }
+
+    /// <summary>W7-7 R-8 test seam: the unavailable surface through the
+    /// same presenter the publish uses, for a reason a top-level preview
+    /// cannot produce through the resolver (the depth limit).</summary>
+    internal void PresentUnavailableEmbedForTests(
+        string targetRaw,
+        int sourceLine,
+        EmbedUnresolvedReason reason)
+    {
+        ThrowIfDisposed();
+        OpenPopover(requestFocus: false);
+        PresentUnavailableEmbed(targetRaw, sourceLine, reason);
     }
 
     private static EmbedPreviewContent BuildEmbedPreview(
@@ -1674,17 +1748,25 @@ internal sealed class EditorInteractionCoordinator : BindableBase, IDisposable
         _hoveredCitationByteOffset = requestPopoverFocus
             ? null
             : checked((int)byteOffset);
+        // W7-7 R-8 (#1251): core renders the whole sentence from the
+        // preview's speech exactly as it arrived, prefix rule included, and
+        // the popover's name IS that rendering — the host neither composes
+        // nor doubles "Citation. ", and name and announcement cannot drift.
+        var shown = new A11yEvent.CitationPopoverShown(preview.Speech);
         PopoverTitle = "Citation";
         PopoverBody = preview.Body;
-        PopoverAutomationName = preview.Speech.StartsWith(
-            "Citation",
-            StringComparison.OrdinalIgnoreCase)
-                ? preview.Speech
-                : $"Citation. {preview.Speech}";
+        PopoverAutomationName = SlateUniffiMethods.A11yRender(shown).Text;
         PopoverImage = null;
         PopoverEmbedRoot = null;
         PopoverSourcePath = null;
         OpenPopover(requestPopoverFocus);
+        if (requestPopoverFocus)
+        {
+            // An activation lands focus on Close, where the popover's name
+            // is not read, so the outcome is announced. A pointer hover is
+            // not spoken over: hover keeps its unavailable states silent too.
+            _announce(shown);
+        }
     }
 
     private bool TryToggleTaskAt(int utf16Offset, EditorInteractionOrigin origin)

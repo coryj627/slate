@@ -605,9 +605,19 @@ internal sealed partial class WorkspaceTabViewModel : BindableBase, IDisposable
         }
         catch (Exception exception) when (exception is not OutOfMemoryException)
         {
-            Status = $"Save blocked by editor integrity check: {exception.Message}";
+            // W7-7 R-7 (#1249; contract 38 D-10): the editor produced no
+            // verified snapshot. ONE NoteSaveBlocked carries core's
+            // integrity sentence, and the status shows the sentence that is
+            // spoken. The exception's own text is host copy (or a runtime
+            // message) and reaches neither; its type goes to the durable
+            // log for diagnosis.
+            HostLog.Write(HostDiagnosticEvent.EditorSaveIntegrityBlocked, exception);
+            var blocked = new A11yEvent.NoteSaveBlocked(
+                System.IO.Path.GetFileName(Path),
+                SlateUniffiMethods.EditorIntegrityDetail());
+            Status = SlateUniffiMethods.A11yRender(blocked).Text;
             _documentChanged?.Invoke(this, null);
-            _announce(new A11yEvent.NoteSaveBlocked(System.IO.Path.GetFileName(Path), exception.Message));
+            _announce(blocked);
             return false;
         }
 
@@ -679,9 +689,29 @@ internal sealed partial class WorkspaceTabViewModel : BindableBase, IDisposable
                     is VaultException.WriteConflict
                     or VaultException.DestinationExists);
             leaseSettled = true;
-            Status = $"Save blocked: {exception.Message}";
+            String filename = System.IO.Path.GetFileName(Path);
+            if (exception is VaultException.WriteConflict)
+            {
+                // W7-7 R-7 (#1249; contract 38 D-10 as amended, OD-5): a
+                // conflict speaks core's sentence and shows the same one.
+                // The binding's message for it is two content hashes and a
+                // modification time, which nobody should hear or read.
+                var conflict = new A11yEvent.NoteSaveConflict(filename);
+                Status = SlateUniffiMethods.A11yRender(conflict).Text;
+                _documentChanged?.Invoke(this, null);
+                _announce(conflict);
+                return false;
+            }
+            // R-7: any other failure keeps its detail — core's rendering of
+            // the error (vault_error_detail), never the binding's
+            // field-labelled message ("@message=…") — and the status shows
+            // the sentence that is spoken.
+            var blocked = new A11yEvent.NoteSaveBlocked(
+                filename,
+                SlateUniffiMethods.VaultErrorDetail(exception));
+            Status = SlateUniffiMethods.A11yRender(blocked).Text;
             _documentChanged?.Invoke(this, null);
-            _announce(new A11yEvent.NoteSaveBlocked(System.IO.Path.GetFileName(Path), exception.Message));
+            _announce(blocked);
             return false;
         }
         finally

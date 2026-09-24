@@ -41,6 +41,148 @@ public sealed class RecoveryAnnouncementTests
         Assert.Equal(A11yPriority.High, failure.Priority);
     }
 
+    /// <summary>W7-7 (#1249, R-7; contract 38 D-10 as amended): a write
+    /// conflict speaks core's conflict sentence (mac's wording without the
+    /// dialog clause, OD-5) and the inline status shows that same sentence.
+    /// The binding's message for a conflict is two content hashes and a
+    /// modification time; none of it may be spoken or shown.</summary>
+    [Theory]
+    [InlineData("save")]
+    [InlineData("save-all")]
+    [InlineData("close")]
+    public void ConflictingSaveSpeaksTheConflictSentence(string action)
+    {
+        using var host = new Host();
+        WorkspaceTabViewModel tab = host.OpenNote();
+        tab.Text += "\nUnsaved local edit.";
+        File.WriteAllText(host.NotePath, "# Externally changed\n");
+        host.Announced.Clear();
+
+        Act(host, tab, action);
+
+        var conflict = Assert.IsType<A11yEvent.NoteSaveConflict>(Assert.Single(host.Announced));
+        Assert.Equal("note0.md", conflict.Filename);
+        RenderedAnnouncement spoken = SlateUniffiMethods.A11yRender(conflict);
+        Assert.Equal(A11yPriority.High, spoken.Priority);
+        Assert.Contains("note0.md", spoken.Text);
+        Assert.Contains("modified externally", spoken.Text);
+        Assert.Contains("remain in the editor", spoken.Text);
+        Assert.Equal(spoken.Text, tab.Status);
+        AssertNoDiagnostics(spoken.Text);
+        AssertNoDiagnostics(tab.Status);
+    }
+
+    /// <summary>R-7's other half: every other save failure keeps
+    /// NoteSaveBlocked and its detail, and the detail is core's rendering
+    /// of the error (vault_error_detail) rather than host copy or the
+    /// binding's field-labelled message ("@message=…"); the status shows
+    /// the sentence that is spoken. A read-only note refuses the atomic
+    /// replace.</summary>
+    [Theory]
+    [InlineData("save")]
+    [InlineData("save-all")]
+    [InlineData("close")]
+    public void AFailedSaveSpeaksItsReasonWithoutBindingFieldLabels(string action)
+    {
+        using var host = new Host();
+        WorkspaceTabViewModel tab = host.OpenNote();
+        tab.Text += "\nUnsaved local edit.";
+        string local = tab.Text;
+        File.SetAttributes(host.NotePath, FileAttributes.ReadOnly);
+        host.Announced.Clear();
+        string coreDetail;
+        try
+        {
+            Act(host, tab, action);
+            // The same refusal, straight from core, rendered by core: the
+            // announced detail must be these bytes.
+            VaultException refusal = Assert.ThrowsAny<VaultException>(
+                () => host.Session.SaveText("note0.md", local, tab.SavedContentHash));
+            coreDetail = SlateUniffiMethods.VaultErrorDetail(refusal);
+        }
+        finally
+        {
+            File.SetAttributes(host.NotePath, FileAttributes.Normal);
+        }
+
+        var blocked = Assert.IsType<A11yEvent.NoteSaveBlocked>(Assert.Single(host.Announced));
+        Assert.Equal("note0.md", blocked.Filename);
+        Assert.False(string.IsNullOrWhiteSpace(blocked.Detail));
+        Assert.Equal(coreDetail, blocked.Detail);
+        Assert.Equal(local, tab.Text);
+        Assert.True(tab.IsDirty);
+        string spoken = SlateUniffiMethods.A11yRender(blocked).Text;
+        Assert.Equal(spoken, tab.Status);
+        AssertNoDiagnostics(spoken);
+        AssertNoDiagnostics(tab.Status);
+    }
+
+    /// <summary>R-7 at the save boundary's other catch (contract 38 D-10):
+    /// an editor that yields no verified snapshot — here its text keeps
+    /// changing while it is being verified, so the snapshot fails closed —
+    /// posts ONE NoteSaveBlocked whose detail is core's integrity sentence,
+    /// and the status is that same rendering: never a host-worded status
+    /// beside a different spoken line, and never the exception's
+    /// text.</summary>
+    [Theory]
+    [InlineData("save")]
+    [InlineData("save-all")]
+    [InlineData("close")]
+    public void AnEditorIntegrityFailureShowsTheSentenceItSpeaks(string action)
+    {
+        using var host = new Host();
+        WorkspaceTabViewModel tab = host.OpenNote();
+        tab.Text += "\nUnsaved local edit.";
+        string disk = File.ReadAllText(host.NotePath);
+        AvalonDocumentBufferSession session =
+            Assert.IsType<AvalonDocumentBufferSession>(tab.EditorSession);
+        int moves = 0;
+        session.BeforeSaveSnapshotAcquired = active =>
+        {
+            moves++;
+            active.Document.Insert(active.Document.TextLength, " ");
+        };
+        host.Announced.Clear();
+
+        Act(host, tab, action);
+
+        Assert.True(moves > 1, "the snapshot was never retried, so the integrity catch never ran");
+        var blocked = Assert.IsType<A11yEvent.NoteSaveBlocked>(Assert.Single(host.Announced));
+        Assert.Equal("note0.md", blocked.Filename);
+        Assert.Equal(SlateUniffiMethods.EditorIntegrityDetail(), blocked.Detail);
+        string spoken = SlateUniffiMethods.A11yRender(blocked).Text;
+        Assert.Equal(
+            "Save blocked. Could not save note0.md: The editor's text failed its integrity check. "
+                + "Your edits remain in the editor.",
+            spoken);
+        Assert.Equal(spoken, tab.Status);
+        Assert.True(tab.IsDirty);
+        Assert.Equal(disk, File.ReadAllText(host.NotePath));
+        AssertNoDiagnostics(tab.Status);
+    }
+
+    private static void Act(Host host, WorkspaceTabViewModel tab, string action)
+    {
+        switch (action)
+        {
+            case "save": host.Workspace.SaveActiveCommand.Execute(null); break;
+            case "save-all": Assert.False(host.Workspace.SaveAll()); break;
+            case "close": host.Workspace.CloseTabCommand.Execute(tab); break;
+            default: throw new ArgumentOutOfRangeException(nameof(action), action, null);
+        }
+    }
+
+    /// <summary>No binding field label, content hash or modification time
+    /// (R-7): the shapes of uniffi's error message.</summary>
+    private static void AssertNoDiagnostics(string text)
+    {
+        Assert.DoesNotContain("@", text, StringComparison.Ordinal);
+        Assert.DoesNotContain("Hash", text, StringComparison.OrdinalIgnoreCase);
+        Assert.DoesNotContain("Mtime", text, StringComparison.OrdinalIgnoreCase);
+        Assert.DoesNotMatch("[0-9a-fA-F]{64}", text);
+        Assert.DoesNotMatch(@"\d{10,}", text);
+    }
+
     [Fact]
     public void SuccessfulSaveKeepsItsExistingAnnouncement()
     {
@@ -227,6 +369,7 @@ public sealed class RecoveryAnnouncementTests
         internal IEnumerable<RenderedAnnouncement> Rendered => Announced.Select(SlateUniffiMethods.A11yRender);
         internal WorkspaceViewModel Workspace { get; }
         internal string NotePath => Path.Combine(_fixture.Root, "note0.md");
+        internal VaultSession Session => _session;
         internal Host()
         {
             _session = VaultSession.OpenFilesystem(_fixture.Root);

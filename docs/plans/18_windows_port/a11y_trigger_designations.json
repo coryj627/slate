@@ -172,7 +172,7 @@
         "status": "recorded"
       },
       "SaveConflict": {
-        "reason": "Owner approved D-10 (2026-09-19): Windows retains the unsaved buffer and inline status, and now posts NoteSaveBlocked from the save boundary. Mac SaveConflict refers to its overwrite/reload dialog, which Windows does not have.",
+        "reason": "Owner approved D-10 (2026-09-19): Windows retains the unsaved buffer and inline status and posts from the save boundary; a write conflict posts NoteSaveConflict (D-10 as amended by W7-7, #1249), mac's sentence without its dialog clause. Mac SaveConflict refers to its overwrite/reload dialog, which Windows does not have.",
         "decision": "docs/plans/38_notification_dispatcher_contracts.md",
         "status": "recorded"
       },
@@ -221,6 +221,41 @@
       "ShellRegionFocused": {
         "reason": "W7-6 (#1240): Mac has no F6 / Shift+F6 shell-region cycling and navigates panes directionally only; ShellRegionFocused is a recorded Windows-only affordance with no Mac construction site.",
         "decision": "docs/plans/18_windows_port/specs/w7_6_f6_region_cycling_spec.md",
+        "status": "recorded"
+      },
+      "NoteSaveConflict": {
+        "reason": "D-10 as amended (W7-7, #1249): Windows has no resolve dialog, so a write conflict speaks mac's conflict sentence without the dialog clause. Mac keeps posting SaveConflict with its Keep mine / Reload dialog; no change to Mac recovery behavior is claimed. Current Windows evidence is hosted (`ConflictingSaveSpeaksTheConflictSentence`); no journey observes its delivery until PR 1's desktop listener (#1244).",
+        "decision": "docs/plans/38_notification_dispatcher_contracts.md",
+        "status": "recorded"
+      },
+      "CitationPopoverShown": {
+        "reason": "W7-7 (#1251): a screen reader does not read a pane's name when focus lands inside it, so the Windows citation popover announces its outcome on activation. Mac's CitationPopover carries the same summary as its accessibility label and moves VoiceOver focus to the title or unresolved notice on appear; Mac constructs no such event in this wave and its owner decides. Current Windows evidence is hosted (`ActivatingACitationAnnouncesCoresSentenceAndNamesThePopoverWithIt`, `HoveringACitationShowsThePopoverWithoutAnnouncing`); the announcement leg of `FluentShell_UiaPatternsKeyboardFocusAndAxe_AreClean` is pending PR 1's desktop listener (#1244), and until it lands that journey asserts the popover's name and focus, not the announcement.",
+        "decision": "docs/plans/38_notification_dispatcher_contracts.md",
+        "status": "recorded"
+      },
+      "EmbedPreviewShown": {
+        "reason": "W7-7 (#1251): the Windows embed preview opens on Close, where its name is not read, so it announces the landed result. Mac removed its own preview-opened announcement (audit #211) because VoiceOver reads the popover's accessibility label; Mac constructs no such event in this wave and its owner decides. Current Windows evidence is hosted (`AResolvedEmbedAnnouncesItsPreviewWhenTheResultLands`); the announcement leg of `FluentShell_UiaPatternsKeyboardFocusAndAxe_AreClean` is pending PR 1's desktop listener (#1244), and until it lands that journey asserts the preview's focus and its second-line read, not the announcement.",
+        "decision": "docs/plans/38_notification_dispatcher_contracts.md",
+        "status": "recorded"
+      },
+      "EmbedPreviewUnavailable": {
+        "reason": "W7-7 (#1251): the Windows embed preview opens on Close, where its name is not read, so it announces an unresolved result, handing core the resolver's semantic reason to word. Mac removed its own preview-opened announcement (audit #211) because VoiceOver reads the popover's accessibility label; Mac constructs no such event in this wave and its owner decides. Current Windows evidence is hosted (`AnUnresolvedEmbedIsWordedByCoreOnEverySurface`, `EveryUnavailableReasonIsOneCoreRenderingOnEverySurface`, `TheUnavailableSurfacesConsumeTheRenderedCoreEvent`); no journey opens an unavailable preview, and none observes its delivery until PR 1's desktop listener (#1244).",
+        "decision": "docs/plans/38_notification_dispatcher_contracts.md",
+        "status": "recorded"
+      },
+      "CitationSummaryShown": {
+        "reason": "W7-7 (#1251): the Windows summary sheet opens on its Walk/Done button, where its name is not read, so it announces its counts. Mac's CitationSummarySheet carries the summary in its accessibility label so VoiceOver reads it on appear; Mac constructs no such event in this wave and its owner decides. Current Windows evidence is hosted (`OpeningTheSummaryAnnouncesItsCounts`); the announcement leg of `CitationSurfaces_GridsSheetsAndChords_AreClean` is pending PR 1's desktop listener (#1244), and until it lands that journey asserts the sheet's appearance and axe scan, not the announcement.",
+        "decision": "docs/plans/38_notification_dispatcher_contracts.md",
+        "status": "recorded"
+      },
+      "CitationDetailsShown": {
+        "reason": "W7-7 (#1251): the Windows citation details sheet opens on Close, where its name is not read, so it announces what it expanded. Mac's CitationPopover carries that summary as its accessibility label and moves VoiceOver focus to the title on appear; Mac constructs no such event in this wave and its owner decides. Current Windows evidence is hosted (`OpeningCitationDetailsAnnouncesTheExpandedCitation`); the announcement leg of `CitationSurfaces_GridsSheetsAndChords_AreClean` is pending PR 1's desktop listener (#1244), and until it lands that journey asserts the sheet's placement and focus, not the announcement.",
+        "decision": "docs/plans/38_notification_dispatcher_contracts.md",
+        "status": "recorded"
+      },
+      "CitationDetailsUnresolved": {
+        "reason": "W7-7 (#1251): the Windows citation details sheet opens on Close, where its name is not read, so a key no bibliography holds announces as unresolved, in mac CitationPopover's own label sentence moved into core. Mac carries that sentence as the popover's accessibility label and moves VoiceOver focus to the unresolved notice on appear; Mac constructs no such event in this wave and its owner decides. Current Windows evidence is hosted (`OpeningCitationDetailsAnnouncesTheExpandedCitation`); no journey opens an unresolved key's details, and none observes its delivery until PR 1's desktop listener (#1244).",
+        "decision": "docs/plans/38_notification_dispatcher_contracts.md",
         "status": "recorded"
       }
     }

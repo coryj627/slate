@@ -9,7 +9,8 @@ namespace SlateWindows.Tests;
 /// <summary>
 /// W4-5 (#737): the three citation overlays — details, summary, and
 /// files-citing. Contracts 10 (no invented data), 12 (summary counts
-/// are reference-derived) and 4 (overlays announce nothing on open).
+/// are reference-derived) and 4 (announcement identity); since W7-7 R-8
+/// an overlay announces once the workspace shows it, never when built.
 /// </summary>
 public class CitationOverlayTests
 {
@@ -188,8 +189,9 @@ public class CitationOverlayTests
     [Fact]
     public void ConstructingOverlaysAnnouncesNothing()
     {
-        // §2.6: opening any overlay is silent — the container's
-        // AutomationName is the speech surface.
+        // Construction stays silent: the workspace announces an overlay
+        // once it is SHOWN (W7-7 R-8, the SheetShown shape), so one that is
+        // built and never shown says nothing.
         var announced = new List<A11yEvent>();
         _ = CitationDetailsViewModel.FromEntry(FullEntry());
         _ = CitationDetailsViewModel.FromRendered(

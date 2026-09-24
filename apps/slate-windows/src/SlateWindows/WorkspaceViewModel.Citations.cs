@@ -291,11 +291,15 @@ internal sealed partial class WorkspaceViewModel
             Citations.References,
             _announce,
             () => CitationSummary = null);
+        // W7-7 R-8 (#1251): the sheet opens on its Walk/Done button, where
+        // its name is not read, so it says its counts. Both the immediate
+        // and the parked (on-publish) open land here.
+        CitationSummary.SheetShown();
     }
 
-    /// <summary>Open the details overlay for a rendered citation row.
-    /// Silent by design (§2.6) — the overlay's name is the speech
-    /// surface.</summary>
+    /// <summary>Open the details overlay for a rendered citation row. It
+    /// announces what it expanded once shown (W7-7 R-8): focus lands on
+    /// Close, where the overlay's name is not read.</summary>
     internal void OpenCitationDetails(CitationRowViewModel row, object? returnFocusToken = null)
     {
         if (row.Rendered is not { } rendered)
@@ -305,13 +309,20 @@ internal sealed partial class WorkspaceViewModel
             // show (contract 2).
             return;
         }
-        CitationDetails = CitationDetailsViewModel.FromRendered(
+        var sheet = CitationDetailsViewModel.FromRendered(
             rendered, row.Reference, returnFocusToken);
+        CitationDetails = sheet;
+        sheet.SheetShown(_announce);
     }
 
-    /// <summary>Open the details overlay for a bibliography entry.</summary>
-    internal void OpenEntryDetails(BibEntry entry, object? returnFocusToken = null) =>
-        CitationDetails = CitationDetailsViewModel.FromEntry(entry, returnFocusToken);
+    /// <summary>Open the details overlay for a bibliography entry; it
+    /// announces the entry once shown (W7-7 R-8).</summary>
+    internal void OpenEntryDetails(BibEntry entry, object? returnFocusToken = null)
+    {
+        var sheet = CitationDetailsViewModel.FromEntry(entry, returnFocusToken);
+        CitationDetails = sheet;
+        sheet.SheetShown(_announce);
+    }
 
     private System.Windows.Input.ICommand? _openCitationLinkCommand;
 
