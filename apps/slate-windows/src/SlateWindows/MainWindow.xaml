@@ -1819,8 +1819,8 @@
                                      container is layout (R-4, #1246). -->
                                 <local:LayoutItemsControl DockPanel.Dock="Bottom"
                                                           Focusable="False"
-                                                          ItemsSource="{Binding Bibliography.LoadNotices}"
-                                                          AutomationProperties.AutomationId="BibliographyNotices" local:SiblingNames.NamePath="" local:SiblingNames.Noun="notice">
+                                                          ItemsSource="{Binding Bibliography.LoadNotices, Converter={x:Static local:SiblingText.Rows}}"
+                                                          AutomationProperties.AutomationId="BibliographyNotices" local:SiblingNames.NamePath="Text" local:SiblingNames.Noun="notice">
                                     <!-- With no notices this renders at
                                          zero size but stays on-screen in
                                          the UIA tree, which axe flags as
@@ -1846,7 +1846,7 @@
                                         <DataTemplate>
                                             <TextBlock Style="{StaticResource PanelEmptyMessage}"
                                                        Focusable="True"
-                                                       Text="{Binding}"
+                                                       Text="{Binding Text}"
                                                        TextWrapping="Wrap"
                                                        AutomationProperties.Name="{Binding (AutomationProperties.Name), RelativeSource={RelativeSource AncestorType=ContentPresenter}}" />
                                         </DataTemplate>

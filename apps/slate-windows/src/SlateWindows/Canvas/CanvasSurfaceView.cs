@@ -232,11 +232,13 @@ internal sealed class CanvasSurfaceView : UserControl, ICanvasSurfacePresenter
             Margin = new Thickness(12, 0, 12, 4),
             MaxHeight = 96,
             Visibility = Visibility.Collapsed,
-            // R-4 (#1246): every items host names its containers.
+            DisplayMemberPath = nameof(SiblingText.Text),
+            // R-4 (#1246): every items host names its containers; two
+            // equal warnings are two rows (SiblingText) read apart.
             ItemContainerStyle = SiblingNames.ContainerStyle(typeof(ListBoxItem)),
         };
         AutomationProperties.SetAutomationId(_warningRows, "CanvasWarningRows");
-        SiblingNames.SetNamePath(_warningRows, string.Empty);
+        SiblingNames.SetNamePath(_warningRows, nameof(SiblingText.Text));
         SiblingNames.SetNoun(_warningRows, "warning");
         AutomationProperties.SetName(_warningRows, CanvasPhrase.WarningsRegionName);
 
@@ -1443,7 +1445,7 @@ internal sealed class CanvasSurfaceView : UserControl, ICanvasSurfacePresenter
         string[] warnings = model.State == CanvasLoadState.Ready
             ? model.Warnings.Select(warning => warning.Detail).ToArray()
             : [];
-        _warningRows.ItemsSource = warnings;
+        _warningRows.ItemsSource = SiblingText.Wrap(warnings);
         _warningRows.Visibility = warnings.Length > 0
             ? Visibility.Visible
             : Visibility.Collapsed;

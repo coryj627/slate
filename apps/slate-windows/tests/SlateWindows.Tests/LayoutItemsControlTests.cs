@@ -131,7 +131,7 @@ public sealed class LayoutItemsControlTests
     {
         var surface = new Bases.BaseSurfaceView();
         LayoutItemsControl banners = surface.WarningBannersForTests;
-        banners.ItemsSource = new[] { "Unknown property: status" };
+        banners.ItemsSource = SiblingText.Wrap(["Unknown property: status"]);
         banners.Visibility = Visibility.Visible;
         ((FrameworkElement)banners.Parent).Visibility = Visibility.Visible;
         var window = new Window

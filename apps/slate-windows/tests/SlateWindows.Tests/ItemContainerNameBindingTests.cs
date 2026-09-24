@@ -40,6 +40,7 @@ public sealed class ItemContainerNameBindingTests
             ["BaseViewPicker"] = (typeof(ComboBox), () => Factory(typeof(Bases.BaseSurfaceView), "ViewPickerItemStyle")),
             ["BaseTabList"] = (typeof(ListBox), () => Factory(typeof(Bases.BaseSurfaceView), "BuildListItemStyle")),
             ["CanvasWarningRows"] = (typeof(ListBox), () => SiblingNames.ContainerStyle(typeof(ListBoxItem))),
+            ["{idRoot}Section{index}List"] = (typeof(ListBox), () => SiblingNames.ContainerStyle(typeof(ListBoxItem))),
             ["ConnectionsDepth"] = (typeof(ComboBox), () => ItemContainerNames.BySelf(typeof(ComboBoxItem))),
             ["GraphInspectorGroupRing:"] = (typeof(ComboBox), () => Factory(typeof(Graph.GraphInspectorView), "PickerItemStyle")),
             ["GraphInspectorGroupColour:"] = (typeof(ComboBox), () => Factory(typeof(Graph.GraphInspectorView), "PickerItemStyle")),
