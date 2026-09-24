@@ -110,10 +110,11 @@ public partial class MainWindow : IShellRegionHost
             case ShellRegionKind.Files:
                 // R-5 (#1247): the filter's results land on a result row,
                 // or on the list itself when it is empty (AR-6); a row that
-                // cannot be landed yet leaves the keys to the tree.
+                // cannot be landed yet leaves the keys to the tree's own
+                // landing, a row or the filter field.
                 _ = FilterResultsList.IsVisible
-                    ? SelectorFocus.FocusFirstOrSelectedItem(FilterResultsList) || FilesTree.Focus()
-                    : FilesTree.Focus();
+                    ? SelectorFocus.FocusFirstOrSelectedItem(FilterResultsList) || LandOnFilesTree()
+                    : LandOnFilesTree();
                 break;
             case ShellRegionKind.TabBar:
                 {
@@ -238,6 +239,57 @@ public partial class MainWindow : IShellRegionHost
         }
 
         return null;
+    }
+
+    /// <summary>
+    /// W7-7 PR 4 (#1247, R-5; spec review round 23): every landing in the
+    /// Files tree — the ring's, the Files boundary's, a rename's, a
+    /// mutation's restore, Move To's, the empty editor's last resort — is a
+    /// ROW: the selected file's, else the first.
+    /// </summary>
+    /// <remarks>
+    /// They were <c>FilesTree.Focus()</c>, which reaches a row only when
+    /// the tree holds a selection: with none the bare tree kept the keys,
+    /// and Left and Right left the region (<c>TreeLandingTests</c>). The
+    /// sidebar's selected node is the source of truth — a recycled
+    /// container drops the tree's own — so its path is handed over. When no
+    /// row can take the keys (an empty vault, a tree the filter has
+    /// replaced) the region's stable stop is the filter field, which keeps
+    /// all four arrows.
+    /// </remarks>
+    /// <returns>Whether the keys landed in the Files region.</returns>
+    internal bool LandOnFilesTree() =>
+        SelectorFocus.FocusSelectedOrFirstRow(FilesTree, SelectedFilesPath())
+        || SidebarFilterTextBox.Focus();
+
+    /// <summary>The sidebar's selected node and its ancestors, root first;
+    /// null when nothing is selected or the node is no longer in the
+    /// tree.</summary>
+    private IReadOnlyList<object>? SelectedFilesPath()
+    {
+        if (_viewModel.FileSidebar is not { SelectedNode: { } selected } sidebar)
+        {
+            return null;
+        }
+
+        var path = new List<object>();
+        return PathTo(sidebar.RootNodes, selected, path) ? path : null;
+
+        static bool PathTo(IEnumerable<FileTreeNodeViewModel> level, FileTreeNodeViewModel target, List<object> path)
+        {
+            foreach (FileTreeNodeViewModel node in level)
+            {
+                path.Add(node);
+                if (ReferenceEquals(node, target) || PathTo(node.Children, target, path))
+                {
+                    return true;
+                }
+
+                path.RemoveAt(path.Count - 1);
+            }
+
+            return false;
+        }
     }
 
     /// <summary>W7-7 PR 4 (#1247, R-5): where a leaf REVEAL puts the keys —

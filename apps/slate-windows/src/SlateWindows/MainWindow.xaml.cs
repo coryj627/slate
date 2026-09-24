@@ -331,7 +331,7 @@ public partial class MainWindow : Window
                     return;
                 }
 
-                _ = FilesTree.Focus();
+                _ = LandOnFilesTree();
             },
             DispatcherPriority.Input);
     }
@@ -360,7 +360,7 @@ public partial class MainWindow : Window
             }
             else
             {
-                FilesTree.Focus();
+                _ = LandOnFilesTree();
             }
         }, DispatcherPriority.Input);
     }
@@ -641,7 +641,7 @@ public partial class MainWindow : Window
         {
             if (boundary == WorkspaceFocusBoundary.Files)
             {
-                FilesTree.Focus();
+                _ = LandOnFilesTree();
             }
             else if (_viewModel.Workspace is WorkspaceViewModel workspace
                 && workspace.ConnectionsLeafIsActive()
@@ -1097,7 +1097,7 @@ public partial class MainWindow : Window
             if (_viewModel.FileSidebar?.RenameCommand.CanExecute(null) == true
                 && _viewModel.FileSidebar.TryRenameSelected())
             {
-                FilesTree.Focus();
+                _ = LandOnFilesTree();
             }
 
             e.Handled = true;
@@ -1109,7 +1109,7 @@ public partial class MainWindow : Window
                 _viewModel.FileSidebar.MutationName = selected.Name;
             }
 
-            FilesTree.Focus();
+            _ = LandOnFilesTree();
             e.Handled = true;
         }
     }
@@ -1744,7 +1744,7 @@ public partial class MainWindow : Window
         // HAS tabs lands on one (W7-7 PR 4, #1247, R-5).
         if (!SelectorFocus.FocusFirstOrSelectedItem(tabs))
         {
-            FilesTree.Focus();
+            _ = LandOnFilesTree();
         }
     }
 
