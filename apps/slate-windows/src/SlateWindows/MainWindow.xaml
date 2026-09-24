@@ -703,48 +703,56 @@
              named, focusable stop whose landing speaks the status text;
              its HelpText is the shell's F6 help. -->
         <!-- W7-6 (#1240): F6 lands here; Tab never does. -->
-        <StatusBar x:Name="ShellStatusBar"
-                   DockPanel.Dock="Bottom"
-                   Focusable="True"
-                   KeyboardNavigation.IsTabStop="False"
-                   AutomationProperties.AutomationId="StatusBar"
-                   AutomationProperties.Name="Status bar"
-                   AutomationProperties.HelpText="{x:Static cmd:NavigationHelp.Shell}">
-            <!-- No vault means no sidebar: an unresolved binding must keep
-                 operation controls out of both layout and automation. -->
-            <StatusBarItem Visibility="{Binding FileSidebar.ShowTrashProgress, Converter={StaticResource BooleanToVisibilityConverter}, FallbackValue=Collapsed}">
-                <StackPanel Orientation="Horizontal">
-                    <TextBlock Text="{Binding FileSidebar.TrashStatus}" VerticalAlignment="Center"
-                               TextWrapping="Wrap" MaxWidth="360"
-                               AutomationProperties.AutomationId="TrashProgressStatus" />
-                    <Button Content="Cancel" Margin="8,0,8,0"
-                            Command="{Binding FileSidebar.CancelTrashCommand}"
-                            GotKeyboardFocus="TrashCancel_GotKeyboardFocus"
-                            LostKeyboardFocus="TrashCancel_LostKeyboardFocus"
-                            IsEnabledChanged="TrashCancel_AvailabilityChanged"
-                            IsVisibleChanged="TrashCancel_AvailabilityChanged"
-                            AutomationProperties.AutomationId="CancelTrash"
-                            AutomationProperties.Name="Cancel moving items to the Recycle Bin" />
-                </StackPanel>
-            </StatusBarItem>
-            <StatusBarItem>
-                <TextBlock x:Name="StatusTextBlock"
-                           AutomationProperties.AutomationId="VaultStatus"
-                           Text="{Binding StatusText}"
-                           TextTrimming="CharacterEllipsis"
-                           AutomationProperties.Name="Vault status" />
-            </StatusBarItem>
-            <Separator />
-            <StatusBarItem HorizontalContentAlignment="Stretch" Width="180">
-                <ProgressBar Minimum="0"
-                             AutomationProperties.AutomationId="VaultScanProgress"
-                             Maximum="{Binding ProgressMaximum}"
-                             Value="{Binding ProgressValue, Mode=OneWay}"
-                             IsIndeterminate="{Binding IsProgressIndeterminate}"
-                             Height="6"
-                             AutomationProperties.Name="Vault scan progress" />
-            </StatusBarItem>
-        </StatusBar>
+        <!-- W7-7 PR 4 (#1247, R-5; spec review round 23): the bar is its
+             own stop - its items take no focus - and an arrow on it went
+             to directional navigation, out of the region. Arrows from an
+             element are judged in its PARENT's group, so the bar sits in a
+             Contained border: they stay on it (ShellContainerLandingTests). -->
+        <Border x:Name="ShellStatusBarRegion"
+                DockPanel.Dock="Bottom"
+                KeyboardNavigation.DirectionalNavigation="Contained">
+            <StatusBar x:Name="ShellStatusBar"
+                       Focusable="True"
+                       KeyboardNavigation.IsTabStop="False"
+                       AutomationProperties.AutomationId="StatusBar"
+                       AutomationProperties.Name="Status bar"
+                       AutomationProperties.HelpText="{x:Static cmd:NavigationHelp.Shell}">
+                <!-- No vault means no sidebar: an unresolved binding must keep
+                     operation controls out of both layout and automation. -->
+                <StatusBarItem Visibility="{Binding FileSidebar.ShowTrashProgress, Converter={StaticResource BooleanToVisibilityConverter}, FallbackValue=Collapsed}">
+                    <StackPanel Orientation="Horizontal">
+                        <TextBlock Text="{Binding FileSidebar.TrashStatus}" VerticalAlignment="Center"
+                                   TextWrapping="Wrap" MaxWidth="360"
+                                   AutomationProperties.AutomationId="TrashProgressStatus" />
+                        <Button Content="Cancel" Margin="8,0,8,0"
+                                Command="{Binding FileSidebar.CancelTrashCommand}"
+                                GotKeyboardFocus="TrashCancel_GotKeyboardFocus"
+                                LostKeyboardFocus="TrashCancel_LostKeyboardFocus"
+                                IsEnabledChanged="TrashCancel_AvailabilityChanged"
+                                IsVisibleChanged="TrashCancel_AvailabilityChanged"
+                                AutomationProperties.AutomationId="CancelTrash"
+                                AutomationProperties.Name="Cancel moving items to the Recycle Bin" />
+                    </StackPanel>
+                </StatusBarItem>
+                <StatusBarItem>
+                    <TextBlock x:Name="StatusTextBlock"
+                               AutomationProperties.AutomationId="VaultStatus"
+                               Text="{Binding StatusText}"
+                               TextTrimming="CharacterEllipsis"
+                               AutomationProperties.Name="Vault status" />
+                </StatusBarItem>
+                <Separator />
+                <StatusBarItem HorizontalContentAlignment="Stretch" Width="180">
+                    <ProgressBar Minimum="0"
+                                 AutomationProperties.AutomationId="VaultScanProgress"
+                                 Maximum="{Binding ProgressMaximum}"
+                                 Value="{Binding ProgressValue, Mode=OneWay}"
+                                 IsIndeterminate="{Binding IsProgressIndeterminate}"
+                                 Height="6"
+                                 AutomationProperties.Name="Vault scan progress" />
+                </StatusBarItem>
+            </StatusBar>
+        </Border>
 
         <Grid>
             <local:AutomationLandmarkGrid x:Name="WelcomeRoot"
