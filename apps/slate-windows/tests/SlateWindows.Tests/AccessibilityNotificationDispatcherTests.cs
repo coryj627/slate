@@ -120,22 +120,28 @@ public sealed class AccessibilityNotificationDispatcherTests
 
     /// <summary>
     /// R-1, codex round 5, recorded rather than assumed: the status element's
-    /// peer has a UIA provider exactly when something has asked its window
-    /// for one (WM_GETOBJECT, which is how every client connects). At the
-    /// first frame of a launch nothing has, so ProviderFromPeer answers null
-    /// (the peer is unconnected, the helper peer has no window, and the
-    /// dispatcher has no automation root) and a line posted then is not
-    /// raised, exactly as WPF's gated call would not raise it.
+    /// peer has a UIA provider exactly when its window's automation root is
+    /// connected. WPF connects it on any WM_GETOBJECT the window receives
+    /// (HwndTarget.CriticalHandleWMGetobject), and by itself, with no message,
+    /// when its process-wide event map already has a listener as the window
+    /// gets its root visual (HwndSource.RootVisual, EventMap's part (a)). At
+    /// a launch's first frame with neither, ProviderFromPeer answers null and
+    /// a line posted then is not raised, exactly as WPF's gated call would
+    /// not raise it; a request for the UIA root connects it.
     /// </summary>
     /// <remarks>
-    /// Another UIA client on the desktop may ask a new window at once (one
-    /// did during a full-suite run here), so the first-frame check follows
-    /// the window's own record of whether it was asked; the explicit ask
-    /// after it holds on every desktop.
+    /// A full-suite run here met both routes: a desktop client can ask a new
+    /// window while it is still being created, before an HwndSource hook
+    /// exists — so the requests are recorded by a thread hook installed first
+    /// — and a client that advised any earlier window of the test process
+    /// leaves the event map listening. The first-frame check applies when the
+    /// map read the same before the window and after its first frame.
     /// </remarks>
     [Fact]
-    public void AtTheFirstFrameTheStatusPeerHasNoProviderUntilTheWindowIsAsked() => RunSta(() =>
+    public void AtTheFirstFrameTheStatusPeerHasNoProviderUntilItsWindowIsConnected() => RunSta(() =>
     {
+        using var requests = new RootRequests();
+        bool listenersBefore = WpfEventMapHasListeners();
         var status = new TextBlock { Text = "Vault status" };
         var window = new Window
         {
@@ -146,30 +152,25 @@ public sealed class AccessibilityNotificationDispatcherTests
             WindowStyle = WindowStyle.None,
             ShowActivated = false,
         };
-        int asked = 0;
         try
         {
             IntPtr handle = new WindowInteropHelper(window).EnsureHandle();
-            HwndSource.FromHwnd(handle).AddHook(
-                (IntPtr hwnd, int message, IntPtr wParam, IntPtr lParam, ref bool handled) =>
-                {
-                    if (message == NativeWindow.WmGetObject)
-                    {
-                        asked++;
-                    }
-
-                    return IntPtr.Zero;
-                });
             window.Show();
 
             bool connected = AccessibilityNotificationDispatcher.NotificationSource.Of(status) is not null;
-            Assert.True(
-                connected == asked > 0,
-                $"first frame: {asked} WM_GETOBJECT seen, status peer provider {(connected ? "present" : "null")}");
+            int asked = requests.To(handle);
+            if (WpfEventMapHasListeners() == listenersBefore)
+            {
+                Assert.True(
+                    connected == (asked > 0 || listenersBefore),
+                    $"first frame: {asked} WM_GETOBJECT, WPF's event map {(listenersBefore ? "listening" : "empty")}, "
+                    + $"status peer provider {(connected ? "present" : "null")}");
+            }
 
-            int before = asked;
             _ = NativeWindow.SendMessage(handle, NativeWindow.WmGetObject, IntPtr.Zero, NativeWindow.UiaRootObjectId);
-            Assert.True(asked > before, "the window's hook never saw the WM_GETOBJECT this fact sent, so it cannot tell asked from unasked.");
+            Assert.True(
+                requests.To(handle) > asked,
+                "the thread hook never saw the WM_GETOBJECT this fact sent, so it cannot tell asked from unasked.");
             Assert.NotNull(AccessibilityNotificationDispatcher.NotificationSource.Of(status));
         }
         finally
@@ -195,15 +196,93 @@ public sealed class AccessibilityNotificationDispatcherTests
             AccessibilityNotificationDispatcher.NotificationSource.SourceChange(ref last, connected: false));
     }
 
+    /// <summary>Whether WPF's process-wide event map has any listener (its
+    /// EventMap.HasListeners, read through the public per-event probe). While
+    /// it has, WPF connects each new window's automation root itself as the
+    /// root visual is set, with no WM_GETOBJECT.</summary>
+    private static bool WpfEventMapHasListeners() =>
+        Enum.GetValues<AutomationEvents>().Any(AutomationPeer.ListenerExists);
+
+    /// <summary>
+    /// Every WM_GETOBJECT the windows of this thread receive, from before the
+    /// window exists: a thread WH_CALLWNDPROC hook sees each sent message as
+    /// it is delivered, including one a desktop client sends while the window
+    /// is still being created, which an HwndSource hook — added only once the
+    /// source exists — would miss. WPF connects the root on any object id, so
+    /// every request counts.
+    /// </summary>
+    private sealed class RootRequests : IDisposable
+    {
+        private readonly NativeWindow.HookProc _onSent;
+        private readonly IntPtr _hook;
+        private readonly List<IntPtr> _asked = [];
+
+        internal RootRequests()
+        {
+            _onSent = OnSent;
+            _hook = NativeWindow.SetWindowsHookEx(NativeWindow.WhCallWndProc, _onSent, IntPtr.Zero, NativeWindow.GetCurrentThreadId());
+            Assert.NotEqual(IntPtr.Zero, _hook);
+        }
+
+        /// <summary>How many requests <paramref name="window"/> has received.</summary>
+        internal int To(IntPtr window) => _asked.Count(asked => asked == window);
+
+        public void Dispose()
+        {
+            _ = NativeWindow.UnhookWindowsHookEx(_hook);
+            GC.KeepAlive(_onSent);
+        }
+
+        private IntPtr OnSent(int code, IntPtr wParam, IntPtr lParam)
+        {
+            if (code >= 0)
+            {
+                NativeWindow.SentMessage sent = Marshal.PtrToStructure<NativeWindow.SentMessage>(lParam);
+                if (sent.Message == NativeWindow.WmGetObject)
+                {
+                    _asked.Add(sent.Window);
+                }
+            }
+
+            return NativeWindow.CallNextHookEx(IntPtr.Zero, code, wParam, lParam);
+        }
+    }
+
     private static class NativeWindow
     {
         internal const int WmGetObject = 0x003D;
 
+        internal const int WhCallWndProc = 4;
+
         // UiaRootObjectId: the object id a UIA client sends with WM_GETOBJECT.
         internal static readonly IntPtr UiaRootObjectId = new(-25);
 
+        internal delegate IntPtr HookProc(int code, IntPtr wParam, IntPtr lParam);
+
+        /// <summary>CWPSTRUCT: a sent message as WH_CALLWNDPROC sees it.</summary>
+        [StructLayout(LayoutKind.Sequential)]
+        internal struct SentMessage
+        {
+            public IntPtr LParam;
+            public IntPtr WParam;
+            public int Message;
+            public IntPtr Window;
+        }
+
         [DllImport("user32.dll", CharSet = CharSet.Unicode)]
         internal static extern IntPtr SendMessage(IntPtr hWnd, int msg, IntPtr wParam, IntPtr lParam);
+
+        [DllImport("user32.dll", SetLastError = true)]
+        internal static extern IntPtr SetWindowsHookEx(int idHook, HookProc lpfn, IntPtr hMod, int dwThreadId);
+
+        [DllImport("user32.dll")]
+        internal static extern bool UnhookWindowsHookEx(IntPtr hhk);
+
+        [DllImport("user32.dll")]
+        internal static extern IntPtr CallNextHookEx(IntPtr hhk, int nCode, IntPtr wParam, IntPtr lParam);
+
+        [DllImport("kernel32.dll")]
+        internal static extern int GetCurrentThreadId();
     }
 
     private static void RunSta(Action body)
@@ -630,8 +709,9 @@ public sealed class AccessibilityNotificationDispatcherTests
     /// connected status provider — production's own probe over a real shown
     /// window. Whatever the desktop does, every raise happens with the status
     /// peer's provider connected, and each line exactly once, in order; when
-    /// the window had not been asked for its UIA root, nothing is raised
-    /// until it is.
+    /// the window's root was not connected at the posts (no client had asked
+    /// it, and WPF's event map had no listener to connect it), nothing is
+    /// raised until a request for the UIA root connects it.
     /// </summary>
     [Fact]
     public void TheLaunchQueueDrainsOnlyThroughAConnectedStatusProvider() => RunSta(() =>
@@ -646,22 +726,11 @@ public sealed class AccessibilityNotificationDispatcherTests
             WindowStyle = WindowStyle.None,
             ShowActivated = false,
         };
-        int asked = 0;
         var raised = new List<(string Text, bool Connected)>();
         Action? tick = null;
         try
         {
             IntPtr handle = new WindowInteropHelper(window).EnsureHandle();
-            HwndSource.FromHwnd(handle).AddHook(
-                (IntPtr hwnd, int message, IntPtr wParam, IntPtr lParam, ref bool handled) =>
-                {
-                    if (message == NativeWindow.WmGetObject)
-                    {
-                        asked++;
-                    }
-
-                    return IntPtr.Zero;
-                });
             window.Show();
             var dispatcher = new AccessibilityNotificationDispatcher(
                 (kind, processing, text, activityId) =>
@@ -678,10 +747,12 @@ public sealed class AccessibilityNotificationDispatcherTests
                     () => TimeSpan.Zero,
                     (_, _) => { }));
 
-            bool askedBefore = asked > 0;
+            // Nothing pumps this thread from here to the ask, so no client and
+            // no event-map listener can connect the root in between.
+            bool connectedAtThePosts = AccessibilityNotificationDispatcher.NotificationSource.Of(status) is not null;
             dispatcher.Post(new RenderedAnnouncement("Vault opened.", A11yPriority.Medium));
             dispatcher.Post(new RenderedAnnouncement("Scanning vault. 2 files to index.", A11yPriority.Medium));
-            if (!askedBefore && asked == 0)
+            if (!connectedAtThePosts)
             {
                 Assert.Empty(raised);
                 tick!();
@@ -763,8 +834,8 @@ public sealed class AccessibilityNotificationDispatcherTests
     /// status provider — never short-circuited behind the client and advise
     /// probes — so the provider state under the launch condition is recorded
     /// at the FIRST unadvised check, before any drain. Production's own
-    /// provider probe over a real shown window; the record matches whether
-    /// the window had been asked for its UIA root.
+    /// provider probe over a real shown window; the record matches the
+    /// provider's state at that post, however the desktop left the window.
     /// </summary>
     [Fact]
     public void TheFirstUnadvisedCheckRecordsTheProviderStateBeforeTheDrain() => RunSta(() =>
@@ -779,23 +850,12 @@ public sealed class AccessibilityNotificationDispatcherTests
             WindowStyle = WindowStyle.None,
             ShowActivated = false,
         };
-        int asked = 0;
         bool listening = false;
         Action? tick = null;
         var logged = new List<(HostDiagnosticEvent Event, string Line)>();
         try
         {
             IntPtr handle = new WindowInteropHelper(window).EnsureHandle();
-            HwndSource.FromHwnd(handle).AddHook(
-                (IntPtr hwnd, int message, IntPtr wParam, IntPtr lParam, ref bool handled) =>
-                {
-                    if (message == NativeWindow.WmGetObject)
-                    {
-                        asked++;
-                    }
-
-                    return IntPtr.Zero;
-                });
             window.Show();
             var dispatcher = new AccessibilityNotificationDispatcher(
                 (kind, processing, text, activityId) => { },
@@ -812,10 +872,10 @@ public sealed class AccessibilityNotificationDispatcherTests
                     Diagnose = (diagnosticEvent, line) => logged.Add((diagnosticEvent, line)),
                 });
 
-            bool askedAtFirst = asked > 0;
+            bool connectedAtFirst = AccessibilityNotificationDispatcher.NotificationSource.Of(status) is not null;
             dispatcher.Post(new RenderedAnnouncement("Vault opened.", A11yPriority.Medium));
             Assert.Equal(
-                (HostDiagnosticEvent.AnnouncementSource, askedAtFirst ? "statusPeerProvider=connected" : "statusPeerProvider=null"),
+                (HostDiagnosticEvent.AnnouncementSource, connectedAtFirst ? "statusPeerProvider=connected" : "statusPeerProvider=null"),
                 Assert.Single(logged));
 
             _ = NativeWindow.SendMessage(handle, NativeWindow.WmGetObject, IntPtr.Zero, NativeWindow.UiaRootObjectId);
