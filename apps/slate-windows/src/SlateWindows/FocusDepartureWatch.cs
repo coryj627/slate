@@ -11,32 +11,65 @@ namespace SlateWindows;
 /// <summary>
 /// W7-7 PR 8 (#1253, contract R-10): whether the reader has left the element
 /// a held focus landing's request found them on — a ONE-WAY latch from that
-/// original request. The first time that element loses keyboard focus while
-/// it is still shown, the reader (or another route) moved them: the owner is
-/// told at once, and coming back never revives the landing. Two moves are
-/// nobody's choice and are followed instead of latched: a loss from an
-/// element that has stopped being shown (hidden, collapsed, taken out of the
-/// tree — WPF's own recovery, a closing overlay's restore), and a move into
-/// the landing's own target. Nothing is sampled later, on a timer or at a
-/// dispatcher priority, so no move queued behind the request can be taken
-/// for the place the request found the reader.
+/// original request. The first time the watched element loses keyboard focus
+/// while it is still shown, the reader (or another route) moved them: the
+/// owner is told at once, and coming back never revives the landing. Three
+/// moves are nobody's leaving and are followed instead of latched: a loss
+/// from an element that has stopped being shown (hidden, collapsed, taken out
+/// of the tree — WPF's own recovery, a closing overlay's restore); the ONE
+/// move that enters the landing's own target (the reader stepping in, or a
+/// document's provisional seat — a request that finds focus already inside
+/// has had its entry); and the document's own terminal seat, the move that
+/// completes its landing, which the document declares (<see
+/// cref="SeatTerminally"/>). Any other move inside the target after the entry
+/// is the reader moving on within it — a departure like any other, so a
+/// landing that would later re-seat them is cancelled instead. Nothing is
+/// sampled later, on a timer or at a dispatcher priority, so no move queued
+/// behind the request can be taken for the place the request found the reader.
 /// </summary>
 internal sealed class FocusDepartureWatch : IDisposable
 {
+    /// <summary>The surface seating its document's terminal landing right
+    /// now, on this thread (the dispatcher's).</summary>
+    [ThreadStatic]
+    private static DependencyObject? _seating;
+
     private readonly DependencyObject _target;
     private readonly Action _departed;
     private DependencyObject? _watched;
     private IInputElement? _origin;
+    private bool _entered;
     private bool _stopped;
 
-    /// <param name="target">The element the landing will seat; focus
-    /// arriving inside it is the landing's, not a departure.</param>
+    /// <param name="target">The element the landing will seat; the one move
+    /// into it, and the document's terminal seat inside it, are the
+    /// landing's, not a departure.</param>
     /// <param name="departed">Called once, when the reader leaves.</param>
     public FocusDepartureWatch(DependencyObject target, Action departed)
     {
         _target = target;
         _departed = departed;
+        _entered = IsWithin(Keyboard.FocusedElement as DependencyObject, target);
         Watch(Keyboard.FocusedElement);
+    }
+
+    /// <summary>Run <paramref name="seat"/> as a document's own TERMINAL
+    /// seat — the move that completes its landing: focus moving inside
+    /// <paramref name="surface"/> meanwhile is the landing arriving, not the
+    /// reader moving on within it, so a held landing's watch follows it. A
+    /// provisional seat, which leaves the request pending, is never declared.</summary>
+    internal static bool SeatTerminally(DependencyObject surface, Func<bool> seat)
+    {
+        DependencyObject? outer = _seating;
+        _seating = surface;
+        try
+        {
+            return seat();
+        }
+        finally
+        {
+            _seating = outer;
+        }
     }
 
     public void Dispose()
@@ -72,8 +105,10 @@ internal sealed class FocusDepartureWatch : IDisposable
             return;
         }
 
-        if (IsWithin(e.NewFocus as DependencyObject, _target) || !IsShown(_origin))
+        bool intoTarget = IsWithin(e.NewFocus as DependencyObject, _target);
+        if (!IsShown(_origin) || (intoTarget && (!_entered || IsTerminalSeatInto(_target))))
         {
+            _entered |= intoTarget;
             Watch(e.NewFocus);
             return;
         }
@@ -82,6 +117,9 @@ internal sealed class FocusDepartureWatch : IDisposable
         Unwatch();
         _departed();
     }
+
+    private static bool IsTerminalSeatInto(DependencyObject target) =>
+        _seating is { } seating && IsWithin(seating, target);
 
     private static bool IsShown(IInputElement? element) => element switch
     {

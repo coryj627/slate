@@ -514,7 +514,8 @@ internal sealed class ReadingSurface : RichTextBox
     /// <summary>Hold the landing. The reader's leaving is latched from the
     /// element this request found them on (<see cref="FocusDepartureWatch"/>):
     /// a move they — or another route — make withdraws the landing at once,
-    /// and coming back does not revive it.</summary>
+    /// and coming back does not revive it. Stepping into the surface is
+    /// followed once; moving on inside it after that is a move too.</summary>
     private void HoldFocusLanding(Action? announceWhenLanded, Action? fallThroughWhenRefused)
     {
         _focusLandingPending = true;
@@ -642,9 +643,10 @@ internal sealed class ReadingSurface : RichTextBox
         {
             return;
         }
-        // Focus already here — the reader moved in while the content arrived
-        // (a move into the landing's own target is followed, not a departure)
-        // — is the landing: its line is spoken, once, like one this seats.
+        // Focus already here — the reader stepped in while the content
+        // arrived (the one move into the landing's own target the watch
+        // follows) — is the landing: its line is spoken, once, like one this
+        // seats.
         if (IsKeyboardFocusWithin || (Focus() && IsKeyboardFocusWithin))
         {
             announce?.Invoke();

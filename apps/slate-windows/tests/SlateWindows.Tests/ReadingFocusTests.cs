@@ -1137,6 +1137,177 @@ public sealed class ReadingFocusTests
         Assert.Equal([host.RightPaneLine()], host.Announced);
     });
 
+    /// <summary>R-10: entering the held editor stop is followed ONCE — the
+    /// reader stepping into a loading canvas, or an in-flight graph's
+    /// provisional seat (its state host over a load with nothing held, its
+    /// grid over the rows it holds) — and any later move inside the stop is
+    /// the reader moving on within it: the landing is cancelled and its
+    /// request released, so the content arriving afterwards neither re-seats
+    /// them nor speaks. The one later move that IS the landing is the
+    /// document's own terminal seat, the move that completes its request: the
+    /// ring's line, exactly once.</summary>
+    [Theory]
+    [InlineData("canvas", false)]
+    [InlineData("canvas", true)]
+    [InlineData("graph over a load", false)]
+    [InlineData("graph over a load", true)]
+    [InlineData("graph over its rows", false)]
+    [InlineData("graph over its rows", true)]
+    public void OnlyTheTerminalSeatFollowsTheEntryIntoTheHeldStop(string kind, bool readerMovesOn) => RunSta(() =>
+    {
+        using var host = new Host();
+        host.Initialize(kind == "canvas" ? "canvas" : "graph");
+        GraphDocumentViewModel? graph = host.Tab.Graph;
+        if (kind == "graph over a load")
+        {
+            // Nothing held: a failed pair leaves ERROR, and the next request
+            // loads from scratch — LOADING, whose provisional seat is the
+            // state host.
+            graph!.FetchGateForTests = () => throw new InvalidOperationException("The fixture's pair fails.");
+            Assert.True(graph.Request(new GraphRequest.Preset(GraphPreset.Orphans)));
+            PumpedDispatcher.PumpUntilDrained(graph.WhenAllWorkDrained());
+            PumpedDispatcher.Drain();
+            Assert.Equal(GraphLoadState.Error, graph.Publication.State);
+            graph.FetchGateForTests = null;
+        }
+        RingHost ring = host.UseRing();
+        using var computing = new ManualResetEventSlim(false);
+        if (graph is not null)
+        {
+            graph.BeforeComputeForTests = () => computing.Wait(TimeSpan.FromSeconds(30));
+            Assert.True(graph.Request(new GraphRequest.Needle()));
+            Assert.True(graph.IsRequestInFlight);
+            Assert.Equal(kind == "graph over its rows", graph.Publication.HoldsSnapshot);
+        }
+        else
+        {
+            host.HoldEditorLanding();
+        }
+        TabItem tabItem = host.FocusTabBar();
+        IInputElement? entered;
+        UIElement? movedTo = null;
+        try
+        {
+            host.Workspace.FocusNextPaneCommand.Execute(null);
+            PumpedDispatcher.Drain();
+
+            Assert.Equal(ShellRegionLanding.Pending, Assert.Single(ring.Attempts).Outcome);
+            FrameworkElement stop = host.EditorStop();
+            if (stop is CanvasSurfaceView canvasView)
+            {
+                // The loading canvas seats nothing; the reader steps in.
+                AssertFocused(tabItem, "the held canvas landing");
+                Assert.True(canvasView.FilterFieldForTests.Focus());
+                PumpedDispatcher.Drain();
+            }
+            else if (kind == "graph over a load")
+            {
+                AssertFocused(((GraphSurfaceView)stop).StateHostForTests, "the graph's provisional seat over its load");
+            }
+            Assert.True(stop.IsKeyboardFocusWithin, $"nothing entered the held stop ({kind})");
+            entered = Keyboard.FocusedElement;
+            Assert.NotNull(host.EditorLandingRequest());
+            Assert.True(host.Workspace.HoldsShellRegionLanding);
+            Assert.Empty(host.Announced);
+
+            if (readerMovesOn)
+            {
+                movedTo = stop is GraphSurfaceView graphView
+                    ? graphView.FilterFieldForTests
+                    : ((CanvasSurfaceView)stop).OutlineChoiceForTests;
+                Assert.True(movedTo.Focus(), $"the other control took no focus ({kind})");
+                PumpedDispatcher.Drain();
+
+                Assert.Null(host.EditorLandingRequest());
+                Assert.False(((IShellRegionHost)host.Shell).WithdrawHeldLanding(), "the landing was still held");
+            }
+        }
+        finally
+        {
+            computing.Set();
+        }
+
+        if (graph is not null)
+        {
+            PumpedDispatcher.PumpUntilDrained(graph.WhenAllWorkDrained());
+            PumpedDispatcher.Drain();
+            Assert.False(graph.IsRequestInFlight);
+        }
+        else
+        {
+            host.LetEditorLandingArrive();
+        }
+
+        Assert.Single(ring.Attempts);
+        Assert.Null(host.EditorLandingRequest());
+        if (movedTo is not null)
+        {
+            AssertFocused(movedTo, $"the content arriving after the reader moved on ({kind})");
+            Assert.Empty(host.Announced);
+            return;
+        }
+
+        Assert.False(host.Workspace.HoldsShellRegionLanding);
+        Assert.True(host.EditorStop().IsKeyboardFocusWithin, $"the terminal seat left the stop ({kind})");
+        if (kind == "canvas")
+        {
+            // The seat moved the reader off the control they stepped onto,
+            // which stayed shown: only the seat's declaration kept the move
+            // from reading as the reader's own.
+            Assert.NotSame(entered, Keyboard.FocusedElement);
+        }
+        Assert.Equal([host.EditorLine()], host.Announced);
+    });
+
+    /// <summary>R-10: every graph seat that completes the request — its rows,
+    /// its state host over nothing to show, its diagram — is declared the
+    /// document's own TERMINAL seat, so a held landing's watch over the
+    /// surface follows the move even off a control that stays shown, while the
+    /// reader's own move afterwards is still a departure. (Under the ring a
+    /// graph seats terminally only after its provisional seat was hidden or
+    /// rebound, which the watch follows anyway; this pins the declaration.)</summary>
+    [Theory]
+    [InlineData("rows")]
+    [InlineData("nothing matches")]
+    [InlineData("diagram")]
+    public void TheGraphsTerminalSeatIsDeclaredItsOwn(string state) => RunSta(() =>
+    {
+        using var host = new Host();
+        host.Initialize("graph");
+        GraphDocumentViewModel graph = host.Tab.Graph!;
+        if (state == "nothing matches")
+        {
+            host.Workspace.GraphNavigator.SetNameQuery("zzz-nothing-matches");
+            PumpedDispatcher.PumpUntilDrained(graph.WhenAllWorkDrained());
+            PumpedDispatcher.Drain();
+            Assert.Equal(GraphLoadState.Empty, graph.Publication.State);
+        }
+        else if (state == "diagram")
+        {
+            Assert.True(graph.SetMode(GraphSurfaceMode.Diagram));
+            Assert.True(PumpedDispatcher.PumpUntil(() => graph.HasLiveDiagram), "the diagram never went live");
+            host.Settle();
+        }
+        var surface = (GraphSurfaceView)host.EditorStop();
+        TextBox filter = surface.FilterFieldForTests;
+        Assert.True(filter.Focus());
+        PumpedDispatcher.Drain();
+        int departures = 0;
+        using var watch = new FocusDepartureWatch(surface, () => departures++);
+
+        graph.RequestFocusLanding(host.Tab);
+        PumpedDispatcher.Drain();
+
+        Assert.Null(graph.FocusRequest);
+        Assert.True(filter.IsVisible);
+        Assert.False(filter.IsKeyboardFocusWithin, $"the {state} seat did not move the reader");
+        Assert.True(surface.IsKeyboardFocusWithin);
+        Assert.Equal(0, departures);
+
+        Assert.True(filter.Focus());
+        Assert.Equal(1, departures);
+    });
+
     /// <summary>R-10's one owner: the surface takes focus only through a
     /// requested landing. Shown over merged content by a flip that asked for
     /// nothing, and merging content while shown, it leaves the reader where

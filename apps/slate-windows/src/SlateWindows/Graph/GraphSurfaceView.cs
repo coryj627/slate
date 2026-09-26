@@ -876,7 +876,10 @@ internal sealed class GraphSurfaceView : UserControl, IGraphSurfacePresenter
     /// nothing held, the visible surface otherwise) and stays pending, a
     /// presenter's takes none; quiescent, READY seats the grid's current row
     /// (else the first) and EMPTY or ERROR the state host — silently — and
-    /// completes the request; a quiescent LOADING has nothing to land on.</summary>
+    /// completes the request; a quiescent LOADING has nothing to land on. A
+    /// seat that completes the request is the document's TERMINAL seat and is
+    /// declared as one (R-10: a held F6 landing follows it; a provisional seat
+    /// is the watch's one entry, or a move it cancels on).</summary>
     private void TryDeliverFocus()
     {
         if (Model is not { FocusRequest: { } request } model
@@ -918,7 +921,10 @@ internal sealed class GraphSurfaceView : UserControl, IGraphSurfacePresenter
             {
                 return;
             }
-            bool landed = model.HasLiveDiagram ? FocusDiagramProjection() : _stateHost.Focus();
+            // The build's terminal seat completes the request: declared, so a
+            // held F6 landing (R-10) takes the move for its arrival.
+            bool landed = FocusDepartureWatch.SeatTerminally(
+                this, () => model.HasLiveDiagram ? FocusDiagramProjection() : _stateHost.Focus());
             if (landed)
             {
                 model.CompleteFocus(request);
@@ -966,11 +972,11 @@ internal sealed class GraphSurfaceView : UserControl, IGraphSurfacePresenter
                 // The grid may have been collapsed under EMPTY or ERROR: realise
                 // its containers before the seat (Term F2).
                 _table.UpdateLayout();
-                delivered = _table.FocusProjection();
+                delivered = FocusDepartureWatch.SeatTerminally(this, _table.FocusProjection);
                 break;
             case GraphLoadState.Empty:
             case GraphLoadState.Error:
-                delivered = _stateHost.Focus();
+                delivered = FocusDepartureWatch.SeatTerminally(this, _stateHost.Focus);
                 break;
             default:
                 // Quiescent LOADING: nothing to land on; the transition's load

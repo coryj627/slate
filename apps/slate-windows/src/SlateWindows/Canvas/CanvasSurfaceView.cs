@@ -1168,15 +1168,15 @@ internal sealed class CanvasSurfaceView : UserControl, ICanvasSurfacePresenter
                 // Nothing to land on yet; the publish will call back.
                 return;
             case CanvasLoadState.Ready when model.FilteredOutline.Count == 0:
-                delivered = _onboarding.IsVisible
+                delivered = SeatTerminally(() => _onboarding.IsVisible
                     ? _onboarding.Focus()
-                    : _filterField.Focus();
+                    : _filterField.Focus());
                 break;
             case CanvasLoadState.Ready:
                 // Whichever projection is SHOWING is the one that can
                 // deliver: a row in a collapsed view has no container to
                 // realize and no focus to take (A14, PR B's arm).
-                delivered = model.FocusLandingNodeFor(request) is { } nodeId
+                delivered = SeatTerminally(() => model.FocusLandingNodeFor(request) is { } nodeId
                     && model.Selection.ActiveSurface switch
                     {
                         CanvasSurfaceKind.Table => _table.DeliverFocus(nodeId),
@@ -1185,10 +1185,10 @@ internal sealed class CanvasSurfaceView : UserControl, ICanvasSurfacePresenter
                         // fallback below is the landing).
                         CanvasSurfaceKind.Visual => false,
                         _ => _outline.DeliverFocus(nodeId) is not null,
-                    };
+                    });
                 break;
             default:
-                delivered = _stateBanner.Focus();
+                delivered = SeatTerminally(_stateBanner.Focus);
                 break;
         }
         if (delivered)
@@ -1200,6 +1200,12 @@ internal sealed class CanvasSurfaceView : UserControl, ICanvasSurfacePresenter
             }
         }
     }
+
+    /// <summary>R-10: every seat <see cref="TryDeliverFocus"/> makes completes
+    /// the request, so each is the document's TERMINAL seat, declared as one: a
+    /// held F6 landing takes the move for its arrival, not for the reader
+    /// moving on inside the surface (<see cref="FocusDepartureWatch"/>).</summary>
+    private bool SeatTerminally(Func<bool> seat) => FocusDepartureWatch.SeatTerminally(this, seat);
 
     private void OnModelPropertyChanged(
         object? sender, System.ComponentModel.PropertyChangedEventArgs e)
