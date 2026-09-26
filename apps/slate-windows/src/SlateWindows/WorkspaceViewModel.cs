@@ -100,6 +100,11 @@ internal sealed partial class WorkspaceTabViewModel : BindableBase, IDisposable
     private int _editorCaretOffset;
     private readonly Dispatcher _dispatcher = Dispatcher.CurrentDispatcher;
     private bool _disposed;
+    // #1280: the tab's save chain (each save starts after the previous
+    // one lands) and the epoch that retires an in-flight save's publish
+    // when the tab is disposed or re-pointed at another item.
+    private Task<bool> _saveTail = Task.FromResult(true);
+    private int _saveEpoch;
     private bool _taskToggleInFlight;
     private int _taskToggleGeneration;
     private int _anchorNavigationGeneration;
@@ -438,6 +443,7 @@ internal sealed partial class WorkspaceTabViewModel : BindableBase, IDisposable
 
     public void ReplaceItem(WorkspaceItemState item)
     {
+        _saveEpoch++;
         _taskToggleGeneration++;
         _taskToggleInFlight = false;
         _editorInteractions?.Dispose();
@@ -621,18 +627,91 @@ internal sealed partial class WorkspaceTabViewModel : BindableBase, IDisposable
         }
     }
 
-    public bool Save()
+    /// <summary>Save the note and report whether it is saved (#1280;
+    /// locked decision 05 §4.1). The core write runs on a worker; this
+    /// caller — the explicit Save, Save All, save-before-close and the
+    /// dirty-navigation gate, all of which decide on the answer — waits in
+    /// a nested dispatcher frame, so the dispatcher keeps pumping input,
+    /// focus, the inline status and every notification while the file and
+    /// index work runs. <paramref name="onSaved"/> runs on the dispatcher
+    /// when this save lands, in save order.</summary>
+    public bool Save(Action? onSaved = null) => WaitWhilePumping(SaveAsync(onSaved));
+
+    /// <summary>The save pipeline (#1280): serialized per tab — a save
+    /// requested while one is in flight starts only after it has landed,
+    /// from a fresh snapshot — each publishing exactly once, in order, on
+    /// the dispatcher.</summary>
+    internal Task<bool> SaveAsync(Action? onSaved = null)
     {
+        _dispatcher.VerifyAccess();
+        Task<bool> previous = _saveTail;
+        var completion = new TaskCompletionSource<bool>();
+        _saveTail = completion.Task;
+        if (previous.IsCompleted)
+        {
+            StartSave(onSaved, completion);
+        }
+        else
+        {
+            previous.ContinueWith(
+                _ => _dispatcher.BeginInvoke(
+                    DispatcherPriority.Normal,
+                    new Action(() => StartSave(onSaved, completion))),
+                CancellationToken.None,
+                TaskContinuationOptions.None,
+                TaskScheduler.Default);
+        }
+        return completion.Task;
+    }
+
+    /// <summary>#1280 test seam: runs on the save worker, before the core
+    /// write — a test parks it there.</summary>
+    internal Action? SaveWriteHookForTests { get; set; }
+
+    private bool WaitWhilePumping(Task<bool> save)
+    {
+        if (!save.IsCompleted)
+        {
+            var frame = new DispatcherFrame();
+            save.ContinueWith(
+                _ => _dispatcher.BeginInvoke(
+                    DispatcherPriority.Send,
+                    new Action(() => frame.Continue = false)),
+                CancellationToken.None,
+                TaskContinuationOptions.None,
+                TaskScheduler.Default);
+            Dispatcher.PushFrame(frame);
+            if (!save.IsCompleted)
+            {
+                // The dispatcher is shutting down: the frame ended before
+                // the save could publish. Nothing waits on it any more.
+                return false;
+            }
+        }
+        return save.GetAwaiter().GetResult();
+    }
+
+    /// <summary>The dispatcher half before the write: the snapshot, the
+    /// integrity refusal and the repair lease; then the worker.</summary>
+    private void StartSave(Action? onSaved, TaskCompletionSource<bool> completion)
+    {
+        if (_disposed)
+        {
+            completion.SetResult(false);
+            return;
+        }
         if (!IsMarkdown || !IsDirty)
         {
-            return true;
+            onSaved?.Invoke();
+            completion.SetResult(true);
+            return;
         }
 
-        string saveText;
+        EditorSaveSnapshot snapshot;
         try
         {
-            EditorSaveSnapshot? snapshot = _editorSession?.PrepareSaveSnapshot();
-            saveText = snapshot?.Text ?? Text;
+            snapshot = _editorSession?.PrepareSaveSnapshot()
+                ?? new EditorSaveSnapshot(Text, Revision: -1);
         }
         catch (Exception exception) when (exception is not OutOfMemoryException)
         {
@@ -649,7 +728,8 @@ internal sealed partial class WorkspaceTabViewModel : BindableBase, IDisposable
             Status = SlateUniffiMethods.A11yRender(blocked).Text;
             _documentChanged?.Invoke(this, null);
             _announce(blocked);
-            return false;
+            completion.SetResult(false);
+            return;
         }
 
         // Ordinary saves route through the same file-before-index
@@ -659,55 +739,127 @@ internal sealed partial class WorkspaceTabViewModel : BindableBase, IDisposable
         // lease covers the interval, and a non-conflict failure
         // converts into the pending repair atomically, so a manual
         // checkbox edit can never resurrect ghost task rows either.
-        Panels.TaskIndexRepairCoordinator? repairs = TaskRepairs;
-        repairs?.BeginMutation(Path);
+        // The lease now spans the off-dispatcher write (#1280).
+        var request = new SaveRequest(
+            Path,
+            snapshot.Text,
+            snapshot.Revision,
+            _contentHash,
+            _saveEpoch,
+            TaskRepairs,
+            onSaved);
+        request.Repairs?.BeginMutation(request.Path);
+        Action? hook = SaveWriteHookForTests;
+        Task.Run(() => WriteForSave(request, hook))
+            .ContinueWith(
+                write => _dispatcher.BeginInvoke(
+                    DispatcherPriority.Normal,
+                    new Action(() =>
+                    {
+                        try
+                        {
+                            completion.SetResult(PublishSave(write, request));
+                        }
+                        catch (Exception exception)
+                        {
+                            completion.SetException(exception);
+                        }
+                    })),
+                CancellationToken.None,
+                TaskContinuationOptions.None,
+                TaskScheduler.Default);
+    }
+
+    private sealed record SaveRequest(
+        string Path,
+        string Text,
+        long Revision,
+        string? ExpectedContentHash,
+        int Epoch,
+        Panels.TaskIndexRepairCoordinator? Repairs,
+        Action? OnSaved);
+
+    private sealed record SaveWrite(string NewContentHash, string? Caveat);
+
+    /// <summary>The worker half: the synchronous core write, off the
+    /// dispatcher (locked decision 05 §4.1).</summary>
+    private SaveWrite WriteForSave(SaveRequest request, Action? hook)
+    {
+        hook?.Invoke();
+        if (request.ExpectedContentHash is null)
+        {
+            // #1077 (contract I8): a tab with no content hash has never
+            // loaded bytes from the path it names — it has no basis to
+            // overwrite whatever sits there now (the parked tab of a
+            // deleted note whose name came back under another spelling
+            // is the case that loses data). Its save is a CREATE:
+            // success when the path is free, DestinationExists — the
+            // conflict arm below — when it is not; never a silent
+            // overwrite. Core's documented "null hash = unconditional"
+            // save is unchanged; this is the host's rule. A post-publish
+            // index failure is a LANDED write (#1123): the bytes are on
+            // disk, so the tab is saved and says so with the caveat.
+            return _session.CreateExclusiveReporting(request.Path, request.Text) switch
+            {
+                CreateExclusiveOutcome.Committed committed =>
+                    new SaveWrite(committed.Report.NewContentHash, null),
+                CreateExclusiveOutcome.PublishedUnindexed published => new SaveWrite(
+                    published.ContentHash,
+                    CreateOutcomes.PublishedUnindexedCaveat(
+                        System.IO.Path.GetFileName(request.Path), published.ErrorMessage)),
+                _ => throw new InvalidOperationException("unknown create outcome"),
+            };
+        }
+        return new SaveWrite(
+            _session.SaveText(request.Path, request.Text, request.ExpectedContentHash)
+                .NewContentHash,
+            null);
+    }
+
+    /// <summary>The dispatcher half after the write: settle the lease,
+    /// then publish state and exactly one D-10 outcome. A tab disposed or
+    /// re-pointed at another item during the write takes no state and says
+    /// nothing — the bytes it wrote are on disk.</summary>
+    private bool PublishSave(Task<SaveWrite> write, SaveRequest request)
+    {
+        Panels.TaskIndexRepairCoordinator? repairs = request.Repairs;
         bool leaseSettled = false;
         try
         {
-            string newContentHash;
-            string? caveat = null;
-            if (_contentHash is null)
+            SaveWrite saved = write.GetAwaiter().GetResult();
+            repairs?.EndMutation(request.Path, indexConsistent: saved.Caveat is null);
+            leaseSettled = true;
+            if (_disposed || request.Epoch != _saveEpoch)
             {
-                // #1077 (contract I8): a tab with no content hash has never
-                // loaded bytes from the path it names — it has no basis to
-                // overwrite whatever sits there now (the parked tab of a
-                // deleted note whose name came back under another spelling
-                // is the case that loses data). Its save is a CREATE:
-                // success when the path is free, DestinationExists — the
-                // conflict arm below — when it is not; never a silent
-                // overwrite. Core's documented "null hash = unconditional"
-                // save is unchanged; this is the host's rule. A post-publish
-                // index failure is a LANDED write (#1123): the bytes are on
-                // disk, so the tab is saved and says so with the caveat.
-                switch (_session.CreateExclusiveReporting(Path, saveText))
+                return true;
+            }
+
+            _contentHash = saved.NewContentHash;
+            IsExternallyStale = false;
+            if (_editorSession is { } session)
+            {
+                _text = request.Text;
+                if (session.Revision == request.Revision)
                 {
-                    case CreateExclusiveOutcome.Committed committed:
-                        newContentHash = committed.Report.NewContentHash;
-                        break;
-                    case CreateExclusiveOutcome.PublishedUnindexed published:
-                        newContentHash = published.ContentHash;
-                        caveat = CreateOutcomes.PublishedUnindexedCaveat(
-                            System.IO.Path.GetFileName(Path), published.ErrorMessage);
-                        break;
-                    default:
-                        throw new InvalidOperationException("unknown create outcome");
+                    session.MarkSaved(request.Text);
                 }
+                else
+                {
+                    // Typed while the write ran: disk holds the snapshot,
+                    // the editor keeps the newer text and stays dirty.
+                    session.MarkSavedBehindEdits(request.Text);
+                }
+                IsDirty = !session.IsAtSavedBaseline;
             }
             else
             {
-                newContentHash = _session.SaveText(Path, saveText, _contentHash).NewContentHash;
+                IsDirty = !string.Equals(_text, request.Text, StringComparison.Ordinal);
             }
-            repairs?.EndMutation(Path, indexConsistent: caveat is null);
-            leaseSettled = true;
-            _contentHash = newContentHash;
-            IsExternallyStale = false;
-            _text = saveText;
-            _editorSession?.MarkSaved(saveText);
-            IsDirty = false;
-            Status = caveat is null
-                ? $"Saved {System.IO.Path.GetFileName(Path)}."
-                : $"Saved {System.IO.Path.GetFileName(Path)}. {caveat}";
+            Status = saved.Caveat is null
+                ? $"Saved {System.IO.Path.GetFileName(request.Path)}."
+                : $"Saved {System.IO.Path.GetFileName(request.Path)}. {saved.Caveat}";
             _documentChanged?.Invoke(this, null);
+            request.OnSaved?.Invoke();
             return true;
         }
         catch (VaultException exception)
@@ -715,12 +867,16 @@ internal sealed partial class WorkspaceTabViewModel : BindableBase, IDisposable
             // A refused create wrote nothing: the index is as consistent as
             // it was, the same as a WriteConflict refusal.
             repairs?.EndMutation(
-                Path,
+                request.Path,
                 indexConsistent: exception
                     is VaultException.WriteConflict
                     or VaultException.DestinationExists);
             leaseSettled = true;
-            String filename = System.IO.Path.GetFileName(Path);
+            if (_disposed || request.Epoch != _saveEpoch)
+            {
+                return false;
+            }
+            String filename = System.IO.Path.GetFileName(request.Path);
             if (exception is VaultException.WriteConflict)
             {
                 // W7-7 R-7 (#1249; contract 38 D-10 as amended, OD-5): a
@@ -751,14 +907,14 @@ internal sealed partial class WorkspaceTabViewModel : BindableBase, IDisposable
             // a leaked lease bars every task query forever.
             if (!leaseSettled)
             {
-                repairs?.EndMutation(Path, indexConsistent: false);
+                repairs?.EndMutation(request.Path, indexConsistent: false);
             }
         }
     }
-
     public void Dispose()
     {
         _disposed = true;
+        _saveEpoch++;
         _taskToggleGeneration++;
         // W4-4: refuse new property-header work before the session
         // this tab's header reads from goes away.
@@ -2445,7 +2601,15 @@ internal sealed partial class WorkspaceViewModel : BindableBase, IDisposable
 
     private void SaveActive()
     {
-        if (ActiveGroup.ActiveTab is WorkspaceTabViewModel tab && tab.Save())
+        if (ActiveGroup.ActiveTab is not WorkspaceTabViewModel tab)
+        {
+            return;
+        }
+
+        // #1280: the confirmation publishes when THIS save lands, from the
+        // tab's save chain — so two quick saves announce once each, in
+        // order, however the nested dispatcher frames unwind.
+        tab.Save(onSaved: () =>
         {
             _announce(new A11yEvent.NoteSaved(System.IO.Path.GetFileName(tab.Path)));
             // Headings move under edits — the outline leaf re-reads
@@ -2456,7 +2620,7 @@ internal sealed partial class WorkspaceViewModel : BindableBase, IDisposable
             // just-saved bytes so its rows and CAS tokens are never
             // a stale generation behind the tab (contract 4).
             RefreshPropertiesFor(tab.Path);
-        }
+        });
     }
 
     private static WorkspaceItemState ItemForPath(string path)

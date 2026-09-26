@@ -536,6 +536,28 @@ internal sealed class AvalonDocumentBufferSession : IDisposable
         AdoptSavedBaseline(savedBaseline);
     }
 
+    /// <summary>#1280: the save of <paramref name="savedText"/> landed
+    /// while the document moved on — an edit made while the write ran off
+    /// the dispatcher. The baseline becomes what is on disk; the document
+    /// keeps the newer text, so it stays dirty.</summary>
+    internal void MarkSavedBehindEdits(string savedText)
+    {
+        ArgumentNullException.ThrowIfNull(savedText);
+        ThrowIfDisposed();
+        Document.VerifyAccess();
+        lock (_gate)
+        {
+            _savedBaselineText = savedText;
+            _savedLengthUtf16 = checked((uint)savedText.Length);
+            _savedContentHash = SlateUniffiMethods.EditorTextContentHash(savedText);
+        }
+
+        // The CURRENT text is not what is on disk: no undo position is the
+        // original file any more, so the baseline answers by comparison —
+        // undoing back to the saved text is clean again, anything else dirty.
+        Document.UndoStack.DiscardOriginalFileMarker();
+    }
+
     internal void MarkSavedAfterVerifiedDelta(
         EditorSavedBaseline savedBaseline,
         long expectedRevision)
