@@ -641,13 +641,34 @@ internal sealed class CanvasDocumentViewModel : PanelWorkScheduler
     /// A surface delivered the request and is saying so. Only the
     /// request that is still PENDING clears it, compared by reference:
     /// a request raised while an older one was in flight must not be
-    /// consumed by the older one's late delivery.
+    /// consumed by the older one's late delivery. Recorded as
+    /// <see cref="DocumentLandingEnd.Seated"/> (W7-7 R-10: the F6 ring's
+    /// Landed): call it only after a terminal seat took focus.
     /// </summary>
-    internal void CompleteFocusLanding(CanvasFocusRequest delivered)
+    internal void CompleteFocusLanding(CanvasFocusRequest delivered) =>
+        EndFocusLanding(delivered, DocumentLandingEnd.Seated);
+
+    /// <summary>Let go of the pending request WITHOUT seating it (a
+    /// withdrawn restoration, the ring cancelling its own landing):
+    /// recorded as <see cref="DocumentLandingEnd.Released"/>, never a
+    /// landing (W7-7 R-10).</summary>
+    internal void ReleaseFocusLanding(CanvasFocusRequest released) =>
+        EndFocusLanding(released, DocumentLandingEnd.Released);
+
+    /// <summary>W7-7 R-10: the last request this document ended, and how.
+    /// Any other way a request goes — a teardown, a tab set that no longer
+    /// holds its owner, a filter excluding its node — records nothing, which
+    /// reads as released: only an explicit seat is a landing.</summary>
+    internal DocumentLandingEnded? LastFocusLandingEnd { get; private set; }
+
+    private void EndFocusLanding(CanvasFocusRequest request, DocumentLandingEnd end)
     {
-        ArgumentNullException.ThrowIfNull(delivered);
-        if (ReferenceEquals(_focusRequest, delivered))
+        ArgumentNullException.ThrowIfNull(request);
+        if (ReferenceEquals(_focusRequest, request))
         {
+            // Recorded BEFORE the change is raised: the change's handlers
+            // read how the request ended.
+            LastFocusLandingEnd = new DocumentLandingEnded(request, request.Owner, end);
             FocusRequest = null;
         }
     }

@@ -822,7 +822,7 @@ internal sealed class CanvasSurfaceView : UserControl, ICanvasSurfacePresenter
             && _deferredRestoration is { } deferred
             && Model is { } model)
         {
-            model.CompleteFocusLanding(deferred);
+            model.ReleaseFocusLanding(deferred);
             _deferredRestoration = null;
             // Nothing is left for the hold to govern, and leaving a
             // stale departure behind is how the reclassification below

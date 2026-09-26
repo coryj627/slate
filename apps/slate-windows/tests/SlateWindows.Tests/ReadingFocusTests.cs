@@ -1145,6 +1145,100 @@ public sealed class ReadingFocusTests
         Assert.Equal([host.RightPaneLine()], host.Announced);
     });
 
+    /// <summary>R-10: a graph whose rows are being refreshed seats a shell
+    /// landing PROVISIONALLY on the grid it still shows, so focus is in the
+    /// surface while the landing is held. When the refresh then ends without
+    /// a terminal seat — a rows-only failure, or a rejection — the document
+    /// releases the request unseated, and that is a delayed REFUSAL whatever
+    /// focus the provisional seat left behind: no editor line, and the same
+    /// press resumes at the next region, spoken once there.</summary>
+    [Theory]
+    [InlineData("rows-only failure")]
+    [InlineData("rejection")]
+    public void AnUnseatedReleaseAfterAProvisionalSeatIsARefusal(string end) => RunSta(() =>
+    {
+        using var host = new Host();
+        host.Initialize("graph");
+        GraphDocumentViewModel graph = host.Tab.Graph!;
+        Assert.True(graph.Publication.HoldsSnapshot);
+        RingHost ring = host.UseRing();
+        using var reached = new ManualResetEventSlim(false);
+        using var release = new ManualResetEventSlim(false);
+        graph.FetchGateForTests = () =>
+        {
+            reached.Set();
+            _ = release.Wait(TimeSpan.FromSeconds(30));
+            if (end == "rows-only failure")
+            {
+                throw new InvalidOperationException("The fixture's rows fail.");
+            }
+        };
+        try
+        {
+            Assert.True(graph.Request(new GraphRequest.Sort(new GraphTableSort(GraphTableColumn.Note, true))));
+            Assert.True(reached.Wait(TimeSpan.FromSeconds(30)), "the refresh never started");
+            GraphLoadToken token = graph.CurrentForTests!;
+            host.FocusTabBar();
+
+            host.Workspace.FocusNextPaneCommand.Execute(null);
+            PumpedDispatcher.Drain();
+
+            Assert.Equal(ShellRegionLanding.Pending, Assert.Single(ring.Attempts).Outcome);
+            Assert.True(host.EditorStop().IsKeyboardFocusWithin, "the refreshing graph gave no provisional seat");
+            Assert.NotNull(host.EditorLandingRequest());
+            Assert.Empty(host.Announced);
+
+            if (end == "rejection")
+            {
+                // The envelope for the CURRENT token whose query is not the
+                // request's: rejected, and the lineage ends.
+                GraphVisibilityQuery foreign = token.Request.Query with { NameQuery = "not-the-request" };
+                GraphTableRows rows = host.Session.GraphTableRows(foreign, token.Request.Sort);
+                graph.ReceiveForTests(new GraphLoadEnvelope(token, foreign.Filter, foreign, token.Request.Sort, null, rows, null));
+            }
+        }
+        finally
+        {
+            release.Set();
+        }
+
+        PumpedDispatcher.PumpUntilDrained(graph.WhenAllWorkDrained());
+        PumpedDispatcher.Drain();
+
+        Assert.False(graph.IsRequestInFlight);
+        Assert.Null(host.EditorLandingRequest());
+        Assert.Equal([ShellRegionKind.Editor, ShellRegionKind.RightPaneContent], ring.Tried);
+        AssertFocused(host.Elsewhere, $"the press resumed past the refused editor ({end})");
+        Assert.Equal([host.RightPaneLine()], host.Announced);
+        Assert.False(host.Workspace.HoldsShellRegionLanding);
+    });
+
+    /// <summary>R-10: the answer inside the press is the document's own
+    /// account too, never where focus sits. A canvas whose document takes no
+    /// landing (shut down) is Refused even with the reader already inside its
+    /// surface: no editor line, and the press resumes past it.</summary>
+    [Fact]
+    public void ADocumentThatTakesNoLandingIsRefusedWithFocusInItsSurface() => RunSta(() =>
+    {
+        using var host = new Host();
+        host.Initialize("canvas");
+        var surface = Assert.IsType<CanvasSurfaceView>(host.EditorStop());
+        Assert.True(surface.FilterFieldForTests.Focus());
+        host.Tab.Canvas!.Shutdown();
+        PumpedDispatcher.Drain();
+        Assert.True(surface.IsKeyboardFocusWithin);
+        int spoken = 0;
+        int fellThrough = 0;
+
+        ShellRegionLanding landing = ((IShellRegionHost)host.Shell).TryLand(
+            ShellRegionKind.Editor, () => spoken++, () => fellThrough++);
+        PumpedDispatcher.Drain();
+
+        Assert.Equal(ShellRegionLanding.Refused, landing);
+        Assert.Equal(0, spoken);
+        Assert.Equal(0, fellThrough);
+    });
+
     /// <summary>R-10: entering the held editor stop is followed ONCE — the
     /// reader stepping into a loading canvas, or an in-flight graph's
     /// provisional seat (its state host over a load with nothing held, its
@@ -2197,11 +2291,11 @@ public sealed class ReadingFocusTests
         {
             if (Tab.Canvas is { FocusRequest: { } canvasRequest } canvas)
             {
-                canvas.CompleteFocusLanding(canvasRequest);
+                canvas.ReleaseFocusLanding(canvasRequest);
             }
             else if (Tab.Graph is { FocusRequest: { } graphRequest } graph)
             {
-                graph.CompleteFocus(graphRequest);
+                graph.ReleaseFocus(graphRequest);
             }
             else
             {

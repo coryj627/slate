@@ -143,13 +143,17 @@ public partial class MainWindow : IShellRegionHost
                     return ShellRegionLanding.Refused;
                 }
 
+                // How the canvas or graph document last ended a request, so the
+                // answer below reads how THIS press's request ended.
+                DocumentLandingEnded? endedBefore = LastDocumentLandingEnd(editorTab);
                 FocusEditorPane(workspace.ActiveGroup, announceWhenLanded, fallThroughWhenRefused);
                 // Canvas and graph tabs seat focus through their document's own
-                // landing, most often inside the request itself; R-10 verifies it
-                // before the ring speaks and holds what is still to come.
+                // landing, most often inside the request itself; R-10 reads the
+                // document's own account of it before the ring speaks, and holds
+                // what is still to come.
                 if (editorTab is { IsCanvas: true } or { IsGraph: true })
                 {
-                    return DocumentLanding(editorTab, announceWhenLanded, fallThroughWhenRefused);
+                    return DocumentLanding(editorTab, endedBefore, announceWhenLanded, fallThroughWhenRefused);
                 }
 
                 // A reading-mode tab's stop is its surface (R-10), verified by
@@ -172,6 +176,11 @@ public partial class MainWindow : IShellRegionHost
                         return ShellRegionLanding.Pending;
                     }
 
+                    // No landing held: the surface either took focus on its
+                    // applied, current projection (it never seats provisionally,
+                    // so focus inside it now IS that landing) or refused, and the
+                    // funnel's own fallbacks moved focus out (the tab item, the
+                    // tab control, the Files tree).
                     return reading.IsKeyboardFocusWithin ? ShellRegionLanding.Landed : ShellRegionLanding.Refused;
                 }
 
@@ -273,12 +282,17 @@ public partial class MainWindow : IShellRegionHost
     /// live for the terminal delivery to re-seat. Its line is spoken when the
     /// document completes it seated, it falls through when the document lets
     /// go of it unseated, and a newer press or request withdraws it —
-    /// releasing it, so the terminal delivery reclaims nothing. Completed
-    /// inside the request with focus in THIS tab's surface is Landed; anything
-    /// else is Refused (the document would not take the landing: retired,
-    /// shut down).</summary>
+    /// releasing it, so the terminal delivery reclaims nothing. Ended inside
+    /// the request, the document's own account decides: a request of THIS
+    /// press it records as <see cref="DocumentLandingEnd.Seated"/> is Landed;
+    /// anything else is Refused (released unseated, or never taken: retired,
+    /// shut down). Where focus sits is never read: a provisional seat puts it
+    /// in the surface without the landing.</summary>
     private ShellRegionLanding DocumentLanding(
-        WorkspaceTabViewModel tab, Action announceWhenLanded, Action fallThroughWhenRefused)
+        WorkspaceTabViewModel tab,
+        DocumentLandingEnded? endedBefore,
+        Action announceWhenLanded,
+        Action fallThroughWhenRefused)
     {
         FrameworkElement? surface = tab.IsCanvas
             ? FindVisualDescendants<Canvas.CanvasSurfaceView>(ContentPaneBorder)
@@ -296,12 +310,14 @@ public partial class MainWindow : IShellRegionHost
                 when ReferenceEquals(request.Owner, tab)
                 => new HeldDocumentLanding(
                     surface, canvas, nameof(canvas.FocusRequest), request, () => canvas.FocusRequest,
-                    () => canvas.CompleteFocusLanding(request), announceWhenLanded, fallThroughWhenRefused),
+                    () => canvas.LastFocusLandingEnd, () => canvas.ReleaseFocusLanding(request),
+                    announceWhenLanded, fallThroughWhenRefused),
             { IsGraph: true, Graph: { FocusRequest: { } request } graph }
                 when ReferenceEquals(request.Owner, tab)
                 => new HeldDocumentLanding(
                     surface, graph, nameof(graph.FocusRequest), request, () => graph.FocusRequest,
-                    () => graph.CompleteFocus(request), announceWhenLanded, fallThroughWhenRefused),
+                    () => graph.LastFocusEnd, () => graph.ReleaseFocus(request),
+                    announceWhenLanded, fallThroughWhenRefused),
             _ => null,
         };
         if (held is not null)
@@ -310,16 +326,31 @@ public partial class MainWindow : IShellRegionHost
             return ShellRegionLanding.Pending;
         }
 
-        return surface.IsKeyboardFocusWithin ? ShellRegionLanding.Landed : ShellRegionLanding.Refused;
+        return LastDocumentLandingEnd(tab) is { End: DocumentLandingEnd.Seated } ended
+            && !ReferenceEquals(ended, endedBefore)
+            && ReferenceEquals(ended.Owner, tab)
+            ? ShellRegionLanding.Landed
+            : ShellRegionLanding.Refused;
     }
 
+    /// <summary>The canvas or graph document's own record of the last
+    /// request it ended (R-10), or null for any other tab.</summary>
+    private static DocumentLandingEnded? LastDocumentLandingEnd(WorkspaceTabViewModel tab) => tab switch
+    {
+        { IsCanvas: true, Canvas: { } canvas } => canvas.LastFocusLandingEnd,
+        { IsGraph: true, Graph: { } graph } => graph.LastFocusEnd,
+        _ => null,
+    };
+
     /// <summary>A canvas or graph landing the ring is waiting on (R-10). The
-    /// document completing the request is its one signal — the surface seats
-    /// a request, then completes it, from every edge that re-asks, its own
-    /// focus-within edge included, so focus arriving is never seen first: the
-    /// line when the completion finds focus in the surface, the fall-through
-    /// when the document let go of the request unseated (a failure, or the
-    /// document torn down while its surface still shows the tab). It is
+    /// document ending the request is its one signal, and the document's own
+    /// account of HOW decides (<see cref="DocumentLandingEnd"/>) — never where
+    /// focus sits, because a graph seats a shell request provisionally while
+    /// its load is in flight and keeps it pending: the line when the document
+    /// records it ended SEATED (a declared terminal seat took focus, then
+    /// completed it), the fall-through when it let go of it any other way (a
+    /// rows-only failure or a rejection after a provisional seat, a load that
+    /// failed, the document torn down while its surface still shows the tab). It is
     /// CANCELLED instead — silently, the request released so the document
     /// seats nobody later — by a newer press, by a newer request in its
     /// place, by the surface leaving the tab (the shared cell rebinds on a
@@ -337,6 +368,7 @@ public partial class MainWindow : IShellRegionHost
         private readonly string _requestProperty;
         private readonly object _request;
         private readonly Func<object?> _currentRequest;
+        private readonly Func<DocumentLandingEnded?> _lastEnd;
         private readonly Action _release;
         private readonly Action _announce;
         private readonly Action _fallThrough;
@@ -349,6 +381,7 @@ public partial class MainWindow : IShellRegionHost
             string requestProperty,
             object request,
             Func<object?> currentRequest,
+            Func<DocumentLandingEnded?> lastEnd,
             Action release,
             Action announce,
             Action fallThrough)
@@ -358,6 +391,7 @@ public partial class MainWindow : IShellRegionHost
             _requestProperty = requestProperty;
             _request = request;
             _currentRequest = currentRequest;
+            _lastEnd = lastEnd;
             _release = release;
             _announce = announce;
             _fallThrough = fallThrough;
@@ -417,9 +451,12 @@ public partial class MainWindow : IShellRegionHost
                 return;
             }
 
-            // Completed seated — focus is in the surface, and the document
-            // completes only after the seat — it is the landing: the line.
-            if (_surface.IsKeyboardFocusWithin)
+            // Ended SEATED, by the document's own account — a declared
+            // terminal seat took focus, then completed the request — it is the
+            // landing: the line. Never read from where focus sits: a graph's
+            // provisional seat leaves focus in the surface when a rows-only
+            // failure or a rejection then releases the request unseated.
+            if (_lastEnd() is { End: DocumentLandingEnd.Seated } ended && ReferenceEquals(ended.Request, _request))
             {
                 _ = Stop();
                 _announce();

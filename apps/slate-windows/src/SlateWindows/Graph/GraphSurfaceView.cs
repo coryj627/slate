@@ -1015,7 +1015,9 @@ internal sealed class GraphSurfaceView : UserControl, IGraphSurfacePresenter
     {
         if (Model is { FocusRequest: { } request } model && ReferenceEquals(request.Owner, Owner))
         {
-            model.CompleteFocus(request);
+            // Released, not completed: a provisional seat may hold the keys,
+            // but nothing seated the request (W7-7 R-10).
+            model.ReleaseFocus(request);
             if (ReferenceEquals(_deferredRestoration, request))
             {
                 _deferredRestoration = null;
@@ -1130,7 +1132,7 @@ internal sealed class GraphSurfaceView : UserControl, IGraphSurfacePresenter
         {
             if (_deferredRestoration is { } deferred && Model is { } model)
             {
-                model.CompleteFocus(deferred);
+                model.ReleaseFocus(deferred);
                 _deferredRestoration = null;
                 _awayBecause = null;
             }
