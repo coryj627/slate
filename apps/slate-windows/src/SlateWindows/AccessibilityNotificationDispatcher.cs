@@ -26,13 +26,15 @@ namespace SlateWindows;
 /// </para>
 /// <para>
 /// OD-7 (2026-09-24), readiness: ONE predicate in every phase — a listening
-/// client, the Notification advise in WPF's map, and a connected status
-/// provider. A line is raised only when all three hold; otherwise it is
-/// QUEUED, never raised: a raise before the advise lands can reach a client
-/// UIA already knows of (measured: it did, on every unadvised launch) and be
-/// raised again at the drain, and one without the advise is deaf. The queue
-/// keeps the last <see cref="LaunchQueueCapacity"/> lines (the launch lines
-/// are about five). While it holds any, a <see cref="LaunchPollInterval"/>
+/// client and a connected status provider. WPF's Notification advise map is
+/// not part of it: the map gates only WPF's own RaiseNotificationEvent, which
+/// this dispatcher never calls, and the ungated raise was measured delivered
+/// with the map empty (7 of 7), so the map is logged with each transition,
+/// never waited for. A line is raised only when both hold; otherwise it is
+/// QUEUED, never raised — there is no provider to raise on, or no client to
+/// hear it — and a queued line is raised only by the drain, so no line is
+/// raised twice. The queue keeps the last
+/// <see cref="LaunchQueueCapacity"/> lines (the launch lines are about five). While it holds any, a <see cref="LaunchPollInterval"/>
 /// poll on the UI thread checks again — the only production wake-up, so it
 /// runs during the launch and after it alike and stops when the queue
 /// empties — and the first ready check (a tick or a post) drains the queue
@@ -45,9 +47,9 @@ namespace SlateWindows;
 /// first. That expiry is only the launch lines, posted by the first frame,
 /// reaching their own deadline; a line posted at 29 s survives until 59 s.
 /// Both are final, and neither raises without readiness: a client that
-/// stops listening or an advise removed after Done queues the line again,
-/// and the poll restarts. Nothing is composed: the drain raises core's
-/// rendered tuples.
+/// stops listening or a provider lost after Done queues the line again, and
+/// the poll restarts. Nothing is composed: the drain raises core's rendered
+/// tuples.
 /// </para>
 /// </remarks>
 internal sealed class AccessibilityNotificationDispatcher
@@ -126,7 +128,7 @@ internal sealed class AccessibilityNotificationDispatcher
     // listener probe and the launch seams are injected beside it, so the
     // readiness predicate and the launch phase are facts
     // (ProductionRaiseWaitsWhileNoClientListens,
-    // WithoutTheAdviseNoLineIsRaisedInAnyPhase,
+    // AnEmptyAdviseMapNeverHoldsALine,
     // AfterDoneALineWaitsWhileReadinessRegressesAndOneTickDeliversIt,
     // AfterExpiryALineWaitsForTheProviderInsteadOfBeingLost) rather than
     // comments.
@@ -207,14 +209,13 @@ internal sealed class AccessibilityNotificationDispatcher
     /// <summary>
     /// One check (every post, and every tick of the poll): the ONE readiness
     /// predicate, the same in every phase — R-1's listening client (UIA's own
-    /// answer), the Notification advise in WPF's map, and a connected status
-    /// provider, each asked every time and never short-circuited (codex round
-    /// 2). Ready, the queue drains once, in order, and then the posted line is
-    /// raised. Unready, the posted line is queued and nothing is raised: a
-    /// raise without the advise is deaf, and one before it lands can be heard
-    /// twice. Lines past their own deadline go first, so none is raised late.
-    /// The phase is bookkeeping only, never a path that raises without
-    /// readiness (codex round 19).
+    /// answer) and a connected status provider, each asked every time and
+    /// never short-circuited (codex round 2). WPF's advise map is read beside
+    /// them for the diagnostics only. Ready, the queue drains once, in order,
+    /// and then the posted line is raised. Unready, the posted line is queued
+    /// and nothing is raised. Lines past their own deadline go first, so none
+    /// is raised late. The phase is bookkeeping only, never a path that raises
+    /// without readiness (codex round 19).
     /// </summary>
     private void Check(QueuedLine? posted)
     {
@@ -227,7 +228,7 @@ internal sealed class AccessibilityNotificationDispatcher
             _launch.Diagnose(HostDiagnosticEvent.AnnouncementSource, provider);
         }
 
-        bool ready = clientsListening && advised && connected;
+        bool ready = clientsListening && connected;
         TimeSpan now = _launch.Elapsed();
         DropExpiredLines(now);
         if (_phase == LaunchPhase.Unadvised)
@@ -245,7 +246,7 @@ internal sealed class AccessibilityNotificationDispatcher
 
         if (ready)
         {
-            Drain();
+            Drain(advised);
             if (posted is { } line)
             {
                 _raise(line.Kind, line.Processing, line.Text, line.ActivityId);
@@ -279,8 +280,10 @@ internal sealed class AccessibilityNotificationDispatcher
 
     /// <summary>Each queued line raised exactly once, in order, through the
     /// same raiser at the first ready check — the launch's lines and later
-    /// ones alike — and the poll stopped with the queue empty.</summary>
-    private void Drain()
+    /// ones alike — and the poll stopped with the queue empty. The log line
+    /// records whether WPF's advise map knew of a listener then: the
+    /// diagnostic that replaced the gate.</summary>
+    private void Drain(bool advised)
     {
         StopPoll();
         if (_queue.Count == 0 && _droppedOldest == 0)
@@ -299,7 +302,8 @@ internal sealed class AccessibilityNotificationDispatcher
 
         _launch.Diagnose(
             HostDiagnosticEvent.AnnouncementReplay,
-            $"drained={queued.Length}, droppedOldest={dropped}, at={(int)_launch.Elapsed().TotalMilliseconds}ms");
+            $"drained={queued.Length}, droppedOldest={dropped}, at={(int)_launch.Elapsed().TotalMilliseconds}ms, "
+            + $"notificationListenerExists={advised}");
     }
 
     /// <summary>OD-7, codex round 20: each queued line expires
@@ -362,8 +366,9 @@ internal sealed class AccessibilityNotificationDispatcher
 
     /// <summary>
     /// OD-7's seams: whether UIA has advised the process of a notification
-    /// listener (WPF's map, which only an advise fills), whether the status
-    /// element has a connected provider to raise on, the readiness poll, the
+    /// listener (WPF's map, which only an advise fills — logged, never a
+    /// gate), whether the status element has a connected provider to raise
+    /// on, the readiness poll, the
     /// time since the first frame, and the diagnostics sink. Production reads
     /// the map and <see cref="NotificationSource"/>, polls on the UI thread,
     /// counts from the window's first frame and logs under
