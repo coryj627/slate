@@ -1261,35 +1261,25 @@ internal static class ReadingDocumentBuilder
         return section;
     }
 
-    /// <summary>The mac EmbedView name shapes, verbatim.</summary>
+    /// <summary>The mac EmbedView name shapes, in core's words (#1278):
+    /// a resolved card's header is core's title for what it resolved to —
+    /// the same title the Ctrl+E preview speaks — so a reading landing on
+    /// it (ReadingNavLanded carries the header as its text) speaks no host
+    /// sentence. An image named by this occurrence's own alt keeps it (mac
+    /// audits #196/#198/#419).</summary>
     private static string EmbedHeaderName(EmbedResolution resolution, string? alt) =>
         resolution switch
         {
-            EmbedResolution.FullNote fullNote =>
-                $"Embedded note: {fullNote.TargetPath}",
-            EmbedResolution.Section section =>
-                $"Embedded section: {section.Heading} from {section.TargetPath}",
-            EmbedResolution.Block block =>
-                $"Embedded block from {block.TargetPath}",
-            EmbedResolution.Image image =>
-                $"Embedded image: {ImageDescriptor(image, alt)}",
             EmbedResolution.Unresolved unresolved =>
                 UnresolvedEmbedText(unresolved.Reason),
-            _ => "Embedded note",
+            _ => ResolvedEmbeds.Of(resolution) switch
+            {
+                ResolvedEmbed.Image image when alt is not null =>
+                    SlateUniffiMethods.ResolvedEmbedTitle(image with { Alt = alt }),
+                { } resolved => SlateUniffiMethods.ResolvedEmbedTitle(resolved),
+                null => throw new System.Diagnostics.UnreachableException(),
+            },
         };
-
-    /// <summary>Alt-or-filename (mac audits #196/#198/#419): trimmed
-    /// authored alt when present, else the target's filename.</summary>
-    private static string ImageDescriptor(EmbedResolution.Image image, string? alt)
-    {
-        string? trimmed = (alt ?? image.Alt)?.Trim();
-        if (!string.IsNullOrEmpty(trimmed))
-        {
-            return trimmed;
-        }
-        int slash = image.TargetPath.LastIndexOf('/');
-        return slash >= 0 ? image.TargetPath[(slash + 1)..] : image.TargetPath;
-    }
 
     /// <summary>The mac visible unresolved strings, verbatim.</summary>
     private static string UnresolvedEmbedText(EmbedUnresolvedReason reason) =>
