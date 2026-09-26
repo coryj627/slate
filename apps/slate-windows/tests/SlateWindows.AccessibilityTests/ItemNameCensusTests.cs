@@ -105,20 +105,49 @@ public sealed class ItemNameCensusTests
         Assert.False(ShellAccessibilityTests.IsUnspeakableItemName(label), label);
     }
 
-    /// <summary>AR-20 (contracts 40): a note whose label is a namespace
-    /// chain with a PascalCase tail, or reads like a record dump, IS flagged
-    /// by the lexical census — the accepted false positive on a contrived
-    /// title, which no fixture carries and which fails a journey loudly with
-    /// the element's path. Pinned here so a change in either direction is
-    /// seen.</summary>
+    /// <summary>A legal note titled like a type name or a record dump:
+    /// its label alone matches the census's shapes, but its Quick Open row
+    /// publishes the note's vault path as HelpText, and the label is that
+    /// file's name with the extension stripped — so the row is spared
+    /// (codex PR 3 round 4; AR-20 now covers only hosts with no such
+    /// provenance).</summary>
     [Theory]
     [InlineData("System.String.md", "System.String")]
     [InlineData("Plan { owner = Alice }.md", "Plan { owner = Alice }")]
-    public void WhatQuickOpenExposesForAnAr20TitleIsFlagged(string file, string label)
+    public void WhatQuickOpenExposesForATypeShapedTitleIsSparedByItsPath(string file, string label)
     {
         Assert.Equal(label, QuickOpenLabel(file));
         Assert.True(ShellAccessibilityTests.IsUnspeakableItemName(label), label);
+        Assert.False(ShellAccessibilityTests.IsUnspeakableItemName(label, $"Notes/{file}"), label);
     }
+
+    /// <summary>The provenance, pinned both ways. A Quick Open row named
+    /// "System.String" whose HelpText is ".../System.String.md" is its file's
+    /// label and passes.</summary>
+    [Theory]
+    [InlineData("System.String", "Notes/System.String.md")]
+    [InlineData("System.String", "System.String.md")]
+    [InlineData("System.String", @"Notes\System.String.markdown")]
+    [InlineData("Plan { owner = Alice }", "Projects/Plan { owner = Alice }.md")]
+    public void ANameThatIsItsOwnFilesLabelIsSpeakable(string name, string helpText) =>
+        Assert.False(ShellAccessibilityTests.IsUnspeakableItemName(name, helpText), $"{name} / {helpText}");
+
+    /// <summary>...and the same name with an unrelated HelpText, a HelpText
+    /// that is no file path, or none at all is still flagged — as is a real
+    /// ToString leak beside its row's path, which never equals that file's
+    /// name.</summary>
+    [Theory]
+    [InlineData("System.String", "Notes/notes.md")]
+    [InlineData("System.String", "Opens the note.")]
+    [InlineData("System.String", "Notes/System.String")]
+    [InlineData("System.String", "Notes/System.String.md.bak")]
+    [InlineData("System.String", "")]
+    [InlineData("System.String", null)]
+    [InlineData("Plan { owner = Alice }", "Projects/plan.md")]
+    [InlineData("SlateWindows.QuickSwitcherRowViewModel", "A/note.md")]
+    [InlineData("QuickSwitcherRowViewModel { Path = A/note.md, Name = note.md }", "A/note.md")]
+    public void ANameWithoutItsOwnFilesProvenanceIsStillFlagged(string name, string? helpText) =>
+        Assert.True(ShellAccessibilityTests.IsUnspeakableItemName(name, helpText), $"{name} / {helpText}");
 
     /// <summary>The label Quick Open shows and speaks for a file, from core's
     /// own ranking (the QuickSwitcherViewModel's source).</summary>

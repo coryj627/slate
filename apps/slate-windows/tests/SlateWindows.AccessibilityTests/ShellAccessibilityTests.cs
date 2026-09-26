@@ -1053,6 +1053,35 @@ public sealed partial class ShellAccessibilityTests
         !string.IsNullOrEmpty(name)
         && (TypeNamePattern.IsMatch(name) || RecordDumpPattern.IsMatch(name));
 
+    /// <summary>The census's verdict on one element: its name, unless the
+    /// element itself proves the name is a file's label (codex PR 3 round 4,
+    /// AR-20). Quick Open names a note by its extension-stripped file name
+    /// and publishes the note's vault path as the row's HelpText, so a legal
+    /// note titled "System.String" or "Plan { owner = Alice }" reads as the
+    /// shapes the census hunts. A name that equals the extension-stripped
+    /// file name its own HelpText carries is that file's label and is
+    /// spared; a real ToString leak never equals its row's file name, so it
+    /// is still caught. Pinned both ways by <see cref="ItemNameCensusTests"/>.</summary>
+    internal static bool IsUnspeakableItemName(string? name, string? helpText) =>
+        IsUnspeakableItemName(name) && !IsLabelOfItsOwnFile(name!, helpText);
+
+    /// <summary>Whether <paramref name="name"/> is the label of the file
+    /// <paramref name="helpText"/> names: the help text is a path whose last
+    /// segment has an extension, and the name is that segment with its
+    /// extension stripped, exactly.</summary>
+    internal static bool IsLabelOfItsOwnFile(string name, string? helpText)
+    {
+        if (string.IsNullOrWhiteSpace(helpText))
+        {
+            return false;
+        }
+        string file = helpText[(helpText.LastIndexOfAny(['/', '\\']) + 1)..];
+        int dot = file.LastIndexOf('.');
+        return dot > 0
+            && dot < file.Length - 1
+            && string.Equals(file[..dot], name, StringComparison.Ordinal);
+    }
+
     /// <summary>
     /// W7-7 PR 3 (#1246, contract R-4): no element of the process that
     /// NVDA names an item by carries a .NET type name or a record dump.
@@ -1111,7 +1140,9 @@ public sealed partial class ShellAccessibilityTests
             foreach (AutomationElement element in window.FindAllDescendants(condition))
             {
                 string? name = element.Properties.Name.ValueOrDefault;
-                if (IsUnspeakableItemName(name))
+                // The HelpText is read only for a name the patterns flag.
+                if (IsUnspeakableItemName(name)
+                    && IsUnspeakableItemName(name, element.Properties.HelpText.ValueOrDefault))
                 {
                     offenders.Add(ElementPath(automation, element));
                 }
@@ -1130,7 +1161,8 @@ public sealed partial class ShellAccessibilityTests
                         {
                             offenders.Add($"{ElementPath(automation, element)} → a selected item with no name");
                         }
-                        else if (IsUnspeakableItemName(value))
+                        else if (IsUnspeakableItemName(value)
+                            && IsUnspeakableItemName(value, selected.Properties.HelpText.ValueOrDefault))
                         {
                             offenders.Add($"{ElementPath(automation, element)} → selected item '{value}'");
                         }
