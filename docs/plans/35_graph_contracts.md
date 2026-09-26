@@ -502,6 +502,7 @@ round finding.
 | T70 | `GraphAnnouncer.swift` (rewritten), the `GraphSurfaceMode` extension | `title`: `Table` / `Diagram` | static label | label inventory (PR A) | §W-C |
 | T71 | `GraphConfig.swift:109–110, 125` | `GraphColorToken.title` — the colour picker's options, `rawValue.capitalized`: `Red`, `Orange`, `Yellow`, `Green`, `Teal`, `Blue`, `Purple`, `Pink` (consumed by T47's picker, `GraphInspectorView.swift:89–93`) | static label | label inventory (PR E), the eight ordered | §W-C |
 | T72 | `GraphConfig.swift:130–131` | `GraphRingStyle` — the ring picker's options, `rawValue.capitalized`: `Solid`, `Dashed`, `Double`, `Dotted` (consumed by T48's picker, `GraphInspectorView.swift:94–98`) | static label | label inventory (PR E), the four ordered | §W-C |
+| W1 | Windows only (#1274): `Graph/ConnectionsPhrase.cs` `NoteHintWithNewTab`, composed by `ConnectionsLeafViewModel.RowHint` (W7-7 R-13, #1257) | a file-backed row's HelpText: T14's `Opens the note.`, then `⟨the spoken chord of windows.connections.openInNewTab⟩ opens it in a new tab.` | composed label (Windows-only: the chord clause is the chord table's spoken column through `NavigationHelp`, contract 39 N-1/N-2, never a literal; the mac's ⌘Return is unadvertised) | label inventory (PR B; B-16 as amended, T16a) | §W-C |
 | X1 | `GraphConfigStore.swift:42–110, 251` | the store's thrown and logged error texts | **excluded — not user-facing**: a read failure is discarded and the defaults apply (`AppState+GraphConfig.swift:48–52`); a write failure reaches `NSLog` only (`GraphConfigStore.swift:251`); neither is spoken or shown | — | — |
 
 **0a-13 — The one already-canonical site becomes a relay that keeps
@@ -533,9 +534,9 @@ assistive technology reads them as an element's name or content:
 dual-use by recorded divergence (0a-D3): `GraphStatus{NoConnections}`
 and `GraphStatus{LoadingConnections}` are static labels on mac (T8, T9)
 and posted on Windows when the leaf takes focus in that state. Every
-other label in the manifest (T1–T7, T10–T72) is §W-C label class,
-carried by the inventory of the PR that lands the surface, and is NOT
-in this vocabulary.
+other label in the manifest (T1–T7, T10–T72, and the Windows-only W1,
+#1274) is §W-C label class, carried by the inventory of the PR that
+lands the surface, and is NOT in this vocabulary.
 
 **0a-15 — Every count slot renders at every reachable cardinality, and
 every preserved plural defect is a (variant, slot) pair.** The
@@ -5148,7 +5149,8 @@ R-13):** a file-backed row's Windows hint composes a second sentence
 for Ctrl+Enter from a chord row, "Control Enter opens it in a new
 tab.", its key name the `windows.connections.openInNewTab` row's
 spoken column through `NavigationHelp` (contract 39 N-2); the first
-sentence stays T16 byte for byte, and a ghost's hint stays T15.
+sentence stays T16 byte for byte, and a ghost's hint stays T15; the
+composed hint is the inventory's T16a (B-16 as amended, #1274).
 **Amended by the owner on 2026-09-26 (#1273):** the tree's keys are
 four rows of the chord table's Connections scope, each matched with
 exactly its modifiers (contract 39 P12, P13(c), N-3) —
@@ -5324,7 +5326,17 @@ the substitutions exercised: the no-note label, the loading label and its
 accessible name, the empty and error labels, both group headers with
 singular and plural counts, both group empties, the three badges, the
 row and action hints, and B1's one Windows string on the disabled menu
-action alone (B-D6, B-9).
+action alone (B-D6, B-9). **Amended by the owner on 2026-09-26 (#1274,
+W7-7 R-13):** the inventory gains T16a, the manifest's Windows-only
+W1 — a file-backed row's hint, T16 then "⟨chord⟩ opens it in a new
+tab.", the chord `windows.connections.openInNewTab`'s spoken column
+through `NavigationHelp` (contract 39 N-1/N-2), never a literal — and
+reads as DATA: `ConnectionsLabelInventory` holds every entry, the
+theory exercises T16a with a substituted chord and with its row's, and
+the row-hint facts compare against it rather than a sentence of their
+own. The theory is bidirectional: every member of `ConnectionsPhrase`
+is an entry and every entry a member (the title among them), so a
+string site added to the phrase class outside the inventory fails.
 
 **B-17 — §W-A: the golden keeps 0b's schema; the full record is an
 in-process fact.** The `connections` entries of `graph_queries.json` are

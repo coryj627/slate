@@ -1,7 +1,8 @@
 // Copyright (C) 2026 Cory Joseph
 // SPDX-License-Identifier: AGPL-3.0-or-later
 
-using SlateWindows.Commands;
+using System.Reflection;
+using System.Runtime.CompilerServices;
 using SlateWindows.Graph;
 using uniffi.slate_uniffi;
 
@@ -222,14 +223,10 @@ public sealed partial class ConnectionsLeafTests
                 Render(new GraphA11yEvent.GraphRow(GraphVerbosity.Standard, ConnectionsLeafViewModel.RowCopy(note))),
                 leaf.RowName(note));
             // W7-7 R-13 (#1257; contract 35 B-9's hint, amended): a file-backed
-            // row's hint says BOTH of its activations — the mac's T16, then
-            // the new-tab gesture, its key name the chord row's spoken column
-            // (contract 39 N-2), never a literal. A ghost keeps T15.
-            string newTab = ChordTable.WindowsSpokenFor("windows.connections.openInNewTab")
-                ?? throw new Xunit.Sdk.XunitException("no spoken chord for windows.connections.openInNewTab");
-            string hint = leaf.RowHint(note);
-            Assert.Equal("Opens the note. " + newTab + " opens it in a new tab.", hint);
-            Assert.Contains(newTab, hint, StringComparison.Ordinal);
+            // row's hint says BOTH of its activations — the inventory's T16a
+            // (B-16 as amended, #1274), its chord the row's through
+            // NavigationHelp, never a literal. A ghost keeps T15.
+            Assert.Equal(ConnectionsLabelInventory.NoteRowHint(), leaf.RowHint(note));
             Assert.Equal(ConnectionsPhrase.GhostHint, leaf.RowHint(ghost));
             Assert.Equal(ghost.References, ConnectionsLeafViewModel.RowCopy(ghost).References);
 
@@ -329,27 +326,57 @@ public sealed partial class ConnectionsLeafTests
         });
     }
 
-    [Fact]
-    public void TheLabelInventoryIsTheMacsByteForByte()
+    /// <summary>The label inventory's entries, one theory row per (member,
+    /// case) — <see cref="ConnectionsLabelInventory"/> is the data.</summary>
+    public static TheoryData<string, string> LabelInventory()
     {
-        Assert.Equal("Select a note to see its connections.", ConnectionsPhrase.NoNote);
-        Assert.Equal("Loading connections…", ConnectionsPhrase.LoadingVisible);
-        Assert.Equal("Loading connections.", ConnectionsPhrase.LoadingAccessible);
-        Assert.Equal("This note has no connections.", ConnectionsPhrase.Empty);
-        Assert.Equal("Connections error: boom", ConnectionsPhrase.Error("boom"));
-        Assert.Equal("Linked from, 1 note", ConnectionsPhrase.GroupHeader(ConnectionsPhrase.IncomingTitle, 1));
-        Assert.Equal("Links to, 0 notes", ConnectionsPhrase.GroupHeader(ConnectionsPhrase.OutgoingTitle, 0));
-        Assert.Equal("Links to, 12 notes", ConnectionsPhrase.GroupHeader(ConnectionsPhrase.OutgoingTitle, 12));
-        Assert.Equal("Nothing links here.", ConnectionsPhrase.IncomingEmpty);
-        Assert.Equal("This note links to nothing.", ConnectionsPhrase.OutgoingEmpty);
-        Assert.Equal(["Unresolved", "Embed", "Attachment"], [ConnectionsPhrase.BadgeUnresolved, ConnectionsPhrase.BadgeEmbed, ConnectionsPhrase.BadgeAttachment]);
-        Assert.Equal("Unresolved. Choose Create note to add it.", ConnectionsPhrase.GhostHint);
-        Assert.Equal("Opens the note.", ConnectionsPhrase.NoteHint);
-        Assert.Equal("Local graph depth", ConnectionsPhrase.DepthName);
-        Assert.Equal("How many links away from this note to include.", ConnectionsPhrase.DepthHint);
-        Assert.Equal(["Links", "2 links away", "3 links away"], ConnectionsPhrase.DepthTags);
-        // The static loading label and the leaf's LoadingConnections status
-        // render the same sentence (0a-D3: the status is Windows's).
+        var rows = new TheoryData<string, string>();
+        foreach ((string _, string member, string @case, string _, Func<string> _) in ConnectionsLabelInventory.Entries)
+        {
+            rows.Add(member, @case);
+        }
+        return rows;
+    }
+
+    /// <summary>B-16 as amended (#1274): every inventory entry byte for byte —
+    /// the mac's T1–T17 with their substitutions, and T16a, the Windows-only
+    /// composed hint (0a-12's W1), with a substituted chord and with the one
+    /// its chord row speaks through <c>NavigationHelp</c>.</summary>
+    [Theory]
+    [MemberData(nameof(LabelInventory))]
+    public void EveryConnectionsLabelIsTheInventorys(string member, string @case)
+    {
+        (string item, string _, string _, string expected, Func<string> actual) = Assert.Single(
+            ConnectionsLabelInventory.Entries, entry => entry.Member == member && entry.Case == @case);
+        Assert.True(expected == actual(), $"{item} ({member}, {@case}): \"{actual()}\" is not the inventory's \"{expected}\"");
+    }
+
+    /// <summary>B-16's other direction (#1274): the inventory and the phrase
+    /// class name the SAME members — a string site added to
+    /// <c>ConnectionsPhrase</c> without an inventory entry (as T16a once was),
+    /// or an entry whose member is gone, fails here.</summary>
+    [Fact]
+    public void TheInventoryAndThePhraseClassNameTheSameMembers()
+    {
+        const BindingFlags Declared = BindingFlags.Public | BindingFlags.NonPublic | BindingFlags.Static | BindingFlags.DeclaredOnly;
+        string[] phrases = [.. typeof(ConnectionsPhrase).GetMembers(Declared)
+            .Where(member => member is FieldInfo or PropertyInfo || member is MethodInfo { IsSpecialName: false })
+            .Where(member => !member.IsDefined(typeof(CompilerGeneratedAttribute), inherit: false))
+            .Select(member => member.Name)
+            .Distinct(StringComparer.Ordinal)
+            .Order(StringComparer.Ordinal)];
+        Assert.NotEmpty(phrases);
+        Assert.Equal(
+            phrases,
+            ConnectionsLabelInventory.Entries.Select(entry => entry.Member).Distinct(StringComparer.Ordinal).Order(StringComparer.Ordinal));
+    }
+
+    /// <summary>The static loading and empty labels and the leaf's posted
+    /// statuses render the same sentences (0a-D3: the statuses are
+    /// Windows's).</summary>
+    [Fact]
+    public void TheLoadingAndEmptyLabelsAreThePostedStatusesSentences()
+    {
         Assert.Equal(ConnectionsPhrase.LoadingAccessible, LoadingLine());
         Assert.Equal(ConnectionsPhrase.Empty, NoConnectionsLine());
     }
