@@ -13,9 +13,11 @@
 // census closes that from the source:
 //
 // - No host source file spells a card-title shape ("Embedded note",
-//   "Embedded section", "Embedded block", "Embedded image") in a string
-//   literal or interpolation, and every ResolvedEmbed the host builds is
-//   filled from the resolution, never from literal text.
+//   "Embedded section", "Embedded block", "Embedded image", "Embedded
+//   base") in a string literal or interpolation, and every ResolvedEmbed
+//   the host builds is filled from the resolution, never from literal
+//   text. The reading view's `.base` summary card (Bases contract C10) is
+//   a card like the others: its header is core's Base title (codex r1).
 // - The one EmbedPreviewShown construction carries the content's Resolved
 //   data; the popover's UIA name is the rendering of that same event; and
 //   the visible header is core's ResolvedEmbedTitle followed only by the
@@ -34,7 +36,7 @@ public sealed partial class EmbedPreviewTitleCensus
     private const string Publisher = "PublishEmbedPreview";
     private const string Locator = " — source line ";
 
-    [GeneratedRegex(@"Embedded (note|section|block|image)\b", RegexOptions.IgnoreCase)]
+    [GeneratedRegex(@"Embedded (note|section|block|image|base)\b", RegexOptions.IgnoreCase)]
     private static partial Regex CardShape();
 
     [Fact]
@@ -85,6 +87,8 @@ public sealed partial class EmbedPreviewTitleCensus
     [InlineData("string M(EmbedResolution.FullNote full) => $\"Embedded note: {full.TargetPath}\";", "Embedded note")]
     [InlineData("string M(EmbedResolution.Block block) => \"Embedded block from \" + block.TargetPath;", "Embedded block")]
     [InlineData("string M(string alt) => $\"embedded image: {alt}\";", "embedded image")]
+    [InlineData("string M(BaseEmbedProjection b) => SlateUniffiMethods.ResolvedEmbedTitle(new ResolvedEmbed.Base(b.TargetPath));", "")]
+    [InlineData("string M(BaseEmbedProjection b) => $\"Embedded base: {System.IO.Path.GetFileNameWithoutExtension(b.TargetPath)}\";", "Embedded base")]
     [InlineData("ResolvedEmbed M() => new ResolvedEmbed.Note(\"note.md\");", "new ResolvedEmbed.Note(\"note.md\")")]
     public void TheSpellingCensusNamesEveryHostTitle(string member, string namedSite)
     {

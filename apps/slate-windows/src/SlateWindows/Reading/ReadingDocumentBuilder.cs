@@ -1178,14 +1178,8 @@ internal static class ReadingDocumentBuilder
         // 1 [medium]): the neutral label says only what is true.
         string headerName = resolution is null
             ? $"Embed: {key}"
-            : EmbedHeaderName(resolution, occurrenceAlt ?? artifact?.Alt);
-        if (artifact is { BaseProjection: { } namedBase })
-        {
-            // The base card names its real kind (contract C10) — the
-            // FullNote resolution would otherwise title it as a note.
-            headerName =
-                $"Embedded base: {System.IO.Path.GetFileNameWithoutExtension(namedBase.TargetPath)}";
-        }
+            : EmbedHeaderName(
+                resolution, occurrenceAlt ?? artifact?.Alt, artifact?.BaseProjection);
         string headerSuffix = resolution is null
             ? string.Empty
             : EmbedHeaderAccessibilitySuffix(resolution);
@@ -1266,12 +1260,20 @@ internal static class ReadingDocumentBuilder
     /// the same title the Ctrl+E preview speaks — so a reading landing on
     /// it (ReadingNavLanded carries the header as its text) speaks no host
     /// sentence. An image named by this occurrence's own alt keeps it (mac
-    /// audits #196/#198/#419).</summary>
-    private static string EmbedHeaderName(EmbedResolution resolution, string? alt) =>
+    /// audits #196/#198/#419). A `.base` card names its real kind (contract
+    /// C10) in core's words too — the FullNote resolution would otherwise
+    /// title it as a note.</summary>
+    private static string EmbedHeaderName(
+        EmbedResolution resolution,
+        string? alt,
+        BaseEmbedProjection? baseCard = null) =>
         resolution switch
         {
             EmbedResolution.Unresolved unresolved =>
                 UnresolvedEmbedText(unresolved.Reason),
+            EmbedResolution.FullNote when baseCard is { } projection =>
+                SlateUniffiMethods.ResolvedEmbedTitle(
+                    new ResolvedEmbed.Base(projection.TargetPath)),
             _ => ResolvedEmbeds.Of(resolution) switch
             {
                 ResolvedEmbed.Image image when alt is not null =>

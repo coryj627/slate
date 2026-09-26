@@ -121,6 +121,7 @@ public sealed class A11yCorpusCensus
         new A11yEvent.EmbedPreviewShown(Target: "recipes", Resolved: new ResolvedEmbed.Block(TargetPath: "recipes.md")),
         new A11yEvent.EmbedPreviewShown(Target: "pie.png", Resolved: new ResolvedEmbed.Image(TargetPath: "images/pie.png", Alt: "  A slice of pie  ")),
         new A11yEvent.EmbedPreviewShown(Target: "pie.png", Resolved: new ResolvedEmbed.Image(TargetPath: "images/pie.png", Alt: "   ")),
+        new A11yEvent.EmbedPreviewShown(Target: "Reading list.base", Resolved: new ResolvedEmbed.Base(TargetPath: "lists/Reading list.base")),
         new A11yEvent.EmbedPreviewUnavailable(Target: "Target", Reason: new EmbedUnresolvedReason.TargetNotFound(Target: "Target")),
         new A11yEvent.EmbedPreviewUnavailable(Target: "recipes#Glaze", Reason: new EmbedUnresolvedReason.HeadingNotFound(TargetPath: "recipes.md", Heading: "Glaze")),
         new A11yEvent.EmbedPreviewUnavailable(Target: "recipes^step-3", Reason: new EmbedUnresolvedReason.BlockNotFound(TargetPath: "recipes.md", BlockId: "step-3")),

@@ -13,7 +13,9 @@ namespace SlateWindows;
 /// <c>EmbedPreviewShown</c> announcement alike, so the Ctrl+E popover, its
 /// nested cards, the embeds leaf and the reading view's embed headers all
 /// carry core's title and no host spells the "Embedded note / section /
-/// block / image" shapes.
+/// block / image / base" shapes. <see cref="ResolvedEmbed.Base"/> is the
+/// reading view's `.base` summary card (Bases contract C10), built where
+/// that card is: a resolution alone is a note.
 /// </summary>
 internal static class ResolvedEmbeds
 {
