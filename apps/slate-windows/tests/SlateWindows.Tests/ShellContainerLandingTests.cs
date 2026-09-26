@@ -33,9 +33,9 @@ public sealed class ShellContainerLandingTests
     public void TheStatusBarKeepsItsArrows(Key key) => RunSta(() =>
     {
         using var host = new Host();
-        FrameworkElement region = host.Lift("ShellStatusBarRegion");
         var bar = Assert.IsType<StatusBar>(host.Shell.FindName("ShellStatusBar"));
-        Assert.True(region.IsAncestorOf(bar));
+        FrameworkElement region = host.Lift(Assert.IsAssignableFrom<FrameworkElement>(bar.Parent));
+        Assert.Equal(KeyboardNavigationMode.Contained, KeyboardNavigation.GetDirectionalNavigation(region));
         host.Show(region);
         Assert.True(bar.Focus());
 
@@ -83,9 +83,11 @@ public sealed class ShellContainerLandingTests
 
         public MainWindow Shell { get; }
 
-        public FrameworkElement Lift(string name)
+        public FrameworkElement Lift(string name) =>
+            Lift(Assert.IsAssignableFrom<FrameworkElement>(Shell.FindName(name)));
+
+        public FrameworkElement Lift(FrameworkElement element)
         {
-            var element = Assert.IsAssignableFrom<FrameworkElement>(Shell.FindName(name));
             switch (element.Parent)
             {
                 case Panel panel:
@@ -98,7 +100,7 @@ public sealed class ShellContainerLandingTests
                     content.Content = null;
                     break;
                 default:
-                    throw new InvalidOperationException($"{name}'s parent {element.Parent} cannot give it up.");
+                    throw new InvalidOperationException($"{element.Name}'s parent {element.Parent} cannot give it up.");
             }
 
             return element;

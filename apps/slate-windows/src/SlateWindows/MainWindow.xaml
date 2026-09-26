@@ -708,8 +708,7 @@
              to directional navigation, out of the region. Arrows from an
              element are judged in its PARENT's group, so the bar sits in a
              Contained border: they stay on it (ShellContainerLandingTests). -->
-        <Border x:Name="ShellStatusBarRegion"
-                DockPanel.Dock="Bottom"
+        <Border DockPanel.Dock="Bottom"
                 KeyboardNavigation.DirectionalNavigation="Contained">
             <StatusBar x:Name="ShellStatusBar"
                        Focusable="True"
