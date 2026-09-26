@@ -41,15 +41,21 @@ public sealed class VaultErrorDetailCensus
     private static readonly string[] FailedSaveEvents =
         ["A11yEvent.NoteSaveBlocked", "A11yEvent.NoteSaveConflict"];
 
+    /// <summary>The save boundary's two halves since the write left the
+    /// dispatcher (#1280): StartSave (the integrity catch, before the
+    /// write) and PublishSave (the core failures, after it).</summary>
+    private static readonly string[] SaveMethods = ["StartSave", "PublishSave"];
+
     /// <summary>The sites where a caught failure becomes announced detail,
     /// as (file, method, constructed type, parameter, position, every
-    /// catch): the save boundary's NoteSaveBlocked in each of its catches,
-    /// and the embed resolver's ReadError reason in its VaultException
-    /// catch (its other catch passes a non-vault exception's own message,
-    /// mac's localizedDescription arm, by design).</summary>
+    /// catch): the save boundary's NoteSaveBlocked in each catch of both its
+    /// halves, and the embed resolver's ReadError reason in its
+    /// VaultException catch (its other catch passes a non-vault exception's
+    /// own message, mac's localizedDescription arm, by design).</summary>
     public static TheoryData<string, string, string, string, int, bool> Sites() => new()
     {
-        { "WorkspaceViewModel.cs", "Save", "A11yEvent.NoteSaveBlocked", "Detail", 1, true },
+        { "WorkspaceViewModel.cs", "StartSave", "A11yEvent.NoteSaveBlocked", "Detail", 1, true },
+        { "WorkspaceViewModel.cs", "PublishSave", "A11yEvent.NoteSaveBlocked", "Detail", 1, true },
         { "EditorInteractions.cs", "ResolveEmbedPreview", "EmbedUnresolvedReason.ReadError", "Message", 0, false },
     };
 
@@ -68,12 +74,38 @@ public sealed class VaultErrorDetailCensus
         Assert.True(failures.Length == 0, $"{file} {method}:\n" + string.Join("\n", failures));
     }
 
-    [Fact]
-    public void EveryFailedSaveStatusIsTheRenderedAnnouncement()
+    [Theory]
+    [InlineData("StartSave")]
+    [InlineData("PublishSave")]
+    public void EveryFailedSaveStatusIsTheRenderedAnnouncement(string method)
     {
-        MethodDeclarationSyntax save = CSharpSource.Load("WorkspaceViewModel.cs").Method("Save");
+        MethodDeclarationSyntax save = CSharpSource.Load("WorkspaceViewModel.cs").Method(method);
         string[] failures = StatusFailures(save).ToArray();
         Assert.True(failures.Length == 0, string.Join("\n", failures));
+    }
+
+    /// <summary>The census reads every place a failed save is announced:
+    /// each NoteSaveBlocked or NoteSaveConflict the file constructs sits in
+    /// one of the save boundary's halves, so moving the write (#1280) or
+    /// adding a failure path cannot leave a sentence unread.</summary>
+    [Fact]
+    public void EveryFailedSaveEventIsConstructedWhereTheCensusReads()
+    {
+        CSharpSource source = CSharpSource.Load("WorkspaceViewModel.cs");
+        foreach (string method in SaveMethods)
+        {
+            _ = source.Method(method);
+        }
+        string[] outside = source.Root.DescendantNodes()
+            .OfType<ObjectCreationExpressionSyntax>()
+            .Where(creation => FailedSaveEvents.Contains(CSharpSource.Normalize(creation.Type)))
+            .Select(creation => creation.Ancestors().OfType<MethodDeclarationSyntax>().FirstOrDefault())
+            .Where(method => method is null || !SaveMethods.Contains(method.Identifier.ValueText))
+            .Select(method => method?.Identifier.ValueText ?? "<no method>")
+            .ToArray();
+        Assert.True(
+            outside.Length == 0,
+            "failed-save events built outside the census: " + string.Join(", ", outside));
     }
 
     /// <summary>The census's teeth on the VaultException catch: each
