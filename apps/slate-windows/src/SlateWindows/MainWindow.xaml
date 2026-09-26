@@ -1251,7 +1251,11 @@
                                  inactive bodies collapse (out of the UIA tree - the
                                  mac accessibilityHidden gating); collections live on
                                  Workspace.Panels, so switching never refetches. -->
-                            <DockPanel Grid.Column="0" Margin="12">
+                            <!-- W7-7 PR 4 (#1247, R-5; codex round 4): the leaf
+                                 contains its arrows - an arrow from its notice, whose
+                                 own group this body is, stays in the leaf. -->
+                            <DockPanel Grid.Column="0" Margin="12"
+                                       KeyboardNavigation.DirectionalNavigation="Contained">
                                 <DockPanel.Style>
                                     <Style TargetType="DockPanel">
                                         <Setter Property="Visibility" Value="Collapsed" />
@@ -1267,7 +1271,9 @@
                                            Text="{Binding Panels.BacklinksHeader}" />
                                 <TextBlock DockPanel.Dock="Top"
                                            Style="{StaticResource PanelEmptyMessage}"
-                                           Text="{Binding Panels.BacklinksEmptyMessage}" />
+                                           Text="{Binding Panels.BacklinksEmptyMessage}"
+                                           Focusable="{Binding Panels.BacklinksNoticeIsAStop}"
+                                           AutomationProperties.AutomationId="PanelBacklinksNotice" />
                                 <TextBlock DockPanel.Dock="Bottom"
                                            Style="{StaticResource PanelEmptyMessage}"
                                            Text="{Binding Panels.BacklinksTruncationNotice}" />
@@ -1300,7 +1306,11 @@
                                     </ListBox.ItemTemplate>
                                 </ListBox>
                             </DockPanel>
-                            <DockPanel Grid.Column="0" Margin="12">
+                            <!-- W7-7 PR 4 (#1247, R-5; codex round 4): the leaf
+                                 contains its arrows - an arrow from its notice, whose
+                                 own group this body is, stays in the leaf. -->
+                            <DockPanel Grid.Column="0" Margin="12"
+                                       KeyboardNavigation.DirectionalNavigation="Contained">
                                 <DockPanel.Style>
                                     <Style TargetType="DockPanel">
                                         <Setter Property="Visibility" Value="Collapsed" />
@@ -1316,7 +1326,9 @@
                                            Text="{Binding Panels.OutgoingLinksHeader}" />
                                 <TextBlock DockPanel.Dock="Top"
                                            Style="{StaticResource PanelEmptyMessage}"
-                                           Text="{Binding Panels.OutgoingLinksEmptyMessage}" />
+                                           Text="{Binding Panels.OutgoingLinksEmptyMessage}"
+                                           Focusable="{Binding Panels.OutgoingLinksNoticeIsAStop}"
+                                           AutomationProperties.AutomationId="PanelOutgoingLinksNotice" />
                                 <TextBlock DockPanel.Dock="Bottom"
                                            Style="{StaticResource PanelEmptyMessage}"
                                            Text="{Binding Panels.OutgoingLinksTruncationNotice}" />
@@ -1381,7 +1393,11 @@
                                     </ListBox.ItemTemplate>
                                 </ListBox>
                             </DockPanel>
-                            <DockPanel Grid.Column="0" Margin="12">
+                            <!-- W7-7 PR 4 (#1247, R-5; codex round 4): the leaf
+                                 contains its arrows - an arrow from its notice, whose
+                                 own group this body is, stays in the leaf. -->
+                            <DockPanel Grid.Column="0" Margin="12"
+                                       KeyboardNavigation.DirectionalNavigation="Contained">
                                 <DockPanel.Style>
                                     <Style TargetType="DockPanel">
                                         <Setter Property="Visibility" Value="Collapsed" />
@@ -1397,7 +1413,9 @@
                                            Text="Outline" />
                                 <TextBlock DockPanel.Dock="Top"
                                            Style="{StaticResource PanelEmptyMessage}"
-                                           Text="{Binding Panels.OutlineEmptyMessage}" />
+                                           Text="{Binding Panels.OutlineEmptyMessage}"
+                                           Focusable="{Binding Panels.OutlineNoticeIsAStop}"
+                                           AutomationProperties.AutomationId="PanelOutlineNotice" />
                                 <TextBlock DockPanel.Dock="Bottom"
                                            Style="{StaticResource PanelEmptyMessage}"
                                            Text="{Binding Panels.OutlineTruncationNotice}" />
@@ -1423,7 +1441,11 @@
                                     </ListBox.ItemTemplate>
                                 </ListBox>
                             </DockPanel>
-                            <DockPanel Grid.Column="0" Margin="12">
+                            <!-- W7-7 PR 4 (#1247, R-5; codex round 4): the leaf
+                                 contains its arrows - an arrow from its notice, whose
+                                 own group this body is, stays in the leaf. -->
+                            <DockPanel Grid.Column="0" Margin="12"
+                                       KeyboardNavigation.DirectionalNavigation="Contained">
                                 <DockPanel.Style>
                                     <Style TargetType="DockPanel">
                                         <Setter Property="Visibility" Value="Collapsed" />
@@ -1439,7 +1461,9 @@
                                            Text="{Binding Panels.EmbedsHeader}" />
                                 <TextBlock DockPanel.Dock="Top"
                                            Style="{StaticResource PanelEmptyMessage}"
-                                           Text="{Binding Panels.EmbedsEmptyMessage}" />
+                                           Text="{Binding Panels.EmbedsEmptyMessage}"
+                                           Focusable="{Binding Panels.EmbedsNoticeIsAStop}"
+                                           AutomationProperties.AutomationId="PanelEmbedsNotice" />
                                 <ScrollViewer Focusable="False" VerticalScrollBarVisibility="Auto"
                                               HorizontalScrollBarVisibility="Disabled">
                                     <ItemsControl ItemsSource="{Binding Panels.Embeds}"
@@ -1472,7 +1496,11 @@
                                  derivation), checkbox + activation per row. Rows
                                  are display-capped VM-side, so the non-virtualized
                                  sections stay bounded. -->
-                            <DockPanel Grid.Column="0" Margin="12">
+                            <!-- W7-7 PR 4 (#1247, R-5; codex round 4): the leaf
+                                 contains its arrows - an arrow from its notice, whose
+                                 own group this body is, stays in the leaf. -->
+                            <DockPanel Grid.Column="0" Margin="12"
+                                       KeyboardNavigation.DirectionalNavigation="Contained">
                                 <DockPanel.Style>
                                     <Style TargetType="DockPanel">
                                         <Setter Property="Visibility" Value="Collapsed" />
@@ -1488,7 +1516,9 @@
                                            Text="{Binding Panels.TasksHeader}" />
                                 <TextBlock DockPanel.Dock="Top"
                                            Style="{StaticResource PanelEmptyMessage}"
-                                           Text="{Binding Panels.TasksEmptyMessage}" />
+                                           Text="{Binding Panels.TasksEmptyMessage}"
+                                           Focusable="{Binding Panels.TasksNoticeIsAStop}"
+                                           AutomationProperties.AutomationId="PanelTasksNotice" />
                                 <TextBlock DockPanel.Dock="Bottom"
                                            Style="{StaticResource PanelEmptyMessage}"
                                            Text="{Binding Panels.TasksTruncationNotice}" />
@@ -1662,7 +1692,11 @@
                                  in-window sheet rather than an anchored
                                  popover (D-1).
                                  ========================================== -->
-                            <DockPanel Grid.Column="0" Margin="12">
+                            <!-- W7-7 PR 4 (#1247, R-5; codex round 4): the leaf
+                                 contains its arrows - an arrow from its notice, whose
+                                 own group this body is, stays in the leaf. -->
+                            <DockPanel Grid.Column="0" Margin="12"
+                                       KeyboardNavigation.DirectionalNavigation="Contained">
                                 <DockPanel.Style>
                                     <Style TargetType="DockPanel">
                                         <Setter Property="Visibility" Value="Collapsed" />

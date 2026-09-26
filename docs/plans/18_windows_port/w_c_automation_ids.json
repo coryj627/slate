@@ -1511,6 +1511,11 @@
   },
   {
     "Source": "MainWindow.xaml",
+    "Expression": "PanelBacklinksNotice",
+    "Surface": "Link & structure panels (W4-2)"
+  },
+  {
+    "Source": "MainWindow.xaml",
     "Expression": "PanelCitationsEmpty",
     "Surface": "Citation surfaces (W4-5)"
   },
@@ -1536,12 +1541,27 @@
   },
   {
     "Source": "MainWindow.xaml",
+    "Expression": "PanelEmbedsNotice",
+    "Surface": "Link & structure panels (W4-2)"
+  },
+  {
+    "Source": "MainWindow.xaml",
     "Expression": "PanelOutgoingLinksList",
     "Surface": "Link & structure panels (W4-2)"
   },
   {
     "Source": "MainWindow.xaml",
+    "Expression": "PanelOutgoingLinksNotice",
+    "Surface": "Link & structure panels (W4-2)"
+  },
+  {
+    "Source": "MainWindow.xaml",
     "Expression": "PanelOutlineList",
+    "Surface": "Link & structure panels (W4-2)"
+  },
+  {
+    "Source": "MainWindow.xaml",
+    "Expression": "PanelOutlineNotice",
     "Surface": "Link & structure panels (W4-2)"
   },
   {
@@ -1582,6 +1602,11 @@
   {
     "Source": "MainWindow.xaml",
     "Expression": "PanelTasksDoneList",
+    "Surface": "Tasks panel + review flow (W4-3)"
+  },
+  {
+    "Source": "MainWindow.xaml",
+    "Expression": "PanelTasksNotice",
     "Surface": "Tasks panel + review flow (W4-3)"
   },
   {

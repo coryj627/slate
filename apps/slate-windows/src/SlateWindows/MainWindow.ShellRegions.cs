@@ -312,7 +312,7 @@ public partial class MainWindow : IShellRegionHost
     /// stop, or its stop took nothing. It was the bare rail, from which Down
     /// walked into the menu bar. Ctrl+Alt+Right's edge is not a reveal and keeps the rail
     /// (<see cref="WorkspaceFocusBoundary.RightPaneEdge"/>).</summary>
-    private void LandInRightPane()
+    internal void LandInRightPane()
     {
         if (VisibleLeafBody() is { } body && FirstFocusable(body) is { } stop && SelectorFocus.LandOnStop(stop))
         {
