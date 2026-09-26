@@ -1112,11 +1112,13 @@ public sealed class AccessibleDataGridTests
         });
     });
 
-    /// <summary>The spec review (round 21): uniqueness is checked AFTER the
-    /// suffixes too. Rows 1 and 3 share "note.md" and would read "note.md,
-    /// row 1" and "note.md, row 3" — but row 2's own first cell already reads
-    /// "note.md, row 1", so the pair that collides falls back to its
-    /// ordinals.</summary>
+    /// <summary>The spec review (rounds 21 and 22): uniqueness is checked
+    /// AFTER the suffixes too. Rows 1 and 3 share "note.md" and would read
+    /// "note.md, row 1" and "note.md, row 3" — but row 2's own first cell
+    /// already reads "note.md, row 1", so the pair that collides falls back
+    /// to its ordinals. Row 4's "note.md (2)", a natural name in the shape
+    /// another tool gives a copy, is not this grid's suffix shape and meets
+    /// no one: it reads as itself.</summary>
     [Fact]
     public void ASuffixThatMeetsANaturalNameFallsBackToTheOrdinal() => RunSta(() =>
     {
@@ -1125,9 +1127,10 @@ public sealed class AccessibleDataGridTests
             + "| --- | --- |\n"
             + "| note.md | a |\n"
             + "| note.md, row 1 | b |\n"
-            + "| note.md | c |\n"));
+            + "| note.md | c |\n"
+            + "| note.md (2) | d |\n"));
         GridRowNames.Hosted(grid, () => Assert.Equal(
-            ["Row 1", "Row 2", "note.md, row 3"],
+            ["Row 1", "Row 2", "note.md, row 3", "note.md (2)"],
             GridRowNames.Read(grid).Select(row => row.Name)));
     });
 

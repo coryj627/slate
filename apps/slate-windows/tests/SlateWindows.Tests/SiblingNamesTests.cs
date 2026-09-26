@@ -44,16 +44,18 @@ public sealed class SiblingNamesTests
             SiblingNames.Compose(["note.md", "note.md"], [null, null], "tab"));
     }
 
-    /// <summary>Uniqueness holds AFTER the suffixes: a natural name that
-    /// reads like a suffixed one sends the whole colliding group to its
-    /// ordinal form.</summary>
+    /// <summary>Uniqueness holds AFTER the suffixes (the spec review,
+    /// rounds 21 and 22): a natural name that reads like a suffixed one sends
+    /// the whole colliding group to its ordinal form. "note.md (2)", a copy's
+    /// name in another tool's shape, is not this rule's shape and meets no
+    /// one: it reads as itself.</summary>
     [Fact]
     public void ASuffixThatMeetsANaturalNameFallsBackToTheOrdinal() =>
         Assert.Equal(
-            ["note.md, item 1", "note.md, A, item 2", "note.md, B"],
+            ["note.md, item 1", "note.md, A, item 2", "note.md, B", "note.md (2)"],
             SiblingNames.Compose(
-                ["note.md", "note.md, A", "note.md"],
-                ["A", null, "B"],
+                ["note.md", "note.md, A", "note.md", "note.md (2)"],
+                ["A", null, "B", null],
                 "item"));
 
     /// <summary>A blank name is never nothing, and a pathological natural
