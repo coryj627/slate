@@ -67,9 +67,11 @@ public sealed class WcMatrixCanvasEvidenceCensus
             ["Value", "Invoke"],
             ["Filter cards", "Filter results"],
             // W7-7 R-12 (#1255): the visual board's arrows, pinned here as the
-            // row now cites them.
+            // row now cites them — over the full scene, dimmed cards included
+            // (follow-up #1270).
             ["CanvasSurfaces_NavigatorFilterAndWhereAmI_AreClean", "CanvasModes_MoveResizeAndConnectPicker_AreReachable", "TheZoomVerbsSpeakCoresZoomEventWithTheirContext",
-                "CanvasSurfaces_VisualBoardPeersAndZoom_AreClean", "TheBoardsDownAndUpAreTheReadingOrderMoveThroughTheAnnouncedDoor", "EveryBoardMoveAsksThePresenterToRevealItsSeat"],
+                "CanvasSurfaces_VisualBoardPeersAndZoom_AreClean", "TheBoardsDownAndUpAreTheReadingOrderMoveThroughTheAnnouncedDoor", "EveryBoardMoveAsksThePresenterToRevealItsSeat",
+                "TheBoardsArrowsWalkTheFullSceneDimmedCardsIncluded", "AFilteredOutSeatStepsThroughTheSceneOnTheBoardAndIntoTheFilteredSetByTheVerbs"],
             ["canvas-navigator", "canvas-move-mode-active"]),
         new(
             "Canvas visual (W6-1 §D)",
@@ -81,8 +83,10 @@ public sealed class WcMatrixCanvasEvidenceCensus
             [],
             [],
             ["speakable_name", "Zoom N percent"],
+            // D4's origin rule for the board's reveal (follow-up #1271).
             ["CanvasSurfaces_VisualBoardPeersAndZoom_AreClean", "TheZoomValueIsCoresRenderMinusItsPeriod", "FitCanvasContainsAndCentresCoresBounds",
-                "TheBoardsRightAndLeftFollowConnectionsAndEveryMoveRevealsItsSeat"],
+                "TheBoardsRightAndLeftFollowConnectionsAndEveryMoveRevealsItsSeat", "TheBoardRevealsItsOwnMovesAlwaysAndOtherMovesOnlyWhileFollowing",
+                "TheRevealRuleIsD4sOriginRule"],
             ["canvas-visual"]),
         new(
             "Canvas card editor (W6-1 §E)",
