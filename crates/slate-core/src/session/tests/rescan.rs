@@ -1727,10 +1727,24 @@ fn the_core_scan_report_stays_bounded_under_thousands_of_failures() {
     )
     .unwrap();
 
+    crate::session::SCAN_ERROR_STREAM.with(|stream| *stream.borrow_mut() = Some(Vec::new()));
     let opened = session.scan_initial(&CancelToken::new()).unwrap();
+    let streamed_at_open = crate::session::SCAN_ERROR_STREAM
+        .with(|stream| stream.borrow_mut().take())
+        .unwrap();
     assert_eq!(opened.error_count, FAILING as u64);
     assert_eq!(opened.error_samples.len(), crate::SCAN_ERROR_SAMPLES);
     assert!(!opened.complete);
+    assert_eq!(
+        streamed_at_open.len(),
+        FAILING,
+        "the open scan's log missed errors"
+    );
+    assert_eq!(
+        opened.error_samples,
+        streamed_at_open[..crate::SCAN_ERROR_SAMPLES].to_vec(),
+        "the open scan's samples are not the first errors streamed"
+    );
 
     // A refused file keeps its (mtime, size) row: change every one.
     for n in 0..FAILING {
