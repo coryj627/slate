@@ -1,31 +1,24 @@
 // Copyright (C) 2026 Cory Joseph
 // SPDX-License-Identifier: AGPL-3.0-or-later
 //
-// W7-7 PR 0 (codex round 1): the executable spec and its contracts
-// document agree on which contract belongs to which PR.
+// W7-7 PR 0: the executable spec and its contracts document agree on which
+// contract belongs to which PR, and the review protocol routes every codex
+// round by those numbers — so a spec section that cites the wrong contract
+// sends the review to the wrong invariant. The first draft did exactly that
+// from PR 4 onward (codex round 1), which is why this census exists.
 //
-// The review protocol drives every codex round from the PR's `R-n`
-// numbers, so a spec section that cites the wrong contract sends the
-// review to the wrong invariant — and the first draft did exactly that
-// from PR 4 onward (arrows cited R-4 instead of R-5, sheets R-5 instead
-// of R-6, and so on down the list). A shifted citation is not a typo; it
-// is a review that verifies nothing. The rule is mechanical: every `R-n`
-// a PR section cites is owned by that PR in contracts 40, and every
-// contract is cited by its owning section at least once.
+// The routing is fixed HERE, as a registry of exact heading strings. The
+// earlier form of this file parsed the headings out of the Markdown with a
+// grammar, and thirty adversarial rounds showed that a parser of free-form
+// Markdown can always be fed one more formatting variant (Unicode suffixes,
+// soft wraps, links, emphasis, blank-line reflows — codex rounds 17–30). A
+// registry has no such surface: a heading either equals its registered text
+// or the census fails, and nothing about ownership is inferred from prose.
+// What the prose may still say beside a heading is not policed (AR-17).
 //
-// Codex round 2: a duplicate definition is as ambiguous as a shifted one,
-// so the parse rejects duplicates instead of letting the later one win.
-// Codex round 3: the contracts document is mutable, so it cannot be the
-// only oracle — the R → PR map is fixed HERE, and every heading-shaped
-// line must match the strict parse so a look-alike definition cannot
-// vanish from the count. Codex round 5: the look-alike detectors are
-// CommonMark-tolerant (up to three leading spaces, any run of spaces
-// after the marker), the strict contract form requires its closing bold
-// on the same line, and a citation needs a boundary on BOTH sides so
-// `R-10x` and `_R-10` are neither citations nor near-misses. Fenced-code
-// headings and negated prose are not distinguished (AR-11): neither
-// document carries either, and a fenced heading would still have to
-// match the strict form to count.
+// The one remaining parse is the spec's contract citations (`R-n` tokens in
+// each PR section), which the routing needs; it reads normalized text with
+// Unicode-aware boundaries and is pinned by theories below.
 
 using System.Text.RegularExpressions;
 
@@ -37,473 +30,168 @@ public sealed partial class W77RemediationDocsCensus
     private const string SpecDoc = "18_windows_port/specs/w7_7_nvda_matrix_remediation_spec.md";
     private const string ContractsDoc = "40_nvda_matrix_remediation_contracts.md";
 
-    /// <summary>
-    /// The wave's ownership, fixed at the docs PR: contract → PR. A
-    /// renumbering is a deliberate edit to this table and the two
-    /// documents together, never to the documents alone.
-    /// </summary>
-    private static readonly IReadOnlyDictionary<int, int> ExpectedOwners =
-        new Dictionary<int, int>
-        {
-            [1] = 1,
-            [2] = 2,
-            [3] = 2,
-            [4] = 3,
-            [5] = 4,
-            [6] = 5,
-            [7] = 6,
-            [8] = 6,
-            [9] = 7,
-            [10] = 8,
-            [11] = 9,
-            [12] = 10,
-            [13] = 11,
-        };
+    private sealed record Contract(int Number, int Pr, string Heading);
 
-    /// <summary>
-    /// The issues each contract closes, fixed with the ownership (codex
-    /// round 18): the owner clause's `#issue` list must match exactly, so
-    /// a wrong or missing secondary issue cannot pass as a well-formed
-    /// heading.
-    /// </summary>
-    private static readonly IReadOnlyDictionary<int, int[]> ExpectedIssues =
-        new Dictionary<int, int[]>
-        {
-            [1] = [1244],
-            [2] = [1245],
-            [3] = [1250],
-            [4] = [1246],
-            [5] = [1247],
-            [6] = [1248],
-            [7] = [1249],
-            [8] = [1251],
-            [9] = [1252],
-            [10] = [1253],
-            [11] = [1254],
-            [12] = [1255, 1256],
-            [13] = [1257],
-        };
+    private sealed record FeaturePr(int Number, string? SpecHeading, string RecordHeading);
 
-    /// <summary>
-    /// The issues a contract's body may cite beyond its own owner clause —
-    /// a fixed allow-list, so an ownership statement cannot hide in the body
-    /// that shares the heading's line (codex round 23).
-    /// </summary>
-    private static readonly IReadOnlyDictionary<int, int[]> AllowedCrossReferences =
-        new Dictionary<int, int[]>
-        {
-            [6] = [1118],
-            [12] = [1270, 1271],
-        };
+    /// <summary>The wave's contracts: number, owning PR, and the heading's
+    /// exact text as the contracts document must carry it (its body follows
+    /// on the same line). A renumbering is a deliberate edit to this table
+    /// and the documents together, never to the documents alone.</summary>
+    private static readonly Contract[] Contracts =
+    [
+        new(1, 1, "**R-1 — Announcements reach a listening client from the first frame (PR 1, #1244).**"),
+        new(2, 2, "**R-2 — Keyboard selection never takes focus out of the Files tree (PR 2, #1245).**"),
+        new(3, 2, "**R-3 — Tag activation composes core's grammar (PR 2, #1250).**"),
+        new(4, 3, "**R-4 — Every reachable item is named; layout containers are not control elements (PR 3, #1246).**"),
+        new(5, 4, "**R-5 — Arrow keys stay in their region (PR 4, #1247).**"),
+        new(6, 5, "**R-6 — A sheet fences Tab (PR 5, #1248).**"),
+        new(7, 6, "**R-7 — A failed save speaks a sentence, never a diagnostic (PR 6, #1249; amends contract 38 D-10).**"),
+        new(8, 6, "**R-8 — A popover or sheet announces its outcome when it opens (PR 6, #1251).**"),
+        new(9, 7, "**R-9 — A rescan is the reconciliation, and it says what it found (PR 7, #1252; amends contract 38 D-3).**"),
+        new(10, 8, "**R-10 — The reading surface is the editor stop (PR 8, #1253).**"),
+        new(11, 9, "**R-11 — The palette announces one selection per query change and renders at typing speed (PR 9, #1254).**"),
+        new(12, 10, "**R-12 — The board's arrows move the seat and its cards have a menu (PR 10, #1255, #1256; amends contract 34 D15 and lifts G2D-12).**"),
+        new(13, 11, "**R-13 — The Connections leaf documents its activation truthfully (PR 11, #1257).**"),
+    ];
 
-    private static readonly int[] ExpectedFeaturePrs = Enumerable.Range(1, 11).ToArray();
-    private static readonly int[] ExpectedReviewRecords = Enumerable.Range(0, 12).ToArray();
+    /// <summary>Every PR of the wave with its exact spec-section heading (PR 0,
+    /// the docs PR, has none) and its exact review-record heading.</summary>
+    private static readonly FeaturePr[] Prs =
+    [
+        new(0, null, "### PR 0 — docs (this document and the spec)"),
+        new(1, "## 2. PR 1 · #1244 — announcements from launch", "### PR 1 — #1244 announcements from launch"),
+        new(2, "## 3. PR 2 · #1245 + #1250 — Files sidebar: tree keys and the tag filter", "### PR 2 — #1245 + #1250 Files sidebar"),
+        new(3, "## 4. PR 3 · #1246 — accessible names for every item", "### PR 3 — #1246 accessible names"),
+        new(4, "## 5. PR 4 · #1247 — arrows never leave the region", "### PR 4 — #1247 arrows stay in the region"),
+        new(5, "## 6. PR 5 · #1248 — sheets fence the keyboard", "### PR 5 — #1248 sheet keyboard fence"),
+        new(6, "## 7. PR 6 · #1249 + #1251 — what a failed save and a popover say", "### PR 6 — #1249 + #1251 failed-save sentence, popover outcomes"),
+        new(7, "## 8. PR 7 · #1252 — files created outside Slate appear (OD-1)", "### PR 7 — #1252 rescan on Refresh and foreground"),
+        new(8, "## 9. PR 8 · #1253 — reading view is the editor stop", "### PR 8 — #1253 reading surface is the editor stop"),
+        new(9, "## 10. PR 9 · #1254 — the palette answers at typing speed", "### PR 9 — #1254 palette selection and speed"),
+        new(10, "## 11. PR 10 · #1255 + #1256 — the canvas board", "### PR 10 — #1255 + #1256 canvas board arrows and menus"),
+        new(11, "## 12. PR 11 · #1257 — the Connections leaf says what Enter does", "### PR 11 — #1257 Connections leaf documentation"),
+    ];
 
+    /// <summary>The registry agrees with itself: every contract's heading
+    /// names its own number and owner, every PR heading names its own number,
+    /// and the issues a PR's headings display are exactly the union of the
+    /// issues its contracts' owner clauses name.</summary>
     [Fact]
-    public void TheContractsDocumentDefinesExactlyTheFixedOwnership()
+    public void TheRegistryIsConsistent()
     {
-        var owners = ContractOwners();
-        Assert.Equal(
-            ExpectedOwners.OrderBy(pair => pair.Key).Select(pair => $"R-{pair.Key}→PR {pair.Value}"),
-            owners.OrderBy(pair => pair.Key).Select(pair => $"R-{pair.Key}→PR {pair.Value}"));
-    }
-
-    [Fact]
-    public void EveryContractNamesExactlyItsIssues()
-    {
-        string contracts = ReadPlan(ContractsDoc);
-        var issues = new Dictionary<int, int[]>();
-        foreach (Match m in ContractHeading().Matches(contracts))
+        foreach (Contract c in Contracts)
         {
-            int contract = int.Parse(m.Groups[1].Value);
-            Assert.True(issues.TryAdd(contract, IssueList(m.Groups[3].Value)), $"R-{contract} is defined twice in {ContractsDoc}.");
+            Assert.StartsWith($"**R-{c.Number} — ", c.Heading);
+            Assert.Contains($"(PR {c.Pr}, #", c.Heading);
+            Assert.Contains(c.Pr, Prs.Select(p => p.Number));
         }
 
-        Assert.Equal(
-            ExpectedIssues.OrderBy(pair => pair.Key).Select(pair => $"R-{pair.Key}→#{string.Join(", #", pair.Value)}"),
-            issues.OrderBy(pair => pair.Key).Select(pair => $"R-{pair.Key}→#{string.Join(", #", pair.Value)}"));
+        foreach (FeaturePr pr in Prs)
+        {
+            int[] owned = Contracts.Where(c => c.Pr == pr.Number).SelectMany(c => IssuesOf(c)).Distinct().Order().ToArray();
+            if (pr.SpecHeading is { } spec)
+            {
+                Assert.Matches($@"^## \d+\. PR {pr.Number} · ", spec);
+                Assert.Equal(owned, IssueNumbers(spec));
+            }
+
+            Assert.StartsWith($"### PR {pr.Number} — ", pr.RecordHeading);
+            Assert.Equal(owned, IssueNumbers(pr.RecordHeading));
+        }
     }
 
-    /// <summary>
-    /// A contract's body shares its heading's line and may be reflowed onto
-    /// the lines after it, so the heading cannot be anchored to the line's
-    /// end; the whole contract paragraph is policed instead (codex rounds 23
-    /// and 25): it names exactly one `PR n` — its owner — and no issue
-    /// outside its owner clause except the fixed cross-reference allow-list.
-    /// </summary>
     [Fact]
-    public void EveryContractParagraphNamesOnlyItsOwnPrAndIssues()
+    public void EveryContractHeadingIsItsRegisteredTextExactlyOnce()
     {
+        string[] lines = Lines(ReadPlan(ContractsDoc));
         var defects = new List<string>();
-        foreach ((Match heading, string paragraph) in ContractParagraphs(ReadPlan(ContractsDoc)))
+        foreach (Contract c in Contracts)
         {
-            if (ContractParagraphDefect(paragraph, heading) is { } defect)
+            int n = lines.Count(line => IsHeadingLine(line, c.Heading));
+            if (n != 1)
             {
-                defects.Add($"R-{heading.Groups[1].Value} {defect}");
+                defects.Add($"R-{c.Number} appears {n} times as its registered heading");
             }
         }
 
-        Assert.True(defects.Count == 0, "Contract paragraphs naming more than their owner: " + string.Join("; ", defects));
-    }
-
-    [Theory]
-    [InlineData("**R-1 — Title (PR 1, #1244).** Body.\nContinued ownership: PR 9, #9999.")]
-    [InlineData("**R-1 — Title (PR 1, #1244).**\nBody. Continued ownership: PR 9, #9999.")]
-    [InlineData("**R-1 — Title (PR 1, #1244).** Body.\nContinued ownership: PR\n9.")]
-    [InlineData("**R-1 — Title (PR 1, #1244).** Body.\nContinued ownership: PR [9](https://example.test/pull/9).")]
-    [InlineData("**R-1 — Title (PR 1, #1244).** Body.\nContinued ownership: PR *9*.")]
-    [InlineData("**R-1 — Title (PR 1, #1244).** Body.\nShared with PRs 9 and 10.")]
-    [InlineData("**R-1 — Title (PR 1, #1244; shared with PR 9).** Body.")]
-    [InlineData("**R-1 — Title (PR 1, #1244; shared with PR [9](https://example.test/pull/9)).** Body.")]
-    [InlineData("**R-1 — Title (PR 1, #1244; shared with PRs 9 and 10).** Body.")]
-    [InlineData("**R-1 — Title (PR 1, #1244).** Body.\nAlso #1244.")]
-    [InlineData("**R-1 — Title (PR 1, #1244).** Body.\nnaming #9999.")]
-    [InlineData("**R-1 — Title (PR 1, #1244).** Body.\n#9999 is named too.")]
-    [InlineData("**R-6 — Title (PR 5, #1248).** Body.\nciting #1118x.")]
-    public void AReflowedBodyIsCheckedAsAWhole(string document)
-    {
-        var (heading, paragraph) = Assert.Single(ContractParagraphs(document));
-        Assert.NotNull(ContractParagraphDefect(paragraph, heading));
-    }
-
-    /// <summary>A contract's text runs to the next contract or Markdown
-    /// heading, blank lines included (codex round 30): a foreign reference in
-    /// a second paragraph under the same heading is the contract's too.</summary>
-    [Fact]
-    public void AContractsTextRunsToTheNextHeadingAcrossBlankLines()
-    {
-        var paragraphs = ContractParagraphs(
-            "**R-1 — Title (PR 1, #1244).** Body.\n\nContinued ownership: PR 9, #9999.\n**R-6 — Title (PR 5, #1248).** Body.\n\n## Next PR 9, #9999")
-            .ToList();
-        Assert.Equal(2, paragraphs.Count);
-        Assert.NotNull(ContractParagraphDefect(paragraphs[0].Paragraph, paragraphs[0].Heading));
-        Assert.Null(ContractParagraphDefect(paragraphs[1].Paragraph, paragraphs[1].Heading));
-    }
-
-    /// <summary>Ordinary inline Markdown around a reference — a link, or
-    /// emphasis — must not hide it (codex round 30): the references are
-    /// extracted from normalized text.</summary>
-    [Theory]
-    [InlineData("**R-1 — Title (PR 1, #1244).** Body naming #[9999](https://example.test/issues/9999).")]
-    [InlineData("**R-1 — Title (PR 1, #1244).** Body naming #*9999*.")]
-    [InlineData("**R-1 — Title (PR 1, #1244).** Body naming #_9999_.")]
-    public void AFormattedForeignIssueIsCaught(string line)
-    {
-        Match heading = ContractHeading().Match(line);
-        Assert.True(heading.Success);
-        Assert.NotNull(ContractParagraphDefect(line, heading));
-    }
-
-    [Theory]
-    [InlineData("see R-[9](https://example.test/contracts#r-9) here", "9")]
-    [InlineData("see R-*9* here", "9")]
-    [InlineData("see _R-9_ here", "9")]
-    public void AFormattedCitationStillCites(string text, string expected) =>
-        Assert.Equal(expected, ContractCitation().Matches(NormalizeInlineMarkdown(text))[0].Groups[1].Value);
-
-    /// <summary>Each strict contract heading with its complete text: the
-    /// heading's line and every following line up to the next heading-shaped
-    /// line or Markdown heading, blank lines included (codex rounds 25 and
-    /// 30: a reflowed or multi-paragraph body stays under the check).</summary>
-    private static IEnumerable<(Match Heading, string Paragraph)> ContractParagraphs(string document)
-    {
-        string[] lines = document.Split('\n');
-        for (int i = 0; i < lines.Length; i++)
+        int shaped = lines.Count(line => LooseContractHeading().IsMatch(line));
+        if (shaped != Contracts.Length)
         {
-            Match heading = ContractHeading().Match(lines[i]);
-            if (!heading.Success)
-            {
-                continue;
-            }
-
-            var paragraph = new List<string> { lines[i] };
-            for (int j = i + 1;
-                j < lines.Length
-                    && !LooseContractHeading().IsMatch(lines[j])
-                    && !MarkdownHeading().IsMatch(lines[j]);
-                j++)
-            {
-                paragraph.Add(lines[j]);
-            }
-
-            yield return (heading, string.Join('\n', paragraph));
-        }
-    }
-
-    /// <summary>Inline Markdown that can wrap a reference without changing
-    /// what a reader sees: a link becomes its text, and emphasis markers
-    /// are dropped, so `#[9999](…)`, `#*9999*` and `_R-9_` read as the
-    /// references they render as (codex round 30).</summary>
-    private static string NormalizeInlineMarkdown(string text) =>
-        MarkdownLink().Replace(text, "$1").Replace("*", string.Empty).Replace("_", string.Empty);
-
-    [Theory]
-    [InlineData("**R-1 — Title (PR 1, #1244).** Body with an extra owner PR 9, #9999.")]
-    [InlineData("**R-1 — Title (PR 1, #1244).** Body naming #9999.")]
-    [InlineData("**R-1 — Title (PR 1, #1244).** Body naming #9999x.")]
-    [InlineData("**R-1 — Title (PR 1, #1244).** Body repeating #1244.")]
-    [InlineData("**R-6 — Title (PR 5, #1248).** Body citing #1118x.")]
-    [InlineData("**R-6 — Title (PR 5, #1248).** Body citing #1118².")]
-    [InlineData("**R-6 — Title (PR 5, #1248).** Body citing #1118\U0001D4B3.")]
-    public void AnOwnershipStatementAfterTheHeadingIsCaught(string line)
-    {
-        Match heading = ContractHeading().Match(line);
-        Assert.True(heading.Success);
-        Assert.NotNull(ContractParagraphDefect(line, heading));
-    }
-
-    /// <summary>The allow-list is what a body MAY cite (codex round 24): a
-    /// listed reference is optional, never required.</summary>
-    [Theory]
-    [InlineData("**R-6 — Title (PR 5, #1248).** Body citing #1118.")]
-    [InlineData("**R-6 — Title (PR 5, #1248).** Body citing nothing.")]
-    [InlineData("**R-12 — Title (PR 10, #1255, #1256; amends contract 34 D15 and lifts G2D-12).** Body.")]
-    public void AContractLineCitingOnlyItsAllowedCrossReferenceIsClean(string line)
-    {
-        Match heading = ContractHeading().Match(line);
-        Assert.True(heading.Success);
-        Assert.Null(ContractParagraphDefect(line, heading));
-    }
-
-    /// <summary>The malformed-heading mutations, kept as parser tests (codex
-    /// round 23): the loose detector sees each line and the strict parse
-    /// refuses it, so the document-level loose/strict fact would fail.</summary>
-    [Theory]
-    [InlineData("**R-1 — Title (PR 1, #1244x).** Body.")]
-    [InlineData("**R-1 — Title (PR 1, #1244é).** Body.")]
-    [InlineData("**R-1 — Title (PR 1, #1244²).** Body.")]
-    [InlineData("**R-1 — Title (PR 1, #1244\U0001D4B3).** Body.")]
-    [InlineData("**R-1 — Title #1299 (PR 1, #1244).** Body.")]
-    [InlineData("**R-1 — Title (PR 1, #1244; see #1299).** Body.")]
-    [InlineData("**R-1 – Title (PR 1, #1244).** Body.")]
-    [InlineData("**R-1 — Title (PR 1).** Body.")]
-    [InlineData("**R-1 — Title (PR 1 nonsense).** Body.")]
-    [InlineData("**R-1 — Title **bold** (PR 1, #1244).** Body.")]
-    [InlineData("**R-1 — Title (PR 1, #1244; shared with PR *9*).** Body.")]
-    public void TheStrictParseRefusesAMalformedContractHeading(string line)
-    {
-        Assert.Single(LooseContractHeading().Matches(line));
-        Assert.Empty(ContractHeading().Matches(line));
-    }
-
-    [Theory]
-    [InlineData("## 2. PR 1 · #1244x #1244 — title", new[] { 1244 })]
-    [InlineData("## 2. PR 1 · #1244é — title", new[] { 1244 })]
-    [InlineData("## 2. PR 1 · #1244² — title", new[] { 1244 })]
-    [InlineData("## 2. PR 1 · #1244\U0001D4B3 — title", new[] { 1244 })]
-    [InlineData("## 2. PR 1 · #1244 + #1244 — title", new[] { 1244 })]
-    [InlineData("### PR 1 — #1244 #1244x announcements", new[] { 1244 })]
-    [InlineData("### PR 0 — docs #9999 (this document)", new int[0])]
-    public void AHeadingWhoseIssuesDriftIsCaught(string heading, int[] expected) =>
-        Assert.False(IssueTokens(heading).SequenceEqual(expected));
-
-    /// <summary>A token glued to a letter, digit or number character on
-    /// either side is not a citation of the contract it resembles (codex
-    /// round 24), so replacing a section's citations with such forms leaves
-    /// the contract uncited and the owning-section fact fails.</summary>
-    [Theory]
-    [InlineData("see AR-6 here")]
-    [InlineData("see TR-6 here")]
-    [InlineData("see R-6x here")]
-    [InlineData("see xR-6 here")]
-    [InlineData("see R-6é here")]
-    [InlineData("see éR-6 here")]
-    [InlineData("see R-6² here")]
-    [InlineData("see R-6\U0001D4B3 here")]
-    [InlineData("see \U0001D4B3R-6 here")]
-    public void ATokenGluedToAnIdentifierIsNotACitation(string text) =>
-        Assert.Empty(ContractCitation().Matches(text));
-
-    [Theory]
-    [InlineData("see R-6 here")]
-    [InlineData("(R-6)")]
-    [InlineData("R-6, R-7")]
-    [InlineData("R-6.")]
-    [InlineData("R-6’s rule")]
-    public void AWellBoundedTokenIsACitation(string text) =>
-        Assert.Equal("6", ContractCitation().Matches(text)[0].Groups[1].Value);
-
-    [Fact]
-    public void ACleanHeadingYieldsExactlyItsIssues() =>
-        Assert.Equal(new[] { 1245, 1250 }, IssueTokens("## 3. PR 2 · #1245 + #1250 — Files sidebar"));
-
-    /// <summary>
-    /// What a contract paragraph names beyond its owner: a count of `PR n`
-    /// tokens other than one, a malformed issue token anywhere outside the
-    /// owner clause, or a well-formed one the allow-list does not name. Only
-    /// the owner clause's own span is exempt — the same issue repeated in the
-    /// body is outside it (codex round 24). The paragraph starts with the
-    /// heading's line, so the heading's spans index it directly. Null when
-    /// the paragraph is clean.
-    /// </summary>
-    private static string? ContractParagraphDefect(string paragraph, Match heading)
-    {
-        // Everything but the canonical owner marker — the `PR n, #…` span
-        // inside the clause — so the clause's own suffix is checked like the
-        // body (codex round 28: `(PR 1, #1244; shared with PR 9)` strict-parses).
-        // No standalone `PR` / `PRs` word may remain, since `PR [9](…)` or
-        // `PR *9*` names a PR without forming a token (codex round 27).
-        Group clause = heading.Groups["clause"];
-        Group issueList = heading.Groups[3];
-        int markerStart = clause.Index + 1;
-        int markerEnd = issueList.Index + issueList.Length;
-        string outside = NormalizeInlineMarkdown(
-            string.Concat(paragraph.AsSpan(0, markerStart), paragraph.AsSpan(markerEnd)));
-        if (PrMarker().Match(outside) is { Success: true } marker)
-        {
-            return $"names a PR outside its owner clause (`{marker.Value}`)";
+            defects.Add($"{shaped} contract-shaped lines for {Contracts.Length} registered contracts");
         }
 
-        if (MalformedIssueToken().Match(outside) is { Success: true } malformed)
-        {
-            return $"carries the malformed issue token `{malformed.Value}`";
-        }
-
-        int contract = int.Parse(heading.Groups[1].Value);
-        int[] allowed = AllowedCrossReferences.GetValueOrDefault(contract, []);
-        int[] unexpected = IssueToken().Matches(outside)
-            .Select(m => int.Parse(m.Groups[1].Value))
-            .Where(issue => !allowed.Contains(issue))
-            .Distinct()
-            .Order()
-            .ToArray();
-        return unexpected.Length == 0
-            ? null
-            : $"names #{string.Join(", #", unexpected)} outside its owner clause";
+        Assert.True(defects.Count == 0, $"{ContractsDoc}: " + string.Join("; ", defects));
     }
 
-    private static int[] IssueList(string ownerList) =>
-        ownerList
-            .Split(',', StringSplitOptions.TrimEntries)
-            .Select(token => int.Parse(token.TrimStart('#')))
-            .ToArray();
-
-    /// <summary>
-    /// The issues a PR's spec heading (`## n. PR m · #a + #b — …`) and its
-    /// review-record heading (`### PR m — #a + #b …`) display are exactly
-    /// the union of the issues its contracts close (codex round 19), so a
-    /// heading cannot drift from the ownership the census fixes.
-    /// </summary>
     [Fact]
-    public void EveryPrHeadingNamesItsContractsIssues()
+    public void EverySpecPrHeadingIsItsRegisteredTextExactlyOnce()
     {
-        var expected = ExpectedOwners
-            .GroupBy(pair => pair.Value)
-            .ToDictionary(
-                group => group.Key,
-                group => group.SelectMany(pair => ExpectedIssues[pair.Key]).Distinct().Order().ToArray());
-
-        var specHeadings = SectionHeading().Matches(ReadPlan(SpecDoc))
-            .Where(m => m.Groups[1].Success)
-            .ToDictionary(m => int.Parse(m.Groups[1].Value), m => IssueTokens(m.Value));
-        var recordHeadings = ReviewRecordHeading().Matches(ReadPlan(ContractsDoc))
-            .ToDictionary(m => int.Parse(m.Groups[1].Value), m => IssueTokens(m.Value));
-
-        // PR 0 (the docs PR) owns no contract and closes no issue, yet its
-        // record heading is required: it is held to an explicit empty set
-        // (codex round 20).
-        expected[0] = [];
-
-        var drifted = new List<string>();
-        foreach ((int pr, int[] issues) in expected.OrderBy(pair => pair.Key))
+        string[] lines = Lines(ReadPlan(SpecDoc));
+        var defects = new List<string>();
+        foreach (FeaturePr pr in Prs.Where(p => p.SpecHeading is not null))
         {
-            if (pr != 0)
+            int n = lines.Count(line => line == pr.SpecHeading);
+            if (n != 1)
             {
-                specHeadings.TryGetValue(pr, out int[]? specIssues);
-                if (specIssues is null || !specIssues.SequenceEqual(issues))
-                {
-                    drifted.Add($"spec heading for PR {pr} shows #{string.Join(", #", specIssues ?? [])}, expected #{string.Join(", #", issues)}");
-                }
-            }
-
-            recordHeadings.TryGetValue(pr, out int[]? recordIssues);
-            if (recordIssues is null || !recordIssues.SequenceEqual(issues))
-            {
-                drifted.Add($"record heading for PR {pr} shows #{string.Join(", #", recordIssues ?? [])}, expected #{string.Join(", #", issues)}");
+                defects.Add($"PR {pr.Number}'s section heading appears {n} times");
             }
         }
 
-        Assert.True(drifted.Count == 0, "PR headings whose issues drift from their contracts: " + string.Join("; ", drifted));
-    }
+        int shaped = lines.Count(line => LoosePrSectionHeading().IsMatch(line));
+        int registered = Prs.Count(p => p.SpecHeading is not null);
+        if (shaped != registered)
+        {
+            defects.Add($"{shaped} PR-section-shaped headings for {registered} registered sections");
+        }
 
-    // Every token counts — a duplicated issue in a heading is a drift too
-    // (codex round 20), so no Distinct() here — and an issue-shaped
-    // substring the grammar does not fully consume (`#1244x` beside a valid
-    // `#1244`) makes the whole heading drift instead of vanishing (codex
-    // round 22): the sentinel never equals an expected set.
-    private static int[] IssueTokens(string headingLine)
-    {
-        string normalized = NormalizeInlineMarkdown(headingLine);
-        return MalformedIssueToken().IsMatch(normalized)
-            ? [-1]
-            : IssueToken().Matches(normalized).Select(m => int.Parse(m.Groups[1].Value)).Order().ToArray();
+        Assert.True(defects.Count == 0, "spec: " + string.Join("; ", defects));
     }
 
     [Fact]
-    public void TheSpecHasOneSectionPerFeaturePrAndTheRecordOneSectionPerPr()
+    public void EveryRecordHeadingIsItsRegisteredTextExactlyOnce()
     {
-        Assert.Equal(ExpectedFeaturePrs, SpecSections().Keys.Order().ToArray());
+        string[] lines = Lines(ReadPlan(ContractsDoc));
+        var defects = new List<string>();
+        foreach (FeaturePr pr in Prs)
+        {
+            int n = lines.Count(line => line == pr.RecordHeading);
+            if (n != 1)
+            {
+                defects.Add($"PR {pr.Number}'s record heading appears {n} times");
+            }
+        }
 
-        string contracts = ReadPlan(ContractsDoc);
-        var records = ReviewRecordHeading().Matches(contracts)
-            .Select(m => int.Parse(m.Groups[1].Value))
-            .ToArray();
-        Assert.Equal(records.Length, records.Distinct().Count());
-        Assert.Equal(ExpectedReviewRecords, records.Order().ToArray());
-    }
+        int shaped = lines.Count(line => LooseReviewRecordHeading().IsMatch(line));
+        if (shaped != Prs.Length)
+        {
+            defects.Add($"{shaped} record-shaped headings for {Prs.Length} registered records");
+        }
 
-    [Fact]
-    public void EveryHeadingShapedLineMatchesTheStrictParse()
-    {
-        string contracts = ReadPlan(ContractsDoc);
-        int looseContracts = LooseContractHeading().Matches(contracts).Count;
-        int strictContracts = ContractHeading().Matches(contracts).Count;
-        Assert.True(
-            looseContracts == strictContracts,
-            $"{looseContracts - strictContracts} contract-shaped line(s) in {ContractsDoc} do not parse as `**R-n — … (PR m, …) …**`.");
-
-        int looseRecords = LooseReviewRecordHeading().Matches(contracts).Count;
-        int strictRecords = ReviewRecordHeading().Matches(contracts).Count;
-        Assert.True(
-            looseRecords == strictRecords,
-            $"{looseRecords - strictRecords} review-record heading(s) in {ContractsDoc} do not parse as `### PR n — …`.");
-
-        string spec = ReadPlan(SpecDoc);
-        int loosePrSections = LoosePrSectionHeading().Matches(spec).Count;
-        int strictPrSections = SectionHeading().Matches(spec).Count(m => m.Groups[1].Success);
-        Assert.True(
-            loosePrSections == strictPrSections,
-            $"{loosePrSections - strictPrSections} PR-section heading(s) in the spec do not parse as `## n. PR m · …`.");
+        Assert.True(defects.Count == 0, $"{ContractsDoc}: " + string.Join("; ", defects));
     }
 
     [Fact]
     public void EveryContractIsCitedByItsOwningSpecSection()
     {
         var sections = SpecSections();
-
-        var missing = new List<string>();
-        foreach ((int contract, int pr) in ExpectedOwners)
-        {
-            if (!sections.TryGetValue(pr, out var cited) || !cited.Contains(contract))
-            {
-                missing.Add($"R-{contract} (owned by PR {pr})");
-            }
-        }
-
+        var missing = Contracts
+            .Where(c => !sections.TryGetValue(c.Pr, out var cited) || !cited.Contains(c.Number))
+            .Select(c => $"R-{c.Number} (owned by PR {c.Pr})")
+            .ToList();
         Assert.True(missing.Count == 0, "Contracts never cited by their owning spec section: " + string.Join(", ", missing));
     }
 
     [Fact]
     public void NoSpecSectionCitesAnotherPrsContract()
     {
-        var sections = SpecSections();
-
+        var owners = Contracts.ToDictionary(c => c.Number, c => c.Pr);
         var shifted = new List<string>();
-        foreach ((int pr, var cited) in sections)
+        foreach ((int pr, var cited) in SpecSections())
         {
             foreach (int contract in cited)
             {
-                if (!ExpectedOwners.TryGetValue(contract, out int owner))
+                if (!owners.TryGetValue(contract, out int owner))
                 {
                     shifted.Add($"PR {pr} cites R-{contract}, which the wave does not define");
                 }
@@ -517,140 +205,137 @@ public sealed partial class W77RemediationDocsCensus
         Assert.True(shifted.Count == 0, "Shifted or undefined contract citations: " + string.Join("; ", shifted));
     }
 
-    /// <summary>Contract number → owning PR, from the `**R-n — … (PR m, …) …**` lines; a second definition of the same `R-n` fails the parse.</summary>
-    private static Dictionary<int, int> ContractOwners()
+    /// <summary>A heading that merely resembles its registered text — a
+    /// different dash, an extra issue, a malformed token, an interior bold, a
+    /// changed owner — is contract-shaped for the loose detector but never
+    /// equals the registry, so the exact-once fact fails on it.</summary>
+    [Theory]
+    [InlineData("**R-1 – Announcements reach a listening client from the first frame (PR 1, #1244).** Body.")]
+    [InlineData("**R-1 — Announcements reach a listening client from the first frame (PR 1, #1244x).** Body.")]
+    [InlineData("**R-1 — Announcements reach a listening client from the first frame (PR 1, #1244, #9999).** Body.")]
+    [InlineData("**R-1 — Announcements reach a listening client from the first frame (PR 9, #1244).** Body.")]
+    [InlineData("**R-1 — Announcements **reach** a listening client from the first frame (PR 1, #1244).** Body.")]
+    [InlineData("**R-1 — Announcements reach a listening client from the first frame (PR 1, #1244).**Body.")]
+    [InlineData(" **R-1 — Announcements reach a listening client from the first frame (PR 1, #1244).** Body.")]
+    public void ALookAlikeHeadingIsNotItsRegisteredText(string line)
     {
-        string contracts = ReadPlan(ContractsDoc);
-        var owners = new Dictionary<int, int>();
-        foreach (Match m in ContractHeading().Matches(contracts))
-        {
-            int contract = int.Parse(m.Groups[1].Value);
-            Assert.True(
-                owners.TryAdd(contract, int.Parse(m.Groups[2].Value)),
-                $"R-{contract} is defined twice in {ContractsDoc}.");
-        }
-
-        return owners;
+        Assert.Matches(LooseContractHeading(), line.TrimStart());
+        Assert.False(IsHeadingLine(line, Contracts[0].Heading));
     }
 
-    /// <summary>
-    /// PR number → the set of `R-n` the spec's section for that PR cites;
-    /// a second section for the same PR fails the parse. The two-sided
-    /// boundary keeps `AR-n` (accepted risks), `TR-n` (contract 30's
-    /// template rules) and malformed tokens out of the count.
-    /// </summary>
+    [Fact]
+    public void TheRegisteredHeadingMatchesWithItsBodyOnTheSameLine() =>
+        Assert.True(IsHeadingLine(Contracts[0].Heading + " The one production raiser …", Contracts[0].Heading));
+
+    /// <summary>A token glued to a letter, digit or number character on
+    /// either side is not a citation of the contract it resembles, so a
+    /// section whose only citation is such a form leaves the contract
+    /// uncited; ordinary inline Markdown around a citation does not hide it.</summary>
+    [Theory]
+    [InlineData("see AR-6 here")]
+    [InlineData("see TR-6 here")]
+    [InlineData("see R-6x here")]
+    [InlineData("see xR-6 here")]
+    [InlineData("see R-6é here")]
+    [InlineData("see éR-6 here")]
+    [InlineData("see R-6² here")]
+    [InlineData("see R-6\U0001D4B3 here")]
+    public void ATokenGluedToAnIdentifierIsNotACitation(string text) =>
+        Assert.Empty(ContractCitation().Matches(NormalizeInlineMarkdown(text)));
+
+    [Theory]
+    [InlineData("see R-6 here")]
+    [InlineData("(R-6)")]
+    [InlineData("R-6, R-7")]
+    [InlineData("R-6.")]
+    [InlineData("R-6’s rule")]
+    [InlineData("see R-[6](https://example.test/contracts#r-6) here")]
+    [InlineData("see R-*6* here")]
+    [InlineData("see _R-6_ here")]
+    public void AWellBoundedOrFormattedTokenIsACitation(string text) =>
+        Assert.Equal("6", ContractCitation().Matches(NormalizeInlineMarkdown(text))[0].Groups[1].Value);
+
+    /// <summary>PR number → the set of `R-n` the spec's section for that PR
+    /// cites. A section starts at its registered heading and ends at the next
+    /// level-two heading of any kind.</summary>
     private static Dictionary<int, HashSet<int>> SpecSections()
     {
-        string spec = ReadPlan(SpecDoc);
+        string[] lines = Lines(ReadPlan(SpecDoc));
         var sections = new Dictionary<int, HashSet<int>>();
-        var headings = SectionHeading().Matches(spec);
-        for (int i = 0; i < headings.Count; i++)
+        foreach (FeaturePr pr in Prs.Where(p => p.SpecHeading is not null))
         {
-            Match heading = headings[i];
-            if (!heading.Groups[1].Success)
+            int start = Array.IndexOf(lines, pr.SpecHeading);
+            if (start < 0)
             {
+                sections[pr.Number] = [];
                 continue;
             }
 
-            int start = heading.Index;
-            int end = i + 1 < headings.Count ? headings[i + 1].Index : spec.Length;
-            string body = NormalizeInlineMarkdown(spec.Substring(start, end - start));
-            var cited = ContractCitation().Matches(body)
-                .Select(m => int.Parse(m.Groups[1].Value))
-                .ToHashSet();
-            int pr = int.Parse(heading.Groups[1].Value);
-            Assert.True(sections.TryAdd(pr, cited), $"PR {pr} has two sections in the spec.");
+            int end = start + 1;
+            while (end < lines.Length && !LooseLevelTwoHeading().IsMatch(lines[end]))
+            {
+                end++;
+            }
+
+            string body = NormalizeInlineMarkdown(string.Join('\n', lines, start, end - start));
+            sections[pr.Number] = ContractCitation().Matches(body).Select(m => int.Parse(m.Groups[1].Value)).ToHashSet();
         }
 
         return sections;
     }
 
+    /// <summary>The line is the heading exactly, or the heading followed by a
+    /// space and its body.</summary>
+    private static bool IsHeadingLine(string line, string heading) =>
+        line == heading || line.StartsWith(heading + " ", StringComparison.Ordinal);
+
+    private static int[] IssuesOf(Contract c) =>
+        IssueNumbers(c.Heading[c.Heading.IndexOf("(PR ", StringComparison.Ordinal)..]);
+
+    private static int[] IssueNumbers(string registryText) =>
+        IssueToken().Matches(registryText).Select(m => int.Parse(m.Groups[1].Value)).Distinct().Order().ToArray();
+
+    private static string[] Lines(string document) => document.Split('\n').Select(l => l.TrimEnd('\r')).ToArray();
+
     private static string ReadPlan(string relative) =>
         File.ReadAllText(Path.Combine(SourceText.RepoRoot(), "docs", "plans", relative));
 
-    // The canonical definition: bold from column zero, an em dash, the
-    // owner clause in parentheses — `(PR n, #issue[, #issue]…` with the
-    // issue list captured (codex rounds 17 and 18) — and the heading's
-    // closing `.**`: a full stop then the bold delimiter, followed by
-    // whitespace, with no other asterisk before it, so an interior bold
-    // span cannot pose as the closing delimiter (codex rounds 6 and 7).
-    // No `#issue` token anywhere outside the owner clause's canonical list
-    // — not in its suffix, not in the title, not after the clause — so an
-    // extra issue cannot hide anywhere in the heading (codex rounds 19–20).
-    // Every issue token ends at a Unicode identifier boundary, so `#1244x`
-    // and `#1244é` are malformed headings rather than issue 1244 (codex
-    // rounds 21–22).
-    // Round 23: the issue list must be followed by `;` or `)`, so any other
-    // character after the digits — a letter, a superscript, a supplementary
-    // character — refuses the heading.
-    // The named `clause` group spans the whole owner clause, `(PR n, …)`;
-    // being named, it leaves the numbered groups (R-n, PR n, the issue
-    // list) where they were (codex round 27).
-    // The closing `.**` is followed by whitespace or the end of the input,
-    // so a heading alone on its line still matches when that line is parsed
-    // in isolation (codex round 29).
-    [GeneratedRegex(@"^\*\*R-(\d+) — [^\n*#]*?(?<clause>\(PR (\d+), (#\d+(?:, #\d+)*)(?=[;)])[^)\n*#]*\))[^\n*#]*?\.\*\*(?=\s|$)", RegexOptions.Multiline)]
-    private static partial Regex ContractHeading();
+    /// <summary>Inline Markdown that can wrap a citation without changing
+    /// what a reader sees: a link becomes its text and emphasis markers are
+    /// dropped.</summary>
+    private static string NormalizeInlineMarkdown(string text) =>
+        MarkdownLink().Replace(text, "$1").Replace("*", string.Empty).Replace("_", string.Empty);
 
-    // Anything that starts a line like a contract definition, however it
-    // is indented or punctuated: the strict parse must account for every
-    // one of them.
+    // Anything that starts a line like a contract definition, however it is
+    // punctuated: counted against the registry, never parsed.
     [GeneratedRegex(@"^[ \t]{0,3}\*\*[ \t]*R\p{Pd}\d+", RegexOptions.Multiline)]
     private static partial Regex LooseContractHeading();
 
-    // Every level-two heading, however indented or spaced (CommonMark allows
-    // up to three leading spaces), terminates the previous section; only the
-    // canonical `## n. PR m · …` shape carries a PR number.
-    [GeneratedRegex(@"^[ \t]{0,3}##[ \t]+(?:(?<=^## )\d+\. PR (\d+) · )?[^\n]*", RegexOptions.Multiline)]
-    private static partial Regex SectionHeading();
-
     // Anything that starts a heading like a PR section, however it is
-    // indented, spaced or punctuated after the PR number.
-    [GeneratedRegex(@"^[ \t]{0,3}##[ \t]+\d+\.[ \t]+PR[ \t]+\d+\b", RegexOptions.Multiline)]
+    // spaced or punctuated after the PR number.
+    [GeneratedRegex(@"^[ \t]{0,3}##[ \t]+\d+\.[ \t]+PR[ \t]+\d+\b")]
     private static partial Regex LoosePrSectionHeading();
 
-    // Unicode-aware boundaries on both sides (codex round 24): a letter,
+    // Anything that starts a heading like a review record.
+    [GeneratedRegex(@"^[ \t]{0,3}###[ \t]+PR[ \t]+\d+\b")]
+    private static partial Regex LooseReviewRecordHeading();
+
+    // Any level-two heading (CommonMark allows up to three leading spaces),
+    // which terminates a PR section.
+    [GeneratedRegex(@"^[ \t]{0,3}##[ \t]")]
+    private static partial Regex LooseLevelTwoHeading();
+
+    // A citation with Unicode-aware boundaries on both sides: a letter,
     // digit, connector, other-number or letter-number character, or a
-    // surrogate (half of a supplementary character) next to `R-n` makes it
-    // a different token — `AR-6`, `TR-6`, `R-6x`, `R-6é`, `éR-6`, `R-6²`
-    // and `R-6` beside a supplementary letter are none of them citations.
+    // surrogate next to `R-n` makes it a different token.
     [GeneratedRegex(@"(?<![\w\p{No}\p{Nl}\p{Cs}])R-(\d+)(?![\w\p{No}\p{Nl}\p{Cs}])")]
     private static partial Regex ContractCitation();
 
-    [GeneratedRegex(@"^### PR (\d+) — [^\n]*", RegexOptions.Multiline)]
-    private static partial Regex ReviewRecordHeading();
-
-    // A token is `#` plus digits ending at whitespace, `,`, `;`, `:`, `.`,
-    // `)` or the end of the line (codex rounds 21–23): an allow-list of
-    // terminators, so `#1244x`, `#1244é`, `#1244²` and a supplementary
-    // character after the digits are all malformed.
-    [GeneratedRegex(@"#(\d+)(?=[\s,;:.)]|$)")]
+    // An issue number in a REGISTRY string (never in the documents).
+    [GeneratedRegex(@"#(\d+)")]
     private static partial Regex IssueToken();
-
-    // An issue-shaped substring whose digits are followed by anything but a
-    // digit or an allowed terminator. The digit in the negated class stops
-    // the digits backtracking into a false "malformed" match on `#1244`.
-    [GeneratedRegex(@"#\d+(?![\d\s,;:.)]|$)")]
-    private static partial Regex MalformedIssueToken();
-
-    // Any standalone `PR` or `PRs` word — with or without a number after
-    // it, across a soft wrap, a link or emphasis — so a formatted foreign
-    // reference cannot hide outside the owner clause (codex rounds 26–27).
-    [GeneratedRegex(@"(?<![A-Za-z0-9_])PRs?(?![A-Za-z0-9_])")]
-    private static partial Regex PrMarker();
-
-    // A Markdown ATX heading line, which ends a contract paragraph. `#` must
-    // be followed by a space or the line end, so a continuation line that
-    // starts with `#1244` stays inside the paragraph.
-    [GeneratedRegex(@"^[ \t]{0,3}#{1,6}(?:[ \t]|$)")]
-    private static partial Regex MarkdownHeading();
 
     // An inline Markdown link, `[text](destination)`, reduced to its text.
     [GeneratedRegex(@"\[([^\]\n]*)\]\([^)\n]*\)")]
     private static partial Regex MarkdownLink();
-
-    // Anything that starts a heading like a review record, however it is
-    // indented, spaced or punctuated after the PR number.
-    [GeneratedRegex(@"^[ \t]{0,3}###[ \t]+PR[ \t]+\d+\b", RegexOptions.Multiline)]
-    private static partial Regex LooseReviewRecordHeading();
 }
