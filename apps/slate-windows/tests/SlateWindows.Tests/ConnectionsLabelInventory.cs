@@ -42,10 +42,18 @@ internal static class ConnectionsLabelInventory
         ("T5", nameof(ConnectionsPhrase.Error), "boom", "Connections error: boom", () => ConnectionsPhrase.Error("boom")),
         ("T6", nameof(ConnectionsPhrase.IncomingTitle), "", "Linked from", () => ConnectionsPhrase.IncomingTitle),
         ("T7", nameof(ConnectionsPhrase.OutgoingTitle), "", "Links to", () => ConnectionsPhrase.OutgoingTitle),
+        // Both headers at zero, one and many (#1274 review): the plural is the
+        // count's alone, never the title's.
+        ("T8", nameof(ConnectionsPhrase.GroupHeader), "Linked from, 0", "Linked from, 0 notes",
+            () => ConnectionsPhrase.GroupHeader(ConnectionsPhrase.IncomingTitle, 0)),
         ("T8", nameof(ConnectionsPhrase.GroupHeader), "Linked from, 1", "Linked from, 1 note",
             () => ConnectionsPhrase.GroupHeader(ConnectionsPhrase.IncomingTitle, 1)),
+        ("T8", nameof(ConnectionsPhrase.GroupHeader), "Linked from, 7", "Linked from, 7 notes",
+            () => ConnectionsPhrase.GroupHeader(ConnectionsPhrase.IncomingTitle, 7)),
         ("T9", nameof(ConnectionsPhrase.GroupHeader), "Links to, 0", "Links to, 0 notes",
             () => ConnectionsPhrase.GroupHeader(ConnectionsPhrase.OutgoingTitle, 0)),
+        ("T9", nameof(ConnectionsPhrase.GroupHeader), "Links to, 1", "Links to, 1 note",
+            () => ConnectionsPhrase.GroupHeader(ConnectionsPhrase.OutgoingTitle, 1)),
         ("T9", nameof(ConnectionsPhrase.GroupHeader), "Links to, 12", "Links to, 12 notes",
             () => ConnectionsPhrase.GroupHeader(ConnectionsPhrase.OutgoingTitle, 12)),
         ("T10", nameof(ConnectionsPhrase.IncomingEmpty), "", "Nothing links here.", () => ConnectionsPhrase.IncomingEmpty),

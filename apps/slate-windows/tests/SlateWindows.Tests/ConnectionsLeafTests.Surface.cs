@@ -354,20 +354,24 @@ public sealed partial class ConnectionsLeafTests
     /// <summary>B-16's other direction (#1274): the inventory and the phrase
     /// class name the SAME members — a string site added to
     /// <c>ConnectionsPhrase</c> without an inventory entry (as T16a once was),
-    /// or an entry whose member is gone, fails here.</summary>
+    /// or an entry whose member is gone, fails here. The inventory keys its
+    /// entries by member NAME, so the phrase class declares each name once
+    /// (#1274 review): an overload would be a second string site that no
+    /// entry exercises.</summary>
     [Fact]
     public void TheInventoryAndThePhraseClassNameTheSameMembers()
     {
         const BindingFlags Declared = BindingFlags.Public | BindingFlags.NonPublic | BindingFlags.Static | BindingFlags.DeclaredOnly;
-        string[] phrases = [.. typeof(ConnectionsPhrase).GetMembers(Declared)
+        string[] declared = [.. typeof(ConnectionsPhrase).GetMembers(Declared)
             .Where(member => member is FieldInfo or PropertyInfo || member is MethodInfo { IsSpecialName: false })
             .Where(member => !member.IsDefined(typeof(CompilerGeneratedAttribute), inherit: false))
             .Select(member => member.Name)
-            .Distinct(StringComparer.Ordinal)
             .Order(StringComparer.Ordinal)];
-        Assert.NotEmpty(phrases);
+        Assert.NotEmpty(declared);
+        string[] overloaded = [.. declared.GroupBy(name => name, StringComparer.Ordinal).Where(group => group.Count() > 1).Select(group => group.Key)];
+        Assert.True(overloaded.Length == 0, $"ConnectionsPhrase overloads {string.Join(", ", overloaded)}; each string site is one inventory member");
         Assert.Equal(
-            phrases,
+            declared,
             ConnectionsLabelInventory.Entries.Select(entry => entry.Member).Distinct(StringComparer.Ordinal).Order(StringComparer.Ordinal));
     }
 
