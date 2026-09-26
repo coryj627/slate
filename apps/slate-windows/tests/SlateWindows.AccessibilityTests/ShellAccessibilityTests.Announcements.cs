@@ -44,11 +44,12 @@ public sealed partial class ShellAccessibilityTests
     /// </para>
     /// <para>
     /// A manual-trait journey (contract 40 AR-1): it was not 6/6 stable on
-    /// the final build — its one miss was its own precondition, all thirty
-    /// launches advised at their first line on a busy desktop — so the shell
-    /// gate's evidence for R-1 is the hosted launch-queue facts and
-    /// <c>AnnouncementSeamCensus</c>, and this journey runs when
-    /// <c>SLATE_MANUAL_JOURNEYS=1</c>. Its counts are recorded with the W7-2
+    /// the final build (5/6 twice), so the shell gate's evidence for R-1 is
+    /// the hosted launch-queue facts and <c>AnnouncementSeamCensus</c>, and
+    /// this journey runs when <c>SLATE_MANUAL_JOURNEYS=1</c>. Both misses
+    /// were the product's: the provider connected before UIA advised the
+    /// process, the lines raised then were lost, and the lines raised after
+    /// the advise were heard. Its counts are recorded with the W7-2
     /// notification etiquette checklist.
     /// </para>
     /// </remarks>
