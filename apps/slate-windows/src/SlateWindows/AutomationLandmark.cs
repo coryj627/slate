@@ -200,13 +200,30 @@ internal sealed class AutomationPresentationItemsControlPeer : FrameworkElementA
 /// <c>IsControlElementCore =&gt; false</c> (NVDA treats such an element as
 /// layout), and the wrapped control is the one stop. A layout host is
 /// never a stop itself: <see cref="Control"/> makes every ItemsControl
-/// focusable by default (the #1120 class), so this one opts out.
+/// focusable by default (the #1120 class), so this one opts out. A host
+/// that is only structure (<see cref="IsStructural"/>) is not even a group.
 /// </summary>
 internal sealed class LayoutItemsControl : ItemsControl
 {
+    /// <summary>Codex PR 3 round 4 (R-4 §4.2: a host that only wraps the
+    /// real stops is never named and never a control element): the split
+    /// host arranges the editor panes and nothing more. Structural, it
+    /// leaves the control and content views, so a split adds no named
+    /// object-navigation element; the panes are the structure the reader
+    /// moves between, and W7-6's announcer speaks "Editor pane 1 of 2,
+    /// {title}." as focus moves.</summary>
+    public static readonly DependencyProperty IsStructuralProperty = DependencyProperty.Register(
+        nameof(IsStructural), typeof(bool), typeof(LayoutItemsControl), new PropertyMetadata(false));
+
     static LayoutItemsControl() =>
         FocusableProperty.OverrideMetadata(
             typeof(LayoutItemsControl), new FrameworkPropertyMetadata(false));
+
+    public bool IsStructural
+    {
+        get => (bool)GetValue(IsStructuralProperty);
+        set => SetValue(IsStructuralProperty, value);
+    }
 
     protected override AutomationPeer OnCreateAutomationPeer() =>
         new LayoutItemsControlAutomationPeer(this);
@@ -223,6 +240,12 @@ internal sealed class LayoutItemsControlAutomationPeer : ItemsControlAutomationP
         AutomationControlType.Group;
 
     protected override string GetClassNameCore() => "SlateGroup";
+
+    protected override bool IsControlElementCore() =>
+        !((LayoutItemsControl)Owner).IsStructural && base.IsControlElementCore();
+
+    protected override bool IsContentElementCore() =>
+        !((LayoutItemsControl)Owner).IsStructural && base.IsContentElementCore();
 
     protected override ItemAutomationPeer CreateItemAutomationPeer(object item) =>
         new LayoutItemAutomationPeer(item, this);

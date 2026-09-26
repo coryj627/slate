@@ -314,7 +314,7 @@ public sealed class ItemContainerNameCensus
                         string.Empty, SiblingConverter, "{}{0}, missing from disk, unsaved changes"),
                 ],
             },
-            ["Editor panes"] = new ContainerNaming.Layout(
+            ["WorkspaceTemplates.xaml#{Binding Children}"] = new ContainerNaming.Layout(
                 "its panes are unnamed structural panes; each tab strip is its own sibling set"),
 
             // --- built in code (codex PR 3 round 1) ---

@@ -82,23 +82,51 @@ public sealed class LayoutItemsControlTests
         }
     });
 
-    /// <summary>Spec §4.2 item 2: the split host is the "Editor panes"
-    /// group and its containers are layout — the announcer already says
-    /// "Editor pane 1 of 2, {title}." on pane moves (W7-6), so nothing
-    /// positional is lost.</summary>
+    /// <summary>Spec §4.2 item 2 (codex PR 3 round 4): a host that only
+    /// wraps the real stops is never named and never a control element. The
+    /// split host arranges the panes and nothing more, so a split adds no
+    /// named object-navigation element: the host is unnamed and out of the
+    /// control and content views, visible or not, and its containers are
+    /// layout. The announcer already says "Editor pane 1 of 2, {title}." on
+    /// pane moves (W7-6), so nothing positional is lost.</summary>
     [Fact]
-    public void TheSplitHostIsTheEditorPanesGroup() => RunSta(() =>
+    public void TheSplitHostIsUnnamedStructure() => RunSta(() =>
     {
         var resources = Assert.IsType<ResourceDictionary>(Application.LoadComponent(
             new Uri("/SlateWindows;component/WorkspaceTemplates.xaml", UriKind.Relative)));
         DataTemplate template = Assert.IsType<DataTemplate>(resources["WorkspaceNodeTemplate"]);
         Grid root = Assert.IsType<Grid>(template.LoadContent());
         LayoutItemsControl host = Assert.Single(root.Children.OfType<LayoutItemsControl>());
-        Assert.Equal("Editor panes", AutomationProperties.GetName(host));
+        Assert.Equal(string.Empty, AutomationProperties.GetName(host));
+        Assert.True(host.IsStructural);
+        host.ItemsSource = new[] { "left", "right" };
+        var window = new Window
+        {
+            Content = root,
+            Width = 480,
+            Height = 320,
+            ShowInTaskbar = false,
+            WindowStyle = WindowStyle.None,
+        };
+        window.Show();
+        try
+        {
+            window.UpdateLayout();
+            Assert.True(host.IsVisible);
+            AutomationPeer peer = UIElementAutomationPeer.CreatePeerForElement(host);
+            Assert.Equal(string.Empty, peer.GetName());
+            Assert.False(peer.IsControlElement());
+            Assert.False(peer.IsContentElement());
+            Assert.All(peer.GetChildren() ?? [], container => Assert.False(container.IsControlElement()));
+        }
+        finally
+        {
+            window.Close();
+        }
     });
 
     /// <summary>With the split containers out of the control view, each
-    /// pane's content would surface directly under "Editor panes" — two
+    /// pane's content would surface directly under the split — two
     /// focusable "Workspace tabs" siblings, which axe fails
     /// (SiblingUniqueAndFocusable, measured on the shell journey's
     /// workspace scan). Each pane is therefore one structural Pane: axe's

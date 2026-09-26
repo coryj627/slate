@@ -72,7 +72,7 @@ public sealed class ItemNameCensusTests
     [InlineData("board.canvas")]
     // The names the fixes give.
     [InlineData("Note 00000")]
-    [InlineData("Editor panes")]
+    [InlineData("Vault root, folder Vault root")]
     [InlineData("Recent vaults")]
     [InlineData("Accessible grids (2021)")]
     [InlineData("Property title, text, editable")]

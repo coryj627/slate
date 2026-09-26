@@ -588,8 +588,8 @@
     <DataTemplate x:Key="WorkspaceGroupTemplate"
                   DataType="{x:Type local:WorkspaceGroupViewModel}">
         <!-- W7-7 PR 3 (#1246, R-4): each pane is one silent structural
-             Pane. With the split's containers out of the control view
-             (the "Editor panes" group below), two panes' tab controls
+             Pane. With the split's host and containers out of the control
+             view (the structural split host below), two panes' tab controls
              would otherwise be sibling "Workspace tabs" — axe's
              SiblingUniqueAndFocusable failure. Unnamed on purpose: a Pane
              named "Editor pane" fails NameExcludesControlType, NVDA does
@@ -732,17 +732,20 @@
             <ContentControl Focusable="False" Content="{Binding Group}"
                             ContentTemplate="{StaticResource WorkspaceGroupTemplate}"
                             Visibility="{Binding IsGroup, Converter={StaticResource BooleanToVisibilityConverter}}" />
-            <!-- W7-7 PR 3 (#1246, R-4): one "Editor panes" group whose
+            <!-- W7-7 PR 3 (#1246, R-4): a structural split host whose
                  containers are layout. A plain ItemsControl named each pane
                  container by its view model's type, and NVDA spoke
                  "SlateWindows.WorkspacePaneNodeViewModel, data item, 1 of 2"
                  on every pane move; the announcer's "Editor pane 1 of 2,
-                 {title}." (W7-6) carries the position instead. -->
+                 {title}." (W7-6) carries the position instead. The host only
+                 arranges the panes, so it is unnamed and out of the control
+                 view (codex PR 3 round 4): a split adds no named
+                 object-navigation element. -->
             <local:LayoutItemsControl ItemsSource="{Binding Children}"
                                       ItemTemplate="{StaticResource WorkspaceNodeChildTemplate}"
                                       AlternationCount="2147483647"
                                       Visibility="{Binding IsSplit, Converter={StaticResource BooleanToVisibilityConverter}}"
-                                      AutomationProperties.Name="Editor panes">
+                                      IsStructural="True">
                 <local:LayoutItemsControl.ItemsPanel>
                     <ItemsPanelTemplate>
                         <local:WeightedSplitPanel Orientation="{Binding DataContext.Axis, RelativeSource={RelativeSource AncestorType=ItemsControl}, Converter={StaticResource AxisToOrientationConverter}}" />
