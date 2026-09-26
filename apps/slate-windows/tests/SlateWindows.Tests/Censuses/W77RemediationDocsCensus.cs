@@ -147,6 +147,7 @@ public sealed partial class W77RemediationDocsCensus
 
     [Theory]
     [InlineData("**R-1 — Title (PR 1, #1244).** Body.\nContinued ownership: PR 9, #9999.")]
+    [InlineData("**R-1 — Title (PR 1, #1244).**\nBody. Continued ownership: PR 9, #9999.")]
     [InlineData("**R-1 — Title (PR 1, #1244).** Body.\nContinued ownership: PR\n9.")]
     [InlineData("**R-1 — Title (PR 1, #1244).** Body.\nContinued ownership: PR [9](https://example.test/pull/9).")]
     [InlineData("**R-1 — Title (PR 1, #1244).** Body.\nContinued ownership: PR *9*.")]
@@ -549,7 +550,10 @@ public sealed partial class W77RemediationDocsCensus
     // The named `clause` group spans the whole owner clause, `(PR n, …)`;
     // being named, it leaves the numbered groups (R-n, PR n, the issue
     // list) where they were (codex round 27).
-    [GeneratedRegex(@"^\*\*R-(\d+) — [^\n*#]*?(?<clause>\(PR (\d+), (#\d+(?:, #\d+)*)(?=[;)])[^)\n*#]*\))[^\n*#]*?\.\*\*(?=\s)", RegexOptions.Multiline)]
+    // The closing `.**` is followed by whitespace or the end of the input,
+    // so a heading alone on its line still matches when that line is parsed
+    // in isolation (codex round 29).
+    [GeneratedRegex(@"^\*\*R-(\d+) — [^\n*#]*?(?<clause>\(PR (\d+), (#\d+(?:, #\d+)*)(?=[;)])[^)\n*#]*\))[^\n*#]*?\.\*\*(?=\s|$)", RegexOptions.Multiline)]
     private static partial Regex ContractHeading();
 
     // Anything that starts a line like a contract definition, however it
