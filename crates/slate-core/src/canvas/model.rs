@@ -42,6 +42,13 @@ use std::collections::HashMap;
 
 use super::{Canvas, Edge, EdgeId, EndStyle, Node, NodeId, NodeKind, Side, color_name};
 
+/// The accessible name every host gives the visual board's container
+/// (Windows `CanvasPhrase.VisualBoardName`, mac's `CanvasRendererView`
+/// label). W6-1 contract 34 D5 reserves it in the board's one name
+/// namespace, so the speakable-name allocator treats it as occupied from
+/// the start and no card answers to it (#1276).
+pub const VISUAL_BOARD_NAME: &str = "Canvas visual view";
+
 /// Axis-aligned rectangle normalized to min/max corners.
 #[derive(Debug, Clone, Copy, PartialEq)]
 pub struct Rect {
@@ -498,10 +505,17 @@ pub fn derive_with(canvas: &Canvas, titles: &dyn FileTitleSource) -> CanvasModel
     // the wrong card. Mac's loop checks only the names it has already
     // assigned, so `A`, `A`, `A 2` becomes `A`, `A 2`, `A 2 2` there —
     // unique, but the second card answers to the third one's title.
+    //
+    // The visual board's container name is RESERVED (W6-1 contract 34 D5:
+    // one name namespace across the container, its cards and its labelled
+    // edges), so the allocator starts with it occupied: a card titled like
+    // the container takes the next free ordinal instead of answering to the
+    // container's own name (#1276).
     let real_titles: std::collections::HashSet<&str> =
         base_titles.values().map(String::as_str).collect();
     let mut used: std::collections::HashSet<String> =
-        std::collections::HashSet::with_capacity(nodes.len());
+        std::collections::HashSet::with_capacity(nodes.len() + 1);
+    used.insert(VISUAL_BOARD_NAME.to_owned());
     let mut speakable_names: HashMap<NodeId, String> = HashMap::with_capacity(nodes.len());
     for node in nodes {
         let base = &base_titles[&node.id];

@@ -5075,7 +5075,12 @@ internal static class CanvasPhrase
     /// view"). NOT the switcher arm's label above: the peer shipped
     /// speaking the radio's word and the FlaUI journey caught it —
     /// the two phrases are neighbours here so they can never be
-    /// confused for one another again.</summary>
+    /// confused for one another again. Contract 34 D5 RESERVES it in the
+    /// board's one name namespace: core's speakable-name allocator starts
+    /// with the same spelling occupied (<c>canvas::model::VISUAL_BOARD_NAME</c>),
+    /// so no card peer answers to it (#1276) — and
+    /// <c>EveryBoardPeerHasItsOwnNameAndTheContainersNameIsReserved</c>
+    /// fails if the two spellings drift apart.</summary>
     public const string VisualBoardName = "Canvas visual view";
 
     /// <summary>The table projection's accessible name (mac's
