@@ -1653,13 +1653,21 @@ public sealed class ReadingFocusTests
     /// <summary>Locked contract 34 D15: seating the canvas's showing
     /// projection — the Escape ladder's and the Where-am-I panel's
     /// fallback — puts the reader on the Visual board's renderer, not on the
-    /// outline collapsed behind it.</summary>
-    [Fact]
-    public void SeatingTheVisualProjectionFocusesTheRenderer() => RunSta(() =>
+    /// outline collapsed behind it; and a needle matching no card changes
+    /// nothing (D4: a Visual filter dims cards and narrows nothing), where the
+    /// outline and the table would fall to the filter field.</summary>
+    [Theory]
+    [InlineData(false)]
+    [InlineData(true)]
+    public void SeatingTheVisualProjectionFocusesTheRenderer(bool zeroMatchFilter) => RunSta(() =>
     {
         using var host = new Host();
         host.Initialize(readingMode: false, documentKind: "canvas", board: CardBoard);
         host.Tab.Canvas!.ShowSurface(CanvasSurfaceKind.Visual);
+        if (zeroMatchFilter)
+        {
+            FilterTheBoardToNothing(host);
+        }
         host.Settle();
         var surface = Assert.IsType<CanvasSurfaceView>(host.EditorStop());
         Assert.True(host.Sentinel.Focus());
@@ -1668,8 +1676,84 @@ public sealed class ReadingFocusTests
         Assert.True(surface.FocusProjection());
         PumpedDispatcher.Drain();
 
-        AssertFocused(surface.VisualForTests, "the Visual projection's seat");
+        AssertFocused(surface.VisualForTests, $"the Visual projection's seat (zero-match filter: {zeroMatchFilter})");
     });
+
+    /// <summary>R-10 over locked contract 34 D4 and D15: a needle that matches
+    /// no card DIMS the Visual board's cards and narrows nothing, so the board
+    /// is still the editor stop. F6 from the tab bar and Shift+F6 from the
+    /// right pane land on the renderer — never on the filter field — with the
+    /// first card of the full scene seated silently though the needle dims
+    /// it, the editor line spoken once, and the filter left as it was.</summary>
+    [Theory]
+    [InlineData("F6 from the tab bar")]
+    [InlineData("Shift+F6 from the right pane")]
+    public void AZeroMatchFilterStillLandsTheBoardOnItsRenderer(string press) => RunSta(() =>
+    {
+        using var host = new Host();
+        host.Initialize(readingMode: false, documentKind: "canvas", board: CardBoard);
+        CanvasDocumentViewModel board = host.Tab.Canvas!;
+        board.ShowSurface(CanvasSurfaceKind.Visual);
+        string needle = FilterTheBoardToNothing(host);
+        host.Settle();
+        RingHost ring = host.UseRing();
+        var surface = Assert.IsType<CanvasSurfaceView>(host.EditorStop());
+        bool backward = press.StartsWith("Shift+F6", StringComparison.Ordinal);
+        UIElement start = backward ? host.Elsewhere : host.ActiveTabItem();
+        Assert.True(start.Focus());
+        PumpedDispatcher.Drain();
+
+        (backward ? host.Workspace.FocusPreviousPaneCommand : host.Workspace.FocusNextPaneCommand).Execute(null);
+        PumpedDispatcher.Drain();
+
+        Assert.Equal(ShellRegionLanding.Landed, Assert.Single(ring.Attempts).Outcome);
+        AssertFocused(surface.VisualForTests, $"the zero-match Visual board's landing ({press})");
+        Assert.False(surface.FilterFieldForTests.IsKeyboardFocusWithin);
+        Assert.Equal("alpha", board.Selection.Selected);
+        Assert.DoesNotContain(board.FilteredOutline, row => row.NodeId == "alpha");
+        Assert.Equal(needle, board.FilterText);
+        Assert.Equal([host.EditorLine()], host.Announced);
+        Assert.Null(host.EditorLandingRequest());
+    });
+
+    /// <summary>R-10: a Visual board with no cards at all is still an empty
+    /// canvas: F6 lands on its onboarding, the editor line spoken once.</summary>
+    [Fact]
+    public void AnEmptyVisualBoardLandsOnItsOnboarding() => RunSta(() =>
+    {
+        using var host = new Host();
+        host.Initialize("canvas");
+        CanvasDocumentViewModel board = host.Tab.Canvas!;
+        Assert.Empty(board.Outline);
+        board.ShowSurface(CanvasSurfaceKind.Visual);
+        host.Settle();
+        RingHost ring = host.UseRing();
+        var surface = Assert.IsType<CanvasSurfaceView>(host.EditorStop());
+        host.FocusTabBar();
+
+        host.Workspace.FocusNextPaneCommand.Execute(null);
+        PumpedDispatcher.Drain();
+
+        Assert.Equal(ShellRegionLanding.Landed, Assert.Single(ring.Attempts).Outcome);
+        AssertFocused(surface.OnboardingForTests, "the empty Visual board's landing");
+        Assert.Equal([host.EditorLine()], host.Announced);
+    });
+
+    /// <summary>A needle no card of <see cref="CardBoard"/> matches, applied
+    /// and answered; the board keeps every card.</summary>
+    private static string FilterTheBoardToNothing(Host host)
+    {
+        const string Needle = "zzz-matches-no-card";
+        CanvasDocumentViewModel board = host.Tab.Canvas!;
+        board.FilterText = Needle;
+        Assert.True(
+            PumpedDispatcher.PumpUntil(() => board.FilterActive && board.FilteredOutline.Count == 0),
+            "the needle never narrowed the rows to none");
+        PumpedDispatcher.PumpUntilDrained(board.WhenAllWorkDrained());
+        PumpedDispatcher.Drain();
+        Assert.Equal(2, board.Outline.Count);
+        return Needle;
+    }
 
     /// <summary>R-10's one owner: the surface takes focus only through a
     /// requested landing. Shown over merged content by a flip that asked for

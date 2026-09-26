@@ -673,6 +673,30 @@ internal sealed class CanvasDocumentViewModel : PanelWorkScheduler
         }
     }
 
+    /// <summary>
+    /// W7-7 R-10 over locked contract 34 D4/D15 — THE seam for the card a
+    /// landing on the VISUAL board seats: the card the request names, else
+    /// the one whose activation the reader is returning from, else the first
+    /// card of the FULL scene in the document's reading order. Never the
+    /// filtered outline: a Visual filter dims cards and narrows nothing, so
+    /// a needle matching no card still leaves every card to land on. The
+    /// board's own full-scene reading order (#1270) replaces the last arm
+    /// here.
+    /// </summary>
+    internal string? BoardLandingNodeFor(CanvasFocusRequest request)
+    {
+        ArgumentNullException.ThrowIfNull(request);
+        if (request.NodeId is { } named && _rows.ContainsKey(named))
+        {
+            return named;
+        }
+        if (LastActivatedNode is { } last && _rows.ContainsKey(last))
+        {
+            return last;
+        }
+        return _outline.Count > 0 ? _outline[0].NodeId : null;
+    }
+
     /// <summary>The row a focus request should land on when it names
     /// none: the row whose activation the user is returning from (WCAG
     /// 2.4.3), else the first.</summary>

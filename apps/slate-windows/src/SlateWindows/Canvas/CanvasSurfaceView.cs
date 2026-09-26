@@ -464,15 +464,20 @@ internal sealed class CanvasSurfaceView : UserControl, ICanvasSurfacePresenter
         // control with the onboarding text unread beside it. Rows first,
         // then whatever this state is actually SHOWING. The Visual board's
         // one focus stop is its renderer (locked contract 34 D15), never the
-        // outline collapsed behind it.
+        // outline collapsed behind it — and it is asked FIRST: a Visual
+        // filter dims cards and narrows nothing (D4), so a needle matching no
+        // card still leaves a board, and only a scene with no cards has none.
+        if (Model is { RendersRetainedSnapshot: true, Outline.Count: > 0 }
+            && Projection == CanvasSurfaceKind.Visual
+            && _visual.Focus())
+        {
+            return true;
+        }
         if (Model is { RendersRetainedSnapshot: true, FilteredOutline.Count: > 0 })
         {
-            bool seated = Projection switch
-            {
-                CanvasSurfaceKind.Table => _table.FocusGrid(),
-                CanvasSurfaceKind.Visual => _visual.Focus(),
-                _ => _outline.FocusTree(),
-            };
+            bool seated = Projection == CanvasSurfaceKind.Table
+                ? _table.FocusGrid()
+                : _outline.FocusTree();
             if (seated)
             {
                 return true;
@@ -1173,6 +1178,17 @@ internal sealed class CanvasSurfaceView : UserControl, ICanvasSurfacePresenter
             case CanvasLoadState.Loading:
                 // Nothing to land on yet; the publish will call back.
                 return;
+            case CanvasLoadState.Ready when model.Selection.ActiveSurface == CanvasSurfaceKind.Visual
+                && model.Outline.Count > 0:
+                // The board BEFORE the filtered-empty arm: a Visual filter dims
+                // cards and narrows nothing (locked contract 34 D4), so a needle
+                // matching no card still leaves a board to land on, and its one
+                // stop is the renderer (D15), never the filter field. Its
+                // emptiness is the scene's; an actually empty board falls to the
+                // onboarding below.
+                delivered = SeatTerminally(() => model.BoardLandingNodeFor(request) is { } boardNode
+                    && LandOnBoard(model, boardNode));
+                break;
             case CanvasLoadState.Ready when model.FilteredOutline.Count == 0:
                 delivered = SeatTerminally(() => _onboarding.IsVisible
                     ? _onboarding.Focus()
@@ -1183,12 +1199,9 @@ internal sealed class CanvasSurfaceView : UserControl, ICanvasSurfacePresenter
                 // deliver: a row in a collapsed view has no container to
                 // realize and no focus to take (A14, PR B's arm).
                 delivered = SeatTerminally(() => model.FocusLandingNodeFor(request) is { } nodeId
-                    && model.Selection.ActiveSurface switch
-                    {
-                        CanvasSurfaceKind.Table => _table.DeliverFocus(nodeId),
-                        CanvasSurfaceKind.Visual => LandOnBoard(model, nodeId),
-                        _ => _outline.DeliverFocus(nodeId) is not null,
-                    });
+                    && (model.Selection.ActiveSurface == CanvasSurfaceKind.Table
+                        ? _table.DeliverFocus(nodeId)
+                        : _outline.DeliverFocus(nodeId) is not null));
                 break;
             default:
                 delivered = SeatTerminally(_stateBanner.Focus);
