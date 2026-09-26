@@ -48,6 +48,67 @@ internal sealed partial class FilesSidebarViewModel
         IsRefreshingTree && _settledTreeGeneration != _treeGeneration;
     internal Task ExpandLoadedCompletion => _expandLoadedCompletion;
 
+    // W7-7 PR 7 (#1252, round 30): the awaited refreshes, each settled by
+    // the publication of its generation or any later one, faulted by a
+    // reported failure of one, cancelled when a cancellation leaves
+    // nothing to publish (a close, a shutdown).
+    private readonly List<(int Generation, TaskCompletionSource Published)> _treeRefreshWaiters = [];
+
+    /// <summary>
+    /// W7-7 PR 7 (#1252, round 30): <see cref="Refresh"/> as the Task a
+    /// rescan awaits with its last page, before the Applied mark and the
+    /// release — it completes when the tree this request produced (or a
+    /// later one) has PUBLISHED on the owner context, faults when the
+    /// refresh reported its failure ("Could not load files."), and is
+    /// cancelled when the refresh was cancelled with nothing left to
+    /// publish.
+    /// </summary>
+    internal Task RefreshAsync(bool reportCount = false)
+    {
+        var published = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
+        (int Generation, TaskCompletionSource Published) waiter = (_treeGeneration + 1, published);
+        lock (_treeRefreshWaiters)
+        {
+            _treeRefreshWaiters.Add(waiter);
+        }
+
+        Refresh(reportCount);
+        if (_treeGeneration < waiter.Generation)
+        {
+            // Refused before it began: the session is shutting down.
+            lock (_treeRefreshWaiters)
+            {
+                _ = _treeRefreshWaiters.Remove(waiter);
+            }
+
+            _ = published.TrySetCanceled();
+        }
+
+        return published.Task;
+    }
+
+    /// <summary>Settle every awaited refresh up to
+    /// <paramref name="generation"/>: published (no failure), failed, or
+    /// cancelled.</summary>
+    private void SettleTreeRefreshWaiters(int generation, Exception? failure, bool cancelled = false)
+    {
+        List<(int Generation, TaskCompletionSource Published)> settled;
+        lock (_treeRefreshWaiters)
+        {
+            settled = [.. _treeRefreshWaiters.Where(waiter => waiter.Generation <= generation)];
+            _ = _treeRefreshWaiters.RemoveAll(waiter => waiter.Generation <= generation);
+        }
+
+        foreach ((_, TaskCompletionSource published) in settled)
+        {
+            _ = cancelled
+                ? published.TrySetCanceled()
+                : failure is null
+                    ? published.TrySetResult()
+                    : published.TrySetException(failure);
+        }
+    }
+
     public bool IsExpandingLoaded
     {
         get => _isExpandingLoaded;
@@ -85,6 +146,7 @@ internal sealed partial class FilesSidebarViewModel
         {
             if (!TryBeginSessionWork(out SessionWorkLease? lease))
             {
+                SettleTreeRefreshWaiters(generation, failure: null, cancelled: true);
                 return;
             }
 
@@ -102,15 +164,18 @@ internal sealed partial class FilesSidebarViewModel
 
                 ApplyTreeRefresh(outcome, reportCount);
                 _treeRefreshCompletion = Task.CompletedTask;
+                SettleTreeRefreshWaiters(generation, failure: null);
             }
             catch (VaultException exception)
             {
+                SettleTreeRefreshWaiters(generation, exception);
                 ReportFailure($"Could not load files: {exception.Message}");
                 _treeRefreshCompletion = Task.CompletedTask;
             }
             catch (Exception exception)
             {
                 HostLog.Write(HostDiagnosticEvent.SidebarTreeRefreshFailed, exception);
+                SettleTreeRefreshWaiters(generation, exception);
                 try
                 {
                     ReportFailure("Could not load files.");
@@ -203,6 +268,7 @@ internal sealed partial class FilesSidebarViewModel
                         if (!token.IsCancellationRequested && generation == _treeGeneration)
                         {
                             ApplyTreeRefresh(outcome, reportCount);
+                            SettleTreeRefreshWaiters(generation, failure: null);
                         }
 
                         applied.TrySetResult();
@@ -229,6 +295,7 @@ internal sealed partial class FilesSidebarViewModel
             await ReportTreeRefreshFailureAsync(
                 generation,
                 $"Could not load files: {exception.Message}",
+                exception,
                 token).ConfigureAwait(false);
         }
         catch (Exception exception)
@@ -242,6 +309,7 @@ internal sealed partial class FilesSidebarViewModel
             await ReportTreeRefreshFailureAsync(
                 generation,
                 "Could not load files.",
+                exception,
                 token).ConfigureAwait(false);
         }
         finally
@@ -266,6 +334,7 @@ internal sealed partial class FilesSidebarViewModel
     private async Task ReportTreeRefreshFailureAsync(
         int generation,
         string message,
+        Exception cause,
         CancellationToken token)
     {
         if (token.IsCancellationRequested)
@@ -288,6 +357,7 @@ internal sealed partial class FilesSidebarViewModel
                             // never publish, so its failure is not held for a
                             // publication — a later refresh must not revive it.
                             _settledTreeGeneration = generation;
+                            SettleTreeRefreshWaiters(generation, cause);
                             ReportFailure(message);
                         }
 
@@ -309,6 +379,7 @@ internal sealed partial class FilesSidebarViewModel
             // Refresh is terminal even when dispatch or presentation fails.
             // Teardown joins this task, so retain diagnostics without faulting it.
             HostLog.Write(HostDiagnosticEvent.SidebarTreeRefreshFailed, exception);
+            SettleTreeRefreshWaiters(generation, cause);
         }
     }
 
@@ -486,6 +557,7 @@ internal sealed partial class FilesSidebarViewModel
         }
 
         CancelTreeRefreshCore();
+        SettleTreeRefreshWaiters(int.MaxValue, failure: null, cancelled: true);
 
         return wasPending;
     }
