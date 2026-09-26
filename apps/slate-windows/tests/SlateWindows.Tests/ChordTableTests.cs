@@ -955,8 +955,21 @@ public sealed class ChordTableTests
                 + $"{access} decides a key outside TreeChords and IsTheBackChord — a chord the table does not declare.");
         }
 
-        // The route: the handler hands the live modifiers to the owner, whose
-        // one reading of the key is the lookup it switches on.
+        // The route: the view's constructor subscribes the tree's KeyDown to
+        // the handler (#1273 review — the handler's body is nothing if no
+        // event reaches it, and nothing unsubscribes it), the handler hands
+        // the live modifiers to the owner, and the owner's one reading of the
+        // key is the lookup it switches on.
+        ConstructorDeclarationSyntax construction = Assert.Single(
+            view.Root.DescendantNodes().OfType<ConstructorDeclarationSyntax>(),
+            constructor => constructor.Identifier.ValueText == "ConnectionsLeafView");
+        Assert.Single(
+            construction.DescendantNodes().OfType<AssignmentExpressionSyntax>(),
+            assignment => CSharpSource.Normalize(assignment) == "_tree.KeyDown+=OnTreeKeyDown");
+        Assert.DoesNotContain(
+            view.Root.DescendantNodes().OfType<AssignmentExpressionSyntax>(),
+            assignment => CSharpSource.Normalize(assignment.Left) == "_tree.KeyDown"
+                && assignment.OperatorToken.ValueText != "+=");
         InvocationExpressionSyntax toOwner = Assert.Single(
             view.Method("OnTreeKeyDown").DescendantNodes().OfType<InvocationExpressionSyntax>(),
             call => CSharpSource.Normalize(call.Expression) == "TryHandleTreeKey");

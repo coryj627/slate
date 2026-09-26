@@ -912,9 +912,15 @@ internal sealed class ConnectionsLeafView : UserControl
         return ConnectionsTreeKey.None;
     }
 
+    /// <summary>The mac's `jumpSection` (`:296–306`): the anchors are the
+    /// groups' first ROWS — an empty group's placeholder is no anchor
+    /// (#1273 review), as the mac's `compactMap` drops an empty section — so
+    /// a one-sided graph lands both jumps on its one group's first row.</summary>
     private void JumpGroup(bool down)
     {
-        ConnectionsRowViewModel[] anchors = [.. _roots.Where(g => g.Children.Count > 0).Select(g => g.Children[0])];
+        ConnectionsRowViewModel[] anchors = [.. _roots
+            .Where(group => group.Children.Count > 0 && group.Children[0].Row is not null)
+            .Select(group => group.Children[0])];
         if (anchors.Length == 0)
         {
             return;

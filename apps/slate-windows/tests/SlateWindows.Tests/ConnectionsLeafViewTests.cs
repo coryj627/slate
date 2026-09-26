@@ -226,14 +226,67 @@ public sealed class ConnectionsLeafViewTests
         });
     }
 
+    /// <summary>#1273 review: a ONE-SIDED graph — an outgoing-only note and
+    /// an incoming-only note — lands both group jumps on its one group's
+    /// first row, the pending focus delivered; an empty group's placeholder
+    /// is no anchor (the mac's `jumpSection` drops an empty section).</summary>
+    [Fact]
+    public void AOneSidedGraphLandsBothGroupJumpsOnItsOnlyRow()
+    {
+        RunSta(() =>
+        {
+            using var host = new Host("one-sided-jumps");
+            // outbound.md links out to the orphan and nothing links to it;
+            // the orphan is then linked to and links nowhere.
+            File.WriteAllText(Path.Combine(host.Root, "outbound.md"), "Out to [[orphan]].\n");
+            using (var cancel = new CancelToken())
+            {
+                host.Session.ScanInitial(cancel);
+            }
+            host.ActivateLeaf();
+            host.OpenNote("outbound.md");
+            host.Settle();
+            (Window window, ConnectionsLeafView view) = Show(host.Leaf);
+            try
+            {
+                void JumpsLandOn(string path, int group)
+                {
+                    view.UpdateLayout();
+                    Assert.Null(view.RootsForTests[1 - group].Children.Single().Row);
+                    ConnectionsRowViewModel only = view.RootsForTests[group].Children.Single(row => row.Row?.Path == path);
+                    foreach (Key key in new[] { Key.Up, Key.Down })
+                    {
+                        Assert.True(view.TryHandleTreeKey(key, ModifierKeys.Alt));
+                        Assert.Same(only, view.TreeForTests.SelectedItem);
+                        Assert.Null(view.PendingFocusForTests);
+                        only.IsSelected = false;
+                    }
+                }
+
+                // Outgoing only: Linked from is the placeholder.
+                JumpsLandOn("orphan.md", group: 1);
+
+                // Incoming only: Links to is the placeholder.
+                host.OpenNote("orphan.md");
+                host.Settle();
+                JumpsLandOn("outbound.md", group: 0);
+            }
+            finally
+            {
+                window.Close();
+            }
+        });
+    }
+
     /// <summary>W7-7 R-13 (#1257): the tree's key owner hands that decision
     /// to the selected row — with the modifiers the key handler reads
     /// injected, Control+Enter opens the note in a new tab and Enter opens
-    /// the next in the current tab — and a real Enter raised through the
-    /// tree reaches that owner and opens the selected note (its tab is the
-    /// live modifiers' business, which another process's input can hold).
-    /// No activation moves the pin or the Back stack (only Show connections
-    /// re-roots).</summary>
+    /// the next in the current tab — and a real, plain Enter raised through
+    /// the tree reaches that owner and opens the selected note in the current
+    /// tab (#1273 review: a modifier held on the shared desktop is waited out
+    /// first, so the event is always plain Enter and a tree whose KeyDown is
+    /// not subscribed fails here). No activation moves the pin or the Back
+    /// stack (only Show connections re-roots).</summary>
     [Fact]
     public void TheTreeOpensTheSelectedNoteInANewTabOnControlEnterAndInTheCurrentTabOnEnter()
     {
@@ -278,21 +331,24 @@ public sealed class ConnectionsLeafViewTests
                 Assert.Same(inView, group.ActiveTab);
                 Assert.Equal("010.md", inView.Path);
 
-                // The key event's route: OnTreeKeyDown to the same owner, with
-                // the thread's own key state — read here, and unchanged until
-                // the thread pumps again, so another process's held modifier
-                // (a shared desktop's injected input) cannot race the read.
+                // The key event's route: OnTreeKeyDown to the same owner, as a
+                // plain Enter every time — a modifier held on the shared
+                // desktop is waited out, and the thread pumps nothing between
+                // that wait and the raise, so its key state cannot change.
                 host.Settle();
                 view.UpdateLayout();
                 Select(Two);
+                WorkspaceTabViewModel current = group.ActiveTab!;
+                AwaitNoHeldModifier();
                 var enter = new KeyEventArgs(Keyboard.PrimaryDevice, PresentationSource.FromVisual(window)!, 0, Key.Return)
                 {
                     RoutedEvent = Keyboard.KeyDownEvent,
                 };
-                bool aTreeChord = ConnectionsLeafView.TreeKeyFor(Key.Return, Keyboard.Modifiers) != ConnectionsTreeKey.None;
                 view.TreeForTests.RaiseEvent(enter);
-                Assert.Equal(aTreeChord, enter.Handled);
-                Assert.Equal(aTreeChord ? Two : "010.md", group.ActiveTab!.Path);
+                Assert.True(enter.Handled, "a plain Enter raised through the tree went unhandled — its KeyDown does not reach OnTreeKeyDown");
+                Assert.Equal(tabs + 1, group.Tabs.Count);
+                Assert.Same(current, group.ActiveTab);
+                Assert.Equal(Two, current.Path);
 
                 Assert.Equal(Hub, host.Leaf.Pin);
                 Assert.Equal(backSteps, host.Leaf.BackStack.Count);
@@ -303,6 +359,16 @@ public sealed class ConnectionsLeafViewTests
             }
         });
     }
+
+    /// <summary>#1273 review, the Files tree facts' shape
+    /// (<c>SidebarTreeKeysTests</c>): a raised key reads its modifiers off the
+    /// real keyboard (<c>Keyboard.Modifiers</c>, the thread's key state), so a
+    /// modifier held on the shared desktop is waited out before a plain key is
+    /// raised; one still held fails here, by name.</summary>
+    private static void AwaitNoHeldModifier() =>
+        Assert.True(
+            PumpedDispatcher.PumpUntil(() => Keyboard.Modifiers == ModifierKeys.None, TimeSpan.FromSeconds(5)),
+            $"A real modifier key is held on this desktop ({Keyboard.Modifiers}); the fact raises a plain Enter.");
 
     /// <summary>A window hosts the view so containers realise and peers
     /// project (a detached control has no automation tree).</summary>
