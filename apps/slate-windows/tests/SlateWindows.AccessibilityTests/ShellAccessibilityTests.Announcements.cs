@@ -24,23 +24,24 @@ public sealed partial class ShellAccessibilityTests
     /// subtree scope, registered before the window exists and never pointed
     /// at it. It must hear the EXACT launch sequence — each line once, in
     /// order, queued while the status provider was not yet connected and
-    /// drained when it connected — and then Ctrl+Alt+I's "Right pane hidden."
-    /// once, with no menu ever opened (a menu's popup window used to unlock
-    /// WPF's gate, record F1).
+    /// drained once it was and UIA had advised the process (or the hold ran
+    /// out) — and then Ctrl+Alt+I's "Right pane hidden." once, with no menu
+    /// ever opened (a menu's popup window used to unlock WPF's gate, record
+    /// F1).
     /// </summary>
     /// <remarks>
     /// <para>
     /// The run is made to exercise the launch queue, not left to chance. A
-    /// launch whose first line already finds the status provider connected (a
-    /// desktop client asked the window first) raises at once and cannot show
-    /// the drain, so it is closed and Slate relaunched, up to
+    /// launch whose first line already finds Slate ready — the status provider
+    /// connected and UIA's advise present — raises at once and cannot show the
+    /// drain, so it is closed and Slate relaunched, up to
     /// <see cref="MaxAnnouncementLaunches"/> times. Then nothing touches the
     /// window through UIA until the launch lines are queued: the walk that
     /// follows connects the status provider, and the queue must drain once, in
-    /// order, whether or not UIA has advised WPF's map (it gates nothing). Every tuple Slate raised is recorded
-    /// in the evidence artifact (<c>announcements-launch.json</c>) with each
-    /// launch attempt and the listener states, sources and drain the app
-    /// logged.
+    /// order — on UIA's advise, or after the three-second hold without it.
+    /// Every tuple Slate raised is recorded in the evidence artifact
+    /// (<c>announcements-launch.json</c>) with each launch attempt and the
+    /// listener states, sources and drain the app logged.
     /// </para>
     /// <para>
     /// A manual-trait journey (contract 40 AR-1): it was not 6/6 stable on
@@ -103,15 +104,20 @@ public sealed partial class ShellAccessibilityTests
                     return;
                 }
 
-                string first = AwaitDiagnostic(process, logFile, "AnnouncementSource", TimeSpan.FromSeconds(30));
-                queued = first.Contains("statusPeerProvider=null", StringComparison.Ordinal);
-                attempts.Add($"launch {attempt}: {first}");
+                // The first check logs both lines; it queued unless a client
+                // listened, the provider was connected and UIA had advised.
+                string source = AwaitDiagnostic(process, logFile, "AnnouncementSource", TimeSpan.FromSeconds(30));
+                string state = AwaitDiagnostic(process, logFile, "AnnouncementListenerState", TimeSpan.FromSeconds(30));
+                queued = source.Contains("statusPeerProvider=null", StringComparison.Ordinal)
+                    || state.Contains("clientsListening=False", StringComparison.Ordinal)
+                    || state.Contains("notificationListenerExists=False", StringComparison.Ordinal);
+                attempts.Add($"launch {attempt}: {state}; {source}");
             }
 
             Assert.True(
                 queued,
-                "Every launch found the status provider already connected at its first line, so no run "
-                + "exercised the launch queue: " + string.Join(" | ", attempts));
+                "Every launch was ready at its first line (a listening client, a connected status provider and "
+                + "UIA's advise), so no run exercised the launch queue: " + string.Join(" | ", attempts));
             Process slate = process!;
             int processId = slate.Id;
             string[] HeardFromSlate() => [.. received.Where(notification => notification.ProcessId == processId)
@@ -199,8 +205,9 @@ public sealed partial class ShellAccessibilityTests
     }
 
     /// <summary>How many times the journey relaunches Slate for a launch whose
-    /// first line lands before the status provider connects, so the launch
-    /// lines are queued. Each launch costs about a second.</summary>
+    /// first line lands before readiness — the status provider not yet
+    /// connected, or UIA's advise not yet present — so the launch lines are
+    /// queued. Each launch costs about a second.</summary>
     private const int MaxAnnouncementLaunches = 30;
 
     /// <summary>Waits until the listener has heard exactly <paramref
