@@ -1046,6 +1046,123 @@ public sealed class SidebarTreeKeysTests : IDisposable
         Assert.Equal(string.Empty, host.Sidebar.FilterText);
     });
 
+    /// <summary>
+    /// #1272 (R-3's Escape route; codex PR 2 round 5): an import in
+    /// progress must not steal the filter field's Escape. With a filter
+    /// active, focus in the field and an import running, Escape — through
+    /// the shipped window's tunnelling handler first, as in the shell —
+    /// clears the filter with one typed SidebarFilterCleared, and the import
+    /// keeps running: the sources it is handed afterwards are imported.
+    /// </summary>
+    [Fact]
+    public void EscapeInTheFilterFieldDuringAnImport_ClearsTheFilterNotTheImport() => RunSta(() =>
+    {
+        using var import = new PendingImport();
+        using var host = new TreeHost(NewVault("import-escape-field"), import.PickSources, import.Run);
+        host.Initialize();
+        host.RouteKeysThroughTheShell();
+        int before = ActivateFilter(host, sidebar => sidebar.FilterText = "alpha");
+        host.Sidebar.ImportCommand.Execute(null);
+        Assert.True(host.Sidebar.IsImporting);
+        Assert.True(host.FilterField.Focus());
+
+        Assert.True(host.PressThrough(host.FilterField, Key.Escape), "Escape in the filter field went unhandled.");
+        PumpedDispatcher.PumpUntilDrained(host.Sidebar.FilterCompletion);
+
+        AssertClearedOnce(host, before);
+        Assert.True(host.Sidebar.IsImporting);
+        import.HandOverTheSource();
+        PumpedDispatcher.PumpUntilDrained(host.Sidebar.ImportCompletion);
+        Assert.False(host.Sidebar.IsImporting);
+        Assert.Equal(1, import.WorkerRuns);
+    });
+
+    /// <summary>
+    /// #1272: Escape anywhere else during an import keeps its meaning — on
+    /// a filter result row with the filter active, and in the filter field
+    /// with nothing filtering, the window's handler takes the key and
+    /// cancels the import (the sources it is handed afterwards are never
+    /// imported), and the filter is untouched: the same text and state,
+    /// no clear spoken.
+    /// </summary>
+    [Theory]
+    [InlineData("result row, filter active")]
+    [InlineData("field, nothing filtering")]
+    public void EscapeElsewhereDuringAnImport_CancelsTheImportAndLeavesTheFilter(string focus) => RunSta(() =>
+    {
+        using var import = new PendingImport();
+        using var host = new TreeHost(NewVault("import-escape-elsewhere"), import.PickSources, import.Run);
+        host.Initialize();
+        host.RouteKeysThroughTheShell();
+        UIElement target;
+        if (focus == "result row, filter active")
+        {
+            _ = ActivateFilter(host, sidebar => sidebar.FilterText = "alpha");
+            target = host.FocusListRow(host.FilterResults, "alpha.md");
+        }
+        else
+        {
+            Assert.False(host.Sidebar.IsFilterActive);
+            Assert.True(host.FilterField.Focus());
+            target = host.FilterField;
+        }
+
+        (string Text, bool Active) filter = (host.Sidebar.FilterText, host.Sidebar.IsFilterActive);
+        host.Sidebar.ImportCommand.Execute(null);
+        Assert.True(host.Sidebar.IsImporting);
+        int before = host.AnnouncementCount;
+
+        Assert.True(host.PressThrough(target, Key.Escape), "Escape during the import went unhandled.");
+
+        Assert.Equal(filter, (host.Sidebar.FilterText, host.Sidebar.IsFilterActive));
+        Assert.DoesNotContain(
+            host.Announcements.Skip(before),
+            announcement => announcement is A11yEvent.SidebarFilterCleared);
+        import.HandOverTheSource();
+        PumpedDispatcher.PumpUntilDrained(host.Sidebar.ImportCompletion);
+        Assert.False(host.Sidebar.IsImporting);
+        Assert.Equal(0, import.WorkerRuns);
+        Assert.Equal(filter, (host.Sidebar.FilterText, host.Sidebar.IsFilterActive));
+    });
+
+    /// <summary>An import whose source picker is still open until the fact
+    /// hands it one real file outside the vault; the worker runs the
+    /// import off the dispatcher and counts itself.</summary>
+    private sealed class PendingImport : IDisposable
+    {
+        private readonly TaskCompletionSource<IReadOnlyList<string>> _sources =
+            new(TaskCreationOptions.RunContinuationsAsynchronously);
+        private readonly string _source = Path.Combine(
+            Path.GetTempPath(), $"slate-import-source-{Guid.NewGuid():N}.md");
+        private int _workerRuns;
+
+        public PendingImport() => File.WriteAllText(_source, "# Imported\n");
+
+        public int WorkerRuns => Volatile.Read(ref _workerRuns);
+
+        public Task<IReadOnlyList<string>> PickSources() => _sources.Task;
+
+        public Task Run(Action work, CancellationToken cancellation)
+        {
+            Interlocked.Increment(ref _workerRuns);
+            return Task.Run(work, cancellation);
+        }
+
+        public void HandOverTheSource() => _sources.SetResult([_source]);
+
+        public void Dispose()
+        {
+            _ = _sources.TrySetResult([]);
+            try
+            {
+                File.Delete(_source);
+            }
+            catch (IOException)
+            {
+            }
+        }
+    }
+
     private static string NavigationHelpText() => Commands.NavigationHelp.FilesTree;
 
     // ---- Helpers --------------------------------------------------------
@@ -1151,7 +1268,10 @@ public sealed class SidebarTreeKeysTests : IDisposable
     /// a real sidebar (the MoveToFocusTests shape: no Application and no
     /// shown MainWindow, so no app-wide state, Jump Lists or window
     /// placement are touched).</summary>
-    private sealed class TreeHost(string root) : IDisposable
+    private sealed class TreeHost(
+        string root,
+        Func<Task<IReadOnlyList<string>>>? pickImportSources = null,
+        Func<Action, CancellationToken, Task>? importWorker = null) : IDisposable
     {
         private readonly List<A11yEvent> _announced = [];
         private VaultSession? _session;
@@ -1188,7 +1308,9 @@ public sealed class SidebarTreeKeysTests : IDisposable
                 _session,
                 _announced.Add,
                 vaultRoot: root,
-                localAppDataRoot: Path.Combine(root, "device-state"));
+                pickImportSources: pickImportSources,
+                localAppDataRoot: Path.Combine(root, "device-state"),
+                importWorker: importWorker);
             PumpedDispatcher.PumpUntilDrained(Sidebar.TreeRefreshCompletion);
             Sidebar.OpenTargetRequested += (_, request) => Requests.Add(request);
 
@@ -1237,6 +1359,19 @@ public sealed class SidebarTreeKeysTests : IDisposable
             _window.Activate();
             _window.UpdateLayout();
             PumpedDispatcher.Drain();
+        }
+
+        /// <summary>#1272: the shipped window's tunnelling key handler
+        /// (<c>MainWindow.Window_PreviewKeyDown</c>) at the root of this
+        /// host window's key route — where it runs in the shell, ahead of
+        /// every focused control's own handlers.</summary>
+        public void RouteKeysThroughTheShell()
+        {
+            MethodInfo handler = typeof(MainWindow).GetMethod(
+                "Window_PreviewKeyDown",
+                BindingFlags.Instance | BindingFlags.NonPublic)
+                ?? throw new InvalidOperationException("MainWindow.Window_PreviewKeyDown is gone.");
+            _window!.PreviewKeyDown += handler.CreateDelegate<KeyEventHandler>(Shell);
         }
 
         public TreeViewItem FocusRow(FileTreeNodeViewModel node)
