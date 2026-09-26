@@ -4047,7 +4047,9 @@ public sealed class CanvasNavigatorTests : IDisposable
     /// dimmed B and announces it through the announced door, never "End of
     /// canvas."; the palette's Next Card from A says the end of what it
     /// walks. With A and C matched, the arrows go A → B → C while Next
-    /// Card skips B.
+    /// Card skips B. The order is the document's one board order,
+    /// <c>SceneReadingOrder</c>: the whole scene in reading order, dimmed
+    /// cards marked.
     /// </summary>
     [Fact]
     public void TheBoardsArrowsWalkTheFullSceneDimmedCardsIncluded() => RunSta(() =>
@@ -4063,6 +4065,13 @@ public sealed class CanvasNavigatorTests : IDisposable
         host.UpdateLayout();
         Assert.Equal(new[] { "evidence" }, document.FilteredOutline.Select(row => row.NodeId));
         Assert.True(surface.ProjectionHasFocus, "premise: the needle took the keys off the board.");
+        // The board's ONE order, the seam the arrows (and a landing on the
+        // board) read: the whole scene in the outline's reading order, with
+        // every card the needle did not keep marked dimmed.
+        Assert.Equal(order, document.SceneReadingOrder.Select(stop => stop.NodeId));
+        Assert.Equal(
+            order.Select(id => id != "evidence"),
+            document.SceneReadingOrder.Select(stop => stop.Dimmed));
         IReadOnlyList<string> owed = LinesOf(document, "evidence", () => document.SelectNode("note"));
         Assert.NotEmpty(owed);
         document.SeatSelectionSilently("evidence");

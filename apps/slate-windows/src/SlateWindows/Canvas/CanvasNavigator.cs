@@ -1158,7 +1158,10 @@ internal sealed class CanvasNavigator
     /// palette's Next and Previous Card keep the filtered order: they are
     /// the verbs every projection shares, and the outline and the table
     /// show only what the needle kept. A canvas with no cards at all keeps
-    /// the empty canvas's sentence — a needle cannot empty the board.
+    /// the empty canvas's sentence — a needle cannot empty the board. The
+    /// order is the document's ONE board order,
+    /// <see cref="CanvasDocumentViewModel.SceneReadingOrder"/>, which a
+    /// landing on the board reads too.
     /// </remarks>
     private void MoveThroughTheScene(int offset)
     {
@@ -1166,13 +1169,13 @@ internal sealed class CanvasNavigator
         {
             return;
         }
-        IReadOnlyList<CanvasOutlineRow> scene = _document.Outline;
+        IReadOnlyList<CanvasSceneStop> scene = _document.SceneReadingOrder;
         if (scene.Count == 0)
         {
             Announce(new CanvasA11yEvent.CanvasStatus(new CanvasStatusNote.Empty()));
             return;
         }
-        StepThrough(scene, offset, CanvasMoveOrigin.OnSurface);
+        StepThrough([.. scene.Select(stop => stop.Row)], offset, CanvasMoveOrigin.OnSurface);
     }
 
     /// <summary>One reading-order step over the given rows: the next or
