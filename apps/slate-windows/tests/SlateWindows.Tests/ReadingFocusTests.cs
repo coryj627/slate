@@ -1529,6 +1529,33 @@ public sealed class ReadingFocusTests
         Assert.False(host.Workspace.HoldsShellRegionLanding);
     });
 
+    /// <summary>Locked contract 34 D15 with contract A14's addressed landing:
+    /// a request that names a card (the canvas prompt's jump) lands the
+    /// Visual board on its renderer with THAT card seated — silently, the
+    /// reader hearing the board they land on — and the request complete.</summary>
+    [Fact]
+    public void ANamedLandingOnTheBoardSeatsItsCard() => RunSta(() =>
+    {
+        using var host = new Host();
+        host.Initialize(readingMode: false, documentKind: "canvas", board: CardBoard);
+        CanvasDocumentViewModel board = host.Tab.Canvas!;
+        board.ShowSurface(CanvasSurfaceKind.Visual);
+        host.Settle();
+        var surface = Assert.IsType<CanvasSurfaceView>(host.EditorStop());
+        Assert.NotEqual("beta", board.Selection.Selected);
+        Assert.True(host.Sentinel.Focus());
+        PumpedDispatcher.Drain();
+        host.Announced.Clear();
+
+        board.RequestFocusLanding(host.Tab, "beta");
+        PumpedDispatcher.Drain();
+
+        AssertFocused(surface.VisualForTests, "the named landing on the Visual board");
+        Assert.Equal("beta", board.Selection.Selected);
+        Assert.Null(board.FocusRequest);
+        Assert.Empty(host.Announced);
+    });
+
     /// <summary>Locked contract 34 D15: seating the canvas's showing
     /// projection — the Escape ladder's and the Where-am-I panel's
     /// fallback — puts the reader on the Visual board's renderer, not on the
