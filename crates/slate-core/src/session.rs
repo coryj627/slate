@@ -660,6 +660,29 @@ impl CancelToken {
     }
 }
 
+#[cfg(test)]
+thread_local! {
+    /// #1279 test seam: candidate rows the embed resolver's streamed
+    /// lookup visited on this thread.
+    pub(crate) static EMBED_CANDIDATE_ROWS_VISITED: std::cell::Cell<usize> =
+        const { std::cell::Cell::new(0) };
+    /// #1279 test seam: cancel the walk's token right after this many
+    /// visited rows (a host cancelling between rows).
+    pub(crate) static EMBED_CANDIDATE_CANCEL_AFTER: std::cell::Cell<Option<usize>> =
+        const { std::cell::Cell::new(None) };
+}
+
+#[cfg(test)]
+fn embed_candidate_row_visited(cancel: &CancelToken) {
+    let visited = EMBED_CANDIDATE_ROWS_VISITED.with(|rows| {
+        rows.set(rows.get() + 1);
+        rows.get()
+    });
+    if EMBED_CANDIDATE_CANCEL_AFTER.with(std::cell::Cell::get) == Some(visited) {
+        cancel.cancel();
+    }
+}
+
 // --- Scan report ---
 
 /// Summary of a scan operation.
@@ -5869,6 +5892,9 @@ impl VaultSession {
         let mut budget = crate::embeds::EmbedResolveBudget::preview();
         let resolution =
             self.resolve_embed_at_depth(host_path, target, 0, alt, &mut budget, cancel)?;
+        // A cancel that landed during the last read is still a cancel: the
+        // result is never handed back (#1279, codex round 1).
+        cancel.check()?;
         Ok(crate::EmbedPreviewResolution {
             resolution,
             truncated: budget.truncated(),
@@ -5882,24 +5908,22 @@ impl VaultSession {
     /// `Unresolved(ReadError)` core-side instead of marshalling —
     /// without the clamp, 128 keys × the 8 MiB per-key allowance
     /// was ~1 GiB of FFI traffic a crafted note triggered on
-    /// activation.
+    /// activation. Cancellable like [`Self::resolve_embed_preview`]
+    /// (#1279): the embeds leaf's load cancels it on a note switch.
     pub fn resolve_embed_preview_pooled(
         &self,
         host_path: &str,
         target: &str,
         alt: Option<String>,
         image_pool_bytes: u64,
+        cancel: &CancelToken,
     ) -> Result<crate::EmbedPreviewResolution, VaultError> {
+        cancel.check()?;
         let mut budget =
             crate::embeds::EmbedResolveBudget::preview_with_image_pool(image_pool_bytes);
-        let resolution = self.resolve_embed_at_depth(
-            host_path,
-            target,
-            0,
-            alt,
-            &mut budget,
-            &CancelToken::new(),
-        )?;
+        let resolution =
+            self.resolve_embed_at_depth(host_path, target, 0, alt, &mut budget, cancel)?;
+        cancel.check()?;
         Ok(crate::EmbedPreviewResolution {
             resolution,
             truncated: budget.truncated(),
@@ -5915,23 +5939,21 @@ impl VaultSession {
     /// fits `image_budget_bytes` (the caller's remaining note-wide
     /// pool). Transient allocation inside this call stays bounded by
     /// the per-key preview budget; nothing over-budget is retained or
-    /// marshalled.
+    /// marshalled. Cancellable like [`Self::resolve_embed_preview`]
+    /// (#1279): a superseded or detached reading refresh cancels it.
     pub fn resolve_embed_reading_card(
         &self,
         host_path: &str,
         target: &str,
         alt: Option<String>,
         image_budget_bytes: u64,
+        cancel: &CancelToken,
     ) -> Result<crate::embeds::EmbedReadingCard, VaultError> {
+        cancel.check()?;
         let mut budget = crate::embeds::EmbedResolveBudget::preview();
-        let resolution = self.resolve_embed_at_depth(
-            host_path,
-            target,
-            0,
-            alt,
-            &mut budget,
-            &CancelToken::new(),
-        )?;
+        let resolution =
+            self.resolve_embed_at_depth(host_path, target, 0, alt, &mut budget, cancel)?;
+        cancel.check()?;
         let mut resolution = crate::embeds::strip_nested_image_payloads(resolution);
         let mut image_elided = false;
         let mut image_len = 0u64;
@@ -5980,33 +6002,29 @@ impl VaultSession {
             return self.resolve_image_embed(host_path, target, note_name, alt, budget, cancel);
         }
 
-        // Note target: fetch only the index rows the resolver could
-        // match (#1279 — never the whole files table), run link_resolver
-        // over them, then read the resolved file off-mutex.
-        let target_path = {
-            let vault_index = self.embed_link_candidates(note_name)?;
-            cancel.check()?;
-            match crate::resolve_link(note_name, None, host_path, &vault_index) {
-                crate::ResolvedLink::Resolved { target_path, .. } => target_path,
-                _ => {
-                    return Ok(crate::EmbedResolution::Unresolved {
-                        reason: crate::EmbedUnresolvedReason::TargetNotFound {
-                            target: target.to_string(),
-                        },
-                    });
-                }
-            }
+        // Note target: stream only the index rows the resolver could
+        // match (#1279 — never the whole files table, never a Vec of
+        // matches), then read the resolved file off-mutex.
+        let Some(target_path) = self.resolve_embed_link_target(note_name, host_path, cancel)?
+        else {
+            return Ok(crate::EmbedResolution::Unresolved {
+                reason: crate::EmbedUnresolvedReason::TargetNotFound {
+                    target: target.to_string(),
+                },
+            });
         };
 
         let resolved = match anchor {
-            None => self.read_embed_text(&target_path, budget).and_then(|text| {
-                self.resolve_full_note_embed(target_path, text, depth, budget, cancel)
-            }),
+            None => self
+                .read_embed_text(&target_path, budget, cancel)
+                .and_then(|text| {
+                    self.resolve_full_note_embed(target_path, text, depth, budget, cancel)
+                }),
             Some(EmbedAnchor::Heading(heading)) => {
                 self.resolve_indexed_section_embed(target_path, heading, depth, budget, cancel)
             }
             Some(EmbedAnchor::Block(block_id)) => {
-                self.resolve_indexed_block_embed(target_path, block_id, budget)
+                self.resolve_indexed_block_embed(target_path, block_id, budget, cancel)
             }
         };
         match resolved {
@@ -6036,7 +6054,11 @@ impl VaultSession {
         budget: &mut crate::embeds::EmbedResolveBudget,
         cancel: &CancelToken,
     ) -> Result<crate::EmbedResolution, VaultError> {
-        let headings = {
+        // The heading and its successor, streamed in document order with a
+        // cooperative boundary around every row (#1279, codex round 1): the
+        // walk stops at the section's end and never collects the heading
+        // table.
+        let matched = {
             let conn = self.conn.lock().expect("session connection mutex");
             let file_id: Option<i64> = conn
                 .query_row(
@@ -6059,32 +6081,38 @@ impl VaultSession {
                  WHERE file_id = ?1
                  ORDER BY ordinal ASC",
             )?;
-            statement
-                .query_map(rusqlite::params![file_id], |row| {
-                    Ok((
-                        row.get::<_, i64>(0)? as u8,
-                        row.get::<_, String>(1)?,
-                        row.get::<_, String>(2)?,
-                        row.get::<_, i64>(3)? as u64,
-                    ))
-                })?
-                .collect::<Result<Vec<_>, _>>()?
+            let mut rows = statement.query(rusqlite::params![file_id])?;
+            let wanted = heading_name.trim();
+            let folded = wanted.to_lowercase();
+            let mut matched: Option<(u8, String, u64)> = None;
+            let mut section_end: Option<u64> = None;
+            loop {
+                cancel.check()?;
+                let Some(row) = rows.next()? else {
+                    break;
+                };
+                let level = row.get::<_, i64>(0)? as u8;
+                let offset = row.get::<_, i64>(3)? as u64;
+                match &matched {
+                    None => {
+                        let text: String = row.get(1)?;
+                        let anchor_id: String = row.get(2)?;
+                        if anchor_id.eq_ignore_ascii_case(wanted)
+                            || text.trim().to_lowercase() == folded
+                        {
+                            matched = Some((level, text, offset));
+                        }
+                    }
+                    Some((matched_level, _, _)) if level <= *matched_level => {
+                        section_end = Some(offset);
+                        break;
+                    }
+                    Some(_) => {}
+                }
+                cancel.check()?;
+            }
+            matched.map(|(_, text, start)| (text, start, section_end))
         };
-        let folded = heading_name.trim().to_lowercase();
-        let matched = headings
-            .iter()
-            .position(|(_, text, anchor_id, _)| {
-                anchor_id.eq_ignore_ascii_case(heading_name.trim())
-                    || text.trim().to_lowercase() == folded
-            })
-            .map(|index| {
-                let (level, text, _, start) = &headings[index];
-                let end = headings[index + 1..]
-                    .iter()
-                    .find(|(next_level, _, _, _)| next_level <= level)
-                    .map(|(_, _, _, offset)| *offset);
-                (text.clone(), *start, end)
-            });
         let Some((heading, start, indexed_end)) = matched else {
             return Ok(crate::EmbedResolution::Unresolved {
                 reason: crate::EmbedUnresolvedReason::HeadingNotFound {
@@ -6093,8 +6121,16 @@ impl VaultSession {
                 },
             });
         };
-        let end = indexed_end.unwrap_or(self.provider.stat(&target_path)?.size_bytes);
-        let section_text = self.read_embed_text_range(&target_path, start, end, budget)?;
+        let end = match indexed_end {
+            Some(end) => end,
+            None => {
+                cancel.check()?;
+                let size = self.provider.stat(&target_path)?.size_bytes;
+                cancel.check()?;
+                size
+            }
+        };
+        let section_text = self.read_embed_text_range(&target_path, start, end, budget, cancel)?;
         let nested =
             self.resolve_nested_embeds(&target_path, &section_text, depth, budget, cancel)?;
         Ok(crate::EmbedResolution::Section {
@@ -6105,23 +6141,31 @@ impl VaultSession {
         })
     }
 
-    /// The index rows an embed target could resolve to (#1279; locked
+    /// Where an embed target resolves from `host_path` (#1279; locked
     /// decision 05 §9.3.1): the resolver's own candidate probe — exact
     /// vault paths for a qualified or rooted target, file names for a
-    /// basename — looked up by the registered Unicode fold, so each
-    /// resolution reads the few rows that can match instead of
-    /// materializing every path in the vault (for every nested node). The
-    /// fold is NFC + full-Unicode lowercase, a superset of the resolver's
-    /// own lowercase comparison, and `resolve_link` still decides over the
-    /// candidates — the answer is the full-index answer.
-    fn embed_link_candidates(
+    /// basename — looked up by the registered Unicode fold, so a
+    /// resolution reads only the rows that can match instead of every path
+    /// in the vault (for every nested node). The rows STREAM through the
+    /// resolver's selector, which keeps only the best candidate, with a
+    /// cooperative boundary before and after every row — a basename every
+    /// directory carries (`index.md`) is a walk the host can stop. The fold
+    /// is NFC + full-Unicode lowercase, a superset of the resolver's own
+    /// lowercase comparison, and the selector still decides: the answer is
+    /// the whole-index answer.
+    fn resolve_embed_link_target(
         &self,
         note_name: &str,
-    ) -> Result<crate::InMemoryVaultIndex, VaultError> {
-        let (column, keys) = match crate::link_resolver::candidate_probe(note_name) {
-            crate::link_resolver::CandidateProbe::None => {
-                return Ok(crate::InMemoryVaultIndex::new(Vec::new()));
-            }
+        host_path: &str,
+        cancel: &CancelToken,
+    ) -> Result<Option<String>, VaultError> {
+        let Some(mut selector) =
+            crate::link_resolver::LinkCandidateSelector::new(note_name, host_path)
+        else {
+            return Ok(None);
+        };
+        let (column, keys) = match selector.probe() {
+            crate::link_resolver::CandidateProbe::None => return Ok(None),
             crate::link_resolver::CandidateProbe::Paths(keys) => ("path", keys),
             crate::link_resolver::CandidateProbe::Names(keys) => ("name", keys),
         };
@@ -6141,10 +6185,19 @@ impl VaultSession {
         );
         let conn = self.conn.lock().expect("session connection mutex");
         let mut statement = conn.prepare_cached(&sql)?;
-        let paths = statement
-            .query_map(rusqlite::params_from_iter(folded.iter()), |row| row.get(0))?
-            .collect::<Result<Vec<String>, _>>()?;
-        Ok(crate::InMemoryVaultIndex::new(paths))
+        let mut rows = statement.query(rusqlite::params_from_iter(folded.iter()))?;
+        loop {
+            cancel.check()?;
+            let Some(row) = rows.next()? else {
+                break;
+            };
+            let path: String = row.get(0)?;
+            selector.offer(&path);
+            #[cfg(test)]
+            embed_candidate_row_visited(cancel);
+            cancel.check()?;
+        }
+        Ok(selector.into_winner())
     }
 
     fn resolve_indexed_block_embed(
@@ -6152,7 +6205,9 @@ impl VaultSession {
         target_path: String,
         block_id: &str,
         budget: &mut crate::embeds::EmbedResolveBudget,
+        cancel: &CancelToken,
     ) -> Result<crate::EmbedResolution, VaultError> {
+        cancel.check()?;
         let resolved = {
             let conn = self.conn.lock().expect("session connection mutex");
             let file_id: Option<i64> = conn
@@ -6180,6 +6235,7 @@ impl VaultSession {
             block.byte_start as u64,
             block.byte_end as u64,
             budget,
+            cancel,
         )?;
         Ok(crate::EmbedResolution::Block {
             target_path,
@@ -6188,15 +6244,21 @@ impl VaultSession {
         })
     }
 
+    /// Every provider read of the walk sits between two cooperative
+    /// boundaries (#1279, codex round 1): a cancel that lands while the
+    /// read runs ends the walk as soon as the read returns.
     fn read_embed_text_range(
         &self,
         path: &str,
         start: u64,
         end: u64,
         budget: &mut crate::embeds::EmbedResolveBudget,
+        cancel: &CancelToken,
     ) -> Result<String, VaultError> {
+        cancel.check()?;
         if !budget.is_preview() {
             let text = self.read_text(path)?;
+            cancel.check()?;
             return Ok(text
                 .get(start as usize..end as usize)
                 .unwrap_or("")
@@ -6213,6 +6275,7 @@ impl VaultSession {
         let mut bytes = self
             .provider
             .read_file_range_with_cap(path, start, read_limit)?;
+        cancel.check()?;
         if bytes.len() as u64 > read_limit {
             bytes.truncate(read_limit as usize);
         }
@@ -6246,25 +6309,19 @@ impl VaultSession {
         budget: &mut crate::embeds::EmbedResolveBudget,
         cancel: &CancelToken,
     ) -> Result<crate::EmbedResolution, VaultError> {
-        // Same path-resolution strategy as note targets: snapshot
-        // the file index and run the link_resolver. `looks_like_image`
-        // guaranteed the extension is one the resolver recognises;
-        // basename / folder matching does the rest. `host_path`
-        // threads through so any future folder-relative resolution
-        // in `link_resolver` lights up automatically.
-        let target_path = {
-            let vault_index = self.embed_link_candidates(note_name)?;
-            cancel.check()?;
-            match crate::resolve_link(note_name, None, host_path, &vault_index) {
-                crate::ResolvedLink::Resolved { target_path, .. } => target_path,
-                _ => {
-                    return Ok(crate::EmbedResolution::Unresolved {
-                        reason: crate::EmbedUnresolvedReason::TargetNotFound {
-                            target: raw_target.to_string(),
-                        },
-                    });
-                }
-            }
+        // Same path-resolution strategy as note targets: stream the
+        // candidate rows through the link resolver's selector.
+        // `looks_like_image` guaranteed the extension is one the resolver
+        // recognises; basename / folder matching does the rest.
+        // `host_path` threads through so any future folder-relative
+        // resolution in `link_resolver` lights up automatically.
+        let Some(target_path) = self.resolve_embed_link_target(note_name, host_path, cancel)?
+        else {
+            return Ok(crate::EmbedResolution::Unresolved {
+                reason: crate::EmbedUnresolvedReason::TargetNotFound {
+                    target: raw_target.to_string(),
+                },
+            });
         };
         // #433: the alt arrives as an argument — threaded from the
         // link's persisted display_text (top level: the Swift caller
@@ -6273,7 +6330,7 @@ impl VaultSession {
         // display_text per occurrence). #419's interim re-read +
         // re-parse of the host per image is gone, and nested alt is
         // now per-occurrence by construction.
-        match self.read_embed_attachment(&target_path, budget) {
+        match self.read_embed_attachment(&target_path, budget, cancel) {
             Ok(att) => Ok(crate::EmbedResolution::Image {
                 target_path,
                 bytes: att.bytes,
@@ -6300,19 +6357,25 @@ impl VaultSession {
         &self,
         path: &str,
         budget: &mut crate::embeds::EmbedResolveBudget,
+        cancel: &CancelToken,
     ) -> Result<String, VaultError> {
+        cancel.check()?;
         if !budget.is_preview() {
-            return self.read_text(path);
+            let text = self.read_text(path)?;
+            cancel.check()?;
+            return Ok(text);
         }
 
         let limit = budget.text_limit(self.config.large_file_refuse_bytes);
         let stat = self.provider.stat(path)?;
+        cancel.check()?;
         if limit == 0 {
             budget.consume_text(0, stat.size_bytes > 0);
             return Ok(String::new());
         }
 
         let mut bytes = self.provider.read_file_with_cap(path, limit)?;
+        cancel.check()?;
         let was_truncated = stat.size_bytes > limit || bytes.len() as u64 > limit;
         if bytes.len() as u64 > limit {
             bytes.truncate(limit as usize);
@@ -6327,13 +6390,18 @@ impl VaultSession {
         &self,
         path: &str,
         budget: &mut crate::embeds::EmbedResolveBudget,
+        cancel: &CancelToken,
     ) -> Result<crate::AttachmentBytes, VaultError> {
+        cancel.check()?;
         if !budget.is_preview() {
-            return self.read_attachment(path);
+            let attachment = self.read_attachment(path)?;
+            cancel.check()?;
+            return Ok(attachment);
         }
 
         let limit = budget.image_limit(self.config.large_attachment_refuse_bytes);
         let stat = self.provider.stat(path)?;
+        cancel.check()?;
         if stat.size_bytes > limit {
             budget.mark_truncated();
             return Err(VaultError::FileTooLarge {
@@ -6342,6 +6410,7 @@ impl VaultSession {
             });
         }
         let bytes = self.provider.read_file_with_cap(path, limit)?;
+        cancel.check()?;
         if bytes.len() as u64 > limit {
             budget.mark_truncated();
             return Err(VaultError::FileTooLarge {

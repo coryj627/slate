@@ -270,66 +270,175 @@ pub fn resolve_link(
         return ResolvedLink::External;
     }
 
-    // Normalize the input: strip a leading `./` or `/` so
-    // `./notes/foo.md` and `/notes/foo.md` both resolve the same as
-    // `notes/foo.md`. Obsidian renders a leading `/` as vault-rooted;
-    // we match that. Multiple `../` is out of scope at this layer —
-    // wiki/markdown links pointing at parent directories of the vault
-    // aren't supported by the indexer.
-    //
-    // `rooted` (a leading `/` or `./`) is VAULT-ROOTED EXACT — no basename
-    // fallback. Before U2-3 the flag was stripped and lost, so `/foo` on a
-    // ROOT-LEVEL file (no `/` left after stripping) fell through to the
-    // basename scan and could tie-break to a DIFFERENT deep file — which
-    // also made root files unpinnable by any authored text (the U2-3
-    // referential-stability census found this, seed 164).
-    let rooted = trimmed.starts_with('/') || trimmed.starts_with("./");
-    let normalized = trimmed
-        .strip_prefix("./")
-        .or_else(|| trimmed.strip_prefix('/'))
-        .unwrap_or(trimmed);
-    // Qualified (contains `/`) or explicitly rooted: exact match only —
-    // literal, then each Markdown extension if the input has none.
-    if rooted || normalized.contains('/') {
-        if let Some(hit) = find_exact(normalized, index) {
-            return ResolvedLink::Resolved {
-                target_path: hit,
-                anchor,
-            };
-        }
+    // One rule for every caller (#1279): the index is offered to the same
+    // incremental selector a streaming caller feeds row by row, so a
+    // resolution over a whole snapshot and one over streamed candidate rows
+    // cannot disagree.
+    let Some(mut selector) = LinkCandidateSelector::new(target_raw, source_path) else {
         return ResolvedLink::Unresolved {
             target_raw: target_raw.to_string(),
             anchor,
         };
+    };
+    for path in index.all_paths() {
+        selector.offer(path);
     }
-
-    // Basename-only: scan the index for files whose final path
-    // component matches case-insensitively.
-    let matches: Vec<&str> = collect_basename_matches(normalized, index);
-    match matches.len() {
-        0 => ResolvedLink::Unresolved {
+    match selector.into_winner() {
+        Some(target_path) => ResolvedLink::Resolved {
+            target_path,
+            anchor,
+        },
+        None => ResolvedLink::Unresolved {
             target_raw: target_raw.to_string(),
             anchor,
         },
-        1 => ResolvedLink::Resolved {
-            target_path: matches[0].to_string(),
-            anchor,
-        },
-        _ => {
-            let winner = tiebreak(&matches, source_path);
-            ResolvedLink::Resolved {
-                target_path: winner.to_string(),
-                anchor,
+    }
+}
+
+/// [`resolve_link`]'s choice among candidate paths, made one path at a time
+/// (#1279), so a caller holding a database streams index rows through it and
+/// keeps only the best candidate instead of materializing every match.
+///
+/// The target is normalized as the resolution rules describe: a leading
+/// `/` or `./` is vault-rooted, and a rooted or qualified target (one that
+/// contains `/`) matches EXACT paths only — the literal, then each implied
+/// Markdown extension in order, the first offered path winning among equals.
+/// A basename target matches every path whose final component equals it
+/// (extension-implied or extension-allowed) and keeps the one nearest the
+/// source by directory distance, then the alphabetically first path.
+/// Comparison is full-Unicode lowercase without NFC; a caller may pre-filter
+/// by a coarser fold, since offering extra paths never changes the answer.
+pub struct LinkCandidateSelector {
+    mode: SelectorMode,
+    best: Option<(SelectorRank, String)>,
+}
+
+enum SelectorMode {
+    /// The lowercased exact keys, in priority order.
+    Exact { keys: Vec<String> },
+    /// The lowercased file name and the source's directories.
+    Basename {
+        basename: String,
+        has_extension: bool,
+        source_dirs: Vec<String>,
+    },
+}
+
+#[derive(Clone, PartialEq, Eq, PartialOrd, Ord)]
+enum SelectorRank {
+    /// The index of the exact key the path matched.
+    Exact(usize),
+    /// Directory distance from the source, then the path itself.
+    Basename(usize, String),
+}
+
+impl LinkCandidateSelector {
+    /// The selector for `target_raw` resolved from `source_path`, or `None`
+    /// when the target can name nothing in the index (empty or external).
+    pub fn new(target_raw: &str, source_path: &str) -> Option<Self> {
+        let trimmed = target_raw.trim();
+        if trimmed.is_empty() || looks_external_for_resolver(trimmed) {
+            return None;
+        }
+        // Normalize the input: strip a leading `./` or `/` so
+        // `./notes/foo.md` and `/notes/foo.md` both resolve the same as
+        // `notes/foo.md`. Obsidian renders a leading `/` as vault-rooted;
+        // we match that. Multiple `../` is out of scope at this layer —
+        // wiki/markdown links pointing at parent directories of the vault
+        // aren't supported by the indexer.
+        //
+        // `rooted` (a leading `/` or `./`) is VAULT-ROOTED EXACT — no
+        // basename fallback. Before U2-3 the flag was stripped and lost, so
+        // `/foo` on a ROOT-LEVEL file (no `/` left after stripping) fell
+        // through to the basename scan and could tie-break to a DIFFERENT
+        // deep file — which also made root files unpinnable by any authored
+        // text (the U2-3 referential-stability census found this, seed 164).
+        let rooted = trimmed.starts_with('/') || trimmed.starts_with("./");
+        let normalized = trimmed
+            .strip_prefix("./")
+            .or_else(|| trimmed.strip_prefix('/'))
+            .unwrap_or(trimmed);
+        let lower = normalized.to_lowercase();
+        let has_extension = has_extension(normalized);
+        let mode = if rooted || normalized.contains('/') {
+            let mut keys = vec![lower.clone()];
+            if !has_extension {
+                keys.extend(MD_EXTENSIONS.iter().map(|ext| format!("{lower}.{ext}")));
+            }
+            SelectorMode::Exact { keys }
+        } else {
+            SelectorMode::Basename {
+                basename: lower,
+                has_extension,
+                source_dirs: dir_components(source_path)
+                    .into_iter()
+                    .map(str::to_string)
+                    .collect(),
+            }
+        };
+        Some(Self { mode, best: None })
+    }
+
+    /// The index rows this target could match, for a caller that fetches
+    /// candidates instead of the whole index.
+    pub fn probe(&self) -> CandidateProbe {
+        match &self.mode {
+            SelectorMode::Exact { keys } => CandidateProbe::Paths(keys.clone()),
+            SelectorMode::Basename {
+                basename,
+                has_extension,
+                ..
+            } => {
+                let mut keys = vec![basename.clone()];
+                if !has_extension {
+                    keys.extend(MD_EXTENSIONS.iter().map(|ext| format!("{basename}.{ext}")));
+                }
+                CandidateProbe::Names(keys)
             }
         }
+    }
+
+    /// Consider one indexed path; a path that cannot match is ignored.
+    pub fn offer(&mut self, path: &str) {
+        let rank = match &self.mode {
+            SelectorMode::Exact { keys } => {
+                let lower = path.to_lowercase();
+                match keys.iter().position(|key| *key == lower) {
+                    Some(index) => SelectorRank::Exact(index),
+                    None => return,
+                }
+            }
+            SelectorMode::Basename {
+                basename,
+                has_extension,
+                source_dirs,
+            } => {
+                let file = final_component(path).to_lowercase();
+                if !basename_matches(&file, basename, *has_extension) {
+                    return;
+                }
+                SelectorRank::Basename(directory_distance(source_dirs, path), path.to_string())
+            }
+        };
+        // Strictly better only: among equals the first offered path stays,
+        // as the whole-index scan's first hit (exact) or first minimum
+        // (basename) did.
+        if self.best.as_ref().is_none_or(|(best, _)| rank < *best) {
+            self.best = Some((rank, path.to_string()));
+        }
+    }
+
+    /// The winning path, if any offered path matched.
+    pub fn into_winner(self) -> Option<String> {
+        self.best.map(|(_, path)| path)
     }
 }
 
 /// The index rows [`resolve_link`] could match for a target (#1279), so a
 /// caller holding a database can fetch just those instead of snapshotting
 /// every path. Keys are lowercased the way the resolver compares; the
-/// caller may fold further (a coarser fold only widens the set), and
-/// `resolve_link` over the fetched candidates still decides.
+/// caller may fold further (a coarser fold only widens the set), and the
+/// resolver's selector over the fetched candidates still decides.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum CandidateProbe {
     /// Nothing in the index can match: an empty or external target.
@@ -345,43 +454,8 @@ pub enum CandidateProbe {
 /// The [`CandidateProbe`] for `target_raw`, normalized exactly as
 /// [`resolve_link`] normalizes it.
 pub fn candidate_probe(target_raw: &str) -> CandidateProbe {
-    let trimmed = target_raw.trim();
-    if trimmed.is_empty() || looks_external_for_resolver(trimmed) {
-        return CandidateProbe::None;
-    }
-    let rooted = trimmed.starts_with('/') || trimmed.starts_with("./");
-    let normalized = trimmed
-        .strip_prefix("./")
-        .or_else(|| trimmed.strip_prefix('/'))
-        .unwrap_or(trimmed);
-    let lower = normalized.to_lowercase();
-    let mut keys = vec![lower.clone()];
-    if !has_extension(normalized) {
-        keys.extend(MD_EXTENSIONS.iter().map(|ext| format!("{lower}.{ext}")));
-    }
-    if rooted || normalized.contains('/') {
-        CandidateProbe::Paths(keys)
-    } else {
-        CandidateProbe::Names(keys)
-    }
-}
-
-/// Try the literal target first; if no hit, retry with each Markdown
-/// extension appended (only when the input has no extension).
-fn find_exact(target: &str, index: &dyn VaultIndex) -> Option<String> {
-    let target_lower = target.to_lowercase();
-    if let Some(hit) = index.all_paths().find(|p| p.to_lowercase() == target_lower) {
-        return Some(hit.to_string());
-    }
-    if !has_extension(target) {
-        for ext in MD_EXTENSIONS {
-            let candidate = format!("{}.{}", target_lower, ext);
-            if let Some(hit) = index.all_paths().find(|p| p.to_lowercase() == candidate) {
-                return Some(hit.to_string());
-            }
-        }
-    }
-    None
+    LinkCandidateSelector::new(target_raw, "")
+        .map_or(CandidateProbe::None, |selector| selector.probe())
 }
 
 /// Gather all index entries whose final path component matches
@@ -389,48 +463,30 @@ fn find_exact(target: &str, index: &dyn VaultIndex) -> Option<String> {
 fn collect_basename_matches<'a>(basename: &str, index: &'a dyn VaultIndex) -> Vec<&'a str> {
     let basename_lower = basename.to_lowercase();
     let basename_has_ext = has_extension(basename);
-    let mut hits = Vec::new();
-    for path in index.all_paths() {
-        let file = final_component(path).to_lowercase();
-        if file == basename_lower {
-            hits.push(path);
-            continue;
-        }
-        if !basename_has_ext {
-            // Implied-extension match: `[[foo]]` matches `foo.md`,
-            // `foo.markdown`, etc.
-            for ext in MD_EXTENSIONS {
-                let candidate = format!("{}.{}", basename_lower, ext);
-                if file == candidate {
-                    hits.push(path);
-                    break;
-                }
-            }
-        }
-    }
-    hits
+    index
+        .all_paths()
+        .filter(|path| {
+            basename_matches(
+                &final_component(path).to_lowercase(),
+                &basename_lower,
+                basename_has_ext,
+            )
+        })
+        .collect()
 }
 
-/// Resolve a tie among multiple basename matches by:
-///   1. shortest directory-distance between `source_path` and the
-///      candidate, then
-///   2. alphabetical order of the candidate paths.
-fn tiebreak<'a>(candidates: &[&'a str], source_path: &str) -> &'a str {
-    debug_assert!(
-        candidates.len() >= 2,
-        "tiebreak called with {} candidate(s); caller should short-circuit",
-        candidates.len()
-    );
-    let source_dirs = dir_components(source_path);
-    candidates
-        .iter()
-        .copied()
-        .min_by(|a, b| {
-            let da = directory_distance(&source_dirs, a);
-            let db = directory_distance(&source_dirs, b);
-            da.cmp(&db).then_with(|| a.cmp(b))
-        })
-        .expect("non-empty by debug_assert")
+/// A lowercased file name matches a lowercased basename exactly, or — for a
+/// basename with no extension — as `basename.{md,markdown,mdown,mkd}`
+/// (`[[foo]]` matches `foo.md`, `foo.markdown`, ...).
+fn basename_matches(file_lower: &str, basename_lower: &str, basename_has_ext: bool) -> bool {
+    file_lower == basename_lower
+        || (!basename_has_ext
+            && MD_EXTENSIONS.iter().any(|ext| {
+                file_lower.len() == basename_lower.len() + 1 + ext.len()
+                    && file_lower.starts_with(basename_lower)
+                    && file_lower[basename_lower.len()..].starts_with('.')
+                    && file_lower.ends_with(ext)
+            }))
 }
 
 /// Distance between two locations measured by directory components.
@@ -441,12 +497,12 @@ fn tiebreak<'a>(candidates: &[&'a str], source_path: &str) -> &'a str {
 /// of the resolver — otherwise a vault on a case-insensitive
 /// filesystem (HFS+, default APFS) could rank `Notes/foo.md` and
 /// `notes/foo.md` as different directories and break the tiebreak.
-fn directory_distance(source_dirs: &[&str], target_path: &str) -> usize {
+fn directory_distance<S: AsRef<str>>(source_dirs: &[S], target_path: &str) -> usize {
     let target_dirs = dir_components(target_path);
     let common = source_dirs
         .iter()
         .zip(target_dirs.iter())
-        .take_while(|(a, b)| a.eq_ignore_ascii_case(b))
+        .take_while(|(a, b)| a.as_ref().eq_ignore_ascii_case(b))
         .count();
     (source_dirs.len() - common) + (target_dirs.len() - common)
 }

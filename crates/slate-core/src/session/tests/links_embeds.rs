@@ -557,7 +557,13 @@ fn oversized_link_aliases_are_snippet_bounded_at_the_read_boundary() {
     assert_eq!(text, &long_heading);
     let composed = format!("{}#{}", anchored.target_raw, text);
     let resolved = session
-        .resolve_embed_preview_pooled("notes/src.md", &composed, None, u64::MAX)
+        .resolve_embed_preview_pooled(
+            "notes/src.md",
+            &composed,
+            None,
+            u64::MAX,
+            &CancelToken::new(),
+        )
         .unwrap();
     assert!(
         matches!(resolved.resolution, crate::EmbedResolution::Section { .. }),
@@ -578,7 +584,7 @@ fn pooled_preview_clamps_image_payloads_to_the_callers_pool() {
     session.scan_initial(&CancelToken::new()).unwrap();
 
     let within = session
-        .resolve_embed_preview_pooled("notes/host.md", "pic.png", None, 1024)
+        .resolve_embed_preview_pooled("notes/host.md", "pic.png", None, 1024, &CancelToken::new())
         .unwrap();
     let crate::EmbedResolution::Image { bytes, .. } = &within.resolution else {
         panic!("expected Image, got {:?}", within.resolution);
@@ -587,7 +593,7 @@ fn pooled_preview_clamps_image_payloads_to_the_callers_pool() {
     assert!(!within.truncated);
 
     let over = session
-        .resolve_embed_preview_pooled("notes/host.md", "pic.png", None, 4)
+        .resolve_embed_preview_pooled("notes/host.md", "pic.png", None, 4, &CancelToken::new())
         .unwrap();
     assert!(matches!(
         over.resolution,
@@ -600,7 +606,13 @@ fn pooled_preview_clamps_image_payloads_to_the_callers_pool() {
     // The pool can only LOWER the per-key allowance, never raise it:
     // a huge pool still leaves the preview budget in charge.
     let huge_pool = session
-        .resolve_embed_preview_pooled("notes/host.md", "pic.png", None, u64::MAX)
+        .resolve_embed_preview_pooled(
+            "notes/host.md",
+            "pic.png",
+            None,
+            u64::MAX,
+            &CancelToken::new(),
+        )
         .unwrap();
     assert!(matches!(
         huge_pool.resolution,
@@ -1276,7 +1288,7 @@ fn reading_card_elides_nested_images_and_honors_the_root_pool() {
 
     // Nested image: payload elided, identity kept, no pool charge.
     let card = session
-        .resolve_embed_reading_card("host.md", "target", None, 1024)
+        .resolve_embed_reading_card("host.md", "target", None, 1024, &CancelToken::new())
         .unwrap();
     let crate::EmbedResolution::FullNote { nested, .. } = &card.resolution else {
         panic!("expected FullNote, got {:?}", card.resolution);
@@ -1291,7 +1303,7 @@ fn reading_card_elides_nested_images_and_honors_the_root_pool() {
 
     // Root image WITHIN the pool: bytes present, true size reported.
     let within = session
-        .resolve_embed_reading_card("host.md", "pic.png", None, 1024)
+        .resolve_embed_reading_card("host.md", "pic.png", None, 1024, &CancelToken::new())
         .unwrap();
     let crate::EmbedResolution::Image { bytes, .. } = &within.resolution else {
         panic!("expected Image, got {:?}", within.resolution);
@@ -1303,7 +1315,7 @@ fn reading_card_elides_nested_images_and_honors_the_root_pool() {
     // Root image OVER the pool: elided, true size still reported so
     // the caller can account honestly.
     let over = session
-        .resolve_embed_reading_card("host.md", "pic.png", None, 4)
+        .resolve_embed_reading_card("host.md", "pic.png", None, 4, &CancelToken::new())
         .unwrap();
     let crate::EmbedResolution::Image { bytes, .. } = &over.resolution else {
         panic!("expected Image, got {:?}", over.resolution);
@@ -1402,14 +1414,165 @@ fn embed_candidates_resolve_exactly_as_the_whole_index_does() {
     ];
     for host in ["host.md", "notes/host.md", "notes/deep/host.md"] {
         for target in targets {
-            let candidates = session.embed_link_candidates(target).unwrap();
-            assert_eq!(
-                crate::resolve_link(target, None, host, &candidates),
-                crate::resolve_link(target, None, host, &whole),
-                "{target:?} from {host}"
-            );
+            let streamed = session
+                .resolve_embed_link_target(target, host, &CancelToken::new())
+                .unwrap();
+            let expected = match crate::resolve_link(target, None, host, &whole) {
+                crate::ResolvedLink::Resolved { target_path, .. } => Some(target_path),
+                _ => None,
+            };
+            assert_eq!(streamed, expected, "{target:?} from {host}");
         }
     }
+}
+
+/// A vault where every directory carries the same basename (`index.md`),
+/// among unrelated files.
+fn every_directory_has_an_index(directories: usize) -> (tempfile::TempDir, VaultSession) {
+    let (tmp, session) = make_vault(|provider| {
+        provider.write_file("index.md", b"# root index\n").unwrap();
+        for n in 0..directories {
+            provider
+                .write_file(
+                    &format!("d{n:02}/index.md"),
+                    format!("# index {n}\n").as_bytes(),
+                )
+                .unwrap();
+            for other in 0..5 {
+                provider
+                    .write_file(&format!("d{n:02}/note{other}.md"), b"# other\n")
+                    .unwrap();
+            }
+        }
+        provider.write_file("d17/host.md", b"![[index]]\n").unwrap();
+    });
+    session.scan_initial(&CancelToken::new()).unwrap();
+    (tmp, session)
+}
+
+/// #1279 (codex round 1): a basename every directory carries walks only
+/// its own candidate rows — never the vault — and keeps the nearest one:
+/// the host's own directory from inside it, the root's from the root.
+#[test]
+fn a_basename_every_directory_carries_streams_only_its_candidates() {
+    let (_tmp, session) = every_directory_has_an_index(40);
+
+    crate::session::EMBED_CANDIDATE_ROWS_VISITED.with(|rows| rows.set(0));
+    let near = session
+        .resolve_embed_preview("d17/host.md", "index", None, &CancelToken::new())
+        .unwrap();
+    let crate::EmbedResolution::FullNote { target_path, .. } = &near.resolution else {
+        panic!("expected FullNote, got {:?}", near.resolution);
+    };
+    assert_eq!(target_path, "d17/index.md");
+    // 41 rows share the name; the 200 other files are never visited.
+    assert_eq!(
+        crate::session::EMBED_CANDIDATE_ROWS_VISITED.with(std::cell::Cell::get),
+        41
+    );
+
+    let from_root = session
+        .resolve_embed_link_target("index", "host.md", &CancelToken::new())
+        .unwrap();
+    assert_eq!(from_root.as_deref(), Some("index.md"));
+}
+
+/// #1279 (codex round 1): a cancel that lands between two candidate rows
+/// stops the streamed lookup at the next boundary — no further row is
+/// visited and the resolve is `Cancelled`, not a card.
+#[test]
+fn a_cancel_between_candidate_rows_stops_the_lookup() {
+    let (_tmp, session) = every_directory_has_an_index(40);
+
+    crate::session::EMBED_CANDIDATE_ROWS_VISITED.with(|rows| rows.set(0));
+    crate::session::EMBED_CANDIDATE_CANCEL_AFTER.with(|after| after.set(Some(5)));
+    let outcome = session.resolve_embed_preview("d17/host.md", "index", None, &CancelToken::new());
+    crate::session::EMBED_CANDIDATE_CANCEL_AFTER.with(|after| after.set(None));
+
+    match outcome {
+        Err(VaultError::Cancelled) => {}
+        other => panic!("expected Cancelled, got {other:?}"),
+    }
+    assert_eq!(
+        crate::session::EMBED_CANDIDATE_ROWS_VISITED.with(std::cell::Cell::get),
+        5,
+        "the lookup visited rows past its cancellation"
+    );
+}
+
+/// #1279 (codex round 1): a cancel that lands DURING the walk's last read
+/// — a card with nothing nested, so the root's own read is the last I/O —
+/// is still `Cancelled`. Every read kind: a whole note, a section and a
+/// block (range reads) and an image (the attachment read).
+#[test]
+fn a_cancel_during_the_last_read_is_still_cancelled() {
+    for target in ["root", "root#Part", "root^blk", "pic.png"] {
+        let cancel = CancelToken::new();
+        let tmp = tempfile::tempdir().unwrap();
+        let inner = FsVaultProvider::new(tmp.path().to_path_buf());
+        inner.write_file("host.md", b"![[root]]").unwrap();
+        inner
+            .write_file("root.md", b"# Part\n\nPlain text. ^blk\n")
+            .unwrap();
+        inner.write_file("pic.png", b"\x89PNG\r\n\x1a\n").unwrap();
+        let provider = Arc::new(CancelOnReadProvider {
+            inner,
+            cancel: cancel.clone(),
+            armed: std::sync::atomic::AtomicBool::new(false),
+            reads: std::sync::atomic::AtomicU32::new(0),
+            cancel_after: 1,
+        });
+        let session = VaultSession::open(
+            provider.clone(),
+            SessionConfig::new(tmp.path().join(".slate")),
+        )
+        .unwrap();
+        session.scan_initial(&CancelToken::new()).unwrap();
+        provider
+            .armed
+            .store(true, std::sync::atomic::Ordering::SeqCst);
+
+        match session.resolve_embed_preview("host.md", target, None, &cancel) {
+            Err(VaultError::Cancelled) => {}
+            other => panic!("{target}: expected Cancelled, got {other:?}"),
+        }
+        assert_eq!(
+            provider.reads.load(std::sync::atomic::Ordering::SeqCst),
+            1,
+            "{target}: the only read was the one the cancel landed in"
+        );
+        // A live token resolves the same target in full.
+        assert!(
+            !matches!(
+                session
+                    .resolve_embed_preview("host.md", target, None, &CancelToken::new())
+                    .unwrap()
+                    .resolution,
+                crate::EmbedResolution::Unresolved { .. }
+            ),
+            "{target}: the fixture itself must resolve"
+        );
+    }
+}
+
+/// #1279 (codex round 1): the panel and reading-card profiles take the
+/// caller's token too — pre-cancelled, they touch nothing.
+#[test]
+fn the_panel_and_reading_card_profiles_are_cancellable() {
+    let never = CancelToken::new();
+    let (_tmp, session, provider) = nested_preview_vault(&never, u32::MAX);
+    let cancelled = CancelToken::new();
+    cancelled.cancel();
+
+    assert!(matches!(
+        session.resolve_embed_preview_pooled("host.md", "root", None, u64::MAX, &cancelled),
+        Err(VaultError::Cancelled)
+    ));
+    assert!(matches!(
+        session.resolve_embed_reading_card("host.md", "root", None, u64::MAX, &cancelled),
+        Err(VaultError::Cancelled)
+    ));
+    assert_eq!(provider.reads.load(std::sync::atomic::Ordering::SeqCst), 0);
 }
 
 /// A provider that cancels a token on the Nth capped read once armed
