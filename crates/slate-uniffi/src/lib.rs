@@ -1987,34 +1987,52 @@ impl VaultSession {
     }
 
     /// Pool-clamped preview (W4-2 round 11): image payloads past the
-    /// caller's remaining note-wide pool never cross the FFI.
+    /// caller's remaining note-wide pool never cross the FFI. `cancel`
+    /// (#1279) is the panel load's: the host cancels it when the note
+    /// changes or the panel shuts down.
     pub fn resolve_embed_preview_pooled(
         &self,
         host_path: String,
         target: String,
         alt: Option<String>,
         image_pool_bytes: u64,
+        cancel: Arc<CancelToken>,
     ) -> Result<EmbedPreviewResolution, VaultError> {
         Ok(self
             .inner
-            .resolve_embed_preview_pooled(&host_path, &target, alt, image_pool_bytes)?
+            .resolve_embed_preview_pooled(
+                &host_path,
+                &target,
+                alt,
+                image_pool_bytes,
+                &cancel.inner,
+            )?
             .into())
     }
 
     /// Resolve one READING-CARD embed (W3-5): preview budgets, nested
     /// image payloads never marshalled, root image included only when
     /// it fits `image_budget_bytes` — with its true size reported so
-    /// the caller charges its note-wide pool honestly.
+    /// the caller charges its note-wide pool honestly. `cancel` (#1279)
+    /// is the reading refresh's: the host cancels it when the refresh is
+    /// superseded, detached or disposed.
     pub fn resolve_embed_reading_card(
         &self,
         host_path: String,
         target: String,
         alt: Option<String>,
         image_budget_bytes: u64,
+        cancel: Arc<CancelToken>,
     ) -> Result<EmbedReadingCard, VaultError> {
         Ok(self
             .inner
-            .resolve_embed_reading_card(&host_path, &target, alt, image_budget_bytes)?
+            .resolve_embed_reading_card(
+                &host_path,
+                &target,
+                alt,
+                image_budget_bytes,
+                &cancel.inner,
+            )?
             .into())
     }
     /// Read a binary attachment from the vault. Used by the read-
