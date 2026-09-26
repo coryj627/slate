@@ -517,6 +517,54 @@ public sealed class RescanTests
     // Paging, page failures and the retained ledger
     // ---------------------------------------------------------------------
 
+    /// <summary>Rounds 25-27 (bounded errors): 1,200 unreadable notes cross
+    /// the FFI as an exact count and at most five samples — the initial
+    /// open's report and the rescan's alike — and the rescan's one sentence
+    /// carries the whole count.</summary>
+    [Fact]
+    public void AScanFfiResultStaysBoundedUnderThousandsOfFailures() => RunSta(() =>
+    {
+        const int Failing = 1200;
+        string root = Harness.NewRoot("bounded-ffi");
+        Harness.Seed(
+            root,
+            [("ok.md", "# Ok\n"), .. Enumerable.Range(0, Failing).Select(n => ($"locked-{n:0000}.md", $"# Locked {n}\n"))]);
+        var denials = new List<DenyAccess>(Failing);
+        Harness? h = null;
+        try
+        {
+            foreach (int n in Enumerable.Range(0, Failing))
+            {
+                denials.Add(DenyAccess.To(Path.Combine(root, $"locked-{n:0000}.md"), FileSystemRights.ReadData));
+            }
+
+            h = Harness.OpenExisting(root);
+            ScanReport opened = Assert.IsType<ScanReport>(h.OpenReport);
+            Assert.Equal((ulong)Failing, opened.ErrorCount);
+            Assert.Equal(5, opened.ErrorSamples.Length);
+            Assert.False(opened.Complete);
+
+            h.Context.Await(h.Lifecycle.RescanAsync(RescanReason.Explicit));
+
+            ScanReport rescanned = Assert.IsType<ScanReport>(h.LastRescanReport);
+            Assert.Equal((ulong)Failing, rescanned.ErrorCount);
+            Assert.Equal(5, rescanned.ErrorSamples.Length);
+            A11yEvent.VaultRescanIncomplete incomplete =
+                Assert.IsType<A11yEvent.VaultRescanIncomplete>(Assert.Single(h.Events));
+            Assert.Equal((ulong)Failing, incomplete.Errors);
+            Assert.Equal([$"Files refreshed with errors. {Failing} errors; results may be incomplete."], h.Spoken);
+        }
+        finally
+        {
+            foreach (DenyAccess denial in denials)
+            {
+                denial.Dispose();
+            }
+
+            h?.Dispose();
+        }
+    });
+
     /// <summary>Round 28 (the honest count): a scan error and a failed page
     /// are counted together — the scan's own count crosses the FFI in full
     /// and the page's failure adds one — so an unreadable file plus a page
@@ -863,9 +911,11 @@ public sealed class RescanTests
     /// read completes while a synchronous Save holds the dispatcher, so the
     /// page's application is queued BEHIND the save — it runs after Save
     /// returns (the tab now clean) and before the save's own event is
-    /// handled. The journal entry the write made at its commit makes the
-    /// application skip the path: no reload, the undo history intact, and
-    /// the superseded row never spoken.</summary>
+    /// handled (the lifecycle's UI queue is held until the rescan has
+    /// finished, so no event bump can stand in). The journal entry the
+    /// write made at its commit makes the application skip the path: no
+    /// reload, the undo history intact, and the superseded row never
+    /// spoken; the event, handled afterwards, changes none of it.</summary>
     [Fact]
     public void APageQueuedBehindABlockingSaveNeverReloadsTheSavedTab() => RunSta(() =>
     {
@@ -885,6 +935,7 @@ public sealed class RescanTests
                 // queued: the Save is queued FIRST, so the page's application
                 // queues behind it while it holds the dispatcher.
                 queued = true;
+                h.HoldUiQueue = true;
                 h.Context.Post(_ => savedOk = y.Save(), null);
             }
         });
@@ -893,9 +944,53 @@ public sealed class RescanTests
 
         Assert.True(queued, "the page never held y.md's modification");
         Assert.True(savedOk);
+        Assert.True(h.HeldUiActions > 0, "the save's event was handled before the page");
         Assert.False(y.IsDirty);
         Assert.Equal("y1 external\nmine\n", y.Text);
         Assert.True(y.EditorDocument!.UndoStack.CanUndo, "the queued page reloaded the tab Save had just cleaned");
+        Assert.Equal([NoChanges], h.Spoken);
+
+        h.ReleaseUiQueue();
+        h.Settle();
+        Assert.False(y.IsDirty);
+        Assert.Equal("y1 external\nmine\n", y.Text);
+        Assert.True(y.EditorDocument!.UndoStack.CanUndo);
+        Assert.Equal([NoChanges], h.Spoken);
+    });
+
+    /// <summary>Rounds 25-26 (the worker read's re-check): a Slate-owned
+    /// write that commits WHILE a clean tab's reload reads on the worker —
+    /// after the page passed its journal check — wins. The read comes back
+    /// to a journal entry newer than the page's capture, so the tab is never
+    /// re-baselined on the bytes the worker read before the write; the
+    /// write's own event reconciles it (changed on disk), and the
+    /// overtaken row is not spoken.</summary>
+    [Fact]
+    public void ASlateWriteDuringAReloadsReadWinsOverIt() => RunSta(() =>
+    {
+        using var h = new Harness("write-during-read", ("x.md", "x0\n"));
+        WorkspaceTabViewModel x = h.Open("x.md");
+        h.Write("x.md", "x1 external\n");
+        bool wrote = false;
+        h.AfterCoreCall = operation =>
+        {
+            if (operation == "read" && !wrote)
+            {
+                // On the read's worker, after the read and before its
+                // continuation: the write commits in between.
+                wrote = true;
+                _ = h.Lifecycle.SessionForTests!.SaveText("x.md", "x2 through Slate\n", null);
+            }
+        };
+
+        h.Context.Await(h.Lifecycle.RescanAsync(RescanReason.Explicit));
+        h.Settle();
+
+        Assert.True(wrote, "the reload never read x.md on the worker");
+        Assert.Equal("x0\n", x.Text);
+        Assert.False(x.IsDirty);
+        Assert.True(x.IsExternallyStale, "the write's own event never reconciled the tab");
+        Assert.Equal("x2 through Slate\n", File.ReadAllText(Path.Combine(h.Root, "x.md")));
         Assert.Equal([NoChanges], h.Spoken);
     });
 
@@ -974,11 +1069,7 @@ public sealed class RescanTests
 
         Task run = h.Lifecycle.RescanAsync(RescanReason.Explicit);
         h.PumpUntil(() => reloadStarted, "the canvas reload starting");
-        for (int turn = 0; turn < 20; turn++)
-        {
-            h.Context.Drain();
-            Thread.Sleep(5);
-        }
+        h.Settle();
 
         Assert.False(run.IsCompleted);
         Assert.Equal(0, Volatile.Read(ref applied));
@@ -1134,7 +1225,11 @@ public sealed class RescanTests
     public void TheHistoryPanelReloadsAfterARescan() => RunSta(() =>
     {
         using var h = new Harness("history-dependent", ("x.md", "x0\n"), ("y.md", "y0\n"));
-        _ = h.Open("x.md");
+        WorkspaceTabViewModel x = h.Open("x.md");
+        // DIRTY: the tab keeps its buffer (marked stale), so its own clean
+        // reload — which re-lists history on the way — never runs; only
+        // the rescan's history dependent reaches the panel.
+        x.Text = "x0\nmine\n";
         h.Workspace.History.NoteChanged("x.md");
         int loads = 0;
         h.Workspace.History.LoadInterleaveForTests = () => Interlocked.Increment(ref loads);
@@ -1153,7 +1248,11 @@ public sealed class RescanTests
         h.Write("x.md", "x1, changed outside Slate\n");
         h.Now += TimeSpan.FromMinutes(1);
         h.Context.Await(h.Lifecycle.RescanAsync(RescanReason.Explicit));
-        h.PumpUntil(() => Volatile.Read(ref loads) > 0, "the history panel reloading");
+
+        // Awaited to its publication: reloaded by the time the run is done.
+        Assert.True(Volatile.Read(ref loads) > 0, "the history panel never reloaded");
+        Assert.True(x.IsDirty);
+        Assert.Equal("x0\nmine\n", x.Text);
     });
 
     /// <summary>Rounds 28-29 (the graph dependent, ONE authority): a rescan
@@ -1316,12 +1415,7 @@ public sealed class RescanTests
 
         Task run = h.Lifecycle.RescanAsync(RescanReason.Explicit);
         h.PumpUntil(() => started, $"the {kind} publication starting");
-        for (int turn = 0; turn < 20; turn++)
-        {
-            h.Context.Drain();
-            PumpedDispatcher.Drain();
-            Thread.Sleep(5);
-        }
+        h.Settle();
 
         Assert.False(run.IsCompleted);
         Assert.Equal(0, Volatile.Read(ref applied));
@@ -1434,11 +1528,7 @@ public sealed class RescanTests
 
         Task run = h.Lifecycle.RescanAsync(RescanReason.Explicit);
         h.Context.RunUntil(() => parked.IsSet, "the tree refresh parking on its worker");
-        for (int turn = 0; turn < 20; turn++)
-        {
-            h.Context.Drain();
-            Thread.Sleep(5);
-        }
+        h.Settle();
 
         Assert.False(run.IsCompleted);
         Assert.Equal(0, Volatile.Read(ref applied));
@@ -2047,6 +2137,21 @@ public sealed class RescanTests
         Assert.NotNull(route.OnActivated());
         Assert.Null(route.OnActivated());
 
+        // A window that lost the foreground before it ever had it (it
+        // opened behind another) forwards nothing on its FIRST activation
+        // either, however long it was away: the open scan just ran.
+        var openedBehind = new ForegroundRescanRoute(
+            reason =>
+            {
+                forwarded.Add(reason);
+                return Task.CompletedTask;
+            },
+            () => false,
+            () => now);
+        openedBehind.OnDeactivated();
+        now += ForegroundRescanRoute.MinimumAway + ForegroundRescanRoute.MinimumAway;
+        Assert.Null(openedBehind.OnActivated());
+
         Assert.Equal([RescanReason.Foreground], forwarded);
     }
 
@@ -2166,6 +2271,11 @@ public sealed class RescanTests
             {
                 harness.RecordCoreCall(operation);
                 T result = call();
+                if (result is ScanReport report)
+                {
+                    harness.LastRescanReport = report;
+                }
+                harness.AfterCoreCall?.Invoke(operation);
                 if (park)
                 {
                     harness.Parked.Set();
@@ -2267,6 +2377,8 @@ public sealed class RescanTests
         private bool _failAppliedMark;
         private Action<ulong, string?>? _onApplied;
         private Action? _afterLedgerCall;
+        private readonly List<Action> _heldUiActions = [];
+        private bool _holdUiQueue;
 
         public Harness(string label, params (string Path, string Text)[] files)
             : this(NewRoot(label), files, VaultLifecycleViewModel.DefaultScanDeltaPageLimit, null)
@@ -2295,7 +2407,7 @@ public sealed class RescanTests
             SynchronizationContext.SetSynchronizationContext(Context);
             Lifecycle = new VaultLifecycleViewModel(
                 pickVault: () => Task.FromResult<string?>(Root),
-                enqueueUi: action => Context.Post(_ => action(), null),
+                enqueueUi: EnqueueUi,
                 recentVaultsStore: new RecentVaultsStore(Path.Combine(Root + "-device", "recent-vaults.json")),
                 announce: Events.Add,
                 pickImportSources: pickImportSources,
@@ -2324,6 +2436,74 @@ public sealed class RescanTests
             Events.Clear();
             // Well past the open scan: the foreground cooldown counts from it.
             Now += TimeSpan.FromMinutes(1);
+        }
+
+        /// <summary>Every rescan core call's operation, on its worker, after
+        /// the call returned and before its continuation is queued.</summary>
+        public Action<string>? AfterCoreCall { get; set; }
+
+        /// <summary>While set, what the lifecycle enqueues for the UI —
+        /// file-change events, progress — is held instead of posted (the
+        /// rescan's own continuations are not: they resume on the
+        /// context).</summary>
+        public bool HoldUiQueue
+        {
+            get => Volatile.Read(ref _holdUiQueue);
+            set => Volatile.Write(ref _holdUiQueue, value);
+        }
+
+        public int HeldUiActions
+        {
+            get
+            {
+                lock (_heldUiActions)
+                {
+                    return _heldUiActions.Count;
+                }
+            }
+        }
+
+        /// <summary>Stop holding, and post everything held, in order.</summary>
+        public void ReleaseUiQueue()
+        {
+            Action[] held;
+            lock (_heldUiActions)
+            {
+                HoldUiQueue = false;
+                held = [.. _heldUiActions];
+                _heldUiActions.Clear();
+            }
+
+            foreach (Action action in held)
+            {
+                Context.Post(_ => action(), null);
+            }
+        }
+
+        /// <summary>A while of turns — this queue and the WPF dispatcher
+        /// both drained — for a fact that asserts nothing happened.</summary>
+        public void Settle()
+        {
+            for (int turn = 0; turn < 20; turn++)
+            {
+                Context.Drain();
+                PumpedDispatcher.Drain();
+                Thread.Sleep(5);
+            }
+        }
+
+        private void EnqueueUi(Action action)
+        {
+            lock (_heldUiActions)
+            {
+                if (HoldUiQueue)
+                {
+                    _heldUiActions.Add(action);
+                    return;
+                }
+            }
+
+            Context.Post(_ => action(), null);
         }
 
         public static Harness OpenExisting(string root) =>
@@ -2374,6 +2554,12 @@ public sealed class RescanTests
         public ManualResetEventSlim Release { get; } = new(false);
 
         public Func<int, Exception?>? ThrowOnCall { get; set; }
+
+        /// <summary>The open scan's report as it crossed the FFI.</summary>
+        public ScanReport? OpenReport { get; private set; }
+
+        /// <summary>The last rescan's report as it crossed the FFI.</summary>
+        public ScanReport? LastRescanReport { get; set; }
 
         public WorkspaceViewModel Workspace => Lifecycle.Workspace!;
 
@@ -2567,8 +2753,18 @@ public sealed class RescanTests
 
         /// <summary>The open's session load: call <see cref="ScanCalls"/>
         /// 1 may throw or park after its work.</summary>
-        private Task<T> RunOnWorker<T>(Func<T> work)
+        private Task<T> RunOnWorker<T>(Func<T> load)
         {
+            Func<T> work = () =>
+            {
+                T loaded = load();
+                if (loaded is ValueTuple<ScanReport, SwitcherFile[]> open)
+                {
+                    OpenReport = open.Item1;
+                }
+
+                return loaded;
+            };
             int call = Interlocked.Increment(ref _scanCalls);
             if (ThrowOnCall?.Invoke(call) is Exception fault)
             {
