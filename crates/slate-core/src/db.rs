@@ -691,8 +691,9 @@ mod tests {
             )
             .unwrap();
         // extension + mtime (001) + birthtime (030, #801) + parent tree order (033)
-        // + Unicode path fold for the collision gate (037, #1077).
-        assert_eq!(indexes, 5);
+        // + Unicode path fold for the collision gate (037, #1077)
+        // + Unicode name fold for the embed resolver (039, #1279).
+        assert_eq!(indexes, 6);
     }
 
     #[test]
