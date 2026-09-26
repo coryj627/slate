@@ -357,6 +357,73 @@ public sealed class SidebarTreeKeysTests : IDisposable
         Assert.True(workspace.ActiveGroup.Tabs[1].IsTransient);
     }
 
+    /// <summary>
+    /// R-2 transient tab: an explicit open into the current tab makes it
+    /// the note's own tab. Arrow onto A — the transient tab shows it — then
+    /// open C explicitly in the current tab, which takes C in place, then
+    /// arrow onto B: C's tab is kept, permanent, and B shows in a new
+    /// transient tab.
+    /// </summary>
+    [Fact]
+    public void AnExplicitOpenIntoTheTransientTab_KeepsIt()
+    {
+        (VaultSession session, WorkspaceViewModel workspace) = NewWorkspace("transient-replace");
+        using VaultSession ownedSession = session;
+        using WorkspaceViewModel ownedWorkspace = workspace;
+
+        workspace.OpenPath("alpha.md", fromSelection: true);
+        WorkspaceTabViewModel tab = Assert.Single(workspace.ActiveGroup.Tabs);
+        Assert.True(tab.IsTransient);
+
+        workspace.OpenPath("Docs/readme.md");
+        Assert.Same(tab, Assert.Single(workspace.ActiveGroup.Tabs));
+        Assert.Equal("Docs/readme.md", tab.Path);
+        Assert.False(tab.IsTransient);
+
+        workspace.OpenPath("beta.md", fromSelection: true);
+
+        Assert.Equal(new[] { "Docs/readme.md", "beta.md" }, workspace.ActiveGroup.Tabs.Select(open => open.Path));
+        Assert.Same(tab, workspace.ActiveGroup.Tabs[0]);
+        Assert.True(workspace.ActiveGroup.Tabs[1].IsTransient);
+    }
+
+    /// <summary>
+    /// R-2 transient tab: a tab born dirty is never transient. With beta
+    /// open in the left pane and alpha edited, unsaved, in a split, arrow
+    /// onto alpha with the left pane active: its new tab takes on the other
+    /// pane's unsaved state and is kept — the next arrow shows the readme in
+    /// a new transient tab beside it, never in its place.
+    /// </summary>
+    [Fact]
+    public void ASelectionOntoAnotherPanesUnsavedNote_IsNeverTransient()
+    {
+        (VaultSession session, WorkspaceViewModel workspace) = NewWorkspace("transient-born-dirty");
+        using VaultSession ownedSession = session;
+        using WorkspaceViewModel ownedWorkspace = workspace;
+        workspace.OpenPath("beta.md");
+        WorkspaceGroupViewModel left = workspace.ActiveGroup;
+        workspace.OpenPath("alpha.md", WorkspaceOpenTarget.SplitRight);
+        Assert.NotSame(left, workspace.ActiveGroup);
+        WorkspaceTabViewModel edited = Assert.Single(workspace.ActiveGroup.Tabs);
+        edited.EditorDocument!.Insert(edited.EditorDocument.TextLength, "Unsaved in the right pane.\n");
+        Assert.True(edited.IsDirty);
+        workspace.SelectGroupFromKeyboardFocus(left);
+        Assert.Same(left, workspace.ActiveGroup);
+
+        workspace.OpenPath("alpha.md", fromSelection: true);
+        WorkspaceTabViewModel mirror = Assert.IsType<WorkspaceTabViewModel>(left.ActiveTab);
+        Assert.Equal("alpha.md", mirror.Path);
+        Assert.NotSame(edited, mirror);
+        Assert.True(mirror.IsDirty);
+        Assert.False(mirror.IsTransient);
+
+        workspace.OpenPath("Docs/readme.md", fromSelection: true);
+
+        Assert.Equal(new[] { "beta.md", "alpha.md", "Docs/readme.md" }, left.Tabs.Select(open => open.Path));
+        Assert.Same(mirror, left.Tabs[1]);
+        Assert.True(left.Tabs[2].IsTransient);
+    }
+
     private (VaultSession Session, WorkspaceViewModel Workspace) NewWorkspace(string label)
     {
         string root = NewVault(label);
