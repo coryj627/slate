@@ -770,6 +770,15 @@ internal sealed class ConnectionsLeafViewModel : PanelWorkScheduler
     /// silent load; Ready and equal → nothing; Error or STALE → one silent
     /// load (the mac reloads in every state); no root → nothing. It never
     /// supersedes an audible load (B-D12).</summary>
+    /// <summary>W7-7 PR 7 (#1252, round 29): <see cref="Probe"/>, awaited
+    /// to its publication — the generation read, and any reload it
+    /// issues, published (an error state included).</summary>
+    internal async Task ProbeAsync()
+    {
+        Probe();
+        await WhenPublishedAsync();
+    }
+
     public void Probe()
     {
         if (_retired)

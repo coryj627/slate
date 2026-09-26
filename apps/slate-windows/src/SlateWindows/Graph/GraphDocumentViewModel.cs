@@ -1971,6 +1971,14 @@ internal sealed class GraphDocumentViewModel : PanelWorkScheduler
     /// <summary>Re-read the generation off the dispatcher and, on a
     /// change against a held snapshot, issue a superseding silent pair;
     /// while nothing READY is held, keep the high-water mark.</summary>
+    /// <summary>W7-7 PR 7 (#1252, round 29): <see cref="Probe"/>, awaited
+    /// to its publication (an error state included).</summary>
+    internal async Task ProbeAsync()
+    {
+        Probe();
+        await WhenPublishedAsync();
+    }
+
     public void Probe()
     {
         if (_retired)

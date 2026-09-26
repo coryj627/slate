@@ -732,10 +732,10 @@ internal sealed class BaseDocumentViewModel : PanelWorkScheduler
     /// <summary>
     /// W7-7 PR 7 (#1252, round 28): <see cref="Load"/> — reopen the
     /// source and re-run the active view on the document's worker — as a
-    /// Task that completes when the result publishes on the dispatcher
-    /// and faults when it publishes a failure. A shut-down document
-    /// completes at once. A rescan awaits it before it reports the page
-    /// applied.
+    /// Task that completes when the result publishes on the dispatcher,
+    /// whatever it is (a published failure is the source's truth). A
+    /// shut-down document completes at once. A rescan awaits it before it
+    /// reports the page applied.
     /// </summary>
     internal Task LoadAsync()
     {
@@ -752,16 +752,10 @@ internal sealed class BaseDocumentViewModel : PanelWorkScheduler
                 return;
             }
 
+            // A published failure state is the source's truth (an invalid
+            // or unreadable base shows its error): the publication happened.
             ResultPublished -= OnPublished;
-            if (State == BaseLoadState.Failed)
-            {
-                published.TrySetException(new InvalidOperationException(
-                    StateMessage ?? "The base reload failed."));
-            }
-            else
-            {
-                published.TrySetResult();
-            }
+            published.TrySetResult();
         }
 
         ResultPublished += OnPublished;
@@ -855,6 +849,36 @@ internal sealed class BaseDocumentViewModel : PanelWorkScheduler
     /// stranding the document in Loading forever. The in-flight load
     /// executes against current data anyway, so the refresh is
     /// redundant there (the RefreshForFunnel guard's precedent).</summary>
+    /// <summary>W7-7 PR 7 (#1252, round 29): <see cref="Refresh"/> as a
+    /// Task that completes when the re-run's result publishes (an
+    /// in-flight load's, when one is running), whatever it is; a shut-down
+    /// document completes at once.</summary>
+    internal Task RefreshAsync()
+    {
+        if (IsShutDown)
+        {
+            return Task.CompletedTask;
+        }
+
+        var published = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
+        void OnPublished(object? sender, EventArgs eventArgs)
+        {
+            if (State == BaseLoadState.Loading)
+            {
+                return;
+            }
+
+            // A published failure state is the source's truth (an invalid
+            // or unreadable base shows its error): the publication happened.
+            ResultPublished -= OnPublished;
+            published.TrySetResult();
+        }
+
+        ResultPublished += OnPublished;
+        Refresh();
+        return published.Task;
+    }
+
     public void Refresh()
     {
         if (IsShutDown || State == BaseLoadState.Loading)
