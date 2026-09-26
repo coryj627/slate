@@ -180,18 +180,27 @@ internal sealed class CommandPaletteSectionViewModel
 /// </summary>
 /// <remarks>
 /// <para>
-/// <b>Synchronous by decision.</b> Unlike Quick Open — which debounces
-/// and serialises because <c>switcher_rank_top</c> ranks an unbounded
-/// vault file list — <c>palette_sections</c> is a pure function over the
-/// open-time command snapshot (order 10^2 records, no I/O, no locks).
-/// Contract P10 also requires the filter count on <i>every</i>
-/// non-empty keystroke with no debounce, and P18 requires one stored
-/// computation per query change that rendering, navigation, and the
-/// count all read; an async pipeline would need a second synchronous
-/// count path and would leave <see cref="Sections"/> transiently stale
-/// while Enter and the arrow keys still read it. mac ranks
-/// synchronously per keystroke, so this also keeps the two hosts'
-/// observable behaviour identical.
+/// <b>Ranked off the UI thread</b> (locked decision 05 §4, principle 2:
+/// "Callers dispatch off the UI thread"; #1275). The open-time snapshot
+/// load, every ranking and the recents write run on a
+/// <see cref="ICommandPaletteWorkLane"/>; the FFI stays synchronous, the
+/// caller does not. Each query change is a request tagged with a
+/// generation, and its result is <i>published</i> on the owning thread
+/// only while it is still the latest: rows, sections, selection and the
+/// count's window move together at publication, never at request, so
+/// what the list shows, what the keys navigate and what Enter runs are
+/// always one query's (P18). Everything that decides what is SAID is
+/// applied at publication too — the P7 selection rule reads the row the
+/// user is on when the rows land, and the P10 count names the published
+/// query — so R-11's one selection per query change holds across the
+/// asynchronous hop. A superseded result is discarded unseen; a superseded
+/// request still waiting its turn never runs.
+/// </para>
+/// <para>
+/// Enter while a newer query's rows are still on their way runs once
+/// they land, against the selection they bring — the user asked to run
+/// what they typed for, not the previous keystroke's row. Moving the
+/// selection meanwhile withdraws that request.
 /// </para>
 /// <para>
 /// <b>No <c>ICommand</c> surface.</b> The palette exposes methods, not
@@ -223,15 +232,25 @@ internal sealed class CommandPaletteViewModel : BindableBase
     private readonly IPaletteCommandSource _source;
     private readonly Action<A11yEvent> _announce;
     private readonly Func<CancellationToken, Task> _filterCountWindow;
+    private readonly ICommandPaletteWorkLane _lane;
+    private readonly Func<Command[], string, string[], string[], PaletteSection[]> _rank;
     private readonly SynchronizationContext? _uiContext;
+    private readonly int _ownerThreadId;
     private CancellationTokenSource? _filterCountCancellation;
     private Task? _filterCountCompletion;
 
     private Command[] _snapshot = [];
-    private string[] _recents = [];
+    private bool _snapshotLoaded;
+    private Task<PaletteSnapshot> _snapshotLoad = Task.FromResult(PaletteSnapshot.Empty);
+    private CancellationTokenSource? _snapshotCancellation;
+    private CancellationTokenSource? _rankCancellation;
+    private int _rankGeneration;
+    private int _publishedGeneration;
+    private bool _invokeWhenPublished;
     private IReadOnlyList<CommandPaletteSectionViewModel> _sections = [];
     private CommandPaletteRowViewModel[] _rows = [];
     private string _query = string.Empty;
+    private string _publishedQuery = string.Empty;
     private string? _selectedId;
     private CommandPaletteRowViewModel? _selectedRow;
     private bool _isOpen;
@@ -239,13 +258,37 @@ internal sealed class CommandPaletteViewModel : BindableBase
     private int _pageSize = 10;
     private int _queryChangesSinceOpen;
 
+    /// <param name="source">The command layer (registry, availability, recents).</param>
+    /// <param name="announce">The shell's one announcement funnel.</param>
+    /// <param name="filterCountWindow">P10's trailing window; facts hold it.</param>
+    /// <param name="lane">Where the FFI work runs — the serialized
+    /// <see cref="CommandPaletteWorkLane"/> unless a fact supplies another.</param>
+    /// <param name="rank">Core's ranking, <c>palette_sections</c>, unless a
+    /// fact parks it.</param>
+    /// <remarks>
+    /// Constructed on the thread that owns the palette — the dispatcher's
+    /// in the shell — whose synchronization context receives every
+    /// publication a worker completes.
+    /// </remarks>
     public CommandPaletteViewModel(IPaletteCommandSource source, Action<A11yEvent> announce,
-        Func<CancellationToken, Task>? filterCountWindow = null)
+        Func<CancellationToken, Task>? filterCountWindow = null,
+        ICommandPaletteWorkLane? lane = null,
+        Func<Command[], string, string[], string[], PaletteSection[]>? rank = null)
     {
         _source = source;
         _announce = announce;
         _filterCountWindow = filterCountWindow ?? (token => Task.Delay(FilterCountWindowMilliseconds, token));
+        _lane = lane ?? new CommandPaletteWorkLane();
+        _rank = rank ?? SlateUniffiMethods.PaletteSections;
         _uiContext = SynchronizationContext.Current;
+        _ownerThreadId = Environment.CurrentManagedThreadId;
+    }
+
+    /// <summary>The open-time snapshot (contract P4): the command list and the
+    /// recents, loaded together off the UI thread.</summary>
+    private sealed record PaletteSnapshot(Command[] Commands, string[] Recents)
+    {
+        internal static PaletteSnapshot Empty { get; } = new([], []);
     }
 
     /// <summary>
@@ -286,6 +329,17 @@ internal sealed class CommandPaletteViewModel : BindableBase
     internal CommandPaletteRecomputeTiming? LastRecomputeTiming { get; private set; }
 
     /// <summary>
+    /// The latest request's ranking and publication hand-off — complete
+    /// once its result is published, discarded or posted to the owning
+    /// thread. For the facts that drive the lane deterministically.
+    /// </summary>
+    internal Task RankCompletion { get; private set; } = Task.CompletedTask;
+
+    /// <summary>Whether a query's rows are still on their way: the list, the
+    /// keys and the count still speak for the last published query.</summary>
+    internal bool IsRankPending => _publishedGeneration != _rankGeneration;
+
+    /// <summary>
     /// Rows moved by one Page Up / Page Down. Windows-only navigation
     /// per divergence PD-1; the host pushes its viewport size here.
     /// </summary>
@@ -307,7 +361,7 @@ internal sealed class CommandPaletteViewModel : BindableBase
 
             if (IsOpen)
             {
-                Recompute();
+                RequestRank();
             }
             else
             {
@@ -341,15 +395,19 @@ internal sealed class CommandPaletteViewModel : BindableBase
 
     public string? SelectedId => _selectedId;
 
-    /// <summary>Empty-registry state (contract P14).</summary>
-    public bool ShowsEmptyRegistry => IsOpen && _snapshot.Length == 0;
+    /// <summary>Empty-registry state (contract P14) — once the open's
+    /// snapshot has landed, so a palette still loading never claims the
+    /// registry is empty.</summary>
+    public bool ShowsEmptyRegistry => IsOpen && _snapshotLoaded && _snapshot.Length == 0;
 
-    /// <summary>No-matches state (contract P14).</summary>
-    public bool ShowsNoMatches => IsOpen && _snapshot.Length > 0 && _rows.Length == 0;
+    /// <summary>No-matches state (contract P14), for the published query.</summary>
+    public bool ShowsNoMatches => IsOpen && _snapshotLoaded && _snapshot.Length > 0 && _rows.Length == 0;
 
-    /// <summary>The visible no-matches line, which quotes the query.</summary>
+    /// <summary>The visible no-matches line, which quotes the query whose
+    /// empty rows are on screen — the published one, not the one still
+    /// ranking.</summary>
     public string NoMatchesDetail =>
-        $"No command matches \"{Query}\". Try fewer letters or a different word.";
+        $"No command matches \"{_publishedQuery}\". Try fewer letters or a different word.";
 
     /// <summary>
     /// The accessible name for the no-matches state, which deliberately
@@ -357,7 +415,7 @@ internal sealed class CommandPaletteViewModel : BindableBase
     /// announce the quotation marks.
     /// </summary>
     public string NoMatchesAccessibleName =>
-        $"No command matches {Query}. Try fewer letters or a different word.";
+        $"No command matches {_publishedQuery}. Try fewer letters or a different word.";
 
     /// <summary>
     /// Whether either empty state is showing. The view collapses the
@@ -409,25 +467,33 @@ internal sealed class CommandPaletteViewModel : BindableBase
         // Contract P4: the command snapshot and the recents list are
         // taken once, here, and ranked for the palette's whole
         // lifetime. A command invoked during this session does not
-        // appear under Recent until the next open.
+        // appear under Recent until the next open. Both are FFI and the
+        // recents are disk, so they load on the lane (locked decision 05
+        // §4, principle 2) and the first ranking waits for them; until
+        // they land the palette shows neither rows nor an empty state.
         //
         // Guarded on !IsOpen because PD-2 makes the chord RE-OPEN rather
         // than toggle, so this method is re-entered while open — and an
         // unguarded snapshot made that one chord press re-read the
-        // registry and re-read recents from disk, on the UI thread,
-        // swapping the rows underneath a palette the user is already
-        // looking at. The comment above claimed a whole-lifetime
-        // snapshot; this is what makes it true. Re-opening still clears
-        // the query and the selection, which is the visible half of PD-2.
+        // registry and re-read recents from disk, swapping the rows
+        // underneath a palette the user is already looking at. The
+        // comment above claimed a whole-lifetime snapshot; this is what
+        // makes it true. Re-opening still clears the query and the
+        // selection, which is the visible half of PD-2.
         if (!_isOpen)
         {
-            _snapshot = _source.ListCommands();
-            _recents = _source.LoadRecents();
+            _snapshotCancellation = new CancellationTokenSource();
+            _snapshotLoaded = false;
+            IPaletteCommandSource source = _source;
+            _snapshotLoad = _lane.Run(
+                () => new PaletteSnapshot(source.ListCommands(), source.LoadRecents()),
+                _snapshotCancellation.Token);
         }
 
         _query = string.Empty;
         _selectedId = null;
         _selectedRow = null;
+        _invokeWhenPublished = false;
         _queryChangesSinceOpen = 0;
         // Contract P10: the first selection change after open is
         // silent — the initial row is not announced before any user
@@ -438,7 +504,7 @@ internal sealed class CommandPaletteViewModel : BindableBase
         OnPropertyChanged(nameof(SelectedId));
         OnPropertyChanged(nameof(SelectedRow));
         OnPropertyChanged(nameof(IsOpen));
-        Recompute();
+        RequestRank();
     }
 
     /// <summary>
@@ -458,6 +524,14 @@ internal sealed class CommandPaletteViewModel : BindableBase
         _selectedId = null;
         _selectedRow = null;
         LastRecomputeTiming = null;
+        // Whatever is still loading or ranking belongs to a palette that is
+        // gone: stop what has not started, and let a newer generation make
+        // anything already running publish nothing.
+        _snapshotCancellation?.Cancel();
+        _snapshotCancellation = null;
+        CancelRankRequest();
+        _publishedGeneration = ++_rankGeneration;
+        _invokeWhenPublished = false;
         // A count still in its window has nothing to say once the palette closes.
         CancelFilterCountWindow();
         _isOpen = false;
@@ -485,7 +559,7 @@ internal sealed class CommandPaletteViewModel : BindableBase
         }
 
         int next = (((index + delta) % _rows.Length) + _rows.Length) % _rows.Length;
-        SetSelection(_rows[next].Id);
+        UserSelect(_rows[next].Id);
     }
 
     /// <summary>Home (divergence PD-1).</summary>
@@ -493,7 +567,7 @@ internal sealed class CommandPaletteViewModel : BindableBase
     {
         if (_rows.Length > 0)
         {
-            SetSelection(_rows[0].Id);
+            UserSelect(_rows[0].Id);
         }
     }
 
@@ -502,7 +576,7 @@ internal sealed class CommandPaletteViewModel : BindableBase
     {
         if (_rows.Length > 0)
         {
-            SetSelection(_rows[^1].Id);
+            UserSelect(_rows[^1].Id);
         }
     }
 
@@ -522,24 +596,37 @@ internal sealed class CommandPaletteViewModel : BindableBase
         int index = IndexOfSelection();
         if (index < 0)
         {
-            SetSelection(delta > 0 ? _rows[0].Id : _rows[^1].Id);
+            UserSelect(delta > 0 ? _rows[0].Id : _rows[^1].Id);
             return;
         }
 
         int next = Math.Clamp(index + (delta * PageSize), 0, _rows.Length - 1);
-        SetSelection(_rows[next].Id);
+        UserSelect(_rows[next].Id);
     }
 
     /// <summary>Pointer / explicit selection.</summary>
-    public void Select(CommandPaletteRowViewModel row) => SetSelection(row.Id);
+    public void Select(CommandPaletteRowViewModel row) => UserSelect(row.Id);
 
     /// <summary>
     /// Activate the selection. No selection is a no-op that does not
     /// even request focus — mac's pinned ordering resolves the command
     /// first.
     /// </summary>
+    /// <remarks>
+    /// While a newer query's rows are still ranking, the selection on
+    /// screen belongs to the previous keystroke; running it would run a
+    /// command the user typed past. The request waits for the rows it was
+    /// typed for and runs against the selection they bring, unless the
+    /// user moves the selection first.
+    /// </remarks>
     public void InvokeSelected()
     {
+        if (IsRankPending)
+        {
+            _invokeWhenPublished = true;
+            return;
+        }
+
         if (_selectedRow is CommandPaletteRowViewModel row)
         {
             Invoke(row);
@@ -599,7 +686,10 @@ internal sealed class CommandPaletteViewModel : BindableBase
             return;
         }
 
-        _source.RecordInvocation(row.Id);
+        // Handed to the lane, not run here: the recents transition is FFI
+        // and the write is disk (locked decision 05 §4, principle 2). The
+        // lane's order still puts it before the next open's recents load.
+        RecordOnLane(row.Id);
         Dismiss();
     }
 
@@ -732,27 +822,156 @@ internal sealed class CommandPaletteViewModel : BindableBase
     }
 
     /// <summary>
-    /// Contract P18: one <c>palette_sections</c> call per query change,
-    /// stored, and read from that field by rendering, navigation, and
-    /// the count.
+    /// One query change: a request for its rows, tagged with the next
+    /// generation. Nothing the list shows, the keys navigate or the reader
+    /// hears changes here — that all waits for <see cref="Publish"/>.
     /// </summary>
-    private void Recompute()
+    private void RequestRank()
     {
-        string? previousId = _selectedId;
+        int generation = ++_rankGeneration;
+        CancelRankRequest();
+        var request = new CancellationTokenSource();
+        _rankCancellation = request;
+
+        // Contract P10 (amended): every keystroke reopens the count's
+        // window. The count itself is scheduled when its rows publish, so
+        // a superseded query never has one to say.
+        CancelFilterCountWindow();
 
         // The #1254 profile: read the clock only while diagnostics are on,
         // and only for the open and the first keystrokes after it.
-        bool timed = _queryChangesSinceOpen <= TimedKeystrokes
-            && HostLog.UiAutomationDiagnosticsEnabled;
-        long started = timed ? Stopwatch.GetTimestamp() : 0;
-        long availabilityTicks = 0;
+        int? timedChange = _queryChangesSinceOpen <= TimedKeystrokes
+            && HostLog.UiAutomationDiagnosticsEnabled
+                ? _queryChangesSinceOpen
+                : null;
+        if (_queryChangesSinceOpen <= TimedKeystrokes)
+        {
+            _queryChangesSinceOpen++;
+        }
 
-        PaletteSection[] computed = SlateUniffiMethods.PaletteSections(
-            _snapshot,
-            Query,
-            _recents,
-            _source.SidebarPinnedOrder);
-        long ranked = timed ? Stopwatch.GetTimestamp() : 0;
+        RankCompletion = RankAndPublishAsync(
+            generation,
+            _query,
+            _source.SidebarPinnedOrder,
+            _snapshotLoad,
+            request.Token,
+            timedChange);
+    }
+
+    /// <summary>
+    /// Waits for the open's snapshot, ranks on the lane, and hands the
+    /// result to the owning thread. Everything read from the view model
+    /// was captured at request; nothing here writes to it.
+    /// </summary>
+    private async Task RankAndPublishAsync(
+        int generation,
+        string query,
+        string[] sidebarPinnedOrder,
+        Task<PaletteSnapshot> snapshotLoad,
+        CancellationToken cancellation,
+        int? timedChange)
+    {
+        long requested = timedChange is null ? 0 : Stopwatch.GetTimestamp();
+        long rankTicks = 0;
+        PaletteSnapshot snapshot;
+        PaletteSection[] sections;
+        try
+        {
+            snapshot = await snapshotLoad.ConfigureAwait(false);
+            cancellation.ThrowIfCancellationRequested();
+            sections = await _lane.Run(
+                () =>
+                {
+                    long started = timedChange is null ? 0 : Stopwatch.GetTimestamp();
+                    PaletteSection[] ranked = _rank(
+                        snapshot.Commands,
+                        query,
+                        snapshot.Recents,
+                        sidebarPinnedOrder);
+                    if (timedChange is not null)
+                    {
+                        rankTicks = Stopwatch.GetTimestamp() - started;
+                    }
+
+                    return ranked;
+                },
+                cancellation).ConfigureAwait(false);
+        }
+        catch (OperationCanceledException)
+        {
+            return;
+        }
+        catch (Exception exception)
+        {
+            // A load or rank that throws publishes nothing: the rows on
+            // screen stay the last query's, and the log names the failure
+            // by type only (W1-RT-01).
+            HostLog.Write(HostDiagnosticEvent.PaletteWorkFailed, exception);
+            return;
+        }
+
+        OnOwnerThread(() => Publish(
+            generation,
+            query,
+            snapshot,
+            sections,
+            timedChange is int change ? (change, requested, rankTicks) : null));
+    }
+
+    /// <summary>
+    /// Runs <paramref name="publish"/> on the thread that owns the palette:
+    /// at once when a synchronous lane finished there, otherwise through the
+    /// owner's synchronization context.
+    /// </summary>
+    private void OnOwnerThread(Action publish)
+    {
+        if (Environment.CurrentManagedThreadId == _ownerThreadId)
+        {
+            publish();
+        }
+        else if (_uiContext is not null)
+        {
+            _uiContext.Post(_ => publish(), null);
+        }
+        else
+        {
+            // A palette built without an owner context has no thread to
+            // publish on; dropping the result is the only safe answer.
+            HostLog.Write(HostDiagnosticEvent.PaletteWorkFailed);
+        }
+    }
+
+    /// <summary>
+    /// Contract P18: one <c>palette_sections</c> result per query change,
+    /// stored, and read from that field by rendering, navigation, and the
+    /// count — published only while it is still the latest request's.
+    /// </summary>
+    /// <remarks>
+    /// Everything that decides what the reader hears is applied here, at
+    /// publication, never at request (R-11): the P7 rule reads the row the
+    /// user is on NOW — they may have moved while the rank ran — and the
+    /// P10 count names the query these rows answer. A superseded
+    /// generation, or a palette that closed meanwhile, publishes nothing.
+    /// </remarks>
+    private void Publish(
+        int generation,
+        string query,
+        PaletteSnapshot snapshot,
+        PaletteSection[] computed,
+        (int QueryChange, long Requested, long RankTicks)? timed)
+    {
+        if (generation != _rankGeneration || !_isOpen)
+        {
+            return;
+        }
+
+        _publishedGeneration = generation;
+        _snapshot = snapshot.Commands;
+        _snapshotLoaded = true;
+        _publishedQuery = query;
+        string? previousId = _selectedId;
+        long availabilityTicks = 0;
+        long building = timed is null ? 0 : Stopwatch.GetTimestamp();
 
         var sections = new List<CommandPaletteSectionViewModel>(computed.Length);
         var rows = new List<CommandPaletteRowViewModel>();
@@ -765,9 +984,11 @@ internal sealed class CommandPaletteViewModel : BindableBase
             {
                 IReadOnlyList<CommandPaletteMatchRun> matchRuns =
                     ToMatchRuns(row.Command.Label, row.LabelMatchSpans);
-                long asked = timed ? Stopwatch.GetTimestamp() : 0;
+                // Dispatcher-affine (the resolver reads live ICommand
+                // state), so it is asked here, on the owning thread.
+                long asked = timed is null ? 0 : Stopwatch.GetTimestamp();
                 string? disabledReason = _source.DisabledReason(row.Command.Id);
-                if (timed)
+                if (timed is not null)
                 {
                     availabilityTicks += Stopwatch.GetTimestamp() - asked;
                 }
@@ -791,20 +1012,15 @@ internal sealed class CommandPaletteViewModel : BindableBase
 
         _sections = sections;
         _rows = [.. rows];
-        LastRecomputeTiming = timed
+        LastRecomputeTiming = timed is (int change, long requested, long rankTicks)
             ? new CommandPaletteRecomputeTiming(
-                _queryChangesSinceOpen,
+                change,
                 _rows.Length,
-                started,
-                ranked - started,
+                requested,
+                rankTicks,
                 availabilityTicks,
-                Stopwatch.GetTimestamp() - ranked - availabilityTicks)
+                Stopwatch.GetTimestamp() - building - availabilityTicks)
             : null;
-        if (_queryChangesSinceOpen <= TimedKeystrokes)
-        {
-            _queryChangesSinceOpen++;
-        }
-
         RaiseDerivedState();
 
         // Contract P7: preserve the selection when its id survived,
@@ -818,14 +1034,57 @@ internal sealed class CommandPaletteViewModel : BindableBase
         SetSelection(nextId);
 
         // Contract P10 (amended): the latest non-empty query speaks once
-        // after a trailing window — every keystroke reopens it, so a typed
-        // query is one count, not a trail queued under Medium=All (D-1).
-        // Suppressed entirely on an empty query.
-        CancelFilterCountWindow();
-        if (Query.Length > 0)
+        // after a trailing window — every keystroke reopened it at
+        // request, so a typed query is one count, not a trail queued under
+        // Medium=All (D-1). Suppressed entirely on an empty query.
+        if (query.Length > 0)
         {
-            ScheduleFilterCount(new A11yEvent.PaletteFilterCount((uint)_rows.Length, Query));
+            ScheduleFilterCount(new A11yEvent.PaletteFilterCount((uint)_rows.Length, query));
         }
+
+        if (_invokeWhenPublished)
+        {
+            _invokeWhenPublished = false;
+            InvokeSelected();
+        }
+    }
+
+    /// <summary>A selection the user makes: it withdraws an Enter still
+    /// waiting for its rows — the user has chosen again.</summary>
+    private void UserSelect(string? id)
+    {
+        _invokeWhenPublished = false;
+        SetSelection(id);
+    }
+
+    /// <summary>Hands a successful invocation's recents transition to the
+    /// lane, behind any load still reading the file.</summary>
+    private void RecordOnLane(string commandId)
+    {
+        IPaletteCommandSource source = _source;
+        _ = _lane.Run(
+            () =>
+            {
+                try
+                {
+                    source.RecordInvocation(commandId);
+                }
+                catch (Exception exception)
+                {
+                    // Recents are a convenience; a failed transition must
+                    // not escape the lane unobserved or reach the user.
+                    HostLog.Write(HostDiagnosticEvent.PaletteWorkFailed, exception);
+                }
+
+                return true;
+            },
+            CancellationToken.None);
+    }
+
+    private void CancelRankRequest()
+    {
+        _rankCancellation?.Cancel();
+        _rankCancellation = null;
     }
 
     /// <summary>The pending filter count's window and its posting, for the
