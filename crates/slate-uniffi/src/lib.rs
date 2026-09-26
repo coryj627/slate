@@ -5674,7 +5674,7 @@ impl From<EmbedUnresolvedReason> for core::EmbedUnresolvedReason {
     }
 }
 
-/// What a resolved embed preview shows (#1278): the resolution's kind and
+/// What a resolved embed card shows (#1278): the resolution's kind and
 /// identifying fields, mirrored from `slate_core::a11y::ResolvedEmbed`.
 /// The host builds it from the resolution it received and hands it back
 /// to core, which words the card title from it — in `A11yEvent::
@@ -5696,6 +5696,9 @@ pub enum ResolvedEmbed {
         target_path: String,
         alt: Option<String>,
     },
+    Base {
+        target_path: String,
+    },
 }
 
 impl From<ResolvedEmbed> for core::a11y::ResolvedEmbed {
@@ -5711,6 +5714,7 @@ impl From<ResolvedEmbed> for core::a11y::ResolvedEmbed {
             },
             ResolvedEmbed::Block { target_path } => Self::Block { target_path },
             ResolvedEmbed::Image { target_path, alt } => Self::Image { target_path, alt },
+            ResolvedEmbed::Base { target_path } => Self::Base { target_path },
         }
     }
 }
@@ -13335,6 +13339,9 @@ mod tests {
             ResolvedEmbed::Image {
                 target_path: "img/c.png".into(),
                 alt: None,
+            },
+            ResolvedEmbed::Base {
+                target_path: "lists/Reading.base".into(),
             },
         ] {
             let direct = core::a11y::resolved_embed_title(&resolved.clone().into());
