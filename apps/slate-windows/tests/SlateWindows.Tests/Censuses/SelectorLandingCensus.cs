@@ -60,6 +60,7 @@ public sealed class SelectorLandingCensus
     [
         ("AccessibleDataGrid.FocusFirstCell: _grid.Focus()", nameof(GridLandingTests.AnEmptyGridKeepsItsArrows)),
         ("MainWindow.TryLand: ShellStatusBar.Focus()", nameof(ShellContainerLandingTests.TheStatusBarKeepsItsArrows)),
+        ("MainWindow.LandOnFilesTree: FilesTree.Focus()", nameof(FilesRegionLandingTests.FromTheFilesLandingEveryArrowStaysInTheRegion)),
     ];
 
     /// <summary>The containers that are their own stop by type, with the

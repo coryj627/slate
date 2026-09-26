@@ -17,8 +17,10 @@ namespace SlateWindows.Tests;
 /// were <c>FilesTree.Focus()</c> — the ring's, the Files boundary's, a
 /// rename's, a mutation's restore, Move To's, the empty editor's last
 /// resort — and all of them now go through
-/// <see cref="MainWindow.LandOnFilesTree"/>: a row, the selected file's else
-/// the first, and the filter field when no row can take the keys. The pane
+/// <see cref="MainWindow.LandOnFilesTree"/>: the selected file's row; with
+/// nothing selected the tree itself, which keeps its arrows (a row would
+/// select itself, and selecting a file opens it); and the filter field when
+/// the tree cannot take the keys. The pane
 /// is the real one — built by the window's own XAML, bound to a sidebar
 /// over a real vault — lifted into a window of its own with a button above
 /// it and one beside it, so an arrow that leaves the region lands
@@ -26,18 +28,24 @@ namespace SlateWindows.Tests;
 /// </summary>
 public sealed class FilesRegionLandingTests
 {
+    /// <summary>With nothing selected the tree itself is the stop: a row
+    /// would select itself as it took the keys, and selecting a file opens
+    /// it — the landing selects nothing and opens nothing.</summary>
     [Fact]
-    public void WithNothingSelectedTheFilesTreeLandsOnItsFirstRow() => RunSta(() =>
+    public void WithNothingSelectedTheFilesTreeItselfIsTheStop() => RunSta(() =>
     {
         using var host = new Host();
         host.Initialize();
-        FileTreeNodeViewModel first = host.Sidebar.RootNodes[0];
+        var opened = new List<string>();
+        host.Sidebar.OpenTargetRequested += (_, request) => opened.Add(request.Path);
         Assert.True(host.Above.Focus());
 
         Assert.True(host.Shell.LandOnFilesTree());
 
-        Assert.Same(first, FocusedNode());
-        host.AssertTreeNeverFocused();
+        Assert.Same(host.Tree, Keyboard.FocusedElement);
+        Assert.Null(host.Sidebar.SelectedNode);
+        Assert.DoesNotContain(host.Sidebar.RootNodes, node => node.IsSelected);
+        Assert.Empty(opened);
     });
 
     [Fact]
@@ -76,9 +84,10 @@ public sealed class FilesRegionLandingTests
         host.AssertTreeNeverFocused();
     });
 
-    /// <summary>The arrow witness for the nine landings: from the landed
-    /// row — and from the filter field, the fallback — each arrow keeps the
-    /// keys in the Files region.</summary>
+    /// <summary>The arrow witness for the nine landings: from the tree with
+    /// nothing selected — its Left and Right stay in its Contained group,
+    /// its Up and Down reach the first row — and from the filter field, the
+    /// fallback, each arrow keeps the keys in the Files region.</summary>
     [Theory]
     [InlineData(Key.Left, false)]
     [InlineData(Key.Right, false)]
@@ -107,7 +116,6 @@ public sealed class FilesRegionLandingTests
         Assert.True(
             host.Pane.IsKeyboardFocusWithin,
             $"{key} took the keys out of the Files region, from {landed} to {Keyboard.FocusedElement}");
-        host.AssertTreeNeverFocused();
     });
 
     private static FileTreeNodeViewModel? FocusedNode() =>

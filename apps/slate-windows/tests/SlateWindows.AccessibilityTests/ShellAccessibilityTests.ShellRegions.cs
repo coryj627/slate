@@ -51,26 +51,7 @@ public sealed partial class ShellAccessibilityTests
             PressKey(VirtualKeyShort.F6);
             AssertEventuallyFocused(WaitForElement(window, "FileMenu", TimeSpan.FromSeconds(10)), "F6 from the status bar did not wrap to the menu bar.");
             PressKey(VirtualKeyShort.F6);
-            // W7-7 PR 4 (#1247, R-5; spec review round 23): the Files landing
-            // is a ROW of the tree - the selected file's, else the first -
-            // never the bare tree, whose Left and Right left the region.
-            Assert.True(
-                SpinWait.SpinUntil(
-                    () =>
-                    {
-                        try
-                        {
-                            return automation.FocusedElement() is { } focused
-                                && focused.Properties.ControlType.ValueOrDefault == ControlType.TreeItem
-                                && IsDescendantOf(focused, tree);
-                        }
-                        catch (System.Runtime.InteropServices.COMException)
-                        {
-                            return false;
-                        }
-                    },
-                    TimeSpan.FromSeconds(10)),
-                $"F6 from the menu bar did not land on a row of Files. {FocusDiagnosis()}");
+            AssertEventuallyFocused(tree, "F6 from the menu bar did not land on Files.");
 
             // Open a note: Files → tab bar → editor → … ; then Shift+F6 back.
             // The tree item's automation name is "{DisplayName}, {kind}"
