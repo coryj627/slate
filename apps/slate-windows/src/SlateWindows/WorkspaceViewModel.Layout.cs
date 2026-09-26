@@ -132,20 +132,24 @@ internal sealed partial class WorkspaceViewModel
 
     /// <summary>W7-7 (R-2, codex PR 2 round 4; spec review round 21): a
     /// Files selection shows its note in the group's ONE transient tab —
-    /// VS Code's preview tab. A note already open in the group, in any
-    /// tab, is simply activated. Otherwise the transient tab takes the note
-    /// in place, or, with none, a transient tab is created. A tab stops
-    /// being transient for good on its first dirty transition (see
-    /// <see cref="WorkspaceTabViewModel.IsTransient"/>), so an edited note
-    /// — saved or undone since, or not — is never replaced, and no other
-    /// tab is ever replaced by a selection: an explicitly opened tab
+    /// VS Code's preview tab. A note already open in the group is simply
+    /// activated, in a PERMANENT tab showing it when there is one; the
+    /// transient tab showing it too (the tab a Duplicate Tab was made
+    /// from, say) is only the fallback, and stays as it is either way
+    /// (spec §3.2 item 2, codex PR 2 round 6). Otherwise the transient tab
+    /// takes the note in place, or, with none, a transient tab is created.
+    /// A tab stops being transient for good on its first dirty transition
+    /// (see <see cref="WorkspaceTabViewModel.IsTransient"/>), so an edited
+    /// note — saved or undone since, or not — is never replaced, and no
+    /// other tab is ever replaced by a selection: an explicitly opened tab
     /// survives arrowing. Focus stays on the row and the modal
     /// dirty-navigation gate never rises.</summary>
     private bool ShowSelectionInTransientTab(WorkspaceItemState item)
     {
         WorkspaceGroupViewModel group = ActiveGroup;
         WorkspaceTabViewModel? open = group.Tabs.FirstOrDefault(
-            tab => ItemsReferToSameTarget(tab.Item, item));
+                tab => !tab.IsTransient && ItemsReferToSameTarget(tab.Item, item))
+            ?? group.Tabs.FirstOrDefault(tab => ItemsReferToSameTarget(tab.Item, item));
         if (open is not null)
         {
             group.ActiveTab = open;

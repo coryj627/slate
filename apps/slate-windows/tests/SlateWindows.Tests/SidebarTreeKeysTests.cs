@@ -468,6 +468,52 @@ public sealed class SidebarTreeKeysTests : IDisposable
         Assert.Single(workspace.ActiveGroup.Tabs, tab => tab.Path == "alpha.md");
     }
 
+    /// <summary>
+    /// R-2 transient tab (spec §3.2 item 2, codex PR 2 round 6): a
+    /// selection prefers a PERMANENT tab showing its note. Arrow onto A —
+    /// the transient tab — then Duplicate Tab, a permanent A beside it,
+    /// then select A again from Files: the permanent duplicate is the
+    /// active tab, the transient A is still there and still transient, and
+    /// no tab was added. With the transient tab made active by hand,
+    /// selecting A again moves to the permanent tab just the same.
+    /// </summary>
+    [Fact]
+    public async Task SelectingANoteWithAPermanentDuplicate_ActivatesThePermanentTab()
+    {
+        (VaultLifecycleViewModel lifecycle, WorkspaceViewModel workspace, FilesSidebarViewModel sidebar) =
+            await OpenAsync("transient-duplicate");
+        using VaultLifecycleViewModel owned = lifecycle;
+        sidebar.SelectedNode = Node(sidebar, "alpha.md");
+        WorkspaceTabViewModel transient = Assert.Single(workspace.ActiveGroup.Tabs);
+        Assert.True(transient.IsTransient);
+
+        workspace.DuplicateTabCommand.Execute(null);
+        Assert.Equal(2, workspace.ActiveGroup.Tabs.Count);
+        WorkspaceTabViewModel permanent = workspace.ActiveGroup.Tabs[1];
+        Assert.NotSame(transient, permanent);
+        Assert.Equal("alpha.md", permanent.Path);
+        Assert.False(permanent.IsTransient);
+
+        // Docs, a folder without a note, moves the selection off alpha and
+        // opens nothing, so the next selection of alpha is a new one.
+        sidebar.SelectedNode = Node(sidebar, "Docs");
+        sidebar.SelectedNode = Node(sidebar, "alpha.md");
+        AssertThePermanentTabIsActive();
+
+        workspace.ActiveGroup.ActiveTab = transient;
+        sidebar.SelectedNode = Node(sidebar, "Docs");
+        sidebar.SelectedNode = Node(sidebar, "alpha.md");
+        AssertThePermanentTabIsActive();
+
+        void AssertThePermanentTabIsActive()
+        {
+            Assert.Same(permanent, workspace.ActiveGroup.ActiveTab);
+            Assert.Equal(new[] { transient, permanent }, workspace.ActiveGroup.Tabs);
+            Assert.True(transient.IsTransient);
+            Assert.Equal("alpha.md", transient.Path);
+        }
+    }
+
     private async Task<(VaultLifecycleViewModel Lifecycle, WorkspaceViewModel Workspace, FilesSidebarViewModel Sidebar)>
         OpenAsync(string label)
     {
