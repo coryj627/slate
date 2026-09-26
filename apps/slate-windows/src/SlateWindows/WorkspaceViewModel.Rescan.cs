@@ -206,14 +206,18 @@ internal sealed partial class WorkspaceViewModel
     }
 
     /// <summary>The graph dependent for a rescan page (round 29): the
-    /// probes <see cref="NotifyGraphOfVaultChange"/> sends for events,
-    /// awaited to their publications.</summary>
+    /// SAME probes a Slate-owned event sends — through
+    /// <see cref="NotifyGraphOfVaultChange"/>, the probes' one owner
+    /// (rule C) — then awaited to their publications: each document's
+    /// fixed-point drain and owner-context barrier covers the generation
+    /// read and any reload it issued.</summary>
     private Task NotifyGraphOfRescanAsync()
     {
-        var probes = new List<Task> { Connections.ProbeAsync() };
-        if (_graphDocument is { IsRetired: false } document && GraphTabIsVisible())
+        NotifyGraphOfVaultChange();
+        var probes = new List<Task> { Connections.WhenPublishedAsync() };
+        if (_graphDocument is { IsRetired: false } document)
         {
-            probes.Add(document.ProbeAsync());
+            probes.Add(document.WhenPublishedAsync());
         }
 
         return Task.WhenAll(probes);

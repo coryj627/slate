@@ -1379,19 +1379,6 @@ internal sealed class CanvasDocumentViewModel : PanelWorkScheduler
 
     // --- Load -----------------------------------------------------------
 
-    /// <summary>Open (or reopen) the canvas and publish its
-    /// projections. The full-reload shape — close, open, outline,
-    /// table, scene — the mac <c>load</c> twin. A reload IS an open, so
-    /// the once-per-open degraded announcement re-arms here
-    /// (contract A4).</summary>
-    /// <remarks>
-    /// Task T3: U4's operation. The request publishes Loading and
-    /// un-names the old lease in one swap, on this thread; the worker
-    /// closes that lease, opens, builds and delivers on its own; and
-    /// the projection of whatever the slot then holds is posted back
-    /// here. A retired document requests nothing — the publication says
-    /// so, and the scheduler's own refusal is the second wall.
-    /// </remarks>
     /// <summary>
     /// W7-7 PR 7 (#1252, round 28): <see cref="Load"/> as a Task that
     /// completes when the reload's result is APPLIED on the dispatcher —
@@ -1428,6 +1415,19 @@ internal sealed class CanvasDocumentViewModel : PanelWorkScheduler
         return applied.Task;
     }
 
+    /// <summary>Open (or reopen) the canvas and publish its
+    /// projections. The full-reload shape — close, open, outline,
+    /// table, scene — the mac <c>load</c> twin. A reload IS an open, so
+    /// the once-per-open degraded announcement re-arms here
+    /// (contract A4).</summary>
+    /// <remarks>
+    /// Task T3: U4's operation. The request publishes Loading and
+    /// un-names the old lease in one swap, on this thread; the worker
+    /// closes that lease, opens, builds and delivers on its own; and
+    /// the projection of whatever the slot then holds is posted back
+    /// here. A retired document requests nothing — the publication says
+    /// so, and the scheduler's own refusal is the second wall.
+    /// </remarks>
     public void Load()
     {
         if (_pipeline.Request() is not { } request)

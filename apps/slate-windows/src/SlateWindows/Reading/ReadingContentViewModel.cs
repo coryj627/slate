@@ -874,18 +874,6 @@ internal sealed class ReadingContentViewModel : BindableBase, IDisposable
     }
 
     /// <summary>
-    /// W3-5 round 1 [high]: a TARGET-note save after publication must
-    /// re-project the cards built from it. The vault event stream
-    /// (session write paths; external edits surface at the next scan)
-    /// reaches every open reading model through the workspace, and
-    /// this filter keeps it cheap: refresh only when the changed path
-    /// is one the published cards were resolved from, or when a
-    /// create/rename might resolve a card that is currently
-    /// unresolved or degraded. Debounced (saves arrive in bursts);
-    /// the artifact digest makes a no-op refresh a memo hit. Hidden
-    /// models do nothing — a rebind always re-projects (W3-2 rule).
-    /// </summary>
-    /// <summary>
     /// W7-7 PR 7 (#1252, round 29): <see cref="NotifyVaultFileChanged"/> for
     /// a rescan, awaitable. A change that touches this model's published
     /// dependencies re-projects NOW (no debounce) and completes when the
@@ -951,6 +939,18 @@ internal sealed class ReadingContentViewModel : BindableBase, IDisposable
         // add/remove rows. Markdown is core's classification (round 27).
         || (_publishedHasBaseEmbeds && CoreDocumentClassification.IsMarkdown(path));
 
+    /// <summary>
+    /// W3-5 round 1 [high]: a TARGET-note save after publication must
+    /// re-project the cards built from it. The vault event stream
+    /// (session write paths; external edits surface at the next scan)
+    /// reaches every open reading model through the workspace, and
+    /// this filter keeps it cheap: refresh only when the changed path
+    /// is one the published cards were resolved from, or when a
+    /// create/rename might resolve a card that is currently
+    /// unresolved or degraded. Debounced (saves arrive in bursts);
+    /// the artifact digest makes a no-op refresh a memo hit. Hidden
+    /// models do nothing — a rebind always re-projects (W3-2 rule).
+    /// </summary>
     public void NotifyVaultFileChanged(FileChangeKind kind, string path)
     {
         // No same-path exclusion (round 2 [medium]): a self-embed or

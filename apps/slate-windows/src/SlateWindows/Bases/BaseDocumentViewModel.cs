@@ -725,10 +725,6 @@ internal sealed class BaseDocumentViewModel : PanelWorkScheduler
     /// every setter feeding a computed property must notify it).</summary>
     private void NotifyStateChanged() => OnPropertyChanged(nameof(ShowEmptyState));
 
-    /// <summary>Open (or reopen) the source and execute the active
-    /// view. The full-reload shape: close, open, views, execute — the
-    /// mac `load` twin. Never announces by itself (INV-4); the
-    /// explicit-refresh caller announces BaseRefreshed.</summary>
     /// <summary>
     /// W7-7 PR 7 (#1252, round 28): <see cref="Load"/> — reopen the
     /// source and re-run the active view on the document's worker — as a
@@ -763,6 +759,10 @@ internal sealed class BaseDocumentViewModel : PanelWorkScheduler
         return published.Task;
     }
 
+    /// <summary>Open (or reopen) the source and execute the active
+    /// view. The full-reload shape: close, open, views, execute — the
+    /// mac `load` twin. Never announces by itself (INV-4); the
+    /// explicit-refresh caller announces BaseRefreshed.</summary>
     public void Load()
     {
         if (IsShutDown)
@@ -840,15 +840,6 @@ internal sealed class BaseDocumentViewModel : PanelWorkScheduler
     private int ClampedViewIndex(int viewCount) =>
         _activeViewIndex < viewCount ? _activeViewIndex : 0;
 
-    /// <summary>Re-run the active view on the CURRENT handle — the
-    /// post-write refresh entry (contract C9). Keeps previous rows on
-    /// failure. Refused while LOADING (codex round 1): scheduler
-    /// bodies are unordered, so a refresh generation-bump could
-    /// overtake a queued LoadBody — the load then bailed before
-    /// opening a handle while the execute bailed on the null handle,
-    /// stranding the document in Loading forever. The in-flight load
-    /// executes against current data anyway, so the refresh is
-    /// redundant there (the RefreshForFunnel guard's precedent).</summary>
     /// <summary>W7-7 PR 7 (#1252, round 29): <see cref="Refresh"/> as a
     /// Task that completes when the re-run's result publishes (an
     /// in-flight load's, when one is running), whatever it is; a shut-down
@@ -879,6 +870,15 @@ internal sealed class BaseDocumentViewModel : PanelWorkScheduler
         return published.Task;
     }
 
+    /// <summary>Re-run the active view on the CURRENT handle — the
+    /// post-write refresh entry (contract C9). Keeps previous rows on
+    /// failure. Refused while LOADING (codex round 1): scheduler
+    /// bodies are unordered, so a refresh generation-bump could
+    /// overtake a queued LoadBody — the load then bailed before
+    /// opening a handle while the execute bailed on the null handle,
+    /// stranding the document in Loading forever. The in-flight load
+    /// executes against current data anyway, so the refresh is
+    /// redundant there (the RefreshForFunnel guard's precedent).</summary>
     public void Refresh()
     {
         if (IsShutDown || State == BaseLoadState.Loading)
