@@ -1120,6 +1120,7 @@ public sealed class SidebarTreeKeysTests : IDisposable
         /// preview handler sees it as that element's key.</summary>
         public bool Press(UIElement target, Key key)
         {
+            AwaitNoHeldModifier();
             var args = new KeyEventArgs(
                 Keyboard.PrimaryDevice,
                 PresentationSource.FromVisual(target)!,
@@ -1139,6 +1140,7 @@ public sealed class SidebarTreeKeysTests : IDisposable
         /// own key bindings (a text box's Delete).</summary>
         public bool PressThrough(UIElement target, Key key)
         {
+            AwaitNoHeldModifier();
             PresentationSource source = PresentationSource.FromVisual(target)!;
             var preview = new KeyEventArgs(Keyboard.PrimaryDevice, source, Environment.TickCount, key)
             {
@@ -1159,6 +1161,20 @@ public sealed class SidebarTreeKeysTests : IDisposable
             PumpedDispatcher.Drain();
             return handled;
         }
+
+        /// <summary>These facts press unmodified keys, and WPF reads the
+        /// modifiers off the real keyboard (<c>Keyboard.Modifiers</c>, the
+        /// thread's key state): a modifier held on a shared desktop — someone
+        /// typing, another run's input landing in this activated window —
+        /// turns the key into a chord no route claims. A brief press is
+        /// waited out; one still held fails here, by name, instead of as an
+        /// unhandled key.</summary>
+        private static void AwaitNoHeldModifier() =>
+            Assert.True(
+                PumpedDispatcher.PumpUntil(
+                    () => Keyboard.Modifiers == ModifierKeys.None,
+                    TimeSpan.FromSeconds(5)),
+                $"A real modifier key is held on this desktop ({Keyboard.Modifiers}); the key facts press unmodified keys.");
 
         public void Dispose()
         {
