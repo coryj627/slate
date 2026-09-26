@@ -225,7 +225,8 @@ public sealed class ItemContainerNameCensus
                 typeof(BacklinkRowViewModel), nameof(BacklinkRowViewModel.AutomationName),
                 nameof(BacklinkRowViewModel.SourcePath), "backlink"),
             ["PanelOutgoingLinksList"] = Sibling(
-                typeof(OutgoingLinkRowViewModel), nameof(OutgoingLinkRowViewModel.AutomationName), null, "link"),
+                typeof(OutgoingLinkRowViewModel), nameof(OutgoingLinkRowViewModel.AutomationName),
+                nameof(OutgoingLinkRowViewModel.Badge), "link"),
             ["PanelOutlineList"] = Sibling(
                 typeof(OutlineRowViewModel), nameof(OutlineRowViewModel.AutomationName), null, "heading"),
             ["PanelEmbedsList"] = new ContainerNaming.Layout(
