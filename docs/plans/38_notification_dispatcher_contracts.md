@@ -26,11 +26,11 @@ authored shell code calls RaiseNotificationEvent, which WPF gates on a
 listener map that only a UIA advise fills. MainWindow's dispatcher is the
 window's only one. A line is raised only when readiness holds — a
 listening client (ClientsAreListening), a connected provider, and either
-the Notification advise in that map or the provider connected for 3 s
-without it, all asked on every check, in every phase — and is otherwise
-queued, the queue keeping the last 16. A raise before the advise is
-delivered only sometimes, so a provider that connects first holds the
-queue for the advise; a client that never advises hears it when the hold
+the Notification advise in that map or the client and provider present
+together for 3 s without it, all asked on every check, in every phase —
+and is otherwise queued, the queue keeping the last 16. A raise before the
+advise is delivered only sometimes, so a pair present before the advise
+holds the queue for it; a client that never advises hears it when the hold
 runs out, and each drain logs which released it. While
 lines are queued and readiness is false a 250 ms poll on the UI thread
 checks again (the only wake-up; it stops when the queue empties), and the
@@ -42,8 +42,9 @@ once: Unadvised, then Done when readiness is first observed, or Expired
 when 30 s pass after the window's first frame without it — which is only
 the launch lines, posted by the first frame, reaching their own deadline.
 Neither raises without readiness: a client that stops listening or a
-provider lost after Done queues the line again, and a provider that
-connects afresh is held afresh. AnnouncementSeamCensus
+provider lost after Done queues the line again, and a client or provider
+that returns is held afresh, so a reader restarted while the peer stays
+connected waits for its own advise. AnnouncementSeamCensus
 pins the raise, the readiness inputs, the one construction and the
 forbidden gated call.
 

@@ -475,10 +475,11 @@ public sealed class AccessibilityNotificationDispatcherTests
     });
 
     /// <summary>
-    /// OD-7, the hybrid (d): a hold runs from the provider's latest connection
-    /// — one lost before its three seconds and found again starts afresh — and
-    /// a hold that runs out while a client listens delivers, the diagnostic
-    /// recording <c>advise=absent, drained=timeout</c>.
+    /// OD-7, the hybrid (d): a hold runs from the latest moment a listening
+    /// client and a connected provider are there together — a provider lost
+    /// before its three seconds and found again starts afresh — and a hold
+    /// that runs out while a client listens delivers, the diagnostic recording
+    /// <c>advise=absent, drained=timeout</c>.
     /// </summary>
     [Fact]
     public void AHoldThatRunsOutWhileAClientListensDeliversAndSaysSo() => RunSta(() =>
@@ -505,6 +506,58 @@ public sealed class AccessibilityNotificationDispatcherTests
         TimerHarness.PumpFor(TimeSpan.FromMilliseconds(750));
         Assert.Equal(["Vault opened."], launch.Raised);
         Assert.Equal(["lines=1, droppedOldest=0, at=6500ms, advise=absent, drained=timeout"], launch.Drains);
+    });
+
+    /// <summary>
+    /// OD-7, the hybrid (e), codex PR 1 round 3: a reader restarted while the
+    /// peer stays connected — NVDA quit and started again — does not inherit
+    /// the old reader's elapsed hold. The hold runs from the first check where
+    /// a listening client and a connected provider are there together, and
+    /// either one's absence resets it, so with the provider connected long
+    /// before, the new client's lines wait for its own advise, or for three
+    /// seconds from its own arrival without one. Production's own timer,
+    /// pumped; the fact never calls the check.
+    /// </summary>
+    [Fact]
+    public void ARestartedReaderWaitsForItsOwnAdviseNotTheOldHold() => RunSta(() =>
+    {
+        var launch = new TimerHarness { Listening = false, Advised = false };
+        launch.Post("Vault opened.");
+        launch.Now = TimeSpan.FromSeconds(10);
+        launch.PumpTicks(2);
+        launch.Listening = true;
+        launch.PumpTicks(2);
+        launch.Now = TimeSpan.FromSeconds(11);
+        launch.PumpTicks(2);
+        Assert.Empty(launch.Raised);
+
+        Task advise = TimerHarness.Later(() => launch.Advised = true);
+        Assert.True(TimerHarness.PumpUntil(() => launch.Raised.Count >= 1), "no tick drained the line once the new reader's advise landed");
+        advise.GetAwaiter().GetResult();
+        Assert.Equal(["Vault opened."], launch.Raised);
+
+        launch.Listening = false;
+        launch.Advised = false;
+        launch.Now = TimeSpan.FromSeconds(15);
+        launch.Post("Right pane hidden.");
+        launch.Now = TimeSpan.FromSeconds(20);
+        launch.PumpTicks(2);
+        launch.Listening = true;
+        launch.PumpTicks(2);
+        launch.Now = TimeSpan.FromMilliseconds(22999);
+        launch.PumpTicks(2);
+        Assert.Equal(["Vault opened."], launch.Raised);
+
+        launch.Now = TimeSpan.FromSeconds(23);
+        Assert.True(TimerHarness.PumpUntil(() => launch.Raised.Count >= 2), "the restarted reader's hold never ran out");
+        TimerHarness.PumpFor(TimeSpan.FromMilliseconds(750));
+        Assert.Equal(["Vault opened.", "Right pane hidden."], launch.Raised);
+        Assert.Equal(
+            [
+                "lines=1, droppedOldest=0, at=11000ms, advise=present, drained=advise",
+                "lines=1, droppedOldest=0, at=23000ms, advise=absent, drained=timeout",
+            ],
+            launch.Drains);
     });
 
     /// <summary>

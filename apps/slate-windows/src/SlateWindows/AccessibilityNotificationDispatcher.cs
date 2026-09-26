@@ -27,11 +27,11 @@ namespace SlateWindows;
 /// <para>
 /// OD-7 (2026-09-24), readiness: ONE predicate in every phase — a listening
 /// client, a connected status provider, and either the Notification advise
-/// in WPF's map or <see cref="AdviseHold"/> of that provider being connected
-/// without it. A raise into a process UIA has not yet advised is delivered
-/// only sometimes (7 of 7 in one measurement, 0 of 6 in another), so once
-/// the provider connects the queue waits for the advise; a client that never
-/// advises still hears the lines when the hold runs out. A line is raised
+/// in WPF's map or <see cref="AdviseHold"/> of that client and provider
+/// present together without it. A raise into a process UIA has not yet
+/// advised is delivered only sometimes (7 of 7 in one measurement, 0 of 6 in
+/// another), so once both are there the queue waits for the advise; a client
+/// that never advises still hears the lines when the hold runs out. A line is raised
 /// only when readiness holds; otherwise it is QUEUED, never raised, and a
 /// queued line is raised only by the drain, so no line is raised twice. The
 /// queue keeps the last <see cref="LaunchQueueCapacity"/> lines (the launch
@@ -50,7 +50,8 @@ namespace SlateWindows;
 /// reaching their own deadline; a line posted at 29 s survives until 59 s.
 /// Both are final, and neither raises without readiness: a client that
 /// stops listening or a provider lost after Done queues the line again, the
-/// poll restarts, and a provider that connects afresh is held afresh.
+/// poll restarts, and a client or provider that returns is held afresh — a
+/// reader restarted while the peer stays connected waits for its own advise.
 /// Nothing is composed: the drain raises core's rendered tuples.
 /// </para>
 /// </remarks>
@@ -79,11 +80,11 @@ internal sealed class AccessibilityNotificationDispatcher
     /// the launch phase lasts, its lines being posted by then.</summary>
     internal static readonly TimeSpan LaunchWindow = TimeSpan.FromSeconds(30);
 
-    /// <summary>OD-7, the hybrid: how long a connected status provider waits
-    /// for UIA's advise before the queue drains without it (a client that
-    /// never advises the process). Measured on the same clock as the launch
-    /// window, so a provider connected before the first frame waits at least
-    /// this long after it.</summary>
+    /// <summary>OD-7, the hybrid: how long a listening client and a connected
+    /// status provider, present together, wait for UIA's advise before the
+    /// queue drains without it (a client that never advises the process).
+    /// Measured on the same clock as the launch window, so a pair present
+    /// before the first frame waits at least this long after it.</summary>
     internal static readonly TimeSpan AdviseHold = TimeSpan.FromSeconds(3);
 
     private const string ActivityId = "slate-accessibility-announcement";
@@ -112,10 +113,12 @@ internal sealed class AccessibilityNotificationDispatcher
     // before the first.
     private int _recordedProviderState = -1;
 
-    // When the checks first saw the status provider connected, on the launch
-    // clock; null while it is not. A provider lost and found again starts a
-    // fresh hold.
-    private TimeSpan? _connectedSince;
+    // When the checks first saw a listening client and a connected status
+    // provider together, on the launch clock; null while either is absent. A
+    // client or provider that goes and returns starts a fresh hold (codex PR
+    // 1 round 3: a reader restarted while the peer stays connected must wait
+    // for its own advise, not inherit the old reader's elapsed hold).
+    private TimeSpan? _pairedSince;
 
     public AccessibilityNotificationDispatcher(FrameworkElement source)
         : this(
@@ -225,7 +228,7 @@ internal sealed class AccessibilityNotificationDispatcher
     /// One check (every post, and every tick of the poll): the ONE readiness
     /// predicate, the same in every phase — R-1's listening client (UIA's own
     /// answer), a connected status provider, and the Notification advise in
-    /// WPF's map or the provider's <see cref="AdviseHold"/> run out, each
+    /// WPF's map or the pair's <see cref="AdviseHold"/> run out, each
     /// asked every time and never short-circuited (codex round 2). Ready, the
     /// queue drains once, in order, and then the posted line is raised.
     /// Unready, the posted line is queued and nothing is raised. Lines past
@@ -246,8 +249,8 @@ internal sealed class AccessibilityNotificationDispatcher
 
         TimeSpan now = _launch.Elapsed();
         DropExpiredLines(now);
-        _connectedSince = connected ? _connectedSince ?? now : null;
-        bool heldLongEnough = _connectedSince is { } since && now - since >= AdviseHold;
+        _pairedSince = clientsListening && connected ? _pairedSince ?? now : null;
+        bool heldLongEnough = _pairedSince is { } since && now - since >= AdviseHold;
         bool ready = clientsListening && connected && (advised || heldLongEnough);
         if (_phase == LaunchPhase.Unadvised)
         {
