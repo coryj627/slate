@@ -443,11 +443,69 @@ public sealed class CanvasContextMenuTests
         persistent.IsOpen = false;
         Pump();
 
-        // No seat: no menu — and still never the tab's.
+        // No seat: no menu — and still never the tab's — and the press SAYS
+        // so (contract 34 C3/C4/E8a, #1283): the existing Nothing selected.
+        // arm, the sentence the board's Right and Left speak for the same
+        // seatless state, where the press used to be swallowed in silence.
         document.SeatSelectionSilently(null);
+        document.AnnouncerForTests.FlushForTests();
+        vault.Announced.Clear();
         PressApplicationsKey(board);
         Assert.False(tabMenu.IsOpen, "with no seat the request climbed to the ancestor's menu.");
         Assert.False(persistent.IsOpen, "with no seat the board opened a menu for nothing.");
+        document.AnnouncerForTests.FlushForTests();
+        string nothingSelected = CanvasAnnouncer.RenderLabel(
+            new CanvasA11yEvent.CanvasStatus(new CanvasStatusNote.NothingSelected()));
+        Assert.True(
+            vault.Announced.SequenceEqual([nothingSelected]),
+            $"with no seat the menu key said [{string.Join(" | ", vault.Announced)}], not "
+            + $"\"{nothingSelected}\" alone: a keypress that does nothing must say so (C3, C4, #1283).");
+    });
+
+    /// <summary>
+    /// #1283, contract 34 C3: a keyboard menu request on an outline with NO
+    /// rows opens no menu and never the tab's — and it answers, with the
+    /// sentence the tree's own arrows speak for the same empty tree: the
+    /// empty canvas's on a canvas with no cards, "No cards match the
+    /// filter." under a needle that keeps none.
+    /// </summary>
+    [Fact]
+    public void AKeyboardRequestOnAnEmptyOutlineSaysWhyThereIsNoMenu() => RunSta(() =>
+    {
+        using var vault = new BoardVault();
+        foreach ((string path, string? needle, CanvasStatusNote owed) in
+            new (string, string?, CanvasStatusNote)[]
+            {
+                ("empty.canvas", null, new CanvasStatusNote.Empty()),
+                ("board.canvas", "no card says this", new CanvasStatusNote.NoCardsMatchFilter()),
+            })
+        {
+            string leg = needle is null ? "an empty canvas" : "a needle that keeps no card";
+            CanvasDocumentViewModel document = vault.Open(path);
+            var surface = new CanvasSurfaceView { Model = document };
+            ContextMenu tabMenu = TabMenuStandIn();
+            using HostedWindow host = Host(new Border { ContextMenu = tabMenu, Child = surface });
+            host.UpdateLayout();
+            if (needle is not null)
+            {
+                document.FilterText = needle;
+                host.UpdateLayout();
+            }
+            CanvasOutlineView outline = surface.OutlineForTests;
+            PumpUntil(() => outline.RootsForTests.Count == 0, $"premise ({leg}): the outline still shows rows.");
+            Assert.True(outline.FocusTree(), $"premise ({leg}): the empty tree refused keyboard focus.");
+            document.AnnouncerForTests.FlushForTests();
+            vault.Announced.Clear();
+
+            PressApplicationsKey(outline.TreeForTests);
+            Assert.False(tabMenu.IsOpen, $"{leg}: the request climbed to the ANCESTOR's menu (F13's class).");
+            document.AnnouncerForTests.FlushForTests();
+            string sentence = CanvasAnnouncer.RenderLabel(new CanvasA11yEvent.CanvasStatus(owed));
+            Assert.True(
+                vault.Announced.SequenceEqual([sentence]),
+                $"{leg}: the menu key said [{string.Join(" | ", vault.Announced)}], not \"{sentence}\" "
+                + "alone — the empty tree swallowed the press (C3, #1283).");
+        }
     });
 
     /// <summary>
@@ -800,16 +858,17 @@ public sealed class CanvasContextMenuTests
         {
             _fixture = FixtureVault.Create(1, "canvas-context-menu");
             File.WriteAllText(Path.Combine(_fixture.Root, "board.canvas"), Board);
+            File.WriteAllText(Path.Combine(_fixture.Root, "empty.canvas"), """{"nodes":[],"edges":[]}""");
             _session = VaultSession.OpenFilesystem(_fixture.Root);
             using var cancel = new CancelToken();
             _session.ScanInitial(cancel);
         }
 
-        internal CanvasDocumentViewModel Open()
+        internal CanvasDocumentViewModel Open(string path = "board.canvas")
         {
             var document = new CanvasDocumentViewModel(
                 _session,
-                "board.canvas",
+                path,
                 new CanvasAnnouncer(line => Announced.Add(line.Text), TimeSpan.FromMinutes(1)),
                 synchronousForTests: true,
                 verbosity: () => CanvasVerbosity.Standard);
