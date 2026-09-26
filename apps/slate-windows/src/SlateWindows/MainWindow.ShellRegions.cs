@@ -156,17 +156,14 @@ public partial class MainWindow : IShellRegionHost
                 // focus in it: an applied note — the empty one included — lands
                 // now. One whose projection is still arriving HOLDS the landing:
                 // no line until focus arrives, and no refusal — the ring would
-                // move on and the held landing then pull focus back.
+                // move on and the held landing then pull focus back. The hold is
+                // read FIRST: focus inside a surface that is not ready is not
+                // the landing (the held one speaks when the content settles).
                 if (editorTab.IsReadingMode)
                 {
                     if (ReadingSurfaceOf(editorTab) is not { } reading)
                     {
                         return ShellRegionLanding.Refused;
-                    }
-
-                    if (reading.IsKeyboardFocusWithin)
-                    {
-                        return ShellRegionLanding.Landed;
                     }
 
                     if (reading.IsFocusLandingPending)
@@ -175,7 +172,7 @@ public partial class MainWindow : IShellRegionHost
                         return ShellRegionLanding.Pending;
                     }
 
-                    return ShellRegionLanding.Refused;
+                    return reading.IsKeyboardFocusWithin ? ShellRegionLanding.Landed : ShellRegionLanding.Refused;
                 }
 
                 // The text editor is synchronous, so its end state is judged like

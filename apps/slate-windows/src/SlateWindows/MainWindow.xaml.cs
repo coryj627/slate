@@ -1727,10 +1727,16 @@ public partial class MainWindow : Window
         // speaks announceWhenHeldLandingArrives (the F6 ring's editor line)
         // only once focus is really there, and one it cannot complete (focus
         // refused, the load failed, the model torn down first) calls
-        // fallThroughWhenHeldLandingRefused (the ring moves on).
+        // fallThroughWhenHeldLandingRefused (the ring moves on). A reader
+        // already inside a surface whose content is not ready yet (an in-place
+        // navigation swapped the note under them) waits on this tab's item,
+        // so the landing is an arrival NVDA speaks on the applied content.
         if (activeTab is { IsReadingMode: true }
             && ReadingSurfaceOf(activeTab) is { IsVisible: true, IsEnabled: true } surface
-            && surface.RequestFocusLanding(announceWhenHeldLandingArrives, fallThroughWhenHeldLandingRefused))
+            && surface.RequestFocusLanding(
+                announceWhenHeldLandingArrives,
+                fallThroughWhenHeldLandingRefused,
+                parkWhileUnready: () => FocusActiveTabItem(group)))
         {
             return;
         }
@@ -1766,6 +1772,22 @@ public partial class MainWindow : Window
         {
             FilesTree.Focus();
         }
+    }
+
+    /// <summary>The tab bar's stop for <paramref name="group"/>'s active tab
+    /// (R-10: where a reader inside a reading surface waits while the content
+    /// replacing what they were reading arrives).</summary>
+    private bool FocusActiveTabItem(WorkspaceGroupViewModel group)
+    {
+        TabControl? tabs = FindVisualDescendants<TabControl>(ContentPaneBorder)
+            .FirstOrDefault(candidate => ReferenceEquals(candidate.DataContext, group));
+        if (tabs is null || group.ActiveTab is not { } activeTab)
+        {
+            return false;
+        }
+
+        tabs.UpdateLayout();
+        return tabs.ItemContainerGenerator.ContainerFromItem(activeTab) is TabItem item && item.Focus();
     }
 
     /// <summary>The reading surface showing <paramref name="tab"/> (R-10):
