@@ -1968,15 +1968,21 @@ impl VaultSession {
     }
 
     /// Resolve a transient editor preview under core-owned cumulative bounds.
+    ///
+    /// `cancel` (#1279, locked decision 05 §4) is the preview request's:
+    /// the host cancels it when the preview is closed, superseded,
+    /// invalidated or disposed, and the walk stops at its next node with
+    /// `VaultError::Cancelled`.
     pub fn resolve_embed_preview(
         &self,
         host_path: String,
         target: String,
         alt: Option<String>,
+        cancel: Arc<CancelToken>,
     ) -> Result<EmbedPreviewResolution, VaultError> {
         Ok(self
             .inner
-            .resolve_embed_preview(&host_path, &target, alt)?
+            .resolve_embed_preview(&host_path, &target, alt, &cancel.inner)?
             .into())
     }
 

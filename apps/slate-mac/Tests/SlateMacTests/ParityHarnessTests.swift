@@ -778,7 +778,7 @@ final class ParityHarnessTests: XCTestCase {
         for (i, key) in embedKeys.enumerated() {
             if i > 0 { j.raw(",") }
             let preview = try session.resolveEmbedPreview(
-                hostPath: relPath, target: key, alt: nil)
+                hostPath: relPath, target: key, alt: nil, cancel: CancelToken())
             j.raw("{\"key\":").str(key)
                 .raw(",\"truncated\":").raw(preview.truncated ? "true" : "false")
                 .raw(",\"resolution\":")
