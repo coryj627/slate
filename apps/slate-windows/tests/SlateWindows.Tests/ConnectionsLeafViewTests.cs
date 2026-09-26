@@ -744,9 +744,8 @@ public sealed class ConnectionsLeafViewTests
                 Assert.True(show.IsEnabled);
                 Assert.Equal((string)show.Header, AutomationProperties.GetHelpText(show));
                 // The ROW's hint is its activation's, never the action's reason
-                // (B-9): the model's hint, T16 then the new-tab gesture (W7-7 R-13).
-                Assert.Equal(host.Leaf.RowHint(note.Row!), note.Hint);
-                Assert.StartsWith(ConnectionsPhrase.NoteHint + " ", note.Hint, StringComparison.Ordinal);
+                // (B-9): the inventory's T16a (W7-7 R-13; B-16 as amended).
+                Assert.Equal(ConnectionsLabelInventory.NoteRowHint(), note.Hint);
                 MenuItem open = menu.Items.Cast<MenuItem>().First();
                 Assert.True(open.IsEnabled);
             }
