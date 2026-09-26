@@ -265,6 +265,11 @@ pub enum FileFilter {
     OpenableDocuments,
 }
 
+/// The Markdown extensions core's index marks `is_markdown`, lowercase
+/// and without the dot. Exported so hosts classify Markdown exactly as
+/// core does (W7-7 PR 7, round 27: the Bases dependents).
+pub const MARKDOWN_DOCUMENT_EXTENSIONS: &[&str] = &["md", "markdown", "mdown", "mkd"];
+
 /// The extensions of the openable-document set
 /// ([`FileFilter::OpenableDocuments`]: the four Markdown extensions
 /// `is_markdown` recognizes plus `.canvas` and `.base`), lowercase and
@@ -10161,10 +10166,9 @@ fn index_file(
         .extension()
         .and_then(|s| s.to_str())
         .map(|s| s.to_ascii_lowercase());
-    let is_markdown = matches!(
-        extension.as_deref(),
-        Some("md") | Some("markdown") | Some("mdown") | Some("mkd")
-    );
+    let is_markdown = extension
+        .as_deref()
+        .is_some_and(|extension| MARKDOWN_DOCUMENT_EXTENSIONS.contains(&extension));
     let is_base = extension.as_deref() == Some("base");
 
     // Fast path: if the indexed row's (mtime_ms, size_bytes, ctime_ms)
@@ -11884,10 +11888,9 @@ fn classify_path(path: &str) -> (String, Option<String>, bool) {
         .extension()
         .and_then(|s| s.to_str())
         .map(|s| s.to_ascii_lowercase());
-    let is_markdown = matches!(
-        extension.as_deref(),
-        Some("md") | Some("markdown") | Some("mdown") | Some("mkd")
-    );
+    let is_markdown = extension
+        .as_deref()
+        .is_some_and(|extension| MARKDOWN_DOCUMENT_EXTENSIONS.contains(&extension));
     (name, extension, is_markdown)
 }
 

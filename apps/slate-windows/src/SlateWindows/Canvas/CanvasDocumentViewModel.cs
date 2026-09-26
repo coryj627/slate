@@ -1392,6 +1392,47 @@ internal sealed class CanvasDocumentViewModel : PanelWorkScheduler
     /// here. A retired document requests nothing — the publication says
     /// so, and the scheduler's own refusal is the second wall.
     /// </remarks>
+    /// <summary>
+    /// W7-7 PR 7 (#1252, round 28): <see cref="Load"/> as a Task that
+    /// completes when the reload's result is APPLIED on the dispatcher —
+    /// its read and build run on the document's worker as always — and
+    /// faults when the applied result is a failure. A retired document
+    /// completes at once. A rescan awaits it before it reports the page
+    /// applied.
+    /// </summary>
+    internal Task ReloadAsync()
+    {
+        var applied = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
+        void OnApplied(CanvasPublication publication)
+        {
+            if (publication.LoadState == CanvasLoadState.Loading)
+            {
+                return;
+            }
+
+            PublicationApplied -= OnApplied;
+            if (publication.LoadState is CanvasLoadState.Ready)
+            {
+                applied.TrySetResult();
+            }
+            else
+            {
+                applied.TrySetException(new InvalidOperationException(
+                    StateMessage ?? $"The canvas reload ended {publication.LoadState}."));
+            }
+        }
+
+        PublicationApplied += OnApplied;
+        Load();
+        if (_slot.Current.Retired)
+        {
+            PublicationApplied -= OnApplied;
+            applied.TrySetResult();
+        }
+
+        return applied.Task;
+    }
+
     public void Load()
     {
         if (_pipeline.Request() is not { } request)

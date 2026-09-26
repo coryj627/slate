@@ -342,12 +342,12 @@ internal sealed partial class VaultLifecycleViewModel
         }
 
         // (5) The tree re-reads the index the scan committed, whatever the
-        // pages did, and the graph probes. A surface that faults here is
-        // logged, never allowed to swallow the run's one sentence below.
+        // pages did (the graph probed with each page's effects). A surface
+        // that faults here is logged, never allowed to swallow the run's
+        // one sentence below.
         try
         {
             FileSidebar?.Refresh(reportCount: reason == RescanReason.Explicit);
-            Workspace?.NotifyGraphOfVaultChange();
         }
         catch (Exception exception) when (exception is not OutOfMemoryException)
         {
@@ -457,9 +457,21 @@ internal sealed partial class VaultLifecycleViewModel
                     return DeltaReconciliation.Cancelled;
                 }
 
-                using (Workspace?.BeginSilentReconciliation())
+                // Every row's reload is awaited — published, not merely
+                // scheduled — before the page is reported applied.
+                IDisposable? silence = Workspace?.BeginSilentReconciliation();
+                try
                 {
-                    ApplyScanDeltaPage(page, capturedEpoch);
+                    await ApplyScanDeltaPageAsync(page, capturedEpoch, cancel);
+                }
+                finally
+                {
+                    silence?.Dispose();
+                }
+
+                if (generation != _generation)
+                {
+                    return DeltaReconciliation.Cancelled;
                 }
 
                 _ = await RunRescanCoreAsync(
@@ -559,90 +571,41 @@ internal sealed partial class VaultLifecycleViewModel
         _slateOwnedWriteEpochs.TryGetValue(path, out long epoch) && epoch > capturedEpoch;
 
     /// <summary>
-    /// One page's effects: the operations <see cref="HandleFileChange"/>
-    /// applies for the matching event kind (an external rename is Deleted +
-    /// Created, AR-8), plus the clean-tab reload the funnel's Modified arm
-    /// never had — for every row no Slate-owned write has reconciled: not
-    /// superseded in core, not journaled since <paramref name="capturedEpoch"/>.
-    /// Idempotent, so a resumed page may be applied twice.
+    /// One page's effects, through the routine a Slate-owned event also
+    /// goes through (<see cref="ApplyFileChangeEffectsAsync"/>), for every
+    /// row no Slate-owned write has reconciled: not superseded in core,
+    /// not journaled since <paramref name="capturedEpoch"/> — also
+    /// re-checked when a reload's worker read comes back. The Task
+    /// completes when every reload has published; idempotent, so a
+    /// resumed page may be applied twice. Each row carries core's own
+    /// openable classification (round 26), and Quick Open takes the page's
+    /// changes as its only rescan path (round 25).
     /// </summary>
-    /// <remarks>
-    /// Batched per page, in the page's own removal-first order, so the cost
-    /// is linear in the delta: the removals invalidate their tabs in one
-    /// sweep with one workspace persist (the funnel's per-event
-    /// <c>InvalidatePath</c> writes the workspace file once per call), the
-    /// missing-tab re-seat — a sweep over every missing tab — runs once per
-    /// page, after that page's removals, when it created anything, and Quick
-    /// Open takes the page's changes in one pass
-    /// (<see cref="QuickSwitcherViewModel.ApplyFileChanges"/>, the funnel's
-    /// per-event <c>ApplyFileChange</c> batched). The delta is Quick Open's
-    /// only rescan path (round 25): a reloaded list read in keyset pages
-    /// could overwrite a newer Slate-owned event with a stale page. Each
-    /// row carries core's own classification of the path (round 26), so a
-    /// .mdown or .mkd note reaches Quick Open like any other.
-    /// </remarks>
-    private void ApplyScanDeltaPage(ScanDeltaPage page, long capturedEpoch)
+    private Task ApplyScanDeltaPageAsync(ScanDeltaPage page, long capturedEpoch, CancelToken cancel)
     {
-        WorkspaceViewModel? workspace = Workspace;
-        ScanDeltaEntry[] live =
-        [
-            .. page.Entries.Where(entry =>
-                !entry.Superseded && !ReconciledSince(entry.Path, capturedEpoch)),
-        ];
-        var removed = new List<string>();
-        var modified = new List<string>();
-        var changes = new List<(FileChangeEvent Change, bool Openable)>(live.Length);
-        bool created = false;
-        foreach (ScanDeltaEntry entry in live)
+        var changes = new List<(FileChangeEvent Change, bool Openable)>();
+        foreach (ScanDeltaEntry entry in page.Entries)
         {
-            FileChangeKind kind;
-            switch (entry.Kind)
+            if (entry.Superseded || ReconciledSince(entry.Path, capturedEpoch))
             {
-                case ScanDeltaKind.Removed:
-                    removed.Add(entry.Path);
-                    kind = FileChangeKind.Deleted;
-                    break;
-                case ScanDeltaKind.Created:
-                    created = true;
-                    kind = FileChangeKind.Created;
-                    break;
-                case ScanDeltaKind.Modified:
-                    modified.Add(entry.Path);
-                    kind = FileChangeKind.Modified;
-                    break;
-                default:
-                    throw new ArgumentOutOfRangeException(nameof(page), entry.Kind, "unknown scan delta kind");
+                continue;
             }
 
+            FileChangeKind kind = entry.Kind switch
+            {
+                ScanDeltaKind.Removed => FileChangeKind.Deleted,
+                ScanDeltaKind.Created => FileChangeKind.Created,
+                ScanDeltaKind.Modified => FileChangeKind.Modified,
+                _ => throw new ArgumentOutOfRangeException(nameof(page), entry.Kind, "unknown scan delta kind"),
+            };
             changes.Add((new FileChangeEvent(kind, entry.Path, null), entry.Openable));
         }
 
-        // Removals before creations: a missing tab's file back under another
-        // spelling (`ghost.md` → `Ghost.md`) is re-seated only once its
-        // removal has marked the tab missing.
-        workspace?.InvalidatePaths(removed);
-        if (created)
-        {
-            workspace?.ReseatMissingTabs();
-        }
-
-        foreach (string path in modified)
-        {
-            workspace?.ReloadCleanTab(path);
-            workspace?.NotifyHistoryOfVaultChange(path);
-        }
-
-        foreach ((FileChangeEvent change, _) in changes)
-        {
-            workspace?.NotifyReadingOfVaultChange(change.Kind, change.Path);
-            workspace?.NotifyBasesOfVaultChange(change.Path);
-        }
-
-        QuickSwitcher?.ApplyFileChanges(changes);
-        if (live.Length > 0)
-        {
-            workspace?.InvalidateAllInteractionStates();
-        }
+        return ApplyFileChangeEffectsAsync(
+            changes,
+            FileChangeOrigin.Rescan,
+            path => ReconciledSince(path, capturedEpoch),
+            cancel);
     }
 
     /// <summary>The rescan's progress policy: an explicit refresh moves the

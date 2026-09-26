@@ -7,6 +7,7 @@ using System.Runtime.ExceptionServices;
 using System.Security.AccessControl;
 using System.Security.Principal;
 using System.Windows.Documents;
+using SlateWindows.Canvas;
 using uniffi.slate_uniffi;
 
 namespace SlateWindows.Tests;
@@ -535,6 +536,9 @@ public sealed class RescanTests
         h.FailReads(read => read == 2);
         h.Context.Await(h.Lifecycle.RescanAsync(RescanReason.Explicit));
 
+        // A clean scan whose page 2 failed: exactly one error, never 0.
+        Assert.Equal(
+            1UL, Assert.IsType<A11yEvent.VaultRescanIncomplete>(Assert.Single(h.Events)).Errors);
         Assert.Equal([OneError], h.Spoken);
         Assert.Equal(
             ["new text 1\n", "new text 2\n", "old 3\n", "old 4\n", "old 5\n"],
@@ -842,17 +846,329 @@ public sealed class RescanTests
         Assert.Equal([NoChanges], h.Spoken);
     });
 
-    /// <summary>Round 26: the host's openable set — the Slate-owned event
-    /// path's classification — IS core's exported set, read off the UI
-    /// thread.</summary>
+    /// <summary>Rounds 26-27: the host's document classification — the
+    /// Slate-owned event path's, Quick Open's and the Bases dependents' — IS
+    /// core's: both exported sets, read off the UI thread.</summary>
     [Fact]
-    public async Task TheHostOpenableSetIsCoresOpenableSet()
+    public async Task TheHostDocumentClassificationIsCores()
     {
-        string[] core = [.. await Task.Run(SlateUniffiMethods.OpenableDocumentExtensions)];
+        string[] openable = [.. await Task.Run(SlateUniffiMethods.OpenableDocumentExtensions)];
+        string[] markdown = [.. await Task.Run(SlateUniffiMethods.MarkdownDocumentExtensions)];
         Assert.Equal(
-            core.Order(StringComparer.Ordinal).ToArray(),
-            QuickSwitcherViewModel.OpenableExtensions.Order(StringComparer.Ordinal).ToArray());
+            openable.Order(StringComparer.Ordinal).ToArray(),
+            CoreDocumentClassification.OpenableExtensions.Order(StringComparer.Ordinal).ToArray());
+        Assert.Equal(
+            markdown.Order(StringComparer.Ordinal).ToArray(),
+            CoreDocumentClassification.MarkdownExtensions.Order(StringComparer.Ordinal).ToArray());
     }
+
+    // ---------------------------------------------------------------------
+    // Kind-aware reconciliation (rounds 27-28)
+    // ---------------------------------------------------------------------
+
+    private const string OneNodeCanvas =
+        """{"nodes":[{"id":"first","type":"text","text":"First","x":0,"y":0,"width":200,"height":60}],"edges":[]}""";
+
+    private const string TwoNodeCanvas =
+        """{"nodes":[{"id":"first","type":"text","text":"First","x":0,"y":0,"width":200,"height":60},{"id":"added","type":"text","text":"Added outside Slate","x":0,"y":100,"width":200,"height":60}],"edges":[]}""";
+
+    /// <summary>Round 27: an open canvas is registry-cached, so the funnel's
+    /// Markdown-only Modified arm would leave its board stale while the tree,
+    /// Quick Open and the sentence reported the change. The rescan's canvas
+    /// arm re-reads it: the node added outside Slate is on the board.</summary>
+    [Fact]
+    public void AnOpenCanvasTabReloadsAfterARescan() => RunSta(() =>
+    {
+        using var h = new Harness("canvas-reload", ("board.canvas", OneNodeCanvas));
+        WorkspaceTabViewModel tab = h.Open("board.canvas");
+        CanvasDocumentViewModel board = Assert.IsType<CanvasDocumentViewModel>(tab.Canvas);
+        h.PumpUntil(() => board.RowFor("first") is not null, "the board's first load");
+        Assert.Null(board.RowFor("added"));
+
+        h.Write("board.canvas", TwoNodeCanvas);
+        h.Context.Await(h.Lifecycle.RescanAsync(RescanReason.Explicit));
+
+        Assert.NotNull(board.RowFor("added"));
+        Assert.Equal(["Files refreshed. 1 new or changed, 0 removed."], h.Spoken);
+    });
+
+    /// <summary>Round 28: the page is reported applied only once every row's
+    /// reload has PUBLISHED. With the canvas reload parked, the run holds:
+    /// no applied mark, no release, no sentence; released, all three
+    /// follow.</summary>
+    [Fact]
+    public void AParkedCanvasReloadHoldsTheAppliedMarkAndTheSentence() => RunSta(() =>
+    {
+        using var h = new Harness("canvas-parked", ("board.canvas", OneNodeCanvas));
+        WorkspaceTabViewModel tab = h.Open("board.canvas");
+        CanvasDocumentViewModel board = Assert.IsType<CanvasDocumentViewModel>(tab.Canvas);
+        h.PumpUntil(() => board.RowFor("first") is not null, "the board's first load");
+        var parked = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
+        bool reloadStarted = false;
+        h.Workspace.RescanKindReloadForTests = async (kind, _, reload) =>
+        {
+            if (kind == "canvas")
+            {
+                reloadStarted = true;
+                await parked.Task;
+            }
+
+            await reload();
+        };
+        int applied = 0;
+        h.OnApplied((_, _) => Interlocked.Increment(ref applied));
+        h.Write("board.canvas", TwoNodeCanvas);
+
+        Task run = h.Lifecycle.RescanAsync(RescanReason.Explicit);
+        h.PumpUntil(() => reloadStarted, "the canvas reload starting");
+        for (int turn = 0; turn < 20; turn++)
+        {
+            h.Context.Drain();
+            Thread.Sleep(5);
+        }
+
+        Assert.False(run.IsCompleted);
+        Assert.Equal(0, Volatile.Read(ref applied));
+        Assert.NotNull(h.Ledger.Pending);
+        Assert.Empty(h.Events);
+
+        parked.SetResult();
+        h.PumpUntil(() => run.IsCompleted, "the rescan finishing");
+        Assert.NotNull(board.RowFor("added"));
+        Assert.Equal(1, Volatile.Read(ref applied));
+        Assert.Equal(new ScanDeltaLedger(null, null), h.Ledger);
+        Assert.Equal(["Files refreshed. 1 new or changed, 0 removed."], h.Spoken);
+    });
+
+    /// <summary>Round 28: a page APPLICATION failure — here an open canvas's
+    /// reload, then an open base's — leaves the generation retained at the
+    /// page's cursor, releases nothing and speaks the honest count: a clean
+    /// scan whose one page failed is "1 error". The retry re-applies the page
+    /// and completes it.</summary>
+    [Fact]
+    public void AFailedKindReloadRetainsTheGenerationAndTheRetryCompletesIt() => RunSta(() =>
+    {
+        foreach (string kind in new[] { "canvas", "base" })
+        {
+            (string Path, string Before, string After) file = kind == "canvas"
+                ? ("board.canvas", OneNodeCanvas, TwoNodeCanvas)
+                : ("Notes.base", "views:\n  - type: table\n    name: Main\n", "views:\n  - type: table\n    name: Renamed\n");
+            using var h = new Harness($"{kind}-fails", (file.Path, file.Before), ("n.md", "# N\n"));
+            WorkspaceTabViewModel tab = h.Open(file.Path);
+            h.PumpUntil(
+                () => kind == "canvas"
+                    ? tab.Canvas?.RowFor("first") is not null
+                    : tab.Base?.State == Bases.BaseLoadState.Ready,
+                $"the {kind}'s first load");
+            bool fail = true;
+            h.Workspace.RescanKindReloadForTests = async (reloading, _, reload) =>
+            {
+                if (reloading == kind && fail)
+                {
+                    throw new IOException($"injected {kind} reload failure");
+                }
+
+                await reload();
+            };
+            h.Write(file.Path, file.After);
+
+            h.Context.Await(h.Lifecycle.RescanAsync(RescanReason.Explicit));
+
+            A11yEvent.VaultRescanIncomplete incomplete =
+                Assert.IsType<A11yEvent.VaultRescanIncomplete>(Assert.Single(h.Events));
+            Assert.Equal(1UL, incomplete.Errors);
+            Assert.Equal([OneError], h.Spoken);
+            Assert.NotNull(h.Ledger.Pending);
+            Assert.Null(h.Ledger.Applied);
+
+            fail = false;
+            h.Now += TimeSpan.FromMinutes(1);
+            h.Context.Await(h.Lifecycle.RescanAsync(RescanReason.Explicit));
+            Assert.Equal([OneError, "Files refreshed. 1 new or changed, 0 removed."], h.Spoken);
+            Assert.Equal(new ScanDeltaLedger(null, null), h.Ledger);
+            if (kind == "canvas")
+            {
+                Assert.NotNull(tab.Canvas!.RowFor("added"));
+            }
+            else
+            {
+                h.PumpUntil(() => tab.Base?.ActiveViewName == "Renamed", "the base's reloaded view");
+            }
+        }
+    });
+
+    /// <summary>Round 27: an open base tab re-queries after a rescan — its own
+    /// definition changed outside Slate reloads (the kind reload, awaited),
+    /// and a note created outside Slate that it lists joins its rows (the
+    /// Bases dependent).</summary>
+    [Fact]
+    public void AnOpenBaseTabRequeriesAfterARescan() => RunSta(() =>
+    {
+        using var h = new Harness(
+            "base-requery",
+            ("Notes.base", "filters: 'file.ext == \"md\"'\nviews:\n  - type: table\n    name: Main\n"),
+            ("a.md", "# A\n"));
+        WorkspaceTabViewModel tab = h.Open("Notes.base");
+        h.PumpUntil(() => tab.Base?.State == Bases.BaseLoadState.Ready, "the base's first load");
+        Assert.Equal(["a.md"], BaseRows(tab));
+
+        h.Write("b.md", "# B\n");
+        h.Context.Await(h.Lifecycle.RescanAsync(RescanReason.Explicit));
+        h.PumpUntil(() => BaseRows(tab).Contains("b.md"), "the base listing the new note");
+
+        h.Write(
+            "Notes.base",
+            "filters: 'file.ext == \"md\"'\nviews:\n  - type: table\n    name: Renamed view\n");
+        h.Now += TimeSpan.FromMinutes(1);
+        h.Context.Await(h.Lifecycle.RescanAsync(RescanReason.Explicit));
+        Assert.Equal("Renamed view", tab.Base!.ActiveViewName);
+    });
+
+    /// <summary>Round 27: Bases' Markdown classification is core's. A base
+    /// over .mdown notes re-queries when a .mdown note is created outside
+    /// Slate — the Bases dependent no longer drops every change but a .md
+    /// one.</summary>
+    [Fact]
+    public void BasesFollowCoreMarkdownClassification() => RunSta(() =>
+    {
+        using var h = new Harness(
+            "bases-mdown",
+            ("Mdown.base", "filters: 'file.ext == \"mdown\"'\nviews:\n  - type: table\n    name: Main\n"),
+            ("one.mdown", "# One\n"));
+        WorkspaceTabViewModel tab = h.Open("Mdown.base");
+        h.PumpUntil(() => tab.Base?.State == Bases.BaseLoadState.Ready, "the base's first load");
+        Assert.Equal(["one.mdown"], BaseRows(tab));
+
+        h.Write("two.mdown", "# Two\n");
+        h.Context.Await(h.Lifecycle.RescanAsync(RescanReason.Explicit));
+
+        h.PumpUntil(() => BaseRows(tab).Contains("two.mdown"), "the base listing the new .mdown note");
+    });
+
+    /// <summary>Round 28 (the reading dependent): a reading-mode note that
+    /// embeds another owes its embed a re-render when the embedded note
+    /// changes outside Slate — the reading models' reverse-dependency
+    /// filter, reached through the one routine. With no surface attached
+    /// (this harness) the model records the pending re-render its surface
+    /// runs on rebind; an unrelated note's change owes it nothing.</summary>
+    [Fact]
+    public void AReadingEmbedFollowsARescan() => RunSta(() =>
+    {
+        using var h = new Harness(
+            "reading-embed",
+            ("host.md", "# Host\n\n![[embedded]]\n"),
+            ("embedded.md", "Embedded before.\n"));
+        WorkspaceTabViewModel host = h.Open("host.md");
+        host.ToggleViewMode();
+        h.PumpUntil(() => ReadingText(host).Contains("Embedded before.", StringComparison.Ordinal), "the embed's first render");
+
+        Assert.False(host.Reading!.HasPendingDependencyRefresh);
+
+        h.Write("unrelated.md", "Nobody embeds me.\n");
+        h.Context.Await(h.Lifecycle.RescanAsync(RescanReason.Explicit));
+        Assert.False(host.Reading!.HasPendingDependencyRefresh, "an unrelated change reached the embedder");
+
+        h.Write("embedded.md", "Embedded after, changed outside Slate.\n");
+        h.Now += TimeSpan.FromMinutes(1);
+        h.Context.Await(h.Lifecycle.RescanAsync(RescanReason.Explicit));
+        Assert.True(host.Reading!.HasPendingDependencyRefresh, "the embedder owes no re-render");
+    });
+
+    /// <summary>Round 28 (the history dependent): the history panel showing a
+    /// note reloads its version list when a rescan finds the note changed
+    /// outside Slate — the same NoteSaved seam a Slate-owned save drives.</summary>
+    [Fact]
+    public void TheHistoryPanelReloadsAfterARescan() => RunSta(() =>
+    {
+        using var h = new Harness("history-dependent", ("x.md", "x0\n"), ("y.md", "y0\n"));
+        _ = h.Open("x.md");
+        h.Workspace.History.NoteChanged("x.md");
+        int loads = 0;
+        h.Workspace.History.LoadInterleaveForTests = () => Interlocked.Increment(ref loads);
+
+        h.Write("y.md", "y1, not the shown note\n");
+        h.Context.Await(h.Lifecycle.RescanAsync(RescanReason.Explicit));
+        for (int turn = 0; turn < 20; turn++)
+        {
+            h.Context.Drain();
+            PumpedDispatcher.Drain();
+            Thread.Sleep(5);
+        }
+
+        Assert.Equal(0, Volatile.Read(ref loads));
+
+        h.Write("x.md", "x1, changed outside Slate\n");
+        h.Now += TimeSpan.FromMinutes(1);
+        h.Context.Await(h.Lifecycle.RescanAsync(RescanReason.Explicit));
+        h.PumpUntil(() => Volatile.Read(ref loads) > 0, "the history panel reloading");
+    });
+
+    /// <summary>Round 28 (the graph dependent): a rescan's page probes the
+    /// graph generation — the Connections leaf's probe, and the graph tab's
+    /// when one is visible — exactly as a Slate-owned event does. Every scan
+    /// already probes once from its index-phase ScanFinished arm; a page of
+    /// changes adds the routine's own probe after its effects, so a changed
+    /// rescan probes exactly once more than an unchanged one.</summary>
+    [Fact]
+    public void TheGraphProbesAfterARescan() => RunSta(() =>
+    {
+        using var h = new Harness("graph-dependent", ("x.md", "# X\n"));
+        int ProbesSoFar()
+        {
+            lock (h.Workspace.Connections.CrossingsForTests)
+            {
+                return h.Workspace.Connections.CrossingsForTests["graph_generation"];
+            }
+        }
+
+        void Settle()
+        {
+            for (int turn = 0; turn < 40; turn++)
+            {
+                h.Context.Drain();
+                PumpedDispatcher.Drain();
+                Thread.Sleep(5);
+            }
+        }
+
+        Settle();
+        int before = ProbesSoFar();
+        h.Context.Await(h.Lifecycle.RescanAsync(RescanReason.Explicit));
+        Settle();
+        int unchanged = ProbesSoFar() - before;
+
+        h.Write("linker.md", "# Linker\n\n[[x]]\n");
+        h.Now += TimeSpan.FromMinutes(1);
+        before = ProbesSoFar();
+        h.Context.Await(h.Lifecycle.RescanAsync(RescanReason.Explicit));
+        Settle();
+        Assert.Equal(unchanged + 1, ProbesSoFar() - before);
+    });
+
+    /// <summary>Round 28 (the interaction dependent): every open tab's editor
+    /// interaction caches — its links, tasks and citations, the state the
+    /// editor's link, task and citation actions act on — are dropped when a
+    /// rescan changes the vault, so no action runs on a cache published
+    /// before the change.</summary>
+    [Fact]
+    public void EditorInteractionCachesAreDroppedAfterARescan() => RunSta(() =>
+    {
+        using var h = new Harness("interaction-dependent", ("a.md", "# A\n\n[[late]]\n"));
+        WorkspaceTabViewModel a = h.Open("a.md");
+        EditorInteractionCoordinator interactions = Assert.IsType<EditorInteractionCoordinator>(a.EditorInteractions);
+        interactions.RefreshArtifactCacheForTests();
+        Assert.True(interactions.ArtifactCacheSourceCurrentForTests);
+
+        h.Write("late.md", "# Late\n");
+        h.Context.Await(h.Lifecycle.RescanAsync(RescanReason.Explicit));
+
+        Assert.False(
+            interactions.ArtifactCacheSourceCurrentForTests,
+            "the interaction cache published before the change is still current");
+    });
+
+    private static string[] BaseRows(WorkspaceTabViewModel tab) =>
+        [.. (tab.Base?.Result?.Rows ?? []).Select(row => row.FilePath).Order(StringComparer.Ordinal)];
 
     /// <summary>Round 26: openability is core's. External .mdown and .MKD
     /// notes reach Quick Open through the delta — each row carries core's
@@ -1744,6 +2060,25 @@ public sealed class RescanTests
                     .Select(file => Path.GetRelativePath(Root, file).Replace('\\', '/'))
                     .Order(StringComparer.Ordinal),
             ];
+        }
+
+        /// <summary>Drain the lifecycle's queue AND the WPF dispatcher (the
+        /// canvas, base and reading documents publish there) until the
+        /// condition holds.</summary>
+        public void PumpUntil(Func<bool> condition, string what)
+        {
+            var clock = Stopwatch.StartNew();
+            while (!condition())
+            {
+                Context.Drain();
+                PumpedDispatcher.Drain();
+                if (clock.Elapsed > TimeSpan.FromSeconds(30))
+                {
+                    throw new TimeoutException($"{what} never happened");
+                }
+
+                Thread.Sleep(5);
+            }
         }
 
         /// <summary>Page reads so far, across every run of this vault.</summary>

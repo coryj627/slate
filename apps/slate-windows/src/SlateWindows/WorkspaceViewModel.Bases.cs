@@ -1692,7 +1692,9 @@ internal sealed partial class WorkspaceViewModel
     internal void NotifyBasesOfVaultChange(string path)
     {
         bool isBaseFile = path.EndsWith(".base", StringComparison.OrdinalIgnoreCase);
-        if (!isBaseFile && !path.EndsWith(".md", StringComparison.OrdinalIgnoreCase))
+        // W7-7 PR 7 (round 27): Markdown is core's classification — all
+        // four extensions its index marks is_markdown, not `.md` alone.
+        if (!isBaseFile && !CoreDocumentClassification.IsMarkdown(path))
         {
             return;
         }

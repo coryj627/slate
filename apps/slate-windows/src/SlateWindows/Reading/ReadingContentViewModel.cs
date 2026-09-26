@@ -899,7 +899,8 @@ internal sealed class ReadingContentViewModel : BindableBase, IDisposable
             // memo makes a no-op re-project cheap, and the debounce
             // coalesces bursts.
             || (_publishedHasBaseEmbeds
-                && path.EndsWith(".md", StringComparison.OrdinalIgnoreCase));
+                // W7-7 PR 7 (round 27): Markdown is core's classification.
+                && CoreDocumentClassification.IsMarkdown(path));
         if (!relevant)
         {
             return;
