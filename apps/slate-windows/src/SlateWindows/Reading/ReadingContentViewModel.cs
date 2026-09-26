@@ -60,6 +60,13 @@ internal sealed class ReadingContentViewModel : BindableBase, IDisposable
     private bool _disposed;
     private int _generation;
 
+    /// <summary>#1279 (locked decision 05 §4): the live refresh's embed
+    /// walks share one cancellation, retired with the generation — a
+    /// superseded, detached, re-preferenced or disposed refresh stops its
+    /// core walk at the next boundary instead of finishing the note.</summary>
+    private CoreRequestCancellation? _fetchCancel;
+    private int _fetchesCancelledForTests;
+
     /// <summary>The generation whose refresh is still live (its
     /// publish or terminal-failure state can still land). -1 when the
     /// current generation has no refresh — the state a surface detach
@@ -259,6 +266,7 @@ internal sealed class ReadingContentViewModel : BindableBase, IDisposable
         // machinery already handles exactly this shape.
         _generation++;
         _liveRefreshGeneration = -1;
+        RetireFetch();
     }
 
     /// <summary>
@@ -285,6 +293,7 @@ internal sealed class ReadingContentViewModel : BindableBase, IDisposable
         Deactivate();
         _generation++;
         _liveRefreshGeneration = -1;
+        RetireFetch();
         _memo = null;
         // _projectionComplete is deliberately untouched: it is already
         // false for any in-flight stream (the case detach must poison),
@@ -460,18 +469,30 @@ internal sealed class ReadingContentViewModel : BindableBase, IDisposable
         string path = _tab.Path;
         long revision = _tab.EditorSession?.Revision ?? -1;
         ulong sessionGeneration = _session.InteractionGeneration();
+        RetireFetch();
+        var cancel = new CoreRequestCancellation();
+        _fetchCancel = cancel;
 
         if (_synchronousForTests)
         {
             try
             {
-                FetchResult fetched = FetchGuarded(_session, path, text);
+                FetchResult fetched = FetchGuarded(_session, path, text, cancel.Token);
                 Publish(generation, path, revision, sessionGeneration, fetched);
+            }
+            catch (VaultException.Cancelled)
+            {
+                // #1279: retired mid-walk; a newer generation owns the view.
+                Interlocked.Increment(ref _fetchesCancelledForTests);
             }
             catch (Exception exception)
             {
                 RecordTerminalFailure(exception);
                 PublishTerminalFailure(generation);
+            }
+            finally
+            {
+                cancel.Finish();
             }
             return;
         }
@@ -491,11 +512,12 @@ internal sealed class ReadingContentViewModel : BindableBase, IDisposable
                 {
                     try
                     {
-                        fetched = FetchGuarded(_session, path, text);
+                        fetched = FetchGuarded(_session, path, text, cancel.Token);
                         break;
                     }
                     catch (Exception exception) when (
-                        exception is VaultException or IOException
+                        exception is (VaultException or IOException)
+                            and not VaultException.Cancelled
                         && attempt < MaximumBackgroundRefreshAttempts)
                     {
                         // Known-transient only; the last attempt and
@@ -511,6 +533,13 @@ internal sealed class ReadingContentViewModel : BindableBase, IDisposable
                         () => Publish(generation, path, revision, sessionGeneration, result)));
                 }
             }
+            catch (VaultException.Cancelled)
+            {
+                // #1279: the refresh was retired mid-walk — superseded,
+                // detached or disposed. Not a failure: a newer generation
+                // (or nothing) owns the view, so nothing publishes.
+                Interlocked.Increment(ref _fetchesCancelledForTests);
+            }
             catch (Exception exception)
             {
                 // Terminal: an unconditional host diagnostic (event +
@@ -520,8 +549,24 @@ internal sealed class ReadingContentViewModel : BindableBase, IDisposable
                 _ = _dispatcher!.InvokeAsync(
                     () => PublishTerminalFailure(generation));
             }
+            finally
+            {
+                cancel.Finish();
+            }
         });
     }
+
+    /// <summary>Cancel the live refresh's core walk (#1279).</summary>
+    private void RetireFetch()
+    {
+        CoreRequestCancellation? retired = _fetchCancel;
+        _fetchCancel = null;
+        retired?.Cancel();
+    }
+
+    /// <summary>#1279 test seam: refreshes that ended because their core
+    /// walk was cancelled.</summary>
+    internal int FetchesCancelledForTests => Volatile.Read(ref _fetchesCancelledForTests);
 
     /// <summary>Terminal-failure injection seam for tests.</summary>
     internal Func<Exception?>? FetchFaultForTests { get; set; }
@@ -538,13 +583,14 @@ internal sealed class ReadingContentViewModel : BindableBase, IDisposable
 
     internal bool ObservesEditorForTests => _observedDocument is not null;
 
-    private FetchResult FetchGuarded(VaultSession session, string path, string text)
+    private FetchResult FetchGuarded(
+        VaultSession session, string path, string text, CancelToken cancel)
     {
         if (FetchFaultForTests?.Invoke() is { } fault)
         {
             throw fault;
         }
-        return Fetch(session, path, text);
+        return Fetch(session, path, text, cancel);
     }
 
     /// <summary>
@@ -623,7 +669,8 @@ internal sealed class ReadingContentViewModel : BindableBase, IDisposable
     internal const int FetchedEmbedImageByteBudget = 16 * 1024 * 1024;
 
     /// <summary>Background-safe: FFI only, no WPF objects.</summary>
-    private FetchResult Fetch(VaultSession session, string path, string text)
+    private FetchResult Fetch(
+        VaultSession session, string path, string text, CancelToken cancel)
     {
         // Records ownership is inherent here — they are fetched for the
         // captured path inside the gated refresh, and publication
@@ -689,7 +736,7 @@ internal sealed class ReadingContentViewModel : BindableBase, IDisposable
         ReadingBlockInlines[] inlines = SlateUniffiMethods.ReadingInlineSegmentsSource(
             text, citations, records);
         ReadingEmbedArtifact[] embeds = FetchEmbedResolutions(
-            session, path, records, inlines);
+            session, path, records, inlines, cancel);
         // The artifact digest hashes the COMPLETE artifact sets, so
         // it belongs here on the fetch task, not on the dispatcher at
         // publication (round 5: a dense note made the memo key itself
@@ -732,7 +779,8 @@ internal sealed class ReadingContentViewModel : BindableBase, IDisposable
         VaultSession session,
         string path,
         OutgoingLink[] records,
-        ReadingBlockInlines[] inlines)
+        ReadingBlockInlines[] inlines,
+        CancelToken cancel)
     {
         var keys = new List<string>();
         var seen = new HashSet<string>(StringComparer.Ordinal);
@@ -786,7 +834,7 @@ internal sealed class ReadingContentViewModel : BindableBase, IDisposable
                 // core enforces both BEFORE marshalling; the true
                 // size comes back for honest pool accounting.
                 EmbedReadingCard card = session.ResolveEmbedReadingCard(
-                    path, key, alt, (ulong)Math.Max(0, imagePool));
+                    path, key, alt, (ulong)Math.Max(0, imagePool), cancel);
                 imageRefused = card.ImageElided;
                 if (card.Resolution is EmbedResolution.Image && !card.ImageElided)
                 {
@@ -794,6 +842,12 @@ internal sealed class ReadingContentViewModel : BindableBase, IDisposable
                 }
                 resolution = new EmbedPreviewResolution(
                     card.Resolution, card.Truncated);
+            }
+            catch (VaultException.Cancelled)
+            {
+                // #1279: the refresh was retired — the whole fetch ends
+                // here; no degraded card is built for a view nobody shows.
+                throw;
             }
             catch (VaultException)
             {
@@ -1317,6 +1371,7 @@ internal sealed class ReadingContentViewModel : BindableBase, IDisposable
             return;
         }
         _disposed = true;
+        RetireFetch();
         Deactivate();
         _editDebounce = null;
         _dependencyDebounce?.Stop();

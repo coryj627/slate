@@ -372,8 +372,11 @@ internal sealed class RightPanePanelsViewModel : PanelWorkScheduler
         }
         NotePath = path;
         // Interlocked so the embed-resolve worker's mid-loop
-        // Volatile.Read observes the bump promptly and abandons.
+        // Volatile.Read observes the bump promptly and abandons; the
+        // in-flight core walk is cancelled too (#1279), so it stops at
+        // its next boundary instead of finishing the current key.
         int generation = Interlocked.Increment(ref _loadGeneration);
+        RetireEmbedResolve();
         Backlinks.Clear();
         OutgoingLinks.Clear();
         Outline.Clear();
@@ -508,155 +511,207 @@ internal sealed class RightPanePanelsViewModel : PanelWorkScheduler
             RaiseHeaderChanges();
             return;
         }
+        // #1279 (locked decision 05 §4): the batch's core walks share one
+        // cancellation, retired with the load that started it.
+        RetireEmbedResolve();
+        var request = new CoreRequestCancellation();
+        _embedResolve = request;
         StartWork(() =>
         {
-            // One core call AND one built card per occurrence key
-            // (raw target + per-occurrence alt): the same [[target]]
-            // embedded five times renders five rows off one shared
-            // resolution and one shared card — no duplicate image
-            // decodes. A null cache entry marks a budget-degraded
-            // key so its duplicates degrade without re-resolving.
-            var cache = new Dictionary<
-                (string Target, string? Alt), EmbedRowViewModel.Shared?>();
-            long imageBytes = 0;
-            long decodedBytes = 0;
-            // The note-wide decoded budget, reserved image-by-image
-            // INSIDE the decode (single worker thread — no locking).
-            bool ReserveDecoded(long cost) =>
-                EditorInteractionCoordinator.TryReserveDecodedBytes(
-                    ref decodedBytes, cost, MaxEmbedDecodedImageBytes);
-            var rows = new List<EmbedRowViewModel>(
-                Math.Min(embedLinks.Length, MaxEmbedRows + 1));
-            for (int index = 0; index < embedLinks.Length; index++)
+            try
             {
-                OutgoingLink link = embedLinks[index];
-
-                // Mid-loop staleness check: a note switch during a
-                // large batch must abandon, not keep resolving into
-                // a publish that will be discarded anyway.
-                if (Volatile.Read(ref _loadGeneration) != generation)
-                {
-                    return;
-                }
-
-                // The materialization cap: every row becomes a full
-                // card visual in a non-virtualized ItemsControl, so
-                // even cheap cache hits are bounded — the tail is
-                // one loud summary, never a silent drop.
-                if (rows.Count >= MaxEmbedRows)
-                {
-                    // The candidate array is itself capped (round 8),
-                    // so the tail size comes from the TRUE total.
-                    rows.Add(EmbedRowViewModel.RowLimit(
-                        link, totalEmbeds - index));
-                    break;
-                }
-
-                // The ANCHORED target (round 6): TargetRaw is anchor-
-                // stripped, so resolving by it renders ![[note#S]] as
-                // the whole note and collides every anchored embed of
-                // one note in the cache.
-                string target =
-                    EditorInteractionCoordinator.ComposeAnchoredTarget(link);
-                (string Target, string? DisplayText) key =
-                    (target, link.DisplayText);
-                if (cache.TryGetValue(key, out EmbedRowViewModel.Shared? hit))
-                {
-                    rows.Add(hit is null
-                        ? EmbedRowViewModel.OverBudget(link)
-                        : EmbedRowViewModel.FromShared(link, hit));
-                    continue;
-                }
-
-                if (cache.Count >= MaxResolvedEmbedTargets)
-                {
-                    cache[key] = null;
-                    rows.Add(EmbedRowViewModel.OverBudget(link));
-                    continue;
-                }
-
-                EmbedResolution resolution;
-                bool truncated = false;
-                try
-                {
-                    // Pool-clamped (round 11): the remaining note-wide
-                    // image pool rides INTO core, so payloads past it
-                    // are refused before any FFI record carries them —
-                    // the post-arrival check below can no longer be
-                    // reached by images, but stays as the final wall.
-                    EmbedPreviewResolution preview =
-                        _session.ResolveEmbedPreviewPooled(
-                            path,
-                            target,
-                            link.DisplayText,
-                            (ulong)Math.Max(0, MaxEmbedImageBytes - imageBytes));
-                    resolution = preview.Resolution;
-                    truncated = preview.Truncated;
-                }
-                catch (Exception exception) when (
-                    exception is not OutOfMemoryException
-                        and not StackOverflowException
-                        and not AccessViolationException)
-                {
-                    // Per-embed failure synthesizes an unresolved row —
-                    // the batch never discards partial success (mac
-                    // audit #202). Broadened past VaultException so a
-                    // session torn down mid-batch degrades instead of
-                    // faulting the worker (round 3).
-                    resolution = new EmbedResolution.Unresolved(
-                        new EmbedUnresolvedReason.ReadError(
-                            "The embed could not be resolved."));
-                }
-
-                // A pool-refused image comes back Unresolved with
-                // truncation marked (round 11) — rebuild the loud
-                // budget card so Jump to the KNOWN target survives
-                // the refusal (round 12: the generic unresolved node
-                // has no source path).
-                if (truncated
-                    && resolution is EmbedResolution.Unresolved
-                    && link.TargetPath is not null)
-                {
-                    cache[key] = null;
-                    rows.Add(EmbedRowViewModel.OverBudget(link));
-                    continue;
-                }
-
-                // Post-resolution accounting: a payload that would
-                // push the cumulative image budget past the cap is
-                // DROPPED — the bound is on retained bytes, so no
-                // single target may overshoot it.
-                long cost = CountImageBytes(resolution);
-                if (cost > 0 && imageBytes + cost > MaxEmbedImageBytes)
-                {
-                    cache[key] = null;
-                    rows.Add(EmbedRowViewModel.OverBudget(link));
-                    continue;
-                }
-
-                imageBytes += cost;
-                var shared = new EmbedRowViewModel.Shared(
-                    resolution,
-                    truncated,
-                    EditorInteractionCoordinator.BuildEmbedPreviewNode(
-                        resolution, ReserveDecoded));
-                cache[key] = shared;
-                rows.Add(EmbedRowViewModel.FromShared(link, shared));
+                ResolveEmbedBatch(path, generation, embedLinks, totalEmbeds, request.Token);
             }
-            Post(() =>
+            finally
             {
-                if (generation != _loadGeneration)
-                {
-                    return;
-                }
-                _totalEmbeds = totalEmbeds;
-                foreach (EmbedRowViewModel row in rows)
-                {
-                    Embeds.Add(row);
-                }
-                IsResolvingEmbeds = false;
-                RaiseHeaderChanges();
-            });
+                request.Finish();
+            }
+        });
+    }
+
+    private CoreRequestCancellation? _embedResolve;
+    private int _embedResolvesCancelledForTests;
+
+    /// <summary>#1279 test seam: embed batches that ended because their
+    /// core walk was cancelled.</summary>
+    internal int EmbedResolvesCancelledForTests =>
+        Volatile.Read(ref _embedResolvesCancelledForTests);
+
+    /// <summary>#1279 test seam: runs on the batch's worker before each
+    /// core resolve — a fact retires the load there.</summary>
+    internal Action? EmbedResolveHookForTests { get; set; }
+
+    /// <summary>Cancel the in-flight embed batch's core walk (#1279): the
+    /// note changed, a newer batch started, or the panel shut down.</summary>
+    private void RetireEmbedResolve()
+    {
+        CoreRequestCancellation? retired = _embedResolve;
+        _embedResolve = null;
+        retired?.Cancel();
+    }
+
+    private void ResolveEmbedBatch(
+        string path,
+        int generation,
+        OutgoingLink[] embedLinks,
+        int totalEmbeds,
+        CancelToken cancel)
+    {
+        // One core call AND one built card per occurrence key
+        // (raw target + per-occurrence alt): the same [[target]]
+        // embedded five times renders five rows off one shared
+        // resolution and one shared card — no duplicate image
+        // decodes. A null cache entry marks a budget-degraded
+        // key so its duplicates degrade without re-resolving.
+        var cache = new Dictionary<
+            (string Target, string? Alt), EmbedRowViewModel.Shared?>();
+        long imageBytes = 0;
+        long decodedBytes = 0;
+        // The note-wide decoded budget, reserved image-by-image
+        // INSIDE the decode (single worker thread — no locking).
+        bool ReserveDecoded(long cost) =>
+            EditorInteractionCoordinator.TryReserveDecodedBytes(
+                ref decodedBytes, cost, MaxEmbedDecodedImageBytes);
+        var rows = new List<EmbedRowViewModel>(
+            Math.Min(embedLinks.Length, MaxEmbedRows + 1));
+        for (int index = 0; index < embedLinks.Length; index++)
+        {
+            OutgoingLink link = embedLinks[index];
+
+            // Mid-loop staleness check: a note switch during a
+            // large batch must abandon, not keep resolving into
+            // a publish that will be discarded anyway.
+            if (Volatile.Read(ref _loadGeneration) != generation)
+            {
+                return;
+            }
+
+            // The materialization cap: every row becomes a full
+            // card visual in a non-virtualized ItemsControl, so
+            // even cheap cache hits are bounded — the tail is
+            // one loud summary, never a silent drop.
+            if (rows.Count >= MaxEmbedRows)
+            {
+                // The candidate array is itself capped (round 8),
+                // so the tail size comes from the TRUE total.
+                rows.Add(EmbedRowViewModel.RowLimit(
+                    link, totalEmbeds - index));
+                break;
+            }
+
+            // The ANCHORED target (round 6): TargetRaw is anchor-
+            // stripped, so resolving by it renders ![[note#S]] as
+            // the whole note and collides every anchored embed of
+            // one note in the cache.
+            string target =
+                EditorInteractionCoordinator.ComposeAnchoredTarget(link);
+            (string Target, string? DisplayText) key =
+                (target, link.DisplayText);
+            if (cache.TryGetValue(key, out EmbedRowViewModel.Shared? hit))
+            {
+                rows.Add(hit is null
+                    ? EmbedRowViewModel.OverBudget(link)
+                    : EmbedRowViewModel.FromShared(link, hit));
+                continue;
+            }
+
+            if (cache.Count >= MaxResolvedEmbedTargets)
+            {
+                cache[key] = null;
+                rows.Add(EmbedRowViewModel.OverBudget(link));
+                continue;
+            }
+
+            EmbedResolution resolution;
+            bool truncated = false;
+            try
+            {
+                // Pool-clamped (round 11): the remaining note-wide
+                // image pool rides INTO core, so payloads past it
+                // are refused before any FFI record carries them —
+                // the post-arrival check below can no longer be
+                // reached by images, but stays as the final wall.
+                EmbedResolveHookForTests?.Invoke();
+                EmbedPreviewResolution preview =
+                    _session.ResolveEmbedPreviewPooled(
+                        path,
+                        target,
+                        link.DisplayText,
+                        (ulong)Math.Max(0, MaxEmbedImageBytes - imageBytes),
+                        cancel);
+                resolution = preview.Resolution;
+                truncated = preview.Truncated;
+            }
+            catch (VaultException.Cancelled)
+            {
+                // #1279: the load was retired mid-walk (a note switch, a
+                // newer batch, shutdown) — nothing of this batch publishes.
+                Interlocked.Increment(ref _embedResolvesCancelledForTests);
+                return;
+            }
+            catch (Exception exception) when (
+                exception is not OutOfMemoryException
+                    and not StackOverflowException
+                    and not AccessViolationException)
+            {
+                // Per-embed failure synthesizes an unresolved row —
+                // the batch never discards partial success (mac
+                // audit #202). Broadened past VaultException so a
+                // session torn down mid-batch degrades instead of
+                // faulting the worker (round 3).
+                resolution = new EmbedResolution.Unresolved(
+                    new EmbedUnresolvedReason.ReadError(
+                        "The embed could not be resolved."));
+            }
+
+            // A pool-refused image comes back Unresolved with
+            // truncation marked (round 11) — rebuild the loud
+            // budget card so Jump to the KNOWN target survives
+            // the refusal (round 12: the generic unresolved node
+            // has no source path).
+            if (truncated
+                && resolution is EmbedResolution.Unresolved
+                && link.TargetPath is not null)
+            {
+                cache[key] = null;
+                rows.Add(EmbedRowViewModel.OverBudget(link));
+                continue;
+            }
+
+            // Post-resolution accounting: a payload that would
+            // push the cumulative image budget past the cap is
+            // DROPPED — the bound is on retained bytes, so no
+            // single target may overshoot it.
+            long cost = CountImageBytes(resolution);
+            if (cost > 0 && imageBytes + cost > MaxEmbedImageBytes)
+            {
+                cache[key] = null;
+                rows.Add(EmbedRowViewModel.OverBudget(link));
+                continue;
+            }
+
+            imageBytes += cost;
+            var shared = new EmbedRowViewModel.Shared(
+                resolution,
+                truncated,
+                EditorInteractionCoordinator.BuildEmbedPreviewNode(
+                    resolution, ReserveDecoded));
+            cache[key] = shared;
+            rows.Add(EmbedRowViewModel.FromShared(link, shared));
+        }
+        Post(() =>
+        {
+            if (generation != _loadGeneration)
+            {
+                return;
+            }
+            _totalEmbeds = totalEmbeds;
+            foreach (EmbedRowViewModel row in rows)
+            {
+                Embeds.Add(row);
+            }
+            IsResolvingEmbeds = false;
+            RaiseHeaderChanges();
         });
     }
 
@@ -1044,6 +1099,7 @@ internal sealed class RightPanePanelsViewModel : PanelWorkScheduler
     {
         base.Shutdown();
         _ = Interlocked.Increment(ref _loadGeneration);
+        RetireEmbedResolve();
     }
 }
 

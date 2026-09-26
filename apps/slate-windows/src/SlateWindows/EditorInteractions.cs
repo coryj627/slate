@@ -576,7 +576,7 @@ internal sealed class EditorInteractionCoordinator : BindableBase, IDisposable
     private long _artifactCacheLoadCountForTests;
     private long _citationCacheLoadCountForTests;
     private int _embedGeneration;
-    private EmbedResolveRequest? _embedResolve;
+    private CoreRequestCancellation? _embedResolve;
     private int _embedResolvesCancelledForTests;
     private EditorEmbedPreviewNode? _popoverEmbedRoot;
     private string? _embedRequestKey;
@@ -1281,7 +1281,7 @@ internal sealed class EditorInteractionCoordinator : BindableBase, IDisposable
         // #1279: a new request supersedes the one in flight — its walk is
         // cancelled in core, not merely left to finish unobserved.
         _embedResolve?.Cancel();
-        var resolve = new EmbedResolveRequest();
+        var resolve = new CoreRequestCancellation();
         _embedResolve = resolve;
         int generation = ++_embedGeneration;
         _embedRequestKey = requestKey;
@@ -1308,40 +1308,6 @@ internal sealed class EditorInteractionCoordinator : BindableBase, IDisposable
         return true;
     }
 
-    /// <summary>#1279 (locked decision 05 §4): the in-flight preview
-    /// resolve's cancellation. The dispatcher cancels it when the request
-    /// is retired — closed, superseded, invalidated or disposed — and core
-    /// stops the walk at its next node; the worker disposes the token once
-    /// its FFI call has returned. The gate keeps a late cancel off a
-    /// disposed token.</summary>
-    private sealed class EmbedResolveRequest
-    {
-        private readonly Lock _gate = new();
-        private bool _finished;
-
-        internal CancelToken Token { get; } = new();
-
-        internal void Cancel()
-        {
-            lock (_gate)
-            {
-                if (!_finished)
-                {
-                    Token.Cancel();
-                }
-            }
-        }
-
-        internal void Finish()
-        {
-            lock (_gate)
-            {
-                _finished = true;
-                Token.Dispose();
-            }
-        }
-    }
-
     /// <summary>Retire the current preview request: nothing it returns
     /// may publish, and its core walk is cancelled (#1279).</summary>
     private void RetireEmbedRequest()
@@ -1349,7 +1315,7 @@ internal sealed class EditorInteractionCoordinator : BindableBase, IDisposable
         _embedGeneration++;
         _embedRequestKey = null;
         _activeEmbedRequestKey = null;
-        EmbedResolveRequest? retired = _embedResolve;
+        CoreRequestCancellation? retired = _embedResolve;
         _embedResolve = null;
         retired?.Cancel();
     }
@@ -1386,7 +1352,7 @@ internal sealed class EditorInteractionCoordinator : BindableBase, IDisposable
         ulong sessionGeneration,
         int sourceLine,
         OutgoingLink link,
-        EmbedResolveRequest resolve)
+        CoreRequestCancellation resolve)
     {
         EmbedPreviewOutcome outcome;
         try
