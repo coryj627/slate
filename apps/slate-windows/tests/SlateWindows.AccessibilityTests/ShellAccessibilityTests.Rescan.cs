@@ -162,14 +162,19 @@ public sealed partial class ShellAccessibilityTests
         Wait.UntilInputIsProcessed(TimeSpan.FromMilliseconds(250));
     }
 
-    /// <summary>Ctrl+O, type the query, find a row whose name starts with
+    /// <summary>Ctrl+O from the sidebar filter (the main journey's route —
+    /// an Edit always takes focus, where UIA refuses SetFocus on the tree
+    /// control while one of its items holds the selection), type the
+    /// query, find a row whose name starts with
     /// <paramref name="expectedPrefix"/>, then Escape.</summary>
     private static void AssertQuickOpenFinds(
         Window window, UIA3Automation automation, string query, string expectedPrefix)
     {
-        WaitForElement(window, "FilesTree", TimeSpan.FromSeconds(10)).Focus();
-        Wait.UntilInputIsProcessed(TimeSpan.FromMilliseconds(250));
         ReassertForegroundForAChord(window);
+        AutomationElement filter = WaitForElement(window, "SidebarFilter", TimeSpan.FromSeconds(10));
+        filter.Focus();
+        AssertEventuallyFocused(filter, "The sidebar filter could not receive focus.");
+        Wait.UntilInputIsProcessed(TimeSpan.FromMilliseconds(250));
         Keyboard.TypeSimultaneously(VirtualKeyShort.CONTROL, VirtualKeyShort.KEY_O);
         AutomationElement search = WaitForElement(window, "QuickSwitcherSearch", TimeSpan.FromSeconds(10));
         AssertEventuallyFocused(search, "Quick Open did not move focus to its search field.");
