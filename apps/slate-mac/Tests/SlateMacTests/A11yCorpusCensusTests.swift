@@ -114,6 +114,7 @@ final class A11yCorpusCensusTests: XCTestCase {
             .embedPreviewShown(target: "recipes", resolved: .block(targetPath: "recipes.md")),
             .embedPreviewShown(target: "pie.png", resolved: .image(targetPath: "images/pie.png", alt: "  A slice of pie  ")),
             .embedPreviewShown(target: "pie.png", resolved: .image(targetPath: "images/pie.png", alt: "   ")),
+            .embedPreviewShown(target: "Reading list.base", resolved: .base(targetPath: "lists/Reading list.base")),
             .embedPreviewUnavailable(target: "Target", reason: .targetNotFound(target: "Target")),
             .embedPreviewUnavailable(target: "recipes#Glaze", reason: .headingNotFound(targetPath: "recipes.md", heading: "Glaze")),
             .embedPreviewUnavailable(target: "recipes^step-3", reason: .blockNotFound(targetPath: "recipes.md", blockId: "step-3")),
