@@ -1298,7 +1298,7 @@
                                          MouseDoubleClick="PanelOutgoingLinks_MouseDoubleClick"
                                          PreviewKeyDown="PanelOutgoingLinks_PreviewKeyDown"
                                          ContextMenuOpening="PanelOutgoingLinks_ContextMenuOpening"
-                                         AutomationProperties.AutomationId="PanelOutgoingLinksList" local:SiblingNames.NamePath="AutomationName" local:SiblingNames.Noun="link"
+                                         AutomationProperties.AutomationId="PanelOutgoingLinksList" local:SiblingNames.NamePath="AutomationName" local:SiblingNames.DistinguisherPath="Badge" local:SiblingNames.Noun="link"
                                          AutomationProperties.Name="Outgoing links">
                                     <ListBox.ContextMenu>
                                         <!-- Items are gated per row state in ContextMenuOpening:

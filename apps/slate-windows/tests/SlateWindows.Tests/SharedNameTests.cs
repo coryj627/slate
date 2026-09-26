@@ -265,6 +265,30 @@ public sealed class SharedNameTests
         });
     }
 
+    /// <summary>A note that links to target.md and embeds it lists two
+    /// outgoing rows that both read "Link to target.md" (mac's labels, the
+    /// role on the badge): the embed adds its badge, so the two read apart
+    /// without a number, and two plain links to one note read their places.
+    /// (The right-pane journey's fixture is exactly this note.)</summary>
+    [Fact]
+    public void OutgoingLinksToOneNoteReadTheirBadgeElseTheirPlace() => RunSta(() =>
+    {
+        static Panels.OutgoingLinkRowViewModel Link(bool embed, uint ordinal) => new(new OutgoingLink(
+            "target.md", "target", null, embed ? "embed" : "wikilink", embed, false, false, string.Empty,
+            ordinal, 0, 0, null));
+        var rows = new System.Collections.ObjectModel.ObservableCollection<Panels.OutgoingLinkRowViewModel>
+        {
+            Link(embed: false, 0),
+            Link(embed: true, 1),
+        };
+        var context = new { Panels = new { OutgoingLinks = rows } };
+        HostedNames("PanelOutgoingLinksList", context, names => Assert.Equal(
+            ["Link to target.md", "Link to target.md, Embed"], names));
+        rows.Add(Link(embed: false, 2));
+        HostedNames("PanelOutgoingLinksList", context, names => Assert.Equal(
+            ["Link to target.md, link 1", "Link to target.md, Embed", "Link to target.md, link 3"], names));
+    });
+
     /// <summary>Add section takes one saved query twice: each section reads
     /// its place, and follows it through a move and a removal.</summary>
     [Fact]
