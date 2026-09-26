@@ -149,25 +149,81 @@ public sealed class ConnectionsLeafViewTests
         });
     }
 
-    /// <summary>W7-7 R-13 (#1257): the row activation's key decision, each
-    /// modifier combination pinned as it stands — Return activates, Control
-    /// (with Shift or Alt or not) opens the note in a new tab, Shift or Alt
-    /// alone changes nothing, and no other key activates.</summary>
+    /// <summary>#1273 (contract 39 N-3): the tree's keys are exactly its
+    /// declared chords — Enter, Ctrl+Enter, Alt+Up, Alt+Down, each with its
+    /// modifiers EQUAL — and no superset, subset or other key is the tree's:
+    /// Shift+Enter, Alt+Enter, Ctrl+Shift+Enter, Ctrl+Alt+Down (the shell's
+    /// pane focus) and the plain arrows (the tree's own walk) pass by.</summary>
     [Theory]
-    [InlineData(Key.Return, ModifierKeys.None, true, false)]
-    [InlineData(Key.Return, ModifierKeys.Control, true, true)]
-    [InlineData(Key.Return, ModifierKeys.Shift, true, false)]
-    [InlineData(Key.Return, ModifierKeys.Control | ModifierKeys.Shift, true, true)]
-    [InlineData(Key.Return, ModifierKeys.Alt, true, false)]
-    [InlineData(Key.Return, ModifierKeys.Control | ModifierKeys.Alt, true, true)]
-    [InlineData(Key.Space, ModifierKeys.None, false, false)]
-    [InlineData(Key.Space, ModifierKeys.Control, false, false)]
-    [InlineData(Key.Down, ModifierKeys.Control, false, false)]
-    [InlineData(Key.Apps, ModifierKeys.None, false, false)]
-    public void TheRowActivationKeyIsReturnAndControlOpensANewTab(Key key, ModifierKeys modifiers, bool activates, bool newTab)
+    [InlineData(Key.Return, ModifierKeys.None, "Activate")]
+    [InlineData(Key.Return, ModifierKeys.Control, "ActivateInNewTab")]
+    [InlineData(Key.Up, ModifierKeys.Alt, "PreviousGroup")]
+    [InlineData(Key.Down, ModifierKeys.Alt, "NextGroup")]
+    [InlineData(Key.Return, ModifierKeys.Shift, "None")]
+    [InlineData(Key.Return, ModifierKeys.Alt, "None")]
+    [InlineData(Key.Return, ModifierKeys.Control | ModifierKeys.Shift, "None")]
+    [InlineData(Key.Return, ModifierKeys.Control | ModifierKeys.Alt, "None")]
+    [InlineData(Key.Up, ModifierKeys.None, "None")]
+    [InlineData(Key.Down, ModifierKeys.None, "None")]
+    [InlineData(Key.Up, ModifierKeys.Alt | ModifierKeys.Shift, "None")]
+    [InlineData(Key.Down, ModifierKeys.Control | ModifierKeys.Alt, "None")]
+    [InlineData(Key.Left, ModifierKeys.Alt, "None")]
+    [InlineData(Key.Space, ModifierKeys.None, "None")]
+    [InlineData(Key.Apps, ModifierKeys.None, "None")]
+    public void TheTreeKeysAreItsDeclaredChordsMatchedExactly(Key key, ModifierKeys modifiers, string action) =>
+        Assert.Equal(action, ConnectionsLeafView.TreeKeyFor(key, modifiers).ToString());
+
+    /// <summary>#1273: Alt+Up and Alt+Down seat the first row of the first
+    /// and of the last group (the mac's `jumpSection`), and a superset of a
+    /// tree chord is not handled — nothing moves, nothing opens.</summary>
+    [Fact]
+    public void AltArrowsJumpBetweenTheGroupsAndASupersetChordPassesBy()
     {
-        Assert.Equal(activates, ConnectionsLeafView.TryActivationFromKey(key, modifiers, out bool opensANewTab));
-        Assert.Equal(newTab, opensANewTab);
+        RunSta(() =>
+        {
+            using var host = new Host("group-jumps");
+            host.ActivateLeaf();
+            host.OpenNote(Hub);
+            host.Settle();
+            (Window window, ConnectionsLeafView view) = Show(host.Leaf);
+            try
+            {
+                ConnectionsRowViewModel firstIncoming = view.RootsForTests[0].Children[0];
+                ConnectionsRowViewModel firstOutgoing = view.RootsForTests[1].Children[0];
+                Assert.NotNull(firstIncoming.Row);
+                Assert.NotNull(firstOutgoing.Row);
+                ConnectionsRowViewModel last = view.RootsForTests[1].Children[^1];
+                Assert.NotNull(view.RealizeContainer(last));
+                last.IsSelected = true;
+
+                Assert.True(view.TryHandleTreeKey(Key.Up, ModifierKeys.Alt));
+                Assert.Same(firstIncoming, view.TreeForTests.SelectedItem);
+                Assert.True(view.TryHandleTreeKey(Key.Down, ModifierKeys.Alt));
+                Assert.Same(firstOutgoing, view.TreeForTests.SelectedItem);
+
+                WorkspaceGroupViewModel group = host.Workspace.ActiveGroup;
+                int tabs = group.Tabs.Count;
+                foreach ((Key key, ModifierKeys modifiers) in new[]
+                {
+                    (Key.Up, ModifierKeys.Alt | ModifierKeys.Control),
+                    (Key.Down, ModifierKeys.Alt | ModifierKeys.Shift),
+                    (Key.Return, ModifierKeys.Shift),
+                    (Key.Return, ModifierKeys.Alt),
+                    (Key.Return, ModifierKeys.Control | ModifierKeys.Shift),
+                    (Key.Return, ModifierKeys.Control | ModifierKeys.Alt),
+                })
+                {
+                    Assert.False(view.TryHandleTreeKey(key, modifiers), $"{modifiers}+{key} was handled");
+                }
+                Assert.Same(firstOutgoing, view.TreeForTests.SelectedItem);
+                Assert.Equal(tabs, group.Tabs.Count);
+                Assert.Equal(Hub, group.ActiveTab!.Path);
+            }
+            finally
+            {
+                window.Close();
+            }
+        });
     }
 
     /// <summary>W7-7 R-13 (#1257): the tree's key owner hands that decision
@@ -222,7 +278,10 @@ public sealed class ConnectionsLeafViewTests
                 Assert.Same(inView, group.ActiveTab);
                 Assert.Equal("010.md", inView.Path);
 
-                // The key event's route: OnTreeKeyDown to the same owner.
+                // The key event's route: OnTreeKeyDown to the same owner, with
+                // the thread's own key state — read here, and unchanged until
+                // the thread pumps again, so another process's held modifier
+                // (a shared desktop's injected input) cannot race the read.
                 host.Settle();
                 view.UpdateLayout();
                 Select(Two);
@@ -230,9 +289,10 @@ public sealed class ConnectionsLeafViewTests
                 {
                     RoutedEvent = Keyboard.KeyDownEvent,
                 };
+                bool aTreeChord = ConnectionsLeafView.TreeKeyFor(Key.Return, Keyboard.Modifiers) != ConnectionsTreeKey.None;
                 view.TreeForTests.RaiseEvent(enter);
-                Assert.True(enter.Handled);
-                Assert.Equal(Two, group.ActiveTab!.Path);
+                Assert.Equal(aTreeChord, enter.Handled);
+                Assert.Equal(aTreeChord ? Two : "010.md", group.ActiveTab!.Path);
 
                 Assert.Equal(Hub, host.Leaf.Pin);
                 Assert.Equal(backSteps, host.Leaf.BackStack.Count);

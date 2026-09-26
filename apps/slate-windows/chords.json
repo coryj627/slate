@@ -3266,6 +3266,19 @@
       "reason": "PR-4, the math-verbosity precedent: the three canvas verbosity levels are selected by one parameterized setter the Canvas menu binds with the level as its CommandParameter. Each level is a row so the catalog records the closed set, and none is registered because a palette row cannot supply the parameter. mac declares no SlateCommandID for these either."
     },
     {
+      "id": "windows.connections.activate",
+      "label": "Connections: activate the selected row",
+      "section": "View",
+      "hint": null,
+      "macChord": null,
+      "mac": null,
+      "windows": "Enter",
+      "windowsSpoken": "Enter",
+      "scope": "Connections",
+      "registered": false,
+      "reason": "#1273, contract 35 B-9: Enter on a Connections row opens its note in the current tab (a ghost's creates its note) and never re-roots — only the row's Show connections action does; on a group header it expands or collapses the group. Delivered by ConnectionsLeafView's TreeChords table, modifiers matched exactly. The mac's Return (ConnectionsPanel.swift's onKeyPress) is a panel key, not a catalog command."
+    },
+    {
       "id": "windows.connections.openInNewTab",
       "label": "Connections: open in a new tab",
       "section": "View",
@@ -3276,7 +3289,33 @@
       "windowsSpoken": "Control Enter",
       "scope": "Connections",
       "registered": false,
-      "reason": "W7-7 R-13 (#1257), contract 35 B-9: Ctrl+Enter on a Connections row opens its note in a new tab; Enter opens it in the current tab. Neither re-roots: only the row's Show connections action does. Delivered by ConnectionsLeafView.OnTreeKeyDown and recorded so the row's hint composes the chord from the table (contract 39 N-2). The mac's ⌘Return (ConnectionsPanel.swift's onKeyPress) is a panel key, not a catalog command."
+      "reason": "W7-7 R-13 (#1257), contract 35 B-9: Ctrl+Enter on a Connections row opens its note in a new tab (a ghost's creates its note); Enter opens it in the current tab. Neither re-roots: only the row's Show connections action does. Delivered by ConnectionsLeafView's TreeChords table with Control alone (#1273), and recorded so the row's hint composes the chord from the table (contract 39 N-2). The mac's ⌘Return (ConnectionsPanel.swift's onKeyPress) is a panel key, not a catalog command."
+    },
+    {
+      "id": "windows.connections.previousGroup",
+      "label": "Connections: first row of the previous group",
+      "section": "View",
+      "hint": null,
+      "macChord": "⌥↑",
+      "mac": "Option Up Arrow",
+      "windows": "Alt+Up",
+      "windowsSpoken": "Alt Up Arrow",
+      "scope": "Connections",
+      "registered": false,
+      "reason": "#1273: Alt+Up in the Connections tree seats the first row of the previous group — the mac's ⌥↑ jumpSection (ConnectionsPanel.swift's onKeyPress), a panel key, not a catalog command. Delivered by ConnectionsLeafView's TreeChords table with Alt alone."
+    },
+    {
+      "id": "windows.connections.nextGroup",
+      "label": "Connections: first row of the next group",
+      "section": "View",
+      "hint": null,
+      "macChord": "⌥↓",
+      "mac": "Option Down Arrow",
+      "windows": "Alt+Down",
+      "windowsSpoken": "Alt Down Arrow",
+      "scope": "Connections",
+      "registered": false,
+      "reason": "#1273: Alt+Down in the Connections tree seats the first row of the next group — the mac's ⌥↓ jumpSection (ConnectionsPanel.swift's onKeyPress), a panel key, not a catalog command. Delivered by ConnectionsLeafView's TreeChords table with Alt alone."
     },
     {
       "id": "windows.graph.escapeLadder",

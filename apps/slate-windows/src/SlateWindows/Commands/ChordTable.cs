@@ -79,8 +79,9 @@ internal enum ChordScope
     /// tunnelling handler — the mac's panel-level key, so it works from
     /// the depth control and the anchor as from the tree — with Control
     /// alone (B2-D11), and falls through when there is nothing to pop.
-    /// W7-7 R-13: the tree's own key handler delivers the row's new-tab
-    /// activation, <c>Ctrl+Enter</c>.</summary>
+    /// W7-7 R-13 and #1273: the tree's own key handler delivers the tree's
+    /// chords — Enter, Ctrl+Enter, Alt+Up, Alt+Down — from its exact
+    /// <c>TreeChords</c> table.</summary>
     Connections,
 }
 
@@ -994,21 +995,45 @@ internal static class ChordTable
         Reg(Ids.GraphConnectionsBack, "Connections: Back", CommandSection.Graph,
             "Return the Connections leaf to the note it showed before the last Show connections.",
             "⌘[", "Ctrl+[", ChordScope.Connections),
-        // W7-7 R-13 (#1257): the tree's new-tab activation — Ctrl+Enter on a
-        // file-backed row opens its note in a new tab (contract 35 B-9),
-        // delivered by ConnectionsLeafView.OnTreeKeyDown; a row interaction,
-        // not a command id, recorded so the row's hint names the chord from
-        // the table (contract 39 N-2). No mac chord: the mac's ⌘Return is a
-        // panel key, not a catalog command, and the mac column has no word for
-        // its Return glyph (the Quick Open rows' precedent).
+        // The tree's own chords (W7-7 R-13, #1257; every delivered one
+        // declared, #1273): row interactions, not command ids, each delivered
+        // by ConnectionsLeafView's TreeChords table with its modifiers matched
+        // EXACTLY (contract 39 P12, P13(c), N-3). Enter and Ctrl+Enter record
+        // no mac chord — the mac's Return and ⌘Return are its panel's keys,
+        // not catalog commands, and the mac column has no word for the Return
+        // glyph (the Quick Open rows' precedent); ⌥↑ / ⌥↓ follow the rule to
+        // Alt+Up / Alt+Down.
+        Chord("windows.connections.activate", "Connections: activate the selected row", "Enter",
+            ChordScope.Connections,
+            "#1273, contract 35 B-9: Enter on a Connections row opens its note in the current "
+            + "tab (a ghost's creates its note) and never re-roots — only the row's Show "
+            + "connections action does; on a group header it expands or collapses the group. "
+            + "Delivered by ConnectionsLeafView's TreeChords table, modifiers matched exactly. "
+            + "The mac's Return (ConnectionsPanel.swift's onKeyPress) is a panel key, not a "
+            + "catalog command."),
         Chord("windows.connections.openInNewTab", "Connections: open in a new tab", "Ctrl+Enter",
             ChordScope.Connections,
             "W7-7 R-13 (#1257), contract 35 B-9: Ctrl+Enter on a Connections row opens its "
-            + "note in a new tab; Enter opens it in the current tab. Neither re-roots: only the "
-            + "row's Show connections action does. Delivered by ConnectionsLeafView.OnTreeKeyDown "
-            + "and recorded so the row's hint composes the chord from the table (contract 39 "
-            + "N-2). The mac's ⌘Return (ConnectionsPanel.swift's onKeyPress) is a panel key, "
-            + "not a catalog command."),
+            + "note in a new tab (a ghost's creates its note); Enter opens it in the current "
+            + "tab. Neither re-roots: only the row's Show connections action does. Delivered by "
+            + "ConnectionsLeafView's TreeChords table with Control alone (#1273), and recorded "
+            + "so the row's hint composes the chord from the table (contract 39 N-2). The mac's "
+            + "⌘Return (ConnectionsPanel.swift's onKeyPress) is a panel key, not a catalog "
+            + "command."),
+        Chord("windows.connections.previousGroup", "Connections: first row of the previous group",
+            "Alt+Up", ChordScope.Connections,
+            "#1273: Alt+Up in the Connections tree seats the first row of the previous group "
+            + "— the mac's ⌥↑ jumpSection (ConnectionsPanel.swift's onKeyPress), a "
+            + "panel key, not a catalog command. Delivered by ConnectionsLeafView's TreeChords "
+            + "table with Alt alone.",
+            mac: "⌥↑"),
+        Chord("windows.connections.nextGroup", "Connections: first row of the next group",
+            "Alt+Down", ChordScope.Connections,
+            "#1273: Alt+Down in the Connections tree seats the first row of the next group "
+            + "— the mac's ⌥↓ jumpSection (ConnectionsPanel.swift's onKeyPress), a "
+            + "panel key, not a catalog command. Delivered by ConnectionsLeafView's TreeChords "
+            + "table with Alt alone.",
+            mac: "⌥↓"),
         // W6-2 PR C (C-3): the three presets — parameterisations of the
         // table, chordless (ChordScope.None through Reg's rule), the labels
         // and hints the mac's byte for byte (SlateCommands.swift:1537–1556;

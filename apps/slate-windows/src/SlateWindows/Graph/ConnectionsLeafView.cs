@@ -17,6 +17,17 @@ using uniffi.slate_uniffi;
 
 namespace SlateWindows.Graph;
 
+/// <summary>What a key does in the Connections tree (#1273): the actions
+/// of the tree's declared chords, and nothing.</summary>
+internal enum ConnectionsTreeKey
+{
+    None,
+    Activate,
+    ActivateInNewTab,
+    PreviousGroup,
+    NextGroup,
+}
+
 /// <summary>
 /// One line of the Connections tree (contracts B-6, B-8): a GROUP row
 /// ("Linked from, N notes" / "Links to, N notes"), a group's EMPTY row
@@ -770,7 +781,10 @@ internal sealed class ConnectionsLeafView : UserControl
             }
             string? snippet = row.Level == 1 && row.Path is { } path && snippets.TryGetValue(path, out string? s) ? s : null;
             ConnectionsRowViewModel item = ConnectionsRowViewModel.ForRow(model, row, snippet);
-            item.Activate = r => model.Activate(r.Row!, newTab: (Keyboard.Modifiers & ModifierKeys.Control) != 0);
+            // An Invoke is the row's Return: the modifiers held choose the tab
+            // through the same exact table as the key (#1273).
+            item.Activate = r => model.Activate(
+                r.Row!, newTab: TreeKeyFor(Key.Return, Keyboard.Modifiers) == ConnectionsTreeKey.ActivateInNewTab);
             item.IsExpanded = !_expansion.TryGetValue(row.Id, out bool expanded) || expanded;
             PropertyChangedEventHandler remember = (_, args) =>
             {
@@ -835,10 +849,12 @@ internal sealed class ConnectionsLeafView : UserControl
     }
 
     /// <summary>The tree's key owner, for the facts (Back's shape, <see
-    /// cref="TryHandleBackChord"/>): handled iff the key activated the
-    /// selected row, toggled the selected group or jumped between the
-    /// groups. W7-7 R-13: the row's activation is <see
-    /// cref="TryActivationFromKey"/>'s decision.</summary>
+    /// cref="TryHandleBackChord"/>): handled iff <see cref="TreeKeyFor"/>
+    /// names a chord and it acted — Enter activates the selected row or
+    /// toggles the selected group, Ctrl+Enter opens the selected row in a new
+    /// tab, Alt+Up / Alt+Down jump to the first row of the previous / next
+    /// group (the mac's `jumpSection`, `:296–306`). No branch reads the key
+    /// itself (#1273).</summary>
     internal bool TryHandleTreeKey(Key key, ModifierKeys modifiers)
     {
         if (Model is not { } model)
@@ -846,35 +862,54 @@ internal sealed class ConnectionsLeafView : UserControl
             return false;
         }
         ConnectionsRowViewModel? current = _tree.SelectedItem as ConnectionsRowViewModel;
-        bool alt = (modifiers & ModifierKeys.Alt) != 0;
-        if (current is { Row: not null } && TryActivationFromKey(key, modifiers, out bool newTab))
+        switch (TreeKeyFor(key, modifiers))
         {
-            model.Activate(current.Row, newTab);
-            return true;
+            case ConnectionsTreeKey.Activate when current is { Row: not null }:
+                model.Activate(current.Row, newTab: false);
+                return true;
+            case ConnectionsTreeKey.ActivateInNewTab when current is { Row: not null }:
+                model.Activate(current.Row, newTab: true);
+                return true;
+            case ConnectionsTreeKey.Activate when current is { IsGroup: true }:
+                current.IsExpanded = !current.IsExpanded;
+                return true;
+            case ConnectionsTreeKey.PreviousGroup:
+                JumpGroup(down: false);
+                return true;
+            case ConnectionsTreeKey.NextGroup:
+                JumpGroup(down: true);
+                return true;
+            default:
+                return false;
         }
-        if (key == Key.Return && current is { IsGroup: true })
-        {
-            current.IsExpanded = !current.IsExpanded;
-            return true;
-        }
-        if (key is Key.Up or Key.Down && alt)
-        {
-            // Alt+Up / Alt+Down: the first row of the previous / next group
-            // (the mac's `jumpSection`, `:296–306`).
-            JumpGroup(key == Key.Down);
-            return true;
-        }
-        return false;
     }
 
-    /// <summary>W7-7 R-13 (#1257): a row's activation key — Return activates
-    /// it, and Control opens its note in a new tab (the chord table's
-    /// <c>windows.connections.openInNewTab</c>, contract 35 B-9); Shift and
-    /// Alt change nothing. The chord table's scope scrape reads this body.</summary>
-    internal static bool TryActivationFromKey(Key key, ModifierKeys modifiers, out bool newTab)
+    /// <summary>#1273 (contract 39 P12, P13(c), N-3): the tree's chords, each
+    /// a row of the chord table's Connections scope, named here beside the
+    /// key and the modifiers it is matched on EXACTLY — the modifiers equal,
+    /// never a bit test, so Ctrl+Shift+Enter, Alt+Enter or Ctrl+Alt+Up is
+    /// not the tree's. The chord table's scope scrape reads this list.</summary>
+    private static readonly (string Row, Key Key, ModifierKeys Modifiers, ConnectionsTreeKey Action)[] TreeChords =
+    [
+        ("windows.connections.activate", Key.Return, ModifierKeys.None, ConnectionsTreeKey.Activate),
+        ("windows.connections.openInNewTab", Key.Return, ModifierKeys.Control, ConnectionsTreeKey.ActivateInNewTab),
+        ("windows.connections.previousGroup", Key.Up, ModifierKeys.Alt, ConnectionsTreeKey.PreviousGroup),
+        ("windows.connections.nextGroup", Key.Down, ModifierKeys.Alt, ConnectionsTreeKey.NextGroup),
+    ];
+
+    /// <summary>What a key does in the tree: the <see cref="TreeChords"/>
+    /// entry whose key and modifiers both equal the pressed ones, else
+    /// nothing.</summary>
+    internal static ConnectionsTreeKey TreeKeyFor(Key key, ModifierKeys modifiers)
     {
-        newTab = key == Key.Return && (modifiers & ModifierKeys.Control) != 0;
-        return key == Key.Return;
+        foreach ((string _, Key chordKey, ModifierKeys chordModifiers, ConnectionsTreeKey action) in TreeChords)
+        {
+            if (chordKey == key && chordModifiers == modifiers)
+            {
+                return action;
+            }
+        }
+        return ConnectionsTreeKey.None;
     }
 
     private void JumpGroup(bool down)
