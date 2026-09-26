@@ -88,4 +88,41 @@ public sealed class ItemNameCensusTests
     [InlineData(null)]
     public void SpokenNamesAreSpeakable(string? name) =>
         Assert.False(ShellAccessibilityTests.IsUnspeakableItemName(name), name);
+
+    /// <summary>Codex PR 3 round 4 (AR-20): Quick Open speaks a note by
+    /// core's extension-stripped label, so the census meets what Quick Open
+    /// EXPOSES, never the file name the cases above test. Each legal name's
+    /// label, as core derives it, is speakable.</summary>
+    [Theory]
+    [InlineData("note.md", "note")]
+    [InlineData("notes.v2.md", "notes.v2")]
+    [InlineData("README.md", "README")]
+    [InlineData("Part.One.md", "Part.One")]
+    [InlineData("Smith.Jones.md", "Smith.Jones")]
+    public void WhatQuickOpenExposesForALegalNameIsSpeakable(string file, string label)
+    {
+        Assert.Equal(label, QuickOpenLabel(file));
+        Assert.False(ShellAccessibilityTests.IsUnspeakableItemName(label), label);
+    }
+
+    /// <summary>AR-20 (contracts 40): a note whose label is a namespace
+    /// chain with a PascalCase tail, or reads like a record dump, IS flagged
+    /// by the lexical census — the accepted false positive on a contrived
+    /// title, which no fixture carries and which fails a journey loudly with
+    /// the element's path. Pinned here so a change in either direction is
+    /// seen.</summary>
+    [Theory]
+    [InlineData("System.String.md", "System.String")]
+    [InlineData("Plan { owner = Alice }.md", "Plan { owner = Alice }")]
+    public void WhatQuickOpenExposesForAnAr20TitleIsFlagged(string file, string label)
+    {
+        Assert.Equal(label, QuickOpenLabel(file));
+        Assert.True(ShellAccessibilityTests.IsUnspeakableItemName(label), label);
+    }
+
+    /// <summary>The label Quick Open shows and speaks for a file, from core's
+    /// own ranking (the QuickSwitcherViewModel's source).</summary>
+    private static string QuickOpenLabel(string file) =>
+        Assert.Single(uniffi.slate_uniffi.SlateUniffiMethods.SwitcherRankTop(
+            [new uniffi.slate_uniffi.SwitcherFile(file, file)], string.Empty, [], 5).Rows).DisplayName;
 }
