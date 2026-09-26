@@ -58,6 +58,17 @@ internal static class SiblingNames
 
     private static readonly ConcurrentDictionary<(Type, string), PropertyInfo?> Properties = new();
 
+    /// <summary>Every live scope, for a container no host has linked (see
+    /// <see cref="NameForUnlinked"/>); shared across UI threads, so
+    /// locked.</summary>
+    private static readonly List<WeakReference<Scope>> Scopes = [];
+
+    private static readonly object ScopesLock = new();
+
+    /// <summary>The containers whose item changes are watched (see
+    /// <see cref="Watch"/>).</summary>
+    private static readonly ConditionalWeakTable<FrameworkElement, object?> Watched = new();
+
     /// <summary>The container style's Name binding reads through this:
     /// <c>{Binding RelativeSource={RelativeSource Self}, Converter={x:Static
     /// local:SiblingNames.Converter}}</c>.</summary>
@@ -196,6 +207,57 @@ internal static class SiblingNames
         return host?.GetValue(ScopeProperty) is Scope scope ? scope.NameFor(container) : null;
     }
 
+    /// <summary>
+    /// The name of an item whose container no host has linked. UIA names an
+    /// item no container holds — a closed combo's selection, a row a
+    /// virtualized list has not realized — through a throwaway wrapper: a
+    /// fresh container handed the item (its DataContext) and the host's
+    /// container style, but placed in no panel, so no host can be found from
+    /// it (the Bases and Graph inspector journeys heard the item's record
+    /// dump). Its host is the scope, on this thread, whose container style it
+    /// wears and whose items hold its item; null when none does.
+    /// </summary>
+    private static string? NameForUnlinked(DependencyObject container)
+    {
+        if (container is not FrameworkElement { DataContext: { } item, Style: { } style })
+        {
+            return null;
+        }
+        Scope[] scopes;
+        lock (ScopesLock)
+        {
+            _ = Scopes.RemoveAll(reference => !reference.TryGetTarget(out _));
+            scopes = [.. Scopes.Select(reference => reference.TryGetTarget(out Scope? scope) ? scope : null).OfType<Scope>()];
+        }
+        foreach (Scope scope in scopes)
+        {
+            if (scope.Host.CheckAccess()
+                && ReferenceEquals(scope.Host.ItemContainerStyle, style)
+                && scope.NameForItem(item) is { } name)
+            {
+                return name;
+            }
+        }
+        return null;
+    }
+
+    /// <summary>A container the rule has named reads again whenever it is
+    /// handed another item: UIA's wrapper is reused item after item, and a
+    /// recycling panel re-links its containers — the name binding's source
+    /// is the container itself, which never changes.</summary>
+    private static void Watch(DependencyObject container)
+    {
+        if (container is FrameworkElement element)
+        {
+            _ = Watched.GetValue(element, key =>
+            {
+                key.DataContextChanged += (_, _) =>
+                    BindingOperations.GetBindingExpression(key, AutomationProperties.NameProperty)?.UpdateTarget();
+                return null;
+            });
+        }
+    }
+
     internal static string Read(object? item, string? path)
     {
         if (string.IsNullOrEmpty(path))
@@ -233,6 +295,10 @@ internal static class SiblingNames
         internal Scope(ItemsControl host)
         {
             _host = host;
+            lock (ScopesLock)
+            {
+                Scopes.Add(new WeakReference<Scope>(this));
+            }
             ((INotifyCollectionChanged)host.Items).CollectionChanged += (_, _) => Invalidate();
             // A recycling panel (the Files tree, the filter results) re-links
             // a container to another item without re-applying its style, and
@@ -249,6 +315,22 @@ internal static class SiblingNames
         }
 
         internal int Refreshes { get; private set; }
+
+        internal ItemsControl Host => _host;
+
+        /// <summary>The name <paramref name="item"/> reads among the host's
+        /// items (its first place, should it be there twice), or null when
+        /// it is none of them.</summary>
+        internal string? NameForItem(object item)
+        {
+            int index = _host.Items.IndexOf(item);
+            if (index < 0)
+            {
+                return null;
+            }
+            _names ??= Compute();
+            return index < _names.Length ? _names[index] : null;
+        }
 
         /// <summary>The items or a name changed: the names are recomputed at
         /// their next read, and the realized containers read again once the
@@ -362,10 +444,15 @@ internal static class SiblingNames
 
     private sealed class ContainerNameConverter : IValueConverter
     {
-        public object Convert(object value, Type targetType, object parameter, CultureInfo culture) =>
-            value is DependencyObject container && NameFor(container) is { } name
-                ? name
-                : DependencyProperty.UnsetValue;
+        public object Convert(object value, Type targetType, object parameter, CultureInfo culture)
+        {
+            if (value is not DependencyObject container)
+            {
+                return DependencyProperty.UnsetValue;
+            }
+            Watch(container);
+            return NameFor(container) ?? NameForUnlinked(container) ?? DependencyProperty.UnsetValue;
+        }
 
         public object ConvertBack(object value, Type targetType, object parameter, CultureInfo culture) =>
             throw new NotSupportedException();
