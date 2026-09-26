@@ -222,7 +222,7 @@ internal sealed class QuickSwitcherViewModel : BindableBase, IDisposable
 
     public void ApplyFileChange(FileChangeEvent change)
     {
-        _files = Applied(_files, change);
+        _files = Applied(_files, change, IsOpenablePath(change.Path));
         if (IsOpen)
         {
             ScheduleRefresh();
@@ -233,7 +233,7 @@ internal sealed class QuickSwitcherViewModel : BindableBase, IDisposable
     /// path (a Created already present, a Deleted already gone, a Renamed
     /// already moved each change nothing), so replaying a change the list
     /// already reflects is harmless.</summary>
-    private static SwitcherFile[] Applied(SwitcherFile[] current, FileChangeEvent change)
+    private static SwitcherFile[] Applied(SwitcherFile[] current, FileChangeEvent change, bool openable)
     {
         var files = current.ToList();
         if (change.PreviousPath is string previous)
@@ -259,7 +259,7 @@ internal sealed class QuickSwitcherViewModel : BindableBase, IDisposable
                 || file.Path.StartsWith(deletedPrefix, StringComparison.Ordinal));
         }
         else if (change.Kind is FileChangeKind.Created or FileChangeKind.Renamed
-            && IsOpenablePath(change.Path)
+            && openable
             && !files.Any(file => string.Equals(file.Path, change.Path, StringComparison.Ordinal)))
         {
             files.Add(new SwitcherFile(change.Path, System.IO.Path.GetFileName(change.Path)));
@@ -275,7 +275,7 @@ internal sealed class QuickSwitcherViewModel : BindableBase, IDisposable
     /// Quick Open: a list reloaded in keyset pages could overwrite a newer
     /// Slate-owned event with a stale page. An open switcher re-ranks once.
     /// </summary>
-    public void ApplyFileChanges(IReadOnlyCollection<FileChangeEvent> changes)
+    public void ApplyFileChanges(IReadOnlyCollection<(FileChangeEvent Change, bool Openable)> changes)
     {
         if (changes.Count == 0)
         {
@@ -283,9 +283,9 @@ internal sealed class QuickSwitcherViewModel : BindableBase, IDisposable
         }
 
         SwitcherFile[] files = _files;
-        foreach (FileChangeEvent change in changes)
+        foreach ((FileChangeEvent change, bool openable) in changes)
         {
-            files = Applied(files, change);
+            files = Applied(files, change, openable);
         }
 
         _files = files;
@@ -298,8 +298,17 @@ internal sealed class QuickSwitcherViewModel : BindableBase, IDisposable
     /// <summary>The paths Quick Open ranks over — for the rescan facts.</summary>
     internal IReadOnlyList<string> FilePathsForTests => [.. _files.Select(file => file.Path)];
 
+    /// <summary>Core's openable-document extensions (W7-7 PR 7, round 26:
+    /// <c>openable_document_extensions</c>, pinned equal by a fact), the
+    /// classification a Slate-owned event's path gets here. A rescan's
+    /// delta rows carry core's own classification instead.</summary>
+    internal static readonly System.Collections.Frozen.FrozenSet<string> OpenableExtensions =
+        System.Collections.Frozen.FrozenSet.ToFrozenSet(
+            ["md", "markdown", "mdown", "mkd", "canvas", "base"],
+            StringComparer.OrdinalIgnoreCase);
+
     private static bool IsOpenablePath(string path) =>
-        System.IO.Path.GetExtension(path).ToLowerInvariant() is ".md" or ".markdown" or ".canvas" or ".base";
+        OpenableExtensions.Contains(System.IO.Path.GetExtension(path).TrimStart('.'));
 
     public void Dispose() => CancelRanking();
 

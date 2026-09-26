@@ -63,7 +63,8 @@ internal sealed partial class VaultLifecycleViewModel
     // W7-7 PR 7 (R-9): the rescan's clock, its delta channel and page size.
     private readonly Func<DateTimeOffset> _scanClock;
     private readonly Func<VaultSession, IScanDeltaChannel> _scanDeltaChannel;
-    private readonly Func<Func<RescanReport>, Task<RescanReport>> _runRescan;
+    private readonly IRescanCoreWorker _rescanWorker;
+    private readonly int _uiThreadId;
     private readonly uint _scanDeltaPageLimit;
 
     /// <summary>
@@ -159,7 +160,7 @@ internal sealed partial class VaultLifecycleViewModel
         Action<RenderedAnnouncement>? announceRendered = null,
         Func<VaultSession, IScanDeltaChannel>? scanDeltaChannel = null,
         uint scanDeltaPageLimit = DefaultScanDeltaPageLimit,
-        Func<Func<RescanReport>, Task<RescanReport>>? rescanWorker = null)
+        IRescanCoreWorker? rescanWorker = null)
     {
         _pickVault = pickVault;
         _enqueueUi = enqueueUi;
@@ -184,7 +185,10 @@ internal sealed partial class VaultLifecycleViewModel
         _scanClock = scanClock ?? (() => DateTimeOffset.UtcNow);
         _scanDeltaChannel = scanDeltaChannel ?? (session => new SessionScanDeltaChannel(session));
         _scanDeltaPageLimit = scanDeltaPageLimit;
-        _runRescan = rescanWorker ?? (work => Task.Run(work));
+        _rescanWorker = rescanWorker ?? ThreadPoolRescanCoreWorker.Instance;
+        // The lifecycle is built on the UI thread; the rescan core seam
+        // refuses any call it would run here (locked decision 05 §4.1).
+        _uiThreadId = Environment.CurrentManagedThreadId;
         _filterUiContext = filterUiContext;
         SynchronizationContext? currentUiContext = SynchronizationContext.Current;
         _lifecycleDispatcher = currentUiContext is DispatcherSynchronizationContext
@@ -447,7 +451,16 @@ internal sealed partial class VaultLifecycleViewModel
             _eventListener = new UiVaultEventListener(
                 (code, eventPath, message) => _enqueueUi(
                     () => HandleVaultError(generation, code, eventPath, message)),
-                @event => _enqueueUi(() => HandleFileChange(generation, @event)),
+                @event =>
+                {
+                    // W7-7 PR 7 (round 26): this runs INSIDE the write, at
+                    // its commit — before a synchronous write returns to
+                    // the UI thread or an asynchronous one's completion
+                    // resumes there — so a rescan page read earlier never
+                    // applies a stale row for the path in between.
+                    NoteSlateOwnedWrite(@event);
+                    _enqueueUi(() => HandleFileChange(generation, @event));
+                },
                 // W6-2 PR A (contract A-3): the index-phase arm, marshalled
                 // like the other two — an external edit surfaces at the next
                 // scan, never as a file change.
@@ -747,13 +760,9 @@ internal sealed partial class VaultLifecycleViewModel
     {
         if (generation == _generation)
         {
-            // W7-7 PR 7 (round 25): this event reconciles its path(s); a
-            // rescan's page read before it must not undo that.
-            NoteSlateOwnedChange(@event.Path);
-            if (@event.PreviousPath is string movedFrom)
-            {
-                NoteSlateOwnedChange(movedFrom);
-            }
+            // W7-7 PR 7 (rounds 25-26): this event reconciles its path(s);
+            // a rescan's page read before it must not undo that.
+            NoteSlateOwnedWrite(@event);
 
             if (@event.Kind == FileChangeKind.Renamed
                 && @event.PreviousPath is string previousPath)
@@ -936,6 +945,29 @@ internal sealed partial class VaultLifecycleViewModel
             HostLog.Write(HostDiagnosticEvent.VaultCommandFailed, exception);
         }
 
+        // W7-7 PR 7 (round 26): a running rescan's token is cancelled — and
+        // below disposed — through the rescan core seam, off the dispatcher;
+        // this blocks only on that one pool call.
+        CancelToken? rescanCancel = _rescanCancel;
+        _rescanCancel = null;
+        if (rescanCancel is not null)
+        {
+            try
+            {
+                _ = StartRescanCoreCall(
+                    "cancel",
+                    () =>
+                    {
+                        rescanCancel.Cancel();
+                        return true;
+                    }).GetAwaiter().GetResult();
+            }
+            catch (Exception exception)
+            {
+                HostLog.Write(HostDiagnosticEvent.VaultCommandFailed, exception);
+            }
+        }
+
         try
         {
             _sessionLoadCompletion.GetAwaiter().GetResult();
@@ -954,6 +986,23 @@ internal sealed partial class VaultLifecycleViewModel
         _sessionLoadCompletion = Task.CompletedTask;
         _scanCancel?.Dispose();
         _scanCancel = null;
+        if (rescanCancel is not null)
+        {
+            try
+            {
+                _ = StartRescanCoreCall(
+                    "dispose",
+                    () =>
+                    {
+                        rescanCancel.Dispose();
+                        return true;
+                    }).GetAwaiter().GetResult();
+            }
+            catch (Exception exception)
+            {
+                HostLog.Write(HostDiagnosticEvent.VaultCommandFailed, exception);
+            }
+        }
         _progressListener = null;
         ResetRescanState();
 

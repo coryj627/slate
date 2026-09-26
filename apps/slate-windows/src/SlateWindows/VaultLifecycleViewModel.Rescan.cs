@@ -52,10 +52,17 @@ internal sealed partial class VaultLifecycleViewModel
     private DateTimeOffset? _lastScanEndedAt;
     private Task _rescanCompletion = Task.CompletedTask;
 
-    // Round 25: the Slate-owned change journal — dispatcher-local, kept
-    // only while a rescan runs (NoteSlateOwnedChange).
-    private readonly Dictionary<string, long> _slateOwnedChangeEpochs = new(StringComparer.Ordinal);
-    private long _slateOwnedChangeEpoch;
+    // Rounds 25-26: the Slate-owned write journal (NoteSlateOwnedWrite) —
+    // written by the session listener on the writer's thread and by the
+    // funnel on this one, kept only while a rescan runs.
+    private readonly System.Collections.Concurrent.ConcurrentDictionary<string, long> _slateOwnedWriteEpochs =
+        new(StringComparer.Ordinal);
+    private long _slateOwnedWriteEpoch;
+    private volatile bool _slateOwnedWriteJournalActive;
+
+    // The running rescan's cancel token (CloseSession cancels it through
+    // the seam and then owns it).
+    private CancelToken? _rescanCancel;
 
     /// <summary>The running rescan (and its coalesced follow-ups), for the
     /// facts to await.</summary>
@@ -110,6 +117,7 @@ internal sealed partial class VaultLifecycleViewModel
         }
 
         _rescanActive = true;
+        _slateOwnedWriteJournalActive = true;
         _rescanCompletion = RunRescansAsync(_generation, session, reason);
         return _rescanCompletion;
     }
@@ -160,7 +168,8 @@ internal sealed partial class VaultLifecycleViewModel
             {
                 _rescanActive = false;
                 _lastScanEndedAt = _scanClock();
-                _slateOwnedChangeEpochs.Clear();
+                _slateOwnedWriteJournalActive = false;
+                _slateOwnedWriteEpochs.Clear();
             }
         }
     }
@@ -168,24 +177,66 @@ internal sealed partial class VaultLifecycleViewModel
     private async Task RunOneRescanAsync(int generation, VaultSession session, RescanReason reason)
     {
         // ONE cancel token for the whole run: the resume, the scan and every
-        // page read take it (locked decision 05). A close or a vault switch
-        // cancels it (CloseSession, which then owns and disposes it); a
-        // cancelled run stops silently wherever it is, its generation Pending
-        // at its cursor for a later rescan of the same session (a closed
-        // session's generation dies with its connection).
-        var cancel = new CancelToken();
-        _scanCancel = cancel;
+        // page read take it (locked decision 05). It is made, cancelled and
+        // disposed through the rescan core seam, like every other rescan core
+        // call. A close or a vault switch cancels it (CloseSession, which
+        // then owns and disposes it); a cancelled run stops silently wherever
+        // it is, its generation Pending at its cursor for a later rescan of
+        // the same session (a closed session's generation dies with its
+        // connection).
+        CancelToken cancel;
+        try
+        {
+            cancel = await RunRescanCoreAsync("token", () => new CancelToken(), trackForClose: false);
+        }
+        catch (Exception exception) when (exception is not OutOfMemoryException)
+        {
+            HostLog.Write(HostDiagnosticEvent.VaultRescanFailed, exception);
+            if (generation == _generation)
+            {
+                PostRescanIncomplete(1);
+            }
+
+            return;
+        }
+
+        if (generation != _generation)
+        {
+            await DisposeRescanTokenAsync(cancel);
+            return;
+        }
+
+        _rescanCancel = cancel;
         try
         {
             await RunOneRescanAsync(generation, session, reason, _scanDeltaChannel(session), cancel);
         }
         finally
         {
-            if (ReferenceEquals(_scanCancel, cancel))
+            if (ReferenceEquals(_rescanCancel, cancel))
             {
-                _scanCancel = null;
-                cancel.Dispose();
+                _rescanCancel = null;
+                await DisposeRescanTokenAsync(cancel);
             }
+        }
+    }
+
+    private async Task DisposeRescanTokenAsync(CancelToken cancel)
+    {
+        try
+        {
+            _ = await RunRescanCoreAsync(
+                "dispose",
+                () =>
+                {
+                    cancel.Dispose();
+                    return true;
+                },
+                trackForClose: false);
+        }
+        catch (Exception exception) when (exception is not OutOfMemoryException)
+        {
+            HostLog.Write(HostDiagnosticEvent.VaultRescanFailed, exception);
         }
     }
 
@@ -213,16 +264,16 @@ internal sealed partial class VaultLifecycleViewModel
                 return;
         }
 
-        // (2) The scan, on the rescan worker. The listener only moves the
+        // (2) The scan, through the seam. The listener only moves the
         // progress bar of an explicit refresh; nothing it hears speaks.
         UiProgressListener? progress = reason == RescanReason.Explicit
             ? new UiProgressListener(_enqueueUi, @event => HandleRescanProgress(generation, @event))
             : null;
-        Task<RescanReport> scan = _runRescan(() => progress is null
+        Task<ScanReport> scan = StartRescanCoreCall("scan", () => progress is null
             ? session.Rescan(cancel)
             : session.RescanWithProgress(cancel, progress));
         _sessionLoadCompletion = scan;
-        RescanReport report;
+        ScanReport report;
         try
         {
             report = await scan;
@@ -275,7 +326,7 @@ internal sealed partial class VaultLifecycleViewModel
             case DeltaReconciliation.Complete:
                 try
                 {
-                    outcome = await RunLedgerCallAsync(channel.Release);
+                    outcome = await RunRescanCoreAsync("release", channel.Release);
                 }
                 catch (Exception exception) when (exception is not OutOfMemoryException)
                 {
@@ -304,7 +355,7 @@ internal sealed partial class VaultLifecycleViewModel
         }
 
         // (6) The one sentence. The error COUNT crosses the FFI in full; its
-        // messages only as samples (round 25).
+        // messages only as samples (rounds 25-26).
         if (outcome is not ScanDeltaOutcome released)
         {
             PostRescanIncomplete(report.ErrorCount == ulong.MaxValue ? ulong.MaxValue : report.ErrorCount + 1);
@@ -348,19 +399,22 @@ internal sealed partial class VaultLifecycleViewModel
     /// </summary>
     /// <remarks>
     /// <para>
-    /// Every ledger call runs OFF the dispatcher, cancellable (locked
-    /// decision 05 §4.1); only the page's effects run here, in one turn.
+    /// Every ledger call runs through the rescan core seam, off the
+    /// dispatcher, cancellable (locked decision 05 §4.1); only a page's
+    /// effects run here, in one turn.
     /// </para>
     /// <para>
-    /// The linearization with Slate-owned writes (round 25): the host
-    /// journals, on this thread, the epoch of every Slate-owned file-change
-    /// event it handles (<see cref="NoteSlateOwnedChange"/>) and captures the
-    /// epoch as it issues each page read. A row whose path's journal epoch
-    /// is newer than the capture is skipped: that event already reconciled
-    /// the path. A write committed before the read arrives superseded
-    /// (core's flag); one whose event is handled after the page's effects
-    /// reconciles over them through its own handling (a Created re-seats
-    /// the tab a stale Deleted marked missing).
+    /// The linearization with Slate-owned writes (rounds 25-26): the host
+    /// journals a new epoch for a path whenever it learns a Slate-owned
+    /// write to it committed (<see cref="NoteSlateOwnedWrite"/>) — at the
+    /// commit itself, where the session's listener runs inside the write
+    /// and so before a synchronous write like Save returns or an
+    /// asynchronous one's completion resumes, and again when its event is
+    /// handled — and captures the epoch as it issues each page read. A row
+    /// whose path's epoch is newer than the capture is skipped: that write
+    /// already reconciled the path. A write committed before the read
+    /// arrives superseded (core's flag); one whose event is handled after
+    /// the page's effects reconciles over them.
     /// </para>
     /// </remarks>
     private async Task<DeltaReconciliation> ReconcileScanDeltaAsync(
@@ -369,7 +423,7 @@ internal sealed partial class VaultLifecycleViewModel
         ScanDeltaPending? pending;
         try
         {
-            pending = await RunLedgerCallAsync(channel.Pending);
+            pending = await RunRescanCoreAsync("pending", channel.Pending);
         }
         catch (Exception exception) when (exception is not OutOfMemoryException)
         {
@@ -388,15 +442,16 @@ internal sealed partial class VaultLifecycleViewModel
         }
 
         string? cursor = pending.Cursor;
-        while (generation == _generation && !cancel.IsCancelled())
+        while (generation == _generation)
         {
-            long capturedEpoch = _slateOwnedChangeEpoch;
+            long capturedEpoch = Interlocked.Read(ref _slateOwnedWriteEpoch);
             string? pageCursor = cursor;
             ScanDeltaPage page;
             try
             {
-                page = await RunLedgerCallAsync(() =>
-                    channel.ReadPage(pending.Generation, pageCursor, _scanDeltaPageLimit, cancel));
+                page = await RunRescanCoreAsync(
+                    "page",
+                    () => channel.ReadPage(pending.Generation, pageCursor, _scanDeltaPageLimit, cancel));
                 if (generation != _generation)
                 {
                     return DeltaReconciliation.Cancelled;
@@ -407,11 +462,13 @@ internal sealed partial class VaultLifecycleViewModel
                     ApplyScanDeltaPage(page, capturedEpoch);
                 }
 
-                await RunLedgerCallAsync(() =>
-                {
-                    channel.PageApplied(pending.Generation, page.NextCursor);
-                    return true;
-                });
+                _ = await RunRescanCoreAsync(
+                    "applied",
+                    () =>
+                    {
+                        channel.PageApplied(pending.Generation, page.NextCursor);
+                        return true;
+                    });
             }
             catch (VaultException.Cancelled)
             {
@@ -434,12 +491,31 @@ internal sealed partial class VaultLifecycleViewModel
         return DeltaReconciliation.Cancelled;
     }
 
-    /// <summary>One synchronous core call, off the dispatcher. It stands in
-    /// the session-load completion, so a close waits for it before the
-    /// session goes away.</summary>
-    private async Task<T> RunLedgerCallAsync<T>(Func<T> call)
+    /// <summary>
+    /// Start one rescan core call through the seam — refused if the seam
+    /// would run it on the UI thread (locked decision 05 §4.1).
+    /// </summary>
+    private Task<T> StartRescanCoreCall<T>(string operation, Func<T> call)
     {
-        Task<T> task = Task.Run(call);
+        int uiThread = _uiThreadId;
+        return _rescanWorker.Run(operation, () =>
+            Environment.CurrentManagedThreadId == uiThread
+                ? throw new InvalidOperationException(
+                    $"The rescan core call '{operation}' was entered on the UI thread.")
+                : call());
+    }
+
+    /// <summary>One rescan core call through the seam, awaited. A tracked
+    /// call stands in the session-load completion, so a close waits for it
+    /// before the session goes away.</summary>
+    private async Task<T> RunRescanCoreAsync<T>(string operation, Func<T> call, bool trackForClose = true)
+    {
+        Task<T> task = StartRescanCoreCall(operation, call);
+        if (!trackForClose)
+        {
+            return await task;
+        }
+
         _sessionLoadCompletion = task;
         try
         {
@@ -455,20 +531,32 @@ internal sealed partial class VaultLifecycleViewModel
     }
 
     /// <summary>
-    /// Round 25: journal a Slate-owned file-change event the host is handling
-    /// (the contract-05 channel) — a new epoch for its path — while a rescan
-    /// runs; a delta page read before the epoch skips that path's row.
+    /// Rounds 25-26: journal a Slate-owned write to <paramref name="path"/> —
+    /// a new epoch — while a rescan runs. Called from any thread: by the
+    /// session listener INSIDE the write (at its commit, before a synchronous
+    /// write returns or an asynchronous one's completion resumes) and by
+    /// <see cref="HandleFileChange"/> when its event is handled. A delta
+    /// page read before the epoch skips that path's row.
     /// </summary>
-    private void NoteSlateOwnedChange(string path)
+    private void NoteSlateOwnedWrite(string path)
     {
-        if (_rescanActive)
+        if (_slateOwnedWriteJournalActive)
         {
-            _slateOwnedChangeEpochs[path] = ++_slateOwnedChangeEpoch;
+            _slateOwnedWriteEpochs[path] = Interlocked.Increment(ref _slateOwnedWriteEpoch);
+        }
+    }
+
+    private void NoteSlateOwnedWrite(FileChangeEvent @event)
+    {
+        NoteSlateOwnedWrite(@event.Path);
+        if (@event.PreviousPath is string movedFrom)
+        {
+            NoteSlateOwnedWrite(movedFrom);
         }
     }
 
     private bool ReconciledSince(string path, long capturedEpoch) =>
-        _slateOwnedChangeEpochs.TryGetValue(path, out long epoch) && epoch > capturedEpoch;
+        _slateOwnedWriteEpochs.TryGetValue(path, out long epoch) && epoch > capturedEpoch;
 
     /// <summary>
     /// One page's effects: the operations <see cref="HandleFileChange"/>
@@ -489,7 +577,9 @@ internal sealed partial class VaultLifecycleViewModel
     /// (<see cref="QuickSwitcherViewModel.ApplyFileChanges"/>, the funnel's
     /// per-event <c>ApplyFileChange</c> batched). The delta is Quick Open's
     /// only rescan path (round 25): a reloaded list read in keyset pages
-    /// could overwrite a newer Slate-owned event with a stale page.
+    /// could overwrite a newer Slate-owned event with a stale page. Each
+    /// row carries core's own classification of the path (round 26), so a
+    /// .mdown or .mkd note reaches Quick Open like any other.
     /// </remarks>
     private void ApplyScanDeltaPage(ScanDeltaPage page, long capturedEpoch)
     {
@@ -501,7 +591,7 @@ internal sealed partial class VaultLifecycleViewModel
         ];
         var removed = new List<string>();
         var modified = new List<string>();
-        var changes = new List<FileChangeEvent>(live.Length);
+        var changes = new List<(FileChangeEvent Change, bool Openable)>(live.Length);
         bool created = false;
         foreach (ScanDeltaEntry entry in live)
         {
@@ -524,7 +614,7 @@ internal sealed partial class VaultLifecycleViewModel
                     throw new ArgumentOutOfRangeException(nameof(page), entry.Kind, "unknown scan delta kind");
             }
 
-            changes.Add(new FileChangeEvent(kind, entry.Path, null));
+            changes.Add((new FileChangeEvent(kind, entry.Path, null), entry.Openable));
         }
 
         // Removals before creations: a missing tab's file back under another
@@ -542,7 +632,7 @@ internal sealed partial class VaultLifecycleViewModel
             workspace?.NotifyHistoryOfVaultChange(path);
         }
 
-        foreach (FileChangeEvent change in changes)
+        foreach ((FileChangeEvent change, _) in changes)
         {
             workspace?.NotifyReadingOfVaultChange(change.Kind, change.Path);
             workspace?.NotifyBasesOfVaultChange(change.Path);
@@ -633,6 +723,7 @@ internal sealed partial class VaultLifecycleViewModel
         _pendingRescanReason = null;
         _lastScanEndedAt = null;
         _rescanCompletion = Task.CompletedTask;
-        _slateOwnedChangeEpochs.Clear();
+        _slateOwnedWriteJournalActive = false;
+        _slateOwnedWriteEpochs.Clear();
     }
 }

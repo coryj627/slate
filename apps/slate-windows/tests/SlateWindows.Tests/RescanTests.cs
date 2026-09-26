@@ -757,16 +757,19 @@ public sealed class RescanTests
         Assert.Equal([OneError, OneError, "Files refreshed. 3 new or changed, 1 removed."], h.Spoken);
     });
 
-    /// <summary>Round 25 (locked decision 05 §4.1): no ledger call runs on the
-    /// UI thread. Across a page failure and its retry — the resume, a new
-    /// generation, every page read, every applied mark and the release —
-    /// every call the lifecycle makes into core's ledger lands on a pool
-    /// thread, never the fact's STA (dispatcher) thread.</summary>
+    /// <summary>Round 26 (locked decision 05 §4.1): ONE seam carries every
+    /// rescan core call, and none runs on the UI thread. Across a page
+    /// failure, its retry, and a close that lands on a parked rescan, every
+    /// operation — the token's creation, the ledger's pending read, the
+    /// scan, every page read, every applied mark (core's coalesce), the
+    /// release (core's reduction), the cancel and the disposal — lands on a
+    /// pool thread, never the fact's STA (dispatcher) thread; so does every
+    /// ledger call inside them.</summary>
     [Fact]
-    public void TheLedgerIsNeverCalledOnTheUiThread() => RunSta(() =>
+    public void NoRescanCoreCallRunsOnTheUiThread() => RunSta(() =>
     {
         using var h = new Harness(
-            "ledger-threads", pageLimit: 1, files: [("a.md", "a0\n"), ("b.md", "b0\n")]);
+            "core-threads", pageLimit: 1, files: [("a.md", "a0\n"), ("b.md", "b0\n")]);
         h.Write("a.md", "a1 text\n");
         h.Write("b.md", "b1 text\n");
         h.FailReads(read => read == 2);
@@ -774,16 +777,108 @@ public sealed class RescanTests
         h.FailReads(_ => false);
         h.Now += TimeSpan.FromMinutes(1);
         h.Context.Await(h.Lifecycle.RescanAsync(RescanReason.Explicit));
+        Assert.Equal([OneError, "Files refreshed. 2 new or changed, 0 removed."], h.Spoken);
 
-        (string Call, int Thread, bool Pool)[] calls = [.. h.LedgerCalls];
+        // A close lands on a parked rescan: its token is cancelled and
+        // disposed through the seam too.
+        h.Write("a.md", "a2 text, longer\n");
+        h.Now += TimeSpan.FromMinutes(1);
+        h.ParkAfterCall = h.ScanCalls + 1;
+        Task parked = h.Lifecycle.RescanAsync(RescanReason.Explicit);
+        h.Context.RunUntil(() => h.Parked.IsSet, "the scan parking");
+        h.Release.Set();
+        h.Lifecycle.CloseVault();
+        h.Context.Await(parked, "the closed rescan");
+
+        (string Operation, int Thread, bool Pool)[] calls = [.. h.CoreCalls];
         Assert.Equal(
-            ["PageApplied", "Pending", "ReadPage", "Release"],
-            calls.Select(call => call.Call).Distinct().Order(StringComparer.Ordinal).ToArray());
+            ["applied", "cancel", "dispose", "page", "pending", "release", "scan", "token"],
+            calls.Select(call => call.Operation).Distinct().Order(StringComparer.Ordinal).ToArray());
         Assert.All(calls, call =>
         {
             Assert.NotEqual(h.UiThread, call.Thread);
-            Assert.True(call.Pool, $"{call.Call} ran on a non-pool thread");
+            Assert.True(call.Pool, $"{call.Operation} ran on a non-pool thread");
         });
+        Assert.All(h.LedgerCalls, call => Assert.NotEqual(h.UiThread, call.Thread));
+    });
+
+    /// <summary>Round 26 (the post-save window, production order): a page
+    /// read completes while a synchronous Save holds the dispatcher, so the
+    /// page's application is queued BEHIND the save — it runs after Save
+    /// returns (the tab now clean) and before the save's own event is
+    /// handled. The journal entry the write made at its commit makes the
+    /// application skip the path: no reload, the undo history intact, and
+    /// the superseded row never spoken.</summary>
+    [Fact]
+    public void APageQueuedBehindABlockingSaveNeverReloadsTheSavedTab() => RunSta(() =>
+    {
+        using var h = new Harness("post-save-window", ("y.md", "y0\n"), ("keep.md", "keep\n"));
+        h.Write("y.md", "y1 external\n");
+        WorkspaceTabViewModel y = h.Open("y.md");
+        Assert.Equal("y1 external\n", y.Text);
+        y.Text = "y1 external\nmine\n";
+        Assert.True(y.IsDirty);
+        bool queued = false;
+        bool? savedOk = null;
+        h.AfterRead(page =>
+        {
+            if (!queued && page.Entries.Any(entry => entry.Path == "y.md" && !entry.Superseded))
+            {
+                // On the read's pool thread, before its continuation is
+                // queued: the Save is queued FIRST, so the page's application
+                // queues behind it while it holds the dispatcher.
+                queued = true;
+                h.Context.Post(_ => savedOk = y.Save(), null);
+            }
+        });
+
+        h.Context.Await(h.Lifecycle.RescanAsync(RescanReason.Explicit));
+
+        Assert.True(queued, "the page never held y.md's modification");
+        Assert.True(savedOk);
+        Assert.False(y.IsDirty);
+        Assert.Equal("y1 external\nmine\n", y.Text);
+        Assert.True(y.EditorDocument!.UndoStack.CanUndo, "the queued page reloaded the tab Save had just cleaned");
+        Assert.Equal([NoChanges], h.Spoken);
+    });
+
+    /// <summary>Round 26: the host's openable set — the Slate-owned event
+    /// path's classification — IS core's exported set, read off the UI
+    /// thread.</summary>
+    [Fact]
+    public async Task TheHostOpenableSetIsCoresOpenableSet()
+    {
+        string[] core = [.. await Task.Run(SlateUniffiMethods.OpenableDocumentExtensions)];
+        Assert.Equal(
+            core.Order(StringComparer.Ordinal).ToArray(),
+            QuickSwitcherViewModel.OpenableExtensions.Order(StringComparer.Ordinal).ToArray());
+    }
+
+    /// <summary>Round 26: openability is core's. External .mdown and .MKD
+    /// notes reach Quick Open through the delta — each row carries core's
+    /// classification — a .txt file does not, and a deleted .mdown note
+    /// leaves it again.</summary>
+    [Fact]
+    public void ExternalMdownAndMkdNotesReachQuickOpen() => RunSta(() =>
+    {
+        using var h = new Harness("mdown-mkd", ("alpha.md", "# Alpha\n"));
+        h.Write("notes.mdown", "# Mdown\n");
+        h.Write("more.MKD", "# Mkd\n");
+        h.Write("data.txt", "text\n");
+
+        h.Context.Await(h.Lifecycle.RescanAsync(RescanReason.Explicit));
+
+        Assert.Contains("notes.mdown", h.QuickOpen.FilePathsForTests);
+        Assert.Contains("more.MKD", h.QuickOpen.FilePathsForTests);
+        Assert.DoesNotContain("data.txt", h.QuickOpen.FilePathsForTests);
+        Assert.Equal(["Files refreshed. 3 new or changed, 0 removed."], h.Spoken);
+
+        h.Events.Clear();
+        h.Delete("notes.mdown");
+        h.Now += TimeSpan.FromMinutes(1);
+        h.Context.Await(h.Lifecycle.RescanAsync(RescanReason.Explicit));
+        Assert.DoesNotContain("notes.mdown", h.QuickOpen.FilePathsForTests);
+        Assert.Contains("more.MKD", h.QuickOpen.FilePathsForTests);
     });
 
     /// <summary>The conflicting pairs, each through the real page-failure →
@@ -1378,6 +1473,42 @@ public sealed class RescanTests
         }
     }
 
+    /// <summary>The rescan core seam for the facts: every call runs through
+    /// the PRODUCTION seam (the pool), recorded with its thread, and a scan
+    /// may throw or park (<see cref="Harness.ThrowOnCall"/>,
+    /// <see cref="Harness.ParkAfterCall"/>, numbered with the open's session
+    /// load).</summary>
+    internal sealed class RecordingRescanWorker(Harness harness) : IRescanCoreWorker
+    {
+        public Task<T> Run<T>(string operation, Func<T> call)
+        {
+            bool park = false;
+            if (operation == "scan")
+            {
+                int number = harness.NextScanCall();
+                if (harness.ThrowOnCall?.Invoke(number) is Exception fault)
+                {
+                    return Task.FromException<T>(fault);
+                }
+
+                park = harness.ParkAfterCall == number;
+            }
+
+            return ThreadPoolRescanCoreWorker.Instance.Run(operation, () =>
+            {
+                harness.RecordCoreCall(operation);
+                T result = call();
+                if (park)
+                {
+                    harness.Parked.Set();
+                    _ = harness.Release.Wait(TimeSpan.FromSeconds(30));
+                }
+
+                return result;
+            });
+        }
+    }
+
     /// <summary>A pass-through over the session's own ledger calls that can
     /// fail a page read (by its ordinal across every run of the vault) or
     /// the Applied mark, and observe each report.</summary>
@@ -1501,7 +1632,7 @@ public sealed class RescanTests
                 pickImportSources: pickImportSources,
                 scanClock: () => Now,
                 sessionLoadWorker: RunOnWorker<(ScanReport Report, SwitcherFile[] SwitcherFiles)>,
-                rescanWorker: RunOnWorker<RescanReport>,
+                rescanWorker: new RecordingRescanWorker(this),
                 scanDeltaChannel: session => new ScriptedChannel(
                     new SessionScanDeltaChannel(session),
                     () => Interlocked.Increment(ref _reads))
@@ -1719,8 +1850,20 @@ public sealed class RescanTests
             }
         }
 
-        /// <summary>The open's session load and every rescan's scan: call
-        /// <see cref="ScanCalls"/> may throw or park after its work.</summary>
+        /// <summary>The next scan's 1-based number (the open's session load
+        /// is call 1).</summary>
+        public int NextScanCall() => Interlocked.Increment(ref _scanCalls);
+
+        /// <summary>Every rescan core call the lifecycle made through its
+        /// seam: the operation, its thread, and whether that was a pool
+        /// thread.</summary>
+        public ConcurrentQueue<(string Operation, int Thread, bool Pool)> CoreCalls { get; } = new();
+
+        public void RecordCoreCall(string operation) => CoreCalls.Enqueue(
+            (operation, Environment.CurrentManagedThreadId, Thread.CurrentThread.IsThreadPoolThread));
+
+        /// <summary>The open's session load: call <see cref="ScanCalls"/>
+        /// 1 may throw or park after its work.</summary>
         private Task<T> RunOnWorker<T>(Func<T> work)
         {
             int call = Interlocked.Increment(ref _scanCalls);
