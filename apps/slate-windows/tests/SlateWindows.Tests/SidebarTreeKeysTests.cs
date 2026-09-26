@@ -637,6 +637,64 @@ public sealed class SidebarTreeKeysTests : IDisposable
     });
 
     /// <summary>
+    /// R-2 on the lists (codex PR 2 round 5): an arrow in the dual pane and
+    /// in the filter results — the key through the list's own route, not
+    /// an assignment — moves the list's selection, and the shipped
+    /// SelectionChanged handlers turn that into the selection-driven open:
+    /// the note the arrow reached is shown without asking for focus, its
+    /// selection is spoken, and after settling focus is still on the row
+    /// the arrow reached. Focusing the starting row moves no selection, so
+    /// nothing opens before the arrow.
+    /// </summary>
+    [Fact]
+    public void ArrowInTheLists_ShowsTheNoteAndKeepsFocusOnTheRow() => RunSta(() =>
+    {
+        using var host = new TreeHost(NewVault("list-arrows"));
+        host.Initialize();
+
+        // The dual pane with no folder selected lists the vault root's
+        // files: alpha.md and beta.md.
+        host.Sidebar.IsDualPaneEnabled = true;
+        AssertArrowShowsTheNote(host, host.DualPane, "beta.md");
+
+        // Every note in the vault is a result.
+        host.Sidebar.FilterText = "ext:md";
+        AssertArrowShowsTheNote(host, host.FilterResults, "Folder/Folder.md");
+    });
+
+    /// <summary>Focus the row next to <paramref name="target"/>'s in
+    /// <paramref name="list"/>, then arrow onto <paramref name="target"/>
+    /// (Down from the row above it, or Up from the row below).</summary>
+    private static void AssertArrowShowsTheNote(TreeHost host, ListBox list, string target)
+    {
+        List<FileTreeNodeViewModel> rows = [];
+        Assert.True(PumpedDispatcher.PumpUntil(() =>
+        {
+            rows = list.Items.OfType<FileTreeNodeViewModel>().ToList();
+            return rows.Count >= 2 && rows.Exists(node => node.Path == target);
+        }));
+        int targetIndex = rows.FindIndex(node => node.Path == target);
+        int startIndex = targetIndex == 0 ? 1 : targetIndex - 1;
+        FileTreeNodeViewModel reached = rows[targetIndex];
+        ListBoxItem start = host.FocusListRow(list, rows[startIndex].Path);
+        Assert.Null(list.SelectedItem);
+        host.Requests.Clear();
+        int announced = host.AnnouncementCount;
+
+        Assert.True(
+            host.PressThrough(start, startIndex < targetIndex ? Key.Down : Key.Up),
+            $"The arrow in {AutomationProperties.GetAutomationId(list)} went unhandled.");
+        // Settle: whatever the open queued has run before focus is read.
+        _ = PumpedDispatcher.PumpUntil(() => false, TimeSpan.FromMilliseconds(300));
+
+        Assert.Same(reached, list.SelectedItem);
+        Assert.Equal((target, WorkspaceOpenTarget.CurrentTab, false), Assert.Single(host.Requests));
+        Assert.Equal(new A11yEvent.RowSelected(reached.DisplayName), host.LastAnnouncement);
+        Assert.Equal(announced + 1, host.AnnouncementCount);
+        Assert.Same(list.ItemContainerGenerator.ContainerFromItem(reached), Keyboard.FocusedElement);
+    }
+
+    /// <summary>
     /// R-2 (design review): the row arm acts on a focused ROW container,
     /// never on a text field: a text box inside a row keeps its Enter and
     /// Space.
