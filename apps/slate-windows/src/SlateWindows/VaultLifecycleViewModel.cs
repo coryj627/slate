@@ -463,8 +463,16 @@ internal sealed partial class VaultLifecycleViewModel
                 },
                 // W6-2 PR A (contract A-3): the index-phase arm, marshalled
                 // like the other two — an external edit surfaces at the next
-                // scan, never as a file change.
-                (phase, filesSeen) => _enqueueUi(() => HandleIndexPhase(generation, phase, filesSeen)));
+                // scan, never as a file change. W7-7 PR 7 (round 29):
+                // whether the phase is a RESCAN's is read here, where the
+                // scan emits it (the run is active from before its scan
+                // starts until after it returns), not when the queue
+                // reaches it.
+                (phase, filesSeen) =>
+                {
+                    bool duringRescan = Volatile.Read(ref _rescanActive);
+                    _enqueueUi(() => HandleIndexPhase(generation, phase, filesSeen, duringRescan));
+                });
             _eventListenerToken = _session.RegisterEventListener(_eventListener);
 
             IsVaultOpen = true;
@@ -747,10 +755,13 @@ internal sealed partial class VaultLifecycleViewModel
     /// <summary>W6-2 PR A (contract A-3): the scan-finished arm — an
     /// external edit is visible only after a scan, so the graph's probe
     /// runs here too, under the same lifecycle check.</summary>
-    private void HandleIndexPhase(int generation, IndexPhase phase, ulong filesSeen)
+    private void HandleIndexPhase(int generation, IndexPhase phase, ulong filesSeen, bool duringRescan)
     {
         _ = filesSeen;
-        if (generation == _generation && phase == IndexPhase.ScanFinished)
+        // W7-7 PR 7 (round 29): a RESCAN's graph authority is the one
+        // routine's per-page probe (ApplyFileChangeEffectsAsync); the scan
+        // phase probes only for the initial open scan.
+        if (generation == _generation && phase == IndexPhase.ScanFinished && !duringRescan)
         {
             Workspace?.NotifyGraphOfVaultChange();
         }

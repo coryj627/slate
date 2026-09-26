@@ -4,6 +4,9 @@
 using ICSharpCode.AvalonEdit.Document;
 using SlateWindows.Bases;
 using SlateWindows.Canvas;
+using SlateWindows.Graph;
+using SlateWindows.Reading;
+using uniffi.slate_uniffi;
 
 namespace SlateWindows;
 
@@ -36,10 +39,12 @@ internal sealed partial class WorkspaceViewModel
         return new SilentReconciliationScope(this);
     }
 
-    /// <summary>Test seam (W7-7 PR 7, round 28): wraps each per-kind reload
-    /// a rescan awaits — (kind, path, the real reload) to the Task the
-    /// reconciliation awaits — so a fact can park one or fail it.</summary>
-    internal Func<string, string, Func<Task>, Task>? RescanKindReloadForTests { get; set; }
+    /// <summary>Test seam (W7-7 PR 7, rounds 28-29): wraps EVERY publication
+    /// a rescan awaits — (kind, path, the real publication) to the Task the
+    /// reconciliation awaits — so a fact can park one or fail it. Kinds: the
+    /// tab kinds (markdown, canvas, base) and the dependents (reading,
+    /// history, bases, graph).</summary>
+    internal Func<string, string, Func<Task>, Task>? RescanPublicationForTests { get; set; }
 
     /// <summary>
     /// W7-7 PR 7 (rounds 27-28): a rescan's Modified row, per tab kind, as ONE
@@ -73,7 +78,7 @@ internal sealed partial class WorkspaceViewModel
     /// </remarks>
     internal async Task ReconcileModifiedPathAsync(
         string path,
-        Func<Func<(string Text, string IndexedHash)>, Task<(string Text, string IndexedHash)>> readOnWorker,
+        Func<Func<(string? Text, string? IndexedHash)>, Task<(string? Text, string? IndexedHash)>> readOnWorker,
         Func<bool> reconciledSince)
     {
         string modified = NormalizeWorkspacePath(path);
@@ -103,7 +108,116 @@ internal sealed partial class WorkspaceViewModel
     }
 
     private Task RunKindReload(string kind, string path, Func<Task> reload) =>
-        RescanKindReloadForTests is { } seam ? seam(kind, path, reload) : reload();
+        RescanPublicationForTests is { } seam ? seam(kind, path, reload) : reload();
+
+    /// <summary>
+    /// W7-7 PR 7 (#1252, round 29): a rescan page's dependents, each an
+    /// awaitable that completes on its UI publication — the reading models
+    /// (their reverse-dependency filter), the history panel for a Modified
+    /// path, the Bases surfaces and the graph (the Connections leaf's probe,
+    /// and the graph tab's when one is visible). The rescan reports the
+    /// page applied only after every one has published; a fault in any
+    /// holds the generation at the page's cursor. The graph probe here is
+    /// the rescan's ONLY path into the graph: the index phase's ScanFinished
+    /// probe is withheld for a rescan.
+    /// </summary>
+    internal Task NotifyRescanDependentsAsync(IReadOnlyList<(FileChangeKind Kind, string Path)> changes)
+    {
+        var publications = new List<Task>();
+        ReadingContentViewModel[] readings =
+        [
+            .. Groups.SelectMany(group => group.Tabs)
+                .Select(tab => tab.Reading)
+                .OfType<ReadingContentViewModel>()
+                .Distinct(),
+        ];
+        foreach ((FileChangeKind kind, string path) in changes)
+        {
+            string changed = NormalizeWorkspacePath(path);
+            foreach (ReadingContentViewModel reading in readings)
+            {
+                publications.Add(RunKindReload(
+                    "reading", changed, () => reading.NotifyVaultFileChangedAsync(kind, changed)));
+            }
+
+            if (kind == FileChangeKind.Modified)
+            {
+                publications.Add(RunKindReload("history", changed, () => History.NoteSavedAsync(changed)));
+            }
+        }
+
+        string[] paths = [.. changes.Select(change => NormalizeWorkspacePath(change.Path))];
+        HashSet<string> removed =
+        [
+            .. changes.Where(change => change.Kind == FileChangeKind.Deleted)
+                .Select(change => NormalizeWorkspacePath(change.Path)),
+        ];
+        publications.Add(RunKindReload("bases", string.Empty, () => NotifyBasesOfRescanAsync(paths, removed)));
+        publications.Add(RunKindReload("graph", string.Empty, NotifyGraphOfRescanAsync));
+        return Task.WhenAll(publications);
+    }
+
+    /// <summary>The Bases dependent for a rescan page (round 29): what
+    /// <see cref="RefreshBasesSurfacesForVaultChange"/> does for events,
+    /// awaited and without the event debounce. A Markdown change re-runs
+    /// every open base and reloads every dashboard; a base whose own file
+    /// the page modified reloads through its kind reload instead, and one
+    /// the page removed is left to the missing-tab handling.</summary>
+    private Task NotifyBasesOfRescanAsync(IReadOnlyCollection<string> paths, IReadOnlySet<string> removed)
+    {
+        HashSet<string> changedBases =
+        [
+            .. paths.Where(path => path.EndsWith(".base", StringComparison.OrdinalIgnoreCase)),
+        ];
+        bool markdownChanged = paths.Any(CoreDocumentClassification.IsMarkdown);
+        if (!markdownChanged && changedBases.Count == 0)
+        {
+            return Task.CompletedTask;
+        }
+
+        var publications = new List<Task>();
+        var seen = new HashSet<BaseDocumentViewModel>(ReferenceEqualityComparer.Instance);
+        IEnumerable<BaseDocumentViewModel> documents = BasesDockDocument is { } dock
+            ? _baseDocuments.Values.Append(dock)
+            : _baseDocuments.Values;
+        foreach (BaseDocumentViewModel document in documents)
+        {
+            if (!seen.Add(document)
+                || (!document.IsSavedQuery && changedBases.Contains(document.Path))
+                || (!document.IsSavedQuery && removed.Contains(document.Path)))
+            {
+                continue;
+            }
+
+            if (markdownChanged)
+            {
+                publications.Add(document.RefreshAsync());
+            }
+        }
+
+        foreach (DashboardViewModel dashboard in BasesDockDashboard is { } dockDashboard
+            ? _dashboardDocuments.Values.Append(dockDashboard).Distinct()
+            : _dashboardDocuments.Values)
+        {
+            publications.Add(dashboard.LoadAsync());
+        }
+
+        return Task.WhenAll(publications);
+    }
+
+    /// <summary>The graph dependent for a rescan page (round 29): the
+    /// probes <see cref="NotifyGraphOfVaultChange"/> sends for events,
+    /// awaited to their publications.</summary>
+    private Task NotifyGraphOfRescanAsync()
+    {
+        var probes = new List<Task> { Connections.ProbeAsync() };
+        if (_graphDocument is { IsRetired: false } document && GraphTabIsVisible())
+        {
+            probes.Add(document.ProbeAsync());
+        }
+
+        return Task.WhenAll(probes);
+    }
 
     private static bool IsMarkdownTabAt(WorkspaceTabViewModel tab, string path) =>
         tab.IsMarkdown && string.Equals(tab.Path, path, StringComparison.Ordinal);
@@ -131,15 +245,26 @@ internal sealed partial class WorkspaceViewModel
 
     private async Task ReloadMarkdownTabsAsync(
         string modified,
-        Func<Func<(string Text, string IndexedHash)>, Task<(string Text, string IndexedHash)>> readOnWorker,
+        Func<Func<(string? Text, string? IndexedHash)>, Task<(string? Text, string? IndexedHash)>> readOnWorker,
         Func<bool> reconciledSince)
     {
-        (string text, string indexedHash) = await readOnWorker(() =>
-            (_session.ReadText(modified), _session.NoteTasks(modified, 1).ContentHash));
+        string onDisk = System.IO.Path.Combine(_vaultRoot, modified);
+        (string? text, string? indexedHash) = await readOnWorker(() =>
+        {
+            try
+            {
+                return ((string?)_session.ReadText(modified), (string?)_session.NoteTasks(modified, 1).ContentHash);
+            }
+            catch (VaultException) when (!System.IO.File.Exists(onDisk))
+            {
+                // Gone since the scan: its removal is the next scan's row.
+                return (null, null);
+            }
+        });
 
         // Back on the dispatcher: the tabs are read afresh — one may have
         // closed, turned dirty or started a save while the worker read.
-        if (reconciledSince())
+        if (reconciledSince() || text is null || indexedHash is null)
         {
             return;
         }

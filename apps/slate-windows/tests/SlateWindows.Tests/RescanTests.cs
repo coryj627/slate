@@ -6,8 +6,10 @@ using System.Diagnostics;
 using System.Runtime.ExceptionServices;
 using System.Security.AccessControl;
 using System.Security.Principal;
+using System.Text.RegularExpressions;
 using System.Windows.Documents;
 using SlateWindows.Canvas;
+using SlateWindows.Graph;
 using uniffi.slate_uniffi;
 
 namespace SlateWindows.Tests;
@@ -515,6 +517,57 @@ public sealed class RescanTests
     // Paging, page failures and the retained ledger
     // ---------------------------------------------------------------------
 
+    /// <summary>Round 28 (the honest count): a scan error and a failed page
+    /// are counted together — the scan's own count crosses the FFI in full
+    /// and the page's failure adds one — so an unreadable file plus a page
+    /// read that fails is "2 errors", the one interim event and the one
+    /// sentence.</summary>
+    [Fact]
+    public void AScanErrorAndAFailedPageAreCountedTogether() => RunSta(() =>
+    {
+        using var h = new Harness("two-errors", ("alpha.md", "# Alpha\n"));
+        h.Write("locked.md", "# Locked\n");
+        h.Write("late.md", "# Late\n");
+        using var deny = DenyAccess.To(Path.Combine(h.Root, "locked.md"), FileSystemRights.ReadData);
+        h.FailReads(read => read == 1);
+
+        h.Context.Await(h.Lifecycle.RescanAsync(RescanReason.Explicit));
+
+        A11yEvent.VaultRescanIncomplete incomplete =
+            Assert.IsType<A11yEvent.VaultRescanIncomplete>(Assert.Single(h.Events));
+        Assert.Equal(2UL, incomplete.Errors);
+        Assert.Equal(["Files refreshed with errors. 2 errors; results may be incomplete."], h.Spoken);
+        Assert.Equal(h.Spoken[0], h.Lifecycle.StatusText);
+        Assert.NotNull(h.Ledger.Pending);
+    });
+
+    /// <summary>Round 29: a Modified row whose file is DELETED before its
+    /// reload's read is not a failure — there is nothing to reload, and the
+    /// next scan's removal reconciles the tab. Counting it would hold the
+    /// generation on every retry (core refuses a new scan over it), so one
+    /// vanished file would stop every later rescan.</summary>
+    [Fact]
+    public void AModifiedNoteDeletedBeforeItsReloadIsLeftToTheNextScan() => RunSta(() =>
+    {
+        using var h = new Harness("vanished", ("x.md", "x0\n"));
+        WorkspaceTabViewModel tab = h.Open("x.md");
+        h.Write("x.md", "x1, changed outside Slate\n");
+        h.AfterRead(_ => File.Delete(Path.Combine(h.Root, "x.md")));
+
+        h.Context.Await(h.Lifecycle.RescanAsync(RescanReason.Explicit));
+        h.AfterRead(null);
+
+        Assert.Equal([Explicit1], h.Spoken);
+        Assert.Equal(new ScanDeltaLedger(null, null), h.Ledger);
+        Assert.Equal("x0\n", tab.Text);
+        Assert.False(tab.IsDirty);
+
+        h.Now += TimeSpan.FromMinutes(1);
+        h.Context.Await(h.Lifecycle.RescanAsync(RescanReason.Explicit));
+        Assert.Equal([Explicit1, "Files refreshed. 0 new or changed, 1 removed."], h.Spoken);
+        Assert.Equal(new ScanDeltaLedger(null, null), h.Ledger);
+    });
+
     /// <summary>Five changes, two to a page; page 2 fails after page 1's
     /// effects landed. The run says only "results may be incomplete"; the
     /// retry resumes the generation from its stored cursor BEFORE a new
@@ -905,7 +958,7 @@ public sealed class RescanTests
         h.PumpUntil(() => board.RowFor("first") is not null, "the board's first load");
         var parked = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
         bool reloadStarted = false;
-        h.Workspace.RescanKindReloadForTests = async (kind, _, reload) =>
+        h.Workspace.RescanPublicationForTests = async (kind, _, reload) =>
         {
             if (kind == "canvas")
             {
@@ -961,7 +1014,7 @@ public sealed class RescanTests
                     : tab.Base?.State == Bases.BaseLoadState.Ready,
                 $"the {kind}'s first load");
             bool fail = true;
-            h.Workspace.RescanKindReloadForTests = async (reloading, _, reload) =>
+            h.Workspace.RescanPublicationForTests = async (reloading, _, reload) =>
             {
                 if (reloading == kind && fail)
                 {
@@ -1103,12 +1156,12 @@ public sealed class RescanTests
         h.PumpUntil(() => Volatile.Read(ref loads) > 0, "the history panel reloading");
     });
 
-    /// <summary>Round 28 (the graph dependent): a rescan's page probes the
-    /// graph generation — the Connections leaf's probe, and the graph tab's
-    /// when one is visible — exactly as a Slate-owned event does. Every scan
-    /// already probes once from its index-phase ScanFinished arm; a page of
-    /// changes adds the routine's own probe after its effects, so a changed
-    /// rescan probes exactly once more than an unchanged one.</summary>
+    /// <summary>Rounds 28-29 (the graph dependent, ONE authority): a rescan
+    /// reaches the graph only through the routine's per-page probe — the
+    /// Connections leaf's, and the graph tab's when one is visible — exactly
+    /// as a Slate-owned event does. The index phase's ScanFinished probe is
+    /// withheld for a rescan (the open scan keeps it), so an unchanged
+    /// rescan probes NOTHING and a changed one probes exactly once.</summary>
     [Fact]
     public void TheGraphProbesAfterARescan() => RunSta(() =>
     {
@@ -1135,21 +1188,314 @@ public sealed class RescanTests
         int before = ProbesSoFar();
         h.Context.Await(h.Lifecycle.RescanAsync(RescanReason.Explicit));
         Settle();
-        int unchanged = ProbesSoFar() - before;
+        Assert.Equal(0, ProbesSoFar() - before);
 
         h.Write("linker.md", "# Linker\n\n[[x]]\n");
         h.Now += TimeSpan.FromMinutes(1);
         before = ProbesSoFar();
         h.Context.Await(h.Lifecycle.RescanAsync(RescanReason.Explicit));
         Settle();
-        Assert.Equal(unchanged + 1, ProbesSoFar() - before);
+        Assert.Equal(1, ProbesSoFar() - before);
+    });
+
+    /// <summary>Round 29: the routine's probe is the rescan's graph path —
+    /// and a sufficient one. The Connections leaf following a note lists a
+    /// backlink created outside Slate the moment the rescan completes (the
+    /// probe, and the reload it issues, are awaited to publication); with
+    /// the routine's probe removed the leaf stays stale, because the index
+    /// phase no longer probes for a rescan.</summary>
+    [Fact]
+    public void TheGraphFollowsARescanThroughTheRoutineAlone() => RunSta(() =>
+    {
+        using var h = new Harness("graph-follows", ("x.md", "# X\n"));
+        ConnectionsLeafViewModel leaf = h.Workspace.Connections;
+        h.Workspace.ActiveLeaf = WorkspaceViewModel.Leaves.First(option => option.Id == "connections");
+        _ = h.Open("x.md");
+        h.PumpUntil(() => leaf.Publication.HoldsTree && leaf.IsCurrent && !leaf.InFlight, "the leaf's first tree");
+        Assert.DoesNotContain(leaf.Publication.Tree!.Incoming, row => row.Path == "linker.md");
+
+        h.Write("linker.md", "# Linker\n\n[[x]]\n");
+        h.Context.Await(h.Lifecycle.RescanAsync(RescanReason.Explicit));
+
+        Assert.True(leaf.Publication.HoldsTree, "the leaf holds no tree after the rescan");
+        Assert.Contains(leaf.Publication.Tree!.Incoming, row => row.Path == "linker.md");
+    });
+
+    /// <summary>Round 29 (ONE graph authority for a rescan), structurally:
+    /// the rescan's graph probe has exactly one reference — the routine's
+    /// dependents (<c>NotifyRescanDependentsAsync</c>, itself reached only
+    /// from the routine's rescan arm) — and the index phase's ScanFinished
+    /// probe is guarded by the rescan flag read where the scan emits it.
+    /// <see cref="TheGraphFollowsARescanThroughTheRoutineAlone"/> is the
+    /// behavioral half: without that call site the graph stays stale.</summary>
+    [Fact]
+    public void TheRescanGraphProbeHasOneCallSite()
+    {
+        Dictionary<string, string> sources = ShellSources();
+        Assert.Equal([("WorkspaceViewModel.Rescan.cs", 1)], References(sources, "NotifyGraphOfRescanAsync"));
+        Assert.Equal([("VaultLifecycleViewModel.FileChanges.cs", 1)], References(sources, "NotifyRescanDependentsAsync"));
+
+        Match arm = Regex.Match(
+            sources["VaultLifecycleViewModel.cs"],
+            @"private void HandleIndexPhase\((?<parameters>[^)]*)\)\s*\{(?<body>.*?)\n    \}",
+            RegexOptions.Singleline);
+        Assert.True(arm.Success, "HandleIndexPhase not found");
+        Assert.Contains("bool duringRescan", arm.Groups["parameters"].Value, StringComparison.Ordinal);
+        Assert.Matches(
+            @"if \(generation == _generation && phase == IndexPhase\.ScanFinished && !duringRescan\)\s*\{\s*Workspace\?\.NotifyGraphOfVaultChange\(\);\s*\}",
+            arm.Groups["body"].Value);
+        Assert.Single(Regex.Matches(arm.Groups["body"].Value, @"\bNotifyGraphOf\w+"));
+        Assert.Single(Regex.Matches(
+            sources["VaultLifecycleViewModel.cs"],
+            @"bool duringRescan = Volatile\.Read\(ref _rescanActive\);\s*_enqueueUi\(\(\) => HandleIndexPhase\(generation, phase, filesSeen, duringRescan\)\);"));
+    }
+
+    /// <summary>The shell's C# sources by root-relative path, comments
+    /// stripped (a comment that names a method is not a call site).</summary>
+    private static Dictionary<string, string> ShellSources()
+    {
+        string root = SourceText.ShellSourceRoot();
+        var sources = new Dictionary<string, string>(StringComparer.Ordinal);
+        foreach (string file in Directory.EnumerateFiles(root, "*.cs", SearchOption.AllDirectories))
+        {
+            string relative = Path.GetRelativePath(root, file).Replace('\\', '/');
+            if (relative.StartsWith("obj/", StringComparison.Ordinal) || relative.StartsWith("bin/", StringComparison.Ordinal))
+            {
+                continue;
+            }
+
+            string code = Regex.Replace(File.ReadAllText(file), @"/\*.*?\*/", string.Empty, RegexOptions.Singleline);
+            sources[relative] = Regex.Replace(code, @"//[^\n]*", string.Empty);
+        }
+
+        return sources;
+    }
+
+    /// <summary>Every file that references <paramref name="name"/> other
+    /// than by declaring it (a call, or a method group handed on), with
+    /// its count.</summary>
+    private static (string File, int Count)[] References(Dictionary<string, string> sources, string name) =>
+    [
+        .. sources
+            .Select(source => (
+                File: source.Key,
+                Count: Regex.Matches(source.Value, $@"\b{name}\b").Count
+                    - Regex.Matches(source.Value, $@"\bTask\s+{name}\s*\(").Count))
+            .Where(reference => reference.Count > 0)
+            .OrderBy(reference => reference.File, StringComparer.Ordinal),
+    ];
+
+    /// <summary>Round 29: every fallible dependent publication a rescan
+    /// triggers — the reading models' (reverse dependencies), the history
+    /// panel's, the Bases surfaces', the graph's — is awaited before its
+    /// page is reported applied. With one parked, the run holds: no Applied
+    /// mark, no release, no sentence; released, all three follow.</summary>
+    [Theory]
+    [InlineData("reading")]
+    [InlineData("history")]
+    [InlineData("bases")]
+    [InlineData("graph")]
+    public void AParkedDependentPublicationHoldsTheAppliedMarkAndTheSentence(string kind) => RunSta(() =>
+    {
+        using Harness h = DependentsHarness($"{kind}-parked");
+        var parked = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
+        bool started = false;
+        h.Workspace.RescanPublicationForTests = async (publishing, _, publish) =>
+        {
+            if (publishing == kind)
+            {
+                started = true;
+                await parked.Task;
+            }
+
+            await publish();
+        };
+        int applied = 0;
+        h.OnApplied((_, _) => Interlocked.Increment(ref applied));
+        h.Write("embedded.md", "Embedded after, changed outside Slate.\n");
+
+        Task run = h.Lifecycle.RescanAsync(RescanReason.Explicit);
+        h.PumpUntil(() => started, $"the {kind} publication starting");
+        for (int turn = 0; turn < 20; turn++)
+        {
+            h.Context.Drain();
+            PumpedDispatcher.Drain();
+            Thread.Sleep(5);
+        }
+
+        Assert.False(run.IsCompleted);
+        Assert.Equal(0, Volatile.Read(ref applied));
+        Assert.DoesNotContain(h.LedgerCalls, call => call.Call == nameof(IScanDeltaChannel.Release));
+        Assert.NotNull(h.Ledger.Pending);
+        Assert.Empty(h.Events);
+
+        parked.SetResult();
+        h.PumpUntil(() => run.IsCompleted, "the rescan finishing");
+        Assert.Equal(1, Volatile.Read(ref applied));
+        Assert.Equal(new ScanDeltaLedger(null, null), h.Ledger);
+        Assert.Equal([Explicit1], h.Spoken);
+    });
+
+    /// <summary>Round 29: an injected failure of a dependent's publication
+    /// fails its page — the generation is retained at the page's cursor,
+    /// nothing is released, and the run says "results may be incomplete"
+    /// with the honest count; the retry re-applies the page and completes
+    /// it.</summary>
+    [Theory]
+    [InlineData("reading")]
+    [InlineData("history")]
+    [InlineData("bases")]
+    [InlineData("graph")]
+    public void AFailedDependentPublicationRetainsTheGenerationAndTheRetryCompletesIt(string kind) => RunSta(() =>
+    {
+        using Harness h = DependentsHarness($"{kind}-fails");
+        bool fail = true;
+        h.Workspace.RescanPublicationForTests = async (publishing, _, publish) =>
+        {
+            if (publishing == kind && fail)
+            {
+                throw new IOException($"injected {kind} publication failure");
+            }
+
+            await publish();
+        };
+        h.Write("embedded.md", "Embedded after, changed outside Slate.\n");
+
+        h.Context.Await(h.Lifecycle.RescanAsync(RescanReason.Explicit));
+
+        A11yEvent.VaultRescanIncomplete incomplete =
+            Assert.IsType<A11yEvent.VaultRescanIncomplete>(Assert.Single(h.Events));
+        Assert.Equal(1UL, incomplete.Errors);
+        Assert.Equal([OneError], h.Spoken);
+        Assert.NotNull(h.Ledger.Pending);
+        Assert.Null(h.Ledger.Applied);
+        Assert.DoesNotContain(h.LedgerCalls, call => call.Call == nameof(IScanDeltaChannel.Release));
+
+        fail = false;
+        h.Now += TimeSpan.FromMinutes(1);
+        h.Context.Await(h.Lifecycle.RescanAsync(RescanReason.Explicit));
+        Assert.Equal([OneError, Explicit1], h.Spoken);
+        Assert.Equal(new ScanDeltaLedger(null, null), h.Ledger);
+    });
+
+    /// <summary>A vault whose one external modification reaches every
+    /// awaited dependent: a reading-mode note embedding the modified note
+    /// (a reading model), the history panel showing it, and the Bases and
+    /// graph dependents every page notifies.</summary>
+    private static Harness DependentsHarness(string label)
+    {
+        var h = new Harness(
+            label,
+            ("host.md", "# Host\n\n![[embedded]]\n"),
+            ("embedded.md", "Embedded before.\n"));
+        WorkspaceTabViewModel host = h.Open("host.md");
+        host.ToggleViewMode();
+        h.PumpUntil(
+            () => ReadingText(host).Contains("Embedded before.", StringComparison.Ordinal),
+            "the embed's first render");
+        h.Workspace.History.NoteChanged("embedded.md");
+        for (int turn = 0; turn < 20; turn++)
+        {
+            h.Context.Drain();
+            PumpedDispatcher.Drain();
+            Thread.Sleep(5);
+        }
+
+        h.Events.Clear();
+        return h;
+    }
+
+    // ---------------------------------------------------------------------
+    // Round 30: the tree's publication is one of the last page's
+    // ---------------------------------------------------------------------
+
+    /// <summary>Round 30: with the rescan's tree refresh parked ON ITS
+    /// WORKER, the run holds — no Applied mark, no release, no sentence, the
+    /// new file not yet in the tree; released, the tree publishes first and
+    /// the mark, the release and "Files refreshed" follow.</summary>
+    [Fact]
+    public void AParkedTreeRefreshHoldsTheAppliedMarkAndTheSentence() => RunSta(() =>
+    {
+        using Harness h = Harness.WithAsyncTree("tree-parked", ("alpha.md", "# Alpha\n"));
+        h.Context.RunUntil(() => !h.Sidebar.IsRefreshingTree, "the open's tree");
+        using var parked = new ManualResetEventSlim(false);
+        using var unpark = new ManualResetEventSlim(false);
+        h.TreeWorker = (work, token) => Task.Run(
+            () =>
+            {
+                parked.Set();
+                _ = unpark.Wait(TimeSpan.FromSeconds(30));
+                work();
+            },
+            token);
+        int applied = 0;
+        h.OnApplied((_, _) => Interlocked.Increment(ref applied));
+        h.Write("late.md", "# Late\n");
+
+        Task run = h.Lifecycle.RescanAsync(RescanReason.Explicit);
+        h.Context.RunUntil(() => parked.IsSet, "the tree refresh parking on its worker");
+        for (int turn = 0; turn < 20; turn++)
+        {
+            h.Context.Drain();
+            Thread.Sleep(5);
+        }
+
+        Assert.False(run.IsCompleted);
+        Assert.Equal(0, Volatile.Read(ref applied));
+        Assert.DoesNotContain(h.LedgerCalls, call => call.Call == nameof(IScanDeltaChannel.Release));
+        Assert.NotNull(h.Ledger.Pending);
+        Assert.Empty(h.Events);
+        Assert.DoesNotContain(h.Sidebar.RootNodes, node => node.Path == "late.md");
+
+        unpark.Set();
+        h.Context.Await(run);
+        Assert.Contains(h.Sidebar.RootNodes, node => node.Path == "late.md");
+        Assert.Equal(1, Volatile.Read(ref applied));
+        Assert.Equal(new ScanDeltaLedger(null, null), h.Ledger);
+        Assert.Equal([Explicit1], h.Spoken);
+    });
+
+    /// <summary>Round 30: a tree refresh that FAILS ("Could not load
+    /// files.") fails the last page — the generation stays Pending at its
+    /// cursor, nothing is released, and after the sidebar's own failure line
+    /// the run says "results may be incomplete", never "Files refreshed".
+    /// The retry re-applies the page, publishes the tree and completes
+    /// it.</summary>
+    [Fact]
+    public void AFailedTreeRefreshRetainsTheGenerationAndTheRetryCompletesIt() => RunSta(() =>
+    {
+        using Harness h = Harness.WithAsyncTree("tree-fails", ("alpha.md", "# Alpha\n"));
+        h.Context.RunUntil(() => !h.Sidebar.IsRefreshingTree, "the open's tree");
+        bool fail = true;
+        h.TreeWorker = (work, token) => Volatile.Read(ref fail)
+            ? Task.FromException(new IOException("injected tree refresh failure"))
+            : Task.Run(work, token);
+        h.Write("late.md", "# Late\n");
+
+        h.Context.Await(h.Lifecycle.RescanAsync(RescanReason.Explicit));
+
+        Assert.Equal(["Could not load files.", OneError], h.Spoken);
+        Assert.NotNull(h.Ledger.Pending);
+        Assert.Null(h.Ledger.Applied);
+        Assert.DoesNotContain(h.LedgerCalls, call => call.Call == nameof(IScanDeltaChannel.PageApplied));
+        Assert.DoesNotContain(h.LedgerCalls, call => call.Call == nameof(IScanDeltaChannel.Release));
+
+        Volatile.Write(ref fail, false);
+        h.Events.Clear();
+        h.Now += TimeSpan.FromMinutes(1);
+        h.Context.Await(h.Lifecycle.RescanAsync(RescanReason.Explicit));
+        Assert.Equal([Explicit1], h.Spoken);
+        Assert.Equal(new ScanDeltaLedger(null, null), h.Ledger);
+        Assert.Contains(h.Sidebar.RootNodes, node => node.Path == "late.md");
     });
 
     /// <summary>Round 28 (the interaction dependent): every open tab's editor
     /// interaction caches — its links, tasks and citations, the state the
     /// editor's link, task and citation actions act on — are dropped when a
     /// rescan changes the vault, so no action runs on a cache published
-    /// before the change.</summary>
+    /// before the change: the cache's generation advances (a fresh cache may
+    /// already be republished for the new state by the time the run
+    /// completes, the dispatcher pumped).</summary>
     [Fact]
     public void EditorInteractionCachesAreDroppedAfterARescan() => RunSta(() =>
     {
@@ -1158,13 +1504,14 @@ public sealed class RescanTests
         EditorInteractionCoordinator interactions = Assert.IsType<EditorInteractionCoordinator>(a.EditorInteractions);
         interactions.RefreshArtifactCacheForTests();
         Assert.True(interactions.ArtifactCacheSourceCurrentForTests);
+        int published = interactions.ArtifactCacheGenerationForTests;
 
         h.Write("late.md", "# Late\n");
         h.Context.Await(h.Lifecycle.RescanAsync(RescanReason.Explicit));
 
-        Assert.False(
-            interactions.ArtifactCacheSourceCurrentForTests,
-            "the interaction cache published before the change is still current");
+        Assert.True(
+            interactions.ArtifactCacheGenerationForTests > published,
+            "the interaction cache published before the change survived the rescan");
     });
 
     private static string[] BaseRows(WorkspaceTabViewModel tab) =>
@@ -1765,12 +2112,17 @@ public sealed class RescanTests
             }
         }
 
+        /// <summary>Drain this queue AND the fact thread's WPF dispatcher
+        /// until the condition holds: a rescan awaits publications that
+        /// land on the dispatcher (round 29 — the Connections leaf and the
+        /// graph document apply there, as every surface does in the shell).</summary>
         public void RunUntil(Func<bool> condition, string what)
         {
             var clock = Stopwatch.StartNew();
             while (!condition())
             {
                 Drain();
+                PumpedDispatcher.Drain();
                 if (clock.Elapsed > TimeSpan.FromSeconds(30))
                 {
                     throw new TimeoutException($"{what} never happened");
@@ -1934,7 +2286,8 @@ public sealed class RescanTests
             string root,
             (string Path, string Text)[] files,
             uint pageLimit,
-            Func<Task<IReadOnlyList<string>>>? pickImportSources)
+            Func<Task<IReadOnlyList<string>>>? pickImportSources,
+            bool asyncTree = false)
         {
             Root = root;
             Seed(root, files);
@@ -1962,7 +2315,9 @@ public sealed class RescanTests
                     OnApplied = (generation, next) => _onApplied?.Invoke(generation, next),
                     AfterCall = () => _afterLedgerCall?.Invoke(),
                 },
-                scanDeltaPageLimit: pageLimit);
+                scanDeltaPageLimit: pageLimit,
+                treeUiContext: asyncTree ? Context : null,
+                treeWorker: asyncTree ? RunTreeWorker : null);
             Context.Await(Lifecycle.OpenVaultAsync(Root), "the vault open");
             OpenEvents = [.. Events];
             OpenStatusText = Lifecycle.StatusText;
@@ -1973,6 +2328,19 @@ public sealed class RescanTests
 
         public static Harness OpenExisting(string root) =>
             new(root, [], VaultLifecycleViewModel.DefaultScanDeltaPageLimit, null);
+
+        /// <summary>A harness whose sidebar refreshes its tree the way the
+        /// shell does — on a worker (<see cref="TreeWorker"/>, the pool by
+        /// default), published on this fact's context — rather than inline.</summary>
+        public static Harness WithAsyncTree(string label, params (string Path, string Text)[] files) =>
+            new(NewRoot(label), files, VaultLifecycleViewModel.DefaultScanDeltaPageLimit, null, asyncTree: true);
+
+        /// <summary>The asynchronous tree's worker (<see cref="WithAsyncTree"/>):
+        /// null runs each tree read on the pool.</summary>
+        public Func<Action, CancellationToken, Task>? TreeWorker { get; set; }
+
+        private Task RunTreeWorker(Action work, CancellationToken token) =>
+            TreeWorker is { } worker ? worker(work, token) : Task.Run(work, token);
 
         public SerialContext Context { get; } = new();
 

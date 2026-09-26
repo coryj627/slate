@@ -40,9 +40,12 @@ internal sealed partial class VaultLifecycleViewModel
     /// interaction caches, the reading models (each applies its own
     /// reverse-dependency filter, so a note's embedders re-render), the
     /// Bases surfaces, the graph probe, the history panel for a Modified
-    /// path, and Quick Open. The returned Task completes when every rescan
-    /// reload has PUBLISHED (a Slate-owned batch completes at once) and
-    /// faults when any read or publication fails.
+    /// path, and Quick Open. For a rescan every fallible publication — each
+    /// tab-kind reload and each dependent's (reading, history, Bases, graph)
+    /// — is awaited: the returned Task completes when all have PUBLISHED
+    /// and faults when any read or publication fails. A Slate-owned batch
+    /// notifies the dependents as the funnel always has and completes at
+    /// once.
     /// </summary>
     private Task ApplyFileChangeEffectsAsync(
         IReadOnlyList<(FileChangeEvent Change, bool Openable)> changes,
@@ -101,6 +104,21 @@ internal sealed partial class VaultLifecycleViewModel
 
         // --- the dependents -------------------------------------------------------
         workspace?.InvalidateAllInteractionStates();
+        QuickSwitcher?.ApplyFileChanges(changes);
+        if (origin == FileChangeOrigin.Rescan)
+        {
+            // Round 29: every fallible dependent publication a rescan
+            // triggers is awaited — reading, history, Bases, graph — and the
+            // routine's graph probe is the rescan's only path into the graph.
+            if (workspace is not null)
+            {
+                reloads.Add(workspace.NotifyRescanDependentsAsync(
+                    [.. changes.Select(c => (c.Change.Kind, c.Change.Path))]));
+            }
+
+            return Task.WhenAll(reloads);
+        }
+
         foreach ((FileChangeEvent change, _) in changes)
         {
             // Reading embed cards depend on OTHER files (W3-5): the change
@@ -127,8 +145,7 @@ internal sealed partial class VaultLifecycleViewModel
         // W6-2 PR A (contract A-3): the graph's generation probe, while a
         // graph tab is visible, and the Connections leaf's.
         workspace?.NotifyGraphOfVaultChange();
-        QuickSwitcher?.ApplyFileChanges(changes);
-        return reloads.Count == 0 ? Task.CompletedTask : Task.WhenAll(reloads);
+        return Task.CompletedTask;
     }
 
     /// <summary>A rescan reload's read: through the rescan core seam, off the
