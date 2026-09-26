@@ -672,7 +672,12 @@ internal sealed class CanvasRendererView : FrameworkElement
     /// <para>
     /// No card to answer for — nothing under the pointer, no seat, a seat
     /// the document no longer knows — is answered HERE with no menu, so
-    /// the request never climbs to the tab's.
+    /// the request never climbs to the tab's. A KEYBOARD request with no
+    /// seat is a keypress that does nothing, so it also says so (contract
+    /// 34 C3/C4/E8a, #1283): the document's C4 door speaks the existing
+    /// <c>Nothing selected.</c> arm — the sentence the board's Right and
+    /// Left already speak for the same seatless state — where it used to
+    /// swallow the press in silence.
     /// </para>
     /// <para>
     /// A pointer request SEATS the hit card, silently, before its menu
@@ -686,8 +691,16 @@ internal sealed class CanvasRendererView : FrameworkElement
     private void OnMenuOpening(object sender, System.Windows.Controls.ContextMenuEventArgs e)
     {
         bool pointerRequest = e.CursorLeft >= 0 || e.CursorTop >= 0;
-        if (MenuTargetFor(pointerRequest, e.CursorLeft, e.CursorTop) is not { } nodeId
-            || !RebuildMenu(nodeId))
+        if (MenuTargetFor(pointerRequest, e.CursorLeft, e.CursorTop) is not { } nodeId)
+        {
+            if (!pointerRequest)
+            {
+                _ = _model?.AnsweredMissingSelection();
+            }
+            e.Handled = true;
+            return;
+        }
+        if (!RebuildMenu(nodeId))
         {
             e.Handled = true;
             return;

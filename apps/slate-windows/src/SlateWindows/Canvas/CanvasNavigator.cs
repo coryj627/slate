@@ -1968,6 +1968,21 @@ internal sealed class CanvasNavigator
         _presenter?.RevealSeat(nodeId, origin);
     }
 
+    /// <summary>
+    /// A keyboard menu request on an outline that shows no rows (#1283):
+    /// the press answers rather than falling silent (contract 34 C3), with
+    /// the sentence the outline's own arrows speak for the same empty tree
+    /// — the state's refusal first, then "No cards match the filter." or
+    /// the empty canvas's sentence.
+    /// </summary>
+    internal void AnswerAMenuRequestWithNoRows()
+    {
+        if (_document.AdmitStructuralRead() && _document.FilteredOutline.Count == 0)
+        {
+            AnnounceNothingToMoveThrough();
+        }
+    }
+
     /// <summary>There is nowhere to move: either the filter matched
     /// nothing, or the canvas is empty. Two different facts, two
     /// sentences.</summary>
