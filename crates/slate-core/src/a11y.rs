@@ -3105,11 +3105,11 @@ fn lead_then_sentence(lead: &str, text: &str) -> String {
     }
 }
 
-/// What a resolved embed preview shows (#1278): the resolution's kind and
+/// What a resolved embed card shows (#1278): the resolution's kind and
 /// the fields that identify it — never its content and never a title. A
 /// host hands this back to core, which words the card title from it
 /// ([`resolved_embed_title`]) for the announcement, the visible card
-/// header and its UIA name alike.
+/// header and its UIA name alike, in the preview and the reading view.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum ResolvedEmbed {
     /// A whole note (`![[note]]`).
@@ -3122,11 +3122,16 @@ pub enum ResolvedEmbed {
     },
     /// One block (`![[note#^block]]`).
     Block { target_path: String },
-    /// An image; `alt` is the authored alt text, if any.
+    /// An image; `alt` is the authored alt text, if any. The path and alt
+    /// are the semantic data — the "image descriptor" the title shows (the
+    /// trimmed alt, else the file name) is core's rendering of them.
     Image {
         target_path: String,
         alt: Option<String>,
     },
+    /// A `.base` file shown as the reading view's layered summary card
+    /// (Bases contract C10) — the card names its real kind, not "note".
+    Base { target_path: String },
 }
 
 /// The display ceiling for AUTHORED text inside a card title (a heading,
@@ -3141,10 +3146,20 @@ fn bound_display_text(value: &str) -> std::borrow::Cow<'_, str> {
     }
 }
 
+/// The last component of a vault path, on either separator.
+fn path_file_name(target_path: &str) -> &str {
+    target_path
+        .rsplit(['/', '\\'])
+        .next()
+        .unwrap_or(target_path)
+}
+
 /// The card title of a resolved embed (#1278): mac `EmbedView`'s label
 /// shapes, rendered here so the Windows host composes none of them. An
 /// image is named by its trimmed alt text, or its file name when there is
-/// none (mac audits #196/#198/#419).
+/// none (mac audits #196/#198/#419). A base is named by its file name
+/// without the extension (mac `BaseEmbedDocument`'s label; a leading dot is
+/// not an extension).
 pub fn resolved_embed_title(resolved: &ResolvedEmbed) -> String {
     match resolved {
         ResolvedEmbed::Note { target_path } => format!("Embedded note: {target_path}"),
@@ -3159,14 +3174,16 @@ pub fn resolved_embed_title(resolved: &ResolvedEmbed) -> String {
         ResolvedEmbed::Image { target_path, alt } => {
             match alt.as_deref().map(str::trim).filter(|alt| !alt.is_empty()) {
                 Some(alt) => format!("Embedded image: {}", bound_display_text(alt)),
-                None => {
-                    let file_name = target_path
-                        .rsplit(['/', '\\'])
-                        .next()
-                        .unwrap_or(target_path);
-                    format!("Embedded image: {file_name}")
-                }
+                None => format!("Embedded image: {}", path_file_name(target_path)),
             }
+        }
+        ResolvedEmbed::Base { target_path } => {
+            let file_name = path_file_name(target_path);
+            let name = match file_name.rfind('.') {
+                Some(dot) if dot > 0 => &file_name[..dot],
+                _ => file_name,
+            };
+            format!("Embedded base: {name}")
         }
     }
 }
@@ -3978,6 +3995,12 @@ pub fn corpus() -> Vec<A11yEvent> {
             resolved: ResolvedEmbed::Image {
                 target_path: "images/pie.png".into(),
                 alt: Some("   ".into()),
+            },
+        },
+        EmbedPreviewShown {
+            target: "Reading list.base".into(),
+            resolved: ResolvedEmbed::Base {
+                target_path: "lists/Reading list.base".into(),
             },
         },
         // Every resolver reason. A resolver that throws is a ReadError too,
@@ -6035,6 +6058,24 @@ mod tests {
                 },
                 "Embedded image: cover.png".to_owned(),
             ),
+            (
+                ResolvedEmbed::Base {
+                    target_path: "lists/Reading.base".into(),
+                },
+                "Embedded base: Reading".to_owned(),
+            ),
+            (
+                ResolvedEmbed::Base {
+                    target_path: "lists\\v1.2 archive.base".into(),
+                },
+                "Embedded base: v1.2 archive".to_owned(),
+            ),
+            (
+                ResolvedEmbed::Base {
+                    target_path: "lists/.base".into(),
+                },
+                "Embedded base: .base".to_owned(),
+            ),
         ] {
             assert_eq!(resolved_embed_title(&resolved), expected, "{resolved:?}");
         }
@@ -6432,6 +6473,10 @@ mod tests {
                 "Embed preview for pie.png. Embedded image: A slice of pie.",
             ),
             (High, "Embed preview for pie.png. Embedded image: pie.png."),
+            (
+                High,
+                "Embed preview for Reading list.base. Embedded base: Reading list.",
+            ),
             (High, "Embed preview for Target. Target not found: Target."),
             (
                 High,

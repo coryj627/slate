@@ -325,6 +325,11 @@
     "text": "Embed preview for pie.png. Embedded image: pie.png."
   },
   {
+    "event": "EmbedPreviewShown { target: \"Reading list.base\", resolved: Base { target_path: \"lists/Reading list.base\" } }",
+    "priority": "high",
+    "text": "Embed preview for Reading list.base. Embedded base: Reading list."
+  },
+  {
     "event": "EmbedPreviewUnavailable { target: \"Target\", reason: TargetNotFound { target: \"Target\" } }",
     "priority": "high",
     "text": "Embed preview for Target. Target not found: Target."
