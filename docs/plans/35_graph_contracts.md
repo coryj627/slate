@@ -5149,6 +5149,17 @@ for Ctrl+Enter from a chord row, "Control Enter opens it in a new
 tab.", its key name the `windows.connections.openInNewTab` row's
 spoken column through `NavigationHelp` (contract 39 N-2); the first
 sentence stays T16 byte for byte, and a ghost's hint stays T15.
+**Amended by the owner on 2026-09-26 (#1273):** the tree's keys are
+four rows of the chord table's Connections scope, each matched with
+exactly its modifiers (contract 39 P12, P13(c), N-3) —
+`windows.connections.activate` (Return: open in the current tab, a
+ghost's create, a group's expand or collapse),
+`windows.connections.openInNewTab` (Ctrl+Return),
+`windows.connections.previousGroup` (Alt+Up) and
+`windows.connections.nextGroup` (Alt+Down) — from the view's one
+`TreeChords` table; a superset such as Ctrl+Shift+Return or
+Ctrl+Alt+Down is not the tree's, and a row's Invoke chooses its tab by
+the same table.
 
 **B-10 — The announcements: a generative rule, pinned by a model; the
 graph family's projection; worked rows.** `LeafPanelShown{title}`
