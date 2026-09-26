@@ -3539,7 +3539,7 @@ where a platform never fires the key.
 | `CanvasMovedTo` | `AppState+CanvasNavigation.swift#canvasSelect`, `CanvasAnnouncer.swift#coalescingClass`, `CanvasOutlineView.swift#announceMove` (+1) | `CanvasAnnouncer.cs#CoalescingClassOf`, `CanvasDocumentViewModel.cs#SelectNode` | `A11yCorpusCensus.cs#Corpus`, `CanvasAnnouncerTests.cs#MovedTo`, `CanvasAnnouncerTests.cs#TheCardReferenceMatchesCoresOwnComposition` (+4) |  |
 | `CanvasGroupEntered` | `AppState+CanvasNavigation.swift#canvasSelect`, `CanvasAnnouncer.swift#coalescingClass`, `CanvasOutlineView.swift#announceMove` | `CanvasAnnouncer.cs#CoalescingClassOf`, `CanvasDocumentViewModel.cs#GroupBoundaryEvent` | `A11yCorpusCensus.cs#Corpus`, `CanvasDocumentTests.cs#CrossingAGroupBoundaryBuildsTheEntryEventWithTheGroupsOwnCount`, `CanvasNavigatorTests.cs#GroupBoundariesUseCoresParentAndChildrenNeverADepthWalk` |  |
 | `CanvasGroupLeft` | `AppState+CanvasNavigation.swift#canvasSelect`, `CanvasAnnouncer.swift#coalescingClass`, `CanvasOutlineView.swift#announceMove` | `CanvasAnnouncer.cs#CoalescingClassOf`, `CanvasDocumentViewModel.cs#GroupBoundaryEvent` | `A11yCorpusCensus.cs#Corpus`, `CanvasDocumentTests.cs#CrossingAGroupBoundaryBuildsTheEntryEventWithTheGroupsOwnCount` |  |
-| `CanvasConnectionTraversed` | `AppState+CanvasNavigation.swift#canvasFollowConnection`, `CanvasAnnouncer.swift#coalescingClass`, `CanvasOutlineView.swift#connectionPhrase` | `CanvasAnnouncer.cs#CoalescingClassOf`, `CanvasDocumentViewModel.cs#ConnectionRowName`, `CanvasNavigator.cs#FollowConnection` (+1) | `A11yCorpusCensus.cs#Corpus`, `CanvasDocumentTests.cs#TheSelectedCardsConnectionRowsAreCoreRenderedAndComeFirst` |  |
+| `CanvasConnectionTraversed` | `AppState+CanvasNavigation.swift#canvasFollowConnection`, `CanvasAnnouncer.swift#coalescingClass`, `CanvasOutlineView.swift#connectionPhrase` | `CanvasAnnouncer.cs#CoalescingClassOf`, `CanvasDocumentViewModel.cs#ConnectionRowName`, `CanvasNavigator.cs#Follow` (+1) | `A11yCorpusCensus.cs#Corpus`, `CanvasDocumentTests.cs#TheSelectedCardsConnectionRowsAreCoreRenderedAndComeFirst` |  |
 | `CanvasTracePathEnd` | `AppState+CanvasNavigation.swift#canvasTracePath` | `CanvasNavigator.cs#TracePath` | `A11yCorpusCensus.cs#Corpus` |  |
 | `CanvasMoveRelative` | `AppState+CanvasModes.swift#canvasModeStep`, `CanvasAnnouncer.swift#coalescingClass` | `CanvasAnnouncer.cs#CoalescingClassOf`, `CanvasNavigator.cs#ModeStep` | `A11yCorpusCensus.cs#Corpus` |  |
 | `CanvasResizeGeometry` | `AppState+CanvasModes.swift#canvasApplyResizePreset`, `AppState+CanvasModes.swift#canvasModeStep`, `CanvasAnnouncer.swift#coalescingClass` | `CanvasAnnouncer.cs#CoalescingClassOf`, `CanvasNavigator.cs#ApplyResizeRect` | `A11yCorpusCensus.cs#Corpus`, `CanvasAnnouncerTests.cs#TheClampRetiresTheGeometryLine` |  |
@@ -3594,17 +3594,17 @@ where a platform never fires the key.
 | `CanvasStatus/PickDifferentTarget` | `AppState+CanvasConnect.swift#canvasConnect` | `CanvasDocumentViewModel.cs#CanvasAlignWith`, `CanvasDocumentViewModel.cs#CanvasPlaceRelative`, `CanvasDocumentViewModel.cs#HandleCardPick` (+3) | `A11yCorpusCensus.cs#Corpus` |  |
 | `CanvasStatus/NoChanges` | `AppState+CanvasCreate.swift#canvasCommitCardEdit` | `CanvasCardEditorViewModel.cs#CommitOnEscape`, `CanvasDocumentViewModel.cs#CanvasAlignWith` | `A11yCorpusCensus.cs#Corpus` |  |
 | `CanvasStatus/NotReadable` | `AppState+Canvas.swift#canvasWhereAmI`, `AppState+CanvasNavigation.swift#activeCanvasDocumentAnyState`, `AppState+CanvasNavigation.swift#canvasReadRefusal` | `CanvasDocumentViewModel.cs#NodeTextOf`, `CanvasDocumentViewModel.cs#ProjectMarkedRows`, `CanvasDocumentViewModel.cs#ReadRefusalFor` (+1) | `A11yCorpusCensus.cs#Corpus`, `CanvasNavigatorTests.cs#TheReadMappingAnswersEveryLoadState` |  |
-| `CanvasStatus/Empty` | `AppState+Canvas.swift#canvasWhereAmI` | `CanvasNavigator.cs#AnnounceNothingToMoveThrough`, `CanvasNavigator.cs#WhereAmI` | `A11yCorpusCensus.cs#Corpus`, `CanvasNavigatorTests.cs#AnEmptyCanvasAnswersRatherThanMovingNowhere`, `CanvasNavigatorTests.cs#WhereAmIOnAnEmptyCanvasStillAnswers` |  |
-| `CanvasStatus/EndOfCanvas` | `AppState+CanvasNavigation.swift#canvasSelectAdjacent` | `CanvasNavigator.cs#ArrowMove`, `CanvasNavigator.cs#SelectAdjacent` | `A11yCorpusCensus.cs#Corpus`, `CanvasNavigatorTests.cs#MovementCrossesTheWholeLargeCanvasWithoutRederivingOrder`, `CanvasNavigatorTests.cs#MovementWalksTheFilteredSetAndTheProjectionsNarrowWithIt` (+2) |  |
-| `CanvasStatus/StartOfCanvas` | `AppState+CanvasNavigation.swift#canvasSelectAdjacent` | `CanvasNavigator.cs#ArrowMove`, `CanvasNavigator.cs#SelectAdjacent` | `A11yCorpusCensus.cs#Corpus`, `CanvasNavigatorTests.cs#TheEndsOfTheCanvasAnnounceRatherThanDoingNothing` |  |
+| `CanvasStatus/Empty` | `AppState+Canvas.swift#canvasWhereAmI` | `CanvasNavigator.cs#AnnounceNothingToMoveThrough`, `CanvasNavigator.cs#MoveThroughTheScene`, `CanvasNavigator.cs#WhereAmI` | `A11yCorpusCensus.cs#Corpus`, `CanvasNavigatorTests.cs#AnEmptyCanvasAnswersRatherThanMovingNowhere`, `CanvasNavigatorTests.cs#TheBoardsArrowsAnswerAtTheEndsAndWithNothingToMoveThrough` (+1) |  |
+| `CanvasStatus/EndOfCanvas` | `AppState+CanvasNavigation.swift#canvasSelectAdjacent` | `CanvasNavigator.cs#ArrowMove`, `CanvasNavigator.cs#StepThrough` | `A11yCorpusCensus.cs#Corpus`, `CanvasNavigatorTests.cs#AFilteredOutSeatStepsThroughTheSceneOnTheBoardAndIntoTheFilteredSetByTheVerbs`, `CanvasNavigatorTests.cs#MovementCrossesTheWholeLargeCanvasWithoutRederivingOrder` (+5) |  |
+| `CanvasStatus/StartOfCanvas` | `AppState+CanvasNavigation.swift#canvasSelectAdjacent` | `CanvasNavigator.cs#ArrowMove`, `CanvasNavigator.cs#StepThrough` | `A11yCorpusCensus.cs#Corpus`, `CanvasNavigatorTests.cs#AFilteredOutSeatStepsThroughTheSceneOnTheBoardAndIntoTheFilteredSetByTheVerbs`, `CanvasNavigatorTests.cs#TheBoardsArrowsAnswerAtTheEndsAndWithNothingToMoveThrough` (+1) |  |
 | `CanvasStatus/AtCanvasLevel` | `AppState+CanvasNavigation.swift#canvasExitGroup` | `CanvasNavigator.cs#ExitGroup` | `A11yCorpusCensus.cs#Corpus`, `CanvasNavigatorTests.cs#AnUnresolvableSelectionIsNeverReportedAsAnEmptyAnswer`, `CanvasNavigatorTests.cs#GroupBoundariesUseCoresParentAndChildrenNeverADepthWalk` |  |
-| `CanvasStatus/NoCardsMatchFilter` | `AppState+CanvasNavigation.swift#canvasSelectAdjacent` | `CanvasNavigator.cs#AnnounceNothingToMoveThrough` | `A11yCorpusCensus.cs#Corpus`, `CanvasNavigatorTests.cs#AFilterThatMatchesNothingSaysSoRatherThanReadingAsAnEmptyCanvas` |  |
+| `CanvasStatus/NoCardsMatchFilter` | `AppState+CanvasNavigation.swift#canvasSelectAdjacent` | `CanvasNavigator.cs#AnnounceNothingToMoveThrough` | `A11yCorpusCensus.cs#Corpus`, `CanvasNavigatorTests.cs#AFilterThatMatchesNothingSaysSoRatherThanReadingAsAnEmptyCanvas`, `CanvasNavigatorTests.cs#TheBoardsArrowsAnswerAtTheEndsAndWithNothingToMoveThrough` |  |
 | `CanvasStatus/NothingToUndo` | `AppState+Canvas.swift#canvasUndo` | `CanvasDocumentViewModel.cs#RunHistory` | `A11yCorpusCensus.cs#Corpus` |  |
 | `CanvasStatus/NothingToRedo` | `AppState+Canvas.swift#canvasRedo` | `CanvasDocumentViewModel.cs#RunHistory` | `A11yCorpusCensus.cs#Corpus` |  |
 | `CanvasStatus/GroupIsEmpty` | `AppState+CanvasNavigation.swift#canvasEnterGroup` | `CanvasNavigator.cs#EnterGroup` | `A11yCorpusCensus.cs#Corpus`, `CanvasNavigatorTests.cs#AnEmptyGroupAndANonGroupEachSayWhatTheyAre` |  |
 | `CanvasStatus/NoOutgoingPath` | `AppState+CanvasNavigation.swift#canvasTracePath` | `CanvasNavigator.cs#TracePath` | `A11yCorpusCensus.cs#Corpus`, `CanvasNavigatorTests.cs#TracePathWalksCoresCycleSafeChainAndEndsWithTheCount` |  |
 | `CanvasStatus/NotInAGroup` | `AppState+CanvasCreate.swift#canvasRemoveFromGroup` | `CanvasDocumentViewModel.cs#CanvasRemoveFromGroup` | `A11yCorpusCensus.cs#Corpus` |  |
-| `CanvasStatus/NoConnection` | `AppState+CanvasNavigation.swift#canvasFollowConnection` | `CanvasNavigator.cs#FollowConnection` | `A11yCorpusCensus.cs#Corpus`, `CanvasNavigatorTests.cs#AMissingConnectionSaysWhichDirectionAndWhichOrdinal`, `CanvasNavigatorTests.cs#ARightArrowOnAConnectionlessLeafStillAnswers` |  |
+| `CanvasStatus/NoConnection` | `AppState+CanvasNavigation.swift#canvasFollowConnection` | `CanvasNavigator.cs#Follow` | `A11yCorpusCensus.cs#Corpus`, `CanvasNavigatorTests.cs#AMissingConnectionSaysWhichDirectionAndWhichOrdinal`, `CanvasNavigatorTests.cs#ARightArrowOnAConnectionlessLeafStillAnswers` (+1) |  |
 | `CanvasStatus/Reopening` | `AppState+Canvas.swift#canvasMutationRefusal`, `AppState+CanvasExtras.swift#canvasAnnounceFilterCount`, `AppState+CanvasNavigation.swift#activeCanvasDocumentAnyState` (+3) | `CanvasDocumentViewModel.cs#ReadRefusalFor`, `CanvasNavigator.cs#FilterStatusSentence` | `A11yCorpusCensus.cs#Corpus`, `CanvasNavigatorTests.cs#TheReadMappingAnswersEveryLoadState` |  |
 | `CanvasStatus/Loading` | `AppState+Canvas.swift#canvasMutationRefusal`, `AppState+Canvas.swift#dropCanvasModeState`, `AppState+CanvasExtras.swift#canvasAnnounceFilterCount` (+3) | `CanvasDocumentViewModel.cs#ReadRefusalFor` | `A11yCorpusCensus.cs#Corpus`, `CanvasNavigatorTests.cs#TheFilterSummaryNeverCountsRowsTheSurfaceIsNotShowing`, `CanvasNavigatorTests.cs#TheReadMappingAnswersEveryLoadState` |  |
 | `CanvasBlocked/ModeBusy` | `AppState+Canvas.swift#canvasApply`, `AppState+Canvas.swift#canvasRedo`, `AppState+Canvas.swift#canvasUndo` (+1) | `CanvasDocumentViewModel.cs#RequestConvertToNote`, `CanvasMutationFunnel.cs#AnnounceAdmission`, `CanvasNavigator.cs#ResizeDefaultSize` (+1) | `A11yCorpusCensus.cs#Corpus`, `CanvasMutationFunnelTests.cs#ABusyGateRefusesAudiblyOncePerHold`, `CanvasMutationFunnelTests.cs#AForeignModeTokenRefusesAudibly` (+1) |  |
@@ -6670,6 +6670,28 @@ Where-am-I remain the two ungated rows.
 > `TheBoardsRightAndLeftFollowConnectionsAndEveryMoveRevealsItsSeat`,
 > `EveryBoardMoveAsksThePresenterToRevealItsSeat` and the journey
 > `CanvasSurfaces_VisualBoardPeersAndZoom_AreClean`.
+>
+> **Corrected by follow-up #1270 (D4).** The board's Down/Up walk the
+> FULL scene the renderer draws — dimmed unmatched cards included, End/Start
+> of canvas at the scene's bounds, through the announced door — on their own
+> path (`MoveThroughTheScene`), not `SelectAdjacent`'s walk over the filtered
+> outline, which stepped over dimmed cards and spoke the boundary with cards
+> still below; the palette's Next/Previous Card keep the filtered order.
+> Pinned by `TheBoardsArrowsWalkTheFullSceneDimmedCardsIncluded`,
+> `AFilteredOutSeatStepsThroughTheSceneOnTheBoardAndIntoTheFilteredSetByTheVerbs`
+> and the journey's filtered leg.
+>
+> **Corrected by follow-up #1271 (D4).** The reveal is origin-aware, not
+> unconditional: the navigator hands `RevealSeat` the move's origin
+> (`CanvasMoveOrigin` — the board's own keys and the connect-mode
+> restoration are on the surface; the palette's and the menus' verbs are
+> elsewhere), and the board decides by D4's rule (`RevealsMoveFrom`): a move
+> made on the board always comes into view, one made elsewhere only while
+> Follow Selection is on. Pinned by
+> `TheBoardRevealsItsOwnMovesAlwaysAndOtherMovesOnlyWhileFollowing` (both
+> toggle states against both origins on the real board),
+> `TheRevealRuleIsD4sOriginRule` and
+> `EveryBoardMoveAsksThePresenterToRevealItsSeat`.
 
 **D16 — §K budgets are asserted, not aspirational.** The renderer
 benchmarks run the 2,000-node fixture and ASSERT the mac budgets:
@@ -19172,62 +19194,62 @@ not keyed is not claimed as keyed.
 
 | Id | Head | Recorded |
 |---|---|---|
-| CD-1 | No standalone overlap events. | Recorded divergences, line 14126 |
-| CD-2 | `CanvasFilterCount` carries `matched` only. | Recorded divergences, line 14137 |
-| CD-3 | `CanvasLoadedDegraded` is an announcement Windows and mac both gain. | Recorded divergences, line 14144 |
-| CD-4 | Group entry speaks the group's CHILD count. | Recorded divergences, line 14161 |
-| CD-5 | Where-am-I has ONE filter spelling. | Recorded divergences, line 14169 |
-| CD-6 | Core's thousands grouping wins over `CountCopy`. | Recorded divergences, line 14180 |
-| CD-7 | The connection-delete sentence no longer lower-cases the author's words. | Recorded divergences, line 14191 |
-| CD-8 | The chord parameter is the one recorded platform difference in the corpus. | Recorded divergences, line 14203 |
-| CD-9 | `towardOther` is dropped. | Recorded divergences, line 14210 |
-| CD-10 | Families are typed nested enums, not one variant per sentence. | Recorded divergences, line 14220 |
-| CD-11 | Names that differ from the spec's indicative list. | Recorded divergences, line 14237 |
-| CD-12 | The family nests under one top-level variant | Recorded divergences, line 14248 |
-| CD-13 | `CanvasTracePathEnd` speaks the count of the titles it just listed. | Recorded divergences, line 14268 |
-| CD-14 | The outline's connection ROW now reads the traversal sentence. | Recorded divergences, line 14288 |
-| CD-15 | Four templates stop hardcoding the plural. | Recorded divergences, line 14312 |
-| CD-16 | `canvas_auto_sides` takes rects, not node ids | Recorded divergences, line 14347 |
-| CD-17 | `canvas_constants()` and `canvas_new_id()` are free functions | Recorded divergences, line 14358 |
-| CD-18 | Equal-area containment ties resolve to the LATER document order. | Recorded divergences, line 14366 |
-| CD-19 | `describe_relative`'s tie-break is pinned where mac's was undefined. | Recorded divergences, line 14377 |
-| CD-20 | `speakable_name` ordinals renumber on delete | Recorded divergences, line 14386 |
-| CD-21 | `place_inside_group`'s fallback fires on SIZE, not on childlessness. | Recorded divergences, line 14400 |
-| CD-22 | Case handling and whitespace trimming are Rust's, not Foundation's — and not case folding either. | Recorded divergences, line 14416 |
-| CD-23 | `speakable_name` is exposed on four records; which surface SPEAKS it stays the host's. | Recorded divergences, line 14437 |
-| CD-24 | `canvas_group_rect_around` returns `Option`. | Recorded divergences, line 14461 |
-| CD-25 | the inside-group search is a column-major LATTICE, not a ring. | Recorded divergences, line 14467 |
-| CD-26 | `count_noun` is an FFI export, because CD-6's other half is a host string. | Recorded divergences, line 14487 |
-| CD-27 | Duplicate's group expansion answers from the tree, not from "centre inside a picked group". | Recorded divergences, line 14517 |
-| CD-28 | `CanvasOpenInfo.degraded` is the PARSE-ERROR state, not the "unsupported items" banner. | Recorded divergences, line 14548 |
-| CD-29 | The degraded announcement is once per DOCUMENT on Windows and once per CONTAINER on mac. | Recorded divergences, line 14565 |
-| CD-30 | The outline row's Name spells `speakable_name`; mac's spells `title`. | Recorded divergences, line 14577 |
-| CD-31 | The surface view is a code-built `UserControl`, not a `.xaml(.cs)` pair. | Recorded divergences, line 14593 |
-| CD-32 | A retarget re-keys the registry; it does not mutate the document's path. | Recorded divergences, line 14605 |
-| CD-33 | The Windows outline NESTS; mac's is flat with indentation. | Recorded divergences, line 14621 |
-| CD-34 | `CanvasPhrase.CardReference` capitalises with .NET's SIMPLE mapping where core uses Rust's FULL one. | Recorded divergences, line 14636 |
-| CD-35 | The canvas link card has no confirmation step, and neither does the policy it reuses. | Recorded divergences, line 14669 |
-| CD-36 | The media activation hint is corrected on Windows; mac's is stale. | Recorded divergences, line 14692 |
-| CD-37 | The empty canvas renders `CanvasStatus{Empty}`, not `CanvasEmptyOnboarding`. | Recorded divergences, line 14705 |
-| CD-38 | Windows will not shell-execute a non-media file card; mac will | Recorded divergences, line 14721 |
-| CD-39 | The canvas table's ordinal columns sort differently from mac's on a mixed-normalization vault | Recorded divergences, line 15024 |
-| CD-40 | Focus delivery seats the shared selection SILENTLY; "lands focus only" is not reachable. | Recorded divergences, line 15059 |
-| CD-41 | M4 does not cancel on a shell overlay; t0 §2 M4's palette clause is superseded. | Recorded divergences, line 15092 |
-| CD-42 | The filter's visible summary is mac's sentence, not t0's spoken one. | Recorded divergences, line 15120 |
-| CD-43 | Clear Filter always answers; mac stays silent when nothing is filtered. | Recorded divergences, line 15129 |
-| CD-44 | `nextCard` the CHORD and `nextCard` the COMMAND visit different rows, deliberately. | Recorded divergences, line 15147 |
-| CD-45 | A survivor whose containing group was filtered out is promoted to a ROOT; the intermediate "nests under a surviving GRANDparent" case cannot… | Recorded divergences, line 15163 |
-| CD-46 | Next/previous card route through the read mapping; mac returns silently outside `.ready`. | Recorded divergences, line 15242 |
-| CD-47 | Escape inside the Where-am-I panel is the PANEL's, not the ladder's; t0 §2 M5 has no clause for a focused transient region. | Recorded divergences, line 15265 |
-| CD-48 | Right/Left FOLLOW unconditionally; the spec's "as mac does" premise was false. | Recorded divergences, line 15323 |
+| CD-1 | No standalone overlap events. | Recorded divergences, line 14190 |
+| CD-2 | `CanvasFilterCount` carries `matched` only. | Recorded divergences, line 14201 |
+| CD-3 | `CanvasLoadedDegraded` is an announcement Windows and mac both gain. | Recorded divergences, line 14208 |
+| CD-4 | Group entry speaks the group's CHILD count. | Recorded divergences, line 14225 |
+| CD-5 | Where-am-I has ONE filter spelling. | Recorded divergences, line 14233 |
+| CD-6 | Core's thousands grouping wins over `CountCopy`. | Recorded divergences, line 14244 |
+| CD-7 | The connection-delete sentence no longer lower-cases the author's words. | Recorded divergences, line 14255 |
+| CD-8 | The chord parameter is the one recorded platform difference in the corpus. | Recorded divergences, line 14267 |
+| CD-9 | `towardOther` is dropped. | Recorded divergences, line 14274 |
+| CD-10 | Families are typed nested enums, not one variant per sentence. | Recorded divergences, line 14284 |
+| CD-11 | Names that differ from the spec's indicative list. | Recorded divergences, line 14301 |
+| CD-12 | The family nests under one top-level variant | Recorded divergences, line 14312 |
+| CD-13 | `CanvasTracePathEnd` speaks the count of the titles it just listed. | Recorded divergences, line 14332 |
+| CD-14 | The outline's connection ROW now reads the traversal sentence. | Recorded divergences, line 14352 |
+| CD-15 | Four templates stop hardcoding the plural. | Recorded divergences, line 14376 |
+| CD-16 | `canvas_auto_sides` takes rects, not node ids | Recorded divergences, line 14411 |
+| CD-17 | `canvas_constants()` and `canvas_new_id()` are free functions | Recorded divergences, line 14422 |
+| CD-18 | Equal-area containment ties resolve to the LATER document order. | Recorded divergences, line 14430 |
+| CD-19 | `describe_relative`'s tie-break is pinned where mac's was undefined. | Recorded divergences, line 14441 |
+| CD-20 | `speakable_name` ordinals renumber on delete | Recorded divergences, line 14450 |
+| CD-21 | `place_inside_group`'s fallback fires on SIZE, not on childlessness. | Recorded divergences, line 14464 |
+| CD-22 | Case handling and whitespace trimming are Rust's, not Foundation's — and not case folding either. | Recorded divergences, line 14480 |
+| CD-23 | `speakable_name` is exposed on four records; which surface SPEAKS it stays the host's. | Recorded divergences, line 14501 |
+| CD-24 | `canvas_group_rect_around` returns `Option`. | Recorded divergences, line 14525 |
+| CD-25 | the inside-group search is a column-major LATTICE, not a ring. | Recorded divergences, line 14531 |
+| CD-26 | `count_noun` is an FFI export, because CD-6's other half is a host string. | Recorded divergences, line 14551 |
+| CD-27 | Duplicate's group expansion answers from the tree, not from "centre inside a picked group". | Recorded divergences, line 14581 |
+| CD-28 | `CanvasOpenInfo.degraded` is the PARSE-ERROR state, not the "unsupported items" banner. | Recorded divergences, line 14612 |
+| CD-29 | The degraded announcement is once per DOCUMENT on Windows and once per CONTAINER on mac. | Recorded divergences, line 14629 |
+| CD-30 | The outline row's Name spells `speakable_name`; mac's spells `title`. | Recorded divergences, line 14641 |
+| CD-31 | The surface view is a code-built `UserControl`, not a `.xaml(.cs)` pair. | Recorded divergences, line 14657 |
+| CD-32 | A retarget re-keys the registry; it does not mutate the document's path. | Recorded divergences, line 14669 |
+| CD-33 | The Windows outline NESTS; mac's is flat with indentation. | Recorded divergences, line 14685 |
+| CD-34 | `CanvasPhrase.CardReference` capitalises with .NET's SIMPLE mapping where core uses Rust's FULL one. | Recorded divergences, line 14700 |
+| CD-35 | The canvas link card has no confirmation step, and neither does the policy it reuses. | Recorded divergences, line 14733 |
+| CD-36 | The media activation hint is corrected on Windows; mac's is stale. | Recorded divergences, line 14756 |
+| CD-37 | The empty canvas renders `CanvasStatus{Empty}`, not `CanvasEmptyOnboarding`. | Recorded divergences, line 14769 |
+| CD-38 | Windows will not shell-execute a non-media file card; mac will | Recorded divergences, line 14785 |
+| CD-39 | The canvas table's ordinal columns sort differently from mac's on a mixed-normalization vault | Recorded divergences, line 15088 |
+| CD-40 | Focus delivery seats the shared selection SILENTLY; "lands focus only" is not reachable. | Recorded divergences, line 15123 |
+| CD-41 | M4 does not cancel on a shell overlay; t0 §2 M4's palette clause is superseded. | Recorded divergences, line 15156 |
+| CD-42 | The filter's visible summary is mac's sentence, not t0's spoken one. | Recorded divergences, line 15184 |
+| CD-43 | Clear Filter always answers; mac stays silent when nothing is filtered. | Recorded divergences, line 15193 |
+| CD-44 | `nextCard` the CHORD and `nextCard` the COMMAND visit different rows, deliberately. | Recorded divergences, line 15211 |
+| CD-45 | A survivor whose containing group was filtered out is promoted to a ROOT; the intermediate "nests under a surviving GRANDparent" case cannot… | Recorded divergences, line 15227 |
+| CD-46 | Next/previous card route through the read mapping; mac returns silently outside `.ready`. | Recorded divergences, line 15306 |
+| CD-47 | Escape inside the Where-am-I panel is the PANEL's, not the ladder's; t0 §2 M5 has no clause for a focused transient region. | Recorded divergences, line 15329 |
+| CD-48 | Right/Left FOLLOW unconditionally; the spec's "as mac does" premise was false. | Recorded divergences, line 15387 |
 
 | Id | Head | Recorded |
 |---|---|---|
-| CR-1 | uniffi's 256-variant enum cap: pressure resolved, and the pattern is set. | Accepted risks, line 15363 |
-| CR-2 | `a11y.rs` is now 5,291 lines | Accepted risks, line 15375 |
-| CR-3 | Two shipped strings have English defects and were migrated verbatim. | Accepted risks, line 15382 |
-| CR-4 | `CanvasModeCancelled` and `CanvasModeEndedWithoutEffect` admit combinations no host produces | Accepted risks, line 15391 |
-| CR-5 | The residue count is unchanged by 0a-1; 0a-2 lowers it. | Accepted risks, line 15397 |
+| CR-1 | uniffi's 256-variant enum cap: pressure resolved, and the pattern is set. | Accepted risks, line 15427 |
+| CR-2 | `a11y.rs` is now 5,291 lines | Accepted risks, line 15439 |
+| CR-3 | Two shipped strings have English defects and were migrated verbatim. | Accepted risks, line 15446 |
+| CR-4 | `CanvasModeCancelled` and `CanvasModeEndedWithoutEffect` admit combinations no host produces | Accepted risks, line 15455 |
+| CR-5 | The residue count is unchanged by 0a-1; 0a-2 lowers it. | Accepted risks, line 15461 |
 
 **(d) Owner decisions D-1…D-7, with their resolution and evidence.**
 
