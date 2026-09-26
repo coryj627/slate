@@ -5846,20 +5846,29 @@ impl VaultSession {
         alt: Option<String>,
     ) -> Result<crate::EmbedResolution, VaultError> {
         let mut budget = crate::embeds::EmbedResolveBudget::Unlimited;
-        self.resolve_embed_at_depth(host_path, target, 0, alt, &mut budget)
+        self.resolve_embed_at_depth(host_path, target, 0, alt, &mut budget, &CancelToken::new())
     }
 
     /// Resolve an editor popover preview under a shared text/node/image budget.
     /// Unlike `resolve_embed`, this bounds allocation while walking the tree,
     /// before the recursive result is materialized across FFI.
+    ///
+    /// Cancellable (locked decision 05 §4, #1279): `cancel` is polled before
+    /// each node, each nested embed and each read, so a preview the host
+    /// closed, superseded or invalidated stops mid-walk and returns
+    /// `VaultError::Cancelled` — never a partial result. A pre-cancelled
+    /// token touches nothing.
     pub fn resolve_embed_preview(
         &self,
         host_path: &str,
         target: &str,
         alt: Option<String>,
+        cancel: &CancelToken,
     ) -> Result<crate::EmbedPreviewResolution, VaultError> {
+        cancel.check()?;
         let mut budget = crate::embeds::EmbedResolveBudget::preview();
-        let resolution = self.resolve_embed_at_depth(host_path, target, 0, alt, &mut budget)?;
+        let resolution =
+            self.resolve_embed_at_depth(host_path, target, 0, alt, &mut budget, cancel)?;
         Ok(crate::EmbedPreviewResolution {
             resolution,
             truncated: budget.truncated(),
@@ -5883,7 +5892,14 @@ impl VaultSession {
     ) -> Result<crate::EmbedPreviewResolution, VaultError> {
         let mut budget =
             crate::embeds::EmbedResolveBudget::preview_with_image_pool(image_pool_bytes);
-        let resolution = self.resolve_embed_at_depth(host_path, target, 0, alt, &mut budget)?;
+        let resolution = self.resolve_embed_at_depth(
+            host_path,
+            target,
+            0,
+            alt,
+            &mut budget,
+            &CancelToken::new(),
+        )?;
         Ok(crate::EmbedPreviewResolution {
             resolution,
             truncated: budget.truncated(),
@@ -5908,7 +5924,14 @@ impl VaultSession {
         image_budget_bytes: u64,
     ) -> Result<crate::embeds::EmbedReadingCard, VaultError> {
         let mut budget = crate::embeds::EmbedResolveBudget::preview();
-        let resolution = self.resolve_embed_at_depth(host_path, target, 0, alt, &mut budget)?;
+        let resolution = self.resolve_embed_at_depth(
+            host_path,
+            target,
+            0,
+            alt,
+            &mut budget,
+            &CancelToken::new(),
+        )?;
         let mut resolution = crate::embeds::strip_nested_image_payloads(resolution);
         let mut image_elided = false;
         let mut image_len = 0u64;
@@ -5935,9 +5958,12 @@ impl VaultSession {
         depth: u32,
         alt: Option<String>,
         budget: &mut crate::embeds::EmbedResolveBudget,
+        cancel: &CancelToken,
     ) -> Result<crate::EmbedResolution, VaultError> {
         use crate::embeds::{EmbedAnchor, parse_embed_target};
 
+        // Every node of the walk is a cooperative boundary (#1279).
+        cancel.check()?;
         if depth >= crate::MAX_EMBED_DEPTH {
             return Ok(crate::EmbedResolution::Unresolved {
                 reason: crate::EmbedUnresolvedReason::DepthLimitReached,
@@ -5951,18 +5977,15 @@ impl VaultSession {
         // host path through so relative-folder resolution stays
         // symmetric with the note-target branch (Codoki PR #190).
         if crate::embeds::looks_like_image(note_name) {
-            return self.resolve_image_embed(host_path, target, note_name, alt, budget);
+            return self.resolve_image_embed(host_path, target, note_name, alt, budget, cancel);
         }
 
-        // Note target: snapshot the file index, run link_resolver,
-        // then read the resolved file off-mutex.
+        // Note target: fetch only the index rows the resolver could
+        // match (#1279 — never the whole files table), run link_resolver
+        // over them, then read the resolved file off-mutex.
         let target_path = {
-            let conn = self.conn.lock().expect("session connection mutex");
-            let paths: Vec<String> = conn
-                .prepare("SELECT path FROM files")?
-                .query_map([], |row| row.get::<_, String>(0))?
-                .collect::<Result<Vec<_>, _>>()?;
-            let vault_index = crate::InMemoryVaultIndex::new(paths);
+            let vault_index = self.embed_link_candidates(note_name)?;
+            cancel.check()?;
             match crate::resolve_link(note_name, None, host_path, &vault_index) {
                 crate::ResolvedLink::Resolved { target_path, .. } => target_path,
                 _ => {
@@ -5976,11 +5999,11 @@ impl VaultSession {
         };
 
         let resolved = match anchor {
-            None => self
-                .read_embed_text(&target_path, budget)
-                .and_then(|text| self.resolve_full_note_embed(target_path, text, depth, budget)),
+            None => self.read_embed_text(&target_path, budget).and_then(|text| {
+                self.resolve_full_note_embed(target_path, text, depth, budget, cancel)
+            }),
             Some(EmbedAnchor::Heading(heading)) => {
-                self.resolve_indexed_section_embed(target_path, heading, depth, budget)
+                self.resolve_indexed_section_embed(target_path, heading, depth, budget, cancel)
             }
             Some(EmbedAnchor::Block(block_id)) => {
                 self.resolve_indexed_block_embed(target_path, block_id, budget)
@@ -5988,6 +6011,8 @@ impl VaultSession {
         };
         match resolved {
             Ok(resolution) => Ok(resolution),
+            // A cancelled walk is not a card: it ends the whole resolve.
+            Err(VaultError::Cancelled) => Err(VaultError::Cancelled),
             Err(VaultError::Io(error)) if error.kind() == std::io::ErrorKind::NotFound => {
                 Ok(crate::EmbedResolution::Unresolved {
                     reason: crate::EmbedUnresolvedReason::TargetNotFound {
@@ -6009,6 +6034,7 @@ impl VaultSession {
         heading_name: &str,
         depth: u32,
         budget: &mut crate::embeds::EmbedResolveBudget,
+        cancel: &CancelToken,
     ) -> Result<crate::EmbedResolution, VaultError> {
         let headings = {
             let conn = self.conn.lock().expect("session connection mutex");
@@ -6069,13 +6095,56 @@ impl VaultSession {
         };
         let end = indexed_end.unwrap_or(self.provider.stat(&target_path)?.size_bytes);
         let section_text = self.read_embed_text_range(&target_path, start, end, budget)?;
-        let nested = self.resolve_nested_embeds(&target_path, &section_text, depth, budget)?;
+        let nested =
+            self.resolve_nested_embeds(&target_path, &section_text, depth, budget, cancel)?;
         Ok(crate::EmbedResolution::Section {
             target_path,
             heading,
             text: section_text,
             nested,
         })
+    }
+
+    /// The index rows an embed target could resolve to (#1279; locked
+    /// decision 05 §9.3.1): the resolver's own candidate probe — exact
+    /// vault paths for a qualified or rooted target, file names for a
+    /// basename — looked up by the registered Unicode fold, so each
+    /// resolution reads the few rows that can match instead of
+    /// materializing every path in the vault (for every nested node). The
+    /// fold is NFC + full-Unicode lowercase, a superset of the resolver's
+    /// own lowercase comparison, and `resolve_link` still decides over the
+    /// candidates — the answer is the full-index answer.
+    fn embed_link_candidates(
+        &self,
+        note_name: &str,
+    ) -> Result<crate::InMemoryVaultIndex, VaultError> {
+        let (column, keys) = match crate::link_resolver::candidate_probe(note_name) {
+            crate::link_resolver::CandidateProbe::None => {
+                return Ok(crate::InMemoryVaultIndex::new(Vec::new()));
+            }
+            crate::link_resolver::CandidateProbe::Paths(keys) => ("path", keys),
+            crate::link_resolver::CandidateProbe::Names(keys) => ("name", keys),
+        };
+        // One indexed lookup (idx_files_path_fold, idx_files_name_fold) for
+        // the probe's handful of keys; the placeholders are generated, the
+        // keys bound.
+        let folded: Vec<String> = keys
+            .iter()
+            .map(|key| crate::db::tree_sort_key(key))
+            .collect();
+        let placeholders = (1..=folded.len())
+            .map(|index| format!("?{index}"))
+            .collect::<Vec<_>>()
+            .join(", ");
+        let sql = format!(
+            "SELECT path FROM files WHERE slate_tree_sort_key({column}) IN ({placeholders})"
+        );
+        let conn = self.conn.lock().expect("session connection mutex");
+        let mut statement = conn.prepare_cached(&sql)?;
+        let paths = statement
+            .query_map(rusqlite::params_from_iter(folded.iter()), |row| row.get(0))?
+            .collect::<Result<Vec<String>, _>>()?;
+        Ok(crate::InMemoryVaultIndex::new(paths))
     }
 
     fn resolve_indexed_block_embed(
@@ -6175,6 +6244,7 @@ impl VaultSession {
         note_name: &str,
         alt: Option<String>,
         budget: &mut crate::embeds::EmbedResolveBudget,
+        cancel: &CancelToken,
     ) -> Result<crate::EmbedResolution, VaultError> {
         // Same path-resolution strategy as note targets: snapshot
         // the file index and run the link_resolver. `looks_like_image`
@@ -6183,12 +6253,8 @@ impl VaultSession {
         // threads through so any future folder-relative resolution
         // in `link_resolver` lights up automatically.
         let target_path = {
-            let conn = self.conn.lock().expect("session connection mutex");
-            let paths: Vec<String> = conn
-                .prepare("SELECT path FROM files")?
-                .query_map([], |row| row.get::<_, String>(0))?
-                .collect::<Result<Vec<_>, _>>()?;
-            let vault_index = crate::InMemoryVaultIndex::new(paths);
+            let vault_index = self.embed_link_candidates(note_name)?;
+            cancel.check()?;
             match crate::resolve_link(note_name, None, host_path, &vault_index) {
                 crate::ResolvedLink::Resolved { target_path, .. } => target_path,
                 _ => {
@@ -6214,6 +6280,7 @@ impl VaultSession {
                 mime: att.mime,
                 alt,
             }),
+            Err(VaultError::Cancelled) => Err(VaultError::Cancelled),
             Err(VaultError::Io(e)) if e.kind() == std::io::ErrorKind::NotFound => {
                 Ok(crate::EmbedResolution::Unresolved {
                     reason: crate::EmbedUnresolvedReason::TargetNotFound {
@@ -6293,9 +6360,10 @@ impl VaultSession {
         text: String,
         depth: u32,
         budget: &mut crate::embeds::EmbedResolveBudget,
+        cancel: &CancelToken,
     ) -> Result<crate::EmbedResolution, VaultError> {
         let body = crate::embeds::strip_frontmatter_for_embed(&text).to_string();
-        let nested = self.resolve_nested_embeds(&target_path, &body, depth, budget)?;
+        let nested = self.resolve_nested_embeds(&target_path, &body, depth, budget, cancel)?;
         Ok(crate::EmbedResolution::FullNote {
             target_path,
             text: body,
@@ -6313,6 +6381,7 @@ impl VaultSession {
         text: &str,
         depth: u32,
         budget: &mut crate::embeds::EmbedResolveBudget,
+        cancel: &CancelToken,
     ) -> Result<Vec<crate::NestedEmbed>, VaultError> {
         let next_depth = depth + 1;
         let mut out: Vec<crate::NestedEmbed> = Vec::new();
@@ -6320,6 +6389,7 @@ impl VaultSession {
             if !link.is_embed {
                 continue;
             }
+            cancel.check()?;
             if !budget.consume_node() {
                 break;
             }
@@ -6337,6 +6407,7 @@ impl VaultSession {
                 next_depth,
                 link.display_text.clone(),
                 budget,
+                cancel,
             )?;
             out.push(crate::NestedEmbed {
                 raw_target: target_with_anchor,

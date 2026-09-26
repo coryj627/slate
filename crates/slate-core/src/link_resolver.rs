@@ -325,6 +325,47 @@ pub fn resolve_link(
     }
 }
 
+/// The index rows [`resolve_link`] could match for a target (#1279), so a
+/// caller holding a database can fetch just those instead of snapshotting
+/// every path. Keys are lowercased the way the resolver compares; the
+/// caller may fold further (a coarser fold only widens the set), and
+/// `resolve_link` over the fetched candidates still decides.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum CandidateProbe {
+    /// Nothing in the index can match: an empty or external target.
+    None,
+    /// A qualified or rooted target: the whole vault-relative paths it
+    /// may name (the literal, then each implied Markdown extension).
+    Paths(Vec<String>),
+    /// A basename target: the file names it may match (the literal, then
+    /// each implied Markdown extension).
+    Names(Vec<String>),
+}
+
+/// The [`CandidateProbe`] for `target_raw`, normalized exactly as
+/// [`resolve_link`] normalizes it.
+pub fn candidate_probe(target_raw: &str) -> CandidateProbe {
+    let trimmed = target_raw.trim();
+    if trimmed.is_empty() || looks_external_for_resolver(trimmed) {
+        return CandidateProbe::None;
+    }
+    let rooted = trimmed.starts_with('/') || trimmed.starts_with("./");
+    let normalized = trimmed
+        .strip_prefix("./")
+        .or_else(|| trimmed.strip_prefix('/'))
+        .unwrap_or(trimmed);
+    let lower = normalized.to_lowercase();
+    let mut keys = vec![lower.clone()];
+    if !has_extension(normalized) {
+        keys.extend(MD_EXTENSIONS.iter().map(|ext| format!("{lower}.{ext}")));
+    }
+    if rooted || normalized.contains('/') {
+        CandidateProbe::Paths(keys)
+    } else {
+        CandidateProbe::Names(keys)
+    }
+}
+
 /// Try the literal target first; if no hit, retry with each Markdown
 /// extension appended (only when the input has no extension).
 fn find_exact(target: &str, index: &dyn VaultIndex) -> Option<String> {

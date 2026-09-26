@@ -1093,7 +1093,7 @@ fn preview_text_budget_preserves_utf8_boundaries_and_full_resolver_is_lossless()
     session.scan_initial(&CancelToken::new()).unwrap();
 
     let preview = session
-        .resolve_embed_preview("host.md", "target", None)
+        .resolve_embed_preview("host.md", "target", None, &CancelToken::new())
         .unwrap();
     assert!(preview.truncated);
     match preview.resolution {
@@ -1117,7 +1117,7 @@ fn preview_node_budget_is_cumulative_across_wide_nested_graph() {
     session.scan_initial(&CancelToken::new()).unwrap();
 
     let preview = session
-        .resolve_embed_preview("host.md", "root", None)
+        .resolve_embed_preview("host.md", "root", None, &CancelToken::new())
         .unwrap();
     assert!(preview.truncated);
     match preview.resolution {
@@ -1143,7 +1143,7 @@ fn preview_text_budget_is_cumulative_across_nested_siblings() {
     session.scan_initial(&CancelToken::new()).unwrap();
 
     let preview = session
-        .resolve_embed_preview("host.md", "root", None)
+        .resolve_embed_preview("host.md", "root", None, &CancelToken::new())
         .unwrap();
     assert!(preview.truncated);
     assert!(resolved_text_bytes(&preview.resolution) <= crate::MAX_EMBED_PREVIEW_TEXT_BYTES);
@@ -1166,7 +1166,7 @@ fn preview_image_budget_is_cumulative_across_nested_siblings() {
     session.scan_initial(&CancelToken::new()).unwrap();
 
     let preview = session
-        .resolve_embed_preview("host.md", "root", None)
+        .resolve_embed_preview("host.md", "root", None, &CancelToken::new())
         .unwrap();
     assert!(preview.truncated);
     assert!(
@@ -1190,7 +1190,7 @@ fn preview_resolves_late_heading_without_materializing_its_prefix() {
     session.scan_initial(&CancelToken::new()).unwrap();
 
     let preview = session
-        .resolve_embed_preview("host.md", "target#Late Héading", None)
+        .resolve_embed_preview("host.md", "target#Late Héading", None, &CancelToken::new())
         .unwrap();
     assert!(!preview.truncated);
     match preview.resolution {
@@ -1215,7 +1215,7 @@ fn preview_resolves_late_block_without_materializing_its_prefix() {
     session.scan_initial(&CancelToken::new()).unwrap();
 
     let preview = session
-        .resolve_embed_preview("host.md", "target^late-id", None)
+        .resolve_embed_preview("host.md", "target^late-id", None, &CancelToken::new())
         .unwrap();
     assert!(!preview.truncated);
     match preview.resolution {
@@ -1311,4 +1311,247 @@ fn reading_card_elides_nested_images_and_honors_the_root_pool() {
     assert!(bytes.is_empty());
     assert_eq!(over.image_len, 8);
     assert!(over.image_elided);
+}
+
+/// #1279 (locked decision 05 §9.3.1): the embed resolver fetches only the
+/// index rows its target could match, and that targeted answer is the
+/// whole-index answer — for qualified, rooted and basename targets, implied
+/// Markdown extensions, duplicate basenames (the distance tiebreak), case
+/// and Unicode (composed and decomposed forms, non-ASCII case), images and
+/// external targets — from hosts at three depths.
+#[test]
+fn embed_candidates_resolve_exactly_as_the_whole_index_does() {
+    let paths = [
+        "a.md",
+        "notes/a.md",
+        "notes/deep/a.md",
+        "Other.markdown",
+        "b.MD",
+        "c.mdown",
+        "\u{dc}ber.md",
+        "folder \u{c4}/Stra\u{df}e.md",
+        "e\u{301}cole.md",
+        "\u{e9}t\u{e9}.md",
+        "img/pic.png",
+        "pic.png",
+        "docs/Readme.md",
+        "readme.md",
+        "x.y.md",
+        "space name.md",
+        "\u{130}stanbul.md",
+        "notes/ÆON.md",
+    ];
+    let (_tmp, session) = make_vault(|provider| {
+        for path in paths {
+            provider.write_file(path, b"# t\n").unwrap();
+        }
+    });
+    session.scan_initial(&CancelToken::new()).unwrap();
+    let all: Vec<String> = {
+        let conn = session.conn.lock().unwrap();
+        conn.prepare("SELECT path FROM files")
+            .unwrap()
+            .query_map([], |row| row.get(0))
+            .unwrap()
+            .map(|row| row.unwrap())
+            .collect()
+    };
+    assert_eq!(all.len(), paths.len(), "every fixture file is indexed");
+    let whole = crate::InMemoryVaultIndex::new(all);
+
+    let targets = [
+        "a",
+        "A",
+        "a.md",
+        "A.MD",
+        "notes/a",
+        "Notes/A",
+        "/a",
+        "./notes/a",
+        "notes/deep/a.md",
+        "deep/a",
+        "other",
+        "OTHER.markdown",
+        "b",
+        "c",
+        "\u{fc}ber",
+        "\u{dc}BER",
+        "folder \u{e4}/stra\u{df}e",
+        "Stra\u{df}e",
+        "\u{e9}cole",
+        "e\u{301}cole",
+        "e\u{301}t\u{e9}",
+        "\u{e9}t\u{e9}",
+        "pic.png",
+        "img/pic.png",
+        "PIC.PNG",
+        "Readme",
+        "docs/readme",
+        "x.y",
+        "x.y.md",
+        "space name",
+        "\u{130}stanbul",
+        "i\u{307}stanbul",
+        "istanbul",
+        "\u{e6}on",
+        "notes/\u{e6}on",
+        "https://example.com/a",
+        "",
+        "   ",
+        "nope",
+    ];
+    for host in ["host.md", "notes/host.md", "notes/deep/host.md"] {
+        for target in targets {
+            let candidates = session.embed_link_candidates(target).unwrap();
+            assert_eq!(
+                crate::resolve_link(target, None, host, &candidates),
+                crate::resolve_link(target, None, host, &whole),
+                "{target:?} from {host}"
+            );
+        }
+    }
+}
+
+/// A provider that cancels a token on the Nth capped read once armed
+/// (#1279): a deterministic "the user closed the preview mid-walk".
+struct CancelOnReadProvider {
+    inner: FsVaultProvider,
+    cancel: CancelToken,
+    armed: std::sync::atomic::AtomicBool,
+    reads: std::sync::atomic::AtomicU32,
+    cancel_after: u32,
+}
+
+impl CancelOnReadProvider {
+    fn count(&self) {
+        if self.armed.load(std::sync::atomic::Ordering::SeqCst) {
+            let n = self.reads.fetch_add(1, std::sync::atomic::Ordering::SeqCst) + 1;
+            if n == self.cancel_after {
+                self.cancel.cancel();
+            }
+        }
+    }
+}
+
+impl crate::VaultProvider for CancelOnReadProvider {
+    fn list_dir(&self, relative: &str) -> Result<Vec<crate::DirEntry>, VaultError> {
+        self.inner.list_dir(relative)
+    }
+    fn read_file(&self, relative: &str) -> Result<Vec<u8>, VaultError> {
+        self.count();
+        self.inner.read_file(relative)
+    }
+    fn read_file_with_cap(&self, relative: &str, max_bytes: u64) -> Result<Vec<u8>, VaultError> {
+        self.count();
+        self.inner.read_file_with_cap(relative, max_bytes)
+    }
+    fn read_file_range_with_cap(
+        &self,
+        relative: &str,
+        offset: u64,
+        max_bytes: u64,
+    ) -> Result<Vec<u8>, VaultError> {
+        self.count();
+        self.inner
+            .read_file_range_with_cap(relative, offset, max_bytes)
+    }
+    fn write_file(&self, relative: &str, contents: &[u8]) -> Result<(), VaultError> {
+        self.inner.write_file(relative, contents)
+    }
+    fn delete(&self, relative: &str) -> Result<(), VaultError> {
+        self.inner.delete(relative)
+    }
+    fn rename(&self, from: &str, to: &str) -> Result<(), VaultError> {
+        self.inner.rename(from, to)
+    }
+    fn create_dir(&self, relative: &str) -> Result<(), VaultError> {
+        self.inner.create_dir(relative)
+    }
+    fn stat(&self, relative: &str) -> Result<crate::FileStat, VaultError> {
+        self.inner.stat(relative)
+    }
+    fn watch(
+        &self,
+        sink: Arc<dyn crate::FileEventSink>,
+    ) -> Result<Option<crate::WatchHandle>, VaultError> {
+        self.inner.watch(sink)
+    }
+}
+
+fn nested_preview_vault(
+    cancel: &CancelToken,
+    cancel_after: u32,
+) -> (tempfile::TempDir, VaultSession, Arc<CancelOnReadProvider>) {
+    let tmp = tempfile::tempdir().unwrap();
+    let inner = FsVaultProvider::new(tmp.path().to_path_buf());
+    inner.write_file("host.md", b"![[root]]").unwrap();
+    let root: String = (0..20).map(|n| format!("![[leaf{n}]]\n")).collect();
+    inner.write_file("root.md", root.as_bytes()).unwrap();
+    for n in 0..20 {
+        inner
+            .write_file(&format!("leaf{n}.md"), format!("leaf {n}").as_bytes())
+            .unwrap();
+    }
+    let provider = Arc::new(CancelOnReadProvider {
+        inner,
+        cancel: cancel.clone(),
+        armed: std::sync::atomic::AtomicBool::new(false),
+        reads: std::sync::atomic::AtomicU32::new(0),
+        cancel_after,
+    });
+    let session = VaultSession::open(
+        provider.clone(),
+        SessionConfig::new(tmp.path().join(".slate")),
+    )
+    .unwrap();
+    session.scan_initial(&CancelToken::new()).unwrap();
+    provider
+        .armed
+        .store(true, std::sync::atomic::Ordering::SeqCst);
+    (tmp, session, provider)
+}
+
+/// #1279: a preview cancelled mid-walk — here after the root and two of
+/// its twenty nested notes were read — ends with `Cancelled`, never a
+/// partial card, and reads nothing more: the walk stops at the next node.
+#[test]
+fn a_preview_cancelled_mid_walk_stops_and_returns_cancelled() {
+    let cancel = CancelToken::new();
+    let (_tmp, session, provider) = nested_preview_vault(&cancel, 3);
+
+    match session.resolve_embed_preview("host.md", "root", None, &cancel) {
+        Err(VaultError::Cancelled) => {}
+        other => panic!("expected Cancelled, got {other:?}"),
+    }
+    assert_eq!(
+        provider.reads.load(std::sync::atomic::Ordering::SeqCst),
+        3,
+        "the walk read past its cancellation"
+    );
+
+    // The same vault resolves in full with a live token: the cancellation
+    // is the only thing that stopped it.
+    let preview = session
+        .resolve_embed_preview("host.md", "root", None, &CancelToken::new())
+        .unwrap();
+    let crate::EmbedResolution::FullNote { nested, .. } = &preview.resolution else {
+        panic!("expected FullNote, got {:?}", preview.resolution);
+    };
+    assert_eq!(nested.len(), 20);
+}
+
+/// #1279: a token already cancelled (a preview superseded before its
+/// worker ran) touches nothing at all.
+#[test]
+fn a_pre_cancelled_preview_touches_nothing() {
+    let never = CancelToken::new();
+    let (_tmp, session, provider) = nested_preview_vault(&never, u32::MAX);
+    let cancelled = CancelToken::new();
+    cancelled.cancel();
+
+    match session.resolve_embed_preview("host.md", "root", None, &cancelled) {
+        Err(VaultError::Cancelled) => {}
+        other => panic!("expected Cancelled, got {other:?}"),
+    }
+    assert_eq!(provider.reads.load(std::sync::atomic::Ordering::SeqCst), 0);
 }
