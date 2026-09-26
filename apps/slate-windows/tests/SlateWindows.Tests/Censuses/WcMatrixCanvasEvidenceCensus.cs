@@ -83,10 +83,11 @@ public sealed class WcMatrixCanvasEvidenceCensus
             [],
             [],
             ["speakable_name", "Zoom N percent"],
-            // D4's origin rule for the board's reveal (follow-up #1271).
+            // D4's origin rule for the board's reveal (follow-up #1271); D5's
+            // reserved container name (#1276).
             ["CanvasSurfaces_VisualBoardPeersAndZoom_AreClean", "TheZoomValueIsCoresRenderMinusItsPeriod", "FitCanvasContainsAndCentresCoresBounds",
                 "TheBoardsRightAndLeftFollowConnectionsAndEveryMoveRevealsItsSeat", "TheBoardRevealsItsOwnMovesAlwaysAndOtherMovesOnlyWhileFollowing",
-                "TheRevealRuleIsD4sOriginRule"],
+                "TheRevealRuleIsD4sOriginRule", "EveryBoardPeerHasItsOwnNameAndTheContainersNameIsReserved"],
             ["canvas-visual"]),
         new(
             "Canvas card editor (W6-1 §E)",
@@ -126,7 +127,9 @@ public sealed class WcMatrixCanvasEvidenceCensus
             // request that opens a fresh row's or the seated card's menu.
             ["TheOutlineMenuEqualsThePlan", "TheRowMenuEqualsThePlansGridProjectionAndToggleMarkIsLive", "AConnectionRowsVerbsActOnTheCapturedEdgeFromItsSeatedSource", "CanvasSurfaces_TableGridSortSelectionAndActivation_AreClean",
                 "TheBoardMenuEqualsThePlan", "TheBoardsCardMenuIsTheApplicableVerbInventoryPerKind", "AKeyboardRequestOnAFreshRowOpensThatRowsMenu", "AKeyboardRequestOnTheBoardOpensTheSeatedCardsMenu", "ARightClickOnAnUnseatedCardOpensItsMenuAndActsOnItAlone",
-                "ARightClickOnEmptyBoardOpensNoMenu", "Canvas_ContextMenus_OpenTheCardMenuByKeyboard"],
+                "ARightClickOnEmptyBoardOpensNoMenu", "Canvas_ContextMenus_OpenTheCardMenuByKeyboard",
+                // #1283: a keyboard request with nothing to open answers.
+                "AKeyboardRequestOnAnEmptyOutlineSaysWhyThereIsNoMenu"],
             []),
     ];
 
