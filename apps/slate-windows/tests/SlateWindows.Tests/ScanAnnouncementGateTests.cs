@@ -95,7 +95,7 @@ public sealed class UiProgressListenerTests
         var queued = new List<Action>();
         var emitted = new List<ScanProgress>();
         var listener = new UiProgressListener(queued.Add, emitted.Add);
-        var report = new ScanReport(2, 2, 0, 32, [], 2, 0, true, null);
+        var report = new ScanReport(2, 2, 0, 32, 0, [], 2, 0, true, null);
 
         listener.OnProgress(new ScanProgress.Started(2));
         listener.OnProgress(new ScanProgress.FileIndexed("a.md", 1, 2));
@@ -128,7 +128,7 @@ public sealed class UiProgressListenerTests
     {
         var queued = new List<Action>();
         var emitted = new List<ScanProgress>();
-        var report = new ScanReport(2, 0, 2, 0, [], 0, 0, true, null);
+        var report = new ScanReport(2, 0, 2, 0, 0, [], 0, 0, true, null);
         UiProgressListener listener = null!;
         listener = new UiProgressListener(
             queued.Add,
