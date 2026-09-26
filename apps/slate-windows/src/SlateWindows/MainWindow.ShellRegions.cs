@@ -244,22 +244,34 @@ public partial class MainWindow : IShellRegionHost
     /// <summary>
     /// W7-7 PR 4 (#1247, R-5; spec review round 23): every landing in the
     /// Files tree — the ring's, the Files boundary's, a rename's, a
-    /// mutation's restore, Move To's, the empty editor's last resort — is a
-    /// ROW: the selected file's, else the first.
+    /// mutation's restore, Move To's, the empty editor's last resort — goes
+    /// through here: the selected file's ROW, realized; with no file
+    /// selected, the tree itself; and when the tree cannot take the keys (a
+    /// tree the filter has replaced), the filter field.
     /// </summary>
     /// <remarks>
-    /// They were <c>FilesTree.Focus()</c>, which reaches a row only when
-    /// the tree holds a selection: with none the bare tree kept the keys,
-    /// and Left and Right left the region (<c>TreeLandingTests</c>). The
-    /// sidebar's selected node is the source of truth — a recycled
-    /// container drops the tree's own — so its path is handed over. When no
-    /// row can take the keys (an empty vault, a tree the filter has
-    /// replaced) the region's stable stop is the filter field, which keeps
-    /// all four arrows.
+    /// <para>
+    /// They were <c>FilesTree.Focus()</c>, which reaches a row only when the
+    /// tree holds a selection it has realized. The sidebar's selected node
+    /// is the source of truth — a recycled container drops the tree's own —
+    /// so its path is handed to the tree landing.
+    /// </para>
+    /// <para>
+    /// With no file selected the landing is NOT the first row, as it is for
+    /// the canvas outline: a row selects itself when it takes focus, and
+    /// selecting a file here OPENS it — F6 into Files, or the launch
+    /// landing, would open the vault's first note. The bare tree is a
+    /// proven stop instead: its own Up and Down reach the first row, and its
+    /// Left and Right, which went to directional navigation and out of the
+    /// region, stay in the tree's Contained group (MainWindow.xaml;
+    /// FilesRegionLandingTests). The filter field keeps all four arrows.
+    /// </para>
     /// </remarks>
     /// <returns>Whether the keys landed in the Files region.</returns>
     internal bool LandOnFilesTree() =>
-        SelectorFocus.FocusSelectedOrFirstRow(FilesTree, SelectedFilesPath())
+        (SelectedFilesPath() is { } selected && SelectorFocus.FocusSelectedOrFirstRow(FilesTree, selected))
+        || FilesTree.Focus()
+        || FilesTree.IsKeyboardFocusWithin
         || SidebarFilterTextBox.Focus();
 
     /// <summary>The sidebar's selected node and its ancestors, root first;

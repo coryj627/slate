@@ -1045,7 +1045,15 @@
                                     <RowDefinition Height="*" />
                                     <RowDefinition Height="Auto" />
                                 </Grid.RowDefinitions>
-                                <Grid Grid.Row="0">
+                                <!-- W7-7 PR 4 (#1247, R-5; spec review round 23): the
+                                     tree and the filter's results contain their
+                                     arrows. With no file selected the tree itself is
+                                     the stop (MainWindow.LandOnFilesTree), and an
+                                     empty result list is its own stop: arrows from
+                                     either are judged in this group, so Left and
+                                     Right stay instead of leaving the region. -->
+                                <Grid Grid.Row="0"
+                                      KeyboardNavigation.DirectionalNavigation="Contained">
                                     <TreeView x:Name="FilesTree"
                                               ItemsSource="{Binding RootNodes}"
                                               ItemTemplate="{StaticResource FileTreeNodeTemplate}"
