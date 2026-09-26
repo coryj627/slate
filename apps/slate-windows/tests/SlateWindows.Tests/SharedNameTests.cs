@@ -105,20 +105,19 @@ public sealed class SharedNameTests
             session,
             fixture.Root,
             new SwitcherFile("A/note.md", "note.md"),
+            new SwitcherFile("A/note.markdown", "note.markdown"),
             new SwitcherFile("B/note.markdown", "note.markdown"),
-            new SwitcherFile("C/other.md", "other.md"),
-            new SwitcherFile("D/draft.md", "draft.md"),
-            new SwitcherFile("D/draft.markdown", "draft.markdown"));
-        // The premise: two raw names, ONE spoken label — across folders and
-        // within one (spec round 26).
+            new SwitcherFile("C/other.md", "other.md"));
+        // The premise: raw names that differ, ONE spoken label — within one
+        // folder (spec round 26) and across two.
         Assert.Equal(
-            ["draft", "draft", "note", "note", "other"],
+            ["note", "note", "note", "other"],
             quick.Results.Select(row => row.DisplayName).Order(StringComparer.Ordinal));
         Assert.Equal(
-            ["draft.markdown", "draft.md", "note.markdown", "note.md", "other.md"],
+            ["note.markdown", "note.markdown", "note.md", "other.md"],
             quick.Results.Select(row => row.Name).Order(StringComparer.Ordinal));
         HostedNames("QuickSwitcherResults", quick, names => Assert.Equal(
-            ["draft, D/draft.markdown", "draft, D/draft.md", "note, A/note.md", "note, B/note.markdown", "other"],
+            ["note, A/note.markdown", "note, A/note.md", "note, B/note.markdown", "other"],
             names.Order(StringComparer.Ordinal)));
     });
 
