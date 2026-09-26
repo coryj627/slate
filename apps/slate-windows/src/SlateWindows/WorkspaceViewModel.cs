@@ -2480,6 +2480,9 @@ internal sealed partial class WorkspaceViewModel : BindableBase, IDisposable
             ? string.Equals(left.Id, right.Id, StringComparison.Ordinal)
             : string.Equals(left.Path, right.Path, StringComparison.Ordinal));
 
+    // Any tab showing the note will do, transient or not (W7-7 R-2): the
+    // peer only seeds a tab's state from the ONE shared document, and
+    // never decides which tab an open shows — FindOpenTab does that.
     private WorkspaceTabViewModel? FindSamePathTab(
         WorkspaceItemState item,
         WorkspaceTabViewModel? excluding = null) =>

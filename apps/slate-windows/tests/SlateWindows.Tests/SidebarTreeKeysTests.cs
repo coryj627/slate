@@ -514,6 +514,75 @@ public sealed class SidebarTreeKeysTests : IDisposable
         }
     }
 
+    /// <summary>
+    /// R-2 transient tab (spec §3.2; codex PR 2 round 7), the whole
+    /// sequence: arrow onto A — the transient tab — then Duplicate Tab,
+    /// [transient A, permanent A], then Ctrl+Enter on A in Files. The
+    /// permanent A is the tab shown and focused; the transient still shows
+    /// A and is still transient, and no tab was added (Ctrl+Enter used to
+    /// find the transient twin first and promote it, losing the preview
+    /// slot, so the next arrow added a third tab). The duplicate was
+    /// already active, so nothing is said; with the transient twin made
+    /// active by hand, Ctrl+Enter — and Enter — each move to the permanent
+    /// A with exactly one tab-focus line. The next arrow, onto B, shows B
+    /// in the transient tab: still two tabs.
+    /// </summary>
+    [Fact]
+    public async Task CtrlEnterBesideAPermanentTwin_KeepsThePreviewSlot()
+    {
+        (VaultLifecycleViewModel lifecycle, WorkspaceViewModel workspace, FilesSidebarViewModel sidebar) =
+            await OpenAsync("transient-twin-ctrl-enter");
+        using VaultLifecycleViewModel owned = lifecycle;
+        var focusRequests = new List<string>();
+        workspace.EditorPaneFocusRequested += (_, group) => focusRequests.Add(group.ActiveTab?.Path ?? "<no tab>");
+        sidebar.SelectedNode = Node(sidebar, "alpha.md");
+        WorkspaceTabViewModel transient = Assert.Single(workspace.ActiveGroup.Tabs);
+        Assert.True(transient.IsTransient);
+        workspace.DuplicateTabCommand.Execute(null);
+        WorkspaceTabViewModel permanent = workspace.ActiveGroup.Tabs[1];
+        Assert.False(permanent.IsTransient);
+        Assert.Same(permanent, workspace.ActiveGroup.ActiveTab);
+
+        // Ctrl+Enter on A, the duplicate active.
+        int before = Announced().Count;
+        focusRequests.Clear();
+        Assert.True(sidebar.OpenNode(Node(sidebar, "alpha.md"), WorkspaceOpenTarget.NewTab));
+        AssertTheTwinsAreIntact();
+        Assert.Empty(Announced().Skip(before));
+        Assert.Equal(new[] { "alpha.md" }, focusRequests);
+
+        // Ctrl+Enter, then Enter, with the transient twin active.
+        foreach (WorkspaceOpenTarget target in new[] { WorkspaceOpenTarget.NewTab, WorkspaceOpenTarget.CurrentTab })
+        {
+            workspace.ActiveGroup.ActiveTab = transient;
+            before = Announced().Count;
+            focusRequests.Clear();
+            Assert.True(sidebar.OpenNode(Node(sidebar, "alpha.md"), target));
+            AssertTheTwinsAreIntact();
+            Assert.Equal(
+                new A11yEvent.TabFocused(string.Empty, permanent.Title, 2u, 2u),
+                Assert.Single(Announced().Skip(before)));
+            Assert.Equal(new[] { "alpha.md" }, focusRequests);
+        }
+
+        // The next arrow shows B in the transient tab: still two tabs.
+        sidebar.SelectedNode = Node(sidebar, "beta.md");
+        Assert.Equal(new[] { transient, permanent }, workspace.ActiveGroup.Tabs);
+        Assert.Same(transient, workspace.ActiveGroup.ActiveTab);
+        Assert.Equal("beta.md", transient.Path);
+        Assert.True(transient.IsTransient);
+        Assert.Equal("alpha.md", permanent.Path);
+
+        void AssertTheTwinsAreIntact()
+        {
+            Assert.Same(permanent, workspace.ActiveGroup.ActiveTab);
+            Assert.Equal(new[] { transient, permanent }, workspace.ActiveGroup.Tabs);
+            Assert.True(transient.IsTransient);
+            Assert.Equal("alpha.md", transient.Path);
+            Assert.False(permanent.IsTransient);
+        }
+    }
+
     private async Task<(VaultLifecycleViewModel Lifecycle, WorkspaceViewModel Workspace, FilesSidebarViewModel Sidebar)>
         OpenAsync(string label)
     {

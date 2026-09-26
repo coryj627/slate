@@ -130,26 +130,34 @@ internal sealed partial class WorkspaceViewModel
         }
     }
 
+    /// <summary>W7-7 (R-2, spec §3.2 item 2; codex PR 2 rounds 6–7): the tab
+    /// of <paramref name="group"/> already showing <paramref name="item"/>
+    /// — a PERMANENT one when there is one, the group's transient tab only
+    /// as the fallback. Every open that reuses a tab (a Files selection,
+    /// Enter's current-tab open, Ctrl+Enter's new-tab open) resolves it
+    /// here, so a transient twin of a permanent tab (the tab a Duplicate
+    /// Tab was made from, say) is never activated, promoted or replaced in
+    /// the permanent tab's place.</summary>
+    private static WorkspaceTabViewModel? FindOpenTab(WorkspaceGroupViewModel group, WorkspaceItemState item) =>
+        group.Tabs.FirstOrDefault(tab => !tab.IsTransient && ItemsReferToSameTarget(tab.Item, item))
+        ?? group.Tabs.FirstOrDefault(tab => ItemsReferToSameTarget(tab.Item, item));
+
     /// <summary>W7-7 (R-2, codex PR 2 round 4; spec review round 21): a
     /// Files selection shows its note in the group's ONE transient tab —
     /// VS Code's preview tab. A note already open in the group is simply
-    /// activated, in a PERMANENT tab showing it when there is one; the
-    /// transient tab showing it too (the tab a Duplicate Tab was made
-    /// from, say) is only the fallback, and stays as it is either way
-    /// (spec §3.2 item 2, codex PR 2 round 6). Otherwise the transient tab
-    /// takes the note in place, or, with none, a transient tab is created.
-    /// A tab stops being transient for good on its first dirty transition
-    /// (see <see cref="WorkspaceTabViewModel.IsTransient"/>), so an edited
-    /// note — saved or undone since, or not — is never replaced, and no
-    /// other tab is ever replaced by a selection: an explicitly opened tab
-    /// survives arrowing. Focus stays on the row and the modal
-    /// dirty-navigation gate never rises.</summary>
+    /// activated (<see cref="FindOpenTab"/>: a permanent tab showing it
+    /// first; the transient one stays as it is either way). Otherwise the
+    /// transient tab takes the note in place, or, with none, a transient
+    /// tab is created. A tab stops being transient for good on its first
+    /// dirty transition (see <see cref="WorkspaceTabViewModel.IsTransient"/>),
+    /// so an edited note — saved or undone since, or not — is never
+    /// replaced, and no other tab is ever replaced by a selection: an
+    /// explicitly opened tab survives arrowing. Focus stays on the row and
+    /// the modal dirty-navigation gate never rises.</summary>
     private bool ShowSelectionInTransientTab(WorkspaceItemState item)
     {
         WorkspaceGroupViewModel group = ActiveGroup;
-        WorkspaceTabViewModel? open = group.Tabs.FirstOrDefault(
-                tab => !tab.IsTransient && ItemsReferToSameTarget(tab.Item, item))
-            ?? group.Tabs.FirstOrDefault(tab => ItemsReferToSameTarget(tab.Item, item));
+        WorkspaceTabViewModel? open = FindOpenTab(group, item);
         if (open is not null)
         {
             group.ActiveTab = open;
@@ -191,18 +199,19 @@ internal sealed partial class WorkspaceViewModel
 
         if (target is WorkspaceOpenTarget.CurrentTab or WorkspaceOpenTarget.NewTab)
         {
-            WorkspaceTabViewModel? existing = ActiveGroup.Tabs.FirstOrDefault(
-                tab => ItemsReferToSameTarget(tab.Item, item));
+            // A permanent tab showing the note first (codex PR 2 round 7):
+            // with a transient twin beside it, the twin is left as it is.
+            WorkspaceTabViewModel? existing = FindOpenTab(ActiveGroup, item);
             if (existing is not null)
             {
                 if (target == WorkspaceOpenTarget.NewTab)
                 {
                     // W7-7 (R-2, codex PR 2 round 4): "open in a new tab" gives
                     // the note a tab of its own that later selections never
-                    // replace — the transient tab showing it becomes that tab;
-                    // a permanent tab showing it is simply activated
-                    // (DuplicateActiveTab is the deliberate route to a second
-                    // tab of one note).
+                    // replace — the transient tab showing it becomes that tab
+                    // when it is the only one; a permanent tab showing it is
+                    // simply activated, a no-op here (DuplicateActiveTab is
+                    // the deliberate route to a second tab of one note).
                     existing.IsTransient = false;
                 }
 
@@ -231,6 +240,9 @@ internal sealed partial class WorkspaceViewModel
         {
             AddTab(ActiveGroup, item, activate: true);
         }
+        // The plain comparison is right here: this is the in-place replace
+        // of the ACTIVE tab, reached only once FindOpenTab found no tab of
+        // the group showing the item, so transient-ness has no say in it.
         else if (!ItemsReferToSameTarget(active.Item, item))
         {
             if (active.IsDirty)
