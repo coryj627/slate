@@ -576,6 +576,8 @@ internal sealed class EditorInteractionCoordinator : BindableBase, IDisposable
     private long _artifactCacheLoadCountForTests;
     private long _citationCacheLoadCountForTests;
     private int _embedGeneration;
+    private EmbedResolveRequest? _embedResolve;
+    private int _embedResolvesCancelledForTests;
     private EditorEmbedPreviewNode? _popoverEmbedRoot;
     private string? _embedRequestKey;
     private string? _activeEmbedRequestKey;
@@ -642,9 +644,7 @@ internal sealed class EditorInteractionCoordinator : BindableBase, IDisposable
                 if (!value)
                 {
                     _hoveredCitationByteOffset = null;
-                    _embedGeneration++;
-                    _embedRequestKey = null;
-                    _activeEmbedRequestKey = null;
+                    RetireEmbedRequest();
                     _popoverFocusPending = false;
                     PopoverEmbedRoot = null;
                 }
@@ -1150,9 +1150,7 @@ internal sealed class EditorInteractionCoordinator : BindableBase, IDisposable
         _pendingHoverUtf16 = null;
         _pendingHoveredCitationByteOffset = null;
         CancelPendingEmbedPreview();
-        _embedGeneration++;
-        _embedRequestKey = null;
-        _activeEmbedRequestKey = null;
+        RetireEmbedRequest();
         if (_tab.EditorSession is not null)
         {
             _tab.EditorSession.HighlightInvalidated -= EditorSession_HighlightInvalidated;
@@ -1193,9 +1191,7 @@ internal sealed class EditorInteractionCoordinator : BindableBase, IDisposable
         }
         _pendingHoverUtf16 = null;
         _pendingHoveredCitationByteOffset = null;
-        _embedGeneration++;
-        _embedRequestKey = null;
-        _activeEmbedRequestKey = null;
+        RetireEmbedRequest();
         ClosePopover(requestFocus: false);
         QueueArtifactCacheRefresh();
         QueueCitationCacheRefresh();
@@ -1282,6 +1278,11 @@ internal sealed class EditorInteractionCoordinator : BindableBase, IDisposable
             return true;
         }
 
+        // #1279: a new request supersedes the one in flight — its walk is
+        // cancelled in core, not merely left to finish unobserved.
+        _embedResolve?.Cancel();
+        var resolve = new EmbedResolveRequest();
+        _embedResolve = resolve;
         int generation = ++_embedGeneration;
         _embedRequestKey = requestKey;
         PopoverTitle = $"Loading embed preview — source line {sourceLine}";
@@ -1302,9 +1303,61 @@ internal sealed class EditorInteractionCoordinator : BindableBase, IDisposable
             revision,
             sessionGeneration,
             sourceLine,
-            link));
+            link,
+            resolve));
         return true;
     }
+
+    /// <summary>#1279 (locked decision 05 §4): the in-flight preview
+    /// resolve's cancellation. The dispatcher cancels it when the request
+    /// is retired — closed, superseded, invalidated or disposed — and core
+    /// stops the walk at its next node; the worker disposes the token once
+    /// its FFI call has returned. The gate keeps a late cancel off a
+    /// disposed token.</summary>
+    private sealed class EmbedResolveRequest
+    {
+        private readonly Lock _gate = new();
+        private bool _finished;
+
+        internal CancelToken Token { get; } = new();
+
+        internal void Cancel()
+        {
+            lock (_gate)
+            {
+                if (!_finished)
+                {
+                    Token.Cancel();
+                }
+            }
+        }
+
+        internal void Finish()
+        {
+            lock (_gate)
+            {
+                _finished = true;
+                Token.Dispose();
+            }
+        }
+    }
+
+    /// <summary>Retire the current preview request: nothing it returns
+    /// may publish, and its core walk is cancelled (#1279).</summary>
+    private void RetireEmbedRequest()
+    {
+        _embedGeneration++;
+        _embedRequestKey = null;
+        _activeEmbedRequestKey = null;
+        EmbedResolveRequest? retired = _embedResolve;
+        _embedResolve = null;
+        retired?.Cancel();
+    }
+
+    /// <summary>How many preview workers stopped on a cancelled walk and
+    /// published nothing (#1279 test seam).</summary>
+    internal int EmbedResolvesCancelledForTests =>
+        Volatile.Read(ref _embedResolvesCancelledForTests);
 
     private sealed record EmbedPreviewContent(
         string Title,
@@ -1332,7 +1385,8 @@ internal sealed class EditorInteractionCoordinator : BindableBase, IDisposable
         long revision,
         ulong sessionGeneration,
         int sourceLine,
-        OutgoingLink link)
+        OutgoingLink link,
+        EmbedResolveRequest resolve)
     {
         EmbedPreviewOutcome outcome;
         try
@@ -1345,11 +1399,19 @@ internal sealed class EditorInteractionCoordinator : BindableBase, IDisposable
             EmbedPreviewResolution preview = _session.ResolveEmbedPreview(
                 path,
                 ComposeAnchoredTarget(link),
-                link.DisplayText);
+                link.DisplayText,
+                resolve.Token);
             outcome = preview.Resolution is EmbedResolution.Unresolved unresolved
                 ? new EmbedPreviewOutcome.Unavailable(unresolved.Reason)
                 : new EmbedPreviewOutcome.Shown(
                     BuildEmbedPreview(preview.Resolution, preview.Truncated));
+        }
+        catch (VaultException.Cancelled)
+        {
+            // #1279: the request was retired and core stopped its walk.
+            // There is no outcome to publish — the worker simply stops.
+            Interlocked.Increment(ref _embedResolvesCancelledForTests);
+            return;
         }
         catch (VaultException error)
         {
@@ -1369,6 +1431,10 @@ internal sealed class EditorInteractionCoordinator : BindableBase, IDisposable
             // is the detail, mac's localizedDescription arm.
             outcome = new EmbedPreviewOutcome.Unavailable(
                 new EmbedUnresolvedReason.ReadError(exception.Message));
+        }
+        finally
+        {
+            resolve.Finish();
         }
 
         if (_dispatcher.HasShutdownStarted || _dispatcher.HasShutdownFinished)
@@ -3202,9 +3268,7 @@ internal sealed class EditorInteractionCoordinator : BindableBase, IDisposable
     private void ClosePopover(bool requestFocus)
     {
         int focusRequestGeneration = ++_focusRequestGeneration;
-        _embedGeneration++;
-        _embedRequestKey = null;
-        _activeEmbedRequestKey = null;
+        RetireEmbedRequest();
         _popoverFocusPending = false;
         IsPopoverOpen = false;
         _hoveredCitationByteOffset = null;
@@ -3229,9 +3293,7 @@ internal sealed class EditorInteractionCoordinator : BindableBase, IDisposable
     private void EditorSession_HighlightInvalidated(object? sender, EventArgs e)
     {
         _hoveredCitationByteOffset = null;
-        _embedGeneration++;
-        _embedRequestKey = null;
-        _activeEmbedRequestKey = null;
+        RetireEmbedRequest();
         CancelPendingEmbedPreview();
         _mathRangesRevision = -1;
         QueueMathRefresh(TimeSpan.FromMilliseconds(250));
