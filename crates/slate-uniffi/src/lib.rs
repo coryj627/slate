@@ -6284,7 +6284,7 @@ impl From<core::Page<core::TaskWithLocation>> for TaskWithLocationPage {
 /// degraded provider can fail every file of the vault, at open and on
 /// every rescan. The count crosses in full, the messages only as samples;
 /// core's log keeps the whole list.
-pub const SCAN_ERROR_SAMPLES: usize = 5;
+pub const SCAN_ERROR_SAMPLES: usize = core::SCAN_ERROR_SAMPLES;
 
 /// Summary of a scan operation — the open scan's and every rescan's.
 #[derive(uniffi::Record)]
@@ -6317,8 +6317,8 @@ impl From<core::ScanReport> for ScanReport {
             files_indexed: r.files_indexed,
             files_skipped: r.files_skipped,
             bytes_processed: r.bytes_processed,
-            error_count: u64::try_from(r.errors.len()).unwrap_or(u64::MAX),
-            error_samples: r.errors.into_iter().take(SCAN_ERROR_SAMPLES).collect(),
+            error_count: r.error_count,
+            error_samples: r.error_samples,
             files_changed: r.files_changed,
             files_removed: r.files_removed,
             complete: r.complete,

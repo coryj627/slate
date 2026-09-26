@@ -60,7 +60,8 @@ pub fn run(
         "files_skipped": report.files_skipped,
         "bytes_processed": report.bytes_processed,
         "markdown_files": markdown_files,
-        "scan_errors": report.errors,
+        "scan_errors": report.error_samples,
+        "scan_error_count": report.error_count,
         "cache": cache,
     });
 
@@ -97,8 +98,14 @@ fn render_human(
         format!("Files: {} ({markdown_files} markdown)", report.files_seen),
         format!("Indexed: {indexed}"),
     ];
-    for err in &report.errors {
+    for err in &report.error_samples {
         lines.push(format!("Scan error: {err}"));
+    }
+    let unshown = report
+        .error_count
+        .saturating_sub(report.error_samples.len() as u64);
+    if unshown > 0 {
+        lines.push(format!("Scan errors not shown: {unshown}"));
     }
     lines.join("\n")
 }
@@ -110,7 +117,7 @@ fn render_tsv(
     markdown_files: u64,
     cache: &str,
 ) -> String {
-    let errors_joined = report.errors.join("; ");
+    let errors_joined = report.error_samples.join("; ");
     let rows = [
         tsv_row(["field", "value"]),
         tsv_row(["files_seen", &report.files_seen.to_string()]),
@@ -119,6 +126,7 @@ fn render_tsv(
         tsv_row(["bytes_processed", &report.bytes_processed.to_string()]),
         tsv_row(["markdown_files", &markdown_files.to_string()]),
         tsv_row(["scan_errors", &errors_joined]),
+        tsv_row(["scan_error_count", &report.error_count.to_string()]),
         tsv_row(["cache", cache]),
     ];
     rows.join("\n")

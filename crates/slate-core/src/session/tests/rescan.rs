@@ -158,7 +158,7 @@ fn a_rescan_reports_a_file_created_outside_slate_as_new() {
     assert_eq!(report.files_seen, 2);
     assert_eq!(report.files_changed, 1);
     assert_eq!(report.files_removed, 0);
-    assert!(report.complete, "{:?}", report.errors);
+    assert!(report.complete, "{:?}", report.error_samples);
     assert!(report.delta_generation.is_some());
     assert!(session.get_file_metadata("late.md").unwrap().is_some());
     let (entries, outcome) = settle(&session);
@@ -537,7 +537,7 @@ fn an_unreadable_subtree_prunes_neither_files_nor_directories() {
     let report = rescan(&session);
 
     assert!(!report.complete, "a partial walk is never complete");
-    assert!(!report.errors.is_empty());
+    assert!(report.error_count > 0);
     assert_eq!(
         dir_rows(&session),
         vec!["sub", "sub/deeper"],
@@ -575,7 +575,7 @@ fn a_single_file_failure_makes_the_rescan_incomplete() {
     provider.stat_fails = Some("locked.md".into());
     let report = rescan(&reopen_through(&tmp, provider));
     assert!(!report.complete, "a stat failure left the rescan complete");
-    assert_eq!(report.errors.len(), 1, "{:?}", report.errors);
+    assert_eq!(report.error_count as usize, 1, "{:?}", report.error_samples);
 
     // read
     let (tmp, session) = make_vault(|p| {
@@ -588,7 +588,7 @@ fn a_single_file_failure_makes_the_rescan_incomplete() {
     provider.read_fails = Some("unreadable.md".into());
     let report = rescan(&reopen_through(&tmp, provider));
     assert!(!report.complete, "a read failure left the rescan complete");
-    assert_eq!(report.errors.len(), 1, "{:?}", report.errors);
+    assert_eq!(report.error_count as usize, 1, "{:?}", report.error_samples);
 
     // index: a file past the refuse threshold is recorded, not indexed.
     let (tmp, session) = make_vault(|p| {
@@ -609,7 +609,7 @@ fn a_single_file_failure_makes_the_rescan_incomplete() {
         !report.complete,
         "an index refusal left the rescan complete"
     );
-    assert_eq!(report.errors.len(), 1, "{:?}", report.errors);
+    assert_eq!(report.error_count as usize, 1, "{:?}", report.error_samples);
 
     // And a clean rescan is complete.
     let (_tmp, session) = make_vault(|p| {
@@ -1702,4 +1702,50 @@ fn the_openable_classifier_is_the_openable_documents_filter() {
         .collect();
     assert_eq!(listed, classified);
     assert!(listed.contains("c.mdown") && listed.contains("d.mkd") && listed.contains("H.Mdown"));
+}
+
+// --- a bounded report where it accumulates (round 27) ---------------------------------
+
+/// Locked decision 05's memory-bounded rule, in core itself: thousands of
+/// refused files leave the report with the EXACT count and at most
+/// `SCAN_ERROR_SAMPLES` verbatim messages — at open and at a rescan —
+/// because nothing collects one string per failure (each is logged as it
+/// happens). The FFI projections are the uniffi facts'.
+#[test]
+fn the_core_scan_report_stays_bounded_under_thousands_of_failures() {
+    const FAILING: usize = 3000;
+    let tmp = tempfile::tempdir().unwrap();
+    std::fs::write(tmp.path().join("ok.md"), b"ok\n").unwrap();
+    for n in 0..FAILING {
+        std::fs::write(tmp.path().join(format!("big-{n:04}.md")), [b'x'; 64]).unwrap();
+    }
+    let mut config = SessionConfig::new(tmp.path().join(".slate"));
+    config.large_file_refuse_bytes = 32;
+    let session = VaultSession::open(
+        Arc::new(FsVaultProvider::new(tmp.path().to_path_buf())),
+        config,
+    )
+    .unwrap();
+
+    let opened = session.scan_initial(&CancelToken::new()).unwrap();
+    assert_eq!(opened.error_count, FAILING as u64);
+    assert_eq!(opened.error_samples.len(), crate::SCAN_ERROR_SAMPLES);
+    assert!(!opened.complete);
+
+    // A refused file keeps its (mtime, size) row: change every one.
+    for n in 0..FAILING {
+        std::fs::write(tmp.path().join(format!("big-{n:04}.md")), [b'y'; 65]).unwrap();
+    }
+    let rescanned = rescan(&session);
+    assert_eq!(rescanned.error_count, FAILING as u64);
+    assert_eq!(rescanned.error_samples.len(), crate::SCAN_ERROR_SAMPLES);
+    assert!(!rescanned.complete);
+    assert!(
+        rescanned
+            .error_samples
+            .iter()
+            .all(|error| error.contains("exceeds large-file refuse threshold")),
+        "{:?}",
+        rescanned.error_samples
+    );
 }

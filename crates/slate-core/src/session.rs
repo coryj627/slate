@@ -682,6 +682,40 @@ impl CancelToken {
 
 // --- Scan report ---
 
+/// The most error messages a [`ScanReport`] keeps (W7-7 PR 7, rounds
+/// 25-27; locked decision 05's memory-bounded rule): a degraded provider
+/// can fail every file of the vault, at open and on every rescan, so the
+/// report counts every error exactly, keeps only the first few verbatim,
+/// and logs each one in full as it happens.
+pub const SCAN_ERROR_SAMPLES: usize = 5;
+
+#[cfg(test)]
+thread_local! {
+    /// Test seam: while `Some`, every error [`ScanReport::record_error`]
+    /// streams to the log on this thread is also captured here in full —
+    /// the facts' view of the stream beyond the samples.
+    pub(crate) static SCAN_ERROR_STREAM: std::cell::RefCell<Option<Vec<String>>> =
+        const { std::cell::RefCell::new(None) };
+}
+
+impl ScanReport {
+    /// Record one scan error: logged in full now, counted, and kept as a
+    /// sample while fewer than [`SCAN_ERROR_SAMPLES`] are held.
+    pub(crate) fn record_error(&mut self, message: String) {
+        log::debug!("scan error: {message}");
+        #[cfg(test)]
+        SCAN_ERROR_STREAM.with(|stream| {
+            if let Some(stream) = stream.borrow_mut().as_mut() {
+                stream.push(message.clone());
+            }
+        });
+        self.error_count = self.error_count.saturating_add(1);
+        if self.error_samples.len() < SCAN_ERROR_SAMPLES {
+            self.error_samples.push(message);
+        }
+    }
+}
+
 /// Summary of a scan operation.
 #[derive(Debug, Default, Clone)]
 pub struct ScanReport {
@@ -693,10 +727,14 @@ pub struct ScanReport {
     /// refresh `indexed_at_ms` for these but don't re-read or re-hash.
     pub files_skipped: u64,
     pub bytes_processed: u64,
-    /// Per-file errors that did not abort the scan. The scanner keeps
-    /// going on individual-file failures so one unreadable file does not
-    /// blank the index.
-    pub errors: Vec<String>,
+    /// Every error that did not abort the scan, counted exactly. The
+    /// scanner keeps going on individual-file failures so one unreadable
+    /// file does not blank the index.
+    pub error_count: u64,
+    /// The first [`SCAN_ERROR_SAMPLES`] of them, verbatim (W7-7 PR 7,
+    /// round 27): the report never holds more, however many files fail;
+    /// each error is logged in full as it happens ([`Self::record_error`]).
+    pub error_samples: Vec<String>,
     /// W7-7 PR 7 (R-9): files whose committed content hash is new or
     /// differs from the one the index held before this scan — the "new
     /// or changed" count both hosts speak. Hash-authoritative: a
@@ -705,8 +743,8 @@ pub struct ScanReport {
     pub files_changed: u64,
     /// Index rows this scan removed because their files left the disk.
     pub files_removed: u64,
-    /// False whenever the walk was partial OR any error was recorded in
-    /// `errors` (a per-file stat, read or index failure included) — never
+    /// False whenever the walk was partial OR any error was recorded
+    /// (a per-file stat, read or index failure included) — never
     /// the walk flag alone. A partial scan must never be spoken as
     /// "No changes".
     pub complete: bool,
@@ -3075,13 +3113,10 @@ impl VaultSession {
             &mut graph_sink,
             capture,
         )?;
-        // W7-7 PR 7 (rounds 25-26): hosts receive the error count and a
-        // few samples across the FFI; the whole list stays in this log.
-        if !report.errors.is_empty() {
-            log::warn!("scan recorded {} errors", report.errors.len());
-            for error in &report.errors {
-                log::debug!("scan error: {error}");
-            }
+        // W7-7 PR 7 (rounds 25-27): each error was logged in full as it
+        // happened (ScanReport::record_error); the report holds a count.
+        if report.error_count > 0 {
+            log::warn!("scan recorded {} errors", report.error_count);
         }
         self.graph_apply(graph_sink);
         self.bump_bases_generation();
@@ -9711,7 +9746,7 @@ fn scan_vault(
         let entries = match provider.list_dir(&dir) {
             Ok(e) => e,
             Err(e) => {
-                report.errors.push(format!("list_dir {dir:?}: {e}"));
+                report.record_error(format!("list_dir {dir:?}: {e}"));
                 walk_complete = false;
                 continue;
             }
@@ -9742,7 +9777,7 @@ fn scan_vault(
             match entry.kind {
                 EntryKind::Directory => {
                     if let Err(e) = upsert_dir(&tx, &path, &dir, &entry.name) {
-                        report.errors.push(format!("upsert dir {path:?}: {e}"));
+                        report.record_error(format!("upsert dir {path:?}: {e}"));
                     }
                     seen_dirs.insert(path.clone());
                     stack.push(path);
@@ -9783,7 +9818,7 @@ fn scan_vault(
                         // their graph ops only partially staged — the
                         // replay is no longer trustworthy (#550).
                         graph_sink.poison();
-                        report.errors.push(format!("{path}: {e}"));
+                        report.record_error(format!("{path}: {e}"));
                     }
                     indexed_count += 1;
                     if let Some(l) = listener {
@@ -9823,7 +9858,7 @@ fn scan_vault(
     // pruning on that partial view made live nested folders vanish from
     // the refreshed tree.
     if walk_complete && let Err(e) = prune_unseen_dirs(&tx, &seen_dirs) {
-        report.errors.push(format!("prune stale dirs: {e}"));
+        report.record_error(format!("prune stale dirs: {e}"));
     }
 
     // Prune `files` rows for files no longer on disk (#641, codex
@@ -9838,7 +9873,7 @@ fn scan_vault(
     // (`walk_complete`): a partial walk must not evict live rows.
     if walk_complete && let Err(e) = prune_unseen_files(&tx, &seen_files, graph_sink) {
         graph_sink.poison();
-        report.errors.push(format!("prune stale files: {e}"));
+        report.record_error(format!("prune stale files: {e}"));
     }
 
     // Re-resolve links that were Unresolved purely because their
@@ -9859,7 +9894,7 @@ fn scan_vault(
                     });
                     if let Err(e) = staged {
                         graph_sink.poison();
-                        report.errors.push(format!("graph re-resolve replay: {e}"));
+                        report.record_error(format!("graph re-resolve replay: {e}"));
                         break;
                     }
                 }
@@ -9870,9 +9905,7 @@ fn scan_vault(
             // partial (still-committing) result the graph can't
             // replay faithfully.
             graph_sink.poison();
-            report
-                .errors
-                .push(format!("re-resolve unresolved links: {e}"));
+            report.record_error(format!("re-resolve unresolved links: {e}"));
         }
     }
 
@@ -9887,7 +9920,7 @@ fn scan_vault(
     // derivation is milliseconds at the 2,000-node budget, so this
     // stays O(canvases), not O(vault).
     if let Err(e) = reindex_all_canvases(&tx, provider, large_file_refuse_bytes) {
-        report.errors.push(format!("canvas index: {e}"));
+        report.record_error(format!("canvas index: {e}"));
     }
 
     // W7-7 PR 7 (R-9): what this scan changed, per path, hash-
@@ -9925,7 +9958,7 @@ fn scan_vault(
     // Complete only when the walk saw everything AND nothing failed:
     // `errors` mixes per-file and systemic failures, and either can hide
     // a change, so a partial scan can never be spoken as "No changes".
-    report.complete = walk_complete && report.errors.is_empty();
+    report.complete = walk_complete && report.error_count == 0;
     report.delta_generation = delta_generation;
 
     // Commit can still fail (disk full, file corruption). If it
@@ -10270,7 +10303,7 @@ fn index_file(
     // would blow process memory and overflow SQLite's TEXT cap
     // when stored as `body_text`. Skip the body indexing for such
     // files and record a per-file error so the user notices via
-    // `ScanReport.errors`; the row is still upserted with metadata
+    // `ScanReport.error_count`; the row is still upserted with metadata
     // (size, mtime, hash of an empty body) so subsequent scans
     // don't re-trip the threshold on every pass.
     if stat.size_bytes > large_file_refuse_bytes {
@@ -10280,7 +10313,7 @@ fn index_file(
             size = stat.size_bytes,
             limit = large_file_refuse_bytes,
         );
-        report.errors.push(message);
+        report.record_error(message);
         // Upsert metadata + empty body so the file appears in the
         // index (sidebar lists it, but search won't find anything
         // inside it). hash is computed against an empty body so
@@ -10605,11 +10638,9 @@ fn record_file_meta_failures(
         // write failure: partial cache state must not publish graph replay.
         graph_sink.poison();
     }
-    report.errors.extend(
-        failures
-            .into_iter()
-            .map(|failure| format!("{}: {}", failure.path, failure.error)),
-    );
+    for failure in failures {
+        report.record_error(format!("{}: {}", failure.path, failure.error));
+    }
 }
 
 /// Drop any cached headings, links, and properties rows for
