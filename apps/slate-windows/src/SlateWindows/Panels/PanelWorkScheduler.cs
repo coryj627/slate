@@ -271,6 +271,27 @@ internal abstract class PanelWorkScheduler : BindableBase
 
     internal Task DrainForTests() => WhenWorkDrained();
 
+    /// <summary>
+    /// W7-7 PR 7 (#1252, round 29): the work a request started has
+    /// PUBLISHED — every tracked body drained to a fixed point (the
+    /// always-async applies included) and then every publication those
+    /// bodies posted to the owner context run: a barrier posted behind
+    /// them on that context completes only after they have. A rescan
+    /// awaits it before it reports a page applied.
+    /// </summary>
+    internal async Task WhenPublishedAsync()
+    {
+        await WhenAllWorkDrained().ConfigureAwait(false);
+        if (_synchronous || _uiContext is not { } context || _isShutDown)
+        {
+            return;
+        }
+
+        var barrier = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
+        context.Post(_ => barrier.TrySetResult(), null);
+        await barrier.Task.ConfigureAwait(false);
+    }
+
     /// <summary>Every tracked body completed — the test seam, and the
     /// TEARDOWN drain: a worker mid-FFI holds resources whose
     /// finally-close must run before the session disposes (INV-2;

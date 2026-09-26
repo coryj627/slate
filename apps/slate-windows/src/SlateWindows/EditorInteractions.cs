@@ -762,6 +762,21 @@ internal sealed class EditorInteractionCoordinator : BindableBase, IDisposable
         }
     }
 
+    /// <summary>W7-7 PR 7 (round 29): the link and task cache's generation —
+    /// every external-state invalidation advances it, so a fact tells a
+    /// dropped cache from a surviving one even after a fresh cache has been
+    /// republished for the new vault state.</summary>
+    internal int ArtifactCacheGenerationForTests
+    {
+        get
+        {
+            lock (_artifactCacheGate)
+            {
+                return _artifactCacheGeneration;
+            }
+        }
+    }
+
     internal long ArtifactCacheLoadCountForTests =>
         Interlocked.Read(ref _artifactCacheLoadCountForTests);
     internal long CitationCacheLoadCountForTests =>

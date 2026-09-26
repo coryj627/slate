@@ -107,6 +107,14 @@ internal sealed class DashboardViewModel : PanelWorkScheduler
 
     public event EventHandler? SectionsPublished;
 
+    /// <summary>W7-7 PR 7 (#1252, round 29): <see cref="Load"/>, awaited
+    /// to its publication (a published failure state included).</summary>
+    internal async Task LoadAsync()
+    {
+        Load();
+        await WhenPublishedAsync();
+    }
+
     public void Load()
     {
         if (IsShutDown)

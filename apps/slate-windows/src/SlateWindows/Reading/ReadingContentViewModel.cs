@@ -467,11 +467,13 @@ internal sealed class ReadingContentViewModel : BindableBase, IDisposable
             {
                 FetchResult fetched = FetchGuarded(_session, path, text);
                 Publish(generation, path, revision, sessionGeneration, fetched);
+                SettlePublicationWaiters(generation, failure: null);
             }
             catch (Exception exception)
             {
                 RecordTerminalFailure(exception);
                 PublishTerminalFailure(generation);
+                SettlePublicationWaiters(generation, failure: null);
             }
             return;
         }
@@ -518,7 +520,11 @@ internal sealed class ReadingContentViewModel : BindableBase, IDisposable
                 // then a generation-gated user-visible failure state.
                 RecordTerminalFailure(exception);
                 _ = _dispatcher!.InvokeAsync(
-                    () => PublishTerminalFailure(generation));
+                    () =>
+                    {
+                        PublishTerminalFailure(generation);
+                        SettlePublicationWaiters(generation, failure: null);
+                    });
             }
         });
     }
@@ -879,6 +885,72 @@ internal sealed class ReadingContentViewModel : BindableBase, IDisposable
     /// the artifact digest makes a no-op refresh a memo hit. Hidden
     /// models do nothing — a rebind always re-projects (W3-2 rule).
     /// </summary>
+    /// <summary>
+    /// W7-7 PR 7 (#1252, round 29): <see cref="NotifyVaultFileChanged"/> for
+    /// a rescan, awaitable. A change that touches this model's published
+    /// dependencies re-projects NOW (no debounce) and completes when the
+    /// projection — or its terminal failure state — publishes; a hidden
+    /// model records the pending re-render its surface runs on rebind and
+    /// completes; an unrelated change completes at once.
+    /// </summary>
+    internal Task NotifyVaultFileChangedAsync(FileChangeKind kind, string path)
+    {
+        if (_disposed || !IsRelevantChange(kind, path))
+        {
+            return Task.CompletedTask;
+        }
+
+        if (BlocksAppended is null)
+        {
+            HasPendingDependencyRefresh = true;
+            return Task.CompletedTask;
+        }
+
+        _dependencyDebounce?.Stop();
+        var published = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
+        int requested = _generation + 1;
+        _publicationWaiters.Add((requested, published));
+        Refresh();
+        if (_generation < requested)
+        {
+            // Refused (disposed, or no longer Markdown): nothing to await.
+            _ = _publicationWaiters.Remove((requested, published));
+            published.TrySetResult();
+        }
+
+        return published.Task;
+    }
+
+    // Round 29: the awaited re-projections, settled by the publication of
+    // their generation or any later one.
+    private readonly List<(int Generation, TaskCompletionSource Published)> _publicationWaiters = [];
+
+    private void SettlePublicationWaiters(int generation, Exception? failure)
+    {
+        foreach ((int Generation, TaskCompletionSource Published) waiter in
+            _publicationWaiters.Where(waiter => waiter.Generation <= generation).ToList())
+        {
+            _ = _publicationWaiters.Remove(waiter);
+            if (failure is null)
+            {
+                waiter.Published.TrySetResult();
+            }
+            else
+            {
+                waiter.Published.TrySetException(failure);
+            }
+        }
+    }
+
+    private bool IsRelevantChange(FileChangeKind kind, string path) =>
+        _publishedEmbedDependencies.Contains(path)
+        || (_publishedHasUnresolvedEmbeds
+            && kind is FileChangeKind.Created or FileChangeKind.Renamed)
+        // A published BASE card depends on the query's whole membership,
+        // which no dependency list can enumerate — any Markdown change may
+        // add/remove rows. Markdown is core's classification (round 27).
+        || (_publishedHasBaseEmbeds && CoreDocumentClassification.IsMarkdown(path));
+
     public void NotifyVaultFileChanged(FileChangeKind kind, string path)
     {
         // No same-path exclusion (round 2 [medium]): a self-embed or
@@ -1188,11 +1260,13 @@ internal sealed class ReadingContentViewModel : BindableBase, IDisposable
         try
         {
             step();
+            SettlePublicationWaiters(generation, failure: null);
         }
         catch (Exception exception)
         {
             RecordTerminalFailure(exception);
             PublishTerminalFailure(generation);
+            SettlePublicationWaiters(generation, failure: null);
         }
     }
 

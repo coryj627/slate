@@ -1395,10 +1395,10 @@ internal sealed class CanvasDocumentViewModel : PanelWorkScheduler
     /// <summary>
     /// W7-7 PR 7 (#1252, round 28): <see cref="Load"/> as a Task that
     /// completes when the reload's result is APPLIED on the dispatcher —
-    /// its read and build run on the document's worker as always — and
-    /// faults when the applied result is a failure. A retired document
-    /// completes at once. A rescan awaits it before it reports the page
-    /// applied.
+    /// its read and build run on the document's worker as always — whatever
+    /// state that result is (a published parse or I/O error is the file's
+    /// truth, not a stale board). A retired document completes at once. A
+    /// rescan awaits it before it reports the page applied.
     /// </summary>
     internal Task ReloadAsync()
     {
@@ -1410,16 +1410,11 @@ internal sealed class CanvasDocumentViewModel : PanelWorkScheduler
                 return;
             }
 
+            // Any terminal state is a PUBLICATION: a board that now shows
+            // a parse or I/O error describes the file as it is, and holding
+            // the rescan on it would hold every later rescan too.
             PublicationApplied -= OnApplied;
-            if (publication.LoadState is CanvasLoadState.Ready)
-            {
-                applied.TrySetResult();
-            }
-            else
-            {
-                applied.TrySetException(new InvalidOperationException(
-                    StateMessage ?? $"The canvas reload ended {publication.LoadState}."));
-            }
+            applied.TrySetResult();
         }
 
         PublicationApplied += OnApplied;
