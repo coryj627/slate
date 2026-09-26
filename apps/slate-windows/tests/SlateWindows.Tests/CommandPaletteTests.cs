@@ -1136,6 +1136,8 @@ public sealed partial class CommandPaletteTests
                 return Task.FromException<T>(exception);
             }
         }
+
+        public Task WhenIdle() => Task.CompletedTask;
     }
 
     private sealed class FakePaletteCommandSource(List<string> log) : IPaletteCommandSource
@@ -1191,6 +1193,16 @@ public sealed partial class CommandPaletteTests
 
         public int? RecordThread { get; private set; }
 
+        /// <summary>Set once a parked command load has returned — the
+        /// teardown fact disposes the source only after this.</summary>
+        public volatile bool ListCommandsReturned;
+
+        /// <summary>Holds a successful invocation's recents write.</summary>
+        public ManualResetEventSlim? RecordGate { get; set; }
+
+        /// <summary>When set, the recents write throws after the gate.</summary>
+        public Exception? RecordFailure { get; set; }
+
         public Command[] ListCommands()
         {
             ListCommandsThread = Environment.CurrentManagedThreadId;
@@ -1198,6 +1210,7 @@ public sealed partial class CommandPaletteTests
                 ListCommandsGate?.Wait(TimeSpan.FromSeconds(30)) ?? true,
                 "the parked command load was never released");
             ListCommandsCalls++;
+            ListCommandsReturned = true;
             return [.. Commands];
         }
 
@@ -1240,6 +1253,14 @@ public sealed partial class CommandPaletteTests
         public void RecordInvocation(string commandId)
         {
             RecordThread = Environment.CurrentManagedThreadId;
+            Assert.True(
+                RecordGate?.Wait(TimeSpan.FromSeconds(30)) ?? true,
+                "the parked recents write was never released");
+            if (RecordFailure is Exception failure)
+            {
+                throw failure;
+            }
+
             lock (log)
             {
                 log.Add("record:" + commandId);

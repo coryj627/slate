@@ -226,12 +226,10 @@ public sealed partial class CommandPaletteTests
     {
         LaneHost host = LaneHost.Opened();
         host.Palette.InvokeSelected();
-        Assert.False(host.Palette.IsOpen);
         Assert.True(
-            PumpedDispatcher.PumpUntil(
-                () => host.Harness.Source.RecordThread is not null,
-                TimeSpan.FromSeconds(10)),
-            "the invocation was never recorded");
+            PumpedDispatcher.PumpUntil(() => !host.Palette.IsOpen, TimeSpan.FromSeconds(10)),
+            "the palette never dismissed after the invocation");
+        Assert.NotNull(host.Harness.Source.RecordThread);
         Assert.NotEqual(host.Owner, host.Harness.Source.RecordThread);
     });
 
@@ -283,7 +281,179 @@ public sealed partial class CommandPaletteTests
         Assert.Equal(["first", "last"], order.ToArray());
     }
 
+    /// <summary>
+    /// An Enter pressed while query A was ranking belongs to A: a later query
+    /// B withdraws it, so when A is discarded and B publishes, nothing runs
+    /// and the palette stays open on B's rows. (The positive case — A lands
+    /// and runs its selection — is <c>EnterWhileARankIsPendingRunsTheRowsItWasTypedFor</c>.)
+    /// </summary>
+    [Fact]
+    public void AnEnterPressedForASupersededQueryRunsNothing() => RunSta(() =>
+    {
+        LaneHost host = LaneHost.Opened();
+        CommandPaletteViewModel palette = host.Palette;
+
+        host.Ranker.Park("q");
+        palette.Query = "q";
+        host.Ranker.WaitUntilEntered("q");
+        palette.InvokeSelected();
+        host.Ranker.Park("o");
+        palette.Query = "o";
+
+        host.Ranker.Release("q");
+        host.Ranker.WaitUntilEntered("o");
+        PumpedDispatcher.Drain();
+        Assert.Empty(host.Harness.Source.Invoked);
+
+        host.Ranker.Release("o");
+        host.PumpUntilPublished();
+        Assert.Empty(host.Harness.Source.Invoked);
+        Assert.True(palette.IsOpen);
+        Assert.Equal(
+            ["slate.file.newNote", "slate.nav.quickOpen", "slate.editor.bold"],
+            host.Harness.RowIds);
+    });
+
+    /// <summary>
+    /// Contract P9 step 4 on the palette's own lane: the recents write lands
+    /// first and the palette dismisses after it — while the write is parked
+    /// the palette stays up and a second Enter runs nothing — and a write
+    /// that fails still dismisses.
+    /// </summary>
+    [Fact]
+    public void ARecordLandsBeforeThePaletteDismisses() => RunSta(() =>
+    {
+        LaneHost host = LaneHost.Opened();
+        CommandPaletteViewModel palette = host.Palette;
+        using var gate = new ManualResetEventSlim(false);
+        host.Harness.Source.RecordGate = gate;
+        lock (host.Harness.Log)
+        {
+            host.Harness.Log.Clear();
+        }
+
+        palette.InvokeSelected();
+        Assert.Equal(["slate.file.newNote"], host.Harness.Source.Invoked);
+        Assert.True(
+            SpinWait.SpinUntil(
+                () => host.Harness.Source.RecordThread is not null,
+                TimeSpan.FromSeconds(10)),
+            "the recents write never started");
+        PumpedDispatcher.Drain();
+        Assert.True(palette.IsOpen, "the palette dismissed before its recents write landed");
+        palette.InvokeSelected();
+        Assert.Single(host.Harness.Source.Invoked);
+
+        gate.Set();
+        Assert.True(
+            PumpedDispatcher.PumpUntil(() => !palette.IsOpen, TimeSpan.FromSeconds(10)),
+            "the palette never dismissed after its recents write");
+        string[] order;
+        lock (host.Harness.Log)
+        {
+            order =
+            [
+                .. host.Harness.Log.Where(entry =>
+                    entry.StartsWith("invoke:", StringComparison.Ordinal)
+                    || entry.StartsWith("record:", StringComparison.Ordinal)
+                    || entry == "dismiss"),
+            ];
+        }
+
+        Assert.Equal(
+            ["invoke:slate.file.newNote", "record:slate.file.newNote", "dismiss"],
+            order);
+
+        // A failed write is logged on the lane and still dismisses.
+        host.Harness.Source.RecordGate = null;
+        host.Harness.Source.RecordFailure = new IOException("recents write refused");
+        palette.Open();
+        host.PumpUntilPublished();
+        palette.InvokeSelected();
+        Assert.True(
+            PumpedDispatcher.PumpUntil(() => !palette.IsOpen, TimeSpan.FromSeconds(10)),
+            "a failed recents write left the palette open");
+    });
+
+    /// <summary>
+    /// Teardown with work parked on the lane: the palette shuts down, the
+    /// command source is disposed only once the lane is quiet, and nothing
+    /// that finishes afterwards publishes, announces or re-opens the palette
+    /// — first with the open's command load parked, then with a rank parked.
+    /// </summary>
+    [Fact]
+    public void TeardownWaitsForTheLaneAndNothingLandsAfterIt() => RunSta(() =>
+    {
+        LaneHost loading = LaneHost.Create();
+        CommandLoadGate gate = loading.ParkTheCommandLoad();
+        loading.Palette.Open();
+        gate.WaitUntilEntered();
+        var loadProbe = new DisposalProbe(() => loading.Harness.Source.ListCommandsReturned);
+        ReleaseSoon(gate.Event);
+        VaultLifecycleViewModel.ShutDownPalette(loading.Palette, loadProbe);
+        Assert.True(loadProbe.Disposed);
+        Assert.True(
+            loadProbe.LaneWasQuietAtDisposal,
+            "the source was disposed while its command load still ran");
+        loading.AssertNothingLandsAfterTeardown();
+
+        LaneHost ranking = LaneHost.Opened();
+        ranking.Ranker.Park("o");
+        ranking.Palette.Query = "o";
+        ranking.Ranker.WaitUntilEntered("o");
+        ranking.Harness.Announcements.Clear();
+        var rankProbe = new DisposalProbe(() => ranking.Ranker.HasReturned("o"));
+        ReleaseSoon(ranking.Ranker.GateOf("o"));
+        VaultLifecycleViewModel.ShutDownPalette(ranking.Palette, rankProbe);
+        Assert.True(
+            rankProbe.LaneWasQuietAtDisposal,
+            "the source was disposed while a rank still ran");
+        ranking.AssertNothingLandsAfterTeardown();
+    });
+
+    /// <summary>The shell's teardown runs the palette's: disposing the
+    /// lifecycle shuts its palette down before the command source goes.</summary>
+    [Fact]
+    public void DisposingTheLifecycleShutsItsPaletteDown()
+    {
+        using var fixture = FixtureVault.Create(1);
+        var lifecycle = new VaultLifecycleViewModel(
+            pickVault: () => Task.FromResult<string?>(fixture.Root),
+            enqueueUi: action => action(),
+            recentVaultsStore: new RecentVaultsStore(
+                Path.Combine(fixture.Root, "device-state", "recent-vaults.json")));
+        CommandPaletteViewModel palette = lifecycle.Palette;
+
+        lifecycle.Dispose();
+
+        Assert.True(palette.IsShutDown);
+    }
+
     // --- helpers -------------------------------------------------------------
+
+    /// <summary>Releases a parked lane item shortly after the calling thread
+    /// has started its teardown, from a thread that is not blocked by it.</summary>
+    private static void ReleaseSoon(ManualResetEventSlim gate) =>
+        _ = Task.Run(async () =>
+        {
+            await Task.Delay(TimeSpan.FromMilliseconds(300));
+            gate.Set();
+        });
+
+    /// <summary>A command source stand-in that records whether the lane had
+    /// gone quiet when it was disposed.</summary>
+    private sealed class DisposalProbe(Func<bool> laneQuiet) : IDisposable
+    {
+        public bool Disposed { get; private set; }
+
+        public bool LaneWasQuietAtDisposal { get; private set; }
+
+        public void Dispose()
+        {
+            LaneWasQuietAtDisposal = laneQuiet();
+            Disposed = true;
+        }
+    }
 
     /// <summary>
     /// The palette over the fake source with its production lane, owned by
@@ -345,6 +515,22 @@ public sealed partial class CommandPaletteTests
             PumpedDispatcher.Drain();
         }
 
+        /// <summary>Pumps what the lane left behind, then asserts the palette
+        /// is shut, empty and silent, and stays shut when asked to open.</summary>
+        public void AssertNothingLandsAfterTeardown()
+        {
+            PumpedDispatcher.PumpUntilDrained(Palette.RankCompletion);
+            PumpedDispatcher.Drain();
+            Assert.True(Palette.IsShutDown);
+            Assert.False(Palette.IsOpen);
+            Assert.Empty(Palette.Rows);
+            Assert.Empty(Harness.Announcements);
+            Palette.Open();
+            PumpedDispatcher.Drain();
+            Assert.False(Palette.IsOpen);
+            Assert.Empty(Palette.Rows);
+        }
+
         public CommandLoadGate ParkTheCommandLoad()
         {
             var gate = new CommandLoadGate(Harness.Source);
@@ -375,6 +561,7 @@ public sealed partial class CommandPaletteTests
         private readonly ConcurrentDictionary<string, ManualResetEventSlim> _gates = new();
         private readonly ConcurrentDictionary<string, ManualResetEventSlim> _entered = new();
         private readonly ConcurrentDictionary<string, int> _threads = new();
+        private readonly ConcurrentDictionary<string, bool> _returned = new();
 
         /// <summary>Every query actually ranked, in order.</summary>
         public ConcurrentQueue<string> Ranked { get; } = new();
@@ -382,6 +569,12 @@ public sealed partial class CommandPaletteTests
         public void Park(string query) => _gates[query] = new ManualResetEventSlim(false);
 
         public void Release(string query) => _gates[query].Set();
+
+        public ManualResetEventSlim GateOf(string query) => _gates[query];
+
+        /// <summary>Whether core's ranking for <paramref name="query"/> has
+        /// returned to the lane.</summary>
+        public bool HasReturned(string query) => _returned.ContainsKey(query);
 
         public void WaitUntilEntered(string query) => Assert.True(
             Entered(query).Wait(TimeSpan.FromSeconds(10)),
@@ -401,7 +594,9 @@ public sealed partial class CommandPaletteTests
                 Assert.True(gate.Wait(TimeSpan.FromSeconds(30)), $"\"{query}\" was never released");
             }
 
-            return SlateUniffiMethods.PaletteSections(commands, query, recents, pinned);
+            PaletteSection[] ranked = SlateUniffiMethods.PaletteSections(commands, query, recents, pinned);
+            _returned[query] = true;
+            return ranked;
         }
 
         private ManualResetEventSlim Entered(string query) =>

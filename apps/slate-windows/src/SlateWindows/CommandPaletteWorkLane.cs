@@ -18,6 +18,13 @@ internal interface ICommandPaletteWorkLane
     /// cancellable, and its caller discards the result.
     /// </summary>
     Task<T> Run<T>(Func<T> work, CancellationToken cancellationToken);
+
+    /// <summary>
+    /// Completes when everything handed over so far has finished — run,
+    /// skipped or failed. Never faults: teardown waits on it before the
+    /// command source is disposed.
+    /// </summary>
+    Task WhenIdle();
 }
 
 /// <summary>
@@ -56,6 +63,18 @@ internal sealed class CommandPaletteWorkLane : ICommandPaletteWorkLane
                 TaskScheduler.Default);
             _tail = next;
             return next;
+        }
+    }
+
+    public Task WhenIdle()
+    {
+        lock (_gate)
+        {
+            return _tail.ContinueWith(
+                _ => { },
+                CancellationToken.None,
+                TaskContinuationOptions.None,
+                TaskScheduler.Default);
         }
     }
 }

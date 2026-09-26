@@ -576,9 +576,9 @@ internal sealed class VaultLifecycleViewModel
         ++_generation;
         CloseSession();
 
-        // Releases the one CommandRegistry (PINV-3). Null unless the
-        // shell actually reached for the palette.
-        _paletteSource?.Dispose();
+        // Releases the one CommandRegistry (PINV-3) — after the palette has
+        // shut down. Null unless the shell actually reached for the palette.
+        ShutDownPalette(_palette, _paletteSource);
         _paletteSource = null;
         _palette = null;
 
@@ -588,6 +588,18 @@ internal sealed class VaultLifecycleViewModel
             _search.Dispose();
             _search = null;
         }
+    }
+
+    /// <summary>
+    /// The palette's teardown order (#1275): shut it down — nothing in
+    /// flight may publish, announce or dismiss afterwards, and its work
+    /// lane goes quiet, so a command load or a recents write still running
+    /// finishes — and only then dispose the command source that lane reads.
+    /// </summary>
+    internal static void ShutDownPalette(CommandPaletteViewModel? palette, IDisposable? source)
+    {
+        palette?.Shutdown(CommandPaletteViewModel.ShutdownDrainBudget);
+        source?.Dispose();
     }
 
     /// <summary>
