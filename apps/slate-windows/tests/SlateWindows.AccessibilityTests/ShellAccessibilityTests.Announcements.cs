@@ -44,18 +44,12 @@ public sealed partial class ShellAccessibilityTests
     /// listener states, sources and drain the app logged.
     /// </para>
     /// <para>
-    /// A manual-trait journey (contract 40 AR-1): it was not 6/6 stable on
-    /// the final build (5/6 twice), so the shell gate's evidence for R-1 is
-    /// the hosted launch-queue facts and <c>AnnouncementSeamCensus</c>, and
-    /// this journey runs when <c>SLATE_MANUAL_JOURNEYS=1</c>. Both misses
-    /// were the product's: the provider connected before UIA advised the
-    /// process, the lines raised then were lost, and the lines raised after
-    /// the advise were heard. Its counts are recorded with the W7-2
-    /// notification etiquette checklist.
+    /// In the shell gate (contract 40 AR-1): 6/6 on the final build, every
+    /// run draining on UIA's advise and hearing every line; the counts are
+    /// recorded with the W7-2 notification etiquette checklist.
     /// </para>
     /// </remarks>
-    [ManualJourneyFact]
-    [Trait("gate", "manual")]
+    [Fact]
     public void Announcements_ReachADesktopScopedListenerFromLaunch()
     {
         // Core's own sentences, rendered through the binding before launch:
@@ -184,23 +178,6 @@ public sealed partial class ShellAccessibilityTests
             }
 
             try { Directory.Delete(testRoot, recursive: true); } catch (IOException) { }
-        }
-    }
-
-    /// <summary>
-    /// A journey outside the shell gate: skipped, with this reason, unless
-    /// <c>SLATE_MANUAL_JOURNEYS=1</c> — so a harness flake is never a gate
-    /// failure, and a skipped run is never counted as evidence.
-    /// </summary>
-    [AttributeUsage(AttributeTargets.Method)]
-    private sealed class ManualJourneyFactAttribute : FactAttribute
-    {
-        public ManualJourneyFactAttribute()
-        {
-            if (!string.Equals(Environment.GetEnvironmentVariable("SLATE_MANUAL_JOURNEYS"), "1", StringComparison.Ordinal))
-            {
-                Skip = "A manual-trait journey (W7-7 AR-1): set SLATE_MANUAL_JOURNEYS=1 to run it.";
-            }
         }
     }
 
