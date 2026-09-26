@@ -81,7 +81,7 @@ public sealed class AccessibilityNotificationDispatcherTests
         var launch = new LaunchHarness
         {
             Listening = false,
-            Advised = true,
+            Connected = true,
             Now = AccessibilityNotificationDispatcher.LaunchWindow,
         };
         launch.Dispatcher.Post(new RenderedAnnouncement("Nobody listens.", A11yPriority.High));
@@ -309,15 +309,16 @@ public sealed class AccessibilityNotificationDispatcherTests
     }
 
     /// <summary>
-    /// OD-7, the launch phase: while Unadvised a posted line is QUEUED, never
-    /// raised — zero raises — and the first check that finds a listening
-    /// client, an advise and a connected provider (here the poll) raises each
-    /// queued line exactly once, in order, as the same tuple. Then the phase
-    /// is Done, and a line posted while ready is raised at once, exactly once,
-    /// with no poll.
+    /// OD-7, the launch phase: while Unadvised — here the status provider not
+    /// yet connected, as at a launch's first frame — a posted line is QUEUED,
+    /// never raised — zero raises — and the first check that finds a listening
+    /// client and a connected provider (here the poll) raises each queued line
+    /// exactly once, in order, as the same tuple, with WPF's advise map still
+    /// empty. Then the phase is Done, and a line posted while ready is raised
+    /// at once, exactly once, with no poll.
     /// </summary>
     [Fact]
-    public void LinesPostedBeforeTheAdviseAreQueuedThenRaisedOnceInOrder()
+    public void LinesPostedBeforeReadinessAreQueuedThenRaisedOnceInOrder()
     {
         var launch = new LaunchHarness();
         launch.Post("Vault opened.", "Scanning vault. 2 files to index.");
@@ -328,7 +329,7 @@ public sealed class AccessibilityNotificationDispatcherTests
         launch.Tick!();
         Assert.Empty(launch.Raised);
 
-        launch.Advised = true;
+        launch.Connected = true;
         launch.Tick!();
         Assert.Equal(
             [
@@ -350,9 +351,9 @@ public sealed class AccessibilityNotificationDispatcherTests
     /// OD-7, codex rounds 17–18: expiry is its own state, and the poll is tied
     /// to the queue, not the launch. At the window's close the launch line
     /// reaches its own deadline and is dropped, and the launch is Expired; a
-    /// later line posted while a client listens and the advise is in WPF's
-    /// map but the status provider is still null raises nothing and is not
-    /// lost — the poll restarts for it — so when the provider connects on
+    /// later line posted while a client listens but the status provider is
+    /// still null raises nothing and is not lost — the poll restarts for it —
+    /// so when the provider connects on
     /// another thread, with no further post, production's own timer tick
     /// drains exactly those lines once, in order, and stops; the next line
     /// raises at once. The fact pumps the dispatcher and never calls the
@@ -376,7 +377,7 @@ public sealed class AccessibilityNotificationDispatcherTests
         TimerHarness.PumpFor(TimeSpan.FromMilliseconds(750));
         Assert.Equal(["Pane resized, 60 percent.", "Right pane hidden."], launch.Raised);
         Assert.Equal(
-            ["dropped=1, unready too long", "expired, never ready", "drained=2, droppedOldest=0, at=30000ms"],
+            ["dropped=1, unready too long", "expired, never ready", "drained=2, droppedOldest=0, at=30000ms, notificationListenerExists=False"],
             launch.Drains);
         Assert.Equal((2, 2), (launch.PollsStarted, launch.PollsStopped));
 
@@ -385,53 +386,46 @@ public sealed class AccessibilityNotificationDispatcherTests
     });
 
     /// <summary>
-    /// OD-7, codex round 18 (ii): readiness is ONE predicate in every phase. A
-    /// listening client and a connected status provider without the
-    /// Notification advise in WPF's map would be a deaf raise, so the post is
-    /// queued and nothing is raised — during the launch, after it expired and
-    /// after Done alike — and the post that finds the advise drains what
-    /// waited, once, in order, before its own line. After Done the launch
-    /// never expires: nothing is logged or dropped across the window, and a
-    /// line waiting across it is kept.
+    /// OD-7 as amended (#1244, contract 40 R-1): readiness is two conjuncts, a
+    /// listening client and a connected status provider. WPF's advise map
+    /// gates only WPF's own RaiseNotificationEvent, which Slate never calls,
+    /// and the ungated raise was measured delivered with the map empty (7 of
+    /// 7), so an empty map never holds a line: with a client listening and
+    /// the provider connected, a line is raised at once, exactly once, with no
+    /// poll — during the launch, after it expired and after Done alike.
     /// </summary>
     [Fact]
-    public void WithoutTheAdviseNoLineIsRaisedInAnyPhase()
+    public void AnEmptyAdviseMapNeverHoldsALine()
     {
-        var unadvised = new LaunchHarness();
-        unadvised.Post("Vault opened.");
-        Assert.Empty(unadvised.Raised);
-        Assert.NotNull(unadvised.Tick);
+        var launching = new LaunchHarness { Connected = true };
+        launching.Post("Vault opened.");
+        Assert.Equal(["Vault opened."], launching.Raised.Select(line => line.Text));
+        Assert.Equal(0, launching.PollsStarted);
 
-        var expired = new LaunchHarness { Now = AccessibilityNotificationDispatcher.LaunchWindow };
-        expired.Post("Scan complete. 2 files indexed.");
-        Assert.Empty(expired.Raised);
-        expired.Advised = true;
+        var expired = new LaunchHarness();
+        expired.Post("Vault opened.");
+        expired.Now = AccessibilityNotificationDispatcher.LaunchWindow;
+        expired.Tick!();
+        Assert.Equal(["dropped=1, unready too long", "expired, never ready"], expired.Drains);
+        expired.Connected = true;
         expired.Post("Right pane hidden.");
-        Assert.Equal(["Scan complete. 2 files indexed.", "Right pane hidden."], expired.Raised.Select(line => line.Text));
+        Assert.Equal(["Right pane hidden."], expired.Raised.Select(line => line.Text));
+        Assert.Equal(1, expired.PollsStarted);
 
-        var done = new LaunchHarness { Advised = true };
+        var done = new LaunchHarness { Connected = true, Advised = true };
         done.Post("Vault opened.");
         done.Advised = false;
-        done.Now = TimeSpan.FromSeconds(20);
-        done.Post("Right pane hidden.");
-        done.Now = AccessibilityNotificationDispatcher.LaunchWindow;
         done.Post("Right pane shown.");
-        Assert.Equal(["Vault opened."], done.Raised.Select(line => line.Text));
-
-        done.Advised = true;
-        done.Now = AccessibilityNotificationDispatcher.LaunchWindow + TimeSpan.FromSeconds(1);
-        done.Post("Pane resized, 60 percent.");
-        Assert.Equal(
-            ["Vault opened.", "Right pane hidden.", "Right pane shown.", "Pane resized, 60 percent."],
-            done.Raised.Select(line => line.Text));
-        Assert.Equal(["drained=2, droppedOldest=0, at=31000ms"], done.Drains);
+        Assert.Equal(["Vault opened.", "Right pane shown."], done.Raised.Select(line => line.Text));
+        Assert.Equal(0, done.PollsStarted);
+        Assert.Empty(done.Drains);
     }
 
     /// <summary>
     /// OD-7, codex round 19: Done is launch bookkeeping only. After a normal
-    /// flip, a conjunct that regresses — the Notification advise removed, or
-    /// no client listening any more — makes a post queue again, never raise
-    /// into a deaf process, and restarts the poll; when readiness returns on
+    /// flip, a conjunct that regresses — the status provider lost, or no
+    /// client listening any more — makes a post queue again, never raise into
+    /// a deaf process, and restarts the poll; when readiness returns on
     /// another thread with no further post, production's own timer delivers
     /// that line exactly once and stops. The fact pumps the dispatcher and
     /// never calls the check.
@@ -439,18 +433,18 @@ public sealed class AccessibilityNotificationDispatcherTests
     [Fact]
     public void AfterDoneALineWaitsWhileReadinessRegressesAndOneTickDeliversIt() => RunSta(() =>
     {
-        var launch = new TimerHarness { Advised = false };
+        var launch = new TimerHarness { Connected = false };
         launch.Post("Vault opened.");
-        Task advise = TimerHarness.Later(() => launch.Advised = true);
+        Task connect = TimerHarness.Later(() => launch.Connected = true);
         Assert.True(TimerHarness.PumpUntil(() => launch.Raised.Count == 1), "no tick flipped the launch phase");
-        advise.GetAwaiter().GetResult();
+        connect.GetAwaiter().GetResult();
 
-        launch.Advised = false;
+        launch.Connected = false;
         launch.Post("Right pane hidden.");
         Assert.Equal(["Vault opened."], launch.Raised);
-        Task restore = TimerHarness.Later(() => launch.Advised = true);
-        Assert.True(TimerHarness.PumpUntil(() => launch.Raised.Count == 2), "no tick delivered the line once the advise returned");
-        restore.GetAwaiter().GetResult();
+        Task reconnect = TimerHarness.Later(() => launch.Connected = true);
+        Assert.True(TimerHarness.PumpUntil(() => launch.Raised.Count == 2), "no tick delivered the line once the provider returned");
+        reconnect.GetAwaiter().GetResult();
 
         launch.Listening = false;
         launch.Post("Right pane shown.");
@@ -461,7 +455,7 @@ public sealed class AccessibilityNotificationDispatcherTests
 
         TimerHarness.PumpFor(TimeSpan.FromMilliseconds(750));
         Assert.Equal(["Vault opened.", "Right pane hidden.", "Right pane shown."], launch.Raised);
-        Assert.Equal(Enumerable.Repeat("drained=1, droppedOldest=0, at=0ms", 3), launch.Drains);
+        Assert.Equal(Enumerable.Repeat("drained=1, droppedOldest=0, at=0ms, notificationListenerExists=False", 3), launch.Drains);
         Assert.Equal((3, 3), (launch.PollsStarted, launch.PollsStopped));
     });
 
@@ -526,7 +520,7 @@ public sealed class AccessibilityNotificationDispatcherTests
     public void EachQueuedLineExpiresAtItsOwnDeadlineNeverTheWholeQueue() => RunSta(() =>
     {
         TimeSpan window = AccessibilityNotificationDispatcher.LaunchWindow;
-        var launch = new TimerHarness { Advised = false };
+        var launch = new TimerHarness { Connected = false };
         launch.Post("Vault opened.");
         launch.Now = window - TimeSpan.FromSeconds(1);
         launch.Post("Pane resized, 60 percent.");
@@ -541,42 +535,50 @@ public sealed class AccessibilityNotificationDispatcherTests
         Assert.Empty(launch.Raised);
         Assert.Equal((1, 0), (launch.PollsStarted, launch.PollsStopped));
 
-        Task advise = TimerHarness.Later(() => launch.Advised = true);
+        Task connect = TimerHarness.Later(() => launch.Connected = true);
         Assert.True(TimerHarness.PumpUntil(() => launch.Raised.Count >= 1), "no tick delivered the young line once readiness returned");
-        advise.GetAwaiter().GetResult();
+        connect.GetAwaiter().GetResult();
         TimerHarness.PumpFor(TimeSpan.FromMilliseconds(750));
         Assert.Equal(["Pane resized, 60 percent."], launch.Raised);
         Assert.Equal(
-            ["dropped=1, unready too long", "expired, never ready", "drained=1, droppedOldest=0, at=58999ms"],
+            ["dropped=1, unready too long", "expired, never ready", "drained=1, droppedOldest=0, at=58999ms, notificationListenerExists=False"],
             launch.Drains);
         Assert.Equal((1, 1), (launch.PollsStarted, launch.PollsStopped));
     });
 
-    /// <summary>OD-7: the same rule after the advise — in Done a line posted
-    /// while the status provider is null waits for it, and is raised once, in
-    /// order, when it connects.</summary>
+    /// <summary>OD-7: the same rule after Done — a line posted while the
+    /// status provider is null waits for it, and is raised once, in order,
+    /// when it connects. Done never goes back: the launch window closing while
+    /// that line waits neither expires anything nor drops it early.</summary>
     [Fact]
-    public void AfterTheAdviseALineStillWaitsForTheProvider()
+    public void AfterDoneALineWaitsForTheProviderAcrossTheLaunchWindow()
     {
-        var launch = new LaunchHarness { Advised = true };
+        var launch = new LaunchHarness { Connected = true };
         launch.Post("Vault opened.");
         launch.Connected = false;
+        launch.Now = TimeSpan.FromSeconds(20);
         launch.Post("Scan complete. 2 files indexed.");
         Assert.Equal(["Vault opened."], launch.Raised.Select(line => line.Text));
 
+        launch.Now = AccessibilityNotificationDispatcher.LaunchWindow;
+        launch.Tick!();
+        Assert.Empty(launch.Drains);
+
         launch.Connected = true;
+        launch.Now = AccessibilityNotificationDispatcher.LaunchWindow + TimeSpan.FromSeconds(1);
         launch.Tick!();
         Assert.Equal(["Vault opened.", "Scan complete. 2 files indexed."], launch.Raised.Select(line => line.Text));
+        Assert.Equal(["drained=1, droppedOldest=0, at=31000ms, notificationListenerExists=False"], launch.Drains);
         Assert.Null(launch.Tick);
     }
 
-    /// <summary>OD-7: a process already advised, with a listening client and a
-    /// connected provider, at its first post ends the phase there: the line is
-    /// raised at once, exactly once, and nothing is queued or polled for.</summary>
+    /// <summary>OD-7: a process ready at its first post — a listening client
+    /// and a connected provider — ends the phase there: the line is raised at
+    /// once, exactly once, and nothing is queued or polled for.</summary>
     [Fact]
-    public void AProcessAdvisedAtItsFirstLineRaisesEveryLineAtOnce()
+    public void AProcessReadyAtItsFirstLineRaisesEveryLineAtOnce()
     {
-        var launch = new LaunchHarness { Advised = true };
+        var launch = new LaunchHarness { Connected = true };
         launch.Post("Vault opened.", "Scanning vault. 2 files to index.");
         Assert.Equal(["Vault opened.", "Scanning vault. 2 files to index."], launch.Raised.Select(line => line.Text));
         Assert.Equal(0, launch.PollsStarted);
@@ -586,9 +588,9 @@ public sealed class AccessibilityNotificationDispatcherTests
 
     /// <summary>OD-7, codex round 1: a screen reader started shortly AFTER
     /// Slate still hears the launch lines. Posted while no client listens at
-    /// all, they are queued — not raised, not discarded — and when a client,
-    /// the advise and a connected provider arrive, exactly those tuples drain
-    /// once, in order.</summary>
+    /// all, they are queued — not raised, not discarded — and when a client
+    /// listens and the provider connects, exactly those tuples drain once, in
+    /// order.</summary>
     [Fact]
     public void LinesPostedBeforeAnyClientListensAreQueuedForAReaderStartedLater()
     {
@@ -599,7 +601,7 @@ public sealed class AccessibilityNotificationDispatcherTests
         Assert.Empty(launch.Raised);
 
         launch.Listening = true;
-        launch.Advised = true;
+        launch.Connected = true;
         launch.Tick!();
         Assert.Equal(
             [
@@ -612,25 +614,22 @@ public sealed class AccessibilityNotificationDispatcherTests
         Assert.Equal(1, launch.PollsStarted);
     }
 
-    /// <summary>OD-7: the phase ends only when all three are there — a
-    /// listening client, the advise and a connected status provider. Any one
-    /// missing keeps the lines queued; the post that completes the three
-    /// drains them before its own line.</summary>
+    /// <summary>OD-7: the phase ends only when both are there — a listening
+    /// client and a connected status provider. Either one missing keeps the
+    /// lines queued, and the post that completes the two drains them before
+    /// its own line.</summary>
     [Fact]
-    public void TheQueueWaitsForAListeningClientAnAdviseAndAConnectedProvider()
+    public void TheQueueWaitsForAListeningClientAndAConnectedProvider()
     {
-        var launch = new LaunchHarness { Advised = true, Connected = false };
+        var launch = new LaunchHarness();
         launch.Post("Vault opened.");
         launch.Tick!();
         launch.Connected = true;
         launch.Listening = false;
         launch.Tick!();
-        launch.Listening = true;
-        launch.Advised = false;
-        launch.Tick!();
         Assert.Empty(launch.Raised);
 
-        launch.Advised = true;
+        launch.Listening = true;
         launch.Post("Scan complete. 2 files indexed.");
         Assert.Equal(["Vault opened.", "Scan complete. 2 files indexed."], launch.Raised.Select(line => line.Text));
         Assert.Null(launch.Tick);
@@ -645,10 +644,10 @@ public sealed class AccessibilityNotificationDispatcherTests
         string[] lines = [.. Enumerable.Range(0, 20).Select(index => $"Line {index}.")];
         launch.Post(lines);
         Assert.Empty(launch.Raised);
-        launch.Advised = true;
+        launch.Connected = true;
         launch.Tick!();
         Assert.Equal(lines.Skip(4), launch.Raised.Select(line => line.Text));
-        Assert.Equal(["drained=16, droppedOldest=4, at=0ms"], launch.Drains);
+        Assert.Equal(["drained=16, droppedOldest=4, at=0ms, notificationListenerExists=False"], launch.Drains);
     }
 
     /// <summary>OD-7: no readiness within the launch window of the first frame
@@ -673,19 +672,20 @@ public sealed class AccessibilityNotificationDispatcherTests
 
         launch.Post("Scan complete. 2 files indexed.");
         Assert.Empty(launch.Raised);
-        launch.Advised = true;
+        launch.Connected = true;
         launch.Post("Right pane hidden.");
         Assert.Equal(["Scan complete. 2 files indexed.", "Right pane hidden."], launch.Raised.Select(line => line.Text));
         Assert.Equal(
-            ["dropped=2, unready too long", "expired, never ready", "drained=1, droppedOldest=0, at=30000ms"],
+            ["dropped=2, unready too long", "expired, never ready", "drained=1, droppedOldest=0, at=30000ms, notificationListenerExists=False"],
             launch.Drains);
         Assert.Equal(2, launch.PollsStarted);
     }
 
     /// <summary>OD-7: the drain writes one diagnostics line (under
-    /// SLATE_UIA_DIAGNOSTICS=1 in production) with its time, and a flip with
-    /// nothing queued writes none; the expiry's and the drops' own lines are
-    /// the expiry facts'.</summary>
+    /// SLATE_UIA_DIAGNOSTICS=1 in production) with its time and whether WPF's
+    /// advise map knew of a listener then — the diagnostic that replaced the
+    /// gate — and a flip with nothing queued writes none; the expiry's and the
+    /// drops' own lines are the expiry facts'.</summary>
     [Fact]
     public void TheLaunchTransitionIsLogged()
     {
@@ -693,13 +693,19 @@ public sealed class AccessibilityNotificationDispatcherTests
         launch.Post("Vault opened.", "Scanning vault. 2 files to index.");
         Assert.Empty(launch.Drains);
         launch.Now = TimeSpan.FromMilliseconds(1250);
-        launch.Advised = true;
+        launch.Connected = true;
         launch.Post("Scan complete. 2 files indexed.");
-        Assert.Equal(["drained=2, droppedOldest=0, at=1250ms"], launch.Drains);
+        Assert.Equal(["drained=2, droppedOldest=0, at=1250ms, notificationListenerExists=False"], launch.Drains);
         launch.Post("Right pane hidden.");
-        Assert.Equal(["drained=2, droppedOldest=0, at=1250ms"], launch.Drains);
+        Assert.Equal(["drained=2, droppedOldest=0, at=1250ms, notificationListenerExists=False"], launch.Drains);
 
-        var quiet = new LaunchHarness { Advised = true };
+        var advised = new LaunchHarness { Advised = true };
+        advised.Post("Vault opened.");
+        advised.Connected = true;
+        advised.Tick!();
+        Assert.Equal(["drained=1, droppedOldest=0, at=0ms, notificationListenerExists=True"], advised.Drains);
+
+        var quiet = new LaunchHarness { Connected = true };
         quiet.Post("Vault opened.");
         Assert.Empty(quiet.Drains);
     }
@@ -802,7 +808,7 @@ public sealed class AccessibilityNotificationDispatcherTests
             Assert.Empty(launch.Raised);
             Assert.Equal(1, launch.PollsStarted);
 
-            launch.Advised = true;
+            launch.Connected = true;
             launch.Tick!();
             Assert.Equal(["Vault opened.", "Sorted by Name, ascending."], launch.Raised.Select(line => line.Text));
 
@@ -883,7 +889,7 @@ public sealed class AccessibilityNotificationDispatcherTests
             tick!();
             Assert.Equal(HostDiagnosticEvent.AnnouncementSource, logged[0].Event);
             Assert.Equal(
-                (HostDiagnosticEvent.AnnouncementReplay, "drained=1, droppedOldest=0, at=0ms"),
+                (HostDiagnosticEvent.AnnouncementReplay, "drained=1, droppedOldest=0, at=0ms, notificationListenerExists=True"),
                 logged[^1]);
         }
         finally
@@ -937,9 +943,10 @@ public sealed class AccessibilityNotificationDispatcherTests
 
     /// <summary>The launch facts' dispatcher: a recording raise, and every
     /// launch input in the fact's hands — whether a client listens, whether
-    /// WPF's map has been advised, whether the status provider is connected,
-    /// the poll's tick, the clock and the log. A client listens and the
-    /// provider is connected unless a fact says otherwise.</summary>
+    /// WPF's map has been advised (logged, never a gate), whether the status
+    /// provider is connected, the poll's tick, the clock and the log. A client
+    /// listens, and the provider is not yet connected and the map empty, as at
+    /// a launch's first frame, unless a fact says otherwise.</summary>
     private sealed class LaunchHarness
     {
         internal LaunchHarness()
@@ -975,7 +982,7 @@ public sealed class AccessibilityNotificationDispatcherTests
 
         internal bool Advised { get; set; }
 
-        internal bool Connected { get; set; } = true;
+        internal bool Connected { get; set; }
 
         internal TimeSpan Now { get; set; }
 
@@ -1001,14 +1008,15 @@ public sealed class AccessibilityNotificationDispatcherTests
     /// The timer-driven facts' dispatcher: production's own readiness poll —
     /// the DispatcherTimer <c>LaunchSeams.ForProduction</c> starts, which
     /// ticks only while this STA thread pumps — over inputs the fact holds:
-    /// whether a client listens, the advise and the provider (flags another
-    /// thread may flip, as UIA does), the clock and the log. Every conjunct
-    /// holds unless the fact says otherwise.
+    /// whether a client listens and whether the provider is connected (flags
+    /// another thread may flip, as UIA does), WPF's advise map (logged only),
+    /// the clock and the log. Both conjuncts hold and the map is empty unless
+    /// the fact says otherwise.
     /// </summary>
     private sealed class TimerHarness
     {
         private volatile bool _listening = true;
-        private volatile bool _advised = true;
+        private volatile bool _advised;
         private volatile bool _connected = true;
 
         internal TimerHarness()
@@ -1135,19 +1143,20 @@ public sealed class AccessibilityNotificationDispatcherTests
         }
     }
 
-    /// <summary>Seams for the facts about the raise itself: the process is
-    /// advised and the provider connected, so the first post ends the launch
-    /// phase with nothing queued, and no poll ever starts.</summary>
-    private static AccessibilityNotificationDispatcher.LaunchSeams AlwaysAdvised() => new(
+    /// <summary>Seams for the facts about the raise itself: the provider is
+    /// connected (and WPF's advise map empty, which no longer matters), so
+    /// the first post ends the launch phase with nothing queued, and no poll
+    /// ever starts.</summary>
+    private static AccessibilityNotificationDispatcher.LaunchSeams AlwaysReady() => new(
+        () => false,
         () => true,
-        () => true,
-        _ => throw new InvalidOperationException("An advised process starts no launch poll."),
+        _ => throw new InvalidOperationException("A ready process starts no launch poll."),
         () => TimeSpan.Zero,
         (diagnosticEvent, line) =>
         {
             if (diagnosticEvent == HostDiagnosticEvent.AnnouncementReplay)
             {
-                throw new InvalidOperationException($"An advised process logs no drain: {line}");
+                throw new InvalidOperationException($"A ready process logs no drain: {line}");
             }
         });
 
@@ -1155,7 +1164,7 @@ public sealed class AccessibilityNotificationDispatcherTests
         new((kind, processing, text, activityId) =>
             raised.Add(new Notification(kind, processing, text, activityId)),
             () => true,
-            AlwaysAdvised());
+            AlwaysReady());
 
     private sealed record Notification(AutomationNotificationKind Kind,
         AutomationNotificationProcessing Processing, string Text, string ActivityId);
