@@ -315,11 +315,24 @@ internal sealed partial class VaultLifecycleViewModel
         }
 
         // (3) The new generation's effects — Quick Open's among them: the
-        // delta is its only rescan path — then (4) the release: core reduces
-        // the retained Applied generation (this run's, coalesced with any
-        // recovered one) into the net per-path counts.
+        // delta is its only rescan path — and, with its LAST page's, the
+        // tree's publication (round 30): awaited before the Applied mark,
+        // so the sentence and the release never precede the tree; then (4)
+        // the release: core reduces the retained Applied generation (this
+        // run's, coalesced with any recovered one) into the net per-path
+        // counts.
+        bool treeRefreshStarted = false;
+        Task RefreshTreeForRescan()
+        {
+            treeRefreshStarted = true;
+            return FileSidebar?.RefreshAsync(reportCount: reason == RescanReason.Explicit)
+                ?? Task.CompletedTask;
+        }
+
         ScanDeltaOutcome? outcome = null;
-        switch (await ReconcileScanDeltaAsync(generation, channel, cancel))
+        DeltaReconciliation reconciled =
+            await ReconcileScanDeltaAsync(generation, channel, cancel, RefreshTreeForRescan);
+        switch (reconciled)
         {
             case DeltaReconciliation.Cancelled:
                 return;
@@ -341,17 +354,21 @@ internal sealed partial class VaultLifecycleViewModel
             return;
         }
 
-        // (5) The tree re-reads the index the scan committed, whatever the
-        // pages did (the graph probed with each page's effects). A surface
-        // that faults here is logged, never allowed to swallow the run's
-        // one sentence below.
-        try
+        // (5) A run whose pages failed before the last one never reached
+        // the tree: it still re-reads the index the scan committed,
+        // best-effort — the run already says "results may be incomplete".
+        // A surface that faults here is logged, never allowed to swallow
+        // the run's one sentence below.
+        if (reconciled == DeltaReconciliation.Failed && !treeRefreshStarted)
         {
-            FileSidebar?.Refresh(reportCount: reason == RescanReason.Explicit);
-        }
-        catch (Exception exception) when (exception is not OutOfMemoryException)
-        {
-            HostLog.Write(HostDiagnosticEvent.VaultRescanFailed, exception);
+            try
+            {
+                FileSidebar?.Refresh(reportCount: reason == RescanReason.Explicit);
+            }
+            catch (Exception exception) when (exception is not OutOfMemoryException)
+            {
+                HostLog.Write(HostDiagnosticEvent.VaultRescanFailed, exception);
+            }
         }
 
         // (6) The one sentence. The error COUNT crosses the FFI in full; its
@@ -396,6 +413,9 @@ internal sealed partial class VaultLifecycleViewModel
     /// reporting each page applied only AFTER its effects. The last page's
     /// report marks the generation Applied. On failure or cancellation the
     /// generation keeps its cursor and the next rescan resumes it.
+    /// <paramref name="lastPagePublication"/> (round 30: the tree's
+    /// refresh, for a new scan's generation) starts with the LAST page's
+    /// effects and is awaited with them: its failure fails the page.
     /// </summary>
     /// <remarks>
     /// <para>
@@ -418,7 +438,7 @@ internal sealed partial class VaultLifecycleViewModel
     /// </para>
     /// </remarks>
     private async Task<DeltaReconciliation> ReconcileScanDeltaAsync(
-        int generation, IScanDeltaChannel channel, CancelToken cancel)
+        int generation, IScanDeltaChannel channel, CancelToken cancel, Func<Task>? lastPagePublication = null)
     {
         ScanDeltaPending? pending;
         try
@@ -457,12 +477,16 @@ internal sealed partial class VaultLifecycleViewModel
                     return DeltaReconciliation.Cancelled;
                 }
 
-                // Every row's reload is awaited — published, not merely
-                // scheduled — before the page is reported applied.
+                // Every row's reload and dependent is awaited — published,
+                // not merely scheduled — before the page is reported
+                // applied; the last page's with the tree's (round 30).
                 IDisposable? silence = Workspace?.BeginSilentReconciliation();
                 try
                 {
-                    await ApplyScanDeltaPageAsync(page, capturedEpoch, cancel);
+                    Task effects = ApplyScanDeltaPageAsync(page, capturedEpoch, cancel);
+                    await (page.NextCursor is null && lastPagePublication is not null
+                        ? Task.WhenAll(effects, StartPublication(lastPagePublication))
+                        : effects);
                 }
                 finally
                 {
@@ -501,6 +525,20 @@ internal sealed partial class VaultLifecycleViewModel
         }
 
         return DeltaReconciliation.Cancelled;
+    }
+
+    /// <summary>A publication's start as a Task: a synchronous throw is its
+    /// fault, never an escape that orphans the page's other completions.</summary>
+    private static Task StartPublication(Func<Task> start)
+    {
+        try
+        {
+            return start();
+        }
+        catch (Exception exception) when (exception is not OutOfMemoryException)
+        {
+            return Task.FromException(exception);
+        }
     }
 
     /// <summary>
