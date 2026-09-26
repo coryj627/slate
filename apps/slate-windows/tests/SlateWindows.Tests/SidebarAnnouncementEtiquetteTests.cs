@@ -66,18 +66,30 @@ public sealed class SidebarAnnouncementEtiquetteTests
         await CompleteNext();
         Assert.Equal([2u, 2u, 3u], announcements.OfType<A11yEvent.FileListCount>().Select(e => e.Count));
 
-        // W7-7 (R-3, codex PR 2 round 2): the emptied field is the user's
-        // clear, heard once as core's SidebarFilterCleared — and after the
-        // listener heard the filter end, the same query is news again, so
-        // its count is spoken. (Mac keeps the last key across its silent
-        // clear; Windows speaks the clear, so the de-duplication starts
-        // over.)
+        // W7-7 (R-3; contract 38 D-5, codex PR 2 round 6): the emptied
+        // field is the user's clear, heard once as core's
+        // SidebarFilterCleared, and the clear RETAINS the last key, as Mac
+        // does (its key resets on vault close, not an ordinary clear). The
+        // identical query re-entered on unchanged results is silent — the
+        // status line still shows its count — while a different total
+        // still speaks.
         sidebar.FilterText = string.Empty;
         Assert.IsType<A11yEvent.SidebarFilterCleared>(announcements[^1]);
+        Assert.Equal("Filter cleared.", sidebar.Status);
+        int beforeReentry = announcements.Count;
         sidebar.FilterText = "not";
         await CompleteNext();
-        Assert.Equal([2u, 2u, 3u, 3u], announcements.OfType<A11yEvent.FileListCount>().Select(e => e.Count));
+        Assert.Equal(beforeReentry, announcements.Count);
+        Assert.Equal([2u, 2u, 3u], announcements.OfType<A11yEvent.FileListCount>().Select(e => e.Count));
+        Assert.Contains("3", sidebar.Status, StringComparison.Ordinal);
+        Assert.NotEqual("Filter cleared.", sidebar.Status);
         Assert.Single(announcements.OfType<A11yEvent.SidebarFilterCleared>());
+
+        File.WriteAllText(Path.Combine(fixture.Root, "note-newer.md"), "# Newer\n");
+        using (var cancel = new CancelToken()) { session.ScanInitial(cancel); }
+        sidebar.Refresh();
+        await CompleteNext();
+        Assert.Equal([2u, 2u, 3u, 4u], announcements.OfType<A11yEvent.FileListCount>().Select(e => e.Count));
     }
 
     /// <summary>W7-7 (R-3, codex round 4): a tag scope's count is

@@ -179,8 +179,10 @@ public sealed class SidebarTagFilterTests
     /// the text and scope gone no filter run follows, so the status line
     /// kept the cleared filter's summary and nothing was said. Now the
     /// status shows core's SidebarFilterCleared sentence and that event is
-    /// spoken exactly once — and, the listener having heard the filter
-    /// end, the same scope activated again speaks its count again.
+    /// spoken exactly once. The count's de-duplication key survives the
+    /// clear (contract 38 D-5, codex PR 2 round 6): the same scope
+    /// activated again on unchanged results shows its count and says
+    /// nothing, while another scope still speaks.
     /// </summary>
     [Fact]
     public async Task ClearFilterCommand_ShowsAndSpeaksTheClearOnce()
@@ -188,6 +190,7 @@ public sealed class SidebarTagFilterTests
         using FixtureVault fixture = FixtureVault.Create(0, "tag-scope-clear");
         Write(fixture, "spaced.md", "---\ntags: [\"two words\"]\n---\n\n# Spaced\n");
         Write(fixture, "spaced note.md", "---\ntags: [\"two words\"]\n---\n\n# Second\n");
+        Write(fixture, "sky.md", "---\ntags: [\"blue sky\"]\n---\n\n# Sky\n");
         using VaultSession session = OpenScanned(fixture);
         var announced = new List<A11yEvent>();
         FilesSidebarViewModel sidebar = await NewSidebar(session, fixture, announced.Add);
@@ -205,10 +208,20 @@ public sealed class SidebarTagFilterTests
         Assert.Equal("Filter cleared.", sidebar.Status);
         Assert.Empty(sidebar.FilterResults);
 
+        // The identical re-entry: shown, not spoken.
+        int beforeReentry = announced.Count;
         sidebar.ActivateTag("two words");
         await sidebar.FilterCompletion;
-        AssertSpoke(announced, new A11yEvent.FileListCount(2, "two words"),
-            "File list, 2 items. Filtered by tag two words.");
+        Assert.Equal("2 results for #two words.", sidebar.Status);
+        Assert.Equal(2, sidebar.FilterResults.Count);
+        Assert.Equal(beforeReentry, announced.Count);
+        Assert.Single(announced.OfType<A11yEvent.FileListCount>());
+
+        // Another scope is news.
+        sidebar.ActivateTag("blue sky");
+        await sidebar.FilterCompletion;
+        AssertSpoke(announced, new A11yEvent.FileListCount(1, "blue sky"),
+            "File list, 1 item. Filtered by tag blue sky.");
     }
 
     /// <summary>

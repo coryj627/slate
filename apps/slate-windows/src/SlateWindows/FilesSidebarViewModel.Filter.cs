@@ -142,8 +142,11 @@ internal sealed partial class FilesSidebarViewModel
     /// no filter run follows an empty, unscoped field, so the status line,
     /// which still carried the cleared filter's summary, shows core's
     /// SidebarFilterCleared sentence and that event is announced once. The
-    /// listener heard the filter end, so the next filter, even the same one
-    /// again, is news: the count de-duplication starts over.</summary>
+    /// count de-duplication key is RETAINED across the clear (contract 38
+    /// D-5, matching Mac, whose key resets on vault close — a new sidebar
+    /// here — not on an ordinary clear): the identical query re-entered on
+    /// unchanged results shows its count in the status line and stays
+    /// silent, while a different query, scope or total speaks.</summary>
     private void ShowAndSpeakFilterCleared()
     {
         var cleared = new A11yEvent.SidebarFilterCleared();
@@ -152,7 +155,6 @@ internal sealed partial class FilesSidebarViewModel
         // sentence; one that has already published has nothing to take
         // (codex PR 2 round 2).
         HoldStatusForPendingPublication();
-        _lastFilterAnnouncement = null;
         _announce(cleared);
     }
 
