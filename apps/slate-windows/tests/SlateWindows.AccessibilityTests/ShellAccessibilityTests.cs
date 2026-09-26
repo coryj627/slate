@@ -393,6 +393,12 @@ public sealed partial class ShellAccessibilityTests
                         StringComparison.Ordinal),
                     TimeSpan.FromSeconds(10)),
                 $"Embed preview did not finish loading: {interactionPopover.Name}");
+            // #1278: the landed preview's UIA name is core's sentence for
+            // what the embed resolved to (the EmbedPreviewShown rendering),
+            // not a host composition.
+            Assert.Equal(
+                "Embed preview for Folder/child. Embedded note: Folder/child.md.",
+                interactionPopover.Name);
             Assert.True(interactionPopover.Properties.IsDialog.Value);
             AutomationElement popoverClose = WaitForElement(
                 window,
