@@ -65,6 +65,51 @@ public sealed class FilesRegionLandingTests
         host.AssertTreeNeverFocused();
     });
 
+    /// <summary>Codex round 4: a selected file beneath a COLLAPSED folder has
+    /// no row to land on. The ring's Files landing must not change what is
+    /// selected or open anything on the way — F6 is navigation, not a
+    /// selection — and the keys still land in the Files region.</summary>
+    [Fact]
+    public void AHiddenSelectedFileKeepsItsSelectionAndOpensNothing() => RunSta(() =>
+    {
+        using var host = new Host();
+        host.Initialize(nested: true);
+        FileTreeNodeViewModel folder = Assert.Single(host.Sidebar.RootNodes, node => node.IsDirectory);
+        folder.IsExpanded = true;
+        Assert.True(
+            PumpedDispatcher.PumpUntil(() => folder.Children.Any(child => child is { IsPlaceholder: false, IsDirectory: false })),
+            "premise: the folder's note never loaded.");
+        FileTreeNodeViewModel inner = folder.Children.Single(child => child is { IsPlaceholder: false, IsDirectory: false });
+        host.Pane.UpdateLayout();
+        folder.IsExpanded = false;
+        host.Pane.UpdateLayout();
+        // Selected while its folder is collapsed — the sidebar's own route
+        // when a filter result is chosen and the filter then cleared. (A
+        // collapse through the tree moves WPF's selection to the folder, so
+        // the collapse comes first.)
+        inner.IsSelected = true;
+        host.Sidebar.SelectedNode = inner;
+        host.Pane.UpdateLayout();
+        PumpedDispatcher.Drain();
+        Assert.True(host.Above.Focus());
+        Assert.Same(inner, host.Sidebar.SelectedNode);
+        Assert.False(folder.IsExpanded);
+        var opened = new List<string>();
+        host.Sidebar.OpenTargetRequested += (_, request) => opened.Add(request.Path);
+        host.Announced.Clear();
+
+        Assert.True(host.Shell.LandOnFilesTree());
+        host.Pane.UpdateLayout();
+        PumpedDispatcher.Drain();
+
+        Assert.Same(inner, host.Sidebar.SelectedNode);
+        Assert.False(folder.IsSelected, "the landing selected the collapsed folder.");
+        Assert.Empty(opened);
+        Assert.Empty(host.Announced);
+        Assert.True(host.Pane.IsKeyboardFocusWithin, $"the keys left the Files region, to {Keyboard.FocusedElement}");
+        Assert.Same(host.Tree, Keyboard.FocusedElement);
+    });
+
     /// <summary>With the filter active the tree is replaced by the results
     /// and no row of it can take the keys: the region's stable stop, the
     /// filter field, does.</summary>
@@ -178,16 +223,26 @@ public sealed class FilesRegionLandingTests
 
         public Button Above { get; private set; } = null!;
 
-        public void Initialize()
+        public List<A11yEvent> Announced { get; } = [];
+
+        /// <param name="nested">Adds a folder holding one note, so a selected
+        /// file can sit beneath a collapsed row.</param>
+        public void Initialize(bool nested = false)
         {
             Assert.Null(Application.Current);
+            if (nested)
+            {
+                Directory.CreateDirectory(Path.Combine(_fixture.Root, "folder"));
+                File.WriteAllText(Path.Combine(_fixture.Root, "folder", "inner.md"), "# Inner\n");
+            }
+
             _session = VaultSession.OpenFilesystem(_fixture.Root);
             using (var cancel = new CancelToken())
             {
                 _session.ScanInitial(cancel);
             }
 
-            Sidebar = new FilesSidebarViewModel(_session, _ => { }, localAppDataRoot: _fixture.Root);
+            Sidebar = new FilesSidebarViewModel(_session, Announced.Add, localAppDataRoot: _fixture.Root);
             PumpedDispatcher.PumpUntilDrained(Sidebar.TreeRefreshCompletion);
             Assert.True(Sidebar.RootNodes.Count >= 3, "premise: the vault's notes are the tree's rows.");
 
