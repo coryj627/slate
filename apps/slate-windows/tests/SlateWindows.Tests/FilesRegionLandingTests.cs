@@ -48,6 +48,31 @@ public sealed class FilesRegionLandingTests
         Assert.Empty(opened);
     });
 
+    /// <summary>Codex round 4: an overlay's restore token captured on the
+    /// bare Files tree (nothing selected) lands back on the tree through the
+    /// one landing for element-typed targets — the Files region's own —
+    /// never on its first row, whose focus would select and open a note.
+    /// The search journey parks its token exactly there.</summary>
+    [Fact]
+    public void ARestoreTokenOnTheBareFilesTreeLandsOnTheTreeAndOpensNothing() => RunSta(() =>
+    {
+        using var host = new Host();
+        host.Initialize();
+        var opened = new List<string>();
+        host.Sidebar.OpenTargetRequested += (_, request) => opened.Add(request.Path);
+        Assert.True(host.Tree.Focus());
+        IInputElement token = Keyboard.FocusedElement;
+        Assert.Same(host.Tree, token);
+        Assert.True(host.Above.Focus());
+
+        Assert.True(host.Shell.TryFocus(token));
+
+        Assert.Same(host.Tree, Keyboard.FocusedElement);
+        Assert.Null(host.Sidebar.SelectedNode);
+        Assert.DoesNotContain(host.Sidebar.RootNodes, node => node.IsSelected);
+        Assert.Empty(opened);
+    });
+
     [Fact]
     public void TheSelectedFilesRowTakesTheKeys() => RunSta(() =>
     {

@@ -1,6 +1,7 @@
 // Copyright (C) 2026 Cory Joseph
 // SPDX-License-Identifier: AGPL-3.0-or-later
 
+using System.Runtime.CompilerServices;
 using System.Windows;
 using System.Windows.Controls;
 using System.Windows.Controls.Primitives;
@@ -67,6 +68,10 @@ internal static class SelectorFocus
     [ThreadStatic]
     private static int _newestRequest;
 
+    /// <summary>The containers whose region owns their landing
+    /// (<see cref="SetOwnLanding"/>).</summary>
+    private static readonly ConditionalWeakTable<UIElement, Func<bool>> OwnLandings = new();
+
     private enum Landing
     {
         Landed,
@@ -127,6 +132,17 @@ internal static class SelectorFocus
             DispatcherPriority.Background);
     }
 
+    /// <summary>
+    /// Give <paramref name="container"/> its region's own landing, which
+    /// <see cref="LandOnStop"/> then takes wherever the container is the
+    /// target — a focus restore's token included. The Files tree is the
+    /// one: with no file selected its landing is the bare tree, a proven
+    /// contained stop, never its first row, whose focus would select and
+    /// OPEN a note (<c>MainWindow.LandOnFilesTree</c>).
+    /// </summary>
+    internal static void SetOwnLanding(UIElement container, Func<bool> land) =>
+        OwnLandings.AddOrUpdate(container, land);
+
     /// <summary>Whether focusing <paramref name="element"/> itself would
     /// land on a bare list. A combo box is its own stop — its items live in
     /// its drop-down — and a grid's stop is a cell, which the grid seats
@@ -138,11 +154,13 @@ internal static class SelectorFocus
     /// The ONE landing for a target typed only as an element — a leaf's
     /// first stop (the region ring's right-pane content landing, a leaf
     /// reveal's) and every focus RESTORE, whose token was captured as an
-    /// <c>IInputElement</c>: a list lands on its row, a tree on its row, a
-    /// grid on a cell through its <see cref="AccessibleDataGrid"/> (the one
-    /// implementation of cell focus, W4-5 D-12), and anything else on
-    /// itself. A grid no AccessibleDataGrid owns is not landed on: nothing
-    /// keeps its arrows, so the caller's own stable stop takes the keys.
+    /// <c>IInputElement</c>: a container whose region owns its landing
+    /// lands through it (<see cref="SetOwnLanding"/>), a list on its row, a
+    /// tree on its row, a grid on a cell through its
+    /// <see cref="AccessibleDataGrid"/> (the one implementation of cell
+    /// focus, W4-5 D-12), and anything else on itself. A grid no
+    /// AccessibleDataGrid owns is not landed on: nothing keeps its arrows,
+    /// so the caller's own stable stop takes the keys.
     /// </summary>
     /// <remarks>
     /// Codex round 4: a restore token captured while a list was EMPTY —
@@ -156,13 +174,15 @@ internal static class SelectorFocus
     /// an element-typed target in the shell to this.
     /// </remarks>
     /// <returns>Whether the keys landed on the target or inside it.</returns>
-    internal static bool LandOnStop(UIElement stop) => stop switch
-    {
-        Selector list when IsListLanding(list) => FocusFirstOrSelectedItem(list),
-        TreeView tree => FocusSelectedOrFirstRow(tree),
-        DataGrid grid => AccessibleDataGrid.Owning(grid) is { } owner && owner.FocusCurrentOrFirstCell(),
-        _ => stop.Focus() || stop.IsKeyboardFocusWithin,
-    };
+    internal static bool LandOnStop(UIElement stop) => OwnLandings.TryGetValue(stop, out Func<bool>? own)
+        ? own()
+        : stop switch
+        {
+            Selector list when IsListLanding(list) => FocusFirstOrSelectedItem(list),
+            TreeView tree => FocusSelectedOrFirstRow(tree),
+            DataGrid grid => AccessibleDataGrid.Owning(grid) is { } owner && owner.FocusCurrentOrFirstCell(),
+            _ => stop.Focus() || stop.IsKeyboardFocusWithin,
+        };
 
     /// <summary>
     /// W7-7 PR 4 (#1247, contract R-5; spec review round 23): a TREE's

@@ -28,6 +28,10 @@ public partial class MainWindow : Window
     public MainWindow()
     {
         InitializeComponent();
+        // R-5 (#1247; codex round 4): a restore whose token is the Files
+        // tree lands as the region does — its selected row, else the bare
+        // tree — never on a first row, whose focus would open its note.
+        SelectorFocus.SetOwnLanding(FilesTree, LandOnFilesTree);
         _windowPlacement = new WindowPlacementManager(this);
         _announcer = new AccessibilityNotificationDispatcher(StatusTextBlock);
         CommandBindings.Add(new CommandBinding(ApplicationCommands.Close, (_, _) => Close()));
