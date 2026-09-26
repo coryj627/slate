@@ -28,6 +28,7 @@ public sealed partial class ShellAccessibilityTests
     /// opened (a menu's popup window used to unlock WPF's gate, record F1).
     /// </summary>
     /// <remarks>
+    /// <para>
     /// The run is made to exercise the launch queue, not left to chance. A
     /// launch whose first line already finds the process advised raises at
     /// once and cannot show the drain, so it is closed and Slate relaunched,
@@ -38,8 +39,19 @@ public sealed partial class ShellAccessibilityTests
     /// in the evidence artifact (<c>announcements-launch.json</c>) with each
     /// launch attempt and the listener states, sources and drain the app
     /// logged.
+    /// </para>
+    /// <para>
+    /// A manual-trait journey (contract 40 AR-1): it was not 6/6 stable on
+    /// the final build — its one miss was its own precondition, all thirty
+    /// launches advised at their first line on a busy desktop — so the shell
+    /// gate's evidence for R-1 is the hosted launch-queue facts and
+    /// <c>AnnouncementSeamCensus</c>, and this journey runs when
+    /// <c>SLATE_MANUAL_JOURNEYS=1</c>. Its counts are recorded with the W7-2
+    /// notification etiquette checklist.
+    /// </para>
     /// </remarks>
-    [Fact]
+    [ManualJourneyFact]
+    [Trait("gate", "manual")]
     public void Announcements_ReachADesktopScopedListenerFromLaunch()
     {
         // Core's own sentences, rendered through the binding before launch:
@@ -164,6 +176,23 @@ public sealed partial class ShellAccessibilityTests
             }
 
             try { Directory.Delete(testRoot, recursive: true); } catch (IOException) { }
+        }
+    }
+
+    /// <summary>
+    /// A journey outside the shell gate: skipped, with this reason, unless
+    /// <c>SLATE_MANUAL_JOURNEYS=1</c> — so a harness flake is never a gate
+    /// failure, and a skipped run is never counted as evidence.
+    /// </summary>
+    [AttributeUsage(AttributeTargets.Method)]
+    private sealed class ManualJourneyFactAttribute : FactAttribute
+    {
+        public ManualJourneyFactAttribute()
+        {
+            if (!string.Equals(Environment.GetEnvironmentVariable("SLATE_MANUAL_JOURNEYS"), "1", StringComparison.Ordinal))
+            {
+                Skip = "A manual-trait journey (W7-7 AR-1): set SLATE_MANUAL_JOURNEYS=1 to run it.";
+            }
         }
     }
 
