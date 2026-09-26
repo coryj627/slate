@@ -1736,16 +1736,40 @@ fn the_core_scan_report_stays_bounded_under_thousands_of_failures() {
     for n in 0..FAILING {
         std::fs::write(tmp.path().join(format!("big-{n:04}.md")), [b'y'; 65]).unwrap();
     }
+    // The full stream the scan logs, read through the test seam: the
+    // report bounds what crosses to the host, never what is logged.
+    crate::session::SCAN_ERROR_STREAM.with(|stream| *stream.borrow_mut() = Some(Vec::new()));
     let rescanned = rescan(&session);
+    let streamed = crate::session::SCAN_ERROR_STREAM
+        .with(|stream| stream.borrow_mut().take())
+        .unwrap();
     assert_eq!(rescanned.error_count, FAILING as u64);
     assert_eq!(rescanned.error_samples.len(), crate::SCAN_ERROR_SAMPLES);
     assert!(!rescanned.complete);
-    assert!(
-        rescanned
-            .error_samples
-            .iter()
-            .all(|error| error.contains("exceeds large-file refuse threshold")),
-        "{:?}",
-        rescanned.error_samples
+
+    // Every error reached the log — one per refused file, each naming its
+    // own file — and the samples are the stream's first five, verbatim.
+    assert_eq!(streamed.len(), FAILING, "the log missed errors");
+    let named: std::collections::BTreeSet<usize> = streamed
+        .iter()
+        .map(|error| {
+            assert!(
+                error.contains("exceeds large-file refuse threshold"),
+                "{error}"
+            );
+            (0..FAILING)
+                .find(|n| error.contains(&format!("big-{n:04}.md")))
+                .unwrap_or_else(|| panic!("an error names no refused file: {error}"))
+        })
+        .collect();
+    assert_eq!(
+        named.len(),
+        FAILING,
+        "some refused file never reached the log"
+    );
+    assert_eq!(
+        rescanned.error_samples,
+        streamed[..crate::SCAN_ERROR_SAMPLES].to_vec(),
+        "the samples are not the first errors streamed"
     );
 }
