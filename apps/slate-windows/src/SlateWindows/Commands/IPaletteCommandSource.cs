@@ -78,7 +78,13 @@ internal interface IPaletteCommandSource
     /// Persistence failure is non-fatal: the in-memory list still moves,
     /// so the open palette stays consistent with what the user just did.
     /// </summary>
-    void RecordInvocation(string commandId);
+    /// <returns>
+    /// Whether the transition was PERSISTED. <see langword="false"/> is the
+    /// store's ordinary IO or access failure — the entry would vanish on
+    /// restart — and the palette logs it rather than letting it pass
+    /// silently (#1275). A throw is reserved for the unexpected.
+    /// </returns>
+    bool RecordInvocation(string commandId);
 
     /// <summary>
     /// Whether a vault is open. The palette refuses to open without one

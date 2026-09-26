@@ -95,11 +95,13 @@ internal sealed class PaletteCommandSource : IPaletteCommandSource, IDisposable
     }
 
     /// <inheritdoc />
-    public void RecordInvocation(string commandId)
+    public bool RecordInvocation(string commandId)
     {
         // The in-memory list moves even when the write fails, so the open
-        // palette stays consistent with what the user just did.
-        _recents = _recentsStore.Add(LoadRecents(), commandId);
+        // palette stays consistent with what the user just did; the caller
+        // hears whether it reached the disk.
+        _recents = _recentsStore.Add(LoadRecents(), commandId, out bool persisted);
+        return persisted;
     }
 
     /// <inheritdoc />

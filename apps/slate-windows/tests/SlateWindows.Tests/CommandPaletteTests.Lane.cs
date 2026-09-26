@@ -3,6 +3,7 @@
 
 using System.Collections.Concurrent;
 using System.Windows.Threading;
+using SlateWindows.Commands;
 using uniffi.slate_uniffi;
 
 namespace SlateWindows.Tests;
@@ -137,41 +138,185 @@ public sealed partial class CommandPaletteTests
     });
 
     /// <summary>
-    /// Enter while a newer query's rows are on their way runs the selection
-    /// those rows bring, once they land — never the previous keystroke's
-    /// row. Moving the selection meanwhile withdraws it.
+    /// #1275 codex round 2, finding 1 (P7): Enter acts on the list on
+    /// screen. With "New Note" published and a newer query still ranking,
+    /// Enter runs New Note at once — never the Quick Open row the pending
+    /// query would bring — and that rank's rows, landing later, run nothing.
+    /// A move made while a rank is pending moves over the rows on screen,
+    /// and Enter runs THAT row.
     /// </summary>
     [Fact]
-    public void EnterWhileARankIsPendingRunsTheRowsItWasTypedFor() => RunSta(() =>
+    public void EnterRunsTheSelectionOnScreenWhileANewerRankIsPending() => RunSta(() =>
     {
         LaneHost host = LaneHost.Opened();
         CommandPaletteViewModel palette = host.Palette;
+        Assert.Equal("slate.file.newNote", palette.SelectedId);
 
         host.Ranker.Park("q");
         palette.Query = "q";
         host.Ranker.WaitUntilEntered("q");
+        Assert.True(palette.IsRankPending);
         palette.InvokeSelected();
-        Assert.Empty(host.Harness.Source.Invoked);
-        Assert.True(palette.IsOpen);
+        Assert.Equal(["slate.file.newNote"], host.Harness.Source.Invoked);
+        Assert.False(palette.IsOpen);
 
         host.Ranker.Release("q");
-        Assert.True(
-            PumpedDispatcher.PumpUntil(() => !palette.IsOpen, TimeSpan.FromSeconds(10)),
-            "Enter never ran once the rows landed");
-        Assert.Equal(["slate.nav.quickOpen"], host.Harness.Source.Invoked);
+        PumpedDispatcher.PumpUntilDrained(palette.RankCompletion);
+        PumpedDispatcher.Drain();
+        Assert.Equal(["slate.file.newNote"], host.Harness.Source.Invoked);
+        Assert.False(palette.IsOpen);
 
-        // Withdrawn: the user moved after pressing Enter.
         palette.Open();
         host.PumpUntilPublished();
         host.Ranker.Park("o");
         palette.Query = "o";
         host.Ranker.WaitUntilEntered("o");
+        palette.SelectLast();
+        Assert.Equal("slate.tasks.review", palette.SelectedId);
         palette.InvokeSelected();
-        palette.MoveSelection(1);
+        Assert.Equal(["slate.file.newNote", "slate.tasks.review"], host.Harness.Source.Invoked);
+
         host.Ranker.Release("o");
-        host.PumpUntilPublished();
+        PumpedDispatcher.PumpUntilDrained(palette.RankCompletion);
+        PumpedDispatcher.Drain();
+        Assert.Equal(["slate.file.newNote", "slate.tasks.review"], host.Harness.Source.Invoked);
+    });
+
+    /// <summary>
+    /// #1275 codex round 2, finding 1: with nothing published — the open's
+    /// snapshot still loading — there is no selection, and Enter does
+    /// nothing, then or later: the first rows landing run nothing and say
+    /// nothing beyond what P7 and P10 say for an open (the first selection
+    /// is silent).
+    /// </summary>
+    [Fact]
+    public void EnterBeforeAnythingIsPublishedRunsNothing() => RunSta(() =>
+    {
+        LaneHost host = LaneHost.Create();
+        CommandPaletteViewModel palette = host.Palette;
+        CommandLoadGate gate = host.ParkTheCommandLoad();
+
+        palette.Open();
+        gate.WaitUntilEntered();
+        Assert.Null(palette.SelectedRow);
+        palette.InvokeSelected();
+        Assert.Empty(host.Harness.Source.Invoked);
         Assert.True(palette.IsOpen);
-        Assert.Equal(["slate.nav.quickOpen"], host.Harness.Source.Invoked);
+
+        gate.Release();
+        host.PumpUntilPublished();
+        Assert.Empty(host.Harness.Source.Invoked);
+        Assert.True(palette.IsOpen);
+        Assert.Equal("slate.file.newNote", palette.SelectedId);
+        Assert.Empty(host.Harness.Announcements);
+    });
+
+    /// <summary>
+    /// #1275 codex round 2, finding 1: a rank that fails resolves — the
+    /// palette is no longer pending — with the list, the selection and the
+    /// copy left as last published, nothing said for the failed query, the
+    /// failure logged, and the keys still working on the rows on screen.
+    /// </summary>
+    [Fact]
+    public void AFailedRankResolvesAndTheKeysStillWorkTheRowsOnScreen() => RunSta(() =>
+    {
+        LaneHost host = LaneHost.Opened();
+        CommandPaletteViewModel palette = host.Palette;
+        palette.SelectLast();
+        host.Harness.Announcements.Clear();
+        CommandPaletteRowViewModel[] before = [.. palette.Rows];
+
+        host.Ranker.Fail("x", new InvalidOperationException("ranking refused"));
+        palette.Query = "x";
+        Assert.True(
+            PumpedDispatcher.PumpUntil(() => !palette.IsRankPending, TimeSpan.FromSeconds(10)),
+            "a failed rank left the palette pending forever");
+        PumpedDispatcher.PumpUntilDrained(palette.RankCompletion);
+        PumpedDispatcher.PumpUntilDrained(palette.FilterCountCompletion);
+        PumpedDispatcher.Drain();
+
+        Assert.Equal(before, palette.Rows);
+        Assert.Equal("slate.tasks.review", palette.SelectedId);
+        Assert.Empty(host.Harness.Announcements);
+        Assert.Contains(HostDiagnosticEvent.PaletteWorkFailed, host.Harness.Diagnostics);
+
+        palette.MoveSelection(-1);
+        Assert.Equal("slate.editor.bold", palette.SelectedId);
+        palette.InvokeSelected();
+        Assert.Equal(["slate.editor.bold"], host.Harness.Source.Invoked);
+        Assert.False(palette.IsOpen);
+    });
+
+    /// <summary>
+    /// #1275 codex round 2, finding 3 (P10): the count's trailing window
+    /// opens at the KEYSTROKE. Here it runs out while the rank is still
+    /// parked: nothing is said until the rows publish, and then the
+    /// selection and the count arrive once each, the count at publication.
+    /// </summary>
+    [Fact]
+    public void TheCountWindowOpensAtTheKeystrokeAndARankSlowerThanItSpeaksAtPublication() => RunSta(() =>
+    {
+        LaneHost host = LaneHost.Opened();
+        CommandPaletteViewModel palette = host.Palette;
+        List<TaskCompletionSource> windows = host.HoldTheCountWindows();
+        host.Harness.Announcements.Clear();
+
+        host.Ranker.Park("q");
+        palette.Query = "q";
+        host.Ranker.WaitUntilEntered("q");
+        TaskCompletionSource window = Assert.Single(windows);
+
+        window.SetResult();
+        PumpedDispatcher.Drain();
+        Assert.Empty(host.Harness.Announcements);
+
+        host.Ranker.Release("q");
+        host.PumpUntilPublished();
+        Assert.Single(windows);
+        Assert.Collection(
+            host.Harness.Announcements,
+            announced => Assert.Equal(
+                "Quick Open",
+                Assert.IsType<A11yEvent.PaletteCommandSelected>(announced).Label),
+            announced => Assert.Equal(
+                (1u, "q"),
+                (Assert.IsType<A11yEvent.PaletteFilterCount>(announced).Count,
+                    ((A11yEvent.PaletteFilterCount)announced).Query)));
+    });
+
+    /// <summary>
+    /// The other ordering: the rows publish while the keystroke's window is
+    /// still open — the selection speaks at publication, the count only when
+    /// the window runs out, once.
+    /// </summary>
+    [Fact]
+    public void ARankFasterThanTheCountWindowSpeaksTheCountWhenTheWindowRunsOut() => RunSta(() =>
+    {
+        LaneHost host = LaneHost.Opened();
+        CommandPaletteViewModel palette = host.Palette;
+        List<TaskCompletionSource> windows = host.HoldTheCountWindows();
+        host.Harness.Announcements.Clear();
+
+        palette.Query = "q";
+        Assert.True(
+            PumpedDispatcher.PumpUntil(() => !palette.IsRankPending, TimeSpan.FromSeconds(10)),
+            "the rank never published");
+        PumpedDispatcher.Drain();
+        Assert.Equal(["Quick Open"], host.SelectionAnnouncements);
+        Assert.Empty(host.Harness.Announcements.OfType<A11yEvent.PaletteFilterCount>());
+
+        Assert.Single(windows).SetResult();
+        PumpedDispatcher.PumpUntilDrained(palette.FilterCountCompletion);
+        PumpedDispatcher.Drain();
+        Assert.Collection(
+            host.Harness.Announcements,
+            announced => Assert.Equal(
+                "Quick Open",
+                Assert.IsType<A11yEvent.PaletteCommandSelected>(announced).Label),
+            announced => Assert.Equal(
+                (1u, "q"),
+                (Assert.IsType<A11yEvent.PaletteFilterCount>(announced).Count,
+                    ((A11yEvent.PaletteFilterCount)announced).Query)));
     });
 
     /// <summary>
@@ -226,12 +371,140 @@ public sealed partial class CommandPaletteTests
     {
         LaneHost host = LaneHost.Opened();
         host.Palette.InvokeSelected();
-        Assert.True(
-            PumpedDispatcher.PumpUntil(() => !host.Palette.IsOpen, TimeSpan.FromSeconds(10)),
-            "the palette never dismissed after the invocation");
+        Assert.False(host.Palette.IsOpen);
+        PumpedDispatcher.PumpUntilDrained(host.Palette.RecordCompletion);
         Assert.NotNull(host.Harness.Source.RecordThread);
         Assert.NotEqual(host.Owner, host.Harness.Source.RecordThread);
     });
+
+    /// <summary>
+    /// #1275 codex round 2, finding 2 (P9 step 4 across the lane): a
+    /// successful invocation hands its recents transition to the lane and
+    /// then retires the palette in the SAME dispatcher turn — it does not
+    /// wait for the write. The write's place on the lane is what P9's
+    /// "record, then dismiss" governs: with it parked, the next open's
+    /// snapshot waits behind it, so the recent exists before anything reads
+    /// recents again. A write that throws or does not persist is logged.
+    /// </summary>
+    [Fact]
+    public void ASuccessfulInvocationRetiresThePaletteAtOnceAndItsRecordLeadsTheNextOpen() => RunSta(() =>
+    {
+        LaneHost host = LaneHost.Opened();
+        CommandPaletteViewModel palette = host.Palette;
+        using var gate = new ManualResetEventSlim(false);
+        host.Harness.Source.RecordGate = gate;
+        host.Harness.Source.LaneOrder.Clear();
+        lock (host.Harness.Log)
+        {
+            host.Harness.Log.Clear();
+        }
+
+        palette.InvokeSelected();
+        Assert.Equal(["slate.file.newNote"], host.Harness.Source.Invoked);
+        Assert.False(palette.IsOpen, "the palette stayed up over the command it ran");
+        Assert.True(
+            SpinWait.SpinUntil(
+                () => host.Harness.Source.RecordThread is not null,
+                TimeSpan.FromSeconds(10)),
+            "the recents write never started");
+        Assert.False(palette.RecordCompletion.IsCompleted);
+
+        palette.Open();
+        PumpedDispatcher.Drain();
+        Assert.True(palette.IsRankPending);
+        Assert.Empty(palette.Rows);
+        Assert.Empty(host.Harness.Source.LaneOrder);
+
+        gate.Set();
+        host.PumpUntilPublished();
+        Assert.True(palette.RecordCompletion.IsCompletedSuccessfully);
+        Assert.Equal(
+            ["record:slate.file.newNote", "list", "recents"],
+            host.Harness.Source.LaneOrder.ToArray());
+        string[] order;
+        lock (host.Harness.Log)
+        {
+            order =
+            [
+                .. host.Harness.Log.Where(entry =>
+                    entry.StartsWith("invoke:", StringComparison.Ordinal)
+                    || entry.StartsWith("record:", StringComparison.Ordinal)
+                    || entry == "dismiss"),
+            ];
+        }
+
+        Assert.Equal(
+            ["invoke:slate.file.newNote", "dismiss", "record:slate.file.newNote"],
+            order);
+        Assert.Empty(host.Harness.Diagnostics);
+
+        // A write that throws, and one that returns without persisting, are
+        // each logged on the lane; the palette had already retired.
+        host.Harness.Source.RecordGate = null;
+        host.Harness.Source.RecordFailure = new IOException("recents write refused");
+        palette.InvokeSelected();
+        Assert.False(palette.IsOpen);
+        PumpedDispatcher.PumpUntilDrained(palette.RecordCompletion);
+        Assert.Equal([HostDiagnosticEvent.PaletteWorkFailed], host.Harness.Diagnostics.ToArray());
+
+        host.Harness.Source.RecordFailure = null;
+        host.Harness.Source.RecordPersisted = false;
+        palette.Open();
+        host.PumpUntilPublished();
+        palette.InvokeSelected();
+        Assert.False(palette.IsOpen);
+        PumpedDispatcher.PumpUntilDrained(palette.RecordCompletion);
+        Assert.Equal(
+            [HostDiagnosticEvent.PaletteWorkFailed, HostDiagnosticEvent.PaletteWorkFailed],
+            host.Harness.Diagnostics.ToArray());
+    });
+
+    /// <summary>
+    /// #1275 codex round 2, finding 4: the recents store's ORDINARY failure
+    /// — an IO error <c>TrySave</c> catches, so <c>RecordInvocation</c>
+    /// returns normally — is logged, through the real
+    /// <see cref="PaletteCommandSource"/> and the real
+    /// <see cref="CommandPaletteRecentsStore"/>. The invocation still
+    /// completes and the in-memory list still moves (P11).
+    /// </summary>
+    [Fact]
+    public void AnUnpersistedRecentsWriteIsLoggedThroughTheRealStore()
+    {
+        string root = Path.Combine(Path.GetTempPath(), "slate-1275-" + Guid.NewGuid().ToString("N"));
+        Directory.CreateDirectory(root);
+        try
+        {
+            // A FILE where the store's directory belongs: CreateDirectory
+            // throws IOException, which TrySave catches and reports as false.
+            string blocker = Path.Combine(root, "blocker");
+            File.WriteAllText(blocker, "not a directory");
+            var store = new CommandPaletteRecentsStore(Path.Combine(blocker, "command-palette-recents.json"));
+            var host = new CommandRegistrationTests.FakeCommandHost { IsVaultOpen = true };
+            using var source = new PaletteCommandSource(host, Dispatcher.CurrentDispatcher, store);
+            var diagnostics = new ConcurrentQueue<HostDiagnosticEvent>();
+            var palette = new CommandPaletteViewModel(
+                source,
+                _ => { },
+                _ => Task.CompletedTask,
+                new InlineWorkLane(),
+                rank: null,
+                diagnostics: (diagnostic, _) => diagnostics.Enqueue(diagnostic));
+
+            palette.Open();
+            palette.Invoke(Assert.Single(palette.Rows, row => row.Id == ChordTable.Ids.VaultOpen));
+
+            Assert.Equal(1, host.OpenVaultInvocations);
+            Assert.False(palette.IsOpen);
+            Assert.True(palette.RecordCompletion.IsCompletedSuccessfully);
+            Assert.IsAssignableFrom<IOException>(source.LastRecentsSaveError);
+            Assert.Equal([HostDiagnosticEvent.PaletteWorkFailed], diagnostics.ToArray());
+            Assert.Equal([ChordTable.Ids.VaultOpen], source.LoadRecents());
+        }
+        finally
+        {
+            Directory.Delete(root, recursive: true);
+        }
+    }
 
     /// <summary>
     /// The lane runs work in hand-over order, off the calling thread; a
@@ -282,104 +555,13 @@ public sealed partial class CommandPaletteTests
     }
 
     /// <summary>
-    /// An Enter pressed while query A was ranking belongs to A: a later query
-    /// B withdraws it, so when A is discarded and B publishes, nothing runs
-    /// and the palette stays open on B's rows. (The positive case — A lands
-    /// and runs its selection — is <c>EnterWhileARankIsPendingRunsTheRowsItWasTypedFor</c>.)
-    /// </summary>
-    [Fact]
-    public void AnEnterPressedForASupersededQueryRunsNothing() => RunSta(() =>
-    {
-        LaneHost host = LaneHost.Opened();
-        CommandPaletteViewModel palette = host.Palette;
-
-        host.Ranker.Park("q");
-        palette.Query = "q";
-        host.Ranker.WaitUntilEntered("q");
-        palette.InvokeSelected();
-        host.Ranker.Park("o");
-        palette.Query = "o";
-
-        host.Ranker.Release("q");
-        host.Ranker.WaitUntilEntered("o");
-        PumpedDispatcher.Drain();
-        Assert.Empty(host.Harness.Source.Invoked);
-
-        host.Ranker.Release("o");
-        host.PumpUntilPublished();
-        Assert.Empty(host.Harness.Source.Invoked);
-        Assert.True(palette.IsOpen);
-        Assert.Equal(
-            ["slate.file.newNote", "slate.nav.quickOpen", "slate.editor.bold"],
-            host.Harness.RowIds);
-    });
-
-    /// <summary>
-    /// Contract P9 step 4 on the palette's own lane: the recents write lands
-    /// first and the palette dismisses after it — while the write is parked
-    /// the palette stays up and a second Enter runs nothing — and a write
-    /// that fails still dismisses.
-    /// </summary>
-    [Fact]
-    public void ARecordLandsBeforeThePaletteDismisses() => RunSta(() =>
-    {
-        LaneHost host = LaneHost.Opened();
-        CommandPaletteViewModel palette = host.Palette;
-        using var gate = new ManualResetEventSlim(false);
-        host.Harness.Source.RecordGate = gate;
-        lock (host.Harness.Log)
-        {
-            host.Harness.Log.Clear();
-        }
-
-        palette.InvokeSelected();
-        Assert.Equal(["slate.file.newNote"], host.Harness.Source.Invoked);
-        Assert.True(
-            SpinWait.SpinUntil(
-                () => host.Harness.Source.RecordThread is not null,
-                TimeSpan.FromSeconds(10)),
-            "the recents write never started");
-        PumpedDispatcher.Drain();
-        Assert.True(palette.IsOpen, "the palette dismissed before its recents write landed");
-        palette.InvokeSelected();
-        Assert.Single(host.Harness.Source.Invoked);
-
-        gate.Set();
-        Assert.True(
-            PumpedDispatcher.PumpUntil(() => !palette.IsOpen, TimeSpan.FromSeconds(10)),
-            "the palette never dismissed after its recents write");
-        string[] order;
-        lock (host.Harness.Log)
-        {
-            order =
-            [
-                .. host.Harness.Log.Where(entry =>
-                    entry.StartsWith("invoke:", StringComparison.Ordinal)
-                    || entry.StartsWith("record:", StringComparison.Ordinal)
-                    || entry == "dismiss"),
-            ];
-        }
-
-        Assert.Equal(
-            ["invoke:slate.file.newNote", "record:slate.file.newNote", "dismiss"],
-            order);
-
-        // A failed write is logged on the lane and still dismisses.
-        host.Harness.Source.RecordGate = null;
-        host.Harness.Source.RecordFailure = new IOException("recents write refused");
-        palette.Open();
-        host.PumpUntilPublished();
-        palette.InvokeSelected();
-        Assert.True(
-            PumpedDispatcher.PumpUntil(() => !palette.IsOpen, TimeSpan.FromSeconds(10)),
-            "a failed recents write left the palette open");
-    });
-
-    /// <summary>
     /// Teardown with work parked on the lane: the palette shuts down, the
     /// command source is disposed only once the lane is quiet, and nothing
     /// that finishes afterwards publishes, announces or re-opens the palette
-    /// — first with the open's command load parked, then with a rank parked.
+    /// — with the open's command load parked, with a rank parked, and with a
+    /// successful invocation's recents write parked (the recent exists
+    /// before the source goes). Each parked item is released only once
+    /// teardown is waiting on the lane — a handshake, not a delay.
     /// </summary>
     [Fact]
     public void TeardownWaitsForTheLaneAndNothingLandsAfterIt() => RunSta(() =>
@@ -389,8 +571,9 @@ public sealed partial class CommandPaletteTests
         loading.Palette.Open();
         gate.WaitUntilEntered();
         var loadProbe = new DisposalProbe(() => loading.Harness.Source.ListCommandsReturned);
-        ReleaseSoon(gate.Event);
+        Task<bool> loadRelease = ReleaseOnceTeardownWaits(loading.Lane, gate.Event);
         VaultLifecycleViewModel.ShutDownPalette(loading.Palette, loadProbe);
+        AssertReleasedByTheHandshake(loadRelease);
         Assert.True(loadProbe.Disposed);
         Assert.True(
             loadProbe.LaneWasQuietAtDisposal,
@@ -403,12 +586,33 @@ public sealed partial class CommandPaletteTests
         ranking.Ranker.WaitUntilEntered("o");
         ranking.Harness.Announcements.Clear();
         var rankProbe = new DisposalProbe(() => ranking.Ranker.HasReturned("o"));
-        ReleaseSoon(ranking.Ranker.GateOf("o"));
+        Task<bool> rankRelease = ReleaseOnceTeardownWaits(ranking.Lane, ranking.Ranker.GateOf("o"));
         VaultLifecycleViewModel.ShutDownPalette(ranking.Palette, rankProbe);
+        AssertReleasedByTheHandshake(rankRelease);
         Assert.True(
             rankProbe.LaneWasQuietAtDisposal,
             "the source was disposed while a rank still ran");
         ranking.AssertNothingLandsAfterTeardown();
+
+        LaneHost recording = LaneHost.Opened();
+        using var recordGate = new ManualResetEventSlim(false);
+        recording.Harness.Source.RecordGate = recordGate;
+        recording.Palette.InvokeSelected();
+        Assert.False(recording.Palette.IsOpen);
+        Assert.True(
+            SpinWait.SpinUntil(
+                () => recording.Harness.Source.RecordThread is not null,
+                TimeSpan.FromSeconds(10)),
+            "the recents write never started");
+        recording.Harness.Announcements.Clear();
+        var recordProbe = new DisposalProbe(() => recording.Harness.Source.LaneOrder.Contains("record:slate.file.newNote"));
+        Task<bool> recordRelease = ReleaseOnceTeardownWaits(recording.Lane, recordGate);
+        VaultLifecycleViewModel.ShutDownPalette(recording.Palette, recordProbe);
+        AssertReleasedByTheHandshake(recordRelease);
+        Assert.True(
+            recordProbe.LaneWasQuietAtDisposal,
+            "the source was disposed before the recents write landed");
+        recording.AssertNothingLandsAfterTeardown();
     });
 
     /// <summary>The shell's teardown runs the palette's: disposing the
@@ -431,14 +635,23 @@ public sealed partial class CommandPaletteTests
 
     // --- helpers -------------------------------------------------------------
 
-    /// <summary>Releases a parked lane item shortly after the calling thread
-    /// has started its teardown, from a thread that is not blocked by it.</summary>
-    private static void ReleaseSoon(ManualResetEventSlim gate) =>
-        _ = Task.Run(async () =>
+    /// <summary>
+    /// Releases a parked lane item once teardown is WAITING on the lane —
+    /// signalled by the lane itself when the palette asks it for idleness —
+    /// from a thread that teardown does not block. The timeout only bounds a
+    /// failure (teardown that never waits); it orders nothing.
+    /// </summary>
+    private static Task<bool> ReleaseOnceTeardownWaits(SignallingLane lane, ManualResetEventSlim gate) =>
+        Task.Run(() =>
         {
-            await Task.Delay(TimeSpan.FromMilliseconds(300));
+            bool waited = lane.WhenIdleAsked.Wait(TimeSpan.FromSeconds(30));
             gate.Set();
+            return waited;
         });
+
+    private static void AssertReleasedByTheHandshake(Task<bool> release) => Assert.True(
+        release.Wait(TimeSpan.FromSeconds(30)) && release.Result,
+        "teardown never asked the lane to go quiet");
 
     /// <summary>A command source stand-in that records whether the lane had
     /// gone quiet when it was disposed.</summary>
@@ -455,6 +668,28 @@ public sealed partial class CommandPaletteTests
         }
     }
 
+    /// <summary>The palette's production lane, reporting when someone asks
+    /// it for idleness — the teardown facts' handshake.</summary>
+    private sealed class SignallingLane : ICommandPaletteWorkLane
+    {
+        private readonly CommandPaletteWorkLane _inner = new();
+
+        /// <summary>Set once <see cref="WhenIdle"/> has captured everything
+        /// handed over so far — after that, releasing parked work cannot
+        /// race the capture.</summary>
+        public ManualResetEventSlim WhenIdleAsked { get; } = new(false);
+
+        public Task<T> Run<T>(Func<T> work, CancellationToken cancellationToken) =>
+            _inner.Run(work, cancellationToken);
+
+        public Task WhenIdle()
+        {
+            Task idle = _inner.WhenIdle();
+            WhenIdleAsked.Set();
+            return idle;
+        }
+    }
+
     /// <summary>
     /// The palette over the fake source with its production lane, owned by
     /// the dispatcher thread the fact runs on, ranked by a
@@ -466,16 +701,20 @@ public sealed partial class CommandPaletteTests
         {
             Owner = Environment.CurrentManagedThreadId;
             Ranker = new ParkedRanker(Owner);
+            Lane = new SignallingLane();
             Harness = new PaletteHarness(
                 SynchronizationContext.Current,
                 StandardCommands(),
                 productionLane: true,
-                rank: Ranker.Rank);
+                rank: Ranker.Rank,
+                lane: Lane);
         }
 
         public int Owner { get; }
 
         public ParkedRanker Ranker { get; }
+
+        public SignallingLane Lane { get; }
 
         public PaletteHarness Harness { get; }
 
@@ -513,6 +752,22 @@ public sealed partial class CommandPaletteTests
                 "the rank never published");
             PumpedDispatcher.PumpUntilDrained(Palette.FilterCountCompletion);
             PumpedDispatcher.Drain();
+        }
+
+        /// <summary>From here on every keystroke's count window is held
+        /// open until the fact completes it; the list is in keystroke
+        /// order. A cancelled window reports cancelled.</summary>
+        public List<TaskCompletionSource> HoldTheCountWindows()
+        {
+            var windows = new List<TaskCompletionSource>();
+            Harness.Window = token =>
+            {
+                var window = new TaskCompletionSource();
+                token.Register(() => window.TrySetCanceled(token));
+                windows.Add(window);
+                return window.Task;
+            };
+            return windows;
         }
 
         /// <summary>Pumps what the lane left behind, then asserts the palette
@@ -562,6 +817,7 @@ public sealed partial class CommandPaletteTests
         private readonly ConcurrentDictionary<string, ManualResetEventSlim> _entered = new();
         private readonly ConcurrentDictionary<string, int> _threads = new();
         private readonly ConcurrentDictionary<string, bool> _returned = new();
+        private readonly ConcurrentDictionary<string, Exception> _failures = new();
 
         /// <summary>Every query actually ranked, in order.</summary>
         public ConcurrentQueue<string> Ranked { get; } = new();
@@ -569,6 +825,11 @@ public sealed partial class CommandPaletteTests
         public void Park(string query) => _gates[query] = new ManualResetEventSlim(false);
 
         public void Release(string query) => _gates[query].Set();
+
+        /// <summary>Ranking <paramref name="query"/> throws
+        /// <paramref name="failure"/> — core's ranking is pure, so this is
+        /// the unexpected failure the palette must still resolve.</summary>
+        public void Fail(string query, Exception failure) => _failures[query] = failure;
 
         public ManualResetEventSlim GateOf(string query) => _gates[query];
 
@@ -592,6 +853,11 @@ public sealed partial class CommandPaletteTests
                 && _gates.TryGetValue(query, out ManualResetEventSlim? gate))
             {
                 Assert.True(gate.Wait(TimeSpan.FromSeconds(30)), $"\"{query}\" was never released");
+            }
+
+            if (_failures.TryGetValue(query, out Exception? failure))
+            {
+                throw failure;
             }
 
             PaletteSection[] ranked = SlateUniffiMethods.PaletteSections(commands, query, recents, pinned);

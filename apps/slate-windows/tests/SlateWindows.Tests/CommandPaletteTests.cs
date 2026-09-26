@@ -1,6 +1,7 @@
 // Copyright (C) 2026 Cory Joseph
 // SPDX-License-Identifier: AGPL-3.0-or-later
 
+using System.Collections.Concurrent;
 using System.Diagnostics;
 using System.Reflection;
 using Microsoft.CodeAnalysis.CSharp.Syntax;
@@ -1057,7 +1058,8 @@ public sealed partial class CommandPaletteTests
             SynchronizationContext? context,
             Command[] commands,
             bool productionLane = false,
-            Func<Command[], string, string[], string[], PaletteSection[]>? rank = null)
+            Func<Command[], string, string[], string[], PaletteSection[]>? rank = null,
+            ICommandPaletteWorkLane? lane = null)
         {
             Source = new FakePaletteCommandSource(Log);
             Source.Commands.AddRange(commands);
@@ -1069,8 +1071,9 @@ public sealed partial class CommandPaletteTests
                     Source,
                     Record,
                     token => Window(token),
-                    productionLane ? null : new InlineWorkLane(),
-                    rank);
+                    lane ?? (productionLane ? null : new InlineWorkLane()),
+                    rank,
+                    (diagnostic, _) => Diagnostics.Enqueue(diagnostic));
             }
             finally
             {
@@ -1082,6 +1085,9 @@ public sealed partial class CommandPaletteTests
 
         /// <summary>The filter-count window: elapsed at once unless a fact holds it.</summary>
         public Func<CancellationToken, Task> Window { get; set; } = _ => Task.CompletedTask;
+
+        /// <summary>Every diagnostic the palette reported, from any thread.</summary>
+        public ConcurrentQueue<HostDiagnosticEvent> Diagnostics { get; } = new();
 
         public FakePaletteCommandSource Source { get; }
 
@@ -1200,8 +1206,17 @@ public sealed partial class CommandPaletteTests
         /// <summary>Holds a successful invocation's recents write.</summary>
         public ManualResetEventSlim? RecordGate { get; set; }
 
+        /// <summary>The lane-side calls in the order they RETURNED —
+        /// "list", "recents", "record:{id}" — for the facts that pin the
+        /// lane's order across an invocation and the next open.</summary>
+        public ConcurrentQueue<string> LaneOrder { get; } = new();
+
         /// <summary>When set, the recents write throws after the gate.</summary>
         public Exception? RecordFailure { get; set; }
+
+        /// <summary>What the recents write reports — false is the store's
+        /// ordinary unpersisted outcome.</summary>
+        public bool RecordPersisted { get; set; } = true;
 
         public Command[] ListCommands()
         {
@@ -1211,12 +1226,14 @@ public sealed partial class CommandPaletteTests
                 "the parked command load was never released");
             ListCommandsCalls++;
             ListCommandsReturned = true;
+            LaneOrder.Enqueue("list");
             return [.. Commands];
         }
 
         public string[] LoadRecents()
         {
             LoadRecentsCalls++;
+            LaneOrder.Enqueue("recents");
             lock (Recents)
             {
                 return [.. Recents];
@@ -1250,7 +1267,7 @@ public sealed partial class CommandPaletteTests
             }
         }
 
-        public void RecordInvocation(string commandId)
+        public bool RecordInvocation(string commandId)
         {
             RecordThread = Environment.CurrentManagedThreadId;
             Assert.True(
@@ -1270,6 +1287,9 @@ public sealed partial class CommandPaletteTests
             {
                 Recorded.Add(commandId);
             }
+
+            LaneOrder.Enqueue("record:" + commandId);
+            return RecordPersisted;
         }
     }
 }
