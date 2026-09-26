@@ -433,13 +433,16 @@ internal sealed class CanvasSurfaceView : UserControl, ICanvasSurfacePresenter
     /// <summary>
     /// R-12 (#1255): the seat in view after a navigator move. The board
     /// pans to contain the card — its cards take no focus, so this is the
-    /// board's whole answer (D4: a selection made on this surface always
-    /// scrolls into view); the outline and the table focused the row,
-    /// which already scrolled it into view.
+    /// board's whole answer — under D4's origin rule (follow-up #1271): a
+    /// move made on the board always comes into view, one made elsewhere
+    /// only while the board follows the selection
+    /// (<see cref="CanvasRendererView.RevealsMoveFrom"/>). The outline
+    /// and the table focused the row, which already scrolled it into
+    /// view.
     /// </summary>
-    public void RevealSeat(string nodeId)
+    public void RevealSeat(string nodeId, CanvasMoveOrigin origin)
     {
-        if (Projection == CanvasSurfaceKind.Visual)
+        if (Projection == CanvasSurfaceKind.Visual && _visual.RevealsMoveFrom(origin))
         {
             _visual.RevealNode(nodeId);
         }

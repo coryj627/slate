@@ -102,6 +102,14 @@ internal sealed class CanvasViewportState
     internal CanvasViewportState WithFollowSelection(bool follow) =>
         new(Zoom, PanX, PanY, ViewWidth, ViewHeight, follow);
 
+    /// <summary>Whether a selection move made from
+    /// <paramref name="origin"/> brings the seat into view — D4's pan
+    /// rule in one place (R-12 follow-up #1271): a move made on the board
+    /// always does; one made elsewhere (the palette's and the menus'
+    /// verbs) only while <see cref="FollowSelection"/> is on.</summary>
+    internal bool RevealsMoveFrom(CanvasMoveOrigin origin) =>
+        origin == CanvasMoveOrigin.OnSurface || FollowSelection;
+
     /// <summary>The widest drift the geometry comparison forgives.
     /// Exact double equality broke ID-2 (codoki on this PR): a
     /// ceiling-clamped zoom recomputes the pan through
