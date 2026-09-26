@@ -200,6 +200,46 @@ public sealed class SiblingNamesTests
         });
     });
 
+    /// <summary>UIA names an item no container holds — a closed combo's
+    /// selection, a row a virtualized list has not realized — through a
+    /// throwaway wrapper container that sits in no panel, and it reuses that
+    /// wrapper for the next such item. The wrapper must read its item's name
+    /// under the rule (never the item's ToString, which the Bases and Graph
+    /// inspector journeys heard as a record dump), and read again for every
+    /// item it is handed.</summary>
+    [Fact]
+    public void AnUnrealizedItemIsNamedThroughTheRuleToo() => RunSta(() =>
+    {
+        var host = new ComboBox { ItemContainerStyle = SiblingNames.ContainerStyle(typeof(ComboBoxItem)) };
+        SiblingNames.SetNamePath(host, "Name");
+        SiblingNames.SetNoun(host, "view");
+        host.ItemsSource = new[] { Row("Open tasks", null), Row("Open tasks", null), Row("Archive", null) };
+        host.SelectedIndex = 1;
+        Hosted(host, () =>
+        {
+            host.UpdateLayout();
+            PumpedDispatcher.Drain();
+            // Never opened: no item has a container of its own.
+            Assert.Null(host.ItemContainerGenerator.ContainerFromIndex(1));
+            AutomationPeer peer = UIElementAutomationPeer.CreatePeerForElement(host);
+            // The peer UIA hands out for the selection (SelectorAutomationPeer
+            // makes it the same way): an item peer with no container behind it.
+            System.Reflection.MethodInfo create = typeof(ItemsControlAutomationPeer).GetMethod(
+                "CreateItemAutomationPeer",
+                System.Reflection.BindingFlags.Instance | System.Reflection.BindingFlags.NonPublic)!;
+            string SelectedName() =>
+                ((ItemAutomationPeer)create.Invoke(peer, [host.SelectedItem])!).GetName();
+
+            Assert.Equal("Open tasks, view 2", SelectedName());
+            host.SelectedIndex = 2;
+            PumpedDispatcher.Drain();
+            Assert.Equal("Archive", SelectedName());
+            host.SelectedIndex = 0;
+            PumpedDispatcher.Drain();
+            Assert.Equal("Open tasks, view 1", SelectedName());
+        });
+    });
+
     /// <summary>A tree scopes per level: each tree item names its own
     /// children among themselves.</summary>
     [Fact]
