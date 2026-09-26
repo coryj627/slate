@@ -298,17 +298,9 @@ internal sealed class QuickSwitcherViewModel : BindableBase, IDisposable
     /// <summary>The paths Quick Open ranks over — for the rescan facts.</summary>
     internal IReadOnlyList<string> FilePathsForTests => [.. _files.Select(file => file.Path)];
 
-    /// <summary>Core's openable-document extensions (W7-7 PR 7, round 26:
-    /// <c>openable_document_extensions</c>, pinned equal by a fact), the
-    /// classification a Slate-owned event's path gets here. A rescan's
-    /// delta rows carry core's own classification instead.</summary>
-    internal static readonly System.Collections.Frozen.FrozenSet<string> OpenableExtensions =
-        System.Collections.Frozen.FrozenSet.ToFrozenSet(
-            ["md", "markdown", "mdown", "mkd", "canvas", "base"],
-            StringComparer.OrdinalIgnoreCase);
-
-    private static bool IsOpenablePath(string path) =>
-        OpenableExtensions.Contains(System.IO.Path.GetExtension(path).TrimStart('.'));
+    /// <summary>A Slate-owned event's path, classified as core does (W7-7
+    /// PR 7, round 26). A rescan's delta rows carry core's own flag.</summary>
+    private static bool IsOpenablePath(string path) => CoreDocumentClassification.IsOpenable(path);
 
     public void Dispose() => CancelRanking();
 

@@ -748,6 +748,20 @@ internal sealed class EditorInteractionCoordinator : BindableBase, IDisposable
     /// Dispatcher-thread read, like every other math-range accessor.</summary>
     internal bool MathRangesCurrentForTests =>
         _tab.EditorSession is { } session && _mathRangesRevision == session.Revision;
+    /// <summary>W7-7 PR 7 (round 28): whether the published link and task
+    /// cache still claims to describe the saved note — false once an
+    /// external-state invalidation dropped it.</summary>
+    internal bool ArtifactCacheSourceCurrentForTests
+    {
+        get
+        {
+            lock (_artifactCacheGate)
+            {
+                return _artifactCacheSourceCurrent;
+            }
+        }
+    }
+
     internal long ArtifactCacheLoadCountForTests =>
         Interlocked.Read(ref _artifactCacheLoadCountForTests);
     internal long CitationCacheLoadCountForTests =>

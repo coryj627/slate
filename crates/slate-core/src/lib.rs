@@ -179,8 +179,8 @@ pub use session::{
     VersionSummary,
 };
 pub use session::{
-    OPENABLE_DOCUMENT_EXTENSIONS, SCAN_ERROR_SAMPLES, SkippedFile, TagCount, TagEditReport,
-    is_openable_document,
+    MARKDOWN_DOCUMENT_EXTENSIONS, OPENABLE_DOCUMENT_EXTENSIONS, SCAN_ERROR_SAMPLES, SkippedFile,
+    TagCount, TagEditReport, is_openable_document,
 };
 pub use sidebar_filter::{
     FilterParseError, SidebarFilterDateWindow, SidebarFilterNamedWindow, SidebarFilterQueryTerm,

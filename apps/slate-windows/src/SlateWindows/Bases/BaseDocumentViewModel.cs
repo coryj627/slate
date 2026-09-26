@@ -729,6 +729,46 @@ internal sealed class BaseDocumentViewModel : PanelWorkScheduler
     /// view. The full-reload shape: close, open, views, execute — the
     /// mac `load` twin. Never announces by itself (INV-4); the
     /// explicit-refresh caller announces BaseRefreshed.</summary>
+    /// <summary>
+    /// W7-7 PR 7 (#1252, round 28): <see cref="Load"/> — reopen the
+    /// source and re-run the active view on the document's worker — as a
+    /// Task that completes when the result publishes on the dispatcher
+    /// and faults when it publishes a failure. A shut-down document
+    /// completes at once. A rescan awaits it before it reports the page
+    /// applied.
+    /// </summary>
+    internal Task LoadAsync()
+    {
+        if (IsShutDown)
+        {
+            return Task.CompletedTask;
+        }
+
+        var published = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
+        void OnPublished(object? sender, EventArgs eventArgs)
+        {
+            if (State == BaseLoadState.Loading)
+            {
+                return;
+            }
+
+            ResultPublished -= OnPublished;
+            if (State == BaseLoadState.Failed)
+            {
+                published.TrySetException(new InvalidOperationException(
+                    StateMessage ?? "The base reload failed."));
+            }
+            else
+            {
+                published.TrySetResult();
+            }
+        }
+
+        ResultPublished += OnPublished;
+        Load();
+        return published.Task;
+    }
+
     public void Load()
     {
         if (IsShutDown)

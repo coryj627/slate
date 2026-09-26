@@ -764,59 +764,11 @@ internal sealed partial class VaultLifecycleViewModel
             // a rescan's page read before it must not undo that.
             NoteSlateOwnedWrite(@event);
 
-            if (@event.Kind == FileChangeKind.Renamed
-                && @event.PreviousPath is string previousPath)
-            {
-                Workspace?.RetargetPath(previousPath, @event.Path);
-            }
-            else if (@event.Kind == FileChangeKind.Deleted)
-            {
-                Workspace?.InvalidatePath(@event.Path);
-            }
-            else if (@event.Kind == FileChangeKind.Modified)
-            {
-                Workspace?.InvalidateModifiedPath(@event.Path);
-            }
-            // #1077 (contract I6): a Created or Renamed publication may be
-            // a missing tab's file coming back under ANOTHER spelling
-            // (`Ghost.md` → `ghost.md` on NTFS); re-seat those tabs once,
-            // here, rather than re-litigating identity per comparison.
-            if (@event.Kind is FileChangeKind.Created or FileChangeKind.Renamed)
-            {
-                Workspace?.ReseatMissingTabs();
-            }
-
-            Workspace?.InvalidateAllInteractionStates();
-            // Reading embed cards depend on OTHER files (W3-5): the
-            // change stream reaches every open reading model, which
-            // applies its own reverse-dependency filter. A rename
-            // notifies both sides of the move.
-            Workspace?.NotifyReadingOfVaultChange(@event.Kind, @event.Path);
-            if (@event.Kind == FileChangeKind.Renamed
-                && @event.PreviousPath is string renamedFrom)
-            {
-                Workspace?.NotifyReadingOfVaultChange(@event.Kind, renamedFrom);
-            }
-            // Bases surfaces re-execute on vault changes too (contract
-            // C9's vault-event arm — property panel, task toggles,
-            // editor saves, and external edits all land here).
-            Workspace?.NotifyBasesOfVaultChange(@event.Path);
-            // W6-2 PR A (contract A-3): the graph's generation probe, while
-            // a graph tab is visible.
-            Workspace?.NotifyGraphOfVaultChange();
-            // W4-7 (HR-2's vault-event arm): a Modified on the active
-            // path appended a version row the save funnel never saw
-            // (Bases grid edits, sync, external editors).
-            if (@event.Kind == FileChangeKind.Modified)
-            {
-                Workspace?.NotifyHistoryOfVaultChange(@event.Path);
-            }
-            if (@event.Kind == FileChangeKind.Renamed
-                && @event.PreviousPath is string basesRenamedFrom)
-            {
-                Workspace?.NotifyBasesOfVaultChange(basesRenamedFrom);
-            }
-            QuickSwitcher?.ApplyFileChange(@event);
+            // W7-7 PR 7 (round 28): the one routine a rescan page also
+            // goes through. A Slate-owned batch has nothing to await.
+            _ = ApplyFileChangeEffectsAsync(
+                [(@event, CoreDocumentClassification.IsOpenable(@event.Path))],
+                FileChangeOrigin.SlateOwned);
             int ticket = Interlocked.Increment(ref _sidebarRefreshTicket);
             _ = Task.Delay(150).ContinueWith(
                 _ => _enqueueUi(() =>

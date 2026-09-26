@@ -6339,6 +6339,17 @@ pub fn openable_document_extensions() -> Vec<String> {
         .collect()
 }
 
+/// The Markdown extensions core's index marks `is_markdown` (W7-7 PR 7,
+/// round 27), lowercase and without the dot. A host's own Markdown
+/// classification (the Bases dependents) is pinned equal to it.
+#[uniffi::export]
+pub fn markdown_document_extensions() -> Vec<String> {
+    core::MARKDOWN_DOCUMENT_EXTENSIONS
+        .iter()
+        .map(|extension| (*extension).to_string())
+        .collect()
+}
+
 /// What one delta entry did to its path (W7-7 PR 7, R-9). No `Renamed`:
 /// an external rename is a removal plus a creation (AR-8).
 #[derive(Debug, Clone, Copy, PartialEq, Eq, uniffi::Enum)]
@@ -13319,6 +13330,10 @@ mod tests {
         assert_eq!(
             openable_document_extensions(),
             ["md", "markdown", "mdown", "mkd", "canvas", "base"]
+        );
+        assert_eq!(
+            markdown_document_extensions(),
+            ["md", "markdown", "mdown", "mkd"]
         );
         let tmp = tempfile::tempdir().expect("tempdir");
         let session = VaultSession::open_filesystem(tmp.path().to_string_lossy().into_owned())

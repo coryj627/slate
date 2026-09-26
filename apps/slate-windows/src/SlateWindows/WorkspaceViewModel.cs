@@ -1305,6 +1305,24 @@ internal sealed partial class WorkspaceTabViewModel : BindableBase, IDisposable
         }
     }
 
+    // W7-7 PR 7 (round 28): text a worker read for an in-place reload.
+    private string? _preloadedText;
+
+    /// <summary>W7-7 PR 7 (round 28): the in-place replace, from text a
+    /// worker already read — the rescan's clean-tab reload.</summary>
+    internal void ReplaceItemWithReadText(WorkspaceItemState item, string text)
+    {
+        _preloadedText = text;
+        try
+        {
+            ReplaceItem(item);
+        }
+        finally
+        {
+            _preloadedText = null;
+        }
+    }
+
     private void Load()
     {
         LoadFailure = null;
@@ -1315,7 +1333,9 @@ internal sealed partial class WorkspaceTabViewModel : BindableBase, IDisposable
 
         try
         {
-            _text = _session.ReadText(Path);
+            // W7-7 PR 7 (round 28): a rescan's reload hands in text its
+            // worker already read, so no core read runs on the dispatcher.
+            _text = _preloadedText ?? _session.ReadText(Path);
             _contentHash = SlateUniffiMethods.EditorTextContentHash(_text);
             _isDirty = false;
         }
