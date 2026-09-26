@@ -49,6 +49,7 @@ internal enum HostDiagnosticEvent
     GraphTopologyFetchFailed,
     MonitorEnumerationFailed,
     PaletteQueryChangeTimed,
+    PaletteWorkFailed,
     QuickOpenRankingFailed,
     RecentVaultJumpListUpdateFailed,
     RecentVaultsPayloadRejected,
