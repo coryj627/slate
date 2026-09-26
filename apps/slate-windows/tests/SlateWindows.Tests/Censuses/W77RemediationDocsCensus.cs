@@ -151,6 +151,9 @@ public sealed partial class W77RemediationDocsCensus
     [InlineData("**R-1 — Title (PR 1, #1244).** Body.\nContinued ownership: PR [9](https://example.test/pull/9).")]
     [InlineData("**R-1 — Title (PR 1, #1244).** Body.\nContinued ownership: PR *9*.")]
     [InlineData("**R-1 — Title (PR 1, #1244).** Body.\nShared with PRs 9 and 10.")]
+    [InlineData("**R-1 — Title (PR 1, #1244; shared with PR 9).** Body.")]
+    [InlineData("**R-1 — Title (PR 1, #1244; shared with PR [9](https://example.test/pull/9)).** Body.")]
+    [InlineData("**R-1 — Title (PR 1, #1244; shared with PRs 9 and 10).** Body.")]
     [InlineData("**R-1 — Title (PR 1, #1244).** Body.\nAlso #1244.")]
     [InlineData("**R-1 — Title (PR 1, #1244).** Body.\nnaming #9999.")]
     [InlineData("**R-1 — Title (PR 1, #1244).** Body.\n#9999 is named too.")]
@@ -221,6 +224,7 @@ public sealed partial class W77RemediationDocsCensus
     [Theory]
     [InlineData("**R-6 — Title (PR 5, #1248).** Body citing #1118.")]
     [InlineData("**R-6 — Title (PR 5, #1248).** Body citing nothing.")]
+    [InlineData("**R-12 — Title (PR 10, #1255, #1256; amends contract 34 D15 and lifts G2D-12).** Body.")]
     public void AContractLineCitingOnlyItsAllowedCrossReferenceIsClean(string line)
     {
         Match heading = ContractHeading().Match(line);
@@ -242,6 +246,7 @@ public sealed partial class W77RemediationDocsCensus
     [InlineData("**R-1 — Title (PR 1).** Body.")]
     [InlineData("**R-1 — Title (PR 1 nonsense).** Body.")]
     [InlineData("**R-1 — Title **bold** (PR 1, #1244).** Body.")]
+    [InlineData("**R-1 — Title (PR 1, #1244; shared with PR *9*).** Body.")]
     public void TheStrictParseRefusesAMalformedContractHeading(string line)
     {
         Assert.Single(LooseContractHeading().Matches(line));
@@ -300,11 +305,16 @@ public sealed partial class W77RemediationDocsCensus
     /// </summary>
     private static string? ContractParagraphDefect(string paragraph, Match heading)
     {
-        // Everything but the owner clause itself: no `PR n` token, and no
-        // standalone `PR` / `PRs` word either, since `PR [9](…)` or `PR *9*`
-        // names a PR without forming a token (codex round 27).
+        // Everything but the canonical owner marker — the `PR n, #…` span
+        // inside the clause — so the clause's own suffix is checked like the
+        // body (codex round 28: `(PR 1, #1244; shared with PR 9)` strict-parses).
+        // No standalone `PR` / `PRs` word may remain, since `PR [9](…)` or
+        // `PR *9*` names a PR without forming a token (codex round 27).
         Group clause = heading.Groups["clause"];
-        string outside = string.Concat(paragraph.AsSpan(0, clause.Index), paragraph.AsSpan(clause.Index + clause.Length));
+        Group issueList = heading.Groups[3];
+        int markerStart = clause.Index + 1;
+        int markerEnd = issueList.Index + issueList.Length;
+        string outside = string.Concat(paragraph.AsSpan(0, markerStart), paragraph.AsSpan(markerEnd));
         if (PrMarker().Match(outside) is { Success: true } marker)
         {
             return $"names a PR outside its owner clause (`{marker.Value}`)";
