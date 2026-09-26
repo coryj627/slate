@@ -243,7 +243,7 @@ fn scan_initial_indexes_markdown_and_non_markdown() {
     let cancel = CancelToken::new();
     let report = session.scan_initial(&cancel).unwrap();
     assert_eq!(report.files_indexed, 4);
-    assert_eq!(report.errors.len(), 0);
+    assert_eq!(report.error_count as usize, 0);
     assert!(report.bytes_processed > 0);
 }
 
@@ -299,22 +299,25 @@ fn scan_batch_reports_meta_fallback_failure_before_later_derivative_error() {
         .unwrap();
     }
 
+    // W7-7 PR 7 (round 27): the report keeps only the first few errors
+    // verbatim; the full stream it logs is read through the test seam.
+    crate::session::SCAN_ERROR_STREAM.with(|stream| *stream.borrow_mut() = Some(Vec::new()));
     let report = session.scan_initial(&CancelToken::new()).unwrap();
+    let streamed = crate::session::SCAN_ERROR_STREAM
+        .with(|stream| stream.borrow_mut().take())
+        .unwrap();
+    assert_eq!(report.error_count, streamed.len() as u64);
     assert!(
-        report
-            .errors
+        streamed
             .iter()
             .any(|error| error.contains("note-000.md") && error.contains("meta fallback sentinel")),
-        "metadata fallback path error must survive a later derivative error: {:?}",
-        report.errors
+        "metadata fallback path error must survive a later derivative error: {streamed:?}"
     );
     assert!(
-        report
-            .errors
+        streamed
             .iter()
             .any(|error| error.contains("later tag sentinel")),
-        "fixture must exercise a later fallible derivative: {:?}",
-        report.errors
+        "fixture must exercise a later fallible derivative: {streamed:?}"
     );
 }
 
@@ -341,11 +344,11 @@ fn scan_meta_failure_invalidates_stale_row_and_next_scan_heals() {
     let failed = session.scan_initial(&CancelToken::new()).unwrap();
     assert!(
         failed
-            .errors
+            .error_samples
             .iter()
             .any(|error| error.contains("note.md") && error.contains("transient meta sentinel")),
         "fixture must exercise the rowwise metadata failure: {:?}",
-        failed.errors
+        failed.error_samples
     );
     {
         let conn = session.conn.lock().unwrap();
@@ -371,7 +374,7 @@ fn scan_meta_failure_invalidates_stale_row_and_next_scan_heals() {
     let recovered = session.scan_initial(&CancelToken::new()).unwrap();
     assert_eq!(recovered.files_indexed, 1);
     assert_eq!(recovered.files_skipped, 0);
-    assert!(recovered.errors.is_empty(), "{:?}", recovered.errors);
+    assert!(recovered.error_count == 0, "{:?}", recovered.error_samples);
 
     let conn = session.conn.lock().unwrap();
     let healed: (i64, i64, String) = conn
@@ -416,11 +419,11 @@ fn scan_meta_invalidation_failure_preserves_old_tuple_for_retry() {
     let failed = session.scan_initial(&CancelToken::new()).unwrap();
     assert!(
         failed
-            .errors
+            .error_samples
             .iter()
             .any(|error| { error.contains("note.md") && error.contains("invalidation sentinel") }),
         "fixture must exercise metadata invalidation failure: {:?}",
-        failed.errors
+        failed.error_samples
     );
     {
         let conn = session.conn.lock().unwrap();
@@ -439,7 +442,7 @@ fn scan_meta_invalidation_failure_preserves_old_tuple_for_retry() {
     let recovered = session.scan_initial(&CancelToken::new()).unwrap();
     assert_eq!(recovered.files_indexed, 1);
     assert_eq!(recovered.files_skipped, 0);
-    assert!(recovered.errors.is_empty(), "{:?}", recovered.errors);
+    assert!(recovered.error_count == 0, "{:?}", recovered.error_samples);
 
     let conn = session.conn.lock().unwrap();
     let healed: (i64, i64, String) = conn
@@ -1071,9 +1074,9 @@ fn scan_census_checkpoint(
         .scan_initial(&CancelToken::new())
         .unwrap_or_else(|error| panic!("{repro}\nincremental scan failed: {error}"));
     assert!(
-        report.errors.is_empty(),
+        report.error_count == 0,
         "{repro}\nincremental scan errors: {:?}",
-        report.errors
+        report.error_samples
     );
     let incremental_snapshot = scanner_census_index_snapshot(incremental, &repro);
 
@@ -1088,9 +1091,9 @@ fn scan_census_checkpoint(
         .scan_initial(&CancelToken::new())
         .unwrap_or_else(|error| panic!("{repro}\nfresh scan failed: {error}"));
     assert!(
-        fresh_report.errors.is_empty(),
+        fresh_report.error_count == 0,
         "{repro}\nfresh scan errors: {:?}",
-        fresh_report.errors
+        fresh_report.error_samples
     );
     let fresh_snapshot = scanner_census_index_snapshot(&fresh, &repro);
 
@@ -1668,9 +1671,9 @@ fn file_vanishing_between_list_and_stat_is_pruned_same_scan() {
     let session = VaultSession::open(flaky, SessionConfig::new(tmp.path().join(".slate"))).unwrap();
     let report = session.scan_initial(&CancelToken::new()).unwrap();
     assert!(
-        report.errors.iter().any(|e| e.contains("ghost.md")),
+        report.error_samples.iter().any(|e| e.contains("ghost.md")),
         "the vanish is reported: {:?}",
-        report.errors
+        report.error_samples
     );
     assert!(
         session.get_file_metadata("ghost.md").unwrap().is_none(),
@@ -1701,9 +1704,9 @@ fn file_erroring_for_other_reasons_keeps_its_row() {
     let session = VaultSession::open(flaky, SessionConfig::new(tmp.path().join(".slate"))).unwrap();
     let report = session.scan_initial(&CancelToken::new()).unwrap();
     assert!(
-        report.errors.iter().any(|e| e.contains("locked.md")),
+        report.error_samples.iter().any(|e| e.contains("locked.md")),
         "the error is reported: {:?}",
-        report.errors
+        report.error_samples
     );
     assert!(
         session.get_file_metadata("locked.md").unwrap().is_some(),
@@ -1742,9 +1745,9 @@ fn incomplete_walk_never_prunes_file_rows() {
     let session = VaultSession::open(failing, config).unwrap();
     let report = session.scan_initial(&CancelToken::new()).unwrap();
     assert!(
-        report.errors.iter().any(|e| e.contains("list_dir")),
+        report.error_samples.iter().any(|e| e.contains("list_dir")),
         "the failed listing is reported: {:?}",
-        report.errors
+        report.error_samples
     );
     assert!(
         session
@@ -2297,11 +2300,11 @@ fn scan_skips_body_indexing_for_files_past_refuse_threshold() {
     assert_eq!(report.files_indexed, 1);
     assert!(
         report
-            .errors
+            .error_samples
             .iter()
             .any(|e| e.contains("exceeds large-file refuse threshold")),
-        "expected refuse error in report.errors, got {:?}",
-        report.errors
+        "expected refuse error in report.error_samples, got {:?}",
+        report.error_samples
     );
     // Body should be empty in the DB → FTS matches against a
     // distinct token must come back empty.
@@ -2394,11 +2397,11 @@ fn file_growing_past_refuse_threshold_purges_derivatives() {
     let report = session.scan_initial(&CancelToken::new()).unwrap();
     assert!(
         report
-            .errors
+            .error_samples
             .iter()
             .any(|e| e.contains("exceeds large-file refuse threshold")),
-        "expected refuse error in report.errors, got {:?}",
-        report.errors
+        "expected refuse error in report.error_samples, got {:?}",
+        report.error_samples
     );
 
     // The file row should still exist (sidebar visibility) ...

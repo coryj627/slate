@@ -375,13 +375,17 @@ States (LeafSection/LeafEmptyState discipline):
 Vault summary from `ScanReport` (session.rs:402-414) + `list_files` totals.
 
 `data`: `{ "files_seen": u64, "files_indexed": u64, "files_skipped": u64, "bytes_processed": u64,
-"markdown_files": u64, "scan_errors": [String], "cache": "warm"|"cold" }`
+"markdown_files": u64, "scan_errors": [String], "scan_error_count": u64, "cache": "warm"|"cold" }`
+(W7-7 PR 7, #1252: `ScanReport` keeps the exact error count and at most five sample messages —
+locked decision 05's memory-bounded rule — so `scan_errors` lists those samples and
+`scan_error_count` counts every error; each one is logged in full as the scan meets it.)
 (`markdown_files` = `list_files(MarkdownOnly, first(1)).total_filtered`; **normative rule:**
 `cache` = "cold" iff `.slate/cache.sqlite` did not exist before this run (the session helper
 checks before opening), else "warm" — the empty-vault and no-changes cases both read truthfully).
 Human: `Vault: <path>` / `Files: N (M markdown)` / `Indexed: fresh|reused cache` / one line per
-scan error. tsv: two columns, `field<TAB>value`, one row per scalar field; `scan_errors` joined
-with `"; "` into one row.
+sample scan error, then `Scan errors not shown: K` when the count exceeds the samples. tsv: two
+columns, `field<TAB>value`, one row per scalar field; `scan_errors` (the samples) joined with
+`"; "` into one row, and a `scan_error_count` row.
 
 ### `slate sync-check <vault-path>`
 
