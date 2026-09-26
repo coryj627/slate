@@ -458,42 +458,57 @@ internal sealed class ReadingSurface : RichTextBox
     /// behind Ctrl+Shift+E, F6/Shift+F6, tab cycling, Quick Open and the
     /// dismissal fallbacks. A surface showing its model's CURRENT projection —
     /// applied, with no refresh of it in flight; an empty note's included —
-    /// takes focus NOW and keeps the caret where the rebind restore or the
-    /// merge seated it. A surface still showing the loading placeholder, or a
-    /// projection a refresh in flight is about to replace (the reader left
-    /// reading mode, edited the note, and came back), HOLDS the landing until
-    /// that refresh settles: focused early, NVDA reads the placeholder (or
-    /// "blank", or the obsolete text) and never re-reads what replaces it. A
+    /// takes focus NOW, or keeps it (focus already inside, a link's included,
+    /// is the stop: the reader's place outranks a re-seat), and keeps the
+    /// caret where the rebind restore or the merge seated it. Readiness and
+    /// failure come FIRST, focus already inside only after them. A surface
+    /// still showing the loading placeholder, or a projection a refresh in
+    /// flight is about to replace (the reader left reading mode, edited the
+    /// note, and came back), HOLDS the landing until that refresh settles:
+    /// focused early, NVDA reads the placeholder (or "blank", or the obsolete
+    /// text) and never re-reads what replaces it. That holds for a reader
+    /// ALREADY inside too (an in-place navigation swapped the note under them;
+    /// the tabs' shared cell rebound to one still projecting): NVDA speaks a
+    /// focus change, never a document replaced under the caret, so they are
+    /// first parked on <paramref name="parkWhileUnready"/> (the shell's stop
+    /// for the tab — its tab item), and the settle's seat is then the one
+    /// arrival on the applied content, which NVDA reads. (A park no stop takes
+    /// leaves them where they are, and the settle lands them in place.) A
     /// held landing calls <paramref name="announceWhenHeldLandingArrives"/>
     /// once focus is really here (the F6 ring's deferred line), or
     /// <paramref name="fallThroughWhenHeldLandingRefused"/> when the content
     /// arrives and focus cannot be taken (the F6 ring moves on); a withdrawn
     /// one calls neither. Answers whether focus is here or held; a hidden
-    /// surface, or one showing the load-failure notice (no note to read),
-    /// answers false, so the caller's fallbacks run (as does one still
-    /// showing what a failed refresh kept).
+    /// surface, or one showing a failure — the load-failure notice, or what a
+    /// failed refresh kept (no note to read) — answers false even with focus
+    /// inside, so the caller's fallbacks run.
     /// </summary>
     internal bool RequestFocusLanding(
         Action? announceWhenHeldLandingArrives = null,
-        Action? fallThroughWhenHeldLandingRefused = null)
+        Action? fallThroughWhenHeldLandingRefused = null,
+        Func<bool>? parkWhileUnready = null)
     {
         WithdrawFocusLanding();
         if (!IsVisible)
         {
             return false;
         }
-        if (IsKeyboardFocusWithin)
-        {
-            // Already the stop — a link inside it may hold the keys, and
-            // the reader's place outranks a re-seat.
-            return true;
-        }
         if (!ShowsAppliedProjection || _model is { RefreshInFlight: true })
         {
+            // Parked BEFORE the hold: the departure watch the hold starts
+            // latches from the stop the reader now waits on.
+            if (IsKeyboardFocusWithin)
+            {
+                _ = parkWhileUnready?.Invoke();
+            }
             HoldFocusLanding(announceWhenHeldLandingArrives, fallThroughWhenHeldLandingRefused);
             return true;
         }
-        return !ShowsFailure && Focus();
+        if (ShowsFailure)
+        {
+            return false;
+        }
+        return IsKeyboardFocusWithin || Focus();
     }
 
     /// <summary>Ready to land: the BOUND model's projection has been applied

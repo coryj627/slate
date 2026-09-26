@@ -1308,6 +1308,163 @@ public sealed class ReadingFocusTests
         Assert.Equal(1, departures);
     });
 
+    /// <summary>R-10: readiness outranks focus already inside the surface. A
+    /// reader IN the reading surface when its note stops being ready — an
+    /// in-place navigation swaps in the destination while its fetch runs, or
+    /// a refresh is in flight — has not landed: the request holds the landing
+    /// and first parks them on the tab's item, so the unapplied surface never
+    /// keeps the keys, and when the content settles the surface is focused
+    /// exactly ONCE, on the applied content — the one arrival NVDA reads (and
+    /// the ring's line, once, when the ring asked). A park no stop takes
+    /// leaves them in place, and the landing is still held, not Landed: the
+    /// ring speaks once, when the content settles.</summary>
+    [Theory]
+    [InlineData("navigated in place")]
+    [InlineData("refreshing")]
+    [InlineData("refreshing, no stop to park on")]
+    public void ReadinessOutranksFocusAlreadyInTheSurface(string how) => RunSta(() =>
+    {
+        const string Edited = "An edited paragraph the reader has not heard yet.";
+        using var host = new Host();
+        host.Initialize(readingMode: true);
+        ReadingSurface surface = host.ShownSurface();
+        ReadingContentViewModel? model = null;
+        if (how != "navigated in place")
+        {
+            model = host.BindProjectionInFlight(surface);
+            host.ReleaseProjection();
+            Assert.Contains(NoteText, DocumentText(surface));
+        }
+        Assert.True(surface.Focus());
+        PumpedDispatcher.Drain();
+        var arrivals = new List<string>();
+        surface.IsKeyboardFocusWithinChanged += (_, e) =>
+        {
+            if (e.NewValue is true)
+            {
+                arrivals.Add(DocumentText(surface));
+            }
+        };
+        host.Announced.Clear();
+        bool parks = how != "refreshing, no stop to park on";
+        int spoken = 0;
+        int fellThrough = 0;
+        string expected;
+
+        if (model is null)
+        {
+            // Enter on a link, the in-place preference: the tab now shows the
+            // destination. The fixture's workspace projects at once, so the
+            // production (asynchronous) projection stands in for it, its fetch
+            // held — bound before the navigation's queued landing runs.
+            host.Tab.NavigateFromReading(new EditorNavigationRequest("other.md", null, null));
+            _ = host.BindProjectionInFlight(surface);
+            expected = "A text tab beside the reading one.";
+        }
+        else
+        {
+            model.Deactivate();
+            host.Tab.Text = "# Reading focus\n\n" + Edited + "\n";
+            host.HoldNextFetch();
+            model.Activate();
+            Assert.True(model.RefreshInFlight);
+            Assert.True(surface.IsKeyboardFocusWithin);
+            if (!parks)
+            {
+                host.ActiveTabItem().Focusable = false;
+            }
+            Assert.Equal(
+                ShellRegionLanding.Pending,
+                ((IShellRegionHost)host.Shell).TryLand(ShellRegionKind.Editor, () => spoken++, () => fellThrough++));
+            PumpedDispatcher.Drain();
+            expected = Edited;
+        }
+
+        Assert.True(surface.IsFocusLandingPending, $"the landing was not held ({how})");
+        if (parks)
+        {
+            AssertFocused(host.ActiveTabItem(), $"the reader waiting for the content ({how})");
+        }
+        else
+        {
+            Assert.True(surface.IsKeyboardFocusWithin);
+        }
+        Assert.Empty(arrivals);
+        Assert.Equal(0, spoken);
+
+        host.ReleaseProjection();
+        Assert.True(
+            PumpedDispatcher.PumpUntil(() => !surface.IsFocusLandingPending),
+            $"the held landing never settled ({how})");
+        PumpedDispatcher.Drain();
+
+        AssertFocused(surface, $"the landing on the applied content ({how})");
+        Assert.Contains(expected, DocumentText(surface));
+        Assert.Equal(0, fellThrough);
+        if (parks)
+        {
+            string landed = Assert.Single(arrivals);
+            Assert.Contains(expected, landed);
+            Assert.DoesNotContain("Loading reading view", landed, StringComparison.Ordinal);
+        }
+        else
+        {
+            Assert.Empty(arrivals);
+        }
+        if (model is null)
+        {
+            // The navigation's own line, once; no editor line on the way (the
+            // panels announce the destination's outline for themselves).
+            Assert.Equal(
+                new A11yEvent.InternalNavigated("wikilink", "other.md"),
+                Assert.Single(host.Announced, line => line is A11yEvent.InternalNavigated));
+            Assert.DoesNotContain(host.Announced, line => line is A11yEvent.EditorPaneFocused);
+        }
+        else
+        {
+            Assert.Equal(1, spoken);
+        }
+    });
+
+    /// <summary>R-10: failure outranks focus already inside the surface too.
+    /// A surface showing a failure — the load-failure notice, or the stale
+    /// content a failed refresh kept — is no stop even with the reader in it:
+    /// the editor landing is refused, nothing is held, and the funnel's own
+    /// fallback, the tab's item, takes the keys.</summary>
+    [Theory]
+    [InlineData("load failed")]
+    [InlineData("refresh failed")]
+    public void AFailureIsNoStopEvenWithFocusInIt(string failure) => RunSta(() =>
+    {
+        using var host = new Host();
+        host.Initialize(readingMode: true);
+        ReadingSurface surface = host.ShownSurface();
+        ReadingContentViewModel model = host.BindProjectionInFlight(surface, failsTerminally: failure == "load failed");
+        host.ReleaseProjection();
+        if (failure == "load failed")
+        {
+            Assert.True(model.PublishedFailureNotice);
+        }
+        else
+        {
+            model.Deactivate();
+            host.HoldNextFetch(failsTerminally: true);
+            model.Activate();
+            host.ReleaseProjection();
+            Assert.True(PumpedDispatcher.PumpUntil(() => !model.RefreshInFlight), "the refresh never ended");
+            Assert.True(model.LastRefreshFailed);
+            Assert.Contains(NoteText, DocumentText(surface));
+        }
+        Assert.True(surface.Focus());
+        PumpedDispatcher.Drain();
+
+        host.Workspace.RequestActiveEditorFocus();
+        PumpedDispatcher.Drain();
+
+        AssertFocused(host.ActiveTabItem(), $"the editor landing over a failure ({failure})");
+        Assert.False(surface.IsFocusLandingPending);
+    });
+
     /// <summary>R-10's one owner: the surface takes focus only through a
     /// requested landing. Shown over merged content by a flip that asked for
     /// nothing, and merging content while shown, it leaves the reader where
