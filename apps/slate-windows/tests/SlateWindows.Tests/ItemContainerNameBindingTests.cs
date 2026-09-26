@@ -420,7 +420,10 @@ public sealed class ItemContainerNameBindingTests
             {
                 items.Add(namesake);
             }
-            Assert.Equal([$"{SecondName}, {rule.Noun} 1", $"{SecondName}, {rule.Noun} 2"], ItemNames(host));
+            // Namesakes that share their distinguisher too read it AND
+            // their place: the ordinal never takes a distinguisher back.
+            string shared = rule.DistinguisherPath is null ? SecondName : $"{SecondName}, d1";
+            Assert.Equal([$"{shared}, {rule.Noun} 1", $"{shared}, {rule.Noun} 2"], ItemNames(host));
             namesake[pin.Path] = FirstName;
             Assert.Equal([SecondName, FirstName], ItemNames(host));
         });

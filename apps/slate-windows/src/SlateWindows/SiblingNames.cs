@@ -119,8 +119,9 @@ internal static class SiblingNames
     /// the item has a distinguisher: "{name}, {distinguisher}";</item>
     /// <item>where names still collide — two namesakes with one
     /// distinguisher (one file in two tabs), or a suffixed name that meets a
-    /// natural one — every member of the colliding group reads "{name},
-    /// {noun} {n}", n its 1-based place;</item>
+    /// natural one — every member of the colliding group adds ", {noun} {n}"
+    /// to what it reads so far, n its 1-based place: a distinguisher already
+    /// given is never taken back ("note, B/note.md, tab 2");</item>
     /// <item>and should even those collide, "{Noun} {n}", unique by n.</item>
     /// </list>
     /// </summary>
@@ -148,7 +149,7 @@ internal static class SiblingNames
         foreach (int index in Colliding(result))
         {
             result[index] = string.Create(
-                CultureInfo.InvariantCulture, $"{bases[index]}, {noun} {index + 1}");
+                CultureInfo.InvariantCulture, $"{result[index]}, {noun} {index + 1}");
         }
         for (int pass = 0; pass <= count && Colliding(result) is { Count: > 0 } colliding; pass++)
         {
@@ -319,11 +320,27 @@ internal static class SiblingNames
         internal ItemsControl Host => _host;
 
         /// <summary>The name <paramref name="item"/> reads among the host's
-        /// items (its first place, should it be there twice), or null when
-        /// it is none of them.</summary>
+        /// items, or null when it is none of them. Found by REFERENCE (codex
+        /// PR 3 round 4): a base keeps duplicate view definitions, and two
+        /// value-equal records are two items that equality would both name as
+        /// the first. Only a value no reference matches — a boxed value boxed
+        /// again — falls back to equality, and equal values are one item to
+        /// UIA anyway.</summary>
         internal string? NameForItem(object item)
         {
-            int index = _host.Items.IndexOf(item);
+            int index = -1;
+            for (int position = 0; position < _host.Items.Count; position++)
+            {
+                if (ReferenceEquals(_host.Items[position], item))
+                {
+                    index = position;
+                    break;
+                }
+            }
+            if (index < 0)
+            {
+                index = _host.Items.IndexOf(item);
+            }
             if (index < 0)
             {
                 return null;

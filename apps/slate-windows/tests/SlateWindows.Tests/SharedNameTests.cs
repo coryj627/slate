@@ -158,7 +158,8 @@ public sealed class SharedNameTests
     /// display name, the extension stripped, so tabs of different files can
     /// share a title — each then reads its full visible path (folder, name
     /// and extension); two tabs of ONE file (Duplicate Tab) share even that,
-    /// so they read their places. Every state a tab can be in — unsaved,
+    /// so they read their path AND their places (codex PR 3 round 4: the
+    /// place never replaces the path). Every state a tab can be in — unsaved,
     /// missing from disk, both — is spoken over the tab's own told-apart
     /// name.</summary>
     [Fact]
@@ -167,7 +168,7 @@ public sealed class SharedNameTests
             "shared-tab-titles",
             ["A/note.md", "B/note.md"],
             duplicateLast: true,
-            ["note, A/note.md", "note, tab 2", "note, tab 3"]));
+            ["note, A/note.md", "note, B/note.md, tab 2", "note, B/note.md, tab 3"]));
 
     /// <summary>Spec round 26: two files of one folder whose names differ
     /// only by extension share title AND folder — a folder alone would leave

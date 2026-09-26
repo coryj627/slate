@@ -34,7 +34,7 @@ public sealed class SiblingNamesTests
     public void NamesakesReadTheirDistinguisherElseTheirOrdinal()
     {
         Assert.Equal(
-            ["note.md, A", "note.md, tab 2", "Note.MD, tab 3", "other.md", "note.md"],
+            ["note.md, A", "note.md, B, tab 2", "Note.MD, B, tab 3", "other.md", "note.md"],
             SiblingNames.Compose(
                 ["note.md", "note.md", "Note.MD", "other.md", "note.md"],
                 ["A", "B", "B", "C", null],
@@ -52,11 +52,24 @@ public sealed class SiblingNamesTests
     [Fact]
     public void ASuffixThatMeetsANaturalNameFallsBackToTheOrdinal() =>
         Assert.Equal(
-            ["note.md, item 1", "note.md, A, item 2", "note.md, B", "note.md (2)"],
+            ["note.md, A, item 1", "note.md, A, item 2", "note.md, B", "note.md (2)"],
             SiblingNames.Compose(
                 ["note.md", "note.md, A", "note.md", "note.md (2)"],
                 ["A", null, "B", null],
                 "item"));
+
+    /// <summary>Codex PR 3 round 4: the ordinal never takes back a
+    /// distinguisher already given. Three tabs titled "note" — one of
+    /// A/note.md, two of B/note.md — read the first by its path and the pair
+    /// by path AND place, so the pair still say which file they hold.</summary>
+    [Fact]
+    public void TheOrdinalKeepsTheDistinguisherItFollows() =>
+        Assert.Equal(
+            ["note, A/note.md", "note, B/note.md, tab 2", "note, B/note.md, tab 3"],
+            SiblingNames.Compose(
+                ["note", "note", "note"],
+                ["A/note.md", "B/note.md", "B/note.md"],
+                "tab"));
 
     /// <summary>A blank name is never nothing, and a pathological natural
     /// name that equals an ordinal form still ends distinct.</summary>

@@ -46,8 +46,8 @@ public sealed class CodeBuiltSiblingTests
             [
                 "note.md, status open, A/note.md",
                 "note.md, status open, B/note.md",
-                "Call back, due Friday, row 3",
-                "Call back, due Friday, row 4",
+                "Call back, due Friday, C/tasks.md, row 3",
+                "Call back, due Friday, C/tasks.md, row 4",
                 "solo.md",
             ],
             ItemContainerNameBindingTests.ItemNames(list)));
@@ -70,7 +70,7 @@ public sealed class CodeBuiltSiblingTests
             [], [], 4, 4, 4, 0, [], null, "4 rows"));
         ListBox list = Detach(surface.ListForTests);
         Hosted(list, () => Assert.Equal(
-            ["note.md, A/note.md", "note.md, B/note.md", "Call back, row 3", "Call back, row 4"],
+            ["note.md, A/note.md", "note.md, B/note.md", "Call back, C/tasks.md, row 3", "Call back, C/tasks.md, row 4"],
             ItemContainerNameBindingTests.ItemNames(list)));
     });
 
@@ -89,6 +89,36 @@ public sealed class CodeBuiltSiblingTests
         Hosted(picker, () => Assert.Equal(
             ["Open tasks, view 1", "Open tasks, view 2", "Archive"],
             ItemContainerNameBindingTests.ItemNames(picker)));
+    });
+
+    /// <summary>Codex PR 3 round 4: a base keeps duplicate view definitions
+    /// (core warns about them), so two views can be fully value-equal
+    /// records. A CLOSED picker's selection is named through UIA's throwaway
+    /// wrapper, which finds its item by reference — the second of two equal
+    /// views reads "view 2", never the first's name.</summary>
+    [Fact]
+    public void AClosedViewPickerNamesTheSecondOfTwoEqualViewsAsTheSecond() => RunSta(() =>
+    {
+        ComboBox picker = Detach(new BaseSurfaceView().ViewPickerForTests);
+        var view = new BaseViewSummary("Open tasks", "table", "tasks", BaseViewStatus.Executable, null);
+        var twin = new BaseViewSummary("Open tasks", "table", "tasks", BaseViewStatus.Executable, null);
+        Assert.Equal(view, twin);
+        Assert.NotSame(view, twin);
+        picker.ItemsSource = new[] { view, twin };
+        picker.SelectedIndex = 1;
+        Hosted(picker, () =>
+        {
+            PumpedDispatcher.Drain();
+            Assert.Null(picker.ItemContainerGenerator.ContainerFromIndex(1));
+            AutomationPeer peer = UIElementAutomationPeer.CreatePeerForElement(picker);
+            System.Reflection.MethodInfo create = typeof(ItemsControlAutomationPeer).GetMethod(
+                "CreateItemAutomationPeer",
+                System.Reflection.BindingFlags.Instance | System.Reflection.BindingFlags.NonPublic)!;
+            string Named(object item) => ((ItemAutomationPeer)create.Invoke(peer, [item])!).GetName();
+            Assert.Same(twin, picker.SelectedItem);
+            Assert.Equal("Open tasks, view 2", Named(twin));
+            Assert.Equal("Open tasks, view 1", Named(view));
+        });
     });
 
     /// <summary>Two equal warnings are two focusable texts, each read apart
