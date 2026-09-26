@@ -12,6 +12,7 @@ using System.Windows.Automation;
 using System.Windows.Controls;
 using System.Windows.Controls.Primitives;
 using System.Windows.Data;
+using System.Windows.Threading;
 
 namespace SlateWindows;
 
@@ -182,6 +183,11 @@ internal static class SiblingNames
         scope.Invalidate();
     }
 
+    /// <summary>How many times <paramref name="host"/>'s names have been
+    /// refreshed; -1 when it declares no scope.</summary>
+    internal static int RefreshesForTests(ItemsControl host) =>
+        host.GetValue(ScopeProperty) is Scope scope ? scope.Refreshes : -1;
+
     /// <summary>The name a container's item reads among its siblings, or
     /// null when its host declares no scope.</summary>
     internal static string? NameFor(DependencyObject container)
@@ -222,6 +228,7 @@ internal static class SiblingNames
         private readonly ConditionalWeakTable<DependencyObject, object?> _known = new();
         private readonly List<WeakReference<DependencyObject>> _readers = [];
         private string[]? _names;
+        private bool _refreshPending;
 
         internal Scope(ItemsControl host)
         {
@@ -241,9 +248,29 @@ internal static class SiblingNames
             };
         }
 
+        internal int Refreshes { get; private set; }
+
+        /// <summary>The items or a name changed: the names are recomputed at
+        /// their next read, and the realized containers read again once the
+        /// current batch of changes is done — a folder resorted row by row, or
+        /// five hundred filter results added one at a time, is ONE refresh
+        /// (each reads every item, so one per change would be
+        /// quadratic).</summary>
         internal void Invalidate()
         {
             _names = null;
+            if (_refreshPending)
+            {
+                return;
+            }
+            _refreshPending = true;
+            _ = _host.Dispatcher.BeginInvoke(DispatcherPriority.DataBind, new Action(Refresh));
+        }
+
+        private void Refresh()
+        {
+            _refreshPending = false;
+            Refreshes++;
             Observe();
             // By index: two equal items (one warning twice) are two
             // containers, which a lookup by item would conflate.

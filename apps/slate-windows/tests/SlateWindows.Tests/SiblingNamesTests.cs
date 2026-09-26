@@ -164,6 +164,42 @@ public sealed class SiblingNamesTests
         });
     });
 
+    /// <summary>A batch of changes — a folder resorted row by row, five
+    /// hundred filter results added one at a time — is ONE refresh of the
+    /// names, once the batch is done: each refresh reads every item, so one
+    /// per change would be quadratic.</summary>
+    [Fact]
+    public void ABatchOfChangesIsOneRefresh() => RunSta(() =>
+    {
+        var items = new ObservableCollection<object>();
+        var host = new ListBox
+        {
+            ItemContainerStyle = SiblingNames.ContainerStyle(typeof(ListBoxItem)),
+            Height = 150,
+        };
+        SiblingNames.SetNamePath(host, "Name");
+        host.ItemsSource = items;
+        Hosted(host, () =>
+        {
+            host.UpdateLayout();
+            PumpedDispatcher.Drain();
+            int before = SiblingNames.RefreshesForTests(host);
+            Assert.True(before >= 0, "the host declares no scope");
+            for (int index = 0; index < 500; index++)
+            {
+                items.Add(Row($"note {index % 250}.md", null));
+            }
+            Assert.Equal(before, SiblingNames.RefreshesForTests(host));
+            host.UpdateLayout();
+            PumpedDispatcher.Drain();
+            Assert.Equal(before + 1, SiblingNames.RefreshesForTests(host));
+            // ...and that one refresh named them: each name twice, told apart
+            // by place.
+            var first = (ListBoxItem)host.ItemContainerGenerator.ContainerFromIndex(0);
+            Assert.Equal("note 0.md, item 1", AutomationProperties.GetName(first));
+        });
+    });
+
     /// <summary>A tree scopes per level: each tree item names its own
     /// children among themselves.</summary>
     [Fact]
