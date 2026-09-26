@@ -75,11 +75,10 @@ public sealed class AnnouncementSeamCensus
                 && listening.ContainingType.ToDisplayString() == "System.Windows.Automation.Provider.AutomationInteropProvider",
             $"the production guard must be AutomationInteropProvider.ClientsAreListening; it is `{probe.ExpressionBody}`.");
 
-        // OD-7: the diagnostics read production's own inputs — WPF's
-        // listener map for the notification event (bound: the map only an
-        // advise fills; logged with each transition, never a gate) and the
-        // status element's connected provider, the one the raise uses and
-        // one of readiness's two conjuncts.
+        // OD-7: readiness reads production's own inputs — WPF's listener
+        // map for the notification event (bound: the map only an advise
+        // fills; waited for up to the hold) and the status element's
+        // connected provider, the one the raise uses.
         RecordDeclarationSyntax seams = Assert.Single(
             notification.Source.Root.DescendantNodes().OfType<RecordDeclarationSyntax>(),
             type => type.Identifier.ValueText == "LaunchSeams");
