@@ -234,7 +234,7 @@
         "status": "recorded"
       },
       "EmbedPreviewShown": {
-        "reason": "W7-7 (#1251): the Windows embed preview opens on Close, where its name is not read, so it announces the landed result. Mac removed its own preview-opened announcement (audit #211) because VoiceOver reads the popover's accessibility label; Mac constructs no such event in this wave and its owner decides. Current Windows evidence is hosted (`AResolvedEmbedAnnouncesItsPreviewWhenTheResultLands`); the announcement leg of `FluentShell_UiaPatternsKeyboardFocusAndAxe_AreClean` is pending PR 1's desktop listener (#1244), and until it lands that journey asserts the preview's focus and its second-line read, not the announcement.",
+        "reason": "W7-7 (#1251): the Windows embed preview opens on Close, where its name is not read, so it announces the landed result: the event carries what the embed resolved to (kind, path, heading, alt) and core words the card title (#1278). Mac removed its own preview-opened announcement (audit #211) because VoiceOver reads the popover's accessibility label; Mac constructs no such event in this wave and its owner decides. Current Windows evidence is hosted (`AResolvedEmbedAnnouncesItsPreviewWhenTheResultLands`, every resolved kind, and the `EmbedPreviewTitleCensus` provenance facts); the announcement leg of `FluentShell_UiaPatternsKeyboardFocusAndAxe_AreClean` is pending PR 1's desktop listener (#1244), and until it lands that journey asserts the preview's name, focus and second-line read, not the announcement.",
         "decision": "docs/plans/38_notification_dispatcher_contracts.md",
         "status": "recorded"
       },
