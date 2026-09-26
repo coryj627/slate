@@ -1176,8 +1176,11 @@ public sealed class CanvasMutationTests : IDisposable
         Assert.Equal("a", document.Selection.Selected);
         Assert.Contains("a", pane.FocusedRows);
         // R-12 (#1255): and the origin is brought back INTO VIEW, which on
-        // the visual board is a pan rather than a row taking focus.
+        // the visual board is a pan rather than a row taking focus — as a
+        // move made ON the surface, which D4 reveals whatever the follow
+        // toggle says (follow-up #1271).
         Assert.Equal(["a"], pane.RevealedRows);
+        Assert.Equal([CanvasMoveOrigin.OnSurface], pane.RevealOrigins);
         Assert.Null(document.ConnectOrigin);
         document.AnnouncerForTests.FlushForTests();
         Assert.Contains(
@@ -1212,6 +1215,8 @@ public sealed class CanvasMutationTests : IDisposable
 
         public List<string> RevealedRows { get; } = [];
 
+        public List<CanvasMoveOrigin> RevealOrigins { get; } = [];
+
         public CanvasSurfaceKind Projection => CanvasSurfaceKind.Outline;
 
         public bool ProjectionHasFocus => true;
@@ -1230,7 +1235,11 @@ public sealed class CanvasMutationTests : IDisposable
             return true;
         }
 
-        public void RevealSeat(string nodeId) => RevealedRows.Add(nodeId);
+        public void RevealSeat(string nodeId, CanvasMoveOrigin origin)
+        {
+            RevealedRows.Add(nodeId);
+            RevealOrigins.Add(origin);
+        }
 
         public bool FocusProjection() => false;
     }
@@ -2181,7 +2190,7 @@ public sealed class CanvasMutationTests : IDisposable
 
         public bool FocusRow(string nodeId) => false;
 
-        public void RevealSeat(string nodeId)
+        public void RevealSeat(string nodeId, CanvasMoveOrigin origin)
         {
         }
 
@@ -2552,7 +2561,7 @@ public sealed class CanvasMutationTests : IDisposable
 
         public bool FocusRow(string nodeId) => false;
 
-        public void RevealSeat(string nodeId)
+        public void RevealSeat(string nodeId, CanvasMoveOrigin origin)
         {
         }
 

@@ -605,8 +605,9 @@ internal sealed class CanvasRendererView : FrameworkElement
     /// peer door's above, and since R-12 (#1255) the navigator's — the
     /// board's arrows and follow chords move the seat through the
     /// navigator, which has already announced the move and asks the
-    /// presenter only to reveal it. A card the installed population does
-    /// not know has nothing to pan to.</summary>
+    /// presenter only to reveal it (the presenter asks
+    /// <see cref="RevealsMoveFrom"/> first). A card the installed
+    /// population does not know has nothing to pan to.</summary>
     internal void RevealNode(string nodeId)
     {
         if (_engine.Current?.Source.Loaded?.Population is { } population
@@ -615,6 +616,12 @@ internal sealed class CanvasRendererView : FrameworkElement
             _engine.CommitViewport(v => PanToContain(v, node));
         }
     }
+
+    /// <summary>D4's pan rule against this board's committed viewport
+    /// (R-12 follow-up #1271): a move made on the board always reveals,
+    /// one made elsewhere only while Follow Selection is on.</summary>
+    internal bool RevealsMoveFrom(CanvasMoveOrigin origin) =>
+        _engine.CommittedViewport.RevealsMoveFrom(origin);
 
     /// <summary>The matrix's clear cell: RemoveFromSelection on the
     /// selected card clears it, announced.</summary>

@@ -21,6 +21,31 @@ internal enum CanvasViewportVerb
 }
 
 /// <summary>
+/// Where a navigator move was made from — the half of contract 34 D4's
+/// ORIGIN-SENSITIVE pan rule the navigator knows (R-12, follow-up #1271).
+/// </summary>
+/// <remarks>
+/// A selection made ON the board — its own keys, a peer's Invoke or
+/// selection, a realization — always scrolls into view, toggle or no
+/// toggle (WCAG 2.4.11); one arriving from anywhere else pans only while
+/// the pane's Follow Selection is on, so the toggle's sentence is true
+/// exactly when it speaks. The pane knows the toggle; the navigator
+/// knows where the move came from, and hands that over with the reveal.
+/// </remarks>
+internal enum CanvasMoveOrigin
+{
+    /// <summary>Made on the surface: the board's own arrow and follow
+    /// keys, and the connect-mode restoration the owning pane
+    /// performs.</summary>
+    OnSurface,
+
+    /// <summary>Made elsewhere: the palette's and the menus' verbs — Next
+    /// and Previous Card, Follow Connection, Enter and Exit Group, Trace
+    /// Path.</summary>
+    Elsewhere,
+}
+
+/// <summary>
 /// What the navigator needs from whichever projection the reader is
 /// actually looking at (contract C2).
 /// </summary>
@@ -86,11 +111,13 @@ internal interface ICanvasSurfacePresenter
     /// off-screen included: the ring drawn outside the window and the
     /// card's peer unmaterialized, while every sentence said the move
     /// had happened. The board pans to contain the card, the pan a
-    /// peer's Invoke already makes (D4: a selection made on this surface
-    /// always scrolls into view). The outline and the table have nothing
-    /// further to do, because focusing the row scrolled it into view.
+    /// peer's Invoke already makes — under D4's ORIGIN-SENSITIVE rule
+    /// (follow-up #1271): a move made on the surface always, one made
+    /// elsewhere only while the pane's Follow Selection is on. The outline
+    /// and the table have nothing further to do, because focusing the row
+    /// scrolled it into view.
     /// </remarks>
-    void RevealSeat(string nodeId);
+    void RevealSeat(string nodeId, CanvasMoveOrigin origin);
 
     /// <summary>
     /// Put keyboard focus back where this state can hold it, reporting
@@ -347,7 +374,7 @@ internal sealed class CanvasNavigator
                 // row cannot take it. R-12: and the origin back in
                 // view, which on the board is the whole of the return.
                 _ = presenter.FocusRow(originId);
-                presenter.RevealSeat(originId);
+                presenter.RevealSeat(originId, CanvasMoveOrigin.OnSurface);
                 return new CanvasModeRestoration.BackAt(originTitle);
             },
             Token: token);
@@ -1099,6 +1126,8 @@ internal sealed class CanvasNavigator
 
     public void PreviousCard() => SelectAdjacent(-1);
 
+    /// <summary>The palette's walk: reading order over the FILTERED set,
+    /// a move made elsewhere (D4's origin rule, #1271).</summary>
     private void SelectAdjacent(int offset)
     {
         if (!_document.AdmitStructuralRead())
@@ -1111,6 +1140,47 @@ internal sealed class CanvasNavigator
             AnnounceNothingToMoveThrough();
             return;
         }
+        StepThrough(rows, offset, CanvasMoveOrigin.Elsewhere);
+    }
+
+    /// <summary>
+    /// The visual board's own Down/Up (R-12; follow-up #1270): reading
+    /// order over the FULL scene the board draws.
+    /// </summary>
+    /// <remarks>
+    /// Contract 34 D4: the visual arm renders the full scene and keeps
+    /// every card's peer, and a needle only DIMS a card it does not match
+    /// — the inventory never shrinks — so the board's arrows walk every
+    /// card it draws, dimmed ones included, and answer End/Start of canvas
+    /// at the SCENE's bounds. PR 10 routed them through
+    /// <see cref="SelectAdjacent"/>, whose filtered walk stepped over the
+    /// dimmed cards and said "End of canvas." with cards still below. The
+    /// palette's Next and Previous Card keep the filtered order: they are
+    /// the verbs every projection shares, and the outline and the table
+    /// show only what the needle kept. A canvas with no cards at all keeps
+    /// the empty canvas's sentence — a needle cannot empty the board.
+    /// </remarks>
+    private void MoveThroughTheScene(int offset)
+    {
+        if (!_document.AdmitStructuralRead())
+        {
+            return;
+        }
+        IReadOnlyList<CanvasOutlineRow> scene = _document.Outline;
+        if (scene.Count == 0)
+        {
+            Announce(new CanvasA11yEvent.CanvasStatus(new CanvasStatusNote.Empty()));
+            return;
+        }
+        StepThrough(scene, offset, CanvasMoveOrigin.OnSurface);
+    }
+
+    /// <summary>One reading-order step over the given rows: the next or
+    /// previous row from the seat through the announced door, the
+    /// boundary sentence at their ends, and — with no seat among them —
+    /// the top going forward and the bottom going back.</summary>
+    private void StepThrough(IReadOnlyList<CanvasOutlineRow> rows, int offset, CanvasMoveOrigin origin)
+    {
         int current = -1;
         if (_document.Selection.Selected is { } selected)
         {
@@ -1142,7 +1212,7 @@ internal sealed class CanvasNavigator
             // bottom — the same wrap-free seat mac makes.
             target = offset > 0 ? 0 : rows.Count - 1;
         }
-        MoveTo(rows[target].NodeId);
+        MoveTo(rows[target].NodeId, origin);
     }
 
     /// <summary>
@@ -1179,7 +1249,7 @@ internal sealed class CanvasNavigator
                 new CanvasStatusNote.GroupIsEmpty(row.Title)));
             return;
         }
-        MoveTo(children[0]);
+        MoveTo(children[0], CanvasMoveOrigin.Elsewhere);
     }
 
     /// <summary>Exit to the containing group (core's
@@ -1208,7 +1278,7 @@ internal sealed class CanvasNavigator
             Announce(new CanvasA11yEvent.CanvasStatus(new CanvasStatusNote.AtCanvasLevel()));
             return;
         }
-        MoveTo(parent);
+        MoveTo(parent, CanvasMoveOrigin.Elsewhere);
     }
 
     /// <summary>
@@ -1225,7 +1295,14 @@ internal sealed class CanvasNavigator
     /// or accurate dead end, whatever the load state; (3) the state
     /// mapping's refusal, and only when (2) came back with nothing.
     /// </remarks>
-    public void FollowConnection(bool forward, int ordinal = 1)
+    public void FollowConnection(bool forward, int ordinal = 1) =>
+        Follow(forward, ordinal, CanvasMoveOrigin.Elsewhere);
+
+    /// <summary>The follow itself, with where it was asked from: the
+    /// palette's verb above is a move made elsewhere, the board's and the
+    /// outline's Right and Left a move made on the surface (D4's origin
+    /// rule, #1271).</summary>
+    private void Follow(bool forward, int ordinal, CanvasMoveOrigin origin)
     {
         if (_document.AnsweredMissingSelection())
         {
@@ -1270,7 +1347,7 @@ internal sealed class CanvasNavigator
         Announce(new CanvasA11yEvent.CanvasConnectionTraversed(
             target.Direction, otherKind, target.OtherTitle, target.Label));
         _document.SelectNode(target.OtherNode, announce: false);
-        ReaderFollows(target.OtherNode);
+        ReaderFollows(target.OtherNode, origin);
     }
 
     /// <summary>
@@ -1305,7 +1382,7 @@ internal sealed class CanvasNavigator
             return;
         }
         _document.SelectNode(hops[^1].NodeId, announce: false);
-        ReaderFollows(hops[^1].NodeId);
+        ReaderFollows(hops[^1].NodeId, CanvasMoveOrigin.Elsewhere);
         string[] titles = startTitle is null
             ? hops.Select(hop => hop.Title).ToArray()
             : [startTitle, .. hops.Select(hop => hop.Title)];
@@ -1623,11 +1700,11 @@ internal sealed class CanvasNavigator
     /// <remarks>
     /// The VISUAL board has no row control to move anyone, so there the
     /// arrow IS the navigator's reading-order move (R-12, #1255; contract
-    /// 34 D15 honoured): <see cref="SelectAdjacent"/> — the announced
-    /// door, End/Start of canvas at the real bounds, and the empty and
-    /// filtered sentences — which is mac's board verbatim
-    /// (<c>CanvasRendererView.swift</c>'s ↓/↑ call
-    /// <c>canvasSelectAdjacent</c>). It used to ask the board
+    /// 34 D15 honoured): <see cref="MoveThroughTheScene"/> — the announced
+    /// door over the FULL scene the board draws, dimmed cards included
+    /// (D4; follow-up #1270), and End/Start of canvas at the scene's
+    /// bounds — which is mac's board (<c>CanvasRendererView.swift</c>'s
+    /// ↓/↑ select the adjacent card). It used to ask the board
     /// <see cref="ICanvasSurfacePresenter.CanMoveWithinProjection"/>, whose
     /// answer there is always no, and speak that no as the boundary: the
     /// NVDA pass heard "End of canvas." for Down and "Start of canvas." for
@@ -1643,7 +1720,7 @@ internal sealed class CanvasNavigator
         }
         if (presenter.Projection == CanvasSurfaceKind.Visual)
         {
-            SelectAdjacent(forward ? 1 : -1);
+            MoveThroughTheScene(forward ? 1 : -1);
             return true;
         }
         if (!_document.AdmitStructuralRead())
@@ -1716,7 +1793,7 @@ internal sealed class CanvasNavigator
         {
             return false;
         }
-        FollowConnection(forward);
+        Follow(forward, ordinal: 1, CanvasMoveOrigin.OnSurface);
         return true;
     }
 
@@ -1868,10 +1945,10 @@ internal sealed class CanvasNavigator
     /// (R-12: on the board, where no row takes focus, the reveal is the
     /// whole of it).
     /// </summary>
-    private void MoveTo(string nodeId)
+    private void MoveTo(string nodeId, CanvasMoveOrigin origin)
     {
         _document.SelectNode(nodeId);
-        ReaderFollows(nodeId);
+        ReaderFollows(nodeId, origin);
     }
 
     /// <summary>
@@ -1880,14 +1957,15 @@ internal sealed class CanvasNavigator
     /// into view — which on the visual board, whose cards take no focus
     /// (<see cref="ICanvasSurfacePresenter.FocusRow"/> answers false
     /// there, m6), is the only way the reader sees where they went (R-12,
-    /// #1255; D4: a selection made on this surface always scrolls into
-    /// view). Every navigator move ends here, so none of them can move the
-    /// seat off-screen and leave it there.
+    /// #1255). Every navigator move ends here with where it was made
+    /// from, because D4's pan rule turns on it (follow-up #1271): a move
+    /// made on the board always comes into view, one made elsewhere only
+    /// while the pane follows the selection.
     /// </summary>
-    private void ReaderFollows(string nodeId)
+    private void ReaderFollows(string nodeId, CanvasMoveOrigin origin)
     {
         _presenter?.FocusRow(nodeId);
-        _presenter?.RevealSeat(nodeId);
+        _presenter?.RevealSeat(nodeId, origin);
     }
 
     /// <summary>There is nowhere to move: either the filter matched
