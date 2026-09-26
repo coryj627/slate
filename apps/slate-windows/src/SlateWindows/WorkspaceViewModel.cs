@@ -100,11 +100,12 @@ internal sealed partial class WorkspaceTabViewModel : BindableBase, IDisposable
     private int _editorCaretOffset;
     private readonly Dispatcher _dispatcher = Dispatcher.CurrentDispatcher;
     private bool _disposed;
-    // #1280: the tab's save chain (each save starts after the previous
-    // one lands) and the epoch that retires an in-flight save's publish
-    // when the tab is disposed or re-pointed at another item.
-    private Task<bool> _saveTail = Task.FromResult(true);
+    // #1280: the epochs that retire an in-flight save's publication.
+    // _itemEpoch moves when the tab is disposed or re-pointed at another
+    // item; _saveEpoch moves then AND when the tab's file is renamed
+    // (retarget) or deleted (invalidated) under the write.
     private int _saveEpoch;
+    private int _itemEpoch;
     private bool _taskToggleInFlight;
     private int _taskToggleGeneration;
     private int _anchorNavigationGeneration;
@@ -444,6 +445,7 @@ internal sealed partial class WorkspaceTabViewModel : BindableBase, IDisposable
     public void ReplaceItem(WorkspaceItemState item)
     {
         _saveEpoch++;
+        _itemEpoch++;
         _taskToggleGeneration++;
         _taskToggleInFlight = false;
         _editorInteractions?.Dispose();
@@ -520,6 +522,9 @@ internal sealed partial class WorkspaceTabViewModel : BindableBase, IDisposable
 
     public void RetargetPath(string path)
     {
+        // #1280: an in-flight save wrote the OLD path; it must not speak or
+        // set status for the renamed tab (codex round 1).
+        _saveEpoch++;
         Item = Item with { Path = path };
         _editorInteractions?.InvalidateExternalState();
         IsMissingFromDisk = false;
@@ -537,6 +542,9 @@ internal sealed partial class WorkspaceTabViewModel : BindableBase, IDisposable
 
     public void InvalidatePath()
     {
+        // #1280: the file is gone under an in-flight save — its outcome
+        // must not overwrite the missing-file status (codex round 1).
+        _saveEpoch++;
         IsMissingFromDisk = true;
         Status = $"{Path} no longer exists on disk. Unsaved editor content is preserved.";
         _documentChanged?.Invoke(this, null);
@@ -633,77 +641,59 @@ internal sealed partial class WorkspaceTabViewModel : BindableBase, IDisposable
     /// dirty-navigation gate, all of which decide on the answer — waits in
     /// a nested dispatcher frame, so the dispatcher keeps pumping input,
     /// focus, the inline status and every notification while the file and
-    /// index work runs. <paramref name="onSaved"/> runs on the dispatcher
-    /// when this save lands, in save order.</summary>
-    public bool Save(Action? onSaved = null) => WaitWhilePumping(SaveAsync(onSaved));
+    /// index work runs. Anything may run inside that frame: every caller
+    /// re-reads what it acts on after this returns (the pumped-wait
+    /// invariant, contract 38 D-10). <paramref name="onSaved"/> runs on the
+    /// dispatcher when this save lands, in save order.</summary>
+    public bool Save(Action? onSaved = null) =>
+        PumpedWait.Result(_dispatcher, SaveAsync(onSaved));
 
-    /// <summary>The save pipeline (#1280): serialized per tab — a save
-    /// requested while one is in flight starts only after it has landed,
-    /// from a fresh snapshot — each publishing exactly once, in order, on
-    /// the dispatcher.</summary>
+    /// <summary>The save pipeline (#1280): admitted through the workspace's
+    /// coordinator, which serializes every save to this canonical path —
+    /// across peer tabs too — so each starts after the previous one has
+    /// published, from a fresh snapshot, and publishes exactly once, in
+    /// order, on the dispatcher.</summary>
     internal Task<bool> SaveAsync(Action? onSaved = null)
     {
         _dispatcher.VerifyAccess();
-        Task<bool> previous = _saveTail;
-        var completion = new TaskCompletionSource<bool>();
-        _saveTail = completion.Task;
-        if (previous.IsCompleted)
-        {
-            StartSave(onSaved, completion);
-        }
-        else
-        {
-            previous.ContinueWith(
-                _ => _dispatcher.BeginInvoke(
-                    DispatcherPriority.Normal,
-                    new Action(() => StartSave(onSaved, completion))),
-                CancellationToken.None,
-                TaskContinuationOptions.None,
-                TaskScheduler.Default);
-        }
-        return completion.Task;
+        return Saves.Enqueue(
+            IsMarkdown ? Path : Id.ToString("N"),
+            ticket => StartSave(onSaved, ticket));
     }
+
+    /// <summary>The workspace's save coordinator; a tab built on its own
+    /// (a tab-level fact) gets a private one.</summary>
+    internal WorkspaceSaveCoordinator? SaveCoordinator { get; set; }
+
+    private WorkspaceSaveCoordinator Saves =>
+        SaveCoordinator ??= new WorkspaceSaveCoordinator(_dispatcher);
 
     /// <summary>#1280 test seam: runs on the save worker, before the core
     /// write — a test parks it there.</summary>
     internal Action? SaveWriteHookForTests { get; set; }
 
-    private bool WaitWhilePumping(Task<bool> save)
-    {
-        if (!save.IsCompleted)
-        {
-            var frame = new DispatcherFrame();
-            save.ContinueWith(
-                _ => _dispatcher.BeginInvoke(
-                    DispatcherPriority.Send,
-                    new Action(() => frame.Continue = false)),
-                CancellationToken.None,
-                TaskContinuationOptions.None,
-                TaskScheduler.Default);
-            Dispatcher.PushFrame(frame);
-            if (!save.IsCompleted)
-            {
-                // The dispatcher is shutting down: the frame ended before
-                // the save could publish. Nothing waits on it any more.
-                return false;
-            }
-        }
-        return save.GetAwaiter().GetResult();
-    }
+    /// <summary>True once the tab is disposed — a pumped caller re-reads
+    /// it after its frame.</summary>
+    internal bool IsDisposed => _disposed;
+
+    /// <summary>The editor's edit revision: a discard approval is pinned
+    /// to it, so an edit typed after the approval is asked about again
+    /// (#1280). -1 for a tab without an editor session.</summary>
+    internal long EditRevision => _editorSession?.Revision ?? -1;
 
     /// <summary>The dispatcher half before the write: the snapshot, the
     /// integrity refusal and the repair lease; then the worker.</summary>
-    private void StartSave(Action? onSaved, TaskCompletionSource<bool> completion)
+    private void StartSave(Action? onSaved, WorkspaceSaveCoordinator.SaveTicket ticket)
     {
         if (_disposed)
         {
-            completion.SetResult(false);
+            ticket.Complete(false);
             return;
         }
         if (!IsMarkdown || !IsDirty)
         {
             onSaved?.Invoke();
-            completion.SetResult(true);
+            ticket.Complete(true);
             return;
         }
 
@@ -728,7 +718,7 @@ internal sealed partial class WorkspaceTabViewModel : BindableBase, IDisposable
             Status = SlateUniffiMethods.A11yRender(blocked).Text;
             _documentChanged?.Invoke(this, null);
             _announce(blocked);
-            completion.SetResult(false);
+            ticket.Complete(false);
             return;
         }
 
@@ -746,28 +736,33 @@ internal sealed partial class WorkspaceTabViewModel : BindableBase, IDisposable
             snapshot.Revision,
             _contentHash,
             _saveEpoch,
+            _itemEpoch,
             TaskRepairs,
             onSaved);
         request.Repairs?.BeginMutation(request.Path);
         Action? hook = SaveWriteHookForTests;
-        Task.Run(() => WriteForSave(request, hook))
-            .ContinueWith(
-                write => _dispatcher.BeginInvoke(
-                    DispatcherPriority.Normal,
-                    new Action(() =>
+        Task<SaveWrite> write = Task.Run(() => WriteForSave(request, hook));
+        // The worker phase is tracked on its own (contract 35 A-1): teardown
+        // joins it before the session is disposed, with no dependence on the
+        // dispatcher callback below.
+        Saves.TrackWorker(write);
+        write.ContinueWith(
+            finished => _dispatcher.BeginInvoke(
+                DispatcherPriority.Normal,
+                new Action(() =>
+                {
+                    try
                     {
-                        try
-                        {
-                            completion.SetResult(PublishSave(write, request));
-                        }
-                        catch (Exception exception)
-                        {
-                            completion.SetException(exception);
-                        }
-                    })),
-                CancellationToken.None,
-                TaskContinuationOptions.None,
-                TaskScheduler.Default);
+                        ticket.Complete(PublishSave(finished, request));
+                    }
+                    catch (Exception exception)
+                    {
+                        ticket.Fail(exception);
+                    }
+                })),
+            CancellationToken.None,
+            TaskContinuationOptions.None,
+            TaskScheduler.Default);
     }
 
     private sealed record SaveRequest(
@@ -776,6 +771,7 @@ internal sealed partial class WorkspaceTabViewModel : BindableBase, IDisposable
         long Revision,
         string? ExpectedContentHash,
         int Epoch,
+        int ItemEpoch,
         Panels.TaskIndexRepairCoordinator? Repairs,
         Action? OnSaved);
 
@@ -817,9 +813,15 @@ internal sealed partial class WorkspaceTabViewModel : BindableBase, IDisposable
     }
 
     /// <summary>The dispatcher half after the write: settle the lease,
-    /// then publish state and exactly one D-10 outcome. A tab disposed or
-    /// re-pointed at another item during the write takes no state and says
-    /// nothing — the bytes it wrote are on disk.</summary>
+    /// then publish state and exactly one D-10 outcome — only to the tab and
+    /// item the write was captured for (#1280, codex round 1). A tab
+    /// disposed or re-pointed at another item during the write takes no
+    /// state and says nothing; the bytes it wrote are on disk. A tab whose
+    /// file was renamed or deleted under the write says nothing and keeps
+    /// the status the rename or deletion set — a CAS write that landed
+    /// before a rename moved the file is adopted silently as the renamed
+    /// tab's baseline, so its next save starts from the bytes on disk
+    /// instead of reporting a false conflict.</summary>
     private bool PublishSave(Task<SaveWrite> write, SaveRequest request)
     {
         Panels.TaskIndexRepairCoordinator? repairs = request.Repairs;
@@ -829,32 +831,22 @@ internal sealed partial class WorkspaceTabViewModel : BindableBase, IDisposable
             SaveWrite saved = write.GetAwaiter().GetResult();
             repairs?.EndMutation(request.Path, indexConsistent: saved.Caveat is null);
             leaseSettled = true;
-            if (_disposed || request.Epoch != _saveEpoch)
+            if (_disposed || request.ItemEpoch != _itemEpoch)
             {
                 return true;
             }
+            if (request.Epoch != _saveEpoch
+                || !string.Equals(request.Path, Path, StringComparison.Ordinal))
+            {
+                if (request.ExpectedContentHash is not null && !IsMissingFromDisk)
+                {
+                    AdoptLandedWrite(request, saved);
+                    _documentChanged?.Invoke(this, null);
+                }
+                return true;
+            }
 
-            _contentHash = saved.NewContentHash;
-            IsExternallyStale = false;
-            if (_editorSession is { } session)
-            {
-                _text = request.Text;
-                if (session.Revision == request.Revision)
-                {
-                    session.MarkSaved(request.Text);
-                }
-                else
-                {
-                    // Typed while the write ran: disk holds the snapshot,
-                    // the editor keeps the newer text and stays dirty.
-                    session.MarkSavedBehindEdits(request.Text);
-                }
-                IsDirty = !session.IsAtSavedBaseline;
-            }
-            else
-            {
-                IsDirty = !string.Equals(_text, request.Text, StringComparison.Ordinal);
-            }
+            AdoptLandedWrite(request, saved);
             Status = saved.Caveat is null
                 ? $"Saved {System.IO.Path.GetFileName(request.Path)}."
                 : $"Saved {System.IO.Path.GetFileName(request.Path)}. {saved.Caveat}";
@@ -872,7 +864,9 @@ internal sealed partial class WorkspaceTabViewModel : BindableBase, IDisposable
                     is VaultException.WriteConflict
                     or VaultException.DestinationExists);
             leaseSettled = true;
-            if (_disposed || request.Epoch != _saveEpoch)
+            if (_disposed
+                || request.Epoch != _saveEpoch
+                || !string.Equals(request.Path, Path, StringComparison.Ordinal))
             {
                 return false;
             }
@@ -911,10 +905,39 @@ internal sealed partial class WorkspaceTabViewModel : BindableBase, IDisposable
             }
         }
     }
+    /// <summary>The landed write's bytes become the tab's saved state: the
+    /// content hash, and the editor's baseline — behind any edit typed while
+    /// the write ran, which keeps the tab dirty.</summary>
+    private void AdoptLandedWrite(SaveRequest request, SaveWrite saved)
+    {
+        _contentHash = saved.NewContentHash;
+        IsExternallyStale = false;
+        if (_editorSession is { } session)
+        {
+            _text = request.Text;
+            if (session.Revision == request.Revision)
+            {
+                session.MarkSaved(request.Text);
+            }
+            else
+            {
+                // Typed while the write ran: disk holds the snapshot,
+                // the editor keeps the newer text and stays dirty.
+                session.MarkSavedBehindEdits(request.Text);
+            }
+            IsDirty = !session.IsAtSavedBaseline;
+        }
+        else
+        {
+            IsDirty = !string.Equals(_text, request.Text, StringComparison.Ordinal);
+        }
+    }
+
     public void Dispose()
     {
         _disposed = true;
         _saveEpoch++;
+        _itemEpoch++;
         _taskToggleGeneration++;
         // W4-4: refuse new property-header work before the session
         // this tab's header reads from goes away.
@@ -1616,6 +1639,10 @@ internal sealed partial class WorkspaceViewModel : BindableBase, IDisposable
     /// after the render — so it cannot use the event seam above.</summary>
     private readonly Action<RenderedAnnouncement> _announceRendered;
     private readonly Panels.TaskIndexRepairCoordinator _taskIndexRepairs;
+    /// <summary>#1280: every tab's saves, serialized per canonical path,
+    /// with the workers tracked for teardown's join.</summary>
+    private readonly WorkspaceSaveCoordinator _saves =
+        new(System.Windows.Threading.Dispatcher.CurrentDispatcher);
     private readonly Func<WorkspaceTabViewModel, WorkspaceItemState, WorkspaceDirtyNavigationDecision>
         _dirtyNavigationDecision;
     private readonly Func<WorkspaceTabViewModel, WorkspaceDirtyNavigationDecision>
@@ -2309,16 +2336,64 @@ internal sealed partial class WorkspaceViewModel : BindableBase, IDisposable
             WorkspaceOpenTarget.NewTab));
     }
 
+    /// <summary>Save every dirty tab (#1280). Each save pumps, and anything
+    /// may run inside its frame — a tab opened, closed, moved or typed into
+    /// — so the pass works over a snapshot and starts a new round whenever
+    /// the tab set's stamp moved: a tab opened mid-way is saved, a closed
+    /// one is skipped, and nothing is enumerated live across a frame. A
+    /// clean tab is never rewritten and a tab whose save failed (and said
+    /// why) is not retried, so every tab is written at most once per edit.
+    /// Saved means a round ended with the stamp unchanged and no dirty tab
+    /// left but the failed ones — within a bounded number of rounds.</summary>
     public bool SaveAll()
     {
-        bool saved = true;
-        foreach (WorkspaceTabViewModel tab in Groups.SelectMany(group => group.Tabs))
+        var failed = new HashSet<WorkspaceTabViewModel>(ReferenceEqualityComparer.Instance);
+        for (int round = 0; round < MaxPumpedAdmissionRounds; round++)
         {
-            saved &= tab.Save();
+            if (_workspaceDisposed)
+            {
+                return false;
+            }
+            TabSetStamp stamp = CaptureTabSet();
+            bool moved = false;
+            foreach (WorkspaceTabViewModel tab in stamp.Tabs)
+            {
+                if (_workspaceDisposed)
+                {
+                    return false;
+                }
+                if (tab.IsDisposed || !tab.IsDirty || failed.Contains(tab))
+                {
+                    continue;
+                }
+                if (!tab.Save())
+                {
+                    failed.Add(tab);
+                }
+                if (!stamp.StillHolds(this))
+                {
+                    moved = true;
+                    break;
+                }
+            }
+            if (!moved
+                && !Groups.SelectMany(group => group.Tabs)
+                    .Any(tab => tab.IsDirty && !failed.Contains(tab)))
+            {
+                return failed.Count == 0;
+            }
         }
-
-        return saved;
+        return false;
     }
+
+    /// <summary>#1280: teardown's first step — pump until every admitted
+    /// save has published, so the dirty state it then evaluates is settled
+    /// and no write admitted before the prompt lands after it. False only
+    /// when the dispatcher is shutting down.</summary>
+    internal bool SettleSaves() => _saves.SettlePumping();
+
+    /// <summary>#1280 test seam: the workspace's save coordinator.</summary>
+    internal WorkspaceSaveCoordinator SavesForTests => _saves;
 
     public void RetargetPath(string oldPath, string newPath)
     {
@@ -2493,6 +2568,13 @@ internal sealed partial class WorkspaceViewModel : BindableBase, IDisposable
 
     public void Dispose()
     {
+        // #1280 (contract 35 A-1, close-before-session): no save starts
+        // from here on, and every save worker already writing is JOINED
+        // before this returns — the vault lifecycle disposes the session
+        // right after. The join needs no dispatcher callback (the workers
+        // call only core); a publication that lands later finds its tab
+        // disposed and says nothing.
+        _saves.CloseAndJoinWorkers();
         // W4-4 (adversarial round 2): the bulk-rename worker holds
         // the shared session too — cancel any in-flight run through
         // its CancelToken and shut the scheduler down so a terminal

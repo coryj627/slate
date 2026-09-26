@@ -1183,7 +1183,30 @@ internal sealed class VaultLifecycleViewModel
         }));
     }
 
+    /// <summary>#1280: true while a workspace teardown is deciding. Its
+    /// saves pump with the window enabled, so a second close, switch or
+    /// window close can arrive inside it; that one is refused rather than
+    /// run nested.</summary>
+    private bool _workspaceTeardownInProgress;
+
     private bool TryCloseWorkspace()
+    {
+        if (_workspaceTeardownInProgress)
+        {
+            return false;
+        }
+        _workspaceTeardownInProgress = true;
+        try
+        {
+            return TryCloseWorkspaceCore();
+        }
+        finally
+        {
+            _workspaceTeardownInProgress = false;
+        }
+    }
+
+    private bool TryCloseWorkspaceCore()
     {
         if (FileSidebar?.CancelTreeRefresh() == true)
         {
@@ -1220,6 +1243,16 @@ internal sealed class VaultLifecycleViewModel
             return false;
         }
 
+        // #1280 (contract 35 A-1): every save already admitted — a Ctrl+S
+        // whose write is still running — settles BEFORE the dirty state is
+        // evaluated, so the prompt asks about what is really unsaved and no
+        // admitted write lands after the user chose Discard. The session is
+        // disposed only after Workspace.Dispose has joined every worker.
+        if (Workspace is WorkspaceViewModel settling && !settling.SettleSaves())
+        {
+            return false;
+        }
+
         if (Workspace?.HasDirtyTabs != true)
         {
             return true;
@@ -1233,7 +1266,13 @@ internal sealed class VaultLifecycleViewModel
 
         if (decision == VaultCloseDecision.SaveAll)
         {
-            if (!Workspace.SaveAll())
+            // Save All pumps: an edit typed or a tab opened meanwhile is
+            // saved by its rounds, and anything still dirty once every save
+            // has settled keeps the vault open rather than being dropped.
+            if (Workspace is not WorkspaceViewModel saving
+                || !saving.SaveAll()
+                || !saving.SettleSaves()
+                || saving.HasDirtyTabs)
             {
                 ReportTerminalStatus(
                     "Vault remains open because one or more notes could not be saved.",

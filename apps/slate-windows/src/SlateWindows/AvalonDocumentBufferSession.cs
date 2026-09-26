@@ -334,13 +334,19 @@ internal sealed class AvalonDocumentBufferSession : IDisposable
             }
             else if (baselineChanged)
             {
-                if (!string.Equals(text, savedBaseline.Text, StringComparison.Ordinal))
+                if (string.Equals(text, savedBaseline.Text, StringComparison.Ordinal))
                 {
-                    throw new InvalidOperationException(
-                        "Only a clean existing peer can advance its saved baseline without reconstruction.");
+                    AdoptSavedBaseline(savedBaseline);
                 }
-
-                AdoptSavedBaseline(savedBaseline);
+                else
+                {
+                    // #1280 (codex round 1): the source saved while an edit
+                    // it shares with this peer was typed — its baseline moved
+                    // BEHIND the edit. The peer adopts the same baseline the
+                    // same way, keeping its text and undo history: it stays
+                    // dirty, and undoing back to the saved text is clean.
+                    AdoptSavedBaselineBehindEdits(savedBaseline);
+                }
             }
 
             if (reconstructUndoHistory)
@@ -545,11 +551,19 @@ internal sealed class AvalonDocumentBufferSession : IDisposable
         ArgumentNullException.ThrowIfNull(savedText);
         ThrowIfDisposed();
         Document.VerifyAccess();
+        AdoptSavedBaselineBehindEdits(new EditorSavedBaseline(
+            savedText,
+            checked((uint)savedText.Length),
+            SlateUniffiMethods.EditorTextContentHash(savedText)));
+    }
+
+    private void AdoptSavedBaselineBehindEdits(EditorSavedBaseline savedBaseline)
+    {
         lock (_gate)
         {
-            _savedBaselineText = savedText;
-            _savedLengthUtf16 = checked((uint)savedText.Length);
-            _savedContentHash = SlateUniffiMethods.EditorTextContentHash(savedText);
+            _savedBaselineText = savedBaseline.Text;
+            _savedLengthUtf16 = savedBaseline.Utf16Length;
+            _savedContentHash = savedBaseline.ContentHash;
         }
 
         // The CURRENT text is not what is on disk: no undo position is the

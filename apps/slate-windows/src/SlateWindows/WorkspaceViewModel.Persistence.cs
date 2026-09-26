@@ -79,6 +79,7 @@ internal sealed partial class WorkspaceViewModel
                     startInteractionBackgroundWork: _startInteractionBackgroundWork)
                 {
                     TaskRepairs = _taskIndexRepairs,
+                    SaveCoordinator = _saves,
                 };
                 AttachTabDocumentsIfNeeded(restoredTab);
                 group.Tabs.Add(restoredTab);
