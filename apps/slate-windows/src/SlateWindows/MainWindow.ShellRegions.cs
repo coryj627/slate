@@ -327,7 +327,9 @@ public partial class MainWindow : IShellRegionHost
     /// seats nobody later — by a newer press, by a newer request in its
     /// place, by the surface leaving the tab (the shared cell rebinds on a
     /// tab switch or close) or the tree (an unload: a closed pane), and the
-    /// moment the reader leaves the element the press found them on (<see
+    /// moment the reader leaves the element the press found them on — or,
+    /// once inside the surface, moves on within it: only the document's own
+    /// terminal seat moves them there after the one entry (<see
     /// cref="FocusDepartureWatch"/>). Cancelled and Refused are exclusive: a
     /// refusal is decided after the move it may travel with, and stands only
     /// if nothing cancelled the landing first.</summary>
