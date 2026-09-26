@@ -28,8 +28,11 @@ public sealed partial class ShellAccessibilityTests
     /// filter results, the tree and the dual pane; the Tags tree filters
     /// by core's grammar — <c>#accessibility</c> in the field, one result —
     /// and a whitespace tag by the out-of-band scope, whose summary is
-    /// shown; and Escape in the filter field clears it. The vault is this
-    /// journey's own, so its extra notes touch no shared fixture.</summary>
+    /// shown; Escape in the filter field clears it; and an arrow in the
+    /// filter results and in the dual pane moves the list's selection,
+    /// which shows the note it reached while focus stays on that row. The
+    /// vault is this journey's own, so its extra notes touch no shared
+    /// fixture.</summary>
     [Fact]
     public void FilesTree_ArrowsKeepFocusEnterOpens()
     {
@@ -45,6 +48,8 @@ public sealed partial class ShellAccessibilityTests
             Path.Combine(vault, "zeta.md"),
             "---\ntags: [\"two words\"]\n---\n\n# Zeta\n");
         File.WriteAllText(Path.Combine(vault, "Folder", "child.md"), "# Child note\n");
+        File.WriteAllText(Path.Combine(vault, "Folder", "sibling.md"), "# Sibling\n");
+        string[] folderFiles = ["child.md", "sibling.md"];
 
         Process? process = null;
         try
@@ -162,13 +167,13 @@ public sealed partial class ShellAccessibilityTests
             AutomationElement dualPane = WaitForElement(window, "SidebarDualPane", TimeSpan.FromSeconds(10));
             WaitForTreeItemStartingWith(tree, automation, "Folder").Focus();
             AssertFocusStaysOnRow(automation, tree, "Folder", "The Folder row did not take focus back.");
-            FocusOnlyListRow(automation, dualPane, "child.md", "The dual pane's child.md row did not take focus.");
+            FocusListRow(automation, dualPane, "child.md", folderFiles, "The dual pane's child.md row did not take focus.");
             PressChord(VirtualKeyShort.CONTROL, VirtualKeyShort.ENTER);
             AssertEventuallyFocused(
                 WaitForEditor(window, automation, "child.md editor", TimeSpan.FromSeconds(10)),
                 "Ctrl+Enter on a dual-pane row did not move focus into its note.");
             AssertTabCount(window, automation, 4, "Ctrl+Enter on a dual-pane row did not open a new tab.");
-            FocusOnlyListRow(automation, dualPane, "child.md", "The dual pane's child.md row did not take focus back.");
+            FocusListRow(automation, dualPane, "child.md", folderFiles, "The dual pane's child.md row did not take focus back.");
             PressKey(VirtualKeyShort.ENTER);
             AssertEventuallyFocused(
                 WaitForEditor(window, automation, "child.md editor", TimeSpan.FromSeconds(10)),
@@ -204,6 +209,27 @@ public sealed partial class ShellAccessibilityTests
                 SpinWait.SpinUntil(() => !clear.IsEnabled, TimeSpan.FromSeconds(10)),
                 "The Clear filter button stayed enabled after Escape cleared the filter.");
             _ = WaitForTreeItemStartingWith(tree, automation, "alpha.md");
+
+            // R-2 on the lists (codex PR 2 round 5): a real arrow moves a
+            // list's selection — focusing a row moves none — and the
+            // selection shows the note the arrow reached while focus stays
+            // on that row. The path:Folder results are child.md and
+            // sibling.md; the arrow reaches sibling.md, shown in a new
+            // transient tab.
+            field.Patterns.Value.Pattern.SetValue("path:Folder");
+            AutomationElement results = FilterResults(window);
+            ArrowOntoListRow(automation, results, "sibling.md", folderFiles, "The path:Folder results");
+            _ = WaitForEditor(window, automation, "sibling.md editor", TimeSpan.FromSeconds(10));
+            AssertFocusStaysOnListRow(automation, results, "sibling.md", "The arrow onto the sibling.md result did not keep focus on it.");
+            AssertTabCount(window, automation, 5, "The arrow in the filter results did not show sibling.md in a new transient tab.");
+
+            // The dual pane still lists Folder's files: the arrow reaches
+            // child.md, whose own tab (Ctrl+Enter's, above) is activated.
+            field.Patterns.Value.Pattern.SetValue(string.Empty);
+            ArrowOntoListRow(automation, dualPane, "child.md", folderFiles, "The dual pane");
+            _ = WaitForEditor(window, automation, "child.md editor", TimeSpan.FromSeconds(10));
+            AssertFocusStaysOnListRow(automation, dualPane, "child.md", "The arrow onto the dual pane's child.md did not keep focus on it.");
+            AssertTabCount(window, automation, 5, "The arrow in the dual pane opened another tab.");
         }
         finally
         {
@@ -221,22 +247,36 @@ public sealed partial class ShellAccessibilityTests
     /// cluster.</summary>
     private static void PressDownArrow() => Keyboard.TypeScanCode(0x50, true);
 
+    /// <summary>The Up arrow as the keyboard's own arrow key (scan code
+    /// 0x48, extended) — see <see cref="PressDownArrow"/>.</summary>
+    private static void PressUpArrow() => Keyboard.TypeScanCode(0x48, true);
+
     /// <summary>R-2's observable: focus is on the row named
     /// <paramref name="prefix"/> inside <paramref name="container"/>, and
     /// it STAYS there for <see cref="FocusSettle"/> — the window in which
     /// the old route's queued editor focus landed.</summary>
     private static void AssertFocusStaysOnRow(
-        UIA3Automation automation, AutomationElement container, string prefix, string message)
+        UIA3Automation automation, AutomationElement container, string prefix, string message) =>
+        AssertFocusStays(automation, () => FocusIsOnRow(automation, container, prefix), message);
+
+    /// <summary><see cref="AssertFocusStaysOnRow"/> for a list row, which
+    /// may show its note's name in a child text rather than its own
+    /// name.</summary>
+    private static void AssertFocusStaysOnListRow(
+        UIA3Automation automation, AutomationElement list, string text, string message) =>
+        AssertFocusStays(automation, () => FocusIsOnListRow(automation, list, text), message);
+
+    private static void AssertFocusStays(UIA3Automation automation, Func<bool?> focusIsOnRow, string message)
     {
         Assert.True(
-            SpinWait.SpinUntil(() => FocusIsOnRow(automation, container, prefix) == true, TimeSpan.FromSeconds(10)),
+            SpinWait.SpinUntil(() => focusIsOnRow() == true, TimeSpan.FromSeconds(10)),
             $"{message} Focused: {DescribeFocus(automation)}. {FocusDiagnosis()}");
         var clock = Stopwatch.StartNew();
         int observed = 0;
         while (clock.Elapsed < FocusSettle)
         {
             // A transient UIA fault is no observation either way.
-            if (FocusIsOnRow(automation, container, prefix) is bool onRow)
+            if (focusIsOnRow() is bool onRow)
             {
                 Assert.True(
                     onRow,
@@ -265,6 +305,95 @@ public sealed partial class ShellAccessibilityTests
         }
     }
 
+    private static bool? FocusIsOnListRow(UIA3Automation automation, AutomationElement list, string text)
+    {
+        try
+        {
+            return automation.FocusedElement() is { } focused
+                && focused.Properties.ControlType.ValueOrDefault == ControlType.ListItem
+                && IsDescendantOf(focused, list)
+                && RowShows(automation, focused, text);
+        }
+        catch (Exception exception) when (IsTransientUiaFault(exception))
+        {
+            return null;
+        }
+    }
+
+    /// <summary>A list row shows <paramref name="text"/> as its own name
+    /// (a display-member row) or in a child text (a templated row).</summary>
+    private static bool RowShows(UIA3Automation automation, AutomationElement row, string text) =>
+        row.Properties.Name.ValueOrDefault == text
+        || row.FindFirstDescendant(automation.ConditionFactory.ByName(text)) is not null;
+
+    /// <summary>The list's rows and the text each shows, in row order —
+    /// once the rows show exactly <paramref name="texts"/>, one each (a
+    /// list keeps its previous rows until the new ones publish, so the
+    /// full set is the proof the list is current); null until then.</summary>
+    private static (AutomationElement[] Rows, string[] Shown)? ListRows(
+        UIA3Automation automation, AutomationElement list, IReadOnlyList<string> texts)
+    {
+        AutomationElement[] rows = list.FindAllDescendants(
+            automation.ConditionFactory.ByControlType(ControlType.ListItem));
+        if (rows.Length != texts.Count)
+        {
+            return null;
+        }
+
+        string[] shown = new string[rows.Length];
+        for (int index = 0; index < rows.Length; index++)
+        {
+            string? text = texts.FirstOrDefault(candidate => RowShows(automation, rows[index], candidate));
+            if (text is null || shown.Contains(text))
+            {
+                return null;
+            }
+
+            shown[index] = text;
+        }
+
+        return (rows, shown);
+    }
+
+    /// <summary>R-2 on a list (codex PR 2 round 5): once the list shows
+    /// exactly <paramref name="texts"/>, focus the row beside
+    /// <paramref name="target"/>'s — focus moves no ListBox selection, so
+    /// nothing opens — and press the real arrow that reaches
+    /// <paramref name="target"/> (Down from the row above, Up from the row
+    /// below), which moves the list's selection onto it.</summary>
+    private static void ArrowOntoListRow(
+        UIA3Automation automation, AutomationElement list, string target, IReadOnlyList<string> texts, string what)
+    {
+        string[] shown = [];
+        Assert.True(
+            SpinWait.SpinUntil(
+                () =>
+                {
+                    try
+                    {
+                        shown = ListRows(automation, list, texts)?.Shown ?? [];
+                        return shown.Length == texts.Count;
+                    }
+                    catch (Exception exception) when (IsTransientUiaFault(exception) || exception is InvalidOperationException)
+                    {
+                        return false;
+                    }
+                },
+                TimeSpan.FromSeconds(10)),
+            $"{what} did not list exactly {string.Join(" and ", texts)}.");
+        int targetIndex = Array.IndexOf(shown, target);
+        int startIndex = targetIndex == 0 ? 1 : targetIndex - 1;
+        FocusListRow(automation, list, shown[startIndex], texts, $"{what}: the {shown[startIndex]} row did not take focus.");
+        if (startIndex < targetIndex)
+        {
+            PressDownArrow();
+        }
+        else
+        {
+            PressUpArrow();
+        }
+    }
+
     private static string DescribeFocus(UIA3Automation automation)
     {
         try
@@ -281,12 +410,18 @@ public sealed partial class ShellAccessibilityTests
     }
 
     /// <summary>A list whose filter or folder leaves exactly one row, the
-    /// one showing <paramref name="text"/> — a list keeps its previous
-    /// rows until the new ones publish, so the text is the proof the list
-    /// is current: focus that row through UIA (focus moves no ListBox
-    /// selection, so nothing opens) and confirm it is the focused
-    /// element.</summary>
-    private static void FocusOnlyListRow(UIA3Automation automation, AutomationElement list, string text, string message)
+    /// one showing <paramref name="text"/>: see
+    /// <see cref="FocusListRow"/>.</summary>
+    private static void FocusOnlyListRow(UIA3Automation automation, AutomationElement list, string text, string message) =>
+        FocusListRow(automation, list, text, [text], message);
+
+    /// <summary>Once the list shows exactly <paramref name="texts"/> (the
+    /// proof it is current — a list keeps its previous rows until the new
+    /// ones publish), focus the row showing <paramref name="text"/>
+    /// through UIA (focus moves no ListBox selection, so nothing opens)
+    /// and confirm it is the focused element.</summary>
+    private static void FocusListRow(
+        UIA3Automation automation, AutomationElement list, string text, IReadOnlyList<string> texts, string message)
     {
         Assert.True(
             SpinWait.SpinUntil(
@@ -294,19 +429,16 @@ public sealed partial class ShellAccessibilityTests
                 {
                     try
                     {
-                        AutomationElement[] rows = list.FindAllDescendants(
-                            automation.ConditionFactory.ByControlType(ControlType.ListItem));
-                        if (rows.Length != 1
-                            || (rows[0].Properties.Name.ValueOrDefault != text
-                                && rows[0].FindFirstDescendant(automation.ConditionFactory.ByName(text)) is null))
+                        if (ListRows(automation, list, texts) is not var (rows, shown))
                         {
                             return false;
                         }
 
-                        rows[0].Focus();
+                        rows[Array.IndexOf(shown, text)].Focus();
                         return automation.FocusedElement() is { } focused
                             && focused.Properties.ControlType.ValueOrDefault == ControlType.ListItem
-                            && IsDescendantOf(focused, list);
+                            && IsDescendantOf(focused, list)
+                            && RowShows(automation, focused, text);
                     }
                     catch (Exception exception) when (IsTransientUiaFault(exception) || exception is InvalidOperationException)
                     {
