@@ -288,9 +288,9 @@ public sealed class ItemContainerNameCensus
             ["TemplateFlowPromptsList"] = new ContainerNaming.Layout(
                 "each prompt's box is named by its label among its siblings",
                 new SiblingRule("Label", null, "field")),
-            ["MoveToList"] = Distinct(
+            ["MoveToList"] = Sibling(
                 typeof(MoveToRowViewModel), nameof(MoveToRowViewModel.AccessibleName),
-                "a nested folder's row carries its full path; top-level folders and the pinned rows are distinct"),
+                nameof(MoveToRowViewModel.Place), "destination"),
             ["CanvasCardPickerRows"] = Sibling(
                 typeof(CanvasCardPickerRow), nameof(CanvasCardPickerRow.Label), null, "card"),
             ["CanvasPromptChoices"] = Sibling(typeof(CanvasPromptChoice), nameof(CanvasPromptChoice.Name), null, "choice"),

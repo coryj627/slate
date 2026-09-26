@@ -4162,11 +4162,11 @@
                              BorderThickness="0"
                              Background="Transparent"
                              MouseDoubleClick="MoveToList_MouseDoubleClick"
-                             AutomationProperties.AutomationId="MoveToList"
+                             AutomationProperties.AutomationId="MoveToList" local:SiblingNames.NamePath="AccessibleName" local:SiblingNames.DistinguisherPath="Place" local:SiblingNames.Noun="destination"
                              AutomationProperties.Name="Destination folders">
                         <ListBox.ItemContainerStyle>
                             <Style TargetType="ListBoxItem">
-                                <Setter Property="AutomationProperties.Name" Value="{Binding AccessibleName}" />
+                                <Setter Property="AutomationProperties.Name" Value="{Binding RelativeSource={RelativeSource Self}, Converter={x:Static local:SiblingNames.Converter}}" />
                                 <Setter Property="AutomationProperties.HelpText" Value="{Binding DataContext.RowHelpText, RelativeSource={RelativeSource AncestorType=ListBox}}" />
                                 <Setter Property="Padding" Value="8,6" />
                             </Style>

@@ -290,6 +290,36 @@ public sealed class SharedNameTests
             ["Link to target.md, link 1", "Link to target.md, Embed", "Link to target.md, link 3"], names));
     });
 
+    /// <summary>Codex PR 3 round 4: a top-level folder named "Vault root"
+    /// reads exactly like the pinned root destination. The picker's rows are
+    /// on the sibling rule — the folder adds its place, the root stays the
+    /// root — and moving the selection speaks the same composed name the
+    /// list item reads, so the reader always knows where Enter moves the
+    /// files.</summary>
+    [Fact]
+    public void AFolderNamedVaultRootReadsApartFromTheRoot() => RunSta(() =>
+    {
+        var announced = new List<A11yEvent>();
+        var picker = new FileManagement.MoveToPickerViewModel(
+            ["Vault root", "alpha", "X/Vault root"],
+            rootIsLegal: true,
+            itemNoun: "a.md",
+            confirmed: _ => { },
+            createAndMove: _ => { },
+            cancelled: () => { },
+            newFolderPathAllowed: _ => true,
+            announce: announced.Add);
+        string[] composed = ["Vault root", "Vault root, folder Vault root", "alpha", "Vault root. X/Vault root."];
+        Assert.Equal(composed, picker.Rows.Select(row => row.SpokenName));
+        HostedNames("MoveToList", picker, names => Assert.Equal(composed, names));
+
+        announced.Clear();
+        picker.SelectedRow = picker.Rows[1];
+        Assert.Equal(
+            "Vault root, folder Vault root",
+            Assert.Single(announced.OfType<A11yEvent.RowSelected>()).Name);
+    });
+
     /// <summary>Add section takes one saved query twice: each section reads
     /// its place, and follows it through a move and a removal.</summary>
     [Fact]
