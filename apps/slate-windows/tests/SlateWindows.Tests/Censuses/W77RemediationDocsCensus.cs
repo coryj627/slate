@@ -148,6 +148,9 @@ public sealed partial class W77RemediationDocsCensus
     [Theory]
     [InlineData("**R-1 — Title (PR 1, #1244).** Body.\nContinued ownership: PR 9, #9999.")]
     [InlineData("**R-1 — Title (PR 1, #1244).** Body.\nContinued ownership: PR\n9.")]
+    [InlineData("**R-1 — Title (PR 1, #1244).** Body.\nContinued ownership: PR [9](https://example.test/pull/9).")]
+    [InlineData("**R-1 — Title (PR 1, #1244).** Body.\nContinued ownership: PR *9*.")]
+    [InlineData("**R-1 — Title (PR 1, #1244).** Body.\nShared with PRs 9 and 10.")]
     [InlineData("**R-1 — Title (PR 1, #1244).** Body.\nAlso #1244.")]
     [InlineData("**R-1 — Title (PR 1, #1244).** Body.\nnaming #9999.")]
     [InlineData("**R-1 — Title (PR 1, #1244).** Body.\n#9999 is named too.")]
@@ -297,14 +300,16 @@ public sealed partial class W77RemediationDocsCensus
     /// </summary>
     private static string? ContractParagraphDefect(string paragraph, Match heading)
     {
-        int prTokens = PrToken().Matches(paragraph).Count;
-        if (prTokens != 1)
+        // Everything but the owner clause itself: no `PR n` token, and no
+        // standalone `PR` / `PRs` word either, since `PR [9](…)` or `PR *9*`
+        // names a PR without forming a token (codex round 27).
+        Group clause = heading.Groups["clause"];
+        string outside = string.Concat(paragraph.AsSpan(0, clause.Index), paragraph.AsSpan(clause.Index + clause.Length));
+        if (PrMarker().Match(outside) is { Success: true } marker)
         {
-            return $"names {prTokens} PRs";
+            return $"names a PR outside its owner clause (`{marker.Value}`)";
         }
 
-        Group owner = heading.Groups[3];
-        string outside = string.Concat(paragraph.AsSpan(0, owner.Index), paragraph.AsSpan(owner.Index + owner.Length));
         if (MalformedIssueToken().Match(outside) is { Success: true } malformed)
         {
             return $"carries the malformed issue token `{malformed.Value}`";
@@ -531,7 +536,10 @@ public sealed partial class W77RemediationDocsCensus
     // Round 23: the issue list must be followed by `;` or `)`, so any other
     // character after the digits — a letter, a superscript, a supplementary
     // character — refuses the heading.
-    [GeneratedRegex(@"^\*\*R-(\d+) — [^\n*#]*?\(PR (\d+), (#\d+(?:, #\d+)*)(?=[;)])[^)\n*#]*\)[^\n*#]*?\.\*\*(?=\s)", RegexOptions.Multiline)]
+    // The named `clause` group spans the whole owner clause, `(PR n, …)`;
+    // being named, it leaves the numbered groups (R-n, PR n, the issue
+    // list) where they were (codex round 27).
+    [GeneratedRegex(@"^\*\*R-(\d+) — [^\n*#]*?(?<clause>\(PR (\d+), (#\d+(?:, #\d+)*)(?=[;)])[^)\n*#]*\))[^\n*#]*?\.\*\*(?=\s)", RegexOptions.Multiline)]
     private static partial Regex ContractHeading();
 
     // Anything that starts a line like a contract definition, however it
@@ -575,12 +583,11 @@ public sealed partial class W77RemediationDocsCensus
     [GeneratedRegex(@"#\d+(?![\d\s,;:.)]|$)")]
     private static partial Regex MalformedIssueToken();
 
-    // A PR reference: `PR` then a number, not inside a longer word. Any run
-    // of whitespace may separate them, a Markdown soft wrap included, since
-    // `PR` at a line's end and `9` on the next line still render as `PR 9`
-    // (codex round 26).
-    [GeneratedRegex(@"(?<![A-Za-z0-9_])PR\s+\d+")]
-    private static partial Regex PrToken();
+    // Any standalone `PR` or `PRs` word — with or without a number after
+    // it, across a soft wrap, a link or emphasis — so a formatted foreign
+    // reference cannot hide outside the owner clause (codex rounds 26–27).
+    [GeneratedRegex(@"(?<![A-Za-z0-9_])PRs?(?![A-Za-z0-9_])")]
+    private static partial Regex PrMarker();
 
     // A Markdown ATX heading line, which ends a contract paragraph. `#` must
     // be followed by a space or the line end, so a continuation line that
