@@ -118,6 +118,36 @@ public sealed class FilesRegionLandingTests
             $"{key} took the keys out of the Files region, from {landed} to {Keyboard.FocusedElement}");
     });
 
+    /// <summary>The arrow witness for the landing with a file selected: from
+    /// the selected file's row each arrow keeps the keys in the tree — at
+    /// the first row and a root (Up, Left) and at the last row and a leaf
+    /// (Down, Right), where the tree has no row further to go. There the
+    /// arrow reaches the row's own check box (the batch-trash mark), which
+    /// is inside the row, never out of the region.</summary>
+    [Theory]
+    [InlineData(Key.Left, 0)]
+    [InlineData(Key.Up, 0)]
+    [InlineData(Key.Right, -1)]
+    [InlineData(Key.Down, -1)]
+    public void FromTheSelectedFilesRowEveryArrowStaysInTheRegion(Key key, int row) => RunSta(() =>
+    {
+        using var host = new Host();
+        host.Initialize();
+        FileTreeNodeViewModel selected = row < 0 ? host.Sidebar.RootNodes[^1] : host.Sidebar.RootNodes[row];
+        selected.IsSelected = true;
+        host.Sidebar.SelectedNode = selected;
+        host.Pane.UpdateLayout();
+        Assert.True(host.Above.Focus());
+        Assert.True(host.Shell.LandOnFilesTree());
+        Assert.Same(selected, FocusedNode());
+
+        host.Press(key);
+
+        Assert.True(
+            host.Tree.IsKeyboardFocusWithin,
+            $"{key} took the keys out of the Files tree, to {Keyboard.FocusedElement}");
+    });
+
     private static FileTreeNodeViewModel? FocusedNode() =>
         (Keyboard.FocusedElement as TreeViewItem)?.DataContext as FileTreeNodeViewModel;
 
