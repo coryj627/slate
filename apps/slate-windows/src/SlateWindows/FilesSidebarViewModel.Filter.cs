@@ -22,7 +22,15 @@ internal sealed partial class FilesSidebarViewModel
     private Task _filterCompletion = Task.CompletedTask;
     private int _filterGeneration;
     private string _filterText = string.Empty;
-    private (string Query, ulong Total)? _lastFilterAnnouncement;
+    private string? _scopeTag;
+
+    /// <summary>The last spoken count, de-duplicated on (query, scope,
+    /// total) — mac's (key, total) with its <c>tagScopeAnnounceKey</c>: the
+    /// same request published again with the same total (a refresh) is not
+    /// news; a changed total (a rescan), or an equal total for another
+    /// query or tag scope, is (W7-7 R-3, codex round 4). A request's
+    /// staleness is (query, scope) alone — the total is its answer.</summary>
+    private (string Query, string? ScopeTag, ulong Total)? _lastFilterAnnouncement;
 
     public ObservableCollection<FileTreeNodeViewModel> FilterResults { get; } = [];
     internal Task FilterCompletion
@@ -43,35 +51,150 @@ internal sealed partial class FilesSidebarViewModel
         get => _filterText;
         set
         {
+            bool wasActive = IsFilterActive;
             if (SetField(ref _filterText, value))
             {
+                // W7-7 (R-3): typing narrows WITHIN a tag scope (core ANDs
+                // the query with scope_tag); emptying the field is the
+                // user's clear, and the scope goes with the text. Only an
+                // EMPTY field clears: a whitespace-only edit (a leading
+                // space before the words) keeps the scope, and core runs
+                // the trimmed query inside it (codex PR 2 round 1).
+                if (string.IsNullOrEmpty(value) && _scopeTag is not null)
+                {
+                    _scopeTag = null;
+                    OnPropertyChanged(nameof(ScopeTag));
+                }
+
+                // A Tags-tree selection stands for "this tag is the filter";
+                // a typed change ends that, and an emptied field is a clear.
+                ReleaseTagSelection();
                 OnPropertyChanged(nameof(IsFilterActive));
                 ScheduleFilter();
                 RaiseCommandStates();
+                if (wasActive && string.IsNullOrEmpty(value))
+                {
+                    // The field emptied by typing is the same clear as the
+                    // command: seen and heard once (codex PR 2 round 2).
+                    ShowAndSpeakFilterCleared();
+                }
             }
         }
     }
 
-    public bool IsFilterActive => !string.IsNullOrWhiteSpace(FilterText);
+    /// <summary>W7-7 (R-3): the out-of-band tag scope, passed as core's
+    /// <c>filter_files</c> <c>scope_tag</c>, for a tag the query grammar
+    /// cannot express because it contains whitespace. Set by a tag
+    /// activation with the field emptied; text typed afterwards filters
+    /// within it; emptying the field or Clear Sidebar Filter drops it. Both
+    /// core renderings name the tag: the status line's summary and the
+    /// count announcement, which carries the scope.</summary>
+    public string? ScopeTag => _scopeTag;
+
+    public bool IsFilterActive => !string.IsNullOrWhiteSpace(FilterText) || _scopeTag is not null;
+
+    /// <summary>One filter change for a tag activation (core's answer) or
+    /// a clear: the field's text and the scope together, one run.</summary>
+    private void ApplyTagActivation(string filterText, string? scopeTag)
+    {
+        bool textChanged = !string.Equals(_filterText, filterText, StringComparison.Ordinal);
+        bool scopeChanged = !string.Equals(_scopeTag, scopeTag, StringComparison.Ordinal);
+        if (!textChanged && !scopeChanged)
+        {
+            return;
+        }
+
+        // Written past the FilterText setter, whose emptied-field rule
+        // would drop the scope being entered.
+        _filterText = filterText;
+        _scopeTag = scopeTag;
+        if (textChanged)
+        {
+            OnPropertyChanged(nameof(FilterText));
+        }
+
+        if (scopeChanged)
+        {
+            OnPropertyChanged(nameof(ScopeTag));
+        }
+
+        OnPropertyChanged(nameof(IsFilterActive));
+        ScheduleFilter();
+        RaiseCommandStates();
+    }
+
+    /// <summary>Clear Sidebar Filter: the text and the scope in one change,
+    /// then the clear's own voice.</summary>
+    private void ClearFilter()
+    {
+        if (!IsFilterActive)
+        {
+            return;
+        }
+
+        ApplyTagActivation(string.Empty, scopeTag: null);
+        ReleaseTagSelection();
+        ShowAndSpeakFilterCleared();
+    }
+
+    /// <summary>A filter clear — Clear Sidebar Filter, or the field emptied
+    /// by the user — speaks for itself (W7-7 R-3, codex PR 2 rounds 1–2):
+    /// no filter run follows an empty, unscoped field, so the status line,
+    /// which still carried the cleared filter's summary, shows core's
+    /// SidebarFilterCleared sentence and that event is announced once. The
+    /// count de-duplication key is RETAINED across the clear (contract 38
+    /// D-5, matching Mac, whose key resets on vault close — a new sidebar
+    /// here — not on an ordinary clear): the identical query re-entered on
+    /// unchanged results shows its count in the status line and stays
+    /// silent, while a different query, scope or total speaks.</summary>
+    private void ShowAndSpeakFilterCleared()
+    {
+        var cleared = new A11yEvent.SidebarFilterCleared();
+        Status = SlateUniffiMethods.A11yRender(cleared).Text;
+        // A tree publication still to come would otherwise overwrite the
+        // sentence; one that has already published has nothing to take
+        // (codex PR 2 round 2).
+        HoldStatusForPendingPublication();
+        _announce(cleared);
+    }
+
+    /// <summary>W7-7 (R-3, codex PR 2 round 2): a filter clear — and any
+    /// filter change that is not the Tags tree's own row — releases the
+    /// tree's selection. The tree applies a tag only when its selection
+    /// CHANGES, so a tag still selected after its filter ended could never
+    /// be applied again — in a one-tag vault, not at all.</summary>
+    private void ReleaseTagSelection()
+    {
+        var pending = new Stack<SidebarTagViewModel>(Tags);
+        while (pending.TryPop(out SidebarTagViewModel? tag))
+        {
+            tag.IsSelected = false;
+            foreach (SidebarTagViewModel child in tag.Children)
+            {
+                pending.Push(child);
+            }
+        }
+    }
 
     private void ScheduleFilter(bool automatic = false)
     {
+        if (!automatic)
+        {
+            // Every user-driven request — typing, a tag, a clear — owns the
+            // status line from here: a status held for a publication is
+            // obsolete (codex round 6, for a clear; codex PR 2 round 2 for
+            // every request — a held "Filter cleared." must not outlive the
+            // tag the user activated next and silence its count).
+            _statusToReassert = null;
+        }
+
         Task previous = FilterCompletion;
         CancelFilterCore();
         int generation = ++_filterGeneration;
         string query = FilterText.Trim();
-        if (query.Length == 0)
+        string? scopeTag = _scopeTag;
+        if (query.Length == 0 && scopeTag is null)
         {
-            // Codex round 6: a USER clearing the filter cancels the
-            // automatic refilter that would have consumed the pending
-            // mutation reassert — clear it here, or a later organic
-            // refresh resurrects the obsolete status. The automatic
-            // path preserves it for its own publication.
-            if (!automatic)
-            {
-                _statusToReassert = null;
-            }
-
             FilterResults.Clear();
             lock (_filterCancellationGate)
             {
@@ -93,10 +216,10 @@ internal sealed partial class FilesSidebarViewModel
                 FilterOutcome outcome;
                 using (lease)
                 {
-                    outcome = RunFilterQuery(query, CancellationToken.None);
+                    outcome = RunFilterQuery(query, scopeTag, CancellationToken.None);
                 }
 
-                ApplyFilterOutcome(query, outcome, automatic);
+                ApplyFilterOutcome(query, scopeTag, outcome, automatic);
             }
             catch (Exception exception)
             {
@@ -134,6 +257,7 @@ internal sealed partial class FilesSidebarViewModel
         Task completion = FilterAfterDelayAsync(
             previous,
             query,
+            scopeTag,
             generation,
             automatic,
             cancellation,
@@ -198,6 +322,7 @@ internal sealed partial class FilesSidebarViewModel
     private async Task FilterAfterDelayAsync(
         Task previous,
         string query,
+        string? scopeTag,
         int generation,
         bool automatic,
         CancellationTokenSource cancellation,
@@ -228,7 +353,7 @@ internal sealed partial class FilesSidebarViewModel
             using (lease)
             {
                 await _runFilterWorker(
-                    () => outcome = RunFilterQuery(query, cancellationToken),
+                    () => outcome = RunFilterQuery(query, scopeTag, cancellationToken),
                     cancellationToken).ConfigureAwait(false);
             }
 
@@ -247,9 +372,10 @@ internal sealed partial class FilesSidebarViewModel
                     {
                         if (!cancellationToken.IsCancellationRequested
                             && generation == _filterGeneration
-                            && string.Equals(FilterText.Trim(), query, StringComparison.Ordinal))
+                            && string.Equals(FilterText.Trim(), query, StringComparison.Ordinal)
+                            && string.Equals(_scopeTag, scopeTag, StringComparison.Ordinal))
                         {
-                            ApplyFilterOutcome(query, outcome, automatic);
+                            ApplyFilterOutcome(query, scopeTag, outcome, automatic);
                         }
 
                         applied.TrySetResult();
@@ -332,7 +458,7 @@ internal sealed partial class FilesSidebarViewModel
         }
     }
 
-    private FilterOutcome RunFilterQuery(string query, CancellationToken cancellationToken)
+    private FilterOutcome RunFilterQuery(string query, string? scopeTag, CancellationToken cancellationToken)
     {
         try
         {
@@ -348,7 +474,7 @@ internal sealed partial class FilesSidebarViewModel
                 SidebarFilterPage page = _session.FilterFiles(
                     query,
                     null,
-                    null,
+                    scopeTag,
                     windows,
                     new Paging(cursor, PageLimit));
                 files.AddRange(page.Files.Take((int)PageLimit - files.Count));
@@ -368,7 +494,7 @@ internal sealed partial class FilesSidebarViewModel
         }
     }
 
-    private void ApplyFilterOutcome(string query, FilterOutcome outcome, bool automatic)
+    private void ApplyFilterOutcome(string query, string? scopeTag, FilterOutcome outcome, bool automatic)
     {
         FilterResults.Clear();
         foreach (FileSummary summary in outcome.Files)
@@ -403,10 +529,15 @@ internal sealed partial class FilesSidebarViewModel
             // reassert — the user asked for the summary.
             _statusToReassert = null;
             Status = outcome.AudioSummary;
-            if (_lastFilterAnnouncement != (query, outcome.Total))
+            if (_lastFilterAnnouncement != (query, scopeTag, outcome.Total))
             {
-                _lastFilterAnnouncement = (query, outcome.Total);
-                _announce(new A11yEvent.FileListCount((uint)Math.Min(outcome.Total, uint.MaxValue)));
+                _lastFilterAnnouncement = (query, scopeTag, outcome.Total);
+                // W7-7 (R-3): the field never shows a tag scope, so the
+                // count carries it and core renders the tag into the
+                // sentence ("File list, 1 item. Filtered by tag two words.").
+                _announce(new A11yEvent.FileListCount(
+                    (uint)Math.Min(outcome.Total, uint.MaxValue),
+                    scopeTag));
             }
         }
     }

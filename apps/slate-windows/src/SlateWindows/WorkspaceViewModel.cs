@@ -384,11 +384,32 @@ internal sealed partial class WorkspaceTabViewModel : BindableBase, IDisposable
             if (SetField(ref _isDirty, value))
             {
                 OnPropertyChanged(nameof(DirtyMarker));
+                if (value)
+                {
+                    // The first dirty transition ends a transient tab for
+                    // good: saved or undone back to clean later, it is kept.
+                    IsTransient = false;
+                }
             }
         }
     }
 
     public string DirtyMarker => IsDirty ? " •" : string.Empty;
+
+    /// <summary>W7-7 (R-2, codex PR 2 round 4; spec review round 21): the
+    /// group's transient tab — VS Code's preview tab — which a Files
+    /// selection shows its note in and the next selection replaces. The flag
+    /// clears permanently on the tab's first dirty transition (its own edit,
+    /// or a peer's unsaved state it takes on), on an explicit open into the
+    /// tab and on "open in a new tab"; nothing sets it again, and a restored
+    /// tab is never transient. The selection never reads IsDirty.</summary>
+    public bool IsTransient
+    {
+        get => _isTransient;
+        internal set => SetField(ref _isTransient, value);
+    }
+
+    private bool _isTransient;
 
     public bool IsMissingFromDisk
     {
@@ -530,6 +551,11 @@ internal sealed partial class WorkspaceTabViewModel : BindableBase, IDisposable
         _contentHash = source._contentHash;
         IsExternallyStale = source.IsExternallyStale;
         _isDirty = source._isDirty;
+        if (_isDirty)
+        {
+            IsTransient = false;
+        }
+
         _isMissingFromDisk = source._isMissingFromDisk;
         _status = source._status;
         AvalonDocumentBufferSession? sourceSession = source._editorSession;
@@ -571,6 +597,11 @@ internal sealed partial class WorkspaceTabViewModel : BindableBase, IDisposable
                 session.EndPeerUpdate();
                 _contentHash = source._contentHash;
                 _isDirty = source._isDirty;
+                if (_isDirty)
+                {
+                    IsTransient = false;
+                }
+
                 _isMissingFromDisk = source._isMissingFromDisk;
                 _status = source._status;
                 if (!_isDirty)
@@ -2012,8 +2043,19 @@ internal sealed partial class WorkspaceViewModel : BindableBase, IDisposable
     public ICommand ToggleRightPaneCommand { get; }
     public ICommand OpenTasksReviewCommand { get; }
 
-    public void OpenPath(string path, WorkspaceOpenTarget target = WorkspaceOpenTarget.CurrentTab) =>
-        RunWorkspaceMutation(() => OpenPathCore(path, target));
+    /// <summary>Opens a path. W7-7 (R-2): <paramref name="fromSelection"/>
+    /// marks a Files selection — tree arrows, a filter result, a dual-pane
+    /// row — which shows the note while keyboard focus stays on the row.
+    /// Such an open asks for no editor focus, speaks no tab focus (the
+    /// row's own selection line is what the reader hears), and never
+    /// raises the modal dirty-navigation gate: a dirty current tab keeps
+    /// its edits and the note shows in another tab of the group (codex PR 2
+    /// round 2). Every other open is explicit and does all three.</summary>
+    public void OpenPath(
+        string path,
+        WorkspaceOpenTarget target = WorkspaceOpenTarget.CurrentTab,
+        bool fromSelection = false) =>
+        RunWorkspaceMutation(() => OpenPathCore(path, target, requestEditorFocus: !fromSelection, fromSelection));
 
     private void OpenEditorNavigation(EditorNavigationRequest request) =>
         RunWorkspaceMutation(() =>
@@ -2052,17 +2094,15 @@ internal sealed partial class WorkspaceViewModel : BindableBase, IDisposable
             }
         });
 
-    private void ActivateEditorTag(string tag)
-    {
+    /// <summary>The editor half of the split tag seam (SD-4): the sidebar
+    /// filters by the tag, and the filter's own core-rendered result — the
+    /// <c>FileListCount</c> naming a tag scope when there is one — is the
+    /// one thing said. W7-7 (R-3, codex PR 2 round 2): the host-composed
+    /// "Filtered files by tag …" residue that also spoke here is gone; with
+    /// the filter now finding the tag's files it was a second result
+    /// line.</summary>
+    private void ActivateEditorTag(string tag) =>
         EditorTagActivated?.Invoke(this, tag);
-        // W0.5-3 residue: Windows editor tag-filter copy. EDITOR path
-        // only since W5-2 SD-4 — the reading path opens the tag-scoped
-        // search overlay and speaks through the search vocabulary, so
-        // this string must never travel with it.
-        _announce(new A11yEvent.HostComposed(
-            $"Filtered files by tag {tag}.",
-            A11yPriority.Medium));
-    }
 
     /// <summary>The reading half of the split tag seam (SD-4): raise
     /// the event and nothing else. Deliberately NO announcement here —
@@ -2071,7 +2111,11 @@ internal sealed partial class WorkspaceViewModel : BindableBase, IDisposable
     private void ActivateReadingTag(string tag) =>
         ReadingTagActivated?.Invoke(this, tag);
 
-    private bool OpenPathCore(string path, WorkspaceOpenTarget target, bool requestEditorFocus = true)
+    private bool OpenPathCore(
+        string path,
+        WorkspaceOpenTarget target,
+        bool requestEditorFocus = true,
+        bool fromSelection = false)
     {
         if (string.IsNullOrWhiteSpace(path))
         {
@@ -2079,7 +2123,7 @@ internal sealed partial class WorkspaceViewModel : BindableBase, IDisposable
         }
 
         WorkspaceItemState item = ItemForPath(path);
-        if (TryOpenItem(item, target, requestEditorFocus))
+        if (TryOpenItem(item, target, requestEditorFocus, fromSelection))
         {
             FileOpened?.Invoke(this, path);
             Persist();
@@ -2436,6 +2480,9 @@ internal sealed partial class WorkspaceViewModel : BindableBase, IDisposable
             ? string.Equals(left.Id, right.Id, StringComparison.Ordinal)
             : string.Equals(left.Path, right.Path, StringComparison.Ordinal));
 
+    // Any tab showing the note will do, transient or not (W7-7 R-2): the
+    // peer only seeds a tab's state from the ONE shared document, and
+    // never decides which tab an open shows — FindOpenTab does that.
     private WorkspaceTabViewModel? FindSamePathTab(
         WorkspaceItemState item,
         WorkspaceTabViewModel? excluding = null) =>

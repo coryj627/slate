@@ -2,6 +2,7 @@
 // SPDX-License-Identifier: AGPL-3.0-or-later
 
 using System.Collections.ObjectModel;
+using System.Diagnostics.CodeAnalysis;
 using System.IO;
 using System.Windows.Threading;
 using System.Windows.Input;
@@ -171,10 +172,17 @@ internal sealed class FileTreeNodeViewModel : BindableBase
         {
             if (IsBatchSelectable && SetField(ref _isBatchSelected, value))
             {
+                OnPropertyChanged(nameof(BatchItemStatus));
                 _owner?.BatchCheckChanged(this);
             }
         }
     }
+
+    /// <summary>W7-7 (R-2, OD-2): the row's UIA ItemStatus. The batch
+    /// check box left the arrow order (Space on the row toggles it), so
+    /// the row the reader is on reports the state itself; the "N items
+    /// selected" announcement stays the audible feedback.</summary>
+    public string BatchItemStatus => _isBatchSelected ? "Checked for batch actions" : string.Empty;
 
     /// <summary>Whether this folder's children are COMPLETELY loaded
     /// real rows — the signal the batch-check reconciliation uses to
@@ -215,9 +223,16 @@ internal sealed class FileTreeNodeViewModel : BindableBase
     /// <summary>Publication-time batch-check rebind (codex round 4):
     /// no per-node announcement — the owner recomputes the count once
     /// after the whole rebind.</summary>
-    internal bool MarkBatchSelectedSilently() =>
-        IsBatchSelectable
-        && SetField(ref _isBatchSelected, true, nameof(IsBatchSelected));
+    internal bool MarkBatchSelectedSilently()
+    {
+        if (!IsBatchSelectable || !SetField(ref _isBatchSelected, true, nameof(IsBatchSelected)))
+        {
+            return false;
+        }
+
+        OnPropertyChanged(nameof(BatchItemStatus));
+        return true;
+    }
 
     internal bool PrepareChildLoad()
     {
@@ -304,8 +319,10 @@ internal sealed class FileTreeNodeViewModel : BindableBase
     }
 }
 
-internal sealed class SidebarTagViewModel
+internal sealed class SidebarTagViewModel : BindableBase
 {
+    private bool _isSelected;
+
     public SidebarTagViewModel(
         string segment,
         string full,
@@ -328,6 +345,16 @@ internal sealed class SidebarTagViewModel
     public string DisplayLabel => $"{Segment} ({FileCount:N0})";
     public string AutomationName => $"{Segment}, {FileCount:N0} {(FileCount == 1 ? "file" : "files")}";
     public ObservableCollection<SidebarTagViewModel> Children { get; } = [];
+
+    /// <summary>The Tags tree's selection, bound two-way (W7-7 R-3, codex
+    /// PR 2 round 2). The tree applies a tag on a selection CHANGE, so
+    /// every filter clear releases it — or the tag just cleared, still
+    /// selected, could never be applied again.</summary>
+    public bool IsSelected
+    {
+        get => _isSelected;
+        set => SetField(ref _isSelected, value);
+    }
 }
 
 internal sealed record SidebarShortcutViewModel(string Kind, string Path)
@@ -427,7 +454,11 @@ internal sealed partial class FilesSidebarViewModel : BindableBase
 
         RefreshCommand = new RelayCommand(_ => Refresh(reportCount: true), _ => true);
         RetrySettingsCommand = new RelayCommand(_ => RetrySettings(), _ => _settingsNotice is not null);
-        ClearFilterCommand = new RelayCommand(_ => FilterText = string.Empty, _ => FilterText.Length > 0);
+        // W7-7 (R-3): Clear covers the tag scope too — text and scope in
+        // one change — and is available exactly while a filter or tag scope
+        // is active: the Clear filter button's enabled state and Escape's
+        // route both read it (codex PR 2 round 4).
+        ClearFilterCommand = new RelayCommand(_ => ClearFilter(), _ => IsFilterActive);
         ToggleTagsCommand = new RelayCommand(_ => ShowTags = !ShowTags, _ => true);
         ToggleDualPaneCommand = new RelayCommand(_ => IsDualPaneEnabled = !IsDualPaneEnabled, _ => true);
         AddTagCommand = new RelayCommand(_ => EditTag(add: true), _ => !IsImporting && !IsTrashing && BatchSelectionCount > 0 && TagInput.Length > 0);
@@ -497,7 +528,13 @@ internal sealed partial class FilesSidebarViewModel : BindableBase
         Refresh(reportCount: true);
     }
 
-    public event EventHandler<(string Path, WorkspaceOpenTarget Target)>? OpenTargetRequested;
+    /// <summary>An open for the workspace. W7-7 (R-2): <c>FocusEditor</c>
+    /// is false for a selection-driven open — tree arrows, a filter
+    /// result, a dual-pane row — which shows the note while keyboard focus
+    /// stays on the row; every explicit open (Enter, Ctrl+Enter, the Open
+    /// buttons and palette rows, shortcuts, history, creates) moves focus
+    /// into the note.</summary>
+    public event EventHandler<(string Path, WorkspaceOpenTarget Target, bool FocusEditor)>? OpenTargetRequested;
 
     public ObservableCollection<FileTreeNodeViewModel> DualPaneFiles { get; } = [];
     public ObservableCollection<SidebarTagViewModel> Tags { get; } = [];
@@ -566,19 +603,24 @@ internal sealed partial class FilesSidebarViewModel : BindableBase
             }
 
             MutationName = value.Name;
+            // W7-7 (R-2, OD-2): selection keeps opening the note (mac
+            // parity: selectedFilePath drives the editor) but never takes
+            // focus off the row — every arrow onto a file used to land the
+            // reader in the editor. Enter and Ctrl+Enter (OpenNode) are the
+            // opens that move focus.
             if (value.IsDirectory)
             {
                 _announce(new A11yEvent.TreeFolderSelected(value.DisplayName));
                 LoadDualPane(value.Path);
                 if (value.HasFolderNote)
                 {
-                    RequestOpen(FolderNotePath(value));
+                    RequestOpen(FolderNotePath(value), focusEditor: false);
                 }
             }
             else
             {
                 _announce(new A11yEvent.RowSelected(value.DisplayName));
-                RequestOpen(value.Path);
+                RequestOpen(value.Path, focusEditor: false);
             }
 
             RaiseCommandStates();
@@ -819,20 +861,59 @@ internal sealed partial class FilesSidebarViewModel : BindableBase
             : new A11yEvent.ItemsSelected((uint)BatchSelectionCount));
     }
 
+    /// <summary>W7-7 (R-2, OD-2): Space on a tree row toggles its batch
+    /// check box, which left the arrow order. The check's own path
+    /// announces the count ("1 item selected"). A placeholder or a group
+    /// header has no box: it answers false and changes nothing, and the
+    /// tree's key route consumes Space regardless (codex PR 2 round
+    /// 3).</summary>
+    internal bool ToggleBatchSelection(FileTreeNodeViewModel node)
+    {
+        if (!node.IsBatchSelectable)
+        {
+            return false;
+        }
+
+        node.IsBatchSelected = !node.IsBatchSelected;
+        return true;
+    }
+
+    /// <summary>The Tags tree's selection: its row stays selected while its
+    /// tag is the filter.</summary>
     public void ActivateTag(SidebarTagViewModel? tag)
     {
-        if (tag is not null)
+        if (tag is not null && !string.IsNullOrWhiteSpace(tag.Full))
         {
-            ActivateTag(tag.Full);
+            ApplyTagFilter(tag.Full);
         }
     }
 
+    /// <summary>A tag activation from outside the Tags tree — the editor's
+    /// Ctrl+Enter on a tag. Whatever the tree has selected no longer
+    /// describes the filter, so its selection is released (W7-7 R-3, codex
+    /// PR 2 round 2).</summary>
     public void ActivateTag(string tag)
     {
-        if (!string.IsNullOrWhiteSpace(tag))
+        if (string.IsNullOrWhiteSpace(tag))
         {
-            FilterText = $"tag:\"{tag}\"";
+            return;
         }
+
+        ReleaseTagSelection();
+        ApplyTagFilter(tag);
+    }
+
+    /// <summary>W7-7 (R-3, #1250): a tag activation writes what core's
+    /// <c>sidebar_tag_filter_activation</c> answers (mac's
+    /// <c>activateSidebarTagScope</c>, as a pure core query): the query
+    /// <c>#tag</c> the grammar understands, or, for a tag containing
+    /// whitespace, an empty field and the out-of-band tag scope. The split
+    /// is core's tokenizer rule, never decided here. The old
+    /// <c>tag:"x"</c> parsed as a name word and matched nothing.</summary>
+    private void ApplyTagFilter(string tag)
+    {
+        SidebarTagFilterActivation written = SlateUniffiMethods.SidebarTagFilterActivation(tag);
+        ApplyTagActivation(written.FilterText, written.ScopeTag);
     }
 
     public void AssignShortcut(int index)
@@ -1384,10 +1465,7 @@ internal sealed partial class FilesSidebarViewModel : BindableBase
                 new CanvasA11yEvent.CanvasFileCreated(
                     System.IO.Path.GetFileNameWithoutExtension(created)));
             Status = SlateUniffiMethods.A11yRender(sentence).Text;
-            if (IsRefreshingTree)
-            {
-                _statusToReassert = Status;
-            }
+            HoldStatusForPendingPublication();
             _announce(sentence);
             if (caveat is not null)
             {
@@ -1420,10 +1498,7 @@ internal sealed partial class FilesSidebarViewModel : BindableBase
     {
         ArgumentNullException.ThrowIfNull(failure);
         Status = SlateUniffiMethods.A11yRender(failure).Text;
-        if (IsRefreshingTree)
-        {
-            _statusToReassert = Status;
-        }
+        HoldStatusForPendingPublication();
         _announce(failure);
     }
 
@@ -1693,20 +1768,31 @@ internal sealed partial class FilesSidebarViewModel : BindableBase
         RaiseCommandStates();
     }
 
-    private bool CanOpenSelected() => SelectedNode is
+    private bool CanOpenSelected() => CanOpen(SelectedNode);
+
+    private static bool CanOpen([NotNullWhen(true)] FileTreeNodeViewModel? node) => node is
     {
         IsPlaceholder: false,
         IsGroupHeader: false,
-    } node && (!node.IsDirectory || node.HasFolderNote);
+    } && (!node.IsDirectory || node.HasFolderNote);
 
-    private void OpenSelected(WorkspaceOpenTarget target)
+    private void OpenSelected(WorkspaceOpenTarget target) => _ = OpenNode(SelectedNode, target);
+
+    /// <summary>W7-7 (R-2): the explicit open of one row — Enter and
+    /// Ctrl+Enter on the row the reader is on, and every Open button and
+    /// palette row through <see cref="OpenSelected"/>. It moves focus into
+    /// the note, the step a selection-driven open withholds. False when
+    /// the row has nothing to open (a placeholder, a group header, a
+    /// folder without a note), so its key falls through.</summary>
+    internal bool OpenNode(FileTreeNodeViewModel? node, WorkspaceOpenTarget target)
     {
-        if (!CanOpenSelected() || SelectedNode is not FileTreeNodeViewModel node)
+        if (!CanOpen(node))
         {
-            return;
+            return false;
         }
 
         RequestOpen(node.IsDirectory ? FolderNotePath(node) : node.Path, target, trackHistory: true);
+        return true;
     }
 
     private StructuralBatchItem[] SelectedBatchItems() => [.. _batchChecked
@@ -1915,15 +2001,16 @@ internal sealed partial class FilesSidebarViewModel : BindableBase
         }) + bookkeepingWarning;
     }
 
-    private void RequestOpen(string path)
+    private void RequestOpen(string path, bool focusEditor = true)
     {
-        RequestOpen(path, WorkspaceOpenTarget.CurrentTab, trackHistory: true);
+        RequestOpen(path, WorkspaceOpenTarget.CurrentTab, trackHistory: true, focusEditor);
     }
 
     private void RequestOpen(
         string path,
         WorkspaceOpenTarget target,
-        bool trackHistory)
+        bool trackHistory,
+        bool focusEditor = true)
     {
         _recents.Remove(path);
         _recents.Insert(0, path);
@@ -1948,7 +2035,7 @@ internal sealed partial class FilesSidebarViewModel : BindableBase
             _historyIndex = _history.Count - 1;
         }
 
-        OpenTargetRequested?.Invoke(this, (path, target));
+        OpenTargetRequested?.Invoke(this, (path, target, focusEditor));
         RaiseCommandStates();
     }
 
@@ -2090,12 +2177,9 @@ internal sealed partial class FilesSidebarViewModel : BindableBase
         }
 
         Status = SlateUniffiMethods.A11yRender(outcome).Text;
-        if (IsRefreshingTree)
-        {
-            // The outcome wins the turn over the republication's own
-            // status arms (the ReportResult discipline).
-            _statusToReassert = Status;
-        }
+        // The outcome wins the turn over the republication's own
+        // status arms (the ReportResult discipline).
+        HoldStatusForPendingPublication();
 
         _announce(outcome);
         RaiseCommandStates();
@@ -2181,11 +2265,8 @@ internal sealed partial class FilesSidebarViewModel : BindableBase
     private void ReportFailure(string message)
     {
         Status = message;
-        if (IsRefreshingTree)
-        {
-            // Codex round 2: same reassert discipline as results.
-            _statusToReassert = Status;
-        }
+        // Codex round 2: same reassert discipline as results.
+        HoldStatusForPendingPublication();
 
         // W0.5-3 residue: Windows sidebar availability/error copy.
         _announce(new A11yEvent.HostComposed(message, A11yPriority.High));
@@ -2194,12 +2275,9 @@ internal sealed partial class FilesSidebarViewModel : BindableBase
     private void ReportResult(string message)
     {
         Status = message;
-        if (IsRefreshingTree)
-        {
-            // Codex round 2: the in-flight refresh's publication arms
-            // must not erase the result the user just heard.
-            _statusToReassert = Status;
-        }
+        // Codex round 2: the in-flight refresh's publication arms
+        // must not erase the result the user just heard.
+        HoldStatusForPendingPublication();
 
         // W0.5-3 residue: Windows sidebar action-result copy.
         _announce(new A11yEvent.HostComposed(message, A11yPriority.Medium));

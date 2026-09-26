@@ -24,6 +24,42 @@ public sealed class NavigationHelpTests
             + "Escape closes Quick Open.", NavigationHelp.QuickOpen);
     }
 
+    /// <summary>W7-7 (R-2, OD-2): the Files tree's help speaks its three
+    /// row gestures from their own rows (N-1), and the shipped tree
+    /// carries it.</summary>
+    [Fact]
+    public void FilesTreeHelpSpeaksItsThreeRowGesturesFromTheirRows()
+    {
+        Assert.Equal("Up and Down move through files and folders, and a selected note is shown. "
+            + $"{ChordTable.WindowsSpokenFor("windows.filesTree.openSelected")} opens it and moves focus into it. "
+            + $"{ChordTable.WindowsSpokenFor("windows.filesTree.openSelectedInNewTab")} opens it in a new tab. "
+            + $"{ChordTable.WindowsSpokenFor("windows.filesTree.toggleBatchSelection")} checks or unchecks it for batch actions.",
+            NavigationHelp.FilesTree);
+        XElement tree = Assert.Single(
+            XDocument.Load(Path.Combine(SourceText.ShellSourceRoot(), "MainWindow.xaml")).Descendants(),
+            element => (string?)element.Attribute("AutomationProperties.AutomationId") == "FilesTree");
+        Assert.Equal(
+            "{x:Static cmd:NavigationHelp.FilesTree}",
+            (string?)tree.Attribute("AutomationProperties.HelpText"));
+    }
+
+    /// <summary>W7-7 (R-3, codex PR 2 round 4): the Files filter field's
+    /// help names its grammar and its clear routes, the key spoken from its
+    /// own row (N-1), and the shipped field carries it.</summary>
+    [Fact]
+    public void SidebarFilterHelpSpeaksItsClearRouteFromItsRow()
+    {
+        Assert.Equal("Filter by words, #tag, path:, ext:, has:task, or @date. "
+            + $"{ChordTable.WindowsSpokenFor("windows.sidebarFilter.clear")} or the Clear filter button clears the filter.",
+            NavigationHelp.SidebarFilter);
+        XElement field = Assert.Single(
+            XDocument.Load(Path.Combine(SourceText.ShellSourceRoot(), "MainWindow.xaml")).Descendants(),
+            element => (string?)element.Attribute("AutomationProperties.AutomationId") == "SidebarFilter");
+        Assert.Equal(
+            "{x:Static cmd:NavigationHelp.SidebarFilter}",
+            (string?)field.Attribute("AutomationProperties.HelpText"));
+    }
+
     [Fact]
     public void ReadingPeerPublishesTheTableDerivedNavigationEntryPoints()
         => OnSta(() =>

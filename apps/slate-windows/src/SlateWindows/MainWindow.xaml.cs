@@ -1284,6 +1284,71 @@ public partial class MainWindow : Window
         }
     }
 
+    /// <summary>W7-7 (R-2, OD-2): the Files region's explicit gestures,
+    /// delivered by the rows' own lists — the Files tree, the filter
+    /// results and the dual pane — while one of their rows has focus
+    /// (a rename field, outside the lists, never sees them). Arrow
+    /// selection only shows the note and keeps focus on the row; Enter
+    /// opens the row and moves focus into the note, Ctrl+Enter opens it in
+    /// a new tab, and Space on a tree row toggles its batch check box,
+    /// which left the arrow order. These are the
+    /// <c>windows.filesTree.*</c> chord rows (<c>ChordScope.FilesTree</c>),
+    /// and the tree's HelpText speaks them (contract 39 N-1). A row with
+    /// nothing to open leaves Enter unhandled. Space is consumed on every
+    /// tree row: a row without a check box — a placeholder, a group
+    /// header — changes nothing, and the key goes no further (spec 3.2
+    /// item 2, codex PR 2 round 3).</summary>
+    private void FilesRows_PreviewKeyDown(object sender, KeyEventArgs e)
+    {
+        if (_viewModel.FileSidebar is not FilesSidebarViewModel sidebar
+            || e.OriginalSource is not FrameworkElement { DataContext: FileTreeNodeViewModel row } source
+            || source is not (TreeViewItem or ListBoxItem))
+        {
+            return;
+        }
+
+        ModifierKeys modifiers = Keyboard.Modifiers;
+        if (e.Key == Key.Enter && modifiers == ModifierKeys.None)
+        {
+            e.Handled = sidebar.OpenNode(row, WorkspaceOpenTarget.CurrentTab);
+        }
+        else if (e.Key == Key.Enter && modifiers == ModifierKeys.Control)
+        {
+            e.Handled = sidebar.OpenNode(row, WorkspaceOpenTarget.NewTab);
+        }
+        else if (e.Key == Key.Space && modifiers == ModifierKeys.None && source is TreeViewItem)
+        {
+            _ = sidebar.ToggleBatchSelection(row);
+            e.Handled = true;
+        }
+    }
+
+    /// <summary>W7-7 (R-3, codex PR 2 round 4): Escape in the Files filter
+    /// field is a user clear — the Clear filter button's and the palette's
+    /// Clear Sidebar Filter — while a filter or tag scope is active; with
+    /// nothing filtering the key is left unhandled for the window's own
+    /// Escape. The <c>windows.sidebarFilter.clear</c> chord row
+    /// (<c>ChordScope.SidebarFilter</c>); the field's HelpText speaks it
+    /// (contract 39 N-1).</summary>
+    private void SidebarFilterTextBox_PreviewKeyDown(object sender, KeyEventArgs e)
+    {
+        ModifierKeys modifiers = Keyboard.Modifiers;
+        if (e.Key == Key.Escape && modifiers == ModifierKeys.None
+            && _viewModel.FileSidebar is FilesSidebarViewModel { IsFilterActive: true } sidebar)
+        {
+            sidebar.ClearFilterCommand.Execute(null);
+            e.Handled = true;
+        }
+    }
+
+    /// <summary>W7-7 (R-3, spec review round 21): the Clear filter button
+    /// disables itself once the filter is cleared, so its own invocation
+    /// hands the keys to the filter field — focus never stays on a disabled
+    /// control. Click is raised before the button's command runs, so the
+    /// field already has focus when the button turns disabled.</summary>
+    private void SidebarFilterClear_Click(object sender, RoutedEventArgs e) =>
+        _ = SidebarFilterTextBox.Focus();
+
     private void Tags_SelectedItemChanged(
         object sender,
         RoutedPropertyChangedEventArgs<object> e)

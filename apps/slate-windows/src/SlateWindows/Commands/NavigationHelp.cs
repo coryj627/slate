@@ -32,6 +32,20 @@ internal static class NavigationHelp
         $"{Spoken("slate.workspace.focusNextPane")} moves to the next region: menu bar, files, tab bar, editor, right pane, status bar. "
         + $"{Spoken("slate.workspace.focusPreviousPane")} moves back.";
 
+    /// <summary>W7-7 (R-2, OD-2): arrows only show a note; the three row
+    /// gestures are spoken from their own rows.</summary>
+    public static string FilesTree =>
+        "Up and Down move through files and folders, and a selected note is shown. "
+        + $"{Spoken("windows.filesTree.openSelected")} opens it and moves focus into it. "
+        + $"{Spoken("windows.filesTree.openSelectedInNewTab")} opens it in a new tab. "
+        + $"{Spoken("windows.filesTree.toggleBatchSelection")} checks or unchecks it for batch actions.";
+
+    /// <summary>W7-7 (R-3): the Files filter field's grammar and its
+    /// clear routes, the key spoken from its own row.</summary>
+    public static string SidebarFilter =>
+        "Filter by words, #tag, path:, ext:, has:task, or @date. "
+        + $"{Spoken("windows.sidebarFilter.clear")} or the Clear filter button clears the filter.";
+
     internal static string Spoken(string id) => ChordTable.WindowsSpokenFor(id)
         ?? throw new InvalidOperationException($"Navigation help requires a chord-table row with a Windows chord: '{id}'.");
 }

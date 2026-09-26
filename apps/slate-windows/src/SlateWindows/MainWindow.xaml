@@ -870,12 +870,32 @@
                                             AutomationProperties.HelpText="Reads .slate/sidebar.json again after you repair it."
                                             Command="{Binding RetrySettingsCommand}" />
                                 </StackPanel>
-                                <TextBox x:Name="SidebarFilterTextBox"
-                                         AutomationProperties.AutomationId="SidebarFilter"
-                                         AutomationProperties.Name="Filter files"
-                                         Text="{Binding FilterText, UpdateSourceTrigger=PropertyChanged}"
-                                         Padding="6,4"
-                                         ToolTip="Filter by words, tag:, path:, or @date." />
+                                <!-- W7-7 (R-3): the filter field and its Clear button (enabled while
+                                     a filter or tag scope is active — a whitespace tag's scope never
+                                     shows in the field); Escape in the field runs the same command. -->
+                                <Grid>
+                                    <Grid.ColumnDefinitions>
+                                        <ColumnDefinition Width="*" />
+                                        <ColumnDefinition Width="Auto" />
+                                    </Grid.ColumnDefinitions>
+                                    <TextBox x:Name="SidebarFilterTextBox"
+                                             Grid.Column="0"
+                                             AutomationProperties.AutomationId="SidebarFilter"
+                                             AutomationProperties.Name="Filter files"
+                                             AutomationProperties.HelpText="{x:Static cmd:NavigationHelp.SidebarFilter}"
+                                             Text="{Binding FilterText, UpdateSourceTrigger=PropertyChanged}"
+                                             PreviewKeyDown="SidebarFilterTextBox_PreviewKeyDown"
+                                             Padding="6,4"
+                                             ToolTip="Filter by words, #tag, path:, ext:, has:task, or @date." />
+                                    <Button Grid.Column="1"
+                                            Margin="4,0,0,0"
+                                            Padding="6,2"
+                                            Content="Clear"
+                                            AutomationProperties.AutomationId="SidebarFilterClear"
+                                            AutomationProperties.Name="Clear filter"
+                                            Click="SidebarFilterClear_Click"
+                                            Command="{Binding ClearFilterCommand}" />
+                                </Grid>
                                 <StackPanel Orientation="Horizontal" Margin="0,6,0,6">
                                     <ComboBox Width="145"
                                               ItemsSource="{Binding SortModes}"
@@ -915,6 +935,9 @@
                                     <TreeView.ItemContainerStyle>
                                         <Style TargetType="TreeViewItem">
                                             <Setter Property="AutomationProperties.Name" Value="{Binding AutomationName}" />
+                                            <!-- W7-7 (R-3): two-way, so a filter clear releases the
+                                                 selection and the same tag can be applied again. -->
+                                            <Setter Property="IsSelected" Value="{Binding IsSelected, Mode=TwoWay}" />
                                         </Style>
                                     </TreeView.ItemContainerStyle>
                                 </TreeView>
@@ -1017,17 +1040,23 @@
                                     <RowDefinition Height="Auto" />
                                 </Grid.RowDefinitions>
                                 <Grid Grid.Row="0">
+                                    <!-- W7-7 (R-2, OD-2): arrows only show a note; the rows'
+                                         own handler delivers Enter / Ctrl+Enter (open, focus
+                                         moves) and Space (batch check), and the HelpText is
+                                         composed from those chord rows (contract 39 N-1). -->
                                     <TreeView x:Name="FilesTree"
                                               ItemsSource="{Binding RootNodes}"
                                               ItemTemplate="{StaticResource FileTreeNodeTemplate}"
                                               TextSearch.TextPath="DisplayName"
                                               SelectedItemChanged="FilesTree_SelectedItemChanged"
+                                              PreviewKeyDown="FilesRows_PreviewKeyDown"
                                               Visibility="{Binding IsFilterActive, Converter={StaticResource InverseBooleanToVisibilityConverter}}"
                                               ScrollViewer.CanContentScroll="True"
                                               VirtualizingStackPanel.IsVirtualizing="True"
                                               VirtualizingStackPanel.VirtualizationMode="Recycling"
                                               AutomationProperties.AutomationId="FilesTree"
-                                              AutomationProperties.Name="Files">
+                                              AutomationProperties.Name="Files"
+                                              AutomationProperties.HelpText="{x:Static cmd:NavigationHelp.FilesTree}">
                                         <TreeView.ItemContainerStyle>
                                             <Style TargetType="TreeViewItem">
                                                 <Setter Property="IsExpanded" Value="{Binding IsExpanded, Mode=TwoWay}" />
@@ -1038,12 +1067,15 @@
                                                      next arrow key jumped to the tree top. -->
                                                 <Setter Property="IsSelected" Value="{Binding IsSelected, Mode=TwoWay}" />
                                                 <Setter Property="AutomationProperties.Name" Value="{Binding AutomationName}" />
+                                                <!-- W7-7 (R-2): the batch state, on the row the reader is on. -->
+                                                <Setter Property="AutomationProperties.ItemStatus" Value="{Binding BatchItemStatus}" />
                                             </Style>
                                         </TreeView.ItemContainerStyle>
                                     </TreeView>
                                     <ListBox x:Name="FilterResultsList"
                                              ItemsSource="{Binding FilterResults}"
                                              SelectionChanged="FilterResults_SelectionChanged"
+                                             PreviewKeyDown="FilesRows_PreviewKeyDown"
                                              Visibility="{Binding IsFilterActive, Converter={StaticResource BooleanToVisibilityConverter}}"
                                              ScrollViewer.CanContentScroll="True"
                                              VirtualizingStackPanel.IsVirtualizing="True"
@@ -1067,6 +1099,7 @@
                                          Margin="0,6,0,0"
                                          ItemsSource="{Binding DualPaneFiles}"
                                          SelectionChanged="DualPaneFiles_SelectionChanged"
+                                         PreviewKeyDown="FilesRows_PreviewKeyDown"
                                          DisplayMemberPath="DisplayName"
                                          Visibility="{Binding IsDualPaneEnabled, Converter={StaticResource BooleanToVisibilityConverter}}"
                                          ScrollViewer.CanContentScroll="True"
