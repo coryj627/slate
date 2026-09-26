@@ -93,6 +93,7 @@ public sealed partial class W77RemediationDocsCensus
         new Dictionary<int, int[]>
         {
             [6] = [1118],
+            [12] = [1270, 1271],
         };
 
     private static readonly int[] ExpectedFeaturePrs = Enumerable.Range(1, 11).ToArray();
@@ -165,20 +166,45 @@ public sealed partial class W77RemediationDocsCensus
         Assert.NotNull(ContractParagraphDefect(paragraph, heading));
     }
 
+    /// <summary>A contract's text runs to the next contract or Markdown
+    /// heading, blank lines included (codex round 30): a foreign reference in
+    /// a second paragraph under the same heading is the contract's too.</summary>
     [Fact]
-    public void AContractParagraphEndsAtABlankLineOrAHeading()
+    public void AContractsTextRunsToTheNextHeadingAcrossBlankLines()
     {
         var paragraphs = ContractParagraphs(
-            "**R-1 — Title (PR 1, #1244).** Body.\n\nUnrelated PR 9, #9999.\n**R-6 — Title (PR 5, #1248).** Body.\n## Next PR 9, #9999")
+            "**R-1 — Title (PR 1, #1244).** Body.\n\nContinued ownership: PR 9, #9999.\n**R-6 — Title (PR 5, #1248).** Body.\n\n## Next PR 9, #9999")
             .ToList();
         Assert.Equal(2, paragraphs.Count);
-        Assert.All(paragraphs, p => Assert.Null(ContractParagraphDefect(p.Paragraph, p.Heading)));
+        Assert.NotNull(ContractParagraphDefect(paragraphs[0].Paragraph, paragraphs[0].Heading));
+        Assert.Null(ContractParagraphDefect(paragraphs[1].Paragraph, paragraphs[1].Heading));
     }
 
-    /// <summary>Each strict contract heading with its complete paragraph: the
-    /// heading's line and every following line up to a blank line, the next
-    /// heading-shaped line or a Markdown heading (codex round 25: a reflowed
-    /// body keeps its later lines under the check).</summary>
+    /// <summary>Ordinary inline Markdown around a reference — a link, or
+    /// emphasis — must not hide it (codex round 30): the references are
+    /// extracted from normalized text.</summary>
+    [Theory]
+    [InlineData("**R-1 — Title (PR 1, #1244).** Body naming #[9999](https://example.test/issues/9999).")]
+    [InlineData("**R-1 — Title (PR 1, #1244).** Body naming #*9999*.")]
+    [InlineData("**R-1 — Title (PR 1, #1244).** Body naming #_9999_.")]
+    public void AFormattedForeignIssueIsCaught(string line)
+    {
+        Match heading = ContractHeading().Match(line);
+        Assert.True(heading.Success);
+        Assert.NotNull(ContractParagraphDefect(line, heading));
+    }
+
+    [Theory]
+    [InlineData("see R-[9](https://example.test/contracts#r-9) here", "9")]
+    [InlineData("see R-*9* here", "9")]
+    [InlineData("see _R-9_ here", "9")]
+    public void AFormattedCitationStillCites(string text, string expected) =>
+        Assert.Equal(expected, ContractCitation().Matches(NormalizeInlineMarkdown(text))[0].Groups[1].Value);
+
+    /// <summary>Each strict contract heading with its complete text: the
+    /// heading's line and every following line up to the next heading-shaped
+    /// line or Markdown heading, blank lines included (codex rounds 25 and
+    /// 30: a reflowed or multi-paragraph body stays under the check).</summary>
     private static IEnumerable<(Match Heading, string Paragraph)> ContractParagraphs(string document)
     {
         string[] lines = document.Split('\n');
@@ -193,7 +219,6 @@ public sealed partial class W77RemediationDocsCensus
             var paragraph = new List<string> { lines[i] };
             for (int j = i + 1;
                 j < lines.Length
-                    && !string.IsNullOrWhiteSpace(lines[j])
                     && !LooseContractHeading().IsMatch(lines[j])
                     && !MarkdownHeading().IsMatch(lines[j]);
                 j++)
@@ -204,6 +229,13 @@ public sealed partial class W77RemediationDocsCensus
             yield return (heading, string.Join('\n', paragraph));
         }
     }
+
+    /// <summary>Inline Markdown that can wrap a reference without changing
+    /// what a reader sees: a link becomes its text, and emphasis markers
+    /// are dropped, so `#[9999](…)`, `#*9999*` and `_R-9_` read as the
+    /// references they render as (codex round 30).</summary>
+    private static string NormalizeInlineMarkdown(string text) =>
+        MarkdownLink().Replace(text, "$1").Replace("*", string.Empty).Replace("_", string.Empty);
 
     [Theory]
     [InlineData("**R-1 — Title (PR 1, #1244).** Body with an extra owner PR 9, #9999.")]
@@ -273,7 +305,7 @@ public sealed partial class W77RemediationDocsCensus
     [InlineData("see AR-6 here")]
     [InlineData("see TR-6 here")]
     [InlineData("see R-6x here")]
-    [InlineData("see _R-6 here")]
+    [InlineData("see xR-6 here")]
     [InlineData("see R-6é here")]
     [InlineData("see éR-6 here")]
     [InlineData("see R-6² here")]
@@ -315,7 +347,8 @@ public sealed partial class W77RemediationDocsCensus
         Group issueList = heading.Groups[3];
         int markerStart = clause.Index + 1;
         int markerEnd = issueList.Index + issueList.Length;
-        string outside = string.Concat(paragraph.AsSpan(0, markerStart), paragraph.AsSpan(markerEnd));
+        string outside = NormalizeInlineMarkdown(
+            string.Concat(paragraph.AsSpan(0, markerStart), paragraph.AsSpan(markerEnd)));
         if (PrMarker().Match(outside) is { Success: true } marker)
         {
             return $"names a PR outside its owner clause (`{marker.Value}`)";
@@ -398,10 +431,13 @@ public sealed partial class W77RemediationDocsCensus
     // substring the grammar does not fully consume (`#1244x` beside a valid
     // `#1244`) makes the whole heading drift instead of vanishing (codex
     // round 22): the sentinel never equals an expected set.
-    private static int[] IssueTokens(string headingLine) =>
-        MalformedIssueToken().IsMatch(headingLine)
+    private static int[] IssueTokens(string headingLine)
+    {
+        string normalized = NormalizeInlineMarkdown(headingLine);
+        return MalformedIssueToken().IsMatch(normalized)
             ? [-1]
-            : IssueToken().Matches(headingLine).Select(m => int.Parse(m.Groups[1].Value)).Order().ToArray();
+            : IssueToken().Matches(normalized).Select(m => int.Parse(m.Groups[1].Value)).Order().ToArray();
+    }
 
     [Fact]
     public void TheSpecHasOneSectionPerFeaturePrAndTheRecordOneSectionPerPr()
@@ -518,7 +554,7 @@ public sealed partial class W77RemediationDocsCensus
 
             int start = heading.Index;
             int end = i + 1 < headings.Count ? headings[i + 1].Index : spec.Length;
-            string body = spec.Substring(start, end - start);
+            string body = NormalizeInlineMarkdown(spec.Substring(start, end - start));
             var cited = ContractCitation().Matches(body)
                 .Select(m => int.Parse(m.Groups[1].Value))
                 .ToHashSet();
@@ -608,6 +644,10 @@ public sealed partial class W77RemediationDocsCensus
     // starts with `#1244` stays inside the paragraph.
     [GeneratedRegex(@"^[ \t]{0,3}#{1,6}(?:[ \t]|$)")]
     private static partial Regex MarkdownHeading();
+
+    // An inline Markdown link, `[text](destination)`, reduced to its text.
+    [GeneratedRegex(@"\[([^\]\n]*)\]\([^)\n]*\)")]
+    private static partial Regex MarkdownLink();
 
     // Anything that starts a heading like a review record, however it is
     // indented, spaced or punctuated after the PR number.
