@@ -422,10 +422,11 @@ internal sealed class CanvasSurfaceView : UserControl, ICanvasSurfacePresenter
     public bool FocusRow(string nodeId) => Projection switch
     {
         CanvasSurfaceKind.Table => _table.DeliverFocus(nodeId),
-        // The visual's cards are peers, not focusable controls: a
-        // focus request has nowhere to land, and answering false lets
-        // the caller fall back honestly (m6's rule). The board shows
-        // the seat through `RevealSeat`'s pan instead (R-12).
+        // The visual's cards are peers, not focusable controls: a ROW
+        // has nowhere to take focus, and answering false lets the caller
+        // fall back honestly (m6's rule). The board shows the seat through
+        // `RevealSeat`'s pan instead (R-12); the board's one focus stop is
+        // the renderer, which the landing and `FocusProjection` seat (D15).
         CanvasSurfaceKind.Visual => false,
         _ => _outline.DeliverFocus(nodeId) is not null,
     };
@@ -461,12 +462,17 @@ internal sealed class CanvasSurfaceView : UserControl, ICanvasSurfacePresenter
         // holding nothing (`TreeView.Focus`, and the grid's own), so a
         // canvas with no cards used to seat the reader on a silent empty
         // control with the onboarding text unread beside it. Rows first,
-        // then whatever this state is actually SHOWING.
+        // then whatever this state is actually SHOWING. The Visual board's
+        // one focus stop is its renderer (locked contract 34 D15), never the
+        // outline collapsed behind it.
         if (Model is { RendersRetainedSnapshot: true, FilteredOutline.Count: > 0 })
         {
-            bool seated = Projection == CanvasSurfaceKind.Table
-                ? _table.FocusGrid()
-                : _outline.FocusTree();
+            bool seated = Projection switch
+            {
+                CanvasSurfaceKind.Table => _table.FocusGrid(),
+                CanvasSurfaceKind.Visual => _visual.Focus(),
+                _ => _outline.FocusTree(),
+            };
             if (seated)
             {
                 return true;
@@ -1180,10 +1186,7 @@ internal sealed class CanvasSurfaceView : UserControl, ICanvasSurfacePresenter
                     && model.Selection.ActiveSurface switch
                     {
                         CanvasSurfaceKind.Table => _table.DeliverFocus(nodeId),
-                        // The visual's cards are peers, not focusable
-                        // controls (m6's honest false — the banner
-                        // fallback below is the landing).
-                        CanvasSurfaceKind.Visual => false,
+                        CanvasSurfaceKind.Visual => LandOnBoard(model, nodeId),
                         _ => _outline.DeliverFocus(nodeId) is not null,
                     });
                 break;
@@ -1199,6 +1202,19 @@ internal sealed class CanvasSurfaceView : UserControl, ICanvasSurfacePresenter
                 _deferredRestoration = null;
             }
         }
+    }
+
+    /// <summary>Locked contract 34 D15: the renderer is the Visual board's
+    /// ONE focus stop, after the surface switcher; its cards are peers,
+    /// reached by arrows and AT navigation, never by focus. So a landing on
+    /// the board seats its node silently (the node the outline or the table
+    /// would seat), brings that card into view, and puts the reader on the
+    /// renderer — delivered only when focus is really there.</summary>
+    private bool LandOnBoard(CanvasDocumentViewModel model, string nodeId)
+    {
+        model.SeatSelectionSilently(nodeId);
+        _visual.RevealNode(nodeId);
+        return _visual.Focus() && _visual.IsKeyboardFocusWithin;
     }
 
     /// <summary>R-10: every seat <see cref="TryDeliverFocus"/> makes completes

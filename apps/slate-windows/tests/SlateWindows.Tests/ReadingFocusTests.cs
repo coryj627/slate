@@ -35,6 +35,14 @@ public sealed class ReadingFocusTests
     private const string HeadedNote = "# Reading focus\n\n" + NoteText + "\n";
     private const string ProseOnlyNote = "Just a paragraph.\n\nAnother paragraph.\n";
 
+    /// <summary>A board with cards: the Visual projection renders only a
+    /// board that has some (an empty one shows its onboarding instead).</summary>
+    private const string CardBoard =
+        "{\"nodes\":["
+        + "{\"id\":\"alpha\",\"type\":\"text\",\"text\":\"Alpha card\",\"x\":0,\"y\":0,\"width\":240,\"height\":120},"
+        + "{\"id\":\"beta\",\"type\":\"text\",\"text\":\"Beta card\",\"x\":0,\"y\":160,\"width\":240,\"height\":120}"
+        + "],\"edges\":[]}";
+
     /// <summary>The funnel behind the toggle, every open and the dismissal
     /// fallbacks, with the content already merged: focus lands at once and
     /// the reader's seated caret survives it. Before R-10 this landing fell
@@ -1465,6 +1473,83 @@ public sealed class ReadingFocusTests
         Assert.False(surface.IsFocusLandingPending);
     });
 
+    /// <summary>R-10 over locked contract 34 D15: the renderer is the Visual
+    /// board's single focus stop, so a canvas showing its board is an editor
+    /// stop like any other, never a silent skip. From the tab bar (F6) and
+    /// from the right pane's content stop (Shift+F6) a ready board is Landed
+    /// on the renderer; one still loading is held (Pending), then landed
+    /// there when its load publishes. The ring speaks the editor exactly
+    /// once either way, and the document's request is complete.</summary>
+    [Theory]
+    [InlineData("F6 from the tab bar", false)]
+    [InlineData("Shift+F6 from the right pane", false)]
+    [InlineData("F6 from the tab bar", true)]
+    public void AVisualBoardLandsOnItsRenderer(string press, bool loading) => RunSta(() =>
+    {
+        using var host = new Host();
+        host.Initialize(readingMode: false, documentKind: "canvas", board: CardBoard);
+        if (loading)
+        {
+            host.HoldEditorLanding();
+        }
+        host.Tab.Canvas!.ShowSurface(CanvasSurfaceKind.Visual);
+        host.Settle();
+        RingHost ring = host.UseRing();
+        var surface = Assert.IsType<CanvasSurfaceView>(host.EditorStop());
+        bool backward = press.StartsWith("Shift+F6", StringComparison.Ordinal);
+        UIElement start = backward ? host.Elsewhere : host.ActiveTabItem();
+        Assert.True(start.Focus());
+        PumpedDispatcher.Drain();
+
+        (backward ? host.Workspace.FocusPreviousPaneCommand : host.Workspace.FocusNextPaneCommand).Execute(null);
+        PumpedDispatcher.Drain();
+
+        RingHost.Attempt attempt = Assert.Single(ring.Attempts);
+        Assert.Equal(ShellRegionKind.Editor, attempt.Region);
+        string route = press + (loading ? ", the board loading" : string.Empty);
+        if (loading)
+        {
+            Assert.Equal(ShellRegionLanding.Pending, attempt.Outcome);
+            Assert.Empty(host.Announced);
+            AssertFocused(start, $"the held landing ({route})");
+            host.LetEditorLandingArrive();
+        }
+        else
+        {
+            Assert.Equal(ShellRegionLanding.Landed, attempt.Outcome);
+        }
+
+        AssertFocused(surface.VisualForTests, $"the Visual board's landing ({route})");
+        // Seated on the node the outline or the table would seat (the first
+        // card, nothing having been activated), silently.
+        Assert.Equal("alpha", host.Tab.Canvas!.Selection.Selected);
+        Assert.Equal([host.EditorLine()], host.Announced);
+        Assert.Single(ring.Attempts);
+        Assert.Null(host.EditorLandingRequest());
+        Assert.False(host.Workspace.HoldsShellRegionLanding);
+    });
+
+    /// <summary>Locked contract 34 D15: seating the canvas's showing
+    /// projection — the Escape ladder's and the Where-am-I panel's
+    /// fallback — puts the reader on the Visual board's renderer, not on the
+    /// outline collapsed behind it.</summary>
+    [Fact]
+    public void SeatingTheVisualProjectionFocusesTheRenderer() => RunSta(() =>
+    {
+        using var host = new Host();
+        host.Initialize(readingMode: false, documentKind: "canvas", board: CardBoard);
+        host.Tab.Canvas!.ShowSurface(CanvasSurfaceKind.Visual);
+        host.Settle();
+        var surface = Assert.IsType<CanvasSurfaceView>(host.EditorStop());
+        Assert.True(host.Sentinel.Focus());
+        PumpedDispatcher.Drain();
+
+        Assert.True(surface.FocusProjection());
+        PumpedDispatcher.Drain();
+
+        AssertFocused(surface.VisualForTests, "the Visual projection's seat");
+    });
+
     /// <summary>R-10's one owner: the surface takes focus only through a
     /// requested landing. Shown over merged content by a flip that asked for
     /// nothing, and merging content while shown, it leaves the reader where
@@ -1760,12 +1845,16 @@ public sealed class ReadingFocusTests
         // Separate initialization keeps the using/finally active even when a
         // constructor, resource load, or focus assertion fails partway through.
         public void Initialize(
-            bool readingMode, string note = HeadedNote, bool besideTextTab = false, string? documentKind = null)
+            bool readingMode,
+            string note = HeadedNote,
+            bool besideTextTab = false,
+            string? documentKind = null,
+            string board = "{\"nodes\":[],\"edges\":[]}")
         {
             Assert.Null(Application.Current);
             File.WriteAllText(Path.Combine(_fixture.Root, "note.md"), note);
             File.WriteAllText(Path.Combine(_fixture.Root, "other.md"), "# Other\n\nA text tab beside the reading one.\n");
-            File.WriteAllText(Path.Combine(_fixture.Root, "board.canvas"), "{\"nodes\":[],\"edges\":[]}");
+            File.WriteAllText(Path.Combine(_fixture.Root, "board.canvas"), board);
             Session = VaultSession.OpenFilesystem(_fixture.Root);
             using (var cancel = new CancelToken()) { Session.ScanInitial(cancel); }
             Workspace = new WorkspaceViewModel(Session, _fixture.Root, () => [], Announced.Add,
