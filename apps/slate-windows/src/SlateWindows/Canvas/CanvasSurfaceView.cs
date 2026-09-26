@@ -1389,8 +1389,10 @@ internal sealed class CanvasSurfaceView : UserControl, ICanvasSurfacePresenter
         // Escape returns focus to the element the reader came from (spec
         // §PR C Builds). A stale or unfocusable token falls back to the
         // projection rather than leaving focus nowhere.
+        // R-5 (#1247; codex round 4): a list, tree or grid token restores
+        // onto its row or cell, never the bare container.
         if (restore is UIElement { IsVisible: true, IsEnabled: true } element
-            && element.Focus())
+            && SelectorFocus.LandOnStop(element))
         {
             return;
         }

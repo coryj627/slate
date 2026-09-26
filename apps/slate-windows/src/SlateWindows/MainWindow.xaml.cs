@@ -1122,7 +1122,7 @@ public partial class MainWindow : Window
         SidebarMutationNameTextBox.Select(0, extension > 0 ? extension : text.Length);
     }
 
-    private bool TryFocus(IInputElement target)
+    internal bool TryFocus(IInputElement target)
     {
         // Red team after codex round 11: the window root is a visible,
         // enabled UIElement, so a token captured while focus sat
@@ -1136,7 +1136,10 @@ public partial class MainWindow : Window
 
         return target switch
         {
-            UIElement element when element.IsVisible && element.IsEnabled => element.Focus(),
+            // R-5 (#1247; codex round 4): a token captured while a list was
+            // empty restores onto its ROW once it has filled, never the bare
+            // list — the one landing for element-typed targets.
+            UIElement element when element.IsVisible && element.IsEnabled => SelectorFocus.LandOnStop(element),
             ContentElement element when element.IsEnabled => element.Focus(),
             _ => false,
         };

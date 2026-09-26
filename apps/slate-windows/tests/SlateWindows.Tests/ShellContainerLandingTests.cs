@@ -1,6 +1,7 @@
 // Copyright (C) 2026 Cory Joseph
 // SPDX-License-Identifier: AGPL-3.0-or-later
 
+using System.Collections.ObjectModel;
 using System.Runtime.ExceptionServices;
 using System.Windows;
 using System.Windows.Controls;
@@ -66,6 +67,37 @@ public sealed class ShellContainerLandingTests
         Assert.Same(combo, Keyboard.FocusedElement);
     });
 
+    /// <summary>
+    /// Codex round 4: an overlay's focus restore captures its token as an
+    /// <c>IInputElement</c> when it opens. Captured on an EMPTY list — its
+    /// own stop then (AR-6) — and restored by the window's <c>TryFocus</c>
+    /// after the list filled behind the overlay, the keys land on a ROW,
+    /// never on the bare populated list, whose arrows would leave the
+    /// region (NVDA pass F4). Before the fix the restore focused the list.
+    /// </summary>
+    [Fact]
+    public void ARestoreTokenTakenOnAnEmptyListLandsOnARowOnceTheListHasFilled() => RunSta(() =>
+    {
+        using var host = new Host();
+        var rows = new ObservableCollection<string>();
+        var list = new ListBox { ItemsSource = rows };
+        host.Show(list);
+        Assert.True(list.Focus());
+        IInputElement token = Keyboard.FocusedElement;
+        Assert.Same(list, token);
+        Assert.True(host.Above.Focus());
+        rows.Add("Row 0");
+        rows.Add("Row 1");
+        list.UpdateLayout();
+        int listTookTheKeys = 0;
+        list.GotKeyboardFocus += (_, e) => listTookTheKeys += ReferenceEquals(e.NewFocus, list) ? 1 : 0;
+
+        Assert.True(host.Shell.TryFocus(token));
+
+        Assert.Same(list.ItemContainerGenerator.ContainerFromIndex(0), Keyboard.FocusedElement);
+        Assert.Equal(0, listTookTheKeys);
+    });
+
     /// <summary>The shipped window, constructed and never shown (the
     /// MoveToFocusTests fixture's reasons: no Application, Jump Lists or
     /// window placement), whose named element is lifted into a shown window
@@ -82,6 +114,10 @@ public sealed class ShellContainerLandingTests
         }
 
         public MainWindow Shell { get; }
+
+        /// <summary>The button above the shown element: somewhere else for
+        /// the keys to be.</summary>
+        public Button Above { get; private set; } = new();
 
         public FrameworkElement Lift(string name) =>
             Lift(Assert.IsAssignableFrom<FrameworkElement>(Shell.FindName(name)));
@@ -121,6 +157,10 @@ public sealed class ShellContainerLandingTests
                 Grid.SetRow(button, row);
                 Grid.SetColumn(button, column);
                 grid.Children.Add(button);
+                if (text == "Above")
+                {
+                    Above = button;
+                }
             }
 
             Grid.SetRow(center, 1);

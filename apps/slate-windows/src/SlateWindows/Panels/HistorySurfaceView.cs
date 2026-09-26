@@ -916,12 +916,10 @@ internal sealed class HistorySurfaceView : UserControl
             this,
             candidate => AutomationProperties.GetAutomationId(candidate)
                 is "HistoryRestoreAsRowRefusal" or "HistoryRecoverAsRowRefusal");
-        if (element is null)
-        {
-            return false;
-        }
-        _ = element.Focus();
-        return true;
+        // R-5 (#1247; codex round 4): through the one landing for
+        // element-typed targets; a block that refuses the keys leaves the
+        // restore to the caller's own fallback.
+        return element is not null && SelectorFocus.LandOnStop(element);
     }
 
     /// <summary>Where was keyboard focus before the rebuild? Keyed by
@@ -998,9 +996,8 @@ internal sealed class HistorySurfaceView : UserControl
 
     private static void FocusElementOrFirstChild(FrameworkElement element)
     {
-        if (element.Focusable)
+        if (element.Focusable && SelectorFocus.LandOnStop(element))
         {
-            _ = element.Focus();
             return;
         }
         _ = element.MoveFocus(
@@ -1021,11 +1018,7 @@ internal sealed class HistorySurfaceView : UserControl
                         AutomationProperties.GetAutomationId(candidate),
                         $"HistoryRow{anchorPosition}",
                         StringComparison.Ordinal));
-                if (target is not null)
-                {
-                    _ = target.Focus();
-                }
-                else
+                if (target is null || !SelectorFocus.LandOnStop(target))
                 {
                     _ = _segmentThisNote.Focus();
                 }
@@ -1051,11 +1044,7 @@ internal sealed class HistorySurfaceView : UserControl
                                 name,
                                 StringComparison.Ordinal))
                     : null;
-                if (target is not null)
-                {
-                    _ = target.Focus();
-                }
-                else
+                if (target is null || !SelectorFocus.LandOnStop(target))
                 {
                     _ = _segmentDeleted.Focus();
                 }

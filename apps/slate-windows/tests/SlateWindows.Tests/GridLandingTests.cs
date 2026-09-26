@@ -120,6 +120,74 @@ public sealed class GridLandingTests
         host.AssertNeverFocused(grid.Grid);
     });
 
+    /// <summary>Codex round 4: a landing on the GRID — SelectorFocus
+    /// .LandOnStop, the shell's one landing for element-typed targets, given
+    /// a restore token captured while an empty grid held the keys — puts
+    /// them on a cell through the grid's substrate: the first, with no
+    /// current cell.</summary>
+    [Fact]
+    public void AGridStopLandsOnACell() => RunSta(() =>
+    {
+        AccessibleDataGrid grid = BoundGrid([new Row("one"), new Row("two")]);
+        using Hosted host = Host(grid);
+        Assert.True(host.Above.Focus());
+        host.RecordFocus();
+
+        Assert.True(SelectorFocus.LandOnStop(grid.Grid));
+
+        var cell = Assert.IsType<DataGridCell>(Keyboard.FocusedElement);
+        Assert.Equal("one", Assert.IsType<Row>(cell.DataContext).Name);
+        host.AssertNeverFocused(grid.Grid);
+    });
+
+    /// <summary>...and the current cell while its row is still bound.</summary>
+    [Fact]
+    public void AGridStopLandsOnItsCurrentCell() => RunSta(() =>
+    {
+        AccessibleDataGrid grid = BoundGrid([new Row("one"), new Row("two")]);
+        using Hosted host = Host(grid);
+        Assert.True(grid.SelectRow(row => ((Row)row).Name == "two"));
+        Assert.True(host.Above.Focus());
+        host.RecordFocus();
+
+        Assert.True(SelectorFocus.LandOnStop(grid.Grid));
+
+        var cell = Assert.IsType<DataGridCell>(Keyboard.FocusedElement);
+        Assert.Equal("two", Assert.IsType<Row>(cell.DataContext).Name);
+        host.AssertNeverFocused(grid.Grid);
+    });
+
+    /// <summary>An EMPTY grid stays its own stop through the same landing
+    /// (AnEmptyGridKeepsItsArrows).</summary>
+    [Fact]
+    public void AnEmptyGridStopIsTheGridItself() => RunSta(() =>
+    {
+        AccessibleDataGrid grid = BoundGrid([]);
+        using Hosted host = Host(grid);
+        Assert.True(host.Above.Focus());
+
+        Assert.True(SelectorFocus.LandOnStop(grid.Grid));
+
+        Assert.Same(grid.Grid, Keyboard.FocusedElement);
+    });
+
+    /// <summary>A grid no AccessibleDataGrid owns has nothing keeping its
+    /// arrows (the first fact here): it is not landed on, and the caller's
+    /// own stable stop takes the keys.</summary>
+    [Fact]
+    public void AGridTheSubstrateDoesNotOwnIsNotLandedOn() => RunSta(() =>
+    {
+        var grid = new DataGrid { ItemsSource = new[] { new Row("one") }, AutoGenerateColumns = true };
+        using Hosted host = Host(grid);
+        Assert.True(host.Above.Focus());
+        host.RecordFocus();
+
+        Assert.False(SelectorFocus.LandOnStop(grid));
+
+        Assert.Same(host.Above, Keyboard.FocusedElement);
+        host.AssertNeverFocused(grid);
+    });
+
     private static AccessibleDataGrid BoundGrid(IReadOnlyList<object> rows)
     {
         var grid = new AccessibleDataGrid { Announce = _ => { } };

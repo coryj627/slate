@@ -803,7 +803,9 @@ internal sealed class GraphSurfaceView : UserControl, IGraphSurfacePresenter
         {
             return;
         }
-        if (restore is UIElement { IsVisible: true, IsEnabled: true } element && element.Focus())
+        // R-5 (#1247; codex round 4): a list, tree or grid token restores
+        // onto its row or cell, never the bare container.
+        if (restore is UIElement { IsVisible: true, IsEnabled: true } element && SelectorFocus.LandOnStop(element))
         {
             return;
         }

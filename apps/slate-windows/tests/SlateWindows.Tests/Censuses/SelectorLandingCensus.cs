@@ -24,24 +24,36 @@
 //
 // BOUND, not read: a landing is a call that binds to a parameterless
 // Focus() (on a receiver, or on the object itself), to Keyboard.Focus, or
-// to one of the shell's own focus funnels (a method that focuses its
-// parameter, such as TryFocus), and the target is judged by its bound
-// static type — an x:Name field binds through the XAML-generated partial
-// (ShellCompilation), so `TryFocus(SomeList)` is caught as surely as
-// `SomeList.Focus()`. A target typed as a base class (a leaf's first stop
-// is a UIElement) is out of a static census's reach; SelectorFocus
-// .LandOnStop routes those at run time, and the FlaUI journey
-// RegionStops_ArrowsStayInRegion witnesses the Citations case.
+// to one of the shell's own focus funnels (a method that focuses a
+// parameter that could hold a container), and the target is judged by its
+// bound static type — an x:Name field binds through the XAML-generated
+// partial (ShellCompilation), so a funnel's `F(SomeList)` is caught as
+// surely as `SomeList.Focus()`.
+//
+// BASE-TYPED, routed (codex round 4): a target typed as a base of the
+// containers — a leaf's first stop is a UIElement, a focus restore's token
+// an IInputElement — may hold one at run time: a token captured while a
+// list was empty (its own stop then, AR-6) was restored with Focus() after
+// the list filled, onto the bare populated list. Such a target lands
+// through SelectorFocus.LandOnStop, which routes a list, a tree or a grid
+// to its row or cell; focusing it directly is an offender, and a funnel
+// that does so is caught at its call sites too. SelectorFocus itself is
+// the sanctioned route: its own focus calls are the rows and the empty
+// containers' own stops, witnessed by SelectorLandingTests,
+// TreeLandingTests and GridLandingTests.
 //
 // ANSWERED, not dropped (codex round 3): the helper answers false when
 // nothing took the keys NOW — a row it could not realize yet, or rows
 // that all refuse — and the populated list is never the landing, so the
 // caller must land on its own stable stop. No landing discards the answer,
-// nor the answer of a method that hands it back (LandOnStop).
+// nor the answer of a method that hands it back (LandOnStop, TryFocus). A
+// call whose targets cannot be containers — `TryFocus(SomeTextBox)` — is
+// no container landing, and its answer is not judged.
 
 using Microsoft.CodeAnalysis;
 using Microsoft.CodeAnalysis.CSharp;
 using Microsoft.CodeAnalysis.CSharp.Syntax;
+using Microsoft.CodeAnalysis.Operations;
 
 namespace SlateWindows.Tests.Censuses;
 
@@ -116,8 +128,13 @@ public sealed class SelectorLandingCensus
     /// <summary>The census's own witness: each landing shape it exists to
     /// catch, planted in a partial of the real window and in views of their
     /// own, is caught — a list, a grid, a tree, a menu, a status bar landed
-    /// on anywhere but its proven site, and a container focusing itself —
-    /// and the combo box, a row, and the helper's own route are not.</summary>
+    /// on anywhere but its proven site, a container focusing itself, and a
+    /// BASE-TYPED target focused directly (an IInputElement restore token,
+    /// through Keyboard.Focus, through a pattern over it, and a funnel that
+    /// restores one, at its body and at its call sites) — and the combo
+    /// box, a row, a content element, the helper's own route, the one
+    /// landing for element-typed targets, and the window's restore (which
+    /// lands through it) are not.</summary>
     [Fact]
     public void ThePlantedBareLandingsAreCaught()
     {
@@ -126,7 +143,7 @@ public sealed class SelectorLandingCensus
 
             public partial class MainWindow
             {
-                private void PlantedLandings(System.Windows.Controls.ListBox list)
+                private void PlantedLandings(System.Windows.Controls.ListBox list, System.Windows.IInputElement token)
                 {
                     RightPaneLeavesList.Focus();
                     _ = TryFocus(PanelCitationsList);
@@ -139,7 +156,17 @@ public sealed class SelectorLandingCensus
                     ShellStatusBar.Focus();
                     new System.Windows.Controls.TreeViewItem().Focus();
                     MainMenu.Focus();
+                    token.Focus();
+                    System.Windows.Input.Keyboard.Focus(token);
+                    if (token is System.Windows.UIElement element) { element.Focus(); }
+                    (token as System.Windows.ContentElement)?.Focus();
+                    _ = SelectorFocus.LandOnStop((System.Windows.UIElement)token);
+                    _ = PlantedRestore(PanelCitationsList);
+                    _ = PlantedRestore(token);
                 }
+
+                private bool PlantedRestore(System.Windows.IInputElement restore) =>
+                    restore is System.Windows.FrameworkElement { IsVisible: true } element && element.Focus();
             }
 
             internal sealed class PlantedView : System.Windows.Controls.UserControl
@@ -164,15 +191,20 @@ public sealed class SelectorLandingCensus
         Assert.Equal(
             [
                 "Planted.cs:7: RightPaneLeavesList.Focus() lands on a bare ListBox",
-                "Planted.cs:8: TryFocus(PanelCitationsList) lands on a bare ListBox",
                 "Planted.cs:9: list?.Focus() lands on a bare ListBox",
                 "Planted.cs:10: System.Windows.Input.Keyboard.Focus(QueriesSavedList) lands on a bare ListBox",
                 "Planted.cs:12: new System.Windows.Controls.DataGrid().Focus() lands on a bare DataGrid",
                 "Planted.cs:14: FilesTree.Focus() lands on a bare TreeView",
                 "Planted.cs:15: ShellStatusBar.Focus() lands on a bare StatusBar",
                 "Planted.cs:17: MainMenu.Focus() lands on a bare Menu",
-                "Planted.cs:25: _list.Focus() lands on a bare ListBox",
-                "Planted.cs:30: Focus() lands on a bare PlantedTree",
+                "Planted.cs:18: token.Focus() lands on a base-typed IInputElement, which may be a bare container: land it through SelectorFocus.LandOnStop",
+                "Planted.cs:19: System.Windows.Input.Keyboard.Focus(token) lands on a base-typed IInputElement, which may be a bare container: land it through SelectorFocus.LandOnStop",
+                "Planted.cs:20: element.Focus() lands on a base-typed UIElement, which may be a bare container: land it through SelectorFocus.LandOnStop",
+                "Planted.cs:23: PlantedRestore(PanelCitationsList) lands on a bare ListBox",
+                "Planted.cs:24: PlantedRestore(token) lands on a base-typed IInputElement, which may be a bare container: land it through SelectorFocus.LandOnStop",
+                "Planted.cs:28: element.Focus() lands on a base-typed FrameworkElement, which may be a bare container: land it through SelectorFocus.LandOnStop",
+                "Planted.cs:35: _list.Focus() lands on a bare ListBox",
+                "Planted.cs:40: Focus() lands on a bare PlantedTree",
             ],
             offenders);
     }
@@ -202,8 +234,9 @@ public sealed class SelectorLandingCensus
     /// <summary>The answer census's own witness: each way to drop the answer
     /// is caught — a discard, a bare call, a wrapper's answer, a void
     /// lambda, a branch of a discarded conditional, a planted wrapper's
-    /// answer, and a ring case that returns before the end-state judge —
-    /// and the rail's row, a tested answer, a fallback after <c>||</c>, an
+    /// answer, a restore of a base-typed token, and a ring case that
+    /// returns before the end-state judge — and a restore onto a button,
+    /// the rail's row, a tested answer, a fallback after <c>||</c>, an
     /// answer a lambda returns, and a ring case that breaks to the judge
     /// are not.</summary>
     [Fact]
@@ -214,7 +247,7 @@ public sealed class SelectorLandingCensus
 
             public partial class MainWindow
             {
-                private void PlantedDiscards()
+                private void PlantedDiscards(System.Windows.IInputElement token)
                 {
                     _ = SelectorFocus.FocusFirstOrSelectedItem(PanelCitationsList);
                     SelectorFocus.FocusFirstOrSelectedItem(QueriesSavedList);
@@ -222,6 +255,8 @@ public sealed class SelectorLandingCensus
                     System.Action seat = () => SelectorFocus.FocusFirstOrSelectedItem(TemplatePickerList);
                     _ = FilterResultsList.IsVisible ? SelectorFocus.FocusFirstOrSelectedItem(FilterResultsList) : FilesTree.Focus();
                     _ = PlantedAnswer();
+                    _ = TryFocus(token);
+                    _ = TryFocus(CanvasPromptClearMarksButton);
                     _ = SelectorFocus.FocusFirstOrSelectedItem(RightPaneLeavesList);
                     if (!SelectorFocus.FocusFirstOrSelectedItem(CanvasPromptChoicesList))
                     {
@@ -270,10 +305,11 @@ public sealed class SelectorLandingCensus
                 "Planted.cs:10: SelectorFocus.FocusFirstOrSelectedItem(TemplatePickerList) discards whether it landed",
                 "Planted.cs:11: SelectorFocus.FocusFirstOrSelectedItem(FilterResultsList) discards whether it landed",
                 "Planted.cs:12: PlantedAnswer() discards whether it landed",
-                "Planted.cs:38: SelectorFocus.FocusFirstOrSelectedItem(_rows) discards whether it landed",
+                "Planted.cs:13: TryFocus(token) discards whether it landed",
+                "Planted.cs:40: SelectorFocus.FocusFirstOrSelectedItem(_rows) discards whether it landed",
             ],
             discards);
-        Assert.Equal(13, judged);
+        Assert.Equal(14, judged);
     }
 
     /// <summary>The shared shell compilation, with the editor's assembly
@@ -322,8 +358,9 @@ public sealed class SelectorLandingCensus
                 ?? throw new Xunit.Sdk.XunitException($"{own.Type} did not bind."))
             .ToArray();
         INamedTypeSymbol keyboard = compilation.GetTypeByMetadataName("System.Windows.Input.Keyboard")!;
+        INamedTypeSymbol selectorFocus = SelectorFocusType(compilation);
         Dictionary<IMethodSymbol, int> funnels = Funnels(
-            compilation, ShellSources(compilation).Concat(scanned).Distinct().ToArray(), itemsControl);
+            compilation, ShellSources(compilation).Concat(scanned).Distinct().ToArray(), itemsControl, selectorFocus);
 
         foreach (SyntaxTree tree in scanned)
         {
@@ -362,8 +399,7 @@ public sealed class SelectorLandingCensus
                     target = call.ArgumentList.Arguments.ElementAtOrDefault(ordinal)?.Expression;
                 }
 
-                if ((target is null && implicitThis is null) || call.Ancestors().OfType<MethodDeclarationSyntax>().Any(
-                        declaration => declaration.Identifier.ValueText == Helper))
+                if ((target is null && implicitThis is null) || InSelectorFocus(model, call, selectorFocus))
                 {
                     continue;
                 }
@@ -385,8 +421,43 @@ public sealed class SelectorLandingCensus
 
                     yield return $"{where}: {Written(call)} lands on a bare {type.Name}";
                 }
+                else if (!DerivesFrom(type, itemsControl) && CouldHoldAContainer(compilation, type, itemsControl))
+                {
+                    yield return $"{where}: {Written(call)} lands on a base-typed {type.Name}, which may be a bare "
+                        + "container: land it through SelectorFocus.LandOnStop";
+                }
             }
         }
+    }
+
+    private static INamedTypeSymbol SelectorFocusType(Compilation compilation) =>
+        compilation.GetTypeByMetadataName("SlateWindows.SelectorFocus")
+            ?? throw new Xunit.Sdk.XunitException("SelectorFocus did not bind.");
+
+    /// <summary>Whether <paramref name="node"/> is inside SelectorFocus —
+    /// the sanctioned route, whose own focus calls are the rows and the
+    /// empty containers' own stops.</summary>
+    private static bool InSelectorFocus(SemanticModel model, SyntaxNode node, INamedTypeSymbol selectorFocus) =>
+        node.AncestorsAndSelf().OfType<TypeDeclarationSyntax>().Any(declaration =>
+            SymbolEqualityComparer.Default.Equals(model.GetDeclaredSymbol(declaration), selectorFocus));
+
+    /// <summary>Whether a value of <paramref name="type"/> could be an
+    /// ItemsControl at run time: a container type itself, or a base of one
+    /// (a UIElement, a FrameworkElement, an IInputElement).</summary>
+    private static bool CouldHoldAContainer(Compilation compilation, ITypeSymbol type, INamedTypeSymbol itemsControl) =>
+        DerivesFrom(type, itemsControl) || compilation.ClassifyConversion(itemsControl, type).IsImplicit;
+
+    private static bool DerivesFrom(ITypeSymbol type, INamedTypeSymbol baseType)
+    {
+        for (ITypeSymbol? current = type; current is not null; current = current.BaseType)
+        {
+            if (SymbolEqualityComparer.Default.Equals(current, baseType))
+            {
+                return true;
+            }
+        }
+
+        return false;
     }
 
     /// <summary>Every call to the helper or to a method that hands back its
@@ -395,8 +466,9 @@ public sealed class SelectorLandingCensus
     private static (string[] Discards, int Judged) Discards(
         CSharpCompilation compilation, IReadOnlyCollection<SyntaxTree> scanned)
     {
-        INamedTypeSymbol focus = compilation.GetTypeByMetadataName("SlateWindows.SelectorFocus")
-            ?? throw new Xunit.Sdk.XunitException("SelectorFocus did not bind.");
+        INamedTypeSymbol focus = SelectorFocusType(compilation);
+        INamedTypeSymbol itemsControl = compilation.GetTypeByMetadataName("System.Windows.Controls.ItemsControl")
+            ?? throw new Xunit.Sdk.XunitException("ItemsControl did not bind: the census compilation lacks WPF.");
         IMethodSymbol[] landings = [.. new[] { Helper, "FocusSelectedOrFirstRow" }.Select(name =>
             focus.GetMembers(name).OfType<IMethodSymbol>().SingleOrDefault()
                 ?? throw new Xunit.Sdk.XunitException($"SelectorFocus.{name} did not bind."))];
@@ -423,7 +495,8 @@ public sealed class SelectorLandingCensus
                     continue;
                 }
 
-                if (!answering.Contains(method.OriginalDefinition))
+                if (!answering.Contains(method.OriginalDefinition)
+                    || TargetsNoContainer(model, call, compilation, itemsControl))
                 {
                     continue;
                 }
@@ -439,6 +512,30 @@ public sealed class SelectorLandingCensus
         }
 
         return (discards.ToArray(), judged);
+    }
+
+    /// <summary>Whether every target of <paramref name="call"/> — each
+    /// argument passed for a parameter that could hold a container — is
+    /// typed so that it cannot be one: <c>TryFocus(SomeTextBox)</c> lands on
+    /// the text box, no container landing. A call with no such argument
+    /// (a wrapper's own landing) is judged.</summary>
+    private static bool TargetsNoContainer(
+        SemanticModel model, InvocationExpressionSyntax call, Compilation compilation, INamedTypeSymbol itemsControl)
+    {
+        if (model.GetOperation(call) is not IInvocationOperation invocation)
+        {
+            return false;
+        }
+
+        ITypeSymbol?[] targets = invocation.Arguments
+            .Where(argument => argument.Parameter is { } parameter
+                && CouldHoldAContainer(compilation, parameter.Type, itemsControl))
+            .Select(argument => argument.Value is IConversionOperation { IsImplicit: true } conversion
+                ? conversion.Operand.Type
+                : argument.Value.Type)
+            .ToArray();
+        return targets.Length > 0
+            && targets.All(type => type is not null && !CouldHoldAContainer(compilation, type, itemsControl));
     }
 
     /// <summary>The landings, and every method that returns one's answer —
@@ -565,12 +662,17 @@ public sealed class SelectorLandingCensus
         _ => false,
     };
 
-    /// <summary>The window's own methods that focus one of their parameters —
-    /// directly, or through a pattern over it (<c>TryFocus</c>'s switch) —
-    /// where that parameter could hold a list. The helper is the one
-    /// sanctioned funnel and is not listed.</summary>
+    /// <summary>The shell's own methods that focus one of their parameters —
+    /// directly, or through a pattern over it — as a type that could hold a
+    /// container. SelectorFocus is the sanctioned route and is not listed;
+    /// a restore that routes its element-typed arm through LandOnStop and
+    /// focuses only a content element directly (<c>TryFocus</c>) is no
+    /// funnel.</summary>
     private static Dictionary<IMethodSymbol, int> Funnels(
-        CSharpCompilation compilation, IReadOnlyCollection<SyntaxTree> trees, INamedTypeSymbol itemsControl)
+        CSharpCompilation compilation,
+        IReadOnlyCollection<SyntaxTree> trees,
+        INamedTypeSymbol itemsControl,
+        INamedTypeSymbol selectorFocus)
     {
         var funnels = new Dictionary<IMethodSymbol, int>(SymbolEqualityComparer.Default);
         foreach (SyntaxTree tree in trees)
@@ -578,8 +680,8 @@ public sealed class SelectorLandingCensus
             SemanticModel model = compilation.GetSemanticModel(tree);
             foreach (MethodDeclarationSyntax declaration in tree.GetRoot().DescendantNodes().OfType<MethodDeclarationSyntax>())
             {
-                if (declaration.Identifier.ValueText == Helper
-                    || model.GetDeclaredSymbol(declaration) is not IMethodSymbol method)
+                if (model.GetDeclaredSymbol(declaration) is not IMethodSymbol method
+                    || SymbolEqualityComparer.Default.Equals(method.ContainingType, selectorFocus))
                 {
                     continue;
                 }
@@ -594,7 +696,9 @@ public sealed class SelectorLandingCensus
                     bool focusesIt = declaration.DescendantNodes().OfType<InvocationExpressionSyntax>().Any(call =>
                         InvokedName(call) == "Focus"
                         && Receiver(call) is { } receiver
-                        && ReachesParameter(model, receiver, parameter));
+                        && ReachesParameter(model, receiver, parameter)
+                        && model.GetTypeInfo(receiver).Type is { } focused
+                        && CouldHoldAContainer(compilation, focused, itemsControl));
                     if (focusesIt)
                     {
                         funnels[method] = parameter.Ordinal;

@@ -103,7 +103,9 @@ public partial class MainWindow
                     return;
                 }
 
-                if (token is UIElement { IsVisible: true } && token.Focus())
+                // R-5 (#1247; codex round 4): a list, tree or grid token
+                // restores onto its row or cell, never the bare container.
+                if (token is UIElement { IsVisible: true } element && SelectorFocus.LandOnStop(element))
                 {
                     return;
                 }

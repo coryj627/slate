@@ -7,6 +7,7 @@ using System.Windows.Controls.Primitives;
 using System.Windows.Input;
 using System.Windows.Media;
 using System.Windows.Threading;
+using SlateWindows.Grids;
 
 namespace SlateWindows;
 
@@ -133,17 +134,33 @@ internal static class SelectorFocus
     internal static bool IsListLanding(UIElement element) =>
         element is Selector and not ComboBox and not DataGrid;
 
-    /// <summary>A leaf's first stop — the region ring's right-pane content
-    /// landing and a leaf reveal's. A list lands on its row. Any other stop
-    /// is judged by where the keys END UP (W7-6 #1240): a stop that hands
-    /// them on to an item or a cell of its own answers false from its own
-    /// <c>Focus()</c> though the keys are inside it, and a caller that
-    /// falls back on false would take them away again.</summary>
-    /// <returns>Whether the keys landed on the stop or inside it.</returns>
+    /// <summary>
+    /// The ONE landing for a target typed only as an element — a leaf's
+    /// first stop (the region ring's right-pane content landing, a leaf
+    /// reveal's) and every focus RESTORE, whose token was captured as an
+    /// <c>IInputElement</c>: a list lands on its row, a tree on its row, a
+    /// grid on a cell through its <see cref="AccessibleDataGrid"/> (the one
+    /// implementation of cell focus, W4-5 D-12), and anything else on
+    /// itself. A grid no AccessibleDataGrid owns is not landed on: nothing
+    /// keeps its arrows, so the caller's own stable stop takes the keys.
+    /// </summary>
+    /// <remarks>
+    /// Codex round 4: a restore token captured while a list was EMPTY —
+    /// its own stop then (AR-6) — was restored with <c>Focus()</c> after
+    /// the list filled behind an overlay, onto the populated bare list
+    /// (the F4 shape). A non-container is judged by where the keys END UP
+    /// (W7-6 #1240): a stop that hands them on to an item or a cell of its
+    /// own answers false from its own <c>Focus()</c> though the keys are
+    /// inside it, and a caller that falls back on false would take them
+    /// away again. <c>SelectorLandingCensus</c> holds every focus call on
+    /// an element-typed target in the shell to this.
+    /// </remarks>
+    /// <returns>Whether the keys landed on the target or inside it.</returns>
     internal static bool LandOnStop(UIElement stop) => stop switch
     {
         Selector list when IsListLanding(list) => FocusFirstOrSelectedItem(list),
         TreeView tree => FocusSelectedOrFirstRow(tree),
+        DataGrid grid => AccessibleDataGrid.Owning(grid) is { } owner && owner.FocusCurrentOrFirstCell(),
         _ => stop.Focus() || stop.IsKeyboardFocusWithin,
     };
 

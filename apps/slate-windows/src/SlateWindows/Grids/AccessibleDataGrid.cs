@@ -271,6 +271,51 @@ internal sealed class AccessibleDataGrid : UserControl
     }
 
     /// <summary>
+    /// W7-7 PR 4 (#1247, R-5; codex round 4): a landing on the GRID — a
+    /// restore token captured while it held the keys itself, which is an
+    /// empty grid's own stop — puts them on a cell: the current one, else
+    /// the first. An empty grid is still its own stop (<see
+    /// cref="FocusFirstCell"/>). Reached through
+    /// <see cref="SelectorFocus.LandOnStop"/>, the shell's one landing for
+    /// element-typed targets.
+    /// </summary>
+    /// <returns>Whether the grid (empty) or a realized cell took the keys
+    /// now; an unrealized cell is seated later, as
+    /// <see cref="FocusCellElement"/> does.</returns>
+    internal bool FocusCurrentOrFirstCell()
+    {
+        if (_items.Count == 0 || _grid.Columns.Count == 0)
+        {
+            return FocusFirstCell();
+        }
+        (object item, DataGridColumn column) = CurrentOrFirstCell();
+        return FocusCellElement(item, column);
+    }
+
+    /// <summary>The grid substrate that owns <paramref name="grid"/>, if
+    /// any — every grid in the shell is one's.</summary>
+    internal static AccessibleDataGrid? Owning(DataGrid grid)
+    {
+        for (DependencyObject? node = grid; node is not null; node = LogicalTreeHelper.GetParent(node))
+        {
+            if (node is AccessibleDataGrid owner && ReferenceEquals(owner._grid, grid))
+            {
+                return owner;
+            }
+        }
+        return null;
+    }
+
+    /// <summary>The cell a landing on the grid goes to: the current one
+    /// while its row and column are still bound, else the first.</summary>
+    private (object Item, DataGridColumn Column) CurrentOrFirstCell() =>
+        (
+            _grid.CurrentCell.Item is { } current && _items.Contains(current) ? current : _items[0],
+            _grid.CurrentCell.Column is { } currentColumn && _grid.Columns.Contains(currentColumn)
+                ? currentColumn
+                : _grid.Columns[0]);
+
+    /// <summary>
     /// Put keyboard focus on the first cell of the row matching
     /// <paramref name="predicate"/>, if the bound set contains one.
     /// Returns false and moves nothing when it does not — the caller
@@ -466,10 +511,7 @@ internal sealed class AccessibleDataGrid : UserControl
         e.Handled = true;
         if (_items.Count > 0 && _grid.Columns.Count > 0)
         {
-            object item = _grid.CurrentCell.Item is { } current && _items.Contains(current) ? current : _items[0];
-            DataGridColumn column = _grid.CurrentCell.Column is { } currentColumn && _grid.Columns.Contains(currentColumn)
-                ? currentColumn
-                : _grid.Columns[0];
+            (object item, DataGridColumn column) = CurrentOrFirstCell();
             _ = FocusCellElement(item, column);
         }
     }
