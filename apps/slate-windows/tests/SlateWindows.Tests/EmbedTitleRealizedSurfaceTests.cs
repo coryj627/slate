@@ -36,6 +36,11 @@
 //   card; the reading card's header text, nested headers and landmark.
 // - Coverage is asserted, not assumed: each surface must actually meet a
 //   corrupt image's warning and a nested note, section, block and image card.
+//   A card counts as met only once it is VISIBLE and in the surface's live
+//   UIA tree: nested cards are built collapsed, so each is first expanded
+//   through its ExpandCollapse pattern, as a reader expands it, and layout
+//   settles — whatever runs on expansion (an Expanded handler anywhere up the
+//   tree, codex's confirmation pass) has run before the card is read.
 //
 // The expected side is computed at test time by core from the ResolvedEmbed
 // each row declares as data; the popover header adds exactly the
@@ -51,6 +56,7 @@ using System.Runtime.ExceptionServices;
 using System.Windows;
 using System.Windows.Automation;
 using System.Windows.Automation.Peers;
+using System.Windows.Automation.Provider;
 using System.Windows.Controls;
 using System.Windows.Documents;
 using System.Windows.Media;
@@ -328,7 +334,8 @@ public sealed class EmbedTitleRealizedSurfaceTests
             }
 
             EditorEmbedPreviewView view = Assert.Single(VisualDescendants(popover).OfType<EditorEmbedPreviewView>());
-            ReadCard($"{at} card", "Ctrl+E popover", view.Content as FrameworkElement, shown.Resolved, row.Nested, misreads, read, met);
+            ReadCard($"{at} card", "Ctrl+E popover", shell.Window, popover, view.Content as FrameworkElement,
+                shown.Resolved, row.Nested, null, misreads, read, met);
             interactions.ClosePopoverCommand.Execute(null);
             Settle(shell.Window);
         }
@@ -367,7 +374,8 @@ public sealed class EmbedTitleRealizedSurfaceTests
                 continue;
             }
             EditorEmbedPreviewView view = Assert.Single(VisualDescendants(container).OfType<EditorEmbedPreviewView>());
-            ReadCard($"{at} card", "embeds leaf", view.Content as FrameworkElement, row.Resolved, row.Nested, misreads, read, met);
+            ReadCard($"{at} card", "embeds leaf", shell.Window, leaf, view.Content as FrameworkElement,
+                row.Resolved, row.Nested, null, misreads, read, met);
         }
     }
 
@@ -384,17 +392,26 @@ public sealed class EmbedTitleRealizedSurfaceTests
 
     // ---- a card, wherever it is shown ----------------------------------------
 
-    /// <summary>A realized card: its peer Name and the text its header
-    /// renders; in its body, a warning's text and name, an image's name and
-    /// each nested card in order — each core's title of what it resolved to.
-    /// The body's text and Jump button are not titles; anything else there is
-    /// read as if it were one. The branches met are recorded.</summary>
+    /// <summary>A card as a reader meets it. A collapsed card — every nested
+    /// card is built collapsed — is first expanded the way a keyboard or
+    /// screen-reader user expands it, through its ExpandCollapse pattern, and
+    /// layout settles, so whatever expanding runs (an Expanded handler
+    /// anywhere up the tree included) has run. Only a card that is then
+    /// VISIBLE and present in the surface's live UIA tree is read and counted
+    /// as met: its peer Name and the text its header renders; in its body a
+    /// warning's text and name and an image's name — each likewise visible and
+    /// in the UIA tree — and each nested card in order, each core's title of
+    /// what it resolved to. The body's text and Jump button are not titles;
+    /// anything else there is read as if it were one.</summary>
     private static void ReadCard(
         string at,
         string surface,
+        Window window,
+        UIElement surfaceRoot,
         FrameworkElement? card,
         ResolvedEmbed resolved,
         ResolvedEmbed[] nested,
+        string? branch,
         List<string> misreads,
         List<string> read,
         HashSet<string> met)
@@ -404,13 +421,36 @@ public sealed class EmbedTitleRealizedSurfaceTests
             misreads.Add($"{at}: no card was realized");
             return;
         }
-        string title = SlateUniffiMethods.ResolvedEmbedTitle(resolved);
-        Expect(at, "UIA Name", PeerName(card), title, misreads, read);
         if (card is not Expander expander)
         {
             misreads.Add($"{at}: the card is a {card.GetType().Name}, not a disclosure");
             return;
         }
+        if (!expander.IsExpanded)
+        {
+            if (UIElementAutomationPeer.CreatePeerForElement(expander)?.GetPattern(PatternInterface.ExpandCollapse)
+                is not IExpandCollapseProvider disclosure)
+            {
+                misreads.Add($"{at}: the collapsed card offers no ExpandCollapse pattern, so no reader can open it");
+                return;
+            }
+            disclosure.Expand();
+            Settle(window);
+        }
+        HashSet<UIElement> inUia = UiaOwners(surfaceRoot);
+        if (!Realized(expander, inUia))
+        {
+            misreads.Add($"{at}: the card is not visible in the realized visual and UIA trees ({Chain(expander)}), "
+                + "so it was never read");
+            return;
+        }
+        if (branch is not null)
+        {
+            met.Add($"{surface}: {branch}");
+        }
+
+        string title = SlateUniffiMethods.ResolvedEmbedTitle(resolved);
+        Expect(at, "UIA Name", PeerName(card), title, misreads, read);
         Expect(at, "rendered header", RenderedText(expander, exclude: expander.Content as DependencyObject), title, misreads, read);
 
         int nestedCards = 0;
@@ -422,18 +462,24 @@ public sealed class EmbedTitleRealizedSurfaceTests
             {
                 case TextBox or Button:
                     break;
+                case Image image when !Realized(image, inUia):
+                    misreads.Add($"{at}: the card's image is not visible in the realized visual and UIA trees");
+                    break;
                 case Image image:
                     Expect(at, "image UIA Name", PeerName(image), title, misreads, read);
                     break;
+                case TextBlock warning when !Realized(warning, inUia):
+                    misreads.Add($"{at}: the card's warning is not visible in the realized visual and UIA trees");
+                    break;
                 case TextBlock warning:
                     met.Add($"{surface}: warning");
-                    Expect(at, "warning text", warning.Text, title, misreads, read);
+                    Expect(at, "warning text", RenderedText(warning, exclude: null), title, misreads, read);
                     Expect(at, "warning UIA Name", PeerName(warning), title, misreads, read);
                     break;
                 case Expander inner when nestedCards < nested.Length:
                     ResolvedEmbed child0 = nested[nestedCards++];
-                    met.Add($"{surface}: nested {child0.GetType().Name}");
-                    ReadCard($"{at} › nested {child0.GetType().Name}", surface, inner, child0, [], misreads, read, met);
+                    string kind = $"nested {child0.GetType().Name}";
+                    ReadCard($"{at} › {kind}", surface, window, surfaceRoot, inner, child0, [], kind, misreads, read, met);
                     break;
                 case FrameworkElement other:
                     misreads.Add($"{at}: the card body holds a {other.GetType().Name} reading "
@@ -445,6 +491,37 @@ public sealed class EmbedTitleRealizedSurfaceTests
         {
             misreads.Add($"{at}: {nestedCards} nested card(s), expected {nested.Length}");
         }
+    }
+
+    /// <summary>Visible in the realized visual tree and present in the live
+    /// UIA tree a reader walks.</summary>
+    private static bool Realized(UIElement element, HashSet<UIElement> inUia) =>
+        element.IsVisible && inUia.Contains(element);
+
+    /// <summary>The elements whose automation peers a UIA client reaches from
+    /// the surface's root, read fresh (each peer's child cache reset).</summary>
+    private static HashSet<UIElement> UiaOwners(UIElement root)
+    {
+        var owners = new HashSet<UIElement>();
+        var pending = new Stack<AutomationPeer>();
+        if (UIElementAutomationPeer.CreatePeerForElement(root) is { } top)
+        {
+            pending.Push(top);
+        }
+        while (pending.Count > 0)
+        {
+            AutomationPeer peer = pending.Pop();
+            if (peer is UIElementAutomationPeer { Owner: var owner })
+            {
+                owners.Add(owner);
+            }
+            peer.ResetChildrenCache();
+            foreach (AutomationPeer child in peer.GetChildren() ?? [])
+            {
+                pending.Push(child);
+            }
+        }
+        return owners;
     }
 
     // ---- the reading view -----------------------------------------------------
