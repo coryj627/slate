@@ -1174,12 +1174,27 @@ internal static class ReadingDocumentBuilder
         section.SetResourceReference(Block.BackgroundProperty, "Slate.RaisedSurfaceBrush");
 
         EmbedResolution? resolution = artifact?.Resolution?.Resolution;
-        // A null resolution never claims a kind it cannot know (round
-        // 1 [medium]): the neutral label says only what is true.
-        string headerName = resolution is null
-            ? $"Embed: {key}"
-            : EmbedHeaderName(
-                resolution, occurrenceAlt ?? artifact?.Alt, artifact?.BaseProjection);
+        // The mac EmbedView name shapes, in core's words (#1278): a resolved
+        // card's header IS core's title for what it resolved to — the same
+        // title the Ctrl+E preview speaks — so a reading landing on it
+        // (ReadingNavLanded carries the header as its text) speaks no host
+        // sentence. Only the two states that are not a card keep host copy:
+        // a null resolution never claims a kind it cannot know (round 1
+        // [medium]), and an unresolved embed says why in mac's words.
+        string headerName = resolution switch
+        {
+            null => $"Embed: {key}",
+            EmbedResolution.Unresolved unresolved => UnresolvedEmbedText(unresolved.Reason),
+            // The base card names its real kind (contract C10) — the
+            // FullNote resolution would otherwise title it as a note.
+            EmbedResolution.FullNote when artifact is { BaseProjection: { } baseCard } =>
+                SlateUniffiMethods.ResolvedEmbedTitle(new ResolvedEmbed.Base(baseCard.TargetPath)),
+            // An image named by this occurrence's own alt keeps it (mac
+            // audits #196/#198/#419).
+            EmbedResolution.Image image => SlateUniffiMethods.ResolvedEmbedTitle(
+                new ResolvedEmbed.Image(image.TargetPath, occurrenceAlt ?? artifact?.Alt ?? image.Alt)),
+            _ => SlateUniffiMethods.ResolvedEmbedTitle(ResolvedEmbeds.Of(resolution)!),
+        };
         string headerSuffix = resolution is null
             ? string.Empty
             : EmbedHeaderAccessibilitySuffix(resolution);
@@ -1254,34 +1269,6 @@ internal static class ReadingDocumentBuilder
         ReadingSemantics.MarkEmbed(section, headerName);
         return section;
     }
-
-    /// <summary>The mac EmbedView name shapes, in core's words (#1278):
-    /// a resolved card's header is core's title for what it resolved to —
-    /// the same title the Ctrl+E preview speaks — so a reading landing on
-    /// it (ReadingNavLanded carries the header as its text) speaks no host
-    /// sentence. An image named by this occurrence's own alt keeps it (mac
-    /// audits #196/#198/#419). A `.base` card names its real kind (contract
-    /// C10) in core's words too — the FullNote resolution would otherwise
-    /// title it as a note.</summary>
-    private static string EmbedHeaderName(
-        EmbedResolution resolution,
-        string? alt,
-        BaseEmbedProjection? baseCard = null) =>
-        resolution switch
-        {
-            EmbedResolution.Unresolved unresolved =>
-                UnresolvedEmbedText(unresolved.Reason),
-            EmbedResolution.FullNote when baseCard is { } projection =>
-                SlateUniffiMethods.ResolvedEmbedTitle(
-                    new ResolvedEmbed.Base(projection.TargetPath)),
-            _ => ResolvedEmbeds.Of(resolution) switch
-            {
-                ResolvedEmbed.Image image when alt is not null =>
-                    SlateUniffiMethods.ResolvedEmbedTitle(image with { Alt = alt }),
-                { } resolved => SlateUniffiMethods.ResolvedEmbedTitle(resolved),
-                null => throw new System.Diagnostics.UnreachableException(),
-            },
-        };
 
     /// <summary>The mac visible unresolved strings, verbatim.</summary>
     private static string UnresolvedEmbedText(EmbedUnresolvedReason reason) =>
@@ -1460,7 +1447,13 @@ internal static class ReadingDocumentBuilder
     /// core depth-limit marker) surface through the header name.</summary>
     private static Paragraph NestedEmbedHeader(NestedEmbed child)
     {
-        string name = EmbedHeaderName(child.Resolution, alt: null);
+        // The nested card's header is core's title too (#1278); only an
+        // unresolved child says why in mac's words.
+        string name = child.Resolution switch
+        {
+            EmbedResolution.Unresolved unresolved => UnresolvedEmbedText(unresolved.Reason),
+            _ => SlateUniffiMethods.ResolvedEmbedTitle(ResolvedEmbeds.Of(child.Resolution)!),
+        };
         (string Path, string? AnchorKind, string? AnchorText)? jump =
             ResolvedJump(child.Resolution);
         var paragraph = new Paragraph

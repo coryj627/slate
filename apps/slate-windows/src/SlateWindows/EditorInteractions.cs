@@ -1438,8 +1438,9 @@ internal sealed class EditorInteractionCoordinator : BindableBase, IDisposable
         // popover's UIA name — the announcement itself, as for every other
         // popover outcome (contract 40 R-8) — and the announcement.
         var shown = new A11yEvent.EmbedPreviewShown(targetRaw, content.Resolved);
-        PopoverTitle =
-            $"{SlateUniffiMethods.ResolvedEmbedTitle(content.Resolved)} — source line {sourceLine}";
+        PopoverTitle = WithSourceLineLocator(
+            SlateUniffiMethods.ResolvedEmbedTitle(content.Resolved),
+            sourceLine);
         PopoverBody = content.Body;
         PopoverAutomationName = SlateUniffiMethods.A11yRender(shown).Text;
         PopoverImage = content.Image;
@@ -1447,6 +1448,12 @@ internal sealed class EditorInteractionCoordinator : BindableBase, IDisposable
         PopoverSourcePath = content.SourcePath;
         _announce(shown);
     }
+
+    /// <summary>The host's one addition to a card title (#1278): the
+    /// popover header's source-line locator, appended here and nowhere else
+    /// (EmbedPreviewTitleCensus pins this helper and its one caller).</summary>
+    private static string WithSourceLineLocator(string coreTitle, int sourceLine) =>
+        $"{coreTitle} — source line {sourceLine}";
 
     /// <summary>The whole unavailable outcome (W7-7 R-8): core words it
     /// from the resolver's semantic reason, and the popover's body and
@@ -1596,13 +1603,13 @@ internal sealed class EditorInteractionCoordinator : BindableBase, IDisposable
         // #1278: a resolved card's title is core's words for what it
         // resolved to — the same title the preview's announcement speaks —
         // so the embeds leaf, nested cards and the popover share one
-        // composition that no host literal takes part in. Core bounds the
-        // authored parts (a heading, an alt) for display.
-        string? title = ResolvedEmbeds.TitleOf(resolution);
+        // composition that no host literal takes part in. Each card's title
+        // IS the core call (EmbedPreviewTitleCensus reads it at this sink).
+        // Core bounds the authored parts (a heading, an alt) for display.
         return resolution switch
         {
             EmbedResolution.FullNote full => new EditorEmbedPreviewNode(
-                title!,
+                SlateUniffiMethods.ResolvedEmbedTitle(ResolvedEmbeds.Of(full)!),
                 BuildEmbedParts(
                     full.Text, full.Nested, depth + 1, reserveDecodedBytes),
                 null,
@@ -1611,7 +1618,7 @@ internal sealed class EditorInteractionCoordinator : BindableBase, IDisposable
                 InitiallyExpanded: depth == 0,
                 IsWarning: false),
             EmbedResolution.Section section => new EditorEmbedPreviewNode(
-                title!,
+                SlateUniffiMethods.ResolvedEmbedTitle(ResolvedEmbeds.Of(section)!),
                 BuildEmbedParts(
                     section.Text, section.Nested, depth + 1, reserveDecodedBytes),
                 null,
@@ -1620,7 +1627,7 @@ internal sealed class EditorInteractionCoordinator : BindableBase, IDisposable
                 InitiallyExpanded: depth == 0,
                 IsWarning: false),
             EmbedResolution.Block block => new EditorEmbedPreviewNode(
-                title!,
+                SlateUniffiMethods.ResolvedEmbedTitle(ResolvedEmbeds.Of(block)!),
                 [new EditorEmbedPreviewPart(BoundPreviewText(block.Text), null)],
                 null,
                 block.TargetPath,
@@ -1628,7 +1635,7 @@ internal sealed class EditorInteractionCoordinator : BindableBase, IDisposable
                 InitiallyExpanded: depth == 0,
                 IsWarning: false),
             EmbedResolution.Image image =>
-                BuildImageNode(image, title!, depth, reserveDecodedBytes),
+                BuildImageNode(image, depth, reserveDecodedBytes),
             EmbedResolution.Unresolved unresolved => new EditorEmbedPreviewNode(
                 Describe(unresolved.Reason),
                 [],
@@ -1654,7 +1661,6 @@ internal sealed class EditorInteractionCoordinator : BindableBase, IDisposable
 
     private static EditorEmbedPreviewNode BuildImageNode(
         EmbedResolution.Image image,
-        string title,
         int depth,
         Func<long, bool>? reserveDecodedBytes)
     {
@@ -1667,7 +1673,7 @@ internal sealed class EditorInteractionCoordinator : BindableBase, IDisposable
                     + "The file may be corrupt or use an unsupported codec."
                 : image.Mime;
         return new EditorEmbedPreviewNode(
-            title,
+            SlateUniffiMethods.ResolvedEmbedTitle(ResolvedEmbeds.Of(image)!),
             [new EditorEmbedPreviewPart(body, null)],
             decoded,
             image.TargetPath,

@@ -10,12 +10,13 @@ namespace SlateWindows;
 /// §1.1, contract 38): the resolution's kind and identifying fields, never
 /// a title. Core words the card title from it
 /// (<see cref="SlateUniffiMethods.ResolvedEmbedTitle"/>) and the
-/// <c>EmbedPreviewShown</c> announcement alike, so the Ctrl+E popover, its
-/// nested cards, the embeds leaf and the reading view's embed headers all
-/// carry core's title and no host spells the "Embedded note / section /
-/// block / image / base" shapes. <see cref="ResolvedEmbed.Base"/> is the
-/// reading view's `.base` summary card (Bases contract C10), built where
-/// that card is: a resolution alone is a note.
+/// <c>EmbedPreviewShown</c> announcement alike. Every title sink — the
+/// Ctrl+E popover's header and cards, the embeds leaf and the reading view's
+/// embed headers — calls core with this data directly, so no host code
+/// composes a title (EmbedPreviewTitleCensus reads each sink). The reading
+/// view's `.base` summary card (Bases contract C10) builds
+/// <see cref="ResolvedEmbed.Base"/> where that card is: a resolution alone
+/// is a note.
 /// </summary>
 internal static class ResolvedEmbeds
 {
@@ -31,11 +32,4 @@ internal static class ResolvedEmbeds
             EmbedResolution.Image image => new ResolvedEmbed.Image(image.TargetPath, image.Alt),
             _ => null,
         };
-
-    /// <summary>Core's card title for <paramref name="resolution"/>, or
-    /// null for an unresolved embed.</summary>
-    internal static string? TitleOf(EmbedResolution resolution) =>
-        Of(resolution) is { } resolved
-            ? SlateUniffiMethods.ResolvedEmbedTitle(resolved)
-            : null;
 }
