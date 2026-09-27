@@ -4633,8 +4633,10 @@ public sealed class CanvasNavigatorTests : IDisposable
     /// <summary>
     /// Follow-up #1271, review round 3 — a debt belongs to its
     /// document. The board owes New Card's card a reveal on document X; before
-    /// that card installs, the pane is rebound to document Y, whose only card
-    /// has the SAME id and is Y's seat. Y's state installs with that id in it,
+    /// that card installs, the pane is rebound to document Y, whose seat is a
+    /// card with the SAME id at the SAME selection revision the debt was owed
+    /// at — so no token can tell the two seats apart, and only the document
+    /// change itself drops the debt. Y's state installs with that id in it,
     /// and the board must not pay X's debt against Y.
     /// </summary>
     [Fact]
@@ -4644,25 +4646,51 @@ public sealed class CanvasNavigatorTests : IDisposable
         using HostedWindow host = HostBoard(document, out CanvasSurfaceView surface);
         CanvasRendererView board = surface.VisualForTests;
         Assert.True(board.Engine.CommittedViewport.FollowSelection, "premise: Follow Selection is on by default.");
-        document.SeatSelectionSilently("question");
+        // X's seat moves a while first, so the revision the debt is owed at is
+        // one Y's seat can be brought to.
+        for (int step = 0; step < 10; step++)
+        {
+            document.SeatSelectionSilently("evidence");
+            document.SeatSelectionSilently("question");
+        }
         board.Engine.CommitViewport(view => view.PannedTo(-5000, -5000));
 
         document.CanvasNewCard();
         string created = Assert.IsType<string>(document.Selection.Selected);
+        long owedAt = document.Selection.Revision;
         Assert.False(Installed(board, created), "premise: the board had already installed the new card.");
 
         File.WriteAllText(
             Path.Combine(_fixture.Root, "collide.canvas"),
-            "{\"nodes\":[{\"id\":\"" + created + "\",\"type\":\"text\",\"text\":\"Same id, another canvas\","
-            + "\"x\":0,\"y\":0,\"width\":200,\"height\":100}],\"edges\":[]}");
+            "{\"nodes\":["
+            + "{\"id\":\"" + created + "\",\"type\":\"text\",\"text\":\"Same id, another canvas\","
+            + "\"x\":0,\"y\":0,\"width\":200,\"height\":100},"
+            + "{\"id\":\"spare\",\"type\":\"text\",\"text\":\"Spare\",\"x\":0,\"y\":400,\"width\":200,\"height\":100}"
+            + "],\"edges\":[]}");
         CanvasDocumentViewModel other = Open("collide.canvas");
         other.ShowSurface(CanvasSurfaceKind.Visual);
         Assert.Equal(created, other.Selection.Selected);
+        long gap = owedAt - other.Selection.Revision;
+        Assert.True(gap >= 2, $"premise: Y's seat is already at revision {other.Selection.Revision}, past {owedAt}.");
+        if (gap % 2 == 1)
+        {
+            other.SeatSelectionSilently(null);
+            other.SeatSelectionSilently("spare");
+            other.SeatSelectionSilently(created);
+        }
+        while (other.Selection.Revision < owedAt)
+        {
+            other.SeatSelectionSilently(null);
+            other.SeatSelectionSilently(created);
+        }
+        Assert.True(
+            other.Selection.Revision == owedAt && other.Selection.Selected == created,
+            "premise: Y's seat is not the same id at the same revision, so a token could tell the seats apart.");
         CanvasViewportState before = board.Engine.CommittedViewport;
 
         surface.Model = other;
         PumpUntil(
-            () => board.Engine.Current?.Source.Loaded?.Population is { Count: 1 } population
+            () => board.Engine.Current?.Source.Loaded?.Population is { Count: 2 } population
                 && population.SceneByNode.ContainsKey(created),
             "premise: the other document's state never installed on the board.");
         Assert.True(
