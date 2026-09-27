@@ -402,6 +402,51 @@ public sealed class PumpedSaveReentrancyTests
         }
     }
 
+    /// <summary>The prompt's answer is pinned to the document, not to its
+    /// file name: a rename that lands while the prompt is up keeps the
+    /// document and its edits, so the Discard stands — one prompt, and the
+    /// close, replace or teardown completes (the open in contract 35's IGL-2
+    /// proceeds the same way). The rename arrives as the lifecycle delivers
+    /// it, through the workspace's retarget, from inside the prompt.</summary>
+    [Theory]
+    [InlineData("close-tab")]
+    [InlineData("close-pane")]
+    [InlineData("replace")]
+    [InlineData("teardown")]
+    public void ARenameWhileThePromptIsUpKeepsTheAnswer(string site)
+    {
+        using var host = new Host(VaultCloseDecision.Discard);
+        int prompts = 0;
+        WorkspaceDirtyNavigationDecision Ask()
+        {
+            if (++prompts == 1)
+            {
+                host.Workspace.RetargetPath("note0.md", "renamed0.md");
+            }
+            return WorkspaceDirtyNavigationDecision.Discard;
+        }
+        host.TabPrompt = _ => Ask();
+        host.ClosePrompt = () => Ask() == WorkspaceDirtyNavigationDecision.Discard
+            ? VaultCloseDecision.Discard
+            : VaultCloseDecision.Cancel;
+
+        host.RunSite(site);
+        host.Settle();
+
+        Assert.True(host.Faults.Count == 0, string.Join("\n---\n", host.Faults));
+        Assert.Equal(1, prompts);
+        switch (site)
+        {
+            case "close-tab": Assert.True(host.T.IsDisposed); break;
+            case "close-pane": Assert.DoesNotContain(host.G1, host.Workspace.Groups); break;
+            case "replace": Assert.Equal("note3.md", host.T.Path); break;
+            case "teardown":
+                Assert.Null(host.Lifecycle.Workspace);
+                Assert.Single(host.Announced, item => item.Event is A11yEvent.VaultClosedChangesDiscarded);
+                break;
+        }
+    }
+
     /// <summary>Codex round 2a (design change): holding Ctrl+S never nests a
     /// frame. Presses made while a write is in flight return at once and join
     /// ONE queued save, which captures the editor when it STARTS — text typed
