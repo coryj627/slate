@@ -146,11 +146,10 @@ internal static class SelectorFocus
     /// <summary>
     /// Give <paramref name="container"/> its region's own landing, which
     /// <see cref="LandOnStop"/> then takes wherever the container is the
-    /// target — a focus restore's token included. The Files tree is the
-    /// one: its landing is the selected file's row, else the Files region's
-    /// stable stop, the filter field — never the bare tree (R-5) and never
-    /// a row that is not selected, whose focus would select it and OPEN a
-    /// note (<c>MainWindow.LandOnFilesTree</c>; codex round 5's ruling).
+    /// target — a focus restore's token included. The Files tree is one:
+    /// its landing is the selected file's row, else its first row
+    /// unselected, which opens nothing — never the bare tree (R-5)
+    /// (<c>MainWindow.LandOnFilesTree</c>; the owner's focus-without-select).
     /// </summary>
     internal static void SetOwnLanding(UIElement container, Func<bool> land) =>
         OwnLandings.AddOrUpdate(container, land);
@@ -449,51 +448,84 @@ internal static class SelectorFocus
     }
 
     /// <summary>
-    /// W7-7 PR 4 (#1247, contract R-5; spec review round 23): a TREE's
-    /// landing is a ROW — the selected one, else the first — and never the
-    /// tree itself.
+    /// W7-7 PR 4 (#1247, contract R-5 as the owner amended it; spec review
+    /// round 23): a TREE's landing is a ROW — the selected one, else the
+    /// first, focused UNSELECTED — and never the tree itself.
     /// </summary>
     /// <remarks>
+    /// <para>
     /// WPF hands a focused tree's keys to its selected container only when
     /// one exists. With no selection the bare tree keeps them: Up and Down
     /// then reach its first row, but Left and Right go to directional
     /// navigation and out of the region (<c>TreeLandingTests</c> measures
     /// both). A selected row the panel has not realized is brought into
     /// view level by level; one under a collapsed row is hidden, cannot take
-    /// the keys, and is not a landing. The selection is not written here — a
-    /// row selects itself
-    /// when it takes focus, as the first row does — and an empty tree is not
-    /// a landing either: the caller's stable stop is.
+    /// the keys, and is not a landing.
+    /// </para>
+    /// <para>
+    /// With no selected row to land on — nothing selected, or the selection
+    /// hidden — the landing is the first row that takes the keys, WITHOUT
+    /// selecting it (<see cref="LandingTreeViewItem.FocusUnselected"/>): a
+    /// selection in the shell's trees opens a note or applies a tag, and a
+    /// landing does neither (the owner's focus-without-select, which
+    /// replaced the Files region's filter-field fallback). The selection is
+    /// never written here; the selected row, focused, selects itself only
+    /// when its container had lost the selection, which re-states it. An
+    /// EMPTY tree on show is its own stop (AR-6), as an empty list is.
+    /// </para>
     /// </remarks>
     /// <param name="selectedPath">The selected row's items, root first, when
     /// the tree's own selection is not the source of truth (a recycled
     /// container drops it); null reads the tree's.</param>
-    /// <returns>Whether a row took the keys now. False means none did, and
-    /// the caller lands on its stable stop.</returns>
+    /// <returns>Whether a row — or the empty tree — took the keys now. False
+    /// means nothing did, and the caller lands on its stable stop.</returns>
     internal static bool FocusSelectedOrFirstRow(TreeView tree, IReadOnlyList<object>? selectedPath = null)
     {
         ++_newestRequest;
         if (!tree.HasItems)
         {
-            return false;
+            return tree.IsVisible && tree.Focus();
         }
 
-        TreeViewItem? row;
+        TreeViewItem? selectedRow = null;
         if (selectedPath is { Count: > 0 })
         {
-            row = RealizedTreeRow(tree, selectedPath);
+            selectedRow = RealizedTreeRow(tree, selectedPath);
         }
         else if (tree.SelectedItem is { } selected)
         {
-            row = SelectedTreeRow(tree)
+            selectedRow = SelectedTreeRow(tree)
                 ?? (tree.Items.Contains(selected) ? RealizedTreeRow(tree, [selected]) : null);
         }
-        else
+
+        if (selectedRow is not null && (selectedRow.Focus() || selectedRow.IsKeyboardFocusWithin))
         {
-            row = RealizedTreeRow(tree, [tree.Items[0]]);
+            return true;
         }
 
-        return row is not null && (row.Focus() || row.IsKeyboardFocusWithin);
+        return FocusFirstRowUnselected(tree);
+    }
+
+    /// <summary>The first root row that takes the keys, focused without
+    /// selecting it; a row that cannot take them (disabled, hidden) is
+    /// passed over for the next.</summary>
+    private static bool FocusFirstRowUnselected(TreeView tree)
+    {
+        int searched = 0;
+        foreach (object item in tree.Items)
+        {
+            if (++searched > FirstRowSearchLimit)
+            {
+                return false;
+            }
+
+            if (RealizedTreeRow(tree, [item]) is { IsEnabled: true } row && LandingTreeViewItem.FocusUnselected(row))
+            {
+                return true;
+            }
+        }
+
+        return false;
     }
 
     private static Landing FocusLandingItem(Selector selector)
@@ -601,7 +633,9 @@ internal static class SelectorFocus
         return row;
     }
 
-    private static TreeViewItem? RealizedTreeRow(ItemsControl level, object item)
+    /// <summary>The row for <paramref name="item"/> in <paramref name="level"/>,
+    /// realized if the level's panel will make it; null otherwise.</summary>
+    internal static TreeViewItem? RealizedTreeRow(ItemsControl level, object item)
     {
         if (level.ItemContainerGenerator.ContainerFromItem(item) is TreeViewItem realized)
         {

@@ -196,7 +196,7 @@ public sealed class SelectorLandingCensus
                 "Planted.cs:9: list?.Focus() lands on a bare ListBox",
                 "Planted.cs:10: System.Windows.Input.Keyboard.Focus(QueriesSavedList) lands on a bare ListBox",
                 "Planted.cs:12: new System.Windows.Controls.DataGrid().Focus() lands on a bare DataGrid",
-                "Planted.cs:14: FilesTree.Focus() lands on a bare TreeView",
+                "Planted.cs:14: FilesTree.Focus() lands on a bare LandingTreeView",
                 "Planted.cs:15: ShellStatusBar.Focus() lands on a bare StatusBar",
                 "Planted.cs:17: MainMenu.Focus() lands on a bare Menu",
                 "Planted.cs:18: token.Focus() lands on a base-typed IInputElement, which may be a bare container: land it through SelectorFocus.LandOnStop",

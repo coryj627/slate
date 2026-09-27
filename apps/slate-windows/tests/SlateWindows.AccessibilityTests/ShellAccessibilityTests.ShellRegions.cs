@@ -14,9 +14,9 @@ public sealed partial class ShellAccessibilityTests
     /// <summary>W7-6 (#1240) spec §5: F6 walks the ring forward from the
     /// Files tree and Shift+F6 walks it back; hiding the right pane drops
     /// both right stops; a zero-tab vault stops on the empty pane. The Files
-    /// region's landing is the selected file's row, else its stable stop,
-    /// the filter field (W7-7 PR 4, R-5; codex round 5's ruling) — never the
-    /// bare tree.</summary>
+    /// region's landing is the selected file's row, else the tree's first row
+    /// unselected (W7-7 PR 4, R-5 as the owner amended it) — a row of the
+    /// tree, never the bare tree.</summary>
     [Fact]
     public void ShellRegions_F6CyclesForwardAndShiftF6Back()
     {
@@ -43,7 +43,7 @@ public sealed partial class ShellAccessibilityTests
             // Zero tabs: Files → empty pane → leaf/rail → status bar → menu bar → Files.
             AutomationElement tree = WaitForElement(window, "FilesTree", TimeSpan.FromSeconds(10));
             tree.Focus();
-            AssertEventuallyFocused(tree, "The Files tree did not take focus.");
+            AssertFilesTreeRegionFocused(window, automation, tree, "The Files tree did not take focus.");
             PressKey(VirtualKeyShort.F6);
             AssertEventuallyFocused(WaitForElement(window, "ContentPane", TimeSpan.FromSeconds(10)), "F6 from Files with no tab did not land on the empty editor pane.");
             PressKey(VirtualKeyShort.F6);
@@ -54,9 +54,7 @@ public sealed partial class ShellAccessibilityTests
             PressKey(VirtualKeyShort.F6);
             AssertEventuallyFocused(WaitForElement(window, "FileMenu", TimeSpan.FromSeconds(10)), "F6 from the status bar did not wrap to the menu bar.");
             PressKey(VirtualKeyShort.F6);
-            AssertEventuallyFocused(
-                WaitForElement(window, "SidebarFilter", TimeSpan.FromSeconds(10)),
-                "F6 from the menu bar did not land on Files' stable stop, the filter field (nothing is selected).");
+            AssertFilesTreeRegionFocused(window, automation, tree, "F6 from the menu bar did not land on Files.");
 
             // Open a note: Files → tab bar → editor → … ; then Shift+F6 back.
             // The tree item's automation name is "{DisplayName}, {kind}"

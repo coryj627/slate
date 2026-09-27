@@ -28,20 +28,17 @@ public partial class MainWindow : Window
     public MainWindow()
     {
         InitializeComponent();
-        // R-5 (#1247; codex rounds 4-5): a restore whose token is the Files
-        // tree lands as the region does — its selected row, else the filter
-        // field — never on the bare tree, nor on a row that is not selected,
-        // whose focus would open its note.
+        // R-5 (#1247, as the owner amended it): a landing in the Files tree —
+        // a restore's, Tab's, a click's — lands as the region does: its
+        // selected row, else its first row unselected, whose focus opens
+        // nothing — never the bare tree.
         SelectorFocus.SetOwnLanding(FilesTree, LandOnFilesTree);
-        // The Tags tree's selection ACTIVATES a tag filter (R-3): a restore
-        // onto the bare tree lands on its selected tag, else the Files
-        // region's stable stop — never a first tag it would apply.
+        // The Tags tree's selection ACTIVATES a tag filter (R-3): its
+        // landing is its selected tag, else its first tag UNSELECTED —
+        // never one it would apply.
         TreeView tags = FindWithAutomationId<TreeView>(FilesPaneBorder, "SidebarTagTree")
             ?? throw new InvalidOperationException("SidebarTagTree is not in the shell's XAML.");
-        SelectorFocus.SetOwnLanding(
-            tags,
-            () => (tags.SelectedItem is not null && SelectorFocus.FocusSelectedOrFirstRow(tags))
-                || SidebarFilterTextBox.Focus());
+        SelectorFocus.SetOwnLanding(tags, () => LandOnSidebarTree(tags, selectedPath: null));
         KeepLeafKeysThroughPublications();
         _windowPlacement = new WindowPlacementManager(this);
         _announcer = new AccessibilityNotificationDispatcher(StatusTextBlock);
@@ -1066,6 +1063,7 @@ public partial class MainWindow : Window
         if (e.Key == Key.Delete
             && modifiers == ModifierKeys.None
             && FilesTree.IsKeyboardFocusWithin
+            && FilesKeysAreOnTheSelection()
             && _viewModel.FileSidebar?.DeleteCommand.CanExecute(null) == true)
         {
             _viewModel.FileSidebar.DeleteCommand.Execute(null);
@@ -1075,6 +1073,7 @@ public partial class MainWindow : Window
 
         if (e.Key == Key.F2
             && FilesTree.IsKeyboardFocusWithin
+            && FilesKeysAreOnTheSelection()
             && _viewModel.FileSidebar?.SelectedNode is
             { IsPlaceholder: false, IsGroupHeader: false })
         {
@@ -1136,6 +1135,16 @@ public partial class MainWindow : Window
         int extension = isFile ? text.LastIndexOf('.') : -1;
         SidebarMutationNameTextBox.Select(0, extension > 0 ? extension : text.Length);
     }
+
+    /// <summary>W7-7 PR 4 (#1247, the owner's focus-without-select): the
+    /// tree's selection verbs — Delete, F2 — act on the row the reader is
+    /// on. A landing may leave the keys on a first row that is NOT the
+    /// sidebar's selection (the selection hidden under a collapsed folder);
+    /// there the verbs leave the key alone rather than act on a file the
+    /// reader cannot hear.</summary>
+    private bool FilesKeysAreOnTheSelection() =>
+        Keyboard.FocusedElement is not TreeViewItem { DataContext: var node }
+        || ReferenceEquals(node, _viewModel.FileSidebar?.SelectedNode);
 
     internal bool TryFocus(IInputElement target)
     {

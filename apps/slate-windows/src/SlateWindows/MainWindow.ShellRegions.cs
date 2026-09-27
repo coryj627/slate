@@ -243,37 +243,42 @@ public partial class MainWindow : IShellRegionHost
     }
 
     /// <summary>
-    /// W7-7 PR 4 (#1247, R-5; spec review round 23; codex round 5): every
-    /// landing in the Files tree — the ring's, the Files boundary's, a
+    /// W7-7 PR 4 (#1247, R-5 as the owner amended it; spec review round 23):
+    /// every landing in the Files tree — the ring's, the Files boundary's, a
     /// rename's, a mutation's restore, Move To's, the empty editor's last
-    /// resort (the launch landing with no tab restored), a restore whose
-    /// token is the tree — goes through here: the selected file's ROW,
-    /// realized; else the Files region's stable stop, the filter field.
+    /// resort (the launch landing with no tab restored, W7-5), a restore
+    /// whose token is the tree or one of its rows, the tree's own hand-on
+    /// from Tab or a click — goes through here: the selected file's ROW,
+    /// realized; else the tree's first row, UNSELECTED.
     /// </summary>
     /// <remarks>
     /// <para>
     /// They were <c>FilesTree.Focus()</c>, which reaches a row only when the
     /// tree holds a selection it has realized. The sidebar's selected node
     /// is the source of truth — a recycled container drops the tree's own —
-    /// so its path is handed to the tree landing, which focuses that row
-    /// and no other.
+    /// so its path is handed to the tree landing, which focuses that row.
     /// </para>
     /// <para>
-    /// With no row to land on — nothing selected, the selection hidden under
-    /// a collapsed folder, a tree the filter has replaced — the landing is
-    /// the filter field (R-5: "a realizing helper focuses the current or
-    /// first item, else the region's stable stop"). It is never the bare
-    /// tree, a populated container (codex round 5's ruling withdrew the
-    /// earlier bare-tree stop), and never a row that is not selected: a row
-    /// selects itself when it takes focus, and selecting a file OPENS it
-    /// (OD-2). The landing selects nothing and opens nothing; the field
-    /// keeps all four arrows.
+    /// With no selected row to land on — nothing selected, the selection
+    /// hidden under a collapsed folder — the landing is the first row,
+    /// focused without selecting it (the owner's focus-without-select,
+    /// which replaced codex round 5's filter-field fallback): selecting a
+    /// file OPENS it (OD-2), and a landing opens nothing, says nothing and
+    /// leaves the selection where it was. It is never the bare tree, a
+    /// populated container. An EMPTY tree is its own stop (AR-6); a tree
+    /// the filter has replaced cannot take the keys, and the region's
+    /// stable stop, the filter field, does.
     /// </para>
     /// </remarks>
     /// <returns>Whether the keys landed in the Files region.</returns>
-    internal bool LandOnFilesTree() =>
-        (SelectedFilesPath() is { } selected && SelectorFocus.FocusSelectedOrFirstRow(FilesTree, selected))
-        || SidebarFilterTextBox.Focus();
+    internal bool LandOnFilesTree() => LandOnSidebarTree(FilesTree, SelectedFilesPath());
+
+    /// <summary>A Files-region tree's landing: its selected row, else its
+    /// first row unselected; an empty tree on show is its own stop (AR-6);
+    /// else — a tree the filter replaced, rows not realized — the region's
+    /// stable stop, the filter field.</summary>
+    private bool LandOnSidebarTree(TreeView tree, IReadOnlyList<object>? selectedPath) =>
+        SelectorFocus.FocusSelectedOrFirstRow(tree, selectedPath) || SidebarFilterTextBox.Focus();
 
     /// <summary>The sidebar's selected node and its ancestors, root first;
     /// null when nothing is selected or the node is no longer in the

@@ -1195,7 +1195,7 @@ public sealed class SidebarTreeKeysTests : IDisposable
             Shell = new MainWindow();
             Lifecycle = Assert.IsType<VaultLifecycleViewModel>(Shell.DataContext);
             SetPrivateProperty(Lifecycle, nameof(VaultLifecycleViewModel.FileSidebar), Sidebar);
-            Tree = Detach<TreeView>(Assert.IsType<TreeView>(Shell.FindName("FilesTree")));
+            Tree = Detach<TreeView>(Assert.IsType<LandingTreeView>(Shell.FindName("FilesTree")));
             FilterResults = Detach<ListBox>(Assert.IsType<ListBox>(Shell.FindName("FilterResultsList")));
             RenameField = Detach<TextBox>(Assert.IsType<TextBox>(Shell.FindName("SidebarMutationNameTextBox")));
             DualPane = Detach<ListBox>(Assert.Single(

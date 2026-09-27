@@ -168,7 +168,7 @@ internal sealed class CanvasOutlineRowViewModel : BindableBase
 /// <see cref="CanvasOutlineItem"/> and therefore carries the
 /// <c>Invoke</c> pattern (contract A8).
 /// </summary>
-internal sealed class CanvasOutlineTree : TreeView
+internal sealed class CanvasOutlineTree : LandingTreeView
 {
     protected override DependencyObject GetContainerForItemOverride() =>
         new CanvasOutlineItem();
@@ -195,7 +195,7 @@ internal sealed class CanvasOutlineTree : TreeView
 /// every row. Overriding the item-peer factory here and on the item peer
 /// puts Invoke on the peer that is actually exposed.
 /// </remarks>
-internal sealed class CanvasOutlineTreeAutomationPeer : TreeViewAutomationPeer
+internal sealed class CanvasOutlineTreeAutomationPeer : LandingTreeViewAutomationPeer
 {
     public CanvasOutlineTreeAutomationPeer(CanvasOutlineTree owner)
         : base(owner)
@@ -247,7 +247,7 @@ internal sealed class CanvasOutlineRowDataPeer
 /// invokable CHILD element instead would put a second peer inside every
 /// row, which the journeys' recorded peered-elements-only trap forbids.
 /// </summary>
-internal sealed class CanvasOutlineItem : TreeViewItem
+internal sealed class CanvasOutlineItem : LandingTreeViewItem
 {
     /// <summary>
     /// R-12 (#1256): the row's context menu EXISTS from the container's

@@ -230,10 +230,10 @@ public sealed partial class ShellAccessibilityTests
             }
 
             // W7-5 (#1239): a vault that restores no tabs lands its launch
-            // focus in the Files region, never on the empty TabControl (which
-            // is not focusable until it has items). With no file selected
-            // that is the region's stable stop, the filter field — never the
-            // bare tree (W7-7 PR 4, R-5; codex round 5's ruling).
+            // focus on the Files tree, never on the empty TabControl (which
+            // is not focusable until it has items) — on a row of it, never
+            // the bare tree: with no file selected, the first row, unselected
+            // (W7-7 PR 4, R-5 as the owner amended it).
             AutomationElement tabs = WaitForElement(
                 window,
                 "WorkspaceTabs",
@@ -241,9 +241,11 @@ public sealed partial class ShellAccessibilityTests
             Assert.False(
                 tabs.Properties.IsKeyboardFocusable.Value,
                 "An empty TabControl must not be keyboard focusable.");
-            AssertEventuallyFocused(
-                WaitForElement(window, "SidebarFilter", TimeSpan.FromSeconds(10)),
-                "Opening a vault with no restored tabs did not land on the Files filter field.");
+            AssertFilesTreeRegionFocused(
+                window,
+                automation,
+                WaitForElement(window, "FilesTree", TimeSpan.FromSeconds(10)),
+                "Opening a vault with no restored tabs did not focus the Files tree.");
 
             AssertActionButtonCensus(
                 WaitForElement(window, "SidebarBatchActions", TimeSpan.FromSeconds(10)),
@@ -5328,12 +5330,11 @@ public sealed partial class ShellAccessibilityTests
             // Park focus somewhere deliberate first, and remember the
             // exact element by runtime id — "restores prior focus" means
             // THAT element, not merely "not the window root" (SD-2). The
-            // Files filter field, not the bare Files tree: a restore onto
-            // the bare tree lands on the region's stable stop, this field,
-            // by design (W7-7 PR 4, R-5; codex round 5's ruling).
-            AutomationElement filesFilter = WaitForElement(
-                window, "SidebarFilter", TimeSpan.FromSeconds(10));
-            filesFilter.Focus();
+            // Files tree hands the keys to its landing row (W7-7 PR 4, R-5),
+            // so THAT row is the element remembered below.
+            AutomationElement filesTree = WaitForElement(
+                window, "FilesTree", TimeSpan.FromSeconds(10));
+            filesTree.Focus();
             Wait.UntilInputIsProcessed(TimeSpan.FromMilliseconds(250));
             AutomationElement? focusedBefore = null;
             Assert.True(
@@ -5457,12 +5458,31 @@ public sealed partial class ShellAccessibilityTests
             // supersession's focus lineage — palette adopts search's
             // pre-open token — is asserted by identity, not vibes
             // (codex round 11: the adoption was previously unprovable
-            // from this journey). The filter field, for the reason above.
+            // from this journey). The Files tree hands the keys to its
+            // landing row (W7-7 PR 4, R-5), so the element parked on is
+            // THAT row.
             AutomationElement parkedBeforeSearch = WaitForElement(
-                window, "SidebarFilter", TimeSpan.FromSeconds(10));
+                window, "FilesTree", TimeSpan.FromSeconds(10));
             parkedBeforeSearch.Focus();
             Wait.UntilInputIsProcessed(TimeSpan.FromMilliseconds(250));
-            int[] parkedRuntimeId = parkedBeforeSearch.Properties.RuntimeId.Value;
+            AutomationElement? parkedOn = null;
+            Assert.True(
+                SpinWait.SpinUntil(
+                    () =>
+                    {
+                        try
+                        {
+                            parkedOn = automation.FocusedElement();
+                            return parkedOn is not null && IsDescendantOf(parkedOn, parkedBeforeSearch);
+                        }
+                        catch (Exception exception) when (IsTransientUiaFault(exception))
+                        {
+                            return false;
+                        }
+                    },
+                    TimeSpan.FromSeconds(10)),
+                "the Files tree did not take the keys before search opened");
+            int[] parkedRuntimeId = parkedOn!.Properties.RuntimeId.Value;
 
             window.SetForeground();
             PressChord(

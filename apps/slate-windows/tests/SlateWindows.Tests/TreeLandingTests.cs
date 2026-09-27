@@ -8,14 +8,15 @@ using System.Windows.Input;
 namespace SlateWindows.Tests;
 
 /// <summary>
-/// W7-7 PR 4 (#1247, contract R-5; spec review round 23): a TREE's landing
-/// is a ROW — <see cref="SelectorFocus.FocusSelectedOrFirstRow"/> puts the
-/// keys on the selected row, else the first — and never the tree itself.
-/// The first fact is the platform's own behavior, measured: WPF hands a
-/// focused tree's keys to its selected row, but a tree with no selection
-/// keeps them, and Left leaves it for whatever lies beside it. Every key
-/// here is a real press through the input manager, so WPF's directional
-/// navigation answers it the way it answers a physical key.
+/// W7-7 PR 4 (#1247, contract R-5 as the owner amended it; spec review round
+/// 23): a TREE's landing is a ROW — <see cref="SelectorFocus.FocusSelectedOrFirstRow"/>
+/// puts the keys on the selected row, else the first, UNSELECTED — and never
+/// the tree itself. The first fact is the platform's own behavior, measured:
+/// WPF hands a focused tree's keys to its selected row, but a tree with no
+/// selection keeps them, and Left leaves it for whatever lies beside it. The
+/// shell's trees are <see cref="LandingTreeView"/>s, which never keep them.
+/// Every key here is a real press through the input manager, so WPF's
+/// directional navigation answers it the way it answers a physical key.
 /// </summary>
 public sealed class TreeLandingTests
 {
@@ -38,19 +39,89 @@ public sealed class TreeLandingTests
         Assert.NotSame(first, Keyboard.FocusedElement);
     });
 
-    /// <summary>With nothing selected the first row takes the keys; the tree
-    /// itself never has them, not even for a moment.</summary>
+    /// <summary>With nothing selected the first row takes the keys WITHOUT
+    /// selecting itself (the owner's focus-without-select: a selection in the
+    /// shell's trees opens a note or applies a tag); the tree itself never has
+    /// them, not even for a moment.</summary>
     [Fact]
-    public void WithNoSelectionTheFirstRowTakesTheKeys() => RunSta(() =>
+    public void WithNoSelectionTheFirstRowTakesTheKeysUnselected() => RunSta(() =>
     {
-        (TreeView tree, TreeViewItem first, _) = Tree();
+        (TreeView tree, TreeViewItem first, TreeViewItem second) = LandingTree();
         using Hosted host = Host(tree);
         Assert.True(host.Above.Focus());
 
         Assert.True(SelectorFocus.FocusSelectedOrFirstRow(tree));
 
         Assert.Same(first, Keyboard.FocusedElement);
+        Assert.False(first.IsSelected, "the landing selected the first row.");
+        Assert.Null(tree.SelectedItem);
         host.AssertNeverFocused(tree);
+
+        // The row is a row like any other from there: Down selects the next,
+        // as an arrow always has.
+        Press(host, Key.Down);
+        Assert.Same(second, Keyboard.FocusedElement);
+        Assert.True(second.IsSelected);
+    });
+
+    /// <summary>The keys on their way to a populated landing tree itself —
+    /// Tab, a click on its empty area (TreeView.HandleMouseButtonDown focuses
+    /// the tree), a restore, UI Automation's SetFocus — go on to its landing
+    /// in the same focus change: the tree never takes them.</summary>
+    [Fact]
+    public void KeysSentToABareLandingTreeGoOnToItsFirstRowUnselected() => RunSta(() =>
+    {
+        (TreeView tree, TreeViewItem first, _) = LandingTree();
+        using Hosted host = Host(tree);
+        Assert.True(host.Above.Focus());
+
+        _ = tree.Focus();
+
+        Assert.Same(first, Keyboard.FocusedElement);
+        Assert.False(first.IsSelected, "the hand-on selected the first row.");
+        host.AssertNeverFocused(tree);
+    });
+
+    /// <summary>Tab — WPF's own traversal, no landing of ours — reaches a
+    /// populated landing tree with nothing selected on its first row,
+    /// unselected: the bare tree was Tab's resting place (codex PR 4 round 6,
+    /// the repro's R6_5x).</summary>
+    [Fact]
+    public void TabIntoALandingTreeRestsOnItsFirstRowUnselected() => RunSta(() =>
+    {
+        (TreeView tree, TreeViewItem first, _) = LandingTree();
+        using Hosted host = Host(tree);
+        Assert.True(host.Left.Focus());
+
+        for (int press = 0; press < 8 && !tree.IsKeyboardFocusWithin; press++)
+        {
+            Press(host, Key.Tab);
+        }
+
+        Assert.Same(first, Keyboard.FocusedElement);
+        Assert.False(first.IsSelected);
+        host.AssertNeverFocused(tree);
+    });
+
+    /// <summary>An EMPTY landing tree is its own stop (AR-6) — the launch
+    /// landing can reach the Files tree before its first publication — and
+    /// rows published under the keys land them on the first row, unselected,
+    /// once the rows are laid out.</summary>
+    [Fact]
+    public void RowsPublishedUnderAnEmptyLandingTreeLandTheKeysOnARow() => RunSta(() =>
+    {
+        var tree = new LandingTreeView();
+        using Hosted host = Host(tree);
+        Assert.True(SelectorFocus.FocusSelectedOrFirstRow(tree));
+        Assert.Same(tree, Keyboard.FocusedElement);
+
+        var first = new LandingTreeViewItem { Header = "A" };
+        tree.Items.Add(first);
+        tree.Items.Add(new LandingTreeViewItem { Header = "B" });
+        PumpedDispatcher.Drain();
+
+        Assert.Same(first, Keyboard.FocusedElement);
+        Assert.False(first.IsSelected);
     });
 
     [Fact]
@@ -93,14 +164,14 @@ public sealed class TreeLandingTests
     });
 
     /// <summary>A selected row under a collapsed row is hidden: it is not a
-    /// landing, and the tree is not landed on either — the call answers false
-    /// and the keys stay for the caller's stable stop.</summary>
+    /// landing, and it gives way to the first row, UNSELECTED — the landing
+    /// neither expands the folder nor selects it.</summary>
     [Fact]
-    public void AHiddenSelectedRowIsNotALanding() => RunSta(() =>
+    public void AHiddenSelectedRowGivesWayToTheFirstRowUnselected() => RunSta(() =>
     {
-        var tree = new TreeView();
-        var folder = new TreeViewItem { Header = "Folder" };
-        var file = new TreeViewItem { Header = "File" };
+        var tree = new LandingTreeView();
+        var folder = new LandingTreeViewItem { Header = "Folder" };
+        var file = new LandingTreeViewItem { Header = "File" };
         folder.Items.Add(file);
         tree.Items.Add(folder);
         using Hosted host = Host(tree);
@@ -110,23 +181,30 @@ public sealed class TreeLandingTests
         tree.UpdateLayout();
         Assert.True(host.Above.Focus());
 
-        Assert.False(SelectorFocus.FocusSelectedOrFirstRow(tree, [folder, file]));
+        Assert.True(SelectorFocus.FocusSelectedOrFirstRow(tree, [folder, file]));
 
-        Assert.Same(host.Above, Keyboard.FocusedElement);
+        Assert.Same(folder, Keyboard.FocusedElement);
+        Assert.False(folder.IsSelected, "the landing selected the folder.");
+        Assert.False(folder.IsExpanded, "the landing expanded the folder.");
         host.AssertNeverFocused(tree);
     });
 
+    /// <summary>An empty tree is its own stop (AR-6), as an empty list is;
+    /// one that is not on show is no landing at all.</summary>
     [Fact]
-    public void AnEmptyTreeIsNotALanding() => RunSta(() =>
+    public void AnEmptyTreeIsItsOwnStop() => RunSta(() =>
     {
-        var tree = new TreeView();
+        var tree = new LandingTreeView();
         using Hosted host = Host(tree);
         Assert.True(host.Above.Focus());
 
-        Assert.False(SelectorFocus.FocusSelectedOrFirstRow(tree));
+        Assert.True(SelectorFocus.FocusSelectedOrFirstRow(tree));
+        Assert.Same(tree, Keyboard.FocusedElement);
 
+        Assert.True(host.Above.Focus());
+        tree.Visibility = Visibility.Collapsed;
+        Assert.False(SelectorFocus.FocusSelectedOrFirstRow(tree));
         Assert.Same(host.Above, Keyboard.FocusedElement);
-        host.AssertNeverFocused(tree);
     });
 
     /// <summary>The arrow witness: from the landed row every arrow keeps the
@@ -138,14 +216,14 @@ public sealed class TreeLandingTests
     [InlineData(Key.Down)]
     public void FromTheLandedRowEveryArrowStaysInTheTree(Key key) => RunSta(() =>
     {
-        (TreeView tree, _, _) = Tree();
+        (TreeView tree, _, _) = LandingTree();
         using Hosted host = Host(tree);
         Assert.True(host.Above.Focus());
         Assert.True(SelectorFocus.FocusSelectedOrFirstRow(tree));
 
         Press(host, key);
 
-        Assert.IsType<TreeViewItem>(Keyboard.FocusedElement);
+        Assert.IsAssignableFrom<TreeViewItem>(Keyboard.FocusedElement);
         Assert.True(tree.IsKeyboardFocusWithin, $"{key} took the keys out of the tree to {Keyboard.FocusedElement}");
         host.AssertNeverFocused(tree);
     });
@@ -157,6 +235,18 @@ public sealed class TreeLandingTests
         var tree = new TreeView();
         var first = new TreeViewItem { Header = "A" };
         var second = new TreeViewItem { Header = "B" };
+        tree.Items.Add(first);
+        tree.Items.Add(second);
+        return (tree, first, second);
+    }
+
+    /// <summary>The shell's kind of tree: rows that can take the keys
+    /// unselected, and a tree that never keeps them itself.</summary>
+    private static (TreeView Tree, TreeViewItem First, TreeViewItem Second) LandingTree()
+    {
+        var tree = new LandingTreeView();
+        var first = new LandingTreeViewItem { Header = "A" };
+        var second = new LandingTreeViewItem { Header = "B" };
         tree.Items.Add(first);
         tree.Items.Add(second);
         return (tree, first, second);

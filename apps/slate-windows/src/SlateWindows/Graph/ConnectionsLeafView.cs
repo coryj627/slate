@@ -140,7 +140,7 @@ internal sealed class ConnectionsRowViewModel : BindableBase
 
 /// <summary>The tree container: every item is a
 /// <see cref="ConnectionsTreeItem"/> carrying Invoke (B-9, B-13).</summary>
-internal sealed class ConnectionsTree : TreeView
+internal sealed class ConnectionsTree : LandingTreeView
 {
     protected override DependencyObject GetContainerForItemOverride() => new ConnectionsTreeItem();
 
@@ -152,7 +152,7 @@ internal sealed class ConnectionsTree : TreeView
 /// <summary>The tree's peer, overriding the item-peer factory: a
 /// container peer's patterns are NOT what AT reads — WPF projects each
 /// row as a data peer (`CanvasOutlineView.cs:188–197`).</summary>
-internal sealed class ConnectionsTreeAutomationPeer : TreeViewAutomationPeer
+internal sealed class ConnectionsTreeAutomationPeer : LandingTreeViewAutomationPeer
 {
     public ConnectionsTreeAutomationPeer(ConnectionsTree owner)
         : base(owner)
@@ -207,7 +207,7 @@ internal sealed class ConnectionsAnchorAutomationPeer : FrameworkElementAutomati
     protected override bool IsKeyboardFocusableCore() => Owner is UIElement { Focusable: true, IsEnabled: true, IsVisible: true };
 }
 
-internal sealed class ConnectionsTreeItem : TreeViewItem
+internal sealed class ConnectionsTreeItem : LandingTreeViewItem
 {
     protected override DependencyObject GetContainerForItemOverride() => new ConnectionsTreeItem();
 
@@ -407,8 +407,14 @@ internal sealed class ConnectionsLeafView : UserControl
         UpdateLayout();
         if (_tree.Visibility == Visibility.Visible && _roots.Count > 0)
         {
-            ConnectionsRowViewModel first = _tree.SelectedItem as ConnectionsRowViewModel ?? _roots[0];
-            return RealizeContainer(first) is { } container && container.Focus();
+            // W7-7 PR 4 (#1247, R-5 as the owner amended it): the selected
+            // row, else the first row UNSELECTED — a landing selects nothing.
+            if (_tree.SelectedItem is ConnectionsRowViewModel selected)
+            {
+                return RealizeContainer(selected) is { } container && container.Focus();
+            }
+
+            return RealizeContainer(_roots[0]) is { } first && LandingTreeViewItem.FocusUnselected(first);
         }
         return _anchor.Focus();
     }

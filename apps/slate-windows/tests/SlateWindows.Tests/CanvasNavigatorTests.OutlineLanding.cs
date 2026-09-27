@@ -12,35 +12,47 @@ namespace SlateWindows.Tests;
 /// <summary>
 /// W7-7 PR 4 (#1247, contract R-5; spec review round 23): the outline's
 /// landing is a ROW. <c>CanvasOutlineView.FocusTree</c> focused the bare
-/// tree; the first fact measures what WPF did with that on the real
-/// outline, and the rest hold the landing that replaced it — the seated
-/// card's row, else the first — with every arrow from it staying in the
-/// outline. Keys are real presses through the input manager, so the
+/// tree, which WPF left holding the keys with no card seated; the facts
+/// hold the landing that replaced it — the seated card's row, else the
+/// first — reached from the bare tree too (a landing tree), with every
+/// arrow from it staying in the outline. Keys are real presses through the input manager, so the
 /// surface's own key handling and WPF's directional navigation both
 /// answer them.
 /// </summary>
 public sealed partial class CanvasNavigatorTests
 {
-    /// <summary>The platform, measured on the outline itself: with no card
-    /// seated a focused tree keeps the keys; with one seated WPF hands them
-    /// to its row, while the tree's own Focus() answers false.</summary>
+    /// <summary>The outline is a landing tree (W7-7 PR 4, R-5 as the owner
+    /// amended it): WPF alone kept the keys on a focused tree with no card
+    /// seated, from where Left and Right left the outline. Keys sent to the
+    /// bare outline — a click on its empty area, Tab, UI Automation's
+    /// SetFocus — go on through the projection's own landing in the same
+    /// focus change: the seated card's row, else the first row, seated
+    /// silently. The tree never has them.</summary>
     [Fact]
-    public void WpfHandsTheOutlinesKeysToItsSeatedRowOnly() => RunSta(() =>
+    public void KeysSentToTheBareOutlineLandAsTheProjectionDoes() => RunSta(() =>
     {
         CanvasDocumentViewModel document = Open("board.canvas");
         document.SeatSelectionSilently(null);
         using OutlineHost host = HostOutline(document);
         TreeView tree = host.Surface.OutlineForTests.TreeForTests;
-
         Assert.True(host.Beside.Focus());
-        Assert.True(tree.Focus());
-        Assert.Same(tree, Keyboard.FocusedElement);
+        Drain(document);
+        host.RecordFocus();
+
+        _ = tree.Focus();
+
+        CanvasOutlineRowViewModel first = host.Surface.OutlineForTests.RootsForTests[0];
+        Assert.Equal(first.Id, FocusedRowId());
+        Assert.Empty(Lines(document));
+        host.AssertTreeNeverFocused();
 
         document.SeatSelectionSilently("loose");
         host.UpdateLayout();
         Assert.True(host.Beside.Focus());
-        Assert.False(tree.Focus());
+        _ = tree.Focus();
         Assert.Equal("loose", FocusedRowId());
+        Assert.Empty(Lines(document));
+        host.AssertTreeNeverFocused();
     });
 
     /// <summary>The seated card's row takes the keys, and the tree itself
@@ -83,21 +95,18 @@ public sealed partial class CanvasNavigatorTests
         host.AssertTreeNeverFocused();
     });
 
-    /// <summary>Codex round 5: a restore token captured on the BARE outline —
-    /// nothing seated, the keys where a click leaves them — lands through
-    /// the projection's own landing (the first row, seated silently), not
-    /// the generic tree landing, whose row's selection echo narrates a move
-    /// on top of the row the reader hears (t0 §1.5).</summary>
+    /// <summary>Codex round 5: a restore token that is the BARE outline —
+    /// nothing seated — lands through the projection's own landing (the
+    /// first row, seated silently), not the generic tree landing, whose
+    /// row's selection echo narrates a move on top of the row the reader
+    /// hears (t0 §1.5).</summary>
     [Fact]
     public void ARestoreTokenOnTheBareOutlineLandsAsTheProjectionDoes() => RunSta(() =>
     {
         CanvasDocumentViewModel document = Open("board.canvas");
         document.SeatSelectionSilently(null);
         using OutlineHost host = HostOutline(document);
-        TreeView tree = host.Surface.OutlineForTests.TreeForTests;
-        Assert.True(tree.Focus());
-        IInputElement token = Keyboard.FocusedElement;
-        Assert.Same(tree, token);
+        IInputElement token = host.Surface.OutlineForTests.TreeForTests;
         Assert.True(host.Beside.Focus());
         Drain(document);
         host.RecordFocus();

@@ -953,22 +953,27 @@
                                                   AutomationProperties.AutomationId="SidebarDualPaneToggle"
                                                   AutomationProperties.Name="Enable dual-pane files sidebar" />
                                 </StackPanel>
-                                <TreeView MaxHeight="120"
+                                <!-- W7-7 PR 4 (#1247, R-5 as the owner amended it): a
+                                     landing tree — keys that reach it go on to its
+                                     selected tag, else its first tag UNSELECTED, whose
+                                     focus applies nothing (LandingTreeView). -->
+                                <local:LandingTreeView MaxHeight="120"
+                                          Style="{DynamicResource {x:Type TreeView}}"
                                           ItemsSource="{Binding Tags}"
                                           ItemTemplate="{StaticResource SidebarTagTemplate}"
                                           SelectedItemChanged="Tags_SelectedItemChanged"
                                           Visibility="{Binding ShowTags, Converter={StaticResource BooleanToVisibilityConverter}}"
                                           AutomationProperties.AutomationId="SidebarTagTree"
                                           AutomationProperties.Name="Tags">
-                                    <TreeView.ItemContainerStyle>
+                                    <local:LandingTreeView.ItemContainerStyle>
                                         <Style TargetType="TreeViewItem">
                                             <Setter Property="AutomationProperties.Name" Value="{Binding AutomationName}" />
                                             <!-- W7-7 (R-3): two-way, so a filter clear releases the
                                                  selection and the same tag can be applied again. -->
                                             <Setter Property="IsSelected" Value="{Binding IsSelected, Mode=TwoWay}" />
                                         </Style>
-                                    </TreeView.ItemContainerStyle>
-                                </TreeView>
+                                    </local:LandingTreeView.ItemContainerStyle>
+                                </local:LandingTreeView>
                             </StackPanel>
                             <ScrollViewer Focusable="False" DockPanel.Dock="Bottom"
                                           MaxHeight="210"
@@ -1071,18 +1076,19 @@
                                      round 5): the tree and the filter's results
                                      contain their arrows. No landing rests on the bare
                                      tree (MainWindow.LandOnFilesTree: the selected
-                                     row, else the filter field), but an arrow from a
-                                     row at the tree's edge, from the tree itself where
-                                     a click leaves the keys, or from an empty result
-                                     list (its own stop) is judged in this group, so
-                                     Left and Right stay instead of leaving the region. -->
+                                     row, else the first row unselected), but an arrow
+                                     from a row at the tree's edge, or from an empty
+                                     tree or result list (its own stop), is judged in
+                                     this group, so Left and Right stay instead of
+                                     leaving the region. -->
                                 <Grid Grid.Row="0"
                                       KeyboardNavigation.DirectionalNavigation="Contained">
                                     <!-- W7-7 (R-2, OD-2): arrows only show a note; the rows'
                                          own handler delivers Enter / Ctrl+Enter (open, focus
                                          moves) and Space (batch check), and the HelpText is
                                          composed from those chord rows (contract 39 N-1). -->
-                                    <TreeView x:Name="FilesTree"
+                                    <local:LandingTreeView x:Name="FilesTree"
+                                              Style="{DynamicResource {x:Type TreeView}}"
                                               ItemsSource="{Binding RootNodes}"
                                               ItemTemplate="{StaticResource FileTreeNodeTemplate}"
                                               TextSearch.TextPath="DisplayName"
@@ -1095,7 +1101,7 @@
                                               AutomationProperties.AutomationId="FilesTree"
                                               AutomationProperties.Name="Files"
                                               AutomationProperties.HelpText="{x:Static cmd:NavigationHelp.FilesTree}">
-                                        <TreeView.ItemContainerStyle>
+                                        <local:LandingTreeView.ItemContainerStyle>
                                             <Style TargetType="TreeViewItem">
                                                 <Setter Property="IsExpanded" Value="{Binding IsExpanded, Mode=TwoWay}" />
                                                 <!-- W5-4 verification: the VM→view selection
@@ -1108,8 +1114,8 @@
                                                 <!-- W7-7 (R-2): the batch state, on the row the reader is on. -->
                                                 <Setter Property="AutomationProperties.ItemStatus" Value="{Binding BatchItemStatus}" />
                                             </Style>
-                                        </TreeView.ItemContainerStyle>
-                                    </TreeView>
+                                        </local:LandingTreeView.ItemContainerStyle>
+                                    </local:LandingTreeView>
                                     <ListBox x:Name="FilterResultsList"
                                              ItemsSource="{Binding FilterResults}"
                                              SelectionChanged="FilterResults_SelectionChanged"

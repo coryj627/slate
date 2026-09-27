@@ -14,32 +14,30 @@ using uniffi.slate_uniffi;
 namespace SlateWindows.Tests;
 
 /// <summary>
-/// W7-7 PR 4 (#1247, contract R-5; spec review round 23; codex round 5):
-/// the Files region's landing, on the shipped Files pane. Nine landings in
-/// the window were <c>FilesTree.Focus()</c> — the ring's, the Files
+/// W7-7 PR 4 (#1247, contract R-5 as the owner amended it; spec review round
+/// 23): the Files region's landing, on the shipped Files pane. Nine landings
+/// in the window were <c>FilesTree.Focus()</c> — the ring's, the Files
 /// boundary's, a rename's, a mutation's restore, Move To's, the empty
-/// editor's last resort — and all of them, and a restore whose token is the
-/// tree, now go through <see cref="MainWindow.LandOnFilesTree"/>: the
-/// selected file's row; else the region's stable stop, the filter field
-/// (R-5's "else the region's stable stop"). Never the bare tree, a
-/// populated container, and never a row that is not selected: a row selects
-/// itself as it takes the keys, and selecting a file opens it (OD-2). The
-/// pane is the real one — built by the window's own XAML, bound to a
-/// sidebar over a real vault — lifted into a window of its own with a
-/// button above it and one beside it, so an arrow that leaves the region
-/// lands somewhere observable. Keys are real presses through the input
-/// manager.
+/// editor's last resort (the launch landing) — and all of them, a restore
+/// whose token is the tree, and the tree's own hand-on from Tab or a click,
+/// now go through <see cref="MainWindow.LandOnFilesTree"/>: the selected
+/// file's row; else the first row, UNSELECTED (the owner's
+/// focus-without-select, which replaced codex round 5's filter-field
+/// fallback). Never the bare tree, a populated container, and the landing
+/// never selects: selecting a file opens it (OD-2). The pane is the real one
+/// — built by the window's own XAML, bound to a sidebar over a real vault —
+/// lifted into a window of its own with a button above it and one beside it,
+/// so an arrow that leaves the region lands somewhere observable. Keys are
+/// real presses through the input manager.
 /// </summary>
 public sealed class FilesRegionLandingTests
 {
-    /// <summary>Codex round 5's ruling: with nothing selected there is no
-    /// row to land on — a row would select itself as it took the keys, and
-    /// selecting a file opens it — and the bare tree is a populated
-    /// container R-5 names, so the landing is the region's stable stop,
-    /// the filter field. It selects nothing, opens nothing, says nothing,
-    /// and the tree never holds the keys.</summary>
+    /// <summary>The owner's focus-without-select: with nothing selected the
+    /// landing is the tree's first row, focused WITHOUT selecting it — it
+    /// selects nothing, opens nothing, says nothing, and the tree never holds
+    /// the keys. (Codex round 5's filter-field stop is withdrawn.)</summary>
     [Fact]
-    public void WithNothingSelectedTheFilterFieldIsTheStop() => RunSta(() =>
+    public void WithNothingSelectedTheFirstRowTakesTheKeysUnselected() => RunSta(() =>
     {
         using var host = new Host();
         host.Initialize();
@@ -50,50 +48,56 @@ public sealed class FilesRegionLandingTests
 
         Assert.True(host.Shell.LandOnFilesTree());
 
-        Assert.Same(host.FilterField, Keyboard.FocusedElement);
+        Assert.Same(host.Sidebar.RootNodes[0], FocusedNode());
         Assert.Null(host.Sidebar.SelectedNode);
         Assert.DoesNotContain(host.Sidebar.RootNodes, node => node.IsSelected);
+        Assert.Null(host.Tree.SelectedItem);
         Assert.Empty(opened);
         Assert.Empty(host.Announced);
         host.AssertTreeNeverFocused();
     });
 
-    /// <summary>An overlay's restore token captured on the bare tree — where
-    /// a click on its empty area leaves the keys — restores through the
-    /// Files region's own landing (the window's registration with
-    /// <see cref="SelectorFocus.SetOwnLanding"/>): nothing selected, so the
-    /// filter field, never the bare tree again and never a row. Nothing is
-    /// selected, opened or said.</summary>
+    /// <summary>The keys sent to the bare tree itself — where a click on its
+    /// empty area sends them (TreeView.HandleMouseButtonDown), where Tab and a
+    /// restore token captured on it send them — go on to the region's landing
+    /// in the same focus change: the first row, unselected. Nothing is
+    /// selected, opened or said, and the tree never holds them.</summary>
     [Fact]
-    public void ARestoreTokenOnTheBareFilesTreeLandsOnTheFilterField() => RunSta(() =>
+    public void KeysSentToTheBareFilesTreeLandOnItsFirstRowUnselected() => RunSta(() =>
     {
         using var host = new Host();
         host.Initialize();
         var opened = new List<string>();
         host.Sidebar.OpenTargetRequested += (_, request) => opened.Add(request.Path);
-        Assert.True(host.Tree.Focus());
-        IInputElement token = Keyboard.FocusedElement;
-        Assert.Same(host.Tree, token);
         Assert.True(host.Above.Focus());
         host.ForgetFocusChanges();
         host.Announced.Clear();
 
-        Assert.True(host.Shell.TryFocus(token));
+        _ = host.Tree.Focus();
+        PumpedDispatcher.Drain();
 
-        Assert.Same(host.FilterField, Keyboard.FocusedElement);
+        Assert.Same(host.Sidebar.RootNodes[0], FocusedNode());
         Assert.Null(host.Sidebar.SelectedNode);
         Assert.DoesNotContain(host.Sidebar.RootNodes, node => node.IsSelected);
         Assert.Empty(opened);
         Assert.Empty(host.Announced);
         host.AssertTreeNeverFocused();
+
+        // A restore whose token is the tree itself lands the same way.
+        Assert.True(host.Above.Focus());
+        Assert.True(host.Shell.TryFocus(host.Tree));
+        Assert.Same(host.Sidebar.RootNodes[0], FocusedNode());
+        Assert.Null(host.Sidebar.SelectedNode);
+        Assert.Empty(opened);
+        host.AssertTreeNeverFocused();
     });
 
-    /// <summary>Codex round 5: the Tags tree's selection APPLIES a tag
-    /// filter (R-3). A restore token captured on the bare Tags tree lands on
-    /// its selected tag, else the Files region's stable stop — never on a
-    /// first tag, whose focus would select it and filter the files.</summary>
+    /// <summary>Codex round 5: the Tags tree's selection APPLIES a tag filter
+    /// (R-3). The keys sent to the bare Tags tree — a restore's token, a click
+    /// on its empty area — land on its selected tag, else its first tag
+    /// UNSELECTED: no tag is applied and nothing is said.</summary>
     [Fact]
-    public void ARestoreTokenOnTheBareTagsTreeAppliesNoTag() => RunSta(() =>
+    public void KeysSentToTheBareTagsTreeApplyNoTag() => RunSta(() =>
     {
         using var host = new Host();
         host.Initialize(tagged: true);
@@ -102,19 +106,20 @@ public sealed class FilesRegionLandingTests
         TreeView tags = host.ElementWithId<TreeView>("SidebarTagTree");
         Assert.True(PumpedDispatcher.PumpUntil(() => tags.HasItems), "premise: the Tags tree never listed the fixture's tag.");
         host.Pane.UpdateLayout();
-        Assert.True(tags.Focus());
-        IInputElement token = Keyboard.FocusedElement;
-        Assert.Same(tags, token);
         Assert.True(host.Above.Focus());
+        host.ForgetFocusChanges();
         host.Announced.Clear();
 
-        Assert.True(host.Shell.TryFocus(token));
+        Assert.True(host.Shell.TryFocus(tags));
         PumpedDispatcher.Drain();
 
-        Assert.Same(host.FilterField, Keyboard.FocusedElement);
+        TreeViewItem row = Assert.IsAssignableFrom<TreeViewItem>(Keyboard.FocusedElement);
+        Assert.Same(tags.ItemContainerGenerator.ContainerFromIndex(0), row);
+        Assert.False(row.IsSelected, "the landing selected the first tag.");
         Assert.Null(tags.SelectedItem);
-        Assert.False(host.Sidebar.IsFilterActive, "the restore applied a tag filter.");
+        Assert.False(host.Sidebar.IsFilterActive, "the landing applied a tag filter.");
         Assert.Empty(host.Announced);
+        host.AssertNeverFocusedPopulated(tags);
     });
 
     [Fact]
@@ -177,10 +182,10 @@ public sealed class FilesRegionLandingTests
     /// <summary>Codex rounds 4-5: a selected file beneath a COLLAPSED folder
     /// has no row to land on. The landing must not change what is selected,
     /// expand the folder or open anything — F6 is navigation, not a
-    /// selection — so the keys go to the region's stable stop, the filter
-    /// field, and the selection stays on the hidden note.</summary>
+    /// selection — so the keys go to the first row, UNSELECTED, and the
+    /// selection stays on the hidden note.</summary>
     [Fact]
-    public void AHiddenSelectedFileLandsOnTheFilterFieldAndKeepsItsSelection() => RunSta(() =>
+    public void AHiddenSelectedFileLandsOnTheFirstRowAndKeepsItsSelection() => RunSta(() =>
     {
         using var host = new Host();
         host.Initialize(nested: true);
@@ -213,7 +218,9 @@ public sealed class FilesRegionLandingTests
         host.Pane.UpdateLayout();
         PumpedDispatcher.Drain();
 
-        Assert.Same(host.FilterField, Keyboard.FocusedElement);
+        FileTreeNodeViewModel first = host.Sidebar.RootNodes[0];
+        Assert.Same(first, FocusedNode());
+        Assert.False(first.IsSelected, "the landing selected the first row.");
         Assert.Same(inner, host.Sidebar.SelectedNode);
         Assert.False(folder.IsSelected, "the landing selected the collapsed folder.");
         Assert.False(folder.IsExpanded, "the landing expanded the collapsed folder.");
@@ -241,9 +248,11 @@ public sealed class FilesRegionLandingTests
         host.AssertTreeNeverFocused();
     });
 
-    /// <summary>The arrow witness for the landing with no row: the filter
-    /// field — whether the tree shows with nothing selected or the filter
-    /// has replaced it — keeps every arrow.</summary>
+    /// <summary>The arrow witness for the landing with nothing selected: from
+    /// the first row, unselected — or, with the filter replacing the tree,
+    /// from the filter field — every arrow keeps the keys in the region. An
+    /// arrow on the row acts from there as always (Down shows the next note);
+    /// none of them leaves.</summary>
     [Theory]
     [InlineData(Key.Left, false)]
     [InlineData(Key.Right, false)]
@@ -265,13 +274,20 @@ public sealed class FilesRegionLandingTests
 
         Assert.True(host.Above.Focus());
         Assert.True(host.Shell.LandOnFilesTree());
-        Assert.Same(host.FilterField, Keyboard.FocusedElement);
+        if (filtered)
+        {
+            Assert.Same(host.FilterField, Keyboard.FocusedElement);
+        }
+        else
+        {
+            Assert.Same(host.Sidebar.RootNodes[0], FocusedNode());
+        }
 
         host.Press(key);
 
         Assert.True(
-            ReferenceEquals(host.FilterField, Keyboard.FocusedElement),
-            $"{key} took the keys off the filter field, to {Keyboard.FocusedElement}");
+            filtered ? ReferenceEquals(host.FilterField, Keyboard.FocusedElement) : host.Tree.IsKeyboardFocusWithin,
+            $"{key} took the keys out of the Files landing, to {Keyboard.FocusedElement}");
     });
 
     /// <summary>The arrow witness for the landing with a file selected: from
@@ -335,6 +351,46 @@ public sealed class FilesRegionLandingTests
         Assert.Equal(-1, results.SelectedIndex);
         Assert.Empty(opened);
         host.AssertNeverFocusedPopulated(results);
+    });
+
+    /// <summary>Codex PR 4 round 6 (the repro's R6_5x): Tab — WPF's own
+    /// traversal, no landing of ours — used to rest on a bare POPULATED tree
+    /// when nothing in it was selected; the Files tree and the Tags tree are
+    /// Tab stops themselves. Now Tab lands on the first row, unselected: no
+    /// note opens, no tag filter applies, nothing is said.</summary>
+    [Theory]
+    [InlineData("FilesTree")]
+    [InlineData("SidebarTagTree")]
+    public void TabIntoAPopulatedTreeWithNothingSelectedLandsOnItsFirstRowUnselected(string treeId) => RunSta(() =>
+    {
+        using var host = new Host();
+        host.Initialize();
+        host.Sidebar.ShowTags = true;
+        host.Pane.UpdateLayout();
+        PumpedDispatcher.Drain();
+        TreeView tree = host.ElementWithId<TreeView>(treeId);
+        Assert.True(tree.HasItems && tree.SelectedItem is null, $"premise: {treeId} is empty or has a selection.");
+        var opened = new List<string>();
+        host.Sidebar.OpenTargetRequested += (_, request) => opened.Add(request.Path);
+        Assert.True(host.FilterField.Focus());
+        host.ForgetFocusChanges();
+        host.Announced.Clear();
+        bool reached = false;
+        for (int press = 0; press < 40 && !reached; press++)
+        {
+            host.Press(Key.Tab);
+            reached = tree.IsKeyboardFocusWithin;
+        }
+
+        Assert.True(reached, $"premise: Tab never reached {treeId}.");
+        TreeViewItem row = Assert.IsAssignableFrom<TreeViewItem>(Keyboard.FocusedElement);
+        Assert.Same(tree.ItemContainerGenerator.ContainerFromIndex(0), row);
+        Assert.False(row.IsSelected, $"Tab selected {treeId}'s first row.");
+        Assert.Null(tree.SelectedItem);
+        Assert.False(host.Sidebar.IsFilterActive, "Tab applied a tag filter.");
+        Assert.Empty(opened);
+        Assert.Empty(host.Announced);
+        host.AssertNeverFocusedPopulated(tree);
     });
 
     private static FileTreeNodeViewModel? FocusedNode() =>
@@ -404,7 +460,7 @@ public sealed class FilesRegionLandingTests
             var lifecycle = Assert.IsType<VaultLifecycleViewModel>(Shell.DataContext);
             SetState(lifecycle, nameof(VaultLifecycleViewModel.FileSidebar), Sidebar);
             Pane = Assert.IsAssignableFrom<FrameworkElement>(Shell.FindName("FilesPaneBorder"));
-            Tree = Assert.IsType<TreeView>(Shell.FindName("FilesTree"));
+            Tree = Assert.IsType<LandingTreeView>(Shell.FindName("FilesTree"));
             FilterField = Assert.IsType<TextBox>(Shell.FindName("SidebarFilterTextBox"));
             Assert.IsAssignableFrom<Panel>(Pane.Parent).Children.Remove(Pane);
 
