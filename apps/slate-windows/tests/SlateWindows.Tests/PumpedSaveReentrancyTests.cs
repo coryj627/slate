@@ -494,21 +494,23 @@ public sealed class PumpedSaveReentrancyTests
 
     /// <summary>Codex round 2a: a Save nobody waits on still has its failure
     /// handled. A refused write (a conflict) is spoken exactly once; a fault
-    /// past the D-10 outcomes is observed and logged, never an unobserved
-    /// task — and neither path waits.</summary>
+    /// past the D-10 outcomes is observed and logged exactly once (by its
+    /// save ticket, round 2b), never an unobserved task, and says nothing —
+    /// and neither path waits.</summary>
     [Theory]
     [InlineData("conflict")]
     [InlineData("fault")]
     public void ASaveFailureIsObservedAndSpokenOnce(string failure)
     {
         using var host = new Host();
+        using var log = new FaultLog();
         if (failure == "conflict")
         {
             host.ParkFirstWrite();
         }
         else
         {
-            host.T.SaveWriteHookForTests = () => throw new InvalidOperationException("injected fault");
+            host.T.SaveWriteHookForTests = () => throw new InjectedSaveFault();
         }
         int frames = PumpedWait.FramesEnteredForTests;
 
@@ -529,17 +531,173 @@ public sealed class PumpedSaveReentrancyTests
         {
             Assert.Single(host.Announced, item => item.Event is A11yEvent.NoteSaveConflict);
             Assert.Equal(0, host.Workspace.SaveFailuresObservedForTests);
+            Assert.Equal(0, log.FaultsLogged);
         }
         else
         {
-            // The observer runs off the dispatcher once the save faults.
+            // The command's observer runs off the dispatcher once the save
+            // faults; everything it does is done before it counts as ended.
             Assert.True(
-                PumpedDispatcher.PumpUntil(() => host.Workspace.SaveFailuresObservedForTests > 0),
+                PumpedDispatcher.PumpUntil(() => host.Workspace.LastSaveObservationForTests.IsCompleted),
                 "the faulted save was never observed");
             Assert.Equal(1, host.Workspace.SaveFailuresObservedForTests);
+            Assert.Equal(1, log.FaultsLogged);
             Assert.DoesNotContain(
                 host.Announced,
                 item => item.Event is A11yEvent.NoteSaveConflict or A11yEvent.NoteSaveBlocked);
+        }
+    }
+
+    /// <summary>Codex round 2b (owner decision): an unexpected fault in a
+    /// save a yes/no caller waits on — Save All, close tab, close pane, the
+    /// replace gate, teardown — fails that caller closed: it answers "not
+    /// saved", nothing is closed or replaced, the tab keeps its edits. The
+    /// fault is logged exactly once per failed save (by its ticket), never
+    /// escapes the command, and says nothing new (R-7) — teardown's existing
+    /// "Vault remains open …" status is the only line. The fault is injected
+    /// on the save worker for every tab on the note (the target and its
+    /// same-path peer), so no other save writes the note instead.</summary>
+    [Theory]
+    [InlineData("save-all")]
+    [InlineData("close-tab")]
+    [InlineData("close-pane")]
+    [InlineData("replace")]
+    [InlineData("teardown")]
+    public void AnAwaitedSaveFaultFailsItsCallerClosedAndIsLoggedOnce(string site)
+    {
+        using var host = new Host(VaultCloseDecision.SaveAll);
+        using var log = new FaultLog();
+        host.T.SaveWriteHookForTests = () => throw new InjectedSaveFault();
+        host.P.SaveWriteHookForTests = () => throw new InjectedSaveFault();
+        // Save All — alone or teardown's — tries the peer too: one failed
+        // save each.
+        int failedSaves = site is "save-all" or "teardown" ? 2 : 1;
+
+        Exception? escaped = Record.Exception(() => host.RunSite(site));
+        host.Settle();
+
+        Assert.True(escaped is null, $"{site}: {escaped}");
+        Assert.Equal(failedSaves, log.FaultsLogged);
+        Assert.True(host.T.IsDirty, $"{site}: the faulted tab lost its edits");
+        Assert.Contains("Marker-A", host.T.Text, StringComparison.Ordinal);
+        Assert.DoesNotContain("Marker-A", host.Disk("note0.md"), StringComparison.Ordinal);
+        Assert.DoesNotContain(
+            host.Announced,
+            item => item.Event is A11yEvent.NoteSaved
+                or A11yEvent.NoteSaveConflict
+                or A11yEvent.NoteSaveBlocked
+                or A11yEvent.VaultClosed
+                or A11yEvent.VaultClosedAllSaved
+                or A11yEvent.VaultClosedChangesDiscarded);
+        switch (site)
+        {
+            case "save-all": Assert.False(host.SiteAnswer); break;
+            case "close-tab": Assert.False(host.T.IsDisposed); break;
+            case "close-pane": Assert.Contains(host.G1, host.Workspace.Groups); break;
+            case "replace": Assert.Equal("note0.md", host.T.Path); break;
+            case "teardown":
+                Assert.NotNull(host.Lifecycle.Workspace);
+                Assert.Equal(
+                    "Vault remains open because one or more notes could not be saved.",
+                    host.Lifecycle.StatusText);
+                break;
+        }
+    }
+
+    /// <summary>Codex round 2b (owner decision; contract 38 D-10 as amended;
+    /// mac parity): only the explicit close speaks a close line. Close Vault
+    /// speaks exactly one of VaultClosed, VaultClosedAllSaved or
+    /// VaultClosedChangesDiscarded — the one its decision names — whether
+    /// the workspace was clean, made clean by settling a Ctrl+S still
+    /// writing, saved or discarded. A vault switch speaks none (every
+    /// close-family sentence ends "Returned to the welcome screen.") and the
+    /// open speaks VaultOpened once; the application closing speaks none.
+    /// The switch rows with a decision are the intended change from main,
+    /// which spoke that decision's line over the switch.</summary>
+    [Theory]
+    [InlineData("close", "clean")]
+    [InlineData("close", "settled")]
+    [InlineData("close", "save-all")]
+    [InlineData("close", "discard")]
+    [InlineData("switch", "clean")]
+    [InlineData("switch", "settled")]
+    [InlineData("switch", "save-all")]
+    [InlineData("switch", "discard")]
+    [InlineData("app-close", "clean")]
+    [InlineData("app-close", "settled")]
+    [InlineData("app-close", "save-all")]
+    [InlineData("app-close", "discard")]
+    public void ATeardownSpeaksTheCloseLineItsRouteCalls(string route, string state)
+    {
+        string other = Path.Combine(Path.GetTempPath(), $"slate-pumped-save-other-{Guid.NewGuid():N}");
+        Directory.CreateDirectory(other);
+        File.WriteAllText(Path.Combine(other, "other.md"), "# Other\n");
+        try
+        {
+            using var host = new Host(state == "discard" ? VaultCloseDecision.Discard : VaultCloseDecision.SaveAll);
+            switch (state)
+            {
+                case "clean":
+                    host.Workspace.SaveActiveAndSettle();
+                    Assert.False(host.Workspace.HasDirtyTabs, "the arrangement left a dirty tab");
+                    break;
+                case "settled":
+                    // A Ctrl+S still writing when the teardown starts; the
+                    // teardown's own settle frame releases it.
+                    host.ParkFirstWrite();
+                    host.Workspace.SaveActiveCommand.Execute(null);
+                    Assert.True(host.WaitParked(), "no write parked");
+                    host.Dispatcher.BeginInvoke(DispatcherPriority.Background, new Action(host.Release));
+                    break;
+            }
+            host.Announced.Clear();
+
+            switch (route)
+            {
+                case "close":
+                    host.Lifecycle.CloseVault();
+                    Assert.Null(host.Lifecycle.Workspace);
+                    break;
+                case "switch":
+                    Task open = host.Lifecycle.OpenVaultAsync(other);
+                    Assert.True(
+                        PumpedDispatcher.PumpUntil(() => open.IsCompleted, TimeSpan.FromSeconds(60)),
+                        "the switch never finished");
+                    open.GetAwaiter().GetResult();
+                    Assert.Single(host.Announced, item => item.Event is A11yEvent.VaultOpened);
+                    break;
+                case "app-close":
+                    Assert.True(host.Lifecycle.PrepareForApplicationClose(), "the application close was refused");
+                    break;
+            }
+            host.Settle();
+
+            A11yEvent[] closeLines =
+            [
+                .. host.Announced
+                    .Select(item => item.Event)
+                    .Where(item => item is A11yEvent.VaultClosed
+                        or A11yEvent.VaultClosedAllSaved
+                        or A11yEvent.VaultClosedChangesDiscarded),
+            ];
+            if (route != "close")
+            {
+                Assert.True(
+                    closeLines.Length == 0,
+                    $"{route} × {state}: [{string.Join(" | ", closeLines.Select(item => SlateUniffiMethods.A11yRender(item).Text))}]");
+                return;
+            }
+            A11yEvent line = Assert.Single(closeLines);
+            switch (state)
+            {
+                case "save-all": Assert.IsType<A11yEvent.VaultClosedAllSaved>(line); break;
+                case "discard": Assert.IsType<A11yEvent.VaultClosedChangesDiscarded>(line); break;
+                default: Assert.IsType<A11yEvent.VaultClosed>(line); break;
+            }
+        }
+        finally
+        {
+            TryDeleteDirectory(other);
         }
     }
 
@@ -834,11 +992,14 @@ public sealed class PumpedSaveReentrancyTests
             Assert.True(
                 confirmations <= saveCommands,
                 $"{cell}: {confirmations} save confirmations for {saveCommands} Save commands");
+            // Every teardown in the matrix is Close Vault: a closed vault
+            // said so exactly once, an open one not at all (round 2b).
+            int closeLines = Announced.Count(item => item.Event is A11yEvent.VaultClosed
+                or A11yEvent.VaultClosedAllSaved
+                or A11yEvent.VaultClosedChangesDiscarded);
             Assert.True(
-                Announced.Count(item => item.Event is A11yEvent.VaultClosed
-                    or A11yEvent.VaultClosedAllSaved
-                    or A11yEvent.VaultClosedChangesDiscarded) <= 1,
-                $"{cell}: more than one close line");
+                closeLines == (Lifecycle.Workspace is null ? 1 : 0),
+                $"{cell}: {closeLines} close lines with the vault {(Lifecycle.Workspace is null ? "closed" : "open")}");
 
             // Every decision was Save: every typed marker is on disk or in a
             // tab that is still open.
@@ -1100,6 +1261,49 @@ public sealed class PumpedSaveReentrancyTests
             catch (UnauthorizedAccessException)
             {
             }
+        }
+    }
+
+    /// <summary>The fault the facts inject: its own type, so the log line it
+    /// produces (<c>SlateWindows.VaultCommandFailed (InjectedSaveFault)</c>)
+    /// is this fact's and no other.</summary>
+    private sealed class InjectedSaveFault() : Exception("injected save fault");
+
+    /// <summary>Counts the injected fault's log lines, from any thread,
+    /// through HostLog's observer. Only these facts throw
+    /// <see cref="InjectedSaveFault"/>, so parallel facts cannot move the
+    /// count, and none of them swaps Console.Error.</summary>
+    private sealed class FaultLog : IDisposable
+    {
+        private readonly Action<string>? _previous = HostLog.ObserverForTests;
+        private int _faultsLogged;
+
+        internal FaultLog() =>
+            HostLog.ObserverForTests = message =>
+            {
+                _previous?.Invoke(message);
+                if (message == "SlateWindows.VaultCommandFailed (InjectedSaveFault)")
+                {
+                    Interlocked.Increment(ref _faultsLogged);
+                }
+            };
+
+        internal int FaultsLogged => Volatile.Read(ref _faultsLogged);
+
+        public void Dispose() => HostLog.ObserverForTests = _previous;
+    }
+
+    private static void TryDeleteDirectory(string directory)
+    {
+        try
+        {
+            Directory.Delete(directory, recursive: true);
+        }
+        catch (IOException)
+        {
+        }
+        catch (UnauthorizedAccessException)
+        {
         }
     }
 
