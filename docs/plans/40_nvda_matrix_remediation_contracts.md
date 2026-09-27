@@ -51,7 +51,7 @@ Scope: [W7-7 executable spec](18_windows_port/specs/w7_7_nvda_matrix_remediation
 - **AR-13:** `W77RemediationDocsCensus` normalizes leading-zero identifiers and does not pin the displayed section ordinals; the mapping, duplicate and malformed-heading checks are its purpose.
 - **AR-14:** PR 9's palette journey checks the on-screen selection only until its announcement leg lands with PR 1's listener; the hosted exact-one replacement-selection fact is the behavioural oracle meanwhile.
 - **AR-11:** `W77RemediationDocsCensus` reads the two documents as text: a fenced-code heading or negated prose mentioning `R-n` would count; neither document carries either, and a fenced heading would still have to match the strict form.
-- **OD-7 (2026-09-24):** replay on advise — the dispatcher queues only while UIA has not advised the process and drains the queue once, in order, on the first advise (PR 1's arbiter and an NVDA fresh-launch run showed the ungated raise alone loses the launch lines); the transient-window and accept-the-residual options were declined. **AR-12:** a process whose client never connects the status provider within the 30 s launch phase keeps its launch lines lost (as today), and a client that connects but never advises hears them only after the 3 s hold; the queue keeps the last 16 lines.
+- **OD-7 (2026-09-24):** replay on advise, amended to replay on readiness — the dispatcher queues only while the process is unready and drains the queue once, in order, when readiness first holds (PR 1's arbiter and an NVDA fresh-launch run showed the ungated raise alone loses the launch lines). As amended 2026-09-26 by PR 1's measurements (R-1), readiness is the hybrid predicate: a listening client and a connected status provider, plus either UIA's Notification advise or the bounded 3 s hold of that client and provider present together without it — the hold is NVDA's primary path (AR-21). The transient-window and accept-the-residual options were declined. **AR-12:** a process whose client never connects the status provider within the 30 s launch phase keeps its launch lines lost (as today), and a client that connects but never advises hears them only after the 3 s hold; the queue keeps the last 16 lines.
 - **OD-5 (2026-09-23, defaults amendable at review):** board Right/Left follow connections; the conflict sentence reuses mac's wording minus the dialog clause; #1257 is a checklist correction plus a composed hint; the scan-finished copy states both counts; #1244 is fixed at the raise call, not with a transient window.
 - **AR-1:** the FlaUI desktop-root subscription (an `IUIAutomation6` handler group registered before launch) is itself advised asynchronously and was silent in some runs; the journey ships in the shell gate only when 6/6 stable on the final build, otherwise as a manual-trait journey with recorded counts, the hosted state-machine facts and the census being the gate evidence (spec §2.4–2.5).
 - **AR-2:** mac does not post the five new popover/sheet variants in this wave; the corpus mirrors them and the mac owner decides.
@@ -410,17 +410,17 @@ Fixes: the docs PR's thirty-first commit (8a056036).
 
 ### PR 1 — #1244 announcements from launch
 
-Branch `claude/w7-7-pr1-notifications` (rebased onto 8193489b; delivery rounds `delivered_pr1_r3`–`r10`). Delivered: R-1:
+Branch `claude/w7-7-pr1-notifications` (rebased onto 8193489b; delivery rounds `delivered_pr1_r3`–`r11`). Delivered: R-1:
 - **The raise.** It goes through `AutomationInteropProvider.RaiseAutomationEvent(NotificationEvent, …)` on the status element's connected peer provider, never WPF's gated `RaiseNotificationEvent`. `AnnouncementSeamCensus` pins the raise shape and rejects the gated call.
-- **Readiness, the hybrid (OD-7).** One predicate holds in every phase: a listening client, a connected provider, and either the Notification advise in WPF's map or 3 s of that client and provider present together without it. While unready, a line is only queued. The queue keeps the last 16, the 250 ms UI-thread poll runs while lines wait, and each line expires 30 s after its own post. The drain runs once, in order, and logs `drained=advise|timeout`. `Done` and `Expired` are bookkeeping only.
+- **Readiness, the hybrid (OD-7).** One predicate holds in every phase: a listening client, a connected provider, and either the Notification advise in WPF's map or 3 s of that client and provider present together without it. While unready, a line is only queued. The queue keeps the last 16, the 250 ms UI-thread poll runs while lines wait, a 1 s epoch watch runs the same check while a pair is held and nothing is queued, and each line expires 30 s after its own post. The drain runs once, in order, and logs `drained=advise|timeout`. `Done` and `Expired` are bookkeeping only.
 - **One dispatcher per window.** Grids post through it.
 - **Activity IDs follow the processing (contract 38 D-1).** Every All line carries `slate-accessibility-announcement.<n>` from the dispatcher's monotonic sequence. Every superseding (High) line keeps the shared ID.
 - **Diagnostics.** Under `SLATE_UIA_DIAGNOSTICS=1` the listener state, the provider state and each drain are logged once per change.
 
 Witnesses:
-- **The hosted facts** (`AccessibilityNotificationDispatcherTests`, 30; the timer facts pump production's own `DispatcherTimer` and never call the check).
-- **`AnnouncementSeamCensus`** (10).
-- **The shell-gate journey `Announcements_ReachADesktopScopedListenerFromLaunch`.** A desktop-root listener registered before launch hears the exact launch sequence and "Right pane hidden.", with no menu opened, each line under its own ID, on whichever path the launch takes.
+- **The hosted facts** (`AccessibilityNotificationDispatcherTests`, 34; the timer facts pump production's own `DispatcherTimer`s and never call the check).
+- **`AnnouncementSeamCensus`** (10). With the hosted facts that makes 44.
+- **The shell-gate journey `Announcements_ReachADesktopScopedListenerFromLaunch`.** Slate is launched as a census instance under the census-only switch `SLATE_TEST_ANNOUNCEMENT_QUEUE_MS` (`LaunchSeams.WithTestLaunchQueue`, inert in production), so every run's first line finds the provider absent and queues. A desktop-root listener registered before launch hears the exact launch sequence — drained exactly once — and "Right pane hidden.", with no menu opened, each line under its own ID. With the replay disabled it fails every run.
 - **Two quiet-desktop NVDA 2026.2 fresh-launch runs** (spec §2.5; the W7-2 checklist and the F1 row).
 
 **Round 1 (2026-09-23; codex adversarial review of the pushed branch).** `needs-attention`, one finding, taken (a4d0c757). Every queue fact posted while a client was still listening. A no-client early return in `Post` would therefore have discarded the launch lines of a screen reader started after Slate while every fact stayed green. The fix is `LinesPostedBeforeAnyClientListensAreQueuedForAReaderStartedLater` (mutation `earlyreturn`, which fails it and five other facts).
@@ -487,6 +487,13 @@ The branch was then rebased onto 8193489b: `w_c_matrix.md` was hand-merged row b
    - `TheTestLaunchQueueSwitchIsInertOutsideACensusInstance` pins inertness, and `AnnouncementSeamCensus` pins `ForProduction`'s only wrapper. Mutations: `switchnocensus`, `switchor`.
    - The journey asserts that the first line found the provider absent and that exactly one drain followed. It passed 6/6; with the replay disabled it failed 3/3, and with the transition never flipping 2/2. Each unmutated run drained four lines about 3.1 s after the first frame and heard `.1`–`.5`.
    - The ready-at-first-line path stays with the hosted facts.
+
+**Round 6 (2026-09-27, on a0da7fa3).** `approve` — "Ship: no blocker"; the forced-queue journey discriminates against replay removal, and the readiness/watch implementation matches its state model. The sub-cadence restart (a sole reader absent for less than the running check's cadence) was ruled accepted AR-27 residue, as AR-27 now records. Five low documentation notes, all fixed, docs only:
+1. OD-7 described advise-only draining; it now states the hybrid predicate (a client and a provider, plus the advise or the bounded 3 s hold), with its label intact.
+2. This record's summary stopped at round 10, 30 dispatcher facts and a journey on "whichever path"; it now reads round 11, 34 dispatcher and 10 census facts, and the census-only forced-queue journey.
+3. The W7-2 checklist's journey paragraph now describes the round-11 journey: the forced queue named, 6/6, replay disabled 0/3.
+4. Spec §2.3 item 6 promised a hosted-grid fallback dispatcher that no longer exists. It now says a grid in no Slate window is silent and hosted tests inject `Announce`.
+5. The W-C matrix's Windows scan-progress guard read 350 ms; it is 2.5 s per contract 38 D-4 (mac keeps 350 ms). Both of the matrix's journey citations name the forced queue.
 
 **The hold's state model (round 5).**
 
