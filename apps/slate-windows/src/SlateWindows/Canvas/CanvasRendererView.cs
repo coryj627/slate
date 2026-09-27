@@ -97,6 +97,7 @@ internal sealed class CanvasRendererView : FrameworkElement
             {
                 old.PublicationApplied -= _engine.OnPublicationApplied;
                 old.ModeVisibleChanged -= OnModeVisibleChanged;
+                LeaveDocument(old);
             }
             // A reveal owed to the old document's seat is not this one's
             // (#1271, review round 2); a teardown sets null and lands here too.
@@ -109,6 +110,7 @@ internal sealed class CanvasRendererView : FrameworkElement
                 _engine.OnPublicationApplied(
                     value.AppliedPublication ?? CanvasPublication.Seed());
                 _engine.CommitTransient(value.Transient);
+                ReturnToDocument(value);
             }
         }
     }
@@ -642,8 +644,11 @@ internal sealed class CanvasRendererView : FrameworkElement
     /// made elsewhere needs Follow Selection on AND the viewport's
     /// <see cref="CanvasViewportState.FollowLapses"/> unchanged — it lapses the
     /// moment the board stops following, for good — while a move made on the
-    /// board stands, toggle or no toggle. It is paid once and cleared, and it
-    /// is dropped when the board's document changes or the board shuts down.
+    /// board stands, toggle or no toggle. It is paid once and cleared. When
+    /// the board's document changes it is set aside with that document, never
+    /// paid against another, and settled if the board returns to it — a tab
+    /// switch rebinds the board rather than hiding it (codex's final check;
+    /// <see cref="ReturnToDocument"/>).
     /// </para>
     /// <para>
     /// It is paid only FROM an installed state whose population is the one
@@ -723,6 +728,71 @@ internal sealed class CanvasRendererView : FrameworkElement
     /// only time a pan means anything to the reader.</summary>
     private bool IsShowing =>
         IsVisible && _engine.CommittedViewport is { ViewWidth: > 0, ViewHeight: > 0 };
+
+    /// <summary>
+    /// What this board last saw of each document it has shown and left — the
+    /// selection revision, whether it followed and its follow-lapse count, and
+    /// the reveal it still owed — keyed weakly, so a closed document's entry
+    /// goes with it.
+    /// </summary>
+    /// <remarks>
+    /// Shown again across a TAB SWITCH (codex's final check on #1271): the
+    /// workspace's pane is one selected-content TabControl, so switching tabs
+    /// does not hide this board, it REBINDS it — the pane's canvas surface
+    /// takes the other tab's document (none, for a note) and this board stops
+    /// hearing the one it left; switching back binds it again. The board's
+    /// view outlives the rebinding, so what it owed that view must too.
+    /// </remarks>
+    private readonly System.Runtime.CompilerServices.ConditionalWeakTable<
+        CanvasDocumentViewModel, AwaySpell> _awaySpells = new();
+
+    /// <summary>What the board saw of a document when it left it.</summary>
+    private sealed record AwaySpell(
+        long SelectionRevision, bool Followed, long FollowLapses, OwedReveal? Owed);
+
+    /// <summary>The board is leaving <paramref name="document"/> (a tab
+    /// switch, a retarget or a teardown): keep what it saw and owed.</summary>
+    private void LeaveDocument(CanvasDocumentViewModel document)
+    {
+        CanvasViewportState view = _engine.CommittedViewport;
+        _awaySpells.AddOrUpdate(
+            document,
+            new AwaySpell(document.Selection.Revision, view.FollowSelection, view.FollowLapses, _owedReveal));
+    }
+
+    /// <summary>
+    /// The board is bound to <paramref name="document"/> again: settle the
+    /// spell it was away, under the rules a hidden board is held to
+    /// (<see cref="RevealNode"/>). If the seat has not moved since, the reveal
+    /// it owed is owed again, its own tokens judging it. If the seat moved
+    /// while it was away, a board that followed the selection the whole time —
+    /// on when it left, on now, and never turned off in between (the lapse
+    /// count) — owes the seat as a move made elsewhere; one that did not owes
+    /// nothing, since it cannot tell a move made while it followed from one
+    /// made while it did not. A document it has never shown owes nothing.
+    /// </summary>
+    private void ReturnToDocument(CanvasDocumentViewModel document)
+    {
+        if (!_awaySpells.TryGetValue(document, out AwaySpell? spell))
+        {
+            return;
+        }
+        _ = _awaySpells.Remove(document);
+        CanvasViewportState view = _engine.CommittedViewport;
+        if (document.Selection.Revision == spell.SelectionRevision)
+        {
+            _owedReveal = spell.Owed;
+        }
+        else if (document.Selection.Selected is { } seat
+            && spell.Followed
+            && view.FollowSelection
+            && view.FollowLapses == spell.FollowLapses)
+        {
+            _owedReveal = new OwedReveal(
+                seat, CanvasMoveOrigin.Elsewhere, document.Selection.Revision, view.FollowLapses);
+        }
+        PayOwedReveal();
+    }
 
     /// <summary>Shown again (owner decision, review round 3): a reveal owed
     /// while hidden is paid once the board is visible — after the layout pass

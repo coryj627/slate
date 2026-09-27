@@ -4766,15 +4766,240 @@ public sealed class CanvasNavigatorTests : IDisposable
     }
 
     /// <summary>
-    /// Follow-up #1271, owner decision (review round 3) — SHOWN AGAIN: a board
-    /// that follows the selection and is hidden behind another tab while the
-    /// seat moves elsewhere owes the reveal, holds it while hidden (the view
-    /// does not move under a board no one can see), and scrolls to the seat
-    /// when it is shown again. One canvas in two panes: pane B stands for the
-    /// hidden tab, pane A's board moves the seat.
+    /// Follow-up #1271, owner decision (review round 3) — SHOWN AGAIN in the
+    /// production tab lifecycle (codex's final check): the workspace's pane is
+    /// ONE selected-content TabControl over the real tab template, so a tab
+    /// switch UNBINDS the pane's canvas surface (its model goes to the other
+    /// tab's, none for a note) and rebinds the same surface on the way back.
+    /// One canvas in two panes: pane B's canvas tab goes behind a note tab,
+    /// pane A's board moves the shared seat off pane B's view, and when pane B
+    /// returns to the canvas tab its board, which follows the selection,
+    /// scrolls to the seat. A board that does not follow the selection comes
+    /// back exactly where it was left.
+    /// </summary>
+    [Theory]
+    [InlineData(true)]
+    [InlineData(false)]
+    public void AFollowingBoardHiddenBehindAnotherTabScrollsToTheSelectionWhenShown(bool follows) => RunSta(() =>
+    {
+        CanvasDocumentViewModel document = Open("board.canvas");
+        using WorkspaceTabViewModel canvasTab = CanvasTab(document, "board.canvas");
+        using WorkspaceTabViewModel noteTab = NoteTab("note0.md");
+        using HostedWindow host = HostBoardBesideATabbedPane(
+            document, [canvasTab, noteTab], out CanvasSurfaceView paneA, out TabControl tabsB);
+        CanvasSurfaceView paneB = SurfaceIn(tabsB);
+        CanvasRendererView boardB = paneB.VisualForTests;
+        PumpUntil(() => boardB.Engine.Current is not null, "premise: pane B's board never installed its first state.");
+        Assert.True(boardB.Engine.CommittedViewport.FollowSelection, "premise: pane B follows the selection.");
+        if (!follows)
+        {
+            _ = paneB.ViewportCommand(CanvasViewportVerb.ToggleFollowSelection);
+            Assert.False(boardB.Engine.CommittedViewport.FollowSelection, "premise: pane B still follows.");
+        }
+        document.SeatSelectionSilently("question");
+        boardB.Engine.CommitViewport(view => view.PannedTo(-5000, -5000));
+        PumpUntil(
+            () => boardB.Engine.Current!.Viewport.SameGeometry(boardB.Engine.CommittedViewport),
+            "premise: pane B's pan-away never installed.");
+        CanvasViewportState parked = boardB.Engine.CommittedViewport;
+
+        tabsB.SelectedItem = noteTab;
+        host.UpdateLayout();
+        Pump();
+        Assert.True(
+            ReferenceEquals(SurfaceIn(tabsB), paneB) && paneB.Model is null,
+            "premise: the tab switch did not unbind pane B's canvas surface in place — the production "
+            + "TabControl reuses the selected-content surface and hands it the note tab's (absent) canvas.");
+
+        Assert.True(PressKey(paneA, Key.Down, ModifierKeys.None));
+        string seat = Assert.IsType<string>(document.Selection.Selected);
+        Assert.NotEqual("question", seat);
+        Pump();
+        Assert.True(
+            parked.SameGeometry(boardB.Engine.CommittedViewport),
+            "pane B's board moved while its tab was behind another: nothing moves under a board no one can see.");
+
+        tabsB.SelectedItem = canvasTab;
+        host.UpdateLayout();
+        Assert.True(
+            ReferenceEquals(SurfaceIn(tabsB), paneB) && ReferenceEquals(paneB.Model, document),
+            "premise: returning to the canvas tab did not rebind pane B's own surface, so its board is not the "
+            + "one whose view was parked.");
+        if (!follows)
+        {
+            PumpUntil(
+                () => boardB.IsVisible && boardB.Engine.Current!.Viewport.SameGeometry(boardB.Engine.CommittedViewport),
+                "premise: pane B's board never showed and installed after its tab returned.");
+            Pump();
+            Assert.True(
+                parked.SameGeometry(boardB.Engine.CommittedViewport),
+                "pane B's board does not follow the selection, yet it moved to the seat pane A chose while its tab "
+                + "was behind another (D4, #1271).");
+            return;
+        }
+        PumpUntil(
+            () => InView(boardB, seat),
+            "pane B returned to its canvas tab and its board never scrolled to the seat pane A moved it to while "
+            + "the tab was behind another: a following board reveals the selection when it is next shown, and a "
+            + "tab switch rebinds the board (owner decision, codex's final check, #1271).");
+    });
+
+    /// <summary>
+    /// Follow-up #1271, codex's final check — a reveal the board still OWED
+    /// when its tab went behind another is still owed when the tab returns,
+    /// if the seat has not moved since: the seat moves while the outline
+    /// shows (both panes, the projection being the document's), pane B's
+    /// canvas tab goes behind a note tab and comes back, and when the board
+    /// is shown it scrolls to the seat.
     /// </summary>
     [Fact]
-    public void AFollowingBoardHiddenBehindAnotherTabScrollsToTheSelectionWhenShown() => RunSta(() =>
+    public void ARevealOwedWhenATabGoesBehindAnotherIsStillOwedWhenItReturns() => RunSta(() =>
+    {
+        CanvasDocumentViewModel document = Open("board.canvas");
+        using WorkspaceTabViewModel canvasTab = CanvasTab(document, "board.canvas");
+        using WorkspaceTabViewModel noteTab = NoteTab("note0.md");
+        using HostedWindow host = HostBoardBesideATabbedPane(
+            document, [canvasTab, noteTab], out _, out TabControl tabsB);
+        CanvasSurfaceView paneB = SurfaceIn(tabsB);
+        CanvasRendererView boardB = paneB.VisualForTests;
+        PumpUntil(() => boardB.Engine.Current is not null, "premise: pane B's board never installed its first state.");
+        document.SeatSelectionSilently("question");
+        boardB.Engine.CommitViewport(view => view.PannedTo(-5000, -5000));
+        PumpUntil(
+            () => boardB.Engine.Current!.Viewport.SameGeometry(boardB.Engine.CommittedViewport),
+            "premise: pane B's pan-away never installed.");
+        CanvasViewportState parked = boardB.Engine.CommittedViewport;
+
+        document.ShowSurface(CanvasSurfaceKind.Outline);
+        host.UpdateLayout();
+        Assert.False(boardB.IsVisible, "premise: pane B's board is still showing under the outline.");
+        document.SelectNode("loose");
+        long revision = document.Selection.Revision;
+
+        tabsB.SelectedItem = noteTab;
+        host.UpdateLayout();
+        Assert.True(paneB.Model is null, "premise: the tab switch did not unbind pane B's canvas surface.");
+        tabsB.SelectedItem = canvasTab;
+        host.UpdateLayout();
+        Assert.True(ReferenceEquals(paneB.Model, document), "premise: pane B's surface was not rebound.");
+        Assert.True(document.Selection.Revision == revision, "premise: the seat moved across the tab switch.");
+        Pump();
+        Assert.True(parked.SameGeometry(boardB.Engine.CommittedViewport), "pane B's board moved under the outline.");
+
+        document.ShowSurface(CanvasSurfaceKind.Visual);
+        host.UpdateLayout();
+        PumpUntil(
+            () => InView(boardB, "loose"),
+            "pane B's board owed the seat when its tab went behind another and, the seat unmoved, never paid it "
+            + "once shown: a reveal owed before a tab switch is still owed after it (codex's final check, #1271).");
+    });
+
+    /// <summary>
+    /// Follow-up #1271, codex's final check — the follow rule across a tab
+    /// switch: pane B shows another canvas while pane A moves the seat. A
+    /// board that followed throughout scrolls to the seat when its tab
+    /// returns. One that did not — it stopped following on the other canvas's
+    /// tab and resumed ("lapses"), or it was not following when it left and
+    /// began on the other tab ("resumes") — cannot tell when the seat moved
+    /// against when it followed, and comes back where it was left.
+    /// </summary>
+    [Theory]
+    [InlineData("throughout")]
+    [InlineData("lapses")]
+    [InlineData("resumes")]
+    public void ABoardThatStopsFollowingWhileItsTabIsAwayDoesNotScrollWhenItReturns(string following) => RunSta(() =>
+    {
+        File.WriteAllText(
+            Path.Combine(_fixture.Root, "other.canvas"),
+            "{\"nodes\":[{\"id\":\"only\",\"type\":\"text\",\"text\":\"Only\",\"x\":0,\"y\":0,\"width\":200,\"height\":100}],"
+            + "\"edges\":[]}");
+        CanvasDocumentViewModel document = Open("board.canvas");
+        CanvasDocumentViewModel other = Open("other.canvas");
+        using WorkspaceTabViewModel canvasTab = CanvasTab(document, "board.canvas");
+        using WorkspaceTabViewModel otherTab = CanvasTab(other, "other.canvas");
+        using HostedWindow host = HostBoardBesideATabbedPane(
+            document, [canvasTab, otherTab], out CanvasSurfaceView paneA, out TabControl tabsB);
+        CanvasSurfaceView paneB = SurfaceIn(tabsB);
+        CanvasRendererView boardB = paneB.VisualForTests;
+        PumpUntil(() => boardB.Engine.Current is not null, "premise: pane B's board never installed its first state.");
+        if (following == "resumes")
+        {
+            _ = paneB.ViewportCommand(CanvasViewportVerb.ToggleFollowSelection);
+            Assert.False(boardB.Engine.CommittedViewport.FollowSelection, "premise: pane B still follows.");
+        }
+        document.SeatSelectionSilently("question");
+        boardB.Engine.CommitViewport(view => view.PannedTo(-5000, -5000));
+        PumpUntil(
+            () => boardB.Engine.Current!.Viewport.SameGeometry(boardB.Engine.CommittedViewport),
+            "premise: pane B's pan-away never installed.");
+        CanvasViewportState parked = boardB.Engine.CommittedViewport;
+
+        tabsB.SelectedItem = otherTab;
+        host.UpdateLayout();
+        Assert.True(
+            ReferenceEquals(SurfaceIn(tabsB), paneB) && ReferenceEquals(paneB.Model, other),
+            "premise: the tab switch did not rebind pane B's surface to the other canvas.");
+        other.ShowSurface(CanvasSurfaceKind.Visual);
+        host.UpdateLayout();
+        long lapsesBefore = boardB.Engine.CommittedViewport.FollowLapses;
+        if (following == "lapses")
+        {
+            _ = paneB.ViewportCommand(CanvasViewportVerb.ToggleFollowSelection);
+            _ = paneB.ViewportCommand(CanvasViewportVerb.ToggleFollowSelection);
+            Assert.True(
+                boardB.Engine.CommittedViewport.FollowSelection
+                    && boardB.Engine.CommittedViewport.FollowLapses == lapsesBefore + 1,
+                "premise: pane B's board did not stop and resume following on the other canvas.");
+        }
+        else if (following == "resumes")
+        {
+            _ = paneB.ViewportCommand(CanvasViewportVerb.ToggleFollowSelection);
+            Assert.True(
+                boardB.Engine.CommittedViewport.FollowSelection
+                    && boardB.Engine.CommittedViewport.FollowLapses == lapsesBefore,
+                "premise: pane B's board did not begin following on the other canvas without a lapse.");
+        }
+        Assert.True(PressKey(paneA, Key.Down, ModifierKeys.None));
+        string seat = Assert.IsType<string>(document.Selection.Selected);
+        Assert.NotEqual("question", seat);
+
+        tabsB.SelectedItem = canvasTab;
+        host.UpdateLayout();
+        Assert.True(ReferenceEquals(paneB.Model, document), "premise: pane B's surface was not rebound.");
+        if (following != "throughout")
+        {
+            PumpUntil(
+                () => boardB.IsVisible
+                    && ReferenceEquals(boardB.Engine.Current!.Source, document.AppliedPublication)
+                    && boardB.Engine.Current.Viewport.SameGeometry(boardB.Engine.CommittedViewport),
+                "premise: pane B's board never showed and installed its canvas again.");
+            Pump();
+            CanvasViewportState found = boardB.Engine.CommittedViewport;
+            Assert.True(
+                found.PanX == parked.PanX && found.PanY == parked.PanY && found.Zoom == parked.Zoom,
+                $"pane B's board did not follow the selection throughout its tab's absence ({following}), yet it "
+                + "scrolled to the seat when it returned: a board that stopped, or had not started, following while "
+                + $"away pays nothing (D4, #1271). Left at ({parked.PanX}, {parked.PanY}), found at "
+                + $"({found.PanX}, {found.PanY}).");
+            return;
+        }
+        PumpUntil(
+            () => ReferenceEquals(boardB.Engine.Current!.Source.Loaded?.Population, document.AppliedPublication!.Population)
+                && InView(boardB, seat),
+            "pane B's board followed the selection throughout while another canvas's tab showed, and never "
+            + "scrolled to the seat pane A moved it to (codex's final check, #1271).");
+    });
+
+    /// <summary>
+    /// Follow-up #1271, owner decision (review round 3) — shown again when a
+    /// pane's canvas surface is COLLAPSED while still bound (no rebind): the
+    /// board holds the reveal while it is not visible, and pays it after the
+    /// layout pass that shows it again, since showing it may bring no install.
+    /// One canvas in two panes: pane B is collapsed, pane A's board moves the
+    /// seat.
+    /// </summary>
+    [Fact]
+    public void AFollowingBoardCollapsedInItsPaneScrollsToTheSelectionWhenShown() => RunSta(() =>
     {
         CanvasDocumentViewModel document = Open("board.canvas");
         using HostedWindow host = HostTwoBoards(document, out CanvasSurfaceView paneA, out CanvasSurfaceView paneB);
@@ -5208,6 +5433,92 @@ public sealed class CanvasNavigatorTests : IDisposable
         paneA = first;
         paneB = second;
         return host;
+    }
+
+    /// <summary>A canvas tab as the workspace makes one: a real tab view
+    /// model with the shared document attached through the one attach
+    /// funnel.</summary>
+    private WorkspaceTabViewModel CanvasTab(CanvasDocumentViewModel document, string path)
+    {
+        var tab = new WorkspaceTabViewModel(
+            _session,
+            new WorkspaceTabState(Guid.NewGuid(), new WorkspaceItemState(WorkspaceItemKind.Canvas, path)),
+            startInteractionBackgroundWork: false);
+        tab.AttachCanvasDocument(document);
+        return tab;
+    }
+
+    /// <summary>A note tab — the other tab a canvas tab goes behind.</summary>
+    private WorkspaceTabViewModel NoteTab(string path) =>
+        new(
+            _session,
+            new WorkspaceTabState(Guid.NewGuid(), new WorkspaceItemState(WorkspaceItemKind.Markdown, path)),
+            startInteractionBackgroundWork: false);
+
+    /// <summary>
+    /// Pane A: a canvas surface on the document, on the Visual board and
+    /// holding the keys. Pane B: the workspace's own pane shape — ONE
+    /// selected-content TabControl over the production tab template
+    /// (<c>WorkspaceTabContentTemplate</c>, as <c>WorkspaceTemplates.xaml</c>
+    /// wires it), showing the first tab.
+    /// </summary>
+    private HostedWindow HostBoardBesideATabbedPane(
+        CanvasDocumentViewModel document,
+        IReadOnlyList<WorkspaceTabViewModel> tabs,
+        out CanvasSurfaceView paneA,
+        out TabControl tabsB)
+    {
+        var resources = (ResourceDictionary)Application.LoadComponent(
+            new Uri("/SlateWindows;component/WorkspaceTemplates.xaml", UriKind.Relative));
+        var first = new CanvasSurfaceView { Model = document, DataContext = new object() };
+        var second = new TabControl
+        {
+            ItemsSource = tabs,
+            ContentTemplate = (DataTemplate)resources["WorkspaceTabContentTemplate"],
+            SelectedItem = tabs[0],
+        };
+        var root = new System.Windows.Controls.Primitives.UniformGrid { Columns = 2 };
+        // The note tab's editor paints from the theme's palette; the pane's
+        // own resources stand in for the application's, leaving the
+        // process-wide theme alone (MenuItemForegroundTests' discipline).
+        root.Resources.MergedDictionaries.Add(new ResourceDictionary
+        {
+            Source = new Uri("pack://application:,,,/SlateWindows;component/Themes/Slate.Light.xaml", UriKind.Absolute),
+        });
+        root.Children.Add(first);
+        root.Children.Add(second);
+        HostedWindow host = Host(root);
+        document.ShowSurface(CanvasSurfaceKind.Visual);
+        host.UpdateLayout();
+        CanvasRendererView boardA = first.VisualForTests;
+        PumpUntil(() => boardA.Engine.Current is not null, "premise: pane A's board never installed its first state.");
+        Assert.True(boardA.Focus(), "premise: pane A's board refused keyboard focus.");
+        host.UpdateLayout();
+        Assert.True(first.ProjectionHasFocus, "premise: pane A's board does not hold the keys.");
+        Drain(document);
+        paneA = first;
+        tabsB = second;
+        return host;
+    }
+
+    /// <summary>The canvas surface in a tabbed pane's selected content.</summary>
+    private static CanvasSurfaceView SurfaceIn(TabControl tabs)
+    {
+        var pending = new Stack<DependencyObject>();
+        pending.Push(tabs);
+        while (pending.Count > 0)
+        {
+            DependencyObject node = pending.Pop();
+            if (node is CanvasSurfaceView surface)
+            {
+                return surface;
+            }
+            for (int i = 0; i < System.Windows.Media.VisualTreeHelper.GetChildrenCount(node); i++)
+            {
+                pending.Push(System.Windows.Media.VisualTreeHelper.GetChild(node, i));
+            }
+        }
+        throw new InvalidOperationException("premise: the tabbed pane shows no canvas surface.");
     }
 
     /// <summary>Whether the board's INSTALLED state has the card — the
