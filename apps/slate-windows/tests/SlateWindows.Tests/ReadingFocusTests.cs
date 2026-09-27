@@ -585,17 +585,54 @@ public sealed class ReadingFocusTests
         // The arm let go of the cancelled landing: no request, no hold.
         Assert.Null(host.EditorLandingRequest());
         string? seated = host.SeatedNode();
+        ReadingSurface? reading = kind == "reading" ? host.ShownSurface() : null;
+        if (reading is not null)
+        {
+            // Codex PR 8 round 8: the reading arm's document, read the way the
+            // reader's AT reads it — still the placeholder, never the note.
+            AssertTheNoteIsStillArriving(reading, route + ", before the stale completion");
+        }
 
         host.CompleteStaleEditorLanding(stale, staleRequest);
         // The stale completion moved nothing: the canvas's seated card and the
         // graph's node are where the reader's moves left them.
         Assert.Equal(seated, host.SeatedNode());
+        if (reading is not null)
+        {
+            AssertTheNoteIsStillArriving(reading, route + ", after the stale completion");
+        }
+
         host.LetEditorLandingArrive();
 
         Assert.Equal([ShellRegionKind.Editor, destination], ring.Tried);
         Assert.Equal([line], host.Announced);
         AssertFocused(landed, route + ", after the stale completion and the content's arrival");
         Assert.False(host.EditorStop().IsKeyboardFocusWithin);
+        if (reading is not null)
+        {
+            // The target note arrived, whole, in the surface the reader left —
+            // its text through the document and UIA's TextPattern, the caret
+            // at its start — and nothing took the reader there.
+            Assert.False(ShowsLoadingNotice(reading), route + ": the placeholder outlived the content");
+            Assert.Contains(NoteText, DocumentText(reading));
+            Assert.Contains(NoteText, UiaDocumentText(reading));
+            Assert.DoesNotContain("Loading reading view", UiaDocumentText(reading));
+            Assert.StartsWith(
+                "Reading focus",
+                new TextRange(reading.CaretPosition, reading.Document.ContentEnd).Text,
+                StringComparison.Ordinal);
+        }
+    }
+
+    /// <summary>The reading arm's held state, read as the reader's AT would:
+    /// the loading placeholder, and none of the target note's text, in the
+    /// document and through UIA's TextPattern.</summary>
+    private static void AssertTheNoteIsStillArriving(ReadingSurface reading, string route)
+    {
+        Assert.True(ShowsLoadingNotice(reading), route + ": the placeholder is gone");
+        Assert.DoesNotContain(NoteText, DocumentText(reading));
+        Assert.DoesNotContain(NoteText, UiaDocumentText(reading));
+        Assert.False(reading.IsKeyboardFocusWithin, route + ": the reader was taken into the surface");
     }
 
     /// <summary>R-10: another route asking for the editor while the ring's
