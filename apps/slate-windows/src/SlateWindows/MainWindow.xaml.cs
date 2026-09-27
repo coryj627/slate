@@ -387,7 +387,7 @@ public partial class MainWindow : Window
         if (_observedWorkspace is not null)
         {
             _observedWorkspace.EditorPaneFocusRequested -= Workspace_EditorPaneFocusRequested;
-            _observedWorkspace.DocumentLandingRaised -= Workspace_DocumentLandingRaised;
+            _observedWorkspace.CanvasNodeLandingRequested -= Workspace_CanvasNodeLandingRequested;
             _observedWorkspace.PropertyChanged -= Workspace_CanvasSheetChanged;
             _observedWorkspace.PropertyChanged -= ModalSource_PropertyChanged;
             UnwireWorkspaceProperties(_observedWorkspace);
@@ -401,7 +401,7 @@ public partial class MainWindow : Window
         if (workspace is not null)
         {
             workspace.EditorPaneFocusRequested += Workspace_EditorPaneFocusRequested;
-            workspace.DocumentLandingRaised += Workspace_DocumentLandingRaised;
+            workspace.CanvasNodeLandingRequested += Workspace_CanvasNodeLandingRequested;
             workspace.PropertyChanged += Workspace_CanvasSheetChanged;
             workspace.PropertyChanged += ModalSource_PropertyChanged;
             WireWorkspaceProperties(workspace);
@@ -482,39 +482,36 @@ public partial class MainWindow : Window
         // before its content can arrive ahead of the queued landing and seat
         // focus where the reader no longer is.
         _ = _editorLandings.Withdraw();
-        // OD-12: the funnel has already asked a canvas or graph tab's document
-        // for its landing (contract A14's workspace-level instruction). That
-        // request is held from the moment it is raised — the queued landing
-        // below takes it over, but a later focus request can supersede that
-        // landing in the arbiter, and a request nobody held would then seat
-        // the tab over wherever the reader went.
-        if (group.ActiveTab is { } tab)
-        {
-            _ = HoldDocumentRequest(
-                group, tab, onLanded: null, onRefused: RouteFallback(group, tab, onLanded: null), ringRegion: null);
-        }
-
+        // OD-12's one entry: the funnel asks, and the queued landing creates
+        // the request (canvas and graph included, contract A14's instruction)
+        // under the window's slot. A later focus request that supersedes it in
+        // the arbiter leaves no request behind to seat the tab later.
         _ = _focusRequests.Post(
             Dispatcher,
             DispatcherPriority.Input,
             () => LandEditorForRoute(group, onLanded: null));
     }
 
-    /// <summary>R-10 (OD-12): a canvas jump's named landing (the marks list's
-    /// Enter) was raised on the tab's document outside the funnel — it names
-    /// the card, which the funnel's own landing would not. Held here from the
-    /// moment it is raised, silently: its outcomes are the landing's own
-    /// (IG-41), and the reader leaving before it seats cancels it.</summary>
-    private void Workspace_DocumentLandingRaised(object? sender, WorkspaceTabViewModel tab)
+    /// <summary>R-10 (OD-12's one entry): a canvas jump asks to land the editor
+    /// on the card the reader chose (the marks list's Enter, IG-39). The ask
+    /// runs deferred, so the reader may have moved on: it lands only while its
+    /// tab is still the active tab of the active group, on the same document —
+    /// otherwise it is stale and lands nothing, and withdraws nothing. A live
+    /// ask supersedes the landing the window holds and goes through the one
+    /// entry (which creates nothing under a modal surface), silently: its
+    /// outcomes are the landing's own (IG-41).</summary>
+    private void Workspace_CanvasNodeLandingRequested(object? sender, CanvasNodeLandingIntent intent)
     {
         if (_viewModel.Workspace is not WorkspaceViewModel workspace
-            || !ReferenceEquals(workspace.ActiveGroup.ActiveTab, tab))
+            || !ReferenceEquals(workspace.ActiveGroup.ActiveTab, intent.Tab)
+            || !ReferenceEquals(intent.Tab.Canvas, intent.Document))
         {
             return;
         }
 
         _ = _editorLandings.Withdraw();
-        _ = HoldDocumentRequest(workspace.ActiveGroup, tab, onLanded: null, onRefused: static () => { }, ringRegion: null);
+        _ = FocusEditorPane(
+            workspace.ActiveGroup, onLanded: null, onRefused: static () => { }, forTheRing: false, canvasNode: intent.NodeId);
     }
 
     private void ObserveQuickSwitcher(QuickSwitcherViewModel? switcher)
@@ -1861,13 +1858,14 @@ public partial class MainWindow : Window
     /// Open's commit and a reading link's navigation among them), the reading
     /// toggle, tab cycling and pane moves; the switcher's committed dismissal;
     /// and the close fallbacks (<see cref="FocusActiveEditorPane"/>). It
-    /// supersedes whatever landing the window holds. OD-12: none is created
-    /// while a modal surface is open — the modal owns the keys, and nothing may
-    /// seat beneath it. Its refusal — now, or later when a held landing's
-    /// content fails, is torn down while current or will not take focus —
-    /// falls back to the tab strip or the Files tree
-    /// (<see cref="FallBackFromEditor"/>), guarded to the same tab: focus is
-    /// never left on the window root or a closed overlay.
+    /// supersedes whatever landing the window holds. OD-12: the one entry
+    /// creates nothing while a modal surface is open — the modal owns the
+    /// keys, and nothing may seat beneath it. Its refusal — now, or later when
+    /// a held landing's content fails, is torn down while current or will not
+    /// take focus — falls back to the tab strip or the Files tree
+    /// (<see cref="FallBackFromEditor"/>), guarded to the same tab with no
+    /// modal open (<see cref="RouteFallback"/>): focus is never left on the
+    /// window root or a closed overlay, and never moved beneath a modal.
     /// <paramref name="onLanded"/> is spoken once focus is in the stop or on
     /// the tab's own item — never for the Files tree, and never when nothing
     /// took focus.
@@ -1875,21 +1873,12 @@ public partial class MainWindow : Window
     private void LandEditorForRoute(WorkspaceGroupViewModel group, Action? onLanded)
     {
         _ = _editorLandings.Withdraw();
-        if (OpenModalSurface is not null)
-        {
-            return;
-        }
-
         WorkspaceTabViewModel? tab = group.ActiveTab;
-        ShellRegionLanding landing = FocusEditorPane(
-            group, onLanded, RouteFallback(group, tab, onLanded), forTheRing: false);
+        Action refused = RouteFallback(group, tab, onLanded);
+        ShellRegionLanding landing = FocusEditorPane(group, onLanded, refused, forTheRing: false);
         if (landing == ShellRegionLanding.Refused)
         {
-            if (FallBackFromEditor(group, tab) == EditorFallback.TabItem)
-            {
-                onLanded?.Invoke();
-            }
-
+            refused();
             return;
         }
 
@@ -1920,11 +1909,14 @@ public partial class MainWindow : Window
         IsStillWhereAsked(group, tab) && OpenModalSurface is null;
 
     /// <summary>
-    /// W7-7 PR 8 (#1253, contract R-10): THE editor landing — the one place an
-    /// editor landing request is created, for the F6 ring and every route. Its
-    /// callers first let go of the editor landing the window holds (one at
-    /// most, whoever asked); it lands the active tab's stop by kind and answers LANDED
-    /// (focus is in the stop now), PENDING (held: its content, surface or row
+    /// W7-7 PR 8 (#1253, contract R-10; OD-12's one entry): THE editor landing
+    /// — the one place an editor landing request is created, for the F6 ring,
+    /// every route and a canvas jump (<paramref name="canvasNode"/>). Nothing
+    /// is created while a modal surface is open. Its callers first let go of
+    /// the editor landing the window holds (one at most, whoever asked); it
+    /// lands the active tab's stop by kind and answers LANDED (focus is in the
+    /// stop now), PENDING (held by the window's slot — a canvas or graph
+    /// request owned before it is raised: its content, surface or row
     /// container is still to come; it then ends seated —
     /// <paramref name="onLanded"/> — refused — <paramref name="onRefused"/> —
     /// or cancelled, silently) or REFUSED (the stop cannot be taken; nothing
@@ -1932,19 +1924,23 @@ public partial class MainWindow : Window
     /// region, a route to its fallback).
     /// </summary>
     private ShellRegionLanding FocusEditorPane(
-        WorkspaceGroupViewModel group, Action? onLanded, Action onRefused, bool forTheRing)
+        WorkspaceGroupViewModel group, Action? onLanded, Action onRefused, bool forTheRing, string? canvasNode = null)
     {
-        WorkspaceTabViewModel? activeTab = group.ActiveTab;
+        if (OpenModalSurface is not null)
+        {
+            return ShellRegionLanding.Refused;
+        }
         // W6-1 PR A (contract A14) and W6-2 PR C (rule F, Term F6): a canvas
         // or graph tab's focus belongs to its surface, which seats the row,
         // the board, the banner or the state host through the document's
         // addressed landing — asked FIRST, so no fallback below takes focus
         // back off what the surface seats (<see cref="LandDocument"/> raises
-        // the request).
-        if (activeTab is { IsCanvas: true } or { IsGraph: true })
+        // the request, under the window's slot).
+        if (group.ActiveTab is { } documentTab && (documentTab.IsCanvas || documentTab.IsGraph))
         {
-            return LandDocument(group, activeTab, onLanded, onRefused, forTheRing);
+            return LandDocument(group, documentTab, onLanded, onRefused, forTheRing, canvasNode);
         }
+        WorkspaceTabViewModel? activeTab = group.ActiveTab;
         if (activeTab is null)
         {
             return ShellRegionLanding.Refused;

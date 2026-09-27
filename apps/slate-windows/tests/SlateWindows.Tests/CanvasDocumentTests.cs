@@ -1253,14 +1253,17 @@ public sealed class CanvasDocumentTests : IDisposable
         Assert.Same(successor, workspace.CanvasPromptSheet);
     }
 
+    // W7-7 PR 8 (OD-12's one entry): the funnel only asks; the shell raises
+    // the landing request, and these facts host the canvas surface without the
+    // shell (ShellLandingStandIn).
     private WorkspaceViewModel NewWorkspace(Action<A11yEvent>? announce = null) =>
-        new(
+        new WorkspaceViewModel(
             _session,
             _fixture.Root,
             () => [],
             announce ?? (_ => { }),
             startInteractionBackgroundWork: false,
-            announceRendered: _announced.Add);
+            announceRendered: _announced.Add).WithShellLandings();
 
     private static CanvasOutlineRow Row(CanvasDocumentViewModel document, string nodeId) =>
         Assert.IsType<CanvasOutlineRow>(document.RowFor(nodeId));

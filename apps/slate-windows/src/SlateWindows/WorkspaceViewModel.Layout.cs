@@ -1029,22 +1029,20 @@ internal sealed partial class WorkspaceViewModel
     /// retarget, a session restore of a pane the user is not in, and a
     /// history reload all publish without asking, and must not steal
     /// focus; a second tab on an already-open path is a registry hit
-    /// that never publishes, and must still land it.
+    /// that never publishes, and must still land it. W7-7 PR 8 (R-10,
+    /// OD-12's one entry): the funnel ASKS; it no longer raises a canvas or
+    /// graph document's request itself. The shell's one landing entry
+    /// creates every editor landing request — addressed to the tab that
+    /// asked, under the window's slot before the request exists, and never
+    /// under an open modal surface (<c>MainWindow.FocusEditorPane</c>).
     /// </summary>
     internal void RequestActiveEditorFocus()
     {
-        // W7-7 PR 8 (R-10): this request supersedes a landing the F6 ring
+        // W7-7 PR 8 (R-10): this request supersedes a landing the window
         // holds — in this pane or in the one it leaves — so that landing is
         // withdrawn NOW, before its content can arrive ahead of this request's
         // own (queued) landing and seat focus there.
         WithdrawHeldShellRegionLanding();
-        // Addressed to the tab that asked: one document serves every
-        // pane on the path, and an unaddressed request lands focus in
-        // all of them.
-        WorkspaceTabViewModel? active = ActiveGroup.ActiveTab;
-        active?.Canvas?.RequestFocusLanding(active);
-        // W6-2 PR C (rule F, Term F6): a graph tab's document, addressed the same way.
-        active?.Graph?.RequestFocusLanding(active);
         EditorPaneFocusRequested?.Invoke(this, ActiveGroup);
     }
 

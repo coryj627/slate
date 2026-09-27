@@ -23,27 +23,27 @@ internal sealed partial class WorkspaceViewModel
     private readonly Dictionary<string, CanvasDocumentViewModel> _canvasDocuments =
         new(StringComparer.Ordinal);
 
-    /// <summary>W7-7 PR 8 (R-10, OD-12): a canvas or graph document's landing
-    /// was raised for a tab outside the editor-focus funnel — the shell holds
-    /// it in its one slot from here, so the reader leaving before it seats
-    /// cancels it.</summary>
-    internal event EventHandler<WorkspaceTabViewModel>? DocumentLandingRaised;
+    /// <summary>W7-7 PR 8 (R-10, OD-12's one entry): a canvas jump asks the
+    /// shell to land the editor on a named card. An INTENT, not a request:
+    /// the document is untouched here — the shell's one landing entry checks
+    /// that the tab is still the active tab of the active group and that no
+    /// modal surface is open, holds the landing in its slot, and only then
+    /// raises the addressed request. A stale intent (the reader moved to
+    /// another pane or tab before it ran) lands nothing and cancels nothing.</summary>
+    internal event EventHandler<CanvasNodeLandingIntent>? CanvasNodeLandingRequested;
 
     /// <summary>W7-7 PR 8 (R-10, OD-12): a canvas jump's named landing (the
-    /// marks list's Enter, IG-39): the card the reader chose, not the funnel's
-    /// unnamed one, so it is raised here rather than through
-    /// <see cref="RequestActiveEditorFocus"/> — superseding any landing the
-    /// window holds, and handed to the shell to hold.</summary>
+    /// marks list's Enter, IG-39) — the card the reader chose, not the
+    /// funnel's unnamed one — handed to the shell as an intent
+    /// (<see cref="CanvasNodeLandingRequested"/>).</summary>
     internal void RaiseCanvasNodeLanding(CanvasDocumentViewModel document, object owner, string nodeId)
     {
         ArgumentNullException.ThrowIfNull(document);
         ArgumentNullException.ThrowIfNull(owner);
-        WithdrawHeldShellRegionLanding();
-        document.RequestFocusLanding(owner, nodeId);
-        if (owner is WorkspaceTabViewModel tab && document.FocusRequest is { } request
-            && ReferenceEquals(request.Owner, tab))
+        ArgumentNullException.ThrowIfNull(nodeId);
+        if (owner is WorkspaceTabViewModel tab)
         {
-            DocumentLandingRaised?.Invoke(this, tab);
+            CanvasNodeLandingRequested?.Invoke(this, new CanvasNodeLandingIntent(tab, document, nodeId));
         }
     }
 

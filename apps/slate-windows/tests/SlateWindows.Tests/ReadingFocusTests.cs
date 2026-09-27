@@ -2504,38 +2504,86 @@ public sealed class ReadingFocusTests
         Assert.Equal(DocumentLandingEnd.Seated, host.Tab.Canvas!.LastFocusLandingEnd?.End);
     });
 
-    /// <summary>OD-12's modal hook is the EDGE: a modal surface opening
-    /// withdraws what is held, and the modal's own changes while it stays open
-    /// withdraw nothing. A palette command's route raises the tab's landing
-    /// under the open palette (the funnel's request, held from the moment it is
-    /// raised); the palette's own changes before it closes leave it held, and
-    /// the route's queued landing then lands it once the palette is gone.</summary>
-    [Fact]
-    public void AModalsOwnChangesLeaveALandingRaisedUnderIt() => RunSta(() =>
+    /// <summary>OD-12's one entry (codex PR 8 round 8): NO editor landing
+    /// request exists while a modal surface is open. A palette command's route
+    /// (the funnel) or a canvas jump asking under the open palette raises
+    /// nothing on the document — the funnel only asks, and the one entry
+    /// creates nothing under a modal — nothing is held, the palette's own
+    /// changes leave it that way, and closing the palette lands nothing
+    /// afterwards: the content arriving seats nobody.</summary>
+    [Theory]
+    [InlineData("reading", "the funnel")]
+    [InlineData("canvas", "the funnel")]
+    [InlineData("graph", "the funnel")]
+    [InlineData("canvas", "a jump")]
+    public void AnOpenModalSurfaceRaisesNoLanding(string kind, string route) => RunSta(() =>
     {
         using var host = new Host();
-        host.Initialize("canvas");
+        host.Initialize(kind, kind == "canvas" ? CardBoard : null);
         host.HoldEditorLanding();
-        host.FocusTabBar();
+        TabItem tabItem = host.FocusTabBar();
         host.OpenModal("palette");
         PumpedDispatcher.Drain();
 
-        host.Workspace.RequestActiveEditorFocus();
-        object? raised = host.EditorLandingRequest();
-        Assert.NotNull(raised);
-        Assert.True(((IShellRegionHost)host.Shell).HoldsLanding);
+        if (route == "the funnel")
+        {
+            host.Workspace.RequestActiveEditorFocus();
+        }
+        else
+        {
+            host.Workspace.RaiseCanvasNodeLanding(host.Tab.Canvas!, host.Tab, "beta");
+        }
 
+        Assert.Null(host.EditorLandingRequest());
+        PumpedDispatcher.Drain();
+        Assert.Null(host.EditorLandingRequest());
+        Assert.False(((IShellRegionHost)host.Shell).HoldsLanding);
         host.Lifecycle.Palette.Query = "a query the palette ranks";
-
-        Assert.Same(raised, host.EditorLandingRequest());
-        Assert.True(((IShellRegionHost)host.Shell).HoldsLanding, "the palette's own change withdrew the landing");
+        PumpedDispatcher.Drain();
+        Assert.Null(host.EditorLandingRequest());
 
         host.Lifecycle.Palette.Dismiss();
         PumpedDispatcher.Drain();
         host.LetEditorLandingArrive();
 
-        Assert.True(host.EditorStop().IsKeyboardFocusWithin, "the route's landing did not land after the palette closed");
+        Assert.False(host.EditorStop().IsKeyboardFocusWithin, $"a landing {route} asked for under the palette seated ({kind})");
         Assert.Null(host.EditorLandingRequest());
+        Assert.DoesNotContain(host.Announced, line => line is A11yEvent.EditorPaneFocused);
+        AssertFocused(tabItem, $"where the reader was when the palette opened ({kind}, {route})");
+    });
+
+    /// <summary>OD-12's modal hook is the EDGE, witnessed at the slot itself: a
+    /// modal surface OPENING withdraws the held landing, and a modal's own
+    /// changes while it stays open withdraw nothing. (Production holds nothing
+    /// under an open modal — the one entry creates nothing there — so the
+    /// fact holds a landing of its own in the window's slot to pin the rule
+    /// the hook implements.)</summary>
+    [Fact]
+    public void TheModalHookWithdrawsAtTheOpeningOnly() => RunSta(() =>
+    {
+        using var host = new Host();
+        host.Initialize(readingMode: true);
+        int withdrawals = 0;
+        HeldEditorLanding Landing(Func<bool> isLive) => new(
+            target: () => null,
+            isLive: isLive,
+            withdraw: () => ++withdrawals > 0,
+            stillWhereAsked: () => true,
+            scope: [],
+            ringRegion: null);
+
+        bool firstLive = true;
+        host.Shell.EditorLandings.Hold(Landing(() => firstLive));
+        host.OpenModal("palette");
+        Assert.Equal(1, withdrawals);
+        firstLive = false;
+
+        host.Shell.EditorLandings.Hold(Landing(() => true));
+        host.Lifecycle.Palette.Query = "a query the palette ranks";
+        PumpedDispatcher.Drain();
+        Assert.Equal(1, withdrawals);
+        Assert.NotNull(host.Shell.EditorLandings.Held);
+        _ = host.Shell.EditorLandings.Withdraw();
     });
 
     /// <summary>OD-12: no route landing is created while a modal surface is
@@ -2560,16 +2608,16 @@ public sealed class ReadingFocusTests
         Assert.False(((IShellRegionHost)host.Shell).HoldsLanding);
     });
 
-    /// <summary>OD-12: the funnel's own canvas or graph request (contract A14's
-    /// workspace-level instruction) is held from the moment it is raised — not
-    /// only once the funnel's queued landing runs. A later focus request that
-    /// supersedes that queued landing in the window's arbiter (a pane-boundary
-    /// move) leaves the request to the slot, and the reader moving away cancels
-    /// it: the load publishing, or the surface being shown, seats nobody.</summary>
+    /// <summary>OD-12's one entry: the funnel ASKS — no canvas or graph
+    /// document request exists until the shell's queued landing creates it,
+    /// under the window's slot. A later focus request that supersedes that
+    /// queued landing in the window's arbiter (a pane-boundary move) therefore
+    /// leaves nothing behind: the reader moving away, and the load publishing
+    /// or the surface being shown afterwards, seats nobody.</summary>
     [Theory]
     [InlineData("canvas")]
     [InlineData("graph")]
-    public void TheFunnelsOwnRequestIsHeldFromTheMomentItIsRaised(string kind) => RunSta(() =>
+    public void TheFunnelRaisesNothingBeforeTheShellsEntry(string kind) => RunSta(() =>
     {
         using var host = new Host();
         host.Initialize(kind);
@@ -2577,12 +2625,18 @@ public sealed class ReadingFocusTests
         host.FocusTabBar();
 
         host.Workspace.RequestActiveEditorFocus();
-        Assert.NotNull(host.EditorLandingRequest());
-        Assert.True(((IShellRegionHost)host.Shell).HoldsLanding, "the funnel's request was not held when raised");
-        // No pane to the left: the boundary route (focus the Files region),
-        // whose request supersedes the funnel's queued landing.
-        Assert.False(host.Workspace.FocusDirectionalPane("horizontal", -1));
+        Assert.Null(host.EditorLandingRequest());
+        Assert.False(((IShellRegionHost)host.Shell).HoldsLanding);
+        // A pane-boundary request (focus the Files region) posted after the
+        // funnel's: the window's arbiter lands the last one raised, so the
+        // funnel's queued landing never runs. (The fixture's lifecycle is not
+        // wired to the workspace's boundary event, so the window's own
+        // handler is invoked as the lifecycle would.)
+        typeof(MainWindow)
+            .GetMethod("ViewModel_WorkspaceFocusBoundaryRequested", BindingFlags.NonPublic | BindingFlags.Instance)!
+            .Invoke(host.Shell, [null, WorkspaceFocusBoundary.Files]);
         PumpedDispatcher.Drain();
+        Assert.Null(host.EditorLandingRequest());
         Assert.True(host.Sentinel.Focus());
         PumpedDispatcher.Drain();
         host.LetEditorLandingArrive();
@@ -2593,9 +2647,9 @@ public sealed class ReadingFocusTests
     });
 
     /// <summary>OD-12: a canvas jump's named landing (the marks list's Enter)
-    /// is raised outside the funnel — it names the card — and the window's
-    /// slot holds it from the moment it is raised: the reader moving away
-    /// before the surface can seat it cancels it, and showing the surface
+    /// asks the shell's one entry — it names the card — which holds it in the
+    /// window's slot before the document's request exists: the reader moving
+    /// away before the surface can seat it cancels it, and showing the surface
     /// afterwards seats nobody.</summary>
     [Fact]
     public void ACanvasJumpsNamedLandingEndsWhenTheReaderMoves() => RunSta(() =>
@@ -2626,6 +2680,110 @@ public sealed class ReadingFocusTests
         host.ShowStop();
 
         AssertFocused(host.Sentinel, "where the reader moved before the jump could land");
+    });
+
+    /// <summary>OD-12 (codex PR 8 round 8): a canvas jump runs deferred — the
+    /// marks list closes, then the jump posts at Background — so the reader can
+    /// move first. In a split, a pane switch queued at Input ahead of the jump
+    /// runs first; the jump then asks for a tab that is no longer the active
+    /// tab of the active group, and the shell's one entry refuses it before
+    /// the document is touched: the canvas in the pane the reader left raises
+    /// no request and takes no focus, and the new pane's own landing is not
+    /// withdrawn.</summary>
+    [Fact]
+    public void AStaleCanvasJumpLandsNothingInThePaneTheReaderLeft() => RunSta(() =>
+    {
+        using var host = new Host();
+        host.Initialize("canvas", CardBoard);
+        host.Workspace.OpenPath("other.md", WorkspaceOpenTarget.SplitRight);
+        host.Settle();
+        WorkspaceGroupViewModel paneB = host.Workspace.ActiveGroup;
+        WorkspaceTabViewModel otherTab = paneB.ActiveTab!;
+        Assert.True(host.Workspace.FocusDirectionalPane("horizontal", -1));
+        host.Settle();
+        Assert.NotSame(paneB, host.Workspace.ActiveGroup);
+        CanvasDocumentViewModel board = host.Tab.Canvas!;
+        board.SeatSelectionSilently("beta");
+        board.ToggleMark();
+        board.SeatSelectionSilently("alpha");
+        FrameworkElement canvasStop = host.EditorStop();
+        host.FocusTabBar();
+        board.OpenMarksList(host.Tab);
+        Assert.IsType<CanvasMarksListPrompt>(host.Workspace.CanvasPromptSheet);
+        int arrivalsInTheCanvas = 0;
+        canvasStop.IsKeyboardFocusWithinChanged += (_, e) =>
+        {
+            if (e.NewValue is true)
+            {
+                arrivalsInTheCanvas++;
+            }
+        };
+
+        host.Workspace.SubmitCanvasPrompt();
+        _ = Dispatcher.CurrentDispatcher.BeginInvoke(
+            DispatcherPriority.Input, () => host.Workspace.FocusDirectionalPane("horizontal", +1));
+        PumpedDispatcher.Drain();
+        host.Settle();
+
+        Assert.Same(paneB, host.Workspace.ActiveGroup);
+        Assert.Null(board.FocusRequest);
+        Assert.Equal(0, arrivalsInTheCanvas);
+        AssertFocused(host.ShownEditor(otherTab).TextArea, "the pane the reader switched to before the jump ran");
+    });
+
+    /// <summary>OD-12 (codex PR 8 round 8): a canvas landing asked before its
+    /// surface was realized takes the lifecycle of the surface realized for its
+    /// tab afterwards: that surface leaving the tree (the pane unloaded) or the
+    /// tab (the shared cell rebound) cancels the landing, so when the surface
+    /// comes back and the load publishes, nothing is seated and nothing is
+    /// spoken.</summary>
+    [Theory]
+    [InlineData("unloaded")]
+    [InlineData("rebound")]
+    public void ALateRealizedSurfaceCarriesTheLandingsLifecycle(string move) => RunSta(() =>
+    {
+        using var host = new Host();
+        host.Initialize("canvas", CardBoard);
+        host.HoldEditorLanding();
+        FrameworkElement surface = host.EditorStop();
+        surface.DataContext = null;
+        PumpedDispatcher.Drain();
+        host.Announced.Clear();
+        host.CloseAPaletteOverAGoneStop();
+        Assert.True(((IShellRegionHost)host.Shell).HoldsLanding, "the close fallback's landing was not held");
+
+        surface.ClearValue(FrameworkElement.DataContextProperty);
+        host.Settle();
+        Assert.True(((IShellRegionHost)host.Shell).HoldsLanding, "the realization ended the landing");
+        Assert.NotNull(host.EditorLandingRequest());
+
+        if (move == "unloaded")
+        {
+            host.DetachPane();
+        }
+        else
+        {
+            surface.DataContext = null;
+            PumpedDispatcher.Drain();
+        }
+
+        Assert.False(((IShellRegionHost)host.Shell).HoldsLanding, $"the surface {move} but the landing is still held");
+        Assert.Null(host.EditorLandingRequest());
+        if (move == "unloaded")
+        {
+            host.AttachPane();
+        }
+        else
+        {
+            surface.ClearValue(FrameworkElement.DataContextProperty);
+        }
+
+        host.Settle();
+        host.LetEditorLandingArrive();
+
+        Assert.False(host.EditorStop().IsKeyboardFocusWithin, $"the landing seated after its surface {move}");
+        Assert.Null(host.EditorLandingRequest());
+        Assert.DoesNotContain(host.Announced, line => line is A11yEvent.EditorPaneFocused);
     });
 
     /// <summary>OD-12: the window losing activation — a dialog, another
@@ -3474,6 +3632,16 @@ public sealed class ReadingFocusTests
         {
             var content = (DockPanel)_window!.Content;
             content.Children.Remove(Shell.ContentPaneBorder);
+        }
+
+        /// <summary>Put the content pane back where <see cref="DetachPane"/>
+        /// took it from: its surfaces load again.</summary>
+        public void AttachPane()
+        {
+            var content = (DockPanel)_window!.Content;
+            content.Children.Add(Shell.ContentPaneBorder);
+            _window.UpdateLayout();
+            PumpedDispatcher.Drain();
         }
 
         /// <summary>Show another element in the window, above the pane.</summary>
