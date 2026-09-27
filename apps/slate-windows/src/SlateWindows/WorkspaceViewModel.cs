@@ -758,6 +758,11 @@ internal sealed partial class WorkspaceTabViewModel : BindableBase, IDisposable
     /// write there.</summary>
     internal Action? SaveWrittenHookForTests { get; set; }
 
+    /// <summary>#1280 test seam: runs on the dispatcher right after a landed
+    /// write became the tab's baseline, before the rest of its publication —
+    /// a fact throws here to fault a save whose tab is already clean.</summary>
+    internal Action? SaveAdoptedHookForTests { get; set; }
+
     /// <summary>True once the tab is disposed — a pumped caller re-reads
     /// it after its frame.</summary>
     internal bool IsDisposed => _disposed;
@@ -921,10 +926,11 @@ internal sealed partial class WorkspaceTabViewModel : BindableBase, IDisposable
     /// disposed or re-pointed at another item during the write takes no
     /// state and says nothing; the bytes it wrote are on disk. A tab whose
     /// file was renamed or deleted under the write says nothing and keeps
-    /// the status the rename or deletion set — a CAS write that landed
-    /// before a rename moved the file is adopted silently as the renamed
-    /// tab's baseline, so its next save starts from the bytes on disk
-    /// instead of reporting a false conflict.</summary>
+    /// the status the rename or deletion set — a write that landed before a
+    /// rename moved the file, a CAS save or a create alike (codex round 3),
+    /// is adopted silently as the renamed tab's baseline, so its next save
+    /// starts from the bytes on disk instead of reporting a false conflict
+    /// or creating over its own file.</summary>
     private bool PublishSave(Task<SaveWrite> write, SaveRequest request)
     {
         Panels.TaskIndexRepairCoordinator? repairs = request.Repairs;
@@ -941,7 +947,7 @@ internal sealed partial class WorkspaceTabViewModel : BindableBase, IDisposable
             if (request.Epoch != _saveEpoch
                 || !string.Equals(request.Path, Path, StringComparison.Ordinal))
             {
-                if (request.ExpectedContentHash is not null && !IsMissingFromDisk)
+                if (!IsMissingFromDisk)
                 {
                     AdoptLandedWrite(request, saved);
                     _documentChanged?.Invoke(this, null);
@@ -950,6 +956,7 @@ internal sealed partial class WorkspaceTabViewModel : BindableBase, IDisposable
             }
 
             AdoptLandedWrite(request, saved);
+            SaveAdoptedHookForTests?.Invoke();
             Status = saved.Caveat is null
                 ? $"Saved {System.IO.Path.GetFileName(request.Path)}."
                 : $"Saved {System.IO.Path.GetFileName(request.Path)}. {saved.Caveat}";
@@ -2463,8 +2470,9 @@ internal sealed partial class WorkspaceViewModel : BindableBase, IDisposable
     /// A clean tab is never rewritten, and a tab whose save failed (and said
     /// why) is not retried while it still shows the same item — a rename
     /// that retired its save gives it a new identity, which is retried.
-    /// Saved means a round ended with the stamp unchanged and no live tab
-    /// dirty — within a bounded number of rounds.</summary>
+    /// Saved means a round ended with the stamp unchanged, no live tab dirty
+    /// and no live tab's save failed at the item it shows — within a bounded
+    /// number of rounds.</summary>
     public bool SaveAll()
     {
         var failed = new Dictionary<WorkspaceTabViewModel, WorkspaceItemState>(
@@ -2505,12 +2513,17 @@ internal sealed partial class WorkspaceViewModel : BindableBase, IDisposable
             {
                 continue;
             }
-            WorkspaceTabViewModel[] dirty = [.. Groups
+            WorkspaceTabViewModel[] live = [.. Groups
                 .SelectMany(group => group.Tabs)
-                .Where(tab => !tab.IsDisposed && tab.IsDirty)];
+                .Where(tab => !tab.IsDisposed)];
+            WorkspaceTabViewModel[] dirty = [.. live.Where(tab => tab.IsDirty)];
             if (dirty.All(FailedAtItsItem))
             {
-                return dirty.Length == 0;
+                // Codex round 3: a save that failed at the item its tab still
+                // shows is a "not saved" even when the tab is clean — a fault
+                // after the landed write was adopted leaves no dirty tab
+                // behind to say so.
+                return dirty.Length == 0 && !live.Any(FailedAtItsItem);
             }
         }
         return false;
