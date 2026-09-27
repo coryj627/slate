@@ -672,6 +672,11 @@ internal sealed partial class WorkspaceTabViewModel : BindableBase, IDisposable
     /// write — a test parks it there.</summary>
     internal Action? SaveWriteHookForTests { get; set; }
 
+    /// <summary>#1280 test seam: runs on the save worker AFTER the core write
+    /// landed, before its publication is queued — a test parks a landed
+    /// write there.</summary>
+    internal Action? SaveWrittenHookForTests { get; set; }
+
     /// <summary>True once the tab is disposed — a pumped caller re-reads
     /// it after its frame.</summary>
     internal bool IsDisposed => _disposed;
@@ -741,7 +746,13 @@ internal sealed partial class WorkspaceTabViewModel : BindableBase, IDisposable
             onSaved);
         request.Repairs?.BeginMutation(request.Path);
         Action? hook = SaveWriteHookForTests;
-        Task<SaveWrite> write = Task.Run(() => WriteForSave(request, hook));
+        Action? written = SaveWrittenHookForTests;
+        Task<SaveWrite> write = Task.Run(() =>
+        {
+            SaveWrite landed = WriteForSave(request, hook);
+            written?.Invoke();
+            return landed;
+        });
         // The worker phase is tracked on its own (contract 35 A-1): teardown
         // joins it before the session is disposed, with no dependence on the
         // dispatcher callback below.
