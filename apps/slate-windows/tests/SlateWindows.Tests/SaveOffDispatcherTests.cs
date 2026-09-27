@@ -11,9 +11,11 @@ namespace SlateWindows.Tests;
 /// on a worker, never on the dispatcher. The editor state is snapshotted on
 /// the dispatcher, the write runs under the tab's save chain, and the
 /// outcome — state, status and exactly one D-10 announcement — is published
-/// back on the dispatcher. The explicit Save, Save All and save-before-close
-/// wait for it in a nested dispatcher frame, so input, focus, the status
-/// and notifications keep flowing while the file and index work runs.
+/// back on the dispatcher. Save All and save-before-close wait for it in a
+/// nested dispatcher frame, so input, focus, the status and notifications
+/// keep flowing while the file and index work runs; the explicit Save
+/// command does not wait at all (codex round 2a) — it requests the write and
+/// returns, and these facts pump until it has published.
 /// </summary>
 public sealed class SaveOffDispatcherTests
 {
@@ -64,7 +66,7 @@ public sealed class SaveOffDispatcherTests
     /// the first's write is still parked, after another edit — each publish
     /// exactly once, in order: the first confirmation lands with the first
     /// write on disk, the second with the second, and nothing is announced
-    /// out of order however the nested frames unwind.</summary>
+    /// out of order.</summary>
     [Fact]
     public void TwoQuickSavesPublishOnceEachInOrder()
     {
@@ -94,7 +96,7 @@ public sealed class SaveOffDispatcherTests
                 host.Workspace.SaveActiveCommand.Execute(null);
             }));
 
-        host.Workspace.SaveActiveCommand.Execute(null);
+        host.Workspace.SaveActiveAndSettle();
 
         Assert.Equal(2, writes);
         (A11yEvent Event, int Thread, string Disk)[] saved = host.Announced
@@ -110,7 +112,7 @@ public sealed class SaveOffDispatcherTests
     }
 
     /// <summary>Typing while the write runs — now possible, since the
-    /// dispatcher pumps — lands on disk as the snapshot, not the newer
+    /// dispatcher is free — lands on disk as the snapshot, not the newer
     /// text: the tab says it saved, stays dirty with the edit kept, and
     /// undoing back to the saved text makes it clean again.</summary>
     [Fact]
@@ -195,7 +197,7 @@ public sealed class SaveOffDispatcherTests
     {
         switch (action)
         {
-            case "save": host.Workspace.SaveActiveCommand.Execute(null); break;
+            case "save": host.Workspace.SaveActiveAndSettle(); break;
             case "save-all": host.Workspace.SaveAll(); break;
             case "close": host.Workspace.CloseTabCommand.Execute(tab); break;
             default: throw new ArgumentOutOfRangeException(nameof(action), action, null);

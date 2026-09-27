@@ -9,11 +9,12 @@ namespace SlateWindows;
 /// #1280 (locked decision 05 §4.1; contract 35 A-1): every save in a
 /// workspace runs through one coordinator.
 /// <list type="bullet">
-/// <item>Saves to one canonical path run strictly one after another across
-/// EVERY tab at that path: each starts, on the dispatcher, only after the
-/// previous one has published, so it snapshots the content hash that
-/// publication recorded — a same-path peer's save never races a second CAS
-/// write from the same old hash into a false "modified externally".</item>
+/// <item>Saves to one file run strictly one after another across EVERY tab
+/// on it: each starts, on the dispatcher, only after the previous one has
+/// published, so it snapshots the content hash that publication recorded —
+/// a same-path peer's save never races a second CAS write from the same old
+/// hash into a false "modified externally". A rename carries the chain: the
+/// new path's saves wait for every save admitted under the old path.</item>
 /// <item>The worker phase is tracked apart from the dispatcher publication,
 /// so teardown joins every worker without depending on a dispatcher
 /// callback — no write lands, and no worker calls core, after the session is
@@ -26,7 +27,7 @@ namespace SlateWindows;
 internal sealed class WorkspaceSaveCoordinator
 {
     private readonly Dispatcher _dispatcher;
-    private readonly Dictionary<string, Task<bool>> _tails = new(StringComparer.Ordinal);
+    private readonly Dictionary<string, Task> _tails = new(StringComparer.Ordinal);
     private readonly Lock _workersGate = new();
     private readonly HashSet<Task> _workers = [];
     private int _pending;
@@ -55,15 +56,23 @@ internal sealed class WorkspaceSaveCoordinator
         }
     }
 
+    /// <summary>#1280 test seam: runs on the joining thread as teardown
+    /// begins to join the save workers — a fact releases a parked worker
+    /// here, deterministically inside the join.</summary>
+    internal Action? BeforeJoinForTests { get; set; }
+
     /// <summary>The serialization keys of a tab's save: the tab itself — so
     /// its saves stay ordered across a rename that changes its path — and,
-    /// for a note, its path folded (NFC, lowercase), so every tab on one file
-    /// shares the chain. Folding can only merge chains, never split one, and
-    /// a merged chain costs ordering, never correctness.</summary>
+    /// for a note, its file (<see cref="PathKey"/>), so every tab on one file
+    /// shares the chain.</summary>
     internal static string[] KeysFor(Guid tab, string? path) =>
-        path is { Length: > 0 }
-            ? [$"tab:{tab:N}", $"path:{path.Normalize(System.Text.NormalizationForm.FormC).ToLowerInvariant()}"]
-            : [$"tab:{tab:N}"];
+        path is { Length: > 0 } ? [$"tab:{tab:N}", PathKey(path)] : [$"tab:{tab:N}"];
+
+    /// <summary>A file's chain key: its path folded (NFC, lowercase). Folding
+    /// can only merge chains, never split one, and a merged chain costs
+    /// ordering, never correctness.</summary>
+    private static string PathKey(string path) =>
+        $"path:{path.Normalize(System.Text.NormalizationForm.FormC).ToLowerInvariant()}";
 
     /// <summary>Admit a save under <paramref name="keys"/>. <paramref name="start"/>
     /// runs on the dispatcher once every earlier save under ANY of the keys
@@ -83,9 +92,9 @@ internal sealed class WorkspaceSaveCoordinator
         {
             _idle = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
         }
-        Task<bool>[] previous = [.. keys
+        Task[] previous = [.. keys
             .Select(key => _tails.GetValueOrDefault(key))
-            .OfType<Task<bool>>()
+            .OfType<Task>()
             .Where(tail => !tail.IsCompleted)
             .Distinct()];
         foreach (string key in keys)
@@ -107,6 +116,28 @@ internal sealed class WorkspaceSaveCoordinator
                 TaskScheduler.Default);
         }
         return ticket.Task;
+    }
+
+    /// <summary>
+    /// The file at <paramref name="oldPath"/> is now <paramref name="newPath"/>
+    /// (#1280, codex round 2a): the new path's chain continues from the old
+    /// path's tail, so every save admitted under the new path waits for every
+    /// save admitted before the rename — a peer's save after a rename starts
+    /// from the hash the pre-rename write published, never beside it.
+    /// </summary>
+    internal void ContinueChain(string oldPath, string newPath)
+    {
+        _dispatcher.VerifyAccess();
+        string from = PathKey(oldPath);
+        string to = PathKey(newPath);
+        if (string.Equals(from, to, StringComparison.Ordinal)
+            || _tails.GetValueOrDefault(from) is not { IsCompleted: false } before)
+        {
+            return;
+        }
+        _tails[to] = _tails.GetValueOrDefault(to) is { IsCompleted: false } already
+            ? Task.WhenAll(before, already)
+            : before;
     }
 
     private void Run(SaveTicket ticket, Action<SaveTicket> start)
@@ -175,6 +206,7 @@ internal sealed class WorkspaceSaveCoordinator
         {
             workers = [.. _workers];
         }
+        BeforeJoinForTests?.Invoke();
         foreach (Task worker in workers)
         {
             try
@@ -193,7 +225,7 @@ internal sealed class WorkspaceSaveCoordinator
     {
         foreach (string key in ticket.Keys)
         {
-            if (_tails.TryGetValue(key, out Task<bool>? tail)
+            if (_tails.TryGetValue(key, out Task? tail)
                 && ReferenceEquals(tail, ticket.Task))
             {
                 _tails.Remove(key);
@@ -252,9 +284,20 @@ internal sealed class WorkspaceSaveCoordinator
 /// <summary>#1280: a wait that keeps the dispatcher pumping — a nested
 /// frame that ends when the task completes. Everything the dispatcher can
 /// run may run inside it, so a caller re-reads what it acts on afterwards
-/// (the pumped-wait invariant, contract 38 D-10).</summary>
+/// (the pumped-wait invariant, contract 38 D-10). Only the callers that need
+/// a synchronous yes/no wait here: close tab, close pane, the replace gate
+/// and vault teardown with its Save All — never the Save command.</summary>
 internal static class PumpedWait
 {
+    // Per thread: a frame is entered on its dispatcher's thread, and facts
+    // running in parallel on other threads must not move this one's count.
+    [ThreadStatic]
+    private static int _framesEntered;
+
+    /// <summary>#1280 test seam: nested frames this thread has entered, ever
+    /// — a fact proves a caller returned without pumping.</summary>
+    internal static int FramesEnteredForTests => _framesEntered;
+
     /// <summary>True when <paramref name="task"/> completed; false when the
     /// dispatcher shut down first.</summary>
     internal static bool Until(Dispatcher dispatcher, Task task)
@@ -271,6 +314,7 @@ internal static class PumpedWait
             CancellationToken.None,
             TaskContinuationOptions.None,
             TaskScheduler.Default);
+        _framesEntered++;
         Dispatcher.PushFrame(frame);
         return task.IsCompleted;
     }

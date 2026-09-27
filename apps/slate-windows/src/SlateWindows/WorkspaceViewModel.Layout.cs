@@ -519,9 +519,10 @@ internal sealed partial class WorkspaceViewModel
         // tab closed or moved, an edit, a teardown can land inside it — so
         // admission works in rounds over the pane's CURRENT tabs, and the
         // pane closes only after a round in which nothing pumped: every tab
-        // it disposes is clean, or approved for discard at its current
-        // edit, at the moment it is disposed.
-        var discarded = new Dictionary<WorkspaceTabViewModel, long>(ReferenceEqualityComparer.Instance);
+        // it disposes has no save pending, and is clean or approved for
+        // discard at exactly the item and edit it was asked about.
+        var discarded = new Dictionary<WorkspaceTabViewModel, (WorkspaceItemState Item, long Revision)>(
+            ReferenceEqualityComparer.Instance);
         for (int round = 0; ; round++)
         {
             if (_workspaceDisposed || Groups.Count <= 1 || !Groups.Contains(group)
@@ -529,21 +530,45 @@ internal sealed partial class WorkspaceViewModel
             {
                 return;
             }
+            // Codex round 2a: the pane's admitted saves settle before any of
+            // its tabs is asked about or approved — a Ctrl+S still writing
+            // never lands after the user's Discard. All of them in one round,
+            // so a pane of saving tabs never runs out of rounds; the settle
+            // pumped, so the next round reads everything again.
+            if (group.Tabs.Any(tab => tab.HasPendingSaves))
+            {
+                foreach (WorkspaceTabViewModel tab in group.Tabs.ToArray())
+                {
+                    if (tab.HasPendingSaves && !tab.SettleSaves())
+                    {
+                        return;
+                    }
+                }
+                continue;
+            }
             TabSetStamp stamp = CaptureTabSet();
             bool pumped = false;
             foreach (WorkspaceTabViewModel tab in group.Tabs.ToArray())
             {
                 if (!tab.IsDirty
-                    || (discarded.TryGetValue(tab, out long approvedAt)
-                        && approvedAt == tab.EditRevision))
+                    || (discarded.TryGetValue(tab, out (WorkspaceItemState Item, long Revision) approved)
+                        && approved == (tab.Item, tab.EditRevision)))
                 {
                     continue;
                 }
                 pumped = true;
+                // What the prompt asks about, read BEFORE it opens.
+                (WorkspaceItemState Item, long Revision) asked = (tab.Item, tab.EditRevision);
                 switch (_dirtyCloseDecision(tab))
                 {
                     case WorkspaceDirtyNavigationDecision.Discard:
-                        discarded[tab] = tab.EditRevision;
+                        // Approved only for exactly what was asked about, with
+                        // nothing pending; an edit or a save that landed while
+                        // the prompt was up is asked about again.
+                        if (!tab.HasPendingSaves && asked == (tab.Item, tab.EditRevision))
+                        {
+                            discarded[tab] = asked;
+                        }
                         break;
                     case WorkspaceDirtyNavigationDecision.Save:
                         // A save retired by a rename under it gave the tab a
@@ -606,33 +631,51 @@ internal sealed partial class WorkspaceViewModel
 
     /// <summary>
     /// Admit replacing or closing a dirty tab (#1280, the pumped-wait
-    /// invariant): ask, then — because the prompt is modal and a Save pumps
-    /// with the window enabled — re-check <paramref name="stillValid"/>
-    /// after every frame and ask again while the tab is dirty. Discard is
-    /// an approval of the edit the user was asked about, pinned to its edit
-    /// revision; anything typed after it is asked about again. True when
-    /// the tab is clean or approved and still valid; false on Cancel, a
-    /// failed save, an invalidated caller, or too many rounds. A save that
-    /// failed because the tab's file was renamed under it (the write was
-    /// retired, the tab now shows the new path) is not a refusal: the tab
-    /// has a new identity, and it is asked about again.
+    /// invariant; codex rounds 1 and 2a). Every step that can pump — settling
+    /// the tab's own saves, the modal prompt, a Save — is followed by a
+    /// re-check of <paramref name="stillValid"/>, and admission restarts
+    /// whenever what it read changed:
+    /// <list type="bullet">
+    /// <item>The tab's admitted saves settle BEFORE it is asked about, and
+    /// again before Discard is accepted: a Ctrl+S still writing never lands
+    /// after the user chose Discard, and a tab the settle made clean is not
+    /// asked about at all.</item>
+    /// <item>What the prompt asks about — the tab's item and edit revision —
+    /// is read BEFORE the prompt opens, and Discard is accepted only when
+    /// that exact pair still holds afterwards: an edit that lands while the
+    /// prompt is up is asked about again, never discarded unasked.</item>
+    /// </list>
+    /// True when the tab is clean, or its Discard was accepted, and it is
+    /// still valid; false on Cancel, a failed save, an invalidated caller or
+    /// too many rounds. A save that failed because the tab's file was
+    /// renamed under it (the write was retired; the tab now shows the new
+    /// path) is not a refusal: the tab has a new identity, and it is asked
+    /// about again.
     /// </summary>
     private bool AdmitDirtyTab(
         WorkspaceTabViewModel tab,
         Func<WorkspaceDirtyNavigationDecision> ask,
         Func<bool> stillValid)
     {
-        long? discardedAt = null;
         for (int round = 0; round < MaxPumpedAdmissionRounds; round++)
         {
             if (!stillValid())
             {
                 return false;
             }
-            if (!tab.IsDirty || discardedAt == tab.EditRevision)
+            if (tab.HasPendingSaves)
+            {
+                if (!tab.SettleSaves())
+                {
+                    return false;
+                }
+                continue;
+            }
+            if (!tab.IsDirty)
             {
                 return true;
             }
+            (WorkspaceItemState Item, long Revision) asked = (tab.Item, tab.EditRevision);
             WorkspaceDirtyNavigationDecision decision = ask();
             if (!stillValid())
             {
@@ -641,7 +684,12 @@ internal sealed partial class WorkspaceViewModel
             switch (decision)
             {
                 case WorkspaceDirtyNavigationDecision.Discard:
-                    discardedAt = tab.EditRevision;
+                    if (!tab.HasPendingSaves && asked == (tab.Item, tab.EditRevision))
+                    {
+                        return true;
+                    }
+                    // A save admitted, or an edit made, while the prompt was
+                    // up: settle it and ask again.
                     break;
                 case WorkspaceDirtyNavigationDecision.Save:
                     WorkspaceItemState saving = tab.Item;

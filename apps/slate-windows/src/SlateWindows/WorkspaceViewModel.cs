@@ -106,6 +106,11 @@ internal sealed partial class WorkspaceTabViewModel : BindableBase, IDisposable
     // (retarget) or deleted (invalidated) under the write.
     private int _saveEpoch;
     private int _itemEpoch;
+    // #1280 (codex round 2a): the tab's queued save — admitted, not yet
+    // started, joined by later requests — and its latest admitted save,
+    // which a dirty-tab admission settles before it asks.
+    private SaveBatch? _queuedSave;
+    private Task<bool> _latestSave = Task.FromResult(true);
     private bool _taskToggleInFlight;
     private int _taskToggleGeneration;
     private int _anchorNavigationGeneration;
@@ -635,30 +640,106 @@ internal sealed partial class WorkspaceTabViewModel : BindableBase, IDisposable
         }
     }
 
-    /// <summary>Save the note and report whether it is saved (#1280;
-    /// locked decision 05 §4.1). The core write runs on a worker; this
-    /// caller — the explicit Save, Save All, save-before-close and the
-    /// dirty-navigation gate, all of which decide on the answer — waits in
-    /// a nested dispatcher frame, so the dispatcher keeps pumping input,
-    /// focus, the inline status and every notification while the file and
-    /// index work runs. Anything may run inside that frame: every caller
+    /// <summary>Save the note and report whether it is saved (#1280). The
+    /// core write runs on a worker; this caller — Save All, save-before-close
+    /// and the dirty-navigation gate, each of which decides on the answer —
+    /// waits in a nested dispatcher frame, so the dispatcher keeps pumping
+    /// input, focus, the inline status and every notification while the file
+    /// and index work runs. Anything may run inside that frame: every caller
     /// re-reads what it acts on after this returns (the pumped-wait
-    /// invariant, contract 38 D-10). <paramref name="onSaved"/> runs on the
-    /// dispatcher when this save lands, in save order.</summary>
-    public bool Save(Action? onSaved = null) =>
-        PumpedWait.Result(_dispatcher, SaveAsync(onSaved));
+    /// invariant, contract 38 D-10). The explicit Save command never waits
+    /// here: it requests the save and returns (<see cref="SaveAsync"/>).</summary>
+    public bool Save() => PumpedWait.Result(_dispatcher, SaveAsync());
 
-    /// <summary>The save pipeline (#1280): admitted through the workspace's
-    /// coordinator, which serializes every save to this canonical path —
-    /// across peer tabs too — so each starts after the previous one has
-    /// published, from a fresh snapshot, and publishes exactly once, in
-    /// order, on the dispatcher.</summary>
-    internal Task<bool> SaveAsync(Action? onSaved = null)
+    /// <summary>
+    /// Request a save (#1280). Saves are serialized through the workspace's
+    /// coordinator — per tab and per file, across peer tabs — and COALESCED
+    /// per tab (codex round 2a): at most one save is writing and one is
+    /// queued, and a request made while one is queued joins it. The queued
+    /// save captures the editor's state when it STARTS, so a joined request
+    /// is served by a write that includes everything typed before it began;
+    /// every joined request's <paramref name="onSaved"/> runs on that one
+    /// publication, which confirms it with one NoteSaved when any joined
+    /// request asked it to <paramref name="announce"/>. A request is for the
+    /// item the tab shows when it is made: a queued save whose tab was
+    /// re-pointed at another item before it started (a Files selection
+    /// replacing a transient tab) is retired silently, and a later request
+    /// queues its own save instead of joining it.
+    /// </summary>
+    internal Task<bool> SaveAsync(Action? onSaved = null, bool announce = false)
     {
         _dispatcher.VerifyAccess();
-        return Saves.Enqueue(
+        if (_queuedSave is { } queued && queued.ItemEpoch == _itemEpoch)
+        {
+            queued.Join(onSaved, announce);
+            return queued.Completion;
+        }
+
+        var batch = new SaveBatch(onSaved, announce, _itemEpoch);
+        _queuedSave = batch;
+        Task<bool> completion = Saves.Enqueue(
             WorkspaceSaveCoordinator.KeysFor(Id, IsMarkdown ? Path : null),
-            ticket => StartSave(onSaved, ticket));
+            ticket =>
+            {
+                if (ReferenceEquals(_queuedSave, batch))
+                {
+                    _queuedSave = null;
+                }
+                StartSave(batch, ticket);
+            });
+        if (completion.IsCompleted && ReferenceEquals(_queuedSave, batch))
+        {
+            // Refused before it could start (a closed coordinator).
+            _queuedSave = null;
+        }
+        batch.Completion = completion;
+        _latestSave = completion;
+        return completion;
+    }
+
+    /// <summary>True while a save this tab admitted has not published.</summary>
+    internal bool HasPendingSaves => !_latestSave.IsCompleted;
+
+    /// <summary>Pump until every save this tab admitted — one admitted
+    /// meanwhile included — has published (#1280, codex round 2a): a dirty
+    /// tab's admission settles the tab's own saves before it asks, and again
+    /// before it accepts Discard, so no admitted write lands after the user
+    /// chose to discard. False only when the dispatcher shut down.</summary>
+    internal bool SettleSaves()
+    {
+        _dispatcher.VerifyAccess();
+        while (!_latestSave.IsCompleted)
+        {
+            if (!PumpedWait.Until(_dispatcher, _latestSave))
+            {
+                return false;
+            }
+        }
+        return true;
+    }
+
+    /// <summary>One queued save and every request that joined it, for the
+    /// item the tab showed when the first of them was made.</summary>
+    private sealed class SaveBatch(Action? onSaved, bool announce, int itemEpoch)
+    {
+        private readonly List<Action> _onSaved = onSaved is null ? [] : [onSaved];
+
+        internal int ItemEpoch { get; } = itemEpoch;
+
+        internal bool Announce { get; private set; } = announce;
+
+        internal Task<bool> Completion { get; set; } = Task.FromResult(false);
+
+        internal IReadOnlyList<Action> OnSaved => _onSaved;
+
+        internal void Join(Action? onSaved, bool announce)
+        {
+            if (onSaved is not null)
+            {
+                _onSaved.Add(onSaved);
+            }
+            Announce |= announce;
+        }
     }
 
     /// <summary>The workspace's save coordinator; a tab built on its own
@@ -688,16 +769,19 @@ internal sealed partial class WorkspaceTabViewModel : BindableBase, IDisposable
 
     /// <summary>The dispatcher half before the write: the snapshot, the
     /// integrity refusal and the repair lease; then the worker.</summary>
-    private void StartSave(Action? onSaved, WorkspaceSaveCoordinator.SaveTicket ticket)
+    private void StartSave(SaveBatch batch, WorkspaceSaveCoordinator.SaveTicket ticket)
     {
-        if (_disposed)
+        // Disposed, or re-pointed at another item while the save waited its
+        // turn: nothing of what was requested is here to save, and the
+        // publication speaks only to the item it was requested for.
+        if (_disposed || batch.ItemEpoch != _itemEpoch)
         {
             ticket.Complete(false);
             return;
         }
         if (!IsMarkdown || !IsDirty)
         {
-            onSaved?.Invoke();
+            PublishSaved(batch.Announce, batch.OnSaved, Path);
             ticket.Complete(true);
             return;
         }
@@ -743,7 +827,8 @@ internal sealed partial class WorkspaceTabViewModel : BindableBase, IDisposable
             _saveEpoch,
             _itemEpoch,
             TaskRepairs,
-            onSaved);
+            [.. batch.OnSaved],
+            batch.Announce);
         request.Repairs?.BeginMutation(request.Path);
         Action? hook = SaveWriteHookForTests;
         Action? written = SaveWrittenHookForTests;
@@ -784,7 +869,8 @@ internal sealed partial class WorkspaceTabViewModel : BindableBase, IDisposable
         int Epoch,
         int ItemEpoch,
         Panels.TaskIndexRepairCoordinator? Repairs,
-        Action? OnSaved);
+        IReadOnlyList<Action> OnSaved,
+        bool Announce);
 
     private sealed record SaveWrite(string NewContentHash, string? Caveat);
 
@@ -862,7 +948,7 @@ internal sealed partial class WorkspaceTabViewModel : BindableBase, IDisposable
                 ? $"Saved {System.IO.Path.GetFileName(request.Path)}."
                 : $"Saved {System.IO.Path.GetFileName(request.Path)}. {saved.Caveat}";
             _documentChanged?.Invoke(this, null);
-            request.OnSaved?.Invoke();
+            PublishSaved(request.Announce, request.OnSaved, request.Path);
             return true;
         }
         catch (VaultException exception)
@@ -916,6 +1002,22 @@ internal sealed partial class WorkspaceTabViewModel : BindableBase, IDisposable
             }
         }
     }
+
+    /// <summary>The one confirmation of a save (#1280): NoteSaved once, when
+    /// any request the save served asked for it (the explicit Save command),
+    /// then every served request's callback — however many joined.</summary>
+    private void PublishSaved(bool announce, IReadOnlyList<Action> onSaved, string path)
+    {
+        if (announce)
+        {
+            _announce(new A11yEvent.NoteSaved(System.IO.Path.GetFileName(path)));
+        }
+        foreach (Action callback in onSaved)
+        {
+            callback();
+        }
+    }
+
     /// <summary>The landed write's bytes become the tab's saved state: the
     /// content hash, and the editor's baseline — behind any edit typed while
     /// the write ran, which keeps the tab dirty.</summary>
@@ -2417,6 +2519,22 @@ internal sealed partial class WorkspaceViewModel : BindableBase, IDisposable
     /// <summary>#1280: true when no admitted save is waiting or writing.</summary>
     internal bool SavesIdle => _saves.IsIdle;
 
+    /// <summary>#1280 (codex round 2a): every dirty tab and exactly what a
+    /// teardown prompt asks about it — its item and edit revision — read
+    /// before the prompt opens.</summary>
+    internal IReadOnlyList<(WorkspaceTabViewModel Tab, WorkspaceItemState Item, long Revision)>
+        DirtyTabsForPrompt() =>
+        [.. Groups
+            .SelectMany(group => group.Tabs)
+            .Where(tab => !tab.IsDisposed && tab.IsDirty)
+            .Select(tab => (tab, tab.Item, tab.EditRevision))];
+
+    /// <summary>True when the dirty tabs are still exactly
+    /// <paramref name="asked"/>: the same tabs, items and edits.</summary>
+    internal bool DirtyTabsStill(
+        IReadOnlyList<(WorkspaceTabViewModel Tab, WorkspaceItemState Item, long Revision)> asked) =>
+        DirtyTabsForPrompt().SequenceEqual(asked);
+
     /// <summary>#1280 test seam: the workspace's save coordinator.</summary>
     internal WorkspaceSaveCoordinator SavesForTests => _saves;
 
@@ -2434,6 +2552,10 @@ internal sealed partial class WorkspaceViewModel : BindableBase, IDisposable
             if (IsPathBacked(tab.Item)
                 && TryRetargetPath(tab.Path, source, destination, out string retargeted))
             {
+                // #1280 (codex round 2a): the renamed file's save chain
+                // continues from the old path's, so a peer's save after the
+                // rename starts from the hash a pre-rename write published.
+                _saves.ContinueChain(tab.Path, retargeted);
                 tab.RetargetPath(retargeted);
             }
         }
@@ -2713,22 +2835,47 @@ internal sealed partial class WorkspaceViewModel : BindableBase, IDisposable
             return;
         }
 
-        // #1280: the confirmation publishes when THIS save lands, from the
-        // tab's save chain — so two quick saves announce once each, in
-        // order, however the nested dispatcher frames unwind.
-        tab.Save(onSaved: () =>
-        {
-            _announce(new A11yEvent.NoteSaved(System.IO.Path.GetFileName(tab.Path)));
-            // Headings move under edits — the outline leaf re-reads
-            // after a save (link rows deliberately do not; mac parity).
-            NotePersisted(tab.Path);
-            // W4-4: frontmatter can be hand-edited in the whole-file
-            // buffer on Windows — the header re-derives from the
-            // just-saved bytes so its rows and CAS tokens are never
-            // a stale generation behind the tab (contract 4).
-            RefreshPropertiesFor(tab.Path);
-        });
+        // #1280 (codex round 2a): the explicit Save requests the write and
+        // returns — it never waits in a frame, so holding Ctrl+S nests
+        // nothing, and requests made while a save is queued join it (one
+        // write, one confirmation). The tab's publication speaks NoteSaved;
+        // what follows a landed save runs from there.
+        ObserveSave(tab.SaveAsync(
+            onSaved: () =>
+            {
+                // Headings move under edits — the outline leaf re-reads
+                // after a save (link rows deliberately do not; mac parity).
+                NotePersisted(tab.Path);
+                // W4-4: frontmatter can be hand-edited in the whole-file
+                // buffer on Windows — the header re-derives from the
+                // just-saved bytes so its rows and CAS tokens are never
+                // a stale generation behind the tab (contract 4).
+                RefreshPropertiesFor(tab.Path);
+            },
+            announce: true));
     }
+
+    /// <summary>#1280: a save nobody waits on still has its failure
+    /// observed. The D-10 outcome of a refused write is spoken by the
+    /// publication; a fault past it (a bug) goes to the durable log instead
+    /// of vanishing as an unobserved task.</summary>
+    private void ObserveSave(Task<bool> save) =>
+        save.ContinueWith(
+            failed =>
+            {
+                Interlocked.Increment(ref _saveFailuresObservedForTests);
+                HostLog.Write(
+                    HostDiagnosticEvent.VaultCommandFailed,
+                    failed.Exception!.GetBaseException());
+            },
+            CancellationToken.None,
+            TaskContinuationOptions.OnlyOnFaulted | TaskContinuationOptions.ExecuteSynchronously,
+            TaskScheduler.Default);
+
+    private int _saveFailuresObservedForTests;
+
+    /// <summary>#1280 test seam: faulted saves the Save command observed.</summary>
+    internal int SaveFailuresObservedForTests => Volatile.Read(ref _saveFailuresObservedForTests);
 
     private static WorkspaceItemState ItemForPath(string path)
     {

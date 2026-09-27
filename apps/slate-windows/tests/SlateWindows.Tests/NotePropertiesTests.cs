@@ -623,7 +623,7 @@ public sealed class NotePropertiesTests
             // Typing YAML directly into the buffer and saving must
             // re-derive the header (contract 4 via the save funnel).
             tab.Text = "---\nonly: value\nadded: fresh\n---\nBody.\n";
-            workspace.SaveActiveCommand.Execute(null);
+            workspace.SaveActiveAndSettle();
             WaitForUi(() => properties.Rows.Count == 2);
             Assert.Equal(
                 new[] { "only", "added" },
@@ -782,7 +782,7 @@ public sealed class NotePropertiesTests
             // direct refresh both rebuild rows from authoritative
             // bytes — the uncommitted draft must survive the rebuild.
             properties.Rows[0].EditorText = "Uncommitted";
-            workspace.SaveActiveCommand.Execute(null);
+            workspace.SaveActiveAndSettle();
             properties.RefreshProperties();
             PropertyRowViewModel title = properties.Rows[0];
             Assert.Equal("Uncommitted", title.EditorText);
