@@ -95,6 +95,95 @@ public sealed class RightPaneLeafRegionTests
         Assert.Equal(["Due today, 0 tasks"], renamedWhileFocused);
     });
 
+    /// <summary>The owner's S2 and the completeness sweep's G2: the
+    /// Bibliography segments are a Windows radio group. Right on "Entries"
+    /// moved focus to "Unresolved" without checking it, the Entries grid
+    /// stayed on screen, and the next Right left the leaf. Now the arrow
+    /// checks the segment it reaches before it takes the keys, the leaf
+    /// switches to it, nothing is announced on top (segment switches never
+    /// are, §2.6), and every further arrow stays in the group.</summary>
+    [Fact]
+    public void AnArrowOnTheBibliographySegmentsSwitchesTheSegment() => RunSta(() =>
+    {
+        using var host = new Host();
+        host.Initialize("bibliography", ("a.md", "# A\n"));
+        host.AttachWorkspaceToTheWindow();
+        RadioButton entries = host.ElementWithId<RadioButton>("BibliographySegmentEntries");
+        RadioButton unresolved = host.ElementWithId<RadioButton>("BibliographySegmentUnresolved");
+        Assert.True(entries.IsChecked, "premise: Entries is not the checked segment.");
+        Assert.True(entries.Focus());
+        bool? checkedWhenFocused = null;
+        unresolved.GotKeyboardFocus += (_, _) => checkedWhenFocused ??= unresolved.IsChecked;
+        host.ForgetFocusAndSpeech();
+
+        host.Press(Key.Right);
+
+        Assert.Same(unresolved, Keyboard.FocusedElement);
+        Assert.True(checkedWhenFocused, "the segment took the keys unchecked");
+        Assert.Equal(Panels.BibliographySegment.Unresolved, host.Workspace.Bibliography.Segment);
+        Assert.True(host.Announced.Count == 0, $"the arrow posted authored lines: {host.Order}");
+
+        host.Press(Key.Right);
+        Assert.Same(entries, Keyboard.FocusedElement);
+        Assert.Equal(Panels.BibliographySegment.Entries, host.Workspace.Bibliography.Segment);
+    });
+
+    /// <summary>The History segments likewise (S2, G2): Right on "This note"
+    /// focused "Deleted" unchecked while the version list stayed, and from
+    /// either end an arrow walked out of the leaf. The arrow checks the
+    /// segment it reaches first, the view switches, and the next arrow wraps
+    /// in the group.</summary>
+    [Fact]
+    public void AnArrowOnTheHistorySegmentsSwitchesTheSegment() => RunSta(() =>
+    {
+        using var host = new Host();
+        host.Initialize("history", ("a.md", "# A\n"));
+        RadioButton thisNote = host.ElementWithId<RadioButton>("HistorySegmentThisNote");
+        RadioButton deleted = host.ElementWithId<RadioButton>("HistorySegmentDeleted");
+        Panels.HistorySurfaceView view = host.Descendant<Panels.HistorySurfaceView>();
+        Assert.True(thisNote.Focus());
+        bool? checkedWhenFocused = null;
+        deleted.GotKeyboardFocus += (_, _) => checkedWhenFocused ??= deleted.IsChecked;
+        host.ForgetFocusAndSpeech();
+
+        host.Press(Key.Right);
+
+        Assert.Same(deleted, Keyboard.FocusedElement);
+        Assert.True(checkedWhenFocused, "the segment took the keys unchecked");
+        Assert.True(DeletedSegmentActive(view), "the view did not switch to the Deleted segment");
+        Assert.True(host.Announced.Count == 0, $"the arrow posted authored lines: {host.Order}");
+
+        host.Press(Key.Right);
+        Assert.Same(thisNote, Keyboard.FocusedElement);
+        Assert.False(DeletedSegmentActive(view));
+        Assert.True(host.VisibleLeafBody().IsKeyboardFocusWithin);
+    });
+
+    /// <summary>The completeness sweep's G15: a leaf's landing on a radio
+    /// group is its CHECKED radio. Ctrl+R with "Overdue" checked put the
+    /// reader on the unchecked "All", and the next arrow committed a filter
+    /// one step from the wrong place.</summary>
+    [Fact]
+    public void ALeafRevealLandsOnTheCheckedFilter() => RunSta(() =>
+    {
+        using var host = new Host();
+        host.Initialize("tasksReview", ("todo.md", "- [ ] late one 📅 2020-01-01\n"));
+        TasksReviewViewModel review = host.Workspace.TasksReview;
+        review.EnsureLoaded();
+        review.OverdueFilterActive = true;
+        Assert.True(PumpedDispatcher.PumpUntil(() => !review.IsLoading && review.OverdueFilterActive), "premise: the Overdue page never published.");
+        RadioButton overdue = host.ElementWithId<RadioButton>("PanelReviewFilterOverdue");
+        Assert.True(overdue.IsChecked);
+
+        host.Shell.LandInRightPane();
+
+        Assert.Same(overdue, Keyboard.FocusedElement);
+    });
+
+    private static bool DeletedSegmentActive(Panels.HistorySurfaceView view) =>
+        (bool)(typeof(Panels.HistorySurfaceView).GetField("_deletedSegmentActive", BindingFlags.Instance | BindingFlags.NonPublic)
+            ?? throw new InvalidOperationException("_deletedSegmentActive is gone")).GetValue(view)!;
+
     public static TheoryData<string, string, Key> LeafStops()
     {
         var data = new TheoryData<string, string, Key>();
@@ -339,6 +428,10 @@ public sealed class RightPaneLeafRegionTests
             where T : DependencyObject =>
             Descendants(_leafHost).OfType<T>().First(element => AutomationProperties.GetAutomationId(element) == automationId
                 || (element is FrameworkElement { Name: { } name } && name == automationId));
+
+        public T Descendant<T>()
+            where T : DependencyObject =>
+            Descendants(_leafHost).OfType<T>().First();
 
         public FrameworkElement VisibleLeafBody() =>
             _leafHost.Children.OfType<FrameworkElement>().Single(body => Grid.GetColumn(body) == 0 && body.IsVisible);

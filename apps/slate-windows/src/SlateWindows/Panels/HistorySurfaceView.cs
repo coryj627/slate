@@ -79,6 +79,15 @@ internal sealed class HistorySurfaceView : UserControl
         };
         segments.Children.Add(_segmentThisNote);
         segments.Children.Add(_segmentDeleted);
+        // W7-7 PR 4 (#1247, R-5; the owner's S2, the sweep's G2): a Windows
+        // radio group — an arrow checks the segment it reaches (it moved
+        // focus alone while the version list stayed, and walked out of the
+        // leaf from either end), Cycle keeps every other arrow in the group,
+        // one Tab stop, the checked segment its stop. Switching still never
+        // announces (H2): an arrow is the focus speech alone.
+        KeyboardNavigation.SetTabNavigation(segments, KeyboardNavigationMode.Once);
+        KeyboardNavigation.SetDirectionalNavigation(segments, KeyboardNavigationMode.Cycle);
+        RadioGroupArrows.SetIsEnabled(segments, true);
         // The group name rides a LANDMARK border, never the panel —
         // a StackPanel gets no peer and the name is dropped (the
         // recorded W4-5 bibliography fix, re-learned in red team

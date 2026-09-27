@@ -1838,7 +1838,16 @@
                                         Margin="0,0,0,6"
                                         AutomationProperties.AutomationId="BibliographySegmentGroup"
                                         AutomationProperties.Name="{x:Static panels:CitationPhrase.BibliographySegmentName}">
-                                <StackPanel Orientation="Horizontal">
+                                <!-- W7-7 PR 4 (#1247, R-5; the owner's S2, the sweep's G2):
+                                     a Windows radio group — an arrow checks the segment
+                                     it reaches (it moved focus alone, and the Entries
+                                     grid stayed on screen), Cycle keeps every other
+                                     arrow in the group, one Tab stop, the checked
+                                     segment its stop. -->
+                                <StackPanel Orientation="Horizontal"
+                                            KeyboardNavigation.TabNavigation="Once"
+                                            KeyboardNavigation.DirectionalNavigation="Cycle"
+                                            local:RadioGroupArrows.IsEnabled="True">
                                     <RadioButton x:Name="BibliographyEntriesSegment"
                                                  GroupName="BibliographySegment"
                                                  Margin="0,0,12,0"
