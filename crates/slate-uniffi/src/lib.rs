@@ -1299,10 +1299,11 @@ impl VaultSession {
         Ok(report.into())
     }
 
-    /// W7-7 PR 7 (#1252, R-9): rescan the OPEN vault and retain its delta
-    /// as a Pending generation (`ScanReport.delta_generation`) for the
-    /// host to reconcile through `scan_delta_page`. Refused while a
-    /// Pending generation exists — resume it first.
+    /// W7-7 PR 7 (#1252, R-9): rescan the OPEN vault — the same
+    /// incremental walk as the open scan. It retains nothing: the host
+    /// re-synchronizes its surfaces from the index afterwards (AR-18's
+    /// fallback), comparing open documents through
+    /// `indexed_content_hashes`.
     pub fn rescan_with_progress(
         &self,
         cancel: Arc<CancelToken>,
@@ -1321,44 +1322,16 @@ impl VaultSession {
         Ok(self.inner.rescan_with_progress(&cancel.inner, None)?.into())
     }
 
-    /// The Pending delta generation and the cursor its effects reached.
-    pub fn scan_delta_pending(&self) -> Result<Option<ScanDeltaPending>, VaultError> {
-        Ok(self.inner.scan_delta_pending()?.map(Into::into))
-    }
-
-    /// The retained ledger: at most one Pending and one Applied generation.
-    pub fn scan_delta_ledger(&self) -> Result<ScanDeltaLedger, VaultError> {
-        Ok(self.inner.scan_delta_ledger()?.into())
-    }
-
-    /// One bounded, removal-first page of the Pending generation.
-    pub fn scan_delta_page(
+    /// W7-7 PR 7 (#1252, R-9): the index's committed content hash for
+    /// each path, in order — `None` where the index holds no such path.
+    /// Bounded (refused beyond `max_indexed_hash_paths()` paths) and
+    /// cancellable: a host asks for its open documents after a rescan.
+    pub fn indexed_content_hashes(
         &self,
-        generation: u64,
-        paging: Paging,
+        paths: Vec<String>,
         cancel: Arc<CancelToken>,
-    ) -> Result<ScanDeltaPage, VaultError> {
-        Ok(self
-            .inner
-            .scan_delta_page(generation, paging.into(), &cancel.inner)?
-            .into())
-    }
-
-    /// Every entry before `next_cursor` has had its effects applied;
-    /// `None` after the LAST page marks the generation Applied.
-    pub fn scan_delta_page_applied(
-        &self,
-        generation: u64,
-        next_cursor: Option<String>,
-    ) -> Result<(), VaultError> {
-        Ok(self
-            .inner
-            .scan_delta_page_applied(generation, next_cursor.as_deref())?)
-    }
-
-    /// Reduce the Applied generation into the spoken counts and release it.
-    pub fn scan_delta_release(&self) -> Result<ScanDeltaOutcome, VaultError> {
-        Ok(self.inner.scan_delta_release()?.into())
+    ) -> Result<Vec<Option<String>>, VaultError> {
+        Ok(self.inner.indexed_content_hashes(&paths, &cancel.inner)?)
     }
 
     /// Register a session-event listener (O-2 #540). Returns an opaque
@@ -6306,8 +6279,6 @@ pub struct ScanReport {
     pub files_removed: u64,
     /// False when the walk was partial or any error was recorded.
     pub complete: bool,
-    /// A rescan's retained delta generation; `None` for the open scan.
-    pub delta_generation: Option<u64>,
 }
 
 impl From<core::ScanReport> for ScanReport {
@@ -6322,15 +6293,13 @@ impl From<core::ScanReport> for ScanReport {
             files_changed: r.files_changed,
             files_removed: r.files_removed,
             complete: r.complete,
-            delta_generation: r.delta_generation,
         }
     }
 }
 
 /// The extensions of core's openable documents (W7-7 PR 7, round 26):
-/// the set `FileFilter::OpenableDocuments` lists and every delta row's
-/// `openable` flag classifies by, lowercase and without the dot. A host's
-/// own list is pinned equal to it.
+/// the set `FileFilter::OpenableDocuments` lists, lowercase and without
+/// the dot. A host's own list is pinned equal to it.
 #[uniffi::export]
 pub fn openable_document_extensions() -> Vec<String> {
     core::OPENABLE_DOCUMENT_EXTENSIONS
@@ -6350,123 +6319,10 @@ pub fn markdown_document_extensions() -> Vec<String> {
         .collect()
 }
 
-/// What one delta entry did to its path (W7-7 PR 7, R-9). No `Renamed`:
-/// an external rename is a removal plus a creation (AR-8).
-#[derive(Debug, Clone, Copy, PartialEq, Eq, uniffi::Enum)]
-pub enum ScanDeltaKind {
-    Removed,
-    Created,
-    Modified,
-}
-
-impl From<core::ScanDeltaKind> for ScanDeltaKind {
-    fn from(k: core::ScanDeltaKind) -> Self {
-        match k {
-            core::ScanDeltaKind::Removed => Self::Removed,
-            core::ScanDeltaKind::Created => Self::Created,
-            core::ScanDeltaKind::Modified => Self::Modified,
-        }
-    }
-}
-
-/// One entry of a rescan delta page. A `superseded` entry was overtaken
-/// by a Slate-owned write to its path after the scan recorded it: the
-/// host applies nothing for it and it is never spoken.
-#[derive(Debug, Clone, PartialEq, Eq, uniffi::Record)]
-pub struct ScanDeltaEntry {
-    pub kind: ScanDeltaKind,
-    pub path: String,
-    pub superseded: bool,
-    /// Core's document classification (round 26): whether the path is
-    /// one of the openable documents Quick Open lists.
-    pub openable: bool,
-}
-
-/// A bounded, removal-first page of the Pending delta generation.
-#[derive(Debug, Clone, PartialEq, Eq, uniffi::Record)]
-pub struct ScanDeltaPage {
-    pub generation: u64,
-    pub entries: Vec<ScanDeltaEntry>,
-    pub next_cursor: Option<String>,
-}
-
-impl From<core::ScanDeltaPage> for ScanDeltaPage {
-    fn from(p: core::ScanDeltaPage) -> Self {
-        Self {
-            generation: p.generation,
-            entries: p
-                .entries
-                .into_iter()
-                .map(|e| ScanDeltaEntry {
-                    kind: e.kind.into(),
-                    path: e.path,
-                    superseded: e.superseded,
-                    openable: e.openable,
-                })
-                .collect(),
-            next_cursor: p.next_cursor,
-        }
-    }
-}
-
-/// The Pending delta generation and the cursor its effects reached.
-#[derive(Debug, Clone, PartialEq, Eq, uniffi::Record)]
-pub struct ScanDeltaPending {
-    pub generation: u64,
-    pub cursor: Option<String>,
-    pub rows: u64,
-}
-
-impl From<core::ScanDeltaPending> for ScanDeltaPending {
-    fn from(p: core::ScanDeltaPending) -> Self {
-        Self {
-            generation: p.generation,
-            cursor: p.cursor,
-            rows: p.rows,
-        }
-    }
-}
-
-/// The one retained Applied delta generation.
-#[derive(Debug, Clone, PartialEq, Eq, uniffi::Record)]
-pub struct ScanDeltaApplied {
-    pub generation: u64,
-    pub rows: u64,
-}
-
-/// The whole retained ledger: at most one Pending and one Applied.
-#[derive(Debug, Clone, PartialEq, Eq, uniffi::Record)]
-pub struct ScanDeltaLedger {
-    pub pending: Option<ScanDeltaPending>,
-    pub applied: Option<ScanDeltaApplied>,
-}
-
-impl From<core::ScanDeltaLedger> for ScanDeltaLedger {
-    fn from(l: core::ScanDeltaLedger) -> Self {
-        Self {
-            pending: l.pending.map(Into::into),
-            applied: l.applied.map(|a| ScanDeltaApplied {
-                generation: a.generation,
-                rows: a.rows,
-            }),
-        }
-    }
-}
-
-/// A release's spoken counts, net per path since the previous release.
-#[derive(Debug, Clone, Copy, PartialEq, Eq, uniffi::Record)]
-pub struct ScanDeltaOutcome {
-    pub changed: u64,
-    pub removed: u64,
-}
-
-impl From<core::ScanDeltaOutcome> for ScanDeltaOutcome {
-    fn from(o: core::ScanDeltaOutcome) -> Self {
-        Self {
-            changed: o.changed,
-            removed: o.removed,
-        }
-    }
+/// The most paths one `indexed_content_hashes` call answers (W7-7 PR 7).
+#[uniffi::export]
+pub fn max_indexed_hash_paths() -> u32 {
+    core::MAX_INDEXED_HASH_PATHS as u32
 }
 
 // =====================================================================
@@ -13266,30 +13122,6 @@ mod tests {
                 })
                 .expect("a Finished event")
         }
-        fn settle(session: &VaultSession) {
-            let pending = session.scan_delta_pending().unwrap().expect("pending");
-            let mut cursor = pending.cursor;
-            loop {
-                let page = session
-                    .scan_delta_page(
-                        pending.generation,
-                        Paging {
-                            cursor,
-                            limit: 1000,
-                        },
-                        CancelToken::new(),
-                    )
-                    .unwrap();
-                session
-                    .scan_delta_page_applied(pending.generation, page.next_cursor.clone())
-                    .unwrap();
-                match page.next_cursor {
-                    Some(next) => cursor = Some(next),
-                    None => break,
-                }
-            }
-            session.scan_delta_release().unwrap();
-        }
         fn write_failing(root: &std::path::Path, fill: u8, len: usize) {
             for n in 0..FAILING {
                 std::fs::write(root.join(format!("big-{n:04}.md")), vec![fill; len]).unwrap();
@@ -13333,7 +13165,6 @@ mod tests {
         assert_eq!(report.error_count, FAILING as u64);
         assert!(!report.complete);
         assert_eq!(report.error_samples.len(), SCAN_ERROR_SAMPLES);
-        settle(&session);
 
         // A rescan with progress.
         write_failing(tmp.path(), b'z', 66);
@@ -13349,11 +13180,10 @@ mod tests {
         );
     }
 
-    /// Round 26: core exports its openable set, and a delta row carries the
-    /// classification that set implies — for the four Markdown extensions,
-    /// canvas and base (any case), and not for anything else.
+    /// Round 26: core exports its openable and Markdown sets — the host's
+    /// classification is pinned to them.
     #[test]
-    fn the_openable_set_and_the_delta_rows_classification_agree() {
+    fn core_exports_its_openable_and_markdown_sets() {
         assert_eq!(
             openable_document_extensions(),
             ["md", "markdown", "mdown", "mkd", "canvas", "base"]
@@ -13362,47 +13192,51 @@ mod tests {
             markdown_document_extensions(),
             ["md", "markdown", "mdown", "mkd"]
         );
+    }
+
+    /// W7-7 PR 7 (AR-18's fallback): the indexed hashes cross the FFI in
+    /// the caller's order, `None` for a path the index lacks; the call is
+    /// bounded and honours a cancelled token.
+    #[test]
+    fn indexed_content_hashes_cross_the_ffi_bounded_and_cancellable() {
         let tmp = tempfile::tempdir().expect("tempdir");
+        std::fs::write(tmp.path().join("a.md"), "alpha\n").unwrap();
+        std::fs::write(tmp.path().join("b.canvas"), "{}").unwrap();
         let session = VaultSession::open_filesystem(tmp.path().to_string_lossy().into_owned())
             .expect("open vault");
         session.scan_initial(CancelToken::new()).unwrap();
-        let files = [
-            ("a.md", true),
-            ("b.markdown", true),
-            ("c.mdown", true),
-            ("d.mkd", true),
-            ("e.canvas", true),
-            ("f.base", true),
-            ("G.MKD", true),
-            ("h.txt", false),
-            ("i.png", false),
-        ];
-        for (path, _) in files {
-            std::fs::write(tmp.path().join(path), "x\n").unwrap();
-        }
-        let generation = session
-            .rescan(CancelToken::new())
-            .unwrap()
-            .delta_generation
-            .unwrap();
-        let page = session
-            .scan_delta_page(
-                generation,
-                Paging {
-                    cursor: None,
-                    limit: 100,
-                },
+
+        let hashes = session
+            .indexed_content_hashes(
+                vec!["b.canvas".into(), "missing.md".into(), "a.md".into()],
                 CancelToken::new(),
             )
             .unwrap();
-        for (path, openable) in files {
-            let entry = page
-                .entries
-                .iter()
-                .find(|entry| entry.path == path)
-                .unwrap_or_else(|| panic!("{path} is not in the delta"));
-            assert_eq!(entry.openable, openable, "{path}");
-        }
+        assert_eq!(hashes.len(), 3);
+        assert_eq!(
+            hashes[0].as_deref(),
+            Some(core::content_hash(b"{}").as_str())
+        );
+        assert_eq!(hashes[1], None);
+        assert_eq!(
+            hashes[2].as_deref(),
+            Some(core::content_hash(b"alpha\n").as_str())
+        );
+
+        let limit = max_indexed_hash_paths() as usize;
+        assert_eq!(limit, 1024);
+        let too_many: Vec<String> = (0..=limit).map(|n| format!("n{n}.md")).collect();
+        assert!(matches!(
+            session.indexed_content_hashes(too_many, CancelToken::new()),
+            Err(VaultError::InvalidArgument { .. })
+        ));
+
+        let cancelled = CancelToken::new();
+        cancelled.cancel();
+        assert!(matches!(
+            session.indexed_content_hashes(vec!["a.md".into()], cancelled),
+            Err(VaultError::Cancelled)
+        ));
     }
 
     #[test]

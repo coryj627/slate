@@ -1645,10 +1645,14 @@ impl crate::VaultProvider for FlakyStatProvider {
 }
 
 #[test]
-fn file_vanishing_between_list_and_stat_is_pruned_same_scan() {
-    // #641 codex round 5: a file deleted between `list_dir` returning
-    // it and `index_file` stat'ing it must not survive as a stale row —
-    // the NotFound un-sees it so the same scan's prune drops the row.
+fn file_vanishing_between_list_and_stat_keeps_its_row_until_a_clean_scan() {
+    // #641 codex round 5 pruned such a row in the SAME scan by
+    // un-seeing it on NotFound. W7-7 PR 7 (AR-26) reverses that: any
+    // recorded per-file failure makes the scan partial and a partial
+    // scan prunes nothing — on Windows a NotFound also comes from
+    // MAX_PATH or permissions on a LIVE file, whose row a prune would
+    // delete. The failure is reported; the next clean scan prunes a
+    // file that really vanished.
     let tmp = tempfile::tempdir().unwrap();
     let clean = FsVaultProvider::new(tmp.path().to_path_buf());
     clean.write_file("keep.md", b"# Keep").unwrap();
@@ -1675,11 +1679,21 @@ fn file_vanishing_between_list_and_stat_is_pruned_same_scan() {
         "the vanish is reported: {:?}",
         report.error_samples
     );
+    assert!(!report.complete);
     assert!(
-        session.get_file_metadata("ghost.md").unwrap().is_none(),
-        "vanished file's row pruned in the SAME scan"
+        session.get_file_metadata("ghost.md").unwrap().is_some(),
+        "AR-26: a NotFound stat pruned the row in the same, partial scan"
     );
     assert!(session.get_file_metadata("keep.md").unwrap().is_some());
+    drop(session);
+
+    // The file really is gone: the next clean scan proves it and prunes.
+    std::fs::remove_file(tmp.path().join("ghost.md")).unwrap();
+    let session = VaultSession::from_filesystem(tmp.path().to_path_buf()).unwrap();
+    let report = session.scan_initial(&CancelToken::new()).unwrap();
+    assert!(report.complete, "{:?}", report.error_samples);
+    assert_eq!(report.files_removed, 1);
+    assert!(session.get_file_metadata("ghost.md").unwrap().is_none());
 }
 
 #[test]

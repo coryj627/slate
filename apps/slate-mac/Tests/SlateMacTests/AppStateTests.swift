@@ -787,8 +787,7 @@ final class AppStateTests: XCTestCase {
             errorSamples: [],
             filesChanged: filesChanged,
             filesRemoved: 0,
-            complete: true,
-            deltaGeneration: nil
+            complete: true
         )
     }
 

@@ -1,103 +1,22 @@
 // Copyright (C) 2026 Cory Joseph
 // SPDX-License-Identifier: AGPL-3.0-or-later
 
-//! W7-7 PR 7 (#1252, contract R-9): the rescan of an open session and
-//! the delta ledger it leaves for the host (`crate::scan_delta`).
-//!
-//! Every fact here drives the REAL scan (`rescan_with_progress`) over a
-//! real vault on disk; the host's side of the protocol — read a page,
-//! apply its effects, report it applied, release — is played by the
-//! helpers below exactly as `VaultLifecycleViewModel.ReconcileScanDelta`
-//! plays it.
+//! W7-7 PR 7 (#1252, contract R-9, AR-18's fallback): the rescan of an
+//! open session. A rescan is the incremental scan; it retains nothing —
+//! the host re-synchronizes its surfaces from the index afterwards. These
+//! facts pin what the scan itself owes: its hash-authoritative counts,
+//! its completeness and the prunes that depend on it, its bounded error
+//! report, and the index lookups the host's re-sync reads.
 
 use std::sync::{Arc, Mutex};
 
 use super::common::*;
 use super::*;
-use crate::scan_delta::{MAX_SCAN_DELTA_PAGE_LIMIT, ScanDeltaKind};
 
 fn rescan(session: &VaultSession) -> ScanReport {
     session
         .rescan_with_progress(&CancelToken::new(), None)
         .expect("rescan")
-}
-
-type Entry = (ScanDeltaKind, String);
-
-fn entry(kind: ScanDeltaKind, path: &str) -> Entry {
-    (kind, path.to_string())
-}
-
-/// Play the host: page the Pending generation from its stored cursor,
-/// report each page applied after "applying" it, and return every entry
-/// in page order.
-fn apply_pending(session: &VaultSession, limit: u32) -> Vec<Entry> {
-    let pending = session
-        .scan_delta_pending()
-        .unwrap()
-        .expect("a pending generation");
-    let mut cursor = pending.cursor.clone();
-    let mut seen = Vec::new();
-    loop {
-        let page = session
-            .scan_delta_page(
-                pending.generation,
-                Paging {
-                    cursor: cursor.clone(),
-                    limit,
-                },
-                &CancelToken::new(),
-            )
-            .unwrap();
-        seen.extend(page.entries.iter().map(|e| (e.kind, e.path.clone())));
-        session
-            .scan_delta_page_applied(pending.generation, page.next_cursor.as_deref())
-            .unwrap();
-        match page.next_cursor {
-            Some(next) => cursor = Some(next),
-            None => return seen,
-        }
-    }
-}
-
-/// Apply everything pending and release: the entries and the spoken
-/// outcome of one complete, uninterrupted rescan.
-fn settle(session: &VaultSession) -> (Vec<Entry>, ScanDeltaOutcome) {
-    let entries = apply_pending(session, 100);
-    (entries, session.scan_delta_release().unwrap())
-}
-
-/// `(state, generations)` straight from the TEMP table — the invariant
-/// the ledger's own summary could not show a violation of.
-fn raw_generations_by_state(session: &VaultSession) -> Vec<(i64, i64)> {
-    let conn = session.conn.lock().unwrap();
-    let mut stmt = conn
-        .prepare(
-            "SELECT state, COUNT(*) FROM temp.scan_delta_generation GROUP BY state ORDER BY state",
-        )
-        .unwrap();
-    stmt.query_map([], |row| Ok((row.get(0)?, row.get(1)?)))
-        .unwrap()
-        .collect::<Result<Vec<_>, _>>()
-        .unwrap()
-}
-
-fn raw_retained_rows(session: &VaultSession) -> i64 {
-    let conn = session.conn.lock().unwrap();
-    conn.query_row("SELECT COUNT(*) FROM temp.scan_delta_row", [], |row| {
-        row.get(0)
-    })
-    .unwrap()
-}
-
-fn assert_ledger_bounded(session: &VaultSession, step: &str) {
-    for (state, count) in raw_generations_by_state(session) {
-        assert!(
-            count <= 1,
-            "{step}: the ledger holds {count} generations in state {state}; \
-             at most one Pending and one Applied may exist"
-        );
-    }
 }
 
 fn indexed_hash(session: &VaultSession, path: &str) -> Option<String> {
@@ -106,17 +25,6 @@ fn indexed_hash(session: &VaultSession, path: &str) -> Option<String> {
         "SELECT content_hash FROM files WHERE path = ?1",
         rusqlite::params![path],
         |row| row.get(0),
-    )
-    .optional()
-    .unwrap()
-}
-
-fn retained_hashes(session: &VaultSession, path: &str) -> Option<(Option<String>, Option<String>)> {
-    let conn = session.conn.lock().unwrap();
-    conn.query_row(
-        "SELECT prior_hash, new_hash FROM temp.scan_delta_row WHERE path = ?1",
-        rusqlite::params![path],
-        |row| Ok((row.get(0)?, row.get(1)?)),
     )
     .optional()
     .unwrap()
@@ -139,67 +47,39 @@ fn edit_same_size(tmp: &tempfile::TempDir, path: &str, bytes: &[u8]) {
     rewrite_until_mtime_advances(&provider, path, bytes, before);
 }
 
-// --- (a)–(d): what a rescan finds ------------------------------------------
+// --- (a)–(d): what a rescan finds, counted as it writes -------------------------
 
 #[test]
 fn a_rescan_reports_a_file_created_outside_slate_as_new() {
     let (tmp, session) = make_vault(|p| {
         p.write_file("keep.md", b"# Keep\n").unwrap();
     });
-    let first = session.scan_initial(&CancelToken::new()).unwrap();
-    assert_eq!(
-        first.delta_generation, None,
-        "the open scan retains nothing"
-    );
+    session.scan_initial(&CancelToken::new()).unwrap();
 
     std::fs::write(tmp.path().join("late.md"), b"# Late\n").unwrap();
     let report = rescan(&session);
 
     assert_eq!(report.files_seen, 2);
-    assert_eq!(report.files_changed, 1);
-    assert_eq!(report.files_removed, 0);
+    assert_eq!((report.files_changed, report.files_removed), (1, 0));
     assert!(report.complete, "{:?}", report.error_samples);
-    assert!(report.delta_generation.is_some());
     assert!(session.get_file_metadata("late.md").unwrap().is_some());
-    let (entries, outcome) = settle(&session);
-    assert_eq!(entries, vec![entry(ScanDeltaKind::Created, "late.md")]);
-    assert_eq!(
-        outcome,
-        ScanDeltaOutcome {
-            changed: 1,
-            removed: 0
-        }
-    );
-    assert_eq!(
-        raw_retained_rows(&session),
-        0,
-        "a release leaves nothing retained"
-    );
 }
 
 #[test]
-fn a_rescan_reports_changed_bytes_as_modified_with_both_hashes() {
+fn a_rescan_reports_changed_bytes_as_modified() {
     let (tmp, session) = make_vault(|p| {
         p.write_file("note.md", b"alpha\n").unwrap();
     });
     session.scan_initial(&CancelToken::new()).unwrap();
-    let before = indexed_hash(&session, "note.md").unwrap();
 
     edit_same_size(&tmp, "note.md", b"omega\n");
     let report = rescan(&session);
 
-    assert_eq!(report.files_changed, 1);
-    assert_eq!(report.files_indexed, 1);
-    let after = indexed_hash(&session, "note.md").unwrap();
-    assert_eq!(after, crate::content_hash(b"omega\n"));
+    assert_eq!((report.files_changed, report.files_indexed), (1, 1));
     assert_eq!(
-        retained_hashes(&session, "note.md"),
-        Some((Some(before), Some(after))),
-        "the retained row carries its prior and new hash"
+        indexed_hash(&session, "note.md").unwrap(),
+        crate::content_hash(b"omega\n")
     );
-    let (entries, outcome) = settle(&session);
-    assert_eq!(entries, vec![entry(ScanDeltaKind::Modified, "note.md")]);
-    assert_eq!(outcome.changed, 1);
 }
 
 /// `ATouchedUnchangedFileIsNotModified`: a re-read of the same bytes
@@ -217,13 +97,10 @@ fn a_touched_unchanged_file_is_not_modified() {
 
     assert_eq!(report.files_indexed, 1, "the slow path re-read the file");
     assert_eq!(report.files_changed, 0, "a re-read is not a change");
-    let (entries, outcome) = settle(&session);
-    assert!(entries.is_empty(), "{entries:?}");
-    assert_eq!(outcome, ScanDeltaOutcome::default());
 }
 
 /// `ACtimeZeroProviderBehavesTheSame`: Windows reports `ctime_ms = 0`;
-/// the delta never used ctime, so created / modified / touched read the
+/// the counts never used ctime, so created / modified / touched read the
 /// same through a zero-ctime provider.
 #[test]
 fn a_ctime_zero_provider_behaves_the_same() {
@@ -247,14 +124,6 @@ fn a_ctime_zero_provider_behaves_the_same() {
     assert_eq!(
         report.files_indexed, 3,
         "new, edited and touched were all read"
-    );
-    let (entries, _) = settle(&session);
-    assert_eq!(
-        entries,
-        vec![
-            entry(ScanDeltaKind::Modified, "edit.md"),
-            entry(ScanDeltaKind::Created, "new.md"),
-        ]
     );
 }
 
@@ -287,8 +156,6 @@ fn ar7_a_same_size_edit_that_preserves_mtime_stays_invisible() {
     let report = rescan(&session);
 
     assert_eq!(report.files_changed, 0, "AR-7: the short-circuit hides it");
-    let (entries, _) = settle(&session);
-    assert!(entries.is_empty(), "{entries:?}");
 }
 
 #[test]
@@ -298,32 +165,16 @@ fn a_rescan_removes_the_row_of_a_file_deleted_outside_slate() {
         p.write_file("gone.md", b"gone\n").unwrap();
     });
     session.scan_initial(&CancelToken::new()).unwrap();
-    let before = indexed_hash(&session, "gone.md");
 
     std::fs::remove_file(tmp.path().join("gone.md")).unwrap();
     let report = rescan(&session);
 
-    assert_eq!(report.files_removed, 1);
-    assert_eq!(report.files_changed, 0);
+    assert_eq!((report.files_changed, report.files_removed), (0, 1));
     assert!(session.get_file_metadata("gone.md").unwrap().is_none());
-    assert_eq!(
-        retained_hashes(&session, "gone.md"),
-        Some((before, None)),
-        "the removed row keeps the hash the live index no longer has"
-    );
-    let (entries, outcome) = settle(&session);
-    assert_eq!(entries, vec![entry(ScanDeltaKind::Removed, "gone.md")]);
-    assert_eq!(
-        outcome,
-        ScanDeltaOutcome {
-            changed: 0,
-            removed: 1
-        }
-    );
 }
 
-/// AR-8: a real filesystem rename through the scan is Deleted + Created
-/// — the index has no filesystem identity to correlate them with.
+/// AR-8: a real filesystem rename through the scan is a removal plus a
+/// creation — the index has no filesystem identity to correlate them with.
 #[test]
 fn a_filesystem_rename_is_a_removal_plus_a_creation() {
     let (tmp, session) = make_vault(|p| {
@@ -332,34 +183,15 @@ fn a_filesystem_rename_is_a_removal_plus_a_creation() {
     session.scan_initial(&CancelToken::new()).unwrap();
 
     std::fs::rename(tmp.path().join("before.md"), tmp.path().join("after.md")).unwrap();
-    rescan(&session);
+    let report = rescan(&session);
 
-    let (entries, outcome) = settle(&session);
-    assert_eq!(
-        entries,
-        vec![
-            entry(ScanDeltaKind::Removed, "before.md"),
-            entry(ScanDeltaKind::Created, "after.md"),
-        ]
-    );
-    assert_eq!(
-        outcome,
-        ScanDeltaOutcome {
-            changed: 1,
-            removed: 1
-        }
-    );
-    // Exhaustive by construction: a kind added to the delta must be
-    // declared here, and `Renamed` is not one (AR-8).
-    for (kind, _) in &entries {
-        match kind {
-            ScanDeltaKind::Removed | ScanDeltaKind::Created | ScanDeltaKind::Modified => {}
-        }
-    }
+    assert_eq!((report.files_changed, report.files_removed), (1, 1));
+    assert!(session.get_file_metadata("before.md").unwrap().is_none());
+    assert!(session.get_file_metadata("after.md").unwrap().is_some());
 }
 
 /// `AUniqueSameHashDeleteCreateIsNotARename`: an external delete of A
-/// and an unrelated B with identical bytes retarget nothing.
+/// and an unrelated B with identical bytes are counted as what they are.
 #[test]
 fn a_unique_same_hash_delete_create_is_not_a_rename() {
     let (tmp, session) = make_vault(|p| {
@@ -369,23 +201,9 @@ fn a_unique_same_hash_delete_create_is_not_a_rename() {
 
     std::fs::remove_file(tmp.path().join("a.md")).unwrap();
     std::fs::write(tmp.path().join("b.md"), b"identical\n").unwrap();
-    rescan(&session);
+    let report = rescan(&session);
 
-    let (entries, outcome) = settle(&session);
-    assert_eq!(
-        entries,
-        vec![
-            entry(ScanDeltaKind::Removed, "a.md"),
-            entry(ScanDeltaKind::Created, "b.md"),
-        ]
-    );
-    assert_eq!(
-        outcome,
-        ScanDeltaOutcome {
-            changed: 1,
-            removed: 1
-        }
-    );
+    assert_eq!((report.files_changed, report.files_removed), (1, 1));
 }
 
 #[derive(Default)]
@@ -440,14 +258,15 @@ fn no_file_change_event_fires_during_any_scan() {
     );
 }
 
-// --- (h): completeness ------------------------------------------------------
+// --- (h): completeness and the prunes that depend on it ------------------------
 
 /// Fails `list_dir` for one directory, and `stat` / `read_file` for one
-/// path — the walk-level and file-level faults of R-9's completeness rule.
+/// path — or reports one listed path as NotFound (AR-26).
 struct FaultingProvider {
     inner: FsVaultProvider,
     list_dir_fails: Option<String>,
     stat_fails: Option<String>,
+    stat_not_found: Option<String>,
     read_fails: Option<String>,
 }
 
@@ -457,6 +276,7 @@ impl FaultingProvider {
             inner: FsVaultProvider::new(root.to_path_buf()),
             list_dir_fails: None,
             stat_fails: None,
+            stat_not_found: None,
             read_fails: None,
         }
     }
@@ -498,6 +318,12 @@ impl crate::VaultProvider for FaultingProvider {
         if self.stat_fails.as_deref() == Some(relative) {
             return Err(denied(relative));
         }
+        if self.stat_not_found.as_deref() == Some(relative) {
+            return Err(VaultError::Io(std::io::Error::new(
+                std::io::ErrorKind::NotFound,
+                format!("injected NotFound at {relative}"),
+            )));
+        }
         self.inner.stat(relative)
     }
     fn watch(
@@ -518,18 +344,20 @@ fn reopen_through(tmp: &tempfile::TempDir, provider: FaultingProvider) -> VaultS
 
 /// An incomplete walk prunes NEITHER files nor directories: a subtree
 /// that is transiently unreadable must not make live nested folders
-/// vanish from the refreshed tree (`prune_unseen_dirs` used to run
-/// unconditionally after a `list_dir` failure).
+/// vanish from the refreshed tree, and a file deleted elsewhere keeps its
+/// row too until a clean scan proves its absence.
 #[test]
 fn an_unreadable_subtree_prunes_neither_files_nor_directories() {
     let (tmp, session) = make_vault(|p| {
         p.write_file("root.md", b"root\n").unwrap();
+        p.write_file("gone.md", b"gone\n").unwrap();
         p.write_file("sub/nested.md", b"nested\n").unwrap();
         p.write_file("sub/deeper/leaf.md", b"leaf\n").unwrap();
     });
     session.scan_initial(&CancelToken::new()).unwrap();
     assert_eq!(dir_rows(&session), vec!["sub", "sub/deeper"]);
     drop(session);
+    std::fs::remove_file(tmp.path().join("gone.md")).unwrap();
 
     let mut provider = FaultingProvider::over(tmp.path());
     provider.list_dir_fails = Some("sub".into());
@@ -543,787 +371,286 @@ fn an_unreadable_subtree_prunes_neither_files_nor_directories() {
         vec!["sub", "sub/deeper"],
         "a folder under the unreadable subtree vanished"
     );
-    assert!(
-        session
-            .get_file_metadata("sub/nested.md")
-            .unwrap()
-            .is_some()
-    );
-    assert!(
-        session
-            .get_file_metadata("sub/deeper/leaf.md")
-            .unwrap()
-            .is_some()
-    );
+    for path in ["sub/nested.md", "sub/deeper/leaf.md", "gone.md"] {
+        assert!(
+            session.get_file_metadata(path).unwrap().is_some(),
+            "a partial walk pruned {path}"
+        );
+    }
     assert_eq!(report.files_removed, 0);
-    let (entries, _) = settle(&session);
-    assert!(entries.is_empty(), "{entries:?}");
 }
 
-/// `complete` is false for a single file whose stat, read or index
-/// fails through the provider — never the walk flag alone.
+/// One arm of R-9's completeness rule (finding 7): what to inject, then
+/// how to heal it.
+#[derive(Clone, Copy, Debug)]
+enum FailureArm {
+    Stat,
+    Read,
+    Oversize,
+    Derivative,
+    FileMeta,
+}
+
+/// Every per-file failure — not only a listing failure — makes the scan
+/// partial, and a partial scan prunes NOTHING: a file and a folder
+/// deleted outside Slate keep their rows while any failure is recorded,
+/// and the next clean scan removes them.
 #[test]
-fn a_single_file_failure_makes_the_rescan_incomplete() {
-    // stat
-    let (tmp, session) = make_vault(|p| {
-        p.write_file("ok.md", b"ok\n").unwrap();
-    });
-    session.scan_initial(&CancelToken::new()).unwrap();
-    drop(session);
-    std::fs::write(tmp.path().join("locked.md"), b"locked\n").unwrap();
-    let mut provider = FaultingProvider::over(tmp.path());
-    provider.stat_fails = Some("locked.md".into());
-    let report = rescan(&reopen_through(&tmp, provider));
-    assert!(!report.complete, "a stat failure left the rescan complete");
-    assert_eq!(report.error_count as usize, 1, "{:?}", report.error_samples);
+fn a_per_file_failure_blocks_both_prunes_until_a_clean_scan() {
+    for arm in [
+        FailureArm::Stat,
+        FailureArm::Read,
+        FailureArm::Oversize,
+        FailureArm::Derivative,
+        FailureArm::FileMeta,
+    ] {
+        let (tmp, session) = make_vault(|p| {
+            p.write_file("keep.md", b"keep\n").unwrap();
+            p.write_file("gone.md", b"gone\n").unwrap();
+            p.write_file("old/inside.md", b"inside\n").unwrap();
+        });
+        session.scan_initial(&CancelToken::new()).unwrap();
+        drop(session);
+        std::fs::remove_file(tmp.path().join("gone.md")).unwrap();
+        std::fs::remove_dir_all(tmp.path().join("old")).unwrap();
+        std::fs::write(tmp.path().join("bad.md"), b"#tagged bad\n").unwrap();
 
-    // read
-    let (tmp, session) = make_vault(|p| {
-        p.write_file("ok.md", b"ok\n").unwrap();
-    });
-    session.scan_initial(&CancelToken::new()).unwrap();
-    drop(session);
-    std::fs::write(tmp.path().join("unreadable.md"), b"unreadable\n").unwrap();
-    let mut provider = FaultingProvider::over(tmp.path());
-    provider.read_fails = Some("unreadable.md".into());
-    let report = rescan(&reopen_through(&tmp, provider));
-    assert!(!report.complete, "a read failure left the rescan complete");
-    assert_eq!(report.error_count as usize, 1, "{:?}", report.error_samples);
+        let mut provider = FaultingProvider::over(tmp.path());
+        let mut config = SessionConfig::new(tmp.path().join(".slate"));
+        match arm {
+            FailureArm::Stat => provider.stat_fails = Some("bad.md".into()),
+            FailureArm::Read => provider.read_fails = Some("bad.md".into()),
+            FailureArm::Oversize => config.large_file_refuse_bytes = 8,
+            FailureArm::Derivative | FailureArm::FileMeta => {}
+        }
+        let session = VaultSession::open(Arc::new(provider), config).unwrap();
+        {
+            let conn = session.conn.lock().unwrap();
+            match arm {
+                FailureArm::Derivative => conn
+                    .execute_batch(
+                        "CREATE TEMP TRIGGER reject_tags BEFORE INSERT ON main.file_tags
+                         BEGIN SELECT RAISE(ABORT, 'injected tag failure'); END;",
+                    )
+                    .unwrap(),
+                FailureArm::FileMeta => conn
+                    .execute_batch(
+                        "CREATE TEMP TRIGGER reject_meta BEFORE INSERT ON main.file_meta
+                         BEGIN SELECT RAISE(ABORT, 'injected file_meta failure'); END;",
+                    )
+                    .unwrap(),
+                _ => {}
+            }
+        }
 
-    // index: a file past the refuse threshold is recorded, not indexed.
+        let report = rescan(&session);
+        assert!(
+            !report.complete,
+            "{arm:?}: the failure left the scan complete"
+        );
+        assert!(report.error_count > 0, "{arm:?}: nothing was recorded");
+        assert_eq!(report.files_removed, 0, "{arm:?}");
+        assert!(
+            session.get_file_metadata("gone.md").unwrap().is_some(),
+            "{arm:?}: a partial scan pruned a file"
+        );
+        assert!(
+            dir_rows(&session).contains(&"old".to_string()),
+            "{arm:?}: a partial scan pruned a folder"
+        );
+        drop(session);
+
+        // Healed: a clean scan proves the absence and prunes both.
+        let session = VaultSession::from_filesystem(tmp.path().to_path_buf()).unwrap();
+        let report = rescan(&session);
+        assert!(report.complete, "{arm:?}: {:?}", report.error_samples);
+        assert!(report.files_removed >= 1, "{arm:?}");
+        assert!(
+            session.get_file_metadata("gone.md").unwrap().is_none(),
+            "{arm:?}"
+        );
+        assert!(!dir_rows(&session).contains(&"old".to_string()), "{arm:?}");
+    }
+}
+
+/// AR-26: a listed file whose stat reports NotFound keeps its row — on
+/// Windows a NotFound also comes from MAX_PATH or permissions on a LIVE
+/// file, and un-seeing it would delete that file's row. The failure is
+/// counted; a clean scan settles the truth either way.
+#[test]
+fn ar26_a_not_found_stat_keeps_the_row_until_a_clean_scan() {
     let (tmp, session) = make_vault(|p| {
-        p.write_file("ok.md", b"ok\n").unwrap();
+        p.write_file("keep.md", b"keep\n").unwrap();
+        p.write_file("live.md", b"live\n").unwrap();
     });
     session.scan_initial(&CancelToken::new()).unwrap();
     drop(session);
-    std::fs::write(tmp.path().join("huge.md"), vec![b'x'; 64]).unwrap();
-    let mut config = SessionConfig::new(tmp.path().join(".slate"));
-    config.large_file_refuse_bytes = 32;
-    let session = VaultSession::open(
-        Arc::new(FsVaultProvider::new(tmp.path().to_path_buf())),
-        config,
-    )
-    .unwrap();
+    edit_same_size(&tmp, "live.md", b"LIVE\n");
+
+    let mut provider = FaultingProvider::over(tmp.path());
+    provider.stat_not_found = Some("live.md".into());
+    let session = reopen_through(&tmp, provider);
     let report = rescan(&session);
-    assert!(
-        !report.complete,
-        "an index refusal left the rescan complete"
-    );
-    assert_eq!(report.error_count as usize, 1, "{:?}", report.error_samples);
 
-    // And a clean rescan is complete.
+    assert!(!report.complete);
+    assert_eq!(report.error_count, 1, "{:?}", report.error_samples);
+    assert_eq!(report.files_removed, 0);
+    assert!(
+        session.get_file_metadata("live.md").unwrap().is_some(),
+        "AR-26: a NotFound stat deleted a live file's row"
+    );
+}
+
+/// The canvas pass must see the post-prune index (its card titles come
+/// from other files' rows), so it follows the prune: its failure makes
+/// the scan incomplete but cannot un-prune what the complete walk proved
+/// gone.
+#[test]
+fn a_canvas_index_failure_makes_the_scan_incomplete_after_the_prune() {
+    let (tmp, session) = make_vault(|p| {
+        p.write_file("gone.md", b"gone\n").unwrap();
+        p.write_file(
+            "board.canvas",
+            br#"{"nodes":[{"id":"a","type":"text","text":"A","x":0,"y":0,"width":10,"height":10}],"edges":[]}"#,
+        )
+        .unwrap();
+    });
+    session.scan_initial(&CancelToken::new()).unwrap();
+    std::fs::remove_file(tmp.path().join("gone.md")).unwrap();
+    {
+        let conn = session.conn.lock().unwrap();
+        conn.execute_batch(
+            "CREATE TEMP TRIGGER reject_canvas_nodes BEFORE INSERT ON main.canvas_nodes
+             BEGIN SELECT RAISE(ABORT, 'injected canvas failure'); END;",
+        )
+        .unwrap();
+    }
+
+    let report = rescan(&session);
+
+    assert!(!report.complete, "a canvas failure left the scan complete");
+    assert!(
+        report
+            .error_samples
+            .iter()
+            .any(|error| error.starts_with("canvas index")),
+        "{:?}",
+        report.error_samples
+    );
+    assert_eq!(report.files_removed, 1, "the complete walk's prune ran");
+    assert!(session.get_file_metadata("gone.md").unwrap().is_none());
+}
+
+/// And a clean rescan is complete.
+#[test]
+fn a_clean_rescan_is_complete() {
     let (_tmp, session) = make_vault(|p| {
         p.write_file("ok.md", b"ok\n").unwrap();
     });
     session.scan_initial(&CancelToken::new()).unwrap();
-    assert!(rescan(&session).complete);
-}
-
-// --- (e): paging --------------------------------------------------------------
-
-#[test]
-fn delta_pages_are_bounded_progress_and_terminate() {
-    let (tmp, session) = make_vault(|p| {
-        p.write_file("seed.md", b"seed\n").unwrap();
-    });
-    session.scan_initial(&CancelToken::new()).unwrap();
-    for n in 1..=5 {
-        std::fs::write(tmp.path().join(format!("n{n}.md")), format!("{n}\n")).unwrap();
-    }
     let report = rescan(&session);
-    let generation = report.delta_generation.unwrap();
-
-    for limit in [0, MAX_SCAN_DELTA_PAGE_LIMIT + 1] {
-        assert!(
-            matches!(
-                session.scan_delta_page(generation, Paging::first(limit), &CancelToken::new()),
-                Err(VaultError::InvalidArgument { .. })
-            ),
-            "limit {limit} was accepted"
-        );
-    }
-
-    let mut cursor: Option<String> = None;
-    let mut sizes = Vec::new();
-    let mut cursors = Vec::new();
-    loop {
-        let page = session
-            .scan_delta_page(
-                generation,
-                Paging {
-                    cursor: cursor.clone(),
-                    limit: 2,
-                },
-                &CancelToken::new(),
-            )
-            .unwrap();
-        assert!(page.entries.len() <= 2, "a page exceeded its limit");
-        sizes.push(page.entries.len());
-        // Reading never moves the stored cursor — only applying does.
-        assert_eq!(
-            session.scan_delta_pending().unwrap().unwrap().cursor,
-            cursor,
-            "reading a page moved the pending cursor"
-        );
-        session
-            .scan_delta_page_applied(generation, page.next_cursor.as_deref())
-            .unwrap();
-        match page.next_cursor {
-            Some(next) => {
-                assert!(!cursors.contains(&next), "the cursor did not progress");
-                cursors.push(next.clone());
-                assert_eq!(
-                    session.scan_delta_pending().unwrap().unwrap().cursor,
-                    Some(next.clone()),
-                    "an applied page did not advance the pending cursor"
-                );
-                cursor = Some(next);
-            }
-            None => break,
-        }
-        assert!(sizes.len() <= 3, "paging did not terminate");
-    }
-    assert_eq!(sizes, vec![2, 2, 1]);
-    assert!(
-        session.scan_delta_pending().unwrap().is_none(),
-        "the last page's report made the generation Applied"
-    );
-    assert!(matches!(
-        session.scan_delta_page(generation, Paging::first(2), &CancelToken::new()),
-        Err(VaultError::InvalidArgument { .. })
-    ));
+    assert!(report.complete, "{:?}", report.error_samples);
+    assert_eq!(report.error_count, 0);
 }
 
+// --- what the host's re-sync reads (AR-18's fallback) ----------------------------
+
+/// The indexed hashes come back in the caller's order, `None` for a path
+/// the index lacks; the lookup is bounded and honours its token.
 #[test]
-fn a_cursor_from_another_generation_fails_closed() {
-    let (tmp, session) = make_vault(|p| {
-        p.write_file("seed.md", b"seed\n").unwrap();
+fn indexed_content_hashes_answer_in_order_bounded_and_cancellable() {
+    let (_tmp, session) = make_vault(|p| {
+        p.write_file("a.md", b"alpha\n").unwrap();
+        p.write_file("b.md", b"beta\n").unwrap();
     });
     session.scan_initial(&CancelToken::new()).unwrap();
-    for n in 1..=3 {
-        std::fs::write(tmp.path().join(format!("a{n}.md")), format!("{n}\n")).unwrap();
-    }
-    let first = rescan(&session).delta_generation.unwrap();
-    let stale = session
-        .scan_delta_page(first, Paging::first(1), &CancelToken::new())
-        .unwrap()
-        .next_cursor
+
+    let hashes = session
+        .indexed_content_hashes(
+            &["b.md".into(), "missing.md".into(), "a.md".into()],
+            &CancelToken::new(),
+        )
         .unwrap();
-    settle(&session);
-    std::fs::write(tmp.path().join("b.md"), b"b\n").unwrap();
-    std::fs::write(tmp.path().join("c.md"), b"c\n").unwrap();
-    let second = rescan(&session).delta_generation.unwrap();
-
-    assert!(matches!(
-        session.scan_delta_page(second, Paging::after(stale.clone(), 1), &CancelToken::new()),
-        Err(VaultError::InvalidArgument { .. })
-    ));
-    assert!(matches!(
-        session.scan_delta_page_applied(second, Some(stale.as_str())),
-        Err(VaultError::InvalidArgument { .. })
-    ));
-}
-
-/// The generation is INTRINSICALLY removal-first: with a limit of one,
-/// every removal pages before any creation or modification, even when
-/// the removed paths sort last.
-#[test]
-fn a_generation_pages_every_removal_before_any_creation() {
-    let (tmp, session) = make_vault(|p| {
-        p.write_file("m.md", b"alpha\n").unwrap();
-        p.write_file("z1.md", b"z1\n").unwrap();
-        p.write_file("z2.md", b"z2\n").unwrap();
-    });
-    session.scan_initial(&CancelToken::new()).unwrap();
-
-    std::fs::remove_file(tmp.path().join("z1.md")).unwrap();
-    std::fs::remove_file(tmp.path().join("z2.md")).unwrap();
-    std::fs::write(tmp.path().join("a1.md"), b"a1\n").unwrap();
-    std::fs::write(tmp.path().join("a2.md"), b"a2\n").unwrap();
-    edit_same_size(&tmp, "m.md", b"omega\n");
-    rescan(&session);
-
     assert_eq!(
-        apply_pending(&session, 1),
+        hashes,
         vec![
-            entry(ScanDeltaKind::Removed, "z1.md"),
-            entry(ScanDeltaKind::Removed, "z2.md"),
-            entry(ScanDeltaKind::Created, "a1.md"),
-            entry(ScanDeltaKind::Created, "a2.md"),
-            entry(ScanDeltaKind::Modified, "m.md"),
+            Some(crate::content_hash(b"beta\n")),
+            None,
+            Some(crate::content_hash(b"alpha\n")),
         ]
     );
-}
 
-// --- atomic commit --------------------------------------------------------------
-
-/// The index mutations and the retained generation are one SQLite
-/// transaction: a fault at ANY commit boundary of a rescan leaves both
-/// or neither — never an indexed change the ledger does not carry (the
-/// host would never reconcile it) nor a generation over an index that
-/// never changed.
-#[test]
-fn the_index_and_its_generation_commit_together_or_not_at_all() {
-    fn fixture() -> (tempfile::TempDir, VaultSession) {
-        let (tmp, session) = make_vault(|p| {
-            p.write_file("seed.md", b"seed\n").unwrap();
-        });
-        session.scan_initial(&CancelToken::new()).unwrap();
-        std::fs::write(tmp.path().join("late.md"), b"late\n").unwrap();
-        (tmp, session)
-    }
-    fn install(session: &VaultSession, fail_at: Option<usize>) -> Arc<Mutex<usize>> {
-        let commits = Arc::new(Mutex::new(0usize));
-        let counter = commits.clone();
-        session
-            .conn
-            .lock()
-            .unwrap()
-            .commit_hook(Some(move || {
-                let mut n = counter.lock().unwrap();
-                *n += 1;
-                // `true` turns this COMMIT into a ROLLBACK.
-                fail_at == Some(*n)
-            }))
-            .unwrap();
-        commits
-    }
-    fn uninstall(session: &VaultSession) {
-        session
-            .conn
-            .lock()
-            .unwrap()
-            .commit_hook(None::<fn() -> bool>)
-            .unwrap();
-    }
-
-    // How many commits one clean rescan makes — every one is a boundary.
-    let (_tmp, session) = fixture();
-    let commits = install(&session, None);
-    rescan(&session);
-    uninstall(&session);
-    let boundaries = *commits.lock().unwrap();
-    assert!(boundaries >= 1);
-
-    for fail_at in 1..=boundaries {
-        let (_tmp, session) = fixture();
-        install(&session, Some(fail_at));
-        let result = session.rescan_with_progress(&CancelToken::new(), None);
-        uninstall(&session);
-        let indexed = session.get_file_metadata("late.md").unwrap().is_some();
-        let retained = session
-            .scan_delta_pending()
-            .unwrap()
-            .is_some_and(|pending| pending.rows == 1);
-        assert_eq!(
-            indexed,
-            retained,
-            "a fault at commit {fail_at} of {boundaries} left the index {} but the ledger {} \
-             ({result:?})",
-            if indexed { "changed" } else { "unchanged" },
-            if retained { "holding it" } else { "empty" },
-        );
-    }
-}
-
-// --- the ledger (retained generations) ---------------------------------------
-
-#[test]
-fn a_pending_generation_refuses_a_new_scan_until_its_effects_are_applied() {
-    let (tmp, session) = make_vault(|p| {
-        p.write_file("seed.md", b"seed\n").unwrap();
-    });
-    session.scan_initial(&CancelToken::new()).unwrap();
-    std::fs::write(tmp.path().join("late.md"), b"late\n").unwrap();
-    rescan(&session);
-
+    let too_many: Vec<String> = (0..=crate::MAX_INDEXED_HASH_PATHS)
+        .map(|n| format!("n{n}.md"))
+        .collect();
     assert!(matches!(
-        session.rescan_with_progress(&CancelToken::new(), None),
+        session.indexed_content_hashes(&too_many, &CancelToken::new()),
         Err(VaultError::InvalidArgument { .. })
     ));
-    assert!(
-        matches!(
-            session.scan_delta_release(),
-            Err(VaultError::InvalidArgument { .. })
-        ),
-        "a release while a generation is pending would split the retry's outcome"
-    );
-    apply_pending(&session, 10);
-    rescan(&session);
-}
-
-/// Coordinator witness (b) and (a)'s core half: A fails on page 2 and is
-/// recovered on retry 1, whose new generation B fails mid-page; retry 2
-/// recovers B and its scan C succeeds. At no step does the ledger hold
-/// more than one Pending and one Applied generation, the release speaks
-/// A+B+C net per path since the last release, and nothing is retained
-/// afterwards. (Mutation: skip the coalesce, keep two Applied rows.)
-#[test]
-fn the_ledger_never_holds_more_than_one_pending_and_one_applied_generation() {
-    let (tmp, session) = make_vault(|p| {
-        p.write_file("a.md", b"h0h0\n").unwrap();
-        p.write_file("b.md", b"bbbb\n").unwrap();
-    });
-    session.scan_initial(&CancelToken::new()).unwrap();
-
-    // A: n1 created, a.md h0 → h1. Page 1 applied, page 2 "fails".
-    std::fs::write(tmp.path().join("n1.md"), b"n1\n").unwrap();
-    edit_same_size(&tmp, "a.md", b"h1h1\n");
-    let a = rescan(&session).delta_generation.unwrap();
-    let page = session
-        .scan_delta_page(a, Paging::first(1), &CancelToken::new())
-        .unwrap();
-    session
-        .scan_delta_page_applied(a, page.next_cursor.as_deref())
-        .unwrap();
-    assert_ledger_bounded(&session, "A failed on page 2");
-    assert_eq!(session.scan_delta_ledger().unwrap().applied, None);
-
-    // Retry 1: A resumes from its cursor and becomes Applied; B (b.md
-    // removed, a.md h1 → h2) is scanned and fails mid-page.
-    let resumed = apply_pending(&session, 1);
-    assert_eq!(resumed.len(), 1, "A resumed from its stored cursor");
-    assert_ledger_bounded(&session, "A recovered");
-    std::fs::remove_file(tmp.path().join("b.md")).unwrap();
-    edit_same_size(&tmp, "a.md", b"h2h2\n");
-    let b = rescan(&session).delta_generation.unwrap();
-    let page = session
-        .scan_delta_page(b, Paging::first(1), &CancelToken::new())
-        .unwrap();
-    session
-        .scan_delta_page_applied(b, page.next_cursor.as_deref())
-        .unwrap();
-    let ledger = session.scan_delta_ledger().unwrap();
-    assert!(ledger.pending.is_some() && ledger.applied.is_some());
-    assert_ledger_bounded(&session, "B failed mid-page beside Applied A");
-
-    // Retry 2: B resumes, coalesces into A; C (n2 created) succeeds.
-    apply_pending(&session, 1);
-    assert_ledger_bounded(&session, "B coalesced into A");
-    std::fs::write(tmp.path().join("n2.md"), b"n2\n").unwrap();
-    rescan(&session);
-    apply_pending(&session, 1);
-    assert_ledger_bounded(&session, "C coalesced into A");
-
-    // n1 created, a.md h0 → h2 (one modification), b.md removed, n2
-    // created: 3 new or changed, 1 removed.
+    let at_limit: Vec<String> = too_many[..crate::MAX_INDEXED_HASH_PATHS].to_vec();
     assert_eq!(
-        session.scan_delta_release().unwrap(),
-        ScanDeltaOutcome {
-            changed: 3,
-            removed: 1
-        }
-    );
-    assert_eq!(raw_retained_rows(&session), 0);
-    assert!(raw_generations_by_state(&session).is_empty());
-}
-
-/// The ledger read is the hosts' view of the bound, so it fails closed on
-/// a violation instead of answering with whichever generation a query
-/// happened to return — the host twin of the bound fact
-/// (`TheLedgerNeverHoldsMoreThanOnePendingAndOneAppliedGeneration`)
-/// observes the invariant through it.
-#[test]
-fn a_ledger_read_refuses_a_second_generation_in_one_state() {
-    let (tmp, session) = make_vault(|p| {
-        p.write_file("a.md", b"a\n").unwrap();
-    });
-    session.scan_initial(&CancelToken::new()).unwrap();
-    std::fs::write(tmp.path().join("b.md"), b"b\n").unwrap();
-    rescan(&session);
-    apply_pending(&session, 10);
-    let applied = session.scan_delta_ledger().unwrap().applied.unwrap();
-
-    let forge = |generation: u64, state: i64| {
-        let conn = session.conn.lock().unwrap();
-        conn.execute(
-            "INSERT INTO temp.scan_delta_generation (generation, state) VALUES (?1, ?2)",
-            rusqlite::params![generation as i64, state],
-        )
-        .unwrap();
-    };
-    forge(applied.generation + 100, 1);
-    assert!(
-        matches!(
-            session.scan_delta_ledger(),
-            Err(VaultError::InvalidArgument { .. })
-        ),
-        "two Applied generations read as a bounded ledger"
-    );
-    {
-        let conn = session.conn.lock().unwrap();
-        conn.execute(
-            "DELETE FROM temp.scan_delta_generation WHERE generation != ?1",
-            rusqlite::params![applied.generation as i64],
-        )
-        .unwrap();
-    }
-    assert!(session.scan_delta_ledger().is_ok());
-
-    forge(applied.generation + 101, 0);
-    forge(applied.generation + 102, 0);
-    assert!(
-        matches!(
-            session.scan_delta_ledger(),
-            Err(VaultError::InvalidArgument { .. })
-        ),
-        "two Pending generations read as a bounded ledger"
-    );
-}
-
-fn raw_rows_of(
-    session: &VaultSession,
-    generation: u64,
-) -> Vec<(String, Option<String>, Option<String>)> {
-    let conn = session.conn.lock().unwrap();
-    let mut stmt = conn
-        .prepare(
-            "SELECT path, prior_hash, new_hash FROM temp.scan_delta_row
-             WHERE generation = ?1 ORDER BY seq",
-        )
-        .unwrap();
-    stmt.query_map(rusqlite::params![generation as i64], |row| {
-        Ok((row.get(0)?, row.get(1)?, row.get(2)?))
-    })
-    .unwrap()
-    .collect::<Result<Vec<_>, _>>()
-    .unwrap()
-}
-
-/// Round-19 amendment (`TheAppliedMarkAndTheCoalesceCommitTogether`):
-/// the applied mark and the coalesce into the retained Applied generation
-/// are ONE transaction. A fault between them lands neither — the
-/// generation stays Pending at the cursor of its last page and the
-/// Applied generation is untouched — and the next retry re-applies that
-/// last page and finishes both, idempotently. Checked at both fault
-/// sites: inside the transaction, between the two statements, and at its
-/// commit boundary. (Mutation: commit the mark before the coalesce.)
-#[test]
-fn the_applied_mark_and_the_coalesce_commit_together() {
-    for fault in [
-        "between the mark and the coalesce",
-        "at the commit boundary",
-    ] {
-        let (tmp, session) = make_vault(|p| {
-            p.write_file("a.md", b"h0h0\n").unwrap();
-        });
-        session.scan_initial(&CancelToken::new()).unwrap();
-        // An Applied generation an earlier retry left retained: a.md h0 → h1.
-        edit_same_size(&tmp, "a.md", b"h1h1\n");
-        rescan(&session);
-        apply_pending(&session, 10);
-        let applied_before = session.scan_delta_ledger().unwrap().applied.unwrap();
-        let rows_before = raw_rows_of(&session, applied_before.generation);
-
-        // The next generation: three creations, paged two at a time. The
-        // first page's effects land; the last page's report faults.
-        for n in 1..=3 {
-            std::fs::write(tmp.path().join(format!("c{n}.md")), format!("{n}\n")).unwrap();
-        }
-        let generation = rescan(&session).delta_generation.unwrap();
-        let first = session
-            .scan_delta_page(generation, Paging::first(2), &CancelToken::new())
-            .unwrap();
         session
-            .scan_delta_page_applied(generation, first.next_cursor.as_deref())
-            .unwrap();
-        let last_page_cursor = first.next_cursor.clone();
-        let last = session
-            .scan_delta_page(
-                generation,
-                Paging {
-                    cursor: last_page_cursor.clone(),
-                    limit: 2,
-                },
-                &CancelToken::new(),
-            )
-            .unwrap();
-        assert!(
-            last.next_cursor.is_none(),
-            "{fault}: the second page is the last"
-        );
-
-        let result = if fault == "at the commit boundary" {
-            session
-                .conn
-                .lock()
-                .unwrap()
-                .commit_hook(Some(|| true))
-                .unwrap();
-            let result = session.scan_delta_page_applied(generation, None);
-            session
-                .conn
-                .lock()
-                .unwrap()
-                .commit_hook(None::<fn() -> bool>)
-                .unwrap();
-            result
-        } else {
-            crate::scan_delta::FAULT_BETWEEN_MARK_AND_COALESCE.with(|armed| armed.set(true));
-            session.scan_delta_page_applied(generation, None)
-        };
-
-        assert!(result.is_err(), "{fault}: the fault did not surface");
-        let ledger = session.scan_delta_ledger().unwrap();
-        assert_eq!(
-            ledger.pending,
-            Some(ScanDeltaPending {
-                generation,
-                cursor: last_page_cursor.clone(),
-                rows: 3,
-            }),
-            "{fault}: the generation left Pending or lost its cursor"
-        );
-        assert_eq!(
-            ledger.applied,
-            Some(applied_before.clone()),
-            "{fault}: the Applied ledger changed"
-        );
-        assert_eq!(
-            raw_rows_of(&session, applied_before.generation),
-            rows_before,
-            "{fault}: the Applied rows changed"
-        );
-        assert_ledger_bounded(&session, fault);
-
-        // The retry resumes at the last page's cursor, re-applies that
-        // page, and finishes the mark and the coalesce.
-        assert_eq!(
-            apply_pending(&session, 2),
-            vec![entry(ScanDeltaKind::Created, "c3.md")],
-            "{fault}: the retry did not resume at the last page"
-        );
-        let ledger = session.scan_delta_ledger().unwrap();
-        assert_eq!(ledger.pending, None);
-        assert_eq!(
-            ledger.applied.map(|applied| applied.rows),
-            Some(4),
-            "{fault}: a.md plus three creations"
-        );
-        assert_eq!(
-            session.scan_delta_release().unwrap(),
-            ScanDeltaOutcome {
-                changed: 4,
-                removed: 0
-            }
-        );
-    }
-}
-
-/// Coordinator witness (c): per-path composition across an Applied and a
-/// newer generation, against the last released state — through real
-/// rescans. (Mutation: release at the applied mark → every case speaks
-/// the second generation alone.)
-#[test]
-fn coalescing_composes_each_path_against_the_last_release() {
-    // Run `first`, apply it WITHOUT releasing (a later step failed), run
-    // `second`, apply it, release: the spoken outcome of the retry.
-    fn composed(
-        seed: &[(&str, &str)],
-        first: impl FnOnce(&std::path::Path),
-        second: impl FnOnce(&std::path::Path),
-    ) -> ScanDeltaOutcome {
-        let tmp = tempfile::tempdir().unwrap();
-        for (path, bytes) in seed {
-            std::fs::write(tmp.path().join(path), bytes).unwrap();
-        }
-        let session = VaultSession::from_filesystem(tmp.path().to_path_buf()).unwrap();
-        session.scan_initial(&CancelToken::new()).unwrap();
-        first(tmp.path());
-        rescan(&session);
-        apply_pending(&session, 1);
-        second(tmp.path());
-        rescan(&session);
-        apply_pending(&session, 1);
-        let outcome = session.scan_delta_release().unwrap();
-        assert_eq!(raw_retained_rows(&session), 0);
-        outcome
-    }
-    fn write_newer(root: &std::path::Path, path: &str, bytes: &[u8]) {
-        let provider = FsVaultProvider::new(root.to_path_buf());
-        let before = provider.stat(path).map(|s| s.mtime_ms).unwrap_or(-1);
-        rewrite_until_mtime_advances(&provider, path, bytes, before);
-    }
-    let none = ScanDeltaOutcome::default();
-    let modified = ScanDeltaOutcome {
-        changed: 1,
-        removed: 0,
-    };
-    let removed = ScanDeltaOutcome {
-        changed: 0,
-        removed: 1,
-    };
-
-    // h0 → h1, then h1 → h0: the effects happened, the speech nets away.
-    assert_eq!(
-        composed(
-            &[("a.md", "h0h0\n")],
-            |root| write_newer(root, "a.md", b"h1h1\n"),
-            |root| write_newer(root, "a.md", b"h0h0\n"),
-        ),
-        none,
-        "h0 -> h1 -> h0"
+            .indexed_content_hashes(&at_limit, &CancelToken::new())
+            .unwrap()
+            .len(),
+        crate::MAX_INDEXED_HASH_PATHS
     );
-    // h0 → h1, then h1 → h2: one modification.
-    assert_eq!(
-        composed(
-            &[("a.md", "h0h0\n")],
-            |root| write_newer(root, "a.md", b"h1h1\n"),
-            |root| write_newer(root, "a.md", b"h2h2\n"),
-        ),
-        modified,
-        "h0 -> h1 -> h2"
-    );
-    // create, then remove: nothing.
-    assert_eq!(
-        composed(
-            &[("seed.md", "seed\n")],
-            |root| std::fs::write(root.join("new.md"), b"new\n").unwrap(),
-            |root| std::fs::remove_file(root.join("new.md")).unwrap(),
-        ),
-        none,
-        "create -> remove"
-    );
-    // remove, then create with a new hash: modified.
-    assert_eq!(
-        composed(
-            &[("a.md", "old\n")],
-            |root| std::fs::remove_file(root.join("a.md")).unwrap(),
-            |root| std::fs::write(root.join("a.md"), b"new bytes\n").unwrap(),
-        ),
-        modified,
-        "remove -> create (new hash)"
-    );
-    // remove, then create with the same hash: nothing.
-    assert_eq!(
-        composed(
-            &[("a.md", "same\n")],
-            |root| std::fs::remove_file(root.join("a.md")).unwrap(),
-            |root| std::fs::write(root.join("a.md"), b"same\n").unwrap(),
-        ),
-        none,
-        "remove -> create (same hash)"
-    );
-    // modify, then remove: removed.
-    assert_eq!(
-        composed(
-            &[("a.md", "h0h0\n")],
-            |root| write_newer(root, "a.md", b"h1h1\n"),
-            |root| std::fs::remove_file(root.join("a.md")).unwrap(),
-        ),
-        removed,
-        "modify -> remove"
-    );
-}
 
-fn temp_ledger_exists(session: &VaultSession) -> bool {
-    let conn = session.conn.lock().unwrap();
-    conn.query_row(
-        "SELECT EXISTS(SELECT 1 FROM temp.sqlite_master WHERE name = 'scan_delta_generation')",
-        [],
-        |row| row.get(0),
-    )
-    .unwrap()
-}
-
-/// The ledger's TEMP tables are created by the first rescan, never at open:
-/// opening a vault never depends on the temp store, and a session that
-/// never rescans (the mac host, the CLI) never touches it. Every read of
-/// an absent ledger answers "nothing retained" without creating it.
-#[test]
-fn the_ledger_is_created_by_the_first_rescan_not_at_open() {
-    let (tmp, session) = make_vault(|p| {
-        p.write_file("a.md", b"a\n").unwrap();
-    });
-    session.scan_initial(&CancelToken::new()).unwrap();
-    assert!(!temp_ledger_exists(&session), "the open created the ledger");
-
-    assert_eq!(
-        session.scan_delta_ledger().unwrap(),
-        ScanDeltaLedger::default()
-    );
-    assert_eq!(session.scan_delta_pending().unwrap(), None);
-    assert_eq!(
-        session.scan_delta_release().unwrap(),
-        ScanDeltaOutcome::default()
-    );
+    let cancelled = CancelToken::new();
+    cancelled.cancel();
     assert!(matches!(
-        session.scan_delta_page(1, Paging::first(1), &CancelToken::new()),
-        Err(VaultError::InvalidArgument { .. })
+        session.indexed_content_hashes(&["a.md".into()], &cancelled),
+        Err(VaultError::Cancelled)
     ));
-    assert!(matches!(
-        session.scan_delta_page_applied(1, None),
-        Err(VaultError::InvalidArgument { .. })
-    ));
-    assert!(!temp_ledger_exists(&session), "a read created the ledger");
-
-    std::fs::write(tmp.path().join("b.md"), b"b\n").unwrap();
-    assert_eq!(rescan(&session).files_changed, 1);
-    assert!(temp_ledger_exists(&session), "the first rescan creates it");
 }
 
-// --- restart protocol --------------------------------------------------------------
-
-/// The initial-open path discards whatever this session retained before
-/// it scans: the rebuilt index has no workspace state to reconcile.
+/// AR-18's fallback, why it compares against the index: two sessions
+/// share `.slate/cache.sqlite` (the app and the CLI, contract 33). What
+/// session B writes lands in the SHARED index, so session A's next scan
+/// finds it already current and counts none of it (AR-25) — but A's
+/// index lookups see every one of B's changes, which is what the host's
+/// re-sync reads.
 #[test]
-fn the_initial_open_scan_discards_retained_generations_before_it_scans() {
-    let (tmp, session) = make_vault(|p| {
-        p.write_file("seed.md", b"seed\n").unwrap();
+fn another_sessions_writes_are_in_the_shared_index_but_not_in_this_scans_counts() {
+    let (tmp, a) = make_vault(|p| {
+        p.write_file("edit.md", b"before\n").unwrap();
+        p.write_file("gone.md", b"gone\n").unwrap();
     });
-    session.scan_initial(&CancelToken::new()).unwrap();
-    std::fs::write(tmp.path().join("late.md"), b"late\n").unwrap();
-    rescan(&session);
-    assert!(session.scan_delta_pending().unwrap().is_some());
+    a.scan_initial(&CancelToken::new()).unwrap();
 
-    let report = session.scan_initial(&CancelToken::new()).unwrap();
+    let b = VaultSession::from_filesystem(tmp.path().to_path_buf()).unwrap();
+    b.scan_initial(&CancelToken::new()).unwrap();
+    b.create_exclusive("new.md", "new\n").unwrap();
+    let before = b
+        .get_file_metadata("edit.md")
+        .unwrap()
+        .unwrap()
+        .content_hash;
+    b.save_text("edit.md", "after, from B\n", Some(&before))
+        .unwrap();
+    b.delete_file("gone.md").unwrap();
 
-    assert_eq!(report.delta_generation, None);
+    let report = rescan(&a);
+    assert!(report.complete, "{:?}", report.error_samples);
     assert_eq!(
-        session.scan_delta_ledger().unwrap(),
-        ScanDeltaLedger::default()
+        (report.files_changed, report.files_removed),
+        (0, 0),
+        "AR-25: another session's already-indexed writes are not this scan's counts"
     );
-    assert_eq!(raw_retained_rows(&session), 0);
+    assert_eq!(
+        a.indexed_content_hashes(
+            &["new.md".into(), "edit.md".into(), "gone.md".into()],
+            &CancelToken::new(),
+        )
+        .unwrap(),
+        vec![
+            Some(crate::content_hash(b"new\n")),
+            Some(crate::content_hash(b"after, from B\n")),
+            None,
+        ],
+        "session A's index lookups see all three of B's changes"
+    );
 }
-
-/// Crash-equivalent: a session abandoned WITHOUT close/dispose cleanup
-/// leaves an unacknowledged generation behind; a fresh session on the
-/// same vault sees no orphan — before it scans and after — so nothing
-/// stale is ever paged, applied or spoken against the rebuilt index.
-#[test]
-fn a_crash_orphaned_generation_never_reaches_a_fresh_session() {
-    let tmp = tempfile::tempdir().unwrap();
-    std::fs::write(tmp.path().join("seed.md"), b"seed\n").unwrap();
-    let abandoned = VaultSession::from_filesystem(tmp.path().to_path_buf()).unwrap();
-    abandoned.scan_initial(&CancelToken::new()).unwrap();
-    std::fs::write(tmp.path().join("late.md"), b"late\n").unwrap();
-    rescan(&abandoned);
-    assert!(abandoned.scan_delta_pending().unwrap().is_some());
-    // No Drop, no close: the process "died" with the generation unacknowledged.
-    std::mem::forget(abandoned);
-
-    let fresh = VaultSession::from_filesystem(tmp.path().to_path_buf()).unwrap();
-    assert_eq!(
-        fresh.scan_delta_ledger().unwrap(),
-        ScanDeltaLedger::default(),
-        "an orphan reached the fresh session before its open scan"
-    );
-    let report = fresh.scan_initial(&CancelToken::new()).unwrap();
-    assert_eq!(report.delta_generation, None);
-    assert_eq!(
-        fresh.scan_delta_ledger().unwrap(),
-        ScanDeltaLedger::default()
-    );
-    assert_eq!(
-        fresh.scan_delta_release().unwrap(),
-        ScanDeltaOutcome::default()
-    );
-    // And the fresh session's own rescans are unblocked.
-    std::fs::write(tmp.path().join("later.md"), b"later\n").unwrap();
-    assert_eq!(rescan(&fresh).files_changed, 1);
-}
-
-// --- the report --------------------------------------------------------------------
 
 /// The open scan reports the same hash-authoritative counts: a new
 /// vault is all new, a reopened unchanged vault is "0 new or changed",
@@ -1371,294 +698,10 @@ fn the_open_scan_reports_changed_and_removed_too() {
     );
 }
 
-// --- Slate-owned writes supersede (round 23) ----------------------------------------
-
-/// `(path, superseded)` for every retained row, straight from the TEMP
-/// table, ordered by path then generation.
-fn raw_flags(session: &VaultSession) -> Vec<(String, bool)> {
-    let conn = session.conn.lock().unwrap();
-    let mut stmt = conn
-        .prepare("SELECT path, superseded FROM temp.scan_delta_row ORDER BY path, generation")
-        .unwrap();
-    stmt.query_map([], |row| Ok((row.get(0)?, row.get(1)?)))
-        .unwrap()
-        .collect::<Result<Vec<_>, _>>()
-        .unwrap()
-}
-
-fn write_external(tmp: &tempfile::TempDir, path: &str, text: &str) {
-    std::fs::write(tmp.path().join(path), text.as_bytes()).unwrap();
-}
-
-/// A Slate-owned write to a path — a save, a create, a rename (BOTH
-/// paths), a move, a delete, a trash, and a folder rename's every file —
-/// supersedes EVERY retained row for that path, in the Applied generation
-/// and the Pending one alike; a path no Slate write touched keeps its rows
-/// live. The superseded rows stay in their page, flagged (the page and its
-/// row count do not move), and are never spoken.
-#[test]
-fn a_slate_owned_write_supersedes_every_retained_row_for_its_path() {
-    let (tmp, session) = make_vault(|p| {
-        for name in [
-            "save.md", "gone.md", "ren.md", "mv.md", "del.md", "trash.md", "keep.md",
-        ] {
-            p.write_file(name, format!("{name} v0\n").as_bytes())
-                .unwrap();
-        }
-        p.create_dir("dir").unwrap();
-        p.write_file("dir/f.md", b"f v0\n").unwrap();
-        p.create_dir("sub").unwrap();
-        p.write_file("sub/x.md", b"x\n").unwrap();
-    });
-    session.scan_initial(&CancelToken::new()).unwrap();
-    let touched = [
-        "save.md", "ren.md", "mv.md", "del.md", "trash.md", "keep.md", "dir/f.md",
-    ];
-
-    // The Applied generation: every touched file modified, gone.md
-    // removed, ren-to.md created.
-    for path in touched {
-        write_external(&tmp, path, &format!("{path} v1 x\n"));
-    }
-    std::fs::remove_file(tmp.path().join("gone.md")).unwrap();
-    write_external(&tmp, "ren-to.md", "squatter\n");
-    rescan(&session);
-    apply_pending(&session, 100);
-    // The Pending generation: every touched file modified again, ren-to.md
-    // removed again.
-    for path in touched {
-        write_external(&tmp, path, &format!("{path} v2, longer\n"));
-    }
-    std::fs::remove_file(tmp.path().join("ren-to.md")).unwrap();
-    rescan(&session);
-    let before = raw_flags(&session);
-    assert_eq!(before.len(), 17, "{before:?}");
-    assert!(
-        before.iter().all(|(_, superseded)| !superseded),
-        "a row was superseded before any Slate-owned write: {before:?}"
-    );
-
-    session.save_text("save.md", "slate\n", None).unwrap();
-    session.create_exclusive("gone.md", "back\n").unwrap();
-    session.rename_file("ren.md", "ren-to.md").unwrap();
-    session.move_file("mv.md", "sub").unwrap();
-    session.delete_file("del.md").unwrap();
-    session
-        .batch_trash(crate::BatchTrashRequest {
-            items: vec![crate::StructuralBatchItem {
-                path: "trash.md".into(),
-                is_directory: false,
-            }],
-        })
-        .unwrap();
-    session.rename_folder("dir", "dir2").unwrap();
-
-    let after = raw_flags(&session);
-    assert_eq!(
-        after.len(),
-        17,
-        "a Slate-owned write dropped a row: {after:?}"
-    );
-    for (path, superseded) in &after {
-        assert_eq!(
-            *superseded,
-            path != "keep.md",
-            "{path}: superseded = {superseded}"
-        );
-    }
-
-    // Flagged in place: the Pending page still holds every row.
-    let pending = session.scan_delta_pending().unwrap().unwrap();
-    let page = session
-        .scan_delta_page(pending.generation, Paging::first(100), &CancelToken::new())
-        .unwrap();
-    assert_eq!(page.entries.len() as u64, pending.rows);
-    for entry in &page.entries {
-        assert_eq!(entry.superseded, entry.path != "keep.md", "{entry:?}");
-    }
-    session
-        .scan_delta_page_applied(pending.generation, None)
-        .unwrap();
-    // Only keep.md, the one path no Slate write touched, is spoken.
-    assert_eq!(
-        session.scan_delta_release().unwrap(),
-        ScanDeltaOutcome {
-            changed: 1,
-            removed: 0
-        }
-    );
-}
-
-/// The flag commits in the write's own transaction: a fault injected into
-/// the flagging rolls the write's index commit back with it (the index
-/// keeps the scan's hash and no row is flagged), and the same write,
-/// unfaulted, lands both.
-#[test]
-fn the_supersede_commits_with_its_write() {
-    let (tmp, session) = make_vault(|p| {
-        p.write_file("p.md", b"p0\n").unwrap();
-    });
-    session.scan_initial(&CancelToken::new()).unwrap();
-    write_external(&tmp, "p.md", "p1 external\n");
-    rescan(&session);
-    let scanned = indexed_hash(&session, "p.md");
-    {
-        let conn = session.conn.lock().unwrap();
-        conn.execute_batch(
-            "CREATE TEMP TRIGGER fault_the_supersede
-                 BEFORE UPDATE OF superseded ON scan_delta_row
-             BEGIN
-                 SELECT RAISE(ABORT, 'injected supersede fault');
-             END;",
-        )
-        .unwrap();
-    }
-
-    assert!(session.save_text("p.md", "slate bytes\n", None).is_err());
-    assert_eq!(
-        indexed_hash(&session, "p.md"),
-        scanned,
-        "the index commit landed without its flag"
-    );
-    assert_eq!(raw_flags(&session), vec![("p.md".to_string(), false)]);
-
-    {
-        let conn = session.conn.lock().unwrap();
-        conn.execute_batch("DROP TRIGGER temp.fault_the_supersede")
-            .unwrap();
-    }
-    session.save_text("p.md", "slate bytes\n", None).unwrap();
-    assert_ne!(indexed_hash(&session, "p.md"), scanned);
-    assert_eq!(raw_flags(&session), vec![("p.md".to_string(), true)]);
-}
-
-/// The scan's own index writes are the delta, never a Slate-owned write:
-/// a rescan that changes a path the Applied generation retains flags
-/// nothing, in the Applied row or its own new one.
-#[test]
-fn a_scan_never_supersedes_what_it_retains() {
-    let (tmp, session) = make_vault(|p| {
-        p.write_file("a.md", b"a0\n").unwrap();
-    });
-    session.scan_initial(&CancelToken::new()).unwrap();
-    write_external(&tmp, "a.md", "a1 x\n");
-    rescan(&session);
-    apply_pending(&session, 10);
-    write_external(&tmp, "a.md", "a2, longer\n");
-    rescan(&session);
-    assert_eq!(
-        raw_flags(&session),
-        vec![("a.md".to_string(), false), ("a.md".to_string(), false)]
-    );
-    // And the next scan after a Slate-owned write compares against the
-    // index that write updated: nothing to record.
-    settle(&session);
-    session.save_text("a.md", "slate\n", None).unwrap();
-    rescan(&session);
-    assert_eq!(session.scan_delta_pending().unwrap().unwrap().rows, 0);
-}
-
-/// A path whose older row was superseded restarts, at the coalesce, from
-/// the newer row alone: only what changed AFTER the Slate-owned write is
-/// spoken. x.md went h0 to h1 outside Slate (applied), was saved through
-/// Slate (hS), then reverted to h0 outside Slate. Composing through the
-/// superseded row would net h0 to h0 into nothing; the truth since the
-/// save is hS to h0, one modification.
-#[test]
-fn a_superseded_path_speaks_only_what_changed_after_the_write() {
-    let (tmp, session) = make_vault(|p| {
-        p.write_file("x.md", b"h0\n").unwrap();
-        p.write_file("y.md", b"y0\n").unwrap();
-    });
-    session.scan_initial(&CancelToken::new()).unwrap();
-    write_external(&tmp, "x.md", "h1 external\n");
-    rescan(&session);
-    apply_pending(&session, 10);
-    let saved = session.save_text("x.md", "hS slate\n", None).unwrap();
-    assert_eq!(raw_flags(&session), vec![("x.md".to_string(), true)]);
-
-    write_external(&tmp, "x.md", "h0\n");
-    write_external(&tmp, "y.md", "y1 x\n");
-    rescan(&session);
-    apply_pending(&session, 10);
-    assert_eq!(
-        retained_hashes(&session, "x.md"),
-        Some((Some(saved.new_content_hash), indexed_hash(&session, "x.md")))
-    );
-    assert_eq!(
-        raw_flags(&session),
-        vec![("x.md".to_string(), false), ("y.md".to_string(), false)]
-    );
-    assert_eq!(
-        session.scan_delta_release().unwrap(),
-        ScanDeltaOutcome {
-            changed: 2,
-            removed: 0
-        }
-    );
-}
-
-// --- cancellation (round 23) ---------------------------------------------------------
-
-/// A page read takes the rescan's cancel token: a cancelled read fails
-/// closed BEFORE it reads (before the first page, and between pages) and
-/// the generation keeps the cursor its last applied page left; a later
-/// read with a live token resumes exactly there.
-#[test]
-fn a_cancelled_page_read_fails_closed_and_moves_nothing() {
-    let (tmp, session) = make_vault(|_| {});
-    session.scan_initial(&CancelToken::new()).unwrap();
-    for name in ["a.md", "b.md", "c.md"] {
-        write_external(&tmp, name, "new\n");
-    }
-    let generation = rescan(&session).delta_generation.unwrap();
-    let cancelled = CancelToken::new();
-    cancelled.cancel();
-
-    assert!(matches!(
-        session.scan_delta_page(generation, Paging::first(1), &cancelled),
-        Err(VaultError::Cancelled)
-    ));
-    assert_eq!(session.scan_delta_pending().unwrap().unwrap().cursor, None);
-
-    let first = session
-        .scan_delta_page(generation, Paging::first(1), &CancelToken::new())
-        .unwrap();
-    session
-        .scan_delta_page_applied(generation, first.next_cursor.as_deref())
-        .unwrap();
-    let after_one = session.scan_delta_pending().unwrap().unwrap().cursor;
-    assert_eq!(after_one, first.next_cursor);
-    assert!(matches!(
-        session.scan_delta_page(
-            generation,
-            Paging {
-                cursor: after_one.clone(),
-                limit: 1
-            },
-            &cancelled
-        ),
-        Err(VaultError::Cancelled)
-    ));
-    assert_eq!(
-        session.scan_delta_pending().unwrap().unwrap().cursor,
-        after_one
-    );
-
-    let rest = apply_pending(&session, 1);
-    assert_eq!(
-        rest,
-        vec![
-            entry(ScanDeltaKind::Created, "b.md"),
-            entry(ScanDeltaKind::Created, "c.md")
-        ]
-    );
-}
-
 // --- openability is core's (round 26) --------------------------------------------------
 
-/// The path classifier every delta row carries (`openable`) is the
-/// `OpenableDocuments` filter itself: over indexed rows of every openable
+/// The path classifier core exports (`is_openable_document`, the host's
+/// pinned set) is the `OpenableDocuments` filter itself: over indexed rows of every openable
 /// extension (any case) and a few that are not, the paths the filter lists
 /// are exactly the paths `is_openable_document` accepts.
 #[test]
