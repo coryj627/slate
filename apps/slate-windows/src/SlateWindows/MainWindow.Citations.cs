@@ -512,11 +512,13 @@ public partial class MainWindow
     }
 
     /// <summary>A placeholder row has nothing to expand — core never
-    /// looked one up (contract 2). Returns whether a sheet opened.
+    /// looked one up (contract 2). The row is the one that holds the keys,
+    /// else the selection (W7-7 PR 4, codex round 7: a landing focuses a
+    /// row without selecting it). Returns whether a sheet opened.
     /// </summary>
     private bool ExpandSelectedCitation()
     {
-        if (PanelCitationsList.SelectedItem is not CitationRowViewModel { CanExpand: true } row)
+        if (SelectorFocus.FocusedOrSelectedItem(PanelCitationsList) is not CitationRowViewModel { CanExpand: true } row)
         {
             return false;
         }

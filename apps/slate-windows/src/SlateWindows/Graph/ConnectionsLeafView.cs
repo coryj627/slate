@@ -346,6 +346,9 @@ internal sealed class ConnectionsLeafView : UserControl
         // the Menu key on a row opened nothing (W6-2 PR B2's journey, T6).
         _tree.ContextMenu = _rowMenu;
         _tree.AddHandler(ContextMenuOpeningEvent, new ContextMenuEventHandler(OnRowContextMenuOpening), handledEventsToo: false);
+        // Every landing on the tree is the leaf's one row landing (codex PR 4
+        // round 7 finding 1).
+        SelectorFocus.SetOwnLanding(_tree, LandOnRow);
 
         var panel = new DockPanel();
         DockPanel.SetDock(_heading, Dock.Top);
@@ -407,16 +410,60 @@ internal sealed class ConnectionsLeafView : UserControl
         UpdateLayout();
         if (_tree.Visibility == Visibility.Visible && _roots.Count > 0)
         {
-            // W7-7 PR 4 (#1247, R-5 as the owner amended it): the selected
-            // row, else the first row UNSELECTED — a landing selects nothing.
-            if (_tree.SelectedItem is ConnectionsRowViewModel selected)
-            {
-                return RealizeContainer(selected) is { } container && container.Focus();
-            }
-
-            return RealizeContainer(_roots[0]) is { } first && LandingTreeViewItem.FocusUnselected(first);
+            return LandOnRow();
         }
         return _anchor.Focus();
+    }
+
+    /// <summary>
+    /// W7-7 PR 4 (#1247, R-5 as the owner amended it; codex round 7 finding
+    /// 1): the leaf's ONE row landing — the boundary's (<see cref="FocusAnchor"/>),
+    /// Tab's, UI Automation's SetFocus, a click on the empty area, a restore
+    /// and the render's keep-alive all land here (the tree's own landing,
+    /// <see cref="SelectorFocus.SetOwnLanding"/>): the SELECTED row while it
+    /// is shown, else the first row UNSELECTED. A landing selects nothing and
+    /// opens nothing — and it expands nothing: a selection hidden under a
+    /// collapsed row is not shown, and the anchor used to re-expand the rows
+    /// above it while Tab went to the first row, two landings for one leaf.
+    /// </summary>
+    /// <returns>Whether a row took the keys.</returns>
+    private bool LandOnRow()
+    {
+        if (_roots.Count == 0)
+        {
+            return false;
+        }
+
+        if (ShownSelection() is { } selected
+            && RealizeContainer(selected) is { } container
+            && (container.Focus() || container.IsKeyboardFocusWithin))
+        {
+            return true;
+        }
+
+        return RealizeContainer(_roots[0]) is { } first && LandingTreeViewItem.FocusUnselected(first);
+    }
+
+    /// <summary>The tree's selected row when every row above it is
+    /// expanded — the selection the reader can see — else null.</summary>
+    private ConnectionsRowViewModel? ShownSelection()
+    {
+        if (_tree.SelectedItem is not ConnectionsRowViewModel selected)
+        {
+            return null;
+        }
+
+        for (ConnectionsRowViewModel? above = _parentOf.GetValueOrDefault(selected);
+            above is not null;
+            above = _parentOf.GetValueOrDefault(above))
+        {
+            if (!above.IsExpanded)
+            {
+                return null;
+            }
+        }
+
+        return selected;
     }
 
     private static void OnModelChanged(DependencyObject sender, DependencyPropertyChangedEventArgs e)
@@ -621,8 +668,7 @@ internal sealed class ConnectionsLeafView : UserControl
     {
         if (_tree.Visibility == Visibility.Visible && _roots.Count > 0)
         {
-            ConnectionsRowViewModel target = _tree.SelectedItem as ConnectionsRowViewModel ?? _roots[0];
-            return RealizeContainer(target) is { } container && container.Focus();
+            return LandOnRow();
         }
         return _anchor.Focus();
     }
@@ -867,7 +913,10 @@ internal sealed class ConnectionsLeafView : UserControl
         {
             return false;
         }
-        ConnectionsRowViewModel? current = _tree.SelectedItem as ConnectionsRowViewModel;
+        // The row that holds the keys, else the selection (W7-7 PR 4, codex
+        // round 7 finding 1): a landing focuses a row without selecting it,
+        // and a selection hidden under a collapsed row is not the reader's.
+        ConnectionsRowViewModel? current = SelectorFocus.FocusedOrSelectedItem(_tree) as ConnectionsRowViewModel;
         switch (TreeKeyFor(key, modifiers))
         {
             case ConnectionsTreeKey.Activate when current is { Row: not null }:
@@ -947,14 +996,15 @@ internal sealed class ConnectionsLeafView : UserControl
     /// <summary>WPF's request for the tree's menu (the Menu key, Shift+F10,
     /// a right-click): a POINTER request targets the row under the cursor
     /// and gets no menu over a group header or empty chrome; the keyboard
-    /// request (cursor coordinates -1) targets the selected row. The
+    /// request (cursor coordinates -1) targets the row that holds the keys,
+    /// else the selected row (W7-7 PR 4, codex round 7 finding 1). The
     /// persistent menu's items are rebuilt from that row.</summary>
     private void OnRowContextMenuOpening(object sender, ContextMenuEventArgs e)
     {
         bool pointerRequest = e.CursorLeft >= 0 || e.CursorTop >= 0;
         ConnectionsRowViewModel? row = pointerRequest
             ? (e.OriginalSource as FrameworkElement)?.DataContext as ConnectionsRowViewModel
-            : _tree.SelectedItem as ConnectionsRowViewModel;
+            : SelectorFocus.FocusedOrSelectedItem(_tree) as ConnectionsRowViewModel;
         if (Model is null || row?.Row is null || !RebuildRowMenu(row))
         {
             e.Handled = true;

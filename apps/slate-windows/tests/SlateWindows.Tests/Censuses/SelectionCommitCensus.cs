@@ -53,7 +53,6 @@ public sealed class SelectionCommitCensus
         ["SlateWindows.Bases.BaseSurfaceView._grid"] = "the base's current row for its commands; nothing opens or speaks",
         ["SlateWindows.CommandPaletteResultsPresenter._list"] = "the current command of a modal overlay's search; Enter commits",
         ["SlateWindows.Graph.ConnectionsLeafView._depth"] = "a combo box, its own stop",
-        ["SlateWindows.Graph.ConnectionsLeafView._tree"] = "the current occurrence for the leaf's verbs; nothing opens or speaks",
         ["SlateWindows.Graph.GraphInspectorView.ring"] = "a combo box, its own stop",
         ["SlateWindows.Graph.GraphInspectorView.colour"] = "a combo box, its own stop",
         ["SlateWindows.Grids.AccessibleDataGrid._grid"] = "the grid's own currency, which its owners subscribe to",
@@ -65,6 +64,10 @@ public sealed class SelectionCommitCensus
     {
         ["SlateWindows.Canvas.CanvasOutlineView._tree"] = (typeof(CanvasOutlineView), view => ((CanvasOutlineView)view).TreeForTests),
         ["SlateWindows.Canvas.CanvasTableView._grid"] = (typeof(CanvasTableView), view => Field<Grids.AccessibleDataGrid>(view, "_grid").Grid),
+        // The selection names the occurrence the leaf's verbs act on; its
+        // own landing keeps every landing on ONE row — the shown selection,
+        // else the first row unselected (codex PR 4 round 7 finding 1).
+        ["SlateWindows.Graph.ConnectionsLeafView._tree"] = (typeof(ConnectionsLeafView), view => ((ConnectionsLeafView)view).TreeForTests),
         ["SlateWindows.Graph.GraphTableView._grid"] = (typeof(GraphTableView), view => Field<Grids.AccessibleDataGrid>(view, "_grid").Grid),
     };
 

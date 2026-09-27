@@ -1029,6 +1029,10 @@ internal sealed class BaseSurfaceView : UserControl
         }
     }
 
+    /// <summary>Opens the row that holds the keys — else the selected row —
+    /// under the C13 admission. W7-7 PR 4 (#1247; codex round 7 finding 4):
+    /// the quick filter's Escape lands on a row without selecting it, and
+    /// Enter there opened nothing.</summary>
     private bool ActivateListRow()
     {
         // The C13 admission the grid's row actions respect (codex
@@ -1037,7 +1041,7 @@ internal sealed class BaseSurfaceView : UserControl
         if (IsReadOnlySurface
             || Model is not
             { State: BaseLoadState.Ready or BaseLoadState.Degraded } model
-            || _list.SelectedItem is not BaseListItemViewModel { Row: { } row })
+            || SelectorFocus.FocusedOrSelectedItem(_list) is not BaseListItemViewModel { Row: { } row })
         {
             return false;
         }

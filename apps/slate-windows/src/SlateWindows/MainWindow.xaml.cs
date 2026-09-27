@@ -1539,10 +1539,14 @@ public partial class MainWindow : Window
         }
     }
 
+    // W7-7 PR 4 (#1247; codex round 7 finding 2): every key below acts on
+    // the row that holds the keys — a landing focuses a row without
+    // selecting it — and on the selection only when no row does
+    // (SelectorFocus.FocusedOrSelectedItem, FocusedRowCensus).
     private void PanelBacklinks_PreviewKeyDown(object sender, KeyEventArgs e)
     {
         if (e.Key == Key.Enter
-            && PanelBacklinksList.SelectedItem is BacklinkRowViewModel row)
+            && SelectorFocus.FocusedOrSelectedItem(PanelBacklinksList) is BacklinkRowViewModel row)
         {
             PanelsViewModel?.OpenBacklink(row, PanelModifierTarget());
             e.Handled = true;
@@ -1564,7 +1568,7 @@ public partial class MainWindow : Window
         // Row targeted — now gate the items to what this row can
         // actually honor (round 3: external rows advertised tab and
         // split actions that launch the browser regardless).
-        if (PanelOutgoingLinksList.SelectedItem
+        if (SelectorFocus.FocusedOrSelectedItem(PanelOutgoingLinksList)
                 is not OutgoingLinkRowViewModel row
             || !PanelRowTargeting.ComposeOutgoingMenu(
                 PanelOutgoingLinksList.ContextMenu, row))
@@ -1618,7 +1622,7 @@ public partial class MainWindow : Window
     private void PanelOutgoingLinks_PreviewKeyDown(object sender, KeyEventArgs e)
     {
         if (e.Key == Key.Enter
-            && PanelOutgoingLinksList.SelectedItem is OutgoingLinkRowViewModel row)
+            && SelectorFocus.FocusedOrSelectedItem(PanelOutgoingLinksList) is OutgoingLinkRowViewModel row)
         {
             PanelsViewModel?.OpenOutgoingLink(row, PanelModifierTarget());
             e.Handled = true;
@@ -1659,7 +1663,7 @@ public partial class MainWindow : Window
     private void PanelOutline_PreviewKeyDown(object sender, KeyEventArgs e)
     {
         if (e.Key == Key.Enter
-            && PanelOutlineList.SelectedItem is OutlineRowViewModel row)
+            && SelectorFocus.FocusedOrSelectedItem(PanelOutlineList) is OutlineRowViewModel row)
         {
             PanelsViewModel?.OpenHeading(row);
             e.Handled = true;
@@ -1688,7 +1692,7 @@ public partial class MainWindow : Window
     private void PanelTasks_PreviewKeyDown(object sender, KeyEventArgs e)
     {
         if (sender is not ListBox list
-            || list.SelectedItem is not NoteTaskRowViewModel row)
+            || SelectorFocus.FocusedOrSelectedItem(list) is not NoteTaskRowViewModel row)
         {
             return;
         }
@@ -1734,7 +1738,7 @@ public partial class MainWindow : Window
 
     private void PanelReview_PreviewKeyDown(object sender, KeyEventArgs e)
     {
-        if (PanelReviewList.SelectedItem is not ReviewTaskRowViewModel row)
+        if (SelectorFocus.FocusedOrSelectedItem(PanelReviewList) is not ReviewTaskRowViewModel row)
         {
             return;
         }

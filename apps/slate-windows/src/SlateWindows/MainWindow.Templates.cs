@@ -407,7 +407,9 @@ public partial class MainWindow
                     return;
                 }
 
-                if (TemplatePickerList.SelectedItem
+                // The row that holds the keys, else the one the arrows
+                // chose (W7-7 PR 4, codex round 7).
+                if (SelectorFocus.FocusedOrSelectedItem(TemplatePickerList)
                     is TemplatePickerRowViewModel row)
                 {
                     picker.ActivateCommand.Execute(row);

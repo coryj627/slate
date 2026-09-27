@@ -968,8 +968,10 @@ internal sealed class CanvasOutlineView : UserControl
 
     private void OnTreeKeyDown(object sender, KeyEventArgs e)
     {
+        // The row that holds the keys, else the seated one (W7-7 PR 4,
+        // codex round 7; FocusedRowCensus).
         if (e.Key != Key.Enter
-            || _tree.SelectedItem is not CanvasOutlineRowViewModel line)
+            || SelectorFocus.FocusedOrSelectedItem(_tree) is not CanvasOutlineRowViewModel line)
         {
             return;
         }

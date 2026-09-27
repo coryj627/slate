@@ -177,7 +177,10 @@ public partial class MainWindow
                 return;
             }
 
-            if (picker.SelectedRow is MoveToRowViewModel row)
+            // The row that holds the keys, when one does (W7-7 PR 4, codex
+            // round 7: a landing focuses a row without selecting it); from
+            // the filter box, the row the arrows chose.
+            if ((SelectorFocus.FocusedItem(MoveToList) ?? picker.SelectedRow) is MoveToRowViewModel row)
             {
                 picker.ActivateCommand.Execute(row);
                 e.Handled = true;
