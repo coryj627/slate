@@ -116,9 +116,10 @@ func runVaultDemo(rootPath: String) {
         print(
             "Scan complete: \(scanReport.filesIndexed) files indexed, "
                 + "\(scanReport.bytesProcessed) bytes processed, "
-                + "\(scanReport.errors.count) errors."
+                + "\(scanReport.errorCount) errors."
         )
-        for err in scanReport.errors {
+        // The report counts every error and carries at most a few samples.
+        for err in scanReport.errorSamples {
             print("  warn: \(err)")
         }
 
