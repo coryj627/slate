@@ -8,7 +8,9 @@ using System.Security.AccessControl;
 using System.Security.Principal;
 using System.Text.RegularExpressions;
 using System.Windows.Documents;
+using System.Windows.Input;
 using SlateWindows.Canvas;
+using SlateWindows.Commands;
 using SlateWindows.Graph;
 using uniffi.slate_uniffi;
 
@@ -21,11 +23,11 @@ namespace SlateWindows.Tests;
 /// </summary>
 /// <remarks>
 /// Every fact drives the REAL path: a real vault on disk, the lifecycle's
-/// own <c>RescanAsync</c>, core's rescan and delta ledger through the
-/// binding, and the workspace's real tabs. The only seams are the ones the
-/// lifecycle already takes — the session-load worker (to park a scan or
-/// make it throw), the clock, and the delta channel (a pass-through that can
-/// fail a page or record when each ledger call arrives). Assertions over
+/// own <c>RescanAsync</c>, core's rescan through the binding, the re-sync
+/// from the index (AR-18's fallback) and the workspace's real tabs. The
+/// only seams are the ones the lifecycle already takes — the rescan core
+/// worker (to park a scan or make it throw), the clock, and the
+/// publication seam (to park or fail one re-sync publication). Assertions over
 /// what was spoken are over the WHOLE captured event sequence. Each fact
 /// runs on its own STA thread, which owns the editor and reading documents
 /// and drains every continuation the lifecycle awaits.
@@ -417,6 +419,66 @@ public sealed class RescanTests
             "the deferred follow-up");
         h.Context.Await(h.Lifecycle.RescanCompletion);
         Assert.Equal([NoChanges, Explicit1], h.Spoken);
+    });
+
+    /// <summary>Codex PR 7 round 1, finding 11: while an import runs, Refresh
+    /// is unavailable — its CanExecute, and the palette resolver's SPECIFIC
+    /// reason, an availability rejection rather than a failure — with a
+    /// CanExecuteChanged when the import starts and when it settles; then it
+    /// is available again.</summary>
+    [Fact]
+    public void RefreshIsUnavailableDuringAnImportAndSaysWhy() => RunSta(() =>
+    {
+        var picker = new TaskCompletionSource<IReadOnlyList<string>>();
+        using var h = new Harness("refresh-import", pickImportSources: () => picker.Task, files: [("alpha.md", "# Alpha\n")]);
+        ICommand refresh = h.Sidebar.RefreshCommand;
+        int changes = 0;
+        refresh.CanExecuteChanged += (_, _) => changes++;
+        Assert.True(refresh.CanExecute(null));
+        Assert.Null(SlateCommandRegistrar.DisabledReason(h.Lifecycle, ChordTable.Ids.SidebarRefresh));
+
+        h.Sidebar.ImportCommand.Execute(null);
+        Assert.True(h.Sidebar.IsImporting);
+        Assert.True(changes > 0, "the import's start requeried Refresh");
+        Assert.False(refresh.CanExecute(null));
+        string? reason = SlateCommandRegistrar.DisabledReason(h.Lifecycle, ChordTable.Ids.SidebarRefresh);
+        Assert.Equal(SlateCommandRegistrar.StructuralMutationBusyReason, reason);
+        Assert.True(SlateCommandRegistrar.IsAvailabilityRejection(reason!));
+
+        int beforeSettle = changes;
+        picker.SetResult([]);
+        h.Context.RunUntil(() => !h.Sidebar.IsImporting, "the import settling");
+        Assert.True(changes > beforeSettle, "the import's end requeried Refresh");
+        Assert.True(refresh.CanExecute(null));
+        Assert.Null(SlateCommandRegistrar.DisabledReason(h.Lifecycle, ChordTable.Ids.SidebarRefresh));
+    });
+
+    /// <summary>Finding 11, the trash arm: while a trash operation holds its
+    /// confirmation, Refresh is unavailable with the same specific reason;
+    /// once it ends, Refresh is available again.</summary>
+    [Fact]
+    public void RefreshIsUnavailableDuringATrashAndSaysWhy() => RunSta(() =>
+    {
+        using var h = new Harness("refresh-trash", ("full/one.md", "1\n"), ("full/two.md", "2\n"));
+        ICommand refresh = h.Sidebar.RefreshCommand;
+        bool? availableDuring = null;
+        string? reasonDuring = null;
+        h.Sidebar.ConfirmRecycle = _ =>
+        {
+            availableDuring = refresh.CanExecute(null);
+            reasonDuring = SlateCommandRegistrar.DisabledReason(h.Lifecycle, ChordTable.Ids.SidebarRefresh);
+            return false;
+        };
+        h.Sidebar.SelectedNode = Assert.Single(h.Sidebar.RootNodes, node => node.Path == "full");
+
+        h.Sidebar.DeleteCommand.Execute(null);
+        h.Context.RunUntil(() => availableDuring is not null, "the trash confirmation");
+        h.Context.RunUntil(() => !h.Sidebar.IsTrashing, "the trash ending");
+
+        Assert.False(availableDuring);
+        Assert.Equal(SlateCommandRegistrar.StructuralMutationBusyReason, reasonDuring);
+        Assert.True(refresh.CanExecute(null));
+        Assert.Null(SlateCommandRegistrar.DisabledReason(h.Lifecycle, ChordTable.Ids.SidebarRefresh));
     });
 
     // ---------------------------------------------------------------------

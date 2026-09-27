@@ -6,6 +6,7 @@ using System.Diagnostics.CodeAnalysis;
 using System.IO;
 using System.Windows.Threading;
 using System.Windows.Input;
+using SlateWindows.Commands;
 using SlateWindows.FileManagement;
 using uniffi.slate_uniffi;
 
@@ -452,7 +453,7 @@ internal sealed partial class FilesSidebarViewModel : BindableBase
             restoredExpandedPaths ?? [],
             StringComparer.Ordinal);
 
-        RefreshCommand = new RelayCommand(_ => RequestRefresh(), _ => true);
+        RefreshCommand = new ReasonedCommand(RequestRefresh, () => RefreshUnavailableReason);
         RetrySettingsCommand = new RelayCommand(_ => RetrySettings(), _ => _settingsNotice is not null);
         // W7-7 (R-3): Clear covers the tag scope too — text and scope in
         // one change — and is available exactly while a filter or tag scope
@@ -780,12 +781,35 @@ internal sealed partial class FilesSidebarViewModel : BindableBase
     /// (#1252, R-9): it is the lifecycle's EXPLICIT rescan, which reconciles
     /// what changed outside Slate and always speaks its outcome; a sidebar
     /// with no lifecycle behind it (headless facts) keeps the tree refresh.
+    /// It is available exactly when the rescan would run (codex PR 7 round
+    /// 1, finding 11): never listed as available while the lifecycle would
+    /// silently refuse it.
     /// </summary>
     public ICommand RefreshCommand { get; }
 
     /// <summary>W7-7 PR 7: installed by the vault lifecycle — the explicit
     /// rescan <see cref="RefreshCommand"/> runs.</summary>
     internal Func<Task>? RescanRequested { get; set; }
+
+    /// <summary>W7-7 PR 7 (finding 11): installed by the vault lifecycle —
+    /// why its rescan would be refused right now, or null.</summary>
+    internal Func<string?>? RescanUnavailableReason { get; set; }
+
+    /// <summary>Why <see cref="RefreshCommand"/> cannot run right now, or
+    /// null: the lifecycle's refusal when one is installed, otherwise an
+    /// import or trash operation in flight.</summary>
+    internal string? RefreshUnavailableReason =>
+        RescanUnavailableReason is Func<string?> lifecycle
+            ? lifecycle()
+            : IsImporting || IsTrashing
+                ? SlateCommandRegistrar.StructuralMutationBusyReason
+                : null;
+
+    /// <summary>Requery <see cref="RefreshCommand"/> — raised with every
+    /// sidebar command-state change and by the lifecycle when one of its
+    /// own blockers changes.</summary>
+    internal void RaiseRefreshAvailabilityChanged() =>
+        ((ReasonedCommand)RefreshCommand).RaiseCanExecuteChanged();
 
     private void RequestRefresh()
     {
@@ -2499,5 +2523,6 @@ internal sealed partial class FilesSidebarViewModel : BindableBase
         ((AsyncRelayCommand)ImportCommand).RaiseCanExecuteChanged();
         ((RelayCommand)CancelImportCommand).RaiseCanExecuteChanged();
         ((RelayCommand)CancelTrashCommand).RaiseCanExecuteChanged();
+        RaiseRefreshAvailabilityChanged();
     }
 }

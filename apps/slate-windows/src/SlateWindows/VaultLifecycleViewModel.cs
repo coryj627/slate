@@ -963,6 +963,7 @@ internal sealed partial class VaultLifecycleViewModel
             FileSidebar.PropertyChanged -= FileSidebar_SheetPresented;
             FileSidebar.PropertyChanged -= FileSidebar_RescanBlockersChanged;
             FileSidebar.RescanRequested = null;
+            FileSidebar.RescanUnavailableReason = null;
         }
 
         if (Workspace is not null)
@@ -1093,6 +1094,9 @@ internal sealed partial class VaultLifecycleViewModel
         // rescan; a follow-up an import or trash blocked runs when they
         // settle.
         sidebar.RescanRequested = () => RescanAsync(RescanReason.Explicit);
+        // Finding 11: Refresh is available exactly when the rescan would
+        // run, and says why when it is not.
+        sidebar.RescanUnavailableReason = RescanUnavailableReason;
         sidebar.PropertyChanged += FileSidebar_RescanBlockersChanged;
         QuickSwitcher = switcher;
         WorkspaceReady?.Invoke(this, EventArgs.Empty);
@@ -1574,6 +1578,9 @@ internal sealed partial class VaultLifecycleViewModel
         _openVaultCommand.RaiseCanExecuteChanged();
         _openRecentCommand.RaiseCanExecuteChanged();
         _closeVaultCommand.RaiseCanExecuteChanged();
+        // W7-7 PR 7 (finding 11): the initial scan is one of Refresh's
+        // blockers.
+        FileSidebar?.RaiseRefreshAvailabilityChanged();
 
         // PINV-7: requery the registered catalog by ENUMERATION, so a
         // newly registered command cannot be silently omitted the way the

@@ -2,6 +2,7 @@
 // SPDX-License-Identifier: AGPL-3.0-or-later
 
 using System.ComponentModel;
+using SlateWindows.Commands;
 using uniffi.slate_uniffi;
 
 namespace SlateWindows;
@@ -115,10 +116,30 @@ internal sealed partial class VaultLifecycleViewModel
     /// <summary>The initial open scan, an import or a trash operation in
     /// flight — the only blockers (a running rescan is joined, not
     /// refused).</summary>
-    private bool RescanIsBlocked() =>
-        IsBusy
-        || FileSidebar?.IsImporting == true
-        || FileSidebar?.IsTrashing == true;
+    private bool RescanIsBlocked() => RescanBlockedReason() is not null;
+
+    /// <summary>The blockers, as the reason a refused request gives: an
+    /// import or a trash operation says what to wait for; the initial open
+    /// scan (the sidebar exists only at its very end) the generic
+    /// reason.</summary>
+    private string? RescanBlockedReason() =>
+        FileSidebar?.IsImporting == true || FileSidebar?.IsTrashing == true
+            ? SlateCommandRegistrar.StructuralMutationBusyReason
+            : IsBusy
+                ? SlateCommandRegistrar.UnavailableReason
+                : null;
+
+    /// <summary>
+    /// W7-7 PR 7 (#1252; codex PR 7 round 1, finding 11): why a rescan
+    /// request would be refused right now, or null — the Refresh command's
+    /// availability, so the palette never lists it as available while
+    /// <see cref="RequestRescan"/> would silently refuse it. The same
+    /// refusals, in the same order: no vault, then the blockers.
+    /// </summary>
+    internal string? RescanUnavailableReason() =>
+        _session is null || !IsVaultOpen || Workspace is null
+            ? SlateCommandRegistrar.NoVaultReason
+            : RescanBlockedReason();
 
     private async Task RunRescansAsync(int generation, VaultSession session, RescanReason reason)
     {
