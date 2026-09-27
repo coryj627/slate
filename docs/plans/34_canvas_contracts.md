@@ -6750,7 +6750,7 @@ Where-am-I remain the two ungated rows.
 > SelectionItem.Select and both realization routes), is pinned by
 > `TheBoardsOwnPeersRevealTheirCardWithFollowSelectionOff`.
 >
-> **Judged by tokens (#1271, review round 3).** "Still payable" is judged
+> **Judged by tokens (#1271, review round 3; contract 40 OD-13).** "Still payable" is judged
 > by tokens taken when the debt was owed, never by the state alone: a seat
 > that left and came back, or a toggle turned off and on, looks unchanged
 > to the state. The selection's revision counts every change of the seat
@@ -6768,7 +6768,7 @@ Where-am-I remain the two ungated rows.
 > `TheSelectionRevisionCountsEveryChangeOfTheSeatAndNothingElse` and
 > `TheViewportCountsAFollowLapseOnlyWhenFollowingStops`.
 >
-> **Shown again (owner decision, 2026-09-27).** A board that follows the
+> **Shown again (owner decision, 2026-09-27; contract 40 OD-13).** A board that follows the
 > selection and is hidden — behind another tab, or under the outline or
 > the table — scrolls to the selection when it is next shown. "Every
 > showing board" above is widened to every board on the document: each
