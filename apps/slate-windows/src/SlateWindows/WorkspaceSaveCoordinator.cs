@@ -275,6 +275,12 @@ internal sealed class WorkspaceSaveCoordinator
             _owner._dispatcher.VerifyAccess();
             if (_completion.TrySetException(exception))
             {
+                // Codex round 2b: every failed save is observed and logged
+                // ONCE, here — the Save command, Save All, a close or replace
+                // gate and teardown read only its answer (PumpedWait.Result
+                // turns a fault into "not saved").
+                _ = _completion.Task.Exception;
+                HostLog.Write(HostDiagnosticEvent.VaultCommandFailed, exception.GetBaseException());
                 _owner.Completed(this);
             }
         }
@@ -319,8 +325,10 @@ internal static class PumpedWait
         return task.IsCompleted;
     }
 
-    /// <summary>The task's answer, or false when the dispatcher shut down
-    /// before it completed.</summary>
+    /// <summary>The task's answer; false when the dispatcher shut down
+    /// before it completed, or when the save faulted (codex round 2b: a
+    /// yes/no caller fails closed — its ticket already logged the fault
+    /// once, and nothing escapes the command that asked).</summary>
     internal static bool Result(Dispatcher dispatcher, Task<bool> task) =>
-        Until(dispatcher, task) && task.GetAwaiter().GetResult();
+        Until(dispatcher, task) && task.IsCompletedSuccessfully && task.Result;
 }

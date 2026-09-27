@@ -2861,27 +2861,27 @@ internal sealed partial class WorkspaceViewModel : BindableBase, IDisposable
             announce: true));
     }
 
-    /// <summary>#1280: a save nobody waits on still has its failure
-    /// observed. The D-10 outcome of a refused write is spoken by the
-    /// publication; a fault past it (a bug) goes to the durable log instead
-    /// of vanishing as an unobserved task.</summary>
+    /// <summary>#1280: the Save command's fault seam for facts. The D-10
+    /// outcome of a refused write is spoken by the publication; a fault past
+    /// it (a bug) is observed and logged once by its save ticket
+    /// (<see cref="WorkspaceSaveCoordinator.SaveTicket.Fail"/>), whoever
+    /// waits on it — this only counts the ones the Save command saw.</summary>
     private void ObserveSave(Task<bool> save) =>
-        save.ContinueWith(
-            failed =>
-            {
-                Interlocked.Increment(ref _saveFailuresObservedForTests);
-                HostLog.Write(
-                    HostDiagnosticEvent.VaultCommandFailed,
-                    failed.Exception!.GetBaseException());
-            },
+        _lastSaveObservation = save.ContinueWith(
+            _ => Interlocked.Increment(ref _saveFailuresObservedForTests),
             CancellationToken.None,
             TaskContinuationOptions.OnlyOnFaulted | TaskContinuationOptions.ExecuteSynchronously,
             TaskScheduler.Default);
 
     private int _saveFailuresObservedForTests;
+    private Task _lastSaveObservation = Task.CompletedTask;
 
     /// <summary>#1280 test seam: faulted saves the Save command observed.</summary>
     internal int SaveFailuresObservedForTests => Volatile.Read(ref _saveFailuresObservedForTests);
+
+    /// <summary>#1280 test seam: the Save command's latest observation — a
+    /// fact waits for it to finish before it counts what was logged.</summary>
+    internal Task LastSaveObservationForTests => _lastSaveObservation;
 
     private static WorkspaceItemState ItemForPath(string path)
     {
