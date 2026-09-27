@@ -64,10 +64,7 @@ public sealed class SharedNameTests
             treeWorker: (work, _) => { work(); return Task.CompletedTask; },
             filterWorker: (work, _) => { work(); return Task.CompletedTask; },
             filterDelay: _ => Task.CompletedTask);
-        sidebar.FilterText = "note";
-        Assert.True(
-            PumpedDispatcher.PumpUntil(() => sidebar.FilterResults.Count == 3, TimeSpan.FromSeconds(10)),
-            $"the filter published {sidebar.FilterResults.Count} results");
+        FilterWhenSettled(sidebar, "note", 3);
 
         HostedNames("SidebarFilterResults", sidebar, names => Assert.Equal(
             [
@@ -138,6 +135,24 @@ public sealed class SharedNameTests
             ["alpha", "beta"],
             names.Order(StringComparer.Ordinal)));
     });
+
+    /// <summary>Filters <paramref name="sidebar"/> once its first tree load
+    /// has landed. That load (the constructor's Refresh) yields to the
+    /// thread pool, and with these facts' inline contexts it publishes there
+    /// and re-runs the filter from that thread: typed before it lands, the
+    /// filter's rows could be replaced under the fact.</summary>
+    private static void FilterWhenSettled(FilesSidebarViewModel sidebar, string query, int expected)
+    {
+        Assert.True(
+            PumpedDispatcher.PumpUntil(() => sidebar.TreeRefreshCompletion.IsCompleted, TimeSpan.FromSeconds(10)),
+            "the sidebar's first tree load did not land");
+        sidebar.FilterText = query;
+        Assert.True(
+            PumpedDispatcher.PumpUntil(
+                () => sidebar.FilterCompletion.IsCompleted && sidebar.FilterResults.Count == expected,
+                TimeSpan.FromSeconds(10)),
+            $"the filter published {sidebar.FilterResults.Count} results");
+    }
 
     private static QuickSwitcherViewModel OpenQuickSwitcher(
         VaultSession session, string root, params SwitcherFile[] files) =>
@@ -383,10 +398,7 @@ public sealed class SharedNameTests
             treeWorker: (work, _) => { work(); return Task.CompletedTask; },
             filterWorker: (work, _) => { work(); return Task.CompletedTask; },
             filterDelay: _ => Task.CompletedTask);
-        sidebar.FilterText = "note";
-        Assert.True(
-            PumpedDispatcher.PumpUntil(() => sidebar.FilterResults.Count == 3, TimeSpan.FromSeconds(10)),
-            $"the filter published {sidebar.FilterResults.Count} results");
+        FilterWhenSettled(sidebar, "note", 3);
         sidebar.SelectedNode = sidebar.FilterResults.Single(row => row.Path == "B/note.md");
         Assert.Equal("note.md, B/note.md", LastSelected());
         sidebar.SelectedNode = sidebar.FilterResults.Single(row => row.Path == "notes-extra.md");
