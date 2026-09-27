@@ -327,16 +327,38 @@ is the rendered announcement. Current evidence is hosted
 `AnEditorIntegrityFailureShowsTheSentenceItSpeaks`, and the
 `VaultErrorDetailCensus` provenance facts); no journey observes the
 delivery until PR 1's desktop listener (#1244).
-Amended by #1280 (2026-09-26; locked decision 05 §4.1): the core write no
-longer runs on the dispatcher. Save snapshots the editor on the dispatcher,
-runs CreateExclusive/SaveText on a worker under the tab's save chain (a save
-requested while one is in flight starts after it lands, from a fresh
-snapshot), and publishes state, status and the one D-10 announcement back on
-the dispatcher; the explicit Save's NoteSaved publishes with it, so quick
-saves announce once each, in order. Save, Save All and save-before-close or
-navigation wait in a nested dispatcher frame, which keeps input, focus and
-notifications flowing. An edit made during the write stays dirty; the
-snapshot is what reached disk (`SaveOffDispatcherTests`).
+Amended by #1280 (2026-09-26; locked decision 05 §4.1; codex design rounds 1
+and 2a): the core write no longer runs on the dispatcher. A save snapshots
+the editor on the dispatcher when it starts, runs CreateExclusive/SaveText on
+a worker, and publishes state, status and its one D-10 outcome back on the
+dispatcher — only to the tab and item it was requested for: a tab disposed or
+re-pointed meanwhile takes no state and says nothing, a write that landed
+before a rename is adopted silently as the renamed tab's baseline, and a tab
+whose file was deleted under the write keeps its missing-file status. Saves
+run one after another per tab and per file (every tab on it; a rename carries
+the file's chain to the new path), each starting from the hash the previous
+one published. The explicit
+Save (Ctrl+S, the menu, the palette) requests the save and returns without
+waiting: per tab at most one save writes and one waits, a request made while
+one waits joins it, the waiting save captures the editor when it starts, and
+its one publication serves every joined request with one NoteSaved. A refused
+write is spoken once by its publication (NoteSaveConflict or NoteSaveBlocked
+as above); a fault past those outcomes is logged, never an unobserved task.
+Only a caller that needs a yes/no waits, in a nested dispatcher frame that
+keeps input, focus and notifications flowing: close tab, close pane, the
+replace gate, and vault teardown with its Save All. Each re-reads the
+workspace after every frame. A dirty tab's admission settles the tab's
+admitted saves before it asks and again before it accepts Discard, and
+Discard is accepted only for exactly the items and edit revisions read before
+the prompt opened — anything that changed while it was up is asked about
+again. Teardown settles every admitted save before it evaluates what is dirty
+and speaks exactly one close line: VaultClosed when nothing was left unsaved
+(a save it settled included), VaultClosedAllSaved or
+VaultClosedChangesDiscarded when it had to decide. An edit made during the
+write stays dirty; the snapshot is what reached disk. Evidence:
+`SaveOffDispatcherTests` and `PumpedSaveReentrancyTests` (every waiting
+caller and the Save command against every mutation that can land while a
+write is parked, and the named facts).
 
 **D-11 — Reopen describes the actual file outcome.** Keep the Windows tab and
 its recovery UI. For file-backed tabs, use core's existing CanonicalPath
