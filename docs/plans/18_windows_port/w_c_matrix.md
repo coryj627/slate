@@ -113,9 +113,9 @@ assertions but delegate human disposition and executable-evidence checks.
 ## W7-2 notification delivery and W7 reconciliation (#748, #750)
 
 Medium announcements request UIA Other / All; High requests Other /
-ImportantMostRecent. Both preserve core text and the shared activity ID; a
-line the launch queue replays carries it with its drain position (contract
-38 D-1).
+ImportantMostRecent. Both preserve core text. A High line keeps the shared
+activity ID, and every Medium (All) line carries it with its own sequence
+number, queued or not, so no two share one (contract 38 D-1).
 `AccessibilityNotificationDispatcherTests` records the exact native arguments,
 `AnnouncementSeamCensus` pins the real element constructors and both seams,
 and `A11yTriggerParityCensus` checks every binding key and registered source
