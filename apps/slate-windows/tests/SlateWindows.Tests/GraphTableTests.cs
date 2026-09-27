@@ -2,6 +2,7 @@
 // SPDX-License-Identifier: AGPL-3.0-or-later
 
 using System.Runtime.ExceptionServices;
+using System.Text.RegularExpressions;
 using System.Windows.Automation;
 using System.Windows.Controls;
 using SlateWindows.Graph;
@@ -255,7 +256,7 @@ public sealed partial class GraphTableTests
                     SiblingNames.ReadAlike.Equals(document.RowName(pair[0]), document.RowName(pair[1])),
                     $"the pair reads apart already: \"{document.RowName(pair[0])}\", \"{document.RowName(pair[1])}\"");
                 (string Key, string Name)[] before = Read();
-                Assert.All(before, row => Assert.EndsWith(row.Key[2..], row.Name, StringComparison.Ordinal));
+                Assert.All(before, row => Assert.EndsWith(", " + row.Key[2..], row.Name, StringComparison.Ordinal));
                 int modified = document.CellIndexOf(GraphTableColumn.Modified);
                 string[] orders = new string[2];
                 foreach ((bool ascending, int index) in new[] { (false, 0), (true, 1) })
@@ -270,6 +271,99 @@ public sealed partial class GraphTableTests
                 }
                 // The premise: the two sorts showed the pair in two orders.
                 Assert.NotEqual(orders[0], orders[1]);
+            }
+            finally
+            {
+                window.Close();
+            }
+        });
+    }
+
+    /// <summary>Codex PR 3 round 7, OD-9: a row's identity is its node's
+    /// STABLE key, never its label. A ghost's label is the smallest authored
+    /// spelling of its target, which core recomputes as links come and go, so
+    /// ordered by label two ghosts that read alike swapped their places when
+    /// one was relabelled. Ghost "foo-bar" (spelled "/foo-bar" and "foo-bar")
+    /// and ghost "foo bar" read alike under every label they take; dropping
+    /// the "/foo-bar" spelling (and one "foo bar" link, so the link counts
+    /// still match) relabels the first past the second, and each keeps its
+    /// place.</summary>
+    [Fact]
+    public void ARelabelledGhostKeepsItsPlaceAmongGhostsThatReadAlike()
+    {
+        RunSta(() =>
+        {
+            FixtureVault vault = FixtureVault.Create(0, "graph-ghost-relabel");
+            File.WriteAllText(Path.Combine(vault.Root, "a.md"), "[[/foo-bar]]\n");
+            File.WriteAllText(Path.Combine(vault.Root, "b.md"), "[[foo-bar]]\n");
+            File.WriteAllText(Path.Combine(vault.Root, "c.md"), "[[foo bar]]\n");
+            File.WriteAllText(Path.Combine(vault.Root, "d.md"), "[[foo bar]]\n");
+            using var host = new Host(vault);
+            GraphDocumentViewModel document = host.Open();
+            var view = new GraphTableView { Model = document };
+            var window = new System.Windows.Window
+            {
+                Content = view,
+                Width = 900,
+                Height = 400,
+                ShowInTaskbar = false,
+                WindowStyle = System.Windows.WindowStyle.None,
+            };
+            window.Show();
+            try
+            {
+                Dictionary<string, (string Label, string Place)> Read()
+                {
+                    host.Settle(document);
+                    window.UpdateLayout();
+                    PumpedDispatcher.Drain();
+                    window.UpdateLayout();
+                    GraphTableRow[] ghosts = [.. document.Publication.Rows.Where(row => row.Path is null)];
+                    Assert.Equal(2, ghosts.Length);
+                    // The premise: the ghosts read alike, by name and by label.
+                    Assert.True(
+                        SiblingNames.ReadAlike.Equals(document.RowName(ghosts[0]), document.RowName(ghosts[1])),
+                        $"the ghosts read apart already: \"{document.RowName(ghosts[0])}\", \"{document.RowName(ghosts[1])}\"");
+                    Assert.True(SiblingNames.ReadAlike.Equals(ghosts[0].Label, ghosts[1].Label));
+                    (GraphTableRow Row, string Name)[] named =
+                    [
+                        .. GridRowNames.Read(view.GridForTests)
+                            .Select(row => ((GraphTableRow)row.Item, row.Name))
+                            .Where(row => row.Item1.Path is null),
+                    ];
+                    // Each reads its own name, then its label — what a reader
+                    // hears of its key — then its place.
+                    Assert.All(named, row => Assert.Matches(
+                        "^" + Regex.Escape($"{document.RowName(row.Row)}, {row.Row.Label}, ") + @"row \d+$",
+                        row.Name));
+                    return named.ToDictionary(
+                        row => row.Row.StableKey,
+                        row => (row.Row.Label, Regex.Match(row.Name, @"row \d+$").Value));
+                }
+
+                Dictionary<string, (string Label, string Place)> before = Read();
+                _ = host.Session.SaveText("a.md", "no link\n", null);
+                _ = host.Session.SaveText("d.md", "no link\n", null);
+                _ = document.Load(GraphLoadKind.Pair, GraphAnnouncePolicy.Silent);
+                Dictionary<string, (string Label, string Place)> after = Read();
+
+                string Show(Dictionary<string, (string Label, string Place)> rows) =>
+                    string.Join(" | ", rows.OrderBy(row => row.Key, StringComparer.Ordinal)
+                        .Select(row => $"{row.Key} = \"{row.Value.Label}\" at \"{row.Value.Place}\""));
+                // The premise: the same two ghosts, one relabelled, and the
+                // label order flipped — a label-ordered naming swaps them.
+                Assert.Equal(
+                    before.Keys.Order(StringComparer.Ordinal),
+                    after.Keys.Order(StringComparer.Ordinal));
+                string relabelled = Assert.Single(before.Keys, key => before[key].Label != after[key].Label);
+                string other = Assert.Single(before.Keys, key => key != relabelled);
+                Assert.NotEqual(
+                    string.CompareOrdinal(before[relabelled].Label, before[other].Label) < 0,
+                    string.CompareOrdinal(after[relabelled].Label, after[other].Label) < 0);
+                Assert.All(before.Values.Concat(after.Values), row => Assert.NotEqual(string.Empty, row.Place));
+                Assert.True(
+                    before.All(row => after[row.Key].Place == row.Value.Place),
+                    $"before the relabel: {Show(before)}; after it: {Show(after)}");
             }
             finally
             {

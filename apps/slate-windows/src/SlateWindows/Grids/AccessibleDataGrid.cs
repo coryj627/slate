@@ -61,6 +61,10 @@ internal sealed class AccessibleDataGrid : UserControl
     // caller's — what tells it apart where its identity collides, and what a
     // nameless row reads; never its position, which a sort changes.
     private Func<object, string>? _rowKey;
+    // …and what the reader hears of that key where identities collide, when
+    // the key itself is no speech (a graph node's stable key); by default
+    // the key (codex PR 3 round 7).
+    private Func<object, string?>? _rowDistinguisher;
     // …and each bound row's name, fixed at Bind (codex PR 3 round 2).
     private Dictionary<object, string> _rowNames = new(ReferenceEqualityComparer.Instance);
     private Func<object, string?>? _rowItemStatus;
@@ -258,7 +262,11 @@ internal sealed class AccessibleDataGrid : UserControl
     /// which republishes the rows in a new order as new objects (Base,
     /// Graph), a sort in the grid, re-realization and a re-bind all leave
     /// every row its name (codex PR 3 round 6: display order swapped
-    /// A/same.md's and B/same.md's "row 1" and "row 2").
+    /// A/same.md's and B/same.md's "row 1" and "row 2"). The key is the
+    /// row's IDENTITY, never a label that can change: a graph row's key is
+    /// its node's stable key, and it READS as its path or label (codex PR 3
+    /// round 7: ordered by a ghost's label, which core recomputes, two ghosts
+    /// swapped their places when one was relabelled).
     /// </summary>
     private Dictionary<object, string> NameRows(IReadOnlyList<object> rows)
     {
@@ -269,7 +277,7 @@ internal sealed class AccessibleDataGrid : UserControl
         ];
         string[] names = SiblingNames.Compose(
             [.. byKey.Select(row => (string?)BaseRowName(row))],
-            [.. byKey.Select(row => (string?)KeyOf(row))],
+            [.. byKey.Select(DistinguisherOf)],
             "row");
         var named = new Dictionary<object, string>(ReferenceEqualityComparer.Instance);
         for (int index = 0; index < byKey.Length; index++)
@@ -281,6 +289,12 @@ internal sealed class AccessibleDataGrid : UserControl
 
     /// <summary>A row's key, as its caller gave it.</summary>
     private string KeyOf(object row) => _rowKey?.Invoke(row) ?? string.Empty;
+
+    /// <summary>What a row reads where its identity collides: its caller's
+    /// distinguisher, else its key.</summary>
+    private string? DistinguisherOf(object row) => _rowDistinguisher is { } distinguisher
+        ? distinguisher(row)
+        : KeyOf(row);
 
     private string BaseRowName(object item)
     {
@@ -297,8 +311,8 @@ internal sealed class AccessibleDataGrid : UserControl
                 return text;
             }
         }
-        // Nothing to say but the key: "row 3" reads "Row 3".
-        string key = KeyOf(item);
+        // Nothing to say but the key's speech: "row 3" reads "Row 3".
+        string key = DistinguisherOf(item) ?? string.Empty;
         return key.Length == 0 ? "Row" : char.ToUpperInvariant(key[0]) + key[1..];
     }
 
@@ -560,10 +574,14 @@ internal sealed class AccessibleDataGrid : UserControl
     /// item's <c>ToString()</c>. <paramref name="rowKey"/> is the row's
     /// STABLE key, REQUIRED too (codex PR 3 round 6, OD-9): speakable, unique
     /// among the rows, and the same for the same row however the rows are
-    /// ordered or republished — a file path, a node, a citation key, a
-    /// source row. Where an identity comes back blank the row takes its
-    /// first non-empty cell, else its key; where rows share one, their keys
-    /// tell them apart (<see cref="NameRows"/>). A row's position never
+    /// ordered or republished — a file path, a node's stable key, a
+    /// citation key, a source row. The rows are named in key order.
+    /// <paramref name="rowDistinguisher"/> is what the reader hears of the
+    /// key where identities collide, when the key is no speech (a graph
+    /// node's stable key reads as its path or label); by default the key
+    /// itself. Where an identity comes back blank the row takes its first
+    /// non-empty cell, else its distinguisher; where rows share one, their
+    /// distinguishers tell them apart (<see cref="NameRows"/>). A row's position never
     /// names it. A surface's teardown is <see cref="Clear"/>, never a bind of
     /// nothing.
     /// </summary>
@@ -574,6 +592,7 @@ internal sealed class AccessibleDataGrid : UserControl
         string accessibilityLabel,
         Func<object, string?> rowAutomationName,
         Func<object, string> rowKey,
+        Func<object, string?>? rowDistinguisher = null,
         Func<object, string?>? rowAudioDescription = null,
         IReadOnlyList<AccessibleGridRowAction>? rowActions = null,
         Func<ExportFormat, string>? exportProducer = null,
@@ -590,6 +609,7 @@ internal sealed class AccessibleDataGrid : UserControl
         ClearRealizedRowSeams();
         _rowAutomationName = rowAutomationName;
         _rowKey = rowKey;
+        _rowDistinguisher = rowDistinguisher;
         _rowItemStatus = rowItemStatus;
         _rowActivatedModified = rowActivatedModified;
         // The user's sort is a user decision, and a re-publish is not
@@ -727,6 +747,7 @@ internal sealed class AccessibleDataGrid : UserControl
         _lastAnnouncedRow = null;
         _activeSort = null;
         _rowKey = null;
+        _rowDistinguisher = null;
         _rowNames = new(ReferenceEqualityComparer.Instance);
         _columns = Array.Empty<AccessibleGridColumn>();
         _grid.Columns.Clear();

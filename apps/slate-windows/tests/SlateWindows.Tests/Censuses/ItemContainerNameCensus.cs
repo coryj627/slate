@@ -785,7 +785,13 @@ public sealed class ItemContainerNameCensus
             ["Bases/BaseSurfaceView.cs"] = [BaseRow, BaseRow],
             ["Bases/DashboardSurfaceView.cs"] = [BaseRow],
             ["Canvas/CanvasTableView.cs"] = ["((CanvasTableRow)row).SpeakableName | ((CanvasTableRow)row).NodeId"],
-            ["Graph/GraphTableView.cs"] = ["model.RowName((GraphTableRow)row) | GraphDocumentViewModel.RowKey((GraphTableRow)row)"],
+            // The node's stable key is the identity; its path or label is
+            // what a reader hears of it (codex PR 3 round 7).
+            ["Graph/GraphTableView.cs"] =
+            [
+                "model.RowName((GraphTableRow)row) | ((GraphTableRow)row).StableKey"
+                + " | GraphDocumentViewModel.RowDistinguisher((GraphTableRow)row)",
+            ],
             ["MainWindow.Citations.cs"] =
             [
                 "((BibliographyRowViewModel)row).TitleLine | ((BibliographyRowViewModel)row).Key",
@@ -850,6 +856,15 @@ public sealed class ItemContainerNameCensus
                     continue;
                 }
                 string pair = body.NormalizeWhitespace().ToFullString() + " | " + keyBody.NormalizeWhitespace().ToFullString();
+                if (ArgumentFor(invocation, method, "rowDistinguisher") is { } distinguisher)
+                {
+                    if (distinguisher.Expression is not LambdaExpressionSyntax { ExpressionBody: { } distinguisherBody })
+                    {
+                        offenders.Add($"{file}:{line}: rowDistinguisher is not an expression lambda the census can read");
+                        continue;
+                    }
+                    pair += " | " + distinguisherBody.NormalizeWhitespace().ToFullString();
+                }
                 if (!expected.TryGetValue(file, out List<string>? pinned) || !pinned.Remove(pair))
                 {
                     offenders.Add($"{file}:{line}: the row identity and key read `{pair}`, which is not the pair pinned for this caller");
