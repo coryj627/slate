@@ -569,15 +569,18 @@ internal sealed class ReadingSurface : RichTextBox
                 DeliverFocusLanding();
             });
 
-    /// <summary>Let go of the held landing that <paramref name="owner"/>
-    /// (its announcement) was requested with — a newer F6 press cancels it —
-    /// and of nothing a later request holds. Answers whether it was still
-    /// held: the reader's leaving withdraws it at once, so a landing still
-    /// held for that owner has the reader exactly where its request found
-    /// them.</summary>
-    internal bool CancelFocusLanding(Action owner)
+    /// <summary>The held landing's own token (R-10) — what its holder cancels
+    /// it by — or null when no landing is held.</summary>
+    internal object? HeldFocusLanding => _focusLandingPending ? _focusLandingToken : null;
+
+    /// <summary>Let go of the held landing <paramref name="token"/> names — a
+    /// newer editor landing, the funnel or a modal cancels it — and of nothing
+    /// a later request holds. Answers whether it was still held: the reader's
+    /// leaving withdraws it at once, so a landing still held has the reader
+    /// exactly where its request found them.</summary>
+    internal bool CancelFocusLanding(object token)
     {
-        if (!_focusLandingPending || !ReferenceEquals(_focusLandingAnnouncement, owner))
+        if (!_focusLandingPending || !ReferenceEquals(_focusLandingToken, token))
         {
             return false;
         }

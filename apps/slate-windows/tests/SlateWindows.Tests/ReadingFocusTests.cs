@@ -250,19 +250,24 @@ public sealed class ReadingFocusTests
         Action third = () => { };
 
         Assert.True(surface.RequestFocusLanding(first));
+        object firstToken = surface.HeldFocusLanding!;
         PumpedDispatcher.Drain();
         Assert.True(surface.RequestFocusLanding(second));
+        object secondToken = surface.HeldFocusLanding!;
         PumpedDispatcher.Drain();
-        Assert.False(surface.CancelFocusLanding(first));
+        Assert.NotSame(firstToken, secondToken);
+        Assert.False(surface.CancelFocusLanding(firstToken));
         Assert.True(surface.IsFocusLandingPending);
 
-        Assert.True(surface.CancelFocusLanding(second));
+        Assert.True(surface.CancelFocusLanding(secondToken));
         Assert.False(surface.IsFocusLandingPending);
+        Assert.Null(surface.HeldFocusLanding);
 
         Assert.True(surface.RequestFocusLanding(third));
+        object thirdToken = surface.HeldFocusLanding!;
         PumpedDispatcher.Drain();
         Assert.True(host.Elsewhere.Focus());
-        Assert.False(surface.CancelFocusLanding(third));
+        Assert.False(surface.CancelFocusLanding(thirdToken));
         Assert.False(surface.IsFocusLandingPending);
 
         host.ReleaseProjection();
@@ -477,57 +482,75 @@ public sealed class ReadingFocusTests
 
     /// <summary>R-10's repeated press, forward — per arm (the W7-6 ring spec,
     /// §4), the reading, canvas or graph tab active and its content not yet
-    /// arrived. The editor's landing is held from either neighbour: F6 from
-    /// the tab bar's active tab item, or Shift+F6 from the right pane's
-    /// content stop — Pending(Editor), nothing spoken, focus where the press
-    /// found it. A second press, F6, CANCELS the held landing and goes on
-    /// from the editor's ring position: focus lands on the right pane's
-    /// content stop, the region after the editor — one landing, one line,
-    /// under the press's own token. The cancelled token, completed afterwards
-    /// (the ring's two completions, then the arm's own request or held
-    /// landing), changes nothing, and the content arriving later seats
-    /// nobody.</summary>
+    /// arrived, and for each shape of the right pane: showing a content stop,
+    /// showing only its rail, or hidden (so the region after the editor is the
+    /// content stop, the rail, or the status bar). The editor's landing is
+    /// held from either neighbour: F6 from the tab bar's active tab item, or
+    /// Shift+F6 from the region after the editor — Pending(Editor), nothing
+    /// spoken, focus where the press found it. A second press, F6, CANCELS the
+    /// held landing and goes on from the editor's ring position: focus lands on
+    /// the region after the editor — one landing, one line, under the press's
+    /// own token. The cancelled token, completed afterwards (the ring's two
+    /// completions, then the arm's own request or held landing), changes
+    /// nothing — the canvas's seated card and the graph's node included — and
+    /// the content arriving later seats nobody.</summary>
     [Theory]
-    [InlineData("reading", "F6 from the tab item")]
-    [InlineData("reading", "Shift+F6 from the right pane")]
-    [InlineData("canvas", "F6 from the tab item")]
-    [InlineData("canvas", "Shift+F6 from the right pane")]
-    [InlineData("graph", "F6 from the tab item")]
-    [InlineData("graph", "Shift+F6 from the right pane")]
-    public void ARepeatedPressMovesOnFromTheHeldEditorLanding(string kind, string approach) =>
-        RunSta(() => RepeatedPressWitness(kind, approach, secondBackward: false));
+    [MemberData(nameof(RepeatedPressShapes))]
+    public void ARepeatedPressMovesOnFromTheHeldEditorLanding(string kind, string approach, string rightPane) =>
+        RunSta(() => RepeatedPressWitness(kind, approach, rightPane, secondBackward: false));
 
-    /// <summary>R-10's repeated press, reversed — per arm, from the same held
-    /// editor landing reached from either neighbour: Shift+F6 CANCELS it and
-    /// goes back from the editor's ring position, never on in the held
-    /// press's direction: focus lands on the tab bar's active tab item, the
-    /// region before the editor — one landing, one line. The cancelled token,
-    /// completed afterwards, changes nothing, and the content arriving later
-    /// seats nobody.</summary>
+    /// <summary>R-10's repeated press, reversed — per arm and per right-pane
+    /// shape, from the same held editor landing reached from either neighbour:
+    /// Shift+F6 CANCELS it and goes back from the editor's ring position, never
+    /// on in the held press's direction: focus lands on the tab bar's active
+    /// tab item, the region before the editor — one landing, one line. The
+    /// cancelled token, completed afterwards, changes nothing, and the content
+    /// arriving later seats nobody.</summary>
     [Theory]
-    [InlineData("reading", "F6 from the tab item")]
-    [InlineData("reading", "Shift+F6 from the right pane")]
-    [InlineData("canvas", "F6 from the tab item")]
-    [InlineData("canvas", "Shift+F6 from the right pane")]
-    [InlineData("graph", "F6 from the tab item")]
-    [InlineData("graph", "Shift+F6 from the right pane")]
-    public void AReversePressGoesBackFromTheHeldEditorLanding(string kind, string approach) =>
-        RunSta(() => RepeatedPressWitness(kind, approach, secondBackward: true));
+    [MemberData(nameof(RepeatedPressShapes))]
+    public void AReversePressGoesBackFromTheHeldEditorLanding(string kind, string approach, string rightPane) =>
+        RunSta(() => RepeatedPressWitness(kind, approach, rightPane, secondBackward: true));
 
-    private static void RepeatedPressWitness(string kind, string approach, bool secondBackward)
+    public static TheoryData<string, string, string> RepeatedPressShapes()
+    {
+        var shapes = new TheoryData<string, string, string>();
+        foreach (string kind in new[] { "reading", "canvas", "graph" })
+        {
+            foreach (string approach in new[] { "F6 from the tab item", "Shift+F6 from the region after the editor" })
+            {
+                foreach (string rightPane in new[] { "with a content stop", "with no content stop", "hidden" })
+                {
+                    shapes.Add(kind, approach, rightPane);
+                }
+            }
+        }
+        return shapes;
+    }
+
+    private static void RepeatedPressWitness(string kind, string approach, string rightPane, bool secondBackward)
     {
         using var host = new Host();
-        host.Initialize(kind);
+        // A canvas with cards: a landing wrongly delivered would seat one.
+        host.Initialize(kind, kind == "canvas" ? CardBoard : null);
         RingHost ring = host.UseRing();
+        ring.RightPaneHasContentStop = rightPane == "with a content stop";
+        if (rightPane == "hidden")
+        {
+            host.Workspace.IsRightPaneVisible = false;
+        }
+        (ShellRegionKind after, UIElement afterStop, A11yEvent afterLine) = rightPane switch
+        {
+            "with a content stop" => (ShellRegionKind.RightPaneContent, (UIElement)host.Elsewhere, host.RightPaneLine()),
+            "with no content stop" => (ShellRegionKind.RightPaneRail, host.Rail, new A11yEvent.ShellRegionFocused(new ShellRegion.RightPaneRail())),
+            _ => (ShellRegionKind.StatusBar, host.Status, new A11yEvent.ShellRegionFocused(new ShellRegion.StatusBar(string.Empty))),
+        };
         host.HoldEditorLanding();
         TabItem tabItem = host.ActiveTabItem();
         bool approachBackward = approach.StartsWith("Shift+F6", StringComparison.Ordinal);
-        UIElement start = approachBackward ? host.Elsewhere : tabItem;
+        UIElement start = approachBackward ? afterStop : tabItem;
         Assert.True(start.Focus());
         PumpedDispatcher.Drain();
-        Assert.Equal(
-            approachBackward ? ShellRegionKind.RightPaneContent : ShellRegionKind.TabBar,
-            ring.FocusedRegion());
+        Assert.Equal(approachBackward ? after : ShellRegionKind.TabBar, ring.FocusedRegion());
 
         (approachBackward ? host.Workspace.FocusPreviousPaneCommand : host.Workspace.FocusNextPaneCommand).Execute(null);
         PumpedDispatcher.Drain();
@@ -535,17 +558,17 @@ public sealed class ReadingFocusTests
         Assert.Equal(ShellRegionKind.Editor, stale.Region);
         Assert.Equal(ShellRegionLanding.Pending, stale.Outcome);
         Assert.Empty(host.Announced);
-        AssertFocused(start, $"the held editor landing ({approach})");
+        AssertFocused(start, $"the held editor landing ({approach}, the right pane {rightPane})");
         object? staleRequest = host.EditorLandingRequest();
-        Assert.True(kind == "reading" ? host.ShownSurface().IsFocusLandingPending : staleRequest is not null);
+        Assert.NotNull(staleRequest);
 
         (secondBackward ? host.Workspace.FocusPreviousPaneCommand : host.Workspace.FocusNextPaneCommand).Execute(null);
         PumpedDispatcher.Drain();
 
-        ShellRegionKind destination = secondBackward ? ShellRegionKind.TabBar : ShellRegionKind.RightPaneContent;
-        IInputElement landed = secondBackward ? tabItem : host.Elsewhere;
-        A11yEvent line = secondBackward ? host.TabBarLine() : host.RightPaneLine();
-        string route = $"{approach}, then {(secondBackward ? "Shift+F6" : "F6")} from the held editor";
+        ShellRegionKind destination = secondBackward ? ShellRegionKind.TabBar : after;
+        IInputElement landed = secondBackward ? tabItem : afterStop;
+        A11yEvent line = secondBackward ? host.TabBarLine() : afterLine;
+        string route = $"{approach}, the right pane {rightPane}, then {(secondBackward ? "Shift+F6" : "F6")} from the held editor";
         Assert.Equal([ShellRegionKind.Editor, destination], ring.Tried);
         RingHost.Attempt moved = ring.Attempts[1];
         Assert.Equal(ShellRegionLanding.Landed, moved.Outcome);
@@ -555,10 +578,7 @@ public sealed class ReadingFocusTests
         Assert.Equal([line], host.Announced);
         // The arm let go of the cancelled landing: no request, no hold.
         Assert.Null(host.EditorLandingRequest());
-        if (kind == "reading")
-        {
-            Assert.False(host.ShownSurface().IsFocusLandingPending);
-        }
+        string? seated = host.SeatedNode();
 
         host.CompleteStaleEditorLanding(stale, staleRequest);
         host.LetEditorLandingArrive();
@@ -567,6 +587,7 @@ public sealed class ReadingFocusTests
         Assert.Equal([line], host.Announced);
         AssertFocused(landed, route + ", after the stale completion and the content's arrival");
         Assert.False(host.EditorStop().IsKeyboardFocusWithin);
+        Assert.Equal(seated, host.SeatedNode());
     }
 
     /// <summary>R-10: another route asking for the editor while the ring's
@@ -805,9 +826,11 @@ public sealed class ReadingFocusTests
     /// ring never speaks. (A graph pane needs no witness: an inactive group's
     /// graph never takes the keys, Term F2.)</summary>
     [Theory]
-    [InlineData("reading")]
-    [InlineData("canvas")]
-    public void APaneMoveWithdrawsTheHeldLandingInThePaneItLeaves(string kind) => RunSta(() =>
+    [InlineData("reading", "the ring")]
+    [InlineData("reading", "a route")]
+    [InlineData("canvas", "the ring")]
+    [InlineData("canvas", "a route")]
+    public void APaneMoveWithdrawsTheHeldLandingInThePaneItLeaves(string kind, string heldBy) => RunSta(() =>
     {
         using var host = new Host();
         host.Initialize(kind);
@@ -821,16 +844,38 @@ public sealed class ReadingFocusTests
         RingHost ring = host.UseRing();
         host.HoldEditorLanding();
         host.FocusTabBar();
-        host.Workspace.FocusNextPaneCommand.Execute(null);
-        PumpedDispatcher.Drain();
-        Assert.Equal(ShellRegionLanding.Pending, Assert.Single(ring.Attempts).Outcome);
+        if (heldBy == "the ring")
+        {
+            host.Workspace.FocusNextPaneCommand.Execute(null);
+            PumpedDispatcher.Drain();
+            Assert.Equal(ShellRegionLanding.Pending, Assert.Single(ring.Attempts).Outcome);
+        }
+        else
+        {
+            // A route's landing — the focus funnel behind every open — held
+            // for the same content.
+            host.Workspace.RequestActiveEditorFocus();
+            PumpedDispatcher.Drain();
+            Assert.NotNull(host.EditorLandingRequest());
+            Assert.Empty(ring.Attempts);
+        }
+        FrameworkElement leftStop = host.EditorStop();
+        int arrivalsInTheLeftPane = 0;
+        leftStop.IsKeyboardFocusWithinChanged += (_, e) =>
+        {
+            if (e.NewValue is true)
+            {
+                arrivalsInTheLeftPane++;
+            }
+        };
 
         Assert.True(host.Workspace.FocusDirectionalPane("horizontal", +1));
         host.LetEditorLandingArriveAhead();
         PumpedDispatcher.Drain();
 
         Assert.Same(paneB, host.Workspace.ActiveGroup);
-        Assert.False(host.EditorStop().IsKeyboardFocusWithin);
+        Assert.False(leftStop.IsKeyboardFocusWithin);
+        Assert.Equal(0, arrivalsInTheLeftPane);
         AssertFocused(host.ShownEditor(otherTab).TextArea, "the pane move");
         // The pane move's own line, once; nothing from the ring. (The move
         // also re-derives the right pane's leaves, which speak for
@@ -838,7 +883,7 @@ public sealed class ReadingFocusTests
         Assert.Equal(
             [new A11yEvent.EditorPaneFocused(2, 2, otherTab.Title, string.Empty)],
             host.Announced.OfType<A11yEvent.EditorPaneFocused>());
-        Assert.Single(ring.Attempts);
+        Assert.Equal(heldBy == "the ring" ? 1 : 0, ring.Attempts.Count);
         Assert.Null(host.EditorLandingRequest());
     });
 
@@ -1277,6 +1322,167 @@ public sealed class ReadingFocusTests
         Assert.Equal([host.RightPaneLine()], host.Announced);
         Assert.Null(host.EditorLandingRequest());
         Assert.False(host.Workspace.HoldsShellRegionLanding);
+    });
+
+    /// <summary>R-10's routes: every editor landing a route asks for carries a
+    /// refusal continuation, and the close fallback speaks the pane only once
+    /// focus is really somewhere. A reading landing held for a load that then
+    /// FAILS — after the reading toggle, after an in-place open (Quick Open's
+    /// commit), or through the palette's close fallback — falls back to the
+    /// tab's item: focus is never left on the window root or a closed overlay.
+    /// The close fallback's pane line is spoken exactly once, after the
+    /// fallback lands, and never while the landing was held; the funnel's
+    /// routes speak no pane line.</summary>
+    [Theory]
+    [InlineData("the reading toggle")]
+    [InlineData("an in-place open")]
+    [InlineData("the palette's close fallback")]
+    public void ARefusedRouteLandingFallsBackToTheTabItem(string route) => RunSta(() =>
+    {
+        using var host = new Host();
+        host.Initialize(readingMode: route != "the reading toggle");
+        ReadingSurface surface = host.ReadingSurfaceOfTab();
+        switch (route)
+        {
+            case "the reading toggle":
+                Assert.True(host.ShownEditor().FocusInputOwner());
+                PumpedDispatcher.Drain();
+                host.Announced.Clear();
+                host.Workspace.ToggleReadingModeCommand.Execute(null);
+                // The fixture projects at once: the production (asynchronous)
+                // projection stands in, and fails, before the queued landing runs.
+                _ = host.BindProjectionInFlight(surface, failsTerminally: true);
+                break;
+            case "an in-place open":
+                Assert.True(host.Sentinel.Focus());
+                PumpedDispatcher.Drain();
+                host.Announced.Clear();
+                host.Workspace.OpenPath("other.md");
+                _ = host.BindProjectionInFlight(surface, failsTerminally: true);
+                break;
+            default:
+                // The palette opened over a stop that is gone when it closes,
+                // with focus nowhere: its restore falls back to the editor pane.
+                _ = host.BindProjectionInFlight(surface, failsTerminally: true);
+                var transient = new TextBox { Text = "Where the palette was opened from" };
+                host.Show(transient);
+                Assert.True(transient.Focus());
+                PumpedDispatcher.Drain();
+                host.OpenModal("palette");
+                PumpedDispatcher.Drain();
+                host.Remove(transient);
+                Keyboard.ClearFocus();
+                host.Announced.Clear();
+                host.Lifecycle.Palette.Dismiss();
+                PumpedDispatcher.Drain();
+                break;
+        }
+
+        Assert.True(surface.IsFocusLandingPending, $"the route's landing was not held ({route})");
+        Assert.DoesNotContain(host.Announced, line => line is A11yEvent.EditorPaneFocused);
+
+        host.ReleaseProjection();
+        Assert.True(
+            PumpedDispatcher.PumpUntil(() => !surface.IsFocusLandingPending),
+            $"the route's held landing never ended ({route})");
+        PumpedDispatcher.Drain();
+
+        AssertFocused(host.ActiveTabItem(), $"the refused route's fallback ({route})");
+        Assert.Equal(
+            route == "the palette's close fallback" ? 1 : 0,
+            host.Announced.Count(line => line is A11yEvent.EditorPaneFocused));
+    });
+
+    /// <summary>R-10: the ring creates NO document request for a canvas or
+    /// graph tab that no surface is realized for yet (the shared cell not yet
+    /// bound to it). The press is refused there and lands the next region
+    /// once; when the surface is realized for the tab afterwards — its
+    /// DataContext edge re-asks the landing — it moves nothing, because no
+    /// request was left for it to seat.</summary>
+    [Theory]
+    [InlineData("canvas")]
+    [InlineData("graph")]
+    public void ARingPressBeforeTheSurfaceIsRealizedCreatesNoLanding(string kind) => RunSta(() =>
+    {
+        using var host = new Host();
+        host.Initialize(kind);
+        Assert.Null(host.EditorLandingRequest());
+        RingHost ring = host.UseRing();
+        FrameworkElement surface = host.EditorStop();
+        // No surface realized for the tab yet: the cell is bound to nothing.
+        surface.DataContext = null;
+        PumpedDispatcher.Drain();
+        Assert.Null(host.EditorStopOrNull());
+        Assert.True(host.Elsewhere.Focus());
+        PumpedDispatcher.Drain();
+
+        host.Workspace.FocusPreviousPaneCommand.Execute(null);
+        PumpedDispatcher.Drain();
+
+        Assert.Equal([ShellRegionKind.Editor, ShellRegionKind.TabBar], ring.Tried);
+        Assert.Equal(ShellRegionLanding.Refused, ring.Attempts[0].Outcome);
+        TabItem tabItem = host.ActiveTabItem();
+        AssertFocused(tabItem, "the press past the unrealized editor");
+        Assert.Equal([host.TabBarLine()], host.Announced);
+        Assert.Null(host.EditorLandingRequest());
+
+        // The surface is realized for the tab: its DataContext edge re-asks.
+        surface.ClearValue(FrameworkElement.DataContextProperty);
+        host.Settle();
+        if (host.Tab.Graph is { } graph)
+        {
+            PumpedDispatcher.PumpUntilDrained(graph.WhenAllWorkDrained());
+            PumpedDispatcher.Drain();
+        }
+
+        Assert.Same(surface, host.EditorStopOrNull());
+        AssertFocused(tabItem, "the surface realized after the press");
+        Assert.Equal([host.TabBarLine()], host.Announced);
+        Assert.Null(host.EditorLandingRequest());
+    });
+
+    /// <summary>R-10 over locked contract 34 D4: a named landing held for the
+    /// Visual board survives a filter answer that EXCLUDES its card — on the
+    /// board a filter dims cards and narrows nothing — so when the board can
+    /// take the landing, the renderer is focused with that exact, dimmed card
+    /// seated and the filter intact.</summary>
+    [Fact]
+    public void AnExcludingFilterKeepsANamedBoardLanding() => RunSta(() =>
+    {
+        using var host = new Host();
+        host.Initialize(readingMode: false, documentKind: "canvas", board: CardBoard);
+        CanvasDocumentViewModel board = host.Tab.Canvas!;
+        board.ShowSurface(CanvasSurfaceKind.Visual);
+        host.Settle();
+        var surface = Assert.IsType<CanvasSurfaceView>(host.EditorStop());
+        // The board is not shown yet, so the named landing waits for it (the
+        // CURRENT value, so the template's visibility binding stays).
+        surface.SetCurrentValue(UIElement.VisibilityProperty, Visibility.Collapsed);
+        PumpedDispatcher.Drain();
+        Assert.True(host.Sentinel.Focus());
+        board.RequestFocusLanding(host.Tab, "beta");
+        PumpedDispatcher.Drain();
+        CanvasFocusRequest named = Assert.IsType<CanvasFocusRequest>(board.FocusRequest);
+
+        // A needle alpha alone matches: the named card is excluded.
+        board.FilterText = "Alpha";
+        Assert.True(
+            PumpedDispatcher.PumpUntil(() => board.FilterActive && board.FilteredOutline.Count == 1),
+            "the needle never narrowed the rows to alpha");
+        PumpedDispatcher.PumpUntilDrained(board.WhenAllWorkDrained());
+        PumpedDispatcher.Drain();
+        Assert.DoesNotContain(board.FilteredOutline, row => row.NodeId == "beta");
+        Assert.Same(named, board.FocusRequest);
+
+        BindingExpression? shown = BindingOperations.GetBindingExpression(surface, UIElement.VisibilityProperty);
+        Assert.NotNull(shown);
+        shown.UpdateTarget();
+        host.Settle();
+
+        AssertFocused(surface.VisualForTests, "the named landing on the filtered board");
+        Assert.Equal("beta", board.Selection.Selected);
+        Assert.Equal("Alpha", board.FilterText);
+        Assert.Null(board.FocusRequest);
     });
 
     /// <summary>R-10: the answer inside the press is the document's own
@@ -2016,7 +2222,9 @@ public sealed class ReadingFocusTests
 
         public bool ModalSurfaceOpen => ((IShellRegionHost)host.Shell).ModalSurfaceOpen;
 
-        public bool RightPaneHasContentStop => true;
+        /// <summary>Whether the right pane shows a content stop; without one
+        /// its rail is the pane's only stop (the ring's presence rule).</summary>
+        public bool RightPaneHasContentStop { get; set; } = true;
 
         public string StatusText => string.Empty;
 
@@ -2031,6 +2239,16 @@ public sealed class ReadingFocusTests
             if (ReferenceEquals(focused, host.Elsewhere) || ReferenceEquals(focused, host.ElsewhereToo))
             {
                 return ShellRegionKind.RightPaneContent;
+            }
+
+            if (ReferenceEquals(focused, host.Rail))
+            {
+                return ShellRegionKind.RightPaneRail;
+            }
+
+            if (ReferenceEquals(focused, host.Status))
+            {
+                return ShellRegionKind.StatusBar;
             }
 
             if (focused is TabItem)
@@ -2056,6 +2274,8 @@ public sealed class ReadingFocusTests
                     ShellRegionKind.Files => host.Sentinel,
                     ShellRegionKind.TabBar => host.ActiveTabItem(),
                     ShellRegionKind.RightPaneContent => host.Elsewhere,
+                    ShellRegionKind.RightPaneRail => host.Rail,
+                    ShellRegionKind.StatusBar => host.Status,
                     _ => null,
                 };
                 outcome = stop is not null && stop.Focus() && stop.IsKeyboardFocusWithin
@@ -2092,17 +2312,27 @@ public sealed class ReadingFocusTests
         public TextBox Sentinel { get; private set; } = null!;
         public TextBox Elsewhere { get; private set; } = null!;
         public TextBox ElsewhereToo { get; private set; } = null!;
+
+        /// <summary>The right pane's rail stand-in (the ring's RightPaneRail).</summary>
+        public TextBox Rail { get; private set; } = null!;
+
+        /// <summary>The status bar's stand-in (the ring's StatusBar).</summary>
+        public TextBox Status { get; private set; } = null!;
         public List<A11yEvent> Announced { get; } = [];
         private FrameworkElement? _heldSurface;
 
         /// <summary>A reading-mode note, a canvas or the graph as the active
-        /// tab (<see cref="Tab"/>).</summary>
-        public void Initialize(string kind)
+        /// tab (<see cref="Tab"/>); a canvas loads <paramref name="board"/>
+        /// when one is given.</summary>
+        public void Initialize(string kind, string? board = null)
         {
             switch (kind)
             {
                 case "reading":
                     Initialize(readingMode: true);
+                    break;
+                case "canvas" when board is not null:
+                    Initialize(readingMode: false, documentKind: kind, board: board);
                     break;
                 case "canvas":
                 case "graph":
@@ -2168,13 +2398,19 @@ public sealed class ReadingFocusTests
             Sentinel = new TextBox { Text = "Focus starts outside the editor pane" };
             Elsewhere = new TextBox { Text = "Somewhere else the reader can go" };
             ElsewhereToo = new TextBox { Text = "And another stop beside it" };
+            Rail = new TextBox { Text = "The right pane's rail" };
+            Status = new TextBox { Text = "The status bar" };
             var content = new DockPanel();
             DockPanel.SetDock(Sentinel, Dock.Top);
             DockPanel.SetDock(Elsewhere, Dock.Top);
             DockPanel.SetDock(ElsewhereToo, Dock.Top);
+            DockPanel.SetDock(Rail, Dock.Top);
+            DockPanel.SetDock(Status, Dock.Top);
             content.Children.Add(Sentinel);
             content.Children.Add(Elsewhere);
             content.Children.Add(ElsewhereToo);
+            content.Children.Add(Rail);
+            content.Children.Add(Status);
             content.Children.Add(pane);
             _window = new Window
             {
@@ -2403,15 +2639,26 @@ public sealed class ReadingFocusTests
             PumpedDispatcher.Drain();
         }
 
+        /// <summary>Where the tab's document has the reader seated: the
+        /// canvas's selected card or the graph's selected node (null for a
+        /// reading tab).</summary>
+        public string? SeatedNode() => Tab.Canvas?.Selection.Selected ?? Tab.Graph?.ViewState.SelectedKey;
+
         /// <summary>The ring's editor line for this fixture's one pane.</summary>
         public A11yEvent EditorLine() =>
             new A11yEvent.EditorPaneFocused(1, 1, Tab.Title, string.Empty);
 
-        /// <summary>The arm's own token for a canvas or graph landing: the
-        /// request its document holds (a reading surface's held landing has
-        /// no token but the ring's).</summary>
+        /// <summary>The arm's own token for the editor landing: the request a
+        /// canvas or graph document holds, or the reading surface's held
+        /// landing.</summary>
         public object? EditorLandingRequest() =>
-            (object?)Tab.Canvas?.FocusRequest ?? Tab.Graph?.FocusRequest;
+            (object?)Tab.Canvas?.FocusRequest
+            ?? Tab.Graph?.FocusRequest
+            ?? (Tab.IsReadingMode ? ShownSurfaceOrNull()?.HeldFocusLanding : null);
+
+        private ReadingSurface? ShownSurfaceOrNull() =>
+            Descendants<ReadingSurface>(Shell.ContentPaneBorder)
+                .SingleOrDefault(surface => ReferenceEquals(surface.DataContext, Tab) && surface.IsVisible);
 
         /// <summary>Complete a cancelled press's token AFTER its replacement
         /// was issued: the ring's two completions, then the arm's own — the
@@ -2429,8 +2676,8 @@ public sealed class ReadingFocusTests
                 case GraphFocusRequest graphRequest:
                     Tab.Graph!.CompleteFocus(graphRequest);
                     break;
-                default:
-                    _ = ShownSurface().CancelFocusLanding(stale.Announce);
+                case { } readingToken:
+                    _ = ShownSurface().CancelFocusLanding(readingToken);
                     break;
             }
             PumpedDispatcher.Drain();
@@ -2476,6 +2723,20 @@ public sealed class ReadingFocusTests
             var content = (DockPanel)_window!.Content;
             DockPanel.SetDock(element, Dock.Top);
             content.Children.Insert(2, element);
+            _window.UpdateLayout();
+        }
+
+        /// <summary>The tab's reading surface, shown or not (the markdown
+        /// template carries it beside the editor).</summary>
+        public ReadingSurface ReadingSurfaceOfTab() => Assert.Single(
+            Descendants<ReadingSurface>(Shell.ContentPaneBorder),
+            surface => ReferenceEquals(surface.DataContext, Tab));
+
+        /// <summary>Take an element <see cref="Show"/> added out of the window.</summary>
+        public void Remove(UIElement element)
+        {
+            var content = (DockPanel)_window!.Content;
+            content.Children.Remove(element);
             _window.UpdateLayout();
         }
 
