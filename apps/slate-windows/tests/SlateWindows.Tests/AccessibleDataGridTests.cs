@@ -1638,7 +1638,8 @@ public sealed class AccessibleDataGridSurfaceRowNameTests : IDisposable
     });
 
     /// <summary>Codex PR 3 round 2: one file name in two folders would read
-    /// alike, so each row carries its source row.</summary>
+    /// alike, so each row carries its key — its path (codex PR 3 round 6,
+    /// OD-8: the path, as lists and tabs read it, never a place).</summary>
     [Fact]
     public void BasesRowsSharingAFileNameAreToldApart() => RunSta(() =>
     {
@@ -1669,7 +1670,7 @@ public sealed class AccessibleDataGridSurfaceRowNameTests : IDisposable
         List<(object Item, string Name)> rows =
             GridRowNames.Realized(surface.GridForTests, surface);
         Assert.Equal(
-            ["same.md, row 1", "same.md, row 2"],
+            ["same.md, A/same.md", "same.md, B/same.md"],
             rows.Select(row => row.Name).Order(StringComparer.Ordinal));
         document.Shutdown();
     });
