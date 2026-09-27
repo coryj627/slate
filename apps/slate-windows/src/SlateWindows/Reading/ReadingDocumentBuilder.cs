@@ -1156,8 +1156,14 @@ internal static class ReadingDocumentBuilder
         // alias-less occurrence of the SAME image key shared one alt
         // and both titled with the filename. The card's own block
         // knows its own record — its authored alias wins here, fixing
-        // the deferral mac documented rather than porting it.
+        // the deferral mac documented rather than porting it. Found, the
+        // record's alias wins even when there is none (#1278 round 4, the
+        // realized-surface witness): an alias-less occurrence BEFORE an
+        // aliased one fell back to the shared last-record alt and was
+        // titled with the other occurrence's alias. The shared alt is only
+        // the fallback for a card whose record is not in the snapshot.
         string? occurrenceAlt = null;
+        bool ownRecord = false;
         foreach (OutgoingLink record in records)
         {
             if (record.IsEmbed
@@ -1165,6 +1171,7 @@ internal static class ReadingDocumentBuilder
                 && record.SpanEnd <= block.ByteEnd)
             {
                 occurrenceAlt = record.DisplayText;
+                ownRecord = true;
             }
         }
         var section = new Section
@@ -1192,7 +1199,7 @@ internal static class ReadingDocumentBuilder
             // An image named by this occurrence's own alt keeps it (mac
             // audits #196/#198/#419).
             EmbedResolution.Image image => SlateUniffiMethods.ResolvedEmbedTitle(
-                new ResolvedEmbed.Image(image.TargetPath, occurrenceAlt ?? artifact?.Alt ?? image.Alt)),
+                new ResolvedEmbed.Image(image.TargetPath, ownRecord ? occurrenceAlt : artifact?.Alt ?? image.Alt)),
             _ => SlateUniffiMethods.ResolvedEmbedTitle(ResolvedEmbeds.Of(resolution)!),
         };
         string headerSuffix = resolution is null
