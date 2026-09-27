@@ -447,6 +447,64 @@ public sealed class SearchOverlayViewModelTests
         Assert.Equal("budget 2026", focused.Query);
     }
 
+    /// <summary>W7-7 PR 3 (#1246, R-4; codex PR 3 round 7, OD-9): a focused
+    /// recent speaks the name its button carries. The store keeps "draft",
+    /// "DRAFT" and "draft." apart (an ordinal de-duplication) and a reader
+    /// hears them alike, so each button reads its place — and the focus
+    /// announcement spoke the bare query for all three. The recents are
+    /// hosted from the authored XAML over the real overlay, each focus
+    /// reported as the view's handler reports it (the button's own
+    /// DataContext), and core's rendering of the announcement is the
+    /// button's name.</summary>
+    [Fact]
+    public void AFocusedRecentSpeaksTheNameItsButtonCarries() => ItemContainerNameBindingTests.RunSta(() =>
+    {
+        var harness = new OverlayHarness();
+        harness.Source.RecentsOnDisk.AddRange(["draft", "budget", "DRAFT", "draft."]);
+        harness.Overlay.Open();
+        Assert.Equal(["draft", "budget", "DRAFT", "draft."], harness.Overlay.Recents);
+        SharedNameTests.Hosted("Recent searches", harness.Overlay, host =>
+        {
+            System.Windows.Controls.Button[] buttons = [.. Buttons(host)];
+            string[] names =
+            [
+                .. buttons.Select(button =>
+                    System.Windows.Automation.Peers.UIElementAutomationPeer.CreatePeerForElement(button).GetName()),
+            ];
+            Assert.Equal(
+                [
+                    "Recent search: draft, search 1", "Recent search: budget",
+                    "Recent search: DRAFT, search 3", "Recent search: draft., search 4",
+                ],
+                names);
+            for (int index = 0; index < buttons.Length; index++)
+            {
+                harness.Announcements.Clear();
+                harness.Overlay.NotifyRecentRowFocused((string)buttons[index].DataContext);
+                Assert.Equal(
+                    names[index],
+                    SlateUniffiMethods.A11yRender(
+                        Assert.IsType<A11yEvent.RecentSearchFocused>(Assert.Single(harness.Announcements))).Text);
+            }
+        });
+
+        static IEnumerable<System.Windows.Controls.Button> Buttons(System.Windows.DependencyObject parent)
+        {
+            for (int index = 0; index < System.Windows.Media.VisualTreeHelper.GetChildrenCount(parent); index++)
+            {
+                System.Windows.DependencyObject child = System.Windows.Media.VisualTreeHelper.GetChild(parent, index);
+                if (child is System.Windows.Controls.Button button)
+                {
+                    yield return button;
+                }
+                foreach (System.Windows.Controls.Button nested in Buttons(child))
+                {
+                    yield return nested;
+                }
+            }
+        }
+    });
+
     [Fact]
     public void IdleStateLabelsAreMacVerbatim()
     {

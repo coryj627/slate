@@ -706,7 +706,7 @@ public sealed class SharedNameTests
             $"{label}: stops read alike: {string.Join(" | ", names)}");
     }
 
-    private static void Hosted(string label, object dataContext, Action<ItemsControl> read)
+    internal static void Hosted(string label, object dataContext, Action<ItemsControl> read)
     {
         (string file, XElement element) = ItemContainerNameCensus.XamlHost(label);
         (Grid root, ItemsControl host) = ShellXamlFragments.LoadHost(element, file);

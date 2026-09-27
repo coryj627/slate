@@ -615,9 +615,14 @@ internal sealed class SearchOverlayViewModel : BindableBase, IDisposable
     }
 
     /// <summary>Announce a focused recent row (contract S14). Called by
-    /// the phase-2 view's focus handler.</summary>
+    /// the phase-2 view's focus handler. W7-7 PR 3 (#1246, R-4; codex PR 3
+    /// round 7, OD-9): the row as its button is named, among the recent
+    /// queries — the store keeps "draft" and "DRAFT" apart, and a reader
+    /// hears them alike, so each reads its place ("draft, search 1"); core
+    /// adds the "Recent search:" the button's name carries.</summary>
     public void NotifyRecentRowFocused(string query) =>
-        _announce(new A11yEvent.RecentSearchFocused(query));
+        _announce(new A11yEvent.RecentSearchFocused(
+            SiblingNames.SpokenAmong(Recents, query, recent => recent, _ => null, "search")));
 
     /// <summary>
     /// Forget every remembered query, then re-read from disk: on a
