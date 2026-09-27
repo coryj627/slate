@@ -2,6 +2,7 @@
 // SPDX-License-Identifier: AGPL-3.0-or-later
 
 using System.Windows.Threading;
+using SlateWindows.Commands;
 using uniffi.slate_uniffi;
 
 namespace SlateWindows.Tests;
@@ -333,5 +334,111 @@ public sealed partial class CommandPaletteTests
             announced => Assert.Equal(
                 "q",
                 Assert.IsType<A11yEvent.PaletteFilterCount>(announced).Query));
+    });
+
+    /// <summary>
+    /// Codex round 4's repro (#1275; the owner chooses the fix — this fact
+    /// FAILS until one lands). Closing the app with a dirty tab while the
+    /// palette is open runs the unsaved-changes prompt
+    /// (<c>PrepareForApplicationClose</c> → <c>TryCloseWorkspace</c> →
+    /// <c>_confirmUnsavedClose</c>), and that prompt's modal loop pumps the
+    /// dispatcher with the palette open and NOT invoking — the invocation
+    /// seal covers only the command the palette itself runs. Here the
+    /// injected confirmation pumps a nested frame, as the real
+    /// <c>MessageBox</c> does, while a parked rank completes and its count
+    /// window runs out: the palette must publish nothing and say nothing
+    /// while the prompt is up.
+    /// </summary>
+    [Fact]
+    public void TheUnsavedChangesPromptOnCloseHearsNothingFromThePalette() => RunSta(() =>
+    {
+        using FixtureVault fixture = FixtureVault.Create(1, "palette-close-prompt");
+        var lane = new CommandPaletteWorkLane();
+        var announced = new List<A11yEvent>();
+        CommandPaletteViewModel? palette = null;
+        Task? parkedRank = null;
+        using var gate = new ManualResetEventSlim(false);
+        int published = 0;
+        (int Published, int Heard)? duringPrompt = null;
+
+        int PaletteHeard() => announced.Count(announcement =>
+            announcement is A11yEvent.PaletteCommandSelected or A11yEvent.PaletteFilterCount);
+
+        VaultCloseDecision Prompt()
+        {
+            // The prompt's modal loop: while it is up the parked rank
+            // completes and posts its rows back, and its count window
+            // runs out.
+            int publishedBefore = published;
+            int heardBefore = PaletteHeard();
+            gate.Set();
+            Assert.True(
+                PumpedDispatcher.PumpUntil(() => parkedRank!.IsCompleted, TimeSpan.FromSeconds(10)),
+                "the parked rank never completed inside the prompt");
+            PumpedDispatcher.Drain();
+            Assert.True(
+                PumpedDispatcher.PumpUntil(
+                    () => palette!.FilterCountCompletion.IsCompleted,
+                    TimeSpan.FromSeconds(10)),
+                "the count window never ran out inside the prompt");
+            PumpedDispatcher.Drain();
+            duringPrompt = (published - publishedBefore, PaletteHeard() - heardBefore);
+            return VaultCloseDecision.Cancel;
+        }
+
+        using var lifecycle = new VaultLifecycleViewModel(
+            pickVault: () => Task.FromResult<string?>(fixture.Root),
+            enqueueUi: action => action(),
+            recentVaultsStore: new RecentVaultsStore(
+                Path.Combine(fixture.Root, "device-state", "recent-vaults.json")),
+            announce: announced.Add,
+            confirmUnsavedClose: Prompt,
+            sessionLoadWorker: work => Task.FromResult(work()),
+            paletteRecentsStore: new CommandPaletteRecentsStore(
+                Path.Combine(fixture.Root, "device-state", "command-palette-recents.json")),
+            paletteLane: lane);
+        PumpedDispatcher.PumpUntilDrained(lifecycle.OpenVaultAsync(fixture.Root));
+        WorkspaceViewModel workspace = Assert.IsType<WorkspaceViewModel>(lifecycle.Workspace);
+        workspace.OpenPath("note0.md");
+        workspace.ActiveGroup.ActiveTab!.Text += "\nUnsaved.";
+
+        palette = lifecycle.Palette;
+        palette.PropertyChanged += (_, change) =>
+        {
+            if (change.PropertyName == nameof(CommandPaletteViewModel.Rows))
+            {
+                published++;
+            }
+        };
+        palette.Open();
+        Assert.True(
+            PumpedDispatcher.PumpUntil(() => !palette.IsRankPending, TimeSpan.FromSeconds(10)),
+            "the open's rows never published");
+        string? selectedBefore = palette.SelectedId;
+
+        // A query whose rank is parked behind a held lane item.
+        using var running = new ManualResetEventSlim(false);
+        _ = lane.Run(
+            () =>
+            {
+                running.Set();
+                return gate.Wait(TimeSpan.FromSeconds(30));
+            },
+            CancellationToken.None);
+        Assert.True(running.Wait(TimeSpan.FromSeconds(10)), "the lane never picked up the parking item");
+        palette.Query = "quick open";
+        parkedRank = palette.RankCompletion;
+        Assert.True(palette.IsRankPending);
+
+        // The window closes with a dirty tab: the unsaved-changes prompt.
+        Assert.False(lifecycle.PrepareForApplicationClose());
+
+        Assert.NotNull(duringPrompt);
+        Assert.True(palette.IsOpen);
+        Assert.True(
+            duringPrompt.Value is (0, 0) && palette.SelectedId == selectedBefore,
+            $"while the unsaved-changes prompt was up the palette published {duringPrompt.Value.Published} "
+            + $"time(s), made {duringPrompt.Value.Heard} announcement(s), and moved its selection from "
+            + $"'{selectedBefore}' to '{palette.SelectedId}'");
     });
 }
