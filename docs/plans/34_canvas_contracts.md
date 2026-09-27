@@ -1375,7 +1375,10 @@ the sites and write the design.
    { Owner, NodeId }` lives on the document as `FocusRequest`.
    `RequestActiveEditorFocus` — the one funnel every user-initiated open
    calls and no background path does — raises it, addressed to the tab
-   that asked. It stays pending until a surface delivers it and says so
+   that asked. (Amended by W7-7 OD-12, contract 40: the funnel asks, and
+   the shell's one landing entry raises the request, addressed the same
+   way, after the window's slot holds the landing and never under an
+   open modal surface.) It stays pending until a surface delivers it and says so
    (`CompleteFocusLanding`), and a newer request supersedes an older one
    because raising OVERWRITES: completion compares the pending RECORD by
    reference, so a late delivery of a superseded request cannot clear a
