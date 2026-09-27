@@ -6730,6 +6730,25 @@ Where-am-I remain the two ungated rows.
 > its own Follow Selection is on; the board that made the move still
 > reveals it as its own. Pinned by
 > `AFollowingBoardInAnotherPanePansToTheSelectionAndAnUnfollowingOneStays`.
+>
+> **And across publications (#1271, review round 2).** The seat moves the
+> moment the document publishes, and New Card and Duplicate seat a card
+> that only the successor has, while each board's engine installs that
+> successor later; a reveal computed against the installed predecessor
+> found no card and was lost. A reveal is now a debt the board owes until
+> an installed state has the card (`RevealNode`), one per board: a newer
+> reveal supersedes it; it is paid only while still payable, meaning its
+> card is still the seat (so it is never replayed for a card no longer
+> selected) and D4 still reveals it (a move made elsewhere lapses when
+> the board stops following; a move made on the board stands); and it is
+> dropped when the board's document changes. Pinned by
+> `AFollowingBoardRevealsANewCardOnceTheStateThatHasItInstalls` (two panes,
+> the new card absent from both boards' installed states and off both
+> views), `AnOwedRevealIsPaidOnlyForTheCardThatIsStillTheSeat` and
+> `AnOwedElsewhereRevealLapsesWhenTheBoardStopsFollowing`. D4's on-surface
+> arm for the board's own peers, with Follow Selection off (Invoke,
+> SelectionItem.Select and both realization routes), is pinned by
+> `TheBoardsOwnPeersRevealTheirCardWithFollowSelectionOff`.
 
 **D16 — §K budgets are asserted, not aspirational.** The renderer
 benchmarks run the 2,000-node fixture and ASSERT the mac budgets:
@@ -19232,62 +19251,62 @@ not keyed is not claimed as keyed.
 
 | Id | Head | Recorded |
 |---|---|---|
-| CD-1 | No standalone overlap events. | Recorded divergences, line 14228 |
-| CD-2 | `CanvasFilterCount` carries `matched` only. | Recorded divergences, line 14239 |
-| CD-3 | `CanvasLoadedDegraded` is an announcement Windows and mac both gain. | Recorded divergences, line 14246 |
-| CD-4 | Group entry speaks the group's CHILD count. | Recorded divergences, line 14263 |
-| CD-5 | Where-am-I has ONE filter spelling. | Recorded divergences, line 14271 |
-| CD-6 | Core's thousands grouping wins over `CountCopy`. | Recorded divergences, line 14282 |
-| CD-7 | The connection-delete sentence no longer lower-cases the author's words. | Recorded divergences, line 14293 |
-| CD-8 | The chord parameter is the one recorded platform difference in the corpus. | Recorded divergences, line 14305 |
-| CD-9 | `towardOther` is dropped. | Recorded divergences, line 14312 |
-| CD-10 | Families are typed nested enums, not one variant per sentence. | Recorded divergences, line 14322 |
-| CD-11 | Names that differ from the spec's indicative list. | Recorded divergences, line 14339 |
-| CD-12 | The family nests under one top-level variant | Recorded divergences, line 14350 |
-| CD-13 | `CanvasTracePathEnd` speaks the count of the titles it just listed. | Recorded divergences, line 14370 |
-| CD-14 | The outline's connection ROW now reads the traversal sentence. | Recorded divergences, line 14390 |
-| CD-15 | Four templates stop hardcoding the plural. | Recorded divergences, line 14414 |
-| CD-16 | `canvas_auto_sides` takes rects, not node ids | Recorded divergences, line 14449 |
-| CD-17 | `canvas_constants()` and `canvas_new_id()` are free functions | Recorded divergences, line 14460 |
-| CD-18 | Equal-area containment ties resolve to the LATER document order. | Recorded divergences, line 14468 |
-| CD-19 | `describe_relative`'s tie-break is pinned where mac's was undefined. | Recorded divergences, line 14479 |
-| CD-20 | `speakable_name` ordinals renumber on delete | Recorded divergences, line 14488 |
-| CD-21 | `place_inside_group`'s fallback fires on SIZE, not on childlessness. | Recorded divergences, line 14502 |
-| CD-22 | Case handling and whitespace trimming are Rust's, not Foundation's — and not case folding either. | Recorded divergences, line 14518 |
-| CD-23 | `speakable_name` is exposed on four records; which surface SPEAKS it stays the host's. | Recorded divergences, line 14539 |
-| CD-24 | `canvas_group_rect_around` returns `Option`. | Recorded divergences, line 14563 |
-| CD-25 | the inside-group search is a column-major LATTICE, not a ring. | Recorded divergences, line 14569 |
-| CD-26 | `count_noun` is an FFI export, because CD-6's other half is a host string. | Recorded divergences, line 14589 |
-| CD-27 | Duplicate's group expansion answers from the tree, not from "centre inside a picked group". | Recorded divergences, line 14619 |
-| CD-28 | `CanvasOpenInfo.degraded` is the PARSE-ERROR state, not the "unsupported items" banner. | Recorded divergences, line 14650 |
-| CD-29 | The degraded announcement is once per DOCUMENT on Windows and once per CONTAINER on mac. | Recorded divergences, line 14667 |
-| CD-30 | The outline row's Name spells `speakable_name`; mac's spells `title`. | Recorded divergences, line 14679 |
-| CD-31 | The surface view is a code-built `UserControl`, not a `.xaml(.cs)` pair. | Recorded divergences, line 14695 |
-| CD-32 | A retarget re-keys the registry; it does not mutate the document's path. | Recorded divergences, line 14707 |
-| CD-33 | The Windows outline NESTS; mac's is flat with indentation. | Recorded divergences, line 14723 |
-| CD-34 | `CanvasPhrase.CardReference` capitalises with .NET's SIMPLE mapping where core uses Rust's FULL one. | Recorded divergences, line 14738 |
-| CD-35 | The canvas link card has no confirmation step, and neither does the policy it reuses. | Recorded divergences, line 14771 |
-| CD-36 | The media activation hint is corrected on Windows; mac's is stale. | Recorded divergences, line 14794 |
-| CD-37 | The empty canvas renders `CanvasStatus{Empty}`, not `CanvasEmptyOnboarding`. | Recorded divergences, line 14807 |
-| CD-38 | Windows will not shell-execute a non-media file card; mac will | Recorded divergences, line 14823 |
-| CD-39 | The canvas table's ordinal columns sort differently from mac's on a mixed-normalization vault | Recorded divergences, line 15126 |
-| CD-40 | Focus delivery seats the shared selection SILENTLY; "lands focus only" is not reachable. | Recorded divergences, line 15161 |
-| CD-41 | M4 does not cancel on a shell overlay; t0 §2 M4's palette clause is superseded. | Recorded divergences, line 15194 |
-| CD-42 | The filter's visible summary is mac's sentence, not t0's spoken one. | Recorded divergences, line 15222 |
-| CD-43 | Clear Filter always answers; mac stays silent when nothing is filtered. | Recorded divergences, line 15231 |
-| CD-44 | `nextCard` the CHORD and `nextCard` the COMMAND visit different rows, deliberately. | Recorded divergences, line 15249 |
-| CD-45 | A survivor whose containing group was filtered out is promoted to a ROOT; the intermediate "nests under a surviving GRANDparent" case cannot… | Recorded divergences, line 15265 |
-| CD-46 | Next/previous card route through the read mapping; mac returns silently outside `.ready`. | Recorded divergences, line 15344 |
-| CD-47 | Escape inside the Where-am-I panel is the PANEL's, not the ladder's; t0 §2 M5 has no clause for a focused transient region. | Recorded divergences, line 15367 |
-| CD-48 | Right/Left FOLLOW unconditionally; the spec's "as mac does" premise was false. | Recorded divergences, line 15425 |
+| CD-1 | No standalone overlap events. | Recorded divergences, line 14247 |
+| CD-2 | `CanvasFilterCount` carries `matched` only. | Recorded divergences, line 14258 |
+| CD-3 | `CanvasLoadedDegraded` is an announcement Windows and mac both gain. | Recorded divergences, line 14265 |
+| CD-4 | Group entry speaks the group's CHILD count. | Recorded divergences, line 14282 |
+| CD-5 | Where-am-I has ONE filter spelling. | Recorded divergences, line 14290 |
+| CD-6 | Core's thousands grouping wins over `CountCopy`. | Recorded divergences, line 14301 |
+| CD-7 | The connection-delete sentence no longer lower-cases the author's words. | Recorded divergences, line 14312 |
+| CD-8 | The chord parameter is the one recorded platform difference in the corpus. | Recorded divergences, line 14324 |
+| CD-9 | `towardOther` is dropped. | Recorded divergences, line 14331 |
+| CD-10 | Families are typed nested enums, not one variant per sentence. | Recorded divergences, line 14341 |
+| CD-11 | Names that differ from the spec's indicative list. | Recorded divergences, line 14358 |
+| CD-12 | The family nests under one top-level variant | Recorded divergences, line 14369 |
+| CD-13 | `CanvasTracePathEnd` speaks the count of the titles it just listed. | Recorded divergences, line 14389 |
+| CD-14 | The outline's connection ROW now reads the traversal sentence. | Recorded divergences, line 14409 |
+| CD-15 | Four templates stop hardcoding the plural. | Recorded divergences, line 14433 |
+| CD-16 | `canvas_auto_sides` takes rects, not node ids | Recorded divergences, line 14468 |
+| CD-17 | `canvas_constants()` and `canvas_new_id()` are free functions | Recorded divergences, line 14479 |
+| CD-18 | Equal-area containment ties resolve to the LATER document order. | Recorded divergences, line 14487 |
+| CD-19 | `describe_relative`'s tie-break is pinned where mac's was undefined. | Recorded divergences, line 14498 |
+| CD-20 | `speakable_name` ordinals renumber on delete | Recorded divergences, line 14507 |
+| CD-21 | `place_inside_group`'s fallback fires on SIZE, not on childlessness. | Recorded divergences, line 14521 |
+| CD-22 | Case handling and whitespace trimming are Rust's, not Foundation's — and not case folding either. | Recorded divergences, line 14537 |
+| CD-23 | `speakable_name` is exposed on four records; which surface SPEAKS it stays the host's. | Recorded divergences, line 14558 |
+| CD-24 | `canvas_group_rect_around` returns `Option`. | Recorded divergences, line 14582 |
+| CD-25 | the inside-group search is a column-major LATTICE, not a ring. | Recorded divergences, line 14588 |
+| CD-26 | `count_noun` is an FFI export, because CD-6's other half is a host string. | Recorded divergences, line 14608 |
+| CD-27 | Duplicate's group expansion answers from the tree, not from "centre inside a picked group". | Recorded divergences, line 14638 |
+| CD-28 | `CanvasOpenInfo.degraded` is the PARSE-ERROR state, not the "unsupported items" banner. | Recorded divergences, line 14669 |
+| CD-29 | The degraded announcement is once per DOCUMENT on Windows and once per CONTAINER on mac. | Recorded divergences, line 14686 |
+| CD-30 | The outline row's Name spells `speakable_name`; mac's spells `title`. | Recorded divergences, line 14698 |
+| CD-31 | The surface view is a code-built `UserControl`, not a `.xaml(.cs)` pair. | Recorded divergences, line 14714 |
+| CD-32 | A retarget re-keys the registry; it does not mutate the document's path. | Recorded divergences, line 14726 |
+| CD-33 | The Windows outline NESTS; mac's is flat with indentation. | Recorded divergences, line 14742 |
+| CD-34 | `CanvasPhrase.CardReference` capitalises with .NET's SIMPLE mapping where core uses Rust's FULL one. | Recorded divergences, line 14757 |
+| CD-35 | The canvas link card has no confirmation step, and neither does the policy it reuses. | Recorded divergences, line 14790 |
+| CD-36 | The media activation hint is corrected on Windows; mac's is stale. | Recorded divergences, line 14813 |
+| CD-37 | The empty canvas renders `CanvasStatus{Empty}`, not `CanvasEmptyOnboarding`. | Recorded divergences, line 14826 |
+| CD-38 | Windows will not shell-execute a non-media file card; mac will | Recorded divergences, line 14842 |
+| CD-39 | The canvas table's ordinal columns sort differently from mac's on a mixed-normalization vault | Recorded divergences, line 15145 |
+| CD-40 | Focus delivery seats the shared selection SILENTLY; "lands focus only" is not reachable. | Recorded divergences, line 15180 |
+| CD-41 | M4 does not cancel on a shell overlay; t0 §2 M4's palette clause is superseded. | Recorded divergences, line 15213 |
+| CD-42 | The filter's visible summary is mac's sentence, not t0's spoken one. | Recorded divergences, line 15241 |
+| CD-43 | Clear Filter always answers; mac stays silent when nothing is filtered. | Recorded divergences, line 15250 |
+| CD-44 | `nextCard` the CHORD and `nextCard` the COMMAND visit different rows, deliberately. | Recorded divergences, line 15268 |
+| CD-45 | A survivor whose containing group was filtered out is promoted to a ROOT; the intermediate "nests under a surviving GRANDparent" case cannot… | Recorded divergences, line 15284 |
+| CD-46 | Next/previous card route through the read mapping; mac returns silently outside `.ready`. | Recorded divergences, line 15363 |
+| CD-47 | Escape inside the Where-am-I panel is the PANEL's, not the ladder's; t0 §2 M5 has no clause for a focused transient region. | Recorded divergences, line 15386 |
+| CD-48 | Right/Left FOLLOW unconditionally; the spec's "as mac does" premise was false. | Recorded divergences, line 15444 |
 
 | Id | Head | Recorded |
 |---|---|---|
-| CR-1 | uniffi's 256-variant enum cap: pressure resolved, and the pattern is set. | Accepted risks, line 15465 |
-| CR-2 | `a11y.rs` is now 5,291 lines | Accepted risks, line 15477 |
-| CR-3 | Two shipped strings have English defects and were migrated verbatim. | Accepted risks, line 15484 |
-| CR-4 | `CanvasModeCancelled` and `CanvasModeEndedWithoutEffect` admit combinations no host produces | Accepted risks, line 15493 |
-| CR-5 | The residue count is unchanged by 0a-1; 0a-2 lowers it. | Accepted risks, line 15499 |
+| CR-1 | uniffi's 256-variant enum cap: pressure resolved, and the pattern is set. | Accepted risks, line 15484 |
+| CR-2 | `a11y.rs` is now 5,291 lines | Accepted risks, line 15496 |
+| CR-3 | Two shipped strings have English defects and were migrated verbatim. | Accepted risks, line 15503 |
+| CR-4 | `CanvasModeCancelled` and `CanvasModeEndedWithoutEffect` admit combinations no host produces | Accepted risks, line 15512 |
+| CR-5 | The residue count is unchanged by 0a-1; 0a-2 lowers it. | Accepted risks, line 15518 |
 
 **(d) Owner decisions D-1…D-7, with their resolution and evidence.**
 

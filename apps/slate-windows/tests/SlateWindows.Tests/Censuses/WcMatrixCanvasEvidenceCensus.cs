@@ -84,11 +84,15 @@ public sealed class WcMatrixCanvasEvidenceCensus
             [],
             ["speakable_name", "Zoom N percent"],
             // D4's origin rule for the board's reveal (follow-up #1271), across
-            // panes too (review round 1); D5's reserved container name (#1276).
+            // panes (review round 1) and across publications, with the board's
+            // own peers pinned toggle-off (review round 2); D5's reserved
+            // container name (#1276).
             ["CanvasSurfaces_VisualBoardPeersAndZoom_AreClean", "TheZoomValueIsCoresRenderMinusItsPeriod", "FitCanvasContainsAndCentresCoresBounds",
                 "TheBoardsRightAndLeftFollowConnectionsAndEveryMoveRevealsItsSeat", "TheBoardRevealsItsOwnMovesAlwaysAndOtherMovesOnlyWhileFollowing",
                 "TheRevealRuleIsD4sOriginRule", "EveryBoardPeerHasItsOwnNameAndTheContainersNameIsReserved",
-                "AFollowingBoardInAnotherPanePansToTheSelectionAndAnUnfollowingOneStays"],
+                "AFollowingBoardInAnotherPanePansToTheSelectionAndAnUnfollowingOneStays",
+                "AFollowingBoardRevealsANewCardOnceTheStateThatHasItInstalls", "AnOwedRevealIsPaidOnlyForTheCardThatIsStillTheSeat",
+                "AnOwedElsewhereRevealLapsesWhenTheBoardStopsFollowing", "TheBoardsOwnPeersRevealTheirCardWithFollowSelectionOff"],
             ["canvas-visual"]),
         new(
             "Canvas card editor (W6-1 §E)",
