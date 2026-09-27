@@ -85,14 +85,23 @@ public sealed class WcMatrixCanvasEvidenceCensus
             ["speakable_name", "Zoom N percent"],
             // D4's origin rule for the board's reveal (follow-up #1271), across
             // panes (review round 1) and across publications, with the board's
-            // own peers pinned toggle-off (review round 2); D5's reserved
+            // own peers pinned toggle-off (review round 2), judged by the
+            // seat's and the toggle's tokens and paid when a hidden board is
+            // shown again (review round 3, owner decision); D5's reserved
             // container name (#1276).
             ["CanvasSurfaces_VisualBoardPeersAndZoom_AreClean", "TheZoomValueIsCoresRenderMinusItsPeriod", "FitCanvasContainsAndCentresCoresBounds",
                 "TheBoardsRightAndLeftFollowConnectionsAndEveryMoveRevealsItsSeat", "TheBoardRevealsItsOwnMovesAlwaysAndOtherMovesOnlyWhileFollowing",
                 "TheRevealRuleIsD4sOriginRule", "EveryBoardPeerHasItsOwnNameAndTheContainersNameIsReserved",
                 "AFollowingBoardInAnotherPanePansToTheSelectionAndAnUnfollowingOneStays",
                 "AFollowingBoardRevealsANewCardOnceTheStateThatHasItInstalls", "AnOwedRevealIsPaidOnlyForTheCardThatIsStillTheSeat",
-                "AnOwedElsewhereRevealLapsesWhenTheBoardStopsFollowing", "TheBoardsOwnPeersRevealTheirCardWithFollowSelectionOff"],
+                "AnOwedElsewhereRevealLapsesWhenTheBoardStopsFollowing", "TheBoardsOwnPeersRevealTheirCardWithFollowSelectionOff",
+                "ABoardMoveDebtIsVoidedWhenTheSeatLeavesAndReturnsBeforeItsCardInstalls",
+                "AnElsewhereDebtStaysLapsedWhenFollowingResumesBeforeItsCardInstalls", "APaidRevealIsNeverPaidAgainByALaterInstall",
+                "ARebindToAnotherDocumentDropsTheDebtEvenForACollidingNodeId", "TheSelectionRevisionCountsEveryChangeOfTheSeatAndNothingElse",
+                "TheViewportCountsAFollowLapseOnlyWhenFollowingStops",
+                "AFollowingBoardHiddenBehindAnotherTabScrollsToTheSelectionWhenShown",
+                "AFollowingBoardUnderTheOutlineScrollsToTheSelectionWhenShown", "ABoardThatStopsFollowingWhileHiddenDoesNotScrollWhenShown",
+                "ABoardShownAgainWithTheSeatAlreadyInViewDoesNotMove", "ABoardMoveMadeBeforeHidingIsRevealedWhenShown"],
             ["canvas-visual"]),
         new(
             "Canvas card editor (W6-1 §E)",
