@@ -673,6 +673,28 @@ thread_local! {
 }
 
 #[cfg(test)]
+thread_local! {
+    /// #1279 test seam: a rendezvous on the resolving thread each time the
+    /// embed walk is about to ask for the session connection — it reports
+    /// the request, then waits for the fact to let it proceed, so a fact can
+    /// park a holder on the connection at exactly the read it interrupts.
+    #[allow(clippy::type_complexity)]
+    pub(crate) static EMBED_CONNECTION_REQUESTED: std::cell::RefCell<
+        Option<(std::sync::mpsc::Sender<()>, std::sync::mpsc::Receiver<()>)>,
+    > = const { std::cell::RefCell::new(None) };
+}
+
+#[cfg(test)]
+fn embed_connection_requested() {
+    EMBED_CONNECTION_REQUESTED.with(|rendezvous| {
+        if let Some((requested, proceed)) = rendezvous.borrow().as_ref() {
+            let _ = requested.send(());
+            let _ = proceed.recv();
+        }
+    });
+}
+
+#[cfg(test)]
 fn embed_candidate_row_visited(cancel: &CancelToken) {
     let visited = EMBED_CANDIDATE_ROWS_VISITED.with(|rows| {
         rows.set(rows.get() + 1);
@@ -6059,7 +6081,12 @@ impl VaultSession {
         // walk stops at the section's end and never collects the heading
         // table.
         let matched = {
-            let conn = self.conn.lock().expect("session connection mutex");
+            // The connection wait is itself a cooperative boundary (#1279,
+            // codex round 2a): a preview retired while a scan or a save holds
+            // the connection returns Cancelled instead of queueing behind it.
+            #[cfg(test)]
+            embed_connection_requested();
+            let conn = lock_cancellable(&self.conn, cancel)?;
             let file_id: Option<i64> = conn
                 .query_row(
                     "SELECT id FROM files WHERE path = ?1",
@@ -6183,7 +6210,9 @@ impl VaultSession {
         let sql = format!(
             "SELECT path FROM files WHERE slate_tree_sort_key({column}) IN ({placeholders})"
         );
-        let conn = self.conn.lock().expect("session connection mutex");
+        #[cfg(test)]
+        embed_connection_requested();
+        let conn = lock_cancellable(&self.conn, cancel)?;
         let mut statement = conn.prepare_cached(&sql)?;
         let mut rows = statement.query(rusqlite::params_from_iter(folded.iter()))?;
         loop {
@@ -6209,7 +6238,9 @@ impl VaultSession {
     ) -> Result<crate::EmbedResolution, VaultError> {
         cancel.check()?;
         let resolved = {
-            let conn = self.conn.lock().expect("session connection mutex");
+            #[cfg(test)]
+            embed_connection_requested();
+            let conn = lock_cancellable(&self.conn, cancel)?;
             let file_id: Option<i64> = conn
                 .query_row(
                     "SELECT id FROM files WHERE path = ?1",

@@ -1555,6 +1555,74 @@ fn a_cancel_during_the_last_read_is_still_cancelled() {
     }
 }
 
+/// #1279 (codex round 2a): the connection wait is a cooperative boundary.
+/// With another holder parked on the session connection — a scan or a
+/// slow save — a preview whose token is cancelled while it waits for the
+/// connection returns `Cancelled` BEFORE the holder lets go, for each of the
+/// walk's three connection reads (the candidate lookup, a section's
+/// headings, a block).
+#[test]
+fn a_preview_waiting_for_the_connection_returns_cancelled_before_the_holder_lets_go() {
+    use std::sync::mpsc;
+    use std::time::Duration;
+    const LIVENESS: Duration = Duration::from_secs(20);
+
+    for (target, reads_before) in [("target", 0), ("target#Part", 1), ("target^blk", 1)] {
+        let (_tmp, session) = make_vault(|p| {
+            p.write_file("host.md", b"![[target]]").unwrap();
+            p.write_file("target.md", b"# Part\n\nPlain text. ^blk\n")
+                .unwrap();
+        });
+        session.scan_initial(&CancelToken::new()).unwrap();
+        let session = Arc::new(session);
+        let cancel = CancelToken::new();
+        let (requested_tx, requested_rx) = mpsc::channel();
+        let (proceed_tx, proceed_rx) = mpsc::channel();
+        let (done_tx, done_rx) = mpsc::channel();
+
+        let resolver_session = Arc::clone(&session);
+        let resolver_cancel = cancel.clone();
+        let resolver = std::thread::spawn(move || {
+            crate::session::EMBED_CONNECTION_REQUESTED.with(|rendezvous| {
+                *rendezvous.borrow_mut() = Some((requested_tx, proceed_rx));
+            });
+            let _ = done_tx.send(resolver_session.resolve_embed_preview(
+                "host.md",
+                target,
+                None,
+                &resolver_cancel,
+            ));
+        });
+
+        // The candidate lookup is the walk's first connection read; a
+        // section's headings or a block is its second. Each read waits at the
+        // rendezvous; the holder parks on the connection only at the read
+        // this case interrupts, then lets that read ask for it.
+        let mut holder = None;
+        for read in 0..=reads_before {
+            requested_rx
+                .recv_timeout(LIVENESS)
+                .expect("the walk asked for the connection");
+            if read == reads_before {
+                holder = Some(session.conn.lock().unwrap());
+            }
+            proceed_tx.send(()).unwrap();
+        }
+        let held = holder.expect("the holder is parked on the connection");
+
+        cancel.cancel();
+        let outcome = done_rx
+            .recv_timeout(LIVENESS)
+            .expect("the walk returned while the holder kept the connection");
+        assert!(
+            matches!(outcome, Err(VaultError::Cancelled)),
+            "{target}: expected Cancelled, got {outcome:?}"
+        );
+        drop(held);
+        resolver.join().unwrap();
+    }
+}
+
 /// #1279 (codex round 1): the panel and reading-card profiles take the
 /// caller's token too — pre-cancelled, they touch nothing.
 #[test]
