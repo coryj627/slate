@@ -718,6 +718,13 @@ public partial class MainWindow : Window
         });
     }
 
+    /// <summary>The window's tunnelling key route, ahead of every focused
+    /// control's own handlers. An unmodified Escape during an import
+    /// cancels it unless an owner of the key is in play — an open modal
+    /// overlay or sheet, WPF menu mode, the Files filter field with a
+    /// filter or tag scope active, or the inline rename box while a row is
+    /// being renamed there — and that owner takes the key through its own
+    /// route instead (#1272).</summary>
     private void Window_PreviewKeyDown(object sender, KeyEventArgs e)
     {
         ModifierKeys modifiers = Keyboard.Modifiers;
@@ -1040,8 +1047,11 @@ public partial class MainWindow : Window
 
         if (e.Key == Key.Escape
             && modifiers == ModifierKeys.None
-            && _viewModel.QuickSwitcher?.IsOpen != true
-            && _viewModel.FileSidebar?.IsImporting == true)
+            && _viewModel.FileSidebar?.IsImporting == true
+            && !ModalSurfaceOwnsEscape()
+            && !MenuModeOwnsEscape(e)
+            && !FilterFieldOwnsEscape()
+            && !RenameBoxOwnsEscape())
         {
             _viewModel.FileSidebar.CancelImportCommand.Execute(null);
             e.Handled = true;
@@ -1397,6 +1407,55 @@ public partial class MainWindow : Window
             sidebar.ClearFilterCommand.Execute(null);
             e.Handled = true;
         }
+    }
+
+    /// <summary>#1272: the focused Files filter field owns an unmodified
+    /// Escape while a filter or tag scope is active — its clear route
+    /// (<see cref="SidebarFilterTextBox_PreviewKeyDown"/>) runs ahead of the
+    /// window's import cancellation.</summary>
+    private bool FilterFieldOwnsEscape() =>
+        SidebarFilterTextBox.IsKeyboardFocusWithin
+        && _viewModel.FileSidebar is FilesSidebarViewModel { IsFilterActive: true };
+
+    /// <summary>#1272: the inline rename box owns an unmodified Escape while
+    /// a row is being renamed in it — keyboard focus in the box, with a row
+    /// F2 can rename selected (F2's own gate) — so its rename cancel
+    /// (<see cref="SidebarMutationNameTextBox_PreviewKeyDown"/>) runs ahead
+    /// of the window's import cancellation. With no such row the box only
+    /// names a new item, and once the rename has ended focus is back in the
+    /// tree: either way the import keeps the key.</summary>
+    private bool RenameBoxOwnsEscape() =>
+        SidebarMutationNameTextBox.IsKeyboardFocusWithin
+        && _viewModel.FileSidebar?.SelectedNode is { IsPlaceholder: false, IsGroupHeader: false };
+
+    /// <summary>#1272 (codex round 2 on the follow-up): an open modal
+    /// surface owns an unmodified Escape — the overlays (palette, search,
+    /// Quick Open, the canvas sheets) take it earlier in
+    /// <see cref="Window_PreviewKeyDown"/>, and every other sheet (the
+    /// template picker and flow, Move To, the property and citation
+    /// sheets…) dismisses through its own route (contract 30 T3/TR-7), so
+    /// the import never cancels from behind a scrim.</summary>
+    private bool ModalSurfaceOwnsEscape() => OpenModalSurface is not null;
+
+    /// <summary>#1272 (codex round 2 on the follow-up): WPF menu mode owns an
+    /// unmodified Escape — the key comes from an item of the menu bar or one
+    /// of its open submenus, the menu routes that traverse this window
+    /// handler, and the menu's own handling closes the open menu or leaves
+    /// menu mode (W7-6 §4) instead of the import being cancelled underneath
+    /// it. A context menu needs no yield here: its keys stay inside its
+    /// Popup's route and never reach this handler, and WPF dismisses it
+    /// natively.</summary>
+    private static bool MenuModeOwnsEscape(KeyEventArgs e)
+    {
+        for (DependencyObject? node = e.OriginalSource as DependencyObject; node is not null; node = Parent(node))
+        {
+            if (node is System.Windows.Controls.Primitives.MenuBase or MenuItem)
+            {
+                return true;
+            }
+        }
+
+        return false;
     }
 
     /// <summary>W7-7 (R-3, spec review round 21): the Clear filter button
