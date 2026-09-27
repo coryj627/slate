@@ -526,7 +526,7 @@ internal sealed partial class WorkspaceViewModel
         // refuses silently while loading/failed (red team round 1:
         // the command spoke the unchanged view name).
         if (document.ActiveViewIndex != before
-            && document.ActiveViewName is { } name)
+            && document.ActiveViewSpokenName is { } name)
         {
             document.AnnounceViewSelected(name);
         }

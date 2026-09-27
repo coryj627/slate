@@ -432,7 +432,7 @@ internal sealed class BaseSurfaceView : UserControl
         }
         int before = model.ActiveViewIndex;
         model.SelectView(_viewPicker.SelectedIndex);
-        if (model.ActiveViewIndex != before && model.ActiveViewName is { } name)
+        if (model.ActiveViewIndex != before && model.ActiveViewSpokenName is { } name)
         {
             model.AnnounceViewSelected(name);
         }

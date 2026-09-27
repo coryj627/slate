@@ -99,8 +99,9 @@ public sealed class CodeBuiltSiblingTests
     /// the picker showed two views while UIA held ONE item peer, named as the
     /// second. Each view is its own occurrence: the open picker's own peer
     /// holds two items, "Open tasks, view 1" and "Open tasks, view 2", and the
-    /// closed picker names its selection — the second — as the
-    /// second.</summary>
+    /// closed picker names its selection — the second — as the second. Codex
+    /// PR 3 round 7: so does the switch's announcement, and Where Am I — both
+    /// spoke the bare "Open tasks" for either.</summary>
     [Fact]
     public void TwoEqualBaseViewsAreTwoUiaItemsReadApart() => RunSta(() => WithBaseViews(
         """
@@ -117,7 +118,7 @@ public sealed class CodeBuiltSiblingTests
             order:
               - file.name
         """,
-        (document, picker) =>
+        (document, picker, announced) =>
         {
             // The premise: two distinct records, equal by value.
             Assert.Equal(document.Views[0], document.Views[1]);
@@ -131,11 +132,51 @@ public sealed class CodeBuiltSiblingTests
                 items.Select(item => item.GetName()));
 
             picker.IsDropDownOpen = false;
+            announced.Clear();
             picker.SelectedIndex = 1;
             PumpedDispatcher.Drain();
             Assert.Equal(1, document.ActiveViewIndex);
             Assert.Equal("Open tasks, view 2", ClosedSelectionName(picker));
+            Assert.Equal(
+                "Open tasks, view 2",
+                Assert.Single(announced.OfType<A11yEvent.BasesViewSelected>()).Name);
+            Assert.Equal(
+                "Open tasks, view 2",
+                Assert.IsType<A11yEvent.BaseWhereAmI>(document.WhereAmIEvent()).View);
         }));
+
+    /// <summary>...and the view commands' switch speaks it too (codex PR 3
+    /// round 7): Next View from the first "Open tasks" names the second as
+    /// the picker does.</summary>
+    [Fact]
+    public void TheViewCommandsSpeakADuplicateViewAsThePickerNamesIt()
+    {
+        using FixtureVault vault = FixtureVault.Create(1, "base-view-commands");
+        File.WriteAllText(
+            Path.Combine(vault.Root, "Views.base"),
+            "filters: 'file.ext == \"md\"'\nviews:\n"
+            + "  - type: table\n    name: Open tasks\n"
+            + "  - type: table\n    name: Open tasks\n"
+            + "  - type: table\n    name: Archive\n");
+        using VaultSession session = VaultSession.OpenFilesystem(vault.Root);
+        using (var cancel = new CancelToken())
+        {
+            session.ScanInitial(cancel);
+        }
+        var announced = new List<A11yEvent>();
+        using var workspace = new WorkspaceViewModel(
+            session, vault.Root, () => [], announced.Add, startInteractionBackgroundWork: false);
+        workspace.OpenPath("Views.base");
+        BaseDocumentViewModel document = Assert.IsType<BaseDocumentViewModel>(workspace.ActiveBaseDocument);
+        Assert.Equal(0, document.ActiveViewIndex);
+
+        workspace.BasesNextViewCommand.Execute(null);
+        workspace.BasesNextViewCommand.Execute(null);
+        workspace.BasesPreviousViewCommand.Execute(null);
+        Assert.Equal(
+            ["Open tasks, view 2", "Archive", "Open tasks, view 2"],
+            announced.OfType<A11yEvent.BasesViewSelected>().Select(item => item.Name));
+    }
 
     /// <summary>Codex PR 3 round 6, OD-9 — speech identity, through the
     /// production render: core keeps a quoted view name verbatim, so views
@@ -158,7 +199,7 @@ public sealed class CodeBuiltSiblingTests
           - type: table
             name: "Archive"
         """,
-        (document, picker) =>
+        (document, picker, _) =>
         {
             Assert.Equal(
                 ["Open tasks", "Open tasks ", " Open  tasks", "Open tasks.", "Open-tasks", "Archive"],
@@ -173,8 +214,10 @@ public sealed class CodeBuiltSiblingTests
 
     /// <summary>A base over one note whose views are <paramref name="views"/>
     /// (YAML list items), loaded, rendered by a real BaseSurfaceView and
-    /// shown; <paramref name="body"/> reads its model and view picker.</summary>
-    private static void WithBaseViews(string views, Action<BaseDocumentViewModel, ComboBox> body)
+    /// shown; <paramref name="body"/> reads its model, its view picker and
+    /// what it announced.</summary>
+    private static void WithBaseViews(
+        string views, Action<BaseDocumentViewModel, ComboBox, List<A11yEvent>> body)
     {
         using FixtureVault vault = FixtureVault.Create(1, "base-view-picker");
         File.WriteAllText(
@@ -185,7 +228,8 @@ public sealed class CodeBuiltSiblingTests
         {
             session.ScanInitial(cancel);
         }
-        var document = new BaseDocumentViewModel(session, "Views.base", _ => { }, synchronousForTests: true);
+        var announced = new List<A11yEvent>();
+        var document = new BaseDocumentViewModel(session, "Views.base", announced.Add, synchronousForTests: true);
         document.Load();
         var surface = new BaseSurfaceView { Model = document };
         var window = new Window
@@ -201,7 +245,7 @@ public sealed class CodeBuiltSiblingTests
         {
             window.UpdateLayout();
             PumpedDispatcher.Drain();
-            body(document, surface.ViewPickerForTests);
+            body(document, surface.ViewPickerForTests, announced);
         }
         finally
         {
