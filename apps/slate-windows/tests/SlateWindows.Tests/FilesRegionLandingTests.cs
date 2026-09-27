@@ -140,6 +140,40 @@ public sealed class FilesRegionLandingTests
         host.AssertTreeNeverFocused();
     });
 
+    /// <summary>With PR 2 (R-2) a Files selection OPENS its note, fired on a
+    /// selection CHANGE. The landing focuses only the sidebar's selected
+    /// row; when its container has lost the tree's selection (a recycled
+    /// container), taking the keys re-selects it, and the echo re-states
+    /// the node already selected — no change, so nothing opens and nothing
+    /// is said.</summary>
+    [Fact]
+    public void LandingOnTheSelectedRowOpensNothingEvenWhenItsContainerLostTheSelection() => RunSta(() =>
+    {
+        using var host = new Host();
+        host.Initialize();
+        FileTreeNodeViewModel selected = host.Sidebar.RootNodes[^1];
+        host.Sidebar.SelectedNode = selected;
+        selected.IsSelected = false;
+        host.Pane.UpdateLayout();
+        PumpedDispatcher.Drain();
+        Assert.Same(selected, host.Sidebar.SelectedNode);
+        Assert.Null(host.Tree.SelectedItem);
+        Assert.True(host.Above.Focus());
+        var opened = new List<string>();
+        host.Sidebar.OpenTargetRequested += (_, request) => opened.Add(request.Path);
+        host.Announced.Clear();
+
+        Assert.True(host.Shell.LandOnFilesTree());
+        PumpedDispatcher.Drain();
+
+        Assert.Same(selected, FocusedNode());
+        Assert.Same(selected, host.Tree.SelectedItem);
+        Assert.Same(selected, host.Sidebar.SelectedNode);
+        Assert.Empty(opened);
+        Assert.Empty(host.Announced);
+        host.AssertTreeNeverFocused();
+    });
+
     /// <summary>Codex rounds 4-5: a selected file beneath a COLLAPSED folder
     /// has no row to land on. The landing must not change what is selected,
     /// expand the folder or open anything — F6 is navigation, not a
