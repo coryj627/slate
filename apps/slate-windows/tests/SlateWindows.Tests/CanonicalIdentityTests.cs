@@ -143,8 +143,8 @@ public sealed class CanonicalIdentityTests
     /// <summary>I6 wiring: the lifecycle's publication handler calls the
     /// re-seat for Created AND Renamed events. A source pin — the
     /// handler is private and its events come from a live watcher. Since
-    /// W7-7 PR 7 (round 28) the handler's effects live in the one routine
-    /// it shares with the rescan (ApplyFileChangeEffectsAsync), so the pin
+    /// W7-7 PR 7 (round 28) the handler's effects live in one routine
+    /// (ApplyFileChangeEffects; a rescan re-syncs instead), so the pin
     /// follows them there.</summary>
     [Fact]
     public void TheLifecycleReseatsMissingTabsOnCreatedAndRenamedPublications()
@@ -152,11 +152,11 @@ public sealed class CanonicalIdentityTests
         string source = File.ReadAllText(FindSource("VaultLifecycleViewModel.cs"));
         int handler = source.IndexOf("private void HandleFileChange(", StringComparison.Ordinal);
         Assert.True(handler >= 0, "HandleFileChange must exist");
-        Assert.Contains("ApplyFileChangeEffectsAsync(", source[handler..], StringComparison.Ordinal);
+        Assert.Contains("ApplyFileChangeEffects(", source[handler..], StringComparison.Ordinal);
 
         string routines = File.ReadAllText(FindSource("VaultLifecycleViewModel.FileChanges.cs"));
-        int routine = routines.IndexOf("private Task ApplyFileChangeEffectsAsync(", StringComparison.Ordinal);
-        Assert.True(routine >= 0, "ApplyFileChangeEffectsAsync must exist");
+        int routine = routines.IndexOf("private void ApplyFileChangeEffects(", StringComparison.Ordinal);
+        Assert.True(routine >= 0, "ApplyFileChangeEffects must exist");
         string body = routines[routine..];
         Assert.Contains(
             "c.Change.Kind is FileChangeKind.Created or FileChangeKind.Renamed",

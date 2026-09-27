@@ -59,6 +59,7 @@ internal sealed class BaseDocumentViewModel : PanelWorkScheduler
     private BasesResultSet? _result;
     private (int ColumnIndex, bool Ascending)? _sortState;
     private CancelToken? _executeCancel;
+    private string? _loadedDefinitionHash;
 
     public BaseDocumentViewModel(
         VaultSession session,
@@ -117,6 +118,35 @@ internal sealed class BaseDocumentViewModel : PanelWorkScheduler
     }
 
     internal string? SavedQueryId => _savedQueryId;
+
+    /// <summary>W7-7 PR 7 (#1252, R-9): the indexed content hash of the
+    /// <c>.base</c> definition this document last opened — read BEFORE the
+    /// open, so a change racing it always compares different — or last
+    /// wrote. A rescan's re-sync reopens the document only when the index
+    /// now differs; otherwise it re-runs the view, keeping the quick filter
+    /// and the transient sort. Null for a saved query, or when the index
+    /// could not be read (the re-sync then reopens).</summary>
+    internal string? LoadedDefinitionHash => Volatile.Read(ref _loadedDefinitionHash);
+
+    /// <summary>The index's hash of this document's definition, or null
+    /// (a saved query, an unindexed path, an unreadable index).</summary>
+    private string? IndexedDefinitionHash()
+    {
+        if (_savedQueryId is not null)
+        {
+            return null;
+        }
+
+        try
+        {
+            using var cancel = new CancelToken();
+            return _session.IndexedContentHashes([Path], cancel)[0];
+        }
+        catch (VaultException)
+        {
+            return null;
+        }
+    }
 
     /// <summary>Vault-relative path — the source identity for
     /// file-backed documents (empty for saved queries). Compared
@@ -433,6 +463,7 @@ internal sealed class BaseDocumentViewModel : PanelWorkScheduler
                             SlateSortYaml(column.Id, sort.Ascending)));
                     _session.BaseSetTransientSort(
                         handle, view, columnId: null, ascending: true);
+                    Volatile.Write(ref _loadedDefinitionHash, IndexedDefinitionHash());
                     views = _session.BaseViews(handle);
                 }
             }
@@ -550,6 +581,7 @@ internal sealed class BaseDocumentViewModel : PanelWorkScheduler
                         return;
                     }
                     _session.BaseApplyEdits(handle, batch);
+                    Volatile.Write(ref _loadedDefinitionHash, IndexedDefinitionHash());
                     views = _session.BaseViews(handle);
                 }
             }
@@ -827,10 +859,12 @@ internal sealed class BaseDocumentViewModel : PanelWorkScheduler
                     return;
                 }
                 CloseHandleLocked();
+                string? definitionHash = IndexedDefinitionHash();
                 handle = _savedQueryId is { } savedQueryId
                     ? _session.OpenSavedQuery(savedQueryId)
                     : _session.OpenBase(Path);
                 _handle = handle;
+                Volatile.Write(ref _loadedDefinitionHash, definitionHash);
                 views = _session.BaseViews(handle);
             }
         }

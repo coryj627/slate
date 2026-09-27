@@ -6,32 +6,35 @@ using SlateWindows.Bases;
 using SlateWindows.Canvas;
 using SlateWindows.Graph;
 using SlateWindows.Reading;
-using uniffi.slate_uniffi;
 
 namespace SlateWindows;
 
 /// <summary>
-/// W7-7 PR 7 (#1252, R-9): the workspace's half of a rescan's
-/// reconciliation. <see cref="VaultLifecycleViewModel"/> walks core's delta
-/// pages and applies, path by path, the operations its file-change funnel
-/// applies — through the seams below, never through the file-change event
+/// W7-7 PR 7 (#1252, contract R-9; AR-18's fallback): the workspace's half of
+/// a rescan's re-sync from the index. After every rescan the lifecycle reads,
+/// on a worker, the index's content hash of every document the workspace
+/// shows (<see cref="RescanPathsToHash"/>); the workspace compares, reloads
+/// and marks — through the seams below, never through the file-change event
 /// channel, which stays Slate-owned writes only (locked decision
-/// <c>05_locked_architecture_decisions.md:338-342</c>).
+/// <c>05_locked_architecture_decisions.md:338-342</c>). Nothing is retained
+/// between runs: every run re-syncs from what the index holds now.
 /// </summary>
 internal sealed partial class WorkspaceViewModel
 {
     private int _silentReconciliationDepth;
 
-    /// <summary>True while a rescan reconciles its delta.</summary>
+    /// <summary>True while a rescan invalidates missing documents.</summary>
     internal bool IsReconcilingSilently => _silentReconciliationDepth > 0;
 
     /// <summary>
     /// Run the funnel's operations silently for the scope's lifetime.
     /// <see cref="InvalidatePath(string)"/>'s "missing from disk" line is
-    /// host-composed residue that must not speak during a reconciliation —
-    /// an open file's external deletion, and a case-only rename's removal
-    /// before its creation, speak only the rescan's one core-rendered
-    /// completion sentence.
+    /// host-composed residue that must not speak during a re-sync — an open
+    /// file's external deletion, and a case-only rename's removal before its
+    /// re-seat, speak only the rescan's one core-rendered completion
+    /// sentence. The scope is held only around the synchronous invalidation,
+    /// so a Slate-owned deletion handled while the re-sync awaits still
+    /// speaks.
     /// </summary>
     internal IDisposable BeginSilentReconciliation()
     {
@@ -41,140 +44,359 @@ internal sealed partial class WorkspaceViewModel
 
     /// <summary>Test seam (W7-7 PR 7, rounds 28-29): wraps EVERY publication
     /// a rescan awaits — (kind, path, the real publication) to the Task the
-    /// reconciliation awaits — so a fact can park one or fail it. Kinds: the
-    /// tab kinds (markdown, canvas, base) and the dependents (reading,
+    /// re-sync awaits — so a fact can park one or fail it. Kinds: the
+    /// document kinds (markdown, canvas, base) and the dependents (reading,
     /// history, bases, graph).</summary>
     internal Func<string, string, Func<Task>, Task>? RescanPublicationForTests { get; set; }
-
-    /// <summary>
-    /// W7-7 PR 7 (rounds 27-28): a rescan's Modified row, per tab kind, as ONE
-    /// awaitable. The funnel's Modified arm is Markdown-only and the canvas
-    /// registry serves a cached document, so an externally modified open
-    /// board would stay stale while the tree, Quick Open and the sentence
-    /// all report the change. Every kind reads on a worker and publishes on
-    /// the dispatcher: clean Markdown tabs reload from text
-    /// <paramref name="readOnWorker"/> read (the rescan core seam, its cancel
-    /// token checked there), an open canvas document re-reads its file
-    /// through the registry, an open base on the path reopens its
-    /// definition and re-runs its view. The Task completes only when every
-    /// kind has PUBLISHED, and faults when any read or publication fails —
-    /// the rescan marks the page applied only after it.
-    /// </summary>
-    /// <remarks>
-    /// EVERY clean Markdown tab on the path reloads — the workspace mirrors
-    /// same-path documents edit-by-edit with cross-document offsets, so
-    /// reloading one and leaving a stale peer arms a divergence (the W5-3
-    /// verification finding) — adopting the new saved hash as its baseline
-    /// with <c>IsDirty</c> false, a fresh undo stack so no undo restores the
-    /// pre-rescan bytes, its caret line kept where the new text allows, and
-    /// a reading-mode tab re-projected. A DIRTY tab keeps its buffer and its
-    /// stale baseline, marked externally stale against the index hash the
-    /// worker read. No tab on the path reloads while a Slate-owned save to it
-    /// is in flight (a property write's note lease, or a task toggle on any
-    /// same-path tab): that save's own completion re-baselines the tab (round
-    /// 24). And none reloads when a Slate-owned write to the path was
-    /// journaled while the worker read (<paramref name="reconciledSince"/>):
-    /// that write already reconciled it.
-    /// </remarks>
-    internal async Task ReconcileModifiedPathAsync(
-        string path,
-        Func<Func<(string? Text, string? IndexedHash)>, Task<(string? Text, string? IndexedHash)>> readOnWorker,
-        Func<bool> reconciledSince)
-    {
-        string modified = NormalizeWorkspacePath(path);
-        if (modified.Length == 0)
-        {
-            return;
-        }
-
-        var reloads = new List<Task>();
-        if (Groups.SelectMany(group => group.Tabs).Any(tab => IsMarkdownTabAt(tab, modified)))
-        {
-            reloads.Add(RunKindReload(
-                "markdown", modified, () => ReloadMarkdownTabsAsync(modified, readOnWorker, reconciledSince)));
-        }
-
-        if (_canvasDocuments.TryGetValue(CanvasKey(modified), out CanvasDocumentViewModel? canvas))
-        {
-            reloads.Add(RunKindReload("canvas", modified, () => canvas.ReloadAsync()));
-        }
-
-        foreach (BaseDocumentViewModel document in OpenBaseDocumentsAt(modified))
-        {
-            reloads.Add(RunKindReload("base", modified, () => document.LoadAsync()));
-        }
-
-        await Task.WhenAll(reloads);
-    }
 
     private Task RunKindReload(string kind, string path, Func<Task> reload) =>
         RescanPublicationForTests is { } seam ? seam(kind, path, reload) : reload();
 
-    /// <summary>
-    /// W7-7 PR 7 (#1252, round 29): a rescan page's dependents, each an
-    /// awaitable that completes on its UI publication — the reading models
-    /// (their reverse-dependency filter), the history panel for a Modified
-    /// path, the Bases surfaces and the graph (the Connections leaf's probe,
-    /// and the graph tab's when one is visible). The rescan reports the
-    /// page applied only after every one has published; a fault in any
-    /// holds the generation at the page's cursor. The graph probe here is
-    /// the rescan's ONLY path into the graph: the index phase's ScanFinished
-    /// probe is withheld for a rescan.
-    /// </summary>
-    internal Task NotifyRescanDependentsAsync(IReadOnlyList<(FileChangeKind Kind, string Path)> changes)
-    {
-        var publications = new List<Task>();
-        ReadingContentViewModel[] readings =
-        [
-            .. Groups.SelectMany(group => group.Tabs)
-                .Select(tab => tab.Reading)
-                .OfType<ReadingContentViewModel>()
-                .Distinct(),
-        ];
-        foreach ((FileChangeKind kind, string path) in changes)
-        {
-            string changed = NormalizeWorkspacePath(path);
-            foreach (ReadingContentViewModel reading in readings)
-            {
-                publications.Add(RunKindReload(
-                    "reading", changed, () => reading.NotifyVaultFileChangedAsync(kind, changed)));
-            }
+    /// <summary>The index's view of one path, as the lifecycle read it on a
+    /// worker: its content hash (null — no index row), and whether a file is
+    /// on disk there (asked only when there is no row: an unindexed file
+    /// that exists — a dot-folder note, say — is never marked missing).</summary>
+    internal readonly record struct IndexedPath(string? Hash, bool OnDisk);
 
-            if (kind == FileChangeKind.Modified)
+    /// <summary>A worker's read of one Markdown path: its text and that
+    /// text's content hash — the index's hash function, over the same bytes.</summary>
+    internal readonly record struct RescanRead(string Text, string Hash);
+
+    /// <summary>What the document re-sync did, for the dependents: how many
+    /// operations failed, which open paths the index showed changed (a tab
+    /// whose baseline, a board whose basis, a base whose definition hash
+    /// differed), and the base documents it reopened.</summary>
+    internal sealed record RescanDocumentsOutcome(
+        ulong Failed,
+        IReadOnlySet<string> ChangedOpenPaths,
+        IReadOnlySet<BaseDocumentViewModel> ReopenedBases);
+
+    /// <summary>
+    /// The distinct vault paths a re-sync reads index hashes for: every
+    /// path-backed open tab, every open canvas and file-backed base document
+    /// (a docked base included), and the history panel's note.
+    /// </summary>
+    internal IReadOnlyList<string> RescanPathsToHash()
+    {
+        var paths = new HashSet<string>(StringComparer.Ordinal);
+        foreach (WorkspaceTabViewModel tab in Groups.SelectMany(group => group.Tabs))
+        {
+            if (IsPathBacked(tab.Item) && NormalizeWorkspacePath(tab.Path) is { Length: > 0 } path)
             {
-                publications.Add(RunKindReload("history", changed, () => History.NoteSavedAsync(changed)));
+                _ = paths.Add(path);
             }
         }
 
-        string[] paths = [.. changes.Select(change => NormalizeWorkspacePath(change.Path))];
-        HashSet<string> removed =
-        [
-            .. changes.Where(change => change.Kind == FileChangeKind.Deleted)
-                .Select(change => NormalizeWorkspacePath(change.Path)),
-        ];
-        publications.Add(RunKindReload("bases", string.Empty, () => NotifyBasesOfRescanAsync(paths, removed)));
-        publications.Add(RunKindReload("graph", string.Empty, NotifyGraphOfRescanAsync));
-        return Task.WhenAll(publications);
+        foreach (CanvasDocumentViewModel canvas in _canvasDocuments.Values)
+        {
+            if (NormalizeWorkspacePath(canvas.Path) is { Length: > 0 } path)
+            {
+                _ = paths.Add(path);
+            }
+        }
+
+        foreach (BaseDocumentViewModel document in FileBackedBaseDocuments())
+        {
+            if (NormalizeWorkspacePath(document.Path) is { Length: > 0 } path)
+            {
+                _ = paths.Add(path);
+            }
+        }
+
+        if (History.Path is string historyPath && NormalizeWorkspacePath(historyPath) is { Length: > 0 } shown)
+        {
+            _ = paths.Add(shown);
+        }
+
+        return [.. paths.Order(StringComparer.Ordinal)];
     }
 
-    /// <summary>The Bases dependent for a rescan page (round 29): what
-    /// <see cref="RefreshBasesSurfacesForVaultChange"/> does for events,
-    /// awaited and without the event debounce. A Markdown change re-runs
-    /// every open base and reloads every dashboard; a base whose own file
-    /// the page modified reloads through its kind reload instead, and one
-    /// the page removed is left to the missing-tab handling.</summary>
-    private Task NotifyBasesOfRescanAsync(IReadOnlyCollection<string> paths, IReadOnlySet<string> removed)
+    /// <summary>
+    /// W7-7 PR 7 (#1252, R-9): re-sync every open document from the index's
+    /// hashes <paramref name="indexed"/>. In order: a path-backed tab whose
+    /// file has no index row and nothing on disk is marked missing —
+    /// silently; missing tabs whose file is back (under its own spelling or
+    /// another) re-seat (#1077); then, each awaited to its publication, a
+    /// Markdown path whose index hash differs from a tab's baseline is read
+    /// once on a worker and applied per tab (<see cref="ReloadMarkdownPathAsync"/>),
+    /// a board whose published basis differs — or that shows a load error —
+    /// reloads, and a base whose definition's hash differs reopens. The
+    /// returned count is the operations that failed.
+    /// </summary>
+    internal async Task<RescanDocumentsOutcome> ReSyncOpenDocumentsAsync(
+        IReadOnlyDictionary<string, IndexedPath> indexed,
+        Func<string, Task<RescanRead?>> readOnWorker,
+        CancellationToken cancellation)
     {
-        HashSet<string> changedBases =
+        string[] missing =
         [
-            .. paths.Where(path => path.EndsWith(".base", StringComparison.OrdinalIgnoreCase)),
+            .. Groups.SelectMany(group => group.Tabs)
+                .Where(tab => IsPathBacked(tab.Item) && !tab.IsMissingFromDisk)
+                .Select(tab => NormalizeWorkspacePath(tab.Path))
+                .Where(path => indexed.TryGetValue(path, out IndexedPath entry)
+                    && entry.Hash is null
+                    && !entry.OnDisk)
+                .Distinct(StringComparer.Ordinal),
         ];
-        bool markdownChanged = paths.Any(CoreDocumentClassification.IsMarkdown);
-        if (!markdownChanged && changedBases.Count == 0)
+        if (missing.Length > 0)
         {
-            return Task.CompletedTask;
+            using (BeginSilentReconciliation())
+            {
+                InvalidatePaths(missing);
+            }
         }
 
+        if (Groups.SelectMany(group => group.Tabs).Any(tab => tab.IsMissingFromDisk))
+        {
+            ReseatMissingTabs();
+        }
+
+        var changed = new HashSet<string>(StringComparer.Ordinal);
+        var reopened = new HashSet<BaseDocumentViewModel>(ReferenceEqualityComparer.Instance);
+        var work = new List<Task>();
+        foreach (IGrouping<string, WorkspaceTabViewModel> group in Groups.SelectMany(group => group.Tabs)
+            .Where(tab => tab.IsMarkdown && !tab.IsMissingFromDisk)
+            .GroupBy(tab => NormalizeWorkspacePath(tab.Path), StringComparer.Ordinal))
+        {
+            if (!indexed.TryGetValue(group.Key, out IndexedPath entry) || entry.Hash is not string indexHash)
+            {
+                continue;
+            }
+
+            WorkspaceTabViewModel[] tabs = [.. group];
+            if (tabs.All(tab => string.Equals(tab.SavedContentHash, indexHash, StringComparison.Ordinal)))
+            {
+                // Current: re-derive the staleness mark (a tab re-baselined
+                // since an earlier mark clears it).
+                foreach (WorkspaceTabViewModel tab in tabs)
+                {
+                    tab.ApplyExternalStaleness(indexHash);
+                }
+
+                continue;
+            }
+
+            string path = group.Key;
+            _ = changed.Add(path);
+            TabTicket[] tickets = [.. tabs.Select(TabTicket.Capture)];
+            work.Add(RunKindReload(
+                "markdown",
+                path,
+                () => ReloadMarkdownPathAsync(path, indexHash, tickets, readOnWorker, cancellation)));
+        }
+
+        foreach (CanvasDocumentViewModel canvas in _canvasDocuments.Values.Distinct())
+        {
+            string path = NormalizeWorkspacePath(canvas.Path);
+            if (!indexed.TryGetValue(path, out IndexedPath entry) || entry.Hash is not string indexHash)
+            {
+                continue;
+            }
+
+            bool stale = canvas.State switch
+            {
+                CanvasLoadState.Ready => !string.Equals(canvas.PublishedBasis, indexHash, StringComparison.Ordinal),
+                // Finding 8's rule for a board: a load error recovers on an
+                // unchanged Refresh.
+                CanvasLoadState.ParseError or CanvasLoadState.Failed => true,
+                _ => false,
+            };
+            if (stale)
+            {
+                _ = changed.Add(path);
+                work.Add(RunKindReload("canvas", path, () => canvas.ReloadAsync(cancellation)));
+            }
+        }
+
+        foreach (BaseDocumentViewModel document in FileBackedBaseDocuments())
+        {
+            string path = NormalizeWorkspacePath(document.Path);
+            if (!indexed.TryGetValue(path, out IndexedPath entry)
+                || entry.Hash is not string indexHash
+                || string.Equals(document.LoadedDefinitionHash, indexHash, StringComparison.Ordinal))
+            {
+                continue;
+            }
+
+            _ = changed.Add(path);
+            _ = reopened.Add(document);
+            work.Add(RunKindReload("base", path, () => document.LoadAsync(cancellation)));
+        }
+
+        ulong failed = await CountRescanFailuresAsync(work, cancellation);
+        return new RescanDocumentsOutcome(failed, changed, reopened);
+    }
+
+    /// <summary>
+    /// W7-7 PR 7 (#1252, R-9; v2 §1, F3): one Markdown path's reload. The
+    /// worker reads the text once and hashes it; back on the dispatcher, in
+    /// ONE turn, every tab's decision is taken before any is applied:
+    /// <list type="bullet">
+    /// <item>a tab that is no longer the item that was read — closed,
+    /// retargeted, a transient tab reused in place for another note (even
+    /// one with the same bytes: the ticket carries the item and the tab's
+    /// generation) — is left alone;</item>
+    /// <item>a tab re-baselined since the read (its own save, a reload, a
+    /// peer's mirror: the ticket carries the baseline hash) is current —
+    /// neither reloaded nor marked;</item>
+    /// <item>a FULL ticket — the same tab, item and generation, clean, no
+    /// Slate-owned save in flight on the path — reloads, but only bytes whose
+    /// hash is the index hash read for the path: a tab never shows bytes the
+    /// index does not vouch for;</item>
+    /// <item>any other — dirty, a save in flight, edited since the read —
+    /// keeps its buffer and is marked stale against the index hash
+    /// (staleness keyed by path, separate from the reload).</item>
+    /// </list>
+    /// A clean, current tab whose bytes could not be vouched for (the read
+    /// failed, or the disk moved past the index) is marked stale too, and
+    /// the path counts one failure: the next rescan reloads it.
+    /// </summary>
+    private async Task ReloadMarkdownPathAsync(
+        string path,
+        string indexHash,
+        IReadOnlyList<TabTicket> tickets,
+        Func<string, Task<RescanRead?>> readOnWorker,
+        CancellationToken cancellation)
+    {
+        RescanRead? read = await readOnWorker(path);
+        cancellation.ThrowIfCancellationRequested();
+
+        // Back on the dispatcher: the apply turn.
+        HashSet<WorkspaceTabViewModel> live =
+            new(Groups.SelectMany(group => group.Tabs), ReferenceEqualityComparer.Instance);
+        bool saveInFlight = PropertyWriteInFlightFor(path)
+            || live.Any(tab => IsMarkdownTabAt(tab, path) && tab.IsTaskToggleInFlight);
+        var reload = new List<WorkspaceTabViewModel>();
+        var stale = new List<WorkspaceTabViewModel>();
+        bool unvouched = false;
+        foreach (TabTicket ticket in tickets)
+        {
+            WorkspaceTabViewModel tab = ticket.Tab;
+            if (!live.Contains(tab)
+                || tab.Id != ticket.Id
+                || tab.Item != ticket.Item
+                || tab.IsMissingFromDisk)
+            {
+                continue;
+            }
+
+            if (!string.Equals(tab.SavedContentHash, ticket.Baseline, StringComparison.Ordinal))
+            {
+                continue;
+            }
+
+            bool fullTicket = !tab.IsDirty
+                && !saveInFlight
+                && tab.ContentGeneration == ticket.Generation;
+            if (fullTicket && read is { } bytes && string.Equals(bytes.Hash, indexHash, StringComparison.Ordinal))
+            {
+                reload.Add(tab);
+                continue;
+            }
+
+            unvouched |= fullTicket;
+            stale.Add(tab);
+        }
+
+        foreach (WorkspaceTabViewModel tab in stale)
+        {
+            tab.InvalidateExternalState();
+            tab.ApplyExternalStaleness(indexHash);
+        }
+
+        foreach (WorkspaceTabViewModel tab in reload)
+        {
+            tab.ReloadKeepingCaretLine(read!.Value.Text);
+        }
+
+        if (reload.Count > 0)
+        {
+            // The whole-document refresh a clean re-baseline owes its
+            // panels (the MirrorSamePathDocumentState precedent): the
+            // outline, tasks and citations re-read the new bytes.
+            NotePersisted(path);
+            TasksReview.NoteRefreshed(path);
+        }
+
+        if (unvouched)
+        {
+            throw new RescanReadNotVouchedException();
+        }
+    }
+
+    /// <summary>
+    /// W7-7 PR 7 (#1252, R-9; AR-18's fallback): the dependents, once per
+    /// rescan, each awaited to its publication — a published failure state
+    /// is a publication (round 29; F6: a dashboard's D-12 line speaks from
+    /// its load as always). The editor interaction caches drop; every
+    /// reading model that depends on other files re-projects (a memo hit
+    /// when unchanged; the re-sync has no per-path delta); the history
+    /// panel reloads when its note changed; every open base re-runs (one
+    /// reopened above is not re-run twice) and every dashboard reloads; the
+    /// graph probes (a STALE or Error graph recovers on an unchanged
+    /// Refresh — finding 8). Returns how many publications failed.
+    /// </summary>
+    internal async Task<ulong> ReSyncDependentsAsync(
+        RescanDocumentsOutcome documents,
+        IReadOnlyDictionary<string, IndexedPath> indexed,
+        CancellationToken cancellation)
+    {
+        InvalidateAllInteractionStates();
+        var work = new List<Task>();
+        foreach (ReadingContentViewModel reading in Groups.SelectMany(group => group.Tabs)
+            .Select(tab => tab.Reading)
+            .OfType<ReadingContentViewModel>()
+            .Distinct())
+        {
+            work.Add(RunKindReload("reading", string.Empty, reading.NotifyRescanAsync));
+        }
+
+        if (History.Path is string historyPath
+            && NormalizeWorkspacePath(historyPath) is { Length: > 0 } shown
+            && HistoryNoteChanged(shown, documents, indexed))
+        {
+            work.Add(RunKindReload("history", shown, () => History.NoteSavedAsync(historyPath)));
+        }
+
+        work.Add(RunKindReload("bases", string.Empty, () => ReSyncBasesAsync(documents.ReopenedBases, cancellation)));
+        work.Add(RunKindReload("graph", string.Empty, NotifyGraphOfRescanAsync));
+        return await CountRescanFailuresAsync(work, cancellation);
+    }
+
+    /// <summary>Whether the history panel's note changed: an open note's
+    /// tab baseline differed from the index (the document re-sync saw it);
+    /// a note that is not open compares the index with the head of the
+    /// version list the panel loaded.</summary>
+    private bool HistoryNoteChanged(
+        string path,
+        RescanDocumentsOutcome documents,
+        IReadOnlyDictionary<string, IndexedPath> indexed)
+    {
+        if (documents.ChangedOpenPaths.Contains(path))
+        {
+            return true;
+        }
+
+        bool open = Groups.SelectMany(group => group.Tabs)
+            .Any(tab => IsPathBacked(tab.Item)
+                && string.Equals(NormalizeWorkspacePath(tab.Path), path, StringComparison.Ordinal));
+        if (open)
+        {
+            return false;
+        }
+
+        return !indexed.TryGetValue(path, out IndexedPath entry)
+            || !string.Equals(entry.Hash, History.HeadContentHash, StringComparison.Ordinal);
+    }
+
+    /// <summary>The Bases dependent: every open base document re-runs its
+    /// view (keeping its quick filter and transient sort) and every
+    /// dashboard reloads — any file may have changed their rows. A base the
+    /// document re-sync reopened is not re-run twice.</summary>
+    private Task ReSyncBasesAsync(
+        IReadOnlySet<BaseDocumentViewModel> reopened,
+        CancellationToken cancellation)
+    {
         var publications = new List<Task>();
         var seen = new HashSet<BaseDocumentViewModel>(ReferenceEqualityComparer.Instance);
         IEnumerable<BaseDocumentViewModel> documents = BasesDockDocument is { } dock
@@ -182,16 +404,9 @@ internal sealed partial class WorkspaceViewModel
             : _baseDocuments.Values;
         foreach (BaseDocumentViewModel document in documents)
         {
-            if (!seen.Add(document)
-                || (!document.IsSavedQuery && changedBases.Contains(document.Path))
-                || (!document.IsSavedQuery && removed.Contains(document.Path)))
+            if (seen.Add(document) && !reopened.Contains(document))
             {
-                continue;
-            }
-
-            if (markdownChanged)
-            {
-                publications.Add(document.RefreshAsync());
+                publications.Add(document.RefreshAsync(cancellation));
             }
         }
 
@@ -199,14 +414,14 @@ internal sealed partial class WorkspaceViewModel
             ? _dashboardDocuments.Values.Append(dockDashboard).Distinct()
             : _dashboardDocuments.Values)
         {
-            publications.Add(dashboard.LoadAsync());
+            publications.Add(dashboard.LoadAsync(cancellation));
         }
 
         return Task.WhenAll(publications);
     }
 
-    /// <summary>The graph dependent for a rescan page (round 29): the
-    /// SAME probes a Slate-owned event sends — through
+    /// <summary>The graph dependent (round 29): the SAME probes a
+    /// Slate-owned event sends — through
     /// <see cref="NotifyGraphOfVaultChange"/>, the probes' one owner
     /// (rule C) — then awaited to their publications: each document's
     /// fixed-point drain and owner-context barrier covers the generation
@@ -223,91 +438,60 @@ internal sealed partial class WorkspaceViewModel
         return Task.WhenAll(probes);
     }
 
-    private static bool IsMarkdownTabAt(WorkspaceTabViewModel tab, string path) =>
-        tab.IsMarkdown && string.Equals(tab.Path, path, StringComparison.Ordinal);
+    /// <summary>Await every re-sync operation; each that faults counts one
+    /// failure (logged by type only). A cancelled run unwinds.</summary>
+    private static async Task<ulong> CountRescanFailuresAsync(
+        IReadOnlyList<Task> work,
+        CancellationToken cancellation)
+    {
+        ulong failed = 0;
+        foreach (Task task in work)
+        {
+            try
+            {
+                await task;
+            }
+            catch (OperationCanceledException) when (cancellation.IsCancellationRequested)
+            {
+            }
+            catch (Exception exception) when (exception is not OutOfMemoryException)
+            {
+                HostLog.Write(HostDiagnosticEvent.VaultRescanFailed, exception);
+                failed++;
+            }
+        }
 
-    private IEnumerable<BaseDocumentViewModel> OpenBaseDocumentsAt(string path)
+        cancellation.ThrowIfCancellationRequested();
+        return failed;
+    }
+
+    private IEnumerable<BaseDocumentViewModel> FileBackedBaseDocuments()
     {
         var seen = new HashSet<BaseDocumentViewModel>(ReferenceEqualityComparer.Instance);
         foreach (BaseDocumentViewModel document in _baseDocuments.Values)
         {
-            if (!document.IsSavedQuery
-                && string.Equals(document.Path, path, StringComparison.Ordinal)
-                && seen.Add(document))
+            if (!document.IsSavedQuery && seen.Add(document))
             {
                 yield return document;
             }
         }
 
-        if (BasesDockDocument is { IsSavedQuery: false } dock
-            && string.Equals(dock.Path, path, StringComparison.Ordinal)
-            && seen.Add(dock))
+        if (BasesDockDocument is { IsSavedQuery: false } dock && seen.Add(dock))
         {
             yield return dock;
         }
     }
 
-    private async Task ReloadMarkdownTabsAsync(
-        string modified,
-        Func<Func<(string? Text, string? IndexedHash)>, Task<(string? Text, string? IndexedHash)>> readOnWorker,
-        Func<bool> reconciledSince)
-    {
-        string onDisk = System.IO.Path.Combine(_vaultRoot, modified);
-        (string? text, string? indexedHash) = await readOnWorker(() =>
-        {
-            try
-            {
-                return ((string?)_session.ReadText(modified), (string?)_session.NoteTasks(modified, 1).ContentHash);
-            }
-            catch (VaultException) when (!System.IO.File.Exists(onDisk))
-            {
-                // Gone since the scan: its removal is the next scan's row.
-                return (null, null);
-            }
-        });
-
-        // Back on the dispatcher: the tabs are read afresh — one may have
-        // closed, turned dirty or started a save while the worker read.
-        if (reconciledSince() || text is null || indexedHash is null)
-        {
-            return;
-        }
-
-        List<WorkspaceTabViewModel> tabs =
-            [.. Groups.SelectMany(group => group.Tabs).Where(tab => IsMarkdownTabAt(tab, modified))];
-        bool saveInFlight = PropertyWriteInFlightFor(modified)
-            || tabs.Any(tab => tab.IsTaskToggleInFlight);
-        bool reloaded = false;
-        foreach (WorkspaceTabViewModel tab in tabs)
-        {
-            if (tab.IsDirty || saveInFlight)
-            {
-                tab.InvalidateExternalState();
-                tab.ApplyExternalStaleness(indexedHash);
-                continue;
-            }
-
-            tab.ReloadKeepingCaretLine(text);
-            reloaded = true;
-        }
-
-        if (reloaded)
-        {
-            // The whole-document refresh a clean re-baseline owes its
-            // panels (the MirrorSamePathDocumentState precedent): the
-            // outline, tasks and citations re-read the new bytes.
-            NotePersisted(modified);
-            TasksReview.NoteRefreshed(modified);
-        }
-    }
+    private static bool IsMarkdownTabAt(WorkspaceTabViewModel tab, string path) =>
+        tab.IsMarkdown && string.Equals(NormalizeWorkspacePath(tab.Path), path, StringComparison.Ordinal);
 
     /// <summary>
-    /// The reconciliation's batch form of <see cref="InvalidatePath(string)"/>
-    /// for one page's removals: the same per-path operations — open tabs
-    /// marked missing (their buffers kept), closed-tab history and the
+    /// The re-sync's batch form of <see cref="InvalidatePath(string)"/> for
+    /// the documents it found missing: the same per-path operations — open
+    /// tabs marked missing (their buffers kept), closed-tab history and the
     /// Connections stack pruned — with ONE command-state refresh and ONE
-    /// workspace persist for the page instead of one per path. Silent by
-    /// contract: only a reconciliation scope may call it.
+    /// workspace persist for the batch. Silent by contract: only a
+    /// reconciliation scope may call it.
     /// </summary>
     internal void InvalidatePaths(IReadOnlyCollection<string> paths)
     {
@@ -334,6 +518,25 @@ internal sealed partial class WorkspaceViewModel
         RaiseCommandStates();
         Persist();
     }
+
+    /// <summary>A tab as the re-sync's worker read found it (v2 §1): the
+    /// reference, its identity and item, its content generation and its
+    /// baseline hash — all compared in the apply turn.</summary>
+    private readonly record struct TabTicket(
+        WorkspaceTabViewModel Tab,
+        Guid Id,
+        WorkspaceItemState Item,
+        long Generation,
+        string? Baseline)
+    {
+        internal static TabTicket Capture(WorkspaceTabViewModel tab) =>
+            new(tab, tab.Id, tab.Item, tab.ContentGeneration, tab.SavedContentHash);
+    }
+
+    /// <summary>A clean, current tab whose bytes the index could not vouch
+    /// for: counted as one failed re-sync operation.</summary>
+    private sealed class RescanReadNotVouchedException()
+        : Exception("A clean tab's re-read did not match the index hash read for it.");
 
     private sealed class SilentReconciliationScope(WorkspaceViewModel owner) : IDisposable
     {

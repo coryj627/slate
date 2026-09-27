@@ -1265,7 +1265,11 @@ internal sealed partial class FilesSidebarViewModel : BindableBase
         }
     }
 
-    private void ApplyTags(TagLoadOutcome outcome)
+    /// <summary>Publish the tag list. <paramref name="announce"/> false —
+    /// a rescan's own tree refresh (W7-7 PR 7, v2 §6) — shows a tag-tree
+    /// failure on the status line without speaking it; the rescan counts
+    /// it in its one sentence.</summary>
+    private void ApplyTags(TagLoadOutcome outcome, bool announce = true)
     {
         Tags.Clear();
         foreach (SidebarTagViewModel tag in outcome.Tags)
@@ -1275,7 +1279,15 @@ internal sealed partial class FilesSidebarViewModel : BindableBase
 
         if (outcome.Error is not null)
         {
-            ReportFailure(outcome.Error);
+            if (announce)
+            {
+                ReportFailure(outcome.Error);
+            }
+            else
+            {
+                Status = outcome.Error;
+                HoldStatusForPendingPublication();
+            }
         }
     }
 

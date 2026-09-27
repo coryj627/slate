@@ -888,6 +888,38 @@ internal sealed class ReadingContentViewModel : BindableBase, IDisposable
             return Task.CompletedTask;
         }
 
+        return ReprojectForDependencyChangeAsync();
+    }
+
+    /// <summary>Whether this model's published projection depends on OTHER
+    /// files at all: resolved embeds, unresolved embeds a creation could
+    /// resolve, or base cards over the vault's membership.</summary>
+    internal bool HasOtherFileDependencies =>
+        _publishedEmbedDependencies.Count > 0
+        || _publishedHasUnresolvedEmbeds
+        || _publishedHasBaseEmbeds;
+
+    /// <summary>
+    /// W7-7 PR 7 (#1252, R-9; AR-18's fallback): the rescan's reading
+    /// dependent. The re-sync carries no per-path delta, so a model whose
+    /// projection depends on other files re-projects on every rescan — the
+    /// artifact digest makes an unchanged one a memo hit — and a hidden one
+    /// records the pending re-render its surface runs on rebind; a model
+    /// with no such dependency owes nothing (its own note's change reaches
+    /// it through its tab's reload).
+    /// </summary>
+    internal Task NotifyRescanAsync()
+    {
+        if (_disposed || !HasOtherFileDependencies)
+        {
+            return Task.CompletedTask;
+        }
+
+        return ReprojectForDependencyChangeAsync();
+    }
+
+    private Task ReprojectForDependencyChangeAsync()
+    {
         if (BlocksAppended is null)
         {
             HasPendingDependencyRefresh = true;

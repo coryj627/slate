@@ -6,70 +6,34 @@ using uniffi.slate_uniffi;
 namespace SlateWindows;
 
 /// <summary>
-/// W7-7 PR 7 (#1252, R-9, round 28): the host-side effects of file changes,
-/// ONE routine for both of their sources — a Slate-owned file-change event
-/// (<see cref="HandleFileChange"/>, the contract-05 channel, which stays
-/// Slate-owned writes only) and a rescan's re-sync from the index (the only
-/// way an external change reaches the host on Windows; its wiring is held
-/// for contract R-9's design ruling). Every dependent a change owes is notified
-/// here and nowhere else, so neither source can drift from the other.
+/// W7-7 PR 7 (#1252, R-9, round 28): the host-side effects of a Slate-owned
+/// file-change event (<see cref="HandleFileChange"/>, the contract-05
+/// channel, which stays Slate-owned writes only). A change made OUTSIDE
+/// Slate never arrives here: on Windows it reaches the host only through a
+/// rescan's re-sync from the index (<c>VaultLifecycleViewModel.Rescan.cs</c>,
+/// AR-18's fallback).
 /// </summary>
 internal sealed partial class VaultLifecycleViewModel
 {
-    /// <summary>Where a batch of file changes came from.</summary>
-    private enum FileChangeOrigin
-    {
-        /// <summary>A Slate-owned write's own event: its tab is already
-        /// current, so a Modified change marks staleness; a deletion
-        /// speaks its "missing from disk" line.</summary>
-        SlateOwned,
-
-        /// <summary>A rescan's re-sync: a change made outside Slate, so each open
-        /// tab kind reloads (awaited); removals are batched and silent (the
-        /// run speaks one sentence).</summary>
-        Rescan,
-    }
-
     /// <summary>
     /// The effects, in the funnel's order: first each change's primary
-    /// effect — a rename retargets its tabs; a removal invalidates its path;
-    /// a Modified change marks staleness (Slate-owned) or reloads every open
-    /// tab kind on the path (rescan: Markdown from a worker's read, the
-    /// canvas and base documents through their own workers); a creation or
-    /// rename re-seats missing tabs once — then the dependents: the editor
-    /// interaction caches, the reading models (each applies its own
-    /// reverse-dependency filter, so a note's embedders re-render), the
-    /// Bases surfaces, the graph probe, the history panel for a Modified
-    /// path, and Quick Open. For a rescan every fallible publication — each
-    /// tab-kind reload and each dependent's (reading, history, Bases, graph)
-    /// — is awaited: the returned Task completes when all have PUBLISHED
-    /// and faults when any read or publication fails. A Slate-owned batch
-    /// notifies the dependents as the funnel always has and completes at
-    /// once.
+    /// effect — a rename retargets its tabs; a removal invalidates its path
+    /// (speaking its "missing from disk" line); a Modified change marks
+    /// staleness; a creation or rename re-seats missing tabs once — then the
+    /// dependents: the editor interaction caches, Quick Open, the reading
+    /// models (each applies its own reverse-dependency filter, so a note's
+    /// embedders re-render), the Bases surfaces, the history panel for a
+    /// Modified path, and the graph probe.
     /// </summary>
-    private Task ApplyFileChangeEffectsAsync(
-        IReadOnlyList<(FileChangeEvent Change, bool Openable)> changes,
-        FileChangeOrigin origin,
-        Func<string, bool>? reconciledSince = null,
-        CancelToken? cancel = null)
+    private void ApplyFileChangeEffects(IReadOnlyList<(FileChangeEvent Change, bool Openable)> changes)
     {
         WorkspaceViewModel? workspace = Workspace;
         if (changes.Count == 0)
         {
-            return Task.CompletedTask;
+            return;
         }
 
         // --- the primary effects ------------------------------------------------
-        if (origin == FileChangeOrigin.Rescan)
-        {
-            // Removals before creations: a missing tab's file back under
-            // another spelling (`ghost.md` → `Ghost.md`) is re-seated only
-            // once its removal has marked the tab missing.
-            workspace?.InvalidatePaths(
-                [.. changes.Where(c => c.Change.Kind == FileChangeKind.Deleted).Select(c => c.Change.Path)]);
-        }
-
-        var reloads = new List<Task>();
         foreach ((FileChangeEvent change, _) in changes)
         {
             switch (change.Kind)
@@ -77,18 +41,11 @@ internal sealed partial class VaultLifecycleViewModel
                 case FileChangeKind.Renamed when change.PreviousPath is string previousPath:
                     workspace?.RetargetPath(previousPath, change.Path);
                     break;
-                case FileChangeKind.Deleted when origin == FileChangeOrigin.SlateOwned:
+                case FileChangeKind.Deleted:
                     workspace?.InvalidatePath(change.Path);
                     break;
-                case FileChangeKind.Modified when origin == FileChangeOrigin.SlateOwned:
+                case FileChangeKind.Modified:
                     workspace?.InvalidateModifiedPath(change.Path);
-                    break;
-                case FileChangeKind.Modified when workspace is not null:
-                    string modified = change.Path;
-                    reloads.Add(workspace.ReconcileModifiedPathAsync(
-                        modified,
-                        work => ReadForRescanAsync(work, cancel),
-                        () => reconciledSince?.Invoke(modified) == true));
                     break;
             }
         }
@@ -105,20 +62,6 @@ internal sealed partial class VaultLifecycleViewModel
         // --- the dependents -------------------------------------------------------
         workspace?.InvalidateAllInteractionStates();
         QuickSwitcher?.ApplyFileChanges(changes);
-        if (origin == FileChangeOrigin.Rescan)
-        {
-            // Round 29: every fallible dependent publication a rescan
-            // triggers is awaited — reading, history, Bases, graph — and the
-            // routine's graph probe is the rescan's only path into the graph.
-            if (workspace is not null)
-            {
-                reloads.Add(workspace.NotifyRescanDependentsAsync(
-                    [.. changes.Select(c => (c.Change.Kind, c.Change.Path))]));
-            }
-
-            return Task.WhenAll(reloads);
-        }
-
         foreach ((FileChangeEvent change, _) in changes)
         {
             // Reading embed cards depend on OTHER files (W3-5): the change
@@ -145,12 +88,5 @@ internal sealed partial class VaultLifecycleViewModel
         // W6-2 PR A (contract A-3): the graph's generation probe, while a
         // graph tab is visible, and the Connections leaf's.
         workspace?.NotifyGraphOfVaultChange();
-        return Task.CompletedTask;
     }
-
-    /// <summary>A rescan reload's read: through the rescan core seam, off the
-    /// dispatcher, refused once the run is cancelled.</summary>
-    private Task<T> ReadForRescanAsync<T>(Func<T> work, CancelToken? cancel) =>
-        RunRescanCoreAsync("read", () =>
-            cancel?.IsCancelled() == true ? throw new VaultException.Cancelled() : work());
 }

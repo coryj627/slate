@@ -746,8 +746,8 @@ internal sealed partial class VaultLifecycleViewModel
     private void HandleIndexPhase(int generation, IndexPhase phase, ulong filesSeen, bool duringRescan)
     {
         _ = filesSeen;
-        // W7-7 PR 7 (round 29): a RESCAN's graph authority is the one
-        // routine's per-page probe (ApplyFileChangeEffectsAsync); the scan
+        // W7-7 PR 7 (round 29): a RESCAN's graph authority is the
+        // re-sync's dependents probe (ReSyncDependentsAsync); the scan
         // phase probes only for the initial open scan.
         if (generation == _generation && phase == IndexPhase.ScanFinished && !duringRescan)
         {
@@ -759,11 +759,9 @@ internal sealed partial class VaultLifecycleViewModel
     {
         if (generation == _generation)
         {
-            // W7-7 PR 7 (round 28): the one routine for a change's host
-            // effects. A Slate-owned batch has nothing to await.
-            _ = ApplyFileChangeEffectsAsync(
-                [(@event, CoreDocumentClassification.IsOpenable(@event.Path))],
-                FileChangeOrigin.SlateOwned);
+            // W7-7 PR 7 (round 28): the one routine for a Slate-owned
+            // change's host effects.
+            ApplyFileChangeEffects([(@event, CoreDocumentClassification.IsOpenable(@event.Path))]);
             int ticket = Interlocked.Increment(ref _sidebarRefreshTicket);
             if (_rescanActive && FileSidebar is { IsTreePublicationPending: true } sidebar)
             {

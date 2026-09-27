@@ -184,6 +184,18 @@ internal sealed partial class WorkspaceTabViewModel : BindableBase, IDisposable
     public AvalonDocumentBufferSession? EditorSession => _editorSession;
     public EditorInteractionCoordinator? EditorInteractions => _editorInteractions;
     internal string? SavedContentHash => _contentHash;
+
+    private long _contentGeneration;
+
+    /// <summary>W7-7 PR 7 (#1252, R-9): a monotonic generation of what this
+    /// tab shows — bumped by every item replacement (a transient tab reused
+    /// in place included), every text change, every baseline or dirty-state
+    /// change and every missing or staleness mark. A rescan's worker read
+    /// captures it with the tab; the reload applies only if it is
+    /// unchanged in the dispatcher turn of the apply.</summary>
+    internal long ContentGeneration => _contentGeneration;
+
+    private void BumpContentGeneration() => _contentGeneration++;
     internal string? LoadFailure { get; private set; }
     public EditorPreferencesViewModel EditorPreferences { get; }
     public string EditorAutomationName =>
@@ -383,6 +395,7 @@ internal sealed partial class WorkspaceTabViewModel : BindableBase, IDisposable
         {
             if (SetField(ref _isDirty, value))
             {
+                BumpContentGeneration();
                 OnPropertyChanged(nameof(DirtyMarker));
                 if (value)
                 {
@@ -414,7 +427,13 @@ internal sealed partial class WorkspaceTabViewModel : BindableBase, IDisposable
     public bool IsMissingFromDisk
     {
         get => _isMissingFromDisk;
-        private set => SetField(ref _isMissingFromDisk, value);
+        private set
+        {
+            if (SetField(ref _isMissingFromDisk, value))
+            {
+                BumpContentGeneration();
+            }
+        }
     }
 
     public string Status
@@ -438,6 +457,7 @@ internal sealed partial class WorkspaceTabViewModel : BindableBase, IDisposable
 
     public void ReplaceItem(WorkspaceItemState item)
     {
+        BumpContentGeneration();
         _taskToggleGeneration++;
         _taskToggleInFlight = false;
         _editorInteractions?.Dispose();
@@ -547,6 +567,7 @@ internal sealed partial class WorkspaceTabViewModel : BindableBase, IDisposable
             return;
         }
 
+        BumpContentGeneration();
         _text = source._text;
         _contentHash = source._contentHash;
         IsExternallyStale = source.IsExternallyStale;
@@ -584,6 +605,7 @@ internal sealed partial class WorkspaceTabViewModel : BindableBase, IDisposable
 
         AvalonDocumentBufferSession session = _editorSession
             ?? throw new InvalidOperationException("A Markdown tab has no editor session.");
+        BumpContentGeneration();
         switch (syncEvent)
         {
             case EditorDocumentUpdateStarted:
@@ -1117,7 +1139,17 @@ internal sealed partial class WorkspaceTabViewModel : BindableBase, IDisposable
     /// guard must refuse until the tab re-baselines. Cleared by the
     /// re-baselining writes (save, verified toggle splice, peer
     /// mirror) and re-derived on every Modified event.</summary>
-    internal bool IsExternallyStale { get; private set; }
+    internal bool IsExternallyStale
+    {
+        get => _isExternallyStale;
+        private set
+        {
+            _isExternallyStale = value;
+            BumpContentGeneration();
+        }
+    }
+
+    private bool _isExternallyStale;
 
     /// <summary>Re-derive <see cref="IsExternallyStale"/> against
     /// the index. Own saves also flow through the change stream
@@ -1313,6 +1345,7 @@ internal sealed partial class WorkspaceTabViewModel : BindableBase, IDisposable
 
     private void ApplyEditorSyncEvent(EditorDocumentSyncEvent syncEvent)
     {
+        BumpContentGeneration();
         if (syncEvent is EditorDocumentChange)
         {
             OnPropertyChanged(nameof(Text));
@@ -1331,6 +1364,7 @@ internal sealed partial class WorkspaceTabViewModel : BindableBase, IDisposable
     {
         if (SetField(ref _text, text, nameof(Text)))
         {
+            BumpContentGeneration();
             IsDirty = true;
             _documentChanged?.Invoke(this, null);
         }
@@ -1379,6 +1413,7 @@ internal sealed partial class WorkspaceTabViewModel : BindableBase, IDisposable
 
     private void NotifyItemChanged()
     {
+        BumpContentGeneration();
         OnPropertyChanged(nameof(Item));
         OnPropertyChanged(nameof(Title));
         OnPropertyChanged(nameof(EditorAutomationName));

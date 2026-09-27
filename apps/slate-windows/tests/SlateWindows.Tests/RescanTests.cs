@@ -285,7 +285,7 @@ public sealed class RescanTests
     // Reconciliation: tabs, Quick Open, the tree
     // ---------------------------------------------------------------------
 
-    /// <summary>Through the real rescan → delta → tab path: a clean tab
+    /// <summary>Through the real rescan → re-sync → tab path: a clean tab
     /// reloads (new text and baseline, not dirty, no undo back to the old
     /// bytes, caret line kept — or clamped), a reading-mode tab re-projects,
     /// a dirty tab keeps its edits and turns stale, and a deleted open
@@ -533,11 +533,11 @@ public sealed class RescanTests
         }
     });
 
-    /// <summary>A case-only rename whose removal and creation share ONE page:
-    /// the page's removals mark the tab missing before its creations re-seat
-    /// it, so the tab follows the new spelling with its content — silently,
-    /// the one sentence counting a removal and a creation (AR-8: no rename
-    /// correlation).</summary>
+    /// <summary>A case-only rename outside Slate: the re-sync finds no index
+    /// row for the tab's spelling and marks it missing, then re-seats it on
+    /// the spelling the filesystem stores (#1077), so the tab follows the new
+    /// spelling with its content — silently, the one sentence counting a
+    /// removal and a creation (AR-8: no rename correlation).</summary>
     [Fact]
     public void ACaseOnlyRenameInOnePageReseatsItsTab() => RunSta(() =>
     {
@@ -594,13 +594,13 @@ public sealed class RescanTests
         });
     });
 
-    /// <summary>Rounds 25-26 (the worker read's re-check): a Slate-owned
-    /// write that commits WHILE a clean tab's reload reads on the worker —
-    /// after the page passed its journal check — wins. The read comes back
-    /// to a journal entry newer than the page's capture, so the tab is never
-    /// re-baselined on the bytes the worker read before the write; the
-    /// write's own event reconciles it (changed on disk), and the
-    /// overtaken row is not spoken.</summary>
+    /// <summary>Rounds 25-26 and v2 §1 (the worker read's ticket): a
+    /// Slate-owned write that commits WHILE a clean tab's reload reads on the
+    /// worker wins. The write's own event marks the tab stale before the read
+    /// comes back, which moves the tab's content generation past the ticket
+    /// the read captured, so the tab is never re-baselined on the bytes the
+    /// worker read before the write; it keeps its text, marked stale. The
+    /// scan's own count stands: it found the external change.</summary>
     [Fact]
     public void ASlateWriteDuringAReloadsReadWinsOverIt() => RunSta(() =>
     {
@@ -627,7 +627,7 @@ public sealed class RescanTests
         Assert.False(x.IsDirty);
         Assert.True(x.IsExternallyStale, "the write's own event never reconciled the tab");
         Assert.Equal("x2 through Slate\n", File.ReadAllText(Path.Combine(h.Root, "x.md")));
-        Assert.Equal([NoChanges], h.Spoken);
+        Assert.Equal([Explicit1], h.Spoken);
     });
 
     /// <summary>Rounds 26-27: the host's document classification — the
@@ -818,33 +818,38 @@ public sealed class RescanTests
         h.PumpUntil(() => BaseRows(tab).Contains("two.mdown"), "the base listing the new .mdown note");
     });
 
-    /// <summary>Round 28 (the reading dependent): a reading-mode note that
-    /// embeds another owes its embed a re-render when the embedded note
-    /// changes outside Slate — the reading models' reverse-dependency
-    /// filter, reached through the one routine. With no surface attached
-    /// (this harness) the model records the pending re-render its surface
-    /// runs on rebind; an unrelated note's change owes it nothing.</summary>
+    /// <summary>Round 28 (the reading dependent), on the re-sync: a
+    /// reading-mode note that embeds another owes its embed a re-render
+    /// when the embedded note changes outside Slate. The re-sync carries no
+    /// per-path delta (AR-18's fallback), so every reading model that
+    /// depends on OTHER files re-projects on a rescan — the artifact digest
+    /// makes an unchanged one a memo hit; with no surface attached (this
+    /// harness) the model records the pending re-render its surface runs on
+    /// rebind — while a reading-mode note that embeds nothing owes nothing:
+    /// its own note's change reaches it through its tab's reload.</summary>
     [Fact]
     public void AReadingEmbedFollowsARescan() => RunSta(() =>
     {
         using var h = new Harness(
             "reading-embed",
             ("host.md", "# Host\n\n![[embedded]]\n"),
-            ("embedded.md", "Embedded before.\n"));
+            ("embedded.md", "Embedded before.\n"),
+            ("plain.md", "# Plain\n\nNo embeds.\n"));
         WorkspaceTabViewModel host = h.Open("host.md");
         host.ToggleViewMode();
+        WorkspaceTabViewModel plain = h.Open("plain.md");
+        plain.ToggleViewMode();
         h.PumpUntil(() => ReadingText(host).Contains("Embedded before.", StringComparison.Ordinal), "the embed's first render");
+        h.PumpUntil(() => ReadingText(plain).Contains("No embeds.", StringComparison.Ordinal), "the plain note's first render");
 
         Assert.False(host.Reading!.HasPendingDependencyRefresh);
-
-        h.Write("unrelated.md", "Nobody embeds me.\n");
-        h.Context.Await(h.Lifecycle.RescanAsync(RescanReason.Explicit));
-        Assert.False(host.Reading!.HasPendingDependencyRefresh, "an unrelated change reached the embedder");
+        Assert.False(plain.Reading!.HasPendingDependencyRefresh);
 
         h.Write("embedded.md", "Embedded after, changed outside Slate.\n");
-        h.Now += TimeSpan.FromMinutes(1);
         h.Context.Await(h.Lifecycle.RescanAsync(RescanReason.Explicit));
+
         Assert.True(host.Reading!.HasPendingDependencyRefresh, "the embedder owes no re-render");
+        Assert.False(plain.Reading!.HasPendingDependencyRefresh, "a note that embeds nothing was re-rendered");
     });
 
     /// <summary>Round 28 (the history dependent): the history panel showing a
@@ -884,12 +889,14 @@ public sealed class RescanTests
         Assert.Equal("x0\nmine\n", x.Text);
     });
 
-    /// <summary>Rounds 28-29 (the graph dependent, ONE authority): a rescan
-    /// reaches the graph only through the routine's per-page probe — the
-    /// Connections leaf's, and the graph tab's when one is visible — exactly
-    /// as a Slate-owned event does. The index phase's ScanFinished probe is
-    /// withheld for a rescan (the open scan keeps it), so an unchanged
-    /// rescan probes NOTHING and a changed one probes exactly once.</summary>
+    /// <summary>Rounds 28-29 (the graph dependent, ONE authority), on the
+    /// re-sync: a rescan reaches the graph only through the re-sync's probe —
+    /// the Connections leaf's, and the graph tab's when one is visible —
+    /// exactly as a Slate-owned event does. The index phase's ScanFinished
+    /// probe is withheld for a rescan (the open scan keeps it), so EVERY
+    /// rescan probes exactly once: an unchanged one too, which is how a
+    /// STALE or Error graph recovers on Refresh (codex round 1, finding 8),
+    /// and a changed one never twice.</summary>
     [Fact]
     public void TheGraphProbesAfterARescan() => RunSta(() =>
     {
@@ -916,7 +923,7 @@ public sealed class RescanTests
         int before = ProbesSoFar();
         h.Context.Await(h.Lifecycle.RescanAsync(RescanReason.Explicit));
         Settle();
-        Assert.Equal(0, ProbesSoFar() - before);
+        Assert.Equal(1, ProbesSoFar() - before);
 
         h.Write("linker.md", "# Linker\n\n[[x]]\n");
         h.Now += TimeSpan.FromMinutes(1);
@@ -926,12 +933,12 @@ public sealed class RescanTests
         Assert.Equal(1, ProbesSoFar() - before);
     });
 
-    /// <summary>Round 29: the routine's probe is the rescan's graph path —
+    /// <summary>Round 29: the re-sync's probe is the rescan's graph path —
     /// and a sufficient one. The Connections leaf following a note lists a
     /// backlink created outside Slate the moment the rescan completes (the
     /// probe, and the reload it issues, are awaited to publication); with
-    /// the routine's probe removed the leaf stays stale, because the index
-    /// phase no longer probes for a rescan.</summary>
+    /// the re-sync's probe removed the leaf stays stale, because the index
+    /// phase does not probe for a rescan.</summary>
     [Fact]
     public void TheGraphFollowsARescanThroughTheRoutineAlone() => RunSta(() =>
     {
@@ -950,10 +957,10 @@ public sealed class RescanTests
     });
 
     /// <summary>Round 29 (ONE graph authority for a rescan), structurally:
-    /// the rescan's graph probe has exactly one reference — the routine's
-    /// dependents (<c>NotifyRescanDependentsAsync</c>, itself reached only
-    /// from the routine's rescan arm) — and the index phase's ScanFinished
-    /// probe is guarded by the rescan flag read where the scan emits it.
+    /// the rescan's graph probe has exactly one reference — the re-sync's
+    /// dependents (<c>ReSyncDependentsAsync</c>, itself reached only from
+    /// the lifecycle's re-sync) — and the index phase's ScanFinished probe
+    /// is guarded by the rescan flag read where the scan emits it.
     /// <see cref="TheGraphFollowsARescanThroughTheRoutineAlone"/> is the
     /// behavioral half: without that call site the graph stays stale.</summary>
     [Fact]
@@ -961,7 +968,7 @@ public sealed class RescanTests
     {
         Dictionary<string, string> sources = ShellSources();
         Assert.Equal([("WorkspaceViewModel.Rescan.cs", 1)], References(sources, "NotifyGraphOfRescanAsync"));
-        Assert.Equal([("VaultLifecycleViewModel.FileChanges.cs", 1)], References(sources, "NotifyRescanDependentsAsync"));
+        Assert.Equal([("VaultLifecycleViewModel.Rescan.cs", 1)], References(sources, "ReSyncDependentsAsync"));
 
         Match arm = Regex.Match(
             sources["VaultLifecycleViewModel.cs"],
@@ -1008,7 +1015,7 @@ public sealed class RescanTests
             .Select(source => (
                 File: source.Key,
                 Count: Regex.Matches(source.Value, $@"\b{name}\b").Count
-                    - Regex.Matches(source.Value, $@"\bTask\s+{name}\s*\(").Count))
+                    - Regex.Matches(source.Value, $@"\bTask(?:<[^>]+>)?\s+{name}\s*\(").Count))
             .Where(reference => reference.Count > 0)
             .OrderBy(reference => reference.File, StringComparer.Ordinal),
     ];
@@ -1247,9 +1254,11 @@ public sealed class RescanTests
         Assert.Contains(h.Sidebar.Tags, tag => tag.Full == "fresh");
     });
 
-    /// <summary>Round 30: a tree refresh that FAILS makes the run say
-    /// "results may be incomplete", never "Files refreshed"; the next,
-    /// independent rescan publishes the tree.</summary>
+    /// <summary>Round 30 and v2 §6: a tree refresh that FAILS makes the run
+    /// say "results may be incomplete", never "Files refreshed" — and the
+    /// rescan's own tree refresh is SILENT: its "Could not load files." is
+    /// shown on the sidebar's status line, counted in the one sentence, never
+    /// spoken. The next, independent rescan publishes the tree.</summary>
     [Fact]
     public void AFailedTreeRefreshSpeaksIncompleteAndTheNextRescanCompletesIt() => RunSta(() =>
     {
@@ -1263,7 +1272,8 @@ public sealed class RescanTests
 
         h.Context.Await(h.Lifecycle.RescanAsync(RescanReason.Explicit));
 
-        Assert.Equal(["Could not load files.", OneError], h.Spoken);
+        Assert.Equal([OneError], h.Spoken);
+        Assert.StartsWith("Could not load files", h.Sidebar.Status, StringComparison.Ordinal);
 
         Volatile.Write(ref fail, false);
         h.Events.Clear();
@@ -1302,9 +1312,9 @@ public sealed class RescanTests
         [.. (tab.Base?.Result?.Rows ?? []).Select(row => row.FilePath).Order(StringComparer.Ordinal)];
 
     /// <summary>Round 26: openability is core's. External .mdown and .MKD
-    /// notes reach Quick Open through the delta — each row carries core's
-    /// classification — a .txt file does not, and a deleted .mdown note
-    /// leaves it again.</summary>
+    /// notes reach Quick Open through the re-sync — its list is core's
+    /// openable-documents filter — a .txt file does not, and a deleted .mdown
+    /// note leaves it again.</summary>
     [Fact]
     public void ExternalMdownAndMkdNotesReachQuickOpen() => RunSta(() =>
     {
@@ -1375,6 +1385,403 @@ public sealed class RescanTests
             "the toggle never completed");
         _ = Assert.Single(toggleEvents.OfType<A11yEvent.TaskToggleConflict>());
         Assert.True(y.EditorDocument!.UndoStack.CanUndo);
+    });
+
+    // ---------------------------------------------------------------------
+    // The re-sync's barriers (option B: v2 §1, §5, §6, §7, §9; F3, F6, F7)
+    // ---------------------------------------------------------------------
+
+    /// <summary>Parks the re-sync's Markdown read ON ITS WORKER, after the
+    /// read and before its apply — the window a fact changes the tab in.</summary>
+    private static (ManualResetEventSlim Parked, ManualResetEventSlim Release) ParkTheRead(Harness h)
+    {
+        var parked = new ManualResetEventSlim(false);
+        var release = new ManualResetEventSlim(false);
+        h.AfterCoreCall = operation =>
+        {
+            if (operation == "read")
+            {
+                parked.Set();
+                _ = release.Wait(TimeSpan.FromSeconds(30));
+            }
+        };
+        return (parked, release);
+    }
+
+    /// <summary>v2 §1 (codex design pass 1, critical 1): a transient tab
+    /// reused IN PLACE for another note while the re-sync reads its old
+    /// note is not reloaded with the old note's bytes — even when both notes
+    /// had the same content hash (empty notes). The ticket carries the item
+    /// and the tab's content generation; the new note stays as it is.</summary>
+    [Fact]
+    public void ATransientTabReusedDuringAParkedReadKeepsItsNewNote() => RunSta(() =>
+    {
+        using var h = new Harness("transient-aba", ("a.md", ""), ("b.md", ""));
+        h.Workspace.OpenPath("a.md", WorkspaceOpenTarget.CurrentTab, fromSelection: true);
+        h.Context.Drain();
+        WorkspaceTabViewModel tab = Assert.Single(h.AllTabs, candidate => candidate.Path == "a.md");
+        Assert.True(tab.IsTransient);
+        string? emptyHash = tab.SavedContentHash;
+        h.Write("a.md", "A, changed outside Slate\n");
+        (ManualResetEventSlim parked, ManualResetEventSlim release) = ParkTheRead(h);
+        using (parked)
+        using (release)
+        {
+            h.Events.Clear();
+            Task run = h.Lifecycle.RescanAsync(RescanReason.Explicit);
+            h.Context.RunUntil(() => parked.IsSet, "the read parking");
+
+            h.Workspace.OpenPath("b.md", WorkspaceOpenTarget.CurrentTab, fromSelection: true);
+            h.Context.Drain();
+            Assert.Same(tab, Assert.Single(h.AllTabs, candidate => candidate.Path == "b.md"));
+            Assert.Equal(emptyHash, tab.SavedContentHash);
+
+            release.Set();
+            h.Context.Await(run);
+        }
+
+        Assert.Equal("b.md", tab.Path);
+        Assert.Equal(string.Empty, tab.Text);
+        Assert.False(tab.IsDirty);
+        Assert.False(tab.IsExternallyStale);
+        A11yEvent.VaultRescanFinished finished =
+            Assert.Single(h.Events.OfType<A11yEvent.VaultRescanFinished>());
+        Assert.Equal((1UL, 0UL), (finished.Changed, finished.Removed));
+    });
+
+    /// <summary>F3 (codex design pass 2): typing into a clean tab while the
+    /// re-sync reads its changed file keeps the typing and marks the tab
+    /// stale against the index hash — staleness is keyed by path and applied
+    /// in the apply turn, separate from the reload, which only a full ticket
+    /// earns.</summary>
+    [Fact]
+    public void TypingDuringAParkedReadKeepsTheEditAndMarksTheTabStale() => RunSta(() =>
+    {
+        using var h = new Harness("type-during-read", ("x.md", "x0\n"));
+        WorkspaceTabViewModel x = h.Open("x.md");
+        h.Write("x.md", "x1, changed outside Slate\n");
+        (ManualResetEventSlim parked, ManualResetEventSlim release) = ParkTheRead(h);
+        using (parked)
+        using (release)
+        {
+            Task run = h.Lifecycle.RescanAsync(RescanReason.Explicit);
+            h.Context.RunUntil(() => parked.IsSet, "the read parking");
+            x.Text = "x0\nmine\n";
+            Assert.True(x.IsDirty);
+            release.Set();
+            h.Context.Await(run);
+        }
+
+        Assert.Equal("x0\nmine\n", x.Text);
+        Assert.True(x.IsDirty);
+        Assert.True(x.IsExternallyStale, "the typed tab lost its stale mark");
+        Assert.Equal([Explicit1], h.Spoken);
+    });
+
+    /// <summary>F3 (codex design pass 2): a tab re-baselined by ITS OWN SAVE
+    /// while the re-sync reads is current — the ticket carries the baseline
+    /// hash — so it is neither reloaded with the bytes the worker read nor
+    /// marked stale.</summary>
+    [Fact]
+    public void ATabReBaselinedByItsOwnSaveDuringAParkedReadIsLeftCurrent() => RunSta(() =>
+    {
+        using var h = new Harness("own-save-during-read", ("x.md", "x0\n"));
+        WorkspaceTabViewModel x = h.Open("x.md");
+        h.Write("x.md", "x1, changed outside Slate\n");
+        (ManualResetEventSlim parked, ManualResetEventSlim release) = ParkTheRead(h);
+        using (parked)
+        using (release)
+        {
+            Task run = h.Lifecycle.RescanAsync(RescanReason.Explicit);
+            h.Context.RunUntil(() => parked.IsSet, "the read parking");
+
+            // Another app puts the file back under the tab, and the tab saves
+            // its own edit over it (its expected hash matches the disk).
+            h.Write("x.md", "x0\n");
+            x.Text = "mine\n";
+            Assert.True(x.Save());
+            h.Context.Drain();
+            release.Set();
+            h.Context.Await(run);
+        }
+
+        h.Settle();
+        Assert.Equal("mine\n", x.Text);
+        Assert.False(x.IsDirty);
+        Assert.False(x.IsExternallyStale, "a tab re-baselined by its own save was marked stale");
+        Assert.Equal("mine\n", File.ReadAllText(Path.Combine(h.Root, "x.md")));
+    });
+
+    /// <summary>The hash-conditioned read (owner ruling, option B): a tab
+    /// never applies bytes whose hash differs from the index hash read for
+    /// it. When the file moves again outside Slate after the re-sync read
+    /// its index hash and before it reads the text, the clean tab keeps its
+    /// text, is marked stale, and the run is honest: "1 error" — the next
+    /// Refresh reloads it.</summary>
+    [Fact]
+    public void BytesTheIndexDoesNotVouchForAreNeverApplied() => RunSta(() =>
+    {
+        using var h = new Harness("unvouched-bytes", ("x.md", "x0\n"));
+        WorkspaceTabViewModel x = h.Open("x.md");
+        h.Write("x.md", "x1, indexed by the scan\n");
+        bool moved = false;
+        h.AfterCoreCall = operation =>
+        {
+            if (operation == "hashes" && !moved)
+            {
+                // After the index hashes were read, before the text is.
+                moved = true;
+                h.Write("x.md", "x2, not yet indexed\n");
+            }
+        };
+
+        h.Context.Await(h.Lifecycle.RescanAsync(RescanReason.Explicit));
+
+        Assert.True(moved);
+        Assert.Equal("x0\n", x.Text);
+        Assert.False(x.IsDirty);
+        Assert.True(x.IsExternallyStale);
+        Assert.Equal([OneError], h.Spoken);
+
+        h.AfterCoreCall = null;
+        h.Events.Clear();
+        h.Now += TimeSpan.FromMinutes(1);
+        h.Context.Await(h.Lifecycle.RescanAsync(RescanReason.Explicit));
+        Assert.Equal("x2, not yet indexed\n", x.Text);
+        Assert.False(x.IsExternallyStale);
+        Assert.Equal([Explicit1], h.Spoken);
+    });
+
+    /// <summary>v2 §5 (codex design pass 1, high 5): the open paths are
+    /// hashed in chunks of at most core's bound under the one token. With
+    /// 1,025 distinct open notes — one more than a single call accepts — the
+    /// note past the first chunk that changed outside Slate reloads, and the
+    /// run is complete.</summary>
+    [Fact]
+    public void MoreOpenPathsThanOneHashCallAcceptsAreHashedInChunks() => RunSta(() =>
+    {
+        int count = checked((int)SlateUniffiMethods.MaxIndexedHashPaths()) + 1;
+        (string Path, string Text)[] notes =
+            [.. Enumerable.Range(0, count).Select(n => ($"n{n:0000}.md", $"{n}\n"))];
+        using var h = new Harness("hash-chunks", notes);
+        foreach ((string path, _) in notes)
+        {
+            h.Workspace.OpenPath(path, WorkspaceOpenTarget.NewTab);
+        }
+
+        h.Context.Drain();
+        string last = notes[^1].Path;
+        WorkspaceTabViewModel tail = Assert.Single(h.AllTabs, tab => tab.Path == last);
+        Assert.Equal(count, h.AllTabs.Select(tab => tab.Path).Distinct().Count());
+        h.Events.Clear();
+
+        h.Write(last, "changed outside Slate\n");
+        h.Context.Await(h.Lifecycle.RescanAsync(RescanReason.Explicit));
+
+        Assert.Equal("changed outside Slate\n", tail.Text);
+        Assert.Equal([Explicit1], h.Spoken);
+    });
+
+    /// <summary>v2 §7 (codex design pass 1, high 7): with Quick Open open,
+    /// the re-sync's re-rank is SILENT — the rows stay while it ranks, no
+    /// count is spoken — and the run completes only INSIDE that rank's
+    /// publication: with the rank parked, the run holds and says nothing;
+    /// released, the new note is listed and the one sentence follows.</summary>
+    [Fact]
+    public void AParkedQuickOpenRankHoldsTheSentence() => RunSta(() =>
+    {
+        using var h = new Harness("quickopen-parked", ("alpha.md", "# Alpha\n"));
+        h.QuickOpen.Open();
+        h.Context.RunUntil(() => !h.QuickOpen.IsRanking && h.QuickOpen.Results.Count > 0, "the open's rank");
+        h.Events.Clear();
+        var gate = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
+        h.QuickOpen.RankDelayForTests = _ => gate.Task;
+        h.Write("late.md", "# Late\n");
+
+        Task run = h.Lifecycle.RescanAsync(RescanReason.Explicit);
+        h.Context.RunUntil(() => h.QuickOpen.IsRanking, "the re-sync's silent re-rank");
+        h.Settle();
+
+        Assert.False(run.IsCompleted);
+        Assert.Empty(h.Events);
+        Assert.Contains(h.QuickOpen.Results, row => row.Path == "alpha.md");
+
+        gate.SetResult();
+        h.Context.Await(run);
+        Assert.Contains(h.QuickOpen.Results, row => row.Path == "late.md");
+        Assert.Equal([Explicit1], h.Spoken);
+    });
+
+    /// <summary>F7 (codex design pass 2): Quick Open dismissed while the
+    /// re-sync's rank is parked publishes no rank — and the rescan it holds
+    /// is settled, not stalled: the one sentence follows.</summary>
+    [Fact]
+    public void DismissingQuickOpenWithARankParkedDoesNotStallTheRescan() => RunSta(() =>
+    {
+        using var h = new Harness("quickopen-dismissed", ("alpha.md", "# Alpha\n"));
+        h.QuickOpen.Open();
+        h.Context.RunUntil(() => !h.QuickOpen.IsRanking && h.QuickOpen.Results.Count > 0, "the open's rank");
+        var never = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
+        h.QuickOpen.RankDelayForTests = token => never.Task.WaitAsync(token);
+        h.Write("late.md", "# Late\n");
+        h.Events.Clear();
+
+        Task run = h.Lifecycle.RescanAsync(RescanReason.Explicit);
+        h.Context.RunUntil(() => h.QuickOpen.IsRanking, "the re-sync's silent re-rank");
+        h.QuickOpen.Dismiss();
+        h.Context.Await(run);
+
+        Assert.Contains(Explicit1, h.Spoken);
+        Assert.Contains("late.md", h.QuickOpen.FilePathsForTests);
+    });
+
+    /// <summary>F7 (codex design pass 2): a vault close while the re-sync's
+    /// rank is parked disposes the switcher, which settles the waiter, and
+    /// cancels the run's token: the run ends silently.</summary>
+    [Fact]
+    public void AVaultCloseWithARankParkedEndsTheRescanSilently() => RunSta(() =>
+    {
+        using var h = new Harness("quickopen-closed", ("alpha.md", "# Alpha\n"));
+        h.QuickOpen.Open();
+        h.Context.RunUntil(() => !h.QuickOpen.IsRanking && h.QuickOpen.Results.Count > 0, "the open's rank");
+        var never = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
+        h.QuickOpen.RankDelayForTests = token => never.Task.WaitAsync(token);
+        h.Write("late.md", "# Late\n");
+        h.Events.Clear();
+
+        Task run = h.Lifecycle.RescanAsync(RescanReason.Explicit);
+        h.Context.RunUntil(() => h.QuickOpen.IsRanking, "the re-sync's silent re-rank");
+        h.Lifecycle.CloseVault();
+        h.Context.Await(run, "the closed rescan");
+
+        Assert.DoesNotContain(h.Events, e => e is A11yEvent.VaultRescanFinished or A11yEvent.VaultRescanIncomplete);
+    });
+
+    /// <summary>v2 §6 (codex design pass 1, high 6), the tag arm: a tag-tree
+    /// failure during the rescan's own tree refresh is shown on the
+    /// sidebar's status line and counted — "1 error" — never spoken on its
+    /// own. The root list's arm is <see cref="AFailedTreeRefreshSpeaksIncompleteAndTheNextRescanCompletesIt"/>.</summary>
+    [Fact]
+    public void ATagTreeFailureIsCountedSilently() => RunSta(() =>
+    {
+        using var h = new Harness("tags-fail", ("alpha.md", "# Alpha\n\n#topic\n"));
+        h.Sidebar.AfterTagTreeForTests = () => throw new VaultException.Io("injected tag tree failure");
+
+        h.Context.Await(h.Lifecycle.RescanAsync(RescanReason.Explicit));
+
+        Assert.Equal([OneError], h.Spoken);
+        Assert.StartsWith("Could not load tags", h.Sidebar.Status, StringComparison.Ordinal);
+
+        h.Sidebar.AfterTagTreeForTests = null;
+        h.Events.Clear();
+        h.Now += TimeSpan.FromMinutes(1);
+        h.Context.Await(h.Lifecycle.RescanAsync(RescanReason.Explicit));
+        Assert.Equal([NoChanges], h.Spoken);
+        Assert.Contains(h.Sidebar.Tags, tag => tag.Full == "topic");
+    });
+
+    /// <summary>F6 (codex design pass 2): a dashboard open in this window
+    /// that another session deletes is reloaded by the re-sync; its failure
+    /// state is a publication (round 29) and its D-12 line speaks from its
+    /// load as on main — then the one completion sentence.</summary>
+    [Fact]
+    public void AnotherSessionDeletingAnOpenDashboardSpeaksItsLineThenTheSentence() => RunSta(() =>
+    {
+        using var h = new Harness("dashboard-deleted", ("a.md", "# A\n"));
+        string id = h.Lifecycle.SessionForTests!.SaveDashboard("Reading", []);
+        h.Workspace.OpenDashboard(id, "Reading");
+        WorkspaceTabViewModel tab = h.AllTabs.Last();
+        h.PumpUntil(() => tab.Dashboard is { Name: "Reading" }, "the dashboard's first load");
+        h.Settle();
+        h.Events.Clear();
+        using (VaultSession other = VaultSession.OpenFilesystem(h.Root))
+        {
+            other.DeleteDashboard(id);
+        }
+
+        Task run = h.Lifecycle.RescanAsync(RescanReason.Explicit);
+        h.PumpUntil(() => run.IsCompleted, "the rescan");
+
+        Assert.Collection(
+            h.Events,
+            first => Assert.IsType<A11yEvent.BasesDashboardLoadFailed>(first),
+            second => Assert.IsType<A11yEvent.VaultRescanFinished>(second));
+        Assert.Equal(NoChanges, h.Spoken[1]);
+    });
+
+    /// <summary>AR-30 (owner-accepted): a Refresh's counts are ITS OWN
+    /// scan's. Another Slate session — another window, slate-cli — that
+    /// modifies, creates and deletes files has already indexed them, so this
+    /// window's re-sync SHOWS all three — the open tab reloads, the deleted
+    /// note's tab is marked missing, the tree and Quick Open follow — while
+    /// an explicit Refresh says "Files refreshed. No changes." and a
+    /// foreground rescan stays silent.</summary>
+    [Fact]
+    public void AnotherSessionsChangesAreShownButNotCounted() => RunSta(() =>
+    {
+        using var h = new Harness("two-sessions", ("mod.md", "before\n"), ("gone.md", "gone\n"));
+        WorkspaceTabViewModel mod = h.Open("mod.md");
+        WorkspaceTabViewModel gone = h.Open("gone.md");
+        using (VaultSession other = VaultSession.OpenFilesystem(h.Root))
+        {
+            _ = other.SaveText("mod.md", "changed by another window\n", null);
+            _ = other.CreateExclusive("new.md", "# New\n");
+            other.DeleteFile("gone.md");
+        }
+
+        h.Context.Await(h.Lifecycle.RescanAsync(RescanReason.Explicit));
+
+        Assert.Equal([NoChanges], h.Spoken);
+        Assert.Equal("changed by another window\n", mod.Text);
+        Assert.False(mod.IsDirty);
+        Assert.True(gone.IsMissingFromDisk);
+        Assert.Contains(h.Sidebar.RootNodes, node => node.Path == "new.md");
+        Assert.DoesNotContain(h.Sidebar.RootNodes, node => node.Path == "gone.md");
+        Assert.Contains("new.md", h.QuickOpen.FilePathsForTests);
+        Assert.DoesNotContain("gone.md", h.QuickOpen.FilePathsForTests);
+
+        using (VaultSession other = VaultSession.OpenFilesystem(h.Root))
+        {
+            _ = other.SaveText("mod.md", "and again\n", null);
+        }
+
+        h.Events.Clear();
+        h.Now += TimeSpan.FromMinutes(1);
+        h.Context.Await(h.Lifecycle.RescanAsync(RescanReason.Foreground));
+        Assert.Empty(h.Events);
+        Assert.Equal("and again\n", mod.Text);
+    });
+
+    /// <summary>AR-26 (v2 §9), the two-refresh fact: a file whose read fails
+    /// blocks the prune, so an open note deleted outside Slate keeps its
+    /// index row — the first Refresh is incomplete, and the tree, Quick Open
+    /// and the note's tab still show it (not missing); once the file reads
+    /// again, the next, clean Refresh removes it from all three.</summary>
+    [Fact]
+    public void AFailedReadBlocksThePruneUntilTheNextCleanRefresh() => RunSta(() =>
+    {
+        using var h = new Harness("ar26-two-refresh", ("gone.md", "gone\n"), ("locked.md", "locked\n"));
+        WorkspaceTabViewModel gone = h.Open("gone.md");
+        h.Delete("gone.md");
+        h.Write("locked.md", "locked, changed\n");
+        using (DenyAccess.To(Path.Combine(h.Root, "locked.md"), FileSystemRights.ReadData))
+        {
+            h.Context.Await(h.Lifecycle.RescanAsync(RescanReason.Explicit));
+        }
+
+        Assert.Equal([OneError], h.Spoken);
+        Assert.False(gone.IsMissingFromDisk, "the blocked prune still removed the row");
+        Assert.Contains(h.Sidebar.RootNodes, node => node.Path == "gone.md");
+        Assert.Contains("gone.md", h.QuickOpen.FilePathsForTests);
+
+        h.Events.Clear();
+        h.Now += TimeSpan.FromMinutes(1);
+        h.Context.Await(h.Lifecycle.RescanAsync(RescanReason.Explicit));
+
+        Assert.Equal(["Files refreshed. 1 new or changed, 1 removed."], h.Spoken);
+        Assert.True(gone.IsMissingFromDisk);
+        Assert.DoesNotContain(h.Sidebar.RootNodes, node => node.Path == "gone.md");
+        Assert.DoesNotContain("gone.md", h.QuickOpen.FilePathsForTests);
     });
 
     // ---------------------------------------------------------------------

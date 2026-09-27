@@ -37,6 +37,16 @@ internal sealed class QuickSwitcherViewModel : BindableBase, IDisposable
     private int _totalResults;
     private bool _isRanking;
     private string? _rankingError;
+    private bool _disposed;
+
+    // W7-7 PR 7 (#1252, R-9; v2 §7): the rescan re-sync's awaited
+    // replacements — each settled INSIDE the publication of its rank
+    // generation or a later one, by its terminal failure, or when the
+    // switcher closes (F7).
+    private readonly List<(int Generation, TaskCompletionSource Published)> _rescanRankWaiters = [];
+
+    // The replacement journals open while a rescan reads the new list.
+    private readonly List<ReplacementJournal> _openJournals = [];
 
     public QuickSwitcherViewModel(
         VaultSession session,
@@ -203,6 +213,9 @@ internal sealed class QuickSwitcherViewModel : BindableBase, IDisposable
     private void CloseSwitcher()
     {
         CancelRanking();
+        // F7: a closed switcher publishes no rank — a rescan awaiting one
+        // is settled here (Dismiss, OpenSelected), never left waiting.
+        SettleRescanRankWaiters(int.MaxValue, failure: null);
         // Remove result peers while their parent is still visible so UIA
         // clients do not retain orphaned children after the overlay collapses.
         Results.Clear();
@@ -222,7 +235,9 @@ internal sealed class QuickSwitcherViewModel : BindableBase, IDisposable
 
     public void ApplyFileChange(FileChangeEvent change)
     {
-        _files = Applied(_files, change, IsOpenablePath(change.Path));
+        bool openable = IsOpenablePath(change.Path);
+        JournalChange(change, openable);
+        _files = Applied(_files, change, openable);
         if (IsOpen)
         {
             ScheduleRefresh();
@@ -269,11 +284,9 @@ internal sealed class QuickSwitcherViewModel : BindableBase, IDisposable
     }
 
     /// <summary>
-    /// W7-7 PR 7 (#1252, R-9, round 25): a rescan page's changes, in page
-    /// order, in one pass — the funnel's per-event
-    /// <see cref="ApplyFileChange"/> batched, and the rescan's ONLY path into
-    /// Quick Open: a list reloaded in keyset pages could overwrite a newer
-    /// Slate-owned event with a stale page. An open switcher re-ranks once.
+    /// A batch of Slate-owned changes, in order, in one pass — the
+    /// funnel's per-event <see cref="ApplyFileChange"/> batched. An open
+    /// switcher re-ranks once.
     /// </summary>
     public void ApplyFileChanges(IReadOnlyCollection<(FileChangeEvent Change, bool Openable)> changes)
     {
@@ -285,6 +298,7 @@ internal sealed class QuickSwitcherViewModel : BindableBase, IDisposable
         SwitcherFile[] files = _files;
         foreach ((FileChangeEvent change, bool openable) in changes)
         {
+            JournalChange(change, openable);
             files = Applied(files, change, openable);
         }
 
@@ -295,6 +309,110 @@ internal sealed class QuickSwitcherViewModel : BindableBase, IDisposable
         }
     }
 
+    /// <summary>
+    /// W7-7 PR 7 (#1252, R-9; v2 §7): a rescan's replacement list is read
+    /// from the index in pages, on a worker, while Slate-owned writes keep
+    /// arriving on the dispatcher. The journal records each change applied
+    /// meanwhile, so <see cref="ReplaceFilesAsync"/> replays them onto the
+    /// pages it read — a stale page can never revert a Slate write
+    /// (<see cref="Applied"/> is idempotent, so a change the pages already
+    /// reflect replays as nothing).
+    /// </summary>
+    internal sealed class ReplacementJournal
+    {
+        internal List<(FileChangeEvent Change, bool Openable)> Changes { get; } = [];
+    }
+
+    internal ReplacementJournal BeginReplacement()
+    {
+        var journal = new ReplacementJournal();
+        _openJournals.Add(journal);
+        return journal;
+    }
+
+    internal void EndReplacement(ReplacementJournal journal) => _ = _openJournals.Remove(journal);
+
+    private void JournalChange(FileChangeEvent change, bool openable)
+    {
+        foreach (ReplacementJournal journal in _openJournals)
+        {
+            journal.Changes.Add((change, openable));
+        }
+    }
+
+    /// <summary>
+    /// W7-7 PR 7 (#1252, R-9; v2 §7): replace the list with the index's
+    /// openable documents <paramref name="files"/>, the journal's changes
+    /// replayed onto it. A closed switcher completes at once; an open one
+    /// re-runs its query SILENTLY — no count is spoken, the rows are
+    /// replaced in place and the selected path is kept when it survives —
+    /// and the Task completes INSIDE the publication of that rank (or of a
+    /// later one), faults on its terminal failure (counted by the rescan,
+    /// never spoken here), completes when the switcher closes (F7), and is
+    /// cancelled with <paramref name="cancellation"/>.
+    /// </summary>
+    internal Task ReplaceFilesAsync(
+        SwitcherFile[] files,
+        ReplacementJournal journal,
+        CancellationToken cancellation)
+    {
+        EndReplacement(journal);
+        if (cancellation.IsCancellationRequested)
+        {
+            return Task.FromCanceled(cancellation);
+        }
+
+        SwitcherFile[] replayed = files;
+        foreach ((FileChangeEvent change, bool openable) in journal.Changes)
+        {
+            replayed = Applied(replayed, change, openable);
+        }
+
+        _files = replayed;
+        if (!IsOpen || _disposed)
+        {
+            return Task.CompletedTask;
+        }
+
+        var published = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
+        _rescanRankWaiters.Add((_rankGeneration + 1, published));
+        if (cancellation.CanBeCanceled)
+        {
+            CancellationTokenRegistration registration =
+                cancellation.Register(() => published.TrySetCanceled(cancellation));
+            _ = published.Task.ContinueWith(
+                _ => registration.Dispose(),
+                CancellationToken.None,
+                TaskContinuationOptions.ExecuteSynchronously,
+                TaskScheduler.Default);
+        }
+
+        ScheduleRefresh(silent: true);
+        return published.Task;
+    }
+
+    /// <summary>Settle every awaited replacement up to
+    /// <paramref name="generation"/>: published, or failed.</summary>
+    private void SettleRescanRankWaiters(int generation, Exception? failure)
+    {
+        if (_rescanRankWaiters.Count == 0)
+        {
+            return;
+        }
+
+        List<(int Generation, TaskCompletionSource Published)> settled =
+            [.. _rescanRankWaiters.Where(waiter => waiter.Generation <= generation)];
+        _ = _rescanRankWaiters.RemoveAll(waiter => waiter.Generation <= generation);
+        foreach ((_, TaskCompletionSource waiter) in settled)
+        {
+            _ = failure is null ? waiter.TrySetResult() : waiter.TrySetException(failure);
+        }
+    }
+
+    /// <summary>Test seam (W7-7 PR 7, F7): replaces the rank debounce, so
+    /// a fact can park a rank between its scheduling and its publication.</summary>
+    internal Func<CancellationToken, Task>? RankDelayForTests { get; set; }
+
     /// <summary>The paths Quick Open ranks over — for the rescan facts.</summary>
     internal IReadOnlyList<string> FilePathsForTests => [.. _files.Select(file => file.Path)];
 
@@ -302,9 +420,21 @@ internal sealed class QuickSwitcherViewModel : BindableBase, IDisposable
     /// PR 7, round 26). A rescan's delta rows carry core's own flag.</summary>
     private static bool IsOpenablePath(string path) => CoreDocumentClassification.IsOpenable(path);
 
-    public void Dispose() => CancelRanking();
+    public void Dispose()
+    {
+        _disposed = true;
+        CancelRanking();
+        // F7: a disposed switcher (a close, a vault switch) publishes no
+        // rank — a rescan awaiting one is settled, never left waiting.
+        SettleRescanRankWaiters(int.MaxValue, failure: null);
+    }
 
-    private void ScheduleRefresh()
+    /// <summary>Re-rank the current query. <paramref name="silent"/> — a
+    /// rescan's replacement (v2 §7) — keeps the published rows until the
+    /// new ones replace them, keeps the selected path when it survives, and
+    /// speaks neither the count nor a ranking failure: the rescan's one
+    /// sentence speaks for the run.</summary>
+    private void ScheduleRefresh(bool silent = false)
     {
         if (!IsOpen)
         {
@@ -313,9 +443,12 @@ internal sealed class QuickSwitcherViewModel : BindableBase, IDisposable
 
         if (_uiContext is null)
         {
+            int inline = ++_rankGeneration;
             ApplyRanked(
                 _rankTop(_files, Query, [.. _recents]),
-                Query);
+                Query,
+                inline,
+                silent);
             return;
         }
 
@@ -329,10 +462,14 @@ internal sealed class QuickSwitcherViewModel : BindableBase, IDisposable
         IsRanking = true;
         _rankingError = null;
         OnPropertyChanged(nameof(ResultSummary));
-        Results.Clear();
-        SelectedRow = null;
+        if (!silent)
+        {
+            Results.Clear();
+            SelectedRow = null;
+        }
+
         RaiseCommandStates();
-        RankCompletion = RankAsync(files, query, recents, generation, cancellation.Token);
+        RankCompletion = RankAsync(files, query, recents, generation, silent, cancellation.Token);
     }
 
     private async Task RankAsync(
@@ -340,11 +477,12 @@ internal sealed class QuickSwitcherViewModel : BindableBase, IDisposable
         string query,
         string[] recents,
         int generation,
+        bool silent,
         CancellationToken cancellationToken)
     {
         try
         {
-            await _rankDelay(cancellationToken);
+            await (RankDelayForTests ?? _rankDelay)(cancellationToken);
             SwitcherRankPage ranked = await _rankCoordinator.RankAsync(
                 () => _rankTop(files, query, recents),
                 cancellationToken);
@@ -356,7 +494,7 @@ internal sealed class QuickSwitcherViewModel : BindableBase, IDisposable
                         && IsOpen
                         && string.Equals(Query, query, StringComparison.Ordinal))
                     {
-                        ApplyRanked(ranked, query);
+                        ApplyRanked(ranked, query, generation, silent);
                     }
                 },
                 null);
@@ -376,22 +514,28 @@ internal sealed class QuickSwitcherViewModel : BindableBase, IDisposable
                         IsRanking = false;
                         _rankingError = "Quick Open could not rank files.";
                         OnPropertyChanged(nameof(ResultSummary));
-                        // W0.5-3 residue: Windows Quick Open engine failure copy.
-                        _announce(new A11yEvent.HostComposed(
-                            _rankingError,
-                            A11yPriority.High));
+                        if (!silent)
+                        {
+                            // W0.5-3 residue: Windows Quick Open engine failure copy.
+                            _announce(new A11yEvent.HostComposed(
+                                _rankingError,
+                                A11yPriority.High));
+                        }
+
                         RaiseCommandStates();
                         HostLog.Write(HostDiagnosticEvent.QuickOpenRankingFailed, exception);
+                        SettleRescanRankWaiters(generation, exception);
                     }
                 },
                 null);
         }
     }
 
-    private void ApplyRanked(SwitcherRankPage ranked, string query)
+    private void ApplyRanked(SwitcherRankPage ranked, string query, int generation, bool silent)
     {
         IsRanking = false;
         _rankingError = null;
+        string? keptPath = silent ? _selectedRow?.Path : null;
 
         TotalResults = ClampTotal(ranked.Total);
         Results.Clear();
@@ -405,12 +549,20 @@ internal sealed class QuickSwitcherViewModel : BindableBase, IDisposable
                 row.DisplayNameMatchSpans));
         }
 
-        _selectedRow = Results.FirstOrDefault();
+        _selectedRow = (keptPath is null
+                ? null
+                : Results.FirstOrDefault(row => string.Equals(row.Path, keptPath, StringComparison.Ordinal)))
+            ?? Results.FirstOrDefault();
         OnPropertyChanged(nameof(SelectedRow));
-        _announce(new A11yEvent.QuickSwitcherCount(
-            (uint)Math.Min(TotalResults, int.MaxValue),
-            query.Length == 0 ? null : query));
+        if (!silent)
+        {
+            _announce(new A11yEvent.QuickSwitcherCount(
+                (uint)Math.Min(TotalResults, int.MaxValue),
+                query.Length == 0 ? null : query));
+        }
+
         RaiseCommandStates();
+        SettleRescanRankWaiters(generation, failure: null);
     }
 
     internal static int ClampTotal(ulong total) =>

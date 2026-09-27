@@ -313,7 +313,7 @@ internal sealed partial class VaultLifecycleViewModel
         // (2) Re-synchronize the host from the index (AR-18's fallback):
         // every re-sync operation is awaited to its publication, and each
         // that fails counts one error in the sentence.
-        ulong failedOperations = await ReSyncFromIndexAsync(generation, reason, cancellation);
+        ulong failedOperations = await ReSyncFromIndexAsync(generation, reason, session, cancel, cancellation);
         if (generation != _generation || cancellation.IsCancellationRequested)
         {
             return;
@@ -336,42 +336,234 @@ internal sealed partial class VaultLifecycleViewModel
     }
 
     /// <summary>
-    /// AR-18's fallback: re-synchronize the host's surfaces from the index
-    /// after a scan, every one awaited to its publication, and return how
-    /// many operations failed (each counts in the sentence). The files tree
-    /// is wired; the rest of the re-sync follows contract R-9's design.
+    /// AR-18's fallback (contract R-9): re-synchronize every host surface
+    /// from the index after the scan — whoever indexed a change (this scan,
+    /// an earlier one, another Slate window or slate-cli), it is shown — and
+    /// return how many operations failed (each counts one error in the
+    /// sentence). Every operation is awaited to its publication, and none
+    /// speaks: the files tree (silent, <see cref="FilesSidebarViewModel.RefreshForRescanAsync"/>),
+    /// Quick Open (the index's openable documents, Slate writes replayed),
+    /// every open document (hash-compared, hash-conditioned reloads), then
+    /// the dependents once. Every core call runs through the rescan seam
+    /// with the run's native token; host-side checks read its managed twin.
+    /// A cancelled run (a close, a vault switch) stops wherever it is.
     /// </summary>
     private async Task<ulong> ReSyncFromIndexAsync(
         int generation,
         RescanReason reason,
+        VaultSession session,
+        CancelToken cancel,
         CancellationToken cancellation)
     {
+        Task<ulong> tree = ReSyncTreeAsync(reason, cancellation);
+        Task<ulong> quickOpen = ReSyncQuickOpenAsync(session, cancel, cancellation);
         ulong failed = 0;
+        if (Workspace is WorkspaceViewModel workspace)
+        {
+            failed += await ReSyncWorkspaceAsync(workspace, session, cancel, cancellation);
+        }
+
+        failed += await tree;
+        failed += await quickOpen;
+        return generation == _generation ? failed : 0;
+    }
+
+    /// <summary>The files tree, silently: its root-list and tag-tree
+    /// failures come back counted, never spoken.</summary>
+    private async Task<ulong> ReSyncTreeAsync(RescanReason reason, CancellationToken cancellation)
+    {
+        if (FileSidebar is not FilesSidebarViewModel sidebar)
+        {
+            return 0;
+        }
+
         try
         {
-            // The run's managed token reaches the tree read and its tag tree
-            // (F5): a cancel before or after the native TagTree call skips or
-            // discards the result.
-            await (FileSidebar?.RefreshAsync(
-                    reportCount: reason == RescanReason.Explicit,
-                    cancellation: cancellation)
-                ?? Task.CompletedTask);
+            return await sidebar.RefreshForRescanAsync(
+                reportCount: reason == RescanReason.Explicit,
+                cancellation);
+        }
+        catch (OperationCanceledException)
+        {
+            // Cancelled with nothing left to publish: a close, a vault
+            // switch, a shutdown — the run says nothing.
+            return 0;
+        }
+    }
+
+    /// <summary>
+    /// Quick Open (v2 §7): the index's openable documents, read in pages on
+    /// the seam with the run's token (<c>ListFiles</c> honours it), replace
+    /// its list — the Slate-owned changes applied meanwhile replayed onto
+    /// the pages — and an open switcher re-ranks silently, awaited to that
+    /// publication.
+    /// </summary>
+    private async Task<ulong> ReSyncQuickOpenAsync(
+        VaultSession session,
+        CancelToken cancel,
+        CancellationToken cancellation)
+    {
+        if (QuickSwitcher is not QuickSwitcherViewModel switcher)
+        {
+            return 0;
+        }
+
+        QuickSwitcherViewModel.ReplacementJournal journal = switcher.BeginReplacement();
+        try
+        {
+            SwitcherFile[] files = await RunRescanCoreAsync(
+                "list",
+                () => LoadSwitcherFiles(session, cancel, null));
+            if (cancellation.IsCancellationRequested || !ReferenceEquals(switcher, QuickSwitcher))
+            {
+                return 0;
+            }
+
+            await switcher.ReplaceFilesAsync(files, journal, cancellation);
+            return 0;
         }
         catch (OperationCanceledException) when (cancellation.IsCancellationRequested)
         {
-            // A close or a vault switch: nothing to count or say.
+            return 0;
+        }
+        catch (VaultException.Cancelled) when (cancellation.IsCancellationRequested)
+        {
+            return 0;
         }
         catch (Exception exception) when (exception is not OutOfMemoryException)
         {
-            if (generation == _generation)
+            HostLog.Write(HostDiagnosticEvent.VaultRescanFailed, exception);
+            return 1;
+        }
+        finally
+        {
+            switcher.EndReplacement(journal);
+        }
+    }
+
+    /// <summary>
+    /// The workspace: the index hashes of every document it shows, read in
+    /// chunks of at most <c>MaxIndexedHashPaths()</c> under the one token
+    /// (v2 §5), then the documents re-sync and the dependents follow.
+    /// </summary>
+    private async Task<ulong> ReSyncWorkspaceAsync(
+        WorkspaceViewModel workspace,
+        VaultSession session,
+        CancelToken cancel,
+        CancellationToken cancellation)
+    {
+        IReadOnlyList<string> paths = workspace.RescanPathsToHash();
+        IReadOnlyDictionary<string, WorkspaceViewModel.IndexedPath> indexed;
+        try
+        {
+            indexed = await RunRescanCoreAsync("hashes", () => ReadIndexedPaths(session, paths, cancel));
+        }
+        catch (VaultException.Cancelled) when (cancellation.IsCancellationRequested)
+        {
+            return 0;
+        }
+        catch (Exception exception) when (exception is not OutOfMemoryException)
+        {
+            // Without the hashes no document can be compared: one failure.
+            HostLog.Write(HostDiagnosticEvent.VaultRescanFailed, exception);
+            return 1;
+        }
+
+        if (cancellation.IsCancellationRequested || !ReferenceEquals(workspace, Workspace))
+        {
+            return 0;
+        }
+
+        try
+        {
+            WorkspaceViewModel.RescanDocumentsOutcome documents = await workspace.ReSyncOpenDocumentsAsync(
+                indexed,
+                path => ReadForRescanAsync(session, path, cancel),
+                cancellation);
+            ulong dependents = await workspace.ReSyncDependentsAsync(documents, indexed, cancellation);
+            return documents.Failed + dependents;
+        }
+        catch (OperationCanceledException) when (cancellation.IsCancellationRequested)
+        {
+            return 0;
+        }
+    }
+
+    /// <summary>The index hashes of <paramref name="paths"/>, chunked to
+    /// core's bound (v2 §5) — ON THE WORKER. A path with no index row is
+    /// also checked on disk, so an unindexed file that exists is never
+    /// marked missing.</summary>
+    private IReadOnlyDictionary<string, WorkspaceViewModel.IndexedPath> ReadIndexedPaths(
+        VaultSession session,
+        IReadOnlyList<string> paths,
+        CancelToken cancel)
+    {
+        var indexed = new Dictionary<string, WorkspaceViewModel.IndexedPath>(StringComparer.Ordinal);
+        int chunk = (int)Math.Max(1U, IndexedHashChunkForTests ?? SlateUniffiMethods.MaxIndexedHashPaths());
+        for (int start = 0; start < paths.Count; start += chunk)
+        {
+            string[] slice = [.. paths.Skip(start).Take(chunk)];
+            IReadOnlyList<string?> hashes = session.IndexedContentHashes(slice, cancel);
+            for (int index = 0; index < slice.Length; index++)
             {
-                HostLog.Write(HostDiagnosticEvent.VaultRescanFailed, exception);
-                failed++;
+                string? hash = hashes[index];
+                bool onDisk = hash is not null || OnDiskUnderThisSpelling(session, slice[index]);
+                indexed[slice[index]] = new WorkspaceViewModel.IndexedPath(hash, onDisk);
             }
         }
 
-        return failed;
+        return indexed;
     }
+
+    /// <summary>Test seam (v2 §5): a smaller hash chunk than core's bound,
+    /// so a fact proves the chunking without a thousand tabs as well.</summary>
+    internal uint? IndexedHashChunkForTests { get; set; }
+
+    /// <summary>Whether an entry exists at the vault-relative
+    /// <paramref name="path"/> UNDER THIS SPELLING — asked on the worker,
+    /// only for a path the index has no row for. Core's canonical path is
+    /// the spelling the filesystem stores (#1077): a case-only rename
+    /// outside Slate (<c>ghost.md</c> → <c>Ghost.md</c>) leaves the old
+    /// spelling "not on disk" even on a case-insensitive volume, so its tab
+    /// is marked missing and re-seated on the stored spelling.</summary>
+    private static bool OnDiskUnderThisSpelling(VaultSession session, string path)
+    {
+        try
+        {
+            return string.Equals(session.CanonicalPath(path), path, StringComparison.Ordinal);
+        }
+        catch (VaultException exception) when (exception is not VaultException.Cancelled)
+        {
+            // Unknown: never mark missing on a guess (contract I7).
+            return true;
+        }
+    }
+
+    /// <summary>A Markdown path's re-read for the re-sync — on the seam, off
+    /// the dispatcher, refused once the run is cancelled: its text and that
+    /// text's content hash (the index's hash function), or null when the
+    /// file cannot be read now (gone since the scan, locked).</summary>
+    private Task<WorkspaceViewModel.RescanRead?> ReadForRescanAsync(
+        VaultSession session,
+        string path,
+        CancelToken cancel) =>
+        RunRescanCoreAsync<WorkspaceViewModel.RescanRead?>("read", () =>
+        {
+            if (cancel.IsCancelled())
+            {
+                throw new VaultException.Cancelled();
+            }
+
+            try
+            {
+                string text = session.ReadText(path);
+                return new WorkspaceViewModel.RescanRead(text, SlateUniffiMethods.EditorTextContentHash(text));
+            }
+            catch (VaultException exception) when (exception is not VaultException.Cancelled)
+            {
+                return null;
+            }
+        });
 
     /// <summary>
     /// Start one rescan core call through the seam — refused if the seam
