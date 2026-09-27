@@ -10197,7 +10197,10 @@ the filter and the announcer's new `FireFilterLineNow` emits the
 filter line as the one arbiter before the landing posts (IG-42), and
 the A14 request — addressed to the owner captured at open, the tab
 the pane renders — posts at background priority so it runs only
-after the workspace has cleared the sheet; A14's own outcomes
+after the workspace has cleared the sheet (amended by W7-7 OD-12,
+contract 40: the workspace raises it in the SAME turn, right after it
+clears the sheet, so no input queued behind the Enter runs first and is
+undone by the jump; the shell's one landing entry holds it); A14's own outcomes
 (delivered, pending, dropped) are the landing's, and the invented
 synchronous failure arm is gone (IG-41). Delete unmarks the active
 row through the document's idempotent, spoken `Unmark`. A refused
