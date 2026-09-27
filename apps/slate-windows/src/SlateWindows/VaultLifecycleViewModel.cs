@@ -20,6 +20,24 @@ internal enum VaultCloseDecision
     Cancel,
 }
 
+/// <summary>#1280 (codex round 2a): what a workspace teardown decided — the
+/// caller speaks exactly one close line from it.</summary>
+internal enum WorkspaceTeardown
+{
+    /// <summary>The close was refused; the vault stays open.</summary>
+    Refused,
+
+    /// <summary>Nothing was left unsaved (a save the teardown settled may
+    /// have made it so).</summary>
+    Closed,
+
+    /// <summary>The user chose Save All and every note saved.</summary>
+    ClosedAllSaved,
+
+    /// <summary>The user chose to discard the unsaved edits.</summary>
+    ClosedChangesDiscarded,
+}
+
 /// <summary>
 /// Owns the Windows vault lifecycle. The active FFI session remains alive for
 /// the complete open-vault state; callbacks only enqueue work for the UI
@@ -396,10 +414,12 @@ internal sealed class VaultLifecycleViewModel
             return;
         }
 
-        if (!TryCloseWorkspace(out _))
+        WorkspaceTeardown teardown = TryCloseWorkspace();
+        if (teardown == WorkspaceTeardown.Refused)
         {
             return;
         }
+        AnnounceTeardownDecision(teardown);
 
         // P14: dismissed AFTER the cancellable gate, matching CloseVault.
         // Dismissing before it meant a refused close — a dirty-tab prompt
@@ -518,14 +538,16 @@ internal sealed class VaultLifecycleViewModel
             return;
         }
 
-        // #1280: the teardown speaks for a close that had to decide about
-        // unsaved edits (all saved, or discarded); every other close says
-        // "vault closed" — including one whose last edits were saved by a
-        // Ctrl+S the teardown settled first.
-        if (!TryCloseWorkspace(out bool closeAnnounced))
+        // #1280 (codex round 2a): exactly one close line, from what the
+        // teardown decided — all saved, discarded, or "vault closed" for a
+        // close with nothing left unsaved, including one whose last edits a
+        // Ctrl+S the teardown settled first had saved.
+        WorkspaceTeardown teardown = TryCloseWorkspace();
+        if (teardown == WorkspaceTeardown.Refused)
         {
             return;
         }
+        AnnounceTeardownDecision(teardown);
 
         // P14: the palette must never be open with no vault, or the
         // next vault open auto-presents it. Dismissed BEFORE the session
@@ -545,7 +567,7 @@ internal sealed class VaultLifecycleViewModel
         ProgressMaximum = 1;
         IsProgressIndeterminate = false;
         StatusText = "Vault closed.";
-        if (!closeAnnounced)
+        if (teardown == WorkspaceTeardown.Closed)
         {
             _announce(new A11yEvent.VaultClosed());
         }
@@ -560,7 +582,13 @@ internal sealed class VaultLifecycleViewModel
             return false;
         }
 
-        return TryCloseWorkspace(out _);
+        WorkspaceTeardown teardown = TryCloseWorkspace();
+        if (teardown == WorkspaceTeardown.Refused)
+        {
+            return false;
+        }
+        AnnounceTeardownDecision(teardown);
+        return true;
     }
 
     public void Dispose()
@@ -1197,21 +1225,36 @@ internal sealed class VaultLifecycleViewModel
     /// production event does.</summary>
     internal VaultSession? SessionForTests => _session;
 
-    private bool TryCloseWorkspace(out bool closeAnnounced)
+    private WorkspaceTeardown TryCloseWorkspace()
     {
-        closeAnnounced = false;
         if (_workspaceTeardownInProgress)
         {
-            return false;
+            return WorkspaceTeardown.Refused;
         }
         _workspaceTeardownInProgress = true;
         try
         {
-            return TryCloseWorkspaceCore(out closeAnnounced);
+            return TryCloseWorkspaceCore();
         }
         finally
         {
             _workspaceTeardownInProgress = false;
+        }
+    }
+
+    /// <summary>The line a teardown that had to decide about unsaved edits
+    /// speaks (#1280): all saved, or discarded. A close with nothing unsaved
+    /// says nothing here; <see cref="CloseVault"/> says "vault closed".</summary>
+    private void AnnounceTeardownDecision(WorkspaceTeardown teardown)
+    {
+        switch (teardown)
+        {
+            case WorkspaceTeardown.ClosedAllSaved:
+                _announce(new A11yEvent.VaultClosedAllSaved());
+                break;
+            case WorkspaceTeardown.ClosedChangesDiscarded:
+                _announce(new A11yEvent.VaultClosedChangesDiscarded());
+                break;
         }
     }
 
@@ -1224,19 +1267,20 @@ internal sealed class VaultLifecycleViewModel
     /// the admission runs in rounds and re-checks the admitted saves and the
     /// dirty tabs after any frame before it answers. Every save admitted
     /// before the prompt settles before the dirty state is evaluated, so the
-    /// prompt asks about what is really unsaved and no admitted write lands
-    /// after the user chose Discard; the session is disposed only after
+    /// prompt asks about what is really unsaved; Discard is accepted only for
+    /// exactly the dirty tabs, items and edits read before the prompt opened,
+    /// with no save pending (codex round 2a) — anything that changed while it
+    /// was up is asked about again. The session is disposed only after
     /// <see cref="WorkspaceViewModel.Dispose"/> has joined every save worker.
     /// </summary>
-    private bool TryCloseWorkspaceCore(out bool closeAnnounced)
+    private WorkspaceTeardown TryCloseWorkspaceCore()
     {
-        closeAnnounced = false;
         if (FileSidebar?.CancelTreeRefresh() == true)
         {
             ReportTerminalStatus(
                 "File tree refresh cancellation requested. Close the vault again after the current directory read finishes.",
                 A11yPriority.Medium);
-            return false;
+            return WorkspaceTeardown.Refused;
         }
 
         if (FileSidebar?.IsExpandingLoaded == true || FileSidebar?.IsLoadingChildren == true)
@@ -1246,7 +1290,7 @@ internal sealed class VaultLifecycleViewModel
             ReportTerminalStatus(
                 "Folder expansion cancellation requested. Close the vault again after the current directory read finishes.",
                 A11yPriority.Medium);
-            return false;
+            return WorkspaceTeardown.Refused;
         }
 
         if (FileSidebar?.IsImporting == true)
@@ -1255,7 +1299,7 @@ internal sealed class VaultLifecycleViewModel
             ReportTerminalStatus(
                 "Import cancellation requested. Close the vault again after completed copies finish reconciling.",
                 A11yPriority.Medium);
-            return false;
+            return WorkspaceTeardown.Refused;
         }
 
         if (FileSidebar?.CancelFilter() == true)
@@ -1263,7 +1307,7 @@ internal sealed class VaultLifecycleViewModel
             ReportTerminalStatus(
                 "File filter cancellation requested. Close the vault again after the current query finishes.",
                 A11yPriority.Medium);
-            return false;
+            return WorkspaceTeardown.Refused;
         }
 
         bool savedAll = false;
@@ -1275,25 +1319,23 @@ internal sealed class VaultLifecycleViewModel
             {
                 if (!settling.SettleSaves())
                 {
-                    return false;
+                    return WorkspaceTeardown.Refused;
                 }
                 continue;
             }
 
-            if (Workspace?.HasDirtyTabs != true)
+            if (Workspace is not WorkspaceViewModel workspace || !workspace.HasDirtyTabs)
             {
-                if (savedAll)
-                {
-                    _announce(new A11yEvent.VaultClosedAllSaved());
-                    closeAnnounced = true;
-                }
-                return true;
+                return savedAll ? WorkspaceTeardown.ClosedAllSaved : WorkspaceTeardown.Closed;
             }
 
+            // What the prompt asks about, read BEFORE it opens.
+            IReadOnlyList<(WorkspaceTabViewModel Tab, WorkspaceItemState Item, long Revision)> asked =
+                workspace.DirtyTabsForPrompt();
             VaultCloseDecision decision = _confirmUnsavedClose();
             if (decision == VaultCloseDecision.Cancel)
             {
-                return false;
+                return WorkspaceTeardown.Refused;
             }
 
             if (decision == VaultCloseDecision.SaveAll)
@@ -1303,7 +1345,7 @@ internal sealed class VaultLifecycleViewModel
                     ReportTerminalStatus(
                         "Vault remains open because one or more notes could not be saved.",
                         A11yPriority.High);
-                    return false;
+                    return WorkspaceTeardown.Refused;
                 }
                 // Save All pumped: an edit typed or a tab opened meanwhile is
                 // caught by the next round, never dropped.
@@ -1311,26 +1353,22 @@ internal sealed class VaultLifecycleViewModel
                 continue;
             }
 
-            // Discard. A save admitted while the prompt was up would land
-            // after the choice: settle it and ask again instead.
-            if (Workspace is WorkspaceViewModel discarding && !discarding.SavesIdle)
+            // Discard: accepted only for exactly what was asked about, with
+            // nothing pending. A save admitted, or an edit made, while the
+            // prompt was up settles and is asked about again.
+            if (Workspace is not WorkspaceViewModel discarding
+                || !discarding.SavesIdle
+                || !discarding.DirtyTabsStill(asked))
             {
-                if (!discarding.SettleSaves())
-                {
-                    return false;
-                }
                 continue;
             }
-
-            _announce(new A11yEvent.VaultClosedChangesDiscarded());
-            closeAnnounced = true;
-            return true;
+            return WorkspaceTeardown.ClosedChangesDiscarded;
         }
 
         ReportTerminalStatus(
             "Vault remains open because one or more notes could not be saved.",
             A11yPriority.High);
-        return false;
+        return WorkspaceTeardown.Refused;
     }
 
     private void FileSidebar_OpenTargetRequested(
