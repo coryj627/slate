@@ -1204,8 +1204,8 @@ internal sealed class CanvasDocumentViewModel : PanelWorkScheduler
     public IReadOnlyList<CanvasOutlineRow> FilteredOutline => Filter.Rows;
 
     /// <summary>
-    /// THE visual board's reading order — the one source every consumer
-    /// that walks or lands on the board reads (R-12 follow-up #1270).
+    /// THE visual board's reading order — the one source a walk of, or a
+    /// landing on, the board is to read (R-12 follow-up #1270).
     /// </summary>
     /// <remarks>
     /// Every card the board draws, in core's reading order (the order of
@@ -1215,9 +1215,9 @@ internal sealed class CanvasDocumentViewModel : PanelWorkScheduler
     /// outline narrows by (<see cref="CanvasFilterView.MatchedIds"/>) —
     /// contract 34 D4: the visual arm renders the full scene and the needle
     /// only dims. The board's Down/Up walk it
-    /// (<c>CanvasNavigator.MoveThroughTheScene</c>); a landing on the board
-    /// that must pick a card with the needle matching nothing picks from
-    /// it too, so the board has one order, not two.
+    /// (<c>CanvasNavigator.MoveThroughTheScene</c>). A landing on the board
+    /// that falls back to the board's first card (W7-7 R-10) is to take
+    /// the first stop here, so the board has one order, not two.
     /// <see cref="FilteredOutline"/> stays the order of the palette's Next
     /// and Previous Card and of the outline and table.
     /// </remarks>

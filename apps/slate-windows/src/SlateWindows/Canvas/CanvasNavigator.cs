@@ -1160,8 +1160,8 @@ internal sealed class CanvasNavigator
     /// show only what the needle kept. A canvas with no cards at all keeps
     /// the empty canvas's sentence — a needle cannot empty the board. The
     /// order is the document's ONE board order,
-    /// <see cref="CanvasDocumentViewModel.SceneReadingOrder"/>, which a
-    /// landing on the board reads too.
+    /// <see cref="CanvasDocumentViewModel.SceneReadingOrder"/>, the order a
+    /// landing on the board is to read too.
     /// </remarks>
     private void MoveThroughTheScene(int offset)
     {
