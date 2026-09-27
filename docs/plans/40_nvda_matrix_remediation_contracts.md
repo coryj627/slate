@@ -4,7 +4,7 @@ Scope: [W7-7 executable spec](18_windows_port/specs/w7_7_nvda_matrix_remediation
 
 ## Contracts
 
-**R-1 — Announcements reach a listening client from the first frame (PR 1, #1244).** The one production raiser (`AccessibilityNotificationDispatcher.cs`, contract 38 D-2) raises through `AutomationInteropProvider.RaiseAutomationEvent(AutomationElementIdentifiers.NotificationEvent, provider, NotificationEventArgs)` with the status element's connected peer provider (`AutomationPeer.ProviderFromPeer`; the HWND host provider raised without error and delivered nothing, so it is not used), guarded by `AutomationInteropProvider.ClientsAreListening` — and, because UIA's advise of the process lands after the launch lines are raised, a monotonic UI-thread state machine queues only while unready (no listening client, no connected provider, or a connected provider still waiting — up to 3 s — for the Notification advise), drains the queue once in order when readiness first holds, then raises every later line through the same readiness branch (`Done` is launch bookkeeping only: a conjunct regressing after it queues again and restarts the poll); the launch phase expires after 30 s without a drain into an `Expired` state that keeps the queue-only-while-unready rule — readiness is the same predicate in every state (a listening client, a connected provider, and the Notification advise in WPF's map or 3 s since the connection without it — measured on the branch: a drain between the connection and the advise lost every line, a drain after it delivered every line, and a client that never advises still hears its lines at the bound), the ≈ 250 ms readiness poll runs whenever lines are queued and readiness is false and stops when the queue empties, and each queued line expires 30 s after its own post, never a wholesale clear — and the queue keeps the last 16 lines (OD-7); the state machine and provider are one per window — production grids receive the window's announcer by injection and the census rejects an independent production dispatcher — so every line is delivered exactly once, never twice. Evidence: WPF's `RaiseNotificationEvent` is gated on `EventMap.HasRegisteredEvent(Notification)`, a process-static map populated only by `ElementProxy.AdviseEventAdded`; the 2026-09-22 record shows the map stays empty until a popup HwndSource appears. Planned witness: `AnnouncementSeamCensus` (the raise shape and the provider at the replay boundary; no `RaiseNotificationEvent` in authored code — the census owns the gated-call mutation), the hosted state-machine facts with exact counts, and the FlaUI journey `Announcements_ReachADesktopScopedListenerFromLaunch` (desktop-root subscription created before launch; the exact launch tuple sequence and "Right pane hidden." each received exactly once without a menu having opened; mutation: replay disabled or the transition never flipping).
+**R-1 — Announcements reach a listening client from the first frame (PR 1, #1244).** The one production raiser (`AccessibilityNotificationDispatcher.cs`, contract 38 D-2) raises through `AutomationInteropProvider.RaiseAutomationEvent(AutomationElementIdentifiers.NotificationEvent, provider, NotificationEventArgs)` with the status element's connected peer provider (`AutomationPeer.ProviderFromPeer`; the HWND host provider raised without error and delivered nothing, so it is not used), guarded by `AutomationInteropProvider.ClientsAreListening` — and, because UIA's advise of the process lands after the launch lines are raised, a monotonic UI-thread state machine queues only while unready (no listening client, no connected provider, or a connected provider still waiting — up to 3 s — for the Notification advise), drains the queue once in order when readiness first holds, then raises every later line through the same readiness branch (`Done` is launch bookkeeping only: a conjunct regressing after it queues again and restarts the poll); the launch phase expires after 30 s without a drain into an `Expired` state that keeps the queue-only-while-unready rule — readiness is the same predicate in every state (a listening client, a connected provider, and the Notification advise in WPF's map or 3 s since a listening client and a connected provider were both present without it, the hold reset whenever either is absent — measured on the branch: a drain between the connection and the advise lost every line, a drain after it delivered every line, and a client that never advises still hears its lines at the bound), the ≈ 250 ms readiness poll runs whenever lines are queued and readiness is false and stops when the queue empties, while a pair is held and nothing is queued a 1 s epoch watch runs the same check so that a sole reader's absence resets the hold even when the app is idle (codex PR 1 round 5), and each queued line expires 30 s after its own post, never a wholesale clear — and the queue keeps the last 16 lines (OD-7); the state machine and provider are one per window — production grids receive the window's announcer by injection and the census rejects an independent production dispatcher — so every line is delivered exactly once, never twice. Evidence: WPF's `RaiseNotificationEvent` is gated on `EventMap.HasRegisteredEvent(Notification)`, a process-static map populated only by `ElementProxy.AdviseEventAdded`; the 2026-09-22 record shows the map stays empty until a popup HwndSource appears. Planned witness: `AnnouncementSeamCensus` (the raise shape and the provider at the replay boundary; no `RaiseNotificationEvent` in authored code — the census owns the gated-call mutation), the hosted state-machine facts with exact counts, and the FlaUI journey `Announcements_ReachADesktopScopedListenerFromLaunch` (desktop-root subscription created before launch; Slate launched as a census instance under the test-only launch switch that holds the status provider absent for 3 s after the first frame, so every run queues and drains; the exact launch tuple sequence and "Right pane hidden." each received exactly once without a menu having opened; mutation: replay disabled or the transition never flipping).
 
 **R-2 — Keyboard selection never takes focus out of the Files tree (PR 2, #1245).** A selection-driven open (tree arrows, filter results, dual pane) opens the note with `requestEditorFocus: false`; `FocusedRegion()` stays `Files`. Enter opens the selected row and moves focus into the note; Ctrl+Enter opens it in a new tab; Space toggles the focused row's batch check box and the row's `ItemStatus` reflects it (a consumed no-op on a row without one); the check box is `Focusable="False"`. A selection-driven open targets the group's one transient tab (replaced while clean; promoted permanently on its first dirty transition) and never replaces any other tab; selecting a note already open in a permanent tab activates it and preserves the transient tab; Ctrl+Enter activates the note's permanent tab when it has one (a transient twin beside it stays transient), else makes its transient tab permanent, or opens one. The three keys are routed from the focused row container, never from "the tree has focus": inside the inline rename box Enter commits and Escape cancels the rename, and the same Enter/Ctrl+Enter serve the filter-results and dual-pane lists. The three gestures are chord rows (`windows.filesTree.*`) and the tree's help is composed from them (contract 39 N-1/N-3). Evidence: `FilesSidebarViewModel.cs:555–586`, `WorkspaceViewModel.cs:2044` (`OpenPathCore(requestEditorFocus)`), `WorkspaceTemplates.xaml:31–36`. Planned witness: unit facts on the setter and the open commands; FlaUI `FilesTree_ArrowsKeepFocusEnterOpens`.
 
@@ -46,10 +46,12 @@ Scope: [W7-7 executable spec](18_windows_port/specs/w7_7_nvda_matrix_remediation
 - **AR-17 (owner decision, 2026-09-26):** `W77RemediationDocsCensus` fixes the review routing as a registry of exact heading strings — a contract, spec-section or record heading either equals its registered text or the census fails — and reads nothing else about ownership from prose: what a contract's body says beside its heading is not policed. Thirty codex rounds showed a Markdown parser can always be fed one more formatting variant (rounds 17–30 spent fourteen findings on it); the registry has no such surface, and a foreign reference in prose cannot change where a review is routed.
 - **AR-18 (owner decision, 2026-09-26):** PR 7's reconciliation design (§8.2 e–h, R-9) is validated by the review of its implementation and tests, not by further prose rounds. Rounds 23–30 each found a real interaction in a design that had grown by accretion to seven times its first draft; the remaining questions are answered by code, with the locked contracts (05 in particular) in that review's scope. If the implementation review shows the retained-generation ledger cannot be made correct, the fallback is the simpler model: serialize the rescan's reconciliation against Slate-owned writes and re-synchronize the host from the index on a retry.
 - **AR-19 (merged-PR audit, 2026-09-26):** the command registry's `list()` and `palette_sections` return the whole authored command catalog and every matching row without paging. Locked decision 05's paging rule (:1492) governs vault operations — files, metadata, operation-log entries, anything that scales with user data; the palette's inputs scale with the authored command set the build fixes, so the lists are bounded by construction. Recorded, not paged. The palette's UI-thread ranking is a separate, real §4.1 violation (#1275).
+- **AR-21:** PR 1's 3 s timeout drain is the primary delivery path for NVDA, not only a fallback. With NVDA 2026.2 as the only client, 18 of 20 quiet fresh launches drained on the hold, 3.0–4.4 s after the first frame. These were the two 2026-09-26 spec §2.5 agent runs: WPF's Notification advise arrived in none of the 10 before the activity-ID fix and in 2 of the 10 after it. Its delivery is evidenced by those runs, in which every hold-drained line after the fix was heard, and by the replay experiment (7 of 7 raises heard with WPF's map empty), and by no deterministic journey: a never-advised client cannot be forced from a desktop-root listener, whose own subscription is what advises. The journey logs `drained=advise|timeout` per run, so a timeout-drained run is visible in the shell gate's output, and its exact-sequence assertion does not depend on the drain kind, so a run that drains on timeout and hears nothing is a gate failure to triage, never a silent pass (codex PR 1 round 3).
+- **AR-27:** PR 1's advise hold restarts per process, not per reader. The hold (`_pairedSince`) sees UIA's aggregate `ClientsAreListening` and the status provider, and readiness reads WPF's process-wide Notification map. So when another UIA client (a second screen reader, an automation tool) keeps listening while a reader restarts, neither input goes absent and the hold does not restart. A line raised in the restarted reader's gap before its own advise can be lost to it; every later line reaches it. It takes three things at once — another client listening throughout, a reader restart, and a line in that gap — and UIA gives a provider no per-client signal to hold on (codex PR 1 round 4). For the same reason the epoch is sampled, not signalled: a sole reader absent for less than the running check's cadence (250 ms while lines wait, the 1 s epoch watch while idle) is not seen leaving, and its successor inherits the hold. A reader restart is a new process registering, which takes longer than that (codex PR 1 round 5; the PR 1 record's state model).
 - **AR-13:** `W77RemediationDocsCensus` normalizes leading-zero identifiers and does not pin the displayed section ordinals; the mapping, duplicate and malformed-heading checks are its purpose.
 - **AR-14:** PR 9's palette journey checks the on-screen selection only until its announcement leg lands with PR 1's listener; the hosted exact-one replacement-selection fact is the behavioural oracle meanwhile.
 - **AR-11:** `W77RemediationDocsCensus` reads the two documents as text: a fenced-code heading or negated prose mentioning `R-n` would count; neither document carries either, and a fenced heading would still have to match the strict form.
-- **OD-7 (2026-09-24):** replay on advise — the dispatcher queues only while UIA has not advised the process and drains the queue once, in order, on the first advise (PR 1's arbiter and an NVDA fresh-launch run showed the ungated raise alone loses the launch lines); the transient-window and accept-the-residual options were declined. **AR-12:** a process whose client never connects the status provider within the 30 s launch phase keeps its launch lines lost (as today), and a client that connects but never advises hears them only after the 3 s hold; the queue keeps the last 16 lines.
+- **OD-7 (2026-09-24):** replay on advise, amended to replay on readiness — the dispatcher queues only while the process is unready and drains the queue once, in order, when readiness first holds (PR 1's arbiter and an NVDA fresh-launch run showed the ungated raise alone loses the launch lines). As amended 2026-09-26 by PR 1's measurements (R-1), readiness is the hybrid predicate: a listening client and a connected status provider, plus either UIA's Notification advise or the bounded 3 s hold of that client and provider present together without it — the hold is NVDA's primary path (AR-21). The transient-window and accept-the-residual options were declined. **AR-12:** a process whose client never connects the status provider within the 30 s launch phase keeps its launch lines lost (as today), and a client that connects but never advises hears them only after the 3 s hold; the queue keeps the last 16 lines.
 - **OD-5 (2026-09-23, defaults amendable at review):** board Right/Left follow connections; the conflict sentence reuses mac's wording minus the dialog clause; #1257 is a checklist correction plus a composed hint; the scan-finished copy states both counts; #1244 is fixed at the raise call, not with a transient window.
 - **AR-1:** the FlaUI desktop-root subscription (an `IUIAutomation6` handler group registered before launch) is itself advised asynchronously and was silent in some runs; the journey ships in the shell gate only when 6/6 stable on the final build, otherwise as a manual-trait journey with recorded counts, the hosted state-machine facts and the census being the gate evidence (spec §2.4–2.5).
 - **AR-2:** mac does not post the five new popover/sheet variants in this wave; the corpus mirrors them and the mac owner decides.
@@ -408,7 +410,185 @@ Fixes: the docs PR's thirty-first commit (8a056036).
 
 ### PR 1 — #1244 announcements from launch
 
-(pending)
+Branch `claude/w7-7-pr1-notifications` (rebased onto 8193489b; delivery rounds `delivered_pr1_r3`–`r11`). Delivered: R-1:
+- **The raise.** It goes through `AutomationInteropProvider.RaiseAutomationEvent(NotificationEvent, …)` on the status element's connected peer provider, never WPF's gated `RaiseNotificationEvent`. `AnnouncementSeamCensus` pins the raise shape and rejects the gated call.
+- **Readiness, the hybrid (OD-7).** One predicate holds in every phase: a listening client, a connected provider, and either the Notification advise in WPF's map or 3 s of that client and provider present together without it. While unready, a line is only queued. The queue keeps the last 16, the 250 ms UI-thread poll runs while lines wait, a 1 s epoch watch runs the same check while a pair is held and nothing is queued, and each line expires 30 s after its own post. The drain runs once, in order, and logs `drained=advise|timeout`. `Done` and `Expired` are bookkeeping only.
+- **One dispatcher per window.** Grids post through it.
+- **Activity IDs follow the processing (contract 38 D-1).** Every All line carries `slate-accessibility-announcement.<n>` from the dispatcher's monotonic sequence. Every superseding (High) line keeps the shared ID.
+- **Diagnostics.** Under `SLATE_UIA_DIAGNOSTICS=1` the listener state, the provider state and each drain are logged once per change.
+
+Witnesses:
+- **The hosted facts** (`AccessibilityNotificationDispatcherTests`, 34; the timer facts pump production's own `DispatcherTimer`s and never call the check).
+- **`AnnouncementSeamCensus`** (10). With the hosted facts that makes 44.
+- **The shell-gate journey `Announcements_ReachADesktopScopedListenerFromLaunch`.** Slate is launched as a census instance under the census-only switch `SLATE_TEST_ANNOUNCEMENT_QUEUE_MS` (`LaunchSeams.WithTestLaunchQueue`, inert in production), so every run's first line finds the provider absent and queues. A desktop-root listener registered before launch hears the exact launch sequence — drained exactly once — and "Right pane hidden.", with no menu opened, each line under its own ID. With the replay disabled it fails every run.
+- **Two quiet-desktop NVDA 2026.2 fresh-launch runs** (spec §2.5; the W7-2 checklist and the F1 row).
+
+**Round 1 (2026-09-23; codex adversarial review of the pushed branch).** `needs-attention`, one finding, taken (a4d0c757). Every queue fact posted while a client was still listening. A no-client early return in `Post` would therefore have discarded the launch lines of a screen reader started after Slate while every fact stayed green. The fix is `LinesPostedBeforeAnyClientListensAreQueuedForAReaderStartedLater` (mutation `earlyreturn`, which fails it and five other facts).
+
+**Round 2.** `needs-attention`, two findings, both taken (b4517821):
+1. The unadvised path short-circuited before `_launch.Connected()`, so the first provider state was never logged. Every input is now asked on every check, never short-circuited (`TheFirstUnadvisedCheckRecordsTheProviderStateBeforeTheDrain`; mutation `shortcircuit`).
+2. The 30 s launch window counted from `MainWindow`'s construction, not its first frame. The clock starts at `ContentRendered` (`TheLaunchWindowStartsAtTheFirstFrameNotAtConstruction`; mutation `clockatconstruction`).
+
+The spec review's OD-7 precisions (its rounds 18–20) landed in the same commits:
+- One readiness predicate in every state, with `Done` as bookkeeping only.
+- An `Expired` launch that still queues while unready.
+- Per-line expiry, never a wholesale clear.
+- The poll tied to queue occupancy.
+
+Mutations: `unconditionalafterdone`, `skiponnullprovider`, `stoppollatexpiry`, `noperlinebound`, `raiselate`, `wholesaleclear`, `deadlinefromlaunch`, `pollforever`.
+
+**Round 3 (2026-09-26).** Before this round, measurement reshaped readiness (owner decisions, 2026-09-26):
+- **Advise dropped as a gate.** The replay experiment heard 7 of 7 raises with WPF's map empty, so the advise was dropped as a delivery gate, leaving two conjuncts (e7b00711).
+- **The hybrid.** The two-conjunct journey then passed 5/6 twice, losing every line raised between the connection and the advise. So the hybrid holds for the advise or 3 s (35b84275), with facts a–d:
+  - `AProviderThatConnectsFirstHoldsTheQueueUntilTheAdvise`
+  - `AProviderThatIsNeverAdvisedDrainsThreeSecondsAfterItConnects`
+  - `LinesPostedDuringTheHoldAreQueuedAndNoneIsRaised`
+  - `AHoldThatRunsOutWhileAClientListensDeliversAndSaysSo`
+  - Mutations: `drophold`, `droptimeout`.
+- **The journey returned to the shell gate** at 6/6 and 6/6 (AR-1; c8e49f86). The three-conjunct variant had passed 6/6 four times and 5/6 twice.
+
+The round itself: `needs-attention`, three findings.
+1. **A stale hold across a reader restart. Taken** (3f0b95bf). The hold epoch is a listening client and a connected provider present together, reset whenever either is absent (`ARestartedReaderWaitsForItsOwnAdviseNotTheOldHold`; mutations `holdprovideronly`, `holdnorestart`). Its per-process limit is AR-27.
+2. **The timeout drain's delivery had no deterministic witness. Ruled an accepted risk** (AR-21; ea687390). A never-advised client cannot be forced from a desktop-root listener. The journey's exact-sequence assertion was confirmed unconditional on the drain kind.
+3. **The spec §2.5 NVDA fresh-launch run was missing. Taken; it took five delivery rounds.**
+   - The first 10 launches never gave Slate the foreground, so NVDA voiced nothing (a harness artifact). One caption click fixed that, after the DPI-unaware point check was corrected.
+   - With Slate in the foreground, other agents' test hosts flooded NVDA's log. The coordinator opened a quiet window.
+   - On the quiet desktop NVDA received 2 of the 4 launch lines in 10 of 10 launches: vault-open 10/10, one scan line 10/10, the editor-pane line 0/10.
+   - The cause is NVDA's UIA rate limiter (nvdaHelper `UIAEventLimiter`, `RateLimitedEventHandler::queueEvent`). It coalesces notifications by sender, event, kind, processing and activity ID; its reference-bound iterator erases the newer record. All four lines shared one key.
+   - Owner decision: replayed lines get distinct activity IDs (5fe07b9c). The post-fix quiet rerun heard and spoke all four lines in 10 of 10 launches (an earlier post-fix attempt reached 9 of 10, its one miss inside another agent's flood), so F1 was marked fixed (c2a62503).
+   - AR-21 was rewritten: with NVDA alone the advise arrived in 2 of 20 quiet launches, so the hold is NVDA's primary delivery path (d9dadb92).
+   - An NV Access issue draft (both defects, a repro, the workaround) went to the owner, not filed.
+
+**Round 4 (2026-09-27).** `needs-attention`, one blocker and two notes, all taken (bd1518e5, 78884733):
+1. **The blocker.** A launch ready at its first line raised its lines back to back under the shared ID, the burst NVDA coalesces. The unit witness posted two lines, and the journey relaunched until a launch queued.
+   - The activity ID now follows the processing, never the path: every All line carries the dispatcher's next sequence ID, queued or not, and a High line keeps the shared ID. `.replay.<n>` is gone.
+   - Facts: `LinesRaisedWhileReadyCarryTheirActivityIdByProcessing` (three Medium lines raised while ready get three distinct IDs in order; a High line gets the shared ID) and `ADrainRaisesEachQueuedPoliteLineUnderItsOwnActivityId` (the sequence runs across both paths and a second drain).
+   - Mutations: `readyshared` (the coordinator's), `drainshared`, `sequenceperdrain`, `sequencestuck`, `highgetssequence`, `politeshared`.
+   - The journey keeps one launch on whichever path it takes and asserts the exact sequence with IDs `.1`–`.N`.
+   - Contract 38 D-1, D-2 and A-1 and the W-C matrix state the rule.
+2. **The restart hold is per process when another client keeps listening** — AR-27, and D-2 was narrowed to match.
+3. **This record.**
+
+The branch was then rebased onto 8193489b: `w_c_matrix.md` was hand-merged row by row, and the bindings were regenerated for main's Rust.
+
+**Round 5 (2026-09-27).** `needs-attention`, two highs, both taken (36c029be). The activity-ID rule passed.
+1. **An idle sole-reader restart reused the previous reader's hold.**
+   - The epoch resets only when a check sees the client or the provider absent. Checks ran only on a post or while lines were queued, so a sole reader that quit and restarted while nothing was queued left the old epoch standing, and the next line skipped the new reader's hold.
+   - This was the fourth round with a blocker in the readiness and hold subsystem (rounds 1, 2, 3 and 5), so it got a design pass rather than a patch: the state model below, with the fix derived from it.
+   - The fix, a 1 s epoch watch, runs the same check while a pair is held and nothing is queued.
+   - Facts:
+     - `AnIdleSoleReaderRestartStartsAFreshHold` (deterministic: drained and idle; the watch sees the sole reader leave, clears the epoch and stops; the reader returns; the next line is held afresh and queued).
+     - Its production-timer twin, `AnIdleReaderRestartIsSeenByTheWatchOnProductionsTimer`.
+     - `AProcessNoClientListensToRunsNoWatch` (the cost row).
+   - Mutations: `nowatch`, `watchnoop`, `watchforever`, `watchalways`, `watchunpaired`.
+   - `ARestartedReaderWaitsForItsOwnAdviseNotTheOldHold`, which posts while the reader is absent, stays as the witness for that row.
+2. **The journey could pass with the replay deleted** (R-1 §2.4, AR-1): it kept a launch that happened to be ready at its first line.
+   - Every run now takes the drain path, through a test-only launch switch that follows the host's census precedent (`--census-log-probe`, `ReadingSurface.CensusDiag`). `LaunchSeams.WithTestLaunchQueue` holds the status provider absent for `SLATE_TEST_ANNOUNCEMENT_QUEUE_MS` after the first frame, and only under `SLATE_CENSUS_INSTANCE_ID`; otherwise the seams come back unchanged.
+   - `TheTestLaunchQueueSwitchIsInertOutsideACensusInstance` pins inertness, and `AnnouncementSeamCensus` pins `ForProduction`'s only wrapper. Mutations: `switchnocensus`, `switchor`.
+   - The journey asserts that the first line found the provider absent and that exactly one drain followed. It passed 6/6; with the replay disabled it failed 3/3, and with the transition never flipping 2/2. Each unmutated run drained four lines about 3.1 s after the first frame and heard `.1`–`.5`.
+   - The ready-at-first-line path stays with the hosted facts.
+
+**Round 6 (2026-09-27, on a0da7fa3).** `approve` — "Ship: no blocker"; the forced-queue journey discriminates against replay removal, and the readiness/watch implementation matches its state model. The sub-cadence restart (a sole reader absent for less than the running check's cadence) was ruled accepted AR-27 residue, as AR-27 now records. Five low documentation notes, all fixed, docs only:
+1. OD-7 described advise-only draining; it now states the hybrid predicate (a client and a provider, plus the advise or the bounded 3 s hold), with its label intact.
+2. This record's summary stopped at round 10, 30 dispatcher facts and a journey on "whichever path"; it now reads round 11, 34 dispatcher and 10 census facts, and the census-only forced-queue journey.
+3. The W7-2 checklist's journey paragraph now describes the round-11 journey: the forced queue named, 6/6, replay disabled 0/3.
+4. Spec §2.3 item 6 promised a hosted-grid fallback dispatcher that no longer exists. It now says a grid in no Slate window is silent and hosted tests inject `Announce`.
+5. The W-C matrix's Windows scan-progress guard read 350 ms; it is 2.5 s per contract 38 D-4 (mac keeps 350 ms). Both of the matrix's journey citations name the forced queue.
+
+**The hold's state model (round 5).**
+
+*Inputs, sampled only at a check:* L (UIA's aggregate `ClientsAreListening`), P (the status provider connected), A (WPF's Notification advise) and t (the first-frame clock).
+
+*The epoch E (`_pairedSince`):*
+- Set at the first check that sees L∧P while it is unset.
+- Unset by any check that sees ¬L or ¬P. That is its only reset.
+- Readiness is L ∧ P ∧ (A ∨ t − E ≥ 3 s).
+
+*When checks run:*
+- Every post.
+- The 250 ms queue poll, exactly while lines are queued.
+- The 1 s epoch watch, exactly while E is set and nothing is queued.
+
+*The invariant (new):* whenever E is set, some periodic check runs. So any absence of the client or the provider longer than the running cadence resets E. When E is unset, nothing runs for it: the next pairing is first seen by a check and its hold starts there — late, never early.
+
+*The watch:*
+- It stops when the pair breaks, when lines queue (the poll takes over), and with the dispatcher (a `DispatcherTimer` ticks only through it).
+- It never runs for a process no client listens to.
+- Each tick is one check: UIA's flag, the map lookup and the peer's provider lookup.
+
+*Residuals:*
+1. An absence shorter than the running cadence is not seen (AR-27).
+2. Another client listening throughout a restart (AR-27).
+3. The first line after a reader starts can wait out its hold even when the reader registered earlier — late, not lost.
+
+The rows, with their witnesses:
+
+| From | Event | Result | Witness |
+|---|---|---|---|
+| U0 (E unset, nothing queued) | post; ¬L or ¬P | queued; poll starts | `LinesPostedBeforeAnyClientListensAreQueuedForAReaderStartedLater`; `earlyreturn` |
+| U0 | post; L∧P∧A | E = t; raised; watch starts | `AProcessReadyAtItsFirstLineRaisesEveryLineAtOnce` |
+| U0 | post; L∧P, ¬A | E = t; queued for the hold | `LinesPostedDuringTheHoldAreQueuedAndNoneIsRaised`; `AnIdleSoleReaderRestartStartsAFreshHold` |
+| U0 | an input changes, no post | nothing runs | `AProcessNoClientListensToRunsNoWatch`; `watchunpaired` |
+| U1 (E unset, queued) | poll tick; L∧P | E = t; the hold starts | `AProviderThatConnectsFirstHoldsTheQueueUntilTheAdvise`; `drophold`, `droptimeout` |
+| U1 | a line's own deadline | dropped; the poll stops when the queue empties | `AQueuedLineIsDroppedThirtySecondsAfterItsPostNeverRaisedLate`; `noperlinebound`, `raiselate`, `wholesaleclear`, `pollforever` |
+| H1 (E set, queued) | poll tick; A, or 3 s held | drain once, in order; the watch starts | `AHoldThatRunsOutWhileAClientListensDeliversAndSaysSo`; `noreplay`, `draintwice` |
+| H1 | poll tick; ¬L or ¬P | E unset | `ARestartedReaderWaitsForItsOwnAdviseNotTheOldHold`; `holdprovideronly`, `holdnorestart` |
+| R0 (E set, idle) | post; ready | raised; the watch runs on | `LinesRaisedWhileReadyCarryTheirActivityIdByProcessing` |
+| R0 | post; not ready | queued; the watch stops | `AfterDoneALineWaitsWhileReadinessRegressesAndOneTickDeliversIt` |
+| R0 | watch tick; ¬L or ¬P | E unset; the watch stops | `AnIdleSoleReaderRestartStartsAFreshHold`, `AnIdleReaderRestartIsSeenByTheWatchOnProductionsTimer`; `nowatch`, `watchnoop`, `watchforever` |
+| R0 | watch tick; L∧P | nothing changes | `AnIdleSoleReaderRestartStartsAFreshHold` |
+| any | lines queue, or the queue empties, while paired | exactly one timer runs | `AnIdleSoleReaderRestartStartsAFreshHold`; `watchalways` |
+| any | the advise arrives | read at the next check | `AProviderThatConnectsFirstHoldsTheQueueUntilTheAdvise` |
+| any | the 30 s launch window closes | bookkeeping only | `AnUnadvisedLaunchExpiresAndDropsItsQueue`; `neverexpire`, `phaseregress`, `stoppollatexpiry` |
+| any | the dispatcher shuts down | no timer ticks (WPF) | none: no Slate code runs |
+| R0 | an absence shorter than the cadence, or another client throughout | E carries over | AR-27 |
+
+**Mutation map (42, all caught).** Each mutation below fails at least the fact named.
+
+| Area | Mutation | Fact(s) it fails |
+|---|---|---|
+| Raise path | `gated` | the census's three raise-shape facts |
+| Raise path | `raisewhileunready` | 22 facts |
+| Readiness | `nolistener` | `ProductionRaiseWaitsWhileNoClientListens` |
+| Readiness | `noconnected` | `TheLaunchQueueDrainsOnlyThroughAConnectedStatusProvider` |
+| Readiness | `neverflips` | 28 facts |
+| Readiness | `earlyreturn` | `LinesPostedBeforeAnyClientListensAreQueuedForAReaderStartedLater` |
+| Readiness | `shortcircuit` | the provider-state fact |
+| Hybrid | `drophold`, `droptimeout` | facts a–d |
+| Hybrid | `holdnorestart`, `holdprovideronly` | `ARestartedReaderWaitsForItsOwnAdviseNotTheOldHold` |
+| Hybrid | `drainlogsnotrigger` | `TheLaunchTransitionIsLogged` |
+| Queue | `noreplay` | 20 facts |
+| Queue | `draintwice` | 10 facts |
+| Queue | `nodrainlog` | 16 facts |
+| Queue | `unbounded` | `TheLaunchQueueKeepsOnlyTheLastSixteenLines` |
+| Phase and expiry | `phaseregress`, `unconditionalafterdone` | `AfterDoneALineWaitsForTheProviderAcrossTheLaunchWindow` |
+| Phase and expiry | `neverexpire`, `stoppollatexpiry`, `pollforever` | `AnUnadvisedLaunchExpiresAndDropsItsQueue` |
+| Phase and expiry | `skiponnullprovider` | `AfterExpiryALineWaitsForTheProviderInsteadOfBeingLost` |
+| Phase and expiry | `noperlinebound`, `raiselate` | `AQueuedLineIsDroppedThirtySecondsAfterItsPostNeverRaisedLate` |
+| Phase and expiry | `wholesaleclear`, `deadlinefromlaunch` | `EachQueuedLineExpiresAtItsOwnDeadlineNeverTheWholeQueue` |
+| Diagnostics and clock | `diageverypost` | `TheListenerStateIsReportedOncePerChange` |
+| Diagnostics and clock | `sourceeverypost` | `TheRaiseSourceIsReportedOncePerChange` |
+| Diagnostics and clock | `clockatconstruction` | the first-frame fact |
+| Activity IDs | `readyshared` | 7 facts, including the ready-path fact |
+| Activity IDs | `drainshared` | 4 facts |
+| Activity IDs | `sequenceperdrain` | the drain-path fact |
+| Activity IDs | `sequencestuck`, `politeshared` | 9 facts each |
+| Activity IDs | `highgetssequence` | 7 facts |
+| Epoch watch | `nowatch`, `watchnoop`, `watchforever` | `AnIdleSoleReaderRestartStartsAFreshHold` and its production-timer twin |
+| Epoch watch | `watchalways` | `AnIdleSoleReaderRestartStartsAFreshHold` |
+| Epoch watch | `watchunpaired` | `AProcessNoClientListensToRunsNoWatch` (and both restart facts) |
+| Launch switch | `switchnocensus`, `switchor` | `TheTestLaunchQueueSwitchIsInertOutsideACensusInstance` |
+
+**Gates on the round-5 head** (36c029be and this record, 2026-09-27; rebased onto 8193489b, the bindings regenerated from the worktree's own cargo target):
+- **Build and checks.** The app build carries no warning beyond main's existing CS0108. `dotnet format --verify-no-changes --include` is clean on the eight touched C# files, and `ShellAccessibilityTests.cs` and `AnnouncementSeamCensus.cs` keep their mixed line endings. Parity `--check` is verified.
+- **Unit project** on CI's filter: 3436/3441. The five failures are the machine-only symlink and reparse-point facts (`CanvasDocumentTests` ×2, `W1AnchoredVaultStoreTests` ×3).
+- **Dispatcher facts and census:** 44/44.
+- **Mutations:** 42/42, the file restored byte-identical.
+- **The journey** under the FlaUI lock:
+  - 6/6: every run found the status provider absent at its first line, drained four lines on the advise about 3.1 s after the first frame, and heard the five lines as `.1`–`.5`.
+  - Replay disabled: 0/3, every run red (nothing heard).
+  - Never flipping: 0/2.
+- **Censuses** 552/552 (the census filter also matches the new switch fact) and `W77RemediationDocsCensus` 30/30.
 
 ### PR 2 — #1245 + #1250 Files sidebar
 

@@ -17,6 +17,10 @@
 // A test-injected sink can never catch that. This census reads the
 // SHIPPING call expressions instead.
 
+using System.Windows;
+using System.Windows.Automation;
+using System.Windows.Automation.Peers;
+using System.Windows.Automation.Provider;
 using Microsoft.CodeAnalysis;
 using Microsoft.CodeAnalysis.CSharp;
 using Microsoft.CodeAnalysis.CSharp.Syntax;
@@ -26,35 +30,200 @@ namespace SlateWindows.Tests.Censuses;
 [Trait("census", "announcement-seams")]
 public sealed class AnnouncementSeamCensus
 {
+    /// <summary>
+    /// Contract 38 D-2 as amended by R-1 (#1244): ONE production raiser, the
+    /// dispatcher's element constructor, and it raises through UI Automation
+    /// itself — <c>AutomationInteropProvider.RaiseAutomationEvent</c> with
+    /// <c>AutomationElementIdentifiers.NotificationEvent</c> and the same
+    /// four-argument tuple — on the provider <c>NotificationSource</c> takes
+    /// from the element's peer, guarded by UIA's <c>ClientsAreListening</c>.
+    /// </summary>
+    /// <remarks>
+    /// BOUND over every authored shell source. A notification can only be
+    /// raised through UIA with a <c>NotificationEventArgs</c>, so every
+    /// construction of that type is counted wherever it is written — in a
+    /// helper, in a second raiser in another file, behind an alias — and the
+    /// one that exists must be the third argument of the one raise call.
+    /// </remarks>
     [Fact]
     public void OnlyTheDispatchersElementConstructorSuppliesTheNativeRaiser()
     {
-        var raisers = ShellCompilation.Sources.SelectMany(entry => entry.Source.Root
-            .DescendantNodes().OfType<InvocationExpressionSyntax>()
-            .Where(call => ShellCompilation.ModelFor(entry.Source).GetSymbolInfo(call).Symbol is IMethodSymbol method
-                && method.Name == "RaiseNotificationEvent"
-                && method.ContainingType.ToDisplayString() == "System.Windows.Automation.Peers.AutomationPeer")
-            .Select(call => (entry.Relative, Call: call))).ToArray();
-        var raiser = Assert.Single(raisers);
-        Assert.Equal("AccessibilityNotificationDispatcher.cs", raiser.Relative);
-        AssertNativeConstructor(raiser.Call.Ancestors().OfType<ConstructorDeclarationSyntax>().Single());
+        var notifications = ShellCompilation.Sources.SelectMany(entry => entry.Source.Root
+            .DescendantNodes().OfType<BaseObjectCreationExpressionSyntax>()
+            .Where(creation => UiaModel(entry.Source).GetSymbolInfo(creation).Symbol is IMethodSymbol constructor
+                && constructor.ContainingType.ToDisplayString() == "System.Windows.Automation.NotificationEventArgs")
+            .Select(creation => (entry.Relative, entry.Source, Creation: creation))).ToArray();
+        var notification = Assert.Single(notifications);
+        Assert.Equal("AccessibilityNotificationDispatcher.cs", notification.Relative);
+        SemanticModel model = UiaModel(notification.Source);
+        Assert.True(
+            notification.Creation.Parent is ArgumentSyntax { Parent: ArgumentListSyntax { Parent: InvocationExpressionSyntax raise } } argument
+                && raise.ArgumentList.Arguments.IndexOf(argument) == 2
+                && model.GetSymbolInfo(raise).Symbol is IMethodSymbol { Name: "RaiseAutomationEvent" } method
+                && method.ContainingType.ToDisplayString() == "System.Windows.Automation.Provider.AutomationInteropProvider"
+                && model.GetSymbolInfo(raise.ArgumentList.Arguments[0].Expression).Symbol is IFieldSymbol { Name: "NotificationEvent" } identifier
+                && identifier.ContainingType.ToDisplayString() == "System.Windows.Automation.AutomationElementIdentifiers",
+            "the one NotificationEventArgs must be the third argument of AutomationInteropProvider.RaiseAutomationEvent("
+            + $"AutomationElementIdentifiers.NotificationEvent, …); it is `{notification.Creation.Parent?.Parent?.Parent}`.");
+        ConstructorDeclarationSyntax constructor = notification.Creation.Ancestors().OfType<ConstructorDeclarationSyntax>().Single();
+        AssertNativeConstructor(constructor);
 
+        // The guard is UIA's own property, bound, not a name that happens to match.
+        var probe = (ParenthesizedLambdaExpressionSyntax)constructor.Initializer!.ArgumentList.Arguments[1].Expression;
+        Assert.True(
+            model.GetSymbolInfo(probe.ExpressionBody!).Symbol is IPropertySymbol { Name: "ClientsAreListening" } listening
+                && listening.ContainingType.ToDisplayString() == "System.Windows.Automation.Provider.AutomationInteropProvider",
+            $"the production guard must be AutomationInteropProvider.ClientsAreListening; it is `{probe.ExpressionBody}`.");
+
+        // OD-7: readiness reads production's own inputs — WPF's listener
+        // map for the notification event (bound: the map only an advise
+        // fills; waited for up to the hold) and the status element's
+        // connected provider, the one the raise uses.
+        RecordDeclarationSyntax seams = Assert.Single(
+            notification.Source.Root.DescendantNodes().OfType<RecordDeclarationSyntax>(),
+            type => type.Identifier.ValueText == "LaunchSeams");
+        MethodDeclarationSyntax forProduction = Assert.Single(
+            seams.Members.OfType<MethodDeclarationSyntax>(), member => member.Identifier.ValueText == "ForProduction");
+        var production = Assert.Single(forProduction.DescendantNodes().OfType<BaseObjectCreationExpressionSyntax>(),
+            creation => model.GetSymbolInfo(creation).Symbol is IMethodSymbol { ContainingType.Name: "LaunchSeams" });
+        var advised = Assert.IsType<ParenthesizedLambdaExpressionSyntax>(production.ArgumentList!.Arguments[0].Expression);
+        Assert.True(
+            advised.ExpressionBody is InvocationExpressionSyntax exists
+                && model.GetSymbolInfo(exists).Symbol is IMethodSymbol { Name: "ListenerExists" } map
+                && map.ContainingType.ToDisplayString() == "System.Windows.Automation.Peers.AutomationPeer"
+                && model.GetSymbolInfo(Assert.Single(exists.ArgumentList.Arguments).Expression).Symbol
+                    is IFieldSymbol { Name: "Notification" } notificationEvent
+                && notificationEvent.ContainingType.ToDisplayString() == "System.Windows.Automation.Peers.AutomationEvents",
+            $"the launch phase's advise probe must be AutomationPeer.ListenerExists(AutomationEvents.Notification); it is `{advised.ExpressionBody}`.");
+        // Token text (CSharpSource.Normalize): NormalizeWhitespace prints
+        // an `is not` pattern without its space.
+        Assert.Equal("()=>NotificationSource.Of(source)isnotnull",
+            CSharpSource.Normalize(production.ArgumentList.Arguments[1].Expression));
+        Assert.Equal("source", Assert.Single(forProduction.ParameterList.Parameters).Identifier.ValueText);
+
+        // Codex PR 1 round 5: the production seams' only wrapper is the
+        // shell journey's test-only launch switch, read from a census instance
+        // and its own variable — inert otherwise
+        // (TheTestLaunchQueueSwitchIsInertOutsideACensusInstance).
+        var wrapper = Assert.IsType<InvocationExpressionSyntax>(forProduction.ExpressionBody!.Expression);
+        Assert.Equal("WithTestLaunchQueue", wrapper.Expression.ToString());
+        Assert.Same(production, wrapper.ArgumentList.Arguments[0].Expression);
+        Assert.Equal(
+            ["Environment.GetEnvironmentVariable(\"SLATE_CENSUS_INSTANCE_ID\")", "Environment.GetEnvironmentVariable(TestLaunchQueueVariable)"],
+            wrapper.ArgumentList.Arguments.Skip(1).Select(argument => argument.Expression.NormalizeWhitespace().ToFullString()));
+
+        // The source (R-1): the element's own provider, through its peer
+        // resolved exactly as the dispatcher always has, and nothing else —
+        // the window's HWND host provider was measured and delivered nothing
+        // to a desktop-scoped client (codex round 5).
+        ClassDeclarationSyntax sources = Assert.Single(
+            notification.Source.Root.DescendantNodes().OfType<ClassDeclarationSyntax>(),
+            type => type.Identifier.ValueText == "NotificationSource");
+        MethodDeclarationSyntax of = Assert.Single(
+            sources.Members.OfType<MethodDeclarationSyntax>(), member => member.Identifier.ValueText == "Of");
+        Assert.Equal(
+            "UIElementAutomationPeer.FromElement(source) ?? UIElementAutomationPeer.CreatePeerForElement(source) ?? new FrameworkElementAutomationPeer(source)",
+            Assert.Single(of.DescendantNodes().OfType<VariableDeclaratorSyntax>(), local => local.Identifier.ValueText == "peer")
+                .Initializer!.Value.NormalizeWhitespace().ToFullString());
+        Assert.Equal("NotificationProviderPeer.Current.ProviderOf(peer)",
+            Assert.IsType<ReturnStatementSyntax>(of.Body!.Statements.Last()).Expression!.NormalizeWhitespace().ToFullString());
+
+        // The one door to a peer's provider: a peer, handing the peer it was
+        // given to AutomationPeer.ProviderFromPeer and nothing else.
+        ClassDeclarationSyntax door = Assert.Single(
+            notification.Source.Root.DescendantNodes().OfType<ClassDeclarationSyntax>(),
+            type => type.Identifier.ValueText == "NotificationProviderPeer");
+        Assert.Equal(
+            "System.Windows.Automation.Peers.FrameworkElementAutomationPeer",
+            model.GetDeclaredSymbol(door)!.BaseType!.ToDisplayString());
+        MethodDeclarationSyntax providerOf = Assert.Single(
+            door.Members.OfType<MethodDeclarationSyntax>(), member => member.Identifier.ValueText == "ProviderOf");
+        Assert.True(
+            providerOf.ExpressionBody?.Expression is InvocationExpressionSyntax wrap
+                && model.GetSymbolInfo(wrap).Symbol is IMethodSymbol { Name: "ProviderFromPeer" } unwrap
+                && unwrap.ContainingType.ToDisplayString() == "System.Windows.Automation.Peers.AutomationPeer"
+                && wrap.ArgumentList.Arguments.Single().Expression is IdentifierNameSyntax passed
+                && passed.Identifier.ValueText == Assert.Single(providerOf.ParameterList.Parameters).Identifier.ValueText,
+            $"ProviderOf must return ProviderFromPeer(peer) for the peer it is handed; it is `{providerOf.ExpressionBody}`.");
+
+        // OD-7: ONE production dispatcher per window, so one launch phase,
+        // one queue and one provider — MainWindow's, over the status element.
+        // Any other construction in shell code (the grid's old lazy one, a
+        // surface's own) is an independent state machine and fails here.
         var constructors = ShellCompilation.Sources.SelectMany(entry => entry.Source.Root
             .DescendantNodes().OfType<BaseObjectCreationExpressionSyntax>()
-            .Where(creation => ShellCompilation.ModelFor(entry.Source).GetSymbolInfo(creation).Symbol is IMethodSymbol method
+            .Where(creation => UiaModel(entry.Source).GetSymbolInfo(creation).Symbol is IMethodSymbol method
                 && method.ContainingType.ToDisplayString() == "SlateWindows.AccessibilityNotificationDispatcher")
-            .Select(creation => (entry.Relative, Creation: creation))).ToArray();
-        Assert.Equal(["Grids/AccessibleDataGrid.cs", "MainWindow.xaml.cs"], constructors.Select(c => c.Relative).Order());
-        var construction = Assert.Single(constructors, c => c.Relative == "MainWindow.xaml.cs");
+            .Select(creation => (entry.Relative, entry.Source, Creation: creation))).ToArray();
+        var construction = Assert.Single(constructors);
+        Assert.Equal("MainWindow.xaml.cs", construction.Relative);
         Assert.Equal("StatusTextBlock", Assert.Single(construction.Creation.ArgumentList!.Arguments).Expression.ToString());
         Assert.Equal("_announcer", construction.Creation.Ancestors().OfType<AssignmentExpressionSyntax>().Single().Left.ToString());
-        foreach (var site in constructors)
+        Assert.Equal(
+            "System.Windows.FrameworkElement",
+            Assert.Single(((IMethodSymbol)UiaModel(construction.Source).GetSymbolInfo(construction.Creation).Symbol!).Parameters)
+                .Type.ToDisplayString());
+
+        // ...and that one is the window's, inherited by every surface in it:
+        // MainWindow's constructor sets it on itself, and the grid's default
+        // seam posts through the one it finds, never one of its own.
+        ConstructorDeclarationSyntax window = construction.Creation.Ancestors().OfType<ConstructorDeclarationSyntax>().Single();
+        Assert.Contains(window.DescendantNodes().OfType<InvocationExpressionSyntax>(), call =>
+            UiaModel(construction.Source).GetSymbolInfo(call).Symbol is IMethodSymbol { Name: "SetAnnouncer" } set
+            && set.ContainingType.ToDisplayString() == "SlateWindows.AccessibilityNotificationDispatcher"
+            && CSharpSource.Normalize(call.ArgumentList) == "(this,_announcer)");
+        CSharpSource grid = CSharpSource.Load("Grids", "AccessibleDataGrid.cs");
+        AssignmentExpressionSyntax seam = Assert.Single(
+            grid.Root.DescendantNodes().OfType<AssignmentExpressionSyntax>(),
+            assignment => assignment.Left is IdentifierNameSyntax { Identifier.ValueText: "Announce" }
+                && assignment.Ancestors().OfType<ConstructorDeclarationSyntax>().Any());
+        Assert.Equal("@event=>AccessibilityNotificationDispatcher.For(this)?.Post(@event)", CSharpSource.Normalize(seam.Right));
+    }
+
+    /// <summary>
+    /// R-1 (#1244): no authored shell code names WPF's gated raise.
+    /// <c>AutomationPeer.RaiseNotificationEvent</c> raises nothing until UIA
+    /// has advised the process of a listener, which it had not done for a
+    /// screen reader already running (the 2026-09-22 record, F1); and
+    /// <c>UiaRaiseNotificationEvent</c> would be a second raiser beside the
+    /// dispatcher's.
+    /// </summary>
+    /// <remarks>
+    /// By NAME over every identifier token, deliberately not by binding: an
+    /// invocation, a method group handed to a delegate, a conditional access
+    /// and a P/Invoke declaration all spell the name, and a name cannot fail
+    /// to bind. Comments and strings are trivia and literals, never tokens
+    /// of this kind, so they cannot trip it.
+    /// </remarks>
+    [Fact]
+    public void NoShellCodeNamesTheGatedNotificationRaise()
+    {
+        string[] gated = ["RaiseNotificationEvent", "UiaRaiseNotificationEvent"];
+        var offenders = new List<string>();
+        foreach ((string relative, CSharpSource source) in ShellCompilation.Sources)
         {
-            var symbol = (IMethodSymbol)ShellCompilation.ModelFor(
-                ShellCompilation.Sources.Single(s => s.Relative == site.Relative).Source)
-                .GetSymbolInfo(site.Creation).Symbol!;
-            Assert.Equal("System.Windows.FrameworkElement", Assert.Single(symbol.Parameters).Type.ToDisplayString());
+            foreach (SyntaxToken name in source.Root.DescendantTokens()
+                .Where(token => token.IsKind(SyntaxKind.IdentifierToken) && gated.Contains(token.ValueText)))
+            {
+                SyntaxNode site = (SyntaxNode?)name.Parent!.AncestorsAndSelf().OfType<StatementSyntax>().FirstOrDefault()
+                    ?? name.Parent!.AncestorsAndSelf().OfType<MemberDeclarationSyntax>().First();
+                string owner = name.Parent!.AncestorsAndSelf().OfType<MemberDeclarationSyntax>().FirstOrDefault() switch
+                {
+                    ConstructorDeclarationSyntax ctor => ctor.Identifier.ValueText + " constructor",
+                    MethodDeclarationSyntax method => method.Identifier.ValueText,
+                    PropertyDeclarationSyntax property => property.Identifier.ValueText,
+                    BaseTypeDeclarationSyntax type => type.Identifier.ValueText,
+                    _ => "<top level>",
+                };
+                offenders.Add($"{relative}:{owner} — {CSharpSource.Normalize(site)}");
+            }
         }
+
+        Assert.True(
+            offenders.Count == 0,
+            "shell code names WPF's gated notification raise, which is silent until UIA advises the "
+            + "process — the #1244 defect — or a second raiser beside the dispatcher's: "
+            + string.Join("; ", offenders));
     }
 
     [Fact]
@@ -64,12 +233,25 @@ public sealed class AnnouncementSeamCensus
             .Root.DescendantNodes().OfType<ConstructorDeclarationSyntax>()
             .Single(c => c.Modifiers.Any(SyntaxKind.PublicKeyword));
         AssertNativeConstructor(constructor);
+        ExpressionStatementSyntax raise = constructor.Initializer!.DescendantNodes().OfType<ExpressionStatementSyntax>().Single();
+        IfStatementSyntax connected = constructor.Initializer.DescendantNodes().OfType<IfStatementSyntax>().Single();
         string original = constructor.ToString();
         foreach (string mutation in new[]
         {
-            original.Replace("peer.RaiseNotificationEvent(kind, processing, text, activityId);", "", StringComparison.Ordinal),
-            original.Replace("kind, processing, text, activityId);", "kind, processing, text, \"wrong\");", StringComparison.Ordinal),
-            original.Replace("FromElement(source)", "FromElement(new System.Windows.Controls.TextBlock())", StringComparison.Ordinal),
+            // The gated raise reinstated in the raise's place (#1244 itself),
+            // and the raise dropped.
+            constructor.ReplaceNode(raise, SyntaxFactory.ParseStatement(
+                "peer.RaiseNotificationEvent(kind, processing, text, activityId);")).ToString(),
+            constructor.ReplaceNode(connected, SyntaxFactory.ParseStatement(";")).ToString(),
+            Mutate(original, "NotificationEventArgs(kind, processing, text, activityId)", "NotificationEventArgs(kind, processing, text, \"wrong\")"),
+            Mutate(original, "NotificationEventArgs(kind, processing, text, activityId)", "NotificationEventArgs(kind, processing, activityId, text)"),
+            Mutate(original, "AutomationElementIdentifiers.NotificationEvent", "AutomationElementIdentifiers.AsyncContentLoadedEvent"),
+            Mutate(original, "NotificationSource.Of(source)", "NotificationSource.Of(new System.Windows.Controls.TextBlock())"),
+            Mutate(original, "NotificationSource.Of(source)", "AutomationInteropProvider.HostProviderFromHandle(System.IntPtr.Zero)"),
+            Mutate(original, "provider is not null", "provider is null"),
+            Mutate(original, "() => AutomationInteropProvider.ClientsAreListening", "() => true"),
+            // OD-7: the launch seams swapped for ones that never see an advise.
+            Mutate(original, "LaunchSeams.ForProduction(source)", "new LaunchSeams(() => false, () => false, _ => null!, _ => null!, () => TimeSpan.Zero, (_, _) => { })"),
         })
         {
             Assert.NotEqual(original, mutation);
@@ -79,23 +261,75 @@ public sealed class AnnouncementSeamCensus
         }
     }
 
+    private static string Mutate(string original, string from, string to)
+    {
+        Assert.Contains(from, original, StringComparison.Ordinal);
+        return original.Replace(from, to, StringComparison.Ordinal);
+    }
+
+    /// <summary>The production constructor's shape (R-1, OD-7): the provider
+    /// from the element through <c>NotificationSource</c>, the raise only when
+    /// there is one, UIA's own listener probe as the guard, and production's
+    /// launch seams for the replay on advise.</summary>
     private static void AssertNativeConstructor(ConstructorDeclarationSyntax constructor)
     {
         Assert.Equal("FrameworkElement", Assert.Single(constructor.ParameterList.Parameters).Type!.ToString());
         Assert.Equal(SyntaxKind.ThisConstructorInitializer, constructor.Initializer!.Kind());
-        var lambda = Assert.IsType<ParenthesizedLambdaExpressionSyntax>(Assert.Single(constructor.Initializer.ArgumentList.Arguments).Expression);
+        SeparatedSyntaxList<ArgumentSyntax> arguments = constructor.Initializer.ArgumentList.Arguments;
+        Assert.Equal(3, arguments.Count);
+        var lambda = Assert.IsType<ParenthesizedLambdaExpressionSyntax>(arguments[0].Expression);
         Assert.Equal(["kind", "processing", "text", "activityId"], lambda.ParameterList.Parameters.Select(p => p.Identifier.ValueText));
         var body = Assert.IsType<BlockSyntax>(lambda.Body);
         Assert.Equal(2, body.Statements.Count);
-        var declaration = Assert.IsType<LocalDeclarationStatementSyntax>(body.Statements[0]);
-        VariableDeclaratorSyntax peer = Assert.Single(declaration.Declaration.Variables);
-        Assert.Equal("peer", peer.Identifier.ValueText);
-        Assert.Equal("UIElementAutomationPeer.FromElement(source) ?? UIElementAutomationPeer.CreatePeerForElement(source) ?? new FrameworkElementAutomationPeer(source)",
-            peer.Initializer!.Value.NormalizeWhitespace().ToFullString());
-        var call = Assert.IsType<InvocationExpressionSyntax>(Assert.IsType<ExpressionStatementSyntax>(body.Statements[1]).Expression);
-        Assert.Equal("peer.RaiseNotificationEvent", call.Expression.ToString());
-        Assert.Equal(["kind", "processing", "text", "activityId"], call.ArgumentList.Arguments.Select(a => a.Expression.ToString()));
+        var providerDeclaration = Assert.IsType<LocalDeclarationStatementSyntax>(body.Statements[0]);
+        VariableDeclaratorSyntax provider = Assert.Single(providerDeclaration.Declaration.Variables);
+        Assert.Equal("provider", provider.Identifier.ValueText);
+        Assert.Equal("NotificationSource.Of(source)", provider.Initializer!.Value.NormalizeWhitespace().ToFullString());
+        var connected = Assert.IsType<IfStatementSyntax>(body.Statements[1]);
+        Assert.Equal("provider is not null", connected.Condition.NormalizeWhitespace().ToFullString());
+        Assert.Null(connected.Else);
+        var raise = Assert.IsType<InvocationExpressionSyntax>(Assert.IsType<ExpressionStatementSyntax>(
+            Assert.Single(Assert.IsType<BlockSyntax>(connected.Statement).Statements)).Expression);
+        Assert.Equal("AutomationInteropProvider.RaiseAutomationEvent", raise.Expression.ToString());
+        Assert.Equal(
+            ["AutomationElementIdentifiers.NotificationEvent", "provider", "new NotificationEventArgs(kind, processing, text, activityId)"],
+            raise.ArgumentList.Arguments.Select(a => a.Expression.NormalizeWhitespace().ToFullString()));
+        var probe = Assert.IsType<ParenthesizedLambdaExpressionSyntax>(arguments[1].Expression);
+        Assert.Empty(probe.ParameterList.Parameters);
+        Assert.Equal("AutomationInteropProvider.ClientsAreListening", probe.ExpressionBody?.ToString());
+        Assert.Equal("LaunchSeams.ForProduction(source)", arguments[2].Expression.NormalizeWhitespace().ToFullString());
     }
+
+    /// <summary>A model over the shell compilation that is sure to see the
+    /// WPF and UIA assemblies these facts bind against. ShellCompilation
+    /// references whatever the test process had loaded when it was first
+    /// built, so a run in which no automation type had loaded yet would
+    /// bind nothing and fail for the wrong reason; the anchors load each
+    /// assembly by type and add any the compilation lacks.</summary>
+    private static SemanticModel UiaModel(CSharpSource source) =>
+        UiaCompilation.Value.GetSemanticModel(source.Root.SyntaxTree);
+
+    private static readonly Lazy<CSharpCompilation> UiaCompilation = new(() =>
+    {
+        CSharpCompilation compilation = ShellCompilation.Compilation;
+        var referenced = compilation.References
+            .OfType<PortableExecutableReference>()
+            .Select(reference => reference.FilePath)
+            .ToHashSet(StringComparer.OrdinalIgnoreCase);
+        foreach (Type anchor in new[]
+        {
+            typeof(AutomationInteropProvider), typeof(NotificationEventArgs), typeof(AutomationElementIdentifiers),
+            typeof(AutomationPeer), typeof(FrameworkElement),
+        })
+        {
+            if (referenced.Add(anchor.Assembly.Location))
+            {
+                compilation = compilation.AddReferences(MetadataReference.CreateFromFile(anchor.Assembly.Location));
+            }
+        }
+
+        return compilation;
+    });
 
     /// <summary>
     /// Hop 1 — <c>MainWindow</c> hands the dispatcher to the vault
@@ -227,9 +461,9 @@ public sealed class AnnouncementSeamCensus
     /// a replacement for it: the rendered line reaches
     /// <c>Post(RenderedAnnouncement)</c>, which renders no second time,
     /// resolves the peer and raises. What no in-process fact can assert
-    /// is that a screen reader HEARD it — `RaiseNotificationEvent` is a
-    /// no-op without a listening UIA client, which is the FlaUI
-    /// journeys' job. So this fact pins the chain end to end through
+    /// is that a screen reader HEARD it — the raise is skipped without a
+    /// listening UIA client (R-1's guard), which is the FlaUI journeys'
+    /// job. So this fact pins the chain end to end through
     /// production types, and the three syntax facts above pin that the
     /// shipping code builds that chain.
     /// </remarks>
