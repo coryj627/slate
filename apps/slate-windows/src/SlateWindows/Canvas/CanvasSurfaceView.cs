@@ -1244,9 +1244,9 @@ internal sealed class CanvasSurfaceView : UserControl, ICanvasSurfacePresenter
 
     /// <summary>R-10: every seat <see cref="TryDeliverFocus"/> makes completes
     /// the request, so each is the document's TERMINAL seat, declared as one: a
-    /// held F6 landing takes the move for its arrival, not for the reader
-    /// moving on inside the surface (<see cref="FocusDepartureWatch"/>).</summary>
-    private LandingSeat SeatTerminally(Func<LandingSeat> seat) => FocusDepartureWatch.SeatTerminally(this, seat);
+    /// held editor landing takes the move for its arrival, not for the reader
+    /// moving on inside the surface (<see cref="EditorLandingSlot"/>).</summary>
+    private LandingSeat SeatTerminally(Func<LandingSeat> seat) => EditorLandingSlot.SeatTerminally(this, seat);
 
     private void OnModelPropertyChanged(
         object? sender, System.ComponentModel.PropertyChangedEventArgs e)

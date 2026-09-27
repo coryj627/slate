@@ -23,14 +23,27 @@ public sealed class ShellRegionCycleTests
         public List<(Action Announce, Action FallThrough)> Held { get; } = [];
         public int Withdrawals { get; private set; }
 
-        /// <summary>What the next withdrawal answers: whether the region
-        /// still held its landing.</summary>
+        /// <summary>Whether the host still holds the landing it answered
+        /// Pending for — false models a host that already let go of it (it
+        /// completed, the view changed, the reader moved).</summary>
         public bool StillHeld { get; set; } = true;
+
+        /// <summary>The landing this host holds, as the window's one slot does
+        /// (R-10, OD-12): the last Pending answer, until it completes or is
+        /// withdrawn.</summary>
+        private object? _held;
+        private ShellRegionKind _heldRegion;
+
+        public bool HoldsLanding => _held is not null && StillHeld;
+
+        public ShellRegionKind? HeldRingRegion => HoldsLanding ? _heldRegion : null;
 
         public bool WithdrawHeldLanding()
         {
             Withdrawals++;
-            return StillHeld;
+            bool held = HoldsLanding;
+            _held = null;
+            return held;
         }
 
         public ShellRegionKind? FocusedRegion() => Focused;
@@ -45,7 +58,22 @@ public sealed class ShellRegionCycleTests
 
             if (Holds.Contains(region))
             {
-                Held.Add((announceWhenLanded, fallThroughWhenRefused));
+                // The host lets go of its landing when that landing ends; a
+                // completion handed to the ring after a withdrawal is passed
+                // through all the same, so the ring's own staleness guard is
+                // what these facts witness.
+                object landing = new();
+                _held = landing;
+                _heldRegion = region;
+                void Ended()
+                {
+                    if (ReferenceEquals(_held, landing))
+                    {
+                        _held = null;
+                    }
+                }
+
+                Held.Add((() => { Ended(); announceWhenLanded(); }, () => { Ended(); fallThroughWhenRefused(); }));
                 return ShellRegionLanding.Pending;
             }
 
@@ -437,9 +465,10 @@ public sealed class ShellRegionCycleTests
 
     /// <summary>R-10: the held region is the ring's position only while the
     /// host still held its landing with the reader exactly where the held
-    /// press left them — the host answers. A landing the host already let go
-    /// of (it completed, the view changed, the reader moved — even within one
-    /// region) holds no position: the next press starts from where focus is —
+    /// press left them — the host answers (OD-12: its slot is the one answer).
+    /// A landing the host already let go of (it completed, the view changed,
+    /// the reader moved — even within one region) holds no position, and there
+    /// is nothing to withdraw: the next press starts from where focus is —
     /// from the tab bar the editor, asked again; from the Files tree the tab
     /// bar.</summary>
     [Theory]
@@ -466,7 +495,7 @@ public sealed class ShellRegionCycleTests
 
             workspace.FocusNextPaneCommand.Execute(null);
 
-            Assert.Equal(1, host.Withdrawals);
+            Assert.Equal(0, host.Withdrawals);
             if (from == "the tab bar")
             {
                 Assert.Equal([ShellRegionKind.Editor, ShellRegionKind.Editor], host.Landed);

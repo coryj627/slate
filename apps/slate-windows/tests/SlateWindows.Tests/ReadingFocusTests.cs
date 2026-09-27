@@ -236,7 +236,9 @@ public sealed class ReadingFocusTests
 
     /// <summary>R-10: a cancel lets go of the held landing its token holds and
     /// of nothing a later request holds, and answers whether that landing was
-    /// still wanted — not once focus has left where its request found it.</summary>
+    /// still wanted — not once focus has left where its request found it: the
+    /// window's one slot (OD-12) has cancelled it by then, and a withdrawal
+    /// finds nothing held.</summary>
     [Fact]
     public void ACancelLetsGoOfItsOwnHeldLandingOnly() => RunSta(() =>
     {
@@ -263,12 +265,15 @@ public sealed class ReadingFocusTests
         Assert.False(surface.IsFocusLandingPending);
         Assert.Null(surface.HeldFocusLanding);
 
-        Assert.True(surface.RequestFocusLanding(third));
+        Assert.Equal(
+            ShellRegionLanding.Pending,
+            ((IShellRegionHost)host.Shell).TryLand(ShellRegionKind.Editor, third, () => { }));
         object thirdToken = surface.HeldFocusLanding!;
         PumpedDispatcher.Drain();
         Assert.True(host.Elsewhere.Focus());
         Assert.False(surface.CancelFocusLanding(thirdToken));
         Assert.False(surface.IsFocusLandingPending);
+        Assert.False(((IShellRegionHost)host.Shell).WithdrawHeldLanding());
 
         host.ReleaseProjection();
         Assert.Same(host.Elsewhere, Keyboard.FocusedElement);
@@ -1667,7 +1672,15 @@ public sealed class ReadingFocusTests
         Assert.True(filter.Focus());
         PumpedDispatcher.Drain();
         int departures = 0;
-        using var watch = new FocusDepartureWatch(surface, () => departures++);
+        // A landing of the fact's own, held in the window's one slot (OD-12)
+        // over the surface: its departures are counted.
+        host.Shell.EditorLandings.Hold(new HeldEditorLanding(
+            target: () => surface,
+            isLive: () => departures == 0,
+            withdraw: () => ++departures == 1,
+            stillWhereAsked: () => true,
+            scope: [],
+            ringRegion: null));
 
         graph.RequestFocusLanding(host.Tab);
         PumpedDispatcher.Drain();
@@ -2477,6 +2490,10 @@ public sealed class ReadingFocusTests
             return outcome;
         }
 
+        public bool HoldsLanding => ((IShellRegionHost)host.Shell).HoldsLanding;
+
+        public ShellRegionKind? HeldRingRegion => ((IShellRegionHost)host.Shell).HeldRingRegion;
+
         public bool WithdrawHeldLanding() => ((IShellRegionHost)host.Shell).WithdrawHeldLanding();
     }
 
@@ -2771,11 +2788,56 @@ public sealed class ReadingFocusTests
                 return;
             }
 
-            // The CURRENT value, so the template's visibility binding stays
-            // and a tab switch still re-evaluates it.
+            HideStop();
+        }
+
+        /// <summary>Collapse the tab's canvas or graph surface — the CURRENT
+        /// value, so the template's visibility binding stays and a tab switch
+        /// still re-evaluates it.</summary>
+        public void HideStop()
+        {
             _heldSurface = EditorStop();
             _heldSurface.SetCurrentValue(UIElement.VisibilityProperty, Visibility.Collapsed);
             PumpedDispatcher.Drain();
+        }
+
+        /// <summary>Show what <see cref="HideStop"/> collapsed: the binding
+        /// re-evaluated.</summary>
+        public void ShowStop()
+        {
+            BindingExpression? shown = BindingOperations.GetBindingExpression(
+                _heldSurface!, UIElement.VisibilityProperty);
+            Assert.NotNull(shown);
+            shown.UpdateTarget();
+            _window!.UpdateLayout();
+            PumpedDispatcher.Drain();
+        }
+
+        /// <summary>The close fallback's route, from nowhere: the palette opened
+        /// from a stop that is gone by the time it closes, so its restore finds
+        /// nothing and the editor landing (<c>FocusActiveEditorPane</c>) runs
+        /// with focus nowhere.</summary>
+        public void CloseAPaletteOverAGoneStop()
+        {
+            var transient = new TextBox { Text = "Where the palette was opened from" };
+            Show(transient);
+            Assert.True(transient.Focus());
+            PumpedDispatcher.Drain();
+            OpenModal("palette");
+            PumpedDispatcher.Drain();
+            Remove(transient);
+            Keyboard.ClearFocus();
+            Lifecycle.Palette.Dismiss();
+            PumpedDispatcher.Drain();
+        }
+
+        /// <summary>Rehost the shell's Files pane beside the content pane, so
+        /// its tree can take focus.</summary>
+        public void ShowFilesPane()
+        {
+            FrameworkElement files = Shell.FilesPaneBorder;
+            Assert.IsAssignableFrom<Panel>(files.Parent).Children.Remove(files);
+            Show(files);
         }
 
         /// <summary>Let what <see cref="HoldEditorLanding"/> held arrive.</summary>
@@ -2796,12 +2858,7 @@ public sealed class ReadingFocusTests
                 return;
             }
 
-            BindingExpression? shown = BindingOperations.GetBindingExpression(
-                _heldSurface!, UIElement.VisibilityProperty);
-            Assert.NotNull(shown);
-            shown.UpdateTarget();
-            _window!.UpdateLayout();
-            PumpedDispatcher.Drain();
+            ShowStop();
         }
 
         /// <summary>The canvas's load in flight. The workspace loads

@@ -168,8 +168,11 @@ internal abstract class CanvasPromptViewModel : System.ComponentModel.INotifyPro
         new CanvasGroupMarkedPrompt(document);
 
     internal static CanvasPromptViewModel MarksList(
-        CanvasDocumentViewModel document, object owner, Action<CanvasPromptViewModel> closeIfCurrent) =>
-        new CanvasMarksListPrompt(document, owner, closeIfCurrent);
+        CanvasDocumentViewModel document,
+        object owner,
+        Action<CanvasPromptViewModel> closeIfCurrent,
+        Action<object, string> land) =>
+        new CanvasMarksListPrompt(document, owner, closeIfCurrent, land);
 
     internal static CanvasPromptViewModel NewGroup(
         CanvasDocumentViewModel document, CanvasPromptContext context) =>
@@ -229,13 +232,22 @@ internal sealed class CanvasMarksListPrompt : CanvasPromptViewModel
 {
     private readonly object _owner;
     private readonly Action<CanvasPromptViewModel> _closeIfCurrent;
+    private readonly Action<object, string> _land;
 
+    /// <param name="land">Raises the jump's A14 landing for (owner, node) —
+    /// the workspace's <c>RaiseCanvasNodeLanding</c>, so the shell holds it
+    /// (W7-7 R-10, OD-12).</param>
     internal CanvasMarksListPrompt(
-        CanvasDocumentViewModel document, object owner, Action<CanvasPromptViewModel> closeIfCurrent)
+        CanvasDocumentViewModel document,
+        object owner,
+        Action<CanvasPromptViewModel> closeIfCurrent,
+        Action<object, string> land)
         : base(document, "Marked Cards", string.Empty, [])
     {
+        ArgumentNullException.ThrowIfNull(land);
         _owner = owner;
         _closeIfCurrent = closeIfCurrent;
+        _land = land;
         Reproject();
         document.PublicationApplied += OnPublicationApplied;
     }
@@ -271,10 +283,10 @@ internal sealed class CanvasMarksListPrompt : CanvasPromptViewModel
             Document.FireFilterLineNow();
         }
         object owner = _owner;
-        CanvasDocumentViewModel document = Document;
+        Action<object, string> land = _land;
         _ = System.Windows.Threading.Dispatcher.CurrentDispatcher.BeginInvoke(
             System.Windows.Threading.DispatcherPriority.Background,
-            () => document.RequestFocusLanding(owner, nodeId));
+            () => land(owner, nodeId));
         return CanvasPromptSubmit.Completed;
     }
 

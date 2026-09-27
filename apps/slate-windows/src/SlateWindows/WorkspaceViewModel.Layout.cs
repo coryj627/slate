@@ -716,53 +716,48 @@ internal sealed partial class WorkspaceViewModel
         // A newer press CANCELS a held one (R-10): withdrawn — no line, no
         // fall-through, and the host lets go of it — so a late completion can
         // never finish a second traversal. The ring stands on the held region:
-        // while the host still held its landing, with the reader exactly
-        // where the held press left them, the new press goes on from THAT
-        // ring position in its own direction (F6 → the region after the
-        // editor, Shift+F6 → the tab bar) and never asks it again. A landing
-        // the host already let go of — it completed, the view changed, the
-        // reader moved, even within one region — holds no position: the
-        // press starts from where focus is.
+        // while the host still holds a press's landing, with the reader exactly
+        // where the held press left them, the new press goes on from THAT ring
+        // position in its own direction (F6 → the region after the editor,
+        // Shift+F6 → the tab bar) and never asks it again. A landing the host
+        // already let go of — it completed, the view changed, the reader moved,
+        // even within one region — holds no position: the press starts from
+        // where focus is. OD-12: whether a landing is held, and the position it
+        // holds, are the host's one answer (the window's slot); the ring keeps
+        // only the identity of its latest press.
         ShellRegionKind? from = host.FocusedRegion();
-        if (_heldShellRegionPress is { } held)
+        _ringPress = null;
+        if (host.HeldRingRegion is { } heldRegion && host.WithdrawHeldLanding())
         {
-            _heldShellRegionPress = null;
-            if (host.WithdrawHeldLanding())
-            {
-                from = held.Region;
-            }
+            from = heldRegion;
         }
 
         CycleShellRegionFrom(host, from, direction, attemptsTaken: 0);
     }
 
-    /// <summary>W7-7 PR 8 (R-10): the one press whose landing a region is
-    /// holding. Its completions act only while it is still this.</summary>
-    private HeldShellRegionPress? _heldShellRegionPress;
+    /// <summary>W7-7 PR 8 (R-10): the ring's latest press — the only one whose
+    /// completions act. Not "is a landing held" (OD-12: the host's slot alone
+    /// answers that): a continuation of a press this one superseded, or one the
+    /// funnel withdrew, is a no-op even from a host that broke its
+    /// never-after-withdrawal contract.</summary>
+    private object? _ringPress;
 
-    /// <summary>A press's landing attempt: the region it asked.</summary>
-    private sealed class HeldShellRegionPress(ShellRegionKind region)
-    {
-        public ShellRegionKind Region { get; } = region;
-    }
+    /// <summary>W7-7 PR 8 (R-10, OD-12): the window holds a landing the F6 ring
+    /// asked for — the host's slot answers.</summary>
+    internal bool HoldsShellRegionLanding => ShellRegionHost?.HeldRingRegion is not null;
 
-    /// <summary>W7-7 PR 8 (R-10): the F6 ring holds a landing.</summary>
-    internal bool HoldsShellRegionLanding => _heldShellRegionPress is not null;
-
-    /// <summary>W7-7 PR 8 (R-10): let go of the landing the F6 ring holds —
-    /// silently, and synchronously, before anything else moves: another
+    /// <summary>W7-7 PR 8 (R-10): let go of the editor landing the window holds
+    /// — silently, and synchronously, before anything else moves: another
     /// route is putting the reader somewhere (the editor-focus funnel behind
-    /// every open, tab switch and pane move; a modal surface opening), so the
-    /// ring's late completion must neither seat focus nor speak.</summary>
+    /// every open, tab switch and pane move), so a late completion must neither
+    /// seat focus nor speak. OD-12: the window holds one, whoever asked for it.</summary>
     internal void WithdrawHeldShellRegionLanding()
     {
-        if (_heldShellRegionPress is null)
+        _ringPress = null;
+        if (ShellRegionHost is { HoldsLanding: true } host)
         {
-            return;
+            _ = host.WithdrawHeldLanding();
         }
-
-        _heldShellRegionPress = null;
-        _ = ShellRegionHost?.WithdrawHeldLanding();
     }
 
     /// <summary>The press's traversal from <paramref name="current"/>, at most
@@ -787,18 +782,18 @@ internal sealed partial class WorkspaceViewModel
         {
             ShellRegionKind target = ShellRegionRing.Next(layout, current, direction);
             int taken = attempt + 1;
-            var press = new HeldShellRegionPress(target);
-            _heldShellRegionPress = press;
+            object press = new();
+            _ringPress = press;
             ShellRegionLanding landing = host.TryLand(
                 target,
                 () =>
                 {
-                    if (!ReferenceEquals(_heldShellRegionPress, press))
+                    if (!ReferenceEquals(_ringPress, press))
                     {
                         return;
                     }
 
-                    _heldShellRegionPress = null;
+                    _ringPress = null;
                     // W7-6 §4's modal rule: a modal surface owns the keys, so
                     // a success arriving under one is not spoken.
                     if (!host.ModalSurfaceOpen)
@@ -808,9 +803,9 @@ internal sealed partial class WorkspaceViewModel
                 },
                 () =>
                 {
-                    if (ReferenceEquals(_heldShellRegionPress, press))
+                    if (ReferenceEquals(_ringPress, press))
                     {
-                        _heldShellRegionPress = null;
+                        _ringPress = null;
                         CycleShellRegionFrom(host, target, direction, taken);
                     }
                 });
@@ -824,9 +819,9 @@ internal sealed partial class WorkspaceViewModel
                 return;
             }
 
-            if (ReferenceEquals(_heldShellRegionPress, press))
+            if (ReferenceEquals(_ringPress, press))
             {
-                _heldShellRegionPress = null;
+                _ringPress = null;
             }
 
             if (landing == ShellRegionLanding.Landed)

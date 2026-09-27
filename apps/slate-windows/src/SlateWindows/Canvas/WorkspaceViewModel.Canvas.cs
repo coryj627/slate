@@ -23,6 +23,30 @@ internal sealed partial class WorkspaceViewModel
     private readonly Dictionary<string, CanvasDocumentViewModel> _canvasDocuments =
         new(StringComparer.Ordinal);
 
+    /// <summary>W7-7 PR 8 (R-10, OD-12): a canvas or graph document's landing
+    /// was raised for a tab outside the editor-focus funnel — the shell holds
+    /// it in its one slot from here, so the reader leaving before it seats
+    /// cancels it.</summary>
+    internal event EventHandler<WorkspaceTabViewModel>? DocumentLandingRaised;
+
+    /// <summary>W7-7 PR 8 (R-10, OD-12): a canvas jump's named landing (the
+    /// marks list's Enter, IG-39): the card the reader chose, not the funnel's
+    /// unnamed one, so it is raised here rather than through
+    /// <see cref="RequestActiveEditorFocus"/> — superseding any landing the
+    /// window holds, and handed to the shell to hold.</summary>
+    internal void RaiseCanvasNodeLanding(CanvasDocumentViewModel document, object owner, string nodeId)
+    {
+        ArgumentNullException.ThrowIfNull(document);
+        ArgumentNullException.ThrowIfNull(owner);
+        WithdrawHeldShellRegionLanding();
+        document.RequestFocusLanding(owner, nodeId);
+        if (owner is WorkspaceTabViewModel tab && document.FocusRequest is { } request
+            && ReferenceEquals(request.Owner, tab))
+        {
+            DocumentLandingRaised?.Invoke(this, tab);
+        }
+    }
+
     /// <summary>The active tab's canvas document, or null — every
     /// <c>slate.canvas.*</c> command gates on this (the Bases
     /// <c>ActiveBaseDocument</c> precedent). Keyed on the ATTACHED
@@ -146,7 +170,11 @@ internal sealed partial class WorkspaceViewModel
                 _ = TryPresentCanvasPrompt(CanvasPromptViewModel.SetColorMarked(document));
             document.MarksListRequested += owner =>
                 _ = TryPresentCanvasPrompt(
-                    CanvasPromptViewModel.MarksList(document, owner, CloseCanvasPromptIfCurrent));
+                    CanvasPromptViewModel.MarksList(
+                        document,
+                        owner,
+                        CloseCanvasPromptIfCurrent,
+                        (landingOwner, nodeId) => RaiseCanvasNodeLanding(document, landingOwner, nodeId)));
             _canvasDocuments[key] = document;
             InstallCanvasDocumentSeams(document);
             document.Load();

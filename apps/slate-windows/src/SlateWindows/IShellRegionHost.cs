@@ -30,16 +30,25 @@ internal interface IShellRegionHost
     /// host then calls <paramref name="announceWhenLanded"/> once focus is
     /// actually in the region, or <paramref name="fallThroughWhenRefused"/>
     /// once the held landing turns out to be untakeable (the view model
-    /// resumes the ring past it), and neither when it is withdrawn.</summary>
+    /// resumes the ring past it), each at most once, and neither once it is
+    /// withdrawn.</summary>
     ShellRegionLanding TryLand(
         ShellRegionKind region, Action announceWhenLanded, Action fallThroughWhenRefused);
 
-    /// <summary>Let go of the landing the last <see
-    /// cref="ShellRegionLanding.Pending"/> answer is holding (W7-7 PR 8, R-10:
-    /// a newer press cancels it): no line, no fall-through, and focus is not
-    /// moved for it. Answers whether it was still held with the reader
-    /// exactly where the held press left them — false when the region already
-    /// let go of it (it completed, the view changed) or the reader moved,
-    /// even between two stops of one region.</summary>
+    /// <summary>W7-7 PR 8 (R-10, OD-12): the host holds an editor landing —
+    /// one per window, whoever asked for it (the ring or a route).</summary>
+    bool HoldsLanding { get; }
+
+    /// <summary>The ring position of the landing the host holds for an F6
+    /// press — null when it holds none, or holds a route's. The one answer to
+    /// "is a press's landing held" (OD-12).</summary>
+    ShellRegionKind? HeldRingRegion { get; }
+
+    /// <summary>Let go of the landing the host holds, whoever asked for it
+    /// (W7-7 PR 8, R-10: a newer press or route cancels it): no line, no
+    /// fall-through, and focus is not moved for it. Answers whether it was
+    /// still held with the reader exactly where it left them — false when the
+    /// host already let go of it (it completed, the view changed) or the reader
+    /// moved, even between two stops of one region.</summary>
     bool WithdrawHeldLanding();
 }

@@ -143,7 +143,7 @@ public partial class MainWindow : IShellRegionHost
                 // — Landed (spoken now), Pending (held: spoken when it seats,
                 // resumed from here when it is refused) or Refused (nothing
                 // held, nothing moved: the press goes on).
-                _ = WithdrawHeldEditorLanding();
+                _ = _editorLandings.Withdraw();
                 return FocusEditorPane(
                     workspace.ActiveGroup, announceWhenLanded, fallThroughWhenRefused, forTheRing: true);
             case ShellRegionKind.EmptyEditor:
@@ -203,69 +203,87 @@ public partial class MainWindow : IShellRegionHost
             : ShellRegionLanding.Refused;
     }
 
-    /// <summary>W7-7 PR 8 (R-10; W7-6 §4's modal rule): a modal surface
-    /// opening withdraws the landing the F6 ring holds, synchronously — the
-    /// modal owns the keys, so the ring's late completion must neither seat
-    /// focus beneath it nor speak through it. Every view model whose flag
-    /// feeds <see cref="OpenModalSurface"/> reports its changes here.</summary>
+    /// <summary>W7-7 PR 8 (R-10, OD-12; W7-6 §4's modal rule): a modal surface
+    /// OPENING withdraws the editor landing the window holds, whoever asked for
+    /// it — the ring, a route, a surface-less route's request — synchronously:
+    /// the modal owns the keys, so nothing may seat beneath it or speak through
+    /// it. The edge, not the level: a modal's own changes while it stays open
+    /// (the palette clearing its query as a command's route runs) leave what
+    /// its commit raised to the landing that route queued, and a route landing
+    /// is never created while a modal is open (<see cref="LandEditorForRoute"/>).
+    /// Every view model whose flag feeds <see cref="OpenModalSurface"/> reports
+    /// its changes here.</summary>
     private void ModalSource_PropertyChanged(object? sender, System.ComponentModel.PropertyChangedEventArgs eventArgs)
     {
-        if (_viewModel.Workspace is { HoldsShellRegionLanding: true } workspace
-            && OpenModalSurface is not null)
+        bool open = OpenModalSurface is not null;
+        bool opened = open && !_modalSurfaceWasOpen;
+        _modalSurfaceWasOpen = open;
+        if (opened)
         {
-            workspace.WithdrawHeldShellRegionLanding();
+            _editorLandings.ModalOpened();
         }
     }
 
-    bool IShellRegionHost.WithdrawHeldLanding() => WithdrawHeldEditorLanding();
+    /// <summary>Whether a modal surface was open at the last report (the
+    /// modal hook's edge).</summary>
+    private bool _modalSurfaceWasOpen;
 
-    /// <summary>R-10: let go of the ONE editor landing the window holds,
-    /// whoever asked for it — the ring, or a route — answering whether it was
-    /// still held. A newer landing supersedes it (<see cref="FocusEditorPane"/>),
-    /// and so does the focus funnel before its own landing is queued.</summary>
-    private bool WithdrawHeldEditorLanding()
-    {
-        Func<bool>? withdraw = _withdrawHeldLanding;
-        _withdrawHeldLanding = null;
-        return withdraw?.Invoke() ?? false;
-    }
+    /// <summary>R-10 (OD-12): the ONE editor landing this window holds, whoever
+    /// asked for it, and everything that cancels it.</summary>
+    private readonly EditorLandingSlot _editorLandings;
 
-    /// <summary>How the editor landing the last Pending answer holds is let go
-    /// of (R-10), answering whether it was still held; a stale one is harmless
-    /// — each lets go of its own request only.</summary>
-    private Func<bool>? _withdrawHeldLanding;
+    /// <summary>The window's landing slot, for the facts that hold a landing
+    /// of their own in it.</summary>
+    internal EditorLandingSlot EditorLandings => _editorLandings;
+
+    bool IShellRegionHost.HoldsLanding => _editorLandings.Held is not null;
+
+    ShellRegionKind? IShellRegionHost.HeldRingRegion => _editorLandings.Held?.RingRegion;
+
+    bool IShellRegionHost.WithdrawHeldLanding() => _editorLandings.Withdraw();
+
+    /// <summary>What a held landing asked for group <paramref name="group"/>
+    /// is scoped to: the workspace (its active group) and the group (its active
+    /// tab).</summary>
+    private IReadOnlyList<System.ComponentModel.INotifyPropertyChanged> LandingScope(WorkspaceGroupViewModel group) =>
+        _viewModel.Workspace is WorkspaceViewModel workspace ? [workspace, group] : [group];
+
+    /// <summary>Whether <paramref name="group"/> is still the active group and
+    /// <paramref name="tab"/> its active tab — where a held landing was asked
+    /// for.</summary>
+    private bool IsStillWhereAsked(WorkspaceGroupViewModel group, WorkspaceTabViewModel? tab) =>
+        _viewModel.Workspace is WorkspaceViewModel workspace
+        && ReferenceEquals(workspace.ActiveGroup, group)
+        && ReferenceEquals(group.ActiveTab, tab);
 
     /// <summary>R-10's canvas and graph arms. The tab's document is asked for
     /// its landing, which the document's surface seats — usually inside that
-    /// request, completing it. A request the document still
-    /// holds for the tab is Pending, EVEN with focus already in the surface:
-    /// a graph whose load is in flight seats a shell request PROVISIONALLY
-    /// (its state host, or the grid it still shows) and keeps the request
-    /// live for the terminal delivery to re-seat. Its line is spoken when the
-    /// document completes it seated, it falls through when the document lets
-    /// go of it unseated, and a newer press or request withdraws it —
-    /// releasing it, so the terminal delivery reclaims nothing. Ended inside
-    /// the request, the document's own account decides: a request of THIS
-    /// press it records as <see cref="DocumentLandingEnd.Seated"/> is Landed;
-    /// anything else is Refused (released unseated, or never taken: retired,
-    /// shut down). Where focus sits is never read: a provisional seat puts it
-    /// in the surface without the landing.</summary>
+    /// request, completing it. A request the document still holds for the tab
+    /// is Pending, EVEN with focus already in the surface: a graph whose load is
+    /// in flight seats a shell request PROVISIONALLY (its state host, or the
+    /// grid it still shows) and keeps the request live for the terminal
+    /// delivery to re-seat. The window's slot holds it (OD-12) — with or without
+    /// a realized surface; its line is spoken when the document completes it
+    /// seated, it falls through when the document lets go of it unseated, and
+    /// the slot cancels it (released, so the terminal delivery reclaims
+    /// nothing). Ended inside the request, the document's own account decides:
+    /// a request of THIS landing it records as
+    /// <see cref="DocumentLandingEnd.Seated"/> is Landed; anything else is
+    /// Refused (released unseated, or never taken: retired, shut down). Where
+    /// focus sits is never read: a provisional seat puts it in the surface
+    /// without the landing.</summary>
     private ShellRegionLanding LandDocument(
-        WorkspaceTabViewModel tab, Action? onLanded, Action onRefused, bool forTheRing)
+        WorkspaceGroupViewModel group, WorkspaceTabViewModel tab, Action? onLanded, Action onRefused, bool forTheRing)
     {
-        FrameworkElement? surface = tab.IsCanvas
-            ? FindVisualDescendants<Canvas.CanvasSurfaceView>(ContentPaneBorder)
-                .FirstOrDefault(candidate => ReferenceEquals(candidate.DataContext, tab))
-            : FindVisualDescendants<Graph.GraphSurfaceView>(ContentPaneBorder)
-                .FirstOrDefault(candidate => ReferenceEquals(candidate.DataContext, tab));
+        FrameworkElement? surface = DocumentSurfaceOf(tab);
         if (surface is null && forTheRing)
         {
-            // Finding 3 (codex round 5): the ring's landing is held through
-            // its surface's watch, so with no surface realized it creates NO
-            // request — one it could not watch would outlive this refusal, and
-            // the surface's Loaded would seat focus behind the region the press
-            // moved on to. A route's request stays the document's durable one
-            // (contract A14): the surface's realization delivers it.
+            // Finding 3 (codex round 5): the ring answers NOW — a press moves on
+            // to the next region — so with no surface realized it creates NO
+            // request: one left behind would seat focus behind the region the
+            // press moved on to. A route's request is the document's durable
+            // one (contract A14), held by the window's slot until the surface's
+            // realization delivers it.
             return ShellRegionLanding.Refused;
         }
 
@@ -281,6 +299,31 @@ public partial class MainWindow : IShellRegionHost
             graphToAsk.RequestFocusLanding(tab);
         }
 
+        if (HoldDocumentRequest(group, tab, onLanded, onRefused, forTheRing ? ShellRegionKind.Editor : null))
+        {
+            return ShellRegionLanding.Pending;
+        }
+
+        return LastDocumentLandingEnd(tab) is { End: DocumentLandingEnd.Seated } ended
+            && !ReferenceEquals(ended, endedBefore)
+            && ReferenceEquals(ended.Owner, tab)
+            ? ShellRegionLanding.Landed
+            : ShellRegionLanding.Refused;
+    }
+
+    /// <summary>R-10 (OD-12): hold the request <paramref name="tab"/>'s canvas or
+    /// graph document holds for it — pending, whoever raised it — in the
+    /// window's slot, answering whether there was one. The slot resolves the
+    /// tab's surface each time it reads a move, so a surface realized after the
+    /// request still takes its entry.</summary>
+    private bool HoldDocumentRequest(
+        WorkspaceGroupViewModel group,
+        WorkspaceTabViewModel tab,
+        Action? onLanded,
+        Action onRefused,
+        ShellRegionKind? ringRegion)
+    {
+        FrameworkElement? surface = DocumentSurfaceOf(tab);
         HeldDocumentLanding? held = tab switch
         {
             { IsCanvas: true, Canvas: { FocusRequest: { } request } canvas }
@@ -297,18 +340,37 @@ public partial class MainWindow : IShellRegionHost
                     onLanded, onRefused),
             _ => null,
         };
-        if (held is not null)
+        if (held is null)
         {
-            _withdrawHeldLanding = held.Withdraw;
-            return ShellRegionLanding.Pending;
+            return false;
         }
 
-        return LastDocumentLandingEnd(tab) is { End: DocumentLandingEnd.Seated } ended
-            && !ReferenceEquals(ended, endedBefore)
-            && ReferenceEquals(ended.Owner, tab)
-            ? ShellRegionLanding.Landed
-            : ShellRegionLanding.Refused;
+        FrameworkElement? seen = surface;
+        _editorLandings.Hold(new HeldEditorLanding(
+            target: () =>
+            {
+                if (seen is null || !ReferenceEquals(seen.DataContext, tab) || !seen.IsLoaded)
+                {
+                    seen = DocumentSurfaceOf(tab);
+                }
+
+                return seen;
+            },
+            isLive: () => held.IsHeld,
+            withdraw: held.Withdraw,
+            stillWhereAsked: () => IsStillWhereAsked(group, tab),
+            scope: LandingScope(group),
+            ringRegion: ringRegion));
+        return true;
     }
+
+    /// <summary>The canvas or graph surface realized for <paramref name="tab"/>
+    /// in the content pane, or null.</summary>
+    private FrameworkElement? DocumentSurfaceOf(WorkspaceTabViewModel tab) => tab.IsCanvas
+        ? FindVisualDescendants<Canvas.CanvasSurfaceView>(ContentPaneBorder)
+            .FirstOrDefault(candidate => ReferenceEquals(candidate.DataContext, tab))
+        : FindVisualDescendants<Graph.GraphSurfaceView>(ContentPaneBorder)
+            .FirstOrDefault(candidate => ReferenceEquals(candidate.DataContext, tab));
 
     /// <summary>The canvas or graph document's own record of the last
     /// request it ended (R-10), or null for any other tab.</summary>
@@ -319,25 +381,24 @@ public partial class MainWindow : IShellRegionHost
         _ => null,
     };
 
-    /// <summary>A canvas or graph landing the ring is waiting on (R-10). The
-    /// document ending the request is its one signal, and the document's own
-    /// account of HOW decides (<see cref="DocumentLandingEnd"/>) — never where
-    /// focus sits, because a graph seats a shell request provisionally while
-    /// its load is in flight and keeps it pending: the line when the document
-    /// records it ended SEATED (a declared terminal seat took focus, then
-    /// completed it), the fall-through when it let go of it any other way (a
-    /// rows-only failure or a rejection after a provisional seat, a load that
-    /// failed, the document torn down while its surface still shows the tab). It is
-    /// CANCELLED instead — silently, the request released so the document
-    /// seats nobody later — by a newer press, by a newer request in its
-    /// place, by the surface leaving the tab (the shared cell rebinds on a
-    /// tab switch or close) or the tree (an unload: a closed pane), and the
-    /// moment the reader leaves the element the press found them on — or,
-    /// once inside the surface, moves on within it: only the document's own
-    /// terminal seat moves them there after the one entry (<see
-    /// cref="FocusDepartureWatch"/>). Cancelled and Refused are exclusive: a
-    /// refusal is decided after the move it may travel with, and stands only
-    /// if nothing cancelled the landing first.</summary>
+    /// <summary>A canvas or graph document's request an editor landing waits
+    /// on (R-10). The document ending the request is its one signal, and the
+    /// document's own account of HOW decides (<see cref="DocumentLandingEnd"/>)
+    /// — never where focus sits, because a graph seats a shell request
+    /// provisionally while its load is in flight and keeps it pending: the line
+    /// when the document records it ended SEATED (a declared terminal seat took
+    /// focus, then completed it), the fall-through when it let go of it any
+    /// other way (a rows-only failure or a rejection after a provisional seat, a
+    /// load that failed, the document torn down while its surface still shows
+    /// the tab). It is CANCELLED instead — silently, the request released so the
+    /// document seats nobody later — by the window's slot (OD-12: a newer
+    /// landing, the reader's departure, a modal opening, the window
+    /// deactivating, the active tab changing), by a newer request in its place,
+    /// and by the surface it was held with leaving the tab (the shared cell
+    /// rebinds on a tab switch or close) or the tree (an unload: a closed pane).
+    /// Cancelled and Refused are exclusive: a refusal is decided after the move
+    /// it may travel with, and stands only if nothing cancelled the landing
+    /// first.</summary>
     private sealed class HeldDocumentLanding
     {
         private readonly System.Windows.Threading.Dispatcher _dispatcher;
@@ -350,13 +411,12 @@ public partial class MainWindow : IShellRegionHost
         private readonly Action _release;
         private readonly Action? _announce;
         private readonly Action _fallThrough;
-        private readonly FocusDepartureWatch? _departure;
         private bool _done;
 
-        /// <param name="surface">The surface that will seat the request; null
-        /// only for a route's request whose surface is not realized yet — the
-        /// document's durable request, which its realization delivers, watched
-        /// through the document alone.</param>
+        /// <param name="surface">The surface realized for the tab when the
+        /// landing was held; null for a route's request whose surface is not
+        /// realized yet — the document's durable request, which its realization
+        /// delivers.</param>
         public HeldDocumentLanding(
             System.Windows.Threading.Dispatcher dispatcher,
             FrameworkElement? surface,
@@ -384,9 +444,12 @@ public partial class MainWindow : IShellRegionHost
             {
                 surface.DataContextChanged += SurfaceRebound;
                 surface.Unloaded += SurfaceUnloaded;
-                _departure = new FocusDepartureWatch(surface, () => _ = Withdraw());
             }
         }
+
+        /// <summary>Whether the landing is still held: not seated, refused or
+        /// withdrawn.</summary>
+        public bool IsHeld => !_done;
 
         /// <summary>Withdraw the landing; answers whether it was still held.
         /// (One its document let go of still counts until the refusal is
@@ -417,7 +480,6 @@ public partial class MainWindow : IShellRegionHost
                 _surface.Unloaded -= SurfaceUnloaded;
             }
             _document.PropertyChanged -= RequestChanged;
-            _departure?.Dispose();
             return true;
         }
 

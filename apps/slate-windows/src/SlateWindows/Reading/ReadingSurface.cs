@@ -361,7 +361,6 @@ internal sealed class ReadingSurface : RichTextBox
     private object? _focusLandingToken;
     private Action? _focusLandingAnnouncement;
     private Action? _focusLandingRefusal;
-    private FocusDepartureWatch? _focusLandingDeparture;
 
     internal IReadOnlyList<ReadingLandmark> LandmarksForTests => _landmarks;
 
@@ -495,8 +494,9 @@ internal sealed class ReadingSurface : RichTextBox
         }
         if (!ShowsAppliedProjection || _model is { RefreshInFlight: true })
         {
-            // Parked BEFORE the hold: the departure watch the hold starts
-            // latches from the stop the reader now waits on.
+            // Parked BEFORE the hold: the park is the landing's own move, made
+            // before the window's slot holds it, and the reader's departure is
+            // read from the stop they now wait on.
             if (IsKeyboardFocusWithin)
             {
                 _ = parkWhileUnready?.Invoke();
@@ -526,18 +526,18 @@ internal sealed class ReadingSurface : RichTextBox
     private bool ShowsFailure =>
         _model is { PublishedFailureNotice: true } or { LastRefreshFailed: true };
 
-    /// <summary>Hold the landing. The reader's leaving is latched from the
-    /// element this request found them on (<see cref="FocusDepartureWatch"/>):
-    /// a move they — or another route — make withdraws the landing at once,
-    /// and coming back does not revive it. Stepping into the surface is
-    /// followed once; moving on inside it after that is a move too.</summary>
+    /// <summary>Hold the landing, under a token of its own
+    /// (<see cref="HeldFocusLanding"/>). The surface seats or refuses it and
+    /// lets go of it when it is hidden or rebinds; everything else that cancels
+    /// it — the reader leaving where the request found them, a modal opening,
+    /// a newer landing — is the window's one slot (OD-12,
+    /// <see cref="EditorLandingSlot"/>), which cancels it by that token.</summary>
     private void HoldFocusLanding(Action? announceWhenLanded, Action? fallThroughWhenRefused)
     {
         _focusLandingPending = true;
         _focusLandingToken = new object();
         _focusLandingAnnouncement = announceWhenLanded;
         _focusLandingRefusal = fallThroughWhenRefused;
-        _focusLandingDeparture = new FocusDepartureWatch(this, WithdrawFocusLanding);
     }
 
     /// <summary>R-10: the refresh the landing waits on settled — the ONE
@@ -573,11 +573,10 @@ internal sealed class ReadingSurface : RichTextBox
     /// it by — or null when no landing is held.</summary>
     internal object? HeldFocusLanding => _focusLandingPending ? _focusLandingToken : null;
 
-    /// <summary>Let go of the held landing <paramref name="token"/> names — a
-    /// newer editor landing, the funnel or a modal cancels it — and of nothing
-    /// a later request holds. Answers whether it was still held: the reader's
-    /// leaving withdraws it at once, so a landing still held has the reader
-    /// exactly where its request found them.</summary>
+    /// <summary>Let go of the held landing <paramref name="token"/> names — the
+    /// window's slot cancels it (a newer editor landing, the funnel, the
+    /// reader's departure, a modal opening) — and of nothing a later request
+    /// holds. Answers whether it was still held.</summary>
     internal bool CancelFocusLanding(object token)
     {
         if (!_focusLandingPending || !ReferenceEquals(_focusLandingToken, token))
@@ -627,8 +626,6 @@ internal sealed class ReadingSurface : RichTextBox
         _focusLandingToken = null;
         _focusLandingAnnouncement = null;
         _focusLandingRefusal = null;
-        _focusLandingDeparture?.Dispose();
-        _focusLandingDeparture = null;
     }
 
     /// <summary>
@@ -641,12 +638,12 @@ internal sealed class ReadingSurface : RichTextBox
     /// cref="ScheduleSettledLanding"/>), focus is refused, or before any apply
     /// the model was torn down (<see cref="Model_TornDown"/>) — it is REFUSED:
     /// the caller falls through (the F6 ring moves on from the editor's
-    /// position) and nothing is spoken. It is WITHDRAWN, with neither, the
-    /// moment the reader leaves where its request found them (<see
-    /// cref="FocusDepartureWatch"/>), and when the surface is hidden (unloaded
-    /// included) or rebinds: the view left under a move the reader or the
-    /// shell made, and falling through over it would pull focus away from
-    /// where that move put it.
+    /// position) and nothing is spoken. It is WITHDRAWN, with neither, when
+    /// the window's slot cancels it (the reader leaving where its request
+    /// found them — <see cref="EditorLandingSlot"/>), and when the surface is
+    /// hidden (unloaded included) or rebinds: the view left under a move the
+    /// reader or the shell made, and falling through over it would pull focus
+    /// away from where that move put it.
     /// </summary>
     private void DeliverFocusLanding()
     {

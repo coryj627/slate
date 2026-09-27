@@ -923,7 +923,7 @@ internal sealed class GraphSurfaceView : UserControl, IGraphSurfacePresenter
             }
             // The build's terminal seat completes the request: declared, so a
             // held F6 landing (R-10) takes the move for its arrival.
-            EndDelivery(model, request, restoration, FocusDepartureWatch.SeatTerminally(
+            EndDelivery(model, request, restoration, EditorLandingSlot.SeatTerminally(
                 this, () => LandingSeats.On(model.HasLiveDiagram ? _diagram : _stateHost)));
             return;
         }
@@ -964,11 +964,11 @@ internal sealed class GraphSurfaceView : UserControl, IGraphSurfacePresenter
                 // The grid may have been collapsed under EMPTY or ERROR: realise
                 // its containers before the seat (Term F2).
                 _table.UpdateLayout();
-                seat = FocusDepartureWatch.SeatTerminally(this, _table.SeatProjection);
+                seat = EditorLandingSlot.SeatTerminally(this, _table.SeatProjection);
                 break;
             case GraphLoadState.Empty:
             case GraphLoadState.Error:
-                seat = FocusDepartureWatch.SeatTerminally(this, () => LandingSeats.On(_stateHost));
+                seat = EditorLandingSlot.SeatTerminally(this, () => LandingSeats.On(_stateHost));
                 break;
             default:
                 // Quiescent LOADING: nothing to land on; the transition's load
