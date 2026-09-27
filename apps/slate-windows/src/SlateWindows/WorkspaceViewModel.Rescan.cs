@@ -54,9 +54,25 @@ internal sealed partial class WorkspaceViewModel
 
     /// <summary>The index's view of one path, as the lifecycle read it on a
     /// worker: its content hash (null — no index row), and whether a file is
-    /// on disk there (asked only when there is no row: an unindexed file
-    /// that exists — a dot-folder note, say — is never marked missing).</summary>
-    internal readonly record struct IndexedPath(string? Hash, bool OnDisk);
+    /// on disk there under this spelling (asked only when there is no row:
+    /// an unindexed file that exists — a dot-folder note, say — is never
+    /// marked missing). <paramref name="ProbeFailed"/> (codex AR-18 review
+    /// round 2, finding 7): that probe failed — the path is kept as present
+    /// (never marked missing on a guess, contract I7) and the failure counts
+    /// one error in the rescan's sentence.</summary>
+    internal readonly record struct IndexedPath(string? Hash, bool OnDisk, bool ProbeFailed = false);
+
+    /// <summary>A missing tab's path as the re-sync's worker probed it
+    /// (codex AR-18 review round 2, finding 1): the spelling the filesystem
+    /// stores (null — nothing there), whether that probe failed, and — for
+    /// a Markdown path — the index's hash of the stored spelling and the
+    /// worker's read of it. A clean tab re-seats only onto bytes whose hash
+    /// is that index hash.</summary>
+    internal readonly record struct ReseatProbe(
+        string? Stored,
+        bool Failed,
+        string? IndexHash,
+        RescanRead? Read);
 
     /// <summary>A worker's read of one Markdown path: its text and that
     /// text's content hash — the index's hash function, over the same bytes.</summary>
@@ -126,8 +142,16 @@ internal sealed partial class WorkspaceViewModel
     internal async Task<RescanDocumentsOutcome> ReSyncOpenDocumentsAsync(
         IReadOnlyDictionary<string, IndexedPath> indexed,
         Func<string, Task<RescanRead?>> readOnWorker,
+        Func<IReadOnlyList<(string Path, bool Markdown)>, Task<IReadOnlyDictionary<string, ReseatProbe>>> probeReseatOnWorker,
         CancellationToken cancellation)
     {
+        // A new run registers its own work for the close's drain; what an
+        // earlier run registered stays only while it is still running.
+        _ = _rescanWorkDrains.RemoveAll(drain => drain().IsCompleted);
+
+        // Finding 7: a path whose spelling probe failed was kept as present
+        // and counts one error.
+        ulong failed = (ulong)indexed.Values.Count(entry => entry.ProbeFailed);
         string[] missing =
         [
             .. Groups.SelectMany(group => group.Tabs)
@@ -146,10 +170,7 @@ internal sealed partial class WorkspaceViewModel
             }
         }
 
-        if (Groups.SelectMany(group => group.Tabs).Any(tab => tab.IsMissingFromDisk))
-        {
-            ReseatMissingTabs();
-        }
+        failed += await ReseatMissingTabsAsync(probeReseatOnWorker, cancellation);
 
         var changed = new HashSet<string>(StringComparer.Ordinal);
         var reopened = new HashSet<BaseDocumentViewModel>(ReferenceEqualityComparer.Instance);
@@ -204,7 +225,12 @@ internal sealed partial class WorkspaceViewModel
             if (stale)
             {
                 _ = changed.Add(path);
-                work.Add(RunKindReload("canvas", path, () => canvas.ReloadAsync(cancellation)));
+                work.Add(RunKindReload("canvas", path, () =>
+                {
+                    Task reload = canvas.ReloadAsync(cancellation);
+                    TrackRescanWork(canvas.WhenWorkDrained());
+                    return reload;
+                }));
             }
         }
 
@@ -220,11 +246,135 @@ internal sealed partial class WorkspaceViewModel
 
             _ = changed.Add(path);
             _ = reopened.Add(document);
-            work.Add(RunKindReload("base", path, () => document.LoadAsync(cancellation)));
+            work.Add(RunKindReload("base", path, () =>
+            {
+                Task reopen = document.LoadAsync(cancellation);
+                TrackRescanWork(document.WhenWorkDrained());
+                return reopen;
+            }));
         }
 
-        ulong failed = await CountRescanFailuresAsync(work, cancellation);
+        failed += await CountRescanFailuresAsync(work, cancellation);
         return new RescanDocumentsOutcome(failed, changed, reopened);
+    }
+
+    /// <summary>
+    /// W7-7 PR 7 (#1252, R-9; codex AR-18 review round 2, finding 1): the
+    /// re-sync's re-seat of missing tabs (#1077). Every core call — the
+    /// stored spelling, the index's hash of it, the read of it — runs on
+    /// the rescan worker with the run's token; back on the dispatcher, in
+    /// ONE turn, a tab re-seats only on its ticket (the same tab, item and
+    /// still missing): a dirty tab takes the stored spelling as its
+    /// identity and keeps its buffer (contract I8); a clean Markdown tab,
+    /// unedited since the probe, re-seats onto the worker's bytes only when
+    /// their hash is the index's hash of the stored spelling — a tab never
+    /// shows bytes the index does not vouch for; any other clean Markdown
+    /// tab stays missing and counts one error (the next rescan re-seats
+    /// it); a tab of another kind re-seats as before. A failed probe keeps
+    /// the tab missing and counts one error. Returns the errors.
+    /// </summary>
+    private async Task<ulong> ReseatMissingTabsAsync(
+        Func<IReadOnlyList<(string Path, bool Markdown)>, Task<IReadOnlyDictionary<string, ReseatProbe>>> probeOnWorker,
+        CancellationToken cancellation)
+    {
+        TabTicket[] tickets =
+        [
+            .. Groups.SelectMany(group => group.Tabs)
+                .Where(tab => tab.IsMissingFromDisk && !string.IsNullOrEmpty(tab.Path))
+                .Select(TabTicket.Capture),
+        ];
+        if (tickets.Length == 0)
+        {
+            return 0;
+        }
+
+        (string Path, bool Markdown)[] paths =
+        [
+            .. tickets
+                .GroupBy(ticket => ticket.Tab.Path, StringComparer.Ordinal)
+                .Select(group => (group.Key, group.Any(ticket => ticket.Tab.IsMarkdown))),
+        ];
+        IReadOnlyDictionary<string, ReseatProbe> probes = await probeOnWorker(paths);
+        cancellation.ThrowIfCancellationRequested();
+
+        // Back on the dispatcher: the apply turn.
+        HashSet<WorkspaceTabViewModel> live =
+            new(Groups.SelectMany(group => group.Tabs), ReferenceEqualityComparer.Instance);
+        var failedPaths = new HashSet<string>(StringComparer.Ordinal);
+        foreach (TabTicket ticket in tickets)
+        {
+            WorkspaceTabViewModel tab = ticket.Tab;
+            if (!live.Contains(tab)
+                || tab.Id != ticket.Id
+                || tab.Item != ticket.Item
+                || !tab.IsMissingFromDisk
+                || !probes.TryGetValue(tab.Path, out ReseatProbe probe))
+            {
+                continue;
+            }
+
+            if (probe.Failed)
+            {
+                // An identity we cannot read is left as it is (fail
+                // closed, contract I7): the tab stays missing.
+                _ = failedPaths.Add(tab.Path);
+                continue;
+            }
+
+            if (probe.Stored is not string stored)
+            {
+                continue;
+            }
+
+            bool respelled = !string.Equals(stored, tab.Path, StringComparison.Ordinal);
+            if (tab.IsDirty)
+            {
+                if (respelled)
+                {
+                    tab.RetargetPath(stored);
+                }
+
+                continue;
+            }
+
+            if (!tab.IsMarkdown)
+            {
+                if (respelled)
+                {
+                    tab.RetargetPath(stored);
+                }
+
+                tab.ReplaceItem(tab.Item);
+                continue;
+            }
+
+            if (tab.ContentGeneration == ticket.Generation && probe.IndexHash is null)
+            {
+                // The index does not track the stored spelling (an
+                // unindexed folder): nothing can vouch for its bytes, so
+                // the tab stays missing.
+                continue;
+            }
+
+            bool vouched = tab.ContentGeneration == ticket.Generation
+                && probe.Read is { } read
+                && string.Equals(read.Hash, probe.IndexHash, StringComparison.Ordinal);
+            if (!vouched)
+            {
+                _ = failedPaths.Add(tab.Path);
+                continue;
+            }
+
+            if (respelled)
+            {
+                tab.RetargetPath(stored);
+            }
+
+            tab.ReplaceItemWithReadText(tab.Item, probe.Read!.Value.Text);
+            TrackTabRescanWork(tab);
+        }
+
+        return (ulong)failedPaths.Count;
     }
 
     /// <summary>
@@ -302,11 +452,13 @@ internal sealed partial class WorkspaceViewModel
         {
             tab.InvalidateExternalState();
             tab.ApplyExternalStaleness(indexHash);
+            TrackTabRescanWork(tab);
         }
 
         foreach (WorkspaceTabViewModel tab in reload)
         {
             tab.ReloadKeepingCaretLine(read!.Value.Text);
+            TrackTabRescanWork(tab);
         }
 
         if (reload.Count > 0)
@@ -316,6 +468,10 @@ internal sealed partial class WorkspaceViewModel
             // outline, tasks and citations re-read the new bytes.
             NotePersisted(path);
             TasksReview.NoteRefreshed(path);
+            TrackRescanWork(Panels.WhenWorkDrained());
+            TrackRescanWork(Citations.WhenWorkDrained());
+            TrackRescanWork(History.WhenWorkDrained());
+            TrackRescanWork(TasksReview.WhenWorkDrained());
         }
 
         if (unvouched)
@@ -342,20 +498,37 @@ internal sealed partial class WorkspaceViewModel
         CancellationToken cancellation)
     {
         InvalidateAllInteractionStates();
+        foreach (WorkspaceTabViewModel tab in Groups.SelectMany(group => group.Tabs))
+        {
+            TrackTabRescanWork(tab);
+        }
+
         var work = new List<Task>();
         foreach (ReadingContentViewModel reading in Groups.SelectMany(group => group.Tabs)
             .Select(tab => tab.Reading)
             .OfType<ReadingContentViewModel>()
             .Distinct())
         {
-            work.Add(RunKindReload("reading", string.Empty, reading.NotifyRescanAsync));
+            // Finding 5: the re-projection is the rescan's — silent, and
+            // its failure faults this Task for the count.
+            work.Add(RunKindReload("reading", string.Empty, () =>
+            {
+                Task projection = reading.NotifyRescanAsync(cancellation);
+                _rescanWorkDrains.Add(reading.WhenRefreshWorkDrained);
+                return projection;
+            }));
         }
 
         if (History.Path is string historyPath
             && NormalizeWorkspacePath(historyPath) is { Length: > 0 } shown
             && HistoryNoteChanged(shown, documents, indexed))
         {
-            work.Add(RunKindReload("history", shown, () => History.NoteSavedAsync(historyPath)));
+            work.Add(RunKindReload("history", shown, () =>
+            {
+                Task reload = History.NoteSavedAsync(historyPath);
+                TrackRescanWork(History.WhenWorkDrained());
+                return reload;
+            }));
         }
 
         work.Add(RunKindReload("bases", string.Empty, () => ReSyncBasesAsync(documents.ReopenedBases, cancellation)));
@@ -407,6 +580,7 @@ internal sealed partial class WorkspaceViewModel
             if (seen.Add(document) && !reopened.Contains(document))
             {
                 publications.Add(document.RefreshAsync(cancellation));
+                TrackRescanWork(document.WhenWorkDrained());
             }
         }
 
@@ -415,6 +589,7 @@ internal sealed partial class WorkspaceViewModel
             : _dashboardDocuments.Values)
         {
             publications.Add(dashboard.LoadAsync(cancellation));
+            TrackRescanWork(dashboard.WhenWorkDrained());
         }
 
         return Task.WhenAll(publications);
@@ -430,39 +605,126 @@ internal sealed partial class WorkspaceViewModel
     {
         NotifyGraphOfVaultChange();
         var probes = new List<Task> { Connections.WhenPublishedAsync() };
+        TrackRescanWork(Connections.WhenWorkDrained());
         if (_graphDocument is { IsRetired: false } document)
         {
             probes.Add(document.WhenPublishedAsync());
+            TrackRescanWork(document.WhenWorkDrained());
         }
 
         return Task.WhenAll(probes);
     }
 
     /// <summary>Await every re-sync operation; each that faults counts one
-    /// failure (logged by type only). A cancelled run unwinds.</summary>
+    /// failure (logged by type only). A cancelled run stops awaiting AT
+    /// ONCE (codex AR-18 review round 2, finding 4) — a publication parked
+    /// behind a close never holds it — and unwinds; the work it started is
+    /// the close's to drain (<see cref="DrainRescanWork"/>).</summary>
     private static async Task<ulong> CountRescanFailuresAsync(
         IReadOnlyList<Task> work,
         CancellationToken cancellation)
     {
-        ulong failed = 0;
-        foreach (Task task in work)
+        Task all = Task.WhenAll(work);
+        if (!all.IsCompleted)
         {
-            try
+            var cancelled = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
+            using (cancellation.Register(() => cancelled.TrySetResult()))
             {
-                await task;
-            }
-            catch (OperationCanceledException) when (cancellation.IsCancellationRequested)
-            {
-            }
-            catch (Exception exception) when (exception is not OutOfMemoryException)
-            {
-                HostLog.Write(HostDiagnosticEvent.VaultRescanFailed, exception);
-                failed++;
+                _ = await Task.WhenAny(all, cancelled.Task);
             }
         }
 
-        cancellation.ThrowIfCancellationRequested();
+        if (cancellation.IsCancellationRequested)
+        {
+            // Abandoned: observed, so a later fault is never unobserved.
+            _ = all.ContinueWith(
+                abandoned => _ = abandoned.Exception,
+                CancellationToken.None,
+                TaskContinuationOptions.OnlyOnFaulted | TaskContinuationOptions.ExecuteSynchronously,
+                TaskScheduler.Default);
+            throw new OperationCanceledException(cancellation);
+        }
+
+        ulong failed = 0;
+        foreach (Task task in work)
+        {
+            if (task.IsCompletedSuccessfully)
+            {
+                continue;
+            }
+
+            Exception failure = task.Exception?.InnerException
+                ?? new OperationCanceledException("A re-sync operation was cancelled outside the run.");
+            HostLog.Write(HostDiagnosticEvent.VaultRescanFailed, failure);
+            failed++;
+        }
+
         return failed;
+    }
+
+    // W7-7 PR 7 (codex AR-18 review round 2, finding 4): the work this run
+    // started outside the rescan seam — its reloads' and dependents' worker
+    // bodies, the reading fetches and editor-cache loads it triggered —
+    // each a drain the close waits for before the session is disposed.
+    private readonly List<Func<Task>> _rescanWorkDrains = [];
+
+    /// <summary>Register a worker drain taken right after the run started
+    /// the work (a scheduler's tracked set is added to synchronously).</summary>
+    private void TrackRescanWork(Task drained)
+    {
+        if (!drained.IsCompleted)
+        {
+            _rescanWorkDrains.Add(() => drained);
+        }
+    }
+
+    /// <summary>A tab's workers a run started — its editor coordinator's
+    /// cache loads and its reading model's fetch — read at drain time, so a
+    /// retry they issue later is drained too.</summary>
+    private void TrackTabRescanWork(WorkspaceTabViewModel tab)
+    {
+        if (tab.EditorInteractions is { } coordinator)
+        {
+            _rescanWorkDrains.Add(coordinator.WhenBackgroundWorkDrained);
+        }
+
+        if (tab.Reading is { } reading)
+        {
+            _rescanWorkDrains.Add(reading.WhenRefreshWorkDrained);
+        }
+    }
+
+    /// <summary>
+    /// W7-7 PR 7 (codex AR-18 review round 2, finding 4): teardown — after
+    /// every scheduler has shut down (their posted applies settled, so no
+    /// drain below waits on this thread) — waits, WITHOUT a bound, until
+    /// none of the work the last rescan started is still inside a core
+    /// call: no session disposal ever races a rescan-originated native
+    /// call. Each such call is bounded (a single-note query) or takes the
+    /// run's token, which the close has cancelled.
+    /// </summary>
+    private void DrainRescanWork()
+    {
+        while (true)
+        {
+            Task[] pending = [.. _rescanWorkDrains.Select(drain => drain()).Where(task => !task.IsCompleted)];
+            if (pending.Length == 0)
+            {
+                break;
+            }
+
+            try
+            {
+                Task.WaitAll(pending);
+            }
+            catch (AggregateException)
+            {
+                // Tracked bodies never fault by contract; a fault is still
+                // an ended call.
+            }
+        }
+
+        _rescanWorkDrains.Clear();
     }
 
     private IEnumerable<BaseDocumentViewModel> FileBackedBaseDocuments()

@@ -53,7 +53,19 @@ internal sealed partial class FilesSidebarViewModel
     // reported failure of one, cancelled when a cancellation leaves
     // nothing to publish (a close, a shutdown).
     // The result is whether the settling publication's tag tree failed.
-    private readonly List<(int Generation, TaskCompletionSource<bool> Published)> _treeRefreshWaiters = [];
+    private readonly List<TreeRefreshWaiter> _treeRefreshWaiters = [];
+
+    /// <summary>One awaited refresh: the generation that settles it, and —
+    /// for the rescan's own refresh (codex AR-18 review round 2, finding 6)
+    /// — the context a REPLACEMENT refresh inherits, since that
+    /// replacement's publication settles this waiter: silent, the count
+    /// report, and the run's cancellation.</summary>
+    private sealed record TreeRefreshWaiter(
+        int Generation,
+        TaskCompletionSource<bool> Published,
+        bool Silent,
+        bool ReportCount,
+        CancellationToken Cancellation);
 
     /// <summary>
     /// W7-7 PR 7 (#1252, round 30): <see cref="Refresh"/> as the Task a
@@ -107,7 +119,7 @@ internal sealed partial class FilesSidebarViewModel
         }
 
         var published = new TaskCompletionSource<bool>(TaskCreationOptions.RunContinuationsAsynchronously);
-        (int Generation, TaskCompletionSource<bool> Published) waiter = (_treeGeneration + 1, published);
+        var waiter = new TreeRefreshWaiter(_treeGeneration + 1, published, silent, reportCount, cancellation);
         lock (_treeRefreshWaiters)
         {
             _treeRefreshWaiters.Add(waiter);
@@ -148,14 +160,14 @@ internal sealed partial class FilesSidebarViewModel
         bool cancelled = false,
         bool tagTreeFailed = false)
     {
-        List<(int Generation, TaskCompletionSource<bool> Published)> settled;
+        List<TreeRefreshWaiter> settled;
         lock (_treeRefreshWaiters)
         {
             settled = [.. _treeRefreshWaiters.Where(waiter => waiter.Generation <= generation)];
             _ = _treeRefreshWaiters.RemoveAll(waiter => waiter.Generation <= generation);
         }
 
-        foreach ((_, TaskCompletionSource<bool> published) in settled)
+        foreach (TaskCompletionSource<bool> published in settled.Select(waiter => waiter.Published))
         {
             _ = cancelled
                 ? published.TrySetCanceled()
@@ -190,6 +202,39 @@ internal sealed partial class FilesSidebarViewModel
             return;
         }
 
+        // W7-7 PR 7 (codex AR-18 review round 2, finding 6): this refresh's
+        // publication settles every pending awaited refresh — a rescan's
+        // among them — so it inherits a pending rescan refresh's context:
+        // silent (its failures counted by the rescan, never spoken), the
+        // count report, and the run's cancellation.
+        CancellationToken[] inherited = [];
+        lock (_treeRefreshWaiters)
+        {
+            TreeRefreshWaiter[] rescans =
+            [
+                .. _treeRefreshWaiters.Where(waiter => waiter.Silent && !waiter.Published.Task.IsCompleted),
+            ];
+            if (rescans.Length > 0)
+            {
+                silent = true;
+                reportCount |= rescans.Any(waiter => waiter.ReportCount);
+                inherited =
+                [
+                    .. rescans
+                        .Select(waiter => waiter.Cancellation)
+                        .Where(token => token.CanBeCanceled && token != external),
+                ];
+            }
+        }
+
+        CancellationTokenSource? inheritedLink = inherited.Length > 0
+            ? CancellationTokenSource.CreateLinkedTokenSource([external, .. inherited])
+            : null;
+        if (inheritedLink is not null)
+        {
+            external = inheritedLink.Token;
+        }
+
         CancelBulkExpansion();
         CancelChildExpansions();
         CancelTreeRefreshCore();
@@ -206,6 +251,7 @@ internal sealed partial class FilesSidebarViewModel
         int tagGeneration = _tagGeneration;
         if (_treeUiContext is null)
         {
+            using CancellationTokenSource? synchronousLink = inheritedLink;
             if (!TryBeginSessionWork(out SessionWorkLease? lease))
             {
                 SettleTreeRefreshWaiters(generation, failure: null, cancelled: true);
@@ -260,9 +306,10 @@ internal sealed partial class FilesSidebarViewModel
             return;
         }
 
-        CancellationTokenSource cancellation = external.CanBeCanceled
-            ? CancellationTokenSource.CreateLinkedTokenSource(external)
-            : new CancellationTokenSource();
+        CancellationTokenSource cancellation = inheritedLink
+            ?? (external.CanBeCanceled
+                ? CancellationTokenSource.CreateLinkedTokenSource(external)
+                : new CancellationTokenSource());
         CancellationToken token = cancellation.Token;
         lock (_treeRefreshCancellationGate)
         {

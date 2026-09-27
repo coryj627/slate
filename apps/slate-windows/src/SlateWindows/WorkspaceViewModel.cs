@@ -2507,6 +2507,13 @@ internal sealed partial class WorkspaceViewModel : BindableBase, IDisposable
         // released dashboard, a swept document) — their in-flight
         // bodies hold ephemeral handles just the same (codex round 3).
         basesDrains.AddRange(RetiredBasesDrains);
+        // W7-7 PR 7 (codex AR-18 review round 2, finding 4): every worker a
+        // rescan started — cancelled mid-re-sync by the close that brought
+        // us here — is drained to EMPTY, not bounded: no rescan-originated
+        // core call is ever in flight when the session is disposed. Every
+        // scheduler above has shut down, so none of these waits on this
+        // thread.
+        DrainRescanWork();
         basesDrains.RemoveAll(task => task.IsCompleted);
         if (basesDrains.Count > 0)
         {

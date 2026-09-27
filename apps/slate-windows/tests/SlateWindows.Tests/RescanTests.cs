@@ -32,7 +32,7 @@ namespace SlateWindows.Tests;
 /// runs on its own STA thread, which owns the editor and reading documents
 /// and drains every continuation the lifecycle awaits.
 /// </remarks>
-public sealed class RescanTests
+public sealed partial class RescanTests
 {
     private const string Explicit1 = "Files refreshed. 1 new or changed, 0 removed.";
     private const string NoChanges = "Files refreshed. No changes.";
@@ -2008,7 +2008,18 @@ public sealed class RescanTests
             return ThreadPoolRescanCoreWorker.Instance.Run(operation, () =>
             {
                 harness.RecordCoreCall(operation);
-                T result = call();
+                T result;
+                try
+                {
+                    result = call();
+                }
+                catch (Exception failure)
+                {
+                    harness.CoreCallOutcomes.Enqueue((operation, failure, harness.Clock.ElapsedMilliseconds));
+                    throw;
+                }
+
+                harness.CoreCallOutcomes.Enqueue((operation, null, harness.Clock.ElapsedMilliseconds));
                 if (result is ScanReport report)
                 {
                     harness.LastRescanReport = report;
@@ -2356,6 +2367,13 @@ public sealed class RescanTests
         /// seam: the operation, its thread, and whether that was a pool
         /// thread.</summary>
         public ConcurrentQueue<(string Operation, int Thread, bool Pool)> CoreCalls { get; } = new();
+
+        /// <summary>Every rescan core call's outcome — its failure, if it
+        /// threw — and when it finished on <see cref="Clock"/> (round 3).</summary>
+        public ConcurrentQueue<(string Operation, Exception? Failure, long At)> CoreCallOutcomes { get; } = new();
+
+        /// <summary>The fact's clock, started with the harness.</summary>
+        public Stopwatch Clock { get; } = Stopwatch.StartNew();
 
         public void RecordCoreCall(string operation) => CoreCalls.Enqueue(
             (operation, Environment.CurrentManagedThreadId, Thread.CurrentThread.IsThreadPoolThread));

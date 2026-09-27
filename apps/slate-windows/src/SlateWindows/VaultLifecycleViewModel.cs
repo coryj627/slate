@@ -857,6 +857,36 @@ internal sealed partial class VaultLifecycleViewModel
         _syncMarkerWatcher?.Dispose();
         _syncMarkerWatcher = null;
 
+        // W7-7 PR 7 (codex AR-18 review round 2, finding 3): the rescan's
+        // core-call admission closes FIRST, then the run is cancelled — its
+        // managed twin (host-side checks, F5), then its native token through
+        // the rescan core seam, off the dispatcher — so nothing new starts
+        // and whatever runs ends promptly; every admitted call is drained
+        // below before any native state is disposed.
+        CloseRescanCoreAdmission();
+        CancellationTokenSource? rescanCancellation = _rescanCancellation;
+        _rescanCancellation = null;
+        rescanCancellation?.Cancel();
+        CancelToken? rescanCancel = _rescanCancel;
+        _rescanCancel = null;
+        if (rescanCancel is not null)
+        {
+            try
+            {
+                _ = StartRescanCoreCall(
+                    "cancel",
+                    () =>
+                    {
+                        rescanCancel.Cancel();
+                        return true;
+                    }).GetAwaiter().GetResult();
+            }
+            catch (Exception exception)
+            {
+                HostLog.Write(HostDiagnosticEvent.VaultCommandFailed, exception);
+            }
+        }
+
         if (FileSidebar is FilesSidebarViewModel sidebar)
         {
             SidebarSessionShutdown shutdown = sidebar.BeginSessionShutdownAndCaptureWork();
@@ -902,34 +932,10 @@ internal sealed partial class VaultLifecycleViewModel
             HostLog.Write(HostDiagnosticEvent.VaultCommandFailed, exception);
         }
 
-        // W7-7 PR 7 (F5): the run's managed token first — host-side checks
-        // (the tag tree's, the reloads') read it, never the native one.
-        CancellationTokenSource? rescanCancellation = _rescanCancellation;
-        _rescanCancellation = null;
-        rescanCancellation?.Cancel();
-
-        // W7-7 PR 7 (round 26): a running rescan's token is cancelled — and
-        // below disposed — through the rescan core seam, off the dispatcher;
-        // this blocks only on that one pool call.
-        CancelToken? rescanCancel = _rescanCancel;
-        _rescanCancel = null;
-        if (rescanCancel is not null)
-        {
-            try
-            {
-                _ = StartRescanCoreCall(
-                    "cancel",
-                    () =>
-                    {
-                        rescanCancel.Cancel();
-                        return true;
-                    }).GetAwaiter().GetResult();
-            }
-            catch (Exception exception)
-            {
-                HostLog.Write(HostDiagnosticEvent.VaultCommandFailed, exception);
-            }
-        }
+        // W7-7 PR 7 (finding 3): every admitted rescan core call — the scan,
+        // the listing, the hash reads, the reads, the re-seat's probe — has
+        // ended before the tokens, the workspace or the session go.
+        DrainRescanCoreCalls();
 
         try
         {
@@ -1016,6 +1022,7 @@ internal sealed partial class VaultLifecycleViewModel
         _eventListener = null;
         _session?.Dispose();
         _session = null;
+        ReopenRescanCoreAdmission();
     }
 
     private void InitializeWorkspace(

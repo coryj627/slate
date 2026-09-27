@@ -66,6 +66,21 @@ internal sealed class ReadingContentViewModel : BindableBase, IDisposable
     /// leaves behind, which a rebind must repair by refreshing even
     /// before the first publication.</summary>
     private int _liveRefreshGeneration = -1;
+
+    // W7-7 PR 7 (codex AR-18 review round 2, finding 5): the generation a
+    // rescan requested — its publication is the rescan's, so its failure or
+    // degraded notice is counted by the rescan's one sentence and never
+    // spoken here. -1 when the current refresh is not a rescan's.
+    private int _silentGeneration = -1;
+
+    // Finding 5: the generation whose publish re-issued a refresh because
+    // its captured tuple drifted — its waiters are the retry's to settle.
+    private int _driftRetriedGeneration = -1;
+
+    // Finding 4: every background fetch in flight, drained by a close
+    // before the session is disposed.
+    private readonly object _refreshWorkGate = new();
+    private readonly HashSet<Task> _refreshWork = [];
     private FlowDocument? _document;
     private bool _isLoading;
     private DispatcherTimer? _editDebounce;
@@ -447,7 +462,15 @@ internal sealed class ReadingContentViewModel : BindableBase, IDisposable
     }
 
     /// <summary>Project the live buffer. Dispatcher thread only.</summary>
-    public void Refresh()
+    public void Refresh() => Refresh(silent: false, CancellationToken.None);
+
+    /// <summary>The refresh; <paramref name="silent"/> — a rescan's
+    /// re-projection (W7-7 PR 7, round 2 finding 5) — publishes its failure
+    /// or degraded notice without speaking it, and the rescan's
+    /// <paramref name="cancellation"/> (finding 4) is checked at the worker
+    /// boundary between the fetch's core calls: a cancelled fetch stops
+    /// there and publishes nothing.</summary>
+    private void Refresh(bool silent, CancellationToken cancellation)
     {
         if (_disposed || !_tab.IsMarkdown)
         {
@@ -456,6 +479,7 @@ internal sealed class ReadingContentViewModel : BindableBase, IDisposable
 
         int generation = ++_generation;
         _liveRefreshGeneration = generation;
+        _silentGeneration = silent ? generation : -1;
         string text = _tab.Text;
         string path = _tab.Path;
         long revision = _tab.EditorSession?.Revision ?? -1;
@@ -465,21 +489,25 @@ internal sealed class ReadingContentViewModel : BindableBase, IDisposable
         {
             try
             {
-                FetchResult fetched = FetchGuarded(_session, path, text);
-                Publish(generation, path, revision, sessionGeneration, fetched);
+                FetchResult fetched = FetchGuarded(_session, path, text, cancellation);
+                Publish(generation, path, revision, sessionGeneration, fetched, cancellation);
                 SettlePublicationWaiters(generation, failure: null);
+            }
+            catch (OperationCanceledException) when (cancellation.IsCancellationRequested)
+            {
+                SettlePublicationWaiters(generation, new OperationCanceledException(cancellation));
             }
             catch (Exception exception)
             {
                 RecordTerminalFailure(exception);
-                PublishTerminalFailure(generation);
-                SettlePublicationWaiters(generation, failure: null);
+                bool shown = PublishTerminalFailure(generation);
+                SettlePublicationWaiters(generation, shown ? exception : null);
             }
             return;
         }
 
         IsLoading = true;
-        _ = Task.Run(async () =>
+        TrackRefreshWork(Task.Run(async () =>
         {
             // The outer boundary exists because this task is
             // fire-and-forget: any exception the retry policy does not
@@ -493,40 +521,107 @@ internal sealed class ReadingContentViewModel : BindableBase, IDisposable
                 {
                     try
                     {
-                        fetched = FetchGuarded(_session, path, text);
+                        fetched = FetchGuarded(_session, path, text, cancellation);
                         break;
                     }
                     catch (Exception exception) when (
                         exception is VaultException or IOException
-                        && attempt < MaximumBackgroundRefreshAttempts)
+                        && attempt < MaximumBackgroundRefreshAttempts
+                        && !cancellation.IsCancellationRequested)
                     {
                         // Known-transient only; the last attempt and
                         // every other exception fall through to the
                         // terminal boundary.
-                        await Task.Delay(RetryDelay).ConfigureAwait(false);
+                        await Task.Delay(RetryDelay, cancellation).ConfigureAwait(false);
                     }
                 }
                 if (fetched is { } result)
                 {
                     _ = _dispatcher!.InvokeAsync(() => RunPublishStep(
                         generation,
-                        () => Publish(generation, path, revision, sessionGeneration, result)));
+                        () => Publish(generation, path, revision, sessionGeneration, result, cancellation)));
                 }
+            }
+            catch (OperationCanceledException) when (cancellation.IsCancellationRequested)
+            {
+                // The rescan that asked for this re-projection was
+                // cancelled (a close, a vault switch): nothing publishes
+                // and nothing is said.
+                _ = _dispatcher!.InvokeAsync(() =>
+                {
+                    if (generation == _generation)
+                    {
+                        _liveRefreshGeneration = -1;
+                        IsLoading = false;
+                    }
+
+                    SettlePublicationWaiters(generation, new OperationCanceledException(cancellation));
+                });
+            }
+            catch (VaultException.Cancelled) when (cancellation.IsCancellationRequested)
+            {
+                _ = _dispatcher!.InvokeAsync(() =>
+                {
+                    if (generation == _generation)
+                    {
+                        _liveRefreshGeneration = -1;
+                        IsLoading = false;
+                    }
+
+                    SettlePublicationWaiters(generation, new OperationCanceledException(cancellation));
+                });
             }
             catch (Exception exception)
             {
                 // Terminal: an unconditional host diagnostic (event +
                 // exception TYPE only, never payload text — W1-RT-01),
-                // then a generation-gated user-visible failure state.
+                // then a generation-gated user-visible failure state —
+                // and the awaiting rescan settled WITH the failure it
+                // shows (W7-7 PR 7, round 2 finding 5).
                 RecordTerminalFailure(exception);
                 _ = _dispatcher!.InvokeAsync(
                     () =>
                     {
-                        PublishTerminalFailure(generation);
-                        SettlePublicationWaiters(generation, failure: null);
+                        bool shown = PublishTerminalFailure(generation);
+                        SettlePublicationWaiters(generation, shown ? exception : null);
                     });
             }
-        });
+        }));
+    }
+
+    /// <summary>W7-7 PR 7 (codex AR-18 review round 2, finding 4): every
+    /// background fetch in flight has ended — a close drains this before
+    /// the session is disposed, so no fetch a rescan started is still
+    /// inside a core call when it goes.</summary>
+    internal Task WhenRefreshWorkDrained()
+    {
+        Task[] snapshot;
+        lock (_refreshWorkGate)
+        {
+            snapshot = [.. _refreshWork];
+        }
+
+        return Task.WhenAll(snapshot);
+    }
+
+    private void TrackRefreshWork(Task work)
+    {
+        lock (_refreshWorkGate)
+        {
+            _ = _refreshWork.Add(work);
+        }
+
+        _ = work.ContinueWith(
+            completed =>
+            {
+                lock (_refreshWorkGate)
+                {
+                    _ = _refreshWork.Remove(completed);
+                }
+            },
+            CancellationToken.None,
+            TaskContinuationOptions.ExecuteSynchronously,
+            TaskScheduler.Default);
     }
 
     /// <summary>Terminal-failure injection seam for tests.</summary>
@@ -544,13 +639,18 @@ internal sealed class ReadingContentViewModel : BindableBase, IDisposable
 
     internal bool ObservesEditorForTests => _observedDocument is not null;
 
-    private FetchResult FetchGuarded(VaultSession session, string path, string text)
+    private FetchResult FetchGuarded(
+        VaultSession session,
+        string path,
+        string text,
+        CancellationToken cancellation)
     {
+        cancellation.ThrowIfCancellationRequested();
         if (FetchFaultForTests?.Invoke() is { } fault)
         {
             throw fault;
         }
-        return Fetch(session, path, text);
+        return Fetch(session, path, text, cancellation);
     }
 
     /// <summary>
@@ -561,18 +661,26 @@ internal sealed class ReadingContentViewModel : BindableBase, IDisposable
     /// Existing content is preserved (stale beats empty); the memo is
     /// untouched, so the next refresh retries the projection in full.
     /// </summary>
-    private void PublishTerminalFailure(int generation)
+    /// <returns>Whether this generation's failure is what the model now
+    /// shows — false when a newer refresh superseded it, or the model is
+    /// disposed.</returns>
+    private bool PublishTerminalFailure(int generation)
     {
         if (_disposed || generation != _generation)
         {
-            return;
+            return false;
         }
         _liveRefreshGeneration = -1;
         IsLoading = false;
-        _announce(new A11yEvent.HostComposed(
-            "Reading view could not load this note. Switch to the editor to "
-            + "keep working, then toggle reading mode to retry.",
-            A11yPriority.High));
+        // W7-7 PR 7 (round 2, finding 5): a rescan's re-projection fails
+        // silently — the rescan counts it in its one sentence.
+        if (generation != _silentGeneration)
+        {
+            _announce(new A11yEvent.HostComposed(
+                "Reading view could not load this note. Switch to the editor to "
+                + "keep working, then toggle reading mode to retry.",
+                A11yPriority.High));
+        }
         // Preserve only what is PROVABLY on screen: a complete,
         // delivered projection outside a rebind. A non-null Document
         // proves nothing by itself — the surface merge drains it, a
@@ -583,7 +691,7 @@ internal sealed class ReadingContentViewModel : BindableBase, IDisposable
         _rebindRecovery = false;
         if (preserve)
         {
-            return;
+            return true;
         }
         var document = new FlowDocument();
         var paragraph = new Paragraph(new Run(
@@ -596,6 +704,7 @@ internal sealed class ReadingContentViewModel : BindableBase, IDisposable
             paragraph, "ReadingRefreshFailedNotice");
         document.Blocks.Add(paragraph);
         Document = document;
+        return true;
     }
 
     /// <summary>Tokens-only fault seam: exercises the degraded code
@@ -629,14 +738,27 @@ internal sealed class ReadingContentViewModel : BindableBase, IDisposable
     internal const int FetchedEmbedImageByteBudget = 16 * 1024 * 1024;
 
     /// <summary>Background-safe: FFI only, no WPF objects.</summary>
-    private FetchResult Fetch(VaultSession session, string path, string text)
+    /// <remarks>W7-7 PR 7 (codex AR-18 review round 2, finding 4): a
+    /// rescan's <paramref name="cancellation"/> is checked at this worker
+    /// boundary between the core calls, which take no token — each is one
+    /// bounded, single-note query — and reaches an embedded base's open and
+    /// execute through their tokens; the close drains the fetch
+    /// (<see cref="WhenRefreshWorkDrained"/>) before the session goes.</remarks>
+    private FetchResult Fetch(
+        VaultSession session,
+        string path,
+        string text,
+        CancellationToken cancellation)
     {
         // Records ownership is inherent here — they are fetched for the
         // captured path inside the gated refresh, and publication
         // re-verifies the tab still shows that exact path (ordinal).
         OutgoingLink[] records = session.OutgoingLinks(path);
-        RenderedCitation[] citations = RenderCitations(session, path);
+        cancellation.ThrowIfCancellationRequested();
+        RenderedCitation[] citations = RenderCitations(session, path, cancellation);
+        cancellation.ThrowIfCancellationRequested();
         TaskItem[] tasks = session.TasksForFile(path).ToArray();
+        cancellation.ThrowIfCancellationRequested();
         // Code blocks degrade per-fetch, mac-style: a failure here
         // renders plain un-highlighted fences with correct preambles
         // rather than failing the whole projection.
@@ -655,6 +777,7 @@ internal sealed class ReadingContentViewModel : BindableBase, IDisposable
             codeBlocks = Array.Empty<CodeBlock>();
             codeFetchDegraded = true;
         }
+        cancellation.ThrowIfCancellationRequested();
         // Math degrades identically (W3-2): a MathCAT failure renders
         // source-in-range fallbacks with nav still working, never a
         // failed projection.
@@ -673,6 +796,7 @@ internal sealed class ReadingContentViewModel : BindableBase, IDisposable
             mathBlocks = Array.Empty<MathBlock>();
             mathFetchDegraded = true;
         }
+        cancellation.ThrowIfCancellationRequested();
         // Diagrams degrade identically (W3-3): a renderer failure
         // renders source-in-range fallbacks with nav still working,
         // never a failed projection.
@@ -691,11 +815,12 @@ internal sealed class ReadingContentViewModel : BindableBase, IDisposable
             diagramBlocks = Array.Empty<DiagramBlock>();
             diagramFetchDegraded = true;
         }
+        cancellation.ThrowIfCancellationRequested();
         ReadingBlock[] blocks = SlateUniffiMethods.ReadingBlocksSource(text);
         ReadingBlockInlines[] inlines = SlateUniffiMethods.ReadingInlineSegmentsSource(
             text, citations, records);
         ReadingEmbedArtifact[] embeds = FetchEmbedResolutions(
-            session, path, records, inlines);
+            session, path, records, inlines, cancellation);
         // The artifact digest hashes the COMPLETE artifact sets, so
         // it belongs here on the fetch task, not on the dispatcher at
         // publication (round 5: a dense note made the memo key itself
@@ -738,7 +863,8 @@ internal sealed class ReadingContentViewModel : BindableBase, IDisposable
         VaultSession session,
         string path,
         OutgoingLink[] records,
-        ReadingBlockInlines[] inlines)
+        ReadingBlockInlines[] inlines,
+        CancellationToken cancellation)
     {
         var keys = new List<string>();
         var seen = new HashSet<string>(StringComparer.Ordinal);
@@ -767,6 +893,7 @@ internal sealed class ReadingContentViewModel : BindableBase, IDisposable
         long imagePool = FetchedEmbedImageByteBudget;
         foreach (string key in keys)
         {
+            cancellation.ThrowIfCancellationRequested();
             altByKey.TryGetValue(key, out string? alt);
             // Attempts are counted BEFORE the FFI call (round 1
             // [high]: counting successes let persistent failures make
@@ -815,7 +942,7 @@ internal sealed class ReadingContentViewModel : BindableBase, IDisposable
                 && fullNote.TargetPath.EndsWith(
                     ".base", StringComparison.OrdinalIgnoreCase))
             {
-                baseProjection = ProjectBaseEmbed(session, fullNote.TargetPath, path);
+                baseProjection = ProjectBaseEmbed(session, fullNote.TargetPath, path, cancellation);
             }
             artifacts.Add(new ReadingEmbedArtifact(
                 key, alt, resolution, imageRefused, baseProjection));
@@ -831,13 +958,20 @@ internal sealed class ReadingContentViewModel : BindableBase, IDisposable
     /// close (INV-2 — the finally owns it). Failures project as an
     /// error sentence, never a silent empty card.</summary>
     private static BaseEmbedProjection ProjectBaseEmbed(
-        VaultSession session, string targetPath, string embeddingNotePath)
+        VaultSession session,
+        string targetPath,
+        string embeddingNotePath,
+        CancellationToken cancellation)
     {
         ulong? handle = null;
+        // W7-7 PR 7 (round 2, finding 4): the open and the execute take one
+        // token the caller's cancellation trips (the link, declared after
+        // the token, is disposed first).
+        using var cancel = new CancelToken();
+        using CancellationTokenRegistration link = cancellation.Register(cancel.Cancel);
         try
         {
-            handle = session.OpenBase(targetPath);
-            using var cancel = new CancelToken();
+            handle = session.OpenBaseCancellable(targetPath, cancel).Handle;
             BasesResultSet result = session.BaseExecute(
                 handle.Value,
                 view: 0,
@@ -908,17 +1042,24 @@ internal sealed class ReadingContentViewModel : BindableBase, IDisposable
     /// with no such dependency owes nothing (its own note's change reaches
     /// it through its tab's reload).
     /// </summary>
-    internal Task NotifyRescanAsync()
+    /// <remarks>W7-7 PR 7 (codex AR-18 review round 2, findings 4 and 5):
+    /// the re-projection is the rescan's — silent (a failure settles the
+    /// returned Task WITH that failure, for the rescan to count, and is not
+    /// spoken here) and cancelled by the run's
+    /// <paramref name="cancellation"/> at the fetch's worker boundary.</remarks>
+    internal Task NotifyRescanAsync(CancellationToken cancellation = default)
     {
         if (_disposed || !HasOtherFileDependencies)
         {
             return Task.CompletedTask;
         }
 
-        return ReprojectForDependencyChangeAsync();
+        return ReprojectForDependencyChangeAsync(silent: true, cancellation);
     }
 
-    private Task ReprojectForDependencyChangeAsync()
+    private Task ReprojectForDependencyChangeAsync(
+        bool silent = false,
+        CancellationToken cancellation = default)
     {
         if (BlocksAppended is null)
         {
@@ -930,7 +1071,7 @@ internal sealed class ReadingContentViewModel : BindableBase, IDisposable
         var published = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
         int requested = _generation + 1;
         _publicationWaiters.Add((requested, published));
-        Refresh();
+        Refresh(silent, cancellation);
         if (_generation < requested)
         {
             // Refused (disposed, or no longer Markdown): nothing to await.
@@ -1118,7 +1259,10 @@ internal sealed class ReadingContentViewModel : BindableBase, IDisposable
     /// mid-transition behavior), so degradation is per-citation, never
     /// note-wide.
     /// </summary>
-    private static RenderedCitation[] RenderCitations(VaultSession session, string path)
+    private static RenderedCitation[] RenderCitations(
+        VaultSession session,
+        string path,
+        CancellationToken cancellation)
     {
         string? styleId = null;
         try
@@ -1150,6 +1294,7 @@ internal sealed class ReadingContentViewModel : BindableBase, IDisposable
         var rendered = new List<RenderedCitation>(references.Count);
         foreach (CitationReference reference in references)
         {
+            cancellation.ThrowIfCancellationRequested();
             try
             {
                 rendered.Add(session.RenderCitation(reference, styleId));
@@ -1167,7 +1312,8 @@ internal sealed class ReadingContentViewModel : BindableBase, IDisposable
         string path,
         long revision,
         ulong sessionGeneration,
-        FetchResult fetched)
+        FetchResult fetched,
+        CancellationToken cancellation)
     {
         if (PublishFaultForTests?.Invoke() is { } fault)
         {
@@ -1193,8 +1339,12 @@ internal sealed class ReadingContentViewModel : BindableBase, IDisposable
             // its placeholder (or on stale content) until a mode
             // cycle; retry immediately with the latest tuple instead.
             // Converges when vault activity settles; a same-text
-            // retry is one parse ending in a memo hit.
-            Refresh();
+            // retry is one parse ending in a memo hit. W7-7 PR 7 (round
+            // 2, finding 5): the retry keeps a rescan's silence and
+            // cancellation, and its publication settles this
+            // generation's waiters.
+            _driftRetriedGeneration = generation;
+            Refresh(generation == _silentGeneration, cancellation);
             return;
         }
 
@@ -1249,7 +1399,7 @@ internal sealed class ReadingContentViewModel : BindableBase, IDisposable
 
         if (firstEnd >= renderLimit)
         {
-            FinishPublish(key, degraded, renderLimit, streamed: false);
+            FinishPublish(key, degraded, renderLimit, streamed: false, generation);
             return;
         }
 
@@ -1267,7 +1417,7 @@ internal sealed class ReadingContentViewModel : BindableBase, IDisposable
                     embeds, records);
                 index = end;
             }
-            FinishPublish(key, degraded, renderLimit, streamed: true);
+            FinishPublish(key, degraded, renderLimit, streamed: true, generation);
             return;
         }
         _ = _dispatcher!.InvokeAsync(
@@ -1292,13 +1442,18 @@ internal sealed class ReadingContentViewModel : BindableBase, IDisposable
         try
         {
             step();
-            SettlePublicationWaiters(generation, failure: null);
+            // A publish whose tuple drifted re-issued the refresh: the
+            // retry's publication settles these waiters (round 2, finding 5).
+            if (_driftRetriedGeneration != generation)
+            {
+                SettlePublicationWaiters(generation, failure: null);
+            }
         }
         catch (Exception exception)
         {
             RecordTerminalFailure(exception);
-            PublishTerminalFailure(generation);
-            SettlePublicationWaiters(generation, failure: null);
+            bool shown = PublishTerminalFailure(generation);
+            SettlePublicationWaiters(generation, shown ? exception : null);
         }
     }
 
@@ -1360,7 +1515,7 @@ internal sealed class ReadingContentViewModel : BindableBase, IDisposable
                 DispatcherPriority.Background);
             return;
         }
-        FinishPublish(key, degraded, renderLimit, streamed: true);
+        FinishPublish(key, degraded, renderLimit, streamed: true, generation);
     }
 
     private void AppendFragment(
@@ -1379,7 +1534,12 @@ internal sealed class ReadingContentViewModel : BindableBase, IDisposable
                 diagramBlocks, embeds, records)
                 .Document);
 
-    private void FinishPublish(MemoKey key, bool degraded, int renderedBlocks, bool streamed)
+    private void FinishPublish(
+        MemoKey key,
+        bool degraded,
+        int renderedBlocks,
+        bool streamed,
+        int generation)
     {
         // A stream nobody heard delivered nothing past chunk 1: leave
         // the memo empty so the next binding's EnsureProjected (or any
@@ -1413,7 +1573,12 @@ internal sealed class ReadingContentViewModel : BindableBase, IDisposable
             paragraph, "ReadingDegradedNotice");
         document.Blocks.Add(paragraph);
         BlocksAppended?.Invoke(document);
-        _announce(new A11yEvent.HostComposed(notice, A11yPriority.High));
+        // W7-7 PR 7 (round 2, finding 5): a rescan's re-projection shows
+        // the notice without speaking it.
+        if (generation != _silentGeneration)
+        {
+            _announce(new A11yEvent.HostComposed(notice, A11yPriority.High));
+        }
     }
 
 

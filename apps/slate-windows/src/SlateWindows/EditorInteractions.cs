@@ -552,6 +552,12 @@ internal sealed class EditorInteractionCoordinator : BindableBase, IDisposable
     private long _mathRangesRevision = -1;
     private bool _popoverFocusPending;
     private int _focusRequestGeneration;
+    // W7-7 PR 7 (codex AR-18 review round 2, finding 4): the background
+    // workers in flight. A rescan invalidates these caches (their reloads
+    // are workers), and the close drains them before the session goes.
+    private readonly object _backgroundWorkGate = new();
+    private readonly HashSet<Task> _backgroundWork = [];
+
     private readonly object _artifactCacheGate = new();
     private bool _artifactCacheLoading;
     private bool _artifactCacheRerunPending;
@@ -1199,6 +1205,41 @@ internal sealed class EditorInteractionCoordinator : BindableBase, IDisposable
         ClosePopover(requestFocus: false);
     }
 
+    /// <summary>W7-7 PR 7 (codex AR-18 review round 2, finding 4): every
+    /// background worker in flight has ended — the close drains this, for
+    /// the coordinators a rescan invalidated, before the session is
+    /// disposed.</summary>
+    internal Task WhenBackgroundWorkDrained()
+    {
+        Task[] snapshot;
+        lock (_backgroundWorkGate)
+        {
+            snapshot = [.. _backgroundWork];
+        }
+
+        return Task.WhenAll(snapshot);
+    }
+
+    private void TrackBackgroundWork(Task work)
+    {
+        lock (_backgroundWorkGate)
+        {
+            _ = _backgroundWork.Add(work);
+        }
+
+        _ = work.ContinueWith(
+            completed =>
+            {
+                lock (_backgroundWorkGate)
+                {
+                    _ = _backgroundWork.Remove(completed);
+                }
+            },
+            CancellationToken.None,
+            TaskContinuationOptions.ExecuteSynchronously,
+            TaskScheduler.Default);
+    }
+
     internal void InvalidateExternalState()
     {
         lock (_artifactCacheGate)
@@ -1323,7 +1364,7 @@ internal sealed class EditorInteractionCoordinator : BindableBase, IDisposable
         HostLog.WriteUiAutomationDiagnostic(
             HostDiagnosticEvent.EditorEmbedPreviewOpened);
         OpenPopover();
-        _ = Task.Run(() => ResolveEmbedPreview(
+        TrackBackgroundWork(Task.Run(() => ResolveEmbedPreview(
             generation,
             requestKey,
             path,
@@ -1331,7 +1372,7 @@ internal sealed class EditorInteractionCoordinator : BindableBase, IDisposable
             revision,
             sessionGeneration,
             sourceLine,
-            link));
+            link)));
         return true;
     }
 
@@ -2027,7 +2068,7 @@ internal sealed class EditorInteractionCoordinator : BindableBase, IDisposable
         }
 
         pending.Dispose();
-        _ = Task.Run(() => RunMathRefreshWorker(generation));
+        TrackBackgroundWork(Task.Run(() => RunMathRefreshWorker(generation)));
     }
 
     private async Task RunMathRefreshWorker(int generation)
@@ -2273,11 +2314,11 @@ internal sealed class EditorInteractionCoordinator : BindableBase, IDisposable
             generation = _artifactCacheGeneration;
         }
 
-        _ = Task.Run(() => LoadArtifactCacheAsync(
+        TrackBackgroundWork(Task.Run(() => LoadArtifactCacheAsync(
             generation,
             path,
             savedHash,
-            sessionGeneration));
+            sessionGeneration)));
     }
 
     private async Task LoadArtifactCacheAsync(
@@ -2470,11 +2511,11 @@ internal sealed class EditorInteractionCoordinator : BindableBase, IDisposable
             generation = _citationCacheGeneration;
         }
 
-        _ = Task.Run(() => LoadCitationCacheAsync(
+        TrackBackgroundWork(Task.Run(() => LoadCitationCacheAsync(
             generation,
             path,
             savedHash,
-            sessionGeneration));
+            sessionGeneration)));
     }
 
     private async Task LoadCitationCacheAsync(

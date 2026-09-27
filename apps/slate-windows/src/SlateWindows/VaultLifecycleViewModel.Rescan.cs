@@ -54,6 +54,16 @@ internal sealed partial class VaultLifecycleViewModel
     // host-side checks read it, so none makes an FFI call on the UI thread.
     private CancellationTokenSource? _rescanCancellation;
 
+    // W7-7 PR 7 (codex AR-18 review round 2, finding 3): every rescan core
+    // call that touches the session is admitted into ONE synchronized set —
+    // the re-sync runs several at once (Quick Open's listing beside the
+    // workspace's hash read, say). CloseSession closes the admission,
+    // cancels the run and drains the set to EMPTY before any native state
+    // is disposed.
+    private readonly object _rescanCoreGate = new();
+    private readonly HashSet<Task> _rescanCoreCalls = [];
+    private bool _rescanCoreAdmissionClosed;
+
     /// <summary>The running rescan (and its coalesced follow-ups), for the
     /// facts to await.</summary>
     internal Task RescanCompletion => _rescanCompletion;
@@ -192,7 +202,7 @@ internal sealed partial class VaultLifecycleViewModel
         CancelToken cancel;
         try
         {
-            cancel = await RunRescanCoreAsync("token", () => new CancelToken(), trackForClose: false);
+            cancel = await StartRescanCoreCall("token", () => new CancelToken());
         }
         catch (Exception exception) when (exception is not OutOfMemoryException)
         {
@@ -238,14 +248,13 @@ internal sealed partial class VaultLifecycleViewModel
     {
         try
         {
-            _ = await RunRescanCoreAsync(
+            _ = await StartRescanCoreCall(
                 "dispose",
                 () =>
                 {
                     cancel.Dispose();
                     return true;
-                },
-                trackForClose: false);
+                });
         }
         catch (Exception exception) when (exception is not OutOfMemoryException)
         {
@@ -265,10 +274,12 @@ internal sealed partial class VaultLifecycleViewModel
         UiProgressListener? progress = reason == RescanReason.Explicit
             ? new UiProgressListener(_enqueueUi, @event => HandleRescanProgress(generation, @event))
             : null;
-        Task<ScanReport> scan = StartRescanCoreCall("scan", () => progress is null
-            ? session.Rescan(cancel)
-            : session.RescanWithProgress(cancel, progress));
-        _sessionLoadCompletion = scan;
+        Task<ScanReport> scan = RunRescanCoreAsync(
+            "scan",
+            () => progress is null
+                ? session.Rescan(cancel)
+                : session.RescanWithProgress(cancel, progress),
+            cancellation);
         ScanReport report;
         try
         {
@@ -296,11 +307,6 @@ internal sealed partial class VaultLifecycleViewModel
         {
             if (generation == _generation)
             {
-                if (_sessionLoadCompletion.IsCompleted)
-                {
-                    _sessionLoadCompletion = Task.CompletedTask;
-                }
-
                 IsProgressIndeterminate = false;
             }
         }
@@ -413,7 +419,8 @@ internal sealed partial class VaultLifecycleViewModel
         {
             SwitcherFile[] files = await RunRescanCoreAsync(
                 "list",
-                () => LoadSwitcherFiles(session, cancel, null));
+                () => LoadSwitcherFiles(session, cancel, SwitcherPageLoadingForTests),
+                cancellation);
             if (cancellation.IsCancellationRequested || !ReferenceEquals(switcher, QuickSwitcher))
             {
                 return 0;
@@ -456,7 +463,10 @@ internal sealed partial class VaultLifecycleViewModel
         IReadOnlyDictionary<string, WorkspaceViewModel.IndexedPath> indexed;
         try
         {
-            indexed = await RunRescanCoreAsync("hashes", () => ReadIndexedPaths(session, paths, cancel));
+            indexed = await RunRescanCoreAsync(
+                "hashes",
+                () => ReadIndexedPaths(session, paths, cancel),
+                cancellation);
         }
         catch (VaultException.Cancelled) when (cancellation.IsCancellationRequested)
         {
@@ -478,7 +488,8 @@ internal sealed partial class VaultLifecycleViewModel
         {
             WorkspaceViewModel.RescanDocumentsOutcome documents = await workspace.ReSyncOpenDocumentsAsync(
                 indexed,
-                path => ReadForRescanAsync(session, path, cancel),
+                path => ReadForRescanAsync(session, path, cancel, cancellation),
+                missing => ProbeReseatAsync(session, missing, cancel, cancellation),
                 cancellation);
             ulong dependents = await workspace.ReSyncDependentsAsync(documents, indexed, cancellation);
             return documents.Failed + dependents;
@@ -492,7 +503,8 @@ internal sealed partial class VaultLifecycleViewModel
     /// <summary>The index hashes of <paramref name="paths"/>, chunked to
     /// core's bound (v2 §5) — ON THE WORKER. A path with no index row is
     /// also checked on disk, so an unindexed file that exists is never
-    /// marked missing.</summary>
+    /// marked missing; a check that FAILS keeps the path present and is
+    /// counted (codex AR-18 review round 2, finding 7).</summary>
     private IReadOnlyDictionary<string, WorkspaceViewModel.IndexedPath> ReadIndexedPaths(
         VaultSession session,
         IReadOnlyList<string> paths,
@@ -507,17 +519,40 @@ internal sealed partial class VaultLifecycleViewModel
             for (int index = 0; index < slice.Length; index++)
             {
                 string? hash = hashes[index];
-                bool onDisk = hash is not null || OnDiskUnderThisSpelling(session, slice[index]);
-                indexed[slice[index]] = new WorkspaceViewModel.IndexedPath(hash, onDisk);
+                if (hash is not null)
+                {
+                    indexed[slice[index]] = new WorkspaceViewModel.IndexedPath(hash, OnDisk: true);
+                    continue;
+                }
+
+                SpellingOnDisk probe = ProbeSpellingOnDisk(session, slice[index]);
+                indexed[slice[index]] = new WorkspaceViewModel.IndexedPath(
+                    null,
+                    OnDisk: probe != SpellingOnDisk.Absent,
+                    ProbeFailed: probe == SpellingOnDisk.Failed);
             }
         }
 
         return indexed;
     }
 
+    /// <summary>Test seam (W7-7 PR 7 round 3): replaces core's canonical-path
+    /// probe for the re-sync, so a fact can make it fail.</summary>
+    internal Func<string, string?>? CanonicalPathForTests { get; set; }
+
     /// <summary>Test seam (v2 §5): a smaller hash chunk than core's bound,
     /// so a fact proves the chunking without a thousand tabs as well.</summary>
     internal uint? IndexedHashChunkForTests { get; set; }
+
+    /// <summary>What an entry at a vault-relative path UNDER THIS SPELLING
+    /// is (codex AR-18 review round 2, finding 7: three states, never a
+    /// guess).</summary>
+    private enum SpellingOnDisk
+    {
+        Present,
+        Absent,
+        Failed,
+    }
 
     /// <summary>Whether an entry exists at the vault-relative
     /// <paramref name="path"/> UNDER THIS SPELLING — asked on the worker,
@@ -525,19 +560,99 @@ internal sealed partial class VaultLifecycleViewModel
     /// the spelling the filesystem stores (#1077): a case-only rename
     /// outside Slate (<c>ghost.md</c> → <c>Ghost.md</c>) leaves the old
     /// spelling "not on disk" even on a case-insensitive volume, so its tab
-    /// is marked missing and re-seated on the stored spelling.</summary>
-    private static bool OnDiskUnderThisSpelling(VaultSession session, string path)
+    /// is marked missing and re-seated on the stored spelling. A probe that
+    /// fails is <see cref="SpellingOnDisk.Failed"/>: the tab is kept, and the
+    /// failure is counted.</summary>
+    private SpellingOnDisk ProbeSpellingOnDisk(VaultSession session, string path)
     {
+        string? stored;
         try
         {
-            return string.Equals(session.CanonicalPath(path), path, StringComparison.Ordinal);
+            stored = StoredSpelling(session, path);
         }
         catch (VaultException exception) when (exception is not VaultException.Cancelled)
         {
-            // Unknown: never mark missing on a guess (contract I7).
-            return true;
+            HostLog.Write(HostDiagnosticEvent.VaultRescanFailed, exception);
+            return SpellingOnDisk.Failed;
         }
+
+        return string.Equals(stored, path, StringComparison.Ordinal)
+            ? SpellingOnDisk.Present
+            : SpellingOnDisk.Absent;
     }
+
+    /// <summary>The spelling the filesystem stores for
+    /// <paramref name="path"/>, or null (nothing there) — core's canonical
+    /// path, or the fact's probe.</summary>
+    private string? StoredSpelling(VaultSession session, string path) =>
+        CanonicalPathForTests is { } probe ? probe(path) : session.CanonicalPath(path);
+
+    /// <summary>
+    /// W7-7 PR 7 (codex AR-18 review round 2, finding 1): the re-seat's
+    /// probe of the missing tabs' paths — ON THE WORKER, through the seam,
+    /// with the run's token: each path's stored spelling (a failed probe is
+    /// marked failed), and for a Markdown path the index's hash of that
+    /// spelling and a read of it. The dispatcher applies the result through
+    /// the tabs' tickets (<c>ReseatMissingTabsAsync</c>).
+    /// </summary>
+    private Task<IReadOnlyDictionary<string, WorkspaceViewModel.ReseatProbe>> ProbeReseatAsync(
+        VaultSession session,
+        IReadOnlyList<(string Path, bool Markdown)> paths,
+        CancelToken cancel,
+        CancellationToken cancellation) =>
+        RunRescanCoreAsync<IReadOnlyDictionary<string, WorkspaceViewModel.ReseatProbe>>(
+            "reseat",
+            () =>
+            {
+                var probes = new Dictionary<string, WorkspaceViewModel.ReseatProbe>(StringComparer.Ordinal);
+                foreach ((string path, bool markdown) in paths)
+                {
+                    if (cancel.IsCancelled())
+                    {
+                        throw new VaultException.Cancelled();
+                    }
+
+                    string? stored;
+                    try
+                    {
+                        stored = StoredSpelling(session, path);
+                    }
+                    catch (VaultException exception) when (exception is not VaultException.Cancelled)
+                    {
+                        HostLog.Write(HostDiagnosticEvent.VaultRescanFailed, exception);
+                        probes[path] = new WorkspaceViewModel.ReseatProbe(null, Failed: true, null, null);
+                        continue;
+                    }
+
+                    if (stored is null || !markdown)
+                    {
+                        probes[path] = new WorkspaceViewModel.ReseatProbe(stored, Failed: false, null, null);
+                        continue;
+                    }
+
+                    string? indexHash = session.IndexedContentHashes([stored], cancel)[0];
+                    WorkspaceViewModel.RescanRead? read = null;
+                    if (indexHash is not null)
+                    {
+                        try
+                        {
+                            string text = session.ReadText(stored);
+                            read = new WorkspaceViewModel.RescanRead(
+                                text,
+                                SlateUniffiMethods.EditorTextContentHash(text));
+                        }
+                        catch (VaultException exception) when (exception is not VaultException.Cancelled)
+                        {
+                            // Unreadable now: the tab stays missing (counted).
+                        }
+                    }
+
+                    probes[path] = new WorkspaceViewModel.ReseatProbe(stored, Failed: false, indexHash, read);
+                }
+
+                return probes;
+            },
+            cancellation);
 
     /// <summary>A Markdown path's re-read for the re-sync — on the seam, off
     /// the dispatcher, refused once the run is cancelled: its text and that
@@ -546,24 +661,28 @@ internal sealed partial class VaultLifecycleViewModel
     private Task<WorkspaceViewModel.RescanRead?> ReadForRescanAsync(
         VaultSession session,
         string path,
-        CancelToken cancel) =>
-        RunRescanCoreAsync<WorkspaceViewModel.RescanRead?>("read", () =>
-        {
-            if (cancel.IsCancelled())
+        CancelToken cancel,
+        CancellationToken cancellation) =>
+        RunRescanCoreAsync<WorkspaceViewModel.RescanRead?>(
+            "read",
+            () =>
             {
-                throw new VaultException.Cancelled();
-            }
+                if (cancel.IsCancelled())
+                {
+                    throw new VaultException.Cancelled();
+                }
 
-            try
-            {
-                string text = session.ReadText(path);
-                return new WorkspaceViewModel.RescanRead(text, SlateUniffiMethods.EditorTextContentHash(text));
-            }
-            catch (VaultException exception) when (exception is not VaultException.Cancelled)
-            {
-                return null;
-            }
-        });
+                try
+                {
+                    string text = session.ReadText(path);
+                    return new WorkspaceViewModel.RescanRead(text, SlateUniffiMethods.EditorTextContentHash(text));
+                }
+                catch (VaultException exception) when (exception is not VaultException.Cancelled)
+                {
+                    return null;
+                }
+            },
+            cancellation);
 
     /// <summary>
     /// Start one rescan core call through the seam — refused if the seam
@@ -579,28 +698,89 @@ internal sealed partial class VaultLifecycleViewModel
                 : call());
     }
 
-    /// <summary>One rescan core call through the seam, awaited. A tracked
-    /// call stands in the session-load completion, so a close waits for it
-    /// before the session goes away.</summary>
-    private async Task<T> RunRescanCoreAsync<T>(string operation, Func<T> call, bool trackForClose = true)
+    /// <summary>
+    /// One session-touching rescan core call through the seam (codex AR-18
+    /// review round 2, finding 3): ADMITTED only while the admission is open
+    /// and the run is not cancelled — a refused call is
+    /// <see cref="VaultException.Cancelled"/> — and tracked in the set a
+    /// close drains, until it ends. Admission and registration are one
+    /// step under the gate, so a close either refuses the call or waits
+    /// for it.
+    /// </summary>
+    private Task<T> RunRescanCoreAsync<T>(string operation, Func<T> call, CancellationToken cancellation)
     {
-        Task<T> task = StartRescanCoreCall(operation, call);
-        if (!trackForClose)
+        lock (_rescanCoreGate)
         {
-            return await task;
-        }
-
-        _sessionLoadCompletion = task;
-        try
-        {
-            return await task;
-        }
-        finally
-        {
-            if (ReferenceEquals(_sessionLoadCompletion, task))
+            if (_rescanCoreAdmissionClosed || cancellation.IsCancellationRequested)
             {
-                _sessionLoadCompletion = Task.CompletedTask;
+                return Task.FromException<T>(new VaultException.Cancelled());
             }
+
+            Task<T> task = StartRescanCoreCall(operation, call);
+            _ = _rescanCoreCalls.Add(task);
+            _ = task.ContinueWith(
+                ended =>
+                {
+                    lock (_rescanCoreGate)
+                    {
+                        _ = _rescanCoreCalls.Remove(ended);
+                    }
+                },
+                CancellationToken.None,
+                TaskContinuationOptions.ExecuteSynchronously,
+                TaskScheduler.Default);
+            return task;
+        }
+    }
+
+    /// <summary>Teardown, first (finding 3): no rescan core call is
+    /// admitted after this.</summary>
+    private void CloseRescanCoreAdmission()
+    {
+        lock (_rescanCoreGate)
+        {
+            _rescanCoreAdmissionClosed = true;
+        }
+    }
+
+    /// <summary>Teardown (finding 3): wait until every admitted rescan core
+    /// call has ended — the run's token is cancelled by then, and each call
+    /// takes it or is a bounded read. Blocks only on pool work.</summary>
+    private void DrainRescanCoreCalls()
+    {
+        while (true)
+        {
+            Task[] pending;
+            lock (_rescanCoreGate)
+            {
+                pending = [.. _rescanCoreCalls.Where(call => !call.IsCompleted)];
+            }
+
+            if (pending.Length == 0)
+            {
+                return;
+            }
+
+            try
+            {
+                Task.WaitAll(pending);
+            }
+            catch (AggregateException)
+            {
+                // An ended call — cancelled or failed — is what the drain
+                // waits for; its outcome is its awaiter's.
+            }
+        }
+    }
+
+    /// <summary>Teardown, last: the next session's rescans are admitted
+    /// again (a cancelled run's late continuation is still refused by its
+    /// own cancelled token).</summary>
+    private void ReopenRescanCoreAdmission()
+    {
+        lock (_rescanCoreGate)
+        {
+            _rescanCoreAdmissionClosed = false;
         }
     }
 
