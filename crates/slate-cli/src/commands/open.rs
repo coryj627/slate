@@ -18,7 +18,7 @@
 //! `cache` = `"cold"` iff `.slate/cache.sqlite` did not exist before
 //! this run, else `"warm"` — decided in [`crate::session::open_vault`].
 
-use slate_core::session::{CancelToken, FileFilter, Paging};
+use slate_core::session::{CancelToken, FileFilter, Paging, VaultSession};
 
 use crate::output::{CommandOutput, tsv_row};
 use crate::progress::StderrProgress;
@@ -47,14 +47,7 @@ pub fn run(
     // Markdown count is the total across all pages of the
     // MarkdownOnly filter — we only need the total, so ask for the
     // smallest possible page.
-    let markdown_files = session
-        .list_files(
-            FileFilter::MarkdownOnly,
-            Paging::first(1),
-            &slate_core::CancelToken::new(),
-        )
-        .map_err(map_vault_error)?
-        .total_filtered;
+    let markdown_files = markdown_file_count(&session, cancel)?;
 
     let cache = if cache_was_warm { "warm" } else { "cold" };
 
@@ -134,4 +127,33 @@ fn render_tsv(
         tsv_row(["cache", cache]),
     ];
     rows.join("\n")
+}
+
+/// The Markdown count: the total across all pages of the `MarkdownOnly`
+/// filter — only the total is needed, so the smallest page is asked for.
+fn markdown_file_count(session: &VaultSession, cancel: &CancelToken) -> Result<u64, CliError> {
+    Ok(session
+        .list_files(FileFilter::MarkdownOnly, Paging::first(1), cancel)
+        .map_err(map_vault_error)?
+        .total_filtered)
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    /// W7-7 PR 7 (codex AR-18 review round 2, finding 8): Ctrl-C after the
+    /// scan aborts the Markdown count to `Cancelled` (exit 130).
+    #[test]
+    fn markdown_count_honours_a_token_cancelled_after_the_scan() {
+        let tmp = tempfile::tempdir().unwrap();
+        std::fs::write(tmp.path().join("a.md"), "# A\n").unwrap();
+        let (session, _) = crate::session::open_and_scan(tmp.path(), &CancelToken::new()).unwrap();
+        let cancel = CancelToken::new();
+        cancel.cancel();
+
+        let result = markdown_file_count(&session, &cancel);
+
+        assert!(matches!(result, Err(CliError::Cancelled)), "{result:?}");
+    }
 }
