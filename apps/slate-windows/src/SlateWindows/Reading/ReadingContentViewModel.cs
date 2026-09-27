@@ -531,6 +531,7 @@ internal sealed class ReadingContentViewModel : BindableBase, IDisposable
                     _ = _dispatcher!.InvokeAsync(() => RunPublishStep(
                         generation,
                         () => Publish(generation, path, revision, sessionGeneration, result)));
+                    PublicationQueuedHookForTests?.Invoke();
                 }
             }
             catch (VaultException.Cancelled)
@@ -943,6 +944,11 @@ internal sealed class ReadingContentViewModel : BindableBase, IDisposable
         }
     }
 
+    /// <summary>#1279 test seam: runs on the fetch worker once a finished
+    /// fetch has queued its publication on the dispatcher — a fact
+    /// supersedes the refresh between the two.</summary>
+    internal Action? PublicationQueuedHookForTests { get; set; }
+
     /// <summary>#1279 test seam: runs on the fetch worker after a `.base`
     /// card's base is opened and before its query runs — a fact parks the
     /// query there.</summary>
@@ -1145,17 +1151,20 @@ internal sealed class ReadingContentViewModel : BindableBase, IDisposable
         ulong sessionGeneration,
         FetchResult fetched)
     {
+        // Superseded or dead: a newer refresh owns the pipeline (and
+        // re-marked itself live); nothing to repair here. Checked before ANY
+        // state moves (#1279, codex round 3): a retired publication that
+        // cleared IsLoading first would take the loading state from the
+        // newer refresh still in flight.
+        if (_disposed || generation != _generation)
+        {
+            return;
+        }
         if (PublishFaultForTests?.Invoke() is { } fault)
         {
             throw fault;
         }
         IsLoading = false;
-        if (_disposed || generation != _generation)
-        {
-            // Superseded or dead: a newer refresh owns the pipeline
-            // (and re-marked itself live); nothing to repair here.
-            return;
-        }
         // Whatever happens below, THIS generation's refresh has landed.
         _liveRefreshGeneration = -1;
         if (!string.Equals(_tab.Path, path, StringComparison.Ordinal)
