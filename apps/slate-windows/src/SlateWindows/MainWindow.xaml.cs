@@ -1380,10 +1380,13 @@ public partial class MainWindow : Window
     private bool ModalSurfaceOwnsEscape() => OpenModalSurface is not null;
 
     /// <summary>#1272 (codex round 2 on the follow-up): WPF menu mode owns an
-    /// unmodified Escape — the key comes from a menu item (the menu bar, one
-    /// of its open menus, a context menu), and the menu's own handling closes
-    /// the open menu or leaves menu mode (W7-6 §4) instead of the import
-    /// being cancelled underneath it.</summary>
+    /// unmodified Escape — the key comes from an item of the menu bar or one
+    /// of its open submenus, the menu routes that traverse this window
+    /// handler, and the menu's own handling closes the open menu or leaves
+    /// menu mode (W7-6 §4) instead of the import being cancelled underneath
+    /// it. A context menu needs no yield here: its keys stay inside its
+    /// Popup's route and never reach this handler, and WPF dismisses it
+    /// natively.</summary>
     private static bool MenuModeOwnsEscape(KeyEventArgs e)
     {
         for (DependencyObject? node = e.OriginalSource as DependencyObject; node is not null; node = Parent(node))
