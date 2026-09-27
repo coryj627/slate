@@ -116,6 +116,48 @@ public sealed partial class GraphTableTests
         });
     }
 
+    /// <summary>OD-12 (codex r6 finding 4): Term F4 falls to the first row only
+    /// when the shared key names NO row. A keyed row that cannot take focus
+    /// yet — the grid is not shown — leaves the landing NOT YET without
+    /// touching the first row: the grid's currency stays on the keyed row (no
+    /// scroll to the top, no current cell on row one), and the grid being shown
+    /// seats the keyed row.</summary>
+    [Fact]
+    public void AKeyedRowNotYetSeatableLeavesTheFirstRowUntouched()
+    {
+        RunSta(() =>
+        {
+            using var host = new Host(40, "graph-landing-keyed-not-yet");
+            GraphDocumentViewModel document = host.Open();
+            GraphSurfaceView view = SurfaceFor(host, document);
+            using HostedWindow window = HostInWindow(view);
+            DataGrid grid = view.TableForTests.GridForTests.Grid;
+            grid.UpdateLayout();
+            GraphTableRow[] rows = [.. grid.Items.Cast<GraphTableRow>()];
+            GraphTableRow keyed = rows[^1];
+            document.ViewState.SelectedKey = keyed.StableKey;
+            host.Settle(document);
+            grid.Visibility = Visibility.Collapsed;
+            grid.UpdateLayout();
+            PumpedDispatcher.Drain();
+
+            document.RequestFocusLanding(GraphTabOf(host));
+            PumpedDispatcher.Drain();
+
+            Assert.NotNull(document.FocusRequest);
+            Assert.NotSame(rows[0], grid.CurrentCell.Item);
+            Assert.Equal(keyed.StableKey, document.ViewState.SelectedKey);
+
+            grid.Visibility = Visibility.Visible;
+            grid.UpdateLayout();
+            PumpedDispatcher.Drain();
+
+            Assert.Null(document.FocusRequest);
+            Assert.True(GridHasTheKeys(view));
+            Assert.Same(keyed, grid.CurrentCell.Item);
+        });
+    }
+
     [Fact]
     public void AFreshOpenLandsFocusOnTheGridsRow()
     {

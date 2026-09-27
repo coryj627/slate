@@ -154,7 +154,9 @@ internal sealed class CanvasTableView : UserControl
         _syncingSelection = true;
         try
         {
-            LandingSeat seat = _grid.SeatRow(row => IsNode(row, nodeId));
+            // A node the table has no row for yet is not yet: the rows the
+            // landing chose it from are the ones this table is about to bind.
+            LandingSeat seat = _grid.SeatRow(row => IsNode(row, nodeId)) ?? LandingSeat.NotYet;
             if (seat == LandingSeat.Seated)
             {
                 model.SeatSelectionSilently(nodeId);

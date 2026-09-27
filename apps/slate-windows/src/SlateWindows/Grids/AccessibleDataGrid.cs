@@ -376,17 +376,25 @@ internal sealed class AccessibleDataGrid : UserControl
 
     /// <summary>
     /// W7-7 PR 8 (R-10): <see cref="SelectRow"/>'s focus-moving seat as the
-    /// tri-state a terminal landing needs. NOT YET while nothing can take
-    /// focus yet — no columns, the row not bound, its container not generated
-    /// (<see cref="ContainersRealized"/> brings the caller back); SEATED when
-    /// the row's cell took focus; REFUSED when the cell exists and will not.
+    /// tri-state a terminal landing needs. NOT YET while the row cannot take
+    /// focus yet — no columns, its container not generated or its cell not
+    /// shown (<see cref="ContainersRealized"/> brings the caller back); SEATED
+    /// when the row's cell took focus; REFUSED when the cell is shown and will
+    /// not. OD-12 (codex round 6): NO ROW — null, and nothing touched — when no
+    /// row matches, which is not "not yet": a caller with a fallback row (Term
+    /// F4's first row) falls to it only then, never over a keyed row that is
+    /// merely still being realized.
     /// </summary>
-    internal LandingSeat SeatRow(Func<object, bool> predicate)
+    internal LandingSeat? SeatRow(Func<object, bool> predicate)
     {
         ArgumentNullException.ThrowIfNull(predicate);
-        if (_grid.Columns.Count == 0 || _items.FirstOrDefault(predicate) is not { } match)
+        if (_grid.Columns.Count == 0)
         {
             return LandingSeat.NotYet;
+        }
+        if (_items.FirstOrDefault(predicate) is not { } match)
+        {
+            return null;
         }
         DataGridColumn column = _grid.CurrentCell.Column is { } currentColumn
             && _grid.Columns.Contains(currentColumn)
