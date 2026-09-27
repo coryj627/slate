@@ -119,34 +119,25 @@ internal sealed class BaseDocumentViewModel : PanelWorkScheduler
 
     internal string? SavedQueryId => _savedQueryId;
 
-    /// <summary>W7-7 PR 7 (#1252, R-9): the indexed content hash of the
-    /// <c>.base</c> definition this document last opened — read BEFORE the
-    /// open, so a change racing it always compares different — or last
-    /// wrote. A rescan's re-sync reopens the document only when the index
-    /// now differs; otherwise it re-runs the view, keeping the quick filter
-    /// and the transient sort. Null for a saved query, or when the index
-    /// could not be read (the re-sync then reopens).</summary>
+    /// <summary>W7-7 PR 7 (#1252, R-9; codex AR-18 review round 2, finding
+    /// 2): the content hash of the <c>.base</c> definition this document
+    /// shows — the hash core returns for the exact bytes its open parsed,
+    /// or the handle's definition hash after one of its own edits; never a
+    /// separate index read, which could see other bytes. A rescan's re-sync
+    /// reopens the document only when the index now differs; otherwise it
+    /// re-runs the view, keeping the quick filter and the transient sort.
+    /// Null for a saved query.</summary>
     internal string? LoadedDefinitionHash => Volatile.Read(ref _loadedDefinitionHash);
 
-    /// <summary>The index's hash of this document's definition, or null
-    /// (a saved query, an unindexed path, an unreadable index).</summary>
-    private string? IndexedDefinitionHash()
-    {
-        if (_savedQueryId is not null)
-        {
-            return null;
-        }
+    /// <summary>Test seam (W7-7 PR 7 round 3): runs on the load's worker
+    /// immediately before the definition is opened.</summary>
+    internal Action? BeforeOpenForTests { get; set; }
 
-        try
-        {
-            using var cancel = new CancelToken();
-            return _session.IndexedContentHashes([Path], cancel)[0];
-        }
-        catch (VaultException)
-        {
-            return null;
-        }
-    }
+    private int _opensForTests;
+
+    /// <summary>Test seam (W7-7 PR 7 round 3): the definitions this document
+    /// has opened.</summary>
+    internal int OpensForTests => Volatile.Read(ref _opensForTests);
 
     /// <summary>Vault-relative path — the source identity for
     /// file-backed documents (empty for saved queries). Compared
@@ -463,7 +454,7 @@ internal sealed class BaseDocumentViewModel : PanelWorkScheduler
                             SlateSortYaml(column.Id, sort.Ascending)));
                     _session.BaseSetTransientSort(
                         handle, view, columnId: null, ascending: true);
-                    Volatile.Write(ref _loadedDefinitionHash, IndexedDefinitionHash());
+                    Volatile.Write(ref _loadedDefinitionHash, _session.BaseDefinitionHash(handle));
                     views = _session.BaseViews(handle);
                 }
             }
@@ -581,7 +572,7 @@ internal sealed class BaseDocumentViewModel : PanelWorkScheduler
                         return;
                     }
                     _session.BaseApplyEdits(handle, batch);
-                    Volatile.Write(ref _loadedDefinitionHash, IndexedDefinitionHash());
+                    Volatile.Write(ref _loadedDefinitionHash, _session.BaseDefinitionHash(handle));
                     views = _session.BaseViews(handle);
                 }
             }
@@ -765,10 +756,11 @@ internal sealed class BaseDocumentViewModel : PanelWorkScheduler
     /// shut-down document completes at once. A rescan awaits it.
     /// </summary>
     /// <remarks>The rescan's <paramref name="cancellation"/> (the ruling on
-    /// codex PR 7 round 1, finding 6): checked before the open — core's
-    /// <c>OpenBase</c> takes no token — and linked into
-    /// <c>BaseExecute</c>'s; a result that arrives after it is discarded,
-    /// and the returned Task is cancelled at once.</remarks>
+    /// codex PR 7 round 1, finding 6; round 2, finding 4): checked before
+    /// the open and linked into the open's own token
+    /// (<c>OpenBaseCancellable</c>) and <c>BaseExecute</c>'s; a result that
+    /// arrives after it is discarded, and the returned Task is cancelled at
+    /// once.</remarks>
     internal Task LoadAsync(CancellationToken cancellation = default) =>
         PublicationAsync(() => Load(cancellation), cancellation);
 
@@ -854,16 +846,41 @@ internal sealed class BaseDocumentViewModel : PanelWorkScheduler
                 if (Volatile.Read(ref _generation) != generation
                     || cancellation.IsCancellationRequested)
                 {
-                    // A cancelled rescan opens nothing: the host-side check
-                    // core's tokenless OpenBase needs (W7-7 PR 7).
+                    // A cancelled rescan opens nothing (W7-7 PR 7).
                     return;
                 }
                 CloseHandleLocked();
-                string? definitionHash = IndexedDefinitionHash();
-                handle = _savedQueryId is { } savedQueryId
-                    ? _session.OpenSavedQuery(savedQueryId)
-                    : _session.OpenBase(Path);
+                BeforeOpenForTests?.Invoke();
+                string? definitionHash;
+                if (_savedQueryId is { } savedQueryId)
+                {
+                    handle = _session.OpenSavedQuery(savedQueryId);
+                    definitionHash = null;
+                }
+                else
+                {
+                    // W7-7 PR 7 (codex AR-18 review round 2, findings 2
+                    // and 4): the open takes a token the rescan's
+                    // cancellation trips — and Shutdown, as it trips an
+                    // execute's — and returns the hash of the exact
+                    // definition it parsed. Declared after the token, the
+                    // link is disposed first.
+                    using var cancel = new CancelToken();
+                    _executeCancel = cancel;
+                    using CancellationTokenRegistration link = cancellation.Register(cancel.Cancel);
+                    try
+                    {
+                        OpenedBase opened = _session.OpenBaseCancellable(Path, cancel);
+                        handle = opened.Handle;
+                        definitionHash = opened.ContentHash;
+                    }
+                    finally
+                    {
+                        _executeCancel = null;
+                    }
+                }
                 _handle = handle;
+                _ = Interlocked.Increment(ref _opensForTests);
                 Volatile.Write(ref _loadedDefinitionHash, definitionHash);
                 views = _session.BaseViews(handle);
             }

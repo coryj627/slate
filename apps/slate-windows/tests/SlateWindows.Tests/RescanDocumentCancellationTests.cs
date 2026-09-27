@@ -98,6 +98,57 @@ public sealed class RescanDocumentCancellationTests : IDisposable
         document.Shutdown();
     }
 
+    /// <summary>Round 2, finding 2: a base records the hash of the definition
+    /// it ACTUALLY opened. A write that lands after the index was consulted
+    /// and before the open is what the document shows — and what it
+    /// records, so a later unchanged Refresh does not reopen it.</summary>
+    [Fact]
+    public void ABaseRecordsTheHashOfTheDefinitionItOpened()
+    {
+        const string Rewritten =
+            "filters: 'file.ext == \"md\"'\nviews:\n  - type: table\n    name: Rewritten\n    order:\n      - file.name\n";
+        var document = new BaseDocumentViewModel(_session, "Notes.base", _announced.Add, synchronousForTests: true);
+        bool written = false;
+        document.BeforeOpenForTests = () =>
+        {
+            if (!written)
+            {
+                written = true;
+                File.WriteAllText(Path.Combine(_root, "Notes.base"), Rewritten);
+            }
+        };
+
+        document.Load();
+
+        Assert.True(written);
+        Assert.Equal("Rewritten", document.ActiveViewName);
+        Assert.Equal(SlateUniffiMethods.EditorTextContentHash(Rewritten), document.LoadedDefinitionHash);
+        document.Shutdown();
+    }
+
+    /// <summary>Round 2, finding 4: a rescan cancelled while a base reopen is
+    /// already inside its load — past the pre-check, at the open — opens
+    /// nothing: the open itself takes the run's token.</summary>
+    [Fact]
+    public void ABaseReopenCancelledAtItsOpenOpensNothing()
+    {
+        var document = new BaseDocumentViewModel(_session, "Notes.base", _announced.Add, synchronousForTests: true);
+        document.Load();
+        Assert.Equal(BaseLoadState.Ready, document.State);
+        int publications = 0;
+        document.ResultPublished += (_, _) => publications++;
+        using var cancellation = new CancellationTokenSource();
+        document.BeforeOpenForTests = cancellation.Cancel;
+        int opensBefore = document.OpensForTests;
+
+        Task load = document.LoadAsync(cancellation.Token);
+
+        Assert.True(load.IsCanceled);
+        Assert.Equal(opensBefore, document.OpensForTests);
+        Assert.Equal(0, publications);
+        document.Shutdown();
+    }
+
     private BaseDocumentViewModel NewAsyncDocument(SynchronizationContext context, string path)
     {
         SynchronizationContext? previous = SynchronizationContext.Current;
