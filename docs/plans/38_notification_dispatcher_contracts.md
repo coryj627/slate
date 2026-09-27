@@ -8,7 +8,15 @@ core owns copy and priority, while hosts own delivery timing.
 
 **D-1 — Exact native delivery.** Every Medium event uses Other / All;
 every High event uses Other / ImportantMostRecent. Both preserve the
-rendered text and activity ID `slate-accessibility-announcement`. There
+rendered text and activity ID `slate-accessibility-announcement`; a line
+whose processing asks for every notification (All or ImportantAll, every
+Medium line) carries `slate-accessibility-announcement.<n>`, n the
+dispatcher's monotonic sequence, whether the drain replays it (D-2) or it
+is raised while ready, so no two such lines ever share an ID. NVDA's UIA
+rate limiter coalesces notifications that share a sender, kind, processing
+and activity ID, and loses lines of such a burst. A superseding line
+(MostRecent or ImportantMostRecent, every High line) keeps the shared ID
+(W7-7, #1244). There
 are exactly two priority enum values today; an exhaustive fact must fail
 when another is introduced. Test the arguments reaching the native peer
 boundary, not a second mapping implementation. Both Post overloads share
@@ -19,6 +27,41 @@ the sole authored RaiseNotificationEvent caller. Extend the existing
 AnnouncementSeamCensus: the real MainWindow still passes both typed and
 rendered seams into the workspace and all family announcers retain the
 same production destination. No default no-op sink can satisfy a test.
+Amended by W7-7 (#1244; contract 40 R-1, owner decision OD-7): the one
+raiser calls AutomationInteropProvider.RaiseAutomationEvent with
+NotificationEvent on the status peer's connected provider, and no
+authored shell code calls RaiseNotificationEvent, which WPF gates on a
+listener map that only a UIA advise fills. MainWindow's dispatcher is the
+window's only one. A line is raised only when readiness holds — a
+listening client (ClientsAreListening), a connected provider, and either
+the Notification advise in that map or the client and provider present
+together for 3 s without it, all asked on every check, in every phase —
+and is otherwise queued, the queue keeping the last 16. A raise before the
+advise is delivered only sometimes, so a pair present before the advise
+holds the queue for it; a client that never advises hears it when the hold
+runs out, and each drain logs which released it. While
+lines are queued and readiness is false a 250 ms poll on the UI thread
+checks again (the only wake-up; it stops when the queue empties), and the
+first ready check, a tick or a post, raises each queued line once, in
+order, through the same raiser, with D-1's activity ID: the drain raises
+back to back, as a launch ready at its first line does without one, and
+NVDA's UIA rate limiter loses lines of a burst that shares one. Every
+queued line is dropped 30 s after
+its own post, never raised late and never in a wholesale clear, so the
+poll always ends. The launch phase is bookkeeping only and moves forward
+once: Unadvised, then Done when readiness is first observed, or Expired
+when 30 s pass after the window's first frame without it — which is only
+the launch lines, posted by the first frame, reaching their own deadline.
+Neither raises without readiness: a client that stops listening or a
+provider lost after Done queues the line again, and a client or provider
+that returns is held afresh. Whenever a pair is held some periodic check
+samples it — the poll while lines wait, a 1 s epoch watch while nothing is
+queued — so a reader restarted while the peer stays connected, idle or not,
+waits for its own advise when it was the only client listening; with
+another UIA client listening throughout, UIA's aggregate never goes absent
+and the hold does not restart (contract 40 AR-27). AnnouncementSeamCensus
+pins the raise, the readiness inputs, the one construction and the
+forbidden gated call.
 
 **D-3 — Typed scan identity and copy.** VaultScanStarted(total_files),
 VaultScanProgress(indexed,total), VaultScanFinished(files_indexed) are
@@ -144,7 +187,8 @@ facts and actual journeys keep their narrower source/behavior role.
 ## Accepted scope and evidence rules
 
 - A-1: Medium queues with All; High retains ImportantMostRecent. No new
-  activity IDs, global scheduler, priority tier or coalescing class.
+  activity IDs beyond D-1's per-line sequence suffix for All lines, and no
+  global scheduler, priority tier or coalescing class.
 - A-2: Stock NVDA and licensed JAWS are independent human acceptance runs.
   Narrator belongs to the W8 smoke pass. Braille is owner-deferred as of
   2026-09-18; no braille or human audible result is inferred from automation.

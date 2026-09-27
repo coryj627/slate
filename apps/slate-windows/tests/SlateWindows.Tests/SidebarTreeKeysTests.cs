@@ -1046,6 +1046,199 @@ public sealed class SidebarTreeKeysTests : IDisposable
         Assert.Equal(string.Empty, host.Sidebar.FilterText);
     });
 
+    /// <summary>
+    /// #1272 (R-3's Escape route; codex PR 2 round 5): an import in
+    /// progress must not steal the filter field's Escape — whether the
+    /// filter is typed text or, with the field empty, a whitespace tag's
+    /// out-of-band scope (complete filter state under R-3; the #1272
+    /// follow-up's codex round 1). With the filter active, focus in the
+    /// field and an import running, Escape — through the shipped window's
+    /// tunnelling handler first, as in the shell — clears text and scope
+    /// together with one typed SidebarFilterCleared and nothing
+    /// host-composed, and the import keeps running: the source it is
+    /// handed afterwards is imported.
+    /// </summary>
+    [Theory]
+    [InlineData("typed text")]
+    [InlineData("whitespace-tag scope, empty field")]
+    public void EscapeInTheFilterFieldDuringAnImport_ClearsTheFilterNotTheImport(string filter) => RunSta(() =>
+    {
+        using var import = new PendingImport();
+        using var host = new TreeHost(NewVaultWithSpacedTag("import-escape-field"), import.PickSources, import.Run);
+        host.Initialize();
+        host.RouteKeysThroughTheShell();
+        int before;
+        if (filter == "typed text")
+        {
+            before = ActivateFilter(host, sidebar => sidebar.FilterText = "alpha");
+            Assert.Equal("alpha", host.FilterField.Text);
+            Assert.Null(host.Sidebar.ScopeTag);
+        }
+        else
+        {
+            before = ActivateFilter(host, sidebar => sidebar.ActivateTag("two words"));
+            Assert.Equal(string.Empty, host.FilterField.Text);
+            Assert.Equal("two words", host.Sidebar.ScopeTag);
+        }
+
+        host.Sidebar.ImportCommand.Execute(null);
+        Assert.True(host.Sidebar.IsImporting);
+        Assert.True(host.FilterField.Focus());
+
+        Assert.True(host.PressThrough(host.FilterField, Key.Escape), "Escape in the filter field went unhandled.");
+        PumpedDispatcher.PumpUntilDrained(host.Sidebar.FilterCompletion);
+
+        AssertClearedOnce(host, before);
+        Assert.True(host.Sidebar.IsImporting);
+        import.HandOverTheSource();
+        PumpedDispatcher.PumpUntilDrained(host.Sidebar.ImportCompletion);
+        Assert.False(host.Sidebar.IsImporting);
+        Assert.Equal(1, import.WorkerRuns);
+    });
+
+    /// <summary>
+    /// #1272: Escape anywhere else during an import keeps its meaning — on
+    /// a filter result row with the filter active, and in the filter field
+    /// with nothing filtering, the window's handler takes the key and
+    /// cancels the import (the sources it is handed afterwards are never
+    /// imported), and the filter is untouched: the same text and state,
+    /// no clear spoken.
+    /// </summary>
+    [Theory]
+    [InlineData("result row, filter active")]
+    [InlineData("field, nothing filtering")]
+    public void EscapeElsewhereDuringAnImport_CancelsTheImportAndLeavesTheFilter(string focus) => RunSta(() =>
+    {
+        using var import = new PendingImport();
+        using var host = new TreeHost(NewVault("import-escape-elsewhere"), import.PickSources, import.Run);
+        host.Initialize();
+        host.RouteKeysThroughTheShell();
+        UIElement target;
+        if (focus == "result row, filter active")
+        {
+            _ = ActivateFilter(host, sidebar => sidebar.FilterText = "alpha");
+            target = host.FocusListRow(host.FilterResults, "alpha.md");
+        }
+        else
+        {
+            Assert.False(host.Sidebar.IsFilterActive);
+            Assert.True(host.FilterField.Focus());
+            target = host.FilterField;
+        }
+
+        (string Text, bool Active) filter = (host.Sidebar.FilterText, host.Sidebar.IsFilterActive);
+        host.Sidebar.ImportCommand.Execute(null);
+        Assert.True(host.Sidebar.IsImporting);
+        int before = host.AnnouncementCount;
+
+        Assert.True(host.PressThrough(target, Key.Escape), "Escape during the import went unhandled.");
+
+        Assert.Equal(filter, (host.Sidebar.FilterText, host.Sidebar.IsFilterActive));
+        Assert.DoesNotContain(
+            host.Announcements.Skip(before),
+            announcement => announcement is A11yEvent.SidebarFilterCleared);
+        import.HandOverTheSource();
+        PumpedDispatcher.PumpUntilDrained(host.Sidebar.ImportCompletion);
+        Assert.False(host.Sidebar.IsImporting);
+        Assert.Equal(0, import.WorkerRuns);
+        Assert.Equal(filter, (host.Sidebar.FilterText, host.Sidebar.IsFilterActive));
+    });
+
+    /// <summary>
+    /// #1272 (R-2's rename route): an import in progress must not steal the
+    /// inline rename box's Escape either. With an import running, F2 on a
+    /// row — through the shipped window route — arms the rename (focus in
+    /// the name box, the stem selected) and a new name is typed; Escape
+    /// then cancels the rename as R-2 has it — the name reverts, nothing is
+    /// renamed, focus is back in the tree — with nothing host-composed
+    /// said, and the import keeps running: the source it is handed
+    /// afterwards is imported.
+    /// </summary>
+    [Fact]
+    public void EscapeInTheRenameBoxDuringAnImport_CancelsTheRenameNotTheImport() => RunSta(() =>
+    {
+        string root = NewVault("import-escape-rename");
+        using var import = new PendingImport();
+        using var host = new TreeHost(root, import.PickSources, import.Run);
+        host.Initialize();
+        host.RouteKeysThroughTheShell();
+        host.Sidebar.ImportCommand.Execute(null);
+        Assert.True(host.Sidebar.IsImporting);
+        TreeViewItem row = host.FocusRow(Node(host.Sidebar, "alpha.md"));
+        Assert.True(host.PressThrough(row, Key.F2), "F2 on the row went unhandled.");
+        Assert.Same(host.RenameField, Keyboard.FocusedElement);
+        Assert.Equal("alpha", host.RenameField.SelectedText);
+        host.RenameField.Text = "renamed.md";
+        Assert.Equal("renamed.md", host.Sidebar.MutationName);
+        int before = host.AnnouncementCount;
+
+        Assert.True(host.PressThrough(host.RenameField, Key.Escape), "Escape in the rename box went unhandled.");
+
+        Assert.Equal("alpha.md", host.Sidebar.MutationName);
+        Assert.Equal("alpha.md", host.RenameField.Text);
+        Assert.True(File.Exists(Path.Combine(root, "alpha.md")));
+        Assert.False(File.Exists(Path.Combine(root, "renamed.md")));
+        Assert.False(host.RenameField.IsKeyboardFocusWithin);
+        Assert.True(host.Tree.IsKeyboardFocusWithin);
+        Assert.DoesNotContain(
+            host.Announcements.Skip(before),
+            announcement => announcement is A11yEvent.HostComposed);
+        Assert.True(host.Sidebar.IsImporting);
+        import.HandOverTheSource();
+        PumpedDispatcher.PumpUntilDrained(host.Sidebar.ImportCompletion);
+        Assert.False(host.Sidebar.IsImporting);
+        Assert.Equal(1, import.WorkerRuns);
+    });
+
+    /// <summary>
+    /// #1272: the rename box owns Escape only while a row is being renamed
+    /// in it. Once the rename has ended — its own Escape put focus back in
+    /// the tree, the row still selected — and while the box has focus with
+    /// no row selected (nothing to rename: the box only names a new item),
+    /// Escape during an import is the window's: the import is cancelled and
+    /// the box's name is left as it was.
+    /// </summary>
+    [Theory]
+    [InlineData("tree, after the rename ended")]
+    [InlineData("name box, no row selected")]
+    public void EscapeOutsideARenameDuringAnImport_CancelsTheImport(string focus) => RunSta(() =>
+    {
+        using var import = new PendingImport();
+        using var host = new TreeHost(NewVault("import-escape-no-rename"), import.PickSources, import.Run);
+        host.Initialize();
+        host.RouteKeysThroughTheShell();
+        UIElement target;
+        if (focus == "tree, after the rename ended")
+        {
+            TreeViewItem row = host.FocusRow(Node(host.Sidebar, "alpha.md"));
+            Assert.True(host.PressThrough(row, Key.F2), "F2 on the row went unhandled.");
+            Assert.Same(host.RenameField, Keyboard.FocusedElement);
+            Assert.True(host.PressThrough(host.RenameField, Key.Escape), "Escape in the rename box went unhandled.");
+            Assert.False(host.RenameField.IsKeyboardFocusWithin);
+            Assert.True(host.Tree.IsKeyboardFocusWithin);
+            Assert.NotNull(host.Sidebar.SelectedNode);
+            target = Assert.IsAssignableFrom<UIElement>(Keyboard.FocusedElement);
+        }
+        else
+        {
+            Assert.Null(host.Sidebar.SelectedNode);
+            Assert.True(host.RenameField.Focus());
+            target = host.RenameField;
+        }
+
+        string name = host.Sidebar.MutationName;
+        host.Sidebar.ImportCommand.Execute(null);
+        Assert.True(host.Sidebar.IsImporting);
+
+        Assert.True(host.PressThrough(target, Key.Escape), "Escape during the import went unhandled.");
+
+        Assert.Equal(name, host.Sidebar.MutationName);
+        import.HandOverTheSource();
+        PumpedDispatcher.PumpUntilDrained(host.Sidebar.ImportCompletion);
+        Assert.False(host.Sidebar.IsImporting);
+        Assert.Equal(0, import.WorkerRuns);
+    });
+
     private static string NavigationHelpText() => Commands.NavigationHelp.FilesTree;
 
     // ---- Helpers --------------------------------------------------------
@@ -1151,7 +1344,10 @@ public sealed class SidebarTreeKeysTests : IDisposable
     /// a real sidebar (the MoveToFocusTests shape: no Application and no
     /// shown MainWindow, so no app-wide state, Jump Lists or window
     /// placement are touched).</summary>
-    private sealed class TreeHost(string root) : IDisposable
+    private sealed class TreeHost(
+        string root,
+        Func<Task<IReadOnlyList<string>>>? pickImportSources = null,
+        Func<Action, CancellationToken, Task>? importWorker = null) : IDisposable
     {
         private readonly List<A11yEvent> _announced = [];
         private VaultSession? _session;
@@ -1188,7 +1384,9 @@ public sealed class SidebarTreeKeysTests : IDisposable
                 _session,
                 _announced.Add,
                 vaultRoot: root,
-                localAppDataRoot: Path.Combine(root, "device-state"));
+                pickImportSources: pickImportSources,
+                localAppDataRoot: Path.Combine(root, "device-state"),
+                importWorker: importWorker);
             PumpedDispatcher.PumpUntilDrained(Sidebar.TreeRefreshCompletion);
             Sidebar.OpenTargetRequested += (_, request) => Requests.Add(request);
 
@@ -1237,6 +1435,19 @@ public sealed class SidebarTreeKeysTests : IDisposable
             _window.Activate();
             _window.UpdateLayout();
             PumpedDispatcher.Drain();
+        }
+
+        /// <summary>#1272: the shipped window's tunnelling key handler
+        /// (<c>MainWindow.Window_PreviewKeyDown</c>) at the root of this
+        /// host window's key route — where it runs in the shell, ahead of
+        /// every focused control's own handlers.</summary>
+        public void RouteKeysThroughTheShell()
+        {
+            MethodInfo handler = typeof(MainWindow).GetMethod(
+                "Window_PreviewKeyDown",
+                BindingFlags.Instance | BindingFlags.NonPublic)
+                ?? throw new InvalidOperationException("MainWindow.Window_PreviewKeyDown is gone.");
+            _window!.PreviewKeyDown += handler.CreateDelegate<KeyEventHandler>(Shell);
         }
 
         public TreeViewItem FocusRow(FileTreeNodeViewModel node)
