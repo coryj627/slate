@@ -1586,11 +1586,16 @@ internal sealed class CanvasDocumentViewModel : PanelWorkScheduler
                     // surface hears the rows changed. A FAILED answer
                     // keeps the rows it was showing (contract C10), so
                     // it excludes nothing new and supersedes nothing.
+                    // W7-7 R-10: only where filtering REMOVES rows — the
+                    // outline and the table. On the Visual board a filter
+                    // dims cards and narrows nothing (locked contract 34
+                    // D4), so the named card stays the landing's.
                     if (loaded.Unit.Answer is CanvasAnswerState.Answered
-                        && _focusRequest is { NodeId: { } sought }
+                        && _focusRequest is { NodeId: { } sought } excluded
+                        && Selection.ActiveSurface != CanvasSurfaceKind.Visual
                         && !loaded.Unit.FilteredOrder.Contains(sought))
                     {
-                        FocusRequest = null;
+                        EndFocusLanding(excluded, DocumentLandingEnd.Released);
                     }
                     OutlinePublished?.Invoke(this, EventArgs.Empty);
                     Navigator.AnnounceFilterCount();
