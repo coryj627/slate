@@ -154,6 +154,11 @@ internal static class SelectorFocus
     internal static void SetOwnLanding(UIElement container, Func<bool> land) =>
         OwnLandings.AddOrUpdate(container, land);
 
+    /// <summary>Whether <paramref name="container"/>'s region owns its
+    /// landing (<c>SelectorLandingCensus</c> holds every
+    /// selection-committing container to it).</summary>
+    internal static bool HasOwnLanding(UIElement container) => OwnLandings.TryGetValue(container, out _);
+
     /// <summary>Whether focusing <paramref name="element"/> itself would
     /// land on a bare list. A combo box is its own stop — its items live in
     /// its drop-down — and a grid's stop is a cell, which the grid seats
@@ -175,6 +180,7 @@ internal static class SelectorFocus
     /// takes the keys.
     /// </summary>
     /// <remarks>
+    /// <para>
     /// Codex round 4: a restore token captured while a list was EMPTY —
     /// its own stop then (AR-6) — was restored with <c>Focus()</c> after
     /// the list filled behind an overlay, onto the populated bare list
@@ -184,10 +190,25 @@ internal static class SelectorFocus
     /// inside it, and a caller that falls back on false would take them
     /// away again. <c>SelectorLandingCensus</c> holds every focus call on
     /// an element-typed target in the shell to this.
+    /// </para>
+    /// <para>
+    /// A ROW token — a tree row, a list row, a grid's cell or row — whose
+    /// container has an own landing lands through that landing, never on
+    /// the row itself (the owner's S4; the completeness sweep's G6 and
+    /// G16). Every selection-committing container has one: a row takes the
+    /// keys by selecting itself (a tree row) or moving the grid's currency,
+    /// and the commit follows — a palette restore onto a Tags row re-applied
+    /// the tag the user had just cleared, a recycled Files row opened
+    /// another note, and a canvas table cell moved and narrated the seat.
+    /// The container's landing puts the reader on its own current row, as
+    /// every other landing does.
+    /// </para>
     /// </remarks>
     /// <returns>Whether the keys landed on the target or inside it.</returns>
-    internal static bool LandOnStop(UIElement stop) => OwnLandings.TryGetValue(stop, out Func<bool>? own)
-        ? own()
+    internal static bool LandOnStop(UIElement stop) =>
+        OwnLandings.TryGetValue(stop, out Func<bool>? own)
+        || (RowOwner(stop) is { } container && OwnLandings.TryGetValue(container, out own))
+        ? own!()
         : stop switch
         {
             Selector list when IsListLanding(list) => FocusFirstOrSelectedItem(list),
@@ -197,6 +218,38 @@ internal static class SelectorFocus
             RadioButton radio when RadioGroupArrows.CheckedPeer(radio) is { } chosen => chosen.Focus(),
             _ => stop.Focus() || stop.IsKeyboardFocusWithin,
         };
+
+    /// <summary>The container a row token belongs to: a tree row's tree, a
+    /// list row's list, a grid cell's or row's grid; null for anything
+    /// else.</summary>
+    private static UIElement? RowOwner(UIElement stop)
+    {
+        switch (stop)
+        {
+            case TreeViewItem row:
+                ItemsControl? level = ItemsControl.ItemsControlFromItemContainer(row);
+                while (level is TreeViewItem parent)
+                {
+                    level = ItemsControl.ItemsControlFromItemContainer(parent);
+                }
+
+                return level as TreeView;
+            case ListBoxItem row:
+                return ItemsControl.ItemsControlFromItemContainer(row);
+            case DataGridCell or DataGridRow:
+                for (DependencyObject? current = stop; current is not null; current = VisualTreeHelper.GetParent(current))
+                {
+                    if (current is DataGrid grid)
+                    {
+                        return grid;
+                    }
+                }
+
+                return null;
+            default:
+                return null;
+        }
+    }
 
     /// <summary>Whether <paramref name="items"/> is an items host with no
     /// landing of its own — R-5's "other <c>ItemsControl</c> container": a

@@ -120,6 +120,37 @@ public sealed partial class CanvasNavigatorTests
         host.AssertTreeNeverFocused();
     });
 
+    /// <summary>The owner's S4 (the completeness sweep's G6): a restore whose
+    /// token is a ROW of the outline lands through the projection's own
+    /// landing — the seated card's row — never on the token's row, whose
+    /// focus would select it, move the seat and narrate the move. The seat
+    /// moved since the token was taken (a palette verb, a command).</summary>
+    [Fact]
+    public void ARestoreTokenOnAnOutlineRowLandsOnTheSeatedRowSilently() => RunSta(() =>
+    {
+        CanvasDocumentViewModel document = Open("board.canvas");
+        using OutlineHost host = HostOutline(document);
+        document.SeatSelectionSilently("loose");
+        host.UpdateLayout();
+        Assert.True(host.Surface.FocusProjection());
+        Assert.Equal("loose", FocusedRowId());
+        CanvasOutlineRowViewModel other = host.Surface.OutlineForTests.RootsForTests
+            .First(row => row is { IsConnection: false } && row.Id != "loose");
+        document.SeatSelectionSilently(other.Id);
+        host.UpdateLayout();
+        IInputElement token = Keyboard.FocusedElement;
+        Assert.True(host.Beside.Focus());
+        document.SeatSelectionSilently("loose");
+        host.UpdateLayout();
+        Drain(document);
+
+        Assert.True(SelectorFocus.LandOnStop((UIElement)token));
+
+        Assert.Equal("loose", FocusedRowId());
+        Assert.Equal("loose", document.Selection.Selected);
+        Assert.Empty(Lines(document));
+    });
+
     /// <summary>The arrow witness: from the landed row each arrow keeps the
     /// keys in the outline — the navigator moves or follows, or answers at
     /// an end — and none reaches the buttons beside it.</summary>

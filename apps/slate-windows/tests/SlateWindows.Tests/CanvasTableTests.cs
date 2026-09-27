@@ -872,11 +872,12 @@ public sealed class CanvasTableTests : IDisposable
             KeyboardNavigationMode.Cycle,
             KeyboardNavigation.GetDirectionalNavigation(surface.SwitcherForTests));
 
-        // ONE stop: Tab from the first choice leaves the group entirely
-        // rather than visiting the other two.
-        Assert.True(surface.OutlineChoiceForTests.Focus());
+        // ONE stop — the CHECKED choice (W7-7 PR 4: keys entering the group
+        // land there) — and Tab from it leaves the group entirely rather
+        // than visiting the other two.
+        Assert.True(surface.TableChoiceForTests.Focus());
         Assert.True(
-            surface.OutlineChoiceForTests.MoveFocus(
+            surface.TableChoiceForTests.MoveFocus(
                 new TraversalRequest(FocusNavigationDirection.Next)));
         Assert.DoesNotContain(
             host.FocusedElement(),
@@ -888,15 +889,15 @@ public sealed class CanvasTableTests : IDisposable
             });
 
         // …and the arrows are how a keyboard user picks a surface.
-        Assert.True(surface.OutlineChoiceForTests.Focus());
-        Assert.True(
-            surface.OutlineChoiceForTests.MoveFocus(
-                new TraversalRequest(FocusNavigationDirection.Right)));
-        Assert.Same(surface.TableChoiceForTests, host.FocusedElement());
+        Assert.True(surface.TableChoiceForTests.Focus());
         Assert.True(
             surface.TableChoiceForTests.MoveFocus(
                 new TraversalRequest(FocusNavigationDirection.Left)));
         Assert.Same(surface.OutlineChoiceForTests, host.FocusedElement());
+        Assert.True(
+            surface.OutlineChoiceForTests.MoveFocus(
+                new TraversalRequest(FocusNavigationDirection.Right)));
+        Assert.Same(surface.TableChoiceForTests, host.FocusedElement());
 
         // §D TD-6: the persisted "visual" token lands on a REAL arm
         // now — checked, ENABLED, and reachable, which is the whole
@@ -961,6 +962,44 @@ public sealed class CanvasTableTests : IDisposable
         Assert.Equal(CanvasSurfaceKind.Table, document.Selection.ActiveSurface);
         Assert.Same(before, transient.Rects);
         Assert.True(document.Modes.IsActive, "the choice ended the move mode");
+        document.Shutdown();
+    });
+
+    /// <summary>
+    /// W7-7 PR 4 (#1247; the owner's S4, the completeness sweep's G16): the
+    /// table's landing — the projection's (Escape from the filter field),
+    /// and a restore whose token is the grid or one of its cells — is the
+    /// SEATED card's row, silently. It was FocusFirstCell: row 0, whatever
+    /// card was seated, and the row's currency moved the seat there with a
+    /// narrated move on top of the row being read.
+    /// </summary>
+    [Fact]
+    public void TheTablesLandingIsTheSeatedCardSilently() => RunSta(() =>
+    {
+        (CanvasDocumentViewModel document, CanvasSurfaceView surface, AccessibleDataGrid grid) = Table();
+        using var host = Host(surface);
+        string seated = document.TableRows[^1].NodeId;
+        Assert.NotEqual(document.TableRows[0].NodeId, seated);
+        document.SelectNode(seated, announce: false);
+        Assert.True(surface.FilterFieldForTests.Focus());
+        document.AnnouncerForTests.FlushForTests();
+        _announced.Clear();
+
+        Assert.True(surface.TableForTests.FocusGrid());
+        document.AnnouncerForTests.FlushForTests();
+
+        Assert.True(grid.Grid.IsKeyboardFocusWithin);
+        Assert.Equal(seated, Assert.IsType<CanvasTableRow>(grid.Grid.CurrentCell.Item).NodeId);
+        Assert.Equal(seated, document.Selection.Selected);
+        Assert.Empty(_announced);
+
+        // A restore whose token is the grid lands the same way.
+        Assert.True(surface.FilterFieldForTests.Focus());
+        Assert.True(SelectorFocus.LandOnStop(grid.Grid));
+        document.AnnouncerForTests.FlushForTests();
+        Assert.Equal(seated, Assert.IsType<CanvasTableRow>(grid.Grid.CurrentCell.Item).NodeId);
+        Assert.Equal(seated, document.Selection.Selected);
+        Assert.Empty(_announced);
         document.Shutdown();
     });
 

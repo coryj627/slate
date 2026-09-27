@@ -39,6 +39,16 @@ public partial class MainWindow : Window
         TreeView tags = FindWithAutomationId<TreeView>(FilesPaneBorder, "SidebarTagTree")
             ?? throw new InvalidOperationException("SidebarTagTree is not in the shell's XAML.");
         SelectorFocus.SetOwnLanding(tags, () => LandOnSidebarTree(tags, selectedPath: null));
+        // S4 (#1247): every selection-committing list owns its landing, so a
+        // restore whose token is one of its rows lands as the region does —
+        // the filter's results and the dual pane OPEN on selection (R-2),
+        // the rail SWITCHES the leaf — and never re-selects a row by focus.
+        SelectorFocus.SetOwnLanding(
+            FilterResultsList, () => SelectorFocus.FocusFirstOrSelectedItem(FilterResultsList) || LandOnFilesTree());
+        ListBox dualPane = FindWithAutomationId<ListBox>(FilesPaneBorder, "SidebarDualPane")
+            ?? throw new InvalidOperationException("SidebarDualPane is not in the shell's XAML.");
+        SelectorFocus.SetOwnLanding(dualPane, () => SelectorFocus.FocusFirstOrSelectedItem(dualPane) || LandOnFilesTree());
+        SelectorFocus.SetOwnLanding(RightPaneLeavesList, () => SelectorFocus.FocusFirstOrSelectedItem(RightPaneLeavesList));
         KeepLeafKeysThroughPublications();
         _windowPlacement = new WindowPlacementManager(this);
         _announcer = new AccessibilityNotificationDispatcher(StatusTextBlock);

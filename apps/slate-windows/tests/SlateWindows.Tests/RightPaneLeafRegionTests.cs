@@ -184,6 +184,32 @@ public sealed class RightPaneLeafRegionTests
         (bool)(typeof(Panels.HistorySurfaceView).GetField("_deletedSegmentActive", BindingFlags.Instance | BindingFlags.NonPublic)
             ?? throw new InvalidOperationException("_deletedSegmentActive is gone")).GetValue(view)!;
 
+    /// <summary>The owner's S4: the rail's selection SWITCHES the leaf, so a
+    /// restore whose token is a rail row lands through the rail's own
+    /// landing — the shown leaf's row — never on a row whose focus would
+    /// leave the reader on a leaf that is not shown (and whose next arrow
+    /// would switch from the wrong place).</summary>
+    [Fact]
+    public void ARestoreTokenOnARailRowLandsOnTheShownLeafsRow() => RunSta(() =>
+    {
+        using var host = new Host();
+        host.Initialize("outline", ("a.md", "# A\n"));
+        ListBox rail = host.ElementWithId<ListBox>("RightPaneLeaves");
+        rail.UpdateLayout();
+        object other = rail.Items.Cast<object>().First(item => !ReferenceEquals(item, rail.SelectedItem));
+        var otherRow = Assert.IsAssignableFrom<ListBoxItem>(rail.ItemContainerGenerator.ContainerFromItem(other));
+        Assert.True(otherRow.Focus());
+        IInputElement token = Keyboard.FocusedElement;
+        object shown = rail.SelectedItem;
+        host.ForgetFocusAndSpeech();
+
+        Assert.True(host.Shell.TryFocus(token));
+
+        Assert.Same(rail.ItemContainerGenerator.ContainerFromItem(shown), Keyboard.FocusedElement);
+        Assert.Same(shown, rail.SelectedItem);
+        Assert.Equal("outline", host.Workspace.ActiveLeaf.Id);
+    });
+
     public static TheoryData<string, string, Key> LeafStops()
     {
         var data = new TheoryData<string, string, Key>();

@@ -122,6 +122,72 @@ public sealed class FilesRegionLandingTests
         host.AssertNeverFocusedPopulated(tags);
     });
 
+    /// <summary>The owner's S4 (the completeness sweep's G6): a restore whose
+    /// token is a Tags ROW lands through the Tags tree's own landing. The row
+    /// applied its tag when the reader chose it; Clear Sidebar Filter then
+    /// released the tag, and the palette's restore focused the row — which
+    /// selected it and applied the tag the reader had just cleared. Now it
+    /// lands on the first tag, unselected: nothing applies, nothing is
+    /// said.</summary>
+    [Fact]
+    public void ARestoreTokenOnAReleasedTagRowAppliesNothing() => RunSta(() =>
+    {
+        using var host = new Host();
+        host.Initialize(tagged: true);
+        host.Sidebar.ShowTags = true;
+        host.Pane.UpdateLayout();
+        TreeView tags = host.ElementWithId<TreeView>("SidebarTagTree");
+        Assert.True(PumpedDispatcher.PumpUntil(() => tags.HasItems), "premise: the Tags tree never listed the fixture's tag.");
+        host.Pane.UpdateLayout();
+        var row = Assert.IsAssignableFrom<TreeViewItem>(tags.ItemContainerGenerator.ContainerFromIndex(0));
+        Assert.True(row.Focus());
+        Assert.True(PumpedDispatcher.PumpUntil(() => host.Sidebar.IsFilterActive), "premise: choosing the tag applied no filter.");
+        IInputElement token = Keyboard.FocusedElement;
+        host.Sidebar.ClearFilterCommand.Execute(null);
+        PumpedDispatcher.Drain();
+        Assert.False(host.Sidebar.IsFilterActive, "premise: the clear left the tag applied.");
+        Assert.False(row.IsSelected, "premise: the clear did not release the tag's row.");
+        Assert.True(host.Above.Focus());
+        host.Announced.Clear();
+
+        Assert.True(host.Shell.TryFocus(token));
+        PumpedDispatcher.Drain();
+
+        TreeViewItem landed = Assert.IsAssignableFrom<TreeViewItem>(Keyboard.FocusedElement);
+        Assert.False(landed.IsSelected, "the restore selected a tag.");
+        Assert.False(host.Sidebar.IsFilterActive, "the restore re-applied the tag the reader cleared.");
+        Assert.Empty(host.Announced);
+    });
+
+    /// <summary>The owner's S4 (G6): a restore whose token is a Files row
+    /// that is NOT the selection — a landing's unselected row, a recycled
+    /// container — lands through the Files region's own landing: the
+    /// selected row, else the first row unselected. The token's own focus
+    /// selected its row, and a Files selection OPENS the note.</summary>
+    [Fact]
+    public void ARestoreTokenOnAnUnselectedFilesRowOpensNothing() => RunSta(() =>
+    {
+        using var host = new Host();
+        host.Initialize();
+        var opened = new List<string>();
+        host.Sidebar.OpenTargetRequested += (_, request) => opened.Add(request.Path);
+        FileTreeNodeViewModel second = host.Sidebar.RootNodes[1];
+        var row = Assert.IsAssignableFrom<TreeViewItem>(host.Tree.ItemContainerGenerator.ContainerFromItem(second));
+        Assert.True(LandingTreeViewItem.FocusUnselected(row));
+        IInputElement token = Keyboard.FocusedElement;
+        Assert.True(host.Above.Focus());
+        host.Announced.Clear();
+
+        Assert.True(host.Shell.TryFocus(token));
+        PumpedDispatcher.Drain();
+
+        Assert.Same(host.Sidebar.RootNodes[0], FocusedNode());
+        Assert.False(second.IsSelected, "the restore selected the token's row.");
+        Assert.Null(host.Sidebar.SelectedNode);
+        Assert.Empty(opened);
+        Assert.Empty(host.Announced);
+    });
+
     [Fact]
     public void TheSelectedFilesRowTakesTheKeys() => RunSta(() =>
     {
