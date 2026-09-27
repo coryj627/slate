@@ -108,28 +108,39 @@ internal sealed class DashboardViewModel : PanelWorkScheduler
     public event EventHandler? SectionsPublished;
 
     /// <summary>W7-7 PR 7 (#1252, round 29): <see cref="Load"/>, awaited
-    /// to its publication (a published failure state included).</summary>
-    internal async Task LoadAsync()
+    /// to its publication (a published failure state included). The
+    /// rescan's <paramref name="cancellation"/> (the ruling on finding 6)
+    /// is checked before every open, trips each <c>BaseExecute</c>, discards
+    /// a later publication and cancels the returned Task at once.</summary>
+    internal async Task LoadAsync(CancellationToken cancellation = default)
     {
-        Load();
-        await WhenPublishedAsync();
+        cancellation.ThrowIfCancellationRequested();
+        Load(cancellation);
+        await WhenPublishedAsync().WaitAsync(cancellation);
     }
 
-    public void Load()
+    public void Load() => Load(CancellationToken.None);
+
+    private void Load(CancellationToken cancellation)
     {
         if (IsShutDown)
         {
             return;
         }
         int generation = Interlocked.Increment(ref _generation);
-        StartWork(() => LoadBody(generation));
+        StartWork(() => LoadBody(generation, cancellation));
     }
 
     // The failure detail last spoken, cleared by a live successful publication.
     private string? _announcedFailure;
 
-    private void LoadBody(int generation)
+    private void LoadBody(int generation, CancellationToken cancellation)
     {
+        if (cancellation.IsCancellationRequested)
+        {
+            return;
+        }
+
         Dashboard dashboard;
         try
         {
@@ -139,7 +150,8 @@ internal sealed class DashboardViewModel : PanelWorkScheduler
         {
             Post(() =>
             {
-                if (Volatile.Read(ref _generation) != generation)
+                if (Volatile.Read(ref _generation) != generation
+                    || cancellation.IsCancellationRequested)
                 {
                     return;
                 }
@@ -178,11 +190,18 @@ internal sealed class DashboardViewModel : PanelWorkScheduler
                 projected.Add(section);
                 continue;
             }
+            if (cancellation.IsCancellationRequested)
+            {
+                // A cancelled rescan opens nothing more (W7-7 PR 7).
+                return;
+            }
+
             ulong? handle = null;
             try
             {
                 handle = _session.OpenSavedQuery(status.SavedQueryId);
                 using var cancel = new CancelToken();
+                using CancellationTokenRegistration link = cancellation.Register(cancel.Cancel);
                 BasesResultSet result = _session.BaseExecute(
                     handle.Value, view: 0, thisPath: ThisPath, quickFilter: null, cancel);
                 section.Result = result;
@@ -222,7 +241,8 @@ internal sealed class DashboardViewModel : PanelWorkScheduler
         }
         Post(() =>
         {
-            if (Volatile.Read(ref _generation) != generation)
+            if (Volatile.Read(ref _generation) != generation
+                || cancellation.IsCancellationRequested)
             {
                 return;
             }

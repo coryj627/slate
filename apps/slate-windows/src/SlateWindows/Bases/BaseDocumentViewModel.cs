@@ -730,14 +730,29 @@ internal sealed class BaseDocumentViewModel : PanelWorkScheduler
     /// source and re-run the active view on the document's worker — as a
     /// Task that completes when the result publishes on the dispatcher,
     /// whatever it is (a published failure is the source's truth). A
-    /// shut-down document completes at once. A rescan awaits it before it
-    /// reports the page applied.
+    /// shut-down document completes at once. A rescan awaits it.
     /// </summary>
-    internal Task LoadAsync()
+    /// <remarks>The rescan's <paramref name="cancellation"/> (the ruling on
+    /// codex PR 7 round 1, finding 6): checked before the open — core's
+    /// <c>OpenBase</c> takes no token — and linked into
+    /// <c>BaseExecute</c>'s; a result that arrives after it is discarded,
+    /// and the returned Task is cancelled at once.</remarks>
+    internal Task LoadAsync(CancellationToken cancellation = default) =>
+        PublicationAsync(() => Load(cancellation), cancellation);
+
+    /// <summary>The awaited form of a load or a re-run: completes on the
+    /// next terminal publication, or is cancelled with
+    /// <paramref name="cancellation"/>.</summary>
+    private Task PublicationAsync(Action start, CancellationToken cancellation)
     {
         if (IsShutDown)
         {
             return Task.CompletedTask;
+        }
+
+        if (cancellation.IsCancellationRequested)
+        {
+            return Task.FromCanceled(cancellation);
         }
 
         var published = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
@@ -755,7 +770,17 @@ internal sealed class BaseDocumentViewModel : PanelWorkScheduler
         }
 
         ResultPublished += OnPublished;
-        Load();
+        CancellationTokenRegistration registration = cancellation.Register(() =>
+        {
+            ResultPublished -= OnPublished;
+            published.TrySetCanceled(cancellation);
+        });
+        _ = published.Task.ContinueWith(
+            _ => registration.Dispose(),
+            CancellationToken.None,
+            TaskContinuationOptions.ExecuteSynchronously,
+            TaskScheduler.Default);
+        start();
         return published.Task;
     }
 
@@ -763,7 +788,9 @@ internal sealed class BaseDocumentViewModel : PanelWorkScheduler
     /// view. The full-reload shape: close, open, views, execute — the
     /// mac `load` twin. Never announces by itself (INV-4); the
     /// explicit-refresh caller announces BaseRefreshed.</summary>
-    public void Load()
+    public void Load() => Load(CancellationToken.None);
+
+    private void Load(CancellationToken cancellation)
     {
         if (IsShutDown)
         {
@@ -781,10 +808,10 @@ internal sealed class BaseDocumentViewModel : PanelWorkScheduler
         // retained tuple would render a sort the rows don't have and
         // let SaveSortToView persist the fiction (red team round 1).
         SortState = null;
-        StartWork(() => LoadBody(generation));
+        StartWork(() => LoadBody(generation, cancellation));
     }
 
-    private void LoadBody(int generation)
+    private void LoadBody(int generation, CancellationToken cancellation)
     {
         ulong handle;
         BaseViewSummary[] views;
@@ -792,8 +819,11 @@ internal sealed class BaseDocumentViewModel : PanelWorkScheduler
         {
             lock (_ffiLock)
             {
-                if (Volatile.Read(ref _generation) != generation)
+                if (Volatile.Read(ref _generation) != generation
+                    || cancellation.IsCancellationRequested)
                 {
+                    // A cancelled rescan opens nothing: the host-side check
+                    // core's tokenless OpenBase needs (W7-7 PR 7).
                     return;
                 }
                 CloseHandleLocked();
@@ -808,7 +838,8 @@ internal sealed class BaseDocumentViewModel : PanelWorkScheduler
         {
             Post(() =>
             {
-                if (Volatile.Read(ref _generation) != generation)
+                if (Volatile.Read(ref _generation) != generation
+                    || cancellation.IsCancellationRequested)
                 {
                     return;
                 }
@@ -819,7 +850,8 @@ internal sealed class BaseDocumentViewModel : PanelWorkScheduler
         }
         Post(() =>
         {
-            if (Volatile.Read(ref _generation) != generation)
+            if (Volatile.Read(ref _generation) != generation
+                || cancellation.IsCancellationRequested)
             {
                 return;
             }
@@ -834,7 +866,11 @@ internal sealed class BaseDocumentViewModel : PanelWorkScheduler
         // field here published the wrong "no executable views" banner
         // on every first asynchronous load (red team round 1 blocker —
         // masked by synchronous test mode, where Post runs inline).
-        ExecuteBody(generation, (uint)ClampedViewIndex(views.Length), freshViews: views);
+        ExecuteBody(
+            generation,
+            (uint)ClampedViewIndex(views.Length),
+            freshViews: views,
+            cancellation: cancellation);
     }
 
     private int ClampedViewIndex(int viewCount) =>
@@ -843,32 +879,11 @@ internal sealed class BaseDocumentViewModel : PanelWorkScheduler
     /// <summary>W7-7 PR 7 (#1252, round 29): <see cref="Refresh"/> as a
     /// Task that completes when the re-run's result publishes (an
     /// in-flight load's, when one is running), whatever it is; a shut-down
-    /// document completes at once.</summary>
-    internal Task RefreshAsync()
-    {
-        if (IsShutDown)
-        {
-            return Task.CompletedTask;
-        }
-
-        var published = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
-        void OnPublished(object? sender, EventArgs eventArgs)
-        {
-            if (State == BaseLoadState.Loading)
-            {
-                return;
-            }
-
-            // A published failure state is the source's truth (an invalid
-            // or unreadable base shows its error): the publication happened.
-            ResultPublished -= OnPublished;
-            published.TrySetResult();
-        }
-
-        ResultPublished += OnPublished;
-        Refresh();
-        return published.Task;
-    }
+    /// document completes at once. The rescan's
+    /// <paramref name="cancellation"/> reaches <c>BaseExecute</c> and
+    /// discards a later result, as <see cref="LoadAsync"/>'s does.</summary>
+    internal Task RefreshAsync(CancellationToken cancellation = default) =>
+        PublicationAsync(() => Refresh(cancellation), cancellation);
 
     /// <summary>Re-run the active view on the CURRENT handle — the
     /// post-write refresh entry (contract C9). Keeps previous rows on
@@ -879,14 +894,16 @@ internal sealed class BaseDocumentViewModel : PanelWorkScheduler
     /// stranding the document in Loading forever. The in-flight load
     /// executes against current data anyway, so the refresh is
     /// redundant there (the RefreshForFunnel guard's precedent).</summary>
-    public void Refresh()
+    public void Refresh() => Refresh(CancellationToken.None);
+
+    private void Refresh(CancellationToken cancellation)
     {
         if (IsShutDown || State == BaseLoadState.Loading)
         {
             return;
         }
         int generation = Interlocked.Increment(ref _generation);
-        StartWork(() => ExecuteBody(generation, (uint)_activeViewIndex));
+        StartWork(() => ExecuteBody(generation, (uint)_activeViewIndex, cancellation: cancellation));
     }
 
     /// <summary>Switch the active view (the mac selectView twin):
@@ -931,7 +948,8 @@ internal sealed class BaseDocumentViewModel : PanelWorkScheduler
         int generation,
         uint view,
         bool announceQuickFilterCount = false,
-        IReadOnlyList<BaseViewSummary>? freshViews = null)
+        IReadOnlyList<BaseViewSummary>? freshViews = null,
+        CancellationToken cancellation = default)
     {
         // Captured once per body: the executed filter and the ACTIVE
         // flag must describe the same run (contract C5).
@@ -952,6 +970,11 @@ internal sealed class BaseDocumentViewModel : PanelWorkScheduler
                 DrainPendingSortClearsLocked(handle);
                 using var cancel = new CancelToken();
                 _executeCancel = cancel;
+                // W7-7 PR 7: the rescan's cancellation trips this execute's
+                // token, as Shutdown does. Declared after the token, so it
+                // is disposed first — a running callback completes before
+                // the token goes away.
+                using CancellationTokenRegistration link = cancellation.Register(cancel.Cancel);
                 try
                 {
                     result = _session.BaseExecute(
@@ -967,7 +990,8 @@ internal sealed class BaseDocumentViewModel : PanelWorkScheduler
         {
             Post(() =>
             {
-                if (Volatile.Read(ref _generation) != generation)
+                if (Volatile.Read(ref _generation) != generation
+                    || cancellation.IsCancellationRequested)
                 {
                     return;
                 }
@@ -984,7 +1008,8 @@ internal sealed class BaseDocumentViewModel : PanelWorkScheduler
         }
         Post(() =>
         {
-            if (Volatile.Read(ref _generation) != generation)
+            if (Volatile.Read(ref _generation) != generation
+                || cancellation.IsCancellationRequested)
             {
                 return;
             }

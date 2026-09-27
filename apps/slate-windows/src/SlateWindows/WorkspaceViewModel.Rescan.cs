@@ -96,12 +96,12 @@ internal sealed partial class WorkspaceViewModel
 
         if (_canvasDocuments.TryGetValue(CanvasKey(modified), out CanvasDocumentViewModel? canvas))
         {
-            reloads.Add(RunKindReload("canvas", modified, canvas.ReloadAsync));
+            reloads.Add(RunKindReload("canvas", modified, () => canvas.ReloadAsync()));
         }
 
         foreach (BaseDocumentViewModel document in OpenBaseDocumentsAt(modified))
         {
-            reloads.Add(RunKindReload("base", modified, document.LoadAsync));
+            reloads.Add(RunKindReload("base", modified, () => document.LoadAsync()));
         }
 
         await Task.WhenAll(reloads);

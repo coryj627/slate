@@ -1385,10 +1385,22 @@ internal sealed class CanvasDocumentViewModel : PanelWorkScheduler
     /// its read and build run on the document's worker as always — whatever
     /// state that result is (a published parse or I/O error is the file's
     /// truth, not a stale board). A retired document completes at once. A
-    /// rescan awaits it before it reports the page applied.
+    /// rescan awaits it.
     /// </summary>
-    internal Task ReloadAsync()
+    /// <remarks>The rescan's <paramref name="cancellation"/> (the ruling on
+    /// codex PR 7 round 1, finding 6): checked before the reload is
+    /// requested — core's <c>OpenCanvas</c> takes no token — and it cancels
+    /// the returned Task at once. A delivery already in flight completes
+    /// inside the pipeline, which owns its lease release; the rescan is
+    /// cancelled only by a close or a vault switch, which retires the
+    /// document, and a retired document applies nothing.</remarks>
+    internal Task ReloadAsync(CancellationToken cancellation = default)
     {
+        if (cancellation.IsCancellationRequested)
+        {
+            return Task.FromCanceled(cancellation);
+        }
+
         var applied = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
         void OnApplied(CanvasPublication publication)
         {
@@ -1405,6 +1417,16 @@ internal sealed class CanvasDocumentViewModel : PanelWorkScheduler
         }
 
         PublicationApplied += OnApplied;
+        CancellationTokenRegistration registration = cancellation.Register(() =>
+        {
+            PublicationApplied -= OnApplied;
+            applied.TrySetCanceled(cancellation);
+        });
+        _ = applied.Task.ContinueWith(
+            _ => registration.Dispose(),
+            CancellationToken.None,
+            TaskContinuationOptions.ExecuteSynchronously,
+            TaskScheduler.Default);
         Load();
         if (_slot.Current.Retired)
         {
