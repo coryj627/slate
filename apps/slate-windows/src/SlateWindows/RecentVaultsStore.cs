@@ -36,13 +36,13 @@ internal sealed record RecentVault(
     /// siblings: the display name, and the path too when another recent
     /// vault shares the display name in any case (speech does not hear
     /// case). Two "Notes" folders that read alike are axe's
-    /// SiblingUniqueAndFocusable error.
+    /// SiblingUniqueAndFocusable error. Named by the one sibling rule and its
+    /// one culture-independent comparison (codex PR 3 round 5): under tr-TR
+    /// the current culture read "FILE" and "file" as different names and
+    /// left both bare.
     /// </summary>
     public static string SpokenName(RecentVault vault, IEnumerable<RecentVault> all) =>
-        all.Count(other => string.Equals(
-            other.DisplayName, vault.DisplayName, StringComparison.CurrentCultureIgnoreCase)) > 1
-            ? $"{vault.DisplayName}, {vault.Path}"
-            : vault.DisplayName;
+        SiblingNames.SpokenAmong([.. all], vault, other => other.DisplayName, other => other.Path, "vault");
 }
 
 /// <summary>

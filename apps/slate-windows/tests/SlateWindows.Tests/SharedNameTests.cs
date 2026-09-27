@@ -140,12 +140,16 @@ public sealed class SharedNameTests
     });
 
     private static QuickSwitcherViewModel OpenQuickSwitcher(
-        VaultSession session, string root, params SwitcherFile[] files)
+        VaultSession session, string root, params SwitcherFile[] files) =>
+        OpenQuickSwitcher(session, root, _ => { }, files);
+
+    private static QuickSwitcherViewModel OpenQuickSwitcher(
+        VaultSession session, string root, Action<A11yEvent> announce, params SwitcherFile[] files)
     {
         var quick = new QuickSwitcherViewModel(
             session,
             root,
-            _ => { },
+            announce,
             files,
             Path.Combine(root, "device-state"),
             debounceRanking: false);
@@ -320,6 +324,73 @@ public sealed class SharedNameTests
             AssertDistinct("WorkspaceTabs", read);
             Assert.Equal([$"draft, draft.md, {state}", $"{natural}, {paths[1]}"], read);
         });
+    });
+
+    /// <summary>Codex PR 3 round 5 (the post-rule sweep): speech that names
+    /// a row outside UIA — the announcement as the arrow reaches it — names
+    /// it as its list does. Quick Open's and the Files filter's namesakes
+    /// were announced by their bare labels, all alike; they are announced
+    /// under the one rule, path and all, and a row whose label no sibling
+    /// shares stays bare.</summary>
+    [Fact]
+    public void ASelectionAnnouncesItsRowAsTheListNamesIt() => RunSta(() =>
+    {
+        var announced = new List<A11yEvent>();
+        string LastSelected() => announced.OfType<A11yEvent.RowSelected>().Last().Name;
+
+        using FixtureVault fixture = FixtureVault.Create(0, "selection-namesakes");
+        foreach (string path in new[] { "A/note.md", "B/note.md", "notes-extra.md" })
+        {
+            string full = Path.Combine(fixture.Root, path.Replace('/', Path.DirectorySeparatorChar));
+            Directory.CreateDirectory(Path.GetDirectoryName(full)!);
+            File.WriteAllText(full, "plain body\n");
+        }
+        using VaultSession session = VaultSession.OpenFilesystem(fixture.Root);
+        using (var cancel = new CancelToken())
+        {
+            session.ScanInitial(cancel);
+        }
+
+        using QuickSwitcherViewModel quick = OpenQuickSwitcher(
+            session,
+            fixture.Root,
+            announced.Add,
+            new SwitcherFile("A/note.md", "note.md"),
+            new SwitcherFile("A/note.markdown", "note.markdown"),
+            new SwitcherFile("C/other.md", "other.md"));
+        void Select(string path)
+        {
+            // Opening selects the first row silently; start from none so
+            // every selection speaks.
+            quick.SelectedRow = null;
+            quick.SelectedRow = quick.Results.Single(row => row.Path == path);
+        }
+        Select("A/note.markdown");
+        Assert.Equal("note, A/note.markdown", LastSelected());
+        Select("A/note.md");
+        Assert.Equal("note, A/note.md", LastSelected());
+        Select("C/other.md");
+        Assert.Equal("other", LastSelected());
+
+        var inline = new InlineContext();
+        var sidebar = new FilesSidebarViewModel(
+            session,
+            announced.Add,
+            vaultRoot: fixture.Root,
+            localAppDataRoot: Path.Combine(fixture.Root, "device-state"),
+            filterUiContext: inline,
+            treeUiContext: inline,
+            treeWorker: (work, _) => { work(); return Task.CompletedTask; },
+            filterWorker: (work, _) => { work(); return Task.CompletedTask; },
+            filterDelay: _ => Task.CompletedTask);
+        sidebar.FilterText = "note";
+        Assert.True(
+            PumpedDispatcher.PumpUntil(() => sidebar.FilterResults.Count == 3, TimeSpan.FromSeconds(10)),
+            $"the filter published {sidebar.FilterResults.Count} results");
+        sidebar.SelectedNode = sidebar.FilterResults.Single(row => row.Path == "B/note.md");
+        Assert.Equal("note.md, B/note.md", LastSelected());
+        sidebar.SelectedNode = sidebar.FilterResults.Single(row => row.Path == "notes-extra.md");
+        Assert.Equal("notes-extra.md", LastSelected());
     });
 
     /// <summary>A note that links to target.md and embeds it lists two

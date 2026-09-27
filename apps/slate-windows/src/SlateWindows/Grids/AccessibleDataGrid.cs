@@ -259,43 +259,20 @@ internal sealed class AccessibleDataGrid : UserControl
     /// </summary>
     private Dictionary<object, string> NameRows(IReadOnlyList<object> rows)
     {
-        var baseNames = new Dictionary<object, string>(ReferenceEqualityComparer.Instance);
-        var carriers = new Dictionary<string, int>(StringComparer.CurrentCultureIgnoreCase);
-        foreach (object row in rows)
+        // The one rule and its one culture-independent comparison
+        // (SiblingNames.Compose; codex PR 3 round 5): under tr-TR the current
+        // culture read "FILE" and "file" as different identities and left both
+        // bare. Rows are passed in source order, so the ordinal the rule gives
+        // ("note.md, row 3"; last, "Row 3") is the row's source ordinal, and
+        // a suffix that meets a natural name is checked again (the spec
+        // review, round 21).
+        string[] names = SiblingNames.Compose([.. rows.Select(row => (string?)BaseRowName(row))], [], "row");
+        var named = new Dictionary<object, string>(ReferenceEqualityComparer.Instance);
+        for (int index = 0; index < rows.Count; index++)
         {
-            if (!baseNames.ContainsKey(row))
-            {
-                string name = BaseRowName(row);
-                baseNames[row] = name;
-                carriers[name] = carriers.GetValueOrDefault(name) + 1;
-            }
+            _ = named.TryAdd(rows[index], names[index]);
         }
-        var names = new Dictionary<object, string>(ReferenceEqualityComparer.Instance);
-        foreach ((object row, string name) in baseNames)
-        {
-            names[row] = carriers[name] > 1
-                ? string.Create(
-                    System.Globalization.CultureInfo.InvariantCulture,
-                    $"{name}, row {_boundOrdinals[row] + 1}")
-                : name;
-        }
-        // The spec review (round 21): a suffix can meet a natural name (a row
-        // whose own identity reads "note.md, row 3"). Every member of a group
-        // that still collides falls back to its ordinal, "Row {n}" — unique
-        // among ordinals — until no two rows share a name.
-        while (names
-            .GroupBy(pair => pair.Value, StringComparer.CurrentCultureIgnoreCase)
-            .Where(group => group.Skip(1).Any())
-            .SelectMany(group => group)
-            .ToList() is { Count: > 0 } colliding)
-        {
-            foreach ((object row, _) in colliding)
-            {
-                names[row] = string.Create(
-                    System.Globalization.CultureInfo.InvariantCulture, $"Row {_boundOrdinals[row] + 1}");
-            }
-        }
-        return names;
+        return named;
     }
 
     private string BaseRowName(object item)

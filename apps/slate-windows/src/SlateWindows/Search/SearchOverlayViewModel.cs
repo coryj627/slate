@@ -243,7 +243,11 @@ internal sealed class SearchOverlayViewModel : BindableBase, IDisposable
                 return;
             }
 
-            _announce(new A11yEvent.RowSelected(Rows[value].Basename));
+            // R-4 (#1246; codex PR 3 round 5): two hits that read alike
+            // (one file twice, or two files of one name) are announced
+            // apart, by the one rule.
+            _announce(new A11yEvent.RowSelected(SiblingNames.SpokenAmong(
+                Rows, Rows[value], row => row.Basename, row => row.Path, "result")));
         }
     }
 

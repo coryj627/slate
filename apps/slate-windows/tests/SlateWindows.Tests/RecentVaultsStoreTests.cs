@@ -154,6 +154,22 @@ public sealed class RecentVaultsStoreTests : IDisposable
         Assert.Equal("Notes", RecentVault.SpokenName(notes, [alpha, notes]));
     }
 
+    /// <summary>Codex PR 3 round 5: the buttons read alike by the ONE
+    /// culture-independent comparison. Under tr-TR the current culture's
+    /// case folding reported "FILE" and "file" as two names and left both
+    /// buttons bare; each now speaks its path.</summary>
+    [Fact]
+    public void UnderATurkishCultureCaseVariantsStillSpeakTheirPaths() => SiblingNamesTests.UnderCulture("tr-TR", () =>
+    {
+        Assert.False(string.Equals("FILE", "file", StringComparison.CurrentCultureIgnoreCase));
+        var upper = new RecentVault(@"C:\Work\FILE", "FILE", 1);
+        var lower = new RecentVault(@"D:\Home\file", "file", 2);
+        RecentVault[] all = [upper, lower];
+
+        Assert.Equal(@"FILE, C:\Work\FILE", RecentVault.SpokenName(upper, all));
+        Assert.Equal(@"file, D:\Home\file", RecentVault.SpokenName(lower, all));
+    });
+
     private string StorePath => Path.Combine(_directory, "recent-vaults.json");
     private RecentVaultsStore CreateStore() => new(StorePath);
 }

@@ -1134,6 +1134,26 @@ public sealed class AccessibleDataGridTests
             GridRowNames.Read(grid).Select(row => row.Name)));
     });
 
+    /// <summary>Codex PR 3 round 5: rows read alike by the ONE
+    /// culture-independent comparison the sibling rule uses. Under tr-TR the
+    /// current culture's case folding reported "FILE" and "file" as two
+    /// identities and left both rows bare; speech does not hear
+    /// case.</summary>
+    [Fact]
+    public void UnderATurkishCultureCaseVariantsStillReadApart() => RunSta(() => SiblingNamesTests.UnderCulture("tr-TR", () =>
+    {
+        Assert.False(string.Equals("FILE", "file", StringComparison.CurrentCultureIgnoreCase));
+        AccessibleDataGrid grid = Assert.IsType<AccessibleDataGrid>(Reading.ReadingTableGrid.Build(
+            "| Name | Status |\n"
+            + "| --- | --- |\n"
+            + "| FILE | a |\n"
+            + "| file | b |\n"
+            + "| other | c |\n"));
+        GridRowNames.Hosted(grid, () => Assert.Equal(
+            ["FILE, row 1", "file, row 2", "other"],
+            GridRowNames.Read(grid).Select(row => row.Name)));
+    }));
+
     /// <summary>W6-2 PR A (contract A-9): the modified activation seam.
     /// Ctrl+Enter and Ctrl+double-click reach the modified handler when
     /// the surface bound one; a surface that bound none keeps the plain

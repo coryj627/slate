@@ -1001,6 +1001,35 @@ public sealed class SearchOverlayViewModelTests
         Assert.Equal("beta.md", selected.Name);
     }
 
+    /// <summary>W7-7 PR 3 (#1246, R-4; codex PR 3 round 5, the post-rule
+    /// sweep): hits whose basenames read alike — note.md in two folders, or
+    /// two hits in one file — are announced apart by the one sibling rule,
+    /// the path first and the place when even that is shared; a basename no
+    /// other hit shares stays bare.</summary>
+    [Fact]
+    public void ArrowMoveAnnouncesNamesakeHitsApart()
+    {
+        var harness = new OverlayHarness();
+        harness.Source.OnSearch = (_, _) => Results(
+            "four",
+            Hit("A/note.md", "a"),
+            Hit("B/note.md", "b"),
+            Hit("B/note.md", "c"),
+            Hit("other.md", "d"));
+        harness.Overlay.Open();
+        harness.Overlay.Query = "x";
+
+        string Next()
+        {
+            harness.Overlay.MoveSelection(1);
+            return Assert.IsType<A11yEvent.RowSelected>(harness.Announcements[^1]).Name;
+        }
+        Assert.Equal("note.md, B/note.md, result 2", Next());
+        Assert.Equal("note.md, B/note.md, result 3", Next());
+        Assert.Equal("other.md", Next());
+        Assert.Equal("note.md, A/note.md", Next());
+    }
+
     [Fact]
     public void PublishWithAutoSelectAnnouncesOnlyTheSummary()
     {

@@ -610,7 +610,7 @@ internal sealed partial class FilesSidebarViewModel : BindableBase
             // opens that move focus.
             if (value.IsDirectory)
             {
-                _announce(new A11yEvent.TreeFolderSelected(value.DisplayName));
+                _announce(new A11yEvent.TreeFolderSelected(SpokenSelection(value)));
                 LoadDualPane(value.Path);
                 if (value.HasFolderNote)
                 {
@@ -619,7 +619,7 @@ internal sealed partial class FilesSidebarViewModel : BindableBase
             }
             else
             {
-                _announce(new A11yEvent.RowSelected(value.DisplayName));
+                _announce(new A11yEvent.RowSelected(SpokenSelection(value)));
                 RequestOpen(value.Path, focusEditor: false);
             }
 
@@ -2109,6 +2109,43 @@ internal sealed partial class FilesSidebarViewModel : BindableBase
                 node.IsExpanded = true;
             }
         }
+    }
+
+    /// <summary>W7-7 PR 3 (#1246, R-4; codex PR 3 round 5): the name a
+    /// selection announces — the node's display name under the sibling rule
+    /// among the rows it sits with (the filter results, the dual pane, or
+    /// its folder's level), so two notes that read alike are announced apart
+    /// as their rows are named, never both by the bare name.</summary>
+    private string SpokenSelection(FileTreeNodeViewModel node)
+    {
+        static bool Holds(IReadOnlyList<FileTreeNodeViewModel> rows, FileTreeNodeViewModel node) =>
+            rows.Any(row => ReferenceEquals(row, node));
+        (IReadOnlyList<FileTreeNodeViewModel>? rows, string noun) =
+            Holds(FilterResults, node) ? (FilterResults, "result")
+            : Holds(DualPaneFiles, node) ? (DualPaneFiles, "file")
+            : (LevelOf(RootNodes, node), "item");
+        return rows is null
+            ? node.DisplayName
+            : SiblingNames.SpokenAmong(rows, node, row => row.DisplayName, row => row.Path, noun);
+    }
+
+    /// <summary>The loaded tree level that holds <paramref name="node"/>, by
+    /// reference, or null.</summary>
+    private static IReadOnlyList<FileTreeNodeViewModel>? LevelOf(
+        IReadOnlyList<FileTreeNodeViewModel> level, FileTreeNodeViewModel node)
+    {
+        if (level.Any(row => ReferenceEquals(row, node)))
+        {
+            return level;
+        }
+        foreach (FileTreeNodeViewModel row in level)
+        {
+            if (LevelOf(row.Children, node) is { } found)
+            {
+                return found;
+            }
+        }
+        return null;
     }
 
     private static IEnumerable<FileTreeNodeViewModel> Flatten(IEnumerable<FileTreeNodeViewModel> roots)
