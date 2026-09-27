@@ -75,6 +75,47 @@ public sealed partial class GraphTableTests
 
     // --- The arms (Term F4) and the at-once delivery (Term F2) -------------------
 
+    /// <summary>Codex r6 finding 4 (attempted reproduction — it does NOT
+    /// reproduce here). Term F4 seats the grid's CURRENT row — the shared
+    /// key's — and falls to the first row only when the key names no row. With
+    /// the keyed row the last of four hundred, far below the viewport and the
+    /// grid scrolled back to row one, the landing lands on the keyed row: the
+    /// seat's own ScrollIntoView and layout realize it first. The claim —
+    /// SeatRow's NotYet covers both "no such row" and "row not realized", so a
+    /// keyed row that CANNOT be realized synchronously would hand the landing
+    /// to row one — needs a state this fixture could not reach (the grid
+    /// loaded and shown, the keyed row unrealizable, row one realized).</summary>
+    [Fact]
+    public void R6_ALandingSeatsTheKeyedRowFarBelowTheViewport()
+    {
+        RunSta(() =>
+        {
+            using var host = new Host(400, "graph-landing-keyed-row");
+            GraphDocumentViewModel document = host.Open();
+            GraphSurfaceView view = SurfaceFor(host, document);
+            using HostedWindow window = HostInWindow(view);
+            DataGrid grid = view.TableForTests.GridForTests.Grid;
+            grid.UpdateLayout();
+            GraphTableRow[] rows = [.. grid.Items.Cast<GraphTableRow>()];
+            GraphTableRow keyed = rows[^1];
+            document.ViewState.SelectedKey = keyed.StableKey;
+            host.Settle(document);
+            grid.ScrollIntoView(rows[0]);
+            grid.UpdateLayout();
+            PumpedDispatcher.Drain();
+            grid.UpdateLayout();
+            Assert.NotNull(grid.ItemContainerGenerator.ContainerFromItem(rows[0]));
+
+            document.RequestFocusLanding(GraphTabOf(host));
+            PumpedDispatcher.Drain();
+
+            Assert.Null(document.FocusRequest);
+            Assert.True(GridHasTheKeys(view));
+            Assert.Same(keyed, grid.CurrentCell.Item);
+            Assert.Equal(keyed.StableKey, document.ViewState.SelectedKey);
+        });
+    }
+
     [Fact]
     public void AFreshOpenLandsFocusOnTheGridsRow()
     {
