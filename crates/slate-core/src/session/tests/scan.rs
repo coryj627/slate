@@ -1231,7 +1231,11 @@ fn list_openable_documents_includes_base_files() {
     session.scan_initial(&CancelToken::new()).unwrap();
 
     let page = session
-        .list_files(FileFilter::OpenableDocuments, Paging::first(100))
+        .list_files(
+            FileFilter::OpenableDocuments,
+            Paging::first(100),
+            &CancelToken::new(),
+        )
         .unwrap();
     let paths: Vec<&str> = page.items.iter().map(|f| f.path.as_str()).collect();
     assert_eq!(
@@ -1255,7 +1259,7 @@ fn scan_initial_skips_hidden_directories() {
     assert_eq!(report.files_indexed, 1, "only real.md should be indexed");
 
     let page = session
-        .list_files(FileFilter::All, Paging::first(100))
+        .list_files(FileFilter::All, Paging::first(100), &CancelToken::new())
         .unwrap();
     let paths: Vec<&str> = page.items.iter().map(|f| f.path.as_str()).collect();
     assert_eq!(paths, vec!["real.md"]);
@@ -1551,7 +1555,7 @@ fn rescan_prunes_files_deleted_out_of_band() {
     // DELETE trigger) — no ghost search hits.
     assert_eq!(fts_match_count(&session, "doomedtoken"), 0);
     let page = session
-        .list_files(FileFilter::All, Paging::first(100))
+        .list_files(FileFilter::All, Paging::first(100), &CancelToken::new())
         .unwrap();
     assert_eq!(page.total_filtered, 1);
 }
@@ -1817,7 +1821,7 @@ fn cancel_after_transaction_opens_rolls_back_inserts() {
     }
 
     let page = session
-        .list_files(FileFilter::All, Paging::first(100))
+        .list_files(FileFilter::All, Paging::first(100), &CancelToken::new())
         .unwrap();
     assert!(
         page.items.is_empty(),
@@ -1846,7 +1850,7 @@ fn cancelled_scan_leaves_index_empty() {
     // No files indexed: the transaction was rolled back (in practice,
     // never opened because the pre-tx check fires first).
     let page = session
-        .list_files(FileFilter::All, Paging::first(100))
+        .list_files(FileFilter::All, Paging::first(100), &CancelToken::new())
         .unwrap();
     assert!(page.items.is_empty(), "cancel should leave no rows behind");
     assert_eq!(page.total_filtered, 0);
@@ -1863,7 +1867,7 @@ fn rescan_updates_existing_rows_via_on_conflict() {
     });
     session.scan_initial(&CancelToken::new()).unwrap();
     let p1 = session
-        .list_files(FileFilter::All, Paging::first(10))
+        .list_files(FileFilter::All, Paging::first(10), &CancelToken::new())
         .unwrap();
     let v1_size = p1.items[0].size_bytes;
 
@@ -1876,7 +1880,7 @@ fn rescan_updates_existing_rows_via_on_conflict() {
     assert_eq!(report.files_indexed, 1);
 
     let p2 = session
-        .list_files(FileFilter::All, Paging::first(10))
+        .list_files(FileFilter::All, Paging::first(10), &CancelToken::new())
         .unwrap();
     assert!(
         p2.items[0].size_bytes > v1_size,
@@ -1928,7 +1932,11 @@ fn case_insensitive_markdown_extensions_are_detected() {
     session.scan_initial(&CancelToken::new()).unwrap();
 
     let page = session
-        .list_files(FileFilter::MarkdownOnly, Paging::first(100))
+        .list_files(
+            FileFilter::MarkdownOnly,
+            Paging::first(100),
+            &CancelToken::new(),
+        )
         .unwrap();
     let mut names: Vec<&str> = page.items.iter().map(|f| f.name.as_str()).collect();
     names.sort();
@@ -1978,7 +1986,7 @@ fn symlinks_pointing_out_of_vault_are_not_indexed() {
     assert_eq!(report.files_indexed, 1);
 
     let page = session
-        .list_files(FileFilter::All, Paging::first(100))
+        .list_files(FileFilter::All, Paging::first(100), &CancelToken::new())
         .unwrap();
     let paths: Vec<&str> = page.items.iter().map(|f| f.path.as_str()).collect();
     assert_eq!(paths, vec!["real.md"]);

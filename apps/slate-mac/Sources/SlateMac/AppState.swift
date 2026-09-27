@@ -11449,7 +11449,8 @@ final class AppState: ObservableObject {
                             // Milestone N (#702): quick open lists the
                             // openable-document set — notes, canvases, bases.
                             filter: .openableDocuments,
-                            paging: Paging(cursor: cursor, limit: 1_000)
+                            paging: Paging(cursor: cursor, limit: 1_000),
+                            cancel: cancel
                         )
                         all.append(contentsOf: page.items)
                         cursor = page.nextCursor
@@ -11501,7 +11502,8 @@ final class AppState: ObservableObject {
             repeat {
                 let page = try session.listFiles(
                     filter: .openableDocuments,
-                    paging: Paging(cursor: cursor, limit: 1_000))
+                    paging: Paging(cursor: cursor, limit: 1_000),
+                    cancel: CancelToken())
                 all.append(contentsOf: page.items)
                 cursor = page.nextCursor
             } while cursor != nil
@@ -11543,7 +11545,8 @@ final class AppState: ObservableObject {
                 repeat {
                     let page = try session.listFiles(
                         filter: .openableDocuments,
-                        paging: Paging(cursor: cursor, limit: 1_000))
+                        paging: Paging(cursor: cursor, limit: 1_000),
+                        cancel: cancel)
                     all.append(contentsOf: page.items)
                     cursor = page.nextCursor
                 } while cursor != nil

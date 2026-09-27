@@ -151,7 +151,8 @@ extension AppState {
         repeat {
             guard
                 let page = try? session.listFiles(
-                    filter: .all, paging: Paging(cursor: cursor, limit: 1_000))
+                    filter: .all, paging: Paging(cursor: cursor, limit: 1_000),
+                    cancel: CancelToken())
             else { break }
             media.append(
                 contentsOf: page.items.map(\.path).filter {

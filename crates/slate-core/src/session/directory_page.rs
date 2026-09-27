@@ -201,7 +201,13 @@ fn check_cancel(cancel: &CancelToken) -> Result<(), VaultError> {
     }
 }
 
-fn with_sqlite_cancellation<T>(
+/// Run `operation` with SQLite's progress handler polling `cancel` every
+/// [`SQLITE_PROGRESS_OPS`] VM steps, so a long statement is interrupted,
+/// not merely checked between rows. The handler is cleared afterwards, and
+/// a cancellation observed at any point reports `Cancelled` — never a
+/// partial result. Shared by the directory pages and `list_files` (W7-7
+/// PR 7).
+pub(super) fn with_sqlite_cancellation<T>(
     conn: &Connection,
     cancel: &CancelToken,
     operation: impl FnOnce() -> Result<T, VaultError>,
@@ -209,7 +215,11 @@ fn with_sqlite_cancellation<T>(
     let progress_cancel = cancel.clone();
     conn.progress_handler(
         SQLITE_PROGRESS_OPS,
-        Some(move || progress_cancel.is_cancelled()),
+        Some(move || {
+            #[cfg(test)]
+            progress_test_hook::fire();
+            progress_cancel.is_cancelled()
+        }),
     )?;
     let result = operation();
     conn.progress_handler(0, None::<fn() -> bool>)?;
@@ -217,6 +227,36 @@ fn with_sqlite_cancellation<T>(
         Err(VaultError::Cancelled)
     } else {
         result
+    }
+}
+
+/// Test seam (W7-7 PR 7): a callback run on the calling thread from inside
+/// SQLite's progress handler — the deterministic way to cancel while a
+/// statement is mid-step.
+#[cfg(test)]
+pub(super) mod progress_test_hook {
+    use std::cell::RefCell;
+
+    type ProgressHook = Box<dyn Fn()>;
+
+    thread_local! {
+        static HOOK: RefCell<Option<ProgressHook>> = const { RefCell::new(None) };
+    }
+
+    pub(in crate::session) fn install(hook: ProgressHook) {
+        HOOK.with(|slot| *slot.borrow_mut() = Some(hook));
+    }
+
+    pub(in crate::session) fn clear() {
+        HOOK.with(|slot| *slot.borrow_mut() = None);
+    }
+
+    pub(super) fn fire() {
+        HOOK.with(|slot| {
+            if let Some(hook) = slot.borrow().as_ref() {
+                hook();
+            }
+        });
     }
 }
 

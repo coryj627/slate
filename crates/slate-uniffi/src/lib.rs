@@ -844,13 +844,19 @@ impl VaultSession {
         Ok(self.inner.remove_tag_from_files(paths, tag)?.into())
     }
 
-    /// Return a page of indexed files matching `filter`.
+    /// Return a page of indexed files matching `filter`. W7-7 PR 7: the
+    /// query honours `cancel` (checked first, polled inside the statement
+    /// and between rows); a cancellation is `Cancelled`, never a partial
+    /// page.
     pub fn list_files(
         &self,
         filter: FileFilter,
         paging: Paging,
+        cancel: Arc<CancelToken>,
     ) -> Result<FileSummaryPage, VaultError> {
-        let page = self.inner.list_files(filter.into(), paging.into())?;
+        let page = self
+            .inner
+            .list_files(filter.into(), paging.into(), &cancel.inner)?;
         Ok(page.into())
     }
 

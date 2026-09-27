@@ -66,7 +66,11 @@ fn indexed_file_paths(session: &crate::VaultSession) -> std::collections::BTreeS
     let mut paging = crate::Paging::first(500);
     loop {
         let page = session
-            .list_files(crate::FileFilter::All, paging.clone())
+            .list_files(
+                crate::FileFilter::All,
+                paging.clone(),
+                &crate::CancelToken::new(),
+            )
             .expect("list");
         for item in &page.items {
             out.insert(item.path.clone());

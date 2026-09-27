@@ -49,7 +49,7 @@ pub fn run(
             None => Paging::first(PAGE_SIZE),
         };
         let page = session
-            .list_files(filter, paging)
+            .list_files(filter, paging, &slate_core::CancelToken::new())
             .map_err(map_vault_error)?;
         files.extend(page.items);
         cursor = page.next_cursor;

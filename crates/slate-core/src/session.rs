@@ -5793,13 +5793,23 @@ impl VaultSession {
     }
 
     /// Page through the indexed files.
+    ///
+    /// W7-7 PR 7 (#1252; locked decision 05 §4, codex PR 7 design pass):
+    /// the query honours `cancel` — checked before it starts, polled by
+    /// SQLite's progress handler inside the statement (the filtered
+    /// `COUNT(*)` walks the whole set) and between rows. A cancellation
+    /// observed at any point returns `Cancelled`, never a partial page.
     pub fn list_files(
         &self,
         filter: FileFilter,
         paging: Paging,
+        cancel: &CancelToken,
     ) -> Result<Page<FileSummary>, VaultError> {
+        cancel.check()?;
         let conn = self.conn.lock().expect("session connection mutex");
-        list_files_impl(&conn, filter, paging)
+        directory_page::with_sqlite_cancellation(&conn, cancel, || {
+            list_files_impl(&conn, filter, paging, cancel)
+        })
     }
 
     /// Fetch one indexed file through the same enriched projection as
@@ -11055,10 +11065,41 @@ fn sidebar_filter_impl(
     })
 }
 
+/// Test seam (W7-7 PR 7): a callback run on the calling thread after each
+/// decoded `list_files` row, with the number of rows decoded so far — the
+/// deterministic way to cancel mid-page.
+#[cfg(test)]
+pub(crate) mod list_files_row_test_hook {
+    use std::cell::RefCell;
+
+    type RowHook = Box<dyn Fn(usize)>;
+
+    thread_local! {
+        static HOOK: RefCell<Option<RowHook>> = const { RefCell::new(None) };
+    }
+
+    pub(crate) fn install(hook: RowHook) {
+        HOOK.with(|slot| *slot.borrow_mut() = Some(hook));
+    }
+
+    pub(crate) fn clear() {
+        HOOK.with(|slot| *slot.borrow_mut() = None);
+    }
+
+    pub(super) fn fire(rows: usize) {
+        HOOK.with(|slot| {
+            if let Some(hook) = slot.borrow().as_ref() {
+                hook(rows);
+            }
+        });
+    }
+}
+
 fn list_files_impl(
     conn: &Connection,
     filter: FileFilter,
     paging: Paging,
+    cancel: &CancelToken,
 ) -> Result<Page<FileSummary>, VaultError> {
     let where_clause = match filter {
         FileFilter::All => "1=1",
@@ -11099,6 +11140,10 @@ fn list_files_impl(
         if let Some(summary) = summary {
             items.push(summary);
         }
+        #[cfg(test)]
+        list_files_row_test_hook::fire(items.len());
+        // Between rows too: a cancellation never yields a partial page.
+        cancel.check()?;
     }
 
     let next_cursor = if items.len() > paging.limit as usize {

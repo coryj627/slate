@@ -123,7 +123,7 @@ func runVaultDemo(rootPath: String) {
         }
 
         let paging = Paging(cursor: nil, limit: 20)
-        let page = try session.listFiles(filter: .markdownOnly, paging: paging)
+        let page = try session.listFiles(filter: .markdownOnly, paging: paging, cancel: CancelToken())
         print(
             "Markdown files (\(page.items.count) of \(page.totalFiltered) shown):"
         )

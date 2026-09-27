@@ -473,10 +473,13 @@ internal sealed partial class VaultLifecycleViewModel
             VaultSession activeSession = _session;
             CancelToken activeCancel = _scanCancel;
             UiProgressListener activeProgressListener = _progressListener;
+            Action<CancelToken>? switcherPageHook = SwitcherPageLoadingForTests;
             Task<(ScanReport Report, SwitcherFile[] SwitcherFiles)> loadTask = _runSessionLoad(() =>
             {
                 ScanReport report = activeSession.ScanInitialWithProgress(activeCancel, activeProgressListener);
-                return (report, LoadSwitcherFiles(activeSession));
+                // W7-7 PR 7: Quick Open's listing honours the open's token
+                // too, so a close stops it mid-listing, not after it.
+                return (report, LoadSwitcherFiles(activeSession, activeCancel, switcherPageHook));
             });
             _sessionLoadCompletion = loadTask;
             (ScanReport Report, SwitcherFile[] SwitcherFiles) loaded = await loadTask;
@@ -1447,16 +1450,25 @@ internal sealed partial class VaultLifecycleViewModel
         _palette?.Dismiss();
     }
 
-    private static SwitcherFile[] LoadSwitcherFiles(VaultSession session)
+    /// <summary>Test seam (W7-7 PR 7): runs on the load's worker before
+    /// each Quick Open listing page, with the open's token.</summary>
+    internal Action<CancelToken>? SwitcherPageLoadingForTests { get; set; }
+
+    private static SwitcherFile[] LoadSwitcherFiles(
+        VaultSession session,
+        CancelToken cancel,
+        Action<CancelToken>? beforePage)
     {
         const uint pageLimit = 500;
         var files = new List<SwitcherFile>();
         string? cursor = null;
         do
         {
+            beforePage?.Invoke(cancel);
             FileSummaryPage page = session.ListFiles(
                 FileFilter.OpenableDocuments,
-                new Paging(cursor, pageLimit));
+                new Paging(cursor, pageLimit),
+                cancel);
             files.AddRange(page.Items.Select(file => new SwitcherFile(file.Path, file.Name)));
             cursor = page.NextCursor;
         }

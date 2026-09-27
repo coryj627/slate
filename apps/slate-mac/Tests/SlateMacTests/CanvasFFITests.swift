@@ -286,11 +286,13 @@ final class CanvasFFITests: XCTestCase {
         _ = try session.scanInitial(cancel: CancelToken())
 
         let page = try session.listFiles(
-            filter: .markdownAndCanvas, paging: Paging(cursor: nil, limit: 100))
+            filter: .markdownAndCanvas, paging: Paging(cursor: nil, limit: 100),
+            cancel: CancelToken())
         XCTAssertEqual(page.items.map(\.name).sorted(), ["n.md", "t.canvas"])
 
         let mdOnly = try session.listFiles(
-            filter: .markdownOnly, paging: Paging(cursor: nil, limit: 100))
+            filter: .markdownOnly, paging: Paging(cursor: nil, limit: 100),
+            cancel: CancelToken())
         XCTAssertEqual(mdOnly.items.map(\.name), ["n.md"])
     }
 }

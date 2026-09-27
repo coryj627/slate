@@ -117,6 +117,7 @@ fn bench_list_files_paged(c: &mut Criterion) {
                                 cursor: cursor.clone(),
                                 limit: 1_000,
                             },
+                            &slate_core::CancelToken::new(),
                         )
                         .expect("list_files");
                     // black_box the per-page count so the compiler

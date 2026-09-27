@@ -2667,7 +2667,8 @@ extension AppState {
                 guard
                     let page = try? session.listFiles(
                         filter: .markdownOnly,
-                        paging: Paging(cursor: cursor, limit: 5_000))
+                        paging: Paging(cursor: cursor, limit: 5_000),
+                        cancel: CancelToken())
                 else { break }
                 out.append(contentsOf: page.items.map(\.path))
                 cursor = page.nextCursor

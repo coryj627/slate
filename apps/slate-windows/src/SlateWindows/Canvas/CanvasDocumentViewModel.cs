@@ -4971,10 +4971,14 @@ internal sealed class CanvasDocumentViewModel : PanelWorkScheduler
     /// <summary>§G2 TG2-3 (G2-6, G2D-6): the admission predicate by purpose —
     /// notes are markdown, media is core's classification over the path,
     /// Locate admits the union of both.</summary>
-    internal CanvasVaultFilePickerModel BuildVaultFilePickerModel(CanvasVaultPickPurpose purpose) =>
-        CanvasVaultFilePickerModel.LoadAll(
+    internal CanvasVaultFilePickerModel BuildVaultFilePickerModel(CanvasVaultPickPurpose purpose)
+    {
+        // W7-7 PR 7: ListFiles takes a token; the picker's listing is one
+        // synchronous call chain, so the token is the call's own.
+        using var cancel = new CancelToken();
+        return CanvasVaultFilePickerModel.LoadAll(
             cursor => _session.ListFiles(
-                FileFilter.All, new Paging(cursor, 128)),
+                FileFilter.All, new Paging(cursor, 128), cancel),
             file => purpose switch
             {
                 CanvasVaultPickPurpose.Note => file.IsMarkdown,
@@ -4982,6 +4986,7 @@ internal sealed class CanvasDocumentViewModel : PanelWorkScheduler
                     SlateUniffiMethods.CanvasMediaClass(file.Path) is not null,
                 _ => file.IsMarkdown || SlateUniffiMethods.CanvasMediaClass(file.Path) is not null,
             });
+    }
 
     private string PublishedTitleOf(string? nodeId) =>
         PublishedRowOf(nodeId)?.Title ?? nodeId ?? string.Empty;

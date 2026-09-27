@@ -726,14 +726,18 @@ fn the_openable_classifier_is_the_openable_documents_filter() {
     });
     session.scan_initial(&CancelToken::new()).unwrap();
     let listed: std::collections::BTreeSet<String> = session
-        .list_files(FileFilter::OpenableDocuments, Paging::first(100))
+        .list_files(
+            FileFilter::OpenableDocuments,
+            Paging::first(100),
+            &CancelToken::new(),
+        )
         .unwrap()
         .items
         .into_iter()
         .map(|summary| summary.path)
         .collect();
     let all: Vec<String> = session
-        .list_files(FileFilter::All, Paging::first(100))
+        .list_files(FileFilter::All, Paging::first(100), &CancelToken::new())
         .unwrap()
         .items
         .into_iter()

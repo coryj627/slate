@@ -48,7 +48,11 @@ pub fn run(
     // MarkdownOnly filter — we only need the total, so ask for the
     // smallest possible page.
     let markdown_files = session
-        .list_files(FileFilter::MarkdownOnly, Paging::first(1))
+        .list_files(
+            FileFilter::MarkdownOnly,
+            Paging::first(1),
+            &slate_core::CancelToken::new(),
+        )
         .map_err(map_vault_error)?
         .total_filtered;
 
