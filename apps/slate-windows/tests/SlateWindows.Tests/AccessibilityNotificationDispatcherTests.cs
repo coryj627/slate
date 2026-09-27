@@ -21,10 +21,14 @@ public sealed class AccessibilityNotificationDispatcherTests
     public void EveryPriorityAndBothOverloadsReachTheExactNativeTuple()
     {
         Assert.Equal([A11yPriority.Medium, A11yPriority.High], Enum.GetValues<A11yPriority>());
-        foreach (var (priority, processing) in new[]
+        foreach (var (priority, processing, activityIds) in new[]
         {
-            (A11yPriority.Medium, AutomationNotificationProcessing.All),
-            (A11yPriority.High, AutomationNotificationProcessing.ImportantMostRecent),
+            // Every notification delivered: each line its own activity ID.
+            (A11yPriority.Medium, AutomationNotificationProcessing.All,
+                new[] { "slate-accessibility-announcement.1", "slate-accessibility-announcement.2" }),
+            // The most recent supersedes: the shared ID.
+            (A11yPriority.High, AutomationNotificationProcessing.ImportantMostRecent,
+                new[] { "slate-accessibility-announcement", "slate-accessibility-announcement" }),
         })
         {
             var raised = new List<Notification>();
@@ -32,9 +36,8 @@ public sealed class AccessibilityNotificationDispatcherTests
             const string text = "Exact text. café — unchanged.";
             dispatcher.Post(new RenderedAnnouncement(text, priority));
             dispatcher.Post(new A11yEvent.HostComposed(text, priority));
-            Assert.Equal(Enumerable.Repeat(new Notification(
-                AutomationNotificationKind.Other, processing, text,
-                "slate-accessibility-announcement"), 2), raised);
+            Assert.Equal(activityIds.Select(activityId => new Notification(
+                AutomationNotificationKind.Other, processing, text, activityId)), raised);
         }
     }
 
@@ -51,8 +54,11 @@ public sealed class AccessibilityNotificationDispatcherTests
                 "high" => AutomationNotificationProcessing.ImportantMostRecent,
                 _ => throw new InvalidOperationException($"Unknown golden priority: {priority}"),
             };
+            string activityId = processing == AutomationNotificationProcessing.All
+                ? "slate-accessibility-announcement.1"
+                : "slate-accessibility-announcement";
             Assert.Equal(new Notification(AutomationNotificationKind.Other,
-                processing, text, "slate-accessibility-announcement"), Assert.Single(raised));
+                processing, text, activityId), Assert.Single(raised));
         }
     }
 
@@ -65,7 +71,7 @@ public sealed class AccessibilityNotificationDispatcherTests
         var raised = new List<Notification>();
         Recording(raised).Post(new RenderedAnnouncement("Unknown priority.", (A11yPriority)42));
         Assert.Equal(new Notification(AutomationNotificationKind.Other, AutomationNotificationProcessing.All,
-            "Unknown priority.", "slate-accessibility-announcement"), Assert.Single(raised));
+            "Unknown priority.", "slate-accessibility-announcement.1"), Assert.Single(raised));
     }
 
     /// <summary>R-1 (#1244): UIA's own "is any client listening" is the first
@@ -74,8 +80,8 @@ public sealed class AccessibilityNotificationDispatcherTests
     /// a probe read once at construction would never let it. After the launch
     /// (here Expired) a line posted while no client listens raises nothing and
     /// waits; the post that finds a client drains it before its own line, each
-    /// exactly once, in order, with core's text and processing — the drained
-    /// lines under their replay activity IDs, the post under the shared one.</summary>
+    /// exactly once, in order, with core's text and processing — the polite
+    /// line under its own activity ID, the High lines under the shared one.</summary>
     [Fact]
     public void ProductionRaiseWaitsWhileNoClientListens()
     {
@@ -93,25 +99,55 @@ public sealed class AccessibilityNotificationDispatcherTests
         launch.Dispatcher.Post(new RenderedAnnouncement("A client listens.", A11yPriority.High));
         Assert.Equal(
             [
-                new Notification(AutomationNotificationKind.Other, AutomationNotificationProcessing.ImportantMostRecent, "Nobody listens.", "slate-accessibility-announcement.replay.1"),
-                new Notification(AutomationNotificationKind.Other, AutomationNotificationProcessing.All, "Nobody listens yet.", "slate-accessibility-announcement.replay.2"),
+                new Notification(AutomationNotificationKind.Other, AutomationNotificationProcessing.ImportantMostRecent, "Nobody listens.", "slate-accessibility-announcement"),
+                new Notification(AutomationNotificationKind.Other, AutomationNotificationProcessing.All, "Nobody listens yet.", "slate-accessibility-announcement.1"),
                 new Notification(AutomationNotificationKind.Other, AutomationNotificationProcessing.ImportantMostRecent, "A client listens.", "slate-accessibility-announcement"),
             ],
             launch.Raised);
     }
 
     /// <summary>
-    /// W7-7 (#1244), contract 38 D-1: a drain raises back to back, and NVDA's
-    /// UIA rate limiter coalesces notifications that share a sender, kind,
-    /// processing and activity ID, losing lines of a same-key burst. So a
-    /// drain of N queued lines raises exactly N notifications, in order, each
-    /// with its own kind, processing and text and its own activity ID — the
-    /// shared one, ".replay." and its 1-based position in that drain, N
-    /// distinct IDs. A line raised while ready is never replayed and keeps the
-    /// shared ID, and a later drain numbers its own lines from one again.
+    /// W7-7 (#1244), contract 38 D-1, codex PR 1 round 4: NVDA's UIA rate
+    /// limiter coalesces notifications that share a sender, kind, processing
+    /// and activity ID and loses lines of a same-key burst, and a launch READY
+    /// at its first line raises its lines back to back with no drain at all.
+    /// So the ID follows the processing, never the path: raised while ready,
+    /// three or more polite lines (All) carry that many distinct IDs — the
+    /// shared one, a dot and the dispatcher's next sequence number — in order,
+    /// each with its own processing, and a High line (ImportantMostRecent)
+    /// keeps the shared ID, the coalescing it asks for.
     /// </summary>
     [Fact]
-    public void ADrainRaisesEachQueuedLineUnderItsOwnReplayActivityId()
+    public void LinesRaisedWhileReadyCarryTheirActivityIdByProcessing()
+    {
+        var launch = new LaunchHarness { Connected = true };
+        launch.Post("Vault opened.", "Scanning vault. 2 files to index.", "Scan complete. 2 files indexed.");
+        launch.Dispatcher.Post(new RenderedAnnouncement("Could not open vault.", A11yPriority.High));
+        launch.Post("Editor pane 1 of 1, Empty pane.");
+        Assert.Equal(
+            [
+                new Notification(AutomationNotificationKind.Other, AutomationNotificationProcessing.All, "Vault opened.", "slate-accessibility-announcement.1"),
+                new Notification(AutomationNotificationKind.Other, AutomationNotificationProcessing.All, "Scanning vault. 2 files to index.", "slate-accessibility-announcement.2"),
+                new Notification(AutomationNotificationKind.Other, AutomationNotificationProcessing.All, "Scan complete. 2 files indexed.", "slate-accessibility-announcement.3"),
+                new Notification(AutomationNotificationKind.Other, AutomationNotificationProcessing.ImportantMostRecent, "Could not open vault.", "slate-accessibility-announcement"),
+                new Notification(AutomationNotificationKind.Other, AutomationNotificationProcessing.All, "Editor pane 1 of 1, Empty pane.", "slate-accessibility-announcement.4"),
+            ],
+            launch.Raised);
+        Assert.Equal(0, launch.PollsStarted);
+        Assert.Empty(launch.Drains);
+    }
+
+    /// <summary>
+    /// W7-7 (#1244), contract 38 D-1: the same rule on the drain path. A drain
+    /// raises its queued lines back to back, each exactly once, in order, with
+    /// its own kind, processing and text: every polite line under its own
+    /// activity ID and every High line under the shared one. The sequence is
+    /// the dispatcher's, never a drain's: a line raised while ready after the
+    /// drain continues it, and a later drain continues it again, so no two
+    /// polite lines ever share an ID.
+    /// </summary>
+    [Fact]
+    public void ADrainRaisesEachQueuedPoliteLineUnderItsOwnActivityId()
     {
         var launch = new LaunchHarness();
         launch.Post("Vault opened.", "Scanning vault. 2 files to index.");
@@ -123,35 +159,43 @@ public sealed class AccessibilityNotificationDispatcherTests
         launch.Tick!();
         Assert.Equal(
             [
-                new Notification(AutomationNotificationKind.Other, AutomationNotificationProcessing.All, "Vault opened.", "slate-accessibility-announcement.replay.1"),
-                new Notification(AutomationNotificationKind.Other, AutomationNotificationProcessing.All, "Scanning vault. 2 files to index.", "slate-accessibility-announcement.replay.2"),
-                new Notification(AutomationNotificationKind.Other, AutomationNotificationProcessing.ImportantMostRecent, "Could not open vault.", "slate-accessibility-announcement.replay.3"),
-                new Notification(AutomationNotificationKind.Other, AutomationNotificationProcessing.All, "Scan complete. 2 files indexed.", "slate-accessibility-announcement.replay.4"),
-                new Notification(AutomationNotificationKind.Other, AutomationNotificationProcessing.All, "Editor pane 1 of 1, Empty pane.", "slate-accessibility-announcement.replay.5"),
+                new Notification(AutomationNotificationKind.Other, AutomationNotificationProcessing.All, "Vault opened.", "slate-accessibility-announcement.1"),
+                new Notification(AutomationNotificationKind.Other, AutomationNotificationProcessing.All, "Scanning vault. 2 files to index.", "slate-accessibility-announcement.2"),
+                new Notification(AutomationNotificationKind.Other, AutomationNotificationProcessing.ImportantMostRecent, "Could not open vault.", "slate-accessibility-announcement"),
+                new Notification(AutomationNotificationKind.Other, AutomationNotificationProcessing.All, "Scan complete. 2 files indexed.", "slate-accessibility-announcement.3"),
+                new Notification(AutomationNotificationKind.Other, AutomationNotificationProcessing.All, "Editor pane 1 of 1, Empty pane.", "slate-accessibility-announcement.4"),
             ],
             launch.Raised);
-        Assert.Equal(5, launch.Raised.Select(line => line.ActivityId).Distinct().Count());
 
-        // Ready: raised at once, not replayed, under the shared ID.
+        // Ready: raised at once; the sequence continues.
         launch.Post("Right pane hidden.");
+        launch.Dispatcher.Post(new RenderedAnnouncement("Could not rename note.", A11yPriority.High));
         Assert.Equal(
-            new Notification(AutomationNotificationKind.Other, AutomationNotificationProcessing.All, "Right pane hidden.", "slate-accessibility-announcement"),
-            launch.Raised[^1]);
+            [
+                new Notification(AutomationNotificationKind.Other, AutomationNotificationProcessing.All, "Right pane hidden.", "slate-accessibility-announcement.5"),
+                new Notification(AutomationNotificationKind.Other, AutomationNotificationProcessing.ImportantMostRecent, "Could not rename note.", "slate-accessibility-announcement"),
+            ],
+            launch.Raised.Skip(5));
 
-        // Readiness regresses, two lines queue, and the next drain numbers its
-        // own lines from one.
+        // Readiness regresses, two lines queue, and the next drain continues
+        // the same sequence.
         launch.Listening = false;
         launch.Post("Left pane hidden.");
         launch.Dispatcher.Post(new RenderedAnnouncement("Could not save note.", A11yPriority.High));
-        Assert.Equal(6, launch.Raised.Count);
+        Assert.Equal(7, launch.Raised.Count);
         launch.Listening = true;
         launch.Tick!();
         Assert.Equal(
             [
-                new Notification(AutomationNotificationKind.Other, AutomationNotificationProcessing.All, "Left pane hidden.", "slate-accessibility-announcement.replay.1"),
-                new Notification(AutomationNotificationKind.Other, AutomationNotificationProcessing.ImportantMostRecent, "Could not save note.", "slate-accessibility-announcement.replay.2"),
+                new Notification(AutomationNotificationKind.Other, AutomationNotificationProcessing.All, "Left pane hidden.", "slate-accessibility-announcement.6"),
+                new Notification(AutomationNotificationKind.Other, AutomationNotificationProcessing.ImportantMostRecent, "Could not save note.", "slate-accessibility-announcement"),
             ],
-            launch.Raised.Skip(6));
+            launch.Raised.Skip(7));
+        string[] politeIds = [.. launch.Raised
+            .Where(line => line.Processing == AutomationNotificationProcessing.All)
+            .Select(line => line.ActivityId)];
+        Assert.Equal(6, politeIds.Distinct().Count());
+        Assert.Equal(6, politeIds.Length);
         Assert.Collection(
             launch.Drains,
             first => Assert.StartsWith("lines=5, ", first, StringComparison.Ordinal),
@@ -372,10 +416,10 @@ public sealed class AccessibilityNotificationDispatcherTests
     /// yet connected, as at a launch's first frame — a posted line is QUEUED,
     /// never raised — zero raises — and the first check that finds a listening
     /// client and a connected provider (here the poll) raises each queued line
-    /// exactly once, in order, with its text and processing and its replay
-    /// activity ID, with WPF's advise map still empty. Then the phase is Done,
-    /// and a line posted while ready is raised at once, exactly once, under
-    /// the shared ID, with no poll.
+    /// exactly once, in order, with its text, processing and activity ID
+    /// (contract 38 D-1), with WPF's advise map still empty. Then the phase is
+    /// Done, and a line posted while ready is raised at once, exactly once,
+    /// with no poll.
     /// </summary>
     [Fact]
     public void LinesPostedBeforeReadinessAreQueuedThenRaisedOnceInOrder()
@@ -393,9 +437,9 @@ public sealed class AccessibilityNotificationDispatcherTests
         launch.Tick!();
         Assert.Equal(
             [
-                new Notification(AutomationNotificationKind.Other, AutomationNotificationProcessing.All, "Vault opened.", "slate-accessibility-announcement.replay.1"),
-                new Notification(AutomationNotificationKind.Other, AutomationNotificationProcessing.All, "Scanning vault. 2 files to index.", "slate-accessibility-announcement.replay.2"),
-                new Notification(AutomationNotificationKind.Other, AutomationNotificationProcessing.ImportantMostRecent, "Could not open vault.", "slate-accessibility-announcement.replay.3"),
+                new Notification(AutomationNotificationKind.Other, AutomationNotificationProcessing.All, "Vault opened.", "slate-accessibility-announcement.1"),
+                new Notification(AutomationNotificationKind.Other, AutomationNotificationProcessing.All, "Scanning vault. 2 files to index.", "slate-accessibility-announcement.2"),
+                new Notification(AutomationNotificationKind.Other, AutomationNotificationProcessing.ImportantMostRecent, "Could not open vault.", "slate-accessibility-announcement"),
             ],
             launch.Raised);
         Assert.Null(launch.Tick);
@@ -404,7 +448,7 @@ public sealed class AccessibilityNotificationDispatcherTests
         Assert.Equal(
             ["Vault opened.", "Scanning vault. 2 files to index.", "Could not open vault.", "Right pane hidden."],
             launch.Raised.Select(line => line.Text));
-        Assert.Equal("slate-accessibility-announcement", launch.Raised[^1].ActivityId);
+        Assert.Equal("slate-accessibility-announcement.3", launch.Raised[^1].ActivityId);
         Assert.Equal(1, launch.PollsStarted);
     }
 
@@ -576,8 +620,11 @@ public sealed class AccessibilityNotificationDispatcherTests
     /// a listening client and a connected provider are there together, and
     /// either one's absence resets it, so with the provider connected long
     /// before, the new client's lines wait for its own advise, or for three
-    /// seconds from its own arrival without one. Production's own timer,
-    /// pumped; the fact never calls the check.
+    /// seconds from its own arrival without one. That holds when the reader
+    /// was the only client: UIA's listening flag is an aggregate, so with
+    /// another client listening throughout it never goes absent and the hold
+    /// is not restarted (contract 40 AR-27). Production's own timer, pumped;
+    /// the fact never calls the check.
     /// </summary>
     [Fact]
     public void ARestartedReaderWaitsForItsOwnAdviseNotTheOldHold() => RunSta(() =>
@@ -774,15 +821,17 @@ public sealed class AccessibilityNotificationDispatcherTests
 
     /// <summary>OD-7: a process ready at its first post — a listening client
     /// and a connected provider — ends the phase there: the line is raised at
-    /// once, exactly once, and nothing is queued or polled for. Neither line
-    /// is replayed, so both keep the shared activity ID.</summary>
+    /// once, exactly once, and nothing is queued or polled for — each polite
+    /// line still under its own activity ID (contract 38 D-1).</summary>
     [Fact]
     public void AProcessReadyAtItsFirstLineRaisesEveryLineAtOnce()
     {
         var launch = new LaunchHarness { Connected = true };
         launch.Post("Vault opened.", "Scanning vault. 2 files to index.");
         Assert.Equal(["Vault opened.", "Scanning vault. 2 files to index."], launch.Raised.Select(line => line.Text));
-        Assert.All(launch.Raised, line => Assert.Equal("slate-accessibility-announcement", line.ActivityId));
+        Assert.Equal(
+            ["slate-accessibility-announcement.1", "slate-accessibility-announcement.2"],
+            launch.Raised.Select(line => line.ActivityId));
         Assert.Equal(0, launch.PollsStarted);
         Assert.Empty(launch.Drains);
         Assert.Equal([(HostDiagnosticEvent.AnnouncementSource, "statusPeerProvider=connected")], launch.Logged);
@@ -792,7 +841,7 @@ public sealed class AccessibilityNotificationDispatcherTests
     /// Slate still hears the launch lines. Posted while no client listens at
     /// all, they are queued — not raised, not discarded — and when a client
     /// listens and the provider connects, exactly those lines drain once, in
-    /// order, each under its replay activity ID.</summary>
+    /// order, with their activity IDs (contract 38 D-1).</summary>
     [Fact]
     public void LinesPostedBeforeAnyClientListensAreQueuedForAReaderStartedLater()
     {
@@ -807,9 +856,9 @@ public sealed class AccessibilityNotificationDispatcherTests
         launch.Tick!();
         Assert.Equal(
             [
-                new Notification(AutomationNotificationKind.Other, AutomationNotificationProcessing.All, "Vault opened.", "slate-accessibility-announcement.replay.1"),
-                new Notification(AutomationNotificationKind.Other, AutomationNotificationProcessing.All, "Scanning vault. 2 files to index.", "slate-accessibility-announcement.replay.2"),
-                new Notification(AutomationNotificationKind.Other, AutomationNotificationProcessing.ImportantMostRecent, "Could not open vault.", "slate-accessibility-announcement.replay.3"),
+                new Notification(AutomationNotificationKind.Other, AutomationNotificationProcessing.All, "Vault opened.", "slate-accessibility-announcement.1"),
+                new Notification(AutomationNotificationKind.Other, AutomationNotificationProcessing.All, "Scanning vault. 2 files to index.", "slate-accessibility-announcement.2"),
+                new Notification(AutomationNotificationKind.Other, AutomationNotificationProcessing.ImportantMostRecent, "Could not open vault.", "slate-accessibility-announcement"),
             ],
             launch.Raised);
         Assert.Null(launch.Tick);
