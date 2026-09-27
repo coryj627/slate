@@ -1189,6 +1189,11 @@ internal sealed class VaultLifecycleViewModel
     /// run nested.</summary>
     private bool _workspaceTeardownInProgress;
 
+    /// <summary>#1280 test seam: the open vault's session, so a fact can
+    /// rename or delete through core and have the change arrive as the
+    /// production event does.</summary>
+    internal VaultSession? SessionForTests => _session;
+
     private bool TryCloseWorkspace()
     {
         if (_workspaceTeardownInProgress)
@@ -1206,6 +1211,19 @@ internal sealed class VaultLifecycleViewModel
         }
     }
 
+    /// <summary>
+    /// The teardown admission (#1280; contract 35 A-1). The sidebar work
+    /// that refuses a close is checked first, before anything pumps; work
+    /// the sidebar starts later — the refresh our own saves schedule — is
+    /// joined by the session teardown, as it always was. Settling admitted
+    /// saves and Save All both pump with the window enabled, so the rest of
+    /// the admission runs in rounds and re-checks the admitted saves and the
+    /// dirty tabs after any frame before it answers. Every save admitted
+    /// before the prompt settles before the dirty state is evaluated, so the
+    /// prompt asks about what is really unsaved and no admitted write lands
+    /// after the user chose Discard; the session is disposed only after
+    /// <see cref="WorkspaceViewModel.Dispose"/> has joined every save worker.
+    /// </summary>
     private bool TryCloseWorkspaceCore()
     {
         if (FileSidebar?.CancelTreeRefresh() == true)
@@ -1243,51 +1261,69 @@ internal sealed class VaultLifecycleViewModel
             return false;
         }
 
-        // #1280 (contract 35 A-1): every save already admitted — a Ctrl+S
-        // whose write is still running — settles BEFORE the dirty state is
-        // evaluated, so the prompt asks about what is really unsaved and no
-        // admitted write lands after the user chose Discard. The session is
-        // disposed only after Workspace.Dispose has joined every worker.
-        if (Workspace is WorkspaceViewModel settling && !settling.SettleSaves())
+        bool savedAll = false;
+        for (int round = 0; round < WorkspaceViewModel.MaxPumpedAdmissionRounds; round++)
         {
-            return false;
-        }
-
-        if (Workspace?.HasDirtyTabs != true)
-        {
-            return true;
-        }
-
-        VaultCloseDecision decision = _confirmUnsavedClose();
-        if (decision == VaultCloseDecision.Cancel)
-        {
-            return false;
-        }
-
-        if (decision == VaultCloseDecision.SaveAll)
-        {
-            // Save All pumps: an edit typed or a tab opened meanwhile is
-            // saved by its rounds, and anything still dirty once every save
-            // has settled keeps the vault open rather than being dropped.
-            if (Workspace is not WorkspaceViewModel saving
-                || !saving.SaveAll()
-                || !saving.SettleSaves()
-                || saving.HasDirtyTabs)
+            // Admitted saves settle first; the settle pumped, so the saves
+            // and the dirty state are checked again.
+            if (Workspace is WorkspaceViewModel settling && !settling.SavesIdle)
             {
-                ReportTerminalStatus(
-                    "Vault remains open because one or more notes could not be saved.",
-                    A11yPriority.High);
+                if (!settling.SettleSaves())
+                {
+                    return false;
+                }
+                continue;
+            }
+
+            if (Workspace?.HasDirtyTabs != true)
+            {
+                if (savedAll)
+                {
+                    _announce(new A11yEvent.VaultClosedAllSaved());
+                }
+                return true;
+            }
+
+            VaultCloseDecision decision = _confirmUnsavedClose();
+            if (decision == VaultCloseDecision.Cancel)
+            {
                 return false;
             }
 
-            _announce(new A11yEvent.VaultClosedAllSaved());
-        }
-        else
-        {
+            if (decision == VaultCloseDecision.SaveAll)
+            {
+                if (Workspace is not WorkspaceViewModel saving || !saving.SaveAll())
+                {
+                    ReportTerminalStatus(
+                        "Vault remains open because one or more notes could not be saved.",
+                        A11yPriority.High);
+                    return false;
+                }
+                // Save All pumped: an edit typed or a tab opened meanwhile is
+                // caught by the next round, never dropped.
+                savedAll = true;
+                continue;
+            }
+
+            // Discard. A save admitted while the prompt was up would land
+            // after the choice: settle it and ask again instead.
+            if (Workspace is WorkspaceViewModel discarding && !discarding.SavesIdle)
+            {
+                if (!discarding.SettleSaves())
+                {
+                    return false;
+                }
+                continue;
+            }
+
             _announce(new A11yEvent.VaultClosedChangesDiscarded());
+            return true;
         }
 
-        return true;
+        ReportTerminalStatus(
+            "Vault remains open because one or more notes could not be saved.",
+            A11yPriority.High);
+        return false;
     }
 
     private void FileSidebar_OpenTargetRequested(

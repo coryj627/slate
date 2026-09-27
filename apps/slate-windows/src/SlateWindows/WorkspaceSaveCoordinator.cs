@@ -35,15 +35,10 @@ internal sealed class WorkspaceSaveCoordinator
 
     internal WorkspaceSaveCoordinator(Dispatcher dispatcher) => _dispatcher = dispatcher;
 
-    /// <summary>True when no admitted save is still waiting or writing.</summary>
-    internal bool IsIdle
-    {
-        get
-        {
-            _dispatcher.VerifyAccess();
-            return _pending == 0;
-        }
-    }
+    /// <summary>True when no admitted save is still waiting or writing. Saves
+    /// are admitted and completed only on the dispatcher, so a caller on
+    /// another thread (a headless teardown) reads a settled count.</summary>
+    internal bool IsIdle => Volatile.Read(ref _pending) == 0;
 
     /// <summary>True once teardown has closed the coordinator.</summary>
     internal bool IsClosed => _closed;
@@ -60,12 +55,22 @@ internal sealed class WorkspaceSaveCoordinator
         }
     }
 
-    /// <summary>Admit a save for <paramref name="key"/>. <paramref name="start"/>
-    /// runs on the dispatcher once every earlier save for the key has
-    /// completed, and completes the ticket it is handed exactly once —
+    /// <summary>The serialization keys of a tab's save: the tab itself — so
+    /// its saves stay ordered across a rename that changes its path — and,
+    /// for a note, its path folded (NFC, lowercase), so every tab on one file
+    /// shares the chain. Folding can only merge chains, never split one, and
+    /// a merged chain costs ordering, never correctness.</summary>
+    internal static string[] KeysFor(Guid tab, string? path) =>
+        path is { Length: > 0 }
+            ? [$"tab:{tab:N}", $"path:{path.Normalize(System.Text.NormalizationForm.FormC).ToLowerInvariant()}"]
+            : [$"tab:{tab:N}"];
+
+    /// <summary>Admit a save under <paramref name="keys"/>. <paramref name="start"/>
+    /// runs on the dispatcher once every earlier save under ANY of the keys
+    /// has completed, and completes the ticket it is handed exactly once —
     /// from the publication, or from an early exit. A closed coordinator
     /// admits nothing.</summary>
-    internal Task<bool> Enqueue(string key, Action<SaveTicket> start)
+    internal Task<bool> Enqueue(IReadOnlyList<string> keys, Action<SaveTicket> start)
     {
         _dispatcher.VerifyAccess();
         if (_closed)
@@ -73,20 +78,27 @@ internal sealed class WorkspaceSaveCoordinator
             return Task.FromResult(false);
         }
 
-        var ticket = new SaveTicket(this, key);
+        var ticket = new SaveTicket(this, keys);
         if (_pending++ == 0)
         {
             _idle = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
         }
-        Task<bool>? previous = _tails.GetValueOrDefault(key);
-        _tails[key] = ticket.Task;
-        if (previous is null || previous.IsCompleted)
+        Task<bool>[] previous = [.. keys
+            .Select(key => _tails.GetValueOrDefault(key))
+            .OfType<Task<bool>>()
+            .Where(tail => !tail.IsCompleted)
+            .Distinct()];
+        foreach (string key in keys)
+        {
+            _tails[key] = ticket.Task;
+        }
+        if (previous.Length == 0)
         {
             Run(ticket, start);
         }
         else
         {
-            previous.ContinueWith(
+            Task.WhenAll(previous).ContinueWith(
                 _ => _dispatcher.BeginInvoke(
                     DispatcherPriority.Normal,
                     new Action(() => Run(ticket, start))),
@@ -179,10 +191,13 @@ internal sealed class WorkspaceSaveCoordinator
 
     private void Completed(SaveTicket ticket)
     {
-        if (_tails.TryGetValue(ticket.Key, out Task<bool>? tail)
-            && ReferenceEquals(tail, ticket.Task))
+        foreach (string key in ticket.Keys)
         {
-            _tails.Remove(ticket.Key);
+            if (_tails.TryGetValue(key, out Task<bool>? tail)
+                && ReferenceEquals(tail, ticket.Task))
+            {
+                _tails.Remove(key);
+            }
         }
         if (--_pending == 0)
         {
@@ -201,15 +216,16 @@ internal sealed class WorkspaceSaveCoordinator
     internal sealed class SaveTicket
     {
         private readonly WorkspaceSaveCoordinator _owner;
-        private readonly TaskCompletionSource<bool> _completion = new();
+        private readonly TaskCompletionSource<bool> _completion =
+            new(TaskCreationOptions.RunContinuationsAsynchronously);
 
-        internal SaveTicket(WorkspaceSaveCoordinator owner, string key)
+        internal SaveTicket(WorkspaceSaveCoordinator owner, IReadOnlyList<string> keys)
         {
             _owner = owner;
-            Key = key;
+            Keys = keys;
         }
 
-        internal string Key { get; }
+        internal IReadOnlyList<string> Keys { get; }
 
         internal Task<bool> Task => _completion.Task;
 

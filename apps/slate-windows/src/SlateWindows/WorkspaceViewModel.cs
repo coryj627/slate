@@ -657,7 +657,7 @@ internal sealed partial class WorkspaceTabViewModel : BindableBase, IDisposable
     {
         _dispatcher.VerifyAccess();
         return Saves.Enqueue(
-            IsMarkdown ? Path : Id.ToString("N"),
+            WorkspaceSaveCoordinator.KeysFor(Id, IsMarkdown ? Path : null),
             ticket => StartSave(onSaved, ticket));
     }
 
@@ -2348,17 +2348,22 @@ internal sealed partial class WorkspaceViewModel : BindableBase, IDisposable
     }
 
     /// <summary>Save every dirty tab (#1280). Each save pumps, and anything
-    /// may run inside its frame — a tab opened, closed, moved or typed into
-    /// — so the pass works over a snapshot and starts a new round whenever
-    /// the tab set's stamp moved: a tab opened mid-way is saved, a closed
-    /// one is skipped, and nothing is enumerated live across a frame. A
-    /// clean tab is never rewritten and a tab whose save failed (and said
-    /// why) is not retried, so every tab is written at most once per edit.
-    /// Saved means a round ended with the stamp unchanged and no dirty tab
-    /// left but the failed ones — within a bounded number of rounds.</summary>
+    /// may run inside its frame — a tab opened, closed, moved, renamed or
+    /// typed into — so the pass works over a snapshot and starts a new round
+    /// whenever the tab set's stamp moved: a tab opened mid-way is saved, a
+    /// closed one is skipped, and nothing is enumerated live across a frame.
+    /// A clean tab is never rewritten, and a tab whose save failed (and said
+    /// why) is not retried while it still shows the same item — a rename
+    /// that retired its save gives it a new identity, which is retried.
+    /// Saved means a round ended with the stamp unchanged and no live tab
+    /// dirty — within a bounded number of rounds.</summary>
     public bool SaveAll()
     {
-        var failed = new HashSet<WorkspaceTabViewModel>(ReferenceEqualityComparer.Instance);
+        var failed = new Dictionary<WorkspaceTabViewModel, WorkspaceItemState>(
+            ReferenceEqualityComparer.Instance);
+        bool FailedAtItsItem(WorkspaceTabViewModel tab) =>
+            failed.TryGetValue(tab, out WorkspaceItemState? at) && at == tab.Item;
+
         for (int round = 0; round < MaxPumpedAdmissionRounds; round++)
         {
             if (_workspaceDisposed)
@@ -2373,13 +2378,14 @@ internal sealed partial class WorkspaceViewModel : BindableBase, IDisposable
                 {
                     return false;
                 }
-                if (tab.IsDisposed || !tab.IsDirty || failed.Contains(tab))
+                if (tab.IsDisposed || !tab.IsDirty || FailedAtItsItem(tab))
                 {
                     continue;
                 }
+                WorkspaceItemState item = tab.Item;
                 if (!tab.Save())
                 {
-                    failed.Add(tab);
+                    failed[tab] = item;
                 }
                 if (!stamp.StillHolds(this))
                 {
@@ -2387,11 +2393,16 @@ internal sealed partial class WorkspaceViewModel : BindableBase, IDisposable
                     break;
                 }
             }
-            if (!moved
-                && !Groups.SelectMany(group => group.Tabs)
-                    .Any(tab => tab.IsDirty && !failed.Contains(tab)))
+            if (moved)
             {
-                return failed.Count == 0;
+                continue;
+            }
+            WorkspaceTabViewModel[] dirty = [.. Groups
+                .SelectMany(group => group.Tabs)
+                .Where(tab => !tab.IsDisposed && tab.IsDirty)];
+            if (dirty.All(FailedAtItsItem))
+            {
+                return dirty.Length == 0;
             }
         }
         return false;
@@ -2402,6 +2413,9 @@ internal sealed partial class WorkspaceViewModel : BindableBase, IDisposable
     /// and no write admitted before the prompt lands after it. False only
     /// when the dispatcher is shutting down.</summary>
     internal bool SettleSaves() => _saves.SettlePumping();
+
+    /// <summary>#1280: true when no admitted save is waiting or writing.</summary>
+    internal bool SavesIdle => _saves.IsIdle;
 
     /// <summary>#1280 test seam: the workspace's save coordinator.</summary>
     internal WorkspaceSaveCoordinator SavesForTests => _saves;

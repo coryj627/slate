@@ -545,7 +545,14 @@ internal sealed partial class WorkspaceViewModel
                     case WorkspaceDirtyNavigationDecision.Discard:
                         discarded[tab] = tab.EditRevision;
                         break;
-                    case WorkspaceDirtyNavigationDecision.Save when tab.Save():
+                    case WorkspaceDirtyNavigationDecision.Save:
+                        // A save retired by a rename under it gave the tab a
+                        // new identity: the next round asks about it again.
+                        WorkspaceItemState saving = tab.Item;
+                        if (!tab.Save() && tab.Item == saving)
+                        {
+                            return;
+                        }
                         break;
                     default:
                         return;
@@ -605,7 +612,10 @@ internal sealed partial class WorkspaceViewModel
     /// an approval of the edit the user was asked about, pinned to its edit
     /// revision; anything typed after it is asked about again. True when
     /// the tab is clean or approved and still valid; false on Cancel, a
-    /// failed save, an invalidated caller, or too many rounds.
+    /// failed save, an invalidated caller, or too many rounds. A save that
+    /// failed because the tab's file was renamed under it (the write was
+    /// retired, the tab now shows the new path) is not a refusal: the tab
+    /// has a new identity, and it is asked about again.
     /// </summary>
     private bool AdmitDirtyTab(
         WorkspaceTabViewModel tab,
@@ -634,7 +644,8 @@ internal sealed partial class WorkspaceViewModel
                     discardedAt = tab.EditRevision;
                     break;
                 case WorkspaceDirtyNavigationDecision.Save:
-                    if (!tab.Save())
+                    WorkspaceItemState saving = tab.Item;
+                    if (!tab.Save() && tab.Item == saving)
                     {
                         return false;
                     }
