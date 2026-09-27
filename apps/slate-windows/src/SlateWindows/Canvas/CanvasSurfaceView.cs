@@ -439,6 +439,8 @@ internal sealed class CanvasSurfaceView : UserControl, ICanvasSurfacePresenter
     /// (<see cref="CanvasRendererView.RevealsMoveFrom"/>). Every pane
     /// showing the board also hears every selection change through the
     /// same rule as a move made elsewhere (<see cref="FollowTheSelection"/>).
+    /// A card the board has not installed yet is owed its reveal until it
+    /// has (<see cref="CanvasRendererView.RevealNode"/>, review round 2).
     /// The outline and the table focused the row, which already scrolled it
     /// into view.
     /// </summary>
@@ -446,7 +448,7 @@ internal sealed class CanvasSurfaceView : UserControl, ICanvasSurfacePresenter
     {
         if (Projection == CanvasSurfaceKind.Visual && _visual.RevealsMoveFrom(origin))
         {
-            _visual.RevealNode(nodeId);
+            _visual.RevealNode(nodeId, origin);
         }
     }
 
@@ -1275,9 +1277,12 @@ internal sealed class CanvasSurfaceView : UserControl, ICanvasSurfacePresenter
     /// The board that made a move still reveals it itself, as a move made ON
     /// the surface (<see cref="RevealSeat"/> and the peer door), which D4
     /// honours toggle or no toggle. When both reveals run for one move they
-    /// ask for the same pan, and the second finds the card already
-    /// contained and commits nothing: the pan is the minimal one that
-    /// contains the card, and the engine drops a same-geometry commit.
+    /// ask for the same card: the second finds it already contained and
+    /// commits nothing (the pan is the minimal one that contains the card,
+    /// and the engine drops a same-geometry commit), or, while the board has
+    /// not installed the card yet, replaces the owed reveal with its own
+    /// (review round 2) — so a move made on the board keeps its on-surface
+    /// standing even if the toggle goes off before the card lands.
     /// </para>
     /// <para>
     /// A board that is not showing — another tab, a collapsed projection, a

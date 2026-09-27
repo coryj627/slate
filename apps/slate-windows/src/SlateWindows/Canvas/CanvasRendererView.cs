@@ -97,6 +97,9 @@ internal sealed class CanvasRendererView : FrameworkElement
                 old.PublicationApplied -= _engine.OnPublicationApplied;
                 old.ModeVisibleChanged -= OnModeVisibleChanged;
             }
+            // A reveal owed to the old document's seat is not this one's
+            // (#1271, review round 2); a teardown sets null and lands here too.
+            _owedReveal = null;
             _model = value;
             if (value is not null)
             {
@@ -140,6 +143,9 @@ internal sealed class CanvasRendererView : FrameworkElement
         // derive from the state that just landed (ID-9's
         // becomes-invalid arm).
         UpdateTooltip();
+        // A reveal owed to a card the previous state lacked is paid by
+        // the first install that has it (#1271, review round 2).
+        PayOwedReveal();
     }
 
     private void DrawCards(CanvasPresentationState state)
@@ -597,24 +603,81 @@ internal sealed class CanvasRendererView : FrameworkElement
             return;
         }
         model.SelectNode(nodeId);
-        RevealNode(nodeId);
+        RevealNode(nodeId, CanvasMoveOrigin.OnSurface);
     }
 
-    /// <summary>The pan that brings a card into the window (D4 — a
-    /// selection made ON this surface always scrolls into view): the
-    /// peer door's above, and since R-12 (#1255) the navigator's — the
-    /// board's arrows and follow chords move the seat through the
-    /// navigator, which has already announced the move and asks the
-    /// presenter only to reveal it (the presenter asks
-    /// <see cref="RevealsMoveFrom"/> first). A card the installed
-    /// population does not know has nothing to pan to.</summary>
-    internal void RevealNode(string nodeId)
+    /// <summary>
+    /// The pan that brings the seat into the window (D4): the peer door's
+    /// above, and since R-12 (#1255) the presenter's, which has already
+    /// decided by <see cref="RevealsMoveFrom"/> that this move reveals.
+    /// </summary>
+    /// <remarks>
+    /// <para>
+    /// A reveal is a DEBT this board owes the reader until the state that has
+    /// the card is installed (R-12 follow-up #1271, review round 2). The seat
+    /// moves the moment the document publishes — New Card and Duplicate seat
+    /// a card that exists only in the successor — while this board's engine
+    /// builds and installs that successor later, off the dispatcher; a reveal
+    /// computed against the installed predecessor finds no card to contain.
+    /// So the pan is paid now when the installed state has the card, and is
+    /// otherwise owed and paid by the install that brings it
+    /// (<see cref="PayOwedReveal"/>).
+    /// </para>
+    /// <para>
+    /// The rules, one slot per board: a newer reveal supersedes the owed one,
+    /// paid or owed in turn; an owed reveal is paid only while it would still
+    /// be asked for — its card is still the seat (a later selection change
+    /// voids it, so it is never replayed for a card no longer selected), and
+    /// D4 still reveals it (a move made elsewhere lapses when the board stops
+    /// following the selection; a move made on the board stands, toggle or no
+    /// toggle); and it is dropped when the board's document changes or the
+    /// board shuts down.
+    /// </para>
+    /// </remarks>
+    internal void RevealNode(string nodeId, CanvasMoveOrigin origin)
     {
-        if (_engine.Current?.Source.Loaded?.Population is { } population
-            && population.SceneByNode.TryGetValue(nodeId, out CanvasSceneNode? node))
+        _owedReveal = TryPanToContain(nodeId) ? null : new OwedReveal(nodeId, origin);
+    }
+
+    /// <summary>The reveal this board owes (see <see cref="RevealNode"/>);
+    /// null when it owes none.</summary>
+    private OwedReveal? _owedReveal;
+
+    private sealed record OwedReveal(string NodeId, CanvasMoveOrigin Origin);
+
+    /// <summary>Pay the owed reveal against the state just installed, if it
+    /// is still payable (<see cref="RevealNode"/>'s rules); an unpayable debt
+    /// is written off, a payable one whose card this state still lacks stays
+    /// owed.</summary>
+    private void PayOwedReveal()
+    {
+        if (_owedReveal is not { } owed)
         {
-            _engine.CommitViewport(v => PanToContain(v, node));
+            return;
         }
+        if (!string.Equals(_model?.Selection.Selected, owed.NodeId, StringComparison.Ordinal)
+            || !RevealsMoveFrom(owed.Origin))
+        {
+            _owedReveal = null;
+            return;
+        }
+        if (TryPanToContain(owed.NodeId))
+        {
+            _owedReveal = null;
+        }
+    }
+
+    /// <summary>Commit the pan that contains the card in the INSTALLED
+    /// state, answering whether that state had the card to pan to.</summary>
+    private bool TryPanToContain(string nodeId)
+    {
+        if (_engine.Current?.Source.Loaded?.Population is not { } population
+            || !population.SceneByNode.TryGetValue(nodeId, out CanvasSceneNode? node))
+        {
+            return false;
+        }
+        _engine.CommitViewport(v => PanToContain(v, node));
+        return true;
     }
 
     /// <summary>D4's pan rule against this board's committed viewport

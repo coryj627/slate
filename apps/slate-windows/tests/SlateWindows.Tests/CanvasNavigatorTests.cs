@@ -4317,23 +4317,9 @@ public sealed class CanvasNavigatorTests : IDisposable
     public void AFollowingBoardInAnotherPanePansToTheSelectionAndAnUnfollowingOneStays() => RunSta(() =>
     {
         CanvasDocumentViewModel document = Open("board.canvas");
-        var paneA = new CanvasSurfaceView { Model = document, DataContext = new object() };
-        var paneB = new CanvasSurfaceView { Model = document, DataContext = new object() };
-        var root = new System.Windows.Controls.Primitives.UniformGrid { Columns = 2 };
-        root.Children.Add(paneA);
-        root.Children.Add(paneB);
-        using HostedWindow host = Host(root);
-        document.ShowSurface(CanvasSurfaceKind.Visual);
-        host.UpdateLayout();
+        using HostedWindow host = HostTwoBoards(document, out CanvasSurfaceView paneA, out CanvasSurfaceView paneB);
         CanvasRendererView boardA = paneA.VisualForTests;
         CanvasRendererView boardB = paneB.VisualForTests;
-        PumpUntil(
-            () => boardA.Engine.Current is not null && boardB.Engine.Current is not null,
-            "premise: the two boards never installed their first presentation states.");
-        Assert.True(boardA.Focus(), "premise: pane A's board refused keyboard focus.");
-        host.UpdateLayout();
-        Assert.True(paneA.ProjectionHasFocus, "premise: pane A's board does not hold the keys.");
-        Assert.False(paneB.ProjectionHasFocus, "premise: pane B holds the keys as well as pane A.");
 
         var legs = new (string Name, Action Select)[]
         {
@@ -4387,6 +4373,266 @@ public sealed class CanvasNavigatorTests : IDisposable
             }
         }
     });
+
+    /// <summary>
+    /// Follow-up #1271, review round 2 — a reveal OWED across a publication.
+    /// New Card seats a card no board has installed yet: the document
+    /// publishes the successor and moves the one shared selection to the new
+    /// card at once, while each board's engine builds and installs that
+    /// successor later, off the dispatcher. A board that follows the
+    /// selection still brings the card into view once the state that has it
+    /// lands — in the pane that holds the keys and in the other pane alike.
+    /// Both boards start panned so that the card, wherever core places it,
+    /// lands outside both views.
+    /// </summary>
+    [Fact]
+    public void AFollowingBoardRevealsANewCardOnceTheStateThatHasItInstalls() => RunSta(() =>
+    {
+        CanvasDocumentViewModel document = Open("board.canvas");
+        using HostedWindow host = HostTwoBoards(document, out CanvasSurfaceView paneA, out CanvasSurfaceView paneB);
+        CanvasRendererView boardA = paneA.VisualForTests;
+        CanvasRendererView boardB = paneB.VisualForTests;
+        Assert.True(
+            boardA.Engine.CommittedViewport.FollowSelection && boardB.Engine.CommittedViewport.FollowSelection,
+            "premise: both boards follow the selection by default.");
+        document.SeatSelectionSilently("question");
+        boardA.Engine.CommitViewport(view => view.PannedTo(-5000, -5000));
+        boardB.Engine.CommitViewport(view => view.PannedTo(-5000, -5000));
+
+        document.CanvasNewCard();
+        string created = Assert.IsType<string>(document.Selection.Selected);
+        Assert.False(
+            Installed(boardA, created) || Installed(boardB, created),
+            "premise: a board had installed the new card before the selection reached it, so no "
+            + "reveal was ever owed across the publication.");
+
+        PumpUntil(
+            () => Installed(boardA, created) && Installed(boardB, created),
+            "premise: the state that has the new card never installed on both boards.");
+        Assert.True(
+            InView(boardA, created),
+            "pane A's board (the keys' pane) installed the new card and left it outside its view: "
+            + "the follow-selection reveal was dropped while its card was not installed (D4, #1271).");
+        Assert.True(
+            InView(boardB, created),
+            "pane B's board installed the new card and left it outside its view: the follow-selection "
+            + "reveal was dropped while its card was not installed (D4, #1271).");
+    });
+
+    /// <summary>
+    /// Follow-up #1271, review round 2 — what an OWED reveal is paid for.
+    /// With Follow Selection OFF, the board's own Down onto a card its engine
+    /// has not installed yet is a move made ON the board, which D4 reveals
+    /// whatever the toggle says: the reveal is owed, and paid when the state
+    /// that has the card lands. If the seat has moved to another card by
+    /// then, the owed reveal is dropped, never replayed — it is paid only for
+    /// the card that is still the seat.
+    /// </summary>
+    [Theory]
+    [InlineData(false)]
+    [InlineData(true)]
+    public void AnOwedRevealIsPaidOnlyForTheCardThatIsStillTheSeat(bool seatMovesOnFirst) => RunSta(() =>
+    {
+        CanvasDocumentViewModel document = Open("board.canvas");
+        using HostedWindow host = HostBoard(document, out CanvasSurfaceView surface);
+        CanvasRendererView board = surface.VisualForTests;
+        _ = surface.ViewportCommand(CanvasViewportVerb.ToggleFollowSelection);
+        Assert.False(board.Engine.CommittedViewport.FollowSelection, "premise: the board still follows the selection.");
+        document.SeatSelectionSilently("question");
+
+        document.CanvasNewCard();
+        string created = Assert.IsType<string>(document.Selection.Selected);
+        List<string> order = document.SceneReadingOrder.Select(stop => stop.NodeId).ToList();
+        int at = order.IndexOf(created);
+        (string from, Key key) = at > 0 ? (order[at - 1], Key.Down) : (order[at + 1], Key.Up);
+        document.SeatSelectionSilently(from);
+        board.Engine.CommitViewport(view => view.PannedTo(-5000, -5000));
+        CanvasViewportState before = board.Engine.CommittedViewport;
+
+        Assert.True(PressKey(surface, key, ModifierKeys.None));
+        Assert.Equal(created, document.Selection.Selected);
+        Assert.False(
+            Installed(board, created),
+            "premise: the board had installed the new card before its own move reached it, so the "
+            + "reveal was paid at once and nothing was owed.");
+        string? elsewhere = null;
+        if (seatMovesOnFirst)
+        {
+            // Made elsewhere with Follow Selection off: this board does not pan
+            // for it, so only the owed reveal's own rule can stop a stale pan.
+            elsewhere = order.First(id => id != created && id != from);
+            document.SelectNode(elsewhere);
+        }
+
+        PumpUntil(() => Installed(board, created), "premise: the state that has the new card never installed.");
+        if (seatMovesOnFirst)
+        {
+            Assert.True(
+                before.SameGeometry(board.Engine.CommittedViewport),
+                $"the board paid a reveal owed to \"{created}\" after the seat had moved on to "
+                + $"\"{elsewhere}\": an owed reveal is paid only for the card that is still the seat (#1271).");
+        }
+        else
+        {
+            Assert.False(
+                before.SameGeometry(board.Engine.CommittedViewport),
+                "the board's own Down onto a card it had not installed yet was never revealed: a move "
+                + "made on the board is revealed whatever the toggle says, once its card installs (D4, #1271).");
+            Assert.True(InView(board, created), $"the owed reveal left \"{created}\" outside the board.");
+        }
+    });
+
+    /// <summary>
+    /// Follow-up #1271, review round 2 — an owed reveal made ELSEWHERE lapses
+    /// when the board stops following the selection before it is paid: New
+    /// Card's selection is owed a reveal while Follow Selection is on, the
+    /// toggle goes off before the card's state installs, and the board stays
+    /// where the reader left it.
+    /// </summary>
+    [Fact]
+    public void AnOwedElsewhereRevealLapsesWhenTheBoardStopsFollowing() => RunSta(() =>
+    {
+        CanvasDocumentViewModel document = Open("board.canvas");
+        using HostedWindow host = HostBoard(document, out CanvasSurfaceView surface);
+        CanvasRendererView board = surface.VisualForTests;
+        Assert.True(board.Engine.CommittedViewport.FollowSelection, "premise: Follow Selection is on by default.");
+        document.SeatSelectionSilently("question");
+        board.Engine.CommitViewport(view => view.PannedTo(-5000, -5000));
+
+        document.CanvasNewCard();
+        string created = Assert.IsType<string>(document.Selection.Selected);
+        Assert.False(Installed(board, created), "premise: the board had already installed the new card.");
+        _ = surface.ViewportCommand(CanvasViewportVerb.ToggleFollowSelection);
+        Assert.False(board.Engine.CommittedViewport.FollowSelection, "premise: the toggle did not turn off.");
+        CanvasViewportState before = board.Engine.CommittedViewport;
+
+        PumpUntil(() => Installed(board, created), "premise: the state that has the new card never installed.");
+        Assert.True(
+            before.SameGeometry(board.Engine.CommittedViewport),
+            "the board paid a reveal made elsewhere after it stopped following the selection (D4, #1271).");
+    });
+
+    /// <summary>
+    /// Follow-up #1271, review round 2 — contract 34 D4's on-surface arm for
+    /// the board's OWN peers, with Follow Selection OFF: a screen reader's
+    /// Invoke and SelectionItem.Select on a card just past the board's edge
+    /// (materialized, so its peer is live, but outside the view) select it and
+    /// bring it into view whatever the toggle says, and so does realization —
+    /// the card peer's VirtualizedItem.Realize and the container's
+    /// ItemContainer name search — for a card far off the board.
+    /// </summary>
+    [Fact]
+    public void TheBoardsOwnPeersRevealTheirCardWithFollowSelectionOff() => RunSta(() =>
+    {
+        CanvasDocumentViewModel document = Open("board.canvas");
+        using HostedWindow host = HostBoard(document, out CanvasSurfaceView surface);
+        CanvasRendererView board = surface.VisualForTests;
+        _ = surface.ViewportCommand(CanvasViewportVerb.ToggleFollowSelection);
+        Assert.False(board.Engine.CommittedViewport.FollowSelection, "premise: the board still follows the selection.");
+        const string Target = "loose";
+        CanvasCardAutomationPeer peer = board.PeerFor(CanvasPeerKey.Card(Target))!;
+
+        foreach ((string name, PatternInterface pattern, Action<object> act) in
+            new (string, PatternInterface, Action<object>)[]
+            {
+                ("Invoke", PatternInterface.Invoke, provider => ((IInvokeProvider)provider).Invoke()),
+                ("SelectionItem.Select", PatternInterface.SelectionItem,
+                    provider => ((ISelectionItemProvider)provider).Select()),
+            })
+        {
+            document.SeatSelectionSilently("question");
+            ParkJustPastTheRightEdge(board, Target);
+            object? live = peer.GetPattern(pattern);
+            Assert.True(live is not null, $"premise ({name}): the card's peer is not live, so no client could reach it.");
+            Assert.False(InView(board, Target), $"premise ({name}): the card was already inside the board.");
+            CanvasViewportState before = board.Engine.CommittedViewport;
+
+            act(live!);
+            Assert.Equal(Target, document.Selection.Selected);
+            Assert.False(
+                before.SameGeometry(board.Engine.CommittedViewport),
+                $"{name} on the board's own card peer never moved the board with Follow Selection off: "
+                + "a selection made on the board scrolls into view whatever the toggle says (D4, #1271).");
+            Assert.True(InView(board, Target), $"{name} left \"{Target}\" outside the board (D4).");
+        }
+
+        foreach ((string name, Action realize) in new (string, Action)[]
+            {
+                ("VirtualizedItem.Realize", () =>
+                    ((IVirtualizedItemProvider)peer.GetPattern(PatternInterface.VirtualizedItem)!).Realize()),
+                ("the container's name search", () =>
+                    _ = ((IItemContainerProvider)new CanvasRendererAutomationPeer(board)).FindItemByProperty(
+                        null, AutomationElementIdentifiers.NameProperty.Id, peer.GetName())),
+            })
+        {
+            board.Engine.CommitViewport(view => view.PannedTo(-5000, -5000));
+            PumpUntil(
+                () => board.Engine.Current!.Viewport.SameGeometry(board.Engine.CommittedViewport),
+                $"premise ({name}): the far viewport never installed.");
+            Assert.True(
+                peer.GetPattern(PatternInterface.Invoke) is null,
+                $"premise ({name}): the far card is still materialized, so nothing needed realizing.");
+            CanvasViewportState before = board.Engine.CommittedViewport;
+
+            realize();
+            Assert.False(
+                before.SameGeometry(board.Engine.CommittedViewport),
+                $"{name} realized a far card with Follow Selection off and never moved the board: a "
+                + "realization scrolls its card into view whatever the toggle says (D4).");
+            Assert.True(InView(board, Target), $"{name} left \"{Target}\" outside the board (D4).");
+        }
+    });
+
+    /// <summary>One canvas in two panes, both on the Visual board (the
+    /// projection is the document's), each board installed, and pane A's
+    /// board holding the keys — every premise with its leg named.</summary>
+    private HostedWindow HostTwoBoards(
+        CanvasDocumentViewModel document, out CanvasSurfaceView paneA, out CanvasSurfaceView paneB)
+    {
+        var first = new CanvasSurfaceView { Model = document, DataContext = new object() };
+        var second = new CanvasSurfaceView { Model = document, DataContext = new object() };
+        var root = new System.Windows.Controls.Primitives.UniformGrid { Columns = 2 };
+        root.Children.Add(first);
+        root.Children.Add(second);
+        HostedWindow host = Host(root);
+        document.ShowSurface(CanvasSurfaceKind.Visual);
+        host.UpdateLayout();
+        CanvasRendererView boardA = first.VisualForTests;
+        CanvasRendererView boardB = second.VisualForTests;
+        PumpUntil(
+            () => boardA.Engine.Current is not null && boardB.Engine.Current is not null,
+            "premise: the two boards never installed their first presentation states.");
+        Assert.True(boardA.Focus(), "premise: pane A's board refused keyboard focus.");
+        host.UpdateLayout();
+        Assert.True(first.ProjectionHasFocus, "premise: pane A's board does not hold the keys.");
+        Assert.False(second.ProjectionHasFocus, "premise: pane B holds the keys as well as pane A.");
+        Drain(document);
+        paneA = first;
+        paneB = second;
+        return host;
+    }
+
+    /// <summary>Whether the board's INSTALLED state has the card — the
+    /// population a reveal computes its pan against.</summary>
+    private static bool Installed(CanvasRendererView board, string nodeId) =>
+        board.Engine.Current?.Source.Loaded?.Population.SceneByNode.ContainsKey(nodeId) == true;
+
+    /// <summary>Pan the board so the card sits just past its right edge —
+    /// outside the view, inside the materialization margin — and wait for
+    /// that state to install, so the card's peer is live.</summary>
+    private static void ParkJustPastTheRightEdge(CanvasRendererView board, string nodeId)
+    {
+        CanvasSceneNode node = board.Engine.Current!.Source.Loaded!.Population.SceneByNode[nodeId];
+        board.Engine.CommitViewport(view => view.PannedTo(
+            view.ViewWidth + 10 - (node.X * view.Zoom),
+            10 - (node.Y * view.Zoom)));
+        PumpUntil(
+            () => board.Engine.Current!.Viewport.SameGeometry(board.Engine.CommittedViewport)
+                && board.Engine.Current.Topology.Placements.TryGetValue(
+                    CanvasPeerKey.Card(nodeId), out CanvasPeerPlacement? placement)
+                && placement.Cell == CanvasPeerCell.Materialized,
+            $"premise: \"{nodeId}\" never materialized just past the board's edge.");
+    }
 
     /// <summary>
     /// R-12 (#1255, #1271): every move the board's keys make asks the
