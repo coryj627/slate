@@ -532,12 +532,13 @@ public sealed class ReadingFocusTests
         using var host = new Host();
         // A canvas with cards: a landing wrongly delivered would seat one.
         host.Initialize(kind, kind == "canvas" ? CardBoard : null);
-        RingHost ring = host.UseRing();
-        ring.RightPaneHasContentStop = rightPane == "with a content stop";
         if (rightPane == "hidden")
         {
             host.Workspace.IsRightPaneVisible = false;
+            host.Settle();
         }
+        RingHost ring = host.UseRing();
+        ring.RightPaneHasContentStop = rightPane == "with a content stop";
         (ShellRegionKind after, UIElement afterStop, A11yEvent afterLine) = rightPane switch
         {
             "with a content stop" => (ShellRegionKind.RightPaneContent, (UIElement)host.Elsewhere, host.RightPaneLine()),
@@ -581,13 +582,15 @@ public sealed class ReadingFocusTests
         string? seated = host.SeatedNode();
 
         host.CompleteStaleEditorLanding(stale, staleRequest);
+        // The stale completion moved nothing: the canvas's seated card and the
+        // graph's node are where the reader's moves left them.
+        Assert.Equal(seated, host.SeatedNode());
         host.LetEditorLandingArrive();
 
         Assert.Equal([ShellRegionKind.Editor, destination], ring.Tried);
         Assert.Equal([line], host.Announced);
         AssertFocused(landed, route + ", after the stale completion and the content's arrival");
         Assert.False(host.EditorStop().IsKeyboardFocusWithin);
-        Assert.Equal(seated, host.SeatedNode());
     }
 
     /// <summary>R-10: another route asking for the editor while the ring's
@@ -932,9 +935,9 @@ public sealed class ReadingFocusTests
     /// pane's content stop, then moved to its OTHER stop — one region, two
     /// focusable controls — the landing is withdrawn with that move, and the
     /// next press starts from the live position: F6 goes on past the right
-    /// pane (to the Files tree, the ring's next stop that can take focus
-    /// here), Shift+F6 goes back to the editor and asks it again — never the
-    /// right pane or the tab bar a restart from the held editor would reach.</summary>
+    /// pane's content (to its rail, the ring's next stop), Shift+F6 goes back
+    /// to the editor and asks it again — never the right pane's content or the
+    /// tab bar a restart from the held editor would reach.</summary>
     [Theory]
     [InlineData("reading", false)]
     [InlineData("reading", true)]
@@ -971,12 +974,9 @@ public sealed class ReadingFocusTests
             return;
         }
 
-        Assert.Equal(
-            [ShellRegionKind.Editor, ShellRegionKind.RightPaneRail, ShellRegionKind.StatusBar,
-                ShellRegionKind.MenuBar, ShellRegionKind.Files],
-            ring.Tried);
-        Assert.Equal([new A11yEvent.FilesRegionFocused()], host.Announced);
-        AssertFocused(host.Sentinel, "F6 from the moved position");
+        Assert.Equal([ShellRegionKind.Editor, ShellRegionKind.RightPaneRail], ring.Tried);
+        Assert.Equal([new A11yEvent.ShellRegionFocused(new ShellRegion.RightPaneRail())], host.Announced);
+        AssertFocused(host.Rail, "F6 from the moved position");
     });
 
     /// <summary>R-10: ONE terminal transition per held landing, and
