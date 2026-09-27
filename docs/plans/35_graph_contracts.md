@@ -3448,6 +3448,16 @@ fact is written now against the document's verbosity field);
 `RenderLabel` posts nothing (the dispatcher's activity count
 unchanged).
 
+**Amended by OD-9** (`40_nvda_matrix_remediation_contracts.md`, owner decision OD-9; W7-7 PR 3, #1246,
+R-4, codex PR 3 rounds 6-9) — authoritative where the paragraphs above differ. The P1 copy is the
+row's IDENTITY, the input to the substrate's one sibling rule (`SiblingNames`), not its final Name:
+where two rows' copies read alike (two notes called same.md; two ghosts whose labels read alike),
+the rule adds the row's distinguisher (`GraphDocumentViewModel.RowDistinguisher`: a note's path, a
+ghost's label), then its place, with the rows keyed and ordered by the node's `StableKey`. The
+realized row's UIA Name is that composed name, and `rowAudioDescription` is the SAME composed name
+(`AccessibleDataGrid.ComposedRowName`), so the row's Name and its `GridRowMoved` description stay one
+text; where no sibling reads alike, both are the P1 copy byte-for-byte, as above.
+
 **A-7 — Selection writes the shared key, revalidated against the
 authority; the summary region is `audio_summary` verbatim.** The
 grid's current row writes `GraphViewState.SelectedKey` (the row's
@@ -3476,6 +3486,16 @@ currency; a key gone from the snapshot clears `SelectedKey`; a
 background publication writes nothing to the key and moves focus
 nowhere (the summary region keeps focus when it had it); the summary
 region text equals the record's summary.
+
+**Amended by OD-9** (`40_nvda_matrix_remediation_contracts.md`, owner decision OD-9; W7-7 PR 3, #1246,
+R-4, codex PR 3 rounds 8-9) — authoritative where the paragraphs above differ. `Bind` restores the
+reader's position by the row's stable key — the caller's `rowKey`, the node's `StableKey` here —
+captured with the outgoing binding's key delegate and matched against the incoming one, the old
+ordinal breaking only a repeated key's tie; never by row-header text, which a ghost's relabel changes
+and two notes of one name share. The restore still raises `CurrentRowChanged` under the syncing
+guard and writes nothing. The grid's current row still writes `SelectedKey`, as the grid's OWN move:
+that write does not re-seat the grid, whose silent select would mark the row announced before its
+row move spoke (every arrow posted a cell move).
 
 **A-8 — Row actions are core's vectors, fetched once, unioned in
 core's order; each action is a shell seam; the create is the
