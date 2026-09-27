@@ -51,6 +51,7 @@ public sealed partial class GraphTableTests
                 host.GraphLines.Count == 0,
                 $"the arrow posted authored line(s): {string.Join(" | ", host.GraphLines)}");
             Assert.Same(to, Keyboard.FocusedElement);
+            Assert.True(document.FocusRequest is null, "the arrow raised M4's landing request for the projection");
         });
     }
 }

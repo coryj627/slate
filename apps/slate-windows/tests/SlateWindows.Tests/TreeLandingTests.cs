@@ -2,6 +2,7 @@
 // SPDX-License-Identifier: AGPL-3.0-or-later
 
 using System.Windows;
+using System.Windows.Automation.Peers;
 using System.Windows.Controls;
 using System.Windows.Input;
 
@@ -79,6 +80,24 @@ public sealed class TreeLandingTests
 
         Assert.Same(first, Keyboard.FocusedElement);
         Assert.False(first.IsSelected, "the hand-on selected the first row.");
+        host.AssertNeverFocused(tree);
+    });
+
+    /// <summary>UI Automation's SetFocus on a bare landing tree succeeds and
+    /// lands on its first row, unselected: WPF's own peer threw whenever the
+    /// tree's Focus() answered false, which a landing tree's always does
+    /// while it has rows.</summary>
+    [Fact]
+    public void UiAutomationSetFocusOnALandingTreeLandsOnARow() => RunSta(() =>
+    {
+        (TreeView tree, TreeViewItem first, _) = LandingTree();
+        using Hosted host = Host(tree);
+        Assert.True(host.Above.Focus());
+
+        UIElementAutomationPeer.CreatePeerForElement(tree).SetFocus();
+
+        Assert.Same(first, Keyboard.FocusedElement);
+        Assert.False(first.IsSelected);
         host.AssertNeverFocused(tree);
     });
 
