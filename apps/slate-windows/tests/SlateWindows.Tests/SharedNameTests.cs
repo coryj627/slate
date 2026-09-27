@@ -184,6 +184,115 @@ public sealed class SharedNameTests
         Assert.Same(first, Assert.Single(sidebar.Shortcuts));
     });
 
+    /// <summary>Codex PR 3 round 7, OD-9: a slot is an occurrence in the
+    /// store and through every path rewrite too. The store merged two slots
+    /// that target one note, and so did a rename's rewrite — the second slot
+    /// vanished and every later Ctrl+number binding shifted down one. Every
+    /// slot survives a restart, a rename and a move, in order, and the
+    /// selection stays on its own slot.</summary>
+    [Fact]
+    public void TwoShortcutSlotsOnOneNoteSurviveARestartARenameAndAMove()
+    {
+        using FixtureVault fixture = FixtureVault.Create(0, "shortcut-slots-persist");
+        File.WriteAllText(Path.Combine(fixture.Root, "b.md"), "plain body\n");
+        File.WriteAllText(Path.Combine(fixture.Root, "other.md"), "plain body\n");
+        Directory.CreateDirectory(Path.Combine(fixture.Root, "sub"));
+        using VaultSession session = VaultSession.OpenFilesystem(fixture.Root);
+        using (var cancel = new CancelToken())
+        {
+            session.ScanInitial(cancel);
+        }
+        FilesSidebarViewModel sidebar = PlainSidebar(session, fixture.Root);
+        sidebar.SelectedNode = sidebar.RootNodes.Single(node => node.Path == "b.md");
+        sidebar.AssignShortcut(1);
+        sidebar.AssignShortcut(2);
+        sidebar.SelectedNode = sidebar.RootNodes.Single(node => node.Path == "other.md");
+        sidebar.AssignShortcut(3);
+        Assert.Equal(["b.md", "b.md", "other.md"], ShortcutPaths(sidebar));
+
+        // Every slot in the store, in order, and back after a restart —
+        // slot 3 still opens other.md.
+        Assert.Equal(
+            ["b.md", "b.md", "other.md"],
+            new SidebarSettingsStore(fixture.Root).Load().Shortcuts.Select(item => item.Path));
+        var opened = new List<string>();
+        FilesSidebarViewModel restarted = PlainSidebar(session, fixture.Root);
+        restarted.OpenTargetRequested += (_, request) => opened.Add(request.Path);
+        Assert.Equal(["b.md", "b.md", "other.md"], ShortcutPaths(restarted));
+        restarted.OpenShortcut(3);
+        Assert.Equal("other.md", Assert.Single(opened));
+
+        // A rename carries both slots, and the selection stays on slot 2.
+        sidebar.SelectedNode = sidebar.RootNodes.Single(node => node.Path == "b.md");
+        sidebar.SelectedShortcut = sidebar.Shortcuts[1];
+        sidebar.MutationName = "c.md";
+        Assert.True(sidebar.TryRenameSelected());
+        Assert.Equal(["c.md", "c.md", "other.md"], ShortcutPaths(sidebar));
+        Assert.Same(sidebar.Shortcuts[1], sidebar.SelectedShortcut);
+        Assert.Equal(["c.md", "c.md", "other.md"], ShortcutPaths(PlainSidebar(session, fixture.Root)));
+
+        // ...and so does a move.
+        sidebar.RootNodes.Single(node => node.Path == "c.md").IsBatchSelected = true;
+        sidebar.MoveDestination = "sub";
+        sidebar.BatchMoveCommand.Execute(null);
+        Assert.True(File.Exists(Path.Combine(fixture.Root, "sub", "c.md")));
+        Assert.Equal(["sub/c.md", "sub/c.md", "other.md"], ShortcutPaths(sidebar));
+        Assert.Same(sidebar.Shortcuts[1], sidebar.SelectedShortcut);
+        Assert.Equal(
+            ["sub/c.md", "sub/c.md", "other.md"],
+            ShortcutPaths(PlainSidebar(session, fixture.Root)));
+    }
+
+    /// <summary>...and a settings retry that adopts the file puts the
+    /// selection back on its own slot, not the first slot that targets the
+    /// same note (codex PR 3 round 7, OD-9).</summary>
+    [Fact]
+    public void ARetriedSettingsFileKeepsTheSelectionOnItsOwnSlot()
+    {
+        using FixtureVault fixture = FixtureVault.Create(0, "shortcut-slots-retry");
+        File.WriteAllText(Path.Combine(fixture.Root, "b.md"), "plain body\n");
+        File.WriteAllText(Path.Combine(fixture.Root, "other.md"), "plain body\n");
+        string settings = Path.Combine(fixture.Root, ".slate", "sidebar.json");
+        const string slots = """
+            {
+              "version": 1,
+              "shortcuts": [
+                { "kind": "file", "path": "b.md" },
+                { "kind": "file", "path": "b.md" },
+                { "kind": "file", "path": "other.md" }
+              ]
+            }
+            """;
+        Directory.CreateDirectory(Path.GetDirectoryName(settings)!);
+        File.WriteAllText(settings, slots);
+        using VaultSession session = VaultSession.OpenFilesystem(fixture.Root);
+        using (var cancel = new CancelToken())
+        {
+            session.ScanInitial(cancel);
+        }
+        FilesSidebarViewModel sidebar = PlainSidebar(session, fixture.Root);
+        Assert.Equal(["b.md", "b.md", "other.md"], ShortcutPaths(sidebar));
+        sidebar.SelectedShortcut = sidebar.Shortcuts[1];
+
+        // The file goes bad under the sidebar, a write finds it blocked, and
+        // the repaired file is adopted wholesale.
+        File.WriteAllText(settings, "{\"version\":1,\"sort\":\"bogus\"}");
+        sidebar.SelectedNode = sidebar.RootNodes.Single(node => node.Path == "other.md");
+        sidebar.PinCommand.Execute(null);
+        Assert.True(sidebar.RetrySettingsCommand.CanExecute(null));
+        File.WriteAllText(settings, slots);
+        sidebar.RetrySettingsCommand.Execute(null);
+
+        Assert.Equal(["b.md", "b.md", "other.md"], ShortcutPaths(sidebar));
+        Assert.Same(sidebar.Shortcuts[1], sidebar.SelectedShortcut);
+    }
+
+    private static FilesSidebarViewModel PlainSidebar(VaultSession session, string root) =>
+        new(session, _ => { }, vaultRoot: root, localAppDataRoot: Path.Combine(root, "device-state"));
+
+    private static string[] ShortcutPaths(FilesSidebarViewModel sidebar) =>
+        [.. sidebar.Shortcuts.Select(item => item.Path)];
+
     /// <summary>Filters <paramref name="sidebar"/> once its first tree load
     /// has landed. That load (the constructor's Refresh) yields to the
     /// thread pool, and with these facts' inline contexts it publishes there

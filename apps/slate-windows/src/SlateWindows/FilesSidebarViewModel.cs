@@ -2243,17 +2243,24 @@ internal sealed partial class FilesSidebarViewModel : BindableBase
         OnPropertyChanged(nameof(GroupByDate));
         _pinned.Clear();
         _pinned.UnionWith(settings.Pins);
+        // The selection stays on its own occurrence (codex PR 3 round 7,
+        // OD-9): the slot at its place when that slot still targets the same
+        // note, else the first slot that does.
         SidebarShortcutViewModel? selected = SelectedShortcut;
+        int selectedIndex = selected is null ? -1 : Shortcuts.IndexOf(selected);
         Shortcuts.Clear();
         foreach (SidebarShortcutState shortcut in settings.Shortcuts)
         {
             Shortcuts.Add(new SidebarShortcutViewModel(shortcut.Kind, shortcut.Path));
         }
 
+        bool Same(SidebarShortcutViewModel item) =>
+            selected is not null && item.Kind == selected.Kind && item.Path == selected.Path;
         SelectedShortcut = selected is null
             ? null
-            : Shortcuts.FirstOrDefault(item =>
-                item.Kind == selected.Kind && item.Path == selected.Path);
+            : selectedIndex >= 0 && selectedIndex < Shortcuts.Count && Same(Shortcuts[selectedIndex])
+                ? Shortcuts[selectedIndex]
+                : Shortcuts.FirstOrDefault(Same);
     }
 
     /// <summary>A write that found the file blocked under its lock
@@ -2396,25 +2403,34 @@ internal sealed partial class FilesSidebarViewModel : BindableBase
         _pinned.Clear();
         _pinned.UnionWith(transformedPins);
 
+        // W7-7 PR 3 (#1246, R-4; codex PR 3 round 7, OD-9): every slot keeps
+        // its place and follows its note — two slots that target one note
+        // stay two (a shortcut is an occurrence, never merged by value), so
+        // no later Ctrl+number binding shifts; the selection stays on its
+        // own occurrence.
         SidebarShortcutViewModel? selected = SelectedShortcut;
-        // Two shortcuts a move folds onto one path become one, as the store
-        // keeps them (a shortcut has no value equality of its own).
-        SidebarShortcutViewModel[] transformedShortcuts = Shortcuts
-            .Select(item => (Item: item, Path: Transform(item.Path)))
-            .Where(pair => pair.Path is not null)
-            .Select(pair => new SidebarShortcutViewModel(pair.Item.Kind, pair.Path!))
-            .DistinctBy(item => (item.Kind, item.Path))
-            .ToArray();
+        var transformedShortcuts = new List<SidebarShortcutViewModel>(Shortcuts.Count);
+        SidebarShortcutViewModel? reselected = null;
+        foreach (SidebarShortcutViewModel item in Shortcuts)
+        {
+            if (Transform(item.Path) is not string transformedPath)
+            {
+                continue;
+            }
+            var transformed = new SidebarShortcutViewModel(item.Kind, transformedPath);
+            transformedShortcuts.Add(transformed);
+            if (ReferenceEquals(item, selected))
+            {
+                reselected = transformed;
+            }
+        }
         Shortcuts.Clear();
         foreach (SidebarShortcutViewModel shortcut in transformedShortcuts)
         {
             Shortcuts.Add(shortcut);
         }
 
-        SelectedShortcut = selected is null
-            ? null
-            : Shortcuts.FirstOrDefault(item =>
-                item.Kind == selected.Kind && item.Path == Transform(selected.Path));
+        SelectedShortcut = reselected;
 
         string[] transformedRecents = _recents
             .Select(Transform)
