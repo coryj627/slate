@@ -1979,6 +1979,9 @@ public sealed class ReadingFocusTests
         host.Initialize(readingMode: false, documentKind: "canvas", board: CardBoard);
         CanvasDocumentViewModel board = host.Tab.Canvas!;
         board.ShowSurface(CanvasSurfaceKind.Visual);
+        // The reader last activated a card that is NOT the scene's first
+        // (codex PR 8 round 8): a zero-match landing still seats the first.
+        board.LastActivatedNode = "beta";
         string needle = FilterTheBoardToNothing(host);
         host.Settle();
         RingHost ring = host.UseRing();

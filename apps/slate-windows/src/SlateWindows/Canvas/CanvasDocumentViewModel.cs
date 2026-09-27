@@ -675,13 +675,15 @@ internal sealed class CanvasDocumentViewModel : PanelWorkScheduler
 
     /// <summary>
     /// W7-7 R-10 over locked contract 34 D4/D15 — THE seam for the card a
-    /// landing on the VISUAL board seats: the card the request names, else
-    /// the one whose activation the reader is returning from, else the first
-    /// card of the FULL scene in the document's reading order. Never the
-    /// filtered outline: a Visual filter dims cards and narrows nothing, so
-    /// a needle matching no card still leaves every card to land on. The
-    /// board's own full-scene reading order (#1270) replaces the last arm
-    /// here.
+    /// landing on the VISUAL board seats: the card the request names; else,
+    /// under a needle matching NO card, the first card of the FULL scene
+    /// (the W7-6 editor row: the board lands with that card seated —
+    /// codex PR 8 round 8, OD-12); else the one whose activation the reader
+    /// is returning from; else the first card of the full scene in the
+    /// document's reading order. Never the filtered outline: a Visual filter
+    /// dims cards and narrows nothing, so a needle matching no card still
+    /// leaves every card to land on. The board's own full-scene reading
+    /// order (#1270) replaces the full-scene arms here.
     /// </summary>
     internal string? BoardLandingNodeFor(CanvasFocusRequest request)
     {
@@ -690,11 +692,16 @@ internal sealed class CanvasDocumentViewModel : PanelWorkScheduler
         {
             return named;
         }
+        string? firstOfTheScene = _outline.Count > 0 ? _outline[0].NodeId : null;
+        if (FilterActive && FilteredOutline.Count == 0)
+        {
+            return firstOfTheScene;
+        }
         if (LastActivatedNode is { } last && _rows.ContainsKey(last))
         {
             return last;
         }
-        return _outline.Count > 0 ? _outline[0].NodeId : null;
+        return firstOfTheScene;
     }
 
     /// <summary>The row a landing on the OUTLINE or the TABLE seats — only a
