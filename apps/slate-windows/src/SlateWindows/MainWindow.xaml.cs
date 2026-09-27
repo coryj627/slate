@@ -865,8 +865,15 @@ public partial class MainWindow : Window
             //
             // #1275 (codex round 5 audit): a sealed palette does not open
             // (contract 28 T1″), so clearing the way first would dismiss
-            // Quick Open or Search for an open that is then refused.
-            if (!_viewModel.Palette.IsSealed && TryClearTheWayForThePalette())
+            // Quick Open or Search for an open that is then refused. The
+            // chord is taken and nothing moves.
+            if (_viewModel.Palette.IsSealed)
+            {
+                e.Handled = true;
+                return;
+            }
+
+            if (TryClearTheWayForThePalette())
             {
                 _viewModel.Palette.Open();
             }
