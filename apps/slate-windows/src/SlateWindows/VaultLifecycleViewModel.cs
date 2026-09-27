@@ -396,7 +396,7 @@ internal sealed class VaultLifecycleViewModel
             return;
         }
 
-        if (!TryCloseWorkspace())
+        if (!TryCloseWorkspace(out _))
         {
             return;
         }
@@ -518,8 +518,11 @@ internal sealed class VaultLifecycleViewModel
             return;
         }
 
-        bool hadDirtyTabs = Workspace?.HasDirtyTabs == true;
-        if (!TryCloseWorkspace())
+        // #1280: the teardown speaks for a close that had to decide about
+        // unsaved edits (all saved, or discarded); every other close says
+        // "vault closed" — including one whose last edits were saved by a
+        // Ctrl+S the teardown settled first.
+        if (!TryCloseWorkspace(out bool closeAnnounced))
         {
             return;
         }
@@ -542,7 +545,7 @@ internal sealed class VaultLifecycleViewModel
         ProgressMaximum = 1;
         IsProgressIndeterminate = false;
         StatusText = "Vault closed.";
-        if (!hadDirtyTabs)
+        if (!closeAnnounced)
         {
             _announce(new A11yEvent.VaultClosed());
         }
@@ -557,7 +560,7 @@ internal sealed class VaultLifecycleViewModel
             return false;
         }
 
-        return TryCloseWorkspace();
+        return TryCloseWorkspace(out _);
     }
 
     public void Dispose()
@@ -1194,8 +1197,9 @@ internal sealed class VaultLifecycleViewModel
     /// production event does.</summary>
     internal VaultSession? SessionForTests => _session;
 
-    private bool TryCloseWorkspace()
+    private bool TryCloseWorkspace(out bool closeAnnounced)
     {
+        closeAnnounced = false;
         if (_workspaceTeardownInProgress)
         {
             return false;
@@ -1203,7 +1207,7 @@ internal sealed class VaultLifecycleViewModel
         _workspaceTeardownInProgress = true;
         try
         {
-            return TryCloseWorkspaceCore();
+            return TryCloseWorkspaceCore(out closeAnnounced);
         }
         finally
         {
@@ -1224,8 +1228,9 @@ internal sealed class VaultLifecycleViewModel
     /// after the user chose Discard; the session is disposed only after
     /// <see cref="WorkspaceViewModel.Dispose"/> has joined every save worker.
     /// </summary>
-    private bool TryCloseWorkspaceCore()
+    private bool TryCloseWorkspaceCore(out bool closeAnnounced)
     {
+        closeAnnounced = false;
         if (FileSidebar?.CancelTreeRefresh() == true)
         {
             ReportTerminalStatus(
@@ -1280,6 +1285,7 @@ internal sealed class VaultLifecycleViewModel
                 if (savedAll)
                 {
                     _announce(new A11yEvent.VaultClosedAllSaved());
+                    closeAnnounced = true;
                 }
                 return true;
             }
@@ -1317,6 +1323,7 @@ internal sealed class VaultLifecycleViewModel
             }
 
             _announce(new A11yEvent.VaultClosedChangesDiscarded());
+            closeAnnounced = true;
             return true;
         }
 
