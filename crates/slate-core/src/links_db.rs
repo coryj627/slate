@@ -227,6 +227,16 @@ pub(crate) fn graph_inbound_rows(
 /// changed, so the graph hook can replay each affected linkset
 /// (Milestone P #550). Empty when nothing resolved.
 pub(crate) fn re_resolve_unresolved_links(tx: &Transaction) -> Result<Vec<String>, VaultError> {
+    re_resolve_unresolved_links_under(tx, &crate::CancelToken::new())
+}
+
+/// [`re_resolve_unresolved_links`] under a scan's token (W7-7 PR 7, codex
+/// PR 7 round 3 finding 2): polled before each row, so a cancelled scan's
+/// tail stops here with `Cancelled`.
+pub(crate) fn re_resolve_unresolved_links_under(
+    tx: &Transaction,
+    cancel: &crate::CancelToken,
+) -> Result<Vec<String>, VaultError> {
     let paths: Vec<String> = tx
         .prepare("SELECT path FROM files")?
         .query_map([], |row| row.get::<_, String>(0))?
@@ -257,6 +267,8 @@ pub(crate) fn re_resolve_unresolved_links(tx: &Transaction) -> Result<Vec<String
     let mut affected: Vec<String> = Vec::new();
     let mut update = tx.prepare("UPDATE links SET target_path = ?1 WHERE rowid = ?2")?;
     for (rowid, source_path, target_raw, anchor_str) in rows {
+        crate::session::scan_point("re-resolve row");
+        cancel.check()?;
         let anchor = deserialize_anchor(anchor_str.as_deref());
         let resolved = resolve_link(&target_raw, anchor, &source_path, &index);
         if let ResolvedLink::Resolved { target_path, .. } = resolved {

@@ -912,3 +912,201 @@ fn a_cancelled_base_open_registers_no_handle() {
     let handle = session.open_base("Notes.base").unwrap();
     assert!(session.bases.lock().unwrap().contains_key(&handle));
 }
+
+// --- the scan's tail honours the token (codex PR 7 round 3, finding 2) -----------
+
+#[derive(Default)]
+struct ProgressLog(Mutex<Vec<String>>);
+
+impl ScanProgressListener for ProgressLog {
+    fn on_progress(&self, event: ScanProgress) {
+        let tag = match event {
+            ScanProgress::Started { .. } => "started",
+            ScanProgress::FileIndexed { .. } => "file",
+            ScanProgress::Finished { .. } => "finished",
+            ScanProgress::Cancelled => "cancelled",
+            ScanProgress::Failed { .. } => "failed",
+        };
+        self.0.lock().unwrap().push(tag.to_string());
+    }
+}
+
+/// A vault whose rescan has work at every tail point: a new note (`c.md`)
+/// that resolves `a.md`'s link, a removed note (`b.md`) and a removed
+/// folder (`dir1`) for both prunes, and a board for the canvas pass.
+fn tail_vault() -> (tempfile::TempDir, VaultSession) {
+    let (tmp, session) = make_vault(|p| {
+        p.write_file("a.md", b"[[c]]\n").unwrap();
+        p.write_file("b.md", b"# B\n").unwrap();
+        p.create_dir("dir1").unwrap();
+        p.write_file("dir1/x.md", b"# X\n").unwrap();
+        p.write_file(
+            "board.canvas",
+            br#"{"nodes":[{"id":"n1","type":"file","file":"a.md","x":0,"y":0,"width":10,"height":10}],"edges":[]}"#,
+        )
+        .unwrap();
+    });
+    session.scan_initial(&CancelToken::new()).unwrap();
+    std::fs::write(tmp.path().join("c.md"), b"# C\n").unwrap();
+    std::fs::remove_file(tmp.path().join("b.md")).unwrap();
+    std::fs::remove_dir_all(tmp.path().join("dir1")).unwrap();
+    (tmp, session)
+}
+
+fn a_links_to_c(session: &VaultSession) -> bool {
+    let conn = session.conn.lock().unwrap();
+    conn.query_row(
+        "SELECT links.target_path FROM links JOIN files ON files.id = links.source_file_id
+         WHERE files.path = 'a.md'",
+        [],
+        |row| row.get::<_, Option<String>>(0),
+    )
+    .unwrap()
+    .as_deref()
+        == Some("c.md")
+}
+
+/// A rescan cancelled at the `nth` firing of a named point.
+struct CancelledAt {
+    result: Result<ScanReport, VaultError>,
+    /// The progress stream's events.
+    events: Vec<String>,
+    /// Whether the point fired `nth` times.
+    fired: bool,
+    /// Every named point that fired AFTER the cancelling one — a scan that
+    /// stops at its point fires none.
+    after: Vec<String>,
+}
+
+/// Cancel the rescan's token at the `nth` firing of `point`.
+fn rescan_cancelled_at(session: &VaultSession, point: &'static str, nth: usize) -> CancelledAt {
+    let cancel = CancelToken::new();
+    let trip = cancel.clone();
+    let seen = Arc::new(Mutex::new((0usize, Vec::<String>::new())));
+    let record = seen.clone();
+    crate::session::scan_point_test_hook::install(Box::new(move |at| {
+        let mut state = record.lock().unwrap();
+        if trip.is_cancelled() {
+            state.1.push(at.to_string());
+        } else if at == point {
+            state.0 += 1;
+            if state.0 == nth {
+                trip.cancel();
+            }
+        }
+    }));
+    let log = Arc::new(ProgressLog::default());
+    let listener: Arc<dyn ScanProgressListener> = log.clone();
+    let result = session.rescan_with_progress(&cancel, Some(listener));
+    crate::session::scan_point_test_hook::clear();
+    let events = log.0.lock().unwrap().clone();
+    let (count, after) = seen.lock().unwrap().clone();
+    CancelledAt {
+        result,
+        events,
+        fired: count >= nth,
+        after,
+    }
+}
+
+/// Finding 2: a cancel that lands after the walk's last file, or at any
+/// point of the tail — the file_meta flush, either prune (and inside the
+/// file prune), link re-resolution (and inside it), the canvas pass (and
+/// inside it), the commit — ends the scan THERE: no later point runs, the
+/// stream's terminal event is `Cancelled`, and nothing the scan did is
+/// committed.
+#[test]
+fn a_cancel_anywhere_in_the_scans_tail_rolls_the_scan_back() {
+    // a.md, c.md, board.canvas: the last file indexed is the third.
+    let points: [(&'static str, usize); 10] = [
+        ("file", 3),
+        ("meta flush", 1),
+        ("prune dirs", 1),
+        ("prune files", 1),
+        ("prune file", 1),
+        ("re-resolve", 1),
+        ("re-resolve row", 1),
+        ("canvas", 1),
+        ("canvas file", 1),
+        ("commit", 1),
+    ];
+    for (point, nth) in points {
+        let (_tmp, session) = tail_vault();
+
+        let CancelledAt {
+            result,
+            events,
+            fired,
+            after,
+        } = rescan_cancelled_at(&session, point, nth);
+
+        assert!(fired, "{point}: the point never fired");
+        assert!(
+            matches!(result, Err(VaultError::Cancelled)),
+            "{point}: {result:?}"
+        );
+        assert!(
+            after.is_empty(),
+            "{point}: the scan ran on past its cancel: {after:?}"
+        );
+        assert_eq!(
+            events.last().map(String::as_str),
+            Some("cancelled"),
+            "{point}: {events:?}"
+        );
+        assert!(
+            indexed_hash(&session, "c.md").is_none(),
+            "{point}: c.md was committed"
+        );
+        assert!(
+            indexed_hash(&session, "b.md").is_some(),
+            "{point}: b.md was pruned"
+        );
+        assert!(
+            dir_rows(&session).contains(&"dir1".to_string()),
+            "{point}: dir1 was pruned"
+        );
+        assert!(
+            !a_links_to_c(&session),
+            "{point}: the re-resolution was committed"
+        );
+
+        // The next clean rescan commits all of it.
+        let report = rescan(&session);
+        assert!(report.complete, "{point}");
+        assert!(indexed_hash(&session, "c.md").is_some(), "{point}");
+        assert!(indexed_hash(&session, "b.md").is_none(), "{point}");
+        assert!(!dir_rows(&session).contains(&"dir1".to_string()), "{point}");
+        assert!(a_links_to_c(&session), "{point}");
+    }
+}
+
+/// Finding 2: a cancel that lands after the commit keeps the committed
+/// scan (`Ok`, `Finished`) and skips the best-effort maintenance that
+/// follows — the op-log reconcile, the events rebuild, the age-out and the
+/// compaction sweep each rerun on the next scan — so a closing host is not
+/// held behind it.
+#[test]
+fn a_cancel_after_the_commit_keeps_the_scan_and_skips_its_maintenance() {
+    let (_tmp, session) = tail_vault();
+    let recorder = Arc::new(ChangeRecorder::default());
+    session.register_event_listener(recorder.clone());
+
+    let CancelledAt {
+        result,
+        events,
+        fired,
+        ..
+    } = rescan_cancelled_at(&session, "maintenance", 1);
+
+    assert!(fired);
+    assert!(result.is_ok(), "{result:?}");
+    assert_eq!(events.last().map(String::as_str), Some("finished"));
+    assert!(indexed_hash(&session, "c.md").is_some());
+    let phases = recorder.phases.lock().unwrap().clone();
+    assert!(
+        !phases.contains(&IndexPhase::ReconcileStarted),
+        "{phases:?}"
+    );
+    assert!(phases.contains(&IndexPhase::ScanFinished), "{phases:?}");
+}

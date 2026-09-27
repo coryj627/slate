@@ -3057,6 +3057,17 @@ impl VaultSession {
         }
         self.graph_apply(graph_sink);
         self.bump_bases_generation();
+        // W7-7 PR 7 (codex PR 7 round 3, finding 2): the scan is committed;
+        // a cancel that lands now skips the best-effort maintenance below —
+        // the op-log reconcile, the events rebuild (its staleness marker is
+        // durable), the age-out and the compaction sweep each rerun on the
+        // next scan — so a closing host is not held behind it.
+        scan_point("maintenance");
+        if cancel.is_cancelled() {
+            drop(conn);
+            self.notify_index_phase(IndexPhase::ScanFinished, report.files_seen);
+            return Ok(report);
+        }
         // Re-attach op logs to live files and surface deleted-file
         // remnants (O-1 #539). Best-effort: a reconcile failure
         // degrades history features, never the scan itself.
@@ -9561,6 +9572,47 @@ fn snapshot_summary_counts(
 
 // --- Internal: scan ---
 
+/// Test seam (W7-7 PR 7, codex PR 7 round 3 finding 2): the scan's named
+/// points — after each indexed file, before each post-walk phase, inside
+/// the prune, re-resolve and canvas loops, and after the commit — where a
+/// fact cancels the scan's token. Thread-local: the scan runs on the
+/// calling thread.
+#[cfg(test)]
+pub(crate) mod scan_point_test_hook {
+    use std::cell::RefCell;
+
+    type PointHook = Box<dyn Fn(&str)>;
+
+    thread_local! {
+        static HOOK: RefCell<Option<PointHook>> = const { RefCell::new(None) };
+    }
+
+    pub(crate) fn install(hook: PointHook) {
+        HOOK.with(|slot| *slot.borrow_mut() = Some(hook));
+    }
+
+    pub(crate) fn clear() {
+        HOOK.with(|slot| *slot.borrow_mut() = None);
+    }
+
+    pub(crate) fn fire(point: &str) {
+        HOOK.with(|slot| {
+            if let Some(hook) = slot.borrow().as_ref() {
+                hook(point);
+            }
+        });
+    }
+}
+
+/// A named point of the scan (the test seam; a no-op in production).
+#[inline]
+pub(crate) fn scan_point(point: &str) {
+    #[cfg(test)]
+    scan_point_test_hook::fire(point);
+    #[cfg(not(test))]
+    let _ = point;
+}
+
 /// W7-7 PR 7 (codex PR 7 round 3, finding 7): the largest page one
 /// [`VaultSession::list_files`] call returns — the directory pages' bound
 /// (locked decision 05 §4 principle 4, §9.3.1). A limit of 0 or above it is
@@ -9604,6 +9656,30 @@ fn scan_vault(
                 l.on_progress(ScanProgress::Cancelled);
             }
             return Err(VaultError::Cancelled);
+        }};
+    }
+
+    /// A cancellation point after `Started` (W7-7 PR 7, codex PR 7
+    /// round 3 finding 2): the named point for the test seam, then the
+    /// token — a cancel anywhere in the walk or its tail rolls the whole
+    /// scan back (the transaction drops uncommitted) and ends the stream
+    /// with `Cancelled` (locked decision 05 §4 principle 3).
+    macro_rules! cancel_point {
+        ($point:expr) => {{
+            scan_point($point);
+            if cancel.is_cancelled() {
+                bail_cancelled_after_started!();
+            }
+        }};
+    }
+
+    /// A tail phase's own outcome: its cancellation ends the scan like any
+    /// other cancellation point; any other failure is the caller's.
+    macro_rules! cancelled_in_phase {
+        ($result:expr) => {{
+            if matches!($result, Err(VaultError::Cancelled)) {
+                bail_cancelled_after_started!();
+            }
         }};
     }
 
@@ -9753,6 +9829,7 @@ fn scan_vault(
                             total: total_files,
                         });
                     }
+                    cancel_point!("file");
                 }
                 EntryKind::Symlink => {
                     // Symlinks are skipped entirely. Following them risks
@@ -9770,6 +9847,7 @@ fn scan_vault(
     // Flush the tail before any post-walk reconciliation and before commit.
     // Full 200-row chunks flush at the locked after-properties seam while the
     // walk runs; this catches the final partial chunk.
+    cancel_point!("meta flush");
     let file_meta_failures = file_meta_batch.flush(&tx);
     record_file_meta_failures(file_meta_failures, &mut report, graph_sink);
 
@@ -9794,6 +9872,7 @@ fn scan_vault(
     // (W7-7 PR 7, R-9): an unlistable directory hides its subtree, and
     // pruning on that partial view made live nested folders vanish from
     // the refreshed tree.
+    cancel_point!("prune dirs");
     if prunable && let Err(e) = prune_unseen_dirs(&tx, &seen_dirs) {
         report.record_error(format!("prune stale dirs: {e}"));
     }
@@ -9808,11 +9887,20 @@ fn scan_vault(
     // (`ON DELETE CASCADE`), FTS is maintained by the migration-006
     // DELETE trigger. Skipped on a partial scan (`prunable`): a partial
     // view must not evict live rows.
-    if prunable
-        && let Err(e) = prune_unseen_files(&tx, &seen_files, graph_sink, &mut report.files_removed)
-    {
-        graph_sink.poison();
-        report.record_error(format!("prune stale files: {e}"));
+    cancel_point!("prune files");
+    if prunable {
+        let pruned = prune_unseen_files(
+            &tx,
+            &seen_files,
+            graph_sink,
+            &mut report.files_removed,
+            cancel,
+        );
+        cancelled_in_phase!(pruned);
+        if let Err(e) = pruned {
+            graph_sink.poison();
+            report.record_error(format!("prune stale files: {e}"));
+        }
     }
 
     // Re-resolve links that were Unresolved purely because their
@@ -9821,7 +9909,10 @@ fn scan_vault(
     // happen inside the same transaction so they commit atomically
     // with the rest of the scan; a cancel beforehand short-circuits
     // through `bail_cancelled_after_started!` and skips this step.
-    match crate::links_db::re_resolve_unresolved_links(&tx) {
+    cancel_point!("re-resolve");
+    let re_resolved = crate::links_db::re_resolve_unresolved_links_under(&tx, cancel);
+    cancelled_in_phase!(re_resolved);
+    match re_resolved {
         Ok(resolved_sources) => {
             if graph_sink.live() {
                 for source in &resolved_sources {
@@ -9858,7 +9949,10 @@ fn scan_vault(
     // .canvas bytes didn't change. Vaults hold few canvases and one
     // derivation is milliseconds at the 2,000-node budget, so this
     // stays O(canvases), not O(vault).
-    if let Err(e) = reindex_all_canvases(&tx, provider, large_file_refuse_bytes) {
+    cancel_point!("canvas");
+    let canvases = reindex_all_canvases(&tx, provider, large_file_refuse_bytes, cancel);
+    cancelled_in_phase!(canvases);
+    if let Err(e) = canvases {
         report.record_error(format!("canvas index: {e}"));
     }
 
@@ -9867,6 +9961,7 @@ fn scan_vault(
     // a change, so a partial scan can never be spoken as "No changes".
     report.complete = walk_complete && report.error_count == 0;
 
+    cancel_point!("commit");
     // Commit can still fail (disk full, file corruption). If it
     // does, the listener has already seen `Started` and N
     // `FileIndexed`s — fire `Failed` before propagating the error
@@ -9972,6 +10067,7 @@ fn prune_unseen_files(
     seen_files: &std::collections::HashSet<String>,
     graph_sink: &mut crate::graph::GraphOpSink,
     removed: &mut u64,
+    cancel: &CancelToken,
 ) -> Result<(), VaultError> {
     // ORDER BY path: deterministic prune (and graph-replay) order —
     // the plain files scan iterates in rowid order, which depends on
@@ -9991,6 +10087,8 @@ fn prune_unseen_files(
         stale
     };
     for (id, path) in stale {
+        scan_point("prune file");
+        cancel.check()?;
         // Inbound snapshot BEFORE the delete: the FK cascade emits no
         // per-row signal, and rows pointing at this path stay
         // resolved-but-dangling (#550, p0_spec rule 1a).
@@ -20334,6 +20432,7 @@ fn reindex_all_canvases(
     tx: &rusqlite::Transaction,
     provider: &dyn VaultProvider,
     large_file_refuse_bytes: u64,
+    cancel: &CancelToken,
 ) -> Result<(), VaultError> {
     let canvases: Vec<(i64, String, i64)> = {
         let mut stmt = tx.prepare(
@@ -20349,6 +20448,8 @@ fn reindex_all_canvases(
         rows.collect::<Result<Vec<_>, _>>()?
     };
     for (file_id, path, size_bytes) in canvases {
+        scan_point("canvas file");
+        cancel.check()?;
         if size_bytes as u64 > large_file_refuse_bytes {
             purge_canvas_rows(tx, file_id)?;
             continue;
