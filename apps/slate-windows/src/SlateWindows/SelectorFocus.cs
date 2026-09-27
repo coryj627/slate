@@ -87,15 +87,25 @@ internal static class SelectorFocus
     /// TreeView all leave the keys where they were), so a pointer user who
     /// clicked into a list was not in it. The landing is the container's —
     /// its own, else its current or first row — and selects nothing. A click
-    /// on a row, or on the scroll bar, is left to the row and the bar.
+    /// on a row, or on the scroll bar, is left to the row and the bar. The
+    /// window registers the rule as it is built; the class handlers are
+    /// process-wide, registered once.
     /// </summary>
-    static SelectorFocus()
+    internal static void RegisterClickRule()
     {
+        if (_clickRuleRegistered)
+        {
+            return;
+        }
+
+        _clickRuleRegistered = true;
         EventManager.RegisterClassHandler(
             typeof(ListBox), Mouse.MouseDownEvent, new MouseButtonEventHandler(ClickedEmptyArea), handledEventsToo: true);
         EventManager.RegisterClassHandler(
             typeof(TreeView), Mouse.MouseDownEvent, new MouseButtonEventHandler(ClickedEmptyArea), handledEventsToo: true);
     }
+
+    private static bool _clickRuleRegistered;
 
     private static void ClickedEmptyArea(object sender, MouseButtonEventArgs e)
     {

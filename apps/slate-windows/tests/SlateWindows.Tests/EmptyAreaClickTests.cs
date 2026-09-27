@@ -92,6 +92,9 @@ public sealed class EmptyAreaClickTests
 
     private static Hosted Host(Control control)
     {
+        // The window registers the rule as it is built; a list hosted
+        // alone registers it the same way.
+        SelectorFocus.RegisterClickRule();
         var above = new Button { Content = "Above" };
         var panel = new StackPanel();
         panel.Children.Add(above);

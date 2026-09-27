@@ -33,6 +33,9 @@ public partial class MainWindow : Window
         // selected row, else its first row unselected, whose focus opens
         // nothing — never the bare tree.
         SelectorFocus.SetOwnLanding(FilesTree, LandOnFilesTree);
+        // R-5 (#1247, OD-8): a click on a populated list's empty area lands
+        // on a row.
+        SelectorFocus.RegisterClickRule();
         // The Tags tree's selection ACTIVATES a tag filter (R-3): its
         // landing is its selected tag, else its first tag UNSELECTED —
         // never one it would apply.

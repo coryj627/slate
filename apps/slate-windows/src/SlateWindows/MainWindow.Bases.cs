@@ -91,9 +91,10 @@ public partial class MainWindow
         }
 
         ListBox home = ListAbove(disabled) ?? QueriesSavedList;
-        if (!(home.HasItems && SelectorFocus.FocusFirstOrSelectedItem(home)))
+        if (!(home.HasItems && SelectorFocus.FocusFirstOrSelectedItem(home)) && !LandInLeaf(body))
         {
-            _ = LandInLeaf(body);
+            // Not even the rail's row took them — the pane's last stable
+            // stop: WPF's own re-evaluation keeps them in the window.
         }
     }
 
