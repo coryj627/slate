@@ -43,6 +43,7 @@ internal sealed class CanvasRendererView : FrameworkElement
         _ = _visuals.Add(_ring);
         SizeChanged += (_, e) => _engine.CommitViewport(
             v => v.WithViewSize(e.NewSize.Width, e.NewSize.Height));
+        IsVisibleChanged += OnIsVisibleChanged;
         _tooltipText = new System.Windows.Controls.TextBlock
         {
             Padding = new Thickness(6, 4, 6, 4),
@@ -624,46 +625,104 @@ internal sealed class CanvasRendererView : FrameworkElement
     /// (<see cref="PayOwedReveal"/>).
     /// </para>
     /// <para>
+    /// The same debt carries a reveal across a HIDDEN spell (owner decision,
+    /// review round 3): a board behind another tab, or under the outline or
+    /// the table, owes the reveal and pays it once it is showing again — on
+    /// the first install once visible, or as soon as it is shown if no install
+    /// comes (<see cref="OnIsVisibleChanged"/>).
+    /// </para>
+    /// <para>
     /// The rules, one slot per board: a newer reveal supersedes the owed one,
-    /// paid or owed in turn; an owed reveal is paid only while it would still
-    /// be asked for — its card is still the seat (a later selection change
-    /// voids it, so it is never replayed for a card no longer selected), and
-    /// D4 still reveals it (a move made elsewhere lapses when the board stops
-    /// following the selection; a move made on the board stands, toggle or no
-    /// toggle); and it is dropped when the board's document changes or the
-    /// board shuts down.
+    /// paid or owed in turn. An owed reveal is paid only while it is still
+    /// payable, judged by TOKENS taken when it was owed, never by the state
+    /// alone (review round 3: a seat that left and came back, or a toggle
+    /// turned off and on, looks unchanged to the state): the selection's
+    /// <see cref="CanvasSelection.Revision"/> must not have moved — a later
+    /// selection change voids the debt, so it is never replayed — and a move
+    /// made elsewhere needs Follow Selection on AND the viewport's
+    /// <see cref="CanvasViewportState.FollowLapses"/> unchanged — it lapses the
+    /// moment the board stops following, for good — while a move made on the
+    /// board stands, toggle or no toggle. It is paid once and cleared, and it
+    /// is dropped when the board's document changes or the board shuts down.
     /// </para>
     /// </remarks>
     internal void RevealNode(string nodeId, CanvasMoveOrigin origin)
     {
-        _owedReveal = TryPanToContain(nodeId) ? null : new OwedReveal(nodeId, origin);
+        _owedReveal = new OwedReveal(
+            nodeId,
+            origin,
+            _model?.Selection.Revision ?? 0,
+            _engine.CommittedViewport.FollowLapses);
+        PayOwedReveal();
     }
 
     /// <summary>The reveal this board owes (see <see cref="RevealNode"/>);
     /// null when it owes none.</summary>
     private OwedReveal? _owedReveal;
 
-    private sealed record OwedReveal(string NodeId, CanvasMoveOrigin Origin);
+    /// <summary>A reveal owed, with the tokens its validity is judged by:
+    /// the selection revision and the viewport's follow-lapse count at the
+    /// moment it was owed.</summary>
+    private sealed record OwedReveal(
+        string NodeId, CanvasMoveOrigin Origin, long SelectionRevision, long FollowLapses);
 
-    /// <summary>Pay the owed reveal against the state just installed, if it
-    /// is still payable (<see cref="RevealNode"/>'s rules); an unpayable debt
-    /// is written off, a payable one whose card this state still lacks stays
-    /// owed.</summary>
+    /// <summary>Pay the owed reveal if it is still payable
+    /// (<see cref="RevealNode"/>'s rules) and the board is showing; an
+    /// unpayable debt is written off, a payable one waits while the board is
+    /// hidden or its installed state still lacks the card.</summary>
     private void PayOwedReveal()
     {
         if (_owedReveal is not { } owed)
         {
             return;
         }
-        if (!string.Equals(_model?.Selection.Selected, owed.NodeId, StringComparison.Ordinal)
-            || !RevealsMoveFrom(owed.Origin))
+        if (!StillPayable(owed))
         {
             _owedReveal = null;
+            return;
+        }
+        if (!IsShowing)
+        {
             return;
         }
         if (TryPanToContain(owed.NodeId))
         {
             _owedReveal = null;
+        }
+    }
+
+    /// <summary>Whether an owed reveal is still owed: the seat has not moved
+    /// since (the selection revision), and a move made elsewhere still
+    /// reveals — Follow Selection on, and never turned off since (the lapse
+    /// count). A move made on the board needs only the first.</summary>
+    private bool StillPayable(OwedReveal owed)
+    {
+        if (_model is not { } model || model.Selection.Revision != owed.SelectionRevision)
+        {
+            return false;
+        }
+        if (owed.Origin == CanvasMoveOrigin.OnSurface)
+        {
+            return true;
+        }
+        CanvasViewportState view = _engine.CommittedViewport;
+        return view.FollowSelection && view.FollowLapses == owed.FollowLapses;
+    }
+
+    /// <summary>Whether the board is on screen with a laid-out view — the
+    /// only time a pan means anything to the reader.</summary>
+    private bool IsShowing =>
+        IsVisible && _engine.CommittedViewport is { ViewWidth: > 0, ViewHeight: > 0 };
+
+    /// <summary>Shown again (owner decision, review round 3): a reveal owed
+    /// while hidden is paid once the board is visible — after the layout pass
+    /// that gives it its size, since showing it may bring no install.</summary>
+    private void OnIsVisibleChanged(object sender, DependencyPropertyChangedEventArgs e)
+    {
+        if (e.NewValue is true && _owedReveal is not null)
+        {
+            _ = Dispatcher.BeginInvoke(
+                new Action(PayOwedReveal), System.Windows.Threading.DispatcherPriority.Loaded);
         }
     }
 

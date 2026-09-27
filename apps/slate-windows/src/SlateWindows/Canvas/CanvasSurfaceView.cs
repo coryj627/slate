@@ -1262,11 +1262,11 @@ internal sealed class CanvasSurfaceView : UserControl, ICanvasSurfacePresenter
     }
 
     /// <summary>
-    /// D4's pan rule for the ONE shared selection, in every pane that shows
-    /// the board (R-12 follow-up #1271, review round 1): each change to the
-    /// selection reaches this pane as a selection made ELSEWHERE, so a
-    /// showing board brings the new seat into view exactly while its own
-    /// Follow Selection is on.
+    /// D4's pan rule for the ONE shared selection, in every pane on the
+    /// document (R-12 follow-up #1271, review rounds 1 and 3): each change to
+    /// the selection reaches this pane's board as a selection made ELSEWHERE,
+    /// so a board that follows the selection brings the new seat into view —
+    /// now if it is showing, and when it is next shown if it is not.
     /// </summary>
     /// <remarks>
     /// <para>
@@ -1285,15 +1285,21 @@ internal sealed class CanvasSurfaceView : UserControl, ICanvasSurfacePresenter
     /// standing even if the toggle goes off before the card lands.
     /// </para>
     /// <para>
-    /// A board that is not showing — another tab, a collapsed projection, a
-    /// state pane — has no view to pan and is left alone.
+    /// A board that is not showing — behind another tab, under the outline or
+    /// the table — OWES the reveal and pays it when it is shown again (owner
+    /// decision, review round 3; <see cref="CanvasRendererView.RevealNode"/>):
+    /// a following board scrolls to the selection the reader moved to while
+    /// it was away, unless the seat moved on or Follow Selection went off
+    /// meanwhile. So the board is asked whatever the projection and the
+    /// visibility; only its own Follow Selection gates the ask.
     /// </para>
     /// </remarks>
     private void FollowTheSelection()
     {
-        if (Model?.Selection.Selected is { } selected && _visual.IsVisible)
+        if (Model?.Selection.Selected is { } selected
+            && _visual.RevealsMoveFrom(CanvasMoveOrigin.Elsewhere))
         {
-            RevealSeat(selected, CanvasMoveOrigin.Elsewhere);
+            _visual.RevealNode(selected, CanvasMoveOrigin.Elsewhere);
         }
     }
 

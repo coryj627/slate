@@ -4513,6 +4513,434 @@ public sealed class CanvasNavigatorTests : IDisposable
     });
 
     /// <summary>
+    /// Follow-up #1271, review round 3 — the ABA schedule for Follow
+    /// Selection: an elsewhere debt LAPSES when the board stops following
+    /// (D15), and a lapsed debt is gone — turning Follow Selection back on
+    /// before the card's state installs must not revive it. New Card's
+    /// selection is owed a reveal with Follow on; the toggle goes off and on
+    /// again while the successor is still in flight; the board stays where the
+    /// reader left it.
+    /// </summary>
+    [Fact]
+    public void AnElsewhereDebtStaysLapsedWhenFollowingResumesBeforeItsCardInstalls() => RunSta(() =>
+    {
+        CanvasDocumentViewModel document = Open("board.canvas");
+        using HostedWindow host = HostBoard(document, out CanvasSurfaceView surface);
+        CanvasRendererView board = surface.VisualForTests;
+        Assert.True(board.Engine.CommittedViewport.FollowSelection, "premise: Follow Selection is on by default.");
+        document.SeatSelectionSilently("question");
+        board.Engine.CommitViewport(view => view.PannedTo(-5000, -5000));
+
+        document.CanvasNewCard();
+        string created = Assert.IsType<string>(document.Selection.Selected);
+        Assert.False(Installed(board, created), "premise: the board had already installed the new card.");
+        _ = surface.ViewportCommand(CanvasViewportVerb.ToggleFollowSelection);
+        Assert.False(board.Engine.CommittedViewport.FollowSelection, "premise: the toggle did not turn off.");
+        _ = surface.ViewportCommand(CanvasViewportVerb.ToggleFollowSelection);
+        Assert.True(board.Engine.CommittedViewport.FollowSelection, "premise: the toggle did not turn back on.");
+        Assert.False(Installed(board, created), "premise: the card installed while the toggle went off and on.");
+        CanvasViewportState before = board.Engine.CommittedViewport;
+
+        PumpUntil(() => Installed(board, created), "premise: the state that has the new card never installed.");
+        Assert.True(
+            before.SameGeometry(board.Engine.CommittedViewport),
+            "the board paid an elsewhere reveal that had lapsed when it stopped following: turning Follow "
+            + "Selection back on revived a debt D15 says is gone (D4, #1271).");
+    });
+
+    /// <summary>
+    /// Follow-up #1271, review round 3 — the ABA schedule for the seat:
+    /// with Follow Selection OFF, the board's own Down onto a card it has not
+    /// installed yet is owed a reveal; the seat then leaves (to B) and comes
+    /// back (to A) from ELSEWHERE before the card installs. The later selection
+    /// change voided the debt (D15), and the selection of A that stands is one
+    /// made elsewhere with the board not following, which D4 does not reveal —
+    /// so the board stays where the reader left it.
+    /// </summary>
+    [Fact]
+    public void ABoardMoveDebtIsVoidedWhenTheSeatLeavesAndReturnsBeforeItsCardInstalls() => RunSta(() =>
+    {
+        CanvasDocumentViewModel document = Open("board.canvas");
+        using HostedWindow host = HostBoard(document, out CanvasSurfaceView surface);
+        CanvasRendererView board = surface.VisualForTests;
+        _ = surface.ViewportCommand(CanvasViewportVerb.ToggleFollowSelection);
+        Assert.False(board.Engine.CommittedViewport.FollowSelection, "premise: the board still follows the selection.");
+        document.SeatSelectionSilently("question");
+
+        document.CanvasNewCard();
+        string created = Assert.IsType<string>(document.Selection.Selected);
+        List<string> order = document.SceneReadingOrder.Select(stop => stop.NodeId).ToList();
+        int at = order.IndexOf(created);
+        (string from, Key key) = at > 0 ? (order[at - 1], Key.Down) : (order[at + 1], Key.Up);
+        document.SeatSelectionSilently(from);
+        board.Engine.CommitViewport(view => view.PannedTo(-5000, -5000));
+        CanvasViewportState before = board.Engine.CommittedViewport;
+
+        Assert.True(PressKey(surface, key, ModifierKeys.None));
+        Assert.Equal(created, document.Selection.Selected);
+        string elsewhere = order.First(id => id != created && id != from);
+        document.SelectNode(elsewhere);
+        document.SelectNode(created);
+        Assert.Equal(created, document.Selection.Selected);
+        Assert.False(
+            Installed(board, created),
+            "premise: the card installed before the seat left and came back, so nothing was owed across it.");
+
+        PumpUntil(() => Installed(board, created), "premise: the state that has the new card never installed.");
+        Assert.True(
+            before.SameGeometry(board.Engine.CommittedViewport),
+            $"the board paid its own Down's reveal after the seat had moved to \"{elsewhere}\" and come back to "
+            + $"\"{created}\" from elsewhere with Follow Selection off: the later selection change voided that "
+            + "debt (D15), and D4 does not reveal the selection that stands (#1271).");
+    });
+
+    /// <summary>
+    /// Follow-up #1271, review round 3 — a reveal is paid ONCE. After
+    /// the install that brings New Card's card pays the owed reveal, the
+    /// reader pans away and the board installs again; the paid debt must not
+    /// pull the view back.
+    /// </summary>
+    [Fact]
+    public void APaidRevealIsNeverPaidAgainByALaterInstall() => RunSta(() =>
+    {
+        CanvasDocumentViewModel document = Open("board.canvas");
+        using HostedWindow host = HostBoard(document, out CanvasSurfaceView surface);
+        CanvasRendererView board = surface.VisualForTests;
+        Assert.True(board.Engine.CommittedViewport.FollowSelection, "premise: Follow Selection is on by default.");
+        document.SeatSelectionSilently("question");
+        board.Engine.CommitViewport(view => view.PannedTo(-5000, -5000));
+
+        document.CanvasNewCard();
+        string created = Assert.IsType<string>(document.Selection.Selected);
+        Assert.False(Installed(board, created), "premise: the board had already installed the new card.");
+        PumpUntil(
+            () => Installed(board, created) && InView(board, created),
+            "premise: the owed reveal was never paid, so there is nothing to pay twice.");
+
+        // The reader pans away; the pan is itself a new state, and it installs.
+        board.Engine.CommitViewport(view => view.PannedTo(-5000, -5000));
+        CanvasViewportState before = board.Engine.CommittedViewport;
+        PumpUntil(
+            () => board.Engine.Current!.Viewport.SameGeometry(board.Engine.CommittedViewport),
+            "premise: no state installed after the pan-away.");
+        Assert.True(
+            before.SameGeometry(board.Engine.CommittedViewport),
+            "a later install paid the already-paid reveal again and pulled the view back to the new card: a "
+            + "debt is cleared when it is paid (D15, #1271).");
+        Assert.False(InView(board, created), "the pan-away was undone.");
+    });
+
+    /// <summary>
+    /// Follow-up #1271, review round 3 — a debt belongs to its
+    /// document. The board owes New Card's card a reveal on document X; before
+    /// that card installs, the pane is rebound to document Y, whose only card
+    /// has the SAME id and is Y's seat. Y's state installs with that id in it,
+    /// and the board must not pay X's debt against Y.
+    /// </summary>
+    [Fact]
+    public void ARebindToAnotherDocumentDropsTheDebtEvenForACollidingNodeId() => RunSta(() =>
+    {
+        CanvasDocumentViewModel document = Open("board.canvas");
+        using HostedWindow host = HostBoard(document, out CanvasSurfaceView surface);
+        CanvasRendererView board = surface.VisualForTests;
+        Assert.True(board.Engine.CommittedViewport.FollowSelection, "premise: Follow Selection is on by default.");
+        document.SeatSelectionSilently("question");
+        board.Engine.CommitViewport(view => view.PannedTo(-5000, -5000));
+
+        document.CanvasNewCard();
+        string created = Assert.IsType<string>(document.Selection.Selected);
+        Assert.False(Installed(board, created), "premise: the board had already installed the new card.");
+
+        File.WriteAllText(
+            Path.Combine(_fixture.Root, "collide.canvas"),
+            "{\"nodes\":[{\"id\":\"" + created + "\",\"type\":\"text\",\"text\":\"Same id, another canvas\","
+            + "\"x\":0,\"y\":0,\"width\":200,\"height\":100}],\"edges\":[]}");
+        CanvasDocumentViewModel other = Open("collide.canvas");
+        other.ShowSurface(CanvasSurfaceKind.Visual);
+        Assert.Equal(created, other.Selection.Selected);
+        CanvasViewportState before = board.Engine.CommittedViewport;
+
+        surface.Model = other;
+        PumpUntil(
+            () => board.Engine.Current?.Source.Loaded?.Population is { Count: 1 } population
+                && population.SceneByNode.ContainsKey(created),
+            "premise: the other document's state never installed on the board.");
+        Assert.True(
+            before.SameGeometry(board.Engine.CommittedViewport),
+            "the board paid a debt owed on the old document against the new one's card with the same id: a "
+            + "document change drops the debt (D15, #1271).");
+    });
+
+    /// <summary>
+    /// Follow-up #1271, review round 3 — the seat's clock: the selection
+    /// revision counts every change of the seat and nothing else, and it is
+    /// already the new revision when the change is raised (a reveal owed
+    /// during the change takes the right token). A seat that leaves and comes
+    /// back is a LATER revision.
+    /// </summary>
+    [Fact]
+    public void TheSelectionRevisionCountsEveryChangeOfTheSeatAndNothingElse()
+    {
+        var selection = new CanvasSelection();
+        var raised = new List<long>();
+        selection.PropertyChanged += (_, e) =>
+        {
+            if (e.PropertyName == nameof(CanvasSelection.Selected))
+            {
+                raised.Add(selection.Revision);
+            }
+        };
+        Assert.Equal(0, selection.Revision);
+        foreach ((string? seat, long revision) in new (string?, long)[]
+        {
+            ("a", 1), ("a", 1), ("b", 2), ("a", 3), (null, 4), (null, 4),
+        })
+        {
+            selection.Selected = seat;
+            Assert.Equal(revision, selection.Revision);
+        }
+        selection.ActiveSurface = CanvasSurfaceKind.Visual;
+        Assert.Equal(4, selection.Revision);
+        Assert.Equal(new long[] { 1, 2, 3, 4 }, raised);
+    }
+
+    /// <summary>
+    /// Follow-up #1271, review round 3 — the toggle's clock: the viewport
+    /// counts a lapse exactly when Follow Selection goes from on to off, never
+    /// when it goes on or stays put, and every other transform carries the
+    /// count, so on → off → on is a later count than the one before it.
+    /// </summary>
+    [Fact]
+    public void TheViewportCountsAFollowLapseOnlyWhenFollowingStops()
+    {
+        CanvasViewportState seed = CanvasViewportState.Seed();
+        Assert.Equal(0, seed.FollowLapses);
+        CanvasViewportState off = seed.WithFollowSelection(false);
+        Assert.Equal(1, off.FollowLapses);
+        Assert.Equal(1, off.WithFollowSelection(false).FollowLapses);
+        CanvasViewportState on = off.WithFollowSelection(true);
+        Assert.Equal(1, on.FollowLapses);
+        Assert.Equal(1, on.WithFollowSelection(true).FollowLapses);
+        CanvasViewportState lapsedTwice = on.WithFollowSelection(false);
+        Assert.Equal(2, lapsedTwice.FollowLapses);
+        foreach (CanvasViewportState carried in new[]
+        {
+            lapsedTwice.PannedTo(5, 7),
+            lapsedTwice.WithViewSize(640, 480),
+            lapsedTwice.WithZoom(2, 10, 10),
+            lapsedTwice.ZoomedIn(0, 0),
+            lapsedTwice.ZoomedOut(0, 0),
+            lapsedTwice.AtActualSize(0, 0),
+        })
+        {
+            Assert.Equal(2, carried.FollowLapses);
+        }
+    }
+
+    /// <summary>
+    /// Follow-up #1271, owner decision (review round 3) — SHOWN AGAIN: a board
+    /// that follows the selection and is hidden behind another tab while the
+    /// seat moves elsewhere owes the reveal, holds it while hidden (the view
+    /// does not move under a board no one can see), and scrolls to the seat
+    /// when it is shown again. One canvas in two panes: pane B stands for the
+    /// hidden tab, pane A's board moves the seat.
+    /// </summary>
+    [Fact]
+    public void AFollowingBoardHiddenBehindAnotherTabScrollsToTheSelectionWhenShown() => RunSta(() =>
+    {
+        CanvasDocumentViewModel document = Open("board.canvas");
+        using HostedWindow host = HostTwoBoards(document, out CanvasSurfaceView paneA, out CanvasSurfaceView paneB);
+        CanvasRendererView boardB = paneB.VisualForTests;
+        Assert.True(boardB.Engine.CommittedViewport.FollowSelection, "premise: pane B follows the selection.");
+        document.SeatSelectionSilently("question");
+        boardB.Engine.CommitViewport(view => view.PannedTo(-5000, -5000));
+        PumpUntil(
+            () => boardB.Engine.Current!.Viewport.SameGeometry(boardB.Engine.CommittedViewport),
+            "premise: pane B's pan-away never installed.");
+        paneB.Visibility = Visibility.Collapsed;
+        host.UpdateLayout();
+        Assert.False(boardB.IsVisible, "premise: pane B's board is still showing.");
+        CanvasViewportState before = boardB.Engine.CommittedViewport;
+
+        Assert.True(PressKey(paneA, Key.Down, ModifierKeys.None));
+        Assert.Equal("evidence", document.Selection.Selected);
+        Pump();
+        Assert.True(
+            before.SameGeometry(boardB.Engine.CommittedViewport),
+            "pane B's board moved while it was hidden: the reveal is paid when the board is shown.");
+
+        paneB.Visibility = Visibility.Visible;
+        host.UpdateLayout();
+        PumpUntil(
+            () => InView(boardB, "evidence"),
+            "pane B's board was shown again and never scrolled to the seat that moved while it was hidden: a "
+            + "following board reveals the selection when it is next shown (owner decision, #1271).");
+        Assert.False(before.SameGeometry(boardB.Engine.CommittedViewport), "pane B's viewport never moved.");
+    });
+
+    /// <summary>
+    /// Follow-up #1271, owner decision (review round 3) — SHOWN AGAIN through
+    /// the projection switch: while the outline shows, the seat moves; when
+    /// the board is shown again it scrolls to the seat.
+    /// </summary>
+    [Fact]
+    public void AFollowingBoardUnderTheOutlineScrollsToTheSelectionWhenShown() => RunSta(() =>
+    {
+        CanvasDocumentViewModel document = Open("board.canvas");
+        using HostedWindow host = HostBoard(document, out CanvasSurfaceView surface);
+        CanvasRendererView board = surface.VisualForTests;
+        document.SeatSelectionSilently("question");
+        board.Engine.CommitViewport(view => view.PannedTo(-5000, -5000));
+        (double panX, double panY) = (board.Engine.CommittedViewport.PanX, board.Engine.CommittedViewport.PanY);
+
+        document.ShowSurface(CanvasSurfaceKind.Outline);
+        host.UpdateLayout();
+        Assert.False(board.IsVisible, "premise: the board is still showing under the outline.");
+        document.SelectNode("loose");
+        Pump();
+
+        document.ShowSurface(CanvasSurfaceKind.Visual);
+        host.UpdateLayout();
+        PumpUntil(
+            () => InView(board, "loose"),
+            "the board was shown again after the seat moved under the outline and never scrolled to it: a "
+            + "following board reveals the selection when it is next shown (owner decision, #1271).");
+        Assert.False(
+            board.Engine.CommittedViewport.PanX == panX && board.Engine.CommittedViewport.PanY == panY,
+            "the board's pan never moved.");
+    });
+
+    /// <summary>
+    /// Follow-up #1271, owner decision (review round 3) — a board that stops
+    /// following while it is hidden owes nothing when shown: Follow Selection
+    /// turned off under the outline, or turned off and on again, lapses the
+    /// reveal the seat's move asked for, and the board comes back where the
+    /// reader left it.
+    /// </summary>
+    [Theory]
+    [InlineData(false)]
+    [InlineData(true)]
+    public void ABoardThatStopsFollowingWhileHiddenDoesNotScrollWhenShown(bool followsAgain) => RunSta(() =>
+    {
+        CanvasDocumentViewModel document = Open("board.canvas");
+        using HostedWindow host = HostBoard(document, out CanvasSurfaceView surface);
+        CanvasRendererView board = surface.VisualForTests;
+        document.SeatSelectionSilently("question");
+        board.Engine.CommitViewport(view => view.PannedTo(-5000, -5000));
+
+        document.ShowSurface(CanvasSurfaceKind.Outline);
+        host.UpdateLayout();
+        document.SelectNode("loose");
+        _ = surface.ViewportCommand(CanvasViewportVerb.ToggleFollowSelection);
+        Assert.False(board.Engine.CommittedViewport.FollowSelection, "premise: the toggle did not turn off.");
+        if (followsAgain)
+        {
+            _ = surface.ViewportCommand(CanvasViewportVerb.ToggleFollowSelection);
+            Assert.True(board.Engine.CommittedViewport.FollowSelection, "premise: the toggle did not turn back on.");
+        }
+        (double panX, double panY, double zoom) = (
+            board.Engine.CommittedViewport.PanX, board.Engine.CommittedViewport.PanY, board.Engine.CommittedViewport.Zoom);
+
+        document.ShowSurface(CanvasSurfaceKind.Visual);
+        host.UpdateLayout();
+        PumpUntil(
+            () => board.IsVisible && board.Engine.CommittedViewport.ViewWidth > 0
+                && board.Engine.Current!.Viewport.SameGeometry(board.Engine.CommittedViewport),
+            "premise: the board never laid out and installed after it was shown.");
+        Pump();
+        Assert.True(
+            board.Engine.CommittedViewport.PanX == panX && board.Engine.CommittedViewport.PanY == panY
+                && board.Engine.CommittedViewport.Zoom == zoom,
+            $"the board scrolled to the seat when shown although it stopped following while hidden"
+            + (followsAgain ? " (and a lapse is for good, even when following resumes)" : string.Empty)
+            + " (D4, D15, #1271).");
+    });
+
+    /// <summary>
+    /// Follow-up #1271, owner decision (review round 3) — shown again with the
+    /// seat where the view already has it: the seat left and came back while
+    /// the board was hidden, the card it came back to is inside the view, and
+    /// the board is shown exactly where the reader left it.
+    /// </summary>
+    [Fact]
+    public void ABoardShownAgainWithTheSeatAlreadyInViewDoesNotMove() => RunSta(() =>
+    {
+        File.WriteAllText(
+            Path.Combine(_fixture.Root, "far.canvas"),
+            "{\"nodes\":["
+            + "{\"id\":\"near\",\"type\":\"text\",\"text\":\"Near\",\"x\":100,\"y\":100,\"width\":200,\"height\":100},"
+            + "{\"id\":\"far\",\"type\":\"text\",\"text\":\"Far\",\"x\":5000,\"y\":5000,\"width\":200,\"height\":100}"
+            + "],\"edges\":[]}");
+        CanvasDocumentViewModel document = Open("far.canvas");
+        using HostedWindow host = HostBoard(document, out CanvasSurfaceView surface);
+        CanvasRendererView board = surface.VisualForTests;
+        document.SeatSelectionSilently("near");
+        Pump();
+        Assert.True(InView(board, "near"), "premise: the seat's card is not in the board's view.");
+        Assert.False(InView(board, "far"), "premise: the far card is in the board's view.");
+        (double panX, double panY, double zoom) = (
+            board.Engine.CommittedViewport.PanX, board.Engine.CommittedViewport.PanY, board.Engine.CommittedViewport.Zoom);
+
+        document.ShowSurface(CanvasSurfaceKind.Outline);
+        host.UpdateLayout();
+        document.SelectNode("far");
+        document.SelectNode("near");
+
+        document.ShowSurface(CanvasSurfaceKind.Visual);
+        host.UpdateLayout();
+        PumpUntil(
+            () => board.IsVisible && board.Engine.CommittedViewport.ViewWidth > 0
+                && board.Engine.Current!.Viewport.SameGeometry(board.Engine.CommittedViewport),
+            "premise: the board never laid out and installed after it was shown.");
+        Pump();
+        Assert.True(
+            board.Engine.CommittedViewport.PanX == panX && board.Engine.CommittedViewport.PanY == panY
+                && board.Engine.CommittedViewport.Zoom == zoom,
+            "the board moved when shown although the seat's card was already inside its view: the reveal is the "
+            + "minimal pan that contains the seat, and the far card the seat passed through is owed nothing (#1271).");
+    });
+
+    /// <summary>
+    /// Follow-up #1271, owner decision (review round 3) — a move made ON the
+    /// board before it was hidden keeps its standing: with Follow Selection
+    /// off, the board's own Down onto a card it has not installed yet is owed;
+    /// the board is hidden under the outline before that card installs, and
+    /// when it is shown again it pays the reveal, toggle or no toggle.
+    /// </summary>
+    [Fact]
+    public void ABoardMoveMadeBeforeHidingIsRevealedWhenShown() => RunSta(() =>
+    {
+        CanvasDocumentViewModel document = Open("board.canvas");
+        using HostedWindow host = HostBoard(document, out CanvasSurfaceView surface);
+        CanvasRendererView board = surface.VisualForTests;
+        _ = surface.ViewportCommand(CanvasViewportVerb.ToggleFollowSelection);
+        Assert.False(board.Engine.CommittedViewport.FollowSelection, "premise: the board still follows the selection.");
+        document.SeatSelectionSilently("question");
+
+        document.CanvasNewCard();
+        string created = Assert.IsType<string>(document.Selection.Selected);
+        List<string> order = document.SceneReadingOrder.Select(stop => stop.NodeId).ToList();
+        int at = order.IndexOf(created);
+        (string from, Key key) = at > 0 ? (order[at - 1], Key.Down) : (order[at + 1], Key.Up);
+        document.SeatSelectionSilently(from);
+        board.Engine.CommitViewport(view => view.PannedTo(-5000, -5000));
+        Assert.True(PressKey(surface, key, ModifierKeys.None));
+        Assert.Equal(created, document.Selection.Selected);
+        Assert.False(Installed(board, created), "premise: the card installed before the board was hidden.");
+
+        document.ShowSurface(CanvasSurfaceKind.Outline);
+        host.UpdateLayout();
+        PumpUntil(() => Installed(board, created), "premise: the new card never installed while the board was hidden.");
+
+        document.ShowSurface(CanvasSurfaceKind.Visual);
+        host.UpdateLayout();
+        PumpUntil(
+            () => InView(board, created),
+            "the board's own Down, made before it was hidden, was never revealed when it was shown again: a move "
+            + "made on the board keeps its standing, toggle or no toggle (D4, #1271).");
+    });
+
+    /// <summary>
     /// Follow-up #1271, review round 2 — contract 34 D4's on-surface arm for
     /// the board's OWN peers, with Follow Selection OFF: a screen reader's
     /// Invoke and SelectionItem.Select on a card just past the board's edge
