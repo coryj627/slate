@@ -2684,38 +2684,41 @@ public sealed class ReadingFocusTests
 
     /// <summary>OD-12 (codex PR 8 round 8): a canvas jump runs deferred — the
     /// marks list closes, then the jump posts at Background — so the reader can
-    /// move first. In a split, a pane switch queued at Input ahead of the jump
-    /// runs first; the jump then asks for a tab that is no longer the active
-    /// tab of the active group, and the shell's one entry refuses it before
-    /// the document is touched: the canvas in the pane the reader left raises
-    /// no request and takes no focus, and the new pane's own landing is not
-    /// withdrawn.</summary>
+    /// move first. In a split showing the same board in both panes, a pane
+    /// switch queued at Input ahead of the jump runs first and lands the other
+    /// pane's board; the jump then asks for a tab that is no longer the active
+    /// tab of the active group, and the shell's one entry refuses it before the
+    /// document is touched: the board in the pane the reader left takes no
+    /// focus, and the pane they switched to keeps its own landing — the jump's
+    /// card is not seated there either.</summary>
     [Fact]
     public void AStaleCanvasJumpLandsNothingInThePaneTheReaderLeft() => RunSta(() =>
     {
         using var host = new Host();
         host.Initialize("canvas", CardBoard);
-        host.Workspace.OpenPath("other.md", WorkspaceOpenTarget.SplitRight);
+        host.Workspace.OpenPath("board.canvas", WorkspaceOpenTarget.SplitRight);
         host.Settle();
         WorkspaceGroupViewModel paneB = host.Workspace.ActiveGroup;
-        WorkspaceTabViewModel otherTab = paneB.ActiveTab!;
+        WorkspaceTabViewModel boardB = paneB.ActiveTab!;
+        Assert.NotSame(host.Tab, boardB);
         Assert.True(host.Workspace.FocusDirectionalPane("horizontal", -1));
         host.Settle();
         Assert.NotSame(paneB, host.Workspace.ActiveGroup);
         CanvasDocumentViewModel board = host.Tab.Canvas!;
+        Assert.Same(board, boardB.Canvas);
         board.SeatSelectionSilently("beta");
         board.ToggleMark();
         board.SeatSelectionSilently("alpha");
-        FrameworkElement canvasStop = host.EditorStop();
+        FrameworkElement boardA = host.EditorStop();
         host.FocusTabBar();
         board.OpenMarksList(host.Tab);
         Assert.IsType<CanvasMarksListPrompt>(host.Workspace.CanvasPromptSheet);
-        int arrivalsInTheCanvas = 0;
-        canvasStop.IsKeyboardFocusWithinChanged += (_, e) =>
+        int arrivalsInPaneA = 0;
+        boardA.IsKeyboardFocusWithinChanged += (_, e) =>
         {
             if (e.NewValue is true)
             {
-                arrivalsInTheCanvas++;
+                arrivalsInPaneA++;
             }
         };
 
@@ -2726,9 +2729,17 @@ public sealed class ReadingFocusTests
         host.Settle();
 
         Assert.Same(paneB, host.Workspace.ActiveGroup);
+        Assert.Equal(0, arrivalsInPaneA);
         Assert.Null(board.FocusRequest);
-        Assert.Equal(0, arrivalsInTheCanvas);
-        AssertFocused(host.ShownEditor(otherTab).TextArea, "the pane the reader switched to before the jump ran");
+        // Pane B's own landing seated the board's first card; the stale jump
+        // named "beta" and seated nothing.
+        Assert.Equal("alpha", board.Selection.Selected);
+        Assert.Same(boardB, board.LastFocusLandingEnd?.Owner);
+        Assert.Null(board.LastFocusLandingEnd?.Request is CanvasFocusRequest { NodeId: { } named } ? named : null);
+        var surfaceB = Assert.Single(
+            Descendants<CanvasSurfaceView>(host.Shell.ContentPaneBorder),
+            surface => ReferenceEquals(surface.DataContext, boardB));
+        Assert.True(surfaceB.IsKeyboardFocusWithin, "the pane the reader switched to lost its landing");
     });
 
     /// <summary>OD-12 (codex PR 8 round 8): a canvas landing asked before its
