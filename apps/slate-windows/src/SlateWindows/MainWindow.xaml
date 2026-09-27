@@ -2690,7 +2690,7 @@
                                 <!-- R-4 (#1246): each Button is the stop; its container
                                      is layout. -->
                                 <local:LayoutItemsControl ItemsSource="{Binding Recents}"
-                                                          AutomationProperties.Name="Recent searches" local:SiblingNames.NamePath="" local:SiblingNames.Noun="search">
+                                                          AutomationProperties.Name="Recent searches" local:SiblingNames.NamePath="" local:SiblingNames.Noun="search" local:SiblingNames.Prefix="Recent search: ">
                                     <local:LayoutItemsControl.ItemContainerStyle>
                                         <Style TargetType="ContentPresenter">
                                             <Setter Property="AutomationProperties.Name" Value="{Binding RelativeSource={RelativeSource Self}, Converter={x:Static local:SiblingNames.Converter}}" />
@@ -2705,7 +2705,7 @@
                                                     Content="{Binding}"
                                                     Click="SearchOverlayRecentRow_Click"
                                                     GotKeyboardFocus="SearchOverlayRecentRow_GotKeyboardFocus"
-                                                    AutomationProperties.Name="{Binding (AutomationProperties.Name), RelativeSource={RelativeSource AncestorType=ContentPresenter}, StringFormat='Recent search: {0}'}"
+                                                    AutomationProperties.Name="{Binding (AutomationProperties.Name), RelativeSource={RelativeSource AncestorType=ContentPresenter}}"
                                                     AutomationProperties.HelpText="Runs this search again." />
                                         </DataTemplate>
                                     </local:LayoutItemsControl.ItemTemplate>

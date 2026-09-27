@@ -266,6 +266,62 @@ public sealed class SharedNameTests
         });
     }
 
+    /// <summary>Codex PR 3 round 5: a tab's state is the sibling rule's
+    /// input, never text appended after it. Beside draft.md in each state
+    /// sits a tab whose file's own title is exactly what draft.md's tab reads
+    /// in that state — "draft, unsaved changes.md" beside draft.md unsaved —
+    /// and the two read apart by their paths, draft.md's still ending in its
+    /// state. Appended after the rule (the trigger formats this replaced),
+    /// both read "draft, unsaved changes".</summary>
+    [Theory]
+    [InlineData("unsaved changes")]
+    [InlineData("missing from disk")]
+    [InlineData("missing from disk, unsaved changes")]
+    public void ATabsStateNeverMakesItReadLikeAnotherTabsTitle(string state) => RunSta(() =>
+    {
+        string natural = $"draft, {state}";
+        string[] paths = ["draft.md", $"{natural}.md"];
+        using FixtureVault fixture = FixtureVault.Create(0, "stated-tab-titles");
+        foreach (string path in paths)
+        {
+            File.WriteAllText(Path.Combine(fixture.Root, path), "plain body\n");
+        }
+        using VaultSession session = VaultSession.OpenFilesystem(fixture.Root);
+        using (var cancel = new CancelToken())
+        {
+            session.ScanInitial(cancel);
+        }
+        using var workspace = new WorkspaceViewModel(
+            session, fixture.Root, () => [], _ => { }, startInteractionBackgroundWork: false);
+        workspace.OpenPath(paths[0]);
+        workspace.OpenPath(paths[1], WorkspaceOpenTarget.NewTab);
+        WorkspaceTabViewModel[] tabs = [.. workspace.ActiveGroup.Tabs];
+        Assert.Equal(paths, tabs.Select(tab => tab.Path));
+        // The premise: the second tab's own title is the first's name in
+        // that state.
+        Assert.Equal(["draft", natural], tabs.Select(tab => tab.Title));
+
+        (ItemsControl host, _) = ItemContainerNameBindingTests.AuthoredHost("WorkspaceTabs");
+        host.ItemsSource = workspace.ActiveGroup.Tabs;
+        ItemContainerNameBindingTests.Hosted(host, () =>
+        {
+            Assert.Equal(["draft", natural], ItemContainerNameBindingTests.ItemNames(host));
+            WorkspaceTabViewModel draft = tabs[0];
+            if (state.Contains("unsaved", StringComparison.Ordinal))
+            {
+                draft.Text = "edited body\n";
+            }
+            if (state.Contains("missing", StringComparison.Ordinal))
+            {
+                draft.InvalidatePath();
+            }
+            Assert.Equal(state, draft.SpokenState);
+            string[] read = ItemContainerNameBindingTests.ItemNames(host);
+            AssertDistinct("WorkspaceTabs", read);
+            Assert.Equal([$"draft, draft.md, {state}", $"{natural}, {paths[1]}"], read);
+        });
+    });
+
     /// <summary>A note that links to target.md and embeds it lists two
     /// outgoing rows that both read "Link to target.md" (mac's labels, the
     /// role on the badge): the embed adds its badge, so the two read apart
@@ -406,7 +462,7 @@ public sealed class SharedNameTests
     {
         Assert.NotEmpty(names);
         Assert.True(
-            names.Distinct(StringComparer.CurrentCultureIgnoreCase).Count() == names.Length,
+            names.Distinct(SiblingNames.ReadAlike).Count() == names.Length,
             $"{label}: stops read alike: {string.Join(" | ", names)}");
     }
 

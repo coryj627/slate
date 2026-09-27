@@ -612,7 +612,7 @@
                         IsTabStop="{Binding HasItems, RelativeSource={RelativeSource Self}}"
                         ItemTemplate="{StaticResource WorkspaceTabHeaderTemplate}"
                         ContentTemplate="{StaticResource WorkspaceTabContentTemplate}"
-                        AutomationProperties.AutomationId="WorkspaceTabs" local:SiblingNames.NamePath="Title" local:SiblingNames.DistinguisherPath="Path" local:SiblingNames.Noun="tab"
+                        AutomationProperties.AutomationId="WorkspaceTabs" local:SiblingNames.NamePath="Title" local:SiblingNames.DistinguisherPath="Path" local:SiblingNames.Noun="tab" local:SiblingNames.StatePath="SpokenState"
                         AutomationProperties.Name="Workspace tabs">
                 <TabControl.ContextMenu>
                     <ContextMenu DataContext="{Binding PlacementTarget.DataContext, RelativeSource={RelativeSource Self}}">
@@ -626,18 +626,21 @@
                 </TabControl.ContextMenu>
                 <TabControl.ItemContainerStyle>
                     <Style TargetType="TabItem">
+                        <!-- W7-7 PR 3 (#1246, R-4; codex PR 3 round 5): the name
+                             carries the tab's state as an INPUT to the sibling
+                             rule (StatePath above), so the rule's collision
+                             checks run over what the reader hears; a trigger
+                             appending the state after the rule re-created the
+                             duplicates it had removed. The triggers below set
+                             only the status. -->
                         <Setter Property="AutomationProperties.Name" Value="{Binding RelativeSource={RelativeSource Self}, Converter={x:Static local:SiblingNames.Converter}}" />
                         <Setter Property="AutomationProperties.ItemStatus" Value="Saved" />
                         <Style.Triggers>
                             <DataTrigger Binding="{Binding IsDirty}" Value="True">
-                                <Setter Property="AutomationProperties.Name"
-                                        Value="{Binding RelativeSource={RelativeSource Self}, Converter={x:Static local:SiblingNames.Converter}, StringFormat='{}{0}, unsaved changes'}" />
                                 <Setter Property="AutomationProperties.ItemStatus"
                                         Value="Unsaved changes" />
                             </DataTrigger>
                             <DataTrigger Binding="{Binding IsMissingFromDisk}" Value="True">
-                                <Setter Property="AutomationProperties.Name"
-                                        Value="{Binding RelativeSource={RelativeSource Self}, Converter={x:Static local:SiblingNames.Converter}, StringFormat='{}{0}, missing from disk'}" />
                                 <Setter Property="AutomationProperties.ItemStatus"
                                         Value="Missing from disk" />
                             </DataTrigger>
@@ -646,8 +649,6 @@
                                     <Condition Binding="{Binding IsDirty}" Value="True" />
                                     <Condition Binding="{Binding IsMissingFromDisk}" Value="True" />
                                 </MultiDataTrigger.Conditions>
-                                <Setter Property="AutomationProperties.Name"
-                                        Value="{Binding RelativeSource={RelativeSource Self}, Converter={x:Static local:SiblingNames.Converter}, StringFormat='{}{0}, missing from disk, unsaved changes'}" />
                                 <Setter Property="AutomationProperties.ItemStatus"
                                         Value="Missing from disk; unsaved changes" />
                             </MultiDataTrigger>

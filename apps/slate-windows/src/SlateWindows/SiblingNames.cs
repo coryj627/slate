@@ -25,7 +25,12 @@ namespace SlateWindows;
 /// (<see cref="NamePathProperty"/>; "" reads the item itself), optionally
 /// the one that tells two namesakes apart
 /// (<see cref="DistinguisherPathProperty"/> — a path, a folder), and the
-/// noun an ordinal takes (<see cref="NounProperty"/>: "item", "tab"). Its
+/// noun an ordinal takes (<see cref="NounProperty"/>: "item", "tab"),
+/// and — when the name the reader hears carries more than the item's name —
+/// the item's state (<see cref="StatePathProperty"/>: a tab's "unsaved
+/// changes") and the host's prefix (<see cref="PrefixProperty"/>: "Recent
+/// search: "). Those are INPUTS to the rule's one final pass, never
+/// appended after it (codex PR 3 round 5). Its
 /// container style binds each container's AutomationProperties.Name to the
 /// container itself through <see cref="Converter"/>, which reads the name
 /// <see cref="Compose"/> gave that container's item among ALL the host's
@@ -52,6 +57,24 @@ internal static class SiblingNames
         typeof(string),
         typeof(SiblingNames),
         new FrameworkPropertyMetadata("item", FrameworkPropertyMetadataOptions.Inherits, OnDeclarationChanged));
+
+    /// <summary>The property each item's STATE is read by — what the reader
+    /// hears after its name, joined by ", " (a tab's "unsaved changes"; ""
+    /// for none); part of the name the collision checks run over.</summary>
+    public static readonly DependencyProperty StatePathProperty = DependencyProperty.RegisterAttached(
+        "StatePath",
+        typeof(string),
+        typeof(SiblingNames),
+        new FrameworkPropertyMetadata(null, FrameworkPropertyMetadataOptions.Inherits, OnDeclarationChanged));
+
+    /// <summary>What the reader hears before every item's name in this host
+    /// ("Recent search: "); part of the name the collision checks run
+    /// over.</summary>
+    public static readonly DependencyProperty PrefixProperty = DependencyProperty.RegisterAttached(
+        "Prefix",
+        typeof(string),
+        typeof(SiblingNames),
+        new FrameworkPropertyMetadata(null, FrameworkPropertyMetadataOptions.Inherits, OnDeclarationChanged));
 
     private static readonly DependencyProperty ScopeProperty = DependencyProperty.RegisterAttached(
         "Scope", typeof(Scope), typeof(SiblingNames), new PropertyMetadata(null));
@@ -88,6 +111,27 @@ internal static class SiblingNames
 
     public static void SetNoun(DependencyObject element, string value) => element.SetValue(NounProperty, value);
 
+    public static string? GetStatePath(DependencyObject element) => (string?)element.GetValue(StatePathProperty);
+
+    public static void SetStatePath(DependencyObject element, string? value) => element.SetValue(StatePathProperty, value);
+
+    public static string? GetPrefix(DependencyObject element) => (string?)element.GetValue(PrefixProperty);
+
+    public static void SetPrefix(DependencyObject element, string? value) => element.SetValue(PrefixProperty, value);
+
+    /// <summary>
+    /// The ONE comparison the rule reads names alike by (codex PR 3 round 5).
+    /// Speech carries neither case nor a string's encoding, so "FILE" and
+    /// "file", or "é" composed and decomposed, are the same name to a
+    /// listener. It is culture-INDEPENDENT: the current culture's case
+    /// folding is not speech's — under tr-TR it reports "FILE" and "file"
+    /// unequal, which left case variants bare on a Turkish machine. The
+    /// invariant culture's ignore-case comparison rather than the ordinal one,
+    /// because it also equates canonically equivalent strings and ignores
+    /// zero-width characters, both of which a reader speaks identically.
+    /// </summary>
+    internal static StringComparer ReadAlike { get; } = StringComparer.InvariantCultureIgnoreCase;
+
     /// <summary>The container style a code-built host uses.</summary>
     internal static Style ContainerStyle(Type containerType)
     {
@@ -111,60 +155,121 @@ internal static class SiblingNames
         };
 
     /// <summary>
-    /// The rule, over sibling names in order and what tells each apart:
+    /// The rule. What the reader hears for item n is its SPOKEN name:
+    /// "{prefix}{identity}", then ", {state}" when it has a state — the
+    /// host's prefix, the item's identity and its state. Every check below
+    /// runs over that spoken name, the final one included, and nothing is
+    /// added to a name after the final pass (codex PR 3 round 5: a state
+    /// appended after the rule re-created the duplicates it had removed).
+    /// Names are compared by <see cref="ReadAlike"/>. The identity starts as
+    /// the item's name — a blank one reads "{Noun} {n}", never nothing — and
+    /// grows only where siblings read alike:
     /// <list type="number">
-    /// <item>the item's name — a blank one reads "{Noun} {n}", never
-    /// nothing;</item>
-    /// <item>where siblings share it (ignoring case, as speech does), and
-    /// the item has a distinguisher: "{name}, {distinguisher}";</item>
-    /// <item>where names still collide — two namesakes with one
-    /// distinguisher (one file in two tabs), or a suffixed name that meets a
-    /// natural one — every member of the colliding group adds ", {noun} {n}"
-    /// to what it reads so far, n its 1-based place: a distinguisher already
-    /// given is never taken back ("note, B/note.md, tab 2");</item>
-    /// <item>and should even those collide, "{Noun} {n}", unique by n.</item>
+    /// <item>items whose names collide, or whose spoken names collide (a dirty
+    /// "draft" beside a clean "draft, unsaved changes"), add their
+    /// distinguisher: "{name}, {distinguisher}";</item>
+    /// <item>where identities or spoken names still collide — two namesakes
+    /// with one distinguisher (one file in two tabs), or a grown name that
+    /// meets a natural one — every member adds ", {noun} {n}", n its 1-based
+    /// place, to what it reads so far: a distinguisher already given is never
+    /// taken back ("note, B/note.md, tab 2");</item>
+    /// <item>the final pass: while spoken names still collide, each colliding
+    /// item's identity becomes "{Noun} {n}". Two such names never read alike
+    /// — their n differ, and the ", " that joins a state ends the number — so
+    /// each pass settles at least one more item, and the pass ends with every
+    /// spoken name distinct.</item>
     /// </list>
     /// </summary>
     internal static string[] Compose(
-        IReadOnlyList<string?> names, IReadOnlyList<string?> distinguishers, string noun)
+        IReadOnlyList<string?> names,
+        IReadOnlyList<string?> distinguishers,
+        string noun,
+        IReadOnlyList<string?>? states = null,
+        string? prefix = null)
     {
         int count = names.Count;
+        // Invariant: the noun is the shell's own English word, never cased by
+        // the machine's locale (under tr-TR "item" would capitalize to "İtem").
         string capitalized = noun.Length == 0
             ? "Item"
-            : char.ToUpper(noun[0], CultureInfo.CurrentCulture) + noun[1..];
+            : char.ToUpper(noun[0], CultureInfo.InvariantCulture) + noun[1..];
         string Ordinal(int index) => string.Create(CultureInfo.InvariantCulture, $"{capitalized} {index + 1}");
-        string[] bases = new string[count];
+        string[] identity = new string[count];
+        string[] spoken = new string[count];
+        void Speak(int index)
+        {
+            string? state = states is not null && index < states.Count ? states[index] : null;
+            spoken[index] = string.IsNullOrWhiteSpace(state)
+                ? $"{prefix}{identity[index]}"
+                : $"{prefix}{identity[index]}, {state}";
+        }
         for (int index = 0; index < count; index++)
         {
-            bases[index] = string.IsNullOrWhiteSpace(names[index]) ? Ordinal(index) : names[index]!;
+            identity[index] = string.IsNullOrWhiteSpace(names[index]) ? Ordinal(index) : names[index]!;
+            Speak(index);
         }
-        string[] result = (string[])bases.Clone();
-        foreach (int index in Colliding(result))
+        foreach (int index in Colliding(identity).Union(Colliding(spoken)).ToArray())
         {
             if (index < distinguishers.Count && !string.IsNullOrWhiteSpace(distinguishers[index]))
             {
-                result[index] = $"{bases[index]}, {distinguishers[index]}";
+                identity[index] = $"{identity[index]}, {distinguishers[index]}";
+                Speak(index);
             }
         }
-        foreach (int index in Colliding(result))
+        foreach (int index in Colliding(identity).Union(Colliding(spoken)).ToArray())
         {
-            result[index] = string.Create(
-                CultureInfo.InvariantCulture, $"{result[index]}, {noun} {index + 1}");
+            identity[index] = string.Create(
+                CultureInfo.InvariantCulture, $"{identity[index]}, {noun} {index + 1}");
+            Speak(index);
         }
-        for (int pass = 0; pass <= count && Colliding(result) is { Count: > 0 } colliding; pass++)
+        // The final pass. Ordinal names never read alike, so every colliding
+        // group holds an item not yet its ordinal: each round settles at least
+        // one more, and within count rounds no two spoken names collide.
+        for (int pass = 0; pass <= count && Colliding(spoken) is { Count: > 0 } colliding; pass++)
         {
             foreach (int index in colliding)
             {
-                result[index] = Ordinal(index);
+                identity[index] = Ordinal(index);
+                Speak(index);
             }
         }
-        return result;
+        return spoken;
+    }
+
+    /// <summary>The name the rule gives <paramref name="item"/> among
+    /// <paramref name="siblings"/> — for speech that names a row outside UIA,
+    /// a selection announcement, so the reader hears exactly what the rule
+    /// would name that row (codex PR 3 rounds 4 and 5). The item is found by
+    /// reference (two value-equal records are two rows), else by equality;
+    /// one that is none of them reads its bare name.</summary>
+    internal static string SpokenAmong<T>(
+        IReadOnlyList<T> siblings, T item, Func<T, string?> name, Func<T, string?> distinguisher, string noun)
+        where T : class
+    {
+        int index = -1;
+        for (int position = 0; position < siblings.Count && index < 0; position++)
+        {
+            if (ReferenceEquals(siblings[position], item))
+            {
+                index = position;
+            }
+        }
+        for (int position = 0; position < siblings.Count && index < 0; position++)
+        {
+            if (Equals(siblings[position], item))
+            {
+                index = position;
+            }
+        }
+        return index < 0
+            ? name(item) ?? string.Empty
+            : Compose([.. siblings.Select(name)], [.. siblings.Select(distinguisher)], noun)[index];
     }
 
     private static List<int> Colliding(string[] names) =>
         [
             .. Enumerable.Range(0, names.Length)
-                .GroupBy(index => names[index], StringComparer.CurrentCultureIgnoreCase)
+                .GroupBy(index => names[index], ReadAlike)
                 .Where(group => group.Skip(1).Any())
                 .SelectMany(group => group)
                 .Order(),
@@ -420,14 +525,17 @@ internal static class SiblingNames
         {
             string? namePath = GetNamePath(_host);
             string? distinguisherPath = GetDistinguisherPath(_host);
+            string? statePath = GetStatePath(_host);
             var names = new List<string?>(_host.Items.Count);
             var distinguishers = new List<string?>(_host.Items.Count);
+            var states = new List<string?>(_host.Items.Count);
             foreach (object item in _host.Items)
             {
                 names.Add(Read(item, namePath));
                 distinguishers.Add(distinguisherPath is null ? null : Read(item, distinguisherPath));
+                states.Add(statePath is null ? null : Read(item, statePath));
             }
-            return Compose(names, distinguishers, GetNoun(_host));
+            return Compose(names, distinguishers, GetNoun(_host), states, GetPrefix(_host));
         }
 
         /// <summary>A renamed item re-names its siblings too: each item that
@@ -452,7 +560,8 @@ internal static class SiblingNames
         {
             if (string.IsNullOrEmpty(args.PropertyName)
                 || args.PropertyName == GetNamePath(_host)
-                || args.PropertyName == GetDistinguisherPath(_host))
+                || args.PropertyName == GetDistinguisherPath(_host)
+                || args.PropertyName == GetStatePath(_host))
             {
                 Invalidate();
             }

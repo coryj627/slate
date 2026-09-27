@@ -50,20 +50,14 @@ public sealed class ItemContainerNameBindingTests
         };
 
     /// <summary>A pin as these facts exercise it: the item type, the
-    /// property the name reads, a converter's key, the sibling rule when
-    /// the host names through it, and the pinned trigger states.</summary>
-    private sealed record Pin(
-        Type ItemType,
-        string Path,
-        string? Converter,
-        SiblingRule? Rule,
-        IReadOnlyList<TriggerNaming> Triggers);
+    /// property the name reads, a converter's key, and the sibling rule when
+    /// the host names through it.</summary>
+    private sealed record Pin(Type ItemType, string Path, string? Converter, SiblingRule? Rule);
 
     private static Pin? PinOf(ContainerNaming naming) => naming switch
     {
-        ContainerNaming.Bound bound => new(bound.ItemType, bound.Path, bound.Converter, null, bound.Triggers),
-        ContainerNaming.Sibling sibling => new(
-            sibling.ItemType, sibling.Rule.NamePath, null, sibling.Rule, sibling.Triggers),
+        ContainerNaming.Bound bound => new(bound.ItemType, bound.Path, bound.Converter, null),
+        ContainerNaming.Sibling sibling => new(sibling.ItemType, sibling.Rule.NamePath, null, sibling.Rule),
         _ => null,
     };
 
@@ -130,16 +124,18 @@ public sealed class ItemContainerNameBindingTests
             SiblingNames.SetNamePath(host, rule.NamePath);
             SiblingNames.SetDistinguisherPath(host, rule.DistinguisherPath);
             SiblingNames.SetNoun(host, rule.Noun);
+            SiblingNames.SetStatePath(host, rule.StatePath);
+            SiblingNames.SetPrefix(host, rule.Prefix);
         }
         Exercise(label, host, pin, converter: null);
     });
 
-    public static TheoryData<string> TriggeredHosts()
+    public static TheoryData<string> StatedHosts()
     {
         var data = new TheoryData<string>();
         foreach ((string label, ContainerNaming naming) in ItemContainerNameCensus.ExpectedNaming)
         {
-            if (PinOf(naming) is { Triggers.Count: > 0 })
+            if (naming is ContainerNaming.Sibling { Rule.StatePath: not null })
             {
                 data.Add(label);
             }
@@ -147,48 +143,59 @@ public sealed class ItemContainerNameBindingTests
         return data;
     }
 
-    /// <summary>Codex PR 3 round 2: every pinned trigger state, hosted. Two
-    /// items walk from rest through each pinned state (the workspace tab's
-    /// dirty, missing and both) and back, and in each the container reads
-    /// the state's format over the item's OWN name — so a format that drops
-    /// the name (every dirty tab called "duplicate") fails here as well as
-    /// in the census.</summary>
+    /// <summary>Codex PR 3 round 5: a state is the sibling rule's INPUT,
+    /// hosted from the authored style (the workspace tab's unsaved and
+    /// missing states). Beside an item in a state sits one whose own name is
+    /// exactly what the first reads with that state — "draft" unsaved beside
+    /// "draft, unsaved changes" — and the pair read apart, the first still
+    /// ending in its state; back at rest, each reads its own name. A state
+    /// appended after the rule (a trigger's format over the converter, the
+    /// shape this replaced) reads the pair alike, and a style that drops the
+    /// state never speaks it: both fail here.</summary>
     [Theory]
-    [MemberData(nameof(TriggeredHosts))]
-    public void EveryPinnedTriggerStateReadsItsOwnName(string label) => RunSta(() =>
+    [MemberData(nameof(StatedHosts))]
+    public void AStateIsTheRulesInputNeverTextAddedAfterIt(string label) => RunSta(() =>
     {
-        Pin pin = PinOf(ItemContainerNameCensus.ExpectedNaming[label])!;
-        (ItemsControl host, _) = AuthoredHost(label);
-        (string Property, object? On, object? Off)[] conditions = Conditions(pin.Triggers);
-        string[] titles = ["Alpha", "Beta"];
-        var items = new ObservableCollection<object>();
-        foreach (string title in titles)
+        SiblingRule rule = ((ContainerNaming.Sibling)ItemContainerNameCensus.ExpectedNaming[label]).Rule;
+        foreach (string state in new[] { "a state", "a state, and another" })
         {
-            var fields = (IDictionary<string, object?>)new ExpandoObject();
-            fields[pin.Path] = title;
-            foreach ((string property, _, object? off) in conditions)
+            (ItemsControl host, _) = AuthoredHost(label);
+            IDictionary<string, object?> Item(string name, string place)
             {
-                fields[property] = off;
+                var fields = (IDictionary<string, object?>)new ExpandoObject();
+                fields[rule.NamePath] = name;
+                if (rule.DistinguisherPath is { } distinguisher)
+                {
+                    fields[distinguisher] = place;
+                }
+                fields[rule.StatePath!] = string.Empty;
+                return fields;
             }
-            items.Add(fields);
-        }
-        host.ItemsSource = items;
-        Hosted(host, () =>
-        {
-            void Expect(string state, Func<string, string> name) => Assert.True(
-                titles.Select(name).SequenceEqual(ItemNames(host)),
-                $"{label} {state}: expected [{string.Join(" | ", titles.Select(name))}], "
-                + $"read [{string.Join(" | ", ItemNames(host))}]");
+            string natural = $"draft, {state}";
+            IDictionary<string, object?> stated = Item("draft", "A/draft.md");
+            var items = new ObservableCollection<object> { stated, Item(natural, $"B/{natural}.md") };
+            host.ItemsSource = items;
+            Hosted(host, () =>
+            {
+                void Expect(string when, string[] expected)
+                {
+                    string[] read = ItemNames(host);
+                    Assert.True(
+                        expected.SequenceEqual(read),
+                        $"{label} {when}: expected [{string.Join(" | ", expected)}], read [{string.Join(" | ", read)}]");
+                }
 
-            Expect("at rest", title => title);
-            foreach (TriggerNaming state in pin.Triggers)
-            {
-                Enter(items, conditions, state.When);
-                Expect($"when {state.When}", title => Formatted(state.Format, title));
-            }
-            Enter(items, conditions, null);
-            Expect("back at rest", title => title);
-        });
+                Expect("at rest", ["draft", natural]);
+                stated[rule.StatePath!] = state;
+                Expect(
+                    $"in \"{state}\"",
+                    rule.DistinguisherPath is null
+                        ? [$"draft, {rule.Noun} 1, {state}", $"{natural}, {rule.Noun} 2"]
+                        : [$"draft, A/draft.md, {state}", $"{natural}, B/{natural}.md"]);
+                stated[rule.StatePath!] = string.Empty;
+                Expect("back at rest", ["draft", natural]);
+            });
+        }
     });
 
     public static TheoryData<string> AuthoredLayoutRuleHosts()
@@ -242,8 +249,13 @@ public sealed class ItemContainerNameBindingTests
             string read = string.Join(" | ", stops);
             Assert.True(stops.Length == 3, $"{label}: {stops.Length} stops: {read}");
             Assert.True(
-                stops.Distinct(StringComparer.CurrentCultureIgnoreCase).Count() == 3,
+                stops.Distinct(SiblingNames.ReadAlike).Count() == 3,
                 $"{label}: stops read alike: {read}");
+            // A prefix is the rule's input too (codex PR 3 round 5): every
+            // stop reads it, and it comes from the host's declaration.
+            Assert.True(
+                stops.All(stop => stop.StartsWith(rule.Prefix ?? string.Empty, StringComparison.Ordinal)),
+                $"{label}: a stop does not read the prefix \"{rule.Prefix}\": {read}");
             Assert.True(
                 stops[0].Contains($", {rule.Noun} 1", StringComparison.Ordinal)
                 && stops[1].Contains($", {rule.Noun} 2", StringComparison.Ordinal),
@@ -288,42 +300,6 @@ public sealed class ItemContainerNameBindingTests
         return null;
     }
 
-    /// <summary>The properties the pinned states name, each with the value
-    /// that enters it and the one that leaves it.</summary>
-    internal static (string Property, object? On, object? Off)[] Conditions(IReadOnlyList<TriggerNaming> triggers) =>
-        [
-            .. triggers
-                .SelectMany(state => state.When.Split(" & "))
-                .Select(condition => condition.Split('='))
-                .DistinctBy(pair => pair[0])
-                .Select(pair => bool.TryParse(pair[1], out bool on)
-                    ? (pair[0], (object?)on, (object?)!on)
-                    : (pair[0], (object?)pair[1], (object?)null)),
-        ];
-
-    /// <summary>Puts every item into the state <paramref name="when"/>
-    /// names (null: at rest).</summary>
-    internal static void Enter(
-        IEnumerable<object> items, (string Property, object? On, object? Off)[] conditions, string? when)
-    {
-        HashSet<string> on = when is null ? [] : [.. when.Split(" & ").Select(condition => condition.Split('=')[0])];
-        foreach (IDictionary<string, object?> fields in items.Cast<IDictionary<string, object?>>())
-        {
-            foreach ((string property, object? onValue, object? off) in conditions)
-            {
-                fields[property] = on.Contains(property) ? onValue : off;
-            }
-        }
-    }
-
-    /// <summary>A state's format applied as WPF applies it: the XAML
-    /// <c>{}</c> escape dropped.</summary>
-    internal static string Formatted(string? format, string name)
-    {
-        string applied = format is null ? "{0}" : format.StartsWith("{}", StringComparison.Ordinal) ? format[2..] : format;
-        return string.Format(CultureInfo.InvariantCulture, applied, name);
-    }
-
     /// <summary>An authored host as the app builds it, minus its data: an
     /// instance of its type, its container style as authored, and the
     /// sibling rule as its XAML declares it (not as the census pins it, so
@@ -343,6 +319,8 @@ public sealed class ItemContainerNameBindingTests
         {
             SiblingNames.SetNamePath(host, namePath);
             SiblingNames.SetDistinguisherPath(host, Declared("DistinguisherPath"));
+            SiblingNames.SetStatePath(host, Declared("StatePath"));
+            SiblingNames.SetPrefix(host, Declared("Prefix"));
             if (Declared("Noun") is { } noun)
             {
                 SiblingNames.SetNoun(host, noun);

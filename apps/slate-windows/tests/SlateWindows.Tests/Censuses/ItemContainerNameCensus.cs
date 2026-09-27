@@ -20,7 +20,9 @@
 // alike (R-4; the spec review, round 21). A host whose names CAN collide
 // names through SiblingNames — the one collision-aware rule: the item's
 // name, a distinguisher (a path, a folder) where namesakes meet, else an
-// ordinal — declared on the host and read by its container style; every
+// ordinal — declared on the host and read by its container style, its name
+// final: a state or a prefix is the rule's input, never text added after it
+// (codex PR 3 round 5; NothingIsAppendedAfterTheSiblingRule); every
 // other host records, in the table, why its names cannot collide. Beneath
 // that: an
 // ItemContainerStyle whose AutomationProperties.Name setter binds the
@@ -71,16 +73,24 @@ namespace SlateWindows.Tests.Censuses;
 
 /// <summary>The sibling rule a host declares (<see cref="SiblingNames"/>):
 /// the property each item is read by ("" = the item itself), the one that
-/// tells namesakes apart, and an ordinal's noun. WPF gives two EQUAL items
-/// ONE automation peer, so a rule over the item itself says why no two
-/// items are equal (<see cref="NoEqualItems"/>); a rule over
-/// <see cref="SiblingText"/> rows (<see cref="Wrapped"/>) is given wrapped
-/// strings wherever its host's ItemsSource is set.</summary>
+/// tells namesakes apart, and an ordinal's noun — and, when the reader hears
+/// more than the item's name, the property its state is read by
+/// (<see cref="StatePath"/>) and the host's <see cref="Prefix"/>: INPUTS to
+/// the rule's one final pass, never text added after it (codex PR 3 round
+/// 5). WPF gives two EQUAL items ONE automation peer, so a rule over the
+/// item itself says why no two items are equal
+/// (<see cref="NoEqualItems"/>); a rule over <see cref="SiblingText"/> rows
+/// (<see cref="Wrapped"/>) is given wrapped strings wherever its host's
+/// ItemsSource is set.</summary>
 internal sealed record SiblingRule(string NamePath, string? DistinguisherPath, string Noun)
 {
     public string NoEqualItems { get; init; } = string.Empty;
 
     public bool Wrapped { get; init; }
+
+    public string? StatePath { get; init; }
+
+    public string? Prefix { get; init; }
 }
 
 /// <summary>How an items host names its containers — the R-4 pin.</summary>
@@ -99,37 +109,26 @@ internal abstract record ContainerNaming
     /// Bind call (the grid fact), never by a container style.</summary>
     internal sealed record Grid : ContainerNaming;
 
-    /// <summary>A container style whose Name setter binds
+    /// <summary>A container style whose one Name setter binds
     /// <paramref name="Path"/> ("" = the item itself) of
     /// <paramref name="ItemType"/>, through <paramref name="Converter"/>
-    /// (a resource key) when one is named — and, in each of
-    /// <see cref="Triggers"/>, exactly the pinned variant (codex PR 3 round
-    /// 2: a state's name is pinned as tightly as the resting one). Allowed
-    /// only where names cannot collide: <see cref="Distinct"/> says
-    /// why.</summary>
+    /// (a resource key) when one is named — and nothing re-names the
+    /// container in any state (codex PR 3 round 5: a state belongs in the
+    /// bound name). Allowed only where names cannot collide:
+    /// <see cref="Distinct"/> says why.</summary>
     internal sealed record Bound(Type ItemType, string Path, string? Converter = null) : ContainerNaming
     {
         public string Distinct { get; init; } = string.Empty;
-
-        public IReadOnlyList<TriggerNaming> Triggers { get; init; } = [];
     }
 
     /// <summary>Names through the sibling rule: the host declares
     /// <paramref name="Rule"/> over <paramref name="ItemType"/>, and its
-    /// container style's Name reads <see cref="SiblingNames.Converter"/>
-    /// — in each of <see cref="Triggers"/> too.</summary>
-    internal sealed record Sibling(Type ItemType, SiblingRule Rule) : ContainerNaming
-    {
-        public IReadOnlyList<TriggerNaming> Triggers { get; init; } = [];
-    }
+    /// container style's one Name setter reads
+    /// <see cref="SiblingNames.Converter"/> — in every state: a state is the
+    /// rule's input (<see cref="SiblingRule.StatePath"/>), never a trigger's
+    /// variant appended after it.</summary>
+    internal sealed record Sibling(Type ItemType, SiblingRule Rule) : ContainerNaming;
 }
-
-/// <summary>One trigger state's name: when <paramref name="When"/> holds
-/// ("IsDirty=True", conditions joined by " &amp; " in document order), the
-/// container's Name binds <paramref name="Path"/> through
-/// <paramref name="Converter"/> with <paramref name="Format"/> as authored
-/// (the XAML <c>{}</c> escape included).</summary>
-internal sealed record TriggerNaming(string When, string Path, string? Converter, string? Format);
 
 /// <summary>How an items host the shell builds or fills in C# is accounted
 /// for (the spec review, round 23).</summary>
@@ -258,10 +257,11 @@ public sealed class ItemContainerNameCensus
                 nameof(SearchResultRowViewModel.Path), "result"),
             ["MainWindow.xaml#{Binding SnippetSegments}"] = new ContainerNaming.Presentation(),
             ["Recent searches"] = new ContainerNaming.Layout(
-                "each button is named among its siblings",
+                "each button is named among its siblings, \"Recent search: \" and all",
                 new SiblingRule(string.Empty, null, "search")
                 {
                     NoEqualItems = "the recents store keeps each query once (SearchRecentsStore: an ordinal de-duplication on add and on load)",
+                    Prefix = "Recent search: ",
                 }),
             ["CommandPaletteResults"] = Distinct(
                 typeof(CommandPaletteRowViewModel), nameof(CommandPaletteRowViewModel.AccessibleName),
@@ -300,20 +300,15 @@ public sealed class ItemContainerNameCensus
                 "each list item's controls carry its index (PropertyPhrase.ListItemLabel)"),
             ["PropertiesRows"] = new ContainerNaming.Layout(
                 "each row's controls carry its property's key, unique in a note's frontmatter"),
-            ["WorkspaceTabs"] = Sibling(
-                typeof(WorkspaceTabViewModel), nameof(WorkspaceTabViewModel.Title),
-                nameof(WorkspaceTabViewModel.Path), "tab") with
-            {
-                Triggers =
-                [
-                    new($"{nameof(WorkspaceTabViewModel.IsDirty)}=True",
-                        string.Empty, SiblingConverter, "{}{0}, unsaved changes"),
-                    new($"{nameof(WorkspaceTabViewModel.IsMissingFromDisk)}=True",
-                        string.Empty, SiblingConverter, "{}{0}, missing from disk"),
-                    new($"{nameof(WorkspaceTabViewModel.IsDirty)}=True & {nameof(WorkspaceTabViewModel.IsMissingFromDisk)}=True",
-                        string.Empty, SiblingConverter, "{}{0}, missing from disk, unsaved changes"),
-                ],
-            },
+            // The tab's unsaved and missing states are the rule's input
+            // (codex PR 3 round 5): a trigger appending them after the rule
+            // read a dirty "draft" like a clean "draft, unsaved changes".
+            ["WorkspaceTabs"] = new ContainerNaming.Sibling(
+                typeof(WorkspaceTabViewModel),
+                new SiblingRule(nameof(WorkspaceTabViewModel.Title), nameof(WorkspaceTabViewModel.Path), "tab")
+                {
+                    StatePath = nameof(WorkspaceTabViewModel.SpokenState),
+                }),
             ["WorkspaceTemplates.xaml#{Binding Children}"] = new ContainerNaming.Layout(
                 "its panes are unnamed structural panes; each tab strip is its own sibling set"),
 
@@ -383,7 +378,7 @@ public sealed class ItemContainerNameCensus
             }
             if (naming is ContainerNaming.Sibling sibling)
             {
-                foreach (string? path in new[] { sibling.Rule.NamePath, sibling.Rule.DistinguisherPath })
+                foreach (string? path in new[] { sibling.Rule.NamePath, sibling.Rule.DistinguisherPath, sibling.Rule.StatePath })
                 {
                     if (path is { Length: > 0 } && sibling.ItemType.GetProperty(path) is null)
                     {
@@ -690,7 +685,7 @@ public sealed class ItemContainerNameCensus
                     continue;
                 }
                 foreach (IGrouping<string, string?> clash in names
-                    .GroupBy(name => name!, StringComparer.CurrentCultureIgnoreCase)
+                    .GroupBy(name => name!, SiblingNames.ReadAlike)
                     .Where(group => group.Skip(1).Any()))
                 {
                     offenders.Add($"{site}: {clash.Count()} items read \"{clash.Key}\"");
@@ -812,6 +807,216 @@ public sealed class ItemContainerNameCensus
             + string.Join("\n  ", offenders));
     }
 
+    /// <summary>
+    /// Codex PR 3 round 5: the sibling rule's name is the LAST word — what
+    /// the reader hears is the input to its one final collision pass. A tab's
+    /// state appended after the rule by a trigger's StringFormat re-created
+    /// the duplicates the rule had removed (a dirty "draft" read like a clean
+    /// "draft, unsaved changes"), so a state and a prefix are the rule's
+    /// inputs (SiblingNames.StatePath, SiblingNames.Prefix), and every reader
+    /// of its names takes them as they are.
+    /// <list type="bullet">
+    /// <item>XAML: every binding through SiblingNames.Converter is a
+    /// container style's Name setter, exactly <c>{Binding
+    /// RelativeSource={RelativeSource Self}, Converter=…}</c>, outside any
+    /// trigger, and nothing else in that style (or the chain it is BasedOn)
+    /// re-names the container; every stop that reads its layout container's
+    /// name binds <c>(AutomationProperties.Name)</c> of its ContentPresenter
+    /// with nothing added, and no trigger of its template re-names it.</item>
+    /// <item>C#: SiblingNames.Converter is read only inside SiblingNames;
+    /// ContainerNameBinding() and FromContainer() are handed straight to the
+    /// AutomationProperties.Name they set (a Setter, a SetBinding); and the
+    /// rule's own results (Compose, SpokenAmong) — the call, or the local it
+    /// initializes — are never joined to other text.</item>
+    /// </list>
+    /// The C# leg reads syntax bound by the compiler, but it follows a result
+    /// no further than a local; a name carried on through a property is
+    /// proved by the hosted facts (SharedNameTests, SiblingNamesTests).
+    /// </summary>
+    [Fact]
+    public void NothingIsAppendedAfterTheSiblingRule()
+    {
+        Dictionary<string, List<XElement>> keyedStyles = KeyedStyles();
+        var offenders = new List<string>();
+        int ruleReaders = 0;
+        int containerReaders = 0;
+        foreach (string path in ShellViewXaml())
+        {
+            string file = Path.GetFileName(path);
+            foreach (XElement element in XDocument.Load(path, LoadOptions.SetLineInfo).Descendants())
+            {
+                foreach (XAttribute attribute in element.Attributes())
+                {
+                    string value = attribute.Value;
+                    string site = $"{file}:{((IXmlLineInfo)attribute).LineNumber}";
+                    if (value.Contains("SiblingNames.Converter", StringComparison.Ordinal))
+                    {
+                        ruleReaders++;
+                        bool nameSetter = element.Name.LocalName == "Setter"
+                            && (string?)element.Attribute("Property") == "AutomationProperties.Name"
+                            && attribute.Name.LocalName == "Value";
+                        XElement? style = element.Parent?.Name.LocalName is "Style" or "Style.Setters"
+                            ? element.Ancestors().FirstOrDefault(ancestor => ancestor.Name.LocalName == "Style")
+                            : null;
+                        if (!nameSetter || !IsSiblingBinding(element) || style is null)
+                        {
+                            offenders.Add(
+                                $"{site}: reads the sibling rule as `{value}` — only a container style's own Name "
+                                + $"setter may, exactly {{Binding RelativeSource={{RelativeSource Self}}, Converter={SiblingConverter}}}");
+                        }
+                        else if (RenamingSetters(style, element, keyedStyles).FirstOrDefault() is { } renamed)
+                        {
+                            offenders.Add($"{site}: {renamed} after the sibling rule named it");
+                        }
+                    }
+                    if (value.Contains("(AutomationProperties.Name)", StringComparison.Ordinal))
+                    {
+                        containerReaders++;
+                        BindingText? binding = ParseBindingMarkup(value);
+                        if (attribute.Name.LocalName != "AutomationProperties.Name"
+                            || binding is not { Path: "(AutomationProperties.Name)", Converter: null, Extras: ["RelativeSource"] }
+                            || !value.Contains("AncestorType=ContentPresenter", StringComparison.Ordinal))
+                        {
+                            offenders.Add(
+                                $"{site}: a stop reads its container's name as `{value}` — it must take it as it is: "
+                                + "{Binding (AutomationProperties.Name), RelativeSource={RelativeSource AncestorType=ContentPresenter}}");
+                        }
+                        else if (element.Ancestors().FirstOrDefault(ancestor => ancestor.Name.LocalName == "DataTemplate") is { } template
+                            && template.Descendants().Any(setter => setter.Name.LocalName == "Setter"
+                                && (string?)setter.Attribute("Property") == "AutomationProperties.Name"))
+                        {
+                            offenders.Add($"{site}: a trigger of this stop's template re-names it after the sibling rule named it");
+                        }
+                    }
+                }
+            }
+        }
+
+        int codeReaders = 0;
+        foreach ((string file, CSharpSource source) in ShellCompilation.Sources)
+        {
+            SemanticModel model = ShellCompilation.ModelFor(source);
+            bool ruleFile = source.Root.DescendantNodes().OfType<ClassDeclarationSyntax>()
+                .Any(declaration => declaration.Identifier.ValueText == nameof(SiblingNames));
+            foreach (SyntaxNode node in source.Root.DescendantNodes())
+            {
+                if (node is IdentifierNameSyntax { Identifier.ValueText: nameof(SiblingNames.Converter) } converter
+                    && model.GetSymbolInfo(converter).Symbol is IPropertySymbol { ContainingType.Name: nameof(SiblingNames) }
+                    && !ruleFile)
+                {
+                    offenders.Add($"{Site(file, node)}: reads SiblingNames.Converter directly — build the Name through ContainerNameBinding()");
+                }
+                if (node is not InvocationExpressionSyntax invocation
+                    || invocation.Expression switch
+                    {
+                        MemberAccessExpressionSyntax access => access.Name.Identifier.ValueText,
+                        SimpleNameSyntax simple => simple.Identifier.ValueText,
+                        _ => null,
+                    } is not (nameof(SiblingNames.ContainerNameBinding) or nameof(SiblingNames.FromContainer)
+                        or nameof(SiblingNames.Compose) or nameof(SiblingNames.SpokenAmong))
+                    || model.GetSymbolInfo(invocation).Symbol is not IMethodSymbol { ContainingType.Name: nameof(SiblingNames) } method)
+                {
+                    continue;
+                }
+                switch (method.Name)
+                {
+                    case nameof(SiblingNames.ContainerNameBinding) or nameof(SiblingNames.FromContainer):
+                        codeReaders++;
+                        if (!HandedStraightToName(invocation, model))
+                        {
+                            offenders.Add(
+                                $"{Site(file, invocation)}: SiblingNames.{method.Name}() is not handed straight to the "
+                                + "AutomationProperties.Name it sets (a Setter, a SetBinding) — nothing may be added to the rule's name");
+                        }
+                        break;
+                    case nameof(SiblingNames.Compose) or nameof(SiblingNames.SpokenAmong):
+                        codeReaders++;
+                        foreach (ExpressionSyntax use in UsesOf(invocation, model))
+                        {
+                            if (JoinedToText(use))
+                            {
+                                offenders.Add(
+                                    $"{Site(file, use)}: the name SiblingNames.{method.Name} gave is joined to other text — make "
+                                    + "that text the rule's input (a state, a prefix)");
+                            }
+                        }
+                        break;
+                }
+            }
+        }
+
+        Assert.True(ruleReaders >= 20, $"only {ruleReaders} XAML readers of the sibling rule — the scan is broken");
+        Assert.True(containerReaders >= 4, $"only {containerReaders} stops reading their container's name — the scan is broken");
+        Assert.True(codeReaders >= 10, $"only {codeReaders} C# readers of the sibling rule — the scan is broken");
+        Assert.True(
+            offenders.Count == 0,
+            "names added to after the sibling rule named them:\n  " + string.Join("\n  ", offenders));
+    }
+
+    /// <summary>Whether <paramref name="invocation"/> is the value argument
+    /// of a <c>new Setter(AutomationProperties.NameProperty, …)</c> or a
+    /// <c>SetBinding(AutomationProperties.NameProperty, …)</c>.</summary>
+    private static bool HandedStraightToName(InvocationExpressionSyntax invocation, SemanticModel model)
+    {
+        if (invocation.Parent is not ArgumentSyntax { Parent: ArgumentListSyntax list } argument)
+        {
+            return false;
+        }
+        int position = list.Arguments.IndexOf(argument);
+        if (position < 1
+            || position != list.Arguments.Count - 1
+            || model.GetSymbolInfo(list.Arguments[position - 1].Expression).Symbol is not IFieldSymbol
+            {
+                Name: "NameProperty",
+                ContainingType.Name: "AutomationProperties",
+            })
+        {
+            return false;
+        }
+        return list.Parent switch
+        {
+            ObjectCreationExpressionSyntax creation =>
+                model.GetTypeInfo(creation).Type?.ToDisplayString() == "System.Windows.Setter",
+            InvocationExpressionSyntax call =>
+                model.GetSymbolInfo(call).Symbol is IMethodSymbol { Name: "SetBinding" },
+            _ => false,
+        };
+    }
+
+    /// <summary>Where the rule's result goes: the call itself, or — when it
+    /// initializes a local — every read of that local.</summary>
+    private static IEnumerable<ExpressionSyntax> UsesOf(InvocationExpressionSyntax invocation, SemanticModel model)
+    {
+        if (invocation.Parent is EqualsValueClauseSyntax { Parent: VariableDeclaratorSyntax declarator }
+            && model.GetDeclaredSymbol(declarator) is ILocalSymbol local
+            && declarator.Ancestors().FirstOrDefault(ancestor => ancestor is BlockSyntax) is { } scope)
+        {
+            return scope.DescendantNodes()
+                .OfType<IdentifierNameSyntax>()
+                .Where(identifier => SymbolEqualityComparer.Default.Equals(model.GetSymbolInfo(identifier).Symbol, local));
+        }
+        return [invocation];
+    }
+
+    /// <summary>Whether a name expression — through an index, parentheses
+    /// or a conditional's branch — is an operand of <c>+</c> or a hole of an
+    /// interpolated string.</summary>
+    private static bool JoinedToText(ExpressionSyntax use)
+    {
+        SyntaxNode current = use;
+        while (current.Parent switch
+        {
+            ElementAccessExpressionSyntax access => access.Expression == current,
+            ParenthesizedExpressionSyntax => true,
+            ConditionalExpressionSyntax conditional => conditional.Condition != current,
+            _ => false,
+        })
+        {
+            current = current.Parent!;
+        }
+        return current.Parent is BinaryExpressionSyntax { RawKind: (int)SyntaxKind.AddExpression } or InterpolationSyntax;
+    }
+
     // ---------------------------------------------------------------- XAML
 
     /// <summary>Every ItemsControl-derived element in the shell's view XAML
@@ -866,14 +1071,14 @@ public sealed class ItemContainerNameCensus
             ContainerNaming.Layout when !typeof(LayoutItemsControl).IsAssignableFrom(type) =>
                 "must be a LayoutItemsControl",
             ContainerNaming.Layout { Rule: { } rule } =>
-                XamlSiblingProblem(host, rule, ContainerStyle(host, keyedStyles), [], keyedStyles),
+                XamlSiblingProblem(host, rule, ContainerStyle(host, keyedStyles), keyedStyles),
             ContainerNaming.Layout => null,
             ContainerNaming.Presentation => typeof(AutomationPresentationItemsControl).IsAssignableFrom(type)
                 ? null : "must be an AutomationPresentationItemsControl",
             ContainerNaming.Bound or ContainerNaming.Sibling when !ContainersAreStops(type) => WrapperIsASecondStop,
             ContainerNaming.Bound bound => BoundProblem(ContainerStyle(host, keyedStyles), bound, keyedStyles),
             ContainerNaming.Sibling sibling => XamlSiblingProblem(
-                host, sibling.Rule, ContainerStyle(host, keyedStyles), sibling.Triggers, keyedStyles),
+                host, sibling.Rule, ContainerStyle(host, keyedStyles), keyedStyles),
             _ => $"pinned as {expected}, which a XAML host cannot be",
         };
         if (problem is not null)
@@ -884,14 +1089,14 @@ public sealed class ItemContainerNameCensus
 
     /// <summary>Why a XAML host does not name through the sibling rule
     /// <paramref name="rule"/>, or null: it declares the rule's name path,
-    /// distinguisher and noun exactly, and its container style's Name — at
-    /// rest and in each pinned trigger state — reads the rule's converter
-    /// from the container itself.</summary>
+    /// distinguisher, noun, state path and prefix exactly, its container
+    /// style's one Name setter reads the rule's converter from the container
+    /// itself, and nothing in the style re-names the container in any state
+    /// (codex PR 3 round 5).</summary>
     private static string? XamlSiblingProblem(
         XElement host,
         SiblingRule rule,
         XElement? style,
-        IReadOnlyList<TriggerNaming> triggers,
         Dictionary<string, List<XElement>> keyedStyles)
     {
         foreach ((string property, string? expected) in new[]
@@ -899,6 +1104,8 @@ public sealed class ItemContainerNameCensus
             ("SiblingNames.NamePath", (string?)rule.NamePath),
             ("SiblingNames.DistinguisherPath", rule.DistinguisherPath),
             ("SiblingNames.Noun", (string?)rule.Noun),
+            ("SiblingNames.StatePath", rule.StatePath),
+            ("SiblingNames.Prefix", rule.Prefix),
         })
         {
             string? declared = (string?)host.Attributes().FirstOrDefault(attribute => attribute.Name.LocalName == property);
@@ -919,45 +1126,56 @@ public sealed class ItemContainerNameCensus
             return "declares the sibling rule but has no container style to read it";
         }
         XElement? setter = TopLevelNameSetter(style, keyedStyles, depth: 0);
-        if (setter is null || !IsSiblingBinding(setter, out string? format) || format is not null)
+        if (setter is null || !IsSiblingBinding(setter))
         {
             return $"its container style's Name (`{(setter is null ? "none" : SetterValueText(setter))}`) does not read "
                 + $"{{Binding RelativeSource={{RelativeSource Self}}, Converter={SiblingConverter}}}";
         }
-        var states = new List<TriggerNaming>();
-        foreach ((string when, XElement triggered) in TriggerNameSetters(style))
-        {
-            if (!IsSiblingBinding(triggered, out string? stateFormat))
-            {
-                return $"the Name setter when {when} (`{SetterValueText(triggered)}`) does not read the sibling rule";
-            }
-            states.Add(new TriggerNaming(when, string.Empty, SiblingConverter, stateFormat));
-        }
-        return states.SequenceEqual(triggers)
-            ? null
-            : "its triggers name "
-                + (states.Count == 0 ? "no state" : string.Join("; ", states.Select(Describe)))
-                + " but R-4 pins "
-                + (triggers.Count == 0 ? "none" : string.Join("; ", triggers.Select(Describe)));
+        return RenamingSetters(style, setter, keyedStyles).FirstOrDefault() is { } renamed
+            ? $"{renamed}: the rule's name is final — a state is the rule's input (SiblingNames.StatePath), "
+                + "a prefix too (SiblingNames.Prefix)"
+            : null;
     }
 
-    /// <summary>Whether a Name setter is the sibling rule's binding —
+    /// <summary>Whether a Name setter is exactly the sibling rule's binding —
     /// <c>{Binding RelativeSource={RelativeSource Self}, Converter={x:Static
-    /// local:SiblingNames.Converter}}</c>, a StringFormat allowed — and its
-    /// format.</summary>
-    private static bool IsSiblingBinding(XElement setter, out string? format)
+    /// local:SiblingNames.Converter}}</c>, with nothing added (codex PR 3
+    /// round 5: a StringFormat over the rule appended text after its
+    /// collision checks).</summary>
+    internal static bool IsSiblingBinding(XElement setter) =>
+        SetterBinding(setter) is { } binding
+        && binding.Path.Length == 0
+        && binding.Converter == SiblingConverter
+        && binding.Extras is ["RelativeSource"]
+        && SetterValueText(setter).Contains("RelativeSource={RelativeSource Self}", StringComparison.Ordinal);
+
+    /// <summary>Every AutomationProperties.Name setter in
+    /// <paramref name="style"/> and the chain it is BasedOn other than
+    /// <paramref name="kept"/> — a trigger's, a template's — each described
+    /// by where it sits; a container style names its container once.</summary>
+    internal static IEnumerable<string> RenamingSetters(
+        XElement style, XElement kept, Dictionary<string, List<XElement>> keyedStyles)
     {
-        format = null;
-        if (SetterBinding(setter) is not { } binding
-            || binding.Path.Length != 0
-            || binding.Converter != SiblingConverter
-            || binding.Extras.Any(extra => extra is not ("RelativeSource" or "StringFormat"))
-            || !SetterValueText(setter).Contains("RelativeSource={RelativeSource Self}", StringComparison.Ordinal))
+        XElement? current = style;
+        for (int depth = 0; current is not null && depth < 8; depth++)
         {
-            return false;
+            foreach (XElement setter in current.Descendants()
+                .Where(element => element.Name.LocalName == "Setter"
+                    && (string?)element.Attribute("Property") == "AutomationProperties.Name"
+                    && element != kept))
+            {
+                XElement? trigger = setter.Ancestors()
+                    .TakeWhile(ancestor => ancestor != current)
+                    .FirstOrDefault(ancestor => ancestor.Name.LocalName.EndsWith("Trigger", StringComparison.Ordinal));
+                yield return (trigger is null ? "another Name setter" : $"a trigger re-names the container when {When(trigger)}")
+                    + $" (line {((IXmlLineInfo)setter).LineNumber}: `{SetterValueText(setter)}`)";
+            }
+            current = ResourceKey((string?)current.Attribute("BasedOn")) is { } basedOn
+                && keyedStyles.TryGetValue(basedOn, out List<XElement>? bases)
+                && bases.Count == 1
+                    ? bases[0]
+                    : null;
         }
-        format = binding.Format;
-        return true;
     }
 
     private const string WrapperIsASecondStop =
@@ -995,10 +1213,11 @@ public sealed class ItemContainerNameCensus
     /// <summary>Why <paramref name="style"/> does not name containers by
     /// <paramref name="expected"/>, or null. The top-level Name setter (on
     /// the style or the chain it is BasedOn) must be a binding of exactly
-    /// the pinned path and converter, with nothing else; the triggers that
-    /// set a Name must be exactly the pinned states, in order, each binding
-    /// its pinned path, converter and format (codex PR 3 round 2: a format
-    /// with no {0} names every dirty tab alike).</summary>
+    /// the pinned path and converter, with nothing else, and no other setter
+    /// may re-name the container in any state (codex PR 3 rounds 2 and 5: a
+    /// trigger's format with no {0} named every dirty tab alike, and one with
+    /// it read a dirty "draft" like a clean "draft, unsaved
+    /// changes").</summary>
     private static string? BoundProblem(
         XElement? style, ContainerNaming.Bound expected, Dictionary<string, List<XElement>> keyedStyles)
     {
@@ -1023,31 +1242,10 @@ public sealed class ItemContainerNameCensus
         {
             return $"its Name setter binds {binding} but R-4 pins {Describe(expected)}";
         }
-        var states = new List<TriggerNaming>();
-        foreach ((string when, XElement triggered) in TriggerNameSetters(style))
-        {
-            BindingText? variant = SetterBinding(triggered);
-            if (variant is null || variant.Extras.Any(extra => extra != "StringFormat"))
-            {
-                return $"the Name setter when {when} (`{SetterValueText(triggered)}`) is not a binding the census can pin";
-            }
-            states.Add(new TriggerNaming(when, variant.Path, variant.Converter, variant.Format));
-        }
-        if (!states.SequenceEqual(expected.Triggers))
-        {
-            return "its triggers name "
-                + (states.Count == 0 ? "no state" : string.Join("; ", states.Select(Describe)))
-                + " but R-4 pins "
-                + (expected.Triggers.Count == 0 ? "none" : string.Join("; ", expected.Triggers.Select(Describe)));
-        }
-        return null;
+        return RenamingSetters(style, setter, keyedStyles).FirstOrDefault() is { } renamed
+            ? $"{renamed}: a state belongs in the bound name, or on the sibling rule as its input"
+            : null;
     }
-
-    private static string Describe(TriggerNaming state) =>
-        $"{state.When} → {{Binding {state.Path}"
-        + (state.Converter is null ? string.Empty : $", Converter={state.Converter}")
-        + (state.Format is null ? string.Empty : $", StringFormat='{state.Format}'")
-        + "}";
 
     private static string Describe(ContainerNaming.Bound bound) =>
         (bound.Path.Length == 0 ? "the item itself" : $"{bound.ItemType.Name}.{bound.Path}")
@@ -1072,19 +1270,10 @@ public sealed class ItemContainerNameCensus
                 : null;
     }
 
-    /// <summary>Every trigger's Name setter with the trigger's conditions:
-    /// a DataTrigger's binding path and value, a property Trigger's
-    /// property and value, and a Multi*Trigger's conditions joined by
-    /// " &amp; " in document order.</summary>
-    private static IEnumerable<(string When, XElement Setter)> TriggerNameSetters(XElement style) =>
-        style.Elements()
-            .Where(child => child.Name.LocalName == "Style.Triggers")
-            .SelectMany(triggers => triggers.Elements())
-            .SelectMany(trigger => trigger.Descendants()
-                .Where(element => element.Name.LocalName == "Setter"
-                    && (string?)element.Attribute("Property") == "AutomationProperties.Name")
-                .Select(setter => (When(trigger), setter)));
-
+    /// <summary>A trigger's conditions: a DataTrigger's binding path and
+    /// value, a property Trigger's property and value, and a
+    /// Multi*Trigger's conditions joined by " &amp; " in document
+    /// order.</summary>
     private static string When(XElement trigger)
     {
         IEnumerable<XElement> conditions = trigger.Name.LocalName is "MultiDataTrigger" or "MultiTrigger"
@@ -1435,10 +1624,10 @@ public sealed class ItemContainerNameCensus
     }
 
     /// <summary>Why a code-built host does not name through the sibling
-    /// rule, or null: the view declares the rule's name path, distinguisher
-    /// and noun on the host (<c>SiblingNames.SetNamePath</c> and its
-    /// siblings, literal or nameof), and the host's container style is
-    /// <c>SiblingNames.ContainerStyle</c> or a style-building method whose
+    /// rule, or null: the view declares the rule's name path, distinguisher,
+    /// noun, state path and prefix on the host (<c>SiblingNames.SetNamePath</c>
+    /// and its siblings, literal or nameof), and the host's container style
+    /// is <c>SiblingNames.ContainerStyle</c> or a style-building method whose
     /// one Name setter is <c>SiblingNames.ContainerNameBinding()</c>.</summary>
     private static string? CodeSiblingProblem(
         ISymbol host,
@@ -1452,6 +1641,8 @@ public sealed class ItemContainerNameCensus
             ("SetNamePath", (string?)rule.NamePath),
             ("SetDistinguisherPath", rule.DistinguisherPath),
             ("SetNoun", (string?)rule.Noun),
+            ("SetStatePath", rule.StatePath),
+            ("SetPrefix", rule.Prefix),
         })
         {
             string?[] declared =

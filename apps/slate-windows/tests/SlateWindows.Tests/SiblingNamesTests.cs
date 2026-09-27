@@ -3,6 +3,7 @@
 
 using System.Collections.ObjectModel;
 using System.Dynamic;
+using System.Globalization;
 using System.Runtime.ExceptionServices;
 using System.Windows;
 using System.Windows.Automation;
@@ -78,7 +79,170 @@ public sealed class SiblingNamesTests
     {
         Assert.Equal(["Item 1", "Item 2", "x"], SiblingNames.Compose([" ", null, "x"], [], "item"));
         string[] names = SiblingNames.Compose(["a", "a", "a, item 1", "Item 1"], [], "item");
-        Assert.Equal(names.Length, names.Distinct(StringComparer.CurrentCultureIgnoreCase).Count());
+        Assert.Equal(names.Length, names.Distinct(SiblingNames.ReadAlike).Count());
+    }
+
+    /// <summary>Codex PR 3 round 5: a state is the rule's INPUT — the name
+    /// the reader hears is what the collision checks run over, and nothing
+    /// is added after them. A dirty "draft" beside a clean "draft, unsaved
+    /// changes" (a note whose own title reads so) both read "draft, unsaved
+    /// changes" when the state is appended after the rule; as an input, the
+    /// pair add their paths (else their places), each still ending in its own
+    /// state. A state tells no one apart by itself: two namesakes read their
+    /// paths whatever their states.</summary>
+    [Fact]
+    public void AStateIsTheRulesInputSoItNeverMakesANameReadLikeAnother()
+    {
+        Assert.Equal(
+            ["draft, A/draft.md, unsaved changes", "draft, unsaved changes, B/draft, unsaved changes.md"],
+            SiblingNames.Compose(
+                ["draft", "draft, unsaved changes"],
+                ["A/draft.md", "B/draft, unsaved changes.md"],
+                "tab",
+                ["unsaved changes", string.Empty]));
+        Assert.Equal(
+            ["draft, tab 1, missing from disk", "draft, missing from disk, tab 2"],
+            SiblingNames.Compose(["draft", "draft, missing from disk"], [], "tab", ["missing from disk", null]));
+        Assert.Equal(
+            ["note, A/note.md", "note, B/note.md, unsaved changes"],
+            SiblingNames.Compose(["note", "note"], ["A/note.md", "B/note.md"], "tab", [null, "unsaved changes"]));
+        Assert.Equal(
+            ["draft, missing from disk, unsaved changes", "other"],
+            SiblingNames.Compose(["draft", "other"], [], "tab", ["missing from disk, unsaved changes", " "]));
+    }
+
+    /// <summary>...and so is a host's prefix ("Recent search: "): every
+    /// name reads it first, and namesakes are told apart after it.</summary>
+    [Fact]
+    public void APrefixIsTheRulesInputToo() =>
+        Assert.Equal(
+            ["Recent search: draft, search 1", "Recent search: DRAFT, search 2", "Recent search: Recent search: draft"],
+            SiblingNames.Compose(["draft", "DRAFT", "Recent search: draft"], [], "search", prefix: "Recent search: "));
+
+    /// <summary>Codex PR 3 round 5: ONE comparison reads names alike, and it
+    /// is culture-independent. Under tr-TR the current culture's case folding
+    /// pairs I with ı and İ with i, so it reported "FILE" and "file" as two
+    /// names and left both bare; speech does not hear case. And the ordinal's
+    /// noun is the shell's English word, never cased by the machine's locale
+    /// ("İtem 1").</summary>
+    [Fact]
+    public void UnderATurkishCultureCaseVariantsStillReadAlike() => UnderCulture("tr-TR", () =>
+    {
+        // The premise: this culture's own ignore-case comparison tells them apart.
+        Assert.False(string.Equals("FILE", "file", StringComparison.CurrentCultureIgnoreCase));
+        Assert.Equal(
+            ["FILE, A/FILE.md", "file, B/file.md"],
+            SiblingNames.Compose(["FILE", "file"], ["A/FILE.md", "B/file.md"], "item"));
+        Assert.Equal(["FILE, item 1", "file, item 2"], SiblingNames.Compose(["FILE", "file"], [], "item"));
+        Assert.Equal(["Item 1", "x"], SiblingNames.Compose([null, "x"], [], "item"));
+    });
+
+    /// <summary>Why the one comparison is the INVARIANT culture's
+    /// ignore-case one rather than the ordinal: speech carries neither case
+    /// nor a string's encoding. "café" composed and decomposed, or a name
+    /// with a zero-width character in it, read identically — the ordinal
+    /// comparison would call each pair two names and leave both
+    /// bare.</summary>
+    [Fact]
+    public void EncodingsOfOneNameReadAlike()
+    {
+        const string Composed = "café";
+        const string Decomposed = "café";
+        Assert.False(string.Equals(Composed, Decomposed, StringComparison.OrdinalIgnoreCase));
+        Assert.Equal(
+            [$"{Composed}, A", $"{Decomposed}, B"],
+            SiblingNames.Compose([Composed, Decomposed], ["A", "B"], "item"));
+        Assert.Equal(["note, A", "no​te, B"], SiblingNames.Compose(["note", "no​te"], ["A", "B"], "item"));
+    }
+
+    /// <summary>
+    /// The closing fact of codex PR 3 round 5: whatever the names,
+    /// distinguishers, states and prefix — every pair of a pool of
+    /// adversarial items (names that are another's name with a state, an
+    /// ordinal, a distinguisher; case, encoding and zero-width variants;
+    /// blanks), and seeded random sets of three to six, under tr-TR — the
+    /// final pass leaves no two spoken names alike, and every name still
+    /// starts with its host's prefix and ends with its own state.
+    /// </summary>
+    [Fact]
+    public void TheFinalPassLeavesNoTwoNamesAlikeWhateverItsInputs() => UnderCulture("tr-TR", () =>
+    {
+        string[] names =
+        [
+            "draft", "DRAFT", "dra​ft", "draft, unsaved changes", "draft, missing from disk",
+            "draft, missing from disk, unsaved changes", "draft, A", "draft, A, item 1", "draft, item 2",
+            "draft, A, unsaved changes", "Item 1", "item 2", "Item 1, unsaved changes", string.Empty, " ",
+            "FILE", "file", "café", "café", "Recent search: draft",
+        ];
+        string?[] distinguishers = [null, "A", "a", "B"];
+        string?[] states = [null, "unsaved changes", "missing from disk", "missing from disk, unsaved changes"];
+        (string Name, string? Distinguisher, string? State)[] pool =
+        [
+            .. from name in names
+               from distinguisher in distinguishers
+               from state in states
+               select (name, distinguisher, state),
+        ];
+        int checkedSets = 0;
+        void Check((string Name, string? Distinguisher, string? State)[] set, string? prefix)
+        {
+            string[] spoken = SiblingNames.Compose(
+                [.. set.Select(item => (string?)item.Name)],
+                [.. set.Select(item => item.Distinguisher)],
+                "item",
+                [.. set.Select(item => item.State)],
+                prefix);
+            string Inputs() => string.Join(" | ", set.Select(item => $"{item.Name}/{item.Distinguisher}/{item.State}"));
+            if (spoken.Distinct(SiblingNames.ReadAlike).Count() != spoken.Length)
+            {
+                Assert.Fail($"[{Inputs()}] read alike: [{string.Join(" | ", spoken)}]");
+            }
+            for (int index = 0; index < set.Length; index++)
+            {
+                if (!spoken[index].StartsWith(prefix ?? string.Empty, StringComparison.Ordinal)
+                    || (!string.IsNullOrWhiteSpace(set[index].State)
+                        && !spoken[index].EndsWith($", {set[index].State}", StringComparison.Ordinal)))
+                {
+                    Assert.Fail($"[{Inputs()}] item {index + 1} reads \"{spoken[index]}\": its prefix or state is lost");
+                }
+            }
+            checkedSets++;
+        }
+
+        for (int first = 0; first < pool.Length; first++)
+        {
+            for (int second = first; second < pool.Length; second++)
+            {
+                Check([pool[first], pool[second]], first % 2 == 0 ? null : "Recent search: ");
+            }
+        }
+        var random = new Random(1246);
+        for (int round = 0; round < 4000; round++)
+        {
+            Check(
+                [.. Enumerable.Range(0, random.Next(3, 7)).Select(_ => pool[random.Next(pool.Length)])],
+                random.Next(2) == 0 ? null : "Recent search: ");
+        }
+        Assert.True(checkedSets > 50_000, $"only {checkedSets} sets checked");
+    });
+
+    /// <summary>Runs <paramref name="body"/> with the current culture and UI
+    /// culture <paramref name="name"/>, restoring both after.</summary>
+    internal static void UnderCulture(string name, Action body)
+    {
+        CultureInfo culture = CultureInfo.CurrentCulture;
+        CultureInfo uiCulture = CultureInfo.CurrentUICulture;
+        CultureInfo.CurrentCulture = CultureInfo.GetCultureInfo(name);
+        CultureInfo.CurrentUICulture = CultureInfo.GetCultureInfo(name);
+        try
+        {
+            body();
+        }
+        finally
+        {
+            CultureInfo.CurrentCulture = culture;
+            CultureInfo.CurrentUICulture = uiCulture;
+        }
     }
 
     /// <summary>Hosted on a list: UIA reads the rule's names — two equal

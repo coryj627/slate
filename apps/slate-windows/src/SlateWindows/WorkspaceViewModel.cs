@@ -136,6 +136,15 @@ internal sealed partial class WorkspaceTabViewModel : BindableBase, IDisposable
             ?? SlateWindows.Panels.PanelWorkScheduler.CurrentContextIsUiDispatcher();
         _anchorResolver = anchorResolver ?? SlateUniffiMethods.LinkAnchorByteOffset;
         _interactionBackgroundFaultForTests = interactionBackgroundFaultForTests;
+        // W7-7 PR 3 (#1246, R-4; codex PR 3 round 5): the spoken state follows
+        // every path that announces the dirty or missing state.
+        PropertyChanged += (_, args) =>
+        {
+            if (args.PropertyName is nameof(IsDirty) or nameof(IsMissingFromDisk))
+            {
+                OnPropertyChanged(nameof(SpokenState));
+            }
+        };
         EditorPreferences = editorPreferences ?? new EditorPreferencesViewModel(_announce);
         Id = state.Id;
         Item = state.Item;
@@ -417,6 +426,20 @@ internal sealed partial class WorkspaceTabViewModel : BindableBase, IDisposable
         get => _isMissingFromDisk;
         private set => SetField(ref _isMissingFromDisk, value);
     }
+
+    /// <summary>W7-7 PR 3 (#1246, R-4; codex PR 3 round 5): what the reader
+    /// hears after the tab's name — its unsaved and missing states, "" for
+    /// none. It is an INPUT to the tab strip's sibling rule (SiblingNames'
+    /// StatePath: the rule joins it with ", " and checks the joined name),
+    /// never appended after it: a dirty "draft" and a clean "draft, unsaved
+    /// changes" would otherwise both read "draft, unsaved changes".</summary>
+    public string SpokenState => (IsDirty, IsMissingFromDisk) switch
+    {
+        (false, false) => string.Empty,
+        (true, false) => "unsaved changes",
+        (false, true) => "missing from disk",
+        (true, true) => "missing from disk, unsaved changes",
+    };
 
     public string Status
     {
