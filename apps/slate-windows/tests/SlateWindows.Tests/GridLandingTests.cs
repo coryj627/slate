@@ -287,6 +287,30 @@ public sealed class GridLandingTests
         Assert.Empty(announced);
     });
 
+    /// <summary>A publication never lands into a scope that is off screen —
+    /// a projection switched away with the reader's keys stranded on it:
+    /// nothing there could take them, and a seat would only write the
+    /// grid's currency, which its consumer follows as the selection.</summary>
+    [Fact]
+    public void APublicationIntoAHiddenGridSeatsNothing() => RunSta(() =>
+    {
+        var announced = new List<A11yEvent>();
+        AccessibleDataGrid grid = BoundGrid([new Row("one"), new Row("two")], announced);
+        using Hosted host = Host(grid);
+        Assert.True(grid.SelectRow(row => ((Row)row).Name == "two", moveFocus: true));
+        var seated = new List<object?>();
+        grid.CurrentRowChanged += row => seated.Add(row);
+        grid.Visibility = Visibility.Collapsed;
+        PumpedDispatcher.Drain();
+        seated.Clear();
+
+        Rebind(grid, [new Row("three"), new Row("four")]);
+        PumpedDispatcher.Drain();
+
+        Assert.DoesNotContain(seated, row => row is not null);
+        Assert.Empty(announced);
+    });
+
     /// <summary>An EMPTY grid stays its own stop through the same landing
     /// (AnEmptyGridKeepsItsArrows).</summary>
     [Fact]
