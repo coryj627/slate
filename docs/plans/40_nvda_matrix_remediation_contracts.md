@@ -410,7 +410,109 @@ Fixes: the docs PR's thirty-first commit (8a056036).
 
 ### PR 1 — #1244 announcements from launch
 
-(pending)
+Branch `claude/w7-7-pr1-notifications` (rebased onto 8193489b; delivery rounds `delivered_pr1_r3`–`r10`). Delivered: R-1:
+- **The raise.** It goes through `AutomationInteropProvider.RaiseAutomationEvent(NotificationEvent, …)` on the status element's connected peer provider, never WPF's gated `RaiseNotificationEvent`. `AnnouncementSeamCensus` pins the raise shape and rejects the gated call.
+- **Readiness, the hybrid (OD-7).** One predicate holds in every phase: a listening client, a connected provider, and either the Notification advise in WPF's map or 3 s of that client and provider present together without it. While unready, a line is only queued. The queue keeps the last 16, the 250 ms UI-thread poll runs while lines wait, and each line expires 30 s after its own post. The drain runs once, in order, and logs `drained=advise|timeout`. `Done` and `Expired` are bookkeeping only.
+- **One dispatcher per window.** Grids post through it.
+- **Activity IDs follow the processing (contract 38 D-1).** Every All line carries `slate-accessibility-announcement.<n>` from the dispatcher's monotonic sequence. Every superseding (High) line keeps the shared ID.
+- **Diagnostics.** Under `SLATE_UIA_DIAGNOSTICS=1` the listener state, the provider state and each drain are logged once per change.
+
+Witnesses:
+- **The hosted facts** (`AccessibilityNotificationDispatcherTests`, 30; the timer facts pump production's own `DispatcherTimer` and never call the check).
+- **`AnnouncementSeamCensus`** (10).
+- **The shell-gate journey `Announcements_ReachADesktopScopedListenerFromLaunch`.** A desktop-root listener registered before launch hears the exact launch sequence and "Right pane hidden.", with no menu opened, each line under its own ID, on whichever path the launch takes.
+- **Two quiet-desktop NVDA 2026.2 fresh-launch runs** (spec §2.5; the W7-2 checklist and the F1 row).
+
+**Round 1 (2026-09-23; codex adversarial review of the pushed branch).** `needs-attention`, one finding, taken (a4d0c757). Every queue fact posted while a client was still listening. A no-client early return in `Post` would therefore have discarded the launch lines of a screen reader started after Slate while every fact stayed green. The fix is `LinesPostedBeforeAnyClientListensAreQueuedForAReaderStartedLater` (mutation `earlyreturn`, which fails it and five other facts).
+
+**Round 2.** `needs-attention`, two findings, both taken (b4517821):
+1. The unadvised path short-circuited before `_launch.Connected()`, so the first provider state was never logged. Every input is now asked on every check, never short-circuited (`TheFirstUnadvisedCheckRecordsTheProviderStateBeforeTheDrain`; mutation `shortcircuit`).
+2. The 30 s launch window counted from `MainWindow`'s construction, not its first frame. The clock starts at `ContentRendered` (`TheLaunchWindowStartsAtTheFirstFrameNotAtConstruction`; mutation `clockatconstruction`).
+
+The spec review's OD-7 precisions (its rounds 18–20) landed in the same commits:
+- One readiness predicate in every state, with `Done` as bookkeeping only.
+- An `Expired` launch that still queues while unready.
+- Per-line expiry, never a wholesale clear.
+- The poll tied to queue occupancy.
+
+Mutations: `unconditionalafterdone`, `skiponnullprovider`, `stoppollatexpiry`, `noperlinebound`, `raiselate`, `wholesaleclear`, `deadlinefromlaunch`, `pollforever`.
+
+**Round 3 (2026-09-26).** Before this round, measurement reshaped readiness (owner decisions, 2026-09-26):
+- **Advise dropped as a gate.** The replay experiment heard 7 of 7 raises with WPF's map empty, so the advise was dropped as a delivery gate, leaving two conjuncts (e7b00711).
+- **The hybrid.** The two-conjunct journey then passed 5/6 twice, losing every line raised between the connection and the advise. So the hybrid holds for the advise or 3 s (35b84275), with facts a–d:
+  - `AProviderThatConnectsFirstHoldsTheQueueUntilTheAdvise`
+  - `AProviderThatIsNeverAdvisedDrainsThreeSecondsAfterItConnects`
+  - `LinesPostedDuringTheHoldAreQueuedAndNoneIsRaised`
+  - `AHoldThatRunsOutWhileAClientListensDeliversAndSaysSo`
+  - Mutations: `drophold`, `droptimeout`.
+- **The journey returned to the shell gate** at 6/6 and 6/6 (AR-1; c8e49f86). The three-conjunct variant had passed 6/6 four times and 5/6 twice.
+
+The round itself: `needs-attention`, three findings.
+1. **A stale hold across a reader restart. Taken** (3f0b95bf). The hold epoch is a listening client and a connected provider present together, reset whenever either is absent (`ARestartedReaderWaitsForItsOwnAdviseNotTheOldHold`; mutations `holdprovideronly`, `holdnorestart`). Its per-process limit is AR-27.
+2. **The timeout drain's delivery had no deterministic witness. Ruled an accepted risk** (AR-21; ea687390). A never-advised client cannot be forced from a desktop-root listener. The journey's exact-sequence assertion was confirmed unconditional on the drain kind.
+3. **The spec §2.5 NVDA fresh-launch run was missing. Taken; it took five delivery rounds.**
+   - The first 10 launches never gave Slate the foreground, so NVDA voiced nothing (a harness artifact). One caption click fixed that, after the DPI-unaware point check was corrected.
+   - With Slate in the foreground, other agents' test hosts flooded NVDA's log. The coordinator opened a quiet window.
+   - On the quiet desktop NVDA received 2 of the 4 launch lines in 10 of 10 launches: vault-open 10/10, one scan line 10/10, the editor-pane line 0/10.
+   - The cause is NVDA's UIA rate limiter (nvdaHelper `UIAEventLimiter`, `RateLimitedEventHandler::queueEvent`). It coalesces notifications by sender, event, kind, processing and activity ID; its reference-bound iterator erases the newer record. All four lines shared one key.
+   - Owner decision: replayed lines get distinct activity IDs (5fe07b9c). The post-fix quiet rerun heard and spoke all four lines in 10 of 10 launches (an earlier post-fix attempt reached 9 of 10, its one miss inside another agent's flood), so F1 was marked fixed (c2a62503).
+   - AR-21 was rewritten: with NVDA alone the advise arrived in 2 of 20 quiet launches, so the hold is NVDA's primary delivery path (d9dadb92).
+   - An NV Access issue draft (both defects, a repro, the workaround) went to the owner, not filed.
+
+**Round 4 (2026-09-27).** `needs-attention`, one blocker and two notes, all taken (bd1518e5, 78884733):
+1. **The blocker.** A launch ready at its first line raised its lines back to back under the shared ID, the burst NVDA coalesces. The unit witness posted two lines, and the journey relaunched until a launch queued.
+   - The activity ID now follows the processing, never the path: every All line carries the dispatcher's next sequence ID, queued or not, and a High line keeps the shared ID. `.replay.<n>` is gone.
+   - Facts: `LinesRaisedWhileReadyCarryTheirActivityIdByProcessing` (three Medium lines raised while ready get three distinct IDs in order; a High line gets the shared ID) and `ADrainRaisesEachQueuedPoliteLineUnderItsOwnActivityId` (the sequence runs across both paths and a second drain).
+   - Mutations: `readyshared` (the coordinator's), `drainshared`, `sequenceperdrain`, `sequencestuck`, `highgetssequence`, `politeshared`.
+   - The journey keeps one launch on whichever path it takes and asserts the exact sequence with IDs `.1`–`.N`.
+   - Contract 38 D-1, D-2 and A-1 and the W-C matrix state the rule.
+2. **The restart hold is per process when another client keeps listening** — AR-27, and D-2 was narrowed to match.
+3. **This record.**
+
+The branch was then rebased onto 8193489b: `w_c_matrix.md` was hand-merged row by row, and the bindings were regenerated for main's Rust.
+
+**Mutation map (35, all caught).** Each mutation below fails at least the fact named.
+
+| Area | Mutation | Fact(s) it fails |
+|---|---|---|
+| Raise path | `gated` | the census's three raise-shape facts |
+| Raise path | `raisewhileunready` | 19 facts |
+| Readiness | `nolistener` | `ProductionRaiseWaitsWhileNoClientListens` |
+| Readiness | `noconnected` | `TheLaunchQueueDrainsOnlyThroughAConnectedStatusProvider` |
+| Readiness | `neverflips` | 26 facts |
+| Readiness | `earlyreturn` | `LinesPostedBeforeAnyClientListensAreQueuedForAReaderStartedLater` |
+| Readiness | `shortcircuit` | the provider-state fact |
+| Hybrid | `drophold`, `droptimeout` | facts a–d |
+| Hybrid | `holdnorestart`, `holdprovideronly` | `ARestartedReaderWaitsForItsOwnAdviseNotTheOldHold` |
+| Hybrid | `drainlogsnotrigger` | `TheLaunchTransitionIsLogged` |
+| Queue | `noreplay` | 18 facts |
+| Queue | `draintwice` | 8 facts |
+| Queue | `nodrainlog` | 14 facts |
+| Queue | `unbounded` | `TheLaunchQueueKeepsOnlyTheLastSixteenLines` |
+| Phase and expiry | `phaseregress`, `unconditionalafterdone` | `AfterDoneALineWaitsForTheProviderAcrossTheLaunchWindow` |
+| Phase and expiry | `neverexpire`, `stoppollatexpiry`, `pollforever` | `AnUnadvisedLaunchExpiresAndDropsItsQueue` |
+| Phase and expiry | `skiponnullprovider` | `AfterExpiryALineWaitsForTheProviderInsteadOfBeingLost` |
+| Phase and expiry | `noperlinebound`, `raiselate` | `AQueuedLineIsDroppedThirtySecondsAfterItsPostNeverRaisedLate` |
+| Phase and expiry | `wholesaleclear`, `deadlinefromlaunch` | `EachQueuedLineExpiresAtItsOwnDeadlineNeverTheWholeQueue` |
+| Diagnostics and clock | `diageverypost` | `TheListenerStateIsReportedOncePerChange` |
+| Diagnostics and clock | `sourceeverypost` | `TheRaiseSourceIsReportedOncePerChange` |
+| Diagnostics and clock | `clockatconstruction` | the first-frame fact |
+| Activity IDs | `readyshared` | 7 facts, including the ready-path fact |
+| Activity IDs | `drainshared` | 4 facts |
+| Activity IDs | `sequenceperdrain` | the drain-path fact |
+| Activity IDs | `sequencestuck`, `politeshared` | 9 facts each |
+| Activity IDs | `highgetssequence` | 7 facts |
+
+**Gates on the rebased head** (78884733 and this record, 2026-09-27; the bindings regenerated from the worktree's own cargo target):
+- **Build and checks.** The app build carries only main's existing CS0108. `dotnet format --verify-no-changes --include` is clean on the eight touched C# files. Parity `--check` is verified.
+- **Unit project** on CI's filter: 3432/3437. The five failures are the machine-only symlink and reparse-point facts (`CanvasDocumentTests` ×2, `W1AnchoredVaultStoreTests` ×3).
+- **Dispatcher facts and census:** 40/40.
+- **Mutations:** 35/35, the file restored byte-identical.
+- **The journey** under the FlaUI lock:
+  - 6/6: three launches ready at the first line and three queued and drained on the advise, every run hearing the five lines as `.1`–`.5`.
+  - Never flipping: 0/2.
+  - Replay disabled: 2/2, both runs ready at the first line. The journey now keeps a ready launch, so the drain's own mutation is the hosted facts' to catch (18 of them).
+- **Censuses** 551/551 and `W77RemediationDocsCensus` 30/30.
 
 ### PR 2 — #1245 + #1250 Files sidebar
 
