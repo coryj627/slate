@@ -127,6 +127,41 @@ public sealed class RegionFocusGuardTests
         host.AssertNeverStranded();
     });
 
+    /// <summary>A focusable scroll viewer or tab control INSIDE the scope —
+    /// a dashboard's section scroller, a nested tab strip — is no stop
+    /// either: WPF's re-evaluation climbed from a rebuilt section's cell to
+    /// the dashboard's scroll viewer (the sweep's G10, G19). The keys land
+    /// through the scope.</summary>
+    [Theory]
+    [InlineData("scroll viewer")]
+    [InlineData("tab control")]
+    public void AContainerInsideTheScopeIsNoStop(string holder) => RunSta(() =>
+    {
+        using var host = new Host();
+        var inner = new Button { Content = "Inner" };
+        host.Content.Children.Remove(host.Target);
+        if (holder == "scroll viewer")
+        {
+            host.Content.Children.Add(new ScrollViewer { Content = inner, Height = 60 });
+        }
+        else
+        {
+            var tabs = new TabControl();
+            tabs.Items.Add(new TabItem { Header = "Inner tab", Content = inner });
+            host.Content.Children.Add(tabs);
+        }
+
+        host.Window.UpdateLayout();
+        Assert.True(inner.Focus());
+        host.Forget();
+
+        inner.IsEnabled = false;
+        PumpedDispatcher.Drain();
+
+        Assert.Same(host.Home, Keyboard.FocusedElement);
+        Assert.Equal([host.Home], host.FocusChanges);
+    });
+
     /// <summary>An EMPTY publication under the keys: the empty list is its
     /// own stop (AR-6) — the keys rest there, not on the window.</summary>
     [Fact]

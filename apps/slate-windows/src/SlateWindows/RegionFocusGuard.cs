@@ -291,7 +291,10 @@ internal static class RegionFocusGuard
                     continue;
                 }
 
-                if (proposed is ItemsControl container
+                // A list the keys were handed to: its row. Never a tab control
+                // — its "row" is a tab header, out of the content the keys
+                // were in.
+                if (proposed is ItemsControl container and not TabControl
                     && !ReferenceEquals(container, scope)
                     && scope.IsAncestorOf(container)
                     && container.IsVisible
@@ -332,11 +335,13 @@ internal static class RegionFocusGuard
         scope.IsVisible && scope.IsEnabled && PresentationSource.FromVisual(scope) is not null;
 
     /// <summary>Whether <paramref name="proposed"/> is a stop the keys may
-    /// rest on: anything but the window, a scroll viewer, a tab control, a
-    /// populated container, or an element that holds one of the scopes the
-    /// keys were in.</summary>
+    /// rest on: anything but the window, a scroll viewer, a tab control or
+    /// a tab's header (WPF's climb out of a tab's content reaches either —
+    /// out of the content region, into the tab strip), a populated
+    /// container, or an element that holds one of the scopes the keys were
+    /// in.</summary>
     private static bool IsAStop(UIElement proposed, UIElement[] scopes) =>
-        proposed is not (Window or ScrollViewer or TabControl)
+        proposed is not (Window or ScrollViewer or TabControl or TabItem)
         && proposed is not ItemsControl { HasItems: true }
         && !scopes.Any(scope => ReferenceEquals(scope, proposed) || proposed.IsAncestorOf(scope));
 
