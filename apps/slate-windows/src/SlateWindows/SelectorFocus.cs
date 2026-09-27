@@ -79,6 +79,62 @@ internal static class SelectorFocus
     /// (<see cref="SetOwnLanding"/>).</summary>
     private static readonly ConditionalWeakTable<UIElement, Func<bool>> OwnLandings = new();
 
+    /// <summary>
+    /// W7-7 PR 4 (#1247, R-5 as the owner amended it): a click on the EMPTY
+    /// area of a populated list or tree — below its last row, beside a row's
+    /// header — puts the keys on a row, as a click inside a Win32 list does.
+    /// WPF gives them to nothing there (measured: a ListBox, a DataGrid and a
+    /// TreeView all leave the keys where they were), so a pointer user who
+    /// clicked into a list was not in it. The landing is the container's —
+    /// its own, else its current or first row — and selects nothing. A click
+    /// on a row, or on the scroll bar, is left to the row and the bar.
+    /// </summary>
+    static SelectorFocus()
+    {
+        EventManager.RegisterClassHandler(
+            typeof(ListBox), Mouse.MouseDownEvent, new MouseButtonEventHandler(ClickedEmptyArea), handledEventsToo: true);
+        EventManager.RegisterClassHandler(
+            typeof(TreeView), Mouse.MouseDownEvent, new MouseButtonEventHandler(ClickedEmptyArea), handledEventsToo: true);
+    }
+
+    private static void ClickedEmptyArea(object sender, MouseButtonEventArgs e)
+    {
+        if (e.ChangedButton != MouseButton.Left
+            || sender is not ItemsControl { HasItems: true, IsVisible: true, IsEnabled: true, IsKeyboardFocusWithin: false } container
+            || (container is Selector && !IsListLanding(container))
+            || e.OriginalSource is not DependencyObject source
+            || InRowOrScrollBar(source, container))
+        {
+            return;
+        }
+
+        if (!LandOnStop(container))
+        {
+            // No row could take them (none realized yet): the keys stay
+            // where they were — a click owes no stable stop of its own, and
+            // the bare list is never one (R-5).
+        }
+    }
+
+    /// <summary>Whether <paramref name="source"/> lies in one of
+    /// <paramref name="container"/>'s rows or in a scroll bar.</summary>
+    private static bool InRowOrScrollBar(DependencyObject source, ItemsControl container)
+    {
+        for (DependencyObject? current = source;
+            current is not null && !ReferenceEquals(current, container);
+            current = current is Visual or System.Windows.Media.Media3D.Visual3D
+                ? VisualTreeHelper.GetParent(current)
+                : LogicalTreeHelper.GetParent(current))
+        {
+            if (current is ScrollBar or ListBoxItem or TreeViewItem)
+            {
+                return true;
+            }
+        }
+
+        return false;
+    }
+
     private enum Landing
     {
         Landed,
