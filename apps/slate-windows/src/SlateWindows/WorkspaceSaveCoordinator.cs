@@ -107,7 +107,7 @@ internal sealed class WorkspaceSaveCoordinator
         }
         else
         {
-            Task.WhenAll(previous).ContinueWith(
+            Task.WhenAll(previous.Select(Settled)).ContinueWith(
                 _ => _dispatcher.BeginInvoke(
                     DispatcherPriority.Normal,
                     new Action(() => Run(ticket, start))),
@@ -117,6 +117,21 @@ internal sealed class WorkspaceSaveCoordinator
         }
         return ticket.Task;
     }
+
+    /// <summary>
+    /// A barrier that completes when <paramref name="task"/> does, however
+    /// it ends, and never faults (codex round 3). A chain waits for earlier
+    /// saves to FINISH, not to succeed; a failed save's fault is observed
+    /// and logged once by its ticket, so a barrier that carried the fault on
+    /// — <c>Task.WhenAll</c> over a faulted ticket — would be one more
+    /// faulted task nobody observes.
+    /// </summary>
+    private static Task Settled(Task task) =>
+        task.ContinueWith(
+            static _ => { },
+            CancellationToken.None,
+            TaskContinuationOptions.ExecuteSynchronously,
+            TaskScheduler.Default);
 
     /// <summary>
     /// The file at <paramref name="oldPath"/> is now <paramref name="newPath"/>
@@ -136,7 +151,7 @@ internal sealed class WorkspaceSaveCoordinator
             return;
         }
         _tails[to] = _tails.GetValueOrDefault(to) is { IsCompleted: false } already
-            ? Task.WhenAll(before, already)
+            ? Task.WhenAll(Settled(before), Settled(already))
             : before;
     }
 
