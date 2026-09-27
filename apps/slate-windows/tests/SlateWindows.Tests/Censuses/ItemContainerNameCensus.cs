@@ -910,6 +910,20 @@ public sealed class ItemContainerNameCensus
                     }
                     pair += " | " + distinguisherBody.NormalizeWhitespace().ToFullString();
                 }
+                // The row move's description is ONE spoken-name authority's
+                // (codex PR 3 round 8, OD-9; contract 35 A-6): a surface whose
+                // row move speaks the row's name speaks the grid's final
+                // composed name, never the identity the sibling rule has not
+                // yet told apart.
+                if (ArgumentFor(invocation, method, "rowAudioDescription") is { } description
+                    && description.Expression is LambdaExpressionSyntax { ExpressionBody: { } descriptionBody }
+                    && descriptionBody.NormalizeWhitespace().ToFullString() == body.NormalizeWhitespace().ToFullString())
+                {
+                    offenders.Add(
+                        $"{file}:{line}: the row move speaks the row's identity before the sibling rule tells it "
+                        + "apart — pass the grid's ComposedRowName");
+                    continue;
+                }
                 if (!expected.TryGetValue(file, out List<string>? pinned) || !pinned.Remove(pair))
                 {
                     offenders.Add($"{file}:{line}: the row identity and key read `{pair}`, which is not the pair pinned for this caller");

@@ -372,6 +372,170 @@ public sealed partial class GraphTableTests
         });
     }
 
+    /// <summary>Two notes called same.md, in A and B, read alike by their
+    /// row copy; A is the older.</summary>
+    private static FixtureVault TwoSameNotes(string label)
+    {
+        FixtureVault vault = FixtureVault.Create(0, label);
+        foreach (string folder in new[] { "A", "B" })
+        {
+            Directory.CreateDirectory(Path.Combine(vault.Root, folder));
+            File.WriteAllText(Path.Combine(vault.Root, folder, "same.md"), $"# In {folder}\n");
+        }
+        File.SetLastWriteTimeUtc(Path.Combine(vault.Root, "A", "same.md"), new DateTime(2025, 1, 1, 0, 0, 0, DateTimeKind.Utc));
+        File.SetLastWriteTimeUtc(Path.Combine(vault.Root, "B", "same.md"), new DateTime(2026, 1, 1, 0, 0, 0, DateTimeKind.Utc));
+        return vault;
+    }
+
+    /// <summary>The graph table over <paramref name="vault"/>, shown; the
+    /// body gets the host, the document, the view and a settle that lays
+    /// the window out again.</summary>
+    private static void WithShownTable(
+        FixtureVault vault, Action<Host, GraphDocumentViewModel, GraphTableView, Action> body)
+    {
+        using var host = new Host(vault);
+        GraphDocumentViewModel document = host.Open();
+        var view = new GraphTableView { Model = document };
+        var window = new System.Windows.Window
+        {
+            Content = view,
+            Width = 900,
+            Height = 400,
+            ShowInTaskbar = false,
+            WindowStyle = System.Windows.WindowStyle.None,
+        };
+        window.Show();
+        try
+        {
+            void Settle()
+            {
+                host.Settle(document);
+                window.UpdateLayout();
+                PumpedDispatcher.Drain();
+                window.UpdateLayout();
+            }
+            Settle();
+            body(host, document, view, Settle);
+        }
+        finally
+        {
+            window.Close();
+        }
+    }
+
+    /// <summary>Codex PR 3 round 8 (contract 35 A-6: the row's Name and its
+    /// row move speak the SAME text): a row move speaks the grid's final
+    /// composed name. The two same.md rows are named "…, A/same.md" and "…,
+    /// B/same.md", and a move onto either — the currency an arrow moves —
+    /// announced the bare row copy both share.</summary>
+    [Fact]
+    public void ARowMoveSpeaksTheRowsComposedName() => RunSta(() => WithShownTable(
+        TwoSameNotes("graph-row-move-name"),
+        (host, document, view, settle) =>
+        {
+            AccessibleDataGrid grid = view.GridForTests;
+            Dictionary<object, string> names = GridRowNames.Read(grid)
+                .ToDictionary(row => row.Item, row => row.Name, ReferenceEqualityComparer.Instance);
+            GraphTableRow[] pair = [.. document.Publication.Rows.Where(row => row.Path?.EndsWith("same.md", StringComparison.Ordinal) == true)];
+            Assert.Equal(2, pair.Length);
+            // The premise: the pair's copy reads alike, its names apart.
+            Assert.True(SiblingNames.ReadAlike.Equals(document.RowName(pair[0]), document.RowName(pair[1])));
+            Assert.False(SiblingNames.ReadAlike.Equals(names[pair[0]], names[pair[1]]));
+            grid.Grid.CurrentCell = new DataGridCellInfo(pair[0], grid.Grid.Columns[0]);
+            settle();
+            var moves = new List<A11yEvent.GridRowMoved>();
+            Action<A11yEvent> relay = grid.Announce;
+            grid.Announce = @event =>
+            {
+                if (@event is A11yEvent.GridRowMoved moved)
+                {
+                    moves.Add(moved);
+                }
+                relay(@event);
+            };
+            foreach (GraphTableRow row in new[] { pair[1], pair[0], pair[1] })
+            {
+                moves.Clear();
+                host.GraphLines.Clear();
+                grid.Grid.CurrentCell = new DataGridCellInfo(row, grid.Grid.Columns[0]);
+                settle();
+                // The description IS the row's UIA Name, and the relayed line
+                // speaks it.
+                A11yEvent.GridRowMoved move = Assert.Single(moves);
+                Assert.Equal(names[row], move.Description);
+                Assert.Contains(SlateUniffiMethods.A11yRender(move).Text, host.GraphLines);
+            }
+        }));
+
+    /// <summary>Codex PR 3 round 8 (R-4, OD-9; contract 35 A-7): a seat the
+    /// shared key does not hold — rule F's silent seat writes none — is
+    /// restored by the row's stable key through a republish that relabels
+    /// it. Ghost "/foo-bar" (seated first under a Note sort) is relabelled
+    /// "foo-bar", which moves it past "foo bar": restored by its old label
+    /// the seat was lost; and nothing writes the key.</summary>
+    [Fact]
+    public void ARelabelledGhostKeepsASeatTheKeyDoesNotHold() => RunSta(() =>
+    {
+        FixtureVault vault = FixtureVault.Create(0, "graph-ghost-seat");
+        File.WriteAllText(Path.Combine(vault.Root, "a.md"), "[[/foo-bar]]\n");
+        File.WriteAllText(Path.Combine(vault.Root, "b.md"), "[[foo-bar]]\n");
+        File.WriteAllText(Path.Combine(vault.Root, "c.md"), "[[foo bar]]\n");
+        File.WriteAllText(Path.Combine(vault.Root, "d.md"), "[[foo bar]]\n");
+        WithShownTable(vault, (host, document, view, settle) =>
+        {
+            host.Workspace.GraphNavigator.SetNameQuery("foo");
+            Assert.True(document.Request(new GraphRequest.Sort(new GraphTableSort(GraphTableColumn.Note, true))));
+            settle();
+            // The premise: the two ghosts, "/foo-bar" first.
+            Assert.Equal(["/foo-bar", "foo bar"], document.Publication.Rows.Select(row => row.Label));
+            Assert.True(view.FocusProjection());
+            settle();
+            Assert.Null(document.ViewState.SelectedKey);
+            var seated = Assert.IsType<GraphTableRow>(view.GridForTests.Grid.CurrentCell.Item);
+            Assert.Equal("/foo-bar", seated.Label);
+
+            _ = host.Session.SaveText("a.md", "no link\n", null);
+            _ = document.Load(GraphLoadKind.Pair, GraphAnnouncePolicy.Silent);
+            settle();
+            // The premise: relabelled, and moved.
+            Assert.Equal(["foo bar", "foo-bar"], document.Publication.Rows.Select(row => row.Label));
+            var restored = Assert.IsType<GraphTableRow>(view.GridForTests.Grid.CurrentCell.Item);
+            Assert.Equal(seated.StableKey, restored.StableKey);
+            Assert.Null(document.ViewState.SelectedKey);
+        });
+    });
+
+    /// <summary>...and through an external sort each way: the two same.md
+    /// rows share their row-header text, so restored by that text and its
+    /// old place the seat moved onto the OTHER note whenever the sort swapped
+    /// them. The seat stays on its node, and nothing writes the key.</summary>
+    [Fact]
+    public void AnExternalSortKeepsASeatTheKeyDoesNotHoldOnItsNode() => RunSta(() => WithShownTable(
+        TwoSameNotes("graph-sort-seat"),
+        (host, document, view, settle) =>
+        {
+            host.Workspace.GraphNavigator.SetNameQuery("same");
+            settle();
+            Assert.Equal(2, document.Publication.Rows.Count);
+            Assert.True(view.FocusProjection());
+            settle();
+            Assert.Null(document.ViewState.SelectedKey);
+            string seated = Assert.IsType<GraphTableRow>(view.GridForTests.Grid.CurrentCell.Item).StableKey;
+            int modified = document.CellIndexOf(GraphTableColumn.Modified);
+            var places = new List<int>();
+            foreach (bool ascending in new[] { true, false, true })
+            {
+                Assert.Null(view.GridForTests.ApplySort(modified, ascending));
+                settle();
+                var current = Assert.IsType<GraphTableRow>(view.GridForTests.Grid.CurrentCell.Item);
+                Assert.Equal(seated, current.StableKey);
+                Assert.Null(document.ViewState.SelectedKey);
+                places.Add(document.Publication.Rows.ToList().FindIndex(row => row.StableKey == seated));
+            }
+            // The premise: the sorts moved the seated note between the places.
+            Assert.Equal(2, places.Distinct().Count());
+        }));
+
     [Fact]
     public void TheRowNameIsTheCorpusCopyAndTheItemStatusIsTheKindCell()
     {

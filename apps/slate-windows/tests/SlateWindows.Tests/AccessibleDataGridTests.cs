@@ -29,6 +29,15 @@ public sealed class AccessibleDataGridTests
         public string Id { get; } = id;
     }
 
+    /// <summary>A row with a stable key and a header that can change: a
+    /// graph ghost, whose label core recomputes.</summary>
+    private sealed class Keyed(string key, string label)
+    {
+        public string Key { get; } = key;
+
+        public string Label { get; } = label;
+    }
+
     private static IReadOnlyList<AccessibleGridColumn> WidgetColumns() => new[]
     {
         new AccessibleGridColumn
@@ -1021,6 +1030,54 @@ public sealed class AccessibleDataGridTests
             grid.Bind(WidgetColumns(), second, "3 rows.", "Widgets", rowKey: RowKey, rowAutomationName: Identity);
 
             Assert.Same(second[1], grid.Grid.CurrentCell.Item);
+        });
+    }
+
+    /// <summary>
+    /// Codex PR 3 round 8, OD-9 (R-4; contract 35 A-7): the reader's row is
+    /// restored by its caller's stable KEY, never its row-header text. The
+    /// header is a label, and a label can change or repeat: a republish
+    /// that relabels the reader's row (a graph ghost's label, which core
+    /// recomputes) cleared the seat, and a republish that swaps two rows
+    /// sharing a header (an external sort) moved the reader onto the other
+    /// row at their old place. Neither restore speaks.
+    /// </summary>
+    [Fact]
+    public void ARepublishRestoresTheReadersRowByItsKey()
+    {
+        RunSta(() =>
+        {
+            var announced = new List<A11yEvent>();
+            var grid = new AccessibleDataGrid { Announce = announced.Add };
+            IReadOnlyList<AccessibleGridColumn> columns =
+            [
+                new AccessibleGridColumn { Header = "Label", Cell = row => ((Keyed)row).Label, IsRowHeader = true },
+                new AccessibleGridColumn { Header = "Key", Cell = row => ((Keyed)row).Key },
+            ];
+            void Bind(params Keyed[] rows) => grid.Bind(
+                columns, rows, "2 rows.", "Keyed", rowKey: row => ((Keyed)row).Key,
+                rowAutomationName: row => ((Keyed)row).Label);
+            string Current() => Assert.IsType<Keyed>(grid.Grid.CurrentCell.Item).Key;
+
+            // A relabel that also moves the row.
+            Keyed[] first = [new("k1", "/foo-bar"), new("k2", "foo bar")];
+            Bind(first);
+            grid.Grid.CurrentCell = new DataGridCellInfo(first[0], grid.Grid.Columns[1]);
+            announced.Clear();
+            Bind(new Keyed("k2", "foo bar"), new Keyed("k1", "foo-bar"));
+            Assert.Equal("k1", Current());
+            Assert.Same(grid.Grid.Columns[1], grid.Grid.CurrentCell.Column);
+
+            // Two rows sharing a header, swapped each way.
+            foreach (bool reversed in new[] { false, true, false })
+            {
+                Bind(reversed
+                    ? [new Keyed("k2", "same"), new Keyed("k1", "same")]
+                    : [new Keyed("k1", "same"), new Keyed("k2", "same")]);
+                Assert.Equal("k1", Current());
+                Assert.Same(grid.Grid.Columns[1], grid.Grid.CurrentCell.Column);
+            }
+            Assert.Empty(announced);
         });
     }
 

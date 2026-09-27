@@ -242,6 +242,12 @@ internal sealed class AccessibleDataGrid : UserControl
     private string RowName(object item) =>
         _rowNames.TryGetValue(item, out string? name) ? name : BaseRowName(item);
 
+    /// <summary>A bound row's FINAL name, as its UIA Name reads it — for a
+    /// surface whose row move must speak the same text (the graph, contract
+    /// 35 A-6; codex PR 3 round 8): the composed name, never the row copy
+    /// the sibling rule has not yet told apart.</summary>
+    internal string ComposedRowName(object row) => RowName(row);
+
     /// <summary>
     /// W7-7 PR 3 (#1246, contract R-4 as amended after codex PR 0 rounds 5
     /// and 6, codex PR 3 rounds 2 and 6, and owner decision OD-9): every
@@ -607,6 +613,13 @@ internal sealed class AccessibleDataGrid : UserControl
         // The outgoing rows drop what the outgoing delegates gave them
         // before anything replaces those delegates.
         ClearRealizedRowSeams();
+        // The reader's row, captured by the OUTGOING key before that
+        // delegate is replaced (codex PR 3 round 8, OD-9; contract 35
+        // A-7): the row's identity is its caller's stable key, never its
+        // row-header text — a header is a label, and a label changes (a
+        // graph ghost's, which core recomputes) or repeats (two same.md
+        // notes an external sort swaps).
+        string? previousRowKey = CurrentRowKey();
         _rowAutomationName = rowAutomationName;
         _rowKey = rowKey;
         _rowDistinguisher = rowDistinguisher;
@@ -650,14 +663,11 @@ internal sealed class AccessibleDataGrid : UserControl
         // surfaces re-Bind on every publish — so a background save
         // while someone is arrowing through the grid moved them.
         //
-        // Keyed on the ROW HEADER, not object identity: every publish
-        // builds fresh row view models, so identity is gone by
-        // definition. The row header is already the row's identity
-        // under §8.7.
-        string? previousRowIdentity = RowIdentityOf(_grid.CurrentCell.Item);
-        // Row-header text is not guaranteed unique — two notes can both
-        // be "Untitled". Where it repeats, the previous ordinal breaks
-        // the tie so the reader keeps the OCCURRENCE they were on.
+        // Keyed on the row's stable KEY (captured above), not object
+        // identity: every publish builds fresh row view models, so
+        // identity is gone by definition. A key a caller repeats keeps
+        // the previous ordinal as its tie-break, so the reader keeps the
+        // OCCURRENCE they were on.
         int previousRowOrdinal = _items.IndexOf(_grid.CurrentCell.Item);
         int previousColumnIndex = _grid.CurrentCell.Column is { } previousColumn
             ? _grid.Columns.IndexOf(previousColumn)
@@ -702,7 +712,7 @@ internal sealed class AccessibleDataGrid : UserControl
         AutomationProperties.SetName(_grid, accessibilityLabel);
 
         WithoutAnnouncing(() => RestoreReaderPosition(
-            previousRowIdentity, previousColumnIndex, previousRowOrdinal));
+            previousRowKey, previousColumnIndex, previousRowOrdinal));
 
         // Re-apply silently: ApplySort posts a GridSorted announcement,
         // which is right when the USER sorts and wrong when a
@@ -759,67 +769,55 @@ internal sealed class AccessibleDataGrid : UserControl
     }
 
     /// <summary>
-    /// The row's identity for position-restore purposes: the row-header
-    /// cell's text, or null when the surface declares no row-header
-    /// column (nothing stable to key on).
+    /// The current row's stable key, by the key delegate bound NOW — at
+    /// Bind, before it is replaced — or null when no bound row is current.
     ///
-    /// Only ever called with a row from the CURRENTLY BOUND set. The
-    /// `Cell` delegates cast to the surface's row type, so handing one
-    /// anything else — most reachably `CollectionView.NewItemPlaceholder`,
-    /// which is what `CurrentCell.Item` holds on an empty grid — throws
-    /// out of Bind and the surface never renders at all. The row-action
-    /// hit-test next door rejects the placeholder for the same reason.
+    /// The `_items.Contains` guard runs exactly once, here: the key
+    /// delegates cast to the surface's row type, so handing one anything
+    /// else — most reachably `CollectionView.NewItemPlaceholder`, which is
+    /// what `CurrentCell.Item` holds on an empty grid — throws out of Bind
+    /// and the surface never renders at all. Guarding inside the restore
+    /// loop, which already walks `_items`, made every re-publish O(n²):
+    /// 8,000 rows took 708 ms on the UI thread against 33 ms before, and
+    /// the bulk-rename preview has no row cap.
     /// </summary>
-    private string? RowIdentityOf(object? item) =>
-        item is not null
+    private string? CurrentRowKey() =>
+        _rowKey is { } rowKey
+        && _grid.CurrentCell.Item is { } item
         && item != CollectionView.NewItemPlaceholder
         && _items.Contains(item)
-            ? BoundRowIdentityOf(item)
+            ? rowKey(item)
             : null;
 
     /// <summary>
-    /// Identity for a row ALREADY KNOWN to be in the bound set.
-    ///
-    /// Split from <see cref="RowIdentityOf"/> because that one's
-    /// `_items.Contains` guard is needed exactly once — at capture,
-    /// where `CurrentCell.Item` may be foreign or the new-item
-    /// placeholder. Calling it from inside a loop that is already
-    /// walking `_items` made every re-publish O(n²): 8,000 rows took
-    /// 708 ms on the UI thread against 33 ms before, and the
-    /// bulk-rename preview has no row cap.
-    /// </summary>
-    private string? BoundRowIdentityOf(object row) =>
-        _rowHeaderColumn is { } header ? header.Cell(row) : null;
-
-    /// <summary>
-    /// Put the reader back where they were, or clear obsolete currency.
+    /// Put the reader back where they were — on the row whose incoming key
+    /// is the key their row had — or clear obsolete currency.
     ///
     /// A row that is GONE after the republish is NOT substituted with a
     /// neighbour. Neither its old item nor its detached column may remain
     /// current: later selection and activation must use the new binding.
     /// </summary>
     private void RestoreReaderPosition(
-        string? rowIdentity, int columnIndex, int previousOrdinal)
+        string? rowKey, int columnIndex, int previousOrdinal)
     {
         _grid.CurrentCell = new DataGridCellInfo();
         _grid.SelectedCells.Clear();
-        if (rowIdentity is null
+        if (rowKey is null
             || columnIndex < 0
             || columnIndex >= _grid.Columns.Count)
         {
             return;
         }
         // Nearest match to where the reader WAS, not the first match:
-        // with unique row headers these are the same row, and with
-        // repeated ones this is the difference between staying put and
+        // with unique keys these are the same row, and with a key a
+        // caller repeats this is the difference between staying put and
         // being moved to a namesake without an announcement. A
         // previousOrdinal of -1 (no prior currency) degrades to the
         // first match, which is the only sensible answer there.
         int best = -1;
         for (int index = 0; index < _items.Count; index++)
         {
-            if (!string.Equals(
-                BoundRowIdentityOf(_items[index]), rowIdentity, StringComparison.Ordinal))
+            if (!string.Equals(KeyOf(_items[index]), rowKey, StringComparison.Ordinal))
             {
                 continue;
             }

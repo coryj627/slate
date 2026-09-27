@@ -220,12 +220,15 @@ internal sealed class GraphTableView : UserControl
         _syncingSelection = true;
         try
         {
+            // The row move speaks the row's UIA Name (contract A-6): the
+            // grid's final composed name, which tells two rows whose copy
+            // reads alike apart (codex PR 3 round 8), never the copy itself.
             _grid.Bind(
                 columns,
                 rows,
                 summary: publication.Summary,
                 accessibilityLabel: GridLabel,
-                rowAudioDescription: row => model.RowName((GraphTableRow)row),
+                rowAudioDescription: _grid.ComposedRowName,
                 rowActions: RowActions(model),
                 exportProducer: null,
                 rowActivated: row => model.Activate((GraphTableRow)row, modified: false),
@@ -373,8 +376,20 @@ internal sealed class GraphTableView : UserControl
             // IGJ-6): the DOCUMENT's guarded selection refuses a retired or
             // unseated document and a key its current snapshot lacks, so a
             // retained view over a closed tab cannot move the workspace's
-            // state.
-            _ = model.SelectRow(current.StableKey);
+            // state. The write is the grid's OWN move, so it does not re-seat
+            // the grid (codex PR 3 round 8): the re-seat's silent select
+            // marked the row announced before the move spoke, and every
+            // arrow onto a row posted a cell move — "Note: same" — in place
+            // of the row move that names the row (contract A-6).
+            _syncingSelection = true;
+            try
+            {
+                _ = model.SelectRow(current.StableKey);
+            }
+            finally
+            {
+                _syncingSelection = false;
+            }
         }
     }
 
