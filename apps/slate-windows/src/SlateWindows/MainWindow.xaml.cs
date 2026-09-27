@@ -751,9 +751,22 @@ public partial class MainWindow : Window
             // nor a refusal announcement. The admission inside the
             // workspace open takes the DismissPaletteThenOpen arm,
             // which retires the palette with its focus lineage.
+            //
+            // #1275 (codex round 5): only while the palette is not
+            // sealed. A sealed palette takes no key but Escape (contract
+            // 28 I3) — a command it ran is still running, or a prompt is
+            // up — and this route bypassed the palette's own key handling:
+            // it dismissed the palette and opened the template picker
+            // inside the running command's nested frame, and that
+            // command's failure was then announced over the new sheet.
+            // Handled either way, so the chord cannot reach the shell.
             if (modifiers == (ModifierKeys.Control | ModifierKeys.Shift) && e.Key == Key.N)
             {
-                _viewModel.Workspace?.OpenTemplatePicker();
+                if (!_viewModel.Palette.IsSealed)
+                {
+                    _viewModel.Workspace?.OpenTemplatePicker();
+                }
+
                 e.Handled = true;
                 return;
             }
@@ -849,7 +862,11 @@ public partial class MainWindow : Window
             // ON TOP of an open Quick Open — leaving two IsDialog surfaces
             // and two hit-test scrims live while Quick Open's key handler
             // sits unreachable behind this branch.
-            if (TryClearTheWayForThePalette())
+            //
+            // #1275 (codex round 5 audit): a sealed palette does not open
+            // (contract 28 T1″), so clearing the way first would dismiss
+            // Quick Open or Search for an open that is then refused.
+            if (!_viewModel.Palette.IsSealed && TryClearTheWayForThePalette())
             {
                 _viewModel.Palette.Open();
             }
