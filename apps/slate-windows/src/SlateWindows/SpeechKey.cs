@@ -32,8 +32,13 @@ namespace SlateWindows;
 /// The key is deliberately COARSE: two names that share a key but would be
 /// spoken apart only cost one needless distinguisher, while two names spoken
 /// alike under different keys would leave a reader unable to tell two
-/// siblings apart. What it cannot see — two scripts whose letters look or
-/// sound alike (Latin "A" and Greek "Α") — is accepted risk AR-34.
+/// siblings apart. What it cannot see is accepted risk, owner-accepted as an
+/// open-ended speech-fidelity class: two scripts whose letters look or sound
+/// alike (Latin "A" and Greek "Α") is AR-34; a symbol a reader speaks as a
+/// word at its symbol level (NVDA's "%" as "percent", so "100%" and "100
+/// percent") is AR-35; forms only full Unicode case folding joins (Greek
+/// final sigma "ς" and "σ"), and a combining mark after a digit run, which
+/// stays with that run, are AR-36 (codex PR 3 round 7).
 /// </summary>
 internal readonly record struct SpeechKey
 {
