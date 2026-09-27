@@ -410,6 +410,51 @@ public sealed class RightPaneNoticeLandingTests
             Line: (uint)(index + 1), ByteOffset: 0, CheckboxStartByte: 2, CheckboxEndByte: 5);
     }
 
+    /// <summary>
+    /// Codex PR 4's final check: a double-click on the Citations list's EMPTY
+    /// area — below the rows — expands nothing. Its first press lands the
+    /// keys on the first row (the click rule), and the double-click expanded
+    /// that landed row: a citation never clicked. A double-click on a row
+    /// expands that row.
+    /// </summary>
+    [Fact]
+    public void ADoubleClickOnTheCitationsEmptyAreaExpandsNothing() => RunSta(() =>
+    {
+        using var host = new Host();
+        host.Initialize("citations", "empty", note: "Cites [@knuth1984].\n", bibliography: true);
+        host.AttachWorkspaceToTheWindow();
+        ListBox list = host.ElementWithId<ListBox>("PanelCitationsList");
+        Assert.True(
+            PumpedDispatcher.PumpUntil(() => list.IsVisible && list.Items.OfType<CitationRowViewModel>().Any(row => row.CanExpand)),
+            "premise: the leaf never listed an expandable citation.");
+        list.UpdateLayout();
+        SelectorFocus.RegisterClickRule();
+        list.RaiseEvent(new MouseButtonEventArgs(Mouse.PrimaryDevice, Environment.TickCount, MouseButton.Left)
+        {
+            RoutedEvent = UIElement.MouseDownEvent,
+        });
+        Assert.IsType<ListBoxItem>(Keyboard.FocusedElement);
+
+        list.RaiseEvent(DoubleClick(list));
+        PumpedDispatcher.Drain();
+
+        Assert.Null(host.Workspace.CitationDetails);
+
+        var row = (ListBoxItem)list.ItemContainerGenerator.ContainerFromItem(
+            list.Items.OfType<CitationRowViewModel>().First(candidate => candidate.CanExpand));
+        list.RaiseEvent(DoubleClick(VisualTreeHelper.GetChild(row, 0)));
+        PumpedDispatcher.Drain();
+
+        Assert.NotNull(host.Workspace.CitationDetails);
+
+        static MouseButtonEventArgs DoubleClick(object hit) =>
+            new(Mouse.PrimaryDevice, Environment.TickCount, MouseButton.Left)
+            {
+                RoutedEvent = Control.MouseDoubleClickEvent,
+                Source = hit,
+            };
+    });
+
     /// <summary>The leaf model's hand-offs — open, scroll, toggle —
     /// replaced by recorders.</summary>
     private static List<string> RecordActions(RightPanePanelsViewModel panels)
@@ -652,6 +697,8 @@ public sealed class RightPaneNoticeLandingTests
 
         public CitationsPanelViewModel Citations => _workspace!.Citations;
 
+        public WorkspaceViewModel Workspace => _workspace!;
+
         /// <summary>Every keyboard focus change in the hosted window.</summary>
         public List<IInputElement> FocusChanges { get; } = [];
 
@@ -711,10 +758,25 @@ public sealed class RightPaneNoticeLandingTests
                 + string.Join(" → ", FocusChanges.Select(focus => focus.GetType().Name)));
 
         /// <param name="note">The open note's text.</param>
-        public void Initialize(string leaf, string state, string note = "Just a line of text.\n")
+        /// <param name="bibliography">Adds a bibliography and a citation
+        /// style, so a citation of <c>knuth1984</c> resolves and
+        /// expands.</param>
+        public void Initialize(string leaf, string state, string note = "Just a line of text.\n", bool bibliography = false)
         {
             Assert.Null(Application.Current);
             File.WriteAllText(Path.Combine(_fixture.Root, "plain.md"), note);
+            if (bibliography)
+            {
+                File.WriteAllText(
+                    Path.Combine(_fixture.Root, "library.bib"),
+                    "@article{knuth1984,\n  title = {Literate Programming},\n  author = {Knuth, Donald E.},\n"
+                        + "  year = {1984},\n  journal = {The Computer Journal}\n}\n");
+                File.Copy(Path.Combine(SourceText.RepoRoot(), "demo-vault", "csl", "ieee.csl"), Path.Combine(_fixture.Root, "ieee.csl"));
+                File.WriteAllText(
+                    Path.Combine(_fixture.Root, "slate.json"),
+                    "{\"citations\":{\"bibliography\":\"library.bib\",\"cite_style\":\"ieee\"}}");
+            }
+
             _session = VaultSession.OpenFilesystem(_fixture.Root);
             using (var cancel = new CancelToken())
             {

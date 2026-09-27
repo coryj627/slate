@@ -479,9 +479,6 @@ internal sealed class TasksReviewViewModel : PanelWorkScheduler
         {
             return;
         }
-        // The winning request's outcome: the chips departed while it loaded
-        // stop naming their held totals.
-        _departedSincePublication.Clear();
         if (failure is not null || page is null)
         {
             // A failed SAME-filter refresh keeps existing rows (mac
@@ -519,6 +516,11 @@ internal sealed class TasksReviewViewModel : PanelWorkScheduler
         _nextCursor = page.NextCursor;
         _totalFiltered = checked((long)page.TotalFiltered);
         _publishedTotals[_publishedFilter.Value] = _totalFiltered;
+        // The winning page is installed: the chips departed while it loaded
+        // stop naming their held totals — only now (codex PR 4's final
+        // check: a FAILED winning request cleared them, and the departed
+        // chips lost their names with no page to show).
+        _departedSincePublication.Clear();
         _loadError = null;
         _isLoading = false;
         RaiseStateChanges();

@@ -171,6 +171,64 @@ public sealed class RightPaneLeafRegionTests
         Assert.True(host.Announced.Count == 0, $"the arrows posted authored lines: {host.Order}");
     });
 
+    /// <summary>
+    /// Codex PR 4's final check: the same A → B → A, and the WINNING request
+    /// fails. No page publishes, so no chip may lose the name it held: the
+    /// departed chips were cleared when the failure arrived, and "Due today"
+    /// dropped its count with no page to show. Every filter radio's name is
+    /// recorded before the failure and after it, and none changes.
+    /// </summary>
+    [Fact]
+    public void AFailedWinningPageRenamesNoChip() => RunSta(() =>
+    {
+        using var host = new Host();
+        host.Initialize("tasksReview", backgroundWork: true, ("todo.md", "- [ ] first\n- [ ] second\n"));
+        TasksReviewViewModel review = host.Workspace.TasksReview;
+        review.EnsureLoaded();
+        Assert.True(PumpedDispatcher.PumpUntil(() => review.Rows.Count == 2 && !review.IsLoading), "premise: the review never loaded.");
+        RadioButton all = host.ElementWithId<RadioButton>("PanelReviewFilterAll");
+        RadioButton[] radios =
+        [
+            all,
+            host.ElementWithId<RadioButton>("PanelReviewFilterDueToday"),
+            host.ElementWithId<RadioButton>("PanelReviewFilterOverdue"),
+            host.ElementWithId<RadioButton>("PanelReviewFilterThisWeek"),
+        ];
+        Assert.True(all.Focus());
+        host.Press(Key.Right);
+        Assert.True(PumpedDispatcher.PumpUntil(() => !review.IsLoading && review.ActiveFilter == TaskReviewFilter.DueToday), "premise: Due today never published.");
+        host.Press(Key.Left);
+        Assert.True(PumpedDispatcher.PumpUntil(() => !review.IsLoading && review.ActiveFilter == TaskReviewFilter.All), "premise: All never published again.");
+        PumpedDispatcher.Drain();
+
+        using var gate = new ManualResetEventSlim(false);
+        review.InterleaveForTests = () =>
+        {
+            gate.Wait(TimeSpan.FromSeconds(30));
+            throw new InvalidOperationException("the index could not be read");
+        };
+        string[] before;
+        try
+        {
+            host.Press(Key.Right);
+            host.Press(Key.Left);
+            Assert.Equal(TaskReviewFilter.All, review.ActiveFilter);
+            Assert.True(review.IsLoading, "premise: the winning page was not held");
+            before = [.. radios.Select(AutomationProperties.GetName)];
+        }
+        finally
+        {
+            gate.Set();
+        }
+
+        Assert.True(PumpedDispatcher.PumpUntil(() => !review.IsLoading), "the failure never arrived.");
+        PumpedDispatcher.Drain();
+
+        Assert.NotNull(review.EmptyMessage);
+        Assert.Equal(before, radios.Select(AutomationProperties.GetName));
+        Assert.StartsWith("Due today, ", AutomationProperties.GetName(radios[1]), StringComparison.Ordinal);
+    });
+
     /// <summary>The owner's S2 and the completeness sweep's G2: the
     /// Bibliography segments are a Windows radio group. Right on "Entries"
     /// moved focus to "Unresolved" without checking it, the Entries grid
@@ -642,7 +700,7 @@ public sealed class RightPaneLeafRegionTests
     });
 
     /// <summary>
-    /// W7-7 PR 4b (#1247; the completeness sweep's G21, AR-41): an arrow on
+    /// W7-7 PR 4b (#1247; the completeness sweep's G21, AR-59): an arrow on
     /// the rail chooses the next leaf, and the row that takes the keys names
     /// it — one utterance. The authored "… panel." line stays silent on that
     /// route only: choosing a leaf any other way (a reveal, a command, a

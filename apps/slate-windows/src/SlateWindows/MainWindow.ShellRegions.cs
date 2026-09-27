@@ -322,7 +322,7 @@ public partial class MainWindow : IShellRegionHost
     private bool _railArrow;
 
     /// <summary>
-    /// W7-7 PR 4b (#1247; the completeness sweep's G21, AR-41): an arrow on
+    /// W7-7 PR 4b (#1247; the completeness sweep's G21, AR-59): an arrow on
     /// the rail CHOOSES the leaf — its selection switches the shown leaf — and
     /// the row taking the keys says so ("Outline, 3 of 12"); the authored
     /// "Outline panel." on top repeated it, one arrow, two utterances. The

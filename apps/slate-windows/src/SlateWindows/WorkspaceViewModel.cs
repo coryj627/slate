@@ -1948,7 +1948,7 @@ internal sealed partial class WorkspaceViewModel : BindableBase, IDisposable
         }
     }
 
-    /// <summary>W7-7 PR 4b (#1247; the sweep's G21, AR-41): whether the leaf
+    /// <summary>W7-7 PR 4b (#1247; the sweep's G21, AR-59): whether the leaf
     /// is being chosen by an arrow on the rail — the rail's row, taking the
     /// keys, names the leaf, and the authored line would repeat it. The
     /// window answers; null (no window) answers no.</summary>
@@ -1961,7 +1961,7 @@ internal sealed partial class WorkspaceViewModel : BindableBase, IDisposable
         {
             if (value is not null && SetField(ref _activeLeaf, value))
             {
-                // Silent on the rail's arrow route only (G21, AR-41).
+                // Silent on the rail's arrow route only (G21, AR-59).
                 if (IsChoosingLeafByArrow?.Invoke() != true)
                 {
                     _announce(new A11yEvent.LeafPanelShown(value.Title));

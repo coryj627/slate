@@ -1030,22 +1030,27 @@ internal sealed class BaseSurfaceView : UserControl
         }
     }
 
+    /// <summary>A double-click opens the row it HIT — never the keyboard's
+    /// row: its first press on the list's empty area lands the keys on a row
+    /// (the click rule), and opening "the focused row" opened a note never
+    /// clicked (codex PR 4's final check).</summary>
     private void OnListDoubleClick(object sender, MouseButtonEventArgs e) =>
-        _ = ActivateListRow();
+        _ = ActivateListRow(SelectorFocus.ClickedItem(_list, e.OriginalSource));
 
     private void OnListKeyDown(object sender, KeyEventArgs e)
     {
-        if (e.Key == Key.Enter && ActivateListRow())
+        if (e.Key == Key.Enter && ActivateListRow(SelectorFocus.FocusedOrSelectedItem(_list)))
         {
             e.Handled = true;
         }
     }
 
-    /// <summary>Opens the row that holds the keys — else the selected row —
-    /// under the C13 admission. W7-7 PR 4 (#1247; codex round 7 finding 4):
-    /// the quick filter's Escape lands on a row without selecting it, and
-    /// Enter there opened nothing.</summary>
-    private bool ActivateListRow()
+    /// <summary>Opens <paramref name="target"/> — Enter's: the row that
+    /// holds the keys, else the selected row; a double-click's: the row it
+    /// hit — under the C13 admission. W7-7 PR 4 (#1247; codex round 7
+    /// finding 4): the quick filter's Escape lands on a row without
+    /// selecting it, and Enter there opened nothing.</summary>
+    private bool ActivateListRow(object? target)
     {
         // The C13 admission the grid's row actions respect (codex
         // round 6: Enter on a Loading surface's stale list row still
@@ -1053,7 +1058,7 @@ internal sealed class BaseSurfaceView : UserControl
         if (IsReadOnlySurface
             || Model is not
             { State: BaseLoadState.Ready or BaseLoadState.Degraded } model
-            || SelectorFocus.FocusedOrSelectedItem(_list) is not BaseListItemViewModel { Row: { } row })
+            || target is not BaseListItemViewModel { Row: { } row })
         {
             return false;
         }
