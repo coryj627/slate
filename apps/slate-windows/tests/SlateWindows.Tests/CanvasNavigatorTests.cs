@@ -4616,13 +4616,23 @@ public sealed class CanvasNavigatorTests : IDisposable
         PumpUntil(
             () => Installed(board, created) && InView(board, created),
             "premise: the owed reveal was never paid, so there is nothing to pay twice.");
+        // Settled first, and again after the pan-away: the board has installed
+        // the population the document has applied with the viewport it
+        // committed, so no install still in flight can land after the check
+        // and hide a second payment (without these waits the paid-clear
+        // mutant escaped this fact one run in five, codex's final check).
+        PumpUntil(
+            () => SettledOnAppliedPopulation(board, document),
+            "premise: the board never settled on the document's applied population after paying.");
 
         // The reader pans away; the pan is itself a new state, and it installs.
         board.Engine.CommitViewport(view => view.PannedTo(-5000, -5000));
         CanvasViewportState before = board.Engine.CommittedViewport;
         PumpUntil(
-            () => board.Engine.Current!.Viewport.SameGeometry(board.Engine.CommittedViewport),
+            () => SettledOnAppliedPopulation(board, document),
             "premise: no state installed after the pan-away.");
+        Pump();
+        Pump();
         Assert.True(
             before.SameGeometry(board.Engine.CommittedViewport),
             "a later install paid the already-paid reveal again and pulled the view back to the new card: a "
@@ -5520,6 +5530,14 @@ public sealed class CanvasNavigatorTests : IDisposable
         }
         throw new InvalidOperationException("premise: the tabbed pane shows no canvas surface.");
     }
+
+    /// <summary>Whether the board has installed the population the document
+    /// has applied, with the viewport it has committed — nothing left in
+    /// flight that a reveal could be paid from.</summary>
+    private static bool SettledOnAppliedPopulation(CanvasRendererView board, CanvasDocumentViewModel document) =>
+        board.Engine.Current is { } state
+        && ReferenceEquals(state.Source.Loaded?.Population, document.AppliedPublication?.Population)
+        && state.Viewport.SameGeometry(board.Engine.CommittedViewport);
 
     /// <summary>Whether the board's INSTALLED state has the card — the
     /// population a reveal computes its pan against.</summary>
