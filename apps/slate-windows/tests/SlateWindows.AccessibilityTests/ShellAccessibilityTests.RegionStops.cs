@@ -161,6 +161,14 @@ public sealed partial class ShellAccessibilityTests
             PressKey(VirtualKeyShort.F6);
             AssertFocusedListItem(automation, rail, "Tasks Review", "F6 from the review's filter did not land on the rail's row.");
 
+            //    Codex PR 4 round 7 finding 5: a genuine CLICK on a filter
+            //    from outside the group gives the keys to the clicked filter
+            //    directly — never first to the checked one (the old choice
+            //    focused, and spoken, before the new) — and the click's route
+            //    says "Filter set" once.
+            AutomationElement overdue = WaitForElement(window, "PanelReviewFilterOverdue", TimeSpan.FromSeconds(10));
+            ClickFilterFromOutsideTheGroup(automation, window, process, overdue, "Overdue", ["PanelReviewFilterDueToday"]);
+
             // 3. Shift+F6 into a Citations list with rows lands on a row.
             AutomationElement cited = WaitForTreeItemStartingWith(tree, automation, "cited.md");
             cited.Patterns.SelectionItem.Pattern.Select();
@@ -299,12 +307,82 @@ public sealed partial class ShellAccessibilityTests
                 SpinWait.SpinUntil(() => !countReadout.Name.Contains("1 of", StringComparison.Ordinal), TimeSpan.FromSeconds(10)),
                 "Escape did not clear the quick filter");
             AssertFocusedListItem(automation, list, null, "Escape from the quick filter did not land on a row of the list.");
+
+            // Codex PR 4 round 7 finding 4: the landing selects nothing, and
+            // Enter opens the row it landed on — the first, Alpha.
+            string landed = automation.FocusedElement().Properties.Name.ValueOrDefault ?? string.Empty;
+            Assert.Contains("alpha", landed, StringComparison.OrdinalIgnoreCase);
+            PressKey(VirtualKeyShort.ENTER);
+            _ = WaitForEditor(window, automation, "alpha.md editor", TimeSpan.FromSeconds(10));
         }
         finally
         {
             try { process?.Kill(entireProcessTree: true); } catch (InvalidOperationException) { }
             try { Directory.Delete(root, recursive: true); } catch (IOException) { }
         }
+    }
+
+    /// <summary>A genuine click on <paramref name="choice"/>, a radio of a
+    /// Windows radio group, with the keys outside the group: the UIA focus
+    /// events Slate raises go to the clicked radio and never to
+    /// <paramref name="neverFocused"/> (the choice checked before), the radio
+    /// is chosen, and the click's route speaks "Filter set" once (codex PR 4
+    /// round 7 finding 5).</summary>
+    private static void ClickFilterFromOutsideTheGroup(
+        UIA3Automation automation, Window window, Process process, AutomationElement choice, string filterName, string[] neverFocused)
+    {
+        var focused = new System.Collections.Concurrent.ConcurrentQueue<string>();
+        var heard = new System.Collections.Concurrent.ConcurrentQueue<string>();
+        int slate = process.Id;
+        var recorder = automation.RegisterFocusChangedEvent(element =>
+        {
+            try
+            {
+                if (element.Properties.ProcessId.ValueOrDefault == slate)
+                {
+                    focused.Enqueue(element.Properties.AutomationId.ValueOrDefault ?? string.Empty);
+                }
+            }
+            catch (Exception exception) when (IsTransientUiaFault(exception))
+            {
+            }
+        });
+        try
+        {
+            using var listener = new DesktopNotificationListener(automation, (processId, _, _, _, displayString, _) =>
+            {
+                if (processId == slate)
+                {
+                    heard.Enqueue(displayString);
+                }
+            });
+            ReassertForegroundForAChord(window);
+            // Registration settles; nothing before the click is the click's.
+            Thread.Sleep(TimeSpan.FromMilliseconds(500));
+            focused.Clear();
+            heard.Clear();
+
+            System.Drawing.Rectangle bounds = choice.BoundingRectangle;
+            Mouse.Click(new System.Drawing.Point(bounds.X + (bounds.Width / 2), bounds.Y + (bounds.Height / 2)));
+
+            AssertEventuallyFocused(choice, $"a click on the {filterName} filter did not give it the keys");
+            Assert.True(SpinWait.SpinUntil(() => IsChosen(choice), TimeSpan.FromSeconds(10)), $"the click did not choose {filterName}");
+            // The focus events and the click's line arrive.
+            Thread.Sleep(TimeSpan.FromMilliseconds(1500));
+        }
+        finally
+        {
+            automation.UnregisterFocusChangedEvent(recorder);
+        }
+
+        string[] order = [.. focused];
+        string choiceId = choice.Properties.AutomationId.ValueOrDefault ?? string.Empty;
+        Assert.True(
+            order.Length > 0 && order[^1] == choiceId && !order.Any(neverFocused.Contains),
+            $"the click's UIA focus events went [{string.Join(", ", order)}], not straight to {choiceId}");
+        string filterSet = uniffi.slate_uniffi.SlateUniffiMethods.A11yRender(
+            new uniffi.slate_uniffi.A11yEvent.TasksFilterSet(filterName)).Text;
+        Assert.Equal([filterSet], heard.ToArray());
     }
 
     /// <summary>R-5's radio half on the canvas (codex design review of

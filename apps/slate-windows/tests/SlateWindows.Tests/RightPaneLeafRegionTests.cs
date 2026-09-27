@@ -95,6 +95,82 @@ public sealed class RightPaneLeafRegionTests
         Assert.Equal(["Due today, 0 tasks"], renamedWhileFocused);
     });
 
+    /// <summary>
+    /// Codex PR 4 round 7 finding 3: arrowing to a filter and BACK before its
+    /// page arrives renames no chip while it holds the keys. With All and Due
+    /// today both published, All → Due today → All while Due today's page is
+    /// still loading renamed Due today — still focused, its count dropped —
+    /// because only the last PUBLISHED filter kept its held count; NVDA
+    /// speaks a rename of the focus object. The departed chips are tracked
+    /// apart from the publications and keep their names until the winning
+    /// page publishes. The loads are held at the review's own seam.
+    /// </summary>
+    [Fact]
+    public void ArrowingBackBeforeThePagePublishesRenamesNoChipUnderTheKeys() => RunSta(() =>
+    {
+        using var host = new Host();
+        host.Initialize("tasksReview", backgroundWork: true, ("todo.md", "- [ ] first\n- [ ] second\n"));
+        TasksReviewViewModel review = host.Workspace.TasksReview;
+        review.EnsureLoaded();
+        Assert.True(PumpedDispatcher.PumpUntil(() => review.Rows.Count == 2 && !review.IsLoading), "premise: the review never loaded.");
+        RadioButton all = host.ElementWithId<RadioButton>("PanelReviewFilterAll");
+        RadioButton dueToday = host.ElementWithId<RadioButton>("PanelReviewFilterDueToday");
+        Assert.True(all.Focus());
+        // Both filters published once: to Due today and back, each page in.
+        host.Press(Key.Right);
+        Assert.True(PumpedDispatcher.PumpUntil(() => !review.IsLoading && review.ActiveFilter == TaskReviewFilter.DueToday), "premise: Due today never published.");
+        host.Press(Key.Left);
+        Assert.True(PumpedDispatcher.PumpUntil(() => !review.IsLoading && review.ActiveFilter == TaskReviewFilter.All), "premise: All never published again.");
+        PumpedDispatcher.Drain();
+        Assert.Same(all, Keyboard.FocusedElement);
+        Assert.Equal("All, 2 tasks", AutomationProperties.GetName(all));
+
+        var renamedWhileFocused = new List<string>();
+        foreach (RadioButton radio in new[] { all, dueToday })
+        {
+            DependencyPropertyDescriptor.FromProperty(AutomationProperties.NameProperty, typeof(RadioButton))
+                .AddValueChanged(radio, (_, _) =>
+                {
+                    if (radio.IsKeyboardFocused)
+                    {
+                        renamedWhileFocused.Add($"{radio.Name} → {AutomationProperties.GetName(radio)}");
+                    }
+                });
+        }
+
+        using var gate = new ManualResetEventSlim(false);
+        review.InterleaveForTests = () => gate.Wait(TimeSpan.FromSeconds(30));
+        host.ForgetFocusAndSpeech();
+        try
+        {
+            host.Press(Key.Right);
+            Assert.Same(dueToday, Keyboard.FocusedElement);
+            Assert.True(review.IsLoading, "premise: Due today's page was not held");
+            string dueTodayName = AutomationProperties.GetName(dueToday);
+
+            host.Press(Key.Left);
+
+            Assert.Same(all, Keyboard.FocusedElement);
+            Assert.Equal(TaskReviewFilter.All, review.ActiveFilter);
+            Assert.True(renamedWhileFocused.Count == 0, $"a chip was renamed while it held the keys: {string.Join("; ", renamedWhileFocused)}");
+            Assert.Equal(dueTodayName, AutomationProperties.GetName(dueToday));
+            Assert.Equal("All, 2 tasks", AutomationProperties.GetName(all));
+            Assert.True(host.Announced.Count == 0, $"the arrows posted authored lines: {host.Order}");
+        }
+        finally
+        {
+            gate.Set();
+        }
+
+        Assert.True(PumpedDispatcher.PumpUntil(() => !review.IsLoading), "the held pages never published.");
+        PumpedDispatcher.Drain();
+        Assert.Equal(TaskReviewFilter.All, review.ActiveFilter);
+        Assert.Equal(2, review.Rows.Count);
+        Assert.Equal("All, 2 tasks", AutomationProperties.GetName(all));
+        Assert.True(renamedWhileFocused.Count == 0, $"a chip was renamed while it held the keys: {string.Join("; ", renamedWhileFocused)}");
+        Assert.True(host.Announced.Count == 0, $"the arrows posted authored lines: {host.Order}");
+    });
+
     /// <summary>The owner's S2 and the completeness sweep's G2: the
     /// Bibliography segments are a Windows radio group. Right on "Entries"
     /// moved focus to "Unresolved" without checking it, the Entries grid
@@ -444,6 +520,74 @@ public sealed class RightPaneLeafRegionTests
         Assert.True(
             host.VisibleLeafBody().IsKeyboardFocusWithin,
             $"after the emptying publication the keys were on {Describe(afterPublication)}; {key} then left the leaf, to {Describe(Keyboard.FocusedElement)}; order: {host.Order}");
+    });
+
+    /// <summary>
+    /// Codex PR 4 round 7 finding 2, the review's list: a click on its empty
+    /// area, or a page-one republish under the reader, puts the keys on a row
+    /// WITHOUT selecting it, and Enter opens that row's task and Space toggles
+    /// it, with one press — the handler read the list's selection, so Enter
+    /// did nothing and Space only selected the row. The review's hand-offs
+    /// are recorded where it passes them on.
+    /// </summary>
+    [Theory]
+    [InlineData("empty-area click", Key.Enter)]
+    [InlineData("empty-area click", Key.Space)]
+    [InlineData("publication", Key.Enter)]
+    [InlineData("publication", Key.Space)]
+    public void OnePressActsOnTheReviewRowALandingFocused(string landing, Key key) => RunSta(() =>
+    {
+        using var host = new Host();
+        host.Initialize("tasksReview", ("todo.md", "- [ ] first\n- [ ] second\n- [ ] third\n"));
+        host.AttachWorkspaceToTheWindow();
+        TasksReviewViewModel review = host.Workspace.TasksReview;
+        review.EnsureLoaded();
+        Assert.True(PumpedDispatcher.PumpUntil(() => review.Rows.Count == 3), "premise: the review never loaded three rows.");
+        var acted = new List<string>();
+        const BindingFlags any = BindingFlags.NonPublic | BindingFlags.Instance;
+        (typeof(TasksReviewViewModel).GetField("_activateRow", any) ?? throw new InvalidOperationException("_activateRow is gone"))
+            .SetValue(review, new Func<string, TaskItem, string, ReviewOpenRoute>((_, task, _) =>
+            {
+                acted.Add("open " + task.Text);
+                return ReviewOpenRoute.OpenFailed;
+            }));
+        (typeof(TasksReviewViewModel).GetField("_toggleViaOpenTab", any) ?? throw new InvalidOperationException("_toggleViaOpenTab is gone"))
+            .SetValue(review, new Func<string, TaskItem, string, ReviewToggleRoute>((_, task, _) =>
+            {
+                acted.Add("toggle " + task.Text);
+                return ReviewToggleRoute.RefusedBusy;
+            }));
+        ListBox list = host.ElementWithId<ListBox>("PanelReviewList");
+        list.UpdateLayout();
+        if (landing == "empty-area click")
+        {
+            ListBox rail = host.ElementWithId<ListBox>("RightPaneLeaves");
+            rail.UpdateLayout();
+            Assert.True(((UIElement)rail.ItemContainerGenerator.ContainerFromIndex(0)).Focus());
+            SelectorFocus.RegisterClickRule();
+            list.RaiseEvent(new MouseButtonEventArgs(Mouse.PrimaryDevice, Environment.TickCount, MouseButton.Left)
+            {
+                RoutedEvent = UIElement.MouseDownEvent,
+            });
+        }
+        else
+        {
+            list.SelectedIndex = 1;
+            list.UpdateLayout();
+            Assert.True(((UIElement)list.ItemContainerGenerator.ContainerFromIndex(1)).Focus());
+            review.ForceReload();
+            Assert.True(PumpedDispatcher.PumpUntil(() => !review.IsLoading && review.Rows.Count == 3), "premise: page one never republished.");
+            PumpedDispatcher.Drain();
+        }
+
+        var row = Assert.IsType<ListBoxItem>(Keyboard.FocusedElement);
+        Assert.Same(list, ItemsControl.ItemsControlFromItemContainer(row));
+        Assert.False(row.IsSelected, $"premise: the {landing} landing selected its row; order: {host.Order}");
+        string expected = (key == Key.Space ? "toggle " : "open ") + Assert.IsType<ReviewTaskRowViewModel>(row.DataContext).Task.Text;
+
+        host.Press(key);
+
+        Assert.Equal([expected], acted);
     });
 
     private static string Describe(IInputElement? element) => element switch

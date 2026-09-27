@@ -115,11 +115,12 @@ internal sealed class TasksReviewViewModel : PanelWorkScheduler
     private TaskFilter? _snapshotFilter;
     private TaskReviewFilter? _publishedFilter;
 
-    /// <summary>The filter whose page was published last, and each
-    /// filter's last published total — what a chip names while its own
-    /// page loads (<see cref="FilterAutomationName"/>).</summary>
-    private TaskReviewFilter? _lastPublishedFilter;
+    /// <summary>Each filter's last published total — what a chip names
+    /// while its own page loads — and the filters DEPARTED since the last
+    /// page published, whose chips keep that name until one does
+    /// (<see cref="FilterAutomationName"/>).</summary>
     private readonly Dictionary<TaskReviewFilter, long> _publishedTotals = [];
+    private readonly HashSet<TaskReviewFilter> _departedSincePublication = [];
     private readonly HashSet<string> _pendingToggleRefreshPaths =
         new(StringComparer.Ordinal);
 
@@ -216,15 +217,19 @@ internal sealed class TasksReviewViewModel : PanelWorkScheduler
     /// chosen filter's page loads, its chip names that filter's last
     /// published total, else no count at all — never the "0 tasks" of the
     /// cleared page, which an arrow's check-then-focus would put into the
-    /// focus speech itself — and the chip it replaced keeps its name until
-    /// the page publishes, so the radio the arrow leaves is not renamed
-    /// while it still holds the keys.
+    /// focus speech itself — and every chip departed since the last page
+    /// published keeps its name until a page publishes, so the radio an
+    /// arrow leaves is not renamed while it still holds the keys. The
+    /// departures are tracked apart from the publications (codex PR 4 round
+    /// 7 finding 3): arrowing A→B and back to A before B's page arrived
+    /// renamed B while it still held the keys, because only the last
+    /// PUBLISHED filter — A — kept its count.
     /// </remarks>
     public string FilterAutomationName(TaskReviewFilter filter)
     {
         long? count = filter == ActiveFilter
             ? _publishedFilter == filter ? _totalFiltered : HeldTotal(filter)
-            : _publishedFilter != ActiveFilter && _lastPublishedFilter == filter ? HeldTotal(filter) : null;
+            : _departedSincePublication.Contains(filter) ? HeldTotal(filter) : null;
         return count is { } total
             ? $"{DisplayName(filter)}, {total} " + (total == 1 ? "task" : "tasks")
             : DisplayName(filter);
@@ -282,6 +287,8 @@ internal sealed class TasksReviewViewModel : PanelWorkScheduler
         {
             return;
         }
+        // The chip departed keeps its name until a page publishes.
+        _ = _departedSincePublication.Add(ActiveFilter);
         ActiveFilter = filter;
         if (announce)
         {
@@ -467,6 +474,9 @@ internal sealed class TasksReviewViewModel : PanelWorkScheduler
         {
             return;
         }
+        // The winning request's outcome: the chips departed while it loaded
+        // stop naming their held totals.
+        _departedSincePublication.Clear();
         if (failure is not null || page is null)
         {
             // A failed SAME-filter refresh keeps existing rows (mac
@@ -503,7 +513,6 @@ internal sealed class TasksReviewViewModel : PanelWorkScheduler
         }
         _nextCursor = page.NextCursor;
         _totalFiltered = checked((long)page.TotalFiltered);
-        _lastPublishedFilter = _publishedFilter;
         _publishedTotals[_publishedFilter.Value] = _totalFiltered;
         _loadError = null;
         _isLoading = false;

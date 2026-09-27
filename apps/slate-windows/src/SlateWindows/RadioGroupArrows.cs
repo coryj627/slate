@@ -54,11 +54,13 @@ namespace SlateWindows;
 /// <c>SelectorFocus.LandOnStop</c> lands a radio there directly and answers
 /// that it landed): Ctrl+R put the reader on
 /// "All" while "Overdue" was checked, and the next arrow committed a
-/// filter one step from the wrong place (the completeness sweep's G15). A
-/// check made while the group holds the keys brings them to the checked
-/// radio — the click whose press the entry redirected, Space, a command
-/// run with the keys on the group — so they never rest on an unchecked
-/// radio.
+/// filter one step from the wrong place (the completeness sweep's G15). The
+/// redirect is keyboard traversal's and a landing's, never a pointer's: a
+/// press on a radio focuses THAT radio, and its release checks it (codex
+/// round 7 finding 5 — a click from outside the group used to focus the old
+/// choice first). A check made while the group holds the keys brings them
+/// to the checked radio — Space, a command run with the keys on the group —
+/// so they never rest on an unchecked radio.
 /// </para>
 /// <para>
 /// A modified arrow is never the group's: Ctrl+Alt+Arrow is the window's
@@ -167,13 +169,69 @@ internal static class RadioGroupArrows
 
         panel.KeyDown -= Panel_KeyDown;
         panel.PreviewGotKeyboardFocus -= Panel_PreviewGotKeyboardFocus;
+        panel.PreviewMouseDown -= Panel_PreviewMouseDown;
         panel.RemoveHandler(ToggleButton.CheckedEvent, (RoutedEventHandler)Panel_Checked);
         if ((bool)change.NewValue)
         {
             panel.KeyDown += Panel_KeyDown;
             panel.PreviewGotKeyboardFocus += Panel_PreviewGotKeyboardFocus;
+            panel.PreviewMouseDown += Panel_PreviewMouseDown;
             panel.AddHandler(ToggleButton.CheckedEvent, (RoutedEventHandler)Panel_Checked);
         }
+    }
+
+    /// <summary>The radio a pointer press in a group is focusing, for the
+    /// length of that press: its own focus is the pointer's, never
+    /// redirected.</summary>
+    [ThreadStatic]
+    private static RadioButton? _pressedRadio;
+
+    /// <summary>
+    /// W7-7 PR 4 (#1247; codex round 7 finding 5): a press on a radio gives
+    /// the keys to THAT radio. The entry redirect is keyboard traversal's and
+    /// a landing's; a click from outside the group used to focus the checked
+    /// radio first — its press redirected — and the clicked one only when
+    /// its release checked it, two focus changes and the old choice spoken
+    /// before the new one.
+    /// </summary>
+    private static void Panel_PreviewMouseDown(object sender, MouseButtonEventArgs e)
+    {
+        if (sender is not Panel panel || RadioAt(panel, e.OriginalSource) is not { } radio)
+        {
+            return;
+        }
+
+        _pressedRadio = radio;
+        // The press's own focus change is dispatched inside this input
+        // report; nothing after it is the press's.
+        _ = panel.Dispatcher.BeginInvoke(
+            System.Windows.Threading.DispatcherPriority.Normal,
+            () =>
+            {
+                if (ReferenceEquals(_pressedRadio, radio))
+                {
+                    _pressedRadio = null;
+                }
+            });
+    }
+
+    /// <summary>The panel's radio that <paramref name="source"/> lies
+    /// in.</summary>
+    private static RadioButton? RadioAt(Panel panel, object? source)
+    {
+        for (DependencyObject? current = source as DependencyObject;
+            current is not null && !ReferenceEquals(current, panel);
+            current = current is Visual or System.Windows.Media.Media3D.Visual3D
+                ? VisualTreeHelper.GetParent(current)
+                : LogicalTreeHelper.GetParent(current))
+        {
+            if (current is RadioButton radio && panel.Children.Contains(radio))
+            {
+                return radio;
+            }
+        }
+
+        return null;
     }
 
     private static void Panel_KeyDown(object sender, KeyEventArgs e)
@@ -210,24 +268,37 @@ internal static class RadioGroupArrows
     }
 
     /// <summary>Keys entering the group from outside onto an unchecked
-    /// radio go on to the checked one, in the same focus change.</summary>
+    /// radio go on to the checked one, in the same focus change — unless a
+    /// pointer press is focusing the radio it pressed.</summary>
     private static void Panel_PreviewGotKeyboardFocus(object sender, KeyboardFocusChangedEventArgs e)
     {
         if (e.Handled
             || sender is not Panel panel
             || e.NewFocus is not RadioButton radio
             || !panel.Children.Contains(radio)
-            || (e.OldFocus is Visual old && panel.IsAncestorOf(old))
-            || CheckedPeer(radio) is not { } chosen)
+            || (e.OldFocus is Visual old && panel.IsAncestorOf(old)))
         {
             return;
         }
 
-        e.Handled = chosen.Focus();
+        if (ReferenceEquals(radio, _pressedRadio))
+        {
+            // The pointer's own focus: the radio it pressed takes the keys,
+            // and its release checks it (codex round 7 finding 5).
+            _pressedRadio = null;
+            return;
+        }
+
+        if (CheckedPeer(radio) is { } chosen)
+        {
+            e.Handled = chosen.Focus();
+        }
     }
 
     /// <summary>A check made while the group holds the keys brings them to
-    /// the checked radio.</summary>
+    /// the checked radio — Space, a command run with the keys on the group
+    /// (a click's press has already put them on the radio it
+    /// checks).</summary>
     private static void Panel_Checked(object sender, RoutedEventArgs e)
     {
         if (sender is Panel { IsKeyboardFocusWithin: true } panel
