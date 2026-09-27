@@ -973,7 +973,9 @@ internal sealed class BaseSurfaceView : UserControl
     /// items carrying the substrate's canonical group heading.</summary>
     private void RenderList(BasesResultSet result)
     {
-        var items = new List<object>();
+        // Typed, never object (codex PR 3 round 7): the census reads the item
+        // type a host holds, and a header is a BaseListItemViewModel too.
+        var items = new List<BaseListItemViewModel>();
         if (result.Groups.Length > 0)
         {
             foreach (BasesGroup group in result.Groups)
@@ -1010,14 +1012,13 @@ internal sealed class BaseSurfaceView : UserControl
     /// note-row when it survived and drops it when it did not — a
     /// retained stale row is the dangling-reference class INV-3
     /// forbids.</summary>
-    private void ReconcileListSelection(IReadOnlyList<object> items)
+    private void ReconcileListSelection(IReadOnlyList<BaseListItemViewModel> items)
     {
         if (Model is not { SelectedRow: { } selected } model)
         {
             return;
         }
         BaseListItemViewModel? match = items
-            .OfType<BaseListItemViewModel>()
             .FirstOrDefault(item => item.Row is { } row
                 && string.Equals(
                     row.FilePath, selected.FilePath, StringComparison.Ordinal)

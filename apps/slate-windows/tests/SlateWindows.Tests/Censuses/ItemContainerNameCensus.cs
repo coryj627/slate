@@ -100,7 +100,13 @@ internal abstract record ContainerNaming
     /// <paramref name="Stops"/> says how the stops its items hold are told
     /// apart; with a <paramref name="Rule"/>, each container carries its
     /// item's name under the sibling rule and the stop inside binds it.</summary>
-    internal sealed record Layout(string Stops, SiblingRule? Rule = null) : ContainerNaming;
+    internal sealed record Layout(string Stops, SiblingRule? Rule = null) : ContainerNaming
+    {
+        /// <summary>The items' type, which a rule's host must name (codex PR
+        /// 3 round 7): its value equality is what the occurrence check reads,
+        /// exactly as a Sibling pin's.</summary>
+        public Type? ItemType { get; init; }
+    }
 
     /// <summary>An AutomationPresentationItemsControl: no container peers.</summary>
     internal sealed record Presentation : ContainerNaming;
@@ -244,7 +250,10 @@ public sealed class ItemContainerNameCensus
                 typeof(OutlineRowViewModel), nameof(OutlineRowViewModel.AutomationName), null, "heading"),
             ["PanelEmbedsList"] = new ContainerNaming.Layout(
                 "each embed is ONE named group, named by its source among its siblings",
-                new SiblingRule(nameof(EmbedRowViewModel.Title), null, "embed")),
+                new SiblingRule(nameof(EmbedRowViewModel.Title), null, "embed"))
+            {
+                ItemType = typeof(EmbedRowViewModel),
+            },
             ["PanelTasksOpenList"] = Sibling(
                 typeof(NoteTaskRowViewModel), nameof(NoteTaskRowViewModel.AutomationName), null, "task"),
             ["PanelTasksDoneList"] = Sibling(
@@ -255,7 +264,10 @@ public sealed class ItemContainerNameCensus
             ["PanelCitationsList"] = Sibling(
                 typeof(CitationRowViewModel), nameof(CitationRowViewModel.AutomationName), null, "citation"),
             ["BibliographyNotices"] = new ContainerNaming.Layout(
-                "each notice's focusable text is named among its siblings", Wrapped("notice")),
+                "each notice's focusable text is named among its siblings", Wrapped("notice"))
+            {
+                ItemType = typeof(SiblingText),
+            },
             ["QueriesSavedList"] = NoTwoEqual(
                 Sibling(typeof(SavedQuerySummary), nameof(SavedQuerySummary.Name), null, "query"),
                 "core keys saved queries by id: no two summaries share one"),
@@ -283,7 +295,10 @@ public sealed class ItemContainerNameCensus
                 {
                     NoEqualItems = "the recents store keeps each query once (SearchRecentsStore: an ordinal de-duplication on add and on load)",
                     Prefix = "Recent search: ",
-                }),
+                })
+            {
+                ItemType = typeof(string),
+            },
             ["CommandPaletteResults"] = Distinct(
                 typeof(CommandPaletteRowViewModel), nameof(CommandPaletteRowViewModel.AccessibleName),
                 "every command has its own label (chords.json)"),
@@ -310,7 +325,10 @@ public sealed class ItemContainerNameCensus
                 typeof(TemplatePickerRowViewModel), nameof(TemplatePickerRowViewModel.AccessibleName), null, "template"),
             ["TemplateFlowPromptsList"] = new ContainerNaming.Layout(
                 "each prompt's box is named by its label among its siblings",
-                new SiblingRule("Label", null, "field")),
+                new SiblingRule(nameof(TemplatePromptFieldViewModel.Label), null, "field"))
+            {
+                ItemType = typeof(TemplatePromptFieldViewModel),
+            },
             ["MoveToList"] = Sibling(
                 typeof(MoveToRowViewModel), nameof(MoveToRowViewModel.AccessibleName),
                 nameof(MoveToRowViewModel.Place), "destination"),
@@ -346,7 +364,10 @@ public sealed class ItemContainerNameCensus
             ["BaseViewPicker"] = Sibling(
                 typeof(ItemOccurrence<BaseViewSummary>), nameof(ItemOccurrence<BaseViewSummary>.Name), null, "view"),
             ["BaseWarningBanners"] = new ContainerNaming.Layout(
-                "each warning's focusable text is named among its siblings", Wrapped("warning")),
+                "each warning's focusable text is named among its siblings", Wrapped("warning"))
+            {
+                ItemType = typeof(SiblingText),
+            },
             ["BaseTabList"] = Sibling(
                 typeof(BaseListItemViewModel), nameof(BaseListItemViewModel.AccessibleName),
                 nameof(BaseListItemViewModel.FilePath), "row"),
@@ -410,6 +431,30 @@ public sealed class ItemContainerNameCensus
             if (naming is ContainerNaming.Layout { Stops.Length: 0 })
             {
                 offenders.Add($"{label}: a layout host that does not say how its stops are told apart");
+            }
+            if (naming is ContainerNaming.Layout { Rule: { } layoutRule } layout)
+            {
+                if (layout.ItemType is not { } layoutType)
+                {
+                    offenders.Add($"{label}: a layout host on the sibling rule that does not name its item type");
+                }
+                else
+                {
+                    if (layoutRule.NamePath.Length > 0 && layoutType.GetProperty(layoutRule.NamePath) is null)
+                    {
+                        offenders.Add($"{label}: {layoutType.Name} has no property {layoutRule.NamePath}");
+                    }
+                    if (layoutType == typeof(SiblingText) != layoutRule.Wrapped)
+                    {
+                        offenders.Add($"{label}: a Wrapped rule reads SiblingText rows, and SiblingText rows need a Wrapped rule");
+                    }
+                    if (ComparesByValue(layoutType) && layoutRule.NoEqualItems.Length == 0)
+                    {
+                        offenders.Add(
+                            $"{label}: {layoutType.Name} compares by value, and two equal items are ONE automation "
+                            + "peer — bind occurrences (ItemOccurrence) or state why no two are ever equal");
+                    }
+                }
             }
             if (naming is ContainerNaming.Sibling sibling)
             {
@@ -1752,16 +1797,17 @@ public sealed class ItemContainerNameCensus
                 // The pin's item type is what the host really holds (codex PR
                 // 3 round 6): a view picker pinned to occurrences must bind
                 // occurrences, not the records they wrap.
-                // (A list typed object — the Base list's headers and rows — is
-                // taken at the pin's word only while that type has reference
-                // identity: its value equality is what the pin must not hide.)
-                if (expected is ContainerNaming.Sibling pinnedSibling
+                // (Never an object-typed collection: it hides the type whose
+                // value equality this check exists to read — codex PR 3 round
+                // 7 — so a host holds a typed one.)
+                if (((expected as ContainerNaming.Sibling)?.ItemType
+                        ?? (expected as ContainerNaming.Layout)?.ItemType) is { } pinnedType
                     && ElementTypeName(model.GetTypeInfo(assignment.Right).Type) is var held
-                    && held != CSharpName(pinnedSibling.ItemType)
-                    && !(held == "System.Object" && !ComparesByValue(pinnedSibling.ItemType)))
+                    && held != CSharpName(pinnedType))
                 {
                     yield return $"{site} `{label}`: its ItemsSource (`{assignment.Right}`) holds {held ?? "(an unreadable element type)"}, "
-                        + $"but the pin names {CSharpName(pinnedSibling.ItemType)}";
+                        + $"but the pin names {CSharpName(pinnedType)}"
+                        + (held == "System.Object" ? " — an object-typed collection hides its items' type; hold a typed one" : string.Empty);
                 }
                 ITypeSymbol? type = creation is not null
                     ? model.GetTypeInfo(creation).Type
