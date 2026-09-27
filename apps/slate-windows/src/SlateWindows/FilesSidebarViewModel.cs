@@ -1214,12 +1214,21 @@ internal sealed partial class FilesSidebarViewModel : BindableBase
         ApplyTags(outcome);
     }
 
+    /// <summary>Test seam (W7-7 PR 7, F5): runs on the tree worker right
+    /// after the native <c>TagTree</c> call returns.</summary>
+    internal Action? AfterTagTreeForTests { get; set; }
+
     private TagLoadOutcome BuildTags(CancellationToken cancellationToken)
     {
         try
         {
+            // W7-7 PR 7 (F5): the caller's token is checked before AND after
+            // the tokenless native call (#1290 owns making it cancellable),
+            // so a cancelled refresh skips it or discards what it returned.
             cancellationToken.ThrowIfCancellationRequested();
             TagTree tree = _session.TagTree();
+            AfterTagTreeForTests?.Invoke();
+            cancellationToken.ThrowIfCancellationRequested();
             var roots = new List<SidebarTagViewModel>();
             var ancestors = new List<SidebarTagViewModel>();
             foreach (TagTreeEntry entry in tree.Entries)

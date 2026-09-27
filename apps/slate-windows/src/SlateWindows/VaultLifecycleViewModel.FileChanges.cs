@@ -9,9 +9,9 @@ namespace SlateWindows;
 /// W7-7 PR 7 (#1252, R-9, round 28): the host-side effects of file changes,
 /// ONE routine for both of their sources — a Slate-owned file-change event
 /// (<see cref="HandleFileChange"/>, the contract-05 channel, which stays
-/// Slate-owned writes only) and a rescan's delta page
-/// (<see cref="ReconcileScanDeltaAsync"/>, the only way an external change
-/// reaches the host on Windows). Every dependent a change owes is notified
+/// Slate-owned writes only) and a rescan's re-sync from the index (the only
+/// way an external change reaches the host on Windows; its wiring is held
+/// for contract R-9's design ruling). Every dependent a change owes is notified
 /// here and nowhere else, so neither source can drift from the other.
 /// </summary>
 internal sealed partial class VaultLifecycleViewModel
@@ -24,7 +24,7 @@ internal sealed partial class VaultLifecycleViewModel
         /// speaks its "missing from disk" line.</summary>
         SlateOwned,
 
-        /// <summary>A rescan page: a change made outside Slate, so each open
+        /// <summary>A rescan's re-sync: a change made outside Slate, so each open
         /// tab kind reloads (awaited); removals are batched and silent (the
         /// run speaks one sentence).</summary>
         Rescan,

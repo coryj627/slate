@@ -63,8 +63,18 @@ internal sealed partial class FilesSidebarViewModel
     /// cancelled when the refresh was cancelled with nothing left to
     /// publish.
     /// </summary>
-    internal Task RefreshAsync(bool reportCount = false)
+    /// <remarks>W7-7 PR 7 (F5): the caller's <paramref name="cancellation"/>
+    /// — a rescan run's — is linked into this refresh's own, so it reaches
+    /// the tree read and the tag tree: checked before and after the native
+    /// <c>TagTree</c> call, a cancel skips or discards the result, nothing
+    /// publishes, and the returned Task is cancelled at once.</remarks>
+    internal Task RefreshAsync(bool reportCount = false, CancellationToken cancellation = default)
     {
+        if (cancellation.IsCancellationRequested)
+        {
+            return Task.FromCanceled(cancellation);
+        }
+
         var published = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
         (int Generation, TaskCompletionSource Published) waiter = (_treeGeneration + 1, published);
         lock (_treeRefreshWaiters)
@@ -72,7 +82,7 @@ internal sealed partial class FilesSidebarViewModel
             _treeRefreshWaiters.Add(waiter);
         }
 
-        Refresh(reportCount);
+        Refresh(reportCount, cancellation);
         if (_treeGeneration < waiter.Generation)
         {
             // Refused before it began: the session is shutting down.
@@ -82,6 +92,17 @@ internal sealed partial class FilesSidebarViewModel
             }
 
             _ = published.TrySetCanceled();
+        }
+
+        if (cancellation.CanBeCanceled)
+        {
+            CancellationTokenRegistration registration =
+                cancellation.Register(() => published.TrySetCanceled(cancellation));
+            _ = published.Task.ContinueWith(
+                _ => registration.Dispose(),
+                CancellationToken.None,
+                TaskContinuationOptions.ExecuteSynchronously,
+                TaskScheduler.Default);
         }
 
         return published.Task;
@@ -121,7 +142,11 @@ internal sealed partial class FilesSidebarViewModel
             .Select(node => node.Path)
             .ToArray();
 
-    public void Refresh(bool reportCount = false)
+    public void Refresh(bool reportCount = false) => Refresh(reportCount, CancellationToken.None);
+
+    /// <summary>The refresh, with a caller's cancellation linked into its
+    /// own (W7-7 PR 7, F5): a cancelled caller publishes nothing.</summary>
+    private void Refresh(bool reportCount, CancellationToken external)
     {
         if (SessionShutdownStarted)
         {
@@ -159,12 +184,19 @@ internal sealed partial class FilesSidebarViewModel
                         ordering,
                         expandedPaths,
                         tagGeneration,
-                        CancellationToken.None);
+                        external);
                 }
 
                 ApplyTreeRefresh(outcome, reportCount);
                 _treeRefreshCompletion = Task.CompletedTask;
                 SettleTreeRefreshWaiters(generation, failure: null);
+            }
+            catch (OperationCanceledException) when (external.IsCancellationRequested)
+            {
+                // The caller was cancelled (a closing rescan): nothing
+                // publishes and nothing is reported.
+                SettleTreeRefreshWaiters(generation, failure: null, cancelled: true);
+                _treeRefreshCompletion = Task.CompletedTask;
             }
             catch (VaultException exception)
             {
@@ -191,7 +223,9 @@ internal sealed partial class FilesSidebarViewModel
             return;
         }
 
-        var cancellation = new CancellationTokenSource();
+        CancellationTokenSource cancellation = external.CanBeCanceled
+            ? CancellationTokenSource.CreateLinkedTokenSource(external)
+            : new CancellationTokenSource();
         CancellationToken token = cancellation.Token;
         lock (_treeRefreshCancellationGate)
         {

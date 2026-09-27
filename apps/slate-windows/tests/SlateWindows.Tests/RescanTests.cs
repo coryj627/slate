@@ -482,7 +482,7 @@ public sealed class RescanTests
     });
 
     // ---------------------------------------------------------------------
-    // Paging, page failures and the retained ledger
+    // Bounded reports, threading and the host's classification
     // ---------------------------------------------------------------------
 
     /// <summary>Rounds 25-27 (bounded errors): 1,200 unreadable notes cross
@@ -1116,7 +1116,7 @@ public sealed class RescanTests
     }
 
     // ---------------------------------------------------------------------
-    // Round 30: the tree's publication is one of the last page's
+    // Round 30: the tree's publication is awaited before the sentence
     // ---------------------------------------------------------------------
 
     /// <summary>Round 30: with the rescan's tree refresh parked ON ITS
@@ -1152,6 +1152,99 @@ public sealed class RescanTests
         h.Context.Await(run);
         Assert.Contains(h.Sidebar.RootNodes, node => node.Path == "late.md");
         Assert.Equal([Explicit1], h.Spoken);
+    });
+
+    /// <summary>F2 (codex PR 7 design pass 2): a Slate write that lands
+    /// after the rescan's tree snapshot was READ, but before it applies, is in
+    /// the tree the run settles on — BEFORE its sentence. The write's event
+    /// refreshes the tree at once while the rescan's tree publication is
+    /// pending, so the stale snapshot fails its generation check; the
+    /// ordinary 150 ms debounce would land after the sentence.</summary>
+    [Fact]
+    public void ASlateWriteDuringAParkedTreeApplyIsInTheTreeBeforeTheSentence() => RunSta(() =>
+    {
+        using Harness h = Harness.WithAsyncTree("tree-slate-write", ("alpha.md", "# Alpha\n"));
+        h.Context.RunUntil(() => !h.Sidebar.IsRefreshingTree, "the open's tree");
+        using var read = new ManualResetEventSlim(false);
+        using var unpark = new ManualResetEventSlim(false);
+        int treeReads = 0;
+        h.TreeWorker = (work, token) => Interlocked.Increment(ref treeReads) == 1
+            ? Task.Run(
+                () =>
+                {
+                    // The rescan's snapshot is read, then parked before it
+                    // applies.
+                    work();
+                    read.Set();
+                    _ = unpark.Wait(TimeSpan.FromSeconds(30));
+                },
+                CancellationToken.None)
+            : Task.Run(work, token);
+        bool? writeShownAtTheSentence = null;
+        h.AfterAnnounce = announced =>
+        {
+            if (announced is A11yEvent.VaultRescanFinished or A11yEvent.VaultRescanIncomplete)
+            {
+                writeShownAtTheSentence = h.Sidebar.RootNodes.Any(node => node.Path == "made.md");
+            }
+        };
+
+        Task run = h.Lifecycle.RescanAsync(RescanReason.Explicit);
+        h.Context.RunUntil(() => read.IsSet, "the rescan's tree snapshot");
+        h.CreateInCore("made.md", "# Made\n");
+        h.Context.RunUntil(() => h.QuickOpen.FilePathsForTests.Contains("made.md"), "the Slate write's event");
+        unpark.Set();
+        h.Context.Await(run);
+
+        Assert.True(writeShownAtTheSentence, "the tree the sentence settled on lacked the Slate write");
+        Assert.Equal([NoChanges], h.Spoken);
+    });
+
+    /// <summary>F5 (codex PR 7 design pass 2, mitigation): a caller's
+    /// cancellation reaches the tree read's tag tree. Cancelled right after
+    /// the native <c>TagTree</c> call returns, the refresh discards what it
+    /// read — nothing publishes, nothing is spoken, the awaited Task is
+    /// cancelled; cancelled before, the tag tree is never read.</summary>
+    [Fact]
+    public void ACancelAroundTheTagTreeCallPublishesNothing() => RunSta(() =>
+    {
+        using Harness h = Harness.WithAsyncTree("tags-cancel", ("alpha.md", "# Alpha\n"));
+        h.Context.RunUntil(() => !h.Sidebar.IsRefreshingTree, "the open's tree");
+        h.Write("late.md", "# Late\n\n#fresh\n");
+        using (var indexing = new CancelToken())
+        {
+            // Indexed without the host hearing of it: a scan emits no event.
+            _ = h.Lifecycle.SessionForTests!.Rescan(indexing);
+        }
+
+        using var cancellation = new CancellationTokenSource();
+        int tagTreeReads = 0;
+        h.Sidebar.AfterTagTreeForTests = () =>
+        {
+            _ = Interlocked.Increment(ref tagTreeReads);
+            cancellation.Cancel();
+        };
+
+        Task refresh = h.Sidebar.RefreshAsync(cancellation: cancellation.Token);
+        h.Context.RunUntil(() => refresh.IsCompleted, "the cancelled refresh");
+        h.Settle();
+
+        Assert.True(refresh.IsCanceled);
+        Assert.Equal(1, Volatile.Read(ref tagTreeReads));
+        Assert.DoesNotContain(h.Sidebar.RootNodes, node => node.Path == "late.md");
+        Assert.DoesNotContain(h.Sidebar.Tags, tag => tag.Full == "fresh");
+        Assert.Empty(h.Events);
+
+        // Already cancelled: the tag tree is not read at all.
+        Assert.True(h.Sidebar.RefreshAsync(cancellation: cancellation.Token).IsCanceled);
+        h.Settle();
+        Assert.Equal(1, Volatile.Read(ref tagTreeReads));
+
+        // Control: an uncancelled refresh publishes both.
+        h.Sidebar.AfterTagTreeForTests = null;
+        h.Context.Await(h.Sidebar.RefreshAsync(), "the control refresh");
+        Assert.Contains(h.Sidebar.RootNodes, node => node.Path == "late.md");
+        Assert.Contains(h.Sidebar.Tags, tag => tag.Full == "fresh");
     });
 
     /// <summary>Round 30: a tree refresh that FAILS makes the run say
@@ -1283,10 +1376,6 @@ public sealed class RescanTests
         _ = Assert.Single(toggleEvents.OfType<A11yEvent.TaskToggleConflict>());
         Assert.True(y.EditorDocument!.UndoStack.CanUndo);
     });
-
-    // ---------------------------------------------------------------------
-    // Cancellation (round 23)
-    // ---------------------------------------------------------------------
 
     // ---------------------------------------------------------------------
     // The foreground route
@@ -1565,7 +1654,7 @@ public sealed class RescanTests
                 pickVault: () => Task.FromResult<string?>(Root),
                 enqueueUi: EnqueueUi,
                 recentVaultsStore: new RecentVaultsStore(Path.Combine(Root + "-device", "recent-vaults.json")),
-                announce: Events.Add,
+                announce: Announce,
                 pickImportSources: pickImportSources,
                 scanClock: () => Now,
                 sessionLoadWorker: RunOnWorker<(ScanReport Report, SwitcherFile[] SwitcherFiles)>,
@@ -1669,6 +1758,17 @@ public sealed class RescanTests
         public string Root { get; }
 
         public List<A11yEvent> Events { get; } = [];
+
+        /// <summary>Runs with every announcement, as it is made — the
+        /// moment a fact samples what the window shows when a sentence
+        /// is spoken.</summary>
+        public Action<A11yEvent>? AfterAnnounce { get; set; }
+
+        private void Announce(A11yEvent announced)
+        {
+            Events.Add(announced);
+            AfterAnnounce?.Invoke(announced);
+        }
 
         public IReadOnlyList<A11yEvent> OpenEvents { get; }
 

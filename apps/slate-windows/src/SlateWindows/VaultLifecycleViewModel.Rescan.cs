@@ -50,6 +50,10 @@ internal sealed partial class VaultLifecycleViewModel
     // the seam and then owns it).
     private CancelToken? _rescanCancel;
 
+    // Its managed twin (F5): CloseSession cancels it with the native one;
+    // host-side checks read it, so none makes an FFI call on the UI thread.
+    private CancellationTokenSource? _rescanCancellation;
+
     /// <summary>The running rescan (and its coalesced follow-ups), for the
     /// facts to await.</summary>
     internal Task RescanCompletion => _rescanCompletion;
@@ -208,12 +212,20 @@ internal sealed partial class VaultLifecycleViewModel
         }
 
         _rescanCancel = cancel;
+        var cancellation = new CancellationTokenSource();
+        _rescanCancellation = cancellation;
         try
         {
-            await RunOneRescanAsync(generation, session, reason, cancel);
+            await RunOneRescanAsync(generation, session, reason, cancel, cancellation.Token);
         }
         finally
         {
+            if (ReferenceEquals(_rescanCancellation, cancellation))
+            {
+                _rescanCancellation = null;
+            }
+
+            cancellation.Dispose();
             if (ReferenceEquals(_rescanCancel, cancel))
             {
                 _rescanCancel = null;
@@ -245,7 +257,8 @@ internal sealed partial class VaultLifecycleViewModel
         int generation,
         VaultSession session,
         RescanReason reason,
-        CancelToken cancel)
+        CancelToken cancel,
+        CancellationToken cancellation)
     {
         // (1) The scan, through the seam. The listener only moves the
         // progress bar of an explicit refresh; nothing it hears speaks.
@@ -300,8 +313,8 @@ internal sealed partial class VaultLifecycleViewModel
         // (2) Re-synchronize the host from the index (AR-18's fallback):
         // every re-sync operation is awaited to its publication, and each
         // that fails counts one error in the sentence.
-        ulong failedOperations = await ReSyncFromIndexAsync(generation, reason);
-        if (generation != _generation || cancel.IsCancelled())
+        ulong failedOperations = await ReSyncFromIndexAsync(generation, reason, cancellation);
+        if (generation != _generation || cancellation.IsCancellationRequested)
         {
             return;
         }
@@ -328,13 +341,25 @@ internal sealed partial class VaultLifecycleViewModel
     /// many operations failed (each counts in the sentence). The files tree
     /// is wired; the rest of the re-sync follows contract R-9's design.
     /// </summary>
-    private async Task<ulong> ReSyncFromIndexAsync(int generation, RescanReason reason)
+    private async Task<ulong> ReSyncFromIndexAsync(
+        int generation,
+        RescanReason reason,
+        CancellationToken cancellation)
     {
         ulong failed = 0;
         try
         {
-            await (FileSidebar?.RefreshAsync(reportCount: reason == RescanReason.Explicit)
+            // The run's managed token reaches the tree read and its tag tree
+            // (F5): a cancel before or after the native TagTree call skips or
+            // discards the result.
+            await (FileSidebar?.RefreshAsync(
+                    reportCount: reason == RescanReason.Explicit,
+                    cancellation: cancellation)
                 ?? Task.CompletedTask);
+        }
+        catch (OperationCanceledException) when (cancellation.IsCancellationRequested)
+        {
+            // A close or a vault switch: nothing to count or say.
         }
         catch (Exception exception) when (exception is not OutOfMemoryException)
         {

@@ -765,6 +765,18 @@ internal sealed partial class VaultLifecycleViewModel
                 [(@event, CoreDocumentClassification.IsOpenable(@event.Path))],
                 FileChangeOrigin.SlateOwned);
             int ticket = Interlocked.Increment(ref _sidebarRefreshTicket);
+            if (_rescanActive && FileSidebar is { IsTreePublicationPending: true } sidebar)
+            {
+                // W7-7 PR 7 (F2, codex design pass 2): a rescan's tree
+                // refresh is pending, and its snapshot may predate this
+                // Slate write. Refresh AT ONCE — the stale snapshot then
+                // fails its generation check, and the rescan settles on
+                // a tree that includes the write, before its sentence.
+                // The debounce below would land after the sentence.
+                sidebar.Refresh();
+                return;
+            }
+
             _ = Task.Delay(150).ContinueWith(
                 _ => _enqueueUi(() =>
                 {
@@ -891,6 +903,12 @@ internal sealed partial class VaultLifecycleViewModel
         {
             HostLog.Write(HostDiagnosticEvent.VaultCommandFailed, exception);
         }
+
+        // W7-7 PR 7 (F5): the run's managed token first — host-side checks
+        // (the tag tree's, the reloads') read it, never the native one.
+        CancellationTokenSource? rescanCancellation = _rescanCancellation;
+        _rescanCancellation = null;
+        rescanCancellation?.Cancel();
 
         // W7-7 PR 7 (round 26): a running rescan's token is cancelled — and
         // below disposed — through the rescan core seam, off the dispatcher;

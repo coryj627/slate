@@ -689,15 +689,17 @@ pub enum A11yEvent {
         files_changed: u64,
     },
     /// A rescan of the open vault reconciled what changed outside Slate
-    /// (R-9): its one completion sentence, reduced per path by core.
+    /// (R-9): its one completion sentence, from the counts this rescan's
+    /// own scan made in the index (new or changed, removed).
     VaultRescanFinished {
         reason: RescanReason,
         changed: u64,
         removed: u64,
     },
     /// A rescan that was partial — the walk, a per-file stat / read /
-    /// index, a delta page, or the scan call itself failed — with an
-    /// honest error count. Never "No changes".
+    /// index, a step of the host's re-sync from the index, or the scan
+    /// call itself failed — with an honest error count. Never "No
+    /// changes".
     VaultRescanIncomplete {
         errors: u64,
     },

@@ -6,9 +6,9 @@ namespace SlateWindows;
 /// <summary>
 /// W7-7 PR 7 (#1252, R-9, round 26; locked decision 05 §4.1): the ONE seam
 /// every rescan core call goes through — the cancel token's creation, the
-/// scan, the ledger's pending read, every page read, every applied mark
-/// (core's coalesce rides the last), the release (core's reduction), and the
-/// token's cancellation and disposal. Synchronous core APIs never run on the
+/// scan, the re-sync's index reads, and the token's cancellation and
+/// disposal (AR-18's fallback retains nothing between runs, so there is no
+/// ledger to read or release). Synchronous core APIs never run on the
 /// dispatcher: <see cref="VaultLifecycleViewModel"/> refuses any call this
 /// seam would run on the UI thread.
 /// </summary>
