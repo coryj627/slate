@@ -1359,6 +1359,9 @@ public sealed partial class ShellAccessibilityTests
             Assert.Equal(
                 "SlateWindows",
                 Process.GetProcessById(process.Id).ProcessName);
+            // R-4 (#1246; codex PR 3 round 8): the runtime item-name census at
+            // this journey's representative state.
+            AssertItemNamesAreSpeakable(process, "reading-identity");
 
             // Open the note, toggle reading mode through the bound menu
             // command, and require the ReadingSurface AutomationId.
@@ -1697,6 +1700,9 @@ public sealed partial class ShellAccessibilityTests
             noteItem.Patterns.SelectionItem.Pattern.Select();
             WaitForEditor(
                 window, automation, "note.md editor", TimeSpan.FromSeconds(10));
+            // R-4 (#1246; codex PR 3 round 8): the runtime item-name census at
+            // this journey's representative state.
+            AssertItemNamesAreSpeakable(process, "reading-range");
 
             AutomationElement toggleReading = WaitForMenuItem(
                 window,
@@ -9165,6 +9171,9 @@ public sealed partial class ShellAccessibilityTests
             AutomationElement tree = WaitForElement(
                 window, "CanvasOutlineTree", TimeSpan.FromSeconds(20));
             AutomationElement[] rows = WaitForTreeItems(automation, tree, 5);
+            // R-4 (#1246; codex PR 3 round 8): the runtime item-name census at
+            // this journey's representative state.
+            AssertItemNamesAreSpeakable(process, "canvas-outline");
 
             // ---- The outline: BOTH keys, each on a FRESH row that is not
             // the first — never asked for a menu before, which is the case

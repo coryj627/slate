@@ -176,6 +176,15 @@ public sealed class CodeBuiltSiblingTests
         Assert.Equal(
             ["Open tasks, view 2", "Archive", "Open tasks, view 2"],
             announced.OfType<A11yEvent.BasesViewSelected>().Select(item => item.Name));
+
+        // Codex PR 3 round 8: so does Edit Filters on the second "Open tasks",
+        // which captured the bare name at dispatch.
+        Assert.Equal(1, document.ActiveViewIndex);
+        announced.Clear();
+        workspace.BasesEditViewFiltersCommand.Execute(null);
+        Assert.Equal(
+            "Open tasks, view 2",
+            Assert.Single(announced.OfType<A11yEvent.BasesEditingFilters>()).ViewName);
     }
 
     /// <summary>Codex PR 3 round 6, OD-9 — speech identity, through the

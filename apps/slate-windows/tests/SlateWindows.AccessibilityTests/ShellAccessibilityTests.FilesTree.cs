@@ -74,6 +74,9 @@ public sealed partial class ShellAccessibilityTests
             {
                 _ = WaitForTreeItemStartingWith(tree, automation, row);
             }
+            // R-4 (#1246; codex PR 3 round 8): the runtime item-name census at
+            // this journey's representative state.
+            AssertItemNamesAreSpeakable(process, "files-tree");
 
             Assert.StartsWith(
                 "Up and Down move through files and folders",

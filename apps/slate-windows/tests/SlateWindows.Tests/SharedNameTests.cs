@@ -287,6 +287,190 @@ public sealed class SharedNameTests
         Assert.Same(sidebar.Shortcuts[1], sidebar.SelectedShortcut);
     }
 
+    /// <summary>Codex PR 3 round 8, OD-9: every announcement that names a
+    /// tab speaks the group's tab strip name — focus, the tab bar, the editor
+    /// pane, a close (the closed tab named among the tabs it leaves, before it
+    /// leaves them; its successor after) and a reopen. A/note.md, B/note.md
+    /// and a duplicate of the second all title "note", and B's tabs are
+    /// unsaved: each spoke the bare "note".</summary>
+    [Fact]
+    public void EveryTabAnnouncementSpeaksTheTabStripsName()
+    {
+        using FixtureVault fixture = FixtureVault.Create(0, "tab-announcement-names");
+        foreach (string path in new[] { "A/note.md", "B/note.md" })
+        {
+            string full = Path.Combine(fixture.Root, path.Replace('/', Path.DirectorySeparatorChar));
+            Directory.CreateDirectory(Path.GetDirectoryName(full)!);
+            File.WriteAllText(full, "plain body\n");
+        }
+        using VaultSession session = VaultSession.OpenFilesystem(fixture.Root);
+        using (var cancel = new CancelToken())
+        {
+            session.ScanInitial(cancel);
+        }
+        var announced = new List<A11yEvent>();
+        using var workspace = new WorkspaceViewModel(
+            session, fixture.Root, () => [], announced.Add, startInteractionBackgroundWork: false);
+        var regions = new RegionHost();
+        workspace.ShellRegionHost = regions;
+        workspace.OpenPath("A/note.md");
+        workspace.OpenPath("B/note.md", WorkspaceOpenTarget.NewTab);
+        ((System.Windows.Input.ICommand)workspace.DuplicateTabCommand).Execute(null);
+        WorkspaceGroupViewModel group = workspace.ActiveGroup;
+        WorkspaceTabViewModel[] tabs = [.. group.Tabs];
+        tabs[1].Text = "edited body\n";
+        Assert.True(tabs[1].IsDirty && tabs[2].IsDirty);
+        Assert.Equal(
+            [
+                "note, A/note.md",
+                "note, B/note.md, tab 2, unsaved changes",
+                "note, B/note.md, tab 3, unsaved changes",
+            ],
+            tabs.Select(group.SpokenNameOf));
+
+        // Focus.
+        foreach (WorkspaceTabViewModel tab in new[] { tabs[0], tabs[1] })
+        {
+            announced.Clear();
+            group.ActiveTab = tab;
+            Assert.Equal(
+                group.SpokenNameOf(tab),
+                Assert.Single(announced.OfType<A11yEvent.TabFocused>()).Filename);
+        }
+
+        // The tab bar and the editor pane.
+        announced.Clear();
+        regions.Focused = ShellRegionKind.Files;
+        workspace.FocusNextPaneCommand.Execute(null);
+        A11yEvent.TabFocused bar = Assert.Single(announced.OfType<A11yEvent.TabFocused>());
+        Assert.Equal("Tab bar. ", bar.Prefix);
+        Assert.Equal("note, B/note.md, tab 2, unsaved changes", bar.Filename);
+        announced.Clear();
+        workspace.AnnounceActivePaneFocus();
+        Assert.Equal(
+            "note, B/note.md, tab 2, unsaved changes",
+            Assert.Single(announced.OfType<A11yEvent.EditorPaneFocused>()).Title);
+
+        // A close: A leaves, and B's tab succeeds it at A's place.
+        group.ActiveTab = tabs[0];
+        announced.Clear();
+        workspace.CloseTabCommand.Execute(tabs[0]);
+        A11yEvent.TabClosed closed = Assert.Single(announced.OfType<A11yEvent.TabClosed>());
+        Assert.Equal("note, A/note.md", closed.ClosedTitle);
+        Assert.Equal("note, B/note.md, tab 1, unsaved changes", closed.Successor);
+
+        // A reopen: A comes back last.
+        announced.Clear();
+        workspace.ReopenClosedTabCommand.Execute(null);
+        WorkspaceTabViewModel reopened = Assert.Single(group.Tabs, tab => tab.Path == "A/note.md");
+        Assert.Equal("note, A/note.md", group.SpokenNameOf(reopened));
+        Assert.Equal("note, A/note.md", Assert.Single(announced.OfType<A11yEvent.ReopenedFile>()).Filename);
+    }
+
+    /// <summary>Codex PR 3 round 8, OD-9: editing a saved query speaks it as
+    /// the Saved queries list names it. The store refuses only byte-equal
+    /// names, so "draft" and "DRAFT." coexist and a reader hears them alike:
+    /// the list reads each by its place, and "Editing …" spoke the second's
+    /// bare name.</summary>
+    [Fact]
+    public void EditingASavedQuerySpeaksItAsTheListNamesIt() => RunSta(() =>
+    {
+        using FixtureVault fixture = FixtureVault.Create(1, "saved-query-names");
+        using VaultSession session = VaultSession.OpenFilesystem(fixture.Root);
+        using (var cancel = new CancelToken())
+        {
+            session.ScanInitial(cancel);
+        }
+        ulong handle = session.OpenDql("TABLE file.name", thisPath: null);
+        string seed;
+        try
+        {
+            seed = session.BaseViewQueryJson(handle, 0);
+        }
+        finally
+        {
+            session.CloseBase(handle);
+        }
+        _ = session.SaveQuery("draft", null, seed, SavedQuerySourceSyntax.Builder);
+        string second = session.SaveQuery("DRAFT.", null, seed, SavedQuerySourceSyntax.Builder);
+        var announced = new List<A11yEvent>();
+        using var workspace = new WorkspaceViewModel(
+            session, fixture.Root, () => [], announced.Add, startInteractionBackgroundWork: false);
+        workspace.RefreshBaseQueries();
+        Assert.Equal(["draft", "DRAFT."], workspace.SavedQueries.Select(query => query.Name));
+        string[] listed = [];
+        HostedNames("QueriesSavedList", workspace, names => listed = names);
+        Assert.Equal(["draft, query 1", "DRAFT., query 2"], listed);
+        Assert.Equal(listed[1], workspace.SavedQuerySpokenName(second, "DRAFT."));
+
+        announced.Clear();
+        workspace.EditSavedQueryInBuilder(second);
+        Assert.Equal(listed[1], Assert.Single(announced.OfType<A11yEvent.BasesSavedQueryEditing>()).Name);
+    });
+
+    /// <summary>Codex PR 3 round 8, OD-9: opening a recent vault, and
+    /// removing one that went missing, speak it as its welcome-screen button
+    /// names it. Two folders called Notes read apart by their paths; each
+    /// spoke the bare "Notes". The removed one is named among the entries it
+    /// leaves, before it leaves them — after, it would read bare.</summary>
+    [Fact]
+    public async Task ARecentVaultIsAnnouncedAsItsButtonNamesIt()
+    {
+        using FixtureVault fixture = FixtureVault.Create(0, "recent-vault-names");
+        string one = Path.Combine(fixture.Root, "one", "Notes");
+        string two = Path.Combine(fixture.Root, "two", "Notes");
+        Directory.CreateDirectory(one);
+        Directory.CreateDirectory(two);
+        var announced = new List<A11yEvent>();
+        using (var lifecycle = new VaultLifecycleViewModel(
+            pickVault: () => Task.FromResult<string?>(null),
+            enqueueUi: action => action(),
+            confirmRemoveMissingRecent: _ => Task.FromResult(true),
+            recentVaultsStore: new RecentVaultsStore(Path.Combine(fixture.Root, "device-state", "recent-vaults.json")),
+            announce: announced.Add))
+        {
+            await lifecycle.OpenVaultAsync(one);
+            Assert.Equal("Notes", Assert.Single(announced.OfType<A11yEvent.VaultOpened>()).VaultTitle);
+
+            announced.Clear();
+            await lifecycle.OpenVaultAsync(two);
+            RecentVault second = Assert.Single(lifecycle.RecentVaults, entry => entry.Path == two);
+            string secondName = RecentVault.SpokenName(second, lifecycle.RecentVaults);
+            Assert.Equal($"Notes, {two}", secondName);
+            Assert.Equal(secondName, Assert.Single(announced.OfType<A11yEvent.VaultOpened>()).VaultTitle);
+
+            lifecycle.CloseVault();
+            Directory.Delete(one, recursive: true);
+            RecentVault missing = Assert.Single(lifecycle.RecentVaults, entry => entry.Path == one);
+            string missingName = RecentVault.SpokenName(missing, lifecycle.RecentVaults);
+            Assert.Equal($"Notes, {one}", missingName);
+            announced.Clear();
+            lifecycle.OpenRecentCommand.Execute(missing);
+            Assert.DoesNotContain(lifecycle.RecentVaults, entry => entry.Path == one);
+            Assert.Equal(missingName, Assert.Single(announced.OfType<A11yEvent.RemovedRecentVault>()).DisplayName);
+        }
+    }
+
+    /// <summary>A shell whose regions all land.</summary>
+    private sealed class RegionHost : IShellRegionHost
+    {
+        public bool ModalSurfaceOpen => false;
+
+        public bool RightPaneHasContentStop => true;
+
+        public string StatusText => string.Empty;
+
+        public ShellRegionKind? Focused { get; set; }
+
+        public ShellRegionKind? FocusedRegion() => Focused;
+
+        public bool TryLand(ShellRegionKind region)
+        {
+            Focused = region;
+            return true;
+        }
+    }
+
     private static FilesSidebarViewModel PlainSidebar(VaultSession session, string root) =>
         new(session, _ => { }, vaultRoot: root, localAppDataRoot: Path.Combine(root, "device-state"));
 
@@ -425,6 +609,12 @@ public sealed class SharedNameTests
                 Assert.True(
                     expected.SequenceEqual(read),
                     $"{state}: expected [{string.Join(" | ", expected)}], read [{string.Join(" | ", read)}]");
+                // Codex PR 3 round 8, OD-9: the group's spoken-name authority,
+                // which every tab announcement speaks, is what the strip reads.
+                string[] spoken = [.. tabs.Select(workspace.ActiveGroup.SpokenNameOf)];
+                Assert.True(
+                    spoken.SequenceEqual(read),
+                    $"{state}: the authority speaks [{string.Join(" | ", spoken)}], the strip reads [{string.Join(" | ", read)}]");
             }
 
             Assert.All(tabs, tab => Assert.False(tab.IsDirty || tab.IsMissingFromDisk));

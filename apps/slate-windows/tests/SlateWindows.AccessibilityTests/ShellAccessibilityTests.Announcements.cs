@@ -126,6 +126,10 @@ public sealed partial class ShellAccessibilityTests
             PressUntilGone(window, automation, "RightPaneLeaves", VirtualKeyShort.CONTROL, VirtualKeyShort.ALT, VirtualKeyShort.KEY_I);
             AwaitHeard(HeardFromSlate, [.. launchLines, rightPaneHidden.Text], TimeSpan.FromSeconds(10), logFile);
 
+            // R-4 (#1246; codex PR 3 round 8): the runtime item-name census at
+            // this journey's representative state.
+            AssertItemNamesAreSpeakable(process, "announcements");
+
             // R-1 / OD-7 diagnostics, read from the production log: the state
             // written once per change, a listening client reported, and the
             // queued launch lines drained exactly once.
