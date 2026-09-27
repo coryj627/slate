@@ -127,7 +127,7 @@ public sealed class RegionBoundaryCensus
         Assert.Equal("Contained", (string?)root.Attribute(Directional));
     }
 
-    private static XDocument Shell() =>
+    internal static XDocument Shell() =>
         XDocument.Load(Path.Combine(SourceText.ShellSourceRoot(), "MainWindow.xaml"), LoadOptions.SetLineInfo);
 
     /// <summary>The shell's region roots and what each may declare: the
@@ -136,7 +136,7 @@ public sealed class RegionBoundaryCensus
     /// pane leaf body (every column-0 child of the leaf host but the docked
     /// placeholder), the rail, the status bar's border, the welcome view,
     /// and every focus-scope overlay (a sheet may cycle).</summary>
-    private static IReadOnlyList<(XElement Root, string[] Allowed)> RegionRoots(XDocument window)
+    internal static IReadOnlyList<(XElement Root, string[] Allowed)> RegionRoots(XDocument window)
     {
         var roots = new List<(XElement, string[])>();
         foreach (XElement element in window.Descendants())
