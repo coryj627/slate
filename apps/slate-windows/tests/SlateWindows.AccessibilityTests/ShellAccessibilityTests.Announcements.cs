@@ -62,7 +62,8 @@ public sealed partial class ShellAccessibilityTests
         [
             SlateUniffiMethods.A11yRender(new A11yEvent.VaultOpened("Accessible Vault", string.Empty)).Text,
             SlateUniffiMethods.A11yRender(new A11yEvent.VaultScanStarted(2)).Text,
-            SlateUniffiMethods.A11yRender(new A11yEvent.VaultScanFinished(2)).Text,
+            // OD-6 (W7-7 PR 7): both counts — a fresh vault's two files are both new.
+            SlateUniffiMethods.A11yRender(new A11yEvent.VaultScanFinished(2, 2)).Text,
             SlateUniffiMethods.A11yRender(new A11yEvent.EditorPaneFocused(1, 1, "Empty pane", string.Empty)).Text,
         ];
         RenderedAnnouncement rightPaneHidden = SlateUniffiMethods.A11yRender(new A11yEvent.RightPaneHidden());
