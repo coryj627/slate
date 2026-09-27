@@ -597,10 +597,11 @@ public sealed class ChordTableTests
                 "MainWindow.xaml.cs:443 opens the rename expander and moves focus, "
                 + "gated on the file tree having focus."),
             [ChordTable.Ids.CancelImport] = new(
-                "MainWindow.xaml.cs:417 cancels a running import, gated on IsImporting, "
-                + "on Quick Open being closed and on neither the Files filter field (focus "
-                + "in it with a filter active) nor the inline rename box (focus in it with a "
-                + "row being renamed) owning the key (#1272). Escape also has a window KeyBinding "
+                "MainWindow.xaml.cs:417 cancels a running import, gated on IsImporting and "
+                + "on no owner of the key being in play: an open modal surface (Quick Open "
+                + "and the other overlays, every sheet), menu mode, the Files filter field "
+                + "(focus in it with a filter active) or the inline rename box (focus in it "
+                + "with a row being renamed) (#1272). Escape also has a window KeyBinding "
                 + "(MainWindow.xaml:55) for the editor popover — a different claimant in "
                 + "the PR-2 chain, so the no-KeyBinding staleness check is waived here.",
                 SharesTheChordWithAnotherClaimant: true),

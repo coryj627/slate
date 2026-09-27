@@ -1239,44 +1239,6 @@ public sealed class SidebarTreeKeysTests : IDisposable
         Assert.Equal(0, import.WorkerRuns);
     });
 
-    /// <summary>An import whose source picker is still open until the fact
-    /// hands it one real file outside the vault; the worker runs the
-    /// import off the dispatcher and counts itself.</summary>
-    private sealed class PendingImport : IDisposable
-    {
-        private readonly TaskCompletionSource<IReadOnlyList<string>> _sources =
-            new(TaskCreationOptions.RunContinuationsAsynchronously);
-        private readonly string _source = Path.Combine(
-            Path.GetTempPath(), $"slate-import-source-{Guid.NewGuid():N}.md");
-        private int _workerRuns;
-
-        public PendingImport() => File.WriteAllText(_source, "# Imported\n");
-
-        public int WorkerRuns => Volatile.Read(ref _workerRuns);
-
-        public Task<IReadOnlyList<string>> PickSources() => _sources.Task;
-
-        public Task Run(Action work, CancellationToken cancellation)
-        {
-            Interlocked.Increment(ref _workerRuns);
-            return Task.Run(work, cancellation);
-        }
-
-        public void HandOverTheSource() => _sources.SetResult([_source]);
-
-        public void Dispose()
-        {
-            _ = _sources.TrySetResult([]);
-            try
-            {
-                File.Delete(_source);
-            }
-            catch (IOException)
-            {
-            }
-        }
-    }
-
     private static string NavigationHelpText() => Commands.NavigationHelp.FilesTree;
 
     // ---- Helpers --------------------------------------------------------
