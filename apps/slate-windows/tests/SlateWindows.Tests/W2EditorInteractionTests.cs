@@ -331,9 +331,11 @@ public sealed class W2EditorInteractionTests
             }
             release.Set();
 
-            WaitForUi(() => interactions.EmbedResolvesCancelledForTests == 1);
-            // Anything the worker had queued would have run by now.
-            WaitForUi(() => true);
+            // The worker has run to its end and everything it queued has run
+            // (codex round 3): a publication queued after the cancellation
+            // would have been delivered before these assertions.
+            SettleWorkers(interactions);
+            Assert.Equal(1, interactions.EmbedResolvesCancelledForTests);
             Assert.DoesNotContain(
                 announcements,
                 item => item is A11yEvent.EmbedPreviewShown or A11yEvent.EmbedPreviewUnavailable);
@@ -396,8 +398,8 @@ public sealed class W2EditorInteractionTests
             Assert.True(interactions.PreviewEmbedAt(Inside(tab.Text, "![[other]]")));
             WaitForUi(() => announcements.OfType<A11yEvent.EmbedPreviewShown>().Any());
             release.Set();
-            WaitForUi(() => interactions.EmbedResolvesCancelledForTests == 1);
-            WaitForUi(() => true);
+            SettleWorkers(interactions);
+            Assert.Equal(1, interactions.EmbedResolvesCancelledForTests);
 
             var shown = Assert.IsType<A11yEvent.EmbedPreviewShown>(Assert.Single(announcements));
             Assert.Equal("other", shown.Target);
@@ -1136,9 +1138,13 @@ public sealed class W2EditorInteractionTests
             }
 
             Assert.True(started.Wait(TimeSpan.FromSeconds(5)));
+            EditorInteractionCoordinator interactions = tab.EditorInteractions!;
             tab.Dispose();
             release.Set();
-            Thread.Sleep(350);
+            // Every worker has run to its end — a retry loop disposal failed
+            // to stop would have made its further attempts by now — and what
+            // it queued has run (codex round 3; no wall-clock sleep).
+            SettleWorkers(interactions);
             Assert.Equal(1, attempts);
             Assert.DoesNotContain(
                 announcements,
@@ -1400,6 +1406,19 @@ public sealed class W2EditorInteractionTests
             Thread.Yield();
         }
     }
+    /// <summary>#1279 (codex round 3): pump until every background worker
+    /// has run to its end, then drain what the workers queued; a drain that
+    /// starts another worker waits for it too.</summary>
+    private static void SettleWorkers(EditorInteractionCoordinator interactions)
+    {
+        do
+        {
+            WaitForUi(() => interactions.LiveWorkersForTests == 0);
+            DrainUi();
+        }
+        while (interactions.LiveWorkersForTests > 0);
+    }
+
     private static void DrainUi()
     {
         var frame = new DispatcherFrame();

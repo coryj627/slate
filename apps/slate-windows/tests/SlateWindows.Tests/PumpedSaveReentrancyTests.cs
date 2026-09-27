@@ -1,6 +1,7 @@
 // Copyright (C) 2026 Cory Joseph
 // SPDX-License-Identifier: AGPL-3.0-or-later
 
+using System.Runtime.CompilerServices;
 using System.Windows.Threading;
 using uniffi.slate_uniffi;
 
@@ -780,6 +781,197 @@ public sealed class PumpedSaveReentrancyTests
         Assert.DoesNotContain("Marker-S2", disk, StringComparison.Ordinal);
         Assert.Equal("note3.md", host.S.Path);
         Assert.False(host.S.IsDirty);
+    }
+
+    /// <summary>Codex round 3: a CREATE that landed before a rename moved
+    /// its file is adopted as the renamed tab's baseline, like a CAS save. A
+    /// tab that never loaded bytes (no content hash) saves as a create; the
+    /// file is renamed before the create's publication; the publication is
+    /// retired silently and its bytes become the tab's baseline, so the next
+    /// save is an ordinary save at the new name — not a second create that
+    /// collides with the tab's own file.</summary>
+    [Fact]
+    public void ALandedCreateIsAdoptedAfterARename()
+    {
+        using var host = new Host();
+        host.Workspace.OpenPath("fresh.md", WorkspaceOpenTarget.NewTab);
+        WorkspaceTabViewModel fresh = Assert.IsType<WorkspaceTabViewModel>(host.Workspace.ActiveGroup.ActiveTab);
+        Assert.Equal("fresh.md", fresh.Path);
+        host.Type(fresh, "Marker-C");
+        Assert.True(fresh.IsDirty, "the new note is not dirty");
+        host.ParkFirstWrite(afterWrite: true);
+        host.Announced.Clear();
+
+        host.Workspace.SaveActiveCommand.Execute(null);
+        Assert.True(host.WaitParked(), "the create never landed");
+        host.Rename("fresh.md", "fresh2.md");
+        Assert.True(
+            PumpedDispatcher.PumpUntil(() => fresh.Path == "fresh2.md"),
+            "the rename never reached the tab");
+        host.Release();
+        host.Settle();
+
+        Assert.True(host.Faults.Count == 0, string.Join("\n---\n", host.Faults));
+        Assert.DoesNotContain(
+            host.Announced,
+            item => item.Event is A11yEvent.NoteSaved
+                or A11yEvent.NoteSaveConflict
+                or A11yEvent.NoteSaveBlocked);
+        Assert.False(fresh.IsDirty, "the landed create was not adopted as the baseline");
+        Assert.Contains("Marker-C", host.Disk("fresh2.md"), StringComparison.Ordinal);
+
+        host.Type(fresh, "Marker-D");
+        host.Workspace.SaveActiveAndSettle();
+
+        var saved = Assert.Single(host.Announced, item => item.Event is A11yEvent.NoteSaved);
+        Assert.Equal("fresh2.md", Assert.IsType<A11yEvent.NoteSaved>(saved.Event).Filename);
+        Assert.DoesNotContain(
+            host.Announced,
+            item => item.Event is A11yEvent.NoteSaveConflict or A11yEvent.NoteSaveBlocked);
+        string disk = host.Disk("fresh2.md");
+        Assert.Contains("Marker-C", disk, StringComparison.Ordinal);
+        Assert.Contains("Marker-D", disk, StringComparison.Ordinal);
+        Assert.False(fresh.IsDirty);
+    }
+
+    /// <summary>Codex round 3: Save All's answer counts a save that failed
+    /// at the item its tab still shows even when the tab is clean. The
+    /// fault lands AFTER the write was adopted as the tab's baseline (a
+    /// publication step past adoption throwing, the peer sync say), so no
+    /// dirty tab is left to say "not saved": Save All still answers false,
+    /// and teardown stays open with its existing line — never "All changes
+    /// saved. Vault closed."</summary>
+    [Theory]
+    [InlineData("save-all")]
+    [InlineData("teardown")]
+    public void AFaultAfterTheWriteWasAdoptedIsStillNotSaved(string site)
+    {
+        using var host = new Host(VaultCloseDecision.SaveAll);
+        using var log = new FaultLog();
+        host.Workspace.SaveActiveAndSettle();
+        Assert.False(host.Workspace.HasDirtyTabs, "the arrangement left a dirty tab");
+        host.Type(host.S, "Marker-S");
+        host.S.SaveAdoptedHookForTests = () => throw new InjectedSaveFault();
+        host.Announced.Clear();
+
+        Exception? escaped = Record.Exception(() => host.RunSite(site));
+        host.Settle();
+
+        Assert.True(escaped is null, $"{site}: {escaped}");
+        Assert.Equal(1, log.FaultsLogged);
+        // The write landed and was adopted before the fault.
+        Assert.False(host.S.IsDirty);
+        Assert.Contains("Marker-S", host.Disk("note1.md"), StringComparison.Ordinal);
+        Assert.DoesNotContain(
+            host.Announced,
+            item => item.Event is A11yEvent.VaultClosed
+                or A11yEvent.VaultClosedAllSaved
+                or A11yEvent.VaultClosedChangesDiscarded);
+        if (site == "save-all")
+        {
+            Assert.False(host.SiteAnswer, "Save All answered saved after a faulted save");
+        }
+        else
+        {
+            Assert.NotNull(host.Lifecycle.Workspace);
+            Assert.Equal(
+                "Vault remains open because one or more notes could not be saved.",
+                host.Lifecycle.StatusText);
+        }
+    }
+
+    /// <summary>Codex round 3: a save that faults while later saves wait
+    /// behind it leaves no faulted task unobserved. A save waits for every
+    /// earlier save on its tab's chain AND its file's chain to FINISH — a
+    /// completion-only barrier — and runs; the fault is observed and logged
+    /// once, by its ticket. The schedule gives the last save two distinct
+    /// predecessors (its own tab's faulted save and the peer's save queued on
+    /// the file), because on this runtime <c>Task.WhenAll</c> over a single
+    /// faulted task raises nothing extra; over two, a barrier built from the
+    /// saves themselves faults and nobody observes it, and its finalizer
+    /// raises <see cref="TaskScheduler.UnobservedTaskException"/> — which
+    /// this fact hooks after forcing collection.</summary>
+    [Fact]
+    public void AFaultedSaveBeforeQueuedOnesLeavesNoFaultUnobserved()
+    {
+        var unobserved = new List<AggregateException>();
+        void Note(object? sender, UnobservedTaskExceptionEventArgs e)
+        {
+            if (e.Exception.Flatten().InnerExceptions.Any(inner => inner is InjectedSaveFault))
+            {
+                lock (unobserved)
+                {
+                    unobserved.Add(e.Exception);
+                }
+            }
+        }
+        TaskScheduler.UnobservedTaskException += Note;
+        try
+        {
+            RunAFaultedSaveBeforeQueuedOnes();
+            for (int pass = 0; pass < 3; pass++)
+            {
+                GC.Collect();
+                GC.WaitForPendingFinalizers();
+            }
+            lock (unobserved)
+            {
+                Assert.True(unobserved.Count == 0, string.Join("\n---\n", unobserved));
+            }
+        }
+        finally
+        {
+            TaskScheduler.UnobservedTaskException -= Note;
+        }
+    }
+
+    /// <summary>The schedule, in its own frame so nothing it created stays
+    /// reachable from the fact's locals when the collector runs.</summary>
+    [MethodImpl(MethodImplOptions.NoInlining)]
+    private static void RunAFaultedSaveBeforeQueuedOnes()
+    {
+        using var host = new Host();
+        using var log = new FaultLog();
+        using var parked = new ManualResetEventSlim();
+        using var release = new ManualResetEventSlim();
+        int targetWrites = 0;
+        host.T.SaveWriteHookForTests = () =>
+        {
+            if (Interlocked.Increment(ref targetWrites) == 1)
+            {
+                parked.Set();
+                release.Wait(TimeSpan.FromSeconds(20));
+                throw new InjectedSaveFault();
+            }
+        };
+
+        // The target's save parks, then faults.
+        host.Workspace.SaveActiveCommand.Execute(null);
+        Assert.True(parked.Wait(TimeSpan.FromSeconds(10)), "the first save never started");
+        host.Type(host.T, "Marker-B");
+        // The peer's save queues on the file's chain behind it...
+        host.Workspace.SelectGroupFromKeyboardFocus(host.G2);
+        host.G2.ActiveTab = host.P;
+        host.Workspace.SaveActiveCommand.Execute(null);
+        // ...and the target's next save waits for both: the tab's chain ends
+        // at the faulting save, the file's at the peer's.
+        host.Workspace.SelectGroupFromKeyboardFocus(host.G1);
+        host.G1.ActiveTab = host.T;
+        host.Workspace.SaveActiveCommand.Execute(null);
+        release.Set();
+        host.Settle();
+        Assert.True(
+            PumpedDispatcher.PumpUntil(() => host.Workspace.LastSaveObservationForTests.IsCompleted),
+            "the last save's observation never finished");
+
+        Assert.True(host.Faults.Count == 0, string.Join("\n---\n", host.Faults));
+        Assert.Equal(1, log.FaultsLogged);
+        string disk = host.Disk("note0.md");
+        Assert.Contains("Marker-A", disk, StringComparison.Ordinal);
+        Assert.Contains("Marker-B", disk, StringComparison.Ordinal);
+        Assert.False(host.T.IsDirty);
+        Assert.False(host.P.IsDirty);
+        Assert.True(host.Workspace.SavesIdle);
     }
 
     internal sealed class Host : IDisposable

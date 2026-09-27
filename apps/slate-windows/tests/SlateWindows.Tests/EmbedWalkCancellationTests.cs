@@ -242,6 +242,80 @@ public sealed class EmbedWalkCancellationTests
         });
     }
 
+    /// <summary>Codex round 3: a refresh superseded AFTER its fetch finished
+    /// — its publication already queued on the dispatcher, too late for any
+    /// cancellation — publishes nothing and moves no state. The newer
+    /// refresh, parked in its own walk, stays loading while the stale
+    /// publication runs, and loads only when it publishes itself.</summary>
+    [Fact]
+    public void ASupersededPublicationLeavesTheNewerRefreshLoading()
+    {
+        using FixtureVault fixture = FixtureVault.Create(0, "reading-stale-publication");
+        File.WriteAllText(Path.Combine(fixture.Root, "host.md"), "# Host\n\n![[target]]\n");
+        File.WriteAllText(Path.Combine(fixture.Root, "target.md"), "# Target\n\nTarget body.\n");
+        PumpedDispatcher.Run(() =>
+        {
+            using VaultSession session = ScannedSession(fixture.Root);
+            var announcements = new List<A11yEvent>();
+            using var tab = new WorkspaceTabViewModel(
+                session,
+                new WorkspaceTabState(
+                    Guid.NewGuid(),
+                    new WorkspaceItemState(WorkspaceItemKind.Markdown, "host.md")),
+                announce: announcements.Add,
+                startInteractionBackgroundWork: true);
+            tab.ToggleViewMode();
+            ReadingContentViewModel reading = Assert.IsType<ReadingContentViewModel>(tab.Reading);
+            Assert.True(
+                PumpedDispatcher.PumpUntil(() => !reading.IsLoading && reading.Document is not null),
+                "the first projection never landed");
+
+            using var queued = new ManualResetEventSlim();
+            using var parked = new ManualResetEventSlim();
+            using var release = new ManualResetEventSlim();
+            int walks = 0;
+            reading.PublicationQueuedHookForTests = queued.Set;
+            reading.EmbedFaultForTests = () =>
+            {
+                // The first refresh's walk runs through; the superseding
+                // refresh's walk parks.
+                if (Interlocked.Increment(ref walks) == 2)
+                {
+                    parked.Set();
+                    release.Wait(TimeSpan.FromSeconds(20));
+                }
+                return null;
+            };
+            try
+            {
+                reading.Refresh();
+                // The first fetch has finished and queued its publication;
+                // this thread — the dispatcher — has not run it.
+                Assert.True(queued.Wait(TimeSpan.FromSeconds(20)), "the first fetch never queued its publication");
+                reading.Refresh();
+                Assert.True(reading.IsLoading);
+
+                // The stale publication runs in these pumps, while the newer
+                // refresh is parked in its walk.
+                Assert.True(
+                    PumpedDispatcher.PumpUntil(() => parked.IsSet),
+                    "the newer refresh never reached its walk");
+                PumpedDispatcher.Drain();
+                Assert.True(reading.IsLoading, "a superseded publication cleared the newer refresh's loading state");
+
+                release.Set();
+                Assert.True(
+                    PumpedDispatcher.PumpUntil(() => !reading.IsLoading),
+                    "the newer refresh never published");
+                Assert.Null(reading.LastTerminalFailureForTests);
+            }
+            finally
+            {
+                release.Set();
+            }
+        });
+    }
+
     private static string DocumentText(ReadingContentViewModel reading)
     {
         System.Windows.Documents.FlowDocument document =

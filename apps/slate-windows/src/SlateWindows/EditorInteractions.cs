@@ -1295,7 +1295,7 @@ internal sealed class EditorInteractionCoordinator : BindableBase, IDisposable
         HostLog.WriteUiAutomationDiagnostic(
             HostDiagnosticEvent.EditorEmbedPreviewOpened);
         OpenPopover();
-        _ = Task.Run(() => ResolveEmbedPreview(
+        TrackWorker(Task.Run(() => ResolveEmbedPreview(
             generation,
             requestKey,
             path,
@@ -1304,7 +1304,7 @@ internal sealed class EditorInteractionCoordinator : BindableBase, IDisposable
             sessionGeneration,
             sourceLine,
             link,
-            resolve));
+            resolve)));
         return true;
     }
 
@@ -1324,6 +1324,44 @@ internal sealed class EditorInteractionCoordinator : BindableBase, IDisposable
     /// published nothing (#1279 test seam).</summary>
     internal int EmbedResolvesCancelledForTests =>
         Volatile.Read(ref _embedResolvesCancelledForTests);
+
+    private readonly Lock _workersGate = new();
+    private readonly HashSet<Task> _liveWorkers = [];
+
+    /// <summary>Track a background worker until it finishes (#1279, codex
+    /// round 3): a fact waits for every worker to have run to its end —
+    /// retries and a cancelled walk included — before it drains the
+    /// dispatcher and asserts what was published.</summary>
+    private void TrackWorker(Task worker)
+    {
+        lock (_workersGate)
+        {
+            _liveWorkers.Add(worker);
+        }
+        worker.ContinueWith(
+            finished =>
+            {
+                lock (_workersGate)
+                {
+                    _liveWorkers.Remove(finished);
+                }
+            },
+            CancellationToken.None,
+            TaskContinuationOptions.ExecuteSynchronously,
+            TaskScheduler.Default);
+    }
+
+    /// <summary>#1279 test seam: background workers not yet finished.</summary>
+    internal int LiveWorkersForTests
+    {
+        get
+        {
+            lock (_workersGate)
+            {
+                return _liveWorkers.Count;
+            }
+        }
+    }
 
     private sealed record EmbedPreviewContent(
         string Title,
@@ -2030,7 +2068,7 @@ internal sealed class EditorInteractionCoordinator : BindableBase, IDisposable
         }
 
         pending.Dispose();
-        _ = Task.Run(() => RunMathRefreshWorker(generation));
+        TrackWorker(Task.Run(() => RunMathRefreshWorker(generation)));
     }
 
     private async Task RunMathRefreshWorker(int generation)
@@ -2276,11 +2314,11 @@ internal sealed class EditorInteractionCoordinator : BindableBase, IDisposable
             generation = _artifactCacheGeneration;
         }
 
-        _ = Task.Run(() => LoadArtifactCacheAsync(
+        TrackWorker(Task.Run(() => LoadArtifactCacheAsync(
             generation,
             path,
             savedHash,
-            sessionGeneration));
+            sessionGeneration)));
     }
 
     private async Task LoadArtifactCacheAsync(
@@ -2473,11 +2511,11 @@ internal sealed class EditorInteractionCoordinator : BindableBase, IDisposable
             generation = _citationCacheGeneration;
         }
 
-        _ = Task.Run(() => LoadCitationCacheAsync(
+        TrackWorker(Task.Run(() => LoadCitationCacheAsync(
             generation,
             path,
             savedHash,
-            sessionGeneration));
+            sessionGeneration)));
     }
 
     private async Task LoadCitationCacheAsync(
