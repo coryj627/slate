@@ -863,7 +863,8 @@ internal sealed class ReadingContentViewModel : BindableBase, IDisposable
                 && fullNote.TargetPath.EndsWith(
                     ".base", StringComparison.OrdinalIgnoreCase))
             {
-                baseProjection = ProjectBaseEmbed(session, fullNote.TargetPath, path);
+                baseProjection = ProjectBaseEmbed(
+                    session, fullNote.TargetPath, path, cancel, BaseProjectionHookForTests);
             }
             artifacts.Add(new ReadingEmbedArtifact(
                 key, alt, resolution, imageRefused, baseProjection));
@@ -877,15 +878,24 @@ internal sealed class ReadingContentViewModel : BindableBase, IDisposable
     /// the reservation's thisPath; codex round 5 — a `this`-relative
     /// base embedded in two notes must summarize per note), ALWAYS
     /// close (INV-2 — the finally owns it). Failures project as an
-    /// error sentence, never a silent empty card.</summary>
+    /// error sentence, never a silent empty card. The query runs under
+    /// the REFRESH's cancellation (#1279, codex round 2a): a superseded,
+    /// detached or disposed refresh stops it, and <c>Cancelled</c> ends
+    /// the whole fetch — it is never an error card.</summary>
     private static BaseEmbedProjection ProjectBaseEmbed(
-        VaultSession session, string targetPath, string embeddingNotePath)
+        VaultSession session,
+        string targetPath,
+        string embeddingNotePath,
+        CancelToken cancel,
+        Action? beforeQuery)
     {
         ulong? handle = null;
         try
         {
+            ThrowIfCancelled(cancel);
             handle = session.OpenBase(targetPath);
-            using var cancel = new CancelToken();
+            ThrowIfCancelled(cancel);
+            beforeQuery?.Invoke();
             BasesResultSet result = session.BaseExecute(
                 handle.Value,
                 view: 0,
@@ -900,6 +910,10 @@ internal sealed class ReadingContentViewModel : BindableBase, IDisposable
                 result.Warnings,
                 result.ViewError,
                 ExecuteError: null);
+        }
+        catch (VaultException.Cancelled)
+        {
+            throw;
         }
         catch (VaultException failure)
         {
@@ -920,6 +934,19 @@ internal sealed class ReadingContentViewModel : BindableBase, IDisposable
             }
         }
     }
+
+    private static void ThrowIfCancelled(CancelToken cancel)
+    {
+        if (cancel.IsCancelled())
+        {
+            throw new VaultException.Cancelled();
+        }
+    }
+
+    /// <summary>#1279 test seam: runs on the fetch worker after a `.base`
+    /// card's base is opened and before its query runs — a fact parks the
+    /// query there.</summary>
+    internal Action? BaseProjectionHookForTests { get; set; }
 
     /// <summary>
     /// W3-5 round 1 [high]: a TARGET-note save after publication must
