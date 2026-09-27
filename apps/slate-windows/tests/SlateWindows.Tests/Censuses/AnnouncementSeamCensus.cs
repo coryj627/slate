@@ -101,6 +101,17 @@ public sealed class AnnouncementSeamCensus
             CSharpSource.Normalize(production.ArgumentList.Arguments[1].Expression));
         Assert.Equal("source", Assert.Single(forProduction.ParameterList.Parameters).Identifier.ValueText);
 
+        // Codex PR 1 round 5: the production seams' only wrapper is the
+        // shell journey's test-only launch switch, read from a census instance
+        // and its own variable — inert otherwise
+        // (TheTestLaunchQueueSwitchIsInertOutsideACensusInstance).
+        var wrapper = Assert.IsType<InvocationExpressionSyntax>(forProduction.ExpressionBody!.Expression);
+        Assert.Equal("WithTestLaunchQueue", wrapper.Expression.ToString());
+        Assert.Same(production, wrapper.ArgumentList.Arguments[0].Expression);
+        Assert.Equal(
+            ["Environment.GetEnvironmentVariable(\"SLATE_CENSUS_INSTANCE_ID\")", "Environment.GetEnvironmentVariable(TestLaunchQueueVariable)"],
+            wrapper.ArgumentList.Arguments.Skip(1).Select(argument => argument.Expression.NormalizeWhitespace().ToFullString()));
+
         // The source (R-1): the element's own provider, through its peer
         // resolved exactly as the dispatcher always has, and nothing else —
         // the window's HWND host provider was measured and delivered nothing
@@ -240,7 +251,7 @@ public sealed class AnnouncementSeamCensus
             Mutate(original, "provider is not null", "provider is null"),
             Mutate(original, "() => AutomationInteropProvider.ClientsAreListening", "() => true"),
             // OD-7: the launch seams swapped for ones that never see an advise.
-            Mutate(original, "LaunchSeams.ForProduction(source)", "new LaunchSeams(() => false, () => false, _ => null!, () => TimeSpan.Zero, (_, _) => { })"),
+            Mutate(original, "LaunchSeams.ForProduction(source)", "new LaunchSeams(() => false, () => false, _ => null!, _ => null!, () => TimeSpan.Zero, (_, _) => { })"),
         })
         {
             Assert.NotEqual(original, mutation);

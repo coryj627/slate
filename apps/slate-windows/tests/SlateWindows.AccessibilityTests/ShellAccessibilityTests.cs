@@ -107,8 +107,11 @@ public sealed partial class ShellAccessibilityTests
     /// <summary>Starts the production executable on <paramref
     /// name="vaultRoot"/> the way the shell gate always has: its own
     /// single-instance identity, the app log in <paramref
-    /// name="logDirectory"/>, and the UIA diagnostics on.</summary>
-    private static Process StartShellProcess(string vaultRoot, string logDirectory)
+    /// name="logDirectory"/>, and the UIA diagnostics on. A positive
+    /// <paramref name="announcementQueueMilliseconds"/> turns on the census
+    /// instance's test-only launch switch that holds the status provider
+    /// absent that long after the first frame (PR 1's journey).</summary>
+    private static Process StartShellProcess(string vaultRoot, string logDirectory, int announcementQueueMilliseconds = 0)
     {
         var startInfo = new ProcessStartInfo(SlateWindowsExe())
         {
@@ -121,6 +124,12 @@ public sealed partial class ShellAccessibilityTests
             $"slate-accessibility-{Guid.NewGuid():N}";
         startInfo.Environment["SLATE_LOG_DIR"] = logDirectory;
         startInfo.Environment["SLATE_UIA_DIAGNOSTICS"] = "1";
+        if (announcementQueueMilliseconds > 0)
+        {
+            startInfo.Environment["SLATE_TEST_ANNOUNCEMENT_QUEUE_MS"] =
+                announcementQueueMilliseconds.ToString(System.Globalization.CultureInfo.InvariantCulture);
+        }
+
         return Process.Start(startInfo)
             ?? throw new Xunit.Sdk.XunitException("SlateWindows.exe did not start.");
     }

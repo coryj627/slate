@@ -669,6 +669,167 @@ public sealed class AccessibilityNotificationDispatcherTests
     });
 
     /// <summary>
+    /// Codex PR 1 round 5 (hold model, row R0 × the sole reader quits): a
+    /// sole reader that quits and restarts while NOTHING is queued. Paired,
+    /// drained and idle, the dispatcher runs its epoch watch, whose check sees
+    /// the reader gone, clears the pairing epoch and stops. The reader returns
+    /// with nothing posted, so no check runs. The first line after the restart
+    /// finds no epoch: it starts a fresh hold and is queued, never raised into
+    /// the new reader's pre-advise gap, until that hold runs out. While the
+    /// line waits the poll samples instead of the watch; idle and paired again,
+    /// the watch resumes.
+    /// </summary>
+    [Fact]
+    public void AnIdleSoleReaderRestartStartsAFreshHold()
+    {
+        var launch = new LaunchHarness { Connected = true, Advised = false };
+        launch.Post("Vault opened.");
+        Assert.Empty(launch.Raised);
+        launch.Now = AccessibilityNotificationDispatcher.AdviseHold;
+        launch.Tick!();
+        Assert.Equal(["Vault opened."], launch.Raised.Select(line => line.Text));
+        Assert.Null(launch.Tick);
+        Assert.NotNull(launch.Watch);
+
+        // Idle and paired: the watch's check changes nothing.
+        launch.Now = TimeSpan.FromSeconds(60);
+        launch.Watch!();
+        Assert.NotNull(launch.Watch);
+
+        // The sole reader quits: the watch sees it, clears the epoch, stops.
+        launch.Listening = false;
+        launch.Watch!();
+        Assert.Null(launch.Watch);
+
+        // The new reader registers; nothing checks until the next post, which
+        // starts a fresh hold and waits in the queue.
+        launch.Listening = true;
+        launch.Now = TimeSpan.FromSeconds(120);
+        launch.Post("Right pane hidden.");
+        Assert.Single(launch.Raised);
+        Assert.NotNull(launch.Tick);
+        Assert.Null(launch.Watch);
+
+        launch.Now = TimeSpan.FromSeconds(122);
+        launch.Tick!();
+        Assert.Single(launch.Raised);
+        launch.Now = TimeSpan.FromSeconds(123);
+        launch.Tick!();
+        Assert.Equal(["Vault opened.", "Right pane hidden."], launch.Raised.Select(line => line.Text));
+        Assert.Null(launch.Tick);
+        Assert.NotNull(launch.Watch);
+        Assert.Equal(2, launch.WatchesStarted);
+        Assert.Equal(
+            [
+                "lines=1, droppedOldest=0, at=3000ms, advise=absent, drained=timeout",
+                "lines=1, droppedOldest=0, at=123000ms, advise=absent, drained=timeout",
+            ],
+            launch.Drains);
+    }
+
+    /// <summary>
+    /// Codex PR 1 round 5, the same restart on production's own timers: after
+    /// the drain the epoch watch starts; the sole reader leaves on another
+    /// thread with nothing queued and no post, and the watch's own tick — never
+    /// a call from the fact — sees it and stops. The line posted after the
+    /// reader returns waits out a fresh hold.
+    /// </summary>
+    [Fact]
+    public void AnIdleReaderRestartIsSeenByTheWatchOnProductionsTimer() => RunSta(() =>
+    {
+        var launch = new TimerHarness { Advised = false };
+        launch.Post("Vault opened.");
+        launch.Now = AccessibilityNotificationDispatcher.AdviseHold;
+        Assert.True(TimerHarness.PumpUntil(() => launch.Raised.Count >= 1), "the hold never ran out");
+        Assert.True(TimerHarness.PumpUntil(() => launch.WatchesStarted == 1), "no watch started once paired and idle");
+
+        Task quit = TimerHarness.Later(() => launch.Listening = false);
+        Assert.True(TimerHarness.PumpUntil(() => launch.WatchesStopped == 1), "the watch never saw the sole reader leave");
+        quit.GetAwaiter().GetResult();
+        Assert.True(launch.WatchTicks >= 1, "the watch stopped without ticking");
+
+        launch.Listening = true;
+        launch.Now = TimeSpan.FromSeconds(60);
+        launch.Post("Right pane hidden.");
+        launch.PumpTicks(2);
+        Assert.Equal(["Vault opened."], launch.Raised);
+
+        launch.Now = TimeSpan.FromSeconds(63);
+        Assert.True(TimerHarness.PumpUntil(() => launch.Raised.Count >= 2), "the fresh hold never ran out");
+        Assert.Equal(["Vault opened.", "Right pane hidden."], launch.Raised);
+        Assert.Equal(
+            [
+                "lines=1, droppedOldest=0, at=3000ms, advise=absent, drained=timeout",
+                "lines=1, droppedOldest=0, at=63000ms, advise=absent, drained=timeout",
+            ],
+            launch.Drains);
+    });
+
+    /// <summary>
+    /// Codex PR 1 round 5, the watch's cost (hold model, rows U0/U1): it runs
+    /// only while a pair is held. A process no client listens to watches
+    /// nothing, whether lines are queued, expire or are queued again.
+    /// </summary>
+    [Fact]
+    public void AProcessNoClientListensToRunsNoWatch()
+    {
+        var launch = new LaunchHarness { Listening = false, Connected = true };
+        launch.Post("Vault opened.");
+        launch.Tick!();
+        launch.Now = AccessibilityNotificationDispatcher.LaunchWindow;
+        launch.Tick!();
+        Assert.Null(launch.Tick);
+        launch.Post("Right pane hidden.");
+        Assert.NotNull(launch.Tick);
+        Assert.Empty(launch.Raised);
+        Assert.Equal(0, launch.WatchesStarted);
+        Assert.Null(launch.Watch);
+    }
+
+    /// <summary>
+    /// Codex PR 1 round 5: the shell journey's test-only launch switch is
+    /// inert unless the process is a census instance AND the variable holds a
+    /// positive whole number of milliseconds; then it holds only the status
+    /// provider absent, only until that long after the first frame, and
+    /// never makes an absent provider present.
+    /// </summary>
+    [Fact]
+    public void TheTestLaunchQueueSwitchIsInertOutsideACensusInstance()
+    {
+        TimeSpan elapsed = TimeSpan.Zero;
+        bool connected = true;
+        var seams = new AccessibilityNotificationDispatcher.LaunchSeams(
+            () => true,
+            () => connected,
+            _ => new StopPoll(() => { }),
+            _ => new StopPoll(() => { }),
+            () => elapsed,
+            (_, _) => { });
+        foreach (var (instance, milliseconds) in new (string?, string?)[]
+        {
+            (null, "3000"), (string.Empty, "3000"), ("census", null), ("census", string.Empty),
+            ("census", "0"), ("census", "-5"), ("census", "3s"), ("census", "1.5"),
+        })
+        {
+            Assert.Same(seams, AccessibilityNotificationDispatcher.LaunchSeams.WithTestLaunchQueue(seams, instance, milliseconds));
+        }
+
+        AccessibilityNotificationDispatcher.LaunchSeams held =
+            AccessibilityNotificationDispatcher.LaunchSeams.WithTestLaunchQueue(seams, "census", "3000");
+        Assert.Same(seams.Advised, held.Advised);
+        Assert.Same(seams.StartPoll, held.StartPoll);
+        Assert.Same(seams.StartWatch, held.StartWatch);
+        Assert.Same(seams.Elapsed, held.Elapsed);
+        Assert.Same(seams.Diagnose, held.Diagnose);
+        elapsed = TimeSpan.FromMilliseconds(2999);
+        Assert.False(held.Connected());
+        elapsed = TimeSpan.FromMilliseconds(3000);
+        Assert.True(held.Connected());
+        connected = false;
+        Assert.False(held.Connected());
+    }
+
+    /// <summary>
     /// OD-7, codex round 19: Done is launch bookkeeping only. After a normal
     /// flip, a conjunct that regresses — the status provider lost, or no
     /// client listening any more — makes a post queue again, never raise into
@@ -1004,6 +1165,7 @@ public sealed class AccessibilityNotificationDispatcherTests
                         tick = poll;
                         return new StopPoll(() => tick = null);
                     },
+                    _ => new StopPoll(() => { }),
                     () => TimeSpan.Zero,
                     (_, _) => { }));
 
@@ -1128,6 +1290,7 @@ public sealed class AccessibilityNotificationDispatcherTests
                         tick = poll;
                         return new StopPoll(() => tick = null);
                     },
+                    StartWatch = _ => new StopPoll(() => { }),
                     Elapsed = () => TimeSpan.Zero,
                     Diagnose = (diagnosticEvent, line) => logged.Add((diagnosticEvent, line)),
                 });
@@ -1217,6 +1380,12 @@ public sealed class AccessibilityNotificationDispatcherTests
                         Tick = tick;
                         return new StopPoll(() => Tick = null);
                     },
+                    tick =>
+                    {
+                        WatchesStarted++;
+                        Watch = tick;
+                        return new StopPoll(() => Watch = null);
+                    },
                     () => Now,
                     (diagnosticEvent, line) => Logged.Add((diagnosticEvent, line))));
         }
@@ -1243,6 +1412,11 @@ public sealed class AccessibilityNotificationDispatcherTests
         internal Action? Tick { get; private set; }
 
         internal int PollsStarted { get; private set; }
+
+        /// <summary>The epoch watch's tick while it runs, else null.</summary>
+        internal Action? Watch { get; private set; }
+
+        internal int WatchesStarted { get; private set; }
 
         internal void Post(params string[] lines)
         {
@@ -1298,6 +1472,20 @@ public sealed class AccessibilityNotificationDispatcherTests
                             timer.Dispose();
                         });
                     },
+                    StartWatch = tick =>
+                    {
+                        WatchesStarted++;
+                        IDisposable timer = production.StartWatch(() =>
+                        {
+                            WatchTicks++;
+                            tick();
+                        });
+                        return new StopPoll(() =>
+                        {
+                            WatchesStopped++;
+                            timer.Dispose();
+                        });
+                    },
                     Elapsed = () => Now,
                     Diagnose = (diagnosticEvent, line) =>
                     {
@@ -1341,6 +1529,12 @@ public sealed class AccessibilityNotificationDispatcherTests
         internal int PollsStarted { get; private set; }
 
         internal int PollsStopped { get; private set; }
+
+        internal int WatchTicks { get; private set; }
+
+        internal int WatchesStarted { get; private set; }
+
+        internal int WatchesStopped { get; private set; }
 
         /// <summary>Flips an input from a thread-pool thread a little later,
         /// with no post: only the poll can notice.</summary>
@@ -1399,11 +1593,13 @@ public sealed class AccessibilityNotificationDispatcherTests
 
     /// <summary>Seams for the facts about the raise itself: the process is
     /// advised and the provider connected, so the first post ends the launch
-    /// phase with nothing queued, and no poll ever starts.</summary>
+    /// phase with nothing queued, and no poll ever starts. Paired and idle, a
+    /// ready process does start its epoch watch; nothing ticks it here.</summary>
     private static AccessibilityNotificationDispatcher.LaunchSeams AlwaysReady() => new(
         () => true,
         () => true,
         _ => throw new InvalidOperationException("A ready process starts no launch poll."),
+        _ => new StopPoll(() => { }),
         () => TimeSpan.Zero,
         (diagnosticEvent, line) =>
         {

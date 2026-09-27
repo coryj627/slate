@@ -37,10 +37,13 @@ namespace SlateWindows;
 /// queued line is raised only by the drain, so no line is raised twice. The
 /// queue keeps the last <see cref="LaunchQueueCapacity"/> lines (the launch
 /// lines are about five). While it holds any, a
-/// <see cref="LaunchPollInterval"/> poll on the UI thread checks again — the
-/// only production wake-up, so it runs during the launch and after it alike,
-/// watches for the advise and the hold's end, and stops when the queue
-/// empties — and the first ready check (a tick or a post) drains the queue
+/// <see cref="LaunchPollInterval"/> poll on the UI thread checks again — it
+/// runs during the launch and after it alike, watches for the advise and the
+/// hold's end, and stops when the queue empties; while a pair is held and
+/// nothing is queued an <see cref="EpochWatchInterval"/> watch checks instead,
+/// so whenever the pairing epoch is set some check samples the client and the
+/// provider (<see cref="WatchWhilePaired"/>) — and the first ready check (a
+/// tick or a post) drains the queue
 /// once, in order, through the same raiser. Every queued line expires
 /// <see cref="LaunchWindow"/> after its own post and is dropped unspoken,
 /// never raised late — never a wholesale clear — so the poll always ends.
@@ -52,8 +55,9 @@ namespace SlateWindows;
 /// Both are final, and neither raises without readiness: a client that
 /// stops listening or a provider lost after Done queues the line again, the
 /// poll restarts, and a client or provider that returns is held afresh — a
-/// reader restarted while the peer stays connected waits for its own advise
-/// when it was the only client listening (with another client listening
+/// reader restarted while the peer stays connected, idle or not, waits for
+/// its own advise when it was the only client listening and was absent for
+/// longer than the running check's cadence (with another client listening
 /// throughout, UIA's aggregate never goes absent: contract 40 AR-27).
 /// Nothing is composed: every line is raised with core's rendered text and
 /// processing, and a line that asks for every notification to be delivered
@@ -100,6 +104,14 @@ internal sealed class AccessibilityNotificationDispatcher
 
     private static readonly TimeSpan LaunchPollInterval = TimeSpan.FromMilliseconds(250);
 
+    /// <summary>Codex PR 1 round 5: how often the epoch watch checks while a
+    /// pair is held and nothing is queued — so a sole reader that quits and
+    /// restarts while the app is idle is seen absent and its successor gets
+    /// a fresh hold. A reader restart (a new process registering) takes
+    /// longer than this; while lines wait the poll samples four times as
+    /// often.</summary>
+    internal static readonly TimeSpan EpochWatchInterval = TimeSpan.FromSeconds(1);
+
     // The listener state last written to the diagnostics log, packed as
     // two bits (a client listens; WPF's map knows of it), -1 before the
     // first. Process-wide like both facts it reports, so the window's
@@ -117,6 +129,12 @@ internal sealed class AccessibilityNotificationDispatcher
     private readonly Queue<QueuedLine> _queue = new();
     private int _droppedOldest;
     private IDisposable? _poll;
+
+    // Codex PR 1 round 5: the epoch watch — a check every EpochWatchInterval
+    // while a pair is held (_pairedSince set) and nothing is queued, so that
+    // whenever the epoch is set some periodic check runs (the poll or this)
+    // and a sole reader's absence resets it even when the app is idle.
+    private IDisposable? _watch;
 
     // The status provider's state last recorded by a check: 1 or 0, -1
     // before the first.
@@ -240,7 +258,8 @@ internal sealed class AccessibilityNotificationDispatcher
     }
 
     /// <summary>
-    /// One check (every post, and every tick of the poll): the ONE readiness
+    /// One check (every post, every tick of the poll and of the epoch watch):
+    /// the ONE readiness
     /// predicate, the same in every phase — R-1's listening client (UIA's own
     /// answer), a connected status provider, and the Notification advise in
     /// WPF's map or the pair's <see cref="AdviseHold"/> run out, each
@@ -287,13 +306,38 @@ internal sealed class AccessibilityNotificationDispatcher
             {
                 Raise(line);
             }
-
-            return;
         }
-
-        if (posted is { } unready)
+        else if (posted is { } unready)
         {
             Enqueue(unready with { PostedAt = now });
+        }
+
+        WatchWhilePaired();
+    }
+
+    /// <summary>
+    /// The epoch watch's one rule, applied after every check: it runs exactly
+    /// while a pair is held and nothing is queued. The pairing epoch is reset
+    /// only by a check that sees the client or the provider absent, and checks
+    /// otherwise run only on a post or while lines wait — so without the watch
+    /// a sole reader that quits and restarts while the app is idle would leave
+    /// the old epoch standing, and the first line after the restart would skip
+    /// the new reader's hold (codex PR 1 round 5). With it, whenever the epoch
+    /// is set a periodic check runs: the poll while lines wait, the watch
+    /// otherwise. Unpaired, nothing runs — a process no client listens to pays
+    /// nothing, and the next pairing starts its hold where a check first sees
+    /// it: late, never early. The tick is the same check.
+    /// </summary>
+    private void WatchWhilePaired()
+    {
+        if (_pairedSince is not null && _queue.Count == 0)
+        {
+            _watch ??= _launch.StartWatch(() => Check(null));
+        }
+        else
+        {
+            _watch?.Dispose();
+            _watch = null;
         }
     }
 
@@ -442,24 +486,61 @@ internal sealed class AccessibilityNotificationDispatcher
     /// OD-7's seams: whether UIA has advised the process of a notification
     /// listener (WPF's map, which only an advise fills), whether the status
     /// element has a connected provider to raise on, the readiness poll, the
-    /// time since the first frame, and the diagnostics sink. Production reads
-    /// the map and <see cref="NotificationSource"/>, polls on the UI thread,
-    /// counts from the window's first frame and logs under
-    /// SLATE_UIA_DIAGNOSTICS=1; the facts hold each one.
+    /// epoch watch, the time since the first frame, and the diagnostics sink.
+    /// Production reads the map and <see cref="NotificationSource"/>, polls
+    /// and watches on the UI thread, counts from the window's first frame and
+    /// logs under SLATE_UIA_DIAGNOSTICS=1; the facts hold each one.
     /// </summary>
     internal sealed record LaunchSeams(
         Func<bool> Advised,
         Func<bool> Connected,
         Func<Action, IDisposable> StartPoll,
+        Func<Action, IDisposable> StartWatch,
         Func<TimeSpan> Elapsed,
         Action<HostDiagnosticEvent, string> Diagnose)
     {
-        internal static LaunchSeams ForProduction(FrameworkElement source) => new(
-            () => AutomationPeer.ListenerExists(AutomationEvents.Notification),
-            () => NotificationSource.Of(source) is not null,
-            PollOnThisThread,
-            SinceFirstFrame(source),
-            HostLog.WriteUiAutomationDiagnostic);
+        /// <summary>The environment variable of the test-only launch switch
+        /// (see <see cref="WithTestLaunchQueue"/>).</summary>
+        internal const string TestLaunchQueueVariable = "SLATE_TEST_ANNOUNCEMENT_QUEUE_MS";
+
+        internal static LaunchSeams ForProduction(FrameworkElement source) => WithTestLaunchQueue(
+            new(
+                () => AutomationPeer.ListenerExists(AutomationEvents.Notification),
+                () => NotificationSource.Of(source) is not null,
+                PollOnThisThread,
+                WatchOnThisThread,
+                SinceFirstFrame(source),
+                HostLog.WriteUiAutomationDiagnostic),
+            Environment.GetEnvironmentVariable("SLATE_CENSUS_INSTANCE_ID"),
+            Environment.GetEnvironmentVariable(TestLaunchQueueVariable));
+
+        /// <summary>
+        /// A test-only launch switch, inert in production. It follows the
+        /// host's census precedent: <c>--census-log-probe</c> and
+        /// <c>ReadingSurface.CensusDiag</c> act only under a census instance.
+        /// Under a census instance (SLATE_CENSUS_INSTANCE_ID set),
+        /// <see cref="TestLaunchQueueVariable"/> holds the status provider
+        /// absent for that many milliseconds after the first frame. The launch
+        /// lines are then queued, and the shell journey witnesses the drain on
+        /// every run instead of only on launches that happen to find the
+        /// process unready (codex PR 1 round 5). Without a census instance, or
+        /// without a positive whole number of milliseconds, the seams are
+        /// returned unchanged.
+        /// </summary>
+        internal static LaunchSeams WithTestLaunchQueue(LaunchSeams seams, string? censusInstance, string? queueMilliseconds)
+        {
+            if (string.IsNullOrEmpty(censusInstance)
+                || !int.TryParse(queueMilliseconds, NumberStyles.None, CultureInfo.InvariantCulture, out int milliseconds)
+                || milliseconds <= 0)
+            {
+                return seams;
+            }
+
+            TimeSpan queueFor = TimeSpan.FromMilliseconds(milliseconds);
+            Func<bool> connected = seams.Connected;
+            Func<TimeSpan> elapsed = seams.Elapsed;
+            return seams with { Connected = () => elapsed() >= queueFor && connected() };
+        }
 
         /// <summary>
         /// The time since the source's window first rendered — zero before
@@ -495,6 +576,12 @@ internal sealed class AccessibilityNotificationDispatcher
         private static IDisposable PollOnThisThread(Action tick) =>
             new StopOnDispose(new DispatcherTimer(
                 LaunchPollInterval, DispatcherPriority.Background, (_, _) => tick(), Dispatcher.CurrentDispatcher));
+
+        // The epoch watch ticks on the same thread at its own cadence; WPF
+        // stops it with the dispatcher.
+        private static IDisposable WatchOnThisThread(Action tick) =>
+            new StopOnDispose(new DispatcherTimer(
+                EpochWatchInterval, DispatcherPriority.Background, (_, _) => tick(), Dispatcher.CurrentDispatcher));
 
         private sealed class StopOnDispose(DispatcherTimer timer) : IDisposable
         {

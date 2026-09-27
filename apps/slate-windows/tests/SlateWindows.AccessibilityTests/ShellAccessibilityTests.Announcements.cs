@@ -30,17 +30,23 @@ public sealed partial class ShellAccessibilityTests
     /// </summary>
     /// <remarks>
     /// <para>
-    /// One launch, kept whichever path it takes (codex PR 1 round 4). A launch
-    /// whose first line finds Slate unready — the status provider not yet
-    /// connected, or UIA's advise not yet present — queues its lines, and the
-    /// queue must drain once, in order, on the advise or after the
-    /// three-second hold without it. A launch READY at its first line raises
-    /// every line at once, back to back, with no drain; that path loses lines
-    /// to NVDA's rate limiter unless each carries its own activity ID, so it is
-    /// asserted, not discarded. Nothing touches the window through UIA until
-    /// the launch lines are posted. Every tuple Slate raised is recorded in the
-    /// evidence artifact (<c>announcements-launch.json</c>) with the path, the
-    /// listener states, sources and any drain the app logged.
+    /// Every run exercises the launch queue's drain (codex PR 1 round 5; R-1
+    /// §2.4, AR-1: the journey ships only while it discriminates). Slate is
+    /// launched as a census instance with the test-only launch switch
+    /// <c>SLATE_TEST_ANNOUNCEMENT_QUEUE_MS</c>
+    /// (<c>LaunchSeams.WithTestLaunchQueue</c>; inert in production), which
+    /// holds the status provider absent for <see cref="LaunchQueueMilliseconds"/>
+    /// after the first frame. So the first line always finds Slate unready and
+    /// is queued, and the queue must drain exactly once, in order — on UIA's
+    /// advise, or after the three-second hold without it. With the replay
+    /// disabled the launch lines are never raised and the run fails. The
+    /// ready-at-first-line path (lines raised back to back, each with its own
+    /// activity ID) is the hosted facts' to pin
+    /// (<c>LinesRaisedWhileReadyCarryTheirActivityIdByProcessing</c>). Nothing
+    /// touches the window through UIA until the launch lines are posted. Every
+    /// tuple Slate raised is recorded in the evidence artifact
+    /// (<c>announcements-launch.json</c>) with the path, the listener states,
+    /// sources and the drain the app logged.
     /// </para>
     /// <para>
     /// In the shell gate (contract 40 AR-1); the counts are recorded with the
@@ -81,20 +87,22 @@ public sealed partial class ShellAccessibilityTests
             logFile = Path.Combine(logDirectory, "slate-windows.log");
             WriteShellFixtureVault(vaultRoot);
             clock.Restart();
-            process = StartShellProcess(vaultRoot, logDirectory);
+            process = StartShellProcess(vaultRoot, logDirectory, LaunchQueueMilliseconds);
             if (!HasInteractiveDesktop(process, "announcements"))
             {
                 return;
             }
 
-            // The first check logs both lines; it queued unless a client
-            // listened, the provider was connected and UIA had advised.
+            // The first check logs both lines. The launch switch holds the
+            // status provider absent, so the first line queues: the run must
+            // take the drain path, never the ready one.
             string source = AwaitDiagnostic(process, logFile, "AnnouncementSource", TimeSpan.FromSeconds(30));
             string state = AwaitDiagnostic(process, logFile, "AnnouncementListenerState", TimeSpan.FromSeconds(30));
-            bool queued = source.Contains("statusPeerProvider=null", StringComparison.Ordinal)
-                || state.Contains("clientsListening=False", StringComparison.Ordinal)
-                || state.Contains("notificationListenerExists=False", StringComparison.Ordinal);
-            attempts.Add($"path: {(queued ? "queued at the first line" : "ready at the first line")}; {state}; {source}");
+            attempts.Add($"{state}; {source}");
+            Assert.True(
+                source.Contains("statusPeerProvider=null", StringComparison.Ordinal),
+                "The launch switch did not hold the status provider absent at the first line, so this run cannot "
+                + "witness the drain: " + string.Join(" | ", attempts));
             Process slate = process;
             int processId = slate.Id;
             string[] HeardFromSlate() => [.. received.Where(notification => notification.ProcessId == processId)
@@ -104,8 +112,8 @@ public sealed partial class ShellAccessibilityTests
             // finishes well inside the settle.
             Thread.Sleep(TimeSpan.FromSeconds(3));
 
-            // The walk: on the queued path the status provider connects and the
-            // queue drains; either way each launch line is heard once, in order.
+            // The walk: the status provider connects once the switch releases
+            // it, and the queue drains — each launch line heard once, in order.
             Window window = WaitForMainWindow(slate, automation, logFile, TimeSpan.FromSeconds(30));
             WaitForElement(window, "RightPaneLeaves", TimeSpan.FromSeconds(30));
             AwaitHeard(HeardFromSlate, launchLines, TimeSpan.FromSeconds(15), logFile);
@@ -120,8 +128,7 @@ public sealed partial class ShellAccessibilityTests
 
             // R-1 / OD-7 diagnostics, read from the production log: the state
             // written once per change, a listening client reported, and the
-            // queued launch lines drained once — or, ready at the first line,
-            // no drain at all.
+            // queued launch lines drained exactly once.
             string[] states = DiagnosticLines(logFile, "AnnouncementListenerState");
             Assert.True(
                 states.Any(state => state.Contains("clientsListening=True", StringComparison.Ordinal)),
@@ -130,15 +137,15 @@ public sealed partial class ShellAccessibilityTests
                 states.Zip(states.Skip(1)).All(pair => pair.First != pair.Second),
                 "The listener state was logged twice without changing: " + string.Join(" | ", states));
             string[] drains = DiagnosticLines(logFile, "AnnouncementReplay");
-            int drained = drains.Count(drain => drain.Contains("drained=", StringComparison.Ordinal));
             Assert.True(
-                drained == (queued ? 1 : 0),
-                $"A launch {(queued ? "queued" : "ready")} at its first line logged {drained} drains: " + string.Join(" | ", drains));
+                drains.Count(drain => drain.Contains("drained=", StringComparison.Ordinal)) == 1,
+                "The queued launch lines did not log exactly one drain: " + string.Join(" | ", drains));
 
-            // The exact tuples on either path: kind Other, the priority's
-            // processing (contract 38 D-1 — every line here is Medium, All),
-            // and each its own activity id, the dispatcher's sequence in order
-            // — no two share one, so NVDA's UIA rate limiter coalesces none.
+            // The exact tuples: kind Other, the priority's processing (contract
+            // 38 D-1 — every line here is Medium, All), and each its own
+            // activity id, the dispatcher's sequence in order — the drained
+            // lines and every later one alike, no two sharing one, so NVDA's
+            // UIA rate limiter coalesces none.
             ReceivedNotification[] fromSlate = [.. received.Where(notification => notification.ProcessId == processId)];
             Assert.Equal(
                 fromSlate.Select((_, index) => (
@@ -169,6 +176,11 @@ public sealed partial class ShellAccessibilityTests
             try { Directory.Delete(testRoot, recursive: true); } catch (IOException) { }
         }
     }
+
+    /// <summary>How long the launch switch holds the status provider absent
+    /// after the first frame: the three-second advise hold, so the launch lines
+    /// (posted by then; a two-file scan) are all queued before the drain.</summary>
+    private const int LaunchQueueMilliseconds = 3000;
 
     /// <summary>Waits until the listener has heard exactly <paramref
     /// name="expected"/> from Slate, in that order — a missing, extra,
