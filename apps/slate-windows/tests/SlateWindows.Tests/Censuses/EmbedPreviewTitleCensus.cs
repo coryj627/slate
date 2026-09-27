@@ -10,12 +10,28 @@
 // headers and landmark name. The popover's own UIA name is core's rendering
 // of the EmbedPreviewShown it announces.
 //
-// The runtime facts (W2EditorInteractionTests, ReadingEmbedTests) prove
-// today's TEXT. They cannot prove PROVENANCE: a host that composes the same
-// words passes every one of them. This census's first form blacklisted the
-// title phrases in host literals, and codex round 2 showed why that cannot
-// hold: "Embedded " + "note: " + path spells the phrase in no one literal and
-// reads identically.
+// THE PRIMARY WITNESS IS AT RUNTIME: EmbedTitleRealizedSurfaceTests realizes
+// the popover, the embeds leaf and the reading card under the app's real
+// resources, in every theme, and compares what a reader gets with core's
+// rendering computed at test time. This census is the SECONDARY net: it
+// names a regression at its file and line, early and cheaply, but a static
+// reading cannot enumerate every way WPF composes text, and it does not try
+// to (codex round 3; the coordinator's ruling). Accepted residue, covered by
+// the runtime witness and recorded in contract 38's EmbedPreviewShown row:
+// text composed by a route this file does not read — a name or header set
+// on a card from outside the renderer, a style, template or DataTemplate
+// applied from code or reached by a key it cannot resolve, a template on a
+// control inside the Expander's own template, a behavior or peer override
+// elsewhere. Where a route is cheap to read, it is read: every name and text
+// the renderer writes is a card's Title or a registered form and no name is
+// read back (codex round 3's second SetName), and XAML types are resolved
+// through the namespace map (codex round 3's `{x:Type wpf:Expander}`).
+//
+// History: the runtime facts (W2EditorInteractionTests, ReadingEmbedTests)
+// prove today's TEXT but not PROVENANCE. This census's first form
+// blacklisted the title phrases in host literals, and codex round 2 showed
+// why that cannot hold: "Embedded " + "note: " + path spells the phrase in
+// no one literal and reads identically.
 //
 // So the census reads provenance AT THE SINKS — every place a card title is
 // handed on toward a reader — and asks what arrives there:
@@ -38,12 +54,14 @@
 //   the node record's Title; the popover properties' accessors and backing
 //   fields, and the peer the popover's host hands its name through; the
 //   renderer's Header / Text / UIA Name, on WPF's own controls with no
-//   format, template or style of the renderer's; the landmark's store and
-//   read.
+//   format, template or style of the renderer's, and every other name or
+//   text it writes a registered form; the landmark's store and read.
 // - The XAML that binds the header, the popover image's name, the popover's
 //   name and each card root is a plain {Binding}: no StringFormat, converter,
 //   fallback text or MultiBinding, and no static sibling text or static name
-//   beside it (EmbedPreviewTitleCensus.Xaml.cs).
+//   beside it; and no Expander style or template, nor a template for every
+//   string, with the type read through the namespace map
+//   (EmbedPreviewTitleCensus.Xaml.cs).
 //
 // The phrase blacklist stays as a second net, and the publisher facts still
 // read the one EmbedPreviewShown: its data is the content's Resolved and the
@@ -255,6 +273,8 @@ public sealed partial class EmbedPreviewTitleCensus
     [InlineData("EditorInteractions.cs", new[] { "$\"{coreTitle} — source line {sourceLine}\"", "$\"Embedded {coreTitle} — source line {sourceLine}\"" }, "adds host text beyond the source-line locator")]
     [InlineData("EditorInteractions.cs", new[] { "private set => SetField(ref _popoverTitle, value);", "private set => SetField(ref _popoverTitle, \"Embedded \" + value);" }, "PopoverTitle's setter")]
     [InlineData("EditorEmbedPreview.cs", new[] { "Header = node.Title,", "Header = \"Embedded \" + node.Title," }, "the renderer composes a card's Title")]
+    [InlineData("EditorEmbedPreview.cs", new[] { "        AutomationProperties.SetName(expander, node.Title);\n", "        AutomationProperties.SetName(expander, node.Title);\n        AutomationProperties.SetName(expander, \"Preview \" + AutomationProperties.GetName(expander));\n" }, "which is neither a card's Title nor a text the census registers")]
+    [InlineData("EditorEmbedPreview.cs", new[] { "        AutomationProperties.SetName(expander, node.Title);\n", "        AutomationProperties.SetName(expander, node.Title);\n        expander.Header = \"Preview: \" + expander.Header;\n" }, "which is neither a card's Title nor a text the census registers")]
     [InlineData("EditorEmbedPreview.cs", new[] { "        var expander = new Expander\n", "        var expander = new EmbedCardExpander\n", "internal sealed record EditorEmbedPreviewPart(", "internal sealed class EmbedCardExpander : Expander\n{\n}\n\ninternal sealed record EditorEmbedPreviewPart(" }, "a host type whose automation peer")]
     [InlineData("EditorEmbedPreview.cs", new[] { "        AutomationProperties.SetName(expander, node.Title);\n", "        AutomationProperties.SetName(expander, node.Title);\n        expander.SetResourceReference(FrameworkElement.StyleProperty, \"EmbedCardStyle\");\n" }, "the renderer sets Style")]
     [InlineData("AutomationLandmark.cs", new[] { "    protected override string GetClassNameCore() => \"SlateLandmark\";", "    protected override string GetClassNameCore() => \"SlateLandmark\";\n\n    protected override string GetNameCore() => \"Embedded \" + base.GetNameCore();" }, "overrides GetNameCore")]
@@ -287,6 +307,9 @@ public sealed partial class EmbedPreviewTitleCensus
     [InlineData("WorkspaceTemplates.xaml", "AutomationProperties.Name=\"{Binding EditorInteractions.PopoverTitle}\" />", "AutomationProperties.Name=\"{Binding EditorInteractions.PopoverTitle, Converter={StaticResource EmbeddedPrefixConverter}}\" />", "Converter")]
     [InlineData("MainWindow.xaml", "<local:EditorEmbedPreviewView Root=\"{Binding Node}\"", "<local:EditorEmbedPreviewView Root=\"{Binding Node, Converter={StaticResource EmbeddedPrefixConverter}}\"", "Converter")]
     [InlineData("WorkspaceTemplates.xaml", "<TextBlock Text=\"{Binding EditorInteractions.PopoverTitle}\"", "<local:TitleBlock Text=\"{Binding EditorInteractions.PopoverTitle}\"", "a title sink the census does not expect")]
+    [InlineData("WorkspaceTemplates.xaml", "    <local:IsNotNullConverter x:Key=\"IsNotNullConverter\" />", "    <local:IsNotNullConverter x:Key=\"IsNotNullConverter\" />\n    <Style xmlns:wpf=\"http://schemas.microsoft.com/winfx/2006/xaml/presentation\" TargetType=\"{x:Type wpf:Expander}\"><Setter Property=\"HeaderTemplate\"><Setter.Value><DataTemplate><TextBlock Text=\"{Binding StringFormat='Preview: {0}'}\" /></DataTemplate></Setter.Value></Setter></Style>", "an Expander style sets HeaderTemplate")]
+    [InlineData("WorkspaceTemplates.xaml", "    <local:IsNotNullConverter x:Key=\"IsNotNullConverter\" />", "    <local:IsNotNullConverter x:Key=\"IsNotNullConverter\" />\n    <Style xmlns:c=\"clr-namespace:System.Windows.Controls;assembly=PresentationFramework\" x:Key=\"{x:Type TypeName=c:Expander}\"><Setter Property=\"Expander.HeaderStringFormat\" Value=\"Preview: {0}\" /></Style>", "an Expander style sets Expander.HeaderStringFormat")]
+    [InlineData("WorkspaceTemplates.xaml", "    <local:IsNotNullConverter x:Key=\"IsNotNullConverter\" />", "    <local:IsNotNullConverter x:Key=\"IsNotNullConverter\" />\n    <DataTemplate xmlns:sys=\"clr-namespace:System;assembly=System.Runtime\" DataType=\"{x:Type sys:String}\"><TextBlock Text=\"{Binding StringFormat='Preview: {0}'}\" /></DataTemplate>", "a DataTemplate for every string")]
     [InlineData("MainWindow.xaml", "<local:EditorEmbedPreviewView Root=\"{Binding Node}\"", "<TextBlock Text=\"{Binding Node.Title, StringFormat='Embedded {0}'}\" /><local:EditorEmbedPreviewView Root=\"{Binding Node}\"", "StringFormat")]
     public void EveryHostCompositionReachingAXamlSinkIsNamed(
         string file, string original, string replacement, string cause)

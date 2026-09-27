@@ -136,14 +136,17 @@ public sealed partial class EmbedPreviewTitleCensus
                         + "can read.");
                 }
 
-                // The renderer's cards are Expanders built in C#; a style or
-                // template for Expander could wrap every card title in text.
-                if (name is "Style" or "ControlTemplate" && TargetsExpander(element))
+                // The renderer's cards are Expanders built in C# and their
+                // headers are strings; a style or template for Expander, or
+                // a template for every string, could wrap each card title in
+                // text. The type is read through the element's namespace map
+                // (codex round 3: `{x:Type wpf:Expander}` under an alias).
+                if (name is "Style" or "ControlTemplate"
+                    && (IsType(element, "TargetType", Expander) || IsType(element, "Key", Expander)))
                 {
                     foreach (XElement setter in element.Descendants().Where(child => child.Name.LocalName == "Setter"
                         && (string?)child.Attribute("Property") is { } set
-                        && (set.EndsWith("StringFormat", StringComparison.Ordinal)
-                            || set.EndsWith("Template", StringComparison.Ordinal))))
+                        && WrapsHeader(set)))
                     {
                         failures.Add($"{file}:{((IXmlLineInfo)setter).LineNumber}: an Expander style sets "
                             + $"{(string?)setter.Attribute("Property")}, which can wrap a card's title in text.");
@@ -152,6 +155,11 @@ public sealed partial class EmbedPreviewTitleCensus
                     {
                         failures.Add($"{where}: an Expander template, which can wrap a card's title in text.");
                     }
+                }
+                if (name is "DataTemplate" && (IsType(element, "DataType", SystemString) || IsType(element, "Key", SystemString)))
+                {
+                    failures.Add($"{where}: a DataTemplate for every string, which templates a card's header "
+                        + "and can wrap its title in text.");
                 }
             }
         }
@@ -249,9 +257,72 @@ public sealed partial class EmbedPreviewTitleCensus
     private static bool MentionsSink(string value) =>
         XamlSinkProperties.Any(property => value.Contains(property, StringComparison.Ordinal));
 
-    private static bool TargetsExpander(XElement element) =>
-        ((string?)element.Attribute("TargetType"))?.Replace(" ", string.Empty, StringComparison.Ordinal)
-            is "Expander" or "{x:TypeExpander}";
+    private const string Xaml = "http://schemas.microsoft.com/winfx/2006/xaml";
+
+    /// <summary>WPF's Expander, under either namespace XAML can name it by.</summary>
+    private static readonly (string Namespace, string Name)[] Expander =
+    [
+        (Presentation, "Expander"),
+        ("clr-namespace:System.Windows.Controls;assembly=PresentationFramework", "Expander"),
+    ];
+
+    /// <summary>System.String, under the namespaces XAML can name it by.</summary>
+    private static readonly (string Namespace, string Name)[] SystemString =
+    [
+        (Xaml, "String"),
+        ("clr-namespace:System;assembly=mscorlib", "String"),
+        ("clr-namespace:System;assembly=System.Runtime", "String"),
+        ("clr-namespace:System;assembly=netstandard", "String"),
+        ("clr-namespace:System;assembly=System.Private.CoreLib", "String"),
+    ];
+
+    private static bool WrapsHeader(string property)
+    {
+        string member = property[(property.LastIndexOf('.') + 1)..];
+        return member is "Header" or "Style"
+            || member.EndsWith("StringFormat", StringComparison.Ordinal)
+            || member.EndsWith("Template", StringComparison.Ordinal)
+            || member.EndsWith("TemplateSelector", StringComparison.Ordinal);
+    }
+
+    /// <summary>Whether an attribute names one of these types — spelled
+    /// `Prefix:Name`, bare, or as `{x:Type …}` (positional or TypeName=) —
+    /// with its prefix resolved through the element's namespace map, never
+    /// by the prefix's spelling. The x:Key attribute is read in the XAML
+    /// namespace.</summary>
+    private static bool IsType(XElement element, string attribute, (string Namespace, string Name)[] types)
+    {
+        XAttribute? found = attribute == "Key"
+            ? element.Attribute(XName.Get("Key", Xaml))
+            : element.Attribute(attribute);
+        if (found is null)
+        {
+            return false;
+        }
+        string value = found.Value.Trim();
+        if (Markup.Parse(value) is { } markup)
+        {
+            (string? extensionNamespace, string extension) = Qualified(element, markup.Name);
+            if (extension != "Type" || extensionNamespace != Xaml)
+            {
+                return false;
+            }
+            value = markup.Named.Where(named => named.Key == "TypeName").Select(named => named.Value)
+                .FirstOrDefault() ?? markup.Positional.FirstOrDefault() ?? string.Empty;
+        }
+        (string? typeNamespace, string typeName) = Qualified(element, value);
+        return types.Any(type => type.Namespace == typeNamespace && type.Name == typeName);
+    }
+
+    /// <summary>`prefix:Name` resolved to (namespace, Name); a bare name is
+    /// in the element's default namespace.</summary>
+    private static (string? Namespace, string Name) Qualified(XElement element, string spelled)
+    {
+        int colon = spelled.IndexOf(':', StringComparison.Ordinal);
+        return colon < 0
+            ? (element.GetDefaultNamespace().NamespaceName, spelled)
+            : (element.GetNamespaceOfPrefix(spelled[..colon])?.NamespaceName, spelled[(colon + 1)..]);
+    }
 
     /// <summary>A XAML markup extension — <c>{Name positional, Key=Value}</c>
     /// — split at its top-level commas; nested braces and quoted text stay

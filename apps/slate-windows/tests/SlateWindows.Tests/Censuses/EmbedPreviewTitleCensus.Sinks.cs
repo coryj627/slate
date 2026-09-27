@@ -225,6 +225,7 @@ public sealed partial class EmbedPreviewTitleCensus
                     break;
                 case ClassDeclarationSyntax renderer when renderer.Identifier.ValueText == Renderer:
                     failures.AddRange(RendererWrapping(file, renderer));
+                    failures.AddRange(RendererTextFailures(file, renderer));
                     break;
                 case ClassDeclarationSyntax host when host.Identifier.ValueText == PopoverHost:
                     ScanPopoverHost(file, host, sinks, failures);
@@ -600,6 +601,102 @@ public sealed partial class EmbedPreviewTitleCensus
             }
         }
     }
+
+    /// <summary>What the renderer may say besides a card's Title, by target
+    /// and value exactly as written: the body's and the Jump button's names,
+    /// the body's text, the expander's content, the button's label and the
+    /// view's own content. Each occurs once.</summary>
+    private static readonly (string Target, string Value)[] RendererTexts =
+    [
+        ("Name", "\"Embedded content\""),
+        ("Name", "$\"Jump to source: {sourcePath}\""),
+        ("Text", "part.Text"),
+        ("Content", "content"),
+        ("Content", "\"Jump to source\""),
+        ("Content", "Rootisnull?null:BuildNode(Root)"),
+    ];
+
+    private static readonly string[] TextTargets = ["Name", "Header", "Content", "Text", "ToolTip"];
+
+    /// <summary>Every UIA Name the renderer writes and every text it sets on a
+    /// control is a card's Title (read above) or a registered form; a name is
+    /// never read back to compose, and no other route writes one (codex round
+    /// 3: a second SetName after the validated one, built from GetName).</summary>
+    private static IEnumerable<string> RendererTextFailures(string file, ClassDeclarationSyntax renderer)
+    {
+        var seen = new List<(string Target, string Value)>();
+        foreach (SyntaxNode node in renderer.DescendantNodes())
+        {
+            (string Target, ExpressionSyntax Value)? write = null;
+            switch (node)
+            {
+                case InvocationExpressionSyntax call when AutomationMember(call) is { } member:
+                    switch (member)
+                    {
+                        case "SetName" when call.ArgumentList.Arguments is [_, var named]:
+                            write = ("Name", named.Expression);
+                            break;
+                        case "GetName" or "SetLabeledBy":
+                            yield return $"{file}:{Line(call)}: the renderer calls AutomationProperties.{member} — a "
+                                + $"card's name is never read back or borrowed: `{Short(call)}`.";
+                            break;
+                    }
+                    break;
+                case InvocationExpressionSyntax { ArgumentList.Arguments: [var property, ..] } call
+                    when InvokedName(call) is "SetValue" or "SetCurrentValue" or "SetBinding" or "SetResourceReference"
+                        && CSharpSource.Normalize(property.Expression).Split('.')[^1] is var named
+                        && named.EndsWith("Property", StringComparison.Ordinal)
+                        && TextTargets.Contains(named[..^"Property".Length]):
+                    yield return $"{file}:{Line(call)}: the renderer writes {named[..^"Property".Length]} through "
+                        + $"{InvokedName(call)}, a route the census does not read: `{Short(call)}`.";
+                    break;
+                case AssignmentExpressionSyntax assignment
+                    when (assignment.Left switch
+                    {
+                        IdentifierNameSyntax identifier => identifier.Identifier.ValueText,
+                        MemberAccessExpressionSyntax access => access.Name.Identifier.ValueText,
+                        _ => null,
+                    }) is { } target && TextTargets.Contains(target):
+                    write = (target, assignment.Right);
+                    break;
+            }
+
+            if (write is not { } found || IsTitleRead(found.Value))
+            {
+                continue;
+            }
+            string value = CSharpSource.Normalize(found.Value);
+            if (RendererTexts.Contains((found.Target, value)))
+            {
+                seen.Add((found.Target, value));
+            }
+            else
+            {
+                yield return $"{file}:{Line(node)}: the renderer writes {found.Target} = `{Short(found.Value)}`, "
+                    + "which is neither a card's Title nor a text the census registers.";
+            }
+        }
+        foreach ((string target, string value) in RendererTexts.Where(text => seen.Count(written => written == text) != 1))
+        {
+            yield return $"{file}: the renderer writes {target} = `{value}` {seen.Count(written => written == (target, value))} "
+                + "times; the census registers it once.";
+        }
+    }
+
+    private static string? AutomationMember(InvocationExpressionSyntax call) =>
+        call.Expression is MemberAccessExpressionSyntax access
+        && CSharpSource.Normalize(access.Expression) is "AutomationProperties"
+            or "System.Windows.Automation.AutomationProperties"
+            or "global::System.Windows.Automation.AutomationProperties"
+            ? access.Name.Identifier.ValueText
+            : null;
+
+    private static bool IsTitleRead(ExpressionSyntax value) => Unwrap(value) switch
+    {
+        MemberAccessExpressionSyntax { Name.Identifier.ValueText: "Title" } => true,
+        ConditionalAccessExpressionSyntax { WhenNotNull: MemberBindingExpressionSyntax { Name.Identifier.ValueText: "Title" } } => true,
+        _ => false,
+    };
 
     private static bool InRenderer(SyntaxNode node) =>
         node.Ancestors().OfType<ClassDeclarationSyntax>().Any(type => type.Identifier.ValueText == Renderer);
