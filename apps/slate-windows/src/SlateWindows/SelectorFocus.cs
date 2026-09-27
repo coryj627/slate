@@ -285,6 +285,61 @@ internal static class SelectorFocus
             _ => stop.Focus() || stop.IsKeyboardFocusWithin,
         };
 
+    /// <summary>
+    /// W7-7 PR 4 (#1247; codex PR 4 round 7's findings 1, 2 and 4 — the
+    /// owner's structural rule): the row a KEYBOARD action, or a menu the
+    /// keyboard opened, acts on is the row that holds the keys — the row the
+    /// reader hears — and the container's selection only when the keys are
+    /// on no row of it.
+    /// </summary>
+    /// <remarks>
+    /// A landing focuses a row without selecting it (the owner's
+    /// focus-without-select, OD-11b), so the row the reader is on and the
+    /// container's <c>SelectedItem</c> can part: Enter on a landed Backlinks
+    /// row did nothing, Space on a landed task only selected it, Enter on a
+    /// Bases list row the quick filter's Escape landed on opened nothing, and
+    /// Connections' Enter and Shift+F10 acted on a selection hidden under a
+    /// collapsed row. Every keyboard and keyboard-menu handler over a landing
+    /// container resolves its row here (<c>FocusedRowCensus</c>).
+    /// </remarks>
+    internal static object? FocusedOrSelectedItem(ItemsControl container) =>
+        FocusedItem(container) ?? container switch
+        {
+            Selector list => list.SelectedItem,
+            TreeView tree => tree.SelectedItem,
+            _ => null,
+        };
+
+    /// <summary>The item of <paramref name="container"/>'s row that holds
+    /// the keys — the focused row, or the row the focused element sits in —
+    /// else null.</summary>
+    internal static object? FocusedItem(ItemsControl container)
+    {
+        if (!container.IsKeyboardFocusWithin || Keyboard.FocusedElement is not DependencyObject focused)
+        {
+            return null;
+        }
+
+        for (DependencyObject? current = focused;
+            current is not null && !ReferenceEquals(current, container);
+            current = current is Visual or System.Windows.Media.Media3D.Visual3D
+                ? VisualTreeHelper.GetParent(current) ?? LogicalTreeHelper.GetParent(current)
+                : LogicalTreeHelper.GetParent(current))
+        {
+            if (current is (ListBoxItem or TreeViewItem) and UIElement row
+                && ReferenceEquals(RowOwner(row), container)
+                && ItemsControl.ItemsControlFromItemContainer(row) is { } level)
+            {
+                object item = level.ItemContainerGenerator.ItemFromContainer(row);
+                return ReferenceEquals(item, DependencyProperty.UnsetValue)
+                    ? (row as FrameworkElement)?.DataContext
+                    : item;
+            }
+        }
+
+        return null;
+    }
+
     /// <summary>The container a row token belongs to: a tree row's tree, a
     /// list row's list, a grid cell's or row's grid; null for anything
     /// else.</summary>

@@ -1069,6 +1069,133 @@ public sealed class ConnectionsLeafViewTests
         });
     }
 
+    /// <summary>
+    /// W7-7 PR 4 (#1247; codex round 7 finding 1): the leaf has ONE row
+    /// landing, and it respects only a SHOWN selection — a nested connection
+    /// selected and then hidden by collapsing its parent is not re-expanded
+    /// by the boundary's landing, which lands on the first row unselected as
+    /// Tab and UI Automation's SetFocus do; and Enter, Ctrl+Enter and the
+    /// keyboard's menu act on the row that holds the keys, never on the
+    /// hidden selection.
+    /// </summary>
+    [Fact]
+    public void ALandingRespectsOnlyAShownSelectionAndTheKeysActOnTheFocusedRow()
+    {
+        RunSta(() =>
+        {
+            using var host = new Host("focused-row");
+            host.ActivateLeaf();
+            host.OpenNote(Hub);
+            host.Leaf.SetDepth(2);
+            host.Settle();
+            // Pinned on the hub, so an open keeps the hub's tree in view.
+            Assert.True(host.Workspace.ReRootConnectionsOn(Hub));
+            host.Settle();
+            var view = new ConnectionsLeafView { Model = host.Leaf };
+            var outside = new Button { Content = "Outside" };
+            var window = new Window
+            {
+                Width = 400,
+                Height = 700,
+                ShowInTaskbar = false,
+                WindowStyle = WindowStyle.None,
+                Content = new DockPanel { Children = { outside, view } },
+            };
+            DockPanel.SetDock(outside, Dock.Top);
+            window.Show();
+            view.UpdateLayout();
+            try
+            {
+                WorkspaceGroupViewModel group = host.Workspace.ActiveGroup;
+                ConnectionsRowViewModel parent = view.RootsForTests[1].Children.First(r => r.Children.Count > 0);
+                ConnectionsRowViewModel hidden = parent.Children.First(r => r.Row is { Kind: GraphNodeKind.Note });
+                // The nested row realized, its parent collapsed, and THEN the
+                // selection moved onto it — the leaf's selection sync seats a
+                // row wherever the selection is (collapsing over a selected row
+                // would have moved the selection up to the collapsed one).
+                Assert.NotNull(view.RealizeContainer(hidden));
+                parent.IsExpanded = false;
+                view.UpdateLayout();
+                hidden.IsSelected = true;
+                Assert.Same(hidden, view.TreeForTests.SelectedItem);
+                Assert.False(parent.IsExpanded, "premise: the parent did not stay collapsed");
+
+                // The boundary's landing: the first row, unselected; the
+                // collapsed parent stays collapsed, the hidden selection stays.
+                Assert.True(outside.Focus());
+                Assert.True(view.FocusAnchor());
+                Assert.Same(view.RootsForTests[0], Assert.IsType<ConnectionsTreeItem>(Keyboard.FocusedElement).DataContext);
+                Assert.False(parent.IsExpanded, "the landing re-expanded the row above the hidden selection");
+                Assert.Same(hidden, view.TreeForTests.SelectedItem);
+
+                // Tab's and UI Automation's landing is the same one.
+                Assert.True(outside.Focus());
+                Assert.True(SelectorFocus.LandOnStop(view.TreeForTests));
+                Assert.Same(view.RootsForTests[0], Assert.IsType<ConnectionsTreeItem>(Keyboard.FocusedElement).DataContext);
+                Assert.False(parent.IsExpanded);
+
+                // A shown note row holds the keys, unselected: Ctrl+Enter
+                // opens IT in a new tab...
+                ConnectionsRowViewModel shown = view.RootsForTests[0].Children
+                    .First(r => r.Row is { Kind: GraphNodeKind.Note } row && row.Path != hidden.Row!.Path && row.Path != Two);
+                FocusUnselected(view, shown);
+                int tabs = group.Tabs.Count;
+                Assert.True(view.TryHandleTreeKey(Key.Return, ModifierKeys.Control));
+                Assert.Equal(tabs + 1, group.Tabs.Count);
+                Assert.Equal(shown.Row!.Path, group.ActiveTab!.Path);
+                host.Settle();
+                view.UpdateLayout();
+
+                // ...and Enter opens IT in the current tab (from another
+                // note, so the open is observable).
+                host.OpenNote(Two);
+                host.Settle();
+                view.UpdateLayout();
+                Assert.Equal(Two, group.ActiveTab!.Path);
+                FocusUnselected(view, shown);
+                Assert.True(view.TryHandleTreeKey(Key.Return, ModifierKeys.None));
+                Assert.Equal(shown.Row!.Path, group.ActiveTab!.Path);
+                Assert.Equal(tabs + 1, group.Tabs.Count);
+                host.Settle();
+                view.UpdateLayout();
+
+                // Shift+F10's menu is the focused row's: its Open opens IT
+                // (from another note, so the open is observable).
+                host.OpenNote(Two);
+                host.Settle();
+                view.UpdateLayout();
+                Assert.Equal(Two, group.ActiveTab!.Path);
+                FocusUnselected(view, shown);
+                var request = (ContextMenuEventArgs)Activator.CreateInstance(
+                    typeof(ContextMenuEventArgs),
+                    System.Reflection.BindingFlags.Instance | System.Reflection.BindingFlags.NonPublic,
+                    null,
+                    [Keyboard.FocusedElement, true],
+                    null)!;
+                request.RoutedEvent = FrameworkElement.ContextMenuOpeningEvent;
+                ((UIElement)Keyboard.FocusedElement).RaiseEvent(request);
+                Assert.False(request.Handled, "the keyboard's menu request over a focused note row was refused");
+                string open = host.Leaf.ActionSpecs(GraphNodeKind.Note).First(spec => spec.Action == GraphRowAction.Open).Title;
+                MenuItem openItem = view.RowMenuForTests.Items.OfType<MenuItem>().Single(item => (string)item.Header == open);
+                openItem.RaiseEvent(new RoutedEventArgs(MenuItem.ClickEvent));
+                Assert.Equal(shown.Row!.Path, group.ActiveTab!.Path);
+                Assert.Same(hidden, view.TreeForTests.SelectedItem);
+            }
+            finally
+            {
+                window.Close();
+            }
+        });
+
+        static void FocusUnselected(ConnectionsLeafView view, ConnectionsRowViewModel row)
+        {
+            ConnectionsTreeItem container = view.RealizeContainer(row)
+                ?? throw new Xunit.Sdk.XunitException($"{row.Id} has no container");
+            Assert.True(LandingTreeViewItem.FocusUnselected(container));
+            Assert.NotSame(row, view.TreeForTests.SelectedItem);
+        }
+    }
+
     /// <summary>W6-2 PR C (C-9): a verbosity change re-names the leaf's
     /// RETAINED rows at the new level — the copy to the bare label — with
     /// no load, no new publication and nothing spoken.</summary>

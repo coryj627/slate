@@ -468,8 +468,25 @@ public sealed class BaseSurfaceViewTests : IDisposable
             Assert.Same(
                 surface.ListForTests,
                 System.Windows.Controls.ItemsControl.ItemsControlFromItemContainer(row));
-            Assert.False(
-                Assert.IsAssignableFrom<SlateWindows.Bases.BaseListItemViewModel>(row.DataContext).IsHeader);
+            var landed = Assert.IsAssignableFrom<SlateWindows.Bases.BaseListItemViewModel>(row.DataContext);
+            Assert.False(landed.IsHeader);
+
+            // Codex PR 4 round 7 finding 4: the landing selects nothing, and
+            // Enter opens the row it landed on — the row the reader hears.
+            Assert.False(row.IsSelected, "premise: the landing selected its row");
+            var opened = new List<BasesRow>();
+            document.OpenRowFromSurface = opened.Add;
+            var enter = new System.Windows.Input.KeyEventArgs(
+                System.Windows.Input.Keyboard.PrimaryDevice,
+                System.Windows.PresentationSource.FromVisual(row)!,
+                0,
+                System.Windows.Input.Key.Enter)
+            {
+                RoutedEvent = System.Windows.Input.Keyboard.KeyDownEvent,
+            };
+            row.RaiseEvent(enter);
+            Assert.True(enter.Handled, "Enter on the landed row was not the list's");
+            Assert.Same(landed.Row, Assert.Single(opened));
         }
         finally
         {

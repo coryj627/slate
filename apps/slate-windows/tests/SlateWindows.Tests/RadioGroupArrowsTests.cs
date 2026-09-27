@@ -188,15 +188,66 @@ public sealed class RadioGroupArrowsTests
         Assert.Same(radios[2], Keyboard.FocusedElement);
         Assert.False(radios[0].IsChecked, "the landing checked the radio it was sent to");
 
-        // ...and a click on another radio — its press focuses it, which the
-        // entry redirects; its release checks it — brings the keys to the
-        // radio it checked: they never rest on an unchecked radio.
+        // ...and so does any other focus request from outside — a restore's
+        // Focus() — while a check made with the keys on the group brings
+        // them to the radio it checked: they never rest on an unchecked one.
         Assert.True(before.Focus());
         _ = radios[0].Focus();
         Assert.Same(radios[2], Keyboard.FocusedElement);
         radios[0].SetCurrentValue(System.Windows.Controls.Primitives.ToggleButton.IsCheckedProperty, true);
         Assert.Same(radios[0], Keyboard.FocusedElement);
         Assert.False(radios[2].IsChecked);
+    });
+
+    /// <summary>
+    /// Codex PR 4 round 7 finding 5: a POINTER press on a radio from outside
+    /// the group gives the keys to that radio, directly. The entry redirect
+    /// took the press's focus to the old checked radio, and the release's
+    /// check moved them on: two focus changes, the old choice spoken before
+    /// the new one. The press takes a real press's route — its tunnelling
+    /// PreviewMouseDown, then the bubbling MouseDown, which the radio turns
+    /// into its own mouse-down focus; the release's check follows. Keyboard
+    /// entry afterwards is still redirected. (The genuine click, with its UIA
+    /// focus events and its one announcement, is the RegionStops journey's.)
+    /// </summary>
+    [Fact]
+    public void APressFocusesTheRadioItPresses() => RunSta(() =>
+    {
+        (StackPanel group, RadioButton[] radios) = Group(3);
+        var before = new Button { Content = "Before" };
+        var root = new StackPanel();
+        root.Children.Add(before);
+        root.Children.Add(group);
+        using HostedWindow host = Host(root);
+        radios[2].IsChecked = true;
+        Assert.True(before.Focus());
+        var focusChanges = new List<IInputElement>();
+        Keyboard.AddGotKeyboardFocusHandler(root, (_, e) => focusChanges.Add(e.NewFocus));
+
+        int timestamp = Environment.TickCount;
+        radios[0].RaiseEvent(new MouseButtonEventArgs(Mouse.PrimaryDevice, timestamp, MouseButton.Left)
+        {
+            RoutedEvent = Mouse.PreviewMouseDownEvent,
+        });
+        radios[0].RaiseEvent(new MouseButtonEventArgs(Mouse.PrimaryDevice, timestamp, MouseButton.Left)
+        {
+            RoutedEvent = Mouse.MouseDownEvent,
+        });
+
+        Assert.Equal([radios[0]], focusChanges);
+        // The release checks it; the keys are already there.
+        radios[0].SetCurrentValue(System.Windows.Controls.Primitives.ToggleButton.IsCheckedProperty, true);
+        Assert.Equal([radios[0]], focusChanges);
+        Assert.False(radios[2].IsChecked);
+
+        // The press is over: keys entering from outside onto an unchecked
+        // radio go on to the checked one again.
+        PumpedDispatcher.Drain();
+        Assert.True(before.Focus());
+        focusChanges.Clear();
+        _ = radios[1].Focus();
+        Assert.Same(radios[0], Keyboard.FocusedElement);
+        Assert.DoesNotContain(radios[1], focusChanges);
     });
 
     [Fact]

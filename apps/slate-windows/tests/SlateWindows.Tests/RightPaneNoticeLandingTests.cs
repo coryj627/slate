@@ -218,6 +218,111 @@ public sealed class RightPaneNoticeLandingTests
         Assert.Empty(host.Announced);
     });
 
+    public static TheoryData<string, string, Key> LandedRowActions()
+    {
+        var data = new TheoryData<string, string, Key>();
+        foreach (string leaf in new[] { "backlinks", "outgoingLinks", "outline", "tasks" })
+        {
+            foreach (string landing in new[] { "boundary", "empty-area click", "publication" })
+            {
+                data.Add(leaf, landing, Key.Enter);
+                if (leaf == "tasks")
+                {
+                    data.Add(leaf, landing, Key.Space);
+                }
+            }
+        }
+
+        return data;
+    }
+
+    /// <summary>
+    /// Codex PR 4 round 7 finding 2: a landing puts the keys on a row
+    /// WITHOUT selecting it — the leaf's boundary landing, a click on the
+    /// list's empty area, a publication under the reader — and the leaf's
+    /// keys act on that row with ONE press. Every handler read the list's
+    /// selection: Enter did nothing, and Space on a task only selected it.
+    /// The actions are recorded where the leaf model hands them on.
+    /// </summary>
+    [Theory]
+    [MemberData(nameof(LandedRowActions))]
+    public void OnePressActsOnTheRowALandingFocused(string leaf, string landing, Key key) => RunSta(() =>
+    {
+        using var host = new Host();
+        host.Initialize(leaf, "empty");
+        host.AwaitFinalNotice(leaf);
+        host.AttachWorkspaceToTheWindow();
+        List<string> acted = RecordActions(host.Panels);
+        ListBox list = host.List(leaf);
+        Publish(host.Panels, leaf, rows: 3);
+        PumpedDispatcher.Drain();
+        Assert.True(host.Beside.Focus());
+        switch (landing)
+        {
+            case "boundary":
+                host.Shell.LandInRightPane();
+                break;
+            case "empty-area click":
+                SelectorFocus.RegisterClickRule();
+                list.RaiseEvent(new MouseButtonEventArgs(Mouse.PrimaryDevice, Environment.TickCount, MouseButton.Left)
+                {
+                    RoutedEvent = UIElement.MouseDownEvent,
+                });
+                break;
+            default:
+                // The reader on row 1 (the arrow selects it), the rows
+                // republished under them: the keeper lands them on a row.
+                host.Shell.LandInRightPane();
+                host.Press(Key.Down);
+                Publish(host.Panels, leaf, rows: 3);
+                PumpedDispatcher.Drain();
+                break;
+        }
+
+        var row = Assert.IsType<ListBoxItem>(Keyboard.FocusedElement);
+        Assert.Same(list, ItemsControl.ItemsControlFromItemContainer(row));
+        Assert.False(row.IsSelected, $"premise: the {landing} landing selected its row");
+        string expected = row.DataContext switch
+        {
+            BacklinkRowViewModel backlink => backlink.SourcePath,
+            OutgoingLinkRowViewModel outgoing => outgoing.Link.TargetPath!,
+            OutlineRowViewModel heading => heading.AnchorId,
+            NoteTaskRowViewModel task => (key == Key.Space ? "toggle " : "open ") + task.Task.Text,
+            _ => throw new Xunit.Sdk.XunitException($"an unexpected row {row.DataContext}"),
+        };
+        acted.Clear();
+
+        host.Press(key);
+
+        Assert.Equal([expected], acted);
+    });
+
+    /// <summary>The leaf model's hand-offs — open, scroll, toggle —
+    /// replaced by recorders.</summary>
+    private static List<string> RecordActions(RightPanePanelsViewModel panels)
+    {
+        var acted = new List<string>();
+        const BindingFlags any = BindingFlags.NonPublic | BindingFlags.Instance;
+        void Replace(string field, object recorder) =>
+            (typeof(RightPanePanelsViewModel).GetField(field, any)
+                ?? throw new InvalidOperationException($"{field} is gone"))
+            .SetValue(panels, recorder);
+
+        Replace("_openInternal", new Func<string, WorkspaceOpenTarget, bool>((path, _) =>
+        {
+            acted.Add(path);
+            return false;
+        }));
+        Replace("_scrollToAnchor", new Action<LinkAnchor, string?>((anchor, _) => acted.Add(anchor.Text)));
+        Replace("_scrollToTask", new Action<TaskItem, string>((task, _) => acted.Add("open " + task.Text)));
+        Replace("_toggleTask", new Func<TaskItem, string, bool>((task, _) =>
+        {
+            acted.Add("toggle " + task.Text);
+            return true;
+        }));
+        return acted;
+    }
+
     /// <summary>Codex round 5: the Embeds leaf's host and its cards'
     /// renderers are layout, not stops. The landing is inside a card —
     /// here its Jump to source button — never the populated host; while
@@ -614,10 +719,25 @@ public sealed class RightPaneNoticeLandingTests
             PumpedDispatcher.Drain();
         }
 
+        /// <summary>The window's leaf handlers reach the leaves' models
+        /// through the lifecycle model, as in the app.</summary>
+        public void AttachWorkspaceToTheWindow()
+        {
+            var lifecycle = Assert.IsType<VaultLifecycleViewModel>(Shell.DataContext);
+            (typeof(VaultLifecycleViewModel).GetProperty(nameof(VaultLifecycleViewModel.Workspace))
+                ?? throw new InvalidOperationException("Workspace is gone"))
+                .SetValue(lifecycle, _workspace);
+        }
+
         public void Dispose()
         {
             try
             {
+                if (Shell?.DataContext is VaultLifecycleViewModel lifecycle && lifecycle.Workspace is not null)
+                {
+                    typeof(VaultLifecycleViewModel).GetProperty(nameof(VaultLifecycleViewModel.Workspace))!.SetValue(lifecycle, null);
+                }
+
                 _window?.Close();
                 Shell?.Close();
                 _workspace?.Dispose();
