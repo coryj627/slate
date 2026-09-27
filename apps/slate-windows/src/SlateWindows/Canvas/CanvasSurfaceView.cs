@@ -1172,7 +1172,7 @@ internal sealed class CanvasSurfaceView : UserControl, ICanvasSurfacePresenter
         {
             return;
         }
-        bool delivered;
+        LandingSeat seat;
         switch (model.State)
         {
             case CanvasLoadState.Loading:
@@ -1186,34 +1186,46 @@ internal sealed class CanvasSurfaceView : UserControl, ICanvasSurfacePresenter
                 // stop is the renderer (D15), never the filter field. Its
                 // emptiness is the scene's; an actually empty board falls to the
                 // onboarding below.
-                delivered = SeatTerminally(() => model.BoardLandingNodeFor(request) is { } boardNode
-                    && LandOnBoard(model, boardNode));
+                seat = SeatTerminally(() => model.BoardLandingNodeFor(request) is { } boardNode
+                    ? LandOnBoard(model, boardNode)
+                    : LandingSeat.Refused);
                 break;
             case CanvasLoadState.Ready when model.FilteredOutline.Count == 0:
-                delivered = SeatTerminally(() => _onboarding.IsVisible
-                    ? _onboarding.Focus()
-                    : _filterField.Focus());
+                seat = SeatTerminally(() => LandingSeats.On(_onboarding.IsVisible ? _onboarding : _filterField));
                 break;
             case CanvasLoadState.Ready:
                 // Whichever projection is SHOWING is the one that can
                 // deliver: a row in a collapsed view has no container to
-                // realize and no focus to take (A14, PR B's arm).
-                delivered = SeatTerminally(() => model.FocusLandingNodeFor(request) is { } nodeId
-                    && (model.Selection.ActiveSurface == CanvasSurfaceKind.Table
-                        ? _table.DeliverFocus(nodeId)
-                        : _outline.DeliverFocus(nodeId) is not null));
+                // realize and no focus to take (A14, PR B's arm). A named
+                // row this projection does not show is no landing at all.
+                seat = SeatTerminally(() => model.FocusLandingNodeFor(request) is { } nodeId
+                    ? model.Selection.ActiveSurface == CanvasSurfaceKind.Table
+                        ? _table.SeatFocus(nodeId)
+                        : _outline.SeatFocus(nodeId)
+                    : LandingSeat.Refused);
                 break;
             default:
-                delivered = SeatTerminally(_stateBanner.Focus);
+                seat = SeatTerminally(() => LandingSeats.On(_stateBanner));
                 break;
         }
-        if (delivered)
+        // R-10: tri-state. A realized target that refused focus ends the
+        // request REFUSED — left pending, nothing would ever seat it, and the
+        // ring (or the route's fallback) would never resume.
+        if (seat == LandingSeat.NotYet)
+        {
+            return;
+        }
+        if (seat == LandingSeat.Seated)
         {
             model.CompleteFocusLanding(request);
-            if (ReferenceEquals(_deferredRestoration, request))
-            {
-                _deferredRestoration = null;
-            }
+        }
+        else
+        {
+            model.ReleaseFocusLanding(request);
+        }
+        if (ReferenceEquals(_deferredRestoration, request))
+        {
+            _deferredRestoration = null;
         }
     }
 
@@ -1223,18 +1235,18 @@ internal sealed class CanvasSurfaceView : UserControl, ICanvasSurfacePresenter
     /// the board seats its node silently (the node the outline or the table
     /// would seat), brings that card into view, and puts the reader on the
     /// renderer — delivered only when focus is really there.</summary>
-    private bool LandOnBoard(CanvasDocumentViewModel model, string nodeId)
+    private LandingSeat LandOnBoard(CanvasDocumentViewModel model, string nodeId)
     {
         model.SeatSelectionSilently(nodeId);
         _visual.RevealNode(nodeId);
-        return _visual.Focus() && _visual.IsKeyboardFocusWithin;
+        return LandingSeats.On(_visual);
     }
 
     /// <summary>R-10: every seat <see cref="TryDeliverFocus"/> makes completes
     /// the request, so each is the document's TERMINAL seat, declared as one: a
     /// held F6 landing takes the move for its arrival, not for the reader
     /// moving on inside the surface (<see cref="FocusDepartureWatch"/>).</summary>
-    private bool SeatTerminally(Func<bool> seat) => FocusDepartureWatch.SeatTerminally(this, seat);
+    private LandingSeat SeatTerminally(Func<LandingSeat> seat) => FocusDepartureWatch.SeatTerminally(this, seat);
 
     private void OnModelPropertyChanged(
         object? sender, System.ComponentModel.PropertyChangedEventArgs e)

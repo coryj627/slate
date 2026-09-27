@@ -133,11 +133,15 @@ internal sealed class CanvasTableView : UserControl
     /// panel makes the container.
     /// </para>
     /// </remarks>
-    internal bool DeliverFocus(string nodeId)
+    internal bool DeliverFocus(string nodeId) => SeatFocus(nodeId) == LandingSeat.Seated;
+
+    /// <summary>W7-7 PR 8 (R-10): <see cref="DeliverFocus"/> as the tri-state a
+    /// terminal landing needs (<see cref="AccessibleDataGrid.SeatRow"/>).</summary>
+    internal LandingSeat SeatFocus(string nodeId)
     {
         if (Model is not { } model)
         {
-            return false;
+            return LandingSeat.NotYet;
         }
         // Contract C12 / CD-40, the outline's twin one projection over:
         // seating currency IS taking focus in a DataGrid, so the guard
@@ -150,12 +154,12 @@ internal sealed class CanvasTableView : UserControl
         _syncingSelection = true;
         try
         {
-            bool delivered = _grid.SelectRow(row => IsNode(row, nodeId), moveFocus: true);
-            if (delivered)
+            LandingSeat seat = _grid.SeatRow(row => IsNode(row, nodeId));
+            if (seat == LandingSeat.Seated)
             {
                 model.SeatSelectionSilently(nodeId);
             }
-            return delivered;
+            return seat;
         }
         finally
         {

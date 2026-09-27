@@ -923,16 +923,8 @@ internal sealed class GraphSurfaceView : UserControl, IGraphSurfacePresenter
             }
             // The build's terminal seat completes the request: declared, so a
             // held F6 landing (R-10) takes the move for its arrival.
-            bool landed = FocusDepartureWatch.SeatTerminally(
-                this, () => model.HasLiveDiagram ? FocusDiagramProjection() : _stateHost.Focus());
-            if (landed)
-            {
-                model.CompleteFocus(request);
-                if (restoration)
-                {
-                    _deferredRestoration = null;
-                }
-            }
+            EndDelivery(model, request, restoration, FocusDepartureWatch.SeatTerminally(
+                this, () => LandingSeats.On(model.HasLiveDiagram ? _diagram : _stateHost)));
             return;
         }
         GraphPublication publication = model.Publication;
@@ -957,7 +949,7 @@ internal sealed class GraphSurfaceView : UserControl, IGraphSurfacePresenter
             }
             return;
         }
-        bool delivered;
+        LandingSeat seat;
         switch (publication.State)
         {
             case GraphLoadState.Ready:
@@ -972,24 +964,42 @@ internal sealed class GraphSurfaceView : UserControl, IGraphSurfacePresenter
                 // The grid may have been collapsed under EMPTY or ERROR: realise
                 // its containers before the seat (Term F2).
                 _table.UpdateLayout();
-                delivered = FocusDepartureWatch.SeatTerminally(this, _table.FocusProjection);
+                seat = FocusDepartureWatch.SeatTerminally(this, _table.SeatProjection);
                 break;
             case GraphLoadState.Empty:
             case GraphLoadState.Error:
-                delivered = FocusDepartureWatch.SeatTerminally(this, _stateHost.Focus);
+                seat = FocusDepartureWatch.SeatTerminally(this, () => LandingSeats.On(_stateHost));
                 break;
             default:
                 // Quiescent LOADING: nothing to land on; the transition's load
                 // will end in a terminal state that re-asks.
                 return;
         }
-        if (delivered)
+        EndDelivery(model, request, restoration, seat);
+    }
+
+    /// <summary>R-10's tri-state end of a terminal delivery: seated completes
+    /// the request; a realized target that refused focus RELEASES it — left
+    /// pending, nothing would ever seat it, and the F6 ring (or the route's
+    /// fallback) would never resume; not yet leaves it for the edge that
+    /// realizes the target.</summary>
+    private void EndDelivery(GraphDocumentViewModel model, GraphFocusRequest request, bool restoration, LandingSeat seat)
+    {
+        if (seat == LandingSeat.NotYet)
+        {
+            return;
+        }
+        if (seat == LandingSeat.Seated)
         {
             model.CompleteFocus(request);
-            if (restoration)
-            {
-                _deferredRestoration = null;
-            }
+        }
+        else
+        {
+            model.ReleaseFocus(request);
+        }
+        if (restoration)
+        {
+            _deferredRestoration = null;
         }
     }
 

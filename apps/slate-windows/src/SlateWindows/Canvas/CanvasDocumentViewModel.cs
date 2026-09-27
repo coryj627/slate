@@ -697,21 +697,27 @@ internal sealed class CanvasDocumentViewModel : PanelWorkScheduler
         return _outline.Count > 0 ? _outline[0].NodeId : null;
     }
 
-    /// <summary>The row a focus request should land on when it names
-    /// none: the row whose activation the user is returning from (WCAG
-    /// 2.4.3), else the first.</summary>
+    /// <summary>The row a landing on the OUTLINE or the TABLE seats — only a
+    /// row that projection SHOWS (the filtered rows): the named row, else the
+    /// row whose activation the user is returning from (WCAG 2.4.3), else the
+    /// first shown row. A named row that exists but the filter hides is no
+    /// landing (null): W7-7 R-10 — chosen from the whole canvas, it could
+    /// never be delivered, and the request stayed pending with nothing to
+    /// seat it. A named row that is gone falls through, as it always did.</summary>
     internal string? FocusLandingNodeFor(CanvasFocusRequest request)
     {
         ArgumentNullException.ThrowIfNull(request);
+        IReadOnlyList<CanvasOutlineRow> shown = FilteredOutline;
         if (request.NodeId is { } named && _rows.ContainsKey(named))
         {
-            return named;
+            return shown.Any(row => string.Equals(row.NodeId, named, StringComparison.Ordinal)) ? named : null;
         }
-        if (LastActivatedNode is { } last && _rows.ContainsKey(last))
+        if (LastActivatedNode is { } last
+            && shown.Any(row => string.Equals(row.NodeId, last, StringComparison.Ordinal)))
         {
             return last;
         }
-        return _outline.Count > 0 ? _outline[0].NodeId : null;
+        return shown.Count > 0 ? shown[0].NodeId : null;
     }
 
     /// <summary>The ONE surface switch (contracts A15/A18): the header

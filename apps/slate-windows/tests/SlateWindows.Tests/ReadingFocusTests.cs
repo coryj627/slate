@@ -1213,6 +1213,72 @@ public sealed class ReadingFocusTests
         Assert.False(host.Workspace.HoldsShellRegionLanding);
     });
 
+    /// <summary>R-10's tri-state terminal delivery: a canvas or graph whose
+    /// REALIZED terminal target refuses focus — the empty canvas's onboarding,
+    /// the Visual board's renderer, the graph's state host over nothing to
+    /// show — ends the landing REFUSED, inside the press or when the load it
+    /// waited on publishes. It is never left pending with nothing that will
+    /// ever seat it: the same press resumes at the next region, spoken once,
+    /// and the editor line is never spoken.</summary>
+    [Theory]
+    [InlineData("canvas onboarding", false)]
+    [InlineData("canvas onboarding", true)]
+    [InlineData("canvas renderer", false)]
+    [InlineData("graph state host", false)]
+    public void ATerminalSeatThatRefusesFocusIsARefusal(string target, bool afterItsLoad) => RunSta(() =>
+    {
+        using var host = new Host();
+        if (target == "canvas renderer")
+        {
+            host.Initialize(readingMode: false, documentKind: "canvas", board: CardBoard);
+            host.Tab.Canvas!.ShowSurface(CanvasSurfaceKind.Visual);
+        }
+        else
+        {
+            host.Initialize(target.StartsWith("canvas", StringComparison.Ordinal) ? "canvas" : "graph");
+        }
+        if (target == "graph state host")
+        {
+            GraphDocumentViewModel graph = host.Tab.Graph!;
+            host.Workspace.GraphNavigator.SetNameQuery("zzz-nothing-matches");
+            PumpedDispatcher.PumpUntilDrained(graph.WhenAllWorkDrained());
+            PumpedDispatcher.Drain();
+            Assert.Equal(GraphLoadState.Empty, graph.Publication.State);
+        }
+        if (afterItsLoad)
+        {
+            host.HoldEditorLanding();
+        }
+        host.Settle();
+        RingHost ring = host.UseRing();
+        UIElement refusing = host.EditorStop() switch
+        {
+            GraphSurfaceView graphView => graphView.StateHostForTests,
+            CanvasSurfaceView canvasView when target == "canvas renderer" => canvasView.VisualForTests,
+            CanvasSurfaceView canvasView => canvasView.OnboardingForTests,
+            _ => throw new InvalidOperationException("an unexpected editor stop"),
+        };
+        refusing.Focusable = false;
+        host.FocusTabBar();
+
+        host.Workspace.FocusNextPaneCommand.Execute(null);
+        PumpedDispatcher.Drain();
+        if (afterItsLoad)
+        {
+            Assert.Equal(ShellRegionLanding.Pending, Assert.Single(ring.Attempts).Outcome);
+            Assert.Empty(host.Announced);
+            host.LetEditorLandingArrive();
+        }
+
+        string route = $"{target}{(afterItsLoad ? ", after its load" : string.Empty)}";
+        Assert.Equal([ShellRegionKind.Editor, ShellRegionKind.RightPaneContent], ring.Tried);
+        Assert.Equal(afterItsLoad ? ShellRegionLanding.Pending : ShellRegionLanding.Refused, ring.Attempts[0].Outcome);
+        AssertFocused(host.Elsewhere, $"the press resumed past the refused editor ({route})");
+        Assert.Equal([host.RightPaneLine()], host.Announced);
+        Assert.Null(host.EditorLandingRequest());
+        Assert.False(host.Workspace.HoldsShellRegionLanding);
+    });
+
     /// <summary>R-10: the answer inside the press is the document's own
     /// account too, never where focus sits. A canvas whose document takes no
     /// landing (shut down) is Refused even with the reader already inside its

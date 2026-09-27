@@ -58,7 +58,7 @@ internal sealed class FocusDepartureWatch : IDisposable
     /// <paramref name="surface"/> meanwhile is the landing arriving, not the
     /// reader moving on within it, so a held landing's watch follows it. A
     /// provisional seat, which leaves the request pending, is never declared.</summary>
-    internal static bool SeatTerminally(DependencyObject surface, Func<bool> seat)
+    internal static T SeatTerminally<T>(DependencyObject surface, Func<T> seat)
     {
         DependencyObject? outer = _seating;
         _seating = surface;

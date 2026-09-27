@@ -1,7 +1,44 @@
 // Copyright (C) 2026 Cory Joseph
 // SPDX-License-Identifier: AGPL-3.0-or-later
 
+using System.Windows;
+
 namespace SlateWindows;
+
+/// <summary>
+/// W7-7 PR 8 (#1253, R-10): one attempt at a terminal seat. A document's
+/// request stays pending only while a later edge can still realize its target;
+/// a realized target that will not take focus ends it refused, so no request
+/// is left live with nothing that will ever seat it.
+/// </summary>
+internal enum LandingSeat
+{
+    /// <summary>Focus is on the target.</summary>
+    Seated,
+
+    /// <summary>The target is not realized yet — not shown, its container not
+    /// generated, the grid not bound to this publication: the edge that
+    /// realizes it re-asks.</summary>
+    NotYet,
+
+    /// <summary>The target is realized and refused focus, or the projection
+    /// cannot show it at all.</summary>
+    Refused,
+}
+
+/// <summary>Terminal seats on a single element (R-10).</summary>
+internal static class LandingSeats
+{
+    /// <summary>Not yet while <paramref name="target"/> is not shown (the edge
+    /// that shows it re-asks); seated when it takes focus; refused when it is
+    /// shown and will not.</summary>
+    internal static LandingSeat On(UIElement target) =>
+        !target.IsVisible
+            ? LandingSeat.NotYet
+            : target.Focus() && target.IsKeyboardFocusWithin
+                ? LandingSeat.Seated
+                : LandingSeat.Refused;
+}
 
 /// <summary>
 /// W7-7 PR 8 (#1253, contract R-10): how a canvas or graph document's
