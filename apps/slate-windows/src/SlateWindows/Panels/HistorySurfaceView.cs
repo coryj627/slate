@@ -102,6 +102,7 @@ internal sealed class HistorySurfaceView : UserControl
         _thisNotePanel = new StackPanel();
         _thisNoteScroll = new ScrollViewer
         {
+            Focusable = false,
             VerticalScrollBarVisibility = ScrollBarVisibility.Auto,
             HorizontalScrollBarVisibility = ScrollBarVisibility.Disabled,
             Content = _thisNotePanel,
@@ -109,6 +110,7 @@ internal sealed class HistorySurfaceView : UserControl
         _deletedPanel = new StackPanel();
         _deletedScroll = new ScrollViewer
         {
+            Focusable = false,
             VerticalScrollBarVisibility = ScrollBarVisibility.Auto,
             HorizontalScrollBarVisibility = ScrollBarVisibility.Disabled,
             Content = _deletedPanel,

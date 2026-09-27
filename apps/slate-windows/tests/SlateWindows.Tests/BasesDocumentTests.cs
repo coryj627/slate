@@ -495,6 +495,182 @@ public sealed class BaseSurfaceViewTests : IDisposable
         }
     });
 
+    /// <summary>
+    /// W7-7 PR 4b (#1247, R-5; the completeness sweep's G10): every vault
+    /// change reloads an open dashboard, and its render rebuilt every
+    /// section's grid under the reader's cell; the keys went up to a focusable
+    /// scroll viewer, the tab control or the window. They land in the same
+    /// section, on the same note's row, once — silently.
+    /// </summary>
+    [Fact]
+    public void ADashboardRebuiltUnderTheReaderKeepsTheirRow() => RunSta(() =>
+    {
+        ulong scratch = _session.OpenBase("Notes.base");
+        string json;
+        try
+        {
+            json = _session.BaseViewQueryJson(scratch, 0);
+        }
+        finally
+        {
+            _session.CloseBase(scratch);
+        }
+
+        string query = _session.SaveQuery("All notes", null, json, SavedQuerySourceSyntax.Builder);
+        string id = _session.SaveDashboard("Board", [new DashboardSection(query, null, null)]);
+        var dashboard = new SlateWindows.Bases.DashboardViewModel(_session, id, "Board", _ => { }, synchronousForTests: true);
+        dashboard.Load();
+        var surface = new SlateWindows.Bases.DashboardSurfaceView { Model = dashboard };
+        var tabs = new System.Windows.Controls.TabControl();
+        tabs.Items.Add(new System.Windows.Controls.TabItem { Header = "Board", Content = surface });
+        var window = new System.Windows.Window
+        {
+            Content = tabs,
+            Width = 700,
+            Height = 600,
+            ShowInTaskbar = false,
+            WindowStyle = System.Windows.WindowStyle.None,
+            ShowActivated = false,
+        };
+        window.Show();
+        window.UpdateLayout();
+        var changes = new List<System.Windows.IInputElement>();
+        System.Windows.Input.Keyboard.AddGotKeyboardFocusHandler(window, (_, e) => changes.Add(e.NewFocus));
+        try
+        {
+            SlateWindows.Grids.AccessibleDataGrid grid = surface.SectionsForTests.Children
+                .OfType<SlateWindows.Grids.AccessibleDataGrid>().Single();
+            Assert.True(grid.SelectRow(row => row is SlateWindows.Bases.BaseGridRowViewModel { Row.FilePath: var path } && path.EndsWith("note1.md", StringComparison.Ordinal), moveFocus: true));
+            PumpedDispatcher.Drain();
+            changes.Clear();
+
+            dashboard.Load();
+            PumpedDispatcher.Drain();
+
+            SlateWindows.Grids.AccessibleDataGrid rebuilt = surface.SectionsForTests.Children
+                .OfType<SlateWindows.Grids.AccessibleDataGrid>().Single();
+            Assert.NotSame(grid, rebuilt);
+            var cell = Assert.IsType<System.Windows.Controls.DataGridCell>(System.Windows.Input.Keyboard.FocusedElement);
+            Assert.True(rebuilt.IsKeyboardFocusWithin, "the keys are not in the rebuilt section");
+            Assert.EndsWith("note1.md", Assert.IsType<SlateWindows.Bases.BaseGridRowViewModel>(cell.DataContext).Row.FilePath, StringComparison.Ordinal);
+            Assert.DoesNotContain(tabs, changes);
+            Assert.True(changes.Count == 1, $"the keys moved {changes.Count} times: {string.Join(" → ", changes.Select(focus => focus.GetType().Name))}");
+        }
+        finally
+        {
+            window.Close();
+            dashboard.Shutdown();
+        }
+    });
+
+    public static TheoryData<string> RendererSwitches() => ["table to list", "list to table", "no rows", "failed"];
+
+    /// <summary>
+    /// W7-7 PR 4b (#1247, R-5; the completeness sweep's G3): the element
+    /// holding the keys collapses under them — View as List from a cell,
+    /// View as Table from a row, a publication with no rows, a failed
+    /// reload — and WPF handed them up to the workspace tab control (the NVDA
+    /// pass heard "Workspace tabs, tab control"). The surface's landing takes
+    /// them, once: the shown renderer's current or first row or cell, else
+    /// the quick filter, else Retry. The surface sits in a tab control here,
+    /// as in the shell.
+    /// </summary>
+    [Theory]
+    [MemberData(nameof(RendererSwitches))]
+    public void TheRendererCollapsingUnderTheKeysLandsThemInTheSurface(string change) => RunSta(() =>
+    {
+        var document = new SlateWindows.Bases.BaseDocumentViewModel(
+            _session, "Notes.base", _ => { }, synchronousForTests: true);
+        document.Load();
+        if (change == "list to table")
+        {
+            document.SelectView(1);
+        }
+
+        var surface = new SlateWindows.Bases.BaseSurfaceView { Model = document };
+        var tabs = new System.Windows.Controls.TabControl();
+        tabs.Items.Add(new System.Windows.Controls.TabItem { Header = "Notes", Content = surface });
+        var window = new System.Windows.Window
+        {
+            Content = tabs,
+            Width = 700,
+            Height = 500,
+            ShowInTaskbar = false,
+            WindowStyle = System.Windows.WindowStyle.None,
+            ShowActivated = false,
+        };
+        window.Show();
+        window.UpdateLayout();
+        var changes = new List<System.Windows.IInputElement>();
+        System.Windows.Input.Keyboard.AddGotKeyboardFocusHandler(window, (_, e) => changes.Add(e.NewFocus));
+        try
+        {
+            if (change == "list to table")
+            {
+                System.Windows.Controls.ListBox list = surface.ListForTests;
+                Assert.True(list.IsVisible, "premise: the list view shows the list");
+                Assert.True(SelectorFocus.FocusFirstOrSelectedItem(list), "premise: no list row took the keys");
+            }
+            else
+            {
+                Assert.True(surface.GridForTests.IsVisible, "premise: the table view shows the grid");
+                Assert.True(SelectorFocus.LandOnStop(surface.GridForTests.Grid), "premise: no cell took the keys");
+            }
+
+            PumpedDispatcher.Drain();
+            changes.Clear();
+
+            switch (change)
+            {
+                case "table to list":
+                    surface.RendererOverride = SlateWindows.Bases.BaseRendererOverride.List;
+                    break;
+                case "list to table":
+                    surface.RendererOverride = SlateWindows.Bases.BaseRendererOverride.Table;
+                    break;
+                case "no rows":
+                    document.QuickFilterText = "zzz-matches-nothing";
+                    document.ApplyQuickFilter();
+                    break;
+                default:
+                    File.Delete(Path.Combine(_fixture.Root, "Notes.base"));
+                    document.Load();
+                    break;
+            }
+
+            PumpedDispatcher.Drain();
+
+            System.Windows.IInputElement landed = System.Windows.Input.Keyboard.FocusedElement;
+            string where = string.Join(" → ", changes.Select(focus => focus.GetType().Name));
+            Assert.DoesNotContain(tabs, changes);
+            Assert.True(changes.Count == 1, $"the keys moved {changes.Count} times: {where}");
+            switch (change)
+            {
+                case "table to list":
+                    Assert.Same(
+                        surface.ListForTests,
+                        System.Windows.Controls.ItemsControl.ItemsControlFromItemContainer(
+                            Assert.IsType<System.Windows.Controls.ListBoxItem>(landed)));
+                    break;
+                case "list to table":
+                    Assert.IsType<System.Windows.Controls.DataGridCell>(landed);
+                    Assert.True(surface.GridForTests.IsKeyboardFocusWithin);
+                    break;
+                case "no rows":
+                    Assert.Same(surface.QuickFilterForTests, landed);
+                    break;
+                default:
+                    Assert.Equal("Retry", Assert.IsType<System.Windows.Controls.Button>(landed).Content);
+                    break;
+            }
+        }
+        finally
+        {
+            window.Close();
+            document.Shutdown();
+        }
+    });
+
     private static void RunSta(Action body)
     {
         Exception? failure = null;

@@ -297,6 +297,119 @@ public sealed class RightPaneNoticeLandingTests
         Assert.Equal([expected], acted);
     });
 
+    /// <summary>
+    /// W7-7 PR 4b (the owner's S5; the completeness sweep's G14): a note whose
+    /// tasks are all done — the Tasks leaf's landing is the first POPULATED
+    /// list's row, the Done list's, not the empty "Open tasks" list above it
+    /// (AR-6 made that list its own stop while the rows sat one list below).
+    /// </summary>
+    [Fact]
+    public void ATasksLeafWhoseTasksAreAllDoneLandsOnTheDoneList() => RunSta(() =>
+    {
+        using var host = new Host();
+        host.Initialize("tasks", "empty");
+        host.AwaitFinalNotice("tasks");
+        PublishTasks(host.Panels, (false, 0), (true, 2));
+        PumpedDispatcher.Drain();
+        ListBox done = host.ElementWithId<ListBox>("PanelTasksDoneList");
+        Assert.False(host.List("tasks").HasItems, "premise: the Open list has rows");
+        Assert.True(host.Beside.Focus());
+        host.ForgetFocusAndSpeech();
+
+        host.Shell.LandInRightPane();
+
+        var row = Assert.IsType<ListBoxItem>(Keyboard.FocusedElement);
+        Assert.Same(done, ItemsControl.ItemsControlFromItemContainer(row));
+        Assert.Equal([row], host.FocusChanges);
+    });
+
+    /// <summary>
+    /// The sweep's G14 (b): Space on the last open task moves it to the Done
+    /// list, and its row's keys went to the now-empty Open list (no stop
+    /// notice there) — "Open tasks, list" with the rows one list below. The
+    /// hand-over is declined, and the keys land on the Done list's row, once.
+    /// </summary>
+    [Fact]
+    public void TheLastOpenTaskDoneLandsTheKeysOnTheDoneList() => RunSta(() =>
+    {
+        using var host = new Host();
+        host.Initialize("tasks", "empty");
+        host.AwaitFinalNotice("tasks");
+        PublishTasks(host.Panels, (false, 1), (true, 1));
+        PumpedDispatcher.Drain();
+        ListBox open = host.List("tasks");
+        ListBox done = host.ElementWithId<ListBox>("PanelTasksDoneList");
+        open.UpdateLayout();
+        Assert.True(((UIElement)open.ItemContainerGenerator.ContainerFromIndex(0)).Focus());
+        host.ForgetFocusAndSpeech();
+
+        PublishTasks(host.Panels, (false, 0), (true, 2));
+        PumpedDispatcher.Drain();
+
+        var row = Assert.IsType<ListBoxItem>(Keyboard.FocusedElement);
+        Assert.Same(done, ItemsControl.ItemsControlFromItemContainer(row));
+        Assert.DoesNotContain(open, host.FocusChanges);
+        Assert.Equal([row], host.FocusChanges);
+        host.AssertNeverStranded();
+    });
+
+    /// <summary>
+    /// W7-7 PR 4b (the completeness sweep's G11): a Citations republish under
+    /// the reader — any save — destroyed the row holding the keys, and its
+    /// hand-over put them on the bare list (a UIA focus change on "Citations,
+    /// list") before the leaf's own restore moved them to a row: two changes,
+    /// the first on the bare Selector. The hand-over is declined, and the
+    /// restore lands them on the reader's row: one focus change.
+    /// </summary>
+    [Fact]
+    public void ACitationsRepublishUnderTheReaderIsOneFocusChange() => RunSta(() =>
+    {
+        using var host = new Host();
+        host.Initialize("citations", "empty", note: "Cites [@knuth1984] and [@ghostkey].\n");
+        // The window's own publish restore (MainWindow.RestoreCitationFocus)
+        // observes the workspace's leaf.
+        host.AttachWorkspaceToTheWindow();
+        ListBox list = host.ElementWithId<ListBox>("PanelCitationsList");
+        Assert.True(PumpedDispatcher.PumpUntil(() => list.Items.Count >= 2 && list.IsVisible), "premise: the leaf never listed the note's citations.");
+        list.UpdateLayout();
+        Assert.True(((UIElement)list.ItemContainerGenerator.ContainerFromIndex(1)).Focus());
+        PumpedDispatcher.Drain();
+        host.ForgetFocusAndSpeech();
+
+        host.Citations.Refresh();
+        Assert.True(PumpedDispatcher.PumpUntil(() => list.Items.Count >= 2), "the republish never listed the citations again.");
+        PumpedDispatcher.Drain();
+
+        var row = Assert.IsType<ListBoxItem>(Keyboard.FocusedElement);
+        Assert.Same(list, ItemsControl.ItemsControlFromItemContainer(row));
+        Assert.Equal([row], host.FocusChanges);
+        host.AssertNeverOnAPopulatedList();
+    });
+
+    /// <summary>A Tasks leaf publication with <paramref name="open"/>'s and
+    /// <paramref name="done"/>'s counts of open and done tasks.</summary>
+    private static void PublishTasks(RightPanePanelsViewModel panels, (bool Completed, int Count) open, (bool Completed, int Count) done)
+    {
+        const BindingFlags any = BindingFlags.NonPublic | BindingFlags.Instance;
+        int requestId = (int)(typeof(RightPanePanelsViewModel).GetField("_tasksRequestId", any)
+            ?? throw new InvalidOperationException("_tasksRequestId is gone")).GetValue(panels)!;
+        TaskItem[] tasks =
+        [
+            .. Enumerable.Range(0, open.Count).Select(index => Task(index, open.Completed)),
+            .. Enumerable.Range(open.Count, done.Count).Select(index => Task(index, done.Completed)),
+        ];
+        panels.PublishTasks(
+            panels.LoadGenerationForTests,
+            requestId,
+            new NoteTasksPage(tasks, (uint)tasks.Length, (uint)tasks.Length, "hash"),
+            failure: null);
+
+        static TaskItem Task(int index, bool completed) => new(
+            Ordinal: (uint)index, Text: $"Task {index}", StatusChar: completed ? "x" : " ", Completed: completed,
+            DueMs: null, ScheduledMs: null, Priority: null, Recurrence: null,
+            Line: (uint)(index + 1), ByteOffset: 0, CheckboxStartByte: 2, CheckboxEndByte: 5);
+    }
+
     /// <summary>The leaf model's hand-offs — open, scroll, toggle —
     /// replaced by recorders.</summary>
     private static List<string> RecordActions(RightPanePanelsViewModel panels)
@@ -597,10 +710,11 @@ public sealed class RightPaneNoticeLandingTests
                 "a populated list took the keys itself; focus went "
                 + string.Join(" → ", FocusChanges.Select(focus => focus.GetType().Name)));
 
-        public void Initialize(string leaf, string state)
+        /// <param name="note">The open note's text.</param>
+        public void Initialize(string leaf, string state, string note = "Just a line of text.\n")
         {
             Assert.Null(Application.Current);
-            File.WriteAllText(Path.Combine(_fixture.Root, "plain.md"), "Just a line of text.\n");
+            File.WriteAllText(Path.Combine(_fixture.Root, "plain.md"), note);
             _session = VaultSession.OpenFilesystem(_fixture.Root);
             using (var cancel = new CancelToken())
             {

@@ -332,7 +332,7 @@ public partial class MainWindow
                 // Otherwise the element that had focus before may no
                 // longer be alive, so a failed restore falls back to the
                 // editor rather than stranding focus on the window root.
-                if (focusBefore is null || !TryFocus(focusBefore))
+                if (!LandToken(focusBefore))
                 {
                     FocusActiveEditorPane();
                 }

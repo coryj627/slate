@@ -53,6 +53,8 @@ public partial class MainWindow : Window
         SelectorFocus.SetOwnLanding(dualPane, () => SelectorFocus.FocusFirstOrSelectedItem(dualPane) || LandOnFilesTree());
         SelectorFocus.SetOwnLanding(RightPaneLeavesList, () => SelectorFocus.FocusFirstOrSelectedItem(RightPaneLeavesList));
         KeepLeafKeysThroughPublications();
+        GuardRegions();
+        WatchRailArrows();
         _windowPlacement = new WindowPlacementManager(this);
         _announcer = new AccessibilityNotificationDispatcher(StatusTextBlock);
         // OD-7: the window's one dispatcher, inherited by every surface in
@@ -416,6 +418,7 @@ public partial class MainWindow : Window
         if (workspace is not null)
         {
             workspace.WorkspaceRowWidth = WorkspaceColumns.ActualWidth;
+            workspace.IsChoosingLeafByArrow = () => _railArrow;
             workspace.EditorPaneFocusRequested += Workspace_EditorPaneFocusRequested;
             workspace.PropertyChanged += Workspace_CanvasSheetChanged;
             WireWorkspaceProperties(workspace);
@@ -653,7 +656,7 @@ public partial class MainWindow : Window
                     FocusEditorPane(workspace.ActiveGroup);
                 }
             }
-            else if (focusBeforeSwitcher is not null && TryFocus(focusBeforeSwitcher))
+            else if (LandToken(focusBeforeSwitcher))
             {
             }
             else
@@ -1196,6 +1199,16 @@ public partial class MainWindow : Window
             _ => false,
         };
     }
+
+    /// <summary>W7-7 PR 4b (#1247, R-5; the sweep's G20): a dismissal's
+    /// restore — the token itself, else the scopes the token was in
+    /// (<see cref="RegionFocusGuard.LandInScopesOf"/>), so a dead token
+    /// lands in its own region, not in the editor. False when neither took
+    /// the keys: the caller's last resort then runs.</summary>
+    internal bool LandToken(IInputElement? token) =>
+        token is not null
+        && !ReferenceEquals(token, this)
+        && (TryFocus(token) || RegionFocusGuard.LandInScopesOf(token));
 
     private void HandleQuickSwitcherKey(KeyEventArgs e, ModifierKeys modifiers)
     {
@@ -1884,6 +1897,24 @@ public partial class MainWindow : Window
         if (activeTab is { IsGraph: true, Graph: { } graph })
         {
             graph.RequestFocusLanding(activeTab);
+            return;
+        }
+        // W7-7 PR 4b (#1247, R-5; the sweep's G20): a Base, saved-query or
+        // dashboard tab lands IN its surface — its current or first row or
+        // cell, else its quick filter — not on its tab header, which F6
+        // then read as a refusal of the editor region.
+        if (activeTab is { IsBaseVisible: true }
+            && FindVisualDescendants<Bases.BaseSurfaceView>(ContentPaneBorder)
+                .FirstOrDefault(surface => ReferenceEquals(surface.Tab, activeTab) && surface.IsVisible) is { } baseSurface
+            && baseSurface.LandInSurface())
+        {
+            return;
+        }
+        if (activeTab is { IsDashboardVisible: true }
+            && FindVisualDescendants<Bases.DashboardSurfaceView>(ContentPaneBorder)
+                .FirstOrDefault(surface => ReferenceEquals(surface.DataContext, activeTab) && surface.IsVisible) is { } dashboard
+            && dashboard.LandInSurface())
+        {
             return;
         }
         SlateTextEditor? editor = FindVisualDescendants<SlateTextEditor>(ContentPaneBorder)

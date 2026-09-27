@@ -419,6 +419,75 @@ public sealed class FilesRegionLandingTests
         host.AssertNeverFocusedPopulated(results);
     });
 
+    /// <summary>
+    /// W7-7 PR 4b (the completeness sweep's G7): Pin Note re-sorts the tree
+    /// (its rows cleared and re-added) under the reader's row. WPF ejected the
+    /// keys (the W5-4 red team measured the window), and Down then did
+    /// nothing. They land on the selected note's row, once, without opening
+    /// anything; the bare tree never holds them.
+    /// </summary>
+    [Fact]
+    public void PinNoteRebuildsTheTreeUnderTheKeysAndTheyStayOnTheRow() => RunSta(() =>
+    {
+        using var host = new Host();
+        host.Initialize();
+        FileTreeNodeViewModel note = host.Sidebar.RootNodes.Last(node => !node.IsDirectory);
+        note.IsSelected = true;
+        host.Sidebar.SelectedNode = note;
+        host.Pane.UpdateLayout();
+        var row = Assert.IsAssignableFrom<TreeViewItem>(host.Tree.ItemContainerGenerator.ContainerFromItem(note));
+        Assert.True(row.Focus());
+        PumpedDispatcher.Drain();
+        var opened = new List<string>();
+        host.Sidebar.OpenTargetRequested += (_, request) => opened.Add(request.Path);
+        host.ForgetFocusChanges();
+
+        host.Sidebar.PinCommand.Execute(null);
+        PumpedDispatcher.Drain();
+
+        Assert.Same(note, FocusedNode());
+        Assert.Empty(opened);
+        host.AssertTreeNeverFocused();
+        Assert.True(Keyboard.FocusedElement is TreeViewItem, $"the keys ended on {Keyboard.FocusedElement}");
+    });
+
+    /// <summary>
+    /// The sweep's G7, the Tags tree: every refresh — a save reaches one —
+    /// rebuilt the tags with nothing selected under the reader's applied tag,
+    /// and the keys left the tree. The applied tag is selected again in the
+    /// rebuilt tree, the keys land on its row, the filter is untouched and
+    /// nothing is re-applied.
+    /// </summary>
+    [Fact]
+    public void ATagsRefreshUnderTheKeysKeepsTheAppliedTagsRow() => RunSta(() =>
+    {
+        using var host = new Host();
+        host.Initialize(tagged: true);
+        host.Sidebar.ShowTags = true;
+        host.Pane.UpdateLayout();
+        TreeView tags = host.ElementWithId<TreeView>("SidebarTagTree");
+        Assert.True(PumpedDispatcher.PumpUntil(() => tags.HasItems), "premise: the Tags tree never listed the fixture's tag.");
+        host.Pane.UpdateLayout();
+        var row = Assert.IsAssignableFrom<TreeViewItem>(tags.ItemContainerGenerator.ContainerFromIndex(0));
+        Assert.True(row.Focus());
+        Assert.True(PumpedDispatcher.PumpUntil(() => host.Sidebar.IsFilterActive), "premise: choosing the tag applied no filter.");
+        string filter = host.Sidebar.FilterText;
+        string applied = Assert.IsType<SidebarTagViewModel>(row.DataContext).Full;
+        host.ForgetFocusChanges();
+
+        host.Sidebar.Refresh();
+        PumpedDispatcher.PumpUntilDrained(host.Sidebar.TreeRefreshCompletion);
+        PumpedDispatcher.Drain();
+
+        var landed = Assert.IsAssignableFrom<TreeViewItem>(Keyboard.FocusedElement);
+        Assert.Equal(applied, Assert.IsType<SidebarTagViewModel>(landed.DataContext).Full);
+        Assert.True(landed.IsSelected, "the applied tag's row lost its selection in the rebuild");
+        Assert.NotSame(row, landed);
+        Assert.Equal(filter, host.Sidebar.FilterText);
+        Assert.True(host.Sidebar.IsFilterActive);
+        host.AssertNeverFocusedPopulated(tags);
+    });
+
     /// <summary>Codex PR 4 round 6 (the repro's R6_5x): Tab — WPF's own
     /// traversal, no landing of ours — used to rest on a bare POPULATED tree
     /// when nothing in it was selected; the Files tree and the Tags tree are

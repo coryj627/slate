@@ -343,8 +343,12 @@ public partial class MainWindow
                     return;
                 }
 
+                // Keys still on the removed row — its hand-over to the bare
+                // list declined (W7-7 PR 4b, the sweep's G11) — are
+                // stranded, and this restore is theirs.
                 if (Keyboard.FocusedElement is DependencyObject focused
                     && !ReferenceEquals(focused, this)
+                    && !(focused is UIElement held && RegionFocusGuard.IsStranded(held))
                     && !PanelCitationsList.IsKeyboardFocusWithin
                     && !CitationNoticeHasTheKeys())
                 {
@@ -638,7 +642,7 @@ public partial class MainWindow
                     return;
                 }
 
-                if (target is not null && TryFocus(target))
+                if (LandToken(target))
                 {
                     return;
                 }

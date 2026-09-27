@@ -141,7 +141,7 @@ internal sealed class GraphInspectorView : UserControl
         _root.Children.Add(_groups);
         _root.Children.Add(_display);
         _root.Children.Add(_forces);
-        Content = new ScrollViewer { Content = _root, VerticalScrollBarVisibility = ScrollBarVisibility.Auto, HorizontalScrollBarVisibility = ScrollBarVisibility.Disabled };
+        Content = new ScrollViewer { Focusable = false, Content = _root, VerticalScrollBarVisibility = ScrollBarVisibility.Auto, HorizontalScrollBarVisibility = ScrollBarVisibility.Disabled };
         Loaded += (_, _) => Observe(Model);
         Unloaded += (_, _) => StopObserving();
         RenderAll();

@@ -590,6 +590,88 @@ public sealed class RightPaneLeafRegionTests
         Assert.Equal([expected], acted);
     });
 
+    /// <summary>
+    /// W7-7 PR 4b (#1247, R-5; the completeness sweep's G4): "Load more" in
+    /// the review. A trigger disabled the focused button while the page
+    /// loaded, and WPF handed its keys to the window. Now the button keeps
+    /// them, enabled, its name saying "Loading more tasks"; and when the last
+    /// page arrives and the button collapses under them, they land on the
+    /// first row that page appended — where the reading continues — once,
+    /// never on the window.
+    /// </summary>
+    [Fact]
+    public void LoadMoreKeepsTheKeysAndTheLastPageLandsThemOnItsFirstRow() => RunSta(() =>
+    {
+        using var host = new Host();
+        string tasks = string.Concat(Enumerable.Range(0, (int)TasksReviewViewModel.PageSize + 5).Select(index => $"- [ ] task {index:D3}\n"));
+        host.Initialize("tasksReview", backgroundWork: true, ("todo.md", tasks));
+        host.AttachWorkspaceToTheWindow();
+        TasksReviewViewModel review = host.Workspace.TasksReview;
+        review.EnsureLoaded();
+        Assert.True(
+            PumpedDispatcher.PumpUntil(() => review.Rows.Count == (int)TasksReviewViewModel.PageSize && review.HasMore && !review.IsLoading),
+            "premise: the first page never published with more to load.");
+        Button loadMore = host.ElementWithId<Button>("PanelReviewLoadMore");
+        ListBox list = host.ElementWithId<ListBox>("PanelReviewList");
+        Assert.True(loadMore.IsVisible && loadMore.Focus(), "premise: Load more refused the keys.");
+        using var gate = new ManualResetEventSlim(false);
+        review.InterleaveForTests = () => gate.Wait(TimeSpan.FromSeconds(30));
+        host.ForgetFocusAndSpeech();
+        try
+        {
+            loadMore.RaiseEvent(new RoutedEventArgs(ButtonBase.ClickEvent));
+            PumpedDispatcher.Drain();
+
+            Assert.True(review.IsLoadingMore, "premise: the page was not held");
+            Assert.Same(loadMore, Keyboard.FocusedElement);
+            Assert.True(loadMore.IsEnabled, "the focused button was disabled while its page loaded");
+            Assert.Equal("Loading more tasks", AutomationProperties.GetName(loadMore));
+        }
+        finally
+        {
+            gate.Set();
+        }
+
+        Assert.True(PumpedDispatcher.PumpUntil(() => !review.IsLoadingMore && !review.HasMore), "the last page never published.");
+        PumpedDispatcher.Drain();
+
+        var row = Assert.IsType<ListBoxItem>(Keyboard.FocusedElement);
+        Assert.Equal((int)TasksReviewViewModel.PageSize, list.ItemContainerGenerator.IndexFromContainer(row));
+        Assert.DoesNotContain("stranded", host.Order, StringComparison.Ordinal);
+        Assert.Single(host.Order.Split(" → "), entry => entry.StartsWith("focus ", StringComparison.Ordinal));
+    });
+
+    /// <summary>
+    /// W7-7 PR 4b (#1247; the completeness sweep's G21, AR-41): an arrow on
+    /// the rail chooses the next leaf, and the row that takes the keys names
+    /// it — one utterance. The authored "… panel." line stays silent on that
+    /// route only: choosing a leaf any other way (a reveal, a command, a
+    /// click's selection) still says it.
+    /// </summary>
+    [Fact]
+    public void AnArrowOnTheRailChoosesTheLeafAsOneUtterance() => RunSta(() =>
+    {
+        using var host = new Host();
+        host.Initialize("outline", ("a.md", "# A\n"));
+        host.AttachWorkspaceToTheWindow();
+        ListBox rail = host.ElementWithId<ListBox>("RightPaneLeaves");
+        rail.UpdateLayout();
+        Assert.True(SelectorFocus.FocusFirstOrSelectedItem(rail), "premise: the rail's row refused the keys.");
+        WorkspaceLeafOption before = host.Workspace.ActiveLeaf;
+        host.ForgetFocusAndSpeech();
+
+        host.Press(Key.Down);
+
+        Assert.NotEqual(before.Id, host.Workspace.ActiveLeaf.Id);
+        var row = Assert.IsType<ListBoxItem>(Keyboard.FocusedElement);
+        Assert.Same(host.Workspace.ActiveLeaf, row.DataContext);
+        Assert.DoesNotContain(host.Announced, line => line is A11yEvent.LeafPanelShown);
+
+        host.Workspace.ActiveLeaf = before;
+
+        Assert.Contains(host.Announced, line => line is A11yEvent.LeafPanelShown);
+    });
+
     private static string Describe(IInputElement? element) => element switch
     {
         null => "nothing",

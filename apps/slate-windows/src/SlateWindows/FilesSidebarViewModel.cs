@@ -1211,10 +1211,22 @@ internal sealed partial class FilesSidebarViewModel : BindableBase
 
     private void ApplyTags(TagLoadOutcome outcome)
     {
+        // W7-7 PR 4b (#1247, R-5; the sweep's G7): the tag whose row is
+        // selected — the row stays selected while its tag is the filter — is
+        // selected again in the rebuilt tree, by name, so a refresh (every
+        // save reaches one) keeps the reader's row and the Tags landing
+        // finds it. Re-selecting an applied tag applies nothing new
+        // (ApplyTagActivation answers an unchanged filter with nothing).
+        string? selected = SelectedTagFull(Tags);
         Tags.Clear();
         foreach (SidebarTagViewModel tag in outcome.Tags)
         {
             Tags.Add(tag);
+        }
+
+        if (selected is not null && FindTag(Tags, selected) is { } again)
+        {
+            again.IsSelected = true;
         }
 
         if (outcome.Error is not null)
@@ -1226,6 +1238,42 @@ internal sealed partial class FilesSidebarViewModel : BindableBase
     private sealed record TagLoadOutcome(
         IReadOnlyList<SidebarTagViewModel> Tags,
         string? Error);
+
+    private static string? SelectedTagFull(IEnumerable<SidebarTagViewModel> level)
+    {
+        foreach (SidebarTagViewModel tag in level)
+        {
+            if (tag.IsSelected)
+            {
+                return tag.Full;
+            }
+
+            if (SelectedTagFull(tag.Children) is { } nested)
+            {
+                return nested;
+            }
+        }
+
+        return null;
+    }
+
+    private static SidebarTagViewModel? FindTag(IEnumerable<SidebarTagViewModel> level, string full)
+    {
+        foreach (SidebarTagViewModel tag in level)
+        {
+            if (string.Equals(tag.Full, full, StringComparison.Ordinal))
+            {
+                return tag;
+            }
+
+            if (FindTag(tag.Children, full) is { } nested)
+            {
+                return nested;
+            }
+        }
+
+        return null;
+    }
 
     private void EditTag(bool add)
     {

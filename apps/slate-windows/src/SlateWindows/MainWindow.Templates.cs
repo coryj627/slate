@@ -334,7 +334,7 @@ public partial class MainWindow
                     return;
                 }
 
-                if (focusBefore is null || !TryFocus(focusBefore))
+                if (!LandToken(focusBefore))
                 {
                     FocusActiveEditorPane();
                 }

@@ -170,6 +170,11 @@ internal sealed class TasksReviewViewModel : PanelWorkScheduler
 
     public bool HasMore => _nextCursor is not null;
 
+    /// <summary>The index of the first row the last load-more appended —
+    /// where the keys go when "Load more" disappears under them (W7-7 PR
+    /// 4b, the sweep's G4); null when it appended none.</summary>
+    internal int? LastAppendStart { get; private set; }
+
     internal int LoadRequestIdForTests => _loadRequestId;
 
     /// <summary>Mac header, verbatim: "Tasks Review, showing N of M"
@@ -641,6 +646,7 @@ internal sealed class TasksReviewViewModel : PanelWorkScheduler
             RaiseStateChanges();
             return;
         }
+        LastAppendStart = page.Items.Length > 0 ? Rows.Count : null;
         foreach (TaskWithLocation row in page.Items)
         {
             Rows.Add(new ReviewTaskRowViewModel(row));

@@ -1669,17 +1669,15 @@
                                         Click="PanelReviewLoadMore_Click"
                                         Visibility="{Binding TasksReview.HasMore, Converter={StaticResource BooleanToVisibilityConverter}}"
                                         AutomationProperties.Name="{Binding TasksReview.LoadMoreAutomationName}"
-                                        AutomationProperties.HelpText="{Binding TasksReview.LoadMoreHelpText}">
-                                    <Button.Style>
-                                        <Style TargetType="Button">
-                                            <Style.Triggers>
-                                                <DataTrigger Binding="{Binding TasksReview.IsLoadingMore}" Value="True">
-                                                    <Setter Property="IsEnabled" Value="False" />
-                                                </DataTrigger>
-                                            </Style.Triggers>
-                                        </Style>
-                                    </Button.Style>
-                                </Button>
+                                        AutomationProperties.HelpText="{Binding TasksReview.LoadMoreHelpText}" />
+                                <!-- W7-7 PR 4b (#1247, R-5; the sweep's G4): never
+                                     disabled under the keys. A trigger disabled the
+                                     focused button while a page loaded, and WPF
+                                     handed its keys to the window; LoadMore refuses
+                                     while loading, and the name says "Loading more
+                                     tasks". The last page collapses it, and its keys
+                                     go to the first row that page appended
+                                     (MainWindow.LandAfterLoadMore). -->
                                 <ListBox x:Name="PanelReviewList"
                                          Style="{StaticResource PanelListBox}"
                                          ItemsSource="{Binding TasksReview.Rows}"

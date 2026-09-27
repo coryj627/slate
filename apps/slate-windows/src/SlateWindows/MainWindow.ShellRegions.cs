@@ -239,18 +239,141 @@ public partial class MainWindow : IShellRegionHost
             .Where(child => Grid.GetColumn(child) == 0 && child.IsVisible)
             .FirstOrDefault(child => !ReferenceEquals(child, RightPaneDockedPlaceholder));
 
+    /// <summary>
+    /// A leaf's first stop, in visual order. Layout is no stop: a border, a
+    /// scroll viewer, a panel (W7-7 PR 4b, the sweep's G19 — the Sync leaf's
+    /// first stop was an unnamed scroll viewer). An EMPTY list gives way to a
+    /// populated list that follows it (the owner's S5, the sweep's G14: a
+    /// note whose tasks are all done landed on the empty "Open tasks" list,
+    /// its rows one list below); with nothing populated after it, the empty
+    /// list is the stop (AR-6).
+    /// </summary>
     private static UIElement? FirstFocusable(DependencyObject root)
     {
+        UIElement? emptyList = null;
         foreach (DependencyObject candidate in FindVisualDescendants<DependencyObject>(root))
         {
-            if (candidate is UIElement { Focusable: true, IsEnabled: true, IsVisible: true } element
-                && candidate is not Border)
+            if (candidate is not UIElement { Focusable: true, IsEnabled: true, IsVisible: true } element
+                || candidate is Border or ScrollViewer or Panel)
             {
-                return element;
+                continue;
             }
+
+            bool list = element is Selector selector && SelectorFocus.IsListLanding(selector);
+            if (list && !((Selector)element).HasItems)
+            {
+                emptyList ??= element;
+                continue;
+            }
+
+            if (emptyList is not null && emptyList.IsAncestorOf(element))
+            {
+                continue;
+            }
+
+            return emptyList is null || list ? element : emptyList;
         }
 
-        return null;
+        return emptyList;
+    }
+
+    /// <summary>
+    /// W7-7 PR 4b (#1247, R-5; the owner's S3): every region root owns its
+    /// landing, which <see cref="RegionFocusGuard"/> takes when the element
+    /// holding the keys in it goes away — disabled, collapsed, rebuilt —
+    /// instead of WPF's hand-up to the tab control, a scroll viewer or the
+    /// window. The Files pane, the editor, each right-pane leaf, the rail,
+    /// the status bar, the welcome view and every sheet
+    /// (<c>RegionGuardCensus</c>). The menu bar is not one: its items are
+    /// in their own popups, and it takes no arrows.
+    /// </summary>
+    private void GuardRegions()
+    {
+        var host = (IShellRegionHost)this;
+        RegionFocusGuard.SetLanding(FilesPaneBorder, () => host.TryLand(ShellRegionKind.Files));
+        RegionFocusGuard.SetLanding(
+            ContentPaneBorder,
+            () => host.TryLand(
+                _viewModel.Workspace is { ActiveGroup.ActiveTab: not null } ? ShellRegionKind.Editor : ShellRegionKind.EmptyEditor));
+        RegionFocusGuard.SetLanding(RightPaneLeavesList, () => SelectorFocus.FocusFirstOrSelectedItem(RightPaneLeavesList));
+        foreach (FrameworkElement body in RightPaneLeafHost.Children.OfType<FrameworkElement>()
+            .Where(child => Grid.GetColumn(child) == 0 && !ReferenceEquals(child, RightPaneDockedPlaceholder)))
+        {
+            RegionFocusGuard.SetLanding(body, () => LandInLeaf(body));
+        }
+
+        RegionFocusGuard.SetLanding(
+            (UIElement)LogicalTreeHelper.GetParent(ShellStatusBar), () => host.TryLand(ShellRegionKind.StatusBar));
+        RegionFocusGuard.SetLanding(WelcomeRoot, () => FirstFocusable(WelcomeRoot) is { } stop && SelectorFocus.LandOnStop(stop));
+        foreach (UIElement sheet in FocusScopeOverlays(this))
+        {
+            RegionFocusGuard.SetLanding(sheet, () => FirstFocusable(sheet) is { } stop && SelectorFocus.LandOnStop(stop));
+        }
+
+        // The review's "Load more" collapses under the keys when the last
+        // page arrives (the sweep's G4): they go to the first row it
+        // appended — where the reading continues — else the list's last
+        // row, else the leaf's landing.
+        RegionFocusGuard.SetStrandedLanding(PanelReviewLoadMore, LandAfterLoadMore);
+    }
+
+    /// <summary>An arrow in the rail is choosing the leaf, for the length of
+    /// its key press.</summary>
+    private bool _railArrow;
+
+    /// <summary>
+    /// W7-7 PR 4b (#1247; the completeness sweep's G21, AR-41): an arrow on
+    /// the rail CHOOSES the leaf — its selection switches the shown leaf — and
+    /// the row taking the keys says so ("Outline, 3 of 12"); the authored
+    /// "Outline panel." on top repeated it, one arrow, two utterances. The
+    /// line stays silent on the arrow route only (OD-11(d)'s rule for a radio
+    /// group's arrow); a reveal, a command, a click and the ring still speak
+    /// it.
+    /// </summary>
+    private void WatchRailArrows()
+    {
+        RightPaneLeavesList.PreviewKeyDown += (_, e) =>
+            _railArrow = e.KeyboardDevice.Modifiers == ModifierKeys.None
+                && e.Key is Key.Up or Key.Down or Key.Left or Key.Right or Key.Home or Key.End or Key.PageUp or Key.PageDown
+                && e.OriginalSource is ListBoxItem;
+        RightPaneLeavesList.AddHandler(
+            KeyDownEvent, new KeyEventHandler((_, _) => _railArrow = false), handledEventsToo: true);
+    }
+
+    private bool LandAfterLoadMore()
+    {
+        if (!PanelReviewList.IsVisible || !PanelReviewList.HasItems || _viewModel.Workspace is not { } workspace)
+        {
+            return false;
+        }
+
+        int index = workspace.TasksReview.LastAppendStart is int start && start < PanelReviewList.Items.Count
+            ? start
+            : PanelReviewList.Items.Count - 1;
+        return SelectorFocus.FocusItem(PanelReviewList, PanelReviewList.Items[index]);
+    }
+
+    /// <summary>The window's sheets: every focus scope in its logical tree
+    /// but a menu.</summary>
+    private static IEnumerable<UIElement> FocusScopeOverlays(DependencyObject root)
+    {
+        foreach (object child in LogicalTreeHelper.GetChildren(root))
+        {
+            if (child is not DependencyObject element)
+            {
+                continue;
+            }
+
+            if (element is UIElement scope and not MenuBase && FocusManager.GetIsFocusScope(scope))
+            {
+                yield return scope;
+            }
+
+            foreach (UIElement nested in FocusScopeOverlays(element))
+            {
+                yield return nested;
+            }
+        }
     }
 
     /// <summary>
