@@ -145,6 +145,110 @@ public sealed class EmbedWalkCancellationTests
         });
     }
 
+    /// <summary>Codex round 2a: a `.base` embed card's query runs under its
+    /// refresh's cancellation, not a token of its own. A refresh retired
+    /// while the card's query is parked — superseded, its surface detached,
+    /// or the model disposed — ends <c>Cancelled</c> at the query: it builds
+    /// no card and no error card, announces nothing, and its worker returns.
+    /// A superseding refresh shows the real summary card.</summary>
+    [Theory]
+    [InlineData("supersede")]
+    [InlineData("detach")]
+    [InlineData("dispose")]
+    public void ARetiredRefreshCancelsItsBaseCardsQuery(string retirement)
+    {
+        using FixtureVault fixture = FixtureVault.Create(2, $"reading-base-cancel-{retirement}");
+        File.WriteAllText(
+            Path.Combine(fixture.Root, "Summary.base"),
+            "filters: 'file.ext == \"md\"'\n" +
+            "views:\n" +
+            "  - type: table\n" +
+            "    name: Main\n" +
+            "    order:\n" +
+            "      - file.name\n");
+        File.WriteAllText(Path.Combine(fixture.Root, "host.md"), "# Host\n\n![[Summary.base]]\n");
+        PumpedDispatcher.Run(() =>
+        {
+            using VaultSession session = ScannedSession(fixture.Root);
+            var announcements = new List<A11yEvent>();
+            using var tab = new WorkspaceTabViewModel(
+                session,
+                new WorkspaceTabState(
+                    Guid.NewGuid(),
+                    new WorkspaceItemState(WorkspaceItemKind.Markdown, "host.md")),
+                announce: announcements.Add,
+                startInteractionBackgroundWork: true);
+            tab.ToggleViewMode();
+            ReadingContentViewModel reading = Assert.IsType<ReadingContentViewModel>(tab.Reading);
+            Assert.True(
+                PumpedDispatcher.PumpUntil(() => !reading.IsLoading && reading.Document is not null),
+                "the first projection never landed");
+            Assert.Contains("Embedded base: Summary", DocumentText(reading), StringComparison.Ordinal);
+
+            using var parked = new ManualResetEventSlim();
+            using var release = new ManualResetEventSlim();
+            int queries = 0;
+            reading.BaseProjectionHookForTests = () =>
+            {
+                if (Interlocked.Increment(ref queries) == 1)
+                {
+                    parked.Set();
+                    release.Wait(TimeSpan.FromSeconds(20));
+                }
+            };
+            try
+            {
+                reading.Refresh();
+                Assert.True(
+                    PumpedDispatcher.PumpUntil(() => parked.IsSet),
+                    "the refresh never reached its base card's query");
+
+                switch (retirement)
+                {
+                    case "supersede": reading.Refresh(); break;
+                    case "detach": reading.OnSurfaceDetached(); break;
+                    case "dispose": reading.Dispose(); break;
+                    default: throw new ArgumentOutOfRangeException(nameof(retirement), retirement, null);
+                }
+                release.Set();
+
+                // The retired walk ended Cancelled at the base query — with
+                // its own token the query would run to completion (or turn
+                // Cancelled into an error card) and the walk would return a
+                // result instead.
+                Assert.True(
+                    PumpedDispatcher.PumpUntil(() => reading.FetchesCancelledForTests == 1),
+                    "the retired refresh's base query was not cancelled");
+                if (retirement == "supersede")
+                {
+                    Assert.True(
+                        PumpedDispatcher.PumpUntil(() => !reading.IsLoading),
+                        "the newer refresh never published");
+                    string shown = DocumentText(reading);
+                    Assert.Contains("Embedded base: Summary", shown, StringComparison.Ordinal);
+                    Assert.DoesNotContain("could not be executed", shown, StringComparison.Ordinal);
+                }
+                Assert.Equal(1, reading.FetchesCancelledForTests);
+                Assert.Null(reading.LastTerminalFailureForTests);
+                Assert.DoesNotContain(
+                    announcements,
+                    item => item is A11yEvent.HostComposed composed
+                        && composed.Text.Contains("could not", StringComparison.Ordinal));
+            }
+            finally
+            {
+                release.Set();
+            }
+        });
+    }
+
+    private static string DocumentText(ReadingContentViewModel reading)
+    {
+        System.Windows.Documents.FlowDocument document =
+            Assert.IsType<System.Windows.Documents.FlowDocument>(reading.Document);
+        return new System.Windows.Documents.TextRange(document.ContentStart, document.ContentEnd).Text;
+    }
+
     private static VaultSession ScannedSession(string root)
     {
         VaultSession session = VaultSession.OpenFilesystem(root);
