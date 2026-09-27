@@ -33,10 +33,12 @@ namespace SlateWindows;
 /// so a taken key types no character and raises no mnemonic. The key's
 /// release is taken as well: the Apps key opens a context menu on its
 /// release, and a context menu's own keys and clicks stay inside its popup,
-/// out of every route here. Text that arrives without a key (an input
-/// panel) is taken, and so are pointer presses and releases, so no button,
-/// menu item or context menu is clicked. A mnemonic that reaches the access
-/// key manager anyway finds no target in the shell.
+/// out of every route here. A text input event is taken too, and so are
+/// pointer presses and releases, so no button, menu item or context menu is
+/// clicked. A mnemonic that reaches the access key manager anyway finds no
+/// target in the shell. (Text a TSF text service writes straight into a
+/// focused field — voice typing, handwriting — goes through WPF's text
+/// store, not these routes: contract 40 AR-48.)
 /// </para>
 /// <para>
 /// <b>Why input, not execution.</b> Every shell command is a view model
