@@ -788,6 +788,17 @@ internal sealed class CommandPaletteViewModel : BindableBase
         // over it would be a second open modal hiding the focused field.
         // Retiring here keeps the sanctioned two-surface transient inside
         // this one dispatcher turn.
+        //
+        // Unless the command's own action tore the shell down — a window
+        // close runs Shutdown synchronously, and so can a confirmation's
+        // nested message loop — in which case the source the write needs is
+        // being disposed, and nothing may join the lane after teardown's
+        // wait: no record, and the dismissal already happened.
+        if (_isShutDown)
+        {
+            return;
+        }
+
         RecordCompletion = RecordOnLane(row.Id);
         Dismiss();
     }

@@ -615,6 +615,34 @@ public sealed partial class CommandPaletteTests
         recording.AssertNothingLandsAfterTeardown();
     });
 
+    /// <summary>
+    /// A command whose own action tears the shell down — a window close
+    /// runs the palette's shutdown synchronously, inside the invoke — gets
+    /// no recents write: teardown has already waited for the lane and let
+    /// the source go, so nothing may join the lane after it (I8).
+    /// </summary>
+    [Fact]
+    public void ACommandThatTearsTheShellDownQueuesNoRecentsWrite() => RunSta(() =>
+    {
+        LaneHost host = LaneHost.Opened();
+        var probe = new DisposalProbe(() => true);
+        host.Harness.Source.OnInvoke = _ => VaultLifecycleViewModel.ShutDownPalette(host.Palette, probe);
+        host.Harness.Source.LaneOrder.Clear();
+        Task before = host.Palette.RecordCompletion;
+
+        host.Palette.InvokeSelected();
+
+        Assert.Equal(["slate.file.newNote"], host.Harness.Source.Invoked);
+        Assert.True(probe.Disposed);
+        Assert.True(host.Palette.IsShutDown);
+        Assert.Same(before, host.Palette.RecordCompletion);
+        PumpedDispatcher.PumpUntilDrained(host.Lane.WhenIdle());
+        PumpedDispatcher.Drain();
+        Assert.Empty(host.Harness.Source.Recorded);
+        Assert.Empty(host.Harness.Source.LaneOrder);
+        Assert.False(host.Palette.IsOpen);
+    });
+
     /// <summary>The shell's teardown runs the palette's: disposing the
     /// lifecycle shuts its palette down before the command source goes.</summary>
     [Fact]

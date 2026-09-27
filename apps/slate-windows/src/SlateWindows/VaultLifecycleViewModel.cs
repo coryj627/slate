@@ -603,9 +603,10 @@ internal sealed class VaultLifecycleViewModel
 
     /// <summary>
     /// The palette's teardown order (#1275): shut it down — nothing in
-    /// flight may publish, announce or dismiss afterwards, and its work
-    /// lane goes quiet, so a command load or a recents write still running
-    /// finishes — and only then dispose the command source that lane reads.
+    /// flight may publish or announce afterwards, nothing joins its work
+    /// lane, and the lane goes quiet, so a command load or a recents write
+    /// still running or queued finishes — and only then dispose the command
+    /// source that lane reads.
     /// </summary>
     internal static void ShutDownPalette(CommandPaletteViewModel? palette, IDisposable? source)
     {

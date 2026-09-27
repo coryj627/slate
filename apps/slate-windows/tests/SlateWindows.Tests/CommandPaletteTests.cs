@@ -1253,6 +1253,10 @@ public sealed partial class CommandPaletteTests
             return DisabledReasons.TryGetValue(commandId, out string? reason) ? reason : null;
         }
 
+        /// <summary>What the invoked command's action does, if anything —
+        /// the #1275 teardown fact's action shuts the shell down.</summary>
+        public Action<string>? OnInvoke { get; set; }
+
         public void Invoke(string commandId)
         {
             lock (log)
@@ -1265,6 +1269,8 @@ public sealed partial class CommandPaletteTests
             {
                 throw failure;
             }
+
+            OnInvoke?.Invoke(commandId);
         }
 
         public bool RecordInvocation(string commandId)
