@@ -199,6 +199,17 @@ public partial class MainWindow : IShellRegionHost
         return ((IShellRegionHost)this).FocusedRegion() == region;
     }
 
+    /// <summary>W7-7 PR 4b (#1247, AR-38): the row the sidebars and the
+    /// editor share tells the workspace how much room a sidebar resize
+    /// step has.</summary>
+    private void WorkspaceColumns_SizeChanged(object sender, SizeChangedEventArgs e)
+    {
+        if (_viewModel.Workspace is WorkspaceViewModel workspace)
+        {
+            workspace.WorkspaceRowWidth = e.NewSize.Width;
+        }
+    }
+
     /// <summary>WPF's menu mode routes keys to the menu; F6 is handed to
     /// the ring so a press from the menu-bar region moves on (spec §4).</summary>
     private void MainMenu_PreviewKeyDown(object sender, KeyEventArgs e)

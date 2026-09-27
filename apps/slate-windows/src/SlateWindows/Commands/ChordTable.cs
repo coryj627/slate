@@ -232,6 +232,10 @@ internal static class ChordTable
         public const string FocusPaneAbove = "slate.workspace.focusPaneAbove";
         public const string FocusPaneBelow = "slate.workspace.focusPaneBelow";
         public const string GrowPane = "slate.workspace.growPane";
+        public const string WidenFilesSidebar = "slate.workspace.widenFilesSidebar";
+        public const string NarrowFilesSidebar = "slate.workspace.narrowFilesSidebar";
+        public const string WidenRightPane = "slate.workspace.widenRightPane";
+        public const string NarrowRightPane = "slate.workspace.narrowRightPane";
         public const string ShrinkPane = "slate.workspace.shrinkPane";
         public const string ClosePane = "slate.workspace.closePane";
         public const string OpenInNewTab = "slate.workspace.openInNewTab";
@@ -752,6 +756,20 @@ internal static class ChordTable
             "Make the focused pane larger.", "⌥⌘=", "Ctrl+Alt+="),
         Reg(Ids.ShrinkPane, "Shrink Pane", CommandSection.View,
             "Make the focused pane smaller.", "⌥⌘-", "Ctrl+Alt+-"),
+
+        // W7-7 PR 4b (#1247; the owner's decision on AR-38): the splitters
+        // left the Tab order, so the keyboard resizes the two sidebars
+        // through these — chordless, from the palette and the Workspace
+        // menu; core speaks the new width. Windows-only: mac's sidebars
+        // resize by pointer.
+        Reg(Ids.WidenFilesSidebar, "Widen Files Sidebar", CommandSection.View,
+            "Make the Files sidebar wider by one step."),
+        Reg(Ids.NarrowFilesSidebar, "Narrow Files Sidebar", CommandSection.View,
+            "Make the Files sidebar narrower by one step."),
+        Reg(Ids.WidenRightPane, "Widen Right Pane", CommandSection.View,
+            "Make the right pane wider by one step."),
+        Reg(Ids.NarrowRightPane, "Narrow Right Pane", CommandSection.View,
+            "Make the right pane narrower by one step."),
         Reg(Ids.ClosePane, "Close Pane", CommandSection.View,
             "Close the focused pane's tabs, prompting for unsaved changes."),
         Reg(Ids.OpenInNewTab, "Open Selected File in New Tab", CommandSection.View,

@@ -2086,12 +2086,37 @@
   },
   {
     "Source": "MainWindow.xaml",
+    "Expression": "WorkspaceColumns",
+    "Surface": "Main window and menu bar"
+  },
+  {
+    "Source": "MainWindow.xaml",
     "Expression": "WorkspaceFocusNextRegionMenuItem",
     "Surface": "Main window and menu bar"
   },
   {
     "Source": "MainWindow.xaml",
     "Expression": "WorkspaceFocusPreviousRegionMenuItem",
+    "Surface": "Main window and menu bar"
+  },
+  {
+    "Source": "MainWindow.xaml",
+    "Expression": "WorkspaceNarrowFilesSidebarMenuItem",
+    "Surface": "Main window and menu bar"
+  },
+  {
+    "Source": "MainWindow.xaml",
+    "Expression": "WorkspaceNarrowRightPaneMenuItem",
+    "Surface": "Main window and menu bar"
+  },
+  {
+    "Source": "MainWindow.xaml",
+    "Expression": "WorkspaceWidenFilesSidebarMenuItem",
+    "Surface": "Main window and menu bar"
+  },
+  {
+    "Source": "MainWindow.xaml",
+    "Expression": "WorkspaceWidenRightPaneMenuItem",
     "Surface": "Main window and menu bar"
   },
   {

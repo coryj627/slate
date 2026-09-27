@@ -298,6 +298,19 @@
                           Command="{Binding Workspace.FocusPreviousPaneCommand}" />
                 <MenuItem Header="Move Tab Left" InputGestureText="{cmd:ChordText slate.workspace.moveTabLeft}" AutomationProperties.AcceleratorKey="{Binding InputGestureText, RelativeSource={RelativeSource Self}}" Command="{Binding Workspace.MoveTabLeftCommand}" />
                 <MenuItem Header="Move Tab Right" InputGestureText="{cmd:ChordText slate.workspace.moveTabRight}" AutomationProperties.AcceleratorKey="{Binding InputGestureText, RelativeSource={RelativeSource Self}}" Command="{Binding Workspace.MoveTabRightCommand}" />
+                <!-- W7-7 PR 4b (#1247, AR-38): the keyboard's sidebar resize. -->
+                <MenuItem Header="Widen _Files Sidebar"
+                          AutomationProperties.AutomationId="WorkspaceWidenFilesSidebarMenuItem"
+                          Command="{Binding Workspace.WidenFilesSidebarCommand}" />
+                <MenuItem Header="Narrow F_iles Sidebar"
+                          AutomationProperties.AutomationId="WorkspaceNarrowFilesSidebarMenuItem"
+                          Command="{Binding Workspace.NarrowFilesSidebarCommand}" />
+                <MenuItem Header="Widen Right Pa_ne"
+                          AutomationProperties.AutomationId="WorkspaceWidenRightPaneMenuItem"
+                          Command="{Binding Workspace.WidenRightPaneCommand}" />
+                <MenuItem Header="Narrow Right Pan_e"
+                          AutomationProperties.AutomationId="WorkspaceNarrowRightPaneMenuItem"
+                          Command="{Binding Workspace.NarrowRightPaneCommand}" />
                 <MenuItem Header="_Grow Pane" InputGestureText="{cmd:ChordText slate.workspace.growPane}" AutomationProperties.AcceleratorKey="{Binding InputGestureText, RelativeSource={RelativeSource Self}}" Command="{Binding Workspace.GrowPaneCommand}" />
                 <MenuItem Header="_Shrink Pane" InputGestureText="{cmd:ChordText slate.workspace.shrinkPane}" AutomationProperties.AcceleratorKey="{Binding InputGestureText, RelativeSource={RelativeSource Self}}" Command="{Binding Workspace.ShrinkPaneCommand}" />
                 <Separator />
@@ -848,13 +861,17 @@
                         <TextBlock Text="{Binding VaultPath}" FontSize="12" Foreground="{DynamicResource Slate.SecondaryTextBrush}" TextTrimming="CharacterEllipsis" />
                     </StackPanel>
                 </Border>
-                <Grid Grid.Row="1">
+                <!-- W7-7 PR 4b (#1247, AR-38): the sidebar widths are the
+                     workspace's, so Widen/Narrow Files Sidebar and Widen/Narrow
+                     Right Pane step them from the keyboard and a splitter drag
+                     writes them back. -->
+                <Grid x:Name="WorkspaceColumns" Grid.Row="1" SizeChanged="WorkspaceColumns_SizeChanged">
                     <Grid.ColumnDefinitions>
-                        <ColumnDefinition Width="270" MinWidth="200" />
+                        <ColumnDefinition Width="{Binding Workspace.FilesSidebarWidth, Mode=TwoWay, Converter={StaticResource PixelGridLengthConverter}, FallbackValue=270}" MinWidth="200" />
                         <ColumnDefinition Width="5" />
                         <ColumnDefinition Width="*" MinWidth="300" />
                         <ColumnDefinition Width="5" />
-                        <ColumnDefinition Width="280" MinWidth="200" />
+                        <ColumnDefinition Width="{Binding Workspace.RightPaneWidth, Mode=TwoWay, Converter={StaticResource PixelGridLengthConverter}, FallbackValue=280}" MinWidth="200" />
                     </Grid.ColumnDefinitions>
                     <local:AutomationLandmarkBorder x:Name="FilesPaneBorder"
                             KeyboardNavigation.DirectionalNavigation="Contained"

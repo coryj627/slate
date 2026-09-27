@@ -8283,6 +8283,38 @@ impl From<core::a11y::A11yPriority> for A11yPriority {
     }
 }
 
+/// 1:1 mirror of `slate_core::a11y::ShellSidebar`.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, uniffi::Enum)]
+pub enum ShellSidebar {
+    Files,
+    RightPane,
+}
+
+impl From<ShellSidebar> for core::a11y::ShellSidebar {
+    fn from(s: ShellSidebar) -> Self {
+        match s {
+            ShellSidebar::Files => Self::Files,
+            ShellSidebar::RightPane => Self::RightPane,
+        }
+    }
+}
+
+/// 1:1 mirror of `slate_core::a11y::SidebarWidthLimit`.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, uniffi::Enum)]
+pub enum SidebarWidthLimit {
+    Narrowest,
+    Widest,
+}
+
+impl From<SidebarWidthLimit> for core::a11y::SidebarWidthLimit {
+    fn from(l: SidebarWidthLimit) -> Self {
+        match l {
+            SidebarWidthLimit::Narrowest => Self::Narrowest,
+            SidebarWidthLimit::Widest => Self::Widest,
+        }
+    }
+}
+
 /// 1:1 mirror of `slate_core::a11y::ShellRegion`.
 #[derive(Debug, Clone, PartialEq, Eq, uniffi::Enum)]
 pub enum ShellRegion {
@@ -8334,6 +8366,11 @@ pub enum A11yEvent {
     NoSplitPanesToResize,
     PaneResized {
         percent: u32,
+    },
+    SidebarResized {
+        sidebar: ShellSidebar,
+        width: u32,
+        limit: Option<SidebarWidthLimit>,
     },
     GraphOpensSinglePane,
     RightPaneShown,
@@ -10226,6 +10263,15 @@ impl From<A11yEvent> for core::a11y::A11yEvent {
             },
             F::NoSplitPanesToResize => C::NoSplitPanesToResize,
             F::PaneResized { percent } => C::PaneResized { percent },
+            F::SidebarResized {
+                sidebar,
+                width,
+                limit,
+            } => C::SidebarResized {
+                sidebar: sidebar.into(),
+                width,
+                limit: limit.map(Into::into),
+            },
             F::GraphOpensSinglePane => C::GraphOpensSinglePane,
             F::RightPaneShown => C::RightPaneShown,
             F::RightPaneHidden => C::RightPaneHidden,

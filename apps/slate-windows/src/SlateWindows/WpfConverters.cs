@@ -28,6 +28,18 @@ internal sealed class AxisToOrientationConverter : IValueConverter
         value is Orientation.Vertical ? "vertical" : "horizontal";
 }
 
+/// <summary>W7-7 PR 4b (#1247): a sidebar column's width, in
+/// device-independent pixels, both ways — the resize commands step the
+/// number and a splitter drag writes it back.</summary>
+internal sealed class PixelGridLengthConverter : IValueConverter
+{
+    public object Convert(object value, Type targetType, object parameter, CultureInfo culture) =>
+        value is double pixels ? new GridLength(pixels) : Binding.DoNothing;
+
+    public object ConvertBack(object value, Type targetType, object parameter, CultureInfo culture) =>
+        value is GridLength { IsAbsolute: true } length ? length.Value : Binding.DoNothing;
+}
+
 internal sealed class NullToVisibilityConverter : IValueConverter
 {
     public object Convert(object value, Type targetType, object parameter, CultureInfo culture) =>

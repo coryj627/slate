@@ -415,6 +415,7 @@ public partial class MainWindow : Window
         _observedWorkspace = workspace;
         if (workspace is not null)
         {
+            workspace.WorkspaceRowWidth = WorkspaceColumns.ActualWidth;
             workspace.EditorPaneFocusRequested += Workspace_EditorPaneFocusRequested;
             workspace.PropertyChanged += Workspace_CanvasSheetChanged;
             WireWorkspaceProperties(workspace);

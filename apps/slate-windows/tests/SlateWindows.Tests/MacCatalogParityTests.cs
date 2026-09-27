@@ -252,7 +252,15 @@ public sealed class MacCatalogParityTests
             ["slate.canvas.colorMarked"] =
                 "§G GD-5: mac's canvasColorMarked has no palette row or chord — a recorded "
                 + "divergence assigned to the mac lane; Windows lands the front door.",
-            ["slate.workspace.focusNextPane"] =
+            ["slate.workspace.widenFilesSidebar"] =
+            "Windows-only keyboard sidebar resize (W7-7 PR 4b, AR-38): the splitters left the Tab order; mac's sidebars resize by pointer.",
+        ["slate.workspace.narrowFilesSidebar"] =
+            "Windows-only keyboard sidebar resize (W7-7 PR 4b, AR-38): the splitters left the Tab order; mac's sidebars resize by pointer.",
+        ["slate.workspace.widenRightPane"] =
+            "Windows-only keyboard sidebar resize (W7-7 PR 4b, AR-38): the splitters left the Tab order; mac's sidebars resize by pointer.",
+        ["slate.workspace.narrowRightPane"] =
+            "Windows-only keyboard sidebar resize (W7-7 PR 4b, AR-38): the splitters left the Tab order; mac's sidebars resize by pointer.",
+        ["slate.workspace.focusNextPane"] =
                 "Windows-only shell region cycling (F6 / Shift+F6, W7-6); mac navigates panes directionally only.",
             ["slate.workspace.focusPreviousPane"] =
                 "Windows-only shell region cycling (F6 / Shift+F6, W7-6); mac navigates panes directionally only.",

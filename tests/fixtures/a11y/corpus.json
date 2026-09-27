@@ -70,6 +70,21 @@
     "text": "Pane resized, 60 percent."
   },
   {
+    "event": "SidebarResized { sidebar: Files, width: 310, limit: None }",
+    "priority": "medium",
+    "text": "Files sidebar resized, 310 pixels."
+  },
+  {
+    "event": "SidebarResized { sidebar: RightPane, width: 200, limit: Some(Narrowest) }",
+    "priority": "medium",
+    "text": "Right pane at its narrowest, 200 pixels."
+  },
+  {
+    "event": "SidebarResized { sidebar: Files, width: 600, limit: Some(Widest) }",
+    "priority": "medium",
+    "text": "Files sidebar at its widest, 600 pixels."
+  },
+  {
     "event": "GraphOpensSinglePane",
     "priority": "medium",
     "text": "The graph opens in a single pane. Split from a note instead."
