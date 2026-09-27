@@ -5,7 +5,6 @@ using System.Reflection;
 using System.Runtime.ExceptionServices;
 using System.Windows;
 using System.Windows.Controls;
-using System.Windows.Controls.Primitives;
 using System.Windows.Input;
 using SlateWindows.Canvas;
 using uniffi.slate_uniffi;
@@ -17,12 +16,13 @@ namespace SlateWindows.Tests;
 /// import on Escape in its TUNNELLING handler, ahead of every focused
 /// control — the position contract 34 documents for the canvas (C16: "an
 /// import in flight keeps Escape and the ladder never sees it") — so every
-/// owner of the key is yielded to by name. These facts run the shipped
-/// shell's own elements and handler with an import in flight: an open
-/// template sheet (contract 30 T3: Esc cancels from every state; TR-7) and
-/// WPF menu mode (W7-6 §4), each taking the key through its own route while
-/// the import keeps running. The Files owners and the fall-through are
-/// SidebarTreeKeysTests' import facts.
+/// owner of the key is yielded to by name. These facts run the shipped,
+/// unshown MainWindow — its own elements and handler — with an import in
+/// flight: an open template sheet (contract 30 T3: Esc cancels from every
+/// state; TR-7) takes the key through its own route, and a key from WPF
+/// menu mode (W7-6 §4) is left to the menu, while the import keeps
+/// running. The Files owners and the fall-through are SidebarTreeKeysTests'
+/// import facts.
 /// </summary>
 public sealed class ImportEscapePrecedenceTests
 {
@@ -58,55 +58,42 @@ public sealed class ImportEscapePrecedenceTests
     });
 
     /// <summary>
-    /// During a long import, WPF menu mode on the shipped menu bar owns
-    /// Escape, through the real input pipeline: with File highlighted,
-    /// Escape leaves menu mode and hands focus back; with the File menu
-    /// open, Escape closes it and menu mode stays. Either way the import
-    /// keeps running (the source it is handed afterwards is imported).
+    /// During a long import, WPF menu mode owns Escape — witnessed at the
+    /// handler, where no foreground is needed. Menu mode itself cannot be
+    /// entered on CI: WPF's menu takes the mouse capture when focus enters
+    /// it and backs out of menu mode when a window that is not in the
+    /// foreground cannot get it, and the CI session is non-interactive. So
+    /// Escape's PreviewKeyDown is raised with a menu item as its source —
+    /// what a key pressed in menu mode is — and tunnels from the shipped,
+    /// unshown MainWindow through the shipped <c>Window_PreviewKeyDown</c>.
+    /// From the File menu item, and from an item of its submenu, the handler
+    /// leaves the key unhandled (for the menu's own KeyDown, which closes the
+    /// menu or leaves menu mode) and the import keeps running: the source it
+    /// is handed afterwards is imported. The same key from the Files tree is
+    /// the handler's, and the import is cancelled: the source is never
+    /// imported.
     /// </summary>
     [Theory]
-    [InlineData("File highlighted")]
-    [InlineData("File menu open")]
-    public void EscapeInMenuModeDuringAnImport_LeavesTheMenuNotTheImport(string menu) => RunSta(() =>
+    [InlineData("FileMenu", true)]
+    [InlineData("OpenVaultMenuItem", true)]
+    [InlineData("FilesTree", false)]
+    public void EscapeFromAMenuItemDuringAnImport_IsLeftToTheMenu(string automationId, bool fromTheMenu) => RunSta(() =>
     {
         using var import = new PendingImport();
-        using var host = new MenuHost(import);
+        using var host = new ShellHost(import);
         host.Sidebar.ImportCommand.Execute(null);
         Assert.True(host.Sidebar.IsImporting);
-        Assert.True(host.Sentinel.Focus());
-        Assert.True(host.FileMenu.Focus());
-        PumpedDispatcher.Drain();
-        Assert.True(host.IsMenuMode, "Focus on the File menu item did not enter menu mode.");
-        if (menu == "File menu open")
-        {
-            // Down on the highlighted File opens its menu with focus on
-            // the first item, as the keyboard opens it.
-            host.Press(Key.Down);
-            Assert.True(
-                PumpedDispatcher.PumpUntil(() => host.FileMenu.IsSubmenuOpen
-                    && Keyboard.FocusedElement is MenuItem item
-                    && !ReferenceEquals(item, host.FileMenu)),
-                "Down on File did not open the File menu with focus on its first item.");
-        }
+        UIElement source = host.ByAutomationId(automationId);
+        Assert.Equal(fromTheMenu, source is MenuItem);
 
-        host.Press(Key.Escape);
+        bool handled = host.PressPreview(source, Key.Escape);
 
-        if (menu == "File menu open")
-        {
-            Assert.False(host.FileMenu.IsSubmenuOpen, "Escape did not close the open File menu.");
-            Assert.True(host.IsMenuMode, "Closing the File menu also left menu mode.");
-        }
-        else
-        {
-            Assert.False(host.IsMenuMode, "Escape did not leave menu mode.");
-            Assert.Same(host.Sentinel, Keyboard.FocusedElement);
-        }
-
+        Assert.Equal(!fromTheMenu, handled);
         Assert.True(host.Sidebar.IsImporting);
         import.HandOverTheSource();
         PumpedDispatcher.PumpUntilDrained(host.Sidebar.ImportCompletion);
         Assert.False(host.Sidebar.IsImporting);
-        Assert.Equal(1, import.WorkerRuns);
+        Assert.Equal(fromTheMenu ? 1 : 0, import.WorkerRuns);
     });
 
     /// <summary>The shipped shell, unshown (SheetKeyboardFenceTests' shape):
@@ -186,6 +173,48 @@ public sealed class ImportEscapePrecedenceTests
             return handled;
         }
 
+        /// <summary>The tunnelling half of a key press alone: the preview is
+        /// raised on <paramref name="target"/>, so it tunnels from the
+        /// MainWindow through <c>Window_PreviewKeyDown</c>; the answer is
+        /// whether anything on that route handled it.</summary>
+        public bool PressPreview(UIElement target, Key key)
+        {
+            AwaitNoHeldModifier();
+            var preview = new KeyEventArgs(
+                Keyboard.PrimaryDevice,
+                PresentationSource.FromVisual(_inputSource)!,
+                Environment.TickCount,
+                key)
+            {
+                RoutedEvent = Keyboard.PreviewKeyDownEvent,
+            };
+            target.RaiseEvent(preview);
+            PumpedDispatcher.Drain();
+            return preview.Handled;
+        }
+
+        /// <summary>The shell's element carrying <paramref name="automationId"/>
+        /// — the menu items have no x:Name.</summary>
+        public UIElement ByAutomationId(string automationId) =>
+            Assert.Single(
+                LogicalDescendants(Shell).OfType<UIElement>(),
+                element => System.Windows.Automation.AutomationProperties.GetAutomationId(element) == automationId);
+
+        private static IEnumerable<DependencyObject> LogicalDescendants(DependencyObject root)
+        {
+            foreach (object child in LogicalTreeHelper.GetChildren(root))
+            {
+                if (child is DependencyObject node)
+                {
+                    yield return node;
+                    foreach (DependencyObject descendant in LogicalDescendants(node))
+                    {
+                        yield return descendant;
+                    }
+                }
+            }
+        }
+
         public void Dispose()
         {
             var failures = new List<Exception>();
@@ -207,116 +236,6 @@ public sealed class ImportEscapePrecedenceTests
             if (failures.Count > 0)
             {
                 throw new AggregateException("The shell fixture's cleanup failed.", failures);
-            }
-        }
-    }
-
-    /// <summary>The shipped menu bar — the MainWindow's own
-    /// <c>MainMenu</c>, with its items, commands and handlers — in a shown
-    /// offscreen window, because menu mode needs keyboard focus and so a
-    /// live HWND, which the unshown MainWindow cannot have (and showing the
-    /// real MainWindow would open the user's recent vaults and write window
-    /// placement). The shipped <c>MainWindow.Window_PreviewKeyDown</c>
-    /// stands at the root of the window's key route, where it runs in the
-    /// shell, and keys arrive through the real input pipeline
-    /// (<see cref="InputManager"/>), so WPF's own menu handling answers
-    /// them.</summary>
-    private sealed class MenuHost : IDisposable
-    {
-        private static readonly PropertyInfo MenuModeProperty =
-            typeof(MenuBase).GetProperty("IsMenuMode", BindingFlags.Instance | BindingFlags.NonPublic)
-            ?? throw new InvalidOperationException("MenuBase.IsMenuMode is gone; the menu-mode fact needs another witness.");
-
-        private readonly FixtureVault _fixture = FixtureVault.Create(1, "import-escape-menu");
-        private readonly Func<bool> _priorOverlayProbe = CanvasSurfaceView.ShellOverlayIsOpen;
-        private readonly VaultSession _session;
-        private readonly VaultLifecycleViewModel _lifecycle;
-        private readonly Window _window;
-        private readonly Menu _menu;
-
-        public MenuHost(PendingImport import)
-        {
-            Assert.Null(Application.Current);
-            _session = VaultSession.OpenFilesystem(_fixture.Root);
-            using (var cancel = new CancelToken())
-            {
-                _session.ScanInitial(cancel);
-            }
-
-            Sidebar = NewSidebar(_session, _fixture.Root, import);
-            Shell = new MainWindow();
-            _lifecycle = Assert.IsType<VaultLifecycleViewModel>(Shell.DataContext);
-            SetState(_lifecycle, nameof(VaultLifecycleViewModel.FileSidebar), Sidebar);
-            _menu = Assert.IsType<Menu>(Shell.FindName("MainMenu"));
-            Assert.IsAssignableFrom<Panel>(_menu.Parent).Children.Remove(_menu);
-            FileMenu = Assert.Single(
-                _menu.Items.OfType<MenuItem>(),
-                item => System.Windows.Automation.AutomationProperties.GetAutomationId(item) == "FileMenu");
-            Sentinel = new TextBox { Text = "Focus before menu mode" };
-            var root = new DockPanel();
-            DockPanel.SetDock(_menu, Dock.Top);
-            root.Children.Add(_menu);
-            root.Children.Add(Sentinel);
-            _window = OffscreenWindow(root);
-            _window.DataContext = _lifecycle;
-            _window.ShowActivated = true;
-            MethodInfo handler = typeof(MainWindow).GetMethod(
-                "Window_PreviewKeyDown",
-                BindingFlags.Instance | BindingFlags.NonPublic)
-                ?? throw new InvalidOperationException("MainWindow.Window_PreviewKeyDown is gone.");
-            _window.PreviewKeyDown += handler.CreateDelegate<KeyEventHandler>(Shell);
-            _window.Show();
-            _window.Activate();
-            _window.UpdateLayout();
-            PumpedDispatcher.Drain();
-        }
-
-        public MainWindow Shell { get; }
-
-        public FilesSidebarViewModel Sidebar { get; }
-
-        public MenuItem FileMenu { get; }
-
-        public TextBox Sentinel { get; }
-
-        public bool IsMenuMode => (bool)MenuModeProperty.GetValue(_menu)!;
-
-        /// <summary>One key press through the input system, delivered to
-        /// the keyboard focus the way a physical press is.</summary>
-        public void Press(Key key)
-        {
-            AwaitNoHeldModifier();
-            InputManager.Current.ProcessInput(new KeyEventArgs(
-                Keyboard.PrimaryDevice,
-                PresentationSource.FromVisual(_window)!,
-                Environment.TickCount,
-                key)
-            {
-                RoutedEvent = Keyboard.PreviewKeyDownEvent,
-            });
-            PumpedDispatcher.Drain();
-        }
-
-        public void Dispose()
-        {
-            var failures = new List<Exception>();
-            void CleanUp(Action action)
-            {
-                try { action(); }
-                catch (Exception exception) { failures.Add(exception); }
-            }
-
-            CleanUp(() => FileMenu.IsSubmenuOpen = false);
-            CleanUp(() => SetState(_lifecycle, nameof(VaultLifecycleViewModel.FileSidebar), null));
-            CleanUp(() => PumpedDispatcher.PumpUntilDrained(Sidebar.BeginSessionShutdownAndCaptureWork().SessionWork));
-            CleanUp(_window.Close);
-            CleanUp(Shell.Close);
-            CleanUp(_session.Dispose);
-            CleanUp(_fixture.Dispose);
-            CanvasSurfaceView.ShellOverlayIsOpen = _priorOverlayProbe;
-            if (failures.Count > 0)
-            {
-                throw new AggregateException("The menu fixture's cleanup failed.", failures);
             }
         }
     }
