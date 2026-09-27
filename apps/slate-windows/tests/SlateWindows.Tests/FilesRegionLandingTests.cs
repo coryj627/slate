@@ -393,6 +393,69 @@ public sealed class FilesRegionLandingTests
         host.AssertNeverFocusedPopulated(tree);
     });
 
+    public static TheoryData<string, Key> EmptyFilesSelectors()
+    {
+        var data = new TheoryData<string, Key>();
+        foreach (string selector in new[] { "SidebarDualPane", "SidebarTagTree", "SidebarShortcuts" })
+        {
+            foreach (Key key in new[] { Key.Right, Key.Left, Key.Up, Key.Down })
+            {
+                data.Add(selector, key);
+            }
+        }
+
+        return data;
+    }
+
+    /// <summary>Codex PR 4 round 6 high 5 (the repro's R6_5, inverted; the
+    /// owner's S1): PR 2's selectors sat outside the Files tree's Contained
+    /// group, and the Files pane was no boundary. Each, EMPTY — its own stop
+    /// (AR-6): the dual pane before a folder with files is chosen, the Tags
+    /// tree over a vault with no tags, the shortcuts list with none added —
+    /// keeps every arrow in the Files region now that the pane contains
+    /// them.</summary>
+    [Theory]
+    [MemberData(nameof(EmptyFilesSelectors))]
+    public void AnEmptyFilesSelectorKeepsItsArrowsInTheRegion(string selector, Key key) => RunSta(() =>
+    {
+        using var host = new Host();
+        host.Initialize(untagged: true);
+        ItemsControl target = ShowEmpty(host, selector);
+        Assert.True(target.Focus(), $"premise: the empty {selector} refused the keys.");
+        Assert.Same(target, Keyboard.FocusedElement);
+
+        host.Press(key);
+
+        Assert.True(
+            host.Pane.IsKeyboardFocusWithin,
+            $"{key} from the empty {selector} left the Files region, to {Keyboard.FocusedElement}");
+    });
+
+    private static ItemsControl ShowEmpty(Host host, string selector)
+    {
+        switch (selector)
+        {
+            case "SidebarDualPane":
+                host.Sidebar.IsDualPaneEnabled = true;
+                host.Sidebar.SelectedNode = host.Sidebar.RootNodes.Single(node => node.IsDirectory && node.Name == "empty");
+                PumpedDispatcher.Drain();
+                break;
+            case "SidebarTagTree":
+                host.Sidebar.ShowTags = true;
+                break;
+            default:
+                host.ElementWithId<Expander>("SidebarShortcutsActions").IsExpanded = true;
+                break;
+        }
+
+        host.Pane.UpdateLayout();
+        PumpedDispatcher.Drain();
+        ItemsControl target = host.ElementWithId<ItemsControl>(selector);
+        Assert.True(target.IsVisible, $"premise: {selector} is not shown.");
+        Assert.False(target.HasItems, $"premise: {selector} is not empty.");
+        return target;
+    }
+
     private static FileTreeNodeViewModel? FocusedNode() =>
         (Keyboard.FocusedElement as TreeViewItem)?.DataContext as FileTreeNodeViewModel;
 
@@ -432,13 +495,27 @@ public sealed class FilesRegionLandingTests
         /// file can sit beneath a collapsed row.</param>
         /// <param name="tagged">Adds a note carrying a tag, so the Tags tree
         /// has a row.</param>
-        public void Initialize(bool nested = false, bool tagged = false)
+        /// <param name="untagged">Strips the fixture's tags, so the Tags tree
+        /// is empty, and adds a folder with no notes, whose dual-pane listing
+        /// is empty.</param>
+        public void Initialize(bool nested = false, bool tagged = false, bool untagged = false)
         {
             Assert.Null(Application.Current);
             if (nested)
             {
                 Directory.CreateDirectory(Path.Combine(_fixture.Root, "folder"));
                 File.WriteAllText(Path.Combine(_fixture.Root, "folder", "inner.md"), "# Inner\n");
+            }
+
+            if (untagged)
+            {
+                foreach (string note in Directory.EnumerateFiles(_fixture.Root, "*.md"))
+                {
+                    File.WriteAllText(note, "# Untagged\n\nNo tags here.\n");
+                }
+
+                Directory.CreateDirectory(Path.Combine(_fixture.Root, "empty"));
+                File.WriteAllText(Path.Combine(_fixture.Root, "empty", ".keep"), string.Empty);
             }
 
             if (tagged)

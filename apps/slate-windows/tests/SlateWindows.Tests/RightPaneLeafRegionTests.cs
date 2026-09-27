@@ -95,6 +95,105 @@ public sealed class RightPaneLeafRegionTests
         Assert.Equal(["Due today, 0 tasks"], renamedWhileFocused);
     });
 
+    public static TheoryData<string, string, Key> LeafStops()
+    {
+        var data = new TheoryData<string, string, Key>();
+        foreach ((string leaf, string stop) in new[]
+                 {
+                     ("connections", "ConnectionsLeafSurface"),
+                     ("queries", "QueriesNewDashboard"),
+                     ("queries", "QueriesRefresh"),
+                     ("bibliography", "BibliographySearch"),
+                 })
+        {
+            foreach (Key key in new[] { Key.Right, Key.Left, Key.Up, Key.Down })
+            {
+                data.Add(leaf, stop, key);
+            }
+        }
+
+        return data;
+    }
+
+    /// <summary>
+    /// The owner's S1 and the completeness sweep's G1: every leaf body is a
+    /// boundary that keeps its arrows. Seven bodies were not: from the
+    /// Connections anchor (the leaf with no note, the F4 transcript site)
+    /// Right reached the rail and Left the "Resize right pane" splitter;
+    /// from Queries' header buttons and the Bibliography search field an
+    /// arrow walked out the same way. From each stop, each arrow keeps the
+    /// keys in the leaf.
+    /// </summary>
+    [Theory]
+    [MemberData(nameof(LeafStops))]
+    public void EveryArrowFromALeafStopStaysInTheLeaf(string leaf, string stop, Key key) => RunSta(() =>
+    {
+        using var host = new Host();
+        host.Initialize(leaf, ("a.md", "# A\n"));
+        FrameworkElement body = host.VisibleLeafBody();
+        body.UpdateLayout();
+        if (host.Shell.FindName(stop) is Graph.ConnectionsLeafView connections)
+        {
+            Assert.True(connections.FocusAnchor(), "premise: the Connections anchor refused the keys.");
+        }
+        else
+        {
+            UIElement element = host.ElementWithId<UIElement>(stop);
+            Assert.True(element.Focus(), $"premise: {stop} refused the keys.");
+        }
+
+        IInputElement from = Keyboard.FocusedElement;
+        host.ForgetFocusAndSpeech();
+
+        host.Press(key);
+
+        Assert.True(
+            body.IsKeyboardFocusWithin,
+            $"{key} from {Describe(from)} left the {leaf} leaf, to {Describe(Keyboard.FocusedElement)}; order: {host.Order}");
+    });
+
+    /// <summary>Round 6 high 4 by its keyboard route (the repro's R6_4,
+    /// inverted; the owner's point fix 4): under the Overdue filter the only
+    /// row is toggled done (Space) and page one re-queries to ZERO rows, so
+    /// the focused row goes away under the reader. With the review body a
+    /// boundary, every arrow from wherever the publication left the keys
+    /// stays in the leaf.</summary>
+    [Theory]
+    [InlineData(Key.Right)]
+    [InlineData(Key.Left)]
+    [InlineData(Key.Up)]
+    [InlineData(Key.Down)]
+    public void AReviewEmptiedUnderTheReaderKeepsItsArrowsInTheLeaf(Key key) => RunSta(() =>
+    {
+        using var host = new Host();
+        host.Initialize("tasksReview", ("todo.md", "- [ ] late one 📅 2020-01-01\n"));
+        host.AttachWorkspaceToTheWindow();
+        TasksReviewViewModel review = host.Workspace.TasksReview;
+        review.EnsureLoaded();
+        Assert.True(PumpedDispatcher.PumpUntil(() => review.Rows.Count == 1), "premise: the review never loaded its row.");
+        review.OverdueFilterActive = true;
+        Assert.True(PumpedDispatcher.PumpUntil(() => review.Rows.Count == 1 && review.OverdueFilterActive), "premise: the Overdue filter lost the row.");
+        ListBox list = host.ElementWithId<ListBox>("PanelReviewList");
+        list.SelectedIndex = 0;
+        list.UpdateLayout();
+        Assert.True(((UIElement)list.ItemContainerGenerator.ContainerFromIndex(0)).Focus());
+        host.ForgetFocusAndSpeech();
+
+        host.Press(Key.Space);
+        Assert.True(
+            PumpedDispatcher.PumpUntil(() => review.Rows.Count == 0
+                && File.ReadAllText(host.PathOf("todo.md")).Contains("- [x] late one", StringComparison.Ordinal)),
+            "premise: the toggle never emptied the Overdue page.");
+        PumpedDispatcher.Drain();
+        IInputElement afterPublication = Keyboard.FocusedElement;
+
+        host.Press(key);
+
+        Assert.True(
+            host.VisibleLeafBody().IsKeyboardFocusWithin,
+            $"after the emptying publication the keys were on {Describe(afterPublication)}; {key} then left the leaf, to {Describe(Keyboard.FocusedElement)}; order: {host.Order}");
+    });
+
     private static string Describe(IInputElement? element) => element switch
     {
         null => "nothing",

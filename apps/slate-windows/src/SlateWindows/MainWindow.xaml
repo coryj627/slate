@@ -755,6 +755,7 @@
 
         <Grid>
             <local:AutomationLandmarkGrid x:Name="WelcomeRoot"
+                  KeyboardNavigation.DirectionalNavigation="Contained"
                   Background="{DynamicResource Slate.WindowBackgroundBrush}"
                   AutomationProperties.AutomationId="WelcomeView"
                   AutomationProperties.Name="Welcome"
@@ -856,6 +857,7 @@
                         <ColumnDefinition Width="280" MinWidth="200" />
                     </Grid.ColumnDefinitions>
                     <local:AutomationLandmarkBorder x:Name="FilesPaneBorder"
+                            KeyboardNavigation.DirectionalNavigation="Contained"
                             Grid.Column="0"
                             AutomationProperties.AutomationId="FilesPane"
                             AutomationProperties.Name="Files"
@@ -1155,6 +1157,7 @@
                         </DockPanel>
                     </local:AutomationLandmarkBorder>
                     <GridSplitter Grid.Column="1"
+                                  KeyboardNavigation.IsTabStop="False"
                                   Background="{DynamicResource Slate.BorderBrush}"
                                   HorizontalAlignment="Stretch"
                                   ResizeDirection="Columns"
@@ -1177,6 +1180,7 @@
                                         AutomationProperties.Name="Workspace editor panes" />
                     </local:AutomationLandmarkBorder>
                     <GridSplitter Grid.Column="3"
+                                  KeyboardNavigation.IsTabStop="False"
                                   Background="{DynamicResource Slate.BorderBrush}"
                                   HorizontalAlignment="Stretch"
                                   ResizeDirection="Columns"
@@ -1574,7 +1578,8 @@
                             <!-- W4-3 (#735): the vault-wide Tasks Review leaf — the
                                  mac TasksReviewPanel flow: pinned filter chips, a
                                  paged row list, and an explicit Load more row. -->
-                            <DockPanel Grid.Column="0" Margin="12">
+                            <DockPanel Grid.Column="0" Margin="12"
+                                       KeyboardNavigation.DirectionalNavigation="Contained">
                                 <DockPanel.Style>
                                     <Style TargetType="DockPanel">
                                         <Setter Property="Visibility" Value="Collapsed" />
@@ -1806,7 +1811,8 @@
                                  bulk-rename preview is; export is null on
                                  both (D-7 / G29).
                                  ========================================== -->
-                            <DockPanel Grid.Column="0" Margin="12">
+                            <DockPanel Grid.Column="0" Margin="12"
+                                       KeyboardNavigation.DirectionalNavigation="Contained">
                                 <DockPanel.Style>
                                     <Style TargetType="DockPanel">
                                         <Setter Property="Visibility" Value="Collapsed" />
@@ -1952,6 +1958,7 @@
                                  the selection (AT-reachable, one route
                                  per action shared with the commands). -->
                             <DockPanel Margin="12"
+                                       KeyboardNavigation.DirectionalNavigation="Contained"
                                        AutomationProperties.AutomationId="QueriesLeafBody">
                                 <DockPanel.Style>
                                     <Style TargetType="DockPanel">
@@ -2140,6 +2147,7 @@
                                  docked target following the active note,
                                  read-only. -->
                             <DockPanel Margin="12"
+                                       KeyboardNavigation.DirectionalNavigation="Contained"
                                        AutomationProperties.AutomationId="BasesDockLeafBody">
                                 <DockPanel.Style>
                                     <Style TargetType="DockPanel">
@@ -2221,6 +2229,7 @@
                                  heading lives inside the view: its text is
                                  the note's file name, the mac's headerTitle. -->
                             <DockPanel Margin="12"
+                                       KeyboardNavigation.DirectionalNavigation="Contained"
                                        AutomationProperties.AutomationId="ConnectionsLeafBody">
                                 <DockPanel.Style>
                                     <Style TargetType="DockPanel">
@@ -2241,6 +2250,7 @@
                                  the workspace's one view model (rule I, Term I1;
                                  contracts E-1, E-15). -->
                             <DockPanel Margin="12"
+                                       KeyboardNavigation.DirectionalNavigation="Contained"
                                        AutomationProperties.AutomationId="GraphInspectorBody">
                                 <DockPanel.Style>
                                     <Style TargetType="DockPanel">
@@ -2261,6 +2271,7 @@
                                  structured diff walkthrough, restore
                                  flows (contracts H2-H10). -->
                             <DockPanel Margin="12"
+                                       KeyboardNavigation.DirectionalNavigation="Contained"
                                        AutomationProperties.AutomationId="HistoryLeafBody">
                                 <DockPanel.Style>
                                     <Style TargetType="DockPanel">
@@ -2285,6 +2296,7 @@
                                  evidence disclosures, and the LiveSync
                                  config section (contracts SD2/SD3). -->
                             <DockPanel Margin="12"
+                                       KeyboardNavigation.DirectionalNavigation="Contained"
                                        AutomationProperties.AutomationId="SyncDiagnosticsLeafBody">
                                 <DockPanel.Style>
                                     <Style TargetType="DockPanel">
@@ -2369,6 +2381,7 @@
                                            TextWrapping="Wrap" />
                             </StackPanel>
                             <ListBox x:Name="RightPaneLeavesList"
+                                     KeyboardNavigation.DirectionalNavigation="Contained"
                                      Grid.Column="1"
                                      ItemsSource="{Binding LeafOptions}"
                                      SelectedItem="{Binding ActiveLeaf, Mode=TwoWay}"
@@ -2396,6 +2409,7 @@
             <Border Background="Transparent"
                     Visibility="{Binding QuickSwitcher.IsOpen, Converter={StaticResource BooleanToVisibilityConverter}}" />
             <local:AutomationLandmarkBorder x:Name="QuickSwitcherOverlay"
+                    KeyboardNavigation.DirectionalNavigation="Contained"
                     Width="600"
                     MaxHeight="430"
                     Padding="16"
@@ -2511,6 +2525,7 @@
             <Border Background="Transparent"
                     Visibility="{Binding Search.IsOpen, Converter={StaticResource BooleanToVisibilityConverter}}" />
             <local:AutomationLandmarkBorder x:Name="SearchOverlay"
+                    KeyboardNavigation.DirectionalNavigation="Contained"
                     Width="640"
                     MaxHeight="470"
                     Padding="16"
@@ -2797,6 +2812,7 @@
             <Border Background="Transparent"
                     Visibility="{Binding Palette.IsOpen, Converter={StaticResource BooleanToVisibilityConverter}}" />
             <local:AutomationLandmarkBorder x:Name="CommandPaletteOverlay"
+                    KeyboardNavigation.DirectionalNavigation="Contained"
                     Width="640"
                     MaxHeight="470"
                     Padding="16"
@@ -2994,6 +3010,7 @@
             <Border Background="Transparent"
                     Visibility="{Binding Workspace.AddPropertySheet, Converter={StaticResource NullToVisibilityConverter}, FallbackValue=Collapsed}" />
             <local:AutomationLandmarkBorder x:Name="AddPropertyOverlay"
+                    KeyboardNavigation.DirectionalNavigation="Contained"
                     Width="460"
                     Padding="16"
                     HorizontalAlignment="Center"
@@ -3068,6 +3085,7 @@
             <Border Background="Transparent"
                     Visibility="{Binding Workspace.BulkRenameSheet, Converter={StaticResource NullToVisibilityConverter}, FallbackValue=Collapsed}" />
             <local:AutomationLandmarkBorder x:Name="BulkRenameOverlay"
+                    KeyboardNavigation.DirectionalNavigation="Contained"
                     Width="760"
                     MaxHeight="560"
                     Padding="16"
@@ -3191,6 +3209,7 @@
             <Border Background="Transparent"
                     Visibility="{Binding Workspace.CitationDetails, Converter={StaticResource NullToVisibilityConverter}, FallbackValue=Collapsed}" />
             <local:AutomationLandmarkBorder x:Name="CitationDetailsOverlay"
+                    KeyboardNavigation.DirectionalNavigation="Contained"
                     Width="460"
                     Padding="16"
                     HorizontalAlignment="Center"
@@ -3328,6 +3347,7 @@
             <Border Background="Transparent"
                     Visibility="{Binding Workspace.CitationSummary, Converter={StaticResource NullToVisibilityConverter}, FallbackValue=Collapsed}" />
             <local:AutomationLandmarkBorder x:Name="CitationSummaryOverlay"
+                    KeyboardNavigation.DirectionalNavigation="Contained"
                     Width="420"
                     Padding="16"
                     HorizontalAlignment="Center"
@@ -3383,6 +3403,7 @@
             <Border Background="Transparent"
                     Visibility="{Binding Workspace.FilesCiting, Converter={StaticResource NullToVisibilityConverter}, FallbackValue=Collapsed}" />
             <local:AutomationLandmarkBorder x:Name="FilesCitingOverlay"
+                    KeyboardNavigation.DirectionalNavigation="Contained"
                     Width="460"
                     Padding="16"
                     HorizontalAlignment="Center"
@@ -3437,6 +3458,7 @@
             <Border Background="Transparent"
                     Visibility="{Binding Workspace.DashboardEditorSheet, Converter={StaticResource NullToVisibilityConverter}, FallbackValue=Collapsed}" />
             <local:AutomationLandmarkBorder x:Name="DashboardEditorOverlay"
+                    KeyboardNavigation.DirectionalNavigation="Contained"
                     Width="560"
                     MaxHeight="520"
                     Padding="16"
@@ -3537,6 +3559,7 @@
             <Border Background="Transparent"
                     Visibility="{Binding Workspace.BaseQueryBuilderSheet, Converter={StaticResource NullToVisibilityConverter}, FallbackValue=Collapsed}" />
             <local:AutomationLandmarkBorder x:Name="BaseQueryBuilderOverlay"
+                    KeyboardNavigation.DirectionalNavigation="Contained"
                     Width="640"
                     MaxHeight="560"
                     Padding="16"
@@ -3776,6 +3799,7 @@
             <Border Background="Transparent"
                     Visibility="{Binding Workspace.TemplatePickerSheet, Converter={StaticResource NullToVisibilityConverter}, FallbackValue=Collapsed}" />
             <local:AutomationLandmarkBorder x:Name="TemplatePickerOverlay"
+                    KeyboardNavigation.DirectionalNavigation="Contained"
                     Width="520"
                     MaxHeight="440"
                     Padding="16"
@@ -3915,6 +3939,7 @@
             <Border Background="Transparent"
                     Visibility="{Binding Workspace.TemplateFlowSheet, Converter={StaticResource NullToVisibilityConverter}, FallbackValue=Collapsed}" />
             <local:AutomationLandmarkBorder x:Name="TemplateFlowOverlay"
+                    KeyboardNavigation.DirectionalNavigation="Contained"
                     Width="520"
                     MaxHeight="480"
                     Padding="16"
@@ -4056,6 +4081,7 @@
             <Border Background="Transparent"
                     Visibility="{Binding FileSidebar.MoveToSheet, Converter={StaticResource NullToVisibilityConverter}, FallbackValue=Collapsed}" />
             <local:AutomationLandmarkBorder x:Name="MoveToOverlay"
+                    KeyboardNavigation.DirectionalNavigation="Contained"
                     Width="520"
                     MaxHeight="440"
                     Padding="16"
@@ -4157,6 +4183,7 @@
             </local:AutomationLandmarkBorder>
 
             <local:AutomationLandmarkBorder x:Name="CanvasCardEditorOverlay"
+                    KeyboardNavigation.DirectionalNavigation="Contained"
                     Padding="16"
                     MinWidth="420"
                     HorizontalAlignment="Center"
@@ -4196,6 +4223,7 @@
                 </StackPanel>
             </local:AutomationLandmarkBorder>
             <local:AutomationLandmarkBorder x:Name="CanvasCardPickerOverlay"
+                    KeyboardNavigation.DirectionalNavigation="Contained"
                     Padding="16"
                     MinWidth="420"
                     HorizontalAlignment="Center"
@@ -4241,6 +4269,7 @@
             </local:AutomationLandmarkBorder>
 
             <local:AutomationLandmarkBorder x:Name="CanvasPromptOverlay"
+                    KeyboardNavigation.DirectionalNavigation="Contained"
                     Padding="16"
                     MinWidth="420"
                     HorizontalAlignment="Center"
