@@ -73,10 +73,6 @@ internal sealed class ReadingContentViewModel : BindableBase, IDisposable
     // spoken here. -1 when the current refresh is not a rescan's.
     private int _silentGeneration = -1;
 
-    // Finding 5: the generation whose publish re-issued a refresh because
-    // its captured tuple drifted — its waiters are the retry's to settle.
-    private int _driftRetriedGeneration = -1;
-
     // Finding 4: every background fetch in flight, drained by a close
     // before the session is disposed.
     private readonly object _refreshWorkGate = new();
@@ -490,8 +486,9 @@ internal sealed class ReadingContentViewModel : BindableBase, IDisposable
             try
             {
                 FetchResult fetched = FetchGuarded(_session, path, text, cancellation);
+                // Its terminal publication settles the waiters (round 3,
+                // finding 3).
                 Publish(generation, path, revision, sessionGeneration, fetched, cancellation);
-                SettlePublicationWaiters(generation, failure: null);
             }
             catch (OperationCanceledException) when (cancellation.IsCancellationRequested)
             {
@@ -1324,6 +1321,7 @@ internal sealed class ReadingContentViewModel : BindableBase, IDisposable
         {
             // Superseded or dead: a newer refresh owns the pipeline
             // (and re-marked itself live); nothing to repair here.
+            SettleSupersededWaiters(generation);
             return;
         }
         // Whatever happens below, THIS generation's refresh has landed.
@@ -1343,7 +1341,6 @@ internal sealed class ReadingContentViewModel : BindableBase, IDisposable
             // 2, finding 5): the retry keeps a rescan's silence and
             // cancellation, and its publication settles this
             // generation's waiters.
-            _driftRetriedGeneration = generation;
             Refresh(generation == _silentGeneration, cancellation);
             return;
         }
@@ -1355,6 +1352,8 @@ internal sealed class ReadingContentViewModel : BindableBase, IDisposable
             fetched.ArtifactDigest);
         if (Document is not null && _memo is { } memo && memo.Matches(key))
         {
+            // Already showing exactly this projection: terminal.
+            SettlePublicationWaiters(generation, failure: null);
             return;
         }
 
@@ -1437,17 +1436,17 @@ internal sealed class ReadingContentViewModel : BindableBase, IDisposable
     /// surface on the loading placeholder with no notice, no
     /// announcement, and no diagnostic.
     /// </summary>
+    /// <remarks>W7-7 PR 7 (codex PR 7 round 3, finding 3): a step that
+    /// succeeds settles nothing — a streamed publication's first chunk is
+    /// not its publication. Success settles only at a TERMINAL point (the
+    /// last chunk's <see cref="FinishPublish"/>, a memo hit, a superseded
+    /// generation nothing else will settle); a failure settles at the step
+    /// that failed.</remarks>
     private void RunPublishStep(int generation, Action step)
     {
         try
         {
             step();
-            // A publish whose tuple drifted re-issued the refresh: the
-            // retry's publication settles these waiters (round 2, finding 5).
-            if (_driftRetriedGeneration != generation)
-            {
-                SettlePublicationWaiters(generation, failure: null);
-            }
         }
         catch (Exception exception)
         {
@@ -1494,6 +1493,7 @@ internal sealed class ReadingContentViewModel : BindableBase, IDisposable
     {
         if (_disposed || generation != _generation)
         {
+            SettleSupersededWaiters(generation);
             return;
         }
         if (PublishFaultForTests?.Invoke() is { } fault)
@@ -1550,6 +1550,7 @@ internal sealed class ReadingContentViewModel : BindableBase, IDisposable
         {
             _memo = null;
             _projectionComplete = false;
+            SettlePublicationWaiters(generation, failure: null);
             return;
         }
         _memo = key;
@@ -1557,6 +1558,7 @@ internal sealed class ReadingContentViewModel : BindableBase, IDisposable
         _rebindRecovery = false;
         if (!degraded)
         {
+            SettlePublicationWaiters(generation, failure: null);
             return;
         }
         string rendered = renderedBlocks.ToString(
@@ -1578,6 +1580,21 @@ internal sealed class ReadingContentViewModel : BindableBase, IDisposable
         if (generation != _silentGeneration)
         {
             _announce(new A11yEvent.HostComposed(notice, A11yPriority.High));
+        }
+
+        SettlePublicationWaiters(generation, failure: null);
+    }
+
+    /// <summary>A superseded or dead generation publishes nothing (round 3,
+    /// finding 3): its waiters belong to the refresh that superseded it,
+    /// which settles every generation up to its own — unless none is live
+    /// (a surface detach, a preference change, a disposal), when they
+    /// settle now, never left waiting.</summary>
+    private void SettleSupersededWaiters(int generation)
+    {
+        if (_disposed || _liveRefreshGeneration == -1)
+        {
+            SettlePublicationWaiters(generation, failure: null);
         }
     }
 

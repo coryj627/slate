@@ -363,15 +363,38 @@ internal sealed partial class VaultLifecycleViewModel
     {
         Task<ulong> tree = ReSyncTreeAsync(reason, cancellation);
         Task<ulong> quickOpen = ReSyncQuickOpenAsync(session, cancel, cancellation);
-        ulong failed = 0;
-        if (Workspace is WorkspaceViewModel workspace)
-        {
-            failed += await ReSyncWorkspaceAsync(workspace, session, cancel, cancellation);
-        }
+        Task<ulong> workspace = Workspace is WorkspaceViewModel open
+            ? ReSyncWorkspaceAsync(open, session, cancel, cancellation)
+            : Task.FromResult(0UL);
 
-        failed += await tree;
-        failed += await quickOpen;
+        // Codex PR 7 round 3, finding 4: every branch is awaited — one that
+        // fails unexpectedly counts one error and never leaves a sibling
+        // unawaited or the run without its sentence.
+        ulong failed = await ContainedAsync(workspace, cancellation);
+        failed += await ContainedAsync(tree, cancellation);
+        failed += await ContainedAsync(quickOpen, cancellation);
         return generation == _generation ? failed : 0;
+    }
+
+    /// <summary>One re-sync branch's failures, counted: its own count, or —
+    /// when it throws anything but the run's cancellation — one error,
+    /// logged by type.</summary>
+    private static async Task<ulong> ContainedAsync(Task<ulong> branch, CancellationToken cancellation)
+    {
+        try
+        {
+            return await branch;
+        }
+        catch (Exception exception) when (exception is not OutOfMemoryException)
+        {
+            if (cancellation.IsCancellationRequested)
+            {
+                return 0;
+            }
+
+            HostLog.Write(HostDiagnosticEvent.VaultRescanFailed, exception);
+            return 1;
+        }
     }
 
     /// <summary>The files tree, silently: its root-list and tag-tree
@@ -486,17 +509,56 @@ internal sealed partial class VaultLifecycleViewModel
 
         try
         {
-            WorkspaceViewModel.RescanDocumentsOutcome documents = await workspace.ReSyncOpenDocumentsAsync(
-                indexed,
-                path => ReadForRescanAsync(session, path, cancel, cancellation),
-                missing => ProbeReseatAsync(session, missing, cancel, cancellation),
-                cancellation);
-            ulong dependents = await workspace.ReSyncDependentsAsync(documents, indexed, cancellation);
-            return documents.Failed + dependents;
+            // Codex PR 7 round 3, finding 4: each phase is contained — a
+            // document re-sync that fails unexpectedly counts one error and
+            // the dependents still run (over an empty outcome).
+            WorkspaceViewModel.RescanDocumentsOutcome documents;
+            ulong failed = 0;
+            try
+            {
+                documents = await workspace.ReSyncOpenDocumentsAsync(
+                    indexed,
+                    path => ReadForRescanAsync(session, path, cancel, cancellation),
+                    missing => ProbeReseatAsync(session, missing, cancel, cancellation),
+                    cancellation);
+                failed += documents.Failed;
+            }
+            catch (Exception exception) when (exception is not OutOfMemoryException
+                and not OperationCanceledException
+                && !cancellation.IsCancellationRequested)
+            {
+                HostLog.Write(HostDiagnosticEvent.VaultRescanFailed, exception);
+                documents = WorkspaceViewModel.RescanDocumentsOutcome.Empty;
+                failed++;
+            }
+
+            try
+            {
+                failed += await workspace.ReSyncDependentsAsync(documents, indexed, cancellation);
+            }
+            catch (Exception exception) when (exception is not OutOfMemoryException
+                and not OperationCanceledException
+                && !cancellation.IsCancellationRequested)
+            {
+                HostLog.Write(HostDiagnosticEvent.VaultRescanFailed, exception);
+                failed++;
+            }
+
+            return failed;
         }
-        catch (OperationCanceledException) when (cancellation.IsCancellationRequested)
+        catch (Exception) when (cancellation.IsCancellationRequested)
         {
             return 0;
+        }
+        finally
+        {
+            // Codex PR 7 round 3, finding 6: an uncancelled run's work is
+            // kept at its fixed point until it ends; a cancelled run's is
+            // drained by the workspace teardown.
+            if (!cancellation.IsCancellationRequested)
+            {
+                workspace.CompleteRescanWork();
+            }
         }
     }
 

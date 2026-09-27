@@ -279,11 +279,11 @@ public sealed partial class RescanTests
     {
         private bool _workspaceDisposed;
 
-        public BackgroundReadingWorkspace(string label)
+        public BackgroundReadingWorkspace(string label, string hostText = "# Host\n\n![[embedded]]\n")
         {
             Root = Path.Combine(Path.GetTempPath(), $"slate-windows-rescan-{label}-{Guid.NewGuid():N}");
             Directory.CreateDirectory(Root);
-            File.WriteAllText(Path.Combine(Root, "host.md"), "# Host\n\n![[embedded]]\n");
+            File.WriteAllText(Path.Combine(Root, "host.md"), hostText);
             File.WriteAllText(Path.Combine(Root, "embedded.md"), "Embedded before.\n");
             Session = VaultSession.OpenFilesystem(Root);
             using (var scan = new CancelToken())

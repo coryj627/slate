@@ -5,6 +5,7 @@ using ICSharpCode.AvalonEdit.Document;
 using SlateWindows.Bases;
 using SlateWindows.Canvas;
 using SlateWindows.Graph;
+using SlateWindows.Panels;
 using SlateWindows.Reading;
 
 namespace SlateWindows;
@@ -85,7 +86,16 @@ internal sealed partial class WorkspaceViewModel
     internal sealed record RescanDocumentsOutcome(
         ulong Failed,
         IReadOnlySet<string> ChangedOpenPaths,
-        IReadOnlySet<BaseDocumentViewModel> ReopenedBases);
+        IReadOnlySet<BaseDocumentViewModel> ReopenedBases)
+    {
+        /// <summary>What the dependents see when the document re-sync
+        /// itself failed (codex PR 7 round 3, finding 4): nothing changed,
+        /// nothing reopened — every dependent still re-syncs.</summary>
+        internal static RescanDocumentsOutcome Empty { get; } = new(
+            0,
+            new HashSet<string>(StringComparer.Ordinal),
+            new HashSet<BaseDocumentViewModel>(ReferenceEqualityComparer.Instance));
+    }
 
     /// <summary>
     /// The distinct vault paths a re-sync reads index hashes for: every
@@ -147,7 +157,7 @@ internal sealed partial class WorkspaceViewModel
     {
         // A new run registers its own work for the close's drain; what an
         // earlier run registered stays only while it is still running.
-        _ = _rescanWorkDrains.RemoveAll(drain => drain().IsCompleted);
+        CompleteRescanWork();
 
         // Finding 7: a path whose spelling probe failed was kept as present
         // and counts one error.
@@ -228,7 +238,7 @@ internal sealed partial class WorkspaceViewModel
                 work.Add(RunKindReload("canvas", path, () =>
                 {
                     Task reload = canvas.ReloadAsync(cancellation);
-                    TrackRescanWork(canvas.WhenWorkDrained());
+                    TouchRescanScheduler(canvas);
                     return reload;
                 }));
             }
@@ -249,7 +259,7 @@ internal sealed partial class WorkspaceViewModel
             work.Add(RunKindReload("base", path, () =>
             {
                 Task reopen = document.LoadAsync(cancellation);
-                TrackRescanWork(document.WhenWorkDrained());
+                TouchRescanScheduler(document);
                 return reopen;
             }));
         }
@@ -294,7 +304,25 @@ internal sealed partial class WorkspaceViewModel
                 .GroupBy(ticket => ticket.Tab.Path, StringComparer.Ordinal)
                 .Select(group => (group.Key, group.Any(ticket => ticket.Tab.IsMarkdown))),
         ];
-        IReadOnlyDictionary<string, ReseatProbe> probes = await probeOnWorker(paths);
+        IReadOnlyDictionary<string, ReseatProbe> probes;
+        try
+        {
+            probes = await probeOnWorker(paths);
+        }
+        catch (Exception exception) when (exception is not OutOfMemoryException)
+        {
+            // Codex PR 7 round 3, finding 4: the re-seat's worker failed (its
+            // index-hash read, say). Contained: one failed operation, the
+            // tabs stay missing, and the rest of the re-sync still runs.
+            if (cancellation.IsCancellationRequested)
+            {
+                throw new OperationCanceledException(cancellation);
+            }
+
+            HostLog.Write(HostDiagnosticEvent.VaultRescanFailed, exception);
+            return 1;
+        }
+
         cancellation.ThrowIfCancellationRequested();
 
         // Back on the dispatcher: the apply turn.
@@ -468,10 +496,10 @@ internal sealed partial class WorkspaceViewModel
             // outline, tasks and citations re-read the new bytes.
             NotePersisted(path);
             TasksReview.NoteRefreshed(path);
-            TrackRescanWork(Panels.WhenWorkDrained());
-            TrackRescanWork(Citations.WhenWorkDrained());
-            TrackRescanWork(History.WhenWorkDrained());
-            TrackRescanWork(TasksReview.WhenWorkDrained());
+            TouchRescanScheduler(Panels);
+            TouchRescanScheduler(Citations);
+            TouchRescanScheduler(History);
+            TouchRescanScheduler(TasksReview);
         }
 
         if (unvouched)
@@ -514,7 +542,7 @@ internal sealed partial class WorkspaceViewModel
             work.Add(RunKindReload("reading", string.Empty, () =>
             {
                 Task projection = reading.NotifyRescanAsync(cancellation);
-                _rescanWorkDrains.Add(reading.WhenRefreshWorkDrained);
+                TouchRescanReading(reading);
                 return projection;
             }));
         }
@@ -526,7 +554,7 @@ internal sealed partial class WorkspaceViewModel
             work.Add(RunKindReload("history", shown, () =>
             {
                 Task reload = History.NoteSavedAsync(historyPath);
-                TrackRescanWork(History.WhenWorkDrained());
+                TouchRescanScheduler(History);
                 return reload;
             }));
         }
@@ -580,7 +608,7 @@ internal sealed partial class WorkspaceViewModel
             if (seen.Add(document) && !reopened.Contains(document))
             {
                 publications.Add(document.RefreshAsync(cancellation));
-                TrackRescanWork(document.WhenWorkDrained());
+                TouchRescanScheduler(document);
             }
         }
 
@@ -589,7 +617,7 @@ internal sealed partial class WorkspaceViewModel
             : _dashboardDocuments.Values)
         {
             publications.Add(dashboard.LoadAsync(cancellation));
-            TrackRescanWork(dashboard.WhenWorkDrained());
+            TouchRescanScheduler(dashboard);
         }
 
         return Task.WhenAll(publications);
@@ -605,11 +633,11 @@ internal sealed partial class WorkspaceViewModel
     {
         NotifyGraphOfVaultChange();
         var probes = new List<Task> { Connections.WhenPublishedAsync() };
-        TrackRescanWork(Connections.WhenWorkDrained());
+        TouchRescanScheduler(Connections);
         if (_graphDocument is { IsRetired: false } document)
         {
             probes.Add(document.WhenPublishedAsync());
-            TrackRescanWork(document.WhenWorkDrained());
+            TouchRescanScheduler(document);
         }
 
         return Task.WhenAll(probes);
@@ -662,36 +690,100 @@ internal sealed partial class WorkspaceViewModel
         return failed;
     }
 
-    // W7-7 PR 7 (codex AR-18 review round 2, finding 4): the work this run
-    // started outside the rescan seam — its reloads' and dependents' worker
-    // bodies, the reading fetches and editor-cache loads it triggered —
-    // each a drain the close waits for before the session is disposed.
-    private readonly List<Func<Task>> _rescanWorkDrains = [];
+    // W7-7 PR 7 (codex AR-18 review round 2, finding 4; codex PR 7 round 3,
+    // finding 6): the owners of the work a run started outside the rescan
+    // seam — its reloads' and dependents' worker bodies, the SUCCESSORS
+    // their publications start (a graph or Connections probe's apply issues
+    // a reload after the probe itself completed), the reading fetches and
+    // editor-cache loads it triggered. Each is registered as its FIXED-POINT
+    // drain, evaluated when waited on, so work started after the
+    // registration is drained too.
+    private readonly List<Func<Task>> _rescanTouched = [];
+    private readonly HashSet<object> _rescanTouchedOwners = new(ReferenceEqualityComparer.Instance);
 
-    /// <summary>Register a worker drain taken right after the run started
-    /// the work (a scheduler's tracked set is added to synchronously).</summary>
-    private void TrackRescanWork(Task drained)
+    // A completed run's fixed-point drains, started when it completed; the
+    // close waits for those still running.
+    private readonly List<Task> _rescanTails = [];
+
+    /// <summary>A scheduler the run started work on — drained to its fixed
+    /// point (<see cref="PanelWorkScheduler.WhenAllWorkDrained"/>).</summary>
+    private void TouchRescanScheduler(PanelWorkScheduler scheduler)
     {
-        if (!drained.IsCompleted)
+        if (_rescanTouchedOwners.Add(scheduler))
         {
-            _rescanWorkDrains.Add(() => drained);
+            _rescanTouched.Add(scheduler.WhenAllWorkDrained);
+        }
+    }
+
+    /// <summary>A reading model the run re-projected — its fetches drained
+    /// until none is left.</summary>
+    private void TouchRescanReading(ReadingContentViewModel reading)
+    {
+        if (_rescanTouchedOwners.Add(reading))
+        {
+            _rescanTouched.Add(() => DrainToEmptyAsync(reading.WhenRefreshWorkDrained));
         }
     }
 
     /// <summary>A tab's workers a run started — its editor coordinator's
-    /// cache loads and its reading model's fetch — read at drain time, so a
-    /// retry they issue later is drained too.</summary>
+    /// cache loads and its reading model's fetch — drained until none is
+    /// left, so a retry they issue later is drained too.</summary>
     private void TrackTabRescanWork(WorkspaceTabViewModel tab)
     {
-        if (tab.EditorInteractions is { } coordinator)
+        if (tab.EditorInteractions is { } coordinator && _rescanTouchedOwners.Add(coordinator))
         {
-            _rescanWorkDrains.Add(coordinator.WhenBackgroundWorkDrained);
+            _rescanTouched.Add(() => DrainToEmptyAsync(coordinator.WhenBackgroundWorkDrained));
         }
 
         if (tab.Reading is { } reading)
         {
-            _rescanWorkDrains.Add(reading.WhenRefreshWorkDrained);
+            TouchRescanReading(reading);
         }
+    }
+
+    /// <summary>Wait on a snapshot drain until a snapshot finds nothing
+    /// running — off the calling thread's context.</summary>
+    private static async Task DrainToEmptyAsync(Func<Task> snapshot)
+    {
+        while (true)
+        {
+            Task pending = snapshot();
+            if (pending.IsCompleted)
+            {
+                return;
+            }
+
+            try
+            {
+                await pending.ConfigureAwait(false);
+            }
+            catch (Exception exception) when (exception is not OutOfMemoryException)
+            {
+                // A worker that ended by failing has ended.
+            }
+        }
+    }
+
+    /// <summary>
+    /// A run whose re-sync ended without being cancelled (and, defensively,
+    /// the next run's start): its owners' fixed-point drains start now and
+    /// are kept until they end — work the run started can outlive it (a
+    /// successor reload, a cache load), and the close waits for it.
+    /// </summary>
+    internal void CompleteRescanWork()
+    {
+        foreach (Func<Task> drain in _rescanTouched)
+        {
+            Task tail = drain();
+            if (!tail.IsCompleted)
+            {
+                _rescanTails.Add(tail);
+            }
+        }
+
+        _rescanTouched.Clear();
+        _rescanTouchedOwners.Clear();
+        _ = _rescanTails.RemoveAll(tail => tail.IsCompleted);
     }
 
     /// <summary>
@@ -707,7 +799,12 @@ internal sealed partial class WorkspaceViewModel
     {
         while (true)
         {
-            Task[] pending = [.. _rescanWorkDrains.Select(drain => drain()).Where(task => !task.IsCompleted)];
+            Task[] pending =
+            [
+                .. _rescanTouched.Select(drain => drain())
+                    .Concat(_rescanTails)
+                    .Where(task => !task.IsCompleted),
+            ];
             if (pending.Length == 0)
             {
                 break;
@@ -724,7 +821,9 @@ internal sealed partial class WorkspaceViewModel
             }
         }
 
-        _rescanWorkDrains.Clear();
+        _rescanTouched.Clear();
+        _rescanTouchedOwners.Clear();
+        _rescanTails.Clear();
     }
 
     private IEnumerable<BaseDocumentViewModel> FileBackedBaseDocuments()

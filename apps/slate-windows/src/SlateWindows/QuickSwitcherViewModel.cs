@@ -82,6 +82,11 @@ internal sealed class QuickSwitcherViewModel : BindableBase, IDisposable
 
     internal Task RankCompletion { get; private set; } = Task.CompletedTask;
 
+    // W7-7 PR 7 (codex PR 7 round 3, finding 5): the rank the coordinator
+    // last ADMITTED, completing once its native call has returned and
+    // released the process-wide lane. Written on the pool at admission.
+    private Task _admittedRank = Task.CompletedTask;
+
     public ObservableCollection<QuickSwitcherRowViewModel> Results { get; } = [];
 
     public string Query
@@ -413,6 +418,11 @@ internal sealed class QuickSwitcherViewModel : BindableBase, IDisposable
     /// a fact can park a rank between its scheduling and its publication.</summary>
     internal Func<CancellationToken, Task>? RankDelayForTests { get; set; }
 
+    /// <summary>Test seam (W7-7 PR 7, codex PR 7 round 3 finding 5): runs on
+    /// the pool INSIDE the admitted native rank — after the coordinator's
+    /// lane admitted it, where its token no longer reaches.</summary>
+    internal Action? InsideRankForTests { get; set; }
+
     /// <summary>The paths Quick Open ranks over — for the rescan facts.</summary>
     internal IReadOnlyList<string> FilePathsForTests => [.. _files.Select(file => file.Path)];
 
@@ -427,6 +437,19 @@ internal sealed class QuickSwitcherViewModel : BindableBase, IDisposable
         // F7: a disposed switcher (a close, a vault switch) publishes no
         // rank — a rescan awaiting one is settled, never left waiting.
         SettleRescanRankWaiters(int.MaxValue, failure: null);
+        // W7-7 PR 7 (codex PR 7 round 3, finding 5): an ADMITTED rank's
+        // native call no longer sees its token. The close waits for it to
+        // return and release the process-wide lane, so nothing this vault
+        // started outlives it and the next vault ranks at once. Pool work
+        // only: the wait never needs this thread. A rank admitted after
+        // the read below finds its token already cancelled and never runs.
+        try
+        {
+            Volatile.Read(ref _admittedRank).Wait();
+        }
+        catch (AggregateException)
+        {
+        }
     }
 
     /// <summary>Re-rank the current query. <paramref name="silent"/> — a
@@ -484,8 +507,13 @@ internal sealed class QuickSwitcherViewModel : BindableBase, IDisposable
         {
             await (RankDelayForTests ?? _rankDelay)(cancellationToken);
             SwitcherRankPage ranked = await _rankCoordinator.RankAsync(
-                () => _rankTop(files, query, recents),
-                cancellationToken);
+                () =>
+                {
+                    InsideRankForTests?.Invoke();
+                    return _rankTop(files, query, recents);
+                },
+                cancellationToken,
+                admitted => Interlocked.Exchange(ref _admittedRank, admitted));
             _uiContext!.Post(
                 _ =>
                 {

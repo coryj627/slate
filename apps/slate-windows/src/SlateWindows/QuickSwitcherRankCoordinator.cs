@@ -16,20 +16,29 @@ internal sealed class QuickSwitcherRankCoordinator
 
     private readonly SemaphoreSlim _nativeRankLane = new(1, 1);
 
+    /// <param name="admitted">W7-7 PR 7 (codex PR 7 round 3, finding 5):
+    /// told, on admission and BEFORE the admitted call's token is checked,
+    /// of a Task that completes once the call has returned and released the
+    /// lane — what a closing owner drains, since the native call itself no
+    /// longer sees its token.</param>
     internal async Task<SwitcherRankPage> RankAsync(
         Func<SwitcherRankPage> rank,
-        CancellationToken cancellationToken)
+        CancellationToken cancellationToken,
+        Action<Task>? admitted = null)
     {
         ArgumentNullException.ThrowIfNull(rank);
         await _nativeRankLane.WaitAsync(cancellationToken).ConfigureAwait(false);
+        var released = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
         try
         {
+            admitted?.Invoke(released.Task);
             cancellationToken.ThrowIfCancellationRequested();
             return await Task.Run(rank, CancellationToken.None).ConfigureAwait(false);
         }
         finally
         {
             _nativeRankLane.Release();
+            _ = released.TrySetResult();
         }
     }
 }
