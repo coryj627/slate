@@ -1566,6 +1566,11 @@
   },
   {
     "Source": "MainWindow.xaml",
+    "Expression": "PanelReviewFilters",
+    "Surface": "Tasks panel + review flow (W4-3)"
+  },
+  {
+    "Source": "MainWindow.xaml",
     "Expression": "PanelReviewFilterAll",
     "Surface": "Tasks panel + review flow (W4-3)"
   },
