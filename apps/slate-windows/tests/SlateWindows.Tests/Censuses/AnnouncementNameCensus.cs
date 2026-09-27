@@ -134,7 +134,7 @@ public sealed class AnnouncementNameCensus
                 }
                 if (node is IdentifierNameSyntax && symbol is ILocalSymbol local && followed.Add(local))
                 {
-                    foreach (SyntaxNode source in SourcesOfLocal(local, node))
+                    foreach (SyntaxNode source in SourcesOfLocal(local, node, model))
                     {
                         foreach (string raw in RawNamesIn(source, model, callers, followed, depth + 1))
                         {
@@ -174,30 +174,35 @@ public sealed class AnnouncementNameCensus
     }
 
     /// <summary>What a local can hold: its initializer, every assignment to
-    /// it, and the tested expression of the pattern that declares it.</summary>
-    private static IEnumerable<SyntaxNode> SourcesOfLocal(ILocalSymbol local, SyntaxNode use)
+    /// it, and the tested expression of the pattern that declares it — read
+    /// across the whole member that declares it, so a lambda that captures
+    /// the local (a continuation announcing a name captured at dispatch) is
+    /// read too.</summary>
+    private static IEnumerable<SyntaxNode> SourcesOfLocal(ILocalSymbol local, SyntaxNode use, SemanticModel model)
     {
-        SyntaxNode? body = use.Ancestors().FirstOrDefault(ancestor =>
+        SyntaxNode declaration = local.DeclaringSyntaxReferences.FirstOrDefault()?.GetSyntax() ?? use;
+        SyntaxNode? body = declaration.AncestorsAndSelf().FirstOrDefault(ancestor =>
             ancestor is BaseMethodDeclarationSyntax or AccessorDeclarationSyntax or LocalFunctionStatementSyntax
-                or PropertyDeclarationSyntax or AnonymousFunctionExpressionSyntax);
+                or PropertyDeclarationSyntax);
         if (body is null)
         {
             yield break;
         }
+        bool Is(ISymbol? symbol) => SymbolEqualityComparer.Default.Equals(symbol, local);
         foreach (SyntaxNode node in body.DescendantNodes())
         {
             switch (node)
             {
-                case VariableDeclaratorSyntax declarator
-                    when declarator.Identifier.ValueText == local.Name && declarator.Initializer is { } initializer:
+                case VariableDeclaratorSyntax { Initializer: { } initializer } declarator
+                    when Is(model.GetDeclaredSymbol(declarator)):
                     yield return initializer.Value;
                     break;
                 case AssignmentExpressionSyntax { Left: IdentifierNameSyntax target } assignment
-                    when target.Identifier.ValueText == local.Name:
+                    when Is(model.GetSymbolInfo(target).Symbol):
                     yield return assignment.Right;
                     break;
                 case SingleVariableDesignationSyntax designation
-                    when designation.Identifier.ValueText == local.Name
+                    when Is(model.GetDeclaredSymbol(designation))
                     && designation.Ancestors().OfType<IsPatternExpressionSyntax>().FirstOrDefault() is { } test:
                     yield return test.Expression;
                     break;
