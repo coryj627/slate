@@ -497,8 +497,13 @@ public partial class MainWindow
         }
     }
 
+    /// <summary>A double-click expands the row it HIT — never the keyboard's
+    /// row: a double-click below the rows lands the keys on the first row
+    /// with its first press (the click rule), and expanding "the focused
+    /// row" opened a citation never clicked (codex PR 4's final
+    /// check).</summary>
     private void PanelCitations_MouseDoubleClick(object sender, MouseButtonEventArgs e) =>
-        ExpandSelectedCitation();
+        _ = ExpandCitation(SelectorFocus.ClickedItem(PanelCitationsList, e.OriginalSource));
 
     private void PanelCitations_PreviewKeyDown(object sender, KeyEventArgs e)
     {
@@ -516,9 +521,12 @@ public partial class MainWindow
     /// else the selection (W7-7 PR 4, codex round 7: a landing focuses a
     /// row without selecting it). Returns whether a sheet opened.
     /// </summary>
-    private bool ExpandSelectedCitation()
+    private bool ExpandSelectedCitation() =>
+        ExpandCitation(SelectorFocus.FocusedOrSelectedItem(PanelCitationsList));
+
+    private bool ExpandCitation(object? target)
     {
-        if (SelectorFocus.FocusedOrSelectedItem(PanelCitationsList) is not CitationRowViewModel { CanExpand: true } row)
+        if (target is not CitationRowViewModel { CanExpand: true } row)
         {
             return false;
         }

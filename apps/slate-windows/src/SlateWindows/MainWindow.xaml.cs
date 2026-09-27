@@ -1508,6 +1508,15 @@ public partial class MainWindow : Window
 
     private void QuickSwitcherResults_MouseDoubleClick(object sender, MouseButtonEventArgs e)
     {
+        // Only a double-click on a RESULT opens (codex PR 4's final check,
+        // the audit of every double-click over a list): one on the empty
+        // area below the results opened the current result, never clicked.
+        // A pressed result is the current one by then.
+        if (sender is ItemsControl results && SelectorFocus.ClickedItem(results, e.OriginalSource) is null)
+        {
+            return;
+        }
+
         _viewModel.QuickSwitcher?.OpenSelected(WorkspaceOpenTarget.CurrentTab);
         e.Handled = true;
     }

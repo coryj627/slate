@@ -985,9 +985,12 @@ internal sealed class ConnectionsLeafView : UserControl
         DeliverPendingFocus();
     }
 
+    /// <summary>A double-click activates the row it HIT, never the
+    /// selection — which can be hidden under a collapsed row — nor the row a
+    /// press on the empty area landed on (codex PR 4's final check).</summary>
     private void OnTreeDoubleClick(object sender, MouseButtonEventArgs e)
     {
-        if (_tree.SelectedItem is ConnectionsRowViewModel { Row: not null } row)
+        if (SelectorFocus.ClickedItem(_tree, e.OriginalSource) is ConnectionsRowViewModel { Row: not null } row)
         {
             Model?.Activate(row.Row, newTab: false);
         }

@@ -979,9 +979,12 @@ internal sealed class CanvasOutlineView : UserControl
         ActivateRow(line);
     }
 
+    /// <summary>A double-click activates the row it HIT, never the seated
+    /// one: a double-click on the tree's empty area lands its first press on
+    /// a row (codex PR 4's final check).</summary>
     private void OnTreeDoubleClick(object sender, MouseButtonEventArgs e)
     {
-        if (_tree.SelectedItem is CanvasOutlineRowViewModel line)
+        if (SelectorFocus.ClickedItem(_tree, e.OriginalSource) is CanvasOutlineRowViewModel line)
         {
             ActivateRow(line);
         }

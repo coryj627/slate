@@ -495,6 +495,70 @@ public sealed class BaseSurfaceViewTests : IDisposable
         }
     });
 
+    /// <summary>
+    /// Codex PR 4's final check: a double-click on the list's EMPTY area —
+    /// below the rows — opens nothing. Its first press lands the keys on a
+    /// row (the click rule), and the double-click resolved that landed row
+    /// and opened it, a note never clicked. A double-click on a row opens
+    /// that row.
+    /// </summary>
+    [Fact]
+    public void ADoubleClickOnTheListsEmptyAreaOpensNothing() => RunSta(() =>
+    {
+        var document = new SlateWindows.Bases.BaseDocumentViewModel(
+            _session, "Notes.base", _ => { }, synchronousForTests: true);
+        document.Load();
+        document.SelectView(1);
+        var opened = new List<BasesRow>();
+        document.OpenRowFromSurface = opened.Add;
+        var surface = new SlateWindows.Bases.BaseSurfaceView { Model = document };
+        var window = new System.Windows.Window
+        {
+            Content = surface,
+            Width = 600,
+            Height = 500,
+            ShowInTaskbar = false,
+            WindowStyle = System.Windows.WindowStyle.None,
+            ShowActivated = false,
+        };
+        window.Show();
+        window.UpdateLayout();
+        try
+        {
+            System.Windows.Controls.ListBox list = surface.ListForTests;
+            SelectorFocus.RegisterClickRule();
+            list.RaiseEvent(new System.Windows.Input.MouseButtonEventArgs(
+                System.Windows.Input.Mouse.PrimaryDevice, Environment.TickCount, System.Windows.Input.MouseButton.Left)
+            {
+                RoutedEvent = System.Windows.UIElement.MouseDownEvent,
+            });
+            Assert.IsType<System.Windows.Controls.ListBoxItem>(System.Windows.Input.Keyboard.FocusedElement);
+
+            // The double-click as the list raises it: on the list, from what
+            // the pointer hit — here the list's own chrome.
+            list.RaiseEvent(DoubleClick(list));
+
+            Assert.Empty(opened);
+
+            var row = (System.Windows.Controls.ListBoxItem)list.ItemContainerGenerator.ContainerFromIndex(2);
+            list.RaiseEvent(DoubleClick(System.Windows.Media.VisualTreeHelper.GetChild(row, 0)));
+
+            Assert.Same(((SlateWindows.Bases.BaseListItemViewModel)row.DataContext).Row, Assert.Single(opened));
+        }
+        finally
+        {
+            window.Close();
+            document.Shutdown();
+        }
+
+        static System.Windows.Input.MouseButtonEventArgs DoubleClick(object hit) =>
+            new(System.Windows.Input.Mouse.PrimaryDevice, Environment.TickCount, System.Windows.Input.MouseButton.Left)
+            {
+                RoutedEvent = System.Windows.Controls.Control.MouseDoubleClickEvent,
+                Source = hit,
+            };
+    });
+
     private static void RunSta(Action body)
     {
         Exception? failure = null;

@@ -245,8 +245,17 @@ public partial class MainWindow
         }
     }
 
-    private void QueriesSavedList_DoubleClick(object sender, MouseButtonEventArgs e) =>
-        QueriesRun_Click(sender, e);
+    // W7-7 PR 4 (#1247; codex PR 4's final check): a double-click acts only
+    // on a row it HIT — a double-click on a list's empty area ran whatever
+    // query was selected. A pressed row is the selection by then (a list
+    // selects on the press).
+    private void QueriesSavedList_DoubleClick(object sender, MouseButtonEventArgs e)
+    {
+        if (SelectorFocus.ClickedItem(QueriesSavedList, e.OriginalSource) is not null)
+        {
+            QueriesRun_Click(sender, e);
+        }
+    }
 
     private void QueriesPin_Click(object sender, RoutedEventArgs e)
     {
@@ -362,8 +371,13 @@ public partial class MainWindow
         }
     }
 
-    private void QueriesBaseFilesList_DoubleClick(object sender, MouseButtonEventArgs e) =>
-        QueriesOpenBaseFile_Click(sender, e);
+    private void QueriesBaseFilesList_DoubleClick(object sender, MouseButtonEventArgs e)
+    {
+        if (SelectorFocus.ClickedItem(QueriesBaseFilesList, e.OriginalSource) is not null)
+        {
+            QueriesOpenBaseFile_Click(sender, e);
+        }
+    }
 
     private void QueriesDockBaseFile_Click(object sender, RoutedEventArgs e)
     {
@@ -381,8 +395,13 @@ public partial class MainWindow
         }
     }
 
-    private void QueriesDashboardsList_DoubleClick(object sender, MouseButtonEventArgs e) =>
-        QueriesOpenDashboard_Click(sender, e);
+    private void QueriesDashboardsList_DoubleClick(object sender, MouseButtonEventArgs e)
+    {
+        if (SelectorFocus.ClickedItem(QueriesDashboardsList, e.OriginalSource) is not null)
+        {
+            QueriesOpenDashboard_Click(sender, e);
+        }
+    }
 
     private void QueriesEditDashboard_Click(object sender, RoutedEventArgs e)
     {

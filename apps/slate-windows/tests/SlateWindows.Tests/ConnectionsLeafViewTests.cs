@@ -1196,6 +1196,56 @@ public sealed class ConnectionsLeafViewTests
         }
     }
 
+    /// <summary>
+    /// Codex PR 4's final check: a double-click on the tree's empty area
+    /// opens nothing — the selection (maybe hidden under a collapsed row) and
+    /// the row a press on the empty area landed on are not the pointer's row
+    /// — and a double-click on a row opens that row.
+    /// </summary>
+    [Fact]
+    public void ADoubleClickOpensOnlyTheRowItHit()
+    {
+        RunSta(() =>
+        {
+            using var host = new Host("double-click");
+            host.ActivateLeaf();
+            host.OpenNote(Hub);
+            host.Settle();
+            Assert.True(host.Workspace.ReRootConnectionsOn(Hub));
+            host.Settle();
+            (Window window, ConnectionsLeafView view) = Show(host.Leaf);
+            try
+            {
+                WorkspaceGroupViewModel group = host.Workspace.ActiveGroup;
+                ConnectionsRowViewModel selected = view.RootsForTests[1].Children.First(r => r.Row is { Kind: GraphNodeKind.Note });
+                Assert.NotNull(view.RealizeContainer(selected));
+                selected.IsSelected = true;
+
+                view.TreeForTests.RaiseEvent(DoubleClick(view.TreeForTests));
+
+                Assert.Equal(Hub, group.ActiveTab!.Path);
+
+                ConnectionsRowViewModel other = view.RootsForTests[0].Children
+                    .First(r => r.Row is { Kind: GraphNodeKind.Note } row && row.Path != selected.Row!.Path);
+                ConnectionsTreeItem container = view.RealizeContainer(other)!;
+                view.TreeForTests.RaiseEvent(DoubleClick(System.Windows.Media.VisualTreeHelper.GetChild(container, 0)));
+
+                Assert.Equal(other.Row!.Path, group.ActiveTab!.Path);
+            }
+            finally
+            {
+                window.Close();
+            }
+        });
+
+        static MouseButtonEventArgs DoubleClick(object hit) =>
+            new(Mouse.PrimaryDevice, Environment.TickCount, MouseButton.Left)
+            {
+                RoutedEvent = Control.MouseDoubleClickEvent,
+                Source = hit,
+            };
+    }
+
     /// <summary>W6-2 PR C (C-9): a verbosity change re-names the leaf's
     /// RETAINED rows at the new level — the copy to the bare label — with
     /// no load, no new publication and nothing spoken.</summary>

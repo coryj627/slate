@@ -313,14 +313,28 @@ internal static class SelectorFocus
     /// <summary>The item of <paramref name="container"/>'s row that holds
     /// the keys — the focused row, or the row the focused element sits in —
     /// else null.</summary>
-    internal static object? FocusedItem(ItemsControl container)
-    {
-        if (!container.IsKeyboardFocusWithin || Keyboard.FocusedElement is not DependencyObject focused)
-        {
-            return null;
-        }
+    internal static object? FocusedItem(ItemsControl container) =>
+        container.IsKeyboardFocusWithin && Keyboard.FocusedElement is DependencyObject focused
+            ? ItemAt(container, focused)
+            : null;
 
-        for (DependencyObject? current = focused;
+    /// <summary>
+    /// W7-7 PR 4 (#1247; codex PR 4's final check): the item of the row a
+    /// POINTER gesture hit — <paramref name="originalSource"/> lies in it —
+    /// else null. A pointer activation acts on the row it hit, never on the
+    /// keyboard's fallback: a double-click on a list's empty area first
+    /// LANDS the keys on a row (the click rule, OD-11c), and resolving the
+    /// second press through <see cref="FocusedOrSelectedItem"/> opened that
+    /// row — one never clicked.
+    /// </summary>
+    internal static object? ClickedItem(ItemsControl container, object? originalSource) =>
+        originalSource is DependencyObject source ? ItemAt(container, source) : null;
+
+    /// <summary>The item of <paramref name="container"/>'s row that
+    /// <paramref name="element"/> lies in, else null.</summary>
+    private static object? ItemAt(ItemsControl container, DependencyObject element)
+    {
+        for (DependencyObject? current = element;
             current is not null && !ReferenceEquals(current, container);
             current = current is Visual or System.Windows.Media.Media3D.Visual3D
                 ? VisualTreeHelper.GetParent(current) ?? LogicalTreeHelper.GetParent(current)
