@@ -66,7 +66,9 @@ public sealed partial class ShellAccessibilityTests
             AutomationElement tree = WaitForElement(window, "FilesTree", TimeSpan.FromSeconds(10));
             ReassertForegroundForAChord(window);
             tree.Focus();
-            AssertEventuallyFocused(tree, "The Files tree did not take focus.");
+            // The tree hands the keys to its first row, unselected (W7-7
+            // OD-11b): the Files region.
+            AssertFilesTreeRegionFocused(window, automation, tree, "The Files tree did not take focus.");
             PressKey(VirtualKeyShort.F6);
             AutomationElement contentPane = WaitForElement(window, "ContentPane", TimeSpan.FromSeconds(10));
             AssertEventuallyFocused(contentPane, "F6 from Files with no tab did not land on the empty editor pane.");
@@ -367,10 +369,11 @@ public sealed partial class ShellAccessibilityTests
     }
 
     /// <summary>R-5's radio half on the graph: Right on the checked Table
-    /// choice checks Diagram and the diagram replaces the table — the
-    /// user's switch, so the keys follow it into the renderer (graph
-    /// contract Term M4). F6 then leaves the editor region for the right
-    /// pane's first stop, as the ring says.</summary>
+    /// choice checks Diagram and the diagram replaces the table. The arrow
+    /// leaves the keys on the switcher (W7-7 OD-11d: the next arrow moves on
+    /// through the group; Term M4's hand-off to the renderer is a click's,
+    /// Space's or a command's). F6 then leaves the editor region for the
+    /// right pane's first stop, as the ring says.</summary>
     [Fact]
     public void RegionStops_GraphSwitcherArrowChecksAndShowsTheView()
     {
@@ -410,12 +413,10 @@ public sealed partial class ShellAccessibilityTests
             // (a) The arrow's destination is the checked choice.
             AssertChosen(diagramChoice, tableChoice, "Right on the graph switcher moved focus to Diagram without checking it.");
             // (b) The view itself switched: the diagram replaces the table,
-            // and the user's switch hands the keys to the renderer (Term M4).
+            // and the arrow's keys stay on the switcher's Diagram choice.
             _ = WaitForElement(window, "GraphDiagram", TimeSpan.FromSeconds(20));
             AssertElementDisappears(window, automation, "GraphTableGrid");
-            Assert.True(
-                SpinWait.SpinUntil(() => FocusIsInside(automation, "GraphDiagram"), TimeSpan.FromSeconds(10)),
-                $"the switch did not land the keys on the renderer; focus is {DescribeFocusedElement(automation)}");
+            AssertEventuallyFocused(diagramChoice, "The arrow's switch took the keys off the switcher.");
             // (c) The ring from the editor region: the right pane's first
             // stop, the review's checked filter.
             PressKey(VirtualKeyShort.F6);
