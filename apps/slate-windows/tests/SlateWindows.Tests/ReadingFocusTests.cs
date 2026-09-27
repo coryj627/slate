@@ -2682,15 +2682,13 @@ public sealed class ReadingFocusTests
         AssertFocused(host.Sentinel, "where the reader moved before the jump could land");
     });
 
-    /// <summary>OD-12 (codex PR 8 round 8): a canvas jump runs deferred — the
-    /// marks list closes, then the jump posts at Background — so the reader can
-    /// move first. In a split showing the same board in both panes, a pane
-    /// switch queued at Input ahead of the jump runs first and lands the other
-    /// pane's board; the jump then asks for a tab that is no longer the active
-    /// tab of the active group, and the shell's one entry refuses it before the
-    /// document is touched: the board in the pane the reader left takes no
-    /// focus, and the pane they switched to keeps its own landing — the jump's
-    /// card is not seated there either.</summary>
+    /// <summary>OD-12 (codex PR 8 round 8): a canvas jump's landing is an ask
+    /// the shell's one entry checks. In a split showing the same board in both
+    /// panes, an ask for the pane the reader has left — a tab no longer the
+    /// active tab of the active group — is refused before the document is
+    /// touched: the board in that pane takes no focus, and the pane the reader
+    /// is in keeps its own landing — the ask's card is not seated there
+    /// either.</summary>
     [Fact]
     public void AStaleCanvasJumpLandsNothingInThePaneTheReaderLeft() => RunSta(() =>
     {
@@ -2701,18 +2699,16 @@ public sealed class ReadingFocusTests
         WorkspaceGroupViewModel paneB = host.Workspace.ActiveGroup;
         WorkspaceTabViewModel boardB = paneB.ActiveTab!;
         Assert.NotSame(host.Tab, boardB);
-        Assert.True(host.Workspace.FocusDirectionalPane("horizontal", -1));
-        host.Settle();
-        Assert.NotSame(paneB, host.Workspace.ActiveGroup);
         CanvasDocumentViewModel board = host.Tab.Canvas!;
         Assert.Same(board, boardB.Canvas);
-        board.SeatSelectionSilently("beta");
-        board.ToggleMark();
         board.SeatSelectionSilently("alpha");
-        FrameworkElement boardA = host.EditorStop();
-        host.FocusTabBar();
-        board.OpenMarksList(host.Tab);
-        Assert.IsType<CanvasMarksListPrompt>(host.Workspace.CanvasPromptSheet);
+        var surfaceB = Assert.Single(
+            Descendants<CanvasSurfaceView>(host.Shell.ContentPaneBorder),
+            surface => ReferenceEquals(surface.DataContext, boardB));
+        Assert.True(surfaceB.IsKeyboardFocusWithin, "premise: pane B's board has the keys");
+        FrameworkElement boardA = Assert.Single(
+            Descendants<CanvasSurfaceView>(host.Shell.ContentPaneBorder),
+            surface => ReferenceEquals(surface.DataContext, host.Tab));
         int arrivalsInPaneA = 0;
         boardA.IsKeyboardFocusWithinChanged += (_, e) =>
         {
@@ -2722,24 +2718,62 @@ public sealed class ReadingFocusTests
             }
         };
 
-        host.Workspace.SubmitCanvasPrompt();
-        _ = Dispatcher.CurrentDispatcher.BeginInvoke(
-            DispatcherPriority.Input, () => host.Workspace.FocusDirectionalPane("horizontal", +1));
+        host.Workspace.RaiseCanvasNodeLanding(board, host.Tab, "beta");
         PumpedDispatcher.Drain();
         host.Settle();
 
         Assert.Same(paneB, host.Workspace.ActiveGroup);
         Assert.Equal(0, arrivalsInPaneA);
         Assert.Null(board.FocusRequest);
-        // Pane B's own landing seated the board's first card; the stale jump
-        // named "beta" and seated nothing.
         Assert.Equal("alpha", board.Selection.Selected);
-        Assert.Same(boardB, board.LastFocusLandingEnd?.Owner);
-        Assert.Null(board.LastFocusLandingEnd?.Request is CanvasFocusRequest { NodeId: { } named } ? named : null);
-        var surfaceB = Assert.Single(
-            Descendants<CanvasSurfaceView>(host.Shell.ContentPaneBorder),
-            surface => ReferenceEquals(surface.DataContext, boardB));
-        Assert.True(surfaceB.IsKeyboardFocusWithin, "the pane the reader switched to lost its landing");
+        Assert.True(surfaceB.IsKeyboardFocusWithin, "the pane the reader is in lost its landing");
+    });
+
+    /// <summary>OD-12 (codex PR 8 round 9): the marks list's jump lands in the
+    /// turn that closes the sheet, so a move the reader queued behind the
+    /// Enter — F6 on to the next region, or a move to the Files region or to
+    /// the right pane's content — runs AFTER the landing and is never undone
+    /// by it: the reader ends where they went, with no request left and
+    /// nothing pulling them back to the canvas.</summary>
+    [Theory]
+    [InlineData("F6")]
+    [InlineData("a move to the Files region")]
+    [InlineData("a move to the right pane's content")]
+    public void NothingQueuedBehindAJumpIsUndoneByIt(string move) => RunSta(() =>
+    {
+        using var host = new Host();
+        host.Initialize("canvas", CardBoard);
+        CanvasDocumentViewModel board = host.Tab.Canvas!;
+        board.SeatSelectionSilently("beta");
+        board.ToggleMark();
+        board.SeatSelectionSilently("alpha");
+        RingHost ring = host.UseRing();
+        host.FocusTabBar();
+        board.OpenMarksList(host.Tab);
+        Assert.IsType<CanvasMarksListPrompt>(host.Workspace.CanvasPromptSheet);
+        IInputElement destination = move == "a move to the Files region" ? host.Sentinel : host.Elsewhere;
+        Action go = move switch
+        {
+            "F6" => () => host.Workspace.FocusNextPaneCommand.Execute(null),
+            "a move to the Files region" => () => _ = host.Sentinel.Focus(),
+            _ => () => _ = host.Elsewhere.Focus(),
+        };
+        FrameworkElement canvas = host.EditorStop();
+
+        host.Workspace.SubmitCanvasPrompt();
+        _ = Dispatcher.CurrentDispatcher.BeginInvoke(DispatcherPriority.Input, go);
+        PumpedDispatcher.Drain();
+        host.Settle();
+
+        AssertFocused(destination, $"where {move} queued behind the jump took the reader");
+        Assert.False(canvas.IsKeyboardFocusWithin, $"the jump pulled the reader back to the canvas after {move}");
+        Assert.Null(board.FocusRequest);
+        Assert.False(((IShellRegionHost)host.Shell).HoldsLanding);
+        Assert.Equal("beta", board.LastFocusLandingEnd?.Request is CanvasFocusRequest { NodeId: { } named } ? named : null);
+        if (move == "F6")
+        {
+            Assert.Equal([ShellRegionKind.RightPaneContent], ring.Tried);
+        }
     });
 
     /// <summary>OD-12 (codex PR 8 round 8): a canvas landing asked before its

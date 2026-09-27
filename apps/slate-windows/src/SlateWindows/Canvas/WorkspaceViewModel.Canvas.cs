@@ -618,6 +618,10 @@ internal sealed partial class WorkspaceViewModel
         else if (result == CanvasPromptSubmit.Completed)
         {
             CanvasPromptSheet = null;
+            // W7-7 PR 8 (R-10, OD-12): a submit that ends in a landing (the
+            // marks list's jump) raises it now, in the turn that closed the
+            // sheet — never deferred behind input the reader has queued.
+            sheet.CompletedAndClosed();
         }
     }
 

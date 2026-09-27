@@ -493,13 +493,14 @@ public partial class MainWindow : Window
     }
 
     /// <summary>R-10 (OD-12's one entry): a canvas jump asks to land the editor
-    /// on the card the reader chose (the marks list's Enter, IG-39). The ask
-    /// runs deferred, so the reader may have moved on: it lands only while its
-    /// tab is still the active tab of the active group, on the same document —
-    /// otherwise it is stale and lands nothing, and withdraws nothing. A live
-    /// ask supersedes the landing the window holds and goes through the one
-    /// entry (which creates nothing under a modal surface), silently: its
-    /// outcomes are the landing's own (IG-41).</summary>
+    /// on the card the reader chose (the marks list's Enter, IG-39) — in the
+    /// turn that closed the sheet, so no input the reader queued behind the
+    /// Enter runs first (codex PR 8 round 9). The ask is still checked: it
+    /// lands only while its tab is the active tab of the active group, on the
+    /// same document — otherwise it is stale and lands nothing, and withdraws
+    /// nothing. A live ask supersedes the landing the window holds and goes
+    /// through the one entry (which creates nothing under a modal surface),
+    /// silently: its outcomes are the landing's own (IG-41).</summary>
     private void Workspace_CanvasNodeLandingRequested(object? sender, CanvasNodeLandingIntent intent)
     {
         if (_viewModel.Workspace is not WorkspaceViewModel workspace
