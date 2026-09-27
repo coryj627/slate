@@ -505,6 +505,17 @@ public sealed class CanvasContextMenuTests
                 vault.Announced.SequenceEqual([sentence]),
                 $"{leg}: the menu key said [{string.Join(" | ", vault.Announced)}], not \"{sentence}\" "
                 + "alone — the empty tree swallowed the press (C3, #1283).");
+
+            // The POINTER arm is unchanged (codex round 2): a right-click on
+            // the empty tree opens nothing and says nothing.
+            vault.Announced.Clear();
+            _ = RightClick(outline.TreeForTests, new Point(5, 5));
+            Assert.False(tabMenu.IsOpen, $"{leg}: a right-click climbed to the ANCESTOR's menu (F13's class).");
+            document.AnnouncerForTests.FlushForTests();
+            Assert.True(
+                vault.Announced.Count == 0,
+                $"{leg}: a right-click on the empty tree spoke [{string.Join(" | ", vault.Announced)}]: "
+                + "only a KEYBOARD request with nothing to open answers (#1283).");
         }
     });
 
@@ -640,6 +651,13 @@ public sealed class CanvasContextMenuTests
             new(board.ActualWidth - 2, board.ActualHeight - 2),
         ];
         Point empty = corners.First(point => board.HitTest(point) is null);
+        // …and with NO seat, so the pointer arm is discriminated from the
+        // keyboard arm (#1283, codex round 2): a keyboard request with no
+        // target answers "Nothing selected.", a pointer request over empty
+        // space says nothing at all — the click itself is the reader's answer.
+        document.SeatSelectionSilently(null);
+        document.AnnouncerForTests.FlushForTests();
+        vault.Announced.Clear();
         _ = RightClick(board, empty);
         Assert.False(
             persistent.IsOpen,
@@ -647,6 +665,11 @@ public sealed class CanvasContextMenuTests
             + "which would act on that card.");
         Assert.False(tabMenu.IsOpen, "a right-click on empty board climbed to the ANCESTOR's menu.");
         Assert.Empty(document.Selection.Marked);
+        document.AnnouncerForTests.FlushForTests();
+        Assert.True(
+            vault.Announced.Count == 0,
+            $"a right-click on empty board with no seat spoke [{string.Join(" | ", vault.Announced)}]: "
+            + "only a KEYBOARD request with nothing to open answers (#1283).");
     });
 
     /// <summary>
@@ -658,7 +681,7 @@ public sealed class CanvasContextMenuTests
     /// and the position is in its view space. Answers what the service
     /// does: whether a menu opened or the request was handled.
     /// </summary>
-    private static bool RightClick(CanvasRendererView board, Point at)
+    private static bool RightClick(IInputElement board, Point at)
     {
         System.Reflection.PropertyInfo service = typeof(FrameworkElement).GetProperty(
             "PopupControlService",
