@@ -367,6 +367,18 @@ public partial class MainWindow : IShellRegionHost
                 body, rows, [ElementWithAutomationId<UIElement>(body, noticeId)], () => LandInLeaf(body));
         }
 
+        // The review's page one re-queries after a toggle, a filter or a
+        // refresh and republishes under the reader (codex PR 4 round 6
+        // high 2): a removed row's keys land on a row, and an emptied
+        // page's on the leaf's landing — its checked filter.
+        FrameworkElement review = LeafBodyOf(PanelReviewList);
+        SelectorFocus.KeepKeysThroughPublications(review, [PanelReviewList], [], () => LandInLeaf(review));
+        // The Queries leaf's three registry lists are rebuilt on every
+        // refresh (G5): a removed row's keys land on the fresh row of the
+        // same item, which the window re-selects by identity.
+        FrameworkElement queries = LeafBodyOf(QueriesSavedList);
+        SelectorFocus.KeepKeysThroughPublications(
+            queries, [QueriesSavedList, QueriesBaseFilesList, QueriesDashboardsList], [], () => LandInLeaf(queries));
         FrameworkElement citations = LeafBodyOf(PanelCitationsList);
         SelectorFocus.KeepKeysThroughPublications(
             citations, [PanelCitationsList], CitationNotices, () => LandInLeaf(citations), reLandPublications: false);

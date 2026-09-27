@@ -210,6 +210,143 @@ public sealed class RightPaneLeafRegionTests
         Assert.Equal("outline", host.Workspace.ActiveLeaf.Id);
     });
 
+    /// <summary>Round 6 high 2 (the repro's R6_2, inverted; the owner's point
+    /// fix 2): a review toggle (Space on a row) re-queries page one, and the
+    /// publication clears and re-adds the rows under the reader. The keys
+    /// land on a row — never the bare populated list — through the review
+    /// list's keeper.</summary>
+    [Fact]
+    public void AReviewToggleKeepsTheKeysOnARow() => ReviewToggle(Key.Right, assertLanding: true);
+
+    /// <summary>High 2's second half: from wherever the publication left the
+    /// keys, each arrow stays in the leaf.</summary>
+    [Theory]
+    [InlineData(Key.Right)]
+    [InlineData(Key.Left)]
+    [InlineData(Key.Up)]
+    [InlineData(Key.Down)]
+    public void AfterAReviewToggleEveryArrowStaysInTheLeaf(Key key) => ReviewToggle(key, assertLanding: false);
+
+    private static void ReviewToggle(Key key, bool assertLanding) => RunSta(() =>
+    {
+        using var host = new Host();
+        host.Initialize("tasksReview", ("todo.md", "- [ ] first\n- [ ] second\n"));
+        host.AttachWorkspaceToTheWindow();
+        TasksReviewViewModel review = host.Workspace.TasksReview;
+        review.EnsureLoaded();
+        Assert.True(PumpedDispatcher.PumpUntil(() => review.Rows.Count == 2), "premise: the review never loaded two rows.");
+        ListBox list = host.ElementWithId<ListBox>("PanelReviewList");
+        list.SelectedIndex = 0;
+        list.UpdateLayout();
+        Assert.True(((UIElement)list.ItemContainerGenerator.ContainerFromIndex(0)).Focus());
+        int publications = 0;
+        ((INotifyCollectionChanged)review.Rows).CollectionChanged += (_, e) =>
+        {
+            if (e.Action == NotifyCollectionChangedAction.Reset)
+            {
+                publications++;
+            }
+        };
+        host.ForgetFocusAndSpeech();
+
+        host.Press(Key.Space);
+        Assert.True(
+            PumpedDispatcher.PumpUntil(() => publications > 0 && review.Rows.Count == 2
+                && File.ReadAllText(host.PathOf("todo.md")).Contains("- [x] first", StringComparison.Ordinal)),
+            "premise: the toggle never reached disk and re-published page one.");
+        PumpedDispatcher.Drain();
+
+        IInputElement afterPublication = Keyboard.FocusedElement;
+        if (assertLanding)
+        {
+            Assert.True(
+                afterPublication is ListBoxItem item && ReferenceEquals(ItemsControl.ItemsControlFromItemContainer(item), list),
+                $"after the publication the keys were on {Describe(afterPublication)}, not a review row; order: {host.Order}");
+        }
+
+        host.Press(key);
+
+        Assert.True(
+            host.VisibleLeafBody().IsKeyboardFocusWithin,
+            $"after the publication the keys were on {Describe(afterPublication)}; {key} then left the leaf, to {Describe(Keyboard.FocusedElement)}; order: {host.Order}");
+    });
+
+    /// <summary>Round 6 high 3 (the repro's R6_3, inverted; the owner's point
+    /// fix 3 and the sweep's G5): Enter in the saved-query rename field
+    /// renames and lands on the query's row; the rename's registry refresh —
+    /// asynchronous in the app, stood in for here by a refresh after the
+    /// landing — rebuilds the rows under the reader. The window re-selects
+    /// the query by identity in the rebuild's own dispatcher operation, and
+    /// the keeper lands the removed row's keys on the renamed query's fresh
+    /// row; an arrow from it stays in the leaf.</summary>
+    [Fact]
+    public void ASavedQueryRenameKeepsTheKeysOnTheRenamedRow() => RunSta(() =>
+    {
+        using var host = new Host();
+        host.Initialize("queries", ("Notes.base", "filters: 'file.ext == \"md\"'\nviews:\n  - type: table\n    name: Main\n    order:\n      - file.name\n"), ("a.md", "# A\n"));
+        string id = host.SaveQuery("All notes");
+        host.AttachWorkspaceToTheWindow();
+        host.Workspace.RefreshBaseQueries();
+        PumpedDispatcher.Drain();
+        ListBox list = host.ElementWithId<ListBox>("QueriesSavedList");
+        Assert.True(PumpedDispatcher.PumpUntil(() => list.HasItems && list.IsVisible), "premise: the saved query never listed.");
+        list.SelectedIndex = 0;
+        list.UpdateLayout();
+        Assert.True(((UIElement)list.ItemContainerGenerator.ContainerFromIndex(0)).Focus());
+        host.ElementWithId<Button>("QueriesRename").RaiseEvent(new RoutedEventArgs(ButtonBase.ClickEvent));
+        TextBox field = host.ElementWithId<TextBox>("QueriesRenameBox");
+        Assert.Same(field, Keyboard.FocusedElement);
+        field.Text = "Renamed notes";
+
+        host.Press(Key.Enter);
+        PumpedDispatcher.Drain();
+        IInputElement landed = Keyboard.FocusedElement;
+        host.ForgetFocusAndSpeech();
+        host.Workspace.RefreshBaseQueries();
+        PumpedDispatcher.Drain();
+        IInputElement afterRefresh = Keyboard.FocusedElement;
+        host.Press(Key.Down);
+
+        Assert.True(
+            afterRefresh is ListBoxItem { DataContext: SavedQuerySummary summary } && summary.Id == id,
+            $"the rename landed on {Describe(landed)}; after its refresh the keys were on {Describe(afterRefresh)}, not the renamed query's row; order: {host.Order}");
+        Assert.True(
+            host.VisibleLeafBody().IsKeyboardFocusWithin,
+            $"Down from there left the leaf, to {Describe(Keyboard.FocusedElement)}; order: {host.Order}");
+    });
+
+    /// <summary>The completeness sweep's G5: Pin/Unpin from its own button
+    /// refreshes the registry, whose rebuild drops the selection every
+    /// action button follows — the focused button disabled under the keys
+    /// and WPF's re-evaluation stranded them at the window. The selection is
+    /// re-seated by identity before that re-evaluation, so the keys stay on
+    /// the enabled button and the query stays selected.</summary>
+    [Fact]
+    public void PinFromItsButtonKeepsTheKeysOnTheButton() => RunSta(() =>
+    {
+        using var host = new Host();
+        host.Initialize("queries", ("Notes.base", "filters: 'file.ext == \"md\"'\nviews:\n  - type: table\n    name: Main\n    order:\n      - file.name\n"), ("a.md", "# A\n"));
+        string id = host.SaveQuery("All notes");
+        host.AttachWorkspaceToTheWindow();
+        host.Workspace.RefreshBaseQueries();
+        PumpedDispatcher.Drain();
+        ListBox list = host.ElementWithId<ListBox>("QueriesSavedList");
+        Assert.True(PumpedDispatcher.PumpUntil(() => list.HasItems && list.IsVisible), "premise: the saved query never listed.");
+        list.SelectedIndex = 0;
+        list.UpdateLayout();
+        Button pin = host.ElementWithId<Button>("QueriesPin");
+        Assert.True(pin.IsEnabled && pin.Focus(), "premise: the Pin button refused the keys.");
+        host.ForgetFocusAndSpeech();
+
+        pin.RaiseEvent(new RoutedEventArgs(ButtonBase.ClickEvent));
+        PumpedDispatcher.Drain();
+
+        Assert.True(
+            ReferenceEquals(pin, Keyboard.FocusedElement) && pin.IsEnabled,
+            $"after the refresh the keys were on {Describe(Keyboard.FocusedElement)}; order: {host.Order}");
+        Assert.Equal(id, Assert.IsType<SavedQuerySummary>(list.SelectedItem).Id);
+    });
+
     public static TheoryData<string, string, Key> LeafStops()
     {
         var data = new TheoryData<string, string, Key>();

@@ -38,11 +38,100 @@ public partial class MainWindow
     private IInputElement? _focusBeforeBuilder;
     private IInputElement? _focusBeforeDashboardEditor;
 
-    private void WireWorkspaceBases(WorkspaceViewModel workspace) =>
+    private void WireWorkspaceBases(WorkspaceViewModel workspace)
+    {
         workspace.PropertyChanged += Workspace_BasesSheetChanged;
+        workspace.BaseQueriesRepublishing += Queries_Republishing;
+        workspace.BaseQueriesRepublished += Queries_Republished;
+    }
 
-    private void UnwireWorkspaceBases(WorkspaceViewModel workspace) =>
+    private void UnwireWorkspaceBases(WorkspaceViewModel workspace)
+    {
         workspace.PropertyChanged -= Workspace_BasesSheetChanged;
+        workspace.BaseQueriesRepublishing -= Queries_Republishing;
+        workspace.BaseQueriesRepublished -= Queries_Republished;
+    }
+
+    /// <summary>The Queries leaf's selections, by identity, as the registry
+    /// rebuild found them.</summary>
+    private (string? SavedQuery, string? BaseFile, string? Dashboard) _queriesSelection;
+
+    private void Queries_Republishing() =>
+        _queriesSelection = (
+            (QueriesSavedList.SelectedItem as SavedQuerySummary)?.Id,
+            (QueriesBaseFilesList.SelectedItem as BaseFileSummary)?.Path,
+            (QueriesDashboardsList.SelectedItem as DashboardSummary)?.Id);
+
+    /// <summary>
+    /// W7-7 PR 4 (#1247, R-5; codex PR 4 round 6 high 3 and the completeness
+    /// sweep's G5): the registry refresh rebuilds the three lists (Clear +
+    /// Add), which drops every selection, and every action button follows
+    /// its list's selection: Pin from its own button disabled the button
+    /// under the keys, and WPF's re-evaluation stranded them at the window;
+    /// a rename's refresh removed the row the keys were on. Each list's
+    /// selection is re-seated by identity here, in the rebuild's own
+    /// dispatcher operation, so the buttons are enabled again before that
+    /// re-evaluation runs and the list keeper lands a removed row's keys on
+    /// the fresh row of the same query. A button whose selection is gone
+    /// for good (Delete) hands the keys to its list's row, else to the
+    /// leaf's own landing.
+    /// </summary>
+    private void Queries_Republished()
+    {
+        (string? query, string? file, string? dashboard) = _queriesSelection;
+        bool lost = !Reselect(QueriesSavedList, query, (SavedQuerySummary summary) => summary.Id)
+            | !Reselect(QueriesBaseFilesList, file, (BaseFileSummary summary) => summary.Path)
+            | !Reselect(QueriesDashboardsList, dashboard, (DashboardSummary summary) => summary.Id);
+        if (!lost
+            || Keyboard.FocusedElement is not UIElement { IsEnabled: false } disabled
+            || LeafBodyOf(QueriesSavedList) is not { } body
+            || !IsWithin(disabled, body))
+        {
+            return;
+        }
+
+        ListBox home = ListAbove(disabled) ?? QueriesSavedList;
+        if (!(home.HasItems && SelectorFocus.FocusFirstOrSelectedItem(home)))
+        {
+            _ = LandInLeaf(body);
+        }
+    }
+
+    /// <summary>The list an action row acts on: in the leaf's column each
+    /// row of buttons sits just after its list.</summary>
+    private static ListBox? ListAbove(DependencyObject element)
+    {
+        for (DependencyObject? current = element; current is not null; current = LogicalTreeHelper.GetParent(current))
+        {
+            if (LogicalTreeHelper.GetParent(current) is Panel column && current is UIElement child)
+            {
+                for (int index = column.Children.IndexOf(child) - 1; index >= 0; index--)
+                {
+                    if (column.Children[index] is ListBox list)
+                    {
+                        return list;
+                    }
+                }
+            }
+        }
+
+        return null;
+    }
+
+    /// <summary>Selects the item with <paramref name="id"/>; true when there
+    /// was none to re-seat or it was re-seated.</summary>
+    private static bool Reselect<T>(ListBox list, string? id, Func<T, string> identity)
+        where T : class
+    {
+        if (id is null)
+        {
+            return true;
+        }
+
+        T? fresh = list.Items.OfType<T>().FirstOrDefault(item => string.Equals(identity(item), id, StringComparison.Ordinal));
+        list.SelectedItem = fresh;
+        return fresh is not null;
+    }
 
     private void Workspace_BasesSheetChanged(
         object? sender, System.ComponentModel.PropertyChangedEventArgs eventArgs)
