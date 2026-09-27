@@ -17627,6 +17627,17 @@ pub struct BaseFileSummary {
     pub indexed_at_ms: i64,
 }
 
+/// What [`VaultSession::open_base_cancellable`] opened: the handle and the
+/// content hash of the exact bytes the open parsed — the definition the
+/// handle shows (W7-7 PR 7, codex AR-18 review round 2, finding 2). A host
+/// that read the index's hash separately, before or after the open, could
+/// record the hash of different bytes than the ones it shows.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct OpenedBase {
+    pub handle: u64,
+    pub content_hash: String,
+}
+
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct BaseViewSummary {
     pub name: String,
@@ -17942,10 +17953,30 @@ impl VaultSession {
     }
 
     pub fn open_base(&self, path: &str) -> Result<u64, VaultError> {
+        self.open_base_cancellable(path, &CancelToken::new())
+            .map(|opened| opened.handle)
+    }
+
+    /// Open a file-backed `.base` under `cancel` (W7-7 PR 7, codex AR-18
+    /// review round 2, findings 2 and 4). The token is checked before the
+    /// read, before the index heal and immediately before the handle
+    /// registers, so a caller cancelled by then gets `Cancelled` and no
+    /// handle; a token cancelled after registration leaves the returned
+    /// handle the caller's to close. The handle comes back with the
+    /// content hash of the exact bytes this open parsed.
+    pub fn open_base_cancellable(
+        &self,
+        path: &str,
+        cancel: &CancelToken,
+    ) -> Result<OpenedBase, VaultError> {
+        cancel.check()?;
         let source = self.read_text(path)?;
+        cancel.check()?;
         self.ensure_open_base_indexed(path)?;
         let (base, warnings) = crate::bases::parse_base(&source);
         let queries = compiled_base_queries(&base);
+        let opened_hash = content_hash(source.as_bytes());
+        cancel.check()?;
         let handle = self
             .next_base_handle
             .fetch_add(1, std::sync::atomic::Ordering::SeqCst);
@@ -17953,7 +17984,7 @@ impl VaultSession {
             handle,
             OpenBaseState {
                 path: Some(path.to_string()),
-                content_hash: Some(content_hash(source.as_bytes())),
+                content_hash: Some(opened_hash.clone()),
                 source: OpenBaseSource::Base(base),
                 queries,
                 warnings: warnings.into_iter().map(|w| w.message).collect(),
@@ -17962,7 +17993,20 @@ impl VaultSession {
                 transient_sort: None,
             },
         );
-        Ok(handle)
+        Ok(OpenedBase {
+            handle,
+            content_hash: opened_hash,
+        })
+    }
+
+    /// The content hash of the definition a base handle shows now: the
+    /// bytes its open parsed, or the bytes its last successful edit wrote
+    /// (W7-7 PR 7, round 2 finding 2 — never a separate index read, which
+    /// could see other bytes). `None` for an inline or query handle.
+    pub fn base_definition_hash(&self, handle: u64) -> Result<Option<String>, VaultError> {
+        let bases = self.bases.lock().expect("base registry mutex");
+        let state = bases.get(&handle).ok_or_else(|| bad_base_handle(handle))?;
+        Ok(state.content_hash.clone())
     }
 
     pub fn open_base_inline(

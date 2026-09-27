@@ -11415,6 +11415,28 @@ impl VaultSession {
         Ok(self.inner.open_base(&path)?)
     }
 
+    /// W7-7 PR 7 (codex AR-18 review round 2, findings 2 and 4): open a
+    /// `.base` under a cancel token — a caller cancelled before the handle
+    /// registers gets `Cancelled` and no handle — returning the handle with
+    /// the content hash of the exact definition it opened.
+    pub fn open_base_cancellable(
+        &self,
+        path: String,
+        cancel: Arc<CancelToken>,
+    ) -> Result<OpenedBase, VaultError> {
+        Ok(self
+            .inner
+            .open_base_cancellable(&path, &cancel.inner)?
+            .into())
+    }
+
+    /// The content hash of the definition a base handle shows now (its
+    /// open's bytes, or its last successful edit's); `None` for an inline
+    /// or query handle.
+    pub fn base_definition_hash(&self, handle: u64) -> Result<Option<String>, VaultError> {
+        Ok(self.inner.base_definition_hash(handle)?)
+    }
+
     pub fn open_base_inline(
         &self,
         source: String,
@@ -11924,6 +11946,23 @@ impl From<core::CanvasLoadDisposition> for CanvasLoadDisposition {
             core::CanvasLoadDisposition::Editable => Self::Editable,
             core::CanvasLoadDisposition::RecoveredReadOnly => Self::RecoveredReadOnly,
             core::CanvasLoadDisposition::Unavailable => Self::Unavailable,
+        }
+    }
+}
+
+/// Result of `open_base_cancellable`: the handle and the content hash of
+/// the exact definition it opened (W7-7 PR 7).
+#[derive(Debug, Clone, PartialEq, Eq, uniffi::Record)]
+pub struct OpenedBase {
+    pub handle: u64,
+    pub content_hash: String,
+}
+
+impl From<core::OpenedBase> for OpenedBase {
+    fn from(opened: core::OpenedBase) -> Self {
+        OpenedBase {
+            handle: opened.handle,
+            content_hash: opened.content_hash,
         }
     }
 }

@@ -167,11 +167,11 @@ pub use session::{
     DashboardSummary, DeletedFileEntry, DirListing, DirListingPage, DirNodeSummary, EventErrorCode,
     ExportFormat, FileChangeEvent, FileChangeKind, FileFilter, FileMetadata, FileSummary,
     IndexPhase, NoteLinkPanels, NoteLoadBundle, NotePartsBundle, NoteTasksPage,
-    OpAnnotationSummary, OutlinePage, Page, Paging, RemnantLog, RenameAffected, RenameFailed,
-    RenameFailureKind, RenameReport, RenameSkipReason, RenameSkipped, SaveReport, SavedQuery,
-    SavedQuerySourceSyntax, SavedQuerySummary, ScanProgress, ScanProgressListener, ScanReport,
-    SessionConfig, TaskIndexRepairOutcome, VaultEventListener, VaultRootIdentity, VaultSession,
-    VersionSummary,
+    OpAnnotationSummary, OpenedBase, OutlinePage, Page, Paging, RemnantLog, RenameAffected,
+    RenameFailed, RenameFailureKind, RenameReport, RenameSkipReason, RenameSkipped, SaveReport,
+    SavedQuery, SavedQuerySourceSyntax, SavedQuerySummary, ScanProgress, ScanProgressListener,
+    ScanReport, SessionConfig, TaskIndexRepairOutcome, VaultEventListener, VaultRootIdentity,
+    VaultSession, VersionSummary,
 };
 pub use session::{
     MARKDOWN_DOCUMENT_EXTENSIONS, MAX_INDEXED_HASH_PATHS, OPENABLE_DOCUMENT_EXTENSIONS,

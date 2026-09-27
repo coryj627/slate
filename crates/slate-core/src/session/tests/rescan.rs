@@ -834,3 +834,81 @@ fn the_core_scan_report_stays_bounded_under_thousands_of_failures() {
         "the samples are not the first errors streamed"
     );
 }
+
+// --- the re-sync's reopens (codex AR-18 review round 2, findings 2 and 4) -------
+
+const NOTES_BASE: &[u8] =
+    b"filters: 'file.ext == \"md\"'\nviews:\n  - type: table\n    name: Main\n";
+
+/// Finding 2: a base handle carries the hash of the exact definition its
+/// open parsed — and, after an edit, of the bytes the edit wrote — never a
+/// separate index read that could see other bytes.
+#[test]
+fn a_base_open_returns_the_hash_of_the_definition_it_opened() {
+    let (tmp, session) = make_vault(|p| {
+        p.write_file("a.md", b"# A\n").unwrap();
+        p.write_file("Notes.base", NOTES_BASE).unwrap();
+    });
+    session.scan_initial(&CancelToken::new()).unwrap();
+    // The file moves past the index before the open: the open's hash is
+    // the bytes it parsed, not the index's.
+    let rewritten: &[u8] =
+        b"filters: 'file.ext == \"md\"'\nviews:\n  - type: table\n    name: Rewritten\n";
+    std::fs::write(tmp.path().join("Notes.base"), rewritten).unwrap();
+
+    let opened = session
+        .open_base_cancellable("Notes.base", &CancelToken::new())
+        .unwrap();
+
+    assert_eq!(opened.content_hash, content_hash(rewritten));
+    assert_ne!(
+        indexed_hash(&session, "Notes.base").as_deref(),
+        Some(opened.content_hash.as_str()),
+        "the index still holds the scanned bytes"
+    );
+    assert_eq!(
+        session.base_views(opened.handle).unwrap()[0].name,
+        "Rewritten"
+    );
+    assert_eq!(
+        session.base_definition_hash(opened.handle).unwrap(),
+        Some(opened.content_hash.clone())
+    );
+
+    session
+        .base_apply_edit(
+            opened.handle,
+            crate::bases::BaseEdit::RenameView {
+                view: 0,
+                name: "Renamed".to_string(),
+            },
+        )
+        .unwrap();
+    let written = std::fs::read(tmp.path().join("Notes.base")).unwrap();
+    assert_eq!(
+        session.base_definition_hash(opened.handle).unwrap(),
+        Some(content_hash(&written))
+    );
+
+    let inline = session.open_base_inline("views: []\n", None).unwrap();
+    assert_eq!(session.base_definition_hash(inline).unwrap(), None);
+}
+
+/// Finding 4: a base open whose token is cancelled registers no handle.
+#[test]
+fn a_cancelled_base_open_registers_no_handle() {
+    let (_tmp, session) = make_vault(|p| {
+        p.write_file("Notes.base", NOTES_BASE).unwrap();
+    });
+    session.scan_initial(&CancelToken::new()).unwrap();
+    let cancel = CancelToken::new();
+    cancel.cancel();
+
+    let opened = session.open_base_cancellable("Notes.base", &cancel);
+
+    assert!(matches!(opened, Err(VaultError::Cancelled)), "{opened:?}");
+    assert!(session.bases.lock().unwrap().is_empty());
+    // The tokenless form is the wrapper, unchanged.
+    let handle = session.open_base("Notes.base").unwrap();
+    assert!(session.bases.lock().unwrap().contains_key(&handle));
+}
