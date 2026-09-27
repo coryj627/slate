@@ -382,6 +382,70 @@ public sealed class TasksReviewTests : IDisposable
         Assert.False(review.IsLoadingMore);
     }
 
+    /// <summary>W7-7 PR 4 (#1247; the completeness sweep's G22): a chip names
+    /// only a PUBLISHED count. While a newly chosen filter's page loads its
+    /// chip names that filter's last published total, else none — never the
+    /// "0 tasks" of the page cleared for the load — and the chip it replaced
+    /// keeps its name until the page publishes. Once published, the mac
+    /// labels hold: the active chip speaks its total, the others their
+    /// names. The loads run on the pool and publish through a pumped
+    /// dispatcher, so the in-flight state is observable.</summary>
+    [Fact]
+    public void AChipNamesOnlyAPublishedCount()
+    {
+        Exception? failure = null;
+        var thread = new Thread(() =>
+        {
+            try
+            {
+                PumpedDispatcher.Run(() =>
+                {
+                    var review = new TasksReviewViewModel(
+                        _session,
+                        _ => { },
+                        (_, _, _) => ReviewOpenRoute.Opened,
+                        (_, _, _) => ReviewToggleRoute.NoOpenTab,
+                        () => Clock);
+                    review.EnsureLoaded();
+                    Assert.True(PumpedDispatcher.PumpUntil(() => !review.IsLoading && review.Rows.Count > 0));
+                    string allName = review.FilterAutomationName(TaskReviewFilter.All);
+                    Assert.Equal("All, 236 tasks", allName);
+
+                    review.ApplyFilter(TaskReviewFilter.Overdue);
+                    Assert.True(review.IsLoading, "premise: the page published inline.");
+                    Assert.Equal("Overdue", review.FilterAutomationName(TaskReviewFilter.Overdue));
+                    Assert.Equal(allName, review.FilterAutomationName(TaskReviewFilter.All));
+                    Assert.True(PumpedDispatcher.PumpUntil(() => !review.IsLoading));
+                    Assert.Equal("Overdue, 1 task", review.FilterAutomationName(TaskReviewFilter.Overdue));
+                    Assert.Equal("All", review.FilterAutomationName(TaskReviewFilter.All));
+
+                    review.ApplyFilter(TaskReviewFilter.All);
+                    Assert.True(review.IsLoading, "premise: the page published inline.");
+                    Assert.Equal(allName, review.FilterAutomationName(TaskReviewFilter.All));
+                    Assert.Equal("Overdue, 1 task", review.FilterAutomationName(TaskReviewFilter.Overdue));
+                    Assert.True(PumpedDispatcher.PumpUntil(() => !review.IsLoading));
+                    Assert.Equal("Overdue", review.FilterAutomationName(TaskReviewFilter.Overdue));
+
+                    review.ApplyFilter(TaskReviewFilter.Overdue);
+                    Assert.Equal("Overdue, 1 task", review.FilterAutomationName(TaskReviewFilter.Overdue));
+                    Assert.True(PumpedDispatcher.PumpUntil(() => !review.IsLoading));
+                    review.Shutdown();
+                });
+            }
+            catch (Exception exception)
+            {
+                failure = exception;
+            }
+        });
+        thread.SetApartmentState(ApartmentState.STA);
+        thread.Start();
+        Assert.True(thread.Join(TimeSpan.FromSeconds(60)), "the review fact timed out.");
+        if (failure is not null)
+        {
+            System.Runtime.ExceptionServices.ExceptionDispatchInfo.Capture(failure).Throw();
+        }
+    }
+
     [Fact]
     public void FilterChipsExposeExactlyOneActiveSelection()
     {

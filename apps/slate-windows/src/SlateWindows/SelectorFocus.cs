@@ -194,6 +194,7 @@ internal static class SelectorFocus
             TreeView tree => FocusSelectedOrFirstRow(tree),
             DataGrid grid => AccessibleDataGrid.Owning(grid) is { } owner && owner.FocusCurrentOrFirstCell(),
             ItemsControl items when IsPlainItemsLanding(items) => LandInsideItems(items),
+            RadioButton radio when RadioGroupArrows.CheckedPeer(radio) is { } chosen => chosen.Focus(),
             _ => stop.Focus() || stop.IsKeyboardFocusWithin,
         };
 

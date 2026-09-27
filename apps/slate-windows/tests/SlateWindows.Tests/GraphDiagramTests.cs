@@ -5,6 +5,7 @@ using System.Runtime.ExceptionServices;
 using System.Windows;
 using System.Windows.Automation;
 using System.Windows.Controls;
+using System.Windows.Input;
 using System.Windows.Threading;
 using SlateWindows.Graph;
 using uniffi.slate_uniffi;
@@ -314,7 +315,11 @@ public sealed partial class GraphDiagramTests
             // request is raised (Term F1); under a build it waits (Term F3's
             // rule for a presenter's request — no provisional seat).
             RadioButton diagram = Choice(surface, GraphSurfaceMode.Diagram);
-            Assert.True(diagram.Focus());
+            // The switcher's stop is its CHECKED radio (W7-7 PR 4, #1247): a
+            // click's press on Diagram lands the keys on Table, and its
+            // release — the check — brings them to Diagram.
+            _ = diagram.Focus();
+            Assert.Same(Choice(surface, GraphSurfaceMode.Table), Keyboard.FocusedElement);
             Assert.True(surface.IsKeyboardFocusWithin);
             diagram.IsChecked = true;
             window.UpdateLayout();
@@ -342,7 +347,10 @@ public sealed partial class GraphDiagramTests
             GraphSurfaceView surface = SurfaceFor(host, document);
             using HostedWindow window = HostInWindow(surface);
             RadioButton diagram = Choice(surface, GraphSurfaceMode.Diagram);
-            Assert.True(diagram.Focus());
+            // A click: the press lands the keys on the checked radio (the
+            // switcher's stop, W7-7 PR 4), the release checks Diagram.
+            _ = diagram.Focus();
+            Assert.True(surface.IsKeyboardFocusWithin);
             diagram.IsChecked = true;
             window.UpdateLayout();
             Assert.NotNull(document.FocusRequest);

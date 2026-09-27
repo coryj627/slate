@@ -5,6 +5,7 @@ using System.Windows;
 using System.Windows.Controls;
 using System.Windows.Controls.Primitives;
 using System.Windows.Input;
+using System.Windows.Media;
 
 namespace SlateWindows;
 
@@ -29,10 +30,35 @@ namespace SlateWindows;
 /// the previous one, wrapping. That is the dialog manager's GROUP order,
 /// not geometry: the Tasks Review filters wrap onto a second row in a
 /// narrow pane, where a geometric Down from "All" reaches "This week" or
-/// nothing. The radio that takes focus is then checked through
+/// nothing.
+/// </para>
+/// <para>
+/// <b>One arrow, one utterance</b> (codex PR 4 round 6 high 1; the owner's
+/// decision). The radio an arrow reaches is CHECKED FIRST — through
 /// <c>SetCurrentValue</c>, exactly as <c>RadioButton.OnToggle</c> checks
 /// it, so a TwoWay binding (the review's filter chips) carries the choice
-/// to its source and survives.
+/// to its source and survives — and only then takes focus, so the focus
+/// speech already says "checked" and names the choice made. The owners'
+/// authored line for the choice (the review's "Filter set", the canvas's
+/// surface line, the graph's mode line) would repeat it: they read
+/// <see cref="IsCommittingByArrow"/> and stay silent on this route only; a
+/// click, Space and a command still speak. Focus stays on the group (the
+/// graph's M4 hand-off to the projection is a click's, not an arrow's).
+/// </para>
+/// <para>
+/// <b>The group's stop is its checked radio.</b> Keys that enter the group
+/// from outside onto an unchecked radio — Tab, whose <c>Once</c> group
+/// remembers the last radio FOCUSED, not the one a command or a click
+/// elsewhere checked; a region's first-stop landing; a restore — go on to
+/// the checked radio in the same focus change (<see cref="CheckedPeer"/>;
+/// <c>SelectorFocus.LandOnStop</c> lands a radio there directly and answers
+/// that it landed): Ctrl+R put the reader on
+/// "All" while "Overdue" was checked, and the next arrow committed a
+/// filter one step from the wrong place (the completeness sweep's G15). A
+/// check made while the group holds the keys brings them to the checked
+/// radio — the click whose press the entry redirected, Space, a command
+/// run with the keys on the group — so they never rest on an unchecked
+/// radio.
 /// </para>
 /// <para>
 /// A modified arrow is never the group's: Ctrl+Alt+Arrow is the window's
@@ -44,6 +70,10 @@ namespace SlateWindows;
 /// </remarks>
 internal static class RadioGroupArrows
 {
+    /// <summary>An arrow's check is in progress on this thread.</summary>
+    [ThreadStatic]
+    private static bool _committingByArrow;
+
     public static readonly DependencyProperty IsEnabledProperty =
         DependencyProperty.RegisterAttached(
             "IsEnabled", typeof(bool), typeof(RadioGroupArrows),
@@ -110,6 +140,23 @@ internal static class RadioGroupArrows
         && GetIsEnabled(panel)
         && Target(panel, radio, key, modifiers) is not null;
 
+    /// <summary>Whether the check being made is an arrow's — the route on
+    /// which the choice's own announcement stays silent, the focus speech
+    /// saying it.</summary>
+    internal static bool IsCommittingByArrow => _committingByArrow;
+
+    /// <summary>
+    /// The checked radio of <paramref name="radio"/>'s group, when
+    /// <paramref name="radio"/> is NOT it and the checked one can take the
+    /// keys: a landing on the group lands there. Null when the radio is the
+    /// checked one, the group has none checked, or it is not an arrow group.
+    /// </summary>
+    internal static RadioButton? CheckedPeer(RadioButton radio) =>
+        radio is { IsChecked: not true, Parent: Panel panel } && GetIsEnabled(panel)
+            ? panel.Children.OfType<RadioButton>().FirstOrDefault(peer =>
+                peer is { IsChecked: true, IsEnabled: true, IsVisible: true, Focusable: true })
+            : null;
+
     private static void OnIsEnabledChanged(DependencyObject element, DependencyPropertyChangedEventArgs change)
     {
         if (element is not Panel panel)
@@ -119,9 +166,13 @@ internal static class RadioGroupArrows
         }
 
         panel.KeyDown -= Panel_KeyDown;
+        panel.PreviewGotKeyboardFocus -= Panel_PreviewGotKeyboardFocus;
+        panel.RemoveHandler(ToggleButton.CheckedEvent, (RoutedEventHandler)Panel_Checked);
         if ((bool)change.NewValue)
         {
             panel.KeyDown += Panel_KeyDown;
+            panel.PreviewGotKeyboardFocus += Panel_PreviewGotKeyboardFocus;
+            panel.AddHandler(ToggleButton.CheckedEvent, (RoutedEventHandler)Panel_Checked);
         }
     }
 
@@ -136,9 +187,54 @@ internal static class RadioGroupArrows
         }
 
         e.Handled = true;
-        if (!ReferenceEquals(to, from) && to.Focus())
+        if (ReferenceEquals(to, from))
+        {
+            return;
+        }
+
+        // Checked BEFORE it takes focus, and silently: the focus speech is
+        // the one utterance. Target() offers only a radio that can take the
+        // keys.
+        bool outer = _committingByArrow;
+        _committingByArrow = true;
+        try
         {
             to.SetCurrentValue(ToggleButton.IsCheckedProperty, true);
+        }
+        finally
+        {
+            _committingByArrow = outer;
+        }
+
+        _ = to.Focus();
+    }
+
+    /// <summary>Keys entering the group from outside onto an unchecked
+    /// radio go on to the checked one, in the same focus change.</summary>
+    private static void Panel_PreviewGotKeyboardFocus(object sender, KeyboardFocusChangedEventArgs e)
+    {
+        if (e.Handled
+            || sender is not Panel panel
+            || e.NewFocus is not RadioButton radio
+            || !panel.Children.Contains(radio)
+            || (e.OldFocus is Visual old && panel.IsAncestorOf(old))
+            || CheckedPeer(radio) is not { } chosen)
+        {
+            return;
+        }
+
+        e.Handled = chosen.Focus();
+    }
+
+    /// <summary>A check made while the group holds the keys brings them to
+    /// the checked radio.</summary>
+    private static void Panel_Checked(object sender, RoutedEventArgs e)
+    {
+        if (sender is Panel { IsKeyboardFocusWithin: true } panel
+            && e.OriginalSource is RadioButton { IsKeyboardFocused: false } radio
+            && panel.Children.Contains(radio))
+        {
+            _ = radio.Focus();
         }
     }
 }

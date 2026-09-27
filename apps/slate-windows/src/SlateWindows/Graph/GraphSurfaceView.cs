@@ -639,15 +639,20 @@ internal sealed class GraphSurfaceView : UserControl, IGraphSurfacePresenter
     /// document's ONE writer; Term M4: a USER switch with the keys inside the
     /// surface raises the landing — a programmatic re-check under the syncing
     /// guard (the persisted restore's path, a document-driven change) raises
-    /// nothing.</summary>
+    /// nothing. W7-7 PR 4 (#1247; the owner's decision): an ARROW's switch is
+    /// silent and leaves the keys on the switcher — the radio is checked
+    /// before it takes focus, its focus speech names the mode, and the next
+    /// arrow moves on through the group; M4 stays a click's, Space's and a
+    /// command's.</summary>
     private void OnModeChosen(GraphSurfaceMode mode)
     {
         if (_synchronizingSwitcher || Model is not { } model)
         {
             return;
         }
+        bool byArrow = RadioGroupArrows.IsCommittingByArrow;
         bool hadTheKeys = IsKeyboardFocusWithin;
-        if (model.SetMode(mode) && hadTheKeys)
+        if (model.SetMode(mode, announce: !byArrow) && hadTheKeys && !byArrow)
         {
             RequestProjectionFocus();
         }

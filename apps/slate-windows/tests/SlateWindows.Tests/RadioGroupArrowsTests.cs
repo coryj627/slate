@@ -126,6 +126,79 @@ public sealed class RadioGroupArrowsTests
         Assert.False(radios[1].IsChecked);
     });
 
+    /// <summary>Codex PR 4 round 6 high 1 (the owner's decision): the radio
+    /// an arrow reaches is CHECKED before it takes the keys — its focus
+    /// speech already says so — and the check is marked as an arrow's, which
+    /// the group's owners read to keep their own line silent. A check by any
+    /// other route is not an arrow's.</summary>
+    [Fact]
+    public void AnArrowChecksTheRadioBeforeItTakesTheKeys() => RunSta(() =>
+    {
+        (StackPanel group, RadioButton[] radios) = Group(3);
+        using HostedWindow host = Host(group);
+        Assert.True(radios[0].Focus());
+        bool? checkedWhenFocused = null;
+        bool? byArrow = null;
+        radios[1].GotKeyboardFocus += (_, _) => checkedWhenFocused ??= radios[1].IsChecked;
+        radios[1].Checked += (_, _) => byArrow ??= RadioGroupArrows.IsCommittingByArrow;
+
+        Assert.True(RaiseKeyDown(radios[0], Key.Right));
+
+        Assert.Same(radios[1], Keyboard.FocusedElement);
+        Assert.True(checkedWhenFocused, "the radio took the keys unchecked");
+        Assert.True(byArrow, "the check was not marked as the arrow's");
+        Assert.False(RadioGroupArrows.IsCommittingByArrow);
+
+        byArrow = null;
+        radios[1].IsChecked = false;
+        radios[1].IsChecked = true;
+        Assert.False(byArrow, "a check by another route read as an arrow's");
+    });
+
+    /// <summary>The completeness sweep's G15: the group's stop is its
+    /// CHECKED radio. Tab enters a Once group on the radio last focused, so
+    /// after a check made with the keys elsewhere — a command, a click — it
+    /// entered on the old one; and a region's first-stop landing reached the
+    /// group's first radio. Both land on the checked radio.</summary>
+    [Fact]
+    public void KeysEnteringTheGroupLandOnItsCheckedRadio() => RunSta(() =>
+    {
+        (StackPanel group, RadioButton[] radios) = Group(3);
+        var before = new Button { Content = "Before" };
+        var root = new StackPanel();
+        root.Children.Add(before);
+        root.Children.Add(group);
+        using HostedWindow host = Host(root);
+        Assert.True(radios[0].Focus());
+        Assert.True(before.Focus());
+        radios[2].IsChecked = true;
+
+        InputManager.Current.ProcessInput(new KeyEventArgs(
+            Keyboard.PrimaryDevice, PresentationSource.FromVisual(before)!, Environment.TickCount, Key.Tab)
+        {
+            RoutedEvent = Keyboard.PreviewKeyDownEvent,
+        });
+
+        Assert.Same(radios[2], Keyboard.FocusedElement);
+        Assert.True(radios[2].IsChecked);
+
+        // A landing — a region's first stop, a restore — lands there too...
+        Assert.True(before.Focus());
+        Assert.True(SelectorFocus.LandOnStop(radios[0]));
+        Assert.Same(radios[2], Keyboard.FocusedElement);
+        Assert.False(radios[0].IsChecked, "the landing checked the radio it was sent to");
+
+        // ...and a click on another radio — its press focuses it, which the
+        // entry redirects; its release checks it — brings the keys to the
+        // radio it checked: they never rest on an unchecked radio.
+        Assert.True(before.Focus());
+        _ = radios[0].Focus();
+        Assert.Same(radios[2], Keyboard.FocusedElement);
+        radios[0].SetCurrentValue(System.Windows.Controls.Primitives.ToggleButton.IsCheckedProperty, true);
+        Assert.Same(radios[0], Keyboard.FocusedElement);
+        Assert.False(radios[2].IsChecked);
+    });
+
     [Fact]
     public void TheBehaviourBelongsOnThePanel() => RunSta(() =>
         Assert.Throws<InvalidOperationException>(() => RadioGroupArrows.SetIsEnabled(new RadioButton(), true)));

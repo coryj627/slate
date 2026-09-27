@@ -114,6 +114,12 @@ internal sealed class TasksReviewViewModel : PanelWorkScheduler
     private ulong _snapshotGeneration;
     private TaskFilter? _snapshotFilter;
     private TaskReviewFilter? _publishedFilter;
+
+    /// <summary>The filter whose page was published last, and each
+    /// filter's last published total — what a chip names while its own
+    /// page loads (<see cref="FilterAutomationName"/>).</summary>
+    private TaskReviewFilter? _lastPublishedFilter;
+    private readonly Dictionary<TaskReviewFilter, long> _publishedTotals = [];
     private readonly HashSet<string> _pendingToggleRefreshPaths =
         new(StringComparer.Ordinal);
 
@@ -200,13 +206,32 @@ internal sealed class TasksReviewViewModel : PanelWorkScheduler
         _ => "All",
     };
 
-    /// <summary>The active chip speaks the filter TOTAL, not the
-    /// loaded-page count (mac chip labels, verbatim).</summary>
-    public string FilterAutomationName(TaskReviewFilter filter) =>
-        filter == ActiveFilter
-            ? $"{DisplayName(filter)}, {_totalFiltered} "
-                + (_totalFiltered == 1 ? "task" : "tasks")
+    /// <summary>
+    /// The active chip speaks the filter TOTAL, not the loaded-page count
+    /// (mac chip labels, verbatim).
+    /// </summary>
+    /// <remarks>
+    /// W7-7 PR 4 (#1247; the owner's decision, the completeness sweep's
+    /// G22): a count is only ever one that was PUBLISHED. While a newly
+    /// chosen filter's page loads, its chip names that filter's last
+    /// published total, else no count at all — never the "0 tasks" of the
+    /// cleared page, which an arrow's check-then-focus would put into the
+    /// focus speech itself — and the chip it replaced keeps its name until
+    /// the page publishes, so the radio the arrow leaves is not renamed
+    /// while it still holds the keys.
+    /// </remarks>
+    public string FilterAutomationName(TaskReviewFilter filter)
+    {
+        long? count = filter == ActiveFilter
+            ? _publishedFilter == filter ? _totalFiltered : HeldTotal(filter)
+            : _publishedFilter != ActiveFilter && _lastPublishedFilter == filter ? HeldTotal(filter) : null;
+        return count is { } total
+            ? $"{DisplayName(filter)}, {total} " + (total == 1 ? "task" : "tasks")
             : DisplayName(filter);
+    }
+
+    private long? HeldTotal(TaskReviewFilter filter) =>
+        _publishedTotals.TryGetValue(filter, out long total) ? total : null;
 
     public static string FilterHelpText(TaskReviewFilter filter) =>
         $"Filter the review to {DisplayName(filter).ToLowerInvariant()} tasks.";
@@ -248,14 +273,20 @@ internal sealed class TasksReviewViewModel : PanelWorkScheduler
     /// <summary>Filter chip commit: re-query and announce (mac
     /// applyTaskReviewFilter). Re-selecting the active filter is a
     /// no-op.</summary>
-    public void ApplyFilter(TaskReviewFilter filter)
+    /// <param name="announce">False on the radio group's arrow route
+    /// (W7-7 PR 4, #1247): the chip is checked before it takes focus, and
+    /// its focus speech names the filter — the line would repeat it.</param>
+    public void ApplyFilter(TaskReviewFilter filter, bool announce = true)
     {
         if (filter == ActiveFilter)
         {
             return;
         }
         ActiveFilter = filter;
-        _announce(new A11yEvent.TasksFilterSet(DisplayName(filter)));
+        if (announce)
+        {
+            _announce(new A11yEvent.TasksFilterSet(DisplayName(filter)));
+        }
         LoadFirstPage();
     }
 
@@ -472,6 +503,8 @@ internal sealed class TasksReviewViewModel : PanelWorkScheduler
         }
         _nextCursor = page.NextCursor;
         _totalFiltered = checked((long)page.TotalFiltered);
+        _lastPublishedFilter = _publishedFilter;
+        _publishedTotals[_publishedFilter.Value] = _totalFiltered;
         _loadError = null;
         _isLoading = false;
         RaiseStateChanges();
@@ -605,6 +638,10 @@ internal sealed class TasksReviewViewModel : PanelWorkScheduler
         }
         _nextCursor = page.NextCursor;
         _totalFiltered = checked((long)page.TotalFiltered);
+        if (_publishedFilter is { } appended)
+        {
+            _publishedTotals[appended] = _totalFiltered;
+        }
         // A successful append is a recovery: a banner left over from
         // an earlier failed load-more would report an ongoing vault
         // failure forever (adversarial round 5).
@@ -906,7 +943,7 @@ internal sealed class TasksReviewViewModel : PanelWorkScheduler
     {
         if (isChecked)
         {
-            ApplyFilter(filter);
+            ApplyFilter(filter, announce: !RadioGroupArrows.IsCommittingByArrow);
         }
     }
 }

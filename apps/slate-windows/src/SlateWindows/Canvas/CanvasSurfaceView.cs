@@ -1267,7 +1267,9 @@ internal sealed class CanvasSurfaceView : UserControl, ICanvasSurfacePresenter
     {
         if (!_synchronizingSwitcher)
         {
-            Model?.ShowSurface(surface);
+            // An arrow's check is silent: the radio's focus speech names
+            // the surface (W7-7 PR 4, #1247; RadioGroupArrows).
+            Model?.ShowSurface(surface, announce: !RadioGroupArrows.IsCommittingByArrow);
         }
     }
 
