@@ -16,15 +16,12 @@ namespace SlateWindows;
 /// </summary>
 /// <remarks>
 /// <para>
-/// One run, in order: resume the Pending delta generation a failed run
-/// left (its effects applied from its stored cursor, idempotently); rescan
-/// on the session-load worker; reconcile the new generation's pages
-/// removal-first — Quick Open's changes among them
-/// (<see cref="ReconcileScanDeltaAsync"/>); release the ledger into core's
-/// per-path net counts; refresh the sidebar, notify the graph; then
-/// EXACTLY ONE completion sentence —
-/// <c>VaultRescanFinished</c>, or <c>VaultRescanIncomplete</c> when the
-/// walk was partial, a file or a page failed, or the scan call threw. The
+/// One run, in order (AR-18's fallback): rescan through the rescan core
+/// seam; re-synchronize the host's surfaces from the index; then EXACTLY
+/// ONE completion sentence — <c>VaultRescanFinished</c> from this scan's
+/// counts, or <c>VaultRescanIncomplete</c> when the walk was partial, a
+/// file or a re-sync operation failed, or the scan call threw. Nothing
+/// is retained between runs. The
 /// progress listener's Started/Finished announcements never speak for a
 /// rescan (the reason-aware progress policy).
 /// </para>
@@ -43,22 +40,10 @@ internal sealed partial class VaultLifecycleViewModel
     /// skipped. A request during a running rescan is never subject to it.</summary>
     internal static readonly TimeSpan ForegroundRescanCooldown = TimeSpan.FromSeconds(5);
 
-    /// <summary>Delta entries per page: small enough to apply in one UI
-    /// turn, large enough that an ordinary refresh is one page.</summary>
-    internal const uint DefaultScanDeltaPageLimit = 256;
-
     private bool _rescanActive;
     private RescanReason? _pendingRescanReason;
     private DateTimeOffset? _lastScanEndedAt;
     private Task _rescanCompletion = Task.CompletedTask;
-
-    // Rounds 25-26: the Slate-owned write journal (NoteSlateOwnedWrite) —
-    // written by the session listener on the writer's thread and by the
-    // funnel on this one, kept only while a rescan runs.
-    private readonly System.Collections.Concurrent.ConcurrentDictionary<string, long> _slateOwnedWriteEpochs =
-        new(StringComparer.Ordinal);
-    private long _slateOwnedWriteEpoch;
-    private volatile bool _slateOwnedWriteJournalActive;
 
     // The running rescan's cancel token (CloseSession cancels it through
     // the seam and then owns it).
@@ -70,7 +55,7 @@ internal sealed partial class VaultLifecycleViewModel
 
     internal bool IsRescanActive => _rescanActive;
 
-    /// <summary>The open session — for the facts that read core's ledger.</summary>
+    /// <summary>The open session — for the facts that write through it.</summary>
     internal VaultSession? SessionForTests => _session;
 
     /// <summary>
@@ -117,7 +102,6 @@ internal sealed partial class VaultLifecycleViewModel
         }
 
         _rescanActive = true;
-        _slateOwnedWriteJournalActive = true;
         _rescanCompletion = RunRescansAsync(_generation, session, reason);
         return _rescanCompletion;
     }
@@ -168,8 +152,6 @@ internal sealed partial class VaultLifecycleViewModel
             {
                 _rescanActive = false;
                 _lastScanEndedAt = _scanClock();
-                _slateOwnedWriteJournalActive = false;
-                _slateOwnedWriteEpochs.Clear();
             }
         }
     }
@@ -181,9 +163,7 @@ internal sealed partial class VaultLifecycleViewModel
         // disposed through the rescan core seam, like every other rescan core
         // call. A close or a vault switch cancels it (CloseSession, which
         // then owns and disposes it); a cancelled run stops silently wherever
-        // it is, its generation Pending at its cursor for a later rescan of
-        // the same session (a closed session's generation dies with its
-        // connection).
+        // it is; nothing is retained, so the next rescan starts afresh.
         CancelToken cancel;
         try
         {
@@ -209,7 +189,7 @@ internal sealed partial class VaultLifecycleViewModel
         _rescanCancel = cancel;
         try
         {
-            await RunOneRescanAsync(generation, session, reason, _scanDeltaChannel(session), cancel);
+            await RunOneRescanAsync(generation, session, reason, cancel);
         }
         finally
         {
@@ -244,27 +224,9 @@ internal sealed partial class VaultLifecycleViewModel
         int generation,
         VaultSession session,
         RescanReason reason,
-        IScanDeltaChannel channel,
         CancelToken cancel)
     {
-        // (1) A Pending generation a failed or cancelled run left: its
-        // remaining pages' effects first, from its stored cursor — core
-        // refuses a new scan over it, so an unreconciled tail is never
-        // overwritten.
-        switch (await ReconcileScanDeltaAsync(generation, channel, cancel))
-        {
-            case DeltaReconciliation.Cancelled:
-                return;
-            case DeltaReconciliation.Failed:
-                if (generation == _generation)
-                {
-                    PostRescanIncomplete(1);
-                }
-
-                return;
-        }
-
-        // (2) The scan, through the seam. The listener only moves the
+        // (1) The scan, through the seam. The listener only moves the
         // progress bar of an explicit refresh; nothing it hears speaks.
         UiProgressListener? progress = reason == RescanReason.Explicit
             ? new UiProgressListener(_enqueueUi, @event => HandleRescanProgress(generation, @event))
@@ -314,231 +276,55 @@ internal sealed partial class VaultLifecycleViewModel
             return;
         }
 
-        // (3) The new generation's effects — Quick Open's among them: the
-        // delta is its only rescan path — and, with its LAST page's, the
-        // tree's publication (round 30): awaited before the Applied mark,
-        // so the sentence and the release never precede the tree; then (4)
-        // the release: core reduces the retained Applied generation (this
-        // run's, coalesced with any recovered one) into the net per-path
-        // counts.
-        bool treeRefreshStarted = false;
-        Task RefreshTreeForRescan()
-        {
-            treeRefreshStarted = true;
-            return FileSidebar?.RefreshAsync(reportCount: reason == RescanReason.Explicit)
-                ?? Task.CompletedTask;
-        }
-
-        ScanDeltaOutcome? outcome = null;
-        DeltaReconciliation reconciled =
-            await ReconcileScanDeltaAsync(generation, channel, cancel, RefreshTreeForRescan);
-        switch (reconciled)
-        {
-            case DeltaReconciliation.Cancelled:
-                return;
-            case DeltaReconciliation.Complete:
-                try
-                {
-                    outcome = await RunRescanCoreAsync("release", channel.Release);
-                }
-                catch (Exception exception) when (exception is not OutOfMemoryException)
-                {
-                    HostLog.Write(HostDiagnosticEvent.VaultRescanFailed, exception);
-                }
-
-                break;
-        }
-
-        if (generation != _generation)
+        // (2) Re-synchronize the host from the index (AR-18's fallback):
+        // every re-sync operation is awaited to its publication, and each
+        // that fails counts one error in the sentence.
+        ulong failedOperations = await ReSyncFromIndexAsync(generation, reason);
+        if (generation != _generation || cancel.IsCancelled())
         {
             return;
         }
 
-        // (5) A run whose pages failed before the last one never reached
-        // the tree: it still re-reads the index the scan committed,
-        // best-effort — the run already says "results may be incomplete".
-        // A surface that faults here is logged, never allowed to swallow
-        // the run's one sentence below.
-        if (reconciled == DeltaReconciliation.Failed && !treeRefreshStarted)
-        {
-            try
-            {
-                FileSidebar?.Refresh(reportCount: reason == RescanReason.Explicit);
-            }
-            catch (Exception exception) when (exception is not OutOfMemoryException)
-            {
-                HostLog.Write(HostDiagnosticEvent.VaultRescanFailed, exception);
-            }
-        }
-
-        // (6) The one sentence. The error COUNT crosses the FFI in full; its
+        // (3) The one sentence. The error COUNT crosses the FFI in full; its
         // messages only as samples (rounds 25-26).
-        if (outcome is not ScanDeltaOutcome released)
+        if (!report.Complete || failedOperations > 0)
         {
-            PostRescanIncomplete(report.ErrorCount == ulong.MaxValue ? ulong.MaxValue : report.ErrorCount + 1);
+            ulong errors = report.ErrorCount > ulong.MaxValue - failedOperations
+                ? ulong.MaxValue
+                : report.ErrorCount + failedOperations;
+            PostRescanIncomplete(Math.Max(1UL, errors));
         }
-        else if (!report.Complete)
-        {
-            PostRescanIncomplete(Math.Max(1UL, report.ErrorCount));
-        }
-        else if (reason == RescanReason.Explicit || released.Changed + released.Removed > 0)
+        else if (reason == RescanReason.Explicit || report.FilesChanged + report.FilesRemoved > 0)
         {
             PostRescanOutcome(new A11yEvent.VaultRescanFinished(
-                reason, released.Changed, released.Removed));
+                reason, report.FilesChanged, report.FilesRemoved));
         }
-    }
-
-    /// <summary>How a walk of the Pending generation ended.</summary>
-    private enum DeltaReconciliation
-    {
-        /// <summary>Every page applied (or nothing was pending).</summary>
-        Complete,
-
-        /// <summary>A page failed: the generation keeps its cursor and the
-        /// run says "results may be incomplete".</summary>
-        Failed,
-
-        /// <summary>The run's token was cancelled, or the vault closed or
-        /// switched: the generation keeps its cursor, nothing is said.</summary>
-        Cancelled,
     }
 
     /// <summary>
-    /// Walk the Pending delta generation from its stored cursor in page
-    /// order — core pages it removal-first, so a case-only rename's removal
-    /// marks its tab missing before the creation re-seats it, in one bounded
-    /// pass with no deferral — applying, path by path, the operations the
-    /// file-change funnel (<see cref="HandleFileChange"/>) applies, silently
-    /// (<see cref="WorkspaceViewModel.BeginSilentReconciliation"/>), and
-    /// reporting each page applied only AFTER its effects. The last page's
-    /// report marks the generation Applied. On failure or cancellation the
-    /// generation keeps its cursor and the next rescan resumes it.
-    /// <paramref name="lastPagePublication"/> (round 30: the tree's
-    /// refresh, for a new scan's generation) starts with the LAST page's
-    /// effects and is awaited with them: its failure fails the page.
+    /// AR-18's fallback: re-synchronize the host's surfaces from the index
+    /// after a scan, every one awaited to its publication, and return how
+    /// many operations failed (each counts in the sentence). The files tree
+    /// is wired; the rest of the re-sync follows contract R-9's design.
     /// </summary>
-    /// <remarks>
-    /// <para>
-    /// Every ledger call runs through the rescan core seam, off the
-    /// dispatcher, cancellable (locked decision 05 §4.1); only a page's
-    /// effects run here, in one turn.
-    /// </para>
-    /// <para>
-    /// The linearization with Slate-owned writes (rounds 25-26): the host
-    /// journals a new epoch for a path whenever it learns a Slate-owned
-    /// write to it committed (<see cref="NoteSlateOwnedWrite"/>) — at the
-    /// commit itself, where the session's listener runs inside the write
-    /// and so before a synchronous write like Save returns or an
-    /// asynchronous one's completion resumes, and again when its event is
-    /// handled — and captures the epoch as it issues each page read. A row
-    /// whose path's epoch is newer than the capture is skipped: that write
-    /// already reconciled the path. A write committed before the read
-    /// arrives superseded (core's flag); one whose event is handled after
-    /// the page's effects reconciles over them.
-    /// </para>
-    /// </remarks>
-    private async Task<DeltaReconciliation> ReconcileScanDeltaAsync(
-        int generation, IScanDeltaChannel channel, CancelToken cancel, Func<Task>? lastPagePublication = null)
+    private async Task<ulong> ReSyncFromIndexAsync(int generation, RescanReason reason)
     {
-        ScanDeltaPending? pending;
+        ulong failed = 0;
         try
         {
-            pending = await RunRescanCoreAsync("pending", channel.Pending);
+            await (FileSidebar?.RefreshAsync(reportCount: reason == RescanReason.Explicit)
+                ?? Task.CompletedTask);
         }
         catch (Exception exception) when (exception is not OutOfMemoryException)
         {
-            HostLog.Write(HostDiagnosticEvent.VaultRescanFailed, exception);
-            return DeltaReconciliation.Failed;
-        }
-
-        if (generation != _generation)
-        {
-            return DeltaReconciliation.Cancelled;
-        }
-
-        if (pending is null)
-        {
-            return DeltaReconciliation.Complete;
-        }
-
-        string? cursor = pending.Cursor;
-        while (generation == _generation)
-        {
-            long capturedEpoch = Interlocked.Read(ref _slateOwnedWriteEpoch);
-            string? pageCursor = cursor;
-            ScanDeltaPage page;
-            try
-            {
-                page = await RunRescanCoreAsync(
-                    "page",
-                    () => channel.ReadPage(pending.Generation, pageCursor, _scanDeltaPageLimit, cancel));
-                if (generation != _generation)
-                {
-                    return DeltaReconciliation.Cancelled;
-                }
-
-                // Every row's reload and dependent is awaited — published,
-                // not merely scheduled — before the page is reported
-                // applied; the last page's with the tree's (round 30).
-                IDisposable? silence = Workspace?.BeginSilentReconciliation();
-                try
-                {
-                    Task effects = ApplyScanDeltaPageAsync(page, capturedEpoch, cancel);
-                    await (page.NextCursor is null && lastPagePublication is not null
-                        ? Task.WhenAll(effects, StartPublication(lastPagePublication))
-                        : effects);
-                }
-                finally
-                {
-                    silence?.Dispose();
-                }
-
-                if (generation != _generation)
-                {
-                    return DeltaReconciliation.Cancelled;
-                }
-
-                _ = await RunRescanCoreAsync(
-                    "applied",
-                    () =>
-                    {
-                        channel.PageApplied(pending.Generation, page.NextCursor);
-                        return true;
-                    });
-            }
-            catch (VaultException.Cancelled)
-            {
-                return DeltaReconciliation.Cancelled;
-            }
-            catch (Exception exception) when (exception is not OutOfMemoryException)
+            if (generation == _generation)
             {
                 HostLog.Write(HostDiagnosticEvent.VaultRescanFailed, exception);
-                return DeltaReconciliation.Failed;
+                failed++;
             }
-
-            if (page.NextCursor is not string next)
-            {
-                return DeltaReconciliation.Complete;
-            }
-
-            cursor = next;
         }
 
-        return DeltaReconciliation.Cancelled;
-    }
-
-    /// <summary>A publication's start as a Task: a synchronous throw is its
-    /// fault, never an escape that orphans the page's other completions.</summary>
-    private static Task StartPublication(Func<Task> start)
-    {
-        try
-        {
-            return start();
-        }
-        catch (Exception exception) when (exception is not OutOfMemoryException)
-        {
-            return Task.FromException(exception);
-        }
+        return failed;
     }
 
     /// <summary>
@@ -578,72 +364,6 @@ internal sealed partial class VaultLifecycleViewModel
                 _sessionLoadCompletion = Task.CompletedTask;
             }
         }
-    }
-
-    /// <summary>
-    /// Rounds 25-26: journal a Slate-owned write to <paramref name="path"/> —
-    /// a new epoch — while a rescan runs. Called from any thread: by the
-    /// session listener INSIDE the write (at its commit, before a synchronous
-    /// write returns or an asynchronous one's completion resumes) and by
-    /// <see cref="HandleFileChange"/> when its event is handled. A delta
-    /// page read before the epoch skips that path's row.
-    /// </summary>
-    private void NoteSlateOwnedWrite(string path)
-    {
-        if (_slateOwnedWriteJournalActive)
-        {
-            _slateOwnedWriteEpochs[path] = Interlocked.Increment(ref _slateOwnedWriteEpoch);
-        }
-    }
-
-    private void NoteSlateOwnedWrite(FileChangeEvent @event)
-    {
-        NoteSlateOwnedWrite(@event.Path);
-        if (@event.PreviousPath is string movedFrom)
-        {
-            NoteSlateOwnedWrite(movedFrom);
-        }
-    }
-
-    private bool ReconciledSince(string path, long capturedEpoch) =>
-        _slateOwnedWriteEpochs.TryGetValue(path, out long epoch) && epoch > capturedEpoch;
-
-    /// <summary>
-    /// One page's effects, through the routine a Slate-owned event also
-    /// goes through (<see cref="ApplyFileChangeEffectsAsync"/>), for every
-    /// row no Slate-owned write has reconciled: not superseded in core,
-    /// not journaled since <paramref name="capturedEpoch"/> — also
-    /// re-checked when a reload's worker read comes back. The Task
-    /// completes when every reload has published; idempotent, so a
-    /// resumed page may be applied twice. Each row carries core's own
-    /// openable classification (round 26), and Quick Open takes the page's
-    /// changes as its only rescan path (round 25).
-    /// </summary>
-    private Task ApplyScanDeltaPageAsync(ScanDeltaPage page, long capturedEpoch, CancelToken cancel)
-    {
-        var changes = new List<(FileChangeEvent Change, bool Openable)>();
-        foreach (ScanDeltaEntry entry in page.Entries)
-        {
-            if (entry.Superseded || ReconciledSince(entry.Path, capturedEpoch))
-            {
-                continue;
-            }
-
-            FileChangeKind kind = entry.Kind switch
-            {
-                ScanDeltaKind.Removed => FileChangeKind.Deleted,
-                ScanDeltaKind.Created => FileChangeKind.Created,
-                ScanDeltaKind.Modified => FileChangeKind.Modified,
-                _ => throw new ArgumentOutOfRangeException(nameof(page), entry.Kind, "unknown scan delta kind"),
-            };
-            changes.Add((new FileChangeEvent(kind, entry.Path, null), entry.Openable));
-        }
-
-        return ApplyFileChangeEffectsAsync(
-            changes,
-            FileChangeOrigin.Rescan,
-            path => ReconciledSince(path, capturedEpoch),
-            cancel);
     }
 
     /// <summary>The rescan's progress policy: an explicit refresh moves the
@@ -724,7 +444,5 @@ internal sealed partial class VaultLifecycleViewModel
         _pendingRescanReason = null;
         _lastScanEndedAt = null;
         _rescanCompletion = Task.CompletedTask;
-        _slateOwnedWriteJournalActive = false;
-        _slateOwnedWriteEpochs.Clear();
     }
 }

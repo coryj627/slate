@@ -60,12 +60,10 @@ internal sealed partial class VaultLifecycleViewModel
         Task<(ScanReport Report, SwitcherFile[] SwitcherFiles)>> _runSessionLoad;
     private readonly Func<Action, Task> _runSyncMarkerArm;
     private readonly TimeSpan? _syncMarkerDebounce;
-    // W7-7 PR 7 (R-9): the rescan's clock, its delta channel and page size.
+    // W7-7 PR 7 (R-9): the rescan's clock and its core-call seam.
     private readonly Func<DateTimeOffset> _scanClock;
-    private readonly Func<VaultSession, IScanDeltaChannel> _scanDeltaChannel;
     private readonly IRescanCoreWorker _rescanWorker;
     private readonly int _uiThreadId;
-    private readonly uint _scanDeltaPageLimit;
 
     /// <summary>
     /// W4-8 (SD6/SDR-5): the once-per-vault-PATH announce gate, keyed
@@ -158,8 +156,6 @@ internal sealed partial class VaultLifecycleViewModel
         Func<Action, Task>? syncArmWorker = null,
         TimeSpan? syncMarkerDebounce = null,
         Action<RenderedAnnouncement>? announceRendered = null,
-        Func<VaultSession, IScanDeltaChannel>? scanDeltaChannel = null,
-        uint scanDeltaPageLimit = DefaultScanDeltaPageLimit,
         IRescanCoreWorker? rescanWorker = null)
     {
         _pickVault = pickVault;
@@ -183,8 +179,6 @@ internal sealed partial class VaultLifecycleViewModel
         _recentVaultsStore = recentVaultsStore ?? new RecentVaultsStore();
         _scanAnnouncements = new ScanAnnouncementGate(scanClock);
         _scanClock = scanClock ?? (() => DateTimeOffset.UtcNow);
-        _scanDeltaChannel = scanDeltaChannel ?? (session => new SessionScanDeltaChannel(session));
-        _scanDeltaPageLimit = scanDeltaPageLimit;
         _rescanWorker = rescanWorker ?? ThreadPoolRescanCoreWorker.Instance;
         // The lifecycle is built on the UI thread; the rescan core seam
         // refuses any call it would run here (locked decision 05 §4.1).
@@ -451,16 +445,7 @@ internal sealed partial class VaultLifecycleViewModel
             _eventListener = new UiVaultEventListener(
                 (code, eventPath, message) => _enqueueUi(
                     () => HandleVaultError(generation, code, eventPath, message)),
-                @event =>
-                {
-                    // W7-7 PR 7 (round 26): this runs INSIDE the write, at
-                    // its commit — before a synchronous write returns to
-                    // the UI thread or an asynchronous one's completion
-                    // resumes there — so a rescan page read earlier never
-                    // applies a stale row for the path in between.
-                    NoteSlateOwnedWrite(@event);
-                    _enqueueUi(() => HandleFileChange(generation, @event));
-                },
+                @event => _enqueueUi(() => HandleFileChange(generation, @event)),
                 // W6-2 PR A (contract A-3): the index-phase arm, marshalled
                 // like the other two — an external edit surfaces at the next
                 // scan, never as a file change. W7-7 PR 7 (round 29):
@@ -771,12 +756,8 @@ internal sealed partial class VaultLifecycleViewModel
     {
         if (generation == _generation)
         {
-            // W7-7 PR 7 (rounds 25-26): this event reconciles its path(s);
-            // a rescan's page read before it must not undo that.
-            NoteSlateOwnedWrite(@event);
-
-            // W7-7 PR 7 (round 28): the one routine a rescan page also
-            // goes through. A Slate-owned batch has nothing to await.
+            // W7-7 PR 7 (round 28): the one routine for a change's host
+            // effects. A Slate-owned batch has nothing to await.
             _ = ApplyFileChangeEffectsAsync(
                 [(@event, CoreDocumentClassification.IsOpenable(@event.Path))],
                 FileChangeOrigin.SlateOwned);
