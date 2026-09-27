@@ -1771,8 +1771,9 @@ public partial class MainWindow : Window
     private void LandEditorForRoute(WorkspaceGroupViewModel group, Action? onLanded)
     {
         (_viewModel.Workspace as WorkspaceViewModel)?.WithdrawHeldShellRegionLanding();
+        _ = WithdrawHeldEditorLanding();
         WorkspaceTabViewModel? tab = group.ActiveTab;
-        ShellRegionLanding landing = LandEditor(
+        ShellRegionLanding landing = FocusEditorPane(
             group,
             onLanded,
             () =>
@@ -1807,9 +1808,9 @@ public partial class MainWindow : Window
 
     /// <summary>
     /// W7-7 PR 8 (#1253, contract R-10): THE editor landing — the one place an
-    /// editor landing request is created, for the F6 ring and every route. It
-    /// supersedes the editor landing the window holds (one at most, whoever
-    /// asked), then lands the active tab's stop by kind and answers LANDED
+    /// editor landing request is created, for the F6 ring and every route. Its
+    /// callers first let go of the editor landing the window holds (one at
+    /// most, whoever asked); it lands the active tab's stop by kind and answers LANDED
     /// (focus is in the stop now), PENDING (held: its content, surface or row
     /// container is still to come; it then ends seated —
     /// <paramref name="onLanded"/> — refused — <paramref name="onRefused"/> —
@@ -1817,22 +1818,23 @@ public partial class MainWindow : Window
     /// is held and nothing moved, so the caller goes on: the ring to the next
     /// region, a route to its fallback).
     /// </summary>
-    private ShellRegionLanding LandEditor(
+    private ShellRegionLanding FocusEditorPane(
         WorkspaceGroupViewModel group, Action? onLanded, Action onRefused, bool forTheRing)
     {
-        _ = WithdrawHeldEditorLanding();
         WorkspaceTabViewModel? activeTab = group.ActiveTab;
-        if (activeTab is null)
-        {
-            return ShellRegionLanding.Refused;
-        }
         // W6-1 PR A (contract A14) and W6-2 PR C (rule F, Term F6): a canvas
         // or graph tab's focus belongs to its surface, which seats the row,
         // the board, the banner or the state host through the document's
-        // addressed landing.
+        // addressed landing — asked FIRST, so no fallback below takes focus
+        // back off what the surface seats (<see cref="LandDocument"/> raises
+        // the request).
         if (activeTab is { IsCanvas: true } or { IsGraph: true })
         {
             return LandDocument(activeTab, onLanded, onRefused, forTheRing);
+        }
+        if (activeTab is null)
+        {
+            return ShellRegionLanding.Refused;
         }
         // A reading-mode tab's editor is COLLAPSED (the template swaps the two
         // by visibility), so its stop is the reading surface (record F10). It

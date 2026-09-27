@@ -143,7 +143,8 @@ public partial class MainWindow : IShellRegionHost
                 // — Landed (spoken now), Pending (held: spoken when it seats,
                 // resumed from here when it is refused) or Refused (nothing
                 // held, nothing moved: the press goes on).
-                return LandEditor(
+                _ = WithdrawHeldEditorLanding();
+                return FocusEditorPane(
                     workspace.ActiveGroup, announceWhenLanded, fallThroughWhenRefused, forTheRing: true);
             case ShellRegionKind.EmptyEditor:
                 if (workspace.ActiveGroup.ActiveTab is not null)
@@ -220,7 +221,7 @@ public partial class MainWindow : IShellRegionHost
 
     /// <summary>R-10: let go of the ONE editor landing the window holds,
     /// whoever asked for it — the ring, or a route — answering whether it was
-    /// still held. A newer landing supersedes it (<see cref="LandEditor"/>),
+    /// still held. A newer landing supersedes it (<see cref="FocusEditorPane"/>),
     /// and so does the focus funnel before its own landing is queued.</summary>
     private bool WithdrawHeldEditorLanding()
     {
