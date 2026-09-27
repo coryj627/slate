@@ -149,35 +149,144 @@ public sealed class ConnectionsLeafViewTests
         });
     }
 
-    /// <summary>W7-7 R-13 (#1257): the row activation's key decision, each
-    /// modifier combination pinned as it stands — Return activates, Control
-    /// (with Shift or Alt or not) opens the note in a new tab, Shift or Alt
-    /// alone changes nothing, and no other key activates.</summary>
+    /// <summary>#1273 (contract 39 N-3): the tree's keys are exactly its
+    /// declared chords — Enter, Ctrl+Enter, Alt+Up, Alt+Down, each with its
+    /// modifiers EQUAL — and no superset, subset or other key is the tree's:
+    /// Shift+Enter, Alt+Enter, Ctrl+Shift+Enter, Ctrl+Alt+Down (the shell's
+    /// pane focus) and the plain arrows (the tree's own walk) pass by.</summary>
     [Theory]
-    [InlineData(Key.Return, ModifierKeys.None, true, false)]
-    [InlineData(Key.Return, ModifierKeys.Control, true, true)]
-    [InlineData(Key.Return, ModifierKeys.Shift, true, false)]
-    [InlineData(Key.Return, ModifierKeys.Control | ModifierKeys.Shift, true, true)]
-    [InlineData(Key.Return, ModifierKeys.Alt, true, false)]
-    [InlineData(Key.Return, ModifierKeys.Control | ModifierKeys.Alt, true, true)]
-    [InlineData(Key.Space, ModifierKeys.None, false, false)]
-    [InlineData(Key.Space, ModifierKeys.Control, false, false)]
-    [InlineData(Key.Down, ModifierKeys.Control, false, false)]
-    [InlineData(Key.Apps, ModifierKeys.None, false, false)]
-    public void TheRowActivationKeyIsReturnAndControlOpensANewTab(Key key, ModifierKeys modifiers, bool activates, bool newTab)
+    [InlineData(Key.Return, ModifierKeys.None, "Activate")]
+    [InlineData(Key.Return, ModifierKeys.Control, "ActivateInNewTab")]
+    [InlineData(Key.Up, ModifierKeys.Alt, "PreviousGroup")]
+    [InlineData(Key.Down, ModifierKeys.Alt, "NextGroup")]
+    [InlineData(Key.Return, ModifierKeys.Shift, "None")]
+    [InlineData(Key.Return, ModifierKeys.Alt, "None")]
+    [InlineData(Key.Return, ModifierKeys.Control | ModifierKeys.Shift, "None")]
+    [InlineData(Key.Return, ModifierKeys.Control | ModifierKeys.Alt, "None")]
+    [InlineData(Key.Up, ModifierKeys.None, "None")]
+    [InlineData(Key.Down, ModifierKeys.None, "None")]
+    [InlineData(Key.Up, ModifierKeys.Alt | ModifierKeys.Shift, "None")]
+    [InlineData(Key.Down, ModifierKeys.Control | ModifierKeys.Alt, "None")]
+    [InlineData(Key.Left, ModifierKeys.Alt, "None")]
+    [InlineData(Key.Space, ModifierKeys.None, "None")]
+    [InlineData(Key.Apps, ModifierKeys.None, "None")]
+    public void TheTreeKeysAreItsDeclaredChordsMatchedExactly(Key key, ModifierKeys modifiers, string action) =>
+        Assert.Equal(action, ConnectionsLeafView.TreeKeyFor(key, modifiers).ToString());
+
+    /// <summary>#1273: Alt+Up and Alt+Down seat the first row of the first
+    /// and of the last group (the mac's `jumpSection`), and a superset of a
+    /// tree chord is not handled — nothing moves, nothing opens.</summary>
+    [Fact]
+    public void AltArrowsJumpBetweenTheGroupsAndASupersetChordPassesBy()
     {
-        Assert.Equal(activates, ConnectionsLeafView.TryActivationFromKey(key, modifiers, out bool opensANewTab));
-        Assert.Equal(newTab, opensANewTab);
+        RunSta(() =>
+        {
+            using var host = new Host("group-jumps");
+            host.ActivateLeaf();
+            host.OpenNote(Hub);
+            host.Settle();
+            (Window window, ConnectionsLeafView view) = Show(host.Leaf);
+            try
+            {
+                ConnectionsRowViewModel firstIncoming = view.RootsForTests[0].Children[0];
+                ConnectionsRowViewModel firstOutgoing = view.RootsForTests[1].Children[0];
+                Assert.NotNull(firstIncoming.Row);
+                Assert.NotNull(firstOutgoing.Row);
+                ConnectionsRowViewModel last = view.RootsForTests[1].Children[^1];
+                Assert.NotNull(view.RealizeContainer(last));
+                last.IsSelected = true;
+
+                Assert.True(view.TryHandleTreeKey(Key.Up, ModifierKeys.Alt));
+                Assert.Same(firstIncoming, view.TreeForTests.SelectedItem);
+                Assert.True(view.TryHandleTreeKey(Key.Down, ModifierKeys.Alt));
+                Assert.Same(firstOutgoing, view.TreeForTests.SelectedItem);
+
+                WorkspaceGroupViewModel group = host.Workspace.ActiveGroup;
+                int tabs = group.Tabs.Count;
+                foreach ((Key key, ModifierKeys modifiers) in new[]
+                {
+                    (Key.Up, ModifierKeys.Alt | ModifierKeys.Control),
+                    (Key.Down, ModifierKeys.Alt | ModifierKeys.Shift),
+                    (Key.Return, ModifierKeys.Shift),
+                    (Key.Return, ModifierKeys.Alt),
+                    (Key.Return, ModifierKeys.Control | ModifierKeys.Shift),
+                    (Key.Return, ModifierKeys.Control | ModifierKeys.Alt),
+                })
+                {
+                    Assert.False(view.TryHandleTreeKey(key, modifiers), $"{modifiers}+{key} was handled");
+                }
+                Assert.Same(firstOutgoing, view.TreeForTests.SelectedItem);
+                Assert.Equal(tabs, group.Tabs.Count);
+                Assert.Equal(Hub, group.ActiveTab!.Path);
+            }
+            finally
+            {
+                window.Close();
+            }
+        });
+    }
+
+    /// <summary>#1273 review: a ONE-SIDED graph — an outgoing-only note and
+    /// an incoming-only note — lands both group jumps on its one group's
+    /// first row, the pending focus delivered; an empty group's placeholder
+    /// is no anchor (the mac's `jumpSection` drops an empty section).</summary>
+    [Fact]
+    public void AOneSidedGraphLandsBothGroupJumpsOnItsOnlyRow()
+    {
+        RunSta(() =>
+        {
+            using var host = new Host("one-sided-jumps");
+            // outbound.md links out to the orphan and nothing links to it;
+            // the orphan is then linked to and links nowhere.
+            File.WriteAllText(Path.Combine(host.Root, "outbound.md"), "Out to [[orphan]].\n");
+            using (var cancel = new CancelToken())
+            {
+                host.Session.ScanInitial(cancel);
+            }
+            host.ActivateLeaf();
+            host.OpenNote("outbound.md");
+            host.Settle();
+            (Window window, ConnectionsLeafView view) = Show(host.Leaf);
+            try
+            {
+                void JumpsLandOn(string path, int group)
+                {
+                    view.UpdateLayout();
+                    Assert.Null(view.RootsForTests[1 - group].Children.Single().Row);
+                    ConnectionsRowViewModel only = view.RootsForTests[group].Children.Single(row => row.Row?.Path == path);
+                    foreach (Key key in new[] { Key.Up, Key.Down })
+                    {
+                        Assert.True(view.TryHandleTreeKey(key, ModifierKeys.Alt));
+                        Assert.Same(only, view.TreeForTests.SelectedItem);
+                        Assert.Null(view.PendingFocusForTests);
+                        only.IsSelected = false;
+                    }
+                }
+
+                // Outgoing only: Linked from is the placeholder.
+                JumpsLandOn("orphan.md", group: 1);
+
+                // Incoming only: Links to is the placeholder.
+                host.OpenNote("orphan.md");
+                host.Settle();
+                JumpsLandOn("outbound.md", group: 0);
+            }
+            finally
+            {
+                window.Close();
+            }
+        });
     }
 
     /// <summary>W7-7 R-13 (#1257): the tree's key owner hands that decision
     /// to the selected row — with the modifiers the key handler reads
     /// injected, Control+Enter opens the note in a new tab and Enter opens
-    /// the next in the current tab — and a real Enter raised through the
-    /// tree reaches that owner and opens the selected note (its tab is the
-    /// live modifiers' business, which another process's input can hold).
-    /// No activation moves the pin or the Back stack (only Show connections
-    /// re-roots).</summary>
+    /// the next in the current tab — and a real, plain Enter raised through
+    /// the tree reaches that owner and opens the selected note in the current
+    /// tab (#1273 review: a modifier held on the shared desktop is waited out
+    /// first, so the event is always plain Enter and a tree whose KeyDown is
+    /// not subscribed fails here). No activation moves the pin or the Back
+    /// stack (only Show connections re-roots).</summary>
     [Fact]
     public void TheTreeOpensTheSelectedNoteInANewTabOnControlEnterAndInTheCurrentTabOnEnter()
     {
@@ -222,17 +331,24 @@ public sealed class ConnectionsLeafViewTests
                 Assert.Same(inView, group.ActiveTab);
                 Assert.Equal("010.md", inView.Path);
 
-                // The key event's route: OnTreeKeyDown to the same owner.
+                // The key event's route: OnTreeKeyDown to the same owner, as a
+                // plain Enter every time — a modifier held on the shared
+                // desktop is waited out, and the thread pumps nothing between
+                // that wait and the raise, so its key state cannot change.
                 host.Settle();
                 view.UpdateLayout();
                 Select(Two);
+                WorkspaceTabViewModel current = group.ActiveTab!;
+                AwaitNoHeldModifier();
                 var enter = new KeyEventArgs(Keyboard.PrimaryDevice, PresentationSource.FromVisual(window)!, 0, Key.Return)
                 {
                     RoutedEvent = Keyboard.KeyDownEvent,
                 };
                 view.TreeForTests.RaiseEvent(enter);
-                Assert.True(enter.Handled);
-                Assert.Equal(Two, group.ActiveTab!.Path);
+                Assert.True(enter.Handled, "a plain Enter raised through the tree went unhandled — its KeyDown does not reach OnTreeKeyDown");
+                Assert.Equal(tabs + 1, group.Tabs.Count);
+                Assert.Same(current, group.ActiveTab);
+                Assert.Equal(Two, current.Path);
 
                 Assert.Equal(Hub, host.Leaf.Pin);
                 Assert.Equal(backSteps, host.Leaf.BackStack.Count);
@@ -243,6 +359,16 @@ public sealed class ConnectionsLeafViewTests
             }
         });
     }
+
+    /// <summary>#1273 review, the Files tree facts' shape
+    /// (<c>SidebarTreeKeysTests</c>): a raised key reads its modifiers off the
+    /// real keyboard (<c>Keyboard.Modifiers</c>, the thread's key state), so a
+    /// modifier held on the shared desktop is waited out before a plain key is
+    /// raised; one still held fails here, by name.</summary>
+    private static void AwaitNoHeldModifier() =>
+        Assert.True(
+            PumpedDispatcher.PumpUntil(() => Keyboard.Modifiers == ModifierKeys.None, TimeSpan.FromSeconds(5)),
+            $"A real modifier key is held on this desktop ({Keyboard.Modifiers}); the fact raises a plain Enter.");
 
     /// <summary>A window hosts the view so containers realise and peers
     /// project (a detached control has no automation tree).</summary>
@@ -684,9 +810,8 @@ public sealed class ConnectionsLeafViewTests
                 Assert.True(show.IsEnabled);
                 Assert.Equal((string)show.Header, AutomationProperties.GetHelpText(show));
                 // The ROW's hint is its activation's, never the action's reason
-                // (B-9): the model's hint, T16 then the new-tab gesture (W7-7 R-13).
-                Assert.Equal(host.Leaf.RowHint(note.Row!), note.Hint);
-                Assert.StartsWith(ConnectionsPhrase.NoteHint + " ", note.Hint, StringComparison.Ordinal);
+                // (B-9): the inventory's T16a (W7-7 R-13; B-16 as amended).
+                Assert.Equal(ConnectionsLabelInventory.NoteRowHint(), note.Hint);
                 MenuItem open = menu.Items.Cast<MenuItem>().First();
                 Assert.True(open.IsEnabled);
             }
