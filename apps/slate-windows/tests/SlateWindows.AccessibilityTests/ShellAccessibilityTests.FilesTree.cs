@@ -64,10 +64,14 @@ public sealed partial class ShellAccessibilityTests
             Window window = WaitForMainWindow(process, automation, Path.Combine(logs, "slate-windows.log"), TimeSpan.FromSeconds(30));
             window.SetForeground();
             AutomationElement tree = WaitForElement(window, "FilesTree", TimeSpan.FromSeconds(30));
-            // The launch lands focus on the tree once the vault has opened
-            // and published its rows (W7-5); interacting before that races
-            // the landing and the first publication.
-            AssertEventuallyFocused(tree, "Opening the vault did not land focus on the Files tree.");
+            // The launch lands focus in the Files region once the vault has
+            // opened (W7-5): with no file selected that is the region's
+            // stable stop, the filter field — never the bare tree (W7-7 PR 4,
+            // R-5; codex round 5's ruling). Interacting before that races the
+            // landing and the first publication.
+            AssertEventuallyFocused(
+                WaitForElement(window, "SidebarFilter", TimeSpan.FromSeconds(30)),
+                "Opening the vault did not land focus on the Files filter field (nothing is selected).");
             // Rows sort by name, folders among files: alpha.md, Folder,
             // note.md, zeta.md.
             foreach (string row in new[] { "alpha.md", "Folder", "note.md", "zeta.md" })
