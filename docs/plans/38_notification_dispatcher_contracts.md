@@ -8,7 +8,11 @@ core owns copy and priority, while hosts own delivery timing.
 
 **D-1 — Exact native delivery.** Every Medium event uses Other / All;
 every High event uses Other / ImportantMostRecent. Both preserve the
-rendered text and activity ID `slate-accessibility-announcement`. There
+rendered text and activity ID `slate-accessibility-announcement`; a line
+the drain replays (D-2) carries `slate-accessibility-announcement.replay.<n>`,
+n its 1-based position in that drain, because NVDA's UIA rate limiter
+coalesces notifications that share a sender, kind, processing and activity
+ID (W7-7, #1244). There
 are exactly two priority enum values today; an exhaustive fact must fail
 when another is introduced. Test the arguments reaching the native peer
 boundary, not a second mapping implementation. Both Post overloads share
@@ -35,7 +39,9 @@ runs out, and each drain logs which released it. While
 lines are queued and readiness is false a 250 ms poll on the UI thread
 checks again (the only wake-up; it stops when the queue empties), and the
 first ready check, a tick or a post, raises each queued line once, in
-order, through the same raiser. Every queued line is dropped 30 s after
+order, through the same raiser, each under its own replay activity ID
+(D-1): the drain raises back to back, and NVDA's UIA rate limiter loses
+lines of a burst that shares one. Every queued line is dropped 30 s after
 its own post, never raised late and never in a wholesale clear, so the
 poll always ends. The launch phase is bookkeeping only and moves forward
 once: Unadvised, then Done when readiness is first observed, or Expired
@@ -172,7 +178,8 @@ facts and actual journeys keep their narrower source/behavior role.
 ## Accepted scope and evidence rules
 
 - A-1: Medium queues with All; High retains ImportantMostRecent. No new
-  activity IDs, global scheduler, priority tier or coalescing class.
+  activity IDs beyond D-1's per-line replay suffix, and no global
+  scheduler, priority tier or coalescing class.
 - A-2: Stock NVDA and licensed JAWS are independent human acceptance runs.
   Narrator belongs to the W8 smoke pass. Braille is owner-deferred as of
   2026-09-18; no braille or human audible result is inferred from automation.
