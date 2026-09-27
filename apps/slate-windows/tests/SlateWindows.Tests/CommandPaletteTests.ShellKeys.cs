@@ -29,18 +29,21 @@ namespace SlateWindows.Tests;
 public sealed partial class CommandPaletteTests
 {
     /// <summary>
-    /// Close Vault run from the palette over a dirty tab raises the real
-    /// unsaved-changes message box inside the command. Inside that loop
-    /// the real Ctrl+Shift+N goes through the shell's key route: it is
-    /// taken and ignored — the palette stays open, sealed and silent, and
-    /// no template picker opens. Cancel on the prompt ends the command;
-    /// only that invocation completes: its recent is written, the palette
-    /// dismisses, and no template sheet ever appeared.
+    /// Close Vault run from the palette over a dirty tab raises the
+    /// unsaved-changes prompt inside the command — through the lifecycle's
+    /// prompt seam, a message-box shaped loop over the shell (CI has no
+    /// interactive session for a native box). Inside that loop the real
+    /// Ctrl+Shift+N goes through the shell's key route: it is taken and
+    /// ignored — the palette stays open, sealed and silent, and no template
+    /// picker opens. Cancel on the prompt ends the command; only that
+    /// invocation completes: its recent is written, the palette dismisses,
+    /// and no template sheet ever appeared.
     /// </summary>
     [Fact]
     public void TheTemplateChordThroughTheShellIsRefusedWhileAPaletteCommandRuns() => RunSta(() =>
     {
-        using var host = new ShippedShellHost();
+        using var host = new ShippedShellHost(shown: true);
+        SyntheticPrompt prompt = host.InstallClosePrompt();
         WorkspaceViewModel workspace = host.AttachDirtyWorkspace();
         CommandPaletteViewModel palette = host.Palette;
         palette.Open();
@@ -64,7 +67,7 @@ public sealed partial class CommandPaletteTests
         var timer = new DispatcherTimer(DispatcherPriority.Normal) { Interval = TimeSpan.FromMilliseconds(50) };
         timer.Tick += (_, _) =>
         {
-            Action? close = Win32DialogCloser();
+            Action? close = prompt.Closer();
             if (close is null && ++ticks < 200)
             {
                 return;
@@ -182,7 +185,8 @@ public sealed partial class CommandPaletteTests
 
     /// <summary>
     /// Codex round 6: the CLOSED-but-sealed state. Close Vault run from the
-    /// palette over a dirty tab raises the real unsaved-changes prompt;
+    /// palette over a dirty tab raises the unsaved-changes prompt through
+    /// the lifecycle's seam (a message-box shaped loop over the shell);
     /// inside it Escape through the shell's route still dismisses the
     /// palette (T9), which leaves the palette closed while its command runs.
     /// Then the shell takes everything and nothing acts: the route under
@@ -199,6 +203,7 @@ public sealed partial class CommandPaletteTests
     public void WithThePaletteDismissedUnderItsRunningCommandTheShellTakesNothing(ClosedSealRoute route) => RunSta(() =>
     {
         using var host = new ShippedShellHost(shown: true, savedQuery: true);
+        SyntheticPrompt prompt = host.InstallClosePrompt();
         WorkspaceViewModel workspace = host.AttachDirtyWorkspace();
         CommandPaletteViewModel palette = host.Palette;
         palette.Open();
@@ -214,7 +219,7 @@ public sealed partial class CommandPaletteTests
         var timer = new DispatcherTimer(DispatcherPriority.Normal) { Interval = TimeSpan.FromMilliseconds(50) };
         timer.Tick += (_, _) =>
         {
-            Action? close = Win32DialogCloser();
+            Action? close = prompt.Closer();
             if (close is null && ++ticks < 200)
             {
                 return;
@@ -291,12 +296,24 @@ public sealed partial class CommandPaletteTests
                     // The mnemonic leg: WPF's loop turns an unhandled Alt+F into
                     // a mnemonic for the access key manager. Raised here whatever
                     // the key leg did, so the manager's own path under the seal
-                    // is shown too.
-                    host.Mnemonic("F");
-                    PumpedDispatcher.Drain();
-                    bool opened = file.IsSubmenuOpen;
-                    file.IsSubmenuOpen = false;
-                    return (handled, opened ? "the File menu opened" : null);
+                    // is shown too. Witnessed by the menu's own SubmenuOpened,
+                    // not its state afterwards: on a non-interactive session a
+                    // menu that cannot take the mouse capture backs straight out.
+                    int opened = 0;
+                    var witness = new RoutedEventHandler((_, _) => opened++);
+                    file.SubmenuOpened += witness;
+                    try
+                    {
+                        host.Mnemonic("F");
+                        PumpedDispatcher.Drain();
+                    }
+                    finally
+                    {
+                        file.SubmenuOpened -= witness;
+                        file.IsSubmenuOpen = false;
+                    }
+
+                    return (handled, opened > 0 ? "the File menu opened" : null);
                 }
 
             case ClosedSealRoute.FileMenuPointer:
@@ -581,6 +598,11 @@ public sealed partial class CommandPaletteTests
         }
 
         public string[] PersistedRecents() => new CommandPaletteRecentsStore(_recentsPath).Load();
+
+        /// <summary>The unsaved-changes prompt as a message-box shaped loop
+        /// over the shown shell (<see cref="InstallClosePrompt"/>).</summary>
+        public SyntheticPrompt InstallClosePrompt() =>
+            CommandPaletteTests.InstallClosePrompt(_lifecycle, Shell, LoopSignals.DisablesShell);
 
         /// <summary>A real key press on <paramref name="target"/>: Preview,
         /// then — unhandled — KeyDown, with exactly
