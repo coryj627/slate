@@ -687,8 +687,9 @@ public partial class MainWindow : Window
     /// <summary>The window's tunnelling key route, ahead of every focused
     /// control's own handlers. An unmodified Escape during an import
     /// cancels it unless keyboard focus is in the Files filter field while a
-    /// filter or tag scope is active, where the field's own clear route
-    /// (W7-7 R-3) takes the key instead (#1272).</summary>
+    /// filter or tag scope is active, or in the inline rename box while a
+    /// row is being renamed there, where that box's own route — W7-7 R-3's
+    /// clear, R-2's rename cancel — takes the key instead (#1272).</summary>
     private void Window_PreviewKeyDown(object sender, KeyEventArgs e)
     {
         ModifierKeys modifiers = Keyboard.Modifiers;
@@ -989,7 +990,8 @@ public partial class MainWindow : Window
             && modifiers == ModifierKeys.None
             && _viewModel.QuickSwitcher?.IsOpen != true
             && _viewModel.FileSidebar?.IsImporting == true
-            && !FilterFieldOwnsEscape())
+            && !FilterFieldOwnsEscape()
+            && !RenameBoxOwnsEscape())
         {
             _viewModel.FileSidebar.CancelImportCommand.Execute(null);
             e.Handled = true;
@@ -1354,6 +1356,17 @@ public partial class MainWindow : Window
     private bool FilterFieldOwnsEscape() =>
         SidebarFilterTextBox.IsKeyboardFocusWithin
         && _viewModel.FileSidebar is FilesSidebarViewModel { IsFilterActive: true };
+
+    /// <summary>#1272: the inline rename box owns an unmodified Escape while
+    /// a row is being renamed in it — keyboard focus in the box, with a row
+    /// F2 can rename selected (F2's own gate) — so its rename cancel
+    /// (<see cref="SidebarMutationNameTextBox_PreviewKeyDown"/>) runs ahead
+    /// of the window's import cancellation. With no such row the box only
+    /// names a new item, and once the rename has ended focus is back in the
+    /// tree: either way the import keeps the key.</summary>
+    private bool RenameBoxOwnsEscape() =>
+        SidebarMutationNameTextBox.IsKeyboardFocusWithin
+        && _viewModel.FileSidebar?.SelectedNode is { IsPlaceholder: false, IsGroupHeader: false };
 
     /// <summary>W7-7 (R-3, spec review round 21): the Clear filter button
     /// disables itself once the filter is cleared, so its own invocation

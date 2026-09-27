@@ -1125,6 +1125,101 @@ public sealed class SidebarTreeKeysTests : IDisposable
         Assert.Equal(filter, (host.Sidebar.FilterText, host.Sidebar.IsFilterActive));
     });
 
+    /// <summary>
+    /// #1272 (R-2's rename route): an import in progress must not steal the
+    /// inline rename box's Escape either. With an import running, F2 on a
+    /// row — through the shipped window route — arms the rename (focus in
+    /// the name box, the stem selected) and a new name is typed; Escape
+    /// then cancels the rename as R-2 has it — the name reverts, nothing is
+    /// renamed, focus is back in the tree — with nothing host-composed
+    /// said, and the import keeps running: the source it is handed
+    /// afterwards is imported.
+    /// </summary>
+    [Fact]
+    public void EscapeInTheRenameBoxDuringAnImport_CancelsTheRenameNotTheImport() => RunSta(() =>
+    {
+        string root = NewVault("import-escape-rename");
+        using var import = new PendingImport();
+        using var host = new TreeHost(root, import.PickSources, import.Run);
+        host.Initialize();
+        host.RouteKeysThroughTheShell();
+        host.Sidebar.ImportCommand.Execute(null);
+        Assert.True(host.Sidebar.IsImporting);
+        TreeViewItem row = host.FocusRow(Node(host.Sidebar, "alpha.md"));
+        Assert.True(host.PressThrough(row, Key.F2), "F2 on the row went unhandled.");
+        Assert.Same(host.RenameField, Keyboard.FocusedElement);
+        Assert.Equal("alpha", host.RenameField.SelectedText);
+        host.RenameField.Text = "renamed.md";
+        Assert.Equal("renamed.md", host.Sidebar.MutationName);
+        int before = host.AnnouncementCount;
+
+        Assert.True(host.PressThrough(host.RenameField, Key.Escape), "Escape in the rename box went unhandled.");
+
+        Assert.Equal("alpha.md", host.Sidebar.MutationName);
+        Assert.Equal("alpha.md", host.RenameField.Text);
+        Assert.True(File.Exists(Path.Combine(root, "alpha.md")));
+        Assert.False(File.Exists(Path.Combine(root, "renamed.md")));
+        Assert.False(host.RenameField.IsKeyboardFocusWithin);
+        Assert.True(host.Tree.IsKeyboardFocusWithin);
+        Assert.DoesNotContain(
+            host.Announcements.Skip(before),
+            announcement => announcement is A11yEvent.HostComposed);
+        Assert.True(host.Sidebar.IsImporting);
+        import.HandOverTheSource();
+        PumpedDispatcher.PumpUntilDrained(host.Sidebar.ImportCompletion);
+        Assert.False(host.Sidebar.IsImporting);
+        Assert.Equal(1, import.WorkerRuns);
+    });
+
+    /// <summary>
+    /// #1272: the rename box owns Escape only while a row is being renamed
+    /// in it. Once the rename has ended — its own Escape put focus back in
+    /// the tree, the row still selected — and while the box has focus with
+    /// no row selected (nothing to rename: the box only names a new item),
+    /// Escape during an import is the window's: the import is cancelled and
+    /// the box's name is left as it was.
+    /// </summary>
+    [Theory]
+    [InlineData("tree, after the rename ended")]
+    [InlineData("name box, no row selected")]
+    public void EscapeOutsideARenameDuringAnImport_CancelsTheImport(string focus) => RunSta(() =>
+    {
+        using var import = new PendingImport();
+        using var host = new TreeHost(NewVault("import-escape-no-rename"), import.PickSources, import.Run);
+        host.Initialize();
+        host.RouteKeysThroughTheShell();
+        UIElement target;
+        if (focus == "tree, after the rename ended")
+        {
+            TreeViewItem row = host.FocusRow(Node(host.Sidebar, "alpha.md"));
+            Assert.True(host.PressThrough(row, Key.F2), "F2 on the row went unhandled.");
+            Assert.Same(host.RenameField, Keyboard.FocusedElement);
+            Assert.True(host.PressThrough(host.RenameField, Key.Escape), "Escape in the rename box went unhandled.");
+            Assert.False(host.RenameField.IsKeyboardFocusWithin);
+            Assert.True(host.Tree.IsKeyboardFocusWithin);
+            Assert.NotNull(host.Sidebar.SelectedNode);
+            target = Assert.IsAssignableFrom<UIElement>(Keyboard.FocusedElement);
+        }
+        else
+        {
+            Assert.Null(host.Sidebar.SelectedNode);
+            Assert.True(host.RenameField.Focus());
+            target = host.RenameField;
+        }
+
+        string name = host.Sidebar.MutationName;
+        host.Sidebar.ImportCommand.Execute(null);
+        Assert.True(host.Sidebar.IsImporting);
+
+        Assert.True(host.PressThrough(target, Key.Escape), "Escape during the import went unhandled.");
+
+        Assert.Equal(name, host.Sidebar.MutationName);
+        import.HandOverTheSource();
+        PumpedDispatcher.PumpUntilDrained(host.Sidebar.ImportCompletion);
+        Assert.False(host.Sidebar.IsImporting);
+        Assert.Equal(0, import.WorkerRuns);
+    });
+
     /// <summary>An import whose source picker is still open until the fact
     /// hands it one real file outside the vault; the worker runs the
     /// import off the dispatcher and counts itself.</summary>
