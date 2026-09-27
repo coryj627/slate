@@ -327,39 +327,51 @@ is the rendered announcement. Current evidence is hosted
 `AnEditorIntegrityFailureShowsTheSentenceItSpeaks`, and the
 `VaultErrorDetailCensus` provenance facts); no journey observes the
 delivery until PR 1's desktop listener (#1244).
-Amended by #1280 (2026-09-26; locked decision 05 §4.1; codex design rounds 1
-and 2a): the core write no longer runs on the dispatcher. A save snapshots
-the editor on the dispatcher when it starts, runs CreateExclusive/SaveText on
-a worker, and publishes state, status and its one D-10 outcome back on the
-dispatcher — only to the tab and item it was requested for: a tab disposed or
-re-pointed meanwhile takes no state and says nothing, a write that landed
-before a rename is adopted silently as the renamed tab's baseline, and a tab
-whose file was deleted under the write keeps its missing-file status. Saves
-run one after another per tab and per file (every tab on it; a rename carries
-the file's chain to the new path), each starting from the hash the previous
-one published. The explicit
-Save (Ctrl+S, the menu, the palette) requests the save and returns without
-waiting: per tab at most one save writes and one waits, a request made while
-one waits joins it, the waiting save captures the editor when it starts, and
-its one publication serves every joined request with one NoteSaved. A refused
-write is spoken once by its publication (NoteSaveConflict or NoteSaveBlocked
-as above); a fault past those outcomes is logged, never an unobserved task.
-Only a caller that needs a yes/no waits, in a nested dispatcher frame that
-keeps input, focus and notifications flowing: close tab, close pane, the
-replace gate, and vault teardown with its Save All. Each re-reads the
-workspace after every frame. A dirty tab's admission settles the tab's
-admitted saves before it asks and again before it accepts Discard, and
-Discard is accepted only for exactly the documents and edit revisions read
-before the prompt opened — a rename keeps a document, re-pointing the tab
-does not — and anything else that changed while it was up is asked about
-again. Teardown settles every admitted save before it evaluates what is dirty
-and speaks exactly one close line: VaultClosed when nothing was left unsaved
-(a save it settled included), VaultClosedAllSaved or
-VaultClosedChangesDiscarded when it had to decide. An edit made during the
-write stays dirty; the snapshot is what reached disk. Evidence:
-`SaveOffDispatcherTests` and `PumpedSaveReentrancyTests` (every waiting
-caller and the Save command against every mutation that can land while a
-write is parked, and the named facts).
+Amended by #1280 (2026-09-26; locked decision 05 §4.1; codex design rounds 1,
+2a and 2b, the last with the owner's decision): the core write no longer runs
+on the dispatcher. A save snapshots the editor on the dispatcher when it
+starts, runs CreateExclusive/SaveText on a worker, and publishes state, status
+and its one D-10 outcome back on the dispatcher — only to the tab and item it
+was requested for: a tab disposed or re-pointed meanwhile takes no state and
+says nothing, a write that landed before a rename is adopted silently as the
+renamed tab's baseline, and a tab whose file was deleted under the write keeps
+its missing-file status. Saves run one after another per tab and per file
+(every tab on it; a rename carries the file's chain to the new path), each
+starting from the hash the previous one published. The explicit Save (Ctrl+S,
+the menu, the palette) requests the save and returns without waiting: per tab
+at most one save writes and one waits, a request made while one waits joins
+it, the waiting save captures the editor when it starts, and its one
+publication serves every joined request with one NoteSaved. A refused write is
+spoken once by its publication (NoteSaveConflict or NoteSaveBlocked as above).
+A fault past those outcomes is logged once, as VaultCommandFailed, by the save
+it failed — whoever waited on it — and is never an unobserved task; it adds no
+spoken line (R-7: no host copy), and a caller that waited on it treats it as
+not saved. Only a caller that needs a yes/no waits, in a nested dispatcher
+frame that keeps input, focus and notifications flowing: close tab, close
+pane, the replace gate, and vault teardown with its Save All. Each re-reads
+the workspace after every frame, and a save that failed or faulted refuses it
+— nothing is closed or replaced; teardown's existing "Vault remains open
+because one or more notes could not be saved." is the only line. A dirty tab's
+admission settles the tab's admitted saves before it asks and again before it
+accepts Discard, and Discard is accepted only for exactly the documents and
+edit revisions read before the prompt opened — a rename keeps a document,
+re-pointing the tab does not — and anything else that changed while it was up
+is asked about again. Teardown settles every admitted save before it evaluates
+what is dirty. The close line belongs to the explicit close alone (mac parity:
+`closeVaultFromUserAction` and its resolvers): Close Vault speaks exactly one
+of VaultClosed — nothing was left unsaved, a save the teardown settled
+included — VaultClosedAllSaved or VaultClosedChangesDiscarded, once the vault
+is closed. A vault switch speaks none — the open speaks VaultOpened, as mac's
+switch does (`switchToRecent`, `completesVaultSwitch`) — and neither does the
+application closing (mac's quit posts nothing): every close-family sentence
+ends "Returned to the welcome screen.", which is false for both. Intended
+change from main: a switch or application close from a dirty vault no longer
+speaks VaultClosedAllSaved or VaultClosedChangesDiscarded. An edit made during
+the write stays dirty; the snapshot is what reached disk. Evidence:
+`SaveOffDispatcherTests` and `PumpedSaveReentrancyTests` (every waiting caller
+and the Save command against every mutation that can land while a write is
+parked; an injected fault through each waiting caller; the close, switch and
+application-close routes; and the named facts).
 
 **D-11 — Reopen describes the actual file outcome.** Keep the Windows tab and
 its recovery UI. For file-backed tabs, use core's existing CanonicalPath
@@ -711,9 +723,9 @@ Canvas and Graph retain their separate structural-key and journey censuses.
 | `TemplateNoteCreated` | posted | `AppState.swift#performCreateNoteFromTemplate@1` | `WorkspaceViewModel.Templates.cs#WorkspaceViewModel.CreateFromTemplate@1` | `Censuses/A11yCorpusCensus.cs#EveryCorpusEventRendersTheCommittedIdentityTextAndPriority` | unit-observed: `AccessibilityNotificationDispatcherTests.cs#EveryCorpusEventReachesTheNativeBoundaryWithItsGoldenTextAndPriority` | — |
 | `TemplatePickerOpened` | posted | `AppState.swift#startTemplateAvailabilityLoad@1` | `Templates/TemplatePickerViewModel.cs#TemplatePickerViewModel.Load@1` | `Censuses/A11yCorpusCensus.cs#EveryCorpusEventRendersTheCommittedIdentityTextAndPriority` | unit-observed: `AccessibilityNotificationDispatcherTests.cs#EveryCorpusEventReachesTheNativeBoundaryWithItsGoldenTextAndPriority` | — |
 | `TreeFolderSelected` | posted | `FileTreeSidebar.swift#handleTypeSelect@1` | `FilesSidebarViewModel.cs#FilesSidebarViewModel.SelectedNode@1` | `Censuses/A11yCorpusCensus.cs#EveryCorpusEventRendersTheCommittedIdentityTextAndPriority` | unit-observed: `AccessibilityNotificationDispatcherTests.cs#EveryCorpusEventReachesTheNativeBoundaryWithItsGoldenTextAndPriority` | — |
-| `VaultClosed` | posted | `AppState.swift#closeVaultFromUserAction@1` | `VaultLifecycleViewModel.cs#VaultLifecycleViewModel.CloseVault@1` | `Censuses/A11yCorpusCensus.cs#EveryCorpusEventRendersTheCommittedIdentityTextAndPriority` | unit-observed: `AccessibilityNotificationDispatcherTests.cs#EveryCorpusEventReachesTheNativeBoundaryWithItsGoldenTextAndPriority` | — |
-| `VaultClosedAllSaved` | posted | `AppState.swift#resolveVaultCloseSaveAll@1` | `VaultLifecycleViewModel.cs#VaultLifecycleViewModel.AnnounceTeardownDecision@1` | `Censuses/A11yCorpusCensus.cs#EveryCorpusEventRendersTheCommittedIdentityTextAndPriority` | unit-observed: `AccessibilityNotificationDispatcherTests.cs#EveryCorpusEventReachesTheNativeBoundaryWithItsGoldenTextAndPriority` | — |
-| `VaultClosedChangesDiscarded` | posted | `AppState.swift#resolveVaultCloseDiscardAll@1` | `VaultLifecycleViewModel.cs#VaultLifecycleViewModel.AnnounceTeardownDecision@1` | `Censuses/A11yCorpusCensus.cs#EveryCorpusEventRendersTheCommittedIdentityTextAndPriority` | unit-observed: `AccessibilityNotificationDispatcherTests.cs#EveryCorpusEventReachesTheNativeBoundaryWithItsGoldenTextAndPriority` | — |
+| `VaultClosed` | posted | `AppState.swift#closeVaultFromUserAction@1` | `VaultLifecycleViewModel.cs#VaultLifecycleViewModel.AnnounceTeardown@1` | `Censuses/A11yCorpusCensus.cs#EveryCorpusEventRendersTheCommittedIdentityTextAndPriority` | unit-observed: `AccessibilityNotificationDispatcherTests.cs#EveryCorpusEventReachesTheNativeBoundaryWithItsGoldenTextAndPriority` | — |
+| `VaultClosedAllSaved` | posted | `AppState.swift#resolveVaultCloseSaveAll@1` | `VaultLifecycleViewModel.cs#VaultLifecycleViewModel.AnnounceTeardown@1` | `Censuses/A11yCorpusCensus.cs#EveryCorpusEventRendersTheCommittedIdentityTextAndPriority` | unit-observed: `AccessibilityNotificationDispatcherTests.cs#EveryCorpusEventReachesTheNativeBoundaryWithItsGoldenTextAndPriority` | — |
+| `VaultClosedChangesDiscarded` | posted | `AppState.swift#resolveVaultCloseDiscardAll@1` | `VaultLifecycleViewModel.cs#VaultLifecycleViewModel.AnnounceTeardown@1` | `Censuses/A11yCorpusCensus.cs#EveryCorpusEventRendersTheCommittedIdentityTextAndPriority` | unit-observed: `AccessibilityNotificationDispatcherTests.cs#EveryCorpusEventReachesTheNativeBoundaryWithItsGoldenTextAndPriority` | — |
 | `VaultOpened` | posted | `AppState.swift#announceDirectVaultSwitch@1`; `MainSplitView.swift#splitViewWithSheets@1` | `VaultLifecycleViewModel.cs#VaultLifecycleViewModel.OpenVaultAsync@1` | `Censuses/A11yCorpusCensus.cs#EveryCorpusEventRendersTheCommittedIdentityTextAndPriority` | unit-observed: `AccessibilityNotificationDispatcherTests.cs#EveryCorpusEventReachesTheNativeBoundaryWithItsGoldenTextAndPriority` | — |
 | `VaultScanFinished` | posted | `AppState.swift#handleScanProgress@1` | `ScanAnnouncementGate.cs#ScanAnnouncementGate.Finished@1` | `Censuses/A11yCorpusCensus.cs#EveryCorpusEventRendersTheCommittedIdentityTextAndPriority` | unit-observed: `AccessibilityNotificationDispatcherTests.cs#EveryCorpusEventReachesTheNativeBoundaryWithItsGoldenTextAndPriority` | — |
 | `VaultScanProgress` | posted | `AppState.swift#handleScanProgress@1` | `ScanAnnouncementGate.cs#ScanAnnouncementGate.FileIndexed@1` | `Censuses/A11yCorpusCensus.cs#EveryCorpusEventRendersTheCommittedIdentityTextAndPriority` | unit-observed: `AccessibilityNotificationDispatcherTests.cs#EveryCorpusEventReachesTheNativeBoundaryWithItsGoldenTextAndPriority` | — |
