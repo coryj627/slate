@@ -645,6 +645,15 @@ internal sealed class CanvasRendererView : FrameworkElement
     /// board stands, toggle or no toggle. It is paid once and cleared, and it
     /// is dropped when the board's document changes or the board shuts down.
     /// </para>
+    /// <para>
+    /// It is paid only FROM an installed state whose population is the one
+    /// the document has applied (review round 4; <see cref="TryPanToContain"/>):
+    /// a card the predecessor has under the same id is not yet the seat's
+    /// card. That population is read when the debt is paid, not stamped when
+    /// it is owed: a later reload the seat survives (same revision) owes the
+    /// reveal against the later population, which may be the only one this
+    /// board's engine ever installs.
+    /// </para>
     /// </remarks>
     internal void RevealNode(string nodeId, CanvasMoveOrigin origin)
     {
@@ -669,7 +678,8 @@ internal sealed class CanvasRendererView : FrameworkElement
     /// <summary>Pay the owed reveal if it is still payable
     /// (<see cref="RevealNode"/>'s rules) and the board is showing; an
     /// unpayable debt is written off, a payable one waits while the board is
-    /// hidden or its installed state still lacks the card.</summary>
+    /// hidden or its installed state is not yet the document's population with
+    /// the card.</summary>
     private void PayOwedReveal()
     {
         if (_owedReveal is not { } owed)
@@ -727,10 +737,16 @@ internal sealed class CanvasRendererView : FrameworkElement
     }
 
     /// <summary>Commit the pan that contains the card in the INSTALLED
-    /// state, answering whether that state had the card to pan to.</summary>
+    /// state, answering whether that state could pay: it must carry the
+    /// population the document has APPLIED — the one the seat was resolved
+    /// against — and have the card in it (review round 4). The seat moves
+    /// during an apply, before this board's engine has the successor, and a
+    /// card that survives a reload under the same id stands in the
+    /// predecessor at the place it has left, so an id alone never pays.</summary>
     private bool TryPanToContain(string nodeId)
     {
         if (_engine.Current?.Source.Loaded?.Population is not { } population
+            || !ReferenceEquals(population, _model?.AppliedPublication?.Population)
             || !population.SceneByNode.TryGetValue(nodeId, out CanvasSceneNode? node))
         {
             return false;

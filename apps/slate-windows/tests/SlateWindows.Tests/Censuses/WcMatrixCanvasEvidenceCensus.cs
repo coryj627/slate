@@ -101,7 +101,9 @@ public sealed class WcMatrixCanvasEvidenceCensus
                 "TheViewportCountsAFollowLapseOnlyWhenFollowingStops",
                 "AFollowingBoardHiddenBehindAnotherTabScrollsToTheSelectionWhenShown",
                 "AFollowingBoardUnderTheOutlineScrollsToTheSelectionWhenShown", "ABoardThatStopsFollowingWhileHiddenDoesNotScrollWhenShown",
-                "ABoardShownAgainWithTheSeatAlreadyInViewDoesNotMove", "ABoardMoveMadeBeforeHidingIsRevealedWhenShown"],
+                "ABoardShownAgainWithTheSeatAlreadyInViewDoesNotMove", "ABoardMoveMadeBeforeHidingIsRevealedWhenShown",
+                "AReloadRevealsItsRelocatedSurvivorOnlyFromTheSuccessorPopulation",
+                "AnOwedRevealIsPaidFromALaterReloadItsSeatSurvives"],
             ["canvas-visual"]),
         new(
             "Canvas card editor (W6-1 §E)",

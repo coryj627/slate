@@ -4969,6 +4969,148 @@ public sealed class CanvasNavigatorTests : IDisposable
     });
 
     /// <summary>
+    /// Follow-up #1271, review round 4 — a reveal is paid only from the
+    /// population the document has applied. A reload removes the seat's card
+    /// and keeps another card under the same id at a new place far off the
+    /// board: the apply moves the seat onto that survivor while this board's
+    /// engine still has the PREDECESSOR installed, where the survivor stands at
+    /// its old place inside the view. A reveal paid there "contains" the stale
+    /// card and is spent; the successor then installs the seat off the board
+    /// with nothing left owed. The reveal waits for the successor instead, and
+    /// is paid against it.
+    /// </summary>
+    [Fact]
+    public void AReloadRevealsItsRelocatedSurvivorOnlyFromTheSuccessorPopulation() => RunSta(() =>
+    {
+        string path = Path.Combine(_fixture.Root, "relocate.canvas");
+        File.WriteAllText(
+            path,
+            "{\"nodes\":["
+            + "{\"id\":\"gone\",\"type\":\"text\",\"text\":\"Gone\",\"x\":100,\"y\":100,\"width\":200,\"height\":100},"
+            + "{\"id\":\"moved\",\"type\":\"text\",\"text\":\"Moved\",\"x\":350,\"y\":100,\"width\":200,\"height\":100}"
+            + "],\"edges\":[]}");
+        CanvasDocumentViewModel document = Open("relocate.canvas");
+        using HostedWindow host = HostBoard(document, out CanvasSurfaceView surface);
+        CanvasRendererView board = surface.VisualForTests;
+        Assert.True(board.Engine.CommittedViewport.FollowSelection, "premise: the board does not follow the selection.");
+        document.SeatSelectionSilently("gone");
+        Pump();
+        Assert.True(
+            InView(board, "gone") && InView(board, "moved"),
+            "premise: the two cards are not both inside the board's view before the reload.");
+        CanvasPopulation predecessor = board.Engine.Current!.Source.Loaded!.Population;
+        CanvasViewportState view = board.Engine.CommittedViewport;
+
+        File.WriteAllText(
+            path,
+            "{\"nodes\":["
+            + "{\"id\":\"moved\",\"type\":\"text\",\"text\":\"Moved\",\"x\":5000,\"y\":5000,\"width\":200,\"height\":100}"
+            + "],\"edges\":[]}");
+        document.Load();
+        Assert.Equal("moved", document.Selection.Selected);
+        Assert.True(
+            ReferenceEquals(board.Engine.Current!.Source.Loaded?.Population, predecessor),
+            "premise: the board installed the reloaded population before the reload moved the seat, so no "
+            + "predecessor was left to pay against.");
+        Assert.True(
+            view.SameGeometry(board.Engine.CommittedViewport),
+            "the board moved before the reloaded population installed: a reveal paid against the predecessor "
+            + "reads the survivor at the place it has left (#1271, review round 4).");
+
+        PumpUntil(
+            () => board.Engine.Current!.Source.Loaded?.Population is { } installed
+                && !ReferenceEquals(installed, predecessor)
+                && installed.SceneByNode.ContainsKey("moved"),
+            "premise: the reloaded population never installed.");
+        CanvasSceneNode relocated = board.Engine.Current!.Source.Loaded!.Population.SceneByNode["moved"];
+        Assert.True(
+            (relocated.X * view.Zoom) + view.PanX > view.ViewWidth
+                || (relocated.Y * view.Zoom) + view.PanY > view.ViewHeight,
+            "premise: the relocated card is still inside the board's view, so no reveal was needed.");
+        Assert.True(
+            InView(board, "moved"),
+            "the reloaded population installed the seat off the board and nothing revealed it: the follow-"
+            + "selection reveal was paid against the predecessor, where the survivor stood at its old place "
+            + "(D4, #1271, review round 4).");
+    });
+
+    /// <summary>
+    /// Follow-up #1271, review round 4 — the population a reveal is paid from
+    /// is the document's at payment time, not the one current when it was
+    /// owed. Two reloads land before this board's engine installs either: the
+    /// first moves the seat onto a relocated survivor (the reveal is owed),
+    /// the second keeps that seat (same revision, so the reveal is still owed)
+    /// and moves the card again. The engine coalesces and installs only the
+    /// second population, and the reveal is paid against it.
+    /// </summary>
+    [Fact]
+    public void AnOwedRevealIsPaidFromALaterReloadItsSeatSurvives() => RunSta(() =>
+    {
+        string path = Path.Combine(_fixture.Root, "relocate-twice.canvas");
+        File.WriteAllText(
+            path,
+            "{\"nodes\":["
+            + "{\"id\":\"gone\",\"type\":\"text\",\"text\":\"Gone\",\"x\":100,\"y\":100,\"width\":200,\"height\":100},"
+            + "{\"id\":\"moved\",\"type\":\"text\",\"text\":\"Moved\",\"x\":350,\"y\":100,\"width\":200,\"height\":100}"
+            + "],\"edges\":[]}");
+        CanvasDocumentViewModel document = Open("relocate-twice.canvas");
+        using HostedWindow host = HostBoard(document, out CanvasSurfaceView surface);
+        CanvasRendererView board = surface.VisualForTests;
+        document.SeatSelectionSilently("gone");
+        Pump();
+        Assert.True(
+            InView(board, "gone") && InView(board, "moved"),
+            "premise: the two cards are not both inside the board's view before the reloads.");
+        CanvasViewportState view = board.Engine.CommittedViewport;
+        var installed = new List<CanvasPopulation>();
+        board.Engine.StateInstalled += (_, state) =>
+        {
+            if (state.Source.Loaded?.Population is { } population)
+            {
+                installed.Add(population);
+            }
+        };
+
+        File.WriteAllText(
+            path,
+            "{\"nodes\":["
+            + "{\"id\":\"moved\",\"type\":\"text\",\"text\":\"Moved\",\"x\":5000,\"y\":5000,\"width\":200,\"height\":100}"
+            + "],\"edges\":[]}");
+        document.Load();
+        Assert.Equal("moved", document.Selection.Selected);
+        CanvasPopulation first = document.AppliedPublication!.Population!;
+        long revision = document.Selection.Revision;
+        File.WriteAllText(
+            path,
+            "{\"nodes\":["
+            + "{\"id\":\"moved\",\"type\":\"text\",\"text\":\"Moved\",\"x\":7000,\"y\":7000,\"width\":200,\"height\":100}"
+            + "],\"edges\":[]}");
+        document.Load();
+        Assert.Equal("moved", document.Selection.Selected);
+        Assert.True(
+            document.Selection.Revision == revision,
+            "premise: the second reload moved the seat, so the reveal was owed again rather than carried.");
+        CanvasPopulation second = document.AppliedPublication!.Population!;
+        Assert.False(ReferenceEquals(first, second), "premise: the second reload did not replace the population.");
+        Assert.True(installed.Count == 0, "premise: the board installed a population between the two reloads.");
+
+        PumpUntil(
+            () => ReferenceEquals(board.Engine.Current!.Source.Loaded?.Population, second),
+            "premise: the second reload's population never installed.");
+        Assert.DoesNotContain(first, installed);
+        CanvasSceneNode relocated = second.SceneByNode["moved"];
+        Assert.True(
+            (relocated.X * view.Zoom) + view.PanX > view.ViewWidth
+                || (relocated.Y * view.Zoom) + view.PanY > view.ViewHeight,
+            "premise: the relocated card is still inside the board's view, so no reveal was needed.");
+        Assert.True(
+            InView(board, "moved"),
+            "the board installed the later reload with the seat off the board and never revealed it: the reveal "
+            + "owed by the first reload is still owed while its seat survives, and is paid from the population "
+            + "the document has when it pays (D4, #1271, review round 4).");
+    });
+
+    /// <summary>
     /// Follow-up #1271, review round 2 — contract 34 D4's on-surface arm for
     /// the board's OWN peers, with Follow Selection OFF: a screen reader's
     /// Invoke and SelectionItem.Select on a card just past the board's edge
