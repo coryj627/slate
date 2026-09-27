@@ -7,9 +7,11 @@ using System.Windows;
 using System.Windows.Controls;
 using System.Windows.Input;
 using System.Windows.Interop;
+using System.Windows.Media;
 using System.Windows.Threading;
 using SlateWindows.Canvas;
 using SlateWindows.Commands;
+using SlateWindows.Graph;
 using uniffi.slate_uniffi;
 
 namespace SlateWindows.Tests;
@@ -171,6 +173,11 @@ public sealed partial class CommandPaletteTests
         /// <summary>A pointer press and release on the File menu, through
         /// the window's route.</summary>
         FileMenuPointer,
+
+        /// <summary>A double-click on the saved-queries list, whose
+        /// double-click runs the selected query (codex round 7): WPF rebuilds
+        /// a fresh double-click from a press the window already took.</summary>
+        SavedQueryDoubleClick,
     }
 
     /// <summary>
@@ -188,9 +195,10 @@ public sealed partial class CommandPaletteTests
     [InlineData(ClosedSealRoute.SaveBinding)]
     [InlineData(ClosedSealRoute.FileMenuAccessKey)]
     [InlineData(ClosedSealRoute.FileMenuPointer)]
+    [InlineData(ClosedSealRoute.SavedQueryDoubleClick)]
     public void WithThePaletteDismissedUnderItsRunningCommandTheShellTakesNothing(ClosedSealRoute route) => RunSta(() =>
     {
-        using var host = new ShippedShellHost(shown: true);
+        using var host = new ShippedShellHost(shown: true, savedQuery: true);
         WorkspaceViewModel workspace = host.AttachDirtyWorkspace();
         CommandPaletteViewModel palette = host.Palette;
         palette.Open();
@@ -319,8 +327,96 @@ public sealed partial class CommandPaletteTests
                     }
                 }
 
+            case ClosedSealRoute.SavedQueryDoubleClick:
+                {
+                    // The shipped list, with the fixture's saved query
+                    // selected: its double-click runs that query in a tab.
+                    ListBox list = host.Shell.QueriesSavedList;
+                    SavedQuerySummary query = Assert.Single(workspace.SavedQueries);
+                    Assert.Contains(query, list.Items.Cast<object>());
+                    list.SelectedItem = query;
+                    bool handled = host.PressPointer(list, clickCount: 2);
+                    PumpedDispatcher.Drain();
+                    return (handled, workspace.ActiveGroup.Tabs.Any(tab => tab.IsSavedQueryTab)
+                        ? "the saved query ran in a tab"
+                        : null);
+                }
+
             default:
                 throw new ArgumentOutOfRangeException(nameof(route), route, null);
+        }
+    }
+
+    /// <summary>
+    /// Codex round 7 (low): the wheel. A graph open in the shipped shell as
+    /// a diagram pans on a wheel turn and zooms on Ctrl+wheel. Under the
+    /// seal — here a thread-modal section that leaves the shell enabled,
+    /// the state in which input can still reach it — neither turn moves the
+    /// viewport; once the section ends the same turn pans, so the route the
+    /// fact drives is live.
+    /// </summary>
+    [Fact]
+    public void AGraphInTheShellNeitherPansNorZoomsUnderTheSeal() => RunSta(() =>
+    {
+        using var host = new ShippedShellHost(shown: true);
+        WorkspaceViewModel workspace = host.AttachDirtyWorkspace();
+        workspace.OpenGraph();
+        GraphDocumentViewModel document = workspace.GraphDocument!;
+        PumpedDispatcher.PumpUntilDrained(document.WhenAllWorkDrained());
+        Assert.True(document.SetMode(GraphSurfaceMode.Diagram));
+        Assert.True(
+            PumpedDispatcher.PumpUntil(() => document.HasLiveDiagram || document.DiagramError is not null, TimeSpan.FromSeconds(30)),
+            "the diagram never built");
+        Assert.Null(document.DiagramError);
+        host.Shell.UpdateLayout();
+        GraphSurfaceView surface = Assert.Single(Descendants<GraphSurfaceView>(host.Shell));
+        GraphDiagramView diagram = surface.DiagramForTests;
+        Assert.True(
+            PumpedDispatcher.PumpUntil(() => diagram.Entries.Count > 0, TimeSpan.FromSeconds(10)),
+            "the diagram never rendered in the shell");
+        Assert.IsType<GraphViewportOutcome.Zoomed>(surface.ViewportCommand(GraphViewportVerb.ActualSize));
+        CanvasViewportState before = diagram.Viewport;
+
+        ComponentDispatcher.PushModal();
+        try
+        {
+            Assert.True(host.Palette.IsSealed);
+            bool pan = host.Wheel(diagram, 120, ModifierKeys.None);
+            bool zoom = host.Wheel(diagram, 120, ModifierKeys.Control);
+            PumpedDispatcher.Drain();
+            Assert.True(pan && zoom, "the shell let a wheel turn through under the seal");
+            Assert.True(
+                (diagram.Viewport.PanX, diagram.Viewport.PanY, diagram.Viewport.ZoomPercent)
+                    == (before.PanX, before.PanY, before.ZoomPercent),
+                $"the graph moved under the seal: pan ({before.PanX}, {before.PanY}) → "
+                + $"({diagram.Viewport.PanX}, {diagram.Viewport.PanY}), zoom {before.ZoomPercent}% → {diagram.Viewport.ZoomPercent}%");
+        }
+        finally
+        {
+            ComponentDispatcher.PopModal();
+        }
+
+        Assert.False(host.Palette.IsSealed);
+        _ = host.Wheel(diagram, 120, ModifierKeys.None);
+        Assert.Equal(before.PanY + 120, diagram.Viewport.PanY, 6);
+    });
+
+    private static IEnumerable<T> Descendants<T>(DependencyObject root)
+        where T : DependencyObject
+    {
+        var pending = new Stack<DependencyObject>([root]);
+        while (pending.Count > 0)
+        {
+            DependencyObject node = pending.Pop();
+            if (node is T match)
+            {
+                yield return match;
+            }
+
+            for (int i = VisualTreeHelper.GetChildrenCount(node) - 1; i >= 0; i--)
+            {
+                pending.Push(VisualTreeHelper.GetChild(node, i));
+            }
         }
     }
 
@@ -355,13 +451,38 @@ public sealed partial class CommandPaletteTests
         private WorkspaceViewModel? _workspace;
         private QuickSwitcherViewModel? _switcher;
 
-        public ShippedShellHost(bool shown = false)
+        public ShippedShellHost(bool shown = false, bool savedQuery = false)
         {
             Assert.Null(Application.Current);
+            if (savedQuery)
+            {
+                File.WriteAllText(
+                    Path.Combine(_fixture.Root, "Notes.base"),
+                    "filters: 'file.ext == \"md\"'\nviews:\n  - type: table\n    name: Main\n    order:\n      - file.name\n");
+            }
+
             _session = VaultSession.OpenFilesystem(_fixture.Root);
             using (var cancel = new CancelToken())
             {
                 _session.ScanInitial(cancel);
+            }
+
+            if (savedQuery)
+            {
+                // BasesQueriesTests' saved query: the base's first view.
+                ulong scratch = _session.OpenBase("Notes.base");
+                try
+                {
+                    _ = _session.SaveQuery(
+                        "All notes",
+                        description: null,
+                        _session.BaseViewQueryJson(scratch, 0),
+                        SavedQuerySourceSyntax.Builder);
+                }
+                finally
+                {
+                    _session.CloseBase(scratch);
+                }
             }
 
             _recentsPath = Path.Combine(_fixture.Root, "device-state", "command-palette-recents.json");
@@ -447,6 +568,8 @@ public sealed partial class CommandPaletteTests
             _workspace.OpenPath("note0.md");
             _workspace.ActiveGroup.ActiveTab!.Text += "\nUnsaved.";
             Assert.True(_workspace.HasDirtyTabs);
+            _workspace.RefreshBaseQueries();
+            PumpedDispatcher.Drain();
             return _workspace;
         }
 
@@ -482,9 +605,12 @@ public sealed partial class CommandPaletteTests
                 () => _ = AccessKeyManager.ProcessKey(PresentationSource.FromVisual(Shell)!, key, false));
 
         /// <summary>A left-button press and release on
-        /// <paramref name="target"/>, each Preview then — unhandled — its
-        /// bubbling twin. Returns whether both were handled.</summary>
-        public bool PressPointer(UIElement target)
+        /// <paramref name="target"/> as the input manager raises them: each
+        /// Preview, then its bubbling twin carrying the preview's handled
+        /// state (a pair shares it), the press with
+        /// <paramref name="clickCount"/>. Returns whether both were
+        /// handled.</summary>
+        public bool PressPointer(UIElement target, int clickCount = 1)
         {
             bool handled = true;
             foreach ((RoutedEvent preview, RoutedEvent bubble) in new[]
@@ -493,23 +619,39 @@ public sealed partial class CommandPaletteTests
                 (Mouse.PreviewMouseUpEvent, Mouse.MouseUpEvent),
             })
             {
-                var args = new MouseButtonEventArgs(Mouse.PrimaryDevice, Environment.TickCount, MouseButton.Left)
-                {
-                    RoutedEvent = preview,
-                };
-                target.RaiseEvent(args);
-                if (!args.Handled)
-                {
-                    args = new MouseButtonEventArgs(Mouse.PrimaryDevice, Environment.TickCount, MouseButton.Left)
-                    {
-                        RoutedEvent = bubble,
-                    };
-                    target.RaiseEvent(args);
-                }
-
-                handled &= args.Handled;
+                MouseButtonEventArgs first = PointerArgs(preview, clickCount);
+                target.RaiseEvent(first);
+                MouseButtonEventArgs second = PointerArgs(bubble, clickCount);
+                second.Handled = first.Handled;
+                target.RaiseEvent(second);
+                handled &= second.Handled;
             }
 
+            return handled;
+        }
+
+        /// <summary>A wheel turn on <paramref name="target"/> with exactly
+        /// <paramref name="modifiers"/> held: Preview, then its bubbling
+        /// twin carrying the preview's handled state. Returns whether it was
+        /// handled.</summary>
+        public bool Wheel(UIElement target, int delta, ModifierKeys modifiers)
+        {
+            bool handled = false;
+            ThreadModifiers.Hold(modifiers, () =>
+            {
+                var preview = new MouseWheelEventArgs(Mouse.PrimaryDevice, Environment.TickCount, delta)
+                {
+                    RoutedEvent = Mouse.PreviewMouseWheelEvent,
+                };
+                target.RaiseEvent(preview);
+                var bubble = new MouseWheelEventArgs(Mouse.PrimaryDevice, Environment.TickCount, delta)
+                {
+                    RoutedEvent = Mouse.MouseWheelEvent,
+                    Handled = preview.Handled,
+                };
+                target.RaiseEvent(bubble);
+                handled = bubble.Handled;
+            });
             return handled;
         }
 
@@ -546,6 +688,21 @@ public sealed partial class CommandPaletteTests
             {
                 CanvasSurfaceView.ShellOverlayIsOpen = _priorOverlayProbe;
             }
+        }
+
+        private static MouseButtonEventArgs PointerArgs(RoutedEvent routed, int clickCount)
+        {
+            var args = new MouseButtonEventArgs(Mouse.PrimaryDevice, Environment.TickCount, MouseButton.Left)
+            {
+                RoutedEvent = routed,
+            };
+
+            // What the mouse device stamps on a second click; internal set.
+            (typeof(MouseButtonEventArgs).GetProperty(nameof(MouseButtonEventArgs.ClickCount))?.GetSetMethod(nonPublic: true)
+                    ?? throw new InvalidOperationException("MouseButtonEventArgs.ClickCount has no setter"))
+                .Invoke(args, [clickCount]);
+            Assert.Equal(clickCount, args.ClickCount);
+            return args;
         }
 
         private static KeyEventArgs KeyArgs(PresentationSource source, Key key, bool system, RoutedEvent routed)

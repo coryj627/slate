@@ -32,9 +32,25 @@ public sealed class ShellSealAdmissionCensus
     /// <summary>The window's preview input routes the admission must hold at
     /// least: keys down and up (the Apps key opens a context menu on its
     /// release), text that arrives without a key, pointer press and
-    /// release.</summary>
+    /// release, the wheel (a graph pans and zooms on it — codex round 7).</summary>
     private static readonly string[] RequiredGates =
-        ["PreviewKeyDown", "PreviewKeyUp", "PreviewTextInput", "PreviewMouseDown", "PreviewMouseUp"];
+        ["PreviewKeyDown", "PreviewKeyUp", "PreviewTextInput", "PreviewMouseDown", "PreviewMouseUp", "PreviewMouseWheel"];
+
+    /// <summary>The double-click events WPF's <c>Control</c> raises FRESH from
+    /// a press it saw past handled; the seal's class handler takes both, and
+    /// only it may register for them.</summary>
+    private static readonly string[] DoubleClickEvents =
+        ["Control.PreviewMouseDoubleClickEvent", "Control.MouseDoubleClickEvent"];
+
+    /// <summary>The shell's reads of a press's click count, each reviewed:
+    /// none can run for a press the admission took.</summary>
+    private static readonly Dictionary<(string File, string Method), string> ClickCountAllowed = new()
+    {
+        [("GraphDiagramView.cs", "OnMouseLeftButtonDown")] =
+            "an override WPF calls only for an unhandled press",
+        [("MainWindow.Templates.cs", "TemplateNameCreate_PreviewMouseLeftButtonDown")] =
+            "an instance handler XAML attaches, which a handled press never reaches",
+    };
 
     /// <summary>The listeners allowed past a handled input, each with why it
     /// cannot act under the seal.</summary>
@@ -115,6 +131,40 @@ public sealed class ShellSealAdmissionCensus
             "the access-key gate no longer listens past handled — a menu item's answer hides its candidate from the seal");
     }
 
+    /// <summary>
+    /// Codex round 7: a press the admission took still reaches
+    /// <c>Control</c>'s own double-click detection, which listens past
+    /// handled and raises a fresh, unhandled double-click on the control.
+    /// The seal's gate is one class handler per double-click event, on
+    /// <c>Control</c>, past handled, applying the owning shell's admission —
+    /// and nothing else in the shell acts on a double-click ahead of it.
+    /// </summary>
+    [Fact]
+    public void TheDoubleClickWpfRebuildsGoesThroughTheAdmission()
+    {
+        CSharpSource seal = CSharpSource.Load("MainWindow.Seal.cs");
+        ConstructorDeclarationSyntax registration = seal.Root.DescendantNodes()
+            .OfType<ConstructorDeclarationSyntax>()
+            .Single(constructor => constructor.Modifiers.Any(SyntaxKind.StaticKeyword));
+        string[] registered = registration.DescendantNodes()
+            .OfType<InvocationExpressionSyntax>()
+            .Where(invocation => CSharpSource.Normalize(invocation.Expression) == "EventManager.RegisterClassHandler")
+            .Select(invocation => string.Join(",", invocation.ArgumentList.Arguments.Select(argument => CSharpSource.Normalize(argument))))
+            .ToArray();
+        Assert.Equal(
+            DoubleClickEvents.Select(routed =>
+                $"typeof(Control),{routed},newMouseButtonEventHandler(OnDoubleClickUnderTheSeal),handledEventsToo:true"),
+            registered);
+        Assert.Equal(
+            "if(senderisDependencyObjectelement&&GetWindow(element)isMainWindowshell){_=shell.SealTakes(e);}",
+            CSharpSource.Normalize(Assert.Single(seal.Method("OnDoubleClickUnderTheSeal").Body!.Statements)));
+
+        List<string> offenders = DoubleClickOffenders(ShellUnits());
+        Assert.True(
+            offenders.Count == 0,
+            "double-click routes the seal's class handler does not govern:\n  " + string.Join("\n  ", offenders));
+    }
+
     [Fact]
     public void NothingInTheShellListensPastAHandledInputOrAheadOfTheRoutes()
     {
@@ -137,6 +187,9 @@ public sealed class ShellSealAdmissionCensus
     [InlineData("past-handled", "class Other { void M(UIElement u) { u.AddHandler(Keyboard.KeyDownEvent, new KeyEventHandler(X), true); } }")]
     [InlineData("class-handler", "class Other { static void M() { EventManager.RegisterClassHandler(typeof(Window), Keyboard.PreviewKeyDownEvent, new KeyEventHandler(X)); } }")]
     [InlineData("input-manager", "class Other { void M() { InputManager.Current.PreProcessInput += X; } }")]
+    [InlineData("double-click-class-handler", "class Other { static Other() { EventManager.RegisterClassHandler(typeof(ListBox), Control.MouseDoubleClickEvent, new MouseButtonEventHandler(X), true); } }")]
+    [InlineData("double-click-override", "class Other : ListBox { protected override void OnMouseDoubleClick(MouseButtonEventArgs e) => Run(); }")]
+    [InlineData("click-count-read", "class Other { void Pressed(object s, MouseButtonEventArgs e) { if (e.ClickCount == 2) Run(); } }")]
     public void EachDetectorCatchesItsBypass(string bypass, string source)
     {
         const string Handlers = """
@@ -168,6 +221,7 @@ public sealed class ShellSealAdmissionCensus
                     XElement.Parse("<Window xmlns=\"http://schemas.microsoft.com/winfx/2006/xaml/presentation\" />"),
                     [handlers, new Unit("MainWindow.Extra.cs", Parse(source))]).Offenders,
             "second-seal-read" => SealReaderOffenders([handlers, new Unit("MainWindow.Extra.cs", Parse(source))]),
+            "double-click-override" or "click-count-read" => DoubleClickOffenders([new Unit("Other.cs", Parse(source))]),
             _ => PastHandledOffenders([new Unit("Other.cs", Parse(source))]),
         };
         Assert.True(found.Count > 0, $"the census missed a planted {bypass} bypass");
@@ -380,7 +434,8 @@ public sealed class ShellSealAdmissionCensus
                 else if (callee == "RegisterClassHandler" && arguments.Count >= 2)
                 {
                     string routed = CSharpSource.Normalize(arguments[1].Expression);
-                    if (!IsKnownNonInput(routed))
+                    bool theDoubleClickGate = unit.Name == "MainWindow.Seal.cs" && DoubleClickEvents.Contains(routed);
+                    if (!IsKnownNonInput(routed) && !theDoubleClickGate)
                     {
                         offenders.Add($"{unit.Name}:{Line(invocation)} registers a class handler for {routed} "
                             + "(a class handler runs before the window's own; name it here only if it carries no input)");
@@ -394,6 +449,41 @@ public sealed class ShellSealAdmissionCensus
             }))
             {
                 offenders.Add($"{unit.Name}:{Line(hook)} hooks {CSharpSource.Normalize(hook)} — input seen ahead of the window's routes");
+            }
+        }
+
+        return offenders;
+    }
+
+    /// <summary>What acts on a double-click ahead of the seal's class handler:
+    /// an override of <c>Control</c>'s double-click virtuals (it runs before
+    /// the event is raised), or a click-count read the census has not
+    /// reviewed.</summary>
+    private static List<string> DoubleClickOffenders(IEnumerable<Unit> shell)
+    {
+        var offenders = new List<string>();
+        foreach (Unit unit in shell)
+        {
+            foreach (MethodDeclarationSyntax method in unit.Root.DescendantNodes()
+                .OfType<MethodDeclarationSyntax>()
+                .Where(method => method.Modifiers.Any(SyntaxKind.OverrideKeyword)
+                    && method.Identifier.ValueText is "OnMouseDoubleClick" or "OnPreviewMouseDoubleClick"))
+            {
+                offenders.Add($"{unit.Name}:{Line(method)} overrides {method.Identifier.ValueText} — Control calls it for a "
+                    + "double-click rebuilt from a press the admission took, before the gate sees the event");
+            }
+
+            foreach (MemberAccessExpressionSyntax read in unit.Root.DescendantNodes()
+                .OfType<MemberAccessExpressionSyntax>()
+                .Where(access => access.Name.Identifier.ValueText == "ClickCount"))
+            {
+                string method = read.Ancestors().OfType<MethodDeclarationSyntax>().FirstOrDefault()?.Identifier.ValueText
+                    ?? "a non-method member";
+                if (!ClickCountAllowed.ContainsKey((unit.Name, method)))
+                {
+                    offenders.Add($"{unit.Name}:{Line(read)} reads a click count in {method} — review whether a press "
+                        + "the admission took can reach it, then name it in ClickCountAllowed");
+                }
             }
         }
 

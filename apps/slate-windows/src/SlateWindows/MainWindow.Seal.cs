@@ -2,6 +2,7 @@
 // SPDX-License-Identifier: AGPL-3.0-or-later
 
 using System.Windows;
+using System.Windows.Controls;
 using System.Windows.Input;
 
 namespace SlateWindows;
@@ -34,11 +35,21 @@ namespace SlateWindows;
 /// release is taken as well: the Apps key opens a context menu on its
 /// release, and a context menu's own keys and clicks stay inside its popup,
 /// out of every route here. A text input event is taken too, and so are
-/// pointer presses and releases, so no button, menu item or context menu is
-/// clicked. A mnemonic that reaches the access key manager anyway finds no
-/// target in the shell. (Text a TSF text service writes straight into a
-/// focused field — voice typing, handwriting — goes through WPF's text
-/// store, not these routes: contract 40 AR-48.)
+/// pointer presses, releases and wheel turns, so no button, menu item or
+/// context menu is clicked and nothing pans or zooms. A mnemonic that
+/// reaches the access key manager anyway finds no target in the shell.
+/// (Text a TSF text service writes straight into a focused field — voice
+/// typing, handwriting — goes through WPF's text store, not these routes:
+/// contract 40 AR-48.)
+/// </para>
+/// <para>
+/// <b>The double-click WPF rebuilds from a taken press</b> (codex round 7).
+/// <c>Control</c> listens to left and right presses even once they are
+/// handled, and on a second click raises a FRESH, unhandled
+/// <c>PreviewMouseDoubleClick</c> or <c>MouseDoubleClick</c> directly on the
+/// control — the saved-queries list runs a query on it. One class handler
+/// per event, on <c>Control</c> and past handled, applies the owning
+/// shell's admission to that event before any instance handler sees it.
 /// </para>
 /// <para>
 /// <b>Why input, not execution.</b> Every shell command is a view model
@@ -58,6 +69,23 @@ namespace SlateWindows;
 /// </remarks>
 public partial class MainWindow
 {
+    /// <summary>The double-click gate, once per process: class handlers run
+    /// before instance handlers, and past handled they see the fresh event
+    /// <c>Control</c> raises from a press the admission already took.</summary>
+    static MainWindow()
+    {
+        EventManager.RegisterClassHandler(
+            typeof(Control),
+            Control.PreviewMouseDoubleClickEvent,
+            new MouseButtonEventHandler(OnDoubleClickUnderTheSeal),
+            handledEventsToo: true);
+        EventManager.RegisterClassHandler(
+            typeof(Control),
+            Control.MouseDoubleClickEvent,
+            new MouseButtonEventHandler(OnDoubleClickUnderTheSeal),
+            handledEventsToo: true);
+    }
+
     /// <summary>
     /// The seal's one admission check. Returns whether the seal took the
     /// input — marked handled, so nothing after this handler acts on it —
@@ -91,6 +119,18 @@ public partial class MainWindow
     private void Window_PreviewMouseDown(object sender, MouseButtonEventArgs e) => _ = SealTakes(e);
 
     private void Window_PreviewMouseUp(object sender, MouseButtonEventArgs e) => _ = SealTakes(e);
+
+    private void Window_PreviewMouseWheel(object sender, MouseWheelEventArgs e) => _ = SealTakes(e);
+
+    /// <summary>A double-click on a control in a shell goes through that
+    /// shell's admission; one anywhere else is not the shell's.</summary>
+    private static void OnDoubleClickUnderTheSeal(object sender, MouseButtonEventArgs e)
+    {
+        if (sender is DependencyObject element && GetWindow(element) is MainWindow shell)
+        {
+            _ = shell.SealTakes(e);
+        }
+    }
 
     /// <summary>The access key manager raises this on each candidate
     /// element to learn its target; under the seal, no element in the
