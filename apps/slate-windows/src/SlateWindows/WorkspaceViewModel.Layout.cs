@@ -249,9 +249,14 @@ internal sealed partial class WorkspaceViewModel
             // PR B2, IGL-6), and its Save pumps with the window ENABLED
             // (#1280): a group switch, a tab close, another navigation, an
             // edit or a teardown can land inside either frame, so the open
-            // re-validates its address — and re-asks when the tab is dirty
-            // again — after every frame, before any replacement.
-            WorkspaceItemState asked = active.Item;
+            // re-validates its address after every frame, before any
+            // replacement. What the tab SHOWS is not part of the address:
+            // an answer applies only to the document and edit it was asked
+            // about (AdmitDirtyTab's pin), so a tab re-pointed inside a frame
+            // is admitted afresh — asked again when dirty, taken when clean —
+            // and the open then installs its own item over it (contract 35
+            // B2-D10: a re-entrant open is an ordinary one; IGL-2: a rename
+            // inside the dialog does not stop the open).
             if (!AdmitDirtyTab(
                     active,
                     () => _dirtyNavigationDecision(active, item),
@@ -259,8 +264,7 @@ internal sealed partial class WorkspaceViewModel
                         && !active.IsDisposed
                         && ReferenceEquals(ActiveGroup, group)
                         && Groups.Contains(group)
-                        && group.Tabs.Contains(active)
-                        && active.Item == asked))
+                        && group.Tabs.Contains(active)))
             {
                 return false;
             }
@@ -520,8 +524,8 @@ internal sealed partial class WorkspaceViewModel
         // admission works in rounds over the pane's CURRENT tabs, and the
         // pane closes only after a round in which nothing pumped: every tab
         // it disposes has no save pending, and is clean or approved for
-        // discard at exactly the item and edit it was asked about.
-        var discarded = new Dictionary<WorkspaceTabViewModel, (WorkspaceItemState Item, long Revision)>(
+        // discard at exactly the document and edit it was asked about.
+        var discarded = new Dictionary<WorkspaceTabViewModel, (int Identity, long Revision)>(
             ReferenceEqualityComparer.Instance);
         for (int round = 0; ; round++)
         {
@@ -551,28 +555,28 @@ internal sealed partial class WorkspaceViewModel
             foreach (WorkspaceTabViewModel tab in group.Tabs.ToArray())
             {
                 if (!tab.IsDirty
-                    || (discarded.TryGetValue(tab, out (WorkspaceItemState Item, long Revision) approved)
-                        && approved == (tab.Item, tab.EditRevision)))
+                    || (discarded.TryGetValue(tab, out (int Identity, long Revision) approved)
+                        && approved == (tab.ItemIdentity, tab.EditRevision)))
                 {
                     continue;
                 }
                 pumped = true;
                 // What the prompt asks about, read BEFORE it opens.
-                (WorkspaceItemState Item, long Revision) asked = (tab.Item, tab.EditRevision);
+                (int Identity, long Revision) asked = (tab.ItemIdentity, tab.EditRevision);
                 switch (_dirtyCloseDecision(tab))
                 {
                     case WorkspaceDirtyNavigationDecision.Discard:
                         // Approved only for exactly what was asked about, with
                         // nothing pending; an edit or a save that landed while
                         // the prompt was up is asked about again.
-                        if (!tab.HasPendingSaves && asked == (tab.Item, tab.EditRevision))
+                        if (!tab.HasPendingSaves && asked == (tab.ItemIdentity, tab.EditRevision))
                         {
                             discarded[tab] = asked;
                         }
                         break;
                     case WorkspaceDirtyNavigationDecision.Save:
-                        // A save retired by a rename under it gave the tab a
-                        // new identity: the next round asks about it again.
+                        // A save retired by a rename under it left the tab at
+                        // a new path: the next round asks about it again.
                         WorkspaceItemState saving = tab.Item;
                         if (!tab.Save() && tab.Item == saving)
                         {
@@ -640,17 +644,19 @@ internal sealed partial class WorkspaceViewModel
     /// again before Discard is accepted: a Ctrl+S still writing never lands
     /// after the user chose Discard, and a tab the settle made clean is not
     /// asked about at all.</item>
-    /// <item>What the prompt asks about — the tab's item and edit revision —
-    /// is read BEFORE the prompt opens, and Discard is accepted only when
-    /// that exact pair still holds afterwards: an edit that lands while the
-    /// prompt is up is asked about again, never discarded unasked.</item>
+    /// <item>What the prompt asks about — the tab's document
+    /// (<see cref="WorkspaceTabViewModel.ItemIdentity"/>, which a rename of
+    /// its file keeps) and edit revision — is read BEFORE the prompt opens,
+    /// and Discard is accepted only when that exact pair still holds
+    /// afterwards: an edit that lands while the prompt is up is asked about
+    /// again, never discarded unasked.</item>
     /// </list>
     /// True when the tab is clean, or its Discard was accepted, and it is
     /// still valid; false on Cancel, a failed save, an invalidated caller or
     /// too many rounds. A save that failed because the tab's file was
     /// renamed under it (the write was retired; the tab now shows the new
-    /// path) is not a refusal: the tab has a new identity, and it is asked
-    /// about again.
+    /// path) is not a refusal: the tab is asked about again at its new
+    /// path.
     /// </summary>
     private bool AdmitDirtyTab(
         WorkspaceTabViewModel tab,
@@ -675,7 +681,7 @@ internal sealed partial class WorkspaceViewModel
             {
                 return true;
             }
-            (WorkspaceItemState Item, long Revision) asked = (tab.Item, tab.EditRevision);
+            (int Identity, long Revision) asked = (tab.ItemIdentity, tab.EditRevision);
             WorkspaceDirtyNavigationDecision decision = ask();
             if (!stillValid())
             {
@@ -684,7 +690,7 @@ internal sealed partial class WorkspaceViewModel
             switch (decision)
             {
                 case WorkspaceDirtyNavigationDecision.Discard:
-                    if (!tab.HasPendingSaves && asked == (tab.Item, tab.EditRevision))
+                    if (!tab.HasPendingSaves && asked == (tab.ItemIdentity, tab.EditRevision))
                     {
                         return true;
                     }

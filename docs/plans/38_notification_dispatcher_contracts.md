@@ -349,8 +349,9 @@ keeps input, focus and notifications flowing: close tab, close pane, the
 replace gate, and vault teardown with its Save All. Each re-reads the
 workspace after every frame. A dirty tab's admission settles the tab's
 admitted saves before it asks and again before it accepts Discard, and
-Discard is accepted only for exactly the items and edit revisions read before
-the prompt opened — anything that changed while it was up is asked about
+Discard is accepted only for exactly the documents and edit revisions read
+before the prompt opened — a rename keeps a document, re-pointing the tab
+does not — and anything else that changed while it was up is asked about
 again. Teardown settles every admitted save before it evaluates what is dirty
 and speaks exactly one close line: VaultClosed when nothing was left unsaved
 (a save it settled included), VaultClosedAllSaved or

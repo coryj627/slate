@@ -1268,9 +1268,9 @@ internal sealed class VaultLifecycleViewModel
     /// dirty tabs after any frame before it answers. Every save admitted
     /// before the prompt settles before the dirty state is evaluated, so the
     /// prompt asks about what is really unsaved; Discard is accepted only for
-    /// exactly the dirty tabs, items and edits read before the prompt opened,
-    /// with no save pending (codex round 2a) — anything that changed while it
-    /// was up is asked about again. The session is disposed only after
+    /// exactly the dirty tabs, documents and edits read before the prompt
+    /// opened, with no save pending (codex round 2a) — anything that changed
+    /// while it was up is asked about again (a rename keeps a document). The session is disposed only after
     /// <see cref="WorkspaceViewModel.Dispose"/> has joined every save worker.
     /// </summary>
     private WorkspaceTeardown TryCloseWorkspaceCore()
@@ -1330,7 +1330,7 @@ internal sealed class VaultLifecycleViewModel
             }
 
             // What the prompt asks about, read BEFORE it opens.
-            IReadOnlyList<(WorkspaceTabViewModel Tab, WorkspaceItemState Item, long Revision)> asked =
+            IReadOnlyList<(WorkspaceTabViewModel Tab, int Identity, long Revision)> asked =
                 workspace.DirtyTabsForPrompt();
             VaultCloseDecision decision = _confirmUnsavedClose();
             if (decision == VaultCloseDecision.Cancel)

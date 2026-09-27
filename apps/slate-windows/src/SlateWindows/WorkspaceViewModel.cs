@@ -767,6 +767,12 @@ internal sealed partial class WorkspaceTabViewModel : BindableBase, IDisposable
     /// (#1280). -1 for a tab without an editor session.</summary>
     internal long EditRevision => _editorSession?.Revision ?? -1;
 
+    /// <summary>The document the tab shows (#1280): it moves when the tab is
+    /// re-pointed at another item or disposed, never when its file is
+    /// renamed — a rename keeps the document and its edits. A prompt's
+    /// answer is pinned to it and the edit revision.</summary>
+    internal int ItemIdentity => _itemEpoch;
+
     /// <summary>The dispatcher half before the write: the snapshot, the
     /// integrity refusal and the repair lease; then the worker.</summary>
     private void StartSave(SaveBatch batch, WorkspaceSaveCoordinator.SaveTicket ticket)
@@ -2520,19 +2526,19 @@ internal sealed partial class WorkspaceViewModel : BindableBase, IDisposable
     internal bool SavesIdle => _saves.IsIdle;
 
     /// <summary>#1280 (codex round 2a): every dirty tab and exactly what a
-    /// teardown prompt asks about it — its item and edit revision — read
+    /// teardown prompt asks about it — its document and edit revision — read
     /// before the prompt opens.</summary>
-    internal IReadOnlyList<(WorkspaceTabViewModel Tab, WorkspaceItemState Item, long Revision)>
+    internal IReadOnlyList<(WorkspaceTabViewModel Tab, int Identity, long Revision)>
         DirtyTabsForPrompt() =>
         [.. Groups
             .SelectMany(group => group.Tabs)
             .Where(tab => !tab.IsDisposed && tab.IsDirty)
-            .Select(tab => (tab, tab.Item, tab.EditRevision))];
+            .Select(tab => (tab, tab.ItemIdentity, tab.EditRevision))];
 
     /// <summary>True when the dirty tabs are still exactly
-    /// <paramref name="asked"/>: the same tabs, items and edits.</summary>
+    /// <paramref name="asked"/>: the same tabs, documents and edits.</summary>
     internal bool DirtyTabsStill(
-        IReadOnlyList<(WorkspaceTabViewModel Tab, WorkspaceItemState Item, long Revision)> asked) =>
+        IReadOnlyList<(WorkspaceTabViewModel Tab, int Identity, long Revision)> asked) =>
         DirtyTabsForPrompt().SequenceEqual(asked);
 
     /// <summary>#1280 test seam: the workspace's save coordinator.</summary>
