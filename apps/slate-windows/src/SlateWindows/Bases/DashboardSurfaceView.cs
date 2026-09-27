@@ -208,7 +208,8 @@ internal sealed class DashboardSurfaceView : UserControl
             rowAudioDescription: static row =>
                 ((BaseGridRowViewModel)row).AudioDescription,
             // R-4 (#1246): the Base tab's row identity.
-            rowAutomationName: static row => ((BaseGridRowViewModel)row).FileName);
+            rowAutomationName: static row => ((BaseGridRowViewModel)row).FileName,
+            rowKey: static row => ((BaseGridRowViewModel)row).RowKey);
         return grid;
     }
 

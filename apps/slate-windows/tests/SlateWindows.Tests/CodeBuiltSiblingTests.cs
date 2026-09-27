@@ -80,46 +80,159 @@ public sealed class CodeBuiltSiblingTests
     public void TheBaseViewPickerTellsViewsNamedAlikeApart() => RunSta(() =>
     {
         ComboBox picker = Detach(new BaseSurfaceView().ViewPickerForTests);
-        picker.ItemsSource = new[]
-        {
-            new BaseViewSummary("Open tasks", "table", "tasks", BaseViewStatus.Executable, null),
-            new BaseViewSummary("Open tasks", "list", "tasks", BaseViewStatus.Executable, null),
-            new BaseViewSummary("Archive", "table", "archive", BaseViewStatus.Executable, null),
-        };
+        picker.ItemsSource = ItemOccurrence.Of(
+            [
+                new BaseViewSummary("Open tasks", "table", "tasks", BaseViewStatus.Executable, null),
+                new BaseViewSummary("Open tasks", "list", "tasks", BaseViewStatus.Executable, null),
+                new BaseViewSummary("Archive", "table", "archive", BaseViewStatus.Executable, null),
+            ],
+            view => view.Name);
         Hosted(picker, () => Assert.Equal(
             ["Open tasks, view 1", "Open tasks, view 2", "Archive"],
             ItemContainerNameBindingTests.ItemNames(picker)));
     });
 
-    /// <summary>Codex PR 3 round 4: a base keeps duplicate view definitions
-    /// (core warns about them), so two views can be fully value-equal
-    /// records. A CLOSED picker's selection is named through UIA's throwaway
-    /// wrapper, which finds its item by reference — the second of two equal
-    /// views reads "view 2", never the first's name.</summary>
+    /// <summary>Codex PR 3 rounds 4 and 6, owner decision OD-8 — occurrence
+    /// identity, through the production render: a base keeps duplicate view
+    /// definitions (core warns DuplicateViewName), so two views are fully
+    /// value-EQUAL records, and WPF keys an items host's peers by equality —
+    /// the picker showed two views while UIA held ONE item peer, named as the
+    /// second. Each view is its own occurrence: the open picker's own peer
+    /// holds two items, "Open tasks, view 1" and "Open tasks, view 2", and the
+    /// closed picker names its selection — the second — as the
+    /// second.</summary>
     [Fact]
-    public void AClosedViewPickerNamesTheSecondOfTwoEqualViewsAsTheSecond() => RunSta(() =>
-    {
-        ComboBox picker = Detach(new BaseSurfaceView().ViewPickerForTests);
-        var view = new BaseViewSummary("Open tasks", "table", "tasks", BaseViewStatus.Executable, null);
-        var twin = new BaseViewSummary("Open tasks", "table", "tasks", BaseViewStatus.Executable, null);
-        Assert.Equal(view, twin);
-        Assert.NotSame(view, twin);
-        picker.ItemsSource = new[] { view, twin };
-        picker.SelectedIndex = 1;
-        Hosted(picker, () =>
+    public void TwoEqualBaseViewsAreTwoUiaItemsReadApart() => RunSta(() => WithBaseViews(
+        """
+          - type: table
+            name: Open tasks
+            order:
+              - file.name
+          - type: table
+            name: Open tasks
+            order:
+              - file.name
+          - type: table
+            name: Archive
+            order:
+              - file.name
+        """,
+        (document, picker) =>
         {
+            // The premise: two distinct records, equal by value.
+            Assert.Equal(document.Views[0], document.Views[1]);
+            Assert.NotSame(document.Views[0], document.Views[1]);
+            ItemAutomationPeer[] items = OpenPickerItems(picker);
+            Assert.True(
+                items.Length == 3,
+                $"{items.Length} item peers for three views: {string.Join(" | ", items.Select(item => item.GetName()))}");
+            Assert.Equal(
+                ["Open tasks, view 1", "Open tasks, view 2", "Archive"],
+                items.Select(item => item.GetName()));
+
+            picker.IsDropDownOpen = false;
+            picker.SelectedIndex = 1;
             PumpedDispatcher.Drain();
-            Assert.Null(picker.ItemContainerGenerator.ContainerFromIndex(1));
-            AutomationPeer peer = UIElementAutomationPeer.CreatePeerForElement(picker);
-            System.Reflection.MethodInfo create = typeof(ItemsControlAutomationPeer).GetMethod(
-                "CreateItemAutomationPeer",
-                System.Reflection.BindingFlags.Instance | System.Reflection.BindingFlags.NonPublic)!;
-            string Named(object item) => ((ItemAutomationPeer)create.Invoke(peer, [item])!).GetName();
-            Assert.Same(twin, picker.SelectedItem);
-            Assert.Equal("Open tasks, view 2", Named(twin));
-            Assert.Equal("Open tasks, view 1", Named(view));
-        });
-    });
+            Assert.Equal(1, document.ActiveViewIndex);
+            Assert.Equal("Open tasks, view 2", ClosedSelectionName(picker));
+        }));
+
+    /// <summary>Codex PR 3 round 6, OD-8 — speech identity, through the
+    /// production render: core keeps a quoted view name verbatim, so views
+    /// named "Open tasks", "Open tasks ", " Open  tasks", "Open tasks." and
+    /// "Open-tasks" all reach the picker, and a reader hears them alike —
+    /// each takes its place, and each keeps its own spelling.</summary>
+    [Fact]
+    public void BaseViewsThatReadAlikeAreToldApartVerbatim() => RunSta(() => WithBaseViews(
+        """
+          - type: table
+            name: "Open tasks"
+          - type: table
+            name: "Open tasks "
+          - type: table
+            name: " Open  tasks"
+          - type: table
+            name: "Open tasks."
+          - type: table
+            name: "Open-tasks"
+          - type: table
+            name: "Archive"
+        """,
+        (document, picker) =>
+        {
+            Assert.Equal(
+                ["Open tasks", "Open tasks ", " Open  tasks", "Open tasks.", "Open-tasks", "Archive"],
+                document.Views.Select(view => view.Name));
+            Assert.Equal(
+                [
+                    "Open tasks, view 1", "Open tasks , view 2", " Open  tasks, view 3", "Open tasks., view 4",
+                    "Open-tasks, view 5", "Archive",
+                ],
+                OpenPickerItems(picker).Select(item => item.GetName()));
+        }));
+
+    /// <summary>A base over one note whose views are <paramref name="views"/>
+    /// (YAML list items), loaded, rendered by a real BaseSurfaceView and
+    /// shown; <paramref name="body"/> reads its model and view picker.</summary>
+    private static void WithBaseViews(string views, Action<BaseDocumentViewModel, ComboBox> body)
+    {
+        using FixtureVault vault = FixtureVault.Create(1, "base-view-picker");
+        File.WriteAllText(
+            Path.Combine(vault.Root, "Views.base"),
+            "filters: 'file.ext == \"md\"'\nviews:\n" + views.Replace("\r\n", "\n", StringComparison.Ordinal) + "\n");
+        using VaultSession session = VaultSession.OpenFilesystem(vault.Root);
+        using (var cancel = new CancelToken())
+        {
+            session.ScanInitial(cancel);
+        }
+        var document = new BaseDocumentViewModel(session, "Views.base", _ => { }, synchronousForTests: true);
+        document.Load();
+        var surface = new BaseSurfaceView { Model = document };
+        var window = new Window
+        {
+            Content = surface,
+            Width = 800,
+            Height = 480,
+            ShowInTaskbar = false,
+            WindowStyle = WindowStyle.None,
+        };
+        window.Show();
+        try
+        {
+            window.UpdateLayout();
+            PumpedDispatcher.Drain();
+            body(document, surface.ViewPickerForTests);
+        }
+        finally
+        {
+            window.Close();
+            document.Shutdown();
+        }
+    }
+
+    /// <summary>The item peers the open picker's own peer holds — WPF's
+    /// item-peer cache included, never peers built by hand.</summary>
+    private static ItemAutomationPeer[] OpenPickerItems(ComboBox picker)
+    {
+        picker.IsDropDownOpen = true;
+        picker.UpdateLayout();
+        PumpedDispatcher.Drain();
+        AutomationPeer peer = UIElementAutomationPeer.CreatePeerForElement(picker);
+        peer.ResetChildrenCache();
+        return [.. (peer.GetChildren() ?? []).OfType<ItemAutomationPeer>()];
+    }
+
+    /// <summary>The name UIA gives a closed combo's selection: an item peer
+    /// the combo's own peer makes for it, through its throwaway
+    /// wrapper.</summary>
+    private static string ClosedSelectionName(ComboBox picker)
+    {
+        AutomationPeer peer = UIElementAutomationPeer.CreatePeerForElement(picker);
+        System.Reflection.MethodInfo create = typeof(ItemsControlAutomationPeer).GetMethod(
+            "CreateItemAutomationPeer",
+            System.Reflection.BindingFlags.Instance | System.Reflection.BindingFlags.NonPublic)!;
+        return ((ItemAutomationPeer)create.Invoke(peer, [picker.SelectedItem])!).GetName();
+    }
 
     /// <summary>Two equal warnings are two focusable texts, each read apart
     /// — not one peer between them (SiblingText).</summary>

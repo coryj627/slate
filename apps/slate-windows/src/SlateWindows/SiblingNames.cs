@@ -120,17 +120,17 @@ internal static class SiblingNames
     public static void SetPrefix(DependencyObject element, string? value) => element.SetValue(PrefixProperty, value);
 
     /// <summary>
-    /// The ONE comparison the rule reads names alike by (codex PR 3 round 5).
-    /// Speech carries neither case nor a string's encoding, so "FILE" and
-    /// "file", or "é" composed and decomposed, are the same name to a
-    /// listener. It is culture-INDEPENDENT: the current culture's case
-    /// folding is not speech's — under tr-TR it reports "FILE" and "file"
-    /// unequal, which left case variants bare on a Turkish machine. The
-    /// invariant culture's ignore-case comparison rather than the ordinal one,
-    /// because it also equates canonically equivalent strings and ignores
-    /// zero-width characters, both of which a reader speaks identically.
+    /// The ONE comparison the rule reads names alike by: two names read
+    /// alike exactly when their <see cref="SpeechKey"/>s are equal — its only
+    /// input (codex PR 3 rounds 5 and 6; owner decision OD-8). Speech carries
+    /// no case, no string encoding, no whitespace between words and, at a
+    /// reader's default level, little punctuation: "FILE" and "file", "café"
+    /// composed and decomposed, "Open tasks" and "Open tasks ." read alike.
+    /// Culture-independent: under tr-TR the current culture's folding split
+    /// "FILE" from "file". NamingComparesOnlyBySpeechKey (the census) holds
+    /// every other comparer out of naming code.
     /// </summary>
-    internal static StringComparer ReadAlike { get; } = StringComparer.InvariantCultureIgnoreCase;
+    internal static StringComparer ReadAlike { get; } = new SpeechKeyComparer();
 
     /// <summary>The container style a code-built host uses.</summary>
     internal static Style ContainerStyle(Type containerType)
@@ -161,9 +161,11 @@ internal static class SiblingNames
     /// runs over that spoken name, the final one included, and nothing is
     /// added to a name after the final pass (codex PR 3 round 5: a state
     /// appended after the rule re-created the duplicates it had removed).
-    /// Names are compared by <see cref="ReadAlike"/>. The identity starts as
-    /// the item's name — a blank one reads "{Noun} {n}", never nothing — and
-    /// grows only where siblings read alike:
+    /// Names are compared by their <see cref="SpeechKey"/>s — what
+    /// <see cref="ReadAlike"/> compares. The identity starts as the item's
+    /// name, verbatim — a silent one (nothing but whitespace, control or
+    /// format characters) reads "{Noun} {n}", never nothing — and grows only
+    /// where siblings read alike:
     /// <list type="number">
     /// <item>items whose names collide, or whose spoken names collide (a dirty
     /// "draft" beside a clean "draft, unsaved changes"), add their
@@ -175,9 +177,9 @@ internal static class SiblingNames
     /// taken back ("note, B/note.md, tab 2");</item>
     /// <item>the final pass: while spoken names still collide, each colliding
     /// item's identity becomes "{Noun} {n}". Two such names never read alike
-    /// — their n differ, and the ", " that joins a state ends the number — so
-    /// each pass settles at least one more item, and the pass ends with every
-    /// spoken name distinct.</item>
+    /// — their keys differ in the run that holds n, and the ", " that joins a
+    /// state ends it — so each pass settles at least one more item, and the
+    /// pass ends with every spoken name distinct.</item>
     /// </list>
     /// </summary>
     internal static string[] Compose(
@@ -196,41 +198,42 @@ internal static class SiblingNames
         string Ordinal(int index) => string.Create(CultureInfo.InvariantCulture, $"{capitalized} {index + 1}");
         string[] identity = new string[count];
         string[] spoken = new string[count];
-        void Speak(int index)
+        // Each name's key, kept beside it: a key is read once per change.
+        var identityKeys = new SpeechKey[count];
+        var spokenKeys = new SpeechKey[count];
+        void Identify(int index, string name)
         {
+            identity[index] = name;
+            identityKeys[index] = SpeechKey.Of(name);
             string? state = states is not null && index < states.Count ? states[index] : null;
-            spoken[index] = string.IsNullOrWhiteSpace(state)
-                ? $"{prefix}{identity[index]}"
-                : $"{prefix}{identity[index]}, {state}";
+            spoken[index] = SpeechKey.IsSilent(state)
+                ? $"{prefix}{name}"
+                : $"{prefix}{name}, {state}";
+            spokenKeys[index] = SpeechKey.Of(spoken[index]);
         }
         for (int index = 0; index < count; index++)
         {
-            identity[index] = string.IsNullOrWhiteSpace(names[index]) ? Ordinal(index) : names[index]!;
-            Speak(index);
+            Identify(index, SpeechKey.IsSilent(names[index]) ? Ordinal(index) : names[index]!);
         }
-        foreach (int index in Colliding(identity).Union(Colliding(spoken)).ToArray())
+        foreach (int index in Colliding(identityKeys).Union(Colliding(spokenKeys)).ToArray())
         {
-            if (index < distinguishers.Count && !string.IsNullOrWhiteSpace(distinguishers[index]))
+            if (index < distinguishers.Count && !SpeechKey.IsSilent(distinguishers[index]))
             {
-                identity[index] = $"{identity[index]}, {distinguishers[index]}";
-                Speak(index);
+                Identify(index, $"{identity[index]}, {distinguishers[index]}");
             }
         }
-        foreach (int index in Colliding(identity).Union(Colliding(spoken)).ToArray())
+        foreach (int index in Colliding(identityKeys).Union(Colliding(spokenKeys)).ToArray())
         {
-            identity[index] = string.Create(
-                CultureInfo.InvariantCulture, $"{identity[index]}, {noun} {index + 1}");
-            Speak(index);
+            Identify(index, string.Create(CultureInfo.InvariantCulture, $"{identity[index]}, {noun} {index + 1}"));
         }
         // The final pass. Ordinal names never read alike, so every colliding
         // group holds an item not yet its ordinal: each round settles at least
         // one more, and within count rounds no two spoken names collide.
-        for (int pass = 0; pass <= count && Colliding(spoken) is { Count: > 0 } colliding; pass++)
+        for (int pass = 0; pass <= count && Colliding(spokenKeys) is { Count: > 0 } colliding; pass++)
         {
             foreach (int index in colliding)
             {
-                identity[index] = Ordinal(index);
-                Speak(index);
+                Identify(index, Ordinal(index));
             }
         }
         return spoken;
@@ -266,14 +269,27 @@ internal static class SiblingNames
             : Compose([.. siblings.Select(name)], [.. siblings.Select(distinguisher)], noun)[index];
     }
 
-    private static List<int> Colliding(string[] names) =>
+    /// <summary>Every index whose key another index shares.</summary>
+    private static List<int> Colliding(SpeechKey[] keys) =>
         [
-            .. Enumerable.Range(0, names.Length)
-                .GroupBy(index => names[index], ReadAlike)
+            .. Enumerable.Range(0, keys.Length)
+                .GroupBy(index => keys[index])
                 .Where(group => group.Skip(1).Any())
                 .SelectMany(group => group)
                 .Order(),
         ];
+
+    /// <summary><see cref="ReadAlike"/>: two strings compare by their
+    /// <see cref="SpeechKey"/>s alone.</summary>
+    private sealed class SpeechKeyComparer : StringComparer
+    {
+        public override int Compare(string? x, string? y) =>
+            string.CompareOrdinal(SpeechKey.Of(x).Value, SpeechKey.Of(y).Value);
+
+        public override bool Equals(string? x, string? y) => SpeechKey.Of(x) == SpeechKey.Of(y);
+
+        public override int GetHashCode(string obj) => SpeechKey.Of(obj).GetHashCode();
+    }
 
     /// <summary>A host's own declaration makes it a scope, and so does a
     /// tree item's inherited one (it names its children); any other items

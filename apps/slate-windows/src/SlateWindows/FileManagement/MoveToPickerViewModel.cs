@@ -273,6 +273,22 @@ internal sealed class MoveToPickerViewModel : BindableBase
     public ICommand CancelCommand => _cancelCommand ??= new RelayCommand(
         _ => { if (!_retired) { _cancelled(); } }, _ => !_retired);
 
+    /// <summary>Each row's name among the rows it sits with, by the one
+    /// sibling rule — naming code, which NamingComparesOnlyBySpeechKey holds
+    /// to the rule's own comparison (the typed filter's match stays in
+    /// <see cref="RebuildRows"/>).</summary>
+    private static void SpeakAmongThemselves(List<MoveToRowViewModel> rows)
+    {
+        string[] spoken = SiblingNames.Compose(
+            [.. rows.Select(row => (string?)row.AccessibleName)],
+            [.. rows.Select(row => row.Place)],
+            "destination");
+        for (int index = 0; index < rows.Count; index++)
+        {
+            rows[index].SpokenName = spoken[index];
+        }
+    }
+
     private void RebuildRows(bool announceCount)
     {
         string filter = FilterText.Trim();
@@ -311,14 +327,7 @@ internal sealed class MoveToPickerViewModel : BindableBase
         // R-4 (#1246): each row's name among its siblings — the rule the
         // list's container style reads (SiblingNames), so the selection
         // speaks exactly what the list item reads.
-        string[] spoken = SiblingNames.Compose(
-            [.. rows.Select(row => (string?)row.AccessibleName)],
-            [.. rows.Select(row => row.Place)],
-            "destination");
-        for (int index = 0; index < rows.Count; index++)
-        {
-            rows[index].SpokenName = spoken[index];
-        }
+        SpeakAmongThemselves(rows);
 
         MoveToRowViewModel? previous = SelectedRow;
         // A loading picker can temporarily fall back to the pinned root before

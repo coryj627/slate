@@ -275,7 +275,8 @@ internal sealed class CanvasTableView : UserControl
                 // identity — the same text the row header carries.
                 // Unnamed, a row read its record dump, "CanvasTableRow {
                 // NodeId = grp-research, … GroupPath = System.String[] … }".
-                rowAutomationName: static row => ((CanvasTableRow)row).SpeakableName);
+                rowAutomationName: static row => ((CanvasTableRow)row).SpeakableName,
+                rowKey: static row => ((CanvasTableRow)row).NodeId);
         }
         finally
         {

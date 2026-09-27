@@ -173,10 +173,24 @@ public sealed class ItemContainerNameCensus
         Type itemType, string namePath, string? distinguisherPath, string noun) =>
         new(itemType, new SiblingRule(namePath, distinguisherPath, noun));
 
+    /// <summary>A sibling pin over an item type with VALUE equality, with the
+    /// reason no two of its items are ever equal (codex PR 3 round 6, OD-8):
+    /// WPF gives two equal items one automation peer.</summary>
+    private static ContainerNaming.Sibling NoTwoEqual(ContainerNaming.Sibling sibling, string reason) =>
+        sibling with { Rule = sibling.Rule with { NoEqualItems = reason } };
+
     /// <summary>A rule over <see cref="SiblingText"/> rows: strings that may
     /// repeat, each wrapped into its own item.</summary>
     private static SiblingRule Wrapped(string noun) =>
         new(nameof(SiblingText.Text), null, noun) { Wrapped = true };
+
+    /// <summary>Whether items of <paramref name="type"/> compare by VALUE —
+    /// a string, a struct or enum, a record, anything that overrides
+    /// <c>Equals</c> — so that two distinct items can be equal.</summary>
+    internal static bool ComparesByValue(Type type) =>
+        type.IsValueType
+        || type == typeof(string)
+        || type.GetMethod(nameof(Equals), [typeof(object)])?.DeclaringType != typeof(object);
 
     /// <summary>The sibling rule a pin declares, if any.</summary>
     internal static SiblingRule? RuleOf(ContainerNaming? naming) => naming switch
@@ -242,16 +256,23 @@ public sealed class ItemContainerNameCensus
                 typeof(CitationRowViewModel), nameof(CitationRowViewModel.AutomationName), null, "citation"),
             ["BibliographyNotices"] = new ContainerNaming.Layout(
                 "each notice's focusable text is named among its siblings", Wrapped("notice")),
-            ["QueriesSavedList"] = Sibling(typeof(SavedQuerySummary), nameof(SavedQuerySummary.Name), null, "query"),
+            ["QueriesSavedList"] = NoTwoEqual(
+                Sibling(typeof(SavedQuerySummary), nameof(SavedQuerySummary.Name), null, "query"),
+                "core keys saved queries by id: no two summaries share one"),
             ["QueriesBaseFilesList"] = Distinct(
                 typeof(BaseFileSummary), nameof(BaseFileSummary.Path), "a vault path names one file"),
-            ["QueriesDashboardsList"] = Sibling(typeof(DashboardSummary), nameof(DashboardSummary.Name), null, "dashboard"),
+            ["QueriesDashboardsList"] = NoTwoEqual(
+                Sibling(typeof(DashboardSummary), nameof(DashboardSummary.Name), null, "dashboard"),
+                "core keys dashboards by id: no two summaries share one"),
             ["RightPaneLeaves"] = Distinct(
                 typeof(WorkspaceLeafOption), nameof(WorkspaceLeafOption.Title),
                 "one row per leaf kind of WorkspaceViewModel.Leaves, each titled apart"),
-            ["QuickSwitcherResults"] = Sibling(
-                typeof(QuickSwitcherRowViewModel), nameof(QuickSwitcherRowViewModel.DisplayName),
-                nameof(QuickSwitcherRowViewModel.Path), "result"),
+            ["QuickSwitcherResults"] = NoTwoEqual(
+                Sibling(
+                    typeof(QuickSwitcherRowViewModel), nameof(QuickSwitcherRowViewModel.DisplayName),
+                    nameof(QuickSwitcherRowViewModel.Path), "result"),
+                "core ranks each file once, and each row carries its own match-span array, which record equality "
+                + "compares by reference"),
             ["SearchOverlayResults"] = Sibling(
                 typeof(SearchResultRowViewModel), nameof(SearchResultRowViewModel.AccessibleName),
                 nameof(SearchResultRowViewModel.Path), "result"),
@@ -275,7 +296,9 @@ public sealed class ItemContainerNameCensus
                 typeof(CitationField), nameof(CitationField.AutomationName),
                 "one row per citation field, each field labelled once"),
             ["FilesCitingList"] = Distinct(typeof(string), string.Empty, "a vault path names one file"),
-            ["DashboardEditorQueryPicker"] = Sibling(typeof(SavedQuerySummary), nameof(SavedQuerySummary.Name), null, "query"),
+            ["DashboardEditorQueryPicker"] = NoTwoEqual(
+                Sibling(typeof(SavedQuerySummary), nameof(SavedQuerySummary.Name), null, "query"),
+                "core keys saved queries by id: no two summaries share one"),
             ["DashboardEditorSections"] = Distinct(
                 typeof(DashboardEditorSection), nameof(DashboardEditorSection.AutomationName),
                 "each section's name carries its place, renumbered on every change (DashboardEditorViewModel)"),
@@ -291,9 +314,13 @@ public sealed class ItemContainerNameCensus
             ["MoveToList"] = Sibling(
                 typeof(MoveToRowViewModel), nameof(MoveToRowViewModel.AccessibleName),
                 nameof(MoveToRowViewModel.Place), "destination"),
-            ["CanvasCardPickerRows"] = Sibling(
-                typeof(CanvasCardPickerRow), nameof(CanvasCardPickerRow.Label), null, "card"),
-            ["CanvasPromptChoices"] = Sibling(typeof(CanvasPromptChoice), nameof(CanvasPromptChoice.Name), null, "choice"),
+            ["CanvasCardPickerRows"] = NoTwoEqual(
+                Sibling(typeof(CanvasCardPickerRow), nameof(CanvasCardPickerRow.Label), null, "card"),
+                "one row per card core orders (BuildCardPickerModel), keyed by its node id"),
+            ["CanvasPromptChoices"] = NoTwoEqual(
+                Sibling(typeof(CanvasPromptChoice), nameof(CanvasPromptChoice.Name), null, "choice"),
+                "within one prompt every choice carries its own value — a node id, an edge id, a colour preset — "
+                + "and at most one carries none (Cancel, No color)"),
 
             // --- authored XAML: WorkspaceTemplates.xaml ---
             ["WorkspaceTemplates.xaml#{Binding Items}"] = new ContainerNaming.Layout(
@@ -313,7 +340,11 @@ public sealed class ItemContainerNameCensus
                 "its panes are unnamed structural panes; each tab strip is its own sibling set"),
 
             // --- built in code (codex PR 3 round 1) ---
-            ["BaseViewPicker"] = Sibling(typeof(BaseViewSummary), nameof(BaseViewSummary.Name), null, "view"),
+            // A base may repeat a view definition (core warns
+            // DuplicateViewName): two equal records were ONE UIA item (codex
+            // PR 3 round 6), so each view is its own occurrence.
+            ["BaseViewPicker"] = Sibling(
+                typeof(ItemOccurrence<BaseViewSummary>), nameof(ItemOccurrence<BaseViewSummary>.Name), null, "view"),
             ["BaseWarningBanners"] = new ContainerNaming.Layout(
                 "each warning's focusable text is named among its siblings", Wrapped("warning")),
             ["BaseTabList"] = Sibling(
@@ -321,12 +352,16 @@ public sealed class ItemContainerNameCensus
                 nameof(BaseListItemViewModel.FilePath), "row"),
             ["CanvasWarningRows"] = new ContainerNaming.Sibling(typeof(SiblingText), Wrapped("warning")),
             ["ConnectionsDepth"] = Distinct(typeof(string), string.Empty, "the three depth tags are fixed and distinct"),
-            ["GraphInspectorGroupRing:"] = Sibling(
-                typeof(GraphRingStyleSpec), nameof(GraphRingStyleSpec.Title), null, "style"),
-            ["GraphInspectorGroupColour:"] = Sibling(
-                typeof(GraphColorTokenSpec), nameof(GraphColorTokenSpec.Title), null, "colour"),
-            ["{idRoot}Section{index}List"] = Sibling(
-                typeof(BasesRow), nameof(BasesRow.AudioDescription), nameof(BasesRow.FilePath), "row"),
+            ["GraphInspectorGroupRing:"] = NoTwoEqual(
+                Sibling(typeof(GraphRingStyleSpec), nameof(GraphRingStyleSpec.Title), null, "style"),
+                "core lists each ring style once (graph_config::ring_styles over GraphRingStyle::ALL)"),
+            ["GraphInspectorGroupColour:"] = NoTwoEqual(
+                Sibling(typeof(GraphColorTokenSpec), nameof(GraphColorTokenSpec.Title), null, "colour"),
+                "core lists each colour token once (graph_config::color_tokens over GraphColorToken::ALL)"),
+            ["{idRoot}Section{index}List"] = NoTwoEqual(
+                Sibling(typeof(BasesRow), nameof(BasesRow.AudioDescription), nameof(BasesRow.FilePath), "row"),
+                "one row per file (or per task of a file) of the result, and each row carries its own values "
+                + "array, which record equality compares by reference"),
             ["CanvasOutlineTree"] = Sibling(
                 typeof(CanvasOutlineRowViewModel), nameof(CanvasOutlineRowViewModel.Name), null, "item"),
             ["ConnectionsTree"] = Sibling(
@@ -388,6 +423,18 @@ public sealed class ItemContainerNameCensus
                 if (sibling.ItemType == typeof(SiblingText) && !sibling.Rule.Wrapped)
                 {
                     offenders.Add($"{label}: reads SiblingText rows under a rule not marked Wrapped");
+                }
+                // Occurrence identity (codex PR 3 round 6, OD-8): WPF keys an
+                // items host's peers by the item's own equality, so two EQUAL
+                // items are one peer — the list shows two, the reader reaches
+                // one. An item type with value equality is wrapped
+                // (ItemOccurrence, SiblingText), or the pin says why no two of
+                // its items are ever equal.
+                if (ComparesByValue(sibling.ItemType) && sibling.Rule.NoEqualItems.Length == 0)
+                {
+                    offenders.Add(
+                        $"{label}: {sibling.ItemType.Name} compares by value, and two equal items are ONE automation "
+                        + "peer — bind occurrences (ItemOccurrence) or state why no two are ever equal (NoTwoEqual)");
                 }
             }
             // Two EQUAL items are one peer (WPF keys item peers by item):
@@ -718,10 +765,12 @@ public sealed class ItemContainerNameCensus
     }
 
     /// <summary>R-4: every <c>AccessibleDataGrid.Bind</c> call passes
-    /// <c>rowAutomationName</c>, and the delegate's body is the row identity
-    /// pinned for its caller (codex PR 3 round 1: a present-but-wrong
-    /// identity, a literal or the whole audio description, must fail as a
-    /// missing one does). Calls are BOUND, not matched by spelling (three
+    /// <c>rowAutomationName</c> and <c>rowKey</c>, and each delegate's body is
+    /// the row identity, and the stable row key, pinned for its caller (codex
+    /// PR 3 round 1: a present-but-wrong identity, a literal or the whole
+    /// audio description, must fail as a missing one does; round 6 and OD-8:
+    /// a key is the row's own — a file path, a node, a citation key, a source
+    /// row — never its position, which an external sort changes). Calls are BOUND, not matched by spelling (three
     /// navigators declare a Bind of their own; the bibliography and
     /// bulk-rename grids are x:Name fields), and the GridConformanceHost
     /// fixture must model the rule too. No bind is exempt (codex PR 3 round
@@ -730,16 +779,24 @@ public sealed class ItemContainerNameCensus
     [Fact]
     public void EveryGridBindNamesItsRows()
     {
+        const string BaseRow = "((BaseGridRowViewModel)row).FileName | ((BaseGridRowViewModel)row).RowKey";
         var expected = new Dictionary<string, List<string>>(StringComparer.Ordinal)
         {
-            ["Bases/BaseSurfaceView.cs"] = ["((BaseGridRowViewModel)row).FileName", "((BaseGridRowViewModel)row).FileName"],
-            ["Bases/DashboardSurfaceView.cs"] = ["((BaseGridRowViewModel)row).FileName"],
-            ["Canvas/CanvasTableView.cs"] = ["((CanvasTableRow)row).SpeakableName"],
-            ["Graph/GraphTableView.cs"] = ["model.RowName((GraphTableRow)row)"],
-            ["MainWindow.Citations.cs"] = ["((BibliographyRowViewModel)row).TitleLine", "((UnresolvedRowViewModel)row).Key"],
-            ["MainWindow.Properties.cs"] = ["((BulkRenameViewModel.PreviewRow)row).Path"],
-            ["Reading/ReadingTableGrid.cs"] = ["CellText(row, 0)"],
-            ["tools/GridConformanceHost/Program.cs"] = ["((FixtureRow)row).Name"],
+            ["Bases/BaseSurfaceView.cs"] = [BaseRow, BaseRow],
+            ["Bases/DashboardSurfaceView.cs"] = [BaseRow],
+            ["Canvas/CanvasTableView.cs"] = ["((CanvasTableRow)row).SpeakableName | ((CanvasTableRow)row).NodeId"],
+            ["Graph/GraphTableView.cs"] = ["model.RowName((GraphTableRow)row) | GraphDocumentViewModel.RowKey((GraphTableRow)row)"],
+            ["MainWindow.Citations.cs"] =
+            [
+                "((BibliographyRowViewModel)row).TitleLine | ((BibliographyRowViewModel)row).Key",
+                "((UnresolvedRowViewModel)row).Key | ((UnresolvedRowViewModel)row).Path",
+            ],
+            ["MainWindow.Properties.cs"] = ["((BulkRenameViewModel.PreviewRow)row).Path | ((BulkRenameViewModel.PreviewRow)row).Path"],
+            ["Reading/ReadingTableGrid.cs"] = ["CellText(row, 0) | SourceRowKey(sourceRows[row])"],
+            ["tools/GridConformanceHost/Program.cs"] =
+            [
+                "((FixtureRow)row).Name | string.Create(CultureInfo.InvariantCulture, $\"row {((FixtureRow)row).Index + 1}\")",
+            ],
         };
         string hostPath = Path.Combine(
             SourceText.RepoRoot(), "apps", "slate-windows", "tools",
@@ -786,10 +843,16 @@ public sealed class ItemContainerNameCensus
                     offenders.Add($"{file}:{line}: rowAutomationName is not an expression lambda the census can read");
                     continue;
                 }
-                string identity = body.NormalizeWhitespace().ToFullString();
-                if (!expected.TryGetValue(file, out List<string>? pinned) || !pinned.Remove(identity))
+                ArgumentSyntax? key = ArgumentFor(invocation, method, "rowKey");
+                if (key?.Expression is not LambdaExpressionSyntax { ExpressionBody: { } keyBody })
                 {
-                    offenders.Add($"{file}:{line}: rowAutomationName reads `{identity}`, which is not the identity pinned for this caller");
+                    offenders.Add($"{file}:{line}: rowKey is missing or not an expression lambda the census can read");
+                    continue;
+                }
+                string pair = body.NormalizeWhitespace().ToFullString() + " | " + keyBody.NormalizeWhitespace().ToFullString();
+                if (!expected.TryGetValue(file, out List<string>? pinned) || !pinned.Remove(pair))
+                {
+                    offenders.Add($"{file}:{line}: the row identity and key read `{pair}`, which is not the pair pinned for this caller");
                     continue;
                 }
                 named++;
@@ -797,7 +860,7 @@ public sealed class ItemContainerNameCensus
         }
         foreach ((string file, List<string> unused) in expected.Where(pair => pair.Value.Count > 0))
         {
-            offenders.Add($"{file}: pinned identities no Bind reads any more: {string.Join(", ", unused)}");
+            offenders.Add($"{file}: pinned identities and keys no Bind reads any more: {string.Join(", ", unused)}");
         }
 
         Assert.True(named + offenders.Count >= 10, $"only {named + offenders.Count} row-bearing grid binds found — the scrape is broken");
@@ -1016,6 +1079,171 @@ public sealed class ItemContainerNameCensus
         }
         return current.Parent is BinaryExpressionSyntax { RawKind: (int)SyntaxKind.AddExpression } or InterpolationSyntax;
     }
+
+    /// <summary>
+    /// Codex PR 3 round 6, owner decision OD-8 — speech identity: whether two
+    /// sibling names read alike is decided in ONE place, <see cref="SpeechKey"/>,
+    /// through <see cref="SiblingNames.ReadAlike"/>. Naming code — the
+    /// SiblingNames class, and every member that composes sibling names (a
+    /// call to <c>SiblingNames.Compose</c> or <c>SpokenAmong</c>) — holds no
+    /// other comparer: no culture or ignore-case <c>StringComparer</c> or
+    /// <c>StringComparison</c>, no <c>string.Compare</c> or
+    /// <c>CompareInfo</c>, no equality over a case-folded, normalized or
+    /// trimmed string, and no grouping, set, lookup or membership test over
+    /// strings but by ReadAlike — or, for an exact identity such as a path or
+    /// a key, an explicit <c>StringComparer.Ordinal</c>. ReadAlike's own
+    /// comparer is the comparison, and exempt. (Bound syntax, as the other
+    /// facts read it; a comparison written some other way — a hand-rolled
+    /// loop over characters — is beyond what a scan can prove, and the
+    /// hosted facts pin the names such a loop would produce.)
+    /// </summary>
+    [Fact]
+    public void NamingComparesOnlyBySpeechKey()
+    {
+        var offenders = new List<string>();
+        var scanned = new List<string>();
+        foreach ((string file, CSharpSource source) in ShellCompilation.Sources)
+        {
+            SemanticModel model = ShellCompilation.ModelFor(source);
+            var scopes = new List<SyntaxNode>();
+            scopes.AddRange(source.Root.DescendantNodes()
+                .OfType<ClassDeclarationSyntax>()
+                .Where(type => type.Identifier.ValueText == nameof(SiblingNames)));
+            foreach (InvocationExpressionSyntax call in source.Root.DescendantNodes().OfType<InvocationExpressionSyntax>())
+            {
+                if (InvokedName(call) is not (nameof(SiblingNames.Compose) or nameof(SiblingNames.SpokenAmong))
+                    || model.GetSymbolInfo(call).Symbol is not IMethodSymbol { ContainingType.Name: nameof(SiblingNames) }
+                    || call.Ancestors().OfType<MemberDeclarationSyntax>()
+                        .FirstOrDefault(member => member is not BaseTypeDeclarationSyntax) is not { } member
+                    || scopes.Any(scope => scope.Contains(member)))
+                {
+                    continue;
+                }
+                scopes.Add(member);
+            }
+            foreach (SyntaxNode scope in scopes)
+            {
+                scanned.Add($"{file}:{scope.GetLocation().GetLineSpan().StartLinePosition.Line + 1}");
+                foreach (SyntaxNode node in scope.DescendantNodes())
+                {
+                    if (node.Ancestors().OfType<ClassDeclarationSyntax>()
+                        .Any(type => type.Identifier.ValueText == "SpeechKeyComparer"))
+                    {
+                        continue;
+                    }
+                    if (SpeechComparerProblem(node, model) is { } problem)
+                    {
+                        offenders.Add($"{Site(file, node)}: {problem} (`{node}`)");
+                    }
+                }
+            }
+        }
+        Assert.True(scanned.Count >= 7, $"only {scanned.Count} naming scopes found — the scan is broken: {string.Join(", ", scanned)}");
+        Assert.True(
+            offenders.Count == 0,
+            "naming code that compares names by something other than their SpeechKey (SiblingNames.ReadAlike):\n  "
+            + string.Join("\n  ", offenders));
+    }
+
+    /// <summary>Why <paramref name="node"/>, in naming code, compares names
+    /// by something other than the rule's comparison; null when it does
+    /// not.</summary>
+    private static string? SpeechComparerProblem(SyntaxNode node, SemanticModel model)
+    {
+        switch (node)
+        {
+            case IdentifierNameSyntax identifier
+                when model.GetSymbolInfo(identifier).Symbol is { ContainingType: { } owner } symbol
+                    && owner.ToDisplayString() is "System.StringComparer" or "System.StringComparison"
+                    && symbol.Name != "Ordinal":
+                return $"{owner.Name}.{symbol.Name} is a comparison of its own";
+            case InvocationExpressionSyntax invocation
+                when model.GetSymbolInfo(invocation).Symbol is IMethodSymbol method:
+                if ((method.ContainingType.SpecialType == SpecialType.System_String
+                        && method.Name is "Compare" or "CompareOrdinal" or "CompareTo")
+                    || method.ContainingType.ToDisplayString() == "System.Globalization.CompareInfo")
+                {
+                    return $"{method.ContainingType.Name}.{method.Name} is a comparison of its own";
+                }
+                if (method.Name == nameof(string.Equals)
+                    && method.ContainingType.SpecialType == SpecialType.System_String
+                    && invocation.ArgumentList.Arguments.Concat(
+                        invocation.Expression is MemberAccessExpressionSyntax receiver
+                            ? [SyntaxFactory.Argument(receiver.Expression)]
+                            : []).Any(argument => IsFolded(argument.Expression, model)))
+                {
+                    return "an equality over a folded, normalized or trimmed string is a comparison of its own";
+                }
+                if (method.ContainingType.ToDisplayString() == "System.Linq.Enumerable"
+                    && ComparedType(method) is { SpecialType: SpecialType.System_String }
+                    && !invocation.ArgumentList.Arguments.Any(argument => IsRuleComparer(argument.Expression, model)))
+                {
+                    return $"{method.Name} over strings with no comparer but the rule's (SiblingNames.ReadAlike) "
+                        + "— or StringComparer.Ordinal, for an exact identity";
+                }
+                return null;
+            case BaseObjectCreationExpressionSyntax creation
+                when model.GetTypeInfo(creation).Type is INamedTypeSymbol { IsGenericType: true } created
+                    && created.OriginalDefinition.ToDisplayString() is
+                        "System.Collections.Generic.HashSet<T>" or "System.Collections.Generic.Dictionary<TKey, TValue>"
+                        or "System.Collections.Generic.SortedSet<T>" or "System.Collections.Generic.SortedDictionary<TKey, TValue>"
+                        or "System.Collections.Concurrent.ConcurrentDictionary<TKey, TValue>"
+                    && created.TypeArguments[0].SpecialType == SpecialType.System_String
+                    && !(creation.ArgumentList?.Arguments.Any(argument => IsRuleComparer(argument.Expression, model)) ?? false):
+                return $"a {created.Name} keyed by strings with no comparer but the rule's (SiblingNames.ReadAlike) "
+                    + "— or StringComparer.Ordinal, for an exact identity";
+            case BinaryExpressionSyntax binary
+                when binary.RawKind is (int)SyntaxKind.EqualsExpression or (int)SyntaxKind.NotEqualsExpression
+                    && (IsFolded(binary.Left, model) || IsFolded(binary.Right, model)):
+                return "an equality over a folded, normalized or trimmed string is a comparison of its own";
+            default:
+                return null;
+        }
+    }
+
+    /// <summary>The type a LINQ operator compares: the key a grouping,
+    /// lookup, join or keyed distinct takes, else the element.</summary>
+    private static ITypeSymbol? ComparedType(IMethodSymbol method)
+    {
+        IMethodSymbol original = method.ReducedFrom ?? method;
+        ITypeSymbol[] arguments = [.. (method.ReducedFrom is null ? method : method.GetConstructedReducedFrom() ?? method).TypeArguments];
+        return original.Name switch
+        {
+            "GroupBy" or "ToLookup" or "ToDictionary" or "DistinctBy" or "UnionBy" or "IntersectBy" or "ExceptBy"
+                or "CountBy" or "AggregateBy" => arguments.Length > 1 ? arguments[1] : null,
+            "Join" or "GroupJoin" => arguments.Length > 2 ? arguments[2] : null,
+            "Distinct" or "ToHashSet" or "Contains" or "Union" or "Intersect" or "Except" or "SequenceEqual"
+                or "Order" or "OrderBy" => arguments.Length > 0 && original.Name is not "OrderBy" ? arguments[0] : null,
+            _ => null,
+        };
+    }
+
+    /// <summary>Whether an argument is the rule's comparison, or the exact
+    /// identity an ordinal comparison is.</summary>
+    private static bool IsRuleComparer(ExpressionSyntax expression, SemanticModel model) =>
+        model.GetSymbolInfo(expression).Symbol is IPropertySymbol property
+        && ((property.Name == nameof(SiblingNames.ReadAlike) && property.ContainingType.Name == nameof(SiblingNames))
+            || (property.Name == "Ordinal" && property.ContainingType.ToDisplayString() == "System.StringComparer"));
+
+    /// <summary>Whether an expression is a string case-folded, normalized or
+    /// trimmed — a second notion of alike when it is compared.</summary>
+    private static bool IsFolded(ExpressionSyntax expression, SemanticModel model) =>
+        expression is InvocationExpressionSyntax invocation
+        && model.GetSymbolInfo(invocation).Symbol is IMethodSymbol
+        {
+            ContainingType.SpecialType: SpecialType.System_String,
+            Name: "ToLower" or "ToUpper" or "ToLowerInvariant" or "ToUpperInvariant" or "Normalize" or "Trim"
+                or "TrimStart" or "TrimEnd",
+        };
+
+    /// <summary>The name an invocation calls, however it is spelled.</summary>
+    private static string? InvokedName(InvocationExpressionSyntax invocation) =>
+        invocation.Expression switch
+        {
+            MemberAccessExpressionSyntax access => access.Name.Identifier.ValueText,
+            SimpleNameSyntax simple => simple.Identifier.ValueText,
+            _ => null,
+        };
 
     // ---------------------------------------------------------------- XAML
 
@@ -1506,6 +1734,20 @@ public sealed class ItemContainerNameCensus
                 {
                     yield return $"{site} `{label}`: {wrap}";
                 }
+                // The pin's item type is what the host really holds (codex PR
+                // 3 round 6): a view picker pinned to occurrences must bind
+                // occurrences, not the records they wrap.
+                // (A list typed object — the Base list's headers and rows — is
+                // taken at the pin's word only while that type has reference
+                // identity: its value equality is what the pin must not hide.)
+                if (expected is ContainerNaming.Sibling pinnedSibling
+                    && ElementTypeName(model.GetTypeInfo(assignment.Right).Type) is var held
+                    && held != CSharpName(pinnedSibling.ItemType)
+                    && !(held == "System.Object" && !ComparesByValue(pinnedSibling.ItemType)))
+                {
+                    yield return $"{site} `{label}`: its ItemsSource (`{assignment.Right}`) holds {held ?? "(an unreadable element type)"}, "
+                        + $"but the pin names {CSharpName(pinnedSibling.ItemType)}";
+                }
                 ITypeSymbol? type = creation is not null
                     ? model.GetTypeInfo(creation).Type
                     : (host as IFieldSymbol)?.Type ?? (host as ILocalSymbol)?.Type;
@@ -1533,6 +1775,39 @@ public sealed class ItemContainerNameCensus
             }
         }
     }
+
+    /// <summary>The element type an ItemsSource expression's type holds (an
+    /// array's, or its <c>IEnumerable&lt;T&gt;</c>'s), as C# displays it;
+    /// null when the census cannot read one.</summary>
+    private static string? ElementTypeName(ITypeSymbol? type)
+    {
+        ITypeSymbol? element = type switch
+        {
+            IArrayTypeSymbol array => array.ElementType,
+            INamedTypeSymbol named => named.AllInterfaces
+                .Prepend(named)
+                .FirstOrDefault(candidate => candidate.OriginalDefinition.ToDisplayString()
+                    == "System.Collections.Generic.IEnumerable<T>")
+                ?.TypeArguments[0],
+            _ => null,
+        };
+        return element?.WithNullableAnnotation(NullableAnnotation.NotAnnotated).ToDisplayString(ClrDisplay);
+    }
+
+    /// <summary>Namespaces and containing types in full, generics with their
+    /// arguments, and no keywords (<c>System.String</c>, not
+    /// <c>string</c>) — the shape <see cref="CSharpName"/> gives a CLR
+    /// type.</summary>
+    private static readonly SymbolDisplayFormat ClrDisplay = new(
+        typeQualificationStyle: SymbolDisplayTypeQualificationStyle.NameAndContainingTypesAndNamespaces,
+        genericsOptions: SymbolDisplayGenericsOptions.IncludeTypeParameters);
+
+    /// <summary>A CLR type as C# displays it: <c>A.B&lt;C.D&gt;</c>.</summary>
+    private static string CSharpName(Type type) =>
+        type.IsGenericType
+            ? $"{type.Namespace}.{type.Name[..type.Name.IndexOf('`', StringComparison.Ordinal)]}"
+                + $"<{string.Join(", ", type.GetGenericArguments().Select(CSharpName))}>"
+            : (type.FullName ?? type.Name).Replace('+', '.');
 
     /// <summary>Why an ItemsSource assignment to a host that reads
     /// SiblingText rows does not wrap its strings, or null.</summary>

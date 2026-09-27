@@ -136,6 +136,54 @@ public sealed class SharedNameTests
             names.Order(StringComparer.Ordinal)));
     });
 
+    /// <summary>Codex PR 3 round 6, owner decision OD-8 — occurrence
+    /// identity, found by the round's scope probe: Assign Shortcut puts one
+    /// note in two slots, and two value-equal shortcut records were ONE item
+    /// to UIA (WPF keys item peers by equality) — and Remove Shortcut took the
+    /// first of the two, not the selected one. Each shortcut is its own
+    /// occurrence: two slots are two items, read apart, and removing the
+    /// second removes the second.</summary>
+    [Fact]
+    public void OneNoteInTwoShortcutSlotsIsTwoItems() => RunSta(() =>
+    {
+        using FixtureVault fixture = FixtureVault.Create(0, "shortcut-occurrences");
+        File.WriteAllText(Path.Combine(fixture.Root, "note.md"), "plain body\n");
+        using VaultSession session = VaultSession.OpenFilesystem(fixture.Root);
+        using (var cancel = new CancelToken())
+        {
+            session.ScanInitial(cancel);
+        }
+        var inline = new InlineContext();
+        var sidebar = new FilesSidebarViewModel(
+            session,
+            _ => { },
+            vaultRoot: fixture.Root,
+            localAppDataRoot: Path.Combine(fixture.Root, "device-state"),
+            filterUiContext: inline,
+            treeUiContext: inline,
+            treeWorker: (work, _) => { work(); return Task.CompletedTask; },
+            filterWorker: (work, _) => { work(); return Task.CompletedTask; },
+            filterDelay: _ => Task.CompletedTask);
+        Assert.True(
+            PumpedDispatcher.PumpUntil(() => sidebar.TreeRefreshCompletion.IsCompleted, TimeSpan.FromSeconds(10)),
+            "the sidebar's first tree load did not land");
+        sidebar.SelectedNode = sidebar.RootNodes.Single(node => node.Path == "note.md");
+        sidebar.AssignShortcut(1);
+        sidebar.AssignShortcut(2);
+        Assert.Equal(2, sidebar.Shortcuts.Count);
+        SidebarShortcutViewModel first = sidebar.Shortcuts[0];
+        SidebarShortcutViewModel second = sidebar.Shortcuts[1];
+        Assert.NotSame(first, second);
+
+        HostedNames("SidebarShortcuts", sidebar, names => Assert.Equal(
+            ["note.md, file shortcut, note.md, shortcut 1", "note.md, file shortcut, note.md, shortcut 2"],
+            names));
+
+        sidebar.SelectedShortcut = second;
+        sidebar.RemoveShortcutCommand.Execute(null);
+        Assert.Same(first, Assert.Single(sidebar.Shortcuts));
+    });
+
     /// <summary>Filters <paramref name="sidebar"/> once its first tree load
     /// has landed. That load (the constructor's Refresh) yields to the
     /// thread pool, and with these facts' inline contexts it publishes there

@@ -155,6 +155,80 @@ public sealed class SiblingNamesTests
         Assert.Equal(["note, A", "no​te, B"], SiblingNames.Compose(["note", "no​te"], ["A", "B"], "item"));
     }
 
+    /// <summary>Codex PR 3 round 6, owner decision OD-8 — speech identity: a
+    /// name's <see cref="SpeechKey"/> is what a reader speaks of it, its
+    /// letter and digit runs after NFKC and invariant case folding, so
+    /// whitespace of any kind, punctuation, a ligature, a fullwidth digit, a
+    /// soft hyphen and a zero-width character change nothing, and a letter
+    /// run meeting a digit run is two words.</summary>
+    [Theory]
+    [InlineData("Open tasks", "Open tasks ", "trailing space")]
+    [InlineData("Open tasks", " Open tasks", "leading space")]
+    [InlineData("Open tasks", "Open  tasks", "repeated space")]
+    [InlineData("Open tasks", "Open\ttasks", "tab")]
+    [InlineData("Open tasks", "Open\u00A0tasks", "no-break space")]
+    [InlineData("Open tasks", "Open\u2003tasks", "em space")]
+    [InlineData("Open tasks", "Open tasks\u3000", "trailing ideographic space")]
+    [InlineData("Open tasks", "Open tasks.", "full stop")]
+    [InlineData("Open tasks", "\u201COpen tasks\u201D", "quotation marks")]
+    [InlineData("Open tasks", "Open, tasks!", "comma and exclamation")]
+    [InlineData("note a", "note-a", "hyphen")]
+    [InlineData("note a", "note_a", "underscore")]
+    [InlineData("note a", "(note) [a]", "brackets")]
+    [InlineData("Note 1", "Note1", "a letter run meeting a digit run")]
+    [InlineData("Note 1", "Note \u0661", "an Arabic-Indic digit")]
+    [InlineData("file 2", "\uFB01le \uFF12", "a ligature and a fullwidth digit")]
+    [InlineData("note", "no\u00ADte", "soft hyphen")]
+    [InlineData("note", "no\u200Bte", "zero-width space")]
+    [InlineData("caf\u00E9", "cafe\u0301", "composed and decomposed")]
+    [InlineData("FILE", "file", "case")]
+    public void NamesThatReadAlikeShareASpeechKey(string name, string twin, string shape)
+    {
+        Assert.True(
+            SpeechKey.Of(name) == SpeechKey.Of(twin) && SiblingNames.ReadAlike.Equals(name, twin),
+            $"{shape}: \"{SpeechKey.Of(name)}\" and \"{SpeechKey.Of(twin)}\"");
+        Assert.Equal(SiblingNames.ReadAlike.GetHashCode(name), SiblingNames.ReadAlike.GetHashCode(twin));
+    }
+
+    /// <summary>...and names a reader speaks apart keep their keys apart: the
+    /// key is coarse, never blind — a combining mark stays with its letter (a
+    /// Devanagari vowel sign, a diaeresis). Two scripts whose letters look
+    /// alike (Latin "A", Greek "\u0391") stay apart too: AR-34.</summary>
+    [Theory]
+    [InlineData("note", "notes")]
+    [InlineData("Note 1", "Note 12")]
+    [InlineData("v1.2", "v12")]
+    [InlineData("draft", "draft 2")]
+    [InlineData("na\u00EFve", "naive")]
+    [InlineData("\u0915\u093F", "\u0915\u093E")]
+    [InlineData("\u0391", "A")]
+    public void NamesSpokenApartKeepTheirKeysApart(string name, string other) =>
+        Assert.NotEqual(SpeechKey.Of(name), SpeechKey.Of(other));
+
+    /// <summary>The rule over those shapes: two names that read alike take
+    /// their places, and each keeps its own spelling — the emitted label is
+    /// verbatim; only the comparison is by key.</summary>
+    [Theory]
+    [InlineData("Open tasks", "Open tasks ")]
+    [InlineData("Open tasks", " Open  tasks")]
+    [InlineData("Open tasks", "Open\ttasks")]
+    [InlineData("Open tasks", "Open tasks\u3000")]
+    [InlineData("Open tasks", "Open tasks.")]
+    [InlineData("note a", "note-a")]
+    [InlineData("Note 1", "Note1")]
+    public void NamesThatReadAlikeTakeTheirPlacesVerbatim(string name, string twin) =>
+        Assert.Equal(
+            [$"{name}, view 1", $"{twin}, view 2"],
+            SiblingNames.Compose([name, twin], [], "view"));
+
+    /// <summary>A name that says nothing — only whitespace, control or format
+    /// characters — is no name: it reads its ordinal.</summary>
+    [Fact]
+    public void ASilentNameIsNoName() =>
+        Assert.Equal(
+            ["View 1", "View 2", "View 3", "Archive"],
+            SiblingNames.Compose(["\u200B", "\u3000", "\t\u00AD", "Archive"], [], "view"));
+
     /// <summary>
     /// The closing fact of codex PR 3 round 5: whatever the names,
     /// distinguishers, states and prefix — every pair of a pool of
@@ -173,6 +247,10 @@ public sealed class SiblingNamesTests
             "draft, missing from disk, unsaved changes", "draft, A", "draft, A, item 1", "draft, item 2",
             "draft, A, unsaved changes", "Item 1", "item 2", "Item 1, unsaved changes", string.Empty, " ",
             "FILE", "file", "café", "café", "Recent search: draft",
+            // Codex PR 3 round 6: whitespace and punctuation a reader does
+            // not speak.
+            "draft ", " draft", "dra  ft", "draft.", "\u201Cdraft\u201D", "draft-a", "draft a", "draft1", "draft 1",
+            "draft, unsaved changes.", "Item 1.", "Item1",
         ];
         string?[] distinguishers = [null, "A", "a", "B"];
         string?[] states = [null, "unsaved changes", "missing from disk", "missing from disk, unsaved changes"];

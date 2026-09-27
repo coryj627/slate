@@ -300,7 +300,8 @@ public partial class MainWindow
                 ? footerText
                 : PropertyPhrase.BulkRenameEmptyState,
             accessibilityLabel: "Rename preview",
-            rowAutomationName: row => ((BulkRenameViewModel.PreviewRow)row).Path);
+            rowAutomationName: row => ((BulkRenameViewModel.PreviewRow)row).Path,
+            rowKey: static row => ((BulkRenameViewModel.PreviewRow)row).Path);
 
     private void AddPropertyAdd_Click(object sender, RoutedEventArgs e) =>
         _ = _observedWorkspace?.AddPropertySheet?.Add();

@@ -40,6 +40,10 @@ internal sealed class BaseSurfaceView : UserControl
 
     private readonly TextBlock _title;
     private readonly ComboBox _viewPicker;
+
+    /// <summary>The views the picker's occurrences were built from: a
+    /// re-render with the same list keeps them (and the picker's state).</summary>
+    private IReadOnlyList<BaseViewSummary>? _pickedViews;
     private readonly TextBlock _countReadout;
     private readonly TextBox _quickFilter;
     private readonly Button _refresh;
@@ -71,7 +75,7 @@ internal sealed class BaseSurfaceView : UserControl
             Margin = new Thickness(12, 0, 0, 0),
             MinWidth = 120,
             VerticalAlignment = VerticalAlignment.Center,
-            DisplayMemberPath = nameof(BaseViewSummary.Name),
+            DisplayMemberPath = nameof(ItemOccurrence<BaseViewSummary>.Name),
             // W7-7 PR 3 (#1246, R-4): DisplayMemberPath templates the text
             // only; NVDA reads a combo's value from the selected item's
             // name, which was the BaseViewSummary record's dump.
@@ -80,7 +84,7 @@ internal sealed class BaseSurfaceView : UserControl
         AutomationProperties.SetAutomationId(_viewPicker, "BaseViewPicker");
         // R-4 (#1246; the spec review, round 21): a base may name two
         // views alike (core warns DuplicateViewName).
-        SiblingNames.SetNamePath(_viewPicker, nameof(BaseViewSummary.Name));
+        SiblingNames.SetNamePath(_viewPicker, nameof(ItemOccurrence<BaseViewSummary>.Name));
         SiblingNames.SetNoun(_viewPicker, "view");
         AutomationProperties.SetName(_viewPicker, "Base view");
         AutomationProperties.SetHelpText(
@@ -528,7 +532,16 @@ internal sealed class BaseSurfaceView : UserControl
         _synchronizingPicker = true;
         try
         {
-            _viewPicker.ItemsSource = model.Views;
+            // R-4 (#1246; codex PR 3 round 6, OD-8): each view is its own
+            // occurrence — a base may repeat a view definition, and two
+            // value-equal records are ONE item to UIA (WPF keys item peers by
+            // equality). Built once per list of views, so a re-render keeps
+            // the picker as it is; selection maps by index.
+            if (!ReferenceEquals(_pickedViews, model.Views))
+            {
+                _pickedViews = model.Views;
+                _viewPicker.ItemsSource = ItemOccurrence.Of(model.Views, view => view.Name);
+            }
             _viewPicker.SelectedIndex =
                 model.Views.Count > 0 ? model.ActiveViewIndex : -1;
             _viewPicker.Visibility = model.Views.Count > 1
@@ -724,7 +737,8 @@ internal sealed class BaseSurfaceView : UserControl
                     ((BaseGridRowViewModel)row).AudioDescription,
                 // R-4 (#1246): unnamed, a row read
                 // "SlateWindows.Bases.BaseGridRowViewModel, data item".
-                rowAutomationName: static row => ((BaseGridRowViewModel)row).FileName);
+                rowAutomationName: static row => ((BaseGridRowViewModel)row).FileName,
+                rowKey: static row => ((BaseGridRowViewModel)row).RowKey);
             _grid.SetSortIndicator(model.SortState);
             _grid.CurrentRowChanged -= OnCurrentRowChanged;
             _grid.CurrentRowChanged += OnCurrentRowChanged;
@@ -782,6 +796,7 @@ internal sealed class BaseSurfaceView : UserControl
             rowAudioDescription: static row =>
                 ((BaseGridRowViewModel)row).AudioDescription,
             rowAutomationName: static row => ((BaseGridRowViewModel)row).FileName,
+            rowKey: static row => ((BaseGridRowViewModel)row).RowKey,
             rowActions: rowActions,
             // No exportProducer: export/copy route through the menu
             // commands, which own the C14 scope prompt and compose off
@@ -1200,6 +1215,14 @@ internal sealed class BaseGridRowViewModel
     /// R-4): the note's file name — core's <c>file.name</c>, extension
     /// included.</summary>
     public string FileName => System.IO.Path.GetFileName(Row.FilePath);
+
+    /// <summary>The row's stable key (W7-7 PR 3, #1246, R-4; codex PR 3
+    /// round 6, OD-8): the note's vault path — with, for a task row, the
+    /// task's place in its note — so two rows of one file name read their
+    /// paths, whatever order core returns them in.</summary>
+    public string RowKey => Row.TaskOrdinal is { } task
+        ? string.Create(System.Globalization.CultureInfo.InvariantCulture, $"{Row.FilePath}, task {task + 1}")
+        : Row.FilePath;
 }
 
 /// <summary>The mac BaseSummaryFormatter twin: custom summary cells,

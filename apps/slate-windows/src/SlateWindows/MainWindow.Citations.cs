@@ -465,7 +465,8 @@ public partial class MainWindow
             rowAudioDescription: row => ((BibliographyRowViewModel)row).RowDescription,
             rowActions: rowActions,
             rowActivated: rowActivated,
-            rowAutomationName: row => ((BibliographyRowViewModel)row).TitleLine);
+            rowAutomationName: row => ((BibliographyRowViewModel)row).TitleLine,
+            rowKey: static row => ((BibliographyRowViewModel)row).Key);
 
     private void BindBibliographyUnresolvedGrid()
     {
@@ -489,7 +490,8 @@ public partial class MainWindow
             summary: summary,
             accessibilityLabel: CitationPhrase.SegmentUnresolved,
             rowAudioDescription: row => ((UnresolvedRowViewModel)row).RowDescription,
-            rowAutomationName: row => ((UnresolvedRowViewModel)row).Key);
+            rowAutomationName: row => ((UnresolvedRowViewModel)row).Key,
+            rowKey: static row => ((UnresolvedRowViewModel)row).Path);
 
     /// <summary>Ctrl+J landed. The leaf has already decided the outcome
     /// and announced it; this only moves focus, and only if the entry

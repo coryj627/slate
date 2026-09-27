@@ -573,6 +573,12 @@ internal sealed class GraphDocumentViewModel : PanelWorkScheduler
     public string RowName(GraphTableRow row) =>
         GraphAnnouncer.RenderLabel(new GraphA11yEvent.GraphRow(Verbosity, RowCopy(row)));
 
+    /// <summary>A table row's stable key (W7-7 PR 3, #1246, R-4; codex PR 3
+    /// round 6, OD-8): its node — a note's vault path, an unresolved
+    /// target's label — what tells two rows that read alike apart, whatever
+    /// order a sort through core republishes them in.</summary>
+    public static string RowKey(GraphTableRow row) => row.Path ?? row.Label;
+
     // --- Announcements the workspace asks for (rule L, Term 6) -------------
 
     // --- Where-am-I (contract C-8) -------------------------------------------

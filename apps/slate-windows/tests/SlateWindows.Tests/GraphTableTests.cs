@@ -199,6 +199,85 @@ public sealed partial class GraphTableTests
         });
     }
 
+    /// <summary>Codex PR 3 round 6, owner decision OD-8 — row identity: the
+    /// graph table's sort is EXTERNAL (a rows-only token to core, which
+    /// republishes the rows in the new order), and a row's name never comes
+    /// from its position. Two notes named same.md read alike, so each adds its
+    /// node — its path — and keeps it through a sort by modified time each
+    /// way.</summary>
+    [Fact]
+    public void AnExternallySortedGraphTableKeepsEachRowsName()
+    {
+        RunSta(() =>
+        {
+            FixtureVault vault = FixtureVault.Create(0, "graph-external-sort");
+            foreach (string folder in new[] { "A", "B" })
+            {
+                Directory.CreateDirectory(Path.Combine(vault.Root, folder));
+                File.WriteAllText(Path.Combine(vault.Root, folder, "same.md"), $"# In {folder}\n");
+            }
+            // A/same.md older than B/same.md, so a sort by modified time
+            // orders the pair — and core's row labels (which count links)
+            // still read alike.
+            File.SetLastWriteTimeUtc(Path.Combine(vault.Root, "A", "same.md"), new DateTime(2025, 1, 1, 0, 0, 0, DateTimeKind.Utc));
+            File.SetLastWriteTimeUtc(Path.Combine(vault.Root, "B", "same.md"), new DateTime(2026, 1, 1, 0, 0, 0, DateTimeKind.Utc));
+            using var host = new Host(vault);
+            GraphDocumentViewModel document = host.Open();
+            var view = new GraphTableView { Model = document };
+            var window = new System.Windows.Window
+            {
+                Content = view,
+                Width = 900,
+                Height = 400,
+                ShowInTaskbar = false,
+                WindowStyle = System.Windows.WindowStyle.None,
+            };
+            window.Show();
+            try
+            {
+                (string Key, string Name)[] Read()
+                {
+                    host.Settle(document);
+                    window.UpdateLayout();
+                    PumpedDispatcher.Drain();
+                    window.UpdateLayout();
+                    return [.. GridRowNames.Read(view.GridForTests)
+                        .Where(row => ((GraphTableRow)row.Item).Path?.EndsWith("same.md", StringComparison.Ordinal) == true)
+                        .Select(row => (((GraphTableRow)row.Item).StableKey, row.Name))];
+                }
+                string Show((string Key, string Name)[] rows) =>
+                    string.Join(" | ", rows.Select(row => $"{row.Key} = \"{row.Name}\""));
+
+                GraphTableRow[] pair = [.. document.Publication.Rows.Where(row => row.Path?.EndsWith("same.md", StringComparison.Ordinal) == true)];
+                Assert.Equal(2, pair.Length);
+                // The premise: the pair's own names read alike.
+                Assert.True(
+                    SiblingNames.ReadAlike.Equals(document.RowName(pair[0]), document.RowName(pair[1])),
+                    $"the pair reads apart already: \"{document.RowName(pair[0])}\", \"{document.RowName(pair[1])}\"");
+                (string Key, string Name)[] before = Read();
+                Assert.All(before, row => Assert.EndsWith(row.Key[2..], row.Name, StringComparison.Ordinal));
+                int modified = document.CellIndexOf(GraphTableColumn.Modified);
+                string[] orders = new string[2];
+                foreach ((bool ascending, int index) in new[] { (false, 0), (true, 1) })
+                {
+                    Assert.Null(view.GridForTests.ApplySort(modified, ascending));
+                    (string Key, string Name)[] after = Read();
+                    orders[index] = after[0].Key;
+                    Assert.True(
+                        before.OrderBy(row => row.Key, StringComparer.Ordinal)
+                            .SequenceEqual(after.OrderBy(row => row.Key, StringComparer.Ordinal)),
+                        $"before the sort: {Show(before)}; after it: {Show(after)}");
+                }
+                // The premise: the two sorts showed the pair in two orders.
+                Assert.NotEqual(orders[0], orders[1]);
+            }
+            finally
+            {
+                window.Close();
+            }
+        });
+    }
+
     [Fact]
     public void TheRowNameIsTheCorpusCopyAndTheItemStatusIsTheKindCell()
     {

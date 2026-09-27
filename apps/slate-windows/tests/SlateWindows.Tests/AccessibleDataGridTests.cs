@@ -64,6 +64,17 @@ public sealed class AccessibleDataGridTests
         _ => null,
     };
 
+    /// <summary>The stable key every bind now requires (codex PR 3 round 6,
+    /// OD-8): a person's name, a widget's id — what a real caller passes, a
+    /// row's own identity that no ordering changes.</summary>
+    private static string RowKey(object row) => row switch
+    {
+        Person person => person.Name,
+        Widget widget => widget.Id,
+        CountingRow counting => counting.Id,
+        _ => string.Empty,
+    };
+
     private static IReadOnlyList<AccessibleGridColumn> Columns() => new[]
     {
         new AccessibleGridColumn
@@ -94,7 +105,7 @@ public sealed class AccessibleDataGridTests
             People,
             "3 rows, 2 columns.",
             "People, data grid",
-            rowAutomationName: Identity,
+            rowKey: RowKey, rowAutomationName: Identity,
             rowAudioDescription: rowAudioDescription,
             rowActions: rowActions,
             exportProducer: exportProducer);
@@ -193,11 +204,11 @@ public sealed class AccessibleDataGridTests
         {
             var grid = new AccessibleDataGrid { Announce = _ => { } };
             IReadOnlyList<object> first = FreshWidgets();
-            grid.Bind(WidgetColumns(), first, "3 rows.", "Widgets", rowAutomationName: Identity);
+            grid.Bind(WidgetColumns(), first, "3 rows.", "Widgets", rowKey: RowKey, rowAutomationName: Identity);
             grid.Grid.CurrentCell = new DataGridCellInfo(first[1], grid.Grid.Columns[1]);
 
             // Fresh instances, same identities — a real re-publish.
-            grid.Bind(WidgetColumns(), FreshWidgets(), "3 rows.", "Widgets", rowAutomationName: Identity);
+            grid.Bind(WidgetColumns(), FreshWidgets(), "3 rows.", "Widgets", rowKey: RowKey, rowAutomationName: Identity);
 
             Assert.Equal("two", Assert.IsType<Widget>(grid.Grid.CurrentCell.Item).Id);
             Assert.Same(grid.Grid.Columns[1], grid.Grid.CurrentCell.Column);
@@ -214,11 +225,11 @@ public sealed class AccessibleDataGridTests
         {
             var grid = new AccessibleDataGrid { Announce = _ => { } };
             IReadOnlyList<object> first = FreshWidgets();
-            grid.Bind(WidgetColumns(), first, "3 rows.", "Widgets", rowAutomationName: Identity);
+            grid.Bind(WidgetColumns(), first, "3 rows.", "Widgets", rowKey: RowKey, rowAutomationName: Identity);
             grid.Grid.CurrentCell = new DataGridCellInfo(first[2], grid.Grid.Columns[0]);
 
             grid.Bind(
-                WidgetColumns(), [new Widget("one")], "1 row.", "Widgets", rowAutomationName: Identity);
+                WidgetColumns(), [new Widget("one")], "1 row.", "Widgets", rowKey: RowKey, rowAutomationName: Identity);
 
             Assert.DoesNotContain(
                 grid.Grid.Items.Cast<object>(),
@@ -239,11 +250,11 @@ public sealed class AccessibleDataGridTests
             var announced = new List<A11yEvent>();
             var grid = new AccessibleDataGrid { Announce = announced.Add };
             IReadOnlyList<object> rows = FreshWidgets();
-            grid.Bind(WidgetColumns(), rows, "3 rows.", "Widgets", rowAutomationName: Identity);
+            grid.Bind(WidgetColumns(), rows, "3 rows.", "Widgets", rowKey: RowKey, rowAutomationName: Identity);
             grid.Grid.CurrentCell = new DataGridCellInfo(rows[1], grid.Grid.Columns[1]);
             announced.Clear();
 
-            grid.Bind([WidgetColumns()[0]], FreshWidgets(), "3 rows.", "Widgets", rowAutomationName: Identity);
+            grid.Bind([WidgetColumns()[0]], FreshWidgets(), "3 rows.", "Widgets", rowKey: RowKey, rowAutomationName: Identity);
 
             Assert.False(grid.Grid.CurrentCell.IsValid);
             Assert.Empty(grid.Grid.SelectedCells);
@@ -261,14 +272,14 @@ public sealed class AccessibleDataGridTests
         {
             var grid = new AccessibleDataGrid { Announce = _ => { } };
             IReadOnlyList<object> rows = FreshWidgets();
-            grid.Bind(WidgetColumns(), rows, "3 rows.", "Widgets", rowAutomationName: Identity);
+            grid.Bind(WidgetColumns(), rows, "3 rows.", "Widgets", rowKey: RowKey, rowAutomationName: Identity);
             grid.Grid.CurrentCell = new DataGridCellInfo(rows[2], grid.Grid.Columns[1]);
 
-            grid.Bind([], [], "No rows.", "Widgets", rowAutomationName: Identity);
+            grid.Bind([], [], "No rows.", "Widgets", rowKey: RowKey, rowAutomationName: Identity);
             Assert.False(grid.Grid.CurrentCell.IsValid);
             Assert.Empty(grid.Grid.SelectedCells);
 
-            grid.Bind(WidgetColumns(), FreshWidgets(), "3 rows.", "Widgets", rowAutomationName: Identity);
+            grid.Bind(WidgetColumns(), FreshWidgets(), "3 rows.", "Widgets", rowKey: RowKey, rowAutomationName: Identity);
             Assert.True(grid.SelectRow(_ => true));
             Assert.Same(grid.Grid.Columns[0], grid.Grid.CurrentCell.Column);
             Assert.Equal("one", Assert.IsType<Widget>(grid.Grid.CurrentCell.Item).Id);
@@ -327,11 +338,11 @@ public sealed class AccessibleDataGridTests
             var announced = new List<A11yEvent>();
             var grid = new AccessibleDataGrid { Announce = announced.Add };
             IReadOnlyList<object> rows = FreshWidgets();
-            grid.Bind(WidgetColumns(), rows, "3 rows.", "Widgets", rowAutomationName: Identity);
+            grid.Bind(WidgetColumns(), rows, "3 rows.", "Widgets", rowKey: RowKey, rowAutomationName: Identity);
             grid.Grid.CurrentCell = new DataGridCellInfo(rows[1], grid.Grid.Columns[1]);
             announced.Clear();
 
-            grid.Bind(WidgetColumns(), FreshWidgets(), "3 rows.", "Widgets", rowAutomationName: Identity);
+            grid.Bind(WidgetColumns(), FreshWidgets(), "3 rows.", "Widgets", rowKey: RowKey, rowAutomationName: Identity);
 
             Assert.Equal("two", Assert.IsType<Widget>(grid.Grid.CurrentCell.Item).Id);
             Assert.Empty(announced);
@@ -359,14 +370,14 @@ public sealed class AccessibleDataGridTests
                 [.. Enumerable.Range(0, count).Select(i => (object)new CountingRow($"r{i}"))];
 
             IReadOnlyList<object> rows = First();
-            grid.Bind(CountingColumns(), rows, "rows.", "Rows", rowAutomationName: Identity);
+            grid.Bind(CountingColumns(), rows, "rows.", "Rows", rowKey: RowKey, rowAutomationName: Identity);
             // Worst case: the reader is on the LAST row, so the restore
             // scan runs to the end.
             grid.Grid.CurrentCell =
                 new DataGridCellInfo(rows[count - 1], grid.Grid.Columns[0]);
 
             CountingRow.EqualsCalls = 0;
-            grid.Bind(CountingColumns(), First(), "rows.", "Rows", rowAutomationName: Identity);
+            grid.Bind(CountingColumns(), First(), "rows.", "Rows", rowKey: RowKey, rowAutomationName: Identity);
 
             Assert.Equal($"r{count - 1}", Assert.IsType<CountingRow>(grid.Grid.CurrentCell.Item).Id);
             // Quadratic would be ~count²/2 ≈ 1,800 here.
@@ -388,7 +399,7 @@ public sealed class AccessibleDataGridTests
             var grid = new AccessibleDataGrid { Announce = _ => { } };
             grid.Bind(
                 Columns(), People, "3 rows.", "People",
-                rowActivated: row => activated = row, rowAutomationName: Identity);
+                rowActivated: row => activated = row, rowKey: RowKey, rowAutomationName: Identity);
             grid.Grid.CurrentCell = new DataGridCellInfo(People[1], grid.Grid.Columns[0]);
 
             grid.Grid.RaiseEvent(new KeyEventArgs(
@@ -423,7 +434,7 @@ public sealed class AccessibleDataGridTests
             var grid = new AccessibleDataGrid { Announce = _ => { } };
             grid.Bind(
                 Columns(), People, "3 rows.", "People",
-                rowActivated: row => activated = row, rowAutomationName: Identity);
+                rowActivated: row => activated = row, rowKey: RowKey, rowAutomationName: Identity);
             grid.Grid.CurrentCell = new DataGridCellInfo(People[0], grid.Grid.Columns[0]);
 
             // Source is the grid itself: no cell, no row — a header or
@@ -458,7 +469,7 @@ public sealed class AccessibleDataGridTests
             Assert.Equal("Alice", Assert.IsType<Person>(grid.Grid.Items[0]).Name);
             int afterUserSort = announced.Count;
 
-            grid.Bind(Columns(), People, "3 rows, 2 columns.", "People, data grid", rowAutomationName: Identity);
+            grid.Bind(Columns(), People, "3 rows, 2 columns.", "People, data grid", rowKey: RowKey, rowAutomationName: Identity);
 
             Assert.Equal("Alice", Assert.IsType<Person>(grid.Grid.Items[0]).Name);
             Assert.Equal((0, true), grid.ActiveSort);
@@ -491,7 +502,7 @@ public sealed class AccessibleDataGridTests
                 ],
                 People,
                 "3 rows, 1 column.",
-                "People, data grid", rowAutomationName: Identity);
+                "People, data grid", rowKey: RowKey, rowAutomationName: Identity);
 
             Assert.Null(grid.ActiveSort);
             Assert.Equal("Charlie", Assert.IsType<Person>(grid.Grid.Items[0]).Name);
@@ -730,7 +741,7 @@ public sealed class AccessibleDataGridTests
                 },
                 People,
                 "3 rows, 1 column.",
-                "People, data grid", rowAutomationName: Identity);
+                "People, data grid", rowKey: RowKey, rowAutomationName: Identity);
             Assert.Equal(DataGridHeadersVisibility.All, grid.Grid.HeadersVisibility);
 
             // Entry lands on the FIRST CELL (round 1: MoveFocus(First)
@@ -864,7 +875,7 @@ public sealed class AccessibleDataGridTests
             var grid = new AccessibleDataGrid { Announce = _ => { } };
             grid.Bind(
                 Columns(), People, "3 rows.", "People",
-                rowActions: actions, rowActivated: row => activated = row, rowAutomationName: Identity);
+                rowActions: actions, rowActivated: row => activated = row, rowKey: RowKey, rowAutomationName: Identity);
             var window = new System.Windows.Window
             {
                 Content = grid,
@@ -965,12 +976,12 @@ public sealed class AccessibleDataGridTests
                     (x, y) => string.CompareOrdinal(((Person)x).Role, ((Person)y).Role)),
             };
             var grid = new AccessibleDataGrid { Announce = _ => { } };
-            grid.Bind([name, role], people, "3 rows.", "People", rowAutomationName: Identity);
+            grid.Bind([name, role], people, "3 rows.", "People", rowKey: RowKey, rowAutomationName: Identity);
             _ = grid.ApplySort(1, ascending: true);
             Assert.Equal("Charlie", Assert.IsType<Person>(grid.Grid.Items[0]).Name);
 
             // Same grid instance, columns swapped.
-            grid.Bind([role, name], people, "3 rows.", "People", rowAutomationName: Identity);
+            grid.Bind([role, name], people, "3 rows.", "People", rowKey: RowKey, rowAutomationName: Identity);
 
             Assert.Equal((0, true), grid.ActiveSort);
             Assert.Equal("Charlie", Assert.IsType<Person>(grid.Grid.Items[0]).Name);
@@ -1001,13 +1012,13 @@ public sealed class AccessibleDataGridTests
             IReadOnlyList<object> first =
                 [new Widget("dup"), new Widget("dup"), new Widget("tail")];
             var grid = new AccessibleDataGrid { Announce = _ => { } };
-            grid.Bind(WidgetColumns(), first, "3 rows.", "Widgets", rowAutomationName: Identity);
+            grid.Bind(WidgetColumns(), first, "3 rows.", "Widgets", rowKey: RowKey, rowAutomationName: Identity);
             grid.Grid.CurrentCell = new DataGridCellInfo(first[1], grid.Grid.Columns[1]);
             Assert.Same(first[1], grid.Grid.CurrentCell.Item);
 
             IReadOnlyList<object> second =
                 [new Widget("dup"), new Widget("dup"), new Widget("tail")];
-            grid.Bind(WidgetColumns(), second, "3 rows.", "Widgets", rowAutomationName: Identity);
+            grid.Bind(WidgetColumns(), second, "3 rows.", "Widgets", rowKey: RowKey, rowAutomationName: Identity);
 
             Assert.Same(second[1], grid.Grid.CurrentCell.Item);
         });
@@ -1026,7 +1037,7 @@ public sealed class AccessibleDataGridTests
             var grid = new AccessibleDataGrid { Announce = _ => { } };
             grid.Bind(
                 Columns(), People, "3 rows.", "People",
-                rowAutomationName: row => $"row {((Person)row).Name}",
+                rowKey: RowKey, rowAutomationName: row => $"row {((Person)row).Name}",
                 rowItemStatus: row => ((Person)row).Role);
             var window = new System.Windows.Window
             {
@@ -1050,7 +1061,7 @@ public sealed class AccessibleDataGridTests
                 // the new rows' containers carry theirs.
                 grid.Bind(
                     Columns(), new object[] { new Person("Dana", "QA") }, "1 row.", "People",
-                    rowAutomationName: row => $"row {((Person)row).Name}",
+                    rowKey: RowKey, rowAutomationName: row => $"row {((Person)row).Name}",
                     rowItemStatus: row => ((Person)row).Role);
                 grid.Grid.UpdateLayout();
                 Assert.Equal(string.Empty, AutomationProperties.GetName(realized));
@@ -1082,7 +1093,7 @@ public sealed class AccessibleDataGridTests
         var grid = new AccessibleDataGrid { Announce = _ => { } };
         grid.Bind(
             Columns(), People, "3 rows.", "People",
-            rowAutomationName: row => ((Person)row).Name,
+            rowKey: RowKey, rowAutomationName: row => ((Person)row).Name,
             rowItemStatus: row => ((Person)row).Role);
         GridRowNames.Hosted(grid, () =>
         {
@@ -1113,12 +1124,13 @@ public sealed class AccessibleDataGridTests
     });
 
     /// <summary>The spec review (rounds 21 and 22): uniqueness is checked
-    /// AFTER the suffixes too. Rows 1 and 3 share "note.md" and would read
-    /// "note.md, row 1" and "note.md, row 3" — but row 2's own first cell
-    /// already reads "note.md, row 1", so the pair that collides falls back
-    /// to its ordinals. Row 4's "note.md (2)", a natural name in the shape
-    /// another tool gives a copy, is not this grid's suffix shape and meets
-    /// no one: it reads as itself.</summary>
+    /// AFTER the suffixes too. Rows 1 and 3 share "note.md" and read their
+    /// keys, "note.md, row 1" and "note.md, row 3" — but row 2's own first
+    /// cell already reads "note.md, row 1", so the pair that collides adds
+    /// its places among the keys (codex PR 3 round 6, OD-8: a key's place,
+    /// never a display position). Row 4's "note.md (2)", a natural name in
+    /// the shape another tool gives a copy, is not this grid's suffix shape
+    /// and meets no one: it reads as itself.</summary>
     [Fact]
     public void ASuffixThatMeetsANaturalNameFallsBackToTheOrdinal() => RunSta(() =>
     {
@@ -1130,7 +1142,7 @@ public sealed class AccessibleDataGridTests
             + "| note.md | c |\n"
             + "| note.md (2) | d |\n"));
         GridRowNames.Hosted(grid, () => Assert.Equal(
-            ["Row 1", "Row 2", "note.md, row 3", "note.md (2)"],
+            ["note.md, row 1, row 1", "note.md, row 1, row 2", "note.md, row 3", "note.md (2)"],
             GridRowNames.Read(grid).Select(row => row.Name)));
     });
 
@@ -1169,7 +1181,7 @@ public sealed class AccessibleDataGridTests
             grid.Bind(
                 Columns(), People, "3 rows.", "People",
                 rowActivated: row => plain = row,
-                rowActivatedModified: row => modified = row, rowAutomationName: Identity);
+                rowActivatedModified: row => modified = row, rowKey: RowKey, rowAutomationName: Identity);
             grid.Grid.CurrentCell = new DataGridCellInfo(People[2], grid.Grid.Columns[0]);
 
             Assert.True(grid.ActivateCurrentRow(modified: true));
@@ -1182,7 +1194,7 @@ public sealed class AccessibleDataGridTests
             // Without a modified handler the modifier is ignored.
             plain = null;
             modified = null;
-            grid.Bind(Columns(), People, "3 rows.", "People", rowActivated: row => plain = row, rowAutomationName: Identity);
+            grid.Bind(Columns(), People, "3 rows.", "People", rowActivated: row => plain = row, rowKey: RowKey, rowAutomationName: Identity);
             grid.Grid.CurrentCell = new DataGridCellInfo(People[0], grid.Grid.Columns[0]);
             Assert.True(grid.ActivateCurrentRow(modified: true));
             Assert.Same(People[0], plain);
@@ -1226,6 +1238,7 @@ public sealed class AccessibleDataGridTests
         var grid = new AccessibleDataGrid { Announce = _ => { } };
         grid.Bind(
             Columns(), rows, "4 rows.", "People",
+            rowKey: row => Reading.ReadingTableGrid.SourceRowKey(Array.IndexOf(rows, row)),
             rowAutomationName: row => ((Person)row).Name == "Charlie" ? "Charlie" : " ");
         var window = new System.Windows.Window
         {
@@ -1435,7 +1448,8 @@ public sealed class AccessibleDataGridTests
     });
 
     /// <summary>Two bibliography entries with one title and year read
-    /// apart by their source row; a lone entry reads bare.</summary>
+    /// apart by their citation keys (codex PR 3 round 6, OD-8: the row's own
+    /// key, never its place); a lone entry reads bare.</summary>
     [Fact]
     public void BibliographyEntriesSharingATitleAndYearAreToldApart() => RunSta(() =>
     {
@@ -1450,7 +1464,7 @@ public sealed class AccessibleDataGridTests
             "3 entries.");
 
         Assert.Equal(
-            ["Accessible grids (2021), row 1", "Accessible grids (2021), row 3", "Reading tables (2020)"],
+            ["Accessible grids (2021), doe2021a", "Accessible grids (2021), doe2021b", "Reading tables (2020)"],
             GridRowNames.Realized(grid).Select(row => row.Name).Order(StringComparer.Ordinal));
     });
 
@@ -1658,6 +1672,91 @@ public sealed class AccessibleDataGridSurfaceRowNameTests : IDisposable
             ["same.md, row 1", "same.md, row 2"],
             rows.Select(row => row.Name).Order(StringComparer.Ordinal));
         document.Shutdown();
+    });
+
+    /// <summary>Codex PR 3 round 6, owner decision OD-8 — row identity: an
+    /// EXTERNAL sort (the Base grid asks core, which republishes the rows in
+    /// the new order as new objects, and the surface binds them again) leaves
+    /// every row its name. Two notes named same.md read their paths, A/same.md
+    /// and B/same.md, before the sort and after it; named by display
+    /// position, they swapped "row 1" and "row 2".</summary>
+    [Fact]
+    public void AnExternallySortedBaseGridKeepsEachRowsName() => RunSta(() =>
+    {
+        using FixtureVault vault = FixtureVault.Create(0, "grid-external-sort");
+        foreach (string folder in new[] { "A", "B" })
+        {
+            Directory.CreateDirectory(Path.Combine(vault.Root, folder));
+            File.WriteAllText(Path.Combine(vault.Root, folder, "same.md"), $"# In {folder}\n");
+        }
+        File.WriteAllText(
+            Path.Combine(vault.Root, "Same.base"),
+            "filters: 'file.ext == \"md\"'\n"
+            + "views:\n"
+            + "  - type: table\n"
+            + "    name: Main\n"
+            + "    order:\n"
+            + "      - file.name\n"
+            + "      - file.folder\n");
+        using VaultSession session = VaultSession.OpenFilesystem(vault.Root);
+        using (var cancel = new CancelToken())
+        {
+            session.ScanInitial(cancel);
+        }
+        var document = new Bases.BaseDocumentViewModel(session, "Same.base", _ => { }, synchronousForTests: true);
+        document.Load();
+        var surface = new Bases.BaseSurfaceView { Model = document };
+        var window = new System.Windows.Window
+        {
+            Content = surface,
+            Width = 640,
+            Height = 480,
+            ShowInTaskbar = false,
+            WindowStyle = System.Windows.WindowStyle.None,
+        };
+        window.Show();
+        try
+        {
+            (string File, string Name)[] Read()
+            {
+                window.UpdateLayout();
+                PumpedDispatcher.Drain();
+                window.UpdateLayout();
+                return [.. GridRowNames.Read(surface.GridForTests)
+                    .Select(row => (((Bases.BaseGridRowViewModel)row.Item).Row.FilePath, row.Name))];
+            }
+            string Show((string File, string Name)[] rows) =>
+                string.Join(" | ", rows.Select(row => $"{row.File} = \"{row.Name}\""));
+
+            (string File, string Name)[] before = Read();
+            Assert.Equal(
+                [("A/same.md", "same.md, A/same.md"), ("B/same.md", "same.md, B/same.md")],
+                before.OrderBy(row => row.File, StringComparer.Ordinal));
+            int folder = Array.FindIndex(
+                Assert.IsType<BasesResultSet>(document.Result).Columns,
+                column => column.Id.Contains("folder", StringComparison.OrdinalIgnoreCase));
+            Assert.True(folder >= 0, "the base has no folder column");
+            foreach (bool ascending in new[] { false, true })
+            {
+                Assert.Null(surface.GridForTests.ApplySort(folder, ascending));
+                // The premise: the sort went to core — the external path,
+                // fresh rows — not the grid's own in-place sort.
+                Assert.True(
+                    document.SortState is { } sort && sort.ColumnIndex == folder && sort.Ascending == ascending,
+                    $"the sort did not go through core: {document.SortState}");
+                (string File, string Name)[] after = Read();
+                Assert.Equal(ascending ? "A/same.md" : "B/same.md", after[0].File);
+                Assert.True(
+                    before.OrderBy(row => row.File, StringComparer.Ordinal)
+                        .SequenceEqual(after.OrderBy(row => row.File, StringComparer.Ordinal)),
+                    $"before the sort: {Show(before)}; after it ({(ascending ? "ascending" : "descending")}): {Show(after)}");
+            }
+        }
+        finally
+        {
+            window.Close();
+            document.Shutdown();
+        }
     });
 
     /// <summary>A dashboard section's read-only grid names rows as the

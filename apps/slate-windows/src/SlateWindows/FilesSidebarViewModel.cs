@@ -357,11 +357,22 @@ internal sealed class SidebarTagViewModel : BindableBase
     }
 }
 
-internal sealed record SidebarShortcutViewModel(string Kind, string Path)
+/// <summary>One shortcut slot. W7-7 PR 3 (#1246, R-4; codex PR 3 round 6,
+/// OD-8): an OCCURRENCE — reference identity, no value equality — because
+/// Assign Shortcut can put one note in two slots, and two equal records
+/// were ONE item to UIA (WPF keys item peers by equality), and Remove took
+/// the first of the two, not the selected one.</summary>
+internal sealed class SidebarShortcutViewModel(string kind, string path)
 {
+    public string Kind { get; } = kind;
+    public string Path { get; } = path;
     public string DisplayName => System.IO.Path.GetFileName(Path.TrimEnd('/'));
     public string KindLabel => Kind == "folder" ? "folder" : "file";
     public string AutomationName => $"{DisplayName}, {KindLabel} shortcut";
+
+    /// <summary>What a name that fell back to the item would read — its
+    /// own name, never a type name.</summary>
+    public override string ToString() => AutomationName;
 }
 
 /// <summary>
@@ -2386,11 +2397,13 @@ internal sealed partial class FilesSidebarViewModel : BindableBase
         _pinned.UnionWith(transformedPins);
 
         SidebarShortcutViewModel? selected = SelectedShortcut;
+        // Two shortcuts a move folds onto one path become one, as the store
+        // keeps them (a shortcut has no value equality of its own).
         SidebarShortcutViewModel[] transformedShortcuts = Shortcuts
             .Select(item => (Item: item, Path: Transform(item.Path)))
             .Where(pair => pair.Path is not null)
             .Select(pair => new SidebarShortcutViewModel(pair.Item.Kind, pair.Path!))
-            .Distinct()
+            .DistinctBy(item => (item.Kind, item.Path))
             .ToArray();
         Shortcuts.Clear();
         foreach (SidebarShortcutViewModel shortcut in transformedShortcuts)

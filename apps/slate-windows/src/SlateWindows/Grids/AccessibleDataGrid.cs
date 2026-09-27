@@ -57,11 +57,11 @@ internal sealed class AccessibleDataGrid : UserControl
     // W6-2 PR A (contracts A-6, A-9; AD-2): the row-name, item-status and
     // modified-activation seams — generic, the graph their first user.
     private Func<object, string?>? _rowAutomationName;
-    // W7-7 PR 3 (R-4): each bound row's place in the rows the surface
-    // passed, by reference — the stable ordinal a nameless row falls back to.
-    private Dictionary<object, int> _boundOrdinals = new(ReferenceEqualityComparer.Instance);
-    // …and each bound row's name, fixed at Bind (codex PR 3 round 2), where
-    // a name other rows share is told apart by that ordinal.
+    // W7-7 PR 3 (R-4; codex PR 3 round 6, OD-8): each row's stable key, the
+    // caller's — what tells it apart where its identity collides, and what a
+    // nameless row reads; never its position, which a sort changes.
+    private Func<object, string>? _rowKey;
+    // …and each bound row's name, fixed at Bind (codex PR 3 round 2).
     private Dictionary<object, string> _rowNames = new(ReferenceEqualityComparer.Instance);
     private Func<object, string?>? _rowItemStatus;
     private Action<object>? _rowActivatedModified;
@@ -240,58 +240,66 @@ internal sealed class AccessibleDataGrid : UserControl
 
     /// <summary>
     /// W7-7 PR 3 (#1246, contract R-4 as amended after codex PR 0 rounds 5
-    /// and 6, and codex PR 3 round 2): every bound row's name, never empty
-    /// and never another row's. A blank name is no name —
+    /// and 6, codex PR 3 rounds 2 and 6, and owner decision OD-8): every
+    /// bound row's name, never empty and never another row's, and never
+    /// taken from the row's POSITION. Each caller hands Bind a stable,
+    /// speakable key per row — a Base or dashboard row's file path (with its
+    /// task's ordinal), a graph row's node, a citation's key, a reading
+    /// table's source row. A blank identity is no name —
     /// DataGridItemAutomationPeer then falls back to the item's
     /// <c>ToString()</c>, and a reading-table row whose first cell is blank
-    /// read "System.String[]" — so a blank identity takes the first
-    /// non-empty cell, else "Row {n}", n the row's place in the rows the
-    /// surface bound: its source order (a reading table's parsed order).
-    /// And two rows may share an identity — one file name in two folders,
-    /// two entries with one title and year, two table rows with one first
-    /// cell — so a name more than one row carries (ignoring case, as speech
-    /// does) is suffixed with that ordinal in the fallback's shape: "note.md,
-    /// row 3" — and the names are checked again AFTER the suffixes, so a
-    /// suffixed name that meets a natural one sends both to "Row {n}". The
-    /// ordinal survives a sort (which re-populates the grid and moves the
-    /// view position), re-realization (the map outlives the containers) and
-    /// a re-bind (recomputed from the rows passed).
+    /// read "System.String[]" — so it takes the first non-empty cell, else
+    /// the key ("Row 3"). Rows whose identities read alike (one file name in
+    /// two folders, two entries with one title and year, two table rows with
+    /// one first cell) add their keys under the one sibling rule: "same.md,
+    /// A/same.md", "note.md, row 3" — and the names are checked again after
+    /// the keys. The rule runs over the rows in KEY order, so even its last
+    /// resort, a place, is the row's place among the keys: an external sort,
+    /// which republishes the rows in a new order as new objects (Base,
+    /// Graph), a sort in the grid, re-realization and a re-bind all leave
+    /// every row its name (codex PR 3 round 6: display order swapped
+    /// A/same.md's and B/same.md's "row 1" and "row 2").
     /// </summary>
     private Dictionary<object, string> NameRows(IReadOnlyList<object> rows)
     {
-        // The one rule and its one culture-independent comparison
-        // (SiblingNames.Compose; codex PR 3 round 5): under tr-TR the current
-        // culture read "FILE" and "file" as different identities and left both
-        // bare. Rows are passed in source order, so the ordinal the rule gives
-        // ("note.md, row 3"; last, "Row 3") is the row's source ordinal, and
-        // a suffix that meets a natural name is checked again (the spec
-        // review, round 21).
-        string[] names = SiblingNames.Compose([.. rows.Select(row => (string?)BaseRowName(row))], [], "row");
+        object[] byKey =
+        [
+            .. rows.Distinct(ReferenceEqualityComparer.Instance)
+                .OrderBy(KeyOf, StringComparer.Ordinal),
+        ];
+        string[] names = SiblingNames.Compose(
+            [.. byKey.Select(row => (string?)BaseRowName(row))],
+            [.. byKey.Select(row => (string?)KeyOf(row))],
+            "row");
         var named = new Dictionary<object, string>(ReferenceEqualityComparer.Instance);
-        for (int index = 0; index < rows.Count; index++)
+        for (int index = 0; index < byKey.Length; index++)
         {
-            _ = named.TryAdd(rows[index], names[index]);
+            named[byKey[index]] = names[index];
         }
         return named;
     }
 
+    /// <summary>A row's key, as its caller gave it.</summary>
+    private string KeyOf(object row) => _rowKey?.Invoke(row) ?? string.Empty;
+
     private string BaseRowName(object item)
     {
         if (_rowAutomationName?.Invoke(item) is { } identity
-            && !string.IsNullOrWhiteSpace(identity))
+            && !SpeechKey.IsSilent(identity))
         {
             return identity;
         }
         foreach (AccessibleGridColumn column in _columns)
         {
             string text = column.Cell(item);
-            if (!string.IsNullOrWhiteSpace(text))
+            if (!SpeechKey.IsSilent(text))
             {
                 return text;
             }
         }
-        return string.Create(
-            System.Globalization.CultureInfo.InvariantCulture, $"Row {_boundOrdinals[item] + 1}");
+        // Nothing to say but the key: "row 3" reads "Row 3".
+        string key = KeyOf(item);
+        return key.Length == 0 ? "Row" : char.ToUpperInvariant(key[0]) + key[1..];
     }
 
     /// <summary>The unloading half of the row seams: a container that
@@ -549,10 +557,15 @@ internal sealed class AccessibleDataGrid : UserControl
     /// name, a title, a first cell — not the whole description), REQUIRED
     /// (W7-7 PR 3, #1246, R-4; each caller's identity pinned by
     /// ItemContainerNameCensus), because an unnamed DataGridRow reads its
-    /// item's <c>ToString()</c>. Where an identity comes back blank the
-    /// row takes its first non-empty cell, else its bound ordinal; where
-    /// rows share one, the ordinal tells them apart (<see cref="NameRows"/>).
-    /// A surface's teardown is <see cref="Clear"/>, never a bind of nothing.
+    /// item's <c>ToString()</c>. <paramref name="rowKey"/> is the row's
+    /// STABLE key, REQUIRED too (codex PR 3 round 6, OD-8): speakable, unique
+    /// among the rows, and the same for the same row however the rows are
+    /// ordered or republished — a file path, a node, a citation key, a
+    /// source row. Where an identity comes back blank the row takes its
+    /// first non-empty cell, else its key; where rows share one, their keys
+    /// tell them apart (<see cref="NameRows"/>). A row's position never
+    /// names it. A surface's teardown is <see cref="Clear"/>, never a bind of
+    /// nothing.
     /// </summary>
     public void Bind(
         IReadOnlyList<AccessibleGridColumn> columns,
@@ -560,6 +573,7 @@ internal sealed class AccessibleDataGrid : UserControl
         string summary,
         string accessibilityLabel,
         Func<object, string?> rowAutomationName,
+        Func<object, string> rowKey,
         Func<object, string?>? rowAudioDescription = null,
         IReadOnlyList<AccessibleGridRowAction>? rowActions = null,
         Func<ExportFormat, string>? exportProducer = null,
@@ -570,10 +584,12 @@ internal sealed class AccessibleDataGrid : UserControl
         ArgumentNullException.ThrowIfNull(columns);
         ArgumentNullException.ThrowIfNull(rows);
         ArgumentNullException.ThrowIfNull(rowAutomationName);
+        ArgumentNullException.ThrowIfNull(rowKey);
         // The outgoing rows drop what the outgoing delegates gave them
         // before anything replaces those delegates.
         ClearRealizedRowSeams();
         _rowAutomationName = rowAutomationName;
+        _rowKey = rowKey;
         _rowItemStatus = rowItemStatus;
         _rowActivatedModified = rowActivatedModified;
         // The user's sort is a user decision, and a re-publish is not
@@ -652,14 +668,8 @@ internal sealed class AccessibleDataGrid : UserControl
             ? DataGridHeadersVisibility.Column
             : DataGridHeadersVisibility.All;
 
-        // The ordinals and names first: clearing and adding realizes rows,
-        // and each realized row takes its name from the map.
-        var boundOrdinals = new Dictionary<object, int>(ReferenceEqualityComparer.Instance);
-        for (int index = 0; index < rows.Count; index++)
-        {
-            _ = boundOrdinals.TryAdd(rows[index], index);
-        }
-        _boundOrdinals = boundOrdinals;
+        // The names first: clearing and adding realizes rows, and each
+        // realized row takes its name from the map.
         _rowNames = NameRows(rows);
         _items.Clear();
         foreach (object row in rows)
@@ -716,7 +726,7 @@ internal sealed class AccessibleDataGrid : UserControl
         _rowActivated = null;
         _lastAnnouncedRow = null;
         _activeSort = null;
-        _boundOrdinals = new(ReferenceEqualityComparer.Instance);
+        _rowKey = null;
         _rowNames = new(ReferenceEqualityComparer.Instance);
         _columns = Array.Empty<AccessibleGridColumn>();
         _grid.Columns.Clear();

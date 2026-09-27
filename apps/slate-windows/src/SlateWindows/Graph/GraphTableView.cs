@@ -230,6 +230,7 @@ internal sealed class GraphTableView : UserControl
                 exportProducer: null,
                 rowActivated: row => model.Activate((GraphTableRow)row, modified: false),
                 rowAutomationName: row => model.RowName((GraphTableRow)row),
+                rowKey: static row => GraphDocumentViewModel.RowKey((GraphTableRow)row),
                 rowItemStatus: row => model.CellOf((GraphTableRow)row, GraphTableColumn.Kind),
                 rowActivatedModified: row => model.Activate((GraphTableRow)row, modified: true));
             _grid.SetSortIndicator((model.CellIndexOf(publication.AcceptedSort.Column), publication.AcceptedSort.Ascending));
