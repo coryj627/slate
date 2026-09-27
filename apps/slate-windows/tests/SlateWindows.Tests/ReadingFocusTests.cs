@@ -2027,6 +2027,196 @@ public sealed class ReadingFocusTests
         return Needle;
     }
 
+    // --- PR 8, codex round 6: reproductions. Each fails on the round-7 code
+    // and states the behaviour the owner's fix must produce. -----------------
+
+    /// <summary>Codex r6 finding 1 (reproduction). A ROUTE's canvas or graph
+    /// landing requested before a surface is realized for the tab is watched
+    /// through the document alone — no departure watch — so after the reader
+    /// moves away (to the Files stand-in), realizing the surface still seats
+    /// the editor, or, when its terminal target refuses focus, still runs the
+    /// route's fallback: either way focus is taken off where the reader went.
+    /// Expected: the reader's move cancels the landing, and realizing the
+    /// surface afterwards moves nothing.</summary>
+    [Theory]
+    [InlineData("canvas", "seats")]
+    [InlineData("canvas", "refuses")]
+    [InlineData("graph", "seats")]
+    [InlineData("graph", "refuses")]
+    public void R6_ASurfacelessRouteLandingIsCancelledWhenTheReaderMoves(string kind, string target) => RunSta(() =>
+    {
+        using var host = new Host();
+        host.Initialize(kind);
+        FrameworkElement surface = host.EditorStop();
+        if (target == "refuses")
+        {
+            if (surface is GraphSurfaceView graphView)
+            {
+                GraphDocumentViewModel graph = host.Tab.Graph!;
+                host.Workspace.GraphNavigator.SetNameQuery("zzz-nothing-matches");
+                PumpedDispatcher.PumpUntilDrained(graph.WhenAllWorkDrained());
+                PumpedDispatcher.Drain();
+                graphView.StateHostForTests.Focusable = false;
+            }
+            else
+            {
+                ((CanvasSurfaceView)surface).OnboardingForTests.Focusable = false;
+            }
+        }
+        TabItem tabItem = host.FocusTabBar();
+        // No surface is realized for the tab: the shared cell is bound to nothing.
+        surface.DataContext = null;
+        PumpedDispatcher.Drain();
+        Assert.Null(host.EditorStopOrNull());
+
+        // A route asks for the editor (the funnel behind every open).
+        host.Workspace.RequestActiveEditorFocus();
+        PumpedDispatcher.Drain();
+        Assert.NotNull(host.EditorLandingRequest());
+        AssertFocused(tabItem, "the route's landing, held for the unrealized surface");
+
+        // The reader moves away, then the surface is realized for the tab.
+        Assert.True(host.Sentinel.Focus());
+        PumpedDispatcher.Drain();
+        surface.ClearValue(FrameworkElement.DataContextProperty);
+        host.Settle();
+        if (host.Tab.Graph is { } settling)
+        {
+            PumpedDispatcher.PumpUntilDrained(settling.WhenAllWorkDrained());
+            PumpedDispatcher.Drain();
+        }
+
+        AssertFocused(host.Sentinel, $"where the reader moved, after the {kind}'s surface realized ({target})");
+        Assert.Null(host.EditorLandingRequest());
+    });
+
+    /// <summary>Codex r6 finding 2 (reproduction). The departure watch samples
+    /// the focused element once, when the landing is held, and installs
+    /// nothing when focus is NOWHERE — as it is after the palette closes over
+    /// a stop that is gone. A route's reading landing held from there is never
+    /// latched: the reader moves to the Files stand-in, and the content's
+    /// arrival seats the surface, or its failure runs the route's fallback to
+    /// the tab item. Expected: the reader's move cancels the landing; focus
+    /// stays where they moved.</summary>
+    [Theory]
+    [InlineData("the content arrives")]
+    [InlineData("the load fails")]
+    public void R6_ALandingHeldWithFocusNowhereIsCancelledWhenTheReaderMoves(string settle) => RunSta(() =>
+    {
+        using var host = new Host();
+        host.Initialize(readingMode: true);
+        ReadingSurface surface = host.ReadingSurfaceOfTab();
+        _ = host.BindProjectionInFlight(surface, failsTerminally: settle == "the load fails");
+        var transient = new TextBox { Text = "Where the palette was opened from" };
+        host.Show(transient);
+        Assert.True(transient.Focus());
+        PumpedDispatcher.Drain();
+        host.OpenModal("palette");
+        PumpedDispatcher.Drain();
+        host.Remove(transient);
+        Keyboard.ClearFocus();
+        host.Lifecycle.Palette.Dismiss();
+        PumpedDispatcher.Drain();
+        Assert.True(surface.IsFocusLandingPending, "the close fallback's landing was not held");
+        Assert.Null(Keyboard.FocusedElement);
+
+        // The reader moves to the Files stand-in before the content settles.
+        Assert.True(host.Sentinel.Focus());
+        PumpedDispatcher.Drain();
+        host.ReleaseProjection();
+        _ = PumpedDispatcher.PumpUntil(() => !surface.IsFocusLandingPending);
+        PumpedDispatcher.Drain();
+
+        AssertFocused(host.Sentinel, $"where the reader moved ({settle})");
+        Assert.False(surface.IsFocusLandingPending);
+    });
+
+    /// <summary>Codex r6 finding 3 (reproduction). A modal surface opening
+    /// withdraws only a landing the F6 ring holds; a landing a ROUTE holds —
+    /// for a reading, canvas or graph tab, or for a canvas with no surface
+    /// realized yet — stays live under the modal, and its content arriving
+    /// seats the editor beneath it. Expected: the modal's opening withdraws
+    /// every held editor landing, whoever asked for it, and nothing seats
+    /// beneath it.</summary>
+    [Theory]
+    [InlineData("reading")]
+    [InlineData("canvas")]
+    [InlineData("graph")]
+    [InlineData("canvas with no surface realized")]
+    public void R6_AModalOpeningWithdrawsARouteHeldLanding(string kind) => RunSta(() =>
+    {
+        using var host = new Host();
+        host.Initialize(kind.StartsWith("canvas", StringComparison.Ordinal) ? "canvas" : kind);
+        FrameworkElement? unrealized = null;
+        if (kind == "canvas with no surface realized")
+        {
+            unrealized = host.EditorStop();
+        }
+        else
+        {
+            host.HoldEditorLanding();
+        }
+        host.FocusTabBar();
+        if (unrealized is not null)
+        {
+            unrealized.DataContext = null;
+            PumpedDispatcher.Drain();
+        }
+        host.Workspace.RequestActiveEditorFocus();
+        PumpedDispatcher.Drain();
+        Assert.NotNull(host.EditorLandingRequest());
+
+        host.OpenModal("palette");
+        PumpedDispatcher.Drain();
+        if (unrealized is not null)
+        {
+            unrealized.ClearValue(FrameworkElement.DataContextProperty);
+            host.Settle();
+        }
+        else
+        {
+            host.LetEditorLandingArrive();
+        }
+
+        Assert.NotNull(host.Shell.OpenModalSurface);
+        Assert.False(host.EditorStop().IsKeyboardFocusWithin, $"the {kind} landing seated beneath the open palette");
+        Assert.Null(host.EditorLandingRequest());
+    });
+
+    /// <summary>Codex r6 note (reproduction). A route's refused landing falls
+    /// back through FallBackFromEditor, which gives up when the group's tab
+    /// control is not realized — without trying the Files tree — and reports
+    /// nothing; the close fallback then speaks the editor pane although no
+    /// fallback took focus. Expected: the pane line is spoken only when focus
+    /// really landed.</summary>
+    [Fact]
+    public void R6_ARouteFallbackThatTakesNoFocusSpeaksNoPane() => RunSta(() =>
+    {
+        using var host = new Host();
+        host.Initialize(readingMode: true);
+        WorkspaceGroupViewModel group = host.Workspace.ActiveGroup;
+        TabControl tabs = Assert.Single(
+            Descendants<TabControl>(host.Shell.ContentPaneBorder),
+            candidate => ReferenceEquals(candidate.DataContext, group));
+        var transient = new TextBox { Text = "Where the palette was opened from" };
+        host.Show(transient);
+        Assert.True(transient.Focus());
+        PumpedDispatcher.Drain();
+        host.OpenModal("palette");
+        PumpedDispatcher.Drain();
+        // The group's tab control is not realized for it: the fallback finds none.
+        tabs.DataContext = null;
+        host.Remove(transient);
+        Keyboard.ClearFocus();
+        host.Announced.Clear();
+
+        host.Lifecycle.Palette.Dismiss();
+        PumpedDispatcher.Drain();
+
+        Assert.Null(Keyboard.FocusedElement);
+        Assert.DoesNotContain(host.Announced, line => line is A11yEvent.EditorPaneFocused);
+    });
+
     /// <summary>R-10's one owner: the surface takes focus only through a
     /// requested landing. Shown over merged content by a flip that asked for
     /// nothing, and merging content while shown, it leaves the reader where
