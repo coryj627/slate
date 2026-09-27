@@ -1253,8 +1253,9 @@ public sealed partial class CommandPaletteTests
             return DisabledReasons.TryGetValue(commandId, out string? reason) ? reason : null;
         }
 
-        /// <summary>What the invoked command's action does, if anything —
-        /// the #1275 teardown fact's action shuts the shell down.</summary>
+        /// <summary>What the invoked command's action does before it returns
+        /// or fails — the #1275 facts' actions run a nested modal loop, or
+        /// shut the shell down.</summary>
         public Action<string>? OnInvoke { get; set; }
 
         public void Invoke(string commandId)
@@ -1265,12 +1266,11 @@ public sealed partial class CommandPaletteTests
             }
 
             Invoked.Add(commandId);
+            OnInvoke?.Invoke(commandId);
             if (InvokeFailures.TryGetValue(commandId, out Exception? failure))
             {
                 throw failure;
             }
-
-            OnInvoke?.Invoke(commandId);
         }
 
         public bool RecordInvocation(string commandId)
