@@ -26,6 +26,19 @@ public partial class MainWindow : Window
     private bool _quickSwitcherCommitted;
 
     public MainWindow()
+        : this(paletteRecentsStore: null, paletteLane: null)
+    {
+    }
+
+    /// <summary>
+    /// The shipped shell over a palette whose recents file and work lane a
+    /// fact supplies (#1275) — so a hosted fact can park a recents write
+    /// without touching the user's %LOCALAPPDATA% file. Production passes
+    /// neither.
+    /// </summary>
+    internal MainWindow(
+        SlateWindows.Commands.CommandPaletteRecentsStore? paletteRecentsStore,
+        ICommandPaletteWorkLane? paletteLane)
     {
         InitializeComponent();
         _windowPlacement = new WindowPlacementManager(this);
@@ -49,7 +62,9 @@ public partial class MainWindow : Window
             // dies silently in production while every fact that injects
             // its own sink stays green. AnnouncementSeamCensus reads
             // this call and fails if either argument goes missing.
-            announceRendered: _announcer.Post);
+            announceRendered: _announcer.Post,
+            paletteRecentsStore: paletteRecentsStore,
+            paletteLane: paletteLane);
         _viewModel.RecentVaultsChanged += ViewModel_RecentVaultsChanged;
         _viewModel.ReturnedToWelcome += ViewModel_ReturnedToWelcome;
         _viewModel.WorkspaceReady += ViewModel_WorkspaceReady;
