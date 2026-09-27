@@ -91,6 +91,13 @@ public partial class MainWindow : Window
         // file dialog, a WPF ShowDialog — seals the palette for as long as
         // it runs, so nothing it owns publishes or speaks behind the prompt.
         _modalLoops = new ShellModalLoopMonitor((UIElement)Content, _viewModel.Palette.SetModalLoop);
+        // #1275 (codex round 6): while sealed, a mnemonic finds no target in
+        // the shell (MainWindow.Seal.cs) — past handled, so a menu item's
+        // own answer cannot hide a candidate from the seal.
+        AddHandler(
+            AccessKeyManager.AccessKeyPressedEvent,
+            new AccessKeyPressedEventHandler(Window_AccessKeyPressed),
+            handledEventsToo: true);
         ObserveSearch();
         RecentVaultJumpList.Apply(_viewModel.RecentVaults);
     }
@@ -724,9 +731,20 @@ public partial class MainWindow : Window
     /// overlay or sheet, WPF menu mode, the Files filter field with a
     /// filter or tag scope active, or the inline rename box while a row is
     /// being renamed there — and that owner takes the key through its own
-    /// route instead (#1272).</summary>
+    /// route instead (#1272). While the palette is sealed the seal's
+    /// admission takes every key first (#1275, <see cref="SealTakes"/>).</summary>
     private void Window_PreviewKeyDown(object sender, KeyEventArgs e)
     {
+        // #1275 (codex round 6, owner decision): the seal's one admission,
+        // ahead of every route below — the palette's own keys, its
+        // carve-outs, the sheets, the shell chords — so none of them needs
+        // a seal check of its own, and none can act while a command the
+        // palette ran is still running or a prompt is up.
+        if (SealTakes(e))
+        {
+            return;
+        }
+
         ModifierKeys modifiers = Keyboard.Modifiers;
 
         // The palette is modal: while it is open it owns the keyboard, so
@@ -757,23 +775,12 @@ public partial class MainWindow : Window
             // dispatch retires the palette, AppState.swift:1980-1989)
             // nor a refusal announcement. The admission inside the
             // workspace open takes the DismissPaletteThenOpen arm,
-            // which retires the palette with its focus lineage.
-            //
-            // #1275 (codex round 5): only while the palette is not
-            // sealed. A sealed palette takes no key but Escape (contract
-            // 28 I3) — a command it ran is still running, or a prompt is
-            // up — and this route bypassed the palette's own key handling:
-            // it dismissed the palette and opened the template picker
-            // inside the running command's nested frame, and that
-            // command's failure was then announced over the new sheet.
-            // Handled either way, so the chord cannot reach the shell.
+            // which retires the palette with its focus lineage. A sealed
+            // palette never gets here (#1275): the seal's admission at the
+            // top of this route took the chord.
             if (modifiers == (ModifierKeys.Control | ModifierKeys.Shift) && e.Key == Key.N)
             {
-                if (!_viewModel.Palette.IsSealed)
-                {
-                    _viewModel.Workspace?.OpenTemplatePicker();
-                }
-
+                _viewModel.Workspace?.OpenTemplatePicker();
                 e.Handled = true;
                 return;
             }
@@ -870,16 +877,10 @@ public partial class MainWindow : Window
             // and two hit-test scrims live while Quick Open's key handler
             // sits unreachable behind this branch.
             //
-            // #1275 (codex round 5 audit): a sealed palette does not open
-            // (contract 28 T1″), so clearing the way first would dismiss
-            // Quick Open or Search for an open that is then refused. The
-            // chord is taken and nothing moves.
-            if (_viewModel.Palette.IsSealed)
-            {
-                e.Handled = true;
-                return;
-            }
-
+            // A sealed palette does not open (contract 28 T1″), and clearing
+            // the way first would dismiss Quick Open or Search for an open
+            // that is then refused — so the seal's admission at the top of
+            // this route takes the chord before this branch (#1275).
             if (TryClearTheWayForThePalette())
             {
                 _viewModel.Palette.Open();

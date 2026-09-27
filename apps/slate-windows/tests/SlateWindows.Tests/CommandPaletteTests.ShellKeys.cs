@@ -15,12 +15,13 @@ using uniffi.slate_uniffi;
 namespace SlateWindows.Tests;
 
 /// <summary>
-/// #1275 codex round 5: the shell's own key route — <c>MainWindow</c>'s
-/// window-level <c>PreviewKeyDown</c> — must respect the palette's seal,
-/// not only the palette's key handler. These facts raise REAL chords
-/// through that route on the shipped shell (unshown, its key presses
-/// raised on their target with a borrowed input source — the
-/// <c>SheetKeyboardFenceTests</c> shape), so the shell's carve-outs are
+/// #1275 codex rounds 5 and 6: the shell's own routes — <c>MainWindow</c>'s
+/// window-level <c>PreviewKeyDown</c>, its XAML input bindings and its menu
+/// — must respect the palette's seal, not only the palette's key handler,
+/// and with the palette closed as well as open. These facts raise REAL
+/// input through those routes on the shipped shell (its key presses raised
+/// on their target with a borrowed input source — the
+/// <c>SheetKeyboardFenceTests</c> shape), so the shell's own admission is
 /// exercised, not the view model's methods.
 /// </summary>
 public sealed partial class CommandPaletteTests
@@ -37,7 +38,7 @@ public sealed partial class CommandPaletteTests
     [Fact]
     public void TheTemplateChordThroughTheShellIsRefusedWhileAPaletteCommandRuns() => RunSta(() =>
     {
-        using var host = new UnshownShellHost();
+        using var host = new ShippedShellHost();
         WorkspaceViewModel workspace = host.AttachDirtyWorkspace();
         CommandPaletteViewModel palette = host.Palette;
         palette.Open();
@@ -124,7 +125,7 @@ public sealed partial class CommandPaletteTests
     [Fact]
     public void ThePaletteChordThroughTheShellLeavesQuickOpenAloneWhileThePaletteIsSealed() => RunSta(() =>
     {
-        using var host = new UnshownShellHost();
+        using var host = new ShippedShellHost();
         QuickSwitcherViewModel switcher = host.AttachQuickOpen();
         switcher.Open();
         Assert.Equal(ModalSurface.QuickOpen, host.Shell.OpenModalSurface);
@@ -151,16 +152,199 @@ public sealed partial class CommandPaletteTests
         Assert.True(switcher.IsOpen);
     });
 
+    /// <summary>A shell route that must not act while the palette is
+    /// closed but sealed.</summary>
+    public enum ClosedSealRoute
+    {
+        /// <summary>Ctrl+Shift+N — the shell's own chord, which opens the
+        /// template picker.</summary>
+        TemplateChord,
+
+        /// <summary>Ctrl+S — the window's XAML key binding to Save.</summary>
+        SaveBinding,
+
+        /// <summary>Alt+F — the File menu's access key: the key through
+        /// the window's route, then the mnemonic itself through the access
+        /// key manager in the shell's scope.</summary>
+        FileMenuAccessKey,
+
+        /// <summary>A pointer press and release on the File menu, through
+        /// the window's route.</summary>
+        FileMenuPointer,
+    }
+
     /// <summary>
-    /// The shipped shell, unshown — MoveToFocusTests' and
-    /// SheetKeyboardFenceTests' shape: the real MainWindow, its XAML,
-    /// lifecycle, handlers, registry and commands, with a fixture vault
-    /// attached through the lifecycle's own setters and the palette's
-    /// recents file in the fixture. Key presses are raised on their target
-    /// element with an off-screen window's presentation source, so the
-    /// window-level route runs as it does for a real key.
+    /// Codex round 6: the CLOSED-but-sealed state. Close Vault run from the
+    /// palette over a dirty tab raises the real unsaved-changes prompt;
+    /// inside it Escape through the shell's route still dismisses the
+    /// palette (T9), which leaves the palette closed while its command runs.
+    /// Then the shell takes everything and nothing acts: the route under
+    /// test goes through the real window and is taken — no template picker,
+    /// no save, no File menu. Cancel on the prompt ends the command, which
+    /// completes alone: its recent is written and the vault stays open.
     /// </summary>
-    private sealed class UnshownShellHost : IDisposable
+    [Theory]
+    [InlineData(ClosedSealRoute.TemplateChord)]
+    [InlineData(ClosedSealRoute.SaveBinding)]
+    [InlineData(ClosedSealRoute.FileMenuAccessKey)]
+    [InlineData(ClosedSealRoute.FileMenuPointer)]
+    public void WithThePaletteDismissedUnderItsRunningCommandTheShellTakesNothing(ClosedSealRoute route) => RunSta(() =>
+    {
+        using var host = new ShippedShellHost(shown: true);
+        WorkspaceViewModel workspace = host.AttachDirtyWorkspace();
+        CommandPaletteViewModel palette = host.Palette;
+        palette.Open();
+        Assert.True(
+            PumpedDispatcher.PumpUntil(() => !palette.IsRankPending, TimeSpan.FromSeconds(10)),
+            "the palette's rows never published");
+        PumpedDispatcher.Drain();
+        palette.Select(Assert.Single(palette.Rows, row => row.Id == ChordTable.Ids.VaultClose));
+        host.Heard.Clear();
+
+        (bool Escaped, bool ClosedAndSealed, bool Handled, string? Acted)? inside = null;
+        int ticks = 0;
+        var timer = new DispatcherTimer(DispatcherPriority.Normal) { Interval = TimeSpan.FromMilliseconds(50) };
+        timer.Tick += (_, _) =>
+        {
+            Action? close = Win32DialogCloser();
+            if (close is null && ++ticks < 200)
+            {
+                return;
+            }
+
+            timer.Stop();
+            if (close is null)
+            {
+                return;
+            }
+
+            // The unsaved-changes prompt is up, inside Close Vault. T9:
+            // Escape through the shell's route dismisses the palette.
+            bool escaped = host.Press(host.Shell.CommandPaletteSearchTextBox, Key.Escape, ModifierKeys.None);
+            PumpedDispatcher.Drain();
+            bool closedAndSealed = !palette.IsOpen && palette.IsSealed;
+            (bool handled, string? acted) = TakeTheRoute(host, workspace, route);
+            inside = (escaped, closedAndSealed, handled, acted);
+            close();
+        };
+        timer.Start();
+        bool enter = host.Press(host.Shell.CommandPaletteSearchTextBox, Key.Enter, ModifierKeys.None);
+        timer.Stop();
+
+        Assert.True(enter, "the palette's key route did not take Enter");
+        Assert.NotNull(inside);
+        Assert.True(inside.Value.Escaped, "Escape through the shell did not reach the sealed palette (T9)");
+        Assert.True(inside.Value.ClosedAndSealed, "Escape did not leave the palette closed under its running command");
+        Assert.True(inside.Value.Handled, $"the shell let {route} through while the palette was closed but sealed");
+        Assert.True(inside.Value.Acted is null, $"{route} acted under the running command: {inside.Value.Acted}");
+
+        // Only the original invocation completed: Close Vault (cancelled at
+        // its prompt) returned and its recent was written; nothing else ran.
+        Assert.False(palette.IsSealed);
+        Assert.False(palette.IsOpen);
+        Assert.Null(workspace.TemplatePickerSheet);
+        Assert.True(workspace.HasDirtyTabs);
+        Assert.True(host.Lifecycle.IsVaultOpen);
+        PumpedDispatcher.PumpUntilDrained(palette.RecordCompletion);
+        Assert.Equal([ChordTable.Ids.VaultClose], host.PersistedRecents());
+        Assert.Empty(host.Heard);
+    });
+
+    /// <summary>Raises <paramref name="route"/> through the shell and says
+    /// what, if anything, it did.</summary>
+    private static (bool Handled, string? Acted) TakeTheRoute(
+        ShippedShellHost host, WorkspaceViewModel workspace, ClosedSealRoute route)
+    {
+        switch (route)
+        {
+            case ClosedSealRoute.TemplateChord:
+                {
+                    bool handled = host.Press(host.Shell, Key.N, ModifierKeys.Control | ModifierKeys.Shift);
+                    PumpedDispatcher.Drain();
+                    return (handled, workspace.TemplatePickerSheet is not null ? "the template picker opened" : null);
+                }
+
+            case ClosedSealRoute.SaveBinding:
+                {
+                    string note = Path.Combine(host.VaultRoot, "note0.md");
+                    string before = File.ReadAllText(note);
+                    bool handled = host.Press(host.Shell, Key.S, ModifierKeys.Control);
+                    PumpedDispatcher.Drain();
+                    return (handled, !workspace.HasDirtyTabs || File.ReadAllText(note) != before
+                        ? "the dirty tab was saved"
+                        : null);
+                }
+
+            case ClosedSealRoute.FileMenuAccessKey:
+                {
+                    MenuItem file = FileMenu(host);
+                    bool handled = host.PressSystem(host.Shell, Key.F, ModifierKeys.Alt);
+
+                    // The mnemonic leg: WPF's loop turns an unhandled Alt+F into
+                    // a mnemonic for the access key manager. Raised here whatever
+                    // the key leg did, so the manager's own path under the seal
+                    // is shown too.
+                    host.Mnemonic("F");
+                    PumpedDispatcher.Drain();
+                    bool opened = file.IsSubmenuOpen;
+                    file.IsSubmenuOpen = false;
+                    return (handled, opened ? "the File menu opened" : null);
+                }
+
+            case ClosedSealRoute.FileMenuPointer:
+                {
+                    // A synthetic press cannot click a menu item (WPF reads the
+                    // real cursor and button), so the witness is reach: the
+                    // item's own button handlers see the press only if the
+                    // window's route let it through unhandled.
+                    MenuItem file = FileMenu(host);
+                    int reached = 0;
+                    var probe = new MouseButtonEventHandler((_, _) => reached++);
+                    file.AddHandler(UIElement.PreviewMouseLeftButtonDownEvent, probe);
+                    file.AddHandler(UIElement.PreviewMouseLeftButtonUpEvent, probe);
+                    try
+                    {
+                        bool handled = host.PressPointer(file);
+                        PumpedDispatcher.Drain();
+                        bool opened = file.IsSubmenuOpen;
+                        file.IsSubmenuOpen = false;
+                        return (handled, reached > 0 || opened
+                            ? $"the File menu took {reached} pointer event(s), and opened={opened}"
+                            : null);
+                    }
+                    finally
+                    {
+                        file.RemoveHandler(UIElement.PreviewMouseLeftButtonDownEvent, probe);
+                        file.RemoveHandler(UIElement.PreviewMouseLeftButtonUpEvent, probe);
+                    }
+                }
+
+            default:
+                throw new ArgumentOutOfRangeException(nameof(route), route, null);
+        }
+    }
+
+    private static MenuItem FileMenu(ShippedShellHost host)
+    {
+        MenuItem file = Assert.IsType<MenuItem>(host.Shell.MainMenu.Items[0]);
+        Assert.Equal("_File", file.Header);
+        Assert.True(file.IsVisible, "the File menu is not visible, so no input could reach it");
+        return file;
+    }
+
+    /// <summary>
+    /// The shipped shell — MoveToFocusTests' and SheetKeyboardFenceTests'
+    /// shape: the real MainWindow, its XAML, lifecycle, handlers, registry
+    /// and commands, with a fixture vault attached through the lifecycle's
+    /// own setters and the palette's recents file in the fixture. Key
+    /// presses are raised on their target element with an off-screen
+    /// window's presentation source, so the window-level route runs as it
+    /// does for a real key. Unshown by default; <c>shown</c> puts the shell
+    /// on its own off-screen window (placement kept in the fixture, never
+    /// activated), so the access key manager — which targets only visible
+    /// elements in a live source — can reach its menu.
+    /// </summary>
+    private sealed class ShippedShellHost : IDisposable
     {
         private readonly FixtureVault _fixture = FixtureVault.Create(1, "palette-shell-keys");
         private readonly Func<bool> _priorOverlayProbe = CanvasSurfaceView.ShellOverlayIsOpen;
@@ -171,7 +355,7 @@ public sealed partial class CommandPaletteTests
         private WorkspaceViewModel? _workspace;
         private QuickSwitcherViewModel? _switcher;
 
-        public UnshownShellHost()
+        public ShippedShellHost(bool shown = false)
         {
             Assert.Null(Application.Current);
             _session = VaultSession.OpenFilesystem(_fixture.Root);
@@ -212,9 +396,36 @@ public sealed partial class CommandPaletteTests
                 WindowStartupLocation = WindowStartupLocation.Manual,
             };
             _inputSource.Show();
+
+            if (shown)
+            {
+                // Placement is restored on the source's creation and saved
+                // on close: both go to the fixture, never the user's file.
+                (typeof(MainWindow).GetField("_windowPlacement", BindingFlags.NonPublic | BindingFlags.Instance)
+                        ?? throw new InvalidOperationException("MainWindow._windowPlacement is gone"))
+                    .SetValue(Shell, new WindowPlacementManager(
+                        Shell, new WindowStateStore(Path.Combine(_fixture.Root, "device-state", "window.json"))));
+
+                // A rendered editor needs the theme the app would supply.
+                Shell.Resources.MergedDictionaries.Add(new ResourceDictionary
+                {
+                    Source = new Uri(
+                        "pack://application:,,,/SlateWindows;component/Themes/Slate.Light.xaml",
+                        UriKind.Absolute),
+                });
+                Shell.WindowStartupLocation = WindowStartupLocation.Manual;
+                Shell.Left = -10_000;
+                Shell.Top = -10_000;
+                Shell.ShowActivated = false;
+                Shell.ShowInTaskbar = false;
+                Shell.Show();
+                PumpedDispatcher.Drain();
+            }
         }
 
         public MainWindow Shell { get; }
+
+        public string VaultRoot => _fixture.Root;
 
         public VaultLifecycleViewModel Lifecycle => _lifecycle;
 
@@ -252,28 +463,53 @@ public sealed partial class CommandPaletteTests
         /// then — unhandled — KeyDown, with exactly
         /// <paramref name="modifiers"/> held in the thread's key state.
         /// Returns whether the press was handled.</summary>
-        public bool Press(UIElement target, Key key, ModifierKeys modifiers)
+        public bool Press(UIElement target, Key key, ModifierKeys modifiers) =>
+            Press(target, key, modifiers, system: false);
+
+        /// <summary>A system key press — what WPF raises for Alt+letter:
+        /// <c>Key.System</c>, the letter in <c>SystemKey</c>.</summary>
+        public bool PressSystem(UIElement target, Key key, ModifierKeys modifiers) =>
+            Press(target, key, modifiers, system: true);
+
+        /// <summary>The mnemonic WPF's loop hands the access key manager for
+        /// an unhandled Alt+<paramref name="key"/>: processed in the scope of
+        /// the shell's presentation source with Alt held, as it is for a real
+        /// key — the main menu joins the window's scope only while Alt is
+        /// down, and keeps a scope of its own otherwise.</summary>
+        public void Mnemonic(string key) =>
+            ThreadModifiers.Hold(
+                ModifierKeys.Alt,
+                () => _ = AccessKeyManager.ProcessKey(PresentationSource.FromVisual(Shell)!, key, false));
+
+        /// <summary>A left-button press and release on
+        /// <paramref name="target"/>, each Preview then — unhandled — its
+        /// bubbling twin. Returns whether both were handled.</summary>
+        public bool PressPointer(UIElement target)
         {
-            bool handled = false;
-            ThreadModifiers.Hold(modifiers, () =>
+            bool handled = true;
+            foreach ((RoutedEvent preview, RoutedEvent bubble) in new[]
             {
-                PresentationSource source = PresentationSource.FromVisual(_inputSource)!;
-                var preview = new KeyEventArgs(Keyboard.PrimaryDevice, source, Environment.TickCount, key)
+                (Mouse.PreviewMouseDownEvent, Mouse.MouseDownEvent),
+                (Mouse.PreviewMouseUpEvent, Mouse.MouseUpEvent),
+            })
+            {
+                var args = new MouseButtonEventArgs(Mouse.PrimaryDevice, Environment.TickCount, MouseButton.Left)
                 {
-                    RoutedEvent = Keyboard.PreviewKeyDownEvent,
+                    RoutedEvent = preview,
                 };
-                target.RaiseEvent(preview);
-                handled = preview.Handled;
-                if (!handled)
+                target.RaiseEvent(args);
+                if (!args.Handled)
                 {
-                    var down = new KeyEventArgs(Keyboard.PrimaryDevice, source, Environment.TickCount, key)
+                    args = new MouseButtonEventArgs(Mouse.PrimaryDevice, Environment.TickCount, MouseButton.Left)
                     {
-                        RoutedEvent = Keyboard.KeyDownEvent,
+                        RoutedEvent = bubble,
                     };
-                    target.RaiseEvent(down);
-                    handled = down.Handled;
+                    target.RaiseEvent(args);
                 }
-            });
+
+                handled &= args.Handled;
+            }
+
             return handled;
         }
 
@@ -312,6 +548,42 @@ public sealed partial class CommandPaletteTests
             }
         }
 
+        private static KeyEventArgs KeyArgs(PresentationSource source, Key key, bool system, RoutedEvent routed)
+        {
+            var args = new KeyEventArgs(Keyboard.PrimaryDevice, source, Environment.TickCount, key)
+            {
+                RoutedEvent = routed,
+            };
+            if (system)
+            {
+                (typeof(KeyEventArgs).GetMethod("MarkSystem", BindingFlags.NonPublic | BindingFlags.Instance)
+                        ?? throw new InvalidOperationException("KeyEventArgs.MarkSystem is gone"))
+                    .Invoke(args, null);
+                Assert.Equal((Key.System, key), (args.Key, args.SystemKey));
+            }
+
+            return args;
+        }
+
+        private bool Press(UIElement target, Key key, ModifierKeys modifiers, bool system)
+        {
+            bool handled = false;
+            ThreadModifiers.Hold(modifiers, () =>
+            {
+                PresentationSource source = PresentationSource.FromVisual(_inputSource)!;
+                KeyEventArgs preview = KeyArgs(source, key, system, Keyboard.PreviewKeyDownEvent);
+                target.RaiseEvent(preview);
+                handled = preview.Handled;
+                if (!handled)
+                {
+                    KeyEventArgs down = KeyArgs(source, key, system, Keyboard.KeyDownEvent);
+                    target.RaiseEvent(down);
+                    handled = down.Handled;
+                }
+            });
+            return handled;
+        }
+
         private void SetField(string name, object? value) =>
             (typeof(VaultLifecycleViewModel).GetField(name, BindingFlags.NonPublic | BindingFlags.Instance)
                 ?? throw new InvalidOperationException($"VaultLifecycleViewModel.{name} is gone"))
@@ -334,8 +606,10 @@ public sealed partial class CommandPaletteTests
     {
         private const int VkShift = 0x10;
         private const int VkControl = 0x11;
+        private const int VkMenu = 0x12;
         private const int VkLeftShift = 0xA0;
         private const int VkLeftControl = 0xA2;
+        private const int VkLeftMenu = 0xA4;
         private const byte KeyDown = 0x80;
         private static readonly int[] AllModifierKeys =
             [0x10, 0x11, 0x12, 0xA0, 0xA1, 0xA2, 0xA3, 0xA4, 0xA5, 0x5B, 0x5C];
@@ -358,6 +632,11 @@ public sealed partial class CommandPaletteTests
             if (modifiers.HasFlag(ModifierKeys.Control))
             {
                 pressed[VkControl] = pressed[VkLeftControl] = KeyDown;
+            }
+
+            if (modifiers.HasFlag(ModifierKeys.Alt))
+            {
+                pressed[VkMenu] = pressed[VkLeftMenu] = KeyDown;
             }
 
             try
