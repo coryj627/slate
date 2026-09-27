@@ -206,18 +206,21 @@ internal sealed class CommandPaletteSectionViewModel
 /// once that window has elapsed AND that query's rows have published.
 /// </para>
 /// <para>
-/// <b>A running command seals the palette</b> (#1275 codex round 3). A
+/// <b>The palette is sealed while a command it runs is running, or while
+/// any modal loop runs over the shell</b> (#1275 codex rounds 3 and 4). A
 /// command can pump nested dispatcher frames before it returns — the folder
-/// picker, the unsaved-changes prompt — so from the moment the command is
-/// called until it returns the palette is <i>invoking</i>: the pending
-/// rank's token is cancelled and the generation advanced, so nothing in
-/// flight can publish; the count window is cancelled; selection moves,
-/// Enter and a re-open are refused; and a query typed meanwhile is kept for
-/// later. The published list stays on screen (P9 keeps the palette up until
-/// the command succeeds), but nothing the palette owns publishes, changes or
-/// speaks while the command runs. A failure ends the seal and, if the seal
-/// took a pending rank or an unspoken count or the query changed, re-ranks
-/// the current query so the list and the count come back consistent.
+/// picker, the unsaved-changes prompt — and so can a prompt the palette did
+/// not start, such as the one closing the app raises. While either cause
+/// holds, the palette is sealed: the pending rank's token is cancelled and
+/// the generation advanced, so nothing in flight can publish; the count
+/// window is cancelled; selection moves, Enter and a re-open are refused;
+/// and a query typed meanwhile is kept for later. The published list stays
+/// on screen, but nothing the palette owns publishes, changes or speaks.
+/// When the last cause ends the seal lifts — a successful command dismisses
+/// instead — and if the seal took a pending rank or an unspoken count, or
+/// the query changed, the current query ranks again so the list and the
+/// count come back consistent. The shell reports modal loops through
+/// <see cref="SetModalLoop"/> (<see cref="ShellModalLoopMonitor"/>).
 /// </para>
 /// <para>
 /// <b>A successful invocation retires the surface in the same dispatcher
@@ -279,6 +282,7 @@ internal sealed class CommandPaletteViewModel : BindableBase
     private int _publishedGeneration;
     private bool _isShutDown;
     private bool _isInvoking;
+    private bool _inModalLoop;
     private bool _resumeRanking;
     private IReadOnlyList<CommandPaletteSectionViewModel> _sections = [];
     private CommandPaletteRowViewModel[] _rows = [];
@@ -409,6 +413,14 @@ internal sealed class CommandPaletteViewModel : BindableBase
     /// the palette is sealed until it returns, however it returns.</summary>
     internal bool IsInvoking => _isInvoking;
 
+    /// <summary>Whether the shell has reported a modal loop running over it
+    /// (<see cref="SetModalLoop"/>).</summary>
+    internal bool IsInModalLoop => _inModalLoop;
+
+    /// <summary>Whether the palette is sealed — by a command it is running,
+    /// by a modal loop over the shell, or both.</summary>
+    internal bool IsSealed => _isInvoking || _inModalLoop;
+
     /// <summary>How long teardown waits for the lane's in-flight item — one
     /// bounded native call or recents write — before it lets go.</summary>
     internal static TimeSpan ShutdownDrainBudget { get; } = TimeSpan.FromSeconds(5);
@@ -433,11 +445,11 @@ internal sealed class CommandPaletteViewModel : BindableBase
                 return;
             }
 
-            if (IsOpen && _isInvoking)
+            if (IsOpen && IsSealed)
             {
-                // A command's modal loop owns the moment: the text is kept,
-                // and its ranking waits for the command to return — a
-                // failure ranks it, a success dismisses.
+                // A command or a modal loop owns the moment: the text is
+                // kept, and its ranking waits for the seal to lift — then it
+                // ranks, unless a successful command dismissed the palette.
                 _resumeRanking = true;
             }
             else if (IsOpen)
@@ -539,11 +551,12 @@ internal sealed class CommandPaletteViewModel : BindableBase
     /// </summary>
     public void Open()
     {
-        // A command still running has the palette sealed: a re-open (PD-2)
-        // would clear the list under it and start ranking inside its modal
-        // loop, and an open after the command dismissed it would be torn
-        // down again by that command's own success.
-        if (_isShutDown || _isInvoking)
+        // A sealed palette neither opens nor re-opens: a re-open (PD-2)
+        // would clear the list under a running command or a modal loop and
+        // start ranking inside it, and an open after a running command
+        // dismissed the palette would be torn down again by that command's
+        // own success.
+        if (_isShutDown || IsSealed)
         {
             return;
         }
@@ -746,8 +759,9 @@ internal sealed class CommandPaletteViewModel : BindableBase
     /// publication the user has not seen, so Enter can never run a row
     /// that was not on screen when it was pressed. With nothing published
     /// yet (the open's snapshot still loading) there is no selection, and
-    /// Enter does nothing. While a command is running, it does nothing
-    /// either: one command at a time.
+    /// Enter does nothing. While the palette is sealed — a command running, or
+    /// a modal loop over the shell — it does nothing either: one command at a
+    /// time, and none under a prompt.
     /// </remarks>
     public void InvokeSelected()
     {
@@ -774,10 +788,10 @@ internal sealed class CommandPaletteViewModel : BindableBase
     /// </remarks>
     public void Invoke(CommandPaletteRowViewModel row)
     {
-        if (_isInvoking)
+        if (IsSealed)
         {
-            // One command at a time: an Enter or a double-click reaching the
-            // palette inside a running command's modal loop runs nothing.
+            // One command at a time, and none under a prompt: an Enter or a
+            // double-click reaching a sealed palette runs nothing.
             return;
         }
 
@@ -840,7 +854,14 @@ internal sealed class CommandPaletteViewModel : BindableBase
         if (failure is not null)
         {
             _announce(failure);
-            ResumeAfterFailedInvocation();
+
+            // The invocation was the seal's last cause unless a modal loop
+            // is still reported; then the seal lifts when that loop ends.
+            if (!IsSealed)
+            {
+                ResumeIfOwed();
+            }
+
             return;
         }
 
@@ -859,29 +880,71 @@ internal sealed class CommandPaletteViewModel : BindableBase
     }
 
     /// <summary>
-    /// T8's seal, immediately before the command runs: remember whether it
+    /// T8's seal cause, immediately before the command runs. Invoke refuses
+    /// while sealed, so a command is always the seal's first cause.
+    /// </summary>
+    private void BeginInvocation()
+    {
+        _isInvoking = true;
+        Seal();
+    }
+
+    /// <summary>
+    /// T13/T14: the shell reports a modal loop beginning over it (a message
+    /// box, a common dialog, a WPF <c>ShowDialog</c>) or the last one ending.
+    /// The first cause seals; a second is already covered. When the last
+    /// cause ends the seal lifts and what it took is ranked again; a command
+    /// still running keeps it sealed until the command returns.
+    /// </summary>
+    internal void SetModalLoop(bool active)
+    {
+        if (active == _inModalLoop)
+        {
+            return;
+        }
+
+        if (active)
+        {
+            bool wasSealed = IsSealed;
+            _inModalLoop = true;
+            if (!wasSealed)
+            {
+                Seal();
+            }
+
+            return;
+        }
+
+        _inModalLoop = false;
+        if (!IsSealed)
+        {
+            ResumeIfOwed();
+        }
+    }
+
+    /// <summary>
+    /// The seal, applied when its first cause arrives: remember whether it
     /// takes anything the user is still owed — rows still ranking, or a count
     /// not yet spoken — then cancel the pending rank's token and advance the
     /// generation (nothing in flight can publish or resolve), and cancel the
     /// count window. The published list stays on screen.
     /// </summary>
-    private void BeginInvocation()
+    private void Seal()
     {
         _resumeRanking = IsRankPending || _countWindow is not null;
-        _isInvoking = true;
         CancelRankRequest();
         _publishedGeneration = ++_rankGeneration;
         CancelFilterCountWindow();
     }
 
     /// <summary>
-    /// A command failed and the palette stays open (P9): if the seal took a
-    /// pending rank or an unspoken count, or the query changed while the
-    /// command ran, rank the current query again (T2) so the list and its
-    /// count come back consistent with what is typed. Otherwise both
-    /// already are, and nothing more is said.
+    /// The seal's last cause has ended with the palette still up (a failed
+    /// command, or a modal loop closing): if the seal took a pending rank or
+    /// an unspoken count, or the query changed meanwhile, rank the current
+    /// query again (T2) so the list and its count come back consistent with
+    /// what is typed. Otherwise both already are, and nothing more is said.
     /// </summary>
-    private void ResumeAfterFailedInvocation()
+    private void ResumeIfOwed()
     {
         bool resume = _resumeRanking;
         _resumeRanking = false;
@@ -1166,7 +1229,7 @@ internal sealed class CommandPaletteViewModel : BindableBase
     /// </summary>
     private void ResolveFailedRank(int generation, Exception exception)
     {
-        if (generation != _rankGeneration || !_isOpen || _isShutDown || _isInvoking)
+        if (generation != _rankGeneration || !_isOpen || _isShutDown || IsSealed)
         {
             return;
         }
@@ -1196,7 +1259,7 @@ internal sealed class CommandPaletteViewModel : BindableBase
         PaletteSection[] computed,
         (int QueryChange, long Requested, long RankTicks)? timed)
     {
-        if (generation != _rankGeneration || !_isOpen || _isShutDown || _isInvoking)
+        if (generation != _rankGeneration || !_isOpen || _isShutDown || IsSealed)
         {
             return;
         }
@@ -1284,11 +1347,11 @@ internal sealed class CommandPaletteViewModel : BindableBase
     }
 
     /// <summary>A selection the user makes on the published rows — refused
-    /// while a command runs, with the palette's own selection re-asserted so
-    /// a list the pointer moved shows it again.</summary>
+    /// while sealed, with the palette's own selection re-asserted so a list
+    /// the pointer moved shows it again.</summary>
     private void UserSelect(string? id)
     {
-        if (_isInvoking)
+        if (IsSealed)
         {
             OnPropertyChanged(nameof(SelectedRow));
             return;
@@ -1386,7 +1449,7 @@ internal sealed class CommandPaletteViewModel : BindableBase
 
         void Speak()
         {
-            if (!window.Token.IsCancellationRequested && IsOpen && !_isInvoking)
+            if (!window.Token.IsCancellationRequested && IsOpen && !IsSealed)
             {
                 _announce(count);
 

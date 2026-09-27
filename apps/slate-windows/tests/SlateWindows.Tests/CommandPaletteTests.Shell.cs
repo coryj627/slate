@@ -97,6 +97,7 @@ public sealed partial class CommandPaletteTests
         private readonly VaultLifecycleViewModel _lifecycle;
         private readonly Window _window;
         private readonly string _recentsPath;
+        private WorkspaceViewModel? _workspace;
 
         public PaletteShellHost()
         {
@@ -127,6 +128,19 @@ public sealed partial class CommandPaletteTests
             SetProperty(nameof(VaultLifecycleViewModel.IsVaultOpen), true);
             SetProperty(nameof(VaultLifecycleViewModel.QuickSwitcher), _switcher);
 
+            // Everything the palette hands the shell's one announcement
+            // funnel, recorded on its way there: the funnel itself raises
+            // UIA notifications no in-process fact can hear.
+            FieldInfo announce = typeof(CommandPaletteViewModel).GetField(
+                    "_announce", BindingFlags.NonPublic | BindingFlags.Instance)
+                ?? throw new InvalidOperationException("CommandPaletteViewModel._announce is gone");
+            var funnel = (Action<A11yEvent>)announce.GetValue(Palette)!;
+            announce.SetValue(Palette, (Action<A11yEvent>)(announcement =>
+            {
+                Heard.Add(announcement);
+                funnel(announcement);
+            }));
+
             UIElement content = Assert.IsAssignableFrom<UIElement>(Shell.Content);
             Shell.Content = null;
             Sentinel = new TextBox { Text = "Focus starts here" };
@@ -146,6 +160,16 @@ public sealed partial class CommandPaletteTests
                 WindowStyle = WindowStyle.None,
                 ResizeMode = ResizeMode.NoResize,
             };
+            // The app merges its theme into Application.Resources; the host's
+            // own resources stand in (MenuItemForegroundTests' shape) so the
+            // process-wide theme is left alone — the editor a dirty
+            // workspace realizes asks for its brushes.
+            _window.Resources.MergedDictionaries.Add(new ResourceDictionary
+            {
+                Source = new Uri(
+                    "pack://application:,,,/SlateWindows;component/Themes/Slate.Light.xaml",
+                    UriKind.Absolute),
+            });
             _window.AddHandler(
                 Keyboard.GotKeyboardFocusEvent,
                 new KeyboardFocusChangedEventHandler(Window_GotKeyboardFocus),
@@ -166,6 +190,34 @@ public sealed partial class CommandPaletteTests
         public TextBox Sentinel { get; }
 
         public CommandPaletteViewModel Palette => _lifecycle.Palette;
+
+        public VaultLifecycleViewModel Lifecycle => _lifecycle;
+
+        /// <summary>The window the shell's content lives in — the owner a
+        /// real dialog over the shell takes.</summary>
+        public Window Window => _window;
+
+        /// <summary>What the palette has announced, in order.</summary>
+        public List<A11yEvent> Heard { get; } = [];
+
+        /// <summary>A workspace with <c>note0.md</c> open and edited, attached
+        /// through the lifecycle's own setter so the shell observes it — what
+        /// the unsaved-changes prompt on close needs.</summary>
+        public WorkspaceViewModel AttachDirtyWorkspace()
+        {
+            _workspace = new WorkspaceViewModel(
+                _session,
+                _fixture.Root,
+                () => [],
+                _ => { },
+                startInteractionBackgroundWork: false,
+                preferencesStore: new AppPreferencesStore(Path.Combine(_fixture.Root, "preferences.json")));
+            SetProperty(nameof(VaultLifecycleViewModel.Workspace), _workspace);
+            _workspace.OpenPath("note0.md");
+            _workspace.ActiveGroup.ActiveTab!.Text += "\nUnsaved.";
+            Assert.True(_workspace.HasDirtyTabs);
+            return _workspace;
+        }
 
         /// <summary>Every element that took keyboard focus since the last
         /// <see cref="PressEnterInThePalette"/>, in order.</summary>
@@ -286,6 +338,12 @@ public sealed partial class CommandPaletteTests
                 // shell's own teardown runs.
                 _switcher.Dismiss();
                 _lifecycle.Search.Close();
+                if (_workspace is not null)
+                {
+                    SetProperty(nameof(VaultLifecycleViewModel.Workspace), null);
+                    _workspace.Dispose();
+                }
+
                 SetProperty(nameof(VaultLifecycleViewModel.QuickSwitcher), null);
                 SetProperty(nameof(VaultLifecycleViewModel.IsVaultOpen), false);
                 SetField("_session", null);

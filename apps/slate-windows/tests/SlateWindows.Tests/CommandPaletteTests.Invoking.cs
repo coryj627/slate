@@ -1,6 +1,8 @@
 // Copyright (C) 2026 Cory Joseph
 // SPDX-License-Identifier: AGPL-3.0-or-later
 
+using System.Windows.Controls;
+using System.Windows.Interop;
 using System.Windows.Threading;
 using SlateWindows.Commands;
 using uniffi.slate_uniffi;
@@ -337,17 +339,20 @@ public sealed partial class CommandPaletteTests
     });
 
     /// <summary>
-    /// Codex round 4's repro (#1275; the owner chooses the fix — this fact
-    /// FAILS until one lands). Closing the app with a dirty tab while the
-    /// palette is open runs the unsaved-changes prompt
-    /// (<c>PrepareForApplicationClose</c> → <c>TryCloseWorkspace</c> →
-    /// <c>_confirmUnsavedClose</c>), and that prompt's modal loop pumps the
-    /// dispatcher with the palette open and NOT invoking — the invocation
-    /// seal covers only the command the palette itself runs. Here the
-    /// injected confirmation pumps a nested frame, as the real
-    /// <c>MessageBox</c> does, while a parked rank completes and its count
-    /// window runs out: the palette must publish nothing and say nothing
-    /// while the prompt is up.
+    /// Codex round 4's repro (#1275), green under the owner's option (a).
+    /// Closing the app with a dirty tab while the palette is open runs the
+    /// unsaved-changes prompt (<c>PrepareForApplicationClose</c> →
+    /// <c>TryCloseWorkspace</c> → <c>_confirmUnsavedClose</c>), whose modal
+    /// loop pumps the dispatcher with the palette open and not invoking.
+    /// The injected confirmation runs a nested frame inside a thread-modal
+    /// section (<c>ComponentDispatcher.PushModal</c>, what WPF and the common
+    /// dialogs raise), and the palette hears about it through the same
+    /// <see cref="ShellModalLoopMonitor"/> the shell builds. Inside the
+    /// prompt a parked rank completes and its count window runs out: the
+    /// palette publishes nothing and says nothing. When the prompt closes
+    /// the query the seal took ranks again: its rows, its selection, one
+    /// count. (The shipped shell's real message box is witnessed by the
+    /// hosted facts in <c>CommandPaletteTests.Shell.cs</c>.)
     /// </summary>
     [Fact]
     public void TheUnsavedChangesPromptOnCloseHearsNothingFromThePalette() => RunSta(() =>
@@ -359,7 +364,7 @@ public sealed partial class CommandPaletteTests
         Task? parkedRank = null;
         using var gate = new ManualResetEventSlim(false);
         int published = 0;
-        (int Published, int Heard)? duringPrompt = null;
+        (int Published, int Heard, string? Selected, bool Sealed)? duringPrompt = null;
 
         int PaletteHeard() => announced.Count(announcement =>
             announcement is A11yEvent.PaletteCommandSelected or A11yEvent.PaletteFilterCount);
@@ -369,20 +374,33 @@ public sealed partial class CommandPaletteTests
             // The prompt's modal loop: while it is up the parked rank
             // completes and posts its rows back, and its count window
             // runs out.
-            int publishedBefore = published;
-            int heardBefore = PaletteHeard();
-            gate.Set();
-            Assert.True(
-                PumpedDispatcher.PumpUntil(() => parkedRank!.IsCompleted, TimeSpan.FromSeconds(10)),
-                "the parked rank never completed inside the prompt");
-            PumpedDispatcher.Drain();
-            Assert.True(
-                PumpedDispatcher.PumpUntil(
-                    () => palette!.FilterCountCompletion.IsCompleted,
-                    TimeSpan.FromSeconds(10)),
-                "the count window never ran out inside the prompt");
-            PumpedDispatcher.Drain();
-            duringPrompt = (published - publishedBefore, PaletteHeard() - heardBefore);
+            ComponentDispatcher.PushModal();
+            try
+            {
+                int publishedBefore = published;
+                int heardBefore = PaletteHeard();
+                gate.Set();
+                Assert.True(
+                    PumpedDispatcher.PumpUntil(() => parkedRank!.IsCompleted, TimeSpan.FromSeconds(10)),
+                    "the parked rank never completed inside the prompt");
+                PumpedDispatcher.Drain();
+                Assert.True(
+                    PumpedDispatcher.PumpUntil(
+                        () => palette!.FilterCountCompletion.IsCompleted,
+                        TimeSpan.FromSeconds(10)),
+                    "the count window never ran out inside the prompt");
+                PumpedDispatcher.Drain();
+                duringPrompt = (
+                    published - publishedBefore,
+                    PaletteHeard() - heardBefore,
+                    palette!.SelectedId,
+                    palette.IsSealed);
+            }
+            finally
+            {
+                ComponentDispatcher.PopModal();
+            }
+
             return VaultCloseDecision.Cancel;
         }
 
@@ -415,6 +433,7 @@ public sealed partial class CommandPaletteTests
             PumpedDispatcher.PumpUntil(() => !palette.IsRankPending, TimeSpan.FromSeconds(10)),
             "the open's rows never published");
         string? selectedBefore = palette.SelectedId;
+        using var modalLoops = new ShellModalLoopMonitor(new Border(), palette.SetModalLoop);
 
         // A query whose rank is parked behind a held lane item.
         using var running = new ManualResetEventSlim(false);
@@ -431,14 +450,118 @@ public sealed partial class CommandPaletteTests
         Assert.True(palette.IsRankPending);
 
         // The window closes with a dirty tab: the unsaved-changes prompt.
+        int publishedBeforeClose = published;
+        int heardBeforeClose = announced.Count;
         Assert.False(lifecycle.PrepareForApplicationClose());
 
         Assert.NotNull(duringPrompt);
-        Assert.True(palette.IsOpen);
+        Assert.True(duringPrompt.Value.Sealed, "the palette was not sealed while the prompt was up");
         Assert.True(
-            duringPrompt.Value is (0, 0) && palette.SelectedId == selectedBefore,
+            duringPrompt.Value is (0, 0, _, _) && duringPrompt.Value.Selected == selectedBefore,
             $"while the unsaved-changes prompt was up the palette published {duringPrompt.Value.Published} "
             + $"time(s), made {duringPrompt.Value.Heard} announcement(s), and moved its selection from "
-            + $"'{selectedBefore}' to '{palette.SelectedId}'");
+            + $"'{selectedBefore}' to '{duringPrompt.Value.Selected}'");
+
+        // The prompt closed (Cancel) with the palette still up: the seal
+        // lifts, and the query it took ranks again — its rows, the
+        // selection they bring, one count.
+        Assert.True(palette.IsOpen);
+        Assert.False(palette.IsSealed);
+        Assert.True(
+            PumpedDispatcher.PumpUntil(() => !palette.IsRankPending, TimeSpan.FromSeconds(10)),
+            "the query the seal took never ranked again");
+        PumpedDispatcher.Drain();
+        PumpedDispatcher.PumpUntilDrained(palette.FilterCountCompletion);
+        PumpedDispatcher.Drain();
+        Assert.Equal(1, published - publishedBeforeClose);
+        Assert.Equal("slate.workspace.quickOpen", palette.SelectedId);
+        A11yEvent[] afterPrompt = [.. announced.Skip(heardBeforeClose)];
+        Assert.Collection(
+            afterPrompt.Where(announcement =>
+                announcement is A11yEvent.PaletteCommandSelected or A11yEvent.PaletteFilterCount),
+            announced => Assert.IsType<A11yEvent.PaletteCommandSelected>(announced),
+            announced => Assert.Equal(
+                "quick open",
+                Assert.IsType<A11yEvent.PaletteFilterCount>(announced).Query));
+    });
+
+    /// <summary>
+    /// One seal, two causes: a command that raises a prompt of its own (a
+    /// thread-modal loop inside the invoke) keeps the palette sealed after
+    /// the prompt closes, until the command itself returns — the modal
+    /// loop's end is not the seal's end while the invocation holds it. A
+    /// parked rank completing after the prompt, still inside the command,
+    /// lands nothing; the failure then speaks, and the query the seal took
+    /// ranks once.
+    /// </summary>
+    [Fact]
+    public void APromptInsideACommandKeepsThePaletteSealedUntilTheCommandReturns() => RunSta(() =>
+    {
+        LaneHost host = LaneHost.Opened();
+        CommandPaletteViewModel palette = host.Palette;
+        using var modalLoops = new ShellModalLoopMonitor(new Border(), palette.SetModalLoop);
+        List<TaskCompletionSource> windows = host.HoldTheCountWindows();
+        host.Harness.Announcements.Clear();
+        host.Harness.Source.InvokeFailures["slate.file.newNote"] =
+            new CommandException.ActionFailed("Disk is full.");
+        int published = 0;
+        palette.PropertyChanged += (_, change) =>
+        {
+            if (change.PropertyName == nameof(CommandPaletteViewModel.Rows))
+            {
+                published++;
+            }
+        };
+
+        host.Ranker.Park("q");
+        palette.Query = "q";
+        host.Ranker.WaitUntilEntered("q");
+        Task parkedRank = palette.RankCompletion;
+        TaskCompletionSource window = Assert.Single(windows);
+
+        (bool InPrompt, bool SealedAfterPrompt, int Published, int Heard)? inside = null;
+        host.Harness.Source.OnInvoke = _ =>
+        {
+            ComponentDispatcher.PushModal();
+            PumpedDispatcher.Drain();
+            bool inPrompt = palette.IsInModalLoop && palette.IsSealed;
+            ComponentDispatcher.PopModal();
+            bool sealedAfterPrompt = palette.IsSealed;
+
+            host.Ranker.Release("q");
+            Assert.True(
+                PumpedDispatcher.PumpUntil(() => parkedRank.IsCompleted, TimeSpan.FromSeconds(10)),
+                "the parked rank never completed inside the command");
+            window.TrySetResult();
+            PumpedDispatcher.PumpUntilDrained(palette.FilterCountCompletion);
+            PumpedDispatcher.Drain();
+            inside = (inPrompt, sealedAfterPrompt, published, host.Harness.Announcements.Count);
+        };
+
+        palette.InvokeSelected();
+
+        Assert.NotNull(inside);
+        Assert.True(inside.Value.InPrompt, "the prompt inside the command was not reported");
+        Assert.True(inside.Value.SealedAfterPrompt, "the prompt's end unsealed a palette whose command still ran");
+        Assert.Equal(0, inside.Value.Published);
+        Assert.Equal(0, inside.Value.Heard);
+        Assert.False(palette.IsSealed);
+        Assert.Equal(2, windows.Count);
+        Assert.True(
+            PumpedDispatcher.PumpUntil(() => !palette.IsRankPending, TimeSpan.FromSeconds(10)),
+            "the failure never ranked the current query again");
+        windows[1].SetResult();
+        PumpedDispatcher.PumpUntilDrained(palette.FilterCountCompletion);
+        PumpedDispatcher.Drain();
+        Assert.Equal(1, published);
+        Assert.Collection(
+            host.Harness.Announcements,
+            announced => Assert.IsType<A11yEvent.PaletteCommandFailed>(announced),
+            announced => Assert.Equal(
+                "Quick Open",
+                Assert.IsType<A11yEvent.PaletteCommandSelected>(announced).Label),
+            announced => Assert.Equal(
+                "q",
+                Assert.IsType<A11yEvent.PaletteFilterCount>(announced).Query));
     });
 }

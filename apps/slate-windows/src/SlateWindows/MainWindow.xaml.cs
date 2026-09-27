@@ -19,6 +19,7 @@ public partial class MainWindow : Window
     private readonly VaultLifecycleViewModel _viewModel;
     private readonly WindowPlacementManager _windowPlacement;
     private readonly AccessibilityNotificationDispatcher _announcer;
+    private readonly ShellModalLoopMonitor _modalLoops;
     private IInputElement? _focusBeforeSwitcher;
     private QuickSwitcherViewModel? _observedQuickSwitcher;
     private WorkspaceViewModel? _observedWorkspace;
@@ -81,9 +82,18 @@ public partial class MainWindow : Window
         // is installed here and CanvasAnnouncerCensus pins that it is.
         Canvas.CanvasSurfaceView.ShellOverlayIsOpen = () => OpenModalSurface is not null;
         ObservePalette();
+        // #1275 (codex round 4, the owner's option (a)): every modal loop
+        // over the shell — the unsaved-changes prompt on close, a folder or
+        // file dialog, a WPF ShowDialog — seals the palette for as long as
+        // it runs, so nothing it owns publishes or speaks behind the prompt.
+        _modalLoops = new ShellModalLoopMonitor((UIElement)Content, _viewModel.Palette.SetModalLoop);
         ObserveSearch();
         RecentVaultJumpList.Apply(_viewModel.RecentVaults);
     }
+
+    /// <summary>The shell's modal-loop monitor, for the facts that drive a
+    /// real dialog over the shell.</summary>
+    internal ShellModalLoopMonitor ModalLoops => _modalLoops;
 
     internal async Task ActivateFromExternalRequestAsync(string? vaultPath)
     {
@@ -403,6 +413,11 @@ public partial class MainWindow : Window
         {
             workspace.EditorPaneFocusRequested += Workspace_EditorPaneFocusRequested;
             workspace.PropertyChanged += Workspace_CanvasSheetChanged;
+            // #1275: the workspace's message boxes are owned by the shell,
+            // so they disable it — the signal the modal-loop monitor reads —
+            // even when the shell is not the active window.
+            workspace.HistoryAlert = (title, message) =>
+                WorkspaceViewModel.ShowHistoryAlert(this, title, message);
             WireWorkspaceProperties(workspace);
             WireWorkspaceCitations(workspace);
             WireWorkspaceBases(workspace);
@@ -1742,6 +1757,7 @@ public partial class MainWindow : Window
         ObserveQuickSwitcher(null);
         ObserveWorkspace(null);
         ObserveFileSidebar(null);
+        _modalLoops.Dispose();
         _viewModel.Dispose();
     }
 

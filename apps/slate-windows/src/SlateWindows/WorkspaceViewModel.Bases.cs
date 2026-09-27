@@ -569,23 +569,36 @@ internal sealed partial class WorkspaceViewModel
     /// argument is the verb ("Export"/"Copy") for the dialog copy and
     /// the cancel announcement.</summary>
     internal Func<string, BasesExportScope> BasesExportScopePrompt { get; set; } =
-        verb =>
-        {
-            System.Windows.MessageBoxResult choice = System.Windows.MessageBox.Show(
-                "A quick filter is active. "
-                + verb + " only the filtered rows?\n\n"
-                + "Yes: the filtered rows shown now.\n"
-                + "No: every row in the view.",
+        verb => AskBasesExportScope(null, verb);
+
+    /// <summary>The scope question as a message box, owned by
+    /// <paramref name="owner"/> when there is one — the shell installs an
+    /// owned prompt (#1275), so the box disables it.</summary>
+    internal static BasesExportScope AskBasesExportScope(System.Windows.Window? owner, string verb)
+    {
+        string text = "A quick filter is active. "
+            + verb + " only the filtered rows?\n\n"
+            + "Yes: the filtered rows shown now.\n"
+            + "No: every row in the view.";
+        System.Windows.MessageBoxResult choice = owner is null
+            ? System.Windows.MessageBox.Show(
+                text,
+                "Slate",
+                System.Windows.MessageBoxButton.YesNoCancel,
+                System.Windows.MessageBoxImage.Question)
+            : System.Windows.MessageBox.Show(
+                owner,
+                text,
                 "Slate",
                 System.Windows.MessageBoxButton.YesNoCancel,
                 System.Windows.MessageBoxImage.Question);
-            return choice switch
-            {
-                System.Windows.MessageBoxResult.Yes => BasesExportScope.Filtered,
-                System.Windows.MessageBoxResult.No => BasesExportScope.All,
-                _ => BasesExportScope.Cancel,
-            };
+        return choice switch
+        {
+            System.Windows.MessageBoxResult.Yes => BasesExportScope.Filtered,
+            System.Windows.MessageBoxResult.No => BasesExportScope.All,
+            _ => BasesExportScope.Cancel,
         };
+    }
 
     /// <summary>C14: with an active quick filter, export/copy must ASK
     /// filtered-vs-all — never silently emit the filtered subset (red

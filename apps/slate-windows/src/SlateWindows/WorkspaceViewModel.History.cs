@@ -37,11 +37,30 @@ internal sealed partial class WorkspaceViewModel
     /// failed" for the restore flow, "Can't restore" for recovery and
     /// Restore As… failures.</summary>
     internal Action<string, string> HistoryAlert { get; set; } =
-        (title, message) => System.Windows.MessageBox.Show(
+        (title, message) => ShowHistoryAlert(null, title, message);
+
+    /// <summary>The history alert as a message box, owned by
+    /// <paramref name="owner"/> when there is one — the shell installs an
+    /// owned alert (#1275), so the box disables it.</summary>
+    internal static void ShowHistoryAlert(System.Windows.Window? owner, string title, string message)
+    {
+        if (owner is null)
+        {
+            _ = System.Windows.MessageBox.Show(
+                message,
+                title,
+                System.Windows.MessageBoxButton.OK,
+                System.Windows.MessageBoxImage.Warning);
+            return;
+        }
+
+        _ = System.Windows.MessageBox.Show(
+            owner,
             message,
             title,
             System.Windows.MessageBoxButton.OK,
             System.Windows.MessageBoxImage.Warning);
+    }
 
     /// <summary>The surface's action seams, installed once (the Bases
     /// InstallBaseDocumentSeams pattern) — called from the workspace
