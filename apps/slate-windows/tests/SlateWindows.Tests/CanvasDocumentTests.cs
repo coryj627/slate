@@ -5489,13 +5489,17 @@ public sealed class CanvasDocumentTests : IDisposable
     /// <summary>The board peer speaks its RATIFIED name (§D D3,
     /// "Canvas visual view") — not the switcher arm's label. The peer
     /// shipped saying "Visual" and only the FlaUI journey noticed;
-    /// this is the unit-level tripwire that failure bought.</summary>
+    /// this is the unit-level tripwire that failure bought. The name is
+    /// CORE's (#1276): the spelling the speakable-name allocator reserves
+    /// crosses the FFI in <c>CanvasConstants</c>, and the peer speaks that
+    /// value rather than a host literal of its own.</summary>
     [Fact]
     public void TheBoardPeerSpeaksItsRatifiedName() => RunSta(() =>
     {
         var renderer = new CanvasRendererView();
         var peer = new CanvasRendererAutomationPeer(renderer);
         Assert.Equal("Canvas visual view", peer.GetName());
+        Assert.Equal(SlateUniffiMethods.CanvasConstants().VisualBoardName, peer.GetName());
         Assert.NotEqual(CanvasPhrase.VisualSurfaceLabel, peer.GetName());
         Assert.Equal(
             System.Windows.Automation.Peers.AutomationControlType.Group,

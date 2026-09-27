@@ -42,11 +42,14 @@ use std::collections::HashMap;
 
 use super::{Canvas, Edge, EdgeId, EndStyle, Node, NodeId, NodeKind, Side, color_name};
 
-/// The accessible name every host gives the visual board's container
-/// (Windows `CanvasPhrase.VisualBoardName`, mac's `CanvasRendererView`
-/// label). W6-1 contract 34 D5 reserves it in the board's one name
-/// namespace, so the speakable-name allocator treats it as occupied from
-/// the start and no card answers to it (#1276).
+/// The accessible name every host gives the visual board's container —
+/// the one authority for it: it crosses the FFI as
+/// `CanvasConstants.visual_board_name`, which Windows'
+/// `CanvasPhrase.VisualBoardName` reads, and mac's `CanvasRendererView`
+/// label is pinned equal to it by a parity test. W6-1 contract 34 D5
+/// reserves it in the board's one name namespace, so the speakable-name
+/// allocator treats it as occupied from the start and no card answers to
+/// it (#1276).
 pub const VISUAL_BOARD_NAME: &str = "Canvas visual view";
 
 /// Axis-aligned rectangle normalized to min/max corners.

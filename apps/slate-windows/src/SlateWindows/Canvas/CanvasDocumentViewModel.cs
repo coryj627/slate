@@ -5113,12 +5113,15 @@ internal static class CanvasPhrase
     /// speaking the radio's word and the FlaUI journey caught it —
     /// the two phrases are neighbours here so they can never be
     /// confused for one another again. Contract 34 D5 RESERVES it in the
-    /// board's one name namespace: core's speakable-name allocator starts
-    /// with the same spelling occupied (<c>canvas::model::VISUAL_BOARD_NAME</c>),
-    /// so no card peer answers to it (#1276) — and
-    /// <c>EveryBoardPeerHasItsOwnNameAndTheContainersNameIsReserved</c>
-    /// fails if the two spellings drift apart.</summary>
-    public const string VisualBoardName = "Canvas visual view";
+    /// board's one name namespace, and core's speakable-name allocator
+    /// holds that spelling occupied (<c>canvas::model::VISUAL_BOARD_NAME</c>)
+    /// so no card peer answers to it (#1276) — so the spelling is CORE's,
+    /// read once over the FFI (<c>CanvasConstants.VisualBoardName</c>),
+    /// never a host literal beside it that could drift.</summary>
+    public static string VisualBoardName => ReservedBoardName.Value;
+
+    private static readonly Lazy<string> ReservedBoardName =
+        new(() => SlateUniffiMethods.CanvasConstants().VisualBoardName);
 
     /// <summary>The table projection's accessible name (mac's
     /// <c>accessibilityLabel</c>, verbatim).</summary>
