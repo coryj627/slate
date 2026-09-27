@@ -1,53 +1,52 @@
 // Copyright (C) 2026 Cory Joseph
 // SPDX-License-Identifier: AGPL-3.0-or-later
 //
-// #1278 (contract 38 "core owns copy"), round 4: the PRIMARY witness that a
-// resolved embed card's title is core's words where a reader meets it.
+// #1278 (contract 38 "core owns copy"): the PRIMARY witness that a resolved
+// embed card's title is core's words where a reader meets it.
 //
 // EmbedPreviewTitleCensus reads the source, and a static reading cannot
-// enumerate every way WPF composes text: codex round 3 put a second
-// SetName after the renderer's validated one, and an implicit Expander
-// style (its TargetType spelled through a namespace alias) whose
-// HeaderTemplate formats 'Preview: {0}'. Neither is a title sink in the
-// source; both change what a reader hears or sees. So this witness does not
-// read the source at all. It builds the shipped surfaces, realizes them in a
-// window under the app's real resources, and reads the values a reader gets:
+// enumerate every way WPF composes text: codex round 3 put a second SetName
+// after the renderer's validated one, and an implicit Expander style whose
+// HeaderTemplate formats 'Preview: {0}'. So this witness does not read the
+// source. It realizes the shipped surfaces and reads what a reader gets.
 //
-// - Resources: the application layers ThemeManager merges for the theme
-//   (Fluent, then Slate's tokens — the same dictionaries, from the same
-//   seam) and the shell's window dictionary (MainWindow merges
-//   WorkspaceTemplates.xaml and nothing else — checked, not assumed), in the
-//   app's precedence, on the window's OWN resources so the process-wide
-//   Application.Resources is left alone. Every theme the app can load.
-// - Surfaces: the shipped tab template in source mode, where Ctrl+E opens
-//   the popover through the real coordinator and the card renderer runs with
-//   its InteractionSession; the shipped embeds-leaf list lifted out of a real
-//   (never shown) MainWindow, fed by the production panels view model; and
-//   the shipped tab template in reading mode, whose ReadingSurface builds the
-//   reading cards.
+// Codex round 4 showed that the first form of this witness read a REPLICA:
+// it reloaded WorkspaceTemplates.xaml into an unrelated window and lifted the
+// embeds list out of its ancestors, so a style put into the LIVE window
+// dictionary or on an ancestor at runtime passed it. And its rows never
+// reached a corrupt image's warning or a nested section, block or image card.
+// So:
+//
+// - Host: the REAL MainWindow, shown off-screen and never activated, with
+//   its own live resource instances and its whole ancestor chain. Nothing is
+//   reloaded or detached. The only substitutions are the ones a test must
+//   make: the window-placement store points into the fixture (showing and
+//   closing the shell must not read or write the user's), and the theme's
+//   application layers — Application.Resources in the app, from ThemeManager's
+//   own seam — are merged BENEATH the window's own dictionaries, so the
+//   process-wide Application.Resources is left alone. Every theme.
+// - Surfaces, inside that shell: the workspace's tab in source mode, where
+//   Ctrl+E opens the popover through the real coordinator; the embeds leaf in
+//   the right pane, fed by the workspace's own panels; the same tab in
+//   reading mode. Data applies on the UI thread, as in the app.
 // - Reads, after layout and data binding: the popover's UIA Name through its
-//   automation peer, its heading's peer Name and rendered text; each card's
-//   peer Name, the text its Expander header actually renders (walked in the
-//   visual tree, so a HeaderTemplate, StringFormat or converter shows), its
-//   image's and warning's name and text, and its nested card; the reading
-//   card's header text (the range a reader's caret reads) and its landmark
-//   (what ReadingNavLanded speaks).
+//   peer, its heading's peer Name and rendered text; each card's peer Name,
+//   the text its Expander header actually renders (walked in the visual
+//   tree), its warning's text and name, its image's name, and every nested
+//   card; the reading card's header text, nested headers and landmark.
+// - Coverage is asserted, not assumed: each surface must actually meet a
+//   corrupt image's warning and a nested note, section, block and image card.
 //
-// The expected side is computed here, at test time, by core: the row
-// declares WHAT the embed resolves to as data (a ResolvedEmbed), and core's
-// ResolvedEmbedTitle / A11yRender render it — never a title written in this
-// file. The popover header adds exactly the " — source line N" locator,
-// N counted from the source text. The row's data is also compared with what
-// the surface was built from (the announced event, the leaf's resolution),
-// so a wrong kind cannot pass as the right words.
-//
-// What a reading of the surface cannot see: a host that spells core's exact
-// words. The fixture exercises every rule core applies (a bounded heading, an
-// image named by its file name, a base named without its extension), so a
-// host spelling that does not reimplement them reads differently; a note's
-// or a block's title has no such rule, and its provenance is the static
-// census's (EmbedPreviewTitleCensus names the split literal at its sink).
+// The expected side is computed at test time by core from the ResolvedEmbed
+// each row declares as data; the popover header adds exactly the
+// " — source line N" locator, N counted from the source. The fixture
+// exercises every rule core applies (a bounded heading, an image named by its
+// file name, a base named without its extension), so a host spelling that
+// does not reimplement them reads differently; a host spelling of core's
+// exact note words is the same text, and its provenance is the census's.
 
+using System.Reflection;
+using System.Runtime.CompilerServices;
 using System.Runtime.ExceptionServices;
 using System.Windows;
 using System.Windows.Automation;
@@ -56,7 +55,6 @@ using System.Windows.Controls;
 using System.Windows.Documents;
 using System.Windows.Media;
 using System.Windows.Threading;
-using SlateWindows.Panels;
 using SlateWindows.Reading;
 using uniffi.slate_uniffi;
 
@@ -72,45 +70,53 @@ public sealed class EmbedTitleRealizedSurfaceTests
         "iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAYAAAAfFcSJAAAADUlEQVR42mP8"
         + "z8BQDwAEhQGAhKmMIQAAAABJRU5ErkJggg==");
 
-    /// <summary>One embed of the fixture note: its markdown, its authored
-    /// target, what it resolves to (data, never words), the nested card it
-    /// carries, and the surfaces it is a card on. A `.base` is a card of
-    /// its own kind in the reading view (contract C10), so that row is read
-    /// there.</summary>
-    private sealed record Row(
-        string Name,
-        string Embed,
-        string Target,
-        ResolvedEmbed Resolved,
-        ResolvedEmbed? Nested,
-        bool OnPopoverAndLeaf);
-
     /// <summary>A heading past core's display bound: core's title ends it in
     /// an ellipsis, which a host spelling of the heading would not.</summary>
     private static readonly string LongHeading = new('h', 5000);
 
-    /// <summary>The fixture exercises every rule core applies to a title —
-    /// a heading bounded for display, an alias-less image named by its file
-    /// name (it lives under attachments/), a base named without its
-    /// extension — so a host spelling that does not reimplement them reads
-    /// differently here. A note's or a block's title has no such rule: a host
-    /// spelling of core's exact words is the same text, which no reading of
-    /// the surface can tell apart; that case is EmbedPreviewTitleCensus's.</summary>
+    /// <summary>One embed of the fixture note: its markdown, what it resolves
+    /// to (data, never words), the nested cards it carries in order, and
+    /// whether the popover and the leaf show it (a `.base` is a card of its
+    /// own kind in the reading view only; contract C10).</summary>
+    private sealed record Row(string Name, string Embed, ResolvedEmbed Resolved, ResolvedEmbed[] Nested, bool OnPopoverAndLeaf);
+
+    /// <summary>What outer.md embeds: every card kind a note can nest.</summary>
+    private static readonly ResolvedEmbed[] NestedKinds =
+    [
+        new ResolvedEmbed.Note("leaf.md"),
+        new ResolvedEmbed.Section("target.md", "Destination"),
+        new ResolvedEmbed.Block("target.md"),
+        new ResolvedEmbed.Image("attachments/photo.png", null),
+    ];
+
     private static readonly Row[] Rows =
     [
-        new("note", "![[target]]", "target", new ResolvedEmbed.Note("target.md"), null, true),
-        new("section", "![[target#Destination]]", "target",
-            new ResolvedEmbed.Section("target.md", "Destination"), null, true),
-        new("section-long", $"![[target#{LongHeading}]]", "target",
-            new ResolvedEmbed.Section("target.md", LongHeading), null, true),
-        new("block", "![[target#^block-id]]", "target", new ResolvedEmbed.Block("target.md"), null, true),
-        new("image", "![[photo.png]]", "photo.png",
-            new ResolvedEmbed.Image("attachments/photo.png", null), null, true),
-        new("image-alt", "![[photo.png|A bar chart]]", "photo.png",
-            new ResolvedEmbed.Image("attachments/photo.png", "A bar chart"), null, true),
-        new("nested", "![[outer]]", "outer", new ResolvedEmbed.Note("outer.md"),
-            new ResolvedEmbed.Note("leaf.md"), true),
-        new("base", "![[Notes.base]]", "Notes.base", new ResolvedEmbed.Base("Notes.base"), null, false),
+        new("note", "![[target]]", new ResolvedEmbed.Note("target.md"), [], true),
+        new("section", "![[target#Destination]]", new ResolvedEmbed.Section("target.md", "Destination"), [], true),
+        new("section-long", $"![[target#{LongHeading}]]", new ResolvedEmbed.Section("target.md", LongHeading), [], true),
+        new("block", "![[target#^block-id]]", new ResolvedEmbed.Block("target.md"), [], true),
+        new("image", "![[photo.png]]", new ResolvedEmbed.Image("attachments/photo.png", null), [], true),
+        new("image-alt", "![[photo.png|A bar chart]]", new ResolvedEmbed.Image("attachments/photo.png", "A bar chart"), [], true),
+        new("image-corrupt", "![[broken.png]]", new ResolvedEmbed.Image("broken.png", null), [], true),
+        new("nested", "![[outer]]", new ResolvedEmbed.Note("outer.md"), NestedKinds, true),
+        new("base", "![[Notes.base]]", new ResolvedEmbed.Base("Notes.base"), [], false),
+    ];
+
+    /// <summary>The branches each surface must actually meet.</summary>
+    private static readonly string[] RequiredBranches =
+    [
+        .. new[] { "Ctrl+E popover", "embeds leaf" }.SelectMany(surface => new[]
+        {
+            $"{surface}: warning",
+            $"{surface}: nested Note",
+            $"{surface}: nested Section",
+            $"{surface}: nested Block",
+            $"{surface}: nested Image",
+        }),
+        "reading card: nested Note",
+        "reading card: nested Section",
+        "reading card: nested Block",
+        "reading card: nested Image",
     ];
 
     [Theory]
@@ -129,6 +135,7 @@ public sealed class EmbedTitleRealizedSurfaceTests
             };
             var misreads = new List<string>();
             var read = new List<string>();
+            var met = new HashSet<string>(StringComparer.Ordinal);
             using var fixture = FixtureVault.Create(0, "embed-title-realized");
             string source = WriteFixture(fixture.Root);
             using VaultSession session = VaultSession.OpenFilesystem(fixture.Root);
@@ -137,44 +144,22 @@ public sealed class EmbedTitleRealizedSurfaceTests
                 session.ScanInitial(cancel);
             }
 
-            // The production panels resolve the leaf's rows before any
-            // window exists: no UI context is captured, so each apply runs
-            // where its compute finished and the drain below completes it.
-            var panels = new RightPanePanelsViewModel(
-                session, _ => { }, (_, _) => true, _ => true, (_, _) => { },
-                (_, _) => true, (_, _) => { });
-            panels.NoteChanged("source.md");
-            panels.DrainForTests().GetAwaiter().GetResult();
-
-            var shell = new MainWindow();
-            Window? host = null;
+            // As in the app: the panels and the coordinator apply on the UI
+            // thread, so the realized list and popover see every change there.
+            SynchronizationContext.SetSynchronizationContext(
+                new DispatcherSynchronizationContext(Dispatcher.CurrentDispatcher));
             var announcements = new List<A11yEvent>();
-            using var sourceTab = new WorkspaceTabViewModel(
-                session,
-                new WorkspaceTabState(Guid.NewGuid(), new WorkspaceItemState(WorkspaceItemKind.Markdown, "source.md")),
-                announce: announcements.Add,
-                startInteractionBackgroundWork: false);
-            using var readingTab = new WorkspaceTabViewModel(
-                session,
-                new WorkspaceTabState(Guid.NewGuid(), new WorkspaceItemState(WorkspaceItemKind.Markdown, "source.md")),
-                startInteractionBackgroundWork: false);
-            try
+            using (var shell = new RealShell(session, fixture.Root, slateTheme, highContrast, announcements.Add))
             {
-                (host, DataTemplate tabTemplate) = Host(shell, slateTheme, highContrast);
-                string where = theme;
-
-                ReadPopovers(where, host, tabTemplate, sourceTab, announcements, source, misreads, read);
-                ReadLeaf(where, host, shell, panels, misreads, read);
-                ReadReadingCards(where, host, tabTemplate, readingTab, misreads, read);
-            }
-            finally
-            {
-                host?.Close();
-                shell.Close();
-                panels.Shutdown();
-                panels.DrainForTests().GetAwaiter().GetResult();
+                ReadPopovers(theme, shell, announcements, source, misreads, read, met);
+                ReadLeaf(theme, shell, misreads, read, met);
+                ReadReadingCards(theme, shell, misreads, read, met);
             }
 
+            foreach (string branch in RequiredBranches.Where(branch => !met.Contains(branch)))
+            {
+                misreads.Add($"{theme} · {branch} was never encountered, so it was never read");
+            }
             Assert.True(
                 misreads.Count == 0,
                 $"{misreads.Count} realized surface(s) do not read as core's title:\n"
@@ -182,63 +167,111 @@ public sealed class EmbedTitleRealizedSurfaceTests
                 + "\n\nEvery surface read:\n" + string.Join("\n", read));
         });
 
-    // ---- the host ------------------------------------------------------------
+    // ---- the real shell -------------------------------------------------------
 
-    /// <summary>An off-screen, never-activated window whose own resources are
-    /// the app's: the theme's application layers, then the shell's window
-    /// dictionary, so later layers win as the window's do over the app's.</summary>
-    private static (Window Host, DataTemplate TabTemplate) Host(
-        MainWindow shell, SlateTheme theme, bool highContrast)
+    /// <summary>The real MainWindow over a real workspace, shown off-screen and
+    /// never activated. Its resource instances and ancestors are its own; the
+    /// placement store points into the fixture, and the theme's application
+    /// layers sit beneath the window's own dictionaries.</summary>
+    private sealed class RealShell : IDisposable
     {
-        // The shell's window resources are WorkspaceTemplates.xaml and
-        // nothing else; if that changes, this host no longer stands for it.
-        Assert.Empty(shell.Resources.Keys);
-        ResourceDictionary windowLayer = Assert.Single(shell.Resources.MergedDictionaries);
-        Assert.EndsWith("WorkspaceTemplates.xaml", windowLayer.Source?.OriginalString, StringComparison.Ordinal);
+        private readonly VaultLifecycleViewModel _lifecycle;
 
-        var host = new Window
+        internal RealShell(
+            VaultSession session, string root, SlateTheme theme, bool highContrast, Action<A11yEvent> announce)
         {
-            Width = 1000,
-            Height = 1600,
-            WindowStartupLocation = WindowStartupLocation.Manual,
-            Left = -20_000,
-            Top = -20_000,
-            ShowInTaskbar = false,
-            ShowActivated = false,
-            WindowStyle = WindowStyle.None,
-            ResizeMode = ResizeMode.NoResize,
-        };
-        foreach (ResourceDictionary layer in ThemeManager.DictionariesFor(theme, highContrast))
-        {
-            host.Resources.MergedDictionaries.Add(layer);
+            // Registers the pack: scheme and its application authority without
+            // constructing an Application (TextBoxAccessibilityTests explains).
+            RuntimeHelpers.RunClassConstructor(typeof(Application).TypeHandle);
+            Window = new MainWindow();
+            FieldInfo placement = typeof(MainWindow).GetField("_windowPlacement", BindingFlags.NonPublic | BindingFlags.Instance)
+                ?? throw new Xunit.Sdk.XunitException("MainWindow no longer holds its placement in _windowPlacement; "
+                    + "the witness must not show the shell against the user's placement store.");
+            placement.SetValue(Window, new WindowPlacementManager(Window, new WindowStateStore(Path.Combine(root, "window-state.json"))));
+            ResourceDictionary[] layers = ThemeManager.DictionariesFor(theme, highContrast);
+            for (int index = 0; index < layers.Length; index++)
+            {
+                Window.Resources.MergedDictionaries.Insert(index, layers[index]);
+            }
+            Window.WindowStartupLocation = WindowStartupLocation.Manual;
+            Window.Left = -20_000;
+            Window.Top = -20_000;
+            Window.ShowActivated = false;
+            Window.ShowInTaskbar = false;
+
+            _lifecycle = Assert.IsType<VaultLifecycleViewModel>(Window.DataContext);
+            Workspace = new WorkspaceViewModel(
+                session,
+                root,
+                () => [],
+                announce,
+                startInteractionBackgroundWork: false,
+                preferencesStore: new AppPreferencesStore(Path.Combine(root, "preferences.json")));
+            SetProperty(_lifecycle, nameof(VaultLifecycleViewModel.Workspace), Workspace);
+            // The shell shows its workspace view for an open vault. Opening one
+            // through the lifecycle would write the user's recents, so only the
+            // state the view binds to is set, as the Workspace above is.
+            SetProperty(_lifecycle, nameof(VaultLifecycleViewModel.IsVaultOpen), true);
+            Window.Show();
+            Workspace.OpenPath("source.md");
+            WaitForUi(() => Workspace.ActiveGroup.ActiveTab is { Path: "source.md" });
+            Tab = Workspace.ActiveGroup.ActiveTab!;
+            Settle(Window);
         }
-        var templates = (ResourceDictionary)Application.LoadComponent(
-            new Uri("/SlateWindows;component/WorkspaceTemplates.xaml", UriKind.Relative));
-        host.Resources.MergedDictionaries.Add(templates);
-        host.SetResourceReference(Control.BackgroundProperty, "Slate.WindowBackgroundBrush");
-        host.SetResourceReference(Control.ForegroundProperty, "Slate.TextBrush");
-        host.Show();
-        return (host, (DataTemplate)templates["WorkspaceTabContentTemplate"]);
+
+        internal MainWindow Window { get; }
+
+        internal WorkspaceViewModel Workspace { get; }
+
+        internal WorkspaceTabViewModel Tab { get; }
+
+        public void Dispose()
+        {
+            var failures = new List<Exception>();
+            foreach (Action step in new Action[]
+            {
+                () => Workspace.Panels.Shutdown(),
+                () => SetProperty(_lifecycle, nameof(VaultLifecycleViewModel.IsVaultOpen), false),
+                () => SetProperty(_lifecycle, nameof(VaultLifecycleViewModel.Workspace), null),
+                () => Window.Close(),
+                () => Workspace.Dispose(),
+            })
+            {
+                try
+                {
+                    step();
+                }
+                catch (Exception exception)
+                {
+                    failures.Add(exception);
+                }
+            }
+            if (failures.Count > 0)
+            {
+                throw new AggregateException(failures);
+            }
+        }
+
+        private static void SetProperty(object target, string name, object? value) =>
+            (target.GetType().GetProperty(name, BindingFlags.Public | BindingFlags.Instance)
+                ?? throw new InvalidOperationException($"Missing property: {name}"))
+            .SetValue(target, value);
     }
 
     // ---- the Ctrl+E popover -------------------------------------------------
 
     private static void ReadPopovers(
         string where,
-        Window host,
-        DataTemplate tabTemplate,
-        WorkspaceTabViewModel tab,
+        RealShell shell,
         List<A11yEvent> announcements,
         string source,
         List<string> misreads,
-        List<string> read)
+        List<string> read,
+        HashSet<string> met)
     {
-        EditorInteractionCoordinator interactions = tab.EditorInteractions!;
+        EditorInteractionCoordinator interactions = shell.Tab.EditorInteractions!;
         interactions.RefreshMathRangesForTests();
         interactions.RefreshArtifactCacheForTests();
-        var presenter = new ContentPresenter { Content = tab, ContentTemplate = tabTemplate };
-        host.Content = presenter;
-        Settle(host);
 
         foreach (Row row in Rows.Where(row => row.OnPopoverAndLeaf))
         {
@@ -247,12 +280,13 @@ public sealed class EmbedTitleRealizedSurfaceTests
             int offset = source.IndexOf(row.Embed, StringComparison.Ordinal);
             Assert.True(offset >= 0, $"the fixture lost {row.Embed}");
             Assert.True(interactions.PreviewEmbedAt(offset + 2), $"{at}: Ctrl+E opened nothing");
-            WaitForUi(() => announcements.Count > 0);
-            Settle(host);
+            WaitForUi(() => announcements.OfType<A11yEvent.EmbedPreviewShown>().Any()
+                || announcements.OfType<A11yEvent.EmbedPreviewUnavailable>().Any());
+            Settle(shell.Window);
 
-            if (Assert.Single(announcements) is not A11yEvent.EmbedPreviewShown shown)
+            if (announcements.OfType<A11yEvent.EmbedPreviewShown>().SingleOrDefault() is not { } shown)
             {
-                misreads.Add($"{at}: announced {announcements[0]}, not EmbedPreviewShown");
+                misreads.Add($"{at}: announced {string.Join(", ", announcements)}, not one EmbedPreviewShown");
                 continue;
             }
             if (!Equals(shown.Resolved, row.Resolved))
@@ -265,9 +299,17 @@ public sealed class EmbedTitleRealizedSurfaceTests
             string name = SlateUniffiMethods.A11yRender(shown).Text;
             int line = source[..offset].Count(character => character == '\n') + 1;
 
-            UIElement popover = Assert.Single(
-                VisualDescendants(host).OfType<UIElement>(),
-                element => AutomationProperties.GetAutomationId(element) == "EditorInteractionPopover");
+            UIElement[] popovers = VisualDescendants(shell.Window).OfType<UIElement>()
+                .Where(element => AutomationProperties.GetAutomationId(element) == "EditorInteractionPopover")
+                .ToArray();
+            if (popovers.Count(element => element.IsVisible) != 1)
+            {
+                throw new Xunit.Sdk.XunitException(
+                    $"{at}: {popovers.Length} popover(s) in the shell's visual tree; visible: "
+                    + string.Join(" | ", popovers.Select(Chain)) + $"; open={interactions.IsPopoverOpen}; "
+                    + $"shell visible={shell.Window.IsVisible}");
+            }
+            UIElement popover = popovers.Single(element => element.IsVisible);
             Expect(at, "the popover's UIA Name", PeerName(popover), name, misreads, read);
 
             FrameworkElement[] headings = VisualDescendants(popover).OfType<FrameworkElement>()
@@ -286,47 +328,27 @@ public sealed class EmbedTitleRealizedSurfaceTests
             }
 
             EditorEmbedPreviewView view = Assert.Single(VisualDescendants(popover).OfType<EditorEmbedPreviewView>());
-            ReadCard($"{at} card", view.Content as FrameworkElement, shown.Resolved, row.Nested, misreads, read);
+            ReadCard($"{at} card", "Ctrl+E popover", view.Content as FrameworkElement, shown.Resolved, row.Nested, misreads, read, met);
             interactions.ClosePopoverCommand.Execute(null);
-            Settle(host);
+            Settle(shell.Window);
         }
     }
 
     // ---- the embeds leaf ----------------------------------------------------
 
-    /// <summary>The shipped leaf list, lifted out of a real (never shown)
-    /// shell — the Move-To and palette fixtures' technique — and re-hosted
-    /// over the production panels' rows.</summary>
+    /// <summary>The embeds leaf where the app shows it: the shell's right pane,
+    /// over the workspace's own panels.</summary>
     private static void ReadLeaf(
-        string where,
-        Window host,
-        MainWindow shell,
-        RightPanePanelsViewModel panels,
-        List<string> misreads,
-        List<string> read)
+        string where, RealShell shell, List<string> misreads, List<string> read, HashSet<string> met)
     {
-        ItemsControl leaf = Assert.Single(
-            LogicalDescendants(shell).OfType<ItemsControl>(),
-            list => AutomationProperties.GetAutomationId(list) == "PanelEmbedsList");
-        switch (leaf.Parent)
-        {
-            case ContentControl owner:
-                owner.Content = null;
-                break;
-            case Panel owner:
-                owner.Children.Remove(leaf);
-                break;
-            case Decorator owner:
-                owner.Child = null;
-                break;
-            default:
-                throw new Xunit.Sdk.XunitException($"the leaf list's parent is a {leaf.Parent?.GetType().Name}");
-        }
-        leaf.DataContext = new LeafContext(panels);
-        host.Content = leaf;
-        Settle(host);
+        shell.Workspace.ActiveLeaf = WorkspaceViewModel.Leaves.First(leaf => leaf.Id == "embeds");
+        shell.Workspace.IsRightPaneVisible = true;
+        WaitForUi(() => shell.Workspace.Panels.Embeds.Count == Rows.Length && !shell.Workspace.Panels.IsResolvingEmbeds);
+        Settle(shell.Window);
 
-        Assert.Equal(Rows.Length, panels.Embeds.Count);
+        ItemsControl leaf = Assert.Single(
+            VisualDescendants(shell.Window).OfType<ItemsControl>(),
+            list => list.IsVisible && AutomationProperties.GetAutomationId(list) == "PanelEmbedsList");
         for (int index = 0; index < Rows.Length; index++)
         {
             Row row = Rows[index];
@@ -335,10 +357,9 @@ public sealed class EmbedTitleRealizedSurfaceTests
                 continue;
             }
             string at = $"{where} · {row.Name} · embeds leaf";
-            EmbedRowViewModel embed = panels.Embeds[index];
-            if (!Resolves(embed.Resolution, row.Resolved))
+            if (!Resolves(shell.Workspace.Panels.Embeds[index].Resolution, row.Resolved))
             {
-                misreads.Add($"{at}: the leaf resolved {embed.Resolution}, not {row.Resolved}");
+                misreads.Add($"{at}: the leaf resolved {shell.Workspace.Panels.Embeds[index].Resolution}, not {row.Resolved}");
             }
             if (leaf.ItemContainerGenerator.ContainerFromIndex(index) is not DependencyObject container)
             {
@@ -346,15 +367,8 @@ public sealed class EmbedTitleRealizedSurfaceTests
                 continue;
             }
             EditorEmbedPreviewView view = Assert.Single(VisualDescendants(container).OfType<EditorEmbedPreviewView>());
-            ReadCard($"{at} card", view.Content as FrameworkElement, row.Resolved, row.Nested, misreads, read);
+            ReadCard($"{at} card", "embeds leaf", view.Content as FrameworkElement, row.Resolved, row.Nested, misreads, read, met);
         }
-    }
-
-    /// <summary>The leaf list's data context in the shell exposes the panels
-    /// as <c>Panels</c>; this stands in for it so the shipped binding runs.</summary>
-    private sealed class LeafContext(RightPanePanelsViewModel panels)
-    {
-        public RightPanePanelsViewModel Panels { get; } = panels;
     }
 
     private static bool Resolves(EmbedResolution resolution, ResolvedEmbed resolved) => (resolution, resolved) switch
@@ -372,16 +386,18 @@ public sealed class EmbedTitleRealizedSurfaceTests
 
     /// <summary>A realized card: its peer Name and the text its header
     /// renders; in its body, a warning's text and name, an image's name and
-    /// a nested card — each core's title of what it resolved to. The body's
-    /// text and Jump button are not titles; anything else there is read as
-    /// if it were one.</summary>
+    /// each nested card in order — each core's title of what it resolved to.
+    /// The body's text and Jump button are not titles; anything else there is
+    /// read as if it were one. The branches met are recorded.</summary>
     private static void ReadCard(
         string at,
+        string surface,
         FrameworkElement? card,
         ResolvedEmbed resolved,
-        ResolvedEmbed? nested,
+        ResolvedEmbed[] nested,
         List<string> misreads,
-        List<string> read)
+        List<string> read,
+        HashSet<string> met)
     {
         if (card is null)
         {
@@ -410,12 +426,14 @@ public sealed class EmbedTitleRealizedSurfaceTests
                     Expect(at, "image UIA Name", PeerName(image), title, misreads, read);
                     break;
                 case TextBlock warning:
-                    Expect(at, "warning text", RenderedText(warning, exclude: null), title, misreads, read);
+                    met.Add($"{surface}: warning");
+                    Expect(at, "warning text", warning.Text, title, misreads, read);
                     Expect(at, "warning UIA Name", PeerName(warning), title, misreads, read);
                     break;
-                case Expander inner when nested is not null:
-                    nestedCards++;
-                    ReadCard($"{at} › nested", inner, nested, null, misreads, read);
+                case Expander inner when nestedCards < nested.Length:
+                    ResolvedEmbed child0 = nested[nestedCards++];
+                    met.Add($"{surface}: nested {child0.GetType().Name}");
+                    ReadCard($"{at} › nested {child0.GetType().Name}", surface, inner, child0, [], misreads, read, met);
                     break;
                 case FrameworkElement other:
                     misreads.Add($"{at}: the card body holds a {other.GetType().Name} reading "
@@ -423,27 +441,21 @@ public sealed class EmbedTitleRealizedSurfaceTests
                     break;
             }
         }
-        if (nestedCards != (nested is null ? 0 : 1))
+        if (nestedCards != nested.Length)
         {
-            misreads.Add($"{at}: {nestedCards} nested card(s), expected {(nested is null ? 0 : 1)}");
+            misreads.Add($"{at}: {nestedCards} nested card(s), expected {nested.Length}");
         }
     }
 
     // ---- the reading view -----------------------------------------------------
 
     private static void ReadReadingCards(
-        string where,
-        Window host,
-        DataTemplate tabTemplate,
-        WorkspaceTabViewModel tab,
-        List<string> misreads,
-        List<string> read)
+        string where, RealShell shell, List<string> misreads, List<string> read, HashSet<string> met)
     {
-        tab.ToggleViewMode();
-        host.Content = new ContentPresenter { Content = tab, ContentTemplate = tabTemplate };
-        Settle(host);
+        shell.Tab.ToggleViewMode();
+        Settle(shell.Window);
         ReadingSurface surface = Assert.Single(
-            VisualDescendants(host).OfType<ReadingSurface>(), candidate => candidate.IsVisible);
+            VisualDescendants(shell.Window).OfType<ReadingSurface>(), candidate => candidate.IsVisible);
 
         Section[] cards = AllBlocks(surface.Document.Blocks)
             .OfType<Section>()
@@ -472,14 +484,17 @@ public sealed class EmbedTitleRealizedSurfaceTests
             Expect(at, "landmark", landmarks[index].Text, title, misreads, read);
 
             Paragraph[] nestedHeaders = headers[1..];
-            if (nestedHeaders.Length != (row.Nested is null ? 0 : 1))
+            if (nestedHeaders.Length != row.Nested.Length)
             {
-                misreads.Add($"{at}: {nestedHeaders.Length} nested header(s), expected {(row.Nested is null ? 0 : 1)}");
+                misreads.Add($"{at}: {nestedHeaders.Length} nested header(s), expected {row.Nested.Length}");
+                continue;
             }
-            else if (row.Nested is { } nested)
+            for (int child = 0; child < nestedHeaders.Length; child++)
             {
-                Expect(at, "nested header text", HeardHeader(nestedHeaders[0], at, misreads),
-                    SlateUniffiMethods.ResolvedEmbedTitle(nested), misreads, read);
+                met.Add($"reading card: nested {row.Nested[child].GetType().Name}");
+                Expect(at, $"nested {row.Nested[child].GetType().Name} header text",
+                    HeardHeader(nestedHeaders[child], at, misreads),
+                    SlateUniffiMethods.ResolvedEmbedTitle(row.Nested[child]), misreads, read);
             }
         }
     }
@@ -518,6 +533,20 @@ public sealed class EmbedTitleRealizedSurfaceTests
     /// title and an unbounded one differ visibly in a failure.</summary>
     private static string? Show(string? value) =>
         value is { Length: > 160 } ? $"{value[..80]}…[{value.Length} chars]…{value[^60..]}" : value;
+
+    /// <summary>Diagnostic: an element's visibility and each ancestor's that hides it.</summary>
+    private static string Chain(DependencyObject element)
+    {
+        var hidden = new List<string>();
+        for (DependencyObject? node = element; node is not null; node = VisualTreeHelper.GetParent(node))
+        {
+            if (node is UIElement { Visibility: not Visibility.Visible } ui)
+            {
+                hidden.Add($"{ui.GetType().Name}({AutomationProperties.GetAutomationId(ui)}):{ui.Visibility}");
+            }
+        }
+        return $"IsVisible={((UIElement)element).IsVisible} hidden-by=[{string.Join(", ", hidden)}]";
+    }
 
     private static string? PeerName(UIElement element) =>
         UIElementAutomationPeer.CreatePeerForElement(element)?.GetName();
@@ -567,21 +596,6 @@ public sealed class EmbedTitleRealizedSurfaceTests
         }
     }
 
-    private static IEnumerable<DependencyObject> LogicalDescendants(DependencyObject root)
-    {
-        foreach (object child in LogicalTreeHelper.GetChildren(root))
-        {
-            if (child is DependencyObject element)
-            {
-                yield return element;
-                foreach (DependencyObject nested in LogicalDescendants(element))
-                {
-                    yield return nested;
-                }
-            }
-        }
-    }
-
     private static IEnumerable<Block> AllBlocks(BlockCollection blocks)
     {
         foreach (Block block in blocks)
@@ -605,10 +619,15 @@ public sealed class EmbedTitleRealizedSurfaceTests
             Path.Combine(root, "target.md"),
             $"# Lead\n\n## Destination\n\nSection body.\n\n## {LongHeading}\n\nLong section body.\n\n"
             + "Block body ^block-id\n");
-        File.WriteAllText(Path.Combine(root, "outer.md"), "Outer body.\n\n![[leaf]]\n");
+        File.WriteAllText(
+            Path.Combine(root, "outer.md"),
+            "Outer body.\n\n![[leaf]]\n\n![[target#Destination]]\n\n![[target#^block-id]]\n\n![[photo.png]]\n");
         File.WriteAllText(Path.Combine(root, "leaf.md"), "Leaf body.\n");
         Directory.CreateDirectory(Path.Combine(root, "attachments"));
         File.WriteAllBytes(Path.Combine(root, "attachments", "photo.png"), TinyPng);
+        // A PNG name over bytes no decoder accepts: an Image resolution whose
+        // card carries the decode warning.
+        File.WriteAllBytes(Path.Combine(root, "broken.png"), new byte[16]);
         File.WriteAllText(
             Path.Combine(root, "Notes.base"),
             "filters: 'file.ext == \"md\"'\nviews:\n  - type: table\n    name: Main\n    order:\n      - file.name\n");
@@ -630,10 +649,10 @@ public sealed class EmbedTitleRealizedSurfaceTests
 
     private static void WaitForUi(Func<bool> condition)
     {
-        DateTime deadline = DateTime.UtcNow.AddSeconds(20);
+        DateTime deadline = DateTime.UtcNow.AddSeconds(30);
         while (!condition())
         {
-            Assert.True(DateTime.UtcNow < deadline, "The embed preview never landed.");
+            Assert.True(DateTime.UtcNow < deadline, "A realized surface never settled.");
             var frame = new DispatcherFrame();
             Dispatcher.CurrentDispatcher.BeginInvoke(
                 DispatcherPriority.Background,
@@ -659,7 +678,7 @@ public sealed class EmbedTitleRealizedSurfaceTests
         });
         thread.SetApartmentState(ApartmentState.STA);
         thread.Start();
-        Assert.True(thread.Join(TimeSpan.FromSeconds(120)), "The realized-surface witness timed out.");
+        Assert.True(thread.Join(TimeSpan.FromSeconds(180)), "The realized-surface witness timed out.");
         if (failure is not null)
         {
             ExceptionDispatchInfo.Capture(failure).Throw();
