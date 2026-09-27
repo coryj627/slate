@@ -20,8 +20,9 @@ internal enum VaultCloseDecision
     Cancel,
 }
 
-/// <summary>#1280 (codex round 2a): what a workspace teardown decided — the
-/// caller speaks exactly one close line from it.</summary>
+/// <summary>#1280 (codex round 2a): what a workspace teardown decided. What
+/// is spoken for it depends on the route that asked for it
+/// (<see cref="TeardownRoute"/>).</summary>
 internal enum WorkspaceTeardown
 {
     /// <summary>The close was refused; the vault stays open.</summary>
@@ -36,6 +37,21 @@ internal enum WorkspaceTeardown
 
     /// <summary>The user chose to discard the unsaved edits.</summary>
     ClosedChangesDiscarded,
+}
+
+/// <summary>#1280 (owner decision, codex round 2b): what asked for a
+/// workspace teardown. Only the explicit close speaks a close line.</summary>
+internal enum TeardownRoute
+{
+    /// <summary>Close Vault: the user returns to the welcome screen.</summary>
+    Close,
+
+    /// <summary>Opening a vault — over an open one, or with none open; the
+    /// open speaks VaultOpened.</summary>
+    Switch,
+
+    /// <summary>The application window closing.</summary>
+    ApplicationClose,
 }
 
 /// <summary>
@@ -419,7 +435,7 @@ internal sealed class VaultLifecycleViewModel
         {
             return;
         }
-        AnnounceTeardownDecision(teardown);
+        AnnounceTeardown(teardown, TeardownRoute.Switch);
 
         // P14: dismissed AFTER the cancellable gate, matching CloseVault.
         // Dismissing before it meant a refused close — a dirty-tab prompt
@@ -538,16 +554,11 @@ internal sealed class VaultLifecycleViewModel
             return;
         }
 
-        // #1280 (codex round 2a): exactly one close line, from what the
-        // teardown decided — all saved, discarded, or "vault closed" for a
-        // close with nothing left unsaved, including one whose last edits a
-        // Ctrl+S the teardown settled first had saved.
         WorkspaceTeardown teardown = TryCloseWorkspace();
         if (teardown == WorkspaceTeardown.Refused)
         {
             return;
         }
-        AnnounceTeardownDecision(teardown);
 
         // P14: the palette must never be open with no vault, or the
         // next vault open auto-presents it. Dismissed BEFORE the session
@@ -567,10 +578,10 @@ internal sealed class VaultLifecycleViewModel
         ProgressMaximum = 1;
         IsProgressIndeterminate = false;
         StatusText = "Vault closed.";
-        if (teardown == WorkspaceTeardown.Closed)
-        {
-            _announce(new A11yEvent.VaultClosed());
-        }
+        // #1280: exactly one close line, from what the teardown decided —
+        // all saved, discarded, or "vault closed" for a close with nothing
+        // left unsaved (a save the teardown settled included).
+        AnnounceTeardown(teardown, TeardownRoute.Close);
 
         ReturnedToWelcome?.Invoke(this, EventArgs.Empty);
     }
@@ -587,7 +598,7 @@ internal sealed class VaultLifecycleViewModel
         {
             return false;
         }
-        AnnounceTeardownDecision(teardown);
+        AnnounceTeardown(teardown, TeardownRoute.ApplicationClose);
         return true;
     }
 
@@ -1242,13 +1253,28 @@ internal sealed class VaultLifecycleViewModel
         }
     }
 
-    /// <summary>The line a teardown that had to decide about unsaved edits
-    /// speaks (#1280): all saved, or discarded. A close with nothing unsaved
-    /// says nothing here; <see cref="CloseVault"/> says "vault closed".</summary>
-    private void AnnounceTeardownDecision(WorkspaceTeardown teardown)
+    /// <summary>
+    /// The one place a successful teardown is spoken (#1280; owner decision
+    /// on codex round 2b; contract 38 D-10 as amended). Mac parity: only the
+    /// explicit close speaks, exactly one of VaultClosed, VaultClosedAllSaved
+    /// or VaultClosedChangesDiscarded (AppState.swift
+    /// <c>closeVaultFromUserAction</c> and its resolvers). Every one of those
+    /// sentences ends "Returned to the welcome screen.", which is false for
+    /// a switch — the open speaks VaultOpened, and mac's resolvers stay
+    /// silent when they complete a switch (<c>completesVaultSwitch</c>) — and
+    /// for the application closing (mac's quit posts nothing).
+    /// </summary>
+    private void AnnounceTeardown(WorkspaceTeardown teardown, TeardownRoute route)
     {
+        if (route != TeardownRoute.Close)
+        {
+            return;
+        }
         switch (teardown)
         {
+            case WorkspaceTeardown.Closed:
+                _announce(new A11yEvent.VaultClosed());
+                break;
             case WorkspaceTeardown.ClosedAllSaved:
                 _announce(new A11yEvent.VaultClosedAllSaved());
                 break;
