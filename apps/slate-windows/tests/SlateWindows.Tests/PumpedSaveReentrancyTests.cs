@@ -245,9 +245,12 @@ public sealed class PumpedSaveReentrancyTests
 
     /// <summary>Contract 35 A-1, without the settle: the lifecycle disposed
     /// while a save's worker is still writing (the shutdown path). Disposal
-    /// joins the worker — its write lands before the session is disposed —
-    /// and no worker ever reaches a disposed session. The worker is released
-    /// from the join seam, deterministically inside the join.</summary>
+    /// closes the coordinator and joins the worker — its write has landed the
+    /// moment disposal returns — and the publication, arriving for a disposed
+    /// tab, says nothing. The worker is released from the join seam, inside
+    /// the join; that the join WAITS is decided by
+    /// <see cref="TheJoinRunsEveryTrackedWorkerToCompletion"/>, which no
+    /// scheduling can pass by luck.</summary>
     [Fact]
     public void DisposalJoinsASaveWorkerBeforeTheSessionGoes()
     {
@@ -273,6 +276,34 @@ public sealed class PumpedSaveReentrancyTests
             item => item.Event is A11yEvent.NoteSaved
                 or A11yEvent.NoteSaveConflict
                 or A11yEvent.NoteSaveBlocked);
+    }
+
+    /// <summary>Contract 35 A-1, the join itself: teardown's join returns
+    /// only once every tracked worker has run to completion. The worker is
+    /// queued on a scheduler that never runs anything on its own — only a
+    /// thread that waits on it runs it (Task.Wait inlines a queued task) — so
+    /// the outcome is decided by the join alone: a join that does not wait
+    /// leaves the worker unrun, whatever the timing.</summary>
+    [Fact]
+    public void TheJoinRunsEveryTrackedWorkerToCompletion()
+    {
+        var saves = new WorkspaceSaveCoordinator(Dispatcher.CurrentDispatcher);
+        int ran = 0;
+        Task worker = Task.Factory.StartNew(
+            () => Interlocked.Increment(ref ran),
+            CancellationToken.None,
+            TaskCreationOptions.None,
+            new RunsOnlyWhenAwaitedScheduler());
+        saves.TrackWorker(worker);
+        Assert.False(worker.IsCompleted);
+        Assert.Equal(1, saves.LiveWorkersForTests);
+
+        saves.CloseAndJoinWorkers();
+
+        Assert.Equal(1, Volatile.Read(ref ran));
+        Assert.True(worker.IsCompleted);
+        Assert.True(saves.IsClosed);
+        Assert.Equal(0, saves.LiveWorkersForTests);
     }
 
     /// <summary>Codex round 2a (model hole 1): a Ctrl+S still writing when
@@ -1025,5 +1056,20 @@ public sealed class PumpedSaveReentrancyTests
             {
             }
         }
+    }
+
+    /// <summary>A scheduler that queues and never runs: a task on it runs
+    /// only when a thread waits on it and <see cref="Task.Wait()"/> inlines
+    /// it.</summary>
+    private sealed class RunsOnlyWhenAwaitedScheduler : TaskScheduler
+    {
+        private readonly List<Task> _queued = [];
+
+        protected override IEnumerable<Task> GetScheduledTasks() => _queued;
+
+        protected override void QueueTask(Task task) => _queued.Add(task);
+
+        protected override bool TryExecuteTaskInline(Task task, bool taskWasPreviouslyQueued) =>
+            TryExecuteTask(task);
     }
 }
