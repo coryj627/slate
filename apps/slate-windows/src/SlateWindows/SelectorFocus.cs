@@ -1,6 +1,7 @@
 // Copyright (C) 2026 Cory Joseph
 // SPDX-License-Identifier: AGPL-3.0-or-later
 
+using System.Collections.Specialized;
 using System.Runtime.CompilerServices;
 using System.Windows;
 using System.Windows.Controls;
@@ -55,6 +56,12 @@ namespace SlateWindows;
 /// combo box or a grid is not a list landing (<see cref="IsListLanding"/>)
 /// and is never passed.
 /// </para>
+/// <para>
+/// A stop is kept through the publications under it
+/// (<see cref="KeepKeysThroughPublications"/>): the rows that fill an empty
+/// list holding the keys, or the notice that stops being a stop, never
+/// leave them on the bare list or strand them (codex round 5).
+/// </para>
 /// </remarks>
 internal static class SelectorFocus
 {
@@ -90,7 +97,11 @@ internal static class SelectorFocus
         {
             foreach (UIElement? notice in emptyNotices)
             {
-                if (notice is { IsVisible: true } && notice.Focus())
+                // A notice that is no longer a stop is passed over even
+                // while it still holds the keys: its own Focus() answers
+                // true then, and the keys would stay on it for WPF's
+                // re-evaluation to strand (codex round 5).
+                if (notice is { IsVisible: true, Focusable: true } && notice.Focus())
                 {
                     return true;
                 }
@@ -136,9 +147,10 @@ internal static class SelectorFocus
     /// Give <paramref name="container"/> its region's own landing, which
     /// <see cref="LandOnStop"/> then takes wherever the container is the
     /// target — a focus restore's token included. The Files tree is the
-    /// one: with no file selected its landing is the bare tree, a proven
-    /// contained stop, never its first row, whose focus would select and
-    /// OPEN a note (<c>MainWindow.LandOnFilesTree</c>).
+    /// one: its landing is the selected file's row, else the Files region's
+    /// stable stop, the filter field — never the bare tree (R-5) and never
+    /// a row that is not selected, whose focus would select it and OPEN a
+    /// note (<c>MainWindow.LandOnFilesTree</c>; codex round 5's ruling).
     /// </summary>
     internal static void SetOwnLanding(UIElement container, Func<bool> land) =>
         OwnLandings.AddOrUpdate(container, land);
@@ -158,9 +170,10 @@ internal static class SelectorFocus
     /// lands through it (<see cref="SetOwnLanding"/>), a list on its row, a
     /// tree on its row, a grid on a cell through its
     /// <see cref="AccessibleDataGrid"/> (the one implementation of cell
-    /// focus, W4-5 D-12), and anything else on itself. A grid no
-    /// AccessibleDataGrid owns is not landed on: nothing keeps its arrows,
-    /// so the caller's own stable stop takes the keys.
+    /// focus, W4-5 D-12) and silently, a plain items host inside an item,
+    /// and anything else on itself. A grid no AccessibleDataGrid owns is not
+    /// landed on: nothing keeps its arrows, so the caller's own stable stop
+    /// takes the keys.
     /// </summary>
     /// <remarks>
     /// Codex round 4: a restore token captured while a list was EMPTY —
@@ -181,8 +194,259 @@ internal static class SelectorFocus
             Selector list when IsListLanding(list) => FocusFirstOrSelectedItem(list),
             TreeView tree => FocusSelectedOrFirstRow(tree),
             DataGrid grid => AccessibleDataGrid.Owning(grid) is { } owner && owner.FocusCurrentOrFirstCell(),
+            ItemsControl items when IsPlainItemsLanding(items) => LandInsideItems(items),
             _ => stop.Focus() || stop.IsKeyboardFocusWithin,
         };
+
+    /// <summary>Whether <paramref name="items"/> is an items host with no
+    /// landing of its own — R-5's "other <c>ItemsControl</c> container": a
+    /// plain host such as the split editor panes. A row (a tree row, a menu
+    /// item: <see cref="HeaderedItemsControl"/>), a list, a grid, a combo
+    /// box, a status bar and a menu each have theirs.</summary>
+    internal static bool IsPlainItemsLanding(ItemsControl items) =>
+        items is not (HeaderedItemsControl or Selector or TreeView or StatusBar or MenuBase);
+
+    /// <summary>A plain items host's landing is INSIDE an item — its first
+    /// focusable element, itself landed through <see cref="LandOnStop"/>;
+    /// an EMPTY host is its own stop (AR-6); a populated host whose items
+    /// take no keys is not landed on, and the caller's stable stop
+    /// is.</summary>
+    private static bool LandInsideItems(ItemsControl items)
+    {
+        if (!items.HasItems)
+        {
+            return items.Focus() || items.IsKeyboardFocusWithin;
+        }
+
+        items.UpdateLayout();
+        return FirstFocusableWithin(items) is { } inner && LandOnStop(inner);
+    }
+
+    private static UIElement? FirstFocusableWithin(DependencyObject root)
+    {
+        for (int index = 0; index < VisualTreeHelper.GetChildrenCount(root); index++)
+        {
+            DependencyObject child = VisualTreeHelper.GetChild(root, index);
+            if (child is UIElement { Focusable: true, IsEnabled: true, IsVisible: true } element)
+            {
+                return element;
+            }
+
+            if (FirstFocusableWithin(child) is { } nested)
+            {
+                return nested;
+            }
+        }
+
+        return null;
+    }
+
+    /// <summary>
+    /// W7-7 PR 4 (#1247, R-5, spec §5.2.2; codex round 5): keep the keys on
+    /// a real stop while a region's rows are published under them.
+    /// </summary>
+    /// <remarks>
+    /// <para>
+    /// An empty list is its own stop while its rows load (AR-6), and WPF
+    /// hands the keys of a removed row to the bare list: a publication that
+    /// filled the list left them on the bare POPULATED list, from which an
+    /// arrow leaves the region. A notice that stops being a stop — its
+    /// sentence turns to "Loading…", or it collapses — had its keys stranded
+    /// by WPF's own focus re-evaluation.
+    /// </para>
+    /// <para>
+    /// The Citations leaf's publish restore is the precedent
+    /// (<c>MainWindow.RestoreCitationFocus</c>). After a publication — once
+    /// however many rows it adds, at Loaded priority: after layout, and
+    /// ahead of WPF's own re-evaluation of a focused element that went away,
+    /// which runs at Input and would move the keys up to the bare list or
+    /// the window first — and only while the keys are still on the scope's
+    /// bare container or stranded from the scope (on nothing, the window, a
+    /// detached, hidden or unfocusable element, or an ancestor WPF moved
+    /// them up to): a bare POPULATED list re-lands on its row (the selected
+    /// one, else the first); a bare EMPTY list on its notice once that is a
+    /// stop (§5.2.2); stranded keys on the rows they were last in; any other
+    /// container, or keys that were on none, on the scope's own landing. A
+    /// notice that stops being a stop while it holds the keys hands them to
+    /// its list first (Normal priority), so they stay in the region. Silent
+    /// apart from the focus change itself, and keys held anywhere else are
+    /// never taken.
+    /// </para>
+    /// </remarks>
+    /// <param name="scope">Where the keys count as being in the region: a
+    /// leaf body, a grid.</param>
+    /// <param name="rows">The containers whose publications re-land.</param>
+    /// <param name="notices">The scope's empty-state notices.</param>
+    /// <param name="landInScope">The scope's own landing.</param>
+    /// <param name="reLandPublications">False where the region restores
+    /// its own publications (the Citations leaf): only the notices' hand-off
+    /// is kept.</param>
+    internal static void KeepKeysThroughPublications(
+        UIElement scope,
+        IReadOnlyList<ItemsControl> rows,
+        IReadOnlyList<UIElement> notices,
+        Func<bool> landInScope,
+        bool reLandPublications = true) =>
+        new PublicationKeeper(scope, rows, notices, landInScope, reLandPublications).Attach();
+
+    private sealed class PublicationKeeper(
+        UIElement scope,
+        IReadOnlyList<ItemsControl> rows,
+        IReadOnlyList<UIElement> notices,
+        Func<bool> landInScope,
+        bool reLandPublications)
+    {
+        /// <summary>The keys are in the scope, or were stranded from it — not
+        /// taken since by a claim anywhere else.</summary>
+        private bool _held;
+
+        /// <summary>The rows container the keys were last in within the
+        /// scope; null when they were on anything else there.</summary>
+        private ItemsControl? _lastRows;
+
+        private bool _pending;
+
+        /// <summary>A removed row's hand-over was declined since the last
+        /// publication: the next is let through, so a re-land that cannot
+        /// take the keys never leaves them nowhere.</summary>
+        private bool _declined;
+
+        public void Attach()
+        {
+            scope.IsKeyboardFocusWithinChanged += (_, e) =>
+                _held = (bool)e.NewValue || (_held && IsStranded(Keyboard.FocusedElement));
+            scope.GotKeyboardFocus += (_, _) =>
+                _lastRows = rows.FirstOrDefault(container => container.IsKeyboardFocusWithin);
+            if (reLandPublications)
+            {
+                foreach (ItemsControl container in rows)
+                {
+                    ((INotifyCollectionChanged)container.Items).CollectionChanged += (_, _) =>
+                    {
+                        _declined = false;
+                        if (container.HasItems)
+                        {
+                            ResolveLater();
+                        }
+                    };
+
+                    // A row removed from the tree hands its keys to its
+                    // container (ListBoxItem's own OnVisualParentChanged) —
+                    // at the layout after a republish, when the container
+                    // is POPULATED again: a UIA focus change on the bare
+                    // list. The hand-over is declined, once, and the keys,
+                    // still on the removed row, are re-landed on a row
+                    // (stranded: the rows they were in) at Loaded.
+                    container.PreviewGotKeyboardFocus += (_, e) =>
+                    {
+                        if (!_declined
+                            && ReferenceEquals(e.NewFocus, container)
+                            && container.HasItems
+                            && e.OldFocus is Visual removed
+                            && PresentationSource.FromVisual(removed) is null)
+                        {
+                            e.Handled = true;
+                            _declined = true;
+                            _held = true;
+                            _lastRows = container;
+                            ResolveLater();
+                        }
+                    };
+                }
+            }
+
+            foreach (UIElement notice in notices)
+            {
+                notice.FocusableChanged += (_, _) => NoticeChanged(notice);
+                notice.IsVisibleChanged += (_, _) => NoticeChanged(notice);
+            }
+        }
+
+        private void NoticeChanged(UIElement notice)
+        {
+            if (notice.IsKeyboardFocused && !IsAStop(notice))
+            {
+                _ = scope.Dispatcher.InvokeAsync(
+                    () =>
+                    {
+                        if (ReferenceEquals(Keyboard.FocusedElement, notice) && !IsAStop(notice) && !HandOff())
+                        {
+                            _ = landInScope();
+                        }
+                    },
+                    DispatcherPriority.Normal);
+                return;
+            }
+
+            if (reLandPublications && IsAStop(notice))
+            {
+                ResolveLater();
+            }
+        }
+
+        private void ResolveLater()
+        {
+            if (!_held || _pending)
+            {
+                return;
+            }
+
+            _pending = true;
+            _ = scope.Dispatcher.InvokeAsync(Resolve, DispatcherPriority.Loaded);
+        }
+
+        private void Resolve()
+        {
+            _pending = false;
+            IInputElement? focused = Keyboard.FocusedElement;
+            ItemsControl? bare = rows.FirstOrDefault(container => ReferenceEquals(container, focused));
+            bool stranded = bare is null && _held && IsStranded(focused);
+            if ((bare is null && !stranded) || !scope.IsVisible)
+            {
+                // The keys are on a real stop — or the scope is not on
+                // screen (a projection switched away, a hidden leaf), where
+                // a landing could take nothing and would only write state.
+                return;
+            }
+
+            if ((bare ?? _lastRows) is Selector list && IsListLanding(list) && list.IsVisible)
+            {
+                // A populated list: its row. An empty one: its notice once
+                // that is a stop; stranded keys come back to it even so.
+                if ((list.HasItems || stranded || notices.Any(IsAStop))
+                    && !FocusFirstOrSelectedItem(list, [.. notices]))
+                {
+                    _ = landInScope();
+                }
+
+                return;
+            }
+
+            if (stranded || bare!.HasItems)
+            {
+                _ = landInScope();
+            }
+        }
+
+        /// <summary>A notice's keys go to its list: the row, another notice
+        /// that is a stop, else the empty list itself (AR-6).</summary>
+        private bool HandOff() =>
+            rows.OfType<Selector>().FirstOrDefault(list => IsListLanding(list) && list.IsVisible) is { } list
+            && FocusFirstOrSelectedItem(list, [.. notices]);
+
+        private static bool IsAStop(UIElement notice) =>
+            notice is { IsVisible: true, Focusable: true, IsEnabled: true };
+
+        private bool IsStranded(IInputElement? focused) => focused switch
+        {
+            null or Window => true,
+            UIElement element => PresentationSource.FromVisual(element) is null
+                || !element.IsVisible
+                || !element.Focusable
+                || element.IsAncestorOf(scope),
+            _ => false,
+        };
+    }
 
     /// <summary>
     /// W7-7 PR 4 (#1247, contract R-5; spec review round 23): a TREE's

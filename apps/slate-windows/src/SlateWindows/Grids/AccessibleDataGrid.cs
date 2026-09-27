@@ -133,6 +133,14 @@ internal sealed class AccessibleDataGrid : UserControl
         _grid.ContextMenuOpening += OnContextMenuOpening;
         _grid.LoadingRow += OnLoadingRow;
         _grid.UnloadingRow += OnUnloadingRow;
+        // W7-7 PR 4 (#1247, R-5; codex round 5): a publication under the
+        // keys — rows filling the empty grid that is its own stop, or a Bind
+        // that destroyed the reader's cell and left the keys on the bare grid
+        // or nowhere — re-seats them like a restore: through the consuming
+        // projection's own landing where it has one (the graph's table keeps
+        // a hidden shared key, A-7), else on the current cell, else the
+        // first, silently (FocusCurrentOrFirstCell).
+        SelectorFocus.KeepKeysThroughPublications(this, [_grid], [], () => SelectorFocus.LandOnStop(_grid));
         _grid.ItemContainerGenerator.StatusChanged += (_, _) =>
         {
             // The subscriber check comes BEFORE the post, not inside the
@@ -271,14 +279,23 @@ internal sealed class AccessibleDataGrid : UserControl
     }
 
     /// <summary>
-    /// W7-7 PR 4 (#1247, R-5; codex round 4): a landing on the GRID — a
+    /// W7-7 PR 4 (#1247, R-5; codex rounds 4-5): a landing on the GRID — a
     /// restore token captured while it held the keys itself, which is an
-    /// empty grid's own stop — puts them on a cell: the current one, else
-    /// the first. An empty grid is still its own stop (<see
-    /// cref="FocusFirstCell"/>). Reached through
+    /// empty grid's own stop, or a publication under the keys — puts them
+    /// on a cell: the current one, else the first. An empty grid is still
+    /// its own stop (<see cref="FocusFirstCell"/>). Reached through
     /// <see cref="SelectorFocus.LandOnStop"/>, the shell's one landing for
-    /// element-typed targets.
+    /// element-typed targets, and the substrate's publication keeper.
     /// </summary>
+    /// <remarks>
+    /// SILENT, the immediate seat and the deferred one alike: seating
+    /// currency posts <c>GridRowMoved</c>/<c>GridCellMoved</c>, and on a
+    /// re-seat — a dismissal's restore, the Canvas and Graph Where-am-I
+    /// close, a publication's re-land — the focus change supplies the
+    /// speech, so a line on top of it is the t0 §1.5 doubling (contract 34
+    /// C6's seat rule; codex round 5). A reader's own arrow keeps
+    /// announcing.
+    /// </remarks>
     /// <returns>Whether the grid (empty) or a realized cell took the keys
     /// now; an unrealized cell is seated later, as
     /// <see cref="FocusCellElement"/> does.</returns>
@@ -289,7 +306,7 @@ internal sealed class AccessibleDataGrid : UserControl
             return FocusFirstCell();
         }
         (object item, DataGridColumn column) = CurrentOrFirstCell();
-        return FocusCellElement(item, column);
+        return FocusCellElement(item, column, silent: true);
     }
 
     /// <summary>The grid substrate that owns <paramref name="grid"/>, if
@@ -462,17 +479,31 @@ internal sealed class AccessibleDataGrid : UserControl
     /// and a fallback that says "true" consumes a request nothing ever
     /// satisfied.
     /// </returns>
-    private bool FocusCellElement(object item, DataGridColumn column)
+    /// <param name="silent">A re-seat's (<see cref="FocusCurrentOrFirstCell"/>):
+    /// the seat, now or deferred, posts no movement line.</param>
+    private bool FocusCellElement(object item, DataGridColumn column, bool silent = false)
     {
-        if (TryFocusCell(item, column))
+        if (SeatCell(item, column, silent))
         {
             return true;
         }
 
         SelectorFocus.SeatLater(
             _grid,
-            () => _items.Contains(item) && _grid.Columns.Contains(column) && TryFocusCell(item, column));
+            () => _items.Contains(item) && _grid.Columns.Contains(column) && SeatCell(item, column, silent));
         return false;
+    }
+
+    private bool SeatCell(object item, DataGridColumn column, bool silent)
+    {
+        if (!silent)
+        {
+            return TryFocusCell(item, column);
+        }
+
+        bool seated = false;
+        WithoutAnnouncing(() => seated = TryFocusCell(item, column));
+        return seated;
     }
 
     private bool TryFocusCell(object item, DataGridColumn column)

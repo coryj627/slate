@@ -67,12 +67,14 @@ public sealed class SelectorLandingCensus
     /// row to land on, each with the hosted fact that shows it keeps all four
     /// arrows — spec review round 23's "a hosted arrow assertion for every
     /// site the census discovers". An entry the shell no longer has fails the
-    /// census: its witness would prove nothing.</summary>
+    /// census: its witness would prove nothing. The bare Files tree is not
+    /// one (codex round 5's ruling: R-5 names the populated
+    /// <c>TreeView</c>; its landing is a row, else the filter
+    /// field).</summary>
     private static readonly (string Site, string Witness)[] ProvenStops =
     [
         ("AccessibleDataGrid.FocusFirstCell: _grid.Focus()", nameof(GridLandingTests.AnEmptyGridKeepsItsArrows)),
         ("MainWindow.TryLand: ShellStatusBar.Focus()", nameof(ShellContainerLandingTests.TheStatusBarKeepsItsArrows)),
-        ("MainWindow.LandOnFilesTree: FilesTree.Focus()", nameof(FilesRegionLandingTests.FromTheFilesLandingEveryArrowStaysInTheRegion)),
     ];
 
     /// <summary>The containers that are their own stop by type, with the

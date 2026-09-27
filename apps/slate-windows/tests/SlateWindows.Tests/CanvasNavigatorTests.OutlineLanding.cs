@@ -83,6 +83,34 @@ public sealed partial class CanvasNavigatorTests
         host.AssertTreeNeverFocused();
     });
 
+    /// <summary>Codex round 5: a restore token captured on the BARE outline —
+    /// nothing seated, the keys where a click leaves them — lands through
+    /// the projection's own landing (the first row, seated silently), not
+    /// the generic tree landing, whose row's selection echo narrates a move
+    /// on top of the row the reader hears (t0 §1.5).</summary>
+    [Fact]
+    public void ARestoreTokenOnTheBareOutlineLandsAsTheProjectionDoes() => RunSta(() =>
+    {
+        CanvasDocumentViewModel document = Open("board.canvas");
+        document.SeatSelectionSilently(null);
+        using OutlineHost host = HostOutline(document);
+        TreeView tree = host.Surface.OutlineForTests.TreeForTests;
+        Assert.True(tree.Focus());
+        IInputElement token = Keyboard.FocusedElement;
+        Assert.Same(tree, token);
+        Assert.True(host.Beside.Focus());
+        Drain(document);
+        host.RecordFocus();
+
+        Assert.True(SelectorFocus.LandOnStop((UIElement)token));
+
+        CanvasOutlineRowViewModel first = host.Surface.OutlineForTests.RootsForTests[0];
+        Assert.Equal(first.Id, FocusedRowId());
+        Assert.Equal(first.Id, document.Selection.Selected);
+        Assert.Empty(Lines(document));
+        host.AssertTreeNeverFocused();
+    });
+
     /// <summary>The arrow witness: from the landed row each arrow keeps the
     /// keys in the outline — the navigator moves or follows, or answers at
     /// an end — and none reaches the buttons beside it.</summary>

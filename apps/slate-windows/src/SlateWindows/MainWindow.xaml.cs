@@ -28,10 +28,21 @@ public partial class MainWindow : Window
     public MainWindow()
     {
         InitializeComponent();
-        // R-5 (#1247; codex round 4): a restore whose token is the Files
-        // tree lands as the region does — its selected row, else the bare
-        // tree — never on a first row, whose focus would open its note.
+        // R-5 (#1247; codex rounds 4-5): a restore whose token is the Files
+        // tree lands as the region does — its selected row, else the filter
+        // field — never on the bare tree, nor on a row that is not selected,
+        // whose focus would open its note.
         SelectorFocus.SetOwnLanding(FilesTree, LandOnFilesTree);
+        // The Tags tree's selection ACTIVATES a tag filter (R-3): a restore
+        // onto the bare tree lands on its selected tag, else the Files
+        // region's stable stop — never a first tag it would apply.
+        TreeView tags = FindWithAutomationId<TreeView>(FilesPaneBorder, "SidebarTagTree")
+            ?? throw new InvalidOperationException("SidebarTagTree is not in the shell's XAML.");
+        SelectorFocus.SetOwnLanding(
+            tags,
+            () => (tags.SelectedItem is not null && SelectorFocus.FocusSelectedOrFirstRow(tags))
+                || SidebarFilterTextBox.Focus());
+        KeepLeafKeysThroughPublications();
         _windowPlacement = new WindowPlacementManager(this);
         _announcer = new AccessibilityNotificationDispatcher(StatusTextBlock);
         CommandBindings.Add(new CommandBinding(ApplicationCommands.Close, (_, _) => Close()));

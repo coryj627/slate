@@ -6,6 +6,7 @@ using System.Windows;
 using System.Windows.Controls;
 using System.Windows.Input;
 using SlateWindows.Grids;
+using uniffi.slate_uniffi;
 
 namespace SlateWindows.Tests;
 
@@ -128,33 +129,162 @@ public sealed class GridLandingTests
     [Fact]
     public void AGridStopLandsOnACell() => RunSta(() =>
     {
-        AccessibleDataGrid grid = BoundGrid([new Row("one"), new Row("two")]);
+        var announced = new List<A11yEvent>();
+        AccessibleDataGrid grid = BoundGrid([new Row("one"), new Row("two")], announced);
         using Hosted host = Host(grid);
         Assert.True(host.Above.Focus());
         host.RecordFocus();
+        announced.Clear();
 
         Assert.True(SelectorFocus.LandOnStop(grid.Grid));
 
         var cell = Assert.IsType<DataGridCell>(Keyboard.FocusedElement);
         Assert.Equal("one", Assert.IsType<Row>(cell.DataContext).Name);
         host.AssertNeverFocused(grid.Grid);
+        Assert.Empty(announced);
     });
 
-    /// <summary>...and the current cell while its row is still bound.</summary>
+    /// <summary>...and the current cell while its row is still bound —
+    /// silently: a re-seat's speech is the focus change's (contract 34 C6;
+    /// codex round 5).</summary>
     [Fact]
     public void AGridStopLandsOnItsCurrentCell() => RunSta(() =>
     {
-        AccessibleDataGrid grid = BoundGrid([new Row("one"), new Row("two")]);
+        var announced = new List<A11yEvent>();
+        AccessibleDataGrid grid = BoundGrid([new Row("one"), new Row("two")], announced);
         using Hosted host = Host(grid);
         Assert.True(grid.SelectRow(row => ((Row)row).Name == "two"));
         Assert.True(host.Above.Focus());
         host.RecordFocus();
+        announced.Clear();
 
         Assert.True(SelectorFocus.LandOnStop(grid.Grid));
 
         var cell = Assert.IsType<DataGridCell>(Keyboard.FocusedElement);
         Assert.Equal("two", Assert.IsType<Row>(cell.DataContext).Name);
         host.AssertNeverFocused(grid.Grid);
+        Assert.Empty(announced);
+    });
+
+    /// <summary>Codex round 5 (contract 34 C6; t0 §1.5): a restore token
+    /// captured while the EMPTY grid held the keys (its own stop) and
+    /// restored after the grid filled behind an overlay lands on a cell and
+    /// says nothing — the focus change is the speech. It posted
+    /// GridRowMoved on every restore.</summary>
+    [Fact]
+    public void AnEmptyGridRestoredAfterItFilledLandsOnACellSilently() => RunSta(() =>
+    {
+        var announced = new List<A11yEvent>();
+        AccessibleDataGrid grid = BoundGrid([], announced);
+        using Hosted host = Host(grid);
+        Assert.True(grid.FocusFirstCell());
+        IInputElement token = Keyboard.FocusedElement;
+        Assert.Same(grid.Grid, token);
+        Assert.True(host.Above.Focus());
+        Rebind(grid, [new Row("one"), new Row("two")]);
+        PumpedDispatcher.Drain();
+        Assert.Same(host.Above, Keyboard.FocusedElement);
+        host.RecordFocus();
+        announced.Clear();
+
+        Assert.True(SelectorFocus.LandOnStop((UIElement)token));
+
+        var cell = Assert.IsType<DataGridCell>(Keyboard.FocusedElement);
+        Assert.Equal("one", Assert.IsType<Row>(cell.DataContext).Name);
+        host.AssertNeverFocused(grid.Grid);
+        Assert.Empty(announced);
+    });
+
+    /// <summary>The deferred seat is as silent as the immediate one: a
+    /// restore onto a grid whose cell cannot be realized yet seats it
+    /// later, without a movement line.</summary>
+    [Fact]
+    public void AnUnrealizedRestoreSeatedLaterIsSilentToo() => RunSta(() =>
+    {
+        var announced = new List<A11yEvent>();
+        AccessibleDataGrid grid = BoundGrid([new Row("one"), new Row("two")], announced);
+        grid.Visibility = Visibility.Collapsed;
+        using Hosted host = Host(grid);
+        Assert.True(host.Above.Focus());
+        host.RecordFocus();
+        announced.Clear();
+
+        Assert.False(SelectorFocus.LandOnStop(grid.Grid));
+        grid.Visibility = Visibility.Visible;
+
+        Assert.True(
+            PumpedDispatcher.PumpUntil(() => Keyboard.FocusedElement is DataGridCell && grid.Grid.IsKeyboardFocusWithin),
+            $"the seat never reached a cell; the keys are on {Keyboard.FocusedElement}");
+        host.AssertNeverFocused(grid.Grid);
+        Assert.Empty(announced);
+    });
+
+    /// <summary>The silence is the re-seat's alone: the reader's own arrow
+    /// from the restored cell still announces its move.</summary>
+    [Fact]
+    public void AReadersArrowAfterASilentRestoreStillAnnounces() => RunSta(() =>
+    {
+        var announced = new List<A11yEvent>();
+        AccessibleDataGrid grid = BoundGrid([new Row("one"), new Row("two")], announced);
+        using Hosted host = Host(grid);
+        Assert.True(host.Above.Focus());
+        Assert.True(SelectorFocus.LandOnStop(grid.Grid));
+        Assert.Empty(announced);
+
+        host.Press(Key.Down);
+
+        var cell = Assert.IsType<DataGridCell>(Keyboard.FocusedElement);
+        Assert.Equal("two", Assert.IsType<Row>(cell.DataContext).Name);
+        Assert.IsType<A11yEvent.GridRowMoved>(Assert.Single(announced));
+    });
+
+    /// <summary>Codex round 5 (R-5): an EMPTY grid is its own stop, so the
+    /// keys can sit on it while its rows load. The rows published under
+    /// them re-land them on a cell — the first, silently — never leaving
+    /// them on the bare populated grid.</summary>
+    [Fact]
+    public void RowsFillingTheEmptyGridUnderTheKeysLandThemOnACellSilently() => RunSta(() =>
+    {
+        var announced = new List<A11yEvent>();
+        AccessibleDataGrid grid = BoundGrid([], announced);
+        using Hosted host = Host(grid);
+        Assert.True(grid.FocusFirstCell());
+        Assert.Same(grid.Grid, Keyboard.FocusedElement);
+        host.RecordFocus();
+        announced.Clear();
+
+        Rebind(grid, [new Row("one"), new Row("two")]);
+        PumpedDispatcher.Drain();
+
+        var cell = Assert.IsType<DataGridCell>(Keyboard.FocusedElement);
+        Assert.Equal("one", Assert.IsType<Row>(cell.DataContext).Name);
+        host.AssertNeverFocused(grid.Grid);
+        Assert.Empty(announced);
+    });
+
+    /// <summary>A re-publish under the reader — every consuming surface
+    /// re-binds on each publish — destroys the cell holding the keys; they
+    /// land again on the reader's cell (the currency the bind restores by
+    /// row identity), silently, never on the bare populated grid or
+    /// nowhere.</summary>
+    [Fact]
+    public void ARepublishUnderTheReaderKeepsTheirCellSilently() => RunSta(() =>
+    {
+        var announced = new List<A11yEvent>();
+        AccessibleDataGrid grid = BoundGrid([new Row("one"), new Row("two"), new Row("three")], announced);
+        using Hosted host = Host(grid);
+        Assert.True(grid.SelectRow(row => ((Row)row).Name == "two", moveFocus: true));
+        Assert.Equal("two", Assert.IsType<Row>(Assert.IsType<DataGridCell>(Keyboard.FocusedElement).DataContext).Name);
+        host.RecordFocus();
+        announced.Clear();
+
+        Rebind(grid, [new Row("one"), new Row("two"), new Row("three")]);
+        PumpedDispatcher.Drain();
+
+        var cell = Assert.IsType<DataGridCell>(Keyboard.FocusedElement);
+        Assert.Equal("two", Assert.IsType<Row>(cell.DataContext).Name);
+        host.AssertNeverFocused(grid.Grid);
+        Assert.Empty(announced);
     });
 
     /// <summary>An EMPTY grid stays its own stop through the same landing
@@ -188,16 +318,23 @@ public sealed class GridLandingTests
         host.AssertNeverFocused(grid);
     });
 
-    private static AccessibleDataGrid BoundGrid(IReadOnlyList<object> rows)
+    /// <summary>A bound substrate whose announcements are RECORDED, never
+    /// swallowed (codex round 5: a discarding seam hid the restore's
+    /// movement line).</summary>
+    private static AccessibleDataGrid BoundGrid(IReadOnlyList<object> rows, List<A11yEvent>? announced = null)
     {
-        var grid = new AccessibleDataGrid { Announce = _ => { } };
+        List<A11yEvent> sink = announced ?? [];
+        var grid = new AccessibleDataGrid { Announce = sink.Add };
+        Rebind(grid, rows);
+        return grid;
+    }
+
+    private static void Rebind(AccessibleDataGrid grid, IReadOnlyList<object> rows) =>
         grid.Bind(
             [new AccessibleGridColumn { Header = "Name", Cell = row => ((Row)row).Name, IsRowHeader = true }],
             rows,
             $"{rows.Count} rows.",
             "Rows");
-        return grid;
-    }
 
     private static Hosted Host(FrameworkElement center)
     {

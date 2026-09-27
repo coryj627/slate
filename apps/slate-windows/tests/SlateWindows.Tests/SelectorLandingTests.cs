@@ -255,6 +255,53 @@ public sealed class SelectorLandingTests
         host.AssertNeverFocused(tree);
     });
 
+    /// <summary>Codex round 5 (R-5's "other <c>ItemsControl</c> container"):
+    /// a plain items host — a restore token on the split editor panes, say —
+    /// lands INSIDE an item, on its first focusable element, and the
+    /// populated host never takes the keys itself.</summary>
+    [Fact]
+    public void APlainItemsHostLandsInsideAnItem() => RunSta(() =>
+    {
+        var items = new ItemsControl { ItemsSource = Items(2), ItemTemplate = Template(typeof(Button)) };
+        using HostedWindow host = Host(items);
+        Assert.True(host.Elsewhere.Focus());
+
+        Assert.True(SelectorFocus.LandOnStop(items));
+
+        var first = Assert.IsType<Button>(Keyboard.FocusedElement);
+        Assert.Equal("Row 0", first.Content);
+        host.AssertNeverFocused(items);
+    });
+
+    /// <summary>An EMPTY items host is its own stop (AR-6); a populated one
+    /// whose items take no keys is not landed on — the caller's stable stop
+    /// takes them.</summary>
+    [Fact]
+    public void AnEmptyItemsHostIsItsOwnStopAndOneWithNoStopsIsNotLandedOn() => RunSta(() =>
+    {
+        var empty = new ItemsControl { ItemsSource = Array.Empty<string>() };
+        var inert = new ItemsControl { ItemsSource = Items(2), ItemTemplate = Template(typeof(TextBlock)) };
+        using HostedWindow host = Host(empty, inert);
+        Assert.True(host.Elsewhere.Focus());
+
+        Assert.True(SelectorFocus.LandOnStop(empty));
+        Assert.Same(empty, Keyboard.FocusedElement);
+
+        Assert.True(host.Elsewhere.Focus());
+        Assert.False(SelectorFocus.LandOnStop(inert));
+        Assert.Same(host.Elsewhere, Keyboard.FocusedElement);
+        host.AssertNeverFocused(inert);
+    });
+
+    private static DataTemplate Template(Type element)
+    {
+        var factory = new FrameworkElementFactory(element);
+        factory.SetBinding(
+            element == typeof(TextBlock) ? TextBlock.TextProperty : ContentControl.ContentProperty,
+            new System.Windows.Data.Binding());
+        return new DataTemplate { VisualTree = factory };
+    }
+
     /// <summary>A row far down a virtualizing list that was JUST populated:
     /// its container does not exist and the generator has not produced any
     /// yet, so a plain ScrollIntoView defers to Loaded priority — the

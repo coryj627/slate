@@ -409,6 +409,11 @@ internal sealed class CanvasOutlineView : UserControl
         _tree.KeyDown += OnTreeKeyDown;
         _tree.MouseDoubleClick += OnTreeDoubleClick;
         Content = _tree;
+        // W7-7 PR 4 (#1247, R-5; codex round 5): a restore whose token is
+        // the bare outline lands as the projection does — the seated row,
+        // else the first, delivered silently. The generic tree landing would
+        // focus a row whose own selection echo narrates a move (t0 §1.5).
+        SelectorFocus.SetOwnLanding(_tree, FocusTree);
     }
 
     public CanvasDocumentViewModel? Model

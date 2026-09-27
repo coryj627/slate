@@ -22,7 +22,7 @@ Issue: W7-6 ([#1240](https://github.com/coryj627/slate/issues/1240)). Wave: [W7]
 | # | Region | Landing element | Present when | Announcement (rendered by core) |
 |---|---|---|---|---|
 | 1 | Menu bar | `MainMenu`'s first top-level `MenuItem` (`FileMenu`), the same element Alt lands on | always (disabled under a modal surface — see §4) | "Menu bar." |
-| 2 | Files pane | `FilesTree` (or `FilterResultsList` when the filter is active, the sidebar's own current stop) | always | existing `FilesRegionFocused` → "Files." |
+| 2 | Files pane | `FilesTree`'s selected row (or `FilterResultsList` when the filter is active, the sidebar's own current stop); with no row to land on, the region's stable stop `SidebarFilterTextBox` — never the bare tree (W7-7 R-5) | always | existing `FilesRegionFocused` → "Files." |
 | 3 | Tab bar | the `TabItem` container of the active tab in the active group (`FocusEditorPane` arm 4) | active group has ≥ 1 tab | existing `TabFocused` → "{filename}, tab {i} of {n}." with `prefix` "Tab bar. " |
 | 4 | Editor | the active tab's input owner: `SlateTextEditor.FocusInputOwner()`, or the canvas / graph surface's focus landing (arms 1–3 of `FocusEditorPane`) | active group has ≥ 1 tab | existing `EditorPaneFocused` (unchanged copy) |
 | 4′ | Empty editor pane | the `ContentPane` landmark (`AutomationLandmarkBorder`, already a named focusable Group) | active group has 0 tabs (replaces 3 + 4) | "Editor pane. Empty." |

@@ -230,8 +230,10 @@ public sealed partial class ShellAccessibilityTests
             }
 
             // W7-5 (#1239): a vault that restores no tabs lands its launch
-            // focus on the Files tree, never on the empty TabControl (which
-            // is not focusable until it has items).
+            // focus in the Files region, never on the empty TabControl (which
+            // is not focusable until it has items). With no file selected
+            // that is the region's stable stop, the filter field — never the
+            // bare tree (W7-7 PR 4, R-5; codex round 5's ruling).
             AutomationElement tabs = WaitForElement(
                 window,
                 "WorkspaceTabs",
@@ -240,8 +242,8 @@ public sealed partial class ShellAccessibilityTests
                 tabs.Properties.IsKeyboardFocusable.Value,
                 "An empty TabControl must not be keyboard focusable.");
             AssertEventuallyFocused(
-                WaitForElement(window, "FilesTree", TimeSpan.FromSeconds(10)),
-                "Opening a vault with no restored tabs did not focus the Files tree.");
+                WaitForElement(window, "SidebarFilter", TimeSpan.FromSeconds(10)),
+                "Opening a vault with no restored tabs did not land on the Files filter field.");
 
             AssertActionButtonCensus(
                 WaitForElement(window, "SidebarBatchActions", TimeSpan.FromSeconds(10)),
@@ -5325,10 +5327,13 @@ public sealed partial class ShellAccessibilityTests
             // --- Esc on a REOPENED overlay restores the pre-open focus -
             // Park focus somewhere deliberate first, and remember the
             // exact element by runtime id — "restores prior focus" means
-            // THAT element, not merely "not the window root" (SD-2).
-            AutomationElement filesTree = WaitForElement(
-                window, "FilesTree", TimeSpan.FromSeconds(10));
-            filesTree.Focus();
+            // THAT element, not merely "not the window root" (SD-2). The
+            // Files filter field, not the bare Files tree: a restore onto
+            // the bare tree lands on the region's stable stop, this field,
+            // by design (W7-7 PR 4, R-5; codex round 5's ruling).
+            AutomationElement filesFilter = WaitForElement(
+                window, "SidebarFilter", TimeSpan.FromSeconds(10));
+            filesFilter.Focus();
             Wait.UntilInputIsProcessed(TimeSpan.FromMilliseconds(250));
             AutomationElement? focusedBefore = null;
             Assert.True(
@@ -5452,9 +5457,9 @@ public sealed partial class ShellAccessibilityTests
             // supersession's focus lineage — palette adopts search's
             // pre-open token — is asserted by identity, not vibes
             // (codex round 11: the adoption was previously unprovable
-            // from this journey).
+            // from this journey). The filter field, for the reason above.
             AutomationElement parkedBeforeSearch = WaitForElement(
-                window, "FilesTree", TimeSpan.FromSeconds(10));
+                window, "SidebarFilter", TimeSpan.FromSeconds(10));
             parkedBeforeSearch.Focus();
             Wait.UntilInputIsProcessed(TimeSpan.FromMilliseconds(250));
             int[] parkedRuntimeId = parkedBeforeSearch.Properties.RuntimeId.Value;

@@ -13,7 +13,10 @@ public sealed partial class ShellAccessibilityTests
 {
     /// <summary>W7-6 (#1240) spec §5: F6 walks the ring forward from the
     /// Files tree and Shift+F6 walks it back; hiding the right pane drops
-    /// both right stops; a zero-tab vault stops on the empty pane.</summary>
+    /// both right stops; a zero-tab vault stops on the empty pane. The Files
+    /// region's landing is the selected file's row, else its stable stop,
+    /// the filter field (W7-7 PR 4, R-5; codex round 5's ruling) — never the
+    /// bare tree.</summary>
     [Fact]
     public void ShellRegions_F6CyclesForwardAndShiftF6Back()
     {
@@ -51,7 +54,9 @@ public sealed partial class ShellAccessibilityTests
             PressKey(VirtualKeyShort.F6);
             AssertEventuallyFocused(WaitForElement(window, "FileMenu", TimeSpan.FromSeconds(10)), "F6 from the status bar did not wrap to the menu bar.");
             PressKey(VirtualKeyShort.F6);
-            AssertEventuallyFocused(tree, "F6 from the menu bar did not land on Files.");
+            AssertEventuallyFocused(
+                WaitForElement(window, "SidebarFilter", TimeSpan.FromSeconds(10)),
+                "F6 from the menu bar did not land on Files' stable stop, the filter field (nothing is selected).");
 
             // Open a note: Files → tab bar → editor → … ; then Shift+F6 back.
             // The tree item's automation name is "{DisplayName}, {kind}"
