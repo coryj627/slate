@@ -199,7 +199,7 @@ public sealed partial class GraphTableTests
         });
     }
 
-    /// <summary>Codex PR 3 round 6, owner decision OD-8 — row identity: the
+    /// <summary>Codex PR 3 round 6, owner decision OD-9 — row identity: the
     /// graph table's sort is EXTERNAL (a rows-only token to core, which
     /// republishes the rows in the new order), and a row's name never comes
     /// from its position. Two notes named same.md read alike, so each adds its

@@ -4,7 +4,7 @@
 namespace SlateWindows;
 
 /// <summary>
-/// W7-7 PR 3 (#1246, R-4; codex PR 3 round 6, owner decision OD-8): one
+/// W7-7 PR 3 (#1246, R-4; codex PR 3 round 6, owner decision OD-9): one
 /// OCCURRENCE of an item in a list — the item, its place and its name —
 /// with REFERENCE identity (sealed, no <c>Equals</c> override). WPF keys an
 /// items host's automation peers by item, with the item's own equality, so

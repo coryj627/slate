@@ -136,7 +136,7 @@ public sealed class SharedNameTests
             names.Order(StringComparer.Ordinal)));
     });
 
-    /// <summary>Codex PR 3 round 6, owner decision OD-8 — occurrence
+    /// <summary>Codex PR 3 round 6, owner decision OD-9 — occurrence
     /// identity, found by the round's scope probe: Assign Shortcut puts one
     /// note in two slots, and two value-equal shortcut records were ONE item
     /// to UIA (WPF keys item peers by equality) — and Remove Shortcut took the

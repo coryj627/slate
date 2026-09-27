@@ -57,7 +57,7 @@ internal sealed class AccessibleDataGrid : UserControl
     // W6-2 PR A (contracts A-6, A-9; AD-2): the row-name, item-status and
     // modified-activation seams — generic, the graph their first user.
     private Func<object, string?>? _rowAutomationName;
-    // W7-7 PR 3 (R-4; codex PR 3 round 6, OD-8): each row's stable key, the
+    // W7-7 PR 3 (R-4; codex PR 3 round 6, OD-9): each row's stable key, the
     // caller's — what tells it apart where its identity collides, and what a
     // nameless row reads; never its position, which a sort changes.
     private Func<object, string>? _rowKey;
@@ -240,7 +240,7 @@ internal sealed class AccessibleDataGrid : UserControl
 
     /// <summary>
     /// W7-7 PR 3 (#1246, contract R-4 as amended after codex PR 0 rounds 5
-    /// and 6, codex PR 3 rounds 2 and 6, and owner decision OD-8): every
+    /// and 6, codex PR 3 rounds 2 and 6, and owner decision OD-9): every
     /// bound row's name, never empty and never another row's, and never
     /// taken from the row's POSITION. Each caller hands Bind a stable,
     /// speakable key per row — a Base or dashboard row's file path (with its
@@ -558,7 +558,7 @@ internal sealed class AccessibleDataGrid : UserControl
     /// (W7-7 PR 3, #1246, R-4; each caller's identity pinned by
     /// ItemContainerNameCensus), because an unnamed DataGridRow reads its
     /// item's <c>ToString()</c>. <paramref name="rowKey"/> is the row's
-    /// STABLE key, REQUIRED too (codex PR 3 round 6, OD-8): speakable, unique
+    /// STABLE key, REQUIRED too (codex PR 3 round 6, OD-9): speakable, unique
     /// among the rows, and the same for the same row however the rows are
     /// ordered or republished — a file path, a node, a citation key, a
     /// source row. Where an identity comes back blank the row takes its

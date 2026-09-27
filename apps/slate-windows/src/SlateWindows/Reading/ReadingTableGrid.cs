@@ -75,7 +75,7 @@ internal static class ReadingTableGrid
 
     /// <summary>The table's bind, and any re-bind. R-4 (#1246): a row is
     /// named by its first cell, the row header's text; unnamed, a row of
-    /// cells read "System.String[]". Its key (codex PR 3 round 6, OD-8) is
+    /// cells read "System.String[]". Its key (codex PR 3 round 6, OD-9) is
     /// its row in the parsed table, "row {n}" — the table's own order, which
     /// no sort in the grid changes and a re-bind parses again — so two rows
     /// with one first cell read "note.md, row 3", and a row with no text at

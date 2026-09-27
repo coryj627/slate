@@ -174,7 +174,7 @@ public sealed class ItemContainerNameCensus
         new(itemType, new SiblingRule(namePath, distinguisherPath, noun));
 
     /// <summary>A sibling pin over an item type with VALUE equality, with the
-    /// reason no two of its items are ever equal (codex PR 3 round 6, OD-8):
+    /// reason no two of its items are ever equal (codex PR 3 round 6, OD-9):
     /// WPF gives two equal items one automation peer.</summary>
     private static ContainerNaming.Sibling NoTwoEqual(ContainerNaming.Sibling sibling, string reason) =>
         sibling with { Rule = sibling.Rule with { NoEqualItems = reason } };
@@ -424,7 +424,7 @@ public sealed class ItemContainerNameCensus
                 {
                     offenders.Add($"{label}: reads SiblingText rows under a rule not marked Wrapped");
                 }
-                // Occurrence identity (codex PR 3 round 6, OD-8): WPF keys an
+                // Occurrence identity (codex PR 3 round 6, OD-9): WPF keys an
                 // items host's peers by the item's own equality, so two EQUAL
                 // items are one peer — the list shows two, the reader reaches
                 // one. An item type with value equality is wrapped
@@ -768,7 +768,7 @@ public sealed class ItemContainerNameCensus
     /// <c>rowAutomationName</c> and <c>rowKey</c>, and each delegate's body is
     /// the row identity, and the stable row key, pinned for its caller (codex
     /// PR 3 round 1: a present-but-wrong identity, a literal or the whole
-    /// audio description, must fail as a missing one does; round 6 and OD-8:
+    /// audio description, must fail as a missing one does; round 6 and OD-9:
     /// a key is the row's own — a file path, a node, a citation key, a source
     /// row — never its position, which an external sort changes). Calls are BOUND, not matched by spelling (three
     /// navigators declare a Bind of their own; the bibliography and
@@ -1081,7 +1081,7 @@ public sealed class ItemContainerNameCensus
     }
 
     /// <summary>
-    /// Codex PR 3 round 6, owner decision OD-8 — speech identity: whether two
+    /// Codex PR 3 round 6, owner decision OD-9 — speech identity: whether two
     /// sibling names read alike is decided in ONE place, <see cref="SpeechKey"/>,
     /// through <see cref="SiblingNames.ReadAlike"/>. Naming code — the
     /// SiblingNames class, and every member that composes sibling names (a

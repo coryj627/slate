@@ -358,7 +358,7 @@ internal sealed class SidebarTagViewModel : BindableBase
 }
 
 /// <summary>One shortcut slot. W7-7 PR 3 (#1246, R-4; codex PR 3 round 6,
-/// OD-8): an OCCURRENCE — reference identity, no value equality — because
+/// OD-9): an OCCURRENCE — reference identity, no value equality — because
 /// Assign Shortcut can put one note in two slots, and two equal records
 /// were ONE item to UIA (WPF keys item peers by equality), and Remove took
 /// the first of the two, not the selected one.</summary>

@@ -155,7 +155,7 @@ public sealed class SiblingNamesTests
         Assert.Equal(["note, A", "no​te, B"], SiblingNames.Compose(["note", "no​te"], ["A", "B"], "item"));
     }
 
-    /// <summary>Codex PR 3 round 6, owner decision OD-8 — speech identity: a
+    /// <summary>Codex PR 3 round 6, owner decision OD-9 — speech identity: a
     /// name's <see cref="SpeechKey"/> is what a reader speaks of it, its
     /// letter and digit runs after NFKC and invariant case folding, so
     /// whitespace of any kind, punctuation, a ligature, a fullwidth digit, a

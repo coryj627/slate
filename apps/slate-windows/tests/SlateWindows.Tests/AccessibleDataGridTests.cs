@@ -65,7 +65,7 @@ public sealed class AccessibleDataGridTests
     };
 
     /// <summary>The stable key every bind now requires (codex PR 3 round 6,
-    /// OD-8): a person's name, a widget's id — what a real caller passes, a
+    /// OD-9): a person's name, a widget's id — what a real caller passes, a
     /// row's own identity that no ordering changes.</summary>
     private static string RowKey(object row) => row switch
     {
@@ -1127,7 +1127,7 @@ public sealed class AccessibleDataGridTests
     /// AFTER the suffixes too. Rows 1 and 3 share "note.md" and read their
     /// keys, "note.md, row 1" and "note.md, row 3" — but row 2's own first
     /// cell already reads "note.md, row 1", so the pair that collides adds
-    /// its places among the keys (codex PR 3 round 6, OD-8: a key's place,
+    /// its places among the keys (codex PR 3 round 6, OD-9: a key's place,
     /// never a display position). Row 4's "note.md (2)", a natural name in
     /// the shape another tool gives a copy, is not this grid's suffix shape
     /// and meets no one: it reads as itself.</summary>
@@ -1448,7 +1448,7 @@ public sealed class AccessibleDataGridTests
     });
 
     /// <summary>Two bibliography entries with one title and year read
-    /// apart by their citation keys (codex PR 3 round 6, OD-8: the row's own
+    /// apart by their citation keys (codex PR 3 round 6, OD-9: the row's own
     /// key, never its place); a lone entry reads bare.</summary>
     [Fact]
     public void BibliographyEntriesSharingATitleAndYearAreToldApart() => RunSta(() =>
@@ -1639,7 +1639,7 @@ public sealed class AccessibleDataGridSurfaceRowNameTests : IDisposable
 
     /// <summary>Codex PR 3 round 2: one file name in two folders would read
     /// alike, so each row carries its key — its path (codex PR 3 round 6,
-    /// OD-8: the path, as lists and tabs read it, never a place).</summary>
+    /// OD-9: the path, as lists and tabs read it, never a place).</summary>
     [Fact]
     public void BasesRowsSharingAFileNameAreToldApart() => RunSta(() =>
     {
@@ -1675,7 +1675,7 @@ public sealed class AccessibleDataGridSurfaceRowNameTests : IDisposable
         document.Shutdown();
     });
 
-    /// <summary>Codex PR 3 round 6, owner decision OD-8 — row identity: an
+    /// <summary>Codex PR 3 round 6, owner decision OD-9 — row identity: an
     /// EXTERNAL sort (the Base grid asks core, which republishes the rows in
     /// the new order as new objects, and the surface binds them again) leaves
     /// every row its name. Two notes named same.md read their paths, A/same.md

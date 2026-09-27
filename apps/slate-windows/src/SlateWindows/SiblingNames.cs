@@ -122,7 +122,7 @@ internal static class SiblingNames
     /// <summary>
     /// The ONE comparison the rule reads names alike by: two names read
     /// alike exactly when their <see cref="SpeechKey"/>s are equal — its only
-    /// input (codex PR 3 rounds 5 and 6; owner decision OD-8). Speech carries
+    /// input (codex PR 3 rounds 5 and 6; owner decision OD-9). Speech carries
     /// no case, no string encoding, no whitespace between words and, at a
     /// reader's default level, little punctuation: "FILE" and "file", "café"
     /// composed and decomposed, "Open tasks" and "Open tasks ." read alike.

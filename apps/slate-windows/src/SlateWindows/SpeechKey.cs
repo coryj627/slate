@@ -7,7 +7,7 @@ using System.Text;
 namespace SlateWindows;
 
 /// <summary>
-/// W7-7 PR 3 (#1246, R-4; codex PR 3 round 6, owner decision OD-8): what a
+/// W7-7 PR 3 (#1246, R-4; codex PR 3 round 6, owner decision OD-9): what a
 /// name SOUNDS like — the one input every sibling-name collision check
 /// reads (<see cref="SiblingNames.ReadAlike"/> compares two names by their
 /// keys and nothing else). A screen reader speaks the letters and digits of

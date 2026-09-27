@@ -532,7 +532,7 @@ internal sealed class BaseSurfaceView : UserControl
         _synchronizingPicker = true;
         try
         {
-            // R-4 (#1246; codex PR 3 round 6, OD-8): each view is its own
+            // R-4 (#1246; codex PR 3 round 6, OD-9): each view is its own
             // occurrence — a base may repeat a view definition, and two
             // value-equal records are ONE item to UIA (WPF keys item peers by
             // equality). Built once per list of views, so a re-render keeps
@@ -1217,7 +1217,7 @@ internal sealed class BaseGridRowViewModel
     public string FileName => System.IO.Path.GetFileName(Row.FilePath);
 
     /// <summary>The row's stable key (W7-7 PR 3, #1246, R-4; codex PR 3
-    /// round 6, OD-8): the note's vault path — with, for a task row, the
+    /// round 6, OD-9): the note's vault path — with, for a task row, the
     /// task's place in its note — so two rows of one file name read their
     /// paths, whatever order core returns them in.</summary>
     public string RowKey => Row.TaskOrdinal is { } task

@@ -92,7 +92,7 @@ public sealed class CodeBuiltSiblingTests
             ItemContainerNameBindingTests.ItemNames(picker)));
     });
 
-    /// <summary>Codex PR 3 rounds 4 and 6, owner decision OD-8 — occurrence
+    /// <summary>Codex PR 3 rounds 4 and 6, owner decision OD-9 — occurrence
     /// identity, through the production render: a base keeps duplicate view
     /// definitions (core warns DuplicateViewName), so two views are fully
     /// value-EQUAL records, and WPF keys an items host's peers by equality —
@@ -137,7 +137,7 @@ public sealed class CodeBuiltSiblingTests
             Assert.Equal("Open tasks, view 2", ClosedSelectionName(picker));
         }));
 
-    /// <summary>Codex PR 3 round 6, OD-8 — speech identity, through the
+    /// <summary>Codex PR 3 round 6, OD-9 — speech identity, through the
     /// production render: core keeps a quoted view name verbatim, so views
     /// named "Open tasks", "Open tasks ", " Open  tasks", "Open tasks." and
     /// "Open-tasks" all reach the picker, and a reader hears them alike —
