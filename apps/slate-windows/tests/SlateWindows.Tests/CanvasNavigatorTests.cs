@@ -4301,6 +4301,94 @@ public sealed class CanvasNavigatorTests : IDisposable
                 madeOnSurface ? CanvasMoveOrigin.OnSurface : CanvasMoveOrigin.Elsewhere));
 
     /// <summary>
+    /// Follow-up #1271, review round 1 — D4's pan rule ACROSS PANES. One
+    /// canvas in two panes: the projection is the document's, so both panes
+    /// show the Visual board, and the navigator reveals through the one pane
+    /// it is attached to — pane A, whose board holds the keys. Pane B's board
+    /// must still follow the one shared selection: a card selected from pane
+    /// A — its board's Down, a card peer's Select on its board, the palette's
+    /// Next Card, and the document's selection door that the outline's and
+    /// the table's rows and every other verb use — pans pane B's board to
+    /// contain the card exactly while pane B's own Follow Selection is on,
+    /// and leaves pane B's viewport where it was while it is off. Each leg
+    /// starts with the destination outside pane B's viewport.
+    /// </summary>
+    [Fact]
+    public void AFollowingBoardInAnotherPanePansToTheSelectionAndAnUnfollowingOneStays() => RunSta(() =>
+    {
+        CanvasDocumentViewModel document = Open("board.canvas");
+        var paneA = new CanvasSurfaceView { Model = document, DataContext = new object() };
+        var paneB = new CanvasSurfaceView { Model = document, DataContext = new object() };
+        var root = new System.Windows.Controls.Primitives.UniformGrid { Columns = 2 };
+        root.Children.Add(paneA);
+        root.Children.Add(paneB);
+        using HostedWindow host = Host(root);
+        document.ShowSurface(CanvasSurfaceKind.Visual);
+        host.UpdateLayout();
+        CanvasRendererView boardA = paneA.VisualForTests;
+        CanvasRendererView boardB = paneB.VisualForTests;
+        PumpUntil(
+            () => boardA.Engine.Current is not null && boardB.Engine.Current is not null,
+            "premise: the two boards never installed their first presentation states.");
+        Assert.True(boardA.Focus(), "premise: pane A's board refused keyboard focus.");
+        host.UpdateLayout();
+        Assert.True(paneA.ProjectionHasFocus, "premise: pane A's board does not hold the keys.");
+        Assert.False(paneB.ProjectionHasFocus, "premise: pane B holds the keys as well as pane A.");
+
+        var legs = new (string Name, Action Select)[]
+        {
+            ("pane A's board's Down", () => Assert.True(PressKey(paneA, Key.Down, ModifierKeys.None))),
+            ("a card peer's Select on pane A's board", () =>
+                ((System.Windows.Automation.Provider.ISelectionItemProvider)
+                    boardA.PeerFor(CanvasPeerKey.Card("evidence"))!).Select()),
+            ("the palette's Next Card", document.Navigator.NextCard),
+            ("the document's selection door", () => document.SelectNode("evidence")),
+        };
+        foreach (bool following in new[] { true, false })
+        {
+            if (boardB.Engine.CommittedViewport.FollowSelection != following)
+            {
+                _ = paneB.ViewportCommand(CanvasViewportVerb.ToggleFollowSelection);
+            }
+            Assert.Equal(following, boardB.Engine.CommittedViewport.FollowSelection);
+            Assert.True(
+                boardA.Engine.CommittedViewport.FollowSelection,
+                "premise: pane B's toggle reached pane A's board.");
+            foreach ((string name, Action select) in legs)
+            {
+                string leg = $"{name}, pane B's Follow Selection {(following ? "on" : "off")}";
+                document.SeatSelectionSilently("question");
+                boardB.Engine.CommitViewport(view => view.PannedTo(-5000, -5000));
+                CanvasViewportState before = boardB.Engine.CommittedViewport;
+                Assert.False(
+                    InView(boardB, "evidence"),
+                    $"premise ({leg}): the destination was already in pane B's view.");
+                Drain(document);
+
+                select();
+                Assert.Equal("evidence", document.Selection.Selected);
+                if (following)
+                {
+                    Assert.False(
+                        before.SameGeometry(boardB.Engine.CommittedViewport),
+                        $"{leg}: pane B's board never moved — it follows the selection, and the "
+                        + "selection moved off its view (D4, #1271).");
+                    Assert.True(
+                        InView(boardB, "evidence"),
+                        $"{leg}: pane B's board panned and left \"evidence\" outside it (D4).");
+                }
+                else
+                {
+                    Assert.True(
+                        before.SameGeometry(boardB.Engine.CommittedViewport),
+                        $"{leg}: pane B's board panned although it does not follow the selection "
+                        + "and the move was not its own (D4, #1271).");
+                }
+            }
+        }
+    });
+
+    /// <summary>
     /// R-12 (#1255, #1271): every move the board's keys make asks the
     /// presenter to reveal its new seat AS A MOVE MADE ON THE SURFACE — the
     /// reading-order move and the follow alike, and the connect-mode

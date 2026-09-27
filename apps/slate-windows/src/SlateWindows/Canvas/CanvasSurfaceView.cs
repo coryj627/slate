@@ -436,9 +436,11 @@ internal sealed class CanvasSurfaceView : UserControl, ICanvasSurfacePresenter
     /// board's whole answer — under D4's origin rule (follow-up #1271): a
     /// move made on the board always comes into view, one made elsewhere
     /// only while the board follows the selection
-    /// (<see cref="CanvasRendererView.RevealsMoveFrom"/>). The outline
-    /// and the table focused the row, which already scrolled it into
-    /// view.
+    /// (<see cref="CanvasRendererView.RevealsMoveFrom"/>). Every pane
+    /// showing the board also hears every selection change through the
+    /// same rule as a move made elsewhere (<see cref="FollowTheSelection"/>).
+    /// The outline and the table focused the row, which already scrolled it
+    /// into view.
     /// </summary>
     public void RevealSeat(string nodeId, CanvasMoveOrigin origin)
     {
@@ -1250,6 +1252,43 @@ internal sealed class CanvasSurfaceView : UserControl, ICanvasSurfacePresenter
             // old projection while the control claimed the new one.
             Render();
             TryDeliverFocus();
+        }
+        else if (e.PropertyName == nameof(CanvasSelection.Selected))
+        {
+            FollowTheSelection();
+        }
+    }
+
+    /// <summary>
+    /// D4's pan rule for the ONE shared selection, in every pane that shows
+    /// the board (R-12 follow-up #1271, review round 1): each change to the
+    /// selection reaches this pane as a selection made ELSEWHERE, so a
+    /// showing board brings the new seat into view exactly while its own
+    /// Follow Selection is on.
+    /// </summary>
+    /// <remarks>
+    /// <para>
+    /// The navigator reveals through the one pane it is attached to, and a
+    /// peer through its own board, so without this a second pane's board —
+    /// the same canvas in another pane, following the selection — moved its
+    /// ring and never panned, and the toggle's sentence was false there.
+    /// The board that made a move still reveals it itself, as a move made ON
+    /// the surface (<see cref="RevealSeat"/> and the peer door), which D4
+    /// honours toggle or no toggle. When both reveals run for one move they
+    /// ask for the same pan, and the second finds the card already
+    /// contained and commits nothing: the pan is the minimal one that
+    /// contains the card, and the engine drops a same-geometry commit.
+    /// </para>
+    /// <para>
+    /// A board that is not showing — another tab, a collapsed projection, a
+    /// state pane — has no view to pan and is left alone.
+    /// </para>
+    /// </remarks>
+    private void FollowTheSelection()
+    {
+        if (Model?.Selection.Selected is { } selected && _visual.IsVisible)
+        {
+            RevealSeat(selected, CanvasMoveOrigin.Elsewhere);
         }
     }
 
