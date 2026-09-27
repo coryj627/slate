@@ -356,11 +356,7 @@ impl VaultSession {
         cancel: &CancelToken,
         scope: PageScope,
     ) -> Result<DirListingPage, VaultError> {
-        if paging.limit == 0 || paging.limit > MAX_DIRECTORY_PAGE_LIMIT {
-            return Err(cursor_error(&format!(
-                "directory page limit must be between 1 and {MAX_DIRECTORY_PAGE_LIMIT}"
-            )));
-        }
+        super::validate_page_limit(paging.limit, MAX_DIRECTORY_PAGE_LIMIT, "directory")?;
         check_cancel(cancel)?;
         let conn = self.conn.lock().expect("session connection mutex");
         let snapshot = DirectorySnapshot::capture(&conn)?;

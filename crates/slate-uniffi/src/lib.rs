@@ -13284,6 +13284,46 @@ mod tests {
         ));
     }
 
+    /// W7-7 PR 7 (codex PR 7 round 3, finding 7): the files page's bound
+    /// holds across the FFI — 0 and over the maximum are refused, the
+    /// maximum is accepted.
+    #[test]
+    fn files_page_limit_is_bounded_across_ffi() {
+        let tmp = tempfile::tempdir().expect("tempdir");
+        std::fs::write(tmp.path().join("a.md"), "# A\n").unwrap();
+        let session = VaultSession::open_filesystem(tmp.path().to_string_lossy().into_owned())
+            .expect("open vault");
+        session.scan_initial(CancelToken::new()).unwrap();
+        let max = core::session::MAX_LIST_FILES_PAGE_LIMIT;
+
+        for limit in [0, max + 1, u32::MAX] {
+            let result = session.list_files(
+                FileFilter::All,
+                Paging {
+                    cursor: None,
+                    limit,
+                },
+                CancelToken::new(),
+            );
+            assert!(
+                matches!(result, Err(VaultError::InvalidArgument { .. })),
+                "limit {limit}: {:?}",
+                result.as_ref().err()
+            );
+        }
+        let page = session
+            .list_files(
+                FileFilter::All,
+                Paging {
+                    cursor: None,
+                    limit: max,
+                },
+                CancelToken::new(),
+            )
+            .unwrap();
+        assert_eq!(page.items.len(), 1);
+    }
+
     #[test]
     fn bounded_directory_page_crosses_ffi_with_cursor_and_cancellation() {
         let tmp = tempfile::tempdir().expect("tempdir");

@@ -802,3 +802,39 @@ fn list_files_cancelled_inside_the_statement_is_interrupted_before_any_row() {
         .unwrap();
     assert_eq!(page.items.len(), 100);
 }
+
+/// W7-7 PR 7 (codex PR 7 round 3, finding 7): a files page is bounded. A
+/// zero or oversized limit is refused before any row is read — a zero
+/// limit used to consume a row into an empty terminal page, and
+/// `u32::MAX` materialized the whole vault — and the maximum is accepted.
+#[test]
+fn list_files_refuses_a_zero_or_oversized_page_limit() {
+    let (_tmp, session) = make_vault(|p| {
+        p.write_file("a.md", b"# A\n").unwrap();
+        p.write_file("b.md", b"# B\n").unwrap();
+    });
+    session.scan_initial(&CancelToken::new()).unwrap();
+
+    for limit in [0, MAX_LIST_FILES_PAGE_LIMIT + 1, u32::MAX] {
+        let result = session.list_files(FileFilter::All, Paging::first(limit), &CancelToken::new());
+        assert!(
+            matches!(result, Err(VaultError::InvalidArgument { .. })),
+            "limit {limit}: {result:?}"
+        );
+    }
+
+    let page = session
+        .list_files(
+            FileFilter::All,
+            Paging::first(MAX_LIST_FILES_PAGE_LIMIT),
+            &CancelToken::new(),
+        )
+        .unwrap();
+    assert_eq!(page.items.len(), 2);
+    assert!(page.next_cursor.is_none());
+    let one = session
+        .list_files(FileFilter::All, Paging::first(1), &CancelToken::new())
+        .unwrap();
+    assert_eq!(one.items.len(), 1);
+    assert!(one.next_cursor.is_some());
+}

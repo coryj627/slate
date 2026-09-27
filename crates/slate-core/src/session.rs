@@ -5805,6 +5805,7 @@ impl VaultSession {
         paging: Paging,
         cancel: &CancelToken,
     ) -> Result<Page<FileSummary>, VaultError> {
+        validate_page_limit(paging.limit, MAX_LIST_FILES_PAGE_LIMIT, "file")?;
         cancel.check()?;
         let conn = self.conn.lock().expect("session connection mutex");
         directory_page::with_sqlite_cancellation(&conn, cancel, || {
@@ -9559,6 +9560,24 @@ fn snapshot_summary_counts(
 }
 
 // --- Internal: scan ---
+
+/// W7-7 PR 7 (codex PR 7 round 3, finding 7): the largest page one
+/// [`VaultSession::list_files`] call returns — the directory pages' bound
+/// (locked decision 05 §4 principle 4, §9.3.1). A limit of 0 or above it is
+/// refused before any row is read.
+pub const MAX_LIST_FILES_PAGE_LIMIT: u32 = 10_000;
+
+/// The one page-limit rule (W7-7 PR 7, round 3 finding 7), shared by the
+/// files page and the directory pages: a limit is `1..=max`, refused
+/// before any row is read.
+pub(crate) fn validate_page_limit(limit: u32, max: u32, what: &str) -> Result<(), VaultError> {
+    if limit == 0 || limit > max {
+        return Err(VaultError::InvalidArgument {
+            message: format!("{what} page limit must be between 1 and {max}"),
+        });
+    }
+    Ok(())
+}
 
 /// W7-7 PR 7 (#1252): the most paths one
 /// [`VaultSession::indexed_content_hashes`] call answers — a host asks
