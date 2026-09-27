@@ -2,6 +2,7 @@
 // SPDX-License-Identifier: AGPL-3.0-or-later
 
 using System.Diagnostics;
+using System.Globalization;
 using System.Windows;
 using System.Windows.Automation;
 using System.Windows.Automation.Peers;
@@ -52,7 +53,9 @@ namespace SlateWindows;
 /// stops listening or a provider lost after Done queues the line again, the
 /// poll restarts, and a client or provider that returns is held afresh — a
 /// reader restarted while the peer stays connected waits for its own advise.
-/// Nothing is composed: the drain raises core's rendered tuples.
+/// Nothing is composed: the drain raises core's rendered text and
+/// processing, each replayed line under its own activity ID (see
+/// <see cref="Drain"/>).
 /// </para>
 /// </remarks>
 internal sealed class AccessibilityNotificationDispatcher
@@ -87,6 +90,9 @@ internal sealed class AccessibilityNotificationDispatcher
     /// before the first frame waits at least this long after it.</summary>
     internal static readonly TimeSpan AdviseHold = TimeSpan.FromSeconds(3);
 
+    /// <summary>The activity ID of every line raised while ready. A line the
+    /// drain replays carries it with a per-line suffix (see
+    /// <see cref="Drain"/>).</summary>
     private const string ActivityId = "slate-accessibility-announcement";
 
     private static readonly TimeSpan LaunchPollInterval = TimeSpan.FromMilliseconds(250);
@@ -304,6 +310,20 @@ internal sealed class AccessibilityNotificationDispatcher
     /// ones alike — and the poll stopped with the queue empty. The log line
     /// records what released it: the advise, or the hold running out without
     /// one.</summary>
+    /// <remarks>
+    /// W7-7 (#1244): a replayed line keeps its own kind, processing and text
+    /// but is raised under its own activity ID — its ID, <c>.replay.</c> and
+    /// its 1-based position in this drain — because the drain raises back to
+    /// back. NVDA's UIA rate limiter (nvdaHelper/local/UIAEventLimiter,
+    /// <c>RateLimitedEventHandler::queueEvent</c>) coalesces notifications by
+    /// the key <c>NotificationEventRecord_t::generateCoalescingKey</c> builds
+    /// in <c>eventRecord.h</c> — sender, event, kind, processing and activity
+    /// ID, never the text — so a same-key burst loses lines: under the shared
+    /// ID the drain's four launch lines reached NVDA as two in 10 of 10 quiet
+    /// launches (2026-09-26). A line raised while ready is not replayed and
+    /// keeps the shared ID, so a High line's ImportantMostRecent still
+    /// supersedes its predecessors in steady state.
+    /// </remarks>
     private void Drain(bool advised)
     {
         StopPoll();
@@ -316,9 +336,14 @@ internal sealed class AccessibilityNotificationDispatcher
         int dropped = _droppedOldest;
         _queue.Clear();
         _droppedOldest = 0;
-        foreach (QueuedLine line in queued)
+        for (int position = 1; position <= queued.Length; position++)
         {
-            _raise(line.Kind, line.Processing, line.Text, line.ActivityId);
+            QueuedLine line = queued[position - 1];
+            _raise(
+                line.Kind,
+                line.Processing,
+                line.Text,
+                string.Create(CultureInfo.InvariantCulture, $"{line.ActivityId}.replay.{position}"));
         }
 
         _launch.Diagnose(
@@ -462,8 +487,9 @@ internal sealed class AccessibilityNotificationDispatcher
     }
 
     /// <summary>One posted tuple, queued as rendered, so the drain raises
-    /// exactly what core rendered; <see cref="PostedAt"/>, when it was
-    /// queued (the first frame for a line posted before it), sets its own
+    /// exactly the text and processing core rendered (under the line's replay
+    /// activity ID, see <see cref="Drain"/>); <see cref="PostedAt"/>, when it
+    /// was queued (the first frame for a line posted before it), sets its own
     /// deadline.</summary>
     private readonly record struct QueuedLine(
         AutomationNotificationKind Kind,

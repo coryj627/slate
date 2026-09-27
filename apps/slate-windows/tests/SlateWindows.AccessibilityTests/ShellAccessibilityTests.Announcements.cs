@@ -3,8 +3,10 @@
 
 using System.Collections.Concurrent;
 using System.Diagnostics;
+using System.Globalization;
 using System.Runtime.InteropServices;
 using System.Text.Json;
+using System.Text.RegularExpressions;
 using FlaUI.Core.AutomationElements;
 using FlaUI.Core.Definitions;
 using FlaUI.Core.WindowsAPI;
@@ -135,17 +137,9 @@ public sealed partial class ShellAccessibilityTests
             PressUntilGone(window, automation, "RightPaneLeaves", VirtualKeyShort.CONTROL, VirtualKeyShort.ALT, VirtualKeyShort.KEY_I);
             AwaitHeard(HeardFromSlate, [.. launchLines, rightPaneHidden.Text], TimeSpan.FromSeconds(10), logFile);
 
-            // The exact tuples: kind Other, the priority's processing (contract
-            // 38 D-1 — every line here is Medium), the shared activity id.
-            Assert.All(
-                received.Where(notification => notification.ProcessId == processId),
-                notification => Assert.Equal(
-                    (NotificationKind.Other, NotificationProcessing.All, "slate-accessibility-announcement"),
-                    (notification.Kind, notification.Processing, notification.ActivityId)));
-
             // R-1 / OD-7 diagnostics, read from the production log: the state
             // written once per change, a listening client reported, and the
-            // queued launch lines drained.
+            // queued launch lines drained, once.
             string[] states = DiagnosticLines(logFile, "AnnouncementListenerState");
             Assert.True(
                 states.Any(state => state.Contains("clientsListening=True", StringComparison.Ordinal)),
@@ -154,9 +148,28 @@ public sealed partial class ShellAccessibilityTests
                 states.Zip(states.Skip(1)).All(pair => pair.First != pair.Second),
                 "The listener state was logged twice without changing: " + string.Join(" | ", states));
             string[] drains = DiagnosticLines(logFile, "AnnouncementReplay");
+            string[] drained = [.. drains.Where(drain => drain.Contains("drained=", StringComparison.Ordinal))];
             Assert.True(
-                drains.Any(drain => drain.Contains("drained=", StringComparison.Ordinal)),
-                "The queued launch lines logged no drain: " + string.Join(" | ", drains));
+                drained.Length == 1,
+                "The queued launch lines did not log exactly one drain: " + string.Join(" | ", drains));
+
+            // The exact tuples: kind Other and the priority's processing
+            // (contract 38 D-1 — every line here is Medium), and the activity
+            // id. The lines the drain released — the first N heard, N as it
+            // logged — each carry their own replay id by position (NVDA's UIA
+            // rate limiter coalesces a burst that shares one); every line
+            // raised while ready carries the shared id.
+            Match count = Regex.Match(drained[0], @"lines=(\d+),");
+            Assert.True(count.Success, "The drain logged no line count: " + drained[0]);
+            int replayed = int.Parse(count.Groups[1].Value, CultureInfo.InvariantCulture);
+            Assert.InRange(replayed, 1, launchLines.Length);
+            ReceivedNotification[] fromSlate = [.. received.Where(notification => notification.ProcessId == processId)];
+            Assert.Equal(
+                fromSlate.Select((_, index) => (
+                    NotificationKind.Other,
+                    NotificationProcessing.All,
+                    index < replayed ? $"slate-accessibility-announcement.replay.{index + 1}" : "slate-accessibility-announcement")),
+                fromSlate.Select(notification => (notification.Kind, notification.Processing, notification.ActivityId)));
         }
         finally
         {
