@@ -1048,20 +1048,39 @@ public sealed class SidebarTreeKeysTests : IDisposable
 
     /// <summary>
     /// #1272 (R-3's Escape route; codex PR 2 round 5): an import in
-    /// progress must not steal the filter field's Escape. With a filter
-    /// active, focus in the field and an import running, Escape — through
-    /// the shipped window's tunnelling handler first, as in the shell —
-    /// clears the filter with one typed SidebarFilterCleared, and the import
-    /// keeps running: the sources it is handed afterwards are imported.
+    /// progress must not steal the filter field's Escape — whether the
+    /// filter is typed text or, with the field empty, a whitespace tag's
+    /// out-of-band scope (complete filter state under R-3; the #1272
+    /// follow-up's codex round 1). With the filter active, focus in the
+    /// field and an import running, Escape — through the shipped window's
+    /// tunnelling handler first, as in the shell — clears text and scope
+    /// together with one typed SidebarFilterCleared and nothing
+    /// host-composed, and the import keeps running: the source it is
+    /// handed afterwards is imported.
     /// </summary>
-    [Fact]
-    public void EscapeInTheFilterFieldDuringAnImport_ClearsTheFilterNotTheImport() => RunSta(() =>
+    [Theory]
+    [InlineData("typed text")]
+    [InlineData("whitespace-tag scope, empty field")]
+    public void EscapeInTheFilterFieldDuringAnImport_ClearsTheFilterNotTheImport(string filter) => RunSta(() =>
     {
         using var import = new PendingImport();
-        using var host = new TreeHost(NewVault("import-escape-field"), import.PickSources, import.Run);
+        using var host = new TreeHost(NewVaultWithSpacedTag("import-escape-field"), import.PickSources, import.Run);
         host.Initialize();
         host.RouteKeysThroughTheShell();
-        int before = ActivateFilter(host, sidebar => sidebar.FilterText = "alpha");
+        int before;
+        if (filter == "typed text")
+        {
+            before = ActivateFilter(host, sidebar => sidebar.FilterText = "alpha");
+            Assert.Equal("alpha", host.FilterField.Text);
+            Assert.Null(host.Sidebar.ScopeTag);
+        }
+        else
+        {
+            before = ActivateFilter(host, sidebar => sidebar.ActivateTag("two words"));
+            Assert.Equal(string.Empty, host.FilterField.Text);
+            Assert.Equal("two words", host.Sidebar.ScopeTag);
+        }
+
         host.Sidebar.ImportCommand.Execute(null);
         Assert.True(host.Sidebar.IsImporting);
         Assert.True(host.FilterField.Focus());

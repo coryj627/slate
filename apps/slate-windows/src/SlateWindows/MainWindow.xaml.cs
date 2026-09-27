@@ -685,11 +685,12 @@ public partial class MainWindow : Window
     }
 
     /// <summary>The window's tunnelling key route, ahead of every focused
-    /// control's own handlers. An unmodified Escape during an import
-    /// cancels it unless keyboard focus is in the Files filter field while a
-    /// filter or tag scope is active, or in the inline rename box while a
-    /// row is being renamed there, where that box's own route — W7-7 R-3's
-    /// clear, R-2's rename cancel — takes the key instead (#1272).</summary>
+    /// control's own handlers. After the higher-priority modal and overlay
+    /// routes, an unmodified Escape during an import cancels it unless
+    /// keyboard focus is in the Files filter field while a filter or tag
+    /// scope is active, or in the inline rename box while a row is being
+    /// renamed there, where that box's own route — W7-7 R-3's clear, R-2's
+    /// rename cancel — takes the key instead (#1272).</summary>
     private void Window_PreviewKeyDown(object sender, KeyEventArgs e)
     {
         ModifierKeys modifiers = Keyboard.Modifiers;
