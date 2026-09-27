@@ -54,10 +54,12 @@ when 30 s pass after the window's first frame without it — which is only
 the launch lines, posted by the first frame, reaching their own deadline.
 Neither raises without readiness: a client that stops listening or a
 provider lost after Done queues the line again, and a client or provider
-that returns is held afresh. So a reader restarted while the peer stays
-connected waits for its own advise when it was the only client listening;
-with another UIA client listening throughout, UIA's aggregate never goes
-absent and the hold does not restart (contract 40 AR-27). AnnouncementSeamCensus
+that returns is held afresh. Whenever a pair is held some periodic check
+samples it — the poll while lines wait, a 1 s epoch watch while nothing is
+queued — so a reader restarted while the peer stays connected, idle or not,
+waits for its own advise when it was the only client listening; with
+another UIA client listening throughout, UIA's aggregate never goes absent
+and the hold does not restart (contract 40 AR-27). AnnouncementSeamCensus
 pins the raise, the readiness inputs, the one construction and the
 forbidden gated call.
 
