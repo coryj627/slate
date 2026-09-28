@@ -123,9 +123,13 @@ internal sealed class DashboardSurfaceView : UserControl
     {
         string? section = _readerAt?.Section;
         BasesRow? row = _readerAt?.Row;
+        // The reader's own section first, its grid or list ahead of its
+        // banner; every other section in document order (codex r2 F8: the
+        // promotion reached every section, and a later grid took the keys
+        // ahead of the first remaining section's banner).
         IEnumerable<UIElement> order = _sectionStops
             .OrderBy(entry => entry.Section == section ? 0 : 1)
-            .ThenBy(entry => row is not null && entry.Stop is AccessibleDataGrid or ListBox ? 0 : 1)
+            .ThenBy(entry => entry.Section == section && row is not null && entry.Stop is AccessibleDataGrid or ListBox ? 0 : 1)
             .Select(entry => entry.Stop);
         foreach (UIElement stop in order)
         {

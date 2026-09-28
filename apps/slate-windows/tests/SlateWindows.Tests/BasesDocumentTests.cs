@@ -622,6 +622,46 @@ public sealed class BaseSurfaceViewTests : IDisposable
     });
 
     /// <summary>
+    /// PR 4b codex round 2, F8: the reader's section gone from the dashboard,
+    /// the grid-or-list promotion — meant for the reader's OWN section, whose
+    /// grid comes ahead of its banner — reached every section, and a later
+    /// section's grid took the keys ahead of the first remaining section's
+    /// banner. They land on the first remaining section's stop, once.
+    /// </summary>
+    [Fact]
+    public void ADashboardWhoseReaderSectionIsGoneLandsOnTheFirstRemainingStop() => RunSta(() =>
+    {
+        string query = SaveAllNotesQuery();
+        string doomed;
+        ulong scratch = _session.OpenBase("Notes.base");
+        try
+        {
+            doomed = _session.SaveQuery("Doomed", null, _session.BaseViewQueryJson(scratch, 0), SavedQuerySourceSyntax.Builder);
+        }
+        finally
+        {
+            _session.CloseBase(scratch);
+        }
+
+        DashboardSection reader = new(query, "Reader", null);
+        DashboardSection missing = new(doomed, "Missing", null);
+        DashboardSection last = new(query, "Last", null);
+        string id = _session.SaveDashboard("Board", [reader, missing, last]);
+        _session.DeleteSavedQuery(doomed);
+        using var host = new DashboardHost(_session, id);
+        AcquireNote1(host, host.StopAfterHeading("Reader"));
+        host.Changes.Clear();
+
+        _session.UpdateDashboard(id, "Board", [missing, last]);
+        host.Dashboard.Load();
+        PumpedDispatcher.Drain();
+
+        var banner = Assert.IsType<System.Windows.Controls.TextBlock>(System.Windows.Input.Keyboard.FocusedElement);
+        Assert.StartsWith("Missing saved query", banner.Text, StringComparison.Ordinal);
+        Assert.Single(host.Changes);
+    });
+
+    /// <summary>
     /// PR 4b codex round 2, F2 (R-5 (h); W7-7 spec §5.2 item 2, an empty
     /// list lands on its empty-state notice): a dashboard with no sections
     /// had no stop in its surface, so F6 and every restore landed on its tab
