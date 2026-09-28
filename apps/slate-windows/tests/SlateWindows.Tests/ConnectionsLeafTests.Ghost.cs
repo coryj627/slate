@@ -246,36 +246,52 @@ public sealed partial class ConnectionsLeafTests
             ready.Set();
             Dispatcher.Run();
         });
+        // Background, and shut down and joined unconditionally below: a fact
+        // that fails before its own shutdown must not leave the thread running
+        // beside the facts after it (LeakedDispatcherGuard).
+        thread.IsBackground = true;
         thread.SetApartmentState(ApartmentState.STA);
         thread.Start();
-        Assert.True(ready.Wait(TimeSpan.FromSeconds(10)), "the dispatcher thread never started");
-        Assert.NotNull(worker);
-        Assert.NotNull(dispatcher);
-        worker.ApplyQueuedForTests = queued.Set;
+        try
+        {
+            Assert.True(ready.Wait(TimeSpan.FromSeconds(10)), "the dispatcher thread never started");
+            Assert.NotNull(worker);
+            Assert.NotNull(dispatcher);
+            worker.ApplyQueuedForTests = queued.Set;
 
-        _ = dispatcher.BeginInvoke(
-            DispatcherPriority.Normal,
-            new Action(() =>
+            _ = dispatcher.BeginInvoke(
+                DispatcherPriority.Normal,
+                new Action(() =>
+                {
+                    insideOperation.Set();
+                    _ = releaseOperation.Wait(TimeSpan.FromSeconds(10));
+                    dispatcher.InvokeShutdown();
+                }));
+            Assert.True(insideOperation.Wait(TimeSpan.FromSeconds(10)), "the dispatcher never entered the blocking operation");
+
+            int completions = 0;
+            worker.Run(
+                () => new FileManagement.NoteCreateResult.Failed("never applied"),
+                _ => Interlocked.Increment(ref completions));
+            Assert.True(queued.Wait(TimeSpan.FromSeconds(10)), "the completion was never enqueued on the busy dispatcher");
+            releaseOperation.Set();
+            Assert.True(thread.Join(TimeSpan.FromSeconds(10)), "the dispatcher never shut down");
+            Assert.True(dispatcher.HasShutdownFinished);
+
+            Task drain = worker.WhenAllWorkDrained();
+            Assert.True(await Task.WhenAny(drain, Task.Delay(TimeSpan.FromSeconds(10))) == drain, "the create's drain waited on an aborted operation");
+            await drain;
+            Assert.Equal(0, Volatile.Read(ref completions));
+        }
+        finally
+        {
+            releaseOperation.Set();
+            if (dispatcher is { HasShutdownStarted: false } running)
             {
-                insideOperation.Set();
-                _ = releaseOperation.Wait(TimeSpan.FromSeconds(10));
-                dispatcher.InvokeShutdown();
-            }));
-        Assert.True(insideOperation.Wait(TimeSpan.FromSeconds(10)), "the dispatcher never entered the blocking operation");
-
-        int completions = 0;
-        worker.Run(
-            () => new FileManagement.NoteCreateResult.Failed("never applied"),
-            _ => Interlocked.Increment(ref completions));
-        Assert.True(queued.Wait(TimeSpan.FromSeconds(10)), "the completion was never enqueued on the busy dispatcher");
-        releaseOperation.Set();
-        Assert.True(thread.Join(TimeSpan.FromSeconds(10)), "the dispatcher never shut down");
-        Assert.True(dispatcher.HasShutdownFinished);
-
-        Task drain = worker.WhenAllWorkDrained();
-        Assert.True(await Task.WhenAny(drain, Task.Delay(TimeSpan.FromSeconds(10))) == drain, "the create's drain waited on an aborted operation");
-        await drain;
-        Assert.Equal(0, Volatile.Read(ref completions));
+                running.BeginInvokeShutdown(DispatcherPriority.Send);
+            }
+            _ = thread.Join(TimeSpan.FromSeconds(10));
+        }
     }
 
     /// <summary>Codex post-implementation pass 4 (IPB-27; A-10 as amended,

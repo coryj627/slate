@@ -144,26 +144,6 @@ public sealed class CheckItemGroupsTests
         System.Windows.Threading.Dispatcher.PushFrame(frame);
     }
 
-    private static void RunSta(Action body)
-    {
-        Exception? failure = null;
-        var thread = new Thread(() =>
-        {
-            try
-            {
-                body();
-            }
-            catch (Exception exception)
-            {
-                failure = exception;
-            }
-        });
-        thread.SetApartmentState(ApartmentState.STA);
-        thread.Start();
-        Assert.True(thread.Join(TimeSpan.FromSeconds(120)), "STA test body timed out.");
-        if (failure is not null)
-        {
-            throw failure;
-        }
-    }
+    private static void RunSta(Action body) =>
+        StaThread.Run(body, TimeSpan.FromSeconds(120), "STA test body timed out.");
 }

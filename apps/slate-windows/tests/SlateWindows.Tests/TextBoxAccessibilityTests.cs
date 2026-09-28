@@ -211,29 +211,8 @@ public sealed class TextBoxAccessibilityTests
         return peer.GetName();
     }
 
-    private static string? OnStaThread(Func<string?> body)
-    {
-        string? result = null;
-        Exception? failure = null;
-        var thread = new Thread(() =>
-        {
-            try
-            {
-                result = body();
-            }
-            catch (Exception exception)
-            {
-                failure = exception;
-            }
-        });
-        thread.SetApartmentState(ApartmentState.STA);
-        thread.Start();
-        thread.Join();
-
-        return failure is null
-            ? result
-            : throw new Xunit.Sdk.XunitException(failure.ToString());
-    }
+    private static string? OnStaThread(Func<string?> body) =>
+        StaThread.Run(body);
 
     private static string Escape(string value) =>
         string.Concat(value.Select(character => character < ' ' || character > '~'
