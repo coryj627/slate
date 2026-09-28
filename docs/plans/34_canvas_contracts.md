@@ -6710,7 +6710,12 @@ Where-am-I remain the two ungated rows.
 > still below; the palette's Next/Previous Card keep the filtered order.
 > Pinned by `TheBoardsArrowsWalkTheFullSceneDimmedCardsIncluded`,
 > `AFilteredOutSeatStepsThroughTheSceneOnTheBoardAndIntoTheFilteredSetByTheVerbs`
-> and the journey's filtered leg.
+> and the journey's filtered leg. The board's landing reads the same order
+> (W7-7 R-10, reconciled when PR 8 merged after this follow-up): a landing
+> that falls back to the board's first card — under a needle matching no
+> card, or with no card named or returned from — seats the first stop of
+> `SceneReadingOrder`, so a landing and a walk agree on which card is first
+> (`TheBoardsFullSceneLandingSeatsTheFirstCardInReadingOrder`).
 >
 > **Corrected by follow-up #1271 (D4).** The reveal is origin-aware, not
 > unconditional: the navigator hands `RevealSeat` the move's origin
