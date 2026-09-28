@@ -103,6 +103,33 @@ public sealed class PropertiesLandingTests
         Assert.Single(changes);
     });
 
+    /// <summary>Save disables itself while its write is in flight, under the
+    /// keys, and the write's refresh then republishes every row: the keys go
+    /// to the same property's editor, and stay on it through the republish —
+    /// never to the header, the window or the note's body.</summary>
+    [Fact]
+    public void ASaveClickLandsOnTheSamePropertysEditor() => RunSta(() =>
+    {
+        using var host = new ShownShell(("a.md", Note));
+        NotePropertiesViewModel properties = OpenProperties(host);
+        PropertyRowViewModel title = Row(properties, "title");
+        RowControl<TextBox>(host, title).Text = "Hello there";
+        host.Settle();
+        ButtonBase save = ShownShell.Descendants(host.Shell).OfType<ButtonBase>()
+            .Single(button => button.IsVisible && ReferenceEquals(button.DataContext, title) && ReferenceEquals(button.Command, title.CommitCommand));
+        Assert.True(save.IsEnabled && save.Focus(), "premise: Save refused the keys");
+        List<IInputElement> changes = host.RecordFocusChanges();
+
+        Click(save);
+        AwaitRepublished(properties, title);
+
+        var now = Assert.IsType<TextBox>(Keyboard.FocusedElement);
+        var fresh = Assert.IsType<PropertyRowViewModel>(now.DataContext);
+        Assert.Equal("title", fresh.KeyIdentity);
+        Assert.Equal("Hello there", now.Text);
+        Assert.All(changes, change => Assert.IsType<TextBox>(change));
+    });
+
     /// <summary>Enter in a list item's editor commits the row: the keys land
     /// on the same item's editor in the republished row.</summary>
     [Fact]
