@@ -75,6 +75,50 @@ public sealed partial class RescanTests
         Assert.Equal(["Files refreshed. 1 new or changed, 1 removed."], h.Spoken);
     });
 
+    /// <summary>Round 4, finding 1: the re-seated board's or base's load is
+    /// the run's own operation — awaited, and its failure one counted error
+    /// ("1 error"), at the stored spelling.</summary>
+    [Theory]
+    [InlineData("canvas")]
+    [InlineData("base")]
+    public void ACaseOnlyReseatedDocumentsFailedLoadIsCounted(string kind) => RunSta(() =>
+    {
+        (string Before, string After, string Text) file = kind == "canvas"
+            ? ("board.canvas", "Board.canvas", OneNodeCanvas)
+            : ("notes.base", "Notes.base", MainBase);
+        using var h = new Harness($"reseat-{kind}-fails", (file.Before, file.Text), ("a.md", "# A\n"));
+        if (!h.VolumeAliasesCase())
+        {
+            return;
+        }
+
+        WorkspaceTabViewModel tab = h.Open(file.Before);
+        h.PumpUntil(
+            () => kind == "canvas"
+                ? tab.Canvas?.RowFor("first") is not null
+                : tab.Base?.State == BaseLoadState.Ready,
+            $"the {kind}'s first load");
+        var failedAt = new List<string>();
+        h.Workspace.RescanPublicationForTests = async (reloading, path, reload) =>
+        {
+            if (reloading == kind)
+            {
+                failedAt.Add(path);
+                throw new IOException($"injected re-seated {kind} load failure");
+            }
+
+            await reload();
+        };
+        File.Move(Path.Combine(h.Root, file.Before), Path.Combine(h.Root, file.After));
+
+        h.Context.Await(h.Lifecycle.RescanAsync(RescanReason.Explicit));
+
+        Assert.Equal([file.After], failedAt);
+        A11yEvent.VaultRescanIncomplete incomplete =
+            Assert.IsType<A11yEvent.VaultRescanIncomplete>(Assert.Single(h.Events));
+        Assert.Equal(1UL, incomplete.Errors);
+    });
+
     // --- (2) no structural sidebar operation starts during a rescan ------------
 
     /// <summary>A rescan parked in its scan, the sidebar's structural
