@@ -2,7 +2,6 @@
 // SPDX-License-Identifier: AGPL-3.0-or-later
 
 using System.Diagnostics;
-using System.Runtime.ExceptionServices;
 using System.Text.Json;
 using System.Text.Json.Nodes;
 using System.Windows;
@@ -181,42 +180,12 @@ public sealed class GraphEndToEndTests
 
     private static string Status(GraphStatusNote note) => Render(new GraphA11yEvent.GraphStatus(note));
 
-    private static void RunSta(Action body)
-    {
-        Exception? failure = null;
-        var thread = new Thread(() =>
-        {
-            try
-            {
-                PumpedDispatcher.Run(body);
-            }
-            catch (Exception exception)
-            {
-                failure = exception;
-            }
-        });
-        // A background thread: a wedged body cannot hold the process past
-        // the runner (IPJ-8-1).
-        thread.IsBackground = true;
-        thread.Name = "graph-e2e-sta";
-        thread.SetApartmentState(ApartmentState.STA);
-        thread.Start();
-        if (!thread.Join(TimeSpan.FromMinutes(4)))
-        {
-            // The bound is real (IPJ-8-1): the body's dispatcher is shut down,
-            // so a pump wedged in a frame unwinds and the body's own `using`
-            // disposals (the vault, the window, the host) run on the way out;
-            // the fact fails here rather than at the job's timeout.
-            Dispatcher.FromThread(thread)?.BeginInvokeShutdown(DispatcherPriority.Send);
-            // xUnit's failure exception thrown directly — the same object
-            // Assert.Fail throws — the form codoki's eighth round asked for.
-            throw new Xunit.Sdk.XunitException("STA test body timed out after four minutes; its dispatcher was shut down.");
-        }
-        if (failure is not null)
-        {
-            ExceptionDispatchInfo.Capture(failure).Throw();
-        }
-    }
+    // The bound is real (IPJ-8-1): on timeout StaThread shuts the body's
+    // dispatcher down, so a pump wedged in a frame unwinds through the
+    // body's own `using` disposals, and its thread is a background thread
+    // that cannot hold the process past the runner.
+    private static void RunSta(Action body) =>
+        StaThread.RunPumped(body, TimeSpan.FromMinutes(4), "STA test body timed out after four minutes.");
 
     private sealed class HostedWindow(Window window) : IDisposable
     {

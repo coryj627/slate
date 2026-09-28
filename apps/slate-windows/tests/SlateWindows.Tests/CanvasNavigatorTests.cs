@@ -6126,28 +6126,8 @@ public sealed class CanvasNavigatorTests : IDisposable
         public void Dispose() => Close();
     }
 
-    private static void RunSta(Action body)
-    {
-        Exception? failure = null;
-        var thread = new Thread(() =>
-        {
-            try
-            {
-                body();
-            }
-            catch (Exception exception)
-            {
-                failure = exception;
-            }
-        });
-        thread.SetApartmentState(ApartmentState.STA);
-        thread.Start();
-        Assert.True(thread.Join(TimeSpan.FromSeconds(120)), "STA test body timed out.");
-        if (failure is not null)
-        {
-            System.Runtime.ExceptionServices.ExceptionDispatchInfo.Capture(failure).Throw();
-        }
-    }
+    private static void RunSta(Action body) =>
+        StaThread.Run(body, TimeSpan.FromSeconds(120), "STA test body timed out.");
 
     /// <summary>§H TH-5 (H4, IH-39): the five zoom verbs speak core's
     /// <c>CanvasZoom</c> with the percent and context the pane COMMITTED

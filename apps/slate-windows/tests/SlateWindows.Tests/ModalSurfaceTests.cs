@@ -1294,37 +1294,19 @@ public sealed class ModalSurfaceTests
     /// lineage.
     /// </summary>
     [Fact]
-    public void TheAncestryWalkSurvivesAFocusedHyperlink()
+    public void TheAncestryWalkSurvivesAFocusedHyperlink() => StaThread.Run(() =>
     {
-        Exception? failure = null;
-        var thread = new System.Threading.Thread(() =>
-        {
-            try
-            {
-                var hyperlink = new System.Windows.Documents.Hyperlink(
-                    new System.Windows.Documents.Run("link"));
-                var text = new System.Windows.Controls.TextBlock(hyperlink);
-                var inside = new System.Windows.Controls.Border { Child = text };
-                var outside = new System.Windows.Controls.Border();
+        var hyperlink = new System.Windows.Documents.Hyperlink(
+            new System.Windows.Documents.Run("link"));
+        var text = new System.Windows.Controls.TextBlock(hyperlink);
+        var inside = new System.Windows.Controls.Border { Child = text };
+        var outside = new System.Windows.Controls.Border();
 
-                // Walk from the Hyperlink: must not throw, must find the
-                // enclosing border, must not find an unrelated one.
-                Assert.True(WalksTo(hyperlink, inside));
-                Assert.False(WalksTo(hyperlink, outside));
-            }
-            catch (Exception exception)
-            {
-                failure = exception;
-            }
-        });
-        thread.SetApartmentState(System.Threading.ApartmentState.STA);
-        thread.Start();
-        thread.Join();
-        if (failure is not null)
-        {
-            throw new Xunit.Sdk.XunitException(failure.ToString());
-        }
-    }
+        // Walk from the Hyperlink: must not throw, must find the
+        // enclosing border, must not find an unrelated one.
+        Assert.True(WalksTo(hyperlink, inside));
+        Assert.False(WalksTo(hyperlink, outside));
+    });
 
     /// <summary>
     /// Every ancestry walker in the shell uses the hybrid parent — a

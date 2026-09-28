@@ -716,28 +716,8 @@ public sealed class W2EditorInteractionTests
         }
     }
 
-    private static void RunOnSta(Action action)
-    {
-        System.Runtime.ExceptionServices.ExceptionDispatchInfo? failure = null;
-        var thread = new Thread(() =>
-        {
-            try
-            {
-                action();
-            }
-            catch (Exception exception)
-            {
-                failure = System.Runtime.ExceptionServices.ExceptionDispatchInfo.Capture(exception);
-            }
-        })
-        {
-            IsBackground = true,
-        };
-        thread.SetApartmentState(ApartmentState.STA);
-        thread.Start();
-        Assert.True(thread.Join(TimeSpan.FromSeconds(30)), "STA preview test timed out.");
-        failure?.Throw();
-    }
+    private static void RunOnSta(Action action) =>
+        StaThread.Run(action, TimeSpan.FromSeconds(30), "STA preview test timed out.");
 
     private static VaultSession ScannedSession(InteractionFixture fixture)
     {

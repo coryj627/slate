@@ -449,40 +449,56 @@ public sealed class PanelWorkSchedulerTests
             ready.Set();
             Dispatcher.Run();
         });
+        // Background, and shut down and joined unconditionally below: a fact
+        // that fails before its own shutdown must not leave the thread running
+        // beside the facts after it (LeakedDispatcherGuard).
+        thread.IsBackground = true;
         thread.SetApartmentState(ApartmentState.STA);
         thread.Start();
-        Assert.True(ready.Wait(TimeSpan.FromSeconds(10)), "the dispatcher thread never started");
-        Assert.NotNull(probe);
-        Assert.NotNull(dispatcher);
-        Assert.True(probe.HasContext);
-        probe.ApplyQueuedForTests = queued.Set;
+        try
+        {
+            Assert.True(ready.Wait(TimeSpan.FromSeconds(10)), "the dispatcher thread never started");
+            Assert.NotNull(probe);
+            Assert.NotNull(dispatcher);
+            Assert.True(probe.HasContext);
+            probe.ApplyQueuedForTests = queued.Set;
 
-        // Occupy the dispatcher thread: anything enqueued now waits behind
-        // this operation, which shuts the dispatcher down when released.
-        _ = dispatcher.BeginInvoke(
-            DispatcherPriority.Normal,
-            new Action(() =>
+            // Occupy the dispatcher thread: anything enqueued now waits behind
+            // this operation, which shuts the dispatcher down when released.
+            _ = dispatcher.BeginInvoke(
+                DispatcherPriority.Normal,
+                new Action(() =>
+                {
+                    insideOperation.Set();
+                    _ = releaseOperation.Wait(TimeSpan.FromSeconds(10));
+                    dispatcher.InvokeShutdown();
+                }));
+            Assert.True(insideOperation.Wait(TimeSpan.FromSeconds(10)), "the dispatcher never entered the blocking operation");
+
+            probe.Run();
+            Assert.True(queued.Wait(TimeSpan.FromSeconds(10)), "the apply was never enqueued on the busy dispatcher");
+            // The apply is a PENDING DispatcherOperation; the shutdown aborts it.
+            releaseOperation.Set();
+            Assert.True(thread.Join(TimeSpan.FromSeconds(10)), "the dispatcher never shut down");
+            Assert.True(dispatcher.HasShutdownFinished);
+
+            Task drain = probe.DrainAll();
+            Assert.True(await Task.WhenAny(drain, Task.Delay(TimeSpan.FromSeconds(10))) == drain, "the drain waited on an aborted operation");
+            await drain;
+            Assert.NotNull(probe.ComputeThread);
+            Assert.Equal(0, probe.Applies);
+            await Task.Delay(50);
+            Assert.Equal(0, probe.FaultedWorkForTests);
+        }
+        finally
+        {
+            releaseOperation.Set();
+            if (dispatcher is { HasShutdownStarted: false } running)
             {
-                insideOperation.Set();
-                _ = releaseOperation.Wait(TimeSpan.FromSeconds(10));
-                dispatcher.InvokeShutdown();
-            }));
-        Assert.True(insideOperation.Wait(TimeSpan.FromSeconds(10)), "the dispatcher never entered the blocking operation");
-
-        probe.Run();
-        Assert.True(queued.Wait(TimeSpan.FromSeconds(10)), "the apply was never enqueued on the busy dispatcher");
-        // The apply is a PENDING DispatcherOperation; the shutdown aborts it.
-        releaseOperation.Set();
-        Assert.True(thread.Join(TimeSpan.FromSeconds(10)), "the dispatcher never shut down");
-        Assert.True(dispatcher.HasShutdownFinished);
-
-        Task drain = probe.DrainAll();
-        Assert.True(await Task.WhenAny(drain, Task.Delay(TimeSpan.FromSeconds(10))) == drain, "the drain waited on an aborted operation");
-        await drain;
-        Assert.NotNull(probe.ComputeThread);
-        Assert.Equal(0, probe.Applies);
-        await Task.Delay(50);
-        Assert.Equal(0, probe.FaultedWorkForTests);
+                running.BeginInvokeShutdown(DispatcherPriority.Send);
+            }
+            _ = thread.Join(TimeSpan.FromSeconds(10));
+        }
     }
 
     /// <summary>A dispatcher context handed in that targets ANOTHER thread's
@@ -501,12 +517,16 @@ public sealed class PanelWorkSchedulerTests
             ready.Set();
             Dispatcher.Run();
         });
+        // Background, and shut down and joined unconditionally below: a fact
+        // that fails before its own shutdown must not leave the thread running
+        // beside the facts after it (LeakedDispatcherGuard).
+        thread.IsBackground = true;
         thread.SetApartmentState(ApartmentState.STA);
         thread.Start();
-        Assert.True(ready.Wait(TimeSpan.FromSeconds(10)), "the owner thread never started");
-        Assert.NotNull(owner);
         try
         {
+            Assert.True(ready.Wait(TimeSpan.FromSeconds(10)), "the owner thread never started");
+            Assert.NotNull(owner);
             // Constructed HERE, over THAT thread's dispatcher.
             var probe = new Probe(new DispatcherSynchronizationContext(owner));
             probe.Run();
@@ -520,7 +540,10 @@ public sealed class PanelWorkSchedulerTests
         }
         finally
         {
-            owner.InvokeShutdown();
+            if (owner is { HasShutdownStarted: false } running)
+            {
+                running.InvokeShutdown();
+            }
             Assert.True(thread.Join(TimeSpan.FromSeconds(10)), "the owner dispatcher never shut down");
         }
     }
@@ -541,24 +564,39 @@ public sealed class PanelWorkSchedulerTests
             ready.Set();
             Dispatcher.Run();
         });
+        // Background, and shut down and joined unconditionally below: a fact
+        // that fails before its own shutdown must not leave the thread running
+        // beside the facts after it (LeakedDispatcherGuard).
+        thread.IsBackground = true;
         thread.SetApartmentState(ApartmentState.STA);
         thread.Start();
-        Assert.True(ready.Wait(TimeSpan.FromSeconds(10)), "the dispatcher thread never started");
-        Assert.NotNull(probe);
-        Assert.NotNull(dispatcher);
-        Assert.True(probe.HasContext);
-        dispatcher.InvokeShutdown();
-        Assert.True(thread.Join(TimeSpan.FromSeconds(10)), "the dispatcher never shut down");
-        Assert.True(dispatcher.HasShutdownFinished);
+        try
+        {
+            Assert.True(ready.Wait(TimeSpan.FromSeconds(10)), "the dispatcher thread never started");
+            Assert.NotNull(probe);
+            Assert.NotNull(dispatcher);
+            Assert.True(probe.HasContext);
+            dispatcher.InvokeShutdown();
+            Assert.True(thread.Join(TimeSpan.FromSeconds(10)), "the dispatcher never shut down");
+            Assert.True(dispatcher.HasShutdownFinished);
 
-        probe.Run();
-        Task drain = probe.DrainAll();
-        Assert.True(await Task.WhenAny(drain, Task.Delay(TimeSpan.FromSeconds(10))) == drain, "the drain waited on a post the dead dispatcher will never run");
-        await drain;
-        Assert.NotNull(probe.ComputeThread);
-        Assert.Equal(0, probe.Applies);
-        await Task.Delay(50);
-        Assert.Equal(0, probe.FaultedWorkForTests);
+            probe.Run();
+            Task drain = probe.DrainAll();
+            Assert.True(await Task.WhenAny(drain, Task.Delay(TimeSpan.FromSeconds(10))) == drain, "the drain waited on a post the dead dispatcher will never run");
+            await drain;
+            Assert.NotNull(probe.ComputeThread);
+            Assert.Equal(0, probe.Applies);
+            await Task.Delay(50);
+            Assert.Equal(0, probe.FaultedWorkForTests);
+        }
+        finally
+        {
+            if (dispatcher is { HasShutdownStarted: false } running)
+            {
+                running.BeginInvokeShutdown(DispatcherPriority.Send);
+            }
+            _ = thread.Join(TimeSpan.FromSeconds(10));
+        }
     }
 
     /// <summary>A seam that throws is the test's defect (IPE-4): tracked
