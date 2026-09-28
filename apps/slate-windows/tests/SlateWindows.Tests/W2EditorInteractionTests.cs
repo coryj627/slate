@@ -251,35 +251,79 @@ public sealed class W2EditorInteractionTests
         Assert.Empty(announcements);
     }
 
-    /// <summary>R-8: an embed preview announces its outcome when the
-    /// result lands, not at open, where the only outcome is
-    /// "Loading".</summary>
-    [Fact]
-    public void AResolvedEmbedAnnouncesItsPreviewWhenTheResultLands()
+    /// <summary>R-8, #1278: a resolved embed preview announces its outcome
+    /// when the result lands, not at open (where the only outcome is
+    /// "Loading"), for every kind a top-level preview can resolve to,
+    /// through the real path. The event carries WHAT it resolved to — the
+    /// exact kind and fields come first, so a mapping that collapsed kinds
+    /// fails every other row — and core words everything from it: the
+    /// announcement, the popover's UIA name (that same sentence) and the
+    /// visible header's title, where only the source-line locator
+    /// follows.</summary>
+    [Theory]
+    [InlineData("note")]
+    [InlineData("section")]
+    [InlineData("block")]
+    [InlineData("image")]
+    [InlineData("image-alt")]
+    public void AResolvedEmbedAnnouncesItsPreviewWhenTheResultLands(string kind)
     {
-        using InteractionFixture fixture = InteractionFixture.Create();
+        (string Embed, string Target, ResolvedEmbed Resolved, string Title) row = kind switch
+        {
+            "note" => (
+                "![[target]]",
+                "target",
+                new ResolvedEmbed.Note("target.md"),
+                "Embedded note: target.md"),
+            "section" => (
+                "![[target#Destination]]",
+                "target",
+                new ResolvedEmbed.Section("target.md", "Destination"),
+                "Embedded section: Destination from target.md"),
+            "block" => (
+                "![[target#^block-id]]",
+                "target",
+                new ResolvedEmbed.Block("target.md"),
+                "Embedded block from target.md"),
+            "image" => (
+                "![[photo.png]]",
+                "photo.png",
+                new ResolvedEmbed.Image("photo.png", null),
+                "Embedded image: photo.png"),
+            "image-alt" => (
+                "![[photo.png|A bar chart]]",
+                "photo.png",
+                new ResolvedEmbed.Image("photo.png", "A bar chart"),
+                "Embedded image: A bar chart"),
+            _ => throw new ArgumentOutOfRangeException(nameof(kind), kind, null),
+        };
+        using InteractionFixture fixture = InteractionFixture.Create($"# Source\n\n{row.Embed}\n");
+        File.WriteAllBytes(Path.Combine(fixture.Root, "photo.png"), new byte[16]);
         using VaultSession session = ScannedSession(fixture);
         var announcements = new List<A11yEvent>();
         using WorkspaceTabViewModel tab = OpenSourceTab(session, announcements);
         EditorInteractionCoordinator interactions = tab.EditorInteractions!;
 
-        Assert.True(interactions.PreviewEmbedAt(Inside(tab.Text, "![[target#Destination]]")));
+        Assert.True(interactions.PreviewEmbedAt(Inside(tab.Text, row.Embed)));
         Assert.True(interactions.IsPopoverOpen);
         Assert.StartsWith("Loading", interactions.PopoverTitle, StringComparison.Ordinal);
         Assert.Empty(announcements);
 
         WaitForUi(() => !interactions.PopoverTitle.StartsWith("Loading", StringComparison.Ordinal));
 
-        // The target as authored (the anchor lives in the card title), the
-        // same pair the popover's name carries.
+        // The event and its fields first: the target as authored (an
+        // anchor is the card's business) and exactly what it resolved to.
         var shown = Assert.IsType<A11yEvent.EmbedPreviewShown>(Assert.Single(announcements));
-        Assert.Equal("target", shown.Target);
-        Assert.Equal("Embedded section: Destination from target.md", shown.Title);
-        Assert.Equal(
-            "Embed preview for target. Embedded section: Destination from target.md.",
-            SlateUniffiMethods.A11yRender(shown).Text);
-        Assert.StartsWith("Embed preview for target, source line", interactions.PopoverAutomationName, StringComparison.Ordinal);
-        Assert.EndsWith(shown.Title, interactions.PopoverAutomationName, StringComparison.Ordinal);
+        Assert.Equal(row.Target, shown.Target);
+        Assert.Equal(row.Resolved, shown.Resolved);
+
+        // Then everything a reader meets, all core's words.
+        string sentence = SlateUniffiMethods.A11yRender(shown).Text;
+        Assert.Equal($"Embed preview for {row.Target}. {row.Title}.", sentence);
+        Assert.Equal(row.Title, SlateUniffiMethods.ResolvedEmbedTitle(shown.Resolved));
+        Assert.Equal(sentence, interactions.PopoverAutomationName);
+        Assert.Equal($"{row.Title} — source line 3", interactions.PopoverTitle);
+        Assert.Equal(row.Title, interactions.PopoverEmbedRoot!.Title);
     }
 
     /// <summary>#1279 (locked decision 05 §4): a preview request retired

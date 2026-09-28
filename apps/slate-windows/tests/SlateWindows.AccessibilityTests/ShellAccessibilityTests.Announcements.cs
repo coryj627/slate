@@ -182,6 +182,50 @@ public sealed partial class ShellAccessibilityTests
     /// (posted by then; a two-file scan) are all queued before the drain.</summary>
     private const int LaunchQueueMilliseconds = 3000;
 
+    /// <summary>Registers NVDA's listener shape (<see
+    /// cref="DesktopNotificationListener"/>) on the desktop root now, in a
+    /// journey already under way, and records every notification it hears
+    /// into <paramref name="heard"/>.</summary>
+    private static DesktopNotificationListener ListenOnTheDesktop(
+        UIA3Automation automation, ConcurrentQueue<ReceivedNotification> heard)
+    {
+        var clock = Stopwatch.StartNew();
+        return new DesktopNotificationListener(automation, (processId, automationId, kind, processing, displayString, activityId) =>
+            heard.Enqueue(new ReceivedNotification(
+                processId, automationId, kind, processing, displayString, activityId, clock.ElapsedMilliseconds)));
+    }
+
+    /// <summary>
+    /// W7-7 PR 6 (#1251, R-8; #1278): the shell gate's Ctrl+E result reaches
+    /// a screen reader as core's sentence. Core renders
+    /// <c>EmbedPreviewShown</c> for what the fixture's embed resolves to —
+    /// the note <c>Folder/child.md</c>, which core titles with
+    /// <c>resolved_embed_title</c> — through the binding here, never a
+    /// transcription. Slate must have raised exactly that line, once, as
+    /// kind Other and ImportantMostRecent (core's High; contract 38 D-1)
+    /// with the shared activity ID a superseding line keeps (D-1). Returns
+    /// the rendered text.
+    /// </summary>
+    private static string AssertHeardEmbedPreviewShown(
+        ConcurrentQueue<ReceivedNotification> heard, int processId, string logFile)
+    {
+        RenderedAnnouncement shown = SlateUniffiMethods.A11yRender(
+            new A11yEvent.EmbedPreviewShown("Folder/child", new ResolvedEmbed.Note("Folder/child.md")));
+        Assert.Equal(A11yPriority.High, shown.Priority);
+        ReceivedNotification[] FromSlate() => [.. heard.Where(notification => notification.ProcessId == processId)];
+        string[] HeardFromSlate() => [.. FromSlate().Select(notification => notification.DisplayString)];
+        AwaitHeard(HeardFromSlate, [shown.Text], TimeSpan.FromSeconds(10), logFile);
+        (NotificationKind, NotificationProcessing, string, string)[] expected =
+        [
+            (NotificationKind.Other, NotificationProcessing.ImportantMostRecent, shown.Text, "slate-accessibility-announcement"),
+        ];
+        Assert.Equal(
+            expected,
+            FromSlate().Select(notification => (
+                notification.Kind, notification.Processing, notification.DisplayString, notification.ActivityId)));
+        return shown.Text;
+    }
+
     /// <summary>Waits until the listener has heard exactly <paramref
     /// name="expected"/> from Slate, in that order — a missing, extra,
     /// repeated or reordered line fails with what was heard.</summary>
@@ -306,6 +350,7 @@ public sealed partial class ShellAccessibilityTests
         private readonly UiaInterop.IUIAutomationElement _root;
         private readonly UiaInterop.IUIAutomationEventHandlerGroup _group;
         private readonly Action<int, string?, NotificationKind, NotificationProcessing, string, string> _received;
+        private bool _disposed;
 
         internal DesktopNotificationListener(
             UIA3Automation automation,
@@ -347,7 +392,18 @@ public sealed partial class ShellAccessibilityTests
                 (NotificationProcessing)(int)notificationProcessing, displayString, activityId);
         }
 
-        public void Dispose() => _automation.RemoveEventHandlerGroup(_root, _group);
+        /// <summary>Removes the group once; a journey that disposes early
+        /// and its <c>using</c> both call it.</summary>
+        public void Dispose()
+        {
+            if (_disposed)
+            {
+                return;
+            }
+
+            _disposed = true;
+            _automation.RemoveEventHandlerGroup(_root, _group);
+        }
     }
 
     private static void WriteAnnouncementEvidence(
