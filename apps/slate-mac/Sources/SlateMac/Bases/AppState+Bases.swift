@@ -2658,23 +2658,32 @@ extension AppState {
         }.value
     }
 
+    /// The builder's note-path completions. ONE native token per load
+    /// (W7-7 PR 7, #1309), cancelled when the awaiting task is: a detached
+    /// task does not inherit its caller's cancellation, so the handler
+    /// bridges it, and a cancelled listing stops at its next page.
     func basesLoadNotePaths() async -> [String] {
         guard let session = currentSession else { return [] }
-        return await Task.detached(priority: .userInitiated) {
-            var cursor: String?
-            var out: [String] = []
-            repeat {
-                guard
-                    let page = try? session.listFiles(
-                        filter: .markdownOnly,
-                        paging: Paging(cursor: cursor, limit: 5_000),
-                        cancel: CancelToken())
-                else { break }
-                out.append(contentsOf: page.items.map(\.path))
-                cursor = page.nextCursor
-            } while cursor != nil && out.count < 50_000
-            return out
-        }.value
+        let cancelToken = CancelToken()
+        return await withTaskCancellationHandler {
+            await Task.detached(priority: .userInitiated) {
+                var cursor: String?
+                var out: [String] = []
+                repeat {
+                    guard
+                        let page = try? session.listFiles(
+                            filter: .markdownOnly,
+                            paging: Paging(cursor: cursor, limit: 5_000),
+                            cancel: cancelToken)
+                    else { break }
+                    out.append(contentsOf: page.items.map(\.path))
+                    cursor = page.nextCursor
+                } while cursor != nil && out.count < 50_000
+                return out
+            }.value
+        } onCancel: {
+            cancelToken.cancel()
+        }
     }
 
     func basesSelectNextView() {
