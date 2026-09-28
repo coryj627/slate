@@ -9,19 +9,21 @@ namespace SlateWindows.Tests;
 
 /// <summary>
 /// Fails any fact that ends with a WPF <see cref="Dispatcher"/> it created
-/// abandoned: its thread gone, the dispatcher never shut down. Applied to
-/// the whole assembly (<c>AssemblyInfo.cs</c>), so it holds for every
-/// current and future fact, whichever helper — or none — started the
-/// thread.
+/// abandoned — its thread gone, the dispatcher never shut down — on a
+/// thread <see cref="StaThread"/> did not run. Applied to the whole
+/// assembly (<c>AssemblyInfo.cs</c>), so it holds for every current and
+/// future fact, whichever helper — or none — started the thread.
 /// </summary>
 /// <remarks>
 /// <para>
 /// An abandoned dispatcher is the leak <see cref="StaThread"/> exists to
-/// prevent: its thread's windows died with the thread, but the window
+/// clean up: its thread's windows died with the thread, but the window
 /// classes of its <c>HwndWrapper</c>s stay registered — each holding
 /// desktop heap — for the rest of the process, and on CI's 768 KB
 /// non-interactive desktop heap a few thousand of them fail every later
-/// window the run creates.
+/// window the run creates. A <see cref="StaThread"/> thread
+/// (<see cref="StaThread.ThreadNamePrefix"/>) abandons its dispatcher by
+/// design and has its classes unregistered, and checked, by the runner.
 /// </para>
 /// <para>
 /// Attribution is exact: only dispatchers that did not exist before the
@@ -70,7 +72,8 @@ internal sealed class LeakedDispatcherGuardAttribute : Xunit.Sdk.BeforeAfterTest
             .Where(dispatcher => !_before.Contains(dispatcher)
                 && !dispatcher.Thread.IsAlive
                 && !dispatcher.HasShutdownFinished
-                && dispatcher.Thread.Name?.StartsWith(".NET ", StringComparison.Ordinal) != true)
+                && dispatcher.Thread.Name?.StartsWith(".NET ", StringComparison.Ordinal) != true
+                && dispatcher.Thread.Name?.StartsWith(StaThread.ThreadNamePrefix, StringComparison.Ordinal) != true)
             .Select(dispatcher => $"\"{dispatcher.Thread.Name ?? "unnamed"}\" (managed id {dispatcher.Thread.ManagedThreadId})")];
         _before = new(ReferenceEqualityComparer.Instance);
         if (abandoned.Length > 0)
@@ -78,8 +81,8 @@ internal sealed class LeakedDispatcherGuardAttribute : Xunit.Sdk.BeforeAfterTest
             throw new Xunit.Sdk.XunitException(
                 $"{methodUnderTest.DeclaringType?.Name}.{methodUnderTest.Name} abandoned {abandoned.Length} WPF dispatcher(s) — "
                 + $"thread(s) {string.Join(", ", abandoned)} ended without a dispatcher shutdown, so their window classes "
-                + "stay registered and hold desktop heap for the rest of the run. Run the body through StaThread.Run, "
-                + "or shut the dispatcher down before its thread ends.");
+                + "stay registered and hold desktop heap for the rest of the run. Run the body through StaThread.Run "
+                + "(which unregisters them), or shut the dispatcher down before its thread ends.");
         }
     }
 

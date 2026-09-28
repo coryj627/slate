@@ -1,46 +1,50 @@
 // Copyright (C) 2026 Cory Joseph
 // SPDX-License-Identifier: AGPL-3.0-or-later
 
+using System.ComponentModel;
+using System.Globalization;
 using System.Runtime.ExceptionServices;
 using System.Runtime.InteropServices;
 using System.Text;
-using System.Windows.Interop;
 using System.Windows.Threading;
 
 namespace SlateWindows.Tests;
 
 /// <summary>
 /// The one way a unit fact runs WPF work on a thread of its own: a fresh
-/// STA thread whose WPF resources are torn down before it ends. Every
-/// per-class <c>RunSta</c>/<c>OnSta</c> helper forwards here, and
-/// <c>StaThreadCensus</c> keeps it that way.
+/// STA thread, and once it has ended, the window classes it registered are
+/// unregistered. Every per-class <c>RunSta</c>/<c>OnSta</c> helper forwards
+/// here, and <c>StaThreadCensus</c> keeps it that way.
 /// </summary>
 /// <remarks>
 /// <para>
-/// Why a teardown. When a thread ends, Windows destroys its windows but
-/// NOT the window classes registered for them. Every WPF
-/// <c>HwndWrapper</c> — a Dispatcher's message window, its MediaContext's
-/// notification window, each HwndSource, a hidden taskbar owner — registers
-/// a uniquely named class that only a WPF-side dispose unregisters. A
-/// thread that ends without shutting its Dispatcher down leaks two classes
-/// (a Dispatcher and one visual) to six (a shown Window never closed) for
-/// the life of the test process, and each class holds roughly 270 bytes of
-/// the DESKTOP HEAP. CI's session is non-interactive: its desktop heap is
-/// 768 KB, not the interactive desktop's 20 MB. Once the leaked classes
-/// fill it, every later <c>CreateWindowEx</c> fails — "The operation
-/// completed successfully" or "Not enough memory resources are available"
-/// from <c>MediaContext..ctor</c>, <c>Window.SetTaskbarStatus</c> or
+/// Why. When a thread ends, Windows destroys its windows but NOT the window
+/// classes registered for them. Every WPF <c>HwndWrapper</c> — a
+/// Dispatcher's message window, its MediaContext's notification window,
+/// each HwndSource, a hidden taskbar owner — registers a uniquely named
+/// class that only a WPF-side dispose unregisters, and a fact's thread ends
+/// without one: two classes leak per fact that only builds visuals, six per
+/// fact that shows a window, for the life of the test process. Each holds
+/// roughly 270 bytes of the DESKTOP HEAP. CI's session is non-interactive,
+/// so its desktop heap is 768 KB rather than the interactive desktop's
+/// 20 MB, and once a few thousand leaked classes fill it every later
+/// <c>CreateWindowEx</c> fails — "The operation completed successfully" or
+/// "Not enough memory resources are available" out of
+/// <c>MediaContext..ctor</c>, <c>Window.SetTaskbarStatus</c> or
 /// <c>Dispatcher..ctor</c> — and every later hosted fact fails with it.
 /// </para>
 /// <para>
-/// The teardown runs on the fact's own thread whatever the body did: each
-/// WPF window still open has its HwndSource disposed, the dispatcher
-/// drains so the class unregistrations those disposals post can run, and
-/// the dispatcher shuts down, which disposes its own wrappers. (Shutting
-/// down alone is not enough: a window the shutdown destroys posts its
-/// class unregistration to a dispatcher that no longer runs anything.)
-/// Then the guard: a WPF window that outlives the teardown, or a
-/// dispatcher that did not finish shutting down, fails the fact.
+/// How. WPF names each class <c>HwndWrapper[app;thread;guid]</c>, so every
+/// fact's thread gets a name of its own, and after the thread has ended —
+/// its windows destroyed by the system — every class carrying that name is
+/// unregistered. A class that will not unregister fails the fact, naming
+/// it. Nothing runs on the fact's thread after its body: tearing its
+/// windows down while the thread lives (a dispatcher shutdown disposes
+/// them) hands the foreground to another process's window, after which the
+/// next fact's <c>Window.Activate</c> is refused and every focus-dependent
+/// fact after it fails (measured: ReadingFocusTests, 6–9 of 21 facts),
+/// whereas a thread that simply ends leaves the foreground for the next
+/// fact to take. The fact's thread therefore ends exactly as it always has.
 /// </para>
 /// <para>
 /// Bounded and fail-fast. The thread is a background thread, so a wedged
@@ -55,8 +59,14 @@ internal static class StaThread
     /// <summary>The bound a caller that names none gets.</summary>
     internal static readonly TimeSpan DefaultTimeout = TimeSpan.FromMinutes(2);
 
-    /// <summary>Run <paramref name="body"/> on a fresh STA thread, tear its
-    /// WPF resources down, and rethrow whatever it threw.</summary>
+    /// <summary>Every fact thread's name starts with this; the rest is a
+    /// sequence number, so the thread's window classes are its alone.</summary>
+    internal const string ThreadNamePrefix = "sta-fact-";
+
+    private static int s_sequence;
+
+    /// <summary>Run <paramref name="body"/> on a fresh STA thread, unregister
+    /// the window classes it leaves behind, and rethrow whatever it threw.</summary>
     internal static void Run(Action body, TimeSpan? timeout = null, string? timeoutMessage = null) =>
         Run<object?>(
             () =>
@@ -74,13 +84,13 @@ internal static class StaThread
         Run(() => PumpedDispatcher.Run(body), timeout, timeoutMessage);
 
     /// <summary>Run <paramref name="body"/> on a fresh STA thread and answer
-    /// its result once its WPF resources are torn down.</summary>
+    /// its result once the window classes it leaves behind are unregistered.</summary>
     internal static T Run<T>(Func<T> body, TimeSpan? timeout = null, string? timeoutMessage = null)
     {
         T result = default!;
         ExceptionDispatchInfo? failure = null;
-        string? residue = null;
         Thread? owner = null;
+        string name = ThreadNamePrefix + Interlocked.Increment(ref s_sequence).ToString(CultureInfo.InvariantCulture);
         var thread = new Thread(() =>
         {
             Volatile.Write(ref owner, Thread.CurrentThread);
@@ -92,14 +102,10 @@ internal static class StaThread
             {
                 failure = ExceptionDispatchInfo.Capture(exception);
             }
-            finally
-            {
-                residue = TearDown();
-            }
         })
         {
             IsBackground = true,
-            Name = "sta-fact",
+            Name = name,
         };
         thread.SetApartmentState(ApartmentState.STA);
         thread.Start();
@@ -115,6 +121,7 @@ internal static class StaThread
                 $"{timeoutMessage ?? "The STA fact timed out."} (bound {limit.TotalSeconds:0} s; its dispatcher was shut down"
                 + (unwound ? " and the body unwound.)" : ", but the body has not unwound — a background thread, so it cannot hold the test host open.)"));
         }
+        string? residue = UnregisterWindowClasses(name);
         failure?.Throw();
         if (residue is not null)
         {
@@ -123,102 +130,51 @@ internal static class StaThread
         return result;
     }
 
-    /// <summary>On the fact's thread: close what the body left open, let
-    /// the posted class unregistrations run, shut the dispatcher down, and
-    /// answer a description of anything that survived (null when clean).</summary>
-    private static string? TearDown()
+    /// <summary>Unregister every WPF window class the ended thread
+    /// <paramref name="threadName"/> registered, answering a description of
+    /// any that would not go (null when none remain). The class names live
+    /// in the session's atom table, which <c>GetClipboardFormatName</c>
+    /// reads; the classes are this process's, registered under its module.</summary>
+    internal static string? UnregisterWindowClasses(string threadName)
     {
-        var problems = new List<string>();
-        Dispatcher? dispatcher = Dispatcher.FromThread(Thread.CurrentThread);
-        if (dispatcher is { HasShutdownStarted: false })
+        IntPtr module = GetModuleHandleW(IntPtr.Zero);
+        string marker = ";" + threadName + ";";
+        var refused = new List<string>();
+        var name = new StringBuilder(512);
+        for (uint atom = 0xC000; atom <= 0xFFFF; atom++)
         {
-            // Disposed, not Closed: a Window's Closing and Closed handlers
-            // are application logic (MainWindow's saves its placement to
-            // the user's profile and may prompt), and a teardown must not
-            // run what the fact never asked for. Destroying the source
-            // raises neither.
-            foreach (IntPtr hwnd in WpfWindows())
+            name.Clear();
+            if (GetClipboardFormatNameW(atom, name, name.Capacity) <= 0)
             {
-                try
-                {
-                    if (HwndSource.FromHwnd(hwnd) is { IsDisposed: false } source)
-                    {
-                        source.Dispose();
-                    }
-                }
-                catch (Exception exception)
-                {
-                    // The shutdown below still disposes it; the survivor
-                    // check reports it if even that fails.
-                    problems.Add($"disposing {Describe(hwnd)} threw {exception.GetType().Name}: {exception.Message}");
-                }
+                continue;
             }
-            try
+            string className = name.ToString();
+            if (!className.StartsWith("HwndWrapper[", StringComparison.Ordinal)
+                || !className.Contains(marker, StringComparison.Ordinal)
+                || UnregisterClassW(className, module))
             {
-                PumpedDispatcher.Drain();
+                continue;
             }
-            catch (Exception exception)
+            int error = Marshal.GetLastWin32Error();
+            // ERROR_CLASS_DOES_NOT_EXIST: another test host's class of the
+            // same name, or one already gone — nothing of this process's to free.
+            if (error != 1411)
             {
-                problems.Add($"the teardown drain failed: {exception.GetType().Name}: {exception.Message}");
-            }
-            try
-            {
-                dispatcher.InvokeShutdown();
-            }
-            catch (Exception exception)
-            {
-                problems.Add($"the dispatcher's shutdown threw {exception.GetType().Name}: {exception.Message}");
+                refused.Add($"{className} ({new Win32Exception(error).Message})");
             }
         }
-        if (dispatcher is { HasShutdownFinished: false })
-        {
-            problems.Add("the dispatcher did not finish shutting down");
-        }
-        problems.AddRange(WpfWindows().Select(hwnd => $"{Describe(hwnd)} is still open"));
-        return problems.Count == 0
+        return refused.Count == 0
             ? null
-            : "The STA fact's teardown left WPF resources alive — each one leaks desktop heap for the rest of the run: "
-                + string.Join("; ", problems);
+            : $"{refused.Count} window class(es) the fact's thread registered would not unregister after it ended — each holds desktop heap for the rest of the run: "
+                + string.Join("; ", refused);
     }
-
-    /// <summary>This thread's top-level WPF windows (every HwndWrapper
-    /// class is named <c>HwndWrapper[…]</c>); system windows such as the
-    /// thread's IME window are not the fact's to close.</summary>
-    private static List<IntPtr> WpfWindows()
-    {
-        var windows = new List<IntPtr>();
-        _ = EnumThreadWindows(GetCurrentThreadId(), (hwnd, _) =>
-        {
-            var name = new StringBuilder(256);
-            if (GetClassNameW(hwnd, name, name.Capacity) > 0
-                && name.ToString().StartsWith("HwndWrapper[", StringComparison.Ordinal))
-            {
-                windows.Add(hwnd);
-            }
-            return true;
-        }, IntPtr.Zero);
-        return windows;
-    }
-
-    private static string Describe(IntPtr hwnd)
-    {
-        string root = HwndSource.FromHwnd(hwnd)?.RootVisual?.GetType().Name ?? "no root visual";
-        var title = new StringBuilder(256);
-        _ = GetWindowTextW(hwnd, title, title.Capacity);
-        return $"window 0x{hwnd:X} ({root}, \"{title}\")";
-    }
-
-    private delegate bool EnumWindowsProc(IntPtr hwnd, IntPtr lParam);
-
-    [DllImport("user32.dll")]
-    private static extern bool EnumThreadWindows(uint threadId, EnumWindowsProc callback, IntPtr lParam);
 
     [DllImport("user32.dll", CharSet = CharSet.Unicode)]
-    private static extern int GetClassNameW(IntPtr hwnd, StringBuilder className, int maxCount);
+    private static extern int GetClipboardFormatNameW(uint format, StringBuilder name, int maxCount);
 
-    [DllImport("user32.dll", CharSet = CharSet.Unicode)]
-    private static extern int GetWindowTextW(IntPtr hwnd, StringBuilder text, int maxCount);
+    [DllImport("user32.dll", CharSet = CharSet.Unicode, SetLastError = true)]
+    private static extern bool UnregisterClassW(string className, IntPtr instance);
 
     [DllImport("kernel32.dll")]
-    private static extern uint GetCurrentThreadId();
+    private static extern IntPtr GetModuleHandleW(IntPtr moduleName);
 }

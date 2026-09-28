@@ -13,8 +13,8 @@ namespace SlateWindows.Tests.Censuses;
 
 /// <summary>
 /// The unit project's hosted facts cannot leak WPF window classes: every
-/// STA thread a fact starts goes through <see cref="StaThread"/>, whose
-/// teardown leaves nothing registered, and the dispatcher registry the
+/// STA thread a fact starts goes through <see cref="StaThread"/>, which
+/// unregisters what the thread leaves registered, and the dispatcher registry the
 /// assembly-wide <see cref="LeakedDispatcherGuardAttribute"/> reads is
 /// where it looks.
 /// </summary>
@@ -58,7 +58,7 @@ public sealed class StaThreadCensus
         Assert.True(
             adHoc.Length == 0,
             "These start an STA thread of their own. Forward the helper to StaThread.Run (or StaThread.RunPumped / "
-            + "StaThread.Run<T>) so its WPF resources are torn down before the thread ends — an ad-hoc runner leaks "
+            + "StaThread.Run<T>) so the window classes its thread registers are unregistered after it ends — an ad-hoc runner leaks "
             + "window classes into CI's 768 KB desktop heap: " + string.Join(", ", adHoc));
 
         string[] stale = [.. OwnTheirDispatcherLifecycle
@@ -81,10 +81,10 @@ public sealed class StaThreadCensus
         Assert.True(seen, "the registry read does not see a live dispatcher; the leak guard would pass everything.");
     }
 
-    /// <summary>The teardown, measured where the leak lives: the window
+    /// <summary>The runner, measured where the leak lives: the window
     /// classes this process has registered. Five facts that show a window,
     /// orphan an HwndSource and close neither leave no class behind — the
-    /// old runner left six per fact.</summary>
+    /// old runner left every one of them registered.</summary>
     [Fact]
     public void FactsThatLeaveTheirWindowsOpenLeaveNoWindowClassBehind()
     {
@@ -113,7 +113,7 @@ public sealed class StaThreadCensus
         int grown = RegisteredWrapperClasses() - before;
         Assert.True(
             grown < facts,
-            $"{facts} torn-down facts left {grown} WPF window classes registered; the teardown should leave none.");
+            $"{facts} facts left {grown} WPF window classes registered; StaThread should leave none.");
     }
 
     private static List<(string File, string Member, int Line)> ApartmentStateSites()
