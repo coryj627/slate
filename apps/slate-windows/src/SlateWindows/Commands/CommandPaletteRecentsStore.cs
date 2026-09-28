@@ -150,9 +150,8 @@ internal sealed class CommandPaletteRecentsStore
         {
             // Non-fatal by contract P11: the caller's in-memory list still
             // moves, so the open palette stays consistent with what the user
-            // just did. Surfaced on LastSaveError rather than swallowed
-            // silently; a HostLog diagnostic event for it is integration
-            // scope (HostLog.cs is outside this slice).
+            // just did. Surfaced on LastSaveError and as the false return,
+            // which the palette logs as PaletteWorkFailed (#1275).
             LastSaveError = exception;
             return false;
         }
@@ -167,12 +166,20 @@ internal sealed class CommandPaletteRecentsStore
     /// transition, persist, and return the updated list. The returned list
     /// is correct even when persistence failed.
     /// </summary>
-    public string[] Add(string[] current, string id)
+    public string[] Add(string[] current, string id) => Add(current, id, out _);
+
+    /// <summary>
+    /// <see cref="Add(string[], string)"/>, also reporting whether the
+    /// updated list reached the disk — <see langword="false"/> when
+    /// <see cref="TrySave"/> caught an IO or access failure
+    /// (<see cref="LastSaveError"/> holds it).
+    /// </summary>
+    public string[] Add(string[] current, string id, out bool persisted)
     {
         ArgumentNullException.ThrowIfNull(current);
         ArgumentException.ThrowIfNullOrEmpty(id);
         string[] updated = SlateUniffiMethods.PaletteRecentsAdd(current, id);
-        _ = TrySave(updated);
+        persisted = TrySave(updated);
         return updated;
     }
 }

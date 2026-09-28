@@ -1,6 +1,7 @@
 // Copyright (C) 2026 Cory Joseph
 // SPDX-License-Identifier: AGPL-3.0-or-later
 
+using System.Collections.Concurrent;
 using System.Diagnostics;
 using System.Reflection;
 using Microsoft.CodeAnalysis.CSharp.Syntax;
@@ -116,13 +117,15 @@ public sealed partial class CommandPaletteTests
     /// an absolute budget, which no two machines would agree on.
     /// </summary>
     /// <remarks>
-    /// The whole synchronous query change the palette runs per keystroke —
-    /// contract 28's synchronous-by-decision rule stands, so this is the
-    /// cost a user's typing waits on: core's ranking through the binding,
-    /// the availability pass, the row build, the selection and the count.
-    /// The two sizes alternate round by round so a burst of load elsewhere
-    /// on the machine lands on both, and the warm-up rounds carry the
-    /// binding and the JIT past their first calls.
+    /// The whole query change the palette runs per keystroke — core's
+    /// ranking through the binding (on the lane since #1275; the harness's
+    /// lane runs it inline, so the clock sees it), the availability pass,
+    /// the row build, the selection and the count at publication. The
+    /// dispatcher-responsiveness and stale-result facts in
+    /// <c>CommandPaletteTests.Lane.cs</c> pin where that work runs; this
+    /// one pins what it costs. The two sizes alternate round by round so a
+    /// burst of load elsewhere on the machine lands on both, and the
+    /// warm-up rounds carry the binding and the JIT past their first calls.
     /// </remarks>
     [Fact]
     public void RecomputeScalesLinearlyInRowCount()
@@ -1045,7 +1048,18 @@ public sealed partial class CommandPaletteTests
         /// <summary>The view model captures the owner context at construction:
         /// none by default, so every fact here runs synchronously; a
         /// <see cref="PublicationContext"/> to exercise the posted path.</summary>
-        public PaletteHarness(SynchronizationContext? context, Command[] commands)
+        /// <remarks>
+        /// The lane is synchronous unless <paramref name="productionLane"/>
+        /// asks for the palette's own: the facts that assert state right
+        /// after a query change need its rows published at once, and the
+        /// #1275 facts need the real hand-off to a worker and back.
+        /// </remarks>
+        public PaletteHarness(
+            SynchronizationContext? context,
+            Command[] commands,
+            bool productionLane = false,
+            Func<Command[], string, string[], string[], PaletteSection[]>? rank = null,
+            ICommandPaletteWorkLane? lane = null)
         {
             Source = new FakePaletteCommandSource(Log);
             Source.Commands.AddRange(commands);
@@ -1053,7 +1067,13 @@ public sealed partial class CommandPaletteTests
             SynchronizationContext.SetSynchronizationContext(context);
             try
             {
-                Palette = new CommandPaletteViewModel(Source, Record, token => Window(token));
+                Palette = new CommandPaletteViewModel(
+                    Source,
+                    Record,
+                    token => Window(token),
+                    lane ?? (productionLane ? null : new InlineWorkLane()),
+                    rank,
+                    (diagnostic, _) => Diagnostics.Enqueue(diagnostic));
             }
             finally
             {
@@ -1065,6 +1085,9 @@ public sealed partial class CommandPaletteTests
 
         /// <summary>The filter-count window: elapsed at once unless a fact holds it.</summary>
         public Func<CancellationToken, Task> Window { get; set; } = _ => Task.CompletedTask;
+
+        /// <summary>Every diagnostic the palette reported, from any thread.</summary>
+        public ConcurrentQueue<HostDiagnosticEvent> Diagnostics { get; } = new();
 
         public FakePaletteCommandSource Source { get; }
 
@@ -1081,7 +1104,10 @@ public sealed partial class CommandPaletteTests
         private void Record(A11yEvent announcement)
         {
             Announcements.Add(announcement);
-            Log.Add("announce:" + Describe(announcement));
+            lock (Log)
+            {
+                Log.Add("announce:" + Describe(announcement));
+            }
         }
 
         private static string Describe(A11yEvent announcement) => announcement switch
@@ -1095,6 +1121,29 @@ public sealed partial class CommandPaletteTests
             A11yEvent.CommandPaletteNeedsVault => "needsvault",
             _ => announcement.GetType().Name,
         };
+    }
+
+    /// <summary>The palette's lane, run at once on the caller's thread.</summary>
+    private sealed class InlineWorkLane : ICommandPaletteWorkLane
+    {
+        public Task<T> Run<T>(Func<T> work, CancellationToken cancellationToken)
+        {
+            if (cancellationToken.IsCancellationRequested)
+            {
+                return Task.FromCanceled<T>(cancellationToken);
+            }
+
+            try
+            {
+                return Task.FromResult(work());
+            }
+            catch (Exception exception)
+            {
+                return Task.FromException<T>(exception);
+            }
+        }
+
+        public Task WhenIdle() => Task.CompletedTask;
     }
 
     private sealed class FakePaletteCommandSource(List<string> log) : IPaletteCommandSource
@@ -1141,42 +1190,112 @@ public sealed partial class CommandPaletteTests
         /// </summary>
         public bool LogAvailabilityChecks { get; set; }
 
+        /// <summary>Holds the open's command load until a fact releases it.</summary>
+        public ManualResetEventSlim? ListCommandsGate { get; set; }
+
+        /// <summary>The threads the lane-side members last ran on — the #1275
+        /// facts compare them with the owner's.</summary>
+        public int? ListCommandsThread { get; private set; }
+
+        public int? RecordThread { get; private set; }
+
+        /// <summary>Set once a parked command load has returned — the
+        /// teardown fact disposes the source only after this.</summary>
+        public volatile bool ListCommandsReturned;
+
+        /// <summary>Holds a successful invocation's recents write.</summary>
+        public ManualResetEventSlim? RecordGate { get; set; }
+
+        /// <summary>The lane-side calls in the order they RETURNED —
+        /// "list", "recents", "record:{id}" — for the facts that pin the
+        /// lane's order across an invocation and the next open.</summary>
+        public ConcurrentQueue<string> LaneOrder { get; } = new();
+
+        /// <summary>When set, the recents write throws after the gate.</summary>
+        public Exception? RecordFailure { get; set; }
+
+        /// <summary>What the recents write reports — false is the store's
+        /// ordinary unpersisted outcome.</summary>
+        public bool RecordPersisted { get; set; } = true;
+
         public Command[] ListCommands()
         {
+            ListCommandsThread = Environment.CurrentManagedThreadId;
+            Assert.True(
+                ListCommandsGate?.Wait(TimeSpan.FromSeconds(30)) ?? true,
+                "the parked command load was never released");
             ListCommandsCalls++;
+            ListCommandsReturned = true;
+            LaneOrder.Enqueue("list");
             return [.. Commands];
         }
 
         public string[] LoadRecents()
         {
             LoadRecentsCalls++;
-            return [.. Recents];
+            LaneOrder.Enqueue("recents");
+            lock (Recents)
+            {
+                return [.. Recents];
+            }
         }
 
         public string? DisabledReason(string commandId)
         {
             if (LogAvailabilityChecks)
             {
-                log.Add("availability:" + commandId);
+                lock (log)
+                {
+                    log.Add("availability:" + commandId);
+                }
             }
 
             return DisabledReasons.TryGetValue(commandId, out string? reason) ? reason : null;
         }
 
+        /// <summary>What the invoked command's action does before it returns
+        /// or fails — the #1275 facts' actions run a nested modal loop, or
+        /// shut the shell down.</summary>
+        public Action<string>? OnInvoke { get; set; }
+
         public void Invoke(string commandId)
         {
-            log.Add("invoke:" + commandId);
+            lock (log)
+            {
+                log.Add("invoke:" + commandId);
+            }
+
             Invoked.Add(commandId);
+            OnInvoke?.Invoke(commandId);
             if (InvokeFailures.TryGetValue(commandId, out Exception? failure))
             {
                 throw failure;
             }
         }
 
-        public void RecordInvocation(string commandId)
+        public bool RecordInvocation(string commandId)
         {
-            log.Add("record:" + commandId);
-            Recorded.Add(commandId);
+            RecordThread = Environment.CurrentManagedThreadId;
+            Assert.True(
+                RecordGate?.Wait(TimeSpan.FromSeconds(30)) ?? true,
+                "the parked recents write was never released");
+            if (RecordFailure is Exception failure)
+            {
+                throw failure;
+            }
+
+            lock (log)
+            {
+                log.Add("record:" + commandId);
+            }
+
+            lock (Recorded)
+            {
+                Recorded.Add(commandId);
+            }
+
+            LaneOrder.Enqueue("record:" + commandId);
+            return RecordPersisted;
         }
     }
 }
