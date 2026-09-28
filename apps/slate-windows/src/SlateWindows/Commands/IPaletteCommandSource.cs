@@ -15,11 +15,19 @@ namespace SlateWindows.Commands;
 /// <para>
 /// Split out so the palette can be built and tested against a fake while
 /// the registration bridge lands separately, and so the palette cannot
-/// reach past it into workspace state. Every member is
-/// <b>dispatcher-affine</b> per contract P15: <c>InvokeById</c> is a
-/// synchronous FFI call that runs the foreign action on the calling
-/// thread, so command invocation happens on the UI thread and the
-/// implementation asserts it.
+/// reach past it into workspace state.
+/// </para>
+/// <para>
+/// <b>Two threads, by member.</b> <see cref="ListCommands"/>,
+/// <see cref="LoadRecents"/> and <see cref="RecordInvocation"/> are FFI
+/// and disk, so the palette calls them on its work lane — off the UI
+/// thread, one at a time, in hand-over order (locked decision 05 §4,
+/// principle 2; #1275) — and they must not touch dispatcher-affine state.
+/// Every other member is <b>dispatcher-affine</b> per contract P15:
+/// <c>InvokeById</c> is a synchronous FFI call that runs the foreign
+/// action on the calling thread, so command invocation happens on the UI
+/// thread and the implementation asserts it, and the availability
+/// resolver reads live command state.
 /// </para>
 /// </remarks>
 internal interface IPaletteCommandSource
@@ -70,7 +78,13 @@ internal interface IPaletteCommandSource
     /// Persistence failure is non-fatal: the in-memory list still moves,
     /// so the open palette stays consistent with what the user just did.
     /// </summary>
-    void RecordInvocation(string commandId);
+    /// <returns>
+    /// Whether the transition was PERSISTED. <see langword="false"/> is the
+    /// store's ordinary IO or access failure — the entry would vanish on
+    /// restart — and the palette logs it rather than letting it pass
+    /// silently (#1275). A throw is reserved for the unexpected.
+    /// </returns>
+    bool RecordInvocation(string commandId);
 
     /// <summary>
     /// Whether a vault is open. The palette refuses to open without one

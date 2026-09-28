@@ -132,6 +132,8 @@ internal sealed class VaultLifecycleViewModel
     private readonly Dispatcher? _lifecycleDispatcher;
     private CommandPaletteViewModel? _palette;
     private PaletteCommandSource? _paletteSource;
+    private readonly CommandPaletteRecentsStore? _paletteRecentsStore;
+    private readonly ICommandPaletteWorkLane? _paletteLane;
     private SearchOverlayViewModel? _search;
     private readonly AsyncRelayCommand _openVaultCommand;
     private readonly AsyncRelayCommand _openRecentCommand;
@@ -185,9 +187,16 @@ internal sealed class VaultLifecycleViewModel
             Task<(ScanReport Report, SwitcherFile[] SwitcherFiles)>>? sessionLoadWorker = null,
         Func<Action, Task>? syncArmWorker = null,
         TimeSpan? syncMarkerDebounce = null,
-        Action<RenderedAnnouncement>? announceRendered = null)
+        Action<RenderedAnnouncement>? announceRendered = null,
+        CommandPaletteRecentsStore? paletteRecentsStore = null,
+        ICommandPaletteWorkLane? paletteLane = null)
     {
         _pickVault = pickVault;
+        // #1275: the palette's recents file and work lane, for the hosted
+        // facts that park a recents write in the shipped shell — never the
+        // user's %LOCALAPPDATA% file. Null in production.
+        _paletteRecentsStore = paletteRecentsStore;
+        _paletteLane = paletteLane;
         _enqueueUi = enqueueUi;
         _announce = announce ?? (_ => { });
         // W6-1 PR A (contract A5): the canvas coalescer queues RENDERED
@@ -362,8 +371,10 @@ internal sealed class VaultLifecycleViewModel
         _palette ??= new CommandPaletteViewModel(
             _paletteSource ??= new PaletteCommandSource(
                 this,
-                _lifecycleDispatcher ?? Dispatcher.CurrentDispatcher),
-            _announce);
+                _lifecycleDispatcher ?? Dispatcher.CurrentDispatcher,
+                _paletteRecentsStore),
+            _announce,
+            lane: _paletteLane);
 
     /// <summary>
     /// The vault-search overlay (W5-2, #742). Public for the same W4-4
@@ -618,9 +629,9 @@ internal sealed class VaultLifecycleViewModel
         ++_generation;
         CloseSession();
 
-        // Releases the one CommandRegistry (PINV-3). Null unless the
-        // shell actually reached for the palette.
-        _paletteSource?.Dispose();
+        // Releases the one CommandRegistry (PINV-3) — after the palette has
+        // shut down. Null unless the shell actually reached for the palette.
+        ShutDownPalette(_palette, _paletteSource);
         _paletteSource = null;
         _palette = null;
 
@@ -630,6 +641,19 @@ internal sealed class VaultLifecycleViewModel
             _search.Dispose();
             _search = null;
         }
+    }
+
+    /// <summary>
+    /// The palette's teardown order (#1275): shut it down — nothing in
+    /// flight may publish or announce afterwards, nothing joins its work
+    /// lane, and the lane goes quiet, so a command load or a recents write
+    /// still running or queued finishes — and only then dispose the command
+    /// source that lane reads.
+    /// </summary>
+    internal static void ShutDownPalette(CommandPaletteViewModel? palette, IDisposable? source)
+    {
+        palette?.Shutdown(CommandPaletteViewModel.ShutdownDrainBudget);
+        source?.Dispose();
     }
 
     /// <summary>
