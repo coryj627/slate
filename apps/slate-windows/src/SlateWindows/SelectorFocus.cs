@@ -92,14 +92,15 @@ internal static class SelectorFocus
     /// process-wide, registered once.
     /// </summary>
     /// <remarks>
-    /// #1275's seal: the rule never listens past handled. The shell's
-    /// admission takes a press on the window's PREVIEW route, which runs
-    /// before every bubble, and marks it handled — so a press it took never
-    /// reaches the rule, which would otherwise move the keys (a UIA focus
-    /// change) under a running command (<c>ShellSealAdmissionCensus</c>
-    /// reviews this registration; <c>AClickOnAListsEmptyAreaMovesNoKeysUnderTheSeal</c>
-    /// holds it). Nothing in a list or a tree handles a press on its empty
-    /// area, so the rule sees every one the shell lets through.
+    /// #1275's seal: the shell's admission takes a press on the window's
+    /// PREVIEW route and marks it handled, and WPF's MouseDevice then raises
+    /// no bubbling MouseDown at all — a press the admission took never
+    /// reaches the rule. The rule also never listens past handled
+    /// (<c>ShellSealAdmissionCensus</c>'s rule for a bubbling class handler;
+    /// <c>AClickOnAListsEmptyAreaMovesNoKeysUnderTheSeal</c> holds the
+    /// registration), so no other raise of the twin reaches it either.
+    /// Nothing in a list or a tree handles a press on its empty area, so the
+    /// rule sees every one the shell lets through.
     /// </remarks>
     internal static void RegisterClickRule()
     {

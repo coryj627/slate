@@ -421,11 +421,16 @@ public sealed partial class CommandPaletteTests
     /// <summary>
     /// W7-7 PR 4's click rule (R-5, OD-11c) under the seal: a press on a
     /// populated list's EMPTY area puts the keys on one of its rows — never
-    /// while the shell is sealed. The rule was a class handler past handled,
-    /// which a press the admission took still reached, moving the keys (a
-    /// UIA focus change) under a running command; it is the list's own
-    /// listener now. Once the modal section ends the same press lands them
-    /// on the saved query's row, so the route the fact drives is live.
+    /// while the shell is sealed. The rule is a class handler for the
+    /// bubbling MouseDown, registered WITHOUT handledEventsToo
+    /// (ShellSealAdmissionCensus). Under real input a sealed press never
+    /// reaches it either way: WPF's MouseDevice raises no bubbling twin for a
+    /// preview the admission handled. This host's PressPointer raises the
+    /// twin, carrying the preview's handled state, which real input never
+    /// does (#1307) — so what the fact pins is the registration: registered
+    /// past handled, the rule moved the keys under that synthetic twin. Once
+    /// the modal section ends the same press lands them on the saved query's
+    /// row, so the route the fact drives is live.
     /// </summary>
     [Fact]
     public void AClickOnAListsEmptyAreaMovesNoKeysUnderTheSeal() => RunSta(() =>
