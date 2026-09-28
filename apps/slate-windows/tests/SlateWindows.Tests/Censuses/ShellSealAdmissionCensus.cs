@@ -66,9 +66,12 @@ public sealed class ShellSealAdmissionCensus
 
     /// <summary>Class handlers for a BUBBLING input event, each reviewed. One
     /// runs ahead of its element's own handlers, never ahead of the window's
-    /// preview route, which the admission holds; registered without
-    /// <c>handledEventsToo</c> (the census checks), it never sees an input the
-    /// admission took.</summary>
+    /// preview route, which the admission holds. Under real input a handled
+    /// preview has no bubbling twin at all (WPF's MouseDevice raises none);
+    /// the rule that such a handler is registered without
+    /// <c>handledEventsToo</c> (the census checks) keeps it out of every
+    /// other raise of the twin as well — a synthetic one carries the
+    /// preview's handled state.</summary>
     private static readonly Dictionary<(string File, string RoutedEvent), string> BubblingClassHandlersAllowed = new()
     {
         [("SelectorFocus.cs", "Mouse.MouseDownEvent")] =

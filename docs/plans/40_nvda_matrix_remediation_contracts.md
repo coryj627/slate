@@ -625,7 +625,7 @@ Branch `claude/w7-7-pr2-sidebar` (rebased onto 7cfd0a37 at approval). Delivered:
 
 ### PR 4 — #1247 arrows stay in the region
 
-(pending)
+(The round-by-round record is pending.) Merge-delta check (codex, on the merge of main's #1298 and #1299, 1566b263..8f735811): one blocker, refuted — WPF's MouseDevice raises no bubbling twin for a preview the seal handled, so no framework class handler registered past handled sees a sealed press; the test helper that raises the twin anyway is main's to fix (#1307).
 
 ### PR 5 — #1248 sheet keyboard fence
 
