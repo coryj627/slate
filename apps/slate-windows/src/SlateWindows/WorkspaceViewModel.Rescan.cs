@@ -196,8 +196,8 @@ internal sealed partial class WorkspaceViewModel
         }
 
         // The boards and bases the re-seat attached and loaded (codex PR 7
-        // round 4, finding 1): loaded once — the passes below and the Bases
-        // dependent skip them.
+        // round 4, finding 1): the run's load is their one load (round 5,
+        // fix 3) — the passes below and the Bases dependent skip them.
         var reseated = new HashSet<object>(ReferenceEqualityComparer.Instance);
         failed += await ReseatMissingTabsAsync(probeReseatOnWorker, reseated, cancellation);
 
@@ -404,7 +404,11 @@ internal sealed partial class WorkspaceViewModel
                 // replace — the attach funnel gives the tab its board or base
                 // on the stored spelling, the release sweep retires the old
                 // one — and that document's load is the rescan's, awaited.
-                ReplaceTabItem(tab, tab.Item);
+                // Round 5, fix 3: a document the registry does not hold at
+                // the stored spelling is constructed WITHOUT a load of its
+                // own (the RetargetCanvasDocuments precedent), so the run's
+                // load below is its one load.
+                ReplaceTabItem(tab, tab.Item, load: false);
                 if (tab.Canvas is { } board)
                 {
                     if (!reseated.Add(board))

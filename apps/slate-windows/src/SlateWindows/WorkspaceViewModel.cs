@@ -1583,7 +1583,7 @@ internal sealed partial class WorkspaceViewModel : BindableBase, IDisposable
     private readonly Dictionary<string, Bases.BaseDocumentViewModel> _baseDocuments =
         new(StringComparer.Ordinal);
 
-    internal Bases.BaseDocumentViewModel BaseDocumentFor(string path)
+    internal Bases.BaseDocumentViewModel BaseDocumentFor(string path, bool load = true)
     {
         string key = "file:" + path;
         if (!_baseDocuments.TryGetValue(key, out Bases.BaseDocumentViewModel? document))
@@ -1595,7 +1595,12 @@ internal sealed partial class WorkspaceViewModel : BindableBase, IDisposable
                 synchronousForTests: !_startInteractionBackgroundWork);
             _baseDocuments[key] = document;
             InstallBaseDocumentSeams(document);
-            document.Load();
+            // W7-7 PR 7 (codex PR 7 round 5, fix 3): a caller that loads the
+            // document itself (the rescan's re-seat) constructs it unloaded.
+            if (load)
+            {
+                document.Load();
+            }
         }
         return document;
     }

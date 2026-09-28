@@ -1474,6 +1474,12 @@ internal sealed class CanvasDocumentViewModel : PanelWorkScheduler
         return applied.Task;
     }
 
+    private int _deliveriesForTests;
+
+    /// <summary>Test seam (W7-7 PR 7, codex PR 7 round 5): how many load
+    /// deliveries — each an open of the file — this document ran.</summary>
+    internal int DeliveriesForTests => Volatile.Read(ref _deliveriesForTests);
+
     /// <summary>Open (or reopen) the canvas and publish its
     /// projections. The full-reload shape — close, open, outline,
     /// table, scene — the mac <c>load</c> twin. A reload IS an open, so
@@ -1500,6 +1506,7 @@ internal sealed class CanvasDocumentViewModel : PanelWorkScheduler
         {
             try
             {
+                _ = Interlocked.Increment(ref _deliveriesForTests);
                 _ = _pipeline.Deliver(request);
             }
             finally

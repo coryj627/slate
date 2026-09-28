@@ -38,8 +38,11 @@ internal sealed partial class WorkspaceViewModel
     /// constructs, installs the seams and loads — which is where the
     /// once-per-open degraded announcement lands (contract A4), so a
     /// second pane on the same path is a hit and hears nothing.</summary>
+    /// <param name="load">False (W7-7 PR 7, codex PR 7 round 5 fix 3): a
+    /// miss constructs the board without its load — the caller (the
+    /// rescan's re-seat) loads it once, awaited.</param>
     internal CanvasDocumentViewModel CanvasDocumentFor(
-        string path, CanvasSelection? seedSelection = null, string? retargetedFrom = null)
+        string path, CanvasSelection? seedSelection = null, string? retargetedFrom = null, bool load = true)
     {
         string key = CanvasKey(path);
         if (!_canvasDocuments.TryGetValue(key, out CanvasDocumentViewModel? document))
@@ -149,7 +152,10 @@ internal sealed partial class WorkspaceViewModel
                     CanvasPromptViewModel.MarksList(document, owner, CloseCanvasPromptIfCurrent));
             _canvasDocuments[key] = document;
             InstallCanvasDocumentSeams(document);
-            document.Load();
+            if (load)
+            {
+                document.Load();
+            }
         }
         return document;
     }

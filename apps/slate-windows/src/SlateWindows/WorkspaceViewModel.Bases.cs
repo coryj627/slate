@@ -1132,11 +1132,15 @@ internal sealed partial class WorkspaceViewModel
     /// call sites from the source and asserts this enumeration equals
     /// them in both directions.
     /// </remarks>
-    private void AttachTabDocumentsIfNeeded(WorkspaceTabViewModel tab)
+    /// <param name="load">False (W7-7 PR 7, codex PR 7 round 5 fix 3; the
+    /// rescan's re-seat through <c>ReplaceTabItem</c> alone): a board or
+    /// file-backed base the registry does not hold is constructed without
+    /// its load — its caller loads it.</param>
+    private void AttachTabDocumentsIfNeeded(WorkspaceTabViewModel tab, bool load = true)
     {
         if (tab.IsBase)
         {
-            tab.AttachBaseDocument(BaseDocumentFor(tab.Path));
+            tab.AttachBaseDocument(BaseDocumentFor(tab.Path, load));
         }
         else if (tab.IsSavedQueryTab && tab.Item.Id is { Length: > 0 } id)
         {
@@ -1150,7 +1154,7 @@ internal sealed partial class WorkspaceViewModel
         }
         else if (tab.IsCanvas)
         {
-            tab.AttachCanvasDocument(CanvasDocumentFor(tab.Path));
+            tab.AttachCanvasDocument(CanvasDocumentFor(tab.Path, load: load));
         }
         else if (tab.IsGraph)
         {
