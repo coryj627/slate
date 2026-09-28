@@ -581,28 +581,8 @@ public sealed class AnnouncementSeamCensus
         }
     }
 
-    private static void RunSta(Action body)
-    {
-        Exception? failure = null;
-        var thread = new Thread(() =>
-        {
-            try
-            {
-                body();
-            }
-            catch (Exception exception)
-            {
-                failure = exception;
-            }
-        });
-        thread.SetApartmentState(ApartmentState.STA);
-        thread.Start();
-        Assert.True(thread.Join(TimeSpan.FromSeconds(120)), "STA census body timed out.");
-        if (failure is not null)
-        {
-            System.Runtime.ExceptionServices.ExceptionDispatchInfo.Capture(failure).Throw();
-        }
-    }
+    private static void RunSta(Action body) =>
+        StaThread.Run(body, TimeSpan.FromSeconds(120), "STA census body timed out.");
 
     /// <summary>
     /// Contract A5/C7: no canvas code reaches the announcer's
