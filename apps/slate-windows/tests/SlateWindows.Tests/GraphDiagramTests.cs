@@ -345,6 +345,49 @@ public sealed partial class GraphDiagramTests
         });
     }
 
+    /// <summary>
+    /// W7-7 PR 4 (#1247; the owner's OD-11(d), contract 40 R-5 (c)): an
+    /// ARROW's switch to Diagram leaves the keys on the switcher — Term M4's
+    /// hand-off is a click's, Space's and a command's — and the reader's
+    /// next Tab reaches the renderer once the build has landed: the route the
+    /// graph journeys take after their arrow.
+    /// </summary>
+    [Fact]
+    public void AfterAnArrowsSwitchTabReachesTheRenderer()
+    {
+        RunSta(() =>
+        {
+            using var host = new Host(3, "diagram-arrow-then-tab");
+            GraphDocumentViewModel document = host.Open();
+            GraphSurfaceView surface = SurfaceFor(host, document);
+            using HostedWindow window = HostInWindow(surface);
+            RadioButton table = Choice(surface, GraphSurfaceMode.Table);
+            RadioButton diagram = Choice(surface, GraphSurfaceMode.Diagram);
+            Assert.True(table.Focus());
+
+            InputManager.Current.ProcessInput(new KeyEventArgs(
+                Keyboard.PrimaryDevice, PresentationSource.FromVisual(window.Window)!, Environment.TickCount, Key.Right)
+            {
+                RoutedEvent = Keyboard.PreviewKeyDownEvent,
+            });
+            PumpedDispatcher.Drain();
+            _ = SettledModel(host, document);
+            window.UpdateLayout();
+            PumpedDispatcher.Drain();
+
+            Assert.Equal(GraphSurfaceMode.Diagram, document.ViewState.Mode);
+            Assert.True(document.HasLiveDiagram);
+            Assert.Same(diagram, Keyboard.FocusedElement);
+
+            Assert.True(diagram.MoveFocus(new TraversalRequest(FocusNavigationDirection.Next)));
+            PumpedDispatcher.Drain();
+
+            Assert.True(
+                surface.DiagramForTests.IsKeyboardFocused,
+                $"Tab from the switcher did not reach the renderer; focus is {Keyboard.FocusedElement}");
+        });
+    }
+
     [Fact]
     public void DiagramAvailabilityChangedIsRaisedAtTheSwitchAndTheEffectiveEdge()
     {
