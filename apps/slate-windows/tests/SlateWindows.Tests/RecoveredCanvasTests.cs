@@ -528,26 +528,6 @@ public sealed class RecoveredCanvasTests : IDisposable
         System.Windows.Threading.Dispatcher.PushFrame(frame);
     }
 
-    private static void RunSta(Action body)
-    {
-        Exception? failure = null;
-        var thread = new Thread(() =>
-        {
-            try
-            {
-                body();
-            }
-            catch (Exception exception)
-            {
-                failure = exception;
-            }
-        });
-        thread.SetApartmentState(ApartmentState.STA);
-        thread.Start();
-        Assert.True(thread.Join(TimeSpan.FromSeconds(30)), "Recovered canvas STA test timed out.");
-        if (failure is not null)
-        {
-            System.Runtime.ExceptionServices.ExceptionDispatchInfo.Capture(failure).Throw();
-        }
-    }
+    private static void RunSta(Action body) =>
+        StaThread.Run(body, TimeSpan.FromSeconds(30), "Recovered canvas STA test timed out.");
 }

@@ -290,29 +290,6 @@ public sealed class MenuItemForegroundTests
         Dispatcher.PushFrame(frame);
     }
 
-    private static T OnStaThread<T>(Func<T> body)
-    {
-        T? result = default;
-        Exception? failure = null;
-        var thread = new Thread(() =>
-        {
-            try
-            {
-                result = body();
-            }
-            catch (Exception exception)
-            {
-                failure = exception;
-            }
-        })
-        {
-            IsBackground = true,
-        };
-        thread.SetApartmentState(ApartmentState.STA);
-        thread.Start();
-        Assert.True(thread.Join(TimeSpan.FromSeconds(30)), "menu rendering timed out.");
-        return failure is null
-            ? result!
-            : throw new Xunit.Sdk.XunitException(failure.ToString());
-    }
+    private static T OnStaThread<T>(Func<T> body) =>
+        StaThread.Run(body, TimeSpan.FromSeconds(30), "menu rendering timed out.");
 }

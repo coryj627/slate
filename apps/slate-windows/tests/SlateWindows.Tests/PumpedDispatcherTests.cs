@@ -1,4 +1,5 @@
 // SPDX-License-Identifier: MIT
+using System.Windows.Threading;
 using Xunit;
 
 namespace SlateWindows.Tests;
@@ -15,15 +16,12 @@ public sealed class PumpedDispatcherTests
     {
         bool answer = true;
         long elapsedMilliseconds = 0;
-        var thread = new Thread(() => PumpedDispatcher.Run(() =>
+        StaThread.RunPumped(() =>
         {
             var clock = System.Diagnostics.Stopwatch.StartNew();
             answer = PumpedDispatcher.PumpUntil(() => false, TimeSpan.FromMilliseconds(150));
             elapsedMilliseconds = clock.ElapsedMilliseconds;
-        }));
-        thread.SetApartmentState(ApartmentState.STA);
-        thread.Start();
-        Assert.True(thread.Join(TimeSpan.FromSeconds(30)), "the pump did not return");
+        }, TimeSpan.FromSeconds(30), "the pump did not return");
         Assert.False(answer);
         Assert.True(elapsedMilliseconds >= 140, $"the pump returned after {elapsedMilliseconds} ms, before its 150 ms budget");
     }
@@ -32,14 +30,36 @@ public sealed class PumpedDispatcherTests
     public void PumpUntilAnswersTrueAsSoonAsTheConditionHolds()
     {
         bool answer = false;
-        var thread = new Thread(() => PumpedDispatcher.Run(() =>
+        StaThread.RunPumped(() =>
         {
             int pumps = 0;
             answer = PumpedDispatcher.PumpUntil(() => ++pumps >= 3, TimeSpan.FromSeconds(5));
-        }));
-        thread.SetApartmentState(ApartmentState.STA);
-        thread.Start();
-        Assert.True(thread.Join(TimeSpan.FromSeconds(30)), "the pump did not return");
+        }, TimeSpan.FromSeconds(30), "the pump did not return");
         Assert.True(answer);
     }
+
+    /// <summary>A drain whose frame the dispatcher never runs FAILS, within
+    /// its bound, instead of blocking the thread for good — the shape of
+    /// the post-exhaustion hang, where a dispatcher without its message
+    /// window held the test host until the CI job's limit. Here a
+    /// Normal-priority operation that re-posts itself starves the drain's
+    /// Background-priority frame.</summary>
+    [Fact]
+    public void ADrainTheDispatcherNeverRunsFailsWithinItsBound() => StaThread.RunPumped(() =>
+    {
+        Dispatcher dispatcher = Dispatcher.CurrentDispatcher;
+        bool starving = true;
+        void Starve()
+        {
+            if (starving)
+            {
+                _ = dispatcher.BeginInvoke(DispatcherPriority.Normal, new Action(Starve));
+            }
+        }
+        Starve();
+        var clock = System.Diagnostics.Stopwatch.StartNew();
+        Assert.Throws<TimeoutException>(() => PumpedDispatcher.Drain(TimeSpan.FromMilliseconds(300)));
+        starving = false;
+        Assert.True(clock.Elapsed < TimeSpan.FromSeconds(10), $"the bounded drain took {clock.Elapsed}");
+    }, TimeSpan.FromSeconds(30), "the bounded drain blocked");
 }

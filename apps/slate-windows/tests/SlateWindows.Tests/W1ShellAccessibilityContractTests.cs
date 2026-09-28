@@ -1,7 +1,6 @@
 // Copyright (C) 2026 Cory Joseph
 // SPDX-License-Identifier: AGPL-3.0-or-later
 
-using System.Runtime.ExceptionServices;
 using System.Windows;
 using System.Windows.Automation;
 using System.Windows.Automation.Peers;
@@ -292,28 +291,6 @@ public sealed class W1ShellAccessibilityContractTests
             },
             "Split handle test timed out.");
 
-    private static void RunOnStaThread(Action action, string timeoutMessage)
-    {
-        ExceptionDispatchInfo? failure = null;
-        var thread = new Thread(() =>
-        {
-            try
-            {
-                action();
-            }
-            catch (Exception exception)
-            {
-                failure = ExceptionDispatchInfo.Capture(exception);
-            }
-        })
-        {
-            IsBackground = true,
-            Name = "w1-shell-sta-test",
-        };
-        thread.SetApartmentState(ApartmentState.STA);
-        thread.Start();
-
-        Assert.True(thread.Join(TimeSpan.FromSeconds(30)), timeoutMessage);
-        failure?.Throw();
-    }
+    private static void RunOnStaThread(Action action, string timeoutMessage) =>
+        StaThread.Run(action, TimeSpan.FromSeconds(30), timeoutMessage);
 }
