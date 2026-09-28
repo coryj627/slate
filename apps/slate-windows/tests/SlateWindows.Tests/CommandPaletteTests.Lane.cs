@@ -555,6 +555,54 @@ public sealed partial class CommandPaletteTests
     }
 
     /// <summary>
+    /// A lane item that faults with no caller awaiting it, then the teardown
+    /// wait: once the lane is dropped and collected, its faulted tail raises
+    /// no unobserved task exception — <c>WhenIdle</c> observed it (Codoki on
+    /// #1298) — and <c>WhenIdle</c> itself completed without faulting.
+    /// </summary>
+    [Fact]
+    public void WhenIdleObservesAFaultNobodyAwaited()
+    {
+        string marker = $"palette-lane-fault-{Guid.NewGuid():N}";
+        int unobserved = 0;
+        EventHandler<UnobservedTaskExceptionEventArgs> watch = (_, e) =>
+        {
+            if (e.Exception.Flatten().InnerExceptions.Any(inner => inner.Message == marker))
+            {
+                _ = Interlocked.Increment(ref unobserved);
+            }
+        };
+        TaskScheduler.UnobservedTaskException += watch;
+        try
+        {
+            FaultTheLaneAndWaitForIdle(marker);
+            for (int pass = 0; pass < 3; pass++)
+            {
+                GC.Collect();
+                GC.WaitForPendingFinalizers();
+            }
+        }
+        finally
+        {
+            TaskScheduler.UnobservedTaskException -= watch;
+        }
+
+        Assert.Equal(0, Volatile.Read(ref unobserved));
+    }
+
+    /// <summary>The lane, its faulted item and the idle wait live only in
+    /// this frame, so all of them are collectable once it returns.</summary>
+    [System.Runtime.CompilerServices.MethodImpl(System.Runtime.CompilerServices.MethodImplOptions.NoInlining)]
+    private static void FaultTheLaneAndWaitForIdle(string marker)
+    {
+        var lane = new CommandPaletteWorkLane();
+        _ = lane.Run<int>(() => throw new InvalidOperationException(marker), CancellationToken.None);
+        Task idle = lane.WhenIdle();
+        Assert.True(idle.Wait(TimeSpan.FromSeconds(10)), "the lane never went idle");
+        Assert.Equal(TaskStatus.RanToCompletion, idle.Status);
+    }
+
+    /// <summary>
     /// Teardown with work parked on the lane: the palette shuts down, the
     /// command source is disposed only once the lane is quiet, and nothing
     /// that finishes afterwards publishes, announces or re-opens the palette

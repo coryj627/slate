@@ -70,8 +70,12 @@ internal sealed class CommandPaletteWorkLane : ICommandPaletteWorkLane
     {
         lock (_gate)
         {
+            // Reading the tail's exception marks it observed, so a faulted
+            // item nobody awaited cannot surface later as an unobserved task
+            // exception when teardown drops the lane; the continuation itself
+            // never throws, so WhenIdle still never faults.
             return _tail.ContinueWith(
-                _ => { },
+                tail => { _ = tail.Exception; },
                 CancellationToken.None,
                 TaskContinuationOptions.None,
                 TaskScheduler.Default);
