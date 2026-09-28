@@ -712,7 +712,7 @@ Mutations, one or more per fix, each killed by its fact: (1) the tab's own `Repl
 - F7 (link re-resolution materializes before its first check): accepted, AR-64.
 - F8 (the prunes and the canvas pass materialize before polling): accepted, AR-65.
 
-Mutations, each killed by its fact: (F1) the execute failure left unrecorded; the open failure left unrecorded; a Failed base re-run instead of reopened; a successful result recorded as a failure. (F2) the re-seat attaching with a load; each registry ignoring the flag; `ReplaceTabItem` dropping it. (F5) every tail failure counted; the walk's failures forgotten; unlisted boards counted.
+Mutations, each killed by its fact: (F1) the execute failure left unrecorded; the open failure left unrecorded; a Failed base re-run instead of reopened; a successful result recorded as a failure; a run cancelled during the drain ending as a success (`ABaseReopenCancelledAtItsOpenOpensNothing`, which the full unit gate caught against the first cut of the drain-barrier wait). (F2) the re-seat attaching with a load; each registry ignoring the flag; `ReplaceTabItem` dropping it. (F5) every tail failure counted; the walk's failures forgotten; unlisted boards counted.
 
 ### PR 8 — #1253 reading surface is the editor stop
 
