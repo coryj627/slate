@@ -3,7 +3,7 @@
   "sites": {
     "collection SlateWindows.Bases.BaseQueryBuilderViewModel.RemoveCondition ConditionRows": "BuilderConditionLandingTests.RemovingAConditionFromItsButtonLandsOnARemainingCondition",
     "collection SlateWindows.Bases.DashboardSurfaceView.Render _sections.Children": "guard: DashboardSurfaceView",
-    "collection SlateWindows.Bases.DashboardViewModel.LoadBody Sections": "guard: DashboardEditorOverlay",
+    "collection SlateWindows.Bases.DashboardViewModel.LoadBody Sections": "exempt: the dashboard's sections are rendered in code by DashboardSurfaceView, whose own landing lands a rebuild under the reader (BaseSurfaceViewTests.ADashboardRebuiltUnderTheReaderKeepsTheirRow); the census attributes a collection by member name alone, and pointed this one at the dashboard editor's list, which binds another view model's Sections (contract 40 AR-67)",
     "collection SlateWindows.Canvas.CanvasContextMenuBuilder.Refill built.Items": "exempt: a context menu's items, built as it opens (its opening handler) — before the keys can be in it; an open menu is a popup of its own, out of the region",
     "collection SlateWindows.Canvas.CanvasContextMenuBuilder.Refill persistent.Items": "exempt: a context menu's items, built as it opens (its opening handler) — before the keys can be in it; an open menu is a popup of its own, out of the region",
     "collection SlateWindows.Canvas.CanvasOutlineView.ApplySelectionCore host.Children": "guard: FilesPaneBorder, ContentPaneBorder",
