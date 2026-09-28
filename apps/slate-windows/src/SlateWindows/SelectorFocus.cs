@@ -549,18 +549,19 @@ internal static class SelectorFocus
                 // is POPULATED again: a UIA focus change on the bare
                 // list. The hand-over is declined, once, and the keys,
                 // still on the removed row, are re-landed on a row
-                // (stranded: the rows they were in) at Loaded. So is a
-                // hand-over to an EMPTY list while a sibling list of the
-                // scope has rows (the sweep's G14: the last open task,
-                // done, moved to the Done list). A region that restores its
-                // own publications (the Citations leaf) declines too — the
-                // bare list was a UIA focus change before its restore (the
+                // (stranded: the rows they were in) at Loaded — the last
+                // open task, done, too: its list still counts its rows when
+                // the hand-over comes (ItemsControl updates HasItems after
+                // the generator removes the row), and Resolve lands the keys
+                // on the Done list's (G14). A region that restores its own
+                // publications (the Citations leaf) declines too — the bare
+                // list was a UIA focus change before its restore (the
                 // sweep's G11) — and restores them itself.
                 container.PreviewGotKeyboardFocus += (_, e) =>
                 {
                     if (!_declined
                         && ReferenceEquals(e.NewFocus, container)
-                        && (container.HasItems || PopulatedSibling(container) is not null)
+                        && container.HasItems
                         && e.OldFocus is Visual removed
                         && PresentationSource.FromVisual(removed) is null)
                     {
@@ -632,6 +633,19 @@ internal static class SelectorFocus
 
             if ((bare ?? _lastRows) is Selector list && IsListLanding(list) && list.IsVisible)
             {
+                if (!list.HasItems && PopulatedSibling(list) is not null)
+                {
+                    // An EMPTY list while a sibling of the scope has rows (S5,
+                    // G14; codex PR 4b r1 F2): the scope's landing — the first
+                    // populated list's row. The keys can already be on the
+                    // bare empty list (a notice handed them there while it
+                    // loaded, AR-6) when a publication brings rows only to
+                    // the sibling: no row departs, so no hand-over is
+                    // declined, and only this lands them.
+                    _ = landInScope();
+                    return;
+                }
+
                 // A populated list: its row. An empty one: its notice once
                 // that is a stop; stranded keys come back to it even so.
                 if ((list.HasItems || stranded || notices.Any(IsAStop))

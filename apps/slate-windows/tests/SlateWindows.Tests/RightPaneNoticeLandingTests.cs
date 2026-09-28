@@ -354,6 +354,41 @@ public sealed class RightPaneNoticeLandingTests
     });
 
     /// <summary>
+    /// Codex PR 4b r1 F2 (S5, G14): the keys already on the bare EMPTY "Open
+    /// tasks" list — handed there by the notice when a save's refresh turned
+    /// it to "Loading…" (AR-6) — and the publication that follows brings only
+    /// DONE tasks. No row departs, so the keeper declines no hand-over, and
+    /// the empty list, holding the keys, kept them while the rows sat one
+    /// list below. The keeper's resolve lands them on the Done list's row,
+    /// once, silently.
+    /// </summary>
+    [Fact]
+    public void ANoticeHandedToTheEmptyOpenListLandsOnTheDoneRowWhenOnlyDoneTasksArrive() => RunSta(() =>
+    {
+        using var host = new Host();
+        host.Initialize("tasks", "empty");
+        host.AwaitFinalNotice("tasks");
+        TextBlock notice = host.Notice("tasks");
+        ListBox open = host.List("tasks");
+        ListBox done = host.ElementWithId<ListBox>("PanelTasksDoneList");
+        Assert.True(host.Beside.Focus());
+        host.Shell.LandInRightPane();
+        Assert.Same(notice, Keyboard.FocusedElement);
+        SetLoading(host.Panels, "tasks", loading: true);
+        PumpedDispatcher.Drain();
+        Assert.Same(open, Keyboard.FocusedElement);
+        host.ForgetFocusAndSpeech();
+
+        PublishTasks(host.Panels, (false, 0), (true, 2));
+        PumpedDispatcher.Drain();
+
+        var row = Assert.IsType<ListBoxItem>(Keyboard.FocusedElement);
+        Assert.Same(done, ItemsControl.ItemsControlFromItemContainer(row));
+        Assert.Equal([row], host.FocusChanges);
+        Assert.Empty(host.Announced);
+    });
+
+    /// <summary>
     /// The sweep's G20, through the shell's own restore
     /// (<see cref="MainWindow.LandToken"/>, every dismissal's): the keys left
     /// a task's row for a dialog, and while it was up the task was done — its
