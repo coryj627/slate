@@ -19,12 +19,19 @@
 //                 an assignment or SetValue/SetCurrentValue/SetBinding
 //   items-source  a write to ItemsControl.ItemsSource, the same ways
 //   collection    a Clear/Remove/RemoveAt/Move call or an indexer write on an
-//                 INotifyCollectionChanged, a UIElementCollection or an
-//                 ItemCollection (an Add or an Insert takes nothing away)
+//                 INotifyCollectionChanged, a UIElementCollection, an
+//                 ItemCollection or a document's TextElementCollection (a
+//                 FlowDocument's blocks, a paragraph's inlines) — an Add or an
+//                 Insert takes nothing away
+//   content       a write to ContentControl.Content, ContentPresenter.Content
+//                 or Decorator.Child — a subtree swapped (a button's or a
+//                 label's content is its label, not a subtree, and is not one)
 //   xaml-trigger  a XAML trigger setting IsEnabled or Visibility
 //   xaml-binding  a XAML Visibility, IsEnabled or Focusable given by a markup
 //                 extension
 //   xaml-items    a XAML ItemsSource given by a markup extension
+//   xaml-content  a XAML ContentControl's or ContentPresenter's Content given
+//                 by a markup extension
 //
 // A property set in an object creation's initializer, or anything a
 // constructor writes, is a new element's initial state — it holds no keys
@@ -137,6 +144,7 @@ public sealed class FocusIntegrityManifestCensus
             using System.Windows;
             using System.Windows.Controls;
             using System.Windows.Data;
+            using System.Windows.Documents;
 
             namespace Planted;
 
@@ -153,6 +161,9 @@ public sealed class FocusIntegrityManifestCensus
                 private readonly ListBox _list = new();
                 private readonly StackPanel _panel = new();
                 private readonly Model _model = new();
+                private readonly ContentControl _host = new();
+                private readonly Border _frame = new();
+                private readonly FlowDocument _document = new();
 
                 public View()
                 {
@@ -170,12 +181,19 @@ public sealed class FocusIntegrityManifestCensus
                 private void Publish() => _model.Rows.RemoveAt(0);
                 private void Replace() => _model.Rows[0] = "row";
                 private void Drop() => _list.Items.Remove("row");
+                private void Swap() => _host.Content = new Button();
+                private void Reframe() => _frame.Child = new Button();
+                private void Present() => _host.SetValue(ContentControl.ContentProperty, null);
+                private void Wipe() => _document.Blocks.Clear();
                 private void NotASite()
                 {
                     _model.IsEnabled = false;
                     _model.Plain.Clear();
                     _model.Rows.Add("row");
                     _list.Items.Insert(0, "row");
+                    _button.Content = "Save";
+                    _document.Blocks.Add(new Paragraph());
+                    _ = new ContentControl { Content = "made" };
                 }
             }
             """;
@@ -202,6 +220,8 @@ public sealed class FocusIntegrityManifestCensus
                   <Button Content="Inside" />
                 </Border>
                 <Border x:Name="Scrim" Visibility="{Binding Shown}" />
+                <ContentControl x:Name="Paged" Content="{Binding Page}" />
+                <Button x:Name="Labelled" Content="{Binding Label}" />
               </StackPanel>
             </Window>
             """,
@@ -216,6 +236,10 @@ public sealed class FocusIntegrityManifestCensus
                 "collection Planted.View.Publish _model.Rows",
                 "collection Planted.View.Rebuild _panel.Children",
                 "collection Planted.View.Replace _model.Rows",
+                "collection Planted.View.Wipe _document.Blocks",
+                "content Planted.View.Present _host Content",
+                "content Planted.View.Reframe _frame Child",
+                "content Planted.View.Swap _host Content",
                 "items-source Planted.View.Feed _list",
                 "items-source Planted.View.FeedAgain _list",
                 "ui-state Planted.View.Bind _button Visibility",
@@ -223,6 +247,7 @@ public sealed class FocusIntegrityManifestCensus
                 "ui-state Planted.View.Hide _button Visibility",
                 "ui-state Planted.View.Unfocus _button Focusable",
                 "xaml-binding Planted.xaml Bound Visibility",
+                "xaml-content Planted.xaml Paged",
                 "xaml-items Planted.xaml Fed",
                 "xaml-trigger Planted.xaml Triggered Visibility",
             ],
@@ -331,6 +356,12 @@ public sealed class FocusIntegrityManifestCensus
                 {
                     Add(sites, model, assignment, "items-source", receiver, property: null);
                 }
+                else if (SwapsASubtree(property, assignment.Left is MemberAccessExpressionSyntax written
+                    ? model.GetTypeInfo(written.Expression).Type
+                    : model.GetEnclosingSymbol(assignment.SpanStart)?.ContainingType))
+                {
+                    Add(sites, model, assignment, "content", receiver, property.Name);
+                }
                 else if (StateProperties.Contains(property.Name) && Derives(property.ContainingType, "System.Windows.UIElement"))
                 {
                     Add(sites, model, assignment, "ui-state", receiver, property.Name);
@@ -365,6 +396,11 @@ public sealed class FocusIntegrityManifestCensus
                     if (target == "ItemsSource")
                     {
                         Add(sites, model, call, "items-source", receiver, property: null);
+                    }
+                    else if (target is "Content" or "Child"
+                        && IsSubtreeHost(operations ? model.GetTypeInfo(arguments[0].Expression).Type : model.GetTypeInfo(member.Expression).Type))
+                    {
+                        Add(sites, model, call, "content", receiver, target);
                     }
                     else if (StateProperties.Contains(target))
                     {
@@ -413,7 +449,10 @@ public sealed class FocusIntegrityManifestCensus
                     string local = attribute.Name.LocalName;
                     string? key = StateProperties.Contains(local)
                         ? $"xaml-binding {file} {Identity(element)} {local}"
-                        : local == "ItemsSource" ? $"xaml-items {file} {Identity(element)}" : null;
+                        : local == "ItemsSource" ? $"xaml-items {file} {Identity(element)}"
+                        : local == "Content" && element.Name.LocalName is "ContentControl" or "ContentPresenter"
+                            ? $"xaml-content {file} {Identity(element)}"
+                            : null;
                     if (key is not null)
                     {
                         sites[key] = new Site(key, element, null, null, null, NamesOf(element));
@@ -455,7 +494,44 @@ public sealed class FocusIntegrityManifestCensus
         type is not null
         && (type.AllInterfaces.Any(candidate => candidate.ToDisplayString() == "System.Collections.Specialized.INotifyCollectionChanged")
             || Derives(type, "System.Windows.Controls.UIElementCollection")
-            || Derives(type, "System.Windows.Controls.ItemCollection"));
+            || Derives(type, "System.Windows.Controls.ItemCollection")
+            || IsTextElementCollection(type));
+
+    /// <summary>A document's blocks or inlines: a <c>TextElementCollection</c>
+    /// (a FlowDocument's <c>Blocks</c>, a paragraph's <c>Inlines</c>), whose
+    /// elements — a Hyperlink, an embedded control — can hold the keys.</summary>
+    private static bool IsTextElementCollection(ITypeSymbol type)
+    {
+        for (ITypeSymbol? current = type; current is not null; current = current.BaseType)
+        {
+            if (current.Name == "TextElementCollection" && current.ContainingNamespace?.ToDisplayString() == "System.Windows.Documents")
+            {
+                return true;
+            }
+        }
+
+        return false;
+    }
+
+    /// <summary>A write that swaps a subtree: <c>Content</c> on a content
+    /// control or presenter, <c>Child</c> on a decorator.</summary>
+    private static bool SwapsASubtree(IPropertySymbol property, ITypeSymbol? receiver) =>
+        (property.Name == "Content"
+            && (Derives(property.ContainingType, "System.Windows.Controls.ContentControl")
+                || Derives(property.ContainingType, "System.Windows.Controls.ContentPresenter"))
+            || property.Name == "Child" && Derives(property.ContainingType, "System.Windows.Controls.Decorator"))
+        && IsSubtreeHost(receiver);
+
+    /// <summary>A content control, presenter or decorator whose content is a
+    /// subtree — not a button's or a label's, whose content is its
+    /// label.</summary>
+    private static bool IsSubtreeHost(ITypeSymbol? type) =>
+        (Derives(type, "System.Windows.Controls.ContentControl")
+            || Derives(type, "System.Windows.Controls.ContentPresenter")
+            || Derives(type, "System.Windows.Controls.Decorator"))
+        && !Derives(type, "System.Windows.Controls.Primitives.ButtonBase")
+        && !Derives(type, "System.Windows.Controls.Label")
+        && !Derives(type, "System.Windows.Controls.ToolTip");
 
     private static bool Derives(ITypeSymbol? type, string baseName)
     {
