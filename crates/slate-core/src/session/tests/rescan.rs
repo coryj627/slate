@@ -268,6 +268,9 @@ struct FaultingProvider {
     stat_fails: Option<String>,
     stat_not_found: Option<String>,
     read_fails: Option<String>,
+    /// Round 5 (codex PR 7 round 4, finding 4): once armed, every read of
+    /// a path with this extension fails — the walk read it, the tail can't.
+    armed_read_fails: Option<(&'static str, Arc<std::sync::atomic::AtomicBool>)>,
 }
 
 impl FaultingProvider {
@@ -278,6 +281,7 @@ impl FaultingProvider {
             stat_fails: None,
             stat_not_found: None,
             read_fails: None,
+            armed_read_fails: None,
         }
     }
 }
@@ -298,6 +302,12 @@ impl crate::VaultProvider for FaultingProvider {
     }
     fn read_file(&self, relative: &str) -> Result<Vec<u8>, VaultError> {
         if self.read_fails.as_deref() == Some(relative) {
+            return Err(denied(relative));
+        }
+        if let Some((extension, armed)) = &self.armed_read_fails
+            && relative.ends_with(extension)
+            && armed.load(std::sync::atomic::Ordering::SeqCst)
+        {
             return Err(denied(relative));
         }
         self.inner.read_file(relative)
@@ -1109,4 +1119,54 @@ fn a_cancel_after_the_commit_keeps_the_scan_and_skips_its_maintenance() {
         "{phases:?}"
     );
     assert!(phases.contains(&IndexPhase::ScanFinished), "{phases:?}");
+}
+
+/// Codex PR 7 round 4, finding 4: a board the walk saw that the post-walk
+/// canvas pass cannot read (unreadable between the walk and its tail) is a
+/// counted error — the scan is incomplete, never "complete" over stale
+/// card rows — with the exact count and at most the bounded samples.
+#[test]
+fn a_board_the_canvas_pass_cannot_read_makes_the_scan_incomplete() {
+    let (tmp, session) = make_vault(|p| {
+        for index in 0..7 {
+            p.write_file(
+                &format!("board{index}.canvas"),
+                br#"{"nodes":[{"id":"n1","type":"text","text":"Card","x":0,"y":0,"width":10,"height":10}],"edges":[]}"#,
+            )
+            .unwrap();
+        }
+    });
+    session.scan_initial(&CancelToken::new()).unwrap();
+    drop(session);
+
+    let armed = Arc::new(std::sync::atomic::AtomicBool::new(false));
+    let mut provider = FaultingProvider::over(tmp.path());
+    provider.armed_read_fails = Some((".canvas", armed.clone()));
+    let session = reopen_through(&tmp, provider);
+    let arm = armed.clone();
+    crate::session::scan_point_test_hook::install(Box::new(move |point| {
+        if point == "canvas" {
+            arm.store(true, std::sync::atomic::Ordering::SeqCst);
+        }
+    }));
+    let report = rescan(&session);
+    crate::session::scan_point_test_hook::clear();
+
+    assert!(
+        armed.load(std::sync::atomic::Ordering::SeqCst),
+        "the canvas pass never ran"
+    );
+    assert!(!report.complete, "{report:?}");
+    assert_eq!(report.error_count, 7, "{report:?}");
+    assert_eq!(
+        report.error_samples.len(),
+        crate::session::SCAN_ERROR_SAMPLES
+    );
+    assert!(
+        report
+            .error_samples
+            .iter()
+            .all(|sample| sample.contains(".canvas")),
+        "{report:?}"
+    );
 }

@@ -693,6 +693,34 @@ impl CancelToken {
 /// and logs each one in full as it happens.
 pub const SCAN_ERROR_SAMPLES: usize = 5;
 
+/// A caller's scan error sink ([`with_scan_error_sink`]).
+type ScanErrorSink = Box<dyn FnMut(&str)>;
+
+thread_local! {
+    /// The sink [`with_scan_error_sink`] installs on this thread.
+    static SCAN_ERROR_SINK: std::cell::RefCell<Option<ScanErrorSink>> =
+        const { std::cell::RefCell::new(None) };
+}
+
+/// Run `f` with every error a scan inside it records ALSO handed to `sink`,
+/// in full, as it happens (W7-7 PR 7, codex PR 7 round 4 finding 7) — a
+/// scan runs on its caller's thread. For a caller whose own contract is the
+/// complete list — slate-cli's `slate.cli.v1` `scan_errors`; the report
+/// itself stays bounded ([`SCAN_ERROR_SAMPLES`]). The previous sink is
+/// restored when `f` returns or unwinds.
+pub fn with_scan_error_sink<R>(sink: impl FnMut(&str) + 'static, f: impl FnOnce() -> R) -> R {
+    struct Restore(Option<ScanErrorSink>);
+    impl Drop for Restore {
+        fn drop(&mut self) {
+            let previous = self.0.take();
+            SCAN_ERROR_SINK.with(|slot| *slot.borrow_mut() = previous);
+        }
+    }
+    let previous = SCAN_ERROR_SINK.with(|slot| slot.borrow_mut().replace(Box::new(sink)));
+    let _restore = Restore(previous);
+    f()
+}
+
 #[cfg(test)]
 thread_local! {
     /// Test seam: while `Some`, every error [`ScanReport::record_error`]
@@ -707,6 +735,11 @@ impl ScanReport {
     /// sample while fewer than [`SCAN_ERROR_SAMPLES`] are held.
     pub(crate) fn record_error(&mut self, message: String) {
         log::debug!("scan error: {message}");
+        SCAN_ERROR_SINK.with(|slot| {
+            if let Some(sink) = slot.borrow_mut().as_mut() {
+                sink(&message);
+            }
+        });
         #[cfg(test)]
         SCAN_ERROR_STREAM.with(|stream| {
             if let Some(stream) = stream.borrow_mut().as_mut() {
@@ -9950,7 +9983,8 @@ fn scan_vault(
     // derivation is milliseconds at the 2,000-node budget, so this
     // stays O(canvases), not O(vault).
     cancel_point!("canvas");
-    let canvases = reindex_all_canvases(&tx, provider, large_file_refuse_bytes, cancel);
+    let canvases =
+        reindex_all_canvases(&tx, provider, large_file_refuse_bytes, cancel, &mut report);
     cancelled_in_phase!(canvases);
     if let Err(e) = canvases {
         report.record_error(format!("canvas index: {e}"));
@@ -20433,6 +20467,7 @@ fn reindex_all_canvases(
     provider: &dyn VaultProvider,
     large_file_refuse_bytes: u64,
     cancel: &CancelToken,
+    report: &mut ScanReport,
 ) -> Result<(), VaultError> {
     let canvases: Vec<(i64, String, i64)> = {
         let mut stmt = tx.prepare(
@@ -20456,10 +20491,14 @@ fn reindex_all_canvases(
         }
         let bytes = match provider.read_file_with_cap(&path, large_file_refuse_bytes) {
             Ok(b) => b,
-            // File vanished between walk and pass, or unreadable:
-            // leave rows for the next scan's delete-pruning rather
-            // than failing the whole scan over one canvas.
-            Err(_) => continue,
+            // File vanished between walk and pass, or unreadable: its rows
+            // stay for the next clean scan, and the failure is COUNTED
+            // (W7-7 PR 7, codex PR 7 round 4 finding 4) — the scan is
+            // incomplete, never "complete" over stale card rows.
+            Err(e) => {
+                report.record_error(format!("{path}: canvas pass read: {e}"));
+                continue;
+            }
         };
         let source = String::from_utf8_lossy(&bytes);
         crate::canvas_db::replace_canvas_for_file(
