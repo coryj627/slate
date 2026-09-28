@@ -102,6 +102,17 @@ internal sealed partial class WorkspaceViewModel
     private ICommand? _widenRightPaneCommand;
     private ICommand? _narrowRightPaneCommand;
 
+    /// <summary>A show or hide of the right pane changes whether its two
+    /// steps can run: both requery, and the registered catalog with them. A
+    /// menu item caches its command's state and asks again only when told
+    /// (SidebarResizeTests.TheRightPaneCommandsNeedTheRightPaneShown).</summary>
+    private void RaiseRightPaneResizeStates()
+    {
+        ((RelayCommand)WidenRightPaneCommand).RaiseCanExecuteChanged();
+        ((RelayCommand)NarrowRightPaneCommand).RaiseCanExecuteChanged();
+        RegisteredCommandStatesChanged?.Invoke();
+    }
+
     /// <summary>The widest <paramref name="sidebar"/> may be now: the fixed
     /// ceiling, and the room left beside the other sidebar, the editor's
     /// minimum and the splitters — never below the floor.</summary>

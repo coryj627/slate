@@ -102,18 +102,37 @@ public sealed class SidebarResizeTests : IDisposable
         Assert.Equal("Files sidebar at its widest, 640 pixels.", SlateUniffiMethods.A11yRender(_announced[^1]).Text);
     });
 
+    /// <summary>The right pane's two steps are available exactly while the
+    /// pane is shown, and every show or hide says so: both commands requery,
+    /// and the registered catalog with them. A Workspace menu item caches its
+    /// command's state and asks again only when told, so without the requery
+    /// NVDA read "unavailable" on a shown pane (PR 4b codex round 2, F4).</summary>
     [Fact]
     public void TheRightPaneCommandsNeedTheRightPaneShown() => RunSta(() =>
     {
         using WorkspaceViewModel workspace = NewWorkspace();
         workspace.IsRightPaneVisible = true;
         Assert.True(workspace.WidenRightPaneCommand.CanExecute(null));
+        int widen = 0, narrow = 0, registered = 0;
+        workspace.WidenRightPaneCommand.CanExecuteChanged += (_, _) => widen++;
+        workspace.NarrowRightPaneCommand.CanExecuteChanged += (_, _) => narrow++;
+        workspace.RegisteredCommandStatesChanged = () => registered++;
 
         workspace.IsRightPaneVisible = false;
 
         Assert.False(workspace.WidenRightPaneCommand.CanExecute(null));
         Assert.False(workspace.NarrowRightPaneCommand.CanExecute(null));
         Assert.True(workspace.WidenFilesSidebarCommand.CanExecute(null));
+        Assert.Equal((1, 1, 1), (widen, narrow, registered));
+
+        workspace.IsRightPaneVisible = false;
+        Assert.Equal((1, 1, 1), (widen, narrow, registered));
+
+        workspace.IsRightPaneVisible = true;
+
+        Assert.True(workspace.WidenRightPaneCommand.CanExecute(null));
+        Assert.True(workspace.NarrowRightPaneCommand.CanExecute(null));
+        Assert.Equal((2, 2, 2), (widen, narrow, registered));
     });
 
     /// <summary>The window's two sidebar columns follow the widths, and a
