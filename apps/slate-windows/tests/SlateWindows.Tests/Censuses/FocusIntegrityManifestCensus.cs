@@ -41,8 +41,10 @@
 // and region roots RegionGuardCensus's.
 //
 // A witness is one of:
-//   Class.Method        a fact in this project whose source names the site —
-//                       its element, its receiver or its type
+//   Class.Method        a fact in this project whose CODE names the site —
+//                       its element, its receiver or its type, as a whole
+//                       identifier or string literal, case-sensitive (a
+//                       comment or a longer name does not)
 //   guard: A[, B]       the site sits strictly inside a guarded scope named A
 //                       (or B) — an element the constructed window gives a
 //                       RegionFocusGuard landing, or a view that registers its
@@ -54,7 +56,8 @@
 //                       template's element lives where the template is used.
 //                       A site whose collapse takes a whole region away needs a
 //                       fact of its own.
-//   exempt: <reason>
+//   exempt: <reason>    a fact the reason cites (SomethingTests.Method) must
+//                       exist
 //
 // SLATE_FOCUS_MANIFEST_UPDATE=1 rewrites the manifest with the scraped sites,
 // keeping every assignment and leaving new sites unassigned, which fails
@@ -291,6 +294,51 @@ public sealed class FocusIntegrityManifestCensus
         Assert.NotNull(judge.Judge(sites["xaml-binding Planted.xaml Inner IsEnabled"], "Facts.ThePaneHides"));
         Assert.NotNull(judge.Judge(sites["xaml-binding Planted.xaml Inner IsEnabled"], "guard: Nowhere"));
         Assert.NotNull(judge.Judge(sites["xaml-binding Planted.xaml Inner IsEnabled"], "exempt: "));
+    }
+
+    /// <summary>A fact names a site in its CODE — an identifier or a string
+    /// literal, whole and case-sensitive — and an exemption's cited fact
+    /// exists (PR 4b codex r2 F6): a name in a comment, a name in another
+    /// case, a longer identifier that contains it, or a missing cited fact
+    /// does not hold.</summary>
+    [Fact]
+    public void AFactWitnessNamesTheSiteInItsCode()
+    {
+        XDocument xaml = XDocument.Parse(
+            """
+            <Window xmlns="http://schemas.microsoft.com/winfx/2006/xaml/presentation"
+                    xmlns:x="http://schemas.microsoft.com/winfx/2006/xaml">
+              <Border x:Name="Pane" Visibility="{Binding PaneShown}">
+                <Button Content="Inside" />
+              </Border>
+            </Window>
+            """,
+            LoadOptions.SetLineInfo);
+        Site pane = Scrape([], [("Planted.xaml", xaml)])["xaml-binding Planted.xaml Pane Visibility"];
+        var list = new Site("items-source Planted.View.Feed _list", null, null, null, "_list", ["list", "View"]);
+        var judge = new WitnessJudge(
+            new Dictionary<string, string>(StringComparer.Ordinal)
+            {
+                ["PlantedTests.ThePaneHides"] = "void ThePaneHides() { shell.Pane.Visibility = Visibility.Collapsed; }",
+                ["PlantedTests.ThePaneByItsId"] = "[InlineData(\"Pane\")] void ThePaneByItsId(string id) { Hide(id); }",
+                ["PlantedTests.OnlyAComment"] = "/// <summary>The Pane hides.</summary>\nvoid OnlyAComment() { // Pane\n shell.Other.Visibility = Visibility.Collapsed; }",
+                ["PlantedTests.AnotherCase"] = "void AnotherCase() { shell.pane.Visibility = Visibility.Collapsed; }",
+                ["PlantedTests.ALongerName"] = "void ALongerName() { shell.PaneBorder.Visibility = Visibility.Collapsed; }",
+                ["PlantedTests.TheList"] = "void TheList() { ListBox list = host.List; list.ItemsSource = null; }",
+                ["PlantedTests.AGenericList"] = "void AGenericList() { var rows = new List<int>(); rows.Clear(); }",
+            },
+            new HashSet<string>(StringComparer.Ordinal),
+            [xaml]);
+
+        Assert.Null(judge.Judge(pane, "PlantedTests.ThePaneHides"));
+        Assert.Null(judge.Judge(pane, "PlantedTests.ThePaneByItsId"));
+        Assert.NotNull(judge.Judge(pane, "PlantedTests.OnlyAComment"));
+        Assert.NotNull(judge.Judge(pane, "PlantedTests.AnotherCase"));
+        Assert.NotNull(judge.Judge(pane, "PlantedTests.ALongerName"));
+        Assert.Null(judge.Judge(list, "PlantedTests.TheList"));
+        Assert.NotNull(judge.Judge(list, "PlantedTests.AGenericList"));
+        Assert.Null(judge.Judge(pane, "exempt: covered by PlantedTests.ThePaneHides"));
+        Assert.NotNull(judge.Judge(pane, "exempt: covered by PlantedTests.NoSuchFact"));
     }
 
     /// <summary>A scraped site: its key, the XAML element that carries it
@@ -614,7 +662,17 @@ public sealed class FocusIntegrityManifestCensus
         {
             if (witness.StartsWith("exempt: ", StringComparison.Ordinal))
             {
-                return witness.Length > 12 ? null : "an exemption with no reason";
+                if (witness.Length <= 12)
+                {
+                    return "an exemption with no reason";
+                }
+
+                // A fact an exemption leans on must exist (PR 4b codex r2 F6).
+                return System.Text.RegularExpressions.Regex.Matches(witness, @"\b[A-Z]\w*Tests\.[A-Z]\w*\b")
+                    .Select(match => match.Value)
+                    .FirstOrDefault(cited => !facts.ContainsKey(cited)) is { } unresolved
+                    ? $"the exemption cites '{unresolved}', which names no fact in this project"
+                    : null;
             }
 
             if (witness.StartsWith("guard: ", StringComparison.Ordinal))
@@ -642,10 +700,23 @@ public sealed class FocusIntegrityManifestCensus
                 return $"'{witness}' names no fact in this project";
             }
 
-            return site.Names.Any(name => name.Length > 2 && source.Contains(name, StringComparison.OrdinalIgnoreCase))
+            // The fact's CODE names the site — an identifier or a string
+            // literal, whole and case-sensitive; a comment, a doc comment or a
+            // substring of a longer name does not (PR 4b codex r2 F6).
+            HashSet<string> tokens = CodeTokens(source);
+            return site.Names.Any(name => name.Length > 2 && tokens.Contains(name))
                 ? null
-                : $"the fact does not name the site ({string.Join(", ", site.Names)})";
+                : $"the fact's code does not name the site ({string.Join(", ", site.Names)})";
         }
+
+        /// <summary>The identifiers and string literals of a fact's source,
+        /// trivia — comments, doc comments — left out.</summary>
+        private static HashSet<string> CodeTokens(string source) =>
+        [
+            .. SyntaxFactory.ParseTokens(source)
+                .Where(token => token.IsKind(SyntaxKind.IdentifierToken) || token.IsKind(SyntaxKind.StringLiteralToken))
+                .Select(token => token.ValueText),
+        ];
 
         /// <summary>The XAML elements a site's change lands on: its element;
         /// the users of its keyed resource; for code, the XAML instances of a

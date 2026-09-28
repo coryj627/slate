@@ -83,7 +83,7 @@
     "items-source SlateWindows.Bases.BaseSurfaceView.RenderChrome _warningBanners": "guard: BaseSurfaceView",
     "items-source SlateWindows.Bases.BaseSurfaceView.RenderList _list": "BaseSurfaceViewTests.TheRendererCollapsingUnderTheKeysLandsThemInTheSurface",
     "items-source SlateWindows.Canvas.CanvasSurfaceView.Render _warningRows": "guard: ContentPaneBorder",
-    "items-source SlateWindows.CommandPaletteResultsPresenter.Refresh _list": "RegionFocusGuardTests.RowsSwappedUnderTheKeysLandOnARow",
+    "items-source SlateWindows.CommandPaletteResultsPresenter.Refresh _list": "CommandPaletteTests.AQueryPublishedUnderTheKeysLandsThemOnARowOfTheNewView",
     "ui-state SlateWindows.Bases.BaseSurfaceView.RenderChrome _banners Visibility": "guard: BaseSurfaceView",
     "ui-state SlateWindows.Bases.BaseSurfaceView.RenderChrome _quickFilter IsEnabled": "guard: BaseSurfaceView",
     "ui-state SlateWindows.Bases.BaseSurfaceView.RenderChrome _stateBanner Visibility": "guard: BaseSurfaceView",

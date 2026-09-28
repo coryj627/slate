@@ -431,18 +431,19 @@ public sealed class FilesRegionLandingTests
     {
         using var host = new Host();
         host.Initialize();
-        FileTreeNodeViewModel note = host.Sidebar.RootNodes.Last(node => !node.IsDirectory);
+        FilesSidebarViewModel sidebar = host.Sidebar;
+        FileTreeNodeViewModel note = sidebar.RootNodes.Last(node => !node.IsDirectory);
         note.IsSelected = true;
-        host.Sidebar.SelectedNode = note;
+        sidebar.SelectedNode = note;
         host.Pane.UpdateLayout();
         var row = Assert.IsAssignableFrom<TreeViewItem>(host.Tree.ItemContainerGenerator.ContainerFromItem(note));
         Assert.True(row.Focus());
         PumpedDispatcher.Drain();
         var opened = new List<string>();
-        host.Sidebar.OpenTargetRequested += (_, request) => opened.Add(request.Path);
+        sidebar.OpenTargetRequested += (_, request) => opened.Add(request.Path);
         host.ForgetFocusChanges();
 
-        host.Sidebar.PinCommand.Execute(null);
+        sidebar.PinCommand.Execute(null);
         PumpedDispatcher.Drain();
 
         Assert.Same(note, FocusedNode());
@@ -500,16 +501,17 @@ public sealed class FilesRegionLandingTests
     {
         using var host = new Host();
         host.Initialize(tagged: true, nestedTag: true);
+        FilesSidebarViewModel sidebar = host.Sidebar;
         TreeView tags = ShowTags(host);
         TreeViewItem nested = ExpandToNestedTag(host, tags);
         Assert.True(nested.Focus());
-        Assert.True(PumpedDispatcher.PumpUntil(() => host.Sidebar.IsFilterActive), "premise: choosing the nested tag applied no filter.");
-        string filter = host.Sidebar.FilterText;
+        Assert.True(PumpedDispatcher.PumpUntil(() => sidebar.IsFilterActive), "premise: choosing the nested tag applied no filter.");
+        string filter = sidebar.FilterText;
         Assert.Equal("alpha/beta", Assert.IsType<SidebarTagViewModel>(nested.DataContext).Full);
         host.ForgetFocusChanges();
 
-        host.Sidebar.Refresh();
-        PumpedDispatcher.PumpUntilDrained(host.Sidebar.TreeRefreshCompletion);
+        sidebar.Refresh();
+        PumpedDispatcher.PumpUntilDrained(sidebar.TreeRefreshCompletion);
         PumpedDispatcher.Drain();
 
         var landed = Assert.IsAssignableFrom<TreeViewItem>(Keyboard.FocusedElement);
@@ -517,7 +519,7 @@ public sealed class FilesRegionLandingTests
         Assert.Equal("alpha/beta", tag.Full);
         Assert.True(landed.IsSelected, "the nested tag's row lost its selection in the rebuild");
         Assert.Same(tag, tags.SelectedItem);
-        Assert.Equal(filter, host.Sidebar.FilterText);
+        Assert.Equal(filter, sidebar.FilterText);
         host.AssertNeverFocusedPopulated(tags);
     });
 
