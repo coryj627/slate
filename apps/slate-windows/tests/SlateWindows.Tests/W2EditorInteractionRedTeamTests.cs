@@ -1,7 +1,6 @@
 // Copyright (C) 2026 Cory Joseph
 // SPDX-License-Identifier: AGPL-3.0-or-later
 
-using System.Runtime.ExceptionServices;
 using System.Text;
 using System.Threading;
 using System.Windows.Threading;
@@ -501,28 +500,8 @@ public sealed class W2EditorInteractionRedTeamTests
         return Path.Combine([directory!.FullName, .. parts]);
     }
 
-    private static void RunOnSta(Action action)
-    {
-        Exception? failure = null;
-        var thread = new Thread(() =>
-        {
-            try
-            {
-                action();
-            }
-            catch (Exception exception)
-            {
-                failure = exception;
-            }
-        });
-        thread.SetApartmentState(ApartmentState.STA);
-        thread.Start();
-        Assert.True(thread.Join(TimeSpan.FromSeconds(20)), "STA spelling test timed out.");
-        if (failure is not null)
-        {
-            ExceptionDispatchInfo.Capture(failure).Throw();
-        }
-    }
+    private static void RunOnSta(Action action) =>
+        StaThread.Run(action, TimeSpan.FromSeconds(20), "STA spelling test timed out.");
 
     private sealed class RedTeamFixture : IDisposable
     {

@@ -1,7 +1,6 @@
 // Copyright (C) 2026 Cory Joseph
 // SPDX-License-Identifier: AGPL-3.0-or-later
 
-using System.Runtime.ExceptionServices;
 using System.Windows.Automation;
 using System.Windows.Automation.Peers;
 using System.Windows.Controls;
@@ -135,25 +134,8 @@ public sealed class NavigationHelpTests
             Assert.Equal(1, itemPeer.GetSizeOfSet());
         });
 
-    private static void OnSta(Action action)
-    {
-        Exception? failure = null;
-        var thread = new Thread(() =>
-        {
-            try
-            {
-                action();
-            }
-            catch (Exception exception) { failure = exception; }
-        });
-        // A background thread: a hung action fails this test at Join and
-        // must not keep the test host alive until the lane's timeout.
-        thread.IsBackground = true;
-        thread.SetApartmentState(ApartmentState.STA);
-        thread.Start();
-        Assert.True(thread.Join(TimeSpan.FromSeconds(10)), "The STA editor operation did not finish.");
-        if (failure is not null) { ExceptionDispatchInfo.Capture(failure).Throw(); }
-    }
+    private static void OnSta(Action action) =>
+        StaThread.Run(action, TimeSpan.FromSeconds(10), "The STA editor operation did not finish.");
 
     [Theory]
     [InlineData("missing.navigation.command")]
