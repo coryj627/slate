@@ -518,7 +518,10 @@ public sealed class CommandRegistrationTests
         return path;
     }
 
-    private sealed class FakeCommandHost : ISlateCommandHost
+    /// <summary>The command host the registration facts drive — internal
+    /// so the palette's persistence fact (#1275) can run the REAL
+    /// <see cref="PaletteCommandSource"/> over it.</summary>
+    internal sealed class FakeCommandHost : ISlateCommandHost
     {
         public WorkspaceViewModel? Workspace => null;
 

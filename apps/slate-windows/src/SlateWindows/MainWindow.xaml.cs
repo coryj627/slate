@@ -19,6 +19,7 @@ public partial class MainWindow : Window
     private readonly VaultLifecycleViewModel _viewModel;
     private readonly WindowPlacementManager _windowPlacement;
     private readonly AccessibilityNotificationDispatcher _announcer;
+    private readonly ShellModalLoopMonitor _modalLoops;
     private IInputElement? _focusBeforeSwitcher;
     private QuickSwitcherViewModel? _observedQuickSwitcher;
     private WorkspaceViewModel? _observedWorkspace;
@@ -26,6 +27,19 @@ public partial class MainWindow : Window
     private bool _quickSwitcherCommitted;
 
     public MainWindow()
+        : this(paletteRecentsStore: null, paletteLane: null)
+    {
+    }
+
+    /// <summary>
+    /// The shipped shell over a palette whose recents file and work lane a
+    /// fact supplies (#1275) — so a hosted fact can park a recents write
+    /// without touching the user's %LOCALAPPDATA% file. Production passes
+    /// neither.
+    /// </summary>
+    internal MainWindow(
+        SlateWindows.Commands.CommandPaletteRecentsStore? paletteRecentsStore,
+        ICommandPaletteWorkLane? paletteLane)
     {
         InitializeComponent();
         // W7-7 PR 8 (R-10, OD-12): the one editor landing this window holds,
@@ -59,7 +73,9 @@ public partial class MainWindow : Window
             // dies silently in production while every fact that injects
             // its own sink stays green. AnnouncementSeamCensus reads
             // this call and fails if either argument goes missing.
-            announceRendered: _announcer.Post);
+            announceRendered: _announcer.Post,
+            paletteRecentsStore: paletteRecentsStore,
+            paletteLane: paletteLane);
         _viewModel.RecentVaultsChanged += ViewModel_RecentVaultsChanged;
         _viewModel.ReturnedToWelcome += ViewModel_ReturnedToWelcome;
         _viewModel.WorkspaceReady += ViewModel_WorkspaceReady;
@@ -76,9 +92,25 @@ public partial class MainWindow : Window
         // is installed here and CanvasAnnouncerCensus pins that it is.
         Canvas.CanvasSurfaceView.ShellOverlayIsOpen = () => OpenModalSurface is not null;
         ObservePalette();
+        // #1275 (codex round 4, the owner's option (a)): every modal loop
+        // over the shell — the unsaved-changes prompt on close, a folder or
+        // file dialog, a WPF ShowDialog — seals the palette for as long as
+        // it runs, so nothing it owns publishes or speaks behind the prompt.
+        _modalLoops = new ShellModalLoopMonitor((UIElement)Content, _viewModel.Palette.SetModalLoop);
+        // #1275 (codex round 6): while sealed, a mnemonic finds no target in
+        // the shell (MainWindow.Seal.cs) — past handled, so a menu item's
+        // own answer cannot hide a candidate from the seal.
+        AddHandler(
+            AccessKeyManager.AccessKeyPressedEvent,
+            new AccessKeyPressedEventHandler(Window_AccessKeyPressed),
+            handledEventsToo: true);
         ObserveSearch();
         RecentVaultJumpList.Apply(_viewModel.RecentVaults);
     }
+
+    /// <summary>The shell's modal-loop monitor, for the facts that drive a
+    /// real dialog over the shell.</summary>
+    internal ShellModalLoopMonitor ModalLoops => _modalLoops;
 
     internal async Task ActivateFromExternalRequestAsync(string? vaultPath)
     {
@@ -125,9 +157,20 @@ public partial class MainWindow : Window
         return Task.FromResult(result == MessageBoxResult.Yes);
     }
 
+    /// <summary>
+    /// The unsaved-changes prompt's display boundary: the native message
+    /// box, and nothing else (#1298). CI's Windows session is
+    /// non-interactive, where a native box never becomes a window a fact
+    /// could find and close, so a hosted fact replaces only this call — the
+    /// prompt's wiring into the lifecycle and its answer mapping still run.
+    /// Production never sets it.
+    /// </summary>
+    internal Func<Window, string, string, MessageBoxButton, MessageBoxImage, MessageBoxResult, MessageBoxResult> ShowUnsavedClosePrompt { get; set; } =
+        MessageBox.Show;
+
     private VaultCloseDecision ConfirmUnsavedClose()
     {
-        MessageBoxResult result = MessageBox.Show(
+        MessageBoxResult result = ShowUnsavedClosePrompt(
             this,
             "One or more notes have unsaved changes.\n\n" +
             "Choose Yes to save all changes, No to discard them, or Cancel to keep the vault open.",
@@ -404,6 +447,11 @@ public partial class MainWindow : Window
             workspace.CanvasNodeLandingRequested += Workspace_CanvasNodeLandingRequested;
             workspace.PropertyChanged += Workspace_CanvasSheetChanged;
             workspace.PropertyChanged += ModalSource_PropertyChanged;
+            // #1275: the workspace's message boxes are owned by the shell,
+            // so they disable it — the signal the modal-loop monitor reads —
+            // even when the shell is not the active window.
+            workspace.HistoryAlert = (title, message) =>
+                WorkspaceViewModel.ShowHistoryAlert(this, title, message);
             WireWorkspaceProperties(workspace);
             WireWorkspaceCitations(workspace);
             WireWorkspaceBases(workspace);
@@ -740,9 +788,20 @@ public partial class MainWindow : Window
     /// overlay or sheet, WPF menu mode, the Files filter field with a
     /// filter or tag scope active, or the inline rename box while a row is
     /// being renamed there — and that owner takes the key through its own
-    /// route instead (#1272).</summary>
+    /// route instead (#1272). While the palette is sealed the seal's
+    /// admission takes every key first (#1275, <see cref="SealTakes"/>).</summary>
     private void Window_PreviewKeyDown(object sender, KeyEventArgs e)
     {
+        // #1275 (codex round 6, owner decision): the seal's one admission,
+        // ahead of every route below — the palette's own keys, its
+        // carve-outs, the sheets, the shell chords — so none of them needs
+        // a seal check of its own, and none can act while a command the
+        // palette ran is still running or a prompt is up.
+        if (SealTakes(e))
+        {
+            return;
+        }
+
         ModifierKeys modifiers = Keyboard.Modifiers;
 
         // The palette is modal: while it is open it owns the keyboard, so
@@ -773,7 +832,9 @@ public partial class MainWindow : Window
             // dispatch retires the palette, AppState.swift:1980-1989)
             // nor a refusal announcement. The admission inside the
             // workspace open takes the DismissPaletteThenOpen arm,
-            // which retires the palette with its focus lineage.
+            // which retires the palette with its focus lineage. A sealed
+            // palette never gets here (#1275): the seal's admission at the
+            // top of this route took the chord.
             if (modifiers == (ModifierKeys.Control | ModifierKeys.Shift) && e.Key == Key.N)
             {
                 _viewModel.Workspace?.OpenTemplatePicker();
@@ -872,6 +933,11 @@ public partial class MainWindow : Window
             // ON TOP of an open Quick Open — leaving two IsDialog surfaces
             // and two hit-test scrims live while Quick Open's key handler
             // sits unreachable behind this branch.
+            //
+            // A sealed palette does not open (contract 28 T1″), and clearing
+            // the way first would dismiss Quick Open or Search for an open
+            // that is then refused — so the seal's admission at the top of
+            // this route takes the chord before this branch (#1275).
             if (TryClearTheWayForThePalette())
             {
                 _viewModel.Palette.Open();
@@ -1837,6 +1903,7 @@ public partial class MainWindow : Window
         ObserveWorkspace(null);
         ObserveFileSidebar(null);
         _editorLandings.Dispose();
+        _modalLoops.Dispose();
         _viewModel.Dispose();
     }
 

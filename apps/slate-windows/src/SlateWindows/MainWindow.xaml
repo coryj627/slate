@@ -16,6 +16,11 @@
         Background="{DynamicResource Slate.WindowBackgroundBrush}"
         Foreground="{DynamicResource Slate.TextBrush}"
         PreviewKeyDown="Window_PreviewKeyDown"
+        PreviewKeyUp="Window_PreviewKeyUp"
+        PreviewTextInput="Window_PreviewTextInput"
+        PreviewMouseDown="Window_PreviewMouseDown"
+        PreviewMouseUp="Window_PreviewMouseUp"
+        PreviewMouseWheel="Window_PreviewMouseWheel"
         SourceInitialized="Window_SourceInitialized"
         Closing="Window_Closing"
         Closed="Window_Closed">
