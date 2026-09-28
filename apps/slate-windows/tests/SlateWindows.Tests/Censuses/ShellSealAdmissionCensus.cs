@@ -76,6 +76,22 @@ public sealed class ShellSealAdmissionCensus
             + "held by CommandPaletteTests.AClickOnAListsEmptyAreaMovesNoKeysUnderTheSeal",
     };
 
+    /// <summary>Class handlers for a keyboard FOCUS change, each reviewed. A
+    /// focus change is not an input the admission takes: under the seal no
+    /// key or press reaches the shell to move focus, so what these see is a
+    /// change the shell itself made — a running command's rebuild taking the
+    /// focused element away — and they land the keys, as they must then
+    /// too.</summary>
+    private static readonly Dictionary<(string File, string RoutedEvent), string> ClassHandlerAllowed = new()
+    {
+        [("RegionFocusGuard.cs", "Keyboard.GotKeyboardFocusEvent")] =
+            "W7-7 PR 4b's guard (R-5, S3): records the scopes the focused element is in",
+        [("RegionFocusGuard.cs", "Keyboard.PreviewGotKeyboardFocusEvent")] =
+            "W7-7 PR 4b's guard: lands keys stranded by an element that went away, inside WPF's re-evaluation",
+        [("RegionFocusGuard.cs", "Keyboard.PreviewLostKeyboardFocusEvent")] =
+            "W7-7 PR 4b's guard: tells a direct focus request from WPF's re-evaluation",
+    };
+
     private sealed record Unit(string Name, CompilationUnitSyntax Root);
 
     [Fact]
@@ -203,6 +219,7 @@ public sealed class ShellSealAdmissionCensus
     [InlineData("double-click-override", "class Other : ListBox { protected override void OnMouseDoubleClick(MouseButtonEventArgs e) => Run(); }")]
     [InlineData("click-count-read", "class Other { void Pressed(object s, MouseButtonEventArgs e) { if (e.ClickCount == 2) Run(); } }")]
     [InlineData("reviewed-bubble-past-handled", "class SelectorFocus { static void M() { EventManager.RegisterClassHandler(typeof(ListBox), Mouse.MouseDownEvent, new MouseButtonEventHandler(X), handledEventsToo: true); } }")]
+    [InlineData("focus-allowance-other-input", "class RegionFocusGuard { static void M() { EventManager.RegisterClassHandler(typeof(Window), Keyboard.PreviewKeyDownEvent, new KeyEventHandler(X), true); } }")]
     public void EachDetectorCatchesItsBypass(string bypass, string source)
     {
         const string Handlers = """
@@ -236,6 +253,7 @@ public sealed class ShellSealAdmissionCensus
             "second-seal-read" => SealReaderOffenders([handlers, new Unit("MainWindow.Extra.cs", Parse(source))]),
             "double-click-override" or "click-count-read" => DoubleClickOffenders([new Unit("Other.cs", Parse(source))]),
             "reviewed-bubble-past-handled" => PastHandledOffenders([new Unit("SelectorFocus.cs", Parse(source))]),
+            "focus-allowance-other-input" => PastHandledOffenders([new Unit("RegionFocusGuard.cs", Parse(source))]),
             _ => PastHandledOffenders([new Unit("Other.cs", Parse(source))]),
         };
         Assert.True(found.Count > 0, $"the census missed a planted {bypass} bypass");
@@ -452,7 +470,9 @@ public sealed class ShellSealAdmissionCensus
                     bool aReviewedBubble = BubblingClassHandlersAllowed.ContainsKey((unit.Name, routed))
                         && !routed.Contains(".Preview", StringComparison.Ordinal)
                         && arguments.Count == 3;
-                    if (!IsKnownNonInput(routed) && !theDoubleClickGate && !aReviewedBubble)
+                    bool aReviewedFocusChange = ClassHandlerAllowed.ContainsKey((unit.Name, routed))
+                        && routed.EndsWith("KeyboardFocusEvent", StringComparison.Ordinal);
+                    if (!IsKnownNonInput(routed) && !theDoubleClickGate && !aReviewedBubble && !aReviewedFocusChange)
                     {
                         offenders.Add($"{unit.Name}:{Line(invocation)} registers a class handler for {routed} "
                             + "(a class handler runs before the window's own; name it here only if it carries no input)");

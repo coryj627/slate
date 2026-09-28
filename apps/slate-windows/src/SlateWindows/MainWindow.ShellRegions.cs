@@ -7,6 +7,7 @@ using System.Windows.Controls;
 using System.Windows.Controls.Primitives;
 using System.Windows.Input;
 using System.Windows.Media;
+using System.Windows.Threading;
 
 namespace SlateWindows;
 
@@ -329,17 +330,22 @@ public partial class MainWindow : IShellRegionHost
     /// "Outline panel." on top repeated it, one arrow, two utterances. The
     /// line stays silent on the arrow route only (OD-11(d)'s rule for a radio
     /// group's arrow); a reveal, a command, a click and the ring still speak
-    /// it.
+    /// it. The flag lasts the key press: the list handles the arrow — its
+    /// selection, the leaf switch — inside the same input dispatch, and the
+    /// flag is cleared at Input priority, after it (never by a listener past
+    /// handled: #1275's seal, ShellSealAdmissionCensus).
     /// </summary>
-    private void WatchRailArrows()
-    {
+    private void WatchRailArrows() =>
         RightPaneLeavesList.PreviewKeyDown += (_, e) =>
+        {
             _railArrow = e.KeyboardDevice.Modifiers == ModifierKeys.None
                 && e.Key is Key.Up or Key.Down or Key.Left or Key.Right or Key.Home or Key.End or Key.PageUp or Key.PageDown
                 && e.OriginalSource is ListBoxItem;
-        RightPaneLeavesList.AddHandler(
-            KeyDownEvent, new KeyEventHandler((_, _) => _railArrow = false), handledEventsToo: true);
-    }
+            if (_railArrow)
+            {
+                _ = Dispatcher.BeginInvoke(() => _railArrow = false, DispatcherPriority.Input);
+            }
+        };
 
     private bool LandAfterLoadMore()
     {
