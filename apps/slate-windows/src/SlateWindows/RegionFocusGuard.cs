@@ -173,9 +173,12 @@ internal static class RegionFocusGuard
 
     private static void Guarded(object sender, KeyboardFocusChangedEventArgs e)
     {
+        // The holder may be a content element — a reading view's Hyperlink
+        // takes the keys by Tab — as well as a visual (PR 4b codex round 2,
+        // F1: Ctrl+W on a pane's last tab, the keys on a link).
         if (_landing
             || e.Handled
-            || e.OldFocus is not UIElement old
+            || e.OldFocus is not IInputElement old
             || !IsStranded(old)
             || e.NewFocus is not UIElement proposed
             || !ScopesAtFocus.TryGetValue(old, out UIElement[]? scopes)
@@ -196,14 +199,17 @@ internal static class RegionFocusGuard
             return;
         }
 
-        if (direct && proposed is ItemsControl { HasItems: true } container && PresentationSource.FromVisual(old) is null)
+        if (direct
+            && proposed is ItemsControl { HasItems: true } container
+            && old is UIElement row
+            && PresentationSource.FromVisual(row) is null)
         {
             // A removed row's own hand-over to its list, inside the layout
             // that removed it: declined — the keys stay on the removed row —
             // and landed once the rows are laid out, ahead of WPF's
             // re-evaluation at Input.
             e.Handled = true;
-            _ = old.Dispatcher.InvokeAsync(
+            _ = row.Dispatcher.InvokeAsync(
                 () =>
                 {
                     if (ReferenceEquals(Keyboard.FocusedElement, old) || Keyboard.FocusedElement is null or Window)
@@ -262,12 +268,7 @@ internal static class RegionFocusGuard
                 Func<bool>? land = IsLive(scope)
                     ? Landings.TryGetValue(scope, out Func<bool>? own) ? own : null
                     : GoneLandings.TryGetValue(scope, out Func<bool>? replaced) ? replaced : null;
-                if (land is not null
-                    && land()
-                    && Keyboard.FocusedElement is UIElement now
-                    && !ReferenceEquals(now, token)
-                    && !IsStranded(now)
-                    && now is not Window)
+                if (land is not null && land() && Landed(token))
                 {
                     return true;
                 }
@@ -286,20 +287,23 @@ internal static class RegionFocusGuard
     /// them stranded first (a publication keeper resolves at Loaded, ahead
     /// of WPF's re-evaluation).</summary>
     /// <returns>Whether they are now on a live element.</returns>
-    internal static bool LandStranded(UIElement old) =>
+    internal static bool LandStranded(IInputElement old) =>
         ScopesAtFocus.TryGetValue(old, out UIElement[]? scopes)
             ? Land(old, proposed: null, scopes)
-            : StrandedLandings.TryGetValue(old, out Func<bool>? own) && own() && Landed(old);
+            : old is UIElement element && StrandedLandings.TryGetValue(element, out Func<bool>? own) && own() && Landed(old);
 
     /// <summary>Lands the keys stranded on <paramref name="old"/>; true when
     /// they are now on a live element other than it.</summary>
-    private static bool Land(UIElement old, UIElement? proposed, UIElement[] scopes)
+    private static bool Land(IInputElement old, UIElement? proposed, UIElement[] scopes)
     {
         bool outer = _landing;
         _landing = true;
         try
         {
-            if (StrandedLandings.TryGetValue(old, out Func<bool>? own) && own() && Landed(old))
+            if (old is UIElement element
+                && StrandedLandings.TryGetValue(element, out Func<bool>? own)
+                && own()
+                && Landed(old))
             {
                 return true;
             }
@@ -362,16 +366,45 @@ internal static class RegionFocusGuard
 
     /// <summary>The keys are on a live element other than the stranded
     /// one.</summary>
-    private static bool Landed(UIElement old) =>
-        Keyboard.FocusedElement is UIElement now && !ReferenceEquals(now, old) && !IsStranded(now) && now is not Window;
+    private static bool Landed(IInputElement old) =>
+        Keyboard.FocusedElement is { } now && !ReferenceEquals(now, old) && !IsStranded(now) && now is not Window;
 
     /// <summary>Whether <paramref name="element"/> can no longer hold the
-    /// keys: out of the tree, hidden, disabled or unfocusable.</summary>
-    private static bool IsStranded(UIElement element) =>
-        PresentationSource.FromVisual(element) is null
-        || !element.IsVisible
-        || !element.IsEnabled
-        || !element.Focusable;
+    /// keys: a visual out of the tree, hidden, disabled or unfocusable; a
+    /// content element (a Hyperlink) disabled or unfocusable, or whose host —
+    /// its nearest visual — is out of the tree, hidden or disabled.</summary>
+    /// <remarks>WPF re-evaluates a content element's keys when it is
+    /// disabled, made unfocusable or taken out of the tree with its host;
+    /// a host merely COLLAPSED under them raises nothing on the element, so
+    /// no guard hears it (contract 40, PR 4b's record).</remarks>
+    private static bool IsStranded(IInputElement element) => element switch
+    {
+        UIElement visual => PresentationSource.FromVisual(visual) is null
+            || !visual.IsVisible
+            || !visual.IsEnabled
+            || !visual.Focusable,
+        ContentElement content => !content.IsEnabled
+            || !content.Focusable
+            || HostOf(content) is not { } host
+            || PresentationSource.FromVisual(host) is null
+            || !host.IsVisible
+            || !host.IsEnabled,
+        _ => false,
+    };
+
+    /// <summary>The nearest visual above <paramref name="content"/>.</summary>
+    private static UIElement? HostOf(ContentElement content)
+    {
+        for (DependencyObject? current = ParentOf(content); current is not null; current = ParentOf(current))
+        {
+            if (current is UIElement host)
+            {
+                return host;
+            }
+        }
+
+        return null;
+    }
 
     private static bool IsLive(UIElement scope) =>
         scope.IsVisible && scope.IsEnabled && PresentationSource.FromVisual(scope) is not null;

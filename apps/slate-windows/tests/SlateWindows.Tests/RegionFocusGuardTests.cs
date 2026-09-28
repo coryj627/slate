@@ -62,6 +62,34 @@ public sealed class RegionFocusGuardTests
         Assert.Equal([host.Home], host.FocusChanges);
     });
 
+    /// <summary>A link holding the keys — a content element, not a visual
+    /// (the reading view's Hyperlinks take the keys by Tab) — whose document
+    /// is taken out of the tree: the keys go to the scope's landing, once,
+    /// never to the window (PR 4b codex round 2, F1).</summary>
+    [Fact]
+    public void ALinkWhoseDocumentGoesAwayLandsThroughTheScope() => RunSta(() =>
+    {
+        using var host = new Host();
+        var link = new System.Windows.Documents.Hyperlink(new System.Windows.Documents.Run("A link"));
+        var document = new RichTextBox
+        {
+            IsDocumentEnabled = true,
+            IsReadOnly = true,
+            Document = new System.Windows.Documents.FlowDocument(new System.Windows.Documents.Paragraph(link)),
+        };
+        host.Content.Children.Add(document);
+        host.Window.UpdateLayout();
+        Assert.True(link.Focus());
+        Assert.Same(link, Keyboard.FocusedElement);
+        host.Forget();
+
+        host.Content.Children.Remove(document);
+        PumpedDispatcher.Drain();
+
+        Assert.Same(host.Home, Keyboard.FocusedElement);
+        Assert.Equal([host.Home], host.FocusChanges);
+    });
+
     /// <summary>The element's own stranded landing comes first (the
     /// review's "Load more", the sweep's G4).</summary>
     [Fact]
