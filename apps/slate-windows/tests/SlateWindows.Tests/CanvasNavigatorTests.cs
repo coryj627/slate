@@ -5416,6 +5416,40 @@ public sealed class CanvasNavigatorTests : IDisposable
         }
     });
 
+    /// <summary>
+    /// W7-7 R-10 over contract 34 D15, reconciled with #1271's origin rule
+    /// (D4): a landing on the Visual board puts the reader ON the board with
+    /// its card seated, so the card comes into view as a move made on the
+    /// board — with Follow Selection OFF too, where a move made elsewhere
+    /// would leave the board where it was.
+    /// </summary>
+    [Fact]
+    public void ALandingOnTheBoardRevealsItsCardWithFollowSelectionOff() => RunSta(() =>
+    {
+        CanvasDocumentViewModel document = Open("board.canvas");
+        using HostedWindow host = HostBoard(document, out CanvasSurfaceView surface);
+        var owner = new object();
+        surface.DataContext = owner;
+        CanvasRendererView board = surface.VisualForTests;
+        _ = surface.ViewportCommand(CanvasViewportVerb.ToggleFollowSelection);
+        Assert.False(board.Engine.CommittedViewport.FollowSelection, "premise: the board still follows the selection.");
+        const string Target = "loose";
+        document.SeatSelectionSilently("question");
+        ParkJustPastTheRightEdge(board, Target);
+        Assert.False(InView(board, Target), "premise: the card was already inside the board.");
+
+        document.RequestFocusLanding(owner, Target);
+        Drain(document);
+
+        Assert.Equal(Target, document.Selection.Selected);
+        Assert.Null(document.FocusRequest);
+        Assert.True(board.IsKeyboardFocusWithin, "the landing did not put the reader on the board");
+        Assert.True(
+            InView(board, Target),
+            $"the landing left \"{Target}\" outside the board with Follow Selection off: a landing puts the "
+            + "reader on the board, so its card comes into view as a move made there (D15, D4).");
+    });
+
     /// <summary>One canvas in two panes, both on the Visual board (the
     /// projection is the document's), each board installed, and pane A's
     /// board holding the keys — every premise with its leg named.</summary>
