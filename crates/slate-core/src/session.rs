@@ -9879,6 +9879,10 @@ fn scan_vault(
     // `write` reports a misleading conflict and `--create` can't
     // recreate it).
     let mut seen_files: std::collections::HashSet<String> = std::collections::HashSet::new();
+    // The listed files whose indexing failed (W7-7 PR 7, codex PR 7 round 5
+    // fix 2): the walk already counted each, so the canvas pass must not
+    // count a board among them again. Bounded by the scan's error count.
+    let mut walk_failed: std::collections::HashSet<String> = std::collections::HashSet::new();
     let mut file_meta_batch = crate::file_meta_db::FileMetaScanBatch::new();
     // A failed directory listing hides its whole subtree from the walk;
     // pruning on a partial view would evict live rows wholesale. Track
@@ -9960,6 +9964,7 @@ fn scan_vault(
                         // replay is no longer trustworthy (#550).
                         graph_sink.poison();
                         report.record_error(format!("{path}: {e}"));
+                        walk_failed.insert(path.clone());
                     }
                     indexed_count += 1;
                     if let Some(l) = listener {
@@ -10090,8 +10095,15 @@ fn scan_vault(
     // derivation is milliseconds at the 2,000-node budget, so this
     // stays O(canvases), not O(vault).
     cancel_point!("canvas");
-    let canvases =
-        reindex_all_canvases(&tx, provider, large_file_refuse_bytes, cancel, &mut report);
+    let refreshed = |path: &str| seen_files.contains(path) && !walk_failed.contains(path);
+    let canvases = reindex_all_canvases(
+        &tx,
+        provider,
+        large_file_refuse_bytes,
+        cancel,
+        &mut report,
+        &refreshed,
+    );
     cancelled_in_phase!(canvases);
     if let Err(e) = canvases {
         report.record_error(format!("canvas index: {e}"));
@@ -20568,13 +20580,19 @@ fn purge_canvas_rows(tx: &rusqlite::Transaction, file_id: i64) -> Result<(), Vau
 
 /// Post-scan canvas pass: (re)derive index rows for every `.canvas`
 /// file in the vault. See the call site in `scan_vault` for why this
-/// runs after the walk and unconditionally.
+/// runs after the walk and unconditionally. `refreshed_this_scan` says
+/// whether the walk listed a board AND indexed it without error: only such
+/// a board's read failure here is a new error (W7-7 PR 7, codex PR 7 round
+/// 5 fix 2) — one the walk failed on is already counted, and one it never
+/// listed (deleted outside Slate; its row survives a partial scan) is not
+/// on disk to be read.
 fn reindex_all_canvases(
     tx: &rusqlite::Transaction,
     provider: &dyn VaultProvider,
     large_file_refuse_bytes: u64,
     cancel: &CancelToken,
     report: &mut ScanReport,
+    refreshed_this_scan: &dyn Fn(&str) -> bool,
 ) -> Result<(), VaultError> {
     let canvases: Vec<(i64, String, i64)> = {
         let mut stmt = tx.prepare(
@@ -20601,9 +20619,12 @@ fn reindex_all_canvases(
             // File vanished between walk and pass, or unreadable: its rows
             // stay for the next clean scan, and the failure is COUNTED
             // (W7-7 PR 7, codex PR 7 round 4 finding 4) — the scan is
-            // incomplete, never "complete" over stale card rows.
+            // incomplete, never "complete" over stale card rows — once per
+            // board (round 5, fix 2): only for a board the walk refreshed.
             Err(e) => {
-                report.record_error(format!("{path}: canvas pass read: {e}"));
+                if refreshed_this_scan(&path) {
+                    report.record_error(format!("{path}: canvas pass read: {e}"));
+                }
                 continue;
             }
         };

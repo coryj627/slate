@@ -269,7 +269,10 @@ struct FaultingProvider {
     stat_not_found: Option<String>,
     read_fails: Option<String>,
     /// Round 5 (codex PR 7 round 4, finding 4): once armed, every read of
-    /// a path with this extension fails — the walk read it, the tail can't.
+    /// a path with this extension fails. Armed at the canvas pass, it fails
+    /// only the pass's reads: the walk fast-paths an unchanged board (its
+    /// tuple and completion marker match) and never reads it, so the pass
+    /// is the one reader — codex round 5 corrected "the walk read it".
     armed_read_fails: Option<(&'static str, Arc<std::sync::atomic::AtomicBool>)>,
 }
 
@@ -1167,6 +1170,66 @@ fn a_board_the_canvas_pass_cannot_read_makes_the_scan_incomplete() {
             .error_samples
             .iter()
             .all(|sample| sample.contains(".canvas")),
+        "{report:?}"
+    );
+}
+
+const ONE_CARD: &[u8] =
+    br#"{"nodes":[{"id":"n1","type":"text","text":"Card","x":0,"y":0,"width":10,"height":10}],"edges":[]}"#;
+
+/// Codex PR 7 round 5 (fix 2): a board whose new bytes the walk cannot read
+/// — the walk's slow path fails on it, the canvas pass fails on it again —
+/// is ONE error: the pass counts only boards the walk refreshed this scan.
+#[test]
+fn a_persistently_unreadable_board_is_one_error() {
+    let (tmp, session) = make_vault(|p| {
+        p.write_file("board.canvas", ONE_CARD).unwrap();
+        p.write_file("n.md", b"n\n").unwrap();
+    });
+    session.scan_initial(&CancelToken::new()).unwrap();
+    drop(session);
+    std::fs::write(
+        tmp.path().join("board.canvas"),
+        br#"{"nodes":[{"id":"n1","type":"text","text":"Card, rewritten","x":0,"y":0,"width":10,"height":10}],"edges":[]}"#,
+    )
+    .unwrap();
+
+    let mut provider = FaultingProvider::over(tmp.path());
+    provider.read_fails = Some("board.canvas".into());
+    let session = reopen_through(&tmp, provider);
+    let report = rescan(&session);
+
+    assert!(!report.complete, "{report:?}");
+    assert_eq!(report.error_count, 1, "{report:?}");
+}
+
+/// Codex PR 7 round 5 (fix 2): a board deleted outside Slate during a scan
+/// that is partial for another reason (an unreadable note) keeps its row
+/// — a partial scan prunes nothing — and the canvas pass adds no phantom
+/// NotFound for it: the note is the ONE error.
+#[test]
+fn a_board_deleted_during_a_partial_scan_adds_no_error() {
+    let (tmp, session) = make_vault(|p| {
+        p.write_file("board.canvas", ONE_CARD).unwrap();
+        p.write_file("n.md", b"n\n").unwrap();
+    });
+    session.scan_initial(&CancelToken::new()).unwrap();
+    drop(session);
+    std::fs::remove_file(tmp.path().join("board.canvas")).unwrap();
+    std::fs::write(tmp.path().join("n.md"), b"n, rewritten\n").unwrap();
+
+    let mut provider = FaultingProvider::over(tmp.path());
+    provider.read_fails = Some("n.md".into());
+    let session = reopen_through(&tmp, provider);
+    let report = rescan(&session);
+
+    assert!(!report.complete, "{report:?}");
+    assert_eq!(report.error_count, 1, "{report:?}");
+    assert!(
+        report
+            .error_samples
+            .iter()
+            .all(|sample| sample.contains("n.md")),
         "{report:?}"
     );
 }
