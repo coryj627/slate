@@ -4,7 +4,6 @@
 using System.Windows;
 using System.Windows.Controls;
 using System.Windows.Data;
-using System.Windows.Threading;
 
 namespace SlateWindows;
 
@@ -20,11 +19,13 @@ namespace SlateWindows;
 /// the picker and closed its calendar after one step.
 /// </summary>
 /// <remarks>
-/// Escape reverts. WPF's DatePicker puts back the day the calendar opened on
-/// AFTER it closes the popup, inside the same key press, so the close's push
-/// waits for the input it came from (Input priority) and then finds the
-/// original day: nothing is written. A close caused by the picker leaving
-/// the tree (its tab closed, its row republished) commits nothing.
+/// Escape reverts: WPF's DatePicker puts back the day the calendar opened on
+/// inside the key press that closes it, and the popup reports its close only
+/// after that, so the push finds the original day and nothing is written —
+/// with the popup's animation and without it
+/// (<c>PropertiesLandingTests.EscapeFromTheCalendarRevertsAndWritesNothing</c>).
+/// A calendar closed with its tab writes nothing
+/// (<c>ACalendarClosedWithItsTabWritesNothing</c>).
 /// </remarks>
 internal static class CalendarCommit
 {
@@ -75,19 +76,11 @@ internal static class CalendarCommit
         }
     }
 
+    /// <summary>The picker's day, pushed to its row: the row's one
+    /// commit.</summary>
     private static void Closed(object? sender, RoutedEventArgs e)
     {
         if (sender is DatePicker picker)
-        {
-            _ = picker.Dispatcher.BeginInvoke(DispatcherPriority.Input, () => Commit(picker));
-        }
-    }
-
-    /// <summary>The picker's day, pushed to its row — unless the picker has
-    /// left the tree, or its calendar opened again meanwhile.</summary>
-    private static void Commit(DatePicker picker)
-    {
-        if (!picker.IsDropDownOpen && PresentationSource.FromVisual(picker) is not null)
         {
             BindingOperations.GetBindingExpression(picker, DatePicker.SelectedDateProperty)?.UpdateSource();
         }

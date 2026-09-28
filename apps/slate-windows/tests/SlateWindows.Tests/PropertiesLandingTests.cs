@@ -342,13 +342,24 @@ public sealed class PropertiesLandingTests
     /// <summary>Escape closes the calendar and puts back the day it opened
     /// on — WPF's own DatePicker restores it — so nothing is written, and the
     /// keys stay on the date field.</summary>
-    [Fact]
-    public void EscapeFromTheCalendarRevertsAndWritesNothing() => RunSta(() =>
+    [Theory]
+    [InlineData(true)]
+    [InlineData(false)]
+    public void EscapeFromTheCalendarRevertsAndWritesNothing(bool animated) => RunSta(() =>
     {
         using var host = new ShownShell(("a.md", DatedNote));
         NotePropertiesViewModel properties = OpenProperties(host, rows: 2);
         PropertyRowViewModel due = Row(properties, "due");
         StrongBox<int> writes = CountRepublications(properties);
+        if (!animated)
+        {
+            // With the system's animations off, the calendar's popup closes
+            // at once, inside the key press, before the picker restores the
+            // day it opened on.
+            Assert.IsType<Popup>(RowControl<DatePicker>(host, due).Template.FindName("PART_Popup", RowControl<DatePicker>(host, due)))
+                .PopupAnimation = PopupAnimation.None;
+        }
+
         DatePicker picker = OpenCalendar(host, due);
 
         Press(Key.Right);
@@ -409,7 +420,10 @@ public sealed class PropertiesLandingTests
 
         host.Workspace.CloseActiveTabCommand.Execute(null);
         PumpedDispatcher.Drain();
-        PumpedDispatcher.PumpUntil(() => properties.IsLoading, TimeSpan.FromSeconds(2));
+        // A write, had the close committed, lands off the dispatcher: give
+        // it time to reach the disk before reading it.
+        PumpedDispatcher.PumpUntil(
+            () => !host.Read("a.md").Contains("due: 2026-09-10", StringComparison.Ordinal), TimeSpan.FromSeconds(3));
         PumpedDispatcher.Drain();
 
         Assert.False(picker.IsDropDownOpen);
