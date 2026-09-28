@@ -1476,30 +1476,13 @@ public sealed class PumpedSaveReentrancyTests
 
         /// <summary>DeleteFile routes through the system trash, whose COM
         /// init needs an STA thread (the app's UI thread is one; the xunit
-        /// thread is not — the HistoryPanelTests precedent). The Deleted
-        /// event still arrives through the lifecycle's listener.</summary>
+        /// thread is not — the HistoryPanelTests precedent), run through the
+        /// shared runner. The Deleted event still arrives through the
+        /// lifecycle's listener.</summary>
         private void DeleteOnSta(string path)
         {
             VaultSession session = Session;
-            Exception? failure = null;
-            var thread = new Thread(() =>
-            {
-                try
-                {
-                    session.DeleteFile(path);
-                }
-                catch (Exception exception)
-                {
-                    failure = exception;
-                }
-            });
-            thread.SetApartmentState(ApartmentState.STA);
-            thread.Start();
-            thread.Join();
-            if (failure is not null)
-            {
-                throw failure;
-            }
+            StaThread.Run(() => session.DeleteFile(path));
         }
 
         private void MaybePark()
