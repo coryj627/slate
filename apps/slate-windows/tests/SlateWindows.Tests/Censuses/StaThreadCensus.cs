@@ -1,8 +1,6 @@
 // Copyright (C) 2026 Cory Joseph
 // SPDX-License-Identifier: AGPL-3.0-or-later
 
-using System.Runtime.InteropServices;
-using System.Text;
 using System.Windows;
 using System.Windows.Controls;
 using System.Windows.Interop;
@@ -83,16 +81,19 @@ public sealed class StaThreadCensus
 
     /// <summary>The runner, measured where the leak lives: the window
     /// classes this process has registered. Five facts that show a window,
-    /// orphan an HwndSource and close neither leave no class behind — the
-    /// old runner left every one of them registered.</summary>
+    /// orphan an HwndSource and close neither leave not one class carrying
+    /// their thread's name — the old runner left every one of them
+    /// registered. Inside each fact the same witness first sees the classes
+    /// (a dispatcher's, a window's, a hidden owner's, the orphan's), so the
+    /// zero after it is the runner's doing, not a witness that sees nothing.</summary>
     [Fact]
     public void FactsThatLeaveTheirWindowsOpenLeaveNoWindowClassBehind()
     {
         const int facts = 5;
-        int before = RegisteredWrapperClasses();
+        var threads = new List<(string Name, int Registered)>();
         for (int fact = 0; fact < facts; fact++)
         {
-            StaThread.Run(() =>
+            threads.Add(StaThread.Run(() =>
             {
                 var window = new Window
                 {
@@ -108,12 +109,15 @@ public sealed class StaThreadCensus
                 window.Show();
                 window.UpdateLayout();
                 _ = new HwndSource(0, 0, 0, 0, 0, "orphaned source", IntPtr.Zero);
-            });
+                string name = Thread.CurrentThread.Name!;
+                return (name, WindowClasses.RegisteredFor(name).Count);
+            }));
         }
-        int grown = RegisteredWrapperClasses() - before;
-        Assert.True(
-            grown < facts,
-            $"{facts} facts left {grown} WPF window classes registered; StaThread should leave none.");
+        Assert.All(threads, thread => Assert.True(
+            thread.Registered >= 4,
+            $"premise: {thread.Name} registered {thread.Registered} WPF classes while its window was open, expected at least four"));
+        string[] left = [.. threads.SelectMany(thread => WindowClasses.RegisteredFor(thread.Name))];
+        Assert.True(left.Length == 0, $"{left.Length} window class(es) outlived their fact's thread: {string.Join(", ", left)}");
     }
 
     private static List<(string File, string Member, int Line)> ApartmentStateSites()
@@ -154,60 +158,4 @@ public sealed class StaThreadCensus
         }
         return sites;
     }
-
-    /// <summary>The WPF window classes (<c>HwndWrapper[…]</c>) registered
-    /// by THIS process. Every class name lives in the session's atom table,
-    /// which other processes share — a concurrent test host's classes carry
-    /// the same prefix — so each name counts only when
-    /// <c>GetClassInfoEx</c> finds it registered against this process's
-    /// module, the instance WPF registers them under.</summary>
-    private static int RegisteredWrapperClasses()
-    {
-        IntPtr module = GetModuleHandleW(IntPtr.Zero);
-        int count = 0;
-        var name = new StringBuilder(512);
-        for (uint atom = 0xC000; atom <= 0xFFFF; atom++)
-        {
-            name.Clear();
-            if (GetClipboardFormatNameW(atom, name, name.Capacity) > 0
-                && name.ToString().StartsWith("HwndWrapper[", StringComparison.Ordinal))
-            {
-                var info = new WindowClassInfo { Size = Marshal.SizeOf<WindowClassInfo>() };
-                if (GetClassInfoExW(module, name.ToString(), ref info) != 0)
-                {
-                    count++;
-                }
-            }
-        }
-        return count;
-    }
-
-    /// <summary>WNDCLASSEXW with its string members as raw pointers: the
-    /// system writes them, and a marshalled string field would free memory
-    /// it never allocated.</summary>
-    [StructLayout(LayoutKind.Sequential)]
-    private struct WindowClassInfo
-    {
-        public int Size;
-        public int Style;
-        public IntPtr WindowProcedure;
-        public int ClassExtra;
-        public int WindowExtra;
-        public IntPtr Instance;
-        public IntPtr Icon;
-        public IntPtr Cursor;
-        public IntPtr Background;
-        public IntPtr MenuName;
-        public IntPtr ClassName;
-        public IntPtr SmallIcon;
-    }
-
-    [DllImport("user32.dll", CharSet = CharSet.Unicode)]
-    private static extern int GetClipboardFormatNameW(uint format, StringBuilder name, int maxCount);
-
-    [DllImport("user32.dll", CharSet = CharSet.Unicode)]
-    private static extern int GetClassInfoExW(IntPtr instance, string className, ref WindowClassInfo info);
-
-    [DllImport("kernel32.dll")]
-    private static extern IntPtr GetModuleHandleW(IntPtr moduleName);
 }

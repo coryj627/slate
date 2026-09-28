@@ -88,7 +88,7 @@ internal static class PumpedDispatcher
                     // A broken dispatcher; the thread message below still
                     // wakes the loop, which then sees the frame ended.
                 }
-                _ = PostThreadMessageW(thread, 0 /* WM_NULL */, IntPtr.Zero, IntPtr.Zero);
+                _ = WakeThread(thread);
             },
             null,
             bound,
@@ -104,8 +104,15 @@ internal static class PumpedDispatcher
         }
     }
 
+    /// <summary>The watchdog's direct wake of a thread blocked in its message
+    /// loop: a WM_NULL thread message, which needs no window. A seam, so a
+    /// witness can see the wake happen and succeed; answers whether it was
+    /// posted.</summary>
+    internal static Func<uint, bool> WakeThread { get; set; } =
+        threadId => PostThreadMessageW(threadId, 0 /* WM_NULL */, IntPtr.Zero, IntPtr.Zero);
+
     [System.Runtime.InteropServices.DllImport("kernel32.dll")]
-    private static extern uint GetCurrentThreadId();
+    internal static extern uint GetCurrentThreadId();
 
     [System.Runtime.InteropServices.DllImport("user32.dll")]
     private static extern bool PostThreadMessageW(uint threadId, uint message, IntPtr wParam, IntPtr lParam);

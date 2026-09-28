@@ -1,11 +1,8 @@
 // Copyright (C) 2026 Cory Joseph
 // SPDX-License-Identifier: AGPL-3.0-or-later
 
-using System.ComponentModel;
 using System.Globalization;
 using System.Runtime.ExceptionServices;
-using System.Runtime.InteropServices;
-using System.Text;
 using System.Windows.Threading;
 
 namespace SlateWindows.Tests;
@@ -48,10 +45,14 @@ namespace SlateWindows.Tests;
 /// </para>
 /// <para>
 /// Bounded and fail-fast. The thread is a background thread, so a wedged
-/// body can never hold the test host open past the run; on timeout its
-/// dispatcher is shut down so a pump wedged in a frame unwinds through the
-/// body's own disposals, and the fact fails here instead of at the job's
-/// limit.
+/// body can never hold the test host open past the run. On timeout its
+/// dispatcher is told to shut down, so a pump wedged in a frame unwinds
+/// through the body's own disposals, and the fact fails here instead of at
+/// the job's limit: a body that unwinds within <see cref="UnwindGrace"/>
+/// still has its classes unregistered; one that does not is running beside
+/// every later fact, so <see cref="LeakedDispatcherGuardAttribute"/> fails
+/// each of them (<see cref="Wedged"/>) until it ends, and then frees its
+/// classes.
 /// </para>
 /// </remarks>
 internal static class StaThread
@@ -59,15 +60,22 @@ internal static class StaThread
     /// <summary>The bound a caller that names none gets.</summary>
     internal static readonly TimeSpan DefaultTimeout = TimeSpan.FromMinutes(2);
 
+    /// <summary>How long a timed-out body gets to unwind once its dispatcher
+    /// has been told to shut down.</summary>
+    internal static readonly TimeSpan UnwindGrace = TimeSpan.FromSeconds(10);
+
     /// <summary>Every fact thread's name starts with this; the rest is a
     /// sequence number, so the thread's window classes are its alone.</summary>
     internal const string ThreadNamePrefix = "sta-fact-";
+
+    private static readonly List<(string Name, Func<bool> Ended, string What)> s_wedged = [];
 
     private static int s_sequence;
 
     /// <summary>Run <paramref name="body"/> on a fresh STA thread, unregister
     /// the window classes it leaves behind, and rethrow whatever it threw.</summary>
-    internal static void Run(Action body, TimeSpan? timeout = null, string? timeoutMessage = null) =>
+    internal static void Run(
+        Action body, TimeSpan? timeout = null, string? timeoutMessage = null, TimeSpan? unwindGrace = null) =>
         Run<object?>(
             () =>
             {
@@ -75,17 +83,20 @@ internal static class StaThread
                 return null;
             },
             timeout,
-            timeoutMessage);
+            timeoutMessage,
+            unwindGrace);
 
-    /// <summary><see cref="Run(Action, TimeSpan?, string?)"/> under
+    /// <summary><see cref="Run(Action, TimeSpan?, string?, TimeSpan?)"/> under
     /// <see cref="PumpedDispatcher.Run"/>: the body's documents capture the
     /// thread's dispatcher as their owner context.</summary>
     internal static void RunPumped(Action body, TimeSpan? timeout = null, string? timeoutMessage = null) =>
         Run(() => PumpedDispatcher.Run(body), timeout, timeoutMessage);
 
     /// <summary>Run <paramref name="body"/> on a fresh STA thread and answer
-    /// its result once the window classes it leaves behind are unregistered.</summary>
-    internal static T Run<T>(Func<T> body, TimeSpan? timeout = null, string? timeoutMessage = null)
+    /// its result once the window classes it leaves behind are unregistered.
+    /// <paramref name="unwindGrace"/> overrides <see cref="UnwindGrace"/>.</summary>
+    internal static T Run<T>(
+        Func<T> body, TimeSpan? timeout = null, string? timeoutMessage = null, TimeSpan? unwindGrace = null)
     {
         T result = default!;
         ExceptionDispatchInfo? failure = null;
@@ -116,12 +127,20 @@ internal static class StaThread
             {
                 Dispatcher.FromThread(started)?.BeginInvokeShutdown(DispatcherPriority.Send);
             }
-            bool unwound = thread.Join(TimeSpan.FromSeconds(10));
+            string what = $"{timeoutMessage ?? "The STA fact timed out."} (thread {name}, bound {limit.TotalSeconds:0.#} s; its dispatcher was told to shut down";
+            if (thread.Join(unwindGrace ?? UnwindGrace))
+            {
+                string? left = WindowClasses.Unregister(name);
+                throw new Xunit.Sdk.XunitException(what + " and the body unwound" + (left is null ? ".)" : "; " + left + ")"));
+            }
+            lock (s_wedged)
+            {
+                s_wedged.Add((name, () => thread.Join(0), timeoutMessage ?? "an STA fact that timed out"));
+            }
             throw new Xunit.Sdk.XunitException(
-                $"{timeoutMessage ?? "The STA fact timed out."} (bound {limit.TotalSeconds:0} s; its dispatcher was shut down"
-                + (unwound ? " and the body unwound.)" : ", but the body has not unwound — a background thread, so it cannot hold the test host open.)"));
+                what + ", but the body has not unwound. It runs on beside the facts after this one, so each of them fails until it ends.)");
         }
-        string? residue = UnregisterWindowClasses(name);
+        string? residue = WindowClasses.Unregister(name);
         failure?.Throw();
         if (residue is not null)
         {
@@ -130,51 +149,38 @@ internal static class StaThread
         return result;
     }
 
-    /// <summary>Unregister every WPF window class the ended thread
-    /// <paramref name="threadName"/> registered, answering a description of
-    /// any that would not go (null when none remain). The class names live
-    /// in the session's atom table, which <c>GetClipboardFormatName</c>
-    /// reads; the classes are this process's, registered under its module.</summary>
-    internal static string? UnregisterWindowClasses(string threadName)
+    /// <summary>The timed-out fact threads still running (null when none
+    /// are): a fact that runs beside one is not isolated, so the leak guard
+    /// fails it. A wedged thread that has since ended is dropped here, and
+    /// its window classes unregistered.</summary>
+    internal static string? Wedged()
     {
-        IntPtr module = GetModuleHandleW(IntPtr.Zero);
-        string marker = ";" + threadName + ";";
-        var refused = new List<string>();
-        var name = new StringBuilder(512);
-        for (uint atom = 0xC000; atom <= 0xFFFF; atom++)
+        var running = new List<string>();
+        var residue = new List<string>();
+        lock (s_wedged)
         {
-            name.Clear();
-            if (GetClipboardFormatNameW(atom, name, name.Capacity) <= 0)
+            for (int i = s_wedged.Count - 1; i >= 0; i--)
             {
-                continue;
-            }
-            string className = name.ToString();
-            if (!className.StartsWith("HwndWrapper[", StringComparison.Ordinal)
-                || !className.Contains(marker, StringComparison.Ordinal)
-                || UnregisterClassW(className, module))
-            {
-                continue;
-            }
-            int error = Marshal.GetLastWin32Error();
-            // ERROR_CLASS_DOES_NOT_EXIST: another test host's class of the
-            // same name, or one already gone — nothing of this process's to free.
-            if (error != 1411)
-            {
-                refused.Add($"{className} ({new Win32Exception(error).Message})");
+                (string name, Func<bool> ended, string what) = s_wedged[i];
+                if (!ended())
+                {
+                    running.Add($"{name} ({what})");
+                    continue;
+                }
+                s_wedged.RemoveAt(i);
+                if (WindowClasses.Unregister(name) is { } left)
+                {
+                    residue.Add(left);
+                }
             }
         }
-        return refused.Count == 0
-            ? null
-            : $"{refused.Count} window class(es) the fact's thread registered would not unregister after it ended — each holds desktop heap for the rest of the run: "
-                + string.Join("; ", refused);
+        if (running.Count == 0 && residue.Count == 0)
+        {
+            return null;
+        }
+        return string.Join(
+            " ",
+            (running.Count == 0 ? [] : new[] { $"An earlier fact's STA thread never unwound after its timeout and is still running beside this fact: {string.Join(", ", running)}." })
+                .Concat(residue));
     }
-
-    [DllImport("user32.dll", CharSet = CharSet.Unicode)]
-    private static extern int GetClipboardFormatNameW(uint format, StringBuilder name, int maxCount);
-
-    [DllImport("user32.dll", CharSet = CharSet.Unicode, SetLastError = true)]
-    private static extern bool UnregisterClassW(string className, IntPtr instance);
-
-    [DllImport("kernel32.dll")]
-    private static extern IntPtr GetModuleHandleW(IntPtr moduleName);
 }
