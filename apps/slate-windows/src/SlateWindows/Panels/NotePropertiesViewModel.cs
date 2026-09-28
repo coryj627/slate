@@ -269,6 +269,7 @@ internal sealed class NotePropertiesViewModel : PanelWorkScheduler
                     property, path, contentHash, _commit, _revertAnnounce, _requestDelete)
                 {
                     Owner = this,
+                    Position = Rows.Count,
                 };
                 if (parkedDrafts.TryGetValue(row.KeyIdentity, out PropertyDraft? parked))
                 {

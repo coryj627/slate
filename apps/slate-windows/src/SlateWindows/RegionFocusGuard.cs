@@ -4,6 +4,7 @@
 using System.Runtime.CompilerServices;
 using System.Windows;
 using System.Windows.Controls;
+using System.Windows.Data;
 using System.Windows.Input;
 using System.Windows.Media;
 using System.Windows.Threading;
@@ -71,6 +72,31 @@ internal static class RegionFocusGuard
     /// <summary>A landing the guard made is not guarded again.</summary>
     [ThreadStatic]
     private static bool _landing;
+
+    /// <summary>The element whose keys a running landing is placing — the
+    /// stranded holder, or a restore's dead token — for a landing that lands
+    /// by what went away (the Properties header's rebuilt lists,
+    /// <see cref="PropertiesLanding"/>); null outside a landing.</summary>
+    [ThreadStatic]
+    private static IInputElement? _holder;
+
+    internal static IInputElement? Holder => _holder;
+
+    /// <summary>What each element that took the keys was showing as it took
+    /// them. An items control hands the elements of a container it removes
+    /// the disconnected-item sentinel for a data context, and a landing by
+    /// what went away needs the item.</summary>
+    private static readonly ConditionalWeakTable<IInputElement, object> ContextsAtFocus = new();
+
+    /// <summary>The <see cref="Holder"/>'s data context — as it is, else, its
+    /// container removed, as it was when it took the keys.</summary>
+    internal static object? HolderContext =>
+        _holder switch
+        {
+            null => null,
+            FrameworkElement { DataContext: { } live } when !ReferenceEquals(live, BindingOperations.DisconnectedSource) => live,
+            _ => ContextsAtFocus.TryGetValue(_holder, out object? recorded) ? recorded : null,
+        };
 
     /// <summary>The last focus change asked of the element losing the keys
     /// (a direct request raises PreviewLostKeyboardFocus first; WPF's
@@ -151,6 +177,15 @@ internal static class RegionFocusGuard
         if (e.NewFocus is DependencyObject focused and IInputElement input && !ReferenceEquals(sender, e.NewFocus))
         {
             ScopesAtFocus.AddOrUpdate(input, ScopesOf(focused));
+            if (((focused as FrameworkElement)?.DataContext ?? (focused as FrameworkContentElement)?.DataContext) is { } context)
+            {
+                ContextsAtFocus.AddOrUpdate(input, context);
+            }
+            else
+            {
+                ContextsAtFocus.Remove(input);
+            }
+
             if (focused is ListBoxItem or TreeViewItem && ItemsControl.ItemsControlFromItemContainer(focused) is { } rows)
             {
                 for (ItemsControl level = rows; level is TreeViewItem row && ItemsControl.ItemsControlFromItemContainer(row) is { } up; level = up)
@@ -245,7 +280,9 @@ internal static class RegionFocusGuard
     internal static bool LandInScopesOf(IInputElement token)
     {
         bool outer = _landing;
+        IInputElement? outerHolder = _holder;
         _landing = true;
+        _holder = token;
         try
         {
             if (token is UIElement row
@@ -279,6 +316,7 @@ internal static class RegionFocusGuard
         finally
         {
             _landing = outer;
+            _holder = outerHolder;
         }
     }
 
@@ -297,7 +335,9 @@ internal static class RegionFocusGuard
     private static bool Land(IInputElement old, UIElement? proposed, UIElement[] scopes)
     {
         bool outer = _landing;
+        IInputElement? outerHolder = _holder;
         _landing = true;
+        _holder = old;
         try
         {
             if (old is UIElement element
@@ -361,6 +401,7 @@ internal static class RegionFocusGuard
         finally
         {
             _landing = outer;
+            _holder = outerHolder;
         }
     }
 

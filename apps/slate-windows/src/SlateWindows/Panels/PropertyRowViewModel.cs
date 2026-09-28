@@ -56,6 +56,11 @@ internal sealed partial class PropertyRowViewModel : INotifyPropertyChanged
     /// whichever duplicate tab happens to be enumerated first.</summary>
     internal NotePropertiesViewModel? Owner { get; set; }
 
+    /// <summary>The row's place in the publication that made it: when a
+    /// republish drops its key, the keys land on the row now there
+    /// (<see cref="PropertiesLanding"/>).</summary>
+    internal int Position { get; set; }
+
     /// <summary>The note PATH of the read that produced this row —
     /// the write seam resolves the target tab by THIS, never by the
     /// active tab (contract 1; adversarial round 1: an old row must

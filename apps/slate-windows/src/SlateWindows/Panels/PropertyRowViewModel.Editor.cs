@@ -300,6 +300,13 @@ internal sealed class PropertyListItemViewModel : INotifyPropertyChanged
         RemoveCommand = new RelayCommand(_ => _row.RemoveItem(_index), _ => true);
     }
 
+    /// <summary>The row the item belongs to, and its place in the row's
+    /// list: a rebuild's landing finds the same place among the fresh items
+    /// (<see cref="PropertiesLanding"/>).</summary>
+    internal PropertyRowViewModel Row => _row;
+
+    internal int Index => _index;
+
     public string ItemLabel { get; }
 
     public string RemoveLabel { get; }
