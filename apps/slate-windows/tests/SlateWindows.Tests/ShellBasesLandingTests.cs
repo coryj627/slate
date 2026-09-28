@@ -160,6 +160,52 @@ public sealed class ShellBasesLandingTests : IDisposable
         }
     });
 
+    /// <summary>PR 4b codex round 2, F2: a dashboard with no sections had no
+    /// stop in its surface, so the editor region's landing fell through to
+    /// the tab header, which F6 read as a refusal and moved on. It lands on
+    /// the dashboard's empty notice.</summary>
+    [Fact]
+    public void TheEditorRegionLandsOnAnEmptyDashboardsNotice() => RunSta(() =>
+    {
+        string id = _session.SaveDashboard("Board", []);
+        using var workspace = new WorkspaceViewModel(
+            _session, _fixture.Root, () => [], _ => { }, startInteractionBackgroundWork: false);
+        var shell = new MainWindow
+        {
+            ShowActivated = false,
+            ShowInTaskbar = false,
+            Width = 1200,
+            Height = 800,
+        };
+        var lifecycle = Assert.IsType<VaultLifecycleViewModel>(shell.DataContext);
+        System.Reflection.PropertyInfo slot = typeof(VaultLifecycleViewModel).GetProperty(nameof(VaultLifecycleViewModel.Workspace))
+            ?? throw new InvalidOperationException("Workspace is gone");
+        System.Reflection.PropertyInfo open = typeof(VaultLifecycleViewModel).GetProperty(nameof(VaultLifecycleViewModel.IsVaultOpen))
+            ?? throw new InvalidOperationException("IsVaultOpen is gone");
+        try
+        {
+            slot.SetValue(lifecycle, workspace);
+            open.SetValue(lifecycle, true);
+            workspace.OpenDashboard(id, "Board");
+            shell.Show();
+            shell.UpdateLayout();
+            PumpedDispatcher.Drain();
+            DashboardSurfaceView surface = Descendants(shell).OfType<DashboardSurfaceView>().Single(view => view.IsVisible);
+            Assert.True(surface.EmptyStateForTests.IsVisible, "premise: the empty dashboard shows no notice");
+
+            Assert.True(((IShellRegionHost)shell).TryLand(ShellRegionKind.Editor), "the editor region refused an empty dashboard tab");
+
+            Assert.Same(surface.EmptyStateForTests, Keyboard.FocusedElement);
+            Assert.Equal(ShellRegionKind.Editor, ((IShellRegionHost)shell).FocusedRegion());
+        }
+        finally
+        {
+            open.SetValue(lifecycle, false);
+            slot.SetValue(lifecycle, null);
+            shell.Close();
+        }
+    });
+
     private static IEnumerable<DependencyObject> Descendants(DependencyObject root)
     {
         for (int index = 0; index < VisualTreeHelper.GetChildrenCount(root); index++)

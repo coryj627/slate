@@ -59,12 +59,16 @@ internal sealed class DashboardSurfaceView : UserControl
         AutomationProperties.SetHeadingLevel(
             _title, AutomationHeadingLevel.Level2);
 
+        // A stop (W7-7 PR 4b round 3, the banner's and the right-pane
+        // notices' precedent): an empty dashboard's surface has nothing else
+        // for the keys, and F6 and every restore land on it.
         _emptyState = new TextBlock
         {
             Margin = new Thickness(32),
             HorizontalAlignment = HorizontalAlignment.Center,
             Text = "No dashboard sections. Add a saved query section to show results.",
             Visibility = Visibility.Collapsed,
+            Focusable = true,
         };
         _emptyState.SetResourceReference(
             TextBlock.ForegroundProperty, "Slate.SecondaryTextBrush");
@@ -113,6 +117,7 @@ internal sealed class DashboardSurfaceView : UserControl
     /// reader was in: the keys land in the SAME section — on the same note's
     /// row, silently, when it is still there, else on that section's current
     /// or first row — else, the section gone, on the first section's stop.
+    /// A dashboard with no sections lands on its empty notice (round 3).
     /// </summary>
     internal bool LandInSurface()
     {
@@ -161,7 +166,7 @@ internal sealed class DashboardSurfaceView : UserControl
             }
         }
 
-        return false;
+        return _emptyState.IsVisible && _emptyState.Focus();
     }
 
     private static bool SameRow(BasesRow candidate, BasesRow row) =>
@@ -195,6 +200,8 @@ internal sealed class DashboardSurfaceView : UserControl
 
     internal StackPanel SectionsForTests => _sections;
 
+    internal TextBlock EmptyStateForTests => _emptyState;
+
     private static void OnModelChanged(
         DependencyObject d, DependencyPropertyChangedEventArgs e)
     {
@@ -223,7 +230,10 @@ internal sealed class DashboardSurfaceView : UserControl
         CaptureReader();
         _sectionStops.Clear();
         _sections.Children.Clear();
-        _emptyState.Visibility = model.Sections.Count == 0
+        // Only once a load has published: before that, no sections means
+        // "not loaded yet", and the notice — a stop — would claim a populated
+        // dashboard empty under the keys.
+        _emptyState.Visibility = model.HasPublished && model.Sections.Count == 0
             ? Visibility.Visible
             : Visibility.Collapsed;
         int index = 0;

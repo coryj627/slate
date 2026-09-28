@@ -621,6 +621,55 @@ public sealed class BaseSurfaceViewTests : IDisposable
         Assert.Single(host.Changes);
     });
 
+    /// <summary>
+    /// PR 4b codex round 2, F2 (R-5 (h); W7-7 spec §5.2 item 2, an empty
+    /// list lands on its empty-state notice): a dashboard with no sections
+    /// had no stop in its surface, so F6 and every restore landed on its tab
+    /// header. Its notice is the stop — and a section added under the keys
+    /// lands them on the section's first stop, once.
+    /// </summary>
+    [Fact]
+    public void AnEmptyDashboardLandsOnItsNoticeAndASectionAddedUnderTheKeysOnItsStop() => RunSta(() =>
+    {
+        string query = SaveAllNotesQuery();
+        string id = _session.SaveDashboard("Board", []);
+        using var host = new DashboardHost(_session, id);
+        System.Windows.Controls.TextBlock notice = host.Surface.EmptyStateForTests;
+        Assert.Empty(host.Stops());
+        Assert.True(notice.IsVisible, "premise: the empty dashboard shows no notice");
+
+        Assert.True(host.Surface.LandInSurface(), "the empty dashboard's surface took no keys");
+        Assert.Same(notice, System.Windows.Input.Keyboard.FocusedElement);
+        host.Changes.Clear();
+
+        _session.UpdateDashboard(id, "Board", [new DashboardSection(query, null, null)]);
+        host.Dashboard.Load();
+        PumpedDispatcher.Drain();
+
+        Assert.False(notice.IsVisible);
+        Assert.True(host.Stops().Single().IsKeyboardFocusWithin, $"the keys are not in the added section, but on {System.Windows.Input.Keyboard.FocusedElement}");
+        Assert.Single(host.Changes);
+    });
+
+    /// <summary>The notice claims nothing before the first publication: a
+    /// populated dashboard's surface, shown before its load publishes, has
+    /// no "No dashboard sections" line for the keys to land on.</summary>
+    [Fact]
+    public void ADashboardNotYetPublishedClaimsNoEmptiness() => RunSta(() =>
+    {
+        string id = _session.SaveDashboard("Board", [new DashboardSection(SaveAllNotesQuery(), null, null)]);
+        using var host = new DashboardHost(_session, id, load: false);
+        Assert.False(host.Dashboard.HasPublished);
+        Assert.False(host.Surface.EmptyStateForTests.IsVisible, "the unloaded dashboard claims it has no sections");
+        Assert.False(host.Surface.LandInSurface());
+
+        host.Dashboard.Load();
+        PumpedDispatcher.Drain();
+
+        Assert.False(host.Surface.EmptyStateForTests.IsVisible);
+        Assert.Single(host.Stops());
+    });
+
     private string SaveAllNotesQuery()
     {
         ulong scratch = _session.OpenBase("Notes.base");
@@ -670,10 +719,14 @@ public sealed class BaseSurfaceViewTests : IDisposable
     {
         private readonly System.Windows.Window _window;
 
-        public DashboardHost(VaultSession session, string id)
+        public DashboardHost(VaultSession session, string id, bool load = true)
         {
             Dashboard = new SlateWindows.Bases.DashboardViewModel(session, id, "Board", _ => { }, synchronousForTests: true);
-            Dashboard.Load();
+            if (load)
+            {
+                Dashboard.Load();
+            }
+
             Surface = new SlateWindows.Bases.DashboardSurfaceView { Model = Dashboard };
             Tabs = new System.Windows.Controls.TabControl();
             Tabs.Items.Add(new System.Windows.Controls.TabItem { Header = "Board", Content = Surface });
