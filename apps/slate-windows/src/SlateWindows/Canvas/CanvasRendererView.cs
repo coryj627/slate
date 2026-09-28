@@ -43,6 +43,7 @@ internal sealed class CanvasRendererView : FrameworkElement
         _ = _visuals.Add(_ring);
         SizeChanged += (_, e) => _engine.CommitViewport(
             v => v.WithViewSize(e.NewSize.Width, e.NewSize.Height));
+        IsVisibleChanged += OnIsVisibleChanged;
         _tooltipText = new System.Windows.Controls.TextBlock
         {
             Padding = new Thickness(6, 4, 6, 4),
@@ -96,7 +97,11 @@ internal sealed class CanvasRendererView : FrameworkElement
             {
                 old.PublicationApplied -= _engine.OnPublicationApplied;
                 old.ModeVisibleChanged -= OnModeVisibleChanged;
+                LeaveDocument(old);
             }
+            // A reveal owed to the old document's seat is not this one's
+            // (#1271, review round 2); a teardown sets null and lands here too.
+            _owedReveal = null;
             _model = value;
             if (value is not null)
             {
@@ -105,6 +110,7 @@ internal sealed class CanvasRendererView : FrameworkElement
                 _engine.OnPublicationApplied(
                     value.AppliedPublication ?? CanvasPublication.Seed());
                 _engine.CommitTransient(value.Transient);
+                ReturnToDocument(value);
             }
         }
     }
@@ -140,6 +146,9 @@ internal sealed class CanvasRendererView : FrameworkElement
         // derive from the state that just landed (ID-9's
         // becomes-invalid arm).
         UpdateTooltip();
+        // A reveal owed to a card the previous state lacked is paid by
+        // the first install that has it (#1271, review round 2).
+        PayOwedReveal();
     }
 
     private void DrawCards(CanvasPresentationState state)
@@ -597,24 +606,230 @@ internal sealed class CanvasRendererView : FrameworkElement
             return;
         }
         model.SelectNode(nodeId);
-        RevealNode(nodeId);
+        RevealNode(nodeId, CanvasMoveOrigin.OnSurface);
     }
 
-    /// <summary>The pan that brings a card into the window (D4 — a
-    /// selection made ON this surface always scrolls into view): the
-    /// peer door's above, and since R-12 (#1255) the navigator's — the
-    /// board's arrows and follow chords move the seat through the
-    /// navigator, which has already announced the move and asks the
-    /// presenter only to reveal it. A card the installed population does
-    /// not know has nothing to pan to.</summary>
-    internal void RevealNode(string nodeId)
+    /// <summary>
+    /// The pan that brings the seat into the window (D4): the peer door's
+    /// above, and since R-12 (#1255) the presenter's, which has already
+    /// decided by <see cref="RevealsMoveFrom"/> that this move reveals.
+    /// </summary>
+    /// <remarks>
+    /// <para>
+    /// A reveal is a DEBT this board owes the reader until the state that has
+    /// the card is installed (R-12 follow-up #1271, review round 2). The seat
+    /// moves the moment the document publishes — New Card and Duplicate seat
+    /// a card that exists only in the successor — while this board's engine
+    /// builds and installs that successor later, off the dispatcher; a reveal
+    /// computed against the installed predecessor finds no card to contain.
+    /// So the pan is paid now when the installed state has the card, and is
+    /// otherwise owed and paid by the install that brings it
+    /// (<see cref="PayOwedReveal"/>).
+    /// </para>
+    /// <para>
+    /// The same debt carries a reveal across a HIDDEN spell (owner decision,
+    /// review round 3): a board behind another tab, or under the outline or
+    /// the table, owes the reveal and pays it once it is showing again — on
+    /// the first install once visible, or as soon as it is shown if no install
+    /// comes (<see cref="OnIsVisibleChanged"/>).
+    /// </para>
+    /// <para>
+    /// The rules, one slot per board: a newer reveal supersedes the owed one,
+    /// paid or owed in turn. An owed reveal is paid only while it is still
+    /// payable, judged by TOKENS taken when it was owed, never by the state
+    /// alone (review round 3: a seat that left and came back, or a toggle
+    /// turned off and on, looks unchanged to the state): the selection's
+    /// <see cref="CanvasSelection.Revision"/> must not have moved — a later
+    /// selection change voids the debt, so it is never replayed — and a move
+    /// made elsewhere needs Follow Selection on AND the viewport's
+    /// <see cref="CanvasViewportState.FollowLapses"/> unchanged — it lapses the
+    /// moment the board stops following, for good — while a move made on the
+    /// board stands, toggle or no toggle. It is paid once and cleared. When
+    /// the board's document changes it is set aside with that document, never
+    /// paid against another, and settled if the board returns to it — a tab
+    /// switch rebinds the board rather than hiding it (codex's final check;
+    /// <see cref="ReturnToDocument"/>).
+    /// </para>
+    /// <para>
+    /// It is paid only FROM an installed state whose population is the one
+    /// the document has applied (review round 4; <see cref="TryPanToContain"/>):
+    /// a card the predecessor has under the same id is not yet the seat's
+    /// card. That population is read when the debt is paid, not stamped when
+    /// it is owed: a later reload the seat survives (same revision) owes the
+    /// reveal against the later population, which may be the only one this
+    /// board's engine ever installs.
+    /// </para>
+    /// </remarks>
+    internal void RevealNode(string nodeId, CanvasMoveOrigin origin)
     {
-        if (_engine.Current?.Source.Loaded?.Population is { } population
-            && population.SceneByNode.TryGetValue(nodeId, out CanvasSceneNode? node))
+        _owedReveal = new OwedReveal(
+            nodeId,
+            origin,
+            _model?.Selection.Revision ?? 0,
+            _engine.CommittedViewport.FollowLapses);
+        PayOwedReveal();
+    }
+
+    /// <summary>The reveal this board owes (see <see cref="RevealNode"/>);
+    /// null when it owes none.</summary>
+    private OwedReveal? _owedReveal;
+
+    /// <summary>A reveal owed, with the tokens its validity is judged by:
+    /// the selection revision and the viewport's follow-lapse count at the
+    /// moment it was owed.</summary>
+    private sealed record OwedReveal(
+        string NodeId, CanvasMoveOrigin Origin, long SelectionRevision, long FollowLapses);
+
+    /// <summary>Pay the owed reveal if it is still payable
+    /// (<see cref="RevealNode"/>'s rules) and the board is showing; an
+    /// unpayable debt is written off, a payable one waits while the board is
+    /// hidden or its installed state is not yet the document's population with
+    /// the card.</summary>
+    private void PayOwedReveal()
+    {
+        if (_owedReveal is not { } owed)
         {
-            _engine.CommitViewport(v => PanToContain(v, node));
+            return;
+        }
+        if (!StillPayable(owed))
+        {
+            _owedReveal = null;
+            return;
+        }
+        if (!IsShowing)
+        {
+            return;
+        }
+        if (TryPanToContain(owed.NodeId))
+        {
+            _owedReveal = null;
         }
     }
+
+    /// <summary>Whether an owed reveal is still owed: the seat has not moved
+    /// since (the selection revision), and a move made elsewhere still
+    /// reveals — Follow Selection on, and never turned off since (the lapse
+    /// count). A move made on the board needs only the first.</summary>
+    private bool StillPayable(OwedReveal owed)
+    {
+        if (_model is not { } model || model.Selection.Revision != owed.SelectionRevision)
+        {
+            return false;
+        }
+        if (owed.Origin == CanvasMoveOrigin.OnSurface)
+        {
+            return true;
+        }
+        CanvasViewportState view = _engine.CommittedViewport;
+        return view.FollowSelection && view.FollowLapses == owed.FollowLapses;
+    }
+
+    /// <summary>Whether the board is on screen with a laid-out view — the
+    /// only time a pan means anything to the reader.</summary>
+    private bool IsShowing =>
+        IsVisible && _engine.CommittedViewport is { ViewWidth: > 0, ViewHeight: > 0 };
+
+    /// <summary>
+    /// What this board last saw of each document it has shown and left — the
+    /// selection revision, whether it followed and its follow-lapse count, and
+    /// the reveal it still owed — keyed weakly, so a closed document's entry
+    /// goes with it.
+    /// </summary>
+    /// <remarks>
+    /// Shown again across a TAB SWITCH (codex's final check on #1271): the
+    /// workspace's pane is one selected-content TabControl, so switching tabs
+    /// does not hide this board, it REBINDS it — the pane's canvas surface
+    /// takes the other tab's document (none, for a note) and this board stops
+    /// hearing the one it left; switching back binds it again. The board's
+    /// view outlives the rebinding, so what it owed that view must too.
+    /// </remarks>
+    private readonly System.Runtime.CompilerServices.ConditionalWeakTable<
+        CanvasDocumentViewModel, AwaySpell> _awaySpells = new();
+
+    /// <summary>What the board saw of a document when it left it.</summary>
+    private sealed record AwaySpell(
+        long SelectionRevision, bool Followed, long FollowLapses, OwedReveal? Owed);
+
+    /// <summary>The board is leaving <paramref name="document"/> (a tab
+    /// switch, a retarget or a teardown): keep what it saw and owed.</summary>
+    private void LeaveDocument(CanvasDocumentViewModel document)
+    {
+        CanvasViewportState view = _engine.CommittedViewport;
+        _awaySpells.AddOrUpdate(
+            document,
+            new AwaySpell(document.Selection.Revision, view.FollowSelection, view.FollowLapses, _owedReveal));
+    }
+
+    /// <summary>
+    /// The board is bound to <paramref name="document"/> again: settle the
+    /// spell it was away, under the rules a hidden board is held to
+    /// (<see cref="RevealNode"/>). If the seat has not moved since, the reveal
+    /// it owed is owed again, its own tokens judging it. If the seat moved
+    /// while it was away, a board that followed the selection the whole time —
+    /// on when it left, on now, and never turned off in between (the lapse
+    /// count) — owes the seat as a move made elsewhere; one that did not owes
+    /// nothing, since it cannot tell a move made while it followed from one
+    /// made while it did not. A document it has never shown owes nothing.
+    /// </summary>
+    private void ReturnToDocument(CanvasDocumentViewModel document)
+    {
+        if (!_awaySpells.TryGetValue(document, out AwaySpell? spell))
+        {
+            return;
+        }
+        _ = _awaySpells.Remove(document);
+        CanvasViewportState view = _engine.CommittedViewport;
+        if (document.Selection.Revision == spell.SelectionRevision)
+        {
+            _owedReveal = spell.Owed;
+        }
+        else if (document.Selection.Selected is { } seat
+            && spell.Followed
+            && view.FollowSelection
+            && view.FollowLapses == spell.FollowLapses)
+        {
+            _owedReveal = new OwedReveal(
+                seat, CanvasMoveOrigin.Elsewhere, document.Selection.Revision, view.FollowLapses);
+        }
+        PayOwedReveal();
+    }
+
+    /// <summary>Shown again (owner decision, review round 3): a reveal owed
+    /// while hidden is paid once the board is visible — after the layout pass
+    /// that gives it its size, since showing it may bring no install.</summary>
+    private void OnIsVisibleChanged(object sender, DependencyPropertyChangedEventArgs e)
+    {
+        if (e.NewValue is true && _owedReveal is not null)
+        {
+            _ = Dispatcher.BeginInvoke(
+                new Action(PayOwedReveal), System.Windows.Threading.DispatcherPriority.Loaded);
+        }
+    }
+
+    /// <summary>Commit the pan that contains the card in the INSTALLED
+    /// state, answering whether that state could pay: it must carry the
+    /// population the document has APPLIED — the one the seat was resolved
+    /// against — and have the card in it (review round 4). The seat moves
+    /// during an apply, before this board's engine has the successor, and a
+    /// card that survives a reload under the same id stands in the
+    /// predecessor at the place it has left, so an id alone never pays.</summary>
+    private bool TryPanToContain(string nodeId)
+    {
+        if (_engine.Current?.Source.Loaded?.Population is not { } population
+            || !ReferenceEquals(population, _model?.AppliedPublication?.Population)
+            || !population.SceneByNode.TryGetValue(nodeId, out CanvasSceneNode? node))
+        {
+            return false;
+        }
+        _engine.CommitViewport(v => PanToContain(v, node));
+        return true;
+    }
+
+    /// <summary>D4's pan rule against this board's committed viewport
+    /// (R-12 follow-up #1271): a move made on the board always reveals,
+    /// one made elsewhere only while Follow Selection is on.</summary>
+    internal bool RevealsMoveFrom(CanvasMoveOrigin origin) =>
+        _engine.CommittedViewport.RevealsMoveFrom(origin);
 
     /// <summary>The matrix's clear cell: RemoveFromSelection on the
     /// selected card clears it, announced.</summary>
@@ -665,7 +880,12 @@ internal sealed class CanvasRendererView : FrameworkElement
     /// <para>
     /// No card to answer for — nothing under the pointer, no seat, a seat
     /// the document no longer knows — is answered HERE with no menu, so
-    /// the request never climbs to the tab's.
+    /// the request never climbs to the tab's. A KEYBOARD request with no
+    /// seat is a keypress that does nothing, so it also says so (contract
+    /// 34 C3/C4/E8a, #1283): the document's C4 door speaks the existing
+    /// <c>Nothing selected.</c> arm — the sentence the board's Right and
+    /// Left already speak for the same seatless state — where it used to
+    /// swallow the press in silence.
     /// </para>
     /// <para>
     /// A pointer request SEATS the hit card, silently, before its menu
@@ -679,8 +899,16 @@ internal sealed class CanvasRendererView : FrameworkElement
     private void OnMenuOpening(object sender, System.Windows.Controls.ContextMenuEventArgs e)
     {
         bool pointerRequest = e.CursorLeft >= 0 || e.CursorTop >= 0;
-        if (MenuTargetFor(pointerRequest, e.CursorLeft, e.CursorTop) is not { } nodeId
-            || !RebuildMenu(nodeId))
+        if (MenuTargetFor(pointerRequest, e.CursorLeft, e.CursorTop) is not { } nodeId)
+        {
+            if (!pointerRequest)
+            {
+                _ = _model?.AnsweredMissingSelection();
+            }
+            e.Handled = true;
+            return;
+        }
+        if (!RebuildMenu(nodeId))
         {
             e.Handled = true;
             return;

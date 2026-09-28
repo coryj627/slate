@@ -23,7 +23,7 @@ internal sealed class CanvasViewportState
 
     private CanvasViewportState(
         double zoom, double panX, double panY,
-        double viewWidth, double viewHeight, bool followSelection)
+        double viewWidth, double viewHeight, bool followSelection, long followLapses)
     {
         Zoom = zoom;
         PanX = panX;
@@ -31,11 +31,12 @@ internal sealed class CanvasViewportState
         ViewWidth = viewWidth;
         ViewHeight = viewHeight;
         FollowSelection = followSelection;
+        FollowLapses = followLapses;
     }
 
     /// <summary>The seed: identity zoom, origin pan, no view yet,
-    /// follow-selection ON (the ratified default).</summary>
-    internal static CanvasViewportState Seed() => new(1.0, 0.0, 0.0, 0.0, 0.0, true);
+    /// follow-selection ON (the ratified default), never lapsed.</summary>
+    internal static CanvasViewportState Seed() => new(1.0, 0.0, 0.0, 0.0, 0.0, true, 0);
 
     internal double Zoom { get; }
 
@@ -59,6 +60,17 @@ internal sealed class CanvasViewportState
     /// the visual surface scrolls into view regardless.</summary>
     internal bool FollowSelection { get; }
 
+    /// <summary>
+    /// How many times <see cref="FollowSelection"/> has gone from on to off
+    /// (R-12 follow-up #1271, review round 3). It travels in this immutable
+    /// value, so every commit path — the toggle verb or a direct engine
+    /// commit — carries it, and a reveal owed for a move made elsewhere
+    /// compares it at payment: a board that stopped following since the
+    /// debt was taken has lapsed it, even if it follows again now (on → off →
+    /// on is a later count, never the earlier one).
+    /// </summary>
+    internal long FollowLapses { get; }
+
     /// <summary>Zoom by one step toward the ceiling, preserving the
     /// given centre point (document coordinates stay under it).</summary>
     internal CanvasViewportState ZoomedIn(double centreX, double centreY) =>
@@ -81,26 +93,38 @@ internal sealed class CanvasViewportState
         double clamped = Math.Clamp(zoom, MinZoom, MaxZoom);
         if (Zoom == 0)
         {
-            return new(clamped, PanX, PanY, ViewWidth, ViewHeight, FollowSelection);
+            return new(clamped, PanX, PanY, ViewWidth, ViewHeight, FollowSelection, FollowLapses);
         }
         double scale = clamped / Zoom;
         double panX = centreX - ((centreX - PanX) * scale);
         double panY = centreY - ((centreY - PanY) * scale);
-        return new(clamped, panX, panY, ViewWidth, ViewHeight, FollowSelection);
+        return new(clamped, panX, panY, ViewWidth, ViewHeight, FollowSelection, FollowLapses);
     }
 
     /// <summary>Pan to an absolute offset (view-space).</summary>
     internal CanvasViewportState PannedTo(double panX, double panY) =>
-        new(Zoom, panX, panY, ViewWidth, ViewHeight, FollowSelection);
+        new(Zoom, panX, panY, ViewWidth, ViewHeight, FollowSelection, FollowLapses);
 
     /// <summary>The view's size changed (layout, DPI, window).</summary>
     internal CanvasViewportState WithViewSize(double width, double height) =>
-        new(Zoom, PanX, PanY, width, height, FollowSelection);
+        new(Zoom, PanX, PanY, width, height, FollowSelection, FollowLapses);
 
     /// <summary>The follow toggle (D4). A transform, not a setter —
-    /// the toggle is viewport state exactly like the zoom.</summary>
+    /// the toggle is viewport state exactly like the zoom. Turning it OFF
+    /// counts a lapse (<see cref="FollowLapses"/>); the count changes only
+    /// with <see cref="FollowSelection"/> itself, so the build dedupe, which
+    /// compares the toggle, can never drop one.</summary>
     internal CanvasViewportState WithFollowSelection(bool follow) =>
-        new(Zoom, PanX, PanY, ViewWidth, ViewHeight, follow);
+        new(Zoom, PanX, PanY, ViewWidth, ViewHeight, follow,
+            FollowSelection && !follow ? FollowLapses + 1 : FollowLapses);
+
+    /// <summary>Whether a selection move made from
+    /// <paramref name="origin"/> brings the seat into view — D4's pan
+    /// rule in one place (R-12 follow-up #1271): a move made on the board
+    /// always does; one made elsewhere (the palette's and the menus'
+    /// verbs) only while <see cref="FollowSelection"/> is on.</summary>
+    internal bool RevealsMoveFrom(CanvasMoveOrigin origin) =>
+        origin == CanvasMoveOrigin.OnSurface || FollowSelection;
 
     /// <summary>The widest drift the geometry comparison forgives.
     /// Exact double equality broke ID-2 (codoki on this PR): a

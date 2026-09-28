@@ -30,8 +30,28 @@ internal sealed class CanvasSelection : BindableBase
     public string? Selected
     {
         get => _selected;
-        internal set => SetField(ref _selected, value);
+        internal set
+        {
+            if (string.Equals(_selected, value, StringComparison.Ordinal))
+            {
+                return;
+            }
+            // Bumped BEFORE the change is raised, so every listener — and
+            // every reveal owed during the change — sees the new revision.
+            Revision++;
+            _ = SetField(ref _selected, value);
+        }
     }
+
+    /// <summary>
+    /// How many times <see cref="Selected"/> has changed (R-12 follow-up
+    /// #1271, review round 3): every writer goes through the setter above,
+    /// so the revision is the one clock a visual board's owed reveal reads
+    /// to know whether the seat has moved since the debt was taken — a seat
+    /// that left and came back (A → B → A) is a later revision, never the
+    /// earlier one. A no-op assignment is not a change.
+    /// </summary>
+    internal long Revision { get; private set; }
 
     /// <summary>The persisted surface (contract A15): outline is the
     /// ABSENT default, so the two writable tokens are the two

@@ -113,6 +113,15 @@ internal sealed record CanvasFilterView(
     bool Current,
     IReadOnlySet<string>? MatchedIds);
 
+/// <summary>One stop in the visual board's reading order
+/// (<see cref="CanvasDocumentViewModel.SceneReadingOrder"/>): a card the
+/// board draws, and whether the applied needle DIMS it (contract 34 D4 —
+/// the filter dims, it never removes).</summary>
+internal sealed record CanvasSceneStop(CanvasOutlineRow Row, bool Dimmed)
+{
+    internal string NodeId => Row.NodeId;
+}
+
 /// <summary>The four-branch answer classification (task T6), computed
 /// ONCE — the cleanup pass folded five hand-kept ladders into this,
 /// so the spoken count, the visible summary and the view cannot
@@ -1199,6 +1208,34 @@ internal sealed class CanvasDocumentViewModel : PanelWorkScheduler
 
     /// <summary>The outline rows the surfaces display.</summary>
     public IReadOnlyList<CanvasOutlineRow> FilteredOutline => Filter.Rows;
+
+    /// <summary>
+    /// THE visual board's reading order — the one source a walk of, or a
+    /// landing on, the board is to read (R-12 follow-up #1270).
+    /// </summary>
+    /// <remarks>
+    /// Every card the board draws, in core's reading order (the order of
+    /// <see cref="Outline"/>: the group tree depth-first, siblings by
+    /// y, x, then document order), filtered-out cards INCLUDED and marked
+    /// <see cref="CanvasSceneStop.Dimmed"/> by the same applied answer the
+    /// outline narrows by (<see cref="CanvasFilterView.MatchedIds"/>) —
+    /// contract 34 D4: the visual arm renders the full scene and the needle
+    /// only dims. The board's Down/Up walk it
+    /// (<c>CanvasNavigator.MoveThroughTheScene</c>). A landing on the board
+    /// that falls back to the board's first card (W7-7 R-10) is to take
+    /// the first stop here, so the board has one order, not two.
+    /// <see cref="FilteredOutline"/> stays the order of the palette's Next
+    /// and Previous Card and of the outline and table.
+    /// </remarks>
+    internal IReadOnlyList<CanvasSceneStop> SceneReadingOrder
+    {
+        get
+        {
+            IReadOnlySet<string>? matched = Filter.MatchedIds;
+            return [.. _outline.Select(row => new CanvasSceneStop(
+                row, matched is not null && !matched.Contains(row.NodeId)))];
+        }
+    }
 
     /// <summary>The table rows the grid displays — core's rows, narrowed
     /// by the SAME answer the outline shows (contract C10).</summary>
@@ -5081,8 +5118,16 @@ internal static class CanvasPhrase
     /// view"). NOT the switcher arm's label above: the peer shipped
     /// speaking the radio's word and the FlaUI journey caught it —
     /// the two phrases are neighbours here so they can never be
-    /// confused for one another again.</summary>
-    public const string VisualBoardName = "Canvas visual view";
+    /// confused for one another again. Contract 34 D5 RESERVES it in the
+    /// board's one name namespace, and core's speakable-name allocator
+    /// holds that spelling occupied (<c>canvas::model::VISUAL_BOARD_NAME</c>)
+    /// so no card peer answers to it (#1276) — so the spelling is CORE's,
+    /// read once over the FFI (<c>CanvasConstants.VisualBoardName</c>),
+    /// never a host literal beside it that could drift.</summary>
+    public static string VisualBoardName => ReservedBoardName.Value;
+
+    private static readonly Lazy<string> ReservedBoardName =
+        new(() => SlateUniffiMethods.CanvasConstants().VisualBoardName);
 
     /// <summary>The table projection's accessible name (mac's
     /// <c>accessibilityLabel</c>, verbatim).</summary>

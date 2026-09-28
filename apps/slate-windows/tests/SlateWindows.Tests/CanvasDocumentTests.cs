@@ -5489,13 +5489,17 @@ public sealed class CanvasDocumentTests : IDisposable
     /// <summary>The board peer speaks its RATIFIED name (§D D3,
     /// "Canvas visual view") — not the switcher arm's label. The peer
     /// shipped saying "Visual" and only the FlaUI journey noticed;
-    /// this is the unit-level tripwire that failure bought.</summary>
+    /// this is the unit-level tripwire that failure bought. The name is
+    /// CORE's (#1276): the spelling the speakable-name allocator reserves
+    /// crosses the FFI in <c>CanvasConstants</c>, and the peer speaks that
+    /// value rather than a host literal of its own.</summary>
     [Fact]
     public void TheBoardPeerSpeaksItsRatifiedName() => RunSta(() =>
     {
         var renderer = new CanvasRendererView();
         var peer = new CanvasRendererAutomationPeer(renderer);
         Assert.Equal("Canvas visual view", peer.GetName());
+        Assert.Equal(SlateUniffiMethods.CanvasConstants().VisualBoardName, peer.GetName());
         Assert.NotEqual(CanvasPhrase.VisualSurfaceLabel, peer.GetName());
         Assert.Equal(
             System.Windows.Automation.Peers.AutomationControlType.Group,
@@ -5533,6 +5537,66 @@ public sealed class CanvasDocumentTests : IDisposable
         host.UpdateLayout();
         PumpUntil(() => (Children()?.Count ?? 0) > 0);
         Assert.NotEmpty(Children());
+        document.Shutdown();
+    });
+
+    /// <summary>
+    /// Contract 34 D5 (#1276): ONE name namespace across the board — the
+    /// container, every card and every labelled edge — with the container's
+    /// name RESERVED. On D5's fixture built to collide four ways (twin card
+    /// titles, twin parallel same-label edges, a card titled like the
+    /// container, and a card pre-named with another card's ordinal suffix)
+    /// every live peer's Name is its own, and the card titled "Canvas visual
+    /// view" answers to core's next free spelling, never to the container's
+    /// Name. The edges are in the fixture so the namespace is D5's whole
+    /// collision; labelled edges have no peers yet (a separate D5 gap), so
+    /// the peers are the container and its four cards.
+    /// </summary>
+    [Fact]
+    public void EveryBoardPeerHasItsOwnNameAndTheContainersNameIsReserved() => RunSta(() =>
+    {
+        File.WriteAllText(
+            Path.Combine(_fixture.Root, "collide.canvas"),
+            "{\"nodes\":["
+            + "{\"id\":\"twin-a\",\"type\":\"text\",\"text\":\"Twin\",\"x\":0,\"y\":0,\"width\":200,\"height\":100},"
+            + "{\"id\":\"twin-b\",\"type\":\"text\",\"text\":\"Twin\",\"x\":260,\"y\":0,\"width\":200,\"height\":100},"
+            + "{\"id\":\"twin-2\",\"type\":\"text\",\"text\":\"Twin 2\",\"x\":0,\"y\":160,\"width\":200,\"height\":100},"
+            + "{\"id\":\"board\",\"type\":\"text\",\"text\":\"" + CanvasPhrase.VisualBoardName
+            + "\",\"x\":260,\"y\":160,\"width\":200,\"height\":100}],"
+            + "\"edges\":["
+            + "{\"id\":\"e1\",\"fromNode\":\"twin-a\",\"toNode\":\"twin-b\",\"label\":\"echoes\"},"
+            + "{\"id\":\"e2\",\"fromNode\":\"twin-a\",\"toNode\":\"twin-b\",\"label\":\"echoes\"}]}");
+        CanvasDocumentViewModel document = NewDocument("collide.canvas");
+        document.Load();
+        var surface = new CanvasSurfaceView { Model = document };
+        using HostedWindow host = Host(surface);
+        document.ShowSurface(CanvasSurfaceKind.Visual);
+        host.UpdateLayout();
+        var board = new CanvasRendererAutomationPeer(surface.VisualForTests);
+        System.Collections.Generic.List<System.Windows.Automation.Peers.AutomationPeer> Children()
+        {
+            board.ResetChildrenCache();
+            return board.GetChildren() ?? [];
+        }
+        PumpUntil(() => Children().OfType<CanvasCardAutomationPeer>().Count() == 4);
+
+        Dictionary<string, string> cards = Children()
+            .OfType<CanvasCardAutomationPeer>()
+            .ToDictionary(card => card.Key.Id, card => card.GetName(), StringComparer.Ordinal);
+        Assert.Equal(4, cards.Count);
+        Assert.True(
+            cards["board"] != board.GetName(),
+            $"the card titled like the container answers to the container's own Name, "
+            + $"\"{board.GetName()}\": the name is not reserved (D5, #1276).");
+        Assert.Equal($"{CanvasPhrase.VisualBoardName} 2", cards["board"]);
+        Assert.Equal("Twin", cards["twin-a"]);
+        Assert.Equal("Twin 3", cards["twin-b"]);
+        Assert.Equal("Twin 2", cards["twin-2"]);
+
+        string[] names = [board.GetName(), .. Children().Select(peer => peer.GetName())];
+        Assert.True(
+            names.Distinct(StringComparer.Ordinal).Count() == names.Length,
+            "two peers on the board answer to one name (D5): " + string.Join(" | ", names));
         document.Shutdown();
     });
 }
