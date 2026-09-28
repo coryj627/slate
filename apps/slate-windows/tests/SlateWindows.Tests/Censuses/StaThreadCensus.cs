@@ -152,26 +152,59 @@ public sealed class StaThreadCensus
         return sites;
     }
 
-    /// <summary>The window classes WPF has registered for THIS process
-    /// (<c>HwndWrapper[&lt;app domain&gt;;…]</c>), read from the session's
-    /// atom table, where every registered class name lives.</summary>
+    /// <summary>The WPF window classes (<c>HwndWrapper[…]</c>) registered
+    /// by THIS process. Every class name lives in the session's atom table,
+    /// which other processes share — a concurrent test host's classes carry
+    /// the same prefix — so each name counts only when
+    /// <c>GetClassInfoEx</c> finds it registered against this process's
+    /// module, the instance WPF registers them under.</summary>
     private static int RegisteredWrapperClasses()
     {
-        string prefix = "HwndWrapper[" + AppDomain.CurrentDomain.FriendlyName + ";";
+        IntPtr module = GetModuleHandleW(IntPtr.Zero);
         int count = 0;
         var name = new StringBuilder(512);
         for (uint atom = 0xC000; atom <= 0xFFFF; atom++)
         {
             name.Clear();
             if (GetClipboardFormatNameW(atom, name, name.Capacity) > 0
-                && name.ToString().StartsWith(prefix, StringComparison.Ordinal))
+                && name.ToString().StartsWith("HwndWrapper[", StringComparison.Ordinal))
             {
-                count++;
+                var info = new WindowClassInfo { Size = Marshal.SizeOf<WindowClassInfo>() };
+                if (GetClassInfoExW(module, name.ToString(), ref info) != 0)
+                {
+                    count++;
+                }
             }
         }
         return count;
     }
 
+    /// <summary>WNDCLASSEXW with its string members as raw pointers: the
+    /// system writes them, and a marshalled string field would free memory
+    /// it never allocated.</summary>
+    [StructLayout(LayoutKind.Sequential)]
+    private struct WindowClassInfo
+    {
+        public int Size;
+        public int Style;
+        public IntPtr WindowProcedure;
+        public int ClassExtra;
+        public int WindowExtra;
+        public IntPtr Instance;
+        public IntPtr Icon;
+        public IntPtr Cursor;
+        public IntPtr Background;
+        public IntPtr MenuName;
+        public IntPtr ClassName;
+        public IntPtr SmallIcon;
+    }
+
     [DllImport("user32.dll", CharSet = CharSet.Unicode)]
     private static extern int GetClipboardFormatNameW(uint format, StringBuilder name, int maxCount);
+
+    [DllImport("user32.dll", CharSet = CharSet.Unicode)]
+    private static extern int GetClassInfoExW(IntPtr instance, string className, ref WindowClassInfo info);
+
+    [DllImport("kernel32.dll")]
+    private static extern IntPtr GetModuleHandleW(IntPtr moduleName);
 }
