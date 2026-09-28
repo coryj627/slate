@@ -995,6 +995,10 @@
                                             <!-- W7-7 (R-3): two-way, so a filter clear releases the
                                                  selection and the same tag can be applied again. -->
                                             <Setter Property="IsSelected" Value="{Binding IsSelected, Mode=TwoWay}" />
+                                            <!-- W7-7 PR 4b (codex r1 F4): the refresh keeps what the
+                                                 reader had open, and opens a nested applied tag's
+                                                 ancestors, so its row is there to land on. -->
+                                            <Setter Property="IsExpanded" Value="{Binding IsExpanded, Mode=TwoWay}" />
                                         </Style>
                                     </local:LandingTreeView.ItemContainerStyle>
                                 </local:LandingTreeView>

@@ -488,6 +488,115 @@ public sealed class FilesRegionLandingTests
         host.AssertNeverFocusedPopulated(tags);
     });
 
+    /// <summary>
+    /// Codex PR 4b r1 F4 (G7): a NESTED applied tag — alpha/beta, under alpha.
+    /// The rebuilt tree came back collapsed, so the re-selected tag had no
+    /// row, and the landing fell to the first root, unselected. The rebuild
+    /// keeps the reader's expansion and opens the applied tag's ancestors:
+    /// the keys land on alpha/beta's own row, selected, the filter untouched.
+    /// </summary>
+    [Fact]
+    public void ANestedTagsRefreshUnderTheKeysKeepsTheAppliedTagsRow() => RunSta(() =>
+    {
+        using var host = new Host();
+        host.Initialize(tagged: true, nestedTag: true);
+        TreeView tags = ShowTags(host);
+        TreeViewItem nested = ExpandToNestedTag(host, tags);
+        Assert.True(nested.Focus());
+        Assert.True(PumpedDispatcher.PumpUntil(() => host.Sidebar.IsFilterActive), "premise: choosing the nested tag applied no filter.");
+        string filter = host.Sidebar.FilterText;
+        Assert.Equal("alpha/beta", Assert.IsType<SidebarTagViewModel>(nested.DataContext).Full);
+        host.ForgetFocusChanges();
+
+        host.Sidebar.Refresh();
+        PumpedDispatcher.PumpUntilDrained(host.Sidebar.TreeRefreshCompletion);
+        PumpedDispatcher.Drain();
+
+        var landed = Assert.IsAssignableFrom<TreeViewItem>(Keyboard.FocusedElement);
+        var tag = Assert.IsType<SidebarTagViewModel>(landed.DataContext);
+        Assert.Equal("alpha/beta", tag.Full);
+        Assert.True(landed.IsSelected, "the nested tag's row lost its selection in the rebuild");
+        Assert.Same(tag, tags.SelectedItem);
+        Assert.Equal(filter, host.Sidebar.FilterText);
+        host.AssertNeverFocusedPopulated(tags);
+    });
+
+    /// <summary>
+    /// Codex PR 4b r1 F4's companion: a tag chosen AFTER a nested refresh is
+    /// the tag the next refresh keeps. The nested tag re-selected with no row
+    /// stayed selected in the model when the reader arrowed to another tag,
+    /// and the next rebuild restored IT — a phantom selection — instead of
+    /// the tag applied. One tag is ever selected, and it is the filter's.
+    /// </summary>
+    [Fact]
+    public void ATagChosenAfterANestedRefreshIsTheTagTheNextRefreshKeeps() => RunSta(() =>
+    {
+        using var host = new Host();
+        host.Initialize(tagged: true, nestedTag: true);
+        TreeView tags = ShowTags(host);
+        TreeViewItem nested = ExpandToNestedTag(host, tags);
+        Assert.True(nested.Focus());
+        Assert.True(PumpedDispatcher.PumpUntil(() => host.Sidebar.IsFilterActive), "premise: choosing the nested tag applied no filter.");
+        host.Sidebar.Refresh();
+        PumpedDispatcher.PumpUntilDrained(host.Sidebar.TreeRefreshCompletion);
+        PumpedDispatcher.Drain();
+
+        string? chosen = null;
+        for (int press = 0; press < 10 && chosen is null; press++)
+        {
+            host.Press(Key.Down);
+            PumpedDispatcher.Drain();
+            if ((Keyboard.FocusedElement as TreeViewItem)?.DataContext is SidebarTagViewModel { Depth: 0 } root
+                && root.Full != "alpha")
+            {
+                chosen = root.Full;
+            }
+        }
+
+        Assert.True(chosen is not null, "premise: Down never reached another root tag.");
+        Assert.True(PumpedDispatcher.PumpUntil(() => host.Sidebar.FilterText.Contains(chosen!, StringComparison.Ordinal)), "premise: the chosen tag applied no filter.");
+        string filter = host.Sidebar.FilterText;
+
+        host.Sidebar.Refresh();
+        PumpedDispatcher.PumpUntilDrained(host.Sidebar.TreeRefreshCompletion);
+        PumpedDispatcher.Drain();
+
+        var landed = Assert.IsAssignableFrom<TreeViewItem>(Keyboard.FocusedElement);
+        Assert.Equal(chosen, Assert.IsType<SidebarTagViewModel>(landed.DataContext).Full);
+        Assert.True(landed.IsSelected);
+        Assert.Equal(filter, host.Sidebar.FilterText);
+        Assert.Equal([chosen], SelectedTags(host.Sidebar.Tags));
+    });
+
+    private static TreeView ShowTags(Host host)
+    {
+        host.Sidebar.ShowTags = true;
+        host.Pane.UpdateLayout();
+        TreeView tags = host.ElementWithId<TreeView>("SidebarTagTree");
+        Assert.True(PumpedDispatcher.PumpUntil(() => tags.HasItems), "premise: the Tags tree never listed the fixture's tags.");
+        host.Pane.UpdateLayout();
+        return tags;
+    }
+
+    /// <summary>The alpha row, expanded as the reader would (Right), and
+    /// its nested alpha/beta row.</summary>
+    private static TreeViewItem ExpandToNestedTag(Host host, TreeView tags)
+    {
+        SidebarTagViewModel alpha = host.Sidebar.Tags.Single(tag => tag.Full == "alpha");
+        Assert.True(alpha.Children.Any(child => child.Full == "alpha/beta"), "premise: alpha/beta is not alpha's child.");
+        var alphaRow = Assert.IsAssignableFrom<TreeViewItem>(tags.ItemContainerGenerator.ContainerFromItem(alpha));
+        alphaRow.SetCurrentValue(TreeViewItem.IsExpandedProperty, true);
+        host.Pane.UpdateLayout();
+        PumpedDispatcher.Drain();
+        return Assert.IsAssignableFrom<TreeViewItem>(
+            alphaRow.ItemContainerGenerator.ContainerFromItem(alpha.Children.Single(child => child.Full == "alpha/beta")));
+    }
+
+    private static List<string> SelectedTags(IEnumerable<SidebarTagViewModel> level) =>
+    [
+        .. level.SelectMany(tag => (tag.IsSelected ? [tag.Full] : Array.Empty<string>()).Concat(SelectedTags(tag.Children))),
+    ];
+
     /// <summary>Codex PR 4 round 6 (the repro's R6_5x): Tab — WPF's own
     /// traversal, no landing of ours — used to rest on a bare POPULATED tree
     /// when nothing in it was selected; the Files tree and the Tags tree are
@@ -633,9 +742,16 @@ public sealed class FilesRegionLandingTests
         /// <param name="untagged">Strips the fixture's tags, so the Tags tree
         /// is empty, and adds a folder with no notes, whose dual-pane listing
         /// is empty.</param>
-        public void Initialize(bool nested = false, bool tagged = false, bool untagged = false)
+        /// <param name="nestedTag">Adds a note tagged <c>alpha/beta</c>, a
+        /// child of the <c>alpha</c> tag.</param>
+        public void Initialize(bool nested = false, bool tagged = false, bool untagged = false, bool nestedTag = false)
         {
             Assert.Null(Application.Current);
+            if (nestedTag)
+            {
+                File.WriteAllText(Path.Combine(_fixture.Root, "nested-tag.md"), "---\ntags: [alpha/beta]\n---\n# Nested\n");
+            }
+
             if (nested)
             {
                 Directory.CreateDirectory(Path.Combine(_fixture.Root, "folder"));

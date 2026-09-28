@@ -355,6 +355,18 @@ internal sealed class SidebarTagViewModel : BindableBase
         get => _isSelected;
         set => SetField(ref _isSelected, value);
     }
+
+    /// <summary>The row's expansion, bound two-way (W7-7 PR 4b, codex r1
+    /// F4): a refresh rebuilds the tags, and the rebuild keeps what the
+    /// reader had open, so a nested applied tag's row is there for the keys
+    /// to land on.</summary>
+    public bool IsExpanded
+    {
+        get => _isExpanded;
+        set => SetField(ref _isExpanded, value);
+    }
+
+    private bool _isExpanded;
 }
 
 internal sealed record SidebarShortcutViewModel(string Kind, string Path)
@@ -1216,14 +1228,21 @@ internal sealed partial class FilesSidebarViewModel : BindableBase
         // selected again in the rebuilt tree, by name, so a refresh (every
         // save reaches one) keeps the reader's row and the Tags landing
         // finds it. Re-selecting an applied tag applies nothing new
-        // (ApplyTagActivation answers an unchanged filter with nothing).
+        // (ApplyTagActivation answers an unchanged filter with nothing). The
+        // rebuilt tree keeps the reader's expansion (codex PR 4b r1 F4): it
+        // came back collapsed, so a NESTED applied tag had no row and the
+        // landing fell to the first root. The applied tag's ancestors are
+        // among those kept — the tree selects only a row it shows, and
+        // collapsing an ancestor moves the selection to it.
         string? selected = SelectedTagFull(Tags);
+        HashSet<string> expanded = ExpandedTagFulls(Tags);
         Tags.Clear();
         foreach (SidebarTagViewModel tag in outcome.Tags)
         {
             Tags.Add(tag);
         }
 
+        ReExpand(Tags, expanded);
         if (selected is not null && FindTag(Tags, selected) is { } again)
         {
             again.IsSelected = true;
@@ -1273,6 +1292,60 @@ internal sealed partial class FilesSidebarViewModel : BindableBase
         }
 
         return null;
+    }
+
+    private static HashSet<string> ExpandedTagFulls(IEnumerable<SidebarTagViewModel> level)
+    {
+        var expanded = new HashSet<string>(StringComparer.Ordinal);
+        var pending = new Stack<SidebarTagViewModel>(level);
+        while (pending.TryPop(out SidebarTagViewModel? tag))
+        {
+            if (tag.IsExpanded)
+            {
+                _ = expanded.Add(tag.Full);
+            }
+
+            foreach (SidebarTagViewModel child in tag.Children)
+            {
+                pending.Push(child);
+            }
+        }
+
+        return expanded;
+    }
+
+    private static void ReExpand(IEnumerable<SidebarTagViewModel> level, HashSet<string> expanded)
+    {
+        foreach (SidebarTagViewModel tag in level)
+        {
+            tag.IsExpanded = expanded.Contains(tag.Full);
+            ReExpand(tag.Children, expanded);
+        }
+    }
+
+    /// <summary>The selected tag and its ancestors, root first — the Tags
+    /// tree's landing path (the Files tree's is the selected file's); null
+    /// with nothing selected.</summary>
+    internal IReadOnlyList<object>? SelectedTagPath()
+    {
+        var path = new List<object>();
+        return PathTo(Tags, path) ? path : null;
+
+        static bool PathTo(IEnumerable<SidebarTagViewModel> level, List<object> path)
+        {
+            foreach (SidebarTagViewModel tag in level)
+            {
+                path.Add(tag);
+                if (tag.IsSelected || PathTo(tag.Children, path))
+                {
+                    return true;
+                }
+
+                path.RemoveAt(path.Count - 1);
+            }
+
+            return false;
+        }
     }
 
     private void EditTag(bool add)
