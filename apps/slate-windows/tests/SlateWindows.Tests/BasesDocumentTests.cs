@@ -564,68 +564,174 @@ public sealed class BaseSurfaceViewTests : IDisposable
     /// change reloads an open dashboard, and its render rebuilt every
     /// section's grid under the reader's cell; the keys went up to a focusable
     /// scroll viewer, the tab control or the window. They land in the same
-    /// section, on the same note's row, once — silently.
+    /// section, on the same note's row, once — silently. The section's
+    /// renderer is the author's choice (codex PR 4b r1 F6): a LIST-rendered
+    /// section keeps the row too — it landed on row 1.
+    /// </summary>
+    [Theory]
+    [InlineData(null)]
+    [InlineData("list")]
+    public void ADashboardRebuiltUnderTheReaderKeepsTheirRow(string? view) => RunSta(() =>
+    {
+        string query = SaveAllNotesQuery();
+        string id = _session.SaveDashboard("Board", [new DashboardSection(query, null, view)]);
+        using var host = new DashboardHost(_session, id);
+        System.Windows.UIElement stop = host.Stops().Single();
+        AcquireNote1(host, stop);
+        host.Changes.Clear();
+
+        host.Dashboard.Load();
+        PumpedDispatcher.Drain();
+
+        System.Windows.UIElement rebuilt = host.Stops().Single();
+        Assert.NotSame(stop, rebuilt);
+        Assert.True(rebuilt.IsKeyboardFocusWithin, "the keys are not in the rebuilt section");
+        Assert.EndsWith("note1.md", ReaderPath(host, rebuilt), StringComparison.Ordinal);
+        Assert.DoesNotContain(host.Tabs, host.Changes);
+        Assert.True(host.Changes.Count == 1, $"the keys moved {host.Changes.Count} times: {string.Join(" → ", host.Changes.Select(focus => focus.GetType().Name))}");
+    });
+
+    /// <summary>
+    /// Codex PR 4b r1 F6: a section is identified by what it shows, not by its
+    /// index — the dashboard editor reorders and inserts sections, and the
+    /// numeric index then named a different section. Two sections over one
+    /// query, "First" and "Second"; the reader on Second's note1; the sections
+    /// swapped and the dashboard reloaded: the keys stay in "Second", on
+    /// note1.
     /// </summary>
     [Fact]
-    public void ADashboardRebuiltUnderTheReaderKeepsTheirRow() => RunSta(() =>
+    public void ADashboardReorderedUnderTheReaderKeepsTheirSection() => RunSta(() =>
+    {
+        string query = SaveAllNotesQuery();
+        DashboardSection first = new(query, "First", null);
+        DashboardSection second = new(query, "Second", null);
+        string id = _session.SaveDashboard("Board", [first, second]);
+        using var host = new DashboardHost(_session, id);
+        System.Windows.UIElement secondStop = host.StopAfterHeading("Second");
+        AcquireNote1(host, secondStop);
+        host.Changes.Clear();
+
+        _session.UpdateDashboard(id, "Board", [second, first]);
+        host.Dashboard.Load();
+        PumpedDispatcher.Drain();
+
+        System.Windows.UIElement rebuilt = host.StopAfterHeading("Second");
+        Assert.True(rebuilt.IsKeyboardFocusWithin, "the keys left the reader's section when the sections were reordered");
+        Assert.EndsWith("note1.md", ReaderPath(host, rebuilt), StringComparison.Ordinal);
+        Assert.Single(host.Changes);
+    });
+
+    private string SaveAllNotesQuery()
     {
         ulong scratch = _session.OpenBase("Notes.base");
-        string json;
         try
         {
-            json = _session.BaseViewQueryJson(scratch, 0);
+            return _session.SaveQuery("All notes", null, _session.BaseViewQueryJson(scratch, 0), SavedQuerySourceSyntax.Builder);
         }
         finally
         {
             _session.CloseBase(scratch);
         }
+    }
 
-        string query = _session.SaveQuery("All notes", null, json, SavedQuerySourceSyntax.Builder);
-        string id = _session.SaveDashboard("Board", [new DashboardSection(query, null, null)]);
-        var dashboard = new SlateWindows.Bases.DashboardViewModel(_session, id, "Board", _ => { }, synchronousForTests: true);
-        dashboard.Load();
-        var surface = new SlateWindows.Bases.DashboardSurfaceView { Model = dashboard };
-        var tabs = new System.Windows.Controls.TabControl();
-        tabs.Items.Add(new System.Windows.Controls.TabItem { Header = "Board", Content = surface });
-        var window = new System.Windows.Window
+    /// <summary>The reader on note1's row of a section's grid or list.</summary>
+    private static void AcquireNote1(DashboardHost host, System.Windows.UIElement stop)
+    {
+        switch (stop)
         {
-            Content = tabs,
-            Width = 700,
-            Height = 600,
-            ShowInTaskbar = false,
-            WindowStyle = System.Windows.WindowStyle.None,
-            ShowActivated = false,
-        };
-        window.Show();
-        window.UpdateLayout();
-        var changes = new List<System.Windows.IInputElement>();
-        System.Windows.Input.Keyboard.AddGotKeyboardFocusHandler(window, (_, e) => changes.Add(e.NewFocus));
-        try
-        {
-            SlateWindows.Grids.AccessibleDataGrid grid = surface.SectionsForTests.Children
-                .OfType<SlateWindows.Grids.AccessibleDataGrid>().Single();
-            Assert.True(grid.SelectRow(row => row is SlateWindows.Bases.BaseGridRowViewModel { Row.FilePath: var path } && path.EndsWith("note1.md", StringComparison.Ordinal), moveFocus: true));
-            PumpedDispatcher.Drain();
-            changes.Clear();
-
-            dashboard.Load();
-            PumpedDispatcher.Drain();
-
-            SlateWindows.Grids.AccessibleDataGrid rebuilt = surface.SectionsForTests.Children
-                .OfType<SlateWindows.Grids.AccessibleDataGrid>().Single();
-            Assert.NotSame(grid, rebuilt);
-            var cell = Assert.IsType<System.Windows.Controls.DataGridCell>(System.Windows.Input.Keyboard.FocusedElement);
-            Assert.True(rebuilt.IsKeyboardFocusWithin, "the keys are not in the rebuilt section");
-            Assert.EndsWith("note1.md", Assert.IsType<SlateWindows.Bases.BaseGridRowViewModel>(cell.DataContext).Row.FilePath, StringComparison.Ordinal);
-            Assert.DoesNotContain(tabs, changes);
-            Assert.True(changes.Count == 1, $"the keys moved {changes.Count} times: {string.Join(" → ", changes.Select(focus => focus.GetType().Name))}");
+            case SlateWindows.Grids.AccessibleDataGrid grid:
+                Assert.True(grid.SelectRow(row => row is SlateWindows.Bases.BaseGridRowViewModel { Row.FilePath: var path } && path.EndsWith("note1.md", StringComparison.Ordinal), moveFocus: true));
+                break;
+            case System.Windows.Controls.ListBox list:
+                string note1 = host.RowText("note1.md");
+                var item = list.Items.OfType<System.Windows.Controls.ListBoxItem>()
+                    .Single(candidate => candidate.Content is System.Windows.Controls.TextBlock { Text: var text } && text == note1);
+                list.SelectedItem = item;
+                Assert.True(item.Focus(), "premise: note1's list row refused the keys");
+                break;
+            default:
+                throw new Xunit.Sdk.XunitException($"an unexpected section stop {stop}");
         }
-        finally
+
+        PumpedDispatcher.Drain();
+    }
+
+    /// <summary>The path of the note whose row the keys are on, in a section's
+    /// grid or list.</summary>
+    private static string ReaderPath(DashboardHost host, System.Windows.UIElement stop) => stop switch
+    {
+        SlateWindows.Grids.AccessibleDataGrid => Assert.IsType<SlateWindows.Bases.BaseGridRowViewModel>(
+            Assert.IsType<System.Windows.Controls.DataGridCell>(System.Windows.Input.Keyboard.FocusedElement).DataContext).Row.FilePath,
+        _ => host.PathOfRowText(Assert.IsType<System.Windows.Controls.TextBlock>(
+            Assert.IsType<System.Windows.Controls.ListBoxItem>(System.Windows.Input.Keyboard.FocusedElement).Content).Text),
+    };
+    /// <summary>A dashboard's surface in a tab of its own, shown.</summary>
+    private sealed class DashboardHost : IDisposable
+    {
+        private readonly System.Windows.Window _window;
+
+        public DashboardHost(VaultSession session, string id)
         {
-            window.Close();
-            dashboard.Shutdown();
+            Dashboard = new SlateWindows.Bases.DashboardViewModel(session, id, "Board", _ => { }, synchronousForTests: true);
+            Dashboard.Load();
+            Surface = new SlateWindows.Bases.DashboardSurfaceView { Model = Dashboard };
+            Tabs = new System.Windows.Controls.TabControl();
+            Tabs.Items.Add(new System.Windows.Controls.TabItem { Header = "Board", Content = Surface });
+            _window = new System.Windows.Window
+            {
+                Content = Tabs,
+                Width = 700,
+                Height = 900,
+                ShowInTaskbar = false,
+                WindowStyle = System.Windows.WindowStyle.None,
+                ShowActivated = false,
+            };
+            _window.Show();
+            _window.UpdateLayout();
+            System.Windows.Input.Keyboard.AddGotKeyboardFocusHandler(_window, (_, e) => Changes.Add(e.NewFocus));
         }
-    });
+
+        public SlateWindows.Bases.DashboardViewModel Dashboard { get; }
+
+        public SlateWindows.Bases.DashboardSurfaceView Surface { get; }
+
+        public System.Windows.Controls.TabControl Tabs { get; }
+
+        public List<System.Windows.IInputElement> Changes { get; } = [];
+
+        /// <summary>The sections' grids and lists, in order.</summary>
+        public List<System.Windows.UIElement> Stops() =>
+        [
+            .. Surface.SectionsForTests.Children.OfType<System.Windows.UIElement>()
+                .Where(child => child is SlateWindows.Grids.AccessibleDataGrid or System.Windows.Controls.ListBox),
+        ];
+
+        /// <summary>The grid or list that follows the section heading
+        /// <paramref name="heading"/>.</summary>
+        public System.Windows.UIElement StopAfterHeading(string heading)
+        {
+            System.Windows.UIElement[] children = [.. Surface.SectionsForTests.Children.OfType<System.Windows.UIElement>()];
+            int at = Array.FindIndex(children, child => child is System.Windows.Controls.TextBlock { Text: var text } && text == heading);
+            Assert.True(at >= 0, $"no section is headed {heading}");
+            return children.Skip(at + 1).First(child => child is SlateWindows.Grids.AccessibleDataGrid or System.Windows.Controls.ListBox);
+        }
+
+        /// <summary>The spoken row text of the note at <paramref name="suffix"/>.</summary>
+        public string RowText(string suffix) =>
+            Dashboard.Sections.SelectMany(section => section.Result?.Rows ?? [])
+                .First(row => row.FilePath.EndsWith(suffix, StringComparison.Ordinal)).AudioDescription;
+
+        /// <summary>The note a list row's text speaks for.</summary>
+        public string PathOfRowText(string text) =>
+            Dashboard.Sections.SelectMany(section => section.Result?.Rows ?? [])
+                .First(row => row.AudioDescription == text).FilePath;
+
+        public void Dispose()
+        {
+            _window.Close();
+            Dashboard.Shutdown();
+        }
+    }
 
     public static TheoryData<string> RendererSwitches() => ["table to list", "list to table", "no rows", "failed"];
 
