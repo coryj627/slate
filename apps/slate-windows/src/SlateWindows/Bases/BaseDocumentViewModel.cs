@@ -798,6 +798,9 @@ internal sealed class BaseDocumentViewModel : PanelWorkScheduler
     private async Task TerminalOutcomeAsync(int before, CancellationToken cancellation)
     {
         await WhenPublishedAsync().WaitAsync(cancellation).ConfigureAwait(false);
+        // A run cancelled meanwhile is cancelled, whatever drained: a body
+        // that saw the cancellation published nothing.
+        cancellation.ThrowIfCancellationRequested();
         // No terminal outcome since the start (superseded by an operation
         // that publishes nothing, or refused by a shut-down document): the
         // document still shows what it showed, which is not this run's
