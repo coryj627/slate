@@ -292,7 +292,16 @@ public partial class MainWindow : IShellRegionHost
     private void GuardRegions()
     {
         var host = (IShellRegionHost)this;
-        // The three workspace columns, outermost (codex PR 4b r1 F1): when a
+        // The window's content, outermost of all (codex PR 4b r1 F8's widened
+        // census): opening or closing the vault swaps the welcome view and the
+        // workspace under the keys, and every scope inside the one that goes
+        // goes with it. The keys land in the view now shown.
+        RegionFocusGuard.SetLanding(
+            ShellRoot,
+            () => WelcomeRoot.IsVisible
+                ? FirstFocusable(WelcomeRoot) is { } welcome && SelectorFocus.LandOnStop(welcome)
+                : EditorRegionLanding());
+        // The three workspace columns (codex PR 4b r1 F1): when a
         // whole region goes — the right pane hidden under the keys (Ctrl+Alt+I,
         // the View menu, the palette) — every scope inside it is gone, and
         // WPF's re-evaluation found no focusable ancestor short of the window.
@@ -303,6 +312,11 @@ public partial class MainWindow : IShellRegionHost
         RegionFocusGuard.SetLanding(FilesPaneBorder, () => host.TryLand(ShellRegionKind.Files));
         RegionFocusGuard.SetLanding(ContentPaneBorder, EditorRegionLanding);
         RegionFocusGuard.SetLanding(RightPaneLeavesList, () => SelectorFocus.FocusFirstOrSelectedItem(RightPaneLeavesList));
+        // The leaves' host: a leaf switched under the keys (a command, a
+        // reveal, the model) collapses the leaf they were in; they land in
+        // the leaf now shown — its first stop, else the rail's row — not out
+        // of the right pane.
+        RegionFocusGuard.SetLanding(RightPaneLeafHost, () => VisibleLeafBody() is { } shown && LandInLeaf(shown));
         foreach (FrameworkElement body in RightPaneLeafHost.Children.OfType<FrameworkElement>()
             .Where(child => Grid.GetColumn(child) == 0 && !ReferenceEquals(child, RightPaneDockedPlaceholder)))
         {

@@ -3,8 +3,10 @@
 
 using System.Runtime.ExceptionServices;
 using System.Windows;
+using System.Windows.Automation;
 using System.Windows.Controls;
 using System.Windows.Input;
+using System.Windows.Media;
 using SlateWindows.Canvas;
 using SlateWindows.Panels;
 using uniffi.slate_uniffi;
@@ -75,6 +77,78 @@ public sealed class RightPaneHideLandingTests
         Assert.Single(changes);
     });
 
+    /// <summary>
+    /// Codex PR 4b r1 F8's widened census: a leaf switched under the keys — by
+    /// a command, a reveal, the model — collapses the leaf body they were in,
+    /// and with it every scope they had. The leaves' host lands them in the
+    /// leaf now shown (its first stop, else the rail's row): never the
+    /// window, never out of the right pane.
+    /// </summary>
+    [Theory]
+    [InlineData("outline", "OutlineLeafBody")]
+    [InlineData("backlinks", "BacklinksLeafBody")]
+    [InlineData("outgoingLinks", "OutgoingLinksLeafBody")]
+    [InlineData("embeds", "EmbedsLeafBody")]
+    [InlineData("tasks", "TasksLeafBody")]
+    [InlineData("tasksReview", "TasksReviewLeafBody")]
+    [InlineData("citations", "CitationsLeafBody")]
+    [InlineData("bibliography", "BibliographyLeafBody")]
+    [InlineData("queries", "QueriesLeafBody")]
+    [InlineData("connections", "ConnectionsLeafBody")]
+    [InlineData("history", "HistoryLeafBody")]
+    [InlineData("syncDiagnostics", "SyncDiagnosticsLeafBody")]
+    public void ALeafSwitchedUnderTheKeysLandsThemInTheShownLeaf(string leaf, string body) => RunSta(() =>
+    {
+        using var host = new ShownShell(("a.md", "Just a line of text.\n"));
+        host.Workspace.OpenPath("a.md");
+        host.Workspace.ActiveLeaf = WorkspaceViewModel.Leaves.First(option => option.Id == leaf);
+        host.Settle();
+        FrameworkElement leafBody = host.Body(body);
+        Assert.True(((IShellRegionHost)host.Shell).TryLand(ShellRegionKind.RightPaneContent), $"premise: {leaf} took no keys");
+        Assert.True(leafBody.IsKeyboardFocusWithin, $"premise: the keys are not in {body}, but on {Keyboard.FocusedElement}");
+
+        host.Workspace.ActiveLeaf = WorkspaceViewModel.Leaves.First(option => option.Id == (leaf == "outline" ? "backlinks" : "outline"));
+        PumpedDispatcher.Drain();
+
+        Assert.False(leafBody.IsVisible);
+        Assert.IsNotType<MainWindow>(Keyboard.FocusedElement);
+        Assert.True(host.Shell.RightPaneBorder.IsKeyboardFocusWithin, $"the keys left the right pane, for {Keyboard.FocusedElement}");
+    });
+
+    /// <summary>Codex PR 4b r1 F8's widened census: closing the vault with
+    /// the keys in the workspace collapses WorkspaceRoot, and every scope in
+    /// it; the keys land on the welcome view, never the window.</summary>
+    [Fact]
+    public void ClosingTheVaultUnderTheKeysLandsThemOnTheWelcomeView() => RunSta(() =>
+    {
+        using var host = new ShownShell(("a.md", "Just a line of text.\n"));
+        host.Workspace.OpenPath("a.md");
+        host.Settle();
+        Assert.True(((IShellRegionHost)host.Shell).TryLand(ShellRegionKind.Editor), "premise: the editor took no keys");
+
+        host.SetVaultOpen(false);
+
+        Assert.False(host.Shell.WorkspaceRoot.IsVisible);
+        Assert.IsNotType<MainWindow>(Keyboard.FocusedElement);
+        Assert.True(host.Shell.WelcomeRoot.IsKeyboardFocusWithin, $"the keys are not on the welcome view, but on {Keyboard.FocusedElement}");
+    });
+
+    /// <summary>Opening the vault from the welcome view collapses WelcomeRoot
+    /// under the keys; they land in the workspace, never the window.</summary>
+    [Fact]
+    public void OpeningTheVaultUnderTheKeysLandsThemInTheWorkspace() => RunSta(() =>
+    {
+        using var host = new ShownShell(("a.md", "Just a line of text.\n"));
+        host.SetVaultOpen(false);
+        Assert.True(host.Shell.WelcomeRoot.IsKeyboardFocusWithin || host.Shell.OpenVaultButton.Focus(), "premise: the welcome view took no keys");
+
+        host.SetVaultOpen(true);
+
+        Assert.False(host.Shell.WelcomeRoot.IsVisible);
+        Assert.IsNotType<MainWindow>(Keyboard.FocusedElement);
+        Assert.True(host.Shell.WorkspaceRoot.IsKeyboardFocusWithin, $"the keys are not in the workspace, but on {Keyboard.FocusedElement}");
+    });
+
     /// <summary>The shipped window, shown off-screen and never activated,
     /// over a real workspace attached through the lifecycle's own
     /// setters.</summary>
@@ -128,6 +202,32 @@ public sealed class RightPaneHideLandingTests
         {
             Shell.UpdateLayout();
             PumpedDispatcher.Drain();
+        }
+
+        /// <summary>The vault opened or closed as the lifecycle marks it —
+        /// the welcome view and the workspace swap.</summary>
+        public void SetVaultOpen(bool open)
+        {
+            _open.SetValue(_lifecycle, open);
+            Settle();
+        }
+
+        /// <summary>A leaf body, by its name or its automation id.</summary>
+        public FrameworkElement Body(string name) =>
+            Shell.FindName(name) as FrameworkElement
+                ?? Descendants(Shell).OfType<FrameworkElement>().Single(element => AutomationProperties.GetAutomationId(element) == name);
+
+        private static IEnumerable<DependencyObject> Descendants(DependencyObject root)
+        {
+            for (int index = 0; index < VisualTreeHelper.GetChildrenCount(root); index++)
+            {
+                DependencyObject child = VisualTreeHelper.GetChild(root, index);
+                yield return child;
+                foreach (DependencyObject nested in Descendants(child))
+                {
+                    yield return nested;
+                }
+            }
         }
 
         /// <summary>Every keyboard focus change in the shell from here.</summary>

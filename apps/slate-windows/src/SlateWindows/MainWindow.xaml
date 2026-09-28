@@ -67,7 +67,7 @@
         <KeyBinding Key="Escape" Command="{Binding Workspace.ActiveGroup.ActiveTab.EditorInteractions.ClosePopoverCommand, FallbackValue={x:Static cmd:DisabledCommand.Instance}}" />
     </Window.InputBindings>
 
-    <DockPanel KeyDown="TrashFallback_KeyDown">
+    <DockPanel x:Name="ShellRoot" KeyDown="TrashFallback_KeyDown">
         <!-- W7-5 (#1239): two things the first NVDA field pass found, both
              owned here. (1) WPF's Menu defaults TabNavigation to Cycle, so a
              Tab that enters the bar never leaves it (File > ... > Files >
@@ -726,7 +726,7 @@
              to directional navigation, out of the region. Arrows from an
              element are judged in its PARENT's group, so the bar sits in a
              Contained border: they stay on it (ShellContainerLandingTests). -->
-        <Border DockPanel.Dock="Bottom"
+        <Border x:Name="ShellStatusBarBorder" DockPanel.Dock="Bottom"
                 KeyboardNavigation.DirectionalNavigation="Contained">
             <StatusBar x:Name="ShellStatusBar"
                        Focusable="True"
@@ -1292,7 +1292,7 @@
                             <!-- W7-7 PR 4 (#1247, R-5; codex round 4): the leaf
                                  contains its arrows - an arrow from its notice, whose
                                  own group this body is, stays in the leaf. -->
-                            <DockPanel Grid.Column="0" Margin="12"
+                            <DockPanel x:Name="BacklinksLeafBody" Grid.Column="0" Margin="12"
                                        KeyboardNavigation.DirectionalNavigation="Contained">
                                 <DockPanel.Style>
                                     <Style TargetType="DockPanel">
@@ -1347,7 +1347,7 @@
                             <!-- W7-7 PR 4 (#1247, R-5; codex round 4): the leaf
                                  contains its arrows - an arrow from its notice, whose
                                  own group this body is, stays in the leaf. -->
-                            <DockPanel Grid.Column="0" Margin="12"
+                            <DockPanel x:Name="OutgoingLinksLeafBody" Grid.Column="0" Margin="12"
                                        KeyboardNavigation.DirectionalNavigation="Contained">
                                 <DockPanel.Style>
                                     <Style TargetType="DockPanel">
@@ -1434,7 +1434,7 @@
                             <!-- W7-7 PR 4 (#1247, R-5; codex round 4): the leaf
                                  contains its arrows - an arrow from its notice, whose
                                  own group this body is, stays in the leaf. -->
-                            <DockPanel Grid.Column="0" Margin="12"
+                            <DockPanel x:Name="OutlineLeafBody" Grid.Column="0" Margin="12"
                                        KeyboardNavigation.DirectionalNavigation="Contained">
                                 <DockPanel.Style>
                                     <Style TargetType="DockPanel">
@@ -1482,7 +1482,7 @@
                             <!-- W7-7 PR 4 (#1247, R-5; codex round 4): the leaf
                                  contains its arrows - an arrow from its notice, whose
                                  own group this body is, stays in the leaf. -->
-                            <DockPanel Grid.Column="0" Margin="12"
+                            <DockPanel x:Name="EmbedsLeafBody" Grid.Column="0" Margin="12"
                                        KeyboardNavigation.DirectionalNavigation="Contained">
                                 <DockPanel.Style>
                                     <Style TargetType="DockPanel">
@@ -1545,7 +1545,7 @@
                             <!-- W7-7 PR 4 (#1247, R-5; codex round 4): the leaf
                                  contains its arrows - an arrow from its notice, whose
                                  own group this body is, stays in the leaf. -->
-                            <DockPanel Grid.Column="0" Margin="12"
+                            <DockPanel x:Name="TasksLeafBody" Grid.Column="0" Margin="12"
                                        KeyboardNavigation.DirectionalNavigation="Contained">
                                 <DockPanel.Style>
                                     <Style TargetType="DockPanel">
@@ -1604,7 +1604,7 @@
                             <!-- W4-3 (#735): the vault-wide Tasks Review leaf — the
                                  mac TasksReviewPanel flow: pinned filter chips, a
                                  paged row list, and an explicit Load more row. -->
-                            <DockPanel Grid.Column="0" Margin="12"
+                            <DockPanel x:Name="TasksReviewLeafBody" Grid.Column="0" Margin="12"
                                        KeyboardNavigation.DirectionalNavigation="Contained">
                                 <DockPanel.Style>
                                     <Style TargetType="DockPanel">
@@ -1742,7 +1742,7 @@
                             <!-- W7-7 PR 4 (#1247, R-5; codex round 4): the leaf
                                  contains its arrows - an arrow from its notice, whose
                                  own group this body is, stays in the leaf. -->
-                            <DockPanel Grid.Column="0" Margin="12"
+                            <DockPanel x:Name="CitationsLeafBody" Grid.Column="0" Margin="12"
                                        KeyboardNavigation.DirectionalNavigation="Contained">
                                 <DockPanel.Style>
                                     <Style TargetType="DockPanel">
@@ -1835,7 +1835,7 @@
                                  bulk-rename preview is; export is null on
                                  both (D-7 / G29).
                                  ========================================== -->
-                            <DockPanel Grid.Column="0" Margin="12"
+                            <DockPanel x:Name="BibliographyLeafBody" Grid.Column="0" Margin="12"
                                        KeyboardNavigation.DirectionalNavigation="Contained">
                                 <DockPanel.Style>
                                     <Style TargetType="DockPanel">

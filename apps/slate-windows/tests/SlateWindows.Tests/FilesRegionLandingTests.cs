@@ -421,9 +421,9 @@ public sealed class FilesRegionLandingTests
 
     /// <summary>
     /// W7-7 PR 4b (the completeness sweep's G7): Pin Note re-sorts the tree
-    /// (its rows cleared and re-added) under the reader's row. WPF ejected the
-    /// keys (the W5-4 red team measured the window), and Down then did
-    /// nothing. They land on the selected note's row, once, without opening
+    /// (FilesSidebarViewModel.Resort: its rows cleared and re-added) under
+    /// the reader's row. WPF ejected the keys (the W5-4 red team measured
+    /// the window), and Down then did nothing. They land on the selected note's row, once, without opening
     /// anything; the bare tree never holds them.
     /// </summary>
     [Fact]

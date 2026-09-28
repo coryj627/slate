@@ -225,6 +225,38 @@ public sealed class RegionBoundaryCensus
         return (offenders.ToArray(), judged);
     }
 
+    /// <summary>Whether <paramref name="element"/> is, or holds, an element
+    /// that can take the keys: focusable by its type's default or its
+    /// declaration (a bound Focusable may be), a shell control that builds
+    /// its focusables in code, or an items control, whose rows are generated.
+    /// One that neither is nor holds such an element cannot take the keys
+    /// away when it goes (FocusIntegrityManifestCensus).</summary>
+    internal static bool HoldsAStop(XElement element)
+    {
+        XDocument? document = element.Document;
+        Dictionary<string, string> namespaces = document is null ? [] : ClrNamespaces(document);
+        return element.DescendantsAndSelf().Any(candidate =>
+        {
+            if (candidate.Name.LocalName.Contains('.', StringComparison.Ordinal)
+                || Resolve(candidate, namespaces) is not { } type)
+            {
+                return false;
+            }
+
+            bool focusable = (string?)candidate.Attribute("Focusable") switch
+            {
+                "False" => false,
+                "True" => true,
+                { } bound when bound.StartsWith('{') => true,
+                _ => DefaultFocusable(type),
+            };
+            return focusable
+                || (type.Assembly == typeof(MainWindow).Assembly && typeof(Control).IsAssignableFrom(type))
+                || typeof(ItemsControl).IsAssignableFrom(type)
+                || typeof(ContentControl).IsAssignableFrom(type) && candidate.Attribute("Content") is { } content && content.Value.StartsWith('{');
+        });
+    }
+
     /// <summary>Elements that are not placed where they are written:
     /// resources and styles (templates applied elsewhere, each inside the
     /// region of its use) and context menus and tool tips, each its own
