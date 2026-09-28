@@ -31,6 +31,12 @@ internal static class WindowClasses
     /// <summary>ERROR_CLASS_DOES_NOT_EXIST.</summary>
     private const int ClassDoesNotExist = 1411;
 
+    /// <summary>ERROR_CLASS_HAS_WINDOWS.</summary>
+    private const int ClassHasWindows = 1412;
+
+    /// <summary>HWND_MESSAGE: the parent of every message-only window.</summary>
+    private static readonly IntPtr MessageOnlyParent = new(-3);
+
     // Every WPF class name carries a fresh GUID, so a name belongs to one
     // process for good: asked once, remembered. Another process's names — a
     // concurrent test host without this runner leaks thousands into the
@@ -86,9 +92,10 @@ internal static class WindowClasses
     }
 
     /// <summary>Unregister every class this process registered for the
-    /// ENDED thread <paramref name="threadName"/> (the system destroyed its
-    /// windows when it ended), answering a description of any that would not
-    /// go, or null when none remain.</summary>
+    /// thread <paramref name="threadName"/>, which has EXITED at the OS level
+    /// (<see cref="OsThreadExit"/>: the system destroyed its windows then),
+    /// answering a description of any that would not go — with the windows
+    /// that still have it — or null when none remain.</summary>
     internal static string? Unregister(string threadName)
     {
         IntPtr module = GetModuleHandleW(IntPtr.Zero);
@@ -109,13 +116,34 @@ internal static class WindowClasses
             // nothing of this process's to free.
             if (error != ClassDoesNotExist)
             {
-                refused.Add($"{name} ({new Win32Exception(error).Message})");
+                refused.Add($"{name} ({new Win32Exception(error).Message}{(error == ClassHasWindows ? "; " + WindowsOf(name) : "")})");
             }
         }
         return refused.Count == 0
             ? null
             : $"{refused.Count} window class(es) thread \"{threadName}\" registered would not unregister after it ended — each holds desktop heap for the rest of the run: "
                 + string.Join("; ", refused);
+    }
+
+    /// <summary>The live windows of a class — top-level and message-only —
+    /// with the thread and process that own each, or a note that none is
+    /// live (a destroyed window still referenced from elsewhere).</summary>
+    private static string WindowsOf(string className)
+    {
+        var found = new List<string>();
+        foreach (IntPtr parent in new[] { IntPtr.Zero, MessageOnlyParent })
+        {
+            for (IntPtr hwnd = FindWindowExW(parent, IntPtr.Zero, className, null);
+                hwnd != IntPtr.Zero;
+                hwnd = FindWindowExW(parent, hwnd, className, null))
+            {
+                uint thread = GetWindowThreadProcessId(hwnd, out uint process);
+                found.Add($"window 0x{hwnd:X} on thread {thread} of process {process}{(process == (uint)Environment.ProcessId ? " (this one)" : "")}");
+            }
+        }
+        return found.Count == 0
+            ? "no live window has it: a destroyed window another thread still references"
+            : string.Join(", ", found.Distinct());
     }
 
     private static IEnumerable<string> WpfClassNames()
@@ -165,4 +193,10 @@ internal static class WindowClasses
 
     [DllImport("kernel32.dll")]
     private static extern IntPtr GetModuleHandleW(IntPtr moduleName);
+
+    [DllImport("user32.dll", CharSet = CharSet.Unicode)]
+    private static extern IntPtr FindWindowExW(IntPtr parent, IntPtr childAfter, string className, string? windowName);
+
+    [DllImport("user32.dll")]
+    private static extern uint GetWindowThreadProcessId(IntPtr hwnd, out uint processId);
 }

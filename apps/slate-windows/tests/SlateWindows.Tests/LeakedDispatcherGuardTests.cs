@@ -68,9 +68,20 @@ public sealed class LeakedDispatcherGuardTests
     [MethodImpl(MethodImplOptions.NoInlining)]
     private static void AbandonADispatcherOn(string name)
     {
-        var thread = new Thread(() => _ = Dispatcher.CurrentDispatcher) { IsBackground = true, Name = name };
+        OsThreadExit? exit = null;
+        var thread = new Thread(() =>
+        {
+            exit = OsThreadExit.OfCurrentThread();
+            _ = Dispatcher.CurrentDispatcher;
+        })
+        { IsBackground = true, Name = name };
         thread.Start();
         Assert.True(thread.Join(TimeSpan.FromSeconds(10)), "the witness thread never ended");
+        using (exit)
+        {
+            // Its windows are gone only once the OS thread has exited.
+            Assert.True(exit!.WaitOne(TimeSpan.FromSeconds(10)), "the witness thread's OS exit never came");
+        }
     }
 
     [MethodImpl(MethodImplOptions.NoInlining)]
@@ -79,8 +90,10 @@ public sealed class LeakedDispatcherGuardTests
         FactBaseline baseline = FactBaseline.Capture();
         using var release = new ManualResetEventSlim(false);
         using var ready = new ManualResetEventSlim(false);
+        OsThreadExit? exit = null;
         var abandoning = new Thread(() =>
         {
+            exit = OsThreadExit.OfCurrentThread();
             _ = Dispatcher.CurrentDispatcher;
             ready.Set();
             _ = release.Wait(TimeSpan.FromSeconds(30));
@@ -104,6 +117,10 @@ public sealed class LeakedDispatcherGuardTests
         {
             release.Set();
             Assert.True(abandoning.Join(TimeSpan.FromSeconds(10)), "the witness thread never ended");
+            using (exit)
+            {
+                Assert.True(exit!.WaitOne(TimeSpan.FromSeconds(10)), "the witness thread's OS exit never came");
+            }
         }
         afterEnd = LeakedDispatcherGuardAttribute.Settle(outstanding);
         int ownedAfterEnd = outstanding.Count;

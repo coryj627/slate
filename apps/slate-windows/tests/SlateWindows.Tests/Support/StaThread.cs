@@ -33,9 +33,10 @@ namespace SlateWindows.Tests;
 /// <para>
 /// How. WPF names each class <c>HwndWrapper[app;thread;guid]</c>, so every
 /// fact's thread gets a name of its own, and after the thread has ended —
-/// its windows destroyed by the system — every class carrying that name is
-/// unregistered. A class that will not unregister fails the fact, naming
-/// it. Nothing runs on the fact's thread after its body: tearing its
+/// at the OS level, which is when the system destroys its windows, and
+/// which a managed Join does not always wait for (<see cref="OsThreadExit"/>)
+/// — every class carrying that name is unregistered. A class that will not
+/// unregister fails the fact, naming it and any window that still has it. Nothing runs on the fact's thread after its body: tearing its
 /// windows down while the thread lives (a dispatcher shutdown disposes
 /// them) hands the foreground to another process's window, after which the
 /// next fact's <c>Window.Activate</c> is refused and every focus-dependent
@@ -68,9 +69,18 @@ internal static class StaThread
     /// sequence number, so the thread's window classes are its alone.</summary>
     internal const string ThreadNamePrefix = "sta-fact-";
 
-    private static readonly List<(string Name, Func<bool> Ended, string What)> s_wedged = [];
+    /// <summary>How long a thread that has ended in managed code gets to
+    /// finish its OS-level exit (which destroys its windows) before its
+    /// classes are freed.</summary>
+    internal static readonly TimeSpan OsExitBound = TimeSpan.FromSeconds(10);
+
+    private static readonly List<(string Name, OsThreadExit? Exit, string What)> s_wedged = [];
 
     private static int s_sequence;
+
+    /// <summary>Test seam: runs between the thread's start and the runner's
+    /// Join, so a witness can make that Join late.</summary>
+    internal static Action? AfterStartForTests { get; set; }
 
     /// <summary>Run <paramref name="body"/> on a fresh STA thread, unregister
     /// the window classes it leaves behind, and rethrow whatever it threw.</summary>
@@ -101,12 +111,14 @@ internal static class StaThread
         T result = default!;
         ExceptionDispatchInfo? failure = null;
         Thread? owner = null;
+        OsThreadExit? exit = null;
         string name = ThreadNamePrefix + Interlocked.Increment(ref s_sequence).ToString(CultureInfo.InvariantCulture);
         var thread = new Thread(() =>
         {
             Volatile.Write(ref owner, Thread.CurrentThread);
             try
             {
+                Volatile.Write(ref exit, OsThreadExit.OfCurrentThread());
                 result = body();
             }
             catch (Exception exception)
@@ -120,6 +132,7 @@ internal static class StaThread
         };
         thread.SetApartmentState(ApartmentState.STA);
         thread.Start();
+        AfterStartForTests?.Invoke();
         TimeSpan limit = timeout ?? DefaultTimeout;
         if (!thread.Join(limit))
         {
@@ -130,17 +143,17 @@ internal static class StaThread
             string what = $"{timeoutMessage ?? "The STA fact timed out."} (thread {name}, bound {limit.TotalSeconds:0.#} s; its dispatcher was told to shut down";
             if (thread.Join(unwindGrace ?? UnwindGrace))
             {
-                string? left = WindowClasses.Unregister(name);
+                string? left = FreeClasses(name, Volatile.Read(ref exit));
                 throw new Xunit.Sdk.XunitException(what + " and the body unwound" + (left is null ? ".)" : "; " + left + ")"));
             }
             lock (s_wedged)
             {
-                s_wedged.Add((name, () => thread.Join(0), timeoutMessage ?? "an STA fact that timed out"));
+                s_wedged.Add((name, Volatile.Read(ref exit), timeoutMessage ?? "an STA fact that timed out"));
             }
             throw new Xunit.Sdk.XunitException(
                 what + ", but the body has not unwound. It runs on beside the facts after this one, so each of them fails until it ends.)");
         }
-        string? residue = WindowClasses.Unregister(name);
+        string? residue = FreeClasses(name, Volatile.Read(ref exit));
         failure?.Throw();
         if (residue is not null)
         {
@@ -161,14 +174,14 @@ internal static class StaThread
         {
             for (int i = s_wedged.Count - 1; i >= 0; i--)
             {
-                (string name, Func<bool> ended, string what) = s_wedged[i];
-                if (!ended())
+                (string name, OsThreadExit? exit, string what) = s_wedged[i];
+                if (exit?.WaitOne(0) == false)
                 {
                     running.Add($"{name} ({what})");
                     continue;
                 }
                 s_wedged.RemoveAt(i);
-                if (WindowClasses.Unregister(name) is { } left)
+                if (FreeClasses(name, exit) is { } left)
                 {
                     residue.Add(left);
                 }
@@ -182,5 +195,25 @@ internal static class StaThread
             " ",
             (running.Count == 0 ? [] : new[] { $"An earlier fact's STA thread never unwound after its timeout and is still running beside this fact: {string.Join(", ", running)}." })
                 .Concat(residue));
+    }
+
+    /// <summary>Once the thread named <paramref name="name"/> has exited at
+    /// the OS level — not merely in managed code; see
+    /// <see cref="OsThreadExit"/> — unregister its window classes, answering
+    /// a description of what could not be freed (null when all were).</summary>
+    private static string? FreeClasses(string name, OsThreadExit? exit)
+    {
+        using (exit)
+        {
+            if (exit is null)
+            {
+                return $"Thread {name} never recorded its OS exit, so its window classes were not freed.";
+            }
+            if (!exit.WaitOne(OsExitBound))
+            {
+                return $"Thread {name} ended in managed code, but its OS thread had not exited {OsExitBound.TotalSeconds:0} s later, so its window classes were not freed.";
+            }
+        }
+        return WindowClasses.Unregister(name);
     }
 }

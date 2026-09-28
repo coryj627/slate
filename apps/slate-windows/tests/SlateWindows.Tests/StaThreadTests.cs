@@ -2,6 +2,7 @@
 // SPDX-License-Identifier: AGPL-3.0-or-later
 
 using System.Reflection;
+using System.Runtime.InteropServices;
 using System.Windows;
 using System.Windows.Controls;
 using System.Windows.Threading;
@@ -84,4 +85,76 @@ public sealed class StaThreadTests
         }
         Assert.Empty(WindowClasses.RegisteredFor(name));
     }
+
+    /// <summary>The CI failure of #1310, reproduced: the runner's Join begins
+    /// only after the runtime has marked the fact's thread dead, while the OS
+    /// thread's exit — which is when the system destroys its windows — is
+    /// held 300 ms (an FLS callback the system runs as the thread exits:
+    /// kernel32!Sleep). A managed Join then answers at once, with the windows
+    /// still alive; the runner must wait for the OS exit before it frees the
+    /// thread's classes, and then leave none.</summary>
+    [Fact]
+    public void AJoinThatBeginsAfterTheThreadDiedStillWaitsForItsWindowsToGo()
+    {
+        Thread? fact = null;
+        OsThreadExit? observed = null;
+        bool osExitedBeforeTheJoin = true;
+        string? name = null;
+        int registered = 0;
+        StaThread.AfterStartForTests = () =>
+        {
+            Assert.True(
+                SpinWait.SpinUntil(() => Volatile.Read(ref fact) is { IsAlive: false }, TimeSpan.FromSeconds(10)),
+                "the fact's thread never ended in managed code");
+            osExitedBeforeTheJoin = Volatile.Read(ref observed)!.WaitOne(0);
+        };
+        try
+        {
+            StaThread.Run(() =>
+            {
+                name = Thread.CurrentThread.Name;
+                Volatile.Write(ref observed, OsThreadExit.OfCurrentThread());
+                _ = Dispatcher.CurrentDispatcher;
+                _ = new Border { Visibility = Visibility.Collapsed };
+                registered = WindowClasses.RegisteredFor(name!).Count;
+                HoldTheOsExit(TimeSpan.FromMilliseconds(300));
+                Volatile.Write(ref fact, Thread.CurrentThread);
+            });
+        }
+        finally
+        {
+            StaThread.AfterStartForTests = null;
+            Volatile.Read(ref observed)?.Dispose();
+        }
+
+        Assert.NotNull(name);
+        Assert.True(registered >= 2, $"premise: the fact's thread registered {registered} WPF classes, expected a dispatcher's and a visual's");
+        Assert.False(osExitedBeforeTheJoin, "premise: the OS thread had already exited when the runner joined, so the race was not set up");
+        Assert.Empty(WindowClasses.RegisteredFor(name));
+    }
+
+    private static readonly Lazy<uint> HoldExitSlot = new(() =>
+    {
+        uint slot = FlsAlloc(GetProcAddress(GetModuleHandleW("kernel32.dll"), "Sleep"));
+        Assert.True(slot != uint.MaxValue, "no FLS slot for the exit hold");
+        return slot;
+    });
+
+    /// <summary>Make the calling thread's OS exit take <paramref name="delay"/>
+    /// longer: the system passes the slot's value to the slot's callback,
+    /// kernel32!Sleep, as the thread exits — after its managed code has ended.</summary>
+    private static void HoldTheOsExit(TimeSpan delay) =>
+        Assert.True(FlsSetValue(HoldExitSlot.Value, (IntPtr)(long)delay.TotalMilliseconds), "the exit hold was not set");
+
+    [DllImport("kernel32.dll")]
+    private static extern uint FlsAlloc(IntPtr callback);
+
+    [DllImport("kernel32.dll")]
+    private static extern bool FlsSetValue(uint slot, IntPtr value);
+
+    [DllImport("kernel32.dll", CharSet = CharSet.Ansi, BestFitMapping = false)]
+    private static extern IntPtr GetProcAddress(IntPtr module, string procName);
+
+    [DllImport("kernel32.dll", CharSet = CharSet.Unicode)]
+    private static extern IntPtr GetModuleHandleW(string moduleName);
 }
