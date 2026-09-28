@@ -2608,6 +2608,65 @@ public sealed class ReadingFocusTests
         Assert.False(((IShellRegionHost)host.Shell).HoldsLanding);
     });
 
+    /// <summary>OD-12, with #1275's modal-loop monitor (the merge of #1298): a
+    /// modal loop beginning over the shell — a message box the shell owns (the
+    /// History alert, the Bases questions), a common dialog, a WPF
+    /// <c>ShowDialog</c> — is a modal opening. It withdraws the held landing
+    /// even when the shell is not the active window (the fixture's shell never
+    /// is, so no deactivation stands in), and while the loop runs the one
+    /// entry creates nothing and its refusal's fallback moves no focus beneath
+    /// it. Once the loop ends, the content arriving seats nobody and nothing
+    /// is spoken. The loop here is WPF's thread-modal state (what a common
+    /// dialog or a <c>ShowDialog</c> raises); a message box's disabled shell
+    /// reaches the slot through the same monitor edge, which #1298's facts
+    /// pin.</summary>
+    [Theory]
+    [InlineData("reading")]
+    [InlineData("canvas")]
+    [InlineData("graph")]
+    public void AModalLoopOverTheShellWithdrawsAndCreatesNoLanding(string kind) => RunSta(() =>
+    {
+        using var host = new Host();
+        host.Initialize(kind);
+        host.HoldEditorLanding();
+        host.FocusTabBar();
+        host.Workspace.RequestActiveEditorFocus();
+        PumpedDispatcher.Drain();
+        Assert.True(((IShellRegionHost)host.Shell).HoldsLanding, $"premise: the route's landing is held ({kind})");
+        Assert.False(host.Shell.ModalLoops.IsModalLoopActive);
+
+        System.Windows.Interop.ComponentDispatcher.PushModal();
+        try
+        {
+            Assert.True(host.Shell.ModalLoops.IsModalLoopActive, "premise: the shell's monitor saw the loop");
+            Assert.False(
+                ((IShellRegionHost)host.Shell).HoldsLanding,
+                $"the modal loop's opening left the landing held ({kind})");
+
+            Assert.True(host.Sentinel.Focus());
+            PumpedDispatcher.Drain();
+            host.Workspace.RequestActiveEditorFocus();
+            PumpedDispatcher.Drain();
+
+            Assert.False(((IShellRegionHost)host.Shell).HoldsLanding, $"a landing was created under the modal loop ({kind})");
+            Assert.Null(host.EditorLandingRequest());
+            AssertFocused(host.Sentinel, $"a route asked for under the modal loop ({kind})");
+        }
+        finally
+        {
+            System.Windows.Interop.ComponentDispatcher.PopModal();
+        }
+
+        PumpedDispatcher.Drain();
+        Assert.False(host.Shell.ModalLoops.IsModalLoopActive);
+        host.LetEditorLandingArrive();
+
+        Assert.False(host.EditorStop().IsKeyboardFocusWithin, $"a landing seated after the modal loop ({kind})");
+        Assert.Null(host.EditorLandingRequest());
+        Assert.DoesNotContain(host.Announced, line => line is A11yEvent.EditorPaneFocused);
+        AssertFocused(host.Sentinel, $"where the reader was under the modal loop ({kind})");
+    });
+
     /// <summary>OD-12's one entry: the funnel ASKS — no canvas or graph
     /// document request exists until the shell's queued landing creates it,
     /// under the window's slot. A later focus request that supersedes that

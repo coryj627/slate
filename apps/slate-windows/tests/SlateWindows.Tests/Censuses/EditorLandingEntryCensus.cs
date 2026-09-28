@@ -94,6 +94,8 @@ public sealed class EditorLandingEntryCensus
         StatementSyntax first = Assert.IsAssignableFrom<StatementSyntax>(entry.Body!.Statements[0]);
         var guard = Assert.IsType<IfStatementSyntax>(first);
         Assert.Contains("OpenModalSurface", guard.Condition.ToString(), StringComparison.Ordinal);
+        // A modal loop over the shell (#1275's monitor) holds the keys too.
+        Assert.Contains("_modalLoops.IsModalLoopActive", guard.Condition.ToString(), StringComparison.Ordinal);
         Assert.NotEmpty(guard.Statement.DescendantNodesAndSelf().OfType<ReturnStatementSyntax>());
     }
 

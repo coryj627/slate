@@ -37,9 +37,10 @@ namespace SlateWindows;
 /// before it is held (the reading park on the tab item, a synchronous fallback)
 /// run before <see cref="Hold"/>; the ones after its arm ended it (a late
 /// refusal's fallback) find nothing held.</item>
-/// <item>ONE modal hook: a modal surface OPENING — the edge, never the level, so a
-/// modal's own later changes do not withdraw what its commit raised
-/// (<see cref="ModalOpened"/>).</item>
+/// <item>ONE modal hook: a modal surface or a modal loop over the shell (a
+/// message box it owns, a common dialog, a WPF <c>ShowDialog</c>) OPENING — the
+/// edge, never the level, so a modal's own later changes do not withdraw what
+/// its commit raised (<see cref="ModalOpened"/>).</item>
 /// <item>The window deactivating (<see cref="WindowDeactivated"/>): a dialog or
 /// another application has the keys.</item>
 /// <item>The active group, or its active tab, changing away from the landing's
@@ -129,8 +130,8 @@ internal sealed class EditorLandingSlot : IDisposable
         return held.Withdraw();
     }
 
-    /// <summary>A modal surface OPENED: it owns the keys, so nothing may seat
-    /// beneath it. The edge alone — a modal's later changes while it stays open
+    /// <summary>A modal surface OPENED, or a modal loop began over the shell:
+    /// it owns the keys, so nothing may seat beneath it. The edge alone — a modal's later changes while it stays open
     /// leave a landing its own commit raised to the route that follows.</summary>
     internal void ModalOpened() => _ = Withdraw();
 

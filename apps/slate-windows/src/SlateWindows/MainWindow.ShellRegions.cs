@@ -228,6 +228,26 @@ public partial class MainWindow : IShellRegionHost
     /// modal hook's edge).</summary>
     private bool _modalSurfaceWasOpen;
 
+    /// <summary>#1275's monitor reporting a modal loop over the shell — a
+    /// message box the shell owns (the History alert, the Bases questions, the
+    /// unsaved-changes prompt), a common dialog, a WPF <c>ShowDialog</c> —
+    /// beginning (<see langword="true"/>) or the last one ending. It seals the
+    /// palette for the loop (contract 28 T13/T14), and the loop BEGINNING is a
+    /// modal opening for the editor landing (W7-7 PR 8, R-10, OD-12): the slot
+    /// withdraws what it holds — the window's deactivation does not cover a
+    /// box raised while the shell is not the active window, which an owned box
+    /// still disables — and the one entry creates nothing while the loop runs
+    /// (<see cref="FocusEditorPane"/>). The edge again: its end restores
+    /// nothing.</summary>
+    private void ModalLoopChanged(bool modalLoop)
+    {
+        _viewModel.Palette.SetModalLoop(modalLoop);
+        if (modalLoop)
+        {
+            _editorLandings.ModalOpened();
+        }
+    }
+
     /// <summary>R-10 (OD-12): the ONE editor landing this window holds, whoever
     /// asked for it, and everything that cancels it.</summary>
     private readonly EditorLandingSlot _editorLandings;

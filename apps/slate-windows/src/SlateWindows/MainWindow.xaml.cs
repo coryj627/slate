@@ -96,7 +96,9 @@ public partial class MainWindow : Window
         // over the shell — the unsaved-changes prompt on close, a folder or
         // file dialog, a WPF ShowDialog — seals the palette for as long as
         // it runs, so nothing it owns publishes or speaks behind the prompt.
-        _modalLoops = new ShellModalLoopMonitor((UIElement)Content, _viewModel.Palette.SetModalLoop);
+        // W7-7 PR 8 (R-10, OD-12): the loop opening is also a modal opening
+        // for the window's editor landing (ModalLoopChanged).
+        _modalLoops = new ShellModalLoopMonitor((UIElement)Content, ModalLoopChanged);
         // #1275 (codex round 6): while sealed, a mnemonic finds no target in
         // the shell (MainWindow.Seal.cs) — past handled, so a menu item's
         // own answer cannot hide a candidate from the seal.
@@ -1972,15 +1974,18 @@ public partial class MainWindow : Window
 
     /// <summary>Whether a refused route landing still owns where the reader
     /// is: <paramref name="group"/> is the active group, <paramref name="tab"/>
-    /// its active tab, and no modal surface holds the keys.</summary>
+    /// its active tab, and no modal holds the keys — neither a modal surface
+    /// nor a modal loop over the shell (#1275's monitor).</summary>
     private bool IsStillTheLandingTab(WorkspaceGroupViewModel group, WorkspaceTabViewModel? tab) =>
-        IsStillWhereAsked(group, tab) && OpenModalSurface is null;
+        IsStillWhereAsked(group, tab) && OpenModalSurface is null && !_modalLoops.IsModalLoopActive;
 
     /// <summary>
     /// W7-7 PR 8 (#1253, contract R-10; OD-12's one entry): THE editor landing
     /// — the one place an editor landing request is created, for the F6 ring,
     /// every route and a canvas jump (<paramref name="canvasNode"/>). Nothing
-    /// is created while a modal surface is open. Its callers first let go of
+    /// is created while a modal holds the keys: a modal surface open, or a
+    /// modal loop over the shell — a message box it owns, a common dialog, a
+    /// WPF <c>ShowDialog</c> (#1275's monitor). Its callers first let go of
     /// the editor landing the window holds (one at most, whoever asked); it
     /// lands the active tab's stop by kind and answers LANDED (focus is in the
     /// stop now), PENDING (held by the window's slot — a canvas or graph
@@ -1994,7 +1999,7 @@ public partial class MainWindow : Window
     private ShellRegionLanding FocusEditorPane(
         WorkspaceGroupViewModel group, Action? onLanded, Action onRefused, bool forTheRing, string? canvasNode = null)
     {
-        if (OpenModalSurface is not null)
+        if (OpenModalSurface is not null || _modalLoops.IsModalLoopActive)
         {
             return ShellRegionLanding.Refused;
         }
