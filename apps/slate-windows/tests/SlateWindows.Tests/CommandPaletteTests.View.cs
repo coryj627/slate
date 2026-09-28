@@ -219,6 +219,103 @@ public sealed partial class CommandPaletteTests
         Assert.Equal(SyntheticId(last), highlighted.Id);
     });
 
+    // --- #1275: the shipped list takes a worker's publication ------------------
+
+    /// <summary>
+    /// The mode users run: the palette's own lane ranks on a worker and the
+    /// shipped list receives the result through the dispatcher. Supersession,
+    /// the replacement selection, zero matches and the recovery from none all
+    /// reach the list on the owning thread, in the order the reader hears
+    /// them, and a superseded query's rows never reach it at all.
+    /// </summary>
+    /// <remarks>
+    /// The R-11 facts above run the synchronous harness, which publishes
+    /// inside the query setter; only this one proves the presenter and the
+    /// ListBox are driven from the dispatcher when a worker finishes.
+    /// </remarks>
+    [Fact]
+    public void TheShippedListTakesAWorkersPublicationOnTheDispatcher() => RunSta(() =>
+    {
+        int owner = Environment.CurrentManagedThreadId;
+        var ranker = new ParkedRanker(owner);
+        using var host = new ShippedResultsList(new PaletteHarness(
+            SynchronizationContext.Current,
+            StandardCommands(),
+            productionLane: true,
+            rank: ranker.Rank));
+        CommandPaletteViewModel palette = host.Palette;
+        var threads = new List<int>();
+        var published = new List<string[]>();
+        palette.PropertyChanged += (_, change) =>
+        {
+            if (change.PropertyName is nameof(CommandPaletteViewModel.Rows)
+                or nameof(CommandPaletteViewModel.SelectedRow))
+            {
+                threads.Add(Environment.CurrentManagedThreadId);
+            }
+
+            if (change.PropertyName == nameof(CommandPaletteViewModel.Rows))
+            {
+                published.Add([.. host.Harness.RowIds]);
+            }
+        };
+        host.List.SelectionChanged += (_, _) => threads.Add(Environment.CurrentManagedThreadId);
+
+        palette.Open();
+        host.SettleAfterPublication();
+        Assert.Equal(5, palette.Rows.Count);
+        host.AssertShowsTheViewModelsSelection();
+        palette.SelectLast();
+        host.Settle();
+        host.ClearObservations();
+        published.Clear();
+
+        // Supersession: "o" is running, "q" is the newest.
+        ranker.Park("o");
+        palette.Query = "o";
+        ranker.WaitUntilEntered("o");
+        palette.Query = "q";
+        ranker.Release("o");
+        host.SettleAfterPublication();
+        Assert.Equal([["slate.nav.quickOpen"]], published);
+        Assert.Equal("slate.nav.quickOpen", palette.SelectedId);
+        host.AssertShowsTheViewModelsSelection();
+        Assert.Collection(
+            host.Harness.Announcements,
+            announced => Assert.Equal(
+                "Quick Open",
+                Assert.IsType<A11yEvent.PaletteCommandSelected>(announced).Label),
+            announced => Assert.Equal(
+                (1u, "q"),
+                (Assert.IsType<A11yEvent.PaletteFilterCount>(announced).Count,
+                    ((A11yEvent.PaletteFilterCount)announced).Query)));
+
+        // Zero matches: no selection on the list, only the count.
+        host.ChangeQuery("zzzz");
+        Assert.Empty(palette.Rows);
+        Assert.Null(host.List.SelectedItem);
+        host.AssertShowsTheViewModelsSelection();
+        A11yEvent.PaletteFilterCount none = Assert.IsType<A11yEvent.PaletteFilterCount>(
+            Assert.Single(host.Harness.Announcements));
+        Assert.Equal((0u, "zzzz"), (none.Count, none.Query));
+
+        // Recovering from none: the selection, then the count.
+        host.ChangeQuery("sav");
+        host.AssertShowsTheViewModelsSelection();
+        Assert.Collection(
+            host.Harness.Announcements,
+            announced => Assert.Equal(
+                "Save",
+                Assert.IsType<A11yEvent.PaletteCommandSelected>(announced).Label),
+            announced => Assert.Equal(
+                "sav",
+                Assert.IsType<A11yEvent.PaletteFilterCount>(announced).Query));
+
+        Assert.NotEmpty(threads);
+        Assert.All(threads, thread => Assert.Equal(owner, thread));
+        Assert.NotEqual(owner, ranker.ThreadOf("o"));
+    });
+
     // --- R-11: grouped rows virtualize --------------------------------------
 
     /// <summary>
@@ -295,8 +392,15 @@ public sealed partial class CommandPaletteTests
         private readonly CommandPaletteResultsPresenter _presenter;
 
         public ShippedResultsList(Command[] commands)
+            : this(new PaletteHarness(commands))
         {
-            Harness = new PaletteHarness(commands);
+        }
+
+        /// <summary>The shipped list over a harness a fact built — the #1275
+        /// witness passes the palette's own lane and a parkable ranker.</summary>
+        public ShippedResultsList(PaletteHarness harness)
+        {
+            Harness = harness;
             _shell = new MainWindow();
             Assert.IsType<CommandPaletteResultsPresenter>(_shell.PaletteResults).Dispose();
             List = _shell.CommandPaletteResultsList;
@@ -353,6 +457,30 @@ public sealed partial class CommandPaletteTests
         {
             ClearObservations();
             Palette.Query = query;
+            SettleAfterPublication();
+        }
+
+        /// <summary>
+        /// Pumps the owning dispatcher until the latest query's rows have
+        /// published and its count has had its turn, then settles the list.
+        /// Immediate on the harness's inline lane.
+        /// </summary>
+        public void SettleAfterPublication()
+        {
+            Assert.True(
+                PumpedDispatcher.PumpUntil(
+                    () => !Palette.IsRankPending && Palette.RankCompletion.IsCompleted,
+                    TimeSpan.FromSeconds(10)),
+                "the rank never published");
+            PumpedDispatcher.Drain();
+            // A publication that threw — the list touched off its dispatcher
+            // throws InvalidOperationException — faults the request's task
+            // instead of surfacing here; name it.
+            Assert.False(
+                Palette.RankCompletion.IsFaulted,
+                "the publication failed: " + Palette.RankCompletion.Exception?.GetBaseException().Message);
+            PumpedDispatcher.PumpUntilDrained(Palette.FilterCountCompletion);
+            PumpedDispatcher.Drain();
             Settle();
         }
 

@@ -35,9 +35,19 @@ internal sealed partial class WorkspaceViewModel
 
     /// <summary>(title, message) — the titles are mac's: "Restore
     /// failed" for the restore flow, "Can't restore" for recovery and
-    /// Restore As… failures.</summary>
-    internal Action<string, string> HistoryAlert { get; set; } =
-        (title, message) => System.Windows.MessageBox.Show(
+    /// Restore As… failures. The shell installs the owned alert
+    /// (<see cref="ShowHistoryAlert"/>); outside a shell there is no window
+    /// to own a box, so none is shown (#1275, contract 28 I11: an ownerless
+    /// box would not disable the shell, and the palette's seal would not see
+    /// it).</summary>
+    internal Action<string, string> HistoryAlert { get; set; } = (_, _) => { };
+
+    /// <summary>The history alert as a message box owned by
+    /// <paramref name="owner"/> — the shell, which installs it (#1275), so
+    /// the box disables it.</summary>
+    internal static void ShowHistoryAlert(System.Windows.Window owner, string title, string message) =>
+        _ = System.Windows.MessageBox.Show(
+            owner,
             message,
             title,
             System.Windows.MessageBoxButton.OK,

@@ -16,14 +16,17 @@ namespace SlateWindows;
 /// </summary>
 public partial class MainWindow
 {
+    private Func<string, bool>? _basesDeleteConfirmation;
+
     /// <summary>Injectable confirmation (the W4-4 dialog-seam
-    /// pattern): production shows a message box; facts inject.</summary>
-    internal Func<string, bool> BasesDeleteConfirmation { get; set; } =
-        message => MessageBox.Show(
-            message,
-            "Slate",
-            MessageBoxButton.YesNo,
-            MessageBoxImage.Warning) == MessageBoxResult.Yes;
+    /// pattern): production shows a message box owned by the shell (#1275:
+    /// an owned box disables the shell, which seals the palette); facts
+    /// inject.</summary>
+    internal Func<string, bool> BasesDeleteConfirmation
+    {
+        get => _basesDeleteConfirmation ??= ConfirmBasesDelete;
+        set => _basesDeleteConfirmation = value;
+    }
 
     private string? _pendingRenameSavedQueryId;
 
@@ -38,8 +41,20 @@ public partial class MainWindow
     private IInputElement? _focusBeforeBuilder;
     private IInputElement? _focusBeforeDashboardEditor;
 
-    private void WireWorkspaceBases(WorkspaceViewModel workspace) =>
+    private void WireWorkspaceBases(WorkspaceViewModel workspace)
+    {
         workspace.PropertyChanged += Workspace_BasesSheetChanged;
+        // #1275: the scope question is owned by the shell, like every
+        // other prompt it raises.
+        workspace.BasesExportScopePrompt = verb => WorkspaceViewModel.AskBasesExportScope(this, verb);
+    }
+
+    private bool ConfirmBasesDelete(string message) => MessageBox.Show(
+        this,
+        message,
+        "Slate",
+        MessageBoxButton.YesNo,
+        MessageBoxImage.Warning) == MessageBoxResult.Yes;
 
     private void UnwireWorkspaceBases(WorkspaceViewModel workspace) =>
         workspace.PropertyChanged -= Workspace_BasesSheetChanged;

@@ -10,6 +10,7 @@
 // `Canvas/` deliberately rather than pretending to be the general one.
 
 using Microsoft.CodeAnalysis;
+using Microsoft.CodeAnalysis.CSharp;
 using Microsoft.CodeAnalysis.CSharp.Syntax;
 
 namespace SlateWindows.Tests.Censuses;
@@ -427,22 +428,40 @@ public sealed class CanvasAnnouncerCensus
     /// see it, because <c>MainWindow</c> is not reachable from a unit
     /// fact.
     /// </summary>
+    /// <remarks>
+    /// Every construction path must install it. <c>MainWindow</c> has one
+    /// constructor that does the work and may have others that delegate to
+    /// it with <c>: this(...)</c> — #1275 added a public one delegating to
+    /// the internal constructor the palette's hosted facts use — so the
+    /// census proves exactly one constructor does the work, every other one
+    /// delegates, and the one install sits in the working constructor,
+    /// which every <c>this(...)</c> chain ends at.
+    /// </remarks>
     [Fact]
     public void TheShellInstallsTheModalOverlayAnswerForModeCancellation()
     {
-        ConstructorDeclarationSyntax constructor = CSharpSource
+        ConstructorDeclarationSyntax[] constructors = CSharpSource
             .Load("MainWindow.xaml.cs")
             .Root.DescendantNodes()
             .OfType<ConstructorDeclarationSyntax>()
-            .Single(declaration => declaration.Identifier.ValueText == "MainWindow");
+            .Where(declaration => declaration.Identifier.ValueText == "MainWindow")
+            .ToArray();
+        ConstructorDeclarationSyntax constructor = Assert.Single(
+            constructors,
+            declaration => declaration.Initializer?.Kind() != SyntaxKind.ThisConstructorInitializer);
 
-        AssignmentExpressionSyntax[] installs = constructor.DescendantNodes()
+        AssignmentExpressionSyntax[] installs = constructors
+            .SelectMany(declaration => declaration.DescendantNodes())
             .OfType<AssignmentExpressionSyntax>()
             .Where(assignment => CSharpSource.Normalize(assignment.Left)
                 .EndsWith("CanvasSurfaceView.ShellOverlayIsOpen", StringComparison.Ordinal))
             .ToArray();
 
         AssignmentExpressionSyntax install = Assert.Single(installs);
+        Assert.True(
+            constructor.Span.Contains(install.Span),
+            "the overlay answer must be installed in the constructor every "
+            + "construction path reaches, not in one that delegates to it");
         Assert.Contains(
             "OpenModalSurface",
             CSharpSource.Normalize(install.Right),
