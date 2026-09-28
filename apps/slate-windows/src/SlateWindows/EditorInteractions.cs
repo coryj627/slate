@@ -1376,8 +1376,12 @@ internal sealed class EditorInteractionCoordinator : BindableBase, IDisposable
         return true;
     }
 
+    /// <summary>A resolved preview card. <paramref name="Resolved"/> is what
+    /// it resolved to, as data (#1278): core words the card's title from it
+    /// for the announcement, the visible header and the popover's name, so
+    /// the host carries no title of its own.</summary>
     private sealed record EmbedPreviewContent(
-        string Title,
+        ResolvedEmbed Resolved,
         string Body,
         string? SourcePath,
         ImageSource? Image,
@@ -1498,15 +1502,28 @@ internal sealed class EditorInteractionCoordinator : BindableBase, IDisposable
             return;
         }
 
-        PopoverTitle = $"{content.Title} — source line {sourceLine}";
+        // #1278: the event carries WHAT the embed resolved to, and core
+        // words everything a reader meets from it: the visible header's
+        // title (after which only the source-line locator follows), the
+        // popover's UIA name — the announcement itself, as for every other
+        // popover outcome (contract 40 R-8) — and the announcement.
+        var shown = new A11yEvent.EmbedPreviewShown(targetRaw, content.Resolved);
+        PopoverTitle = WithSourceLineLocator(
+            SlateUniffiMethods.ResolvedEmbedTitle(content.Resolved),
+            sourceLine);
         PopoverBody = content.Body;
-        PopoverAutomationName =
-            $"Embed preview for {targetRaw}, source line {sourceLine}. {content.Title}";
+        PopoverAutomationName = SlateUniffiMethods.A11yRender(shown).Text;
         PopoverImage = content.Image;
         PopoverEmbedRoot = content.Root;
         PopoverSourcePath = content.SourcePath;
-        _announce(new A11yEvent.EmbedPreviewShown(targetRaw, content.Title));
+        _announce(shown);
     }
+
+    /// <summary>The host's one addition to a card title (#1278): the
+    /// popover header's source-line locator, appended here and nowhere else
+    /// (EmbedPreviewTitleCensus pins this helper and its one caller).</summary>
+    private static string WithSourceLineLocator(string coreTitle, int sourceLine) =>
+        $"{coreTitle} — source line {sourceLine}";
 
     /// <summary>The whole unavailable outcome (W7-7 R-8): core words it
     /// from the resolver's semantic reason, and the popover's body and
@@ -1571,7 +1588,8 @@ internal sealed class EditorInteractionCoordinator : BindableBase, IDisposable
         }
 
         return new EmbedPreviewContent(
-            root.Title,
+            ResolvedEmbeds.Of(resolution)
+                ?? throw new System.Diagnostics.UnreachableException(),
             body,
             root.SourcePath,
             root.Image,
@@ -1652,10 +1670,16 @@ internal sealed class EditorInteractionCoordinator : BindableBase, IDisposable
                 IsWarning: true);
         }
 
+        // #1278: a resolved card's title is core's words for what it
+        // resolved to — the same title the preview's announcement speaks —
+        // so the embeds leaf, nested cards and the popover share one
+        // composition that no host literal takes part in. Each card's title
+        // IS the core call (EmbedPreviewTitleCensus reads it at this sink).
+        // Core bounds the authored parts (a heading, an alt) for display.
         return resolution switch
         {
             EmbedResolution.FullNote full => new EditorEmbedPreviewNode(
-                $"Embedded note: {full.TargetPath}",
+                SlateUniffiMethods.ResolvedEmbedTitle(ResolvedEmbeds.Of(full)!),
                 BuildEmbedParts(
                     full.Text, full.Nested, depth + 1, reserveDecodedBytes),
                 null,
@@ -1663,12 +1687,8 @@ internal sealed class EditorInteractionCoordinator : BindableBase, IDisposable
                 IsDisclosure: true,
                 InitiallyExpanded: depth == 0,
                 IsWarning: false),
-            // The heading is authored text and reaches the Expander
-            // header + UIA name — display-bounded (round 16); the
-            // resolution already happened, so nothing exact is lost.
             EmbedResolution.Section section => new EditorEmbedPreviewNode(
-                $"Embedded section: {BoundDisplayText(section.Heading)} "
-                    + $"from {section.TargetPath}",
+                SlateUniffiMethods.ResolvedEmbedTitle(ResolvedEmbeds.Of(section)!),
                 BuildEmbedParts(
                     section.Text, section.Nested, depth + 1, reserveDecodedBytes),
                 null,
@@ -1677,7 +1697,7 @@ internal sealed class EditorInteractionCoordinator : BindableBase, IDisposable
                 InitiallyExpanded: depth == 0,
                 IsWarning: false),
             EmbedResolution.Block block => new EditorEmbedPreviewNode(
-                $"Embedded block from {block.TargetPath}",
+                SlateUniffiMethods.ResolvedEmbedTitle(ResolvedEmbeds.Of(block)!),
                 [new EditorEmbedPreviewPart(BoundPreviewText(block.Text), null)],
                 null,
                 block.TargetPath,
@@ -1723,7 +1743,7 @@ internal sealed class EditorInteractionCoordinator : BindableBase, IDisposable
                     + "The file may be corrupt or use an unsupported codec."
                 : image.Mime;
         return new EditorEmbedPreviewNode(
-            ImageTitle(image.TargetPath, image.Alt),
+            SlateUniffiMethods.ResolvedEmbedTitle(ResolvedEmbeds.Of(image)!),
             [new EditorEmbedPreviewPart(body, null)],
             decoded,
             image.TargetPath,
@@ -3241,17 +3261,6 @@ internal sealed class EditorInteractionCoordinator : BindableBase, IDisposable
         {
             return null;
         }
-    }
-    private static string ImageTitle(string targetPath, string? alt)
-    {
-        // Nested alts are parsed at resolve time — they never pass
-        // the links_db display bound, so the title bounds them here
-        // (round 16).
-        string trimmed = alt?.Trim() ?? string.Empty;
-        string descriptor = trimmed.Length > 0
-            ? BoundDisplayText(trimmed)
-            : Path.GetFileName(targetPath);
-        return $"Embedded image: {descriptor}";
     }
     private void OpenPopoverSource()
     {

@@ -784,12 +784,14 @@ pub enum A11yEvent {
     CitationPopoverShown {
         speech: String,
     },
-    /// An embed preview's result landed; `title` is the resolved card's
-    /// title ("Embedded note: …"). Announced when the result lands, not
-    /// at open, where the only outcome is "Loading".
+    /// An embed preview's result landed. `resolved` is WHAT it resolved
+    /// to — the kind and its identifying fields, never a title — and core
+    /// words the card title from it ([`resolved_embed_title`], #1278), so
+    /// no host sentence rides inside the event. Announced when the result
+    /// lands, not at open, where the only outcome is "Loading".
     EmbedPreviewShown {
         target: String,
-        title: String,
+        resolved: ResolvedEmbed,
     },
     /// An embed preview resolved to nothing. `reason` is the resolver's
     /// SEMANTIC reason, not its card's text: core renders the sentence
@@ -1998,9 +2000,10 @@ impl A11yEvent {
                     format!("Citation. {speech}")
                 }
             }
-            EmbedPreviewShown { target, title } => {
-                lead_then_sentence(&format!("Embed preview for {target}."), title)
-            }
+            EmbedPreviewShown { target, resolved } => lead_then_sentence(
+                &format!("Embed preview for {target}."),
+                &resolved_embed_title(resolved),
+            ),
             EmbedPreviewUnavailable { target, reason } => lead_then_sentence(
                 &format!("Embed preview for {target}."),
                 &embed_unavailable_reason(reason),
@@ -3151,6 +3154,89 @@ fn lead_then_sentence(lead: &str, text: &str) -> String {
     }
 }
 
+/// What a resolved embed card shows (#1278): the resolution's kind and
+/// the fields that identify it — never its content and never a title. A
+/// host hands this back to core, which words the card title from it
+/// ([`resolved_embed_title`]) for the announcement, the visible card
+/// header and its UIA name alike, in the preview and the reading view.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum ResolvedEmbed {
+    /// A whole note (`![[note]]`).
+    Note { target_path: String },
+    /// One heading's section (`![[note#Heading]]`); `heading` is the
+    /// resolved heading's text.
+    Section {
+        target_path: String,
+        heading: String,
+    },
+    /// One block (`![[note#^block]]`).
+    Block { target_path: String },
+    /// An image; `alt` is the authored alt text, if any. The path and alt
+    /// are the semantic data — the "image descriptor" the title shows (the
+    /// trimmed alt, else the file name) is core's rendering of them.
+    Image {
+        target_path: String,
+        alt: Option<String>,
+    },
+    /// A `.base` file shown as the reading view's layered summary card
+    /// (Bases contract C10) — the card names its real kind, not "note".
+    Base { target_path: String },
+}
+
+/// The display ceiling for AUTHORED text inside a card title (a heading,
+/// an image's alt): a megabyte heading must not become a megabyte
+/// announcement or UIA name. Paths are vault paths and stay whole.
+const MAX_TITLE_FIELD_CHARS: usize = 4096;
+
+fn bound_display_text(value: &str) -> std::borrow::Cow<'_, str> {
+    match value.char_indices().nth(MAX_TITLE_FIELD_CHARS) {
+        None => std::borrow::Cow::Borrowed(value),
+        Some((cut, _)) => std::borrow::Cow::Owned(format!("{}\u{2026}", &value[..cut])),
+    }
+}
+
+/// The last component of a vault path, on either separator.
+fn path_file_name(target_path: &str) -> &str {
+    target_path
+        .rsplit(['/', '\\'])
+        .next()
+        .unwrap_or(target_path)
+}
+
+/// The card title of a resolved embed (#1278): mac `EmbedView`'s label
+/// shapes, rendered here so the Windows host composes none of them. An
+/// image is named by its trimmed alt text, or its file name when there is
+/// none (mac audits #196/#198/#419). A base is named by its file name
+/// without the extension (mac `BaseEmbedDocument`'s label; a leading dot is
+/// not an extension).
+pub fn resolved_embed_title(resolved: &ResolvedEmbed) -> String {
+    match resolved {
+        ResolvedEmbed::Note { target_path } => format!("Embedded note: {target_path}"),
+        ResolvedEmbed::Section {
+            target_path,
+            heading,
+        } => format!(
+            "Embedded section: {} from {target_path}",
+            bound_display_text(heading)
+        ),
+        ResolvedEmbed::Block { target_path } => format!("Embedded block from {target_path}"),
+        ResolvedEmbed::Image { target_path, alt } => {
+            match alt.as_deref().map(str::trim).filter(|alt| !alt.is_empty()) {
+                Some(alt) => format!("Embedded image: {}", bound_display_text(alt)),
+                None => format!("Embedded image: {}", path_file_name(target_path)),
+            }
+        }
+        ResolvedEmbed::Base { target_path } => {
+            let file_name = path_file_name(target_path);
+            let name = match file_name.rfind('.') {
+                Some(dot) if dot > 0 => &file_name[..dot],
+                _ => file_name,
+            };
+            format!("Embedded base: {name}")
+        }
+    }
+}
+
 /// Why an embed preview has nothing to show, from the resolver's own
 /// reason (W7-7, #1251). The wording is the preview card's shipped copy,
 /// moved here so the host passes the reason and never a sentence; the
@@ -3952,9 +4038,46 @@ pub fn corpus() -> Vec<A11yEvent> {
         CitationPopoverShown {
             speech: "Unresolved citation: smith2020".into(),
         },
+        // Every resolved kind (#1278), and both image namings: the
+        // trimmed alt, else the file name (a blank alt is no alt).
         EmbedPreviewShown {
             target: "Whipped cream".into(),
-            title: "Embedded note: recipes/Whipped cream.md".into(),
+            resolved: ResolvedEmbed::Note {
+                target_path: "recipes/Whipped cream.md".into(),
+            },
+        },
+        EmbedPreviewShown {
+            target: "recipes#Glaze".into(),
+            resolved: ResolvedEmbed::Section {
+                target_path: "recipes.md".into(),
+                heading: "Glaze".into(),
+            },
+        },
+        EmbedPreviewShown {
+            target: "recipes".into(),
+            resolved: ResolvedEmbed::Block {
+                target_path: "recipes.md".into(),
+            },
+        },
+        EmbedPreviewShown {
+            target: "pie.png".into(),
+            resolved: ResolvedEmbed::Image {
+                target_path: "images/pie.png".into(),
+                alt: Some("  A slice of pie  ".into()),
+            },
+        },
+        EmbedPreviewShown {
+            target: "pie.png".into(),
+            resolved: ResolvedEmbed::Image {
+                target_path: "images/pie.png".into(),
+                alt: Some("   ".into()),
+            },
+        },
+        EmbedPreviewShown {
+            target: "Reading list.base".into(),
+            resolved: ResolvedEmbed::Base {
+                target_path: "lists/Reading list.base".into(),
+            },
         },
         // Every resolver reason. A resolver that throws is a ReadError too,
         // carrying its error's core-rendered detail (the index witness).
@@ -5916,6 +6039,125 @@ mod tests {
         }
     }
 
+    /// #1278: every kind an embed preview can resolve to has an
+    /// EmbedPreviewShown corpus witness, so core's title for it is pinned
+    /// by the golden, the artifact and both host censuses.
+    #[test]
+    fn every_resolved_embed_kind_has_a_shown_witness() {
+        let declared = declared_variants("ResolvedEmbed");
+        assert!(
+            declared.len() >= 4,
+            "parsed only {declared:?} — the parser broke, not the vocabulary"
+        );
+        let witnessed: std::collections::BTreeSet<String> = corpus()
+            .iter()
+            .filter_map(|event| match event {
+                A11yEvent::EmbedPreviewShown { resolved, .. } => Some(
+                    format!("{resolved:?}")
+                        .chars()
+                        .take_while(char::is_ascii_alphanumeric)
+                        .collect(),
+                ),
+                _ => None,
+            })
+            .collect();
+        assert_eq!(
+            witnessed, declared,
+            "ResolvedEmbed kinds without an EmbedPreviewShown witness"
+        );
+    }
+
+    /// #1278: core words every card title — the kind decides the shape,
+    /// authored text (a heading, an alt) is display-bounded, and an image
+    /// without a usable alt is named by its file name on either separator.
+    #[test]
+    fn resolved_embed_titles_are_cores_words() {
+        let long = "h".repeat(5000);
+        for (resolved, expected) in [
+            (
+                ResolvedEmbed::Note {
+                    target_path: "a/b.md".into(),
+                },
+                "Embedded note: a/b.md".to_owned(),
+            ),
+            (
+                ResolvedEmbed::Section {
+                    target_path: "a/b.md".into(),
+                    heading: "Plan".into(),
+                },
+                "Embedded section: Plan from a/b.md".to_owned(),
+            ),
+            (
+                ResolvedEmbed::Section {
+                    target_path: "a/b.md".into(),
+                    heading: long.clone(),
+                },
+                format!("Embedded section: {}\u{2026} from a/b.md", "h".repeat(4096)),
+            ),
+            (
+                ResolvedEmbed::Block {
+                    target_path: "a/b.md".into(),
+                },
+                "Embedded block from a/b.md".to_owned(),
+            ),
+            (
+                ResolvedEmbed::Image {
+                    target_path: "img/cover.png".into(),
+                    alt: Some(" Cover ".into()),
+                },
+                "Embedded image: Cover".to_owned(),
+            ),
+            (
+                ResolvedEmbed::Image {
+                    target_path: "img/cover.png".into(),
+                    alt: Some(long),
+                },
+                format!("Embedded image: {}\u{2026}", "h".repeat(4096)),
+            ),
+            (
+                ResolvedEmbed::Image {
+                    target_path: "img/cover.png".into(),
+                    alt: None,
+                },
+                "Embedded image: cover.png".to_owned(),
+            ),
+            (
+                ResolvedEmbed::Image {
+                    target_path: "img\\cover.png".into(),
+                    alt: Some(String::new()),
+                },
+                "Embedded image: cover.png".to_owned(),
+            ),
+            (
+                ResolvedEmbed::Image {
+                    target_path: "cover.png".into(),
+                    alt: None,
+                },
+                "Embedded image: cover.png".to_owned(),
+            ),
+            (
+                ResolvedEmbed::Base {
+                    target_path: "lists/Reading.base".into(),
+                },
+                "Embedded base: Reading".to_owned(),
+            ),
+            (
+                ResolvedEmbed::Base {
+                    target_path: "lists\\v1.2 archive.base".into(),
+                },
+                "Embedded base: v1.2 archive".to_owned(),
+            ),
+            (
+                ResolvedEmbed::Base {
+                    target_path: "lists/.base".into(),
+                },
+                "Embedded base: .base".to_owned(),
+            ),
+        ] {
+            assert_eq!(resolved_embed_title(&resolved), expected, "{resolved:?}");
+        }
+    }
+
     /// W7-7 (#1251): every reason the embed resolver can give has an
     /// EmbedPreviewUnavailable corpus witness, so its sentence is pinned
     /// by the golden, the artifact and both host censuses. The render
@@ -6376,6 +6618,23 @@ mod tests {
             (
                 High,
                 "Embed preview for Whipped cream. Embedded note: recipes/Whipped cream.md.",
+            ),
+            (
+                High,
+                "Embed preview for recipes#Glaze. Embedded section: Glaze from recipes.md.",
+            ),
+            (
+                High,
+                "Embed preview for recipes. Embedded block from recipes.md.",
+            ),
+            (
+                High,
+                "Embed preview for pie.png. Embedded image: A slice of pie.",
+            ),
+            (High, "Embed preview for pie.png. Embedded image: pie.png."),
+            (
+                High,
+                "Embed preview for Reading list.base. Embedded base: Reading list.",
             ),
             (High, "Embed preview for Target. Target not found: Target."),
             (
