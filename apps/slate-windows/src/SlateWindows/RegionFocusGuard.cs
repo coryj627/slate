@@ -325,7 +325,7 @@ internal static class RegionFocusGuard
 
     /// <summary>Whether <paramref name="element"/> can no longer hold the
     /// keys: out of the tree, hidden, disabled or unfocusable.</summary>
-    internal static bool IsStranded(UIElement element) =>
+    private static bool IsStranded(UIElement element) =>
         PresentationSource.FromVisual(element) is null
         || !element.IsVisible
         || !element.IsEnabled

@@ -624,14 +624,6 @@ internal static class SelectorFocus
 
             if ((bare ?? _lastRows) is Selector list && IsListLanding(list) && list.IsVisible)
             {
-                if (!list.HasItems && PopulatedSibling(list) is not null)
-                {
-                    // An emptied list while a sibling has rows: the scope's
-                    // landing, the first populated list's row (G14).
-                    _ = landInScope();
-                    return;
-                }
-
                 // A populated list: its row. An empty one: its notice once
                 // that is a stop; stranded keys come back to it even so.
                 if ((list.HasItems || stranded || notices.Any(IsAStop))

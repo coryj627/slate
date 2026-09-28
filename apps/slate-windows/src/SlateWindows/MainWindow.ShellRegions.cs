@@ -240,13 +240,14 @@ public partial class MainWindow : IShellRegionHost
             .FirstOrDefault(child => !ReferenceEquals(child, RightPaneDockedPlaceholder));
 
     /// <summary>
-    /// A leaf's first stop, in visual order. Layout is no stop: a border, a
-    /// scroll viewer, a panel (W7-7 PR 4b, the sweep's G19 — the Sync leaf's
-    /// first stop was an unnamed scroll viewer). An EMPTY list gives way to a
-    /// populated list that follows it (the owner's S5, the sweep's G14: a
-    /// note whose tasks are all done landed on the empty "Open tasks" list,
-    /// its rows one list below); with nothing populated after it, the empty
-    /// list is the stop (AR-6).
+    /// A leaf's first stop, in visual order. Layout is no stop: a border
+    /// never is, and every scroll viewer the code builds is unfocusable
+    /// (W7-7 PR 4b, the sweep's G19 — the Sync leaf's first stop was an
+    /// unnamed scroll viewer; <c>ScrollViewerStopCensus</c>). An EMPTY list
+    /// gives way to a populated list that follows it (the owner's S5, the
+    /// sweep's G14: a note whose tasks are all done landed on the empty
+    /// "Open tasks" list, its rows one list below); with nothing populated
+    /// after it, the empty list is the stop (AR-6).
     /// </summary>
     private static UIElement? FirstFocusable(DependencyObject root)
     {
@@ -254,7 +255,7 @@ public partial class MainWindow : IShellRegionHost
         foreach (DependencyObject candidate in FindVisualDescendants<DependencyObject>(root))
         {
             if (candidate is not UIElement { Focusable: true, IsEnabled: true, IsVisible: true } element
-                || candidate is Border or ScrollViewer or Panel)
+                || candidate is Border)
             {
                 continue;
             }

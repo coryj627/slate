@@ -354,6 +354,40 @@ public sealed class RightPaneNoticeLandingTests
     });
 
     /// <summary>
+    /// The sweep's G20, through the shell's own restore
+    /// (<see cref="MainWindow.LandToken"/>, every dismissal's): the keys left
+    /// a task's row for a dialog, and while it was up the task was done — its
+    /// row gone. The restore lands in the leaf the row was in, on the Done
+    /// list's row, in one focus change — it used to fall back to the editor.
+    /// </summary>
+    [Fact]
+    public void ARestoreWhoseRowIsGoneLandsInItsLeaf() => RunSta(() =>
+    {
+        using var host = new Host();
+        host.Initialize("tasks", "empty");
+        host.AwaitFinalNotice("tasks");
+        PublishTasks(host.Panels, (false, 1), (true, 1));
+        PumpedDispatcher.Drain();
+        ListBox open = host.List("tasks");
+        ListBox done = host.ElementWithId<ListBox>("PanelTasksDoneList");
+        open.UpdateLayout();
+        Assert.True(((UIElement)open.ItemContainerGenerator.ContainerFromIndex(0)).Focus());
+        IInputElement token = Keyboard.FocusedElement;
+        Assert.True(host.Beside.Focus());
+        PublishTasks(host.Panels, (false, 0), (true, 2));
+        PumpedDispatcher.Drain();
+        Assert.Same(host.Beside, Keyboard.FocusedElement);
+        Assert.Null(PresentationSource.FromVisual((Visual)token));
+        host.ForgetFocusAndSpeech();
+
+        Assert.True(host.Shell.LandToken(token), "the restore took nothing");
+
+        var row = Assert.IsType<ListBoxItem>(Keyboard.FocusedElement);
+        Assert.Same(done, ItemsControl.ItemsControlFromItemContainer(row));
+        Assert.Equal([row], host.FocusChanges);
+    });
+
+    /// <summary>
     /// W7-7 PR 4b (the completeness sweep's G11): a Citations republish under
     /// the reader — any save — destroyed the row holding the keys, and its
     /// hand-over put them on the bare list (a UIA focus change on "Citations,
