@@ -1,7 +1,6 @@
 // Copyright (C) 2026 Cory Joseph
 // SPDX-License-Identifier: AGPL-3.0-or-later
 
-using System.Reflection;
 using System.Runtime.InteropServices;
 using System.Windows;
 using System.Windows.Interop;
@@ -100,28 +99,64 @@ public sealed partial class CommandPaletteTests
 
     /// <summary>
     /// Codex round 4's own path in the shipped shell: closing the app with
-    /// a dirty tab while the palette is open raises the unsaved-changes
-    /// prompt through the lifecycle's own prompt seam — here a message-box
-    /// shaped loop, which never enters WPF's thread-modal state, so only the
-    /// shell's disabled window says it is up. Cancel keeps the app open and
-    /// the palette resumes.
+    /// a dirty tab while the palette is open raises the shell's
+    /// unsaved-changes prompt — its wiring into the lifecycle, its owner and
+    /// its answer mapping all shipped; only the native box itself is a
+    /// message-box shaped loop, which never enters WPF's thread-modal state,
+    /// so only the disabled window says it is up. Cancel keeps the app open
+    /// and the palette resumes.
     /// </summary>
     [Fact]
     public void TheShippedClosePromptSealsThePalette() => RunSta(() =>
     {
         using var host = new PaletteShellHost();
         host.AttachDirtyWorkspace();
-        SyntheticPrompt prompt = InstallClosePrompt(host.Lifecycle, host.Window, LoopSignals.DisablesShell);
+        SyntheticPrompt prompt = InstallClosePrompt(host.Shell, host.Window, LoopSignals.DisablesShell, MessageBoxResult.Cancel);
         bool closed = true;
         ModalLoopWitness witness = WitnessAModalLoop(
             host,
             show: () => closed = host.Lifecycle.PrepareForApplicationClose(),
             findCloser: prompt.Closer);
 
-        Assert.True(prompt.Ran, "closing the app never raised the unsaved-changes prompt");
+        AssertTheShippedPromptWasShown(prompt, host.Shell);
         Assert.False(closed, "Cancel on the unsaved-changes prompt closed the app");
         witness.AssertSealedAndSilentThenResumed(host);
     });
+
+    /// <summary>
+    /// The shipped prompt's answer decides the close (codex on #1298's CI
+    /// fix: the hosted facts must run the shell's own prompt wiring and its
+    /// mapping, not a replacement for them): Yes saves every dirty note and
+    /// closes, No closes leaving the note as it was on disk, Cancel keeps
+    /// the vault open with its changes.
+    /// </summary>
+    [Theory]
+    [InlineData(MessageBoxResult.Yes, true, true)]
+    [InlineData(MessageBoxResult.No, true, false)]
+    [InlineData(MessageBoxResult.Cancel, false, false)]
+    public void TheClosePromptsAnswerDecidesTheClose(MessageBoxResult answer, bool closes, bool saves) => RunSta(() =>
+    {
+        using var host = new ShippedShellHost();
+        WorkspaceViewModel workspace = host.AttachDirtyWorkspace();
+        string note = Path.Combine(host.VaultRoot, "note0.md");
+        string before = File.ReadAllText(note);
+        SyntheticPrompt prompt = InstallClosePrompt(host.Shell, fallback: null, LoopSignals.None, answer);
+
+        bool closed = host.Lifecycle.PrepareForApplicationClose();
+
+        AssertTheShippedPromptWasShown(prompt, host.Shell);
+        Assert.Equal(closes, closed);
+        Assert.Equal(saves, File.ReadAllText(note) != before);
+        Assert.Equal(!saves, workspace.HasDirtyTabs);
+    });
+
+    private static void AssertTheShippedPromptWasShown(SyntheticPrompt prompt, MainWindow shell)
+    {
+        (Window Owner, string Caption, MessageBoxButton Buttons, MessageBoxResult Default) shown =
+            Assert.Single(prompt.Shown);
+        Assert.Same(shell, shown.Owner);
+        Assert.Equal(("Close Vault", MessageBoxButton.YesNoCancel, MessageBoxResult.Cancel), (shown.Caption, shown.Buttons, shown.Default));
+    }
 
     /// <summary>
     /// Opens the palette over the shell, parks its lane, types a query whose
@@ -200,20 +235,26 @@ public sealed partial class CommandPaletteTests
         return witness;
     }
 
-    /// <summary>Replaces the lifecycle's unsaved-changes prompt — the seam
-    /// the shell fills with its message box — with <paramref name="signals"/>'
-    /// loop over <paramref name="shell"/>'s window, answering Cancel.</summary>
+    /// <summary>
+    /// Replaces ONLY the native box behind the shell's unsaved-changes
+    /// prompt (<c>MainWindow.ShowUnsavedClosePrompt</c>) with
+    /// <paramref name="signals"/>' loop, answering
+    /// <paramref name="answer"/>: the lifecycle still reaches the shell's
+    /// own prompt through its shipped binding, and the shell still maps the
+    /// answer. The loop disables the box's owner's window, as a real box
+    /// does — or, when the owner has none, <paramref name="fallback"/>, the
+    /// active window WPF would hand a real box instead.
+    /// </summary>
     private static SyntheticPrompt InstallClosePrompt(
-        VaultLifecycleViewModel lifecycle, Visual? shell, LoopSignals signals)
+        MainWindow shell, Visual? fallback, LoopSignals signals, MessageBoxResult answer)
     {
-        var prompt = new SyntheticPrompt(shell, signals);
-        (typeof(VaultLifecycleViewModel).GetField("_confirmUnsavedClose", BindingFlags.NonPublic | BindingFlags.Instance)
-                ?? throw new InvalidOperationException("VaultLifecycleViewModel._confirmUnsavedClose is gone"))
-            .SetValue(lifecycle, (Func<VaultCloseDecision>)(() =>
-            {
-                prompt.Run();
-                return VaultCloseDecision.Cancel;
-            }));
+        var prompt = new SyntheticPrompt(fallback, signals);
+        shell.ShowUnsavedClosePrompt = (owner, _, caption, buttons, _, defaultResult) =>
+        {
+            prompt.Shown.Add((owner, caption, buttons, defaultResult));
+            prompt.Run(PresentationSource.FromVisual(owner) is HwndSource ? owner : fallback);
+            return answer;
+        };
         return prompt;
     }
 
@@ -233,15 +274,29 @@ public sealed partial class CommandPaletteTests
         /// <summary>Whether the loop has run.</summary>
         public bool Ran { get; private set; }
 
+        /// <summary>Each native box this loop stood in for, as the shell asked
+        /// for it.</summary>
+        public List<(Window Owner, string Caption, MessageBoxButton Buttons, MessageBoxResult Default)> Shown { get; } = [];
+
         /// <summary>Ends the loop while it runs; null otherwise.</summary>
         public Action? Closer() => _frame is { } frame ? () => frame.Continue = false : null;
 
-        public void Run()
+        /// <summary>Runs the loop over <paramref name="over"/>'s window (the
+        /// one given at construction by default). With no signals there is
+        /// no loop: the answer is immediate.</summary>
+        public void Run(Visual? over = null)
         {
+            Visual? target = over ?? shell;
+            if (signals == LoopSignals.None)
+            {
+                Ran = true;
+                return;
+            }
+
             IntPtr window = IntPtr.Zero;
             if (signals.HasFlag(LoopSignals.DisablesShell))
             {
-                window = shell is not null && PresentationSource.FromVisual(shell) is HwndSource source
+                window = target is not null && PresentationSource.FromVisual(target) is HwndSource source
                     ? source.Handle
                     : throw new InvalidOperationException("a loop that disables the shell needs the shell's window");
             }

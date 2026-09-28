@@ -599,10 +599,11 @@ public sealed partial class CommandPaletteTests
 
         public string[] PersistedRecents() => new CommandPaletteRecentsStore(_recentsPath).Load();
 
-        /// <summary>The unsaved-changes prompt as a message-box shaped loop
-        /// over the shown shell (<see cref="InstallClosePrompt"/>).</summary>
+        /// <summary>The shell's unsaved-changes prompt with only its native
+        /// box replaced by a message-box shaped loop over the shown shell,
+        /// answering Cancel (<see cref="InstallClosePrompt"/>).</summary>
         public SyntheticPrompt InstallClosePrompt() =>
-            CommandPaletteTests.InstallClosePrompt(_lifecycle, Shell, LoopSignals.DisablesShell);
+            CommandPaletteTests.InstallClosePrompt(Shell, fallback: null, LoopSignals.DisablesShell, MessageBoxResult.Cancel);
 
         /// <summary>A real key press on <paramref name="target"/>: Preview,
         /// then — unhandled — KeyDown, with exactly

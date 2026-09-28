@@ -151,9 +151,20 @@ public partial class MainWindow : Window
         return Task.FromResult(result == MessageBoxResult.Yes);
     }
 
+    /// <summary>
+    /// The unsaved-changes prompt's display boundary: the native message
+    /// box, and nothing else (#1298). CI's Windows session is
+    /// non-interactive, where a native box never becomes a window a fact
+    /// could find and close, so a hosted fact replaces only this call — the
+    /// prompt's wiring into the lifecycle and its answer mapping still run.
+    /// Production never sets it.
+    /// </summary>
+    internal Func<Window, string, string, MessageBoxButton, MessageBoxImage, MessageBoxResult, MessageBoxResult> ShowUnsavedClosePrompt { get; set; } =
+        MessageBox.Show;
+
     private VaultCloseDecision ConfirmUnsavedClose()
     {
-        MessageBoxResult result = MessageBox.Show(
+        MessageBoxResult result = ShowUnsavedClosePrompt(
             this,
             "One or more notes have unsaved changes.\n\n" +
             "Choose Yes to save all changes, No to discard them, or Cancel to keep the vault open.",
