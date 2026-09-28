@@ -1323,31 +1323,6 @@ internal sealed partial class FilesSidebarViewModel : BindableBase
         }
     }
 
-    /// <summary>The selected tag and its ancestors, root first — the Tags
-    /// tree's landing path (the Files tree's is the selected file's); null
-    /// with nothing selected.</summary>
-    internal IReadOnlyList<object>? SelectedTagPath()
-    {
-        var path = new List<object>();
-        return PathTo(Tags, path) ? path : null;
-
-        static bool PathTo(IEnumerable<SidebarTagViewModel> level, List<object> path)
-        {
-            foreach (SidebarTagViewModel tag in level)
-            {
-                path.Add(tag);
-                if (tag.IsSelected || PathTo(tag.Children, path))
-                {
-                    return true;
-                }
-
-                path.RemoveAt(path.Count - 1);
-            }
-
-            return false;
-        }
-    }
-
     private void EditTag(bool add)
     {
         string[] paths = [.. _batchChecked

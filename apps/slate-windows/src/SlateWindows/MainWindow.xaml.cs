@@ -52,14 +52,10 @@ public partial class MainWindow : Window
         SelectorFocus.RegisterClickRule();
         // The Tags tree's selection ACTIVATES a tag filter (R-3): its
         // landing is its selected tag, else its first tag UNSELECTED —
-        // never one it would apply. The selected tag's path comes from the
-        // model, as the Files tree's does, so a NESTED tag's row is realized
-        // level by level even before WPF has generated it (codex PR 4b r1 F4).
+        // never one it would apply.
         TreeView tags = FindWithAutomationId<TreeView>(FilesPaneBorder, "SidebarTagTree")
             ?? throw new InvalidOperationException("SidebarTagTree is not in the shell's XAML.");
-        SelectorFocus.SetOwnLanding(
-            tags,
-            () => LandOnSidebarTree(tags, _viewModel.FileSidebar?.SelectedTagPath()));
+        SelectorFocus.SetOwnLanding(tags, () => LandOnSidebarTree(tags, selectedPath: null));
         // S4 (#1247): every selection-committing list owns its landing, so a
         // restore whose token is one of its rows lands as the region does —
         // the filter's results and the dual pane OPEN on selection (R-2),
