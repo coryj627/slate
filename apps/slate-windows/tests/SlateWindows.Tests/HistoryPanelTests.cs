@@ -81,28 +81,8 @@ public sealed class HistoryPanelTests : IDisposable
     /// <summary>DeleteFile routes through the system trash, whose COM
     /// init requires an STA thread (the app's UI thread is STA; the
     /// xunit thread is not — measured RPC_E_CHANGED_MODE panic).</summary>
-    private static void DeleteOnSta(VaultSession session, string path)
-    {
-        Exception? failure = null;
-        var thread = new Thread(() =>
-        {
-            try
-            {
-                session.DeleteFile(path);
-            }
-            catch (Exception exception)
-            {
-                failure = exception;
-            }
-        });
-        thread.SetApartmentState(ApartmentState.STA);
-        thread.Start();
-        thread.Join();
-        if (failure is not null)
-        {
-            throw failure;
-        }
-    }
+    private static void DeleteOnSta(VaultSession session, string path) =>
+        StaThread.Run(() => session.DeleteFile(path));
 
     /// <summary>Core builds the remnant set at RECONCILE (scan) — a
     /// same-session deletion enters the Deleted list at the next

@@ -1,7 +1,6 @@
 // Copyright (C) 2026 Cory Joseph
 // SPDX-License-Identifier: AGPL-3.0-or-later
 
-using System.Runtime.ExceptionServices;
 using System.Windows.Automation;
 using System.Windows.Controls;
 using System.Windows.Input;
@@ -1601,28 +1600,8 @@ public sealed class AccessibleDataGridTests
             Publisher: null,
             AbstractText: null);
 
-    private static void RunSta(Action body)
-    {
-        Exception? failure = null;
-        var thread = new Thread(() =>
-        {
-            try
-            {
-                body();
-            }
-            catch (Exception exception)
-            {
-                failure = exception;
-            }
-        });
-        thread.SetApartmentState(ApartmentState.STA);
-        thread.Start();
-        Assert.True(thread.Join(TimeSpan.FromSeconds(60)), "STA test body timed out.");
-        if (failure is not null)
-        {
-            ExceptionDispatchInfo.Capture(failure).Throw();
-        }
-    }
+    private static void RunSta(Action body) =>
+        StaThread.Run(body, TimeSpan.FromSeconds(60), "STA test body timed out.");
 }
 
 /// <summary>W7-7 PR 3 (#1246, contract R-4), the surface callers: the
@@ -1855,28 +1834,8 @@ public sealed class AccessibleDataGridSurfaceRowNameTests : IDisposable
         document.Shutdown();
     });
 
-    private static void RunSta(Action body)
-    {
-        Exception? failure = null;
-        var thread = new Thread(() =>
-        {
-            try
-            {
-                body();
-            }
-            catch (Exception exception)
-            {
-                failure = exception;
-            }
-        });
-        thread.SetApartmentState(ApartmentState.STA);
-        thread.Start();
-        Assert.True(thread.Join(TimeSpan.FromSeconds(60)), "STA test body timed out.");
-        if (failure is not null)
-        {
-            ExceptionDispatchInfo.Capture(failure).Throw();
-        }
-    }
+    private static void RunSta(Action body) =>
+        StaThread.Run(body, TimeSpan.FromSeconds(60), "STA test body timed out.");
 }
 
 /// <summary>The realized rows of a grid, as UIA reads them.</summary>

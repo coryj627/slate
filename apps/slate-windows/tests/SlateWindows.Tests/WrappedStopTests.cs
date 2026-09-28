@@ -3,7 +3,6 @@
 
 using System.Collections.ObjectModel;
 using System.Dynamic;
-using System.Runtime.ExceptionServices;
 using System.Text.Json.Nodes;
 using System.Windows;
 using System.Windows.Automation.Peers;
@@ -224,26 +223,6 @@ public sealed class WrappedStopTests
         }
     }
 
-    private static void RunSta(Action body)
-    {
-        Exception? failure = null;
-        var thread = new Thread(() =>
-        {
-            try
-            {
-                body();
-            }
-            catch (Exception exception)
-            {
-                failure = exception;
-            }
-        });
-        thread.SetApartmentState(ApartmentState.STA);
-        thread.Start();
-        Assert.True(thread.Join(TimeSpan.FromSeconds(60)), "STA test body timed out.");
-        if (failure is not null)
-        {
-            ExceptionDispatchInfo.Capture(failure).Throw();
-        }
-    }
+    private static void RunSta(Action body) =>
+        StaThread.Run(body, TimeSpan.FromSeconds(60), "STA test body timed out.");
 }

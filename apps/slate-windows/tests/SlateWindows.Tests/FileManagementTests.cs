@@ -1809,28 +1809,8 @@ public sealed class FileManagementTests
             Sidebar.TreeRefreshCompletion.WaitAsync(TimeSpan.FromSeconds(5));
     }
 
-    private static void OnSta(Action action)
-    {
-        Exception? failure = null;
-        var thread = new Thread(() =>
-        {
-            try
-            {
-                action();
-            }
-            catch (Exception exception)
-            {
-                failure = exception;
-            }
-        });
-        thread.SetApartmentState(ApartmentState.STA);
-        thread.Start();
-        thread.Join();
-        if (failure is not null)
-        {
-            throw failure;
-        }
-    }
+    private static void OnSta(Action action) =>
+        StaThread.Run(action);
 
     private static FileTreeNodeViewModel Node(SidebarRig rig, string path) =>
         Assert.Single(rig.Sidebar.RootNodes, node => node.Path == path);

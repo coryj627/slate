@@ -5,7 +5,6 @@ using System.Collections.ObjectModel;
 using System.Dynamic;
 using System.Globalization;
 using System.Reflection;
-using System.Runtime.ExceptionServices;
 using System.Windows;
 using System.Windows.Automation.Peers;
 using System.Windows.Controls;
@@ -447,26 +446,6 @@ public sealed class ItemContainerNameBindingTests
     private static Style Factory(Type owner, string method) =>
         (Style)owner.GetMethod(method, BindingFlags.NonPublic | BindingFlags.Static)!.Invoke(null, null)!;
 
-    internal static void RunSta(Action body)
-    {
-        Exception? failure = null;
-        var thread = new Thread(() =>
-        {
-            try
-            {
-                body();
-            }
-            catch (Exception exception)
-            {
-                failure = exception;
-            }
-        });
-        thread.SetApartmentState(ApartmentState.STA);
-        thread.Start();
-        Assert.True(thread.Join(TimeSpan.FromSeconds(60)), "STA test body timed out.");
-        if (failure is not null)
-        {
-            ExceptionDispatchInfo.Capture(failure).Throw();
-        }
-    }
+    internal static void RunSta(Action body) =>
+        StaThread.Run(body, TimeSpan.FromSeconds(60), "STA test body timed out.");
 }
