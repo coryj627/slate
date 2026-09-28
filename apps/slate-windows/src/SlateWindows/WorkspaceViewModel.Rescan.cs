@@ -53,6 +53,21 @@ internal sealed partial class WorkspaceViewModel
     private Task RunKindReload(string kind, string path, Func<Task> reload) =>
         RescanPublicationForTests is { } seam ? seam(kind, path, reload) : reload();
 
+    /// <summary>A reload that reports how many of its own operations failed
+    /// (codex PR 7 round 4, finding 6) — a group's children, a path's tabs'
+    /// projections — through the same seam.</summary>
+    private async Task<ulong> RunCountedReload(string kind, string path, Func<Task<ulong>> reload)
+    {
+        if (RescanPublicationForTests is not { } seam)
+        {
+            return await reload();
+        }
+
+        ulong counted = 0;
+        await seam(kind, path, async () => counted = await reload());
+        return counted;
+    }
+
     /// <summary>The index's view of one path, as the lifecycle read it on a
     /// worker: its content hash (null — no index row), and whether a file is
     /// on disk there under this spelling (asked only when there is no row:
@@ -180,10 +195,16 @@ internal sealed partial class WorkspaceViewModel
             }
         }
 
-        failed += await ReseatMissingTabsAsync(probeReseatOnWorker, cancellation);
+        // The boards and bases the re-seat attached and loaded (codex PR 7
+        // round 4, finding 1): loaded once — the passes below and the Bases
+        // dependent skip them.
+        var reseated = new HashSet<object>(ReferenceEqualityComparer.Instance);
+        failed += await ReseatMissingTabsAsync(probeReseatOnWorker, reseated, cancellation);
 
         var changed = new HashSet<string>(StringComparer.Ordinal);
-        var reopened = new HashSet<BaseDocumentViewModel>(ReferenceEqualityComparer.Instance);
+        var reopened = new HashSet<BaseDocumentViewModel>(
+            reseated.OfType<BaseDocumentViewModel>(),
+            ReferenceEqualityComparer.Instance);
         var work = new List<Task>();
         foreach (IGrouping<string, WorkspaceTabViewModel> group in Groups.SelectMany(group => group.Tabs)
             .Where(tab => tab.IsMarkdown && !tab.IsMissingFromDisk)
@@ -210,7 +231,7 @@ internal sealed partial class WorkspaceViewModel
             string path = group.Key;
             _ = changed.Add(path);
             TabTicket[] tickets = [.. tabs.Select(TabTicket.Capture)];
-            work.Add(RunKindReload(
+            work.Add(RunCountedReload(
                 "markdown",
                 path,
                 () => ReloadMarkdownPathAsync(path, indexHash, tickets, readOnWorker, cancellation)));
@@ -219,7 +240,9 @@ internal sealed partial class WorkspaceViewModel
         foreach (CanvasDocumentViewModel canvas in _canvasDocuments.Values.Distinct())
         {
             string path = NormalizeWorkspacePath(canvas.Path);
-            if (!indexed.TryGetValue(path, out IndexedPath entry) || entry.Hash is not string indexHash)
+            if (reseated.Contains(canvas)
+                || !indexed.TryGetValue(path, out IndexedPath entry)
+                || entry.Hash is not string indexHash)
             {
                 continue;
             }
@@ -247,7 +270,8 @@ internal sealed partial class WorkspaceViewModel
         foreach (BaseDocumentViewModel document in FileBackedBaseDocuments())
         {
             string path = NormalizeWorkspacePath(document.Path);
-            if (!indexed.TryGetValue(path, out IndexedPath entry)
+            if (reseated.Contains(document)
+                || !indexed.TryGetValue(path, out IndexedPath entry)
                 || entry.Hash is not string indexHash
                 || string.Equals(document.LoadedDefinitionHash, indexHash, StringComparison.Ordinal))
             {
@@ -285,6 +309,7 @@ internal sealed partial class WorkspaceViewModel
     /// </summary>
     private async Task<ulong> ReseatMissingTabsAsync(
         Func<IReadOnlyList<(string Path, bool Markdown)>, Task<IReadOnlyDictionary<string, ReseatProbe>>> probeOnWorker,
+        ISet<object> reseated,
         CancellationToken cancellation)
     {
         TabTicket[] tickets =
@@ -329,6 +354,9 @@ internal sealed partial class WorkspaceViewModel
         HashSet<WorkspaceTabViewModel> live =
             new(Groups.SelectMany(group => group.Tabs), ReferenceEqualityComparer.Instance);
         var failedPaths = new HashSet<string>(StringComparer.Ordinal);
+        // The re-seated documents' publications (a board's or base's load, a
+        // reading-mode note's projection), each counted.
+        var documents = new List<Task>();
         foreach (TabTicket ticket in tickets)
         {
             WorkspaceTabViewModel tab = ticket.Tab;
@@ -372,7 +400,35 @@ internal sealed partial class WorkspaceViewModel
                     tab.RetargetPath(stored);
                 }
 
-                tab.ReplaceItem(tab.Item);
+                // Codex PR 7 round 4, finding 1: through the workspace's
+                // replace — the attach funnel gives the tab its board or base
+                // on the stored spelling, the release sweep retires the old
+                // one — and that document's load is the rescan's, awaited.
+                ReplaceTabItem(tab, tab.Item);
+                if (tab.Canvas is { } board)
+                {
+                    if (!reseated.Add(board))
+                    {
+                        continue;
+                    }
+
+                    documents.Add(RunKindReload("canvas", tab.Path, () =>
+                    {
+                        Task reload = board.ReloadAsync(cancellation);
+                        TouchRescanScheduler(board);
+                        return reload;
+                    }));
+                }
+                else if (tab.Base is { } document && reseated.Add(document))
+                {
+                    documents.Add(RunKindReload("base", tab.Path, () =>
+                    {
+                        Task reopen = document.LoadAsync(cancellation);
+                        TouchRescanScheduler(document);
+                        return reopen;
+                    }));
+                }
+
                 continue;
             }
 
@@ -398,11 +454,12 @@ internal sealed partial class WorkspaceViewModel
                 tab.RetargetPath(stored);
             }
 
-            tab.ReplaceItemWithReadText(tab.Item, probe.Read!.Value.Text);
+            tab.ReplaceItemWithReadText(tab.Item, probe.Read!.Value.Text, cancellation);
+            documents.Add(tab.RescanReadingPublication);
             TrackTabRescanWork(tab);
         }
 
-        return (ulong)failedPaths.Count;
+        return (ulong)failedPaths.Count + await CountRescanFailuresAsync(documents, cancellation);
     }
 
     /// <summary>
@@ -429,7 +486,12 @@ internal sealed partial class WorkspaceViewModel
     /// failed, or the disk moved past the index) is marked stale too, and
     /// the path counts one failure: the next rescan reloads it.
     /// </summary>
-    private async Task ReloadMarkdownPathAsync(
+    /// <returns>The path's failed operations: one when a clean, current
+    /// tab's bytes could not be vouched for, plus one per reloaded
+    /// reading-mode tab whose projection failed (codex PR 7 round 4,
+    /// finding 3: the projection is the rescan's — silent, under the run's
+    /// token, and awaited here).</returns>
+    private async Task<ulong> ReloadMarkdownPathAsync(
         string path,
         string indexHash,
         IReadOnlyList<TabTicket> tickets,
@@ -483,9 +545,11 @@ internal sealed partial class WorkspaceViewModel
             TrackTabRescanWork(tab);
         }
 
+        var projections = new List<Task>();
         foreach (WorkspaceTabViewModel tab in reload)
         {
-            tab.ReloadKeepingCaretLine(read!.Value.Text);
+            tab.ReloadKeepingCaretLine(read!.Value.Text, cancellation);
+            projections.Add(tab.RescanReadingPublication);
             TrackTabRescanWork(tab);
         }
 
@@ -502,10 +566,14 @@ internal sealed partial class WorkspaceViewModel
             TouchRescanScheduler(TasksReview);
         }
 
+        ulong failed = 0;
         if (unvouched)
         {
-            throw new RescanReadNotVouchedException();
+            HostLog.Write(HostDiagnosticEvent.VaultRescanFailed, new RescanReadNotVouchedException());
+            failed++;
         }
+
+        return failed + await CountRescanFailuresAsync(projections, cancellation);
     }
 
     /// <summary>
@@ -559,8 +627,8 @@ internal sealed partial class WorkspaceViewModel
             }));
         }
 
-        work.Add(RunKindReload("bases", string.Empty, () => ReSyncBasesAsync(documents.ReopenedBases, cancellation)));
-        work.Add(RunKindReload("graph", string.Empty, NotifyGraphOfRescanAsync));
+        work.Add(RunCountedReload("bases", string.Empty, () => ReSyncBasesAsync(documents.ReopenedBases, cancellation)));
+        work.Add(RunCountedReload("graph", string.Empty, () => NotifyGraphOfRescanAsync(cancellation)));
         return await CountRescanFailuresAsync(work, cancellation);
     }
 
@@ -593,8 +661,10 @@ internal sealed partial class WorkspaceViewModel
     /// <summary>The Bases dependent: every open base document re-runs its
     /// view (keeping its quick filter and transient sort) and every
     /// dashboard reloads — any file may have changed their rows. A base the
-    /// document re-sync reopened is not re-run twice.</summary>
-    private Task ReSyncBasesAsync(
+    /// document re-sync reopened is not re-run twice. Each is its OWN
+    /// operation (codex PR 7 round 4, finding 6): the returned count is how
+    /// many of them failed.</summary>
+    private Task<ulong> ReSyncBasesAsync(
         IReadOnlySet<BaseDocumentViewModel> reopened,
         CancellationToken cancellation)
     {
@@ -607,8 +677,12 @@ internal sealed partial class WorkspaceViewModel
         {
             if (seen.Add(document) && !reopened.Contains(document))
             {
-                publications.Add(document.RefreshAsync(cancellation));
-                TouchRescanScheduler(document);
+                publications.Add(RunKindReload("base-refresh", document.Path, () =>
+                {
+                    Task refresh = document.RefreshAsync(cancellation);
+                    TouchRescanScheduler(document);
+                    return refresh;
+                }));
             }
         }
 
@@ -616,11 +690,15 @@ internal sealed partial class WorkspaceViewModel
             ? _dashboardDocuments.Values.Append(dockDashboard).Distinct()
             : _dashboardDocuments.Values)
         {
-            publications.Add(dashboard.LoadAsync(cancellation));
-            TouchRescanScheduler(dashboard);
+            publications.Add(RunKindReload("dashboard", string.Empty, () =>
+            {
+                Task load = dashboard.LoadAsync(cancellation);
+                TouchRescanScheduler(dashboard);
+                return load;
+            }));
         }
 
-        return Task.WhenAll(publications);
+        return CountRescanFailuresAsync(publications, cancellation);
     }
 
     /// <summary>The graph dependent (round 29): the SAME probes a
@@ -629,18 +707,31 @@ internal sealed partial class WorkspaceViewModel
     /// (rule C) — then awaited to their publications: each document's
     /// fixed-point drain and owner-context barrier covers the generation
     /// read and any reload it issued.</summary>
-    private Task NotifyGraphOfRescanAsync()
+    /// <remarks>Codex PR 7 round 4: the run's token rides the probes into
+    /// the native graph queries of the loads they issue (finding 5), and the
+    /// graph document's publication and the Connections leaf's are two
+    /// operations, each counted (finding 6).</remarks>
+    private Task<ulong> NotifyGraphOfRescanAsync(CancellationToken cancellation)
     {
-        NotifyGraphOfVaultChange();
-        var probes = new List<Task> { Connections.WhenPublishedAsync() };
-        TouchRescanScheduler(Connections);
+        NotifyGraphOfVaultChange(cancellation);
+        var probes = new List<Task>
+        {
+            RunKindReload("connections", string.Empty, () =>
+            {
+                TouchRescanScheduler(Connections);
+                return Connections.WhenPublishedAsync();
+            }),
+        };
         if (_graphDocument is { IsRetired: false } document)
         {
-            probes.Add(document.WhenPublishedAsync());
-            TouchRescanScheduler(document);
+            probes.Add(RunKindReload("graph-document", string.Empty, () =>
+            {
+                TouchRescanScheduler(document);
+                return document.WhenPublishedAsync();
+            }));
         }
 
-        return Task.WhenAll(probes);
+        return CountRescanFailuresAsync(probes, cancellation);
     }
 
     /// <summary>Await every re-sync operation; each that faults counts one
@@ -676,6 +767,14 @@ internal sealed partial class WorkspaceViewModel
         ulong failed = 0;
         foreach (Task task in work)
         {
+            // A counted operation reports its own children's failures
+            // (codex PR 7 round 4, finding 6).
+            if (task is Task<ulong> { IsCompletedSuccessfully: true } counted)
+            {
+                failed += counted.Result;
+                continue;
+            }
+
             if (task.IsCompletedSuccessfully)
             {
                 continue;
@@ -929,13 +1028,13 @@ internal sealed partial class WorkspaceTabViewModel
     /// bound offset, never a caret-navigation request, which would take
     /// keyboard focus into the editor from wherever the user is.
     /// </summary>
-    internal void ReloadKeepingCaretLine(string text)
+    internal void ReloadKeepingCaretLine(string text, CancellationToken rescan = default)
     {
         TextDocument? before = EditorDocument;
         TextLocation caret = before is null
             ? new TextLocation(1, 1)
             : before.GetLocation(Math.Clamp(EditorCaretOffset, 0, before.TextLength));
-        ReplaceItemWithReadText(Item, text);
+        ReplaceItemWithReadText(Item, text, rescan);
         if (EditorDocument is TextDocument after)
         {
             int line = Math.Clamp(caret.Line, 1, after.LineCount);

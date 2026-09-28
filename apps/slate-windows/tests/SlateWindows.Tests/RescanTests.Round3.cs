@@ -326,6 +326,31 @@ public sealed partial class RescanTests
                 new Dictionary<string, WorkspaceViewModel.IndexedPath>(StringComparer.Ordinal),
                 cancellation);
 
+        /// <summary>The documents re-sync of a run whose index holds the
+        /// host note's current bytes (written outside Slate, rescanned).</summary>
+        public Task<WorkspaceViewModel.RescanDocumentsOutcome> ReSyncHostAsync(CancellationToken cancellation)
+        {
+            using var cancel = new CancelToken();
+            string hash = Session.IndexedContentHashes(["host.md"], cancel)[0]!;
+            var indexed = new Dictionary<string, WorkspaceViewModel.IndexedPath>(StringComparer.Ordinal)
+            {
+                ["host.md"] = new(hash, OnDisk: true),
+            };
+            return Workspace.ReSyncOpenDocumentsAsync(
+                indexed,
+                path => Task.Run<WorkspaceViewModel.RescanRead?>(() =>
+                {
+                    string text = Session.ReadText(path);
+                    return new WorkspaceViewModel.RescanRead(text, SlateUniffiMethods.EditorTextContentHash(text));
+                }),
+                _ => Task.FromResult<IReadOnlyDictionary<string, WorkspaceViewModel.ReseatProbe>>(
+                    new Dictionary<string, WorkspaceViewModel.ReseatProbe>(StringComparer.Ordinal)),
+                cancellation);
+        }
+
+        public WorkspaceTabViewModel HostTab =>
+            Workspace.Groups.SelectMany(group => group.Tabs).Single(tab => tab.Path == "host.md");
+
         public void DisposeWorkspace()
         {
             if (!_workspaceDisposed)

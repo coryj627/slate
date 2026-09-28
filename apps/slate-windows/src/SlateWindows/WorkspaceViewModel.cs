@@ -167,6 +167,10 @@ internal sealed partial class WorkspaceTabViewModel : BindableBase, IDisposable
         }
     }
 
+    /// <summary>Test seam (W7-7 PR 7, codex PR 7 round 4 finding 3): the
+    /// Reading model an in-place replace creates, before it projects.</summary>
+    internal Action<ReadingContentViewModel>? ReadingCreatedForTests { get; set; }
+
     internal int AnchorNavigationPublishCountForTests =>
         Volatile.Read(ref _anchorNavigationPublishCountForTests);
 
@@ -508,7 +512,14 @@ internal sealed partial class WorkspaceTabViewModel : BindableBase, IDisposable
             Reading = new ReadingContentViewModel(
                 _session, this, _announce,
                 synchronousForTests: !_startInteractionBackgroundWork);
-            if (_startInteractionBackgroundWork)
+            ReadingCreatedForTests?.Invoke(Reading);
+            if (_reloadingForRescan)
+            {
+                RescanReadingPublication = Reading.ActivateForRescanAsync(
+                    _rescanReload,
+                    attachObserver: _startInteractionBackgroundWork);
+            }
+            else if (_startInteractionBackgroundWork)
             {
                 Reading.Activate();
             }
@@ -1374,10 +1385,19 @@ internal sealed partial class WorkspaceTabViewModel : BindableBase, IDisposable
     private string? _preloadedText;
 
     /// <summary>W7-7 PR 7 (round 28): the in-place replace, from text a
-    /// worker already read — the rescan's clean-tab reload.</summary>
-    internal void ReplaceItemWithReadText(WorkspaceItemState item, string text)
+    /// worker already read — the rescan's clean-tab reload. Its
+    /// <paramref name="rescan"/> token (codex PR 7 round 4, finding 3) makes
+    /// a reading-mode tab's new projection the rescan's: silent, under that
+    /// token, and exposed as <see cref="RescanReadingPublication"/>.</summary>
+    internal void ReplaceItemWithReadText(
+        WorkspaceItemState item,
+        string text,
+        CancellationToken rescan = default)
     {
         _preloadedText = text;
+        _rescanReload = rescan;
+        _reloadingForRescan = true;
+        RescanReadingPublication = Task.CompletedTask;
         try
         {
             ReplaceItem(item);
@@ -1385,8 +1405,20 @@ internal sealed partial class WorkspaceTabViewModel : BindableBase, IDisposable
         finally
         {
             _preloadedText = null;
+            _reloadingForRescan = false;
+            _rescanReload = default;
         }
     }
+
+    // W7-7 PR 7 (codex PR 7 round 4, finding 3): set while a rescan replaces
+    // this tab in place.
+    private bool _reloadingForRescan;
+    private CancellationToken _rescanReload;
+
+    /// <summary>The last rescan reload's reading projection — completing at
+    /// its terminal publication, faulted by its failure; completed when the
+    /// tab is not in reading mode.</summary>
+    internal Task RescanReadingPublication { get; private set; } = Task.CompletedTask;
 
     private void Load()
     {

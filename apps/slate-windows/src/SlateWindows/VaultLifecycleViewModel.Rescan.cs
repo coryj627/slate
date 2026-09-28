@@ -117,6 +117,7 @@ internal sealed partial class VaultLifecycleViewModel
         }
 
         _rescanActive = true;
+        FileSidebar?.RaiseStructuralMutationAvailabilityChanged();
         _rescanCompletion = RunRescansAsync(_generation, session, reason);
         return _rescanCompletion;
     }
@@ -142,6 +143,13 @@ internal sealed partial class VaultLifecycleViewModel
             : IsBusy
                 ? SlateCommandRegistrar.UnavailableReason
                 : null;
+
+    /// <summary>W7-7 PR 7 (codex PR 7 round 4, finding 2): why an import or a
+    /// trash operation cannot START now — a running rescan — or null. R-9's
+    /// concurrency rule holds in both orders: a rescan never starts during
+    /// them, and they never start during a rescan.</summary>
+    internal string? StructuralMutationBlockedReason() =>
+        _rescanActive ? SlateCommandRegistrar.StructuralMutationBusyReason : null;
 
     /// <summary>
     /// W7-7 PR 7 (#1252; codex PR 7 round 1, finding 11): why a rescan
@@ -187,6 +195,7 @@ internal sealed partial class VaultLifecycleViewModel
             {
                 _rescanActive = false;
                 _lastScanEndedAt = _scanClock();
+                FileSidebar?.RaiseStructuralMutationAvailabilityChanged();
             }
         }
     }

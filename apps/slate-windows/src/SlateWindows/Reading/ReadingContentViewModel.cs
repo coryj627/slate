@@ -1054,6 +1054,38 @@ internal sealed class ReadingContentViewModel : BindableBase, IDisposable
         return ReprojectForDependencyChangeAsync(silent: true, cancellation);
     }
 
+    /// <summary>
+    /// W7-7 PR 7 (codex PR 7 round 4, finding 3): <see cref="Activate"/> for
+    /// the reading model a rescan's in-place reload created — the projection
+    /// is the rescan's: silent, under its <paramref name="cancellation"/>,
+    /// and the returned Task completes at its terminal publication (faulted
+    /// by its failure) for the rescan to await and count.
+    /// </summary>
+    internal Task ActivateForRescanAsync(CancellationToken cancellation, bool attachObserver)
+    {
+        if (_disposed || !_tab.IsMarkdown)
+        {
+            return Task.CompletedTask;
+        }
+
+        if (attachObserver)
+        {
+            AttachObserver();
+        }
+
+        var published = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
+        int requested = _generation + 1;
+        _publicationWaiters.Add((requested, published));
+        Refresh(silent: true, cancellation);
+        if (_generation < requested)
+        {
+            _ = _publicationWaiters.Remove((requested, published));
+            published.TrySetResult();
+        }
+
+        return published.Task;
+    }
+
     private Task ReprojectForDependencyChangeAsync(
         bool silent = false,
         CancellationToken cancellation = default)

@@ -392,11 +392,12 @@ public sealed partial class RescanTests
         Assert.Equal(scans, h.ScanCalls);
     });
 
-    /// <summary>A request joined to a running rescan is never dropped: when
-    /// an import began meanwhile, the follow-up waits and runs once the
-    /// import settles.</summary>
+    /// <summary>A request joined to a running rescan is never dropped, and
+    /// an import requested meanwhile never starts (codex PR 7 round 4,
+    /// finding 2 — this fact used to start one and assert the overlap): the
+    /// follow-up runs straight after the first run.</summary>
     [Fact]
-    public void AFollowUpBlockedByAnImportRunsWhenTheImportSettles() => RunSta(() =>
+    public void AFollowUpRunsAndAnImportRequestedMeanwhileNeverStarts() => RunSta(() =>
     {
         var picker = new TaskCompletionSource<IReadOnlyList<string>>();
         using var h = new Harness("import-follow-up", pickImportSources: () => picker.Task, files: [("alpha.md", "# Alpha\n")]);
@@ -407,18 +408,16 @@ public sealed partial class RescanTests
         h.Write("late.md", "# Late\n");
         _ = h.Lifecycle.RescanAsync(RescanReason.Foreground);
         h.Sidebar.ImportCommand.Execute(null);
-        Assert.True(h.Sidebar.IsImporting);
+        Assert.False(h.Sidebar.IsImporting);
         h.Release.Set();
         h.Context.Await(run);
-        Assert.Equal([NoChanges], h.Spoken);
-        Assert.Equal(scans + 1, h.ScanCalls);
-
-        picker.SetResult([]);
         h.Context.RunUntil(
             () => h.ScanCalls == scans + 2 && !h.Lifecycle.IsRescanActive,
-            "the deferred follow-up");
+            "the follow-up");
         h.Context.Await(h.Lifecycle.RescanCompletion);
+
         Assert.Equal([NoChanges, Explicit1], h.Spoken);
+        Assert.False(h.Sidebar.IsImporting);
     });
 
     /// <summary>Codex PR 7 round 1, finding 11: while an import runs, Refresh

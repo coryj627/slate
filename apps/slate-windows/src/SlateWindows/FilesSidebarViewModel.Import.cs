@@ -74,6 +74,12 @@ internal sealed partial class FilesSidebarViewModel
 
     private async Task ImportAsync()
     {
+        // W7-7 PR 7 (codex PR 7 round 4, finding 2): never during a rescan.
+        if (StructuralMutationBlocked is not null)
+        {
+            return;
+        }
+
         var cancellation = new CancellationTokenSource();
         CancellationToken cancellationToken = cancellation.Token;
         lock (_importCancellationGate)

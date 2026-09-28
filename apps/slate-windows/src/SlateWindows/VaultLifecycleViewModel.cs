@@ -989,6 +989,7 @@ internal sealed partial class VaultLifecycleViewModel
             FileSidebar.PropertyChanged -= FileSidebar_RescanBlockersChanged;
             FileSidebar.RescanRequested = null;
             FileSidebar.RescanUnavailableReason = null;
+            FileSidebar.StructuralMutationBlockedReason = null;
         }
 
         if (Workspace is not null)
@@ -1123,6 +1124,9 @@ internal sealed partial class VaultLifecycleViewModel
         // Finding 11: Refresh is available exactly when the rescan would
         // run, and says why when it is not.
         sidebar.RescanUnavailableReason = RescanUnavailableReason;
+        // W7-7 PR 7 (codex PR 7 round 4, finding 2): the reverse order — no
+        // import or trash STARTS while a rescan runs.
+        sidebar.StructuralMutationBlockedReason = StructuralMutationBlockedReason;
         sidebar.PropertyChanged += FileSidebar_RescanBlockersChanged;
         QuickSwitcher = switcher;
         WorkspaceReady?.Invoke(this, EventArgs.Empty);
@@ -1673,25 +1677,34 @@ internal sealed class RelayCommand : ICommand
     public void RaiseCanExecuteChanged() => CanExecuteChanged?.Invoke(this, EventArgs.Empty);
 }
 
-internal sealed class AsyncRelayCommand : ICommand
+internal sealed class AsyncRelayCommand : ICommand, Commands.IUnavailableReason
 {
     private readonly Func<object?, Task> _execute;
     private readonly Predicate<object?> _canExecute;
+    private readonly Func<string?>? _unavailableReason;
     private bool _isExecuting;
 
-    public AsyncRelayCommand(Func<object?, Task> execute, Func<bool> canExecute)
-        : this(execute, _ => canExecute())
+    public AsyncRelayCommand(Func<object?, Task> execute, Func<bool> canExecute, Func<string?>? unavailableReason = null)
+        : this(execute, _ => canExecute(), unavailableReason)
     {
     }
 
-    public AsyncRelayCommand(Func<object?, Task> execute, Predicate<object?> canExecute)
+    public AsyncRelayCommand(
+        Func<object?, Task> execute,
+        Predicate<object?> canExecute,
+        Func<string?>? unavailableReason = null)
     {
         _execute = execute;
         _canExecute = canExecute;
+        _unavailableReason = unavailableReason;
     }
 
     public event EventHandler? CanExecuteChanged;
     public bool CanExecute(object? parameter) => !_isExecuting && _canExecute(parameter);
+
+    /// <summary>W7-7 PR 7 (codex PR 7 round 4, finding 2): why the command
+    /// cannot run, when its owner knows — null leaves the generic reason.</summary>
+    public string? UnavailableReason => _unavailableReason?.Invoke();
 
     public async void Execute(object? parameter)
     {

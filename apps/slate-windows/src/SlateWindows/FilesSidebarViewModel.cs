@@ -480,8 +480,9 @@ internal sealed partial class FilesSidebarViewModel : BindableBase
         // a spurious failure; the guard matches every sibling verb.
         DeleteCommand = new AsyncRelayCommand(
             _ => _trashCompletion = DeleteSelectedAsync(),
-            _ => !IsImporting && !IsTrashing
-                && SelectedNode is { IsPlaceholder: false, IsGroupHeader: false });
+            _ => !IsImporting && !IsTrashing && StructuralMutationBlocked is null
+                && SelectedNode is { IsPlaceholder: false, IsGroupHeader: false },
+            () => StructuralMutationBlocked);
         CreateFolderNoteCommand = new RelayCommand(_ => CreateFolderNote(), _ => !IsImporting && !IsTrashing && SelectedNode?.IsDirectory == true && !SelectedNode.HasFolderNote);
         DeleteFolderNoteCommand = new RelayCommand(_ => DeleteFolderNote(), _ => !IsImporting && !IsTrashing && SelectedNode?.IsDirectory == true && SelectedNode.HasFolderNote);
         CopyWikilinkCommand = new RelayCommand(_ => CopyWikilink(), _ => SelectedNode is { IsDirectory: false });
@@ -513,10 +514,14 @@ internal sealed partial class FilesSidebarViewModel : BindableBase
         OpenNewTabCommand = new RelayCommand(_ => OpenSelected(WorkspaceOpenTarget.NewTab), _ => CanOpenSelected());
         OpenSplitCommand = new RelayCommand(_ => OpenSelected(WorkspaceOpenTarget.SplitRight), _ => CanOpenSelected());
         BatchMoveCommand = new RelayCommand(_ => BatchMove(), _ => !IsImporting && !IsTrashing && BatchSelectionCount > 0 && MoveDestination.Length > 0);
-        BatchTrashCommand = new AsyncRelayCommand(_ => _trashCompletion = BatchTrashAsync(), _ => !IsImporting && !IsTrashing && BatchSelectionCount > 0);
+        BatchTrashCommand = new AsyncRelayCommand(
+            _ => _trashCompletion = BatchTrashAsync(),
+            _ => !IsImporting && !IsTrashing && StructuralMutationBlocked is null && BatchSelectionCount > 0,
+            () => StructuralMutationBlocked);
         ImportCommand = new AsyncRelayCommand(
             _ => _importCompletion = ImportAsync(),
-            () => !IsImporting && !IsTrashing);
+            () => !IsImporting && !IsTrashing && StructuralMutationBlocked is null,
+            () => StructuralMutationBlocked);
         CancelImportCommand = new RelayCommand(_ => CancelImport(), _ => IsImporting);
         CancelTrashCommand = new RelayCommand(_ => CancelTrash(), _ => CanCancelTrash);
         ClearRecentsCommand = new RelayCommand(_ => ClearRecents(), _ => _recents.Count > 0);
@@ -794,6 +799,23 @@ internal sealed partial class FilesSidebarViewModel : BindableBase
     /// <summary>W7-7 PR 7 (finding 11): installed by the vault lifecycle —
     /// why its rescan would be refused right now, or null.</summary>
     internal Func<string?>? RescanUnavailableReason { get; set; }
+
+    /// <summary>W7-7 PR 7 (codex PR 7 round 4, finding 2): installed by the
+    /// vault lifecycle — why an import or a trash operation cannot START now
+    /// (a running rescan), or null. Import, Delete and Batch Trash read it in
+    /// their availability AND at their own entry.</summary>
+    internal Func<string?>? StructuralMutationBlockedReason { get; set; }
+
+    private string? StructuralMutationBlocked => StructuralMutationBlockedReason?.Invoke();
+
+    /// <summary>Requery Import, Delete and Batch Trash — the lifecycle
+    /// raises it when a rescan starts and when it ends.</summary>
+    internal void RaiseStructuralMutationAvailabilityChanged()
+    {
+        ((AsyncRelayCommand)ImportCommand).RaiseCanExecuteChanged();
+        ((AsyncRelayCommand)DeleteCommand).RaiseCanExecuteChanged();
+        ((AsyncRelayCommand)BatchTrashCommand).RaiseCanExecuteChanged();
+    }
 
     /// <summary>Why <see cref="RefreshCommand"/> cannot run right now, or
     /// null: the lifecycle's refusal when one is installed, otherwise an
@@ -1576,7 +1598,7 @@ internal sealed partial class FilesSidebarViewModel : BindableBase
 
     private async Task DeleteSelectedAsync()
     {
-        if (IsTrashing || SessionShutdownStarted || SelectedNode is not
+        if (IsTrashing || SessionShutdownStarted || StructuralMutationBlocked is not null || SelectedNode is not
             { IsPlaceholder: false, IsGroupHeader: false } node)
         {
             return;
@@ -1933,7 +1955,7 @@ internal sealed partial class FilesSidebarViewModel : BindableBase
     private async Task BatchTrashAsync()
     {
         StructuralBatchItem[] items = SelectedBatchItems();
-        if (IsTrashing || SessionShutdownStarted || items.Length == 0) { return; }
+        if (IsTrashing || SessionShutdownStarted || StructuralMutationBlocked is not null || items.Length == 0) { return; }
         TrashWorkOwner owner = BeginTrash();
         StagedTrash? staged = null;
         try
