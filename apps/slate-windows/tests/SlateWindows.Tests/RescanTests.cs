@@ -713,14 +713,17 @@ public sealed partial class RescanTests
         Assert.Equal(["Files refreshed. 1 new or changed, 0 removed."], h.Spoken);
     });
 
-    /// <summary>Round 28: a failed reload — an open canvas's, then an open
-    /// base's — makes the run speak the honest count: a clean scan whose one
-    /// re-sync operation failed is "1 error". Nothing is retained; the next
-    /// rescan re-syncs from the index and completes the reload.</summary>
+    /// <summary>Round 28 — WIRING, not a real failure (codex PR 7 round 5):
+    /// an open canvas's reload runs through the re-sync seam, and a fault
+    /// thrown AT THE SEAM, before the production reload, makes the run speak
+    /// "1 error"; nothing is retained, and the next rescan completes the
+    /// reload. A board's own published failure counts 0 (AR-66). The base
+    /// arm is the production fact
+    /// <c>ABaseWhoseReopenFailsIsCountedAndTheNextRescanCompletesIt</c>.</summary>
     [Fact]
-    public void AFailedKindReloadSpeaksIncompleteAndTheNextRescanCompletesIt() => RunSta(() =>
+    public void AKindReloadFaultedAtTheSeamSpeaksIncompleteAndTheNextRescanCompletesIt() => RunSta(() =>
     {
-        foreach (string kind in new[] { "canvas", "base" })
+        foreach (string kind in new[] { "canvas" })
         {
             (string Path, string Before, string After) file = kind == "canvas"
                 ? ("board.canvas", OneNodeCanvas, TwoNodeCanvas)
@@ -1058,9 +1061,15 @@ public sealed partial class RescanTests
         Assert.Equal([Explicit1], h.Spoken);
     });
 
-    /// <summary>Round 29: an injected failure of a dependent's publication
-    /// makes the run say "results may be incomplete" with the honest
-    /// count; the next, independent rescan re-syncs and completes it.</summary>
+    /// <summary>Round 29 — WIRING (codex PR 7 round 5): a fault thrown AT
+    /// THE SEAM around a dependent's publication, before the production
+    /// publication runs, makes the run say "results may be incomplete" with
+    /// the honest count; the next, independent rescan re-syncs and
+    /// completes it. What a real failure counts is each surface's own fact:
+    /// a reading re-projection's (<c>AReadingFailureOnItsWorkerIsCountedAndSilent</c>)
+    /// and a base's (<c>AViewlessBaseIsCountedAndEveryRescanEnds</c>) count;
+    /// History, dashboard, graph and Connections failure states count 0
+    /// (AR-66).</summary>
     [Theory]
     [InlineData("reading")]
     [InlineData("history")]

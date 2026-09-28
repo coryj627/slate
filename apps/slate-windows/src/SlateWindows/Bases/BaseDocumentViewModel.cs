@@ -751,9 +751,13 @@ internal sealed class BaseDocumentViewModel : PanelWorkScheduler
     /// <summary>
     /// W7-7 PR 7 (#1252, round 28): <see cref="Load"/> — reopen the
     /// source and re-run the active view on the document's worker — as a
-    /// Task that completes when the result publishes on the dispatcher,
-    /// whatever it is (a published failure is the source's truth). A
-    /// shut-down document completes at once. A rescan awaits it.
+    /// Task that completes once that work has published on the dispatcher.
+    /// It faults with <see cref="BasePublicationFailedException"/> when the
+    /// document's last terminal outcome is an OPERATION failure — the open
+    /// failed, or the execute did (codex PR 7 round 5, the owner's
+    /// decision) — so a rescan counts it; a result that shows the file's
+    /// own truth (a fallback or erroring view) completes it. A shut-down
+    /// document completes at once. A rescan awaits it.
     /// </summary>
     /// <remarks>The rescan's <paramref name="cancellation"/> (the ruling on
     /// codex PR 7 round 1, finding 6; round 2, finding 4): checked before
@@ -764,9 +768,16 @@ internal sealed class BaseDocumentViewModel : PanelWorkScheduler
     internal Task LoadAsync(CancellationToken cancellation = default) =>
         PublicationAsync(() => Load(cancellation), cancellation);
 
-    /// <summary>The awaited form of a load or a re-run: completes on the
-    /// next terminal publication, or is cancelled with
-    /// <paramref name="cancellation"/>.</summary>
+    /// <summary>The awaited form of a load or a re-run: completes once
+    /// the work it started — and anything queued behind it — has run and
+    /// published, faulted when the last terminal outcome is an operation
+    /// failure, or cancelled with <paramref name="cancellation"/>.</summary>
+    /// <remarks>W7-7 PR 7 (codex PR 7 round 5, fix 1): it used to wait for
+    /// the next <see cref="ResultPublished"/>, which an execute failure
+    /// (published as Degraded) and a run declined on a closed handle never
+    /// raise — a view-less or unparseable base held the rescan, and every
+    /// later one, until the vault closed. The document's own drain barrier
+    /// ends it whatever its bodies did; the outcome is read after it.</remarks>
     private Task PublicationAsync(Action start, CancellationToken cancellation)
     {
         if (IsShutDown)
@@ -779,33 +790,37 @@ internal sealed class BaseDocumentViewModel : PanelWorkScheduler
             return Task.FromCanceled(cancellation);
         }
 
-        var published = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
-        void OnPublished(object? sender, EventArgs eventArgs)
-        {
-            if (State == BaseLoadState.Loading)
-            {
-                return;
-            }
-
-            // A published failure state is the source's truth (an invalid
-            // or unreadable base shows its error): the publication happened.
-            ResultPublished -= OnPublished;
-            published.TrySetResult();
-        }
-
-        ResultPublished += OnPublished;
-        CancellationTokenRegistration registration = cancellation.Register(() =>
-        {
-            ResultPublished -= OnPublished;
-            published.TrySetCanceled(cancellation);
-        });
-        _ = published.Task.ContinueWith(
-            _ => registration.Dispose(),
-            CancellationToken.None,
-            TaskContinuationOptions.ExecuteSynchronously,
-            TaskScheduler.Default);
+        int before = Volatile.Read(ref _terminalOutcomes);
         start();
-        return published.Task;
+        return TerminalOutcomeAsync(before, cancellation);
+    }
+
+    private async Task TerminalOutcomeAsync(int before, CancellationToken cancellation)
+    {
+        await WhenPublishedAsync().WaitAsync(cancellation).ConfigureAwait(false);
+        // No terminal outcome since the start (superseded by an operation
+        // that publishes nothing, or refused by a shut-down document): the
+        // document still shows what it showed, which is not this run's
+        // failure.
+        if (Volatile.Read(ref _terminalOutcomes) != before
+            && Volatile.Read(ref _lastTerminalFailure) is { } failure)
+        {
+            throw new BasePublicationFailedException(failure);
+        }
+    }
+
+    // W7-7 PR 7 (codex PR 7 round 5, fix 1): every terminal outcome a body
+    // publishes on the dispatcher — a result, a failure, an execute failure
+    // published as Degraded, a sort's outcome, a run declined on a closed
+    // handle — counted, with the operation failure it was (null for a
+    // result, whatever state the result shows).
+    private int _terminalOutcomes;
+    private string? _lastTerminalFailure;
+
+    private void RecordTerminalOutcome(string? operationFailure)
+    {
+        Volatile.Write(ref _lastTerminalFailure, operationFailure);
+        _ = Interlocked.Increment(ref _terminalOutcomes);
     }
 
     /// <summary>Open (or reopen) the source and execute the active
@@ -933,8 +948,25 @@ internal sealed class BaseDocumentViewModel : PanelWorkScheduler
     /// document completes at once. The rescan's
     /// <paramref name="cancellation"/> reaches <c>BaseExecute</c> and
     /// discards a later result, as <see cref="LoadAsync"/>'s does.</summary>
+    /// <remarks>Codex PR 7 round 5, fix 1: a document left Failed — its
+    /// open failed, or a failed sort rollback closed its handle — has no
+    /// view to re-run (the re-run would decline on the closed handle), so
+    /// the rescan reopens it: it recovers when its file does, and a failing
+    /// reopen is counted.</remarks>
     internal Task RefreshAsync(CancellationToken cancellation = default) =>
-        PublicationAsync(() => Refresh(cancellation), cancellation);
+        PublicationAsync(
+            () =>
+            {
+                if (State == BaseLoadState.Failed)
+                {
+                    Load(cancellation);
+                }
+                else
+                {
+                    Refresh(cancellation);
+                }
+            },
+            cancellation);
 
     /// <summary>Re-run the active view on the CURRENT handle — the
     /// post-write refresh entry (contract C9). Keeps previous rows on
@@ -1011,9 +1043,15 @@ internal sealed class BaseDocumentViewModel : PanelWorkScheduler
         {
             lock (_ffiLock)
             {
-                if (Volatile.Read(ref _generation) != generation
-                    || _handle is not { } handle)
+                // A superseded body publishes nothing: its successor does.
+                if (Volatile.Read(ref _generation) != generation)
                 {
+                    return;
+                }
+
+                if (_handle is not { } handle)
+                {
+                    PostDeclinedRun(generation, cancellation);
                     return;
                 }
                 IReadOnlyList<BaseViewSummary> viewList = freshViews ?? _views;
@@ -1048,7 +1086,11 @@ internal sealed class BaseDocumentViewModel : PanelWorkScheduler
                 }
                 // Previous rows and handle stay in place — a failed
                 // refresh must never blank the pane (contract C9).
-                PublishDegraded(BasePhrase.ExecuteFailed(exception));
+                string message = BasePhrase.ExecuteFailed(exception);
+                PublishDegraded(message);
+                // Codex PR 7 round 5, fix 1: a terminal outcome, and an
+                // operation failure.
+                RecordTerminalOutcome(message);
                 // The write-outcome continuations still run: each
                 // outcome describes its WRITE (which landed), and the
                 // retained rows are what the row-presence check reads
@@ -1074,6 +1116,20 @@ internal sealed class BaseDocumentViewModel : PanelWorkScheduler
             }
         });
     }
+
+    /// <summary>Codex PR 7 round 5, fix 1: a current run with no open
+    /// handle (the open failed, or a failed sort rollback closed it) has
+    /// nothing to execute — a terminal outcome all the same, and an
+    /// operation failure, so nothing that awaits it waits forever.</summary>
+    private void PostDeclinedRun(int generation, CancellationToken cancellation) =>
+        Post(() =>
+        {
+            if (Volatile.Read(ref _generation) == generation
+                && !cancellation.IsCancellationRequested)
+            {
+                RecordTerminalOutcome(StateMessage ?? "The base is not open.");
+            }
+        });
 
     /// <summary>The dock's follow-the-active-note context: threaded
     /// as base_execute's this_path so `this`-relative queries resolve
@@ -1115,6 +1171,9 @@ internal sealed class BaseDocumentViewModel : PanelWorkScheduler
             State = BaseLoadState.Ready;
             StateMessage = null;
         }
+        // Codex PR 7 round 5, fix 1: the execute succeeded — whatever the
+        // view shows is the file's own truth, not an operation failure.
+        RecordTerminalOutcome(null);
         ResultPublished?.Invoke(this, EventArgs.Empty);
         SettleFunnelOutcomes(result);
     }
@@ -1131,6 +1190,7 @@ internal sealed class BaseDocumentViewModel : PanelWorkScheduler
         State = BaseLoadState.Failed;
         SortState = null;
         Result = null;
+        RecordTerminalOutcome(message);
         ResultPublished?.Invoke(this, EventArgs.Empty);
         // Terminal for this load: pending write outcomes still speak
         // (the writes landed; only the refresh died).
@@ -1251,7 +1311,9 @@ internal sealed class BaseDocumentViewModel : PanelWorkScheduler
                         {
                             return;
                         }
-                        PublishDegraded(BasePhrase.ExecuteFailed(executeFailure));
+                        string message = BasePhrase.ExecuteFailed(executeFailure);
+                        PublishDegraded(message);
+                        RecordTerminalOutcome(message);
                         // A rolled-back engine with a STALE previous
                         // tuple (column set shrank underneath it)
                         // cleared the engine sort — the published
@@ -1290,6 +1352,7 @@ internal sealed class BaseDocumentViewModel : PanelWorkScheduler
             }
             Result = result;
             SortState = (columnIndex, ascending);
+            RecordTerminalOutcome(null);
             ResultPublished?.Invoke(this, EventArgs.Empty);
             _announce(new A11yEvent.BaseSortedByColumn(column.Label, ascending));
             SettleFunnelOutcomes(result);
@@ -1428,3 +1491,9 @@ internal static class BasePhrase
     private static string Message(VaultException exception) =>
         exception.Message;
 }
+
+/// <summary>W7-7 PR 7 (codex PR 7 round 5, fix 1): an awaited base
+/// publication whose last terminal outcome was an operation failure — the
+/// open or the execute failed. A rescan counts it; the log records its
+/// type only.</summary>
+internal sealed class BasePublicationFailedException(string message) : Exception(message);

@@ -46,6 +46,10 @@ public sealed partial class RescanTests
         CanvasDocumentViewModel reseated = Assert.IsType<CanvasDocumentViewModel>(tab.Canvas);
         Assert.Equal("Board.canvas", reseated.Path);
         Assert.NotNull(reseated.RowFor("first"));
+        // Codex PR 7 round 5 (fix 3): the run's reload is the board's ONE
+        // delivery — the attach at the stored spelling constructs it without
+        // a load of its own.
+        Assert.Equal(1, reseated.DeliveriesForTests);
         Assert.Equal(["Files refreshed. 1 new or changed, 1 removed."], h.Spoken);
     });
 
@@ -72,39 +76,36 @@ public sealed partial class RescanTests
         Assert.Equal("Notes.base", reseated.Path);
         Assert.Equal(BaseLoadState.Ready, reseated.State);
         Assert.Equal(["a.md"], BaseRows(tab));
+        // Codex PR 7 round 5 (fix 3): the run's load is the base's ONE open.
+        Assert.Equal(1, reseated.OpensForTests);
         Assert.Equal(["Files refreshed. 1 new or changed, 1 removed."], h.Spoken);
     });
 
-    /// <summary>Round 4, finding 1: the re-seated board's or base's load is
-    /// the run's own operation — awaited, and its failure one counted error
-    /// ("1 error"), at the stored spelling.</summary>
-    [Theory]
-    [InlineData("canvas")]
-    [InlineData("base")]
-    public void ACaseOnlyReseatedDocumentsFailedLoadIsCounted(string kind) => RunSta(() =>
+    /// <summary>Round 4, finding 1 — WIRING, not a real failure (codex PR 7
+    /// round 5): the re-seated board's reload runs through the re-sync seam
+    /// at the stored spelling, awaited, and a fault thrown AT THE SEAM,
+    /// before the production reload, is one counted operation. A board's
+    /// own published failure counts 0 (AR-66); the base arm is the
+    /// production fact <c>ACaseOnlyReseatedViewlessBaseIsCounted</c>.</summary>
+    [Fact]
+    public void ACaseOnlyReseatedBoardsReloadRunsThroughTheSeam() => RunSta(() =>
     {
-        (string Before, string After, string Text) file = kind == "canvas"
-            ? ("board.canvas", "Board.canvas", OneNodeCanvas)
-            : ("notes.base", "Notes.base", MainBase);
-        using var h = new Harness($"reseat-{kind}-fails", (file.Before, file.Text), ("a.md", "# A\n"));
+        (string Before, string After, string Text) file = ("board.canvas", "Board.canvas", OneNodeCanvas);
+        using var h = new Harness("reseat-canvas-seam", (file.Before, file.Text), ("a.md", "# A\n"));
         if (!h.VolumeAliasesCase())
         {
             return;
         }
 
         WorkspaceTabViewModel tab = h.Open(file.Before);
-        h.PumpUntil(
-            () => kind == "canvas"
-                ? tab.Canvas?.RowFor("first") is not null
-                : tab.Base?.State == BaseLoadState.Ready,
-            $"the {kind}'s first load");
+        h.PumpUntil(() => tab.Canvas?.RowFor("first") is not null, "the board's first load");
         var failedAt = new List<string>();
         h.Workspace.RescanPublicationForTests = async (reloading, path, reload) =>
         {
-            if (reloading == kind)
+            if (reloading == "canvas")
             {
                 failedAt.Add(path);
-                throw new IOException($"injected re-seated {kind} load failure");
+                throw new IOException("injected at the seam");
             }
 
             await reload();
@@ -331,44 +332,17 @@ public sealed partial class RescanTests
 
     // --- (6) every child of a grouped dependent is counted ---------------------
 
-    /// <summary>Round 4, finding 6: two open bases whose re-runs both fail
-    /// are TWO failed operations — "2 errors" — never one for their group.</summary>
+    // The bases arm is the production fact TwoViewlessBasesAreTwoErrors
+    // (codex PR 7 round 5 replaced round 4's seam-thrown one).
+
+    /// <summary>Round 4, finding 6, the graph arm — AGGREGATION, not a real
+    /// failure (codex PR 7 round 5): the graph document's probe and the
+    /// Connections leaf's are two operations of the group, so two faults
+    /// thrown AT THE SEAM, before either production publication, are
+    /// "2 errors". A graph or Connections Error state the probes publish
+    /// counts 0 (AR-66).</summary>
     [Fact]
-    public void TwoFailedBasePublicationsAreTwoErrors() => RunSta(() =>
-    {
-        using var h = new Harness(
-            "two-bases-fail",
-            ("One.base", MainBase),
-            ("Two.base", MainBase),
-            ("a.md", "# A\n"));
-        WorkspaceTabViewModel one = h.Open("One.base");
-        WorkspaceTabViewModel two = h.Open("Two.base");
-        h.PumpUntil(
-            () => one.Base?.State == BaseLoadState.Ready && two.Base?.State == BaseLoadState.Ready,
-            "both bases' first loads");
-        h.Workspace.RescanPublicationForTests = async (publishing, _, publish) =>
-        {
-            if (publishing == "base-refresh")
-            {
-                throw new IOException("injected base publication failure");
-            }
-
-            await publish();
-        };
-        h.Write("b.md", "# B\n");
-
-        h.Context.Await(h.Lifecycle.RescanAsync(RescanReason.Explicit));
-
-        A11yEvent.VaultRescanIncomplete incomplete =
-            Assert.IsType<A11yEvent.VaultRescanIncomplete>(Assert.Single(h.Events));
-        Assert.Equal(2UL, incomplete.Errors);
-    });
-
-    /// <summary>Round 4, finding 6, the graph arm: the graph document's
-    /// probe and the Connections leaf's are two operations — both failing
-    /// is "2 errors".</summary>
-    [Fact]
-    public void AFailedGraphAndConnectionsProbeAreTwoErrors() => RunSta(() =>
+    public void TheGraphAndConnectionsProbesAreTwoOperationsAtTheSeam() => RunSta(() =>
     {
         using Harness h = DependentsHarness("graph-connections-fail");
         h.Workspace.OpenGraph();
