@@ -434,15 +434,22 @@ internal sealed class CanvasSurfaceView : UserControl, ICanvasSurfacePresenter
     /// <summary>
     /// R-12 (#1255): the seat in view after a navigator move. The board
     /// pans to contain the card — its cards take no focus, so this is the
-    /// board's whole answer (D4: a selection made on this surface always
-    /// scrolls into view); the outline and the table focused the row,
-    /// which already scrolled it into view.
+    /// board's whole answer — under D4's origin rule (follow-up #1271): a
+    /// move made on the board always comes into view, one made elsewhere
+    /// only while the board follows the selection
+    /// (<see cref="CanvasRendererView.RevealsMoveFrom"/>). Every pane
+    /// showing the board also hears every selection change through the
+    /// same rule as a move made elsewhere (<see cref="FollowTheSelection"/>).
+    /// A card the board has not installed yet is owed its reveal until it
+    /// has (<see cref="CanvasRendererView.RevealNode"/>, review round 2).
+    /// The outline and the table focused the row, which already scrolled it
+    /// into view.
     /// </summary>
-    public void RevealSeat(string nodeId)
+    public void RevealSeat(string nodeId, CanvasMoveOrigin origin)
     {
-        if (Projection == CanvasSurfaceKind.Visual)
+        if (Projection == CanvasSurfaceKind.Visual && _visual.RevealsMoveFrom(origin))
         {
-            _visual.RevealNode(nodeId);
+            _visual.RevealNode(nodeId, origin);
         }
     }
 
@@ -1234,11 +1241,14 @@ internal sealed class CanvasSurfaceView : UserControl, ICanvasSurfacePresenter
     /// reached by arrows and AT navigation, never by focus. So a landing on
     /// the board seats its node silently (the node the outline or the table
     /// would seat), brings that card into view, and puts the reader on the
-    /// renderer — delivered only when focus is really there.</summary>
+    /// renderer — delivered only when focus is really there. The reveal is a
+    /// move made ON the board (#1271's origin rule, contract 34 D4): the
+    /// landing puts the reader on the board with that card seated, so it
+    /// comes into view whatever Follow Selection says.</summary>
     private LandingSeat LandOnBoard(CanvasDocumentViewModel model, string nodeId)
     {
         model.SeatSelectionSilently(nodeId);
-        _visual.RevealNode(nodeId);
+        _visual.RevealNode(nodeId, CanvasMoveOrigin.OnSurface);
         return LandingSeats.On(_visual);
     }
 
@@ -1294,6 +1304,52 @@ internal sealed class CanvasSurfaceView : UserControl, ICanvasSurfacePresenter
             // old projection while the control claimed the new one.
             Render();
             TryDeliverFocus();
+        }
+        else if (e.PropertyName == nameof(CanvasSelection.Selected))
+        {
+            FollowTheSelection();
+        }
+    }
+
+    /// <summary>
+    /// D4's pan rule for the ONE shared selection, in every pane on the
+    /// document (R-12 follow-up #1271, review rounds 1 and 3): each change to
+    /// the selection reaches this pane's board as a selection made ELSEWHERE,
+    /// so a board that follows the selection brings the new seat into view —
+    /// now if it is showing, and when it is next shown if it is not.
+    /// </summary>
+    /// <remarks>
+    /// <para>
+    /// The navigator reveals through the one pane it is attached to, and a
+    /// peer through its own board, so without this a second pane's board —
+    /// the same canvas in another pane, following the selection — moved its
+    /// ring and never panned, and the toggle's sentence was false there.
+    /// The board that made a move still reveals it itself, as a move made ON
+    /// the surface (<see cref="RevealSeat"/> and the peer door), which D4
+    /// honours toggle or no toggle. When both reveals run for one move they
+    /// ask for the same card: the second finds it already contained and
+    /// commits nothing (the pan is the minimal one that contains the card,
+    /// and the engine drops a same-geometry commit), or, while the board has
+    /// not installed the card yet, replaces the owed reveal with its own
+    /// (review round 2) — so a move made on the board keeps its on-surface
+    /// standing even if the toggle goes off before the card lands.
+    /// </para>
+    /// <para>
+    /// A board that is not showing — behind another tab, under the outline or
+    /// the table — OWES the reveal and pays it when it is shown again (owner
+    /// decision, review round 3; <see cref="CanvasRendererView.RevealNode"/>):
+    /// a following board scrolls to the selection the reader moved to while
+    /// it was away, unless the seat moved on or Follow Selection went off
+    /// meanwhile. So the board is asked whatever the projection and the
+    /// visibility; only its own Follow Selection gates the ask.
+    /// </para>
+    /// </remarks>
+    private void FollowTheSelection()
+    {
+        if (Model?.Selection.Selected is { } selected
+            && _visual.RevealsMoveFrom(CanvasMoveOrigin.Elsewhere))
+        {
+            _visual.RevealNode(selected, CanvasMoveOrigin.Elsewhere);
         }
     }
 

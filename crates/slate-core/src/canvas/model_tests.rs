@@ -436,6 +436,42 @@ fn speakable_names_follow_document_order() {
     assert_eq!(doc(["A", "A", "A"]), ["A", "A 2", "A 3"]);
 }
 
+/// Contract 34 D5 (#1276): the visual board's container name is RESERVED
+/// in the one name namespace, so the allocator starts with it occupied —
+/// a card titled like the container takes the next free ordinal, even
+/// when it comes first, and the skip over real titles still holds.
+#[test]
+fn speakable_names_reserve_the_visual_boards_container_name() {
+    let doc = |order: [&str; 3]| {
+        let nodes: Vec<serde_json::Value> = order
+            .iter()
+            .enumerate()
+            .map(|(i, title)| {
+                serde_json::json!({"id": format!("n{i}"), "type":"text", "text": title,
+                    "x": 0, "y": (i as i64) * 20, "width": 10, "height": 10})
+            })
+            .collect();
+        let (canvas, _) = parse(&serde_json::json!({"nodes":nodes,"edges":[]}).to_string());
+        let model = derive(&canvas);
+        (0..3)
+            .map(|i| {
+                model.summaries[&id(&format!("n{i}"))]
+                    .speakable_name
+                    .clone()
+            })
+            .collect::<Vec<String>>()
+    };
+    assert_eq!(VISUAL_BOARD_NAME, "Canvas visual view");
+    assert_eq!(
+        doc([VISUAL_BOARD_NAME, "A", VISUAL_BOARD_NAME]),
+        ["Canvas visual view 2", "A", "Canvas visual view 3"]
+    );
+    assert_eq!(
+        doc([VISUAL_BOARD_NAME, "Canvas visual view 2", "A"]),
+        ["Canvas visual view 3", "Canvas visual view 2", "A"]
+    );
+}
+
 /// `target` is derived once, in the model, and the index column is that
 /// derivation rather than a second `match` in `canvas_db` (0b-13).
 #[test]
