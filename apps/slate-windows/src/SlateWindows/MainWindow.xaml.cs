@@ -1937,8 +1937,11 @@ public partial class MainWindow : Window
     /// modal open (<see cref="RouteFallback"/>): focus is never left on the
     /// window root or a closed overlay, and never moved beneath a modal.
     /// <paramref name="onLanded"/> is spoken once focus is in the stop or on
-    /// the tab's own item — never for the Files tree, and never when nothing
-    /// took focus.
+    /// the tab's own item, or — for an EMPTY pane, which has neither — on the
+    /// Files tree (owner decision 2026-09-28: the line tells the reader nothing
+    /// is open; R-1's fourth launch line). Never for the Files tree when the
+    /// pane has a tab whose stop was refused, and never when nothing took
+    /// focus.
     /// </summary>
     private void LandEditorForRoute(WorkspaceGroupViewModel group, Action? onLanded)
     {
@@ -1958,15 +1961,23 @@ public partial class MainWindow : Window
         }
     }
 
-    /// <summary>A route's LATER refusal (R-10): only while the reader is still
-    /// where the route put them — the same group and tab, no modal over it —
-    /// the fallback runs, and <paramref name="onLanded"/> is spoken only when
-    /// it took the tab's own item.</summary>
+    /// <summary>A route's refusal (R-10): only while the reader is still where
+    /// the route put them — the same group and tab, no modal over it — the
+    /// fallback runs, and <paramref name="onLanded"/> is spoken only when it
+    /// took the tab's own item, or when the pane is EMPTY and it took the Files
+    /// tree (owner decision 2026-09-28). A pane with a tab whose stop was
+    /// refused says nothing from the Files tree (codex PR 8 round 6): its line
+    /// would name a tab the reader is not on.</summary>
     private Action RouteFallback(WorkspaceGroupViewModel group, WorkspaceTabViewModel? tab, Action? onLanded) =>
         () =>
         {
             if (IsStillTheLandingTab(group, tab)
-                && FallBackFromEditor(group, tab) == EditorFallback.TabItem)
+                && FallBackFromEditor(group, tab) switch
+                {
+                    EditorFallback.TabItem => true,
+                    EditorFallback.Files => tab is null,
+                    _ => false,
+                })
             {
                 onLanded?.Invoke();
             }

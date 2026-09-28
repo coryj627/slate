@@ -3050,6 +3050,70 @@ public sealed class ReadingFocusTests
         Assert.DoesNotContain(host.Announced, line => line is A11yEvent.EditorPaneFocused);
     });
 
+    /// <summary>Owner decision (2026-09-28, after PR 8's first shell-gate
+    /// run): an EMPTY pane speaks its line when a route's fallback lands on
+    /// the Files tree — once, with focus on the Files tree — telling the
+    /// reader nothing is open. That is the fourth of R-1's launch lines (F1's
+    /// four stand) and every close fallback over an empty pane alike. A pane
+    /// that HAS a tab whose stop was refused stays silent on the Files
+    /// fallback (codex PR 8 round 6's fix): the pane line there would name a
+    /// tab the reader is not on.</summary>
+    [Theory]
+    [InlineData("the launch landing on an empty workspace")]
+    [InlineData("a close fallback over a pane whose last tab was closed")]
+    [InlineData("a pane with a tab whose stop was refused")]
+    public void AnEmptyPaneSpeaksItsLineOnTheFilesFallback(string route) => RunSta(() =>
+    {
+        using var host = new Host();
+        host.Initialize(readingMode: true);
+        host.ShowFilesPane();
+        WorkspaceGroupViewModel group = host.Workspace.ActiveGroup;
+        bool empty = route != "a pane with a tab whose stop was refused";
+        if (empty)
+        {
+            host.Workspace.CloseTabCommand.Execute(host.Tab);
+            host.Settle();
+            Assert.Null(group.ActiveTab);
+            Assert.DoesNotContain(host.Announced, line => line is A11yEvent.EditorPaneFocused);
+        }
+        else
+        {
+            // The round-6 shape: the tab's stop and its strip cannot take
+            // focus (the group's tab control is not realized), so the chain
+            // ends on the Files tree with a tab still open.
+            TabControl tabs = Assert.Single(
+                Descendants<TabControl>(host.Shell.ContentPaneBorder),
+                candidate => ReferenceEquals(candidate.DataContext, group));
+            tabs.DataContext = null;
+        }
+        host.Announced.Clear();
+
+        if (route == "the launch landing on an empty workspace")
+        {
+            Keyboard.ClearFocus();
+            typeof(MainWindow)
+                .GetMethod("ViewModel_WorkspaceReady", BindingFlags.NonPublic | BindingFlags.Instance)!
+                .Invoke(host.Shell, [null, EventArgs.Empty]);
+            PumpedDispatcher.Drain();
+        }
+        else
+        {
+            host.CloseAPaletteOverAGoneStop();
+        }
+
+        Assert.True(host.Shell.FilesTree.IsKeyboardFocusWithin, $"{route} left focus on {Describe(Keyboard.FocusedElement)}");
+        A11yEvent[] paneLines = [.. host.Announced.Where(line => line is A11yEvent.EditorPaneFocused)];
+        if (empty)
+        {
+            Assert.Equal([new A11yEvent.EditorPaneFocused(1, 1, "Empty pane", string.Empty)], paneLines);
+        }
+        else
+        {
+            Assert.Empty(paneLines);
+        }
+        Assert.False(((IShellRegionHost)host.Shell).HoldsLanding);
+    });
+
     private static void RaiseWindowEvent(Window window, string method) =>
         typeof(Window).GetMethod(method, BindingFlags.NonPublic | BindingFlags.Instance)!
             .Invoke(window, [EventArgs.Empty]);
