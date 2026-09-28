@@ -688,11 +688,12 @@ internal sealed class CanvasDocumentViewModel : PanelWorkScheduler
     /// under a needle matching NO card, the first card of the FULL scene
     /// (the W7-6 editor row: the board lands with that card seated —
     /// codex PR 8 round 8, OD-12); else the one whose activation the reader
-    /// is returning from; else the first card of the full scene in the
-    /// document's reading order. Never the filtered outline: a Visual filter
-    /// dims cards and narrows nothing, so a needle matching no card still
-    /// leaves every card to land on. The board's own full-scene reading
-    /// order (#1270) replaces the full-scene arms here.
+    /// is returning from; else the first card of the full scene. Never the
+    /// filtered outline: a Visual filter dims cards and narrows nothing, so a
+    /// needle matching no card still leaves every card to land on. Both
+    /// full-scene arms read the board's ONE reading order,
+    /// <see cref="SceneReadingOrder"/> — the order its Down/Up walk (#1270) —
+    /// so a landing and a walk never disagree about which card is first.
     /// </summary>
     internal string? BoardLandingNodeFor(CanvasFocusRequest request)
     {
@@ -701,7 +702,7 @@ internal sealed class CanvasDocumentViewModel : PanelWorkScheduler
         {
             return named;
         }
-        string? firstOfTheScene = _outline.Count > 0 ? _outline[0].NodeId : null;
+        string? firstOfTheScene = SceneReadingOrder.FirstOrDefault()?.NodeId;
         if (FilterActive && FilteredOutline.Count == 0)
         {
             return firstOfTheScene;

@@ -43,6 +43,16 @@ public sealed class ReadingFocusTests
         + "{\"id\":\"beta\",\"type\":\"text\",\"text\":\"Beta card\",\"x\":0,\"y\":160,\"width\":240,\"height\":120}"
         + "],\"edges\":[]}";
 
+    /// <summary>A board whose reading order (y, then x, then document order)
+    /// is neither its document order nor its id order: "c-top" reads first,
+    /// "b-lower" is first in the file and "a-middle" first by id.</summary>
+    private const string ReadingOrderBoard =
+        "{\"nodes\":["
+        + "{\"id\":\"b-lower\",\"type\":\"text\",\"text\":\"Lower card\",\"x\":0,\"y\":320,\"width\":240,\"height\":120},"
+        + "{\"id\":\"c-top\",\"type\":\"text\",\"text\":\"Top card\",\"x\":0,\"y\":0,\"width\":240,\"height\":120},"
+        + "{\"id\":\"a-middle\",\"type\":\"text\",\"text\":\"Middle card\",\"x\":0,\"y\":160,\"width\":240,\"height\":120}"
+        + "],\"edges\":[]}";
+
     /// <summary>The funnel behind the toggle, every open and the dismissal
     /// fallbacks, with the content already merged: focus lands at once and
     /// the reader's seated caret survives it. Before R-10 this landing fell
@@ -2041,6 +2051,47 @@ public sealed class ReadingFocusTests
         Assert.Null(host.EditorLandingRequest());
     });
 
+    /// <summary>R-10 over contract 34 D15, reconciled with #1299 (#1270): the
+    /// board's two full-scene landing arms — under a needle matching no card
+    /// (which outranks the card the reader last activated), and with no card
+    /// named or returned from — seat the first card in the board's ONE
+    /// reading order (<c>SceneReadingOrder</c>, the order its Down/Up walk):
+    /// never the first card in the file, nor the first by id, nor the card
+    /// already seated.</summary>
+    [Theory]
+    [InlineData("a needle matching no card")]
+    [InlineData("no card named or returned from")]
+    public void TheBoardsFullSceneLandingSeatsTheFirstCardInReadingOrder(string arm) => RunSta(() =>
+    {
+        using var host = new Host();
+        host.Initialize(readingMode: false, documentKind: "canvas", board: ReadingOrderBoard);
+        CanvasDocumentViewModel board = host.Tab.Canvas!;
+        board.ShowSurface(CanvasSurfaceKind.Visual);
+        Assert.Equal(["c-top", "a-middle", "b-lower"], board.SceneReadingOrder.Select(stop => stop.NodeId));
+        if (arm == "a needle matching no card")
+        {
+            board.LastActivatedNode = "a-middle";
+            _ = FilterTheBoardToNothing(host, cards: 3);
+        }
+        else
+        {
+            Assert.Null(board.LastActivatedNode);
+        }
+        board.SeatSelectionSilently("b-lower");
+        host.Settle();
+        RingHost ring = host.UseRing();
+        var surface = Assert.IsType<CanvasSurfaceView>(host.EditorStop());
+        host.FocusTabBar();
+
+        host.Workspace.FocusNextPaneCommand.Execute(null);
+        PumpedDispatcher.Drain();
+
+        Assert.Equal(ShellRegionLanding.Landed, Assert.Single(ring.Attempts).Outcome);
+        AssertFocused(surface.VisualForTests, $"the board's full-scene landing ({arm})");
+        Assert.Equal("c-top", board.Selection.Selected);
+        Assert.Equal([host.EditorLine()], host.Announced);
+    });
+
     /// <summary>R-10: a Visual board with no cards at all is still an empty
     /// canvas: F6 lands on its onboarding, the editor line spoken once.</summary>
     [Fact]
@@ -2066,7 +2117,7 @@ public sealed class ReadingFocusTests
 
     /// <summary>A needle no card of <see cref="CardBoard"/> matches, applied
     /// and answered; the board keeps every card.</summary>
-    private static string FilterTheBoardToNothing(Host host)
+    private static string FilterTheBoardToNothing(Host host, int cards = 2)
     {
         const string Needle = "zzz-matches-no-card";
         CanvasDocumentViewModel board = host.Tab.Canvas!;
@@ -2076,7 +2127,7 @@ public sealed class ReadingFocusTests
             "the needle never narrowed the rows to none");
         PumpedDispatcher.PumpUntilDrained(board.WhenAllWorkDrained());
         PumpedDispatcher.Drain();
-        Assert.Equal(2, board.Outline.Count);
+        Assert.Equal(cards, board.Outline.Count);
         return Needle;
     }
 
