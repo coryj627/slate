@@ -1156,8 +1156,14 @@ internal static class ReadingDocumentBuilder
         // alias-less occurrence of the SAME image key shared one alt
         // and both titled with the filename. The card's own block
         // knows its own record — its authored alias wins here, fixing
-        // the deferral mac documented rather than porting it.
+        // the deferral mac documented rather than porting it. Found, the
+        // record's alias wins even when there is none (#1278 round 4, the
+        // realized-surface witness): an alias-less occurrence BEFORE an
+        // aliased one fell back to the shared last-record alt and was
+        // titled with the other occurrence's alias. The shared alt is only
+        // the fallback for a card whose record is not in the snapshot.
         string? occurrenceAlt = null;
+        bool ownRecord = false;
         foreach (OutgoingLink record in records)
         {
             if (record.IsEmbed
@@ -1165,6 +1171,7 @@ internal static class ReadingDocumentBuilder
                 && record.SpanEnd <= block.ByteEnd)
             {
                 occurrenceAlt = record.DisplayText;
+                ownRecord = true;
             }
         }
         var section = new Section
@@ -1174,18 +1181,27 @@ internal static class ReadingDocumentBuilder
         section.SetResourceReference(Block.BackgroundProperty, "Slate.RaisedSurfaceBrush");
 
         EmbedResolution? resolution = artifact?.Resolution?.Resolution;
-        // A null resolution never claims a kind it cannot know (round
-        // 1 [medium]): the neutral label says only what is true.
-        string headerName = resolution is null
-            ? $"Embed: {key}"
-            : EmbedHeaderName(resolution, occurrenceAlt ?? artifact?.Alt);
-        if (artifact is { BaseProjection: { } namedBase })
+        // The mac EmbedView name shapes, in core's words (#1278): a resolved
+        // card's header IS core's title for what it resolved to — the same
+        // title the Ctrl+E preview speaks — so a reading landing on it
+        // (ReadingNavLanded carries the header as its text) speaks no host
+        // sentence. Only the two states that are not a card keep host copy:
+        // a null resolution never claims a kind it cannot know (round 1
+        // [medium]), and an unresolved embed says why in mac's words.
+        string headerName = resolution switch
         {
+            null => $"Embed: {key}",
+            EmbedResolution.Unresolved unresolved => UnresolvedEmbedText(unresolved.Reason),
             // The base card names its real kind (contract C10) — the
             // FullNote resolution would otherwise title it as a note.
-            headerName =
-                $"Embedded base: {System.IO.Path.GetFileNameWithoutExtension(namedBase.TargetPath)}";
-        }
+            EmbedResolution.FullNote when artifact is { BaseProjection: { } baseCard } =>
+                SlateUniffiMethods.ResolvedEmbedTitle(new ResolvedEmbed.Base(baseCard.TargetPath)),
+            // An image named by this occurrence's own alt keeps it (mac
+            // audits #196/#198/#419).
+            EmbedResolution.Image image => SlateUniffiMethods.ResolvedEmbedTitle(
+                new ResolvedEmbed.Image(image.TargetPath, ownRecord ? occurrenceAlt : artifact?.Alt ?? image.Alt)),
+            _ => SlateUniffiMethods.ResolvedEmbedTitle(ResolvedEmbeds.Of(resolution)!),
+        };
         string headerSuffix = resolution is null
             ? string.Empty
             : EmbedHeaderAccessibilitySuffix(resolution);
@@ -1259,36 +1275,6 @@ internal static class ReadingDocumentBuilder
 
         ReadingSemantics.MarkEmbed(section, headerName);
         return section;
-    }
-
-    /// <summary>The mac EmbedView name shapes, verbatim.</summary>
-    private static string EmbedHeaderName(EmbedResolution resolution, string? alt) =>
-        resolution switch
-        {
-            EmbedResolution.FullNote fullNote =>
-                $"Embedded note: {fullNote.TargetPath}",
-            EmbedResolution.Section section =>
-                $"Embedded section: {section.Heading} from {section.TargetPath}",
-            EmbedResolution.Block block =>
-                $"Embedded block from {block.TargetPath}",
-            EmbedResolution.Image image =>
-                $"Embedded image: {ImageDescriptor(image, alt)}",
-            EmbedResolution.Unresolved unresolved =>
-                UnresolvedEmbedText(unresolved.Reason),
-            _ => "Embedded note",
-        };
-
-    /// <summary>Alt-or-filename (mac audits #196/#198/#419): trimmed
-    /// authored alt when present, else the target's filename.</summary>
-    private static string ImageDescriptor(EmbedResolution.Image image, string? alt)
-    {
-        string? trimmed = (alt ?? image.Alt)?.Trim();
-        if (!string.IsNullOrEmpty(trimmed))
-        {
-            return trimmed;
-        }
-        int slash = image.TargetPath.LastIndexOf('/');
-        return slash >= 0 ? image.TargetPath[(slash + 1)..] : image.TargetPath;
     }
 
     /// <summary>The mac visible unresolved strings, verbatim.</summary>
@@ -1468,7 +1454,13 @@ internal static class ReadingDocumentBuilder
     /// core depth-limit marker) surface through the header name.</summary>
     private static Paragraph NestedEmbedHeader(NestedEmbed child)
     {
-        string name = EmbedHeaderName(child.Resolution, alt: null);
+        // The nested card's header is core's title too (#1278); only an
+        // unresolved child says why in mac's words.
+        string name = child.Resolution switch
+        {
+            EmbedResolution.Unresolved unresolved => UnresolvedEmbedText(unresolved.Reason),
+            _ => SlateUniffiMethods.ResolvedEmbedTitle(ResolvedEmbeds.Of(child.Resolution)!),
+        };
         (string Path, string? AnchorKind, string? AnchorText)? jump =
             ResolvedJump(child.Resolution);
         var paragraph = new Paragraph

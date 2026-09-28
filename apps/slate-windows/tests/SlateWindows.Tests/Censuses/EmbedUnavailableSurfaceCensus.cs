@@ -57,7 +57,7 @@ public sealed class EmbedUnavailableSurfaceCensus
     [InlineData("string sentence = SlateUniffiMethods.A11yRender(unavailable).Text; PopoverBody = Describe(reason); PopoverAutomationName = sentence;", "PopoverBody = Describe(reason)")]
     [InlineData("string sentence = SlateUniffiMethods.A11yRender(unavailable).Text; PopoverBody = sentence; PopoverAutomationName = \"Embed preview unavailable.\";", "PopoverAutomationName = \"Embed preview unavailable.\"")]
     [InlineData("string sentence = SlateUniffiMethods.A11yRender(unavailable).Text; PopoverBody = $\"{sentence}\"; PopoverAutomationName = sentence;", "PopoverBody = $\"{sentence}\"")]
-    [InlineData("string sentence = SlateUniffiMethods.A11yRender(new A11yEvent.EmbedPreviewShown(targetRaw, \"t\")).Text; PopoverBody = sentence; PopoverAutomationName = sentence;", "PopoverBody = sentence")]
+    [InlineData("string sentence = SlateUniffiMethods.A11yRender(new A11yEvent.EmbedPreviewShown(targetRaw, new ResolvedEmbed.Note(\"t.md\"))).Text; PopoverBody = sentence; PopoverAutomationName = sentence;", "PopoverBody = sentence")]
     [InlineData("string body = Describe(reason); string sentence = body; PopoverBody = sentence; PopoverAutomationName = SlateUniffiMethods.A11yRender(unavailable).Text;", "PopoverBody = sentence")]
     public void TheCensusNamesEveryRewiredSurface(string body, string namedSite)
     {
