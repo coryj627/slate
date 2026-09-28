@@ -118,9 +118,14 @@ public sealed partial class ShellAccessibilityTests
             WaitForElement(window, "RightPaneLeaves", TimeSpan.FromSeconds(30));
             AwaitHeard(HeardFromSlate, launchLines, TimeSpan.FromSeconds(15), logFile);
 
-            // A chord-driven line after launch, still with no menu opened.
+            // A chord-driven line after launch, still with no menu opened. The
+            // launch lands the keys on a ROW of the Files tree, never the bare
+            // tree (W7-7 PR 4, R-5 as the owner amended it: with no file
+            // selected, the first row, unselected).
             window.SetForeground();
-            AssertEventuallyFocused(
+            AssertFilesTreeRegionFocused(
+                window,
+                automation,
                 WaitForElement(window, "FilesTree", TimeSpan.FromSeconds(10)),
                 "The launch focus did not land on the Files tree before Ctrl+Alt+I.");
             PressUntilGone(window, automation, "RightPaneLeaves", VirtualKeyShort.CONTROL, VirtualKeyShort.ALT, VirtualKeyShort.KEY_I);
