@@ -567,31 +567,29 @@ internal sealed partial class WorkspaceViewModel
     /// <summary>Injectable scope prompt (the W4-4 dialog-seam
     /// pattern): production shows a modal choice; facts inject. The
     /// argument is the verb ("Export"/"Copy") for the dialog copy and
-    /// the cancel announcement.</summary>
+    /// the cancel announcement. The shell installs the owned question
+    /// (<see cref="AskBasesExportScope"/>); outside a shell there is no
+    /// window to own a box, so none is shown and the export is cancelled
+    /// (#1275, contract 28 I11: an ownerless box would not disable the
+    /// shell, and the palette's seal would not see it).</summary>
     internal Func<string, BasesExportScope> BasesExportScopePrompt { get; set; } =
-        verb => AskBasesExportScope(null, verb);
+        _ => BasesExportScope.Cancel;
 
-    /// <summary>The scope question as a message box, owned by
-    /// <paramref name="owner"/> when there is one — the shell installs an
-    /// owned prompt (#1275), so the box disables it.</summary>
-    internal static BasesExportScope AskBasesExportScope(System.Windows.Window? owner, string verb)
+    /// <summary>The scope question as a message box owned by
+    /// <paramref name="owner"/> — the shell, which installs it (#1275), so
+    /// the box disables it.</summary>
+    internal static BasesExportScope AskBasesExportScope(System.Windows.Window owner, string verb)
     {
         string text = "A quick filter is active. "
             + verb + " only the filtered rows?\n\n"
             + "Yes: the filtered rows shown now.\n"
             + "No: every row in the view.";
-        System.Windows.MessageBoxResult choice = owner is null
-            ? System.Windows.MessageBox.Show(
-                text,
-                "Slate",
-                System.Windows.MessageBoxButton.YesNoCancel,
-                System.Windows.MessageBoxImage.Question)
-            : System.Windows.MessageBox.Show(
-                owner,
-                text,
-                "Slate",
-                System.Windows.MessageBoxButton.YesNoCancel,
-                System.Windows.MessageBoxImage.Question);
+        System.Windows.MessageBoxResult choice = System.Windows.MessageBox.Show(
+            owner,
+            text,
+            "Slate",
+            System.Windows.MessageBoxButton.YesNoCancel,
+            System.Windows.MessageBoxImage.Question);
         return choice switch
         {
             System.Windows.MessageBoxResult.Yes => BasesExportScope.Filtered,
