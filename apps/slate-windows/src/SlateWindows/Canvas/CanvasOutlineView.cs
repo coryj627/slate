@@ -561,10 +561,17 @@ internal sealed class CanvasOutlineView : UserControl
     /// that had happened (the W7-6 #1240 shape; OutlineLandingTests measures
     /// both). The landing is the delivery's — realized, silent, and
     /// reported truthfully — and a seat that cannot be delivered (filtered
-    /// out) gives way to the first row.
+    /// out) gives way to the first row. A tree with NO rows is its own stop
+    /// (AR-6) and takes the keys itself — the menu key's answer on an empty
+    /// outline (#1283, contract 34 C3) is spoken from there.
     /// </remarks>
     internal bool FocusTree()
     {
+        if (_roots.Count == 0)
+        {
+            return _tree.Focus();
+        }
+
         if (_selectedRow is { IsConnection: false } seated && DeliverFocus(seated.Id) is not null)
         {
             return true;
