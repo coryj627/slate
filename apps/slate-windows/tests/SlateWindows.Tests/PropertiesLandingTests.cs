@@ -2,7 +2,6 @@
 // SPDX-License-Identifier: AGPL-3.0-or-later
 
 using System.Reflection;
-using System.Runtime.ExceptionServices;
 using System.Windows;
 using System.Windows.Controls;
 using System.Windows.Controls.Primitives;
@@ -362,25 +361,13 @@ public sealed class PropertiesLandingTests
     private static void RunSta(Action body)
     {
         Func<bool> priorOverlayProbe = CanvasSurfaceView.ShellOverlayIsOpen;
-        Exception? failure = null;
-        var thread = new Thread(() =>
+        try
         {
-            try
-            {
-                PumpedDispatcher.Run(body);
-            }
-            catch (Exception exception)
-            {
-                failure = exception;
-            }
-        });
-        thread.SetApartmentState(ApartmentState.STA);
-        thread.Start();
-        Assert.True(thread.Join(TimeSpan.FromSeconds(90)), "STA test body timed out.");
-        CanvasSurfaceView.ShellOverlayIsOpen = priorOverlayProbe;
-        if (failure is not null)
+            StaThread.RunPumped(body, TimeSpan.FromSeconds(90), "STA test body timed out.");
+        }
+        finally
         {
-            ExceptionDispatchInfo.Capture(failure).Throw();
+            CanvasSurfaceView.ShellOverlayIsOpen = priorOverlayProbe;
         }
     }
 }

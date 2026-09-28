@@ -65,7 +65,6 @@
 
 using System.Collections.Immutable;
 using System.Reflection;
-using System.Runtime.ExceptionServices;
 using System.Text.Json;
 using System.Text.Json.Nodes;
 using System.Windows;
@@ -870,58 +869,43 @@ public sealed class FocusIntegrityManifestCensus
     private static HashSet<string> GuardedScopes()
     {
         var guarded = new HashSet<string>(StringComparer.Ordinal);
-        Exception? failure = null;
-        var thread = new Thread(() =>
-        {
-            try
+        StaThread.RunPumped(
+            () =>
             {
-                PumpedDispatcher.Run(() =>
+                var shell = new MainWindow();
+                try
                 {
-                    var shell = new MainWindow();
-                    try
+                    var pending = new Stack<object>([shell]);
+                    var seen = new HashSet<object>(ReferenceEqualityComparer.Instance);
+                    while (pending.TryPop(out object? node))
                     {
-                        var pending = new Stack<object>([shell]);
-                        var seen = new HashSet<object>(ReferenceEqualityComparer.Instance);
-                        while (pending.TryPop(out object? node))
+                        if (!seen.Add(node) || node is not DependencyObject element)
                         {
-                            if (!seen.Add(node) || node is not DependencyObject element)
-                            {
-                                continue;
-                            }
+                            continue;
+                        }
 
-                            if (element is FrameworkElement framework && RegionFocusGuard.HasLanding(framework))
+                        if (element is FrameworkElement framework && RegionFocusGuard.HasLanding(framework))
+                        {
+                            foreach (string name in new[] { framework.Name, AutomationProperties.GetAutomationId(framework) }
+                                .Where(name => !string.IsNullOrEmpty(name)))
                             {
-                                foreach (string name in new[] { framework.Name, AutomationProperties.GetAutomationId(framework) }
-                                    .Where(name => !string.IsNullOrEmpty(name)))
-                                {
-                                    _ = guarded.Add(name);
-                                }
-                            }
-
-                            foreach (object child in LogicalTreeHelper.GetChildren(element))
-                            {
-                                pending.Push(child);
+                                _ = guarded.Add(name);
                             }
                         }
+
+                        foreach (object child in LogicalTreeHelper.GetChildren(element))
+                        {
+                            pending.Push(child);
+                        }
                     }
-                    finally
-                    {
-                        shell.Close();
-                    }
-                });
-            }
-            catch (Exception exception)
-            {
-                failure = exception;
-            }
-        });
-        thread.SetApartmentState(ApartmentState.STA);
-        thread.Start();
-        Assert.True(thread.Join(TimeSpan.FromSeconds(60)), "the guard map timed out.");
-        if (failure is not null)
-        {
-            ExceptionDispatchInfo.Capture(failure).Throw();
-        }
+                }
+                finally
+                {
+                    shell.Close();
+                }
+            },
+            TimeSpan.FromSeconds(60),
+            "the guard map timed out.");
 
         foreach ((string _, CSharpSource source) in ShellCompilation.Sources)
         {

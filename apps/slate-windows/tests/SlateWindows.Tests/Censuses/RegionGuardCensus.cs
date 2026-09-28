@@ -12,7 +12,6 @@
 // XAML census reads, and the two counts must agree, so a root added to the
 // XAML without a guard fails here.
 
-using System.Runtime.ExceptionServices;
 using System.Windows;
 using System.Windows.Controls;
 using System.Windows.Controls.Primitives;
@@ -113,26 +112,6 @@ public sealed class RegionGuardCensus
         }
     }
 
-    private static void RunSta(Action body)
-    {
-        Exception? failure = null;
-        var thread = new Thread(() =>
-        {
-            try
-            {
-                PumpedDispatcher.Run(body);
-            }
-            catch (Exception exception)
-            {
-                failure = exception;
-            }
-        });
-        thread.SetApartmentState(ApartmentState.STA);
-        thread.Start();
-        Assert.True(thread.Join(TimeSpan.FromSeconds(60)), "the region guard census timed out.");
-        if (failure is not null)
-        {
-            ExceptionDispatchInfo.Capture(failure).Throw();
-        }
-    }
+    private static void RunSta(Action body) =>
+        StaThread.RunPumped(body, TimeSpan.FromSeconds(60), "the region guard census timed out.");
 }
