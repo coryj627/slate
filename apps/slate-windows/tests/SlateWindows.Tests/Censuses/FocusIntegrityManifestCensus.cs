@@ -846,6 +846,7 @@ public sealed class FocusIntegrityManifestCensus
             root.ToJsonString(new JsonSerializerOptions
             {
                 WriteIndented = true,
+                NewLine = "\n",
                 Encoder = System.Text.Encodings.Web.JavaScriptEncoder.UnsafeRelaxedJsonEscaping,
             }) + "\n");
     }
