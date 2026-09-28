@@ -1,6 +1,7 @@
 // Copyright (C) 2026 Cory Joseph
 // SPDX-License-Identifier: AGPL-3.0-or-later
 
+using System.Runtime.CompilerServices;
 using System.Windows.Input;
 using uniffi.slate_uniffi;
 
@@ -39,26 +40,56 @@ internal sealed partial class WorkspaceViewModel
     private double _filesSidebarWidth = 270;
     private double _rightPaneWidth = 280;
 
-    /// <summary>The Files sidebar's width, bound both ways to its
-    /// column.</summary>
+    /// <summary>The Files sidebar's width, bound both ways to its column,
+    /// and held inside its range whoever writes it (codex PR 4b r1 F7): a
+    /// splitter drag or arrow is bounded only by the column's minimum.</summary>
     public double FilesSidebarWidth
     {
         get => _filesSidebarWidth;
-        set => SetField(ref _filesSidebarWidth, value);
+        set => HoldWidth(ref _filesSidebarWidth, value, ShellSidebar.Files);
     }
 
-    /// <summary>The right pane's width, bound both ways to its
-    /// column.</summary>
+    /// <summary>The right pane's width, bound both ways to its column, and
+    /// held inside its range whoever writes it.</summary>
     public double RightPaneWidth
     {
         get => _rightPaneWidth;
-        set => SetField(ref _rightPaneWidth, value);
+        set => HoldWidth(ref _rightPaneWidth, value, ShellSidebar.RightPane);
     }
 
     /// <summary>The width of the row the two sidebars and the editor share,
     /// as the window lays it out; zero until it has been laid out, when
-    /// only <see cref="MaximumSidebarWidth"/> bounds a step.</summary>
-    internal double WorkspaceRowWidth { get; set; }
+    /// only <see cref="MaximumSidebarWidth"/> bounds a width. A narrower row
+    /// brings both widths back into its room (a window shrunk or snapped
+    /// under a wide sidebar), so every step is one step and says the
+    /// truth.</summary>
+    internal double WorkspaceRowWidth
+    {
+        get => _workspaceRowWidth;
+        set
+        {
+            _workspaceRowWidth = value;
+            FilesSidebarWidth = _filesSidebarWidth;
+            RightPaneWidth = _rightPaneWidth;
+        }
+    }
+
+    private double _workspaceRowWidth;
+
+    /// <summary>Stores <paramref name="value"/> bounded to
+    /// <paramref name="sidebar"/>'s range — at least the columns' minimum, at
+    /// most the ceiling and the room beside the other sidebar and the
+    /// editor's minimum. A write the bound changed is always announced, even
+    /// when the held width is the one already stored: the column the drag
+    /// wrote then follows the held width, not the dragged one.</summary>
+    private void HoldWidth(ref double field, double value, ShellSidebar sidebar, [CallerMemberName] string? name = null)
+    {
+        double held = Math.Clamp(value, MinimumSidebarWidth, WidestSidebarWidth(sidebar));
+        if (!SetField(ref field, held, name) && held != value)
+        {
+            OnPropertyChanged(name);
+        }
+    }
 
     public ICommand WidenFilesSidebarCommand => _widenFilesSidebarCommand ??=
         new RelayCommand(_ => StepSidebar(ShellSidebar.Files, +1), _ => true);

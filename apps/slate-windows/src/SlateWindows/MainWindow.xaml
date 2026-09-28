@@ -872,11 +872,11 @@
                      writes them back. -->
                 <Grid x:Name="WorkspaceColumns" Grid.Row="1" SizeChanged="WorkspaceColumns_SizeChanged">
                     <Grid.ColumnDefinitions>
-                        <ColumnDefinition Width="{Binding Workspace.FilesSidebarWidth, Mode=TwoWay, Converter={StaticResource PixelGridLengthConverter}, FallbackValue=270}" MinWidth="200" />
+                        <ColumnDefinition Width="{Binding Workspace.FilesSidebarWidth, Mode=TwoWay, Converter={StaticResource PixelGridLengthConverter}, FallbackValue=270}" MinWidth="200" MaxWidth="640" />
                         <ColumnDefinition Width="5" />
                         <ColumnDefinition Width="*" MinWidth="300" />
                         <ColumnDefinition Width="5" />
-                        <ColumnDefinition Width="{Binding Workspace.RightPaneWidth, Mode=TwoWay, Converter={StaticResource PixelGridLengthConverter}, FallbackValue=280}" MinWidth="200" />
+                        <ColumnDefinition Width="{Binding Workspace.RightPaneWidth, Mode=TwoWay, Converter={StaticResource PixelGridLengthConverter}, FallbackValue=280}" MinWidth="200" MaxWidth="640" />
                     </Grid.ColumnDefinitions>
                     <local:AutomationLandmarkBorder x:Name="FilesPaneBorder"
                             KeyboardNavigation.DirectionalNavigation="Contained"

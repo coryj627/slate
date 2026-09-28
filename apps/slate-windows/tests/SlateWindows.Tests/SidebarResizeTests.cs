@@ -155,6 +155,78 @@ public sealed class SidebarResizeTests : IDisposable
         }
     });
 
+    /// <summary>
+    /// Codex PR 4b r1 F7: a splitter drag writes the column's width with no
+    /// bound but the column's minimum — past the 640-pixel ceiling, past the
+    /// room the editor needs — and the resize commands then spoke "at its
+    /// widest" of a width over the ceiling and "narrowed" by hundreds of
+    /// pixels. The width is held inside its range whoever writes it, and the
+    /// column follows the held width.
+    /// </summary>
+    [Fact]
+    public void ADraggedWidthIsHeldInsideTheRoom() => RunSta(() =>
+    {
+        using WorkspaceViewModel workspace = NewWorkspace();
+        var shell = new MainWindow();
+        try
+        {
+            var lifecycle = Assert.IsType<VaultLifecycleViewModel>(shell.DataContext);
+            (typeof(VaultLifecycleViewModel).GetProperty(nameof(VaultLifecycleViewModel.Workspace))
+                ?? throw new InvalidOperationException("Workspace is gone"))
+                .SetValue(lifecycle, workspace);
+            var columns = Assert.IsType<Grid>(shell.FindName("WorkspaceColumns"));
+            PumpedDispatcher.Drain();
+            workspace.WorkspaceRowWidth = 1600;
+
+            // What GridSplitter.SetDefinitionLength writes on a drag.
+            columns.ColumnDefinitions[0].Width = new GridLength(900);
+            PumpedDispatcher.Drain();
+            Assert.Equal(WorkspaceViewModel.MaximumSidebarWidth, workspace.FilesSidebarWidth);
+            Assert.Equal(new GridLength(WorkspaceViewModel.MaximumSidebarWidth), columns.ColumnDefinitions[0].Width);
+
+            workspace.WidenFilesSidebarCommand.Execute(null);
+            Assert.Equal("Files sidebar at its widest, 640 pixels.", SlateUniffiMethods.A11yRender(_announced[^1]).Text);
+            workspace.NarrowFilesSidebarCommand.Execute(null);
+            Assert.Equal(600, workspace.FilesSidebarWidth);
+            Assert.Equal("Files sidebar resized, 600 pixels.", SlateUniffiMethods.A11yRender(_announced[^1]).Text);
+
+            // The room row: 1,000 − 280 − 300 − 10 leaves the Files sidebar 410.
+            workspace.WorkspaceRowWidth = 1000;
+            workspace.RightPaneWidth = 280;
+            columns.ColumnDefinitions[0].Width = new GridLength(500);
+            PumpedDispatcher.Drain();
+            Assert.Equal(410, workspace.FilesSidebarWidth);
+            Assert.Equal(new GridLength(410), columns.ColumnDefinitions[0].Width);
+        }
+        finally
+        {
+            (typeof(VaultLifecycleViewModel).GetProperty(nameof(VaultLifecycleViewModel.Workspace)))!
+                .SetValue(shell.DataContext, null);
+            shell.Close();
+        }
+    });
+
+    /// <summary>Codex PR 4b r1 F7: the row narrowing under a wide sidebar (a
+    /// window shrunk, snapped) brings the width back into the room, so the
+    /// next step is one step and says the truth.</summary>
+    [Fact]
+    public void AShrunkRowBringsTheWidthBackInRange() => RunSta(() =>
+    {
+        using WorkspaceViewModel workspace = NewWorkspace();
+        workspace.WorkspaceRowWidth = 1600;
+        workspace.RightPaneWidth = 280;
+        workspace.FilesSidebarWidth = 640;
+
+        workspace.WorkspaceRowWidth = 1000;
+
+        Assert.Equal(410, workspace.FilesSidebarWidth);
+        workspace.WidenFilesSidebarCommand.Execute(null);
+        Assert.Equal("Files sidebar at its widest, 410 pixels.", SlateUniffiMethods.A11yRender(_announced[^1]).Text);
+        workspace.NarrowFilesSidebarCommand.Execute(null);
+        Assert.Equal(370, workspace.FilesSidebarWidth);
+        Assert.Equal("Files sidebar resized, 370 pixels.", SlateUniffiMethods.A11yRender(_announced[^1]).Text);
+    });
+
     private WorkspaceViewModel NewWorkspace() =>
         new(
             _session,
