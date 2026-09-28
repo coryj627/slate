@@ -369,8 +369,9 @@ public sealed class GraphNavigatorCensus
 
     /// <summary>C-15 (iv), IGP-23: the census is rooted at the crossings too —
     /// every GraphSnapshot, GraphTableRows and GraphGeneration invocation on
-    /// a session anywhere in the shell is inside the document's Fetch or Probe
-    /// (the leaf's generation probe is B2's, named) — and no Task.Run,
+    /// a session anywhere in the shell is inside the document's Fetch (its
+    /// FetchUnder body, W7-7 PR 7) or Probe (the leaf's generation probe is
+    /// B2's, named) — and no Task.Run,
     /// ThreadPool, Thread, Dispatcher.BeginInvoke or InvokeAsync under Graph/
     /// reaches a load: the named sites are the leaf view's focus retries.</summary>
     [Fact]
@@ -385,7 +386,13 @@ public sealed class GraphNavigatorCensus
             {
                 foreach (ISymbol candidate in Candidates(model.GetSymbolInfo(call)))
                 {
-                    if (candidate is IMethodSymbol { Name: "GraphSnapshot" or "GraphTableRows" or "GraphGeneration" or "StartGraphLayout" or "GraphTopology" } method
+                    // W7-7 PR 7 (codex PR 7 round 4, finding 5): the cancellable
+                    // forms are the same crossings, under a token.
+                    if (candidate is IMethodSymbol
+                        {
+                            Name: "GraphSnapshot" or "GraphTableRows" or "GraphGeneration" or "StartGraphLayout" or "GraphTopology"
+                                or "GraphSnapshotCancellable" or "GraphTableRowsCancellable" or "GraphTopologyCancellable",
+                        } method
                         && method.ContainingType.Name == "VaultSession")
                     {
                         crossings.Add($"{relative}:{OwnerOf(call)}:{method.Name}");
@@ -393,7 +400,7 @@ public sealed class GraphNavigatorCensus
                     // W6-2 PR D (D-15 iii): the layout session's own crossings.
                     if (candidate is IMethodSymbol
                         {
-                            Name: "Tick" or "RunToConvergence" or "Refresh" or "NodeIds" or "Edges" or "NodeMetadata" or "Generation" or "PinNode" or "UnpinNode" or "SetForces",
+                            Name: "Tick" or "RunToConvergence" or "Refresh" or "RefreshCancellable" or "NodeIds" or "Edges" or "NodeMetadata" or "Generation" or "PinNode" or "UnpinNode" or "SetForces",
                         } layout
                         && layout.ContainingType.Name is "LayoutSession" or "ILayoutSession")
                     {
@@ -460,18 +467,21 @@ public sealed class GraphNavigatorCensus
                 "Graph/GraphDocumentViewModel.cs:BuildDiagram:NodeIds",
                 "Graph/GraphDocumentViewModel.cs:BuildDiagram:NodeMetadata",
                 "Graph/GraphDocumentViewModel.cs:BuildDiagram:StartGraphLayout",
-                "Graph/GraphDocumentViewModel.cs:Fetch:GraphSnapshot",
-                "Graph/GraphDocumentViewModel.cs:Fetch:GraphTableRows",
-                "Graph/GraphDocumentViewModel.cs:FetchTopology:GraphTopology",
+                "Graph/GraphDocumentViewModel.cs:FetchTopology:GraphTopologyCancellable",
+                "Graph/GraphDocumentViewModel.cs:FetchUnder:GraphSnapshotCancellable",
+                "Graph/GraphDocumentViewModel.cs:FetchUnder:GraphTableRowsCancellable",
                 "Graph/GraphDocumentViewModel.cs:Probe:GraphGeneration",
                 "Graph/GraphDocumentViewModel.cs:RefreshDiagram:Edges",
                 "Graph/GraphDocumentViewModel.cs:RefreshDiagram:NodeIds",
                 "Graph/GraphDocumentViewModel.cs:RefreshDiagram:NodeMetadata",
-                "Graph/GraphDocumentViewModel.cs:RefreshDiagram:Refresh",
+                "Graph/GraphDocumentViewModel.cs:RefreshDiagram:RefreshCancellable",
                 "Graph/GraphLayoutDriver.cs:Converge:RunToConvergence",
                 "Graph/GraphLayoutDriver.cs:Step:Tick",
             ],
             crossings.Order(StringComparer.Ordinal));
+        // W7-7 PR 7 (codex PR 7 round 4, finding 5): FetchUnder is Fetch's body
+        // under its native token — Fetch is its one caller.
+        Assert.Equal(["Graph/GraphDocumentViewModel.cs:Fetch"], CallersOf(TheDocumentType, "FetchUnder"));
         // The named sites — the leaf view's focus retries, the relay's
         // marshalling and the three timers (the relay's window, the
         // preferences' save, the driver's cadence) — none reaching a load.
