@@ -522,8 +522,11 @@ internal sealed class ReadingContentViewModel : BindableBase, IDisposable
                     {
                         // Known-transient only; the last attempt and
                         // every other exception fall through to the
-                        // terminal boundary.
+                        // terminal boundary. A refresh retired during the
+                        // delay stops instead of retrying (codex round 4).
+                        ThrowIfCancelled(cancel.Token);
                         await Task.Delay(RetryDelay).ConfigureAwait(false);
+                        ThrowIfCancelled(cancel.Token);
                     }
                 }
                 if (fetched is { } result)
@@ -676,9 +679,13 @@ internal sealed class ReadingContentViewModel : BindableBase, IDisposable
         // Records ownership is inherent here — they are fetched for the
         // captured path inside the gated refresh, and publication
         // re-verifies the tab still shows that exact path (ordinal).
+        FetchStage(cancel, "links");
         OutgoingLink[] records = session.OutgoingLinks(path);
+        FetchStage(cancel, "citations");
         RenderedCitation[] citations = RenderCitations(session, path);
+        FetchStage(cancel, "tasks");
         TaskItem[] tasks = session.TasksForFile(path).ToArray();
+        FetchStage(cancel, "code");
         // Code blocks degrade per-fetch, mac-style: a failure here
         // renders plain un-highlighted fences with correct preambles
         // rather than failing the whole projection.
@@ -697,6 +704,7 @@ internal sealed class ReadingContentViewModel : BindableBase, IDisposable
             codeBlocks = Array.Empty<CodeBlock>();
             codeFetchDegraded = true;
         }
+        FetchStage(cancel, "math");
         // Math degrades identically (W3-2): a MathCAT failure renders
         // source-in-range fallbacks with nav still working, never a
         // failed projection.
@@ -715,6 +723,7 @@ internal sealed class ReadingContentViewModel : BindableBase, IDisposable
             mathBlocks = Array.Empty<MathBlock>();
             mathFetchDegraded = true;
         }
+        FetchStage(cancel, "diagrams");
         // Diagrams degrade identically (W3-3): a renderer failure
         // renders source-in-range fallbacks with nav still working,
         // never a failed projection.
@@ -733,11 +742,15 @@ internal sealed class ReadingContentViewModel : BindableBase, IDisposable
             diagramBlocks = Array.Empty<DiagramBlock>();
             diagramFetchDegraded = true;
         }
+        FetchStage(cancel, "blocks");
         ReadingBlock[] blocks = SlateUniffiMethods.ReadingBlocksSource(text);
+        FetchStage(cancel, "inlines");
         ReadingBlockInlines[] inlines = SlateUniffiMethods.ReadingInlineSegmentsSource(
             text, citations, records);
+        FetchStage(cancel, "embeds");
         ReadingEmbedArtifact[] embeds = FetchEmbedResolutions(
             session, path, records, inlines, cancel);
+        ThrowIfCancelled(cancel);
         // The artifact digest hashes the COMPLETE artifact sets, so
         // it belongs here on the fetch task, not on the dispatcher at
         // publication (round 5: a dense note made the memo key itself
@@ -799,6 +812,7 @@ internal sealed class ReadingContentViewModel : BindableBase, IDisposable
         var altByKey = new Dictionary<string, string?>(StringComparer.Ordinal);
         foreach (OutgoingLink record in records)
         {
+            ThrowIfCancelled(cancel);
             if (record.IsEmbed)
             {
                 altByKey[SlateUniffiMethods.ReadingEmbedKey(
@@ -810,6 +824,7 @@ internal sealed class ReadingContentViewModel : BindableBase, IDisposable
         long imagePool = FetchedEmbedImageByteBudget;
         foreach (string key in keys)
         {
+            ThrowIfCancelled(cancel);
             altByKey.TryGetValue(key, out string? alt);
             // Attempts are counted BEFORE the FFI call (round 1
             // [high]: counting successes let persistent failures make
@@ -935,6 +950,21 @@ internal sealed class ReadingContentViewModel : BindableBase, IDisposable
             }
         }
     }
+
+    /// <summary>The boundary before each stage of a refresh's fetch
+    /// (#1279, codex round 4): a retired refresh — superseded, detached or
+    /// disposed — stops here with <c>Cancelled</c> and starts no further
+    /// query or parse, whether or not the note has embeds. A query already
+    /// running finishes (the queries take no token: AR-60).</summary>
+    private void FetchStage(CancelToken cancel, string stage)
+    {
+        ThrowIfCancelled(cancel);
+        FetchStageHookForTests?.Invoke(stage);
+    }
+
+    /// <summary>#1279 test seam: runs on the fetch worker as each stage of
+    /// the fetch begins — a fact counts the stages a retired fetch ran.</summary>
+    internal Action<string>? FetchStageHookForTests { get; set; }
 
     private static void ThrowIfCancelled(CancelToken cancel)
     {

@@ -316,6 +316,182 @@ public sealed class EmbedWalkCancellationTests
         });
     }
 
+    /// <summary>Codex round 4 (owner decision): a refresh's token is checked
+    /// at the fetch's entry and between every stage, not only in the embed
+    /// walk. On a note with no embeds, a refresh retired before its first
+    /// query — superseded, its surface detached, or the model disposed —
+    /// stops there: it runs no stage (no links, citations, tasks, code, math,
+    /// diagram or parse), ends Cancelled, and publishes nothing. The fetch
+    /// is parked at its entry; the stages are counted on its own worker
+    /// thread, so the superseding refresh's stages do not count.</summary>
+    [Theory]
+    [InlineData("supersede")]
+    [InlineData("detach")]
+    [InlineData("dispose")]
+    public void ARefreshRetiredBeforeItsFirstQueryRunsNoStage(string retirement)
+    {
+        using FixtureVault fixture = FixtureVault.Create(0, $"reading-early-cancel-{retirement}");
+        File.WriteAllText(
+            Path.Combine(fixture.Root, "plain.md"),
+            "# Plain\n\nNo embeds here, only a link to [[other]].\n");
+        File.WriteAllText(Path.Combine(fixture.Root, "other.md"), "# Other\n");
+        PumpedDispatcher.Run(() =>
+        {
+            using VaultSession session = ScannedSession(fixture.Root);
+            var announcements = new List<A11yEvent>();
+            using var tab = new WorkspaceTabViewModel(
+                session,
+                new WorkspaceTabState(
+                    Guid.NewGuid(),
+                    new WorkspaceItemState(WorkspaceItemKind.Markdown, "plain.md")),
+                announce: announcements.Add,
+                startInteractionBackgroundWork: true);
+            tab.ToggleViewMode();
+            ReadingContentViewModel reading = Assert.IsType<ReadingContentViewModel>(tab.Reading);
+            Assert.True(
+                PumpedDispatcher.PumpUntil(() => !reading.IsLoading && reading.Document is not null),
+                "the first projection never landed");
+            System.Windows.Documents.FlowDocument? shown = reading.Document;
+
+            using var parked = new ManualResetEventSlim();
+            using var release = new ManualResetEventSlim();
+            int entries = 0;
+            int retiredThread = -1;
+            int retiredStages = 0;
+            reading.FetchFaultForTests = () =>
+            {
+                // The first fetch after the arrangement parks at its entry,
+                // before any query.
+                if (Interlocked.Increment(ref entries) == 1)
+                {
+                    Volatile.Write(ref retiredThread, Environment.CurrentManagedThreadId);
+                    parked.Set();
+                    release.Wait(TimeSpan.FromSeconds(20));
+                }
+                return null;
+            };
+            reading.FetchStageHookForTests = _ =>
+            {
+                // The retired fetch's own stages: on its worker thread, before
+                // it ends Cancelled (a later fetch may reuse the pool thread).
+                if (Environment.CurrentManagedThreadId == Volatile.Read(ref retiredThread)
+                    && reading.FetchesCancelledForTests == 0)
+                {
+                    Interlocked.Increment(ref retiredStages);
+                }
+            };
+            try
+            {
+                reading.Refresh();
+                Assert.True(
+                    PumpedDispatcher.PumpUntil(() => parked.IsSet),
+                    "the refresh never reached its fetch");
+
+                switch (retirement)
+                {
+                    case "supersede": reading.Refresh(); break;
+                    case "detach": reading.OnSurfaceDetached(); break;
+                    case "dispose": reading.Dispose(); break;
+                    default: throw new ArgumentOutOfRangeException(nameof(retirement), retirement, null);
+                }
+                if (retirement == "supersede")
+                {
+                    // The superseding fetch runs on another worker and publishes.
+                    Assert.True(
+                        PumpedDispatcher.PumpUntil(() => !reading.IsLoading),
+                        "the newer refresh never published");
+                }
+                release.Set();
+
+                Assert.True(
+                    PumpedDispatcher.PumpUntil(() => reading.FetchesCancelledForTests == 1),
+                    "the retired refresh's worker did not stop on Cancelled");
+                PumpedDispatcher.Drain();
+                Assert.Equal(0, Volatile.Read(ref retiredStages));
+                Assert.Equal(1, reading.FetchesCancelledForTests);
+                Assert.Null(reading.LastTerminalFailureForTests);
+                Assert.DoesNotContain(
+                    announcements,
+                    item => item is A11yEvent.HostComposed composed
+                        && composed.Text.Contains("could not", StringComparison.Ordinal));
+                if (retirement != "supersede")
+                {
+                    Assert.Same(shown, reading.Document);
+                }
+            }
+            finally
+            {
+                release.Set();
+            }
+        });
+    }
+
+    /// <summary>Codex round 4: the retry loop checks the refresh's token
+    /// around its delay. A refresh retired while its first attempt is failing
+    /// transiently (an IOException) does not retry: it ends Cancelled after
+    /// that one attempt, with no terminal failure and nothing announced.</summary>
+    [Fact]
+    public void ARefreshRetiredDuringATransientFailureDoesNotRetry()
+    {
+        using FixtureVault fixture = FixtureVault.Create(0, "reading-retry-cancel");
+        File.WriteAllText(Path.Combine(fixture.Root, "plain.md"), "# Plain\n\nNothing to resolve.\n");
+        PumpedDispatcher.Run(() =>
+        {
+            using VaultSession session = ScannedSession(fixture.Root);
+            var announcements = new List<A11yEvent>();
+            using var tab = new WorkspaceTabViewModel(
+                session,
+                new WorkspaceTabState(
+                    Guid.NewGuid(),
+                    new WorkspaceItemState(WorkspaceItemKind.Markdown, "plain.md")),
+                announce: announcements.Add,
+                startInteractionBackgroundWork: true);
+            tab.ToggleViewMode();
+            ReadingContentViewModel reading = Assert.IsType<ReadingContentViewModel>(tab.Reading);
+            Assert.True(
+                PumpedDispatcher.PumpUntil(() => !reading.IsLoading && reading.Document is not null),
+                "the first projection never landed");
+
+            using var parked = new ManualResetEventSlim();
+            using var release = new ManualResetEventSlim();
+            int attempts = 0;
+            reading.FetchFaultForTests = () =>
+            {
+                if (Interlocked.Increment(ref attempts) == 1)
+                {
+                    parked.Set();
+                    release.Wait(TimeSpan.FromSeconds(20));
+                    return new IOException("injected transient failure");
+                }
+                return null;
+            };
+            try
+            {
+                reading.Refresh();
+                Assert.True(
+                    PumpedDispatcher.PumpUntil(() => parked.IsSet),
+                    "the refresh never reached its fetch");
+                reading.OnSurfaceDetached();
+                release.Set();
+
+                Assert.True(
+                    PumpedDispatcher.PumpUntil(() => reading.FetchesCancelledForTests == 1),
+                    "the retired refresh's worker did not stop on Cancelled");
+                PumpedDispatcher.Drain();
+                Assert.Equal(1, Volatile.Read(ref attempts));
+                Assert.Null(reading.LastTerminalFailureForTests);
+                Assert.DoesNotContain(
+                    announcements,
+                    item => item is A11yEvent.HostComposed composed
+                        && composed.Text.Contains("could not", StringComparison.Ordinal));
+            }
+            finally
+            {
+                release.Set();
+            }
+        });
+    }
+
     private static string DocumentText(ReadingContentViewModel reading)
     {
         System.Windows.Documents.FlowDocument document =
