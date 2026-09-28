@@ -569,7 +569,7 @@ internal sealed class CanvasOutlineView : UserControl
     {
         if (_roots.Count == 0)
         {
-            return _tree.Focus();
+            return SelectorFocus.FocusSelectedOrFirstRow(_tree);
         }
 
         if (_selectedRow is { IsConnection: false } seated && DeliverFocus(seated.Id) is not null)
