@@ -1,7 +1,6 @@
 // Copyright (C) 2026 Cory Joseph
 // SPDX-License-Identifier: AGPL-3.0-or-later
 
-using System.Runtime.ExceptionServices;
 using System.Windows;
 using System.Windows.Input;
 using System.Windows.Automation;
@@ -84,28 +83,8 @@ public sealed class ConnectionsLeafViewTests
         }
     }
 
-    private static void RunSta(Action body)
-    {
-        Exception? failure = null;
-        var thread = new Thread(() =>
-        {
-            try
-            {
-                PumpedDispatcher.Run(body);
-            }
-            catch (Exception exception)
-            {
-                failure = exception;
-            }
-        });
-        thread.SetApartmentState(ApartmentState.STA);
-        thread.Start();
-        Assert.True(thread.Join(TimeSpan.FromSeconds(120)), "STA test body timed out.");
-        if (failure is not null)
-        {
-            ExceptionDispatchInfo.Capture(failure).Throw();
-        }
-    }
+    private static void RunSta(Action body) =>
+        StaThread.RunPumped(body, TimeSpan.FromSeconds(120), "STA test body timed out.");
 
     /// <summary>W6-2 PR B2, B2-4 / B2-D11: the leaf's body owns Back's chord
     /// — Control alone, so the sidebar history's Ctrl+Alt+[ and Previous

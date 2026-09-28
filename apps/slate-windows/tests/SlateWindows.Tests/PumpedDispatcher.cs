@@ -44,16 +44,78 @@ internal static class PumpedDispatcher
         return condition();
     }
 
+    /// <summary>How long one <see cref="Drain()"/> may wait for its frame.</summary>
+    internal static readonly TimeSpan DrainBound = TimeSpan.FromSeconds(30);
+
     /// <summary>One background-priority frame: everything queued on the
     /// current dispatcher before it runs.</summary>
-    public static void Drain()
+    /// <remarks>Bounded: a dispatcher whose message window could not be
+    /// created (the desktop heap exhausted — see <see cref="StaThread"/>)
+    /// never runs the frame's closing operation, and an unbounded
+    /// <c>PushFrame</c> then blocked its thread for good, holding the test
+    /// host until the CI job's limit. A watchdog ends the frame and wakes
+    /// the thread's message loop directly — the dispatcher's own wake-up
+    /// goes through the window that is missing — and the drain fails
+    /// fast.</remarks>
+    public static void Drain() => Drain(DrainBound);
+
+    /// <summary><see cref="Drain()"/> with an explicit bound.</summary>
+    internal static void Drain(TimeSpan bound)
     {
         var frame = new DispatcherFrame();
+        bool ran = false;
         _ = Dispatcher.CurrentDispatcher.BeginInvoke(
             DispatcherPriority.Background,
-            () => frame.Continue = false);
-        Dispatcher.PushFrame(frame);
+            () =>
+            {
+                Volatile.Write(ref ran, true);
+                frame.Continue = false;
+            });
+        uint thread = GetCurrentThreadId();
+        using (new Timer(
+            _ =>
+            {
+                if (Volatile.Read(ref ran))
+                {
+                    return;
+                }
+                try
+                {
+                    frame.Continue = false;
+                }
+                catch (Exception)
+                {
+                    // A broken dispatcher; the thread message below still
+                    // wakes the loop, which then sees the frame ended.
+                }
+                _ = WakeThread(thread);
+            },
+            null,
+            bound,
+            Timeout.InfiniteTimeSpan))
+        {
+            Dispatcher.PushFrame(frame);
+        }
+        if (!Volatile.Read(ref ran))
+        {
+            throw new TimeoutException(
+                $"The dispatcher did not run a background frame within {bound.TotalSeconds:0.#} s; "
+                + "a dispatcher whose message window could not be created (desktop heap exhausted?) never will.");
+        }
     }
+
+    /// <summary>The watchdog's direct wake of a thread blocked in its message
+    /// loop: a WM_NULL thread message, which needs no window. A seam, so a
+    /// witness can see the wake happen and succeed; answers whether it was
+    /// posted.</summary>
+    internal static Func<uint, bool> WakeThread { get; set; } =
+        threadId => PostThreadMessageW(threadId, 0 /* WM_NULL */, IntPtr.Zero, IntPtr.Zero);
+
+    [System.Runtime.InteropServices.DllImport("kernel32.dll")]
+    internal static extern uint GetCurrentThreadId();
+
+    [System.Runtime.InteropServices.DllImport("user32.dll")]
+    private static extern bool PostThreadMessageW(uint threadId, uint message, IntPtr wParam, IntPtr lParam);
 
     /// <summary>Pump until a scheduler's fixed-point drain completes — and
     /// OBSERVE it (IPA-8): a faulted or cancelled drain is complete too,

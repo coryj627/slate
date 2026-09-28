@@ -52,7 +52,6 @@
 
 using System.Reflection;
 using System.Runtime.CompilerServices;
-using System.Runtime.ExceptionServices;
 using System.Windows;
 using System.Windows.Automation;
 using System.Windows.Automation.Peers;
@@ -739,26 +738,6 @@ public sealed class EmbedTitleRealizedSurfaceTests
         }
     }
 
-    private static void RunSta(Action body)
-    {
-        Exception? failure = null;
-        var thread = new Thread(() =>
-        {
-            try
-            {
-                body();
-            }
-            catch (Exception exception)
-            {
-                failure = exception;
-            }
-        });
-        thread.SetApartmentState(ApartmentState.STA);
-        thread.Start();
-        Assert.True(thread.Join(TimeSpan.FromSeconds(180)), "The realized-surface witness timed out.");
-        if (failure is not null)
-        {
-            ExceptionDispatchInfo.Capture(failure).Throw();
-        }
-    }
+    private static void RunSta(Action body) =>
+        StaThread.Run(body, TimeSpan.FromSeconds(180), "The realized-surface witness timed out.");
 }
