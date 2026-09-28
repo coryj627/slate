@@ -84,6 +84,82 @@ public sealed class ShellBasesLandingTests : IDisposable
         }
     });
 
+    /// <summary>
+    /// Codex PR 4b r1 F3 (R-5 (h), G20): the query builder opened from the
+    /// menu or the palette over a Queries row takes that ROW as its restore
+    /// token; saving refreshes the leaf, which rebuilds every row, so the
+    /// token is dead when the builder closes. The restore fell back to the
+    /// active tab's editor — out of the right pane. It lands the keys back
+    /// on the rows they were in: the same saved query's fresh row.
+    /// </summary>
+    [Fact]
+    public void ABuilderClosedOverARepublishedQueriesRowLandsBackOnItsRow() => RunSta(() =>
+    {
+        ulong scratch = _session.OpenBase("Notes.base");
+        try
+        {
+            _ = _session.SaveQuery(
+                "All notes", description: null, _session.BaseViewQueryJson(scratch, 0), SavedQuerySourceSyntax.Builder);
+        }
+        finally
+        {
+            _session.CloseBase(scratch);
+        }
+
+        using var workspace = new WorkspaceViewModel(
+            _session, _fixture.Root, () => [], _ => { }, startInteractionBackgroundWork: false);
+        var shell = new MainWindow
+        {
+            ShowActivated = false,
+            ShowInTaskbar = false,
+            Width = 1200,
+            Height = 800,
+        };
+        var lifecycle = Assert.IsType<VaultLifecycleViewModel>(shell.DataContext);
+        System.Reflection.PropertyInfo slot = typeof(VaultLifecycleViewModel).GetProperty(nameof(VaultLifecycleViewModel.Workspace))
+            ?? throw new InvalidOperationException("Workspace is gone");
+        System.Reflection.PropertyInfo open = typeof(VaultLifecycleViewModel).GetProperty(nameof(VaultLifecycleViewModel.IsVaultOpen))
+            ?? throw new InvalidOperationException("IsVaultOpen is gone");
+        try
+        {
+            slot.SetValue(lifecycle, workspace);
+            open.SetValue(lifecycle, true);
+            workspace.OpenPath("Notes.base");
+            workspace.ActiveLeaf = WorkspaceViewModel.Leaves.First(leaf => leaf.Id == "queries");
+            shell.Show();
+            shell.UpdateLayout();
+            PumpedDispatcher.Drain();
+            ListBox list = shell.QueriesSavedList;
+            SavedQuerySummary query = Assert.Single(workspace.SavedQueries);
+            list.UpdateLayout();
+            var token = Assert.IsType<ListBoxItem>(list.ItemContainerGenerator.ContainerFromItem(query));
+            Assert.True(token.Focus(), "premise: the saved query's row refused the keys");
+
+            workspace.BasesNewQueryCommand.Execute(null);
+            PumpedDispatcher.Drain();
+            Assert.NotNull(workspace.BaseQueryBuilderSheet);
+            Assert.True(workspace.BaseQueryBuilderSheet!.SaveAsSavedQuery("Second", null), "premise: the builder did not save");
+            workspace.RefreshBaseQueries();
+            PumpedDispatcher.Drain();
+            Assert.Equal(2, workspace.SavedQueries.Count);
+            Assert.Null(PresentationSource.FromVisual(token));
+
+            workspace.CloseQueryBuilder();
+            PumpedDispatcher.Drain();
+
+            var row = Assert.IsType<ListBoxItem>(Keyboard.FocusedElement);
+            Assert.Same(list, ItemsControl.ItemsControlFromItemContainer(row));
+            Assert.Equal(query.Id, Assert.IsType<SavedQuerySummary>(row.DataContext).Id);
+            Assert.False(shell.ContentPaneBorder.IsKeyboardFocusWithin, "the keys left the right pane for the editor");
+        }
+        finally
+        {
+            open.SetValue(lifecycle, false);
+            slot.SetValue(lifecycle, null);
+            shell.Close();
+        }
+    });
+
     private static IEnumerable<DependencyObject> Descendants(DependencyObject root)
     {
         for (int index = 0; index < VisualTreeHelper.GetChildrenCount(root); index++)

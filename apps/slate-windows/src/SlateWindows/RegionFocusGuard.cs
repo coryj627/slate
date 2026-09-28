@@ -215,20 +215,34 @@ internal static class RegionFocusGuard
     /// collapsed, its cell rebuilt — lands in the scopes the token was in,
     /// innermost first, instead of every restore's old fallback, the editor:
     /// the Files filter's cleared results land in the Files pane, a Bases
-    /// cell on the surface's current row.
+    /// cell on the surface's current row. A dead ROW's token comes back to
+    /// the rows it was in first — its list's selected (re-seated) or first
+    /// row, R-5 (h) (codex PR 4b r1 F3: a Queries row the builder's save
+    /// rebuilt) — while that list still has rows; an emptied one gives way
+    /// to the scopes, whose landing prefers a populated list (S5).
     /// </summary>
     /// <returns>Whether the keys landed on a live element.</returns>
     internal static bool LandInScopesOf(IInputElement token)
     {
-        if (!ScopesAtFocus.TryGetValue(token, out UIElement[]? scopes))
-        {
-            return false;
-        }
-
         bool outer = _landing;
         _landing = true;
         try
         {
+            if (token is UIElement row
+                && RowsAtFocus.TryGetValue(row, out ItemsControl? rows)
+                && IsLive(rows)
+                && rows.HasItems
+                && SelectorFocus.LandOnStop(rows)
+                && Landed(row))
+            {
+                return true;
+            }
+
+            if (!ScopesAtFocus.TryGetValue(token, out UIElement[]? scopes))
+            {
+                return false;
+            }
+
             foreach (UIElement scope in scopes)
             {
                 if (IsLive(scope)
