@@ -73,8 +73,11 @@ public sealed class StaThreadCensus
         Assert.True(
             LeakedDispatcherGuardAttribute.Readable,
             "WPF's private Dispatcher._dispatchers/_globalLock moved: the assembly-wide leak guard is disarmed until it is taught the new shape.");
-        bool seen = StaThread.Run(() => LeakedDispatcherGuardAttribute.Snapshot()
-            .Contains(System.Windows.Threading.Dispatcher.CurrentDispatcher));
+        bool seen = StaThread.Run(() =>
+        {
+            System.Windows.Threading.Dispatcher dispatcher = System.Windows.Threading.Dispatcher.CurrentDispatcher;
+            return LeakedDispatcherGuardAttribute.Snapshot().Contains(dispatcher);
+        });
         Assert.True(seen, "the registry read does not see a live dispatcher; the leak guard would pass everything.");
     }
 

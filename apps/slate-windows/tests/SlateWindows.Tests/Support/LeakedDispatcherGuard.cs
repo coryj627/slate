@@ -30,6 +30,16 @@ namespace SlateWindows.Tests;
 /// and a leak is reported against the fact that made it.
 /// </para>
 /// <para>
+/// Not judged: dispatchers on the runtime's own worker threads (named
+/// <c>.NET …</c> — the pool's and <c>LongRunning</c> tasks', which xUnit
+/// runs facts on). Production code that captures
+/// <c>Dispatcher.CurrentDispatcher</c> in a constructor gives the test's
+/// thread one when a plain fact builds it there. Such a thread is MTA, so
+/// its dispatcher can host no window or visual and costs one class — about
+/// a hundred per full run, against the thousands the STA facts leaked — and
+/// the thread is the runner's, not the fact's, to end.
+/// </para>
+/// <para>
 /// WPF keeps its dispatchers in a private registry; this reads it by
 /// reflection. <see cref="Readable"/> is asserted by
 /// <c>StaThreadCensus</c>, so a framework change that renames it fails one
@@ -59,7 +69,8 @@ internal sealed class LeakedDispatcherGuardAttribute : Xunit.Sdk.BeforeAfterTest
         string[] abandoned = [.. Snapshot()
             .Where(dispatcher => !_before.Contains(dispatcher)
                 && !dispatcher.Thread.IsAlive
-                && !dispatcher.HasShutdownFinished)
+                && !dispatcher.HasShutdownFinished
+                && dispatcher.Thread.Name?.StartsWith(".NET ", StringComparison.Ordinal) != true)
             .Select(dispatcher => $"\"{dispatcher.Thread.Name ?? "unnamed"}\" (managed id {dispatcher.Thread.ManagedThreadId})")];
         _before = new(ReferenceEqualityComparer.Instance);
         if (abandoned.Length > 0)
