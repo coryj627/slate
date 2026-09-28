@@ -90,7 +90,8 @@ public sealed class ReadingReclaimTests
     /// <summary>The surface re-bound to another tab's model under the keys
     /// (a group's tabs share one surface): the old document's blocks are
     /// cleared for a placeholder (<c>ClearForModelSwitch</c>), and the keys on
-    /// its link land on the document, once, never on the window.</summary>
+    /// its link land on the document at once, never left on a link out of any
+    /// document until the other note's projection arrives.</summary>
     [Fact]
     public void ARebindUnderAFocusedLinkLandsTheKeysOnTheDocument() => RunSta(() =>
     {
@@ -140,8 +141,12 @@ public sealed class ReadingReclaimTests
             Keyboard.AddGotKeyboardFocusHandler(window, (_, e) => changes.Add(e.NewFocus));
 
             surface.Model = other;
-            PumpedDispatcher.Drain();
 
+            // At once: the other note projects later, off the dispatcher, and
+            // a link taken out of its document raises no re-evaluation, so
+            // nothing else would move the keys off it until then.
+            Assert.Same(surface, Keyboard.FocusedElement);
+            PumpedDispatcher.Drain();
             Assert.Same(surface, Keyboard.FocusedElement);
             Assert.Equal([surface], changes);
         }

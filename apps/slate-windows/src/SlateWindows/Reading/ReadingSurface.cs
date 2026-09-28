@@ -296,6 +296,17 @@ internal sealed class ReadingSurface : RichTextBox
 
     private void ClearForModelSwitch()
     {
+        // The clear takes whatever in the document holds the keys — a link,
+        // a task's check box — and a link taken out of its document raises no
+        // re-evaluation: the keys would rest on it, out of every document,
+        // until the incoming note's projection reclaimed them. Reclaim them
+        // for the document first, as ApplyBuiltDocument does (W7-7 PR 4b
+        // round 3, R-5 (h)).
+        if (IsKeyboardFocusWithin && !IsKeyboardFocused)
+        {
+            _ = Focus();
+        }
+
         Document.Blocks.Clear();
         var placeholder = new Paragraph(new Run("Loading reading view…"))
         {
