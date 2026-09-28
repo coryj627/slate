@@ -300,9 +300,34 @@
     "text": "Citation. Unresolved citation: smith2020"
   },
   {
-    "event": "EmbedPreviewShown { target: \"Whipped cream\", title: \"Embedded note: recipes/Whipped cream.md\" }",
+    "event": "EmbedPreviewShown { target: \"Whipped cream\", resolved: Note { target_path: \"recipes/Whipped cream.md\" } }",
     "priority": "high",
     "text": "Embed preview for Whipped cream. Embedded note: recipes/Whipped cream.md."
+  },
+  {
+    "event": "EmbedPreviewShown { target: \"recipes#Glaze\", resolved: Section { target_path: \"recipes.md\", heading: \"Glaze\" } }",
+    "priority": "high",
+    "text": "Embed preview for recipes#Glaze. Embedded section: Glaze from recipes.md."
+  },
+  {
+    "event": "EmbedPreviewShown { target: \"recipes\", resolved: Block { target_path: \"recipes.md\" } }",
+    "priority": "high",
+    "text": "Embed preview for recipes. Embedded block from recipes.md."
+  },
+  {
+    "event": "EmbedPreviewShown { target: \"pie.png\", resolved: Image { target_path: \"images/pie.png\", alt: Some(\"  A slice of pie  \") } }",
+    "priority": "high",
+    "text": "Embed preview for pie.png. Embedded image: A slice of pie."
+  },
+  {
+    "event": "EmbedPreviewShown { target: \"pie.png\", resolved: Image { target_path: \"images/pie.png\", alt: Some(\"   \") } }",
+    "priority": "high",
+    "text": "Embed preview for pie.png. Embedded image: pie.png."
+  },
+  {
+    "event": "EmbedPreviewShown { target: \"Reading list.base\", resolved: Base { target_path: \"lists/Reading list.base\" } }",
+    "priority": "high",
+    "text": "Embed preview for Reading list.base. Embedded base: Reading list."
   },
   {
     "event": "EmbedPreviewUnavailable { target: \"Target\", reason: TargetNotFound { target: \"Target\" } }",

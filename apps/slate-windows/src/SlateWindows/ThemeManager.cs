@@ -184,18 +184,29 @@ internal sealed class ThemeManager : IDisposable
         }
     }
 
-    private void ApplyResources()
+    /// <summary>
+    /// The application-level dictionaries a theme resolves to, in merge
+    /// order: Fluent first, Slate's tokens last. <see cref="ApplyResources"/>
+    /// merges exactly these; a hosted test merges the same pair into its own
+    /// window to realize a surface under the app's real resources without
+    /// touching the process-wide <see cref="Application.Resources"/>.
+    /// </summary>
+    internal static ResourceDictionary[] DictionariesFor(SlateTheme theme, bool highContrast)
     {
-        bool highContrast = SystemParameters.HighContrast;
         string fluentName = highContrast
             ? "Fluent.HC.xaml"
-            : _theme == SlateTheme.Dark ? "Fluent.Dark.xaml" : "Fluent.Light.xaml";
+            : theme == SlateTheme.Dark ? "Fluent.Dark.xaml" : "Fluent.Light.xaml";
         string slateName = highContrast
             ? "Slate.Contrast.xaml"
-            : _theme == SlateTheme.Dark ? "Slate.Dark.xaml" : "Slate.Light.xaml";
+            : theme == SlateTheme.Dark ? "Slate.Dark.xaml" : "Slate.Light.xaml";
+        return [LoadDictionary(FluentRoot + fluentName), LoadDictionary(SlateRoot + slateName)];
+    }
 
-        ResourceDictionary fluentResources = LoadDictionary(FluentRoot + fluentName);
-        ResourceDictionary slateResources = LoadDictionary(SlateRoot + slateName);
+    private void ApplyResources()
+    {
+        ResourceDictionary[] layers = DictionariesFor(_theme, SystemParameters.HighContrast);
+        ResourceDictionary fluentResources = layers[0];
+        ResourceDictionary slateResources = layers[1];
 
         var dictionaries = _application.Resources.MergedDictionaries;
         if (_fluentResources is not null)

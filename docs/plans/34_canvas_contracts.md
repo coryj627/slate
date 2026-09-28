@@ -534,6 +534,13 @@ lowercased v4 UUID — 16 lowercase hex, `'4'` at index 12, 60 bits of
 entropy — with **no** collision check against the canvas (mac parity),
 pinned by a shape test over many draws rather than by a golden value.
 
+> **Amended by W7-7 #1276 (an R-12 follow-up, review round 1).**
+> `CanvasConstants` also carries one string, `visual_board_name`: the
+> visual board's reserved container name (§D D5),
+> `canvas::model::VISUAL_BOARD_NAME` rather than a `placement.rs`
+> constant, so no host re-types it. The field-by-field assertion covers
+> it (`canvas_constants_mirror_core_and_carry_the_reserved_board_name`).
+
 **0b-5 — `speakable_name` is one algorithm, on `CardSummary`.** It is
 `display_title` when that spelling is free, and
 `⟨display_title⟩ ⟨k⟩` for the k-th node (k ≥ 2) in **document order**
@@ -3539,7 +3546,7 @@ where a platform never fires the key.
 | `CanvasMovedTo` | `AppState+CanvasNavigation.swift#canvasSelect`, `CanvasAnnouncer.swift#coalescingClass`, `CanvasOutlineView.swift#announceMove` (+1) | `CanvasAnnouncer.cs#CoalescingClassOf`, `CanvasDocumentViewModel.cs#SelectNode` | `A11yCorpusCensus.cs#Corpus`, `CanvasAnnouncerTests.cs#MovedTo`, `CanvasAnnouncerTests.cs#TheCardReferenceMatchesCoresOwnComposition` (+4) |  |
 | `CanvasGroupEntered` | `AppState+CanvasNavigation.swift#canvasSelect`, `CanvasAnnouncer.swift#coalescingClass`, `CanvasOutlineView.swift#announceMove` | `CanvasAnnouncer.cs#CoalescingClassOf`, `CanvasDocumentViewModel.cs#GroupBoundaryEvent` | `A11yCorpusCensus.cs#Corpus`, `CanvasDocumentTests.cs#CrossingAGroupBoundaryBuildsTheEntryEventWithTheGroupsOwnCount`, `CanvasNavigatorTests.cs#GroupBoundariesUseCoresParentAndChildrenNeverADepthWalk` |  |
 | `CanvasGroupLeft` | `AppState+CanvasNavigation.swift#canvasSelect`, `CanvasAnnouncer.swift#coalescingClass`, `CanvasOutlineView.swift#announceMove` | `CanvasAnnouncer.cs#CoalescingClassOf`, `CanvasDocumentViewModel.cs#GroupBoundaryEvent` | `A11yCorpusCensus.cs#Corpus`, `CanvasDocumentTests.cs#CrossingAGroupBoundaryBuildsTheEntryEventWithTheGroupsOwnCount` |  |
-| `CanvasConnectionTraversed` | `AppState+CanvasNavigation.swift#canvasFollowConnection`, `CanvasAnnouncer.swift#coalescingClass`, `CanvasOutlineView.swift#connectionPhrase` | `CanvasAnnouncer.cs#CoalescingClassOf`, `CanvasDocumentViewModel.cs#ConnectionRowName`, `CanvasNavigator.cs#FollowConnection` (+1) | `A11yCorpusCensus.cs#Corpus`, `CanvasDocumentTests.cs#TheSelectedCardsConnectionRowsAreCoreRenderedAndComeFirst` |  |
+| `CanvasConnectionTraversed` | `AppState+CanvasNavigation.swift#canvasFollowConnection`, `CanvasAnnouncer.swift#coalescingClass`, `CanvasOutlineView.swift#connectionPhrase` | `CanvasAnnouncer.cs#CoalescingClassOf`, `CanvasDocumentViewModel.cs#ConnectionRowName`, `CanvasNavigator.cs#Follow` (+1) | `A11yCorpusCensus.cs#Corpus`, `CanvasDocumentTests.cs#TheSelectedCardsConnectionRowsAreCoreRenderedAndComeFirst` |  |
 | `CanvasTracePathEnd` | `AppState+CanvasNavigation.swift#canvasTracePath` | `CanvasNavigator.cs#TracePath` | `A11yCorpusCensus.cs#Corpus` |  |
 | `CanvasMoveRelative` | `AppState+CanvasModes.swift#canvasModeStep`, `CanvasAnnouncer.swift#coalescingClass` | `CanvasAnnouncer.cs#CoalescingClassOf`, `CanvasNavigator.cs#ModeStep` | `A11yCorpusCensus.cs#Corpus` |  |
 | `CanvasResizeGeometry` | `AppState+CanvasModes.swift#canvasApplyResizePreset`, `AppState+CanvasModes.swift#canvasModeStep`, `CanvasAnnouncer.swift#coalescingClass` | `CanvasAnnouncer.cs#CoalescingClassOf`, `CanvasNavigator.cs#ApplyResizeRect` | `A11yCorpusCensus.cs#Corpus`, `CanvasAnnouncerTests.cs#TheClampRetiresTheGeometryLine` |  |
@@ -3579,7 +3586,7 @@ where a platform never fires the key.
 | `CanvasHistoryApplied` | `AppState+Canvas.swift#canvasRedo`, `AppState+Canvas.swift#canvasUndo` | `CanvasMutationFunnel.cs#TransactHistory` | `A11yCorpusCensus.cs#Corpus`, `CanvasMutationFunnelTests.cs#AnUnindexedHistoryApplyCrossesTheReceiptAndBlocksOnRecovery` |  |
 | `CanvasUndoMenuTitle` | `AppState.swift#canvasUndoRedoMenuTitle` | — | `A11yCorpusCensus.cs#Corpus` | designated: no Edit menu on Windows (HD-D3); the history verbs' palette rows carry the registry's static labels |
 | `CanvasHistoryQuarantinedTitle` | — | — | `A11yCorpusCensus.cs#Corpus` | designated: no Edit menu on Windows (HD-D3); mac designated: mac's undo stack has no basis quarantine (TE-2/TE-4 are Windows's mechanism) — with no Edit menu on Windows either, an orphaned label arm, owed to an owner decision |
-| `CanvasStatus/NothingSelected` | `AppState+CanvasActions.swift#canvasOpenCardPicker`, `AppState+CanvasActions.swift#canvasPromptMoveIntoGroup`, `AppState+CanvasActions.swift#canvasPromptSetColor` (+14) | `CanvasDocumentViewModel.cs#AnnounceSelectionUnresolvable`, `CanvasDocumentViewModel.cs#CanvasConnect`, `CanvasDocumentViewModel.cs#CanvasConvertToNote` (+24) | `A11yCorpusCensus.cs#Corpus`, `CanvasAnnouncerTests.cs#AnOrdinaryImmediateEventRetiresNothing`, `CanvasNavigatorTests.cs#AnUnresolvableSelectionIsNeverReportedAsAnEmptyAnswer` (+1) |  |
+| `CanvasStatus/NothingSelected` | `AppState+CanvasActions.swift#canvasOpenCardPicker`, `AppState+CanvasActions.swift#canvasPromptMoveIntoGroup`, `AppState+CanvasActions.swift#canvasPromptSetColor` (+14) | `CanvasDocumentViewModel.cs#AnnounceSelectionUnresolvable`, `CanvasDocumentViewModel.cs#CanvasConnect`, `CanvasDocumentViewModel.cs#CanvasConvertToNote` (+24) | `A11yCorpusCensus.cs#Corpus`, `CanvasAnnouncerTests.cs#AnOrdinaryImmediateEventRetiresNothing`, `CanvasContextMenuTests.cs#AKeyboardRequestOnTheBoardOpensTheSeatedCardsMenu` (+2) |  |
 | `CanvasStatus/NoMarks` | `AppState+CanvasActions.swift#canvasColorMarked`, `AppState+CanvasActions.swift#canvasDeleteMarked`, `AppState+CanvasActions.swift#canvasGroupMarked` (+2) | `CanvasDocumentViewModel.cs#CanvasDuplicate`, `CanvasDocumentViewModel.cs#OpenMarksList`, `CanvasDocumentViewModel.cs#RequestColorMarked` (+3) | `A11yCorpusCensus.cs#Corpus`, `CanvasDocumentTests.cs#NothingSpeaksAfterTheLastTabClosed`, `CanvasNavigatorTests.cs#AShutdownDuringACommitDrainsTheHeldDepartureThenSilences` (+1) |  |
 | `CanvasStatus/NotAGroup` | `AppState+CanvasActions.swift#canvasPromptRenameGroup`, `AppState+CanvasActions.swift#canvasRenameGroup`, `AppState+CanvasNavigation.swift#canvasEnterGroup` | `CanvasDocumentViewModel.cs#CanvasMoveIntoGroup`, `CanvasDocumentViewModel.cs#CanvasUngroup`, `CanvasDocumentViewModel.cs#RequestGroupRenameForSelection` (+1) | `A11yCorpusCensus.cs#Corpus`, `CanvasNavigatorTests.cs#AnEmptyGroupAndANonGroupEachSayWhatTheyAre` |  |
 | `CanvasStatus/NotATextCard` | `AppState+CanvasCreate.swift#canvasEditCard` | `CanvasDocumentViewModel.cs#NodeTextOf`, `CanvasDocumentViewModel.cs#OpenCardEditor` | `A11yCorpusCensus.cs#Corpus` |  |
@@ -3594,17 +3601,17 @@ where a platform never fires the key.
 | `CanvasStatus/PickDifferentTarget` | `AppState+CanvasConnect.swift#canvasConnect` | `CanvasDocumentViewModel.cs#CanvasAlignWith`, `CanvasDocumentViewModel.cs#CanvasPlaceRelative`, `CanvasDocumentViewModel.cs#HandleCardPick` (+3) | `A11yCorpusCensus.cs#Corpus` |  |
 | `CanvasStatus/NoChanges` | `AppState+CanvasCreate.swift#canvasCommitCardEdit` | `CanvasCardEditorViewModel.cs#CommitOnEscape`, `CanvasDocumentViewModel.cs#CanvasAlignWith` | `A11yCorpusCensus.cs#Corpus` |  |
 | `CanvasStatus/NotReadable` | `AppState+Canvas.swift#canvasWhereAmI`, `AppState+CanvasNavigation.swift#activeCanvasDocumentAnyState`, `AppState+CanvasNavigation.swift#canvasReadRefusal` | `CanvasDocumentViewModel.cs#NodeTextOf`, `CanvasDocumentViewModel.cs#ProjectMarkedRows`, `CanvasDocumentViewModel.cs#ReadRefusalFor` (+1) | `A11yCorpusCensus.cs#Corpus`, `CanvasNavigatorTests.cs#TheReadMappingAnswersEveryLoadState` |  |
-| `CanvasStatus/Empty` | `AppState+Canvas.swift#canvasWhereAmI` | `CanvasNavigator.cs#AnnounceNothingToMoveThrough`, `CanvasNavigator.cs#WhereAmI` | `A11yCorpusCensus.cs#Corpus`, `CanvasNavigatorTests.cs#AnEmptyCanvasAnswersRatherThanMovingNowhere`, `CanvasNavigatorTests.cs#WhereAmIOnAnEmptyCanvasStillAnswers` |  |
-| `CanvasStatus/EndOfCanvas` | `AppState+CanvasNavigation.swift#canvasSelectAdjacent` | `CanvasNavigator.cs#ArrowMove`, `CanvasNavigator.cs#SelectAdjacent` | `A11yCorpusCensus.cs#Corpus`, `CanvasNavigatorTests.cs#MovementCrossesTheWholeLargeCanvasWithoutRederivingOrder`, `CanvasNavigatorTests.cs#MovementWalksTheFilteredSetAndTheProjectionsNarrowWithIt` (+2) |  |
-| `CanvasStatus/StartOfCanvas` | `AppState+CanvasNavigation.swift#canvasSelectAdjacent` | `CanvasNavigator.cs#ArrowMove`, `CanvasNavigator.cs#SelectAdjacent` | `A11yCorpusCensus.cs#Corpus`, `CanvasNavigatorTests.cs#TheEndsOfTheCanvasAnnounceRatherThanDoingNothing` |  |
+| `CanvasStatus/Empty` | `AppState+Canvas.swift#canvasWhereAmI` | `CanvasNavigator.cs#AnnounceNothingToMoveThrough`, `CanvasNavigator.cs#MoveThroughTheScene`, `CanvasNavigator.cs#WhereAmI` | `A11yCorpusCensus.cs#Corpus`, `CanvasContextMenuTests.cs#AKeyboardRequestOnAnEmptyOutlineSaysWhyThereIsNoMenu`, `CanvasNavigatorTests.cs#AnEmptyCanvasAnswersRatherThanMovingNowhere` (+2) |  |
+| `CanvasStatus/EndOfCanvas` | `AppState+CanvasNavigation.swift#canvasSelectAdjacent` | `CanvasNavigator.cs#ArrowMove`, `CanvasNavigator.cs#StepThrough` | `A11yCorpusCensus.cs#Corpus`, `CanvasNavigatorTests.cs#AFilteredOutSeatStepsThroughTheSceneOnTheBoardAndIntoTheFilteredSetByTheVerbs`, `CanvasNavigatorTests.cs#MovementCrossesTheWholeLargeCanvasWithoutRederivingOrder` (+5) |  |
+| `CanvasStatus/StartOfCanvas` | `AppState+CanvasNavigation.swift#canvasSelectAdjacent` | `CanvasNavigator.cs#ArrowMove`, `CanvasNavigator.cs#StepThrough` | `A11yCorpusCensus.cs#Corpus`, `CanvasNavigatorTests.cs#AFilteredOutSeatStepsThroughTheSceneOnTheBoardAndIntoTheFilteredSetByTheVerbs`, `CanvasNavigatorTests.cs#TheBoardsArrowsAnswerAtTheEndsAndWithNothingToMoveThrough` (+1) |  |
 | `CanvasStatus/AtCanvasLevel` | `AppState+CanvasNavigation.swift#canvasExitGroup` | `CanvasNavigator.cs#ExitGroup` | `A11yCorpusCensus.cs#Corpus`, `CanvasNavigatorTests.cs#AnUnresolvableSelectionIsNeverReportedAsAnEmptyAnswer`, `CanvasNavigatorTests.cs#GroupBoundariesUseCoresParentAndChildrenNeverADepthWalk` |  |
-| `CanvasStatus/NoCardsMatchFilter` | `AppState+CanvasNavigation.swift#canvasSelectAdjacent` | `CanvasNavigator.cs#AnnounceNothingToMoveThrough` | `A11yCorpusCensus.cs#Corpus`, `CanvasNavigatorTests.cs#AFilterThatMatchesNothingSaysSoRatherThanReadingAsAnEmptyCanvas` |  |
+| `CanvasStatus/NoCardsMatchFilter` | `AppState+CanvasNavigation.swift#canvasSelectAdjacent` | `CanvasNavigator.cs#AnnounceNothingToMoveThrough` | `A11yCorpusCensus.cs#Corpus`, `CanvasContextMenuTests.cs#AKeyboardRequestOnAnEmptyOutlineSaysWhyThereIsNoMenu`, `CanvasNavigatorTests.cs#AFilterThatMatchesNothingSaysSoRatherThanReadingAsAnEmptyCanvas` (+1) |  |
 | `CanvasStatus/NothingToUndo` | `AppState+Canvas.swift#canvasUndo` | `CanvasDocumentViewModel.cs#RunHistory` | `A11yCorpusCensus.cs#Corpus` |  |
 | `CanvasStatus/NothingToRedo` | `AppState+Canvas.swift#canvasRedo` | `CanvasDocumentViewModel.cs#RunHistory` | `A11yCorpusCensus.cs#Corpus` |  |
 | `CanvasStatus/GroupIsEmpty` | `AppState+CanvasNavigation.swift#canvasEnterGroup` | `CanvasNavigator.cs#EnterGroup` | `A11yCorpusCensus.cs#Corpus`, `CanvasNavigatorTests.cs#AnEmptyGroupAndANonGroupEachSayWhatTheyAre` |  |
 | `CanvasStatus/NoOutgoingPath` | `AppState+CanvasNavigation.swift#canvasTracePath` | `CanvasNavigator.cs#TracePath` | `A11yCorpusCensus.cs#Corpus`, `CanvasNavigatorTests.cs#TracePathWalksCoresCycleSafeChainAndEndsWithTheCount` |  |
 | `CanvasStatus/NotInAGroup` | `AppState+CanvasCreate.swift#canvasRemoveFromGroup` | `CanvasDocumentViewModel.cs#CanvasRemoveFromGroup` | `A11yCorpusCensus.cs#Corpus` |  |
-| `CanvasStatus/NoConnection` | `AppState+CanvasNavigation.swift#canvasFollowConnection` | `CanvasNavigator.cs#FollowConnection` | `A11yCorpusCensus.cs#Corpus`, `CanvasNavigatorTests.cs#AMissingConnectionSaysWhichDirectionAndWhichOrdinal`, `CanvasNavigatorTests.cs#ARightArrowOnAConnectionlessLeafStillAnswers` |  |
+| `CanvasStatus/NoConnection` | `AppState+CanvasNavigation.swift#canvasFollowConnection` | `CanvasNavigator.cs#Follow` | `A11yCorpusCensus.cs#Corpus`, `CanvasNavigatorTests.cs#AMissingConnectionSaysWhichDirectionAndWhichOrdinal`, `CanvasNavigatorTests.cs#ARightArrowOnAConnectionlessLeafStillAnswers` (+1) |  |
 | `CanvasStatus/Reopening` | `AppState+Canvas.swift#canvasMutationRefusal`, `AppState+CanvasExtras.swift#canvasAnnounceFilterCount`, `AppState+CanvasNavigation.swift#activeCanvasDocumentAnyState` (+3) | `CanvasDocumentViewModel.cs#ReadRefusalFor`, `CanvasNavigator.cs#FilterStatusSentence` | `A11yCorpusCensus.cs#Corpus`, `CanvasNavigatorTests.cs#TheReadMappingAnswersEveryLoadState` |  |
 | `CanvasStatus/Loading` | `AppState+Canvas.swift#canvasMutationRefusal`, `AppState+Canvas.swift#dropCanvasModeState`, `AppState+CanvasExtras.swift#canvasAnnounceFilterCount` (+3) | `CanvasDocumentViewModel.cs#ReadRefusalFor` | `A11yCorpusCensus.cs#Corpus`, `CanvasNavigatorTests.cs#TheFilterSummaryNeverCountsRowsTheSurfaceIsNotShowing`, `CanvasNavigatorTests.cs#TheReadMappingAnswersEveryLoadState` |  |
 | `CanvasBlocked/ModeBusy` | `AppState+Canvas.swift#canvasApply`, `AppState+Canvas.swift#canvasRedo`, `AppState+Canvas.swift#canvasUndo` (+1) | `CanvasDocumentViewModel.cs#RequestConvertToNote`, `CanvasMutationFunnel.cs#AnnounceAdmission`, `CanvasNavigator.cs#ResizeDefaultSize` (+1) | `A11yCorpusCensus.cs#Corpus`, `CanvasMutationFunnelTests.cs#ABusyGateRefusesAudiblyOncePerHold`, `CanvasMutationFunnelTests.cs#AForeignModeTokenRefusesAudibly` (+1) |  |
@@ -6463,6 +6470,25 @@ collide four ways: twin card titles, twin parallel same-label
 edges, a card named after the container, and a card pre-named with
 another card's ordinal suffix.
 
+> **Delivered for the container by #1276 (a W7-7 R-12 follow-up).** The
+> container's name was reserved in words only: core's speakable-name
+> allocator started from an empty set, so a card titled "Canvas visual
+> view" answered to exactly the container's Name. The allocator now starts
+> with the reserved spelling occupied (`canvas::model::VISUAL_BOARD_NAME`,
+> the same spelling as the host's container Name), so
+> such a card takes the next free ordinal on every surface. Pinned by
+> `speakable_names_reserve_the_visual_boards_container_name` and the
+> uniqueness fact above, `EveryBoardPeerHasItsOwnNameAndTheContainersNameIsReserved`,
+> on this four-way fixture. Labelled edges still have no peers — a separate
+> D5 gap, filed for the owner — so the fixture's edges are present and
+> unpeered.
+>
+> **One authority for the spelling (review round 1).** The name crosses
+> the FFI as the `visual_board_name` field of `CanvasConstants`: Windows'
+> container Name reads it rather than carrying a literal of its own, and
+> mac's renderer label, still a literal, is pinned equal to it by
+> `testContainerLabelIsCoresReservedBoardName` in the mac suite.
+
 **D6 — Selection: one committed value, its doors, and the machine
 owns the transition.** The surface display authority is
 `CanvasSelection`; the publication carries selection INTENT; the
@@ -6670,6 +6696,132 @@ Where-am-I remain the two ungated rows.
 > `TheBoardsRightAndLeftFollowConnectionsAndEveryMoveRevealsItsSeat`,
 > `EveryBoardMoveAsksThePresenterToRevealItsSeat` and the journey
 > `CanvasSurfaces_VisualBoardPeersAndZoom_AreClean`.
+>
+> **Corrected by follow-up #1270 (D4).** The board's Down/Up walk the
+> FULL scene the renderer draws — dimmed unmatched cards included, End/Start
+> of canvas at the scene's bounds, through the announced door — on their own
+> path (`MoveThroughTheScene`, reading the document's one board order,
+> `SceneReadingOrder`: the whole scene in the outline's reading order with
+> dimmed cards marked), not `SelectAdjacent`'s walk over the filtered
+> outline, which stepped over dimmed cards and spoke the boundary with cards
+> still below; the palette's Next/Previous Card keep the filtered order.
+> Pinned by `TheBoardsArrowsWalkTheFullSceneDimmedCardsIncluded`,
+> `AFilteredOutSeatStepsThroughTheSceneOnTheBoardAndIntoTheFilteredSetByTheVerbs`
+> and the journey's filtered leg.
+>
+> **Corrected by follow-up #1271 (D4).** The reveal is origin-aware, not
+> unconditional: the navigator hands `RevealSeat` the move's origin
+> (`CanvasMoveOrigin` — the board's own keys and the connect-mode
+> restoration are on the surface; the palette's and the menus' verbs are
+> elsewhere), and the board decides by D4's rule (`RevealsMoveFrom`): a move
+> made on the board always comes into view, one made elsewhere only while
+> Follow Selection is on. Pinned by
+> `TheBoardRevealsItsOwnMovesAlwaysAndOtherMovesOnlyWhileFollowing` (both
+> toggle states against both origins on the real board),
+> `TheRevealRuleIsD4sOriginRule` and
+> `EveryBoardMoveAsksThePresenterToRevealItsSeat`.
+>
+> **And across panes (#1271, review round 1).** The navigator reveals
+> through the one pane it is attached to, so a second pane on the same
+> canvas (the projection being the document's, it shows the board too)
+> moved its selection ring and never panned, Follow Selection or not.
+> Every showing board now hears every change to the shared selection as
+> a move made elsewhere (`FollowTheSelection`), so it pans exactly while
+> its own Follow Selection is on; the board that made the move still
+> reveals it as its own. Pinned by
+> `AFollowingBoardInAnotherPanePansToTheSelectionAndAnUnfollowingOneStays`.
+>
+> **And across publications (#1271, review round 2).** The seat moves the
+> moment the document publishes, and New Card and Duplicate seat a card
+> that only the successor has, while each board's engine installs that
+> successor later; a reveal computed against the installed predecessor
+> found no card and was lost. A reveal is now a debt the board owes until
+> an installed state has the card (`RevealNode`), one per board: a newer
+> reveal supersedes it; it is paid only while still payable, meaning its
+> card is still the seat (so it is never replayed for a card no longer
+> selected) and D4 still reveals it (a move made elsewhere lapses when
+> the board stops following; a move made on the board stands); and it is
+> dropped when the board's document changes. Pinned by
+> `AFollowingBoardRevealsANewCardOnceTheStateThatHasItInstalls` (two panes,
+> the new card absent from both boards' installed states and off both
+> views), `AnOwedRevealIsPaidOnlyForTheCardThatIsStillTheSeat` and
+> `AnOwedElsewhereRevealLapsesWhenTheBoardStopsFollowing`. D4's on-surface
+> arm for the board's own peers, with Follow Selection off (Invoke,
+> SelectionItem.Select and both realization routes), is pinned by
+> `TheBoardsOwnPeersRevealTheirCardWithFollowSelectionOff`.
+>
+> **Judged by tokens (#1271, review round 3; contract 40 OD-13).** "Still payable" is judged
+> by tokens taken when the debt was owed, never by the state alone: a seat
+> that left and came back, or a toggle turned off and on, looks unchanged
+> to the state. The selection's revision counts every change of the seat
+> (bumped in its one setter), and the viewport's follow-lapse count every
+> time Follow Selection goes from on to off (carried in the viewport
+> value). A debt is paid only at the revision it was owed at, and a move
+> made elsewhere only with Follow Selection on and the lapse count
+> unchanged. A reveal is paid once and cleared, and a document change
+> drops it even when the new document's seat has the same id at the same
+> revision (no token can tell those seats apart). Pinned
+> by `ABoardMoveDebtIsVoidedWhenTheSeatLeavesAndReturnsBeforeItsCardInstalls`,
+> `AnElsewhereDebtStaysLapsedWhenFollowingResumesBeforeItsCardInstalls`,
+> `APaidRevealIsNeverPaidAgainByALaterInstall`,
+> `ARebindToAnotherDocumentDropsTheDebtEvenForACollidingNodeId`,
+> `TheSelectionRevisionCountsEveryChangeOfTheSeatAndNothingElse` and
+> `TheViewportCountsAFollowLapseOnlyWhenFollowingStops`.
+>
+> **Paid from the applied population (#1271, review round 4; contract 40
+> OD-13).** A debt is paid only from an installed state whose population
+> is the one the document has applied — the population the seat was
+> resolved against — never from an installed state that merely has a card
+> under the seat's id. A reload moves the seat during its apply, while a
+> board's engine still has the predecessor installed, and a card that
+> survives the reload under the same id stands there at the place it has
+> left: a reveal paid against it contained the stale card and was spent,
+> and the successor then installed the seat off the board with nothing
+> left owed. The population is read when the debt is paid, not stamped
+> when it is owed, so a debt carried into a later reload the seat survives
+> (the same revision) is paid against that later population, which may be
+> the only one the engine installs. Pinned by
+> `AReloadRevealsItsRelocatedSurvivorOnlyFromTheSuccessorPopulation` and
+> `AnOwedRevealIsPaidFromALaterReloadItsSeatSurvives`.
+>
+> **Shown again (owner decision, 2026-09-27; contract 40 OD-13).** A board that follows the
+> selection and is hidden — behind another tab, or under the outline or
+> the table — scrolls to the selection when it is next shown. "Every
+> showing board" above is widened to every board on the document: each
+> change of the seat is owed as a move made elsewhere to a board that
+> follows, whatever its projection or visibility, and the board pays it
+> once it is showing again (on the first install once visible, or after
+> the layout pass that shows it, since showing it may bring no install),
+> under the same tokens: a seat that moved on, or Follow Selection turned
+> off meanwhile, pays nothing, and the pan is the minimal one, so a seat
+> already in view moves nothing. A move made on the board before it was
+> hidden keeps its standing. Nothing moves while the board is hidden.
+> Pinned by `AFollowingBoardHiddenBehindAnotherTabScrollsToTheSelectionWhenShown`,
+> `AFollowingBoardCollapsedInItsPaneScrollsToTheSelectionWhenShown`,
+> `AFollowingBoardUnderTheOutlineScrollsToTheSelectionWhenShown`,
+> `ABoardThatStopsFollowingWhileHiddenDoesNotScrollWhenShown`,
+> `ABoardShownAgainWithTheSeatAlreadyInViewDoesNotMove` and
+> `ABoardMoveMadeBeforeHidingIsRevealedWhenShown`.
+>
+> **Behind another tab is a rebind (#1271, codex's final check; contract
+> 40 OD-13).** The workspace's pane is one selected-content TabControl,
+> so switching tabs does not hide a canvas board: it rebinds the pane's
+> surface to the other tab's document (none, for a note) and binds it
+> again on the way back, and while it is away the board hears nothing of
+> the document it left. So a board sets its reveal aside with the
+> document it leaves — the selection revision it last saw, whether it
+> followed and its follow-lapse count, and the reveal it still owed — and
+> settles it when it returns. The seat unmoved, the reveal it owed is owed
+> again under its own tokens. The seat moved, the new seat is owed as a
+> move made elsewhere only if the board followed throughout: on when it
+> left, on when it returns, and never turned off in between; a board that
+> did not cannot order the move against the toggle, and owes nothing. A
+> reveal is never paid against another document, and a document the board
+> never showed owes nothing. Pinned by
+> `AFollowingBoardHiddenBehindAnotherTabScrollsToTheSelectionWhenShown`
+> (the production TabControl and tab template, in process),
+> `ARevealOwedWhenATabGoesBehindAnotherIsStillOwedWhenItReturns` and
+> `ABoardThatStopsFollowingWhileItsTabIsAwayDoesNotScrollWhenItReturns`.
 
 **D16 — §K budgets are asserted, not aspirational.** The renderer
 benchmarks run the 2,000-node fixture and ASSERT the mac budgets:
@@ -19172,62 +19324,62 @@ not keyed is not claimed as keyed.
 
 | Id | Head | Recorded |
 |---|---|---|
-| CD-1 | No standalone overlap events. | Recorded divergences, line 14126 |
-| CD-2 | `CanvasFilterCount` carries `matched` only. | Recorded divergences, line 14137 |
-| CD-3 | `CanvasLoadedDegraded` is an announcement Windows and mac both gain. | Recorded divergences, line 14144 |
-| CD-4 | Group entry speaks the group's CHILD count. | Recorded divergences, line 14161 |
-| CD-5 | Where-am-I has ONE filter spelling. | Recorded divergences, line 14169 |
-| CD-6 | Core's thousands grouping wins over `CountCopy`. | Recorded divergences, line 14180 |
-| CD-7 | The connection-delete sentence no longer lower-cases the author's words. | Recorded divergences, line 14191 |
-| CD-8 | The chord parameter is the one recorded platform difference in the corpus. | Recorded divergences, line 14203 |
-| CD-9 | `towardOther` is dropped. | Recorded divergences, line 14210 |
-| CD-10 | Families are typed nested enums, not one variant per sentence. | Recorded divergences, line 14220 |
-| CD-11 | Names that differ from the spec's indicative list. | Recorded divergences, line 14237 |
-| CD-12 | The family nests under one top-level variant | Recorded divergences, line 14248 |
-| CD-13 | `CanvasTracePathEnd` speaks the count of the titles it just listed. | Recorded divergences, line 14268 |
-| CD-14 | The outline's connection ROW now reads the traversal sentence. | Recorded divergences, line 14288 |
-| CD-15 | Four templates stop hardcoding the plural. | Recorded divergences, line 14312 |
-| CD-16 | `canvas_auto_sides` takes rects, not node ids | Recorded divergences, line 14347 |
-| CD-17 | `canvas_constants()` and `canvas_new_id()` are free functions | Recorded divergences, line 14358 |
-| CD-18 | Equal-area containment ties resolve to the LATER document order. | Recorded divergences, line 14366 |
-| CD-19 | `describe_relative`'s tie-break is pinned where mac's was undefined. | Recorded divergences, line 14377 |
-| CD-20 | `speakable_name` ordinals renumber on delete | Recorded divergences, line 14386 |
-| CD-21 | `place_inside_group`'s fallback fires on SIZE, not on childlessness. | Recorded divergences, line 14400 |
-| CD-22 | Case handling and whitespace trimming are Rust's, not Foundation's — and not case folding either. | Recorded divergences, line 14416 |
-| CD-23 | `speakable_name` is exposed on four records; which surface SPEAKS it stays the host's. | Recorded divergences, line 14437 |
-| CD-24 | `canvas_group_rect_around` returns `Option`. | Recorded divergences, line 14461 |
-| CD-25 | the inside-group search is a column-major LATTICE, not a ring. | Recorded divergences, line 14467 |
-| CD-26 | `count_noun` is an FFI export, because CD-6's other half is a host string. | Recorded divergences, line 14487 |
-| CD-27 | Duplicate's group expansion answers from the tree, not from "centre inside a picked group". | Recorded divergences, line 14517 |
-| CD-28 | `CanvasOpenInfo.degraded` is the PARSE-ERROR state, not the "unsupported items" banner. | Recorded divergences, line 14548 |
-| CD-29 | The degraded announcement is once per DOCUMENT on Windows and once per CONTAINER on mac. | Recorded divergences, line 14565 |
-| CD-30 | The outline row's Name spells `speakable_name`; mac's spells `title`. | Recorded divergences, line 14577 |
-| CD-31 | The surface view is a code-built `UserControl`, not a `.xaml(.cs)` pair. | Recorded divergences, line 14593 |
-| CD-32 | A retarget re-keys the registry; it does not mutate the document's path. | Recorded divergences, line 14605 |
-| CD-33 | The Windows outline NESTS; mac's is flat with indentation. | Recorded divergences, line 14621 |
-| CD-34 | `CanvasPhrase.CardReference` capitalises with .NET's SIMPLE mapping where core uses Rust's FULL one. | Recorded divergences, line 14636 |
-| CD-35 | The canvas link card has no confirmation step, and neither does the policy it reuses. | Recorded divergences, line 14669 |
-| CD-36 | The media activation hint is corrected on Windows; mac's is stale. | Recorded divergences, line 14692 |
-| CD-37 | The empty canvas renders `CanvasStatus{Empty}`, not `CanvasEmptyOnboarding`. | Recorded divergences, line 14705 |
-| CD-38 | Windows will not shell-execute a non-media file card; mac will | Recorded divergences, line 14721 |
-| CD-39 | The canvas table's ordinal columns sort differently from mac's on a mixed-normalization vault | Recorded divergences, line 15024 |
-| CD-40 | Focus delivery seats the shared selection SILENTLY; "lands focus only" is not reachable. | Recorded divergences, line 15059 |
-| CD-41 | M4 does not cancel on a shell overlay; t0 §2 M4's palette clause is superseded. | Recorded divergences, line 15092 |
-| CD-42 | The filter's visible summary is mac's sentence, not t0's spoken one. | Recorded divergences, line 15120 |
-| CD-43 | Clear Filter always answers; mac stays silent when nothing is filtered. | Recorded divergences, line 15129 |
-| CD-44 | `nextCard` the CHORD and `nextCard` the COMMAND visit different rows, deliberately. | Recorded divergences, line 15147 |
-| CD-45 | A survivor whose containing group was filtered out is promoted to a ROOT; the intermediate "nests under a surviving GRANDparent" case cannot… | Recorded divergences, line 15163 |
-| CD-46 | Next/previous card route through the read mapping; mac returns silently outside `.ready`. | Recorded divergences, line 15242 |
-| CD-47 | Escape inside the Where-am-I panel is the PANEL's, not the ladder's; t0 §2 M5 has no clause for a focused transient region. | Recorded divergences, line 15265 |
-| CD-48 | Right/Left FOLLOW unconditionally; the spec's "as mac does" premise was false. | Recorded divergences, line 15323 |
+| CD-1 | No standalone overlap events. | Recorded divergences, line 14320 |
+| CD-2 | `CanvasFilterCount` carries `matched` only. | Recorded divergences, line 14331 |
+| CD-3 | `CanvasLoadedDegraded` is an announcement Windows and mac both gain. | Recorded divergences, line 14338 |
+| CD-4 | Group entry speaks the group's CHILD count. | Recorded divergences, line 14355 |
+| CD-5 | Where-am-I has ONE filter spelling. | Recorded divergences, line 14363 |
+| CD-6 | Core's thousands grouping wins over `CountCopy`. | Recorded divergences, line 14374 |
+| CD-7 | The connection-delete sentence no longer lower-cases the author's words. | Recorded divergences, line 14385 |
+| CD-8 | The chord parameter is the one recorded platform difference in the corpus. | Recorded divergences, line 14397 |
+| CD-9 | `towardOther` is dropped. | Recorded divergences, line 14404 |
+| CD-10 | Families are typed nested enums, not one variant per sentence. | Recorded divergences, line 14414 |
+| CD-11 | Names that differ from the spec's indicative list. | Recorded divergences, line 14431 |
+| CD-12 | The family nests under one top-level variant | Recorded divergences, line 14442 |
+| CD-13 | `CanvasTracePathEnd` speaks the count of the titles it just listed. | Recorded divergences, line 14462 |
+| CD-14 | The outline's connection ROW now reads the traversal sentence. | Recorded divergences, line 14482 |
+| CD-15 | Four templates stop hardcoding the plural. | Recorded divergences, line 14506 |
+| CD-16 | `canvas_auto_sides` takes rects, not node ids | Recorded divergences, line 14541 |
+| CD-17 | `canvas_constants()` and `canvas_new_id()` are free functions | Recorded divergences, line 14552 |
+| CD-18 | Equal-area containment ties resolve to the LATER document order. | Recorded divergences, line 14560 |
+| CD-19 | `describe_relative`'s tie-break is pinned where mac's was undefined. | Recorded divergences, line 14571 |
+| CD-20 | `speakable_name` ordinals renumber on delete | Recorded divergences, line 14580 |
+| CD-21 | `place_inside_group`'s fallback fires on SIZE, not on childlessness. | Recorded divergences, line 14594 |
+| CD-22 | Case handling and whitespace trimming are Rust's, not Foundation's — and not case folding either. | Recorded divergences, line 14610 |
+| CD-23 | `speakable_name` is exposed on four records; which surface SPEAKS it stays the host's. | Recorded divergences, line 14631 |
+| CD-24 | `canvas_group_rect_around` returns `Option`. | Recorded divergences, line 14655 |
+| CD-25 | the inside-group search is a column-major LATTICE, not a ring. | Recorded divergences, line 14661 |
+| CD-26 | `count_noun` is an FFI export, because CD-6's other half is a host string. | Recorded divergences, line 14681 |
+| CD-27 | Duplicate's group expansion answers from the tree, not from "centre inside a picked group". | Recorded divergences, line 14711 |
+| CD-28 | `CanvasOpenInfo.degraded` is the PARSE-ERROR state, not the "unsupported items" banner. | Recorded divergences, line 14742 |
+| CD-29 | The degraded announcement is once per DOCUMENT on Windows and once per CONTAINER on mac. | Recorded divergences, line 14759 |
+| CD-30 | The outline row's Name spells `speakable_name`; mac's spells `title`. | Recorded divergences, line 14771 |
+| CD-31 | The surface view is a code-built `UserControl`, not a `.xaml(.cs)` pair. | Recorded divergences, line 14787 |
+| CD-32 | A retarget re-keys the registry; it does not mutate the document's path. | Recorded divergences, line 14799 |
+| CD-33 | The Windows outline NESTS; mac's is flat with indentation. | Recorded divergences, line 14815 |
+| CD-34 | `CanvasPhrase.CardReference` capitalises with .NET's SIMPLE mapping where core uses Rust's FULL one. | Recorded divergences, line 14830 |
+| CD-35 | The canvas link card has no confirmation step, and neither does the policy it reuses. | Recorded divergences, line 14863 |
+| CD-36 | The media activation hint is corrected on Windows; mac's is stale. | Recorded divergences, line 14886 |
+| CD-37 | The empty canvas renders `CanvasStatus{Empty}`, not `CanvasEmptyOnboarding`. | Recorded divergences, line 14899 |
+| CD-38 | Windows will not shell-execute a non-media file card; mac will | Recorded divergences, line 14915 |
+| CD-39 | The canvas table's ordinal columns sort differently from mac's on a mixed-normalization vault | Recorded divergences, line 15218 |
+| CD-40 | Focus delivery seats the shared selection SILENTLY; "lands focus only" is not reachable. | Recorded divergences, line 15253 |
+| CD-41 | M4 does not cancel on a shell overlay; t0 §2 M4's palette clause is superseded. | Recorded divergences, line 15286 |
+| CD-42 | The filter's visible summary is mac's sentence, not t0's spoken one. | Recorded divergences, line 15314 |
+| CD-43 | Clear Filter always answers; mac stays silent when nothing is filtered. | Recorded divergences, line 15323 |
+| CD-44 | `nextCard` the CHORD and `nextCard` the COMMAND visit different rows, deliberately. | Recorded divergences, line 15341 |
+| CD-45 | A survivor whose containing group was filtered out is promoted to a ROOT; the intermediate "nests under a surviving GRANDparent" case cannot… | Recorded divergences, line 15357 |
+| CD-46 | Next/previous card route through the read mapping; mac returns silently outside `.ready`. | Recorded divergences, line 15436 |
+| CD-47 | Escape inside the Where-am-I panel is the PANEL's, not the ladder's; t0 §2 M5 has no clause for a focused transient region. | Recorded divergences, line 15459 |
+| CD-48 | Right/Left FOLLOW unconditionally; the spec's "as mac does" premise was false. | Recorded divergences, line 15517 |
 
 | Id | Head | Recorded |
 |---|---|---|
-| CR-1 | uniffi's 256-variant enum cap: pressure resolved, and the pattern is set. | Accepted risks, line 15363 |
-| CR-2 | `a11y.rs` is now 5,291 lines | Accepted risks, line 15375 |
-| CR-3 | Two shipped strings have English defects and were migrated verbatim. | Accepted risks, line 15382 |
-| CR-4 | `CanvasModeCancelled` and `CanvasModeEndedWithoutEffect` admit combinations no host produces | Accepted risks, line 15391 |
-| CR-5 | The residue count is unchanged by 0a-1; 0a-2 lowers it. | Accepted risks, line 15397 |
+| CR-1 | uniffi's 256-variant enum cap: pressure resolved, and the pattern is set. | Accepted risks, line 15557 |
+| CR-2 | `a11y.rs` is now 5,291 lines | Accepted risks, line 15569 |
+| CR-3 | Two shipped strings have English defects and were migrated verbatim. | Accepted risks, line 15576 |
+| CR-4 | `CanvasModeCancelled` and `CanvasModeEndedWithoutEffect` admit combinations no host produces | Accepted risks, line 15585 |
+| CR-5 | The residue count is unchanged by 0a-1; 0a-2 lowers it. | Accepted risks, line 15591 |
 
 **(d) Owner decisions D-1…D-7, with their resolution and evidence.**
 

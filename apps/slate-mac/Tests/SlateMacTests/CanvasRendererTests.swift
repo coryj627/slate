@@ -143,6 +143,17 @@ final class CanvasRendererTests: XCTestCase {
             CanvasSidePair(from: .left, to: .left))
     }
 
+    /// W7-7 #1276, contract 34 D5: the board's container name is RESERVED
+    /// in the board's one name namespace — core's speakable-name allocator
+    /// holds that spelling occupied, so no card answers to it — and core
+    /// exports the spelling (`CanvasConstants.visualBoardName`). The
+    /// renderer still spells its label as a literal; this parity assertion
+    /// pins the literal to core's constant, so the two cannot drift.
+    func testContainerLabelIsCoresReservedBoardName() {
+        let view = CanvasRendererNSView(frame: NSRect(x: 0, y: 0, width: 800, height: 600))
+        XCTAssertEqual(view.accessibilityLabel(), canvasConstants().visualBoardName)
+    }
+
     func testPanMaterializesTheNextWindow() async throws {
         let (_, doc, view) = try await makeView()
         XCTAssertNil(view.visibleCardFramesForTesting()["far"])

@@ -443,11 +443,80 @@ public sealed class CanvasContextMenuTests
         persistent.IsOpen = false;
         Pump();
 
-        // No seat: no menu — and still never the tab's.
+        // No seat: no menu — and still never the tab's — and the press SAYS
+        // so (contract 34 C3/C4/E8a, #1283): the existing Nothing selected.
+        // arm, the sentence the board's Right and Left speak for the same
+        // seatless state, where the press used to be swallowed in silence.
         document.SeatSelectionSilently(null);
+        document.AnnouncerForTests.FlushForTests();
+        vault.Announced.Clear();
         PressApplicationsKey(board);
         Assert.False(tabMenu.IsOpen, "with no seat the request climbed to the ancestor's menu.");
         Assert.False(persistent.IsOpen, "with no seat the board opened a menu for nothing.");
+        document.AnnouncerForTests.FlushForTests();
+        string nothingSelected = CanvasAnnouncer.RenderLabel(
+            new CanvasA11yEvent.CanvasStatus(new CanvasStatusNote.NothingSelected()));
+        Assert.True(
+            vault.Announced.SequenceEqual([nothingSelected]),
+            $"with no seat the menu key said [{string.Join(" | ", vault.Announced)}], not "
+            + $"\"{nothingSelected}\" alone: a keypress that does nothing must say so (C3, C4, #1283).");
+    });
+
+    /// <summary>
+    /// #1283, contract 34 C3: a keyboard menu request on an outline with NO
+    /// rows opens no menu and never the tab's — and it answers, with the
+    /// sentence the tree's own arrows speak for the same empty tree: the
+    /// empty canvas's on a canvas with no cards, "No cards match the
+    /// filter." under a needle that keeps none.
+    /// </summary>
+    [Fact]
+    public void AKeyboardRequestOnAnEmptyOutlineSaysWhyThereIsNoMenu() => RunSta(() =>
+    {
+        using var vault = new BoardVault();
+        foreach ((string path, string? needle, CanvasStatusNote owed) in
+            new (string, string?, CanvasStatusNote)[]
+            {
+                ("empty.canvas", null, new CanvasStatusNote.Empty()),
+                ("board.canvas", "no card says this", new CanvasStatusNote.NoCardsMatchFilter()),
+            })
+        {
+            string leg = needle is null ? "an empty canvas" : "a needle that keeps no card";
+            CanvasDocumentViewModel document = vault.Open(path);
+            var surface = new CanvasSurfaceView { Model = document };
+            ContextMenu tabMenu = TabMenuStandIn();
+            using HostedWindow host = Host(new Border { ContextMenu = tabMenu, Child = surface });
+            host.UpdateLayout();
+            if (needle is not null)
+            {
+                document.FilterText = needle;
+                host.UpdateLayout();
+            }
+            CanvasOutlineView outline = surface.OutlineForTests;
+            PumpUntil(() => outline.RootsForTests.Count == 0, $"premise ({leg}): the outline still shows rows.");
+            Assert.True(outline.FocusTree(), $"premise ({leg}): the empty tree refused keyboard focus.");
+            document.AnnouncerForTests.FlushForTests();
+            vault.Announced.Clear();
+
+            PressApplicationsKey(outline.TreeForTests);
+            Assert.False(tabMenu.IsOpen, $"{leg}: the request climbed to the ANCESTOR's menu (F13's class).");
+            document.AnnouncerForTests.FlushForTests();
+            string sentence = CanvasAnnouncer.RenderLabel(new CanvasA11yEvent.CanvasStatus(owed));
+            Assert.True(
+                vault.Announced.SequenceEqual([sentence]),
+                $"{leg}: the menu key said [{string.Join(" | ", vault.Announced)}], not \"{sentence}\" "
+                + "alone — the empty tree swallowed the press (C3, #1283).");
+
+            // The POINTER arm is unchanged (codex round 2): a right-click on
+            // the empty tree opens nothing and says nothing.
+            vault.Announced.Clear();
+            _ = RightClick(outline.TreeForTests, new Point(5, 5));
+            Assert.False(tabMenu.IsOpen, $"{leg}: a right-click climbed to the ANCESTOR's menu (F13's class).");
+            document.AnnouncerForTests.FlushForTests();
+            Assert.True(
+                vault.Announced.Count == 0,
+                $"{leg}: a right-click on the empty tree spoke [{string.Join(" | ", vault.Announced)}]: "
+                + "only a KEYBOARD request with nothing to open answers (#1283).");
+        }
     });
 
     /// <summary>
@@ -582,6 +651,13 @@ public sealed class CanvasContextMenuTests
             new(board.ActualWidth - 2, board.ActualHeight - 2),
         ];
         Point empty = corners.First(point => board.HitTest(point) is null);
+        // …and with NO seat, so the pointer arm is discriminated from the
+        // keyboard arm (#1283, codex round 2): a keyboard request with no
+        // target answers "Nothing selected.", a pointer request over empty
+        // space says nothing at all — the click itself is the reader's answer.
+        document.SeatSelectionSilently(null);
+        document.AnnouncerForTests.FlushForTests();
+        vault.Announced.Clear();
         _ = RightClick(board, empty);
         Assert.False(
             persistent.IsOpen,
@@ -589,6 +665,11 @@ public sealed class CanvasContextMenuTests
             + "which would act on that card.");
         Assert.False(tabMenu.IsOpen, "a right-click on empty board climbed to the ANCESTOR's menu.");
         Assert.Empty(document.Selection.Marked);
+        document.AnnouncerForTests.FlushForTests();
+        Assert.True(
+            vault.Announced.Count == 0,
+            $"a right-click on empty board with no seat spoke [{string.Join(" | ", vault.Announced)}]: "
+            + "only a KEYBOARD request with nothing to open answers (#1283).");
     });
 
     /// <summary>
@@ -600,7 +681,7 @@ public sealed class CanvasContextMenuTests
     /// and the position is in its view space. Answers what the service
     /// does: whether a menu opened or the request was handled.
     /// </summary>
-    private static bool RightClick(CanvasRendererView board, Point at)
+    private static bool RightClick(IInputElement board, Point at)
     {
         System.Reflection.PropertyInfo service = typeof(FrameworkElement).GetProperty(
             "PopupControlService",
@@ -800,16 +881,17 @@ public sealed class CanvasContextMenuTests
         {
             _fixture = FixtureVault.Create(1, "canvas-context-menu");
             File.WriteAllText(Path.Combine(_fixture.Root, "board.canvas"), Board);
+            File.WriteAllText(Path.Combine(_fixture.Root, "empty.canvas"), """{"nodes":[],"edges":[]}""");
             _session = VaultSession.OpenFilesystem(_fixture.Root);
             using var cancel = new CancelToken();
             _session.ScanInitial(cancel);
         }
 
-        internal CanvasDocumentViewModel Open()
+        internal CanvasDocumentViewModel Open(string path = "board.canvas")
         {
             var document = new CanvasDocumentViewModel(
                 _session,
-                "board.canvas",
+                path,
                 new CanvasAnnouncer(line => Announced.Add(line.Text), TimeSpan.FromMinutes(1)),
                 synchronousForTests: true,
                 verbosity: () => CanvasVerbosity.Standard);

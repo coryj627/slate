@@ -342,8 +342,8 @@ public sealed class AnnouncementNameCensus
             }
         }
         return calls.ToLookup(
-            call => call.Method,
+            call => (ISymbol)call.Method,
             call => (call.Arguments, call.Model),
-            SymbolEqualityComparer.Default);
+            (IEqualityComparer<ISymbol>)SymbolEqualityComparer.Default);
     }
 }
