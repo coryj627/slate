@@ -2131,11 +2131,6 @@
   },
   {
     "Source": "MainWindow.xaml",
-    "Expression": "ShellRoot",
-    "Surface": "Main window and menu bar"
-  },
-  {
-    "Source": "MainWindow.xaml",
     "Expression": "ShellStatusBarBorder",
     "Surface": "Main window and menu bar"
   },

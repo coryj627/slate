@@ -59,6 +59,7 @@ internal static class RegionFocusGuard
 {
     private static readonly ConditionalWeakTable<UIElement, Func<bool>> Landings = new();
     private static readonly ConditionalWeakTable<UIElement, Func<bool>> StrandedLandings = new();
+    private static readonly ConditionalWeakTable<UIElement, Func<bool>> GoneLandings = new();
     private static readonly ConditionalWeakTable<IInputElement, UIElement[]> ScopesAtFocus = new();
 
     /// <summary>The list or tree whose row took the keys, recorded as it
@@ -98,6 +99,19 @@ internal static class RegionFocusGuard
         StrandedLandings.AddOrUpdate(element, land);
     }
 
+    /// <summary>
+    /// Where the keys go when <paramref name="scope"/> ITSELF goes away under
+    /// them, every scope inside it with it: the view that replaced it (W7-7 PR
+    /// 4b round 2 — the welcome view and the workspace, swapped by the vault's
+    /// open and close). A scope whose going has no replacement (a sheet: its
+    /// own dismissal restores the keys) registers none.
+    /// </summary>
+    internal static void SetGoneLanding(UIElement scope, Func<bool> land)
+    {
+        Register();
+        GoneLandings.AddOrUpdate(scope, land);
+    }
+
     /// <summary>The guard's class handlers, process-wide, registered once:
     /// every focus change inside a window routes through its root.</summary>
     internal static void Register()
@@ -123,7 +137,7 @@ internal static class RegionFocusGuard
         var scopes = new List<UIElement>();
         for (DependencyObject? current = element; current is not null; current = ParentOf(current))
         {
-            if (current is UIElement scope && Landings.TryGetValue(scope, out _))
+            if (current is UIElement scope && (Landings.TryGetValue(scope, out _) || GoneLandings.TryGetValue(scope, out _)))
             {
                 scopes.Add(scope);
             }
@@ -245,8 +259,10 @@ internal static class RegionFocusGuard
 
             foreach (UIElement scope in scopes)
             {
-                if (IsLive(scope)
-                    && Landings.TryGetValue(scope, out Func<bool>? land)
+                Func<bool>? land = IsLive(scope)
+                    ? Landings.TryGetValue(scope, out Func<bool>? own) ? own : null
+                    : GoneLandings.TryGetValue(scope, out Func<bool>? replaced) ? replaced : null;
+                if (land is not null
                     && land()
                     && Keyboard.FocusedElement is UIElement now
                     && !ReferenceEquals(now, token)
@@ -300,7 +316,19 @@ internal static class RegionFocusGuard
 
             foreach (UIElement scope in scopes)
             {
-                if (!IsLive(scope) || !Landings.TryGetValue(scope, out Func<bool>? land))
+                if (!IsLive(scope))
+                {
+                    // A scope gone with everything in it: the view that
+                    // replaced it, if it names one.
+                    if (GoneLandings.TryGetValue(scope, out Func<bool>? replaced) && replaced() && Landed(old))
+                    {
+                        return true;
+                    }
+
+                    continue;
+                }
+
+                if (!Landings.TryGetValue(scope, out Func<bool>? land))
                 {
                     continue;
                 }

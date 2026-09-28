@@ -67,7 +67,7 @@
         <KeyBinding Key="Escape" Command="{Binding Workspace.ActiveGroup.ActiveTab.EditorInteractions.ClosePopoverCommand, FallbackValue={x:Static cmd:DisabledCommand.Instance}}" />
     </Window.InputBindings>
 
-    <DockPanel x:Name="ShellRoot" KeyDown="TrashFallback_KeyDown">
+    <DockPanel KeyDown="TrashFallback_KeyDown">
         <!-- W7-5 (#1239): two things the first NVDA field pass found, both
              owned here. (1) WPF's Menu defaults TabNavigation to Cycle, so a
              Tab that enters the bar never leaves it (File > ... > Files >

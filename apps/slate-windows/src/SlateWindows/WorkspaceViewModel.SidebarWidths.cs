@@ -79,17 +79,11 @@ internal sealed partial class WorkspaceViewModel
     /// <summary>Stores <paramref name="value"/> bounded to
     /// <paramref name="sidebar"/>'s range — at least the columns' minimum, at
     /// most the ceiling and the room beside the other sidebar and the
-    /// editor's minimum. A write the bound changed is always announced, even
-    /// when the held width is the one already stored: the column the drag
-    /// wrote then follows the held width, not the dragged one.</summary>
-    private void HoldWidth(ref double field, double value, ShellSidebar sidebar, [CallerMemberName] string? name = null)
-    {
-        double held = Math.Clamp(value, MinimumSidebarWidth, WidestSidebarWidth(sidebar));
-        if (!SetField(ref field, held, name) && held != value)
-        {
-            OnPropertyChanged(name);
-        }
-    }
+    /// editor's minimum. A column the drag wrote follows the held width: its
+    /// two-way binding converts, and WPF reads a converted source back after
+    /// the write (SidebarResizeTests.ADraggedWidthIsHeldInsideTheRoom).</summary>
+    private void HoldWidth(ref double field, double value, ShellSidebar sidebar, [CallerMemberName] string? name = null) =>
+        SetField(ref field, Math.Clamp(value, MinimumSidebarWidth, WidestSidebarWidth(sidebar)), name);
 
     public ICommand WidenFilesSidebarCommand => _widenFilesSidebarCommand ??=
         new RelayCommand(_ => StepSidebar(ShellSidebar.Files, +1), _ => true);

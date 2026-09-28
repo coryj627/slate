@@ -292,15 +292,15 @@ public partial class MainWindow : IShellRegionHost
     private void GuardRegions()
     {
         var host = (IShellRegionHost)this;
-        // The window's content, outermost of all (codex PR 4b r1 F8's widened
-        // census): opening or closing the vault swaps the welcome view and the
-        // workspace under the keys, and every scope inside the one that goes
-        // goes with it. The keys land in the view now shown.
-        RegionFocusGuard.SetLanding(
-            ShellRoot,
-            () => WelcomeRoot.IsVisible
-                ? FirstFocusable(WelcomeRoot) is { } welcome && SelectorFocus.LandOnStop(welcome)
-                : EditorRegionLanding());
+        // The welcome view and the workspace (codex PR 4b r1 F8's widened
+        // census): opening or closing the vault swaps them under the keys,
+        // and every scope inside the one that goes goes with it. The keys land
+        // in the one that replaced it. (No landing sits above both: the
+        // sheets share their parent, and a sheet's close is its own
+        // restore's.)
+        RegionFocusGuard.SetGoneLanding(
+            WorkspaceRoot, () => FirstFocusable(WelcomeRoot) is { } welcome && SelectorFocus.LandOnStop(welcome));
+        RegionFocusGuard.SetGoneLanding(WelcomeRoot, EditorRegionLanding);
         // The three workspace columns (codex PR 4b r1 F1): when a
         // whole region goes — the right pane hidden under the keys (Ctrl+Alt+I,
         // the View menu, the palette) — every scope inside it is gone, and
