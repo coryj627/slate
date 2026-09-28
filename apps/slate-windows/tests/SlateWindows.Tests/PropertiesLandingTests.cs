@@ -203,6 +203,78 @@ public sealed class PropertiesLandingTests
         Assert.Single(changes);
     });
 
+    /// <summary>A refresh from disk that republishes every row while the keys
+    /// rest on a property's Delete: they land on the same property's
+    /// Delete, not its editor.</summary>
+    [Fact]
+    public void ARefreshUnderTheKeysKeepsThemOnTheSameControl() => RunSta(() =>
+    {
+        using var host = new ShownShell(("a.md", Note));
+        NotePropertiesViewModel properties = OpenProperties(host);
+        PropertyRowViewModel title = Row(properties, "title");
+        Assert.True(DeleteOf(host, title).Focus(), "premise: the title's Delete refused the keys");
+        List<IInputElement> changes = host.RecordFocusChanges();
+
+        host.Rewrite("a.md", Note.Replace("[red, green, blue]", "[red, green, teal]", StringComparison.Ordinal));
+        properties.RefreshProperties();
+        AwaitRepublished(properties, title);
+
+        var now = Assert.IsAssignableFrom<ButtonBase>(Keyboard.FocusedElement);
+        var fresh = Assert.IsType<PropertyRowViewModel>(now.DataContext);
+        Assert.NotSame(title, fresh);
+        Assert.Equal("title", fresh.KeyIdentity);
+        Assert.Same(fresh.DeleteCommand, now.Command);
+        Assert.Single(changes);
+    });
+
+    /// <summary>A property gone under the keys on its Delete: they land on
+    /// the Delete of the row now in its place.</summary>
+    [Fact]
+    public void APropertyGoneUnderItsDeleteLandsOnTheDeleteNowInItsPlace() => RunSta(() =>
+    {
+        using var host = new ShownShell(("a.md", Note));
+        NotePropertiesViewModel properties = OpenProperties(host);
+        Assert.True(DeleteOf(host, Row(properties, "title")).Focus(), "premise: the title's Delete refused the keys");
+        List<IInputElement> changes = host.RecordFocusChanges();
+
+        host.Rewrite("a.md", "---\ncolors: [red, green, blue]\nsolo: [only]\ndone: false\n---\nThe body.\n");
+        properties.RefreshProperties();
+        Assert.True(
+            PumpedDispatcher.PumpUntil(() => !properties.IsLoading && properties.Rows.Count == 3, TimeSpan.FromSeconds(30)),
+            "premise: the refresh never dropped the title");
+        PumpedDispatcher.Drain();
+
+        var now = Assert.IsAssignableFrom<ButtonBase>(Keyboard.FocusedElement);
+        var neighbour = Assert.IsType<PropertyRowViewModel>(now.DataContext);
+        Assert.Equal("done", neighbour.KeyIdentity);
+        Assert.Same(neighbour.DeleteCommand, now.Command);
+        Assert.Single(changes);
+    });
+
+    /// <summary>A property whose kind changes under the keys, and moves: the
+    /// switch the keys were on is gone from its row, and they land on the
+    /// same property's new editor — not on the row now at its old
+    /// place.</summary>
+    [Fact]
+    public void APropertyWhoseKindChangesUnderTheKeysLandsOnItsNewEditor() => RunSta(() =>
+    {
+        using var host = new ShownShell(("a.md", Note));
+        NotePropertiesViewModel properties = OpenProperties(host);
+        PropertyRowViewModel done = Row(properties, "done");
+        Assert.True(RowControl<CheckBox>(host, done).Focus(), "premise: the switch refused the keys");
+        List<IInputElement> changes = host.RecordFocusChanges();
+
+        host.Rewrite("a.md", "---\ndone: maybe\ncolors: [red, green, blue]\nsolo: [only]\ntitle: Hello\n---\nThe body.\n");
+        properties.RefreshProperties();
+        AwaitRepublished(properties, done);
+
+        var now = Assert.IsType<TextBox>(Keyboard.FocusedElement);
+        var fresh = Assert.IsType<PropertyRowViewModel>(now.DataContext);
+        Assert.Equal("done", fresh.KeyIdentity);
+        Assert.Equal("maybe", now.Text);
+        Assert.Single(changes);
+    });
+
     /// <summary>The last property gone under the keys: the rows' list
     /// collapses with it, and the keys land on the header's Add
     /// property.</summary>
@@ -250,6 +322,11 @@ public sealed class PropertiesLandingTests
     private static T RowControl<T>(ShownShell host, PropertyRowViewModel row)
         where T : FrameworkElement =>
         ShownShell.Descendants(host.Shell).OfType<T>().Single(control => control.IsVisible && ReferenceEquals(control.DataContext, row));
+
+    /// <summary>A property's shown Delete.</summary>
+    private static ButtonBase DeleteOf(ShownShell host, PropertyRowViewModel row) =>
+        ShownShell.Descendants(host.Shell).OfType<ButtonBase>().Single(button =>
+            button.IsVisible && ReferenceEquals(button.DataContext, row) && ReferenceEquals(button.Command, row.DeleteCommand));
 
     /// <summary>A shown control of a list item, by its type and — for a
     /// button — its command.</summary>

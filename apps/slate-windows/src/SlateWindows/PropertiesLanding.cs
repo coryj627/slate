@@ -23,9 +23,10 @@ namespace SlateWindows;
 /// (WorkspaceTemplates.xaml), which lands by what went away
 /// (<see cref="RegionFocusGuard.Holder"/>, and what it showed as it took the
 /// keys): the same property's same control — a list item's by its place,
-/// clamped, else the row's Add item — else the property's first stop; a
-/// property gone, the row now at its place; the last one gone — the rows'
-/// list collapses with it — the header's Add property. A list property's own
+/// clamped — else the property's first stop (an emptied list's is its Add
+/// item); a property gone, the same control of the row now at its place,
+/// else its first stop; the last one gone — the rows' list collapses with
+/// it — the header's Add property. A list property's own
 /// items need no landing of their own: a Remove rebuilds them inside a row
 /// that stays, so the rows' landing finds the row and its item.
 /// A control is known by its type and what it is bound to — its command, its
@@ -58,7 +59,7 @@ internal static class PropertiesLanding
     }
 
     /// <summary>The same property's same control, else its first stop; the
-    /// property gone, the row now at its place, else Add property.</summary>
+    /// property gone, the row now at its place.</summary>
     private static bool LandInRows(ItemsControl rows)
     {
         if (RegionFocusGuard.Holder is not FrameworkElement holder)
@@ -85,7 +86,7 @@ internal static class PropertiesLanding
         {
             bool landed = item >= 0
                 ? Controls(property).OfType<ItemsControl>().FirstOrDefault(list => list.DataContext == fresh[same]) is { } items
-                    && (LandOnItem(items, role, item) || LandOnAddItem(fresh[same], items))
+                    && LandOnItem(items, role, item)
                 : Land(Stop(property, role));
             if (landed || Land(Stop(property)))
             {
@@ -100,7 +101,7 @@ internal static class PropertiesLanding
             return true;
         }
 
-        return LandOnAddProperty(rows);
+        return false;
     }
 
     /// <summary>The header's Add property.</summary>
@@ -118,12 +119,6 @@ internal static class PropertiesLanding
             && items.ItemContainerGenerator.ContainerFromIndex(Math.Min(index, count - 1)) is DependencyObject container
             && Land(Stop(container, role));
     }
-
-    /// <summary>The row's Add item, beside its items.</summary>
-    private static bool LandOnAddItem(PropertyRowViewModel row, ItemsControl items) =>
-        VisualTreeHelper.GetParent(items) is DependencyObject editor
-        && Land(Controls(editor).FirstOrDefault(control =>
-            control is ButtonBase { Command: var command } && ReferenceEquals(command, row.AddItemCommand)));
 
     /// <summary>What a control is: its type and what it is bound to.</summary>
     private static string RoleOf(FrameworkElement control)
