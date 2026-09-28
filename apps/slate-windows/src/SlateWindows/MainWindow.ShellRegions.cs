@@ -292,11 +292,16 @@ public partial class MainWindow : IShellRegionHost
     private void GuardRegions()
     {
         var host = (IShellRegionHost)this;
+        // The three workspace columns, outermost (codex PR 4b r1 F1): when a
+        // whole region goes — the right pane hidden under the keys (Ctrl+Alt+I,
+        // the View menu, the palette) — every scope inside it is gone, and
+        // WPF's re-evaluation found no focusable ancestor short of the window.
+        // The keys land in the editor region, as the pane's own Left boundary
+        // does. A modal overlay (it disables the workspace) and the welcome
+        // view (it collapses it) leave this scope dead, and it takes nothing.
+        RegionFocusGuard.SetLanding(WorkspaceColumns, EditorRegionLanding);
         RegionFocusGuard.SetLanding(FilesPaneBorder, () => host.TryLand(ShellRegionKind.Files));
-        RegionFocusGuard.SetLanding(
-            ContentPaneBorder,
-            () => host.TryLand(
-                _viewModel.Workspace is { ActiveGroup.ActiveTab: not null } ? ShellRegionKind.Editor : ShellRegionKind.EmptyEditor));
+        RegionFocusGuard.SetLanding(ContentPaneBorder, EditorRegionLanding);
         RegionFocusGuard.SetLanding(RightPaneLeavesList, () => SelectorFocus.FocusFirstOrSelectedItem(RightPaneLeavesList));
         foreach (FrameworkElement body in RightPaneLeafHost.Children.OfType<FrameworkElement>()
             .Where(child => Grid.GetColumn(child) == 0 && !ReferenceEquals(child, RightPaneDockedPlaceholder)))
@@ -318,6 +323,12 @@ public partial class MainWindow : IShellRegionHost
         // row, else the leaf's landing.
         RegionFocusGuard.SetStrandedLanding(PanelReviewLoadMore, LandAfterLoadMore);
     }
+
+    /// <summary>The editor region's landing: the active tab's editor, else
+    /// the empty editor's.</summary>
+    private bool EditorRegionLanding() =>
+        ((IShellRegionHost)this).TryLand(
+            _viewModel.Workspace is { ActiveGroup.ActiveTab: not null } ? ShellRegionKind.Editor : ShellRegionKind.EmptyEditor);
 
     /// <summary>An arrow in the rail is choosing the leaf, for the length of
     /// its key press.</summary>
