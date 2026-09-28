@@ -67,9 +67,11 @@ public sealed class WcMatrixCanvasEvidenceCensus
             ["Value", "Invoke"],
             ["Filter cards", "Filter results"],
             // W7-7 R-12 (#1255): the visual board's arrows, pinned here as the
-            // row now cites them.
+            // row now cites them — over the full scene, dimmed cards included
+            // (follow-up #1270).
             ["CanvasSurfaces_NavigatorFilterAndWhereAmI_AreClean", "CanvasModes_MoveResizeAndConnectPicker_AreReachable", "TheZoomVerbsSpeakCoresZoomEventWithTheirContext",
-                "CanvasSurfaces_VisualBoardPeersAndZoom_AreClean", "TheBoardsDownAndUpAreTheReadingOrderMoveThroughTheAnnouncedDoor", "EveryBoardMoveAsksThePresenterToRevealItsSeat"],
+                "CanvasSurfaces_VisualBoardPeersAndZoom_AreClean", "TheBoardsDownAndUpAreTheReadingOrderMoveThroughTheAnnouncedDoor", "EveryBoardMoveAsksThePresenterToRevealItsSeat",
+                "TheBoardsArrowsWalkTheFullSceneDimmedCardsIncluded", "AFilteredOutSeatStepsThroughTheSceneOnTheBoardAndIntoTheFilteredSetByTheVerbs"],
             ["canvas-navigator", "canvas-move-mode-active"]),
         new(
             "Canvas visual (W6-1 §D)",
@@ -81,8 +83,30 @@ public sealed class WcMatrixCanvasEvidenceCensus
             [],
             [],
             ["speakable_name", "Zoom N percent"],
+            // D4's origin rule for the board's reveal (follow-up #1271), across
+            // panes (review round 1) and across publications, with the board's
+            // own peers pinned toggle-off (review round 2), judged by the
+            // seat's and the toggle's tokens and paid when a hidden board is
+            // shown again (review round 3, owner decision); D5's reserved
+            // container name (#1276).
             ["CanvasSurfaces_VisualBoardPeersAndZoom_AreClean", "TheZoomValueIsCoresRenderMinusItsPeriod", "FitCanvasContainsAndCentresCoresBounds",
-                "TheBoardsRightAndLeftFollowConnectionsAndEveryMoveRevealsItsSeat"],
+                "TheBoardsRightAndLeftFollowConnectionsAndEveryMoveRevealsItsSeat", "TheBoardRevealsItsOwnMovesAlwaysAndOtherMovesOnlyWhileFollowing",
+                "TheRevealRuleIsD4sOriginRule", "EveryBoardPeerHasItsOwnNameAndTheContainersNameIsReserved",
+                "AFollowingBoardInAnotherPanePansToTheSelectionAndAnUnfollowingOneStays",
+                "AFollowingBoardRevealsANewCardOnceTheStateThatHasItInstalls", "AnOwedRevealIsPaidOnlyForTheCardThatIsStillTheSeat",
+                "AnOwedElsewhereRevealLapsesWhenTheBoardStopsFollowing", "TheBoardsOwnPeersRevealTheirCardWithFollowSelectionOff",
+                "ABoardMoveDebtIsVoidedWhenTheSeatLeavesAndReturnsBeforeItsCardInstalls",
+                "AnElsewhereDebtStaysLapsedWhenFollowingResumesBeforeItsCardInstalls", "APaidRevealIsNeverPaidAgainByALaterInstall",
+                "ARebindToAnotherDocumentDropsTheDebtEvenForACollidingNodeId", "TheSelectionRevisionCountsEveryChangeOfTheSeatAndNothingElse",
+                "TheViewportCountsAFollowLapseOnlyWhenFollowingStops",
+                "AFollowingBoardHiddenBehindAnotherTabScrollsToTheSelectionWhenShown",
+                "AFollowingBoardCollapsedInItsPaneScrollsToTheSelectionWhenShown",
+                "ARevealOwedWhenATabGoesBehindAnotherIsStillOwedWhenItReturns",
+                "ABoardThatStopsFollowingWhileItsTabIsAwayDoesNotScrollWhenItReturns",
+                "AFollowingBoardUnderTheOutlineScrollsToTheSelectionWhenShown", "ABoardThatStopsFollowingWhileHiddenDoesNotScrollWhenShown",
+                "ABoardShownAgainWithTheSeatAlreadyInViewDoesNotMove", "ABoardMoveMadeBeforeHidingIsRevealedWhenShown",
+                "AReloadRevealsItsRelocatedSurvivorOnlyFromTheSuccessorPopulation",
+                "AnOwedRevealIsPaidFromALaterReloadItsSeatSurvives"],
             ["canvas-visual"]),
         new(
             "Canvas card editor (W6-1 §E)",
@@ -122,7 +146,9 @@ public sealed class WcMatrixCanvasEvidenceCensus
             // request that opens a fresh row's or the seated card's menu.
             ["TheOutlineMenuEqualsThePlan", "TheRowMenuEqualsThePlansGridProjectionAndToggleMarkIsLive", "AConnectionRowsVerbsActOnTheCapturedEdgeFromItsSeatedSource", "CanvasSurfaces_TableGridSortSelectionAndActivation_AreClean",
                 "TheBoardMenuEqualsThePlan", "TheBoardsCardMenuIsTheApplicableVerbInventoryPerKind", "AKeyboardRequestOnAFreshRowOpensThatRowsMenu", "AKeyboardRequestOnTheBoardOpensTheSeatedCardsMenu", "ARightClickOnAnUnseatedCardOpensItsMenuAndActsOnItAlone",
-                "ARightClickOnEmptyBoardOpensNoMenu", "Canvas_ContextMenus_OpenTheCardMenuByKeyboard"],
+                "ARightClickOnEmptyBoardOpensNoMenu", "Canvas_ContextMenus_OpenTheCardMenuByKeyboard",
+                // #1283: a keyboard request with nothing to open answers.
+                "AKeyboardRequestOnAnEmptyOutlineSaysWhyThereIsNoMenu"],
             []),
     ];
 
