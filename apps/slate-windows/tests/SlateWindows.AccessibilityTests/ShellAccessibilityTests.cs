@@ -1,6 +1,7 @@
 // Copyright (C) 2026 Cory Joseph
 // SPDX-License-Identifier: AGPL-3.0-or-later
 
+using System.Collections.Concurrent;
 using System.Diagnostics;
 using System.Runtime.ExceptionServices;
 using System.Runtime.InteropServices;
@@ -364,6 +365,11 @@ public sealed partial class ShellAccessibilityTests
             AssertEventuallyFocused(editor, "The editor did not regain focus after menu preview.");
             PlaceCaretAtText(editor, "![[Folder/child]]");
             string editorTextBeforePreview = editor.Patterns.Value.Pattern.Value;
+            // W7-7 PR 6 (#1251, R-8; #1278): what a screen reader hears when
+            // the preview lands — PR 1's desktop listener (#1244), NVDA's
+            // registration shape, registered just before the chord.
+            var embedHeard = new ConcurrentQueue<ReceivedNotification>();
+            using DesktopNotificationListener embedListener = ListenOnTheDesktop(automation, embedHeard);
             PressChord(VirtualKeyShort.CONTROL, VirtualKeyShort.KEY_E);
             AutomationElement? interactionPopover = TryWaitForElement(
                 window,
@@ -393,6 +399,21 @@ public sealed partial class ShellAccessibilityTests
                         StringComparison.Ordinal),
                     TimeSpan.FromSeconds(10)),
                 $"Embed preview did not finish loading: {interactionPopover.Name}");
+            // #1278: the landed preview's UIA name is core's sentence for
+            // what the embed resolved to (the EmbedPreviewShown rendering),
+            // not a host composition.
+            Assert.Equal(
+                "Embed preview for Folder/child. Embedded note: Folder/child.md.",
+                interactionPopover.Name);
+            // The landed result is announced, and a screen reader hears
+            // core's rendering of it once — the sentence the popover is
+            // named with.
+            string heardEmbedPreview = AssertHeardEmbedPreviewShown(
+                embedHeard,
+                process.Id,
+                Path.Combine(logDirectory, "slate-windows.log"));
+            Assert.Equal(heardEmbedPreview, interactionPopover.Name);
+            embedListener.Dispose();
             Assert.True(interactionPopover.Properties.IsDialog.Value);
             AutomationElement popoverClose = WaitForElement(
                 window,
@@ -416,16 +437,6 @@ public sealed partial class ShellAccessibilityTests
                 popoverClose,
                 "Shift+Tab from Open source did not wrap to Close.");
             AssertAxeClean(process, "editor-embed-popover");
-
-            // ---- TODO(#1244): the preview's outcome announcement ----
-            // W7-7 PR 6 (#1251, R-8) posts EmbedPreviewShown when the
-            // result lands. Asserting that a screen reader RECEIVES it needs
-            // PR 1's desktop-scoped notification listener
-            // (ShellAccessibilityTests.Announcements.cs), which is not on
-            // this branch; PR 6 deliberately builds no listener of its own.
-            // Once PR 1 merges, assert here that the listener received
-            // "Embed preview for Folder/child. Embedded note: Folder/child.md."
-            // with ImportantMostRecent processing.
 
             // W7-7 (#1251, R-8): the preview text is readable line by line.
             // WPF disables caret navigation in a read-only TextBox that hides
