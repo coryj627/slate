@@ -1585,6 +1585,20 @@ impl VaultSession {
         Ok(self.inner.graph_snapshot(filter.into())?.into())
     }
 
+    /// `graph_snapshot` under a cancel token (W7-7 PR 7, codex PR 7 round 4
+    /// finding 5): polled per node and edge; the index build and the mtime
+    /// read are interrupted inside SQLite.
+    pub fn graph_snapshot_cancellable(
+        &self,
+        filter: GraphFilter,
+        cancel: Arc<CancelToken>,
+    ) -> Result<GraphSnapshot, VaultError> {
+        Ok(self
+            .inner
+            .graph_snapshot_cancellable(filter.into(), &cancel.inner)?
+            .into())
+    }
+
     /// Depth-limited (1..=3, clamped) undirected neighborhood of one
     /// note (#552). The filter applies before traversal.
     pub fn graph_neighborhood(
@@ -1632,6 +1646,19 @@ impl VaultSession {
             .into())
     }
 
+    /// `graph_topology` under a cancel token (W7-7 PR 7).
+    pub fn graph_topology_cancellable(
+        &self,
+        query: GraphVisibilityQuery,
+        config: GraphConfig,
+        cancel: Arc<CancelToken>,
+    ) -> Result<GraphTopology, VaultError> {
+        Ok(self
+            .inner
+            .graph_topology_cancellable(&query.into(), &config.into(), &cancel.inner)?
+            .into())
+    }
+
     /// The VISIBLE neighbours of `id` under a query (0b-6b): both
     /// directions, unique, in the snapshot's edge order.
     pub fn graph_neighbors(
@@ -1657,6 +1684,20 @@ impl VaultSession {
             .into())
     }
 
+    /// `graph_connections_tree` under a cancel token (W7-7 PR 7).
+    pub fn graph_connections_tree_cancellable(
+        &self,
+        path: String,
+        depth: u32,
+        filter: GraphFilter,
+        cancel: Arc<CancelToken>,
+    ) -> Result<GraphConnectionsTree, VaultError> {
+        Ok(self
+            .inner
+            .graph_connections_tree_cancellable(&path, depth, filter.into(), &cancel.inner)?
+            .into())
+    }
+
     /// The table rows under a query, core-formatted (nine cells) and in
     /// `sort`'s order (0b-7).
     pub fn graph_table_rows(
@@ -1667,6 +1708,19 @@ impl VaultSession {
         Ok(self
             .inner
             .graph_table_rows(&query.into(), sort.into())?
+            .into())
+    }
+
+    /// `graph_table_rows` under a cancel token (W7-7 PR 7).
+    pub fn graph_table_rows_cancellable(
+        &self,
+        query: GraphVisibilityQuery,
+        sort: GraphTableSort,
+        cancel: Arc<CancelToken>,
+    ) -> Result<GraphTableRows, VaultError> {
+        Ok(self
+            .inner
+            .graph_table_rows_cancellable(&query.into(), sort.into(), &cancel.inner)?
             .into())
     }
 
@@ -5202,13 +5256,23 @@ impl LayoutSession {
     /// `edges()`: the returned frame's `generation` moved and ids may
     /// have been reassigned.
     pub fn refresh(&self) -> Result<Option<LayoutFrame>, VaultError> {
+        self.refresh_cancellable(CancelToken::new())
+    }
+
+    /// `refresh` under a cancel token (W7-7 PR 7, codex PR 7 round 4
+    /// finding 5): a cancelled refresh leaves the layout as it was.
+    pub fn refresh_cancellable(
+        &self,
+        cancel: Arc<CancelToken>,
+    ) -> Result<Option<LayoutFrame>, VaultError> {
         let mut state = self.state.lock().expect("layout state mutex");
         let last_generation = state.generation;
-        match self
-            .session
-            .inner
-            .refresh_layout(&mut state.engine, self.filter, last_generation)?
-        {
+        match self.session.inner.refresh_layout_cancellable(
+            &mut state.engine,
+            self.filter,
+            last_generation,
+            &cancel.inner,
+        )? {
             None => Ok(None),
             Some((topology, _warm)) => {
                 state.apply_topology(topology);

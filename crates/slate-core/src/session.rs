@@ -1867,6 +1867,21 @@ impl VaultSession {
     /// `floor + 1` — a rebuilt index must never reuse an
     /// already-observed generation (review round 1 finding 2). Caller
     /// holds conn then graph (LOCK ORDER).
+    /// [`Self::graph_ensure_built`] under `cancel` (W7-7 PR 7, codex PR 7
+    /// round 4 finding 5): the index build's SQL is interrupted by the
+    /// token; an interrupted build leaves no index (the next query builds).
+    fn graph_ensure_built_under(
+        &self,
+        conn: &Connection,
+        guard: &mut Option<crate::graph::GraphIndex>,
+        cancel: &CancelToken,
+    ) -> Result<(), VaultError> {
+        cancel.check()?;
+        directory_page::with_sqlite_cancellation(conn, cancel, || {
+            self.graph_ensure_built(conn, guard)
+        })
+    }
+
     fn graph_ensure_built(
         &self,
         conn: &Connection,
@@ -2034,11 +2049,26 @@ impl VaultSession {
         &self,
         filter: crate::graph::GraphFilter,
     ) -> Result<crate::graph::GraphSnapshot, VaultError> {
+        self.graph_snapshot_cancellable(filter, &CancelToken::new())
+    }
+
+    /// [`Self::graph_snapshot`] under `cancel` (W7-7 PR 7, codex PR 7 round
+    /// 4 finding 5): the index build and the mtime read are interrupted
+    /// inside SQLite, and the token is polled before each node and edge —
+    /// a cancelled caller gets `Cancelled`, never a partial snapshot.
+    pub fn graph_snapshot_cancellable(
+        &self,
+        filter: crate::graph::GraphFilter,
+        cancel: &CancelToken,
+    ) -> Result<crate::graph::GraphSnapshot, VaultError> {
+        cancel.check()?;
         let conn = self.conn.lock().expect("session connection mutex");
         let mut guard = self.graph.lock().expect("graph index mutex");
-        self.graph_ensure_built(&conn, &mut guard)?;
+        self.graph_ensure_built_under(&conn, &mut guard, cancel)?;
         let index = guard.as_ref().expect("graph index just ensured");
+        cancel.check()?;
         let metrics = self.graph_metrics_cached(index);
+        cancel.check()?;
 
         let filtered =
             index.filtered_nodes(&filter, |key| metrics.get(key).is_some_and(|m| m.is_orphan));
@@ -2046,22 +2076,23 @@ impl VaultSession {
             filtered.iter().map(|(id, _)| *id).collect();
         let raw_edges = index.edges_among(&surviving);
 
-        let mtimes = file_mtimes(&conn)?;
-        let nodes: Vec<crate::graph::GraphNode> = filtered
-            .iter()
-            .map(|(id, data)| graph_node_payload(*id, data, &metrics, &mtimes))
-            .collect();
-        let edges: Vec<crate::graph::GraphEdge> = raw_edges
-            .into_iter()
-            .map(
-                |(source_id, target_id, kind, count)| crate::graph::GraphEdge {
-                    source_id,
-                    target_id,
-                    kind,
-                    count,
-                },
-            )
-            .collect();
+        let mtimes = file_mtimes_under(&conn, cancel)?;
+        let mut nodes: Vec<crate::graph::GraphNode> = Vec::with_capacity(filtered.len());
+        for (id, data) in &filtered {
+            scan_point("graph node");
+            cancel.check()?;
+            nodes.push(graph_node_payload(*id, data, &metrics, &mtimes));
+        }
+        let mut edges: Vec<crate::graph::GraphEdge> = Vec::with_capacity(raw_edges.len());
+        for (source_id, target_id, kind, count) in raw_edges {
+            cancel.check()?;
+            edges.push(crate::graph::GraphEdge {
+                source_id,
+                target_id,
+                kind,
+                count,
+            });
+        }
 
         let summary_counts = snapshot_summary_counts(&nodes, &edges, filter);
         let audio_summary = crate::graph_summary::snapshot_summary(&summary_counts);
@@ -2087,7 +2118,7 @@ impl VaultSession {
         let mut guard = self.graph.lock().expect("graph index mutex");
         self.graph_ensure_built(&conn, &mut guard)?;
         let index = guard.as_ref().expect("graph index just ensured");
-        self.graph_neighborhood_locked(&conn, index, path, depth, filter)
+        self.graph_neighborhood_locked(&conn, index, path, depth, filter, &CancelToken::new())
     }
 
     /// The neighbourhood under a HELD lock (W6-2 PR 0b): the tree query
@@ -2099,7 +2130,9 @@ impl VaultSession {
         path: &str,
         depth: u32,
         filter: crate::graph::GraphFilter,
+        cancel: &CancelToken,
     ) -> Result<crate::graph::GraphNeighborhood, VaultError> {
+        cancel.check()?;
         let depth = depth.clamp(1, 3);
         let metrics = self.graph_metrics_cached(index);
 
@@ -2117,12 +2150,13 @@ impl VaultSession {
 
         // Key-sorted node order = filtered_nodes retained to members.
         let filtered = index.filtered_nodes(&filter, is_orphan);
-        let mtimes = file_mtimes(conn)?;
-        let nodes: Vec<crate::graph::GraphNode> = filtered
-            .iter()
-            .filter(|(id, _)| member_ids.contains(id))
-            .map(|(id, data)| graph_node_payload(*id, data, &metrics, &mtimes))
-            .collect();
+        let mtimes = file_mtimes_under(conn, cancel)?;
+        let mut nodes: Vec<crate::graph::GraphNode> = Vec::new();
+        for (id, data) in filtered.iter().filter(|(id, _)| member_ids.contains(id)) {
+            scan_point("graph node");
+            cancel.check()?;
+            nodes.push(graph_node_payload(*id, data, &metrics, &mtimes));
+        }
         let edges: Vec<crate::graph::GraphEdge> = index
             .edges_among(&member_ids)
             .into_iter()
@@ -2176,11 +2210,25 @@ impl VaultSession {
         depth: u32,
         filter: crate::graph::GraphFilter,
     ) -> Result<crate::graph_queries::GraphConnectionsTree, VaultError> {
+        self.graph_connections_tree_cancellable(path, depth, filter, &CancelToken::new())
+    }
+
+    /// [`Self::graph_connections_tree`] under `cancel` (W7-7 PR 7, codex PR
+    /// 7 round 4 finding 5): the build and the mtime read interrupted, the
+    /// token polled per neighbourhood node.
+    pub fn graph_connections_tree_cancellable(
+        &self,
+        path: &str,
+        depth: u32,
+        filter: crate::graph::GraphFilter,
+        cancel: &CancelToken,
+    ) -> Result<crate::graph_queries::GraphConnectionsTree, VaultError> {
+        cancel.check()?;
         let conn = self.conn.lock().expect("session connection mutex");
         let mut guard = self.graph.lock().expect("graph index mutex");
-        self.graph_ensure_built(&conn, &mut guard)?;
+        self.graph_ensure_built_under(&conn, &mut guard, cancel)?;
         let index = guard.as_ref().expect("graph index just ensured");
-        let hood = self.graph_neighborhood_locked(&conn, index, path, depth, filter)?;
+        let hood = self.graph_neighborhood_locked(&conn, index, path, depth, filter, cancel)?;
         Ok(crate::graph_queries::connections_tree(
             &hood,
             index.generation(),
@@ -2206,7 +2254,19 @@ impl VaultSession {
         query: &crate::graph_queries::GraphVisibilityQuery,
         config: &crate::graph_config::GraphConfig,
     ) -> Result<crate::graph_queries::GraphTopology, VaultError> {
-        let snapshot = self.graph_snapshot(query.filter)?;
+        self.graph_topology_cancellable(query, config, &CancelToken::new())
+    }
+
+    /// [`Self::graph_topology`] under `cancel` (W7-7 PR 7, codex PR 7 round
+    /// 4 finding 5): its snapshot is the cancellable one.
+    pub fn graph_topology_cancellable(
+        &self,
+        query: &crate::graph_queries::GraphVisibilityQuery,
+        config: &crate::graph_config::GraphConfig,
+        cancel: &CancelToken,
+    ) -> Result<crate::graph_queries::GraphTopology, VaultError> {
+        let snapshot = self.graph_snapshot_cancellable(query.filter, cancel)?;
+        cancel.check()?;
         Ok(crate::graph_queries::topology(&snapshot, query, config))
     }
 
@@ -2232,7 +2292,19 @@ impl VaultSession {
         query: &crate::graph_queries::GraphVisibilityQuery,
         sort: crate::graph_queries::GraphTableSort,
     ) -> Result<crate::graph_queries::GraphTableRows, VaultError> {
-        let snapshot = self.graph_snapshot(query.filter)?;
+        self.graph_table_rows_cancellable(query, sort, &CancelToken::new())
+    }
+
+    /// [`Self::graph_table_rows`] under `cancel` (W7-7 PR 7, codex PR 7
+    /// round 4 finding 5): its snapshot is the cancellable one.
+    pub fn graph_table_rows_cancellable(
+        &self,
+        query: &crate::graph_queries::GraphVisibilityQuery,
+        sort: crate::graph_queries::GraphTableSort,
+        cancel: &CancelToken,
+    ) -> Result<crate::graph_queries::GraphTableRows, VaultError> {
+        let snapshot = self.graph_snapshot_cancellable(query.filter, cancel)?;
+        cancel.check()?;
         Ok(crate::graph_queries::GraphTableRows {
             generation: snapshot.generation,
             total: snapshot.nodes.len() as u64,
@@ -2267,7 +2339,7 @@ impl VaultSession {
         // Node metadata under the SAME lock as the topology, so the
         // diagram's labels can never come from a different generation than
         // its ids (P2-3 #559 review — eliminates the snapshot handshake).
-        topology.nodes = self.graph_nodes_locked(&conn, index, &filter)?;
+        topology.nodes = self.graph_nodes_locked(&conn, index, &filter, &CancelToken::new())?;
         Ok((engine, topology))
     }
 
@@ -2280,15 +2352,19 @@ impl VaultSession {
         conn: &Connection,
         index: &crate::graph::GraphIndex,
         filter: &crate::graph::GraphFilter,
+        cancel: &CancelToken,
     ) -> Result<Vec<crate::graph::GraphNode>, VaultError> {
         let metrics = self.graph_metrics_cached(index);
         let filtered =
             index.filtered_nodes(filter, |key| metrics.get(key).is_some_and(|m| m.is_orphan));
-        let mtimes = file_mtimes(conn)?;
-        Ok(filtered
-            .iter()
-            .map(|(id, data)| graph_node_payload(*id, data, &metrics, &mtimes))
-            .collect())
+        let mtimes = file_mtimes_under(conn, cancel)?;
+        let mut nodes = Vec::with_capacity(filtered.len());
+        for (id, data) in &filtered {
+            scan_point("graph node");
+            cancel.check()?;
+            nodes.push(graph_node_payload(*id, data, &metrics, &mtimes));
+        }
+        Ok(nodes)
     }
 
     /// Re-sync `engine` with the live graph iff its generation moved
@@ -2312,9 +2388,30 @@ impl VaultSession {
         )>,
         VaultError,
     > {
+        self.refresh_layout_cancellable(engine, filter, last_generation, &CancelToken::new())
+    }
+
+    /// [`Self::refresh_layout`] under `cancel` (W7-7 PR 7, codex PR 7 round
+    /// 4 finding 5): the build and the node metadata honour the token, all
+    /// BEFORE the engine is touched, so a cancelled refresh leaves the
+    /// engine as it was.
+    pub fn refresh_layout_cancellable(
+        &self,
+        engine: &mut crate::graph_layout::LayoutEngine,
+        filter: crate::graph::GraphFilter,
+        last_generation: u64,
+        cancel: &CancelToken,
+    ) -> Result<
+        Option<(
+            crate::graph_layout::LayoutTopology,
+            crate::graph_layout::WarmReport,
+        )>,
+        VaultError,
+    > {
+        cancel.check()?;
         let conn = self.conn.lock().expect("session connection mutex");
         let mut guard = self.graph.lock().expect("graph index mutex");
-        self.graph_ensure_built(&conn, &mut guard)?;
+        self.graph_ensure_built_under(&conn, &mut guard, cancel)?;
         let index = guard.as_ref().expect("graph index just ensured");
         if index.generation() == last_generation {
             return Ok(None);
@@ -2327,7 +2424,7 @@ impl VaultSession {
         // then apply new-topology positions under old ids. `warm_update`
         // and `layout_topology` are both infallible, so once the metadata
         // read succeeds the rest commits cleanly.
-        let nodes = self.graph_nodes_locked(&conn, index, &filter)?;
+        let nodes = self.graph_nodes_locked(&conn, index, &filter, cancel)?;
         let warm = engine.warm_update(index, &filter);
         let mut topology = crate::graph_layout::layout_topology(engine, index);
         topology.nodes = nodes;
@@ -9532,6 +9629,16 @@ impl VaultSession {
 /// `path → mtime_ms` for every indexed file — the `modified_ms`
 /// source for graph payloads (one query per snapshot; ghosts have no
 /// row and stay `None`).
+/// [`file_mtimes`] under `cancel`: the statement is interrupted by the
+/// token (W7-7 PR 7, codex PR 7 round 4 finding 5).
+fn file_mtimes_under(
+    conn: &Connection,
+    cancel: &CancelToken,
+) -> Result<std::collections::HashMap<String, i64>, VaultError> {
+    cancel.check()?;
+    directory_page::with_sqlite_cancellation(conn, cancel, || file_mtimes(conn))
+}
+
 fn file_mtimes(conn: &Connection) -> Result<std::collections::HashMap<String, i64>, VaultError> {
     let mut stmt = conn.prepare_cached("SELECT path, mtime_ms FROM files")?;
     let rows = stmt.query_map([], |row| {
