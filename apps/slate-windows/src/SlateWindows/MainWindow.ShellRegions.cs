@@ -317,6 +317,16 @@ public partial class MainWindow : IShellRegionHost
             RegionFocusGuard.SetLanding(sheet, () => FirstFocusable(sheet) is { } stop && SelectorFocus.LandOnStop(stop));
         }
 
+        // The query builder's conditions, a finer scope inside its sheet (codex
+        // PR 4b r1 F5; R-5 (h), "a removed row's keys come back to the rows
+        // they were in"): a condition removed from its own Remove button lands
+        // the keys in a remaining condition, not on the sheet's first stop —
+        // its footer. The last removal collapses the conditions, and the
+        // sheet's landing takes them.
+        ItemsControl conditions = FindWithAutomationId<ItemsControl>(BaseQueryBuilderOverlay, "BuilderConditions")
+            ?? throw new InvalidOperationException("BuilderConditions is not in the shell's XAML.");
+        RegionFocusGuard.SetLanding(conditions, () => SelectorFocus.LandOnStop(conditions));
+
         // The review's "Load more" collapses under the keys when the last
         // page arrives (the sweep's G4): they go to the first row it
         // appended — where the reading continues — else the list's last
