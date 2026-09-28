@@ -301,26 +301,6 @@ public class CanonicalHighlightCensus
         }
     }
 
-    private static void RunOnSta(Action action)
-    {
-        Exception? failure = null;
-        var thread = new Thread(() =>
-        {
-            try
-            {
-                action();
-            }
-            catch (Exception exception)
-            {
-                failure = exception;
-            }
-        });
-        thread.SetApartmentState(ApartmentState.STA);
-        thread.Start();
-        Assert.True(thread.Join(TimeSpan.FromSeconds(30)), "STA highlight census timed out.");
-        if (failure is not null)
-        {
-            throw new Xunit.Sdk.XunitException(failure.ToString());
-        }
-    }
+    private static void RunOnSta(Action action) =>
+        StaThread.Run(action, TimeSpan.FromSeconds(30), "STA highlight census timed out.");
 }

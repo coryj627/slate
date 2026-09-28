@@ -365,26 +365,6 @@ public sealed class CanvasEndToEndTests : IDisposable
         document.Shutdown();
     }
 
-    private static void RunSta(Action body)
-    {
-        Exception? failure = null;
-        var thread = new Thread(() =>
-        {
-            try
-            {
-                body();
-            }
-            catch (Exception e)
-            {
-                failure = e;
-            }
-        });
-        thread.SetApartmentState(ApartmentState.STA);
-        thread.Start();
-        thread.Join();
-        if (failure is not null)
-        {
-            throw new Xunit.Sdk.XunitException(failure.ToString());
-        }
-    }
+    private static void RunSta(Action body) =>
+        StaThread.Run(body);
 }

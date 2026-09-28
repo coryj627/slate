@@ -17,7 +17,6 @@
 // whose reason is written here: a site added with neither fails.
 
 using System.Reflection;
-using System.Runtime.ExceptionServices;
 using System.Windows;
 using System.Windows.Automation;
 using System.Windows.Controls;
@@ -262,26 +261,6 @@ public sealed class SelectionCommitCensus
         (T)(instance.GetType().GetField(name, BindingFlags.Instance | BindingFlags.NonPublic)?.GetValue(instance)
             ?? throw new Xunit.Sdk.XunitException($"{instance.GetType().Name}.{name} is gone"));
 
-    private static void RunSta(Action body)
-    {
-        Exception? failure = null;
-        var thread = new Thread(() =>
-        {
-            try
-            {
-                PumpedDispatcher.Run(body);
-            }
-            catch (Exception exception)
-            {
-                failure = exception;
-            }
-        });
-        thread.SetApartmentState(ApartmentState.STA);
-        thread.Start();
-        Assert.True(thread.Join(TimeSpan.FromSeconds(60)), "the selection census timed out.");
-        if (failure is not null)
-        {
-            ExceptionDispatchInfo.Capture(failure).Throw();
-        }
-    }
+    private static void RunSta(Action body) =>
+        StaThread.RunPumped(body, TimeSpan.FromSeconds(60), "the selection census timed out.");
 }

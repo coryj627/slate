@@ -415,57 +415,39 @@ public sealed class TasksReviewTests : IDisposable
     [Fact]
     public void AChipNamesOnlyAPublishedCount()
     {
-        Exception? failure = null;
-        var thread = new Thread(() =>
+        StaThread.RunPumped(() =>
         {
-            try
-            {
-                PumpedDispatcher.Run(() =>
-                {
-                    var review = new TasksReviewViewModel(
-                        _session,
-                        _ => { },
-                        (_, _, _) => ReviewOpenRoute.Opened,
-                        (_, _, _) => ReviewToggleRoute.NoOpenTab,
-                        () => Clock);
-                    review.EnsureLoaded();
-                    Assert.True(PumpedDispatcher.PumpUntil(() => !review.IsLoading && review.Rows.Count > 0));
-                    string allName = review.FilterAutomationName(TaskReviewFilter.All);
-                    Assert.Equal("All, 236 tasks", allName);
+            var review = new TasksReviewViewModel(
+                _session,
+                _ => { },
+                (_, _, _) => ReviewOpenRoute.Opened,
+                (_, _, _) => ReviewToggleRoute.NoOpenTab,
+                () => Clock);
+            review.EnsureLoaded();
+            Assert.True(PumpedDispatcher.PumpUntil(() => !review.IsLoading && review.Rows.Count > 0));
+            string allName = review.FilterAutomationName(TaskReviewFilter.All);
+            Assert.Equal("All, 236 tasks", allName);
 
-                    review.ApplyFilter(TaskReviewFilter.Overdue);
-                    Assert.True(review.IsLoading, "premise: the page published inline.");
-                    Assert.Equal("Overdue", review.FilterAutomationName(TaskReviewFilter.Overdue));
-                    Assert.Equal(allName, review.FilterAutomationName(TaskReviewFilter.All));
-                    Assert.True(PumpedDispatcher.PumpUntil(() => !review.IsLoading));
-                    Assert.Equal("Overdue, 1 task", review.FilterAutomationName(TaskReviewFilter.Overdue));
-                    Assert.Equal("All", review.FilterAutomationName(TaskReviewFilter.All));
+            review.ApplyFilter(TaskReviewFilter.Overdue);
+            Assert.True(review.IsLoading, "premise: the page published inline.");
+            Assert.Equal("Overdue", review.FilterAutomationName(TaskReviewFilter.Overdue));
+            Assert.Equal(allName, review.FilterAutomationName(TaskReviewFilter.All));
+            Assert.True(PumpedDispatcher.PumpUntil(() => !review.IsLoading));
+            Assert.Equal("Overdue, 1 task", review.FilterAutomationName(TaskReviewFilter.Overdue));
+            Assert.Equal("All", review.FilterAutomationName(TaskReviewFilter.All));
 
-                    review.ApplyFilter(TaskReviewFilter.All);
-                    Assert.True(review.IsLoading, "premise: the page published inline.");
-                    Assert.Equal(allName, review.FilterAutomationName(TaskReviewFilter.All));
-                    Assert.Equal("Overdue, 1 task", review.FilterAutomationName(TaskReviewFilter.Overdue));
-                    Assert.True(PumpedDispatcher.PumpUntil(() => !review.IsLoading));
-                    Assert.Equal("Overdue", review.FilterAutomationName(TaskReviewFilter.Overdue));
+            review.ApplyFilter(TaskReviewFilter.All);
+            Assert.True(review.IsLoading, "premise: the page published inline.");
+            Assert.Equal(allName, review.FilterAutomationName(TaskReviewFilter.All));
+            Assert.Equal("Overdue, 1 task", review.FilterAutomationName(TaskReviewFilter.Overdue));
+            Assert.True(PumpedDispatcher.PumpUntil(() => !review.IsLoading));
+            Assert.Equal("Overdue", review.FilterAutomationName(TaskReviewFilter.Overdue));
 
-                    review.ApplyFilter(TaskReviewFilter.Overdue);
-                    Assert.Equal("Overdue, 1 task", review.FilterAutomationName(TaskReviewFilter.Overdue));
-                    Assert.True(PumpedDispatcher.PumpUntil(() => !review.IsLoading));
-                    review.Shutdown();
-                });
-            }
-            catch (Exception exception)
-            {
-                failure = exception;
-            }
-        });
-        thread.SetApartmentState(ApartmentState.STA);
-        thread.Start();
-        Assert.True(thread.Join(TimeSpan.FromSeconds(60)), "the review fact timed out.");
-        if (failure is not null)
-        {
-            System.Runtime.ExceptionServices.ExceptionDispatchInfo.Capture(failure).Throw();
-        }
+            review.ApplyFilter(TaskReviewFilter.Overdue);
+            Assert.Equal("Overdue, 1 task", review.FilterAutomationName(TaskReviewFilter.Overdue));
+            Assert.True(PumpedDispatcher.PumpUntil(() => !review.IsLoading));
+            review.Shutdown();
+        }, TimeSpan.FromSeconds(60), "the review fact timed out.");
     }
 
     [Fact]

@@ -1,7 +1,6 @@
 // Copyright (C) 2026 Cory Joseph
 // SPDX-License-Identifier: AGPL-3.0-or-later
 
-using System.Runtime.ExceptionServices;
 using System.Runtime.InteropServices;
 using System.Windows;
 using System.Windows.Automation;
@@ -676,18 +675,6 @@ public sealed class EditorSemanticTextRangeTests
         Assert.True(complete(), "The dispatched editor operation did not complete.");
     }
 
-    private static void OnSta(Action action)
-    {
-        Exception? failure = null;
-        var thread = new Thread(() =>
-        {
-            try { action(); }
-            catch (Exception error) { failure = error; }
-            finally { Dispatcher.CurrentDispatcher.InvokeShutdown(); }
-        });
-        thread.SetApartmentState(ApartmentState.STA);
-        thread.Start();
-        Assert.True(thread.Join(TimeSpan.FromMinutes(2)), "Editor peer test did not finish.");
-        if (failure is not null) { ExceptionDispatchInfo.Capture(failure).Throw(); }
-    }
+    private static void OnSta(Action action) =>
+        StaThread.Run(action, TimeSpan.FromMinutes(2), "Editor peer test did not finish.");
 }

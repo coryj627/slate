@@ -2,7 +2,6 @@
 // SPDX-License-Identifier: AGPL-3.0-or-later
 
 using System.Diagnostics;
-using System.Runtime.ExceptionServices;
 using System.Text;
 using System.Windows;
 using System.Windows.Automation;
@@ -888,27 +887,6 @@ public sealed class AvalonDocumentBufferCensus
         Dispatcher.PushFrame(frame);
     }
 
-    private static void RunOnSta(Action action)
-    {
-        ExceptionDispatchInfo? failure = null;
-        var thread = new Thread(() =>
-        {
-            try
-            {
-                action();
-            }
-            catch (Exception exception)
-            {
-                failure = ExceptionDispatchInfo.Capture(exception);
-            }
-        });
-        thread.SetApartmentState(ApartmentState.STA);
-        thread.Start();
-        if (!thread.Join(TimeSpan.FromSeconds(30)))
-        {
-            throw new TimeoutException("AvalonEdit STA census did not finish within 30 seconds.");
-        }
-
-        failure?.Throw();
-    }
+    private static void RunOnSta(Action action) =>
+        StaThread.Run(action, TimeSpan.FromSeconds(30), "AvalonEdit STA census did not finish within 30 seconds.");
 }
