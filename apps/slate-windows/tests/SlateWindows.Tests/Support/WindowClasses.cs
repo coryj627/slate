@@ -20,7 +20,9 @@ namespace SlateWindows.Tests;
 /// shared with every other process in the session — a concurrent test host
 /// registers the same prefix — so a name counts only when
 /// <c>GetClassInfoEx</c> finds it registered against this process's module,
-/// the instance WPF registers under. One full scan takes about 4 ms.
+/// the instance WPF registers under. Each name is asked about once (see
+/// the cache below), so a scan stays about 4 ms however many classes other
+/// processes have leaked into the table.
 /// </remarks>
 internal static class WindowClasses
 {
@@ -29,17 +31,38 @@ internal static class WindowClasses
     /// <summary>ERROR_CLASS_DOES_NOT_EXIST.</summary>
     private const int ClassDoesNotExist = 1411;
 
+    // Every WPF class name carries a fresh GUID, so a name belongs to one
+    // process for good: asked once, remembered. Another process's names — a
+    // concurrent test host without this runner leaks thousands into the
+    // shared table — are never asked about again (at ~12 µs a query they
+    // made every scan tens of milliseconds); this process's stay registered
+    // exactly as long as their atom stays in the table, since unregistering
+    // a class releases its atom.
+    private static readonly HashSet<string> s_ours = new(StringComparer.Ordinal);
+    private static readonly HashSet<string> s_foreign = new(StringComparer.Ordinal);
+
     /// <summary>Every WPF window class this process has registered, by name.</summary>
     internal static HashSet<string> Registered()
     {
         IntPtr module = GetModuleHandleW(IntPtr.Zero);
         var registered = new HashSet<string>(StringComparer.Ordinal);
-        foreach (string name in WpfClassNames())
+        lock (s_ours)
         {
-            var info = new WindowClassInfo { Size = Marshal.SizeOf<WindowClassInfo>() };
-            if (GetClassInfoExW(module, name, ref info) != 0)
+            foreach (string name in WpfClassNames())
             {
-                registered.Add(name);
+                if (s_foreign.Contains(name))
+                {
+                    continue;
+                }
+                if (!s_ours.Contains(name))
+                {
+                    var info = new WindowClassInfo { Size = Marshal.SizeOf<WindowClassInfo>() };
+                    _ = (GetClassInfoExW(module, name, ref info) != 0 ? s_ours : s_foreign).Add(name);
+                }
+                if (s_ours.Contains(name))
+                {
+                    registered.Add(name);
+                }
             }
         }
         return registered;
@@ -70,7 +93,12 @@ internal static class WindowClasses
     {
         IntPtr module = GetModuleHandleW(IntPtr.Zero);
         var refused = new List<string>();
-        foreach (string name in WpfClassNames().Where(name => ThreadOf(name) == threadName))
+        string[] candidates;
+        lock (s_ours)
+        {
+            candidates = [.. WpfClassNames().Where(name => ThreadOf(name) == threadName && !s_foreign.Contains(name))];
+        }
+        foreach (string name in candidates)
         {
             if (UnregisterClassW(name, module))
             {
