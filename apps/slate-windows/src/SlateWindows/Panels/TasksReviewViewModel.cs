@@ -265,11 +265,14 @@ internal sealed class TasksReviewViewModel : PanelWorkScheduler
     }
 
     /// <summary>Rail reveal (mac ensureVaultTasksLoaded): idempotent
-    /// — loads only when nothing is loaded, nothing is in flight,
-    /// and no error is showing.</summary>
+    /// — loads only when no page for the chosen filter has published,
+    /// nothing is in flight, and no error is showing. An EMPTY published
+    /// page counts as loaded (W7-7 PR 4b, AR-59): the rail's arrows reveal
+    /// the leaf on every pass, and testing for rows re-ran the query on
+    /// each.</summary>
     public void EnsureLoaded()
     {
-        if (Rows.Count > 0 || _isLoading || _loadError is not null)
+        if (_publishedFilter == ActiveFilter || _isLoading || _loadError is not null)
         {
             return;
         }

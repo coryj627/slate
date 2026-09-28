@@ -59,6 +59,27 @@ public sealed class BasesQueriesTests : IDisposable
         new(_session, _fixture.Root, () => [], _announced.Add,
             startInteractionBackgroundWork: false);
 
+    /// <summary>W7-7 PR 4b (AR-59, owner-decided): the rail's arrows reveal
+    /// the Queries leaf as they pass it, and its refresh runs; a refresh that
+    /// failed after the reader had arrowed on spoke over the next leaf. The
+    /// failure speaks only while the Queries leaf is the one shown.</summary>
+    [Fact]
+    public void AFailedRefreshSpeaksOnlyWhileTheQueriesLeafIsShown()
+    {
+        using WorkspaceViewModel workspace = NewWorkspace();
+        workspace.ActiveLeaf = WorkspaceViewModel.Leaves.First(leaf => leaf.Id == "outline");
+        workspace.QueriesRefreshReadForTests = () => throw new VaultException.Io("registry unreadable");
+        _announced.Clear();
+
+        workspace.RefreshBaseQueries();
+
+        Assert.DoesNotContain(_announced, line => line is A11yEvent.BasesQueriesRefreshFailed);
+
+        workspace.ActiveLeaf = WorkspaceViewModel.Leaves.First(leaf => leaf.Id == "queries");
+
+        Assert.Contains(_announced, line => line is A11yEvent.BasesQueriesRefreshFailed);
+    }
+
     [Fact]
     public void SavedQueryTabSharesTheDocumentAndExecutes()
     {

@@ -1198,6 +1198,10 @@ internal sealed partial class WorkspaceViewModel
         TrackRetiredBasesWork(Task.Run(() => RefreshBaseQueriesBody(generation)));
     }
 
+    /// <summary>Runs ahead of the registry reads; a fact makes it throw, as
+    /// an unreadable registry does.</summary>
+    internal Action? QueriesRefreshReadForTests { get; set; }
+
     private void RefreshBaseQueriesBody(int generation)
     {
         SavedQuerySummary[] savedQueries;
@@ -1205,6 +1209,7 @@ internal sealed partial class WorkspaceViewModel
         DashboardSummary[] dashboards;
         try
         {
+            QueriesRefreshReadForTests?.Invoke();
             savedQueries = _session.ListSavedQueries();
             baseFiles = _session.BasesList();
             dashboards = _session.ListDashboards();
@@ -1216,10 +1221,14 @@ internal sealed partial class WorkspaceViewModel
             {
                 // Same generation gate as success: a stale failure
                 // must not speak after a newer refresh landed — nor
-                // into a disposed workspace (codex round 6).
+                // into a disposed workspace (codex round 6) — nor after
+                // the reader has moved on from the Queries leaf (W7-7 PR
+                // 4b, AR-59: the rail's arrows reveal each leaf they pass,
+                // and a refresh failing behind them spoke over the next).
                 if (!_workspaceDisposed
                     && failure is VaultException vaultFailure
-                    && Volatile.Read(ref _queriesRefreshGeneration) == generation)
+                    && Volatile.Read(ref _queriesRefreshGeneration) == generation
+                    && string.Equals(ActiveLeaf.Id, "queries", StringComparison.Ordinal))
                 {
                     _announce(new A11yEvent.BasesQueriesRefreshFailed(
                         vaultFailure.Message));
