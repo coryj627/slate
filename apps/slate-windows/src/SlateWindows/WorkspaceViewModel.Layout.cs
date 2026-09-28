@@ -554,9 +554,18 @@ internal sealed partial class WorkspaceViewModel
             bool pumped = false;
             foreach (WorkspaceTabViewModel tab in group.Tabs.ToArray())
             {
-                if (!tab.IsDirty
-                    || (discarded.TryGetValue(tab, out (int Identity, long Revision) approved)
-                        && approved == (tab.ItemIdentity, tab.EditRevision)))
+                if (!tab.IsDirty)
+                {
+                    // Codex round 4: a clean tab whose settled save faulted
+                    // is not saved; the pane stays open.
+                    if (tab.LastSaveFaulted)
+                    {
+                        return;
+                    }
+                    continue;
+                }
+                if (discarded.TryGetValue(tab, out (int Identity, long Revision) approved)
+                    && approved == (tab.ItemIdentity, tab.EditRevision))
                 {
                     continue;
                 }
@@ -679,7 +688,11 @@ internal sealed partial class WorkspaceViewModel
             }
             if (!tab.IsDirty)
             {
-                return true;
+                // Codex round 4: clean, but the save the admission settled —
+                // or an earlier one of this item — faulted, a step after its
+                // write was adopted included: not saved (D-10). Fail closed;
+                // a later successful save of the item clears it.
+                return !tab.LastSaveFaulted;
             }
             (int Identity, long Revision) asked = (tab.ItemIdentity, tab.EditRevision);
             WorkspaceDirtyNavigationDecision decision = ask();

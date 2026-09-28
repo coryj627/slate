@@ -351,7 +351,11 @@ frame that keeps input, focus and notifications flowing: close tab, close
 pane, the replace gate, and vault teardown with its Save All. Each re-reads
 the workspace after every frame, and a save that failed or faulted refuses it
 — nothing is closed or replaced; teardown's existing "Vault remains open
-because one or more notes could not be saved." is the only line. A dirty tab's
+because one or more notes could not be saved." is the only line. A save that
+faulted after its write was adopted leaves the tab clean, so the fault is kept
+with the item: a gate that would pass the clean tab without asking (close
+tab, close pane, replace, vault close) refuses it until a later successful
+save of the item or an item change (codex round 4). A dirty tab's
 admission settles the tab's admitted saves before it asks and again before it
 accepts Discard, and Discard is accepted only for exactly the documents and
 edit revisions read before the prompt opened — a rename keeps a document,

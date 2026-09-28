@@ -111,6 +111,11 @@ internal sealed partial class WorkspaceTabViewModel : BindableBase, IDisposable
     // which a dirty-tab admission settles before it asks.
     private SaveBatch? _queuedSave;
     private Task<bool> _latestSave = Task.FromResult(true);
+    // #1280 (codex round 4): the item epoch of the latest save that faulted
+    // — past the D-10 outcomes, a step after adoption included — or -1. It
+    // belongs to that item: a later successful save of it clears it, and an
+    // item change leaves it behind.
+    private int _faultedSaveItemEpoch = -1;
     private bool _taskToggleInFlight;
     private int _taskToggleGeneration;
     private int _anchorNavigationGeneration;
@@ -685,7 +690,16 @@ internal sealed partial class WorkspaceTabViewModel : BindableBase, IDisposable
                 {
                     _queuedSave = null;
                 }
-                StartSave(batch, ticket);
+                try
+                {
+                    StartSave(batch, ticket);
+                }
+                catch (Exception)
+                {
+                    // The coordinator fails the ticket (and logs it once).
+                    RecordSaveFault(batch.ItemEpoch);
+                    throw;
+                }
             });
         if (completion.IsCompleted && ReferenceEquals(_queuedSave, batch))
         {
@@ -699,6 +713,23 @@ internal sealed partial class WorkspaceTabViewModel : BindableBase, IDisposable
 
     /// <summary>True while a save this tab admitted has not published.</summary>
     internal bool HasPendingSaves => !_latestSave.IsCompleted;
+
+    /// <summary>True when the latest save of the item the tab shows faulted
+    /// (#1280, codex round 4) — a fault after its write was adopted
+    /// included, which leaves the tab clean. A gate that would pass a clean
+    /// tab without asking fails closed on it: the note is not saved in the
+    /// D-10 sense. A later successful save of the item clears it.</summary>
+    internal bool LastSaveFaulted => !_disposed && _faultedSaveItemEpoch == _itemEpoch;
+
+    private void RecordSaveFault(int itemEpoch) => _faultedSaveItemEpoch = itemEpoch;
+
+    private void ClearSaveFault(int itemEpoch)
+    {
+        if (_faultedSaveItemEpoch == itemEpoch)
+        {
+            _faultedSaveItemEpoch = -1;
+        }
+    }
 
     /// <summary>Pump until every save this tab admitted — one admitted
     /// meanwhile included — has published (#1280, codex round 2a): a dirty
@@ -793,6 +824,7 @@ internal sealed partial class WorkspaceTabViewModel : BindableBase, IDisposable
         if (!IsMarkdown || !IsDirty)
         {
             PublishSaved(batch.Announce, batch.OnSaved, Path);
+            ClearSaveFault(batch.ItemEpoch);
             ticket.Complete(true);
             return;
         }
@@ -860,10 +892,16 @@ internal sealed partial class WorkspaceTabViewModel : BindableBase, IDisposable
                 {
                     try
                     {
-                        ticket.Complete(PublishSave(finished, request));
+                        bool saved = PublishSave(finished, request);
+                        if (saved)
+                        {
+                            ClearSaveFault(request.ItemEpoch);
+                        }
+                        ticket.Complete(saved);
                     }
                     catch (Exception exception)
                     {
+                        RecordSaveFault(request.ItemEpoch);
                         ticket.Fail(exception);
                     }
                 })),
@@ -2537,6 +2575,13 @@ internal sealed partial class WorkspaceViewModel : BindableBase, IDisposable
 
     /// <summary>#1280: true when no admitted save is waiting or writing.</summary>
     internal bool SavesIdle => _saves.IsIdle;
+
+    /// <summary>#1280 (codex round 4): a clean tab whose latest save
+    /// faulted — teardown, which would close it without asking, stays open
+    /// instead.</summary>
+    internal bool HasCleanTabWithAFaultedSave =>
+        Groups.SelectMany(group => group.Tabs)
+            .Any(tab => !tab.IsDirty && tab.LastSaveFaulted);
 
     /// <summary>#1280 (codex round 2a): every dirty tab and exactly what a
     /// teardown prompt asks about it — its document and edit revision — read

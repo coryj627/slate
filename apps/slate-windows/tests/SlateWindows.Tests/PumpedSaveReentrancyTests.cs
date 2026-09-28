@@ -880,6 +880,97 @@ public sealed class PumpedSaveReentrancyTests
         }
     }
 
+    /// <summary>Codex round 4 (owner decision): a gate that settles a Ctrl+S
+    /// still writing, whose publication then faults AFTER the landed write
+    /// was adopted, fails closed. The settle leaves the tab clean, but the
+    /// save it waited on faulted, so the close, pane close, replace or vault
+    /// close treats the note as not saved: nothing is closed or replaced and
+    /// no close line is spoken (teardown keeps its existing "Vault remains
+    /// open …"). The fault is logged once. The state belongs to the item: a
+    /// later successful save clears it, and the same gate then proceeds.</summary>
+    [Theory]
+    [InlineData("close-tab")]
+    [InlineData("close-pane")]
+    [InlineData("replace")]
+    [InlineData("teardown")]
+    public void ASettledSaveThatFaultedAfterAdoptionKeepsTheGateClosed(string site)
+    {
+        using var host = new Host(VaultCloseDecision.Discard);
+        using var log = new FaultLog();
+        // The target and its peer saved: the note under test is the only
+        // one with anything to save.
+        host.Workspace.SaveActiveAndSettle();
+        Assert.False(host.Workspace.HasDirtyTabs, "the arrangement left a dirty tab");
+        host.G1.ActiveTab = host.S;
+        host.Type(host.S, "Marker-S");
+        host.S.SaveAdoptedHookForTests = () => throw new InjectedSaveFault();
+        host.ParkFirstWrite();
+
+        // Ctrl+S, still writing when the gate runs; the gate's own settle
+        // frame releases it.
+        host.Workspace.SaveActiveCommand.Execute(null);
+        Assert.True(host.WaitParked(), "no write parked");
+        host.Dispatcher.BeginInvoke(DispatcherPriority.Background, new Action(host.Release));
+        host.Announced.Clear();
+
+        Exception? escaped = Record.Exception(() => RunGateOn(host, site));
+        host.Settle();
+
+        Assert.True(escaped is null, $"{site}: {escaped}");
+        Assert.Equal(1, log.FaultsLogged);
+        // The write landed and was adopted before the publication faulted.
+        Assert.False(host.S.IsDirty);
+        Assert.Contains("Marker-S", host.Disk("note1.md"), StringComparison.Ordinal);
+        Assert.DoesNotContain(
+            host.Announced,
+            item => item.Event is A11yEvent.TabClosed
+                or A11yEvent.VaultClosed
+                or A11yEvent.VaultClosedAllSaved
+                or A11yEvent.VaultClosedChangesDiscarded);
+        switch (site)
+        {
+            case "close-tab": Assert.False(host.S.IsDisposed, "the tab closed over a faulted save"); break;
+            case "close-pane": Assert.Contains(host.G1, host.Workspace.Groups); break;
+            case "replace": Assert.Equal("note1.md", host.S.Path); break;
+            case "teardown":
+                Assert.NotNull(host.Lifecycle.Workspace);
+                Assert.Equal(
+                    "Vault remains open because one or more notes could not be saved.",
+                    host.Lifecycle.StatusText);
+                break;
+        }
+
+        // A later successful save of the same note clears it.
+        host.S.SaveAdoptedHookForTests = null;
+        host.Workspace.SaveActiveAndSettle();
+        host.Announced.Clear();
+        RunGateOn(host, site);
+        host.Settle();
+        switch (site)
+        {
+            case "close-tab": Assert.True(host.S.IsDisposed, "the tab stayed open after a successful save"); break;
+            case "close-pane": Assert.DoesNotContain(host.G1, host.Workspace.Groups); break;
+            case "replace": Assert.Equal("note3.md", host.S.Path); break;
+            case "teardown":
+                Assert.Null(host.Lifecycle.Workspace);
+                Assert.Single(host.Announced, item => item.Event is A11yEvent.VaultClosed);
+                break;
+        }
+    }
+
+    /// <summary>The gates, on the note under test (S) in the first pane.</summary>
+    private static void RunGateOn(Host host, string site)
+    {
+        switch (site)
+        {
+            case "close-tab": host.Workspace.CloseTabCommand.Execute(host.S); break;
+            case "close-pane": host.Workspace.ClosePaneCommand.Execute(null); break;
+            case "replace": host.Workspace.OpenPath("note3.md"); break;
+            case "teardown": host.Lifecycle.CloseVault(); break;
+            default: throw new ArgumentOutOfRangeException(nameof(site), site, null);
+        }
+    }
+
     /// <summary>Codex round 3: a save that faults while later saves wait
     /// behind it leaves no faulted task unobserved. A save waits for every
     /// earlier save on its tab's chain AND its file's chain to FINISH — a

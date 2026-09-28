@@ -1350,6 +1350,17 @@ internal sealed class VaultLifecycleViewModel
                 continue;
             }
 
+            // Codex round 4: a clean tab whose settled save faulted is not
+            // saved (D-10); the close would pass it without asking, so it
+            // stays open instead, with the existing line.
+            if (Workspace is WorkspaceViewModel faulted && faulted.HasCleanTabWithAFaultedSave)
+            {
+                ReportTerminalStatus(
+                    "Vault remains open because one or more notes could not be saved.",
+                    A11yPriority.High);
+                return WorkspaceTeardown.Refused;
+            }
+
             if (Workspace is not WorkspaceViewModel workspace || !workspace.HasDirtyTabs)
             {
                 return savedAll ? WorkspaceTeardown.ClosedAllSaved : WorkspaceTeardown.Closed;
