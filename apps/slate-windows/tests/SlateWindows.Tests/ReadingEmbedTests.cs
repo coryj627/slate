@@ -185,6 +185,53 @@ public sealed class ReadingEmbedTests
         });
     }
 
+    /// <summary>#1278 round 4 (found by EmbedTitleRealizedSurfaceTests): each
+    /// image card titles from ITS OWN occurrence in either order. With the
+    /// alias-less occurrence FIRST, the shared last-record alt is the
+    /// other occurrence's alias, and the alias-less card borrowed it.</summary>
+    [Theory]
+    [InlineData(false)]
+    [InlineData(true)]
+    public void EachImageOccurrenceTitlesFromItsOwnAliasInEitherOrder(bool aliasedFirst)
+    {
+        RunSta(() =>
+        {
+            using var fixture = FixtureVault.Create(1, "reading-embed-image-order");
+            File.WriteAllBytes(Path.Combine(fixture.Root, "pic.png"), TinyPng);
+            (string Embed, ResolvedEmbed Resolved)[] occurrences =
+            [
+                ("![[pic.png|A tiny chart]]", new ResolvedEmbed.Image("pic.png", "A tiny chart")),
+                ("![[pic.png]]", new ResolvedEmbed.Image("pic.png", null)),
+            ];
+            if (!aliasedFirst)
+            {
+                Array.Reverse(occurrences);
+            }
+            File.WriteAllText(
+                Path.Combine(fixture.Root, "note0.md"),
+                string.Join("\n\n", occurrences.Select(occurrence => occurrence.Embed)) + "\n");
+            using var session = VaultSession.OpenFilesystem(fixture.Root);
+            using var cancel = new CancelToken();
+            session.ScanInitial(cancel);
+
+            using var tab = new WorkspaceTabViewModel(
+                session,
+                new WorkspaceTabState(
+                    Guid.NewGuid(),
+                    new WorkspaceItemState(
+                        WorkspaceItemKind.Markdown, "note0.md")),
+                startInteractionBackgroundWork: false);
+            tab.ToggleViewMode();
+            var surface = new ReadingSurface { Model = tab.Reading };
+
+            Assert.Equal(
+                occurrences.Select(occurrence => SlateUniffiMethods.ResolvedEmbedTitle(occurrence.Resolved)),
+                surface.LandmarksForTests
+                    .Where(candidate => candidate.Kind == ReadingLandmarkKind.Embed)
+                    .Select(landmark => landmark.Text));
+        });
+    }
+
     /// <summary>
     /// Field, 2026-07-30 (the stale-cards bug): the surface's
     /// same-projection rebind FAST PATH reused the published document

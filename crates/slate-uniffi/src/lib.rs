@@ -5674,6 +5674,51 @@ impl From<EmbedUnresolvedReason> for core::EmbedUnresolvedReason {
     }
 }
 
+/// What a resolved embed card shows (#1278): the resolution's kind and
+/// identifying fields, mirrored from `slate_core::a11y::ResolvedEmbed`.
+/// The host builds it from the resolution it received and hands it back
+/// to core, which words the card title from it — in `A11yEvent::
+/// EmbedPreviewShown` and through `resolved_embed_title` for the visible
+/// header — so no host sentence crosses the boundary.
+#[derive(Debug, Clone, PartialEq, Eq, uniffi::Enum)]
+pub enum ResolvedEmbed {
+    Note {
+        target_path: String,
+    },
+    Section {
+        target_path: String,
+        heading: String,
+    },
+    Block {
+        target_path: String,
+    },
+    Image {
+        target_path: String,
+        alt: Option<String>,
+    },
+    Base {
+        target_path: String,
+    },
+}
+
+impl From<ResolvedEmbed> for core::a11y::ResolvedEmbed {
+    fn from(resolved: ResolvedEmbed) -> Self {
+        match resolved {
+            ResolvedEmbed::Note { target_path } => Self::Note { target_path },
+            ResolvedEmbed::Section {
+                target_path,
+                heading,
+            } => Self::Section {
+                target_path,
+                heading,
+            },
+            ResolvedEmbed::Block { target_path } => Self::Block { target_path },
+            ResolvedEmbed::Image { target_path, alt } => Self::Image { target_path, alt },
+            ResolvedEmbed::Base { target_path } => Self::Base { target_path },
+        }
+    }
+}
+
 /// Kind of operation recorded in an op-log entry (#378, #372, O-1 #539).
 ///
 /// `WholeFileReplace`'s `payload_bytes` is the full file; `EditBatch`'s
@@ -8431,7 +8476,7 @@ pub enum A11yEvent {
     },
     EmbedPreviewShown {
         target: String,
-        title: String,
+        resolved: ResolvedEmbed,
     },
     EmbedPreviewUnavailable {
         target: String,
@@ -10278,7 +10323,10 @@ impl From<A11yEvent> for core::a11y::A11yEvent {
             F::OpenedFile { filename } => C::OpenedFile { filename },
             F::ShowingNote { display_name } => C::ShowingNote { display_name },
             F::CitationPopoverShown { speech } => C::CitationPopoverShown { speech },
-            F::EmbedPreviewShown { target, title } => C::EmbedPreviewShown { target, title },
+            F::EmbedPreviewShown { target, resolved } => C::EmbedPreviewShown {
+                target,
+                resolved: resolved.into(),
+            },
             F::EmbedPreviewUnavailable { target, reason } => C::EmbedPreviewUnavailable {
                 target,
                 reason: reason.into(),
@@ -10630,6 +10678,15 @@ pub fn vault_error_detail(error: VaultError) -> String {
 #[uniffi::export]
 pub fn editor_integrity_detail() -> String {
     core::a11y::editor_integrity_detail()
+}
+
+/// Core's title for a resolved embed card (#1278), rendered by
+/// `slate_core::a11y::resolved_embed_title`: the same words
+/// `EmbedPreviewShown` speaks, for the card's visible header and name, so
+/// the host spells none of the "Embedded note/section/block/image" shapes.
+#[uniffi::export]
+pub fn resolved_embed_title(resolved: ResolvedEmbed) -> String {
+    core::a11y::resolved_embed_title(&resolved.into())
 }
 
 /// Render an accessibility event to its canonical spoken form
@@ -13265,6 +13322,47 @@ mod tests {
             20,
             "one witness per VaultError variant: {seen:?}"
         );
+    }
+
+    /// #1278: the card title a host gets through the FFI is core's, and it
+    /// is the title the EmbedPreviewShown announcement speaks.
+    #[test]
+    fn resolved_embed_title_crosses_the_ffi_as_core_renders_it() {
+        for resolved in [
+            ResolvedEmbed::Note {
+                target_path: "a/b.md".into(),
+            },
+            ResolvedEmbed::Section {
+                target_path: "a/b.md".into(),
+                heading: "Plan".into(),
+            },
+            ResolvedEmbed::Block {
+                target_path: "a/b.md".into(),
+            },
+            ResolvedEmbed::Image {
+                target_path: "img/c.png".into(),
+                alt: Some("Chart".into()),
+            },
+            ResolvedEmbed::Image {
+                target_path: "img/c.png".into(),
+                alt: None,
+            },
+            ResolvedEmbed::Base {
+                target_path: "lists/Reading.base".into(),
+            },
+        ] {
+            let direct = core::a11y::resolved_embed_title(&resolved.clone().into());
+            assert_eq!(
+                resolved_embed_title(resolved.clone()),
+                direct,
+                "{resolved:?}"
+            );
+            let event = A11yEvent::EmbedPreviewShown {
+                target: "t".into(),
+                resolved,
+            };
+            assert!(a11y_render(event).text.contains(&direct));
+        }
     }
 
     /// W7-7 (#1249): the integrity detail a host gets through the FFI is
