@@ -17,8 +17,11 @@ namespace SlateWindows;
 /// under the keys — a list property's items by Remove and Add
 /// (<c>PropertyRowViewModel.RebuildItems</c>), every row by the refresh after
 /// a committed edit (<c>NotePropertiesViewModel.PublishProperties</c>: Enter,
-/// the boolean switch, a date pick) — and the keys went to the editor
-/// region's landing, the note's body. The rows are templated per tab, so
+/// Save, the boolean switch, a date's calendar closing) — and the keys went
+/// to the editor region's landing, the note's body. A date commits once, as
+/// its calendar closes (<see cref="CalendarCommit"/>), so the republish finds
+/// the keys back on the date field, never on a day of the calendar: a day's
+/// data context is its date, which names no property. The rows are templated per tab, so
 /// they register their landing through this attached property
 /// (WorkspaceTemplates.xaml), which lands by what went away
 /// (<see cref="RegionFocusGuard.Holder"/>, and what it showed as it took the

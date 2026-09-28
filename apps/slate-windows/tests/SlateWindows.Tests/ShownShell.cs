@@ -78,6 +78,9 @@ internal sealed class ShownShell : IDisposable
     /// <summary>A note's file rewritten on disk, as another program would.</summary>
     public void Rewrite(string path, string text) => File.WriteAllText(Path.Combine(_fixture.Root, path), text);
 
+    /// <summary>A note's file as it is on disk.</summary>
+    public string Read(string path) => File.ReadAllText(Path.Combine(_fixture.Root, path));
+
     public WorkspaceViewModel Workspace { get; }
 
     public void Settle()

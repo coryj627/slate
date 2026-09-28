@@ -2,6 +2,7 @@
 // SPDX-License-Identifier: AGPL-3.0-or-later
 
 using System.Reflection;
+using System.Runtime.CompilerServices;
 using System.Windows;
 using System.Windows.Controls;
 using System.Windows.Controls.Primitives;
@@ -298,9 +299,185 @@ public sealed class PropertiesLandingTests
         Assert.Single(changes);
     });
 
+    private const string DatedNote = "---\ndue: 2026-09-10\ntitle: Hello\n---\nThe body.\n";
+
+    /// <summary>
+    /// PR 4b's last codex check (the owner's decision): a date property's
+    /// calendar commits once, when it closes. The arrows move the calendar's
+    /// day without a write — each arrow wrote the note and republished every
+    /// row, which closed the calendar after one step and landed the keys in
+    /// the note's body. The arrows move from the row's day (a fresh WPF
+    /// calendar moved them from today's). Enter closes it: ONE write, the day
+    /// two arrows on, and the keys on the fresh row's date field.
+    /// </summary>
+    [Fact]
+    public void ArrowsInTheCalendarCommitOnceWhenEnterClosesIt() => RunSta(() =>
+    {
+        using var host = new ShownShell(("a.md", DatedNote));
+        NotePropertiesViewModel properties = OpenProperties(host, rows: 2);
+        PropertyRowViewModel due = Row(properties, "due");
+        StrongBox<int> writes = CountRepublications(properties);
+        DatePicker picker = OpenCalendar(host, due);
+
+        Press(Key.Right);
+        Assert.Equal(new DateTime(2026, 9, 11), picker.SelectedDate);
+        Press(Key.Right);
+        Assert.Equal(new DateTime(2026, 9, 12), picker.SelectedDate);
+        Assert.True(picker.IsDropDownOpen, "an arrow closed the calendar");
+        Assert.Equal(0, writes.Value);
+        List<IInputElement> changes = host.RecordFocusChanges();
+        Press(Key.Enter);
+        AwaitRepublished(properties, due);
+
+        Assert.Equal(1, writes.Value);
+        Assert.Contains("due: 2026-09-12", host.Read("a.md"), StringComparison.Ordinal);
+        var now = Assert.IsType<DatePickerTextBox>(Keyboard.FocusedElement);
+        PropertyRowViewModel fresh = Row(properties, "due");
+        Assert.NotSame(due, fresh);
+        Assert.Same(fresh, now.DataContext);
+        Assert.Single(changes, change => ReferenceEquals(change, now));
+        Assert.All(changes, change => Assert.IsType<DatePickerTextBox>(change));
+    });
+
+    /// <summary>Escape closes the calendar and puts back the day it opened
+    /// on — WPF's own DatePicker restores it — so nothing is written, and the
+    /// keys stay on the date field.</summary>
+    [Fact]
+    public void EscapeFromTheCalendarRevertsAndWritesNothing() => RunSta(() =>
+    {
+        using var host = new ShownShell(("a.md", DatedNote));
+        NotePropertiesViewModel properties = OpenProperties(host, rows: 2);
+        PropertyRowViewModel due = Row(properties, "due");
+        StrongBox<int> writes = CountRepublications(properties);
+        DatePicker picker = OpenCalendar(host, due);
+
+        Press(Key.Right);
+        Press(Key.Right);
+        Press(Key.Escape);
+        PumpedDispatcher.Drain();
+
+        Assert.False(picker.IsDropDownOpen);
+        Assert.False(properties.IsLoading, "a write started");
+        Assert.Equal(0, writes.Value);
+        Assert.Same(due, Row(properties, "due"));
+        Assert.Equal(new DateTime(2026, 9, 10), due.DateValue);
+        Assert.Equal(new DateTime(2026, 9, 10), picker.SelectedDate);
+        Assert.Contains("due: 2026-09-10", host.Read("a.md"), StringComparison.Ordinal);
+        Assert.IsType<DatePickerTextBox>(Keyboard.FocusedElement);
+    });
+
+    /// <summary>A day picked with the pointer closes the calendar (WPF's
+    /// day-button release) and commits once.</summary>
+    [Fact]
+    public void APointerPickedDayCommitsOnce() => RunSta(() =>
+    {
+        using var host = new ShownShell(("a.md", DatedNote));
+        NotePropertiesViewModel properties = OpenProperties(host, rows: 2);
+        PropertyRowViewModel due = Row(properties, "due");
+        StrongBox<int> writes = CountRepublications(properties);
+        DatePicker picker = OpenCalendar(host, due);
+        CalendarDayButton day = CalendarDays(picker).First(button => button.DataContext is DateTime { Month: 9, Day: 15 });
+
+        day.RaiseEvent(new MouseButtonEventArgs(Mouse.PrimaryDevice, Environment.TickCount, MouseButton.Left)
+        {
+            RoutedEvent = UIElement.MouseLeftButtonDownEvent,
+        });
+        day.RaiseEvent(new MouseButtonEventArgs(Mouse.PrimaryDevice, Environment.TickCount, MouseButton.Left)
+        {
+            RoutedEvent = UIElement.MouseLeftButtonUpEvent,
+        });
+        AwaitRepublished(properties, due);
+
+        Assert.False(picker.IsDropDownOpen);
+        Assert.Equal(1, writes.Value);
+        Assert.Contains("due: 2026-09-15", host.Read("a.md"), StringComparison.Ordinal);
+    });
+
+    /// <summary>A calendar closed because its picker left the tree — its
+    /// tab closed under it — commits nothing: the day was never
+    /// chosen.</summary>
+    [Fact]
+    public void ACalendarClosedWithItsTabWritesNothing() => RunSta(() =>
+    {
+        using var host = new ShownShell(("a.md", DatedNote));
+        NotePropertiesViewModel properties = OpenProperties(host, rows: 2);
+        PropertyRowViewModel due = Row(properties, "due");
+        StrongBox<int> writes = CountRepublications(properties);
+        DatePicker picker = OpenCalendar(host, due);
+        Press(Key.Right);
+        Press(Key.Right);
+
+        host.Workspace.CloseActiveTabCommand.Execute(null);
+        PumpedDispatcher.Drain();
+        PumpedDispatcher.PumpUntil(() => properties.IsLoading, TimeSpan.FromSeconds(2));
+        PumpedDispatcher.Drain();
+
+        Assert.False(picker.IsDropDownOpen);
+        Assert.Empty(host.Workspace.ActiveGroup.Tabs);
+        Assert.Equal(0, writes.Value);
+        Assert.Contains("due: 2026-09-10", host.Read("a.md"), StringComparison.Ordinal);
+    });
+
+    /// <summary>Counts the header's republications: one per write, whose
+    /// refresh clears and rebuilds every row.</summary>
+    private static StrongBox<int> CountRepublications(NotePropertiesViewModel properties)
+    {
+        var count = new StrongBox<int>();
+        properties.Rows.CollectionChanged += (_, e) =>
+        {
+            if (e.Action == System.Collections.Specialized.NotifyCollectionChangedAction.Reset)
+            {
+                count.Value++;
+            }
+        };
+        return count;
+    }
+
+    /// <summary>The row's date field focused, and its calendar opened as
+    /// Alt+Down opens it, the keys on the calendar's day.</summary>
+    private static DatePicker OpenCalendar(ShownShell host, PropertyRowViewModel row)
+    {
+        DatePicker picker = RowControl<DatePicker>(host, row);
+        // The picker hands the keys to its text field.
+        _ = picker.Focus();
+        Assert.True(picker.IsKeyboardFocusWithin, "premise: the date field refused the keys");
+        picker.IsDropDownOpen = true;
+        Assert.True(
+            PumpedDispatcher.PumpUntil(() => Keyboard.FocusedElement is CalendarDayButton, TimeSpan.FromSeconds(10)),
+            $"premise: the calendar never took the keys ({Keyboard.FocusedElement})");
+        PumpedDispatcher.Drain();
+        Assert.Equal(
+            picker.SelectedDate,
+            Assert.IsType<CalendarDayButton>(Keyboard.FocusedElement).DataContext as DateTime?);
+        return picker;
+    }
+
+    private static IEnumerable<CalendarDayButton> CalendarDays(DatePicker picker) =>
+        picker.Template.FindName("PART_Popup", picker) is Popup { Child: { } calendar }
+            ? ShownShell.Descendants(calendar).OfType<CalendarDayButton>()
+            : [];
+
+    /// <summary>A key press on the element holding the keys, as the keyboard
+    /// raises it: the preview, then — unless it was handled — the key
+    /// down.</summary>
+    private static void Press(Key key)
+    {
+        var target = Assert.IsAssignableFrom<UIElement>(Keyboard.FocusedElement);
+        PresentationSource source = PresentationSource.FromVisual(target)
+            ?? throw new Xunit.Sdk.XunitException("the keys are on an element out of the tree");
+        var preview = new KeyEventArgs(Keyboard.PrimaryDevice, source, 0, key) { RoutedEvent = Keyboard.PreviewKeyDownEvent };
+        target.RaiseEvent(preview);
+        if (!preview.Handled)
+        {
+            target.RaiseEvent(new KeyEventArgs(Keyboard.PrimaryDevice, source, 0, key) { RoutedEvent = Keyboard.KeyDownEvent });
+        }
+
+        PumpedDispatcher.Drain();
+    }
+
     /// <summary>The note's Properties header, expanded, with its rows
     /// published.</summary>
-    private static NotePropertiesViewModel OpenProperties(ShownShell host)
+    private static NotePropertiesViewModel OpenProperties(ShownShell host, int rows = 4)
     {
         host.Workspace.OpenPath("a.md");
         host.Settle();
@@ -308,7 +485,7 @@ public sealed class PropertiesLandingTests
             ?? throw new Xunit.Sdk.XunitException("premise: the markdown tab has no Properties header");
         properties.IsExpanded = true;
         Assert.True(
-            PumpedDispatcher.PumpUntil(() => !properties.IsLoading && properties.Rows.Count == 4, TimeSpan.FromSeconds(30)),
+            PumpedDispatcher.PumpUntil(() => !properties.IsLoading && properties.Rows.Count == rows, TimeSpan.FromSeconds(30)),
             $"premise: the header published {properties.Rows.Count} rows");
         host.Settle();
         return properties;

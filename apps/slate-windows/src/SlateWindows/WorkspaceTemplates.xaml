@@ -92,12 +92,16 @@
     <DataTemplate x:Key="PropertyDatePickerTemplate"
                   DataType="{x:Type panels:PropertyRowViewModel}">
         <!-- Only mounted when the STORED value parses yyyy-MM-dd, so
-             SelectedDate never invents a date; a CALENDAR pick
-             commits immediately (mac parity). The text portion is
-             read-only (adversarial round 1, contract 2): WPF's
-             DatePicker parses typed text on LostFocus, which would
-             turn a focus change into a disk write. -->
-        <DatePicker SelectedDate="{Binding DateValue, Mode=TwoWay}"
+             SelectedDate never invents a date. The calendar commits
+             ONCE, when it closes (CalendarCommit; the owner's decision
+             on PR 4b's last codex check): its arrows move the day
+             without a write, and Escape puts back the day it opened on.
+             The text portion is read-only (adversarial round 1,
+             contract 2): WPF's DatePicker parses typed text on
+             LostFocus, which would turn a focus change into a disk
+             write. -->
+        <DatePicker SelectedDate="{Binding DateValue, Mode=TwoWay, UpdateSourceTrigger=Explicit}"
+                    local:CalendarCommit.IsEnabled="True"
                     ToolTip="{Binding EditorTooltip}"
                     AutomationProperties.Name="{Binding AutomationName}">
             <DatePicker.Resources>
