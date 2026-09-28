@@ -3932,14 +3932,15 @@ public sealed partial class CanvasNavigatorTests : IDisposable
         Assert.True(surface.CanMoveWithinProjection(forward: false));
     });
 
-    // --- R-12 (#1255): the visual board's arrows --------------------------
+    // --- R-12 (#1255, #1270, #1271): the visual board's arrows -------------
 
     /// <summary>
     /// R-12 (#1255; the NVDA pass's F12), contract 34 D15 honoured: the
     /// visual board has no row control to move the reader, so its Down
-    /// and Up ARE the navigator's reading-order move — Next Card and
-    /// Previous Card through the announced door, the same seat and the
-    /// same lines — over the whole filtered reading order, both ways.
+    /// and Up ARE the navigator's reading-order move through the announced
+    /// door — over the FULL scene the board draws (D4; follow-up #1270),
+    /// which with no needle in the field is the order Next Card and
+    /// Previous Card walk, so each step owes the verb's own seat and lines.
     /// </summary>
     /// <remarks>
     /// Each step's owed lines are the VERB's, taken from the same seat
@@ -3954,8 +3955,9 @@ public sealed partial class CanvasNavigatorTests : IDisposable
     {
         CanvasDocumentViewModel document = Open("board.canvas");
         using HostedWindow host = HostBoard(document, out CanvasSurfaceView surface);
-        IReadOnlyList<CanvasOutlineRow> rows = document.FilteredOutline;
-        Assert.True(rows.Count >= 4, "premise: the fixture's reading order is too short to walk.");
+        IReadOnlyList<CanvasOutlineRow> scene = document.Outline;
+        Assert.True(scene.Count >= 4, "premise: the fixture's reading order is too short to walk.");
+        Assert.False(document.FilterActive, "premise: a needle would make the verbs' order differ from the scene's.");
 
         foreach ((Key key, int offset, Action verb) in new (Key, int, Action)[]
         {
@@ -3963,14 +3965,14 @@ public sealed partial class CanvasNavigatorTests : IDisposable
             (Key.Up, -1, document.Navigator.PreviousCard),
         })
         {
-            for (int from = offset > 0 ? 0 : rows.Count - 1;
-                from + offset >= 0 && from + offset < rows.Count;
+            for (int from = offset > 0 ? 0 : scene.Count - 1;
+                from + offset >= 0 && from + offset < scene.Count;
                 from += offset)
             {
-                CanvasOutlineRow arrival = rows[from + offset];
-                IReadOnlyList<string> owed = LinesOf(document, rows[from].NodeId, verb);
+                CanvasOutlineRow arrival = scene[from + offset];
+                IReadOnlyList<string> owed = LinesOf(document, scene[from].NodeId, verb);
                 Assert.Contains(arrival.SpeakableName, string.Join(" | ", owed), StringComparison.Ordinal);
-                document.SeatSelectionSilently(rows[from].NodeId);
+                document.SeatSelectionSilently(scene[from].NodeId);
                 Drain(document);
 
                 Assert.True(
@@ -3984,45 +3986,51 @@ public sealed partial class CanvasNavigatorTests : IDisposable
     });
 
     /// <summary>
-    /// R-12 (#1255): the board's arrows answer at the ends with the
-    /// reading-order move's own boundary — "End of canvas." past the last
-    /// card and "Start of canvas." before the first, the seat unmoved —
-    /// and a canvas with nothing to move through keeps the two sentences
-    /// every projection already had: the needle that matched nothing, and
-    /// the empty canvas.
+    /// R-12 (#1255, #1270): the board's arrows answer at the FULL scene's
+    /// ends — "End of canvas." past its last card and "Start of canvas."
+    /// before its first, the seat unmoved — with or without a needle in
+    /// the field: the board dims what a needle does not match and hides
+    /// nothing (D4), so a needle that matches nothing leaves every card
+    /// to walk. A canvas with no cards keeps the empty canvas's sentence.
     /// </summary>
     [Fact]
     public void TheBoardsArrowsAnswerAtTheEndsAndWithNothingToMoveThrough() => RunSta(() =>
     {
         CanvasDocumentViewModel document = Open("board.canvas");
         using HostedWindow host = HostBoard(document, out CanvasSurfaceView surface);
-        IReadOnlyList<CanvasOutlineRow> rows = document.FilteredOutline;
+        IReadOnlyList<CanvasOutlineRow> scene = document.Outline;
 
-        foreach ((Key key, CanvasOutlineRow end, CanvasStatusNote boundary) in
-            new (Key, CanvasOutlineRow, CanvasStatusNote)[]
-            {
-                (Key.Down, rows[^1], new CanvasStatusNote.EndOfCanvas()),
-                (Key.Up, rows[0], new CanvasStatusNote.StartOfCanvas()),
-            })
+        foreach (string needle in new[] { string.Empty, "zzzz-no-such-card" })
         {
-            document.SeatSelectionSilently(end.NodeId);
-            Drain(document);
-            Assert.True(
-                PressKey(surface, key, ModifierKeys.None),
-                $"the board left {key} unconsumed at the end of the canvas.");
-            Assert.Equal(Rendered(boundary), OneLine(document));
-            Assert.Equal(end.NodeId, document.Selection.Selected);
+            document.FilterText = needle;
+            host.UpdateLayout();
+            Assert.True(surface.ProjectionHasFocus, "premise: the needle took the keys off the board.");
+            foreach ((Key key, CanvasOutlineRow end, CanvasStatusNote boundary) in
+                new (Key, CanvasOutlineRow, CanvasStatusNote)[]
+                {
+                    (Key.Down, scene[^1], new CanvasStatusNote.EndOfCanvas()),
+                    (Key.Up, scene[0], new CanvasStatusNote.StartOfCanvas()),
+                })
+            {
+                document.SeatSelectionSilently(end.NodeId);
+                Drain(document);
+                Assert.True(
+                    PressKey(surface, key, ModifierKeys.None),
+                    $"the board left {key} unconsumed at the end of the canvas.");
+                Assert.Equal(Rendered(boundary), OneLine(document));
+                Assert.Equal(end.NodeId, document.Selection.Selected);
+            }
         }
 
-        // A needle that matches nothing: the filter's sentence, never a
-        // boundary. The board DIMS rather than hides (D4), so the keys stay
-        // on it while the move walks what the needle kept — nothing.
-        document.FilterText = "zzzz-no-such-card";
-        host.UpdateLayout();
-        Assert.True(surface.ProjectionHasFocus, "premise: the needle took the keys off the board.");
+        // A needle that matches nothing leaves the board every card to walk
+        // (D4): the move goes on, and the filter's sentence is never the
+        // board's answer.
+        Assert.Empty(document.FilteredOutline);
+        document.SeatSelectionSilently(scene[0].NodeId);
         Drain(document);
         Assert.True(PressKey(surface, Key.Down, ModifierKeys.None));
-        Assert.Equal(Rendered(new CanvasStatusNote.NoCardsMatchFilter()), OneLine(document));
+        Assert.Equal(scene[1].NodeId, document.Selection.Selected);
+        Assert.DoesNotContain(Rendered(new CanvasStatusNote.NoCardsMatchFilter()), Lines(document));
 
         CanvasDocumentViewModel empty = Open("empty.canvas");
         using HostedWindow emptyHost = HostBoard(empty, out CanvasSurfaceView emptySurface);
@@ -4031,14 +4039,96 @@ public sealed partial class CanvasNavigatorTests : IDisposable
     });
 
     /// <summary>
+    /// Follow-up #1270, contract 34 D4: the board renders the FULL scene
+    /// and a needle only DIMS what it does not match, so the board's arrows
+    /// walk every card it draws — dimmed ones included — and only the
+    /// palette's Next and Previous Card walk the filtered order. On a
+    /// board whose needle matches only A of A → B → C, Down from A seats
+    /// dimmed B and announces it through the announced door, never "End of
+    /// canvas."; the palette's Next Card from A says the end of what it
+    /// walks. With A and C matched, the arrows go A → B → C while Next
+    /// Card skips B. The order is the document's one board order,
+    /// <c>SceneReadingOrder</c>: the whole scene in reading order, dimmed
+    /// cards marked.
+    /// </summary>
+    [Fact]
+    public void TheBoardsArrowsWalkTheFullSceneDimmedCardsIncluded() => RunSta(() =>
+    {
+        CanvasDocumentViewModel document = Open("board.canvas");
+        using HostedWindow host = HostBoard(document, out CanvasSurfaceView surface);
+        // A → B → C in the scene's reading order: evidence, note, loose.
+        IReadOnlyList<string> order = document.Outline.Select(row => row.NodeId).ToArray();
+        Assert.Equal(new[] { "evidence", "note", "loose" }, order.Skip(order.ToList().IndexOf("evidence")).Take(3));
+
+        // The needle matches ONLY A.
+        document.FilterText = "Evidence";
+        host.UpdateLayout();
+        Assert.Equal(new[] { "evidence" }, document.FilteredOutline.Select(row => row.NodeId));
+        Assert.True(surface.ProjectionHasFocus, "premise: the needle took the keys off the board.");
+        // The board's ONE order, the seam the arrows (and a landing on the
+        // board) read: the whole scene in the outline's reading order, with
+        // every card the needle did not keep marked dimmed.
+        Assert.Equal(order, document.SceneReadingOrder.Select(stop => stop.NodeId));
+        Assert.Equal(
+            order.Select(id => id != "evidence"),
+            document.SceneReadingOrder.Select(stop => stop.Dimmed));
+        IReadOnlyList<string> owed = LinesOf(document, "evidence", () => document.SelectNode("note"));
+        Assert.NotEmpty(owed);
+        document.SeatSelectionSilently("evidence");
+        Drain(document);
+
+        Assert.True(PressKey(surface, Key.Down, ModifierKeys.None));
+        Assert.True(
+            document.Selection.Selected == "note",
+            $"Down from A seated \"{document.Selection.Selected}\", not the dimmed B: the board walked the "
+            + "filtered rows, not the scene it draws (D4, #1270).");
+        IReadOnlyList<string> heard = Lines(document);
+        Assert.DoesNotContain(Rendered(new CanvasStatusNote.EndOfCanvas()), heard);
+        Assert.Equal(owed, heard);
+
+        // The palette's Next Card keeps the filtered order: from A, nothing
+        // it walks comes next.
+        document.SeatSelectionSilently("evidence");
+        Drain(document);
+        document.Navigator.NextCard();
+        Assert.Equal(Rendered(new CanvasStatusNote.EndOfCanvas()), OneLine(document));
+        Assert.Equal("evidence", document.Selection.Selected);
+
+        // The needle matches A and C: the arrows go A → B → C and back,
+        // while Next Card goes A → C.
+        document.FilterText = "zeta";
+        host.UpdateLayout();
+        Assert.Equal(new[] { "evidence", "loose" }, document.FilteredOutline.Select(row => row.NodeId));
+        document.SeatSelectionSilently("evidence");
+        Drain(document);
+        foreach ((Key key, string arrival) in new[]
+        {
+            (Key.Down, "note"),
+            (Key.Down, "loose"),
+            (Key.Up, "note"),
+        })
+        {
+            Assert.True(PressKey(surface, key, ModifierKeys.None));
+            Assert.Equal(arrival, document.Selection.Selected);
+        }
+        document.SeatSelectionSilently("evidence");
+        Drain(document);
+        document.Navigator.NextCard();
+        Assert.Equal("loose", document.Selection.Selected);
+    });
+
+    /// <summary>
     /// R-12 (#1255), owner decision OD-5: Right and Left on the board
     /// FOLLOW connections — the chord table's canvas-scope Follow
     /// Connection rows, delivered where the reader is (contract 39 N-3;
     /// D15's "the outline's" clause amended) — with the verb's own lines
     /// and seat, and a direction with no connection answering rather than
-    /// falling silent. Every board move brings its seat INTO VIEW, from a
-    /// viewport panned so it showed none of it: the pan a peer's Invoke
-    /// makes (D4), reached through the presenter's reveal.
+    /// falling silent. Every move the board's keys make brings its seat
+    /// INTO VIEW from a viewport panned so it showed none of it — the pan a
+    /// peer's Invoke makes, reached through the presenter's reveal — and so
+    /// do the palette's moves while Follow Selection is on, the pane's
+    /// default (D4's origin rule over both toggle states is the next
+    /// fact's).
     /// </summary>
     [Fact]
     public void TheBoardsRightAndLeftFollowConnectionsAndEveryMoveRevealsItsSeat() => RunSta(() =>
@@ -4046,6 +4136,7 @@ public sealed partial class CanvasNavigatorTests : IDisposable
         CanvasDocumentViewModel document = Open("board.canvas");
         using HostedWindow host = HostBoard(document, out CanvasSurfaceView surface);
         CanvasRendererView board = surface.VisualForTests;
+        Assert.True(board.Engine.CommittedViewport.FollowSelection, "premise: Follow Selection is on by default.");
 
         foreach ((Key key, bool forward, string arrival) in new (Key, bool, string)[]
         {
@@ -4086,24 +4177,23 @@ public sealed partial class CanvasNavigatorTests : IDisposable
         Assert.Equal("evidence", document.Selection.Selected);
 
         // The reading-order move reveals its seat the same way.
-        IReadOnlyList<CanvasOutlineRow> rows = document.FilteredOutline;
-        document.SeatSelectionSilently(rows[^2].NodeId);
+        IReadOnlyList<CanvasOutlineRow> scene = document.Outline;
+        document.SeatSelectionSilently(scene[^2].NodeId);
         board.Engine.CommitViewport(view => view.PannedTo(-5000, -5000));
         CanvasViewportState panned = board.Engine.CommittedViewport;
-        Assert.False(InView(board, rows[^1].NodeId), "premise: the last card was already in view.");
+        Assert.False(InView(board, scene[^1].NodeId), "premise: the last card was already in view.");
         Assert.True(PressKey(surface, Key.Down, ModifierKeys.None));
-        Assert.Equal(rows[^1].NodeId, document.Selection.Selected);
+        Assert.Equal(scene[^1].NodeId, document.Selection.Selected);
         Assert.False(
             panned.SameGeometry(board.Engine.CommittedViewport),
             "Down left the board's transform where the pan-away put it (D4).");
         Assert.True(
-            InView(board, rows[^1].NodeId),
+            InView(board, scene[^1].NodeId),
             "Down moved the seat and left it outside the board: the move never revealed it (D4).");
 
-        // The PALETTE's moves are board moves too (R-12: every move on the
-        // board reveals its seat) — Next Card and Follow Connection with no
-        // key pressed, each from a viewport that showed none of its
-        // destination.
+        // The PALETTE's moves reveal too while Follow Selection is on — Next
+        // Card and Follow Connection with no key pressed, each from a
+        // viewport that showed none of its destination.
         foreach ((string verb, Action move, string from, string arrival) in
             new (string, Action, string, string)[]
             {
@@ -4119,21 +4209,1368 @@ public sealed partial class CanvasNavigatorTests : IDisposable
             Assert.Equal(arrival, document.Selection.Selected);
             Assert.False(
                 before.SameGeometry(board.Engine.CommittedViewport),
-                $"the palette's {verb} left the board's transform where the pan-away put it (D4).");
+                $"the palette's {verb} left the board's transform where the pan-away put it while "
+                + "following the selection (D4).");
             Assert.True(
                 InView(board, arrival),
-                $"the palette's {verb} moved the seat and left it outside the board (D4).");
+                $"the palette's {verb} moved the seat and left it outside the board while following "
+                + "the selection (D4).");
         }
     });
 
     /// <summary>
-    /// R-12 (#1255): every move the board's arrows make ends by asking the
-    /// presenter to REVEAL the new seat — the reading-order move and the
-    /// follow alike — and so does every move the palette's verbs make there
-    /// (Next and Previous Card, Follow Connection, Enter and Exit Group,
-    /// Trace Path); a press that moved nothing asks for none. Pinned at the
-    /// seam the real board implements, through a recording presenter; the
-    /// hosted fact above pins the board's own pan.
+    /// Follow-up #1271, contract 34 D4's ORIGIN-SENSITIVE pan rule, over
+    /// both toggle states and both origins on the real board: a move made
+    /// ON the board — its Down and its Right — scrolls its seat into view
+    /// toggle or no toggle (WCAG 2.4.11); a move made ELSEWHERE — the
+    /// palette's Next Card and Follow Connection — pans only while Follow
+    /// Selection is on, and with it off leaves the viewport exactly where
+    /// it was, so the toggle's sentence is true when it speaks. Each leg
+    /// starts from a viewport that shows none of its destination.
+    /// </summary>
+    [Fact]
+    public void TheBoardRevealsItsOwnMovesAlwaysAndOtherMovesOnlyWhileFollowing() => RunSta(() =>
+    {
+        CanvasDocumentViewModel document = Open("board.canvas");
+        using HostedWindow host = HostBoard(document, out CanvasSurfaceView surface);
+        CanvasRendererView board = surface.VisualForTests;
+        var legs = new (string Name, CanvasMoveOrigin Origin, Action Move, string Arrival)[]
+        {
+            ("the board's Down", CanvasMoveOrigin.OnSurface,
+                () => Assert.True(PressKey(surface, Key.Down, ModifierKeys.None)), "evidence"),
+            ("the board's Right", CanvasMoveOrigin.OnSurface,
+                () => Assert.True(PressKey(surface, Key.Right, ModifierKeys.None)), "evidence"),
+            ("the palette's Next Card", CanvasMoveOrigin.Elsewhere, document.Navigator.NextCard, "evidence"),
+            ("the palette's Follow Connection", CanvasMoveOrigin.Elsewhere,
+                () => document.Navigator.FollowConnection(forward: true), "evidence"),
+        };
+
+        foreach (bool following in new[] { true, false })
+        {
+            if (board.Engine.CommittedViewport.FollowSelection != following)
+            {
+                document.Navigator.ToggleFollowSelection();
+            }
+            Assert.Equal(following, board.Engine.CommittedViewport.FollowSelection);
+            foreach ((string name, CanvasMoveOrigin origin, Action move, string arrival) in legs)
+            {
+                string leg = $"{name} with Follow Selection {(following ? "on" : "off")}";
+                document.SeatSelectionSilently("question");
+                board.Engine.CommitViewport(view => view.PannedTo(-5000, -5000));
+                CanvasViewportState before = board.Engine.CommittedViewport;
+                Assert.False(InView(board, arrival), $"premise ({leg}): the destination was already in view.");
+                Drain(document);
+
+                move();
+                Assert.Equal(arrival, document.Selection.Selected);
+                bool reveals = origin == CanvasMoveOrigin.OnSurface || following;
+                if (reveals)
+                {
+                    Assert.False(
+                        before.SameGeometry(board.Engine.CommittedViewport),
+                        $"{leg}: the viewport never moved, so nothing revealed \"{arrival}\" (D4).");
+                    Assert.True(InView(board, arrival), $"{leg}: \"{arrival}\" was left outside the board (D4).");
+                }
+                else
+                {
+                    Assert.True(
+                        before.SameGeometry(board.Engine.CommittedViewport),
+                        $"{leg}: the viewport panned although the move came from elsewhere and the pane "
+                        + "does not follow the selection — the toggle's sentence is false (D4, #1271).");
+                    Assert.False(InView(board, arrival), $"{leg}: \"{arrival}\" was brought into view.");
+                }
+            }
+        }
+    });
+
+    /// <summary>
+    /// D4's pan rule itself (follow-up #1271): a move made on the surface
+    /// reveals whatever the toggle says; a move made elsewhere reveals
+    /// exactly while Follow Selection is on — both toggle states against
+    /// both origins, on the viewport value the pane decides with.
+    /// </summary>
+    [Theory]
+    [InlineData(true, true, true)]
+    [InlineData(true, false, true)]
+    [InlineData(false, true, true)]
+    [InlineData(false, false, false)]
+    public void TheRevealRuleIsD4sOriginRule(bool madeOnSurface, bool following, bool reveals) =>
+        Assert.Equal(
+            reveals,
+            CanvasViewportState.Seed().WithFollowSelection(following).RevealsMoveFrom(
+                madeOnSurface ? CanvasMoveOrigin.OnSurface : CanvasMoveOrigin.Elsewhere));
+
+    /// <summary>
+    /// Follow-up #1271, review round 1 — D4's pan rule ACROSS PANES. One
+    /// canvas in two panes: the projection is the document's, so both panes
+    /// show the Visual board, and the navigator reveals through the one pane
+    /// it is attached to — pane A, whose board holds the keys. Pane B's board
+    /// must still follow the one shared selection: a card selected from pane
+    /// A — its board's Down, a card peer's Select on its board, the palette's
+    /// Next Card, and the document's selection door that the outline's and
+    /// the table's rows and every other verb use — pans pane B's board to
+    /// contain the card exactly while pane B's own Follow Selection is on,
+    /// and leaves pane B's viewport where it was while it is off. Each leg
+    /// starts with the destination outside pane B's viewport.
+    /// </summary>
+    [Fact]
+    public void AFollowingBoardInAnotherPanePansToTheSelectionAndAnUnfollowingOneStays() => RunSta(() =>
+    {
+        CanvasDocumentViewModel document = Open("board.canvas");
+        using HostedWindow host = HostTwoBoards(document, out CanvasSurfaceView paneA, out CanvasSurfaceView paneB);
+        CanvasRendererView boardA = paneA.VisualForTests;
+        CanvasRendererView boardB = paneB.VisualForTests;
+
+        var legs = new (string Name, Action Select)[]
+        {
+            ("pane A's board's Down", () => Assert.True(PressKey(paneA, Key.Down, ModifierKeys.None))),
+            ("a card peer's Select on pane A's board", () =>
+                ((System.Windows.Automation.Provider.ISelectionItemProvider)
+                    boardA.PeerFor(CanvasPeerKey.Card("evidence"))!).Select()),
+            ("the palette's Next Card", document.Navigator.NextCard),
+            ("the document's selection door", () => document.SelectNode("evidence")),
+        };
+        foreach (bool following in new[] { true, false })
+        {
+            if (boardB.Engine.CommittedViewport.FollowSelection != following)
+            {
+                _ = paneB.ViewportCommand(CanvasViewportVerb.ToggleFollowSelection);
+            }
+            Assert.Equal(following, boardB.Engine.CommittedViewport.FollowSelection);
+            Assert.True(
+                boardA.Engine.CommittedViewport.FollowSelection,
+                "premise: pane B's toggle reached pane A's board.");
+            foreach ((string name, Action select) in legs)
+            {
+                string leg = $"{name}, pane B's Follow Selection {(following ? "on" : "off")}";
+                document.SeatSelectionSilently("question");
+                boardB.Engine.CommitViewport(view => view.PannedTo(-5000, -5000));
+                CanvasViewportState before = boardB.Engine.CommittedViewport;
+                Assert.False(
+                    InView(boardB, "evidence"),
+                    $"premise ({leg}): the destination was already in pane B's view.");
+                Drain(document);
+
+                select();
+                Assert.Equal("evidence", document.Selection.Selected);
+                if (following)
+                {
+                    Assert.False(
+                        before.SameGeometry(boardB.Engine.CommittedViewport),
+                        $"{leg}: pane B's board never moved — it follows the selection, and the "
+                        + "selection moved off its view (D4, #1271).");
+                    Assert.True(
+                        InView(boardB, "evidence"),
+                        $"{leg}: pane B's board panned and left \"evidence\" outside it (D4).");
+                }
+                else
+                {
+                    Assert.True(
+                        before.SameGeometry(boardB.Engine.CommittedViewport),
+                        $"{leg}: pane B's board panned although it does not follow the selection "
+                        + "and the move was not its own (D4, #1271).");
+                }
+            }
+        }
+    });
+
+    /// <summary>
+    /// Follow-up #1271, review round 2 — a reveal OWED across a publication.
+    /// New Card seats a card no board has installed yet: the document
+    /// publishes the successor and moves the one shared selection to the new
+    /// card at once, while each board's engine builds and installs that
+    /// successor later, off the dispatcher. A board that follows the
+    /// selection still brings the card into view once the state that has it
+    /// lands — in the pane that holds the keys and in the other pane alike.
+    /// Both boards start panned so that the card, wherever core places it,
+    /// lands outside both views.
+    /// </summary>
+    [Fact]
+    public void AFollowingBoardRevealsANewCardOnceTheStateThatHasItInstalls() => RunSta(() =>
+    {
+        CanvasDocumentViewModel document = Open("board.canvas");
+        using HostedWindow host = HostTwoBoards(document, out CanvasSurfaceView paneA, out CanvasSurfaceView paneB);
+        CanvasRendererView boardA = paneA.VisualForTests;
+        CanvasRendererView boardB = paneB.VisualForTests;
+        Assert.True(
+            boardA.Engine.CommittedViewport.FollowSelection && boardB.Engine.CommittedViewport.FollowSelection,
+            "premise: both boards follow the selection by default.");
+        document.SeatSelectionSilently("question");
+        boardA.Engine.CommitViewport(view => view.PannedTo(-5000, -5000));
+        boardB.Engine.CommitViewport(view => view.PannedTo(-5000, -5000));
+
+        document.CanvasNewCard();
+        string created = Assert.IsType<string>(document.Selection.Selected);
+        Assert.False(
+            Installed(boardA, created) || Installed(boardB, created),
+            "premise: a board had installed the new card before the selection reached it, so no "
+            + "reveal was ever owed across the publication.");
+
+        PumpUntil(
+            () => Installed(boardA, created) && Installed(boardB, created),
+            "premise: the state that has the new card never installed on both boards.");
+        Assert.True(
+            InView(boardA, created),
+            "pane A's board (the keys' pane) installed the new card and left it outside its view: "
+            + "the follow-selection reveal was dropped while its card was not installed (D4, #1271).");
+        Assert.True(
+            InView(boardB, created),
+            "pane B's board installed the new card and left it outside its view: the follow-selection "
+            + "reveal was dropped while its card was not installed (D4, #1271).");
+    });
+
+    /// <summary>
+    /// Follow-up #1271, review round 2 — what an OWED reveal is paid for.
+    /// With Follow Selection OFF, the board's own Down onto a card its engine
+    /// has not installed yet is a move made ON the board, which D4 reveals
+    /// whatever the toggle says: the reveal is owed, and paid when the state
+    /// that has the card lands. If the seat has moved to another card by
+    /// then, the owed reveal is dropped, never replayed — it is paid only for
+    /// the card that is still the seat.
+    /// </summary>
+    [Theory]
+    [InlineData(false)]
+    [InlineData(true)]
+    public void AnOwedRevealIsPaidOnlyForTheCardThatIsStillTheSeat(bool seatMovesOnFirst) => RunSta(() =>
+    {
+        CanvasDocumentViewModel document = Open("board.canvas");
+        using HostedWindow host = HostBoard(document, out CanvasSurfaceView surface);
+        CanvasRendererView board = surface.VisualForTests;
+        _ = surface.ViewportCommand(CanvasViewportVerb.ToggleFollowSelection);
+        Assert.False(board.Engine.CommittedViewport.FollowSelection, "premise: the board still follows the selection.");
+        document.SeatSelectionSilently("question");
+
+        document.CanvasNewCard();
+        string created = Assert.IsType<string>(document.Selection.Selected);
+        List<string> order = document.SceneReadingOrder.Select(stop => stop.NodeId).ToList();
+        int at = order.IndexOf(created);
+        (string from, Key key) = at > 0 ? (order[at - 1], Key.Down) : (order[at + 1], Key.Up);
+        document.SeatSelectionSilently(from);
+        board.Engine.CommitViewport(view => view.PannedTo(-5000, -5000));
+        CanvasViewportState before = board.Engine.CommittedViewport;
+
+        Assert.True(PressKey(surface, key, ModifierKeys.None));
+        Assert.Equal(created, document.Selection.Selected);
+        Assert.False(
+            Installed(board, created),
+            "premise: the board had installed the new card before its own move reached it, so the "
+            + "reveal was paid at once and nothing was owed.");
+        string? elsewhere = null;
+        if (seatMovesOnFirst)
+        {
+            // Made elsewhere with Follow Selection off: this board does not pan
+            // for it, so only the owed reveal's own rule can stop a stale pan.
+            elsewhere = order.First(id => id != created && id != from);
+            document.SelectNode(elsewhere);
+        }
+
+        PumpUntil(() => Installed(board, created), "premise: the state that has the new card never installed.");
+        if (seatMovesOnFirst)
+        {
+            Assert.True(
+                before.SameGeometry(board.Engine.CommittedViewport),
+                $"the board paid a reveal owed to \"{created}\" after the seat had moved on to "
+                + $"\"{elsewhere}\": an owed reveal is paid only for the card that is still the seat (#1271).");
+        }
+        else
+        {
+            Assert.False(
+                before.SameGeometry(board.Engine.CommittedViewport),
+                "the board's own Down onto a card it had not installed yet was never revealed: a move "
+                + "made on the board is revealed whatever the toggle says, once its card installs (D4, #1271).");
+            Assert.True(InView(board, created), $"the owed reveal left \"{created}\" outside the board.");
+        }
+    });
+
+    /// <summary>
+    /// Follow-up #1271, review round 2 — an owed reveal made ELSEWHERE lapses
+    /// when the board stops following the selection before it is paid: New
+    /// Card's selection is owed a reveal while Follow Selection is on, the
+    /// toggle goes off before the card's state installs, and the board stays
+    /// where the reader left it.
+    /// </summary>
+    [Fact]
+    public void AnOwedElsewhereRevealLapsesWhenTheBoardStopsFollowing() => RunSta(() =>
+    {
+        CanvasDocumentViewModel document = Open("board.canvas");
+        using HostedWindow host = HostBoard(document, out CanvasSurfaceView surface);
+        CanvasRendererView board = surface.VisualForTests;
+        Assert.True(board.Engine.CommittedViewport.FollowSelection, "premise: Follow Selection is on by default.");
+        document.SeatSelectionSilently("question");
+        board.Engine.CommitViewport(view => view.PannedTo(-5000, -5000));
+
+        document.CanvasNewCard();
+        string created = Assert.IsType<string>(document.Selection.Selected);
+        Assert.False(Installed(board, created), "premise: the board had already installed the new card.");
+        _ = surface.ViewportCommand(CanvasViewportVerb.ToggleFollowSelection);
+        Assert.False(board.Engine.CommittedViewport.FollowSelection, "premise: the toggle did not turn off.");
+        CanvasViewportState before = board.Engine.CommittedViewport;
+
+        PumpUntil(() => Installed(board, created), "premise: the state that has the new card never installed.");
+        Assert.True(
+            before.SameGeometry(board.Engine.CommittedViewport),
+            "the board paid a reveal made elsewhere after it stopped following the selection (D4, #1271).");
+    });
+
+    /// <summary>
+    /// Follow-up #1271, review round 3 — the ABA schedule for Follow
+    /// Selection: an elsewhere debt LAPSES when the board stops following
+    /// (D15), and a lapsed debt is gone — turning Follow Selection back on
+    /// before the card's state installs must not revive it. New Card's
+    /// selection is owed a reveal with Follow on; the toggle goes off and on
+    /// again while the successor is still in flight; the board stays where the
+    /// reader left it.
+    /// </summary>
+    [Fact]
+    public void AnElsewhereDebtStaysLapsedWhenFollowingResumesBeforeItsCardInstalls() => RunSta(() =>
+    {
+        CanvasDocumentViewModel document = Open("board.canvas");
+        using HostedWindow host = HostBoard(document, out CanvasSurfaceView surface);
+        CanvasRendererView board = surface.VisualForTests;
+        Assert.True(board.Engine.CommittedViewport.FollowSelection, "premise: Follow Selection is on by default.");
+        document.SeatSelectionSilently("question");
+        board.Engine.CommitViewport(view => view.PannedTo(-5000, -5000));
+
+        document.CanvasNewCard();
+        string created = Assert.IsType<string>(document.Selection.Selected);
+        Assert.False(Installed(board, created), "premise: the board had already installed the new card.");
+        _ = surface.ViewportCommand(CanvasViewportVerb.ToggleFollowSelection);
+        Assert.False(board.Engine.CommittedViewport.FollowSelection, "premise: the toggle did not turn off.");
+        _ = surface.ViewportCommand(CanvasViewportVerb.ToggleFollowSelection);
+        Assert.True(board.Engine.CommittedViewport.FollowSelection, "premise: the toggle did not turn back on.");
+        Assert.False(Installed(board, created), "premise: the card installed while the toggle went off and on.");
+        CanvasViewportState before = board.Engine.CommittedViewport;
+
+        PumpUntil(() => Installed(board, created), "premise: the state that has the new card never installed.");
+        Assert.True(
+            before.SameGeometry(board.Engine.CommittedViewport),
+            "the board paid an elsewhere reveal that had lapsed when it stopped following: turning Follow "
+            + "Selection back on revived a debt D15 says is gone (D4, #1271).");
+    });
+
+    /// <summary>
+    /// Follow-up #1271, review round 3 — the ABA schedule for the seat:
+    /// with Follow Selection OFF, the board's own Down onto a card it has not
+    /// installed yet is owed a reveal; the seat then leaves (to B) and comes
+    /// back (to A) from ELSEWHERE before the card installs. The later selection
+    /// change voided the debt (D15), and the selection of A that stands is one
+    /// made elsewhere with the board not following, which D4 does not reveal —
+    /// so the board stays where the reader left it.
+    /// </summary>
+    [Fact]
+    public void ABoardMoveDebtIsVoidedWhenTheSeatLeavesAndReturnsBeforeItsCardInstalls() => RunSta(() =>
+    {
+        CanvasDocumentViewModel document = Open("board.canvas");
+        using HostedWindow host = HostBoard(document, out CanvasSurfaceView surface);
+        CanvasRendererView board = surface.VisualForTests;
+        _ = surface.ViewportCommand(CanvasViewportVerb.ToggleFollowSelection);
+        Assert.False(board.Engine.CommittedViewport.FollowSelection, "premise: the board still follows the selection.");
+        document.SeatSelectionSilently("question");
+
+        document.CanvasNewCard();
+        string created = Assert.IsType<string>(document.Selection.Selected);
+        List<string> order = document.SceneReadingOrder.Select(stop => stop.NodeId).ToList();
+        int at = order.IndexOf(created);
+        (string from, Key key) = at > 0 ? (order[at - 1], Key.Down) : (order[at + 1], Key.Up);
+        document.SeatSelectionSilently(from);
+        board.Engine.CommitViewport(view => view.PannedTo(-5000, -5000));
+        CanvasViewportState before = board.Engine.CommittedViewport;
+
+        Assert.True(PressKey(surface, key, ModifierKeys.None));
+        Assert.Equal(created, document.Selection.Selected);
+        string elsewhere = order.First(id => id != created && id != from);
+        document.SelectNode(elsewhere);
+        document.SelectNode(created);
+        Assert.Equal(created, document.Selection.Selected);
+        Assert.False(
+            Installed(board, created),
+            "premise: the card installed before the seat left and came back, so nothing was owed across it.");
+
+        PumpUntil(() => Installed(board, created), "premise: the state that has the new card never installed.");
+        Assert.True(
+            before.SameGeometry(board.Engine.CommittedViewport),
+            $"the board paid its own Down's reveal after the seat had moved to \"{elsewhere}\" and come back to "
+            + $"\"{created}\" from elsewhere with Follow Selection off: the later selection change voided that "
+            + "debt (D15), and D4 does not reveal the selection that stands (#1271).");
+    });
+
+    /// <summary>
+    /// Follow-up #1271, review round 3 — a reveal is paid ONCE. After
+    /// the install that brings New Card's card pays the owed reveal, the
+    /// reader pans away and the board installs again; the paid debt must not
+    /// pull the view back.
+    /// </summary>
+    [Fact]
+    public void APaidRevealIsNeverPaidAgainByALaterInstall() => RunSta(() =>
+    {
+        CanvasDocumentViewModel document = Open("board.canvas");
+        using HostedWindow host = HostBoard(document, out CanvasSurfaceView surface);
+        CanvasRendererView board = surface.VisualForTests;
+        Assert.True(board.Engine.CommittedViewport.FollowSelection, "premise: Follow Selection is on by default.");
+        document.SeatSelectionSilently("question");
+        board.Engine.CommitViewport(view => view.PannedTo(-5000, -5000));
+
+        document.CanvasNewCard();
+        string created = Assert.IsType<string>(document.Selection.Selected);
+        Assert.False(Installed(board, created), "premise: the board had already installed the new card.");
+        PumpUntil(
+            () => Installed(board, created) && InView(board, created),
+            "premise: the owed reveal was never paid, so there is nothing to pay twice.");
+        // Settled first, and again after the pan-away: the board has installed
+        // the population the document has applied with the viewport it
+        // committed, so no install still in flight can land after the check
+        // and hide a second payment (without these waits the paid-clear
+        // mutant escaped this fact one run in five, codex's final check).
+        PumpUntil(
+            () => SettledOnAppliedPopulation(board, document),
+            "premise: the board never settled on the document's applied population after paying.");
+
+        // The reader pans away; the pan is itself a new state, and it installs.
+        board.Engine.CommitViewport(view => view.PannedTo(-5000, -5000));
+        CanvasViewportState before = board.Engine.CommittedViewport;
+        PumpUntil(
+            () => SettledOnAppliedPopulation(board, document),
+            "premise: no state installed after the pan-away.");
+        Pump();
+        Pump();
+        Assert.True(
+            before.SameGeometry(board.Engine.CommittedViewport),
+            "a later install paid the already-paid reveal again and pulled the view back to the new card: a "
+            + "debt is cleared when it is paid (D15, #1271).");
+        Assert.False(InView(board, created), "the pan-away was undone.");
+    });
+
+    /// <summary>
+    /// Follow-up #1271, review round 3 — a debt belongs to its
+    /// document. The board owes New Card's card a reveal on document X; before
+    /// that card installs, the pane is rebound to document Y, whose seat is a
+    /// card with the SAME id at the SAME selection revision the debt was owed
+    /// at — so no token can tell the two seats apart, and only the document
+    /// change itself drops the debt. Y's state installs with that id in it,
+    /// and the board must not pay X's debt against Y.
+    /// </summary>
+    [Fact]
+    public void ARebindToAnotherDocumentDropsTheDebtEvenForACollidingNodeId() => RunSta(() =>
+    {
+        CanvasDocumentViewModel document = Open("board.canvas");
+        using HostedWindow host = HostBoard(document, out CanvasSurfaceView surface);
+        CanvasRendererView board = surface.VisualForTests;
+        Assert.True(board.Engine.CommittedViewport.FollowSelection, "premise: Follow Selection is on by default.");
+        // X's seat moves a while first, so the revision the debt is owed at is
+        // one Y's seat can be brought to.
+        for (int step = 0; step < 10; step++)
+        {
+            document.SeatSelectionSilently("evidence");
+            document.SeatSelectionSilently("question");
+        }
+        board.Engine.CommitViewport(view => view.PannedTo(-5000, -5000));
+
+        document.CanvasNewCard();
+        string created = Assert.IsType<string>(document.Selection.Selected);
+        long owedAt = document.Selection.Revision;
+        Assert.False(Installed(board, created), "premise: the board had already installed the new card.");
+
+        File.WriteAllText(
+            Path.Combine(_fixture.Root, "collide.canvas"),
+            "{\"nodes\":["
+            + "{\"id\":\"" + created + "\",\"type\":\"text\",\"text\":\"Same id, another canvas\","
+            + "\"x\":0,\"y\":0,\"width\":200,\"height\":100},"
+            + "{\"id\":\"spare\",\"type\":\"text\",\"text\":\"Spare\",\"x\":0,\"y\":400,\"width\":200,\"height\":100}"
+            + "],\"edges\":[]}");
+        CanvasDocumentViewModel other = Open("collide.canvas");
+        other.ShowSurface(CanvasSurfaceKind.Visual);
+        Assert.Equal(created, other.Selection.Selected);
+        long gap = owedAt - other.Selection.Revision;
+        Assert.True(gap >= 2, $"premise: Y's seat is already at revision {other.Selection.Revision}, past {owedAt}.");
+        if (gap % 2 == 1)
+        {
+            other.SeatSelectionSilently(null);
+            other.SeatSelectionSilently("spare");
+            other.SeatSelectionSilently(created);
+        }
+        while (other.Selection.Revision < owedAt)
+        {
+            other.SeatSelectionSilently(null);
+            other.SeatSelectionSilently(created);
+        }
+        Assert.True(
+            other.Selection.Revision == owedAt && other.Selection.Selected == created,
+            "premise: Y's seat is not the same id at the same revision, so a token could tell the seats apart.");
+        CanvasViewportState before = board.Engine.CommittedViewport;
+
+        surface.Model = other;
+        PumpUntil(
+            () => board.Engine.Current?.Source.Loaded?.Population is { Count: 2 } population
+                && population.SceneByNode.ContainsKey(created),
+            "premise: the other document's state never installed on the board.");
+        Assert.True(
+            before.SameGeometry(board.Engine.CommittedViewport),
+            "the board paid a debt owed on the old document against the new one's card with the same id: a "
+            + "document change drops the debt (D15, #1271).");
+    });
+
+    /// <summary>
+    /// Follow-up #1271, review round 3 — the seat's clock: the selection
+    /// revision counts every change of the seat and nothing else, and it is
+    /// already the new revision when the change is raised (a reveal owed
+    /// during the change takes the right token). A seat that leaves and comes
+    /// back is a LATER revision.
+    /// </summary>
+    [Fact]
+    public void TheSelectionRevisionCountsEveryChangeOfTheSeatAndNothingElse()
+    {
+        var selection = new CanvasSelection();
+        var raised = new List<long>();
+        selection.PropertyChanged += (_, e) =>
+        {
+            if (e.PropertyName == nameof(CanvasSelection.Selected))
+            {
+                raised.Add(selection.Revision);
+            }
+        };
+        Assert.Equal(0, selection.Revision);
+        foreach ((string? seat, long revision) in new (string?, long)[]
+        {
+            ("a", 1), ("a", 1), ("b", 2), ("a", 3), (null, 4), (null, 4),
+        })
+        {
+            selection.Selected = seat;
+            Assert.Equal(revision, selection.Revision);
+        }
+        selection.ActiveSurface = CanvasSurfaceKind.Visual;
+        Assert.Equal(4, selection.Revision);
+        Assert.Equal(new long[] { 1, 2, 3, 4 }, raised);
+    }
+
+    /// <summary>
+    /// Follow-up #1271, review round 3 — the toggle's clock: the viewport
+    /// counts a lapse exactly when Follow Selection goes from on to off, never
+    /// when it goes on or stays put, and every other transform carries the
+    /// count, so on → off → on is a later count than the one before it.
+    /// </summary>
+    [Fact]
+    public void TheViewportCountsAFollowLapseOnlyWhenFollowingStops()
+    {
+        CanvasViewportState seed = CanvasViewportState.Seed();
+        Assert.Equal(0, seed.FollowLapses);
+        CanvasViewportState off = seed.WithFollowSelection(false);
+        Assert.Equal(1, off.FollowLapses);
+        Assert.Equal(1, off.WithFollowSelection(false).FollowLapses);
+        CanvasViewportState on = off.WithFollowSelection(true);
+        Assert.Equal(1, on.FollowLapses);
+        Assert.Equal(1, on.WithFollowSelection(true).FollowLapses);
+        CanvasViewportState lapsedTwice = on.WithFollowSelection(false);
+        Assert.Equal(2, lapsedTwice.FollowLapses);
+        foreach (CanvasViewportState carried in new[]
+        {
+            lapsedTwice.PannedTo(5, 7),
+            lapsedTwice.WithViewSize(640, 480),
+            lapsedTwice.WithZoom(2, 10, 10),
+            lapsedTwice.ZoomedIn(0, 0),
+            lapsedTwice.ZoomedOut(0, 0),
+            lapsedTwice.AtActualSize(0, 0),
+        })
+        {
+            Assert.Equal(2, carried.FollowLapses);
+        }
+    }
+
+    /// <summary>
+    /// Follow-up #1271, owner decision (review round 3) — SHOWN AGAIN in the
+    /// production tab lifecycle (codex's final check): the workspace's pane is
+    /// ONE selected-content TabControl over the real tab template, so a tab
+    /// switch UNBINDS the pane's canvas surface (its model goes to the other
+    /// tab's, none for a note) and rebinds the same surface on the way back.
+    /// One canvas in two panes: pane B's canvas tab goes behind a note tab,
+    /// pane A's board moves the shared seat off pane B's view, and when pane B
+    /// returns to the canvas tab its board, which follows the selection,
+    /// scrolls to the seat. A board that does not follow the selection comes
+    /// back exactly where it was left.
+    /// </summary>
+    [Theory]
+    [InlineData(true)]
+    [InlineData(false)]
+    public void AFollowingBoardHiddenBehindAnotherTabScrollsToTheSelectionWhenShown(bool follows) => RunSta(() =>
+    {
+        CanvasDocumentViewModel document = Open("board.canvas");
+        using WorkspaceTabViewModel canvasTab = CanvasTab(document, "board.canvas");
+        using WorkspaceTabViewModel noteTab = NoteTab("note0.md");
+        using HostedWindow host = HostBoardBesideATabbedPane(
+            document, [canvasTab, noteTab], out CanvasSurfaceView paneA, out TabControl tabsB);
+        CanvasSurfaceView paneB = SurfaceIn(tabsB);
+        CanvasRendererView boardB = paneB.VisualForTests;
+        PumpUntil(() => boardB.Engine.Current is not null, "premise: pane B's board never installed its first state.");
+        Assert.True(boardB.Engine.CommittedViewport.FollowSelection, "premise: pane B follows the selection.");
+        if (!follows)
+        {
+            _ = paneB.ViewportCommand(CanvasViewportVerb.ToggleFollowSelection);
+            Assert.False(boardB.Engine.CommittedViewport.FollowSelection, "premise: pane B still follows.");
+        }
+        document.SeatSelectionSilently("question");
+        boardB.Engine.CommitViewport(view => view.PannedTo(-5000, -5000));
+        PumpUntil(
+            () => boardB.Engine.Current!.Viewport.SameGeometry(boardB.Engine.CommittedViewport),
+            "premise: pane B's pan-away never installed.");
+        CanvasViewportState parked = boardB.Engine.CommittedViewport;
+
+        tabsB.SelectedItem = noteTab;
+        host.UpdateLayout();
+        Pump();
+        Assert.True(
+            ReferenceEquals(SurfaceIn(tabsB), paneB) && paneB.Model is null,
+            "premise: the tab switch did not unbind pane B's canvas surface in place — the production "
+            + "TabControl reuses the selected-content surface and hands it the note tab's (absent) canvas.");
+
+        Assert.True(PressKey(paneA, Key.Down, ModifierKeys.None));
+        string seat = Assert.IsType<string>(document.Selection.Selected);
+        Assert.NotEqual("question", seat);
+        Pump();
+        Assert.True(
+            parked.SameGeometry(boardB.Engine.CommittedViewport),
+            "pane B's board moved while its tab was behind another: nothing moves under a board no one can see.");
+
+        tabsB.SelectedItem = canvasTab;
+        host.UpdateLayout();
+        Assert.True(
+            ReferenceEquals(SurfaceIn(tabsB), paneB) && ReferenceEquals(paneB.Model, document),
+            "premise: returning to the canvas tab did not rebind pane B's own surface, so its board is not the "
+            + "one whose view was parked.");
+        if (!follows)
+        {
+            PumpUntil(
+                () => boardB.IsVisible && boardB.Engine.Current!.Viewport.SameGeometry(boardB.Engine.CommittedViewport),
+                "premise: pane B's board never showed and installed after its tab returned.");
+            Pump();
+            Assert.True(
+                parked.SameGeometry(boardB.Engine.CommittedViewport),
+                "pane B's board does not follow the selection, yet it moved to the seat pane A chose while its tab "
+                + "was behind another (D4, #1271).");
+            return;
+        }
+        PumpUntil(
+            () => InView(boardB, seat),
+            "pane B returned to its canvas tab and its board never scrolled to the seat pane A moved it to while "
+            + "the tab was behind another: a following board reveals the selection when it is next shown, and a "
+            + "tab switch rebinds the board (owner decision, codex's final check, #1271).");
+    });
+
+    /// <summary>
+    /// Follow-up #1271, codex's final check — a reveal the board still OWED
+    /// when its tab went behind another is still owed when the tab returns,
+    /// if the seat has not moved since: the seat moves while the outline
+    /// shows (both panes, the projection being the document's), pane B's
+    /// canvas tab goes behind a note tab and comes back, and when the board
+    /// is shown it scrolls to the seat.
+    /// </summary>
+    [Fact]
+    public void ARevealOwedWhenATabGoesBehindAnotherIsStillOwedWhenItReturns() => RunSta(() =>
+    {
+        CanvasDocumentViewModel document = Open("board.canvas");
+        using WorkspaceTabViewModel canvasTab = CanvasTab(document, "board.canvas");
+        using WorkspaceTabViewModel noteTab = NoteTab("note0.md");
+        using HostedWindow host = HostBoardBesideATabbedPane(
+            document, [canvasTab, noteTab], out _, out TabControl tabsB);
+        CanvasSurfaceView paneB = SurfaceIn(tabsB);
+        CanvasRendererView boardB = paneB.VisualForTests;
+        PumpUntil(() => boardB.Engine.Current is not null, "premise: pane B's board never installed its first state.");
+        document.SeatSelectionSilently("question");
+        boardB.Engine.CommitViewport(view => view.PannedTo(-5000, -5000));
+        PumpUntil(
+            () => boardB.Engine.Current!.Viewport.SameGeometry(boardB.Engine.CommittedViewport),
+            "premise: pane B's pan-away never installed.");
+        CanvasViewportState parked = boardB.Engine.CommittedViewport;
+
+        document.ShowSurface(CanvasSurfaceKind.Outline);
+        host.UpdateLayout();
+        Assert.False(boardB.IsVisible, "premise: pane B's board is still showing under the outline.");
+        document.SelectNode("loose");
+        long revision = document.Selection.Revision;
+
+        tabsB.SelectedItem = noteTab;
+        host.UpdateLayout();
+        Assert.True(paneB.Model is null, "premise: the tab switch did not unbind pane B's canvas surface.");
+        tabsB.SelectedItem = canvasTab;
+        host.UpdateLayout();
+        Assert.True(ReferenceEquals(paneB.Model, document), "premise: pane B's surface was not rebound.");
+        Assert.True(document.Selection.Revision == revision, "premise: the seat moved across the tab switch.");
+        Pump();
+        Assert.True(parked.SameGeometry(boardB.Engine.CommittedViewport), "pane B's board moved under the outline.");
+
+        document.ShowSurface(CanvasSurfaceKind.Visual);
+        host.UpdateLayout();
+        PumpUntil(
+            () => InView(boardB, "loose"),
+            "pane B's board owed the seat when its tab went behind another and, the seat unmoved, never paid it "
+            + "once shown: a reveal owed before a tab switch is still owed after it (codex's final check, #1271).");
+    });
+
+    /// <summary>
+    /// Follow-up #1271, codex's final check — the follow rule across a tab
+    /// switch: pane B shows another canvas while pane A moves the seat. A
+    /// board that followed throughout scrolls to the seat when its tab
+    /// returns. One that did not — it stopped following on the other canvas's
+    /// tab and resumed ("lapses"), or it was not following when it left and
+    /// began on the other tab ("resumes") — cannot tell when the seat moved
+    /// against when it followed, and comes back where it was left.
+    /// </summary>
+    [Theory]
+    [InlineData("throughout")]
+    [InlineData("lapses")]
+    [InlineData("resumes")]
+    public void ABoardThatStopsFollowingWhileItsTabIsAwayDoesNotScrollWhenItReturns(string following) => RunSta(() =>
+    {
+        File.WriteAllText(
+            Path.Combine(_fixture.Root, "other.canvas"),
+            "{\"nodes\":[{\"id\":\"only\",\"type\":\"text\",\"text\":\"Only\",\"x\":0,\"y\":0,\"width\":200,\"height\":100}],"
+            + "\"edges\":[]}");
+        CanvasDocumentViewModel document = Open("board.canvas");
+        CanvasDocumentViewModel other = Open("other.canvas");
+        using WorkspaceTabViewModel canvasTab = CanvasTab(document, "board.canvas");
+        using WorkspaceTabViewModel otherTab = CanvasTab(other, "other.canvas");
+        using HostedWindow host = HostBoardBesideATabbedPane(
+            document, [canvasTab, otherTab], out CanvasSurfaceView paneA, out TabControl tabsB);
+        CanvasSurfaceView paneB = SurfaceIn(tabsB);
+        CanvasRendererView boardB = paneB.VisualForTests;
+        PumpUntil(() => boardB.Engine.Current is not null, "premise: pane B's board never installed its first state.");
+        if (following == "resumes")
+        {
+            _ = paneB.ViewportCommand(CanvasViewportVerb.ToggleFollowSelection);
+            Assert.False(boardB.Engine.CommittedViewport.FollowSelection, "premise: pane B still follows.");
+        }
+        document.SeatSelectionSilently("question");
+        boardB.Engine.CommitViewport(view => view.PannedTo(-5000, -5000));
+        PumpUntil(
+            () => boardB.Engine.Current!.Viewport.SameGeometry(boardB.Engine.CommittedViewport),
+            "premise: pane B's pan-away never installed.");
+        CanvasViewportState parked = boardB.Engine.CommittedViewport;
+
+        tabsB.SelectedItem = otherTab;
+        host.UpdateLayout();
+        Assert.True(
+            ReferenceEquals(SurfaceIn(tabsB), paneB) && ReferenceEquals(paneB.Model, other),
+            "premise: the tab switch did not rebind pane B's surface to the other canvas.");
+        other.ShowSurface(CanvasSurfaceKind.Visual);
+        host.UpdateLayout();
+        long lapsesBefore = boardB.Engine.CommittedViewport.FollowLapses;
+        if (following == "lapses")
+        {
+            _ = paneB.ViewportCommand(CanvasViewportVerb.ToggleFollowSelection);
+            _ = paneB.ViewportCommand(CanvasViewportVerb.ToggleFollowSelection);
+            Assert.True(
+                boardB.Engine.CommittedViewport.FollowSelection
+                    && boardB.Engine.CommittedViewport.FollowLapses == lapsesBefore + 1,
+                "premise: pane B's board did not stop and resume following on the other canvas.");
+        }
+        else if (following == "resumes")
+        {
+            _ = paneB.ViewportCommand(CanvasViewportVerb.ToggleFollowSelection);
+            Assert.True(
+                boardB.Engine.CommittedViewport.FollowSelection
+                    && boardB.Engine.CommittedViewport.FollowLapses == lapsesBefore,
+                "premise: pane B's board did not begin following on the other canvas without a lapse.");
+        }
+        Assert.True(PressKey(paneA, Key.Down, ModifierKeys.None));
+        string seat = Assert.IsType<string>(document.Selection.Selected);
+        Assert.NotEqual("question", seat);
+
+        tabsB.SelectedItem = canvasTab;
+        host.UpdateLayout();
+        Assert.True(ReferenceEquals(paneB.Model, document), "premise: pane B's surface was not rebound.");
+        if (following != "throughout")
+        {
+            PumpUntil(
+                () => boardB.IsVisible
+                    && ReferenceEquals(boardB.Engine.Current!.Source, document.AppliedPublication)
+                    && boardB.Engine.Current.Viewport.SameGeometry(boardB.Engine.CommittedViewport),
+                "premise: pane B's board never showed and installed its canvas again.");
+            Pump();
+            CanvasViewportState found = boardB.Engine.CommittedViewport;
+            Assert.True(
+                found.PanX == parked.PanX && found.PanY == parked.PanY && found.Zoom == parked.Zoom,
+                $"pane B's board did not follow the selection throughout its tab's absence ({following}), yet it "
+                + "scrolled to the seat when it returned: a board that stopped, or had not started, following while "
+                + $"away pays nothing (D4, #1271). Left at ({parked.PanX}, {parked.PanY}), found at "
+                + $"({found.PanX}, {found.PanY}).");
+            return;
+        }
+        PumpUntil(
+            () => ReferenceEquals(boardB.Engine.Current!.Source.Loaded?.Population, document.AppliedPublication!.Population)
+                && InView(boardB, seat),
+            "pane B's board followed the selection throughout while another canvas's tab showed, and never "
+            + "scrolled to the seat pane A moved it to (codex's final check, #1271).");
+    });
+
+    /// <summary>
+    /// Follow-up #1271, owner decision (review round 3) — shown again when a
+    /// pane's canvas surface is COLLAPSED while still bound (no rebind): the
+    /// board holds the reveal while it is not visible, and pays it after the
+    /// layout pass that shows it again, since showing it may bring no install.
+    /// One canvas in two panes: pane B is collapsed, pane A's board moves the
+    /// seat.
+    /// </summary>
+    [Fact]
+    public void AFollowingBoardCollapsedInItsPaneScrollsToTheSelectionWhenShown() => RunSta(() =>
+    {
+        CanvasDocumentViewModel document = Open("board.canvas");
+        using HostedWindow host = HostTwoBoards(document, out CanvasSurfaceView paneA, out CanvasSurfaceView paneB);
+        CanvasRendererView boardB = paneB.VisualForTests;
+        Assert.True(boardB.Engine.CommittedViewport.FollowSelection, "premise: pane B follows the selection.");
+        document.SeatSelectionSilently("question");
+        boardB.Engine.CommitViewport(view => view.PannedTo(-5000, -5000));
+        PumpUntil(
+            () => boardB.Engine.Current!.Viewport.SameGeometry(boardB.Engine.CommittedViewport),
+            "premise: pane B's pan-away never installed.");
+        paneB.Visibility = Visibility.Collapsed;
+        host.UpdateLayout();
+        Assert.False(boardB.IsVisible, "premise: pane B's board is still showing.");
+        CanvasViewportState before = boardB.Engine.CommittedViewport;
+
+        Assert.True(PressKey(paneA, Key.Down, ModifierKeys.None));
+        Assert.Equal("evidence", document.Selection.Selected);
+        Pump();
+        Assert.True(
+            before.SameGeometry(boardB.Engine.CommittedViewport),
+            "pane B's board moved while it was hidden: the reveal is paid when the board is shown.");
+
+        paneB.Visibility = Visibility.Visible;
+        host.UpdateLayout();
+        PumpUntil(
+            () => InView(boardB, "evidence"),
+            "pane B's board was shown again and never scrolled to the seat that moved while it was hidden: a "
+            + "following board reveals the selection when it is next shown (owner decision, #1271).");
+        Assert.False(before.SameGeometry(boardB.Engine.CommittedViewport), "pane B's viewport never moved.");
+    });
+
+    /// <summary>
+    /// Follow-up #1271, owner decision (review round 3) — SHOWN AGAIN through
+    /// the projection switch: while the outline shows, the seat moves; when
+    /// the board is shown again it scrolls to the seat.
+    /// </summary>
+    [Fact]
+    public void AFollowingBoardUnderTheOutlineScrollsToTheSelectionWhenShown() => RunSta(() =>
+    {
+        CanvasDocumentViewModel document = Open("board.canvas");
+        using HostedWindow host = HostBoard(document, out CanvasSurfaceView surface);
+        CanvasRendererView board = surface.VisualForTests;
+        document.SeatSelectionSilently("question");
+        board.Engine.CommitViewport(view => view.PannedTo(-5000, -5000));
+        (double panX, double panY) = (board.Engine.CommittedViewport.PanX, board.Engine.CommittedViewport.PanY);
+
+        document.ShowSurface(CanvasSurfaceKind.Outline);
+        host.UpdateLayout();
+        Assert.False(board.IsVisible, "premise: the board is still showing under the outline.");
+        document.SelectNode("loose");
+        Pump();
+
+        document.ShowSurface(CanvasSurfaceKind.Visual);
+        host.UpdateLayout();
+        PumpUntil(
+            () => InView(board, "loose"),
+            "the board was shown again after the seat moved under the outline and never scrolled to it: a "
+            + "following board reveals the selection when it is next shown (owner decision, #1271).");
+        Assert.False(
+            board.Engine.CommittedViewport.PanX == panX && board.Engine.CommittedViewport.PanY == panY,
+            "the board's pan never moved.");
+    });
+
+    /// <summary>
+    /// Follow-up #1271, owner decision (review round 3) — a board that stops
+    /// following while it is hidden owes nothing when shown: Follow Selection
+    /// turned off under the outline, or turned off and on again, lapses the
+    /// reveal the seat's move asked for, and the board comes back where the
+    /// reader left it.
+    /// </summary>
+    [Theory]
+    [InlineData(false)]
+    [InlineData(true)]
+    public void ABoardThatStopsFollowingWhileHiddenDoesNotScrollWhenShown(bool followsAgain) => RunSta(() =>
+    {
+        CanvasDocumentViewModel document = Open("board.canvas");
+        using HostedWindow host = HostBoard(document, out CanvasSurfaceView surface);
+        CanvasRendererView board = surface.VisualForTests;
+        document.SeatSelectionSilently("question");
+        board.Engine.CommitViewport(view => view.PannedTo(-5000, -5000));
+
+        document.ShowSurface(CanvasSurfaceKind.Outline);
+        host.UpdateLayout();
+        document.SelectNode("loose");
+        _ = surface.ViewportCommand(CanvasViewportVerb.ToggleFollowSelection);
+        Assert.False(board.Engine.CommittedViewport.FollowSelection, "premise: the toggle did not turn off.");
+        if (followsAgain)
+        {
+            _ = surface.ViewportCommand(CanvasViewportVerb.ToggleFollowSelection);
+            Assert.True(board.Engine.CommittedViewport.FollowSelection, "premise: the toggle did not turn back on.");
+        }
+        (double panX, double panY, double zoom) = (
+            board.Engine.CommittedViewport.PanX, board.Engine.CommittedViewport.PanY, board.Engine.CommittedViewport.Zoom);
+
+        document.ShowSurface(CanvasSurfaceKind.Visual);
+        host.UpdateLayout();
+        PumpUntil(
+            () => board.IsVisible && board.Engine.CommittedViewport.ViewWidth > 0
+                && board.Engine.Current!.Viewport.SameGeometry(board.Engine.CommittedViewport),
+            "premise: the board never laid out and installed after it was shown.");
+        Pump();
+        Assert.True(
+            board.Engine.CommittedViewport.PanX == panX && board.Engine.CommittedViewport.PanY == panY
+                && board.Engine.CommittedViewport.Zoom == zoom,
+            $"the board scrolled to the seat when shown although it stopped following while hidden"
+            + (followsAgain ? " (and a lapse is for good, even when following resumes)" : string.Empty)
+            + " (D4, D15, #1271).");
+    });
+
+    /// <summary>
+    /// Follow-up #1271, owner decision (review round 3) — shown again with the
+    /// seat where the view already has it: the seat left and came back while
+    /// the board was hidden, the card it came back to is inside the view, and
+    /// the board is shown exactly where the reader left it.
+    /// </summary>
+    [Fact]
+    public void ABoardShownAgainWithTheSeatAlreadyInViewDoesNotMove() => RunSta(() =>
+    {
+        File.WriteAllText(
+            Path.Combine(_fixture.Root, "far.canvas"),
+            "{\"nodes\":["
+            + "{\"id\":\"near\",\"type\":\"text\",\"text\":\"Near\",\"x\":100,\"y\":100,\"width\":200,\"height\":100},"
+            + "{\"id\":\"far\",\"type\":\"text\",\"text\":\"Far\",\"x\":5000,\"y\":5000,\"width\":200,\"height\":100}"
+            + "],\"edges\":[]}");
+        CanvasDocumentViewModel document = Open("far.canvas");
+        using HostedWindow host = HostBoard(document, out CanvasSurfaceView surface);
+        CanvasRendererView board = surface.VisualForTests;
+        document.SeatSelectionSilently("near");
+        Pump();
+        Assert.True(InView(board, "near"), "premise: the seat's card is not in the board's view.");
+        Assert.False(InView(board, "far"), "premise: the far card is in the board's view.");
+        (double panX, double panY, double zoom) = (
+            board.Engine.CommittedViewport.PanX, board.Engine.CommittedViewport.PanY, board.Engine.CommittedViewport.Zoom);
+
+        document.ShowSurface(CanvasSurfaceKind.Outline);
+        host.UpdateLayout();
+        document.SelectNode("far");
+        document.SelectNode("near");
+
+        document.ShowSurface(CanvasSurfaceKind.Visual);
+        host.UpdateLayout();
+        PumpUntil(
+            () => board.IsVisible && board.Engine.CommittedViewport.ViewWidth > 0
+                && board.Engine.Current!.Viewport.SameGeometry(board.Engine.CommittedViewport),
+            "premise: the board never laid out and installed after it was shown.");
+        Pump();
+        Assert.True(
+            board.Engine.CommittedViewport.PanX == panX && board.Engine.CommittedViewport.PanY == panY
+                && board.Engine.CommittedViewport.Zoom == zoom,
+            "the board moved when shown although the seat's card was already inside its view: the reveal is the "
+            + "minimal pan that contains the seat, and the far card the seat passed through is owed nothing (#1271).");
+    });
+
+    /// <summary>
+    /// Follow-up #1271, owner decision (review round 3) — a move made ON the
+    /// board before it was hidden keeps its standing: with Follow Selection
+    /// off, the board's own Down onto a card it has not installed yet is owed;
+    /// the board is hidden under the outline before that card installs, and
+    /// when it is shown again it pays the reveal, toggle or no toggle.
+    /// </summary>
+    [Fact]
+    public void ABoardMoveMadeBeforeHidingIsRevealedWhenShown() => RunSta(() =>
+    {
+        CanvasDocumentViewModel document = Open("board.canvas");
+        using HostedWindow host = HostBoard(document, out CanvasSurfaceView surface);
+        CanvasRendererView board = surface.VisualForTests;
+        _ = surface.ViewportCommand(CanvasViewportVerb.ToggleFollowSelection);
+        Assert.False(board.Engine.CommittedViewport.FollowSelection, "premise: the board still follows the selection.");
+        document.SeatSelectionSilently("question");
+
+        document.CanvasNewCard();
+        string created = Assert.IsType<string>(document.Selection.Selected);
+        List<string> order = document.SceneReadingOrder.Select(stop => stop.NodeId).ToList();
+        int at = order.IndexOf(created);
+        (string from, Key key) = at > 0 ? (order[at - 1], Key.Down) : (order[at + 1], Key.Up);
+        document.SeatSelectionSilently(from);
+        board.Engine.CommitViewport(view => view.PannedTo(-5000, -5000));
+        Assert.True(PressKey(surface, key, ModifierKeys.None));
+        Assert.Equal(created, document.Selection.Selected);
+        Assert.False(Installed(board, created), "premise: the card installed before the board was hidden.");
+
+        document.ShowSurface(CanvasSurfaceKind.Outline);
+        host.UpdateLayout();
+        PumpUntil(() => Installed(board, created), "premise: the new card never installed while the board was hidden.");
+
+        document.ShowSurface(CanvasSurfaceKind.Visual);
+        host.UpdateLayout();
+        PumpUntil(
+            () => InView(board, created),
+            "the board's own Down, made before it was hidden, was never revealed when it was shown again: a move "
+            + "made on the board keeps its standing, toggle or no toggle (D4, #1271).");
+    });
+
+    /// <summary>
+    /// Follow-up #1271, review round 4 — a reveal is paid only from the
+    /// population the document has applied. A reload removes the seat's card
+    /// and keeps another card under the same id at a new place far off the
+    /// board: the apply moves the seat onto that survivor while this board's
+    /// engine still has the PREDECESSOR installed, where the survivor stands at
+    /// its old place inside the view. A reveal paid there "contains" the stale
+    /// card and is spent; the successor then installs the seat off the board
+    /// with nothing left owed. The reveal waits for the successor instead, and
+    /// is paid against it.
+    /// </summary>
+    [Fact]
+    public void AReloadRevealsItsRelocatedSurvivorOnlyFromTheSuccessorPopulation() => RunSta(() =>
+    {
+        string path = Path.Combine(_fixture.Root, "relocate.canvas");
+        File.WriteAllText(
+            path,
+            "{\"nodes\":["
+            + "{\"id\":\"gone\",\"type\":\"text\",\"text\":\"Gone\",\"x\":100,\"y\":100,\"width\":200,\"height\":100},"
+            + "{\"id\":\"moved\",\"type\":\"text\",\"text\":\"Moved\",\"x\":350,\"y\":100,\"width\":200,\"height\":100}"
+            + "],\"edges\":[]}");
+        CanvasDocumentViewModel document = Open("relocate.canvas");
+        using HostedWindow host = HostBoard(document, out CanvasSurfaceView surface);
+        CanvasRendererView board = surface.VisualForTests;
+        Assert.True(board.Engine.CommittedViewport.FollowSelection, "premise: the board does not follow the selection.");
+        document.SeatSelectionSilently("gone");
+        Pump();
+        Assert.True(
+            InView(board, "gone") && InView(board, "moved"),
+            "premise: the two cards are not both inside the board's view before the reload.");
+        CanvasPopulation predecessor = board.Engine.Current!.Source.Loaded!.Population;
+        CanvasViewportState view = board.Engine.CommittedViewport;
+
+        File.WriteAllText(
+            path,
+            "{\"nodes\":["
+            + "{\"id\":\"moved\",\"type\":\"text\",\"text\":\"Moved\",\"x\":5000,\"y\":5000,\"width\":200,\"height\":100}"
+            + "],\"edges\":[]}");
+        document.Load();
+        Assert.Equal("moved", document.Selection.Selected);
+        Assert.True(
+            ReferenceEquals(board.Engine.Current!.Source.Loaded?.Population, predecessor),
+            "premise: the board installed the reloaded population before the reload moved the seat, so no "
+            + "predecessor was left to pay against.");
+        Assert.True(
+            view.SameGeometry(board.Engine.CommittedViewport),
+            "the board moved before the reloaded population installed: a reveal paid against the predecessor "
+            + "reads the survivor at the place it has left (#1271, review round 4).");
+
+        PumpUntil(
+            () => board.Engine.Current!.Source.Loaded?.Population is { } installed
+                && !ReferenceEquals(installed, predecessor)
+                && installed.SceneByNode.ContainsKey("moved"),
+            "premise: the reloaded population never installed.");
+        CanvasSceneNode relocated = board.Engine.Current!.Source.Loaded!.Population.SceneByNode["moved"];
+        Assert.True(
+            (relocated.X * view.Zoom) + view.PanX > view.ViewWidth
+                || (relocated.Y * view.Zoom) + view.PanY > view.ViewHeight,
+            "premise: the relocated card is still inside the board's view, so no reveal was needed.");
+        Assert.True(
+            InView(board, "moved"),
+            "the reloaded population installed the seat off the board and nothing revealed it: the follow-"
+            + "selection reveal was paid against the predecessor, where the survivor stood at its old place "
+            + "(D4, #1271, review round 4).");
+    });
+
+    /// <summary>
+    /// Follow-up #1271, review round 4 — the population a reveal is paid from
+    /// is the document's at payment time, not the one current when it was
+    /// owed. Two reloads land before this board's engine installs either: the
+    /// first moves the seat onto a relocated survivor (the reveal is owed),
+    /// the second keeps that seat (same revision, so the reveal is still owed)
+    /// and moves the card again. The engine coalesces and installs only the
+    /// second population, and the reveal is paid against it.
+    /// </summary>
+    [Fact]
+    public void AnOwedRevealIsPaidFromALaterReloadItsSeatSurvives() => RunSta(() =>
+    {
+        string path = Path.Combine(_fixture.Root, "relocate-twice.canvas");
+        File.WriteAllText(
+            path,
+            "{\"nodes\":["
+            + "{\"id\":\"gone\",\"type\":\"text\",\"text\":\"Gone\",\"x\":100,\"y\":100,\"width\":200,\"height\":100},"
+            + "{\"id\":\"moved\",\"type\":\"text\",\"text\":\"Moved\",\"x\":350,\"y\":100,\"width\":200,\"height\":100}"
+            + "],\"edges\":[]}");
+        CanvasDocumentViewModel document = Open("relocate-twice.canvas");
+        using HostedWindow host = HostBoard(document, out CanvasSurfaceView surface);
+        CanvasRendererView board = surface.VisualForTests;
+        document.SeatSelectionSilently("gone");
+        Pump();
+        Assert.True(
+            InView(board, "gone") && InView(board, "moved"),
+            "premise: the two cards are not both inside the board's view before the reloads.");
+        CanvasViewportState view = board.Engine.CommittedViewport;
+        var installed = new List<CanvasPopulation>();
+        board.Engine.StateInstalled += (_, state) =>
+        {
+            if (state.Source.Loaded?.Population is { } population)
+            {
+                installed.Add(population);
+            }
+        };
+
+        File.WriteAllText(
+            path,
+            "{\"nodes\":["
+            + "{\"id\":\"moved\",\"type\":\"text\",\"text\":\"Moved\",\"x\":5000,\"y\":5000,\"width\":200,\"height\":100}"
+            + "],\"edges\":[]}");
+        document.Load();
+        Assert.Equal("moved", document.Selection.Selected);
+        CanvasPopulation first = document.AppliedPublication!.Population!;
+        long revision = document.Selection.Revision;
+        File.WriteAllText(
+            path,
+            "{\"nodes\":["
+            + "{\"id\":\"moved\",\"type\":\"text\",\"text\":\"Moved\",\"x\":7000,\"y\":7000,\"width\":200,\"height\":100}"
+            + "],\"edges\":[]}");
+        document.Load();
+        Assert.Equal("moved", document.Selection.Selected);
+        Assert.True(
+            document.Selection.Revision == revision,
+            "premise: the second reload moved the seat, so the reveal was owed again rather than carried.");
+        CanvasPopulation second = document.AppliedPublication!.Population!;
+        Assert.False(ReferenceEquals(first, second), "premise: the second reload did not replace the population.");
+        Assert.True(installed.Count == 0, "premise: the board installed a population between the two reloads.");
+
+        PumpUntil(
+            () => ReferenceEquals(board.Engine.Current!.Source.Loaded?.Population, second),
+            "premise: the second reload's population never installed.");
+        Assert.DoesNotContain(first, installed);
+        CanvasSceneNode relocated = second.SceneByNode["moved"];
+        Assert.True(
+            (relocated.X * view.Zoom) + view.PanX > view.ViewWidth
+                || (relocated.Y * view.Zoom) + view.PanY > view.ViewHeight,
+            "premise: the relocated card is still inside the board's view, so no reveal was needed.");
+        Assert.True(
+            InView(board, "moved"),
+            "the board installed the later reload with the seat off the board and never revealed it: the reveal "
+            + "owed by the first reload is still owed while its seat survives, and is paid from the population "
+            + "the document has when it pays (D4, #1271, review round 4).");
+    });
+
+    /// <summary>
+    /// Follow-up #1271, review round 2 — contract 34 D4's on-surface arm for
+    /// the board's OWN peers, with Follow Selection OFF: a screen reader's
+    /// Invoke and SelectionItem.Select on a card just past the board's edge
+    /// (materialized, so its peer is live, but outside the view) select it and
+    /// bring it into view whatever the toggle says, and so does realization —
+    /// the card peer's VirtualizedItem.Realize and the container's
+    /// ItemContainer name search — for a card far off the board.
+    /// </summary>
+    [Fact]
+    public void TheBoardsOwnPeersRevealTheirCardWithFollowSelectionOff() => RunSta(() =>
+    {
+        CanvasDocumentViewModel document = Open("board.canvas");
+        using HostedWindow host = HostBoard(document, out CanvasSurfaceView surface);
+        CanvasRendererView board = surface.VisualForTests;
+        _ = surface.ViewportCommand(CanvasViewportVerb.ToggleFollowSelection);
+        Assert.False(board.Engine.CommittedViewport.FollowSelection, "premise: the board still follows the selection.");
+        const string Target = "loose";
+        CanvasCardAutomationPeer peer = board.PeerFor(CanvasPeerKey.Card(Target))!;
+
+        foreach ((string name, PatternInterface pattern, Action<object> act) in
+            new (string, PatternInterface, Action<object>)[]
+            {
+                ("Invoke", PatternInterface.Invoke, provider => ((IInvokeProvider)provider).Invoke()),
+                ("SelectionItem.Select", PatternInterface.SelectionItem,
+                    provider => ((ISelectionItemProvider)provider).Select()),
+            })
+        {
+            document.SeatSelectionSilently("question");
+            ParkJustPastTheRightEdge(board, Target);
+            object? live = peer.GetPattern(pattern);
+            Assert.True(live is not null, $"premise ({name}): the card's peer is not live, so no client could reach it.");
+            Assert.False(InView(board, Target), $"premise ({name}): the card was already inside the board.");
+            CanvasViewportState before = board.Engine.CommittedViewport;
+
+            act(live!);
+            Assert.Equal(Target, document.Selection.Selected);
+            Assert.False(
+                before.SameGeometry(board.Engine.CommittedViewport),
+                $"{name} on the board's own card peer never moved the board with Follow Selection off: "
+                + "a selection made on the board scrolls into view whatever the toggle says (D4, #1271).");
+            Assert.True(InView(board, Target), $"{name} left \"{Target}\" outside the board (D4).");
+        }
+
+        foreach ((string name, Action realize) in new (string, Action)[]
+            {
+                ("VirtualizedItem.Realize", () =>
+                    ((IVirtualizedItemProvider)peer.GetPattern(PatternInterface.VirtualizedItem)!).Realize()),
+                ("the container's name search", () =>
+                    _ = ((IItemContainerProvider)new CanvasRendererAutomationPeer(board)).FindItemByProperty(
+                        null, AutomationElementIdentifiers.NameProperty.Id, peer.GetName())),
+            })
+        {
+            board.Engine.CommitViewport(view => view.PannedTo(-5000, -5000));
+            PumpUntil(
+                () => board.Engine.Current!.Viewport.SameGeometry(board.Engine.CommittedViewport),
+                $"premise ({name}): the far viewport never installed.");
+            Assert.True(
+                peer.GetPattern(PatternInterface.Invoke) is null,
+                $"premise ({name}): the far card is still materialized, so nothing needed realizing.");
+            CanvasViewportState before = board.Engine.CommittedViewport;
+
+            realize();
+            Assert.False(
+                before.SameGeometry(board.Engine.CommittedViewport),
+                $"{name} realized a far card with Follow Selection off and never moved the board: a "
+                + "realization scrolls its card into view whatever the toggle says (D4).");
+            Assert.True(InView(board, Target), $"{name} left \"{Target}\" outside the board (D4).");
+        }
+    });
+
+    /// <summary>One canvas in two panes, both on the Visual board (the
+    /// projection is the document's), each board installed, and pane A's
+    /// board holding the keys — every premise with its leg named.</summary>
+    private HostedWindow HostTwoBoards(
+        CanvasDocumentViewModel document, out CanvasSurfaceView paneA, out CanvasSurfaceView paneB)
+    {
+        var first = new CanvasSurfaceView { Model = document, DataContext = new object() };
+        var second = new CanvasSurfaceView { Model = document, DataContext = new object() };
+        var root = new System.Windows.Controls.Primitives.UniformGrid { Columns = 2 };
+        root.Children.Add(first);
+        root.Children.Add(second);
+        HostedWindow host = Host(root);
+        document.ShowSurface(CanvasSurfaceKind.Visual);
+        host.UpdateLayout();
+        CanvasRendererView boardA = first.VisualForTests;
+        CanvasRendererView boardB = second.VisualForTests;
+        PumpUntil(
+            () => boardA.Engine.Current is not null && boardB.Engine.Current is not null,
+            "premise: the two boards never installed their first presentation states.");
+        Assert.True(boardA.Focus(), "premise: pane A's board refused keyboard focus.");
+        host.UpdateLayout();
+        Assert.True(first.ProjectionHasFocus, "premise: pane A's board does not hold the keys.");
+        Assert.False(second.ProjectionHasFocus, "premise: pane B holds the keys as well as pane A.");
+        Drain(document);
+        paneA = first;
+        paneB = second;
+        return host;
+    }
+
+    /// <summary>A canvas tab as the workspace makes one: a real tab view
+    /// model with the shared document attached through the one attach
+    /// funnel.</summary>
+    private WorkspaceTabViewModel CanvasTab(CanvasDocumentViewModel document, string path)
+    {
+        var tab = new WorkspaceTabViewModel(
+            _session,
+            new WorkspaceTabState(Guid.NewGuid(), new WorkspaceItemState(WorkspaceItemKind.Canvas, path)),
+            startInteractionBackgroundWork: false);
+        tab.AttachCanvasDocument(document);
+        return tab;
+    }
+
+    /// <summary>A note tab — the other tab a canvas tab goes behind.</summary>
+    private WorkspaceTabViewModel NoteTab(string path) =>
+        new(
+            _session,
+            new WorkspaceTabState(Guid.NewGuid(), new WorkspaceItemState(WorkspaceItemKind.Markdown, path)),
+            startInteractionBackgroundWork: false);
+
+    /// <summary>
+    /// Pane A: a canvas surface on the document, on the Visual board and
+    /// holding the keys. Pane B: the workspace's own pane shape — ONE
+    /// selected-content TabControl over the production tab template
+    /// (<c>WorkspaceTabContentTemplate</c>, as <c>WorkspaceTemplates.xaml</c>
+    /// wires it), showing the first tab.
+    /// </summary>
+    private HostedWindow HostBoardBesideATabbedPane(
+        CanvasDocumentViewModel document,
+        IReadOnlyList<WorkspaceTabViewModel> tabs,
+        out CanvasSurfaceView paneA,
+        out TabControl tabsB)
+    {
+        var resources = (ResourceDictionary)Application.LoadComponent(
+            new Uri("/SlateWindows;component/WorkspaceTemplates.xaml", UriKind.Relative));
+        var first = new CanvasSurfaceView { Model = document, DataContext = new object() };
+        var second = new TabControl
+        {
+            ItemsSource = tabs,
+            ContentTemplate = (DataTemplate)resources["WorkspaceTabContentTemplate"],
+            SelectedItem = tabs[0],
+        };
+        var root = new System.Windows.Controls.Primitives.UniformGrid { Columns = 2 };
+        // The note tab's editor paints from the theme's palette; the pane's
+        // own resources stand in for the application's, leaving the
+        // process-wide theme alone (MenuItemForegroundTests' discipline).
+        root.Resources.MergedDictionaries.Add(new ResourceDictionary
+        {
+            Source = new Uri("pack://application:,,,/SlateWindows;component/Themes/Slate.Light.xaml", UriKind.Absolute),
+        });
+        root.Children.Add(first);
+        root.Children.Add(second);
+        HostedWindow host = Host(root);
+        document.ShowSurface(CanvasSurfaceKind.Visual);
+        host.UpdateLayout();
+        CanvasRendererView boardA = first.VisualForTests;
+        PumpUntil(() => boardA.Engine.Current is not null, "premise: pane A's board never installed its first state.");
+        Assert.True(boardA.Focus(), "premise: pane A's board refused keyboard focus.");
+        host.UpdateLayout();
+        Assert.True(first.ProjectionHasFocus, "premise: pane A's board does not hold the keys.");
+        Drain(document);
+        paneA = first;
+        tabsB = second;
+        return host;
+    }
+
+    /// <summary>The canvas surface in a tabbed pane's selected content.</summary>
+    private static CanvasSurfaceView SurfaceIn(TabControl tabs)
+    {
+        var pending = new Stack<DependencyObject>();
+        pending.Push(tabs);
+        while (pending.Count > 0)
+        {
+            DependencyObject node = pending.Pop();
+            if (node is CanvasSurfaceView surface)
+            {
+                return surface;
+            }
+            for (int i = 0; i < System.Windows.Media.VisualTreeHelper.GetChildrenCount(node); i++)
+            {
+                pending.Push(System.Windows.Media.VisualTreeHelper.GetChild(node, i));
+            }
+        }
+        throw new InvalidOperationException("premise: the tabbed pane shows no canvas surface.");
+    }
+
+    /// <summary>Whether the board has installed the population the document
+    /// has applied, with the viewport it has committed — nothing left in
+    /// flight that a reveal could be paid from.</summary>
+    private static bool SettledOnAppliedPopulation(CanvasRendererView board, CanvasDocumentViewModel document) =>
+        board.Engine.Current is { } state
+        && ReferenceEquals(state.Source.Loaded?.Population, document.AppliedPublication?.Population)
+        && state.Viewport.SameGeometry(board.Engine.CommittedViewport);
+
+    /// <summary>Whether the board's INSTALLED state has the card — the
+    /// population a reveal computes its pan against.</summary>
+    private static bool Installed(CanvasRendererView board, string nodeId) =>
+        board.Engine.Current?.Source.Loaded?.Population.SceneByNode.ContainsKey(nodeId) == true;
+
+    /// <summary>Pan the board so the card sits just past its right edge —
+    /// outside the view, inside the materialization margin — and wait for
+    /// that state to install, so the card's peer is live.</summary>
+    private static void ParkJustPastTheRightEdge(CanvasRendererView board, string nodeId)
+    {
+        CanvasSceneNode node = board.Engine.Current!.Source.Loaded!.Population.SceneByNode[nodeId];
+        board.Engine.CommitViewport(view => view.PannedTo(
+            view.ViewWidth + 10 - (node.X * view.Zoom),
+            10 - (node.Y * view.Zoom)));
+        PumpUntil(
+            () => board.Engine.Current!.Viewport.SameGeometry(board.Engine.CommittedViewport)
+                && board.Engine.Current.Topology.Placements.TryGetValue(
+                    CanvasPeerKey.Card(nodeId), out CanvasPeerPlacement? placement)
+                && placement.Cell == CanvasPeerCell.Materialized,
+            $"premise: \"{nodeId}\" never materialized just past the board's edge.");
+    }
+
+    /// <summary>
+    /// R-12 (#1255, #1271): every move the board's keys make asks the
+    /// presenter to reveal its new seat AS A MOVE MADE ON THE SURFACE — the
+    /// reading-order move and the follow alike, and the connect-mode
+    /// restoration the owning pane performs — and every move the palette's
+    /// verbs make there asks AS A MOVE MADE ELSEWHERE (Next and Previous
+    /// Card, Follow Connection, Enter and Exit Group, Trace Path); a press
+    /// that moved nothing asks for none. Pinned at the seam the real board
+    /// implements, through a recording presenter; the hosted facts above
+    /// pin the board's own decision over both toggle states.
     /// </summary>
     [Fact]
     public void EveryBoardMoveAsksThePresenterToRevealItsSeat()
@@ -4141,27 +5578,31 @@ public sealed partial class CanvasNavigatorTests : IDisposable
         CanvasDocumentViewModel document = Open("board.canvas");
         var board = new RevealingBoard();
         document.Navigator.AttachPresenter(board);
-        IReadOnlyList<CanvasOutlineRow> rows = document.FilteredOutline;
+        IReadOnlyList<CanvasOutlineRow> scene = document.Outline;
+        const CanvasMoveOrigin On = CanvasMoveOrigin.OnSurface;
+        const CanvasMoveOrigin Else = CanvasMoveOrigin.Elsewhere;
 
-        document.SeatSelectionSilently(rows[0].NodeId);
+        document.SeatSelectionSilently(scene[0].NodeId);
         Assert.True(document.Navigator.HandleKey(Key.Down, ModifierKeys.None, board));
         Assert.True(document.Navigator.HandleKey(Key.Up, ModifierKeys.None, board));
         document.SeatSelectionSilently("question");
         Assert.True(document.Navigator.HandleKey(Key.Right, ModifierKeys.None, board));
         document.SeatSelectionSilently("question");
         Assert.True(document.Navigator.HandleKey(Key.Left, ModifierKeys.None, board));
-        Assert.Equal(new[] { rows[1].NodeId, rows[0].NodeId, "evidence", "loose" }, board.Revealed);
+        Assert.Equal(
+            new[] { (scene[1].NodeId, On), (scene[0].NodeId, On), ("evidence", On), ("loose", On) },
+            board.Revealed);
 
         // A press that moved nothing reveals nothing: the end of the
         // canvas, and a direction with no connection.
-        document.SeatSelectionSilently(rows[^1].NodeId);
+        document.SeatSelectionSilently(scene[^1].NodeId);
         Assert.True(document.Navigator.HandleKey(Key.Down, ModifierKeys.None, board));
         document.SeatSelectionSilently("evidence");
         Assert.True(document.Navigator.HandleKey(Key.Right, ModifierKeys.None, board));
         Assert.Equal(4, board.Revealed.Count);
 
         // The palette's verbs move the seat on the board too, with no key:
-        // every one of them reveals where it went (R-12).
+        // every one of them asks for its reveal as a move made elsewhere.
         board.Revealed.Clear();
         document.SeatSelectionSilently("grp");
         document.Navigator.NextCard();
@@ -4174,48 +5615,62 @@ public sealed partial class CanvasNavigatorTests : IDisposable
         document.SeatSelectionSilently("question");
         document.Navigator.TracePath();
         Assert.Equal(
-            new[] { "question", "grp", "evidence", "question", "grp", "evidence" },
+            new[]
+            {
+                ("question", Else), ("grp", Else), ("evidence", Else), ("question", Else), ("grp", Else),
+                ("evidence", Else),
+            },
             board.Revealed);
     }
 
     /// <summary>
-    /// R-12 (#1255), m5 parity: a seat the filter does not keep (m5 — the
-    /// movement verbs can seat one) is no caret in the filtered set, so the
-    /// board's Down enters the set at its top and Up at its bottom — the
-    /// seat and the lines Next Card and Previous Card give from there, the
-    /// verbs every projection's palette runs (and mac's
-    /// <c>canvasSelectAdjacent</c>, which mac's board runs) — never a
-    /// boundary claim about a set the seat is not in.
+    /// R-12 (#1255, #1270), m5 parity for the verbs: a seat the filter
+    /// does not keep (m5 — the movement verbs can seat one) is still a card
+    /// the board draws, DIMMED, so the board's Down and Up step to its
+    /// neighbours in the full scene — a dimmed group included — while the
+    /// palette's Next and Previous Card, which walk the filtered order,
+    /// enter the filtered set at its top and its bottom, never claiming a
+    /// boundary about a set the seat is not in.
     /// </summary>
     [Fact]
-    public void AFilteredOutSeatEntersTheFilteredSetFromTheBoardAsTheVerbsDo() => RunSta(() =>
+    public void AFilteredOutSeatStepsThroughTheSceneOnTheBoardAndIntoTheFilteredSetByTheVerbs() => RunSta(() =>
     {
         CanvasDocumentViewModel document = Open("board.canvas");
         using HostedWindow host = HostBoard(document, out CanvasSurfaceView surface);
         document.FilterText = "zeta";
         host.UpdateLayout();
         IReadOnlyList<CanvasOutlineRow> kept = document.FilteredOutline;
+        IReadOnlyList<CanvasOutlineRow> scene = document.Outline;
         Assert.True(
             kept.Count >= 2 && kept.All(row => row.NodeId != "question"),
             "premise: the needle must keep two cards and not the seat.");
         Assert.True(surface.ProjectionHasFocus, "premise: the needle took the keys off the board.");
+        int seat = scene.Select(row => row.NodeId).ToList().IndexOf("question");
 
-        foreach ((Key key, Action verb, string arrival, CanvasStatusNote boundary) in
-            new (Key, Action, string, CanvasStatusNote)[]
+        foreach ((Key key, Action verb, string boardArrival, string verbArrival, CanvasStatusNote boundary) in
+            new (Key, Action, string, string, CanvasStatusNote)[]
             {
-                (Key.Down, document.Navigator.NextCard, kept[0].NodeId, new CanvasStatusNote.EndOfCanvas()),
-                (Key.Up, document.Navigator.PreviousCard, kept[^1].NodeId, new CanvasStatusNote.StartOfCanvas()),
+                (Key.Down, document.Navigator.NextCard, scene[seat + 1].NodeId, kept[0].NodeId,
+                    new CanvasStatusNote.EndOfCanvas()),
+                (Key.Up, document.Navigator.PreviousCard, scene[seat - 1].NodeId, kept[^1].NodeId,
+                    new CanvasStatusNote.StartOfCanvas()),
             })
         {
             IReadOnlyList<string> owed = LinesOf(document, "question", verb);
             Assert.DoesNotContain(Rendered(boundary), owed);
             document.SeatSelectionSilently("question");
-            Drain(document);
+            verb();
+            Assert.Equal(verbArrival, document.Selection.Selected);
 
+            document.SeatSelectionSilently("question");
+            Drain(document);
             Assert.True(PressKey(surface, key, ModifierKeys.None));
-            Assert.Equal(arrival, document.Selection.Selected);
-            Assert.Equal(owed, Lines(document));
+            Assert.Equal(boardArrival, document.Selection.Selected);
+            Assert.DoesNotContain(Rendered(boundary), Lines(document));
         }
+        // The scene and the filtered set disagree about Up from the seat, so
+        // the two paths are not one walk dressed twice.
+        Assert.NotEqual(scene[seat - 1].NodeId, kept[^1].NodeId);
     });
 
     /// <summary>
@@ -4326,10 +5781,11 @@ public sealed partial class CanvasNavigatorTests : IDisposable
     }
 
     /// <summary>The visual board, presenter-side, holding the keys: it
-    /// records every reveal the navigator asks of it.</summary>
+    /// records every reveal the navigator asks of it, with the origin the
+    /// navigator hands over (D4, #1271).</summary>
     private sealed class RevealingBoard : ICanvasSurfacePresenter
     {
-        public List<string> Revealed { get; } = [];
+        public List<(string Node, CanvasMoveOrigin Origin)> Revealed { get; } = [];
 
         public CanvasSurfaceKind Projection => CanvasSurfaceKind.Visual;
 
@@ -4341,7 +5797,7 @@ public sealed partial class CanvasNavigatorTests : IDisposable
 
         public bool FocusRow(string nodeId) => false;
 
-        public void RevealSeat(string nodeId) => Revealed.Add(nodeId);
+        public void RevealSeat(string nodeId, CanvasMoveOrigin origin) => Revealed.Add((nodeId, origin));
 
         public bool FocusProjection() => false;
 
@@ -4812,7 +6268,7 @@ public sealed partial class CanvasNavigatorTests : IDisposable
 
         public bool FocusRow(string nodeId) => false;
 
-        public void RevealSeat(string nodeId)
+        public void RevealSeat(string nodeId, CanvasMoveOrigin origin)
         {
         }
 
@@ -4874,7 +6330,7 @@ public sealed partial class CanvasNavigatorTests : IDisposable
 
         public bool FocusRow(string nodeId) => false;
 
-        public void RevealSeat(string nodeId)
+        public void RevealSeat(string nodeId, CanvasMoveOrigin origin)
         {
         }
 
@@ -4946,7 +6402,7 @@ public sealed partial class CanvasNavigatorTests : IDisposable
 
         public bool FocusRow(string nodeId) => false;
 
-        public void RevealSeat(string nodeId)
+        public void RevealSeat(string nodeId, CanvasMoveOrigin origin)
         {
         }
 

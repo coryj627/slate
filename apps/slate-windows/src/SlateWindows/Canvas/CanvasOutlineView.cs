@@ -561,10 +561,17 @@ internal sealed class CanvasOutlineView : UserControl
     /// that had happened (the W7-6 #1240 shape; OutlineLandingTests measures
     /// both). The landing is the delivery's — realized, silent, and
     /// reported truthfully — and a seat that cannot be delivered (filtered
-    /// out) gives way to the first row.
+    /// out) gives way to the first row. A tree with NO rows is its own stop
+    /// (AR-6) and takes the keys itself — the menu key's answer on an empty
+    /// outline (#1283, contract 34 C3) is spoken from there.
     /// </remarks>
     internal bool FocusTree()
     {
+        if (_roots.Count == 0)
+        {
+            return SelectorFocus.FocusSelectedOrFirstRow(_tree);
+        }
+
         if (_selectedRow is { IsConnection: false } seated && DeliverFocus(seated.Id) is not null)
         {
             return true;
@@ -1091,7 +1098,10 @@ internal sealed class CanvasOutlineView : UserControl
     /// A request that resolves to no row — the tree's own chrome, an empty
     /// tree — or to a row the plan gives nothing is answered HERE with no
     /// menu, so it never climbs to the tab's (R-12; the grid's rule for a
-    /// pointer request over no row).
+    /// pointer request over no row). A KEYBOARD request on a tree with no
+    /// rows at all is a keypress that does nothing, so it also says so
+    /// (contract 34 C3, #1283) — the sentence the tree's arrows speak for
+    /// the same empty tree, through the navigator.
     /// </para>
     /// </remarks>
     private void OnRowContextMenuOpening(
@@ -1106,6 +1116,11 @@ internal sealed class CanvasOutlineView : UserControl
             || BuildContextMenu(rowModel) is not { } built
             || !CanvasContextMenuBuilder.Refill(persistent, built))
         {
+            bool keyboardRequest = e.CursorLeft < 0 && e.CursorTop < 0;
+            if (keyboardRequest && _roots.Count == 0)
+            {
+                Model?.Navigator.AnswerAMenuRequestWithNoRows();
+            }
             e.Handled = true;
         }
     }

@@ -91,6 +91,16 @@ internal static class SelectorFocus
     /// window registers the rule as it is built; the class handlers are
     /// process-wide, registered once.
     /// </summary>
+    /// <remarks>
+    /// #1275's seal: the rule never listens past handled. The shell's
+    /// admission takes a press on the window's PREVIEW route, which runs
+    /// before every bubble, and marks it handled — so a press it took never
+    /// reaches the rule, which would otherwise move the keys (a UIA focus
+    /// change) under a running command (<c>ShellSealAdmissionCensus</c>
+    /// reviews this registration; <c>AClickOnAListsEmptyAreaMovesNoKeysUnderTheSeal</c>
+    /// holds it). Nothing in a list or a tree handles a press on its empty
+    /// area, so the rule sees every one the shell lets through.
+    /// </remarks>
     internal static void RegisterClickRule()
     {
         if (_clickRuleRegistered)
@@ -99,10 +109,8 @@ internal static class SelectorFocus
         }
 
         _clickRuleRegistered = true;
-        EventManager.RegisterClassHandler(
-            typeof(ListBox), Mouse.MouseDownEvent, new MouseButtonEventHandler(ClickedEmptyArea), handledEventsToo: true);
-        EventManager.RegisterClassHandler(
-            typeof(TreeView), Mouse.MouseDownEvent, new MouseButtonEventHandler(ClickedEmptyArea), handledEventsToo: true);
+        EventManager.RegisterClassHandler(typeof(ListBox), Mouse.MouseDownEvent, new MouseButtonEventHandler(ClickedEmptyArea));
+        EventManager.RegisterClassHandler(typeof(TreeView), Mouse.MouseDownEvent, new MouseButtonEventHandler(ClickedEmptyArea));
     }
 
     private static bool _clickRuleRegistered;

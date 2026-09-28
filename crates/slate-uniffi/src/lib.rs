@@ -12610,10 +12610,15 @@ impl From<core::canvas::placement::InsideGroupPlacement> for CanvasInsideGroupPl
     }
 }
 
-/// The canvas grid/sizing constants (0b-4). Every field is the
+/// The canvas grid/sizing constants (0b-4). Every numeric field is the
 /// `slate_core::canvas::placement` constant of that name — a host that
-/// re-types one of these numbers has re-derived it (R-D).
-#[derive(Debug, Clone, Copy, PartialEq, uniffi::Record)]
+/// re-types one of these numbers has re-derived it (R-D). The one string,
+/// `visual_board_name`, is `slate_core::canvas::model::VISUAL_BOARD_NAME`:
+/// the visual board's container name, which contract 34 D5 reserves in the
+/// board's one name namespace and core's speakable-name allocator holds
+/// occupied, so a host names its container with core's spelling rather than
+/// a literal of its own (W7-7 #1276).
+#[derive(Debug, Clone, PartialEq, uniffi::Record)]
 pub struct CanvasConstants {
     pub grid_step: f64,
     pub grid_step_large: f64,
@@ -12623,6 +12628,7 @@ pub struct CanvasConstants {
     pub default_group_h: f64,
     pub default_gap: f64,
     pub min_card_size: f64,
+    pub visual_board_name: String,
 }
 
 impl From<core::canvas::placement::Constants> for CanvasConstants {
@@ -12636,6 +12642,7 @@ impl From<core::canvas::placement::Constants> for CanvasConstants {
             default_group_h: c.default_group_h,
             default_gap: c.default_gap,
             min_card_size: c.min_card_size,
+            visual_board_name: core::canvas::model::VISUAL_BOARD_NAME.to_owned(),
         }
     }
 }
@@ -16217,6 +16224,28 @@ mod canvas_mirror_tests {
     //! drivable through the FFI wrapper against a real vault.
 
     use super::*;
+
+    /// The handle-free constants mirror core field by field (0b-4), the
+    /// one string included: the visual board's reserved container name
+    /// (contract 34 D5, W7-7 #1276) crosses here so no host re-types the
+    /// spelling core's speakable-name allocator holds occupied.
+    #[test]
+    fn canvas_constants_mirror_core_and_carry_the_reserved_board_name() {
+        let placement = slate_core::canvas::placement::constants();
+        let ffi = canvas_constants();
+        assert_eq!(ffi.grid_step, placement.grid_step);
+        assert_eq!(ffi.grid_step_large, placement.grid_step_large);
+        assert_eq!(ffi.default_card_w, placement.default_card_w);
+        assert_eq!(ffi.default_card_h, placement.default_card_h);
+        assert_eq!(ffi.default_group_w, placement.default_group_w);
+        assert_eq!(ffi.default_group_h, placement.default_group_h);
+        assert_eq!(ffi.default_gap, placement.default_gap);
+        assert_eq!(ffi.min_card_size, placement.min_card_size);
+        assert_eq!(
+            ffi.visual_board_name,
+            slate_core::canvas::model::VISUAL_BOARD_NAME
+        );
+    }
 
     #[test]
     fn enum_mirrors_are_total() {
