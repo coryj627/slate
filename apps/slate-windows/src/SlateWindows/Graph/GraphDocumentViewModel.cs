@@ -1106,7 +1106,14 @@ internal sealed class GraphDocumentViewModel : PanelWorkScheduler
                     {
                         CrossingsForTests["graph_topology"]++;
                     }
-                    return (GraphTopology?)_session.GraphTopology(query, config);
+                    (CancelToken cancel, CancellationTokenRegistration lifetime, CancellationTokenRegistration caller) =
+                        QueryToken(CancellationToken.None);
+                    using (cancel)
+                    using (lifetime)
+                    using (caller)
+                    {
+                        return (GraphTopology?)_session.GraphTopologyCancellable(query, config, cancel);
+                    }
                 }
                 catch (VaultException exception)
                 {
@@ -1163,7 +1170,15 @@ internal sealed class GraphDocumentViewModel : PanelWorkScheduler
                         // The fetch gate's throw is the injected failure (D-5).
                         FetchGateForTests?.Invoke();
                         model.Count("layout_refresh");
-                        LayoutFrame? frame = session.Refresh();
+                        (CancelToken cancel, CancellationTokenRegistration lifetime, CancellationTokenRegistration caller) =
+                            QueryToken(CancellationToken.None);
+                        LayoutFrame? frame;
+                        using (cancel)
+                        using (lifetime)
+                        using (caller)
+                        {
+                            frame = session.RefreshCancellable(cancel);
+                        }
                         if (frame is null)
                         {
                             return new GraphDiagramRefresh(null, null, null);
@@ -1689,11 +1704,37 @@ internal sealed class GraphDocumentViewModel : PanelWorkScheduler
 
     internal GraphLoadToken? CurrentForTests => _current;
 
+    // W7-7 PR 7 (codex PR 7 round 4, finding 5): the document's lifetime —
+    // cancelled when it retires, so a close cancels every native graph
+    // query it has in flight; each query's token is linked to it.
+    private readonly CancellationTokenSource _lifetime = new();
+
+    /// <summary>Test seam (W7-7 PR 7, round 4 finding 5): runs on the pool
+    /// immediately before a load's native graph queries, handed their
+    /// token — a fact parks here as a long native query would, until the
+    /// token is cancelled.</summary>
+    internal Action<CancelToken>? BeforeGraphQueryForTests { get; set; }
+
+    /// <summary>A native token for one query: cancelled when the document
+    /// retires or <paramref name="cancellation"/> (a rescan's) is.</summary>
+    private (CancelToken Token, CancellationTokenRegistration Lifetime, CancellationTokenRegistration Caller) QueryToken(
+        CancellationToken cancellation)
+    {
+        var token = new CancelToken();
+        return (token, _lifetime.Token.Register(token.Cancel), cancellation.Register(token.Cancel));
+    }
+
     /// <summary>Every token is issued here: the sequence advances, the
     /// request is the view state's three query fields as ONE record (C-4)
     /// with the sort, LOADING shows when no snapshot is held, and the token
     /// becomes the lineage (Term Q2).</summary>
-    private GraphLoadToken Issue(GraphLoadKind kind, GraphAnnouncePolicy announce, GraphTableSort sort, bool userSort, GraphPreset? preset)
+    private GraphLoadToken Issue(
+        GraphLoadKind kind,
+        GraphAnnouncePolicy announce,
+        GraphTableSort sort,
+        bool userSort,
+        GraphPreset? preset,
+        CancellationToken cancellation = default)
     {
         _seq++;
         var request = new GraphTableRequest(
@@ -1709,7 +1750,7 @@ internal sealed class GraphDocumentViewModel : PanelWorkScheduler
         }
         var token = new GraphLoadToken(this, _session, _lifecycleGeneration(), request, _seq, kind, announce, preset, userSort);
         SetCurrent(token);
-        StartWorkAlwaysAsync(() => Fetch(token), Receive);
+        StartWorkAlwaysAsync(() => Fetch(token, cancellation), Receive);
         return token;
     }
 
@@ -1724,17 +1765,34 @@ internal sealed class GraphDocumentViewModel : PanelWorkScheduler
     /// promotion is gone and the letter of Terms Q4 and Q9 stands: a needle's
     /// or a sort's replacement speaks the count, and Term Q5 (c)'s
     /// cancellation stays silent through its replacement too.</summary>
-    private GraphLoadToken IssueReplacing(GraphLoadToken replaced) =>
+    private GraphLoadToken IssueReplacing(GraphLoadToken replaced, CancellationToken cancellation = default) =>
         Issue(
             GraphLoadKind.Pair,
             replaced.Announce,
             replaced.Request.Sort,
             replaced.UserSort,
-            replaced.Preset);
+            replaced.Preset,
+            cancellation);
 
-    private GraphLoadEnvelope Fetch(GraphLoadToken token)
+    /// <remarks>W7-7 PR 7 (codex PR 7 round 4, finding 5): both queries
+    /// take one native token — cancelled when the document retires or the
+    /// load's <paramref name="cancellation"/> (the rescan's, for a probe's
+    /// load) is — so a close never waits out a whole-graph query.</remarks>
+    private GraphLoadEnvelope Fetch(GraphLoadToken token, CancellationToken cancellation)
     {
         GraphFilter filter = token.Request.Query.Filter;
+        (CancelToken cancel, CancellationTokenRegistration lifetime, CancellationTokenRegistration caller) =
+            QueryToken(cancellation);
+        using (cancel)
+        using (lifetime)
+        using (caller)
+        {
+            return FetchUnder(token, filter, cancel);
+        }
+    }
+
+    private GraphLoadEnvelope FetchUnder(GraphLoadToken token, GraphFilter filter, CancelToken cancel)
+    {
         // The selection this fetch OBSERVES, read on the pool immediately
         // before the snapshot crossing (IPC-13): a key written between the
         // load's issue and this read is older than the snapshot and is this
@@ -1749,13 +1807,14 @@ internal sealed class GraphDocumentViewModel : PanelWorkScheduler
                 {
                     CrossingsForTests["graph_snapshot"]++;
                 }
-                snapshot = token.Session.GraphSnapshot(filter);
+                BeforeGraphQueryForTests?.Invoke(cancel);
+                snapshot = token.Session.GraphSnapshotCancellable(filter, cancel);
             }
             lock (CrossingsForTests)
             {
                 CrossingsForTests["graph_table_rows"]++;
             }
-            GraphTableRows rows = token.Session.GraphTableRows(token.Request.Query, token.Request.Sort);
+            GraphTableRows rows = token.Session.GraphTableRowsCancellable(token.Request.Query, token.Request.Sort, cancel);
             FetchGateForTests?.Invoke();
             return new GraphLoadEnvelope(token, filter, token.Request.Query, token.Request.Sort, snapshot, rows, null, observed);
         }
@@ -1970,8 +2029,10 @@ internal sealed class GraphDocumentViewModel : PanelWorkScheduler
 
     /// <summary>Re-read the generation off the dispatcher and, on a
     /// change against a held snapshot, issue a superseding silent pair;
-    /// while nothing READY is held, keep the high-water mark.</summary>
-    public void Probe()
+    /// while nothing READY is held, keep the high-water mark.
+    /// <paramref name="cancellation"/> (W7-7 PR 7, round 4 finding 5) — a
+    /// rescan's — reaches the native queries of the load the probe issues.</summary>
+    public void Probe(CancellationToken cancellation = default)
     {
         if (_retired)
         {
@@ -2009,8 +2070,8 @@ internal sealed class GraphDocumentViewModel : PanelWorkScheduler
                         // its request whole; over a quiescent lineage the
                         // pair is silent and carries the accepted sort.
                         _ = _current is { } inFlight
-                            ? IssueReplacing(inFlight)
-                            : Issue(GraphLoadKind.Pair, GraphAnnouncePolicy.Silent, held.AcceptedSort, userSort: false, preset: null);
+                            ? IssueReplacing(inFlight, cancellation)
+                            : Issue(GraphLoadKind.Pair, GraphAnnouncePolicy.Silent, held.AcceptedSort, userSort: false, preset: null, cancellation);
                     }
                 }
                 else
@@ -2111,6 +2172,9 @@ internal sealed class GraphDocumentViewModel : PanelWorkScheduler
             unseated = [.. _unseatedBuilds];
             _unseatedBuilds.Clear();
         }
+        // W7-7 PR 7 (codex PR 7 round 4, finding 5): every native graph query
+        // in flight is cancelled — the teardown's drain waits for none.
+        _lifetime.Cancel();
         _seq++;
         _request = null;
         SetCurrent(null);

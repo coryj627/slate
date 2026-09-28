@@ -333,6 +333,15 @@ internal sealed class ConnectionsLeafViewModel : PanelWorkScheduler
     /// before the envelope returns.</summary>
     internal Action? FetchGateForTests { get; set; }
 
+    // W7-7 PR 7 (codex PR 7 round 4, finding 5): the leaf's lifetime —
+    // cancelled when it retires, so a close cancels the tree query in
+    // flight; each query's token is linked to it.
+    private readonly CancellationTokenSource _lifetime = new();
+
+    /// <summary>Test seam (W7-7 PR 7, round 4 finding 5): runs on the pool
+    /// immediately before the tree query, handed its token.</summary>
+    internal Action<CancelToken>? BeforeTreeQueryForTests { get; set; }
+
     /// <summary>Test seam: rewrite the envelope the body returns — the
     /// receiver's rejections are stated over its echoes (Term 8).</summary>
     internal Func<ConnectionsLoadEnvelope, ConnectionsLoadEnvelope>? EnvelopeForTests { get; set; }
@@ -770,7 +779,10 @@ internal sealed class ConnectionsLeafViewModel : PanelWorkScheduler
     /// silent load; Ready and equal → nothing; Error or STALE → one silent
     /// load (the mac reloads in every state); no root → nothing. It never
     /// supersedes an audible load (B-D12).</summary>
-    public void Probe()
+    /// <remarks><paramref name="cancellation"/> (W7-7 PR 7, round 4 finding
+    /// 5) — a rescan's — reaches the tree query of the load the probe
+    /// issues.</remarks>
+    public void Probe(CancellationToken cancellation = default)
     {
         if (_retired)
         {
@@ -798,14 +810,14 @@ internal sealed class ConnectionsLeafViewModel : PanelWorkScheduler
                 {
                     if (generation != held.Tree!.Generation)
                     {
-                        _ = Load(GraphAnnouncePolicy.Silent);
+                        _ = Load(GraphAnnouncePolicy.Silent, cancellation);
                     }
                     return;
                 }
                 // Error, or STALE (a root the presentation is not for):
                 // one silent load, so the leaf cannot stay errored or
                 // stale without a user action (IGH-2).
-                _ = Load(GraphAnnouncePolicy.Silent);
+                _ = Load(GraphAnnouncePolicy.Silent, cancellation);
             });
     }
 
@@ -813,7 +825,7 @@ internal sealed class ConnectionsLeafViewModel : PanelWorkScheduler
 
     /// <summary>Issue a token and start the body: a new sequence every
     /// call, so this load supersedes any in flight, silent or audible.</summary>
-    internal ConnectionsLoadToken Load(GraphAnnouncePolicy announce)
+    internal ConnectionsLoadToken Load(GraphAnnouncePolicy announce, CancellationToken cancellation = default)
     {
         if (_retired)
         {
@@ -837,11 +849,23 @@ internal sealed class ConnectionsLeafViewModel : PanelWorkScheduler
             Install(ConnectionsPublication.Loading(request));
         }
         var token = new ConnectionsLoadToken(this, _session, _lifecycleGeneration(), request, _seq, announce);
-        StartWorkAlwaysAsync(() => Fetch(token), Receive);
+        StartWorkAlwaysAsync(() => Fetch(token, cancellation), Receive);
         return token;
     }
 
-    private ConnectionsLoadEnvelope Fetch(ConnectionsLoadToken token)
+    /// <remarks>W7-7 PR 7 (codex PR 7 round 4, finding 5): the tree query
+    /// takes a native token cancelled when the leaf retires or the load's
+    /// <paramref name="cancellation"/> (a rescan's) is. The depth-1 bundle is
+    /// one bounded page and stays tokenless.</remarks>
+    private ConnectionsLoadEnvelope Fetch(ConnectionsLoadToken token, CancellationToken cancellation)
+    {
+        using var cancel = new CancelToken();
+        using CancellationTokenRegistration lifetime = _lifetime.Token.Register(cancel.Cancel);
+        using CancellationTokenRegistration caller = cancellation.Register(cancel.Cancel);
+        return FetchUnder(token, cancel);
+    }
+
+    private ConnectionsLoadEnvelope FetchUnder(ConnectionsLoadToken token, CancelToken cancel)
     {
         ConnectionsRequest request = token.Request;
         string? bundlePath = null;
@@ -850,7 +874,9 @@ internal sealed class ConnectionsLeafViewModel : PanelWorkScheduler
         try
         {
             CountCrossing("graph_connections_tree");
-            GraphConnectionsTree tree = token.Session.GraphConnectionsTree(request.Root, request.Depth, request.Filter);
+            BeforeTreeQueryForTests?.Invoke(cancel);
+            GraphConnectionsTree tree = token.Session.GraphConnectionsTreeCancellable(
+                request.Root, request.Depth, request.Filter, cancel);
             NoteLoadBundle? bundle = null;
             if (request.Depth == 1)
             {
@@ -1131,6 +1157,9 @@ internal sealed class ConnectionsLeafViewModel : PanelWorkScheduler
             return;
         }
         _retired = true;
+        // W7-7 PR 7 (codex PR 7 round 4, finding 5): the tree query in
+        // flight is cancelled — the teardown's drain waits for none.
+        _lifetime.Cancel();
         _seq++;
         _inFlight = false;
         _request = null;
