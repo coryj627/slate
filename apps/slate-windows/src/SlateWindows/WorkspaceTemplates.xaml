@@ -177,8 +177,7 @@
                  per-item editors carry the full labels. -->
             <ItemsControl ItemsSource="{Binding Items}"
                           Focusable="False"
-                          IsTabStop="False"
-                          local:PropertiesLanding.Kind="Items">
+                          IsTabStop="False">
                 <ItemsControl.ItemTemplate>
                     <DataTemplate DataType="{x:Type panels:PropertyListItemViewModel}">
                         <StackPanel Margin="0,2" Orientation="Horizontal">
@@ -395,7 +394,7 @@
                                       IsTabStop="False"
                                       AutomationProperties.AutomationId="PropertiesRows"
                                       AutomationProperties.Name="{Binding Properties.HeaderGroupName}"
-                                      local:PropertiesLanding.Kind="Rows" />
+                                      local:PropertiesLanding.IsEnabled="True" />
                     </ScrollViewer>
                 </StackPanel>
             </Expander>

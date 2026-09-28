@@ -11,88 +11,50 @@ using SlateWindows.Panels;
 
 namespace SlateWindows;
 
-/// <summary>Which of the Properties header's rebuilt lists a
-/// <see cref="PropertiesLanding"/> guards.</summary>
-internal enum PropertiesLandingKind
-{
-    None,
-
-    /// <summary>A list property's items: Remove and Add rebuild them.</summary>
-    Items,
-
-    /// <summary>The header's rows: every committed edit republishes them.</summary>
-    Rows,
-}
-
 /// <summary>
 /// W7-7 PR 4b round 3 (#1247, R-5 (h): "a removed row's keys come back to the
-/// rows they were in"; codex r2 F3): the Properties header's two lists are
-/// rebuilt under the keys — a list property's items by Remove and Add
+/// rows they were in"; codex r2 F3): the Properties header's rows are rebuilt
+/// under the keys — a list property's items by Remove and Add
 /// (<c>PropertyRowViewModel.RebuildItems</c>), every row by the refresh after
 /// a committed edit (<c>NotePropertiesViewModel.PublishProperties</c>: Enter,
 /// the boolean switch, a date pick) — and the keys went to the editor
-/// region's landing, the note's body. Both lists are templated per tab, so
-/// each registers its landing through this attached property
-/// (WorkspaceTemplates.xaml), and each lands by what went away
-/// (<see cref="RegionFocusGuard.Holder"/>):
-/// <list type="bullet">
-/// <item>the items: the item now at the holder's place, clamped, on the same
-/// control (its editor or its Remove), else the row's Add item;</item>
-/// <item>the rows: the same property's same control (an item's by its place,
-/// clamped, else the row's Add item), else the property's first stop; a
+/// region's landing, the note's body. The rows are templated per tab, so
+/// they register their landing through this attached property
+/// (WorkspaceTemplates.xaml), which lands by what went away
+/// (<see cref="RegionFocusGuard.Holder"/>, and what it showed as it took the
+/// keys): the same property's same control — a list item's by its place,
+/// clamped, else the row's Add item — else the property's first stop; a
 /// property gone, the row now at its place; the last one gone — the rows'
-/// list collapses with it — the header's Add property.</item>
-/// </list>
+/// list collapses with it — the header's Add property. A list property's own
+/// items need no landing of their own: a Remove rebuilds them inside a row
+/// that stays, so the rows' landing finds the row and its item.
 /// A control is known by its type and what it is bound to — its command, its
 /// text, its check — never by its position among controls whose visibility a
 /// commit changes (Save, Revert).
 /// </summary>
 internal static class PropertiesLanding
 {
-    public static readonly DependencyProperty KindProperty =
+    public static readonly DependencyProperty IsEnabledProperty =
         DependencyProperty.RegisterAttached(
-            "Kind", typeof(PropertiesLandingKind), typeof(PropertiesLanding),
-            new PropertyMetadata(PropertiesLandingKind.None, OnKindChanged));
+            "IsEnabled", typeof(bool), typeof(PropertiesLanding),
+            new PropertyMetadata(false, OnIsEnabledChanged));
 
-    public static PropertiesLandingKind GetKind(DependencyObject element) =>
-        (PropertiesLandingKind)element.GetValue(KindProperty);
+    public static bool GetIsEnabled(DependencyObject element) =>
+        (bool)element.GetValue(IsEnabledProperty);
 
-    public static void SetKind(DependencyObject element, PropertiesLandingKind value) =>
-        element.SetValue(KindProperty, value);
+    public static void SetIsEnabled(DependencyObject element, bool value) =>
+        element.SetValue(IsEnabledProperty, value);
 
-    private static void OnKindChanged(DependencyObject element, DependencyPropertyChangedEventArgs e)
+    private static void OnIsEnabledChanged(DependencyObject element, DependencyPropertyChangedEventArgs e)
     {
-        if (element is not ItemsControl list)
+        if (element is not ItemsControl rows || e.NewValue is not true)
         {
             return;
         }
 
-        RegionFocusGuard.SetLanding(list, (PropertiesLandingKind)e.NewValue switch
-        {
-            PropertiesLandingKind.Items => () => LandInItems(list),
-            PropertiesLandingKind.Rows => () => LandInRows(list),
-            _ => static () => false,
-        });
-        if ((PropertiesLandingKind)e.NewValue == PropertiesLandingKind.Rows)
-        {
-            // The last property gone: the rows' list collapses with them.
-            RegionFocusGuard.SetGoneLanding(list, () => LandOnAddProperty(list));
-        }
-    }
-
-    /// <summary>The item now at the holder's place, on the same control, else
-    /// the row's Add item.</summary>
-    private static bool LandInItems(ItemsControl items)
-    {
-        if (RegionFocusGuard.Holder is not FrameworkElement holder
-            || RegionFocusGuard.HolderContext is not PropertyListItemViewModel item
-            || items.DataContext is not PropertyRowViewModel row)
-        {
-            return false;
-        }
-
-        items.UpdateLayout();
-        return LandOnItem(items, RoleOf(holder), item.Index) || LandOnAddItem(row, items);
+        RegionFocusGuard.SetLanding(rows, () => LandInRows(rows));
+        // The last property gone: the rows' list collapses with them.
+        RegionFocusGuard.SetGoneLanding(rows, () => LandOnAddProperty(rows));
     }
 
     /// <summary>The same property's same control, else its first stop; the
