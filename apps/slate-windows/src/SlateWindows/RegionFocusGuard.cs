@@ -460,12 +460,24 @@ internal static class RegionFocusGuard
     /// <summary>Whether <paramref name="proposed"/> is a stop the keys may
     /// rest on: anything but the window, a scroll viewer, a tab control
     /// (WPF's climb out of a tab's content reaches it — out of the content
-    /// region, toward the tab strip), a populated container, or an element
-    /// that holds one of the scopes the keys were in.</summary>
+    /// region, toward the tab strip), a bare populated container, or an
+    /// element that holds one of the scopes the keys were in.</summary>
     private static bool IsAStop(UIElement proposed, UIElement[] scopes) =>
         proposed is not (Window or ScrollViewer or TabControl)
-        && proposed is not ItemsControl { HasItems: true }
+        && !IsBareContainer(proposed)
         && !scopes.Any(scope => ReferenceEquals(scope, proposed) || proposed.IsAncestorOf(scope));
+
+    /// <summary>
+    /// A populated list, tree or grid ITSELF — never one of its rows. A tree's
+    /// row is an items control with rows of its own, and a stop: #1318's shell
+    /// gate caught the guard reading the window's landing in the Connections
+    /// leaf — a direct request to the tree's group row, made after the
+    /// re-root's open took the graph table's cell holding the keys out of the
+    /// tree — as that cell's hand-over to its bare list, declining it, so the
+    /// boundary fell back to the rail.
+    /// </summary>
+    private static bool IsBareContainer(UIElement element) =>
+        element is ItemsControl { HasItems: true } && ItemsControl.ItemsControlFromItemContainer(element) is null;
 
     private static DependencyObject? ParentOf(DependencyObject current) =>
         current is Visual or System.Windows.Media.Media3D.Visual3D

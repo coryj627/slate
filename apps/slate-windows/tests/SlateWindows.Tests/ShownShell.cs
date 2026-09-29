@@ -100,6 +100,20 @@ internal sealed class ShownShell : IDisposable
         Settle();
     }
 
+    /// <summary>The lifecycle's relay of the workspace's focus boundaries to
+    /// the window, as <c>VaultLifecycleViewModel.InitializeWorkspace</c>
+    /// subscribes it (a workspace attached through the setter has none).</summary>
+    public void RelayFocusBoundaries()
+    {
+        var relay = (EventHandler<WorkspaceFocusBoundary>)Delegate.CreateDelegate(
+            typeof(EventHandler<WorkspaceFocusBoundary>),
+            _lifecycle,
+            typeof(VaultLifecycleViewModel).GetMethod(
+                "Workspace_FocusBoundaryRequested", System.Reflection.BindingFlags.NonPublic | System.Reflection.BindingFlags.Instance)
+                ?? throw new InvalidOperationException("The lifecycle's boundary relay is gone"));
+        Workspace.FocusBoundaryRequested += relay;
+    }
+
     /// <summary>The welcome view shown with no workspace attached, as the
     /// lifecycle leaves it before an open.</summary>
     public void ShowWelcomeWithoutAWorkspace()

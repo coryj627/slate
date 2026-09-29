@@ -3135,6 +3135,57 @@ public sealed class ReadingFocusTests
         }
     });
 
+    /// <summary>W7-7 PR 4b on OD-12 (the amended exception): the focus guard's
+    /// landing of keys stranded in ANOTHER region — on an element disabled or
+    /// made unfocusable while still shown — is WPF's recovery made explicit,
+    /// never the reader leaving, so it leaves a route's held editor landing to
+    /// seat. (A region of the fact's own, guarded like the shell's.)</summary>
+    [Theory]
+    [InlineData("disabled")]
+    [InlineData("unfocusable")]
+    public void TheGuardsRecoveryElsewhereLeavesAHeldEditorLandingToSeat(string stranded) => RunSta(() =>
+    {
+        using var host = new Host();
+        host.Initialize("canvas");
+        host.HoldEditorLanding();
+        var holding = new TextBox { Text = "Where the reader was" };
+        var next = new TextBox { Text = "The region's own landing" };
+        var region = new StackPanel();
+        region.Children.Add(holding);
+        region.Children.Add(next);
+        RegionFocusGuard.SetLanding(region, () => next.Focus());
+        host.Show(region);
+        try
+        {
+            Assert.True(holding.Focus(), "premise: the region took no keys");
+            PumpedDispatcher.Drain();
+            host.Workspace.RequestActiveEditorFocus();
+            PumpedDispatcher.Drain();
+            Assert.True(((IShellRegionHost)host.Shell).HoldsLanding, "premise: the route's canvas landing is not held");
+            AssertFocused(holding, "the route's held landing");
+
+            if (stranded == "disabled")
+            {
+                holding.IsEnabled = false;
+            }
+            else
+            {
+                holding.Focusable = false;
+            }
+
+            PumpedDispatcher.Drain();
+
+            AssertFocused(next, $"the guard's landing in the region ({stranded})");
+            Assert.True(((IShellRegionHost)host.Shell).HoldsLanding, $"the guard's recovery withdrew the held landing ({stranded})");
+            host.LetEditorLandingArrive();
+            Assert.True(host.EditorStop().IsKeyboardFocusWithin, $"the held landing never seated ({stranded})");
+        }
+        finally
+        {
+            host.Remove(region);
+        }
+    });
+
     /// <summary>#1318's merge check, the guard's PARK: a dismissal's restore
     /// whose token died in the editor region while its canvas loads — the keys
     /// nowhere, as a dismissal leaves them — lands the canvas through the one
