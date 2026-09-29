@@ -79,6 +79,21 @@ public sealed class ShellSealAdmissionCensus
             + "held by CommandPaletteTests.AClickOnAListsEmptyAreaMovesNoKeysUnderTheSeal",
     };
 
+    /// <summary>Class handlers for routed events that carry no key, text or
+    /// pointer, each with why it cannot act on input the admission took
+    /// (file-scoped: the same registration anywhere else is an offender).</summary>
+    private static readonly Dictionary<(string File, string RoutedEvent), string> ClassHandlerAllowed = new()
+    {
+        [("EditorLandingSlot.cs", "Keyboard.GotKeyboardFocusEvent")] = FocusDepartureObserver,
+        [("EditorLandingSlot.cs", "Keyboard.LostKeyboardFocusEvent")] = FocusDepartureObserver,
+    };
+
+    /// <summary>W7-7 PR 8's one departure observer (contract 40 OD-12).</summary>
+    private const string FocusDepartureObserver =
+        "a focus-change notification, raised by a focus move — never by a key, text or pointer reaching a "
+        + "handler; the observer only lets go of the window's held editor landing or notes its entry: it runs "
+        + "no command, moves no focus and speaks nothing";
+
     private sealed record Unit(string Name, CompilationUnitSyntax Root);
 
     [Fact]
@@ -201,6 +216,7 @@ public sealed class ShellSealAdmissionCensus
     [InlineData("second-seal-read", "class MainWindow { bool M() => _viewModel.Palette.IsSealed; }")]
     [InlineData("past-handled", "class Other { void M(UIElement u) { u.AddHandler(Keyboard.KeyDownEvent, new KeyEventHandler(X), true); } }")]
     [InlineData("class-handler", "class Other { static void M() { EventManager.RegisterClassHandler(typeof(Window), Keyboard.PreviewKeyDownEvent, new KeyEventHandler(X)); } }")]
+    [InlineData("focus-class-handler-elsewhere", "class Other { static void M() { EventManager.RegisterClassHandler(typeof(UIElement), Keyboard.GotKeyboardFocusEvent, new KeyboardFocusChangedEventHandler(X), true); } }")]
     [InlineData("input-manager", "class Other { void M() { InputManager.Current.PreProcessInput += X; } }")]
     [InlineData("double-click-class-handler", "class Other { static Other() { EventManager.RegisterClassHandler(typeof(ListBox), Control.MouseDoubleClickEvent, new MouseButtonEventHandler(X), true); } }")]
     [InlineData("double-click-override", "class Other : ListBox { protected override void OnMouseDoubleClick(MouseButtonEventArgs e) => Run(); }")]
@@ -246,6 +262,54 @@ public sealed class ShellSealAdmissionCensus
         // And the planted handlers alone are clean, so the finding above is
         // the bypass, not the scaffold.
         Assert.Empty(SealReaderOffenders([handlers]));
+    }
+
+    /// <summary>
+    /// The departure observer is admitted only in its exact shape (codex on
+    /// PR 8's merge with #1298): <see cref="ClassHandlerAllowed"/> names its
+    /// events, and <see cref="FocusObserverShapeOffenders"/> holds its file to
+    /// exactly the intended registrations. The real file is clean — two
+    /// registrations in one loop over three owners, six at run time — and
+    /// each change planted in that same file is an offender.
+    /// </summary>
+    [Theory]
+    [InlineData("a wrong callback",
+        "Keyboard.GotKeyboardFocusEvent, new KeyboardFocusChangedEventHandler(OnGotKeyboardFocus)",
+        "Keyboard.GotKeyboardFocusEvent, new KeyboardFocusChangedEventHandler(OnLostKeyboardFocus)")]
+    [InlineData("a wrong owner", "typeof(ContentElement)", "typeof(Control)")]
+    [InlineData("an owner more", "typeof(UIElement3D) }", "typeof(UIElement3D), typeof(Window) }")]
+    [InlineData("a duplicate registration",
+        "new KeyboardFocusChangedEventHandler(OnGotKeyboardFocus), handledEventsToo: true);",
+        "new KeyboardFocusChangedEventHandler(OnGotKeyboardFocus), handledEventsToo: true);\n"
+        + "            EventManager.RegisterClassHandler(\n"
+        + "                owner, Keyboard.GotKeyboardFocusEvent, new KeyboardFocusChangedEventHandler(OnGotKeyboardFocus), handledEventsToo: true);")]
+    [InlineData("not past handled",
+        "new KeyboardFocusChangedEventHandler(OnLostKeyboardFocus), handledEventsToo: true);",
+        "new KeyboardFocusChangedEventHandler(OnLostKeyboardFocus), handledEventsToo: false);")]
+    [InlineData("a side-effecting handler added",
+        "new KeyboardFocusChangedEventHandler(OnLostKeyboardFocus), handledEventsToo: true);",
+        "new KeyboardFocusChangedEventHandler(OnLostKeyboardFocus), handledEventsToo: true);\n"
+        + "            EventManager.RegisterClassHandler(\n"
+        + "                owner, Keyboard.GotKeyboardFocusEvent, new KeyboardFocusChangedEventHandler((_, e) => e.Handled = true), handledEventsToo: true);")]
+    [InlineData("a registration outside the loop",
+        "    public void Dispose()",
+        "    internal static void Again() => EventManager.RegisterClassHandler(\n"
+        + "        typeof(UIElement), Keyboard.GotKeyboardFocusEvent, new KeyboardFocusChangedEventHandler(OnGotKeyboardFocus), handledEventsToo: true);\n\n"
+        + "    public void Dispose()")]
+    [InlineData("a side-effecting handler substituted",
+        "Transition(e.OldFocus, e.NewFocus);",
+        "Transition(e.OldFocus, e.NewFocus);\n                Keyboard.ClearFocus();")]
+    public void TheFocusObserverIsAdmittedOnlyInItsExactShape(string bypass, string from, string to)
+    {
+        string real = File.ReadAllText(Path.Combine(SourceText.ShellSourceRoot(), FocusObserverFile));
+        Assert.Empty(FocusObserverShapeOffenders(new Unit(FocusObserverFile, Parse(real))));
+        Assert.Empty(PastHandledOffenders([new Unit(FocusObserverFile, Parse(real))]));
+        Assert.True(
+            real.Split(from).Length == 2,
+            $"the planted {bypass} no longer finds its one anchor in {FocusObserverFile} — update the row");
+
+        List<string> found = PastHandledOffenders([new Unit(FocusObserverFile, Parse(real.Replace(from, to, StringComparison.Ordinal)))]);
+        Assert.True(found.Count > 0, $"the census admitted {bypass} in the departure observer's own file");
     }
 
     private static List<string> SealReaderOffenders(IEnumerable<Unit> shell)
@@ -455,7 +519,8 @@ public sealed class ShellSealAdmissionCensus
                     bool aReviewedBubble = BubblingClassHandlersAllowed.ContainsKey((unit.Name, routed))
                         && !routed.Contains(".Preview", StringComparison.Ordinal)
                         && arguments.Count == 3;
-                    if (!IsKnownNonInput(routed) && !theDoubleClickGate && !aReviewedBubble)
+                    if (!IsKnownNonInput(routed) && !theDoubleClickGate && !aReviewedBubble
+                        && !ClassHandlerAllowed.ContainsKey((unit.Name, routed)))
                     {
                         offenders.Add($"{unit.Name}:{Line(invocation)} registers a class handler for {routed} "
                             + "(a class handler runs before the window's own; name it here only if it carries no input)");
@@ -469,6 +534,97 @@ public sealed class ShellSealAdmissionCensus
             }))
             {
                 offenders.Add($"{unit.Name}:{Line(hook)} hooks {CSharpSource.Normalize(hook)} — input seen ahead of the window's routes");
+            }
+
+            offenders.AddRange(FocusObserverShapeOffenders(unit));
+        }
+
+        return offenders;
+    }
+
+    /// <summary>W7-7 PR 8's departure observer (contract 40 OD-12) — the one
+    /// file whose focus class handlers <see cref="ClassHandlerAllowed"/>
+    /// names.</summary>
+    private const string FocusObserverFile = "EditorLandingSlot.cs";
+
+    /// <summary>The observer's owners: every input element kind, so a popup's
+    /// and a context menu's focus is seen.</summary>
+    private const string FocusObserverOwners = "new[]{typeof(UIElement),typeof(ContentElement),typeof(UIElement3D)}";
+
+    /// <summary>The observer's registrations, the whole of its static
+    /// constructor's one loop over <see cref="FocusObserverOwners"/> — two
+    /// statements, six registrations at run time — each past handled, each to
+    /// its own callback.</summary>
+    private static readonly string[] FocusObserverRegistrations =
+    [
+        "EventManager.RegisterClassHandler(owner,Keyboard.GotKeyboardFocusEvent,newKeyboardFocusChangedEventHandler(OnGotKeyboardFocus),handledEventsToo:true);",
+        "EventManager.RegisterClassHandler(owner,Keyboard.LostKeyboardFocusEvent,newKeyboardFocusChangedEventHandler(OnLostKeyboardFocus),handledEventsToo:true);",
+    ];
+
+    /// <summary>The observer's callbacks, whole: each hands the transition to
+    /// the window slots and does nothing else.</summary>
+    private static readonly Dictionary<string, string> FocusObserverCallbacks = new()
+    {
+        ["OnGotKeyboardFocus"] = "{if(ReferenceEquals(sender,e.NewFocus)){Transition(e.OldFocus,e.NewFocus);}}",
+        ["OnLostKeyboardFocus"] = "{if(e.NewFocusisnull&&ReferenceEquals(sender,e.OldFocus)){Transition(e.OldFocus,null);}}",
+    };
+
+    /// <summary>
+    /// The departure observer in its exact shape (codex on PR 8's merge with
+    /// #1298): <see cref="FocusObserverFile"/> registers exactly
+    /// <see cref="FocusObserverRegistrations"/> — no other class handler, and
+    /// those only as the whole body of ONE loop over exactly
+    /// <see cref="FocusObserverOwners"/> in its static constructor — and its
+    /// callbacks are exactly <see cref="FocusObserverCallbacks"/>. A wrong
+    /// owner or callback, a registration more, one not past handled, or a
+    /// handler that does more is an offender, whatever
+    /// <see cref="ClassHandlerAllowed"/> names. Any other file: nothing.
+    /// </summary>
+    private static List<string> FocusObserverShapeOffenders(Unit unit)
+    {
+        var offenders = new List<string>();
+        if (unit.Name != FocusObserverFile)
+        {
+            return offenders;
+        }
+
+        int registrations = unit.Root.DescendantNodes()
+            .OfType<InvocationExpressionSyntax>()
+            .Count(invocation => invocation.Expression switch
+            {
+                IdentifierNameSyntax identifier => identifier.Identifier.ValueText == "RegisterClassHandler",
+                MemberAccessExpressionSyntax access => access.Name.Identifier.ValueText == "RegisterClassHandler",
+                _ => false,
+            });
+        ForEachStatementSyntax[] loops = unit.Root.DescendantNodes()
+            .OfType<ConstructorDeclarationSyntax>()
+            .Where(constructor => constructor.Modifiers.Any(SyntaxKind.StaticKeyword))
+            .SelectMany(constructor => constructor.DescendantNodes().OfType<ForEachStatementSyntax>())
+            .Where(loop => loop.Identifier.ValueText == "owner"
+                && CSharpSource.Normalize(loop.Expression) == FocusObserverOwners)
+            .ToArray();
+        string[] registered = loops is [{ Statement: BlockSyntax body }]
+            ? body.Statements.Select(statement => CSharpSource.Normalize(statement)).ToArray()
+            : [];
+        if (!registered.SequenceEqual(FocusObserverRegistrations) || registrations != FocusObserverRegistrations.Length)
+        {
+            offenders.Add($"{unit.Name}: the departure observer's class handlers are not exactly its intended "
+                + $"registrations — {registrations} registration(s) in the file, and the static constructor's loop "
+                + $"over {FocusObserverOwners} registers [{string.Join(" ", registered)}]");
+        }
+
+        foreach ((string name, string expected) in FocusObserverCallbacks)
+        {
+            MethodDeclarationSyntax[] declared = unit.Root.DescendantNodes()
+                .OfType<MethodDeclarationSyntax>()
+                .Where(method => method.Identifier.ValueText == name)
+                .ToArray();
+            if (declared is not [{ Body: { } callback } only]
+                || !only.Modifiers.Any(SyntaxKind.StaticKeyword)
+                || CSharpSource.Normalize(callback) != expected)
+            {
+                offenders.Add($"{unit.Name}: the departure observer's callback {name} is not exactly its intended "
+                    + "handler, which only hands the transition to the window slots");
             }
         }
 

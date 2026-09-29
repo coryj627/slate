@@ -276,7 +276,8 @@ public sealed class SelectorLandingCensus
             {
                 private readonly System.Windows.Controls.ListBox _rows = new();
 
-                bool IShellRegionHost.TryLand(ShellRegionKind region)
+                ShellRegionLanding IShellRegionHost.TryLand(
+                    ShellRegionKind region, System.Action announceWhenLanded, System.Action fallThroughWhenRefused)
                 {
                     switch (region)
                     {
@@ -285,10 +286,12 @@ public sealed class SelectorLandingCensus
                             break;
                         case ShellRegionKind.Files:
                             _ = SelectorFocus.FocusFirstOrSelectedItem(_rows);
-                            return true;
+                            return ShellRegionLanding.Landed;
                     }
 
-                    return ((IShellRegionHost)this).FocusedRegion() == region;
+                    return ((IShellRegionHost)this).FocusedRegion() == region
+                        ? ShellRegionLanding.Landed
+                        : ShellRegionLanding.Refused;
                 }
             }
             """;
@@ -308,7 +311,7 @@ public sealed class SelectorLandingCensus
                 "Planted.cs:11: SelectorFocus.FocusFirstOrSelectedItem(FilterResultsList) discards whether it landed",
                 "Planted.cs:12: PlantedAnswer() discards whether it landed",
                 "Planted.cs:13: TryFocus(token) discards whether it landed",
-                "Planted.cs:40: SelectorFocus.FocusFirstOrSelectedItem(_rows) discards whether it landed",
+                "Planted.cs:41: SelectorFocus.FocusFirstOrSelectedItem(_rows) discards whether it landed",
             ],
             discards);
         Assert.Equal(14, judged);

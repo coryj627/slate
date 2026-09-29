@@ -891,7 +891,10 @@ internal sealed class GraphSurfaceView : UserControl, IGraphSurfacePresenter
     /// nothing held, the visible surface otherwise) and stays pending, a
     /// presenter's takes none; quiescent, READY seats the grid's current row
     /// (else the first) and EMPTY or ERROR the state host — silently — and
-    /// completes the request; a quiescent LOADING has nothing to land on.</summary>
+    /// completes the request; a quiescent LOADING has nothing to land on. A
+    /// seat that completes the request is the document's TERMINAL seat and is
+    /// declared as one (R-10: a held F6 landing follows it; a provisional seat
+    /// is the watch's one entry, or a move it cancels on).</summary>
     private void TryDeliverFocus()
     {
         if (Model is not { FocusRequest: { } request } model
@@ -933,15 +936,10 @@ internal sealed class GraphSurfaceView : UserControl, IGraphSurfacePresenter
             {
                 return;
             }
-            bool landed = model.HasLiveDiagram ? FocusDiagramProjection() : _stateHost.Focus();
-            if (landed)
-            {
-                model.CompleteFocus(request);
-                if (restoration)
-                {
-                    _deferredRestoration = null;
-                }
-            }
+            // The build's terminal seat completes the request: declared, so a
+            // held F6 landing (R-10) takes the move for its arrival.
+            EndDelivery(model, request, restoration, EditorLandingSlot.SeatTerminally(
+                this, () => LandingSeats.On(model.HasLiveDiagram ? _diagram : _stateHost)));
             return;
         }
         GraphPublication publication = model.Publication;
@@ -966,7 +964,7 @@ internal sealed class GraphSurfaceView : UserControl, IGraphSurfacePresenter
             }
             return;
         }
-        bool delivered;
+        LandingSeat seat;
         switch (publication.State)
         {
             case GraphLoadState.Ready:
@@ -981,24 +979,42 @@ internal sealed class GraphSurfaceView : UserControl, IGraphSurfacePresenter
                 // The grid may have been collapsed under EMPTY or ERROR: realise
                 // its containers before the seat (Term F2).
                 _table.UpdateLayout();
-                delivered = _table.FocusProjection();
+                seat = EditorLandingSlot.SeatTerminally(this, _table.SeatProjection);
                 break;
             case GraphLoadState.Empty:
             case GraphLoadState.Error:
-                delivered = _stateHost.Focus();
+                seat = EditorLandingSlot.SeatTerminally(this, () => LandingSeats.On(_stateHost));
                 break;
             default:
                 // Quiescent LOADING: nothing to land on; the transition's load
                 // will end in a terminal state that re-asks.
                 return;
         }
-        if (delivered)
+        EndDelivery(model, request, restoration, seat);
+    }
+
+    /// <summary>R-10's tri-state end of a terminal delivery: seated completes
+    /// the request; a realized target that refused focus RELEASES it — left
+    /// pending, nothing would ever seat it, and the F6 ring (or the route's
+    /// fallback) would never resume; not yet leaves it for the edge that
+    /// realizes the target.</summary>
+    private void EndDelivery(GraphDocumentViewModel model, GraphFocusRequest request, bool restoration, LandingSeat seat)
+    {
+        if (seat == LandingSeat.NotYet)
+        {
+            return;
+        }
+        if (seat == LandingSeat.Seated)
         {
             model.CompleteFocus(request);
-            if (restoration)
-            {
-                _deferredRestoration = null;
-            }
+        }
+        else
+        {
+            model.ReleaseFocus(request);
+        }
+        if (restoration)
+        {
+            _deferredRestoration = null;
         }
     }
 
@@ -1024,7 +1040,9 @@ internal sealed class GraphSurfaceView : UserControl, IGraphSurfacePresenter
     {
         if (Model is { FocusRequest: { } request } model && ReferenceEquals(request.Owner, Owner))
         {
-            model.CompleteFocus(request);
+            // Released, not completed: a provisional seat may hold the keys,
+            // but nothing seated the request (W7-7 R-10).
+            model.ReleaseFocus(request);
             if (ReferenceEquals(_deferredRestoration, request))
             {
                 _deferredRestoration = null;
@@ -1139,7 +1157,7 @@ internal sealed class GraphSurfaceView : UserControl, IGraphSurfacePresenter
         {
             if (_deferredRestoration is { } deferred && Model is { } model)
             {
-                model.CompleteFocus(deferred);
+                model.ReleaseFocus(deferred);
                 _deferredRestoration = null;
                 _awayBecause = null;
             }
