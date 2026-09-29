@@ -345,19 +345,28 @@ public sealed class CanvasAnnouncerCensus
         // reachable in-process, so this is asserted in the source; the
         // one-sided version (return only) went green while the raise was
         // missing, which is the supplies-its-own-mechanism class a third
-        // time.
+        // time. W7-7 PR 8 (R-10): the arm hands the tab to LandDocument,
+        // which raises the request (and, for the F6 ring, only once a
+        // surface is realized to watch it) — so the raise is read there.
+        static bool RaisesTheRequest(SyntaxNode node) => node.DescendantNodesAndSelf()
+            .OfType<InvocationExpressionSyntax>()
+            .Any(invocation => invocation.Expression
+                is MemberAccessExpressionSyntax
+            {
+                Name.Identifier.ValueText: "RequestFocusLanding",
+            });
+        bool handsToLandDocument = guard.Statement.DescendantNodesAndSelf()
+            .OfType<InvocationExpressionSyntax>()
+            .Any(invocation => invocation.Expression is IdentifierNameSyntax { Identifier.ValueText: "LandDocument" });
         Assert.True(
-            guard.Statement.DescendantNodesAndSelf()
-                .OfType<InvocationExpressionSyntax>()
-                .Any(invocation => invocation.Expression
-                    is MemberAccessExpressionSyntax
-                {
-                    Name.Identifier.ValueText: "RequestFocusLanding",
-                }),
+            RaisesTheRequest(guard.Statement)
+                || (handsToLandDocument
+                    && RaisesTheRequest(CSharpSource.Load("MainWindow.ShellRegions.cs").Method("LandDocument"))),
             "the canvas arm of FocusEditorPane must RAISE a focus request "
-            + "(`canvas.RequestFocusLanding(activeTab)`), or the palette/search/"
-            + "properties/template dismissal routes strand focus on the window "
-            + "root — the very thing their own fallback comment exists to prevent.");
+            + "(`canvas.RequestFocusLanding(activeTab)`, directly or through "
+            + "LandDocument), or the palette/search/properties/template dismissal "
+            + "routes strand focus on the window root — the very thing their own "
+            + "fallback comment exists to prevent.");
         // And it has to come before the fallbacks it is protecting the
         // canvas from, not after them.
         Assert.True(

@@ -66,6 +66,39 @@ internal sealed class ReadingContentViewModel : BindableBase, IDisposable
     /// leaves behind, which a rebind must repair by refreshing even
     /// before the first publication.</summary>
     private int _liveRefreshGeneration = -1;
+
+    /// <summary>W7-7 PR 8 (R-10): the generation whose refresh failed
+    /// terminally; a newer refresh is a newer generation, so the failure is
+    /// never mistaken for its outcome.</summary>
+    private int _failedGeneration = -1;
+
+    /// <summary>Every write of the live generation goes through here, so a
+    /// surface hears when a refresh starts and when it settles.</summary>
+    private int LiveRefreshGeneration
+    {
+        get => _liveRefreshGeneration;
+        set
+        {
+            bool wasInFlight = _liveRefreshGeneration != -1;
+            _liveRefreshGeneration = value;
+            if (wasInFlight != (value != -1))
+            {
+                OnPropertyChanged(nameof(RefreshInFlight));
+            }
+        }
+    }
+
+    /// <summary>W7-7 PR 8 (R-10): a refresh of the current generation is
+    /// still live — its publish or its terminal failure can still land. A
+    /// reading surface holds a focus landing until it settles, so the reader
+    /// is never seated on a projection this refresh is about to replace (the
+    /// return to reading mode after an edit made elsewhere).</summary>
+    internal bool RefreshInFlight => _liveRefreshGeneration != -1;
+
+    /// <summary>W7-7 PR 8 (R-10): the current generation's refresh failed
+    /// terminally — whether its notice replaced the shown content or the
+    /// content was kept. A landing held for that refresh is refused.</summary>
+    internal bool LastRefreshFailed => _failedGeneration == _generation;
     private FlowDocument? _document;
     private bool _isLoading;
     private DispatcherTimer? _editDebounce;
@@ -258,7 +291,7 @@ internal sealed class ReadingContentViewModel : BindableBase, IDisposable
         // EnsureProjected restart — the pre-publication rebind
         // machinery already handles exactly this shape.
         _generation++;
-        _liveRefreshGeneration = -1;
+        LiveRefreshGeneration = -1;
     }
 
     /// <summary>
@@ -284,7 +317,7 @@ internal sealed class ReadingContentViewModel : BindableBase, IDisposable
         // re-attaches on the next bind.
         Deactivate();
         _generation++;
-        _liveRefreshGeneration = -1;
+        LiveRefreshGeneration = -1;
         _memo = null;
         // _projectionComplete is deliberately untouched: it is already
         // false for any in-flight stream (the case detach must poison),
@@ -455,7 +488,7 @@ internal sealed class ReadingContentViewModel : BindableBase, IDisposable
         }
 
         int generation = ++_generation;
-        _liveRefreshGeneration = generation;
+        LiveRefreshGeneration = generation;
         string text = _tab.Text;
         string path = _tab.Path;
         long revision = _tab.EditorSession?.Revision ?? -1;
@@ -526,6 +559,12 @@ internal sealed class ReadingContentViewModel : BindableBase, IDisposable
     /// <summary>Terminal-failure injection seam for tests.</summary>
     internal Func<Exception?>? FetchFaultForTests { get; set; }
 
+    /// <summary>W7-7 PR 8 (R-10): the published document is the terminal
+    /// failure notice, not a projection of the note, so the reading surface
+    /// is no editor stop while it shows it (the failure was announced when
+    /// it happened).</summary>
+    internal bool PublishedFailureNotice { get; private set; }
+
     /// <summary>Dispatcher-side (publish/chunk-build) fault injection
     /// seam for tests.</summary>
     internal Func<Exception?>? PublishFaultForTests { get; set; }
@@ -561,7 +600,8 @@ internal sealed class ReadingContentViewModel : BindableBase, IDisposable
         {
             return;
         }
-        _liveRefreshGeneration = -1;
+        _failedGeneration = generation;
+        LiveRefreshGeneration = -1;
         IsLoading = false;
         _announce(new A11yEvent.HostComposed(
             "Reading view could not load this note. Switch to the editor to "
@@ -589,6 +629,7 @@ internal sealed class ReadingContentViewModel : BindableBase, IDisposable
         System.Windows.Automation.AutomationProperties.SetAutomationId(
             paragraph, "ReadingRefreshFailedNotice");
         document.Blocks.Add(paragraph);
+        PublishedFailureNotice = true;
         Document = document;
     }
 
@@ -1075,8 +1116,10 @@ internal sealed class ReadingContentViewModel : BindableBase, IDisposable
             // (and re-marked itself live); nothing to repair here.
             return;
         }
-        // Whatever happens below, THIS generation's refresh has landed.
-        _liveRefreshGeneration = -1;
+        // THIS generation's refresh stays live until its projection is
+        // complete — the memo hit below, the last streamed chunk
+        // (FinishPublish), or a terminal failure (a later chunk can still
+        // fault): a landing held for it must not be seated on chunk one.
         if (!string.Equals(_tab.Path, path, StringComparison.Ordinal)
             || (_tab.EditorSession?.Revision ?? -1) != revision
             || _session.InteractionGeneration() != sessionGeneration)
@@ -1100,6 +1143,7 @@ internal sealed class ReadingContentViewModel : BindableBase, IDisposable
             fetched.ArtifactDigest);
         if (Document is not null && _memo is { } memo && memo.Matches(key))
         {
+            LiveRefreshGeneration = -1;
             return;
         }
 
@@ -1136,6 +1180,7 @@ internal sealed class ReadingContentViewModel : BindableBase, IDisposable
         _publishedTasks = fetched.Tasks;
         CollectEmbedDependencies(fetched.Embeds);
         _projectionComplete = false;
+        PublishedFailureNotice = false;
         // Only the DOCUMENT is published. The built model's landmarks
         // point into a container the surface's merge empties — the
         // surface re-collects over the live container, and a second
@@ -1274,6 +1319,8 @@ internal sealed class ReadingContentViewModel : BindableBase, IDisposable
 
     private void FinishPublish(MemoKey key, bool degraded, int renderedBlocks, bool streamed)
     {
+        // The projection is complete: the refresh has landed (R-10).
+        LiveRefreshGeneration = -1;
         // A stream nobody heard delivered nothing past chunk 1: leave
         // the memo empty so the next binding's EnsureProjected (or any
         // refresh) rebuilds instead of memo-matching a torso, and say
@@ -1310,6 +1357,11 @@ internal sealed class ReadingContentViewModel : BindableBase, IDisposable
     }
 
 
+    /// <summary>W7-7 PR 8 (R-10): raised once, when this projection is torn
+    /// down (its tab navigated in place or closed). A surface holding a
+    /// landing for its apply refuses it: none is coming.</summary>
+    internal event Action? TornDown;
+
     public void Dispose()
     {
         if (_disposed)
@@ -1321,6 +1373,7 @@ internal sealed class ReadingContentViewModel : BindableBase, IDisposable
         _editDebounce = null;
         _dependencyDebounce?.Stop();
         _dependencyDebounce = null;
+        TornDown?.Invoke();
     }
 
     private sealed record FetchResult(

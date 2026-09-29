@@ -117,13 +117,16 @@ public sealed class GraphEndToEndTests
             // Both sinks into ONE timeline: the relay's rendered lines and the
             // shell's own posts (A-8's one direct post, NoteCreated, rides the
             // shell's announce), each as core's render.
+            // W7-7 PR 8 (OD-12's one entry): the funnel only asks; the shell
+            // raises the landing request, and these facts host the graph
+            // surface without the shell (ShellLandingStandIn).
             Workspace = new WorkspaceViewModel(
                 Session,
                 root,
                 () => [],
                 @event => Lines.Add(SlateUniffiMethods.A11yRender(@event).Text),
                 startInteractionBackgroundWork: false,
-                announceRendered: line => Lines.Add(line.Text));
+                announceRendered: line => Lines.Add(line.Text)).WithShellLandings();
             Workspace.GraphMotionPolicyForTests = new GraphMotionPolicy(() => false);
             Sidebar = new FilesSidebarViewModel(Session, _ => { }, vaultRoot: root, localAppDataRoot: Path.Combine(root, ".appdata"));
             Workspace.GraphNoteCreator = Sidebar;
