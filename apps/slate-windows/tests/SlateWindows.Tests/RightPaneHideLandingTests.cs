@@ -33,7 +33,7 @@ public sealed class RightPaneHideLandingTests
         host.Workspace.ActiveLeaf = WorkspaceViewModel.Leaves.First(leaf => leaf.Id == "outline");
         host.Settle();
         var shell = (IShellRegionHost)host.Shell;
-        Assert.True(shell.TryLand(Enum.Parse<ShellRegionKind>(origin)), $"premise: {origin} took no keys");
+        Assert.True(host.Land(Enum.Parse<ShellRegionKind>(origin)), $"premise: {origin} took no keys");
         Assert.True(host.Shell.RightPaneBorder.IsKeyboardFocusWithin, "premise: the keys are not in the right pane");
         List<IInputElement> changes = host.RecordFocusChanges();
 
@@ -103,7 +103,7 @@ public sealed class RightPaneHideLandingTests
         host.Workspace.ActiveLeaf = WorkspaceViewModel.Leaves.First(option => option.Id == leaf);
         host.Settle();
         FrameworkElement leafBody = host.Body(body);
-        Assert.True(((IShellRegionHost)host.Shell).TryLand(ShellRegionKind.RightPaneContent), $"premise: {leaf} took no keys");
+        Assert.True(host.Land(ShellRegionKind.RightPaneContent), $"premise: {leaf} took no keys");
         Assert.True(leafBody.IsKeyboardFocusWithin, $"premise: the keys are not in {body}, but on {Keyboard.FocusedElement}");
 
         host.Workspace.ActiveLeaf = WorkspaceViewModel.Leaves.First(option => option.Id == (leaf == "outline" ? "backlinks" : "outline"));
@@ -123,7 +123,7 @@ public sealed class RightPaneHideLandingTests
         using var host = new ShownShell(("a.md", "Just a line of text.\n"));
         host.Workspace.OpenPath("a.md");
         host.Settle();
-        Assert.True(((IShellRegionHost)host.Shell).TryLand(ShellRegionKind.Editor), "premise: the editor took no keys");
+        Assert.True(host.Land(ShellRegionKind.Editor), "premise: the editor took no keys");
 
         host.SetVaultOpen(false);
 

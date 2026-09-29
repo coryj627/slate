@@ -69,7 +69,7 @@ public sealed class ShellBasesLandingTests : IDisposable
             BaseSurfaceView surface = Descendants(shell).OfType<BaseSurfaceView>().Single(view => view.IsVisible);
             Assert.True(surface.GridForTests.IsVisible, "premise: the Base shows its table");
 
-            Assert.True(((IShellRegionHost)shell).TryLand(ShellRegionKind.Editor), "the editor region refused a Base tab");
+            Assert.True(ShownShell.LandRegion(shell, ShellRegionKind.Editor), "the editor region refused a Base tab");
 
             Assert.IsType<DataGridCell>(Keyboard.FocusedElement);
             Assert.True(surface.IsKeyboardFocusWithin, "the keys are not in the Base's surface");
@@ -192,7 +192,7 @@ public sealed class ShellBasesLandingTests : IDisposable
             DashboardSurfaceView surface = Descendants(shell).OfType<DashboardSurfaceView>().Single(view => view.IsVisible);
             Assert.True(surface.EmptyStateForTests.IsVisible, "premise: the empty dashboard shows no notice");
 
-            Assert.True(((IShellRegionHost)shell).TryLand(ShellRegionKind.Editor), "the editor region refused an empty dashboard tab");
+            Assert.True(ShownShell.LandRegion(shell, ShellRegionKind.Editor), "the editor region refused an empty dashboard tab");
 
             Assert.Same(surface.EmptyStateForTests, Keyboard.FocusedElement);
             Assert.Equal(ShellRegionKind.Editor, ((IShellRegionHost)shell).FocusedRegion());

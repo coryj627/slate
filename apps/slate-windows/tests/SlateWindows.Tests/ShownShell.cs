@@ -115,6 +115,15 @@ internal sealed class ShownShell : IDisposable
         }
     }
 
+    /// <summary>The ring's landing of <paramref name="region"/>, silently —
+    /// no line, no fall-through (W7-7 PR 8's tri-state answer): whether the
+    /// keys are in it now.</summary>
+    public bool Land(ShellRegionKind region) => LandRegion(Shell, region);
+
+    /// <summary><see cref="Land"/> for any shell.</summary>
+    public static bool LandRegion(MainWindow shell, ShellRegionKind region) =>
+        ((IShellRegionHost)shell).TryLand(region, static () => { }, static () => { }) == ShellRegionLanding.Landed;
+
     /// <summary>Every keyboard focus change in the shell from here.</summary>
     public List<IInputElement> RecordFocusChanges()
     {

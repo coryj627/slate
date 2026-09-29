@@ -75,6 +75,149 @@ public sealed partial class GraphTableTests
 
     // --- The arms (Term F4) and the at-once delivery (Term F2) -------------------
 
+    /// <summary>Codex r6 finding 4 (attempted reproduction — it does NOT
+    /// reproduce here). Term F4 seats the grid's CURRENT row — the shared
+    /// key's — and falls to the first row only when the key names no row. With
+    /// the keyed row the last of four hundred, far below the viewport and the
+    /// grid scrolled back to row one, the landing lands on the keyed row: the
+    /// seat's own ScrollIntoView and layout realize it first. The claim —
+    /// SeatRow's NotYet covers both "no such row" and "row not realized", so a
+    /// keyed row that CANNOT be realized synchronously would hand the landing
+    /// to row one — needs a state this fixture could not reach (the grid
+    /// loaded and shown, the keyed row unrealizable, row one realized).</summary>
+    [Fact]
+    public void R6_ALandingSeatsTheKeyedRowFarBelowTheViewport()
+    {
+        RunSta(() =>
+        {
+            using var host = new Host(400, "graph-landing-keyed-row");
+            GraphDocumentViewModel document = host.Open();
+            GraphSurfaceView view = SurfaceFor(host, document);
+            using HostedWindow window = HostInWindow(view);
+            DataGrid grid = view.TableForTests.GridForTests.Grid;
+            grid.UpdateLayout();
+            GraphTableRow[] rows = [.. grid.Items.Cast<GraphTableRow>()];
+            GraphTableRow keyed = rows[^1];
+            document.ViewState.SelectedKey = keyed.StableKey;
+            host.Settle(document);
+            grid.ScrollIntoView(rows[0]);
+            grid.UpdateLayout();
+            PumpedDispatcher.Drain();
+            grid.UpdateLayout();
+            Assert.NotNull(grid.ItemContainerGenerator.ContainerFromItem(rows[0]));
+
+            document.RequestFocusLanding(GraphTabOf(host));
+            PumpedDispatcher.Drain();
+
+            Assert.Null(document.FocusRequest);
+            Assert.True(GridHasTheKeys(view));
+            Assert.Same(keyed, grid.CurrentCell.Item);
+            Assert.Equal(keyed.StableKey, document.ViewState.SelectedKey);
+        });
+    }
+
+    /// <summary>OD-12 (codex r6 finding 4): Term F4 falls to the first row only
+    /// when the shared key names NO row. A keyed row that cannot take focus
+    /// yet — the grid is not shown — leaves the landing NOT YET without
+    /// touching the first row: the grid's currency stays on the keyed row (no
+    /// scroll to the top, no current cell on row one), and the grid being shown
+    /// seats the keyed row.</summary>
+    [Fact]
+    public void AKeyedRowNotYetSeatableLeavesTheFirstRowUntouched()
+    {
+        RunSta(() =>
+        {
+            using var host = new Host(40, "graph-landing-keyed-not-yet");
+            GraphDocumentViewModel document = host.Open();
+            GraphSurfaceView view = SurfaceFor(host, document);
+            using HostedWindow window = HostInWindow(view);
+            DataGrid grid = view.TableForTests.GridForTests.Grid;
+            grid.UpdateLayout();
+            GraphTableRow[] rows = [.. grid.Items.Cast<GraphTableRow>()];
+            GraphTableRow keyed = rows[^1];
+            document.ViewState.SelectedKey = keyed.StableKey;
+            host.Settle(document);
+            grid.Visibility = Visibility.Collapsed;
+            grid.UpdateLayout();
+            PumpedDispatcher.Drain();
+
+            document.RequestFocusLanding(GraphTabOf(host));
+            PumpedDispatcher.Drain();
+
+            Assert.NotNull(document.FocusRequest);
+            Assert.NotSame(rows[0], grid.CurrentCell.Item);
+            Assert.Equal(keyed.StableKey, document.ViewState.SelectedKey);
+
+            grid.Visibility = Visibility.Visible;
+            grid.UpdateLayout();
+            PumpedDispatcher.Drain();
+
+            Assert.Null(document.FocusRequest);
+            Assert.True(GridHasTheKeys(view));
+            Assert.Same(keyed, grid.CurrentCell.Item);
+        });
+    }
+
+    /// <summary>
+    /// OD-12 under Term F3 (codex on #1300's merge with PR 8): the PROVISIONAL
+    /// seat a shell request takes while a refresh is in flight follows Term
+    /// F4 like the terminal one — the keyed row, and the first row only when
+    /// the key names no row. A keyed row that cannot take the keys yet (the
+    /// held grid not shown) leaves the first row untouched: no current cell,
+    /// no selection, no focus, nothing said. The keyed row takes the
+    /// provisional seat when the grid is shown, the request still pending for
+    /// the refresh's terminal delivery.
+    /// </summary>
+    [Fact]
+    public void AProvisionalSeatNeverTakesTheFirstRowOverAKeyedRowNotYetSeatable()
+    {
+        RunSta(() =>
+        {
+            using var host = new Host(40, "graph-provisional-keyed-not-yet");
+            GraphDocumentViewModel document = host.Open();
+            GraphSurfaceView view = SurfaceFor(host, document);
+            using HostedWindow window = HostInWindow(view);
+            DataGrid grid = view.TableForTests.GridForTests.Grid;
+            grid.UpdateLayout();
+            GraphTableRow[] rows = [.. grid.Items.Cast<GraphTableRow>()];
+            GraphTableRow keyed = rows[^1];
+            document.ViewState.SelectedKey = keyed.StableKey;
+            host.Settle(document);
+            using var park = new ParkedFetch(document, 1);
+            Assert.True(document.Request(new GraphRequest.Sort(new GraphTableSort(GraphTableColumn.Note, false))));
+            park.WaitReached();
+            Assert.True(document.IsRequestInFlight);
+            Assert.True(document.Publication.HoldsSnapshot);
+            grid.Visibility = Visibility.Collapsed;
+            grid.UpdateLayout();
+            PumpedDispatcher.Drain();
+            host.GraphLines.Clear();
+            host.ShellEvents.Clear();
+
+            document.RequestFocusLanding(GraphTabOf(host));
+            PumpedDispatcher.Drain();
+
+            Assert.NotNull(document.FocusRequest);
+            Assert.NotSame(rows[0], grid.CurrentCell.Item);
+            Assert.DoesNotContain(grid.SelectedCells, cell => ReferenceEquals(cell.Item, rows[0]));
+            Assert.False(grid.IsKeyboardFocusWithin);
+            Assert.Empty(host.GraphLines);
+            Assert.Empty(host.ShellEvents);
+
+            grid.Visibility = Visibility.Visible;
+            grid.UpdateLayout();
+            PumpedDispatcher.Drain();
+
+            Assert.True(GridHasTheKeys(view), $"the keyed row took no provisional seat; the keys are on {Keyboard.FocusedElement}");
+            Assert.Same(keyed, grid.CurrentCell.Item);
+            Assert.NotNull(document.FocusRequest);
+            Assert.Empty(host.GraphLines);
+            Assert.Empty(host.ShellEvents);
+            park.Release();
+            host.Settle(document);
+        });
+    }
+
     [Fact]
     public void AFreshOpenLandsFocusOnTheGridsRow()
     {

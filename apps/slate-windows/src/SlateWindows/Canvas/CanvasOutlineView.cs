@@ -456,12 +456,22 @@ internal sealed class CanvasOutlineView : UserControl
     /// the request pending so the next realization delivers it.
     /// </para>
     /// </remarks>
-    internal CanvasOutlineRowViewModel? DeliverFocus(string nodeId)
+    internal CanvasOutlineRowViewModel? DeliverFocus(string nodeId) =>
+        SeatFocus(nodeId) == LandingSeat.Seated && _byNode.TryGetValue(nodeId, out CanvasOutlineRowViewModel? row)
+            ? row
+            : null;
+
+    /// <summary>W7-7 PR 8 (R-10): <see cref="DeliverFocus"/> as the tri-state a
+    /// terminal landing needs. NOT YET while the row has no realized container
+    /// (or the tree has not rebuilt from the rows the surface chose among) —
+    /// the next realization re-asks; SEATED when its container took focus;
+    /// REFUSED when the realized container will not.</summary>
+    internal LandingSeat SeatFocus(string nodeId)
     {
         if (Model is not { } model
             || !_byNode.TryGetValue(nodeId, out CanvasOutlineRowViewModel? target))
         {
-            return null;
+            return LandingSeat.NotYet;
         }
         // Contract C12 / CD-40: a delivery is a LANDING, not a move the
         // user made, so it is silent. The whole body runs inside the sync
@@ -476,9 +486,13 @@ internal sealed class CanvasOutlineView : UserControl
         {
             SetSelectedRow(target);
             model.SeatSelectionSilently(nodeId);
-            return RealizeContainer(target) is { } container && container.Focus()
-                ? target
-                : null;
+            if (RealizeContainer(target) is not { } container)
+            {
+                return LandingSeat.NotYet;
+            }
+            return container.Focus() ? LandingSeat.Seated
+                : container.IsVisible ? LandingSeat.Refused
+                : LandingSeat.NotYet;
         }
         finally
         {

@@ -23,6 +23,30 @@ internal sealed partial class WorkspaceViewModel
     private readonly Dictionary<string, CanvasDocumentViewModel> _canvasDocuments =
         new(StringComparer.Ordinal);
 
+    /// <summary>W7-7 PR 8 (R-10, OD-12's one entry): a canvas jump asks the
+    /// shell to land the editor on a named card. An INTENT, not a request:
+    /// the document is untouched here — the shell's one landing entry checks
+    /// that the tab is still the active tab of the active group and that no
+    /// modal surface is open, holds the landing in its slot, and only then
+    /// raises the addressed request. A stale intent (the reader moved to
+    /// another pane or tab before it ran) lands nothing and cancels nothing.</summary>
+    internal event EventHandler<CanvasNodeLandingIntent>? CanvasNodeLandingRequested;
+
+    /// <summary>W7-7 PR 8 (R-10, OD-12): a canvas jump's named landing (the
+    /// marks list's Enter, IG-39) — the card the reader chose, not the
+    /// funnel's unnamed one — handed to the shell as an intent
+    /// (<see cref="CanvasNodeLandingRequested"/>).</summary>
+    internal void RaiseCanvasNodeLanding(CanvasDocumentViewModel document, object owner, string nodeId)
+    {
+        ArgumentNullException.ThrowIfNull(document);
+        ArgumentNullException.ThrowIfNull(owner);
+        ArgumentNullException.ThrowIfNull(nodeId);
+        if (owner is WorkspaceTabViewModel tab)
+        {
+            CanvasNodeLandingRequested?.Invoke(this, new CanvasNodeLandingIntent(tab, document, nodeId));
+        }
+    }
+
     /// <summary>The active tab's canvas document, or null — every
     /// <c>slate.canvas.*</c> command gates on this (the Bases
     /// <c>ActiveBaseDocument</c> precedent). Keyed on the ATTACHED
@@ -146,7 +170,11 @@ internal sealed partial class WorkspaceViewModel
                 _ = TryPresentCanvasPrompt(CanvasPromptViewModel.SetColorMarked(document));
             document.MarksListRequested += owner =>
                 _ = TryPresentCanvasPrompt(
-                    CanvasPromptViewModel.MarksList(document, owner, CloseCanvasPromptIfCurrent));
+                    CanvasPromptViewModel.MarksList(
+                        document,
+                        owner,
+                        CloseCanvasPromptIfCurrent,
+                        (landingOwner, nodeId) => RaiseCanvasNodeLanding(document, landingOwner, nodeId)));
             _canvasDocuments[key] = document;
             InstallCanvasDocumentSeams(document);
             document.Load();
@@ -590,6 +618,10 @@ internal sealed partial class WorkspaceViewModel
         else if (result == CanvasPromptSubmit.Completed)
         {
             CanvasPromptSheet = null;
+            // W7-7 PR 8 (R-10, OD-12): a submit that ends in a landing (the
+            // marks list's jump) raises it now, in the turn that closed the
+            // sheet — never deferred behind input the reader has queued.
+            sheet.CompletedAndClosed();
         }
     }
 

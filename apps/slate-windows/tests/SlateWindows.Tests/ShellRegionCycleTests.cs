@@ -18,20 +18,67 @@ public sealed class ShellRegionCycleTests
         public string StatusText { get; set; } = "Scan finished: 2 files indexed.";
         public ShellRegionKind? Focused { get; set; }
         public HashSet<ShellRegionKind> Refuses { get; } = [];
+        public HashSet<ShellRegionKind> Holds { get; } = [];
         public List<ShellRegionKind> Landed { get; } = [];
+        public List<(Action Announce, Action FallThrough)> Held { get; } = [];
+        public int Withdrawals { get; private set; }
+
+        /// <summary>Whether the host still holds the landing it answered
+        /// Pending for — false models a host that already let go of it (it
+        /// completed, the view changed, the reader moved).</summary>
+        public bool StillHeld { get; set; } = true;
+
+        /// <summary>The landing this host holds, as the window's one slot does
+        /// (R-10, OD-12): the last Pending answer, until it completes or is
+        /// withdrawn.</summary>
+        private object? _held;
+        private ShellRegionKind _heldRegion;
+
+        public bool HoldsLanding => _held is not null && StillHeld;
+
+        public ShellRegionKind? HeldRingRegion => HoldsLanding ? _heldRegion : null;
+
+        public bool WithdrawHeldLanding()
+        {
+            Withdrawals++;
+            bool held = HoldsLanding;
+            _held = null;
+            return held;
+        }
 
         public ShellRegionKind? FocusedRegion() => Focused;
 
-        public bool TryLand(ShellRegionKind region)
+        public ShellRegionLanding TryLand(ShellRegionKind region, Action announceWhenLanded, Action fallThroughWhenRefused)
         {
             Landed.Add(region);
             if (Refuses.Contains(region))
             {
-                return false;
+                return ShellRegionLanding.Refused;
+            }
+
+            if (Holds.Contains(region))
+            {
+                // The host lets go of its landing when that landing ends; a
+                // completion handed to the ring after a withdrawal is passed
+                // through all the same, so the ring's own staleness guard is
+                // what these facts witness.
+                object landing = new();
+                _held = landing;
+                _heldRegion = region;
+                void Ended()
+                {
+                    if (ReferenceEquals(_held, landing))
+                    {
+                        _held = null;
+                    }
+                }
+
+                Held.Add((() => { Ended(); announceWhenLanded(); }, () => { Ended(); fallThroughWhenRefused(); }));
+                return ShellRegionLanding.Pending;
             }
 
             Focused = region;
-            return true;
+            return ShellRegionLanding.Landed;
         }
     }
 
@@ -146,6 +193,11 @@ public sealed class ShellRegionCycleTests
             Assert.Equal([ShellRegionKind.RightPaneContent, ShellRegionKind.RightPaneRail], host.Landed);
             A11yEvent.ShellRegionFocused region = Assert.IsType<A11yEvent.ShellRegionFocused>(Assert.Single(announced));
             Assert.IsType<ShellRegion.RightPaneRail>(region.Region);
+
+            // W7-7 R-10: a press whose landings were answered at once holds
+            // nothing, so the next press has nothing to withdraw.
+            workspace.FocusNextPaneCommand.Execute(null);
+            Assert.Equal(0, host.Withdrawals);
         }
     }
 
@@ -265,6 +317,261 @@ public sealed class ShellRegionCycleTests
             A11yEvent.ShellRegionFocused region =
                 Assert.IsType<A11yEvent.ShellRegionFocused>(Assert.Single(announced));
             Assert.IsType<ShellRegion.MenuBar>(region.Region);
+        }
+    }
+
+    /// <summary>W7-7 PR 8 (R-10): a region that holds the landing for
+    /// content still arriving (a reading surface) is neither announced nor
+    /// passed over — the W7-6 contract speaks a region only once focus is in
+    /// it. The host speaks the same line when focus arrives, through the
+    /// callback the ring handed it.</summary>
+    [Fact]
+    public void AHeldLandingIsSpokenOnlyWhenFocusArrives()
+    {
+        (WorkspaceViewModel workspace, FakeHost host, List<A11yEvent> announced, FixtureVault fixture, VaultSession session) = Open();
+        using (fixture)
+        using (session)
+        using (workspace)
+        {
+            workspace.OpenPath("note0.md");
+            announced.Clear();
+            host.Focused = ShellRegionKind.TabBar;
+            host.Holds.Add(ShellRegionKind.Editor);
+
+            workspace.FocusNextPaneCommand.Execute(null);
+
+            Assert.Equal([ShellRegionKind.Editor], host.Landed);
+            Assert.Empty(announced);
+
+            Assert.Single(host.Held).Announce();
+
+            A11yEvent.EditorPaneFocused pane = Assert.IsType<A11yEvent.EditorPaneFocused>(Assert.Single(announced));
+            Assert.Equal("note0", pane.Title);
+
+            // Spoken, the landing is done: the next press withdraws nothing
+            // and goes on from where focus arrived.
+            host.Focused = ShellRegionKind.Editor;
+            workspace.FocusNextPaneCommand.Execute(null);
+            Assert.Equal(0, host.Withdrawals);
+            Assert.Equal([ShellRegionKind.Editor, ShellRegionKind.RightPaneContent], host.Landed);
+        }
+    }
+
+    /// <summary>A held landing that turns out untakeable (its focus refused,
+    /// or only the load-failure notice arrived) resumes the SAME press past
+    /// it: the next region receives focus once and speaks its own line, the
+    /// held region never. A modal surface that opened meanwhile owns the keys,
+    /// so nothing resumes.</summary>
+    [Theory]
+    [InlineData(false)]
+    [InlineData(true)]
+    public void ARefusedHeldLandingResumesThePressPastIt(bool modalOpenedMeanwhile)
+    {
+        (WorkspaceViewModel workspace, FakeHost host, List<A11yEvent> announced, FixtureVault fixture, VaultSession session) = Open();
+        using (fixture)
+        using (session)
+        using (workspace)
+        {
+            workspace.OpenPath("note0.md");
+            announced.Clear();
+            host.Focused = ShellRegionKind.TabBar;
+            host.Holds.Add(ShellRegionKind.Editor);
+            workspace.FocusNextPaneCommand.Execute(null);
+            Assert.Equal([ShellRegionKind.Editor], host.Landed);
+            host.ModalSurfaceOpen = modalOpenedMeanwhile;
+
+            Assert.Single(host.Held).FallThrough();
+
+            if (modalOpenedMeanwhile)
+            {
+                Assert.Equal([ShellRegionKind.Editor], host.Landed);
+                Assert.Empty(announced);
+                return;
+            }
+
+            Assert.Equal([ShellRegionKind.Editor, ShellRegionKind.RightPaneContent], host.Landed);
+            Assert.IsType<A11yEvent.LeafPanelShown>(Assert.Single(announced));
+        }
+    }
+
+    /// <summary>R-10: a second press while a landing is held CANCELS it — the
+    /// host lets go of it, once — and starts a fresh traversal FROM THE HELD
+    /// REGION'S RING POSITION in the new press's direction. Focus on the tab
+    /// bar, the editor held: F6 goes on to the right pane's content (itself
+    /// held here, so the replacement is a token of its own); Shift+F6 goes
+    /// back to the tab bar. The cancelled token, completed after its
+    /// replacement was issued, does nothing — no line, no second traversal,
+    /// no focus move — and the replacement still completes: one landing, one
+    /// line.</summary>
+    [Theory]
+    [InlineData(false)]
+    [InlineData(true)]
+    public void ASecondPressCancelsAHeldLanding(bool backward)
+    {
+        (WorkspaceViewModel workspace, FakeHost host, List<A11yEvent> announced, FixtureVault fixture, VaultSession session) = Open();
+        using (fixture)
+        using (session)
+        using (workspace)
+        {
+            workspace.OpenPath("note0.md");
+            announced.Clear();
+            host.Focused = ShellRegionKind.TabBar;
+            host.Holds.Add(ShellRegionKind.Editor);
+            host.Holds.Add(ShellRegionKind.RightPaneContent);
+            workspace.FocusNextPaneCommand.Execute(null);
+            (Action announceFirst, Action fallThroughFirst) = Assert.Single(host.Held);
+
+            (backward ? workspace.FocusPreviousPaneCommand : workspace.FocusNextPaneCommand).Execute(null);
+
+            A11yEvent tabBar = new A11yEvent.TabFocused("Tab bar. ", "note0", 1, 1);
+            Assert.Equal(1, host.Withdrawals);
+            if (backward)
+            {
+                Assert.Equal([ShellRegionKind.Editor, ShellRegionKind.TabBar], host.Landed);
+                Assert.Equal(ShellRegionKind.TabBar, host.Focused);
+                Assert.Equal([tabBar], announced);
+                Assert.Single(host.Held);
+            }
+            else
+            {
+                Assert.Equal([ShellRegionKind.Editor, ShellRegionKind.RightPaneContent], host.Landed);
+                Assert.Equal(ShellRegionKind.TabBar, host.Focused);
+                Assert.Equal(2, host.Held.Count);
+                Assert.NotSame(announceFirst, host.Held[1].Announce);
+                Assert.NotSame(fallThroughFirst, host.Held[1].FallThrough);
+                Assert.Empty(announced);
+            }
+
+            // The cancelled token completes after its replacement was issued.
+            announceFirst();
+            fallThroughFirst();
+
+            Assert.Equal(1, host.Withdrawals);
+            if (backward)
+            {
+                Assert.Equal([ShellRegionKind.Editor, ShellRegionKind.TabBar], host.Landed);
+                Assert.Equal(ShellRegionKind.TabBar, host.Focused);
+                Assert.Equal([tabBar], announced);
+                return;
+            }
+
+            Assert.Equal([ShellRegionKind.Editor, ShellRegionKind.RightPaneContent], host.Landed);
+            Assert.Equal(ShellRegionKind.TabBar, host.Focused);
+            Assert.Empty(announced);
+            host.Held[1].Announce();
+            Assert.Equal([new A11yEvent.LeafPanelShown(workspace.ActiveLeaf.Title)], announced);
+        }
+    }
+
+    /// <summary>R-10: the held region is the ring's position only while the
+    /// host still held its landing with the reader exactly where the held
+    /// press left them — the host answers (OD-12: its slot is the one answer).
+    /// A landing the host already let go of (it completed, the view changed,
+    /// the reader moved — even within one region) holds no position, and there
+    /// is nothing to withdraw: the next press starts from where focus is —
+    /// from the tab bar the editor, asked again; from the Files tree the tab
+    /// bar.</summary>
+    [Theory]
+    [InlineData("the tab bar")]
+    [InlineData("the Files tree")]
+    public void APressAfterTheHostLetGoOfTheHeldLandingStartsFromFocus(string from)
+    {
+        (WorkspaceViewModel workspace, FakeHost host, List<A11yEvent> announced, FixtureVault fixture, VaultSession session) = Open();
+        using (fixture)
+        using (session)
+        using (workspace)
+        {
+            workspace.OpenPath("note0.md");
+            announced.Clear();
+            host.Focused = ShellRegionKind.TabBar;
+            host.Holds.Add(ShellRegionKind.Editor);
+            workspace.FocusNextPaneCommand.Execute(null);
+            Assert.Single(host.Held);
+            host.StillHeld = false;
+            if (from == "the Files tree")
+            {
+                host.Focused = ShellRegionKind.Files;
+            }
+
+            workspace.FocusNextPaneCommand.Execute(null);
+
+            Assert.Equal(0, host.Withdrawals);
+            if (from == "the tab bar")
+            {
+                Assert.Equal([ShellRegionKind.Editor, ShellRegionKind.Editor], host.Landed);
+                Assert.Equal(2, host.Held.Count);
+                Assert.Empty(announced);
+                return;
+            }
+
+            Assert.Equal([ShellRegionKind.Editor, ShellRegionKind.TabBar], host.Landed);
+            Assert.Equal(ShellRegionKind.TabBar, host.Focused);
+            Assert.Equal([new A11yEvent.TabFocused("Tab bar. ", "note0", 1, 1)], announced);
+        }
+    }
+
+    /// <summary>R-10 (W7-6 §4's modal rule): a held landing whose success
+    /// arrives while a modal surface is open is not spoken — the modal owns
+    /// the keys — and the press is over: the next press has nothing to
+    /// withdraw.</summary>
+    [Fact]
+    public void AHeldLandingCompletingUnderAModalIsNotSpoken()
+    {
+        (WorkspaceViewModel workspace, FakeHost host, List<A11yEvent> announced, FixtureVault fixture, VaultSession session) = Open();
+        using (fixture)
+        using (session)
+        using (workspace)
+        {
+            workspace.OpenPath("note0.md");
+            announced.Clear();
+            host.Focused = ShellRegionKind.TabBar;
+            host.Holds.Add(ShellRegionKind.Editor);
+            workspace.FocusNextPaneCommand.Execute(null);
+            (Action announce, _) = Assert.Single(host.Held);
+            host.ModalSurfaceOpen = true;
+
+            announce();
+
+            Assert.Empty(announced);
+            Assert.False(workspace.HoldsShellRegionLanding);
+            host.ModalSurfaceOpen = false;
+            host.Holds.Clear();
+            workspace.FocusNextPaneCommand.Execute(null);
+            Assert.Equal(0, host.Withdrawals);
+        }
+    }
+
+    /// <summary>R-10: another route asking for the editor — the funnel behind
+    /// every open, tab switch and pane move — withdraws the landing the ring
+    /// holds, synchronously and once; its late completions then do nothing,
+    /// and the next press starts from where focus is.</summary>
+    [Fact]
+    public void AnotherRouteRequestingTheEditorWithdrawsTheHeldLanding()
+    {
+        (WorkspaceViewModel workspace, FakeHost host, List<A11yEvent> announced, FixtureVault fixture, VaultSession session) = Open();
+        using (fixture)
+        using (session)
+        using (workspace)
+        {
+            workspace.OpenPath("note0.md");
+            announced.Clear();
+            host.Focused = ShellRegionKind.TabBar;
+            host.Holds.Add(ShellRegionKind.Editor);
+            workspace.FocusNextPaneCommand.Execute(null);
+            (Action announce, Action fallThrough) = Assert.Single(host.Held);
+
+            workspace.RequestActiveEditorFocus();
+
+            Assert.Equal(1, host.Withdrawals);
+            Assert.False(workspace.HoldsShellRegionLanding);
+            announce();
+            fallThrough();
+            Assert.Empty(announced);
+            Assert.Equal([ShellRegionKind.Editor], host.Landed);
+
+            workspace.FocusNextPaneCommand.Execute(null);
+            Assert.Equal(1, host.Withdrawals);
+            Assert.Equal([ShellRegionKind.Editor, ShellRegionKind.Editor], host.Landed);
         }
     }
 

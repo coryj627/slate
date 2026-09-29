@@ -1382,7 +1382,10 @@ the sites and write the design.
    { Owner, NodeId }` lives on the document as `FocusRequest`.
    `RequestActiveEditorFocus` — the one funnel every user-initiated open
    calls and no background path does — raises it, addressed to the tab
-   that asked. It stays pending until a surface delivers it and says so
+   that asked. (Amended by W7-7 OD-12, contract 40: the funnel asks, and
+   the shell's one landing entry raises the request, addressed the same
+   way, after the window's slot holds the landing and never under an
+   open modal surface.) It stays pending until a surface delivers it and says so
    (`CompleteFocusLanding`), and a newer request supersedes an older one
    because raising OVERWRITES: completion compares the pending RECORD by
    reference, so a late delivery of a superseded request cannot clear a
@@ -6707,7 +6710,12 @@ Where-am-I remain the two ungated rows.
 > still below; the palette's Next/Previous Card keep the filtered order.
 > Pinned by `TheBoardsArrowsWalkTheFullSceneDimmedCardsIncluded`,
 > `AFilteredOutSeatStepsThroughTheSceneOnTheBoardAndIntoTheFilteredSetByTheVerbs`
-> and the journey's filtered leg.
+> and the journey's filtered leg. The board's landing reads the same order
+> (W7-7 R-10, reconciled when PR 8 merged after this follow-up): a landing
+> that falls back to the board's first card — under a needle matching no
+> card, or with no card named or returned from — seats the first stop of
+> `SceneReadingOrder`, so a landing and a walk agree on which card is first
+> (`TheBoardsFullSceneLandingSeatsTheFirstCardInReadingOrder`).
 >
 > **Corrected by follow-up #1271 (D4).** The reveal is origin-aware, not
 > unconditional: the navigator hands `RevealSeat` the move's origin
@@ -10346,7 +10354,10 @@ the filter and the announcer's new `FireFilterLineNow` emits the
 filter line as the one arbiter before the landing posts (IG-42), and
 the A14 request — addressed to the owner captured at open, the tab
 the pane renders — posts at background priority so it runs only
-after the workspace has cleared the sheet; A14's own outcomes
+after the workspace has cleared the sheet (amended by W7-7 OD-12,
+contract 40: the workspace raises it in the SAME turn, right after it
+clears the sheet, so no input queued behind the Enter runs first and is
+undone by the jump; the shell's one landing entry holds it); A14's own outcomes
 (delivered, pending, dropped) are the landing's, and the invented
 synchronous failure arm is gone (IG-41). Delete unmarks the active
 row through the document's idempotent, spoken `Unmark`. A refused
