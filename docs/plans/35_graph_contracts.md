@@ -8812,7 +8812,9 @@ surface's field, panel and state host).
   (`MainWindow.xaml.cs:1645–1690`) gains a graph arm before its editor
   and tab-container fallbacks — the canvas arm's shape (`:1660–1664`) —
   and `RequestActiveEditorFocus` (`Layout.cs:734–742`) addresses a graph
-  tab's document beside a canvas tab's; the window's `FocusRequestArbiter`
+  tab's document beside a canvas tab's (amended by W7-7 OD-12, contract
+  40: the funnel asks, and the shell's one landing entry raises the
+  addressed request under the window's slot); the window's `FocusRequestArbiter`
   (`:447`, `:456`) stamps the shell's deferred landings so a later request
   wins (IPC-2).
 

@@ -378,7 +378,7 @@ internal sealed class AccessibleDataGrid : UserControl
         {
             return _grid.Focus();
         }
-        return FocusCellElement(_items[0], _grid.Columns[0]);
+        return FocusCellElement(_items[0], _grid.Columns[0]) == LandingSeat.Seated;
     }
 
     /// <summary>
@@ -476,7 +476,7 @@ internal sealed class AccessibleDataGrid : UserControl
             _lastAnnouncedRow = match;
             if (moveFocus)
             {
-                focusedTheRow = FocusCellElement(match, column);
+                focusedTheRow = FocusCellElement(match, column) == LandingSeat.Seated;
                 return;
             }
             _grid.CurrentCell = new DataGridCellInfo(match, column);
@@ -484,6 +484,41 @@ internal sealed class AccessibleDataGrid : UserControl
             _grid.SelectedCells.Add(_grid.CurrentCell);
         });
         return !moveFocus || focusedTheRow;
+    }
+
+    /// <summary>
+    /// W7-7 PR 8 (R-10): <see cref="SelectRow"/>'s focus-moving seat as the
+    /// tri-state a terminal landing needs. NOT YET while the row cannot take
+    /// focus yet — no columns, its container not generated or its cell not
+    /// shown (<see cref="ContainersRealized"/> brings the caller back); SEATED
+    /// when the row's cell took focus; REFUSED when the cell is shown and will
+    /// not. OD-12 (codex round 6): NO ROW — null, and nothing touched — when no
+    /// row matches, which is not "not yet": a caller with a fallback row (Term
+    /// F4's first row) falls to it only then, never over a keyed row that is
+    /// merely still being realized.
+    /// </summary>
+    internal LandingSeat? SeatRow(Func<object, bool> predicate)
+    {
+        ArgumentNullException.ThrowIfNull(predicate);
+        if (_grid.Columns.Count == 0)
+        {
+            return LandingSeat.NotYet;
+        }
+        if (_items.FirstOrDefault(predicate) is not { } match)
+        {
+            return null;
+        }
+        DataGridColumn column = _grid.CurrentCell.Column is { } currentColumn
+            && _grid.Columns.Contains(currentColumn)
+                ? currentColumn
+                : _grid.Columns[0];
+        LandingSeat seat = LandingSeat.NotYet;
+        WithoutAnnouncing(() =>
+        {
+            _lastAnnouncedRow = match;
+            seat = FocusCellElement(match, column);
+        });
+        return seat;
     }
 
     /// <summary>
@@ -519,7 +554,7 @@ internal sealed class AccessibleDataGrid : UserControl
     /// only a realized row counts as delivered and a fallback that says
     /// "true" consumes a request nothing ever satisfied.
     /// </returns>
-    private bool FocusCellElement(object item, DataGridColumn column)
+    private LandingSeat FocusCellElement(object item, DataGridColumn column)
     {
         _grid.ScrollIntoView(item, column);
         if (_grid.IsLoaded)
@@ -533,12 +568,17 @@ internal sealed class AccessibleDataGrid : UserControl
                 is DataGridRow row
             && column.GetCellContent(row)?.Parent is DataGridCell cell)
         {
-            return cell.Focus();
+            // A cell that is not shown yet (its grid only just realized) is
+            // not a refusal: the layout that shows it brings the caller back.
+            return cell.Focus() ? LandingSeat.Seated
+                : cell.IsVisible ? LandingSeat.Refused
+                : LandingSeat.NotYet;
         }
         // The reader is NOT on the row. Focus still goes somewhere
-        // sensible rather than nowhere, but the caller is told the truth.
+        // sensible rather than nowhere, but the caller is told the truth:
+        // the row's container is not realized yet.
         _ = _grid.Focus();
-        return false;
+        return LandingSeat.NotYet;
     }
 
     /// <summary>

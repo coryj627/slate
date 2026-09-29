@@ -1023,8 +1023,11 @@ public sealed class CanvasDocumentTests : IDisposable
     }
 
     /// <summary>§G TG-2 (IG-39): Enter JUMPS — the sheet closes FIRST,
-    /// the A14 landing posts after, addressed to the captured owner;
-    /// the seat is silent (no moved-to line).</summary>
+    /// the A14 landing is raised after, addressed to the captured owner;
+    /// the seat is silent (no moved-to line). W7-7 PR 8 (codex PR 8
+    /// round 9): "after" is the same turn — the landing is raised the
+    /// moment the workspace cleared the sheet, never posted behind input
+    /// the reader queued.</summary>
     [Fact]
     public void JumpClosesFirstThenLandsThroughA14()
     {
@@ -1040,15 +1043,14 @@ public sealed class CanvasDocumentTests : IDisposable
         document.OpenMarksList(tab);
         Assert.IsType<CanvasMarksListPrompt>(workspace.CanvasPromptSheet);
         _announced.Clear();
-        CanvasFocusRequest? standing = document.FocusRequest;
+        bool closedWhenAsked = false;
+        workspace.CanvasNodeLandingRequested += (_, _) => closedWhenAsked = workspace.CanvasPromptSheet is null;
 
         workspace.SubmitCanvasPrompt();
 
-        // Closed first: the Jump's landing is not yet posted — whatever
-        // request stood before (the tab's own nodeless one) still stands.
+        // Closed first, then landed — in the one turn, nothing pumped.
         Assert.Null(workspace.CanvasPromptSheet);
-        Assert.Same(standing, document.FocusRequest);
-        PumpDispatcher();
+        Assert.True(closedWhenAsked, "the jump's landing was asked for before the sheet closed");
         Assert.Same(tab, document.FocusRequest?.Owner);
         Assert.Equal("evidence", document.FocusRequest?.NodeId);
         Assert.Equal("evidence", document.Selection.Selected);
@@ -1258,14 +1260,17 @@ public sealed class CanvasDocumentTests : IDisposable
         Assert.Same(successor, workspace.CanvasPromptSheet);
     }
 
+    // W7-7 PR 8 (OD-12's one entry): the funnel only asks; the shell raises
+    // the landing request, and these facts host the canvas surface without the
+    // shell (ShellLandingStandIn).
     private WorkspaceViewModel NewWorkspace(Action<A11yEvent>? announce = null) =>
-        new(
+        new WorkspaceViewModel(
             _session,
             _fixture.Root,
             () => [],
             announce ?? (_ => { }),
             startInteractionBackgroundWork: false,
-            announceRendered: _announced.Add);
+            announceRendered: _announced.Add).WithShellLandings();
 
     private static CanvasOutlineRow Row(CanvasDocumentViewModel document, string nodeId) =>
         Assert.IsType<CanvasOutlineRow>(document.RowFor(nodeId));

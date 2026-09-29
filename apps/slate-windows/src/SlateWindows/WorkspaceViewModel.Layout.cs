@@ -701,6 +701,13 @@ internal sealed partial class WorkspaceViewModel
 
         int index = ActiveGroup.ActiveTab is null ? 0 : ActiveGroup.Tabs.IndexOf(ActiveGroup.ActiveTab);
         ActiveGroup.ActiveTab = ActiveGroup.Tabs[(index + delta + ActiveGroup.Tabs.Count) % ActiveGroup.Tabs.Count];
+        // W7-7 PR 8 (R-10): a user's tab switch lands the new tab's editor
+        // stop. Cycling into a reading tab used to rely on the reading
+        // surface focusing itself when shown; the surface now takes focus
+        // only through the landing this funnel asks for, and without the
+        // request WPF's recovery off the collapsed editor seats the tab
+        // control — record F10's "Workspace tabs, tab control".
+        RequestActiveEditorFocus();
     }
 
     /// <summary>One F6 (<paramref name="direction"/> +1) or Shift+F6 (-1)
@@ -712,16 +719,118 @@ internal sealed partial class WorkspaceViewModel
             return;
         }
 
+        // A newer press CANCELS a held one (R-10): withdrawn — no line, no
+        // fall-through, and the host lets go of it — so a late completion can
+        // never finish a second traversal. The ring stands on the held region:
+        // while the host still holds a press's landing, with the reader exactly
+        // where the held press left them, the new press goes on from THAT ring
+        // position in its own direction (F6 → the region after the editor,
+        // Shift+F6 → the tab bar) and never asks it again. A landing the host
+        // already let go of — it completed, the view changed, the reader moved,
+        // even within one region — holds no position: the press starts from
+        // where focus is. OD-12: whether a landing is held, and the position it
+        // holds, are the host's one answer (the window's slot); the ring keeps
+        // only the identity of its latest press.
+        ShellRegionKind? from = host.FocusedRegion();
+        _ringPress = null;
+        if (host.HeldRingRegion is { } heldRegion && host.WithdrawHeldLanding())
+        {
+            from = heldRegion;
+        }
+
+        CycleShellRegionFrom(host, from, direction, attemptsTaken: 0);
+    }
+
+    /// <summary>W7-7 PR 8 (R-10): the ring's latest press — the only one whose
+    /// completions act. Not "is a landing held" (OD-12: the host's slot alone
+    /// answers that): a continuation of a press this one superseded, or one the
+    /// funnel withdrew, is a no-op even from a host that broke its
+    /// never-after-withdrawal contract.</summary>
+    private object? _ringPress;
+
+    /// <summary>W7-7 PR 8 (R-10, OD-12): the window holds a landing the F6 ring
+    /// asked for — the host's slot answers.</summary>
+    internal bool HoldsShellRegionLanding => ShellRegionHost?.HeldRingRegion is not null;
+
+    /// <summary>W7-7 PR 8 (R-10): let go of the editor landing the window holds
+    /// — silently, and synchronously, before anything else moves: another
+    /// route is putting the reader somewhere (the editor-focus funnel behind
+    /// every open, tab switch and pane move), so a late completion must neither
+    /// seat focus nor speak. OD-12: the window holds one, whoever asked for it.</summary>
+    internal void WithdrawHeldShellRegionLanding()
+    {
+        _ringPress = null;
+        if (ShellRegionHost is { HoldsLanding: true } host)
+        {
+            _ = host.WithdrawHeldLanding();
+        }
+    }
+
+    /// <summary>The press's traversal from <paramref name="current"/>, at most
+    /// one full ring. W7-7 PR 8 (R-10): a held landing that is refused later
+    /// resumes this same traversal from its own position, reading the ring
+    /// from live state again — the next region receives focus once, and the
+    /// held region is never spoken.</summary>
+    private void CycleShellRegionFrom(
+        IShellRegionHost host, ShellRegionKind? current, int direction, int attemptsTaken)
+    {
+        if (host.ModalSurfaceOpen)
+        {
+            return;
+        }
+
         var layout = new ShellRegionLayout(
             HasTabs: ActiveGroup.Tabs.Count > 0,
             RightPaneVisible: IsRightPaneVisible,
             RightPaneHasContentStop: host.RightPaneHasContentStop);
-        ShellRegionKind? current = host.FocusedRegion();
         int attempts = ShellRegionRing.Ring(layout).Count;
-        for (int attempt = 0; attempt < attempts; attempt++)
+        for (int attempt = attemptsTaken; attempt < attempts; attempt++)
         {
             ShellRegionKind target = ShellRegionRing.Next(layout, current, direction);
-            if (host.TryLand(target))
+            int taken = attempt + 1;
+            object press = new();
+            _ringPress = press;
+            ShellRegionLanding landing = host.TryLand(
+                target,
+                () =>
+                {
+                    if (!ReferenceEquals(_ringPress, press))
+                    {
+                        return;
+                    }
+
+                    _ringPress = null;
+                    // W7-6 §4's modal rule: a modal surface owns the keys, so
+                    // a success arriving under one is not spoken.
+                    if (!host.ModalSurfaceOpen)
+                    {
+                        AnnounceShellRegion(target, host);
+                    }
+                },
+                () =>
+                {
+                    if (ReferenceEquals(_ringPress, press))
+                    {
+                        _ringPress = null;
+                        CycleShellRegionFrom(host, target, direction, taken);
+                    }
+                });
+            if (landing == ShellRegionLanding.Pending)
+            {
+                // W7-7 PR 8 (R-10): the region holds the landing for its
+                // content. The line is spoken when focus arrives, the ring
+                // resumes here if the landing is refused, and a withdrawn
+                // landing does neither; moving on now would land a second
+                // region under the held one.
+                return;
+            }
+
+            if (ReferenceEquals(_ringPress, press))
+            {
+                _ringPress = null;
+            }
+
+            if (landing == ShellRegionLanding.Landed)
             {
                 AnnounceShellRegion(target, host);
                 return;
@@ -926,17 +1035,20 @@ internal sealed partial class WorkspaceViewModel
     /// retarget, a session restore of a pane the user is not in, and a
     /// history reload all publish without asking, and must not steal
     /// focus; a second tab on an already-open path is a registry hit
-    /// that never publishes, and must still land it.
+    /// that never publishes, and must still land it. W7-7 PR 8 (R-10,
+    /// OD-12's one entry): the funnel ASKS; it no longer raises a canvas or
+    /// graph document's request itself. The shell's one landing entry
+    /// creates every editor landing request — addressed to the tab that
+    /// asked, under the window's slot before the request exists, and never
+    /// under an open modal surface (<c>MainWindow.FocusEditorPane</c>).
     /// </summary>
     internal void RequestActiveEditorFocus()
     {
-        // Addressed to the tab that asked: one document serves every
-        // pane on the path, and an unaddressed request lands focus in
-        // all of them.
-        WorkspaceTabViewModel? active = ActiveGroup.ActiveTab;
-        active?.Canvas?.RequestFocusLanding(active);
-        // W6-2 PR C (rule F, Term F6): a graph tab's document, addressed the same way.
-        active?.Graph?.RequestFocusLanding(active);
+        // W7-7 PR 8 (R-10): this request supersedes a landing the window
+        // holds — in this pane or in the one it leaves — so that landing is
+        // withdrawn NOW, before its content can arrive ahead of this request's
+        // own (queued) landing and seat focus there.
+        WithdrawHeldShellRegionLanding();
         EditorPaneFocusRequested?.Invoke(this, ActiveGroup);
     }
 

@@ -450,7 +450,8 @@ public sealed class SharedNameTests
         }
     }
 
-    /// <summary>A shell whose regions all land.</summary>
+    /// <summary>A shell whose regions all land at once: it never holds a
+    /// landing (W7-7 PR 8's held landings are not this fact's subject).</summary>
     private sealed class RegionHost : IShellRegionHost
     {
         public bool ModalSurfaceOpen => false;
@@ -461,13 +462,20 @@ public sealed class SharedNameTests
 
         public ShellRegionKind? Focused { get; set; }
 
+        public bool HoldsLanding => false;
+
+        public ShellRegionKind? HeldRingRegion => null;
+
         public ShellRegionKind? FocusedRegion() => Focused;
 
-        public bool TryLand(ShellRegionKind region)
+        public ShellRegionLanding TryLand(
+            ShellRegionKind region, Action announceWhenLanded, Action fallThroughWhenRefused)
         {
             Focused = region;
-            return true;
+            return ShellRegionLanding.Landed;
         }
+
+        public bool WithdrawHeldLanding() => false;
     }
 
     private static FilesSidebarViewModel PlainSidebar(VaultSession session, string root) =>
