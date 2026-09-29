@@ -1991,16 +1991,18 @@ public partial class MainWindow : Window
     /// creates nothing while a modal surface is open — the modal owns the
     /// keys, and nothing may seat beneath it. Its refusal — now, or later when
     /// a held landing's content fails, is torn down while current or will not
-    /// take focus — falls back to the tab strip or the Files tree
+    /// take focus — falls back to the tab strip, else the Files region: its
+    /// tree, or its filter field when a filter is active
     /// (<see cref="FallBackFromEditor"/>), guarded to the same tab with no
     /// modal open (<see cref="RouteFallback"/>): focus is never left on the
     /// window root or a closed overlay, and never moved beneath a modal.
     /// <paramref name="onLanded"/> is spoken once focus is in the stop or on
-    /// the tab's own item, or — for an EMPTY pane, which has neither — on the
-    /// Files tree (owner decision 2026-09-28: the line tells the reader nothing
-    /// is open; R-1's fourth launch line). Never for the Files tree when the
-    /// pane has a tab whose stop was refused, and never when nothing took
-    /// focus.
+    /// the tab's own item, or — for an EMPTY pane, which has neither — in the
+    /// Files region, its tree or its filter field (owner decisions 2026-09-28:
+    /// the line tells the reader nothing is open, R-1's fourth launch line; and
+    /// 2026-09-29: the filter field is the same Files fallback, and the line is
+    /// just as true there). Never from the Files region when the pane has a
+    /// tab whose stop was refused, and never when nothing took focus.
     /// </summary>
     private void LandEditorForRoute(WorkspaceGroupViewModel group, Action? onLanded)
     {
@@ -2023,10 +2025,11 @@ public partial class MainWindow : Window
     /// <summary>A route's refusal (R-10): only while the reader is still where
     /// the route put them — the same group and tab, no modal over it — the
     /// fallback runs, and <paramref name="onLanded"/> is spoken only when it
-    /// took the tab's own item, or when the pane is EMPTY and it took the Files
-    /// tree (owner decision 2026-09-28). A pane with a tab whose stop was
-    /// refused says nothing from the Files tree (codex PR 8 round 6): its line
-    /// would name a tab the reader is not on.</summary>
+    /// took the tab's own item, or when the pane is EMPTY and it landed in the
+    /// Files region — its tree, or its filter field when a filter is active
+    /// (owner decisions 2026-09-28 and 2026-09-29). A pane with a tab whose
+    /// stop was refused says nothing from the Files region (codex PR 8 round
+    /// 6): its line would name a tab the reader is not on.</summary>
     private Action RouteFallback(WorkspaceGroupViewModel group, WorkspaceTabViewModel? tab, Action? onLanded) =>
         () =>
         {
@@ -2128,8 +2131,9 @@ public partial class MainWindow : Window
     /// <summary>
     /// A refused editor landing's fallback for a route: the tab strip's stop
     /// for the tab, else the tab control's selected or first tab, else the
-    /// Files tree's landing row (W7-7 PR 4, R-5: never a bare container) —
-    /// answering which took focus. W7-5 (#1239): an EMPTY tab control refuses focus (its
+    /// Files region's landing — its tree's row, or its filter field when a
+    /// filter is active (W7-7 PR 4, R-5: never a bare container) — answering
+    /// which took focus. W7-5 (#1239): an EMPTY tab control refuses focus (its
     /// Focusable follows HasItems, WorkspaceTemplates.xaml), so the last resort
     /// is the Files tree: the owner's launch landing when nothing is open, and
     /// the one region that always has something to say. Landing on the bare
@@ -2172,6 +2176,9 @@ public partial class MainWindow : Window
         None,
         TabItem,
         TabControl,
+
+        /// <summary>The Files region: its tree, or its filter field when a
+        /// filter is active.</summary>
         Files,
     }
 
