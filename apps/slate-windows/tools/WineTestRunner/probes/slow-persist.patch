@@ -1,0 +1,14 @@
+diff --git a/apps/slate-windows/src/SlateWindows/WorkspaceViewModel.Persistence.cs b/apps/slate-windows/src/SlateWindows/WorkspaceViewModel.Persistence.cs
+index da8e6ce..61fc9d1 100644
+--- a/apps/slate-windows/src/SlateWindows/WorkspaceViewModel.Persistence.cs
++++ b/apps/slate-windows/src/SlateWindows/WorkspaceViewModel.Persistence.cs
+@@ -208,6 +208,9 @@ internal sealed partial class WorkspaceViewModel
+             return;
+         }
+ 
++        // #1285 probe (never commit): Windows-like workspace write latency.
++        // Under Wine AnchoredVaultStore throws at once, which hides the race.
++        Thread.Sleep(Random.Shared.Next(0, 400));
+         try
+         {
+             _persistence.Save(new WorkspaceSnapshot(

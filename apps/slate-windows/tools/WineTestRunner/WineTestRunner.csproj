@@ -1,0 +1,31 @@
+<Project Sdk="Microsoft.NET.Sdk">
+
+  <!-- #1285 verification harness. THROWAWAY: runs one xunit class of
+       SlateWindows.Tests in-process with xunit's own execution engine, as a
+       self-contained win-x64 exe, so the unit facts can run under Wine on a
+       Linux machine with no Windows box. It is not referenced by the
+       solution and ships in no build; see README.md for setup, fidelity
+       limits and the evidence it produced. probes/ is reference source for
+       copying into the unit project, not compiled here. -->
+
+  <PropertyGroup>
+    <OutputType>Exe</OutputType>
+    <TargetFramework>net10.0-windows</TargetFramework>
+    <UseWPF>true</UseWPF>
+    <RuntimeIdentifier>win-x64</RuntimeIdentifier>
+    <SelfContained>true</SelfContained>
+    <!-- The unit project is itself an exe (Microsoft.NET.Test.Sdk), and it is
+         referenced only so its assembly and dependencies land next to this
+         runner. -->
+    <ValidateExecutableReferencesMatchSelfContained>false</ValidateExecutableReferencesMatchSelfContained>
+    <ImplicitUsings>enable</ImplicitUsings>
+    <Nullable>enable</Nullable>
+  </PropertyGroup>
+
+  <ItemGroup>
+    <Compile Remove="probes/**" />
+    <PackageReference Include="xunit.runner.utility" Version="2.9.3" />
+    <ProjectReference Include="..\..\tests\SlateWindows.Tests\SlateWindows.Tests.csproj" />
+  </ItemGroup>
+
+</Project>
