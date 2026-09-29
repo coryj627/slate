@@ -406,6 +406,15 @@ public sealed class CitationAsyncInterleavingTests : IDisposable
     /// answer. Worse, a superseded publish is discarded before the
     /// event is raised, so the answer is guaranteed to come from a
     /// LATER, unrelated load.
+    ///
+    /// cited.md's load is HELD until the user has moved on. Unheld,
+    /// "the answer has not arrived yet" was a bet on scheduling: the
+    /// seed settles on its own schedule, the load it releases publishes
+    /// on the test host's pool (xunit's context posts there), and
+    /// nothing orders either against the test thread. When cited.md
+    /// published before the move — 3 runs in 9 on a busy machine — the
+    /// summary rightly answered the note it was asked about, and the
+    /// last assertion failed on cited.md's own counts.
     /// </summary>
     [Fact]
     public async Task ADeferredSummaryDoesNotAnswerForADifferentNote()
@@ -413,10 +422,11 @@ public sealed class CitationAsyncInterleavingTests : IDisposable
         var announced = new List<A11yEvent>();
         using VaultSession session = OpenScanned();
         using var workspace = MakeAsyncWorkspace(session, announced);
+        using var held = new ManualResetEventSlim(false);
+        workspace.Citations.InterleaveForTests = () => held.Wait(TimeSpan.FromSeconds(10));
 
         workspace.OpenPath("cited.md");
-        // Deterministic: Refresh sets IsLoading synchronously before
-        // queueing the gated body.
+        // Deterministic: a held load cannot publish.
         Assert.True(workspace.Citations.IsLoading);
 
         workspace.OpenCitationSummary();
@@ -424,6 +434,8 @@ public sealed class CitationAsyncInterleavingTests : IDisposable
 
         // The user moves on before the answer arrives.
         workspace.OpenPath("other.md");
+        held.Set();
+        workspace.Citations.InterleaveForTests = null;
         await QuiesceAsync(workspace);
 
         // No sheet, because the question was about cited.md and the
@@ -435,19 +447,25 @@ public sealed class CitationAsyncInterleavingTests : IDisposable
     /// <summary>The defer must still DELIVER for the note it was asked
     /// about — a fix that simply stopped opening the sheet would pass
     /// the wrong-note test and reintroduce the dead keypress the defer
-    /// exists to prevent.</summary>
+    /// exists to prevent. Held like its sibling, so the press is really
+    /// parked rather than answered on the spot by a load that won the
+    /// race.</summary>
     [Fact]
     public async Task ADeferredSummaryStillAnswersForTheNoteItWasAskedAbout()
     {
         var announced = new List<A11yEvent>();
         using VaultSession session = OpenScanned();
         using var workspace = MakeAsyncWorkspace(session, announced);
+        using var held = new ManualResetEventSlim(false);
+        workspace.Citations.InterleaveForTests = () => held.Wait(TimeSpan.FromSeconds(10));
 
         workspace.OpenPath("cited.md");
         Assert.True(workspace.Citations.IsLoading);
         workspace.OpenCitationSummary();
         Assert.Null(workspace.CitationSummary);
 
+        held.Set();
+        workspace.Citations.InterleaveForTests = null;
         await QuiesceAsync(workspace);
 
         Assert.NotNull(workspace.CitationSummary);
