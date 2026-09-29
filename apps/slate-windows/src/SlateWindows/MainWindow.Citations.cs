@@ -181,9 +181,10 @@ public partial class MainWindow
             _observedBibliography.KeyFocusRequested -= Bibliography_KeyFocusRequested;
             _observedBibliography = null;
             // Drop the closed vault's rows rather than leaving up to
-            // MaxEntryRows of them alive behind the welcome screen.
-            BibliographyEntriesGrid.Bind([], [], summary: "", accessibilityLabel: "");
-            BibliographyUnresolvedGrid.Bind([], [], summary: "", accessibilityLabel: "");
+            // MaxEntryRows of them alive behind the welcome screen — and
+            // their names with them (codex PR 3 round 2).
+            BibliographyEntriesGrid.Clear();
+            BibliographyUnresolvedGrid.Clear();
         }
         if (_observedCitations is not null)
         {
@@ -420,12 +421,10 @@ public partial class MainWindow
         {
             return;
         }
-        BibliographyEntriesGrid.Bind(
-            BibliographyEntryColumns,
+        BindBibliographyEntries(
+            BibliographyEntriesGrid,
             [.. bibliography.Entries],
-            summary: bibliography.EntriesSummary,
-            accessibilityLabel: CitationPhrase.BibliographyHeading,
-            rowAudioDescription: row => ((BibliographyRowViewModel)row).RowDescription,
+            bibliography.EntriesSummary,
             rowActions: BibliographyRowActions(),
             // Enter expands the entry, as mac's entry Button does. The
             // details overlay was reachable only from the citations
@@ -436,19 +435,52 @@ public partial class MainWindow
                 ((BibliographyRowViewModel)row).Entry, Keyboard.FocusedElement));
     }
 
+    /// <summary>The entries grid's one bind — static, so a fact drives
+    /// the production call. W7-7 PR 3 (#1246, R-4): a row is named by
+    /// its entry, "Title (year)", the text its row header carries;
+    /// unnamed it read "SlateWindows.Panels.BibliographyRowViewModel,
+    /// data item".</summary>
+    internal static void BindBibliographyEntries(
+        AccessibleDataGrid grid,
+        IReadOnlyList<object> entries,
+        string summary,
+        IReadOnlyList<AccessibleGridRowAction>? rowActions = null,
+        Action<object>? rowActivated = null) =>
+        grid.Bind(
+            BibliographyEntryColumns,
+            entries,
+            summary: summary,
+            accessibilityLabel: CitationPhrase.BibliographyHeading,
+            rowAudioDescription: row => ((BibliographyRowViewModel)row).RowDescription,
+            rowActions: rowActions,
+            rowActivated: rowActivated,
+            rowAutomationName: row => ((BibliographyRowViewModel)row).TitleLine,
+            rowKey: static row => ((BibliographyRowViewModel)row).Key);
+
     private void BindBibliographyUnresolvedGrid()
     {
         if (_observedBibliography is not { } bibliography)
         {
             return;
         }
-        BibliographyUnresolvedGrid.Bind(
-            BibliographyUnresolvedColumns,
+        BindBibliographyUnresolved(
+            BibliographyUnresolvedGrid,
             [.. bibliography.Unresolved],
-            summary: bibliography.UnresolvedSummary,
-            accessibilityLabel: CitationPhrase.SegmentUnresolved,
-            rowAudioDescription: row => ((UnresolvedRowViewModel)row).RowDescription);
+            bibliography.UnresolvedSummary);
     }
+
+    /// <summary>The unresolved grid's one bind (R-4): a row is named by
+    /// its citation key, its row header.</summary>
+    internal static void BindBibliographyUnresolved(
+        AccessibleDataGrid grid, IReadOnlyList<object> rows, string summary) =>
+        grid.Bind(
+            BibliographyUnresolvedColumns,
+            rows,
+            summary: summary,
+            accessibilityLabel: CitationPhrase.SegmentUnresolved,
+            rowAudioDescription: row => ((UnresolvedRowViewModel)row).RowDescription,
+            rowAutomationName: row => ((UnresolvedRowViewModel)row).Key,
+            rowKey: static row => ((UnresolvedRowViewModel)row).Path);
 
     /// <summary>Ctrl+J landed. The leaf has already decided the outcome
     /// and announced it; this only moves focus, and only if the entry

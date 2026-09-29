@@ -289,6 +289,9 @@ public sealed partial class ShellAccessibilityTests
             Assert.True(
                 SpinWait.SpinUntil(() => ListItemNames(automation, list).Length >= 2, TimeSpan.FromSeconds(15)),
                 "the list-mode base never showed its two rows");
+            // R-4 (#1246; codex PR 3 round 8): the runtime item-name census at
+            // this journey's representative state, before its keys move.
+            AssertItemNamesAreSpeakable(process, "region-bases");
 
             // The field is always in the header (Ctrl+F is the GRID's chord;
             // a list reader Tabs to it or uses Base > Quick Filter).
@@ -417,6 +420,9 @@ public sealed partial class ShellAccessibilityTests
 
             OpenCanvasFromTree(window, automation, "sample");
             _ = WaitForElement(window, "CanvasOutlineTree", TimeSpan.FromSeconds(20));
+            // R-4 (#1246; codex PR 3 round 8): the runtime item-name census at
+            // this journey's representative state, before its keys move.
+            AssertItemNamesAreSpeakable(process, "region-canvas");
             AutomationElement outline = WaitForElement(window, "CanvasShowOutline", TimeSpan.FromSeconds(10));
             AutomationElement table = WaitForElement(window, "CanvasShowTable", TimeSpan.FromSeconds(10));
             Assert.True(IsChosen(outline), "the Outline projection must start checked");
@@ -480,6 +486,9 @@ public sealed partial class ShellAccessibilityTests
             Assert.True(
                 SpinWait.SpinUntil(() => FocusIsInside(automation, "GraphTableGrid"), TimeSpan.FromSeconds(10)),
                 $"the open did not land focus in the grid; focus is {DescribeFocusedElement(automation)}");
+            // R-4 (#1246; codex PR 3 round 8): the runtime item-name census at
+            // this journey's representative state, before its keys move.
+            AssertItemNamesAreSpeakable(process, "region-graph");
             AutomationElement tableChoice = WaitForElement(window, "GraphMode.table", TimeSpan.FromSeconds(10));
             AutomationElement diagramChoice = WaitForElement(window, "GraphMode.diagram", TimeSpan.FromSeconds(10));
             Assert.True(IsChosen(tableChoice), "the Table view must start checked");

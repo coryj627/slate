@@ -79,6 +79,10 @@ internal sealed class SidebarSettingsStore
             }
         }
 
+        // Every slot in order, a note two slots target included (W7-7 PR 3,
+        // #1246, R-4; codex PR 3 round 7, OD-9): a slot is an occurrence,
+        // and merging two dropped the second and shifted every later
+        // Ctrl+number binding after a restart.
         var shortcuts = new List<SidebarShortcutState>();
         if (_root["shortcuts"] is JsonArray shortcutEntries)
         {
@@ -88,8 +92,7 @@ internal sealed class SidebarSettingsStore
                     && StringValue(entry["kind"]) is string kind
                     && StringValue(entry["path"]) is string path
                     && (kind == "file" || kind == "folder")
-                    && path.Length <= MaxPathLength
-                    && !shortcuts.Any(item => item.Kind == kind && item.Path == path))
+                    && path.Length <= MaxPathLength)
                 {
                     shortcuts.Add(new SidebarShortcutState(kind, path));
                 }
@@ -192,7 +195,9 @@ internal sealed class SidebarSettingsStore
             throw new InvalidOperationException("Sidebar shortcuts contain an invalid kind or path.");
         }
 
-        SidebarShortcutState[] desired = requested.Distinct().ToArray();
+        // Every slot in order, duplicates included (codex PR 3 round 7,
+        // OD-9): two slots may target one note.
+        SidebarShortcutState[] desired = requested;
         if (desired.Length > MaxShortcuts)
         {
             throw new InvalidOperationException(

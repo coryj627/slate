@@ -732,10 +732,13 @@ public sealed class BaseSurfaceViewTests : IDisposable
                 Assert.True(grid.SelectRow(row => row is SlateWindows.Bases.BaseGridRowViewModel { Row.FilePath: var path } && path.EndsWith("note1.md", StringComparison.Ordinal), moveFocus: true));
                 break;
             case System.Windows.Controls.ListBox list:
-                string note1 = host.RowText("note1.md");
-                var item = list.Items.OfType<System.Windows.Controls.ListBoxItem>()
-                    .Single(candidate => candidate.Content is System.Windows.Controls.TextBlock { Text: var text } && text == note1);
-                list.SelectedItem = item;
+                // The list's items are the rows it reads back (W7-7 PR 3's
+                // sibling-named list).
+                BasesRow note1 = list.Items.OfType<BasesRow>()
+                    .Single(candidate => candidate.FilePath.EndsWith("note1.md", StringComparison.Ordinal));
+                list.SelectedItem = note1;
+                list.UpdateLayout();
+                var item = Assert.IsType<System.Windows.Controls.ListBoxItem>(list.ItemContainerGenerator.ContainerFromItem(note1));
                 Assert.True(item.Focus(), "premise: note1's list row refused the keys");
                 break;
             default:
@@ -751,8 +754,8 @@ public sealed class BaseSurfaceViewTests : IDisposable
     {
         SlateWindows.Grids.AccessibleDataGrid => Assert.IsType<SlateWindows.Bases.BaseGridRowViewModel>(
             Assert.IsType<System.Windows.Controls.DataGridCell>(System.Windows.Input.Keyboard.FocusedElement).DataContext).Row.FilePath,
-        _ => host.PathOfRowText(Assert.IsType<System.Windows.Controls.TextBlock>(
-            Assert.IsType<System.Windows.Controls.ListBoxItem>(System.Windows.Input.Keyboard.FocusedElement).Content).Text),
+        _ => Assert.IsType<BasesRow>(
+            Assert.IsType<System.Windows.Controls.ListBoxItem>(System.Windows.Input.Keyboard.FocusedElement).DataContext).FilePath,
     };
     /// <summary>A dashboard's surface in a tab of its own, shown.</summary>
     private sealed class DashboardHost : IDisposable
@@ -808,16 +811,6 @@ public sealed class BaseSurfaceViewTests : IDisposable
             Assert.True(at >= 0, $"no section is headed {heading}");
             return children.Skip(at + 1).First(child => child is SlateWindows.Grids.AccessibleDataGrid or System.Windows.Controls.ListBox);
         }
-
-        /// <summary>The spoken row text of the note at <paramref name="suffix"/>.</summary>
-        public string RowText(string suffix) =>
-            Dashboard.Sections.SelectMany(section => section.Result?.Rows ?? [])
-                .First(row => row.FilePath.EndsWith(suffix, StringComparison.Ordinal)).AudioDescription;
-
-        /// <summary>The note a list row's text speaks for.</summary>
-        public string PathOfRowText(string text) =>
-            Dashboard.Sections.SelectMany(section => section.Result?.Rows ?? [])
-                .First(row => row.AudioDescription == text).FilePath;
 
         public void Dispose()
         {
@@ -969,7 +962,8 @@ public sealed class AccessibleDataGridExternalSortTests
             ],
             rows.Cast<object>().ToList(),
             summary: "3 rows",
-            accessibilityLabel: "External sort probe");
+            accessibilityLabel: "External sort probe",
+            rowKey: static row => (string)row, rowAutomationName: row => (string)row);
 
         Assert.Null(grid.ApplySort(0, ascending: true));
 
@@ -998,7 +992,8 @@ public sealed class AccessibleDataGridExternalSortTests
             ],
             rows.Cast<object>().ToList(),
             summary: "3 rows",
-            accessibilityLabel: "External sort probe");
+            accessibilityLabel: "External sort probe",
+            rowKey: static row => (string)row, rowAutomationName: row => (string)row);
         Assert.Single(requested);
     });
 

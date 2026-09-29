@@ -811,16 +811,21 @@ public sealed class CanvasDocumentTests : IDisposable
         // §G2 TG2-9: the item's UIA NAME is the choice's Name — a bound
         // record's container otherwise names itself by ToString, which the
         // journey heard as "CanvasPromptChoice { Value = … }". The picker's
-        // rows carry their Label the same way.
-        Assert.Contains(
-            "Property=\"AutomationProperties.Name\" Value=\"{Binding Name}\"",
-            xaml[list..end]);
+        // rows carry their Label the same way. Both read it under the
+        // sibling rule (W7-7 PR 3, #1246, R-4), so two choices that share a
+        // name still read apart: the host declares the property, and the
+        // container's Name reads the rule (ItemContainerNameCensus pins
+        // both; ItemContainerNameBindingTests hosts them).
+        const string siblingName =
+            "Property=\"AutomationProperties.Name\" Value=\"{Binding RelativeSource={RelativeSource Self}, "
+            + "Converter={x:Static local:SiblingNames.Converter}}\"";
+        Assert.Contains("local:SiblingNames.NamePath=\"Name\"", xaml[list..end]);
+        Assert.Contains(siblingName, xaml[list..end]);
         int picker = xaml.IndexOf("AutomationProperties.AutomationId=\"CanvasCardPickerRows\"", StringComparison.Ordinal);
         Assert.True(picker >= 0);
         int pickerEnd = xaml.IndexOf("</ListBox>", picker, StringComparison.Ordinal);
-        Assert.Contains(
-            "Property=\"AutomationProperties.Name\" Value=\"{Binding Label}\"",
-            xaml[picker..pickerEnd]);
+        Assert.Contains("local:SiblingNames.NamePath=\"Label\"", xaml[picker..pickerEnd]);
+        Assert.Contains(siblingName, xaml[picker..pickerEnd]);
     }
 
     /// <summary>§G2 TG2-0 (G2-1): the five front-door commands over §E's

@@ -59,6 +59,9 @@ public sealed partial class ShellAccessibilityTests
             // field pass heard "Workspace tabs, tab control").
             PressChord(VirtualKeyShort.CONTROL, VirtualKeyShort.SHIFT, VirtualKeyShort.KEY_E);
             AssertReadingSurfaceLanding(window, automation, "Ctrl+Shift+E into reading", ReadingFocusAlphaText, caretOnHeading: "Alpha");
+            // R-4 (#1246; codex PR 3 round 8): the runtime item-name census at
+            // this journey's representative state — the reading surface up.
+            AssertItemNamesAreSpeakable(process, "reading-focus");
 
             // F6 from Files: the tab bar, then the reading surface (the field
             // pass went tab bar → right pane).

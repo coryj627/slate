@@ -96,6 +96,9 @@ public sealed partial class ShellAccessibilityTests
             string[] listed = WaitForListedRows(results, automation, minimum: 1);
             Assert.InRange(listed.Length, 1, splitMatches);
             Assert.Contains(selectedName, listed);
+            // R-4 (#1246; codex PR 3 round 8): the runtime item-name census at
+            // this journey's representative state.
+            AssertItemNamesAreSpeakable(process, "palette-results");
 
             // TODO(#1244), with the listener: across leg 1 exactly ONE
             // PaletteFilterCount, rendered by core for (splitMatches,

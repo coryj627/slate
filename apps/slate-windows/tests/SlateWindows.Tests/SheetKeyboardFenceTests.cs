@@ -389,7 +389,8 @@ public sealed class SheetKeyboardFenceTests
                     ],
                     People,
                     "2 rows.",
-                    "People");
+                    "People",
+                    rowKey: static row => ((Person)row).Name, rowAutomationName: row => ((Person)row).Name);
                 fields.Children.Add(Grid);
             }
 
