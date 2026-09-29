@@ -158,6 +158,66 @@ public sealed partial class GraphTableTests
         });
     }
 
+    /// <summary>
+    /// OD-12 under Term F3 (codex on #1300's merge with PR 8): the PROVISIONAL
+    /// seat a shell request takes while a refresh is in flight follows Term
+    /// F4 like the terminal one — the keyed row, and the first row only when
+    /// the key names no row. A keyed row that cannot take the keys yet (the
+    /// held grid not shown) leaves the first row untouched: no current cell,
+    /// no selection, no focus, nothing said. The keyed row takes the
+    /// provisional seat when the grid is shown, the request still pending for
+    /// the refresh's terminal delivery.
+    /// </summary>
+    [Fact]
+    public void AProvisionalSeatNeverTakesTheFirstRowOverAKeyedRowNotYetSeatable()
+    {
+        RunSta(() =>
+        {
+            using var host = new Host(40, "graph-provisional-keyed-not-yet");
+            GraphDocumentViewModel document = host.Open();
+            GraphSurfaceView view = SurfaceFor(host, document);
+            using HostedWindow window = HostInWindow(view);
+            DataGrid grid = view.TableForTests.GridForTests.Grid;
+            grid.UpdateLayout();
+            GraphTableRow[] rows = [.. grid.Items.Cast<GraphTableRow>()];
+            GraphTableRow keyed = rows[^1];
+            document.ViewState.SelectedKey = keyed.StableKey;
+            host.Settle(document);
+            using var park = new ParkedFetch(document, 1);
+            Assert.True(document.Request(new GraphRequest.Sort(new GraphTableSort(GraphTableColumn.Note, false))));
+            park.WaitReached();
+            Assert.True(document.IsRequestInFlight);
+            Assert.True(document.Publication.HoldsSnapshot);
+            grid.Visibility = Visibility.Collapsed;
+            grid.UpdateLayout();
+            PumpedDispatcher.Drain();
+            host.GraphLines.Clear();
+            host.ShellEvents.Clear();
+
+            document.RequestFocusLanding(GraphTabOf(host));
+            PumpedDispatcher.Drain();
+
+            Assert.NotNull(document.FocusRequest);
+            Assert.NotSame(rows[0], grid.CurrentCell.Item);
+            Assert.DoesNotContain(grid.SelectedCells, cell => ReferenceEquals(cell.Item, rows[0]));
+            Assert.False(grid.IsKeyboardFocusWithin);
+            Assert.Empty(host.GraphLines);
+            Assert.Empty(host.ShellEvents);
+
+            grid.Visibility = Visibility.Visible;
+            grid.UpdateLayout();
+            PumpedDispatcher.Drain();
+
+            Assert.True(GridHasTheKeys(view), $"the keyed row took no provisional seat; the keys are on {Keyboard.FocusedElement}");
+            Assert.Same(keyed, grid.CurrentCell.Item);
+            Assert.NotNull(document.FocusRequest);
+            Assert.Empty(host.GraphLines);
+            Assert.Empty(host.ShellEvents);
+            park.Release();
+            host.Settle(document);
+        });
+    }
+
     [Fact]
     public void AFreshOpenLandsFocusOnTheGridsRow()
     {
