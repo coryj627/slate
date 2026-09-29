@@ -129,6 +129,14 @@ internal abstract class CanvasPromptViewModel : System.ComponentModel.INotifyPro
     {
     }
 
+    /// <summary>W7-7 PR 8 (R-10, OD-12): the workspace's hook right after a
+    /// Completed submit cleared this sheet — in the same turn, before any
+    /// input queued behind the submit can run. A variant whose submit ends in
+    /// a landing (the marks list's jump) raises it here.</summary>
+    internal virtual void CompletedAndClosed()
+    {
+    }
+
     private protected void Raise(string name) =>
         PropertyChanged?.Invoke(this, new System.ComponentModel.PropertyChangedEventArgs(name));
 
@@ -168,8 +176,11 @@ internal abstract class CanvasPromptViewModel : System.ComponentModel.INotifyPro
         new CanvasGroupMarkedPrompt(document);
 
     internal static CanvasPromptViewModel MarksList(
-        CanvasDocumentViewModel document, object owner, Action<CanvasPromptViewModel> closeIfCurrent) =>
-        new CanvasMarksListPrompt(document, owner, closeIfCurrent);
+        CanvasDocumentViewModel document,
+        object owner,
+        Action<CanvasPromptViewModel> closeIfCurrent,
+        Action<object, string> land) =>
+        new CanvasMarksListPrompt(document, owner, closeIfCurrent, land);
 
     internal static CanvasPromptViewModel NewGroup(
         CanvasDocumentViewModel document, CanvasPromptContext context) =>
@@ -229,13 +240,23 @@ internal sealed class CanvasMarksListPrompt : CanvasPromptViewModel
 {
     private readonly object _owner;
     private readonly Action<CanvasPromptViewModel> _closeIfCurrent;
+    private readonly Action<object, string> _land;
+    private string? _jumpTo;
 
+    /// <param name="land">Raises the jump's A14 landing for (owner, node) —
+    /// the workspace's <c>RaiseCanvasNodeLanding</c>, so the shell's one
+    /// entry holds it (W7-7 R-10, OD-12).</param>
     internal CanvasMarksListPrompt(
-        CanvasDocumentViewModel document, object owner, Action<CanvasPromptViewModel> closeIfCurrent)
+        CanvasDocumentViewModel document,
+        object owner,
+        Action<CanvasPromptViewModel> closeIfCurrent,
+        Action<object, string> land)
         : base(document, "Marked Cards", string.Empty, [])
     {
+        ArgumentNullException.ThrowIfNull(land);
         _owner = owner;
         _closeIfCurrent = closeIfCurrent;
+        _land = land;
         Reproject();
         document.PublicationApplied += OnPublicationApplied;
     }
@@ -247,12 +268,16 @@ internal sealed class CanvasMarksListPrompt : CanvasPromptViewModel
     internal override void Closed() => Document.PublicationApplied -= OnPublicationApplied;
 
     /// <summary>Enter: JUMP. Close first, land after (IG-39): the
-    /// selection seats silently now; the A14 request posts at
-    /// background priority so it runs after the workspace has cleared
-    /// this sheet; the Visual owner switches to the outline first
-    /// (IG-40); a filtered-out row clears the filter and fires its
-    /// line now (IG-42). A14's own outcomes — delivered, pending,
-    /// dropped — are the landing's, not this sheet's (IG-41).</summary>
+    /// selection seats silently now; the A14 landing is raised the moment
+    /// the workspace has cleared this sheet (<see cref="CompletedAndClosed"/>)
+    /// — close and land are one turn. W7-7 PR 8 (codex PR 8 round 9): it
+    /// used to post at background priority, and an F6 or a move to another
+    /// region queued behind the Enter then ran first and was undone by the
+    /// jump; in the same turn nothing can come between. The Visual owner
+    /// switches to the outline first (IG-40); a filtered-out row clears the
+    /// filter and fires its line now (IG-42). A14's own outcomes —
+    /// delivered, pending, dropped — are the landing's, not this sheet's
+    /// (IG-41).</summary>
     internal override CanvasPromptSubmit Submit(Action onLanded)
     {
         ArgumentNullException.ThrowIfNull(onLanded);
@@ -270,12 +295,19 @@ internal sealed class CanvasMarksListPrompt : CanvasPromptViewModel
             Document.Navigator.ClearFilter();
             Document.FireFilterLineNow();
         }
-        object owner = _owner;
-        CanvasDocumentViewModel document = Document;
-        _ = System.Windows.Threading.Dispatcher.CurrentDispatcher.BeginInvoke(
-            System.Windows.Threading.DispatcherPriority.Background,
-            () => document.RequestFocusLanding(owner, nodeId));
+        _jumpTo = nodeId;
         return CanvasPromptSubmit.Completed;
+    }
+
+    /// <summary>The jump's landing, raised once, in the turn that cleared
+    /// the sheet.</summary>
+    internal override void CompletedAndClosed()
+    {
+        if (_jumpTo is { } nodeId)
+        {
+            _jumpTo = null;
+            _land(_owner, nodeId);
+        }
     }
 
     /// <summary>Delete: unmark the active row through the document's

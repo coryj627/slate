@@ -422,10 +422,11 @@ internal sealed class CanvasSurfaceView : UserControl, ICanvasSurfacePresenter
     public bool FocusRow(string nodeId) => Projection switch
     {
         CanvasSurfaceKind.Table => _table.DeliverFocus(nodeId),
-        // The visual's cards are peers, not focusable controls: a
-        // focus request has nowhere to land, and answering false lets
-        // the caller fall back honestly (m6's rule). The board shows
-        // the seat through `RevealSeat`'s pan instead (R-12).
+        // The visual's cards are peers, not focusable controls: a ROW
+        // has nowhere to take focus, and answering false lets the caller
+        // fall back honestly (m6's rule). The board shows the seat through
+        // `RevealSeat`'s pan instead (R-12); the board's one focus stop is
+        // the renderer, which the landing and `FocusProjection` seat (D15).
         CanvasSurfaceKind.Visual => false,
         _ => _outline.DeliverFocus(nodeId) is not null,
     };
@@ -468,7 +469,17 @@ internal sealed class CanvasSurfaceView : UserControl, ICanvasSurfacePresenter
         // holding nothing (`TreeView.Focus`, and the grid's own), so a
         // canvas with no cards used to seat the reader on a silent empty
         // control with the onboarding text unread beside it. Rows first,
-        // then whatever this state is actually SHOWING.
+        // then whatever this state is actually SHOWING. The Visual board's
+        // one focus stop is its renderer (locked contract 34 D15), never the
+        // outline collapsed behind it — and it is asked FIRST: a Visual
+        // filter dims cards and narrows nothing (D4), so a needle matching no
+        // card still leaves a board, and only a scene with no cards has none.
+        if (Model is { RendersRetainedSnapshot: true, Outline.Count: > 0 }
+            && Projection == CanvasSurfaceKind.Visual
+            && _visual.Focus())
+        {
+            return true;
+        }
         if (Model is { RendersRetainedSnapshot: true, FilteredOutline.Count: > 0 })
         {
             bool seated = Projection == CanvasSurfaceKind.Table
@@ -823,7 +834,7 @@ internal sealed class CanvasSurfaceView : UserControl, ICanvasSurfacePresenter
             && _deferredRestoration is { } deferred
             && Model is { } model)
         {
-            model.CompleteFocusLanding(deferred);
+            model.ReleaseFocusLanding(deferred);
             _deferredRestoration = null;
             // Nothing is left for the hold to govern, and leaving a
             // stale departure behind is how the reclassification below
@@ -1168,45 +1179,84 @@ internal sealed class CanvasSurfaceView : UserControl, ICanvasSurfacePresenter
         {
             return;
         }
-        bool delivered;
+        LandingSeat seat;
         switch (model.State)
         {
             case CanvasLoadState.Loading:
                 // Nothing to land on yet; the publish will call back.
                 return;
+            case CanvasLoadState.Ready when model.Selection.ActiveSurface == CanvasSurfaceKind.Visual
+                && model.Outline.Count > 0:
+                // The board BEFORE the filtered-empty arm: a Visual filter dims
+                // cards and narrows nothing (locked contract 34 D4), so a needle
+                // matching no card still leaves a board to land on, and its one
+                // stop is the renderer (D15), never the filter field. Its
+                // emptiness is the scene's; an actually empty board falls to the
+                // onboarding below.
+                seat = SeatTerminally(() => model.BoardLandingNodeFor(request) is { } boardNode
+                    ? LandOnBoard(model, boardNode)
+                    : LandingSeat.Refused);
+                break;
             case CanvasLoadState.Ready when model.FilteredOutline.Count == 0:
-                delivered = _onboarding.IsVisible
-                    ? _onboarding.Focus()
-                    : _filterField.Focus();
+                seat = SeatTerminally(() => LandingSeats.On(_onboarding.IsVisible ? _onboarding : _filterField));
                 break;
             case CanvasLoadState.Ready:
                 // Whichever projection is SHOWING is the one that can
                 // deliver: a row in a collapsed view has no container to
-                // realize and no focus to take (A14, PR B's arm).
-                delivered = model.FocusLandingNodeFor(request) is { } nodeId
-                    && model.Selection.ActiveSurface switch
-                    {
-                        CanvasSurfaceKind.Table => _table.DeliverFocus(nodeId),
-                        // The visual's cards are peers, not focusable
-                        // controls (m6's honest false — the banner
-                        // fallback below is the landing).
-                        CanvasSurfaceKind.Visual => false,
-                        _ => _outline.DeliverFocus(nodeId) is not null,
-                    };
+                // realize and no focus to take (A14, PR B's arm). A named
+                // row this projection does not show is no landing at all.
+                seat = SeatTerminally(() => model.FocusLandingNodeFor(request) is { } nodeId
+                    ? model.Selection.ActiveSurface == CanvasSurfaceKind.Table
+                        ? _table.SeatFocus(nodeId)
+                        : _outline.SeatFocus(nodeId)
+                    : LandingSeat.Refused);
                 break;
             default:
-                delivered = _stateBanner.Focus();
+                seat = SeatTerminally(() => LandingSeats.On(_stateBanner));
                 break;
         }
-        if (delivered)
+        // R-10: tri-state. A realized target that refused focus ends the
+        // request REFUSED — left pending, nothing would ever seat it, and the
+        // ring (or the route's fallback) would never resume.
+        if (seat == LandingSeat.NotYet)
+        {
+            return;
+        }
+        if (seat == LandingSeat.Seated)
         {
             model.CompleteFocusLanding(request);
-            if (ReferenceEquals(_deferredRestoration, request))
-            {
-                _deferredRestoration = null;
-            }
+        }
+        else
+        {
+            model.ReleaseFocusLanding(request);
+        }
+        if (ReferenceEquals(_deferredRestoration, request))
+        {
+            _deferredRestoration = null;
         }
     }
+
+    /// <summary>Locked contract 34 D15: the renderer is the Visual board's
+    /// ONE focus stop, after the surface switcher; its cards are peers,
+    /// reached by arrows and AT navigation, never by focus. So a landing on
+    /// the board seats its node silently (the node the outline or the table
+    /// would seat), brings that card into view, and puts the reader on the
+    /// renderer — delivered only when focus is really there. The reveal is a
+    /// move made ON the board (#1271's origin rule, contract 34 D4): the
+    /// landing puts the reader on the board with that card seated, so it
+    /// comes into view whatever Follow Selection says.</summary>
+    private LandingSeat LandOnBoard(CanvasDocumentViewModel model, string nodeId)
+    {
+        model.SeatSelectionSilently(nodeId);
+        _visual.RevealNode(nodeId, CanvasMoveOrigin.OnSurface);
+        return LandingSeats.On(_visual);
+    }
+
+    /// <summary>R-10: every seat <see cref="TryDeliverFocus"/> makes completes
+    /// the request, so each is the document's TERMINAL seat, declared as one: a
+    /// held editor landing takes the move for its arrival, not for the reader
+    /// moving on inside the surface (<see cref="EditorLandingSlot"/>).</summary>
+    private LandingSeat SeatTerminally(Func<LandingSeat> seat) => EditorLandingSlot.SeatTerminally(this, seat);
 
     private void OnModelPropertyChanged(
         object? sender, System.ComponentModel.PropertyChangedEventArgs e)

@@ -242,6 +242,38 @@ internal sealed class GraphTableView : UserControl
         BoundPublication = publication;
     }
 
+    /// <summary>W7-7 PR 8 (R-10): <see cref="FocusProjection"/> as the
+    /// tri-state a terminal landing needs — the selected row, else the first
+    /// (<see cref="AccessibleDataGrid.SeatRow"/>). Term F4's "else" is the key
+    /// naming NO row (OD-12): a keyed row not yet realized is NOT YET, and the
+    /// first row is never seated — or scrolled to, or made current — over it.</summary>
+    internal LandingSeat SeatProjection()
+    {
+        if (Model is not { } model)
+        {
+            return LandingSeat.NotYet;
+        }
+        bool wasSyncing = _syncingSelection;
+        _syncingSelection = true;
+        try
+        {
+            string? key = model.ViewState.SelectedKey;
+            if (key is not null)
+            {
+                if (_grid.SeatRow(row => string.Equals(((GraphTableRow)row).StableKey, key, StringComparison.Ordinal))
+                    is { } selected)
+                {
+                    return selected;
+                }
+            }
+            return _grid.SeatRow(_ => true) ?? LandingSeat.NotYet;
+        }
+        finally
+        {
+            _syncingSelection = wasSyncing;
+        }
+    }
+
     /// <summary>Contract A-7: seat the grid on the row whose key equals
     /// the shared selection; with no visible row for it, clear the grid's
     /// currency WITHOUT writing the key.</summary>
