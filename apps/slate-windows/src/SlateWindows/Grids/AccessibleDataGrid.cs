@@ -421,6 +421,26 @@ internal sealed class AccessibleDataGrid : UserControl
         return FocusCellElement(item, column, silent: true) == LandingSeat.Seated;
     }
 
+    /// <summary>
+    /// W7-7 PR 3 x PR 4 (codex on #1302's merge with PR 4): the same landing
+    /// on <paramref name="row"/>'s cell, for a surface whose landing row is
+    /// its own rule (the graph table's Term F4): the current column while it
+    /// is still bound, else the first — SILENT, seated now or once realized,
+    /// exactly as <see cref="FocusCurrentOrFirstCell"/>, which a row the grid
+    /// does not hold falls back to.
+    /// </summary>
+    /// <returns>Whether a realized cell, or the empty grid, took the keys
+    /// now.</returns>
+    internal bool FocusRowCell(object row)
+    {
+        ArgumentNullException.ThrowIfNull(row);
+        if (_grid.Columns.Count == 0 || !_items.Contains(row))
+        {
+            return FocusCurrentOrFirstCell();
+        }
+        return FocusCellElement(row, CurrentOrFirstCell().Column, silent: true) == LandingSeat.Seated;
+    }
+
     /// <summary>The grid substrate that owns <paramref name="grid"/>, if
     /// any — every grid in the shell is one's.</summary>
     internal static AccessibleDataGrid? Owning(DataGrid grid)

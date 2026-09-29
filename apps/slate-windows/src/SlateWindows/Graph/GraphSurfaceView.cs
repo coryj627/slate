@@ -955,10 +955,13 @@ internal sealed class GraphSurfaceView : UserControl, IGraphSurfacePresenter
             }
             if (publication.State is GraphLoadState.Ready && publication.HoldsSnapshot)
             {
-                // Term F4 as the terminal seat reads it (OD-12): the keyed row,
-                // and the first row only when the key names no row — a keyed
-                // row not seatable yet leaves the first row untouched, and the
-                // grid's realization edge re-asks (codex on #1300's merge).
+                // Term F4 as the terminal seat reads it (OD-12), through the
+                // one rule (GraphTableView.LandingRow): the keyed row; with no
+                // key the reader's current row, which a republish restores by
+                // its stable key (codex on #1302's merge); the first row only
+                // when neither holds — a keyed row not seatable yet leaves the
+                // first row untouched, and the grid's realization edge re-asks
+                // (codex on #1300's merge).
                 _table.UpdateLayout();
                 _ = _table.SeatProjection();
             }
