@@ -650,32 +650,91 @@ internal sealed class CanvasDocumentViewModel : PanelWorkScheduler
     /// A surface delivered the request and is saying so. Only the
     /// request that is still PENDING clears it, compared by reference:
     /// a request raised while an older one was in flight must not be
-    /// consumed by the older one's late delivery.
+    /// consumed by the older one's late delivery. Recorded as
+    /// <see cref="DocumentLandingEnd.Seated"/> (W7-7 R-10: the F6 ring's
+    /// Landed): call it only after a terminal seat took focus.
     /// </summary>
-    internal void CompleteFocusLanding(CanvasFocusRequest delivered)
+    internal void CompleteFocusLanding(CanvasFocusRequest delivered) =>
+        EndFocusLanding(delivered, DocumentLandingEnd.Seated);
+
+    /// <summary>Let go of the pending request WITHOUT seating it (a
+    /// withdrawn restoration, the ring cancelling its own landing):
+    /// recorded as <see cref="DocumentLandingEnd.Released"/>, never a
+    /// landing (W7-7 R-10).</summary>
+    internal void ReleaseFocusLanding(CanvasFocusRequest released) =>
+        EndFocusLanding(released, DocumentLandingEnd.Released);
+
+    /// <summary>W7-7 R-10: the last request this document ended, and how.
+    /// Any other way a request goes — a teardown, a tab set that no longer
+    /// holds its owner, a filter excluding its node — records nothing, which
+    /// reads as released: only an explicit seat is a landing.</summary>
+    internal DocumentLandingEnded? LastFocusLandingEnd { get; private set; }
+
+    private void EndFocusLanding(CanvasFocusRequest request, DocumentLandingEnd end)
     {
-        ArgumentNullException.ThrowIfNull(delivered);
-        if (ReferenceEquals(_focusRequest, delivered))
+        ArgumentNullException.ThrowIfNull(request);
+        if (ReferenceEquals(_focusRequest, request))
         {
+            // Recorded BEFORE the change is raised: the change's handlers
+            // read how the request ended.
+            LastFocusLandingEnd = new DocumentLandingEnded(request, request.Owner, end);
             FocusRequest = null;
         }
     }
 
-    /// <summary>The row a focus request should land on when it names
-    /// none: the row whose activation the user is returning from (WCAG
-    /// 2.4.3), else the first.</summary>
-    internal string? FocusLandingNodeFor(CanvasFocusRequest request)
+    /// <summary>
+    /// W7-7 R-10 over locked contract 34 D4/D15 — THE seam for the card a
+    /// landing on the VISUAL board seats: the card the request names; else,
+    /// under a needle matching NO card, the first card of the FULL scene
+    /// (the W7-6 editor row: the board lands with that card seated —
+    /// codex PR 8 round 8, OD-12); else the one whose activation the reader
+    /// is returning from; else the first card of the full scene. Never the
+    /// filtered outline: a Visual filter dims cards and narrows nothing, so a
+    /// needle matching no card still leaves every card to land on. Both
+    /// full-scene arms read the board's ONE reading order,
+    /// <see cref="SceneReadingOrder"/> — the order its Down/Up walk (#1270) —
+    /// so a landing and a walk never disagree about which card is first.
+    /// </summary>
+    internal string? BoardLandingNodeFor(CanvasFocusRequest request)
     {
         ArgumentNullException.ThrowIfNull(request);
         if (request.NodeId is { } named && _rows.ContainsKey(named))
         {
             return named;
         }
+        string? firstOfTheScene = SceneReadingOrder.FirstOrDefault()?.NodeId;
+        if (FilterActive && FilteredOutline.Count == 0)
+        {
+            return firstOfTheScene;
+        }
         if (LastActivatedNode is { } last && _rows.ContainsKey(last))
         {
             return last;
         }
-        return _outline.Count > 0 ? _outline[0].NodeId : null;
+        return firstOfTheScene;
+    }
+
+    /// <summary>The row a landing on the OUTLINE or the TABLE seats — only a
+    /// row that projection SHOWS (the filtered rows): the named row, else the
+    /// row whose activation the user is returning from (WCAG 2.4.3), else the
+    /// first shown row. A named row that exists but the filter hides is no
+    /// landing (null): W7-7 R-10 — chosen from the whole canvas, it could
+    /// never be delivered, and the request stayed pending with nothing to
+    /// seat it. A named row that is gone falls through, as it always did.</summary>
+    internal string? FocusLandingNodeFor(CanvasFocusRequest request)
+    {
+        ArgumentNullException.ThrowIfNull(request);
+        IReadOnlyList<CanvasOutlineRow> shown = FilteredOutline;
+        if (request.NodeId is { } named && _rows.ContainsKey(named))
+        {
+            return shown.Any(row => string.Equals(row.NodeId, named, StringComparison.Ordinal)) ? named : null;
+        }
+        if (LastActivatedNode is { } last
+            && shown.Any(row => string.Equals(row.NodeId, last, StringComparison.Ordinal)))
+        {
+            return last;
+        }
+        return shown.Count > 0 ? shown[0].NodeId : null;
     }
 
     /// <summary>The ONE surface switch (contracts A15/A18): the header
@@ -1637,11 +1696,16 @@ internal sealed class CanvasDocumentViewModel : PanelWorkScheduler
                     // surface hears the rows changed. A FAILED answer
                     // keeps the rows it was showing (contract C10), so
                     // it excludes nothing new and supersedes nothing.
+                    // W7-7 R-10: only where filtering REMOVES rows — the
+                    // outline and the table. On the Visual board a filter
+                    // dims cards and narrows nothing (locked contract 34
+                    // D4), so the named card stays the landing's.
                     if (loaded.Unit.Answer is CanvasAnswerState.Answered
-                        && _focusRequest is { NodeId: { } sought }
+                        && _focusRequest is { NodeId: { } sought } excluded
+                        && Selection.ActiveSurface != CanvasSurfaceKind.Visual
                         && !loaded.Unit.FilteredOrder.Contains(sought))
                     {
-                        FocusRequest = null;
+                        EndFocusLanding(excluded, DocumentLandingEnd.Released);
                     }
                     OutlinePublished?.Invoke(this, EventArgs.Empty);
                     Navigator.AnnounceFilterCount();

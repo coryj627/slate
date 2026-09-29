@@ -418,12 +418,30 @@ internal sealed class GraphDocumentViewModel : PanelWorkScheduler
         }
     }
 
-    /// <summary>Completion, only on a delivered quiescent landing (Term F4).</summary>
-    internal void CompleteFocus(GraphFocusRequest request)
+    /// <summary>Completion, only on a delivered quiescent landing (Term F4):
+    /// recorded as <see cref="DocumentLandingEnd.Seated"/> (W7-7 R-10: the
+    /// F6 ring's Landed), so call it only after a terminal seat took focus.</summary>
+    internal void CompleteFocus(GraphFocusRequest request) => EndFocus(request, DocumentLandingEnd.Seated);
+
+    /// <summary>Let go of the pending request WITHOUT a terminal seat — Term
+    /// F3's withdrawal on a rows-only failure or a rejection, a withdrawn
+    /// restoration, the ring cancelling its own landing: recorded as
+    /// <see cref="DocumentLandingEnd.Released"/>. A provisional seat may have
+    /// put focus in the surface; that is still no landing (W7-7 R-10).</summary>
+    internal void ReleaseFocus(GraphFocusRequest request) => EndFocus(request, DocumentLandingEnd.Released);
+
+    /// <summary>W7-7 R-10: the last request this document ended, and how; a
+    /// request that went any other way (retirement) recorded nothing, which
+    /// reads as released.</summary>
+    internal DocumentLandingEnded? LastFocusEnd { get; private set; }
+
+    private void EndFocus(GraphFocusRequest request, DocumentLandingEnd end)
     {
         ArgumentNullException.ThrowIfNull(request);
         if (ReferenceEquals(_focusRequest, request))
         {
+            // Recorded BEFORE the change is raised: its handlers read it.
+            LastFocusEnd = new DocumentLandingEnded(request, request.Owner, end);
             FocusRequest = null;
         }
     }

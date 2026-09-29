@@ -88,7 +88,11 @@ public sealed class WcMatrixCanvasEvidenceCensus
             // own peers pinned toggle-off (review round 2), judged by the
             // seat's and the toggle's tokens and paid when a hidden board is
             // shown again (review round 3, owner decision); D5's reserved
-            // container name (#1276).
+            // container name (#1276). W7-7 R-10 (PR 8): the board is the editor
+            // stop, a landing seats its card and brings it into view whatever
+            // Follow Selection says (a move made on the board), a zero-match
+            // needle still lands, and a full-scene landing takes the first card
+            // in the board's reading order.
             ["CanvasSurfaces_VisualBoardPeersAndZoom_AreClean", "TheZoomValueIsCoresRenderMinusItsPeriod", "FitCanvasContainsAndCentresCoresBounds",
                 "TheBoardsRightAndLeftFollowConnectionsAndEveryMoveRevealsItsSeat", "TheBoardRevealsItsOwnMovesAlwaysAndOtherMovesOnlyWhileFollowing",
                 "TheRevealRuleIsD4sOriginRule", "EveryBoardPeerHasItsOwnNameAndTheContainersNameIsReserved",
@@ -106,7 +110,11 @@ public sealed class WcMatrixCanvasEvidenceCensus
                 "AFollowingBoardUnderTheOutlineScrollsToTheSelectionWhenShown", "ABoardThatStopsFollowingWhileHiddenDoesNotScrollWhenShown",
                 "ABoardShownAgainWithTheSeatAlreadyInViewDoesNotMove", "ABoardMoveMadeBeforeHidingIsRevealedWhenShown",
                 "AReloadRevealsItsRelocatedSurvivorOnlyFromTheSuccessorPopulation",
-                "AnOwedRevealIsPaidFromALaterReloadItsSeatSurvives"],
+                "AnOwedRevealIsPaidFromALaterReloadItsSeatSurvives",
+                "AVisualBoardLandsOnItsRenderer", "ANamedLandingOnTheBoardSeatsItsCard",
+                "ALandingOnTheBoardRevealsItsCardWithFollowSelectionOff", "AZeroMatchFilterStillLandsTheBoardOnItsRenderer",
+                "TheBoardsFullSceneLandingSeatsTheFirstCardInReadingOrder", "AnEmptyVisualBoardLandsOnItsOnboarding",
+                "SeatingTheVisualProjectionFocusesTheRenderer"],
             ["canvas-visual"]),
         new(
             "Canvas card editor (W6-1 §E)",

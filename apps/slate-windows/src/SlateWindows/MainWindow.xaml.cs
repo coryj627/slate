@@ -44,6 +44,12 @@ public partial class MainWindow : Window
         ICommandPaletteWorkLane? paletteLane)
     {
         InitializeComponent();
+        // W7-7 PR 8 (R-10, OD-12): the one editor landing this window holds,
+        // and its window-level cancellations — the window losing activation,
+        // and WPF's restore when it comes back (no one's move).
+        _editorLandings = new EditorLandingSlot(Dispatcher);
+        Activated += (_, _) => _editorLandings.WindowActivated();
+        Deactivated += (_, _) => _editorLandings.WindowDeactivated();
         _windowPlacement = new WindowPlacementManager(this);
         _announcer = new AccessibilityNotificationDispatcher(StatusTextBlock);
         // OD-7: the window's one dispatcher, inherited by every surface in
@@ -92,7 +98,9 @@ public partial class MainWindow : Window
         // over the shell — the unsaved-changes prompt on close, a folder or
         // file dialog, a WPF ShowDialog — seals the palette for as long as
         // it runs, so nothing it owns publishes or speaks behind the prompt.
-        _modalLoops = new ShellModalLoopMonitor((UIElement)Content, _viewModel.Palette.SetModalLoop);
+        // W7-7 PR 8 (R-10, OD-12): the loop opening is also a modal opening
+        // for the window's editor landing (ModalLoopChanged).
+        _modalLoops = new ShellModalLoopMonitor((UIElement)Content, ModalLoopChanged);
         // #1275 (codex round 6): while sealed, a mnemonic finds no target in
         // the shell (MainWindow.Seal.cs) — past handled, so a menu item's
         // own answer cannot hide a candidate from the seal.
@@ -333,6 +341,7 @@ public partial class MainWindow : Window
             _observedFileSidebar.TreeSelectionRestored -=
                 FileSidebar_TreeSelectionRestored;
             _observedFileSidebar.PropertyChanged -= FileSidebar_MoveToSheetChanged;
+            _observedFileSidebar.PropertyChanged -= ModalSource_PropertyChanged;
             _observedFileSidebar.MoveToOpenAdmission = null;
             _observedFileSidebar.MoveToOwnsModal = null;
         }
@@ -353,6 +362,7 @@ public partial class MainWindow : Window
             sidebar.MoveToOwnsModal = () => ReferenceEquals(_observedFileSidebar, sidebar)
                 && OpenModalSurface == ModalSurface.MoveTo;
             sidebar.PropertyChanged += FileSidebar_MoveToSheetChanged;
+            sidebar.PropertyChanged += ModalSource_PropertyChanged;
         }
 
         // A vault transition mid-pick never runs the restore (the sheet
@@ -432,7 +442,9 @@ public partial class MainWindow : Window
         if (_observedWorkspace is not null)
         {
             _observedWorkspace.EditorPaneFocusRequested -= Workspace_EditorPaneFocusRequested;
+            _observedWorkspace.CanvasNodeLandingRequested -= Workspace_CanvasNodeLandingRequested;
             _observedWorkspace.PropertyChanged -= Workspace_CanvasSheetChanged;
+            _observedWorkspace.PropertyChanged -= ModalSource_PropertyChanged;
             UnwireWorkspaceProperties(_observedWorkspace);
             UnwireWorkspaceCitations(_observedWorkspace);
             UnwireWorkspaceBases(_observedWorkspace);
@@ -444,7 +456,9 @@ public partial class MainWindow : Window
         if (workspace is not null)
         {
             workspace.EditorPaneFocusRequested += Workspace_EditorPaneFocusRequested;
+            workspace.CanvasNodeLandingRequested += Workspace_CanvasNodeLandingRequested;
             workspace.PropertyChanged += Workspace_CanvasSheetChanged;
+            workspace.PropertyChanged += ModalSource_PropertyChanged;
             // #1275: the workspace's message boxes are owned by the shell,
             // so they disable it — the signal the modal-loop monitor reads —
             // even when the shell is not the active window.
@@ -523,10 +537,42 @@ public partial class MainWindow : Window
         object? sender,
         WorkspaceGroupViewModel group)
     {
+        // W7-7 PR 8 (R-10): a newer editor landing is coming, so the one the
+        // window holds (the ring's, or an earlier route's) is withdrawn NOW,
+        // before its content can arrive ahead of the queued landing and seat
+        // focus where the reader no longer is.
+        _ = _editorLandings.Withdraw();
+        // OD-12's one entry: the funnel asks, and the queued landing creates
+        // the request (canvas and graph included, contract A14's instruction)
+        // under the window's slot. A later focus request that supersedes it in
+        // the arbiter leaves no request behind to seat the tab later.
         _ = _focusRequests.Post(
             Dispatcher,
             DispatcherPriority.Input,
-            () => FocusEditorPane(group));
+            () => LandEditorForRoute(group, onLanded: null));
+    }
+
+    /// <summary>R-10 (OD-12's one entry): a canvas jump asks to land the editor
+    /// on the card the reader chose (the marks list's Enter, IG-39) — in the
+    /// turn that closed the sheet, so no input the reader queued behind the
+    /// Enter runs first (codex PR 8 round 9). The ask is still checked: it
+    /// lands only while its tab is the active tab of the active group, on the
+    /// same document — otherwise it is stale and lands nothing, and withdraws
+    /// nothing. A live ask supersedes the landing the window holds and goes
+    /// through the one entry (which creates nothing under a modal surface),
+    /// silently: its outcomes are the landing's own (IG-41).</summary>
+    private void Workspace_CanvasNodeLandingRequested(object? sender, CanvasNodeLandingIntent intent)
+    {
+        if (_viewModel.Workspace is not WorkspaceViewModel workspace
+            || !ReferenceEquals(workspace.ActiveGroup.ActiveTab, intent.Tab)
+            || !ReferenceEquals(intent.Tab.Canvas, intent.Document))
+        {
+            return;
+        }
+
+        _ = _editorLandings.Withdraw();
+        _ = FocusEditorPane(
+            workspace.ActiveGroup, onLanded: null, onRefused: static () => { }, forTheRing: false, canvasNode: intent.NodeId);
     }
 
     private void ObserveQuickSwitcher(QuickSwitcherViewModel? switcher)
@@ -539,6 +585,7 @@ public partial class MainWindow : Window
         if (_observedQuickSwitcher is not null)
         {
             _observedQuickSwitcher.PropertyChanged -= QuickSwitcher_PropertyChanged;
+            _observedQuickSwitcher.PropertyChanged -= ModalSource_PropertyChanged;
             _observedQuickSwitcher.OpenRequested -= QuickSwitcher_OpenRequested;
         }
 
@@ -546,6 +593,7 @@ public partial class MainWindow : Window
         if (switcher is not null)
         {
             switcher.PropertyChanged += QuickSwitcher_PropertyChanged;
+            switcher.PropertyChanged += ModalSource_PropertyChanged;
             switcher.OpenRequested += QuickSwitcher_OpenRequested;
         }
     }
@@ -687,7 +735,7 @@ public partial class MainWindow : Window
             {
                 if (_viewModel.Workspace is WorkspaceViewModel workspace)
                 {
-                    FocusEditorPane(workspace.ActiveGroup);
+                    LandEditorForRoute(workspace.ActiveGroup, onLanded: null);
                 }
             }
             else if (focusBeforeSwitcher is not null && TryFocus(focusBeforeSwitcher))
@@ -1469,7 +1517,7 @@ public partial class MainWindow : Window
     /// natively.</summary>
     private static bool MenuModeOwnsEscape(KeyEventArgs e)
     {
-        for (DependencyObject? node = e.OriginalSource as DependencyObject; node is not null; node = Parent(node))
+        for (DependencyObject? node = e.OriginalSource as DependencyObject; node is not null; node = ParentOf(node))
         {
             if (node is System.Windows.Controls.Primitives.MenuBase or MenuItem)
             {
@@ -1866,6 +1914,7 @@ public partial class MainWindow : Window
         ObserveQuickSwitcher(null);
         ObserveWorkspace(null);
         ObserveFileSidebar(null);
+        _editorLandings.Dispose();
         _modalLoops.Dispose();
         _viewModel.Dispose();
     }
@@ -1877,74 +1926,222 @@ public partial class MainWindow : Window
             return;
         }
 
-        FocusEditorPane(workspace.ActiveGroup);
-        workspace.AnnounceActivePaneFocus();
+        // W7-7 PR 8 (R-10): the pane is announced ONCE, when focus is really
+        // in the stop — at once, when a held landing seats, or after the
+        // fallback a refused one takes — never while its content is arriving.
+        LandEditorForRoute(workspace.ActiveGroup, workspace.AnnounceActivePaneFocus);
     }
 
-    private void FocusEditorPane(WorkspaceGroupViewModel group)
+    /// <summary>
+    /// W7-7 PR 8 (#1253, contract R-10): an editor landing a ROUTE asks for —
+    /// every caller but the F6 ring: the focus funnel behind every open (Quick
+    /// Open's commit and a reading link's navigation among them), the reading
+    /// toggle, tab cycling and pane moves; the switcher's committed dismissal;
+    /// and the close fallbacks (<see cref="FocusActiveEditorPane"/>). It
+    /// supersedes whatever landing the window holds. OD-12: the one entry
+    /// creates nothing while a modal surface is open — the modal owns the
+    /// keys, and nothing may seat beneath it. Its refusal — now, or later when
+    /// a held landing's content fails, is torn down while current or will not
+    /// take focus — falls back to the tab strip or the Files tree
+    /// (<see cref="FallBackFromEditor"/>), guarded to the same tab with no
+    /// modal open (<see cref="RouteFallback"/>): focus is never left on the
+    /// window root or a closed overlay, and never moved beneath a modal.
+    /// <paramref name="onLanded"/> is spoken once focus is in the stop or on
+    /// the tab's own item, or — for an EMPTY pane, which has neither — on the
+    /// Files tree (owner decision 2026-09-28: the line tells the reader nothing
+    /// is open; R-1's fourth launch line). Never for the Files tree when the
+    /// pane has a tab whose stop was refused, and never when nothing took
+    /// focus.
+    /// </summary>
+    private void LandEditorForRoute(WorkspaceGroupViewModel group, Action? onLanded)
     {
-        WorkspaceTabViewModel? activeTab = group.ActiveTab;
-        // W6-1 PR A (contract A14): a canvas tab's focus belongs to the
-        // canvas surface, which realizes an outline row and places focus
-        // there. The fallbacks below (the TabItem, then the TabControl)
-        // would take focus straight back off that row, and this handler
-        // is queued at Input priority — i.e. strictly AFTER the canvas
-        // delivery — so they would win deterministically.
-        //
-        // But it must not return BARE. Seven routes reach here as a
-        // last resort after a dismissal whose own comments say the
-        // fallback exists "rather than stranding focus on the window
-        // root" — the palette, search, properties and template sheets
-        // among them — and for those the canvas delivery has not been
-        // asked for at all. So the canvas arm ASKS: one authority per
-        // tab kind, and every route that wanted "put focus somewhere
-        // sensible" gets the outline row.
-        if (activeTab is { IsCanvas: true, Canvas: { } canvas })
+        _ = _editorLandings.Withdraw();
+        WorkspaceTabViewModel? tab = group.ActiveTab;
+        Action refused = RouteFallback(group, tab, onLanded);
+        ShellRegionLanding landing = FocusEditorPane(group, onLanded, refused, forTheRing: false);
+        if (landing == ShellRegionLanding.Refused)
         {
-            canvas.RequestFocusLanding(activeTab);
+            refused();
             return;
         }
-        // W6-2 PR C (rule F, Term F6): a graph tab's focus belongs to the graph
-        // surface, which seats the grid's row or the state host through the
-        // document's addressed landing — the canvas arm's shape.
-        if (activeTab is { IsGraph: true, Graph: { } graph })
+
+        if (landing == ShellRegionLanding.Landed)
         {
-            graph.RequestFocusLanding(activeTab);
-            return;
+            onLanded?.Invoke();
+        }
+    }
+
+    /// <summary>A route's refusal (R-10): only while the reader is still where
+    /// the route put them — the same group and tab, no modal over it — the
+    /// fallback runs, and <paramref name="onLanded"/> is spoken only when it
+    /// took the tab's own item, or when the pane is EMPTY and it took the Files
+    /// tree (owner decision 2026-09-28). A pane with a tab whose stop was
+    /// refused says nothing from the Files tree (codex PR 8 round 6): its line
+    /// would name a tab the reader is not on.</summary>
+    private Action RouteFallback(WorkspaceGroupViewModel group, WorkspaceTabViewModel? tab, Action? onLanded) =>
+        () =>
+        {
+            if (IsStillTheLandingTab(group, tab)
+                && FallBackFromEditor(group, tab) switch
+                {
+                    EditorFallback.TabItem => true,
+                    EditorFallback.Files => tab is null,
+                    _ => false,
+                })
+            {
+                onLanded?.Invoke();
+            }
+        };
+
+    /// <summary>Whether a refused route landing still owns where the reader
+    /// is: <paramref name="group"/> is the active group, <paramref name="tab"/>
+    /// its active tab, and no modal holds the keys — neither a modal surface
+    /// nor a modal loop over the shell (#1275's monitor).</summary>
+    private bool IsStillTheLandingTab(WorkspaceGroupViewModel group, WorkspaceTabViewModel? tab) =>
+        IsStillWhereAsked(group, tab) && OpenModalSurface is null && !_modalLoops.IsModalLoopActive;
+
+    /// <summary>
+    /// W7-7 PR 8 (#1253, contract R-10; OD-12's one entry): THE editor landing
+    /// — the one place an editor landing request is created, for the F6 ring,
+    /// every route and a canvas jump (<paramref name="canvasNode"/>). Nothing
+    /// is created while a modal holds the keys: a modal surface open, or a
+    /// modal loop over the shell — a message box it owns, a common dialog, a
+    /// WPF <c>ShowDialog</c> (#1275's monitor). Its callers first let go of
+    /// the editor landing the window holds (one at most, whoever asked); it
+    /// lands the active tab's stop by kind and answers LANDED (focus is in the
+    /// stop now), PENDING (held by the window's slot — a canvas or graph
+    /// request owned before it is raised: its content, surface or row
+    /// container is still to come; it then ends seated —
+    /// <paramref name="onLanded"/> — refused — <paramref name="onRefused"/> —
+    /// or cancelled, silently) or REFUSED (the stop cannot be taken; nothing
+    /// is held and nothing moved, so the caller goes on: the ring to the next
+    /// region, a route to its fallback).
+    /// </summary>
+    private ShellRegionLanding FocusEditorPane(
+        WorkspaceGroupViewModel group, Action? onLanded, Action onRefused, bool forTheRing, string? canvasNode = null)
+    {
+        if (OpenModalSurface is not null || _modalLoops.IsModalLoopActive)
+        {
+            return ShellRegionLanding.Refused;
+        }
+        // W6-1 PR A (contract A14) and W6-2 PR C (rule F, Term F6): a canvas
+        // or graph tab's focus belongs to its surface, which seats the row,
+        // the board, the banner or the state host through the document's
+        // addressed landing — asked FIRST, so no fallback below takes focus
+        // back off what the surface seats (<see cref="LandDocument"/> raises
+        // the request, under the window's slot).
+        if (group.ActiveTab is { } documentTab && (documentTab.IsCanvas || documentTab.IsGraph))
+        {
+            return LandDocument(group, documentTab, onLanded, onRefused, forTheRing, canvasNode);
+        }
+        WorkspaceTabViewModel? activeTab = group.ActiveTab;
+        if (activeTab is null)
+        {
+            return ShellRegionLanding.Refused;
+        }
+        // A reading-mode tab's editor is COLLAPSED (the template swaps the two
+        // by visibility), so its stop is the reading surface (record F10). It
+        // lands at once on an applied, current projection, and otherwise holds
+        // the landing for the content — never focusing the loading
+        // placeholder; a reader already inside a surface that is not ready (an
+        // in-place navigation swapped the note under them) waits on this tab's
+        // item, so the landing is an arrival NVDA speaks.
+        if (activeTab.IsReadingMode)
+        {
+            if (ReadingSurfaceOf(activeTab) is not { IsVisible: true, IsEnabled: true } surface
+                || !surface.RequestFocusLanding(
+                    onLanded, onRefused, parkWhileUnready: () => FocusActiveTabItem(group)))
+            {
+                return ShellRegionLanding.Refused;
+            }
+            if (surface.HeldFocusLanding is { } held)
+            {
+                // Held by the window's slot (OD-12), after the park: the park is
+                // this landing's own move, made before it is held.
+                _editorLandings.Hold(new HeldEditorLanding(
+                    target: () => surface,
+                    isLive: () => ReferenceEquals(surface.HeldFocusLanding, held),
+                    withdraw: () => surface.CancelFocusLanding(held),
+                    stillWhereAsked: () => IsStillWhereAsked(group, activeTab),
+                    scope: LandingScope(group),
+                    ringRegion: forTheRing ? ShellRegionKind.Editor : null));
+                return ShellRegionLanding.Pending;
+            }
+            return ShellRegionLanding.Landed;
         }
         SlateTextEditor? editor = FindVisualDescendants<SlateTextEditor>(ContentPaneBorder)
             .FirstOrDefault(candidate => ReferenceEquals(candidate.DataContext, activeTab));
-        if (editor is { IsVisible: true, IsEnabled: true } && editor.FocusInputOwner())
-        {
-            return;
-        }
+        return editor is { IsVisible: true, IsEnabled: true } && editor.FocusInputOwner()
+            ? ShellRegionLanding.Landed
+            : ShellRegionLanding.Refused;
+    }
 
+    /// <summary>
+    /// A refused editor landing's fallback for a route: the tab strip's stop
+    /// for the tab, else the tab control, else the Files tree — answering which
+    /// took focus. W7-5 (#1239): an EMPTY tab control refuses focus (its
+    /// Focusable follows HasItems, WorkspaceTemplates.xaml), so the last resort
+    /// is the Files tree: the owner's launch landing when nothing is open, and
+    /// the one region that always has something to say. Landing on the bare
+    /// TabControl gave NVDA "Workspace tabs tab control" and let Down arrow
+    /// wander into the menu bar. OD-12 (codex round 6's note): a group whose
+    /// tab control is not realized still tries the Files tree, and the answer
+    /// is what decides whether the route's line is spoken.
+    /// </summary>
+    private EditorFallback FallBackFromEditor(WorkspaceGroupViewModel group, WorkspaceTabViewModel? activeTab)
+    {
         TabControl? tabs = FindVisualDescendants<TabControl>(ContentPaneBorder)
             .FirstOrDefault(candidate => ReferenceEquals(candidate.DataContext, group));
-        if (tabs is null)
+        if (tabs is not null)
         {
-            return;
+            tabs.UpdateLayout();
+            if (activeTab is not null
+                && tabs.ItemContainerGenerator.ContainerFromItem(activeTab) is TabItem selectedTab
+                && selectedTab.Focus())
+            {
+                return EditorFallback.TabItem;
+            }
+
+            if (tabs.Focus())
+            {
+                return EditorFallback.TabControl;
+            }
+        }
+
+        return FilesTree.Focus() ? EditorFallback.Files : EditorFallback.None;
+    }
+
+    /// <summary>Where a refused route landing's fallback put the reader.</summary>
+    private enum EditorFallback
+    {
+        None,
+        TabItem,
+        TabControl,
+        Files,
+    }
+
+    /// <summary>The tab bar's stop for <paramref name="group"/>'s active tab
+    /// (R-10: where a reader inside a reading surface waits while the content
+    /// replacing what they were reading arrives).</summary>
+    private bool FocusActiveTabItem(WorkspaceGroupViewModel group)
+    {
+        TabControl? tabs = FindVisualDescendants<TabControl>(ContentPaneBorder)
+            .FirstOrDefault(candidate => ReferenceEquals(candidate.DataContext, group));
+        if (tabs is null || group.ActiveTab is not { } activeTab)
+        {
+            return false;
         }
 
         tabs.UpdateLayout();
-        if (activeTab is not null
-            && tabs.ItemContainerGenerator.ContainerFromItem(activeTab) is TabItem selectedTab
-            && selectedTab.Focus())
-        {
-            return;
-        }
-
-        // W7-5 (#1239): an EMPTY tab control refuses focus (its Focusable
-        // follows HasItems, WorkspaceTemplates.xaml), so the last resort is
-        // the Files tree: the owner's launch landing when nothing is open,
-        // and the one region that always has something to say. Landing on
-        // the bare TabControl gave NVDA "Workspace tabs tab control" and
-        // let Down arrow wander into the menu bar.
-        if (!tabs.Focus())
-        {
-            FilesTree.Focus();
-        }
+        return tabs.ItemContainerGenerator.ContainerFromItem(activeTab) is TabItem item && item.Focus();
     }
+
+    /// <summary>The reading surface showing <paramref name="tab"/> (R-10):
+    /// one per tab control, shared by its tabs, so the DataContext names the
+    /// tab it shows now.</summary>
+    private Reading.ReadingSurface? ReadingSurfaceOf(WorkspaceTabViewModel tab) =>
+        FindVisualDescendants<Reading.ReadingSurface>(ContentPaneBorder)
+            .FirstOrDefault(candidate => ReferenceEquals(candidate.DataContext, tab));
 
     internal static T? FindAncestorDataContext<T>(DependencyObject current)
         where T : class

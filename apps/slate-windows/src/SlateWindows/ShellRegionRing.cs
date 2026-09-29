@@ -18,6 +18,20 @@ internal enum ShellRegionKind
     StatusBar,
 }
 
+/// <summary>What a landing did (W7-6; W7-7 PR 8, contract R-10): focus is
+/// in the region; the region HOLDS the landing until its content arrives (a
+/// reading projection, a canvas load, a graph surface not yet shown), so the
+/// ring neither announces nor moves on — the host later speaks the region's
+/// line when focus arrives, or resumes the ring past the region when the held
+/// landing cannot be taken, and a newer press cancels it; or the region
+/// cannot take focus and the ring tries the next.</summary>
+internal enum ShellRegionLanding
+{
+    Landed,
+    Pending,
+    Refused,
+}
+
 /// <summary>What the ring depends on, read live on every press.</summary>
 internal readonly record struct ShellRegionLayout(
     bool HasTabs,

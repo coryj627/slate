@@ -42,13 +42,16 @@ public sealed partial class GraphTableTests
             Session = VaultSession.OpenFilesystem(Vault.Root);
             using var cancel = new CancelToken();
             Session.ScanInitial(cancel);
+            // W7-7 PR 8 (OD-12's one entry): the funnel only asks; the shell
+            // raises the landing request, and these facts host the graph
+            // surface without the shell (ShellLandingStandIn).
             Workspace = new WorkspaceViewModel(
                 Session,
                 Vault.Root,
                 () => [],
                 @event => ShellEvents.Add(@event),
                 startInteractionBackgroundWork: false,
-                announceRendered: line => GraphLines.Add(line.Text));
+                announceRendered: line => GraphLines.Add(line.Text)).WithShellLandings();
         }
 
         public GraphDocumentViewModel Open()
