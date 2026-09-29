@@ -53,6 +53,18 @@ internal sealed class MoveToRowViewModel
 
     public string AccessibleName =>
         Detail is { } detail ? $"{Label}. {detail}." : Label;
+
+    /// <summary>W7-7 PR 3 (#1246, R-4; codex PR 3 round 4): what tells this
+    /// row from a namesake — a folder AS a folder, by its path; none for the
+    /// pinned rows. A top-level folder named "Vault root" otherwise reads
+    /// exactly like the pinned root, and Enter moves files to a destination
+    /// the reader cannot tell apart.</summary>
+    public string? Place => Kind == MoveToRowKind.Folder ? $"folder {Destination}" : null;
+
+    /// <summary>The row's name among its siblings (SiblingNames' rule over
+    /// <see cref="AccessibleName"/> and <see cref="Place"/>) — what the list
+    /// item reads and what a selection move speaks.</summary>
+    public string SpokenName { get; internal set; } = string.Empty;
 }
 
 /// <summary>
@@ -232,7 +244,7 @@ internal sealed class MoveToPickerViewModel : BindableBase
                 && !_rebuilding
                 && value is not null)
             {
-                _announce(new A11yEvent.RowSelected(value.AccessibleName));
+                _announce(new A11yEvent.RowSelected(value.SpokenName));
             }
         }
     }
@@ -260,6 +272,22 @@ internal sealed class MoveToPickerViewModel : BindableBase
 
     public ICommand CancelCommand => _cancelCommand ??= new RelayCommand(
         _ => { if (!_retired) { _cancelled(); } }, _ => !_retired);
+
+    /// <summary>Each row's name among the rows it sits with, by the one
+    /// sibling rule — naming code, which NamingComparesOnlyBySpeechKey holds
+    /// to the rule's own comparison (the typed filter's match stays in
+    /// <see cref="RebuildRows"/>).</summary>
+    private static void SpeakAmongThemselves(List<MoveToRowViewModel> rows)
+    {
+        string[] spoken = SiblingNames.Compose(
+            [.. rows.Select(row => (string?)row.AccessibleName)],
+            [.. rows.Select(row => row.Place)],
+            "destination");
+        for (int index = 0; index < rows.Count; index++)
+        {
+            rows[index].SpokenName = spoken[index];
+        }
+    }
 
     private void RebuildRows(bool announceCount)
     {
@@ -295,6 +323,11 @@ internal sealed class MoveToPickerViewModel : BindableBase
                 typedPath,
                 $"New Folder “{typedPath}”"));
         }
+
+        // R-4 (#1246): each row's name among its siblings — the rule the
+        // list's container style reads (SiblingNames), so the selection
+        // speaks exactly what the list item reads.
+        SpeakAmongThemselves(rows);
 
         MoveToRowViewModel? previous = SelectedRow;
         // A loading picker can temporarily fall back to the pinned root before

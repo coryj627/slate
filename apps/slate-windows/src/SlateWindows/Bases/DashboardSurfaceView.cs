@@ -176,7 +176,7 @@ internal sealed class DashboardSurfaceView : UserControl
     /// <summary>A READ-ONLY thin grid configuration (contract C2): no
     /// editing seam, no row actions, no activation — the mac
     /// BaseReadOnlyResultView.</summary>
-    private static AccessibleDataGrid BuildSectionGrid(
+    internal static AccessibleDataGrid BuildSectionGrid(
         string idRoot, int index, BasesResultSet result)
     {
         var grid = new AccessibleDataGrid
@@ -206,33 +206,37 @@ internal sealed class DashboardSurfaceView : UserControl
             summary: BaseSummaryFormatter.SummaryText(result, quickFilterActive: false),
             accessibilityLabel: result.AudioSummary,
             rowAudioDescription: static row =>
-                ((BaseGridRowViewModel)row).AudioDescription);
+                ((BaseGridRowViewModel)row).AudioDescription,
+            // R-4 (#1246): the Base tab's row identity.
+            rowAutomationName: static row => ((BaseGridRowViewModel)row).FileName,
+            rowKey: static row => ((BaseGridRowViewModel)row).RowKey);
         return grid;
     }
 
     /// <summary>The "list" view override: core's row readbacks in a
     /// keyboard-navigable read-only list (the thin twin of the Base
-    /// tab's list renderer — no actions, no activation).</summary>
-    private static UIElement BuildSectionList(
+    /// tab's list renderer — no actions, no activation). W7-7 PR 3 (#1246,
+    /// R-4): each row is named by its readback under the sibling rule —
+    /// two rows that read alike add their file, and two of one file (its
+    /// tasks) their place.</summary>
+    internal static ListBox BuildSectionList(
         string idRoot, int index, BasesResultSet result)
     {
+        var text = new FrameworkElementFactory(typeof(TextBlock));
+        text.SetBinding(TextBlock.TextProperty, new System.Windows.Data.Binding(nameof(BasesRow.AudioDescription)));
+        text.SetValue(TextBlock.TextWrappingProperty, TextWrapping.Wrap);
         var list = new ListBox
         {
             MaxHeight = 320,
+            ItemTemplate = new DataTemplate { VisualTree = text },
+            ItemContainerStyle = SiblingNames.ContainerStyle(typeof(ListBoxItem)),
+            ItemsSource = result.Rows,
         };
         AutomationProperties.SetAutomationId(list, $"{idRoot}Section{index}List");
         AutomationProperties.SetName(list, result.AudioSummary);
-        foreach (BasesRow row in result.Rows)
-        {
-            list.Items.Add(new ListBoxItem
-            {
-                Content = new TextBlock
-                {
-                    Text = row.AudioDescription,
-                    TextWrapping = TextWrapping.Wrap,
-                },
-            });
-        }
+        SiblingNames.SetNamePath(list, nameof(BasesRow.AudioDescription));
+        SiblingNames.SetDistinguisherPath(list, nameof(BasesRow.FilePath));
+        SiblingNames.SetNoun(list, "row");
         return list;
     }
 }

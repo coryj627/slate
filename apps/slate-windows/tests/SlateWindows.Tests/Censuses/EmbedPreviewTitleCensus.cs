@@ -42,7 +42,8 @@
 //   every write of the popover's header and name, every inline of a reading
 //   embed header and every landmark name. The population is pinned: one card
 //   per resolved kind (the kinds come from the binding's EmbedResolution), the
-//   registered warnings, the renderer's six, the reading view's three, the
+//   registered warnings, the renderer's six, the embeds leaf's one whole
+//   pass-through to the sibling rule (W7-7 PR 3, R-4), the reading view's three, the
 //   popover's four writers and the one locator helper with its one caller.
 // - What arrives at a card sink is core's ResolvedEmbedTitle(...) — through
 //   locals if need be, every assignment — fed from the resolution. A '+', an
@@ -284,6 +285,7 @@ public sealed partial class EmbedPreviewTitleCensus
     [InlineData("Reading/ReadingDocumentBuilder.cs", new[] { "header.Inlines.Add(new Run(headerName));", "header.Inlines.Add(new Run(\"Embedded \"));\n        header.Inlines.Add(new Run(headerName));" }, "static text beside the header's title")]
     [InlineData("Reading/ReadingSemantics.cs", new[] { "section.SetValue(EmbedNameProperty, name);", "section.SetValue(EmbedNameProperty, \"Embedded \" + name);" }, "the embed landmark stores")]
     [InlineData("ResolvedEmbeds.cs", new[] { "new ResolvedEmbed.Note(full.TargetPath)", "new ResolvedEmbed.Note(\"Embedded \" + full.TargetPath)" }, "a ResolvedEmbed filled from host text")]
+    [InlineData("Panels/RightPanePanelsViewModel.cs", new[] { "public string Title => Node.Title;", "public string Title => \"Embedded \" + Node.Title;" }, "a card's Title is read outside EditorEmbedPreviewView")]
     public void EveryHostCompositionReachingACSharpSinkIsNamed(string file, string[] edits, string cause)
     {
         string[] failures = CSharpMutantFailures(file, edits);

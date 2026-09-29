@@ -81,7 +81,7 @@ internal sealed partial class WorkspaceViewModel
             int index = group.Tabs.IndexOf(tab) + 1;
             _announce(new A11yEvent.TabFocused(
                 Prefix: string.Empty,
-                Filename: tab.Title,
+                Filename: group.SpokenNameOf(tab),
                 Index: (uint)Math.Max(1, index),
                 Count: (uint)group.Tabs.Count));
         }
@@ -452,6 +452,9 @@ internal sealed partial class WorkspaceViewModel
         }
 
         int index = group.Tabs.IndexOf(tab);
+        // The closed tab is named among the tabs it leaves, BEFORE it leaves
+        // them (codex PR 3 round 8); its successor, below, after.
+        string closedName = group.SpokenNameOf(tab);
         _closedTabs.Add((tab.Item, group.Id));
         if (_closedTabs.Count > ClosedTabCapacity)
         {
@@ -468,7 +471,8 @@ internal sealed partial class WorkspaceViewModel
             ? null
             : group.Tabs[Math.Min(index, group.Tabs.Count - 1)];
         group.ActiveTab = successor;
-        _announce(new A11yEvent.TabClosed(tab.Title, successor?.Title));
+        _announce(new A11yEvent.TabClosed(
+            closedName, successor is null ? null : group.SpokenNameOf(successor)));
         if (group.Tabs.Count == 0 && Groups.Count > 1)
         {
             RemoveEmptyGroup(group);
@@ -848,8 +852,8 @@ internal sealed partial class WorkspaceViewModel
         {
             WorkspaceItemKind.Graph => new A11yEvent.ReopenedGraph(),
             WorkspaceItemKind.SavedQuery or WorkspaceItemKind.Dashboard =>
-                new A11yEvent.ReopenedNamed(tab.Title),
-            _ => ReopenFileAnnouncement(tab),
+                new A11yEvent.ReopenedNamed(group.SpokenNameOf(tab)),
+            _ => ReopenFileAnnouncement(group, tab),
         };
         // A missing target keeps the tab and its recovery UI, without
         // claiming success (D-11): the tab's state changes here, not
@@ -863,9 +867,11 @@ internal sealed partial class WorkspaceViewModel
         Persist();
     }
 
-    private A11yEvent ReopenFileAnnouncement(WorkspaceTabViewModel tab)
+    private A11yEvent ReopenFileAnnouncement(WorkspaceGroupViewModel group, WorkspaceTabViewModel tab)
     {
-        string filename = System.IO.Path.GetFileName(tab.Path);
+        // The reopened tab as its group's strip names it (codex PR 3 round
+        // 8, OD-9): the file that failed or went missing is that tab's.
+        string filename = group.SpokenNameOf(tab);
         try
         {
             // The index may still contain a deleted file. Ask the live core
@@ -881,7 +887,7 @@ internal sealed partial class WorkspaceViewModel
         }
         return tab.LoadFailure is { } detail
             ? new A11yEvent.FileReopenFailed(filename, detail)
-            : new A11yEvent.ReopenedFile(tab.Title);
+            : new A11yEvent.ReopenedFile(filename);
     }
 
     private void MoveActiveTab(int delta)
@@ -1071,7 +1077,7 @@ internal sealed partial class WorkspaceViewModel
                 WorkspaceTabViewModel? tab = ActiveGroup.ActiveTab;
                 _announce(new A11yEvent.TabFocused(
                     Prefix: "Tab bar. ",
-                    Filename: tab?.Title ?? string.Empty,
+                    Filename: tab is null ? string.Empty : ActiveGroup.SpokenNameOf(tab),
                     Index: (uint)Math.Max(1, tab is null ? 1 : ActiveGroup.Tabs.IndexOf(tab) + 1),
                     Count: (uint)ActiveGroup.Tabs.Count));
                 break;
@@ -1276,7 +1282,7 @@ internal sealed partial class WorkspaceViewModel
         _announce(new A11yEvent.EditorPaneFocused(
             ordinal,
             (uint)groups.Count,
-            ActiveGroup.ActiveTab?.Title ?? "Empty pane",
+            ActiveGroup.ActiveTab is { } active ? ActiveGroup.SpokenNameOf(active) : "Empty pane",
             string.Empty));
     }
 

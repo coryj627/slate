@@ -13,6 +13,7 @@
     <local:NullToVisibilityConverter x:Key="NullToVisibilityConverter" />
     <local:IsNotNullConverter x:Key="IsNotNullConverter" />
     <local:SidebarSortModeLabelConverter x:Key="SidebarSortModeLabelConverter" />
+    <local:RecentVaultNameConverter x:Key="RecentVaultNameConverter" />
 
     <HierarchicalDataTemplate x:Key="SidebarTagTemplate"
                               DataType="{x:Type local:SidebarTagViewModel}"
@@ -173,11 +174,12 @@
             <!-- Unnamed on purpose: it is non-focusable structure and
                  the type-cued row name contains "list", which trips
                  axe's NameExcludesControlType on a List control. The
-                 per-item editors carry the full labels. -->
-            <ItemsControl ItemsSource="{Binding Items}"
-                          Focusable="False"
-                          IsTabStop="False">
-                <ItemsControl.ItemTemplate>
+                 per-item editors carry the full labels, so the item
+                 containers are layout too (R-4, #1246). -->
+            <local:LayoutItemsControl ItemsSource="{Binding Items}"
+                                      Focusable="False"
+                                      IsTabStop="False">
+                <local:LayoutItemsControl.ItemTemplate>
                     <DataTemplate DataType="{x:Type panels:PropertyListItemViewModel}">
                         <StackPanel Margin="0,2" Orientation="Horizontal">
                             <!-- Enter commits the ROW (contract 2 —
@@ -199,8 +201,8 @@
                                     AutomationProperties.Name="{Binding RemoveLabel}" />
                         </StackPanel>
                     </DataTemplate>
-                </ItemsControl.ItemTemplate>
-            </ItemsControl>
+                </local:LayoutItemsControl.ItemTemplate>
+            </local:LayoutItemsControl>
             <Button Margin="0,4,0,0"
                     Padding="8,2"
                     HorizontalAlignment="Left"
@@ -387,7 +389,14 @@
                                   VerticalScrollBarVisibility="Auto"
                                   HorizontalScrollBarVisibility="Disabled"
                                   Visibility="{Binding Properties.HasRows, Converter={StaticResource BooleanToVisibilityConverter}}">
-                        <ItemsControl ItemsSource="{Binding Properties.Rows}"
+                        <!-- W7-7 PR 3 (#1246, R-4's one-stop rule): a row's
+                             container is layout. As a plain ItemsControl
+                             container NVDA read "SlateWindows.Panels.
+                             PropertyRowViewModel, data item, 1 of 7", and
+                             named by the editor's label it was a second stop
+                             reading the editor's own name; the editor and its
+                             buttons already carry the key. -->
+                        <local:LayoutItemsControl ItemsSource="{Binding Properties.Rows}"
                                       ItemTemplate="{StaticResource PropertyRowTemplate}"
                                       Focusable="False"
                                       IsTabStop="False"
@@ -583,11 +592,19 @@
 
     <DataTemplate x:Key="WorkspaceGroupTemplate"
                   DataType="{x:Type local:WorkspaceGroupViewModel}">
-        <Border Margin="2"
-                BorderBrush="{DynamicResource Slate.BorderBrush}"
-                BorderThickness="1"
-                Background="{DynamicResource Slate.WindowBackgroundBrush}"
-                AutomationProperties.Name="Editor pane">
+        <!-- W7-7 PR 3 (#1246, R-4): each pane is one silent structural
+             Pane. With the split's host and containers out of the control
+             view (the structural split host below), two panes' tab controls
+             would otherwise be sibling "Workspace tabs" — axe's
+             SiblingUniqueAndFocusable failure. Unnamed on purpose: a Pane
+             named "Editor pane" fails NameExcludesControlType, NVDA does
+             not speak an unnamed Pane, and W7-6's announcer already says
+             "Editor pane 1 of 2, {title}.". (The old name sat on a plain
+             Border, which creates no peer, so it never reached UIA.) -->
+        <local:AutomationLandmarkBorder Margin="2"
+                                        BorderBrush="{DynamicResource Slate.BorderBrush}"
+                                        BorderThickness="1"
+                                        Background="{DynamicResource Slate.WindowBackgroundBrush}">
             <!-- W7-5 (#1239): an EMPTY tab control is not a stop. With zero
                  restored tabs the startup focus landed here, NVDA said only
                  "Workspace tabs tab control", and Down arrow wandered to the
@@ -600,7 +617,7 @@
                         IsTabStop="{Binding HasItems, RelativeSource={RelativeSource Self}}"
                         ItemTemplate="{StaticResource WorkspaceTabHeaderTemplate}"
                         ContentTemplate="{StaticResource WorkspaceTabContentTemplate}"
-                        AutomationProperties.AutomationId="WorkspaceTabs"
+                        AutomationProperties.AutomationId="WorkspaceTabs" local:SiblingNames.NamePath="Title" local:SiblingNames.DistinguisherPath="Path" local:SiblingNames.Noun="tab" local:SiblingNames.StatePath="SpokenState"
                         AutomationProperties.Name="Workspace tabs">
                 <TabControl.ContextMenu>
                     <ContextMenu DataContext="{Binding PlacementTarget.DataContext, RelativeSource={RelativeSource Self}}">
@@ -614,18 +631,21 @@
                 </TabControl.ContextMenu>
                 <TabControl.ItemContainerStyle>
                     <Style TargetType="TabItem">
-                        <Setter Property="AutomationProperties.Name" Value="{Binding Title}" />
+                        <!-- W7-7 PR 3 (#1246, R-4; codex PR 3 round 5): the name
+                             carries the tab's state as an INPUT to the sibling
+                             rule (StatePath above), so the rule's collision
+                             checks run over what the reader hears; a trigger
+                             appending the state after the rule re-created the
+                             duplicates it had removed. The triggers below set
+                             only the status. -->
+                        <Setter Property="AutomationProperties.Name" Value="{Binding RelativeSource={RelativeSource Self}, Converter={x:Static local:SiblingNames.Converter}}" />
                         <Setter Property="AutomationProperties.ItemStatus" Value="Saved" />
                         <Style.Triggers>
                             <DataTrigger Binding="{Binding IsDirty}" Value="True">
-                                <Setter Property="AutomationProperties.Name"
-                                        Value="{Binding Title, StringFormat='{}{0}, unsaved changes'}" />
                                 <Setter Property="AutomationProperties.ItemStatus"
                                         Value="Unsaved changes" />
                             </DataTrigger>
                             <DataTrigger Binding="{Binding IsMissingFromDisk}" Value="True">
-                                <Setter Property="AutomationProperties.Name"
-                                        Value="{Binding Title, StringFormat='{}{0}, missing from disk'}" />
                                 <Setter Property="AutomationProperties.ItemStatus"
                                         Value="Missing from disk" />
                             </DataTrigger>
@@ -634,8 +654,6 @@
                                     <Condition Binding="{Binding IsDirty}" Value="True" />
                                     <Condition Binding="{Binding IsMissingFromDisk}" Value="True" />
                                 </MultiDataTrigger.Conditions>
-                                <Setter Property="AutomationProperties.Name"
-                                        Value="{Binding Title, StringFormat='{}{0}, missing from disk, unsaved changes'}" />
                                 <Setter Property="AutomationProperties.ItemStatus"
                                         Value="Missing from disk; unsaved changes" />
                             </MultiDataTrigger>
@@ -643,7 +661,7 @@
                     </Style>
                 </TabControl.ItemContainerStyle>
             </TabControl>
-        </Border>
+        </local:AutomationLandmarkBorder>
     </DataTemplate>
 
     <DataTemplate x:Key="WorkspaceNodeChildTemplate"
@@ -720,17 +738,26 @@
             <ContentControl Focusable="False" Content="{Binding Group}"
                             ContentTemplate="{StaticResource WorkspaceGroupTemplate}"
                             Visibility="{Binding IsGroup, Converter={StaticResource BooleanToVisibilityConverter}}" />
-            <ItemsControl ItemsSource="{Binding Children}"
-                          ItemTemplate="{StaticResource WorkspaceNodeChildTemplate}"
-                          AlternationCount="2147483647"
-                          Visibility="{Binding IsSplit, Converter={StaticResource BooleanToVisibilityConverter}}"
-                          AutomationProperties.Name="Split editor panes">
-                <ItemsControl.ItemsPanel>
+            <!-- W7-7 PR 3 (#1246, R-4): a structural split host whose
+                 containers are layout. A plain ItemsControl named each pane
+                 container by its view model's type, and NVDA spoke
+                 "SlateWindows.WorkspacePaneNodeViewModel, data item, 1 of 2"
+                 on every pane move; the announcer's "Editor pane 1 of 2,
+                 {title}." (W7-6) carries the position instead. The host only
+                 arranges the panes, so it is unnamed and out of the control
+                 view (codex PR 3 round 4): a split adds no named
+                 object-navigation element. -->
+            <local:LayoutItemsControl ItemsSource="{Binding Children}"
+                                      ItemTemplate="{StaticResource WorkspaceNodeChildTemplate}"
+                                      AlternationCount="2147483647"
+                                      Visibility="{Binding IsSplit, Converter={StaticResource BooleanToVisibilityConverter}}"
+                                      IsStructural="True">
+                <local:LayoutItemsControl.ItemsPanel>
                     <ItemsPanelTemplate>
                         <local:WeightedSplitPanel Orientation="{Binding DataContext.Axis, RelativeSource={RelativeSource AncestorType=ItemsControl}, Converter={StaticResource AxisToOrientationConverter}}" />
                     </ItemsPanelTemplate>
-                </ItemsControl.ItemsPanel>
-            </ItemsControl>
+                </local:LayoutItemsControl.ItemsPanel>
+            </local:LayoutItemsControl>
         </Grid>
     </DataTemplate>
 </ResourceDictionary>

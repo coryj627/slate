@@ -86,6 +86,9 @@ public sealed partial class ShellAccessibilityTests
             AutomationElement topic = PromptField(flow, automation, "Topic");
             AutomationElement attendees = PromptField(flow, automation, "Attendees");
             AssertEventuallyFocused(topic, "the prompt step did not focus Topic (T4).");
+            // R-4 (#1246; codex PR 3 round 8): the runtime item-name census at
+            // this journey's representative state.
+            AssertItemNamesAreSpeakable(process, "template-prompts");
 
             PressKey(VirtualKeyShort.TAB);
             AssertEventuallyFocused(attendees, "Tab from Topic did not reach Attendees inside the sheet (R-6).");

@@ -352,12 +352,17 @@ public sealed class GridLandingTests
         return grid;
     }
 
+    // Every Bind names its rows and keys them (W7-7 PR 3, #1246, R-4; OD-9):
+    // these rows' names are distinct, so each is its own key, and the key
+    // restore after a republish keeps the reader on the same row.
     private static void Rebind(AccessibleDataGrid grid, IReadOnlyList<object> rows) =>
         grid.Bind(
             [new AccessibleGridColumn { Header = "Name", Cell = row => ((Row)row).Name, IsRowHeader = true }],
             rows,
             $"{rows.Count} rows.",
-            "Rows");
+            "Rows",
+            rowAutomationName: row => ((Row)row).Name,
+            rowKey: row => ((Row)row).Name);
 
     private static Hosted Host(FrameworkElement center)
     {

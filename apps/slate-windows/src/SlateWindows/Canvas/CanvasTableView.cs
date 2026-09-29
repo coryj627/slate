@@ -321,7 +321,13 @@ internal sealed class CanvasTableView : UserControl
                 rowAudioDescription: null,
                 rowActions: RowActions(),
                 exportProducer: null,
-                rowActivated: ActivateRow);
+                rowActivated: ActivateRow,
+                // R-4 (#1246): core's speakable name is the row's
+                // identity — the same text the row header carries.
+                // Unnamed, a row read its record dump, "CanvasTableRow {
+                // NodeId = grp-research, … GroupPath = System.String[] … }".
+                rowAutomationName: static row => ((CanvasTableRow)row).SpeakableName,
+                rowKey: static row => ((CanvasTableRow)row).NodeId);
         }
         finally
         {
