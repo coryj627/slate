@@ -829,7 +829,10 @@ internal sealed class GraphDocumentViewModel : PanelWorkScheduler
     /// a no-op for the current mode; otherwise the field, the persisted mode
     /// (Term W7, the mac's <c>setGraphMode</c>), the mode line, Term M2's
     /// effects, then the two availability edges.</summary>
-    public bool SetMode(GraphSurfaceMode mode)
+    /// <param name="announce">False on the switcher's arrow route (W7-7 PR 4,
+    /// #1247): the radio is checked before it takes focus, and its focus
+    /// speech names the mode — the mode line would repeat it.</param>
+    public bool SetMode(GraphSurfaceMode mode, bool announce = true)
     {
         if (_retired || !_isSeated() || ViewState.Mode == mode)
         {
@@ -837,7 +840,10 @@ internal sealed class GraphDocumentViewModel : PanelWorkScheduler
         }
         ViewState.Mode = mode;
         _preferences?.SetMode(mode);
-        AnnounceMode(mode);
+        if (announce)
+        {
+            AnnounceMode(mode);
+        }
         if (mode == GraphSurfaceMode.Diagram)
         {
             EnterDiagram();

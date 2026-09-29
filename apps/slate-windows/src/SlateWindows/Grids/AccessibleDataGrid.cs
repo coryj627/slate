@@ -139,10 +139,19 @@ internal sealed class AccessibleDataGrid : UserControl
         _grid.Sorting += OnHeaderSorting;
         _grid.PreviewTextInput += OnTypeAhead;
         _grid.PreviewKeyDown += OnActivationKey;
+        _grid.KeyDown += OnBareGridArrow;
         _grid.MouseDoubleClick += OnActivationDoubleClick;
         _grid.ContextMenuOpening += OnContextMenuOpening;
         _grid.LoadingRow += OnLoadingRow;
         _grid.UnloadingRow += OnUnloadingRow;
+        // W7-7 PR 4 (#1247, R-5; codex round 5): a publication under the
+        // keys — rows filling the empty grid that is its own stop, or a Bind
+        // that destroyed the reader's cell and left the keys on the bare grid
+        // or nowhere — re-seats them like a restore: through the consuming
+        // projection's own landing where it has one (the graph's table keeps
+        // a hidden shared key, A-7), else on the current cell, else the
+        // first, silently (FocusCurrentOrFirstCell).
+        SelectorFocus.KeepKeysThroughPublications(this, [_grid], [], () => SelectorFocus.LandOnStop(_grid));
         _grid.ItemContainerGenerator.StatusChanged += (_, _) =>
         {
             // The subscriber check comes BEFORE the post, not inside the
@@ -382,6 +391,60 @@ internal sealed class AccessibleDataGrid : UserControl
     }
 
     /// <summary>
+    /// W7-7 PR 4 (#1247, R-5; codex rounds 4-5): a landing on the GRID — a
+    /// restore token captured while it held the keys itself, which is an
+    /// empty grid's own stop, or a publication under the keys — puts them
+    /// on a cell: the current one, else the first. An empty grid is still
+    /// its own stop (<see cref="FocusFirstCell"/>). Reached through
+    /// <see cref="SelectorFocus.LandOnStop"/>, the shell's one landing for
+    /// element-typed targets, and the substrate's publication keeper.
+    /// </summary>
+    /// <remarks>
+    /// SILENT, the immediate seat and the deferred one alike: seating
+    /// currency posts <c>GridRowMoved</c>/<c>GridCellMoved</c>, and on a
+    /// re-seat — a dismissal's restore, the Canvas and Graph Where-am-I
+    /// close, a publication's re-land — the focus change supplies the
+    /// speech, so a line on top of it is the t0 §1.5 doubling (contract 34
+    /// C6's seat rule; codex round 5). A reader's own arrow keeps
+    /// announcing.
+    /// </remarks>
+    /// <returns>Whether the grid (empty) or a realized cell took the keys
+    /// now; an unrealized cell is seated later, as
+    /// <see cref="FocusCellElement"/> does.</returns>
+    internal bool FocusCurrentOrFirstCell()
+    {
+        if (_items.Count == 0 || _grid.Columns.Count == 0)
+        {
+            return FocusFirstCell();
+        }
+        (object item, DataGridColumn column) = CurrentOrFirstCell();
+        return FocusCellElement(item, column, silent: true) == LandingSeat.Seated;
+    }
+
+    /// <summary>The grid substrate that owns <paramref name="grid"/>, if
+    /// any — every grid in the shell is one's.</summary>
+    internal static AccessibleDataGrid? Owning(DataGrid grid)
+    {
+        for (DependencyObject? node = grid; node is not null; node = LogicalTreeHelper.GetParent(node))
+        {
+            if (node is AccessibleDataGrid owner && ReferenceEquals(owner._grid, grid))
+            {
+                return owner;
+            }
+        }
+        return null;
+    }
+
+    /// <summary>The cell a landing on the grid goes to: the current one
+    /// while its row and column are still bound, else the first.</summary>
+    private (object Item, DataGridColumn Column) CurrentOrFirstCell() =>
+        (
+            _grid.CurrentCell.Item is { } current && _items.Contains(current) ? current : _items[0],
+            _grid.CurrentCell.Column is { } currentColumn && _grid.Columns.Contains(currentColumn)
+                ? currentColumn
+                : _grid.Columns[0]);
+
+    /// <summary>
     /// Put keyboard focus on the first cell of the row matching
     /// <paramref name="predicate"/>, if the bound set contains one.
     /// Returns false and moves nothing when it does not — the caller
@@ -516,7 +579,7 @@ internal sealed class AccessibleDataGrid : UserControl
         WithoutAnnouncing(() =>
         {
             _lastAnnouncedRow = match;
-            seat = FocusCellElement(match, column);
+            seat = FocusCellElement(match, column, seatLater: false);
         });
         return seat;
     }
@@ -542,19 +605,63 @@ internal sealed class AccessibleDataGrid : UserControl
     /// scroll, realize the container synchronously (under a starved
     /// session the deferred generation leaves Focus() on the grid, and
     /// AT announces the grid instead of the cell), set currency, focus
-    /// the realized DataGridCell. Falls back to the grid only when the
-    /// container genuinely cannot exist yet (pre-load).
+    /// the realized DataGridCell. A cell whose container cannot exist yet
+    /// is seated once it does, while the keys have not moved.
     /// </summary>
+    /// <remarks>
+    /// W7-7 PR 4 (#1247, R-5; spec review round 23): the unrealized case
+    /// fell back to focusing the grid itself, and a populated grid is not
+    /// a landing — DataGrid moves between cells only from a cell, so from
+    /// the grid every arrow went to directional navigation and out of the
+    /// region, a current cell or not (GridLandingTests measures it). The
+    /// keys now stay where they were, the caller is told the truth, and
+    /// the seat is the list landing's own: the newest request only, and
+    /// only while the keys are exactly where they were.
+    /// </remarks>
     /// <returns>
-    /// Whether the REALIZED CELL took focus — false for the grid-level
-    /// fallback, which is a different outcome and used to be reported as
-    /// the same one. Currency and selection are set either way, so the
-    /// callers that only want the reader's position keep ignoring this;
-    /// W6-1 PR B's focus delivery reads it, because A14's rule is that
-    /// only a realized row counts as delivered and a fallback that says
-    /// "true" consumes a request nothing ever satisfied.
+    /// The seat now (W7-7 PR 8's tri-state, R-10): SEATED when the realized
+    /// cell took the keys; NOT YET while its container or cell cannot take
+    /// them yet; REFUSED when the shown cell will not. Currency and selection
+    /// are set either way, so the callers that only want the reader's
+    /// position keep ignoring this; W6-1 PR B's focus delivery reads it,
+    /// because A14's rule is that only a realized row counts as delivered
+    /// and a fallback that says "seated" consumes a request nothing ever
+    /// satisfied.
     /// </returns>
-    private LandingSeat FocusCellElement(object item, DataGridColumn column)
+    /// <param name="silent">A re-seat's (<see cref="FocusCurrentOrFirstCell"/>):
+    /// the seat, now or deferred, posts no movement line.</param>
+    /// <param name="seatLater">Whether a cell that cannot take the keys yet is
+    /// seated once it can, while the keys have not moved: false for a caller
+    /// the realization edge brings back itself (<see cref="SeatRow"/>, whose
+    /// terminal landings re-ask on <see cref="ContainersRealized"/>).</param>
+    private LandingSeat FocusCellElement(object item, DataGridColumn column, bool silent = false, bool seatLater = true)
+    {
+        LandingSeat seat = SeatCell(item, column, silent);
+        if (seat == LandingSeat.NotYet && seatLater)
+        {
+            SelectorFocus.SeatLater(
+                _grid,
+                () => _items.Contains(item)
+                    && _grid.Columns.Contains(column)
+                    && SeatCell(item, column, silent) == LandingSeat.Seated);
+        }
+
+        return seat;
+    }
+
+    private LandingSeat SeatCell(object item, DataGridColumn column, bool silent)
+    {
+        if (!silent)
+        {
+            return TryFocusCell(item, column);
+        }
+
+        LandingSeat seat = LandingSeat.NotYet;
+        WithoutAnnouncing(() => seat = TryFocusCell(item, column));
+        return seat;
+    }
+
+    private LandingSeat TryFocusCell(object item, DataGridColumn column)
     {
         _grid.ScrollIntoView(item, column);
         if (_grid.IsLoaded)
@@ -564,8 +671,7 @@ internal sealed class AccessibleDataGrid : UserControl
         _grid.CurrentCell = new DataGridCellInfo(item, column);
         _grid.SelectedCells.Clear();
         _grid.SelectedCells.Add(_grid.CurrentCell);
-        if (_grid.ItemContainerGenerator.ContainerFromItem(item)
-                is DataGridRow row
+        if (_grid.ItemContainerGenerator.ContainerFromItem(item) is DataGridRow row
             && column.GetCellContent(row)?.Parent is DataGridCell cell)
         {
             // A cell that is not shown yet (its grid only just realized) is
@@ -574,11 +680,37 @@ internal sealed class AccessibleDataGrid : UserControl
                 : cell.IsVisible ? LandingSeat.Refused
                 : LandingSeat.NotYet;
         }
-        // The reader is NOT on the row. Focus still goes somewhere
-        // sensible rather than nowhere, but the caller is told the truth:
-        // the row's container is not realized yet.
-        _ = _grid.Focus();
+
+        // The row's container is not realized yet. The keys stay where they
+        // were — a populated grid is no landing (R-5) — and the caller is told
+        // the truth.
         return LandingSeat.NotYet;
+    }
+
+    /// <summary>
+    /// W7-7 PR 4 (#1247, R-5; spec review round 23): an arrow pressed while
+    /// the GRID itself holds the keys — an empty grid's own stop, or a grid
+    /// WPF handed them to when their row went away — lands on a cell, the
+    /// current one else the first, and an empty grid keeps it. DataGrid
+    /// moves between cells only from a cell: from the grid, every arrow
+    /// went to directional navigation and out of the region.
+    /// </summary>
+    private void OnBareGridArrow(object sender, KeyEventArgs e)
+    {
+        if (e.Handled
+            || !ReferenceEquals(e.OriginalSource, _grid)
+            || Keyboard.Modifiers != ModifierKeys.None
+            || e.Key is not (Key.Left or Key.Right or Key.Up or Key.Down))
+        {
+            return;
+        }
+
+        e.Handled = true;
+        if (_items.Count > 0 && _grid.Columns.Count > 0)
+        {
+            (object item, DataGridColumn column) = CurrentOrFirstCell();
+            _ = FocusCellElement(item, column);
+        }
     }
 
     /// <summary>

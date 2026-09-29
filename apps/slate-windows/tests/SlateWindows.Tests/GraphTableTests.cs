@@ -487,6 +487,82 @@ public sealed partial class GraphTableTests
         });
     });
 
+    /// <summary>W7-7 PR 3 x PR 4 (the merge): the KEYS follow the key-restored
+    /// row too. A republish keeps them on the reader's node; a restore of the
+    /// reader's cell — a menu or an overlay dismissed — lands through the
+    /// grid's own landing (PR 4's <see cref="SelectorFocus.LandOnStop"/>),
+    /// which with no shared key fell to the FIRST row, a display position,
+    /// though the republish had restored the reader's row by its stable key
+    /// (R-4, OD-9). The relabelled ghost moves from the first row to the
+    /// second, and the restore lands back on it; nothing writes the key.</summary>
+    [Fact]
+    public void AStrandedSeatTheKeyDoesNotHoldReLandsOnItsNodeNotTheFirstRow() => RunSta(() =>
+    {
+        FixtureVault vault = FixtureVault.Create(0, "graph-ghost-seat-keys");
+        File.WriteAllText(Path.Combine(vault.Root, "a.md"), "[[/foo-bar]]\n");
+        File.WriteAllText(Path.Combine(vault.Root, "b.md"), "[[foo-bar]]\n");
+        File.WriteAllText(Path.Combine(vault.Root, "c.md"), "[[foo bar]]\n");
+        File.WriteAllText(Path.Combine(vault.Root, "d.md"), "[[foo bar]]\n");
+        using var host = new Host(vault);
+        GraphDocumentViewModel document = host.Open();
+        GraphSurfaceView view = SurfaceFor(host, document);
+        // A menu's own focus scope above the surface: the keys go INTO it and
+        // the window's logical focus stays on the reader's cell, as an opened
+        // menu leaves it.
+        var elsewhere = new TextBox { Width = 80 };
+        var menu = new StackPanel();
+        System.Windows.Input.FocusManager.SetIsFocusScope(menu, true);
+        menu.Children.Add(elsewhere);
+        var dock = new DockPanel();
+        DockPanel.SetDock(menu, Dock.Top);
+        dock.Children.Add(menu);
+        dock.Children.Add(view);
+        using HostedWindow window = HostInWindow(dock);
+        PumpLoadedState();
+        host.Workspace.GraphNavigator.SetNameQuery("foo");
+        Assert.True(document.Request(new GraphRequest.Sort(new GraphTableSort(GraphTableColumn.Note, true))));
+        host.Settle(document);
+        window.UpdateLayout();
+        PumpedDispatcher.Drain();
+        DataGrid grid = view.TableForTests.GridForTests.Grid;
+        // The premise: the two ghosts, "/foo-bar" first, and the reader seated
+        // on it with the keys, silently — no shared key.
+        Assert.Equal(["/foo-bar", "foo bar"], document.Publication.Rows.Select(row => row.Label));
+        Assert.True(view.TableForTests.FocusProjection());
+        PumpedDispatcher.Drain();
+        Assert.Null(document.ViewState.SelectedKey);
+        Assert.True(GridHasTheKeys(view), $"the seat took no keys; they are on {System.Windows.Input.Keyboard.FocusedElement}");
+        string seated = Assert.IsType<GraphTableRow>(grid.CurrentCell.Item).StableKey;
+
+        _ = host.Session.SaveText("a.md", "no link\n", null);
+        _ = document.Load(GraphLoadKind.Pair, GraphAnnouncePolicy.Silent);
+        host.Settle(document);
+        window.UpdateLayout();
+        PumpedDispatcher.Drain();
+        PumpLoadedState();
+
+        // The premise: relabelled and moved to the second row, the keys on it.
+        Assert.Equal(["foo bar", "foo-bar"], document.Publication.Rows.Select(row => row.Label));
+        Assert.Equal(seated, Assert.IsType<GraphTableRow>(grid.CurrentCell.Item).StableKey);
+        Assert.True(GridHasTheKeys(view), $"the republish left the keys on {System.Windows.Input.Keyboard.FocusedElement}");
+        var cell = Assert.IsType<DataGridCell>(System.Windows.Input.Keyboard.FocusedElement);
+        Assert.Equal(seated, Assert.IsType<GraphTableRow>(cell.DataContext).StableKey);
+        Assert.Null(document.ViewState.SelectedKey);
+
+        // The menu takes the keys; the reader's row stays current.
+        Assert.True(elsewhere.Focus());
+        PumpedDispatcher.Drain();
+        Assert.False(GridHasTheKeys(view));
+        Assert.Equal(seated, Assert.IsType<GraphTableRow>(grid.CurrentCell.Item).StableKey);
+
+        // Its dismissal restores the reader's cell: back on the node.
+        Assert.True(SelectorFocus.LandOnStop(cell));
+        PumpedDispatcher.Drain();
+        var landed = Assert.IsType<DataGridCell>(System.Windows.Input.Keyboard.FocusedElement);
+        Assert.Equal(seated, Assert.IsType<GraphTableRow>(landed.DataContext).StableKey);
+        Assert.Equal(seated, Assert.IsType<GraphTableRow>(grid.CurrentCell.Item).StableKey);
+        Assert.Null(document.ViewState.SelectedKey);
+    });
     /// <summary>...and through an external sort each way: the two same.md
     /// rows share their row-header text, so restored by that text and its
     /// old place the seat moved onto the OTHER note whenever the sort swapped

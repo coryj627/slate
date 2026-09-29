@@ -44,6 +44,8 @@ public partial class MainWindow
     private void WireWorkspaceBases(WorkspaceViewModel workspace)
     {
         workspace.PropertyChanged += Workspace_BasesSheetChanged;
+        workspace.BaseQueriesRepublishing += Queries_Republishing;
+        workspace.BaseQueriesRepublished += Queries_Republished;
         // #1275: the scope question is owned by the shell, like every
         // other prompt it raises.
         workspace.BasesExportScopePrompt = verb => WorkspaceViewModel.AskBasesExportScope(this, verb);
@@ -56,8 +58,94 @@ public partial class MainWindow
         MessageBoxButton.YesNo,
         MessageBoxImage.Warning) == MessageBoxResult.Yes;
 
-    private void UnwireWorkspaceBases(WorkspaceViewModel workspace) =>
+    private void UnwireWorkspaceBases(WorkspaceViewModel workspace)
+    {
         workspace.PropertyChanged -= Workspace_BasesSheetChanged;
+        workspace.BaseQueriesRepublishing -= Queries_Republishing;
+        workspace.BaseQueriesRepublished -= Queries_Republished;
+    }
+
+    /// <summary>The Queries leaf's selections, by identity, as the registry
+    /// rebuild found them.</summary>
+    private (string? SavedQuery, string? BaseFile, string? Dashboard) _queriesSelection;
+
+    private void Queries_Republishing() =>
+        _queriesSelection = (
+            (QueriesSavedList.SelectedItem as SavedQuerySummary)?.Id,
+            (QueriesBaseFilesList.SelectedItem as BaseFileSummary)?.Path,
+            (QueriesDashboardsList.SelectedItem as DashboardSummary)?.Id);
+
+    /// <summary>
+    /// W7-7 PR 4 (#1247, R-5; codex PR 4 round 6 high 3 and the completeness
+    /// sweep's G5): the registry refresh rebuilds the three lists (Clear +
+    /// Add), which drops every selection, and every action button follows
+    /// its list's selection: Pin from its own button disabled the button
+    /// under the keys, and WPF's re-evaluation stranded them at the window;
+    /// a rename's refresh removed the row the keys were on. Each list's
+    /// selection is re-seated by identity here, in the rebuild's own
+    /// dispatcher operation, so the buttons are enabled again before that
+    /// re-evaluation runs and the list keeper lands a removed row's keys on
+    /// the fresh row of the same query. A button whose selection is gone
+    /// for good (Delete) hands the keys to its list's row, else to the
+    /// leaf's own landing.
+    /// </summary>
+    private void Queries_Republished()
+    {
+        (string? query, string? file, string? dashboard) = _queriesSelection;
+        bool lost = !Reselect(QueriesSavedList, query, (SavedQuerySummary summary) => summary.Id)
+            | !Reselect(QueriesBaseFilesList, file, (BaseFileSummary summary) => summary.Path)
+            | !Reselect(QueriesDashboardsList, dashboard, (DashboardSummary summary) => summary.Id);
+        if (!lost
+            || Keyboard.FocusedElement is not UIElement { IsEnabled: false } disabled
+            || LeafBodyOf(QueriesSavedList) is not { } body
+            || !IsWithin(disabled, body))
+        {
+            return;
+        }
+
+        ListBox home = ListAbove(disabled) ?? QueriesSavedList;
+        if (!(home.HasItems && SelectorFocus.FocusFirstOrSelectedItem(home)) && !LandInLeaf(body))
+        {
+            // Not even the rail's row took them — the pane's last stable
+            // stop: WPF's own re-evaluation keeps them in the window.
+        }
+    }
+
+    /// <summary>The list an action row acts on: in the leaf's column each
+    /// row of buttons sits just after its list.</summary>
+    private static ListBox? ListAbove(DependencyObject element)
+    {
+        for (DependencyObject? current = element; current is not null; current = LogicalTreeHelper.GetParent(current))
+        {
+            if (LogicalTreeHelper.GetParent(current) is Panel column && current is UIElement child)
+            {
+                for (int index = column.Children.IndexOf(child) - 1; index >= 0; index--)
+                {
+                    if (column.Children[index] is ListBox list)
+                    {
+                        return list;
+                    }
+                }
+            }
+        }
+
+        return null;
+    }
+
+    /// <summary>Selects the item with <paramref name="id"/>; true when there
+    /// was none to re-seat or it was re-seated.</summary>
+    private static bool Reselect<T>(ListBox list, string? id, Func<T, string> identity)
+        where T : class
+    {
+        if (id is null)
+        {
+            return true;
+        }
+
+        T? fresh = list.Items.OfType<T>().FirstOrDefault(item => string.Equals(identity(item), id, StringComparison.Ordinal));
+        list.SelectedItem = fresh;
+        return fresh is not null;
+    }
 
     private void Workspace_BasesSheetChanged(
         object? sender, System.ComponentModel.PropertyChangedEventArgs eventArgs)
@@ -118,7 +206,9 @@ public partial class MainWindow
                     return;
                 }
 
-                if (token is UIElement { IsVisible: true } && token.Focus())
+                // R-5 (#1247; codex round 4): a list, tree or grid token
+                // restores onto its row or cell, never the bare container.
+                if (token is UIElement { IsVisible: true } element && SelectorFocus.LandOnStop(element))
                 {
                     return;
                 }
@@ -168,8 +258,17 @@ public partial class MainWindow
         }
     }
 
-    private void QueriesSavedList_DoubleClick(object sender, MouseButtonEventArgs e) =>
-        QueriesRun_Click(sender, e);
+    // W7-7 PR 4 (#1247; codex PR 4's final check): a double-click acts only
+    // on a row it HIT — a double-click on a list's empty area ran whatever
+    // query was selected. A pressed row is the selection by then (a list
+    // selects on the press).
+    private void QueriesSavedList_DoubleClick(object sender, MouseButtonEventArgs e)
+    {
+        if (SelectorFocus.ClickedItem(QueriesSavedList, e.OriginalSource) is not null)
+        {
+            QueriesRun_Click(sender, e);
+        }
+    }
 
     private void QueriesPin_Click(object sender, RoutedEventArgs e)
     {
@@ -199,8 +298,9 @@ public partial class MainWindow
             QueriesRenameRow.Visibility = Visibility.Collapsed;
             _pendingRenameSavedQueryId = null;
             // Focus returns to the list the rename came from — the
-            // collapsed row must not strand focus (red team round 1).
-            _ = QueriesSavedList.Focus();
+            // collapsed row must not strand focus (red team round 1) — on
+            // the renamed query's row, never the bare list (R-5, #1247).
+            LandOnSavedQueries();
             e.Handled = true;
             return;
         }
@@ -211,8 +311,19 @@ public partial class MainWindow
         BasesWorkspace?.RenameSavedQuery(id, QueriesRenameBox.Text);
         QueriesRenameRow.Visibility = Visibility.Collapsed;
         _pendingRenameSavedQueryId = null;
-        _ = QueriesSavedList.Focus();
+        LandOnSavedQueries();
         e.Handled = true;
+    }
+
+    /// <summary>The saved query's row; a row that cannot be landed yet
+    /// leaves the keys to the pane's stable stop, the rail's row (R-5,
+    /// #1247).</summary>
+    private void LandOnSavedQueries()
+    {
+        if (!SelectorFocus.FocusFirstOrSelectedItem(QueriesSavedList))
+        {
+            _ = SelectorFocus.FocusFirstOrSelectedItem(RightPaneLeavesList);
+        }
     }
 
     private void QueriesExport_Click(object sender, RoutedEventArgs e)
@@ -273,8 +384,13 @@ public partial class MainWindow
         }
     }
 
-    private void QueriesBaseFilesList_DoubleClick(object sender, MouseButtonEventArgs e) =>
-        QueriesOpenBaseFile_Click(sender, e);
+    private void QueriesBaseFilesList_DoubleClick(object sender, MouseButtonEventArgs e)
+    {
+        if (SelectorFocus.ClickedItem(QueriesBaseFilesList, e.OriginalSource) is not null)
+        {
+            QueriesOpenBaseFile_Click(sender, e);
+        }
+    }
 
     private void QueriesDockBaseFile_Click(object sender, RoutedEventArgs e)
     {
@@ -292,8 +408,13 @@ public partial class MainWindow
         }
     }
 
-    private void QueriesDashboardsList_DoubleClick(object sender, MouseButtonEventArgs e) =>
-        QueriesOpenDashboard_Click(sender, e);
+    private void QueriesDashboardsList_DoubleClick(object sender, MouseButtonEventArgs e)
+    {
+        if (SelectorFocus.ClickedItem(QueriesDashboardsList, e.OriginalSource) is not null)
+        {
+            QueriesOpenDashboard_Click(sender, e);
+        }
+    }
 
     private void QueriesEditDashboard_Click(object sender, RoutedEventArgs e)
     {

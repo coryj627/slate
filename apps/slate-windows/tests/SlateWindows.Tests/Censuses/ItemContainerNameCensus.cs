@@ -150,6 +150,15 @@ internal abstract record CodeItemsHost
     /// its own children under it.</summary>
     internal sealed record Container(string Label) : CodeItemsHost;
 
+    /// <summary>A BASE tree's item container, made for every tree the shell
+    /// declares on that base in XAML (W7-7 PR 4's LandingTreeView; PR 3's
+    /// merge of it): <paramref name="Labels"/> names each, every one pinned
+    /// here as a tree whose container style names its rows (on the sibling
+    /// rule, or bound), and declared in the authored XAML as
+    /// <paramref name="Base"/>. The container takes each tree's own style,
+    /// so each tree's pin is what names its rows.</summary>
+    internal sealed record BaseContainer(string Base, string[] Labels) : CodeItemsHost;
+
     /// <summary>A menu the shell fills with MenuItems it builds: each is its
     /// own container, named by its Header, never an item's ToString; and
     /// <paramref name="Distinct"/> says why one menu's headers cannot
@@ -531,6 +540,12 @@ public sealed class ItemContainerNameCensus
             ["GraphInspectorView.BuildRow.colour"] = new CodeItemsHost.Pinned("GraphInspectorGroupColour:"),
             ["AccessibleDataGrid._grid"] = new CodeItemsHost.Pinned("AccessibleDataGrid"),
             ["CanvasOutlineTree.GetContainerForItemOverride"] = new CodeItemsHost.Container("CanvasOutlineTree"),
+            // W7-7 PR 4 (#1247): the landing tree's rows, at every level, for
+            // the two trees the shell declares on it in XAML.
+            ["LandingTreeView.GetContainerForItemOverride"] =
+                new CodeItemsHost.BaseContainer("LandingTreeView", ["FilesTree", "SidebarTagTree"]),
+            ["LandingTreeViewItem.GetContainerForItemOverride"] =
+                new CodeItemsHost.BaseContainer("LandingTreeView", ["FilesTree", "SidebarTagTree"]),
             ["CanvasOutlineItem.GetContainerForItemOverride"] = new CodeItemsHost.Container("CanvasOutlineTree"),
             ["ConnectionsTree.GetContainerForItemOverride"] = new CodeItemsHost.Container("ConnectionsTree"),
             ["ConnectionsTreeItem.GetContainerForItemOverride"] = new CodeItemsHost.Container("ConnectionsTree"),
@@ -640,6 +655,18 @@ public sealed class ItemContainerNameCensus
                         when ExpectedNaming.GetValueOrDefault(container.Label) is not ContainerNaming.Sibling =>
                         $"is a container of `{container.Label}`, which is not a tree on the sibling rule",
                     CodeItemsHost.Container when !InheritsFrom(type, "System.Windows.Controls.TreeViewItem") =>
+                        $"is a {type?.Name ?? "(unknown)"}, not a tree's item container",
+                    CodeItemsHost.BaseContainer { Labels.Length: 0 } =>
+                        "a base tree's container that names no tree it serves",
+                    CodeItemsHost.BaseContainer shared
+                        when shared.Labels.FirstOrDefault(label => ExpectedNaming.GetValueOrDefault(label)
+                            is not (ContainerNaming.Sibling or ContainerNaming.Bound)) is { } unpinned =>
+                        $"is a container of `{unpinned}`, which is not a tree whose container style names its rows",
+                    CodeItemsHost.BaseContainer shared
+                        when shared.Labels.FirstOrDefault(label => XamlHost(label).Host.Name.LocalName != shared.Base)
+                            is { } other =>
+                        $"serves `{other}`, which the authored XAML does not declare as a {shared.Base}",
+                    CodeItemsHost.BaseContainer when !InheritsFrom(type, "System.Windows.Controls.TreeViewItem") =>
                         $"is a {type?.Name ?? "(unknown)"}, not a tree's item container",
                     CodeItemsHost.Menu { Distinct.Length: 0 } =>
                         "a menu with no reason its headers cannot collide",

@@ -3051,16 +3051,19 @@ public sealed class ReadingFocusTests
     });
 
     /// <summary>Owner decision (2026-09-28, after PR 8's first shell-gate
-    /// run): an EMPTY pane speaks its line when a route's fallback lands on
-    /// the Files tree — once, with focus on the Files tree — telling the
-    /// reader nothing is open. That is the fourth of R-1's launch lines (F1's
-    /// four stand) and every close fallback over an empty pane alike. A pane
-    /// that HAS a tab whose stop was refused stays silent on the Files
-    /// fallback (codex PR 8 round 6's fix): the pane line there would name a
-    /// tab the reader is not on.</summary>
+    /// run): an EMPTY pane speaks its line when a route's fallback lands in
+    /// the Files region — once — telling the reader nothing is open. That is
+    /// the fourth of R-1's launch lines (F1's four stand) and every close
+    /// fallback over an empty pane alike. The region's landing is its tree,
+    /// or its filter field when a filter is active, and the line is just as
+    /// true from either (owner decision 2026-09-29, on codex's check of
+    /// #1300's merge). A pane that HAS a tab whose stop was refused stays
+    /// silent on the Files fallback (codex PR 8 round 6's fix): the pane line
+    /// there would name a tab the reader is not on.</summary>
     [Theory]
     [InlineData("the launch landing on an empty workspace")]
     [InlineData("a close fallback over a pane whose last tab was closed")]
+    [InlineData("a close fallback over an empty pane with the Files filter active")]
     [InlineData("a pane with a tab whose stop was refused")]
     public void AnEmptyPaneSpeaksItsLineOnTheFilesFallback(string route) => RunSta(() =>
     {
@@ -3086,6 +3089,11 @@ public sealed class ReadingFocusTests
                 candidate => ReferenceEquals(candidate.DataContext, group));
             tabs.DataContext = null;
         }
+        bool filtered = route.EndsWith("with the Files filter active", StringComparison.Ordinal);
+        if (filtered)
+        {
+            host.ActivateFilesFilter("note");
+        }
         host.Announced.Clear();
 
         if (route == "the launch landing on an empty workspace")
@@ -3101,7 +3109,8 @@ public sealed class ReadingFocusTests
             host.CloseAPaletteOverAGoneStop();
         }
 
-        Assert.True(host.Shell.FilesTree.IsKeyboardFocusWithin, $"{route} left focus on {Describe(Keyboard.FocusedElement)}");
+        FrameworkElement filesLanding = filtered ? host.Shell.SidebarFilterTextBox : host.Shell.FilesTree;
+        Assert.True(filesLanding.IsKeyboardFocusWithin, $"{route} left focus on {Describe(Keyboard.FocusedElement)}");
         A11yEvent[] paneLines = [.. host.Announced.Where(line => line is A11yEvent.EditorPaneFocused)];
         if (empty)
         {
@@ -3719,6 +3728,26 @@ public sealed class ReadingFocusTests
             PumpedDispatcher.Drain();
         }
 
+        /// <summary>A Files sidebar over the vault with its filter active: the
+        /// filter's results replace the tree, which then cannot take the keys,
+        /// so the region's landing is its filter field.</summary>
+        public void ActivateFilesFilter(string query)
+        {
+            _sidebar = new FilesSidebarViewModel(Session, Announced.Add, localAppDataRoot: _fixture.Root);
+            PumpedDispatcher.PumpUntilDrained(_sidebar.TreeRefreshCompletion);
+            SetProperty(Lifecycle, nameof(VaultLifecycleViewModel.FileSidebar), _sidebar);
+            _sidebar.FilterText = query;
+            Assert.True(
+                PumpedDispatcher.PumpUntil(() => _sidebar.IsFilterActive),
+                "premise: the Files filter never became active");
+            _window!.UpdateLayout();
+            PumpedDispatcher.Drain();
+            Assert.False(Shell.FilesTree.IsVisible, "premise: the filter did not replace the Files tree");
+            Assert.True(Shell.SidebarFilterTextBox.IsVisible, "premise: the Files filter field is not shown");
+        }
+
+        private FilesSidebarViewModel? _sidebar;
+
         /// <summary>Rehost the shell's Files pane beside the content pane, so
         /// its tree can take focus.</summary>
         public void ShowFilesPane()
@@ -4080,6 +4109,14 @@ public sealed class ReadingFocusTests
                 if (Lifecycle is not null)
                 {
                     CleanUp(() => SetProperty(Lifecycle, nameof(VaultLifecycleViewModel.Workspace), null));
+                    if (_sidebar is not null)
+                    {
+                        CleanUp(() => SetProperty(Lifecycle, nameof(VaultLifecycleViewModel.FileSidebar), null));
+                    }
+                }
+                if (_sidebar is { } sidebar)
+                {
+                    CleanUp(() => PumpedDispatcher.PumpUntilDrained(sidebar.BeginSessionShutdownAndCaptureWork().SessionWork));
                 }
                 CleanUp(() => _window?.Close());
                 CleanUp(() => Workspace?.Dispose());

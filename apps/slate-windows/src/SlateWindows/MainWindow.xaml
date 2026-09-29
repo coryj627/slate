@@ -80,11 +80,19 @@
              dark theme enabled items drew near-black on the popup while
              disabled ones kept Fluent's translucent white. The reference is
              declared here so the inheritance chain starts at Fluent's
-             token again; MenuItemForegroundTests renders it. -->
+             token again; MenuItemForegroundTests renders it. (3) W7-7
+             PR 4 (#1247, R-5): the arrows stay out as well. Menu's
+             default DirectionalNavigation is Cycle, which makes the bar a
+             directional GROUP any arrow search in the window can choose:
+             from the empty editor stop Down and Up reached Canvas, Left
+             Graph and Right File (NVDA pass F4). None refuses entry from
+             outside; Left/Right between the headers, wrap included, is the
+             items panel's (below). MenuBarCensus pins all of it. -->
         <Menu x:Name="MainMenu"
               DockPanel.Dock="Top"
               Focusable="False"
               KeyboardNavigation.TabNavigation="None"
+              KeyboardNavigation.DirectionalNavigation="None"
               Foreground="{DynamicResource MenuBarForeground}"
               AutomationProperties.Name="Application commands"
               PreviewKeyDown="MainMenu_PreviewKeyDown">
@@ -155,6 +163,19 @@
                     </Style.Triggers>
                 </Style>
             </Menu.Style>
+            <!-- W7-7 PR 4 (#1247, R-5): the bar's own Left/Right still wrap.
+                 A header's arrow is found by directional navigation inside
+                 its nearest directional group, which was the Menu (Cycle by
+                 default); with the Menu None, Right on the last header and
+                 Left on File went nowhere. This panel — Menu's default
+                 WrapPanel — is now that group, and cycles; the Menu's None
+                 still refuses every arrow from outside. MenuBarCensus pins
+                 it. -->
+            <Menu.ItemsPanel>
+                <ItemsPanelTemplate>
+                    <WrapPanel KeyboardNavigation.DirectionalNavigation="Cycle" />
+                </ItemsPanelTemplate>
+            </Menu.ItemsPanel>
             <MenuItem Header="_File"
                       AutomationProperties.AutomationId="FileMenu">
                 <MenuItem Header="_Open Vault…"
@@ -687,51 +708,59 @@
              named, focusable stop whose landing speaks the status text;
              its HelpText is the shell's F6 help. -->
         <!-- W7-6 (#1240): F6 lands here; Tab never does. -->
-        <StatusBar x:Name="ShellStatusBar"
-                   DockPanel.Dock="Bottom"
-                   Focusable="True"
-                   KeyboardNavigation.IsTabStop="False"
-                   AutomationProperties.AutomationId="StatusBar"
-                   AutomationProperties.Name="Status bar"
-                   AutomationProperties.HelpText="{x:Static cmd:NavigationHelp.Shell}">
-            <!-- No vault means no sidebar: an unresolved binding must keep
-                 operation controls out of both layout and automation. -->
-            <StatusBarItem Visibility="{Binding FileSidebar.ShowTrashProgress, Converter={StaticResource BooleanToVisibilityConverter}, FallbackValue=Collapsed}">
-                <StackPanel Orientation="Horizontal">
-                    <TextBlock Text="{Binding FileSidebar.TrashStatus}" VerticalAlignment="Center"
-                               TextWrapping="Wrap" MaxWidth="360"
-                               AutomationProperties.AutomationId="TrashProgressStatus" />
-                    <Button Content="Cancel" Margin="8,0,8,0"
-                            Command="{Binding FileSidebar.CancelTrashCommand}"
-                            GotKeyboardFocus="TrashCancel_GotKeyboardFocus"
-                            LostKeyboardFocus="TrashCancel_LostKeyboardFocus"
-                            IsEnabledChanged="TrashCancel_AvailabilityChanged"
-                            IsVisibleChanged="TrashCancel_AvailabilityChanged"
-                            AutomationProperties.AutomationId="CancelTrash"
-                            AutomationProperties.Name="Cancel moving items to the Recycle Bin" />
-                </StackPanel>
-            </StatusBarItem>
-            <StatusBarItem>
-                <TextBlock x:Name="StatusTextBlock"
-                           AutomationProperties.AutomationId="VaultStatus"
-                           Text="{Binding StatusText}"
-                           TextTrimming="CharacterEllipsis"
-                           AutomationProperties.Name="Vault status" />
-            </StatusBarItem>
-            <Separator />
-            <StatusBarItem HorizontalContentAlignment="Stretch" Width="180">
-                <ProgressBar Minimum="0"
-                             AutomationProperties.AutomationId="VaultScanProgress"
-                             Maximum="{Binding ProgressMaximum}"
-                             Value="{Binding ProgressValue, Mode=OneWay}"
-                             IsIndeterminate="{Binding IsProgressIndeterminate}"
-                             Height="6"
-                             AutomationProperties.Name="Vault scan progress" />
-            </StatusBarItem>
-        </StatusBar>
+        <!-- W7-7 PR 4 (#1247, R-5; spec review round 23): the bar is its
+             own stop - its items take no focus - and an arrow on it went
+             to directional navigation, out of the region. Arrows from an
+             element are judged in its PARENT's group, so the bar sits in a
+             Contained border: they stay on it (ShellContainerLandingTests). -->
+        <Border DockPanel.Dock="Bottom"
+                KeyboardNavigation.DirectionalNavigation="Contained">
+            <StatusBar x:Name="ShellStatusBar"
+                       Focusable="True"
+                       KeyboardNavigation.IsTabStop="False"
+                       AutomationProperties.AutomationId="StatusBar"
+                       AutomationProperties.Name="Status bar"
+                       AutomationProperties.HelpText="{x:Static cmd:NavigationHelp.Shell}">
+                <!-- No vault means no sidebar: an unresolved binding must keep
+                     operation controls out of both layout and automation. -->
+                <StatusBarItem Visibility="{Binding FileSidebar.ShowTrashProgress, Converter={StaticResource BooleanToVisibilityConverter}, FallbackValue=Collapsed}">
+                    <StackPanel Orientation="Horizontal">
+                        <TextBlock Text="{Binding FileSidebar.TrashStatus}" VerticalAlignment="Center"
+                                   TextWrapping="Wrap" MaxWidth="360"
+                                   AutomationProperties.AutomationId="TrashProgressStatus" />
+                        <Button Content="Cancel" Margin="8,0,8,0"
+                                Command="{Binding FileSidebar.CancelTrashCommand}"
+                                GotKeyboardFocus="TrashCancel_GotKeyboardFocus"
+                                LostKeyboardFocus="TrashCancel_LostKeyboardFocus"
+                                IsEnabledChanged="TrashCancel_AvailabilityChanged"
+                                IsVisibleChanged="TrashCancel_AvailabilityChanged"
+                                AutomationProperties.AutomationId="CancelTrash"
+                                AutomationProperties.Name="Cancel moving items to the Recycle Bin" />
+                    </StackPanel>
+                </StatusBarItem>
+                <StatusBarItem>
+                    <TextBlock x:Name="StatusTextBlock"
+                               AutomationProperties.AutomationId="VaultStatus"
+                               Text="{Binding StatusText}"
+                               TextTrimming="CharacterEllipsis"
+                               AutomationProperties.Name="Vault status" />
+                </StatusBarItem>
+                <Separator />
+                <StatusBarItem HorizontalContentAlignment="Stretch" Width="180">
+                    <ProgressBar Minimum="0"
+                                 AutomationProperties.AutomationId="VaultScanProgress"
+                                 Maximum="{Binding ProgressMaximum}"
+                                 Value="{Binding ProgressValue, Mode=OneWay}"
+                                 IsIndeterminate="{Binding IsProgressIndeterminate}"
+                                 Height="6"
+                                 AutomationProperties.Name="Vault scan progress" />
+                </StatusBarItem>
+            </StatusBar>
+        </Border>
 
         <Grid>
             <local:AutomationLandmarkGrid x:Name="WelcomeRoot"
+                  KeyboardNavigation.DirectionalNavigation="Contained"
                   Background="{DynamicResource Slate.WindowBackgroundBrush}"
                   AutomationProperties.AutomationId="WelcomeView"
                   AutomationProperties.Name="Welcome"
@@ -845,6 +874,7 @@
                         <ColumnDefinition Width="280" MinWidth="200" />
                     </Grid.ColumnDefinitions>
                     <local:AutomationLandmarkBorder x:Name="FilesPaneBorder"
+                            KeyboardNavigation.DirectionalNavigation="Contained"
                             Grid.Column="0"
                             AutomationProperties.AutomationId="FilesPane"
                             AutomationProperties.Name="Files"
@@ -949,22 +979,27 @@
                                                   AutomationProperties.AutomationId="SidebarDualPaneToggle"
                                                   AutomationProperties.Name="Enable dual-pane files sidebar" />
                                 </StackPanel>
-                                <TreeView MaxHeight="120"
+                                <!-- W7-7 PR 4 (#1247, R-5 as the owner amended it): a
+                                     landing tree — keys that reach it go on to its
+                                     selected tag, else its first tag UNSELECTED, whose
+                                     focus applies nothing (LandingTreeView). -->
+                                <local:LandingTreeView MaxHeight="120"
+                                          Style="{DynamicResource {x:Type TreeView}}"
                                           ItemsSource="{Binding Tags}"
                                           ItemTemplate="{StaticResource SidebarTagTemplate}"
                                           SelectedItemChanged="Tags_SelectedItemChanged"
                                           Visibility="{Binding ShowTags, Converter={StaticResource BooleanToVisibilityConverter}}"
                                           AutomationProperties.AutomationId="SidebarTagTree"
                                           AutomationProperties.Name="Tags">
-                                    <TreeView.ItemContainerStyle>
+                                    <local:LandingTreeView.ItemContainerStyle>
                                         <Style TargetType="TreeViewItem">
                                             <Setter Property="AutomationProperties.Name" Value="{Binding AutomationName}" />
                                             <!-- W7-7 (R-3): two-way, so a filter clear releases the
                                                  selection and the same tag can be applied again. -->
                                             <Setter Property="IsSelected" Value="{Binding IsSelected, Mode=TwoWay}" />
                                         </Style>
-                                    </TreeView.ItemContainerStyle>
-                                </TreeView>
+                                    </local:LandingTreeView.ItemContainerStyle>
+                                </local:LandingTreeView>
                             </StackPanel>
                             <ScrollViewer Focusable="False" DockPanel.Dock="Bottom"
                                           MaxHeight="210"
@@ -1071,12 +1106,23 @@
                                     <RowDefinition Height="*" />
                                     <RowDefinition Height="Auto" />
                                 </Grid.RowDefinitions>
-                                <Grid Grid.Row="0">
+                                <!-- W7-7 PR 4 (#1247, R-5; spec review round 23; codex
+                                     round 5): the tree and the filter's results
+                                     contain their arrows. No landing rests on the bare
+                                     tree (MainWindow.LandOnFilesTree: the selected
+                                     row, else the first row unselected), but an arrow
+                                     from a row at the tree's edge, or from an empty
+                                     tree or result list (its own stop), is judged in
+                                     this group, so Left and Right stay instead of
+                                     leaving the region. -->
+                                <Grid Grid.Row="0"
+                                      KeyboardNavigation.DirectionalNavigation="Contained">
                                     <!-- W7-7 (R-2, OD-2): arrows only show a note; the rows'
                                          own handler delivers Enter / Ctrl+Enter (open, focus
                                          moves) and Space (batch check), and the HelpText is
                                          composed from those chord rows (contract 39 N-1). -->
-                                    <TreeView x:Name="FilesTree"
+                                    <local:LandingTreeView x:Name="FilesTree"
+                                              Style="{DynamicResource {x:Type TreeView}}"
                                               ItemsSource="{Binding RootNodes}"
                                               ItemTemplate="{StaticResource FileTreeNodeTemplate}"
                                               TextSearch.TextPath="DisplayName"
@@ -1089,7 +1135,7 @@
                                               AutomationProperties.AutomationId="FilesTree" local:SiblingNames.NamePath="AutomationName" local:SiblingNames.DistinguisherPath="Path" local:SiblingNames.Noun="item"
                                               AutomationProperties.Name="Files"
                                               AutomationProperties.HelpText="{x:Static cmd:NavigationHelp.FilesTree}">
-                                        <TreeView.ItemContainerStyle>
+                                        <local:LandingTreeView.ItemContainerStyle>
                                             <Style TargetType="TreeViewItem">
                                                 <Setter Property="IsExpanded" Value="{Binding IsExpanded, Mode=TwoWay}" />
                                                 <!-- W5-4 verification: the VM→view selection
@@ -1102,8 +1148,8 @@
                                                 <!-- W7-7 (R-2): the batch state, on the row the reader is on. -->
                                                 <Setter Property="AutomationProperties.ItemStatus" Value="{Binding BatchItemStatus}" />
                                             </Style>
-                                        </TreeView.ItemContainerStyle>
-                                    </TreeView>
+                                        </local:LandingTreeView.ItemContainerStyle>
+                                    </local:LandingTreeView>
                                     <ListBox x:Name="FilterResultsList"
                                              ItemsSource="{Binding FilterResults}"
                                              SelectionChanged="FilterResults_SelectionChanged"
@@ -1159,15 +1205,19 @@
                         </DockPanel>
                     </local:AutomationLandmarkBorder>
                     <GridSplitter Grid.Column="1"
+                                  KeyboardNavigation.IsTabStop="False"
                                   Background="{DynamicResource Slate.BorderBrush}"
                                   HorizontalAlignment="Stretch"
                                   ResizeDirection="Columns"
                                   AutomationProperties.Name="Resize files sidebar" />
-                    <!-- W7-6 (#1240): F6 lands here; Tab never does. -->
+                    <!-- W7-6 (#1240): F6 lands here; Tab never does. W7-7
+                         PR 4 (#1247, R-5): and no arrow leaves the editor
+                         region from inside it. -->
                     <local:AutomationLandmarkBorder x:Name="ContentPaneBorder"
                             Grid.Column="2"
                             Focusable="True"
                             KeyboardNavigation.IsTabStop="False"
+                            KeyboardNavigation.DirectionalNavigation="Contained"
                             AutomationProperties.AutomationId="ContentPane"
                             AutomationProperties.Name="Editor workspace"
                             Background="{DynamicResource Slate.WindowBackgroundBrush}"
@@ -1178,6 +1228,7 @@
                                         AutomationProperties.Name="Workspace editor panes" />
                     </local:AutomationLandmarkBorder>
                     <GridSplitter Grid.Column="3"
+                                  KeyboardNavigation.IsTabStop="False"
                                   Background="{DynamicResource Slate.BorderBrush}"
                                   HorizontalAlignment="Stretch"
                                   ResizeDirection="Columns"
@@ -1260,7 +1311,11 @@
                                  inactive bodies collapse (out of the UIA tree - the
                                  mac accessibilityHidden gating); collections live on
                                  Workspace.Panels, so switching never refetches. -->
-                            <DockPanel Grid.Column="0" Margin="12">
+                            <!-- W7-7 PR 4 (#1247, R-5; codex round 4): the leaf
+                                 contains its arrows - an arrow from its notice, whose
+                                 own group this body is, stays in the leaf. -->
+                            <DockPanel Grid.Column="0" Margin="12"
+                                       KeyboardNavigation.DirectionalNavigation="Contained">
                                 <DockPanel.Style>
                                     <Style TargetType="DockPanel">
                                         <Setter Property="Visibility" Value="Collapsed" />
@@ -1276,7 +1331,9 @@
                                            Text="{Binding Panels.BacklinksHeader}" />
                                 <TextBlock DockPanel.Dock="Top"
                                            Style="{StaticResource PanelEmptyMessage}"
-                                           Text="{Binding Panels.BacklinksEmptyMessage}" />
+                                           Text="{Binding Panels.BacklinksEmptyMessage}"
+                                           Focusable="{Binding Panels.BacklinksNoticeIsAStop}"
+                                           AutomationProperties.AutomationId="PanelBacklinksNotice" />
                                 <TextBlock DockPanel.Dock="Bottom"
                                            Style="{StaticResource PanelEmptyMessage}"
                                            Text="{Binding Panels.BacklinksTruncationNotice}" />
@@ -1309,7 +1366,11 @@
                                     </ListBox.ItemTemplate>
                                 </ListBox>
                             </DockPanel>
-                            <DockPanel Grid.Column="0" Margin="12">
+                            <!-- W7-7 PR 4 (#1247, R-5; codex round 4): the leaf
+                                 contains its arrows - an arrow from its notice, whose
+                                 own group this body is, stays in the leaf. -->
+                            <DockPanel Grid.Column="0" Margin="12"
+                                       KeyboardNavigation.DirectionalNavigation="Contained">
                                 <DockPanel.Style>
                                     <Style TargetType="DockPanel">
                                         <Setter Property="Visibility" Value="Collapsed" />
@@ -1325,7 +1386,9 @@
                                            Text="{Binding Panels.OutgoingLinksHeader}" />
                                 <TextBlock DockPanel.Dock="Top"
                                            Style="{StaticResource PanelEmptyMessage}"
-                                           Text="{Binding Panels.OutgoingLinksEmptyMessage}" />
+                                           Text="{Binding Panels.OutgoingLinksEmptyMessage}"
+                                           Focusable="{Binding Panels.OutgoingLinksNoticeIsAStop}"
+                                           AutomationProperties.AutomationId="PanelOutgoingLinksNotice" />
                                 <TextBlock DockPanel.Dock="Bottom"
                                            Style="{StaticResource PanelEmptyMessage}"
                                            Text="{Binding Panels.OutgoingLinksTruncationNotice}" />
@@ -1390,7 +1453,11 @@
                                     </ListBox.ItemTemplate>
                                 </ListBox>
                             </DockPanel>
-                            <DockPanel Grid.Column="0" Margin="12">
+                            <!-- W7-7 PR 4 (#1247, R-5; codex round 4): the leaf
+                                 contains its arrows - an arrow from its notice, whose
+                                 own group this body is, stays in the leaf. -->
+                            <DockPanel Grid.Column="0" Margin="12"
+                                       KeyboardNavigation.DirectionalNavigation="Contained">
                                 <DockPanel.Style>
                                     <Style TargetType="DockPanel">
                                         <Setter Property="Visibility" Value="Collapsed" />
@@ -1406,7 +1473,9 @@
                                            Text="Outline" />
                                 <TextBlock DockPanel.Dock="Top"
                                            Style="{StaticResource PanelEmptyMessage}"
-                                           Text="{Binding Panels.OutlineEmptyMessage}" />
+                                           Text="{Binding Panels.OutlineEmptyMessage}"
+                                           Focusable="{Binding Panels.OutlineNoticeIsAStop}"
+                                           AutomationProperties.AutomationId="PanelOutlineNotice" />
                                 <TextBlock DockPanel.Dock="Bottom"
                                            Style="{StaticResource PanelEmptyMessage}"
                                            Text="{Binding Panels.OutlineTruncationNotice}" />
@@ -1432,7 +1501,11 @@
                                     </ListBox.ItemTemplate>
                                 </ListBox>
                             </DockPanel>
-                            <DockPanel Grid.Column="0" Margin="12">
+                            <!-- W7-7 PR 4 (#1247, R-5; codex round 4): the leaf
+                                 contains its arrows - an arrow from its notice, whose
+                                 own group this body is, stays in the leaf. -->
+                            <DockPanel Grid.Column="0" Margin="12"
+                                       KeyboardNavigation.DirectionalNavigation="Contained">
                                 <DockPanel.Style>
                                     <Style TargetType="DockPanel">
                                         <Setter Property="Visibility" Value="Collapsed" />
@@ -1448,13 +1521,22 @@
                                            Text="{Binding Panels.EmbedsHeader}" />
                                 <TextBlock DockPanel.Dock="Top"
                                            Style="{StaticResource PanelEmptyMessage}"
-                                           Text="{Binding Panels.EmbedsEmptyMessage}" />
+                                           Text="{Binding Panels.EmbedsEmptyMessage}"
+                                           Focusable="{Binding Panels.EmbedsNoticeIsAStop}"
+                                           AutomationProperties.AutomationId="PanelEmbedsNotice" />
                                 <ScrollViewer Focusable="False" VerticalScrollBarVisibility="Auto"
                                               HorizontalScrollBarVisibility="Disabled">
                                     <!-- R-4 (#1246): the embed card is the named stop;
                                          its container is layout, not an
-                                         "SlateWindows.Panels.EmbedRowViewModel" item. -->
+                                         "SlateWindows.Panels.EmbedRowViewModel" item.
+                                         W7-7 PR 4 (#1247, R-5; codex round 5): the host and
+                                         its cards' renderers are layout, not stops - a landing
+                                         on the host rested on a bare populated container. The
+                                         leaf's stop is a card's own first control (its
+                                         disclosure, its text, its Jump button); resolving, the
+                                         leaf has none and the ring passes to the rail. -->
                                     <local:LayoutItemsControl ItemsSource="{Binding Panels.Embeds}"
+                                                              Focusable="False"
                                                               AutomationProperties.AutomationId="PanelEmbedsList" local:SiblingNames.NamePath="Title" local:SiblingNames.Noun="embed"
                                                               AutomationProperties.Name="Embeds">
                                         <local:LayoutItemsControl.ItemContainerStyle>
@@ -1478,6 +1560,7 @@
                                                                Text="Preview truncated."
                                                                Foreground="{DynamicResource Slate.SecondaryTextBrush}" />
                                                     <local:EditorEmbedPreviewView Root="{Binding Node}"
+                                                                                  Focusable="False"
                                                                                   Loaded="PanelEmbedView_Loaded" />
                                                 </local:AutomationNamedGroupPanel>
                                                 <DataTemplate.Triggers>
@@ -1496,7 +1579,11 @@
                                  derivation), checkbox + activation per row. Rows
                                  are display-capped VM-side, so the non-virtualized
                                  sections stay bounded. -->
-                            <DockPanel Grid.Column="0" Margin="12">
+                            <!-- W7-7 PR 4 (#1247, R-5; codex round 4): the leaf
+                                 contains its arrows - an arrow from its notice, whose
+                                 own group this body is, stays in the leaf. -->
+                            <DockPanel Grid.Column="0" Margin="12"
+                                       KeyboardNavigation.DirectionalNavigation="Contained">
                                 <DockPanel.Style>
                                     <Style TargetType="DockPanel">
                                         <Setter Property="Visibility" Value="Collapsed" />
@@ -1512,7 +1599,9 @@
                                            Text="{Binding Panels.TasksHeader}" />
                                 <TextBlock DockPanel.Dock="Top"
                                            Style="{StaticResource PanelEmptyMessage}"
-                                           Text="{Binding Panels.TasksEmptyMessage}" />
+                                           Text="{Binding Panels.TasksEmptyMessage}"
+                                           Focusable="{Binding Panels.TasksNoticeIsAStop}"
+                                           AutomationProperties.AutomationId="PanelTasksNotice" />
                                 <TextBlock DockPanel.Dock="Bottom"
                                            Style="{StaticResource PanelEmptyMessage}"
                                            Text="{Binding Panels.TasksTruncationNotice}" />
@@ -1550,10 +1639,10 @@
                                 </ScrollViewer>
                             </DockPanel>
                             <!-- W4-3 (#735): the vault-wide Tasks Review leaf — the
-                                 mac TasksReviewPanel flow: pinned filter chips
-                                 (focus-then-activate, never commit-on-arrow), a
+                                 mac TasksReviewPanel flow: pinned filter chips, a
                                  paged row list, and an explicit Load more row. -->
-                            <DockPanel Grid.Column="0" Margin="12">
+                            <DockPanel Grid.Column="0" Margin="12"
+                                       KeyboardNavigation.DirectionalNavigation="Contained">
                                 <DockPanel.Style>
                                     <Style TargetType="DockPanel">
                                         <Setter Property="Visibility" Value="Collapsed" />
@@ -1569,12 +1658,23 @@
                                            Text="{Binding TasksReview.Header}" />
                                 <!-- Radio buttons, not plain buttons (adversarial
                                      round 3): the active filter is a real UIA
-                                     selection state with a non-color visual, and
-                                     WPF radios keep the mac chip semantics — arrow
-                                     keys move focus without committing; Space or
-                                     click commits. -->
-                                <WrapPanel DockPanel.Dock="Top"
+                                     selection state with a non-color visual.
+                                     W7-7 PR 4 (#1247, R-5): and a Windows radio
+                                     group — an arrow checks the filter it moves
+                                     to (RadioGroupArrows), where WPF's radios
+                                     moved focus alone and Down from "All" walked
+                                     into the menu bar (NVDA pass F4); Cycle keeps
+                                     every other arrow inside the group, and the
+                                     group is ONE Tab stop (Once), as the canvas
+                                     and graph switchers are: Tab visited all four
+                                     filters. The group is a named UIA Group, which a
+                                     plain WrapPanel is not (G22). -->
+                                <local:AutomationNamedWrapPanel DockPanel.Dock="Top"
                                            Margin="0,0,0,6"
+                                           KeyboardNavigation.TabNavigation="Once"
+                                           KeyboardNavigation.DirectionalNavigation="Cycle"
+                                           local:RadioGroupArrows.IsEnabled="True"
+                                           AutomationProperties.AutomationId="PanelReviewFilters"
                                            AutomationProperties.Name="Filter">
                                     <RadioButton x:Name="PanelReviewFilterAll"
                                                  Content="All"
@@ -1603,7 +1703,7 @@
                                                  IsChecked="{Binding TasksReview.ThisWeekFilterActive, Mode=TwoWay}"
                                                  AutomationProperties.Name="{Binding TasksReview.ThisWeekFilterName}"
                                                  AutomationProperties.HelpText="Filter the review to this week tasks." />
-                                </WrapPanel>
+                                </local:AutomationNamedWrapPanel>
                                 <TextBlock DockPanel.Dock="Top"
                                            Style="{StaticResource PanelEmptyMessage}"
                                            Text="{Binding TasksReview.EmptyMessage}" />
@@ -1678,7 +1778,11 @@
                                  in-window sheet rather than an anchored
                                  popover (D-1).
                                  ========================================== -->
-                            <DockPanel Grid.Column="0" Margin="12">
+                            <!-- W7-7 PR 4 (#1247, R-5; codex round 4): the leaf
+                                 contains its arrows - an arrow from its notice, whose
+                                 own group this body is, stays in the leaf. -->
+                            <DockPanel Grid.Column="0" Margin="12"
+                                       KeyboardNavigation.DirectionalNavigation="Contained">
                                 <DockPanel.Style>
                                     <Style TargetType="DockPanel">
                                         <Setter Property="Visibility" Value="Collapsed" />
@@ -1692,21 +1796,36 @@
                                 <TextBlock DockPanel.Dock="Top"
                                            Style="{StaticResource PanelHeading}"
                                            Text="{x:Static panels:CitationPhrase.CitationsHeading}" />
-                                <TextBlock DockPanel.Dock="Top"
+                                <!-- W7-7 PR 4 (#1247, R-5; spec §5.2.2): an EMPTY list's
+                                     stop is its notice — the no-file and no-citations
+                                     sentences take the keys and read their reason
+                                     (their text is their name), where the bare empty
+                                     list said only "Citations, list". Loading stays a
+                                     decoration: it collapses under the keys within
+                                     moments. The ring reaches them as the leaf's first
+                                     stop; the restores through SelectorFocus. -->
+                                <TextBlock x:Name="PanelCitationsNoFile"
+                                           DockPanel.Dock="Top"
                                            Style="{StaticResource PanelEmptyMessage}"
                                            Text="{Binding Citations.NoFileText}"
-                                           Visibility="{Binding Citations.ShowNoFileState, Converter={StaticResource BooleanToVisibilityConverter}}" />
+                                           Visibility="{Binding Citations.ShowNoFileState, Converter={StaticResource BooleanToVisibilityConverter}}"
+                                           Focusable="True"
+                                           AutomationProperties.AutomationId="PanelCitationsNoFile" />
                                 <TextBlock DockPanel.Dock="Top"
                                            Style="{StaticResource PanelEmptyMessage}"
                                            Text="{Binding Citations.LoadingVisibleText}"
                                            Visibility="{Binding Citations.IsLoading, Converter={StaticResource BooleanToVisibilityConverter}}" />
-                                <TextBlock DockPanel.Dock="Top"
+                                <TextBlock x:Name="PanelCitationsEmpty"
+                                           DockPanel.Dock="Top"
                                            Style="{StaticResource PanelEmptyMessage}"
                                            Text="{Binding Citations.EmptyText}"
-                                           Visibility="{Binding Citations.ShowEmptyState, Converter={StaticResource BooleanToVisibilityConverter}}" />
+                                           Visibility="{Binding Citations.ShowEmptyState, Converter={StaticResource BooleanToVisibilityConverter}}"
+                                           Focusable="True"
+                                           AutomationProperties.AutomationId="PanelCitationsEmpty" />
                                 <!-- Load notices are surfaced verbatim and
                                      never swallowed (contract 5). -->
-                                <TextBlock DockPanel.Dock="Top"
+                                <TextBlock x:Name="PanelCitationsError"
+                                           DockPanel.Dock="Top"
                                            Style="{StaticResource PanelEmptyMessage}"
                                            Text="{Binding Citations.ErrorSpoken}"
                                            TextWrapping="Wrap"
@@ -1755,7 +1874,8 @@
                                  bulk-rename preview is; export is null on
                                  both (D-7 / G29).
                                  ========================================== -->
-                            <DockPanel Grid.Column="0" Margin="12">
+                            <DockPanel Grid.Column="0" Margin="12"
+                                       KeyboardNavigation.DirectionalNavigation="Contained">
                                 <DockPanel.Style>
                                     <Style TargetType="DockPanel">
                                         <Setter Property="Visibility" Value="Collapsed" />
@@ -1781,7 +1901,16 @@
                                         Margin="0,0,0,6"
                                         AutomationProperties.AutomationId="BibliographySegmentGroup"
                                         AutomationProperties.Name="{x:Static panels:CitationPhrase.BibliographySegmentName}">
-                                <StackPanel Orientation="Horizontal">
+                                <!-- W7-7 PR 4 (#1247, R-5; the owner's S2, the sweep's G2):
+                                     a Windows radio group — an arrow checks the segment
+                                     it reaches (it moved focus alone, and the Entries
+                                     grid stayed on screen), Cycle keeps every other
+                                     arrow in the group, one Tab stop, the checked
+                                     segment its stop. -->
+                                <StackPanel Orientation="Horizontal"
+                                            KeyboardNavigation.TabNavigation="Once"
+                                            KeyboardNavigation.DirectionalNavigation="Cycle"
+                                            local:RadioGroupArrows.IsEnabled="True">
                                     <RadioButton x:Name="BibliographyEntriesSegment"
                                                  GroupName="BibliographySegment"
                                                  Margin="0,0,12,0"
@@ -1909,6 +2038,7 @@
                                  the selection (AT-reachable, one route
                                  per action shared with the commands). -->
                             <DockPanel Margin="12"
+                                       KeyboardNavigation.DirectionalNavigation="Contained"
                                        AutomationProperties.AutomationId="QueriesLeafBody">
                                 <DockPanel.Style>
                                     <Style TargetType="DockPanel">
@@ -2118,6 +2248,7 @@
                                  docked target following the active note,
                                  read-only. -->
                             <DockPanel Margin="12"
+                                       KeyboardNavigation.DirectionalNavigation="Contained"
                                        AutomationProperties.AutomationId="BasesDockLeafBody">
                                 <DockPanel.Style>
                                     <Style TargetType="DockPanel">
@@ -2199,6 +2330,7 @@
                                  heading lives inside the view: its text is
                                  the note's file name, the mac's headerTitle. -->
                             <DockPanel Margin="12"
+                                       KeyboardNavigation.DirectionalNavigation="Contained"
                                        AutomationProperties.AutomationId="ConnectionsLeafBody">
                                 <DockPanel.Style>
                                     <Style TargetType="DockPanel">
@@ -2219,6 +2351,7 @@
                                  the workspace's one view model (rule I, Term I1;
                                  contracts E-1, E-15). -->
                             <DockPanel Margin="12"
+                                       KeyboardNavigation.DirectionalNavigation="Contained"
                                        AutomationProperties.AutomationId="GraphInspectorBody">
                                 <DockPanel.Style>
                                     <Style TargetType="DockPanel">
@@ -2239,6 +2372,7 @@
                                  structured diff walkthrough, restore
                                  flows (contracts H2-H10). -->
                             <DockPanel Margin="12"
+                                       KeyboardNavigation.DirectionalNavigation="Contained"
                                        AutomationProperties.AutomationId="HistoryLeafBody">
                                 <DockPanel.Style>
                                     <Style TargetType="DockPanel">
@@ -2263,6 +2397,7 @@
                                  evidence disclosures, and the LiveSync
                                  config section (contracts SD2/SD3). -->
                             <DockPanel Margin="12"
+                                       KeyboardNavigation.DirectionalNavigation="Contained"
                                        AutomationProperties.AutomationId="SyncDiagnosticsLeafBody">
                                 <DockPanel.Style>
                                     <Style TargetType="DockPanel">
@@ -2347,6 +2482,7 @@
                                            TextWrapping="Wrap" />
                             </StackPanel>
                             <ListBox x:Name="RightPaneLeavesList"
+                                     KeyboardNavigation.DirectionalNavigation="Contained"
                                      Grid.Column="1"
                                      ItemsSource="{Binding LeafOptions}"
                                      SelectedItem="{Binding ActiveLeaf, Mode=TwoWay}"
@@ -2374,6 +2510,7 @@
             <Border Background="Transparent"
                     Visibility="{Binding QuickSwitcher.IsOpen, Converter={StaticResource BooleanToVisibilityConverter}}" />
             <local:AutomationLandmarkBorder x:Name="QuickSwitcherOverlay"
+                    KeyboardNavigation.DirectionalNavigation="Contained"
                     Width="600"
                     MaxHeight="430"
                     Padding="16"
@@ -2489,6 +2626,7 @@
             <Border Background="Transparent"
                     Visibility="{Binding Search.IsOpen, Converter={StaticResource BooleanToVisibilityConverter}}" />
             <local:AutomationLandmarkBorder x:Name="SearchOverlay"
+                    KeyboardNavigation.DirectionalNavigation="Contained"
                     Width="640"
                     MaxHeight="470"
                     Padding="16"
@@ -2782,6 +2920,7 @@
             <Border Background="Transparent"
                     Visibility="{Binding Palette.IsOpen, Converter={StaticResource BooleanToVisibilityConverter}}" />
             <local:AutomationLandmarkBorder x:Name="CommandPaletteOverlay"
+                    KeyboardNavigation.DirectionalNavigation="Contained"
                     Width="640"
                     MaxHeight="470"
                     Padding="16"
@@ -2984,6 +3123,7 @@
             <Border Background="Transparent"
                     Visibility="{Binding Workspace.AddPropertySheet, Converter={StaticResource NullToVisibilityConverter}, FallbackValue=Collapsed}" />
             <local:AutomationLandmarkBorder x:Name="AddPropertyOverlay"
+                    KeyboardNavigation.DirectionalNavigation="Contained"
                     Width="460"
                     Padding="16"
                     HorizontalAlignment="Center"
@@ -3065,6 +3205,7 @@
             <Border Background="Transparent"
                     Visibility="{Binding Workspace.BulkRenameSheet, Converter={StaticResource NullToVisibilityConverter}, FallbackValue=Collapsed}" />
             <local:AutomationLandmarkBorder x:Name="BulkRenameOverlay"
+                    KeyboardNavigation.DirectionalNavigation="Contained"
                     Width="760"
                     MaxHeight="560"
                     Padding="16"
@@ -3198,6 +3339,7 @@
             <Border Background="Transparent"
                     Visibility="{Binding Workspace.CitationDetails, Converter={StaticResource NullToVisibilityConverter}, FallbackValue=Collapsed}" />
             <local:AutomationLandmarkBorder x:Name="CitationDetailsOverlay"
+                    KeyboardNavigation.DirectionalNavigation="Contained"
                     Width="460"
                     Padding="16"
                     HorizontalAlignment="Center"
@@ -3335,6 +3477,7 @@
             <Border Background="Transparent"
                     Visibility="{Binding Workspace.CitationSummary, Converter={StaticResource NullToVisibilityConverter}, FallbackValue=Collapsed}" />
             <local:AutomationLandmarkBorder x:Name="CitationSummaryOverlay"
+                    KeyboardNavigation.DirectionalNavigation="Contained"
                     Width="420"
                     Padding="16"
                     HorizontalAlignment="Center"
@@ -3390,6 +3533,7 @@
             <Border Background="Transparent"
                     Visibility="{Binding Workspace.FilesCiting, Converter={StaticResource NullToVisibilityConverter}, FallbackValue=Collapsed}" />
             <local:AutomationLandmarkBorder x:Name="FilesCitingOverlay"
+                    KeyboardNavigation.DirectionalNavigation="Contained"
                     Width="460"
                     Padding="16"
                     HorizontalAlignment="Center"
@@ -3444,6 +3588,7 @@
             <Border Background="Transparent"
                     Visibility="{Binding Workspace.DashboardEditorSheet, Converter={StaticResource NullToVisibilityConverter}, FallbackValue=Collapsed}" />
             <local:AutomationLandmarkBorder x:Name="DashboardEditorOverlay"
+                    KeyboardNavigation.DirectionalNavigation="Contained"
                     Width="560"
                     MaxHeight="520"
                     Padding="16"
@@ -3559,6 +3704,7 @@
             <Border Background="Transparent"
                     Visibility="{Binding Workspace.BaseQueryBuilderSheet, Converter={StaticResource NullToVisibilityConverter}, FallbackValue=Collapsed}" />
             <local:AutomationLandmarkBorder x:Name="BaseQueryBuilderOverlay"
+                    KeyboardNavigation.DirectionalNavigation="Contained"
                     Width="640"
                     MaxHeight="560"
                     Padding="16"
@@ -3805,6 +3951,7 @@
             <Border Background="Transparent"
                     Visibility="{Binding Workspace.TemplatePickerSheet, Converter={StaticResource NullToVisibilityConverter}, FallbackValue=Collapsed}" />
             <local:AutomationLandmarkBorder x:Name="TemplatePickerOverlay"
+                    KeyboardNavigation.DirectionalNavigation="Contained"
                     Width="520"
                     MaxHeight="440"
                     Padding="16"
@@ -3944,6 +4091,7 @@
             <Border Background="Transparent"
                     Visibility="{Binding Workspace.TemplateFlowSheet, Converter={StaticResource NullToVisibilityConverter}, FallbackValue=Collapsed}" />
             <local:AutomationLandmarkBorder x:Name="TemplateFlowOverlay"
+                    KeyboardNavigation.DirectionalNavigation="Contained"
                     Width="520"
                     MaxHeight="480"
                     Padding="16"
@@ -4093,6 +4241,7 @@
             <Border Background="Transparent"
                     Visibility="{Binding FileSidebar.MoveToSheet, Converter={StaticResource NullToVisibilityConverter}, FallbackValue=Collapsed}" />
             <local:AutomationLandmarkBorder x:Name="MoveToOverlay"
+                    KeyboardNavigation.DirectionalNavigation="Contained"
                     Width="520"
                     MaxHeight="440"
                     Padding="16"
@@ -4194,6 +4343,7 @@
             </local:AutomationLandmarkBorder>
 
             <local:AutomationLandmarkBorder x:Name="CanvasCardEditorOverlay"
+                    KeyboardNavigation.DirectionalNavigation="Contained"
                     Padding="16"
                     MinWidth="420"
                     HorizontalAlignment="Center"
@@ -4233,6 +4383,7 @@
                 </StackPanel>
             </local:AutomationLandmarkBorder>
             <local:AutomationLandmarkBorder x:Name="CanvasCardPickerOverlay"
+                    KeyboardNavigation.DirectionalNavigation="Contained"
                     Padding="16"
                     MinWidth="420"
                     HorizontalAlignment="Center"
@@ -4278,6 +4429,7 @@
             </local:AutomationLandmarkBorder>
 
             <local:AutomationLandmarkBorder x:Name="CanvasPromptOverlay"
+                    KeyboardNavigation.DirectionalNavigation="Contained"
                     Padding="16"
                     MinWidth="420"
                     HorizontalAlignment="Center"

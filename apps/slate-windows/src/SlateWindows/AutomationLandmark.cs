@@ -73,6 +73,19 @@ internal sealed class AutomationNamedGroupPanel : StackPanel
         new AutomationNamedGroupPeer(this);
 }
 
+/// <summary>
+/// The wrapping twin of <see cref="AutomationNamedGroupPanel"/>: a plain
+/// <see cref="WrapPanel"/> creates no automation peer either, so the Tasks
+/// Review filter group's "Filter" name reached no client and its four radio
+/// buttons appeared ungrouped (W7-7 PR 4, #1247; the completeness sweep's
+/// G22). The chips wrap onto a second row in a narrow pane.
+/// </summary>
+internal sealed class AutomationNamedWrapPanel : WrapPanel
+{
+    protected override AutomationPeer OnCreateAutomationPeer() =>
+        new AutomationNamedGroupPeer(this);
+}
+
 internal sealed class AutomationNamedGroupPeer : FrameworkElementAutomationPeer
 {
     internal AutomationNamedGroupPeer(FrameworkElement owner)

@@ -86,6 +86,62 @@ public sealed class SharedNameTests
             names.Order(StringComparer.Ordinal)));
     });
 
+    /// <summary>W7-7 PR 3 x PR 4 (the merge): a row PR 4's landing focuses
+    /// WITHOUT selecting it (the owner's focus-without-select) is still named
+    /// by PR 3's sibling rule — the name is the container's, whatever the
+    /// selection. "note-a.md" and "note a.md" sit side by side in the Files
+    /// tree and read alike; the landing puts the keys on the first row,
+    /// unselected, and its UIA name is its composed name, not the bare
+    /// one.</summary>
+    [Fact]
+    public void AFilesRowLandedUnselectedReadsItsComposedName() => RunSta(() =>
+    {
+        using FixtureVault fixture = FixtureVault.Create(0, "landed-row-names");
+        foreach (string path in new[] { "note-a.md", "note a.md" })
+        {
+            File.WriteAllText(Path.Combine(fixture.Root, path), "plain body\n");
+        }
+        using VaultSession session = VaultSession.OpenFilesystem(fixture.Root);
+        using (var cancel = new CancelToken())
+        {
+            session.ScanInitial(cancel);
+        }
+        var inline = new InlineContext();
+        var sidebar = new FilesSidebarViewModel(
+            session,
+            _ => { },
+            vaultRoot: fixture.Root,
+            localAppDataRoot: Path.Combine(fixture.Root, "device-state"),
+            filterUiContext: inline,
+            treeUiContext: inline,
+            treeWorker: (work, _) => { work(); return Task.CompletedTask; },
+            filterWorker: (work, _) => { work(); return Task.CompletedTask; },
+            filterDelay: _ => Task.CompletedTask);
+        Assert.True(
+            PumpedDispatcher.PumpUntil(
+                () => sidebar.TreeRefreshCompletion.IsCompleted && sidebar.RootNodes.Count == 2,
+                TimeSpan.FromSeconds(10)),
+            "the sidebar's first tree load did not land");
+        FileTreeNodeViewModel[] rows = [.. sidebar.RootNodes];
+        string[] composed = SiblingNames.Compose(
+            [.. rows.Select(row => (string?)row.AutomationName)], [.. rows.Select(row => (string?)row.Path)], "item");
+        // The premise: the rows read alike, so the rule composes their names.
+        Assert.True(SiblingNames.ReadAlike.Equals(rows[0].AutomationName, rows[1].AutomationName));
+        Assert.NotEqual(rows[0].AutomationName, composed[0]);
+
+        Hosted("FilesTree", sidebar, host =>
+        {
+            TreeView tree = Assert.IsAssignableFrom<TreeView>(host);
+            Assert.True(SelectorFocus.FocusSelectedOrFirstRow(tree));
+            PumpedDispatcher.Drain();
+            TreeViewItem landed = Assert.IsAssignableFrom<TreeViewItem>(System.Windows.Input.Keyboard.FocusedElement);
+            Assert.False(landed.IsSelected, "the landing selected the row it focused");
+            int index = Array.IndexOf(rows, landed.DataContext);
+            Assert.True(index >= 0, "the landed row is not one of the tree's rows");
+            Assert.Equal(composed[index], UIElementAutomationPeer.CreatePeerForElement(landed).GetName());
+        });
+    });
+
     /// <summary>The spec review, rounds 21-23 and 26: Quick Open speaks a
     /// row by core's DISPLAY name — the extension stripped — so note.md and
     /// note.markdown both read "note", in two folders or in one. Namesakes

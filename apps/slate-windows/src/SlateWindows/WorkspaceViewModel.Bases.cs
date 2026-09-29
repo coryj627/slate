@@ -1258,6 +1258,12 @@ internal sealed partial class WorkspaceViewModel
             {
                 return;
             }
+            // W7-7 PR 4 (#1247, R-5; the completeness sweep's G5): the view
+            // re-seats its selection by identity in THIS dispatcher
+            // operation, before WPF re-evaluates a focused element the
+            // rebuild disabled (every action button follows the selection)
+            // or removed (a row).
+            BaseQueriesRepublishing?.Invoke();
             // Pinned first in pin order, then case-insensitive name
             // with id tiebreak (the mac ordering).
             SavedQueries.Clear();
@@ -1284,8 +1290,18 @@ internal sealed partial class WorkspaceViewModel
             // Pins prune to live ids (the mac rule).
             _pinnedSavedQueryIds.RemoveWhere(id =>
                 !savedQueries.Any(s => string.Equals(s.Id, id, StringComparison.Ordinal)));
+            BaseQueriesRepublished?.Invoke();
         });
     }
+
+    /// <summary>W7-7 PR 4 (#1247; G5): raised on the dispatcher just before
+    /// the Queries leaf's three registry lists are rebuilt (Clear + Add),
+    /// in the same dispatcher operation as <see cref="BaseQueriesRepublished"/>.</summary>
+    internal event Action? BaseQueriesRepublishing;
+
+    /// <summary>Raised on the dispatcher just after the three lists are
+    /// rebuilt, in the rebuild's own dispatcher operation.</summary>
+    internal event Action? BaseQueriesRepublished;
 
     internal void ToggleSavedQueryPin(string id)
     {

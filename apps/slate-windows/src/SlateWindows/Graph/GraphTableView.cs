@@ -47,6 +47,13 @@ internal sealed class GraphTableView : UserControl
             ExternalSortHandler = OnExternalSort,
         };
         _grid.CurrentRowChanged += OnCurrentRowChanged;
+        // W7-7 PR 4 (#1247, R-5; codex round 5): a landing on the bare grid
+        // — a restore token, a publication under the keys — is the
+        // projection's own (rule F): the shared key's row, else the reader's
+        // own current row (W7-7 PR 3's merge: a republish restores it by its
+        // stable key), else the first, under the syncing guard, so it never
+        // writes the key (A-7).
+        SelectorFocus.SetOwnLanding(_grid.Grid, LandOnOwnRow);
         // C-5: the grid's Ctrl+F reaches the field with no new row (C-D2)
         // — the canvas table's line, routed through the navigator to the
         // presenter that has the keys.
@@ -303,6 +310,39 @@ internal sealed class GraphTableView : UserControl
                 return true;
             }
             return _grid.SelectRow(_ => true, moveFocus: true);
+        }
+        finally
+        {
+            _syncingSelection = wasSyncing;
+        }
+    }
+
+    /// <summary>The grid's own landing (W7-7 PR 4, R-5) — a restore token, a
+    /// publication under the keys — as rule F seats it, with one difference
+    /// from <see cref="FocusProjection"/>: with no shared key the keys go to
+    /// the grid's CURRENT row before the first. A seat the key does not hold
+    /// (rule F's silent seat) is the reader's own row, and a republish
+    /// restores it by the node's stable key (W7-7 PR 3, R-4, OD-9: a ghost's
+    /// relabel or a sort moves it); the first row is a display position, and
+    /// re-landing there moved the reader onto another node. Silent, under the
+    /// syncing guard: nothing writes the key (A-7).</summary>
+    private bool LandOnOwnRow()
+    {
+        if (Model is not { } model)
+        {
+            return false;
+        }
+        bool wasSyncing = _syncingSelection;
+        _syncingSelection = true;
+        try
+        {
+            string? key = model.ViewState.SelectedKey;
+            if (key is not null
+                && _grid.SelectRow(row => string.Equals(((GraphTableRow)row).StableKey, key, StringComparison.Ordinal), moveFocus: true))
+            {
+                return true;
+            }
+            return _grid.FocusCurrentOrFirstCell();
         }
         finally
         {

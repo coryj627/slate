@@ -2,6 +2,7 @@
 // SPDX-License-Identifier: AGPL-3.0-or-later
 
 using System.Windows;
+using System.Windows.Automation;
 using System.Windows.Controls;
 using System.Windows.Controls.Primitives;
 using System.Windows.Input;
@@ -115,9 +116,13 @@ public partial class MainWindow : IShellRegionHost
                 first.Focus();
                 break;
             case ShellRegionKind.Files:
+                // R-5 (#1247): the filter's results land on a result row,
+                // or on the list itself when it is empty (AR-6); a row that
+                // cannot be landed yet leaves the keys to the tree's own
+                // landing, a row or the filter field.
                 _ = FilterResultsList.IsVisible
-                    ? FilterResultsList.Focus() || FilesTree.Focus()
-                    : FilesTree.Focus();
+                    ? SelectorFocus.FocusFirstOrSelectedItem(FilterResultsList) || LandOnFilesTree()
+                    : LandOnFilesTree();
                 break;
             case ShellRegionKind.TabBar:
                 {
@@ -170,7 +175,9 @@ public partial class MainWindow : IShellRegionHost
                 }
                 else if (VisibleLeafBody() is { } body && FirstFocusable(body) is { } stop)
                 {
-                    stop.Focus();
+                    // A stop that cannot be landed leaves the region
+                    // unfocused, so the ring moves on to the rail.
+                    _ = SelectorFocus.LandOnStop(stop);
                 }
 
                 break;
@@ -180,16 +187,10 @@ public partial class MainWindow : IShellRegionHost
                     return ShellRegionLanding.Refused;
                 }
 
-                if (RightPaneLeavesList.SelectedItem is { } selected
-                    && RightPaneLeavesList.ItemContainerGenerator.ContainerFromItem(selected) is ListBoxItem row)
-                {
-                    row.Focus();
-                }
-                else
-                {
-                    RightPaneLeavesList.Focus();
-                }
-
+                // R-5 (#1247): the shown leaf's row (the first row if the
+                // rail names none), never the bare list, from which Down
+                // walked into the menu bar.
+                _ = SelectorFocus.FocusFirstOrSelectedItem(RightPaneLeavesList);
                 break;
             case ShellRegionKind.StatusBar:
                 ShellStatusBar.Focus();
@@ -736,6 +737,195 @@ public partial class MainWindow : IShellRegionHost
                 && candidate is not Border)
             {
                 return element;
+            }
+        }
+
+        return null;
+    }
+
+    /// <summary>
+    /// W7-7 PR 4 (#1247, R-5 as the owner amended it; spec review round 23):
+    /// every landing in the Files tree — the ring's, the Files boundary's, a
+    /// rename's, a mutation's restore, Move To's, the empty editor's last
+    /// resort (the launch landing with no tab restored, W7-5), a restore
+    /// whose token is the tree or one of its rows, the tree's own hand-on
+    /// from Tab or a click — goes through here: the selected file's ROW,
+    /// realized; else the tree's first row, UNSELECTED.
+    /// </summary>
+    /// <remarks>
+    /// <para>
+    /// They were <c>FilesTree.Focus()</c>, which reaches a row only when the
+    /// tree holds a selection it has realized. The sidebar's selected node
+    /// is the source of truth — a recycled container drops the tree's own —
+    /// so its path is handed to the tree landing, which focuses that row.
+    /// </para>
+    /// <para>
+    /// With no selected row to land on — nothing selected, the selection
+    /// hidden under a collapsed folder — the landing is the first row,
+    /// focused without selecting it (the owner's focus-without-select,
+    /// which replaced codex round 5's filter-field fallback): selecting a
+    /// file OPENS it (OD-2), and a landing opens nothing, says nothing and
+    /// leaves the selection where it was. It is never the bare tree, a
+    /// populated container. An EMPTY tree is its own stop (AR-6); a tree
+    /// the filter has replaced cannot take the keys, and the region's
+    /// stable stop, the filter field, does.
+    /// </para>
+    /// </remarks>
+    /// <returns>Whether the keys landed in the Files region.</returns>
+    internal bool LandOnFilesTree() => LandOnSidebarTree(FilesTree, SelectedFilesPath());
+
+    /// <summary>A Files-region tree's landing: its selected row, else its
+    /// first row unselected; an empty tree on show is its own stop (AR-6);
+    /// else — a tree the filter replaced, rows not realized — the region's
+    /// stable stop, the filter field.</summary>
+    private bool LandOnSidebarTree(TreeView tree, IReadOnlyList<object>? selectedPath) =>
+        SelectorFocus.FocusSelectedOrFirstRow(tree, selectedPath) || SidebarFilterTextBox.Focus();
+
+    /// <summary>The sidebar's selected node and its ancestors, root first;
+    /// null when nothing is selected or the node is no longer in the
+    /// tree.</summary>
+    private IReadOnlyList<object>? SelectedFilesPath()
+    {
+        if (_viewModel.FileSidebar is not { SelectedNode: { } selected } sidebar)
+        {
+            return null;
+        }
+
+        var path = new List<object>();
+        return PathTo(sidebar.RootNodes, selected, path) ? path : null;
+
+        static bool PathTo(IEnumerable<FileTreeNodeViewModel> level, FileTreeNodeViewModel target, List<object> path)
+        {
+            foreach (FileTreeNodeViewModel node in level)
+            {
+                path.Add(node);
+                if (ReferenceEquals(node, target) || PathTo(node.Children, target, path))
+                {
+                    return true;
+                }
+
+                path.RemoveAt(path.Count - 1);
+            }
+
+            return false;
+        }
+    }
+
+    /// <summary>W7-7 PR 4 (#1247, R-5): where a leaf REVEAL puts the keys —
+    /// Ctrl+R's review, Show History — when the shown leaf has no landing
+    /// of its own: the leaf's first stop, the same landing as the ring's
+    /// right-pane content stop, so Ctrl+R puts the reader on the review's
+    /// "All, N tasks" filter; the rail's selected row when the leaf has no
+    /// stop, or its stop took nothing. It was the bare rail, from which Down
+    /// walked into the menu bar. Ctrl+Alt+Right's edge is not a reveal and keeps the rail
+    /// (<see cref="WorkspaceFocusBoundary.RightPaneEdge"/>).</summary>
+    internal void LandInRightPane()
+    {
+        if (VisibleLeafBody() is { } body && FirstFocusable(body) is { } stop && SelectorFocus.LandOnStop(stop))
+        {
+            return;
+        }
+
+        // The leaf has no stop, or its stop took nothing (a list whose row
+        // cannot be landed yet among them): the pane's stable stop, the
+        // rail's row.
+        _ = SelectorFocus.FocusFirstOrSelectedItem(RightPaneLeavesList);
+    }
+
+    /// <summary>A leaf's own landing — the reveal's and the ring's: its
+    /// first stop, else the pane's stable stop, the rail's row.</summary>
+    private bool LandInLeaf(FrameworkElement body) =>
+        (body.IsVisible && FirstFocusable(body) is { } stop && SelectorFocus.LandOnStop(stop))
+        || SelectorFocus.FocusFirstOrSelectedItem(RightPaneLeavesList);
+
+    /// <summary>
+    /// W7-7 PR 4 (#1247, R-5, spec §5.2.2; codex round 5): the leaves'
+    /// publications under the keys keep them on a stop
+    /// (<see cref="SelectorFocus.KeepKeysThroughPublications"/>). The four
+    /// list leaves and the Tasks leaf: rows that fill an empty list holding
+    /// the keys while it loaded — or a list WPF handed a removed row's keys
+    /// to — land them on a row; a list left empty lands them on its notice;
+    /// a notice whose sentence turns to "Loading…" hands them to its list
+    /// first. The Embeds leaf's cards are its stops, its host none. The
+    /// Citations leaf restores its own publications
+    /// (<see cref="RestoreCitationFocus"/>), so only its notices' hand-off
+    /// is kept; the Files filter's results re-land like a leaf's list.
+    /// </summary>
+    private void KeepLeafKeysThroughPublications()
+    {
+        (ItemsControl[] Rows, string Notice)[] leaves =
+        [
+            ([PanelBacklinksList], "PanelBacklinksNotice"),
+            ([PanelOutgoingLinksList], "PanelOutgoingLinksNotice"),
+            ([PanelOutlineList], "PanelOutlineNotice"),
+            ([ElementWithAutomationId<ItemsControl>(RightPaneLeafHost, "PanelEmbedsList")], "PanelEmbedsNotice"),
+            ([PanelTasksOpenList, PanelTasksDoneList], "PanelTasksNotice"),
+        ];
+        foreach ((ItemsControl[] rows, string noticeId) in leaves)
+        {
+            FrameworkElement body = LeafBodyOf(rows[0]);
+            SelectorFocus.KeepKeysThroughPublications(
+                body, rows, [ElementWithAutomationId<UIElement>(body, noticeId)], () => LandInLeaf(body));
+        }
+
+        // The review's page one re-queries after a toggle, a filter or a
+        // refresh and republishes under the reader (codex PR 4 round 6
+        // high 2): a removed row's keys land on a row, and an emptied
+        // page's on the leaf's landing — its checked filter.
+        FrameworkElement review = LeafBodyOf(PanelReviewList);
+        SelectorFocus.KeepKeysThroughPublications(review, [PanelReviewList], [], () => LandInLeaf(review));
+        // The Queries leaf's three registry lists are rebuilt on every
+        // refresh (G5): a removed row's keys land on the fresh row of the
+        // same item, which the window re-selects by identity.
+        FrameworkElement queries = LeafBodyOf(QueriesSavedList);
+        SelectorFocus.KeepKeysThroughPublications(
+            queries, [QueriesSavedList, QueriesBaseFilesList, QueriesDashboardsList], [], () => LandInLeaf(queries));
+        FrameworkElement citations = LeafBodyOf(PanelCitationsList);
+        SelectorFocus.KeepKeysThroughPublications(
+            citations, [PanelCitationsList], CitationNotices, () => LandInLeaf(citations), reLandPublications: false);
+        SelectorFocus.KeepKeysThroughPublications(
+            FilterResultsList,
+            [FilterResultsList],
+            [],
+            () => SelectorFocus.FocusFirstOrSelectedItem(FilterResultsList) || LandOnFilesTree());
+    }
+
+    /// <summary>The leaf body — a direct child of the leaf host — that
+    /// holds <paramref name="element"/>.</summary>
+    private FrameworkElement LeafBodyOf(DependencyObject element)
+    {
+        DependencyObject current = element;
+        while (LogicalTreeHelper.GetParent(current) is { } parent && !ReferenceEquals(parent, RightPaneLeafHost))
+        {
+            current = parent;
+        }
+
+        return (FrameworkElement)current;
+    }
+
+    private static T ElementWithAutomationId<T>(DependencyObject root, string automationId)
+        where T : DependencyObject =>
+        FindWithAutomationId<T>(root, automationId)
+            ?? throw new InvalidOperationException($"{automationId} is not in the shell's XAML.");
+
+    private static T? FindWithAutomationId<T>(DependencyObject root, string automationId)
+        where T : DependencyObject
+    {
+        foreach (object child in LogicalTreeHelper.GetChildren(root))
+        {
+            if (child is not DependencyObject element)
+            {
+                continue;
+            }
+
+            if (element is T match && AutomationProperties.GetAutomationId(element) == automationId)
+            {
+                return match;
+            }
+
+            if (FindWithAutomationId<T>(element, automationId) is { } nested)
+            {
+                return nested;
             }
         }
 
