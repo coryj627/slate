@@ -297,6 +297,7 @@ internal sealed class ReadingContentViewModel : BindableBase, IDisposable
         // can land; retiring the live marker makes the next bind's
         // EnsureProjected restart — the pre-publication rebind
         // machinery already handles exactly this shape.
+        ReadingSurface.CensusDiag($"reading prefs invalidated unbound at {_generation}");
         _generation++;
         LiveRefreshGeneration = -1;
         RetireFetch();
@@ -323,6 +324,7 @@ internal sealed class ReadingContentViewModel : BindableBase, IDisposable
         // HERE, not on tab Deactivate (which also fires on split-pane
         // focus moves while the tab stays visible). EnsureProjected
         // re-attaches on the next bind.
+        ReadingSurface.CensusDiag($"reading detached at {_generation}");
         Deactivate();
         _generation++;
         LiveRefreshGeneration = -1;
@@ -497,6 +499,7 @@ internal sealed class ReadingContentViewModel : BindableBase, IDisposable
         }
 
         int generation = ++_generation;
+        ReadingSurface.CensusDiag($"reading refresh {generation}");
         LiveRefreshGeneration = generation;
         string text = _tab.Text;
         string path = _tab.Path;
@@ -564,6 +567,7 @@ internal sealed class ReadingContentViewModel : BindableBase, IDisposable
                 }
                 if (fetched is { } result)
                 {
+                    ReadingSurface.CensusDiag($"reading fetch {generation} done");
                     _ = _dispatcher!.InvokeAsync(() => RunPublishStep(
                         generation,
                         () => Publish(generation, path, revision, sessionGeneration, result)));
@@ -575,6 +579,7 @@ internal sealed class ReadingContentViewModel : BindableBase, IDisposable
                 // #1279: the refresh was retired mid-walk — superseded,
                 // detached or disposed. Not a failure: a newer generation
                 // (or nothing) owns the view, so nothing publishes.
+                ReadingSurface.CensusDiag($"reading fetch {generation} retired");
                 Interlocked.Increment(ref _fetchesCancelledForTests);
             }
             catch (Exception exception)
@@ -582,6 +587,7 @@ internal sealed class ReadingContentViewModel : BindableBase, IDisposable
                 // Terminal: an unconditional host diagnostic (event +
                 // exception TYPE only, never payload text — W1-RT-01),
                 // then a generation-gated user-visible failure state.
+                ReadingSurface.CensusDiag($"reading fetch {generation} failed: {exception.GetType().Name}");
                 RecordTerminalFailure(exception);
                 _ = _dispatcher!.InvokeAsync(
                     () => PublishTerminalFailure(generation));
@@ -650,6 +656,7 @@ internal sealed class ReadingContentViewModel : BindableBase, IDisposable
         {
             return;
         }
+        ReadingSurface.CensusDiag($"reading refresh {generation} failed terminally");
         _failedGeneration = generation;
         LiveRefreshGeneration = -1;
         IsLoading = false;
@@ -999,6 +1006,7 @@ internal sealed class ReadingContentViewModel : BindableBase, IDisposable
     /// running finishes (the queries take no token: AR-60).</summary>
     private void FetchStage(CancelToken cancel, string stage)
     {
+        ReadingSurface.CensusDiag($"reading stage {stage} (worker {Environment.CurrentManagedThreadId})");
         ThrowIfCancelled(cancel);
         FetchStageHookForTests?.Invoke(stage);
     }
@@ -1231,6 +1239,7 @@ internal sealed class ReadingContentViewModel : BindableBase, IDisposable
         // about to be replaced.
         if (_disposed || generation != _generation)
         {
+            ReadingSurface.CensusDiag($"reading publish {generation} dropped (current {_generation}, disposed {_disposed})");
             return;
         }
         if (PublishFaultForTests?.Invoke() is { } fault)
@@ -1254,6 +1263,7 @@ internal sealed class ReadingContentViewModel : BindableBase, IDisposable
             // cycle; retry immediately with the latest tuple instead.
             // Converges when vault activity settles; a same-text
             // retry is one parse ending in a memo hit.
+            ReadingSurface.CensusDiag($"reading publish {generation} drifted");
             Refresh();
             return;
         }
@@ -1265,6 +1275,7 @@ internal sealed class ReadingContentViewModel : BindableBase, IDisposable
             fetched.ArtifactDigest);
         if (Document is not null && _memo is { } memo && memo.Matches(key))
         {
+            ReadingSurface.CensusDiag($"reading publish {generation} memo hit");
             LiveRefreshGeneration = -1;
             return;
         }
@@ -1442,6 +1453,7 @@ internal sealed class ReadingContentViewModel : BindableBase, IDisposable
     private void FinishPublish(MemoKey key, bool degraded, int renderedBlocks, bool streamed)
     {
         // The projection is complete: the refresh has landed (R-10).
+        ReadingSurface.CensusDiag($"reading projection complete ({renderedBlocks} blocks)");
         LiveRefreshGeneration = -1;
         // A stream nobody heard delivered nothing past chunk 1: leave
         // the memo empty so the next binding's EnsureProjected (or any
@@ -1490,6 +1502,7 @@ internal sealed class ReadingContentViewModel : BindableBase, IDisposable
         {
             return;
         }
+        ReadingSurface.CensusDiag($"reading disposed at {_generation}");
         _disposed = true;
         RetireFetch();
         Deactivate();
