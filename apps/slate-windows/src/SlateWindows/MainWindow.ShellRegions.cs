@@ -860,15 +860,22 @@ public partial class MainWindow : IShellRegionHost
     /// the one landing entry (<see cref="FocusEditorPane"/>), silently — a
     /// route's landing that speaks nothing, never the ring's (a held press's
     /// ring position is an F6 press's alone). W7-7 PR 4b on PR 8 (R-10,
-    /// OD-12): an editor landing the window already holds for the active tab
-    /// is LEFT to seat — its line and its fallback stay its route's or its
-    /// press's, and the launch landing's among them — and the keys wait
-    /// meanwhile where a refused route's would (the tab's own item, else the
-    /// tab strip, else the Files region) — never back on the element that
-    /// went away, whose own <c>Focus()</c> answers true while it still holds
-    /// them; so do they for a landing this one holds, and for a refused one.
-    /// Nothing lands under a modal. Answers whether the keys are on a stop
-    /// now.
+    /// OD-12): a landing that is PENDING with the keys already on a live stop
+    /// — a loading or refreshing graph's provisional seat (its state host, or
+    /// the grid it still shows), the reading park on the tab item — is done:
+    /// the keys stay there and the landing stays held for its content (#1318's
+    /// merge check: moving them on was the reader leaving, and withdrew it).
+    /// An editor landing the window already holds for the active tab is LEFT
+    /// to seat — its line and its fallback stay its route's or its press's,
+    /// and the launch landing's among them. Only when the keys are on nothing
+    /// valid — a landing that holds but seats nothing yet (a loading canvas),
+    /// a held landing, a refused one — does the guard PARK them where a
+    /// refused route's would wait (the tab's own item, else the tab strip,
+    /// else the Files region), never back on the element that went away,
+    /// whose own <c>Focus()</c> answers true while it still holds them; the
+    /// park is a recovery, which withdraws nothing
+    /// (<see cref="EditorLandingSlot.Park"/>). Nothing lands under a modal.
+    /// Answers whether the keys are on a stop now.
     /// </summary>
     private bool EditorRegionLanding()
     {
@@ -888,16 +895,18 @@ public partial class MainWindow : IShellRegionHost
         if (_editorLandings.Held is not { } held || !held.StillWhereAsked())
         {
             _ = _editorLandings.Withdraw();
-            if (FocusEditorPane(group, onLanded: null, onRefused: static () => { }, forTheRing: false)
-                == ShellRegionLanding.Landed)
+            ShellRegionLanding landing = FocusEditorPane(
+                group, onLanded: null, onRefused: static () => { }, forTheRing: false);
+            if (landing == ShellRegionLanding.Landed
+                || (landing == ShellRegionLanding.Pending && RegionFocusGuard.HolderLanded))
             {
                 return true;
             }
         }
 
-        return FallBackFromEditor(group, tab) != EditorFallback.None
-                && !ReferenceEquals(Keyboard.FocusedElement, RegionFocusGuard.Holder)
-            || LandOnFilesTree();
+        return EditorLandingSlot.Park(() =>
+            (FallBackFromEditor(group, tab) != EditorFallback.None && RegionFocusGuard.HolderLanded)
+            || (LandOnFilesTree() && RegionFocusGuard.HolderLanded));
     }
 
     /// <summary>An arrow in the rail is choosing the leaf, for the length of

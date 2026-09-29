@@ -82,6 +82,13 @@ internal static class RegionFocusGuard
 
     internal static IInputElement? Holder => _holder;
 
+    /// <summary>Whether the keys are on a live element other than the
+    /// <see cref="Holder"/> — never the window. A landing tells from it that
+    /// it placed them: an element that went away still answers its own
+    /// <c>Focus()</c> true while it holds them, and a pending landing may have
+    /// moved them nowhere yet.</summary>
+    internal static bool HolderLanded => Landed(_holder);
+
     /// <summary>What each element that took the keys was showing as it took
     /// them. An items control hands the elements of a container it removes
     /// the disconnected-item sentinel for a data context, and a landing by
@@ -407,7 +414,7 @@ internal static class RegionFocusGuard
 
     /// <summary>The keys are on a live element other than the stranded
     /// one.</summary>
-    private static bool Landed(IInputElement old) =>
+    private static bool Landed(IInputElement? old) =>
         Keyboard.FocusedElement is { } now && !ReferenceEquals(now, old) && !IsStranded(now) && now is not Window;
 
     /// <summary>Whether <paramref name="element"/> can no longer hold the

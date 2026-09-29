@@ -7,6 +7,7 @@ using System.Windows.Controls;
 using System.Windows.Input;
 using System.Windows.Media;
 using SlateWindows.Canvas;
+using SlateWindows.Graph;
 using SlateWindows.Panels;
 using uniffi.slate_uniffi;
 
@@ -187,6 +188,140 @@ public sealed class RightPaneHideLandingTests
         {
             _ = host.Shell.EditorLandings.Withdraw();
         }
+    });
+
+    /// <summary>
+    /// #1318's merge check (R-5 (h) on R-10): hiding the right pane under the
+    /// keys while the graph's load or refresh is in flight lands them through
+    /// the one entry, and the graph seats that landing PROVISIONALLY — its
+    /// state host over a load with nothing held, the grid it still shows over
+    /// a load or a refresh of its rows. That seat is the guard's landing: the
+    /// keys stay on it, in one focus change, and the request stays held — the
+    /// guard never moves them on to the tab's item, which read as the reader
+    /// leaving and withdrew it. The terminal publication then seats the grid,
+    /// and nothing is spoken for it.
+    /// </summary>
+    [Theory]
+    [InlineData("a load with nothing held")]
+    [InlineData("a load over its rows")]
+    [InlineData("a refresh of its rows")]
+    public void HidingTheRightPaneOverAGraphInFlightKeepsItsProvisionalSeat(string flight) => RunSta(() =>
+    {
+        using var host = new ShownShell(("a.md", "Links to [[b]].\n"), ("b.md", "Links to [[a]].\n"));
+        host.Workspace.OpenGraph();
+        GraphDocumentViewModel graph = host.Workspace.GraphDocument!;
+        PumpedDispatcher.PumpUntilDrained(graph.WhenAllWorkDrained());
+        host.Settle();
+        GraphSurfaceView view = ShownShell.Descendants(host.Shell).OfType<GraphSurfaceView>().Single(candidate => candidate.IsVisible);
+        Assert.True(host.Land(ShellRegionKind.RightPaneContent), "premise: the right pane took no keys");
+        Assert.True(host.Shell.RightPaneBorder.IsKeyboardFocusWithin, "premise: the keys are not in the right pane");
+        using var gate = new ManualResetEventSlim(false);
+        using var reached = new ManualResetEventSlim(false);
+        try
+        {
+            if (flight == "a load with nothing held")
+            {
+                // A failed pair leaves ERROR with nothing held, and the next
+                // request loads from scratch: LOADING, whose provisional seat
+                // is the state host.
+                graph.FetchGateForTests = () => throw new InvalidOperationException("The fixture's pair fails.");
+                Assert.True(graph.Request(new GraphRequest.Preset(GraphPreset.Orphans)));
+                PumpedDispatcher.PumpUntilDrained(graph.WhenAllWorkDrained());
+                PumpedDispatcher.Drain();
+                Assert.Equal(GraphLoadState.Error, graph.Publication.State);
+                graph.FetchGateForTests = null;
+            }
+
+            if (flight == "a refresh of its rows")
+            {
+                graph.FetchGateForTests = () =>
+                {
+                    reached.Set();
+                    _ = gate.Wait(TimeSpan.FromSeconds(30));
+                };
+                Assert.True(graph.Request(new GraphRequest.Sort(new GraphTableSort(GraphTableColumn.Note, true))));
+                Assert.True(reached.Wait(TimeSpan.FromSeconds(30)), "premise: the refresh never started");
+            }
+            else
+            {
+                graph.BeforeComputeForTests = () => gate.Wait(TimeSpan.FromSeconds(30));
+                Assert.True(graph.Request(new GraphRequest.Needle()));
+            }
+
+            Assert.True(graph.IsRequestInFlight, $"premise: nothing is in flight ({flight})");
+            Assert.Equal(flight != "a load with nothing held", graph.Publication.HoldsSnapshot);
+            Assert.True(host.Shell.RightPaneBorder.IsKeyboardFocusWithin, "premise: the request moved the keys");
+            List<IInputElement> changes = host.RecordFocusChanges();
+            host.Announced.Clear();
+
+            host.Workspace.ToggleRightPaneCommand.Execute(null);
+            PumpedDispatcher.Drain();
+
+            Assert.False(host.Shell.RightPaneBorder.IsVisible);
+            IInputElement provisional = Assert.Single(changes);
+            Assert.Same(provisional, Keyboard.FocusedElement);
+            if (flight == "a load with nothing held")
+            {
+                Assert.Same(view.StateHostForTests, provisional);
+            }
+            else
+            {
+                Assert.True(view.TableForTests.IsKeyboardFocusWithin, $"the provisional seat is not the grid it still shows, but {provisional} ({flight})");
+            }
+
+            Assert.NotNull(graph.FocusRequest);
+            Assert.True(((IShellRegionHost)host.Shell).HoldsLanding, $"the guard withdrew its own landing ({flight})");
+            Assert.Null(((IShellRegionHost)host.Shell).HeldRingRegion);
+        }
+        finally
+        {
+            gate.Set();
+        }
+
+        PumpedDispatcher.PumpUntilDrained(graph.WhenAllWorkDrained());
+        PumpedDispatcher.Drain();
+        graph.BeforeComputeForTests = null;
+        graph.FetchGateForTests = null;
+
+        Assert.False(graph.IsRequestInFlight);
+        Assert.Null(graph.FocusRequest);
+        Assert.False(((IShellRegionHost)host.Shell).HoldsLanding);
+        Assert.True(view.TableForTests.IsKeyboardFocusWithin, $"the terminal publication seated nothing; the keys are on {Keyboard.FocusedElement} ({flight})");
+        Assert.DoesNotContain(host.Announced, line => line is A11yEvent.EditorPaneFocused);
+    });
+
+    /// <summary>
+    /// #1318's merge check (R-1's launch landing; R-5 (h)): an open that
+    /// completes in ONE dispatcher turn — the welcome view collapsing under
+    /// the keys, the workspace attached and the real <c>WorkspaceReady</c>
+    /// raised, in the lifecycle's own order — moves the keys ONCE. The launch
+    /// landing runs at Loaded, ahead of WPF's re-evaluation of the collapsed
+    /// welcome view at Input, so the guard's gone landing never lands them
+    /// first: with nothing open the launch landing is the Files region, the
+    /// empty pane's line spoken once, and no editor or tab landing comes
+    /// between.
+    /// </summary>
+    [Fact]
+    public void AnOpenInOneTurnMovesTheKeysOnceToTheLaunchLanding() => RunSta(() =>
+    {
+        using var host = new ShownShell(("a.md", "Just a line of text.\n"));
+        host.ShowWelcomeWithoutAWorkspace();
+        Assert.True(host.Shell.OpenVaultButton.Focus(), "premise: the welcome view took no keys");
+        PumpedDispatcher.Drain();
+        Assert.Same(host.Shell.OpenVaultButton, Keyboard.FocusedElement);
+        List<IInputElement> changes = host.RecordFocusChanges();
+        host.Announced.Clear();
+
+        host.OpenVaultInOneTurn();
+        PumpedDispatcher.Drain();
+
+        Assert.False(host.Shell.WelcomeRoot.IsVisible);
+        Assert.True(
+            changes.Count == 1,
+            $"the open moved the keys {changes.Count} time(s): {string.Join(" -> ", changes)}");
+        Assert.Same(changes[0], Keyboard.FocusedElement);
+        Assert.True(host.Shell.FilesPaneBorder.IsKeyboardFocusWithin, $"the launch landed on {Keyboard.FocusedElement}");
+        Assert.Equal([new A11yEvent.EditorPaneFocused(1, 1, "Empty pane", string.Empty)], host.Announced);
     });
 
     private static void RunSta(Action body)

@@ -41,7 +41,7 @@ internal sealed class ShownShell : IDisposable
         }
 
         Workspace = new WorkspaceViewModel(
-            _session, _fixture.Root, () => [], _ => { }, startInteractionBackgroundWork: true);
+            _session, _fixture.Root, () => [], Announced.Add, startInteractionBackgroundWork: true);
         // Registers the pack: scheme and its application authority without
         // constructing an Application (TextBoxAccessibilityTests explains).
         System.Runtime.CompilerServices.RuntimeHelpers.RunClassConstructor(typeof(Application).TypeHandle);
@@ -83,6 +83,9 @@ internal sealed class ShownShell : IDisposable
 
     public WorkspaceViewModel Workspace { get; }
 
+    /// <summary>What the workspace has announced, in order.</summary>
+    public List<A11yEvent> Announced { get; } = [];
+
     public void Settle()
     {
         Shell.UpdateLayout();
@@ -95,6 +98,34 @@ internal sealed class ShownShell : IDisposable
     {
         _open.SetValue(_lifecycle, open);
         Settle();
+    }
+
+    /// <summary>The welcome view shown with no workspace attached, as the
+    /// lifecycle leaves it before an open.</summary>
+    public void ShowWelcomeWithoutAWorkspace()
+    {
+        _open.SetValue(_lifecycle, false);
+        _slot.SetValue(_lifecycle, null);
+        Settle();
+    }
+
+    /// <summary>
+    /// An open that completes in ONE dispatcher turn, in the lifecycle's own
+    /// order (<c>VaultLifecycleViewModel.OpenVaultAsync</c> when its load has
+    /// finished before its await): the vault marked open — the welcome view
+    /// collapsing under the keys — then the workspace attached and the REAL
+    /// <c>WorkspaceReady</c> raised, which queues the window's launch landing.
+    /// Nothing is pumped between them.
+    /// </summary>
+    public void OpenVaultInOneTurn()
+    {
+        _open.SetValue(_lifecycle, true);
+        _slot.SetValue(_lifecycle, Workspace);
+        var ready = (EventHandler?)typeof(VaultLifecycleViewModel)
+            .GetField(nameof(VaultLifecycleViewModel.WorkspaceReady), System.Reflection.BindingFlags.NonPublic | System.Reflection.BindingFlags.Instance)?
+            .GetValue(_lifecycle);
+        Assert.NotNull(ready);
+        ready(_lifecycle, EventArgs.Empty);
     }
 
     /// <summary>A leaf body, by its name or its automation id.</summary>

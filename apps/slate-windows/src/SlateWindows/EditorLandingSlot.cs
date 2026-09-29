@@ -31,9 +31,10 @@ namespace SlateWindows;
 /// landing's target (the reader stepping in, a graph's provisional seat — a
 /// landing that found focus already inside has had its entry); the target's
 /// own TERMINAL seat, the move that completes the landing, which the surface
-/// declares (<see cref="SeatTerminally"/>); or the window's activation restore
-/// (WPF putting focus back when the window comes forward: a landing raised while
-/// the window was away was not declined by it).
+/// declares (<see cref="SeatTerminally"/>); the focus guard's park of keys that
+/// had no valid place while the landing waits (<see cref="Park"/>); or the
+/// window's activation restore (WPF putting focus back when the window comes
+/// forward: a landing raised while the window was away was not declined by it).
 /// The target is resolved when a transition is read, so a landing whose surface is
 /// realized only later still recognises its own entry. The moves a landing makes
 /// before it is held (the reading park on the tab item, a synchronous fallback)
@@ -63,6 +64,11 @@ internal sealed class EditorLandingSlot : IDisposable
     /// now, on this thread.</summary>
     [ThreadStatic]
     private static DependencyObject? t_seating;
+
+    /// <summary>The focus guard's parks running right now, on this
+    /// thread.</summary>
+    [ThreadStatic]
+    private static int t_parking;
 
     private readonly Dispatcher _dispatcher;
     private HeldEditorLanding? _held;
@@ -186,6 +192,27 @@ internal sealed class EditorLandingSlot : IDisposable
         }
     }
 
+    /// <summary>Run <paramref name="park"/> as the focus guard's PARK (W7-7 PR
+    /// 4b, R-5 (h)): the keys it re-lands had no valid place — the element
+    /// holding them went away, or a restore found its token dead with the keys
+    /// nowhere — while an editor landing the window holds waits for its
+    /// content, and the guard puts them where a refused route's would wait.
+    /// That move is a recovery, never the reader leaving: it withdraws
+    /// nothing. Only the moves <paramref name="park"/> makes are covered.</summary>
+    internal static T Park<T>(Func<T> park)
+    {
+        ArgumentNullException.ThrowIfNull(park);
+        t_parking++;
+        try
+        {
+            return park();
+        }
+        finally
+        {
+            t_parking--;
+        }
+    }
+
     internal void ScopeChanged(HeldEditorLanding landing)
     {
         if (ReferenceEquals(Held, landing) && !landing.StillWhereAsked())
@@ -214,8 +241,9 @@ internal sealed class EditorLandingSlot : IDisposable
         // Nobody's leaving: WPF's own recovery off an element that can no
         // longer hold the keys — no longer shown, disabled or made unfocusable —
         // and the focus guard's landing that takes its place (W7-7 PR 4b, R-5
-        // (h)); and WPF's restore when the window comes forward.
-        if (from is null ? _restoringActivation : !CanHoldKeys(from))
+        // (h)); the guard's park (Park); and WPF's restore when the window
+        // comes forward.
+        if (t_parking > 0 || (from is null ? _restoringActivation : !CanHoldKeys(from)))
         {
             return;
         }

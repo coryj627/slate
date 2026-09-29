@@ -3135,6 +3135,40 @@ public sealed class ReadingFocusTests
         }
     });
 
+    /// <summary>#1318's merge check, the guard's PARK: a dismissal's restore
+    /// whose token died in the editor region while its canvas loads — the keys
+    /// nowhere, as a dismissal leaves them — lands the canvas through the one
+    /// entry, which holds it and seats nothing yet, so the keys have no valid
+    /// place and the guard parks them on the tab's own item. The park is a
+    /// recovery (<c>EditorLandingSlot.Park</c>), not the reader leaving: the
+    /// landing stays held, and the load seats it without a line.</summary>
+    [Fact]
+    public void ARestoreIntoALoadingCanvasParksTheKeysAndKeepsItsLanding() => RunSta(() =>
+    {
+        using var host = new Host();
+        host.Initialize("canvas");
+        host.HoldEditorLanding();
+        var canvasView = Assert.IsType<CanvasSurfaceView>(host.EditorStop());
+        TextBox token = canvasView.FilterFieldForTests;
+        Assert.True(token.Focus(), "premise: the loading canvas's filter field took no keys");
+        PumpedDispatcher.Drain();
+        Keyboard.ClearFocus();
+        token.SetCurrentValue(UIElement.VisibilityProperty, Visibility.Collapsed);
+        PumpedDispatcher.Drain();
+        Assert.Null(Keyboard.FocusedElement);
+        Assert.False(((IShellRegionHost)host.Shell).HoldsLanding);
+        host.Announced.Clear();
+
+        Assert.True(host.Shell.LandToken(token), "the restore landed the keys nowhere");
+
+        AssertFocused(host.ActiveTabItem(), "the park of a restore into a loading canvas");
+        Assert.True(((IShellRegionHost)host.Shell).HoldsLanding, "the park withdrew the canvas landing");
+        Assert.NotNull(host.EditorLandingRequest());
+        host.LetEditorLandingArrive();
+        Assert.True(host.EditorStop().IsKeyboardFocusWithin, $"the loaded canvas never seated; the keys are on {Describe(Keyboard.FocusedElement)}");
+        Assert.DoesNotContain(host.Announced, line => line is A11yEvent.EditorPaneFocused);
+    });
+
     /// <summary>OD-12 (codex round 6's note): a route's refused landing whose
     /// group has no realized tab control still tries the Files tree — the
     /// chain's last resort — and the answer decides the line: focus on the
