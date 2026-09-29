@@ -3079,6 +3079,62 @@ public sealed class ReadingFocusTests
         Assert.Equal([host.EditorLine()], host.Announced.OfType<A11yEvent.EditorPaneFocused>());
     });
 
+    /// <summary>W7-7 PR 4b on OD-12: with nothing held, the guard's own editor
+    /// landing is a route's that speaks nothing — never an F6 press's. Its hold
+    /// names no ring position (a press's position would make the next F6 skip
+    /// the editor), the keys wait on a live stop while the canvas loads, and
+    /// the load seats the landing without a line.</summary>
+    [Fact]
+    public void TheGuardsOwnEditorLandingIsASilentRouteNeverAPress() => RunSta(() =>
+    {
+        using var host = new Host();
+        host.Initialize("canvas");
+        host.ShowFilesPane();
+        host.HoldEditorLanding();
+        TabItem tabItem = host.FocusTabBar();
+        Assert.Null(host.Shell.EditorLandings.Held);
+        host.Announced.Clear();
+
+        tabItem.IsEnabled = false;
+        PumpedDispatcher.Drain();
+
+        Assert.True(host.Shell.FilesTree.IsKeyboardFocusWithin, $"the guard left the keys on {Describe(Keyboard.FocusedElement)}");
+        Assert.True(((IShellRegionHost)host.Shell).HoldsLanding, "the guard's landing held nothing for the loading canvas");
+        Assert.Null(((IShellRegionHost)host.Shell).HeldRingRegion);
+        Assert.False(host.Workspace.HoldsShellRegionLanding);
+        host.LetEditorLandingArrive();
+        Assert.True(host.EditorStop().IsKeyboardFocusWithin, "the guard's held landing never seated");
+        Assert.DoesNotContain(host.Announced, line => line is A11yEvent.EditorPaneFocused);
+    });
+
+    /// <summary>W7-7 PR 4b on OD-12: under a modal loop over the shell the
+    /// guard's editor landing creates nothing and moves nothing beneath it —
+    /// the one entry's rule — so WPF's own recovery is all that runs.</summary>
+    [Fact]
+    public void TheGuardsEditorLandingMovesNothingBeneathAModalLoop() => RunSta(() =>
+    {
+        using var host = new Host();
+        host.Initialize("canvas");
+        host.ShowFilesPane();
+        host.HoldEditorLanding();
+        TabItem tabItem = host.FocusTabBar();
+        System.Windows.Interop.ComponentDispatcher.PushModal();
+        try
+        {
+            Assert.True(host.Shell.ModalLoops.IsModalLoopActive, "premise: the shell's monitor saw the loop");
+
+            tabItem.IsEnabled = false;
+            PumpedDispatcher.Drain();
+
+            Assert.False(host.Shell.FilesTree.IsKeyboardFocusWithin, "the guard moved the keys beneath the modal loop");
+            Assert.False(((IShellRegionHost)host.Shell).HoldsLanding, "the guard created a landing under the modal loop");
+        }
+        finally
+        {
+            System.Windows.Interop.ComponentDispatcher.PopModal();
+        }
+    });
+
     /// <summary>OD-12 (codex round 6's note): a route's refused landing whose
     /// group has no realized tab control still tries the Files tree — the
     /// chain's last resort — and the answer decides the line: focus on the
