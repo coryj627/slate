@@ -323,7 +323,12 @@
 
     <DataTemplate x:Key="WorkspaceTabContentTemplate"
                   DataType="{x:Type local:WorkspaceTabViewModel}">
-        <Grid Background="{DynamicResource Slate.WindowBackgroundBrush}">
+        <!-- W7-7 PR 4 (#1247, R-5; the completeness sweep's G17): the tab's
+             content contains its arrows. The tab strip is a region of its
+             own directly above, and Up from the Properties header selected a
+             tab; in a split, Left and Right crossed into the other pane. -->
+        <Grid Background="{DynamicResource Slate.WindowBackgroundBrush}"
+              KeyboardNavigation.DirectionalNavigation="Contained">
             <Grid.RowDefinitions>
                 <RowDefinition Height="Auto" />
                 <RowDefinition Height="*" />

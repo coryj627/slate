@@ -258,7 +258,9 @@ public sealed partial class ShellAccessibilityTests
 
             // W7-5 (#1239): a vault that restores no tabs lands its launch
             // focus on the Files tree, never on the empty TabControl (which
-            // is not focusable until it has items).
+            // is not focusable until it has items) — on a row of it, never
+            // the bare tree: with no file selected, the first row, unselected
+            // (W7-7 PR 4, R-5 as the owner amended it).
             AutomationElement tabs = WaitForElement(
                 window,
                 "WorkspaceTabs",
@@ -266,7 +268,9 @@ public sealed partial class ShellAccessibilityTests
             Assert.False(
                 tabs.Properties.IsKeyboardFocusable.Value,
                 "An empty TabControl must not be keyboard focusable.");
-            AssertEventuallyFocused(
+            AssertFilesTreeRegionFocused(
+                window,
+                automation,
                 WaitForElement(window, "FilesTree", TimeSpan.FromSeconds(10)),
                 "Opening a vault with no restored tabs did not focus the Files tree.");
 
@@ -5362,7 +5366,9 @@ public sealed partial class ShellAccessibilityTests
             // --- Esc on a REOPENED overlay restores the pre-open focus -
             // Park focus somewhere deliberate first, and remember the
             // exact element by runtime id — "restores prior focus" means
-            // THAT element, not merely "not the window root" (SD-2).
+            // THAT element, not merely "not the window root" (SD-2). The
+            // Files tree hands the keys to its landing row (W7-7 PR 4, R-5),
+            // so THAT row is the element remembered below.
             AutomationElement filesTree = WaitForElement(
                 window, "FilesTree", TimeSpan.FromSeconds(10));
             filesTree.Focus();
@@ -5489,12 +5495,31 @@ public sealed partial class ShellAccessibilityTests
             // supersession's focus lineage — palette adopts search's
             // pre-open token — is asserted by identity, not vibes
             // (codex round 11: the adoption was previously unprovable
-            // from this journey).
+            // from this journey). The Files tree hands the keys to its
+            // landing row (W7-7 PR 4, R-5), so the element parked on is
+            // THAT row.
             AutomationElement parkedBeforeSearch = WaitForElement(
                 window, "FilesTree", TimeSpan.FromSeconds(10));
             parkedBeforeSearch.Focus();
             Wait.UntilInputIsProcessed(TimeSpan.FromMilliseconds(250));
-            int[] parkedRuntimeId = parkedBeforeSearch.Properties.RuntimeId.Value;
+            AutomationElement? parkedOn = null;
+            Assert.True(
+                SpinWait.SpinUntil(
+                    () =>
+                    {
+                        try
+                        {
+                            parkedOn = automation.FocusedElement();
+                            return parkedOn is not null && IsDescendantOf(parkedOn, parkedBeforeSearch);
+                        }
+                        catch (Exception exception) when (IsTransientUiaFault(exception))
+                        {
+                            return false;
+                        }
+                    },
+                    TimeSpan.FromSeconds(10)),
+                "the Files tree did not take the keys before search opened");
+            int[] parkedRuntimeId = parkedOn!.Properties.RuntimeId.Value;
 
             window.SetForeground();
             PressChord(
@@ -9951,8 +9976,10 @@ public sealed partial class ShellAccessibilityTests
                     TimeSpan.FromSeconds(10)),
                 $"the hide did not return the keys to the grid's row; focus is {DescribeFocusedElement(automation)}");
 
-            // Rule M: Shift+Tab to the switcher, Right to Diagram — the
-            // renderer takes the keys.
+            // Rule M: Shift+Tab to the switcher, Right to Diagram. An ARROW's
+            // switch leaves the keys on the switcher (W7-7 PR 4, the owner's
+            // OD-11(d), contract 40 R-5 (c)); Tab takes them on to the
+            // renderer once the build lands.
             ReassertForegroundForAChord(window);
             PressChord(VirtualKeyShort.SHIFT, VirtualKeyShort.TAB);
             Assert.True(
@@ -9963,10 +9990,20 @@ public sealed partial class ShellAccessibilityTests
             Assert.True(
                 SpinWait.SpinUntil(() => diagramChoice.Patterns.SelectionItem.Pattern.IsSelected.ValueOrDefault, TimeSpan.FromSeconds(10)),
                 "Right on the switcher did not choose the Diagram item");
+            Assert.True(
+                SpinWait.SpinUntil(() => FocusIsInside(automation, "GraphMode.diagram"), TimeSpan.FromSeconds(10)),
+                $"the arrow's switch moved the keys off the switcher; focus is {DescribeFocusedElement(automation)}");
             AutomationElement diagram = WaitForElement(window, "GraphDiagram", TimeSpan.FromSeconds(20));
             Assert.True(
+                SpinWait.SpinUntil(
+                    () => diagram.FindAllChildren(automation.ConditionFactory.ByControlType(ControlType.Button)).Length > 0,
+                    TimeSpan.FromSeconds(20)),
+                "the diagram never exposed its node peers");
+            ReassertForegroundForAChord(window);
+            PressKey(VirtualKeyShort.TAB);
+            Assert.True(
                 SpinWait.SpinUntil(() => FocusIsInside(automation, "GraphDiagram"), TimeSpan.FromSeconds(10)),
-                $"the switch did not land the keys on the renderer; focus is {DescribeFocusedElement(automation)}");
+                $"Tab from the switcher did not reach the renderer; focus is {DescribeFocusedElement(automation)}");
 
             // Term I2's show with the leaf still the inspector; Rule K: the
             // Repel slider by Right — one SmallChange — its RangeValue moved,
@@ -10195,9 +10232,11 @@ public sealed partial class ShellAccessibilityTests
                 $"the open did not land focus on a realised row cell; focus is {DescribeFocusedElement(automation)}");
 
             // Rule M, Term M1: Shift+Tab to the switcher (the checked Table
-            // choice), Right to the Diagram choice — the USER's switch, which
-            // raises rule F's landing on the renderer once the build lands
-            // (Term M4, DD-Q5's amended F4).
+            // choice), Right to the Diagram choice — the USER's switch. An
+            // ARROW's switch leaves the keys on the switcher (W7-7 PR 4, the
+            // owner's OD-11(d), contract 40 R-5 (c): Term M4's hand-off to the
+            // renderer stays a click's, Space's and a command's), so the
+            // reader Tabs on to the renderer once the build lands.
             ReassertForegroundForAChord(window);
             PressChord(VirtualKeyShort.SHIFT, VirtualKeyShort.TAB);
             Assert.True(
@@ -10208,17 +10247,23 @@ public sealed partial class ShellAccessibilityTests
             Assert.True(
                 SpinWait.SpinUntil(() => diagramChoice.Patterns.SelectionItem.Pattern.IsSelected.ValueOrDefault, TimeSpan.FromSeconds(10)),
                 "Right on the switcher did not choose the Diagram item");
+            Assert.True(
+                SpinWait.SpinUntil(() => FocusIsInside(automation, "GraphMode.diagram"), TimeSpan.FromSeconds(10)),
+                $"the arrow's switch moved the keys off the switcher; focus is {DescribeFocusedElement(automation)}");
 
-            // D-8: the container, its complete peers (tier A), the landing.
+            // D-8: the container, its complete peers (tier A), the stop after
+            // the switcher.
             AutomationElement diagram = WaitForElement(window, "GraphDiagram", TimeSpan.FromSeconds(20));
             AutomationElement[] Peers() =>
                 diagram.FindAllChildren(automation.ConditionFactory.ByControlType(ControlType.Button));
             Assert.True(
                 SpinWait.SpinUntil(() => Peers().Length == visibleCount, TimeSpan.FromSeconds(20)),
                 $"the diagram never exposed {visibleCount} node peers; it exposes {Peers().Length}");
+            ReassertForegroundForAChord(window);
+            PressKey(VirtualKeyShort.TAB);
             Assert.True(
                 SpinWait.SpinUntil(() => FocusIsInside(automation, "GraphDiagram"), TimeSpan.FromSeconds(10)),
-                $"the switch did not land the keys on the renderer; focus is {DescribeFocusedElement(automation)}");
+                $"Tab from the switcher did not reach the renderer; focus is {DescribeFocusedElement(automation)}");
             // GraphPhrase.DiagramName, the mac's (T61).
             Assert.Equal("Graph, visual diagram", diagram.Properties.Name.Value);
             AutomationElement firstPeer = Peers()[0];

@@ -468,7 +468,14 @@ internal sealed class BaseSurfaceView : UserControl
         }
         else if (_list.Visibility == Visibility.Visible)
         {
-            _ = _list.Focus();
+            // A row, never the bare list, from which an arrow walked
+            // into the menu bar (W7-7 PR 4, #1247, R-5). A row that cannot
+            // be landed leaves the keys on the surface's stable stop, the
+            // quick filter the Escape came from.
+            if (!SelectorFocus.FocusFirstOrSelectedItem(_list))
+            {
+                _ = _quickFilter.Focus();
+            }
         }
     }
 
@@ -959,6 +966,17 @@ internal sealed class BaseSurfaceView : UserControl
         AutomationProperties.SetName(_list, result.AudioSummary);
         _list.ItemContainerStyle ??= BuildListItemStyle();
         ReconcileListSelection(items);
+        // A republish replaces every row container, and WPF hands the keys
+        // of a removed row to the bare list — measured: Escape from the
+        // quick filter landed on its row, and the re-query that followed
+        // left the reader on "2 notes, list", from which an arrow walked
+        // into the menu bar. The row, never the bare list (W7-7 PR 4,
+        // #1247, R-5; codex round 1) — else the surface's stable stop, the
+        // quick filter (codex round 3).
+        if (_list.IsKeyboardFocused && !SelectorFocus.FocusFirstOrSelectedItem(_list))
+        {
+            _ = _quickFilter.Focus();
+        }
     }
 
     /// <summary>C9 selection preservation by IDENTITY (FilePath,
@@ -1000,18 +1018,27 @@ internal sealed class BaseSurfaceView : UserControl
         }
     }
 
+    /// <summary>A double-click opens the row it HIT — never the keyboard's
+    /// row: its first press on the list's empty area lands the keys on a row
+    /// (the click rule), and opening "the focused row" opened a note never
+    /// clicked (codex PR 4's final check).</summary>
     private void OnListDoubleClick(object sender, MouseButtonEventArgs e) =>
-        _ = ActivateListRow();
+        _ = ActivateListRow(SelectorFocus.ClickedItem(_list, e.OriginalSource));
 
     private void OnListKeyDown(object sender, KeyEventArgs e)
     {
-        if (e.Key == Key.Enter && ActivateListRow())
+        if (e.Key == Key.Enter && ActivateListRow(SelectorFocus.FocusedOrSelectedItem(_list)))
         {
             e.Handled = true;
         }
     }
 
-    private bool ActivateListRow()
+    /// <summary>Opens <paramref name="target"/> — Enter's: the row that
+    /// holds the keys, else the selected row; a double-click's: the row it
+    /// hit — under the C13 admission. W7-7 PR 4 (#1247; codex round 7
+    /// finding 4): the quick filter's Escape lands on a row without
+    /// selecting it, and Enter there opened nothing.</summary>
+    private bool ActivateListRow(object? target)
     {
         // The C13 admission the grid's row actions respect (codex
         // round 6: Enter on a Loading surface's stale list row still
@@ -1019,7 +1046,7 @@ internal sealed class BaseSurfaceView : UserControl
         if (IsReadOnlySurface
             || Model is not
             { State: BaseLoadState.Ready or BaseLoadState.Degraded } model
-            || _list.SelectedItem is not BaseListItemViewModel { Row: { } row })
+            || target is not BaseListItemViewModel { Row: { } row })
         {
             return false;
         }

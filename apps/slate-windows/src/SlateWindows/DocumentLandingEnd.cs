@@ -30,12 +30,15 @@ internal enum LandingSeat
 internal static class LandingSeats
 {
     /// <summary>Not yet while <paramref name="target"/> is not shown (the edge
-    /// that shows it re-asks); seated when it takes focus; refused when it is
-    /// shown and will not.</summary>
+    /// that shows it re-asks); seated when the keys end up in it; refused when
+    /// it is shown and will not take them. The seat goes through
+    /// <see cref="SelectorFocus.LandOnStop"/>, the shell's one landing for an
+    /// element-typed target (W7-7 PR 4, R-5: never a bare populated
+    /// container; <c>SelectorLandingCensus</c>).</summary>
     internal static LandingSeat On(UIElement target) =>
         !target.IsVisible
             ? LandingSeat.NotYet
-            : target.Focus() && target.IsKeyboardFocusWithin
+            : SelectorFocus.LandOnStop(target) && target.IsKeyboardFocusWithin
                 ? LandingSeat.Seated
                 : LandingSeat.Refused;
 }

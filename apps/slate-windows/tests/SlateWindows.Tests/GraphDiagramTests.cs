@@ -4,6 +4,7 @@
 using System.Windows;
 using System.Windows.Automation;
 using System.Windows.Controls;
+using System.Windows.Input;
 using System.Windows.Threading;
 using SlateWindows.Graph;
 using uniffi.slate_uniffi;
@@ -293,7 +294,11 @@ public sealed partial class GraphDiagramTests
             // request is raised (Term F1); under a build it waits (Term F3's
             // rule for a presenter's request — no provisional seat).
             RadioButton diagram = Choice(surface, GraphSurfaceMode.Diagram);
-            Assert.True(diagram.Focus());
+            // The switcher's stop is its CHECKED radio (W7-7 PR 4, #1247): a
+            // click's press on Diagram lands the keys on Table, and its
+            // release — the check — brings them to Diagram.
+            _ = diagram.Focus();
+            Assert.Same(Choice(surface, GraphSurfaceMode.Table), Keyboard.FocusedElement);
             Assert.True(surface.IsKeyboardFocusWithin);
             diagram.IsChecked = true;
             window.UpdateLayout();
@@ -321,7 +326,10 @@ public sealed partial class GraphDiagramTests
             GraphSurfaceView surface = SurfaceFor(host, document);
             using HostedWindow window = HostInWindow(surface);
             RadioButton diagram = Choice(surface, GraphSurfaceMode.Diagram);
-            Assert.True(diagram.Focus());
+            // A click: the press lands the keys on the checked radio (the
+            // switcher's stop, W7-7 PR 4), the release checks Diagram.
+            _ = diagram.Focus();
+            Assert.True(surface.IsKeyboardFocusWithin);
             diagram.IsChecked = true;
             window.UpdateLayout();
             Assert.NotNull(document.FocusRequest);
@@ -334,6 +342,49 @@ public sealed partial class GraphDiagramTests
                 $"the landing did not arrive on the renderer; focus is {System.Windows.Input.Keyboard.FocusedElement}");
             Assert.False(surface.StateHostForTests.IsKeyboardFocused);
             Assert.Equal(Visibility.Collapsed, surface.StateHostForTests.Visibility);
+        });
+    }
+
+    /// <summary>
+    /// W7-7 PR 4 (#1247; the owner's OD-11(d), contract 40 R-5 (c)): an
+    /// ARROW's switch to Diagram leaves the keys on the switcher — Term M4's
+    /// hand-off is a click's, Space's and a command's — and the reader's
+    /// next Tab reaches the renderer once the build has landed: the route the
+    /// graph journeys take after their arrow.
+    /// </summary>
+    [Fact]
+    public void AfterAnArrowsSwitchTabReachesTheRenderer()
+    {
+        RunSta(() =>
+        {
+            using var host = new Host(3, "diagram-arrow-then-tab");
+            GraphDocumentViewModel document = host.Open();
+            GraphSurfaceView surface = SurfaceFor(host, document);
+            using HostedWindow window = HostInWindow(surface);
+            RadioButton table = Choice(surface, GraphSurfaceMode.Table);
+            RadioButton diagram = Choice(surface, GraphSurfaceMode.Diagram);
+            Assert.True(table.Focus());
+
+            InputManager.Current.ProcessInput(new KeyEventArgs(
+                Keyboard.PrimaryDevice, PresentationSource.FromVisual(window.Window)!, Environment.TickCount, Key.Right)
+            {
+                RoutedEvent = Keyboard.PreviewKeyDownEvent,
+            });
+            PumpedDispatcher.Drain();
+            _ = SettledModel(host, document);
+            window.UpdateLayout();
+            PumpedDispatcher.Drain();
+
+            Assert.Equal(GraphSurfaceMode.Diagram, document.ViewState.Mode);
+            Assert.True(document.HasLiveDiagram);
+            Assert.Same(diagram, Keyboard.FocusedElement);
+
+            Assert.True(diagram.MoveFocus(new TraversalRequest(FocusNavigationDirection.Next)));
+            PumpedDispatcher.Drain();
+
+            Assert.True(
+                surface.DiagramForTests.IsKeyboardFocused,
+                $"Tab from the switcher did not reach the renderer; focus is {Keyboard.FocusedElement}");
         });
     }
 

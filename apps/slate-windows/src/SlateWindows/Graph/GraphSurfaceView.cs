@@ -136,6 +136,12 @@ internal sealed class GraphSurfaceView : UserControl, IGraphSurfacePresenter
             Margin = new Thickness(12, 4, 12, 4),
         };
         KeyboardNavigation.SetTabNavigation(_switcher, KeyboardNavigationMode.Once);
+        // W7-7 PR 4 (#1247, R-5): a Windows radio group — arrows stay in
+        // it and wrap, and the one an arrow reaches is checked, so Right
+        // on Table IS the user's switch to Diagram (Term M4 then hands the
+        // keys to the renderer); WPF's radios moved focus alone.
+        KeyboardNavigation.SetDirectionalNavigation(_switcher, KeyboardNavigationMode.Cycle);
+        RadioGroupArrows.SetIsEnabled(_switcher, true);
         KeyboardNavigation.SetTabIndex(_switcher, 4);
         AutomationProperties.SetName(_switcher, "Graph surface");
         AutomationProperties.SetAutomationId(_switcher, "GraphSurfaceSwitcher");
@@ -329,6 +335,8 @@ internal sealed class GraphSurfaceView : UserControl, IGraphSurfacePresenter
     internal GraphFocusDeparture? AwayBecauseForTests => _awayBecause;
 
     internal IReadOnlyList<RadioButton> ModeChoicesForTests => _modeChoices;
+
+    internal Panel SwitcherForTests => _switcher;
 
     internal System.Windows.Controls.Primitives.ToggleButton InspectorToggleForTests => _inspectorToggle;
 
@@ -631,15 +639,20 @@ internal sealed class GraphSurfaceView : UserControl, IGraphSurfacePresenter
     /// document's ONE writer; Term M4: a USER switch with the keys inside the
     /// surface raises the landing — a programmatic re-check under the syncing
     /// guard (the persisted restore's path, a document-driven change) raises
-    /// nothing.</summary>
+    /// nothing. W7-7 PR 4 (#1247; the owner's decision): an ARROW's switch is
+    /// silent and leaves the keys on the switcher — the radio is checked
+    /// before it takes focus, its focus speech names the mode, and the next
+    /// arrow moves on through the group; M4 stays a click's, Space's and a
+    /// command's.</summary>
     private void OnModeChosen(GraphSurfaceMode mode)
     {
         if (_synchronizingSwitcher || Model is not { } model)
         {
             return;
         }
+        bool byArrow = RadioGroupArrows.IsCommittingByArrow;
         bool hadTheKeys = IsKeyboardFocusWithin;
-        if (model.SetMode(mode) && hadTheKeys)
+        if (model.SetMode(mode, announce: !byArrow) && hadTheKeys && !byArrow)
         {
             RequestProjectionFocus();
         }
@@ -795,7 +808,9 @@ internal sealed class GraphSurfaceView : UserControl, IGraphSurfacePresenter
         {
             return;
         }
-        if (restore is UIElement { IsVisible: true, IsEnabled: true } element && element.Focus())
+        // R-5 (#1247; codex round 4): a list, tree or grid token restores
+        // onto its row or cell, never the bare container.
+        if (restore is UIElement { IsVisible: true, IsEnabled: true } element && SelectorFocus.LandOnStop(element))
         {
             return;
         }
@@ -940,8 +955,12 @@ internal sealed class GraphSurfaceView : UserControl, IGraphSurfacePresenter
             }
             if (publication.State is GraphLoadState.Ready && publication.HoldsSnapshot)
             {
+                // Term F4 as the terminal seat reads it (OD-12): the keyed row,
+                // and the first row only when the key names no row — a keyed
+                // row not seatable yet leaves the first row untouched, and the
+                // grid's realization edge re-asks (codex on #1300's merge).
                 _table.UpdateLayout();
-                _ = _table.FocusProjection();
+                _ = _table.SeatProjection();
             }
             else
             {

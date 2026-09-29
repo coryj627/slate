@@ -64,6 +64,21 @@ public sealed class ShellSealAdmissionCensus
             "IME composition tracking only (IsComposing); a taken key never reaches the IME",
     };
 
+    /// <summary>Class handlers for a BUBBLING input event, each reviewed. One
+    /// runs ahead of its element's own handlers, never ahead of the window's
+    /// preview route, which the admission holds. Under real input a handled
+    /// preview has no bubbling twin at all (WPF's MouseDevice raises none);
+    /// the rule that such a handler is registered without
+    /// <c>handledEventsToo</c> (the census checks) keeps it out of every
+    /// other raise of the twin as well — a synthetic one carries the
+    /// preview's handled state.</summary>
+    private static readonly Dictionary<(string File, string RoutedEvent), string> BubblingClassHandlersAllowed = new()
+    {
+        [("SelectorFocus.cs", "Mouse.MouseDownEvent")] =
+            "W7-7 PR 4's click rule (R-5, OD-11c): a press on a populated list's empty area lands a row; "
+            + "held by CommandPaletteTests.AClickOnAListsEmptyAreaMovesNoKeysUnderTheSeal",
+    };
+
     /// <summary>Class handlers for routed events that carry no key, text or
     /// pointer, each with why it cannot act on input the admission took
     /// (file-scoped: the same registration anywhere else is an offender).</summary>
@@ -206,6 +221,7 @@ public sealed class ShellSealAdmissionCensus
     [InlineData("double-click-class-handler", "class Other { static Other() { EventManager.RegisterClassHandler(typeof(ListBox), Control.MouseDoubleClickEvent, new MouseButtonEventHandler(X), true); } }")]
     [InlineData("double-click-override", "class Other : ListBox { protected override void OnMouseDoubleClick(MouseButtonEventArgs e) => Run(); }")]
     [InlineData("click-count-read", "class Other { void Pressed(object s, MouseButtonEventArgs e) { if (e.ClickCount == 2) Run(); } }")]
+    [InlineData("reviewed-bubble-past-handled", "class SelectorFocus { static void M() { EventManager.RegisterClassHandler(typeof(ListBox), Mouse.MouseDownEvent, new MouseButtonEventHandler(X), handledEventsToo: true); } }")]
     public void EachDetectorCatchesItsBypass(string bypass, string source)
     {
         const string Handlers = """
@@ -238,6 +254,7 @@ public sealed class ShellSealAdmissionCensus
                     [handlers, new Unit("MainWindow.Extra.cs", Parse(source))]).Offenders,
             "second-seal-read" => SealReaderOffenders([handlers, new Unit("MainWindow.Extra.cs", Parse(source))]),
             "double-click-override" or "click-count-read" => DoubleClickOffenders([new Unit("Other.cs", Parse(source))]),
+            "reviewed-bubble-past-handled" => PastHandledOffenders([new Unit("SelectorFocus.cs", Parse(source))]),
             _ => PastHandledOffenders([new Unit("Other.cs", Parse(source))]),
         };
         Assert.True(found.Count > 0, $"the census missed a planted {bypass} bypass");
@@ -499,7 +516,11 @@ public sealed class ShellSealAdmissionCensus
                 {
                     string routed = CSharpSource.Normalize(arguments[1].Expression);
                     bool theDoubleClickGate = unit.Name == "MainWindow.Seal.cs" && DoubleClickEvents.Contains(routed);
-                    if (!IsKnownNonInput(routed) && !theDoubleClickGate && !ClassHandlerAllowed.ContainsKey((unit.Name, routed)))
+                    bool aReviewedBubble = BubblingClassHandlersAllowed.ContainsKey((unit.Name, routed))
+                        && !routed.Contains(".Preview", StringComparison.Ordinal)
+                        && arguments.Count == 3;
+                    if (!IsKnownNonInput(routed) && !theDoubleClickGate && !aReviewedBubble
+                        && !ClassHandlerAllowed.ContainsKey((unit.Name, routed)))
                     {
                         offenders.Add($"{unit.Name}:{Line(invocation)} registers a class handler for {routed} "
                             + "(a class handler runs before the window's own; name it here only if it carries no input)");
