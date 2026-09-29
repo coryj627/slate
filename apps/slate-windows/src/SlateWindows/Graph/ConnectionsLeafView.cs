@@ -296,7 +296,13 @@ internal sealed class ConnectionsLeafView : UserControl
         _summary = new TextBlock { TextWrapping = TextWrapping.Wrap, Margin = new Thickness(0, 4, 0, 0) };
         AutomationProperties.SetAutomationId(_summary, "ConnectionsSummary");
 
-        _depth = new ComboBox { Margin = new Thickness(0, 8, 0, 8), ItemsSource = ConnectionsPhrase.DepthTags };
+        _depth = new ComboBox
+        {
+            Margin = new Thickness(0, 8, 0, 8),
+            ItemsSource = ConnectionsPhrase.DepthTags,
+            // R-4 (#1246): every items host names its containers.
+            ItemContainerStyle = ItemContainerNames.BySelf(typeof(ComboBoxItem)),
+        };
         AutomationProperties.SetAutomationId(_depth, "ConnectionsDepth");
         AutomationProperties.SetName(_depth, ConnectionsPhrase.DepthName);
         AutomationProperties.SetHelpText(_depth, ConnectionsPhrase.DepthHint);
@@ -324,6 +330,10 @@ internal sealed class ConnectionsLeafView : UserControl
         // automation peer for different rows.
         VirtualizingStackPanel.SetVirtualizationMode(_tree, VirtualizationMode.Standard);
         AutomationProperties.SetAutomationId(_tree, "ConnectionsTree");
+        // R-4 (#1246; the spec review, round 21): two notes may read
+        // alike; each tree level tells its own rows apart.
+        SiblingNames.SetNamePath(_tree, nameof(ConnectionsRowViewModel.Name));
+        SiblingNames.SetNoun(_tree, "item");
         AutomationProperties.SetName(_tree, ConnectionsPhrase.Title);
         _tree.ItemContainerGenerator.StatusChanged += (_, _) =>
         {
@@ -1224,7 +1234,7 @@ internal sealed class ConnectionsLeafView : UserControl
         var style = new Style(typeof(ConnectionsTreeItem));
         style.Setters.Add(new Setter(TreeViewItem.IsExpandedProperty, new Binding(nameof(ConnectionsRowViewModel.IsExpanded)) { Mode = BindingMode.TwoWay }));
         style.Setters.Add(new Setter(TreeViewItem.IsSelectedProperty, new Binding(nameof(ConnectionsRowViewModel.IsSelected)) { Mode = BindingMode.TwoWay }));
-        style.Setters.Add(new Setter(AutomationProperties.NameProperty, new Binding(nameof(ConnectionsRowViewModel.Name))));
+        style.Setters.Add(new Setter(AutomationProperties.NameProperty, SiblingNames.ContainerNameBinding()));
         style.Setters.Add(new Setter(AutomationProperties.ItemStatusProperty, new Binding(nameof(ConnectionsRowViewModel.Status))));
         style.Setters.Add(new Setter(AutomationProperties.HelpTextProperty, new Binding(nameof(ConnectionsRowViewModel.Hint))));
         style.Setters.Add(new Setter(AutomationProperties.AutomationIdProperty, new Binding(nameof(ConnectionsRowViewModel.Id))));

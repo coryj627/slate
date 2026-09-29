@@ -6,6 +6,7 @@ using System.Diagnostics;
 using System.Runtime.ExceptionServices;
 using System.Runtime.InteropServices;
 using System.Text.Json;
+using System.Text.RegularExpressions;
 using Axe.Windows.Automation;
 using FlaUI.Core.AutomationElements;
 using FlaUI.Core.Definitions;
@@ -232,6 +233,12 @@ public sealed partial class ShellAccessibilityTests
                 TimeSpan.FromSeconds(10));
             Assert.Equal(ControlType.ComboBox, sortOrder.ControlType);
             Assert.True(sortOrder.Patterns.Selection.IsSupported);
+            // W7-7 PR 3 (#1246, R-4): NVDA reads a combo's value from its
+            // selected item's name — the label, never the enum member
+            // ("NameAscending"), which no type/record census pattern sees.
+            Assert.Equal(
+                "Name (A to Z)",
+                Assert.Single(sortOrder.Patterns.Selection.Pattern.Selection.Value).Name);
 
             AutomationElement groupDates = WaitForElement(
                 window,
@@ -610,6 +617,17 @@ public sealed partial class ShellAccessibilityTests
                         automation.ConditionFactory.ByControlType(ControlType.ListItem)).Length > 0,
                     TimeSpan.FromSeconds(10)),
                 "The asynchronous sidebar filter did not publish a result.");
+            // W7-7 PR 3 (#1246, R-4): a result row is named as the Files
+            // tree names it; unnamed, NVDA read
+            // "SlateWindows.FileTreeNodeViewModel, not selected, 1 of 2".
+            // No axe scan runs while the filter is up, so the census runs
+            // here directly.
+            Assert.Contains(
+                filterResults.FindAllDescendants(
+                    automation.ConditionFactory.ByControlType(ControlType.ListItem)),
+                result => result.Name.StartsWith("note", StringComparison.OrdinalIgnoreCase)
+                    && result.Name.EndsWith(", file", StringComparison.Ordinal));
+            AssertItemNamesAreSpeakable(process, "sidebar-filter-results");
             sidebarFilter.Patterns.Value.Pattern.SetValue(string.Empty);
 
             AutomationElement tagToggle = WaitForNamedElement(
@@ -866,11 +884,13 @@ public sealed partial class ShellAccessibilityTests
             Assert.True(openVault.IsEnabled);
             Assert.True(openVault.Patterns.Invoke.IsSupported);
             Assert.Contains("Open Vault", openVault.Name, StringComparison.Ordinal);
+            // W7-7 PR 3 (#1246): the recents list is device-wide, and a
+            // display name another recent vault shares carries its path
+            // (RecentVault.SpokenName), so the name starts with it.
             Assert.Contains(
                 welcome.FindAllDescendants(
                     automation.ConditionFactory.ByControlType(ControlType.Button)),
-                element => string.Equals(
-                    element.Name,
+                element => element.Name.StartsWith(
                     "Accessible Vault",
                     StringComparison.Ordinal));
 
@@ -935,6 +955,10 @@ public sealed partial class ShellAccessibilityTests
         // the realized items' rectangles; a scan that still fails after the
         // wait is a defect, not a race.
         WaitForRealizedItemBounds(process);
+        // W7-7 PR 3 (#1246, R-4): every scan first proves no item is
+        // named by a .NET type name or a record dump — axe has no rule
+        // for it, which is how ten surfaces shipped reading one.
+        AssertItemNamesAreSpeakable(process, surface);
         var config = Config.Builder.ForProcessId(process.Id).Build();
         var output = ScannerFactory.CreateScanner(config).Scan(null);
         Assert.NotEmpty(output.WindowScanOutputs);
@@ -990,6 +1014,205 @@ public sealed partial class ShellAccessibilityTests
                 }
             },
             TimeSpan.FromSeconds(10));
+    }
+
+    /// <summary>The control types NVDA announces by Name on a focus move or
+    /// a list walk — where WPF's <c>ToString()</c> fallback surfaced in the
+    /// 2026-09-22 pass (record F3).</summary>
+    private static readonly ControlType[] NamedItemControlTypes =
+    [
+        ControlType.ListItem,
+        ControlType.DataItem,
+        ControlType.TreeItem,
+        ControlType.ComboBox,
+        ControlType.Custom,
+        ControlType.Group,
+    ];
+
+    /// <summary>A .NET type name as <c>ToString()</c> prints one: ROOTED in a
+    /// namespace this app's types come from, then dotted or <c>+</c>-nested
+    /// identifiers, ANY of them with a generic arity
+    /// ("System.Collections.Generic.Dictionary`2+Enumerator[…]",
+    /// "SlateWindows.Outer`1+Inner`1[…]" — codex PR 3 round 2), ending in a
+    /// type: a PascalCase segment, or one a generic arity or bracketed element
+    /// or argument types follow — "SlateWindows.Panels.PropertyRowViewModel",
+    /// "System.String[]" (a markdown table row's). The root is the
+    /// discriminator, not the spelling (codex PR 3 round 1): spec §4.2's
+    /// <c>^[A-Za-z_]\w*(\.[A-Za-z_]\w*)+$</c> matched "note.md", and a
+    /// lexical narrowing (a capitalised last segment) alone still flagged
+    /// dotted user content — "README.MD", "Part.One", "Smith.Jones". The
+    /// PascalCase tail then keeps a root-led file name speakable ("System.md",
+    /// "SlateWindows.note.md" — round 2). The roots are those the shell's
+    /// sources import, plus the conformance host's.</summary>
+    private static readonly Regex TypeNamePattern = new(
+        @"^(?:SlateWindows|GridConformanceHost|System|Microsoft|ICSharpCode|uniffi|Svg|SkiaSharp|WpfMath)(?:`\d+)?"
+        + @"(?:[.+][A-Za-z_]\w*(?:`\d+)?)*"
+        + @"[.+](?:[A-Z]\w*(?:`\d+)?(?:\[.*\])?|[A-Za-z_]\w*(?:`\d+(?:\[.*\])?|\[.*\]))$",
+        RegexOptions.CultureInvariant);
+
+    /// <summary>A C# record's synthesized <c>ToString()</c>, the WHOLE name:
+    /// "RecentVault { Path = …, LastOpenedMs = … }" (spec §4.2), its type
+    /// name namespace- or nesting-qualified or not
+    /// ("SlateWindows.Foo.BarRow { Name = value }"), and ending at the
+    /// dump's closing brace — a user's file named "Plan { owner = Alice }.md"
+    /// is no dump (codex PR 3 round 2) — across lines too: a rendering that
+    /// breaks its members over lines is still a dump (the spec review,
+    /// round 21).</summary>
+    private static readonly Regex RecordDumpPattern = new(
+        @"^[\w.+]+\s\{\s.*\s=\s.*\s\}$",
+        RegexOptions.CultureInvariant | RegexOptions.Singleline);
+
+    /// <summary>The census's verdict on one name — a pure function, pinned
+    /// both ways by <see cref="ItemNameCensusTests"/>.</summary>
+    internal static bool IsUnspeakableItemName(string? name) =>
+        !string.IsNullOrEmpty(name)
+        && (TypeNamePattern.IsMatch(name) || RecordDumpPattern.IsMatch(name));
+
+    /// <summary>The census's verdict on one element: its name, unless the
+    /// element itself proves the name is a file's label (codex PR 3 round 4,
+    /// AR-20). Quick Open names a note by its extension-stripped file name
+    /// and publishes the note's vault path as the row's HelpText, so a legal
+    /// note titled "System.String" or "Plan { owner = Alice }" reads as the
+    /// shapes the census hunts. A name that equals the extension-stripped
+    /// file name its own HelpText carries is that file's label and is
+    /// spared; a real ToString leak never equals its row's file name, so it
+    /// is still caught. Pinned both ways by <see cref="ItemNameCensusTests"/>.</summary>
+    internal static bool IsUnspeakableItemName(string? name, string? helpText) =>
+        IsUnspeakableItemName(name) && !IsLabelOfItsOwnFile(name!, helpText);
+
+    /// <summary>Whether <paramref name="name"/> is the label of the file
+    /// <paramref name="helpText"/> names: the help text is a path whose last
+    /// segment has an extension, and the name is that segment with its
+    /// extension stripped, exactly.</summary>
+    internal static bool IsLabelOfItsOwnFile(string name, string? helpText)
+    {
+        if (string.IsNullOrWhiteSpace(helpText))
+        {
+            return false;
+        }
+        string file = helpText[(helpText.LastIndexOfAny(['/', '\\']) + 1)..];
+        int dot = file.LastIndexOf('.');
+        return dot > 0
+            && dot < file.Length - 1
+            && string.Equals(file[..dot], name, StringComparison.Ordinal);
+    }
+
+    /// <summary>
+    /// W7-7 PR 3 (#1246, contract R-4): no element of the process that
+    /// NVDA names an item by carries a .NET type name or a record dump.
+    /// <see cref="AssertAxeClean"/> runs it before every scan, so every
+    /// journey runs it; journeys also call it at states no scan sees (a
+    /// filter's results, an open sheet). A ComboBox is also judged by
+    /// what NVDA reads as its VALUE — the selected item's name, which
+    /// exists while the drop-down's containers do not, and must not be
+    /// EMPTY either (codex PR 3 round 1) — and its Value when editable. A
+    /// name that is a bare identifier ("NameAscending", an enum's
+    /// ToString) is neither shape: the journeys pin each combo's exact
+    /// selected name. A failure names each element by its path.
+    /// </summary>
+    internal static void AssertItemNamesAreSpeakable(Process process, string surface)
+    {
+        using var automation = new UIA3Automation();
+        string[] offenders = [];
+        Exception? lastFault = null;
+        bool read = SpinWait.SpinUntil(
+            () =>
+            {
+                try
+                {
+                    offenders = UnspeakableItemNames(automation, process);
+                    return true;
+                }
+                catch (Exception exception) when (IsTransientUiaFault(exception))
+                {
+                    // An element that left the tree mid-walk: re-read the
+                    // whole state rather than judge half of it.
+                    lastFault = exception;
+                    return false;
+                }
+            },
+            TimeSpan.FromSeconds(15));
+        Assert.True(
+            read,
+            $"{surface}: the item-name census could not read the tree: {lastFault?.Message}");
+        Assert.True(
+            offenders.Length == 0,
+            $"{surface}: items named by a .NET type name or a record dump, or a selected "
+            + "combo item with no name (R-4, #1246):"
+            + Environment.NewLine + "  "
+            + string.Join(Environment.NewLine + "  ", offenders));
+    }
+
+    private static string[] UnspeakableItemNames(UIA3Automation automation, Process process)
+    {
+        var factory = automation.ConditionFactory;
+        var condition = new FlaUI.Core.Conditions.OrCondition(
+            NamedItemControlTypes.Select(type => (FlaUI.Core.Conditions.ConditionBase)factory.ByControlType(type)).ToArray());
+        var offenders = new List<string>();
+        foreach (AutomationElement window in automation.GetDesktop()
+            .FindAllChildren(factory.ByProcessId(process.Id)))
+        {
+            foreach (AutomationElement element in window.FindAllDescendants(condition))
+            {
+                string? name = element.Properties.Name.ValueOrDefault;
+                // The HelpText is read only for a name the patterns flag.
+                if (IsUnspeakableItemName(name)
+                    && IsUnspeakableItemName(name, element.Properties.HelpText.ValueOrDefault))
+                {
+                    offenders.Add(ElementPath(automation, element));
+                }
+                if (element.Properties.ControlType.ValueOrDefault != ControlType.ComboBox)
+                {
+                    continue;
+                }
+                if (element.Patterns.Selection.PatternOrDefault is { } selection)
+                {
+                    foreach (AutomationElement selected in selection.Selection.ValueOrDefault ?? [])
+                    {
+                        // A transient fault here propagates: the whole
+                        // state is re-read, never judged as "no name".
+                        string? value = selected.Properties.Name.ValueOrDefault;
+                        if (string.IsNullOrWhiteSpace(value))
+                        {
+                            offenders.Add($"{ElementPath(automation, element)} → a selected item with no name");
+                        }
+                        else if (IsUnspeakableItemName(value)
+                            && IsUnspeakableItemName(value, selected.Properties.HelpText.ValueOrDefault))
+                        {
+                            offenders.Add($"{ElementPath(automation, element)} → selected item '{value}'");
+                        }
+                    }
+                }
+                if (element.Patterns.Value.PatternOrDefault is { } valuePattern
+                    && valuePattern.Value.ValueOrDefault is { } text
+                    && IsUnspeakableItemName(text))
+                {
+                    offenders.Add($"{ElementPath(automation, element)} → value '{text}'");
+                }
+            }
+        }
+        return [.. offenders];
+    }
+
+    /// <summary>"Window 'Slate' › Pane 'Workspace' [WorkspaceView] › …"
+    /// through the control view, root first.</summary>
+    private static string ElementPath(UIA3Automation automation, AutomationElement element)
+    {
+        var walker = automation.TreeWalkerFactory.GetControlViewWalker();
+        var segments = new List<string>();
+        for (AutomationElement? node = element; node is not null && segments.Count < 24; node = walker.GetParent(node))
+        {
+            string? id = node.Properties.AutomationId.ValueOrDefault;
+            segments.Add(
+                $"{node.Properties.ControlType.ValueOrDefault} '{node.Properties.Name.ValueOrDefault}'"
+                + (string.IsNullOrEmpty(id) ? string.Empty : $" [{id}]"));
+            if (node.Properties.ControlType.ValueOrDefault == ControlType.Window)
+            {
+                break;
+            }
+        }
+        segments.Reverse();
+        return string.Join(" › ", segments);
     }
 
     private static object DescribeAxeError(Axe.Windows.Automation.ScanResult error) => new
@@ -1151,6 +1374,9 @@ public sealed partial class ShellAccessibilityTests
             Assert.Equal(
                 "SlateWindows",
                 Process.GetProcessById(process.Id).ProcessName);
+            // R-4 (#1246; codex PR 3 round 8): the runtime item-name census at
+            // this journey's representative state.
+            AssertItemNamesAreSpeakable(process, "reading-identity");
 
             // Open the note, toggle reading mode through the bound menu
             // command, and require the ReadingSurface AutomationId.
@@ -1489,6 +1715,9 @@ public sealed partial class ShellAccessibilityTests
             noteItem.Patterns.SelectionItem.Pattern.Select();
             WaitForEditor(
                 window, automation, "note.md editor", TimeSpan.FromSeconds(10));
+            // R-4 (#1246; codex PR 3 round 8): the runtime item-name census at
+            // this journey's representative state.
+            AssertItemNamesAreSpeakable(process, "reading-range");
 
             AutomationElement toggleReading = WaitForMenuItem(
                 window,
@@ -2722,6 +2951,12 @@ public sealed partial class ShellAccessibilityTests
                 window, "AddPropertySheet", TimeSpan.FromSeconds(10));
             Assert.Equal(
                 "Add property", addSheet.Properties.Name.ValueOrDefault);
+            // W7-7 PR 3 (#1246, R-4): the type combo's value is its
+            // selected item's name — the kind, exactly.
+            Assert.Equal(
+                "text",
+                Assert.Single(WaitForElement(window, "AddPropertyType", TimeSpan.FromSeconds(10))
+                    .Patterns.Selection.Pattern.Selection.Value).Name);
             WaitForElement(window, "AddPropertyCancel", TimeSpan.FromSeconds(10))
                 .Patterns.Invoke.Pattern.Invoke();
 
@@ -2769,6 +3004,23 @@ public sealed partial class ShellAccessibilityTests
                         .IsSupersetOf(["Path", "Status", "Before", "After"]),
                     TimeSpan.FromSeconds(15)),
                 "the preview grid never exposed the four column headers");
+            // W7-7 PR 3 (#1246, R-4): NVDA reads the closed combo's value
+            // from its selected item's NAME, which was the record dump
+            // "KeyTypeChoice { Label = Any key type, Kind = }"; the preview
+            // rows are named by the note they rename. The sheet closes
+            // before the header's axe scan, so the census runs here too.
+            Assert.Equal(
+                "Any key type",
+                Assert.Single(keyType.Patterns.Selection.Pattern.Selection.Value).Name);
+            Assert.True(
+                SpinWait.SpinUntil(
+                    () => grid
+                        .FindAllDescendants(
+                            automation.ConditionFactory.ByControlType(ControlType.DataItem))
+                        .Any(row => row.Name == "props.md"),
+                    TimeSpan.FromSeconds(15)),
+                "the preview row is not named by the note it renames");
+            AssertItemNamesAreSpeakable(process, "bulk-rename-sheet");
             WaitForElement(window, "BulkRenameClose", TimeSpan.FromSeconds(10))
                 .Patterns.Invoke.Pattern.Invoke();
 
@@ -3582,7 +3834,13 @@ public sealed partial class ShellAccessibilityTests
             "    name: Main\n" +
             "    order:\n" +
             "      - file.name\n" +
-            "      - note.status\n");
+            "      - note.status\n" +
+            // W7-7 PR 3 (#1246): a second view shows the view picker
+            // (collapsed for a single view) so its value can be asserted.
+            "  - type: list\n" +
+            "    name: Rows\n" +
+            "    order:\n" +
+            "      - file.name\n");
 
         Process? process = null;
         try
@@ -3641,6 +3899,12 @@ public sealed partial class ShellAccessibilityTests
                         .IsSupersetOf(["file.name", "note.status"]),
                     TimeSpan.FromSeconds(15)),
                 "the base grid's core-labelled headers never materialized");
+            // W7-7 PR 3 (#1246, R-4): the view picker's value is the active
+            // view's name, never the BaseViewSummary record's dump.
+            Assert.Equal(
+                "Main",
+                Assert.Single(WaitForElement(window, "BaseViewPicker", TimeSpan.FromSeconds(10))
+                    .Patterns.Selection.Pattern.Selection.Value).Name);
             AssertAxeClean(process, "bases-tab");
 
             // Quick filter: grid-scoped Ctrl+F focuses the transient
@@ -3999,6 +4263,14 @@ public sealed partial class ShellAccessibilityTests
                     TimeSpan.FromSeconds(10)),
                 "the saved query never appeared in the section picker");
             pickerItem!.Patterns.SelectionItem.Pattern.Select();
+            // W7-7 PR 3 (#1246, R-4): the picker's value is the query's
+            // name, exactly — never the SavedQuerySummary record's dump.
+            Assert.True(
+                SpinWait.SpinUntil(
+                    () => queryPicker.Patterns.Selection.Pattern.Selection.Value is [{ } chosen]
+                        && chosen.Name == "Journey query",
+                    TimeSpan.FromSeconds(10)),
+                "the section picker's selected item does not read the query's name");
             WaitForElement(window, "DashboardEditorAddSection", TimeSpan.FromSeconds(10))
                 .Patterns.Invoke.Pattern.Invoke();
             AssertAxeClean(process, "bases-dashboard-editor");
@@ -8969,6 +9241,9 @@ public sealed partial class ShellAccessibilityTests
             AutomationElement tree = WaitForElement(
                 window, "CanvasOutlineTree", TimeSpan.FromSeconds(20));
             AutomationElement[] rows = WaitForTreeItems(automation, tree, 5);
+            // R-4 (#1246; codex PR 3 round 8): the runtime item-name census at
+            // this journey's representative state.
+            AssertItemNamesAreSpeakable(process, "canvas-outline");
 
             // ---- The outline: BOTH keys, each on a FRESH row that is not
             // the first — never asked for a menu before, which is the case

@@ -49,8 +49,11 @@ internal sealed class GraphTableView : UserControl
         _grid.CurrentRowChanged += OnCurrentRowChanged;
         // W7-7 PR 4 (#1247, R-5; codex round 5): a landing on the bare grid
         // — a restore token, a publication under the keys — is the
-        // projection's own (rule F): the shared key's row, else the first,
-        // under the syncing guard, so it never writes the key (A-7).
+        // projection's own (rule F): Term F4's row, the one rule every
+        // landing on the table resolves (LandingRow: the shared key's row;
+        // with no key the reader's current row, which a republish restores
+        // by its stable key; else the first), under the syncing guard, so it
+        // never writes the key (A-7).
         SelectorFocus.SetOwnLanding(_grid.Grid, FocusProjection);
         // C-5: the grid's Ctrl+F reaches the field with no new row (C-D2)
         // — the canvas table's line, routed through the navigator to the
@@ -225,16 +228,21 @@ internal sealed class GraphTableView : UserControl
         _syncingSelection = true;
         try
         {
+            // The row move speaks the row's UIA Name (contract A-6): the
+            // grid's final composed name, which tells two rows whose copy
+            // reads alike apart (codex PR 3 round 8), never the copy itself.
             _grid.Bind(
                 columns,
                 rows,
                 summary: publication.Summary,
                 accessibilityLabel: GridLabel,
-                rowAudioDescription: row => model.RowName((GraphTableRow)row),
+                rowAudioDescription: _grid.ComposedRowName,
                 rowActions: RowActions(model),
                 exportProducer: null,
                 rowActivated: row => model.Activate((GraphTableRow)row, modified: false),
                 rowAutomationName: row => model.RowName((GraphTableRow)row),
+                rowKey: static row => ((GraphTableRow)row).StableKey,
+                rowDistinguisher: static row => GraphDocumentViewModel.RowDistinguisher((GraphTableRow)row),
                 rowItemStatus: row => model.CellOf((GraphTableRow)row, GraphTableColumn.Kind),
                 rowActivatedModified: row => model.Activate((GraphTableRow)row, modified: true));
             _grid.SetSortIndicator((model.CellIndexOf(publication.AcceptedSort.Column), publication.AcceptedSort.Ascending));
@@ -247,11 +255,53 @@ internal sealed class GraphTableView : UserControl
         BoundPublication = publication;
     }
 
-    /// <summary>W7-7 PR 8 (R-10): <see cref="FocusProjection"/> as the
-    /// tri-state a terminal landing needs — the selected row, else the first
-    /// (<see cref="AccessibleDataGrid.SeatRow"/>). Term F4's "else" is the key
-    /// naming NO row (OD-12): a keyed row not yet realized is NOT YET, and the
-    /// first row is never seated — or scrolled to, or made current — over it.</summary>
+    /// <summary>
+    /// Contract 35 Term F4's row, as OD-12 reads it — the ONE rule every
+    /// landing on the table resolves (codex on #1302's merge with PR 4), so
+    /// the surface's terminal and provisional seats
+    /// (<see cref="SeatProjection"/>) and rule F's seat, which is the grid's
+    /// own landing (<see cref="FocusProjection"/>), cannot part again: the
+    /// shared key's row; with NO key, the grid's current row — the reader's
+    /// own silent seat, which a republish restores by its stable key (W7-7
+    /// PR 3, R-4, OD-9: a ghost's relabel or a sort moves it) — else the
+    /// first; a key that names no row, the first. Null when there is no row.
+    /// </summary>
+    /// <param name="key">The shared selection's key, or null.</param>
+    /// <param name="rows">The bound rows, in display order.</param>
+    /// <param name="current">The grid's current row; honoured only while it is
+    /// one of <paramref name="rows"/> — the same instance, not a stale
+    /// row a republish replaced.</param>
+    internal static GraphTableRow? LandingRow(string? key, IEnumerable<GraphTableRow> rows, GraphTableRow? current)
+    {
+        ArgumentNullException.ThrowIfNull(rows);
+        GraphTableRow? first = null;
+        foreach (GraphTableRow row in rows)
+        {
+            first ??= row;
+            if (key is not null
+                ? string.Equals(row.StableKey, key, StringComparison.Ordinal)
+                : ReferenceEquals(row, current))
+            {
+                return row;
+            }
+        }
+        return first;
+    }
+
+    private GraphTableRow? LandingRowOf(GraphDocumentViewModel model) =>
+        LandingRow(
+            model.ViewState.SelectedKey,
+            _grid.Grid.Items.OfType<GraphTableRow>(),
+            _grid.Grid.CurrentCell.Item as GraphTableRow);
+
+    /// <summary>W7-7 PR 8 (R-10): Term F4's row (<see cref="LandingRow"/>)
+    /// as the tri-state a terminal landing needs
+    /// (<see cref="AccessibleDataGrid.SeatRow"/>) — the surface's terminal
+    /// delivery and its provisional seat both take it. A row that cannot take
+    /// the keys yet is NOT YET: a keyed row still being realized is never
+    /// passed over for the first row — scrolled to, made current or seated
+    /// (OD-12) — and the grid's realization edge re-asks. Silent, under the
+    /// syncing guard: nothing writes the key (Term F5).</summary>
     internal LandingSeat SeatProjection()
     {
         if (Model is not { } model)
@@ -262,16 +312,9 @@ internal sealed class GraphTableView : UserControl
         _syncingSelection = true;
         try
         {
-            string? key = model.ViewState.SelectedKey;
-            if (key is not null)
-            {
-                if (_grid.SeatRow(row => string.Equals(((GraphTableRow)row).StableKey, key, StringComparison.Ordinal))
-                    is { } selected)
-                {
-                    return selected;
-                }
-            }
-            return _grid.SeatRow(_ => true) ?? LandingSeat.NotYet;
+            return LandingRowOf(model) is { } row
+                ? _grid.SeatRow(candidate => ReferenceEquals(candidate, row)) ?? LandingSeat.NotYet
+                : LandingSeat.NotYet;
         }
         finally
         {
@@ -279,13 +322,13 @@ internal sealed class GraphTableView : UserControl
         }
     }
 
-    /// <summary>Contract A-7: seat the grid on the row whose key equals
-    /// the shared selection; with no visible row for it, clear the grid's
-    /// currency WITHOUT writing the key.</summary>
-    /// <summary>Rule F, Terms F4 and F5: seat the reader on the grid's
-    /// current row — the shared key's, else the first — SILENTLY: the
-    /// syncing guard writes no key and the grid posts no row move. False
-    /// when no realised cell took the keys.</summary>
+    /// <summary>Rule F, Terms F4 and F5 — and the grid's own landing (W7-7
+    /// PR 4, R-5: a restore token, a publication under the keys): Term F4's
+    /// row (<see cref="LandingRow"/>), seated now or once its cell is
+    /// realized, SILENTLY — the syncing guard writes no key and the grid posts
+    /// no row move, the deferred seat included. An empty grid is its own
+    /// stop. False when no realised cell, nor the empty grid, took the keys
+    /// now.</summary>
     internal bool FocusProjection()
     {
         if (Model is not { } model)
@@ -296,13 +339,9 @@ internal sealed class GraphTableView : UserControl
         _syncingSelection = true;
         try
         {
-            string? key = model.ViewState.SelectedKey;
-            if (key is not null
-                && _grid.SelectRow(row => string.Equals(((GraphTableRow)row).StableKey, key, StringComparison.Ordinal), moveFocus: true))
-            {
-                return true;
-            }
-            return _grid.SelectRow(_ => true, moveFocus: true);
+            return LandingRowOf(model) is { } row
+                ? _grid.FocusRowCell(row)
+                : _grid.FocusCurrentOrFirstCell();
         }
         finally
         {
@@ -310,6 +349,9 @@ internal sealed class GraphTableView : UserControl
         }
     }
 
+    /// <summary>Contract A-7: seat the grid on the row whose key equals
+    /// the shared selection; with no visible row for it, clear the grid's
+    /// currency WITHOUT writing the key.</summary>
     private void Reseat(GraphDocumentViewModel model)
     {
         bool wasSyncing = _syncingSelection;
@@ -376,7 +418,8 @@ internal sealed class GraphTableView : UserControl
     private void ClearBinding()
     {
         _grid.Announce = _ => { };
-        _grid.Bind([], [], summary: string.Empty, accessibilityLabel: GridLabel);
+        // The rows' names go with them (codex PR 3 round 2).
+        _grid.Clear(summary: string.Empty, accessibilityLabel: GridLabel);
         BoundPublication = null;
     }
 
@@ -407,8 +450,20 @@ internal sealed class GraphTableView : UserControl
             // IGJ-6): the DOCUMENT's guarded selection refuses a retired or
             // unseated document and a key its current snapshot lacks, so a
             // retained view over a closed tab cannot move the workspace's
-            // state.
-            _ = model.SelectRow(current.StableKey);
+            // state. The write is the grid's OWN move, so it does not re-seat
+            // the grid (codex PR 3 round 8): the re-seat's silent select
+            // marked the row announced before the move spoke, and every
+            // arrow onto a row posted a cell move — "Note: same" — in place
+            // of the row move that names the row (contract A-6).
+            _syncingSelection = true;
+            try
+            {
+                _ = model.SelectRow(current.StableKey);
+            }
+            finally
+            {
+                _syncingSelection = false;
+            }
         }
     }
 

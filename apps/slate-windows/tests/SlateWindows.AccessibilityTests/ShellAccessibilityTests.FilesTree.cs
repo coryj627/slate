@@ -70,6 +70,9 @@ public sealed partial class ShellAccessibilityTests
             {
                 _ = WaitForTreeItemStartingWith(tree, automation, row);
             }
+            // R-4 (#1246; codex PR 3 round 8): the runtime item-name census at
+            // this journey's representative state.
+            AssertItemNamesAreSpeakable(process, "files-tree");
 
             // The launch lands focus on the tree once the vault has opened
             // and published its rows (W7-5) — on its first row, UNSELECTED,

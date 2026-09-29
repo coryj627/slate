@@ -13,8 +13,11 @@ namespace SlateWindows.Bases;
 /// as (keep verbatim or delete — never silently rewritten).</summary>
 internal sealed class BuilderConditionRow : BindableBase
 {
+    private readonly System.Collections.ObjectModel.ObservableCollection<BuilderConditionRow>? _groupMembers;
     private string _expression = string.Empty;
     private string? _validationMessage;
+    private int _position;
+    private int _groupPosition;
 
     /// <summary>Non-null for the preserved row: the view's existing
     /// filter node, core-encoded, kept byte-verbatim.</summary>
@@ -26,9 +29,70 @@ internal sealed class BuilderConditionRow : BindableBase
     /// member expressions, OR-combined (the one-level mac group).</summary>
     public System.Collections.ObjectModel.ObservableCollection<BuilderConditionRow>?
         GroupMembers
-    { get; init; }
+    {
+        get => _groupMembers;
+        init
+        {
+            _groupMembers = value;
+            if (value is not null)
+            {
+                value.CollectionChanged += (_, _) => NumberMembers();
+            }
+        }
+    }
 
     public bool IsGroup => GroupMembers is not null;
+
+    /// <summary>W7-7 PR 3 (#1246, R-4's one-stop rule): the row's
+    /// identity, spoken by its CONTROLS. The row's container is layout —
+    /// named, it was a second stop beside them — so the position its name
+    /// carried moves onto the stops ("Condition 2", "Group 3", "Group 3
+    /// condition 1": the mac BaseQueryBuilderRow.accessibilityLabel
+    /// prefixes). Two rows' controls never share a name.</summary>
+    public string RowName =>
+        IsPreserved ? "Existing filters (preserved)"
+        : _groupPosition > 0 ? $"Group {_groupPosition} condition {_position}"
+        : IsGroup ? $"Group {_position}"
+        : $"Condition {_position}";
+
+    /// <summary>The expression box's name (R-4).</summary>
+    public string ExpressionName => $"{RowName} expression";
+
+    /// <summary>The Remove button's name (R-4).</summary>
+    public string RemoveName => $"Remove {RowName}";
+
+    /// <summary>Numbers <paramref name="rows"/> in order, 1-based, and each
+    /// group's members under their group; the builder renumbers on every
+    /// change to its rows.</summary>
+    internal static void Number(IList<BuilderConditionRow> rows)
+    {
+        for (int index = 0; index < rows.Count; index++)
+        {
+            rows[index].Place(index + 1, groupPosition: 0);
+        }
+    }
+
+    private void Place(int position, int groupPosition)
+    {
+        _position = position;
+        _groupPosition = groupPosition;
+        OnPropertyChanged(nameof(RowName));
+        OnPropertyChanged(nameof(ExpressionName));
+        OnPropertyChanged(nameof(RemoveName));
+        NumberMembers();
+    }
+
+    private void NumberMembers()
+    {
+        if (_groupMembers is null)
+        {
+            return;
+        }
+        for (int index = 0; index < _groupMembers.Count; index++)
+        {
+            _groupMembers[index].Place(index + 1, _position);
+        }
+    }
 
     public string Expression
     {
@@ -147,6 +211,8 @@ internal sealed class BaseQueryBuilderViewModel : PanelWorkScheduler
         _document = document;
         Context = context;
         _announce = announce;
+        // R-4 (#1246): the rows' controls carry their position.
+        ConditionRows.CollectionChanged += (_, _) => BuilderConditionRow.Number(ConditionRows);
         if (_document["filters"] is { } existing)
         {
             ConditionRows.Add(new BuilderConditionRow

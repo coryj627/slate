@@ -2,10 +2,28 @@
 // SPDX-License-Identifier: AGPL-3.0-or-later
 
 using System.Windows;
+using System.Windows.Automation;
 using System.Windows.Automation.Peers;
 using System.Windows.Controls;
+using System.Windows.Data;
 
 namespace SlateWindows;
+
+/// <summary>
+/// W7-7 PR 3 (#1246, R-4): item container styles built in code. Every
+/// items host names its containers explicitly (ItemContainerNameCensus);
+/// a host whose items are strings names each container by the string
+/// itself, which is also what it shows.
+/// </summary>
+internal static class ItemContainerNames
+{
+    internal static Style BySelf(Type containerType)
+    {
+        var style = new Style(containerType);
+        style.Setters.Add(new Setter(AutomationProperties.NameProperty, new Binding()));
+        return style;
+    }
+}
 
 /// <summary>
 /// Layout containers do not create WPF automation peers by default. These
@@ -177,6 +195,94 @@ internal sealed class AutomationPresentationItemsControlPeer : FrameworkElementA
         : base(owner)
     {
     }
+
+    protected override bool IsControlElementCore() => false;
+
+    protected override bool IsContentElementCore() => false;
+}
+
+/// <summary>
+/// An items host whose item containers only WRAP the real stop — a
+/// recent-vault Button, a template prompt TextBox, a split pane's editor
+/// (W7-7 PR 3, #1246, contract R-4). WPF gives each item of a plain
+/// <see cref="ItemsControl"/> a DataItem peer named by the item's
+/// <c>ToString()</c>, so NVDA spoke "RecentVault { Path = …, LastOpenedMs = … },
+/// data item" and "SlateWindows.WorkspacePaneNodeViewModel, data item, 1 of 2"
+/// on the way to the control the reader actually landed on (record F3).
+/// Here the host is one named Group, each container peer answers
+/// <c>IsControlElementCore =&gt; false</c> (NVDA treats such an element as
+/// layout), and the wrapped control is the one stop. A layout host is
+/// never a stop itself: <see cref="Control"/> makes every ItemsControl
+/// focusable by default (the #1120 class), so this one opts out. A host
+/// that is only structure (<see cref="IsStructural"/>) is not even a group.
+/// </summary>
+internal sealed class LayoutItemsControl : ItemsControl
+{
+    /// <summary>Codex PR 3 round 4 (R-4 §4.2: a host that only wraps the
+    /// real stops is never named and never a control element): the split
+    /// host arranges the editor panes and nothing more. Structural, it
+    /// leaves the control and content views, so a split adds no named
+    /// object-navigation element; the panes are the structure the reader
+    /// moves between, and W7-6's announcer speaks "Editor pane 1 of 2,
+    /// {title}." as focus moves.</summary>
+    public static readonly DependencyProperty IsStructuralProperty = DependencyProperty.Register(
+        nameof(IsStructural), typeof(bool), typeof(LayoutItemsControl), new PropertyMetadata(false));
+
+    static LayoutItemsControl() =>
+        FocusableProperty.OverrideMetadata(
+            typeof(LayoutItemsControl), new FrameworkPropertyMetadata(false));
+
+    public bool IsStructural
+    {
+        get => (bool)GetValue(IsStructuralProperty);
+        set => SetValue(IsStructuralProperty, value);
+    }
+
+    protected override AutomationPeer OnCreateAutomationPeer() =>
+        new LayoutItemsControlAutomationPeer(this);
+}
+
+internal sealed class LayoutItemsControlAutomationPeer : ItemsControlAutomationPeer
+{
+    internal LayoutItemsControlAutomationPeer(LayoutItemsControl owner)
+        : base(owner)
+    {
+    }
+
+    protected override AutomationControlType GetAutomationControlTypeCore() =>
+        AutomationControlType.Group;
+
+    protected override string GetClassNameCore() => "SlateGroup";
+
+    protected override bool IsControlElementCore() =>
+        !((LayoutItemsControl)Owner).IsStructural && base.IsControlElementCore();
+
+    protected override bool IsContentElementCore() =>
+        !((LayoutItemsControl)Owner).IsStructural && base.IsContentElementCore();
+
+    protected override ItemAutomationPeer CreateItemAutomationPeer(object item) =>
+        new LayoutItemAutomationPeer(item, this);
+}
+
+/// <summary>
+/// A <see cref="LayoutItemsControl"/> container: out of the control and
+/// content views, and nameless, so not even a raw-view client reads the
+/// item's <c>ToString()</c>. Its children — the wrapped stop — surface
+/// directly under the host in the control view.
+/// </summary>
+internal sealed class LayoutItemAutomationPeer : ItemAutomationPeer
+{
+    internal LayoutItemAutomationPeer(object item, LayoutItemsControlAutomationPeer host)
+        : base(item, host)
+    {
+    }
+
+    protected override AutomationControlType GetAutomationControlTypeCore() =>
+        AutomationControlType.DataItem;
+
+    protected override string GetClassNameCore() => "SlateLayoutItem";
+
+    protected override string GetNameCore() => string.Empty;
 
     protected override bool IsControlElementCore() => false;
 

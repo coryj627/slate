@@ -28,6 +28,21 @@ internal sealed record RecentVault(
             displayName,
             (now ?? DateTimeOffset.UtcNow).ToUnixTimeMilliseconds());
     }
+
+    /// <summary>
+    /// The welcome screen's name for this vault's button (W7-7 PR 3,
+    /// #1246, R-4). The button is the one stop in its row — the row's
+    /// container is layout — so the name must tell it apart from its
+    /// siblings: the display name, and the path too when another recent
+    /// vault shares the display name in any case (speech does not hear
+    /// case). Two "Notes" folders that read alike are axe's
+    /// SiblingUniqueAndFocusable error. Named by the one sibling rule and its
+    /// one culture-independent comparison (codex PR 3 round 5): under tr-TR
+    /// the current culture read "FILE" and "file" as different names and
+    /// left both bare.
+    /// </summary>
+    public static string SpokenName(RecentVault vault, IEnumerable<RecentVault> all) =>
+        SiblingNames.SpokenAmong([.. all], vault, other => other.DisplayName, other => other.Path, "vault");
 }
 
 /// <summary>

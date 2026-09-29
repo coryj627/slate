@@ -594,7 +594,8 @@ public sealed class AccessibleDataGridExternalSortTests
             ],
             rows.Cast<object>().ToList(),
             summary: "3 rows",
-            accessibilityLabel: "External sort probe");
+            accessibilityLabel: "External sort probe",
+            rowKey: static row => (string)row, rowAutomationName: row => (string)row);
 
         Assert.Null(grid.ApplySort(0, ascending: true));
 
@@ -623,7 +624,8 @@ public sealed class AccessibleDataGridExternalSortTests
             ],
             rows.Cast<object>().ToList(),
             summary: "3 rows",
-            accessibilityLabel: "External sort probe");
+            accessibilityLabel: "External sort probe",
+            rowKey: static row => (string)row, rowAutomationName: row => (string)row);
         Assert.Single(requested);
     });
 

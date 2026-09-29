@@ -93,7 +93,10 @@ internal sealed class QuickSwitcherViewModel : BindableBase, IDisposable
         {
             if (SetField(ref _selectedRow, value) && value is not null)
             {
-                _announce(new A11yEvent.RowSelected(value.DisplayName));
+                // R-4 (#1246; codex PR 3 round 5): the row the arrow reached,
+                // named as the list names it — namesakes read apart here too.
+                _announce(new A11yEvent.RowSelected(SiblingNames.SpokenAmong(
+                    Results, value, row => row.DisplayName, row => row.Path, "result")));
                 RaiseCommandStates();
             }
         }

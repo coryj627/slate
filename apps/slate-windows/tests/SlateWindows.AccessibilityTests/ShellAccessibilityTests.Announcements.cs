@@ -56,11 +56,19 @@ public sealed partial class ShellAccessibilityTests
     [Fact]
     public void Announcements_ReachADesktopScopedListenerFromLaunch()
     {
+        // The vault's display name is this run's own. The recents list is
+        // device-wide (%LOCALAPPDATA%\Slate\recent-vaults.json, one store for
+        // every launch), every shell-gate journey opens an "Accessible Vault"
+        // of its own, and VaultOpened speaks a recent vault as its welcome
+        // button names it (W7-7 PR 3, OD-9: RecentVault.SpokenName) — with
+        // its path when another recent's display name reads alike. A name no
+        // other recent can share is announced bare, whatever the recents hold.
+        string vaultName = $"Announcements Vault {Guid.NewGuid():N}"[..28];
         // Core's own sentences, rendered through the binding before launch:
         // the witness asserts core's copy, never a transcription of it.
         string[] launchLines =
         [
-            SlateUniffiMethods.A11yRender(new A11yEvent.VaultOpened("Accessible Vault", string.Empty)).Text,
+            SlateUniffiMethods.A11yRender(new A11yEvent.VaultOpened(vaultName, string.Empty)).Text,
             SlateUniffiMethods.A11yRender(new A11yEvent.VaultScanStarted(2)).Text,
             SlateUniffiMethods.A11yRender(new A11yEvent.VaultScanFinished(2)).Text,
             SlateUniffiMethods.A11yRender(new A11yEvent.EditorPaneFocused(1, 1, "Empty pane", string.Empty)).Text,
@@ -82,7 +90,7 @@ public sealed partial class ShellAccessibilityTests
                 received.Enqueue(new ReceivedNotification(
                     processId, automationId, kind, processing, displayString, activityId, clock.ElapsedMilliseconds)));
 
-            string vaultRoot = Path.Combine(testRoot, "Accessible Vault");
+            string vaultRoot = Path.Combine(testRoot, vaultName);
             string logDirectory = Path.Combine(testRoot, "logs");
             logFile = Path.Combine(logDirectory, "slate-windows.log");
             WriteShellFixtureVault(vaultRoot);
@@ -130,6 +138,10 @@ public sealed partial class ShellAccessibilityTests
                 "The launch focus did not land on the Files tree before Ctrl+Alt+I.");
             PressUntilGone(window, automation, "RightPaneLeaves", VirtualKeyShort.CONTROL, VirtualKeyShort.ALT, VirtualKeyShort.KEY_I);
             AwaitHeard(HeardFromSlate, [.. launchLines, rightPaneHidden.Text], TimeSpan.FromSeconds(10), logFile);
+
+            // R-4 (#1246; codex PR 3 round 8): the runtime item-name census at
+            // this journey's representative state.
+            AssertItemNamesAreSpeakable(process, "announcements");
 
             // R-1 / OD-7 diagnostics, read from the production log: the state
             // written once per change, a listening client reported, and the

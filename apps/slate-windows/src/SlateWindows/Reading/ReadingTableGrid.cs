@@ -1,6 +1,7 @@
 // Copyright (C) 2026 Cory Joseph
 // SPDX-License-Identifier: AGPL-3.0-or-later
 
+using System.Globalization;
 using System.Windows;
 using System.Windows.Automation;
 using System.Windows.Input;
@@ -68,9 +69,41 @@ internal static class ReadingTableGrid
             return null;
         }
         var grid = new AccessibleDataGrid();
-        grid.Bind(model.Columns, model.Rows, model.Summary, model.Label);
+        Bind(grid, model);
         return grid;
     }
+
+    /// <summary>The table's bind, and any re-bind. R-4 (#1246): a row is
+    /// named by its first cell, the row header's text; unnamed, a row of
+    /// cells read "System.String[]". Its key (codex PR 3 round 6, OD-9) is
+    /// its row in the parsed table, "row {n}" — the table's own order, which
+    /// no sort in the grid changes and a re-bind parses again — so two rows
+    /// with one first cell read "note.md, row 3", and a row with no text at
+    /// all "Row 3".</summary>
+    internal static void Bind(
+        AccessibleDataGrid grid,
+        (IReadOnlyList<AccessibleGridColumn> Columns,
+            IReadOnlyList<object> Rows,
+            string Summary,
+            string Label) model)
+    {
+        var sourceRows = new Dictionary<object, int>(ReferenceEqualityComparer.Instance);
+        for (int index = 0; index < model.Rows.Count; index++)
+        {
+            _ = sourceRows.TryAdd(model.Rows[index], index);
+        }
+        grid.Bind(
+            model.Columns,
+            model.Rows,
+            model.Summary,
+            model.Label,
+            rowAutomationName: static row => CellText(row, 0),
+            rowKey: row => SourceRowKey(sourceRows[row]));
+    }
+
+    /// <summary>A row's key: its row in the parsed table.</summary>
+    internal static string SourceRowKey(int index) =>
+        string.Create(CultureInfo.InvariantCulture, $"row {index + 1}");
 
     /// <summary>Null when core cannot derive cells — the caller must
     /// let Enter fall through rather than open an empty window.</summary>

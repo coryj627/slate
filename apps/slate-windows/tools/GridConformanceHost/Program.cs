@@ -126,7 +126,12 @@ internal static class Program
             },
             exportProducer: format => format == ExportFormat.Csv
                 ? $"Name,Status,Notes\r\nfixture,{rowCount},rows"
-                : $"|Name|Status|Notes|\n|fixture|{rowCount}|rows|");
+                : $"|Name|Status|Notes|\n|fixture|{rowCount}|rows|",
+            // The fixture models R-4 (#1246): every consuming surface
+            // names its rows by identity. Unnamed, a row read the
+            // FixtureRow record's dump.
+            rowAutomationName: row => ((FixtureRow)row).Name,
+            rowKey: static row => string.Create(CultureInfo.InvariantCulture, $"row {((FixtureRow)row).Index + 1}"));
         grid.ExportProduced += (format, text) =>
             actionLog.Text = $"exported:{format}:{text.Length}";
         // The suite drives the menu by keyboard and reads its

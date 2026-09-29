@@ -250,6 +250,16 @@ internal sealed class DashboardEditorViewModel : BindableBase
     {
         DashboardId = dashboardId;
         _name = name;
+        // R-4 (#1246; codex PR 3 round 2): one query may be added twice, so
+        // each section and its controls carry its position — renumbered on
+        // every add, removal and move.
+        Sections.CollectionChanged += (_, _) =>
+        {
+            for (int index = 0; index < Sections.Count; index++)
+            {
+                Sections[index].Position = index + 1;
+            }
+        };
     }
 
     /// <summary>Null for a NEW dashboard.</summary>
@@ -291,6 +301,7 @@ internal sealed class DashboardEditorSection : BindableBase
 {
     private string _headingOverride = string.Empty;
     private string _viewOverride = string.Empty;
+    private int _position;
 
     public DashboardEditorSection(string savedQueryId, string savedQueryName)
     {
@@ -301,6 +312,26 @@ internal sealed class DashboardEditorSection : BindableBase
     public string SavedQueryId { get; set; }
 
     public string SavedQueryName { get; set; }
+
+    /// <summary>The section's 1-based place in the editor's list, kept by
+    /// the editor on every change to it.</summary>
+    public int Position
+    {
+        get => _position;
+        set
+        {
+            if (SetField(ref _position, value))
+            {
+                OnPropertyChanged(nameof(AutomationName));
+            }
+        }
+    }
+
+    /// <summary>W7-7 PR 3 (#1246, R-4; codex PR 3 round 2): the section's
+    /// name, and the stem of every control's in it ("Move {0} up"). The
+    /// query alone is not enough: Add section takes one query twice, and
+    /// the two sections read alike down to their buttons.</summary>
+    public string AutomationName => $"{SavedQueryName} (section {Position})";
 
     public string HeadingOverride
     {
