@@ -148,6 +148,47 @@ public sealed class RightPaneHideLandingTests
         Assert.True(host.Shell.WorkspaceRoot.IsKeyboardFocusWithin, $"the keys are not in the workspace, but on {Keyboard.FocusedElement}");
     });
 
+    /// <summary>
+    /// W7-7 PR 4b on PR 8 (OD-12): the welcome view gone under the keys lands
+    /// them in the workspace WITHOUT withdrawing the editor landing the window
+    /// holds — the launch landing, held while a canvas or graph loads, seats and
+    /// speaks its own line afterwards. The keys wait on the active tab's item
+    /// meanwhile. (A landing of the fact's own stands in for the launch
+    /// landing: the fixture raises no WorkspaceReady.)
+    /// </summary>
+    [Fact]
+    public void OpeningTheVaultUnderTheKeysLeavesAHeldEditorLandingToSeat() => RunSta(() =>
+    {
+        using var host = new ShownShell(("a.md", "Just a line of text.\n"));
+        host.Workspace.OpenPath("a.md");
+        host.Settle();
+        host.SetVaultOpen(false);
+        Assert.True(host.Shell.OpenVaultButton.Focus(), "premise: the welcome view took no keys");
+        int withdrawals = 0;
+        var launch = new HeldEditorLanding(
+            target: () => null,
+            isLive: () => true,
+            withdraw: () => ++withdrawals > 0,
+            stillWhereAsked: () => true,
+            scope: [],
+            ringRegion: null);
+        host.Shell.EditorLandings.Hold(launch);
+        try
+        {
+            host.SetVaultOpen(true);
+
+            Assert.False(host.Shell.WelcomeRoot.IsVisible);
+            Assert.Equal(0, withdrawals);
+            Assert.Same(launch, host.Shell.EditorLandings.Held);
+            Assert.IsType<TabItem>(Keyboard.FocusedElement);
+            Assert.True(host.Shell.WorkspaceRoot.IsKeyboardFocusWithin, $"the keys are not in the workspace, but on {Keyboard.FocusedElement}");
+        }
+        finally
+        {
+            _ = host.Shell.EditorLandings.Withdraw();
+        }
+    });
+
     private static void RunSta(Action body)
     {
         Func<bool> priorOverlayProbe = CanvasSurfaceView.ShellOverlayIsOpen;

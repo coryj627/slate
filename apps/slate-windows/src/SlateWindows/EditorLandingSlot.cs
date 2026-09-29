@@ -25,13 +25,15 @@ namespace SlateWindows;
 /// popup's or a context menu's focus is seen, and a transition FROM nowhere (focus
 /// null) is seen like one to nowhere. While a landing is held, a transition is the
 /// reader (or another route) moving them, and cancels it, unless it is a loss from
-/// an element that has stopped being shown (WPF's recovery, a closing overlay's
-/// restore); the ONE move that enters the landing's target (the reader stepping
-/// in, a graph's provisional seat — a landing that found focus already inside has
-/// had its entry); the target's own TERMINAL seat, the move that completes the
-/// landing, which the surface declares (<see cref="SeatTerminally"/>); or the
-/// window's activation restore (WPF putting focus back when the window comes
-/// forward: a landing raised while the window was away was not declined by it).
+/// an element that can no longer hold the keys — no longer shown, disabled or
+/// made unfocusable (WPF's recovery and the focus guard's landing in its place,
+/// W7-7 PR 4b; a closing overlay's restore); the ONE move that enters the
+/// landing's target (the reader stepping in, a graph's provisional seat — a
+/// landing that found focus already inside has had its entry); the target's
+/// own TERMINAL seat, the move that completes the landing, which the surface
+/// declares (<see cref="SeatTerminally"/>); or the window's activation restore
+/// (WPF putting focus back when the window comes forward: a landing raised while
+/// the window was away was not declined by it).
 /// The target is resolved when a transition is read, so a landing whose surface is
 /// realized only later still recognises its own entry. The moves a landing makes
 /// before it is held (the reading park on the tab item, a synchronous fallback)
@@ -209,9 +211,11 @@ internal sealed class EditorLandingSlot : IDisposable
             return;
         }
 
-        // Nobody's leaving: WPF's own recovery off an element that stopped being
-        // shown, and its restore when the window comes forward.
-        if (from is null ? _restoringActivation : !IsShown(from))
+        // Nobody's leaving: WPF's own recovery off an element that can no
+        // longer hold the keys — no longer shown, disabled or made unfocusable —
+        // and the focus guard's landing that takes its place (W7-7 PR 4b, R-5
+        // (h)); and WPF's restore when the window comes forward.
+        if (from is null ? _restoringActivation : !CanHoldKeys(from))
         {
             return;
         }
@@ -263,11 +267,19 @@ internal sealed class EditorLandingSlot : IDisposable
     private static bool IsTerminalSeatInto(DependencyObject target) =>
         t_seating is { } seating && IsWithin(seating, target);
 
-    private static bool IsShown(IInputElement element) => element switch
+    /// <summary>Whether <paramref name="element"/> can still hold the keys:
+    /// shown, enabled and focusable (a content element: itself enabled and
+    /// focusable, its host shown and enabled). A move off one that cannot is
+    /// WPF's recovery — or the focus guard's landing in its place — never the
+    /// reader leaving (W7-7 PR 4b on OD-12: the guard lands keys stranded on a
+    /// disabled element as it does on a collapsed one).</summary>
+    private static bool CanHoldKeys(IInputElement element) => element switch
     {
-        UIElement visual => visual.IsVisible,
-        UIElement3D visual3D => visual3D.IsVisible,
-        ContentElement content => HostOf(content) is { IsVisible: true },
+        UIElement visual => visual.IsVisible && visual.IsEnabled && visual.Focusable,
+        UIElement3D visual3D => visual3D.IsVisible && visual3D.IsEnabled && visual3D.Focusable,
+        ContentElement content => content.IsEnabled
+            && content.Focusable
+            && HostOf(content) is { IsVisible: true, IsEnabled: true },
         _ => false,
     };
 

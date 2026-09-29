@@ -3027,6 +3027,58 @@ public sealed class ReadingFocusTests
         }
     });
 
+    /// <summary>
+    /// W7-7 PR 4b on OD-12 (R-5 (h)): the focus guard re-lands keys stranded
+    /// in the editor region WITHOUT withdrawing the editor landing the window
+    /// holds. The launch landing (R-1's launch line) is held while its content
+    /// arrives, the keys wait on the tab's item, and that item is disabled — or
+    /// made unfocusable — under them. The guard lands them where a refused
+    /// route's would (the tab strip, else the Files region: here the Files
+    /// tree, the item being what went away), and its move off an element that
+    /// can no longer hold the keys is WPF's recovery made explicit, not the
+    /// reader leaving. The content arriving then seats the launch landing, and
+    /// its line is spoken once.
+    /// </summary>
+    [Theory]
+    [InlineData("reading", "disabled")]
+    [InlineData("canvas", "disabled")]
+    [InlineData("graph", "disabled")]
+    [InlineData("canvas", "unfocusable")]
+    public void TheGuardLeavesAHeldEditorLandingToSeat(string kind, string stranded) => RunSta(() =>
+    {
+        using var host = new Host();
+        host.Initialize(kind);
+        host.ShowFilesPane();
+        host.HoldEditorLanding();
+        TabItem tabItem = host.FocusTabBar();
+        typeof(MainWindow)
+            .GetMethod("ViewModel_WorkspaceReady", BindingFlags.NonPublic | BindingFlags.Instance)!
+            .Invoke(host.Shell, [null, EventArgs.Empty]);
+        PumpedDispatcher.Drain();
+        HeldEditorLanding held = Assert.IsType<HeldEditorLanding>(host.Shell.EditorLandings.Held);
+        AssertFocused(tabItem, $"the launch landing, held ({kind})");
+        host.Announced.Clear();
+
+        if (stranded == "disabled")
+        {
+            tabItem.IsEnabled = false;
+        }
+        else
+        {
+            tabItem.Focusable = false;
+        }
+
+        PumpedDispatcher.Drain();
+
+        Assert.True(
+            host.Shell.FilesTree.IsKeyboardFocusWithin,
+            $"the guard left the keys on {Describe(Keyboard.FocusedElement)} ({kind}, {stranded})");
+        Assert.Same(held, host.Shell.EditorLandings.Held);
+        host.LetEditorLandingArrive();
+        Assert.True(host.EditorStop().IsKeyboardFocusWithin, $"the held landing never seated ({kind}, {stranded})");
+        Assert.Equal([host.EditorLine()], host.Announced.OfType<A11yEvent.EditorPaneFocused>());
+    });
+
     /// <summary>OD-12 (codex round 6's note): a route's refused landing whose
     /// group has no realized tab control still tries the Files tree — the
     /// chain's last resort — and the answer decides the line: focus on the
