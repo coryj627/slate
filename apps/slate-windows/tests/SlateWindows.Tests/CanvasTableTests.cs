@@ -872,11 +872,12 @@ public sealed class CanvasTableTests : IDisposable
             KeyboardNavigationMode.Cycle,
             KeyboardNavigation.GetDirectionalNavigation(surface.SwitcherForTests));
 
-        // ONE stop: Tab from the first choice leaves the group entirely
-        // rather than visiting the other two.
-        Assert.True(surface.OutlineChoiceForTests.Focus());
+        // ONE stop — the CHECKED choice (W7-7 PR 4: keys entering the group
+        // land there) — and Tab from it leaves the group entirely rather
+        // than visiting the other two.
+        Assert.True(surface.TableChoiceForTests.Focus());
         Assert.True(
-            surface.OutlineChoiceForTests.MoveFocus(
+            surface.TableChoiceForTests.MoveFocus(
                 new TraversalRequest(FocusNavigationDirection.Next)));
         Assert.DoesNotContain(
             host.FocusedElement(),
@@ -888,15 +889,15 @@ public sealed class CanvasTableTests : IDisposable
             });
 
         // …and the arrows are how a keyboard user picks a surface.
-        Assert.True(surface.OutlineChoiceForTests.Focus());
-        Assert.True(
-            surface.OutlineChoiceForTests.MoveFocus(
-                new TraversalRequest(FocusNavigationDirection.Right)));
-        Assert.Same(surface.TableChoiceForTests, host.FocusedElement());
+        Assert.True(surface.TableChoiceForTests.Focus());
         Assert.True(
             surface.TableChoiceForTests.MoveFocus(
                 new TraversalRequest(FocusNavigationDirection.Left)));
         Assert.Same(surface.OutlineChoiceForTests, host.FocusedElement());
+        Assert.True(
+            surface.OutlineChoiceForTests.MoveFocus(
+                new TraversalRequest(FocusNavigationDirection.Right)));
+        Assert.Same(surface.TableChoiceForTests, host.FocusedElement());
 
         // §D TD-6: the persisted "visual" token lands on a REAL arm
         // now — checked, ENABLED, and reachable, which is the whole
@@ -916,6 +917,89 @@ public sealed class CanvasTableTests : IDisposable
                 surface.TableChoiceForTests,
                 surface.VisualChoiceForTests,
             });
+        document.Shutdown();
+    });
+
+    /// <summary>
+    /// W7-7 PR 4 (#1247, R-5; codex round 1): the switcher's arrows are its
+    /// radio group's even while a Move mode owns every other arrow on the
+    /// surface — the surface's tunnelling navigator steps the moving cards
+    /// on an unmodified arrow, and it ran first. Right on the checked
+    /// Outline choice checks Table and switches the projection; the cards
+    /// stay where they were and the mode stays up. The key travels both
+    /// routed phases with one argument object, as the input manager sends
+    /// it.
+    /// </summary>
+    [Fact]
+    public void TheSwitchersArrowsChooseEvenWhileAModeStepsTheCards() => RunSta(() =>
+    {
+        CanvasDocumentViewModel document = NewDocument("table.canvas");
+        document.Load();
+        var surface = new CanvasSurfaceView { Model = document };
+        using var host = Host(surface);
+        document.SelectNode("beta", announce: false);
+        document.Navigator.AttachPresenter(surface);
+        Assert.True(document.Navigator.EnterMoveMode(), "move mode did not enter");
+        CanvasTransientHolder transient = Assert.IsType<CanvasTransientHolder>(document.Transient);
+        var before = transient.Rects;
+        Assert.True(surface.OutlineChoiceForTests.IsChecked);
+        Assert.True(surface.OutlineChoiceForTests.Focus());
+
+        var args = new KeyEventArgs(
+            Keyboard.PrimaryDevice,
+            PresentationSource.FromVisual(surface.OutlineChoiceForTests)
+                ?? throw new InvalidOperationException("the switcher is not in a window."),
+            0,
+            Key.Right)
+        {
+            RoutedEvent = Keyboard.PreviewKeyDownEvent,
+        };
+        surface.OutlineChoiceForTests.RaiseEvent(args);
+        args.RoutedEvent = Keyboard.KeyDownEvent;
+        surface.OutlineChoiceForTests.RaiseEvent(args);
+
+        Assert.True(surface.TableChoiceForTests.IsChecked, "Right in move mode did not choose Table");
+        Assert.Equal(CanvasSurfaceKind.Table, document.Selection.ActiveSurface);
+        Assert.Same(before, transient.Rects);
+        Assert.True(document.Modes.IsActive, "the choice ended the move mode");
+        document.Shutdown();
+    });
+
+    /// <summary>
+    /// W7-7 PR 4 (#1247; the owner's S4, the completeness sweep's G16): the
+    /// table's landing — the projection's (Escape from the filter field),
+    /// and a restore whose token is the grid or one of its cells — is the
+    /// SEATED card's row, silently. It was FocusFirstCell: row 0, whatever
+    /// card was seated, and the row's currency moved the seat there with a
+    /// narrated move on top of the row being read.
+    /// </summary>
+    [Fact]
+    public void TheTablesLandingIsTheSeatedCardSilently() => RunSta(() =>
+    {
+        (CanvasDocumentViewModel document, CanvasSurfaceView surface, AccessibleDataGrid grid) = Table();
+        using var host = Host(surface);
+        string seated = document.TableRows[^1].NodeId;
+        Assert.NotEqual(document.TableRows[0].NodeId, seated);
+        document.SelectNode(seated, announce: false);
+        Assert.True(surface.FilterFieldForTests.Focus());
+        document.AnnouncerForTests.FlushForTests();
+        _announced.Clear();
+
+        Assert.True(surface.TableForTests.FocusGrid());
+        document.AnnouncerForTests.FlushForTests();
+
+        Assert.True(grid.Grid.IsKeyboardFocusWithin);
+        Assert.Equal(seated, Assert.IsType<CanvasTableRow>(grid.Grid.CurrentCell.Item).NodeId);
+        Assert.Equal(seated, document.Selection.Selected);
+        Assert.Empty(_announced);
+
+        // A restore whose token is the grid lands the same way.
+        Assert.True(surface.FilterFieldForTests.Focus());
+        Assert.True(SelectorFocus.LandOnStop(grid.Grid));
+        document.AnnouncerForTests.FlushForTests();
+        Assert.Equal(seated, Assert.IsType<CanvasTableRow>(grid.Grid.CurrentCell.Item).NodeId);
+        Assert.Equal(seated, document.Selection.Selected);
+        Assert.Empty(_announced);
         document.Shutdown();
     });
 

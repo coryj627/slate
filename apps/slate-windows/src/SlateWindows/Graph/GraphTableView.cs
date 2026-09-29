@@ -47,6 +47,11 @@ internal sealed class GraphTableView : UserControl
             ExternalSortHandler = OnExternalSort,
         };
         _grid.CurrentRowChanged += OnCurrentRowChanged;
+        // W7-7 PR 4 (#1247, R-5; codex round 5): a landing on the bare grid
+        // — a restore token, a publication under the keys — is the
+        // projection's own (rule F): the shared key's row, else the first,
+        // under the syncing guard, so it never writes the key (A-7).
+        SelectorFocus.SetOwnLanding(_grid.Grid, FocusProjection);
         // C-5: the grid's Ctrl+F reaches the field with no new row (C-D2)
         // — the canvas table's line, routed through the navigator to the
         // presenter that has the keys.

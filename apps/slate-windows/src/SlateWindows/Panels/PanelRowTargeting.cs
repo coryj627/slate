@@ -12,20 +12,30 @@ namespace SlateWindows.Panels;
 /// menu acts on the CLICKED row (WPF moves selection only on the
 /// left-button path, so right-clicking row B with row A selected
 /// would otherwise open A), a pointer request over empty chrome gets
-/// no menu, and the keyboard path (Menu / Shift+F10) keeps the
-/// current selection — refusing the menu outright when nothing is
-/// selected rather than opening one that silently does nothing.
+/// no menu, and the keyboard path (Menu / Shift+F10) targets the row
+/// that holds the keys — selecting it, so the menu's items act on the
+/// row the reader is on (W7-7 PR 4, codex round 7: a landing focuses a
+/// row without selecting it) — else the current selection, refusing the
+/// menu outright when there is neither rather than opening one that
+/// silently does nothing.
 /// </summary>
 internal static class PanelRowTargeting
 {
-    /// <summary>True when the menu may open; the clicked row (pointer
-    /// path) is selected and focused as a side effect.</summary>
+    /// <summary>True when the menu may open; the targeted row — the clicked
+    /// one (pointer path, also focused) or the focused one (keyboard path) —
+    /// is selected as a side effect.</summary>
     internal static bool TargetRowAt(
         ListBox list, object originalSource, bool pointerRequest)
     {
         if (!pointerRequest)
         {
-            return list.SelectedItem is not null;
+            if (SelectorFocus.FocusedOrSelectedItem(list) is not { } target)
+            {
+                return false;
+            }
+
+            list.SelectedItem = target;
+            return true;
         }
 
         DependencyObject? current = originalSource as DependencyObject;

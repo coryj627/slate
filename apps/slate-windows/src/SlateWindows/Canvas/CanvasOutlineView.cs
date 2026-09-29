@@ -168,7 +168,7 @@ internal sealed class CanvasOutlineRowViewModel : BindableBase
 /// <see cref="CanvasOutlineItem"/> and therefore carries the
 /// <c>Invoke</c> pattern (contract A8).
 /// </summary>
-internal sealed class CanvasOutlineTree : TreeView
+internal sealed class CanvasOutlineTree : LandingTreeView
 {
     protected override DependencyObject GetContainerForItemOverride() =>
         new CanvasOutlineItem();
@@ -195,7 +195,7 @@ internal sealed class CanvasOutlineTree : TreeView
 /// every row. Overriding the item-peer factory here and on the item peer
 /// puts Invoke on the peer that is actually exposed.
 /// </remarks>
-internal sealed class CanvasOutlineTreeAutomationPeer : TreeViewAutomationPeer
+internal sealed class CanvasOutlineTreeAutomationPeer : LandingTreeViewAutomationPeer
 {
     public CanvasOutlineTreeAutomationPeer(CanvasOutlineTree owner)
         : base(owner)
@@ -247,7 +247,7 @@ internal sealed class CanvasOutlineRowDataPeer
 /// invokable CHILD element instead would put a second peer inside every
 /// row, which the journeys' recorded peered-elements-only trap forbids.
 /// </summary>
-internal sealed class CanvasOutlineItem : TreeViewItem
+internal sealed class CanvasOutlineItem : LandingTreeViewItem
 {
     /// <summary>
     /// R-12 (#1256): the row's context menu EXISTS from the container's
@@ -409,6 +409,11 @@ internal sealed class CanvasOutlineView : UserControl
         _tree.KeyDown += OnTreeKeyDown;
         _tree.MouseDoubleClick += OnTreeDoubleClick;
         Content = _tree;
+        // W7-7 PR 4 (#1247, R-5; codex round 5): a restore whose token is
+        // the bare outline lands as the projection does — the seated row,
+        // else the first, delivered silently. The generic tree landing would
+        // focus a row whose own selection echo narrates a move (t0 §1.5).
+        SelectorFocus.SetOwnLanding(_tree, FocusTree);
     }
 
     public CanvasDocumentViewModel? Model
@@ -557,10 +562,39 @@ internal sealed class CanvasOutlineView : UserControl
 
     internal bool HasKeyboardFocus => _tree.IsKeyboardFocusWithin;
 
-    /// <summary>Put the reader on the tree, reporting whether it took
-    /// the keys — a collapsed projection cannot, and a caller with
-    /// nowhere else to go needs to know that (contract C6).</summary>
-    internal bool FocusTree() => _tree.Focus();
+    /// <summary>Put the reader on a ROW of the tree — the seated card's,
+    /// else the first — reporting whether one took the keys: a collapsed
+    /// projection cannot, and a caller with nowhere else to go needs to
+    /// know that (contract C6).</summary>
+    /// <remarks>
+    /// W7-7 PR 4 (#1247, R-5; spec review round 23): this focused the bare
+    /// tree. WPF hands a tree's keys to its selected row only when there is
+    /// one, so with no card seated the tree kept them and Left and Right
+    /// left the outline; with one seated WPF forwarded them, but the tree's
+    /// own Focus() answered false and FocusProjection went on past a landing
+    /// that had happened (the W7-6 #1240 shape; OutlineLandingTests measures
+    /// both). The landing is the delivery's — realized, silent, and
+    /// reported truthfully — and a seat that cannot be delivered (filtered
+    /// out) gives way to the first row. A tree with NO rows is its own stop
+    /// (AR-6) and takes the keys itself — the menu key's answer on an empty
+    /// outline (#1283, contract 34 C3) is spoken from there.
+    /// </remarks>
+    internal bool FocusTree()
+    {
+        if (_roots.Count == 0)
+        {
+            return SelectorFocus.FocusSelectedOrFirstRow(_tree);
+        }
+
+        if (_selectedRow is { IsConnection: false } seated && DeliverFocus(seated.Id) is not null)
+        {
+            return true;
+        }
+
+        return _roots.FirstOrDefault() is { IsConnection: false } first
+            && !ReferenceEquals(first, _selectedRow)
+            && DeliverFocus(first.Id) is not null;
+    }
 
     /// <summary>The container for a row at any depth, realized if it
     /// can be. Null when the panel would not make it.</summary>
@@ -955,8 +989,10 @@ internal sealed class CanvasOutlineView : UserControl
 
     private void OnTreeKeyDown(object sender, KeyEventArgs e)
     {
+        // The row that holds the keys, else the seated one (W7-7 PR 4,
+        // codex round 7; FocusedRowCensus).
         if (e.Key != Key.Enter
-            || _tree.SelectedItem is not CanvasOutlineRowViewModel line)
+            || SelectorFocus.FocusedOrSelectedItem(_tree) is not CanvasOutlineRowViewModel line)
         {
             return;
         }
@@ -964,9 +1000,12 @@ internal sealed class CanvasOutlineView : UserControl
         ActivateRow(line);
     }
 
+    /// <summary>A double-click activates the row it HIT, never the seated
+    /// one: a double-click on the tree's empty area lands its first press on
+    /// a row (codex PR 4's final check).</summary>
     private void OnTreeDoubleClick(object sender, MouseButtonEventArgs e)
     {
-        if (_tree.SelectedItem is CanvasOutlineRowViewModel line)
+        if (SelectorFocus.ClickedItem(_tree, e.OriginalSource) is CanvasOutlineRowViewModel line)
         {
             ActivateRow(line);
         }

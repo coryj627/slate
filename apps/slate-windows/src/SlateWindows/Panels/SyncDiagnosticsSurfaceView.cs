@@ -606,7 +606,7 @@ internal sealed class SyncDiagnosticsSurfaceView : UserControl
                 // left keyboard focus wherever Children.Clear() dropped
                 // it, the window root, and Tab restarted at the top of
                 // the shell.
-                if (target is not null && target.Focus())
+                if (target is not null && SelectorFocus.LandOnStop(target))
                 {
                     return;
                 }
@@ -631,7 +631,13 @@ internal sealed class SyncDiagnosticsSurfaceView : UserControl
                 _content,
                 candidate => HasAutomationId(candidate, "SyncDiagnosticsRetry"))
             ?? FindDescendant(_content, candidate => candidate.Focusable);
-        _ = anchor?.Focus();
+        // The leaf's last resort, through the one landing for element-typed
+        // targets (R-5, #1247; codex round 4); an anchor that refuses the
+        // keys hands them to its own first stop.
+        if (anchor is not null && !SelectorFocus.LandOnStop(anchor))
+        {
+            _ = anchor.MoveFocus(new TraversalRequest(FocusNavigationDirection.First));
+        }
     }
 
     private static bool HasAutomationId(FrameworkElement element, string id) =>

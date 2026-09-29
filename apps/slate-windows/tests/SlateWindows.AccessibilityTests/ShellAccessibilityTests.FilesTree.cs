@@ -64,10 +64,6 @@ public sealed partial class ShellAccessibilityTests
             Window window = WaitForMainWindow(process, automation, Path.Combine(logs, "slate-windows.log"), TimeSpan.FromSeconds(30));
             window.SetForeground();
             AutomationElement tree = WaitForElement(window, "FilesTree", TimeSpan.FromSeconds(30));
-            // The launch lands focus on the tree once the vault has opened
-            // and published its rows (W7-5); interacting before that races
-            // the landing and the first publication.
-            AssertEventuallyFocused(tree, "Opening the vault did not land focus on the Files tree.");
             // Rows sort by name, folders among files: alpha.md, Folder,
             // note.md, zeta.md.
             foreach (string row in new[] { "alpha.md", "Folder", "note.md", "zeta.md" })
@@ -75,15 +71,31 @@ public sealed partial class ShellAccessibilityTests
                 _ = WaitForTreeItemStartingWith(tree, automation, row);
             }
 
+            // The launch lands focus on the tree once the vault has opened
+            // and published its rows (W7-5) — on its first row, UNSELECTED,
+            // with no file selected (W7-7 PR 4, R-5 as the owner amended it):
+            // the landing opens nothing. Interacting before that races the
+            // landing and the first publication.
+            AssertFocusStaysOnRow(automation, tree, "alpha.md", "Opening the vault did not land focus on the Files tree's first row.");
+            Assert.False(
+                WaitForTreeItemStartingWith(tree, automation, "alpha.md").Patterns.SelectionItem.Pattern.IsSelected.Value,
+                "The launch landing selected the first row.");
+            Assert.Equal(0, TabCount(window, automation));
+
             Assert.StartsWith(
                 "Up and Down move through files and folders",
                 tree.Properties.HelpText.ValueOrDefault ?? string.Empty,
                 StringComparison.Ordinal);
 
             // A file row, a folder row, a file row: each file is shown,
-            // and focus never leaves its row (R-2). Focusing the first row
-            // selects it, the same selection-driven open an arrow makes.
-            WaitForTreeItemStartingWith(tree, automation, "alpha.md").Focus();
+            // and focus never leaves its row (R-2). From the unselected
+            // launch row Down selects the Folder row, which opens nothing,
+            // and Up selects alpha.md: the selection-driven open an arrow
+            // makes.
+            PressDownArrow();
+            AssertFocusStaysOnRow(automation, tree, "Folder", "Down from the launch row did not move to the Folder row.");
+            Assert.Equal(0, TabCount(window, automation));
+            PressUpArrow();
             _ = WaitForEditor(window, automation, "alpha.md editor", TimeSpan.FromSeconds(10));
             AssertFocusStaysOnRow(automation, tree, "alpha.md", "Selecting alpha.md moved focus off the Files tree.");
             PressDownArrow();

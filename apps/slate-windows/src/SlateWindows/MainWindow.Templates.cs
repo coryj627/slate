@@ -232,22 +232,19 @@ public partial class MainWindow
         switch (picker.State)
         {
             case TemplatePickerState.Available:
-                if (TemplatePickerList.Items.Count > 0)
+                if (TemplatePickerList.Items.Count > 0 && TemplatePickerList.SelectedIndex < 0)
                 {
-                    TemplatePickerList.SelectedIndex =
-                        TemplatePickerList.SelectedIndex < 0
-                            ? 0
-                            : TemplatePickerList.SelectedIndex;
-                    if (TemplatePickerList.ItemContainerGenerator
-                        .ContainerFromIndex(TemplatePickerList.SelectedIndex)
-                        is ListBoxItem item)
-                    {
-                        _ = item.Focus();
-                        return;
-                    }
+                    TemplatePickerList.SelectedIndex = 0;
                 }
 
-                _ = TemplatePickerList.Focus();
+                // The selected row, never the bare list (R-5, #1247); a
+                // row that cannot be landed yet leaves the keys to the
+                // sheet's stable stop, Cancel.
+                if (!SelectorFocus.FocusFirstOrSelectedItem(TemplatePickerList))
+                {
+                    _ = TemplatePickerCancelButton.Focus();
+                }
+
                 return;
             case TemplatePickerState.Empty:
                 _ = TemplatePickerTryAgainButton.Focus();
@@ -410,7 +407,9 @@ public partial class MainWindow
                     return;
                 }
 
-                if (TemplatePickerList.SelectedItem
+                // The row that holds the keys, else the one the arrows
+                // chose (W7-7 PR 4, codex round 7).
+                if (SelectorFocus.FocusedOrSelectedItem(TemplatePickerList)
                     is TemplatePickerRowViewModel row)
                 {
                     picker.ActivateCommand.Execute(row);

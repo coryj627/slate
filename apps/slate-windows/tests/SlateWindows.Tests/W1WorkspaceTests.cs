@@ -170,7 +170,8 @@ public sealed class W1WorkspaceModelTests
         Assert.Equal(WorkspaceFocusBoundary.Files, boundary);
         workspace.IsRightPaneVisible = false;
         workspace.FocusPaneRightCommand.Execute(null);
-        Assert.Equal(WorkspaceFocusBoundary.RightPane, boundary);
+        // The directional edge, not a leaf reveal (W7-7 PR 4, #1247).
+        Assert.Equal(WorkspaceFocusBoundary.RightPaneEdge, boundary);
         Assert.True(workspace.IsRightPaneVisible);
     }
 
