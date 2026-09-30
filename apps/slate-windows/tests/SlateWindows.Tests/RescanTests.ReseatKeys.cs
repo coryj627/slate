@@ -72,6 +72,62 @@ public sealed partial class RescanTests
         }
     });
 
+    /// <summary>#1318's final merge (W7-7 PR 4b over PR 7): the same re-seat
+    /// with the surface inside a scope the focus guard lands, as the shell's
+    /// editor pane is. The outline's rebuild removes the card's row under the
+    /// keys, and the re-seat seed's landing puts them back on the card: one
+    /// focus change. The guard leaves the outline tree to its own hand-over
+    /// and never runs the scope's landing.</summary>
+    [Fact]
+    public void ACaseOnlyReseatInsideAGuardedScopeMovesTheKeysOnce() => RunSta(() =>
+    {
+        using var h = new Harness("reseat-canvas-guard", ("board.canvas", TwoNodeCanvas));
+        if (!h.VolumeAliasesCase())
+        {
+            return;
+        }
+
+        WorkspaceTabViewModel tab = h.Open("board.canvas");
+        h.PumpUntil(() => tab.Canvas?.RowFor("added") is not null, "the board's first load");
+        var surface = new CanvasSurfaceView { DataContext = tab };
+        _ = surface.SetBinding(CanvasSurfaceView.ModelProperty, new Binding(nameof(WorkspaceTabViewModel.Canvas)));
+        var scope = new Border { Child = surface };
+        int scopeLandings = 0;
+        RegionFocusGuard.SetLanding(scope, () =>
+        {
+            scopeLandings++;
+            return surface.Focus();
+        });
+        Window window = ShowHosted(scope);
+        List<IInputElement> changes = RecordFocusChanges(window);
+        try
+        {
+            Assert.True(surface.FocusRow("added"));
+            PumpedDispatcher.Drain();
+            Assert.Equal("added", FocusedOutlineNode());
+            h.Events.Clear();
+            changes.Clear();
+
+            File.Move(Path.Combine(h.Root, "board.canvas"), Path.Combine(h.Root, "Board.canvas"));
+            h.Context.Await(h.Lifecycle.RescanAsync(RescanReason.Explicit));
+            h.PumpUntil(
+                () => tab.Canvas is { Path: "Board.canvas" } board && board.RowFor("added") is not null,
+                "the re-seated board's load");
+            Settle(window);
+
+            AssertKeysInside(surface);
+            Assert.IsType<CanvasOutlineItem>(Keyboard.FocusedElement);
+            Assert.Equal("added", FocusedOutlineNode());
+            AssertOneFocusChangeNeverTheWindow(changes);
+            Assert.Equal(0, scopeLandings);
+            Assert.Equal(["Files refreshed. 1 new or changed, 1 removed."], h.Spoken);
+        }
+        finally
+        {
+            window.Close();
+        }
+    });
+
     /// <summary>The keys on a base's MIDDLE row: the re-seated base's first
     /// publication binds its grid through the grid's key restore, which reads
     /// the reader's row key off the retired document's rows, so the keys stay

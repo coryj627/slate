@@ -124,6 +124,72 @@ public sealed partial class FilesRegionLandingTests
         host.AssertKeysNeverOnAWindow();
     });
 
+    /// <summary>
+    /// #1318's final merge (W7-7 PR 4b over PR 7): the Files pane's focus
+    /// guard and the tree's restore of a rescan's publication move the keys
+    /// ONCE between them. The restore lands them on a live row before WPF
+    /// re-evaluates the removed one. The guard, finding them on a live row,
+    /// adds no second landing and declines nothing. The keys end on the
+    /// reader's fresh row, on the nearest survivor unselected, or on the
+    /// emptied FilesTree, the region's stop.
+    /// </summary>
+    [Theory]
+    [InlineData("kept")]
+    [InlineData("deleted")]
+    [InlineData("emptied")]
+    public void ARescansTreePublicationMovesTheKeysOnceBesideTheGuard(string arm) => RunSta(() =>
+    {
+        using var host = new Host();
+        host.Initialize();
+        Assert.Same(host.Shell.FilesTree, host.Tree);
+        Assert.True(RegionFocusGuard.HasLanding(host.Pane), "premise: the guard is armed on the Files pane");
+        var opened = new List<string>();
+        string readerPath = arm == "kept" ? host.Sidebar.RootNodes[^1].Path : "note1.md";
+        _ = LandOnSelected(host, readerPath, opened);
+        switch (arm)
+        {
+            case "kept":
+                File.WriteAllText(Path.Combine(host.Root, "0-created-outside.md"), "# Outside\n");
+                break;
+            case "deleted":
+                File.Delete(Path.Combine(host.Root, readerPath));
+                break;
+            default:
+                foreach (string note in Directory.EnumerateFiles(host.Root, "*.md"))
+                {
+                    File.Delete(note);
+                }
+
+                break;
+        }
+
+        RescanAndRefresh(host);
+
+        IInputElement landed = Assert.Single(host.FocusChanges);
+        Assert.Same(landed, Keyboard.FocusedElement);
+        switch (arm)
+        {
+            case "kept":
+                Assert.True(
+                    landed is TreeViewItem { IsSelected: true, DataContext: FileTreeNodeViewModel kept } && kept.Path == readerPath,
+                    $"the keys moved to {landed}, not to {readerPath}'s fresh row");
+                break;
+            case "deleted":
+                Assert.True(
+                    landed is TreeViewItem { IsSelected: false, DataContext: FileTreeNodeViewModel { Path: "note2.md" } },
+                    $"the keys moved to {landed}, not to note2.md's row unselected");
+                break;
+            default:
+                Assert.Same(host.Tree, landed);
+                Assert.False(host.Tree.HasItems);
+                break;
+        }
+
+        Assert.Empty(opened);
+        Assert.Empty(host.Announced);
+        host.AssertKeysNeverOnAWindow();
+    });
+
     /// <summary>Select <paramref name="path"/>'s row, land the keys on it, then
     /// forget the setup's focus changes and announcements and start counting
     /// opens.</summary>
@@ -166,6 +232,9 @@ public sealed partial class FilesRegionLandingTests
         public VaultSession Session => _session ?? throw new InvalidOperationException("The host is not initialized.");
 
         public string Root => _fixture.Root;
+
+        /// <summary>Every focus change since the last forget, in order.</summary>
+        public IReadOnlyList<IInputElement> FocusChanges => _focusChanges;
 
         /// <summary>No focus change since the last forget put the keys on a
         /// window — the stranded state a removed row leaves.</summary>

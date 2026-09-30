@@ -724,6 +724,39 @@ The focus manifest follows PR 3's host types and witnesses `AccessibleDataGrid.C
   Letting the pool finish before the first frame fails the old fixture every time: 4 of 4 on 4b and 3 of 3 on main. The fixture now waits on the publish itself, then drains what it queued. The new fixture passes that ordering, and passed 21 of 21 runs on two cores contended by four spinners. The assembly runs its classes one at a time, so nothing else was in flight.
 - `ReadingViewTests.SyntheticAttributeWalkSurvivesHugeDocuments` overran its 60 s STA bound, at 63 s. None of 4b's code is on its path: the fact builds a reading surface and its peer with no window, shell or focus change. The branch's one reading-path change, `ClearForModelSwitch`, does not run. Locally it takes 10, 11 and 11 s on 4b, and 11, 10 and 10 s on main. The time is the synthetic style walk over 10,050 paragraphs: about 4 s for the whole range's style name, and about 3.2 s for each `FindAttribute`. That CI app lane took 18 min 17 s, against 13–15 min on main's last three runs. The bound stays at 60 s; raising it is the owner's call.
 
+**Merge with main 356864a0 (2026-09-30; #1304, PR 6 follow-up B, and #1309, PR 7).** Three conflicts, kept both ways:
+- `DashboardViewModel`: 4b's `HasPublished` sits beside PR 7's cancellable `LoadAsync`. A cancelled rescan's discarded publication leaves it unset.
+- `a11y.rs`: 4b's `ShellSidebar` and `SidebarWidthLimit` sit beside PR 7's `RescanReason`, and the pinned top-level count is 217. `SidebarResized` and the rescan pair all speak at Medium, as follow-up B's close lines do, and each sentence is its own. The corpus, the trigger ledger and contract 38's rows carry all three.
+- The W-C matrix was merged cell by cell.
+
+The guard against PR 7's keepers:
+- PR 7's new keepers never double-land with 4b's guard and are never declined by it. These keepers are:
+  - the Files tree's restore of a rescan that removed the reader's row;
+  - Quick Open's publication keeper;
+  - the Bases list's keeper, and the rows kept while a re-seated document loads;
+  - the canvas's re-seat seed.
+- Each keeper lands the keys on a live stop before WPF's re-evaluation. The guard acts only on a move off a stranded element onto something that is no stop. It leaves a `LandingTreeView` and a list with a publication keeper to their own hand-overs.
+- PR 7's new facts pass with the guard facts, 200 of 200. Among them, Quick Open's re-rank and the Bases re-seats each assert one focus change.
+- `FilesRegionLandingTests.ARescansTreePublicationMovesTheKeysOnceBesideTheGuard` counts the tree restore's arms, each one focus change: kept (the reader's fresh row), deleted (the nearest survivor, unselected) and emptied (the empty tree).
+- `RescanTests.ACaseOnlyReseatInsideAGuardedScopeMovesTheKeysOnce` puts the canvas re-seat inside a scope the guard lands: one focus change, back on the card, and the scope's landing never runs.
+
+The S6 manifest:
+- PR 7 adds no site of the census's classes. Its publications reuse listed sites: the tree's items, Quick Open's `Results` and the Bases list's `ItemsSource`.
+- The sites whose keys PR 7's keepers now land cite PR 7's facts, and the census judges each:
+  - `QuickSwitcherResultsList`'s items and `ApplyRanked`'s `Results`: `QuickSwitcherRescanLandingTests.ARescansSilentReRankKeepsTheKeysOnTheReadersResult`.
+  - `FilesTree`'s items: the fact above.
+  - The Bases list's `RenderList`: `RescanTests.ACaseOnlyReseatKeepsTheKeysOnTheReadersListRow`.
+
+The calendar against follow-up B's save chain:
+- `CalendarCommit`'s one commit takes the property write's own way, never the tab's save chain: the row's gates, the note's write lease and a check against the row's hash.
+- Follow-up B keeps a saving tab dirty until its save publishes. So a day picked while the save writes off the dispatcher is refused, said once, and nothing is written over the save.
+- The save's publication rebuilds the header from the bytes it wrote. A day picked after it writes once, over the saved body (`PropertiesLandingTests.ADayPickedWhileItsNoteSavesWritesNothingUntilTheSavePublishes`).
+
+Mutations, each killed:
+- the tree restore never landing;
+- the guard landing over the restore's direct request to a row;
+- a property write admitted while its tab is dirty.
+
 ### PR 5 — #1248 sheet keyboard fence
 
 Branch `claude/w7-7-pr5-sheet-fence` (base 937dd3dd). Delivered: `SheetKeyboardFence` on all sixteen focus-scope overlays — one edge command binding per Tab command that refuses `TabForward`/`TabBackward` only when nothing inside answered and lets the key keep routing, plus a guard on a direct `Execute`; no key hook (controls that own Tab keep it; an IME-claimed Tab stays with the IME); `SheetFenceCensus` requiring the fence and `Cycle` in the element and style branches; contract 30 T4 amended. Follow-up #1259 (Ctrl+Z/Y/X reach the note behind a sheet).

@@ -9,6 +9,7 @@ using System.Windows.Controls.Primitives;
 using System.Windows.Input;
 using SlateWindows.Canvas;
 using SlateWindows.Panels;
+using uniffi.slate_uniffi;
 
 namespace SlateWindows.Tests;
 
@@ -430,6 +431,83 @@ public sealed class PropertiesLandingTests
         Assert.Empty(host.Workspace.ActiveGroup.Tabs);
         Assert.Equal(0, writes.Value);
         Assert.Contains("due: 2026-09-10", host.Read("a.md"), StringComparison.Ordinal);
+    });
+
+    /// <summary>
+    /// #1318's final merge (W7-7 PR 4b over PR 6 follow-up B, #1280): a
+    /// save's write runs off the dispatcher now, so a calendar can close
+    /// while its note is still being written. The day it commits takes the
+    /// property write's own way: the row's gates, the note's write lease and
+    /// a check against the row's hash, never the tab's save chain. The tab
+    /// stays dirty until its save publishes, so a day picked inside the save
+    /// is refused, said once, and nothing is written over the save. The
+    /// save's publication rebuilds the header from the bytes it wrote. A day
+    /// picked after that writes once, over the saved body.
+    /// </summary>
+    [Fact]
+    public void ADayPickedWhileItsNoteSavesWritesNothingUntilTheSavePublishes() => RunSta(() =>
+    {
+        const string Edit = "An edit on its way to disk.";
+        using var host = new ShownShell(("a.md", DatedNote));
+        NotePropertiesViewModel properties = OpenProperties(host, rows: 2);
+        WorkspaceTabViewModel tab = Assert.IsType<WorkspaceTabViewModel>(host.Workspace.ActiveGroup.ActiveTab);
+        tab.Text += $"\n{Edit}\n";
+        Assert.True(tab.IsDirty, "premise: the edit left the tab clean");
+        using var parked = new ManualResetEventSlim();
+        using var release = new ManualResetEventSlim();
+        tab.SaveWriteHookForTests = () =>
+        {
+            parked.Set();
+            _ = release.Wait(TimeSpan.FromSeconds(30));
+        };
+        PropertyRowViewModel due = Row(properties, "due");
+        try
+        {
+            host.Workspace.SaveActiveCommand.Execute(null);
+            Assert.True(parked.Wait(TimeSpan.FromSeconds(10)), "premise: the save's write never started");
+            StrongBox<int> writes = CountRepublications(properties);
+            host.Announced.Clear();
+
+            DatePicker picker = OpenCalendar(host, due);
+            Press(Key.Right);
+            Press(Key.Enter);
+            PumpedDispatcher.Drain();
+
+            Assert.False(picker.IsDropDownOpen);
+            Assert.True(tab.IsDirty, "the tab went clean before its save published");
+            Assert.False(due.WriteInFlight, "a property write started inside the save");
+            Assert.Equal(0, writes.Value);
+            string during = host.Read("a.md");
+            Assert.Contains("due: 2026-09-10", during, StringComparison.Ordinal);
+            Assert.DoesNotContain(Edit, during, StringComparison.Ordinal);
+            _ = Assert.Single(
+                host.Announced.OfType<A11yEvent.HostComposed>(),
+                line => line.Text.StartsWith("Save the note before editing properties.", StringComparison.Ordinal));
+        }
+        finally
+        {
+            release.Set();
+        }
+
+        Assert.True(PumpedDispatcher.PumpUntil(() => !tab.IsDirty, TimeSpan.FromSeconds(30)), "the save never published");
+        AwaitRepublished(properties, due);
+        string saved = host.Read("a.md");
+        Assert.Contains(Edit, saved, StringComparison.Ordinal);
+        Assert.Contains("due: 2026-09-10", saved, StringComparison.Ordinal);
+
+        PropertyRowViewModel fresh = Row(properties, "due");
+        StrongBox<int> after = CountRepublications(properties);
+        DatePicker again = OpenCalendar(host, fresh);
+        Press(Key.Right);
+        DateTime picked = Assert.IsType<DateTime>(again.SelectedDate);
+        Press(Key.Enter);
+        AwaitRepublished(properties, fresh);
+
+        Assert.Equal(1, after.Value);
+        string written = host.Read("a.md");
+        Assert.Contains("due: " + picked.ToString("yyyy-MM-dd", System.Globalization.CultureInfo.InvariantCulture), written, StringComparison.Ordinal);
+        Assert.Contains(Edit, written, StringComparison.Ordinal);
+        Assert.False(tab.IsDirty);
     });
 
     /// <summary>Counts the header's republications: one per write, whose
