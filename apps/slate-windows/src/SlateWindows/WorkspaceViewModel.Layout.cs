@@ -353,7 +353,8 @@ internal sealed partial class WorkspaceViewModel
             ActivateReadingTag,
             _announce,
             EditorPreferences,
-            startInteractionBackgroundWork: _startInteractionBackgroundWork);
+            startInteractionBackgroundWork: _startInteractionBackgroundWork,
+            interactionBackgroundFaultForTests: InteractionBackgroundFaultForTests);
         tab.TaskRepairs = _taskIndexRepairs;
         tab.SaveCoordinator = _saves;
         AttachTabDocumentsIfNeeded(tab);

@@ -50,6 +50,12 @@ internal sealed partial class WorkspaceViewModel
     /// history, bases, graph).</summary>
     internal Func<string, string, Func<Task>, Task>? RescanPublicationForTests { get; set; }
 
+    /// <summary>Test seam (W7-7 PR 7, codex's final merge-delta check, note
+    /// 3): the editor interaction workers' fault seam, handed to every tab
+    /// the workspace builds from now on — a fact parks a tab's cache load
+    /// inside it.</summary>
+    internal Func<EditorInteractionWorkerKind, Exception?>? InteractionBackgroundFaultForTests { get; set; }
+
     private Task RunKindReload(string kind, string path, Func<Task> reload) =>
         RescanPublicationForTests is { } seam ? seam(kind, path, reload) : reload();
 
@@ -827,6 +833,16 @@ internal sealed partial class WorkspaceViewModel
     // close waits for those still running.
     private readonly List<Task> _rescanTails = [];
 
+    // Codex's final merge-delta check (note 3): the editor coordinators a run
+    // touched stay registered until their background work is idle — a
+    // load's worker, its dispatcher publication and the rerun that
+    // publication starts (EditorInteractionCoordinator.IsBackgroundIdle). A
+    // snapshot of the workers alone reads empty between a worker's end and
+    // its publication, and forgot the rerun. Pruned when idle, across runs;
+    // the close joins the workers of every one still registered.
+    private readonly HashSet<EditorInteractionCoordinator> _rescanCoordinators =
+        new(ReferenceEqualityComparer.Instance);
+
     /// <summary>A scheduler the run started work on — drained to its fixed
     /// point (<see cref="PanelWorkScheduler.WhenAllWorkDrained"/>).</summary>
     private void TouchRescanScheduler(PanelWorkScheduler scheduler)
@@ -848,13 +864,15 @@ internal sealed partial class WorkspaceViewModel
     }
 
     /// <summary>A tab's workers a run started — its editor coordinator's
-    /// cache loads and its reading model's fetch — drained until none is
-    /// left, so a retry they issue later is drained too.</summary>
+    /// cache loads, kept registered until the coordinator is idle (a rerun a
+    /// load's publication starts included), and its reading model's fetch,
+    /// drained until none is left, so a retry they issue later is drained
+    /// too.</summary>
     private void TrackTabRescanWork(WorkspaceTabViewModel tab)
     {
-        if (tab.EditorInteractions is { } coordinator && _rescanTouchedOwners.Add(coordinator))
+        if (tab.EditorInteractions is { } coordinator)
         {
-            _rescanTouched.Add(() => DrainToEmptyAsync(coordinator.WhenBackgroundWorkDrained));
+            _ = _rescanCoordinators.Add(coordinator);
         }
 
         if (tab.Reading is { } reading)
@@ -906,6 +924,7 @@ internal sealed partial class WorkspaceViewModel
         _rescanTouched.Clear();
         _rescanTouchedOwners.Clear();
         _ = _rescanTails.RemoveAll(tail => tail.IsCompleted);
+        _ = _rescanCoordinators.RemoveWhere(coordinator => coordinator.IsBackgroundIdle);
     }
 
     /// <summary>
@@ -921,10 +940,14 @@ internal sealed partial class WorkspaceViewModel
     {
         while (true)
         {
+            // A registered coordinator's workers only: its queued
+            // publications need this thread, and a coordinator is disposed
+            // before any of them runs, so none starts a rerun.
             Task[] pending =
             [
                 .. _rescanTouched.Select(drain => drain())
                     .Concat(_rescanTails)
+                    .Concat(_rescanCoordinators.Select(coordinator => coordinator.WhenBackgroundWorkDrained()))
                     .Where(task => !task.IsCompleted),
             ];
             if (pending.Length == 0)
@@ -946,6 +969,7 @@ internal sealed partial class WorkspaceViewModel
         _rescanTouched.Clear();
         _rescanTouchedOwners.Clear();
         _rescanTails.Clear();
+        _rescanCoordinators.Clear();
     }
 
     private IEnumerable<BaseDocumentViewModel> FileBackedBaseDocuments()

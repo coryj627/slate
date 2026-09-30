@@ -1,6 +1,7 @@
 // Copyright (C) 2026 Cory Joseph
 // SPDX-License-Identifier: AGPL-3.0-or-later
 
+using System.Diagnostics;
 using uniffi.slate_uniffi;
 
 namespace SlateWindows.Tests;
@@ -12,7 +13,8 @@ namespace SlateWindows.Tests;
 /// dispatcher as the production listener delivers them, every save writing
 /// off the dispatcher. (1) A Created event never re-seats a tab under a save
 /// admitted for its file (contract 38 D-10, R-9). (2) A rescan's same-item
-/// reload keeps a faulted save's gates closed (D-10).
+/// reload keeps a faulted save's gates closed (D-10). (3) Close Vault waits
+/// for a cache rerun a rescan's invalidation started (R-9's fixed point).
 /// </summary>
 public sealed class FinalMergeDeltaTests
 {
@@ -184,6 +186,94 @@ public sealed class FinalMergeDeltaTests
         Assert.True(host.S.IsDisposed, "a clean note with no faulted save stayed open");
     }
 
+    /// <summary>Finding 3: a tab's link-and-task cache load parked, a rescan
+    /// invalidates the tab (the load owes a rerun), the load ends and its
+    /// publication starts the rerun, which parks too. Close Vault waits for
+    /// that rerun before the session goes — the fixed point includes a
+    /// successor a worker's publication started.</summary>
+    [Fact]
+    public void TheCloseWaitsForARerunARescansInvalidationStarted()
+    {
+        using var host = new PumpedSaveReentrancyTests.Host();
+        using var loads = new ParkedLoads(host);
+        EditorInteractionCoordinator coordinator = loads.OpenParked("note3.md");
+        int generation = coordinator.ArtifactCacheGenerationForTests;
+
+        Task run = host.Lifecycle.RescanAsync(RescanReason.Explicit);
+        Assert.True(PumpedDispatcher.PumpUntil(() => run.IsCompleted, TimeSpan.FromSeconds(60)), "the rescan");
+        // The rescan's invalidation reached the load in flight — the one
+        // coordinator, its first load still unpublished — so the load's
+        // publication owes the rerun.
+        Assert.True(coordinator.ArtifactCacheLoadingForTests, "premise: the first load is still in flight");
+        Assert.True(
+            coordinator.ArtifactCacheGenerationForTests > generation,
+            "premise: the rescan's invalidation did not reach the load in flight");
+        loads.ReleaseFirst.Set();
+        Assert.True(PumpedDispatcher.PumpUntil(() => loads.Second.IsSet, TimeSpan.FromSeconds(10)), "the rerun parking");
+
+        CloseWhileTheRerunIsParked(host, loads.ReleaseSecond);
+    }
+
+    /// <summary>Finding 3, the gap itself: the load's worker has ended but
+    /// its publication — the one that starts the rerun the rescan's
+    /// invalidation asked for — is still queued when the run completes and
+    /// prunes the coordinators it touched (the dispatcher is busy with the
+    /// run's tail). The coordinator is not idle, so it stays registered, and
+    /// Close Vault waits for the rerun that publication starts.</summary>
+    [Fact]
+    public void ALoadWhosePublicationIsQueuedKeepsTheCloseWaiting()
+    {
+        using var host = new PumpedSaveReentrancyTests.Host();
+        using var loads = new ParkedLoads(host);
+        EditorInteractionCoordinator coordinator = loads.OpenParked("note3.md");
+
+        // The run's last dependent: every publication the run awaits settles
+        // first; then, with the dispatcher held in this turn, the load's
+        // worker ends — its publication queues behind the turn, and the run
+        // completes, pruning, inside it. Premises are read after the run (an
+        // assertion thrown here would only count as a failed operation).
+        var publications = new List<Task>();
+        bool held = false;
+        bool settled = false;
+        bool inFlight = false;
+        bool ended = false;
+        bool queued = false;
+        host.Workspace.RescanPublicationForTests = (kind, _, publication) =>
+        {
+            Task real = publication();
+            publications.Add(real);
+            if (kind != "graph" || held)
+            {
+                return real;
+            }
+
+            held = true;
+            settled = PumpedDispatcher.PumpUntil(
+                () => publications.All(task => task.IsCompleted),
+                TimeSpan.FromSeconds(30));
+            // Their awaiters' continuations too: nothing the run awaits after
+            // this turn is left incomplete.
+            PumpedDispatcher.Drain();
+            inFlight = coordinator.ArtifactCacheLoadingForTests;
+            loads.ReleaseFirst.Set();
+            ended = SpinWait.SpinUntil(() => coordinator.LiveWorkersForTests == 0, TimeSpan.FromSeconds(10));
+            queued = coordinator.ArtifactCacheLoadingForTests;
+            return real;
+        };
+
+        Task run = host.Lifecycle.RescanAsync(RescanReason.Explicit);
+        Assert.True(PumpedDispatcher.PumpUntil(() => run.IsCompleted, TimeSpan.FromSeconds(60)), "the rescan");
+        host.Workspace.RescanPublicationForTests = null;
+        Assert.True(held, "premise: the run's graph dependent never published");
+        Assert.True(settled, "premise: the run's other publications never settled");
+        Assert.True(inFlight, "premise: the first load was not in flight");
+        Assert.True(ended, "premise: the load's worker never ended");
+        Assert.True(queued, "premise: the load's publication ran inside the run's turn");
+        Assert.True(PumpedDispatcher.PumpUntil(() => loads.Second.IsSet, TimeSpan.FromSeconds(10)), "the rerun parking");
+
+        CloseWhileTheRerunIsParked(host, loads.ReleaseSecond);
+    }
+
     /// <summary>A note that does not exist, opened (its load reads nothing,
     /// so it carries no content hash) and swept as missing — what a restore
     /// of a vanished note produces.</summary>
@@ -259,6 +349,100 @@ public sealed class FinalMergeDeltaTests
             case "close-pane": host.Workspace.ClosePaneCommand.Execute(null); break;
             case "replace": host.Workspace.OpenPath("note3.md"); break;
             case "teardown": host.Lifecycle.CloseVault(); break;
+        }
+    }
+
+    /// <summary>Close Vault while the rerun is parked, releasing it 800 ms
+    /// later from another thread: the close must not return before then —
+    /// the rerun's core calls run before the session is disposed.</summary>
+    private static void CloseWhileTheRerunIsParked(PumpedSaveReentrancyTests.Host host, ManualResetEventSlim rerun)
+    {
+        var clock = Stopwatch.StartNew();
+        long releasedAt = 0;
+        _ = Task.Run(async () =>
+        {
+            await Task.Delay(800);
+            Volatile.Write(ref releasedAt, clock.ElapsedMilliseconds);
+            try
+            {
+                rerun.Set();
+            }
+            catch (ObjectDisposedException)
+            {
+                // The fact already failed and tore its fixture down.
+            }
+        });
+        host.Lifecycle.CloseVault();
+        long closedAt = clock.ElapsedMilliseconds;
+
+        long released = Volatile.Read(ref releasedAt);
+        Assert.Null(host.Lifecycle.Workspace);
+        Assert.True(
+            released > 0 && closedAt >= released,
+            $"the close returned at {closedAt} ms, before the rerun was released at {released} ms");
+    }
+
+    /// <summary>The link-and-task cache loads of the tabs the workspace
+    /// builds from now on, parked in the workers' fault seam: the first on
+    /// <see cref="First"/> until <see cref="ReleaseFirst"/>, the second on
+    /// <see cref="Second"/> until <see cref="ReleaseSecond"/>.</summary>
+    private sealed class ParkedLoads : IDisposable
+    {
+        private readonly PumpedSaveReentrancyTests.Host _host;
+        private int _loads;
+
+        internal ParkedLoads(PumpedSaveReentrancyTests.Host host)
+        {
+            _host = host;
+            host.Workspace.SaveActiveAndSettle();
+            Assert.False(host.Workspace.HasDirtyTabs, "the arrangement left a dirty tab");
+            host.Workspace.InteractionBackgroundFaultForTests = kind =>
+            {
+                if (kind == EditorInteractionWorkerKind.Artifact)
+                {
+                    switch (Interlocked.Increment(ref _loads))
+                    {
+                        case 1:
+                            First.Set();
+                            _ = ReleaseFirst.Wait(TimeSpan.FromSeconds(30));
+                            break;
+                        case 2:
+                            Second.Set();
+                            _ = ReleaseSecond.Wait(TimeSpan.FromSeconds(30));
+                            break;
+                    }
+                }
+
+                return null;
+            };
+        }
+
+        internal ManualResetEventSlim First { get; } = new(false);
+        internal ManualResetEventSlim ReleaseFirst { get; } = new(false);
+        internal ManualResetEventSlim Second { get; } = new(false);
+        internal ManualResetEventSlim ReleaseSecond { get; } = new(false);
+
+        /// <summary>Open <paramref name="path"/> in a new tab and wait for its
+        /// first cache load to park; the tab's coordinator.</summary>
+        internal EditorInteractionCoordinator OpenParked(string path)
+        {
+            _host.Workspace.OpenPath(path, WorkspaceOpenTarget.NewTab);
+            WorkspaceTabViewModel tab = _host.Workspace.ActiveGroup.ActiveTab!;
+            Assert.Equal(path, tab.Path);
+            Assert.True(PumpedDispatcher.PumpUntil(() => First.IsSet, TimeSpan.FromSeconds(10)), "the cache load parking");
+            return tab.EditorInteractions!;
+        }
+
+        public void Dispose()
+        {
+            // Release first: a worker still parked wakes before its event goes.
+            ReleaseFirst.Set();
+            ReleaseSecond.Set();
+            _host.Workspace.InteractionBackgroundFaultForTests = null;
+            First.Dispose();
+            ReleaseFirst.Dispose();
+            Second.Dispose();
+            ReleaseSecond.Dispose();
         }
     }
 

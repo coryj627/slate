@@ -76,7 +76,8 @@ internal sealed partial class WorkspaceViewModel
                     ActivateReadingTag,
                     _announce,
                     EditorPreferences,
-                    startInteractionBackgroundWork: _startInteractionBackgroundWork)
+                    startInteractionBackgroundWork: _startInteractionBackgroundWork,
+                    interactionBackgroundFaultForTests: InteractionBackgroundFaultForTests)
                 {
                     TaskRepairs = _taskIndexRepairs,
                     SaveCoordinator = _saves,

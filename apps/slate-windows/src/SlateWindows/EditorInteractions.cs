@@ -1219,6 +1219,47 @@ internal sealed class EditorInteractionCoordinator : BindableBase, IDisposable
         return Task.WhenAll(snapshot);
     }
 
+    /// <summary>W7-7 PR 7 (#1252, R-9; codex's final merge-delta check, note
+    /// 3): true when none of this coordinator's background work is left — no
+    /// worker running; no link-and-task or citation load between its start
+    /// and its dispatcher publication (that publication starts the rerun an
+    /// invalidation asked for, so a load is not over until it has
+    /// published); no math refresh pending, running or owed a rerun. The
+    /// worker set alone reads empty between a worker's end and its
+    /// publication. A disposed coordinator's loads never publish, so only its
+    /// workers count.</summary>
+    internal bool IsBackgroundIdle
+    {
+        get
+        {
+            lock (_workersGate)
+            {
+                if (_liveWorkers.Count > 0)
+                {
+                    return false;
+                }
+            }
+
+            if (_disposed)
+            {
+                return true;
+            }
+
+            lock (_artifactCacheGate)
+            {
+                if (_artifactCacheLoading || _citationCacheLoading)
+                {
+                    return false;
+                }
+            }
+
+            lock (_mathRefreshGate)
+            {
+                return _mathRefreshDelay is null && !_mathWorkerRunning && !_mathRerunPending;
+            }
+        }
+    }
+
     internal void InvalidateExternalState()
     {
         lock (_artifactCacheGate)
