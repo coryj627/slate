@@ -974,7 +974,12 @@ public sealed class AccessibilityNotificationDispatcherTests
             launch.Raised.Select(line => line.ActivityId));
         Assert.Equal(0, launch.PollsStarted);
         Assert.Empty(launch.Drains);
-        Assert.Equal([(HostDiagnosticEvent.AnnouncementSource, "statusPeerProvider=connected")], launch.Logged);
+        Assert.Equal(
+            [
+                (HostDiagnosticEvent.AnnouncementSource, "statusPeerProvider=connected"),
+                (HostDiagnosticEvent.AnnouncementLaunchSettled, "outcome=ready-empty, lines=0, lost=0, at=0ms, advise=present"),
+            ],
+            launch.Logged);
     }
 
     /// <summary>OD-7, codex round 1: a screen reader started shortly AFTER
@@ -1102,6 +1107,115 @@ public sealed class AccessibilityNotificationDispatcherTests
         var quiet = new LaunchHarness { Connected = true };
         quiet.Post("Vault opened.");
         Assert.Empty(quiet.Drains);
+    }
+
+    /// <summary>
+    /// #1326: the launch settles once and says how. Lines queued before
+    /// readiness and replayed whole settle it as <c>drained</c>, with the lines
+    /// replayed — on UIA's advise, or when the hold runs out without one —
+    /// written after the drain's own line, so the replayed lines are raised by
+    /// then; nothing later settles it again.
+    /// </summary>
+    [Fact]
+    public void ALaunchWhoseQueuedLinesDrainSettlesOnceAsDrained()
+    {
+        var launch = new LaunchHarness();
+        launch.Post("Vault opened.", "Scanning vault. 2 files to index.");
+        Assert.Empty(launch.Settled);
+        launch.Now = TimeSpan.FromMilliseconds(1250);
+        launch.Connected = true;
+        launch.Post("Scan complete. 2 files indexed.");
+        Assert.Equal(["outcome=drained, lines=2, lost=0, at=1250ms, advise=present"], launch.Settled);
+        Assert.Equal([HostDiagnosticEvent.AnnouncementReplay, HostDiagnosticEvent.AnnouncementLaunchSettled], launch.LaunchEvents);
+        launch.Post("Right pane hidden.");
+        Assert.Single(launch.Settled);
+
+        var held = new LaunchHarness { Advised = false };
+        held.Post("Vault opened.");
+        held.Connected = true;
+        held.Tick!();
+        Assert.Empty(held.Settled);
+        held.Now = AccessibilityNotificationDispatcher.AdviseHold;
+        held.Tick!();
+        Assert.Equal(["outcome=drained, lines=1, lost=0, at=3000ms, advise=absent"], held.Settled);
+    }
+
+    /// <summary>
+    /// #1326: a process ready at its first line queues nothing, drains nothing
+    /// and logs no drain — the CI shell gate's path, where a journey's own
+    /// listener is advised before the first launch line — and its launch
+    /// settles there, once, as <c>ready-empty</c>: every line went straight
+    /// out, the first one just after the settled line.
+    /// </summary>
+    [Fact]
+    public void ALaunchReadyAtItsFirstLineSettlesOnceAsReadyEmpty()
+    {
+        var launch = new LaunchHarness { Connected = true };
+        launch.Post("Vault opened.");
+        Assert.Equal(["Vault opened."], launch.Raised.Select(line => line.Text));
+        Assert.Empty(launch.Drains);
+        Assert.Equal(["outcome=ready-empty, lines=0, lost=0, at=0ms, advise=present"], launch.Settled);
+
+        launch.Now = TimeSpan.FromSeconds(5);
+        launch.Post("Scanning vault. 2 files to index.");
+        Assert.Equal(2, launch.Raised.Count);
+        Assert.Single(launch.Settled);
+    }
+
+    /// <summary>
+    /// #1326: a launch that loses a line before readiness settles as
+    /// <c>dropped</c>, with what it replayed and what it lost — to the queue's
+    /// bound (sixteen kept of twenty), or to a line's own deadline when
+    /// readiness comes only as the launch window closes. A lost launch line is
+    /// a defect a journey must not step past.
+    /// </summary>
+    [Fact]
+    public void ALaunchThatLosesALineBeforeReadinessSettlesAsDropped()
+    {
+        var bounded = new LaunchHarness();
+        bounded.Post([.. Enumerable.Range(0, 20).Select(index => $"Line {index}.")]);
+        bounded.Connected = true;
+        bounded.Tick!();
+        Assert.Equal(16, bounded.Raised.Count);
+        Assert.Equal(["outcome=dropped, lines=16, lost=4, at=0ms, advise=present"], bounded.Settled);
+
+        var late = new LaunchHarness();
+        late.Post("Vault opened.");
+        late.Now = TimeSpan.FromSeconds(1);
+        late.Post("Scanning vault. 2 files to index.");
+        late.Now = AccessibilityNotificationDispatcher.LaunchWindow;
+        late.Connected = true;
+        late.Tick!();
+        Assert.Equal(["Scanning vault. 2 files to index."], late.Raised.Select(line => line.Text));
+        Assert.Equal(["outcome=dropped, lines=1, lost=1, at=30000ms, advise=present"], late.Settled);
+    }
+
+    /// <summary>
+    /// #1326: a launch never ready within its window settles as
+    /// <c>expired</c> when the window closes — after the drop and expiry lines,
+    /// with the launch lines lost — and readiness that comes later raises later
+    /// lines without settling the launch again.
+    /// </summary>
+    [Fact]
+    public void ALaunchNeverReadyInItsWindowSettlesOnceAsExpired()
+    {
+        var launch = new LaunchHarness();
+        launch.Post("Vault opened.", "Scanning vault. 2 files to index.");
+        launch.Now = AccessibilityNotificationDispatcher.LaunchWindow - TimeSpan.FromMilliseconds(1);
+        launch.Tick!();
+        Assert.Empty(launch.Settled);
+
+        launch.Now = AccessibilityNotificationDispatcher.LaunchWindow;
+        launch.Tick!();
+        Assert.Equal(["outcome=expired, lines=0, lost=2, at=30000ms, advise=present"], launch.Settled);
+        Assert.Equal(
+            [HostDiagnosticEvent.AnnouncementReplay, HostDiagnosticEvent.AnnouncementReplay, HostDiagnosticEvent.AnnouncementLaunchSettled],
+            launch.LaunchEvents);
+
+        launch.Connected = true;
+        launch.Post("Right pane hidden.");
+        Assert.Equal(["Right pane hidden."], launch.Raised.Select(line => line.Text));
+        Assert.Single(launch.Settled);
     }
 
     /// <summary>
@@ -1286,6 +1400,9 @@ public sealed class AccessibilityNotificationDispatcherTests
             Assert.Equal(HostDiagnosticEvent.AnnouncementSource, logged[0].Event);
             Assert.Equal(
                 (HostDiagnosticEvent.AnnouncementReplay, "lines=1, droppedOldest=0, at=0ms, advise=present, drained=advise"),
+                logged[^2]);
+            Assert.Equal(
+                (HostDiagnosticEvent.AnnouncementLaunchSettled, "outcome=drained, lines=1, lost=0, at=0ms, advise=present"),
                 logged[^1]);
         }
         finally
@@ -1379,6 +1496,18 @@ public sealed class AccessibilityNotificationDispatcherTests
         internal string[] Drains => [.. Logged
             .Where(entry => entry.Event == HostDiagnosticEvent.AnnouncementReplay)
             .Select(entry => entry.Line)];
+
+        /// <summary>The launch's settled lines (#1326), in order: one at
+        /// most, once the phase has moved.</summary>
+        internal string[] Settled => [.. Logged
+            .Where(entry => entry.Event == HostDiagnosticEvent.AnnouncementLaunchSettled)
+            .Select(entry => entry.Line)];
+
+        /// <summary>The events logged, the provider's state lines left out:
+        /// the order of the drain's, expiry's and settled lines.</summary>
+        internal HostDiagnosticEvent[] LaunchEvents => [.. Logged
+            .Select(entry => entry.Event)
+            .Where(diagnosticEvent => diagnosticEvent != HostDiagnosticEvent.AnnouncementSource)];
 
         internal bool Listening { get; set; } = true;
 

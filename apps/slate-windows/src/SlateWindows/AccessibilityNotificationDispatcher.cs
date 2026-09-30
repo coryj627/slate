@@ -50,8 +50,10 @@ namespace SlateWindows;
 /// The launch phase is bookkeeping only and moves forward once: from
 /// Unadvised to Done when readiness is first observed and the queue drained,
 /// or to Expired when <see cref="LaunchWindow"/> passes after the first frame
-/// first. That expiry is only the launch lines, posted by the first frame,
-/// reaching their own deadline; a line posted at 29 s survives until 59 s.
+/// first; either move writes the launch's one settled line
+/// (<see cref="LogLaunchSettled"/>). That expiry is only the launch lines,
+/// posted by the first frame, reaching their own deadline; a line posted at
+/// 29 s survives until 59 s.
 /// Both are final, and neither raises without readiness: a client that
 /// stops listening or a provider lost after Done queues the line again, the
 /// poll restarts, and a client or provider that returns is held afresh — a
@@ -129,6 +131,10 @@ internal sealed class AccessibilityNotificationDispatcher
     private readonly Queue<QueuedLine> _queue = new();
     private int _droppedOldest;
     private IDisposable? _poll;
+
+    // #1326: launch lines lost unspoken while the phase is Unadvised — to the
+    // queue's bound or to their own deadline — which the settled line reports.
+    private int _launchLinesLost;
 
     // Codex PR 1 round 5: the epoch watch — a check every EpochWatchInterval
     // while a pair is held (_pairedSince set) and nothing is queued, so that
@@ -268,7 +274,8 @@ internal sealed class AccessibilityNotificationDispatcher
     /// Unready, the posted line is queued and nothing is raised. Lines past
     /// their own deadline go first, so none is raised late. The phase is
     /// bookkeeping only, never a path that raises without readiness (codex
-    /// round 19).
+    /// round 19); the check that moves it writes the launch's settled line,
+    /// after the drain's own (#1326).
     /// </summary>
     private void Check(QueuedLine? posted)
     {
@@ -286,22 +293,35 @@ internal sealed class AccessibilityNotificationDispatcher
         _pairedSince = clientsListening && connected ? _pairedSince ?? now : null;
         bool heldLongEnough = _pairedSince is { } since && now - since >= AdviseHold;
         bool ready = clientsListening && connected && (advised || heldLongEnough);
+        bool launchSettles = false;
         if (_phase == LaunchPhase.Unadvised)
         {
             if (ready)
             {
                 _phase = LaunchPhase.Done;
+                launchSettles = true;
             }
             else if (now >= LaunchWindow)
             {
                 _phase = LaunchPhase.Expired;
                 _launch.Diagnose(HostDiagnosticEvent.AnnouncementReplay, "expired, never ready");
+                LogLaunchSettled("expired", 0, now, advised);
             }
         }
 
         if (ready)
         {
+            int replayed = _queue.Count;
             Drain(advised);
+            if (launchSettles)
+            {
+                LogLaunchSettled(
+                    _launchLinesLost > 0 ? "dropped" : replayed > 0 ? "drained" : "ready-empty",
+                    replayed,
+                    now,
+                    advised);
+            }
+
             if (posted is { } line)
             {
                 Raise(line);
@@ -352,6 +372,10 @@ internal sealed class AccessibilityNotificationDispatcher
         {
             _ = _queue.Dequeue();
             _droppedOldest++;
+            if (_phase == LaunchPhase.Unadvised)
+            {
+                _launchLinesLost++;
+            }
         }
 
         _queue.Enqueue(line);
@@ -385,6 +409,27 @@ internal sealed class AccessibilityNotificationDispatcher
             $"lines={queued.Length}, droppedOldest={dropped}, at={(int)_launch.Elapsed().TotalMilliseconds}ms, "
             + (advised ? "advise=present, drained=advise" : "advise=absent, drained=timeout"));
     }
+
+    /// <summary>
+    /// #1326: the launch's one settled line, written when the phase leaves
+    /// Unadvised (under SLATE_UIA_DIAGNOSTICS=1 in production, as the drain's
+    /// is) — so a run can tell a whole launch from a lost line, and a launch
+    /// that queued nothing from one that has not settled yet. The outcome:
+    /// <c>drained</c>, lines queued before readiness replayed with none lost;
+    /// <c>ready-empty</c>, ready at its first check with nothing queued, every
+    /// line raised as it is posted — a path that logs no drain; <c>dropped</c>,
+    /// ready, but a launch line lost first, to the queue's bound or its own
+    /// deadline; <c>expired</c>, the launch window closed before readiness.
+    /// With the lines the drain replayed, the launch lines lost, the time of
+    /// the check that settled it (so a drain's own line, timed after its
+    /// raises, can read a millisecond or two later) and whether UIA had
+    /// advised the process.
+    /// </summary>
+    private void LogLaunchSettled(string outcome, int replayed, TimeSpan now, bool advised) =>
+        _launch.Diagnose(
+            HostDiagnosticEvent.AnnouncementLaunchSettled,
+            $"outcome={outcome}, lines={replayed}, lost={_launchLinesLost}, at={(int)now.TotalMilliseconds}ms, "
+            + (advised ? "advise=present" : "advise=absent"));
 
     /// <summary>The one raise, for a line raised while ready and for each
     /// line the drain replays alike: core's kind, processing and text, under
@@ -435,6 +480,11 @@ internal sealed class AccessibilityNotificationDispatcher
         {
             _ = _queue.Dequeue();
             dropped++;
+        }
+
+        if (_phase == LaunchPhase.Unadvised)
+        {
+            _launchLinesLost += dropped;
         }
 
         if (_queue.Count == 0)
@@ -593,7 +643,8 @@ internal sealed class AccessibilityNotificationDispatcher
     /// readiness is first observed (then Done, the queue drained) or the
     /// launch window closes first (then Expired, logged once; its lines
     /// expire at their own deadlines like every other). Done and Expired are
-    /// final.</summary>
+    /// final, and the move to either writes the settled line once
+    /// (<see cref="LogLaunchSettled"/>).</summary>
     private enum LaunchPhase
     {
         Unadvised,
