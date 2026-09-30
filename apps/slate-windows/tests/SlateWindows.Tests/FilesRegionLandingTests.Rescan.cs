@@ -1,6 +1,7 @@
 // Copyright (C) 2026 Cory Joseph
 // SPDX-License-Identifier: AGPL-3.0-or-later
 
+using System.Windows;
 using System.Windows.Controls;
 using System.Windows.Input;
 using uniffi.slate_uniffi;
@@ -60,12 +61,118 @@ public sealed partial class FilesRegionLandingTests
         Assert.Empty(opened);
         Assert.Empty(host.Announced);
         host.AssertTreeNeverFocused();
+        host.AssertKeysNeverOnAWindow();
     });
+
+    /// <summary>Codex's merge-delta check (finding 1): with the keys on the
+    /// selected note, the note deleted outside Slate and the rescan's refresh
+    /// published, the keys land on the nearest surviving row — the next
+    /// sibling — focused WITHOUT selecting it (R-5's focus-without-select):
+    /// never the window, never the bare tree, nothing opened, nothing
+    /// said.</summary>
+    [Fact]
+    public void ARescanThatDeletesTheFocusedRowLandsTheKeysOnTheNextRowUnselected() => RunSta(() =>
+    {
+        using var host = new Host();
+        host.Initialize();
+        var opened = new List<string>();
+        FileTreeNodeViewModel reader = LandOnSelected(host, "note1.md", opened);
+
+        File.Delete(Path.Combine(host.Root, reader.Path));
+        RescanAndRefresh(host);
+
+        FileTreeNodeViewModel? focused = FocusedNode();
+        Assert.True(
+            focused is { Path: "note2.md" },
+            $"the deletion left the keys on {Keyboard.FocusedElement?.GetType().Name ?? "nothing"} "
+            + $"({focused?.Path ?? "no row"}), not on note2.md's row");
+        Assert.False(Assert.IsAssignableFrom<TreeViewItem>(Keyboard.FocusedElement).IsSelected, "the landing selected the row.");
+        Assert.Null(host.Sidebar.SelectedNode);
+        Assert.DoesNotContain(host.Sidebar.RootNodes, node => node.IsSelected);
+        Assert.Empty(opened);
+        Assert.Empty(host.Announced);
+        host.AssertTreeNeverFocused();
+        host.AssertKeysNeverOnAWindow();
+    });
+
+    /// <summary>Finding 1's other arm: the deletion empties the tree, which is
+    /// the Files region's stop (AR-6) — the keys land on the empty tree,
+    /// never on the window.</summary>
+    [Fact]
+    public void ARescanThatEmptiesTheTreeLandsTheKeysOnTheEmptyTree() => RunSta(() =>
+    {
+        using var host = new Host();
+        host.Initialize();
+        var opened = new List<string>();
+        _ = LandOnSelected(host, "note1.md", opened);
+
+        foreach (string note in Directory.EnumerateFiles(host.Root, "*.md"))
+        {
+            File.Delete(note);
+        }
+
+        RescanAndRefresh(host);
+
+        Assert.False(host.Tree.HasItems, "premise: the refresh left rows in the tree.");
+        Assert.True(
+            ReferenceEquals(Keyboard.FocusedElement, host.Tree),
+            $"the deletion left the keys on {Keyboard.FocusedElement?.GetType().Name ?? "nothing"}, not on the empty tree");
+        Assert.Null(host.Sidebar.SelectedNode);
+        Assert.Empty(opened);
+        Assert.Empty(host.Announced);
+        host.AssertNeverFocusedPopulated(host.Tree);
+        host.AssertKeysNeverOnAWindow();
+    });
+
+    /// <summary>Select <paramref name="path"/>'s row, land the keys on it, then
+    /// forget the setup's focus changes and announcements and start counting
+    /// opens.</summary>
+    private static FileTreeNodeViewModel LandOnSelected(Host host, string path, List<string> opened)
+    {
+        FileTreeNodeViewModel reader = host.Sidebar.RootNodes.Single(node => node.Path == path);
+        host.Sidebar.SelectedNode = reader;
+        host.Pane.UpdateLayout();
+        PumpedDispatcher.Drain();
+        Assert.True(host.Shell.LandOnFilesTree());
+        PumpedDispatcher.Drain();
+        Assert.Same(reader, FocusedNode());
+        host.Sidebar.OpenTargetRequested += (_, request) => opened.Add(request.Path);
+        host.ForgetFocusChanges();
+        host.Announced.Clear();
+        return reader;
+    }
+
+    /// <summary>The rescan's scan, then its tree refresh — silent, awaited —
+    /// pumped to its publication and the landings it schedules.</summary>
+    private static void RescanAndRefresh(Host host)
+    {
+        using (var scan = new CancelToken())
+        {
+            _ = host.Session.Rescan(scan);
+        }
+
+        Task<ulong> refresh = host.Sidebar.RefreshForRescanAsync(reportCount: false, CancellationToken.None);
+        Assert.True(PumpedDispatcher.PumpUntil(() => refresh.IsCompleted), "the rescan's tree refresh");
+        Assert.Equal(0UL, refresh.Result);
+        for (int round = 0; round < 2; round++)
+        {
+            host.Pane.UpdateLayout();
+            PumpedDispatcher.Drain();
+        }
+    }
 
     private sealed partial class Host
     {
         public VaultSession Session => _session ?? throw new InvalidOperationException("The host is not initialized.");
 
         public string Root => _fixture.Root;
+
+        /// <summary>No focus change since the last forget put the keys on a
+        /// window — the stranded state a removed row leaves.</summary>
+        public void AssertKeysNeverOnAWindow() =>
+            Assert.True(
+                !_focusChanges.Any(focus => focus is Window),
+                "the keys reached the window; focus went "
+                + string.Join(" → ", _focusChanges.Select(focus => focus.GetType().Name)));
     }
 }

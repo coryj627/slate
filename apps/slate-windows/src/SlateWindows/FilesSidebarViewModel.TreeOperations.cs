@@ -598,6 +598,11 @@ internal sealed partial class FilesSidebarViewModel
     private void ApplyTreeRefresh(TreeRefreshOutcome outcome, bool reportCount, bool silent = false)
     {
         _settledTreeGeneration = _treeGeneration;
+        // W7-7 PR 7 (codex's merge-delta check, finding 1): the tree being
+        // replaced, where a selected row this publication removes had its
+        // neighbours — and an earlier removal's landing nobody took is stale.
+        ObservableCollection<FileTreeNodeViewModel> previousRoots = RootNodes;
+        _ = TakeVanishedSelection();
         RootNodes = outcome.RootNodes;
         if (outcome.TagGeneration == _tagGeneration)
         {
@@ -614,7 +619,7 @@ internal sealed partial class FilesSidebarViewModel
         // W6-2 PR A (contract A-8): a surface's "Reveal in File Tree" whose
         // node the previous tree had not materialised.
         ConsumePendingSurfaceSelection();
-        ReconcileSelectionAfterPublication();
+        ReconcileSelectionAfterPublication(previousRoots);
 
         // Project the AUTHORITATIVE checked set onto the published
         // nodes (codex rounds 4-5): a fresh node whose path is

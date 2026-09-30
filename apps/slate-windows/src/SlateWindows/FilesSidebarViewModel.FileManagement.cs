@@ -611,7 +611,16 @@ internal sealed partial class FilesSidebarViewModel
     /// destructive verbs then targeted whatever now lives at that
     /// path. Rebind to the fresh same-path node when it survived;
     /// disarm (null) when it vanished.</summary>
-    private void ReconcileSelectionAfterPublication()
+    /// <remarks>W7-7 PR 7 (#1252, R-9 over R-5), codex's merge-delta check
+    /// (finding 1): a selected row that VANISHED — deleted or moved outside
+    /// Slate, published by a rescan — took the keys with it, and WPF strands
+    /// them on the window when the focused row unloads (no fresh container is
+    /// selected to take them, as a surviving one does). The disarm now also
+    /// raises the guarded tree restore (<see cref="TreeSelectionRestored"/>)
+    /// with the row to land on: the nearest one that survived
+    /// (<see cref="NearestSurvivor"/>), focused without selecting it — R-5's
+    /// focus-without-select, since a selection would open the note.</remarks>
+    private void ReconcileSelectionAfterPublication(IList<FileTreeNodeViewModel> previousRoots)
     {
         if (SelectedNode is not { } current)
         {
@@ -631,9 +640,115 @@ internal sealed partial class FilesSidebarViewModel
             return;
         }
 
+        FileTreeNodeViewModel? survivor = NearestSurvivor(previousRoots, current);
         if (SetField(ref _selectedNode, null, nameof(SelectedNode)))
         {
             RaiseCommandStates();
+        }
+
+        _vanishedSelection = new VanishedSelection(survivor);
+        TreeSelectionRestored?.Invoke();
+    }
+
+    /// <summary>A selected row a publication removed, and the row its keys
+    /// land on — null for the tree's own landing (its first row, or the
+    /// empty tree, the region's stop).</summary>
+    internal sealed record VanishedSelection(FileTreeNodeViewModel? Survivor);
+
+    private VanishedSelection? _vanishedSelection;
+
+    /// <summary>The last publication's vanished selection, taken once — by
+    /// the window's restore, which lands the keys there only when they were
+    /// on a row that publication removed. The next publication drops one
+    /// nobody took.</summary>
+    internal VanishedSelection? TakeVanishedSelection()
+    {
+        VanishedSelection? taken = _vanishedSelection;
+        _vanishedSelection = null;
+        return taken;
+    }
+
+    /// <summary>The published row nearest <paramref name="vanished"/>'s place
+    /// in the tree it was removed from: its next siblings in order, then its
+    /// previous ones nearest first, then its parent — and, when none of those
+    /// survived either, the parent's own nearest survivor. Matched by path,
+    /// and only a row the published tree SHOWS (every ancestor expanded) —
+    /// one under a collapsed folder cannot take the keys. Null when nothing
+    /// survived.</summary>
+    private FileTreeNodeViewModel? NearestSurvivor(
+        IList<FileTreeNodeViewModel> previousRoots,
+        FileTreeNodeViewModel vanished)
+    {
+        var shown = new Dictionary<string, FileTreeNodeViewModel>(StringComparer.Ordinal);
+        foreach (FileTreeNodeViewModel node in ShownRows(RootNodes))
+        {
+            if (node is { IsPlaceholder: false, IsGroupHeader: false, Path.Length: > 0 })
+            {
+                _ = shown.TryAdd(node.Path, node);
+            }
+        }
+
+        for (FileTreeNodeViewModel? target = vanished; target is not null;)
+        {
+            if (FindSiblings(previousRoots, target, parent: null) is not { } found)
+            {
+                return null;
+            }
+
+            (IList<FileTreeNodeViewModel> siblings, FileTreeNodeViewModel? parent) = found;
+            int index = siblings.IndexOf(target);
+            foreach (FileTreeNodeViewModel candidate in siblings.Skip(index + 1).Concat(siblings.Take(index).Reverse()))
+            {
+                if (shown.TryGetValue(candidate.Path, out FileTreeNodeViewModel? survivor))
+                {
+                    return survivor;
+                }
+            }
+
+            if (parent is not null && shown.TryGetValue(parent.Path, out FileTreeNodeViewModel? folder))
+            {
+                return folder;
+            }
+
+            target = parent;
+        }
+
+        return null;
+
+        static IEnumerable<FileTreeNodeViewModel> ShownRows(IEnumerable<FileTreeNodeViewModel> level)
+        {
+            foreach (FileTreeNodeViewModel node in level)
+            {
+                yield return node;
+                if (node.IsExpanded)
+                {
+                    foreach (FileTreeNodeViewModel child in ShownRows(node.Children))
+                    {
+                        yield return child;
+                    }
+                }
+            }
+        }
+
+        static (IList<FileTreeNodeViewModel> Siblings, FileTreeNodeViewModel? Parent)? FindSiblings(
+            IList<FileTreeNodeViewModel> level,
+            FileTreeNodeViewModel target,
+            FileTreeNodeViewModel? parent)
+        {
+            if (level.Any(node => ReferenceEquals(node, target)))
+            {
+                return (level, parent);
+            }
+
+            foreach (FileTreeNodeViewModel node in level)
+            {
+                if (FindSiblings(node.Children, target, node) is { } found)
+                {
+                    return found;
+                }
+            }
+
+            return null;
         }
     }
 
