@@ -165,6 +165,7 @@ public sealed partial class ShellAccessibilityTests
             int slateId = process?.Id ?? -1;
             WriteAnnouncementEvidence(
                 "palette-typing",
+                RegisteredAfterTheWindow,
                 HeardFrom(heard, slateId),
                 heard.Count(notification => notification.ProcessId != slateId),
                 [

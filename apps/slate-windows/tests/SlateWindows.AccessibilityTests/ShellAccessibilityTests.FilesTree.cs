@@ -60,6 +60,9 @@ public sealed partial class ShellAccessibilityTests
             start.ArgumentList.Add(vault);
             start.Environment["SLATE_CENSUS_INSTANCE_ID"] = "files-tree-" + Guid.NewGuid().ToString("N");
             start.Environment["SLATE_LOG_DIR"] = logs;
+            // The announcement dispatcher's R-1 diagnostics: the launch drain the
+            // batch legs wait for, and the listener's failure message.
+            start.Environment["SLATE_UIA_DIAGNOSTICS"] = "1";
             process = Process.Start(start) ?? throw new Xunit.Sdk.XunitException("Slate did not start.");
             if (!HasInteractiveDesktop(process, "files-tree")) { return; }
             using var automation = new UIA3Automation();
@@ -117,29 +120,48 @@ public sealed partial class ShellAccessibilityTests
             // through PR 1's desktop listener, #1244) — and again unchecks
             // it: "No items selected".
             AutomationElement noteRow = WaitForTreeItemStartingWith(tree, automation, "note.md");
+            string logFile = Path.Combine(logs, "slate-windows.log");
             var batchHeard = new System.Collections.Concurrent.ConcurrentQueue<ReceivedNotification>();
             using DesktopNotificationListener batchListener = ListenOnTheDesktop(automation, batchHeard);
-            int checkMark = QuietMark(batchHeard, process.Id);
-            PressKey(VirtualKeyShort.SPACE);
-            AssertBatchChecked(automation, noteRow, true);
-            AssertFocusStaysOnRow(automation, tree, "note.md", "Space moved focus off the note.md row.");
-            AwaitHeardSince(
-                batchHeard,
-                process.Id,
-                checkMark,
-                [uniffi.slate_uniffi.SlateUniffiMethods.A11yRender(new uniffi.slate_uniffi.A11yEvent.ItemsSelected(1))],
-                TimeSpan.FromSeconds(10),
-                Path.Combine(logs, "slate-windows.log"));
-            int uncheckMark = QuietMark(batchHeard, process.Id);
-            PressKey(VirtualKeyShort.SPACE);
-            AssertBatchChecked(automation, noteRow, false);
-            AwaitHeardSince(
-                batchHeard,
-                process.Id,
-                uncheckMark,
-                [uniffi.slate_uniffi.SlateUniffiMethods.A11yRender(new uniffi.slate_uniffi.A11yEvent.NoItemsSelected())],
-                TimeSpan.FromSeconds(10),
-                Path.Combine(logs, "slate-windows.log"));
+            try
+            {
+                // The first witnessed step: after the launch drain (contract
+                // 40's wave-close evidence), then a quiet second.
+                int checkMark = LaunchDrainedMark(batchHeard, process.Id, logFile);
+                PressKey(VirtualKeyShort.SPACE);
+                AssertBatchChecked(automation, noteRow, true);
+                AssertFocusStaysOnRow(automation, tree, "note.md", "Space moved focus off the note.md row.");
+                AwaitHeardSince(
+                    batchHeard,
+                    process.Id,
+                    checkMark,
+                    [uniffi.slate_uniffi.SlateUniffiMethods.A11yRender(new uniffi.slate_uniffi.A11yEvent.ItemsSelected(1))],
+                    TimeSpan.FromSeconds(10),
+                    logFile);
+                int uncheckMark = QuietMark(batchHeard, process.Id);
+                PressKey(VirtualKeyShort.SPACE);
+                AssertBatchChecked(automation, noteRow, false);
+                AwaitHeardSince(
+                    batchHeard,
+                    process.Id,
+                    uncheckMark,
+                    [uniffi.slate_uniffi.SlateUniffiMethods.A11yRender(new uniffi.slate_uniffi.A11yEvent.NoItemsSelected())],
+                    TimeSpan.FromSeconds(10),
+                    logFile);
+            }
+            finally
+            {
+                WriteAnnouncementEvidence(
+                    "files-tree-batch",
+                    RegisteredAfterTheWindow,
+                    HeardFrom(batchHeard, process.Id),
+                    batchHeard.Count(notification => notification.ProcessId != process.Id),
+                    [
+                        .. DiagnosticLines(logFile, "AnnouncementListenerState"),
+                        .. DiagnosticLines(logFile, "AnnouncementSource"),
+                        .. DiagnosticLines(logFile, "AnnouncementReplay"),
+                    ]);
+            }
             batchListener.Dispose();
 
             // Ctrl+Enter gives the note shown in the transient tab a tab of

@@ -177,6 +177,7 @@ public sealed partial class ShellAccessibilityTests
             int slateId = process?.Id ?? -1;
             WriteAnnouncementEvidence(
                 "launch",
+                RegisteredBeforeLaunch,
                 [.. received.Where(notification => notification.ProcessId == slateId)],
                 received.Count(notification => notification.ProcessId != slateId),
                 [
@@ -219,18 +220,18 @@ public sealed partial class ShellAccessibilityTests
     /// <c>EmbedPreviewShown</c> for what the fixture's embed resolves to —
     /// the note <c>Folder/child.md</c>, which core titles with
     /// <c>resolved_embed_title</c> — through the binding here, never a
-    /// transcription. Slate must have raised exactly that line, once, as
-    /// kind Other and ImportantMostRecent (core's High; contract 38 D-1)
-    /// with the shared activity ID a superseding line keeps (D-1). Returns
-    /// the rendered text.
+    /// transcription. Since <paramref name="mark"/>, Slate must have raised
+    /// exactly that line, once, as kind Other and ImportantMostRecent (core's
+    /// High; contract 38 D-1) with the shared activity ID a superseding line
+    /// keeps (D-1). Returns the rendered text.
     /// </summary>
     private static string AssertHeardEmbedPreviewShown(
-        ConcurrentQueue<ReceivedNotification> heard, int processId, string logFile)
+        ConcurrentQueue<ReceivedNotification> heard, int processId, int mark, string logFile)
     {
         RenderedAnnouncement shown = SlateUniffiMethods.A11yRender(
             new A11yEvent.EmbedPreviewShown("Folder/child", new ResolvedEmbed.Note("Folder/child.md")));
         Assert.Equal(A11yPriority.High, shown.Priority);
-        ReceivedNotification[] FromSlate() => [.. heard.Where(notification => notification.ProcessId == processId)];
+        ReceivedNotification[] FromSlate() => [.. HeardFrom(heard, processId).Skip(mark)];
         string[] HeardFromSlate() => [.. FromSlate().Select(notification => notification.DisplayString)];
         AwaitHeard(HeardFromSlate, [shown.Text], TimeSpan.FromSeconds(10), logFile);
         (NotificationKind, NotificationProcessing, string, string)[] expected =
@@ -544,8 +545,22 @@ public sealed partial class ShellAccessibilityTests
         }
     }
 
+    /// <summary>The launch journey's listener: registered before Slate
+    /// launched, which is that journey's subject (R-1).</summary>
+    private const string RegisteredBeforeLaunch = "registered before launch";
+
+    /// <summary>Every other journey's listener: registered once
+    /// <c>WaitForMainWindow</c> had reached the window, its legs taken after the
+    /// launch drain (<see cref="LaunchDrainedMark"/>).</summary>
+    private const string RegisteredAfterTheWindow = "registered after WaitForMainWindow reached the window";
+
+    /// <summary>Writes one surface's announcement evidence (under
+    /// <c>SLATE_ACCESSIBILITY_EVIDENCE_DIR</c>): what Slate raised, how many
+    /// lines came from other processes, the app's diagnostics, and where the
+    /// listener was registered — <see cref="RegisteredBeforeLaunch"/> or
+    /// <see cref="RegisteredAfterTheWindow"/>.</summary>
     private static void WriteAnnouncementEvidence(
-        string surface, ReceivedNotification[] fromSlate, int otherProcesses, string[] diagnostics)
+        string surface, string registered, ReceivedNotification[] fromSlate, int otherProcesses, string[] diagnostics)
     {
         string? directory = Environment.GetEnvironmentVariable("SLATE_ACCESSIBILITY_EVIDENCE_DIR");
         if (string.IsNullOrWhiteSpace(directory))
@@ -561,7 +576,7 @@ public sealed partial class ShellAccessibilityTests
             sourceRevision = Environment.GetEnvironmentVariable("GITHUB_SHA"),
             operatingSystem = Environment.OSVersion.VersionString,
             dotnetRuntime = Environment.Version.ToString(),
-            listener = "IUIAutomation6 event-handler group on the desktop root, subtree scope, registered before launch",
+            listener = "IUIAutomation6 event-handler group on the desktop root, subtree scope, " + registered,
             received = fromSlate.Select(notification => new
             {
                 displayString = notification.DisplayString,

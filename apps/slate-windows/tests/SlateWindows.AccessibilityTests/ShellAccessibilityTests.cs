@@ -381,6 +381,9 @@ public sealed partial class ShellAccessibilityTests
             // registration shape, registered just before the chord.
             var embedHeard = new ConcurrentQueue<ReceivedNotification>();
             using DesktopNotificationListener embedListener = ListenOnTheDesktop(automation, embedHeard);
+            // The journey's first witnessed step: after the launch drain
+            // (contract 40's wave-close evidence), then a quiet second.
+            int embedMark = LaunchDrainedMark(embedHeard, process.Id, Path.Combine(logDirectory, "slate-windows.log"));
             PressChord(VirtualKeyShort.CONTROL, VirtualKeyShort.KEY_E);
             AutomationElement? interactionPopover = TryWaitForElement(
                 window,
@@ -419,10 +422,28 @@ public sealed partial class ShellAccessibilityTests
             // The landed result is announced, and a screen reader hears
             // core's rendering of it once — the sentence the popover is
             // named with.
-            string heardEmbedPreview = AssertHeardEmbedPreviewShown(
-                embedHeard,
-                process.Id,
-                Path.Combine(logDirectory, "slate-windows.log"));
+            string heardEmbedPreview;
+            try
+            {
+                heardEmbedPreview = AssertHeardEmbedPreviewShown(
+                    embedHeard,
+                    process.Id,
+                    embedMark,
+                    Path.Combine(logDirectory, "slate-windows.log"));
+            }
+            finally
+            {
+                WriteAnnouncementEvidence(
+                    "embed-preview",
+                    RegisteredAfterTheWindow,
+                    HeardFrom(embedHeard, process.Id),
+                    embedHeard.Count(notification => notification.ProcessId != process.Id),
+                    [
+                        .. DiagnosticLines(Path.Combine(logDirectory, "slate-windows.log"), "AnnouncementListenerState"),
+                        .. DiagnosticLines(Path.Combine(logDirectory, "slate-windows.log"), "AnnouncementSource"),
+                        .. DiagnosticLines(Path.Combine(logDirectory, "slate-windows.log"), "AnnouncementReplay"),
+                    ]);
+            }
             Assert.Equal(heardEmbedPreview, interactionPopover.Name);
             embedListener.Dispose();
             Assert.True(interactionPopover.Properties.IsDialog.Value);
@@ -501,7 +522,7 @@ public sealed partial class ShellAccessibilityTests
             // the chord, as around Ctrl+E above.
             var citationHeard = new ConcurrentQueue<ReceivedNotification>();
             using DesktopNotificationListener citationListener = ListenOnTheDesktop(automation, citationHeard);
-            int citationMark = QuietMark(citationHeard, process.Id);
+            int citationMark = LaunchDrainedMark(citationHeard, process.Id, Path.Combine(logDirectory, "slate-windows.log"));
             PressChord(VirtualKeyShort.CONTROL, VirtualKeyShort.ENTER);
             AutomationElement citationPopover = WaitForElement(
                 window,
@@ -529,13 +550,29 @@ public sealed partial class ShellAccessibilityTests
             uniffi.slate_uniffi.RenderedAnnouncement citationShown = uniffi.slate_uniffi.SlateUniffiMethods.A11yRender(
                 new uniffi.slate_uniffi.A11yEvent.CitationPopoverShown("Citation: doe"));
             Assert.Equal(citationShown.Text, citationPopover.Name);
-            AwaitHeardSince(
-                citationHeard,
-                process.Id,
-                citationMark,
-                [citationShown],
-                TimeSpan.FromSeconds(10),
-                Path.Combine(logDirectory, "slate-windows.log"));
+            try
+            {
+                AwaitHeardSince(
+                    citationHeard,
+                    process.Id,
+                    citationMark,
+                    [citationShown],
+                    TimeSpan.FromSeconds(10),
+                    Path.Combine(logDirectory, "slate-windows.log"));
+            }
+            finally
+            {
+                WriteAnnouncementEvidence(
+                    "citation-popover",
+                    RegisteredAfterTheWindow,
+                    HeardFrom(citationHeard, process.Id),
+                    citationHeard.Count(notification => notification.ProcessId != process.Id),
+                    [
+                        .. DiagnosticLines(Path.Combine(logDirectory, "slate-windows.log"), "AnnouncementListenerState"),
+                        .. DiagnosticLines(Path.Combine(logDirectory, "slate-windows.log"), "AnnouncementSource"),
+                        .. DiagnosticLines(Path.Combine(logDirectory, "slate-windows.log"), "AnnouncementReplay"),
+                    ]);
+            }
             citationListener.Dispose();
             Keyboard.Press(VirtualKeyShort.ESCAPE);
             Assert.True(
@@ -3288,7 +3325,9 @@ public sealed partial class ShellAccessibilityTests
             // ---- Details sheet: in-window, and focus returns -------
             resolvedRow!.Patterns.SelectionItem.Pattern.Select();
             resolvedRow.Focus();
-            int detailsMark = QuietMark(sheetsHeard, process.Id);
+            // The first witnessed step: after the launch drain (contract 40's
+            // wave-close evidence), then a quiet second.
+            int detailsMark = LaunchDrainedMark(sheetsHeard, process.Id, logFile);
             PressKey(VirtualKeyShort.RETURN);
             AutomationElement details = WaitForElement(
                 window, "CitationDetailsSheet", TimeSpan.FromSeconds(10));
@@ -3688,6 +3727,7 @@ public sealed partial class ShellAccessibilityTests
             int slateId = process?.Id ?? -1;
             WriteAnnouncementEvidence(
                 "citation-sheets",
+                RegisteredAfterTheWindow,
                 HeardFrom(sheetsHeard, slateId),
                 sheetsHeard.Count(notification => notification.ProcessId != slateId),
                 [
