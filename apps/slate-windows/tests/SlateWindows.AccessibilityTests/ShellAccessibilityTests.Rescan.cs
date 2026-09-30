@@ -81,6 +81,10 @@ public sealed partial class ShellAccessibilityTests
 
             _ = WaitForTreeItemStartingWith(filesTree, automation, "late");
             AssertQuickOpenFinds(window, automation, "late", "late");
+            // W7-7 PR 3 (#1246, R-4): the rows the rescan republished — the
+            // tree's and every list's — are named speakably, never by a .NET
+            // type name or a record dump.
+            AssertItemNamesAreSpeakable(process, "rescan-refreshed-files");
 
             // TODO(#1244), with the listener: exactly one notification since the
             // Refresh — "Files refreshed. 1 new or changed, 0 removed." — and no

@@ -182,6 +182,17 @@ internal sealed class BaseDocumentViewModel : PanelWorkScheduler
     public string? ActiveViewName =>
         _views.Count > _activeViewIndex ? _views[_activeViewIndex].Name : null;
 
+    /// <summary>The active view as the view picker names it, among the
+    /// views (W7-7 PR 3, #1246, R-4; codex PR 3 round 7, OD-9): a base may
+    /// repeat a view definition, and the switch announcement spoke the bare
+    /// "Open tasks" for either of two — the picker reads "Open tasks, view
+    /// 2". Every announcement of the active view — the switch and Where
+    /// Am I — speaks this name.</summary>
+    public string? ActiveViewSpokenName =>
+        _views.Count > _activeViewIndex && _activeViewIndex >= 0
+            ? SiblingNames.Compose([.. _views.Select(view => (string?)view.Name)], [], "view")[_activeViewIndex]
+            : null;
+
     /// <summary>Core's result, untransformed (INV-1). Null until the
     /// first successful execute; retained across failed refreshes so
     /// a failure never blanks the pane (contract C9).</summary>
@@ -629,7 +640,7 @@ internal sealed class BaseDocumentViewModel : PanelWorkScheduler
     /// <summary>slate.bases.whereAmI — core joins the present parts.</summary>
     public A11yEvent WhereAmIEvent() => new A11yEvent.BaseWhereAmI(
         DisplayName,
-        ActiveViewName,
+        ActiveViewSpokenName,
         QuickFilterActive ? _executedQuickFilter : null);
 
     /// <summary>slate.bases.resultsPopover — the readback rides only

@@ -57,6 +57,16 @@ internal sealed class AccessibleDataGrid : UserControl
     // W6-2 PR A (contracts A-6, A-9; AD-2): the row-name, item-status and
     // modified-activation seams — generic, the graph their first user.
     private Func<object, string?>? _rowAutomationName;
+    // W7-7 PR 3 (R-4; codex PR 3 round 6, OD-9): each row's stable key, the
+    // caller's — what tells it apart where its identity collides, and what a
+    // nameless row reads; never its position, which a sort changes.
+    private Func<object, string>? _rowKey;
+    // …and what the reader hears of that key where identities collide, when
+    // the key itself is no speech (a graph node's stable key); by default
+    // the key (codex PR 3 round 7).
+    private Func<object, string?>? _rowDistinguisher;
+    // …and each bound row's name, fixed at Bind (codex PR 3 round 2).
+    private Dictionary<object, string> _rowNames = new(ReferenceEqualityComparer.Instance);
     private Func<object, string?>? _rowItemStatus;
     private Action<object>? _rowActivatedModified;
     private string _typeAheadBuffer = string.Empty;
@@ -129,10 +139,19 @@ internal sealed class AccessibleDataGrid : UserControl
         _grid.Sorting += OnHeaderSorting;
         _grid.PreviewTextInput += OnTypeAhead;
         _grid.PreviewKeyDown += OnActivationKey;
+        _grid.KeyDown += OnBareGridArrow;
         _grid.MouseDoubleClick += OnActivationDoubleClick;
         _grid.ContextMenuOpening += OnContextMenuOpening;
         _grid.LoadingRow += OnLoadingRow;
         _grid.UnloadingRow += OnUnloadingRow;
+        // W7-7 PR 4 (#1247, R-5; codex round 5): a publication under the
+        // keys — rows filling the empty grid that is its own stop, or a Bind
+        // that destroyed the reader's cell and left the keys on the bare grid
+        // or nowhere — re-seats them like a restore: through the consuming
+        // projection's own landing where it has one (the graph's table keeps
+        // a hidden shared key, A-7), else on the current cell, else the
+        // first, silently (FocusCurrentOrFirstCell).
+        SelectorFocus.KeepKeysThroughPublications(this, [_grid], [], () => SelectorFocus.LandOnStop(_grid));
         _grid.ItemContainerGenerator.StatusChanged += (_, _) =>
         {
             // The subscriber check comes BEFORE the post, not inside the
@@ -216,14 +235,100 @@ internal sealed class AccessibleDataGrid : UserControl
         // the consuming surface's delegates, applied per REALIZED row —
         // Standard virtualization creates and discards containers, never
         // reuses them, so every container carries its own row's values.
-        if (_rowAutomationName is { } name)
+        if (_rowAutomationName is not null)
         {
-            AutomationProperties.SetName(e.Row, name(e.Row.Item) ?? string.Empty);
+            AutomationProperties.SetName(e.Row, RowName(e.Row.Item));
         }
         if (_rowItemStatus is { } status)
         {
             AutomationProperties.SetItemStatus(e.Row, status(e.Row.Item) ?? string.Empty);
         }
+    }
+
+    /// <summary>A realized row's name, fixed for it at Bind. Every row the
+    /// grid holds came through Bind — ApplySort only reorders them — so its
+    /// name exists; the view position is never consulted.</summary>
+    private string RowName(object item) =>
+        _rowNames.TryGetValue(item, out string? name) ? name : BaseRowName(item);
+
+    /// <summary>A bound row's FINAL name, as its UIA Name reads it — for a
+    /// surface whose row move must speak the same text (the graph, contract
+    /// 35 A-6; codex PR 3 round 8): the composed name, never the row copy
+    /// the sibling rule has not yet told apart.</summary>
+    internal string ComposedRowName(object row) => RowName(row);
+
+    /// <summary>
+    /// W7-7 PR 3 (#1246, contract R-4 as amended after codex PR 0 rounds 5
+    /// and 6, codex PR 3 rounds 2 and 6, and owner decision OD-9): every
+    /// bound row's name, never empty and never another row's, and never
+    /// taken from the row's POSITION. Each caller hands Bind a stable,
+    /// speakable key per row — a Base or dashboard row's file path (with its
+    /// task's ordinal), a graph row's node, a citation's key, a reading
+    /// table's source row. A blank identity is no name —
+    /// DataGridItemAutomationPeer then falls back to the item's
+    /// <c>ToString()</c>, and a reading-table row whose first cell is blank
+    /// read "System.String[]" — so it takes the first non-empty cell, else
+    /// the key ("Row 3"). Rows whose identities read alike (one file name in
+    /// two folders, two entries with one title and year, two table rows with
+    /// one first cell) add their keys under the one sibling rule: "same.md,
+    /// A/same.md", "note.md, row 3" — and the names are checked again after
+    /// the keys. The rule runs over the rows in KEY order, so even its last
+    /// resort, a place, is the row's place among the keys: an external sort,
+    /// which republishes the rows in a new order as new objects (Base,
+    /// Graph), a sort in the grid, re-realization and a re-bind all leave
+    /// every row its name (codex PR 3 round 6: display order swapped
+    /// A/same.md's and B/same.md's "row 1" and "row 2"). The key is the
+    /// row's IDENTITY, never a label that can change: a graph row's key is
+    /// its node's stable key, and it READS as its path or label (codex PR 3
+    /// round 7: ordered by a ghost's label, which core recomputes, two ghosts
+    /// swapped their places when one was relabelled).
+    /// </summary>
+    private Dictionary<object, string> NameRows(IReadOnlyList<object> rows)
+    {
+        object[] byKey =
+        [
+            .. rows.Distinct(ReferenceEqualityComparer.Instance)
+                .OrderBy(KeyOf, StringComparer.Ordinal),
+        ];
+        string[] names = SiblingNames.Compose(
+            [.. byKey.Select(row => (string?)BaseRowName(row))],
+            [.. byKey.Select(DistinguisherOf)],
+            "row");
+        var named = new Dictionary<object, string>(ReferenceEqualityComparer.Instance);
+        for (int index = 0; index < byKey.Length; index++)
+        {
+            named[byKey[index]] = names[index];
+        }
+        return named;
+    }
+
+    /// <summary>A row's key, as its caller gave it.</summary>
+    private string KeyOf(object row) => _rowKey?.Invoke(row) ?? string.Empty;
+
+    /// <summary>What a row reads where its identity collides: its caller's
+    /// distinguisher, else its key.</summary>
+    private string? DistinguisherOf(object row) => _rowDistinguisher is { } distinguisher
+        ? distinguisher(row)
+        : KeyOf(row);
+
+    private string BaseRowName(object item)
+    {
+        if (_rowAutomationName?.Invoke(item) is { } identity
+            && !SpeechKey.IsSilent(identity))
+        {
+            return identity;
+        }
+        foreach (AccessibleGridColumn column in _columns)
+        {
+            string text = column.Cell(item);
+            if (!SpeechKey.IsSilent(text))
+            {
+                return text;
+            }
+        }
+        // Nothing to say but the key's speech: "row 3" reads "Row 3".
+        string key = DistinguisherOf(item) ?? string.Empty;
+        return key.Length == 0 ? "Row" : char.ToUpperInvariant(key[0]) + key[1..];
     }
 
     /// <summary>The unloading half of the row seams: a container that
@@ -238,6 +343,22 @@ internal sealed class AccessibleDataGrid : UserControl
         if (_rowItemStatus is not null)
         {
             e.Row.ClearValue(AutomationProperties.ItemStatusProperty);
+        }
+    }
+
+    /// <summary>Codex PR 3 round 2: every realized row drops the name and
+    /// status the bound delegates gave it — run while those delegates are
+    /// still bound, before anything replaces them, so no row a client's
+    /// peer still holds keeps a name its grid no longer gives.</summary>
+    private void ClearRealizedRowSeams()
+    {
+        foreach (object item in _items)
+        {
+            if (_grid.ItemContainerGenerator.ContainerFromItem(item) is DataGridRow row)
+            {
+                row.ClearValue(AutomationProperties.NameProperty);
+                row.ClearValue(AutomationProperties.ItemStatusProperty);
+            }
         }
     }
 
@@ -268,6 +389,80 @@ internal sealed class AccessibleDataGrid : UserControl
         }
         return FocusCellElement(_items[0], _grid.Columns[0]) == LandingSeat.Seated;
     }
+
+    /// <summary>
+    /// W7-7 PR 4 (#1247, R-5; codex rounds 4-5): a landing on the GRID — a
+    /// restore token captured while it held the keys itself, which is an
+    /// empty grid's own stop, or a publication under the keys — puts them
+    /// on a cell: the current one, else the first. An empty grid is still
+    /// its own stop (<see cref="FocusFirstCell"/>). Reached through
+    /// <see cref="SelectorFocus.LandOnStop"/>, the shell's one landing for
+    /// element-typed targets, and the substrate's publication keeper.
+    /// </summary>
+    /// <remarks>
+    /// SILENT, the immediate seat and the deferred one alike: seating
+    /// currency posts <c>GridRowMoved</c>/<c>GridCellMoved</c>, and on a
+    /// re-seat — a dismissal's restore, the Canvas and Graph Where-am-I
+    /// close, a publication's re-land — the focus change supplies the
+    /// speech, so a line on top of it is the t0 §1.5 doubling (contract 34
+    /// C6's seat rule; codex round 5). A reader's own arrow keeps
+    /// announcing.
+    /// </remarks>
+    /// <returns>Whether the grid (empty) or a realized cell took the keys
+    /// now; an unrealized cell is seated later, as
+    /// <see cref="FocusCellElement"/> does.</returns>
+    internal bool FocusCurrentOrFirstCell()
+    {
+        if (_items.Count == 0 || _grid.Columns.Count == 0)
+        {
+            return FocusFirstCell();
+        }
+        (object item, DataGridColumn column) = CurrentOrFirstCell();
+        return FocusCellElement(item, column, silent: true) == LandingSeat.Seated;
+    }
+
+    /// <summary>
+    /// W7-7 PR 3 x PR 4 (codex on #1302's merge with PR 4): the same landing
+    /// on <paramref name="row"/>'s cell, for a surface whose landing row is
+    /// its own rule (the graph table's Term F4): the current column while it
+    /// is still bound, else the first — SILENT, seated now or once realized,
+    /// exactly as <see cref="FocusCurrentOrFirstCell"/>, which a row the grid
+    /// does not hold falls back to.
+    /// </summary>
+    /// <returns>Whether a realized cell, or the empty grid, took the keys
+    /// now.</returns>
+    internal bool FocusRowCell(object row)
+    {
+        ArgumentNullException.ThrowIfNull(row);
+        if (_grid.Columns.Count == 0 || !_items.Contains(row))
+        {
+            return FocusCurrentOrFirstCell();
+        }
+        return FocusCellElement(row, CurrentOrFirstCell().Column, silent: true) == LandingSeat.Seated;
+    }
+
+    /// <summary>The grid substrate that owns <paramref name="grid"/>, if
+    /// any — every grid in the shell is one's.</summary>
+    internal static AccessibleDataGrid? Owning(DataGrid grid)
+    {
+        for (DependencyObject? node = grid; node is not null; node = LogicalTreeHelper.GetParent(node))
+        {
+            if (node is AccessibleDataGrid owner && ReferenceEquals(owner._grid, grid))
+            {
+                return owner;
+            }
+        }
+        return null;
+    }
+
+    /// <summary>The cell a landing on the grid goes to: the current one
+    /// while its row and column are still bound, else the first.</summary>
+    private (object Item, DataGridColumn Column) CurrentOrFirstCell() =>
+        (
+            _grid.CurrentCell.Item is { } current && _items.Contains(current) ? current : _items[0],
+            _grid.CurrentCell.Column is { } currentColumn && _grid.Columns.Contains(currentColumn)
+                ? currentColumn
+                : _grid.Columns[0]);
 
     /// <summary>
     /// Put keyboard focus on the first cell of the row matching
@@ -404,7 +599,7 @@ internal sealed class AccessibleDataGrid : UserControl
         WithoutAnnouncing(() =>
         {
             _lastAnnouncedRow = match;
-            seat = FocusCellElement(match, column);
+            seat = FocusCellElement(match, column, seatLater: false);
         });
         return seat;
     }
@@ -430,19 +625,63 @@ internal sealed class AccessibleDataGrid : UserControl
     /// scroll, realize the container synchronously (under a starved
     /// session the deferred generation leaves Focus() on the grid, and
     /// AT announces the grid instead of the cell), set currency, focus
-    /// the realized DataGridCell. Falls back to the grid only when the
-    /// container genuinely cannot exist yet (pre-load).
+    /// the realized DataGridCell. A cell whose container cannot exist yet
+    /// is seated once it does, while the keys have not moved.
     /// </summary>
+    /// <remarks>
+    /// W7-7 PR 4 (#1247, R-5; spec review round 23): the unrealized case
+    /// fell back to focusing the grid itself, and a populated grid is not
+    /// a landing — DataGrid moves between cells only from a cell, so from
+    /// the grid every arrow went to directional navigation and out of the
+    /// region, a current cell or not (GridLandingTests measures it). The
+    /// keys now stay where they were, the caller is told the truth, and
+    /// the seat is the list landing's own: the newest request only, and
+    /// only while the keys are exactly where they were.
+    /// </remarks>
     /// <returns>
-    /// Whether the REALIZED CELL took focus — false for the grid-level
-    /// fallback, which is a different outcome and used to be reported as
-    /// the same one. Currency and selection are set either way, so the
-    /// callers that only want the reader's position keep ignoring this;
-    /// W6-1 PR B's focus delivery reads it, because A14's rule is that
-    /// only a realized row counts as delivered and a fallback that says
-    /// "true" consumes a request nothing ever satisfied.
+    /// The seat now (W7-7 PR 8's tri-state, R-10): SEATED when the realized
+    /// cell took the keys; NOT YET while its container or cell cannot take
+    /// them yet; REFUSED when the shown cell will not. Currency and selection
+    /// are set either way, so the callers that only want the reader's
+    /// position keep ignoring this; W6-1 PR B's focus delivery reads it,
+    /// because A14's rule is that only a realized row counts as delivered
+    /// and a fallback that says "seated" consumes a request nothing ever
+    /// satisfied.
     /// </returns>
-    private LandingSeat FocusCellElement(object item, DataGridColumn column)
+    /// <param name="silent">A re-seat's (<see cref="FocusCurrentOrFirstCell"/>):
+    /// the seat, now or deferred, posts no movement line.</param>
+    /// <param name="seatLater">Whether a cell that cannot take the keys yet is
+    /// seated once it can, while the keys have not moved: false for a caller
+    /// the realization edge brings back itself (<see cref="SeatRow"/>, whose
+    /// terminal landings re-ask on <see cref="ContainersRealized"/>).</param>
+    private LandingSeat FocusCellElement(object item, DataGridColumn column, bool silent = false, bool seatLater = true)
+    {
+        LandingSeat seat = SeatCell(item, column, silent);
+        if (seat == LandingSeat.NotYet && seatLater)
+        {
+            SelectorFocus.SeatLater(
+                _grid,
+                () => _items.Contains(item)
+                    && _grid.Columns.Contains(column)
+                    && SeatCell(item, column, silent) == LandingSeat.Seated);
+        }
+
+        return seat;
+    }
+
+    private LandingSeat SeatCell(object item, DataGridColumn column, bool silent)
+    {
+        if (!silent)
+        {
+            return TryFocusCell(item, column);
+        }
+
+        LandingSeat seat = LandingSeat.NotYet;
+        WithoutAnnouncing(() => seat = TryFocusCell(item, column));
+        return seat;
+    }
+
+    private LandingSeat TryFocusCell(object item, DataGridColumn column)
     {
         _grid.ScrollIntoView(item, column);
         if (_grid.IsLoaded)
@@ -452,8 +691,7 @@ internal sealed class AccessibleDataGrid : UserControl
         _grid.CurrentCell = new DataGridCellInfo(item, column);
         _grid.SelectedCells.Clear();
         _grid.SelectedCells.Add(_grid.CurrentCell);
-        if (_grid.ItemContainerGenerator.ContainerFromItem(item)
-                is DataGridRow row
+        if (_grid.ItemContainerGenerator.ContainerFromItem(item) is DataGridRow row
             && column.GetCellContent(row)?.Parent is DataGridCell cell)
         {
             // A cell that is not shown yet (its grid only just realized) is
@@ -462,11 +700,37 @@ internal sealed class AccessibleDataGrid : UserControl
                 : cell.IsVisible ? LandingSeat.Refused
                 : LandingSeat.NotYet;
         }
-        // The reader is NOT on the row. Focus still goes somewhere
-        // sensible rather than nowhere, but the caller is told the truth:
-        // the row's container is not realized yet.
-        _ = _grid.Focus();
+
+        // The row's container is not realized yet. The keys stay where they
+        // were — a populated grid is no landing (R-5) — and the caller is told
+        // the truth.
         return LandingSeat.NotYet;
+    }
+
+    /// <summary>
+    /// W7-7 PR 4 (#1247, R-5; spec review round 23): an arrow pressed while
+    /// the GRID itself holds the keys — an empty grid's own stop, or a grid
+    /// WPF handed them to when their row went away — lands on a cell, the
+    /// current one else the first, and an empty grid keeps it. DataGrid
+    /// moves between cells only from a cell: from the grid, every arrow
+    /// went to directional navigation and out of the region.
+    /// </summary>
+    private void OnBareGridArrow(object sender, KeyEventArgs e)
+    {
+        if (e.Handled
+            || !ReferenceEquals(e.OriginalSource, _grid)
+            || Keyboard.Modifiers != ModifierKeys.None
+            || e.Key is not (Key.Left or Key.Right or Key.Up or Key.Down))
+        {
+            return;
+        }
+
+        e.Handled = true;
+        if (_items.Count > 0 && _grid.Columns.Count > 0)
+        {
+            (object item, DataGridColumn column) = CurrentOrFirstCell();
+            _ = FocusCellElement(item, column);
+        }
     }
 
     /// <summary>
@@ -501,23 +765,56 @@ internal sealed class AccessibleDataGrid : UserControl
     /// text columns whose cells carry the mac "Header: value" label
     /// contract; <paramref name="rowAudioDescription"/> is the core
     /// `audio_description` the row-move announcement consumes.
+    /// <paramref name="rowAutomationName"/> is the row's IDENTITY (a file
+    /// name, a title, a first cell — not the whole description), REQUIRED
+    /// (W7-7 PR 3, #1246, R-4; each caller's identity pinned by
+    /// ItemContainerNameCensus), because an unnamed DataGridRow reads its
+    /// item's <c>ToString()</c>. <paramref name="rowKey"/> is the row's
+    /// STABLE key, REQUIRED too (codex PR 3 round 6, OD-9): speakable, unique
+    /// among the rows, and the same for the same row however the rows are
+    /// ordered or republished — a file path, a node's stable key, a
+    /// citation key, a source row. The rows are named in key order.
+    /// <paramref name="rowDistinguisher"/> is what the reader hears of the
+    /// key where identities collide, when the key is no speech (a graph
+    /// node's stable key reads as its path or label); by default the key
+    /// itself. Where an identity comes back blank the row takes its first
+    /// non-empty cell, else its distinguisher; where rows share one, their
+    /// distinguishers tell them apart (<see cref="NameRows"/>). A row's position never
+    /// names it. A surface's teardown is <see cref="Clear"/>, never a bind of
+    /// nothing.
     /// </summary>
     public void Bind(
         IReadOnlyList<AccessibleGridColumn> columns,
         IReadOnlyList<object> rows,
         string summary,
         string accessibilityLabel,
+        Func<object, string?> rowAutomationName,
+        Func<object, string> rowKey,
+        Func<object, string?>? rowDistinguisher = null,
         Func<object, string?>? rowAudioDescription = null,
         IReadOnlyList<AccessibleGridRowAction>? rowActions = null,
         Func<ExportFormat, string>? exportProducer = null,
         Action<object>? rowActivated = null,
-        Func<object, string?>? rowAutomationName = null,
         Func<object, string?>? rowItemStatus = null,
         Action<object>? rowActivatedModified = null)
     {
         ArgumentNullException.ThrowIfNull(columns);
         ArgumentNullException.ThrowIfNull(rows);
+        ArgumentNullException.ThrowIfNull(rowAutomationName);
+        ArgumentNullException.ThrowIfNull(rowKey);
+        // The outgoing rows drop what the outgoing delegates gave them
+        // before anything replaces those delegates.
+        ClearRealizedRowSeams();
+        // The reader's row, captured by the OUTGOING key before that
+        // delegate is replaced (codex PR 3 round 8, OD-9; contract 35
+        // A-7): the row's identity is its caller's stable key, never its
+        // row-header text — a header is a label, and a label changes (a
+        // graph ghost's, which core recomputes) or repeats (two same.md
+        // notes an external sort swaps).
+        string? previousRowKey = CurrentRowKey();
         _rowAutomationName = rowAutomationName;
+        _rowKey = rowKey;
+        _rowDistinguisher = rowDistinguisher;
         _rowItemStatus = rowItemStatus;
         _rowActivatedModified = rowActivatedModified;
         // The user's sort is a user decision, and a re-publish is not
@@ -558,14 +855,11 @@ internal sealed class AccessibleDataGrid : UserControl
         // surfaces re-Bind on every publish — so a background save
         // while someone is arrowing through the grid moved them.
         //
-        // Keyed on the ROW HEADER, not object identity: every publish
-        // builds fresh row view models, so identity is gone by
-        // definition. The row header is already the row's identity
-        // under §8.7.
-        string? previousRowIdentity = RowIdentityOf(_grid.CurrentCell.Item);
-        // Row-header text is not guaranteed unique — two notes can both
-        // be "Untitled". Where it repeats, the previous ordinal breaks
-        // the tie so the reader keeps the OCCURRENCE they were on.
+        // Keyed on the row's stable KEY (captured above), not object
+        // identity: every publish builds fresh row view models, so
+        // identity is gone by definition. A key a caller repeats keeps
+        // the previous ordinal as its tie-break, so the reader keeps the
+        // OCCURRENCE they were on.
         int previousRowOrdinal = _items.IndexOf(_grid.CurrentCell.Item);
         int previousColumnIndex = _grid.CurrentCell.Column is { } previousColumn
             ? _grid.Columns.IndexOf(previousColumn)
@@ -596,6 +890,9 @@ internal sealed class AccessibleDataGrid : UserControl
             ? DataGridHeadersVisibility.Column
             : DataGridHeadersVisibility.All;
 
+        // The names first: clearing and adding realizes rows, and each
+        // realized row takes its name from the map.
+        _rowNames = NameRows(rows);
         _items.Clear();
         foreach (object row in rows)
         {
@@ -607,7 +904,7 @@ internal sealed class AccessibleDataGrid : UserControl
         AutomationProperties.SetName(_grid, accessibilityLabel);
 
         WithoutAnnouncing(() => RestoreReaderPosition(
-            previousRowIdentity, previousColumnIndex, previousRowOrdinal));
+            previousRowKey, previousColumnIndex, previousRowOrdinal));
 
         // Re-apply silently: ApplySort posts a GridSorted announcement,
         // which is right when the USER sorts and wrong when a
@@ -630,67 +927,89 @@ internal sealed class AccessibleDataGrid : UserControl
     }
 
     /// <summary>
-    /// The row's identity for position-restore purposes: the row-header
-    /// cell's text, or null when the surface declares no row-header
-    /// column (nothing stable to key on).
-    ///
-    /// Only ever called with a row from the CURRENTLY BOUND set. The
-    /// `Cell` delegates cast to the surface's row type, so handing one
-    /// anything else — most reachably `CollectionView.NewItemPlaceholder`,
-    /// which is what `CurrentCell.Item` holds on an empty grid — throws
-    /// out of Bind and the surface never renders at all. The row-action
-    /// hit-test next door rejects the placeholder for the same reason.
+    /// Codex PR 3 round 2: a surface's teardown — every row, column and
+    /// delegate the grid holds goes, and the summary and grid name become
+    /// <paramref name="summary"/> and <paramref name="accessibilityLabel"/>.
+    /// The realized rows drop the names and statuses the delegates gave
+    /// them FIRST, while those delegates are still bound; a bind of no rows
+    /// swapped the delegates out before its rows unloaded, so each
+    /// torn-down row kept its name for any peer a client still held.
     /// </summary>
-    private string? RowIdentityOf(object? item) =>
-        item is not null
+    public void Clear(string summary = "", string accessibilityLabel = "")
+    {
+        ClearRealizedRowSeams();
+        _items.Clear();
+        _rowAutomationName = null;
+        _rowItemStatus = null;
+        _rowActivatedModified = null;
+        _rowAudioDescription = null;
+        _rowActions = Array.Empty<AccessibleGridRowAction>();
+        _exportProducer = null;
+        _rowActivated = null;
+        _lastAnnouncedRow = null;
+        _activeSort = null;
+        _rowKey = null;
+        _rowDistinguisher = null;
+        _rowNames = new(ReferenceEqualityComparer.Instance);
+        _columns = Array.Empty<AccessibleGridColumn>();
+        _grid.Columns.Clear();
+        _rowHeaderColumn = null;
+        _grid.HeadersVisibility = DataGridHeadersVisibility.Column;
+        _summary.Text = summary;
+        AutomationProperties.SetName(_summary, $"Summary: {summary}");
+        AutomationProperties.SetName(_grid, accessibilityLabel);
+    }
+
+    /// <summary>
+    /// The current row's stable key, by the key delegate bound NOW — at
+    /// Bind, before it is replaced — or null when no bound row is current.
+    ///
+    /// The `_items.Contains` guard runs exactly once, here: the key
+    /// delegates cast to the surface's row type, so handing one anything
+    /// else — most reachably `CollectionView.NewItemPlaceholder`, which is
+    /// what `CurrentCell.Item` holds on an empty grid — throws out of Bind
+    /// and the surface never renders at all. Guarding inside the restore
+    /// loop, which already walks `_items`, made every re-publish O(n²):
+    /// 8,000 rows took 708 ms on the UI thread against 33 ms before, and
+    /// the bulk-rename preview has no row cap.
+    /// </summary>
+    private string? CurrentRowKey() =>
+        _rowKey is { } rowKey
+        && _grid.CurrentCell.Item is { } item
         && item != CollectionView.NewItemPlaceholder
         && _items.Contains(item)
-            ? BoundRowIdentityOf(item)
+            ? rowKey(item)
             : null;
 
     /// <summary>
-    /// Identity for a row ALREADY KNOWN to be in the bound set.
-    ///
-    /// Split from <see cref="RowIdentityOf"/> because that one's
-    /// `_items.Contains` guard is needed exactly once — at capture,
-    /// where `CurrentCell.Item` may be foreign or the new-item
-    /// placeholder. Calling it from inside a loop that is already
-    /// walking `_items` made every re-publish O(n²): 8,000 rows took
-    /// 708 ms on the UI thread against 33 ms before, and the
-    /// bulk-rename preview has no row cap.
-    /// </summary>
-    private string? BoundRowIdentityOf(object row) =>
-        _rowHeaderColumn is { } header ? header.Cell(row) : null;
-
-    /// <summary>
-    /// Put the reader back where they were, or clear obsolete currency.
+    /// Put the reader back where they were — on the row whose incoming key
+    /// is the key their row had — or clear obsolete currency.
     ///
     /// A row that is GONE after the republish is NOT substituted with a
     /// neighbour. Neither its old item nor its detached column may remain
     /// current: later selection and activation must use the new binding.
     /// </summary>
     private void RestoreReaderPosition(
-        string? rowIdentity, int columnIndex, int previousOrdinal)
+        string? rowKey, int columnIndex, int previousOrdinal)
     {
         _grid.CurrentCell = new DataGridCellInfo();
         _grid.SelectedCells.Clear();
-        if (rowIdentity is null
+        if (rowKey is null
             || columnIndex < 0
             || columnIndex >= _grid.Columns.Count)
         {
             return;
         }
         // Nearest match to where the reader WAS, not the first match:
-        // with unique row headers these are the same row, and with
-        // repeated ones this is the difference between staying put and
+        // with unique keys these are the same row, and with a key a
+        // caller repeats this is the difference between staying put and
         // being moved to a namesake without an announcement. A
         // previousOrdinal of -1 (no prior currency) degrades to the
         // first match, which is the only sensible answer there.
         int best = -1;
         for (int index = 0; index < _items.Count; index++)
         {
-            if (!string.Equals(
-                BoundRowIdentityOf(_items[index]), rowIdentity, StringComparison.Ordinal))
+            if (!string.Equals(KeyOf(_items[index]), rowKey, StringComparison.Ordinal))
             {
                 continue;
             }

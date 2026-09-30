@@ -23,10 +23,24 @@ internal enum WorkspaceOpenTarget
     SplitDown,
 }
 
+/// <summary>Where a request puts the keys at the workspace's edge.</summary>
 internal enum WorkspaceFocusBoundary
 {
+    /// <summary>Ctrl+Alt+Left at the window's edge: the Files tree.</summary>
     Files,
+
+    /// <summary>A command that shows a right-pane leaf and moves to it
+    /// (Ctrl+R's review, Show History, the Connections and inspector
+    /// routes): the keys go INTO the shown leaf — its own landing, else its
+    /// first stop (W7-7 PR 4, #1247, R-5).</summary>
     RightPane,
+
+    /// <summary>Ctrl+Alt+Right at the window's edge: arrival at the right
+    /// pane by direction. Its stop is the rail's row unless the shown leaf
+    /// owns a landing (the Connections anchor, the inspector's first stop)
+    /// — Ctrl+Alt+Arrow's semantics are not a leaf reveal's (W7-6 §6,
+    /// W7-7 §14).</summary>
+    RightPaneEdge,
 }
 
 internal enum WorkspaceDirtyNavigationDecision
@@ -136,6 +150,15 @@ internal sealed partial class WorkspaceTabViewModel : BindableBase, IDisposable
             ?? SlateWindows.Panels.PanelWorkScheduler.CurrentContextIsUiDispatcher();
         _anchorResolver = anchorResolver ?? SlateUniffiMethods.LinkAnchorByteOffset;
         _interactionBackgroundFaultForTests = interactionBackgroundFaultForTests;
+        // W7-7 PR 3 (#1246, R-4; codex PR 3 round 5): the spoken state follows
+        // every path that announces the dirty or missing state.
+        PropertyChanged += (_, args) =>
+        {
+            if (args.PropertyName is nameof(IsDirty) or nameof(IsMissingFromDisk))
+            {
+                OnPropertyChanged(nameof(SpokenState));
+            }
+        };
         EditorPreferences = editorPreferences ?? new EditorPreferencesViewModel(_announce);
         Id = state.Id;
         Item = state.Item;
@@ -205,6 +228,7 @@ internal sealed partial class WorkspaceTabViewModel : BindableBase, IDisposable
     public string EditorAutomationName =>
         $"{System.IO.Path.GetFileName(Path)} editor";
     public string Path => Item.Path;
+
     public bool IsMarkdown => Item.Kind == WorkspaceItemKind.Markdown;
 
     /// <summary>The persisted `"reading"` token (schema v1, G17).</summary>
@@ -439,6 +463,20 @@ internal sealed partial class WorkspaceTabViewModel : BindableBase, IDisposable
             }
         }
     }
+
+    /// <summary>W7-7 PR 3 (#1246, R-4; codex PR 3 round 5): what the reader
+    /// hears after the tab's name — its unsaved and missing states, "" for
+    /// none. It is an INPUT to the tab strip's sibling rule (SiblingNames'
+    /// StatePath: the rule joins it with ", " and checks the joined name),
+    /// never appended after it: a dirty "draft" and a clean "draft, unsaved
+    /// changes" would otherwise both read "draft, unsaved changes".</summary>
+    public string SpokenState => (IsDirty, IsMissingFromDisk) switch
+    {
+        (false, false) => string.Empty,
+        (true, false) => "unsaved changes",
+        (false, true) => "missing from disk",
+        (true, true) => "missing from disk, unsaved changes",
+    };
 
     public string Status
     {
@@ -1510,6 +1548,35 @@ internal sealed class WorkspaceGroupViewModel : BindableBase
     {
         _activeTab = tab;
         OnPropertyChanged(nameof(ActiveTab));
+    }
+
+    /// <summary>W7-7 PR 3 (#1246, R-4; codex PR 3 round 8, OD-9): the tab's
+    /// name as this group's tab strip reads it — its title among the group's
+    /// tabs, told apart by path and then place, with its unsaved and missing
+    /// states — the ONE spoken-name authority for a tab. The strip declares
+    /// the same rule (NamePath Title, DistinguisherPath Path, Noun tab,
+    /// StatePath SpokenState); every announcement that names a tab (focus,
+    /// close, reopen, the tab bar, the editor pane) speaks this, so two tabs
+    /// the strip reads apart are never announced alike. A tab the group does
+    /// not hold reads its bare title.</summary>
+    public string SpokenNameOf(WorkspaceTabViewModel tab)
+    {
+        ArgumentNullException.ThrowIfNull(tab);
+        int index = -1;
+        for (int position = 0; position < Tabs.Count && index < 0; position++)
+        {
+            if (ReferenceEquals(Tabs[position], tab))
+            {
+                index = position;
+            }
+        }
+        return index < 0
+            ? tab.Title
+            : SiblingNames.Compose(
+                [.. Tabs.Select(item => (string?)item.Title)],
+                [.. Tabs.Select(item => (string?)item.Path)],
+                "tab",
+                [.. Tabs.Select(item => (string?)item.SpokenState)])[index];
     }
 }
 

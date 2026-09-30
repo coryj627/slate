@@ -741,14 +741,20 @@ internal sealed class CanvasDocumentViewModel : PanelWorkScheduler
     /// switcher and the three <c>slate.canvas.show*</c> commands share
     /// it, so the state, the persisted token and the spoken sentence
     /// cannot disagree.</summary>
-    public void ShowSurface(CanvasSurfaceKind surface)
+    /// <param name="announce">False on the switcher's arrow route (W7-7
+    /// PR 4, #1247): the radio is checked before it takes focus, and its
+    /// focus speech names the surface — the sentence would repeat it.</param>
+    public void ShowSurface(CanvasSurfaceKind surface, bool announce = true)
     {
         if (Selection.ActiveSurface == surface)
         {
             return;
         }
         Selection.ActiveSurface = surface;
-        Speak(new CanvasA11yEvent.CanvasSurfaceShown(surface));
+        if (announce)
+        {
+            Speak(new CanvasA11yEvent.CanvasSurfaceShown(surface));
+        }
         SurfaceChanged?.Invoke(this, surface);
     }
 

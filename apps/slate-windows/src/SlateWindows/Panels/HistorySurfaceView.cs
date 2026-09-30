@@ -79,6 +79,15 @@ internal sealed class HistorySurfaceView : UserControl
         };
         segments.Children.Add(_segmentThisNote);
         segments.Children.Add(_segmentDeleted);
+        // W7-7 PR 4 (#1247, R-5; the owner's S2, the sweep's G2): a Windows
+        // radio group — an arrow checks the segment it reaches (it moved
+        // focus alone while the version list stayed, and walked out of the
+        // leaf from either end), Cycle keeps every other arrow in the group,
+        // one Tab stop, the checked segment its stop. Switching still never
+        // announces (H2): an arrow is the focus speech alone.
+        KeyboardNavigation.SetTabNavigation(segments, KeyboardNavigationMode.Once);
+        KeyboardNavigation.SetDirectionalNavigation(segments, KeyboardNavigationMode.Cycle);
+        RadioGroupArrows.SetIsEnabled(segments, true);
         // The group name rides a LANDMARK border, never the panel —
         // a StackPanel gets no peer and the name is dropped (the
         // recorded W4-5 bibliography fix, re-learned in red team
@@ -916,12 +925,10 @@ internal sealed class HistorySurfaceView : UserControl
             this,
             candidate => AutomationProperties.GetAutomationId(candidate)
                 is "HistoryRestoreAsRowRefusal" or "HistoryRecoverAsRowRefusal");
-        if (element is null)
-        {
-            return false;
-        }
-        _ = element.Focus();
-        return true;
+        // R-5 (#1247; codex round 4): through the one landing for
+        // element-typed targets; a block that refuses the keys leaves the
+        // restore to the caller's own fallback.
+        return element is not null && SelectorFocus.LandOnStop(element);
     }
 
     /// <summary>Where was keyboard focus before the rebuild? Keyed by
@@ -998,9 +1005,8 @@ internal sealed class HistorySurfaceView : UserControl
 
     private static void FocusElementOrFirstChild(FrameworkElement element)
     {
-        if (element.Focusable)
+        if (element.Focusable && SelectorFocus.LandOnStop(element))
         {
-            _ = element.Focus();
             return;
         }
         _ = element.MoveFocus(
@@ -1021,11 +1027,7 @@ internal sealed class HistorySurfaceView : UserControl
                         AutomationProperties.GetAutomationId(candidate),
                         $"HistoryRow{anchorPosition}",
                         StringComparison.Ordinal));
-                if (target is not null)
-                {
-                    _ = target.Focus();
-                }
-                else
+                if (target is null || !SelectorFocus.LandOnStop(target))
                 {
                     _ = _segmentThisNote.Focus();
                 }
@@ -1051,11 +1053,7 @@ internal sealed class HistorySurfaceView : UserControl
                                 name,
                                 StringComparison.Ordinal))
                     : null;
-                if (target is not null)
-                {
-                    _ = target.Focus();
-                }
-                else
+                if (target is null || !SelectorFocus.LandOnStop(target))
                 {
                     _ = _segmentDeleted.Focus();
                 }

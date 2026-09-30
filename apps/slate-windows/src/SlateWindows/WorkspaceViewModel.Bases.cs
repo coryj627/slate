@@ -132,7 +132,10 @@ internal sealed partial class WorkspaceViewModel
             // the active index in the continuation could seed from
             // one view and save to another).
             int viewIndex = document.ActiveViewIndex;
-            string viewName = document.ActiveViewName ?? document.DisplayName;
+            // The view as the picker names it (codex PR 3 round 8, OD-9): a
+            // base may repeat a view, and "Editing filters for Open tasks"
+            // spoke the bare name for either.
+            string viewName = document.ActiveViewSpokenName ?? document.DisplayName;
             // The edit-JSON fetch shares the FFI lock with executes,
             // so it runs off the dispatcher and the overlay opens in
             // the continuation (INV-6; red team round 1).
@@ -181,7 +184,28 @@ internal sealed partial class WorkspaceViewModel
             _announce(new A11yEvent.BasesSavedQueryEditFailed(failure.Message));
             return;
         }
-        _announce(new A11yEvent.BasesSavedQueryEditing(savedQuery.Name));
+        _announce(new A11yEvent.BasesSavedQueryEditing(SavedQuerySpokenName(id, savedQuery.Name)));
+    }
+
+    /// <summary>W7-7 PR 3 (#1246, R-4; codex PR 3 round 8, OD-9): the saved
+    /// query <paramref name="id"/> as the Saved queries list names it — its
+    /// name among the listed queries, which the store lets differ only in case
+    /// or punctuation ("draft", "DRAFT."), told apart by place — the ONE
+    /// spoken-name authority for a saved query; <paramref name="name"/>, bare,
+    /// when the list does not hold it.</summary>
+    internal string SavedQuerySpokenName(string id, string name)
+    {
+        int index = -1;
+        for (int position = 0; position < SavedQueries.Count && index < 0; position++)
+        {
+            if (string.Equals(SavedQueries[position].Id, id, StringComparison.Ordinal))
+            {
+                index = position;
+            }
+        }
+        return index < 0
+            ? name
+            : SiblingNames.Compose([.. SavedQueries.Select(query => (string?)query.Name)], [], "query")[index];
     }
 
     internal void CloseQueryBuilder() => BaseQueryBuilderSheet = null;
@@ -526,7 +550,7 @@ internal sealed partial class WorkspaceViewModel
         // refuses silently while loading/failed (red team round 1:
         // the command spoke the unchanged view name).
         if (document.ActiveViewIndex != before
-            && document.ActiveViewName is { } name)
+            && document.ActiveViewSpokenName is { } name)
         {
             document.AnnounceViewSelected(name);
         }
@@ -1238,6 +1262,12 @@ internal sealed partial class WorkspaceViewModel
             {
                 return;
             }
+            // W7-7 PR 4 (#1247, R-5; the completeness sweep's G5): the view
+            // re-seats its selection by identity in THIS dispatcher
+            // operation, before WPF re-evaluates a focused element the
+            // rebuild disabled (every action button follows the selection)
+            // or removed (a row).
+            BaseQueriesRepublishing?.Invoke();
             // Pinned first in pin order, then case-insensitive name
             // with id tiebreak (the mac ordering).
             SavedQueries.Clear();
@@ -1264,8 +1294,18 @@ internal sealed partial class WorkspaceViewModel
             // Pins prune to live ids (the mac rule).
             _pinnedSavedQueryIds.RemoveWhere(id =>
                 !savedQueries.Any(s => string.Equals(s.Id, id, StringComparison.Ordinal)));
+            BaseQueriesRepublished?.Invoke();
         });
     }
+
+    /// <summary>W7-7 PR 4 (#1247; G5): raised on the dispatcher just before
+    /// the Queries leaf's three registry lists are rebuilt (Clear + Add),
+    /// in the same dispatcher operation as <see cref="BaseQueriesRepublished"/>.</summary>
+    internal event Action? BaseQueriesRepublishing;
+
+    /// <summary>Raised on the dispatcher just after the three lists are
+    /// rebuilt, in the rebuild's own dispatcher operation.</summary>
+    internal event Action? BaseQueriesRepublished;
 
     internal void ToggleSavedQueryPin(string id)
     {

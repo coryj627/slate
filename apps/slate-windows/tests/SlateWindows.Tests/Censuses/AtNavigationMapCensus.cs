@@ -231,9 +231,37 @@ public sealed class AtNavigationMapCensus
         return true;
     }
 
-    private static IEnumerable<string> XamlNativePatterns(XElement element) =>
-        element.Name.NamespaceName == "http://schemas.microsoft.com/winfx/2006/xaml/presentation"
-            && NativePatterns.TryGetValue(element.Name.LocalName, out string[]? patterns) ? patterns : [];
+    private static IEnumerable<string> XamlNativePatterns(XElement element)
+    {
+        if (element.Name.NamespaceName == "http://schemas.microsoft.com/winfx/2006/xaml/presentation")
+        {
+            return NativePatterns.TryGetValue(element.Name.LocalName, out string[]? patterns) ? patterns : [];
+        }
+
+        // A shell subclass of a framework control inherits the framework
+        // control's native patterns, as its C# twin does through
+        // FrameworkPatterns (W7-7 PR 4: the sidebar trees are
+        // LandingTreeViews). Resolved from the shell's own assembly, so a
+        // name alone in some other namespace satisfies nothing.
+        const string Shell = "clr-namespace:SlateWindows";
+        if (!element.Name.NamespaceName.StartsWith(Shell, StringComparison.Ordinal)
+            || typeof(MainWindow).Assembly.GetType(
+                $"{element.Name.NamespaceName["clr-namespace:".Length..].Split(';')[0]}.{element.Name.LocalName}") is not { } type)
+        {
+            return [];
+        }
+
+        for (Type? current = type.BaseType; current is not null; current = current.BaseType)
+        {
+            if (current.Assembly == typeof(System.Windows.FrameworkElement).Assembly
+                && NativePatterns.TryGetValue(current.Name, out string[]? inherited))
+            {
+                return inherited;
+            }
+        }
+
+        return [];
+    }
 
     private static bool IsFrameworkType(ITypeSymbol type, string fullName) =>
         type.ToDisplayString() == fullName && type.ContainingAssembly.Name is "PresentationCore" or "PresentationFramework";
@@ -336,6 +364,8 @@ public sealed class AtNavigationMapCensus
         Assert.Equal(new[] { "RealId" }, AutomationIds(tree.GetRoot().DescendantNodes().ToArray(), compilation.GetSemanticModel(tree)));
         Assert.Empty(XamlNativePatterns(XElement.Parse("<Button xmlns='clr-namespace:Other'/>")));
         Assert.Contains("Invoke", XamlNativePatterns(XElement.Parse("<Button xmlns='http://schemas.microsoft.com/winfx/2006/xaml/presentation'/>")));
+        Assert.Contains("ExpandCollapse", XamlNativePatterns(XElement.Parse("<LandingTreeView xmlns='clr-namespace:SlateWindows'/>")));
+        Assert.Empty(XamlNativePatterns(XElement.Parse("<LandingTreeView xmlns='clr-namespace:Other'/>")));
     }
 
     [Theory]

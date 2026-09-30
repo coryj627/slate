@@ -24,6 +24,10 @@ public sealed partial class EmbedPreviewTitleCensus
     private const string NodeMetadataName = "SlateWindows.EditorEmbedPreviewNode";
     private const string Renderer = "EditorEmbedPreviewView";
 
+    /// <summary>The one type that hands a card's Title, whole, to the
+    /// sibling rule (W7-7 PR 3, #1246, R-4).</summary>
+    private const string SiblingIdentityOwner = "EmbedRowViewModel";
+
     /// <summary>The element the popover's name is set on (XAML), and the
     /// peer it hands that name to assistive technology through.</summary>
     private const string PopoverHost = "AutomationLandmarkGrid";
@@ -107,6 +111,7 @@ public sealed partial class EmbedPreviewTitleCensus
         NodeRecordDeclaration,
         PopoverHostPeer,
         PopoverPeerName,
+        SiblingIdentity,
     }
 
     internal sealed record Sink(SinkKind Kind, string File, int Line, string Key, string What);
@@ -271,6 +276,11 @@ public sealed partial class EmbedPreviewTitleCensus
         {
             yield return $"a card's Title is set after it is built ({At(SinkKind.CardInitializer)}); the "
                 + "census pins none — build the card with core's title.";
+        }
+        if (Count(SinkKind.SiblingIdentity) != 1)
+        {
+            yield return $"a card's Title is handed to the sibling rule {Count(SinkKind.SiblingIdentity)} times "
+                + $"({At(SinkKind.SiblingIdentity)}); the census reads the embeds leaf's one pass-through.";
         }
         if (Count(SinkKind.Renderer) != RendererReads)
         {
@@ -539,6 +549,21 @@ public sealed partial class EmbedPreviewTitleCensus
         int line = Line(read);
         string? form = RendererForm(read);
         string owner = read.Ancestors().OfType<TypeDeclarationSyntax>().FirstOrDefault()?.Identifier.ValueText ?? "?";
+        // W7-7 PR 3 (#1246, R-4; the spec review, round 21): the embeds
+        // leaf names each embed GROUP by its card's title among its
+        // siblings, through the one sibling rule (SiblingNames) — core's
+        // title whole as the rule's identity, so two embeds of one note
+        // read apart. The card inside is still named by the renderer alone.
+        // The one pass-through: the row's Title property, its body the read
+        // and nothing else; anything composed there is a read outside the
+        // renderer.
+        if (owner == SiblingIdentityOwner
+            && read.Parent is ArrowExpressionClauseSyntax { Parent: PropertyDeclarationSyntax { Identifier.ValueText: "Title" } })
+        {
+            sinks.Add(new Sink(SinkKind.SiblingIdentity, file, line, owner,
+                "the embeds leaf's sibling-rule identity: a card's Title whole"));
+            return;
+        }
         sinks.Add(new Sink(SinkKind.Renderer, file, line, form ?? "?",
             $"the renderer's {form ?? "composition"} of a card's Title"));
         if (owner != Renderer)

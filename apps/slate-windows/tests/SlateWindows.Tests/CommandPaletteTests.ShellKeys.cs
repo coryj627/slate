@@ -418,6 +418,58 @@ public sealed partial class CommandPaletteTests
         Assert.Equal(before.PanY + 120, diagram.Viewport.PanY, 6);
     });
 
+    /// <summary>
+    /// W7-7 PR 4's click rule (R-5, OD-11c) under the seal: a press on a
+    /// populated list's EMPTY area puts the keys on one of its rows — never
+    /// while the shell is sealed. The rule is a class handler for the
+    /// bubbling MouseDown, registered WITHOUT handledEventsToo
+    /// (ShellSealAdmissionCensus). Under real input a sealed press never
+    /// reaches it either way: WPF's MouseDevice raises no bubbling twin for a
+    /// preview the admission handled. This host's PressPointer raises the
+    /// twin, carrying the preview's handled state, which real input never
+    /// does (#1307) — so what the fact pins is the registration: registered
+    /// past handled, the rule moved the keys under that synthetic twin. Once
+    /// the modal section ends the same press lands them on the saved query's
+    /// row, so the route the fact drives is live.
+    /// </summary>
+    [Fact]
+    public void AClickOnAListsEmptyAreaMovesNoKeysUnderTheSeal() => RunSta(() =>
+    {
+        using var host = new ShippedShellHost(shown: true, savedQuery: true);
+        WorkspaceViewModel workspace = host.AttachDirtyWorkspace();
+        workspace.ActiveLeaf = WorkspaceViewModel.Leaves.First(leaf => leaf.Id == "queries");
+        PumpedDispatcher.Drain();
+        host.Shell.UpdateLayout();
+        ListBox list = host.Shell.QueriesSavedList;
+        Assert.True(
+            PumpedDispatcher.PumpUntil(() => list.IsVisible && list.HasItems, TimeSpan.FromSeconds(10)),
+            "premise: the Queries leaf never showed the saved query");
+        ListBox rail = host.Shell.RightPaneLeavesList;
+        rail.UpdateLayout();
+        var held = Assert.IsAssignableFrom<UIElement>(rail.ItemContainerGenerator.ContainerFromIndex(0));
+        Assert.True(held.Focus(), "premise: the rail's row refused the keys");
+
+        ComponentDispatcher.PushModal();
+        try
+        {
+            Assert.True(host.Palette.IsSealed);
+            bool handled = host.PressPointer(list);
+            PumpedDispatcher.Drain();
+            Assert.True(handled, "the shell let a press on the list through under the seal");
+            Assert.Same(held, Keyboard.FocusedElement);
+        }
+        finally
+        {
+            ComponentDispatcher.PopModal();
+        }
+
+        Assert.False(host.Palette.IsSealed);
+        _ = host.PressPointer(list);
+        PumpedDispatcher.Drain();
+        var row = Assert.IsType<ListBoxItem>(Keyboard.FocusedElement);
+        Assert.Same(list, ItemsControl.ItemsControlFromItemContainer(row));
+    });
+
     private static IEnumerable<T> Descendants<T>(DependencyObject root)
         where T : DependencyObject
     {

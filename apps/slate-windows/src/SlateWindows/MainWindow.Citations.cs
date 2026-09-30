@@ -181,9 +181,10 @@ public partial class MainWindow
             _observedBibliography.KeyFocusRequested -= Bibliography_KeyFocusRequested;
             _observedBibliography = null;
             // Drop the closed vault's rows rather than leaving up to
-            // MaxEntryRows of them alive behind the welcome screen.
-            BibliographyEntriesGrid.Bind([], [], summary: "", accessibilityLabel: "");
-            BibliographyUnresolvedGrid.Bind([], [], summary: "", accessibilityLabel: "");
+            // MaxEntryRows of them alive behind the welcome screen — and
+            // their names with them (codex PR 3 round 2).
+            BibliographyEntriesGrid.Clear();
+            BibliographyUnresolvedGrid.Clear();
         }
         if (_observedCitations is not null)
         {
@@ -290,8 +291,19 @@ public partial class MainWindow
             _selectedCitationKey = row.Reference.Citations.FirstOrDefault()?.Key;
         }
 
-        _citationsListOwnedFocusBeforePublish = PanelCitationsList.IsKeyboardFocusWithin;
+        _citationsListOwnedFocusBeforePublish = PanelCitationsList.IsKeyboardFocusWithin
+            || CitationNoticeHasTheKeys();
     }
+
+    /// <summary>The leaf's empty-state notices, in their visual order: an
+    /// EMPTY list's stop is the one showing (W7-7 PR 4, #1247; spec
+    /// §5.2.2). A publish that fills the list collapses the notice under
+    /// the keys, so the notices are sampled with the list (#1098).</summary>
+    private UIElement[] CitationNotices =>
+        [PanelCitationsNoFile, PanelCitationsEmpty, PanelCitationsError];
+
+    private bool CitationNoticeHasTheKeys() =>
+        CitationNotices.Any(notice => notice.IsKeyboardFocused);
 
     /// <summary>
     /// The focus half of the republish restore (#1098): the selection
@@ -299,7 +311,8 @@ public partial class MainWindow
     /// user's keyboard focus was ejected with the old container, so
     /// they would have to Tab back to resume. When the list owned focus
     /// before the publish, put it back on the restored row's container
-    /// (the list itself if the container has not generated yet) —
+    /// (the first row when no selection was restored; the list itself
+    /// only until the container is generated — W7-7 PR 4, #1247) —
     /// guarded so it never steals: a modal surface owns the moment, and
     /// a real focus claim elsewhere (the editor after a save's own
     /// landing) wins; only window-root/null focus is the stranded state
@@ -333,46 +346,23 @@ public partial class MainWindow
 
                 if (Keyboard.FocusedElement is DependencyObject focused
                     && !ReferenceEquals(focused, this)
-                    && !PanelCitationsList.IsKeyboardFocusWithin)
+                    && !PanelCitationsList.IsKeyboardFocusWithin
+                    && !CitationNoticeHasTheKeys())
                 {
                     return;
                 }
 
-                if (PanelCitationsList.SelectedItem is not { } selected)
+                // The restored row, else the first — never the bare list,
+                // from which Down walked into the menu bar (W7-7 PR 4,
+                // #1247, R-5). The helper realizes a row the virtualizing
+                // panel has not generated yet (measured: at Input priority
+                // the generator still answered null); an emptied list lands
+                // on its notice; a row that still cannot be landed leaves
+                // the keys to the pane's stable stop, the rail's row.
+                if (!SelectorFocus.FocusFirstOrSelectedItem(PanelCitationsList, CitationNotices))
                 {
-                    _ = PanelCitationsList.Focus();
-                    return;
+                    _ = SelectorFocus.FocusFirstOrSelectedItem(RightPaneLeavesList);
                 }
-
-                PanelCitationsList.ScrollIntoView(selected);
-                PanelCitationsList.UpdateLayout();
-                if (PanelCitationsList.ItemContainerGenerator.ContainerFromItem(selected)
-                    is ListBoxItem container)
-                {
-                    _ = container.Focus();
-                    return;
-                }
-
-                // The row's container has not generated yet — the
-                // virtualizing panel materializes it on the next layout
-                // pass (measured: at Input priority the generator still
-                // answers null and focus landed on the list itself). Hold
-                // focus on the list so it is never stranded, then seat it
-                // on the row once the container exists; the second step
-                // stands down if focus has moved on meanwhile.
-                _ = PanelCitationsList.Focus();
-                _ = Dispatcher.InvokeAsync(
-                    () =>
-                    {
-                        if (PanelCitationsList.IsKeyboardFocusWithin
-                            && ReferenceEquals(PanelCitationsList.SelectedItem, selected)
-                            && PanelCitationsList.ItemContainerGenerator
-                                .ContainerFromItem(selected) is ListBoxItem late)
-                        {
-                            _ = late.Focus();
-                        }
-                    },
-                    System.Windows.Threading.DispatcherPriority.Background);
             },
             System.Windows.Threading.DispatcherPriority.Input);
     }
@@ -431,12 +421,10 @@ public partial class MainWindow
         {
             return;
         }
-        BibliographyEntriesGrid.Bind(
-            BibliographyEntryColumns,
+        BindBibliographyEntries(
+            BibliographyEntriesGrid,
             [.. bibliography.Entries],
-            summary: bibliography.EntriesSummary,
-            accessibilityLabel: CitationPhrase.BibliographyHeading,
-            rowAudioDescription: row => ((BibliographyRowViewModel)row).RowDescription,
+            bibliography.EntriesSummary,
             rowActions: BibliographyRowActions(),
             // Enter expands the entry, as mac's entry Button does. The
             // details overlay was reachable only from the citations
@@ -447,19 +435,52 @@ public partial class MainWindow
                 ((BibliographyRowViewModel)row).Entry, Keyboard.FocusedElement));
     }
 
+    /// <summary>The entries grid's one bind — static, so a fact drives
+    /// the production call. W7-7 PR 3 (#1246, R-4): a row is named by
+    /// its entry, "Title (year)", the text its row header carries;
+    /// unnamed it read "SlateWindows.Panels.BibliographyRowViewModel,
+    /// data item".</summary>
+    internal static void BindBibliographyEntries(
+        AccessibleDataGrid grid,
+        IReadOnlyList<object> entries,
+        string summary,
+        IReadOnlyList<AccessibleGridRowAction>? rowActions = null,
+        Action<object>? rowActivated = null) =>
+        grid.Bind(
+            BibliographyEntryColumns,
+            entries,
+            summary: summary,
+            accessibilityLabel: CitationPhrase.BibliographyHeading,
+            rowAudioDescription: row => ((BibliographyRowViewModel)row).RowDescription,
+            rowActions: rowActions,
+            rowActivated: rowActivated,
+            rowAutomationName: row => ((BibliographyRowViewModel)row).TitleLine,
+            rowKey: static row => ((BibliographyRowViewModel)row).Key);
+
     private void BindBibliographyUnresolvedGrid()
     {
         if (_observedBibliography is not { } bibliography)
         {
             return;
         }
-        BibliographyUnresolvedGrid.Bind(
-            BibliographyUnresolvedColumns,
+        BindBibliographyUnresolved(
+            BibliographyUnresolvedGrid,
             [.. bibliography.Unresolved],
-            summary: bibliography.UnresolvedSummary,
-            accessibilityLabel: CitationPhrase.SegmentUnresolved,
-            rowAudioDescription: row => ((UnresolvedRowViewModel)row).RowDescription);
+            bibliography.UnresolvedSummary);
     }
+
+    /// <summary>The unresolved grid's one bind (R-4): a row is named by
+    /// its citation key, its row header.</summary>
+    internal static void BindBibliographyUnresolved(
+        AccessibleDataGrid grid, IReadOnlyList<object> rows, string summary) =>
+        grid.Bind(
+            BibliographyUnresolvedColumns,
+            rows,
+            summary: summary,
+            accessibilityLabel: CitationPhrase.SegmentUnresolved,
+            rowAudioDescription: row => ((UnresolvedRowViewModel)row).RowDescription,
+            rowAutomationName: row => ((UnresolvedRowViewModel)row).Key,
+            rowKey: static row => ((UnresolvedRowViewModel)row).Path);
 
     /// <summary>Ctrl+J landed. The leaf has already decided the outcome
     /// and announced it; this only moves focus, and only if the entry
@@ -508,8 +529,13 @@ public partial class MainWindow
         }
     }
 
+    /// <summary>A double-click expands the row it HIT — never the keyboard's
+    /// row: a double-click below the rows lands the keys on the first row
+    /// with its first press (the click rule), and expanding "the focused
+    /// row" opened a citation never clicked (codex PR 4's final
+    /// check).</summary>
     private void PanelCitations_MouseDoubleClick(object sender, MouseButtonEventArgs e) =>
-        ExpandSelectedCitation();
+        _ = ExpandCitation(SelectorFocus.ClickedItem(PanelCitationsList, e.OriginalSource));
 
     private void PanelCitations_PreviewKeyDown(object sender, KeyEventArgs e)
     {
@@ -523,11 +549,16 @@ public partial class MainWindow
     }
 
     /// <summary>A placeholder row has nothing to expand — core never
-    /// looked one up (contract 2). Returns whether a sheet opened.
+    /// looked one up (contract 2). The row is the one that holds the keys,
+    /// else the selection (W7-7 PR 4, codex round 7: a landing focuses a
+    /// row without selecting it). Returns whether a sheet opened.
     /// </summary>
-    private bool ExpandSelectedCitation()
+    private bool ExpandSelectedCitation() =>
+        ExpandCitation(SelectorFocus.FocusedOrSelectedItem(PanelCitationsList));
+
+    private bool ExpandCitation(object? target)
     {
-        if (PanelCitationsList.SelectedItem is not CitationRowViewModel { CanExpand: true } row)
+        if (target is not CitationRowViewModel { CanExpand: true } row)
         {
             return false;
         }
@@ -651,7 +682,13 @@ public partial class MainWindow
                 {
                     return;
                 }
-                _ = PanelCitationsList.Focus();
+                // A row of the list, never the bare list — or its notice
+                // when it is empty — else the pane's stable stop, the rail's
+                // row (R-5, #1247).
+                if (!SelectorFocus.FocusFirstOrSelectedItem(PanelCitationsList, CitationNotices))
+                {
+                    _ = SelectorFocus.FocusFirstOrSelectedItem(RightPaneLeavesList);
+                }
             },
             System.Windows.Threading.DispatcherPriority.Input);
     }

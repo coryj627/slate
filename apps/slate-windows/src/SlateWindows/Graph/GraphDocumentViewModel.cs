@@ -591,6 +591,14 @@ internal sealed class GraphDocumentViewModel : PanelWorkScheduler
     public string RowName(GraphTableRow row) =>
         GraphAnnouncer.RenderLabel(new GraphA11yEvent.GraphRow(Verbosity, RowCopy(row)));
 
+    /// <summary>What a table row reads where its name collides with a
+    /// sibling's (W7-7 PR 3, #1246, R-4; codex PR 3 rounds 6 and 7, OD-9):
+    /// its node as a reader knows it — a note's vault path, an unresolved
+    /// target's label. The row's IDENTITY, which orders the rows and never
+    /// changes, is its stable key (contract 35 0b-3, A-5); a ghost's label is
+    /// recomputed by core and only ever spoken.</summary>
+    public static string RowDistinguisher(GraphTableRow row) => row.Path ?? row.Label;
+
     // --- Announcements the workspace asks for (rule L, Term 6) -------------
 
     // --- Where-am-I (contract C-8) -------------------------------------------
@@ -821,7 +829,10 @@ internal sealed class GraphDocumentViewModel : PanelWorkScheduler
     /// a no-op for the current mode; otherwise the field, the persisted mode
     /// (Term W7, the mac's <c>setGraphMode</c>), the mode line, Term M2's
     /// effects, then the two availability edges.</summary>
-    public bool SetMode(GraphSurfaceMode mode)
+    /// <param name="announce">False on the switcher's arrow route (W7-7 PR 4,
+    /// #1247): the radio is checked before it takes focus, and its focus
+    /// speech names the mode — the mode line would repeat it.</param>
+    public bool SetMode(GraphSurfaceMode mode, bool announce = true)
     {
         if (_retired || !_isSeated() || ViewState.Mode == mode)
         {
@@ -829,7 +840,10 @@ internal sealed class GraphDocumentViewModel : PanelWorkScheduler
         }
         ViewState.Mode = mode;
         _preferences?.SetMode(mode);
-        AnnounceMode(mode);
+        if (announce)
+        {
+            AnnounceMode(mode);
+        }
         if (mode == GraphSurfaceMode.Diagram)
         {
             EnterDiagram();

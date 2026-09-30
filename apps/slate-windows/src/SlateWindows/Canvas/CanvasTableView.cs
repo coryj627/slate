@@ -71,6 +71,9 @@ internal sealed class CanvasTableView : UserControl
         // makes containers — the outline's `ContainersRealized` shape,
         // one projection over.
         _grid.ContainersRealized += () => ContainersRealized?.Invoke();
+        // W7-7 PR 4 (#1247, S4): a landing on the bare grid or one of its
+        // cells is the projection's own — the seated card's row, silently.
+        SelectorFocus.SetOwnLanding(_grid.Grid, FocusGrid);
         Content = _grid;
     }
 
@@ -177,7 +180,49 @@ internal sealed class CanvasTableView : UserControl
 
     /// <summary>The outline's twin, and the same reason: a collapsed
     /// grid cannot take the keys (contract C6).</summary>
-    internal bool FocusGrid() => _grid.FocusFirstCell();
+    /// <remarks>
+    /// W7-7 PR 4 (#1247; the owner's S4, the completeness sweep's G16): the
+    /// seated card's row, else the grid's current or first row — silently,
+    /// under the sync guard, and the seat follows silently, as the outline's
+    /// <c>FocusTree</c> does. It was <c>FocusFirstCell</c>: Escape from the
+    /// filter field put the reader on row 0 whatever card was seated, and the
+    /// row's currency moved the seat there with a narrated move on top of
+    /// the row being read. It is also the grid's own landing
+    /// (<see cref="SelectorFocus.SetOwnLanding"/>), so a restore whose token
+    /// is the grid or one of its cells lands the same way.
+    /// </remarks>
+    internal bool FocusGrid()
+    {
+        if (Model is not { } model)
+        {
+            return false;
+        }
+
+        if (model.Selection.Selected is { } seated && DeliverFocus(seated))
+        {
+            return true;
+        }
+
+        _syncingSelection = true;
+        try
+        {
+            if (!_grid.FocusCurrentOrFirstCell())
+            {
+                return false;
+            }
+
+            if (_grid.Grid.CurrentItem is CanvasTableRow landed)
+            {
+                model.SeatSelectionSilently(landed.NodeId);
+            }
+
+            return true;
+        }
+        finally
+        {
+            _syncingSelection = false;
+        }
+    }
 
     private static void OnModelChanged(
         DependencyObject d, DependencyPropertyChangedEventArgs e)
@@ -276,7 +321,13 @@ internal sealed class CanvasTableView : UserControl
                 rowAudioDescription: null,
                 rowActions: RowActions(),
                 exportProducer: null,
-                rowActivated: ActivateRow);
+                rowActivated: ActivateRow,
+                // R-4 (#1246): core's speakable name is the row's
+                // identity — the same text the row header carries.
+                // Unnamed, a row read its record dump, "CanvasTableRow {
+                // NodeId = grp-research, … GroupPath = System.String[] … }".
+                rowAutomationName: static row => ((CanvasTableRow)row).SpeakableName,
+                rowKey: static row => ((CanvasTableRow)row).NodeId);
         }
         finally
         {

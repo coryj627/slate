@@ -558,8 +558,11 @@ public sealed class SidebarTreeKeysTests : IDisposable
             focusRequests.Clear();
             Assert.True(sidebar.OpenNode(Node(sidebar, "alpha.md"), target));
             AssertTheTwinsAreIntact();
+            // The twin named as the tab strip names it among two tabs of one
+            // file (codex PR 3 round 8, OD-9): "alpha, alpha.md, tab 2".
+            Assert.Equal("alpha, alpha.md, tab 2", workspace.ActiveGroup.SpokenNameOf(permanent));
             Assert.Equal(
-                new A11yEvent.TabFocused(string.Empty, permanent.Title, 2u, 2u),
+                new A11yEvent.TabFocused(string.Empty, workspace.ActiveGroup.SpokenNameOf(permanent), 2u, 2u),
                 Assert.Single(Announced().Skip(before)));
             Assert.Equal(new[] { "alpha.md" }, focusRequests);
         }
@@ -1392,7 +1395,7 @@ public sealed class SidebarTreeKeysTests : IDisposable
             Shell = new MainWindow();
             Lifecycle = Assert.IsType<VaultLifecycleViewModel>(Shell.DataContext);
             SetPrivateProperty(Lifecycle, nameof(VaultLifecycleViewModel.FileSidebar), Sidebar);
-            Tree = Detach<TreeView>(Assert.IsType<TreeView>(Shell.FindName("FilesTree")));
+            Tree = Detach<TreeView>(Assert.IsType<LandingTreeView>(Shell.FindName("FilesTree")));
             FilterResults = Detach<ListBox>(Assert.IsType<ListBox>(Shell.FindName("FilterResultsList")));
             RenameField = Detach<TextBox>(Assert.IsType<TextBox>(Shell.FindName("SidebarMutationNameTextBox")));
             DualPane = Detach<ListBox>(Assert.Single(

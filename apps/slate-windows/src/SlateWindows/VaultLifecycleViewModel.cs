@@ -475,7 +475,7 @@ internal sealed partial class VaultLifecycleViewModel
             VaultPath = root;
             VaultDisplayName = RecentVault.FromPath(root).DisplayName;
             AddRecentVault(root);
-            _announce(new A11yEvent.VaultOpened(VaultDisplayName, string.Empty));
+            _announce(new A11yEvent.VaultOpened(RecentVaultSpokenName(root), string.Empty));
 
             _scanCancel = new CancelToken();
             _progressListener = new UiProgressListener(
@@ -831,12 +831,27 @@ internal sealed partial class VaultLifecycleViewModel
         ReplaceRecentVaults(_recentVaultsStore.Load());
     }
 
+    /// <summary>W7-7 PR 3 (#1246, R-4; codex PR 3 round 8, OD-9): the recent
+    /// vault at <paramref name="root"/> as its welcome-screen button names it
+    /// (<see cref="RecentVault.SpokenName"/>, the ONE spoken-name authority
+    /// for a recent vault): two "Notes" folders each speak their path. A
+    /// vault no recent entry holds (the store could not record it) reads its
+    /// bare display name.</summary>
+    private string RecentVaultSpokenName(string root) =>
+        RecentVault.SpokenName(
+            RecentVaults.FirstOrDefault(entry => string.Equals(entry.Path, root, StringComparison.OrdinalIgnoreCase))
+                ?? RecentVault.FromPath(root),
+            RecentVaults);
+
     private void RemoveRecentVault(RecentVault recent)
     {
         try
         {
+            // Named as its button reads it, among the entries it leaves —
+            // BEFORE it leaves them (codex PR 3 round 8).
+            string removedName = RecentVault.SpokenName(recent, RecentVaults);
             ReplaceRecentVaults(_recentVaultsStore.Remove(recent.Path));
-            var removed = new A11yEvent.RemovedRecentVault(recent.DisplayName);
+            var removed = new A11yEvent.RemovedRecentVault(removedName);
             StatusText = SlateUniffiMethods.A11yRender(removed).Text;
             _announce(removed);
         }

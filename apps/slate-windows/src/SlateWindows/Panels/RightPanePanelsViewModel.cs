@@ -356,6 +356,34 @@ internal sealed class RightPanePanelsViewModel : PanelWorkScheduler
         : Embeds.Count == 0 ? "This note has no embeds."
         : null;
 
+    // ---- Which notice is a STOP (W7-7 PR 4, #1247, R-5; spec §5.2.2;
+    // codex round 4). An empty leaf's stop is its notice, as the Citations
+    // leaf's is: the no-note, failure and empty sentences are final and
+    // take the keys, reading their reason where the bare empty list said
+    // only "list". A loading sentence is not a stop — it gives way to the
+    // rows within moments. ----
+
+    public bool BacklinksNoticeIsAStop =>
+        BacklinksEmptyMessage is not null && IsFinal(IsLoadingLinks, LinksLoadError);
+
+    public bool OutgoingLinksNoticeIsAStop =>
+        OutgoingLinksEmptyMessage is not null && IsFinal(IsLoadingLinks, LinksLoadError);
+
+    public bool OutlineNoticeIsAStop =>
+        OutlineEmptyMessage is not null && IsFinal(IsLoadingOutline, OutlineLoadError);
+
+    public bool EmbedsNoticeIsAStop =>
+        EmbedsEmptyMessage is not null && IsFinal(IsResolvingEmbeds, EmbedsLoadError);
+
+    public bool TasksNoticeIsAStop =>
+        TasksEmptyMessage is not null && IsFinal(_isLoadingTasks, _tasksLoadError);
+
+    /// <summary>The empty messages' own precedence: no note, then a
+    /// failure, then loading — only the loading sentence is
+    /// transient.</summary>
+    private bool IsFinal(bool loading, string? error) =>
+        NotePath is null || error is { Length: > 0 } || !loading;
+
     /// <summary>
     /// The active markdown note changed (or went away). Mac's
     /// fireCollectionLoads: one bundle lock for links + backlinks,
@@ -1033,6 +1061,11 @@ internal sealed class RightPanePanelsViewModel : PanelWorkScheduler
         OnPropertyChanged(nameof(DoneTasksGroupHeader));
         OnPropertyChanged(nameof(TasksEmptyMessage));
         OnPropertyChanged(nameof(TasksTruncationNotice));
+        OnPropertyChanged(nameof(BacklinksNoticeIsAStop));
+        OnPropertyChanged(nameof(OutgoingLinksNoticeIsAStop));
+        OnPropertyChanged(nameof(OutlineNoticeIsAStop));
+        OnPropertyChanged(nameof(EmbedsNoticeIsAStop));
+        OnPropertyChanged(nameof(TasksNoticeIsAStop));
     }
 
     /// <summary>Workspace teardown: invalidate every in-flight load
@@ -1243,6 +1276,11 @@ internal sealed class EmbedRowViewModel
         Truncated = truncated;
         Node = node;
     }
+
+    /// <summary>The embed's source as the card tree titles it: the name
+    /// its group takes among its siblings (R-4; the spec review, round
+    /// 21 — one note embedded twice reads apart).</summary>
+    public string Title => Node.Title;
 
     public static EmbedRowViewModel FromShared(
         OutgoingLink link, Shared shared) => new(

@@ -158,6 +158,209 @@ public sealed partial class GraphTableTests
         });
     }
 
+    /// <summary>
+    /// OD-12 under Term F3 (codex on #1300's merge with PR 8): the PROVISIONAL
+    /// seat a shell request takes while a refresh is in flight follows Term
+    /// F4 like the terminal one — the keyed row, and the first row only when
+    /// the key names no row. A keyed row that cannot take the keys yet (the
+    /// held grid not shown) leaves the first row untouched: no current cell,
+    /// no selection, no focus, nothing said. The keyed row takes the
+    /// provisional seat when the grid is shown, the request still pending for
+    /// the refresh's terminal delivery.
+    /// </summary>
+    [Fact]
+    public void AProvisionalSeatNeverTakesTheFirstRowOverAKeyedRowNotYetSeatable()
+    {
+        RunSta(() =>
+        {
+            using var host = new Host(40, "graph-provisional-keyed-not-yet");
+            GraphDocumentViewModel document = host.Open();
+            GraphSurfaceView view = SurfaceFor(host, document);
+            using HostedWindow window = HostInWindow(view);
+            DataGrid grid = view.TableForTests.GridForTests.Grid;
+            grid.UpdateLayout();
+            GraphTableRow[] rows = [.. grid.Items.Cast<GraphTableRow>()];
+            GraphTableRow keyed = rows[^1];
+            document.ViewState.SelectedKey = keyed.StableKey;
+            host.Settle(document);
+            using var park = new ParkedFetch(document, 1);
+            Assert.True(document.Request(new GraphRequest.Sort(new GraphTableSort(GraphTableColumn.Note, false))));
+            park.WaitReached();
+            Assert.True(document.IsRequestInFlight);
+            Assert.True(document.Publication.HoldsSnapshot);
+            grid.Visibility = Visibility.Collapsed;
+            grid.UpdateLayout();
+            PumpedDispatcher.Drain();
+            host.GraphLines.Clear();
+            host.ShellEvents.Clear();
+
+            document.RequestFocusLanding(GraphTabOf(host));
+            PumpedDispatcher.Drain();
+
+            Assert.NotNull(document.FocusRequest);
+            Assert.NotSame(rows[0], grid.CurrentCell.Item);
+            Assert.DoesNotContain(grid.SelectedCells, cell => ReferenceEquals(cell.Item, rows[0]));
+            Assert.False(grid.IsKeyboardFocusWithin);
+            Assert.Empty(host.GraphLines);
+            Assert.Empty(host.ShellEvents);
+
+            grid.Visibility = Visibility.Visible;
+            grid.UpdateLayout();
+            PumpedDispatcher.Drain();
+
+            Assert.True(GridHasTheKeys(view), $"the keyed row took no provisional seat; the keys are on {Keyboard.FocusedElement}");
+            Assert.Same(keyed, grid.CurrentCell.Item);
+            Assert.NotNull(document.FocusRequest);
+            Assert.Empty(host.GraphLines);
+            Assert.Empty(host.ShellEvents);
+            park.Release();
+            host.Settle(document);
+        });
+    }
+
+    /// <summary>
+    /// W7-7 PR 3 x PR 4 (codex on #1302's merge with PR 4): Term F4's arm is
+    /// the grid's CURRENT row, else the first — and with no shared key the
+    /// current row is the reader's own seat, which a republish restores by its
+    /// stable key (R-4, OD-9). The shell's landing (the palette or a menu
+    /// closed, F6) took the FIRST row whenever the key was absent: after a
+    /// relabel moved the seated ghost to the second row, the terminal
+    /// delivery and the provisional seat under a held publication both moved
+    /// the reader onto another node. Both land on the node now, silently, and
+    /// nothing writes the key.
+    /// </summary>
+    [Fact]
+    public void AShellLandingKeepsASeatTheKeyDoesNotHoldOnItsNodeThroughARepublish()
+    {
+        RunSta(() =>
+        {
+            FixtureVault vault = FixtureVault.Create(0, "graph-landing-seat-republish");
+            File.WriteAllText(Path.Combine(vault.Root, "a.md"), "[[/foo-bar]]\n");
+            File.WriteAllText(Path.Combine(vault.Root, "b.md"), "[[foo-bar]]\n");
+            File.WriteAllText(Path.Combine(vault.Root, "c.md"), "[[foo bar]]\n");
+            File.WriteAllText(Path.Combine(vault.Root, "d.md"), "[[foo bar]]\n");
+            using var host = new Host(vault);
+            GraphDocumentViewModel document = host.Open();
+            GraphSurfaceView view = SurfaceFor(host, document);
+            // A menu's own focus scope above the surface: the keys go INTO it
+            // and the window's logical focus stays on the reader's cell, as the
+            // palette or an opened menu leaves it.
+            var elsewhere = new TextBox { Width = 80 };
+            var menu = new StackPanel();
+            FocusManager.SetIsFocusScope(menu, true);
+            menu.Children.Add(elsewhere);
+            var dock = new DockPanel();
+            DockPanel.SetDock(menu, Dock.Top);
+            dock.Children.Add(menu);
+            dock.Children.Add(view);
+            using HostedWindow window = HostInWindow(dock);
+            PumpLoadedState();
+            host.Workspace.GraphNavigator.SetNameQuery("foo");
+            Assert.True(document.Request(new GraphRequest.Sort(new GraphTableSort(GraphTableColumn.Note, true))));
+            host.Settle(document);
+            window.UpdateLayout();
+            PumpedDispatcher.Drain();
+            DataGrid grid = view.TableForTests.GridForTests.Grid;
+            string CurrentKey() => Assert.IsType<GraphTableRow>(grid.CurrentCell.Item).StableKey;
+            string LandedKey() =>
+                Assert.IsType<GraphTableRow>(Assert.IsType<DataGridCell>(Keyboard.FocusedElement).DataContext).StableKey;
+
+            // The premise: the reader seated on "/foo-bar", the first row,
+            // silently — no shared key — and a relabel that moves the node to
+            // the second row, the seat restored onto it by its stable key.
+            Assert.Equal(["/foo-bar", "foo bar"], document.Publication.Rows.Select(row => row.Label));
+            Assert.True(view.TableForTests.FocusProjection());
+            PumpedDispatcher.Drain();
+            string seated = CurrentKey();
+            _ = host.Session.SaveText("a.md", "no link\n", null);
+            _ = document.Load(GraphLoadKind.Pair, GraphAnnouncePolicy.Silent);
+            host.Settle(document);
+            window.UpdateLayout();
+            PumpedDispatcher.Drain();
+            Assert.Equal(["foo bar", "foo-bar"], document.Publication.Rows.Select(row => row.Label));
+            Assert.Equal(seated, CurrentKey());
+            Assert.Null(document.ViewState.SelectedKey);
+
+            // The TERMINAL delivery: the keys in the menu, the shell's request
+            // raised with nothing in flight.
+            Assert.True(elsewhere.Focus());
+            PumpedDispatcher.Drain();
+            Assert.False(GridHasTheKeys(view));
+            Assert.Equal(seated, CurrentKey());
+            host.GraphLines.Clear();
+            host.ShellEvents.Clear();
+            document.RequestFocusLanding(GraphTabOf(host));
+            PumpedDispatcher.Drain();
+            Assert.Null(document.FocusRequest);
+            Assert.True(GridHasTheKeys(view));
+            Assert.Equal(seated, LandedKey());
+            Assert.Equal(seated, CurrentKey());
+            Assert.Null(document.ViewState.SelectedKey);
+            Assert.Empty(host.GraphLines);
+            Assert.Empty(host.ShellEvents);
+
+            // The PROVISIONAL seat: the keys in the menu again, a pair in
+            // flight over the held publication, the shell's request — then the
+            // pair's terminal re-seat.
+            Assert.True(elsewhere.Focus());
+            PumpedDispatcher.Drain();
+            using var park = new ParkedFetch(document, 1);
+            _ = document.Load(GraphLoadKind.Pair, GraphAnnouncePolicy.Silent);
+            park.WaitReached();
+            Assert.True(document.IsRequestInFlight);
+            Assert.True(document.Publication.HoldsSnapshot);
+            Assert.Equal(seated, CurrentKey());
+            document.RequestFocusLanding(GraphTabOf(host));
+            PumpedDispatcher.Drain();
+            Assert.NotNull(document.FocusRequest);
+            Assert.True(GridHasTheKeys(view), $"no provisional seat; the keys are on {Keyboard.FocusedElement}");
+            Assert.Equal(seated, LandedKey());
+            Assert.Null(document.ViewState.SelectedKey);
+            park.Release();
+            host.Settle(document);
+            window.UpdateLayout();
+            PumpedDispatcher.Drain();
+            Assert.Null(document.FocusRequest);
+            Assert.True(GridHasTheKeys(view));
+            Assert.Equal(seated, LandedKey());
+            Assert.Equal(seated, CurrentKey());
+            Assert.Null(document.ViewState.SelectedKey);
+            Assert.Empty(host.GraphLines);
+            Assert.Empty(host.ShellEvents);
+        });
+    }
+
+    /// <summary>Term F4's row arm by arm — the one rule the surface's seats and
+    /// the grid's own landing resolve (codex on #1302's merge with PR 4).</summary>
+    [Fact]
+    public void TheLandingRowIsTheKeysElseTheCurrentElseTheFirst()
+    {
+        GraphTableRow first = Row("g:a");
+        GraphTableRow second = Row("g:b");
+        GraphTableRow third = Row("g:c");
+        GraphTableRow[] rows = [first, second, third];
+        // The shared key's row, over the current one.
+        Assert.Same(third, GraphTableView.LandingRow("g:c", rows, second));
+        // A key that names no row: the first, not the current (OD-12).
+        Assert.Same(first, GraphTableView.LandingRow("g:gone", rows, second));
+        // No key: the current row...
+        Assert.Same(second, GraphTableView.LandingRow(null, rows, second));
+        Assert.Same(third, GraphTableView.LandingRow(null, rows, third));
+        // ...only while it IS one of the rows — a row a republish replaced is
+        // not, however equal...
+        GraphTableRow replaced = Row("g:b");
+        Assert.Equal(second, replaced);
+        Assert.Same(first, GraphTableView.LandingRow(null, rows, replaced));
+        // ...else the first.
+        Assert.Same(first, GraphTableView.LandingRow(null, rows, null));
+        // No row: none.
+        Assert.Null(GraphTableView.LandingRow(null, [], second));
+        Assert.Null(GraphTableView.LandingRow("g:a", [], null));
+
+        static GraphTableRow Row(string key) =>
+            new(key, 0, key, null, GraphNodeKind.Ghost, [], 0, 0, 0, 0, 0, null);
+    }
+
     [Fact]
     public void AFreshOpenLandsFocusOnTheGridsRow()
     {
@@ -247,6 +450,45 @@ public sealed partial class GraphTableTests
             Assert.True(GridHasTheKeys(view));
             Assert.Empty(host.GraphLines);
             Assert.Equal(key, state.SelectedKey);
+        });
+    }
+
+    /// <summary>W7-7 PR 4 (#1247, R-5; codex round 5): a landing on the BARE
+    /// grid — a restore token, a publication under the keys — is the
+    /// projection's own (rule F), not the substrate's: with the shared key's
+    /// row hidden by a needle (the grid's currency cleared, A-7) the keys
+    /// land on a row and the key is NEVER written; nothing is said. The
+    /// substrate's own landing would have made its first row the shared
+    /// selection.</summary>
+    [Fact]
+    public void ALandingOnTheBareGridKeepsAHiddenSharedKey()
+    {
+        RunSta(() =>
+        {
+            using var host = new Host(4, "graph-landing-bare-token");
+            GraphDocumentViewModel document = host.Open();
+            GraphSurfaceView view = SurfaceFor(host, document);
+            using HostedWindow window = HostInWindow(view);
+            GraphTableRow second = document.Publication.Rows[1];
+            Assert.True(document.SelectRow(second.StableKey));
+            host.Workspace.GraphNavigator.SetNameQuery("note0");
+            host.Settle(document);
+            window.UpdateLayout();
+            DataGrid grid = view.TableForTests.GridForTests.Grid;
+            Assert.True(PumpedDispatcher.PumpUntil(() => grid.Items.Count == 1), "premise: the needle never narrowed the rows.");
+            Assert.Equal(second.StableKey, document.ViewState.SelectedKey);
+            Assert.True(grid.Focus());
+            IInputElement token = Keyboard.FocusedElement;
+            Assert.Same(grid, token);
+            Assert.True(view.FilterFieldForTests.Focus());
+            host.GraphLines.Clear();
+
+            Assert.True(SelectorFocus.LandOnStop((UIElement)token));
+
+            Assert.IsType<DataGridCell>(Keyboard.FocusedElement);
+            Assert.True(GridHasTheKeys(view));
+            Assert.Equal(second.StableKey, document.ViewState.SelectedKey);
+            Assert.Empty(host.GraphLines);
         });
     }
 

@@ -44,6 +44,31 @@ public partial class MainWindow : Window
         ICommandPaletteWorkLane? paletteLane)
     {
         InitializeComponent();
+        // R-5 (#1247, as the owner amended it): a landing in the Files tree —
+        // a restore's, Tab's, a click's — lands as the region does: its
+        // selected row, else its first row unselected, whose focus opens
+        // nothing — never the bare tree.
+        SelectorFocus.SetOwnLanding(FilesTree, LandOnFilesTree);
+        // R-5 (#1247, OD-11c): a click on a populated list's empty area lands
+        // on a row.
+        SelectorFocus.RegisterClickRule();
+        // The Tags tree's selection ACTIVATES a tag filter (R-3): its
+        // landing is its selected tag, else its first tag UNSELECTED —
+        // never one it would apply.
+        TreeView tags = FindWithAutomationId<TreeView>(FilesPaneBorder, "SidebarTagTree")
+            ?? throw new InvalidOperationException("SidebarTagTree is not in the shell's XAML.");
+        SelectorFocus.SetOwnLanding(tags, () => LandOnSidebarTree(tags, selectedPath: null));
+        // S4 (#1247): every selection-committing list owns its landing, so a
+        // restore whose token is one of its rows lands as the region does —
+        // the filter's results and the dual pane OPEN on selection (R-2),
+        // the rail SWITCHES the leaf — and never re-selects a row by focus.
+        SelectorFocus.SetOwnLanding(
+            FilterResultsList, () => SelectorFocus.FocusFirstOrSelectedItem(FilterResultsList) || LandOnFilesTree());
+        ListBox dualPane = FindWithAutomationId<ListBox>(FilesPaneBorder, "SidebarDualPane")
+            ?? throw new InvalidOperationException("SidebarDualPane is not in the shell's XAML.");
+        SelectorFocus.SetOwnLanding(dualPane, () => SelectorFocus.FocusFirstOrSelectedItem(dualPane) || LandOnFilesTree());
+        SelectorFocus.SetOwnLanding(RightPaneLeavesList, () => SelectorFocus.FocusFirstOrSelectedItem(RightPaneLeavesList));
+        KeepLeafKeysThroughPublications();
         // W7-7 PR 8 (R-10, OD-12): the one editor landing this window holds,
         // and its window-level cancellations — the window losing activation,
         // and WPF's restore when it comes back (no one's move).
@@ -398,7 +423,7 @@ public partial class MainWindow : Window
                     return;
                 }
 
-                _ = FilesTree.Focus();
+                _ = LandOnFilesTree();
             },
             DispatcherPriority.Input);
     }
@@ -427,7 +452,7 @@ public partial class MainWindow : Window
             }
             else
             {
-                FilesTree.Focus();
+                _ = LandOnFilesTree();
             }
         }, DispatcherPriority.Input);
     }
@@ -512,17 +537,12 @@ public partial class MainWindow : Window
             }
             return;
         }
-        if (CanvasPromptChoicesList.IsVisible && CanvasPromptChoicesList.Focusable)
+        // R-5 (#1247): the selected choice's row, never the bare list; a
+        // row that cannot be landed yet leaves the keys to the sheet's
+        // other stop.
+        if (CanvasPromptChoicesList.IsVisible && CanvasPromptChoicesList.Focusable
+            && SelectorFocus.FocusFirstOrSelectedItem(CanvasPromptChoicesList))
         {
-            object? selected = CanvasPromptChoicesList.SelectedItem;
-            if (selected is not null
-                && CanvasPromptChoicesList.ItemContainerGenerator.ContainerFromItem(selected)
-                    is IInputElement container
-                && TryFocus(container))
-            {
-                return;
-            }
-            _ = TryFocus(CanvasPromptChoicesList);
             return;
         }
         _ = TryFocus(CanvasPromptClearMarksButton);
@@ -756,7 +776,7 @@ public partial class MainWindow : Window
         {
             if (boundary == WorkspaceFocusBoundary.Files)
             {
-                FilesTree.Focus();
+                _ = LandOnFilesTree();
             }
             else if (_viewModel.Workspace is WorkspaceViewModel workspace
                 && workspace.ConnectionsLeafIsActive()
@@ -785,11 +805,22 @@ public partial class MainWindow : Window
                     Graph.GraphInspectorView.LandBoundary(
                         _viewModel.Workspace is WorkspaceViewModel current && current.IsGraphInspectorShown,
                         GraphInspectorSurface.FocusFirstStop,
-                        () => _ = RightPaneLeavesList.Focus()));
+                        () => _ = SelectorFocus.FocusFirstOrSelectedItem(RightPaneLeavesList)));
+            }
+            else if (boundary == WorkspaceFocusBoundary.RightPaneEdge)
+            {
+                // Ctrl+Alt+Right at the edge keeps its landing, the rail
+                // (W7-6 §6: Ctrl+Alt+Arrow's semantics unchanged) — on the
+                // shown leaf's row, never the bare rail, from which Down
+                // walked into the menu bar (W7-7 PR 4, #1247, R-5).
+                _ = SelectorFocus.FocusFirstOrSelectedItem(RightPaneLeavesList);
             }
             else
             {
-                RightPaneLeavesList.Focus();
+                // A leaf reveal (Ctrl+R, Show History) puts the reader IN
+                // the leaf — Ctrl+R on the review's filter — or on the
+                // rail's row when the leaf has no stop (R-5).
+                LandInRightPane();
             }
         });
     }
@@ -1183,6 +1214,7 @@ public partial class MainWindow : Window
         if (e.Key == Key.Delete
             && modifiers == ModifierKeys.None
             && FilesTree.IsKeyboardFocusWithin
+            && FilesKeysAreOnTheSelection()
             && _viewModel.FileSidebar?.DeleteCommand.CanExecute(null) == true)
         {
             _viewModel.FileSidebar.DeleteCommand.Execute(null);
@@ -1192,6 +1224,7 @@ public partial class MainWindow : Window
 
         if (e.Key == Key.F2
             && FilesTree.IsKeyboardFocusWithin
+            && FilesKeysAreOnTheSelection()
             && _viewModel.FileSidebar?.SelectedNode is
             { IsPlaceholder: false, IsGroupHeader: false })
         {
@@ -1229,7 +1262,7 @@ public partial class MainWindow : Window
             if (_viewModel.FileSidebar?.RenameCommand.CanExecute(null) == true
                 && _viewModel.FileSidebar.TryRenameSelected())
             {
-                FilesTree.Focus();
+                _ = LandOnFilesTree();
             }
 
             e.Handled = true;
@@ -1241,7 +1274,7 @@ public partial class MainWindow : Window
                 _viewModel.FileSidebar.MutationName = selected.Name;
             }
 
-            FilesTree.Focus();
+            _ = LandOnFilesTree();
             e.Handled = true;
         }
     }
@@ -1254,7 +1287,17 @@ public partial class MainWindow : Window
         SidebarMutationNameTextBox.Select(0, extension > 0 ? extension : text.Length);
     }
 
-    private bool TryFocus(IInputElement target)
+    /// <summary>W7-7 PR 4 (#1247, the owner's focus-without-select): the
+    /// tree's selection verbs — Delete, F2 — act on the row the reader is
+    /// on. A landing may leave the keys on a first row that is NOT the
+    /// sidebar's selection (the selection hidden under a collapsed folder);
+    /// there the verbs leave the key alone rather than act on a file the
+    /// reader cannot hear.</summary>
+    private bool FilesKeysAreOnTheSelection() =>
+        Keyboard.FocusedElement is not TreeViewItem { DataContext: var node }
+        || ReferenceEquals(node, _viewModel.FileSidebar?.SelectedNode);
+
+    internal bool TryFocus(IInputElement target)
     {
         // Red team after codex round 11: the window root is a visible,
         // enabled UIElement, so a token captured while focus sat
@@ -1268,7 +1311,10 @@ public partial class MainWindow : Window
 
         return target switch
         {
-            UIElement element when element.IsVisible && element.IsEnabled => element.Focus(),
+            // R-5 (#1247; codex round 4): a token captured while a list was
+            // empty restores onto its ROW once it has filled, never the bare
+            // list — the one landing for element-typed targets.
+            UIElement element when element.IsVisible && element.IsEnabled => SelectorFocus.LandOnStop(element),
             ContentElement element when element.IsEnabled => element.Focus(),
             _ => false,
         };
@@ -1586,6 +1632,15 @@ public partial class MainWindow : Window
 
     private void QuickSwitcherResults_MouseDoubleClick(object sender, MouseButtonEventArgs e)
     {
+        // Only a double-click on a RESULT opens (codex PR 4's final check,
+        // the audit of every double-click over a list): one on the empty
+        // area below the results opened the current result, never clicked.
+        // A pressed result is the current one by then.
+        if (sender is ItemsControl results && SelectorFocus.ClickedItem(results, e.OriginalSource) is null)
+        {
+            return;
+        }
+
         _viewModel.QuickSwitcher?.OpenSelected(WorkspaceOpenTarget.CurrentTab);
         e.Handled = true;
     }
@@ -1617,10 +1672,14 @@ public partial class MainWindow : Window
         }
     }
 
+    // W7-7 PR 4 (#1247; codex round 7 finding 2): every key below acts on
+    // the row that holds the keys — a landing focuses a row without
+    // selecting it — and on the selection only when no row does
+    // (SelectorFocus.FocusedOrSelectedItem, FocusedRowCensus).
     private void PanelBacklinks_PreviewKeyDown(object sender, KeyEventArgs e)
     {
         if (e.Key == Key.Enter
-            && PanelBacklinksList.SelectedItem is BacklinkRowViewModel row)
+            && SelectorFocus.FocusedOrSelectedItem(PanelBacklinksList) is BacklinkRowViewModel row)
         {
             PanelsViewModel?.OpenBacklink(row, PanelModifierTarget());
             e.Handled = true;
@@ -1642,7 +1701,7 @@ public partial class MainWindow : Window
         // Row targeted — now gate the items to what this row can
         // actually honor (round 3: external rows advertised tab and
         // split actions that launch the browser regardless).
-        if (PanelOutgoingLinksList.SelectedItem
+        if (SelectorFocus.FocusedOrSelectedItem(PanelOutgoingLinksList)
                 is not OutgoingLinkRowViewModel row
             || !PanelRowTargeting.ComposeOutgoingMenu(
                 PanelOutgoingLinksList.ContextMenu, row))
@@ -1696,7 +1755,7 @@ public partial class MainWindow : Window
     private void PanelOutgoingLinks_PreviewKeyDown(object sender, KeyEventArgs e)
     {
         if (e.Key == Key.Enter
-            && PanelOutgoingLinksList.SelectedItem is OutgoingLinkRowViewModel row)
+            && SelectorFocus.FocusedOrSelectedItem(PanelOutgoingLinksList) is OutgoingLinkRowViewModel row)
         {
             PanelsViewModel?.OpenOutgoingLink(row, PanelModifierTarget());
             e.Handled = true;
@@ -1737,7 +1796,7 @@ public partial class MainWindow : Window
     private void PanelOutline_PreviewKeyDown(object sender, KeyEventArgs e)
     {
         if (e.Key == Key.Enter
-            && PanelOutlineList.SelectedItem is OutlineRowViewModel row)
+            && SelectorFocus.FocusedOrSelectedItem(PanelOutlineList) is OutlineRowViewModel row)
         {
             PanelsViewModel?.OpenHeading(row);
             e.Handled = true;
@@ -1766,7 +1825,7 @@ public partial class MainWindow : Window
     private void PanelTasks_PreviewKeyDown(object sender, KeyEventArgs e)
     {
         if (sender is not ListBox list
-            || list.SelectedItem is not NoteTaskRowViewModel row)
+            || SelectorFocus.FocusedOrSelectedItem(list) is not NoteTaskRowViewModel row)
         {
             return;
         }
@@ -1812,7 +1871,7 @@ public partial class MainWindow : Window
 
     private void PanelReview_PreviewKeyDown(object sender, KeyEventArgs e)
     {
-        if (PanelReviewList.SelectedItem is not ReviewTaskRowViewModel row)
+        if (SelectorFocus.FocusedOrSelectedItem(PanelReviewList) is not ReviewTaskRowViewModel row)
         {
             return;
         }
@@ -1942,16 +2001,18 @@ public partial class MainWindow : Window
     /// creates nothing while a modal surface is open — the modal owns the
     /// keys, and nothing may seat beneath it. Its refusal — now, or later when
     /// a held landing's content fails, is torn down while current or will not
-    /// take focus — falls back to the tab strip or the Files tree
+    /// take focus — falls back to the tab strip, else the Files region: its
+    /// tree, or its filter field when a filter is active
     /// (<see cref="FallBackFromEditor"/>), guarded to the same tab with no
     /// modal open (<see cref="RouteFallback"/>): focus is never left on the
     /// window root or a closed overlay, and never moved beneath a modal.
     /// <paramref name="onLanded"/> is spoken once focus is in the stop or on
-    /// the tab's own item, or — for an EMPTY pane, which has neither — on the
-    /// Files tree (owner decision 2026-09-28: the line tells the reader nothing
-    /// is open; R-1's fourth launch line). Never for the Files tree when the
-    /// pane has a tab whose stop was refused, and never when nothing took
-    /// focus.
+    /// the tab's own item, or — for an EMPTY pane, which has neither — in the
+    /// Files region, its tree or its filter field (owner decisions 2026-09-28:
+    /// the line tells the reader nothing is open, R-1's fourth launch line; and
+    /// 2026-09-29: the filter field is the same Files fallback, and the line is
+    /// just as true there). Never from the Files region when the pane has a
+    /// tab whose stop was refused, and never when nothing took focus.
     /// </summary>
     private void LandEditorForRoute(WorkspaceGroupViewModel group, Action? onLanded)
     {
@@ -1974,10 +2035,11 @@ public partial class MainWindow : Window
     /// <summary>A route's refusal (R-10): only while the reader is still where
     /// the route put them — the same group and tab, no modal over it — the
     /// fallback runs, and <paramref name="onLanded"/> is spoken only when it
-    /// took the tab's own item, or when the pane is EMPTY and it took the Files
-    /// tree (owner decision 2026-09-28). A pane with a tab whose stop was
-    /// refused says nothing from the Files tree (codex PR 8 round 6): its line
-    /// would name a tab the reader is not on.</summary>
+    /// took the tab's own item, or when the pane is EMPTY and it landed in the
+    /// Files region — its tree, or its filter field when a filter is active
+    /// (owner decisions 2026-09-28 and 2026-09-29). A pane with a tab whose
+    /// stop was refused says nothing from the Files region (codex PR 8 round
+    /// 6): its line would name a tab the reader is not on.</summary>
     private Action RouteFallback(WorkspaceGroupViewModel group, WorkspaceTabViewModel? tab, Action? onLanded) =>
         () =>
         {
@@ -2078,8 +2140,10 @@ public partial class MainWindow : Window
 
     /// <summary>
     /// A refused editor landing's fallback for a route: the tab strip's stop
-    /// for the tab, else the tab control, else the Files tree — answering which
-    /// took focus. W7-5 (#1239): an EMPTY tab control refuses focus (its
+    /// for the tab, else the tab control's selected or first tab, else the
+    /// Files region's landing — its tree's row, or its filter field when a
+    /// filter is active (W7-7 PR 4, R-5: never a bare container) — answering
+    /// which took focus. W7-5 (#1239): an EMPTY tab control refuses focus (its
     /// Focusable follows HasItems, WorkspaceTemplates.xaml), so the last resort
     /// is the Files tree: the owner's launch landing when nothing is open, and
     /// the one region that always has something to say. Landing on the bare
@@ -2102,13 +2166,18 @@ public partial class MainWindow : Window
                 return EditorFallback.TabItem;
             }
 
-            if (tabs.Focus())
+            // W7-7 PR 4 (#1247, R-5): a tab control that HAS tabs lands on
+            // one, never the bare control — its selected tab, else its first.
+            if (SelectorFocus.FocusFirstOrSelectedItem(tabs))
             {
                 return EditorFallback.TabControl;
             }
         }
 
-        return FilesTree.Focus() ? EditorFallback.Files : EditorFallback.None;
+        // The Files region's landing (W7-7 PR 4, R-5 as the owner amended it):
+        // the selected file's row, else the first row UNSELECTED — never the
+        // bare tree.
+        return LandOnFilesTree() ? EditorFallback.Files : EditorFallback.None;
     }
 
     /// <summary>Where a refused route landing's fallback put the reader.</summary>
@@ -2117,6 +2186,9 @@ public partial class MainWindow : Window
         None,
         TabItem,
         TabControl,
+
+        /// <summary>The Files region: its tree, or its filter field when a
+        /// filter is active.</summary>
         Files,
     }
 

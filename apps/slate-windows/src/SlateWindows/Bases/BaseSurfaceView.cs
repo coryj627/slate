@@ -40,12 +40,16 @@ internal sealed class BaseSurfaceView : UserControl
 
     private readonly TextBlock _title;
     private readonly ComboBox _viewPicker;
+
+    /// <summary>The views the picker's occurrences were built from: a
+    /// re-render with the same list keeps them (and the picker's state).</summary>
+    private IReadOnlyList<BaseViewSummary>? _pickedViews;
     private readonly TextBlock _countReadout;
     private readonly TextBox _quickFilter;
     private readonly Button _refresh;
     private readonly StackPanel _banners;
     private readonly TextBlock _stateBanner;
-    private readonly ItemsControl _warningBanners;
+    private readonly LayoutItemsControl _warningBanners;
     private readonly TextBlock _emptyState;
     private readonly AccessibleDataGrid _grid;
     private readonly ListBox _list;
@@ -71,9 +75,17 @@ internal sealed class BaseSurfaceView : UserControl
             Margin = new Thickness(12, 0, 0, 0),
             MinWidth = 120,
             VerticalAlignment = VerticalAlignment.Center,
-            DisplayMemberPath = nameof(BaseViewSummary.Name),
+            DisplayMemberPath = nameof(ItemOccurrence<BaseViewSummary>.Name),
+            // W7-7 PR 3 (#1246, R-4): DisplayMemberPath templates the text
+            // only; NVDA reads a combo's value from the selected item's
+            // name, which was the BaseViewSummary record's dump.
+            ItemContainerStyle = ViewPickerItemStyle(),
         };
         AutomationProperties.SetAutomationId(_viewPicker, "BaseViewPicker");
+        // R-4 (#1246; the spec review, round 21): a base may name two
+        // views alike (core warns DuplicateViewName).
+        SiblingNames.SetNamePath(_viewPicker, nameof(ItemOccurrence<BaseViewSummary>.Name));
+        SiblingNames.SetNoun(_viewPicker, "view");
         AutomationProperties.SetName(_viewPicker, "Base view");
         AutomationProperties.SetHelpText(
             _viewPicker, "Switch the active view in this base.");
@@ -140,12 +152,20 @@ internal sealed class BaseSurfaceView : UserControl
 
         _stateBanner = BannerText();
         AutomationProperties.SetAutomationId(_stateBanner, "BaseStateBanner");
-        _warningBanners = new ItemsControl
+        // W7-7 PR 3 (#1246, R-4; codex PR 3 round 1): each warning's
+        // focusable text is the stop, so its container is layout — a plain
+        // ItemsControl published a DataItem wrapper per warning.
+        _warningBanners = new LayoutItemsControl
         {
             Focusable = false,
             ItemTemplate = WarningTemplate(),
+            ItemContainerStyle = SiblingNames.ContainerStyle(typeof(ContentPresenter)),
         };
         AutomationProperties.SetAutomationId(_warningBanners, "BaseWarningBanners");
+        // Two warnings may read alike: each text takes its container's
+        // composed name (R-4; the spec review, round 21).
+        SiblingNames.SetNamePath(_warningBanners, nameof(SiblingText.Text));
+        SiblingNames.SetNoun(_warningBanners, "warning");
         _banners = new StackPanel { Margin = new Thickness(12, 0, 12, 4) };
         _banners.Children.Add(_stateBanner);
         _banners.Children.Add(_warningBanners);
@@ -175,6 +195,9 @@ internal sealed class BaseSurfaceView : UserControl
             SelectionMode = SelectionMode.Single,
         };
         AutomationProperties.SetAutomationId(_list, "BaseTabList");
+        SiblingNames.SetNamePath(_list, nameof(BaseListItemViewModel.AccessibleName));
+        SiblingNames.SetDistinguisherPath(_list, nameof(BaseListItemViewModel.FilePath));
+        SiblingNames.SetNoun(_list, "row");
         ScrollViewer.SetHorizontalScrollBarVisibility(
             _list, ScrollBarVisibility.Disabled);
         // The list renderer participates in selection and activation
@@ -261,6 +284,12 @@ internal sealed class BaseSurfaceView : UserControl
     internal AccessibleDataGrid GridForTests => _grid;
 
     internal ListBox ListForTests => _list;
+
+    internal ComboBox ViewPickerForTests => _viewPicker;
+
+    internal void RenderListForTests(BasesResultSet result) => RenderList(result);
+
+    internal LayoutItemsControl WarningBannersForTests => _warningBanners;
 
     internal TextBox QuickFilterForTests => _quickFilter;
 
@@ -403,7 +432,7 @@ internal sealed class BaseSurfaceView : UserControl
         }
         int before = model.ActiveViewIndex;
         model.SelectView(_viewPicker.SelectedIndex);
-        if (model.ActiveViewIndex != before && model.ActiveViewName is { } name)
+        if (model.ActiveViewIndex != before && model.ActiveViewSpokenName is { } name)
         {
             model.AnnounceViewSelected(name);
         }
@@ -468,7 +497,14 @@ internal sealed class BaseSurfaceView : UserControl
         }
         else if (_list.Visibility == Visibility.Visible)
         {
-            _ = _list.Focus();
+            // A row, never the bare list, from which an arrow walked
+            // into the menu bar (W7-7 PR 4, #1247, R-5). A row that cannot
+            // be landed leaves the keys on the surface's stable stop, the
+            // quick filter the Escape came from.
+            if (!SelectorFocus.FocusFirstOrSelectedItem(_list))
+            {
+                _ = _quickFilter.Focus();
+            }
         }
     }
 
@@ -503,7 +539,16 @@ internal sealed class BaseSurfaceView : UserControl
         _synchronizingPicker = true;
         try
         {
-            _viewPicker.ItemsSource = model.Views;
+            // R-4 (#1246; codex PR 3 round 6, OD-9): each view is its own
+            // occurrence — a base may repeat a view definition, and two
+            // value-equal records are ONE item to UIA (WPF keys item peers by
+            // equality). Built once per list of views, so a re-render keeps
+            // the picker as it is; selection maps by index.
+            if (!ReferenceEquals(_pickedViews, model.Views))
+            {
+                _pickedViews = model.Views;
+                _viewPicker.ItemsSource = ItemOccurrence.Of(model.Views, view => view.Name);
+            }
             _viewPicker.SelectedIndex =
                 model.Views.Count > 0 ? model.ActiveViewIndex : -1;
             _viewPicker.Visibility = model.Views.Count > 1
@@ -571,7 +616,7 @@ internal sealed class BaseSurfaceView : UserControl
             ? Visibility.Visible
             : Visibility.Collapsed;
         string[] warnings = model.Result?.Warnings ?? [];
-        _warningBanners.ItemsSource = warnings;
+        _warningBanners.ItemsSource = SiblingText.Wrap(warnings);
         _warningBanners.Visibility =
             warnings.Length > 0 ? Visibility.Visible : Visibility.Collapsed;
         _banners.Visibility =
@@ -696,7 +741,11 @@ internal sealed class BaseSurfaceView : UserControl
                 summary: BaseSummaryFormatter.SummaryText(result, model.QuickFilterActive),
                 accessibilityLabel: result.AudioSummary,
                 rowAudioDescription: static row =>
-                    ((BaseGridRowViewModel)row).AudioDescription);
+                    ((BaseGridRowViewModel)row).AudioDescription,
+                // R-4 (#1246): unnamed, a row read
+                // "SlateWindows.Bases.BaseGridRowViewModel, data item".
+                rowAutomationName: static row => ((BaseGridRowViewModel)row).FileName,
+                rowKey: static row => ((BaseGridRowViewModel)row).RowKey);
             _grid.SetSortIndicator(model.SortState);
             _grid.CurrentRowChanged -= OnCurrentRowChanged;
             _grid.CurrentRowChanged += OnCurrentRowChanged;
@@ -753,6 +802,8 @@ internal sealed class BaseSurfaceView : UserControl
             accessibilityLabel: result.AudioSummary,
             rowAudioDescription: static row =>
                 ((BaseGridRowViewModel)row).AudioDescription,
+            rowAutomationName: static row => ((BaseGridRowViewModel)row).FileName,
+            rowKey: static row => ((BaseGridRowViewModel)row).RowKey,
             rowActions: rowActions,
             // No exportProducer: export/copy route through the menu
             // commands, which own the C14 scope prompt and compose off
@@ -929,7 +980,9 @@ internal sealed class BaseSurfaceView : UserControl
     /// items carrying the substrate's canonical group heading.</summary>
     private void RenderList(BasesResultSet result)
     {
-        var items = new List<object>();
+        // Typed, never object (codex PR 3 round 7): the census reads the item
+        // type a host holds, and a header is a BaseListItemViewModel too.
+        var items = new List<BaseListItemViewModel>();
         if (result.Groups.Length > 0)
         {
             foreach (BasesGroup group in result.Groups)
@@ -959,6 +1012,17 @@ internal sealed class BaseSurfaceView : UserControl
         AutomationProperties.SetName(_list, result.AudioSummary);
         _list.ItemContainerStyle ??= BuildListItemStyle();
         ReconcileListSelection(items);
+        // A republish replaces every row container, and WPF hands the keys
+        // of a removed row to the bare list — measured: Escape from the
+        // quick filter landed on its row, and the re-query that followed
+        // left the reader on "2 notes, list", from which an arrow walked
+        // into the menu bar. The row, never the bare list (W7-7 PR 4,
+        // #1247, R-5; codex round 1) — else the surface's stable stop, the
+        // quick filter (codex round 3).
+        if (_list.IsKeyboardFocused && !SelectorFocus.FocusFirstOrSelectedItem(_list))
+        {
+            _ = _quickFilter.Focus();
+        }
     }
 
     /// <summary>C9 selection preservation by IDENTITY (FilePath,
@@ -966,14 +1030,13 @@ internal sealed class BaseSurfaceView : UserControl
     /// note-row when it survived and drops it when it did not — a
     /// retained stale row is the dangling-reference class INV-3
     /// forbids.</summary>
-    private void ReconcileListSelection(IReadOnlyList<object> items)
+    private void ReconcileListSelection(IReadOnlyList<BaseListItemViewModel> items)
     {
         if (Model is not { SelectedRow: { } selected } model)
         {
             return;
         }
         BaseListItemViewModel? match = items
-            .OfType<BaseListItemViewModel>()
             .FirstOrDefault(item => item.Row is { } row
                 && string.Equals(
                     row.FilePath, selected.FilePath, StringComparison.Ordinal)
@@ -1000,18 +1063,27 @@ internal sealed class BaseSurfaceView : UserControl
         }
     }
 
+    /// <summary>A double-click opens the row it HIT — never the keyboard's
+    /// row: its first press on the list's empty area lands the keys on a row
+    /// (the click rule), and opening "the focused row" opened a note never
+    /// clicked (codex PR 4's final check).</summary>
     private void OnListDoubleClick(object sender, MouseButtonEventArgs e) =>
-        _ = ActivateListRow();
+        _ = ActivateListRow(SelectorFocus.ClickedItem(_list, e.OriginalSource));
 
     private void OnListKeyDown(object sender, KeyEventArgs e)
     {
-        if (e.Key == Key.Enter && ActivateListRow())
+        if (e.Key == Key.Enter && ActivateListRow(SelectorFocus.FocusedOrSelectedItem(_list)))
         {
             e.Handled = true;
         }
     }
 
-    private bool ActivateListRow()
+    /// <summary>Opens <paramref name="target"/> — Enter's: the row that
+    /// holds the keys, else the selected row; a double-click's: the row it
+    /// hit — under the C13 admission. W7-7 PR 4 (#1247; codex round 7
+    /// finding 4): the quick filter's Escape lands on a row without
+    /// selecting it, and Enter there opened nothing.</summary>
+    private bool ActivateListRow(object? target)
     {
         // The C13 admission the grid's row actions respect (codex
         // round 6: Enter on a Loading surface's stale list row still
@@ -1019,7 +1091,7 @@ internal sealed class BaseSurfaceView : UserControl
         if (IsReadOnlySurface
             || Model is not
             { State: BaseLoadState.Ready or BaseLoadState.Degraded } model
-            || _list.SelectedItem is not BaseListItemViewModel { Row: { } row })
+            || target is not BaseListItemViewModel { Row: { } row })
         {
             return false;
         }
@@ -1056,6 +1128,17 @@ internal sealed class BaseSurfaceView : UserControl
                     + $"{cell.Summary}: "
                     + (cell.Value.Display.Length > 0 ? cell.Value.Display : "empty")));
 
+    /// <summary>The view picker's items are named by the view's name —
+    /// the GraphInspectorView picker precedent.</summary>
+    private static Style ViewPickerItemStyle()
+    {
+        var style = new Style(typeof(ComboBoxItem));
+        style.Setters.Add(new Setter(
+            AutomationProperties.NameProperty,
+            SiblingNames.ContainerNameBinding()));
+        return style;
+    }
+
     private static Style BuildListItemStyle()
     {
         // Group headers are separators, not selectable rows: they stay
@@ -1064,7 +1147,7 @@ internal sealed class BaseSurfaceView : UserControl
         var style = new Style(typeof(ListBoxItem));
         style.Setters.Add(new Setter(
             AutomationProperties.NameProperty,
-            new System.Windows.Data.Binding(nameof(BaseListItemViewModel.AccessibleName))));
+            SiblingNames.ContainerNameBinding()));
         var headerTrigger = new DataTrigger
         {
             Binding = new System.Windows.Data.Binding(nameof(BaseListItemViewModel.IsHeader)),
@@ -1091,9 +1174,10 @@ internal sealed class BaseSurfaceView : UserControl
     private static DataTemplate WarningTemplate()
     {
         var text = new FrameworkElementFactory(typeof(TextBlock));
-        text.SetBinding(TextBlock.TextProperty, new System.Windows.Data.Binding());
+        text.SetBinding(TextBlock.TextProperty, new System.Windows.Data.Binding(nameof(SiblingText.Text)));
         text.SetValue(TextBlock.TextWrappingProperty, TextWrapping.Wrap);
         text.SetValue(FocusableProperty, true);
+        text.SetBinding(AutomationProperties.NameProperty, SiblingNames.FromContainer());
         text.SetResourceReference(
             TextBlock.ForegroundProperty, "Slate.WarningBrush");
         return new DataTemplate { VisualTree = text };
@@ -1119,6 +1203,11 @@ internal class BaseListItemViewModel
     public BasesRow? Row { get; }
 
     public string AccessibleName { get; }
+
+    /// <summary>W7-7 PR 3 (#1246, R-4): what tells two rows that read
+    /// alike apart — their files (SiblingNames' distinguisher); a group
+    /// header has none.</summary>
+    public string? FilePath => Row?.FilePath;
 
     public bool IsHeader => Row is null;
 
@@ -1149,6 +1238,19 @@ internal sealed class BaseGridRowViewModel
             : string.Empty;
 
     public string AudioDescription => Row.AudioDescription;
+
+    /// <summary>The row's identity for its UIA name (W7-7 PR 3, #1246,
+    /// R-4): the note's file name — core's <c>file.name</c>, extension
+    /// included.</summary>
+    public string FileName => System.IO.Path.GetFileName(Row.FilePath);
+
+    /// <summary>The row's stable key (W7-7 PR 3, #1246, R-4; codex PR 3
+    /// round 6, OD-9): the note's vault path — with, for a task row, the
+    /// task's place in its note — so two rows of one file name read their
+    /// paths, whatever order core returns them in.</summary>
+    public string RowKey => Row.TaskOrdinal is { } task
+        ? string.Create(System.Globalization.CultureInfo.InvariantCulture, $"{Row.FilePath}, task {task + 1}")
+        : Row.FilePath;
 }
 
 /// <summary>The mac BaseSummaryFormatter twin: custom summary cells,

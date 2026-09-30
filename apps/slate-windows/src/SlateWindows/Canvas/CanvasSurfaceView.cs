@@ -138,6 +138,11 @@ internal sealed class CanvasSurfaceView : UserControl, ICanvasSurfacePresenter
         // untrue sentence the Tab claim was.
         KeyboardNavigation.SetDirectionalNavigation(
             _switcher, KeyboardNavigationMode.Cycle);
+        // …and an arrow CHOOSES (W7-7 PR 4, #1247, R-5): WPF's radios
+        // moved focus alone, so Right on Outline landed on Table while
+        // the outline stayed on screen and checked — a screen reader
+        // announced a projection the canvas had not switched to.
+        RadioGroupArrows.SetIsEnabled(_switcher, true);
 
         // The filter field (t0 §3: the filter's state is READABLE — the
         // field's value plus a result summary element — never
@@ -232,8 +237,14 @@ internal sealed class CanvasSurfaceView : UserControl, ICanvasSurfacePresenter
             Margin = new Thickness(12, 0, 12, 4),
             MaxHeight = 96,
             Visibility = Visibility.Collapsed,
+            DisplayMemberPath = nameof(SiblingText.Text),
+            // R-4 (#1246): every items host names its containers; two
+            // equal warnings are two rows (SiblingText) read apart.
+            ItemContainerStyle = SiblingNames.ContainerStyle(typeof(ListBoxItem)),
         };
         AutomationProperties.SetAutomationId(_warningRows, "CanvasWarningRows");
+        SiblingNames.SetNamePath(_warningRows, nameof(SiblingText.Text));
+        SiblingNames.SetNoun(_warningRows, "warning");
         AutomationProperties.SetName(_warningRows, CanvasPhrase.WarningsRegionName);
 
         var banners = new StackPanel { Margin = new Thickness(12, 0, 12, 4) };
@@ -624,6 +635,14 @@ internal sealed class CanvasSurfaceView : UserControl, ICanvasSurfacePresenter
         {
             CloseWhereAmI();
             e.Handled = true;
+            return;
+        }
+        // The projection switcher's arrows are its radio group's (W7-7
+        // PR 4, #1247, R-5): in a Move or Resize mode the navigator below
+        // takes every unmodified arrow on the surface, and Right on the
+        // checked choice stepped the moving cards instead of choosing.
+        if (RadioGroupArrows.OwnsKey(e.OriginalSource, key, Keyboard.Modifiers))
+        {
             return;
         }
         if (model.Navigator.HandleKey(key, Keyboard.Modifiers, this))
@@ -1357,7 +1376,9 @@ internal sealed class CanvasSurfaceView : UserControl, ICanvasSurfacePresenter
     {
         if (!_synchronizingSwitcher)
         {
-            Model?.ShowSurface(surface);
+            // An arrow's check is silent: the radio's focus speech names
+            // the surface (W7-7 PR 4, #1247; RadioGroupArrows).
+            Model?.ShowSurface(surface, announce: !RadioGroupArrows.IsCommittingByArrow);
         }
     }
 
@@ -1479,8 +1500,10 @@ internal sealed class CanvasSurfaceView : UserControl, ICanvasSurfacePresenter
         // Escape returns focus to the element the reader came from (spec
         // §PR C Builds). A stale or unfocusable token falls back to the
         // projection rather than leaving focus nowhere.
+        // R-5 (#1247; codex round 4): a list, tree or grid token restores
+        // onto its row or cell, never the bare container.
         if (restore is UIElement { IsVisible: true, IsEnabled: true } element
-            && element.Focus())
+            && SelectorFocus.LandOnStop(element))
         {
             return;
         }
@@ -1542,7 +1565,7 @@ internal sealed class CanvasSurfaceView : UserControl, ICanvasSurfacePresenter
         string[] warnings = model.State == CanvasLoadState.Ready
             ? model.Warnings.Select(warning => warning.Detail).ToArray()
             : [];
-        _warningRows.ItemsSource = warnings;
+        _warningRows.ItemsSource = SiblingText.Wrap(warnings);
         _warningRows.Visibility = warnings.Length > 0
             ? Visibility.Visible
             : Visibility.Collapsed;

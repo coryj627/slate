@@ -421,6 +421,144 @@ public sealed class BaseSurfaceViewTests : IDisposable
         document.Shutdown();
     });
 
+    /// <summary>W7-7 PR 4 (#1247, R-5; codex round 1): Escape from the
+    /// quick filter returns the keys to a ROW of a list-mode base — past the
+    /// group heading, a disabled separator — never the bare list, from
+    /// which an arrow walked into the menu bar. Synchronous here, so the
+    /// re-query lands before the landing and nothing after it can re-seat
+    /// the keys: this is the Escape's own landing.</summary>
+    [Fact]
+    public void EscapeFromTheQuickFilterLandsOnAListRow() => RunSta(() =>
+    {
+        var document = new SlateWindows.Bases.BaseDocumentViewModel(
+            _session, "Notes.base", _ => { }, synchronousForTests: true);
+        document.Load();
+        document.SelectView(1);
+        var surface = new SlateWindows.Bases.BaseSurfaceView { Model = document };
+        var window = new System.Windows.Window
+        {
+            Content = surface,
+            Width = 600,
+            Height = 400,
+            ShowInTaskbar = false,
+            WindowStyle = System.Windows.WindowStyle.None,
+            ShowActivated = false,
+        };
+        window.Show();
+        window.UpdateLayout();
+        try
+        {
+            System.Windows.Controls.TextBox filter = surface.QuickFilterForTests;
+            Assert.True(filter.Focus());
+            filter.Text = "1";
+            var escape = new System.Windows.Input.KeyEventArgs(
+                System.Windows.Input.Keyboard.PrimaryDevice,
+                System.Windows.PresentationSource.FromVisual(filter)!,
+                0,
+                System.Windows.Input.Key.Escape)
+            {
+                RoutedEvent = System.Windows.Input.Keyboard.PreviewKeyDownEvent,
+            };
+            filter.RaiseEvent(escape);
+
+            Assert.True(escape.Handled, "Escape with text in the filter was not the filter's");
+            Assert.Equal(string.Empty, filter.Text);
+            var row = Assert.IsType<System.Windows.Controls.ListBoxItem>(
+                System.Windows.Input.Keyboard.FocusedElement);
+            Assert.Same(
+                surface.ListForTests,
+                System.Windows.Controls.ItemsControl.ItemsControlFromItemContainer(row));
+            var landed = Assert.IsAssignableFrom<SlateWindows.Bases.BaseListItemViewModel>(row.DataContext);
+            Assert.False(landed.IsHeader);
+
+            // Codex PR 4 round 7 finding 4: the landing selects nothing, and
+            // Enter opens the row it landed on — the row the reader hears.
+            Assert.False(row.IsSelected, "premise: the landing selected its row");
+            var opened = new List<BasesRow>();
+            document.OpenRowFromSurface = opened.Add;
+            var enter = new System.Windows.Input.KeyEventArgs(
+                System.Windows.Input.Keyboard.PrimaryDevice,
+                System.Windows.PresentationSource.FromVisual(row)!,
+                0,
+                System.Windows.Input.Key.Enter)
+            {
+                RoutedEvent = System.Windows.Input.Keyboard.KeyDownEvent,
+            };
+            row.RaiseEvent(enter);
+            Assert.True(enter.Handled, "Enter on the landed row was not the list's");
+            Assert.Same(landed.Row, Assert.Single(opened));
+        }
+        finally
+        {
+            window.Close();
+            document.Shutdown();
+        }
+    });
+
+    /// <summary>
+    /// Codex PR 4's final check: a double-click on the list's EMPTY area —
+    /// below the rows — opens nothing. Its first press lands the keys on a
+    /// row (the click rule), and the double-click resolved that landed row
+    /// and opened it, a note never clicked. A double-click on a row opens
+    /// that row.
+    /// </summary>
+    [Fact]
+    public void ADoubleClickOnTheListsEmptyAreaOpensNothing() => RunSta(() =>
+    {
+        var document = new SlateWindows.Bases.BaseDocumentViewModel(
+            _session, "Notes.base", _ => { }, synchronousForTests: true);
+        document.Load();
+        document.SelectView(1);
+        var opened = new List<BasesRow>();
+        document.OpenRowFromSurface = opened.Add;
+        var surface = new SlateWindows.Bases.BaseSurfaceView { Model = document };
+        var window = new System.Windows.Window
+        {
+            Content = surface,
+            Width = 600,
+            Height = 500,
+            ShowInTaskbar = false,
+            WindowStyle = System.Windows.WindowStyle.None,
+            ShowActivated = false,
+        };
+        window.Show();
+        window.UpdateLayout();
+        try
+        {
+            System.Windows.Controls.ListBox list = surface.ListForTests;
+            SelectorFocus.RegisterClickRule();
+            list.RaiseEvent(new System.Windows.Input.MouseButtonEventArgs(
+                System.Windows.Input.Mouse.PrimaryDevice, Environment.TickCount, System.Windows.Input.MouseButton.Left)
+            {
+                RoutedEvent = System.Windows.UIElement.MouseDownEvent,
+            });
+            Assert.IsType<System.Windows.Controls.ListBoxItem>(System.Windows.Input.Keyboard.FocusedElement);
+
+            // The double-click as the list raises it: on the list, from what
+            // the pointer hit — here the list's own chrome.
+            list.RaiseEvent(DoubleClick(list));
+
+            Assert.Empty(opened);
+
+            var row = (System.Windows.Controls.ListBoxItem)list.ItemContainerGenerator.ContainerFromIndex(2);
+            list.RaiseEvent(DoubleClick(System.Windows.Media.VisualTreeHelper.GetChild(row, 0)));
+
+            Assert.Same(((SlateWindows.Bases.BaseListItemViewModel)row.DataContext).Row, Assert.Single(opened));
+        }
+        finally
+        {
+            window.Close();
+            document.Shutdown();
+        }
+
+        static System.Windows.Input.MouseButtonEventArgs DoubleClick(object hit) =>
+            new(System.Windows.Input.Mouse.PrimaryDevice, Environment.TickCount, System.Windows.Input.MouseButton.Left)
+            {
+                RoutedEvent = System.Windows.Controls.Control.MouseDoubleClickEvent,
+                Source = hit,
+            };
+    });
+
     private static void RunSta(Action body) =>
         StaThread.Run(body, TimeSpan.FromSeconds(60), "STA test body timed out.");
 }
@@ -456,7 +594,8 @@ public sealed class AccessibleDataGridExternalSortTests
             ],
             rows.Cast<object>().ToList(),
             summary: "3 rows",
-            accessibilityLabel: "External sort probe");
+            accessibilityLabel: "External sort probe",
+            rowKey: static row => (string)row, rowAutomationName: row => (string)row);
 
         Assert.Null(grid.ApplySort(0, ascending: true));
 
@@ -485,7 +624,8 @@ public sealed class AccessibleDataGridExternalSortTests
             ],
             rows.Cast<object>().ToList(),
             summary: "3 rows",
-            accessibilityLabel: "External sort probe");
+            accessibilityLabel: "External sort probe",
+            rowKey: static row => (string)row, rowAutomationName: row => (string)row);
         Assert.Single(requested);
     });
 
