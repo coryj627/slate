@@ -48,6 +48,135 @@ internal sealed partial class FilesSidebarViewModel
         IsRefreshingTree && _settledTreeGeneration != _treeGeneration;
     internal Task ExpandLoadedCompletion => _expandLoadedCompletion;
 
+    // W7-7 PR 7 (#1252, round 30): the awaited refreshes, each settled by
+    // the publication of its generation or any later one, faulted by a
+    // reported failure of one, cancelled when a cancellation leaves
+    // nothing to publish (a close, a shutdown).
+    // The result is whether the settling publication's tag tree failed.
+    private readonly List<TreeRefreshWaiter> _treeRefreshWaiters = [];
+
+    /// <summary>One awaited refresh: the generation that settles it, and —
+    /// for the rescan's own refresh (codex AR-18 review round 2, finding 6)
+    /// — the context a REPLACEMENT refresh inherits, since that
+    /// replacement's publication settles this waiter: silent, the count
+    /// report, and the run's cancellation.</summary>
+    private sealed record TreeRefreshWaiter(
+        int Generation,
+        TaskCompletionSource<bool> Published,
+        bool Silent,
+        bool ReportCount,
+        CancellationToken Cancellation);
+
+    /// <summary>
+    /// W7-7 PR 7 (#1252, round 30): <see cref="Refresh"/> as the Task a
+    /// rescan awaits with its last page, before the Applied mark and the
+    /// release — it completes when the tree this request produced (or a
+    /// later one) has PUBLISHED on the owner context, faults when the
+    /// refresh reported its failure ("Could not load files."), and is
+    /// cancelled when the refresh was cancelled with nothing left to
+    /// publish.
+    /// </summary>
+    /// <remarks>W7-7 PR 7 (F5): the caller's <paramref name="cancellation"/>
+    /// — a rescan run's — is linked into this refresh's own, so it reaches
+    /// the tree read and the tag tree: checked before and after the native
+    /// <c>TagTree</c> call, a cancel skips or discards the result, nothing
+    /// publishes, and the returned Task is cancelled at once.</remarks>
+    internal Task RefreshAsync(bool reportCount = false, CancellationToken cancellation = default) =>
+        StartAwaitedRefresh(reportCount, cancellation, silent: false);
+
+    /// <summary>
+    /// W7-7 PR 7 (#1252, R-9; v2 §3, §6): the rescan's OWN tree refresh —
+    /// <see cref="RefreshAsync"/> made silent, with a structured outcome.
+    /// Nothing it hears speaks: a root-list failure ("Could not load
+    /// files.") and a tag-tree failure ("Could not load tags: …") are shown
+    /// on the sidebar's status line and returned as the number of failed
+    /// operations (0, 1 or 2) for the rescan's one sentence to count. The
+    /// run's token is linked in (F5); a cancellation throws.
+    /// </summary>
+    internal async Task<ulong> RefreshForRescanAsync(bool reportCount, CancellationToken cancellation)
+    {
+        try
+        {
+            bool tagTreeFailed = await StartAwaitedRefresh(reportCount, cancellation, silent: true);
+            return tagTreeFailed ? 1UL : 0UL;
+        }
+        catch (OperationCanceledException)
+        {
+            throw;
+        }
+        catch (Exception exception) when (exception is not OutOfMemoryException)
+        {
+            // The root list failed: nothing published.
+            return 1UL;
+        }
+    }
+
+    private Task<bool> StartAwaitedRefresh(bool reportCount, CancellationToken cancellation, bool silent)
+    {
+        if (cancellation.IsCancellationRequested)
+        {
+            return Task.FromCanceled<bool>(cancellation);
+        }
+
+        var published = new TaskCompletionSource<bool>(TaskCreationOptions.RunContinuationsAsynchronously);
+        var waiter = new TreeRefreshWaiter(_treeGeneration + 1, published, silent, reportCount, cancellation);
+        lock (_treeRefreshWaiters)
+        {
+            _treeRefreshWaiters.Add(waiter);
+        }
+
+        Refresh(reportCount, cancellation, silent);
+        if (_treeGeneration < waiter.Generation)
+        {
+            // Refused before it began: the session is shutting down.
+            lock (_treeRefreshWaiters)
+            {
+                _ = _treeRefreshWaiters.Remove(waiter);
+            }
+
+            _ = published.TrySetCanceled();
+        }
+
+        if (cancellation.CanBeCanceled)
+        {
+            CancellationTokenRegistration registration =
+                cancellation.Register(() => published.TrySetCanceled(cancellation));
+            _ = published.Task.ContinueWith(
+                _ => registration.Dispose(),
+                CancellationToken.None,
+                TaskContinuationOptions.ExecuteSynchronously,
+                TaskScheduler.Default);
+        }
+
+        return published.Task;
+    }
+
+    /// <summary>Settle every awaited refresh up to
+    /// <paramref name="generation"/>: published (no failure), failed, or
+    /// cancelled.</summary>
+    private void SettleTreeRefreshWaiters(
+        int generation,
+        Exception? failure,
+        bool cancelled = false,
+        bool tagTreeFailed = false)
+    {
+        List<TreeRefreshWaiter> settled;
+        lock (_treeRefreshWaiters)
+        {
+            settled = [.. _treeRefreshWaiters.Where(waiter => waiter.Generation <= generation)];
+            _ = _treeRefreshWaiters.RemoveAll(waiter => waiter.Generation <= generation);
+        }
+
+        foreach (TaskCompletionSource<bool> published in settled.Select(waiter => waiter.Published))
+        {
+            _ = cancelled
+                ? published.TrySetCanceled()
+                : failure is null
+                    ? published.TrySetResult(tagTreeFailed)
+                    : published.TrySetException(failure);
+        }
+    }
+
     public bool IsExpandingLoaded
     {
         get => _isExpandingLoaded;
@@ -60,11 +189,50 @@ internal sealed partial class FilesSidebarViewModel
             .Select(node => node.Path)
             .ToArray();
 
-    public void Refresh(bool reportCount = false)
+    public void Refresh(bool reportCount = false) => Refresh(reportCount, CancellationToken.None, silent: false);
+
+    /// <summary>The refresh, with a caller's cancellation linked into its
+    /// own (W7-7 PR 7, F5): a cancelled caller publishes nothing.
+    /// <paramref name="silent"/> — the rescan's own refresh — shows its
+    /// failures on the status line without speaking them.</summary>
+    private void Refresh(bool reportCount, CancellationToken external, bool silent)
     {
         if (SessionShutdownStarted)
         {
             return;
+        }
+
+        // W7-7 PR 7 (codex AR-18 review round 2, finding 6): this refresh's
+        // publication settles every pending awaited refresh — a rescan's
+        // among them — so it inherits a pending rescan refresh's context:
+        // silent (its failures counted by the rescan, never spoken), the
+        // count report, and the run's cancellation.
+        CancellationToken[] inherited = [];
+        lock (_treeRefreshWaiters)
+        {
+            TreeRefreshWaiter[] rescans =
+            [
+                .. _treeRefreshWaiters.Where(waiter => waiter.Silent && !waiter.Published.Task.IsCompleted),
+            ];
+            if (rescans.Length > 0)
+            {
+                silent = true;
+                reportCount |= rescans.Any(waiter => waiter.ReportCount);
+                inherited =
+                [
+                    .. rescans
+                        .Select(waiter => waiter.Cancellation)
+                        .Where(token => token.CanBeCanceled && token != external),
+                ];
+            }
+        }
+
+        CancellationTokenSource? inheritedLink = inherited.Length > 0
+            ? CancellationTokenSource.CreateLinkedTokenSource([external, .. inherited])
+            : null;
+        if (inheritedLink is not null)
+        {
+            external = inheritedLink.Token;
         }
 
         CancelBulkExpansion();
@@ -83,8 +251,10 @@ internal sealed partial class FilesSidebarViewModel
         int tagGeneration = _tagGeneration;
         if (_treeUiContext is null)
         {
+            using CancellationTokenSource? synchronousLink = inheritedLink;
             if (!TryBeginSessionWork(out SessionWorkLease? lease))
             {
+                SettleTreeRefreshWaiters(generation, failure: null, cancelled: true);
                 return;
             }
 
@@ -97,23 +267,33 @@ internal sealed partial class FilesSidebarViewModel
                         ordering,
                         expandedPaths,
                         tagGeneration,
-                        CancellationToken.None);
+                        external);
                 }
 
-                ApplyTreeRefresh(outcome, reportCount);
+                ApplyTreeRefresh(outcome, reportCount, silent);
+                _treeRefreshCompletion = Task.CompletedTask;
+                SettleTreeRefreshWaiters(generation, failure: null, tagTreeFailed: outcome.Tags.Error is not null);
+            }
+            catch (OperationCanceledException) when (external.IsCancellationRequested)
+            {
+                // The caller was cancelled (a closing rescan): nothing
+                // publishes and nothing is reported.
+                SettleTreeRefreshWaiters(generation, failure: null, cancelled: true);
                 _treeRefreshCompletion = Task.CompletedTask;
             }
             catch (VaultException exception)
             {
-                ReportFailure($"Could not load files: {exception.Message}");
+                SettleTreeRefreshWaiters(generation, exception);
+                ReportTreeFailure($"Could not load files: {exception.Message}", silent);
                 _treeRefreshCompletion = Task.CompletedTask;
             }
             catch (Exception exception)
             {
                 HostLog.Write(HostDiagnosticEvent.SidebarTreeRefreshFailed, exception);
+                SettleTreeRefreshWaiters(generation, exception);
                 try
                 {
-                    ReportFailure("Could not load files.");
+                    ReportTreeFailure("Could not load files.", silent);
                 }
                 catch (Exception callbackException)
                 {
@@ -126,7 +306,10 @@ internal sealed partial class FilesSidebarViewModel
             return;
         }
 
-        var cancellation = new CancellationTokenSource();
+        CancellationTokenSource cancellation = inheritedLink
+            ?? (external.CanBeCanceled
+                ? CancellationTokenSource.CreateLinkedTokenSource(external)
+                : new CancellationTokenSource());
         CancellationToken token = cancellation.Token;
         lock (_treeRefreshCancellationGate)
         {
@@ -142,8 +325,23 @@ internal sealed partial class FilesSidebarViewModel
             expandedPaths,
             tagGeneration,
             reportCount,
+            silent,
             cancellation,
             token);
+    }
+
+    /// <summary>A tree failure's line: spoken, or — for the rescan's own
+    /// refresh — shown on the status line only (the rescan counts it).</summary>
+    private void ReportTreeFailure(string message, bool silent)
+    {
+        if (silent)
+        {
+            Status = message;
+            HoldStatusForPendingPublication();
+            return;
+        }
+
+        ReportFailure(message);
     }
 
     private async Task RefreshTreeAsync(
@@ -153,6 +351,7 @@ internal sealed partial class FilesSidebarViewModel
         IReadOnlySet<string> expandedPaths,
         int tagGeneration,
         bool reportCount,
+        bool silent,
         CancellationTokenSource cancellation,
         CancellationToken token)
     {
@@ -202,7 +401,11 @@ internal sealed partial class FilesSidebarViewModel
                     {
                         if (!token.IsCancellationRequested && generation == _treeGeneration)
                         {
-                            ApplyTreeRefresh(outcome, reportCount);
+                            ApplyTreeRefresh(outcome, reportCount, silent);
+                            SettleTreeRefreshWaiters(
+                                generation,
+                                failure: null,
+                                tagTreeFailed: outcome.Tags.Error is not null);
                         }
 
                         applied.TrySetResult();
@@ -229,6 +432,8 @@ internal sealed partial class FilesSidebarViewModel
             await ReportTreeRefreshFailureAsync(
                 generation,
                 $"Could not load files: {exception.Message}",
+                exception,
+                silent,
                 token).ConfigureAwait(false);
         }
         catch (Exception exception)
@@ -242,6 +447,8 @@ internal sealed partial class FilesSidebarViewModel
             await ReportTreeRefreshFailureAsync(
                 generation,
                 "Could not load files.",
+                exception,
+                silent,
                 token).ConfigureAwait(false);
         }
         finally
@@ -266,6 +473,8 @@ internal sealed partial class FilesSidebarViewModel
     private async Task ReportTreeRefreshFailureAsync(
         int generation,
         string message,
+        Exception cause,
+        bool silent,
         CancellationToken token)
     {
         if (token.IsCancellationRequested)
@@ -288,7 +497,8 @@ internal sealed partial class FilesSidebarViewModel
                             // never publish, so its failure is not held for a
                             // publication — a later refresh must not revive it.
                             _settledTreeGeneration = generation;
-                            ReportFailure(message);
+                            SettleTreeRefreshWaiters(generation, cause);
+                            ReportTreeFailure(message, silent);
                         }
 
                         applied.TrySetResult();
@@ -309,6 +519,7 @@ internal sealed partial class FilesSidebarViewModel
             // Refresh is terminal even when dispatch or presentation fails.
             // Teardown joins this task, so retain diagnostics without faulting it.
             HostLog.Write(HostDiagnosticEvent.SidebarTreeRefreshFailed, exception);
+            SettleTreeRefreshWaiters(generation, cause);
         }
     }
 
@@ -384,13 +595,18 @@ internal sealed partial class FilesSidebarViewModel
         return overflowPath;
     }
 
-    private void ApplyTreeRefresh(TreeRefreshOutcome outcome, bool reportCount)
+    private void ApplyTreeRefresh(TreeRefreshOutcome outcome, bool reportCount, bool silent = false)
     {
         _settledTreeGeneration = _treeGeneration;
+        // W7-7 PR 7 (codex's merge-delta check, finding 1): the tree being
+        // replaced, where a selected row this publication removes had its
+        // neighbours — and an earlier removal's landing nobody took is stale.
+        ObservableCollection<FileTreeNodeViewModel> previousRoots = RootNodes;
+        _ = TakeVanishedSelection();
         RootNodes = outcome.RootNodes;
         if (outcome.TagGeneration == _tagGeneration)
         {
-            ApplyTags(outcome.Tags);
+            ApplyTags(outcome.Tags, announce: !silent);
         }
 
         ScheduleFilter(automatic: true);
@@ -403,7 +619,7 @@ internal sealed partial class FilesSidebarViewModel
         // W6-2 PR A (contract A-8): a surface's "Reveal in File Tree" whose
         // node the previous tree had not materialised.
         ConsumePendingSurfaceSelection();
-        ReconcileSelectionAfterPublication();
+        ReconcileSelectionAfterPublication(previousRoots);
 
         // Project the AUTHORITATIVE checked set onto the published
         // nodes (codex rounds 4-5): a fresh node whose path is
@@ -468,6 +684,14 @@ internal sealed partial class FilesSidebarViewModel
             Status = DirectoryOverflowStatus(overflowPath);
         }
 
+        // W7-7 PR 7 (v2 §6): a silent refresh's tag-tree failure is not
+        // spoken — so it stays on the status line over this publication's
+        // count, where it is seen; the rescan counts it.
+        if (silent && outcome.TagGeneration == _tagGeneration && outcome.Tags.Error is string tagError)
+        {
+            Status = tagError;
+        }
+
         // The mutation result wins the turn over this publication's
         // own status arms (codex round 2) — a persistent condition
         // (overflow, settings notice) returns on the next organic
@@ -486,6 +710,7 @@ internal sealed partial class FilesSidebarViewModel
         }
 
         CancelTreeRefreshCore();
+        SettleTreeRefreshWaiters(int.MaxValue, failure: null, cancelled: true);
 
         return wasPending;
     }

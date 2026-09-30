@@ -66,7 +66,7 @@ internal enum TeardownRoute
 /// the registry. The interface names members this type already exposed —
 /// implementing it added no surface.
 /// </remarks>
-internal sealed class VaultLifecycleViewModel
+internal sealed partial class VaultLifecycleViewModel
     : INotifyPropertyChanged, IDisposable, ISlateCommandHost
 {
     private readonly Func<Task<string?>> _pickVault;
@@ -94,6 +94,10 @@ internal sealed class VaultLifecycleViewModel
         Task<(ScanReport Report, SwitcherFile[] SwitcherFiles)>> _runSessionLoad;
     private readonly Func<Action, Task> _runSyncMarkerArm;
     private readonly TimeSpan? _syncMarkerDebounce;
+    // W7-7 PR 7 (R-9): the rescan's clock and its core-call seam.
+    private readonly Func<DateTimeOffset> _scanClock;
+    private readonly IRescanCoreWorker _rescanWorker;
+    private readonly int _uiThreadId;
 
     /// <summary>
     /// W4-8 (SD6/SDR-5): the once-per-vault-PATH announce gate, keyed
@@ -188,6 +192,7 @@ internal sealed class VaultLifecycleViewModel
         Func<Action, Task>? syncArmWorker = null,
         TimeSpan? syncMarkerDebounce = null,
         Action<RenderedAnnouncement>? announceRendered = null,
+        IRescanCoreWorker? rescanWorker = null,
         CommandPaletteRecentsStore? paletteRecentsStore = null,
         ICommandPaletteWorkLane? paletteLane = null)
     {
@@ -216,6 +221,11 @@ internal sealed class VaultLifecycleViewModel
             ?? (_ => Task.FromResult(false));
         _recentVaultsStore = recentVaultsStore ?? new RecentVaultsStore();
         _scanAnnouncements = new ScanAnnouncementGate(scanClock);
+        _scanClock = scanClock ?? (() => DateTimeOffset.UtcNow);
+        _rescanWorker = rescanWorker ?? ThreadPoolRescanCoreWorker.Instance;
+        // The lifecycle is built on the UI thread; the rescan core seam
+        // refuses any call it would run here (locked decision 05 §4.1).
+        _uiThreadId = Environment.CurrentManagedThreadId;
         _filterUiContext = filterUiContext;
         SynchronizationContext? currentUiContext = SynchronizationContext.Current;
         _lifecycleDispatcher = currentUiContext is DispatcherSynchronizationContext
@@ -485,8 +495,16 @@ internal sealed class VaultLifecycleViewModel
                 @event => _enqueueUi(() => HandleFileChange(generation, @event)),
                 // W6-2 PR A (contract A-3): the index-phase arm, marshalled
                 // like the other two — an external edit surfaces at the next
-                // scan, never as a file change.
-                (phase, filesSeen) => _enqueueUi(() => HandleIndexPhase(generation, phase, filesSeen)));
+                // scan, never as a file change. W7-7 PR 7 (round 29):
+                // whether the phase is a RESCAN's is read here, where the
+                // scan emits it (the run is active from before its scan
+                // starts until after it returns), not when the queue
+                // reaches it.
+                (phase, filesSeen) =>
+                {
+                    bool duringRescan = Volatile.Read(ref _rescanActive);
+                    _enqueueUi(() => HandleIndexPhase(generation, phase, filesSeen, duringRescan));
+                });
             _eventListenerToken = _session.RegisterEventListener(_eventListener);
 
             IsVaultOpen = true;
@@ -502,16 +520,22 @@ internal sealed class VaultLifecycleViewModel
             VaultSession activeSession = _session;
             CancelToken activeCancel = _scanCancel;
             UiProgressListener activeProgressListener = _progressListener;
+            Action<CancelToken>? switcherPageHook = SwitcherPageLoadingForTests;
             Task<(ScanReport Report, SwitcherFile[] SwitcherFiles)> loadTask = _runSessionLoad(() =>
             {
                 ScanReport report = activeSession.ScanInitialWithProgress(activeCancel, activeProgressListener);
-                return (report, LoadSwitcherFiles(activeSession));
+                // W7-7 PR 7: Quick Open's listing honours the open's token
+                // too, so a close stops it mid-listing, not after it.
+                return (report, LoadSwitcherFiles(activeSession, activeCancel, switcherPageHook));
             });
             _sessionLoadCompletion = loadTask;
             (ScanReport Report, SwitcherFile[] SwitcherFiles) loaded = await loadTask;
             if (generation == _generation)
             {
-                StatusText = $"Scan finished: {loaded.Report.FilesIndexed} files indexed.";
+                StatusText = ScanFinishedStatus(loaded.Report);
+                // The foreground rescan's cooldown counts from the open
+                // scan too: the vault was just read (W7-7 PR 7).
+                _lastScanEndedAt = _scanClock();
                 ProgressMaximum = Math.Max(1, loaded.Report.FilesSeen);
                 ProgressValue = ProgressMaximum;
                 IsProgressIndeterminate = false;
@@ -741,8 +765,10 @@ internal sealed class VaultLifecycleViewModel
                 ProgressMaximum = Math.Max(1, finished.Report.FilesSeen);
                 ProgressValue = ProgressMaximum;
                 IsProgressIndeterminate = false;
-                StatusText = $"Scan finished: {finished.Report.FilesIndexed} files indexed.";
-                _announce(_scanAnnouncements.Finished(finished.Report.FilesIndexed));
+                StatusText = ScanFinishedStatus(finished.Report);
+                _announce(_scanAnnouncements.Finished(
+                    finished.Report.FilesSeen,
+                    finished.Report.FilesChanged));
                 break;
             case ScanProgress.Cancelled:
                 IsProgressIndeterminate = false;
@@ -783,10 +809,13 @@ internal sealed class VaultLifecycleViewModel
     /// <summary>W6-2 PR A (contract A-3): the scan-finished arm — an
     /// external edit is visible only after a scan, so the graph's probe
     /// runs here too, under the same lifecycle check.</summary>
-    private void HandleIndexPhase(int generation, IndexPhase phase, ulong filesSeen)
+    private void HandleIndexPhase(int generation, IndexPhase phase, ulong filesSeen, bool duringRescan)
     {
         _ = filesSeen;
-        if (generation == _generation && phase == IndexPhase.ScanFinished)
+        // W7-7 PR 7 (round 29): a RESCAN's graph authority is the
+        // re-sync's dependents probe (ReSyncDependentsAsync); the scan
+        // phase probes only for the initial open scan.
+        if (generation == _generation && phase == IndexPhase.ScanFinished && !duringRescan)
         {
             Workspace?.NotifyGraphOfVaultChange();
         }
@@ -796,60 +825,22 @@ internal sealed class VaultLifecycleViewModel
     {
         if (generation == _generation)
         {
-            if (@event.Kind == FileChangeKind.Renamed
-                && @event.PreviousPath is string previousPath)
+            // W7-7 PR 7 (round 28): the one routine for a Slate-owned
+            // change's host effects.
+            ApplyFileChangeEffects([(@event, CoreDocumentClassification.IsOpenable(@event.Path))]);
+            int ticket = Interlocked.Increment(ref _sidebarRefreshTicket);
+            if (_rescanActive && FileSidebar is { IsTreePublicationPending: true } sidebar)
             {
-                Workspace?.RetargetPath(previousPath, @event.Path);
-            }
-            else if (@event.Kind == FileChangeKind.Deleted)
-            {
-                Workspace?.InvalidatePath(@event.Path);
-            }
-            else if (@event.Kind == FileChangeKind.Modified)
-            {
-                Workspace?.InvalidateModifiedPath(@event.Path);
-            }
-            // #1077 (contract I6): a Created or Renamed publication may be
-            // a missing tab's file coming back under ANOTHER spelling
-            // (`Ghost.md` → `ghost.md` on NTFS); re-seat those tabs once,
-            // here, rather than re-litigating identity per comparison.
-            if (@event.Kind is FileChangeKind.Created or FileChangeKind.Renamed)
-            {
-                Workspace?.ReseatMissingTabs();
+                // W7-7 PR 7 (F2, codex design pass 2): a rescan's tree
+                // refresh is pending, and its snapshot may predate this
+                // Slate write. Refresh AT ONCE — the stale snapshot then
+                // fails its generation check, and the rescan settles on
+                // a tree that includes the write, before its sentence.
+                // The debounce below would land after the sentence.
+                sidebar.Refresh();
+                return;
             }
 
-            Workspace?.InvalidateAllInteractionStates();
-            // Reading embed cards depend on OTHER files (W3-5): the
-            // change stream reaches every open reading model, which
-            // applies its own reverse-dependency filter. A rename
-            // notifies both sides of the move.
-            Workspace?.NotifyReadingOfVaultChange(@event.Kind, @event.Path);
-            if (@event.Kind == FileChangeKind.Renamed
-                && @event.PreviousPath is string renamedFrom)
-            {
-                Workspace?.NotifyReadingOfVaultChange(@event.Kind, renamedFrom);
-            }
-            // Bases surfaces re-execute on vault changes too (contract
-            // C9's vault-event arm — property panel, task toggles,
-            // editor saves, and external edits all land here).
-            Workspace?.NotifyBasesOfVaultChange(@event.Path);
-            // W6-2 PR A (contract A-3): the graph's generation probe, while
-            // a graph tab is visible.
-            Workspace?.NotifyGraphOfVaultChange();
-            // W4-7 (HR-2's vault-event arm): a Modified on the active
-            // path appended a version row the save funnel never saw
-            // (Bases grid edits, sync, external editors).
-            if (@event.Kind == FileChangeKind.Modified)
-            {
-                Workspace?.NotifyHistoryOfVaultChange(@event.Path);
-            }
-            if (@event.Kind == FileChangeKind.Renamed
-                && @event.PreviousPath is string basesRenamedFrom)
-            {
-                Workspace?.NotifyBasesOfVaultChange(basesRenamedFrom);
-            }
-            QuickSwitcher?.ApplyFileChange(@event);
-            int ticket = Interlocked.Increment(ref _sidebarRefreshTicket);
             _ = Task.Delay(150).ContinueWith(
                 _ => _enqueueUi(() =>
                 {
@@ -947,6 +938,36 @@ internal sealed class VaultLifecycleViewModel
         _syncMarkerWatcher?.Dispose();
         _syncMarkerWatcher = null;
 
+        // W7-7 PR 7 (codex AR-18 review round 2, finding 3): the rescan's
+        // core-call admission closes FIRST, then the run is cancelled — its
+        // managed twin (host-side checks, F5), then its native token through
+        // the rescan core seam, off the dispatcher — so nothing new starts
+        // and whatever runs ends promptly; every admitted call is drained
+        // below before any native state is disposed.
+        CloseRescanCoreAdmission();
+        CancellationTokenSource? rescanCancellation = _rescanCancellation;
+        _rescanCancellation = null;
+        rescanCancellation?.Cancel();
+        CancelToken? rescanCancel = _rescanCancel;
+        _rescanCancel = null;
+        if (rescanCancel is not null)
+        {
+            try
+            {
+                _ = StartRescanCoreCall(
+                    "cancel",
+                    () =>
+                    {
+                        rescanCancel.Cancel();
+                        return true;
+                    }).GetAwaiter().GetResult();
+            }
+            catch (Exception exception)
+            {
+                HostLog.Write(HostDiagnosticEvent.VaultCommandFailed, exception);
+            }
+        }
+
         if (FileSidebar is FilesSidebarViewModel sidebar)
         {
             SidebarSessionShutdown shutdown = sidebar.BeginSessionShutdownAndCaptureWork();
@@ -992,6 +1013,11 @@ internal sealed class VaultLifecycleViewModel
             HostLog.Write(HostDiagnosticEvent.VaultCommandFailed, exception);
         }
 
+        // W7-7 PR 7 (finding 3): every admitted rescan core call — the scan,
+        // the listing, the hash reads, the reads, the re-seat's probe — has
+        // ended before the tokens, the workspace or the session go.
+        DrainRescanCoreCalls();
+
         try
         {
             _sessionLoadCompletion.GetAwaiter().GetResult();
@@ -1010,7 +1036,25 @@ internal sealed class VaultLifecycleViewModel
         _sessionLoadCompletion = Task.CompletedTask;
         _scanCancel?.Dispose();
         _scanCancel = null;
+        if (rescanCancel is not null)
+        {
+            try
+            {
+                _ = StartRescanCoreCall(
+                    "dispose",
+                    () =>
+                    {
+                        rescanCancel.Dispose();
+                        return true;
+                    }).GetAwaiter().GetResult();
+            }
+            catch (Exception exception)
+            {
+                HostLog.Write(HostDiagnosticEvent.VaultCommandFailed, exception);
+            }
+        }
         _progressListener = null;
+        ResetRescanState();
 
         if (QuickSwitcher is not null)
         {
@@ -1023,6 +1067,10 @@ internal sealed class VaultLifecycleViewModel
         {
             FileSidebar.OpenTargetRequested -= FileSidebar_OpenTargetRequested;
             FileSidebar.PropertyChanged -= FileSidebar_SheetPresented;
+            FileSidebar.PropertyChanged -= FileSidebar_RescanBlockersChanged;
+            FileSidebar.RescanRequested = null;
+            FileSidebar.RescanUnavailableReason = null;
+            FileSidebar.StructuralMutationBlockedReason = null;
         }
 
         if (Workspace is not null)
@@ -1056,6 +1104,7 @@ internal sealed class VaultLifecycleViewModel
         _eventListener = null;
         _session?.Dispose();
         _session = null;
+        ReopenRescanCoreAdmission();
     }
 
     private void InitializeWorkspace(
@@ -1149,6 +1198,17 @@ internal sealed class VaultLifecycleViewModel
         FileSidebar = sidebar;
         // The sidebar twin, same post-assignment ordering rationale.
         sidebar.PropertyChanged += FileSidebar_SheetPresented;
+        // W7-7 PR 7 (#1252, R-9): Files Sidebar → Refresh is the explicit
+        // rescan; a follow-up an import or trash blocked runs when they
+        // settle.
+        sidebar.RescanRequested = () => RescanAsync(RescanReason.Explicit);
+        // Finding 11: Refresh is available exactly when the rescan would
+        // run, and says why when it is not.
+        sidebar.RescanUnavailableReason = RescanUnavailableReason;
+        // W7-7 PR 7 (codex PR 7 round 4, finding 2): the reverse order — no
+        // import or trash STARTS while a rescan runs.
+        sidebar.StructuralMutationBlockedReason = StructuralMutationBlockedReason;
+        sidebar.PropertyChanged += FileSidebar_RescanBlockersChanged;
         QuickSwitcher = switcher;
         WorkspaceReady?.Invoke(this, EventArgs.Empty);
     }
@@ -1613,16 +1673,25 @@ internal sealed class VaultLifecycleViewModel
         _palette?.Dismiss();
     }
 
-    private static SwitcherFile[] LoadSwitcherFiles(VaultSession session)
+    /// <summary>Test seam (W7-7 PR 7): runs on the load's worker before
+    /// each Quick Open listing page, with the open's token.</summary>
+    internal Action<CancelToken>? SwitcherPageLoadingForTests { get; set; }
+
+    private static SwitcherFile[] LoadSwitcherFiles(
+        VaultSession session,
+        CancelToken cancel,
+        Action<CancelToken>? beforePage)
     {
         const uint pageLimit = 500;
         var files = new List<SwitcherFile>();
         string? cursor = null;
         do
         {
+            beforePage?.Invoke(cancel);
             FileSummaryPage page = session.ListFiles(
                 FileFilter.OpenableDocuments,
-                new Paging(cursor, pageLimit));
+                new Paging(cursor, pageLimit),
+                cancel);
             files.AddRange(page.Items.Select(file => new SwitcherFile(file.Path, file.Name)));
             cursor = page.NextCursor;
         }
@@ -1744,6 +1813,9 @@ internal sealed class VaultLifecycleViewModel
         _openVaultCommand.RaiseCanExecuteChanged();
         _openRecentCommand.RaiseCanExecuteChanged();
         _closeVaultCommand.RaiseCanExecuteChanged();
+        // W7-7 PR 7 (finding 11): the initial scan is one of Refresh's
+        // blockers.
+        FileSidebar?.RaiseRefreshAvailabilityChanged();
 
         // PINV-7: requery the registered catalog by ENUMERATION, so a
         // newly registered command cannot be silently omitted the way the
@@ -1801,25 +1873,34 @@ internal sealed class RelayCommand : ICommand
     public void RaiseCanExecuteChanged() => CanExecuteChanged?.Invoke(this, EventArgs.Empty);
 }
 
-internal sealed class AsyncRelayCommand : ICommand
+internal sealed class AsyncRelayCommand : ICommand, Commands.IUnavailableReason
 {
     private readonly Func<object?, Task> _execute;
     private readonly Predicate<object?> _canExecute;
+    private readonly Func<string?>? _unavailableReason;
     private bool _isExecuting;
 
-    public AsyncRelayCommand(Func<object?, Task> execute, Func<bool> canExecute)
-        : this(execute, _ => canExecute())
+    public AsyncRelayCommand(Func<object?, Task> execute, Func<bool> canExecute, Func<string?>? unavailableReason = null)
+        : this(execute, _ => canExecute(), unavailableReason)
     {
     }
 
-    public AsyncRelayCommand(Func<object?, Task> execute, Predicate<object?> canExecute)
+    public AsyncRelayCommand(
+        Func<object?, Task> execute,
+        Predicate<object?> canExecute,
+        Func<string?>? unavailableReason = null)
     {
         _execute = execute;
         _canExecute = canExecute;
+        _unavailableReason = unavailableReason;
     }
 
     public event EventHandler? CanExecuteChanged;
     public bool CanExecute(object? parameter) => !_isExecuting && _canExecute(parameter);
+
+    /// <summary>W7-7 PR 7 (codex PR 7 round 4, finding 2): why the command
+    /// cannot run, when its owner knows — null leaves the generic reason.</summary>
+    public string? UnavailableReason => _unavailableReason?.Invoke();
 
     public async void Execute(object? parameter)
     {

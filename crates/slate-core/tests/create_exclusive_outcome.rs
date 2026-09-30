@@ -168,6 +168,7 @@ fn indexed_paths(session: &VaultSession) -> Vec<String> {
                 cursor: None,
                 limit: 1000,
             },
+            &slate_core::CancelToken::new(),
         )
         .unwrap()
         .items

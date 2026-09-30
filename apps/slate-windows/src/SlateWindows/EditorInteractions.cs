@@ -552,6 +552,10 @@ internal sealed class EditorInteractionCoordinator : BindableBase, IDisposable
     private long _mathRangesRevision = -1;
     private bool _popoverFocusPending;
     private int _focusRequestGeneration;
+    // W7-7 PR 7 (codex AR-18 review round 2, finding 4): the background
+    // workers in flight. A rescan invalidates these caches (their reloads
+    // are workers), and the close drains them before the session goes.
+
     private readonly object _artifactCacheGate = new();
     private bool _artifactCacheLoading;
     private bool _artifactCacheRerunPending;
@@ -748,6 +752,35 @@ internal sealed class EditorInteractionCoordinator : BindableBase, IDisposable
     /// Dispatcher-thread read, like every other math-range accessor.</summary>
     internal bool MathRangesCurrentForTests =>
         _tab.EditorSession is { } session && _mathRangesRevision == session.Revision;
+    /// <summary>W7-7 PR 7 (round 28): whether the published link and task
+    /// cache still claims to describe the saved note — false once an
+    /// external-state invalidation dropped it.</summary>
+    internal bool ArtifactCacheSourceCurrentForTests
+    {
+        get
+        {
+            lock (_artifactCacheGate)
+            {
+                return _artifactCacheSourceCurrent;
+            }
+        }
+    }
+
+    /// <summary>W7-7 PR 7 (round 29): the link and task cache's generation —
+    /// every external-state invalidation advances it, so a fact tells a
+    /// dropped cache from a surviving one even after a fresh cache has been
+    /// republished for the new vault state.</summary>
+    internal int ArtifactCacheGenerationForTests
+    {
+        get
+        {
+            lock (_artifactCacheGate)
+            {
+                return _artifactCacheGeneration;
+            }
+        }
+    }
+
     internal long ArtifactCacheLoadCountForTests =>
         Interlocked.Read(ref _artifactCacheLoadCountForTests);
     internal long CitationCacheLoadCountForTests =>
@@ -1166,6 +1199,65 @@ internal sealed class EditorInteractionCoordinator : BindableBase, IDisposable
         _citationLoadRequestedByUser = false;
         CancelPendingEmbedPreview();
         ClosePopover(requestFocus: false);
+    }
+
+    /// <summary>W7-7 PR 7 (codex AR-18 review round 2, finding 4): every
+    /// background worker in flight has ended — the close drains this, for
+    /// the coordinators a rescan invalidated, before the session is
+    /// disposed.</summary>
+    /// <remarks>The merge with follow-up B (#1304): the workers are the ones
+    /// <see cref="TrackWorker"/> tracks — one set, drained here and counted
+    /// by its facts.</remarks>
+    internal Task WhenBackgroundWorkDrained()
+    {
+        Task[] snapshot;
+        lock (_workersGate)
+        {
+            snapshot = [.. _liveWorkers];
+        }
+
+        return Task.WhenAll(snapshot);
+    }
+
+    /// <summary>W7-7 PR 7 (#1252, R-9; codex's final merge-delta check, note
+    /// 3): true when none of this coordinator's background work is left — no
+    /// worker running; no link-and-task or citation load between its start
+    /// and its dispatcher publication (that publication starts the rerun an
+    /// invalidation asked for, so a load is not over until it has
+    /// published); no math refresh pending, running or owed a rerun. The
+    /// worker set alone reads empty between a worker's end and its
+    /// publication. A disposed coordinator's loads never publish, so only its
+    /// workers count.</summary>
+    internal bool IsBackgroundIdle
+    {
+        get
+        {
+            lock (_workersGate)
+            {
+                if (_liveWorkers.Count > 0)
+                {
+                    return false;
+                }
+            }
+
+            if (_disposed)
+            {
+                return true;
+            }
+
+            lock (_artifactCacheGate)
+            {
+                if (_artifactCacheLoading || _citationCacheLoading)
+                {
+                    return false;
+                }
+            }
+
+            lock (_mathRefreshGate)
+            {
+                return _mathRefreshDelay is null && !_mathWorkerRunning && !_mathRerunPending;
+            }
+        }
     }
 
     internal void InvalidateExternalState()

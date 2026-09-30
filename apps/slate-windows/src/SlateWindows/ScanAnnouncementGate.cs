@@ -40,10 +40,13 @@ internal sealed class ScanAnnouncementGate
         return new A11yEvent.VaultScanProgress(indexed, total);
     }
 
-    public A11yEvent Finished(ulong filesIndexed)
+    /// <summary>OD-6 (W7-7 PR 7, contract 38 D-3 as amended): both counts
+    /// from the report — files seen and core's hash-authoritative files
+    /// changed, never the read count.</summary>
+    public A11yEvent Finished(ulong filesSeen, ulong filesChanged)
     {
         _lastFiredAt = _clock();
-        return new A11yEvent.VaultScanFinished(filesIndexed);
+        return new A11yEvent.VaultScanFinished(filesSeen, filesChanged);
     }
 
     public void Reset()

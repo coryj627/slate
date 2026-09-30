@@ -1922,7 +1922,8 @@ final class BasesTabRoutingTests: XCTestCase {
         let session = try XCTUnwrap(state.currentSession)
 
         let page = try session.listFiles(
-            filter: .openableDocuments, paging: Paging(cursor: nil, limit: 100))
+            filter: .openableDocuments, paging: Paging(cursor: nil, limit: 100),
+            cancel: CancelToken())
         XCTAssertTrue(page.items.contains { $0.name == "Reading.base" })
     }
 

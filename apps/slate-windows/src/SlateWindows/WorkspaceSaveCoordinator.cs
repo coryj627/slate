@@ -74,6 +74,18 @@ internal sealed class WorkspaceSaveCoordinator
     private static string PathKey(string path) =>
         $"path:{path.Normalize(System.Text.NormalizationForm.FormC).ToLowerInvariant()}";
 
+    /// <summary>W7-7 PR 7 (#1252, R-9; codex's final merge-delta check,
+    /// finding 1): true while a save admitted for <paramref name="path"/>'s
+    /// file — under any spelling that folds to it, from any tab on it — has
+    /// not completed: it waits its turn, writes, or has yet to publish. A
+    /// re-seat keeps every tab on the file while this holds (contract 38
+    /// D-10). Dispatcher only, like every admission.</summary>
+    internal bool HasAdmittedSaveFor(string path)
+    {
+        _dispatcher.VerifyAccess();
+        return _tails.GetValueOrDefault(PathKey(path)) is { IsCompleted: false };
+    }
+
     /// <summary>Admit a save under <paramref name="keys"/>. <paramref name="start"/>
     /// runs on the dispatcher once every earlier save under ANY of the keys
     /// has completed, and completes the ticket it is handed exactly once —

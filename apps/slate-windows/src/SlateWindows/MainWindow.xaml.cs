@@ -5,6 +5,7 @@ using System.ComponentModel;
 using System.Windows;
 using System.Windows.Controls;
 using System.Windows.Input;
+using System.Windows.Interop;
 using System.Windows.Media;
 using System.Windows.Threading;
 using ICSharpCode.AvalonEdit;
@@ -19,6 +20,7 @@ public partial class MainWindow : Window
     private readonly VaultLifecycleViewModel _viewModel;
     private readonly WindowPlacementManager _windowPlacement;
     private readonly AccessibilityNotificationDispatcher _announcer;
+    private readonly ForegroundRescanRoute _foregroundRescan;
     private readonly ShellModalLoopMonitor _modalLoops;
     private IInputElement? _focusBeforeSwitcher;
     private QuickSwitcherViewModel? _observedQuickSwitcher;
@@ -133,6 +135,14 @@ public partial class MainWindow : Window
             handledEventsToo: true);
         ObserveSearch();
         RecentVaultJumpList.Apply(_viewModel.RecentVaults);
+        // W7-7 PR 7 (#1252, OD-1, R-9): coming back to the window rescans —
+        // no modal in the way, not on the first activation — and the
+        // lifecycle coalescer decides the rest.
+        _foregroundRescan = new ForegroundRescanRoute(
+            _viewModel.RescanAsync,
+            () => OpenModalSurface is not null || ComponentDispatcher.IsThreadModal);
+        Activated += (_, _) => _ = _foregroundRescan.OnActivated();
+        Deactivated += (_, _) => _foregroundRescan.OnDeactivated();
     }
 
     /// <summary>The shell's modal-loop monitor, for the facts that drive a
@@ -396,19 +406,30 @@ public partial class MainWindow : Window
     /// modal surface or a real claim elsewhere (the editor, a sheet's
     /// own restore target) wins — window-root/null focus is the
     /// stranded state this repairs.</summary>
+    /// <remarks>W7-7 PR 7 (#1252, R-9 over R-5), codex's merge-delta check
+    /// (finding 1): a publication that REMOVED the selected row — a file
+    /// deleted or moved outside Slate, published by a rescan — lands its keys
+    /// at once, while WPF still counts them within the tree on the removed
+    /// row: the new rows are laid out and the nearest surviving row takes
+    /// them, unselected, in ONE focus change, before WPF's own re-evaluation
+    /// can strand them on the window. The guarded restore below never takes
+    /// keys already on a live row — the row a publication's selection took
+    /// them to — so it cannot move them on to the first row.</remarks>
     private void FileSidebar_TreeSelectionRestored()
     {
+        if (_observedFileSidebar?.TakeVanishedSelection() is { } vanished
+            && OpenModalSurface is null
+            && KeysOnARemovedFilesRow())
+        {
+            FilesTree.UpdateLayout();
+            _ = LandNearVanishedSelection(vanished.Survivor);
+            return;
+        }
+
         _ = Dispatcher.InvokeAsync(
             () =>
             {
-                if (OpenModalSurface is not null)
-                {
-                    return;
-                }
-
-                if (Keyboard.FocusedElement is DependencyObject focused
-                    && !ReferenceEquals(focused, this)
-                    && !FilesTree.IsKeyboardFocusWithin)
+                if (OpenModalSurface is not null || !KeysStrandedFromFilesTree())
                 {
                     return;
                 }

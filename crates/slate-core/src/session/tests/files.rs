@@ -20,7 +20,11 @@ fn list_files_markdown_only() {
     session.scan_initial(&CancelToken::new()).unwrap();
 
     let page = session
-        .list_files(FileFilter::MarkdownOnly, Paging::first(100))
+        .list_files(
+            FileFilter::MarkdownOnly,
+            Paging::first(100),
+            &CancelToken::new(),
+        )
         .unwrap();
     let names: Vec<&str> = page.items.iter().map(|f| f.name.as_str()).collect();
     assert_eq!(names, vec!["a.md", "c.markdown"]);
@@ -41,7 +45,7 @@ fn list_files_paginates() {
 
     // First page of 4
     let page1 = session
-        .list_files(FileFilter::All, Paging::first(4))
+        .list_files(FileFilter::All, Paging::first(4), &CancelToken::new())
         .unwrap();
     assert_eq!(page1.items.len(), 4);
     assert_eq!(page1.total_filtered, 10);
@@ -49,14 +53,22 @@ fn list_files_paginates() {
 
     // Second page of 4
     let page2 = session
-        .list_files(FileFilter::All, Paging::after(cursor1, 4))
+        .list_files(
+            FileFilter::All,
+            Paging::after(cursor1, 4),
+            &CancelToken::new(),
+        )
         .unwrap();
     assert_eq!(page2.items.len(), 4);
     let cursor2 = page2.next_cursor.clone().expect("should have next cursor");
 
     // Third (final) page: remaining 2
     let page3 = session
-        .list_files(FileFilter::All, Paging::after(cursor2, 4))
+        .list_files(
+            FileFilter::All,
+            Paging::after(cursor2, 4),
+            &CancelToken::new(),
+        )
         .unwrap();
     assert_eq!(page3.items.len(), 2);
     assert!(page3.next_cursor.is_none(), "no more pages");
@@ -77,7 +89,7 @@ fn list_files_empty_vault() {
     let tmp = tempfile::tempdir().unwrap();
     let session = VaultSession::from_filesystem(tmp.path().to_path_buf()).unwrap();
     let page = session
-        .list_files(FileFilter::All, Paging::first(10))
+        .list_files(FileFilter::All, Paging::first(10), &CancelToken::new())
         .unwrap();
     assert!(page.items.is_empty());
     assert_eq!(page.total_filtered, 0);
@@ -181,7 +193,7 @@ Hello [[World|friend]].
     }
 
     let page = session
-        .list_files(FileFilter::All, Paging::first(100))
+        .list_files(FileFilter::All, Paging::first(100), &CancelToken::new())
         .unwrap();
     assert_eq!(page.total_filtered, 8);
     assert_eq!(page.items.len(), 8, "property joins must not multiply rows");
@@ -340,7 +352,7 @@ Target preview words.
     session.scan_initial(&CancelToken::new()).unwrap();
 
     let listed = session
-        .list_files(FileFilter::All, Paging::first(100))
+        .list_files(FileFilter::All, Paging::first(100), &CancelToken::new())
         .unwrap()
         .items
         .into_iter()
@@ -408,7 +420,7 @@ fn get_file_summary_returns_latest_enrichment_after_save() {
         .unwrap();
     let after = session.get_file_summary("note.md").unwrap().unwrap();
     let listed_after = session
-        .list_files(FileFilter::All, Paging::first(10))
+        .list_files(FileFilter::All, Paging::first(10), &CancelToken::new())
         .unwrap()
         .items
         .into_iter()
@@ -438,7 +450,7 @@ fn file_summary_enrichment_preserves_pagination_totals_and_order() {
     session.scan_initial(&CancelToken::new()).unwrap();
 
     let first = session
-        .list_files(FileFilter::All, Paging::first(2))
+        .list_files(FileFilter::All, Paging::first(2), &CancelToken::new())
         .unwrap();
     assert_eq!(first.total_filtered, 5);
     assert_eq!(
@@ -453,6 +465,7 @@ fn file_summary_enrichment_preserves_pagination_totals_and_order() {
         .list_files(
             FileFilter::All,
             Paging::after(first.next_cursor.clone().unwrap(), 2),
+            &CancelToken::new(),
         )
         .unwrap();
     assert_eq!(second.total_filtered, 5);
@@ -468,6 +481,7 @@ fn file_summary_enrichment_preserves_pagination_totals_and_order() {
         .list_files(
             FileFilter::All,
             Paging::after(second.next_cursor.clone().unwrap(), 2),
+            &CancelToken::new(),
         )
         .unwrap();
     assert_eq!(third.total_filtered, 5);
@@ -475,7 +489,11 @@ fn file_summary_enrichment_preserves_pagination_totals_and_order() {
     assert!(third.next_cursor.is_none());
 
     let past_end = session
-        .list_files(FileFilter::All, Paging::after("z.md".into(), 2))
+        .list_files(
+            FileFilter::All,
+            Paging::after("z.md".into(), 2),
+            &CancelToken::new(),
+        )
         .unwrap();
     assert!(past_end.items.is_empty());
     assert_eq!(past_end.total_filtered, 5);
@@ -705,4 +723,118 @@ fn get_file_metadata_returns_properties_in_document_order() {
     let md = session.get_file_metadata("notes/note.md").unwrap().unwrap();
     let keys: Vec<&str> = md.properties.iter().map(|p| p.key.as_str()).collect();
     assert_eq!(keys, vec!["title", "tags", "published"]);
+}
+
+// --- W7-7 PR 7 (#1252): list_files honours its CancelToken ---------------------
+
+fn vault_of(count: usize) -> (tempfile::TempDir, VaultSession) {
+    let (tmp, session) = make_vault(|p| {
+        for i in 0..count {
+            p.write_file(&format!("n{i:03}.md"), b"x").unwrap();
+        }
+    });
+    session.scan_initial(&CancelToken::new()).unwrap();
+    (tmp, session)
+}
+
+/// A token cancelled before the call answers `Cancelled`, with no page.
+#[test]
+fn list_files_refuses_an_already_cancelled_token() {
+    let (_tmp, session) = vault_of(3);
+    let cancel = CancelToken::new();
+    cancel.cancel();
+
+    let result = session.list_files(FileFilter::All, Paging::first(10), &cancel);
+
+    assert!(matches!(result, Err(VaultError::Cancelled)));
+}
+
+/// Cancelled mid-page — after the first decoded row — the call answers
+/// `Cancelled`, never the partial page; the next call, with a fresh token,
+/// answers the whole page (the progress handler was cleared).
+#[test]
+fn list_files_cancelled_mid_page_is_cancelled_not_a_partial_page() {
+    let (_tmp, session) = vault_of(20);
+    let cancel = CancelToken::new();
+    let trip = cancel.clone();
+    crate::session::list_files_row_test_hook::install(Box::new(move |rows| {
+        if rows == 1 {
+            trip.cancel();
+        }
+    }));
+
+    let result = session.list_files(FileFilter::All, Paging::first(100), &cancel);
+    crate::session::list_files_row_test_hook::clear();
+
+    assert!(matches!(result, Err(VaultError::Cancelled)));
+    let page = session
+        .list_files(FileFilter::All, Paging::first(100), &CancelToken::new())
+        .unwrap();
+    assert_eq!(page.items.len(), 20);
+    assert_eq!(page.total_filtered, 20);
+}
+
+/// The progress handler interrupts the statement itself: cancelled from
+/// inside SQLite's first progress callback — mid-step, before any row is
+/// decoded — the call answers `Cancelled` and no row was ever produced.
+#[test]
+fn list_files_cancelled_inside_the_statement_is_interrupted_before_any_row() {
+    let (_tmp, session) = vault_of(300);
+    let cancel = CancelToken::new();
+    let trip = cancel.clone();
+    let rows_decoded = std::rc::Rc::new(std::cell::Cell::new(0usize));
+    let seen = rows_decoded.clone();
+    crate::session::list_files_row_test_hook::install(Box::new(move |rows| seen.set(rows)));
+    crate::session::directory_page::progress_test_hook::install(Box::new(move || trip.cancel()));
+
+    let result = session.list_files(FileFilter::All, Paging::first(100), &cancel);
+    crate::session::directory_page::progress_test_hook::clear();
+    crate::session::list_files_row_test_hook::clear();
+
+    assert!(matches!(result, Err(VaultError::Cancelled)));
+    assert_eq!(
+        rows_decoded.get(),
+        0,
+        "the statement was interrupted before its first row"
+    );
+    let page = session
+        .list_files(FileFilter::All, Paging::first(100), &CancelToken::new())
+        .unwrap();
+    assert_eq!(page.items.len(), 100);
+}
+
+/// W7-7 PR 7 (codex PR 7 round 3, finding 7): a files page is bounded. A
+/// zero or oversized limit is refused before any row is read — a zero
+/// limit used to consume a row into an empty terminal page, and
+/// `u32::MAX` materialized the whole vault — and the maximum is accepted.
+#[test]
+fn list_files_refuses_a_zero_or_oversized_page_limit() {
+    let (_tmp, session) = make_vault(|p| {
+        p.write_file("a.md", b"# A\n").unwrap();
+        p.write_file("b.md", b"# B\n").unwrap();
+    });
+    session.scan_initial(&CancelToken::new()).unwrap();
+
+    for limit in [0, MAX_LIST_FILES_PAGE_LIMIT + 1, u32::MAX] {
+        let result = session.list_files(FileFilter::All, Paging::first(limit), &CancelToken::new());
+        assert!(
+            matches!(result, Err(VaultError::InvalidArgument { .. })),
+            "limit {limit}: {result:?}"
+        );
+    }
+
+    let page = session
+        .list_files(
+            FileFilter::All,
+            Paging::first(MAX_LIST_FILES_PAGE_LIMIT),
+            &CancelToken::new(),
+        )
+        .unwrap();
+    assert_eq!(page.items.len(), 2);
+    assert!(page.next_cursor.is_none());
+    let one = session
+        .list_files(FileFilter::All, Paging::first(1), &CancelToken::new())
+        .unwrap();
+    assert_eq!(one.items.len(), 1);
+    assert!(one.next_cursor.is_some());
 }

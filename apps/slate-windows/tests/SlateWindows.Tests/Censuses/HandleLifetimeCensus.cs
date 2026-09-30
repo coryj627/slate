@@ -26,13 +26,13 @@ public partial class HandleLifetimeCensus
         {
             Assert.Equal(8UL, s1.ScanInitial(cancel).FilesIndexed);
         }
-        Assert.Equal(8, s1.ListFiles(FileFilter.MarkdownOnly, new Paging(null, 100)).Items.Length);
+        Assert.Equal(8, s1.ListFiles(FileFilter.MarkdownOnly, new Paging(null, 100), new CancelToken()).Items.Length);
         s1.Dispose();
         s1.Dispose(); // double-Dispose must be a no-op
 
         // Use-after-Dispose must surface as a managed exception, never a
         // native fault.
-        Assert.ThrowsAny<Exception>(() => s1.ListFiles(FileFilter.All, new Paging(null, 1)));
+        Assert.ThrowsAny<Exception>(() => s1.ListFiles(FileFilter.All, new Paging(null, 1), new CancelToken()));
 
         // Reopen after close: the sqlite cache must have been released.
         using (var s2 = VaultSession.OpenFilesystem(vault.Root))
@@ -47,7 +47,7 @@ public partial class HandleLifetimeCensus
         GC.WaitForPendingFinalizers();
         GC.Collect();
         using var s3 = VaultSession.OpenFilesystem(vault.Root);
-        Assert.Equal(8UL, s3.ListFiles(FileFilter.All, new Paging(null, 1)).TotalFiltered);
+        Assert.Equal(8UL, s3.ListFiles(FileFilter.All, new Paging(null, 1), new CancelToken()).TotalFiltered);
     }
 
     private static void OpenAndDrop(string root)
@@ -170,7 +170,7 @@ public partial class HandleLifetimeCensus
         using var reopened = VaultSession.OpenFilesystem(vault.Root);
         using var census = new CancelToken();
         reopened.ScanInitial(census);
-        Assert.Equal(2UL, reopened.ListFiles(FileFilter.All, new Paging(null, 1)).TotalFiltered);
+        Assert.Equal(2UL, reopened.ListFiles(FileFilter.All, new Paging(null, 1), new CancelToken()).TotalFiltered);
     }
 
     [System.Runtime.CompilerServices.MethodImpl(System.Runtime.CompilerServices.MethodImplOptions.NoInlining)]

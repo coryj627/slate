@@ -534,14 +534,17 @@ internal sealed partial class WorkspaceViewModel
 
     /// <summary>The lifecycle's file-change and scan-finished arms land
     /// here: probe only while the graph tab is VISIBLE.</summary>
-    internal void NotifyGraphOfVaultChange()
+    /// <remarks><paramref name="cancellation"/> (W7-7 PR 7, codex PR 7
+    /// round 4 finding 5): a rescan's token, carried into the loads the
+    /// probes issue; a Slate-owned event's probes pass none.</remarks>
+    internal void NotifyGraphOfVaultChange(CancellationToken cancellation = default)
     {
         if (_graphDocument is { IsRetired: false } document && GraphTabIsVisible())
         {
-            document.Probe();
+            document.Probe(cancellation);
         }
         // W6-2 PR B (rule C, Term 3(f)): the leaf's probe at EVERY level.
-        ProbeConnections();
+        ProbeConnections(cancellation);
     }
 
     // --- The addressed open (contract A-9) -------------------------------

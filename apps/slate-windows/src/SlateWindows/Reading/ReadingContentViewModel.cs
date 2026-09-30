@@ -74,13 +74,25 @@ internal sealed class ReadingContentViewModel : BindableBase, IDisposable
     /// before the first publication.</summary>
     private int _liveRefreshGeneration = -1;
 
+    // W7-7 PR 7 (codex AR-18 review round 2, finding 5): the generation a
+    // rescan requested — its publication is the rescan's, so its failure or
+    // degraded notice is counted by the rescan's one sentence and never
+    // spoken here. -1 when the current refresh is not a rescan's.
+    private int _silentGeneration = -1;
+
+    // Finding 4: every background fetch in flight, drained by a close
+    // before the session is disposed.
+    private readonly object _refreshWorkGate = new();
+    private readonly HashSet<Task> _refreshWork = [];
+
     /// <summary>W7-7 PR 8 (R-10): the generation whose refresh failed
     /// terminally; a newer refresh is a newer generation, so the failure is
     /// never mistaken for its outcome.</summary>
     private int _failedGeneration = -1;
 
     /// <summary>Every write of the live generation goes through here, so a
-    /// surface hears when a refresh starts and when it settles.</summary>
+    /// surface hears when a refresh starts and when it settles — a rescan's
+    /// silent re-projection included (W7-7 PR 7).</summary>
     private int LiveRefreshGeneration
     {
         get => _liveRefreshGeneration;
@@ -491,7 +503,15 @@ internal sealed class ReadingContentViewModel : BindableBase, IDisposable
     }
 
     /// <summary>Project the live buffer. Dispatcher thread only.</summary>
-    public void Refresh()
+    public void Refresh() => Refresh(silent: false, CancellationToken.None);
+
+    /// <summary>The refresh; <paramref name="silent"/> — a rescan's
+    /// re-projection (W7-7 PR 7, round 2 finding 5) — publishes its failure
+    /// or degraded notice without speaking it, and the rescan's
+    /// <paramref name="cancellation"/> (finding 4) is checked at the worker
+    /// boundary between the fetch's core calls: a cancelled fetch stops
+    /// there and publishes nothing.</summary>
+    private void Refresh(bool silent, CancellationToken cancellation)
     {
         if (_disposed || !_tab.IsMarkdown)
         {
@@ -501,6 +521,7 @@ internal sealed class ReadingContentViewModel : BindableBase, IDisposable
         int generation = ++_generation;
         ReadingSurface.CensusDiag($"reading refresh {generation}");
         LiveRefreshGeneration = generation;
+        _silentGeneration = silent ? generation : -1;
         string text = _tab.Text;
         string path = _tab.Path;
         long revision = _tab.EditorSession?.Revision ?? -1;
@@ -508,33 +529,61 @@ internal sealed class ReadingContentViewModel : BindableBase, IDisposable
         RetireFetch();
         var cancel = new CoreRequestCancellation();
         _fetchCancel = cancel;
+        // The merge with follow-up B (#1279): a rescan's re-projection runs
+        // under the refresh's core token like any other — and the run's
+        // cancellation (W7-7 PR 7, finding 4) trips that token, so every
+        // stage check and core walk stops for a cancelled rescan as for a
+        // superseded refresh.
+        CancellationTokenRegistration rescanLink = cancellation.Register(cancel.Cancel);
 
         if (_synchronousForTests)
         {
             try
             {
                 FetchResult fetched = FetchGuarded(_session, path, text, cancel.Token);
-                Publish(generation, path, revision, sessionGeneration, fetched);
+                // Its terminal publication settles the waiters (round 3,
+                // finding 3).
+                Publish(generation, path, revision, sessionGeneration, fetched, cancellation);
+            }
+            catch (Exception exception) when (
+                exception is OperationCanceledException or VaultException.Cancelled
+                && cancellation.IsCancellationRequested)
+            {
+                // The rescan that asked for this re-projection was cancelled:
+                // nothing publishes and nothing is said.
+                if (generation == _generation)
+                {
+                    LiveRefreshGeneration = -1;
+                }
+
+                SettlePublicationWaiters(generation, new OperationCanceledException(cancellation));
             }
             catch (VaultException.Cancelled)
             {
                 // #1279: retired mid-walk; a newer generation owns the view.
+                // The merge with follow-up B: an awaiting rescan settles with
+                // the refresh that superseded this one, or now when none is
+                // live — never left waiting on a publication that is not
+                // coming.
                 Interlocked.Increment(ref _fetchesCancelledForTests);
+                SettleSupersededWaiters(generation);
             }
             catch (Exception exception)
             {
                 RecordTerminalFailure(exception);
-                PublishTerminalFailure(generation);
+                bool shown = PublishTerminalFailure(generation);
+                SettlePublicationWaiters(generation, shown ? exception : null);
             }
             finally
             {
+                rescanLink.Dispose();
                 cancel.Finish();
             }
             return;
         }
 
         IsLoading = true;
-        _ = Task.Run(async () =>
+        TrackRefreshWork(Task.Run(async () =>
         {
             // The outer boundary exists because this task is
             // fire-and-forget: any exception the retry policy does not
@@ -554,14 +603,15 @@ internal sealed class ReadingContentViewModel : BindableBase, IDisposable
                     catch (Exception exception) when (
                         exception is (VaultException or IOException)
                             and not VaultException.Cancelled
-                        && attempt < MaximumBackgroundRefreshAttempts)
+                        && attempt < MaximumBackgroundRefreshAttempts
+                        && !cancellation.IsCancellationRequested)
                     {
                         // Known-transient only; the last attempt and
                         // every other exception fall through to the
                         // terminal boundary. A refresh retired during the
                         // delay stops instead of retrying (codex round 4).
                         ThrowIfCancelled(cancel.Token);
-                        await Task.Delay(RetryDelay).ConfigureAwait(false);
+                        await Task.Delay(RetryDelay, cancellation).ConfigureAwait(false);
                         ThrowIfCancelled(cancel.Token);
                     }
                 }
@@ -570,33 +620,109 @@ internal sealed class ReadingContentViewModel : BindableBase, IDisposable
                     ReadingSurface.CensusDiag($"reading fetch {generation} done");
                     _ = _dispatcher!.InvokeAsync(() => RunPublishStep(
                         generation,
-                        () => Publish(generation, path, revision, sessionGeneration, result)));
+                        () => Publish(generation, path, revision, sessionGeneration, result, cancellation)));
                     PublicationQueuedHookForTests?.Invoke();
                 }
+            }
+            catch (OperationCanceledException) when (cancellation.IsCancellationRequested)
+            {
+                // The rescan that asked for this re-projection was
+                // cancelled (a close, a vault switch): nothing publishes
+                // and nothing is said.
+                _ = _dispatcher!.InvokeAsync(() =>
+                {
+                    if (generation == _generation)
+                    {
+                        LiveRefreshGeneration = -1;
+                        IsLoading = false;
+                    }
+
+                    SettlePublicationWaiters(generation, new OperationCanceledException(cancellation));
+                });
+            }
+            catch (VaultException.Cancelled) when (cancellation.IsCancellationRequested)
+            {
+                _ = _dispatcher!.InvokeAsync(() =>
+                {
+                    if (generation == _generation)
+                    {
+                        LiveRefreshGeneration = -1;
+                        IsLoading = false;
+                    }
+
+                    SettlePublicationWaiters(generation, new OperationCanceledException(cancellation));
+                });
             }
             catch (VaultException.Cancelled)
             {
                 // #1279: the refresh was retired mid-walk — superseded,
                 // detached or disposed. Not a failure: a newer generation
-                // (or nothing) owns the view, so nothing publishes.
+                // (or nothing) owns the view, so nothing publishes. The
+                // merge with follow-up B: an awaiting rescan settles with
+                // the refresh that superseded this one, or now when none is
+                // live — a detach, a preference change, a disposal — never
+                // left waiting on a publication that is not coming.
                 ReadingSurface.CensusDiag($"reading fetch {generation} retired");
                 Interlocked.Increment(ref _fetchesCancelledForTests);
+                _ = _dispatcher!.InvokeAsync(() => SettleSupersededWaiters(generation));
             }
             catch (Exception exception)
             {
                 // Terminal: an unconditional host diagnostic (event +
                 // exception TYPE only, never payload text — W1-RT-01),
-                // then a generation-gated user-visible failure state.
+                // then a generation-gated user-visible failure state —
+                // and the awaiting rescan settled WITH the failure it
+                // shows (W7-7 PR 7, round 2 finding 5).
                 ReadingSurface.CensusDiag($"reading fetch {generation} failed: {exception.GetType().Name}");
                 RecordTerminalFailure(exception);
                 _ = _dispatcher!.InvokeAsync(
-                    () => PublishTerminalFailure(generation));
+                    () =>
+                    {
+                        bool shown = PublishTerminalFailure(generation);
+                        SettlePublicationWaiters(generation, shown ? exception : null);
+                    });
             }
             finally
             {
+                rescanLink.Dispose();
                 cancel.Finish();
             }
-        });
+        }));
+    }
+
+    /// <summary>W7-7 PR 7 (codex AR-18 review round 2, finding 4): every
+    /// background fetch in flight has ended — a close drains this before
+    /// the session is disposed, so no fetch a rescan started is still
+    /// inside a core call when it goes.</summary>
+    internal Task WhenRefreshWorkDrained()
+    {
+        Task[] snapshot;
+        lock (_refreshWorkGate)
+        {
+            snapshot = [.. _refreshWork];
+        }
+
+        return Task.WhenAll(snapshot);
+    }
+
+    private void TrackRefreshWork(Task work)
+    {
+        lock (_refreshWorkGate)
+        {
+            _ = _refreshWork.Add(work);
+        }
+
+        _ = work.ContinueWith(
+            completed =>
+            {
+                lock (_refreshWorkGate)
+                {
+                    _ = _refreshWork.Remove(completed);
+                }
+            },
+            CancellationToken.None,
+            TaskContinuationOptions.ExecuteSynchronously,
+            TaskScheduler.Default);
     }
 
     /// <summary>Cancel the live refresh's core walk (#1279).</summary>
@@ -635,6 +761,9 @@ internal sealed class ReadingContentViewModel : BindableBase, IDisposable
     private FetchResult FetchGuarded(
         VaultSession session, string path, string text, CancelToken cancel)
     {
+        // The refresh's first stage boundary (Fetch's own) checks the token,
+        // a rescan's cancellation included: the fault seam runs for every
+        // fetch attempt first, as follow-up B's facts count it.
         if (FetchFaultForTests?.Invoke() is { } fault)
         {
             throw fault;
@@ -650,20 +779,28 @@ internal sealed class ReadingContentViewModel : BindableBase, IDisposable
     /// Existing content is preserved (stale beats empty); the memo is
     /// untouched, so the next refresh retries the projection in full.
     /// </summary>
-    private void PublishTerminalFailure(int generation)
+    /// <returns>Whether this generation's failure is what the model now
+    /// shows — false when a newer refresh superseded it, or the model is
+    /// disposed.</returns>
+    private bool PublishTerminalFailure(int generation)
     {
         if (_disposed || generation != _generation)
         {
-            return;
+            return false;
         }
         ReadingSurface.CensusDiag($"reading refresh {generation} failed terminally");
         _failedGeneration = generation;
         LiveRefreshGeneration = -1;
         IsLoading = false;
-        _announce(new A11yEvent.HostComposed(
-            "Reading view could not load this note. Switch to the editor to "
-            + "keep working, then toggle reading mode to retry.",
-            A11yPriority.High));
+        // W7-7 PR 7 (round 2, finding 5): a rescan's re-projection fails
+        // silently — the rescan counts it in its one sentence.
+        if (generation != _silentGeneration)
+        {
+            _announce(new A11yEvent.HostComposed(
+                "Reading view could not load this note. Switch to the editor to "
+                + "keep working, then toggle reading mode to retry.",
+                A11yPriority.High));
+        }
         // Preserve only what is PROVABLY on screen: a complete,
         // delivered projection outside a rebind. A non-null Document
         // proves nothing by itself — the surface merge drains it, a
@@ -674,7 +811,7 @@ internal sealed class ReadingContentViewModel : BindableBase, IDisposable
         _rebindRecovery = false;
         if (preserve)
         {
-            return;
+            return true;
         }
         var document = new FlowDocument();
         var paragraph = new Paragraph(new Run(
@@ -688,6 +825,7 @@ internal sealed class ReadingContentViewModel : BindableBase, IDisposable
         document.Blocks.Add(paragraph);
         PublishedFailureNotice = true;
         Document = document;
+        return true;
     }
 
     /// <summary>Tokens-only fault seam: exercises the degraded code
@@ -721,6 +859,14 @@ internal sealed class ReadingContentViewModel : BindableBase, IDisposable
     internal const int FetchedEmbedImageByteBudget = 16 * 1024 * 1024;
 
     /// <summary>Background-safe: FFI only, no WPF objects.</summary>
+    /// <remarks>W7-7 PR 7 (codex AR-18 review round 2, finding 4), merged
+    /// with follow-up B (#1279): the refresh's core token — which a
+    /// superseding refresh, a detach, a disposal and a rescan's own
+    /// cancellation all trip — is checked at each stage boundary between the
+    /// core calls, which take no token (AR-60), and between citations, and it
+    /// reaches the embed walks and an embedded base's open and execute; the
+    /// close drains the fetch (<see cref="WhenRefreshWorkDrained"/>) before
+    /// the session goes.</remarks>
     private FetchResult Fetch(
         VaultSession session, string path, string text, CancelToken cancel)
     {
@@ -730,7 +876,7 @@ internal sealed class ReadingContentViewModel : BindableBase, IDisposable
         FetchStage(cancel, "links");
         OutgoingLink[] records = session.OutgoingLinks(path);
         FetchStage(cancel, "citations");
-        RenderedCitation[] citations = RenderCitations(session, path);
+        RenderedCitation[] citations = RenderCitations(session, path, cancel);
         FetchStage(cancel, "tasks");
         TaskItem[] tasks = session.TasksForFile(path).ToArray();
         FetchStage(cancel, "code");
@@ -957,7 +1103,10 @@ internal sealed class ReadingContentViewModel : BindableBase, IDisposable
         try
         {
             ThrowIfCancelled(cancel);
-            handle = session.OpenBase(targetPath);
+            // W7-7 PR 7 (round 2, finding 4): the open takes the token too —
+            // the refresh's, which a rescan's cancellation trips (the merge
+            // with follow-up B, #1279).
+            handle = session.OpenBaseCancellable(targetPath, cancel).Handle;
             ThrowIfCancelled(cancel);
             beforeQuery?.Invoke();
             BasesResultSet result = session.BaseExecute(
@@ -1034,6 +1183,143 @@ internal sealed class ReadingContentViewModel : BindableBase, IDisposable
     internal Action? BaseProjectionHookForTests { get; set; }
 
     /// <summary>
+    /// W7-7 PR 7 (#1252, round 29): <see cref="NotifyVaultFileChanged"/> for
+    /// a rescan, awaitable. A change that touches this model's published
+    /// dependencies re-projects NOW (no debounce) and completes when the
+    /// projection — or its terminal failure state — publishes; a hidden
+    /// model records the pending re-render its surface runs on rebind and
+    /// completes; an unrelated change completes at once.
+    /// </summary>
+    internal Task NotifyVaultFileChangedAsync(FileChangeKind kind, string path)
+    {
+        if (_disposed || !IsRelevantChange(kind, path))
+        {
+            return Task.CompletedTask;
+        }
+
+        return ReprojectForDependencyChangeAsync();
+    }
+
+    /// <summary>Whether this model's published projection depends on OTHER
+    /// files at all: resolved embeds, unresolved embeds a creation could
+    /// resolve, or base cards over the vault's membership.</summary>
+    internal bool HasOtherFileDependencies =>
+        _publishedEmbedDependencies.Count > 0
+        || _publishedHasUnresolvedEmbeds
+        || _publishedHasBaseEmbeds;
+
+    /// <summary>
+    /// W7-7 PR 7 (#1252, R-9; AR-18's fallback): the rescan's reading
+    /// dependent. The re-sync carries no per-path delta, so a model whose
+    /// projection depends on other files re-projects on every rescan — the
+    /// artifact digest makes an unchanged one a memo hit — and a hidden one
+    /// records the pending re-render its surface runs on rebind; a model
+    /// with no such dependency owes nothing (its own note's change reaches
+    /// it through its tab's reload).
+    /// </summary>
+    /// <remarks>W7-7 PR 7 (codex AR-18 review round 2, findings 4 and 5):
+    /// the re-projection is the rescan's — silent (a failure settles the
+    /// returned Task WITH that failure, for the rescan to count, and is not
+    /// spoken here) and cancelled by the run's
+    /// <paramref name="cancellation"/> at the fetch's worker boundary.</remarks>
+    internal Task NotifyRescanAsync(CancellationToken cancellation = default)
+    {
+        if (_disposed || !HasOtherFileDependencies)
+        {
+            return Task.CompletedTask;
+        }
+
+        return ReprojectForDependencyChangeAsync(silent: true, cancellation);
+    }
+
+    /// <summary>
+    /// W7-7 PR 7 (codex PR 7 round 4, finding 3): <see cref="Activate"/> for
+    /// the reading model a rescan's in-place reload created — the projection
+    /// is the rescan's: silent, under its <paramref name="cancellation"/>,
+    /// and the returned Task completes at its terminal publication (faulted
+    /// by its failure) for the rescan to await and count.
+    /// </summary>
+    internal Task ActivateForRescanAsync(CancellationToken cancellation, bool attachObserver)
+    {
+        if (_disposed || !_tab.IsMarkdown)
+        {
+            return Task.CompletedTask;
+        }
+
+        if (attachObserver)
+        {
+            AttachObserver();
+        }
+
+        var published = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
+        int requested = _generation + 1;
+        _publicationWaiters.Add((requested, published));
+        Refresh(silent: true, cancellation);
+        if (_generation < requested)
+        {
+            _ = _publicationWaiters.Remove((requested, published));
+            published.TrySetResult();
+        }
+
+        return published.Task;
+    }
+
+    private Task ReprojectForDependencyChangeAsync(
+        bool silent = false,
+        CancellationToken cancellation = default)
+    {
+        if (BlocksAppended is null)
+        {
+            HasPendingDependencyRefresh = true;
+            return Task.CompletedTask;
+        }
+
+        _dependencyDebounce?.Stop();
+        var published = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
+        int requested = _generation + 1;
+        _publicationWaiters.Add((requested, published));
+        Refresh(silent, cancellation);
+        if (_generation < requested)
+        {
+            // Refused (disposed, or no longer Markdown): nothing to await.
+            _ = _publicationWaiters.Remove((requested, published));
+            published.TrySetResult();
+        }
+
+        return published.Task;
+    }
+
+    // Round 29: the awaited re-projections, settled by the publication of
+    // their generation or any later one.
+    private readonly List<(int Generation, TaskCompletionSource Published)> _publicationWaiters = [];
+
+    private void SettlePublicationWaiters(int generation, Exception? failure)
+    {
+        foreach ((int Generation, TaskCompletionSource Published) waiter in
+            _publicationWaiters.Where(waiter => waiter.Generation <= generation).ToList())
+        {
+            _ = _publicationWaiters.Remove(waiter);
+            if (failure is null)
+            {
+                waiter.Published.TrySetResult();
+            }
+            else
+            {
+                waiter.Published.TrySetException(failure);
+            }
+        }
+    }
+
+    private bool IsRelevantChange(FileChangeKind kind, string path) =>
+        _publishedEmbedDependencies.Contains(path)
+        || (_publishedHasUnresolvedEmbeds
+            && kind is FileChangeKind.Created or FileChangeKind.Renamed)
+        // A published BASE card depends on the query's whole membership,
+        // which no dependency list can enumerate — any Markdown change may
+        // add/remove rows. Markdown is core's classification (round 27).
+        || (_publishedHasBaseEmbeds && CoreDocumentClassification.IsMarkdown(path));
+
+    /// <summary>
     /// W3-5 round 1 [high]: a TARGET-note save after publication must
     /// re-project the cards built from it. The vault event stream
     /// (session write paths; external edits surface at the next scan)
@@ -1065,7 +1351,8 @@ internal sealed class ReadingContentViewModel : BindableBase, IDisposable
             // memo makes a no-op re-project cheap, and the debounce
             // coalesces bursts.
             || (_publishedHasBaseEmbeds
-                && path.EndsWith(".md", StringComparison.OrdinalIgnoreCase));
+                // W7-7 PR 7 (round 27): Markdown is core's classification.
+                && CoreDocumentClassification.IsMarkdown(path));
         if (!relevant)
         {
             return;
@@ -1179,7 +1466,10 @@ internal sealed class ReadingContentViewModel : BindableBase, IDisposable
     /// mid-transition behavior), so degradation is per-citation, never
     /// note-wide.
     /// </summary>
-    private static RenderedCitation[] RenderCitations(VaultSession session, string path)
+    private static RenderedCitation[] RenderCitations(
+        VaultSession session,
+        string path,
+        CancelToken cancel)
     {
         string? styleId = null;
         try
@@ -1211,6 +1501,7 @@ internal sealed class ReadingContentViewModel : BindableBase, IDisposable
         var rendered = new List<RenderedCitation>(references.Count);
         foreach (CitationReference reference in references)
         {
+            ThrowIfCancelled(cancel);
             try
             {
                 rendered.Add(session.RenderCitation(reference, styleId));
@@ -1228,7 +1519,8 @@ internal sealed class ReadingContentViewModel : BindableBase, IDisposable
         string path,
         long revision,
         ulong sessionGeneration,
-        FetchResult fetched)
+        FetchResult fetched,
+        CancellationToken cancellation)
     {
         // Superseded or dead: a newer refresh owns the pipeline (and
         // re-marked itself live); nothing to repair here. Checked before ANY
@@ -1240,6 +1532,9 @@ internal sealed class ReadingContentViewModel : BindableBase, IDisposable
         if (_disposed || generation != _generation)
         {
             ReadingSurface.CensusDiag($"reading publish {generation} dropped (current {_generation}, disposed {_disposed})");
+            // W7-7 PR 7 (round 3, finding 3): its waiters settle with the
+            // refresh that superseded it, or now when none is live.
+            SettleSupersededWaiters(generation);
             return;
         }
         if (PublishFaultForTests?.Invoke() is { } fault)
@@ -1262,9 +1557,12 @@ internal sealed class ReadingContentViewModel : BindableBase, IDisposable
             // its placeholder (or on stale content) until a mode
             // cycle; retry immediately with the latest tuple instead.
             // Converges when vault activity settles; a same-text
-            // retry is one parse ending in a memo hit.
+            // retry is one parse ending in a memo hit. W7-7 PR 7 (round
+            // 2, finding 5): the retry keeps a rescan's silence and
+            // cancellation, and its publication settles this
+            // generation's waiters.
             ReadingSurface.CensusDiag($"reading publish {generation} drifted");
-            Refresh();
+            Refresh(generation == _silentGeneration, cancellation);
             return;
         }
 
@@ -1275,8 +1573,11 @@ internal sealed class ReadingContentViewModel : BindableBase, IDisposable
             fetched.ArtifactDigest);
         if (Document is not null && _memo is { } memo && memo.Matches(key))
         {
+            // Already showing exactly this projection: terminal — the
+            // refresh settles (R-10) and so do its waiters (PR 7).
             ReadingSurface.CensusDiag($"reading publish {generation} memo hit");
             LiveRefreshGeneration = -1;
+            SettlePublicationWaiters(generation, failure: null);
             return;
         }
 
@@ -1322,7 +1623,7 @@ internal sealed class ReadingContentViewModel : BindableBase, IDisposable
 
         if (firstEnd >= renderLimit)
         {
-            FinishPublish(key, degraded, renderLimit, streamed: false);
+            FinishPublish(key, degraded, renderLimit, streamed: false, generation);
             return;
         }
 
@@ -1340,7 +1641,7 @@ internal sealed class ReadingContentViewModel : BindableBase, IDisposable
                     embeds, records);
                 index = end;
             }
-            FinishPublish(key, degraded, renderLimit, streamed: true);
+            FinishPublish(key, degraded, renderLimit, streamed: true, generation);
             return;
         }
         _ = _dispatcher!.InvokeAsync(
@@ -1360,6 +1661,12 @@ internal sealed class ReadingContentViewModel : BindableBase, IDisposable
     /// surface on the loading placeholder with no notice, no
     /// announcement, and no diagnostic.
     /// </summary>
+    /// <remarks>W7-7 PR 7 (codex PR 7 round 3, finding 3): a step that
+    /// succeeds settles nothing — a streamed publication's first chunk is
+    /// not its publication. Success settles only at a TERMINAL point (the
+    /// last chunk's <see cref="FinishPublish"/>, a memo hit, a superseded
+    /// generation nothing else will settle); a failure settles at the step
+    /// that failed.</remarks>
     private void RunPublishStep(int generation, Action step)
     {
         try
@@ -1369,7 +1676,8 @@ internal sealed class ReadingContentViewModel : BindableBase, IDisposable
         catch (Exception exception)
         {
             RecordTerminalFailure(exception);
-            PublishTerminalFailure(generation);
+            bool shown = PublishTerminalFailure(generation);
+            SettlePublicationWaiters(generation, shown ? exception : null);
         }
     }
 
@@ -1410,6 +1718,7 @@ internal sealed class ReadingContentViewModel : BindableBase, IDisposable
     {
         if (_disposed || generation != _generation)
         {
+            SettleSupersededWaiters(generation);
             return;
         }
         if (PublishFaultForTests?.Invoke() is { } fault)
@@ -1431,7 +1740,7 @@ internal sealed class ReadingContentViewModel : BindableBase, IDisposable
                 DispatcherPriority.Background);
             return;
         }
-        FinishPublish(key, degraded, renderLimit, streamed: true);
+        FinishPublish(key, degraded, renderLimit, streamed: true, generation);
     }
 
     private void AppendFragment(
@@ -1450,7 +1759,12 @@ internal sealed class ReadingContentViewModel : BindableBase, IDisposable
                 diagramBlocks, embeds, records)
                 .Document);
 
-    private void FinishPublish(MemoKey key, bool degraded, int renderedBlocks, bool streamed)
+    private void FinishPublish(
+        MemoKey key,
+        bool degraded,
+        int renderedBlocks,
+        bool streamed,
+        int generation)
     {
         // The projection is complete: the refresh has landed (R-10).
         ReadingSurface.CensusDiag($"reading projection complete ({renderedBlocks} blocks)");
@@ -1464,6 +1778,7 @@ internal sealed class ReadingContentViewModel : BindableBase, IDisposable
         {
             _memo = null;
             _projectionComplete = false;
+            SettlePublicationWaiters(generation, failure: null);
             return;
         }
         _memo = key;
@@ -1471,6 +1786,7 @@ internal sealed class ReadingContentViewModel : BindableBase, IDisposable
         _rebindRecovery = false;
         if (!degraded)
         {
+            SettlePublicationWaiters(generation, failure: null);
             return;
         }
         string rendered = renderedBlocks.ToString(
@@ -1487,7 +1803,27 @@ internal sealed class ReadingContentViewModel : BindableBase, IDisposable
             paragraph, "ReadingDegradedNotice");
         document.Blocks.Add(paragraph);
         BlocksAppended?.Invoke(document);
-        _announce(new A11yEvent.HostComposed(notice, A11yPriority.High));
+        // W7-7 PR 7 (round 2, finding 5): a rescan's re-projection shows
+        // the notice without speaking it.
+        if (generation != _silentGeneration)
+        {
+            _announce(new A11yEvent.HostComposed(notice, A11yPriority.High));
+        }
+
+        SettlePublicationWaiters(generation, failure: null);
+    }
+
+    /// <summary>A superseded or dead generation publishes nothing (round 3,
+    /// finding 3): its waiters belong to the refresh that superseded it,
+    /// which settles every generation up to its own — unless none is live
+    /// (a surface detach, a preference change, a disposal), when they
+    /// settle now, never left waiting.</summary>
+    private void SettleSupersededWaiters(int generation)
+    {
+        if (_disposed || _liveRefreshGeneration == -1)
+        {
+            SettlePublicationWaiters(generation, failure: null);
+        }
     }
 
 

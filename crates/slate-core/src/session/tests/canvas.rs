@@ -568,7 +568,7 @@ fn file_filter_markdown_and_canvas() {
 
     let names = |filter| {
         session
-            .list_files(filter, Paging::first(100))
+            .list_files(filter, Paging::first(100), &CancelToken::new())
             .unwrap()
             .items
             .iter()

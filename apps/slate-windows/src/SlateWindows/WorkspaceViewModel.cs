@@ -206,6 +206,10 @@ internal sealed partial class WorkspaceTabViewModel : BindableBase, IDisposable
         }
     }
 
+    /// <summary>Test seam (W7-7 PR 7, codex PR 7 round 4 finding 3): the
+    /// Reading model an in-place replace creates, before it projects.</summary>
+    internal Action<ReadingContentViewModel>? ReadingCreatedForTests { get; set; }
+
     internal int AnchorNavigationPublishCountForTests =>
         Volatile.Read(ref _anchorNavigationPublishCountForTests);
 
@@ -223,6 +227,18 @@ internal sealed partial class WorkspaceTabViewModel : BindableBase, IDisposable
     public AvalonDocumentBufferSession? EditorSession => _editorSession;
     public EditorInteractionCoordinator? EditorInteractions => _editorInteractions;
     internal string? SavedContentHash => _contentHash;
+
+    private long _contentGeneration;
+
+    /// <summary>W7-7 PR 7 (#1252, R-9): a monotonic generation of what this
+    /// tab shows — bumped by every item replacement (a transient tab reused
+    /// in place included), every text change, every baseline or dirty-state
+    /// change and every missing or staleness mark. A rescan's worker read
+    /// captures it with the tab; the reload applies only if it is
+    /// unchanged in the dispatcher turn of the apply.</summary>
+    internal long ContentGeneration => _contentGeneration;
+
+    private void BumpContentGeneration() => _contentGeneration++;
     internal string? LoadFailure { get; private set; }
     public EditorPreferencesViewModel EditorPreferences { get; }
     public string EditorAutomationName =>
@@ -423,6 +439,7 @@ internal sealed partial class WorkspaceTabViewModel : BindableBase, IDisposable
         {
             if (SetField(ref _isDirty, value))
             {
+                BumpContentGeneration();
                 OnPropertyChanged(nameof(DirtyMarker));
                 if (value)
                 {
@@ -454,7 +471,13 @@ internal sealed partial class WorkspaceTabViewModel : BindableBase, IDisposable
     public bool IsMissingFromDisk
     {
         get => _isMissingFromDisk;
-        private set => SetField(ref _isMissingFromDisk, value);
+        private set
+        {
+            if (SetField(ref _isMissingFromDisk, value))
+            {
+                BumpContentGeneration();
+            }
+        }
     }
 
     /// <summary>W7-7 PR 3 (#1246, R-4; codex PR 3 round 5): what the reader
@@ -492,8 +515,21 @@ internal sealed partial class WorkspaceTabViewModel : BindableBase, IDisposable
 
     public void ReplaceItem(WorkspaceItemState item)
     {
+        // W7-7 PR 7 (#1252, R-9; codex's final merge-delta check, note 2;
+        // contract 38 D-10): a faulted save belongs to its item — only a
+        // later successful save of the item, or an actual item change,
+        // leaves it behind. A same-item replace (a rescan's reload of a note
+        // changed outside Slate, a re-seat, a restore's reload) is neither:
+        // the fault moves to the new document with the item, and every gate
+        // still refuses.
+        bool carriesFault = LastSaveFaulted && item == Item;
+        BumpContentGeneration();
         _saveEpoch++;
         _itemEpoch++;
+        if (carriesFault)
+        {
+            _faultedSaveItemEpoch = _itemEpoch;
+        }
         _taskToggleGeneration++;
         _taskToggleInFlight = false;
         _editorInteractions?.Dispose();
@@ -544,7 +580,14 @@ internal sealed partial class WorkspaceTabViewModel : BindableBase, IDisposable
             Reading = new ReadingContentViewModel(
                 _session, this, _announce,
                 synchronousForTests: !_startInteractionBackgroundWork);
-            if (_startInteractionBackgroundWork)
+            ReadingCreatedForTests?.Invoke(Reading);
+            if (_reloadingForRescan)
+            {
+                RescanReadingPublication = Reading.ActivateForRescanAsync(
+                    _rescanReload,
+                    attachObserver: _startInteractionBackgroundWork);
+            }
+            else if (_startInteractionBackgroundWork)
             {
                 Reading.Activate();
             }
@@ -580,6 +623,18 @@ internal sealed partial class WorkspaceTabViewModel : BindableBase, IDisposable
         NotifyItemChanged();
     }
 
+    /// <summary>W7-7 PR 7 (#1252, R-9; codex's final merge-delta check,
+    /// finding 1): the tab's file is back under the spelling the tab names
+    /// while a save is admitted for it — the save's own create, say. The tab
+    /// stops reporting the file missing and keeps its buffer, its document
+    /// and its epochs, so the save still publishes to it (contract 38 D-10):
+    /// no replace, and no epoch change that would retire the publication.</summary>
+    internal void MarkBackOnDisk()
+    {
+        IsMissingFromDisk = false;
+        Status = string.Empty;
+    }
+
     /// <summary>Registry-item rename (saved queries, dashboards): the
     /// tab keeps its identity (Id) and retitles.</summary>
     public void RetargetName(string name)
@@ -609,6 +664,7 @@ internal sealed partial class WorkspaceTabViewModel : BindableBase, IDisposable
             return;
         }
 
+        BumpContentGeneration();
         _text = source._text;
         _contentHash = source._contentHash;
         IsExternallyStale = source.IsExternallyStale;
@@ -646,6 +702,7 @@ internal sealed partial class WorkspaceTabViewModel : BindableBase, IDisposable
 
         AvalonDocumentBufferSession session = _editorSession
             ?? throw new InvalidOperationException("A Markdown tab has no editor session.");
+        BumpContentGeneration();
         switch (syncEvent)
         {
             case EditorDocumentUpdateStarted:
@@ -1254,6 +1311,19 @@ internal sealed partial class WorkspaceTabViewModel : BindableBase, IDisposable
     /// written, index commit failed) with an actual landed write.</summary>
     internal Action? TaskToggleFaultForTests { get; set; }
 
+    /// <summary>Test seam (W7-7 PR 7, round 24): runs INSIDE the toggle
+    /// worker BEFORE the core write, so a fact can hold a toggle in flight,
+    /// its write not yet committed, while a rescan applies the note's
+    /// delta.</summary>
+    internal Action? TaskToggleBeforeWriteForTests { get; set; }
+
+    /// <summary>True from a task toggle's start until its dispatcher-side
+    /// publish re-baselines the tab (W7-7 PR 7, round 24): a rescan's
+    /// clean-tab reload waits for it, because a reload in between would
+    /// move the revision the splice verifies and discard the undo
+    /// history.</summary>
+    internal bool IsTaskToggleInFlight => _taskToggleInFlight;
+
     /// <summary>The workspace's shared repair quarantine (adversarial
     /// round 19): set at tab creation so EVERY toggle route through
     /// this tab — panel, review, editor, reading view — leases the
@@ -1315,6 +1385,7 @@ internal sealed partial class WorkspaceTabViewModel : BindableBase, IDisposable
             {
                 try
                 {
+                    TaskToggleBeforeWriteForTests?.Invoke();
                     SaveReport report = _session.ToggleTaskStatus(
                         path,
                         task.Ordinal,
@@ -1484,7 +1555,17 @@ internal sealed partial class WorkspaceTabViewModel : BindableBase, IDisposable
     /// guard must refuse until the tab re-baselines. Cleared by the
     /// re-baselining writes (save, verified toggle splice, peer
     /// mirror) and re-derived on every Modified event.</summary>
-    internal bool IsExternallyStale { get; private set; }
+    internal bool IsExternallyStale
+    {
+        get => _isExternallyStale;
+        private set
+        {
+            _isExternallyStale = value;
+            BumpContentGeneration();
+        }
+    }
+
+    private bool _isExternallyStale;
 
     /// <summary>Re-derive <see cref="IsExternallyStale"/> against
     /// the index. Own saves also flow through the change stream
@@ -1680,6 +1761,7 @@ internal sealed partial class WorkspaceTabViewModel : BindableBase, IDisposable
 
     private void ApplyEditorSyncEvent(EditorDocumentSyncEvent syncEvent)
     {
+        BumpContentGeneration();
         if (syncEvent is EditorDocumentChange)
         {
             OnPropertyChanged(nameof(Text));
@@ -1698,10 +1780,50 @@ internal sealed partial class WorkspaceTabViewModel : BindableBase, IDisposable
     {
         if (SetField(ref _text, text, nameof(Text)))
         {
+            BumpContentGeneration();
             IsDirty = true;
             _documentChanged?.Invoke(this, null);
         }
     }
+
+    // W7-7 PR 7 (round 28): text a worker read for an in-place reload.
+    private string? _preloadedText;
+
+    /// <summary>W7-7 PR 7 (round 28): the in-place replace, from text a
+    /// worker already read — the rescan's clean-tab reload. Its
+    /// <paramref name="rescan"/> token (codex PR 7 round 4, finding 3) makes
+    /// a reading-mode tab's new projection the rescan's: silent, under that
+    /// token, and exposed as <see cref="RescanReadingPublication"/>.</summary>
+    internal void ReplaceItemWithReadText(
+        WorkspaceItemState item,
+        string text,
+        CancellationToken rescan = default)
+    {
+        _preloadedText = text;
+        _rescanReload = rescan;
+        _reloadingForRescan = true;
+        RescanReadingPublication = Task.CompletedTask;
+        try
+        {
+            ReplaceItem(item);
+        }
+        finally
+        {
+            _preloadedText = null;
+            _reloadingForRescan = false;
+            _rescanReload = default;
+        }
+    }
+
+    // W7-7 PR 7 (codex PR 7 round 4, finding 3): set while a rescan replaces
+    // this tab in place.
+    private bool _reloadingForRescan;
+    private CancellationToken _rescanReload;
+
+    /// <summary>The last rescan reload's reading projection — completing at
+    /// its terminal publication, faulted by its failure; completed when the
+    /// tab is not in reading mode.</summary>
+    internal Task RescanReadingPublication { get; private set; } = Task.CompletedTask;
 
     private void Load()
     {
@@ -1713,7 +1835,9 @@ internal sealed partial class WorkspaceTabViewModel : BindableBase, IDisposable
 
         try
         {
-            _text = _session.ReadText(Path);
+            // W7-7 PR 7 (round 28): a rescan's reload hands in text its
+            // worker already read, so no core read runs on the dispatcher.
+            _text = _preloadedText ?? _session.ReadText(Path);
             _contentHash = SlateUniffiMethods.EditorTextContentHash(_text);
             _isDirty = false;
         }
@@ -1726,6 +1850,7 @@ internal sealed partial class WorkspaceTabViewModel : BindableBase, IDisposable
 
     private void NotifyItemChanged()
     {
+        BumpContentGeneration();
         OnPropertyChanged(nameof(Item));
         OnPropertyChanged(nameof(Title));
         OnPropertyChanged(nameof(EditorAutomationName));
@@ -1896,7 +2021,13 @@ internal sealed partial class WorkspaceViewModel : BindableBase, IDisposable
     private readonly Dictionary<string, Bases.BaseDocumentViewModel> _baseDocuments =
         new(StringComparer.Ordinal);
 
-    internal Bases.BaseDocumentViewModel BaseDocumentFor(string path)
+    /// <param name="seedRow">W7-7 PR 7 (#1252, R-9 over R-5), codex's
+    /// merge-delta check (finding 2): the rescan's re-seat seeds a document
+    /// constructed here with the retired document's reader row — its
+    /// identity, PR 3's row key (the note's path, and a task's place in it)
+    /// — so the surfaces' first publication reconciles its selection onto
+    /// that row, as a rename's retarget carries a board's (CD-32).</param>
+    internal Bases.BaseDocumentViewModel BaseDocumentFor(string path, bool load = true, BasesRow? seedRow = null)
     {
         string key = "file:" + path;
         if (!_baseDocuments.TryGetValue(key, out Bases.BaseDocumentViewModel? document))
@@ -1908,7 +2039,17 @@ internal sealed partial class WorkspaceViewModel : BindableBase, IDisposable
                 synchronousForTests: !_startInteractionBackgroundWork);
             _baseDocuments[key] = document;
             InstallBaseDocumentSeams(document);
-            document.Load();
+            if (seedRow is not null)
+            {
+                document.SelectedRow = seedRow;
+            }
+
+            // W7-7 PR 7 (codex PR 7 round 5, fix 3): a caller that loads the
+            // document itself (the rescan's re-seat) constructs it unloaded.
+            if (load)
+            {
+                document.Load();
+            }
         }
         return document;
     }
@@ -2810,21 +2951,74 @@ internal sealed partial class WorkspaceViewModel : BindableBase, IDisposable
             {
                 continue;
             }
-            bool respelled = !string.Equals(stored, tab.Path, StringComparison.Ordinal);
-            if (tab.IsDirty)
+            if (KeepsBufferOnReseat(tab, stored))
             {
-                if (respelled)
-                {
-                    tab.RetargetPath(stored);
-                }
                 continue;
             }
-            if (respelled)
+            if (!string.Equals(stored, tab.Path, StringComparison.Ordinal))
             {
                 tab.RetargetPath(stored);
             }
             tab.ReplaceItem(tab.Item);
         }
+    }
+
+    /// <summary>
+    /// W7-7 PR 7 (#1252, R-9; codex's final merge-delta check, finding 1):
+    /// the ONE rule both re-seats apply — a Slate-owned Created or Renamed
+    /// event's (<see cref="ReseatMissingTabs"/>) and a rescan's
+    /// (<c>ReseatMissingTabsAsync</c>) — before they re-seat a missing tab
+    /// whose file is back at <paramref name="stored"/>. True when the tab
+    /// keeps its buffer and its document:
+    /// <list type="bullet">
+    /// <item>while a save is admitted for the file — its case-folded path, the
+    /// chain every tab on the file shares (<see cref="WorkspaceSaveCoordinator.HasAdmittedSaveFor"/>)
+    /// — EVERY Markdown tab on it keeps them (contract 38 D-10). The save's
+    /// own create publishes its Created event before the save publishes, and
+    /// an edit made while the create ran — an undo back to the baseline
+    /// included, which leaves the tab clean — must stay an unsaved change
+    /// behind the created bytes. The file is back: a tab under another
+    /// spelling takes the stored one (#1077, a rename's retarget), and any
+    /// other clears its missing state in place
+    /// (<see cref="WorkspaceTabViewModel.MarkBackOnDisk"/>) — no replace, and
+    /// no epoch change, so the save still publishes to it;</item>
+    /// <item>a dirty tab keeps them as before (#1077, contract I8): under
+    /// another spelling it takes the stored one; under its own it stays
+    /// missing — its hashless save is a create onto an occupied path.</item>
+    /// </list>
+    /// False: the caller re-seats the tab.
+    /// </summary>
+    private bool KeepsBufferOnReseat(WorkspaceTabViewModel tab, string stored)
+    {
+        bool respelled = !string.Equals(stored, tab.Path, StringComparison.Ordinal);
+        if (tab.IsMarkdown
+            && (tab.HasPendingSaves
+                || _saves.HasAdmittedSaveFor(tab.Path)
+                || _saves.HasAdmittedSaveFor(stored)))
+        {
+            if (respelled)
+            {
+                tab.RetargetPath(stored);
+            }
+            else
+            {
+                tab.MarkBackOnDisk();
+            }
+
+            return true;
+        }
+
+        if (tab.IsDirty)
+        {
+            if (respelled)
+            {
+                tab.RetargetPath(stored);
+            }
+
+            return true;
+        }
+
+        return false;
     }
 
     public void InvalidatePath(string path)
@@ -2835,6 +3029,17 @@ internal sealed partial class WorkspaceViewModel : BindableBase, IDisposable
             return;
         }
 
+        InvalidatePath(invalidated, persist: true);
+    }
+
+    /// <summary>The per-path invalidation <see cref="InvalidatePath(string)"/>
+    /// and a rescan's page batch (<see cref="InvalidatePaths"/>) share: open
+    /// tabs on the path marked missing (their buffers kept), closed-tab
+    /// history and the Connections stack pruned. <paramref name="persist"/>
+    /// false leaves the command-state refresh and the workspace persist to
+    /// the batch, once per page.</summary>
+    private void InvalidatePath(string invalidated, bool persist)
+    {
         int affected = 0;
         foreach (WorkspaceTabViewModel tab in Groups.SelectMany(group => group.Tabs))
         {
@@ -2852,9 +3057,15 @@ internal sealed partial class WorkspaceViewModel : BindableBase, IDisposable
         // note that is gone; the pin and the note in view are kept (the
         // Error presentation, B1's delete route).
         Connections.Prune(invalidated);
-        RaiseCommandStates();
-        Persist();
-        if (affected > 0)
+        if (persist)
+        {
+            RaiseCommandStates();
+            Persist();
+        }
+
+        // W7-7 PR 7 (R-9): silent under a rescan's reconciliation, which
+        // speaks only its one core-rendered completion sentence.
+        if (affected > 0 && !IsReconcilingSilently)
         {
             // W0.5-3 residue: Windows missing-editor availability copy.
             _announce(new A11yEvent.HostComposed(
@@ -2956,6 +3167,13 @@ internal sealed partial class WorkspaceViewModel : BindableBase, IDisposable
         // released dashboard, a swept document) — their in-flight
         // bodies hold ephemeral handles just the same (codex round 3).
         basesDrains.AddRange(RetiredBasesDrains);
+        // W7-7 PR 7 (codex AR-18 review round 2, finding 4): every worker a
+        // rescan started — cancelled mid-re-sync by the close that brought
+        // us here — is drained to EMPTY, not bounded: no rescan-originated
+        // core call is ever in flight when the session is disposed. Every
+        // scheduler above has shut down, so none of these waits on this
+        // thread.
+        DrainRescanWork();
         basesDrains.RemoveAll(task => task.IsCompleted);
         if (basesDrains.Count > 0)
         {

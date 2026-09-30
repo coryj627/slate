@@ -175,11 +175,12 @@ internal static class SlateCommandRegistrar
 
     /// <summary>
     /// Mac's structural-mutation refusal, byte-identical to
-    /// <c>AppState.structuralMutationBusyReason</c>. Windows has no
-    /// structural-mutation gate of its own yet, so nothing here emits it —
-    /// it is listed as an availability reason so that a core-side or
-    /// future host-side refusal carrying this exact text is announced as
-    /// a rejection rather than as "{label} failed: {reason}".
+    /// <c>AppState.structuralMutationBusyReason</c>. W7-7 PR 7 (#1252;
+    /// codex PR 7 round 1, finding 11): Files Sidebar → Refresh gives it
+    /// while an import or a trash operation runs — the rescan cannot start
+    /// until they settle. It is listed as an availability reason so that
+    /// refusal, and a core-side one carrying this exact text, is announced
+    /// as a rejection rather than as "{label} failed: {reason}".
     /// </summary>
     internal const string StructuralMutationBusyReason =
         "Wait for the current file operation to finish.";
@@ -319,7 +320,14 @@ internal static class SlateCommandRegistrar
             return host.IsVaultOpen ? UnavailableReason : NoVaultReason;
         }
 
-        return command.CanExecute(null) ? null : UnavailableReason;
+        if (command.CanExecute(null))
+        {
+            return null;
+        }
+
+        // W7-7 PR 7 (finding 11): a command that knows why it is
+        // unavailable says so; the generic reason covers the rest.
+        return (command as IUnavailableReason)?.UnavailableReason ?? UnavailableReason;
     }
 
     /// <summary>
@@ -345,6 +353,9 @@ internal static class SlateCommandRegistrar
                     break;
                 case AsyncRelayCommand asyncRelay:
                     asyncRelay.RaiseCanExecuteChanged();
+                    break;
+                case ReasonedCommand reasoned:
+                    reasoned.RaiseCanExecuteChanged();
                     break;
                 default:
                     break;

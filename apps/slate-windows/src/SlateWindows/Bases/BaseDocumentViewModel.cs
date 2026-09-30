@@ -59,6 +59,7 @@ internal sealed class BaseDocumentViewModel : PanelWorkScheduler
     private BasesResultSet? _result;
     private (int ColumnIndex, bool Ascending)? _sortState;
     private CancelToken? _executeCancel;
+    private string? _loadedDefinitionHash;
 
     public BaseDocumentViewModel(
         VaultSession session,
@@ -117,6 +118,26 @@ internal sealed class BaseDocumentViewModel : PanelWorkScheduler
     }
 
     internal string? SavedQueryId => _savedQueryId;
+
+    /// <summary>W7-7 PR 7 (#1252, R-9; codex AR-18 review round 2, finding
+    /// 2): the content hash of the <c>.base</c> definition this document
+    /// shows — the hash core returns for the exact bytes its open parsed,
+    /// or the handle's definition hash after one of its own edits; never a
+    /// separate index read, which could see other bytes. A rescan's re-sync
+    /// reopens the document only when the index now differs; otherwise it
+    /// re-runs the view, keeping the quick filter and the transient sort.
+    /// Null for a saved query.</summary>
+    internal string? LoadedDefinitionHash => Volatile.Read(ref _loadedDefinitionHash);
+
+    /// <summary>Test seam (W7-7 PR 7 round 3): runs on the load's worker
+    /// immediately before the definition is opened.</summary>
+    internal Action? BeforeOpenForTests { get; set; }
+
+    private int _opensForTests;
+
+    /// <summary>Test seam (W7-7 PR 7 round 3): the definitions this document
+    /// has opened.</summary>
+    internal int OpensForTests => Volatile.Read(ref _opensForTests);
 
     /// <summary>Vault-relative path — the source identity for
     /// file-backed documents (empty for saved queries). Compared
@@ -444,6 +465,7 @@ internal sealed class BaseDocumentViewModel : PanelWorkScheduler
                             SlateSortYaml(column.Id, sort.Ascending)));
                     _session.BaseSetTransientSort(
                         handle, view, columnId: null, ascending: true);
+                    Volatile.Write(ref _loadedDefinitionHash, _session.BaseDefinitionHash(handle));
                     views = _session.BaseViews(handle);
                 }
             }
@@ -561,6 +583,7 @@ internal sealed class BaseDocumentViewModel : PanelWorkScheduler
                         return;
                     }
                     _session.BaseApplyEdits(handle, batch);
+                    Volatile.Write(ref _loadedDefinitionHash, _session.BaseDefinitionHash(handle));
                     views = _session.BaseViews(handle);
                 }
             }
@@ -736,11 +759,91 @@ internal sealed class BaseDocumentViewModel : PanelWorkScheduler
     /// every setter feeding a computed property must notify it).</summary>
     private void NotifyStateChanged() => OnPropertyChanged(nameof(ShowEmptyState));
 
+    /// <summary>
+    /// W7-7 PR 7 (#1252, round 28): <see cref="Load"/> — reopen the
+    /// source and re-run the active view on the document's worker — as a
+    /// Task that completes once that work has published on the dispatcher.
+    /// It faults with <see cref="BasePublicationFailedException"/> when the
+    /// document's last terminal outcome is an OPERATION failure — the open
+    /// failed, or the execute did (codex PR 7 round 5, the owner's
+    /// decision) — so a rescan counts it; a result that shows the file's
+    /// own truth (a fallback or erroring view) completes it. A shut-down
+    /// document completes at once. A rescan awaits it.
+    /// </summary>
+    /// <remarks>The rescan's <paramref name="cancellation"/> (the ruling on
+    /// codex PR 7 round 1, finding 6; round 2, finding 4): checked before
+    /// the open and linked into the open's own token
+    /// (<c>OpenBaseCancellable</c>) and <c>BaseExecute</c>'s; a result that
+    /// arrives after it is discarded, and the returned Task is cancelled at
+    /// once.</remarks>
+    internal Task LoadAsync(CancellationToken cancellation = default) =>
+        PublicationAsync(() => Load(cancellation), cancellation);
+
+    /// <summary>The awaited form of a load or a re-run: completes once
+    /// the work it started — and anything queued behind it — has run and
+    /// published, faulted when the last terminal outcome is an operation
+    /// failure, or cancelled with <paramref name="cancellation"/>.</summary>
+    /// <remarks>W7-7 PR 7 (codex PR 7 round 5, fix 1): it used to wait for
+    /// the next <see cref="ResultPublished"/>, which an execute failure
+    /// (published as Degraded) and a run declined on a closed handle never
+    /// raise — a view-less or unparseable base held the rescan, and every
+    /// later one, until the vault closed. The document's own drain barrier
+    /// ends it whatever its bodies did; the outcome is read after it.</remarks>
+    private Task PublicationAsync(Action start, CancellationToken cancellation)
+    {
+        if (IsShutDown)
+        {
+            return Task.CompletedTask;
+        }
+
+        if (cancellation.IsCancellationRequested)
+        {
+            return Task.FromCanceled(cancellation);
+        }
+
+        int before = Volatile.Read(ref _terminalOutcomes);
+        start();
+        return TerminalOutcomeAsync(before, cancellation);
+    }
+
+    private async Task TerminalOutcomeAsync(int before, CancellationToken cancellation)
+    {
+        await WhenPublishedAsync().WaitAsync(cancellation).ConfigureAwait(false);
+        // A run cancelled meanwhile is cancelled, whatever drained: a body
+        // that saw the cancellation published nothing.
+        cancellation.ThrowIfCancellationRequested();
+        // No terminal outcome since the start (superseded by an operation
+        // that publishes nothing, or refused by a shut-down document): the
+        // document still shows what it showed, which is not this run's
+        // failure.
+        if (Volatile.Read(ref _terminalOutcomes) != before
+            && Volatile.Read(ref _lastTerminalFailure) is { } failure)
+        {
+            throw new BasePublicationFailedException(failure);
+        }
+    }
+
+    // W7-7 PR 7 (codex PR 7 round 5, fix 1): every terminal outcome a body
+    // publishes on the dispatcher — a result, a failure, an execute failure
+    // published as Degraded, a sort's outcome, a run declined on a closed
+    // handle — counted, with the operation failure it was (null for a
+    // result, whatever state the result shows).
+    private int _terminalOutcomes;
+    private string? _lastTerminalFailure;
+
+    private void RecordTerminalOutcome(string? operationFailure)
+    {
+        Volatile.Write(ref _lastTerminalFailure, operationFailure);
+        _ = Interlocked.Increment(ref _terminalOutcomes);
+    }
+
     /// <summary>Open (or reopen) the source and execute the active
     /// view. The full-reload shape: close, open, views, execute — the
     /// mac `load` twin. Never announces by itself (INV-4); the
     /// explicit-refresh caller announces BaseRefreshed.</summary>
-    public void Load()
+    public void Load() => Load(CancellationToken.None);
+
+    private void Load(CancellationToken cancellation)
     {
         if (IsShutDown)
         {
@@ -758,10 +861,10 @@ internal sealed class BaseDocumentViewModel : PanelWorkScheduler
         // retained tuple would render a sort the rows don't have and
         // let SaveSortToView persist the fiction (red team round 1).
         SortState = null;
-        StartWork(() => LoadBody(generation));
+        StartWork(() => LoadBody(generation, cancellation));
     }
 
-    private void LoadBody(int generation)
+    private void LoadBody(int generation, CancellationToken cancellation)
     {
         ulong handle;
         BaseViewSummary[] views;
@@ -769,15 +872,45 @@ internal sealed class BaseDocumentViewModel : PanelWorkScheduler
         {
             lock (_ffiLock)
             {
-                if (Volatile.Read(ref _generation) != generation)
+                if (Volatile.Read(ref _generation) != generation
+                    || cancellation.IsCancellationRequested)
                 {
+                    // A cancelled rescan opens nothing (W7-7 PR 7).
                     return;
                 }
                 CloseHandleLocked();
-                handle = _savedQueryId is { } savedQueryId
-                    ? _session.OpenSavedQuery(savedQueryId)
-                    : _session.OpenBase(Path);
+                BeforeOpenForTests?.Invoke();
+                string? definitionHash;
+                if (_savedQueryId is { } savedQueryId)
+                {
+                    handle = _session.OpenSavedQuery(savedQueryId);
+                    definitionHash = null;
+                }
+                else
+                {
+                    // W7-7 PR 7 (codex AR-18 review round 2, findings 2
+                    // and 4): the open takes a token the rescan's
+                    // cancellation trips — and Shutdown, as it trips an
+                    // execute's — and returns the hash of the exact
+                    // definition it parsed. Declared after the token, the
+                    // link is disposed first.
+                    using var cancel = new CancelToken();
+                    _executeCancel = cancel;
+                    using CancellationTokenRegistration link = cancellation.Register(cancel.Cancel);
+                    try
+                    {
+                        OpenedBase opened = _session.OpenBaseCancellable(Path, cancel);
+                        handle = opened.Handle;
+                        definitionHash = opened.ContentHash;
+                    }
+                    finally
+                    {
+                        _executeCancel = null;
+                    }
+                }
                 _handle = handle;
+                _ = Interlocked.Increment(ref _opensForTests);
+                Volatile.Write(ref _loadedDefinitionHash, definitionHash);
                 views = _session.BaseViews(handle);
             }
         }
@@ -785,7 +918,8 @@ internal sealed class BaseDocumentViewModel : PanelWorkScheduler
         {
             Post(() =>
             {
-                if (Volatile.Read(ref _generation) != generation)
+                if (Volatile.Read(ref _generation) != generation
+                    || cancellation.IsCancellationRequested)
                 {
                     return;
                 }
@@ -796,7 +930,8 @@ internal sealed class BaseDocumentViewModel : PanelWorkScheduler
         }
         Post(() =>
         {
-            if (Volatile.Read(ref _generation) != generation)
+            if (Volatile.Read(ref _generation) != generation
+                || cancellation.IsCancellationRequested)
             {
                 return;
             }
@@ -811,11 +946,41 @@ internal sealed class BaseDocumentViewModel : PanelWorkScheduler
         // field here published the wrong "no executable views" banner
         // on every first asynchronous load (red team round 1 blocker —
         // masked by synchronous test mode, where Post runs inline).
-        ExecuteBody(generation, (uint)ClampedViewIndex(views.Length), freshViews: views);
+        ExecuteBody(
+            generation,
+            (uint)ClampedViewIndex(views.Length),
+            freshViews: views,
+            cancellation: cancellation);
     }
 
     private int ClampedViewIndex(int viewCount) =>
         _activeViewIndex < viewCount ? _activeViewIndex : 0;
+
+    /// <summary>W7-7 PR 7 (#1252, round 29): <see cref="Refresh"/> as a
+    /// Task that completes when the re-run's result publishes (an
+    /// in-flight load's, when one is running), whatever it is; a shut-down
+    /// document completes at once. The rescan's
+    /// <paramref name="cancellation"/> reaches <c>BaseExecute</c> and
+    /// discards a later result, as <see cref="LoadAsync"/>'s does.</summary>
+    /// <remarks>Codex PR 7 round 5, fix 1: a document left Failed — its
+    /// open failed, or a failed sort rollback closed its handle — has no
+    /// view to re-run (the re-run would decline on the closed handle), so
+    /// the rescan reopens it: it recovers when its file does, and a failing
+    /// reopen is counted.</remarks>
+    internal Task RefreshAsync(CancellationToken cancellation = default) =>
+        PublicationAsync(
+            () =>
+            {
+                if (State == BaseLoadState.Failed)
+                {
+                    Load(cancellation);
+                }
+                else
+                {
+                    Refresh(cancellation);
+                }
+            },
+            cancellation);
 
     /// <summary>Re-run the active view on the CURRENT handle — the
     /// post-write refresh entry (contract C9). Keeps previous rows on
@@ -826,14 +991,16 @@ internal sealed class BaseDocumentViewModel : PanelWorkScheduler
     /// stranding the document in Loading forever. The in-flight load
     /// executes against current data anyway, so the refresh is
     /// redundant there (the RefreshForFunnel guard's precedent).</summary>
-    public void Refresh()
+    public void Refresh() => Refresh(CancellationToken.None);
+
+    private void Refresh(CancellationToken cancellation)
     {
         if (IsShutDown || State == BaseLoadState.Loading)
         {
             return;
         }
         int generation = Interlocked.Increment(ref _generation);
-        StartWork(() => ExecuteBody(generation, (uint)_activeViewIndex));
+        StartWork(() => ExecuteBody(generation, (uint)_activeViewIndex, cancellation: cancellation));
     }
 
     /// <summary>Switch the active view (the mac selectView twin):
@@ -878,7 +1045,8 @@ internal sealed class BaseDocumentViewModel : PanelWorkScheduler
         int generation,
         uint view,
         bool announceQuickFilterCount = false,
-        IReadOnlyList<BaseViewSummary>? freshViews = null)
+        IReadOnlyList<BaseViewSummary>? freshViews = null,
+        CancellationToken cancellation = default)
     {
         // Captured once per body: the executed filter and the ACTIVE
         // flag must describe the same run (contract C5).
@@ -889,9 +1057,15 @@ internal sealed class BaseDocumentViewModel : PanelWorkScheduler
         {
             lock (_ffiLock)
             {
-                if (Volatile.Read(ref _generation) != generation
-                    || _handle is not { } handle)
+                // A superseded body publishes nothing: its successor does.
+                if (Volatile.Read(ref _generation) != generation)
                 {
+                    return;
+                }
+
+                if (_handle is not { } handle)
+                {
+                    PostDeclinedRun(generation, cancellation);
                     return;
                 }
                 IReadOnlyList<BaseViewSummary> viewList = freshViews ?? _views;
@@ -899,6 +1073,11 @@ internal sealed class BaseDocumentViewModel : PanelWorkScheduler
                 DrainPendingSortClearsLocked(handle);
                 using var cancel = new CancelToken();
                 _executeCancel = cancel;
+                // W7-7 PR 7: the rescan's cancellation trips this execute's
+                // token, as Shutdown does. Declared after the token, so it
+                // is disposed first — a running callback completes before
+                // the token goes away.
+                using CancellationTokenRegistration link = cancellation.Register(cancel.Cancel);
                 try
                 {
                     result = _session.BaseExecute(
@@ -914,13 +1093,18 @@ internal sealed class BaseDocumentViewModel : PanelWorkScheduler
         {
             Post(() =>
             {
-                if (Volatile.Read(ref _generation) != generation)
+                if (Volatile.Read(ref _generation) != generation
+                    || cancellation.IsCancellationRequested)
                 {
                     return;
                 }
                 // Previous rows and handle stay in place — a failed
                 // refresh must never blank the pane (contract C9).
-                PublishDegraded(BasePhrase.ExecuteFailed(exception));
+                string message = BasePhrase.ExecuteFailed(exception);
+                PublishDegraded(message);
+                // Codex PR 7 round 5, fix 1: a terminal outcome, and an
+                // operation failure.
+                RecordTerminalOutcome(message);
                 // The write-outcome continuations still run: each
                 // outcome describes its WRITE (which landed), and the
                 // retained rows are what the row-presence check reads
@@ -931,7 +1115,8 @@ internal sealed class BaseDocumentViewModel : PanelWorkScheduler
         }
         Post(() =>
         {
-            if (Volatile.Read(ref _generation) != generation)
+            if (Volatile.Read(ref _generation) != generation
+                || cancellation.IsCancellationRequested)
             {
                 return;
             }
@@ -945,6 +1130,20 @@ internal sealed class BaseDocumentViewModel : PanelWorkScheduler
             }
         });
     }
+
+    /// <summary>Codex PR 7 round 5, fix 1: a current run with no open
+    /// handle (the open failed, or a failed sort rollback closed it) has
+    /// nothing to execute — a terminal outcome all the same, and an
+    /// operation failure, so nothing that awaits it waits forever.</summary>
+    private void PostDeclinedRun(int generation, CancellationToken cancellation) =>
+        Post(() =>
+        {
+            if (Volatile.Read(ref _generation) == generation
+                && !cancellation.IsCancellationRequested)
+            {
+                RecordTerminalOutcome(StateMessage ?? "The base is not open.");
+            }
+        });
 
     /// <summary>The dock's follow-the-active-note context: threaded
     /// as base_execute's this_path so `this`-relative queries resolve
@@ -986,6 +1185,9 @@ internal sealed class BaseDocumentViewModel : PanelWorkScheduler
             State = BaseLoadState.Ready;
             StateMessage = null;
         }
+        // Codex PR 7 round 5, fix 1: the execute succeeded — whatever the
+        // view shows is the file's own truth, not an operation failure.
+        RecordTerminalOutcome(null);
         ResultPublished?.Invoke(this, EventArgs.Empty);
         SettleFunnelOutcomes(result);
     }
@@ -1002,6 +1204,7 @@ internal sealed class BaseDocumentViewModel : PanelWorkScheduler
         State = BaseLoadState.Failed;
         SortState = null;
         Result = null;
+        RecordTerminalOutcome(message);
         ResultPublished?.Invoke(this, EventArgs.Empty);
         // Terminal for this load: pending write outcomes still speak
         // (the writes landed; only the refresh died).
@@ -1122,7 +1325,9 @@ internal sealed class BaseDocumentViewModel : PanelWorkScheduler
                         {
                             return;
                         }
-                        PublishDegraded(BasePhrase.ExecuteFailed(executeFailure));
+                        string message = BasePhrase.ExecuteFailed(executeFailure);
+                        PublishDegraded(message);
+                        RecordTerminalOutcome(message);
                         // A rolled-back engine with a STALE previous
                         // tuple (column set shrank underneath it)
                         // cleared the engine sort — the published
@@ -1161,6 +1366,7 @@ internal sealed class BaseDocumentViewModel : PanelWorkScheduler
             }
             Result = result;
             SortState = (columnIndex, ascending);
+            RecordTerminalOutcome(null);
             ResultPublished?.Invoke(this, EventArgs.Empty);
             _announce(new A11yEvent.BaseSortedByColumn(column.Label, ascending));
             SettleFunnelOutcomes(result);
@@ -1299,3 +1505,9 @@ internal static class BasePhrase
     private static string Message(VaultException exception) =>
         exception.Message;
 }
+
+/// <summary>W7-7 PR 7 (codex PR 7 round 5, fix 1): an awaited base
+/// publication whose last terminal outcome was an operation failure — the
+/// open or the execute failed. A rescan counts it; the log records its
+/// type only.</summary>
+internal sealed class BasePublicationFailedException(string message) : Exception(message);

@@ -201,14 +201,30 @@ public sealed class QuickSwitcherRankCoordinatorTests
             first.Open();
             Task firstCompletion = first.RankCompletion;
             Assert.True(firstStarted.Wait(TimeSpan.FromSeconds(5)));
-            first.Dispose();
 
+            // W7-7 PR 7 (codex PR 7 round 3, finding 5): disposing the first
+            // switcher WAITS for its admitted native rank to return and release
+            // the process-wide lane — nothing a closed vault started outlives it.
+            var clock = System.Diagnostics.Stopwatch.StartNew();
+            long releasedAt = 0;
+            _ = Task.Run(async () =>
+            {
+                await Task.Delay(300);
+                Volatile.Write(ref releasedAt, clock.ElapsedMilliseconds);
+                releaseFirst.Set();
+            });
+            first.Dispose();
+            long disposedAt = clock.ElapsedMilliseconds;
+            long released = Volatile.Read(ref releasedAt);
+            Assert.True(
+                released > 0 && disposedAt >= released,
+                $"dispose returned at {disposedAt} ms, before the admitted rank returned at {released} ms");
+
+            // The lane is free: the next switcher ranks at once — still one
+            // native rank at a time.
             second.Open();
             Task secondCompletion = second.RankCompletion;
-            Assert.False(secondStarted.Wait(TimeSpan.FromMilliseconds(200)));
-            Assert.Equal(1, Volatile.Read(ref maximum));
-
-            releaseFirst.Set();
+            Assert.True(secondStarted.Wait(TimeSpan.FromSeconds(5)));
             await Task.WhenAll(firstCompletion, secondCompletion)
                 .WaitAsync(TimeSpan.FromSeconds(5));
             context.Drain();

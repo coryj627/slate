@@ -1156,11 +1156,24 @@ internal sealed partial class WorkspaceViewModel
     /// call sites from the source and asserts this enumeration equals
     /// them in both directions.
     /// </remarks>
-    private void AttachTabDocumentsIfNeeded(WorkspaceTabViewModel tab)
+    /// <param name="load">False (W7-7 PR 7, codex PR 7 round 5 fix 3; the
+    /// rescan's re-seat through <c>ReplaceTabItem</c> alone): a board or
+    /// file-backed base the registry does not hold is constructed without
+    /// its load — its caller loads it.</param>
+    /// <param name="canvasSeed">The re-seat's too: a board constructed here
+    /// starts from the retired board's selection, marks and projection (the
+    /// CD-32 retarget's seed).</param>
+    /// <param name="baseSeed">The re-seat's too: a file-backed base
+    /// constructed here starts from the retired document's reader row.</param>
+    private void AttachTabDocumentsIfNeeded(
+        WorkspaceTabViewModel tab,
+        bool load = true,
+        SlateWindows.Canvas.CanvasSelection? canvasSeed = null,
+        BasesRow? baseSeed = null)
     {
         if (tab.IsBase)
         {
-            tab.AttachBaseDocument(BaseDocumentFor(tab.Path));
+            tab.AttachBaseDocument(BaseDocumentFor(tab.Path, load, baseSeed));
         }
         else if (tab.IsSavedQueryTab && tab.Item.Id is { Length: > 0 } id)
         {
@@ -1174,7 +1187,7 @@ internal sealed partial class WorkspaceViewModel
         }
         else if (tab.IsCanvas)
         {
-            tab.AttachCanvasDocument(CanvasDocumentFor(tab.Path));
+            tab.AttachCanvasDocument(CanvasDocumentFor(tab.Path, seedSelection: canvasSeed, load: load));
         }
         else if (tab.IsGraph)
         {
@@ -1743,7 +1756,9 @@ internal sealed partial class WorkspaceViewModel
     internal void NotifyBasesOfVaultChange(string path)
     {
         bool isBaseFile = path.EndsWith(".base", StringComparison.OrdinalIgnoreCase);
-        if (!isBaseFile && !path.EndsWith(".md", StringComparison.OrdinalIgnoreCase))
+        // W7-7 PR 7 (round 27): Markdown is core's classification — all
+        // four extensions its index marks is_markdown, not `.md` alone.
+        if (!isBaseFile && !CoreDocumentClassification.IsMarkdown(path))
         {
             return;
         }

@@ -293,12 +293,25 @@ internal sealed partial class WorkspaceViewModel
     /// construction site — it needs the same attach funnel as
     /// AddTab/restore/duplicate or a .base opened into the tab ships a dead
     /// pane (red team round 1 blocker). Attach before the release sweep so
-    /// a shared document is never shut down between the two steps.</summary>
-    private void ReplaceTabItem(WorkspaceTabViewModel tab, WorkspaceItemState item)
+    /// a shared document is never shut down between the two steps.
+    /// <paramref name="load"/> false (W7-7 PR 7, codex PR 7 round 5 fix 3:
+    /// the rescan's re-seat alone) constructs a missing board or base
+    /// without loading it — the caller's own, awaited load is its one
+    /// load. <paramref name="canvasSeed"/> (the re-seat's too) seeds a
+    /// board constructed here with the retired board's selection, marks
+    /// and projection, as a rename's retarget does (CD-32), and
+    /// <paramref name="baseSeed"/> a base constructed here with the retired
+    /// document's reader row (codex's merge-delta check, finding 2).</summary>
+    private void ReplaceTabItem(
+        WorkspaceTabViewModel tab,
+        WorkspaceItemState item,
+        bool load = true,
+        SlateWindows.Canvas.CanvasSelection? canvasSeed = null,
+        BasesRow? baseSeed = null)
     {
         WorkspaceTabViewModel? peer = FindSamePathTab(item, excluding: tab);
         tab.ReplaceItem(item);
-        AttachTabDocumentsIfNeeded(tab);
+        AttachTabDocumentsIfNeeded(tab, load, canvasSeed, baseSeed);
         ReleaseUnreferencedBaseDocuments();
         ReleaseUnreferencedDashboards();
         ReleaseUnreferencedCanvasDocuments();
@@ -340,7 +353,8 @@ internal sealed partial class WorkspaceViewModel
             ActivateReadingTag,
             _announce,
             EditorPreferences,
-            startInteractionBackgroundWork: _startInteractionBackgroundWork);
+            startInteractionBackgroundWork: _startInteractionBackgroundWork,
+            interactionBackgroundFaultForTests: InteractionBackgroundFaultForTests);
         tab.TaskRepairs = _taskIndexRepairs;
         tab.SaveCoordinator = _saves;
         AttachTabDocumentsIfNeeded(tab);
