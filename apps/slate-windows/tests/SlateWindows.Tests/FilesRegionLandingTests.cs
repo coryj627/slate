@@ -29,7 +29,7 @@ namespace SlateWindows.Tests;
 /// so an arrow that leaves the region lands somewhere observable. Keys are
 /// real presses through the input manager.
 /// </summary>
-public sealed class FilesRegionLandingTests
+public sealed partial class FilesRegionLandingTests
 {
     /// <summary>The owner's focus-without-select: with nothing selected the
     /// landing is the tree's first row, focused WITHOUT selecting it — it
@@ -533,7 +533,7 @@ public sealed class FilesRegionLandingTests
     /// lifted into a shown window of its own. No Application and no shown
     /// MainWindow (the MoveToFocusTests fixture's reasons): its constructor
     /// still builds the shipped XAML and wires the pane's bindings.</summary>
-    private sealed class Host : IDisposable
+    private sealed partial class Host : IDisposable
     {
         private readonly FixtureVault _fixture = FixtureVault.Create(3, "files-landing");
         private readonly Func<bool> _priorOverlayProbe = CanvasSurfaceView.ShellOverlayIsOpen;
