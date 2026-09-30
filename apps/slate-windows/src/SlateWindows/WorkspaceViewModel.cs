@@ -611,6 +611,18 @@ internal sealed partial class WorkspaceTabViewModel : BindableBase, IDisposable
         NotifyItemChanged();
     }
 
+    /// <summary>W7-7 PR 7 (#1252, R-9; codex's final merge-delta check,
+    /// finding 1): the tab's file is back under the spelling the tab names
+    /// while a save is admitted for it — the save's own create, say. The tab
+    /// stops reporting the file missing and keeps its buffer, its document
+    /// and its epochs, so the save still publishes to it (contract 38 D-10):
+    /// no replace, and no epoch change that would retire the publication.</summary>
+    internal void MarkBackOnDisk()
+    {
+        IsMissingFromDisk = false;
+        Status = string.Empty;
+    }
+
     /// <summary>Registry-item rename (saved queries, dashboards): the
     /// tab keeps its identity (Id) and retitles.</summary>
     public void RetargetName(string name)
@@ -2927,21 +2939,74 @@ internal sealed partial class WorkspaceViewModel : BindableBase, IDisposable
             {
                 continue;
             }
-            bool respelled = !string.Equals(stored, tab.Path, StringComparison.Ordinal);
-            if (tab.IsDirty)
+            if (KeepsBufferOnReseat(tab, stored))
             {
-                if (respelled)
-                {
-                    tab.RetargetPath(stored);
-                }
                 continue;
             }
-            if (respelled)
+            if (!string.Equals(stored, tab.Path, StringComparison.Ordinal))
             {
                 tab.RetargetPath(stored);
             }
             tab.ReplaceItem(tab.Item);
         }
+    }
+
+    /// <summary>
+    /// W7-7 PR 7 (#1252, R-9; codex's final merge-delta check, finding 1):
+    /// the ONE rule both re-seats apply — a Slate-owned Created or Renamed
+    /// event's (<see cref="ReseatMissingTabs"/>) and a rescan's
+    /// (<c>ReseatMissingTabsAsync</c>) — before they re-seat a missing tab
+    /// whose file is back at <paramref name="stored"/>. True when the tab
+    /// keeps its buffer and its document:
+    /// <list type="bullet">
+    /// <item>while a save is admitted for the file — its case-folded path, the
+    /// chain every tab on the file shares (<see cref="WorkspaceSaveCoordinator.HasAdmittedSaveFor"/>)
+    /// — EVERY Markdown tab on it keeps them (contract 38 D-10). The save's
+    /// own create publishes its Created event before the save publishes, and
+    /// an edit made while the create ran — an undo back to the baseline
+    /// included, which leaves the tab clean — must stay an unsaved change
+    /// behind the created bytes. The file is back: a tab under another
+    /// spelling takes the stored one (#1077, a rename's retarget), and any
+    /// other clears its missing state in place
+    /// (<see cref="WorkspaceTabViewModel.MarkBackOnDisk"/>) — no replace, and
+    /// no epoch change, so the save still publishes to it;</item>
+    /// <item>a dirty tab keeps them as before (#1077, contract I8): under
+    /// another spelling it takes the stored one; under its own it stays
+    /// missing — its hashless save is a create onto an occupied path.</item>
+    /// </list>
+    /// False: the caller re-seats the tab.
+    /// </summary>
+    private bool KeepsBufferOnReseat(WorkspaceTabViewModel tab, string stored)
+    {
+        bool respelled = !string.Equals(stored, tab.Path, StringComparison.Ordinal);
+        if (tab.IsMarkdown
+            && (tab.HasPendingSaves
+                || _saves.HasAdmittedSaveFor(tab.Path)
+                || _saves.HasAdmittedSaveFor(stored)))
+        {
+            if (respelled)
+            {
+                tab.RetargetPath(stored);
+            }
+            else
+            {
+                tab.MarkBackOnDisk();
+            }
+
+            return true;
+        }
+
+        if (tab.IsDirty)
+        {
+            if (respelled)
+            {
+                tab.RetargetPath(stored);
+            }
+
+            return true;
+        }
+
+        return false;
     }
 
     public void InvalidatePath(string path)

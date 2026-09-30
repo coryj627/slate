@@ -382,21 +382,17 @@ internal sealed partial class WorkspaceViewModel
                 continue;
             }
 
-            bool respelled = !string.Equals(stored, tab.Path, StringComparison.Ordinal);
-            // The merge with follow-up B (#1280): a Markdown tab with an
-            // admitted save — its write off the dispatcher — is re-seated as
-            // a dirty one is: it takes the stored spelling and keeps its
-            // buffer and its document, so the save publishes to the tab it
-            // was admitted for.
-            if (tab.IsDirty || (tab.IsMarkdown && tab.HasPendingSaves))
+            // The merge with follow-up B (#1280), and codex's final
+            // merge-delta check (finding 1): the event path's rule, the one
+            // helper both re-seats call — every Markdown tab on a file with
+            // an admitted save, and every dirty tab, keeps its buffer and its
+            // document, so the save publishes to the tab it was admitted for.
+            if (KeepsBufferOnReseat(tab, stored))
             {
-                if (respelled)
-                {
-                    tab.RetargetPath(stored);
-                }
-
                 continue;
             }
+
+            bool respelled = !string.Equals(stored, tab.Path, StringComparison.Ordinal);
 
             if (!tab.IsMarkdown)
             {
