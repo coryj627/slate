@@ -22,7 +22,9 @@ public sealed partial class ShellAccessibilityTests
     /// real keys: Down through a folder row and two file rows keeps focus
     /// on each row while the editor shows the file in the one transient
     /// tab; Space toggles the focused row's batch check box (the row's
-    /// ItemStatus reports it, focus stays); Ctrl+Enter gives the note its
+    /// ItemStatus reports it, focus stays, and PR 1's desktop listener
+    /// (#1244) hears core's "1 item selected", then "No items selected");
+    /// Ctrl+Enter gives the note its
     /// own tab, so the next arrow shows its note in a new transient tab;
     /// Enter moves focus into the note; Enter and Ctrl+Enter open from the
     /// filter results, the tree and the dual pane; the Tags tree filters
@@ -58,6 +60,10 @@ public sealed partial class ShellAccessibilityTests
             start.ArgumentList.Add(vault);
             start.Environment["SLATE_CENSUS_INSTANCE_ID"] = "files-tree-" + Guid.NewGuid().ToString("N");
             start.Environment["SLATE_LOG_DIR"] = logs;
+            // The announcement dispatcher's R-1 diagnostics: the launch's
+            // settled line the batch legs wait for, and the listener's failure
+            // message.
+            start.Environment["SLATE_UIA_DIAGNOSTICS"] = "1";
             process = Process.Start(start) ?? throw new Xunit.Sdk.XunitException("Slate did not start.");
             if (!HasInteractiveDesktop(process, "files-tree")) { return; }
             using var automation = new UIA3Automation();
@@ -110,14 +116,53 @@ public sealed partial class ShellAccessibilityTests
             Assert.Equal(1, TabCount(window, automation));
 
             // Space checks the focused row for batch actions — the row
-            // reports it, the check box follows, focus stays — and again
-            // unchecks it.
+            // reports it, the check box follows, focus stays, and a screen
+            // reader hears the count (spec §3.4: core's "1 item selected",
+            // through PR 1's desktop listener, #1244) — and again unchecks
+            // it: "No items selected".
             AutomationElement noteRow = WaitForTreeItemStartingWith(tree, automation, "note.md");
-            PressKey(VirtualKeyShort.SPACE);
-            AssertBatchChecked(automation, noteRow, true);
-            AssertFocusStaysOnRow(automation, tree, "note.md", "Space moved focus off the note.md row.");
-            PressKey(VirtualKeyShort.SPACE);
-            AssertBatchChecked(automation, noteRow, false);
+            string logFile = Path.Combine(logs, "slate-windows.log");
+            var batchHeard = new System.Collections.Concurrent.ConcurrentQueue<ReceivedNotification>();
+            using DesktopNotificationListener batchListener = ListenOnTheDesktop(automation, batchHeard);
+            ListenerOutcome batchOutcome = ListenerOutcome.Failed;
+            try
+            {
+                // The first witnessed step: once the launch has settled
+                // (contract 40's wave-close evidence), then a quiet second.
+                int checkMark = LaunchSettledMark(batchHeard, process.Id, logFile);
+                PressKey(VirtualKeyShort.SPACE);
+                AssertBatchChecked(automation, noteRow, true);
+                AssertFocusStaysOnRow(automation, tree, "note.md", "Space moved focus off the note.md row.");
+                AwaitHeardSince(
+                    batchHeard,
+                    process.Id,
+                    checkMark,
+                    [uniffi.slate_uniffi.SlateUniffiMethods.A11yRender(new uniffi.slate_uniffi.A11yEvent.ItemsSelected(1))],
+                    TimeSpan.FromSeconds(10),
+                    logFile);
+                int uncheckMark = QuietMark(batchHeard, process.Id);
+                PressKey(VirtualKeyShort.SPACE);
+                AssertBatchChecked(automation, noteRow, false);
+                AwaitHeardSince(
+                    batchHeard,
+                    process.Id,
+                    uncheckMark,
+                    [uniffi.slate_uniffi.SlateUniffiMethods.A11yRender(new uniffi.slate_uniffi.A11yEvent.NoItemsSelected())],
+                    TimeSpan.FromSeconds(10),
+                    logFile);
+                batchOutcome = ListenerOutcome.Completed;
+            }
+            finally
+            {
+                WriteAnnouncementEvidence(
+                    "files-tree-batch",
+                    RegisteredAfterTheWindow,
+                    batchOutcome,
+                    HeardFrom(batchHeard, process.Id),
+                    batchHeard.Count(notification => notification.ProcessId != process.Id),
+                    AnnouncementDiagnostics(logFile));
+            }
+            batchListener.Dispose();
 
             // Ctrl+Enter gives the note shown in the transient tab a tab of
             // its own (focus moves into it); back on the row, the next arrow

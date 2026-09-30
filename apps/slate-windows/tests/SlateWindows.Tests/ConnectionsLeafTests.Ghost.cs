@@ -218,7 +218,7 @@ public sealed partial class ConnectionsLeafTests
 
             leaf.Execute(GraphRowAction.Reveal, note);
 
-            Assert.Equal([note.Path], revealed);
+            Assert.Equal([note.Path!], revealed);
             Assert.Null(host.Workspace.GraphDocument);
             Assert.Equal(Hub, host.Workspace.ActiveGroup.ActiveTab!.Path);
         });

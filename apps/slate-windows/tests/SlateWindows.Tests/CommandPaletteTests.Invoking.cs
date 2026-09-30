@@ -193,6 +193,104 @@ public sealed partial class CommandPaletteTests
     });
 
     /// <summary>
+    /// P10 as amended at the W7-7 wave close: the count is spoken only after
+    /// all queued input has been dispatched. Here the window runs out and the
+    /// count is posted; then the user's next key is queued through the real
+    /// dispatcher at input priority, as a key the user had already typed, and
+    /// only then does the dispatcher run. A count posted at Normal priority
+    /// outranks that key and is spoken first — the defect the wave close found
+    /// under NVDA; posted below input, the key runs first. The next letter
+    /// reopens the window, so the count of the query it replaced is never
+    /// spoken; Escape, or an Enter whose command succeeds, closes the palette,
+    /// and the count says nothing afterwards; an Enter whose command fails
+    /// leaves the count owed, spoken once, after the failure.
+    /// </summary>
+    [Theory]
+    [InlineData("the next letter")]
+    [InlineData("Escape")]
+    [InlineData("Enter, the command succeeds")]
+    [InlineData("Enter, the command fails")]
+    public void TheCountWaitsForTheKeysAlreadyQueuedAheadOfIt(string key) => RunSta(() =>
+    {
+        LaneHost host = LaneHost.Opened();
+        CommandPaletteViewModel palette = host.Palette;
+        List<TaskCompletionSource> windows = host.HoldTheCountWindows();
+        palette.Query = "q";
+        Assert.True(
+            PumpedDispatcher.PumpUntil(() => !palette.IsRankPending, TimeSpan.FromSeconds(10)),
+            "the rank never published");
+        PumpedDispatcher.Drain();
+        Assert.Equal("slate.nav.quickOpen", palette.SelectedId);
+        host.Harness.Announcements.Clear();
+        if (key == "Enter, the command fails")
+        {
+            host.Harness.Source.InvokeFailures["slate.nav.quickOpen"] =
+                new CommandException.ActionFailed("Disk is full.");
+        }
+
+        // The window runs out and the count is posted — the posting finishes
+        // off this thread, and nothing here pumps, so it is only queued.
+        Assert.Single(windows).SetResult();
+        Assert.True(
+            palette.FilterCountCompletion.Wait(TimeSpan.FromSeconds(10)),
+            "the count was never posted");
+        Assert.Empty(host.Harness.Announcements);
+
+        // The key the user already typed, queued behind it at input priority.
+        Action typed = key switch
+        {
+            "the next letter" => () => palette.Query = "qu",
+            "Escape" => () => palette.Dismiss(),
+            _ => () => palette.InvokeSelected(),
+        };
+        _ = Dispatcher.CurrentDispatcher.BeginInvoke(DispatcherPriority.Input, typed);
+        PumpedDispatcher.Drain();
+
+        if (key is "Escape" or "Enter, the command succeeds")
+        {
+            Assert.False(palette.IsOpen);
+            Assert.Empty(host.Harness.Announcements);
+            return;
+        }
+
+        if (key == "the next letter")
+        {
+            Assert.Empty(host.Harness.Announcements);
+            Assert.Equal(2, windows.Count);
+            Assert.True(
+                PumpedDispatcher.PumpUntil(() => !palette.IsRankPending, TimeSpan.FromSeconds(10)),
+                "the rank for \"qu\" never published");
+            windows[1].SetResult();
+            PumpedDispatcher.PumpUntilDrained(palette.FilterCountCompletion);
+            PumpedDispatcher.Drain();
+            A11yEvent.PaletteFilterCount spoken = Assert.IsType<A11yEvent.PaletteFilterCount>(
+                Assert.Single(host.Harness.Announcements));
+            Assert.Equal((1u, "qu"), (spoken.Count, spoken.Query));
+            return;
+        }
+
+        // The failure is the first thing said: the posted count did not run
+        // ahead of the Enter.
+        Assert.True(palette.IsOpen, "a failure leaves the palette open (P9)");
+        Assert.IsType<A11yEvent.PaletteCommandFailed>(Assert.Single(host.Harness.Announcements));
+        Assert.Equal(2, windows.Count);
+        Assert.True(
+            PumpedDispatcher.PumpUntil(() => !palette.IsRankPending, TimeSpan.FromSeconds(10)),
+            "the failure never ranked the current query again");
+        windows[1].SetResult();
+        PumpedDispatcher.PumpUntilDrained(palette.FilterCountCompletion);
+        PumpedDispatcher.Drain();
+        Assert.Collection(
+            host.Harness.Announcements,
+            announced => Assert.IsType<A11yEvent.PaletteCommandFailed>(announced),
+            announced =>
+            {
+                var count = Assert.IsType<A11yEvent.PaletteFilterCount>(announced);
+                Assert.Equal((1u, "q"), (count.Count, count.Query));
+            });
+    });
+
+    /// <summary>
     /// Keys and the pointer can reach the palette inside a loop that is not
     /// modal to the shell. While the command runs they are refused — a
     /// selection move (the palette's selection is re-asserted to the list),

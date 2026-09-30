@@ -323,8 +323,17 @@ internal sealed class CommandPaletteViewModel : BindableBase
         _rank = rank ?? SlateUniffiMethods.PaletteSections;
         _diagnostics = diagnostics ?? HostLog.Write;
         _uiContext = SynchronizationContext.Current;
+        _countDispatcher = _uiContext is System.Windows.Threading.DispatcherSynchronizationContext
+            ? System.Windows.Threading.Dispatcher.CurrentDispatcher
+            : null;
         _ownerThreadId = Environment.CurrentManagedThreadId;
     }
+
+    /// <summary>P10 (amended at the W7-7 wave close): the dispatcher a count is
+    /// spoken on — at Background priority, below input, so the count is
+    /// spoken only after all queued input has been dispatched. Null without a
+    /// dispatcher context (the facts' synchronous or custom contexts).</summary>
+    private readonly System.Windows.Threading.Dispatcher? _countDispatcher;
 
     /// <summary>The open-time snapshot (contract P4): the command list and the
     /// recents, loaded together off the UI thread.</summary>
@@ -1423,7 +1432,14 @@ internal sealed class CommandPaletteViewModel : BindableBase
     /// <summary>The search overlay's shape: wait out what is left of the
     /// window — nothing, when it elapsed before the rows published — then
     /// post back to the owner context; a window a later keystroke
-    /// cancelled, or a palette that closed meanwhile, says nothing.</summary>
+    /// cancelled, or a palette that closed meanwhile, says nothing.
+    /// P10 as amended at the W7-7 wave close: on the dispatcher the post is at
+    /// Background priority, below input. A Normal post is dispatched ahead of
+    /// OS input the user has already typed, so under a publication that
+    /// settles past the window (about 200 ms under NVDA) the count of a query
+    /// the user had already typed past was spoken; below input, a keystroke
+    /// already typed reopens the window first, and an Escape or Enter already
+    /// typed closes the palette first.</summary>
     private async Task SpeakAfterWindowAsync(A11yEvent count, CountWindow window)
     {
         try
@@ -1441,6 +1457,10 @@ internal sealed class CommandPaletteViewModel : BindableBase
         if (_uiContext is null)
         {
             Speak();
+        }
+        else if (_countDispatcher is not null)
+        {
+            _ = _countDispatcher.BeginInvoke(System.Windows.Threading.DispatcherPriority.Background, Speak);
         }
         else
         {

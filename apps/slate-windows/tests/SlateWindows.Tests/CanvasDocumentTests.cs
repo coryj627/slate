@@ -964,7 +964,7 @@ public sealed class CanvasDocumentTests : IDisposable
 
         Assert.Contains("question", document.AppliedPublication!.MarkedIntent);
         Assert.Same(sheet, workspace.CanvasPromptSheet);
-        Assert.Equal(["question"], sheet.Choices.Select(c => c.Value).ToArray());
+        Assert.Equal(["question"], sheet.Choices.Select(c => c.Value!).ToArray());
     }
 
     /// <summary>§G TG-2 (G4, IG-10): opening reads STORE emptiness —
@@ -1007,14 +1007,14 @@ public sealed class CanvasDocumentTests : IDisposable
 
         document.OpenMarksList(tab);
         var sheet = Assert.IsType<CanvasMarksListPrompt>(workspace.CanvasPromptSheet);
-        Assert.Equal(["question", "evidence"], sheet.Choices.Select(c => c.Value).ToArray());
+        Assert.Equal(["question", "evidence"], sheet.Choices.Select(c => c.Value!).ToArray());
         Assert.All(sheet.Choices, c => Assert.EndsWith(", marked", c.Name, StringComparison.Ordinal));
         Assert.Equal("Marked Cards (2)", sheet.Title);
         Assert.Same(tab, sheet.Owner);
 
         _ = document.Unmark("question");
         Assert.Same(sheet, workspace.CanvasPromptSheet);
-        Assert.Equal(["evidence"], sheet.Choices.Select(c => c.Value).ToArray());
+        Assert.Equal(["evidence"], sheet.Choices.Select(c => c.Value!).ToArray());
         Assert.Equal("evidence", sheet.SelectedChoice?.Value);
         Assert.Equal("Marked Cards (1)", sheet.Title);
 
@@ -1082,7 +1082,7 @@ public sealed class CanvasDocumentTests : IDisposable
         workspace.DeleteOnCanvasPrompt();
 
         Assert.Same(sheet, workspace.CanvasPromptSheet);
-        Assert.Equal(["evidence"], sheet.Choices.Select(c => c.Value).ToArray());
+        Assert.Equal(["evidence"], sheet.Choices.Select(c => c.Value!).ToArray());
         Assert.Equal("evidence", sheet.SelectedChoice?.Value);
         Assert.Contains(
             _announced,
@@ -5526,7 +5526,7 @@ public sealed class CanvasDocumentTests : IDisposable
         document.ShowSurface(CanvasSurfaceKind.Visual);
         host.UpdateLayout();
         PumpUntil(() => (Children()?.Count ?? 0) > 0);
-        Assert.NotEmpty(Children());
+        Assert.NotEmpty(Children() ?? []);
         document.Shutdown();
     });
 

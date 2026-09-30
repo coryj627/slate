@@ -82,6 +82,9 @@ public sealed partial class ShellAccessibilityTests
         var received = new ConcurrentQueue<ReceivedNotification>();
         var clock = Stopwatch.StartNew();
         Process? process = null;
+        // #1326: the evidence records what happened, never a capture that did not.
+        string registered = NotRegistered;
+        ListenerOutcome outcome = ListenerOutcome.Aborted;
         try
         {
             using var automation = new UIA3Automation();
@@ -90,6 +93,7 @@ public sealed partial class ShellAccessibilityTests
             using var listener = new DesktopNotificationListener(automation, (processId, automationId, kind, processing, displayString, activityId) =>
                 received.Enqueue(new ReceivedNotification(
                     processId, automationId, kind, processing, displayString, activityId, clock.ElapsedMilliseconds)));
+            (registered, outcome) = (RegisteredBeforeLaunch, ListenerOutcome.Failed);
 
             string vaultRoot = Path.Combine(testRoot, vaultName);
             string logDirectory = Path.Combine(testRoot, "logs");
@@ -99,6 +103,8 @@ public sealed partial class ShellAccessibilityTests
             process = StartShellProcess(vaultRoot, logDirectory, LaunchQueueMilliseconds);
             if (!HasInteractiveDesktop(process, "announcements"))
             {
+                // A startup smoke: no window, nothing a listener could hear.
+                outcome = ListenerOutcome.Aborted;
                 return;
             }
 
@@ -158,6 +164,13 @@ public sealed partial class ShellAccessibilityTests
             Assert.True(
                 drains.Count(drain => drain.Contains("drained=", StringComparison.Ordinal)) == 1,
                 "The queued launch lines did not log exactly one drain: " + string.Join(" | ", drains));
+            // #1326: the launch settled once, as the switch forces — its lines
+            // queued and replayed whole, none lost.
+            string settled = Assert.Single(DiagnosticLines(logFile, "AnnouncementLaunchSettled"));
+            Assert.True(
+                settled.Contains("(outcome=drained,", StringComparison.Ordinal)
+                    && settled.Contains(", lost=0,", StringComparison.Ordinal),
+                "The queued launch did not settle as drained with nothing lost: " + settled);
 
             // The exact tuples: kind Other, the priority's processing (contract
             // 38 D-1 — every line here is Medium, All), and each its own
@@ -171,19 +184,20 @@ public sealed partial class ShellAccessibilityTests
                     NotificationProcessing.All,
                     $"slate-accessibility-announcement.{index + 1}")),
                 fromSlate.Select(notification => (notification.Kind, notification.Processing, notification.ActivityId)));
+            outcome = ListenerOutcome.Completed;
         }
         finally
         {
             int slateId = process?.Id ?? -1;
             WriteAnnouncementEvidence(
                 "launch",
+                registered,
+                outcome,
                 [.. received.Where(notification => notification.ProcessId == slateId)],
                 received.Count(notification => notification.ProcessId != slateId),
                 [
                     .. attempts,
-                    .. DiagnosticLines(logFile, "AnnouncementListenerState"),
-                    .. DiagnosticLines(logFile, "AnnouncementSource"),
-                    .. DiagnosticLines(logFile, "AnnouncementReplay"),
+                    .. AnnouncementDiagnostics(logFile),
                 ]);
             if (process is not null)
             {
@@ -219,18 +233,18 @@ public sealed partial class ShellAccessibilityTests
     /// <c>EmbedPreviewShown</c> for what the fixture's embed resolves to —
     /// the note <c>Folder/child.md</c>, which core titles with
     /// <c>resolved_embed_title</c> — through the binding here, never a
-    /// transcription. Slate must have raised exactly that line, once, as
-    /// kind Other and ImportantMostRecent (core's High; contract 38 D-1)
-    /// with the shared activity ID a superseding line keeps (D-1). Returns
-    /// the rendered text.
+    /// transcription. Since <paramref name="mark"/>, Slate must have raised
+    /// exactly that line, once, as kind Other and ImportantMostRecent (core's
+    /// High; contract 38 D-1) with the shared activity ID a superseding line
+    /// keeps (D-1). Returns the rendered text.
     /// </summary>
     private static string AssertHeardEmbedPreviewShown(
-        ConcurrentQueue<ReceivedNotification> heard, int processId, string logFile)
+        ConcurrentQueue<ReceivedNotification> heard, int processId, int mark, string logFile)
     {
         RenderedAnnouncement shown = SlateUniffiMethods.A11yRender(
             new A11yEvent.EmbedPreviewShown("Folder/child", new ResolvedEmbed.Note("Folder/child.md")));
         Assert.Equal(A11yPriority.High, shown.Priority);
-        ReceivedNotification[] FromSlate() => [.. heard.Where(notification => notification.ProcessId == processId)];
+        ReceivedNotification[] FromSlate() => [.. HeardFrom(heard, processId).Skip(mark)];
         string[] HeardFromSlate() => [.. FromSlate().Select(notification => notification.DisplayString)];
         AwaitHeard(HeardFromSlate, [shown.Text], TimeSpan.FromSeconds(10), logFile);
         (NotificationKind, NotificationProcessing, string, string)[] expected =
@@ -268,9 +282,151 @@ public sealed partial class ShellAccessibilityTests
             actual.SequenceEqual(expected),
             "The desktop listener did not hear exactly the expected lines, once each, in order. Expected: ["
             + string.Join(" | ", expected) + "]. Heard: [" + string.Join(" | ", actual) + "]. Logged: "
-            + string.Join(" | ", DiagnosticLines(logFile, "AnnouncementListenerState"))
-            + " | " + string.Join(" | ", DiagnosticLines(logFile, "AnnouncementSource"))
-            + " | " + string.Join(" | ", DiagnosticLines(logFile, "AnnouncementReplay")));
+            + string.Join(" | ", AnnouncementDiagnostics(logFile)));
+    }
+
+    /// <summary>The announcement dispatcher's R-1 and OD-7 diagnostics in the
+    /// app log (under <c>SLATE_UIA_DIAGNOSTICS=1</c>), for a failure message
+    /// or an evidence artifact: the listener's states, the status provider's,
+    /// the drains, drops and expiry, and the launch's settled line
+    /// (#1326).</summary>
+    private static string[] AnnouncementDiagnostics(string logFile) =>
+    [
+        .. DiagnosticLines(logFile, "AnnouncementListenerState"),
+        .. DiagnosticLines(logFile, "AnnouncementSource"),
+        .. DiagnosticLines(logFile, "AnnouncementReplay"),
+        .. DiagnosticLines(logFile, "AnnouncementLaunchSettled"),
+    ];
+
+    /// <summary>The activity ID every line Slate raises starts from
+    /// (contract 38 D-1): a superseding (High) line keeps it, and a Medium
+    /// line carries its own numbered one.</summary>
+    private const string SlateActivityId = "slate-accessibility-announcement";
+
+    /// <summary>Everything a journey's desktop listener has heard from
+    /// Slate, in order.</summary>
+    private static ReceivedNotification[] HeardFrom(ConcurrentQueue<ReceivedNotification> heard, int processId) =>
+        [.. heard.Where(notification => notification.ProcessId == processId)];
+
+    /// <summary>
+    /// Where a step's own lines start: waits until nothing new has been heard
+    /// from Slate for a quiet second — whatever the steps before it raised has
+    /// arrived (at most fifteen seconds) — and returns how many lines have
+    /// been heard so far.
+    /// </summary>
+    private static int QuietMark(ConcurrentQueue<ReceivedNotification> heard, int processId)
+    {
+        int count = HeardFrom(heard, processId).Length;
+        var quiet = Stopwatch.StartNew();
+        var waited = Stopwatch.StartNew();
+        while (quiet.Elapsed < TimeSpan.FromSeconds(1) && waited.Elapsed < TimeSpan.FromSeconds(15))
+        {
+            Thread.Sleep(100);
+            int now = HeardFrom(heard, processId).Length;
+            if (now != count)
+            {
+                count = now;
+                quiet.Restart();
+            }
+        }
+
+        return count;
+    }
+
+    /// <summary>
+    /// The first step's mark after a launch. Slate's launch settles once
+    /// (R-1, OD-7) and logs how, under <c>SLATE_UIA_DIAGNOSTICS=1</c>
+    /// (<c>AnnouncementLaunchSettled</c>, #1326): <c>drained</c> — the lines
+    /// posted before readiness queued and replayed together, on UIA's advise
+    /// or once the three-second hold ran out; <c>ready-empty</c> — ready at
+    /// its first line, nothing queued, every line raised as it was posted (the
+    /// CI shell gate's path: the journey's own listener is advised before the
+    /// first launch line, and no drain is ever logged); or a launch line lost
+    /// unspoken — <c>dropped</c> or <c>expired</c> — a defect this fails on at
+    /// once. A step taken before the launch settled would count its lines as
+    /// the step's own, so this waits for the settled line (the thirty-second
+    /// launch window bounds it), then for a quiet second (<see cref="QuietMark"/>).
+    /// </summary>
+    private static int LaunchSettledMark(ConcurrentQueue<ReceivedNotification> heard, int processId, string logFile)
+    {
+        string settled = string.Empty;
+        bool logged = SpinWait.SpinUntil(
+            () =>
+            {
+                if (DiagnosticLines(logFile, "AnnouncementLaunchSettled") is [string line, ..])
+                {
+                    settled = line;
+                    return true;
+                }
+
+                Thread.Sleep(100);
+                return false;
+            },
+            TimeSpan.FromSeconds(45));
+        Assert.True(
+            logged,
+            "Slate's launch never settled (no AnnouncementLaunchSettled diagnostic): "
+            + string.Join(" | ", AnnouncementDiagnostics(logFile)));
+        Assert.True(
+            settled.Contains("(outcome=drained,", StringComparison.Ordinal)
+                || settled.Contains("(outcome=ready-empty,", StringComparison.Ordinal),
+            "Slate lost a launch line before it was spoken: "
+            + string.Join(" | ", AnnouncementDiagnostics(logFile)));
+        return QuietMark(heard, processId);
+    }
+
+    /// <summary>
+    /// Waits until Slate has raised exactly <paramref name="expected"/> since
+    /// <paramref name="mark"/> — core's renderings, once each, in order, and
+    /// nothing else (<see cref="AwaitHeard"/>) — then checks each line's UIA
+    /// shape (<see cref="AssertRaisedAsRendered"/>).
+    /// </summary>
+    private static void AwaitHeardSince(
+        ConcurrentQueue<ReceivedNotification> heard,
+        int processId,
+        int mark,
+        RenderedAnnouncement[] expected,
+        TimeSpan timeout,
+        string logFile)
+    {
+        AwaitHeard(
+            () => [.. HeardFrom(heard, processId).Skip(mark).Select(notification => notification.DisplayString)],
+            [.. expected.Select(line => line.Text)],
+            timeout,
+            logFile);
+        ReceivedNotification[] lines = [.. HeardFrom(heard, processId).Skip(mark)];
+        for (int index = 0; index < expected.Length; index++)
+        {
+            AssertRaisedAsRendered(expected[index], lines[index]);
+        }
+    }
+
+    /// <summary>
+    /// A line Slate raised has the shape contract 38 D-1 gives core's
+    /// priority: kind Other; a High line ImportantMostRecent under the shared
+    /// activity ID (a newer one supersedes it); a Medium line All under a
+    /// numbered ID of its own, so NVDA's UIA rate limiter coalesces none
+    /// (#1244).
+    /// </summary>
+    private static void AssertRaisedAsRendered(RenderedAnnouncement expected, ReceivedNotification heard)
+    {
+        (NotificationProcessing processing, bool numbered) = expected.Priority switch
+        {
+            A11yPriority.High => (NotificationProcessing.ImportantMostRecent, false),
+            A11yPriority.Medium => (NotificationProcessing.All, true),
+            _ => throw new Xunit.Sdk.XunitException(
+                $"contract 38 D-1 maps no processing for {expected.Priority} (\"{expected.Text}\")."),
+        };
+        Assert.True(
+            heard.Kind == NotificationKind.Other
+                && heard.Processing == processing
+                && (numbered
+                    ? System.Text.RegularExpressions.Regex.IsMatch(
+                        heard.ActivityId, "^" + SlateActivityId + @"\.\d+$")
+                    : heard.ActivityId == SlateActivityId),
+            $"\"{heard.DisplayString}\" was raised as ({heard.Kind}, {heard.Processing}, {heard.ActivityId}); core's "
+            + $"{expected.Priority} line is (Other, {processing}, "
+            + (numbered ? SlateActivityId + ".<n>" : SlateActivityId) + ") (contract 38 D-1).");
     }
 
     private static void StopProcess(Process process)
@@ -424,8 +580,51 @@ public sealed partial class ShellAccessibilityTests
         }
     }
 
+    /// <summary>The launch journey's listener: registered before Slate
+    /// launched, which is that journey's subject (R-1).</summary>
+    private const string RegisteredBeforeLaunch = "registered before launch";
+
+    /// <summary>Every other journey's listener: registered once
+    /// <c>WaitForMainWindow</c> had reached the window, its legs taken after the
+    /// launch settled (<see cref="LaunchSettledMark"/>).</summary>
+    private const string RegisteredAfterTheWindow = "registered after WaitForMainWindow reached the window";
+
+    /// <summary>#1326: a listener that was never registered — the journey
+    /// returned (no interactive desktop) or failed before its registration
+    /// returned. The evidence says so, with an aborted outcome, and claims no
+    /// capture.</summary>
+    private const string NotRegistered = "not registered";
+
+    /// <summary>#1326: how far a journey (or a leg) got with its desktop
+    /// listener, as its evidence records it.</summary>
+    private enum ListenerOutcome
+    {
+        /// <summary>Nothing could be heard: the listener was never registered,
+        /// or the run degraded to a startup smoke with no window.</summary>
+        Aborted,
+
+        /// <summary>Registered, and the journey stopped before its end: an
+        /// assertion failed or an exception escaped.</summary>
+        Failed,
+
+        /// <summary>Registered, and the journey reached its end.</summary>
+        Completed,
+    }
+
+    /// <summary>Writes one surface's announcement evidence (under
+    /// <c>SLATE_ACCESSIBILITY_EVIDENCE_DIR</c>): what Slate raised, how many
+    /// lines came from other processes, the app's diagnostics, where the
+    /// listener was registered — <see cref="RegisteredBeforeLaunch"/>,
+    /// <see cref="RegisteredAfterTheWindow"/> or <see cref="NotRegistered"/> —
+    /// and how far the journey got (<see cref="ListenerOutcome"/>; a listener
+    /// never registered is always an aborted one).</summary>
     private static void WriteAnnouncementEvidence(
-        string surface, ReceivedNotification[] fromSlate, int otherProcesses, string[] diagnostics)
+        string surface,
+        string registered,
+        ListenerOutcome outcome,
+        ReceivedNotification[] fromSlate,
+        int otherProcesses,
+        string[] diagnostics)
     {
         string? directory = Environment.GetEnvironmentVariable("SLATE_ACCESSIBILITY_EVIDENCE_DIR");
         if (string.IsNullOrWhiteSpace(directory))
@@ -435,13 +634,14 @@ public sealed partial class ShellAccessibilityTests
 
         var evidence = new
         {
-            schemaVersion = 1,
+            schemaVersion = 2,
             surface,
             recordedAtUtc = DateTimeOffset.UtcNow,
             sourceRevision = Environment.GetEnvironmentVariable("GITHUB_SHA"),
             operatingSystem = Environment.OSVersion.VersionString,
             dotnetRuntime = Environment.Version.ToString(),
-            listener = "IUIAutomation6 event-handler group on the desktop root, subtree scope, registered before launch",
+            listener = "IUIAutomation6 event-handler group on the desktop root, subtree scope, " + registered,
+            outcome = (registered == NotRegistered ? ListenerOutcome.Aborted : outcome).ToString().ToLowerInvariant(),
             received = fromSlate.Select(notification => new
             {
                 displayString = notification.DisplayString,

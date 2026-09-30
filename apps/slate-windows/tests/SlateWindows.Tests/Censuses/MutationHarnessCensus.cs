@@ -51,7 +51,7 @@ public class MutationHarnessCensus
             MutationDriver.RunAll(ScenariosPath);
 
         var goldenNames = Directory.EnumerateFiles(GoldenDir, "*.json")
-            .Select(Path.GetFileName)
+            .Select(path => Path.GetFileName(path))
             .Where(name => name != "scenarios.json")
             .OrderBy(name => name, StringComparer.Ordinal)
             .ToList();

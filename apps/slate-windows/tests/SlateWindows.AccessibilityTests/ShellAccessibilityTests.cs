@@ -381,6 +381,9 @@ public sealed partial class ShellAccessibilityTests
             // registration shape, registered just before the chord.
             var embedHeard = new ConcurrentQueue<ReceivedNotification>();
             using DesktopNotificationListener embedListener = ListenOnTheDesktop(automation, embedHeard);
+            // The journey's first witnessed step: once the launch has settled
+            // (contract 40's wave-close evidence), then a quiet second.
+            int embedMark = LaunchSettledMark(embedHeard, process.Id, Path.Combine(logDirectory, "slate-windows.log"));
             PressChord(VirtualKeyShort.CONTROL, VirtualKeyShort.KEY_E);
             AutomationElement? interactionPopover = TryWaitForElement(
                 window,
@@ -419,10 +422,27 @@ public sealed partial class ShellAccessibilityTests
             // The landed result is announced, and a screen reader hears
             // core's rendering of it once — the sentence the popover is
             // named with.
-            string heardEmbedPreview = AssertHeardEmbedPreviewShown(
-                embedHeard,
-                process.Id,
-                Path.Combine(logDirectory, "slate-windows.log"));
+            string heardEmbedPreview;
+            ListenerOutcome embedOutcome = ListenerOutcome.Failed;
+            try
+            {
+                heardEmbedPreview = AssertHeardEmbedPreviewShown(
+                    embedHeard,
+                    process.Id,
+                    embedMark,
+                    Path.Combine(logDirectory, "slate-windows.log"));
+                embedOutcome = ListenerOutcome.Completed;
+            }
+            finally
+            {
+                WriteAnnouncementEvidence(
+                    "embed-preview",
+                    RegisteredAfterTheWindow,
+                    embedOutcome,
+                    HeardFrom(embedHeard, process.Id),
+                    embedHeard.Count(notification => notification.ProcessId != process.Id),
+                    AnnouncementDiagnostics(Path.Combine(logDirectory, "slate-windows.log")));
+            }
             Assert.Equal(heardEmbedPreview, interactionPopover.Name);
             embedListener.Dispose();
             Assert.True(interactionPopover.Properties.IsDialog.Value);
@@ -496,6 +516,12 @@ public sealed partial class ShellAccessibilityTests
             editor.Focus();
             PlaceCaretAtText(editor, "[@doe]");
             string editorTextBeforeCitation = editor.Patterns.Value.Pattern.Value;
+            // W7-7 R-8 (#1251): what a screen reader hears when the popover
+            // opens — PR 1's desktop listener (#1244), registered just before
+            // the chord, as around Ctrl+E above.
+            var citationHeard = new ConcurrentQueue<ReceivedNotification>();
+            using DesktopNotificationListener citationListener = ListenOnTheDesktop(automation, citationHeard);
+            int citationMark = LaunchSettledMark(citationHeard, process.Id, Path.Combine(logDirectory, "slate-windows.log"));
             PressChord(VirtualKeyShort.CONTROL, VirtualKeyShort.ENTER);
             AutomationElement citationPopover = WaitForElement(
                 window,
@@ -517,11 +543,35 @@ public sealed partial class ShellAccessibilityTests
                 "The citation popover did not focus its Close button.");
             AssertAxeClean(process, "editor-citation-popover");
             // W7-7 (#1251, R-8): the popover's name is core's rendering of
-            // the same CitationPopoverShown event the activation posts.
-            Assert.Equal("Citation: doe", citationPopover.Name);
-            // TODO(#1244): with PR 1's desktop-scoped listener on this
-            // branch, assert here that Ctrl+Enter delivered "Citation: doe"
-            // (ImportantMostRecent). No listener is built in PR 6.
+            // the same CitationPopoverShown event the activation posts, and
+            // Ctrl+Enter delivered that rendering to the listener exactly
+            // once, High (ImportantMostRecent under the shared ID).
+            uniffi.slate_uniffi.RenderedAnnouncement citationShown = uniffi.slate_uniffi.SlateUniffiMethods.A11yRender(
+                new uniffi.slate_uniffi.A11yEvent.CitationPopoverShown("Citation: doe"));
+            Assert.Equal(citationShown.Text, citationPopover.Name);
+            ListenerOutcome citationOutcome = ListenerOutcome.Failed;
+            try
+            {
+                AwaitHeardSince(
+                    citationHeard,
+                    process.Id,
+                    citationMark,
+                    [citationShown],
+                    TimeSpan.FromSeconds(10),
+                    Path.Combine(logDirectory, "slate-windows.log"));
+                citationOutcome = ListenerOutcome.Completed;
+            }
+            finally
+            {
+                WriteAnnouncementEvidence(
+                    "citation-popover",
+                    RegisteredAfterTheWindow,
+                    citationOutcome,
+                    HeardFrom(citationHeard, process.Id),
+                    citationHeard.Count(notification => notification.ProcessId != process.Id),
+                    AnnouncementDiagnostics(Path.Combine(logDirectory, "slate-windows.log")));
+            }
+            citationListener.Dispose();
             Keyboard.Press(VirtualKeyShort.ESCAPE);
             Assert.True(
                 SpinWait.SpinUntil(
@@ -3108,7 +3158,14 @@ public sealed partial class ShellAccessibilityTests
             Path.Combine(vaultRoot, "slate.json"),
             "{\"citations\":{\"bibliography\":\"library.bib\",\"cite_style\":\"ieee\"}}");
 
+        // What the sheets announce, heard through PR 1's desktop listener
+        // (#1244).
+        string logFile = Path.Combine(logDirectory, "slate-windows.log");
+        var sheetsHeard = new ConcurrentQueue<ReceivedNotification>();
         Process? process = null;
+        // #1326: the evidence records what happened, never a capture that did not.
+        string sheetsRegistered = NotRegistered;
+        ListenerOutcome sheetsOutcome = ListenerOutcome.Aborted;
         try
         {
             var startInfo = new ProcessStartInfo(SlateWindowsExe())
@@ -3121,6 +3178,9 @@ public sealed partial class ShellAccessibilityTests
             startInfo.Environment["SLATE_CENSUS_INSTANCE_ID"] =
                 $"slate-citations-{Guid.NewGuid():N}";
             startInfo.Environment["SLATE_LOG_DIR"] = logDirectory;
+            // The announcement dispatcher's R-1 diagnostics, for the listener's
+            // failure message and the evidence artifact.
+            startInfo.Environment["SLATE_UIA_DIAGNOSTICS"] = "1";
             process = Process.Start(startInfo)
                 ?? throw new Xunit.Sdk.XunitException("SlateWindows.exe did not start.");
 
@@ -3133,8 +3193,14 @@ public sealed partial class ShellAccessibilityTests
             Window window = WaitForMainWindow(
                 process,
                 automation,
-                Path.Combine(logDirectory, "slate-windows.log"),
+                logFile,
                 TimeSpan.FromSeconds(30));
+            // Registered once the window exists: a desktop listener registered
+            // while Slate's process is still starting can miss its
+            // registration (measured locally, with NVDA running), where one
+            // registered after UIA has reached the window is advised to it.
+            using DesktopNotificationListener sheetsListener = ListenOnTheDesktop(automation, sheetsHeard);
+            (sheetsRegistered, sheetsOutcome) = (RegisteredAfterTheWindow, ListenerOutcome.Failed);
 
             AutomationElement filesTree = WaitForElement(
                 window, "FilesTree", TimeSpan.FromSeconds(30));
@@ -3261,12 +3327,24 @@ public sealed partial class ShellAccessibilityTests
             // ---- Details sheet: in-window, and focus returns -------
             resolvedRow!.Patterns.SelectionItem.Pattern.Select();
             resolvedRow.Focus();
+            // The first witnessed step: once the launch has settled (contract
+            // 40's wave-close evidence), then a quiet second.
+            int detailsMark = LaunchSettledMark(sheetsHeard, process.Id, logFile);
             PressKey(VirtualKeyShort.RETURN);
             AutomationElement details = WaitForElement(
                 window, "CitationDetailsSheet", TimeSpan.FromSeconds(10));
-            // TODO(#1244): W7-7 R-8 (#1251) posts CitationDetailsShown here
-            // ("Citation expanded. {title}."); assert its delivery through
-            // PR 1's desktop-scoped listener once that is on this branch.
+            // W7-7 R-8 (#1251): the sheet opens on Close, where its name is
+            // not read, so it announces what it expanded — core's rendering
+            // of CitationDetailsShown for the fixture's entry, heard exactly
+            // once through the desktop listener.
+            AwaitHeardSince(
+                sheetsHeard,
+                process.Id,
+                detailsMark,
+                [uniffi.slate_uniffi.SlateUniffiMethods.A11yRender(
+                    new uniffi.slate_uniffi.A11yEvent.CitationDetailsShown("Literate Programming"))],
+                TimeSpan.FromSeconds(10),
+                logFile);
             // D-1: the sheet is inside THIS window's subtree. A Popup
             // would make it a sibling HWND and this lookup would miss.
             Assert.NotNull(window.FindFirstDescendant(
@@ -3476,8 +3554,24 @@ public sealed partial class ShellAccessibilityTests
                     .Contains("Unresolved", StringComparison.OrdinalIgnoreCase));
             ghostRow.Patterns.SelectionItem.Pattern.Select();
             ghostRow.Focus();
+            int unresolvedMark = QuietMark(sheetsHeard, process.Id);
             PressKey(VirtualKeyShort.RETURN);
-            WaitForElement(window, "CitationDetailsSheet", TimeSpan.FromSeconds(10));
+            AutomationElement unresolvedDetails = WaitForElement(
+                window, "CitationDetailsSheet", TimeSpan.FromSeconds(10));
+            // W7-7 R-8 (#1251): a key no bibliography holds expanded nothing,
+            // so the sheet says so — core's CitationDetailsUnresolved
+            // sentence, which is also the sheet's name, heard exactly once.
+            uniffi.slate_uniffi.RenderedAnnouncement unresolvedShown =
+                uniffi.slate_uniffi.SlateUniffiMethods.A11yRender(
+                    new uniffi.slate_uniffi.A11yEvent.CitationDetailsUnresolved("ghostkey"));
+            AwaitHeardSince(
+                sheetsHeard,
+                process.Id,
+                unresolvedMark,
+                [unresolvedShown],
+                TimeSpan.FromSeconds(10),
+                logFile);
+            Assert.Equal(unresolvedShown.Text, unresolvedDetails.Name);
             PressChord(VirtualKeyShort.CONTROL, VirtualKeyShort.KEY_J);
             AssertElementDisappears(window, automation, "CitationDetailsSheet");
             AutomationElement afterMiss = WaitForElement(
@@ -3493,13 +3587,21 @@ public sealed partial class ShellAccessibilityTests
             Wait.UntilInputIsProcessed(TimeSpan.FromMilliseconds(300));
 
             // ---- Ctrl+Shift+J: the summary sheet ------------------
+            int summaryMark = QuietMark(sheetsHeard, process.Id);
             PressChord(VirtualKeyShort.SHIFT, VirtualKeyShort.CONTROL, VirtualKeyShort.KEY_J);
             WaitForElement(window, "CitationSummarySheet", TimeSpan.FromSeconds(10));
-            // TODO(#1244): W7-7 R-8 (#1251) posts CitationSummaryShown here
-            // ("Citation summary. N citations referencing M unique
-            // sources."). Asserting delivery needs PR 1's desktop-scoped
-            // notification listener, which is not on this branch; once it
-            // is, assert the line here (spec §7.5). No listener in PR 6.
+            // W7-7 R-8 (#1251): the sheet opens on its Walk/Done button,
+            // where its name is not read, so it announces its counts — core's
+            // CitationSummaryShown for the note's two citations of two keys,
+            // heard exactly once (spec §7.5).
+            AwaitHeardSince(
+                sheetsHeard,
+                process.Id,
+                summaryMark,
+                [uniffi.slate_uniffi.SlateUniffiMethods.A11yRender(
+                    new uniffi.slate_uniffi.A11yEvent.CitationSummaryShown(2, 2))],
+                TimeSpan.FromSeconds(10),
+                logFile);
             AssertAxeClean(process, "citation-summary-sheet");
             WaitForElement(window, "CitationSummaryDismiss", TimeSpan.FromSeconds(10))
                 .Patterns.Invoke.Pattern.Invoke();
@@ -3621,9 +3723,18 @@ public sealed partial class ShellAccessibilityTests
                 "Escape from the files-citing sheet did not return focus to the "
                     + "bibliography row that opened it; focus was on "
                     + $"\"{automation.FocusedElement().Properties.Name.ValueOrDefault}\"");
+            sheetsOutcome = ListenerOutcome.Completed;
         }
         finally
         {
+            int slateId = process?.Id ?? -1;
+            WriteAnnouncementEvidence(
+                "citation-sheets",
+                sheetsRegistered,
+                sheetsOutcome,
+                HeardFrom(sheetsHeard, slateId),
+                sheetsHeard.Count(notification => notification.ProcessId != slateId),
+                AnnouncementDiagnostics(logFile));
             if (process is not null && !process.HasExited)
             {
                 process.CloseMainWindow();
@@ -8927,7 +9038,7 @@ public sealed partial class ShellAccessibilityTests
             AutomationElement[] cards = Retry.WhileEmpty(
                 () => board.FindAllChildren(
                     finder => finder.ByControlType(ControlType.Button)),
-                TimeSpan.FromSeconds(20)).Result;
+                TimeSpan.FromSeconds(20)).Result ?? [];
             Assert.True(cards.Length >= 1, "no card peers materialized.");
             string[] names = [.. cards.Select(card => card.Properties.Name.Value)];
             Assert.All(names, name => Assert.False(string.IsNullOrWhiteSpace(name)));
@@ -9879,8 +9990,8 @@ public sealed partial class ShellAccessibilityTests
                 $"Escape did not seat the reader on the cleared rows; focus is {DescribeFocusedElement(automation)}");
             Assert.True(
                 SpinWait.SpinUntil(
-                    () => window.FindFirstDescendant(automation.ConditionFactory.ByAutomationId("GraphFilterSummary")) is null
-                        || window.FindFirstDescendant(automation.ConditionFactory.ByAutomationId("GraphFilterSummary")).Properties.IsOffscreen.ValueOrDefault,
+                    () => window.FindFirstDescendant(automation.ConditionFactory.ByAutomationId("GraphFilterSummary")) is not { } filterSummaryElement
+                        || filterSummaryElement.Properties.IsOffscreen.ValueOrDefault,
                     TimeSpan.FromSeconds(10)),
                 "the count region did not collapse when nothing narrows");
 
@@ -9891,8 +10002,8 @@ public sealed partial class ShellAccessibilityTests
                 SpinWait.SpinUntil(() => RowCount(grid) == 1 && TypeColumn(grid)[0].Contains("Solo", StringComparison.Ordinal), TimeSpan.FromSeconds(10)),
                 $"the orphans preset did not narrow the grid to Solo; it reads [{string.Join(", ", TypeColumn(grid))}]");
             Assert.True(
-                window.FindFirstDescendant(automation.ConditionFactory.ByAutomationId("GraphFilterSummary")) is null
-                    || window.FindFirstDescendant(automation.ConditionFactory.ByAutomationId("GraphFilterSummary")).Properties.IsOffscreen.ValueOrDefault,
+                window.FindFirstDescendant(automation.ConditionFactory.ByAutomationId("GraphFilterSummary")) is not { } filterSummaryElement
+                    || filterSummaryElement.Properties.IsOffscreen.ValueOrDefault,
                 "the count region showed under a backend-only narrowing");
 
             // The Unresolved Links preset: the region reads the ghost count
@@ -9966,8 +10077,8 @@ public sealed partial class ShellAccessibilityTests
             PressKey(VirtualKeyShort.ESCAPE);
             Assert.True(
                 SpinWait.SpinUntil(
-                    () => window.FindFirstDescendant(automation.ConditionFactory.ByAutomationId("GraphWhereAmIReadback")) is null
-                        || window.FindFirstDescendant(automation.ConditionFactory.ByAutomationId("GraphWhereAmIReadback")).Properties.IsOffscreen.ValueOrDefault,
+                    () => window.FindFirstDescendant(automation.ConditionFactory.ByAutomationId("GraphWhereAmIReadback")) is not { } readbackElement
+                        || readbackElement.Properties.IsOffscreen.ValueOrDefault,
                     TimeSpan.FromSeconds(10)),
                 "Escape did not close the panel");
             Assert.True(
@@ -10166,7 +10277,7 @@ public sealed partial class ShellAccessibilityTests
             AutomationElement toggle = WaitForElement(window, "GraphInspectorToggle", TimeSpan.FromSeconds(10));
             Assert.Equal("Toggle graph inspector", toggle.Properties.Name.Value);
             Assert.Equal("Show the graph inspector — filters, colour groups, display, and forces.", toggle.Properties.HelpText.Value);
-            AutomationElement PaneOrNull() =>
+            AutomationElement? PaneOrNull() =>
                 window.FindFirstDescendant(automation.ConditionFactory.ByAutomationId("GraphInspector"));
             bool PaneShown() => PaneOrNull() is { } pane && !pane.Properties.IsOffscreen.ValueOrDefault;
             toggle.Patterns.Toggle.Pattern.Toggle();
@@ -10204,8 +10315,8 @@ public sealed partial class ShellAccessibilityTests
             // E-13's wording).
             Assert.True(
                 SpinWait.SpinUntil(
-                    () => window.FindFirstDescendant(automation.ConditionFactory.ByAutomationId("GraphFilterSummary")) is null
-                        || window.FindFirstDescendant(automation.ConditionFactory.ByAutomationId("GraphFilterSummary")).Properties.IsOffscreen.ValueOrDefault,
+                    () => window.FindFirstDescendant(automation.ConditionFactory.ByAutomationId("GraphFilterSummary")) is not { } filterSummaryElement
+                        || filterSummaryElement.Properties.IsOffscreen.ValueOrDefault,
                     TimeSpan.FromSeconds(5)),
                 "the needle's count region showed for a flag change with no needle");
             _ = noGhostCount;
@@ -10351,8 +10462,8 @@ public sealed partial class ShellAccessibilityTests
             PressKey(VirtualKeyShort.ESCAPE);
             Assert.True(
                 SpinWait.SpinUntil(
-                    () => window.FindFirstDescendant(automation.ConditionFactory.ByAutomationId("GraphWhereAmIReadback")) is null
-                        || window.FindFirstDescendant(automation.ConditionFactory.ByAutomationId("GraphWhereAmIReadback")).Properties.IsOffscreen.ValueOrDefault,
+                    () => window.FindFirstDescendant(automation.ConditionFactory.ByAutomationId("GraphWhereAmIReadback")) is not { } readbackElement
+                        || readbackElement.Properties.IsOffscreen.ValueOrDefault,
                     TimeSpan.FromSeconds(10)),
                 "Escape did not close the panel");
             Assert.True(
@@ -10702,8 +10813,8 @@ public sealed partial class ShellAccessibilityTests
             PressKey(VirtualKeyShort.ESCAPE);
             Assert.True(
                 SpinWait.SpinUntil(
-                    () => window.FindFirstDescendant(automation.ConditionFactory.ByAutomationId("GraphWhereAmIReadback")) is null
-                        || window.FindFirstDescendant(automation.ConditionFactory.ByAutomationId("GraphWhereAmIReadback")).Properties.IsOffscreen.ValueOrDefault,
+                    () => window.FindFirstDescendant(automation.ConditionFactory.ByAutomationId("GraphWhereAmIReadback")) is not { } readbackElement
+                        || readbackElement.Properties.IsOffscreen.ValueOrDefault,
                     TimeSpan.FromSeconds(10)),
                 "Escape did not close the panel");
             Assert.True(
