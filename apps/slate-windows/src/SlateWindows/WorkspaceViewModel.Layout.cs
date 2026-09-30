@@ -296,12 +296,18 @@ internal sealed partial class WorkspaceViewModel
     /// <paramref name="load"/> false (W7-7 PR 7, codex PR 7 round 5 fix 3:
     /// the rescan's re-seat alone) constructs a missing board or base
     /// without loading it — the caller's own, awaited load is its one
-    /// load.</summary>
-    private void ReplaceTabItem(WorkspaceTabViewModel tab, WorkspaceItemState item, bool load = true)
+    /// load. <paramref name="canvasSeed"/> (the re-seat's too) seeds a
+    /// board constructed here with the retired board's selection, marks
+    /// and projection, as a rename's retarget does (CD-32).</summary>
+    private void ReplaceTabItem(
+        WorkspaceTabViewModel tab,
+        WorkspaceItemState item,
+        bool load = true,
+        SlateWindows.Canvas.CanvasSelection? canvasSeed = null)
     {
         WorkspaceTabViewModel? peer = FindSamePathTab(item, excluding: tab);
         tab.ReplaceItem(item);
-        AttachTabDocumentsIfNeeded(tab, load);
+        AttachTabDocumentsIfNeeded(tab, load, canvasSeed);
         ReleaseUnreferencedBaseDocuments();
         ReleaseUnreferencedDashboards();
         ReleaseUnreferencedCanvasDocuments();

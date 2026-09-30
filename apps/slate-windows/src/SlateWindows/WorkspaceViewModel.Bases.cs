@@ -1160,7 +1160,13 @@ internal sealed partial class WorkspaceViewModel
     /// rescan's re-seat through <c>ReplaceTabItem</c> alone): a board or
     /// file-backed base the registry does not hold is constructed without
     /// its load — its caller loads it.</param>
-    private void AttachTabDocumentsIfNeeded(WorkspaceTabViewModel tab, bool load = true)
+    /// <param name="canvasSeed">The re-seat's too: a board constructed here
+    /// starts from the retired board's selection, marks and projection (the
+    /// CD-32 retarget's seed).</param>
+    private void AttachTabDocumentsIfNeeded(
+        WorkspaceTabViewModel tab,
+        bool load = true,
+        SlateWindows.Canvas.CanvasSelection? canvasSeed = null)
     {
         if (tab.IsBase)
         {
@@ -1178,7 +1184,7 @@ internal sealed partial class WorkspaceViewModel
         }
         else if (tab.IsCanvas)
         {
-            tab.AttachCanvasDocument(CanvasDocumentFor(tab.Path, load: load));
+            tab.AttachCanvasDocument(CanvasDocumentFor(tab.Path, seedSelection: canvasSeed, load: load));
         }
         else if (tab.IsGraph)
         {

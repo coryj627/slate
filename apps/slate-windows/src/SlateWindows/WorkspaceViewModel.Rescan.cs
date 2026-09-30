@@ -395,6 +395,13 @@ internal sealed partial class WorkspaceViewModel
 
             if (!tab.IsMarkdown)
             {
+                // The merge with PR 4 (#1247, R-5): the board the reader is
+                // on, before the re-seat retires it. A case-only rename is a
+                // rename, not a close — the retired board's selection, marks
+                // and projection seed the board at the stored spelling, as a
+                // rename's retarget does (CD-32), so the outline's landing
+                // puts the keys back on the reader's card, not the first.
+                CanvasSelection? seat = tab.Canvas?.Selection;
                 if (respelled)
                 {
                     tab.RetargetPath(stored);
@@ -408,7 +415,7 @@ internal sealed partial class WorkspaceViewModel
                 // the stored spelling is constructed WITHOUT a load of its
                 // own (the RetargetCanvasDocuments precedent), so the run's
                 // load below is its one load.
-                ReplaceTabItem(tab, tab.Item, load: false);
+                ReplaceTabItem(tab, tab.Item, load: false, canvasSeed: seat);
                 if (tab.Canvas is { } board)
                 {
                     if (!reseated.Add(board))
