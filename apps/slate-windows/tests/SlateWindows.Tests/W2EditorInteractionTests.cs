@@ -326,6 +326,136 @@ public sealed class W2EditorInteractionTests
         Assert.Equal(row.Title, interactions.PopoverEmbedRoot!.Title);
     }
 
+    /// <summary>#1279 (locked decision 05 §4): a preview request retired
+    /// while its worker is on the way to core — the popover closed, the
+    /// note's interaction state invalidated, the tab disposed — cancels its
+    /// walk in core: the worker stops on <c>Cancelled</c> and publishes
+    /// nothing, so no preview is announced and none is shown.</summary>
+    [Theory]
+    [InlineData("close")]
+    [InlineData("invalidate")]
+    [InlineData("dispose")]
+    public void ARetiredPreviewCancelsItsWalkAndPublishesNothing(string retire)
+    {
+        using InteractionFixture fixture = InteractionFixture.Create("# Source\n\n![[target]]\n");
+        using VaultSession session = ScannedSession(fixture);
+        var announcements = new List<A11yEvent>();
+        using var parked = new ManualResetEventSlim();
+        using var release = new ManualResetEventSlim();
+        var tab = new WorkspaceTabViewModel(
+            session,
+            new WorkspaceTabState(
+                Guid.NewGuid(),
+                new WorkspaceItemState(WorkspaceItemKind.Markdown, "source.md")),
+            announce: announcements.Add,
+            startInteractionBackgroundWork: false,
+            interactionBackgroundFaultForTests: worker =>
+            {
+                if (worker is EditorInteractionWorkerKind.EmbedPreview)
+                {
+                    parked.Set();
+                    release.Wait(TimeSpan.FromSeconds(20));
+                }
+                return null;
+            });
+        try
+        {
+            EditorInteractionCoordinator interactions = tab.EditorInteractions!;
+            interactions.RefreshMathRangesForTests();
+            interactions.RefreshArtifactCacheForTests();
+            Assert.True(interactions.PreviewEmbedAt(Inside(tab.Text, "![[target]]")));
+            Assert.True(parked.Wait(TimeSpan.FromSeconds(5)), "the preview worker never started");
+
+            switch (retire)
+            {
+                case "close": interactions.ClosePopoverCommand.Execute(null); break;
+                case "invalidate": interactions.InvalidateExternalState(); break;
+                case "dispose": tab.Dispose(); break;
+                default: throw new ArgumentOutOfRangeException(nameof(retire), retire, null);
+            }
+            release.Set();
+
+            // The worker has run to its end and everything it queued has run
+            // (codex round 3): a publication queued after the cancellation
+            // would have been delivered before these assertions.
+            SettleWorkers(interactions);
+            Assert.Equal(1, interactions.EmbedResolvesCancelledForTests);
+            Assert.DoesNotContain(
+                announcements,
+                item => item is A11yEvent.EmbedPreviewShown or A11yEvent.EmbedPreviewUnavailable);
+            Assert.Null(interactions.PopoverEmbedRoot);
+            if (retire is not "dispose")
+            {
+                // A disposed coordinator's popover state is moot; a live
+                // one stays closed rather than reopening on a late result.
+                Assert.False(interactions.IsPopoverOpen);
+            }
+        }
+        finally
+        {
+            release.Set();
+            tab.Dispose();
+        }
+    }
+
+    /// <summary>#1279: a preview superseded by a newer request — Ctrl+E on
+    /// another embed while the first is still resolving — never publishes:
+    /// its walk is cancelled in core and only the newer result is announced
+    /// and shown.</summary>
+    [Fact]
+    public void ASupersededPreviewNeverPublishes()
+    {
+        using InteractionFixture fixture = InteractionFixture.Create(
+            "# Source\n\n![[target]]\n\n![[other]]\n");
+        File.WriteAllText(Path.Combine(fixture.Root, "other.md"), "# Other\n\nOther body.\n");
+        using VaultSession session = ScannedSession(fixture);
+        var announcements = new List<A11yEvent>();
+        using var parked = new ManualResetEventSlim();
+        using var release = new ManualResetEventSlim();
+        int starts = 0;
+        using var tab = new WorkspaceTabViewModel(
+            session,
+            new WorkspaceTabState(
+                Guid.NewGuid(),
+                new WorkspaceItemState(WorkspaceItemKind.Markdown, "source.md")),
+            announce: announcements.Add,
+            startInteractionBackgroundWork: false,
+            interactionBackgroundFaultForTests: worker =>
+            {
+                // Only the FIRST preview's worker parks.
+                if (worker is EditorInteractionWorkerKind.EmbedPreview
+                    && Interlocked.Increment(ref starts) == 1)
+                {
+                    parked.Set();
+                    release.Wait(TimeSpan.FromSeconds(20));
+                }
+                return null;
+            });
+        try
+        {
+            EditorInteractionCoordinator interactions = tab.EditorInteractions!;
+            interactions.RefreshMathRangesForTests();
+            interactions.RefreshArtifactCacheForTests();
+            Assert.True(interactions.PreviewEmbedAt(Inside(tab.Text, "![[target]]")));
+            Assert.True(parked.Wait(TimeSpan.FromSeconds(5)), "the first worker never started");
+
+            Assert.True(interactions.PreviewEmbedAt(Inside(tab.Text, "![[other]]")));
+            WaitForUi(() => announcements.OfType<A11yEvent.EmbedPreviewShown>().Any());
+            release.Set();
+            SettleWorkers(interactions);
+            Assert.Equal(1, interactions.EmbedResolvesCancelledForTests);
+
+            var shown = Assert.IsType<A11yEvent.EmbedPreviewShown>(Assert.Single(announcements));
+            Assert.Equal("other", shown.Target);
+            Assert.True(interactions.IsPopoverOpen);
+            Assert.EndsWith("other.md", interactions.PopoverSourcePath, StringComparison.Ordinal);
+        }
+        finally
+        {
+            release.Set();
+        }
+    }
+
     /// <summary>R-8: every outcome the resolver can give a top-level preview
     /// other than a card — each structured unresolved result, and a
     /// resolver that throws (a vault error, raw or structured, and any
@@ -1032,9 +1162,13 @@ public sealed class W2EditorInteractionTests
             }
 
             Assert.True(started.Wait(TimeSpan.FromSeconds(5)));
+            EditorInteractionCoordinator interactions = tab.EditorInteractions!;
             tab.Dispose();
             release.Set();
-            Thread.Sleep(350);
+            // Every worker has run to its end — a retry loop disposal failed
+            // to stop would have made its further attempts by now — and what
+            // it queued has run (codex round 3; no wall-clock sleep).
+            SettleWorkers(interactions);
             Assert.Equal(1, attempts);
             Assert.DoesNotContain(
                 announcements,
@@ -1296,6 +1430,19 @@ public sealed class W2EditorInteractionTests
             Thread.Yield();
         }
     }
+    /// <summary>#1279 (codex round 3): pump until every background worker
+    /// has run to its end, then drain what the workers queued; a drain that
+    /// starts another worker waits for it too.</summary>
+    private static void SettleWorkers(EditorInteractionCoordinator interactions)
+    {
+        do
+        {
+            WaitForUi(() => interactions.LiveWorkersForTests == 0);
+            DrainUi();
+        }
+        while (interactions.LiveWorkersForTests > 0);
+    }
+
     private static void DrainUi()
     {
         var frame = new DispatcherFrame();

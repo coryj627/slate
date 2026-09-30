@@ -155,7 +155,8 @@ final class CanvasTabRoutingTests: XCTestCase {
         let state = try await makeAppState()
         let session = try XCTUnwrap(state.currentSession)
         let page = try session.listFiles(
-            filter: .markdownAndCanvas, paging: Paging(cursor: nil, limit: 100))
+            filter: .markdownAndCanvas, paging: Paging(cursor: nil, limit: 100),
+            cancel: CancelToken())
         XCTAssertTrue(page.items.contains { $0.name == "board.canvas" })
     }
 }

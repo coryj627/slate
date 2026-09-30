@@ -77,6 +77,7 @@ internal enum HostDiagnosticEvent
     SingleInstanceActivationTimedOut,
     VaultCommandFailed,
     VaultEventFailed,
+    VaultRescanFailed,
     VaultListenerUnregisterFailed,
     WindowPositionFailed,
     WindowStatePersistFailed,
@@ -200,8 +201,15 @@ internal static class HostLog
             + $"(observedBytes={exception.ObservedBytes}, maximumBytes={exception.MaximumBytes})");
     }
 
+    /// <summary>#1280 test seam: sees every diagnostic written, from any
+    /// thread, so a fact counts its own lines — lines naming an exception
+    /// type only it throws — without swapping <see cref="Console.Error"/>,
+    /// which facts in other classes, running in parallel, swap too.</summary>
+    internal static volatile Action<string>? ObserverForTests;
+
     private static void WriteWithoutThrowing(string message)
     {
+        ObserverForTests?.Invoke(message);
         try
         {
             Console.Error.WriteLine(message);

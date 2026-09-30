@@ -24,7 +24,7 @@ public sealed class RecoveryAnnouncementTests
 
         switch (action)
         {
-            case "save": host.Workspace.SaveActiveCommand.Execute(null); break;
+            case "save": host.Workspace.SaveActiveAndSettle(); break;
             case "save-all": Assert.False(host.Workspace.SaveAll()); break;
             case "close": host.Workspace.CloseTabCommand.Execute(tab); break;
         }
@@ -165,7 +165,7 @@ public sealed class RecoveryAnnouncementTests
     {
         switch (action)
         {
-            case "save": host.Workspace.SaveActiveCommand.Execute(null); break;
+            case "save": host.Workspace.SaveActiveAndSettle(); break;
             case "save-all": Assert.False(host.Workspace.SaveAll()); break;
             case "close": host.Workspace.CloseTabCommand.Execute(tab); break;
             default: throw new ArgumentOutOfRangeException(nameof(action), action, null);
@@ -190,7 +190,7 @@ public sealed class RecoveryAnnouncementTests
         WorkspaceTabViewModel tab = host.OpenNote();
         tab.Text += "\nSaved edit.";
         host.Announced.Clear();
-        host.Workspace.SaveActiveCommand.Execute(null);
+        host.Workspace.SaveActiveAndSettle();
         Assert.IsType<A11yEvent.NoteSaved>(Assert.Single(host.Announced));
         Assert.False(tab.IsDirty);
         Assert.EndsWith("Saved edit.", File.ReadAllText(host.NotePath));

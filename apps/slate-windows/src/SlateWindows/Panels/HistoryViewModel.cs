@@ -437,6 +437,21 @@ internal sealed class HistoryViewModel : PanelWorkScheduler
         LoadFirstPage(runSinceOpenFunnel: false);
     }
 
+    /// <summary>W7-7 PR 7 (#1252, round 29): <see cref="NoteSaved"/> for a
+    /// rescan, awaitable — completes when the reloaded list (or its load
+    /// error) has published; a note the panel does not show completes at
+    /// once.</summary>
+    internal async Task NoteSavedAsync(string path)
+    {
+        if (IsShutDown || !string.Equals(_path, path, StringComparison.Ordinal))
+        {
+            return;
+        }
+
+        LoadFirstPage(runSinceOpenFunnel: false);
+        await WhenPublishedAsync();
+    }
+
     /// <summary>Explicit reload of the current note's list.</summary>
     public void Reload()
     {

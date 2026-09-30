@@ -1014,15 +1014,20 @@ public partial class MainWindow : IShellRegionHost
     /// <summary>The sidebar's selected node and its ancestors, root first;
     /// null when nothing is selected or the node is no longer in the
     /// tree.</summary>
-    private IReadOnlyList<object>? SelectedFilesPath()
+    private IReadOnlyList<object>? SelectedFilesPath() =>
+        _viewModel.FileSidebar is { SelectedNode: { } selected } ? FilesRowPath(selected) : null;
+
+    /// <summary><paramref name="target"/> and its ancestors in the sidebar's
+    /// tree, root first; null when it is not in the tree.</summary>
+    private IReadOnlyList<object>? FilesRowPath(FileTreeNodeViewModel target)
     {
-        if (_viewModel.FileSidebar is not { SelectedNode: { } selected } sidebar)
+        if (_viewModel.FileSidebar is not { } sidebar)
         {
             return null;
         }
 
         var path = new List<object>();
-        return PathTo(sidebar.RootNodes, selected, path) ? path : null;
+        return PathTo(sidebar.RootNodes, target, path) ? path : null;
 
         static bool PathTo(IEnumerable<FileTreeNodeViewModel> level, FileTreeNodeViewModel target, List<object> path)
         {
@@ -1039,6 +1044,42 @@ public partial class MainWindow : IShellRegionHost
 
             return false;
         }
+    }
+
+    /// <summary>
+    /// W7-7 PR 7 (#1252, R-9 over R-5), codex's merge-delta check (finding
+    /// 1): where the keys go when a publication removed the selected row
+    /// they were on — the nearest row that survived, focused WITHOUT
+    /// selecting it (a selection would open the note), else the tree's own
+    /// landing: its first row unselected, or the empty tree, the region's
+    /// stop (AR-6).
+    /// </summary>
+    private bool LandNearVanishedSelection(FileTreeNodeViewModel? survivor) =>
+        (survivor is not null
+            && FilesRowPath(survivor) is { } path
+            && SelectorFocus.FocusRowUnselected(FilesTree, path))
+        || LandOnFilesTree();
+
+    /// <summary>The keys are on a Files-tree row a publication just removed:
+    /// WPF still counts them within the tree, on a row no window shows. Its
+    /// own re-evaluation would move them to the window next.</summary>
+    private bool KeysOnARemovedFilesRow() =>
+        FilesTree.IsKeyboardFocusWithin
+        && Keyboard.FocusedElement is Visual row
+        && PresentationSource.FromVisual(row) is null;
+
+    /// <summary>Whether the keys are stranded from the Files region, so the
+    /// tree's restore is to land them: on nothing, on the window that holds
+    /// the tree, on the bare tree, or on a tree row a publication removed.
+    /// Keys on a live row of the tree — the one a publication's selected row
+    /// took them to — or held anywhere else are never taken.</summary>
+    private bool KeysStrandedFromFilesTree()
+    {
+        IInputElement? focused = Keyboard.FocusedElement;
+        return focused is null
+            || ReferenceEquals(focused, Window.GetWindow(FilesTree))
+            || (FilesTree.IsKeyboardFocusWithin
+                && (ReferenceEquals(focused, FilesTree) || KeysOnARemovedFilesRow()));
     }
 
     /// <summary>W7-7 PR 4 (#1247, R-5): where a leaf REVEAL puts the keys —
@@ -1079,7 +1120,8 @@ public partial class MainWindow : IShellRegionHost
     /// first. The Embeds leaf's cards are its stops, its host none. The
     /// Citations leaf restores its own publications
     /// (<see cref="RestoreCitationFocus"/>), so only its notices' hand-off
-    /// is kept; the Files filter's results re-land like a leaf's list.
+    /// is kept; the Files filter's results, and Quick Open's (W7-7 PR 7),
+    /// re-land like a leaf's list.
     /// </summary>
     private void KeepLeafKeysThroughPublications()
     {
@@ -1118,6 +1160,16 @@ public partial class MainWindow : IShellRegionHost
             [FilterResultsList],
             [],
             () => SelectorFocus.FocusFirstOrSelectedItem(FilterResultsList) || LandOnFilesTree());
+        // W7-7 PR 7 (#1252, R-9 over R-5), codex's merge-delta check (finding
+        // 3): every rank rebuilds Quick Open's results — the rescan's silent
+        // re-rank among them, under a reader on a result row. The removed
+        // row's keys land on the fresh row the switcher kept selected (the
+        // same path), else the first, else the search field.
+        SelectorFocus.KeepKeysThroughPublications(
+            QuickSwitcherResultsList,
+            [QuickSwitcherResultsList],
+            [],
+            () => SelectorFocus.FocusFirstOrSelectedItem(QuickSwitcherResultsList) || QuickSwitcherSearchTextBox.Focus());
     }
 
     /// <summary>The leaf body — a direct child of the leaf host — that

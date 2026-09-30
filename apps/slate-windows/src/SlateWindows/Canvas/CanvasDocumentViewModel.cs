@@ -1481,6 +1481,70 @@ internal sealed class CanvasDocumentViewModel : PanelWorkScheduler
 
     // --- Load -----------------------------------------------------------
 
+    /// <summary>
+    /// W7-7 PR 7 (#1252, round 28): <see cref="Load"/> as a Task that
+    /// completes when the reload's result is APPLIED on the dispatcher —
+    /// its read and build run on the document's worker as always — whatever
+    /// state that result is (a published parse or I/O error is the file's
+    /// truth, not a stale board). A retired document completes at once. A
+    /// rescan awaits it.
+    /// </summary>
+    /// <remarks>The rescan's <paramref name="cancellation"/> (the ruling on
+    /// codex PR 7 round 1, finding 6): checked before the reload is
+    /// requested — core's <c>OpenCanvas</c> takes no token — and it cancels
+    /// the returned Task at once. A delivery already in flight completes
+    /// inside the pipeline, which owns its lease release; the rescan is
+    /// cancelled only by a close or a vault switch, which retires the
+    /// document, and a retired document applies nothing.</remarks>
+    internal Task ReloadAsync(CancellationToken cancellation = default)
+    {
+        if (cancellation.IsCancellationRequested)
+        {
+            return Task.FromCanceled(cancellation);
+        }
+
+        var applied = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
+        void OnApplied(CanvasPublication publication)
+        {
+            if (publication.LoadState == CanvasLoadState.Loading)
+            {
+                return;
+            }
+
+            // Any terminal state is a PUBLICATION: a board that now shows
+            // a parse or I/O error describes the file as it is, and holding
+            // the rescan on it would hold every later rescan too.
+            PublicationApplied -= OnApplied;
+            applied.TrySetResult();
+        }
+
+        PublicationApplied += OnApplied;
+        CancellationTokenRegistration registration = cancellation.Register(() =>
+        {
+            PublicationApplied -= OnApplied;
+            applied.TrySetCanceled(cancellation);
+        });
+        _ = applied.Task.ContinueWith(
+            _ => registration.Dispose(),
+            CancellationToken.None,
+            TaskContinuationOptions.ExecuteSynchronously,
+            TaskScheduler.Default);
+        Load();
+        if (_slot.Current.Retired)
+        {
+            PublicationApplied -= OnApplied;
+            applied.TrySetResult();
+        }
+
+        return applied.Task;
+    }
+
+    private int _deliveriesForTests;
+
+    /// <summary>Test seam (W7-7 PR 7, codex PR 7 round 5): how many load
+    /// deliveries — each an open of the file — this document ran.</summary>
+    internal int DeliveriesForTests => Volatile.Read(ref _deliveriesForTests);
+
     /// <summary>Open (or reopen) the canvas and publish its
     /// projections. The full-reload shape — close, open, outline,
     /// table, scene — the mac <c>load</c> twin. A reload IS an open, so
@@ -1507,6 +1571,7 @@ internal sealed class CanvasDocumentViewModel : PanelWorkScheduler
         {
             try
             {
+                _ = Interlocked.Increment(ref _deliveriesForTests);
                 _ = _pipeline.Deliver(request);
             }
             finally
@@ -5020,10 +5085,14 @@ internal sealed class CanvasDocumentViewModel : PanelWorkScheduler
     /// <summary>§G2 TG2-3 (G2-6, G2D-6): the admission predicate by purpose —
     /// notes are markdown, media is core's classification over the path,
     /// Locate admits the union of both.</summary>
-    internal CanvasVaultFilePickerModel BuildVaultFilePickerModel(CanvasVaultPickPurpose purpose) =>
-        CanvasVaultFilePickerModel.LoadAll(
+    internal CanvasVaultFilePickerModel BuildVaultFilePickerModel(CanvasVaultPickPurpose purpose)
+    {
+        // W7-7 PR 7: ListFiles takes a token; the picker's listing is one
+        // synchronous call chain, so the token is the call's own.
+        using var cancel = new CancelToken();
+        return CanvasVaultFilePickerModel.LoadAll(
             cursor => _session.ListFiles(
-                FileFilter.All, new Paging(cursor, 128)),
+                FileFilter.All, new Paging(cursor, 128), cancel),
             file => purpose switch
             {
                 CanvasVaultPickPurpose.Note => file.IsMarkdown,
@@ -5031,6 +5100,7 @@ internal sealed class CanvasDocumentViewModel : PanelWorkScheduler
                     SlateUniffiMethods.CanvasMediaClass(file.Path) is not null,
                 _ => file.IsMarkdown || SlateUniffiMethods.CanvasMediaClass(file.Path) is not null,
             });
+    }
 
     private string PublishedTitleOf(string? nodeId) =>
         PublishedRowOf(nodeId)?.Title ?? nodeId ?? string.Empty;

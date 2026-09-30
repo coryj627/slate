@@ -245,27 +245,28 @@ internal sealed partial class WorkspaceViewModel
         // the group showing the item, so transient-ness has no say in it.
         else if (!ItemsReferToSameTarget(active.Item, item))
         {
-            if (active.IsDirty)
+            // The gate is a MODAL dialog that pumps the dispatcher (W6-2
+            // PR B2, IGL-6), and its Save pumps with the window ENABLED
+            // (#1280): a group switch, a tab close, another navigation, an
+            // edit or a teardown can land inside either frame, so the open
+            // re-validates its address after every frame, before any
+            // replacement. What the tab SHOWS is not part of the address:
+            // an answer applies only to the document and edit it was asked
+            // about (AdmitDirtyTab's pin), so a tab re-pointed inside a frame
+            // is admitted afresh — asked again when dirty, taken when clean —
+            // and the open then installs its own item over it (contract 35
+            // B2-D10: a re-entrant open is an ordinary one; IGL-2: a rename
+            // inside the dialog does not stop the open).
+            if (!AdmitDirtyTab(
+                    active,
+                    () => _dirtyNavigationDecision(active, item),
+                    () => !_workspaceDisposed
+                        && !active.IsDisposed
+                        && ReferenceEquals(ActiveGroup, group)
+                        && Groups.Contains(group)
+                        && group.Tabs.Contains(active)))
             {
-                WorkspaceDirtyNavigationDecision decision = _dirtyNavigationDecision(active, item);
-                if (decision == WorkspaceDirtyNavigationDecision.Cancel
-                    || (decision == WorkspaceDirtyNavigationDecision.Save && !active.Save()))
-                {
-                    return false;
-                }
-                // The gate is a MODAL dialog that pumps the dispatcher (W6-2
-                // PR B2, IGL-6): a group switch, a tab close or a teardown can
-                // land while it is up, and the captured tab would then be
-                // replaced inside a group that no longer holds it, or no
-                // longer exists. Every open validates its address after the
-                // gate, before any replacement.
-                if (_workspaceDisposed
-                    || !ReferenceEquals(ActiveGroup, group)
-                    || !Groups.Contains(group)
-                    || !group.Tabs.Contains(active))
-                {
-                    return false;
-                }
+                return false;
             }
 
             ReplaceTabItem(active, item);
@@ -292,12 +293,25 @@ internal sealed partial class WorkspaceViewModel
     /// construction site — it needs the same attach funnel as
     /// AddTab/restore/duplicate or a .base opened into the tab ships a dead
     /// pane (red team round 1 blocker). Attach before the release sweep so
-    /// a shared document is never shut down between the two steps.</summary>
-    private void ReplaceTabItem(WorkspaceTabViewModel tab, WorkspaceItemState item)
+    /// a shared document is never shut down between the two steps.
+    /// <paramref name="load"/> false (W7-7 PR 7, codex PR 7 round 5 fix 3:
+    /// the rescan's re-seat alone) constructs a missing board or base
+    /// without loading it — the caller's own, awaited load is its one
+    /// load. <paramref name="canvasSeed"/> (the re-seat's too) seeds a
+    /// board constructed here with the retired board's selection, marks
+    /// and projection, as a rename's retarget does (CD-32), and
+    /// <paramref name="baseSeed"/> a base constructed here with the retired
+    /// document's reader row (codex's merge-delta check, finding 2).</summary>
+    private void ReplaceTabItem(
+        WorkspaceTabViewModel tab,
+        WorkspaceItemState item,
+        bool load = true,
+        SlateWindows.Canvas.CanvasSelection? canvasSeed = null,
+        BasesRow? baseSeed = null)
     {
         WorkspaceTabViewModel? peer = FindSamePathTab(item, excluding: tab);
         tab.ReplaceItem(item);
-        AttachTabDocumentsIfNeeded(tab);
+        AttachTabDocumentsIfNeeded(tab, load, canvasSeed, baseSeed);
         ReleaseUnreferencedBaseDocuments();
         ReleaseUnreferencedDashboards();
         ReleaseUnreferencedCanvasDocuments();
@@ -339,8 +353,10 @@ internal sealed partial class WorkspaceViewModel
             ActivateReadingTag,
             _announce,
             EditorPreferences,
-            startInteractionBackgroundWork: _startInteractionBackgroundWork);
+            startInteractionBackgroundWork: _startInteractionBackgroundWork,
+            interactionBackgroundFaultForTests: InteractionBackgroundFaultForTests);
         tab.TaskRepairs = _taskIndexRepairs;
+        tab.SaveCoordinator = _saves;
         AttachTabDocumentsIfNeeded(tab);
         if (peer is not null)
         {
@@ -434,8 +450,17 @@ internal sealed partial class WorkspaceViewModel
             return;
         }
 
-        WorkspaceGroupViewModel? group = Groups.FirstOrDefault(candidate => candidate.Tabs.Contains(tab));
-        if (group is null || !CanCloseTab(tab))
+        // Admission may pump — the modal prompt, and a save-before-close
+        // with the window enabled (#1280) — so the group is re-resolved by
+        // membership after it and nothing captured before it is used: a
+        // tab closed, moved or re-pointed meanwhile is never indexed from a
+        // stale group, and one closed meanwhile is not closed twice.
+        if (GroupOf(tab) is null
+            || !AdmitDirtyTab(
+                tab,
+                () => _dirtyCloseDecision(tab),
+                () => !_workspaceDisposed && !tab.IsDisposed && GroupOf(tab) is not null)
+            || GroupOf(tab) is not WorkspaceGroupViewModel group)
         {
             return;
         }
@@ -512,11 +537,90 @@ internal sealed partial class WorkspaceViewModel
         }
 
         WorkspaceGroupViewModel group = ActiveGroup;
-        foreach (WorkspaceTabViewModel tab in group.Tabs.ToArray())
+        // #1280: each admission may pump — a tab opened into this pane, a
+        // tab closed or moved, an edit, a teardown can land inside it — so
+        // admission works in rounds over the pane's CURRENT tabs, and the
+        // pane closes only after a round in which nothing pumped: every tab
+        // it disposes has no save pending, and is clean or approved for
+        // discard at exactly the document and edit it was asked about.
+        var discarded = new Dictionary<WorkspaceTabViewModel, (int Identity, long Revision)>(
+            ReferenceEqualityComparer.Instance);
+        for (int round = 0; ; round++)
         {
-            if (!CanCloseTab(tab))
+            if (_workspaceDisposed || Groups.Count <= 1 || !Groups.Contains(group)
+                || round >= MaxPumpedAdmissionRounds)
             {
                 return;
+            }
+            // Codex round 2a: the pane's admitted saves settle before any of
+            // its tabs is asked about or approved — a Ctrl+S still writing
+            // never lands after the user's Discard. All of them in one round,
+            // so a pane of saving tabs never runs out of rounds; the settle
+            // pumped, so the next round reads everything again.
+            if (group.Tabs.Any(tab => tab.HasPendingSaves))
+            {
+                foreach (WorkspaceTabViewModel tab in group.Tabs.ToArray())
+                {
+                    if (tab.HasPendingSaves && !tab.SettleSaves())
+                    {
+                        return;
+                    }
+                }
+                continue;
+            }
+            TabSetStamp stamp = CaptureTabSet();
+            bool pumped = false;
+            foreach (WorkspaceTabViewModel tab in group.Tabs.ToArray())
+            {
+                if (!tab.IsDirty)
+                {
+                    // Codex round 4: a clean tab whose settled save faulted
+                    // is not saved; the pane stays open.
+                    if (tab.LastSaveFaulted)
+                    {
+                        return;
+                    }
+                    continue;
+                }
+                if (discarded.TryGetValue(tab, out (int Identity, long Revision) approved)
+                    && approved == (tab.ItemIdentity, tab.EditRevision))
+                {
+                    continue;
+                }
+                pumped = true;
+                // What the prompt asks about, read BEFORE it opens.
+                (int Identity, long Revision) asked = (tab.ItemIdentity, tab.EditRevision);
+                switch (_dirtyCloseDecision(tab))
+                {
+                    case WorkspaceDirtyNavigationDecision.Discard:
+                        // Approved only for exactly what was asked about, with
+                        // nothing pending; an edit or a save that landed while
+                        // the prompt was up is asked about again.
+                        if (!tab.HasPendingSaves && asked == (tab.ItemIdentity, tab.EditRevision))
+                        {
+                            discarded[tab] = asked;
+                        }
+                        break;
+                    case WorkspaceDirtyNavigationDecision.Save:
+                        // A save retired by a rename under it left the tab at
+                        // a new path: the next round asks about it again.
+                        WorkspaceItemState saving = tab.Item;
+                        if (!tab.Save() && tab.Item == saving)
+                        {
+                            return;
+                        }
+                        break;
+                    default:
+                        return;
+                }
+                if (!stamp.StillHolds(this))
+                {
+                    break;
+                }
+            }
+            if (!pumped)
+            {
+                break;
             }
         }
 
@@ -549,17 +653,148 @@ internal sealed partial class WorkspaceViewModel
         Persist();
     }
 
-    private bool CanCloseTab(WorkspaceTabViewModel tab)
+    /// <summary>#1280: the bound on admission rounds — a tab typed into
+    /// during every one of its saves is refused rather than looped on.</summary>
+    internal const int MaxPumpedAdmissionRounds = 8;
+
+    private WorkspaceGroupViewModel? GroupOf(WorkspaceTabViewModel tab) =>
+        Groups.FirstOrDefault(candidate => candidate.Tabs.Contains(tab));
+
+    /// <summary>
+    /// Admit replacing or closing a dirty tab (#1280, the pumped-wait
+    /// invariant; codex rounds 1 and 2a). Every step that can pump — settling
+    /// the tab's own saves, the modal prompt, a Save — is followed by a
+    /// re-check of <paramref name="stillValid"/>, and admission restarts
+    /// whenever what it read changed:
+    /// <list type="bullet">
+    /// <item>The tab's admitted saves settle BEFORE it is asked about, and
+    /// again before Discard is accepted: a Ctrl+S still writing never lands
+    /// after the user chose Discard, and a tab the settle made clean is not
+    /// asked about at all.</item>
+    /// <item>What the prompt asks about — the tab's document
+    /// (<see cref="WorkspaceTabViewModel.ItemIdentity"/>, which a rename of
+    /// its file keeps) and edit revision — is read BEFORE the prompt opens,
+    /// and Discard is accepted only when that exact pair still holds
+    /// afterwards: an edit that lands while the prompt is up is asked about
+    /// again, never discarded unasked.</item>
+    /// </list>
+    /// True when the tab is clean, or its Discard was accepted, and it is
+    /// still valid; false on Cancel, a failed save, an invalidated caller or
+    /// too many rounds. A save that failed because the tab's file was
+    /// renamed under it (the write was retired; the tab now shows the new
+    /// path) is not a refusal: the tab is asked about again at its new
+    /// path.
+    /// </summary>
+    private bool AdmitDirtyTab(
+        WorkspaceTabViewModel tab,
+        Func<WorkspaceDirtyNavigationDecision> ask,
+        Func<bool> stillValid)
     {
-        if (!tab.IsDirty)
+        for (int round = 0; round < MaxPumpedAdmissionRounds; round++)
         {
+            if (!stillValid())
+            {
+                return false;
+            }
+            if (tab.HasPendingSaves)
+            {
+                if (!tab.SettleSaves())
+                {
+                    return false;
+                }
+                continue;
+            }
+            if (!tab.IsDirty)
+            {
+                // Codex round 4: clean, but the save the admission settled —
+                // or an earlier one of this item — faulted, a step after its
+                // write was adopted included: not saved (D-10). Fail closed;
+                // a later successful save of the item clears it.
+                return !tab.LastSaveFaulted;
+            }
+            (int Identity, long Revision) asked = (tab.ItemIdentity, tab.EditRevision);
+            WorkspaceDirtyNavigationDecision decision = ask();
+            if (!stillValid())
+            {
+                return false;
+            }
+            switch (decision)
+            {
+                case WorkspaceDirtyNavigationDecision.Discard:
+                    if (!tab.HasPendingSaves && asked == (tab.ItemIdentity, tab.EditRevision))
+                    {
+                        return true;
+                    }
+                    // A save admitted, or an edit made, while the prompt was
+                    // up: settle it and ask again.
+                    break;
+                case WorkspaceDirtyNavigationDecision.Save:
+                    WorkspaceItemState saving = tab.Item;
+                    if (!tab.Save() && tab.Item == saving)
+                    {
+                        return false;
+                    }
+                    break;
+                default:
+                    return false;
+            }
+        }
+        return false;
+    }
+
+    /// <summary>
+    /// #1280: the tab set and every tab's identity at one instant — the
+    /// ordered (group, tab, item) triples, empty groups included. A pumped
+    /// caller compares it after its frame: structural, so no mutation site
+    /// has to remember to bump a counter.
+    /// </summary>
+    private sealed class TabSetStamp
+    {
+        private readonly Entry[] _entries;
+
+        internal TabSetStamp(WorkspaceViewModel workspace)
+        {
+            _entries = Capture(workspace);
+            Tabs = [.. _entries.Where(entry => entry.Tab is not null).Select(entry => entry.Tab!)];
+        }
+
+        internal WorkspaceTabViewModel[] Tabs { get; }
+
+        internal bool StillHolds(WorkspaceViewModel workspace)
+        {
+            if (workspace._workspaceDisposed)
+            {
+                return false;
+            }
+            Entry[] now = Capture(workspace);
+            if (now.Length != _entries.Length)
+            {
+                return false;
+            }
+            for (int index = 0; index < now.Length; index++)
+            {
+                if (!ReferenceEquals(now[index].Group, _entries[index].Group)
+                    || !ReferenceEquals(now[index].Tab, _entries[index].Tab)
+                    || now[index].Item != _entries[index].Item)
+                {
+                    return false;
+                }
+            }
             return true;
         }
 
-        WorkspaceDirtyNavigationDecision decision = _dirtyCloseDecision(tab);
-        return decision == WorkspaceDirtyNavigationDecision.Discard
-            || (decision == WorkspaceDirtyNavigationDecision.Save && tab.Save());
+        private static Entry[] Capture(WorkspaceViewModel workspace) =>
+            [.. workspace.Groups.SelectMany(group => group.Tabs.Count == 0
+                ? [new Entry(group, null, null)]
+                : group.Tabs.Select(tab => new Entry(group, tab, tab.Item)))];
+
+        private readonly record struct Entry(
+            WorkspaceGroupViewModel Group,
+            WorkspaceTabViewModel? Tab,
+            WorkspaceItemState? Item);
     }
+
+    private TabSetStamp CaptureTabSet() => new(this);
 
     private void DuplicateActiveTab()
     {
@@ -580,6 +815,8 @@ internal sealed partial class WorkspaceViewModel
             _announce,
             EditorPreferences,
             startInteractionBackgroundWork: _startInteractionBackgroundWork);
+        // #1280: the duplicate's saves serialize with its source's.
+        duplicate.SaveCoordinator = _saves;
         // The registry, not a fresh document: a duplicated tab shares
         // its source's ONE document (contract C3).
         AttachTabDocumentsIfNeeded(duplicate);

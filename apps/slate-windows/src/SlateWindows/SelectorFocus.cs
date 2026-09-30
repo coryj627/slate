@@ -763,6 +763,22 @@ internal static class SelectorFocus
         return FocusFirstRowUnselected(tree);
     }
 
+    /// <summary>
+    /// W7-7 PR 7 (#1252, R-9 over R-5), codex's merge-delta check (finding
+    /// 1): land on the row at the end of <paramref name="path"/> (its items,
+    /// root first) WITHOUT selecting it — the nearest row that survived a
+    /// publication which removed the selected row the keys were on. A row a
+    /// level will not realize, or one that cannot take the keys, answers
+    /// false, and the caller lands as it otherwise would.
+    /// </summary>
+    internal static bool FocusRowUnselected(TreeView tree, IReadOnlyList<object> path)
+    {
+        ++_newestRequest;
+        return path.Count > 0
+            && RealizedTreeRow(tree, path) is { IsEnabled: true } row
+            && LandingTreeViewItem.FocusUnselected(row);
+    }
+
     /// <summary>The first root row that takes the keys, focused without
     /// selecting it; a row that cannot take them (disabled, hidden) is
     /// passed over for the next.</summary>

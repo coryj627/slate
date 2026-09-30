@@ -70,6 +70,25 @@ index.; Indexed I of T file/files.; Scan complete. N file/files indexed.
 Core owns singular/plural grammar. Windows and Mac construct the same
 events and render through the existing funnel. Cancelled/failed scan
 progress remains silent; existing failure UI is separate.
+Amended by W7-7 PR 7 (#1252; contract R-9 in
+`40_nvda_matrix_remediation_contracts.md`; OD-6): VaultScanFinished is
+(files_seen, files_changed) and its copy is Scan complete. N file/files,
+M new or changed. — files_changed is core's hash-authoritative count
+(new rows plus rows whose committed content hash differs), never
+files_indexed, which counts reads, so a touched-but-unchanged vault says
+"0 new or changed". Both hosts pass both counts from the report (a
+cross-host signature change; the Mac post site and its distinct-count
+fact move with it), and the Windows status line reads Scan finished: N
+files, M new or changed. A rescan of the open vault (Windows: Files
+Sidebar Refresh and the foreground rescan) never speaks this family: it
+posts exactly one Medium completion sentence, VaultRescanFinished(reason,
+changed, removed) — Files refreshed. C new or changed, R removed. / Files
+refreshed. No changes. — or, when the walk was partial, any file or delta
+page failed, or the scan call threw, VaultRescanIncomplete(errors) —
+Files refreshed with errors. E error/errors; results may be incomplete.
+An explicit Refresh always speaks; a foreground rescan only when
+something changed or the scan was incomplete. Mac has no rescan trigger
+in this wave (the two events are recorded Windows-only designations).
 
 **D-4 — Host timing remains host timing.** The injected-clock minimum
 interval suppresses only progress. Start/finish always fire and advance the
@@ -327,6 +346,55 @@ is the rendered announcement. Current evidence is hosted
 `AnEditorIntegrityFailureShowsTheSentenceItSpeaks`, and the
 `VaultErrorDetailCensus` provenance facts); no journey observes the
 delivery until PR 1's desktop listener (#1244).
+Amended by #1280 (2026-09-26; locked decision 05 §4.1; codex design rounds 1,
+2a and 2b, the last with the owner's decision): the core write no longer runs
+on the dispatcher. A save snapshots the editor on the dispatcher when it
+starts, runs CreateExclusive/SaveText on a worker, and publishes state, status
+and its one D-10 outcome back on the dispatcher — only to the tab and item it
+was requested for: a tab disposed or re-pointed meanwhile takes no state and
+says nothing, a write that landed before a rename is adopted silently as the
+renamed tab's baseline, and a tab whose file was deleted under the write keeps
+its missing-file status. Saves run one after another per tab and per file
+(every tab on it; a rename carries the file's chain to the new path), each
+starting from the hash the previous one published. The explicit Save (Ctrl+S,
+the menu, the palette) requests the save and returns without waiting: per tab
+at most one save writes and one waits, a request made while one waits joins
+it, the waiting save captures the editor when it starts, and its one
+publication serves every joined request with one NoteSaved. A refused write is
+spoken once by its publication (NoteSaveConflict or NoteSaveBlocked as above).
+A fault past those outcomes is logged once, as VaultCommandFailed, by the save
+it failed — whoever waited on it — and is never an unobserved task; it adds no
+spoken line (R-7: no host copy), and a caller that waited on it treats it as
+not saved. Only a caller that needs a yes/no waits, in a nested dispatcher
+frame that keeps input, focus and notifications flowing: close tab, close
+pane, the replace gate, and vault teardown with its Save All. Each re-reads
+the workspace after every frame, and a save that failed or faulted refuses it
+— nothing is closed or replaced; teardown's existing "Vault remains open
+because one or more notes could not be saved." is the only line. A save that
+faulted after its write was adopted leaves the tab clean, so the fault is kept
+with the item: a gate that would pass the clean tab without asking (close
+tab, close pane, replace, vault close) refuses it until a later successful
+save of the item or an item change (codex round 4). A dirty tab's
+admission settles the tab's admitted saves before it asks and again before it
+accepts Discard, and Discard is accepted only for exactly the documents and
+edit revisions read before the prompt opened — a rename keeps a document,
+re-pointing the tab does not — and anything else that changed while it was up
+is asked about again. Teardown settles every admitted save before it evaluates
+what is dirty. The close line belongs to the explicit close alone (mac parity:
+`closeVaultFromUserAction` and its resolvers): Close Vault speaks exactly one
+of VaultClosed — nothing was left unsaved, a save the teardown settled
+included — VaultClosedAllSaved or VaultClosedChangesDiscarded, once the vault
+is closed. A vault switch speaks none — the open speaks VaultOpened, as mac's
+switch does (`switchToRecent`, `completesVaultSwitch`) — and neither does the
+application closing (mac's quit posts nothing): every close-family sentence
+ends "Returned to the welcome screen.", which is false for both. Intended
+change from main: a switch or application close from a dirty vault no longer
+speaks VaultClosedAllSaved or VaultClosedChangesDiscarded. An edit made during
+the write stays dirty; the snapshot is what reached disk. Evidence:
+`SaveOffDispatcherTests` and `PumpedSaveReentrancyTests` (every waiting caller
+and the Save command against every mutation that can land while a write is
+parked; an injected fault through each waiting caller; the close, switch and
+application-close routes; and the named facts).
 
 **D-11 — Reopen describes the actual file outcome.** Keep the Windows tab and
 its recovery UI. For file-backed tabs, use core's existing CanonicalPath
@@ -604,9 +672,9 @@ Canvas and Graph retain their separate structural-key and journey censuses.
 | `NoResolvedEmbedAtCursor` | posted | `AppState.swift#requestEmbedPreview@1` | `EditorInteractions.cs#EditorInteractionCoordinator.PreviewEmbed@1` | `Censuses/A11yCorpusCensus.cs#EveryCorpusEventRendersTheCommittedIdentityTextAndPriority` | unit-observed: `AccessibilityNotificationDispatcherTests.cs#EveryCorpusEventReachesTheNativeBoundaryWithItsGoldenTextAndPriority` | — |
 | `NoSplitPanesToResize` | posted | `AppState.swift#adjustFocusedPane@1` | `WorkspaceViewModel.Layout.cs#WorkspaceViewModel.ResizeActivePane@1` | `Censuses/A11yCorpusCensus.cs#EveryCorpusEventRendersTheCommittedIdentityTextAndPriority` | unit-observed: `AccessibilityNotificationDispatcherTests.cs#EveryCorpusEventReachesTheNativeBoundaryWithItsGoldenTextAndPriority` | — |
 | `NoteChangedAgain` | posted | `AppState.swift#performPropertyEdit@1`; `AppState.swift#resolvePropertyEditConflictReloadFromDisk@1`; `AppState.swift#retryActivePropertyPublication@1`; `AppState.swift#useCurrentVersionForActivePropertyPublication@1` | — | `Censuses/A11yCorpusCensus.cs#EveryCorpusEventRendersTheCommittedIdentityTextAndPriority` | unit-observed: `AccessibilityNotificationDispatcherTests.cs#EveryCorpusEventReachesTheNativeBoundaryWithItsGoldenTextAndPriority` | Windows recorded: Mac body-only property reconciliation/publication recovery has no identical Windows trigger: Windows uses whole-file dirty/stale refusal, PropertyConflict and PropertiesReloaded/PropertiesReloadFailed. [22_property_panel_contracts](../../docs/plans/22_property_panel_contracts.md) |
-| `NoteSaveBlocked` | posted | — | `WorkspaceViewModel.cs#WorkspaceTabViewModel.Save@1`; `WorkspaceViewModel.cs#WorkspaceTabViewModel.Save@2` | `Censuses/A11yCorpusCensus.cs#EveryCorpusEventRendersTheCommittedIdentityTextAndPriority` | unit-observed: `AccessibilityNotificationDispatcherTests.cs#EveryCorpusEventReachesTheNativeBoundaryWithItsGoldenTextAndPriority` | Mac recorded: D-10 owner-approved Windows inline save-failure notification. Mac retains SaveConflict with its dialog and the existing save-error UI; no change to Mac recovery behavior is claimed. [38_notification_dispatcher_contracts](../../docs/plans/38_notification_dispatcher_contracts.md) |
-| `NoteSaveConflict` | posted | — | `WorkspaceViewModel.cs#WorkspaceTabViewModel.Save@1` | `Censuses/A11yCorpusCensus.cs#EveryCorpusEventRendersTheCommittedIdentityTextAndPriority` | unit-observed: `AccessibilityNotificationDispatcherTests.cs#EveryCorpusEventReachesTheNativeBoundaryWithItsGoldenTextAndPriority` | Mac recorded: D-10 as amended (W7-7, #1249): Windows has no resolve dialog, so a write conflict speaks mac's conflict sentence without the dialog clause. Mac keeps posting SaveConflict with its Keep mine / Reload dialog; no change to Mac recovery behavior is claimed. Current Windows evidence is hosted (`ConflictingSaveSpeaksTheConflictSentence`); no journey observes its delivery until PR 1's desktop listener (#1244). [38_notification_dispatcher_contracts](../../docs/plans/38_notification_dispatcher_contracts.md) |
-| `NoteSaved` | posted | `AppState.swift#performSave@1` | `WorkspaceViewModel.cs#WorkspaceViewModel.SaveActive@1` | `Censuses/A11yCorpusCensus.cs#EveryCorpusEventRendersTheCommittedIdentityTextAndPriority` | unit-observed: `AccessibilityNotificationDispatcherTests.cs#EveryCorpusEventReachesTheNativeBoundaryWithItsGoldenTextAndPriority` | — |
+| `NoteSaveBlocked` | posted | — | `WorkspaceViewModel.cs#WorkspaceTabViewModel.PublishSave@1`; `WorkspaceViewModel.cs#WorkspaceTabViewModel.StartSave@1` | `Censuses/A11yCorpusCensus.cs#EveryCorpusEventRendersTheCommittedIdentityTextAndPriority` | unit-observed: `AccessibilityNotificationDispatcherTests.cs#EveryCorpusEventReachesTheNativeBoundaryWithItsGoldenTextAndPriority` | Mac recorded: D-10 owner-approved Windows inline save-failure notification. Mac retains SaveConflict with its dialog and the existing save-error UI; no change to Mac recovery behavior is claimed. [38_notification_dispatcher_contracts](../../docs/plans/38_notification_dispatcher_contracts.md) |
+| `NoteSaveConflict` | posted | — | `WorkspaceViewModel.cs#WorkspaceTabViewModel.PublishSave@1` | `Censuses/A11yCorpusCensus.cs#EveryCorpusEventRendersTheCommittedIdentityTextAndPriority` | unit-observed: `AccessibilityNotificationDispatcherTests.cs#EveryCorpusEventReachesTheNativeBoundaryWithItsGoldenTextAndPriority` | Mac recorded: D-10 as amended (W7-7, #1249): Windows has no resolve dialog, so a write conflict speaks mac's conflict sentence without the dialog clause. Mac keeps posting SaveConflict with its Keep mine / Reload dialog; no change to Mac recovery behavior is claimed. Current Windows evidence is hosted (`ConflictingSaveSpeaksTheConflictSentence`); no journey observes its delivery until PR 1's desktop listener (#1244). [38_notification_dispatcher_contracts](../../docs/plans/38_notification_dispatcher_contracts.md) |
+| `NoteSaved` | posted | `AppState.swift#performSave@1` | `WorkspaceViewModel.cs#WorkspaceTabViewModel.PublishSaved@1` | `Censuses/A11yCorpusCensus.cs#EveryCorpusEventRendersTheCommittedIdentityTextAndPriority` | unit-observed: `AccessibilityNotificationDispatcherTests.cs#EveryCorpusEventReachesTheNativeBoundaryWithItsGoldenTextAndPriority` | — |
 | `OpenedAtLine` | posted | `AppState.swift#openTaskRow@1`; `Bases/AppState+Bases.swift#basesOpen@1` | `Panels/TasksReviewViewModel.cs#TasksReviewViewModel.OpenRow@1` | `Censuses/A11yCorpusCensus.cs#EveryCorpusEventRendersTheCommittedIdentityTextAndPriority` | unit-observed: `AccessibilityNotificationDispatcherTests.cs#EveryCorpusEventReachesTheNativeBoundaryWithItsGoldenTextAndPriority` | — |
 | `OpenedFile` | posted | `Bases/AppState+Bases.swift#basesOpen@1` | `Graph/WorkspaceViewModel.Graph.cs#WorkspaceViewModel.OpenGraphRowFromSurface@1`; `WorkspaceViewModel.Bases.cs#WorkspaceViewModel.BasesOpenRow@1`; `WorkspaceViewModel.Connections.cs#WorkspaceViewModel.OpenConnectionsRowFromSurface@1` | `Censuses/A11yCorpusCensus.cs#EveryCorpusEventRendersTheCommittedIdentityTextAndPriority` | unit-observed: `AccessibilityNotificationDispatcherTests.cs#EveryCorpusEventReachesTheNativeBoundaryWithItsGoldenTextAndPriority` | — |
 | `OutlineCount` | posted | `OutlineSidebar.swift#announceIfNeeded@1` | `Panels/RightPanePanelsViewModel.cs#RightPanePanelsViewModel.PublishOutline@1` | `Censuses/A11yCorpusCensus.cs#EveryCorpusEventRendersTheCommittedIdentityTextAndPriority` | unit-observed: `AccessibilityNotificationDispatcherTests.cs#EveryCorpusEventReachesTheNativeBoundaryWithItsGoldenTextAndPriority` | — |
@@ -679,10 +747,12 @@ Canvas and Graph retain their separate structural-key and journey censuses.
 | `TemplateNoteCreated` | posted | `AppState.swift#performCreateNoteFromTemplate@1` | `WorkspaceViewModel.Templates.cs#WorkspaceViewModel.CreateFromTemplate@1` | `Censuses/A11yCorpusCensus.cs#EveryCorpusEventRendersTheCommittedIdentityTextAndPriority` | unit-observed: `AccessibilityNotificationDispatcherTests.cs#EveryCorpusEventReachesTheNativeBoundaryWithItsGoldenTextAndPriority` | — |
 | `TemplatePickerOpened` | posted | `AppState.swift#startTemplateAvailabilityLoad@1` | `Templates/TemplatePickerViewModel.cs#TemplatePickerViewModel.Load@1` | `Censuses/A11yCorpusCensus.cs#EveryCorpusEventRendersTheCommittedIdentityTextAndPriority` | unit-observed: `AccessibilityNotificationDispatcherTests.cs#EveryCorpusEventReachesTheNativeBoundaryWithItsGoldenTextAndPriority` | — |
 | `TreeFolderSelected` | posted | `FileTreeSidebar.swift#handleTypeSelect@1` | `FilesSidebarViewModel.cs#FilesSidebarViewModel.SelectedNode@1` | `Censuses/A11yCorpusCensus.cs#EveryCorpusEventRendersTheCommittedIdentityTextAndPriority` | unit-observed: `AccessibilityNotificationDispatcherTests.cs#EveryCorpusEventReachesTheNativeBoundaryWithItsGoldenTextAndPriority` | — |
-| `VaultClosed` | posted | `AppState.swift#closeVaultFromUserAction@1` | `VaultLifecycleViewModel.cs#VaultLifecycleViewModel.CloseVault@1` | `Censuses/A11yCorpusCensus.cs#EveryCorpusEventRendersTheCommittedIdentityTextAndPriority` | unit-observed: `AccessibilityNotificationDispatcherTests.cs#EveryCorpusEventReachesTheNativeBoundaryWithItsGoldenTextAndPriority` | — |
-| `VaultClosedAllSaved` | posted | `AppState.swift#resolveVaultCloseSaveAll@1` | `VaultLifecycleViewModel.cs#VaultLifecycleViewModel.TryCloseWorkspace@1` | `Censuses/A11yCorpusCensus.cs#EveryCorpusEventRendersTheCommittedIdentityTextAndPriority` | unit-observed: `AccessibilityNotificationDispatcherTests.cs#EveryCorpusEventReachesTheNativeBoundaryWithItsGoldenTextAndPriority` | — |
-| `VaultClosedChangesDiscarded` | posted | `AppState.swift#resolveVaultCloseDiscardAll@1` | `VaultLifecycleViewModel.cs#VaultLifecycleViewModel.TryCloseWorkspace@1` | `Censuses/A11yCorpusCensus.cs#EveryCorpusEventRendersTheCommittedIdentityTextAndPriority` | unit-observed: `AccessibilityNotificationDispatcherTests.cs#EveryCorpusEventReachesTheNativeBoundaryWithItsGoldenTextAndPriority` | — |
+| `VaultClosed` | posted | `AppState.swift#closeVaultFromUserAction@1` | `VaultLifecycleViewModel.cs#VaultLifecycleViewModel.AnnounceTeardown@1` | `Censuses/A11yCorpusCensus.cs#EveryCorpusEventRendersTheCommittedIdentityTextAndPriority` | unit-observed: `AccessibilityNotificationDispatcherTests.cs#EveryCorpusEventReachesTheNativeBoundaryWithItsGoldenTextAndPriority` | — |
+| `VaultClosedAllSaved` | posted | `AppState.swift#resolveVaultCloseSaveAll@1` | `VaultLifecycleViewModel.cs#VaultLifecycleViewModel.AnnounceTeardown@1` | `Censuses/A11yCorpusCensus.cs#EveryCorpusEventRendersTheCommittedIdentityTextAndPriority` | unit-observed: `AccessibilityNotificationDispatcherTests.cs#EveryCorpusEventReachesTheNativeBoundaryWithItsGoldenTextAndPriority` | — |
+| `VaultClosedChangesDiscarded` | posted | `AppState.swift#resolveVaultCloseDiscardAll@1` | `VaultLifecycleViewModel.cs#VaultLifecycleViewModel.AnnounceTeardown@1` | `Censuses/A11yCorpusCensus.cs#EveryCorpusEventRendersTheCommittedIdentityTextAndPriority` | unit-observed: `AccessibilityNotificationDispatcherTests.cs#EveryCorpusEventReachesTheNativeBoundaryWithItsGoldenTextAndPriority` | — |
 | `VaultOpened` | posted | `AppState.swift#announceDirectVaultSwitch@1`; `MainSplitView.swift#splitViewWithSheets@1` | `VaultLifecycleViewModel.cs#VaultLifecycleViewModel.OpenVaultAsync@1` | `Censuses/A11yCorpusCensus.cs#EveryCorpusEventRendersTheCommittedIdentityTextAndPriority` | unit-observed: `AccessibilityNotificationDispatcherTests.cs#EveryCorpusEventReachesTheNativeBoundaryWithItsGoldenTextAndPriority` | — |
+| `VaultRescanFinished` | posted | — | `VaultLifecycleViewModel.Rescan.cs#VaultLifecycleViewModel.RunOneRescanAsync@1` | `Censuses/A11yCorpusCensus.cs#EveryCorpusEventRendersTheCommittedIdentityTextAndPriority` | unit-observed: `AccessibilityNotificationDispatcherTests.cs#EveryCorpusEventReachesTheNativeBoundaryWithItsGoldenTextAndPriority` | Mac recorded: OD-1 / W7-7 PR 7 (#1252, R-9): with no live watcher, Windows reconciles files changed outside Slate through Files Sidebar Refresh and the foreground rescan; Mac has no rescan trigger in this wave (the spec's mac non-goal; OD-6 carves out only VaultScanFinished). [38_notification_dispatcher_contracts](../../docs/plans/38_notification_dispatcher_contracts.md) |
+| `VaultRescanIncomplete` | posted | — | `VaultLifecycleViewModel.Rescan.cs#VaultLifecycleViewModel.PostRescanIncomplete@1` | `Censuses/A11yCorpusCensus.cs#EveryCorpusEventRendersTheCommittedIdentityTextAndPriority` | unit-observed: `AccessibilityNotificationDispatcherTests.cs#EveryCorpusEventReachesTheNativeBoundaryWithItsGoldenTextAndPriority` | Mac recorded: OD-1 / W7-7 PR 7 (#1252, R-9): with no live watcher, Windows reconciles files changed outside Slate through Files Sidebar Refresh and the foreground rescan; Mac has no rescan trigger in this wave (the spec's mac non-goal; OD-6 carves out only VaultScanFinished). [38_notification_dispatcher_contracts](../../docs/plans/38_notification_dispatcher_contracts.md) |
 | `VaultScanFinished` | posted | `AppState.swift#handleScanProgress@1` | `ScanAnnouncementGate.cs#ScanAnnouncementGate.Finished@1` | `Censuses/A11yCorpusCensus.cs#EveryCorpusEventRendersTheCommittedIdentityTextAndPriority` | unit-observed: `AccessibilityNotificationDispatcherTests.cs#EveryCorpusEventReachesTheNativeBoundaryWithItsGoldenTextAndPriority` | — |
 | `VaultScanProgress` | posted | `AppState.swift#handleScanProgress@1` | `ScanAnnouncementGate.cs#ScanAnnouncementGate.FileIndexed@1` | `Censuses/A11yCorpusCensus.cs#EveryCorpusEventRendersTheCommittedIdentityTextAndPriority` | unit-observed: `AccessibilityNotificationDispatcherTests.cs#EveryCorpusEventReachesTheNativeBoundaryWithItsGoldenTextAndPriority` | — |
 | `VaultScanStarted` | posted | `AppState.swift#handleScanProgress@1` | `ScanAnnouncementGate.cs#ScanAnnouncementGate.Started@1` | `Censuses/A11yCorpusCensus.cs#EveryCorpusEventRendersTheCommittedIdentityTextAndPriority` | unit-observed: `AccessibilityNotificationDispatcherTests.cs#EveryCorpusEventReachesTheNativeBoundaryWithItsGoldenTextAndPriority` | — |

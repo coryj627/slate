@@ -1415,16 +1415,27 @@ public sealed partial class ShellAccessibilityTests
             // project deliberately never links the app assembly.
             int mathMlPropertyId = RegisterMathMlPropertyAsClient();
             AutomationElement? math = null;
-            Assert.True(
-                SpinWait.SpinUntil(
+            // The math arrives with the note's FIRST projection, which the
+            // reading fetch publishes only once the note's diagram has
+            // rendered — a cold runner's first mermaid render (bounded as
+            // the RangeFromChild journey bounds it; 2026-09-29 a run left
+            // the surface on its loading placeholder past this journey's
+            // old 10 s, and the rerun passed). A failure carries the
+            // reading pipeline's census trace: where the projection stopped.
+            if (!SpinWait.SpinUntil(
                     () =>
                     {
                         math = window.FindFirstDescendant(
                             cf => cf.ByLocalizedControlType("math"));
                         return math is not null;
                     },
-                    TimeSpan.FromSeconds(10)),
-                "no element with localized control type 'math' appeared");
+                    TimeSpan.FromSeconds(300)))
+            {
+                string diag = ReadSharedLog(Path.Combine(logDirectory, "slate-census-diag.log"));
+                Assert.Fail(
+                    "no element with localized control type 'math' appeared\n"
+                    + $"census diag: {(diag.Length <= 2500 ? diag : diag[^2500..])}");
+            }
             var native = (FlaUI.UIA3.UIA3FrameworkAutomationElement)
                 math!.FrameworkAutomationElement;
             object? mathMl = native.NativeElement.GetCurrentPropertyValue(
@@ -1735,6 +1746,12 @@ public sealed partial class ShellAccessibilityTests
             // race them (observed live: a CI runner finished the
             // diagram between the math wait and the snapshot, and
             // eight of nine kinds read "absent" off dead elements).
+            // The math itself arrives with the FIRST projection, which the
+            // reading fetch publishes only once the note's diagram has
+            // rendered, so its wait is bounded like the diagram's below (a
+            // cold runner's first render; 2026-09-29 a run left the surface
+            // on its loading placeholder past the old 30 s, and the rerun
+            // passed). A failure carries the app log and the census trace.
             _ = WaitForSurfaceDescendant(
                 window,
                 element => string.Equals(
@@ -1742,7 +1759,8 @@ public sealed partial class ShellAccessibilityTests
                     "math",
                     StringComparison.Ordinal),
                 "math element",
-                TimeSpan.FromSeconds(30));
+                TimeSpan.FromSeconds(300),
+                Path.Combine(logDirectory, "slate-windows.log"));
             _ = WaitForSurfaceDescendant(
                 window,
                 element => string.Equals(

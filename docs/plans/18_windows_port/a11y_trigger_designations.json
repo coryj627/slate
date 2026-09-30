@@ -267,6 +267,16 @@
         "reason": "W7-7 R-3 (#1250, codex PR 2 round 1): Windows keeps one always-visible sidebar status line, so a clear - Clear Sidebar Filter or the field emptied by the user - replaces the cleared filter's summary with this sentence and speaks it once. Mac's filter overlay, with its summary, disappears on Escape, which stays silent; no Mac construction site.",
         "decision": "docs/plans/15_files_sidebar/specs/fl4_spec.md",
         "status": "proposed"
+      },
+      "VaultRescanFinished": {
+        "reason": "OD-1 / W7-7 PR 7 (#1252, R-9): with no live watcher, Windows reconciles files changed outside Slate through Files Sidebar Refresh and the foreground rescan; Mac has no rescan trigger in this wave (the spec's mac non-goal; OD-6 carves out only VaultScanFinished).",
+        "decision": "docs/plans/38_notification_dispatcher_contracts.md",
+        "status": "recorded"
+      },
+      "VaultRescanIncomplete": {
+        "reason": "OD-1 / W7-7 PR 7 (#1252, R-9): with no live watcher, Windows reconciles files changed outside Slate through Files Sidebar Refresh and the foreground rescan; Mac has no rescan trigger in this wave (the spec's mac non-goal; OD-6 carves out only VaultScanFinished).",
+        "decision": "docs/plans/38_notification_dispatcher_contracts.md",
+        "status": "recorded"
       }
     }
   },

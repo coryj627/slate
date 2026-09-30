@@ -373,7 +373,7 @@ public sealed class CitationWorkspaceSeamTests : IDisposable
         var tab = Assert.IsType<WorkspaceTabViewModel>(workspace.ActiveGroup.ActiveTab);
         tab.Text = "# Cited\n\nA citation [@knuth1984], a ghost [@ghostkey], "
             + "and a third [@newkey].\n";
-        workspace.SaveActiveCommand.Execute(null);
+        workspace.SaveActiveAndSettle();
 
         Assert.Equal(3, workspace.Citations.Rows.Count);
     }
@@ -403,14 +403,14 @@ public sealed class CitationWorkspaceSeamTests : IDisposable
         // The save path the funnel now drives.
         var tab = Assert.IsType<WorkspaceTabViewModel>(workspace.ActiveGroup.ActiveTab);
         tab.Text = "# Cited\n\nA citation [@knuth1984] and a ghost [@ghostkey].\n";
-        workspace.SaveActiveCommand.Execute(null);
+        workspace.SaveActiveAndSettle();
 
         // Still cited, so the sheet describing it is still valid.
         Assert.True(workspace.Citations.ContainsKey("knuth1984"));
 
         // Remove it and the answer flips — the sheet SHOULD close then.
         tab.Text = "# Cited\n\nOnly a ghost [@ghostkey] now.\n";
-        workspace.SaveActiveCommand.Execute(null);
+        workspace.SaveActiveAndSettle();
 
         Assert.False(workspace.Citations.ContainsKey("knuth1984"));
         Assert.True(workspace.Citations.ContainsKey("ghostkey"));

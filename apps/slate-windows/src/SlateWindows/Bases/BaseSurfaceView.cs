@@ -207,6 +207,13 @@ internal sealed class BaseSurfaceView : UserControl
         _list.SelectionChanged += OnListSelectionChanged;
         _list.MouseDoubleClick += OnListDoubleClick;
         _list.KeyDown += OnListKeyDown;
+        // W7-7 PR 7 (#1252, R-9 over R-5), codex's merge-delta check
+        // (finding 2): a publication replaces every row container under the
+        // keys. The grid keeps them through its own keeper; the list now
+        // does too — the removed row's hand-over to the bare list is
+        // declined, and the keys land on the reconciled selected row, else
+        // the first.
+        SelectorFocus.KeepKeysThroughPublications(_list, [_list], [], () => SelectorFocus.LandOnStop(_list));
 
         var layout = new DockPanel();
         DockPanel.SetDock(header, Dock.Top);
@@ -672,6 +679,23 @@ internal sealed class BaseSurfaceView : UserControl
         }
         if (model.Result is not { } result || model.State == BaseLoadState.Failed)
         {
+            // W7-7 PR 7 (#1252, R-9 over R-5), codex's merge-delta check
+            // (finding 2): a surface rebound to a document that has not
+            // published yet — the rescan's re-seat of a base renamed outside
+            // Slate, its document at the stored spelling loading under the
+            // reader — keeps the rows that hold the keys until that first
+            // publication. Collapsing them stranded the keys on the window;
+            // the publication now replaces them under the keys, where the
+            // grid's and the list's keepers land them on the reader's row
+            // (the grid's row key, the re-seated document's seeded selection)
+            // in one focus change.
+            if (model.Result is null
+                && model.State == BaseLoadState.Loading
+                && (_grid.IsKeyboardFocusWithin || _list.IsKeyboardFocusWithin))
+            {
+                return;
+            }
+
             _grid.Visibility = Visibility.Collapsed;
             _list.Visibility = Visibility.Collapsed;
             _emptyState.Visibility = model.State == BaseLoadState.Failed

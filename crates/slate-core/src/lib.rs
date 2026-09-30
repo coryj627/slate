@@ -167,13 +167,16 @@ pub use session::{
     DashboardSummary, DeletedFileEntry, DirListing, DirListingPage, DirNodeSummary, EventErrorCode,
     ExportFormat, FileChangeEvent, FileChangeKind, FileFilter, FileMetadata, FileSummary,
     IndexPhase, NoteLinkPanels, NoteLoadBundle, NotePartsBundle, NoteTasksPage,
-    OpAnnotationSummary, OutlinePage, Page, Paging, RemnantLog, RenameAffected, RenameFailed,
-    RenameFailureKind, RenameReport, RenameSkipReason, RenameSkipped, SaveReport, SavedQuery,
-    SavedQuerySourceSyntax, SavedQuerySummary, ScanProgress, ScanProgressListener, ScanReport,
-    SessionConfig, TaskIndexRepairOutcome, VaultEventListener, VaultRootIdentity, VaultSession,
-    VersionSummary,
+    OpAnnotationSummary, OpenedBase, OutlinePage, Page, Paging, RemnantLog, RenameAffected,
+    RenameFailed, RenameFailureKind, RenameReport, RenameSkipReason, RenameSkipped, SaveReport,
+    SavedQuery, SavedQuerySourceSyntax, SavedQuerySummary, ScanProgress, ScanProgressListener,
+    ScanReport, SessionConfig, TaskIndexRepairOutcome, VaultEventListener, VaultRootIdentity,
+    VaultSession, VersionSummary,
 };
-pub use session::{SkippedFile, TagCount, TagEditReport};
+pub use session::{
+    MARKDOWN_DOCUMENT_EXTENSIONS, MAX_INDEXED_HASH_PATHS, OPENABLE_DOCUMENT_EXTENSIONS,
+    SCAN_ERROR_SAMPLES, SkippedFile, TagCount, TagEditReport, is_openable_document,
+};
 pub use sidebar_filter::{
     FilterParseError, SidebarFilterDateWindow, SidebarFilterNamedWindow, SidebarFilterQueryTerm,
     SidebarFilterTerm, SidebarTagFilterActivation, parse_sidebar_filter,

@@ -844,13 +844,19 @@ impl VaultSession {
         Ok(self.inner.remove_tag_from_files(paths, tag)?.into())
     }
 
-    /// Return a page of indexed files matching `filter`.
+    /// Return a page of indexed files matching `filter`. W7-7 PR 7: the
+    /// query honours `cancel` (checked first, polled inside the statement
+    /// and between rows); a cancellation is `Cancelled`, never a partial
+    /// page.
     pub fn list_files(
         &self,
         filter: FileFilter,
         paging: Paging,
+        cancel: Arc<CancelToken>,
     ) -> Result<FileSummaryPage, VaultError> {
-        let page = self.inner.list_files(filter.into(), paging.into())?;
+        let page = self
+            .inner
+            .list_files(filter.into(), paging.into(), &cancel.inner)?;
         Ok(page.into())
     }
 
@@ -1299,6 +1305,41 @@ impl VaultSession {
         Ok(report.into())
     }
 
+    /// W7-7 PR 7 (#1252, R-9): rescan the OPEN vault — the same
+    /// incremental walk as the open scan. It retains nothing: the host
+    /// re-synchronizes its surfaces from the index afterwards (AR-18's
+    /// fallback), comparing open documents through
+    /// `indexed_content_hashes`.
+    pub fn rescan_with_progress(
+        &self,
+        cancel: Arc<CancelToken>,
+        listener: Arc<dyn ScanProgressListener>,
+    ) -> Result<ScanReport, VaultError> {
+        let adapter: Arc<dyn core::ScanProgressListener> =
+            Arc::new(ScanProgressListenerAdapter { foreign: listener });
+        let report = self
+            .inner
+            .rescan_with_progress(&cancel.inner, Some(adapter))?;
+        Ok(report.into())
+    }
+
+    /// The listener-less rescan (a foreground rescan shows no progress).
+    pub fn rescan(&self, cancel: Arc<CancelToken>) -> Result<ScanReport, VaultError> {
+        Ok(self.inner.rescan_with_progress(&cancel.inner, None)?.into())
+    }
+
+    /// W7-7 PR 7 (#1252, R-9): the index's committed content hash for
+    /// each path, in order — `None` where the index holds no such path.
+    /// Bounded (refused beyond `max_indexed_hash_paths()` paths) and
+    /// cancellable: a host asks for its open documents after a rescan.
+    pub fn indexed_content_hashes(
+        &self,
+        paths: Vec<String>,
+        cancel: Arc<CancelToken>,
+    ) -> Result<Vec<Option<String>>, VaultError> {
+        Ok(self.inner.indexed_content_hashes(&paths, &cancel.inner)?)
+    }
+
     /// Register a session-event listener (O-2 #540). Returns an opaque
     /// token for `unregister_event_listener`. Events arrive on
     /// background worker threads — marshal to the main actor inside
@@ -1544,6 +1585,20 @@ impl VaultSession {
         Ok(self.inner.graph_snapshot(filter.into())?.into())
     }
 
+    /// `graph_snapshot` under a cancel token (W7-7 PR 7, codex PR 7 round 4
+    /// finding 5): polled per node and edge; the index build and the mtime
+    /// read are interrupted inside SQLite.
+    pub fn graph_snapshot_cancellable(
+        &self,
+        filter: GraphFilter,
+        cancel: Arc<CancelToken>,
+    ) -> Result<GraphSnapshot, VaultError> {
+        Ok(self
+            .inner
+            .graph_snapshot_cancellable(filter.into(), &cancel.inner)?
+            .into())
+    }
+
     /// Depth-limited (1..=3, clamped) undirected neighborhood of one
     /// note (#552). The filter applies before traversal.
     pub fn graph_neighborhood(
@@ -1591,6 +1646,19 @@ impl VaultSession {
             .into())
     }
 
+    /// `graph_topology` under a cancel token (W7-7 PR 7).
+    pub fn graph_topology_cancellable(
+        &self,
+        query: GraphVisibilityQuery,
+        config: GraphConfig,
+        cancel: Arc<CancelToken>,
+    ) -> Result<GraphTopology, VaultError> {
+        Ok(self
+            .inner
+            .graph_topology_cancellable(&query.into(), &config.into(), &cancel.inner)?
+            .into())
+    }
+
     /// The VISIBLE neighbours of `id` under a query (0b-6b): both
     /// directions, unique, in the snapshot's edge order.
     pub fn graph_neighbors(
@@ -1616,6 +1684,20 @@ impl VaultSession {
             .into())
     }
 
+    /// `graph_connections_tree` under a cancel token (W7-7 PR 7).
+    pub fn graph_connections_tree_cancellable(
+        &self,
+        path: String,
+        depth: u32,
+        filter: GraphFilter,
+        cancel: Arc<CancelToken>,
+    ) -> Result<GraphConnectionsTree, VaultError> {
+        Ok(self
+            .inner
+            .graph_connections_tree_cancellable(&path, depth, filter.into(), &cancel.inner)?
+            .into())
+    }
+
     /// The table rows under a query, core-formatted (nine cells) and in
     /// `sort`'s order (0b-7).
     pub fn graph_table_rows(
@@ -1626,6 +1708,19 @@ impl VaultSession {
         Ok(self
             .inner
             .graph_table_rows(&query.into(), sort.into())?
+            .into())
+    }
+
+    /// `graph_table_rows` under a cancel token (W7-7 PR 7).
+    pub fn graph_table_rows_cancellable(
+        &self,
+        query: GraphVisibilityQuery,
+        sort: GraphTableSort,
+        cancel: Arc<CancelToken>,
+    ) -> Result<GraphTableRows, VaultError> {
+        Ok(self
+            .inner
+            .graph_table_rows_cancellable(&query.into(), sort.into(), &cancel.inner)?
             .into())
     }
 
@@ -1968,47 +2063,71 @@ impl VaultSession {
     }
 
     /// Resolve a transient editor preview under core-owned cumulative bounds.
+    ///
+    /// `cancel` (#1279, locked decision 05 §4) is the preview request's:
+    /// the host cancels it when the preview is closed, superseded,
+    /// invalidated or disposed, and the walk stops at its next node with
+    /// `VaultError::Cancelled`.
     pub fn resolve_embed_preview(
         &self,
         host_path: String,
         target: String,
         alt: Option<String>,
+        cancel: Arc<CancelToken>,
     ) -> Result<EmbedPreviewResolution, VaultError> {
         Ok(self
             .inner
-            .resolve_embed_preview(&host_path, &target, alt)?
+            .resolve_embed_preview(&host_path, &target, alt, &cancel.inner)?
             .into())
     }
 
     /// Pool-clamped preview (W4-2 round 11): image payloads past the
-    /// caller's remaining note-wide pool never cross the FFI.
+    /// caller's remaining note-wide pool never cross the FFI. `cancel`
+    /// (#1279) is the panel load's: the host cancels it when the note
+    /// changes or the panel shuts down.
     pub fn resolve_embed_preview_pooled(
         &self,
         host_path: String,
         target: String,
         alt: Option<String>,
         image_pool_bytes: u64,
+        cancel: Arc<CancelToken>,
     ) -> Result<EmbedPreviewResolution, VaultError> {
         Ok(self
             .inner
-            .resolve_embed_preview_pooled(&host_path, &target, alt, image_pool_bytes)?
+            .resolve_embed_preview_pooled(
+                &host_path,
+                &target,
+                alt,
+                image_pool_bytes,
+                &cancel.inner,
+            )?
             .into())
     }
 
     /// Resolve one READING-CARD embed (W3-5): preview budgets, nested
     /// image payloads never marshalled, root image included only when
     /// it fits `image_budget_bytes` — with its true size reported so
-    /// the caller charges its note-wide pool honestly.
+    /// the caller charges its note-wide pool honestly. `cancel` (#1279)
+    /// is the reading refresh's: the host cancels it when the refresh is
+    /// superseded, detached or disposed.
     pub fn resolve_embed_reading_card(
         &self,
         host_path: String,
         target: String,
         alt: Option<String>,
         image_budget_bytes: u64,
+        cancel: Arc<CancelToken>,
     ) -> Result<EmbedReadingCard, VaultError> {
         Ok(self
             .inner
-            .resolve_embed_reading_card(&host_path, &target, alt, image_budget_bytes)?
+            .resolve_embed_reading_card(
+                &host_path,
+                &target,
+                alt,
+                image_budget_bytes,
+                &cancel.inner,
+            )?
             .into())
     }
     /// Read a binary attachment from the vault. Used by the read-
@@ -5161,13 +5280,23 @@ impl LayoutSession {
     /// `edges()`: the returned frame's `generation` moved and ids may
     /// have been reassigned.
     pub fn refresh(&self) -> Result<Option<LayoutFrame>, VaultError> {
+        self.refresh_cancellable(CancelToken::new())
+    }
+
+    /// `refresh` under a cancel token (W7-7 PR 7, codex PR 7 round 4
+    /// finding 5): a cancelled refresh leaves the layout as it was.
+    pub fn refresh_cancellable(
+        &self,
+        cancel: Arc<CancelToken>,
+    ) -> Result<Option<LayoutFrame>, VaultError> {
         let mut state = self.state.lock().expect("layout state mutex");
         let last_generation = state.generation;
-        match self
-            .session
-            .inner
-            .refresh_layout(&mut state.engine, self.filter, last_generation)?
-        {
+        match self.session.inner.refresh_layout_cancellable(
+            &mut state.engine,
+            self.filter,
+            last_generation,
+            &cancel.inner,
+        )? {
             None => Ok(None),
             Some((topology, _warm)) => {
                 state.apply_topology(topology);
@@ -6262,14 +6391,33 @@ impl From<core::Page<core::TaskWithLocation>> for TaskWithLocationPage {
     }
 }
 
-/// Summary of a scan operation.
+/// The most error messages a scan report carries across the FFI (W7-7
+/// PR 7, rounds 25-26; locked decision 05's memory-bounded rule): a
+/// degraded provider can fail every file of the vault, at open and on
+/// every rescan. The count crosses in full, the messages only as samples;
+/// core's log keeps the whole list.
+pub const SCAN_ERROR_SAMPLES: usize = core::SCAN_ERROR_SAMPLES;
+
+/// Summary of a scan operation — the open scan's and every rescan's.
 #[derive(uniffi::Record)]
 pub struct ScanReport {
     pub files_seen: u64,
+    /// Files the scanner read and hashed this pass — a READ count, never
+    /// copy (W7-7 PR 7): use `files_changed` for "new or changed".
     pub files_indexed: u64,
     pub files_skipped: u64,
     pub bytes_processed: u64,
-    pub errors: Vec<String>,
+    /// Every error the scan recorded, counted (what
+    /// `VaultRescanIncomplete` speaks).
+    pub error_count: u64,
+    /// The first of them, never more than [`SCAN_ERROR_SAMPLES`].
+    pub error_samples: Vec<String>,
+    /// New rows plus rows whose committed content hash differs (R-9).
+    pub files_changed: u64,
+    /// Rows removed because their files left the disk.
+    pub files_removed: u64,
+    /// False when the walk was partial or any error was recorded.
+    pub complete: bool,
 }
 
 impl From<core::ScanReport> for ScanReport {
@@ -6279,9 +6427,41 @@ impl From<core::ScanReport> for ScanReport {
             files_indexed: r.files_indexed,
             files_skipped: r.files_skipped,
             bytes_processed: r.bytes_processed,
-            errors: r.errors,
+            error_count: r.error_count,
+            error_samples: r.error_samples,
+            files_changed: r.files_changed,
+            files_removed: r.files_removed,
+            complete: r.complete,
         }
     }
+}
+
+/// The extensions of core's openable documents (W7-7 PR 7, round 26):
+/// the set `FileFilter::OpenableDocuments` lists, lowercase and without
+/// the dot. A host's own list is pinned equal to it.
+#[uniffi::export]
+pub fn openable_document_extensions() -> Vec<String> {
+    core::OPENABLE_DOCUMENT_EXTENSIONS
+        .iter()
+        .map(|extension| (*extension).to_string())
+        .collect()
+}
+
+/// The Markdown extensions core's index marks `is_markdown` (W7-7 PR 7,
+/// round 27), lowercase and without the dot. A host's own Markdown
+/// classification (the Bases dependents) is pinned equal to it.
+#[uniffi::export]
+pub fn markdown_document_extensions() -> Vec<String> {
+    core::MARKDOWN_DOCUMENT_EXTENSIONS
+        .iter()
+        .map(|extension| (*extension).to_string())
+        .collect()
+}
+
+/// The most paths one `indexed_content_hashes` call answers (W7-7 PR 7).
+#[uniffi::export]
+pub fn max_indexed_hash_paths() -> u32 {
+    core::MAX_INDEXED_HASH_PATHS as u32
 }
 
 // =====================================================================
@@ -8380,6 +8560,22 @@ impl From<ShellRegion> for core::a11y::ShellRegion {
     }
 }
 
+/// 1:1 mirror of `slate_core::a11y::RescanReason` (W7-7 PR 7, R-9).
+#[derive(Debug, Clone, Copy, PartialEq, Eq, uniffi::Enum)]
+pub enum RescanReason {
+    Explicit,
+    Foreground,
+}
+
+impl From<RescanReason> for core::a11y::RescanReason {
+    fn from(r: RescanReason) -> Self {
+        match r {
+            RescanReason::Explicit => Self::Explicit,
+            RescanReason::Foreground => Self::Foreground,
+        }
+    }
+}
+
 /// One announcement, as data — 1:1 mirror of `slate_core::a11y::A11yEvent`
 /// (see that module for per-variant docs, the copy rules, and the
 /// `HostComposed` residue contract).
@@ -8455,7 +8651,16 @@ pub enum A11yEvent {
         total: u64,
     },
     VaultScanFinished {
-        files_indexed: u64,
+        files_seen: u64,
+        files_changed: u64,
+    },
+    VaultRescanFinished {
+        reason: RescanReason,
+        changed: u64,
+        removed: u64,
+    },
+    VaultRescanIncomplete {
+        errors: u64,
     },
     SearchResultsSummary {
         count: u32,
@@ -10339,7 +10544,23 @@ impl From<A11yEvent> for core::a11y::A11yEvent {
             F::SearchNeedsVault => C::SearchNeedsVault,
             F::VaultScanStarted { total_files } => C::VaultScanStarted { total_files },
             F::VaultScanProgress { indexed, total } => C::VaultScanProgress { indexed, total },
-            F::VaultScanFinished { files_indexed } => C::VaultScanFinished { files_indexed },
+            F::VaultScanFinished {
+                files_seen,
+                files_changed,
+            } => C::VaultScanFinished {
+                files_seen,
+                files_changed,
+            },
+            F::VaultRescanFinished {
+                reason,
+                changed,
+                removed,
+            } => C::VaultRescanFinished {
+                reason: reason.into(),
+                changed,
+                removed,
+            },
+            F::VaultRescanIncomplete { errors } => C::VaultRescanIncomplete { errors },
             F::SearchResultsSummary { count } => C::SearchResultsSummary { count },
             F::SearchFailed { message } => C::SearchFailed { message },
             F::SearchResultOpened {
@@ -11385,6 +11606,28 @@ impl VaultSession {
         Ok(self.inner.open_base(&path)?)
     }
 
+    /// W7-7 PR 7 (codex AR-18 review round 2, findings 2 and 4): open a
+    /// `.base` under a cancel token — a caller cancelled before the handle
+    /// registers gets `Cancelled` and no handle — returning the handle with
+    /// the content hash of the exact definition it opened.
+    pub fn open_base_cancellable(
+        &self,
+        path: String,
+        cancel: Arc<CancelToken>,
+    ) -> Result<OpenedBase, VaultError> {
+        Ok(self
+            .inner
+            .open_base_cancellable(&path, &cancel.inner)?
+            .into())
+    }
+
+    /// The content hash of the definition a base handle shows now (its
+    /// open's bytes, or its last successful edit's); `None` for an inline
+    /// or query handle.
+    pub fn base_definition_hash(&self, handle: u64) -> Result<Option<String>, VaultError> {
+        Ok(self.inner.base_definition_hash(handle)?)
+    }
+
     pub fn open_base_inline(
         &self,
         source: String,
@@ -11894,6 +12137,23 @@ impl From<core::CanvasLoadDisposition> for CanvasLoadDisposition {
             core::CanvasLoadDisposition::Editable => Self::Editable,
             core::CanvasLoadDisposition::RecoveredReadOnly => Self::RecoveredReadOnly,
             core::CanvasLoadDisposition::Unavailable => Self::Unavailable,
+        }
+    }
+}
+
+/// Result of `open_base_cancellable`: the handle and the content hash of
+/// the exact definition it opened (W7-7 PR 7).
+#[derive(Debug, Clone, PartialEq, Eq, uniffi::Record)]
+pub struct OpenedBase {
+    pub handle: u64,
+    pub content_hash: String,
+}
+
+impl From<core::OpenedBase> for OpenedBase {
+    fn from(opened: core::OpenedBase) -> Self {
+        OpenedBase {
+            handle: opened.handle,
+            content_hash: opened.content_hash,
         }
     }
 }
@@ -13077,6 +13337,190 @@ impl VaultSession {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    /// W7-7 PR 7 (rounds 25-26; locked decision 05's memory-bounded rule):
+    /// thousands of failing files cross the FFI as the EXACT error count
+    /// and at most five sample messages — at the initial open scan and at a
+    /// rescan, on both paths out of each (the returned report and the
+    /// progress stream's Finished report).
+    #[test]
+    fn every_scan_carries_an_exact_error_count_and_at_most_five_samples_across_the_ffi() {
+        struct Recorder(std::sync::Mutex<Vec<ScanProgress>>);
+        impl ScanProgressListener for Recorder {
+            fn on_progress(&self, event: ScanProgress) {
+                self.0.lock().unwrap().push(event);
+            }
+        }
+        fn finished_samples(recorder: &Recorder) -> (u64, usize) {
+            recorder
+                .0
+                .lock()
+                .unwrap()
+                .iter()
+                .find_map(|event| match event {
+                    ScanProgress::Finished { report } => {
+                        Some((report.error_count, report.error_samples.len()))
+                    }
+                    _ => None,
+                })
+                .expect("a Finished event")
+        }
+        fn write_failing(root: &std::path::Path, fill: u8, len: usize) {
+            for n in 0..FAILING {
+                std::fs::write(root.join(format!("big-{n:04}.md")), vec![fill; len]).unwrap();
+            }
+        }
+
+        const FAILING: usize = 3000;
+        let tmp = tempfile::tempdir().expect("tempdir");
+        std::fs::write(tmp.path().join("ok.md"), "ok\n").unwrap();
+        // Every file past the refuse threshold is recorded as an error; a
+        // refused file keeps its (mtime, size) row, so a later scan re-reads
+        // (and refuses) it only once it changes.
+        write_failing(tmp.path(), b'x', 64);
+        let mut config = core::SessionConfig::new(tmp.path().join(".slate"));
+        config.large_file_refuse_bytes = 32;
+        let session = VaultSession {
+            inner: core::VaultSession::open(
+                Arc::new(core::FsVaultProvider::new(tmp.path().to_path_buf())),
+                config,
+            )
+            .expect("open vault"),
+            _census: census_live::Marker::count(&census_live::SESSIONS),
+        };
+
+        // The initial open scan.
+        let opened = Arc::new(Recorder(std::sync::Mutex::new(Vec::new())));
+        let report = session
+            .scan_initial_with_progress(CancelToken::new(), opened.clone())
+            .unwrap();
+        assert_eq!(report.error_count, FAILING as u64);
+        assert!(!report.complete);
+        assert_eq!(report.error_samples.len(), SCAN_ERROR_SAMPLES);
+        assert_eq!(
+            finished_samples(&opened),
+            (FAILING as u64, SCAN_ERROR_SAMPLES)
+        );
+
+        // A rescan, listener-less.
+        write_failing(tmp.path(), b'y', 65);
+        let report = session.rescan(CancelToken::new()).unwrap();
+        assert_eq!(report.error_count, FAILING as u64);
+        assert!(!report.complete);
+        assert_eq!(report.error_samples.len(), SCAN_ERROR_SAMPLES);
+
+        // A rescan with progress.
+        write_failing(tmp.path(), b'z', 66);
+        let rescanned = Arc::new(Recorder(std::sync::Mutex::new(Vec::new())));
+        let report = session
+            .rescan_with_progress(CancelToken::new(), rescanned.clone())
+            .unwrap();
+        assert_eq!(report.error_count, FAILING as u64);
+        assert_eq!(report.error_samples.len(), SCAN_ERROR_SAMPLES);
+        assert_eq!(
+            finished_samples(&rescanned),
+            (FAILING as u64, SCAN_ERROR_SAMPLES)
+        );
+    }
+
+    /// Round 26: core exports its openable and Markdown sets — the host's
+    /// classification is pinned to them.
+    #[test]
+    fn core_exports_its_openable_and_markdown_sets() {
+        assert_eq!(
+            openable_document_extensions(),
+            ["md", "markdown", "mdown", "mkd", "canvas", "base"]
+        );
+        assert_eq!(
+            markdown_document_extensions(),
+            ["md", "markdown", "mdown", "mkd"]
+        );
+    }
+
+    /// W7-7 PR 7 (AR-18's fallback): the indexed hashes cross the FFI in
+    /// the caller's order, `None` for a path the index lacks; the call is
+    /// bounded and honours a cancelled token.
+    #[test]
+    fn indexed_content_hashes_cross_the_ffi_bounded_and_cancellable() {
+        let tmp = tempfile::tempdir().expect("tempdir");
+        std::fs::write(tmp.path().join("a.md"), "alpha\n").unwrap();
+        std::fs::write(tmp.path().join("b.canvas"), "{}").unwrap();
+        let session = VaultSession::open_filesystem(tmp.path().to_string_lossy().into_owned())
+            .expect("open vault");
+        session.scan_initial(CancelToken::new()).unwrap();
+
+        let hashes = session
+            .indexed_content_hashes(
+                vec!["b.canvas".into(), "missing.md".into(), "a.md".into()],
+                CancelToken::new(),
+            )
+            .unwrap();
+        assert_eq!(hashes.len(), 3);
+        assert_eq!(
+            hashes[0].as_deref(),
+            Some(core::content_hash(b"{}").as_str())
+        );
+        assert_eq!(hashes[1], None);
+        assert_eq!(
+            hashes[2].as_deref(),
+            Some(core::content_hash(b"alpha\n").as_str())
+        );
+
+        let limit = max_indexed_hash_paths() as usize;
+        assert_eq!(limit, 1024);
+        let too_many: Vec<String> = (0..=limit).map(|n| format!("n{n}.md")).collect();
+        assert!(matches!(
+            session.indexed_content_hashes(too_many, CancelToken::new()),
+            Err(VaultError::InvalidArgument { .. })
+        ));
+
+        let cancelled = CancelToken::new();
+        cancelled.cancel();
+        assert!(matches!(
+            session.indexed_content_hashes(vec!["a.md".into()], cancelled),
+            Err(VaultError::Cancelled)
+        ));
+    }
+
+    /// W7-7 PR 7 (codex PR 7 round 3, finding 7): the files page's bound
+    /// holds across the FFI — 0 and over the maximum are refused, the
+    /// maximum is accepted.
+    #[test]
+    fn files_page_limit_is_bounded_across_ffi() {
+        let tmp = tempfile::tempdir().expect("tempdir");
+        std::fs::write(tmp.path().join("a.md"), "# A\n").unwrap();
+        let session = VaultSession::open_filesystem(tmp.path().to_string_lossy().into_owned())
+            .expect("open vault");
+        session.scan_initial(CancelToken::new()).unwrap();
+        let max = core::session::MAX_LIST_FILES_PAGE_LIMIT;
+
+        for limit in [0, max + 1, u32::MAX] {
+            let result = session.list_files(
+                FileFilter::All,
+                Paging {
+                    cursor: None,
+                    limit,
+                },
+                CancelToken::new(),
+            );
+            assert!(
+                matches!(result, Err(VaultError::InvalidArgument { .. })),
+                "limit {limit}: {:?}",
+                result.as_ref().err()
+            );
+        }
+        let page = session
+            .list_files(
+                FileFilter::All,
+                Paging {
+                    cursor: None,
+                    limit: max,
+                },
+                CancelToken::new(),
+            )
+            .unwrap();
+        assert_eq!(page.items.len(), 1);
+    }
 
     #[test]
     fn bounded_directory_page_crosses_ffi_with_cursor_and_cancellation() {

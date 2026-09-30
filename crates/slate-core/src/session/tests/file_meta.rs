@@ -943,7 +943,9 @@ fn list_files_snapshot(session: &VaultSession, context: &str) -> Vec<FilterPages
     .into_iter()
     .map(|(name, filter)| FilterPages {
         name,
-        pages: drain_file_pages(name, context, |paging| session.list_files(filter, paging)),
+        pages: drain_file_pages(name, context, |paging| {
+            session.list_files(filter, paging, &CancelToken::new())
+        }),
     })
     .collect()
 }

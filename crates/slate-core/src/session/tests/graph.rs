@@ -1982,3 +1982,89 @@ fn session_results_carry_the_generation_they_read() {
             .all(|r| !r.id.contains(&r.node_id.to_string()) || r.id.contains('%'))
     );
 }
+
+/// W7-7 PR 7 (codex PR 7 round 4, finding 5): the graph queries a rescan's
+/// graph publication reaches honour a cancel token — cancelled before the
+/// call, or at the first node inside it — with `Cancelled`, never a partial
+/// answer. The tokenless forms are their wrappers, unchanged.
+#[test]
+fn the_rescans_graph_queries_honour_a_cancel_token() {
+    use crate::graph::GraphFilter;
+    use crate::graph_queries::{GraphTableSort, GraphVisibilityQuery};
+    let (_tmp, session) = make_vault(|p| {
+        p.write_file("a.md", b"[[b]] [[c]]").unwrap();
+        p.write_file("b.md", b"[[a]]").unwrap();
+        p.write_file("c.md", b"").unwrap();
+    });
+    session.scan_initial(&CancelToken::new()).unwrap();
+    let q = GraphVisibilityQuery {
+        filter: GraphFilter::default(),
+        name_query: String::new(),
+        kind_only: None,
+    };
+    let config = crate::graph_config::GraphConfig::default();
+
+    type Query<'a> = Box<dyn Fn(&CancelToken) -> Result<(), VaultError> + 'a>;
+    let queries: Vec<(&str, Query)> = vec![
+        (
+            "snapshot",
+            Box::new(|cancel| {
+                session
+                    .graph_snapshot_cancellable(GraphFilter::default(), cancel)
+                    .map(|_| ())
+            }),
+        ),
+        (
+            "table rows",
+            Box::new(|cancel| {
+                session
+                    .graph_table_rows_cancellable(&q, GraphTableSort::default(), cancel)
+                    .map(|_| ())
+            }),
+        ),
+        (
+            "topology",
+            Box::new(|cancel| {
+                session
+                    .graph_topology_cancellable(&q, &config, cancel)
+                    .map(|_| ())
+            }),
+        ),
+        (
+            "connections tree",
+            Box::new(|cancel| {
+                session
+                    .graph_connections_tree_cancellable("a.md", 1, GraphFilter::default(), cancel)
+                    .map(|_| ())
+            }),
+        ),
+    ];
+
+    for (name, query) in &queries {
+        let before = CancelToken::new();
+        before.cancel();
+        assert!(
+            matches!(query(&before), Err(VaultError::Cancelled)),
+            "{name}: cancelled before"
+        );
+
+        let inside = CancelToken::new();
+        let trip = inside.clone();
+        crate::session::scan_point_test_hook::install(Box::new(move |point| {
+            if point == "graph node" {
+                trip.cancel();
+            }
+        }));
+        let result = query(&inside);
+        crate::session::scan_point_test_hook::clear();
+        assert!(
+            matches!(result, Err(VaultError::Cancelled)),
+            "{name}: cancelled at a node"
+        );
+
+        assert!(query(&CancelToken::new()).is_ok(), "{name}: a live token");
+    }
+
+    let snapshot = session.graph_snapshot(GraphFilter::default()).unwrap();
+    assert_eq!(snapshot.nodes.len(), 3);
+}

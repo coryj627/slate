@@ -116,14 +116,15 @@ func runVaultDemo(rootPath: String) {
         print(
             "Scan complete: \(scanReport.filesIndexed) files indexed, "
                 + "\(scanReport.bytesProcessed) bytes processed, "
-                + "\(scanReport.errors.count) errors."
+                + "\(scanReport.errorCount) errors."
         )
-        for err in scanReport.errors {
+        // The report counts every error and carries at most a few samples.
+        for err in scanReport.errorSamples {
             print("  warn: \(err)")
         }
 
         let paging = Paging(cursor: nil, limit: 20)
-        let page = try session.listFiles(filter: .markdownOnly, paging: paging)
+        let page = try session.listFiles(filter: .markdownOnly, paging: paging, cancel: CancelToken())
         print(
             "Markdown files (\(page.items.count) of \(page.totalFiltered) shown):"
         )

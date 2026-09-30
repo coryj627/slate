@@ -6,6 +6,7 @@ using System.Diagnostics.CodeAnalysis;
 using System.IO;
 using System.Windows.Threading;
 using System.Windows.Input;
+using SlateWindows.Commands;
 using SlateWindows.FileManagement;
 using uniffi.slate_uniffi;
 
@@ -475,7 +476,7 @@ internal sealed partial class FilesSidebarViewModel : BindableBase
             restoredExpandedPaths ?? [],
             StringComparer.Ordinal);
 
-        RefreshCommand = new RelayCommand(_ => Refresh(reportCount: true), _ => true);
+        RefreshCommand = new ReasonedCommand(RequestRefresh, () => RefreshUnavailableReason);
         RetrySettingsCommand = new RelayCommand(_ => RetrySettings(), _ => _settingsNotice is not null);
         // W7-7 (R-3): Clear covers the tag scope too — text and scope in
         // one change — and is available exactly while a filter or tag scope
@@ -502,8 +503,9 @@ internal sealed partial class FilesSidebarViewModel : BindableBase
         // a spurious failure; the guard matches every sibling verb.
         DeleteCommand = new AsyncRelayCommand(
             _ => _trashCompletion = DeleteSelectedAsync(),
-            _ => !IsImporting && !IsTrashing
-                && SelectedNode is { IsPlaceholder: false, IsGroupHeader: false });
+            _ => !IsImporting && !IsTrashing && StructuralMutationBlocked is null
+                && SelectedNode is { IsPlaceholder: false, IsGroupHeader: false },
+            () => StructuralMutationBlocked);
         CreateFolderNoteCommand = new RelayCommand(_ => CreateFolderNote(), _ => !IsImporting && !IsTrashing && SelectedNode?.IsDirectory == true && !SelectedNode.HasFolderNote);
         DeleteFolderNoteCommand = new RelayCommand(_ => DeleteFolderNote(), _ => !IsImporting && !IsTrashing && SelectedNode?.IsDirectory == true && SelectedNode.HasFolderNote);
         CopyWikilinkCommand = new RelayCommand(_ => CopyWikilink(), _ => SelectedNode is { IsDirectory: false });
@@ -535,10 +537,14 @@ internal sealed partial class FilesSidebarViewModel : BindableBase
         OpenNewTabCommand = new RelayCommand(_ => OpenSelected(WorkspaceOpenTarget.NewTab), _ => CanOpenSelected());
         OpenSplitCommand = new RelayCommand(_ => OpenSelected(WorkspaceOpenTarget.SplitRight), _ => CanOpenSelected());
         BatchMoveCommand = new RelayCommand(_ => BatchMove(), _ => !IsImporting && !IsTrashing && BatchSelectionCount > 0 && MoveDestination.Length > 0);
-        BatchTrashCommand = new AsyncRelayCommand(_ => _trashCompletion = BatchTrashAsync(), _ => !IsImporting && !IsTrashing && BatchSelectionCount > 0);
+        BatchTrashCommand = new AsyncRelayCommand(
+            _ => _trashCompletion = BatchTrashAsync(),
+            _ => !IsImporting && !IsTrashing && StructuralMutationBlocked is null && BatchSelectionCount > 0,
+            () => StructuralMutationBlocked);
         ImportCommand = new AsyncRelayCommand(
             _ => _importCompletion = ImportAsync(),
-            () => !IsImporting && !IsTrashing);
+            () => !IsImporting && !IsTrashing && StructuralMutationBlocked is null,
+            () => StructuralMutationBlocked);
         CancelImportCommand = new RelayCommand(_ => CancelImport(), _ => IsImporting);
         CancelTrashCommand = new RelayCommand(_ => CancelTrash(), _ => CanCancelTrash);
         ClearRecentsCommand = new RelayCommand(_ => ClearRecents(), _ => _recents.Count > 0);
@@ -797,7 +803,70 @@ internal sealed partial class FilesSidebarViewModel : BindableBase
         ? "No files selected"
         : $"{BatchSelectionCount:N0} {(BatchSelectionCount == 1 ? "file" : "files")} selected";
 
+    /// <summary>
+    /// Files Sidebar → Refresh — the "Refresh files" button, the Files
+    /// Sidebar menu item and the registered command all run it. W7-7 PR 7
+    /// (#1252, R-9): it is the lifecycle's EXPLICIT rescan, which reconciles
+    /// what changed outside Slate and always speaks its outcome; a sidebar
+    /// with no lifecycle behind it (headless facts) keeps the tree refresh.
+    /// It is available exactly when the rescan would run (codex PR 7 round
+    /// 1, finding 11): never listed as available while the lifecycle would
+    /// silently refuse it.
+    /// </summary>
     public ICommand RefreshCommand { get; }
+
+    /// <summary>W7-7 PR 7: installed by the vault lifecycle — the explicit
+    /// rescan <see cref="RefreshCommand"/> runs.</summary>
+    internal Func<Task>? RescanRequested { get; set; }
+
+    /// <summary>W7-7 PR 7 (finding 11): installed by the vault lifecycle —
+    /// why its rescan would be refused right now, or null.</summary>
+    internal Func<string?>? RescanUnavailableReason { get; set; }
+
+    /// <summary>W7-7 PR 7 (codex PR 7 round 4, finding 2): installed by the
+    /// vault lifecycle — why an import or a trash operation cannot START now
+    /// (a running rescan), or null. Import, Delete and Batch Trash read it in
+    /// their availability AND at their own entry.</summary>
+    internal Func<string?>? StructuralMutationBlockedReason { get; set; }
+
+    private string? StructuralMutationBlocked => StructuralMutationBlockedReason?.Invoke();
+
+    /// <summary>Requery Import, Delete and Batch Trash — the lifecycle
+    /// raises it when a rescan starts and when it ends.</summary>
+    internal void RaiseStructuralMutationAvailabilityChanged()
+    {
+        ((AsyncRelayCommand)ImportCommand).RaiseCanExecuteChanged();
+        ((AsyncRelayCommand)DeleteCommand).RaiseCanExecuteChanged();
+        ((AsyncRelayCommand)BatchTrashCommand).RaiseCanExecuteChanged();
+    }
+
+    /// <summary>Why <see cref="RefreshCommand"/> cannot run right now, or
+    /// null: the lifecycle's refusal when one is installed, otherwise an
+    /// import or trash operation in flight.</summary>
+    internal string? RefreshUnavailableReason =>
+        RescanUnavailableReason is Func<string?> lifecycle
+            ? lifecycle()
+            : IsImporting || IsTrashing
+                ? SlateCommandRegistrar.StructuralMutationBusyReason
+                : null;
+
+    /// <summary>Requery <see cref="RefreshCommand"/> — raised with every
+    /// sidebar command-state change and by the lifecycle when one of its
+    /// own blockers changes.</summary>
+    internal void RaiseRefreshAvailabilityChanged() =>
+        ((ReasonedCommand)RefreshCommand).RaiseCanExecuteChanged();
+
+    private void RequestRefresh()
+    {
+        if (RescanRequested is Func<Task> rescan)
+        {
+            _ = rescan();
+            return;
+        }
+
+        Refresh(reportCount: true);
+    }
+
     public ICommand RetrySettingsCommand { get; }
     public ICommand ClearFilterCommand { get; }
     public ICommand ToggleTagsCommand { get; }
@@ -1190,12 +1259,21 @@ internal sealed partial class FilesSidebarViewModel : BindableBase
         ApplyTags(outcome);
     }
 
+    /// <summary>Test seam (W7-7 PR 7, F5): runs on the tree worker right
+    /// after the native <c>TagTree</c> call returns.</summary>
+    internal Action? AfterTagTreeForTests { get; set; }
+
     private TagLoadOutcome BuildTags(CancellationToken cancellationToken)
     {
         try
         {
+            // W7-7 PR 7 (F5): the caller's token is checked before AND after
+            // the tokenless native call (#1290 owns making it cancellable),
+            // so a cancelled refresh skips it or discards what it returned.
             cancellationToken.ThrowIfCancellationRequested();
             TagTree tree = _session.TagTree();
+            AfterTagTreeForTests?.Invoke();
+            cancellationToken.ThrowIfCancellationRequested();
             var roots = new List<SidebarTagViewModel>();
             var ancestors = new List<SidebarTagViewModel>();
             foreach (TagTreeEntry entry in tree.Entries)
@@ -1232,7 +1310,11 @@ internal sealed partial class FilesSidebarViewModel : BindableBase
         }
     }
 
-    private void ApplyTags(TagLoadOutcome outcome)
+    /// <summary>Publish the tag list. <paramref name="announce"/> false —
+    /// a rescan's own tree refresh (W7-7 PR 7, v2 §6) — shows a tag-tree
+    /// failure on the status line without speaking it; the rescan counts
+    /// it in its one sentence.</summary>
+    private void ApplyTags(TagLoadOutcome outcome, bool announce = true)
     {
         // W7-7 PR 4b (#1247, R-5; the sweep's G7): the tag whose row is
         // selected — the row stays selected while its tag is the filter — is
@@ -1261,7 +1343,15 @@ internal sealed partial class FilesSidebarViewModel : BindableBase
 
         if (outcome.Error is not null)
         {
-            ReportFailure(outcome.Error);
+            if (announce)
+            {
+                ReportFailure(outcome.Error);
+            }
+            else
+            {
+                Status = outcome.Error;
+                HoldStatusForPendingPublication();
+            }
         }
     }
 
@@ -1615,7 +1705,7 @@ internal sealed partial class FilesSidebarViewModel : BindableBase
 
     private async Task DeleteSelectedAsync()
     {
-        if (IsTrashing || SessionShutdownStarted || SelectedNode is not
+        if (IsTrashing || SessionShutdownStarted || StructuralMutationBlocked is not null || SelectedNode is not
             { IsPlaceholder: false, IsGroupHeader: false } node)
         {
             return;
@@ -1972,7 +2062,7 @@ internal sealed partial class FilesSidebarViewModel : BindableBase
     private async Task BatchTrashAsync()
     {
         StructuralBatchItem[] items = SelectedBatchItems();
-        if (IsTrashing || SessionShutdownStarted || items.Length == 0) { return; }
+        if (IsTrashing || SessionShutdownStarted || StructuralMutationBlocked is not null || items.Length == 0) { return; }
         TrashWorkOwner owner = BeginTrash();
         StagedTrash? staged = null;
         try
@@ -2638,5 +2728,6 @@ internal sealed partial class FilesSidebarViewModel : BindableBase
         ((AsyncRelayCommand)ImportCommand).RaiseCanExecuteChanged();
         ((RelayCommand)CancelImportCommand).RaiseCanExecuteChanged();
         ((RelayCommand)CancelTrashCommand).RaiseCanExecuteChanged();
+        RaiseRefreshAvailabilityChanged();
     }
 }

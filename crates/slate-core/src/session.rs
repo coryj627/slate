@@ -264,6 +264,30 @@ pub enum FileFilter {
     OpenableDocuments,
 }
 
+/// The Markdown extensions core's index marks `is_markdown`, lowercase
+/// and without the dot. Exported so hosts classify Markdown exactly as
+/// core does (W7-7 PR 7, round 27: the Bases dependents).
+pub const MARKDOWN_DOCUMENT_EXTENSIONS: &[&str] = &["md", "markdown", "mdown", "mkd"];
+
+/// The extensions of the openable-document set
+/// ([`FileFilter::OpenableDocuments`]: the four Markdown extensions
+/// `is_markdown` recognizes plus `.canvas` and `.base`), lowercase and
+/// without the dot. Exported so hosts classify exactly as core does
+/// (W7-7 PR 7, round 26).
+pub const OPENABLE_DOCUMENT_EXTENSIONS: &[&str] =
+    &["md", "markdown", "mdown", "mkd", "canvas", "base"];
+
+/// Whether `path` names an openable document — the classification
+/// [`FileFilter::OpenableDocuments`] applies to indexed rows, from the
+/// path alone (its extension, case-folded), so a removed path classifies
+/// the same as a present one.
+pub fn is_openable_document(path: &str) -> bool {
+    let (_, extension, _) = classify_path(path);
+    extension
+        .as_deref()
+        .is_some_and(|extension| OPENABLE_DOCUMENT_EXTENSIONS.contains(&extension))
+}
+
 // --- Summary type ---
 
 /// Light-weight per-file row returned by `list_files`. The full per-file
@@ -660,7 +684,119 @@ impl CancelToken {
     }
 }
 
+#[cfg(test)]
+thread_local! {
+    /// #1279 test seam: candidate rows the embed resolver's streamed
+    /// lookup visited on this thread.
+    pub(crate) static EMBED_CANDIDATE_ROWS_VISITED: std::cell::Cell<usize> =
+        const { std::cell::Cell::new(0) };
+    /// #1279 test seam: cancel the walk's token right after this many
+    /// visited rows (a host cancelling between rows).
+    pub(crate) static EMBED_CANDIDATE_CANCEL_AFTER: std::cell::Cell<Option<usize>> =
+        const { std::cell::Cell::new(None) };
+}
+
+#[cfg(test)]
+thread_local! {
+    /// #1279 test seam: a rendezvous on the resolving thread each time the
+    /// embed walk is about to ask for the session connection — it reports
+    /// the request, then waits for the fact to let it proceed, so a fact can
+    /// park a holder on the connection at exactly the read it interrupts.
+    #[allow(clippy::type_complexity)]
+    pub(crate) static EMBED_CONNECTION_REQUESTED: std::cell::RefCell<
+        Option<(std::sync::mpsc::Sender<()>, std::sync::mpsc::Receiver<()>)>,
+    > = const { std::cell::RefCell::new(None) };
+}
+
+#[cfg(test)]
+fn embed_connection_requested() {
+    EMBED_CONNECTION_REQUESTED.with(|rendezvous| {
+        if let Some((requested, proceed)) = rendezvous.borrow().as_ref() {
+            let _ = requested.send(());
+            let _ = proceed.recv();
+        }
+    });
+}
+
+#[cfg(test)]
+fn embed_candidate_row_visited(cancel: &CancelToken) {
+    let visited = EMBED_CANDIDATE_ROWS_VISITED.with(|rows| {
+        rows.set(rows.get() + 1);
+        rows.get()
+    });
+    if EMBED_CANDIDATE_CANCEL_AFTER.with(std::cell::Cell::get) == Some(visited) {
+        cancel.cancel();
+    }
+}
+
 // --- Scan report ---
+
+/// The most error messages a [`ScanReport`] keeps (W7-7 PR 7, rounds
+/// 25-27; locked decision 05's memory-bounded rule): a degraded provider
+/// can fail every file of the vault, at open and on every rescan, so the
+/// report counts every error exactly, keeps only the first few verbatim,
+/// and logs each one in full as it happens.
+pub const SCAN_ERROR_SAMPLES: usize = 5;
+
+/// A caller's scan error sink ([`with_scan_error_sink`]).
+type ScanErrorSink = Box<dyn FnMut(&str)>;
+
+thread_local! {
+    /// The sink [`with_scan_error_sink`] installs on this thread.
+    static SCAN_ERROR_SINK: std::cell::RefCell<Option<ScanErrorSink>> =
+        const { std::cell::RefCell::new(None) };
+}
+
+/// Run `f` with every error a scan inside it records ALSO handed to `sink`,
+/// in full, as it happens (W7-7 PR 7, codex PR 7 round 4 finding 7) — a
+/// scan runs on its caller's thread. For a caller whose own contract is the
+/// complete list — slate-cli's `slate.cli.v1` `scan_errors`; the report
+/// itself stays bounded ([`SCAN_ERROR_SAMPLES`]). The previous sink is
+/// restored when `f` returns or unwinds.
+pub fn with_scan_error_sink<R>(sink: impl FnMut(&str) + 'static, f: impl FnOnce() -> R) -> R {
+    struct Restore(Option<ScanErrorSink>);
+    impl Drop for Restore {
+        fn drop(&mut self) {
+            let previous = self.0.take();
+            SCAN_ERROR_SINK.with(|slot| *slot.borrow_mut() = previous);
+        }
+    }
+    let previous = SCAN_ERROR_SINK.with(|slot| slot.borrow_mut().replace(Box::new(sink)));
+    let _restore = Restore(previous);
+    f()
+}
+
+#[cfg(test)]
+thread_local! {
+    /// Test seam: while `Some`, every error [`ScanReport::record_error`]
+    /// streams to the log on this thread is also captured here in full —
+    /// the facts' view of the stream beyond the samples.
+    pub(crate) static SCAN_ERROR_STREAM: std::cell::RefCell<Option<Vec<String>>> =
+        const { std::cell::RefCell::new(None) };
+}
+
+impl ScanReport {
+    /// Record one scan error: logged in full now, counted, and kept as a
+    /// sample while fewer than [`SCAN_ERROR_SAMPLES`] are held.
+    pub(crate) fn record_error(&mut self, message: String) {
+        log::debug!("scan error: {message}");
+        SCAN_ERROR_SINK.with(|slot| {
+            if let Some(sink) = slot.borrow_mut().as_mut() {
+                sink(&message);
+            }
+        });
+        #[cfg(test)]
+        SCAN_ERROR_STREAM.with(|stream| {
+            if let Some(stream) = stream.borrow_mut().as_mut() {
+                stream.push(message.clone());
+            }
+        });
+        self.error_count = self.error_count.saturating_add(1);
+        if self.error_samples.len() < SCAN_ERROR_SAMPLES {
+            self.error_samples.push(message);
+        }
+    }
+}
 
 /// Summary of a scan operation.
 #[derive(Debug, Default, Clone)]
@@ -673,10 +809,31 @@ pub struct ScanReport {
     /// refresh `indexed_at_ms` for these but don't re-read or re-hash.
     pub files_skipped: u64,
     pub bytes_processed: u64,
-    /// Per-file errors that did not abort the scan. The scanner keeps
-    /// going on individual-file failures so one unreadable file does not
-    /// blank the index.
-    pub errors: Vec<String>,
+    /// Every error that did not abort the scan, counted exactly. The
+    /// scanner keeps going on individual-file failures so one unreadable
+    /// file does not blank the index.
+    pub error_count: u64,
+    /// The first [`SCAN_ERROR_SAMPLES`] of them, verbatim (W7-7 PR 7,
+    /// round 27): the report never holds more, however many files fail;
+    /// each error is logged in full as it happens ([`Self::record_error`]).
+    pub error_samples: Vec<String>,
+    /// W7-7 PR 7 (R-9): files whose committed content hash is new or
+    /// differs from the one the index held before this scan — the "new
+    /// or changed" count both hosts speak. Hash-authoritative: a
+    /// slow-path re-read of unchanged bytes counts in `files_indexed`
+    /// and never here, so a touched-but-unchanged vault reports 0.
+    /// Counted as each row is written (`index_file` compares the prior
+    /// row's hash it already reads), so the scan holds no before-picture
+    /// of the vault.
+    pub files_changed: u64,
+    /// Index rows this scan removed because their files left the disk
+    /// (counted by the file prune).
+    pub files_removed: u64,
+    /// False whenever the walk was partial OR any error was recorded
+    /// (a per-file stat, read or index failure included) — never
+    /// the walk flag alone. A partial scan must never be spoken as
+    /// "No changes".
+    pub complete: bool,
 }
 
 // --- Scan progress events ---
@@ -1035,7 +1192,8 @@ impl DiagramCompletedCache {
 pub struct VaultSession {
     provider: Arc<dyn VaultProvider>,
     conn: Mutex<Connection>,
-    /// Ephemeral process/session binding for opaque directory cursors.
+    /// Ephemeral process/session binding for opaque directory cursors —
+    /// and, since W7-7 PR 7, for scan-delta cursors too.
     directory_cursor_nonce: u64,
     config: SessionConfig,
     /// Per-file op-log append state (#378). See [`OplogAppendState`].
@@ -1754,6 +1912,21 @@ impl VaultSession {
     /// `floor + 1` — a rebuilt index must never reuse an
     /// already-observed generation (review round 1 finding 2). Caller
     /// holds conn then graph (LOCK ORDER).
+    /// [`Self::graph_ensure_built`] under `cancel` (W7-7 PR 7, codex PR 7
+    /// round 4 finding 5): the index build's SQL is interrupted by the
+    /// token; an interrupted build leaves no index (the next query builds).
+    fn graph_ensure_built_under(
+        &self,
+        conn: &Connection,
+        guard: &mut Option<crate::graph::GraphIndex>,
+        cancel: &CancelToken,
+    ) -> Result<(), VaultError> {
+        cancel.check()?;
+        directory_page::with_sqlite_cancellation(conn, cancel, || {
+            self.graph_ensure_built(conn, guard)
+        })
+    }
+
     fn graph_ensure_built(
         &self,
         conn: &Connection,
@@ -1921,11 +2094,26 @@ impl VaultSession {
         &self,
         filter: crate::graph::GraphFilter,
     ) -> Result<crate::graph::GraphSnapshot, VaultError> {
+        self.graph_snapshot_cancellable(filter, &CancelToken::new())
+    }
+
+    /// [`Self::graph_snapshot`] under `cancel` (W7-7 PR 7, codex PR 7 round
+    /// 4 finding 5): the index build and the mtime read are interrupted
+    /// inside SQLite, and the token is polled before each node and edge —
+    /// a cancelled caller gets `Cancelled`, never a partial snapshot.
+    pub fn graph_snapshot_cancellable(
+        &self,
+        filter: crate::graph::GraphFilter,
+        cancel: &CancelToken,
+    ) -> Result<crate::graph::GraphSnapshot, VaultError> {
+        cancel.check()?;
         let conn = self.conn.lock().expect("session connection mutex");
         let mut guard = self.graph.lock().expect("graph index mutex");
-        self.graph_ensure_built(&conn, &mut guard)?;
+        self.graph_ensure_built_under(&conn, &mut guard, cancel)?;
         let index = guard.as_ref().expect("graph index just ensured");
+        cancel.check()?;
         let metrics = self.graph_metrics_cached(index);
+        cancel.check()?;
 
         let filtered =
             index.filtered_nodes(&filter, |key| metrics.get(key).is_some_and(|m| m.is_orphan));
@@ -1933,22 +2121,23 @@ impl VaultSession {
             filtered.iter().map(|(id, _)| *id).collect();
         let raw_edges = index.edges_among(&surviving);
 
-        let mtimes = file_mtimes(&conn)?;
-        let nodes: Vec<crate::graph::GraphNode> = filtered
-            .iter()
-            .map(|(id, data)| graph_node_payload(*id, data, &metrics, &mtimes))
-            .collect();
-        let edges: Vec<crate::graph::GraphEdge> = raw_edges
-            .into_iter()
-            .map(
-                |(source_id, target_id, kind, count)| crate::graph::GraphEdge {
-                    source_id,
-                    target_id,
-                    kind,
-                    count,
-                },
-            )
-            .collect();
+        let mtimes = file_mtimes_under(&conn, cancel)?;
+        let mut nodes: Vec<crate::graph::GraphNode> = Vec::with_capacity(filtered.len());
+        for (id, data) in &filtered {
+            scan_point("graph node");
+            cancel.check()?;
+            nodes.push(graph_node_payload(*id, data, &metrics, &mtimes));
+        }
+        let mut edges: Vec<crate::graph::GraphEdge> = Vec::with_capacity(raw_edges.len());
+        for (source_id, target_id, kind, count) in raw_edges {
+            cancel.check()?;
+            edges.push(crate::graph::GraphEdge {
+                source_id,
+                target_id,
+                kind,
+                count,
+            });
+        }
 
         let summary_counts = snapshot_summary_counts(&nodes, &edges, filter);
         let audio_summary = crate::graph_summary::snapshot_summary(&summary_counts);
@@ -1974,7 +2163,7 @@ impl VaultSession {
         let mut guard = self.graph.lock().expect("graph index mutex");
         self.graph_ensure_built(&conn, &mut guard)?;
         let index = guard.as_ref().expect("graph index just ensured");
-        self.graph_neighborhood_locked(&conn, index, path, depth, filter)
+        self.graph_neighborhood_locked(&conn, index, path, depth, filter, &CancelToken::new())
     }
 
     /// The neighbourhood under a HELD lock (W6-2 PR 0b): the tree query
@@ -1986,7 +2175,9 @@ impl VaultSession {
         path: &str,
         depth: u32,
         filter: crate::graph::GraphFilter,
+        cancel: &CancelToken,
     ) -> Result<crate::graph::GraphNeighborhood, VaultError> {
+        cancel.check()?;
         let depth = depth.clamp(1, 3);
         let metrics = self.graph_metrics_cached(index);
 
@@ -2004,12 +2195,13 @@ impl VaultSession {
 
         // Key-sorted node order = filtered_nodes retained to members.
         let filtered = index.filtered_nodes(&filter, is_orphan);
-        let mtimes = file_mtimes(conn)?;
-        let nodes: Vec<crate::graph::GraphNode> = filtered
-            .iter()
-            .filter(|(id, _)| member_ids.contains(id))
-            .map(|(id, data)| graph_node_payload(*id, data, &metrics, &mtimes))
-            .collect();
+        let mtimes = file_mtimes_under(conn, cancel)?;
+        let mut nodes: Vec<crate::graph::GraphNode> = Vec::new();
+        for (id, data) in filtered.iter().filter(|(id, _)| member_ids.contains(id)) {
+            scan_point("graph node");
+            cancel.check()?;
+            nodes.push(graph_node_payload(*id, data, &metrics, &mtimes));
+        }
         let edges: Vec<crate::graph::GraphEdge> = index
             .edges_among(&member_ids)
             .into_iter()
@@ -2063,11 +2255,25 @@ impl VaultSession {
         depth: u32,
         filter: crate::graph::GraphFilter,
     ) -> Result<crate::graph_queries::GraphConnectionsTree, VaultError> {
+        self.graph_connections_tree_cancellable(path, depth, filter, &CancelToken::new())
+    }
+
+    /// [`Self::graph_connections_tree`] under `cancel` (W7-7 PR 7, codex PR
+    /// 7 round 4 finding 5): the build and the mtime read interrupted, the
+    /// token polled per neighbourhood node.
+    pub fn graph_connections_tree_cancellable(
+        &self,
+        path: &str,
+        depth: u32,
+        filter: crate::graph::GraphFilter,
+        cancel: &CancelToken,
+    ) -> Result<crate::graph_queries::GraphConnectionsTree, VaultError> {
+        cancel.check()?;
         let conn = self.conn.lock().expect("session connection mutex");
         let mut guard = self.graph.lock().expect("graph index mutex");
-        self.graph_ensure_built(&conn, &mut guard)?;
+        self.graph_ensure_built_under(&conn, &mut guard, cancel)?;
         let index = guard.as_ref().expect("graph index just ensured");
-        let hood = self.graph_neighborhood_locked(&conn, index, path, depth, filter)?;
+        let hood = self.graph_neighborhood_locked(&conn, index, path, depth, filter, cancel)?;
         Ok(crate::graph_queries::connections_tree(
             &hood,
             index.generation(),
@@ -2093,7 +2299,19 @@ impl VaultSession {
         query: &crate::graph_queries::GraphVisibilityQuery,
         config: &crate::graph_config::GraphConfig,
     ) -> Result<crate::graph_queries::GraphTopology, VaultError> {
-        let snapshot = self.graph_snapshot(query.filter)?;
+        self.graph_topology_cancellable(query, config, &CancelToken::new())
+    }
+
+    /// [`Self::graph_topology`] under `cancel` (W7-7 PR 7, codex PR 7 round
+    /// 4 finding 5): its snapshot is the cancellable one.
+    pub fn graph_topology_cancellable(
+        &self,
+        query: &crate::graph_queries::GraphVisibilityQuery,
+        config: &crate::graph_config::GraphConfig,
+        cancel: &CancelToken,
+    ) -> Result<crate::graph_queries::GraphTopology, VaultError> {
+        let snapshot = self.graph_snapshot_cancellable(query.filter, cancel)?;
+        cancel.check()?;
         Ok(crate::graph_queries::topology(&snapshot, query, config))
     }
 
@@ -2119,7 +2337,19 @@ impl VaultSession {
         query: &crate::graph_queries::GraphVisibilityQuery,
         sort: crate::graph_queries::GraphTableSort,
     ) -> Result<crate::graph_queries::GraphTableRows, VaultError> {
-        let snapshot = self.graph_snapshot(query.filter)?;
+        self.graph_table_rows_cancellable(query, sort, &CancelToken::new())
+    }
+
+    /// [`Self::graph_table_rows`] under `cancel` (W7-7 PR 7, codex PR 7
+    /// round 4 finding 5): its snapshot is the cancellable one.
+    pub fn graph_table_rows_cancellable(
+        &self,
+        query: &crate::graph_queries::GraphVisibilityQuery,
+        sort: crate::graph_queries::GraphTableSort,
+        cancel: &CancelToken,
+    ) -> Result<crate::graph_queries::GraphTableRows, VaultError> {
+        let snapshot = self.graph_snapshot_cancellable(query.filter, cancel)?;
+        cancel.check()?;
         Ok(crate::graph_queries::GraphTableRows {
             generation: snapshot.generation,
             total: snapshot.nodes.len() as u64,
@@ -2154,7 +2384,7 @@ impl VaultSession {
         // Node metadata under the SAME lock as the topology, so the
         // diagram's labels can never come from a different generation than
         // its ids (P2-3 #559 review — eliminates the snapshot handshake).
-        topology.nodes = self.graph_nodes_locked(&conn, index, &filter)?;
+        topology.nodes = self.graph_nodes_locked(&conn, index, &filter, &CancelToken::new())?;
         Ok((engine, topology))
     }
 
@@ -2167,15 +2397,19 @@ impl VaultSession {
         conn: &Connection,
         index: &crate::graph::GraphIndex,
         filter: &crate::graph::GraphFilter,
+        cancel: &CancelToken,
     ) -> Result<Vec<crate::graph::GraphNode>, VaultError> {
         let metrics = self.graph_metrics_cached(index);
         let filtered =
             index.filtered_nodes(filter, |key| metrics.get(key).is_some_and(|m| m.is_orphan));
-        let mtimes = file_mtimes(conn)?;
-        Ok(filtered
-            .iter()
-            .map(|(id, data)| graph_node_payload(*id, data, &metrics, &mtimes))
-            .collect())
+        let mtimes = file_mtimes_under(conn, cancel)?;
+        let mut nodes = Vec::with_capacity(filtered.len());
+        for (id, data) in &filtered {
+            scan_point("graph node");
+            cancel.check()?;
+            nodes.push(graph_node_payload(*id, data, &metrics, &mtimes));
+        }
+        Ok(nodes)
     }
 
     /// Re-sync `engine` with the live graph iff its generation moved
@@ -2199,9 +2433,30 @@ impl VaultSession {
         )>,
         VaultError,
     > {
+        self.refresh_layout_cancellable(engine, filter, last_generation, &CancelToken::new())
+    }
+
+    /// [`Self::refresh_layout`] under `cancel` (W7-7 PR 7, codex PR 7 round
+    /// 4 finding 5): the build and the node metadata honour the token, all
+    /// BEFORE the engine is touched, so a cancelled refresh leaves the
+    /// engine as it was.
+    pub fn refresh_layout_cancellable(
+        &self,
+        engine: &mut crate::graph_layout::LayoutEngine,
+        filter: crate::graph::GraphFilter,
+        last_generation: u64,
+        cancel: &CancelToken,
+    ) -> Result<
+        Option<(
+            crate::graph_layout::LayoutTopology,
+            crate::graph_layout::WarmReport,
+        )>,
+        VaultError,
+    > {
+        cancel.check()?;
         let conn = self.conn.lock().expect("session connection mutex");
         let mut guard = self.graph.lock().expect("graph index mutex");
-        self.graph_ensure_built(&conn, &mut guard)?;
+        self.graph_ensure_built_under(&conn, &mut guard, cancel)?;
         let index = guard.as_ref().expect("graph index just ensured");
         if index.generation() == last_generation {
             return Ok(None);
@@ -2214,7 +2469,7 @@ impl VaultSession {
         // then apply new-topology positions under old ids. `warm_update`
         // and `layout_topology` are both infallible, so once the metadata
         // read succeeds the rest commits cleanly.
-        let nodes = self.graph_nodes_locked(&conn, index, &filter)?;
+        let nodes = self.graph_nodes_locked(&conn, index, &filter, cancel)?;
         let warm = engine.warm_update(index, &filter);
         let mut topology = crate::graph_layout::layout_topology(engine, index);
         topology.nodes = nodes;
@@ -2870,6 +3125,64 @@ impl VaultSession {
         cancel: &CancelToken,
         listener: Option<Arc<dyn ScanProgressListener>>,
     ) -> Result<ScanReport, VaultError> {
+        self.scan_session(cancel, listener)
+    }
+
+    /// W7-7 PR 7 (#1252, R-9): rescan the OPEN session — the same
+    /// incremental walk as [`Self::scan_initial_with_progress`], named for
+    /// the host's Refresh and foreground rescans. It retains nothing: the
+    /// host re-synchronizes every surface from the index afterwards
+    /// (contract R-9, AR-18's fallback), so a change another session
+    /// already indexed is shown too. No file-change event is emitted
+    /// (locked decision 05: external edits surface at a scan, never as
+    /// events).
+    pub fn rescan_with_progress(
+        &self,
+        cancel: &CancelToken,
+        listener: Option<Arc<dyn ScanProgressListener>>,
+    ) -> Result<ScanReport, VaultError> {
+        self.scan_session(cancel, listener)
+    }
+
+    /// W7-7 PR 7 (#1252, R-9): the committed content hash of each path,
+    /// in order (`None` for a path the index does not hold) — what a
+    /// host compares its open documents against after a rescan. Bounded:
+    /// refused beyond [`MAX_INDEXED_HASH_PATHS`] paths; cancellable
+    /// between lookups (locked decision 05 §4).
+    pub fn indexed_content_hashes(
+        &self,
+        paths: &[String],
+        cancel: &CancelToken,
+    ) -> Result<Vec<Option<String>>, VaultError> {
+        if paths.len() > MAX_INDEXED_HASH_PATHS {
+            return Err(VaultError::InvalidArgument {
+                message: format!("at most {MAX_INDEXED_HASH_PATHS} paths per indexed-hash lookup"),
+            });
+        }
+        if cancel.is_cancelled() {
+            return Err(VaultError::Cancelled);
+        }
+        let conn = self.conn.lock().expect("session connection mutex");
+        let mut lookup = conn.prepare_cached("SELECT content_hash FROM files WHERE path = ?1")?;
+        let mut hashes = Vec::with_capacity(paths.len());
+        for path in paths {
+            if cancel.is_cancelled() {
+                return Err(VaultError::Cancelled);
+            }
+            hashes.push(
+                lookup
+                    .query_row(rusqlite::params![path], |row| row.get::<_, String>(0))
+                    .optional()?,
+            );
+        }
+        Ok(hashes)
+    }
+
+    fn scan_session(
+        &self,
+        cancel: &CancelToken,
+        listener: Option<Arc<dyn ScanProgressListener>>,
+    ) -> Result<ScanReport, VaultError> {
         // #802: coarse lifecycle events bracket the scan. Started
         // fires before the session lock is taken; Finished after it
         // drops; the reconcile pair fires under the lock (the
@@ -2912,8 +3225,24 @@ impl VaultSession {
             listener.as_deref(),
             &mut graph_sink,
         )?;
+        // W7-7 PR 7 (rounds 25-27): each error was logged in full as it
+        // happened (ScanReport::record_error); the report holds a count.
+        if report.error_count > 0 {
+            log::warn!("scan recorded {} errors", report.error_count);
+        }
         self.graph_apply(graph_sink);
         self.bump_bases_generation();
+        // W7-7 PR 7 (codex PR 7 round 3, finding 2): the scan is committed;
+        // a cancel that lands now skips the best-effort maintenance below —
+        // the op-log reconcile, the events rebuild (its staleness marker is
+        // durable), the age-out and the compaction sweep each rerun on the
+        // next scan — so a closing host is not held behind it.
+        scan_point("maintenance");
+        if cancel.is_cancelled() {
+            drop(conn);
+            self.notify_index_phase(IndexPhase::ScanFinished, report.files_seen);
+            return Ok(report);
+        }
         // Re-attach op logs to live files and surface deleted-file
         // remnants (O-1 #539). Best-effort: a reconcile failure
         // degrades history features, never the scan itself.
@@ -5650,13 +5979,24 @@ impl VaultSession {
     }
 
     /// Page through the indexed files.
+    ///
+    /// W7-7 PR 7 (#1252; locked decision 05 §4, codex PR 7 design pass):
+    /// the query honours `cancel` — checked before it starts, polled by
+    /// SQLite's progress handler inside the statement (the filtered
+    /// `COUNT(*)` walks the whole set) and between rows. A cancellation
+    /// observed at any point returns `Cancelled`, never a partial page.
     pub fn list_files(
         &self,
         filter: FileFilter,
         paging: Paging,
+        cancel: &CancelToken,
     ) -> Result<Page<FileSummary>, VaultError> {
+        validate_page_limit(paging.limit, MAX_LIST_FILES_PAGE_LIMIT, "file")?;
+        cancel.check()?;
         let conn = self.conn.lock().expect("session connection mutex");
-        list_files_impl(&conn, filter, paging)
+        directory_page::with_sqlite_cancellation(&conn, cancel, || {
+            list_files_impl(&conn, filter, paging, cancel)
+        })
     }
 
     /// Fetch one indexed file through the same enriched projection as
@@ -5846,20 +6186,32 @@ impl VaultSession {
         alt: Option<String>,
     ) -> Result<crate::EmbedResolution, VaultError> {
         let mut budget = crate::embeds::EmbedResolveBudget::Unlimited;
-        self.resolve_embed_at_depth(host_path, target, 0, alt, &mut budget)
+        self.resolve_embed_at_depth(host_path, target, 0, alt, &mut budget, &CancelToken::new())
     }
 
     /// Resolve an editor popover preview under a shared text/node/image budget.
     /// Unlike `resolve_embed`, this bounds allocation while walking the tree,
     /// before the recursive result is materialized across FFI.
+    ///
+    /// Cancellable (locked decision 05 §4, #1279): `cancel` is polled before
+    /// each node, each nested embed and each read, so a preview the host
+    /// closed, superseded or invalidated stops mid-walk and returns
+    /// `VaultError::Cancelled` — never a partial result. A pre-cancelled
+    /// token touches nothing.
     pub fn resolve_embed_preview(
         &self,
         host_path: &str,
         target: &str,
         alt: Option<String>,
+        cancel: &CancelToken,
     ) -> Result<crate::EmbedPreviewResolution, VaultError> {
+        cancel.check()?;
         let mut budget = crate::embeds::EmbedResolveBudget::preview();
-        let resolution = self.resolve_embed_at_depth(host_path, target, 0, alt, &mut budget)?;
+        let resolution =
+            self.resolve_embed_at_depth(host_path, target, 0, alt, &mut budget, cancel)?;
+        // A cancel that landed during the last read is still a cancel: the
+        // result is never handed back (#1279, codex round 1).
+        cancel.check()?;
         Ok(crate::EmbedPreviewResolution {
             resolution,
             truncated: budget.truncated(),
@@ -5873,17 +6225,22 @@ impl VaultSession {
     /// `Unresolved(ReadError)` core-side instead of marshalling —
     /// without the clamp, 128 keys × the 8 MiB per-key allowance
     /// was ~1 GiB of FFI traffic a crafted note triggered on
-    /// activation.
+    /// activation. Cancellable like [`Self::resolve_embed_preview`]
+    /// (#1279): the embeds leaf's load cancels it on a note switch.
     pub fn resolve_embed_preview_pooled(
         &self,
         host_path: &str,
         target: &str,
         alt: Option<String>,
         image_pool_bytes: u64,
+        cancel: &CancelToken,
     ) -> Result<crate::EmbedPreviewResolution, VaultError> {
+        cancel.check()?;
         let mut budget =
             crate::embeds::EmbedResolveBudget::preview_with_image_pool(image_pool_bytes);
-        let resolution = self.resolve_embed_at_depth(host_path, target, 0, alt, &mut budget)?;
+        let resolution =
+            self.resolve_embed_at_depth(host_path, target, 0, alt, &mut budget, cancel)?;
+        cancel.check()?;
         Ok(crate::EmbedPreviewResolution {
             resolution,
             truncated: budget.truncated(),
@@ -5899,16 +6256,21 @@ impl VaultSession {
     /// fits `image_budget_bytes` (the caller's remaining note-wide
     /// pool). Transient allocation inside this call stays bounded by
     /// the per-key preview budget; nothing over-budget is retained or
-    /// marshalled.
+    /// marshalled. Cancellable like [`Self::resolve_embed_preview`]
+    /// (#1279): a superseded or detached reading refresh cancels it.
     pub fn resolve_embed_reading_card(
         &self,
         host_path: &str,
         target: &str,
         alt: Option<String>,
         image_budget_bytes: u64,
+        cancel: &CancelToken,
     ) -> Result<crate::embeds::EmbedReadingCard, VaultError> {
+        cancel.check()?;
         let mut budget = crate::embeds::EmbedResolveBudget::preview();
-        let resolution = self.resolve_embed_at_depth(host_path, target, 0, alt, &mut budget)?;
+        let resolution =
+            self.resolve_embed_at_depth(host_path, target, 0, alt, &mut budget, cancel)?;
+        cancel.check()?;
         let mut resolution = crate::embeds::strip_nested_image_payloads(resolution);
         let mut image_elided = false;
         let mut image_len = 0u64;
@@ -5935,9 +6297,12 @@ impl VaultSession {
         depth: u32,
         alt: Option<String>,
         budget: &mut crate::embeds::EmbedResolveBudget,
+        cancel: &CancelToken,
     ) -> Result<crate::EmbedResolution, VaultError> {
         use crate::embeds::{EmbedAnchor, parse_embed_target};
 
+        // Every node of the walk is a cooperative boundary (#1279).
+        cancel.check()?;
         if depth >= crate::MAX_EMBED_DEPTH {
             return Ok(crate::EmbedResolution::Unresolved {
                 reason: crate::EmbedUnresolvedReason::DepthLimitReached,
@@ -5951,43 +6316,38 @@ impl VaultSession {
         // host path through so relative-folder resolution stays
         // symmetric with the note-target branch (Codoki PR #190).
         if crate::embeds::looks_like_image(note_name) {
-            return self.resolve_image_embed(host_path, target, note_name, alt, budget);
+            return self.resolve_image_embed(host_path, target, note_name, alt, budget, cancel);
         }
 
-        // Note target: snapshot the file index, run link_resolver,
-        // then read the resolved file off-mutex.
-        let target_path = {
-            let conn = self.conn.lock().expect("session connection mutex");
-            let paths: Vec<String> = conn
-                .prepare("SELECT path FROM files")?
-                .query_map([], |row| row.get::<_, String>(0))?
-                .collect::<Result<Vec<_>, _>>()?;
-            let vault_index = crate::InMemoryVaultIndex::new(paths);
-            match crate::resolve_link(note_name, None, host_path, &vault_index) {
-                crate::ResolvedLink::Resolved { target_path, .. } => target_path,
-                _ => {
-                    return Ok(crate::EmbedResolution::Unresolved {
-                        reason: crate::EmbedUnresolvedReason::TargetNotFound {
-                            target: target.to_string(),
-                        },
-                    });
-                }
-            }
+        // Note target: stream only the index rows the resolver could
+        // match (#1279 — never the whole files table, never a Vec of
+        // matches), then read the resolved file off-mutex.
+        let Some(target_path) = self.resolve_embed_link_target(note_name, host_path, cancel)?
+        else {
+            return Ok(crate::EmbedResolution::Unresolved {
+                reason: crate::EmbedUnresolvedReason::TargetNotFound {
+                    target: target.to_string(),
+                },
+            });
         };
 
         let resolved = match anchor {
             None => self
-                .read_embed_text(&target_path, budget)
-                .and_then(|text| self.resolve_full_note_embed(target_path, text, depth, budget)),
+                .read_embed_text(&target_path, budget, cancel)
+                .and_then(|text| {
+                    self.resolve_full_note_embed(target_path, text, depth, budget, cancel)
+                }),
             Some(EmbedAnchor::Heading(heading)) => {
-                self.resolve_indexed_section_embed(target_path, heading, depth, budget)
+                self.resolve_indexed_section_embed(target_path, heading, depth, budget, cancel)
             }
             Some(EmbedAnchor::Block(block_id)) => {
-                self.resolve_indexed_block_embed(target_path, block_id, budget)
+                self.resolve_indexed_block_embed(target_path, block_id, budget, cancel)
             }
         };
         match resolved {
             Ok(resolution) => Ok(resolution),
+            // A cancelled walk is not a card: it ends the whole resolve.
+            Err(VaultError::Cancelled) => Err(VaultError::Cancelled),
             Err(VaultError::Io(error)) if error.kind() == std::io::ErrorKind::NotFound => {
                 Ok(crate::EmbedResolution::Unresolved {
                     reason: crate::EmbedUnresolvedReason::TargetNotFound {
@@ -6009,9 +6369,19 @@ impl VaultSession {
         heading_name: &str,
         depth: u32,
         budget: &mut crate::embeds::EmbedResolveBudget,
+        cancel: &CancelToken,
     ) -> Result<crate::EmbedResolution, VaultError> {
-        let headings = {
-            let conn = self.conn.lock().expect("session connection mutex");
+        // The heading and its successor, streamed in document order with a
+        // cooperative boundary around every row (#1279, codex round 1): the
+        // walk stops at the section's end and never collects the heading
+        // table.
+        let matched = {
+            // The connection wait is itself a cooperative boundary (#1279,
+            // codex round 2a): a preview retired while a scan or a save holds
+            // the connection returns Cancelled instead of queueing behind it.
+            #[cfg(test)]
+            embed_connection_requested();
+            let conn = lock_cancellable(&self.conn, cancel)?;
             let file_id: Option<i64> = conn
                 .query_row(
                     "SELECT id FROM files WHERE path = ?1",
@@ -6033,32 +6403,38 @@ impl VaultSession {
                  WHERE file_id = ?1
                  ORDER BY ordinal ASC",
             )?;
-            statement
-                .query_map(rusqlite::params![file_id], |row| {
-                    Ok((
-                        row.get::<_, i64>(0)? as u8,
-                        row.get::<_, String>(1)?,
-                        row.get::<_, String>(2)?,
-                        row.get::<_, i64>(3)? as u64,
-                    ))
-                })?
-                .collect::<Result<Vec<_>, _>>()?
+            let mut rows = statement.query(rusqlite::params![file_id])?;
+            let wanted = heading_name.trim();
+            let folded = wanted.to_lowercase();
+            let mut matched: Option<(u8, String, u64)> = None;
+            let mut section_end: Option<u64> = None;
+            loop {
+                cancel.check()?;
+                let Some(row) = rows.next()? else {
+                    break;
+                };
+                let level = row.get::<_, i64>(0)? as u8;
+                let offset = row.get::<_, i64>(3)? as u64;
+                match &matched {
+                    None => {
+                        let text: String = row.get(1)?;
+                        let anchor_id: String = row.get(2)?;
+                        if anchor_id.eq_ignore_ascii_case(wanted)
+                            || text.trim().to_lowercase() == folded
+                        {
+                            matched = Some((level, text, offset));
+                        }
+                    }
+                    Some((matched_level, _, _)) if level <= *matched_level => {
+                        section_end = Some(offset);
+                        break;
+                    }
+                    Some(_) => {}
+                }
+                cancel.check()?;
+            }
+            matched.map(|(_, text, start)| (text, start, section_end))
         };
-        let folded = heading_name.trim().to_lowercase();
-        let matched = headings
-            .iter()
-            .position(|(_, text, anchor_id, _)| {
-                anchor_id.eq_ignore_ascii_case(heading_name.trim())
-                    || text.trim().to_lowercase() == folded
-            })
-            .map(|index| {
-                let (level, text, _, start) = &headings[index];
-                let end = headings[index + 1..]
-                    .iter()
-                    .find(|(next_level, _, _, _)| next_level <= level)
-                    .map(|(_, _, _, offset)| *offset);
-                (text.clone(), *start, end)
-            });
         let Some((heading, start, indexed_end)) = matched else {
             return Ok(crate::EmbedResolution::Unresolved {
                 reason: crate::EmbedUnresolvedReason::HeadingNotFound {
@@ -6067,9 +6443,18 @@ impl VaultSession {
                 },
             });
         };
-        let end = indexed_end.unwrap_or(self.provider.stat(&target_path)?.size_bytes);
-        let section_text = self.read_embed_text_range(&target_path, start, end, budget)?;
-        let nested = self.resolve_nested_embeds(&target_path, &section_text, depth, budget)?;
+        let end = match indexed_end {
+            Some(end) => end,
+            None => {
+                cancel.check()?;
+                let size = self.provider.stat(&target_path)?.size_bytes;
+                cancel.check()?;
+                size
+            }
+        };
+        let section_text = self.read_embed_text_range(&target_path, start, end, budget, cancel)?;
+        let nested =
+            self.resolve_nested_embeds(&target_path, &section_text, depth, budget, cancel)?;
         Ok(crate::EmbedResolution::Section {
             target_path,
             heading,
@@ -6078,14 +6463,79 @@ impl VaultSession {
         })
     }
 
+    /// Where an embed target resolves from `host_path` (#1279; locked
+    /// decision 05 §9.3.1): the resolver's own candidate probe — exact
+    /// vault paths for a qualified or rooted target, file names for a
+    /// basename — looked up by the registered Unicode fold, so a
+    /// resolution reads only the rows that can match instead of every path
+    /// in the vault (for every nested node). The rows STREAM through the
+    /// resolver's selector, which keeps only the best candidate, with a
+    /// cooperative boundary before and after every row — a basename every
+    /// directory carries (`index.md`) is a walk the host can stop. The fold
+    /// is NFC + full-Unicode lowercase, a superset of the resolver's own
+    /// lowercase comparison, and the selector still decides: the answer is
+    /// the whole-index answer.
+    fn resolve_embed_link_target(
+        &self,
+        note_name: &str,
+        host_path: &str,
+        cancel: &CancelToken,
+    ) -> Result<Option<String>, VaultError> {
+        let Some(mut selector) =
+            crate::link_resolver::LinkCandidateSelector::new(note_name, host_path)
+        else {
+            return Ok(None);
+        };
+        let (column, keys) = match selector.probe() {
+            crate::link_resolver::CandidateProbe::None => return Ok(None),
+            crate::link_resolver::CandidateProbe::Paths(keys) => ("path", keys),
+            crate::link_resolver::CandidateProbe::Names(keys) => ("name", keys),
+        };
+        // One indexed lookup (idx_files_path_fold, idx_files_name_fold) for
+        // the probe's handful of keys; the placeholders are generated, the
+        // keys bound.
+        let folded: Vec<String> = keys
+            .iter()
+            .map(|key| crate::db::tree_sort_key(key))
+            .collect();
+        let placeholders = (1..=folded.len())
+            .map(|index| format!("?{index}"))
+            .collect::<Vec<_>>()
+            .join(", ");
+        let sql = format!(
+            "SELECT path FROM files WHERE slate_tree_sort_key({column}) IN ({placeholders})"
+        );
+        #[cfg(test)]
+        embed_connection_requested();
+        let conn = lock_cancellable(&self.conn, cancel)?;
+        let mut statement = conn.prepare_cached(&sql)?;
+        let mut rows = statement.query(rusqlite::params_from_iter(folded.iter()))?;
+        loop {
+            cancel.check()?;
+            let Some(row) = rows.next()? else {
+                break;
+            };
+            let path: String = row.get(0)?;
+            selector.offer(&path);
+            #[cfg(test)]
+            embed_candidate_row_visited(cancel);
+            cancel.check()?;
+        }
+        Ok(selector.into_winner())
+    }
+
     fn resolve_indexed_block_embed(
         &self,
         target_path: String,
         block_id: &str,
         budget: &mut crate::embeds::EmbedResolveBudget,
+        cancel: &CancelToken,
     ) -> Result<crate::EmbedResolution, VaultError> {
+        cancel.check()?;
         let resolved = {
-            let conn = self.conn.lock().expect("session connection mutex");
+            #[cfg(test)]
+            embed_connection_requested();
+            let conn = lock_cancellable(&self.conn, cancel)?;
             let file_id: Option<i64> = conn
                 .query_row(
                     "SELECT id FROM files WHERE path = ?1",
@@ -6111,6 +6561,7 @@ impl VaultSession {
             block.byte_start as u64,
             block.byte_end as u64,
             budget,
+            cancel,
         )?;
         Ok(crate::EmbedResolution::Block {
             target_path,
@@ -6119,15 +6570,21 @@ impl VaultSession {
         })
     }
 
+    /// Every provider read of the walk sits between two cooperative
+    /// boundaries (#1279, codex round 1): a cancel that lands while the
+    /// read runs ends the walk as soon as the read returns.
     fn read_embed_text_range(
         &self,
         path: &str,
         start: u64,
         end: u64,
         budget: &mut crate::embeds::EmbedResolveBudget,
+        cancel: &CancelToken,
     ) -> Result<String, VaultError> {
+        cancel.check()?;
         if !budget.is_preview() {
             let text = self.read_text(path)?;
+            cancel.check()?;
             return Ok(text
                 .get(start as usize..end as usize)
                 .unwrap_or("")
@@ -6144,6 +6601,7 @@ impl VaultSession {
         let mut bytes = self
             .provider
             .read_file_range_with_cap(path, start, read_limit)?;
+        cancel.check()?;
         if bytes.len() as u64 > read_limit {
             bytes.truncate(read_limit as usize);
         }
@@ -6175,30 +6633,21 @@ impl VaultSession {
         note_name: &str,
         alt: Option<String>,
         budget: &mut crate::embeds::EmbedResolveBudget,
+        cancel: &CancelToken,
     ) -> Result<crate::EmbedResolution, VaultError> {
-        // Same path-resolution strategy as note targets: snapshot
-        // the file index and run the link_resolver. `looks_like_image`
-        // guaranteed the extension is one the resolver recognises;
-        // basename / folder matching does the rest. `host_path`
-        // threads through so any future folder-relative resolution
-        // in `link_resolver` lights up automatically.
-        let target_path = {
-            let conn = self.conn.lock().expect("session connection mutex");
-            let paths: Vec<String> = conn
-                .prepare("SELECT path FROM files")?
-                .query_map([], |row| row.get::<_, String>(0))?
-                .collect::<Result<Vec<_>, _>>()?;
-            let vault_index = crate::InMemoryVaultIndex::new(paths);
-            match crate::resolve_link(note_name, None, host_path, &vault_index) {
-                crate::ResolvedLink::Resolved { target_path, .. } => target_path,
-                _ => {
-                    return Ok(crate::EmbedResolution::Unresolved {
-                        reason: crate::EmbedUnresolvedReason::TargetNotFound {
-                            target: raw_target.to_string(),
-                        },
-                    });
-                }
-            }
+        // Same path-resolution strategy as note targets: stream the
+        // candidate rows through the link resolver's selector.
+        // `looks_like_image` guaranteed the extension is one the resolver
+        // recognises; basename / folder matching does the rest.
+        // `host_path` threads through so any future folder-relative
+        // resolution in `link_resolver` lights up automatically.
+        let Some(target_path) = self.resolve_embed_link_target(note_name, host_path, cancel)?
+        else {
+            return Ok(crate::EmbedResolution::Unresolved {
+                reason: crate::EmbedUnresolvedReason::TargetNotFound {
+                    target: raw_target.to_string(),
+                },
+            });
         };
         // #433: the alt arrives as an argument — threaded from the
         // link's persisted display_text (top level: the Swift caller
@@ -6207,13 +6656,14 @@ impl VaultSession {
         // display_text per occurrence). #419's interim re-read +
         // re-parse of the host per image is gone, and nested alt is
         // now per-occurrence by construction.
-        match self.read_embed_attachment(&target_path, budget) {
+        match self.read_embed_attachment(&target_path, budget, cancel) {
             Ok(att) => Ok(crate::EmbedResolution::Image {
                 target_path,
                 bytes: att.bytes,
                 mime: att.mime,
                 alt,
             }),
+            Err(VaultError::Cancelled) => Err(VaultError::Cancelled),
             Err(VaultError::Io(e)) if e.kind() == std::io::ErrorKind::NotFound => {
                 Ok(crate::EmbedResolution::Unresolved {
                     reason: crate::EmbedUnresolvedReason::TargetNotFound {
@@ -6233,19 +6683,25 @@ impl VaultSession {
         &self,
         path: &str,
         budget: &mut crate::embeds::EmbedResolveBudget,
+        cancel: &CancelToken,
     ) -> Result<String, VaultError> {
+        cancel.check()?;
         if !budget.is_preview() {
-            return self.read_text(path);
+            let text = self.read_text(path)?;
+            cancel.check()?;
+            return Ok(text);
         }
 
         let limit = budget.text_limit(self.config.large_file_refuse_bytes);
         let stat = self.provider.stat(path)?;
+        cancel.check()?;
         if limit == 0 {
             budget.consume_text(0, stat.size_bytes > 0);
             return Ok(String::new());
         }
 
         let mut bytes = self.provider.read_file_with_cap(path, limit)?;
+        cancel.check()?;
         let was_truncated = stat.size_bytes > limit || bytes.len() as u64 > limit;
         if bytes.len() as u64 > limit {
             bytes.truncate(limit as usize);
@@ -6260,13 +6716,18 @@ impl VaultSession {
         &self,
         path: &str,
         budget: &mut crate::embeds::EmbedResolveBudget,
+        cancel: &CancelToken,
     ) -> Result<crate::AttachmentBytes, VaultError> {
+        cancel.check()?;
         if !budget.is_preview() {
-            return self.read_attachment(path);
+            let attachment = self.read_attachment(path)?;
+            cancel.check()?;
+            return Ok(attachment);
         }
 
         let limit = budget.image_limit(self.config.large_attachment_refuse_bytes);
         let stat = self.provider.stat(path)?;
+        cancel.check()?;
         if stat.size_bytes > limit {
             budget.mark_truncated();
             return Err(VaultError::FileTooLarge {
@@ -6275,6 +6736,7 @@ impl VaultSession {
             });
         }
         let bytes = self.provider.read_file_with_cap(path, limit)?;
+        cancel.check()?;
         if bytes.len() as u64 > limit {
             budget.mark_truncated();
             return Err(VaultError::FileTooLarge {
@@ -6293,9 +6755,10 @@ impl VaultSession {
         text: String,
         depth: u32,
         budget: &mut crate::embeds::EmbedResolveBudget,
+        cancel: &CancelToken,
     ) -> Result<crate::EmbedResolution, VaultError> {
         let body = crate::embeds::strip_frontmatter_for_embed(&text).to_string();
-        let nested = self.resolve_nested_embeds(&target_path, &body, depth, budget)?;
+        let nested = self.resolve_nested_embeds(&target_path, &body, depth, budget, cancel)?;
         Ok(crate::EmbedResolution::FullNote {
             target_path,
             text: body,
@@ -6313,6 +6776,7 @@ impl VaultSession {
         text: &str,
         depth: u32,
         budget: &mut crate::embeds::EmbedResolveBudget,
+        cancel: &CancelToken,
     ) -> Result<Vec<crate::NestedEmbed>, VaultError> {
         let next_depth = depth + 1;
         let mut out: Vec<crate::NestedEmbed> = Vec::new();
@@ -6320,6 +6784,7 @@ impl VaultSession {
             if !link.is_embed {
                 continue;
             }
+            cancel.check()?;
             if !budget.consume_node() {
                 break;
             }
@@ -6337,6 +6802,7 @@ impl VaultSession {
                 next_depth,
                 link.display_text.clone(),
                 budget,
+                cancel,
             )?;
             out.push(crate::NestedEmbed {
                 raw_target: target_with_anchor,
@@ -9334,6 +9800,16 @@ impl VaultSession {
 /// `path → mtime_ms` for every indexed file — the `modified_ms`
 /// source for graph payloads (one query per snapshot; ghosts have no
 /// row and stay `None`).
+/// [`file_mtimes`] under `cancel`: the statement is interrupted by the
+/// token (W7-7 PR 7, codex PR 7 round 4 finding 5).
+fn file_mtimes_under(
+    conn: &Connection,
+    cancel: &CancelToken,
+) -> Result<std::collections::HashMap<String, i64>, VaultError> {
+    cancel.check()?;
+    directory_page::with_sqlite_cancellation(conn, cancel, || file_mtimes(conn))
+}
+
 fn file_mtimes(conn: &Connection) -> Result<std::collections::HashMap<String, i64>, VaultError> {
     let mut stmt = conn.prepare_cached("SELECT path, mtime_ms FROM files")?;
     let rows = stmt.query_map([], |row| {
@@ -9407,6 +9883,70 @@ fn snapshot_summary_counts(
 
 // --- Internal: scan ---
 
+/// Test seam (W7-7 PR 7, codex PR 7 round 3 finding 2): the scan's named
+/// points — after each indexed file, before each post-walk phase, inside
+/// the prune, re-resolve and canvas loops, and after the commit — where a
+/// fact cancels the scan's token. Thread-local: the scan runs on the
+/// calling thread.
+#[cfg(test)]
+pub(crate) mod scan_point_test_hook {
+    use std::cell::RefCell;
+
+    type PointHook = Box<dyn Fn(&str)>;
+
+    thread_local! {
+        static HOOK: RefCell<Option<PointHook>> = const { RefCell::new(None) };
+    }
+
+    pub(crate) fn install(hook: PointHook) {
+        HOOK.with(|slot| *slot.borrow_mut() = Some(hook));
+    }
+
+    pub(crate) fn clear() {
+        HOOK.with(|slot| *slot.borrow_mut() = None);
+    }
+
+    pub(crate) fn fire(point: &str) {
+        HOOK.with(|slot| {
+            if let Some(hook) = slot.borrow().as_ref() {
+                hook(point);
+            }
+        });
+    }
+}
+
+/// A named point of the scan (the test seam; a no-op in production).
+#[inline]
+pub(crate) fn scan_point(point: &str) {
+    #[cfg(test)]
+    scan_point_test_hook::fire(point);
+    #[cfg(not(test))]
+    let _ = point;
+}
+
+/// W7-7 PR 7 (codex PR 7 round 3, finding 7): the largest page one
+/// [`VaultSession::list_files`] call returns — the directory pages' bound
+/// (locked decision 05 §4 principle 4, §9.3.1). A limit of 0 or above it is
+/// refused before any row is read.
+pub const MAX_LIST_FILES_PAGE_LIMIT: u32 = 10_000;
+
+/// The one page-limit rule (W7-7 PR 7, round 3 finding 7), shared by the
+/// files page and the directory pages: a limit is `1..=max`, refused
+/// before any row is read.
+pub(crate) fn validate_page_limit(limit: u32, max: u32, what: &str) -> Result<(), VaultError> {
+    if limit == 0 || limit > max {
+        return Err(VaultError::InvalidArgument {
+            message: format!("{what} page limit must be between 1 and {max}"),
+        });
+    }
+    Ok(())
+}
+
+/// W7-7 PR 7 (#1252): the most paths one
+/// [`VaultSession::indexed_content_hashes`] call answers — a host asks
+/// for its open documents, never for the vault.
+pub const MAX_INDEXED_HASH_PATHS: usize = 1024;
+
 #[allow(clippy::too_many_arguments)] // shared scanner state; bundling adds friction
 fn scan_vault(
     provider: &dyn VaultProvider,
@@ -9427,6 +9967,30 @@ fn scan_vault(
                 l.on_progress(ScanProgress::Cancelled);
             }
             return Err(VaultError::Cancelled);
+        }};
+    }
+
+    /// A cancellation point after `Started` (W7-7 PR 7, codex PR 7
+    /// round 3 finding 2): the named point for the test seam, then the
+    /// token — a cancel anywhere in the walk or its tail rolls the whole
+    /// scan back (the transaction drops uncommitted) and ends the stream
+    /// with `Cancelled` (locked decision 05 §4 principle 3).
+    macro_rules! cancel_point {
+        ($point:expr) => {{
+            scan_point($point);
+            if cancel.is_cancelled() {
+                bail_cancelled_after_started!();
+            }
+        }};
+    }
+
+    /// A tail phase's own outcome: its cancellation ends the scan like any
+    /// other cancellation point; any other failure is the caller's.
+    macro_rules! cancelled_in_phase {
+        ($result:expr) => {{
+            if matches!($result, Err(VaultError::Cancelled)) {
+                bail_cancelled_after_started!();
+            }
         }};
     }
 
@@ -9486,6 +10050,10 @@ fn scan_vault(
     // `write` reports a misleading conflict and `--create` can't
     // recreate it).
     let mut seen_files: std::collections::HashSet<String> = std::collections::HashSet::new();
+    // The listed files whose indexing failed (W7-7 PR 7, codex PR 7 round 5
+    // fix 2): the walk already counted each, so the canvas pass must not
+    // count a board among them again. Bounded by the scan's error count.
+    let mut walk_failed: std::collections::HashSet<String> = std::collections::HashSet::new();
     let mut file_meta_batch = crate::file_meta_db::FileMetaScanBatch::new();
     // A failed directory listing hides its whole subtree from the walk;
     // pruning on a partial view would evict live rows wholesale. Track
@@ -9502,7 +10070,7 @@ fn scan_vault(
         let entries = match provider.list_dir(&dir) {
             Ok(e) => e,
             Err(e) => {
-                report.errors.push(format!("list_dir {dir:?}: {e}"));
+                report.record_error(format!("list_dir {dir:?}: {e}"));
                 walk_complete = false;
                 continue;
             }
@@ -9533,7 +10101,7 @@ fn scan_vault(
             match entry.kind {
                 EntryKind::Directory => {
                     if let Err(e) = upsert_dir(&tx, &path, &dir, &entry.name) {
-                        report.errors.push(format!("upsert dir {path:?}: {e}"));
+                        report.record_error(format!("upsert dir {path:?}: {e}"));
                     }
                     seen_dirs.insert(path.clone());
                     stack.push(path);
@@ -9554,27 +10122,20 @@ fn scan_vault(
                         Some(&mut file_meta_batch),
                         graph_sink,
                     ) {
-                        // NotFound here means the file vanished between
-                        // the directory listing and the stat/read — a
-                        // concurrent deleter (#641 codex round 5).
-                        // Un-see it so the post-walk prune drops any
-                        // stale row THIS scan; the disk truth is
-                        // "gone". Every other per-file error
-                        // (permissions, oversize, invalid UTF-8) keeps
-                        // the row: the file still exists.
-                        if matches!(
-                            &e,
-                            VaultError::Io(io_err)
-                                if io_err.kind() == std::io::ErrorKind::NotFound
-                        ) {
-                            seen_files.remove(&path);
-                        }
+                        // Any per-file failure — NotFound included —
+                        // is recorded and so blocks this scan's prunes
+                        // (W7-7 PR 7, AR-26): on Windows a NotFound can
+                        // come from MAX_PATH or permissions on a LIVE
+                        // file, whose row a prune would delete. A file
+                        // that really vanished keeps its row until the
+                        // next clean scan.
                         // The failed file's writes may have partially
                         // landed in this (continuing) transaction with
                         // their graph ops only partially staged — the
                         // replay is no longer trustworthy (#550).
                         graph_sink.poison();
-                        report.errors.push(format!("{path}: {e}"));
+                        report.record_error(format!("{path}: {e}"));
+                        walk_failed.insert(path.clone());
                     }
                     indexed_count += 1;
                     if let Some(l) = listener {
@@ -9584,6 +10145,7 @@ fn scan_vault(
                             total: total_files,
                         });
                     }
+                    cancel_point!("file");
                 }
                 EntryKind::Symlink => {
                     // Symlinks are skipped entirely. Following them risks
@@ -9601,16 +10163,34 @@ fn scan_vault(
     // Flush the tail before any post-walk reconciliation and before commit.
     // Full 200-row chunks flush at the locked after-properties seam while the
     // walk runs; this catches the final partial chunk.
+    cancel_point!("meta flush");
     let file_meta_failures = file_meta_batch.flush(&tx);
     record_file_meta_failures(file_meta_failures, &mut report, graph_sink);
+
+    // THE completeness predicate (W7-7 PR 7, R-9, finding 7): the walk
+    // listed every directory AND nothing failed so far — a directory
+    // upsert, any per-file stat/read/oversize/index failure, the
+    // file_meta flush. A partial view proves no absence, so a partial
+    // scan prunes neither files nor directories; the rows heal on the
+    // next clean scan. (The canvas pass below derives card titles from
+    // other files' rows, so it must see the post-prune index — a pruned
+    // note's title must not survive on a card; it therefore follows the
+    // prune, and its failures make the scan incomplete without
+    // un-pruning. It hides no file from the walk.)
+    let prunable = walk_complete && report.error_count == 0;
 
     // Prune `dirs` rows for directories no longer on disk. The walk
     // upserts every directory it sees into `seen_dirs`; anything left
     // in the table that we didn't see this pass was deleted (or renamed
     // away) since the last scan, so drop it. Runs inside the same
     // transaction so it commits atomically with the upserts above.
-    if let Err(e) = prune_unseen_dirs(&tx, &seen_dirs) {
-        report.errors.push(format!("prune stale dirs: {e}"));
+    // Skipped on a partial scan, exactly like the file prune below
+    // (W7-7 PR 7, R-9): an unlistable directory hides its subtree, and
+    // pruning on that partial view made live nested folders vanish from
+    // the refreshed tree.
+    cancel_point!("prune dirs");
+    if prunable && let Err(e) = prune_unseen_dirs(&tx, &seen_dirs) {
+        report.record_error(format!("prune stale dirs: {e}"));
     }
 
     // Prune `files` rows for files no longer on disk (#641, codex
@@ -9621,11 +10201,22 @@ fn scan_vault(
     // Deletion follows the shipped `delete_file` discipline exactly:
     // one `DELETE FROM files` per row — child tables cascade
     // (`ON DELETE CASCADE`), FTS is maintained by the migration-006
-    // DELETE trigger. Skipped when any directory listing failed
-    // (`walk_complete`): a partial walk must not evict live rows.
-    if walk_complete && let Err(e) = prune_unseen_files(&tx, &seen_files, graph_sink) {
-        graph_sink.poison();
-        report.errors.push(format!("prune stale files: {e}"));
+    // DELETE trigger. Skipped on a partial scan (`prunable`): a partial
+    // view must not evict live rows.
+    cancel_point!("prune files");
+    if prunable {
+        let pruned = prune_unseen_files(
+            &tx,
+            &seen_files,
+            graph_sink,
+            &mut report.files_removed,
+            cancel,
+        );
+        cancelled_in_phase!(pruned);
+        if let Err(e) = pruned {
+            graph_sink.poison();
+            report.record_error(format!("prune stale files: {e}"));
+        }
     }
 
     // Re-resolve links that were Unresolved purely because their
@@ -9634,7 +10225,10 @@ fn scan_vault(
     // happen inside the same transaction so they commit atomically
     // with the rest of the scan; a cancel beforehand short-circuits
     // through `bail_cancelled_after_started!` and skips this step.
-    match crate::links_db::re_resolve_unresolved_links(&tx) {
+    cancel_point!("re-resolve");
+    let re_resolved = crate::links_db::re_resolve_unresolved_links_under(&tx, cancel);
+    cancelled_in_phase!(re_resolved);
+    match re_resolved {
         Ok(resolved_sources) => {
             if graph_sink.live() {
                 for source in &resolved_sources {
@@ -9646,7 +10240,7 @@ fn scan_vault(
                     });
                     if let Err(e) = staged {
                         graph_sink.poison();
-                        report.errors.push(format!("graph re-resolve replay: {e}"));
+                        report.record_error(format!("graph re-resolve replay: {e}"));
                         break;
                     }
                 }
@@ -9657,9 +10251,7 @@ fn scan_vault(
             // partial (still-committing) result the graph can't
             // replay faithfully.
             graph_sink.poison();
-            report
-                .errors
-                .push(format!("re-resolve unresolved links: {e}"));
+            report.record_error(format!("re-resolve unresolved links: {e}"));
         }
     }
 
@@ -9673,10 +10265,27 @@ fn scan_vault(
     // .canvas bytes didn't change. Vaults hold few canvases and one
     // derivation is milliseconds at the 2,000-node budget, so this
     // stays O(canvases), not O(vault).
-    if let Err(e) = reindex_all_canvases(&tx, provider, large_file_refuse_bytes) {
-        report.errors.push(format!("canvas index: {e}"));
+    cancel_point!("canvas");
+    let refreshed = |path: &str| seen_files.contains(path) && !walk_failed.contains(path);
+    let canvases = reindex_all_canvases(
+        &tx,
+        provider,
+        large_file_refuse_bytes,
+        cancel,
+        &mut report,
+        &refreshed,
+    );
+    cancelled_in_phase!(canvases);
+    if let Err(e) = canvases {
+        report.record_error(format!("canvas index: {e}"));
     }
 
+    // Complete only when the walk saw everything AND nothing failed:
+    // `errors` mixes per-file and systemic failures, and either can hide
+    // a change, so a partial scan can never be spoken as "No changes".
+    report.complete = walk_complete && report.error_count == 0;
+
+    cancel_point!("commit");
     // Commit can still fail (disk full, file corruption). If it
     // does, the listener has already seen `Started` and N
     // `FileIndexed`s — fire `Failed` before propagating the error
@@ -9781,6 +10390,8 @@ fn prune_unseen_files(
     tx: &rusqlite::Transaction,
     seen_files: &std::collections::HashSet<String>,
     graph_sink: &mut crate::graph::GraphOpSink,
+    removed: &mut u64,
+    cancel: &CancelToken,
 ) -> Result<(), VaultError> {
     // ORDER BY path: deterministic prune (and graph-replay) order —
     // the plain files scan iterates in rowid order, which depends on
@@ -9800,6 +10411,8 @@ fn prune_unseen_files(
         stale
     };
     for (id, path) in stale {
+        scan_point("prune file");
+        cancel.check()?;
         // Inbound snapshot BEFORE the delete: the FK cascade emits no
         // per-row signal, and rows pointing at this path stay
         // resolved-but-dangling (#550, p0_spec rule 1a).
@@ -9810,6 +10423,8 @@ fn prune_unseen_files(
             })
         })?;
         tx.execute("DELETE FROM files WHERE id = ?1", rusqlite::params![id])?;
+        // W7-7 PR 7 (R-9): the scan's "removed" count.
+        *removed += 1;
     }
     Ok(())
 }
@@ -9877,10 +10492,9 @@ fn index_file(
         .extension()
         .and_then(|s| s.to_str())
         .map(|s| s.to_ascii_lowercase());
-    let is_markdown = matches!(
-        extension.as_deref(),
-        Some("md") | Some("markdown") | Some("mdown") | Some("mkd")
-    );
+    let is_markdown = extension
+        .as_deref()
+        .is_some_and(|extension| MARKDOWN_DOCUMENT_EXTENSIONS.contains(&extension));
     let is_base = extension.as_deref() == Some("base");
 
     // Fast path: if the indexed row's (mtime_ms, size_bytes, ctime_ms)
@@ -9899,16 +10513,25 @@ fn index_file(
     // skipped and the fast path keeps its mtime+size semantics. We
     // still refresh `indexed_at_ms` so a future stale-row sweep can
     // tell "the scanner has visited this" from "this row is orphaned."
-    let existing: Option<(i64, i64, i64)> = tx
-        .prepare_cached("SELECT mtime_ms, size_bytes, ctime_ms FROM files WHERE path = ?1")?
+    // W7-7 PR 7 (R-9): the same read carries the prior committed hash,
+    // so the scan counts "new or changed" as it writes each row — no
+    // before-picture of the vault is held.
+    let existing_row: Option<(i64, i64, i64, String)> = tx
+        .prepare_cached(
+            "SELECT mtime_ms, size_bytes, ctime_ms, content_hash FROM files WHERE path = ?1",
+        )?
         .query_row(rusqlite::params![path], |row| {
             Ok((
                 row.get::<_, i64>(0)?,
                 row.get::<_, i64>(1)?,
                 row.get::<_, i64>(2)?,
+                row.get::<_, String>(3)?,
             ))
         })
         .optional()?;
+    let prior_hash: Option<String> = existing_row.as_ref().map(|row| row.3.clone());
+    let existing: Option<(i64, i64, i64)> =
+        existing_row.map(|(mtime, size, ctime, _)| (mtime, size, ctime));
     let replacing_existing_file = existing.is_some();
     // Prior mtime, for the metadata-touch gate below — captured
     // before `existing` is consumed by the fast path.
@@ -10019,7 +10642,7 @@ fn index_file(
     // would blow process memory and overflow SQLite's TEXT cap
     // when stored as `body_text`. Skip the body indexing for such
     // files and record a per-file error so the user notices via
-    // `ScanReport.errors`; the row is still upserted with metadata
+    // `ScanReport.error_count`; the row is still upserted with metadata
     // (size, mtime, hash of an empty body) so subsequent scans
     // don't re-trip the threshold on every pass.
     if stat.size_bytes > large_file_refuse_bytes {
@@ -10029,7 +10652,7 @@ fn index_file(
             size = stat.size_bytes,
             limit = large_file_refuse_bytes,
         );
-        report.errors.push(message);
+        report.record_error(message);
         // Upsert metadata + empty body so the file appears in the
         // index (sidebar lists it, but search won't find anything
         // inside it). hash is computed against an empty body so
@@ -10070,6 +10693,7 @@ fn index_file(
                 stat.birthtime_ms,
             ],
         )?;
+        count_committed_hash(report, prior_hash.as_deref(), &empty_hash);
         // A file that grew past the refuse threshold may have been
         // indexed earlier with full derivatives. Drop those rows so
         // backlinks / outgoing links / frontmatter properties /
@@ -10144,6 +10768,7 @@ fn index_file(
         body_text,
         stat.birthtime_ms,
     ])?;
+    count_committed_hash(report, prior_hash.as_deref(), &hash);
 
     // (MetadataTouched for an existing file whose mtime moved was
     // staged uniformly after the fast path above — it covers this
@@ -10209,6 +10834,14 @@ fn index_file(
     report.files_indexed += 1;
     report.bytes_processed += stat.size_bytes;
     Ok(())
+}
+
+/// W7-7 PR 7 (R-9): a row's committed hash is new or differs from the
+/// one the index held — the scan's "new or changed" count.
+fn count_committed_hash(report: &mut ScanReport, prior: Option<&str>, committed: &str) {
+    if prior != Some(committed) {
+        report.files_changed += 1;
+    }
 }
 
 /// Advance the GLOBAL index-epoch clock and stamp the new value onto
@@ -10354,11 +10987,9 @@ fn record_file_meta_failures(
         // write failure: partial cache state must not publish graph replay.
         graph_sink.poison();
     }
-    report.errors.extend(
-        failures
-            .into_iter()
-            .map(|failure| format!("{}: {}", failure.path, failure.error)),
-    );
+    for failure in failures {
+        report.record_error(format!("{}: {}", failure.path, failure.error));
+    }
 }
 
 /// Drop any cached headings, links, and properties rows for
@@ -10875,10 +11506,41 @@ fn sidebar_filter_impl(
     })
 }
 
+/// Test seam (W7-7 PR 7): a callback run on the calling thread after each
+/// decoded `list_files` row, with the number of rows decoded so far — the
+/// deterministic way to cancel mid-page.
+#[cfg(test)]
+pub(crate) mod list_files_row_test_hook {
+    use std::cell::RefCell;
+
+    type RowHook = Box<dyn Fn(usize)>;
+
+    thread_local! {
+        static HOOK: RefCell<Option<RowHook>> = const { RefCell::new(None) };
+    }
+
+    pub(crate) fn install(hook: RowHook) {
+        HOOK.with(|slot| *slot.borrow_mut() = Some(hook));
+    }
+
+    pub(crate) fn clear() {
+        HOOK.with(|slot| *slot.borrow_mut() = None);
+    }
+
+    pub(super) fn fire(rows: usize) {
+        HOOK.with(|slot| {
+            if let Some(hook) = slot.borrow().as_ref() {
+                hook(rows);
+            }
+        });
+    }
+}
+
 fn list_files_impl(
     conn: &Connection,
     filter: FileFilter,
     paging: Paging,
+    cancel: &CancelToken,
 ) -> Result<Page<FileSummary>, VaultError> {
     let where_clause = match filter {
         FileFilter::All => "1=1",
@@ -10919,6 +11581,10 @@ fn list_files_impl(
         if let Some(summary) = summary {
             items.push(summary);
         }
+        #[cfg(test)]
+        list_files_row_test_hook::fire(items.len());
+        // Between rows too: a cancellation never yields a partial page.
+        cancel.check()?;
     }
 
     let next_cursor = if items.len() > paging.limit as usize {
@@ -11602,10 +12268,9 @@ fn classify_path(path: &str) -> (String, Option<String>, bool) {
         .extension()
         .and_then(|s| s.to_str())
         .map(|s| s.to_ascii_lowercase());
-    let is_markdown = matches!(
-        extension.as_deref(),
-        Some("md") | Some("markdown") | Some("mdown") | Some("mkd")
-    );
+    let is_markdown = extension
+        .as_deref()
+        .is_some_and(|extension| MARKDOWN_DOCUMENT_EXTENSIONS.contains(&extension));
     (name, extension, is_markdown)
 }
 
@@ -17403,6 +18068,17 @@ pub struct BaseFileSummary {
     pub indexed_at_ms: i64,
 }
 
+/// What [`VaultSession::open_base_cancellable`] opened: the handle and the
+/// content hash of the exact bytes the open parsed — the definition the
+/// handle shows (W7-7 PR 7, codex AR-18 review round 2, finding 2). A host
+/// that read the index's hash separately, before or after the open, could
+/// record the hash of different bytes than the ones it shows.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct OpenedBase {
+    pub handle: u64,
+    pub content_hash: String,
+}
+
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct BaseViewSummary {
     pub name: String,
@@ -17718,10 +18394,30 @@ impl VaultSession {
     }
 
     pub fn open_base(&self, path: &str) -> Result<u64, VaultError> {
+        self.open_base_cancellable(path, &CancelToken::new())
+            .map(|opened| opened.handle)
+    }
+
+    /// Open a file-backed `.base` under `cancel` (W7-7 PR 7, codex AR-18
+    /// review round 2, findings 2 and 4). The token is checked before the
+    /// read, before the index heal and immediately before the handle
+    /// registers, so a caller cancelled by then gets `Cancelled` and no
+    /// handle; a token cancelled after registration leaves the returned
+    /// handle the caller's to close. The handle comes back with the
+    /// content hash of the exact bytes this open parsed.
+    pub fn open_base_cancellable(
+        &self,
+        path: &str,
+        cancel: &CancelToken,
+    ) -> Result<OpenedBase, VaultError> {
+        cancel.check()?;
         let source = self.read_text(path)?;
+        cancel.check()?;
         self.ensure_open_base_indexed(path)?;
         let (base, warnings) = crate::bases::parse_base(&source);
         let queries = compiled_base_queries(&base);
+        let opened_hash = content_hash(source.as_bytes());
+        cancel.check()?;
         let handle = self
             .next_base_handle
             .fetch_add(1, std::sync::atomic::Ordering::SeqCst);
@@ -17729,7 +18425,7 @@ impl VaultSession {
             handle,
             OpenBaseState {
                 path: Some(path.to_string()),
-                content_hash: Some(content_hash(source.as_bytes())),
+                content_hash: Some(opened_hash.clone()),
                 source: OpenBaseSource::Base(base),
                 queries,
                 warnings: warnings.into_iter().map(|w| w.message).collect(),
@@ -17738,7 +18434,20 @@ impl VaultSession {
                 transient_sort: None,
             },
         );
-        Ok(handle)
+        Ok(OpenedBase {
+            handle,
+            content_hash: opened_hash,
+        })
+    }
+
+    /// The content hash of the definition a base handle shows now: the
+    /// bytes its open parsed, or the bytes its last successful edit wrote
+    /// (W7-7 PR 7, round 2 finding 2 — never a separate index read, which
+    /// could see other bytes). `None` for an inline or query handle.
+    pub fn base_definition_hash(&self, handle: u64) -> Result<Option<String>, VaultError> {
+        let bases = self.bases.lock().expect("base registry mutex");
+        let state = bases.get(&handle).ok_or_else(|| bad_base_handle(handle))?;
+        Ok(state.content_hash.clone())
     }
 
     pub fn open_base_inline(
@@ -20042,11 +20751,19 @@ fn purge_canvas_rows(tx: &rusqlite::Transaction, file_id: i64) -> Result<(), Vau
 
 /// Post-scan canvas pass: (re)derive index rows for every `.canvas`
 /// file in the vault. See the call site in `scan_vault` for why this
-/// runs after the walk and unconditionally.
+/// runs after the walk and unconditionally. `refreshed_this_scan` says
+/// whether the walk listed a board AND indexed it without error: only such
+/// a board's read failure here is a new error (W7-7 PR 7, codex PR 7 round
+/// 5 fix 2) — one the walk failed on is already counted, and one it never
+/// listed (deleted outside Slate; its row survives a partial scan) is not
+/// on disk to be read.
 fn reindex_all_canvases(
     tx: &rusqlite::Transaction,
     provider: &dyn VaultProvider,
     large_file_refuse_bytes: u64,
+    cancel: &CancelToken,
+    report: &mut ScanReport,
+    refreshed_this_scan: &dyn Fn(&str) -> bool,
 ) -> Result<(), VaultError> {
     let canvases: Vec<(i64, String, i64)> = {
         let mut stmt = tx.prepare(
@@ -20062,16 +20779,25 @@ fn reindex_all_canvases(
         rows.collect::<Result<Vec<_>, _>>()?
     };
     for (file_id, path, size_bytes) in canvases {
+        scan_point("canvas file");
+        cancel.check()?;
         if size_bytes as u64 > large_file_refuse_bytes {
             purge_canvas_rows(tx, file_id)?;
             continue;
         }
         let bytes = match provider.read_file_with_cap(&path, large_file_refuse_bytes) {
             Ok(b) => b,
-            // File vanished between walk and pass, or unreadable:
-            // leave rows for the next scan's delete-pruning rather
-            // than failing the whole scan over one canvas.
-            Err(_) => continue,
+            // File vanished between walk and pass, or unreadable: its rows
+            // stay for the next clean scan, and the failure is COUNTED
+            // (W7-7 PR 7, codex PR 7 round 4 finding 4) — the scan is
+            // incomplete, never "complete" over stale card rows — once per
+            // board (round 5, fix 2): only for a board the walk refreshed.
+            Err(e) => {
+                if refreshed_this_scan(&path) {
+                    report.record_error(format!("{path}: canvas pass read: {e}"));
+                }
+                continue;
+            }
         };
         let source = String::from_utf8_lossy(&bytes);
         crate::canvas_db::replace_canvas_for_file(
@@ -21088,6 +21814,9 @@ mod tests {
 
     #[path = "scan.rs"]
     mod scan;
+
+    #[path = "rescan.rs"]
+    mod rescan;
 
     #[path = "file_meta.rs"]
     mod file_meta;
