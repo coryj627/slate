@@ -515,9 +515,21 @@ internal sealed partial class WorkspaceTabViewModel : BindableBase, IDisposable
 
     public void ReplaceItem(WorkspaceItemState item)
     {
+        // W7-7 PR 7 (#1252, R-9; codex's final merge-delta check, note 2;
+        // contract 38 D-10): a faulted save belongs to its item — only a
+        // later successful save of the item, or an actual item change,
+        // leaves it behind. A same-item replace (a rescan's reload of a note
+        // changed outside Slate, a re-seat, a restore's reload) is neither:
+        // the fault moves to the new document with the item, and every gate
+        // still refuses.
+        bool carriesFault = LastSaveFaulted && item == Item;
         BumpContentGeneration();
         _saveEpoch++;
         _itemEpoch++;
+        if (carriesFault)
+        {
+            _faultedSaveItemEpoch = _itemEpoch;
+        }
         _taskToggleGeneration++;
         _taskToggleInFlight = false;
         _editorInteractions?.Dispose();

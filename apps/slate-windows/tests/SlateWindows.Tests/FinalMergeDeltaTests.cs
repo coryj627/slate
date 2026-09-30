@@ -11,7 +11,8 @@ namespace SlateWindows.Tests;
 /// opened through the vault lifecycle, its file events arriving on the
 /// dispatcher as the production listener delivers them, every save writing
 /// off the dispatcher. (1) A Created event never re-seats a tab under a save
-/// admitted for its file (contract 38 D-10, R-9).
+/// admitted for its file (contract 38 D-10, R-9). (2) A rescan's same-item
+/// reload keeps a faulted save's gates closed (D-10).
 /// </summary>
 public sealed class FinalMergeDeltaTests
 {
@@ -113,6 +114,76 @@ public sealed class FinalMergeDeltaTests
         Assert.Equal("draft\n", host.Disk("ghost.md"));
     }
 
+    /// <summary>Finding 2: a save that faulted after its write was adopted
+    /// leaves the tab clean but not saved in D-10's sense. The note changed
+    /// outside Slate and a Refresh reloads the clean tab in place — the same
+    /// item — and every gate still refuses: the fault is the item's.</summary>
+    [Theory]
+    [InlineData("close-tab")]
+    [InlineData("close-pane")]
+    [InlineData("replace")]
+    [InlineData("teardown")]
+    public void ARescansReloadKeepsAFaultedSavesGatesClosed(string site)
+    {
+        using var host = new PumpedSaveReentrancyTests.Host(VaultCloseDecision.Discard);
+        FaultAfterAdoption(host);
+        int document = host.S.ItemIdentity;
+
+        File.WriteAllText(Path.Combine(host.Root, "note1.md"), "# Note 1\n\nChanged outside Slate.\n");
+        Task run = host.Lifecycle.RescanAsync(RescanReason.Explicit);
+        Assert.True(PumpedDispatcher.PumpUntil(() => run.IsCompleted, TimeSpan.FromSeconds(60)), "the rescan");
+        host.Settle();
+        Assert.Contains("Changed outside Slate.", host.S.Text, StringComparison.Ordinal);
+        Assert.NotEqual(document, host.S.ItemIdentity);
+        Assert.True(host.S.LastSaveFaulted, "the rescan's reload cleared the faulted save");
+        host.Announced.Clear();
+
+        RunGate(host, site);
+        host.Settle();
+
+        Assert.DoesNotContain(
+            host.Announced,
+            item => item.Event is A11yEvent.TabClosed
+                or A11yEvent.VaultClosed
+                or A11yEvent.VaultClosedAllSaved
+                or A11yEvent.VaultClosedChangesDiscarded);
+        switch (site)
+        {
+            case "close-tab": Assert.False(host.S.IsDisposed, "the tab closed over a faulted save"); break;
+            case "close-pane": Assert.Contains(host.G1, host.Workspace.Groups); break;
+            case "replace": Assert.Equal("note1.md", host.S.Path); break;
+            case "teardown":
+                Assert.NotNull(host.Lifecycle.Workspace);
+                Assert.Equal(
+                    "Vault remains open because one or more notes could not be saved.",
+                    host.Lifecycle.StatusText);
+                break;
+        }
+    }
+
+    /// <summary>Finding 2's other side (D-10): the fault belongs to its item,
+    /// so an ACTUAL item change still leaves it behind — the reader edits the
+    /// note after the fault, opens another note into its tab and discards;
+    /// the tab shows that note, clean and not faulted, and closes.</summary>
+    [Fact]
+    public void AnItemChangeStillLeavesAFaultedSaveBehind()
+    {
+        using var host = new PumpedSaveReentrancyTests.Host(VaultCloseDecision.Discard);
+        FaultAfterAdoption(host);
+
+        host.Type(host.S, "Marker-S2");
+        host.TabPrompt = _ => WorkspaceDirtyNavigationDecision.Discard;
+        host.Workspace.OpenPath("note3.md");
+        host.Settle();
+        Assert.Equal("note3.md", host.S.Path);
+        Assert.False(host.S.IsDirty);
+        Assert.False(host.S.LastSaveFaulted, "the fault followed the tab to another note");
+
+        host.Workspace.CloseTabCommand.Execute(host.S);
+        host.Settle();
+        Assert.True(host.S.IsDisposed, "a clean note with no faulted save stayed open");
+    }
+
     /// <summary>A note that does not exist, opened (its load reads nothing,
     /// so it carries no content hash) and swept as missing — what a restore
     /// of a vanished note produces.</summary>
@@ -162,4 +233,34 @@ public sealed class FinalMergeDeltaTests
             tab.SaveWriteHookForTests = null;
         }
     }
+
+    /// <summary>The note under test (S) saved with a fault after its write
+    /// was adopted: clean, and not saved in D-10's sense.</summary>
+    private static void FaultAfterAdoption(PumpedSaveReentrancyTests.Host host)
+    {
+        host.Workspace.SaveActiveAndSettle();
+        Assert.False(host.Workspace.HasDirtyTabs, "the arrangement left a dirty tab");
+        host.G1.ActiveTab = host.S;
+        host.Type(host.S, "Marker-S");
+        host.S.SaveAdoptedHookForTests = () => throw new InjectedFault();
+        host.Workspace.SaveActiveCommand.Execute(null);
+        host.Settle();
+        host.S.SaveAdoptedHookForTests = null;
+        Assert.False(host.S.IsDirty);
+        Assert.True(host.S.LastSaveFaulted, "premise: the save's publication did not fault after adoption");
+    }
+
+    /// <summary>The gates, on the note under test (S) in the first pane.</summary>
+    private static void RunGate(PumpedSaveReentrancyTests.Host host, string site)
+    {
+        switch (site)
+        {
+            case "close-tab": host.Workspace.CloseTabCommand.Execute(host.S); break;
+            case "close-pane": host.Workspace.ClosePaneCommand.Execute(null); break;
+            case "replace": host.Workspace.OpenPath("note3.md"); break;
+            case "teardown": host.Lifecycle.CloseVault(); break;
+        }
+    }
+
+    private sealed class InjectedFault() : Exception("injected fault after adoption");
 }
