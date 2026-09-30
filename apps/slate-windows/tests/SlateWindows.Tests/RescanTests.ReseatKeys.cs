@@ -97,6 +97,7 @@ public sealed partial class RescanTests
         _ = surface.SetBinding(BaseSurfaceView.TabProperty, new Binding());
         _ = surface.SetBinding(BaseSurfaceView.ModelProperty, new Binding(nameof(WorkspaceTabViewModel.Base)));
         Window window = ShowHosted(surface);
+        List<IInputElement> changes = RecordFocusChanges(window);
         try
         {
             AccessibleDataGrid grid = surface.GridForTests;
@@ -104,6 +105,8 @@ public sealed partial class RescanTests
             PumpedDispatcher.Drain();
             Assert.Equal("d.md", RowKeyOfFocusedCell());
             h.Events.Clear();
+            changes.Clear();
+            OpenALoadingGap(h);
 
             File.Move(Path.Combine(h.Root, "notes.base"), Path.Combine(h.Root, "Notes.base"));
             h.Context.Await(h.Lifecycle.RescanAsync(RescanReason.Explicit));
@@ -115,6 +118,7 @@ public sealed partial class RescanTests
             Assert.NotSame(retired, tab.Base);
             AssertKeysInside(surface);
             Assert.Equal("d.md", RowKeyOfFocusedCell());
+            AssertOneFocusChangeNeverTheWindow(changes);
             Assert.Equal(["Files refreshed. 1 new or changed, 1 removed."], h.Spoken);
         }
         finally
@@ -122,6 +126,112 @@ public sealed partial class RescanTests
             window.Close();
         }
     });
+
+    private const string ListViewBase =
+        "filters: 'file.ext == \"md\"'\nviews:\n  - type: list\n    name: Main\n";
+
+    /// <summary>Codex's merge-delta check (finding 2): the keys on a
+    /// list-view base's THIRD row. The re-seat swapped in a document with
+    /// nothing published: the list collapsed under the keys, WPF stranded
+    /// them on the window, and the new document knew no reader row. Now the
+    /// list keeps its rows while they hold the keys, the new document starts
+    /// from the retired one's reader row, and its first publication lands
+    /// the keys on that row — one focus change, never the window.</summary>
+    [Fact]
+    public void ACaseOnlyReseatKeepsTheKeysOnTheReadersListRow() => RunSta(() =>
+    {
+        using var h = new Harness(
+            "reseat-list-keys",
+            ("notes.base", ListViewBase),
+            ("b.md", "# B\n"),
+            ("d.md", "# D\n"),
+            ("f.md", "# F\n"),
+            ("h.md", "# H\n"));
+        if (!h.VolumeAliasesCase())
+        {
+            return;
+        }
+
+        WorkspaceTabViewModel tab = h.Open("notes.base");
+        h.PumpUntil(() => tab.Base?.State == BaseLoadState.Ready, "the base's first load");
+        BaseDocumentViewModel retired = Assert.IsType<BaseDocumentViewModel>(tab.Base);
+        var surface = new BaseSurfaceView { DataContext = tab };
+        _ = surface.SetBinding(BaseSurfaceView.TabProperty, new Binding());
+        _ = surface.SetBinding(BaseSurfaceView.ModelProperty, new Binding(nameof(WorkspaceTabViewModel.Base)));
+        Window window = ShowHosted(surface);
+        List<IInputElement> changes = RecordFocusChanges(window);
+        try
+        {
+            ListBox list = surface.ListForTests;
+            Assert.True(list.IsVisible, "premise: the base renders as a list.");
+            BaseListItemViewModel reader = list.Items.Cast<BaseListItemViewModel>()
+                .Single(item => item.Row?.FilePath == "f.md");
+            Assert.NotSame(reader, list.Items[0]);
+            list.SelectedItem = reader;
+            list.UpdateLayout();
+            Assert.True(Assert.IsType<ListBoxItem>(list.ItemContainerGenerator.ContainerFromItem(reader)).Focus());
+            PumpedDispatcher.Drain();
+            Assert.Equal("f.md", ListRowWithKeys());
+            h.Events.Clear();
+            changes.Clear();
+            OpenALoadingGap(h);
+
+            File.Move(Path.Combine(h.Root, "notes.base"), Path.Combine(h.Root, "Notes.base"));
+            h.Context.Await(h.Lifecycle.RescanAsync(RescanReason.Explicit));
+            h.PumpUntil(
+                () => tab.Base is { Path: "Notes.base", State: BaseLoadState.Ready },
+                "the re-seated base's load");
+            Settle(window);
+
+            Assert.NotSame(retired, tab.Base);
+            AssertKeysInside(surface);
+            Assert.Equal("f.md", ListRowWithKeys());
+            Assert.Equal("f.md", tab.Base!.SelectedRow?.FilePath);
+            AssertOneFocusChangeNeverTheWindow(changes);
+            Assert.Equal(["Files refreshed. 1 new or changed, 1 removed."], h.Spoken);
+        }
+        finally
+        {
+            window.Close();
+        }
+    });
+
+    /// <summary>Production's gap: a re-seated base's document loads on a
+    /// worker, so the shell draws it between the re-seat and its first
+    /// publication. The harness loads inline; this parks the re-seat's load
+    /// at the rescan's publication seam for a few dispatcher turns.</summary>
+    private static void OpenALoadingGap(Harness h) =>
+        h.Workspace.RescanPublicationForTests = async (reloading, _, reload) =>
+        {
+            if (reloading == "base")
+            {
+                await Task.Delay(150);
+            }
+
+            await reload();
+        };
+
+    private static string? ListRowWithKeys() =>
+        Keyboard.FocusedElement is ListBoxItem { DataContext: BaseListItemViewModel { Row: { } row } } ? row.FilePath : null;
+
+    /// <summary>Every keyboard focus change in <paramref name="window"/> from
+    /// now on, handled or not.</summary>
+    private static List<IInputElement> RecordFocusChanges(Window window)
+    {
+        var changes = new List<IInputElement>();
+        window.AddHandler(
+            Keyboard.GotKeyboardFocusEvent,
+            new KeyboardFocusChangedEventHandler((_, e) => changes.Add(e.NewFocus)),
+            handledEventsToo: true);
+        return changes;
+    }
+
+    /// <summary>The keys moved once — from the reader's row to its
+    /// successor — and never through the window.</summary>
+    private static void AssertOneFocusChangeNeverTheWindow(List<IInputElement> changes) =>
+        Assert.True(
+            changes.Count == 1 && changes[0] is not Window,
+            "the keys moved " + string.Join(" → ", changes.Select(focus => focus.GetType().Name)));
 
     private static Window ShowHosted(FrameworkElement surface)
     {

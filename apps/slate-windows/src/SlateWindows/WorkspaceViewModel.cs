@@ -1650,7 +1650,13 @@ internal sealed partial class WorkspaceViewModel : BindableBase, IDisposable
     private readonly Dictionary<string, Bases.BaseDocumentViewModel> _baseDocuments =
         new(StringComparer.Ordinal);
 
-    internal Bases.BaseDocumentViewModel BaseDocumentFor(string path, bool load = true)
+    /// <param name="seedRow">W7-7 PR 7 (#1252, R-9 over R-5), codex's
+    /// merge-delta check (finding 2): the rescan's re-seat seeds a document
+    /// constructed here with the retired document's reader row — its
+    /// identity, PR 3's row key (the note's path, and a task's place in it)
+    /// — so the surfaces' first publication reconciles its selection onto
+    /// that row, as a rename's retarget carries a board's (CD-32).</param>
+    internal Bases.BaseDocumentViewModel BaseDocumentFor(string path, bool load = true, BasesRow? seedRow = null)
     {
         string key = "file:" + path;
         if (!_baseDocuments.TryGetValue(key, out Bases.BaseDocumentViewModel? document))
@@ -1662,6 +1668,11 @@ internal sealed partial class WorkspaceViewModel : BindableBase, IDisposable
                 synchronousForTests: !_startInteractionBackgroundWork);
             _baseDocuments[key] = document;
             InstallBaseDocumentSeams(document);
+            if (seedRow is not null)
+            {
+                document.SelectedRow = seedRow;
+            }
+
             // W7-7 PR 7 (codex PR 7 round 5, fix 3): a caller that loads the
             // document itself (the rescan's re-seat) constructs it unloaded.
             if (load)

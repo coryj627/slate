@@ -401,7 +401,12 @@ internal sealed partial class WorkspaceViewModel
                 // and projection seed the board at the stored spelling, as a
                 // rename's retarget does (CD-32), so the outline's landing
                 // puts the keys back on the reader's card, not the first.
+                // Codex's merge-delta check (finding 2): a base's reader row
+                // rides across the same way — its identity, PR 3's row key —
+                // so the list's landing, and the grid's, find the reader's
+                // row in the document's first publication.
                 CanvasSelection? seat = tab.Canvas?.Selection;
+                uniffi.slate_uniffi.BasesRow? baseSeat = tab.Base?.SelectedRow;
                 if (respelled)
                 {
                     tab.RetargetPath(stored);
@@ -415,7 +420,7 @@ internal sealed partial class WorkspaceViewModel
                 // the stored spelling is constructed WITHOUT a load of its
                 // own (the RetargetCanvasDocuments precedent), so the run's
                 // load below is its one load.
-                ReplaceTabItem(tab, tab.Item, load: false, canvasSeed: seat);
+                ReplaceTabItem(tab, tab.Item, load: false, canvasSeed: seat, baseSeed: baseSeat);
                 if (tab.Canvas is { } board)
                 {
                     if (!reseated.Add(board))

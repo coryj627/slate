@@ -1163,14 +1163,17 @@ internal sealed partial class WorkspaceViewModel
     /// <param name="canvasSeed">The re-seat's too: a board constructed here
     /// starts from the retired board's selection, marks and projection (the
     /// CD-32 retarget's seed).</param>
+    /// <param name="baseSeed">The re-seat's too: a file-backed base
+    /// constructed here starts from the retired document's reader row.</param>
     private void AttachTabDocumentsIfNeeded(
         WorkspaceTabViewModel tab,
         bool load = true,
-        SlateWindows.Canvas.CanvasSelection? canvasSeed = null)
+        SlateWindows.Canvas.CanvasSelection? canvasSeed = null,
+        BasesRow? baseSeed = null)
     {
         if (tab.IsBase)
         {
-            tab.AttachBaseDocument(BaseDocumentFor(tab.Path, load));
+            tab.AttachBaseDocument(BaseDocumentFor(tab.Path, load, baseSeed));
         }
         else if (tab.IsSavedQueryTab && tab.Item.Id is { Length: > 0 } id)
         {

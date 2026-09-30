@@ -298,16 +298,19 @@ internal sealed partial class WorkspaceViewModel
     /// without loading it — the caller's own, awaited load is its one
     /// load. <paramref name="canvasSeed"/> (the re-seat's too) seeds a
     /// board constructed here with the retired board's selection, marks
-    /// and projection, as a rename's retarget does (CD-32).</summary>
+    /// and projection, as a rename's retarget does (CD-32), and
+    /// <paramref name="baseSeed"/> a base constructed here with the retired
+    /// document's reader row (codex's merge-delta check, finding 2).</summary>
     private void ReplaceTabItem(
         WorkspaceTabViewModel tab,
         WorkspaceItemState item,
         bool load = true,
-        SlateWindows.Canvas.CanvasSelection? canvasSeed = null)
+        SlateWindows.Canvas.CanvasSelection? canvasSeed = null,
+        BasesRow? baseSeed = null)
     {
         WorkspaceTabViewModel? peer = FindSamePathTab(item, excluding: tab);
         tab.ReplaceItem(item);
-        AttachTabDocumentsIfNeeded(tab, load, canvasSeed);
+        AttachTabDocumentsIfNeeded(tab, load, canvasSeed, baseSeed);
         ReleaseUnreferencedBaseDocuments();
         ReleaseUnreferencedDashboards();
         ReleaseUnreferencedCanvasDocuments();
