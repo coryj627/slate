@@ -91,6 +91,7 @@ public sealed partial class ShellAccessibilityTests
                     topLevel ??= menu;
                     menu.Patterns.ExpandCollapse.Pattern.Expand();
                 }
+                Assert.NotNull(menu);
                 foreach (XElement declared in group)
                 {
                     string name = declared.Attribute("Header")!.Value.Replace("_", "");

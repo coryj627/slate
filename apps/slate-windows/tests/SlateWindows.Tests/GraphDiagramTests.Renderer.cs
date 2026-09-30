@@ -551,6 +551,7 @@ public sealed partial class GraphDiagramTests
             Assert.Equal(GraphDiagramView.GroupBrushKeys[(int)GraphColorToken.Teal], diagram.FillKeyForTests(id));
             (double width, double[]? dash) = diagram.RingStyleForTests(id)!.Value;
             Assert.Equal(3, width);
+            Assert.NotNull(dash);
             Assert.Equal([4, 2], dash);
             document.ViewState.Groups = [new GraphGroup("note", GraphColorToken.Purple, GraphRingStyle.Double)];
             host.Settle(document);
@@ -591,7 +592,9 @@ public sealed partial class GraphDiagramTests
             document.ViewState.Groups = [new GraphGroup("note", GraphColorToken.Green, GraphRingStyle.Dotted)];
             host.Settle(document);
             Assert.True(PumpedDispatcher.PumpUntil(() => diagram.Entries[id].Group is not null, TimeSpan.FromSeconds(5)));
-            Assert.Equal([1, 2], diagram.RingStyleForTests(id)!.Value.Dash);
+            double[]? dotted = diagram.RingStyleForTests(id)!.Value.Dash;
+            Assert.NotNull(dotted);
+            Assert.Equal([1, 2], dotted);
             document.ViewState.Groups = [];
             host.Settle(document);
             Assert.True(PumpedDispatcher.PumpUntil(() => diagram.Entries[id].Group is null, TimeSpan.FromSeconds(5)));

@@ -8998,7 +8998,7 @@ public sealed partial class ShellAccessibilityTests
             AutomationElement[] cards = Retry.WhileEmpty(
                 () => board.FindAllChildren(
                     finder => finder.ByControlType(ControlType.Button)),
-                TimeSpan.FromSeconds(20)).Result;
+                TimeSpan.FromSeconds(20)).Result ?? [];
             Assert.True(cards.Length >= 1, "no card peers materialized.");
             string[] names = [.. cards.Select(card => card.Properties.Name.Value)];
             Assert.All(names, name => Assert.False(string.IsNullOrWhiteSpace(name)));
@@ -9950,8 +9950,8 @@ public sealed partial class ShellAccessibilityTests
                 $"Escape did not seat the reader on the cleared rows; focus is {DescribeFocusedElement(automation)}");
             Assert.True(
                 SpinWait.SpinUntil(
-                    () => window.FindFirstDescendant(automation.ConditionFactory.ByAutomationId("GraphFilterSummary")) is null
-                        || window.FindFirstDescendant(automation.ConditionFactory.ByAutomationId("GraphFilterSummary")).Properties.IsOffscreen.ValueOrDefault,
+                    () => window.FindFirstDescendant(automation.ConditionFactory.ByAutomationId("GraphFilterSummary")) is not { } filterSummaryElement
+                        || filterSummaryElement.Properties.IsOffscreen.ValueOrDefault,
                     TimeSpan.FromSeconds(10)),
                 "the count region did not collapse when nothing narrows");
 
@@ -9962,8 +9962,8 @@ public sealed partial class ShellAccessibilityTests
                 SpinWait.SpinUntil(() => RowCount(grid) == 1 && TypeColumn(grid)[0].Contains("Solo", StringComparison.Ordinal), TimeSpan.FromSeconds(10)),
                 $"the orphans preset did not narrow the grid to Solo; it reads [{string.Join(", ", TypeColumn(grid))}]");
             Assert.True(
-                window.FindFirstDescendant(automation.ConditionFactory.ByAutomationId("GraphFilterSummary")) is null
-                    || window.FindFirstDescendant(automation.ConditionFactory.ByAutomationId("GraphFilterSummary")).Properties.IsOffscreen.ValueOrDefault,
+                window.FindFirstDescendant(automation.ConditionFactory.ByAutomationId("GraphFilterSummary")) is not { } filterSummaryElement
+                    || filterSummaryElement.Properties.IsOffscreen.ValueOrDefault,
                 "the count region showed under a backend-only narrowing");
 
             // The Unresolved Links preset: the region reads the ghost count
@@ -10037,8 +10037,8 @@ public sealed partial class ShellAccessibilityTests
             PressKey(VirtualKeyShort.ESCAPE);
             Assert.True(
                 SpinWait.SpinUntil(
-                    () => window.FindFirstDescendant(automation.ConditionFactory.ByAutomationId("GraphWhereAmIReadback")) is null
-                        || window.FindFirstDescendant(automation.ConditionFactory.ByAutomationId("GraphWhereAmIReadback")).Properties.IsOffscreen.ValueOrDefault,
+                    () => window.FindFirstDescendant(automation.ConditionFactory.ByAutomationId("GraphWhereAmIReadback")) is not { } readbackElement
+                        || readbackElement.Properties.IsOffscreen.ValueOrDefault,
                     TimeSpan.FromSeconds(10)),
                 "Escape did not close the panel");
             Assert.True(
@@ -10237,7 +10237,7 @@ public sealed partial class ShellAccessibilityTests
             AutomationElement toggle = WaitForElement(window, "GraphInspectorToggle", TimeSpan.FromSeconds(10));
             Assert.Equal("Toggle graph inspector", toggle.Properties.Name.Value);
             Assert.Equal("Show the graph inspector — filters, colour groups, display, and forces.", toggle.Properties.HelpText.Value);
-            AutomationElement PaneOrNull() =>
+            AutomationElement? PaneOrNull() =>
                 window.FindFirstDescendant(automation.ConditionFactory.ByAutomationId("GraphInspector"));
             bool PaneShown() => PaneOrNull() is { } pane && !pane.Properties.IsOffscreen.ValueOrDefault;
             toggle.Patterns.Toggle.Pattern.Toggle();
@@ -10275,8 +10275,8 @@ public sealed partial class ShellAccessibilityTests
             // E-13's wording).
             Assert.True(
                 SpinWait.SpinUntil(
-                    () => window.FindFirstDescendant(automation.ConditionFactory.ByAutomationId("GraphFilterSummary")) is null
-                        || window.FindFirstDescendant(automation.ConditionFactory.ByAutomationId("GraphFilterSummary")).Properties.IsOffscreen.ValueOrDefault,
+                    () => window.FindFirstDescendant(automation.ConditionFactory.ByAutomationId("GraphFilterSummary")) is not { } filterSummaryElement
+                        || filterSummaryElement.Properties.IsOffscreen.ValueOrDefault,
                     TimeSpan.FromSeconds(5)),
                 "the needle's count region showed for a flag change with no needle");
             _ = noGhostCount;
@@ -10422,8 +10422,8 @@ public sealed partial class ShellAccessibilityTests
             PressKey(VirtualKeyShort.ESCAPE);
             Assert.True(
                 SpinWait.SpinUntil(
-                    () => window.FindFirstDescendant(automation.ConditionFactory.ByAutomationId("GraphWhereAmIReadback")) is null
-                        || window.FindFirstDescendant(automation.ConditionFactory.ByAutomationId("GraphWhereAmIReadback")).Properties.IsOffscreen.ValueOrDefault,
+                    () => window.FindFirstDescendant(automation.ConditionFactory.ByAutomationId("GraphWhereAmIReadback")) is not { } readbackElement
+                        || readbackElement.Properties.IsOffscreen.ValueOrDefault,
                     TimeSpan.FromSeconds(10)),
                 "Escape did not close the panel");
             Assert.True(
@@ -10773,8 +10773,8 @@ public sealed partial class ShellAccessibilityTests
             PressKey(VirtualKeyShort.ESCAPE);
             Assert.True(
                 SpinWait.SpinUntil(
-                    () => window.FindFirstDescendant(automation.ConditionFactory.ByAutomationId("GraphWhereAmIReadback")) is null
-                        || window.FindFirstDescendant(automation.ConditionFactory.ByAutomationId("GraphWhereAmIReadback")).Properties.IsOffscreen.ValueOrDefault,
+                    () => window.FindFirstDescendant(automation.ConditionFactory.ByAutomationId("GraphWhereAmIReadback")) is not { } readbackElement
+                        || readbackElement.Properties.IsOffscreen.ValueOrDefault,
                     TimeSpan.FromSeconds(10)),
                 "Escape did not close the panel");
             Assert.True(

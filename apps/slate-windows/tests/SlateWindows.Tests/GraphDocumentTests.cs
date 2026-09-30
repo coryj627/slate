@@ -1102,7 +1102,7 @@ public sealed partial class GraphDocumentTests
             Assert.Same(graphGroup, activeAtReveal);
             Assert.Same(graphGroup, host.Workspace.ActiveGroup);
             Assert.True(host.Workspace.GraphTabIsEffective());
-            Assert.Equal([note.Path], revealed);
+            Assert.Equal([note.Path!], revealed);
         });
     }
 
