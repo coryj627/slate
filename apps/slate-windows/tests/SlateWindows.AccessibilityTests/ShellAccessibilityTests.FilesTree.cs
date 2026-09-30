@@ -60,8 +60,9 @@ public sealed partial class ShellAccessibilityTests
             start.ArgumentList.Add(vault);
             start.Environment["SLATE_CENSUS_INSTANCE_ID"] = "files-tree-" + Guid.NewGuid().ToString("N");
             start.Environment["SLATE_LOG_DIR"] = logs;
-            // The announcement dispatcher's R-1 diagnostics: the launch drain the
-            // batch legs wait for, and the listener's failure message.
+            // The announcement dispatcher's R-1 diagnostics: the launch's
+            // settled line the batch legs wait for, and the listener's failure
+            // message.
             start.Environment["SLATE_UIA_DIAGNOSTICS"] = "1";
             process = Process.Start(start) ?? throw new Xunit.Sdk.XunitException("Slate did not start.");
             if (!HasInteractiveDesktop(process, "files-tree")) { return; }
@@ -123,11 +124,12 @@ public sealed partial class ShellAccessibilityTests
             string logFile = Path.Combine(logs, "slate-windows.log");
             var batchHeard = new System.Collections.Concurrent.ConcurrentQueue<ReceivedNotification>();
             using DesktopNotificationListener batchListener = ListenOnTheDesktop(automation, batchHeard);
+            ListenerOutcome batchOutcome = ListenerOutcome.Failed;
             try
             {
-                // The first witnessed step: after the launch drain (contract
-                // 40's wave-close evidence), then a quiet second.
-                int checkMark = LaunchDrainedMark(batchHeard, process.Id, logFile);
+                // The first witnessed step: once the launch has settled
+                // (contract 40's wave-close evidence), then a quiet second.
+                int checkMark = LaunchSettledMark(batchHeard, process.Id, logFile);
                 PressKey(VirtualKeyShort.SPACE);
                 AssertBatchChecked(automation, noteRow, true);
                 AssertFocusStaysOnRow(automation, tree, "note.md", "Space moved focus off the note.md row.");
@@ -148,19 +150,17 @@ public sealed partial class ShellAccessibilityTests
                     [uniffi.slate_uniffi.SlateUniffiMethods.A11yRender(new uniffi.slate_uniffi.A11yEvent.NoItemsSelected())],
                     TimeSpan.FromSeconds(10),
                     logFile);
+                batchOutcome = ListenerOutcome.Completed;
             }
             finally
             {
                 WriteAnnouncementEvidence(
                     "files-tree-batch",
                     RegisteredAfterTheWindow,
+                    batchOutcome,
                     HeardFrom(batchHeard, process.Id),
                     batchHeard.Count(notification => notification.ProcessId != process.Id),
-                    [
-                        .. DiagnosticLines(logFile, "AnnouncementListenerState"),
-                        .. DiagnosticLines(logFile, "AnnouncementSource"),
-                        .. DiagnosticLines(logFile, "AnnouncementReplay"),
-                    ]);
+                    AnnouncementDiagnostics(logFile));
             }
             batchListener.Dispose();
 

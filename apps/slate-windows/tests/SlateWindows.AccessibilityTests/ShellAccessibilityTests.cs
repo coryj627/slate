@@ -381,9 +381,9 @@ public sealed partial class ShellAccessibilityTests
             // registration shape, registered just before the chord.
             var embedHeard = new ConcurrentQueue<ReceivedNotification>();
             using DesktopNotificationListener embedListener = ListenOnTheDesktop(automation, embedHeard);
-            // The journey's first witnessed step: after the launch drain
+            // The journey's first witnessed step: once the launch has settled
             // (contract 40's wave-close evidence), then a quiet second.
-            int embedMark = LaunchDrainedMark(embedHeard, process.Id, Path.Combine(logDirectory, "slate-windows.log"));
+            int embedMark = LaunchSettledMark(embedHeard, process.Id, Path.Combine(logDirectory, "slate-windows.log"));
             PressChord(VirtualKeyShort.CONTROL, VirtualKeyShort.KEY_E);
             AutomationElement? interactionPopover = TryWaitForElement(
                 window,
@@ -423,6 +423,7 @@ public sealed partial class ShellAccessibilityTests
             // core's rendering of it once — the sentence the popover is
             // named with.
             string heardEmbedPreview;
+            ListenerOutcome embedOutcome = ListenerOutcome.Failed;
             try
             {
                 heardEmbedPreview = AssertHeardEmbedPreviewShown(
@@ -430,19 +431,17 @@ public sealed partial class ShellAccessibilityTests
                     process.Id,
                     embedMark,
                     Path.Combine(logDirectory, "slate-windows.log"));
+                embedOutcome = ListenerOutcome.Completed;
             }
             finally
             {
                 WriteAnnouncementEvidence(
                     "embed-preview",
                     RegisteredAfterTheWindow,
+                    embedOutcome,
                     HeardFrom(embedHeard, process.Id),
                     embedHeard.Count(notification => notification.ProcessId != process.Id),
-                    [
-                        .. DiagnosticLines(Path.Combine(logDirectory, "slate-windows.log"), "AnnouncementListenerState"),
-                        .. DiagnosticLines(Path.Combine(logDirectory, "slate-windows.log"), "AnnouncementSource"),
-                        .. DiagnosticLines(Path.Combine(logDirectory, "slate-windows.log"), "AnnouncementReplay"),
-                    ]);
+                    AnnouncementDiagnostics(Path.Combine(logDirectory, "slate-windows.log")));
             }
             Assert.Equal(heardEmbedPreview, interactionPopover.Name);
             embedListener.Dispose();
@@ -522,7 +521,7 @@ public sealed partial class ShellAccessibilityTests
             // the chord, as around Ctrl+E above.
             var citationHeard = new ConcurrentQueue<ReceivedNotification>();
             using DesktopNotificationListener citationListener = ListenOnTheDesktop(automation, citationHeard);
-            int citationMark = LaunchDrainedMark(citationHeard, process.Id, Path.Combine(logDirectory, "slate-windows.log"));
+            int citationMark = LaunchSettledMark(citationHeard, process.Id, Path.Combine(logDirectory, "slate-windows.log"));
             PressChord(VirtualKeyShort.CONTROL, VirtualKeyShort.ENTER);
             AutomationElement citationPopover = WaitForElement(
                 window,
@@ -550,6 +549,7 @@ public sealed partial class ShellAccessibilityTests
             uniffi.slate_uniffi.RenderedAnnouncement citationShown = uniffi.slate_uniffi.SlateUniffiMethods.A11yRender(
                 new uniffi.slate_uniffi.A11yEvent.CitationPopoverShown("Citation: doe"));
             Assert.Equal(citationShown.Text, citationPopover.Name);
+            ListenerOutcome citationOutcome = ListenerOutcome.Failed;
             try
             {
                 AwaitHeardSince(
@@ -559,19 +559,17 @@ public sealed partial class ShellAccessibilityTests
                     [citationShown],
                     TimeSpan.FromSeconds(10),
                     Path.Combine(logDirectory, "slate-windows.log"));
+                citationOutcome = ListenerOutcome.Completed;
             }
             finally
             {
                 WriteAnnouncementEvidence(
                     "citation-popover",
                     RegisteredAfterTheWindow,
+                    citationOutcome,
                     HeardFrom(citationHeard, process.Id),
                     citationHeard.Count(notification => notification.ProcessId != process.Id),
-                    [
-                        .. DiagnosticLines(Path.Combine(logDirectory, "slate-windows.log"), "AnnouncementListenerState"),
-                        .. DiagnosticLines(Path.Combine(logDirectory, "slate-windows.log"), "AnnouncementSource"),
-                        .. DiagnosticLines(Path.Combine(logDirectory, "slate-windows.log"), "AnnouncementReplay"),
-                    ]);
+                    AnnouncementDiagnostics(Path.Combine(logDirectory, "slate-windows.log")));
             }
             citationListener.Dispose();
             Keyboard.Press(VirtualKeyShort.ESCAPE);
@@ -3165,6 +3163,9 @@ public sealed partial class ShellAccessibilityTests
         string logFile = Path.Combine(logDirectory, "slate-windows.log");
         var sheetsHeard = new ConcurrentQueue<ReceivedNotification>();
         Process? process = null;
+        // #1326: the evidence records what happened, never a capture that did not.
+        string sheetsRegistered = NotRegistered;
+        ListenerOutcome sheetsOutcome = ListenerOutcome.Aborted;
         try
         {
             var startInfo = new ProcessStartInfo(SlateWindowsExe())
@@ -3199,6 +3200,7 @@ public sealed partial class ShellAccessibilityTests
             // registration (measured locally, with NVDA running), where one
             // registered after UIA has reached the window is advised to it.
             using DesktopNotificationListener sheetsListener = ListenOnTheDesktop(automation, sheetsHeard);
+            (sheetsRegistered, sheetsOutcome) = (RegisteredAfterTheWindow, ListenerOutcome.Failed);
 
             AutomationElement filesTree = WaitForElement(
                 window, "FilesTree", TimeSpan.FromSeconds(30));
@@ -3325,9 +3327,9 @@ public sealed partial class ShellAccessibilityTests
             // ---- Details sheet: in-window, and focus returns -------
             resolvedRow!.Patterns.SelectionItem.Pattern.Select();
             resolvedRow.Focus();
-            // The first witnessed step: after the launch drain (contract 40's
-            // wave-close evidence), then a quiet second.
-            int detailsMark = LaunchDrainedMark(sheetsHeard, process.Id, logFile);
+            // The first witnessed step: once the launch has settled (contract
+            // 40's wave-close evidence), then a quiet second.
+            int detailsMark = LaunchSettledMark(sheetsHeard, process.Id, logFile);
             PressKey(VirtualKeyShort.RETURN);
             AutomationElement details = WaitForElement(
                 window, "CitationDetailsSheet", TimeSpan.FromSeconds(10));
@@ -3721,20 +3723,18 @@ public sealed partial class ShellAccessibilityTests
                 "Escape from the files-citing sheet did not return focus to the "
                     + "bibliography row that opened it; focus was on "
                     + $"\"{automation.FocusedElement().Properties.Name.ValueOrDefault}\"");
+            sheetsOutcome = ListenerOutcome.Completed;
         }
         finally
         {
             int slateId = process?.Id ?? -1;
             WriteAnnouncementEvidence(
                 "citation-sheets",
-                RegisteredAfterTheWindow,
+                sheetsRegistered,
+                sheetsOutcome,
                 HeardFrom(sheetsHeard, slateId),
                 sheetsHeard.Count(notification => notification.ProcessId != slateId),
-                [
-                    .. DiagnosticLines(logFile, "AnnouncementListenerState"),
-                    .. DiagnosticLines(logFile, "AnnouncementSource"),
-                    .. DiagnosticLines(logFile, "AnnouncementReplay"),
-                ]);
+                AnnouncementDiagnostics(logFile));
             if (process is not null && !process.HasExited)
             {
                 process.CloseMainWindow();

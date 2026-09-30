@@ -50,6 +50,9 @@ public sealed partial class ShellAccessibilityTests
             new A11yEvent.VaultRescanFinished(RescanReason.Explicit, changed, removed));
 
         Process? process = null;
+        // #1326: the evidence records what happened, never a capture that did not.
+        string registered = NotRegistered;
+        ListenerOutcome outcome = ListenerOutcome.Aborted;
         try
         {
             var startInfo = new ProcessStartInfo(SlateWindowsExe()) { UseShellExecute = false };
@@ -75,9 +78,10 @@ public sealed partial class ShellAccessibilityTests
                 TimeSpan.FromSeconds(30));
             // PR 1's desktop-scoped notification listener (#1244; NVDA's
             // registration shape), registered once the window exists and kept
-            // for every leg below; the legs start after Slate has drained its
-            // launch lines (R-1 — the launch journey's to witness).
+            // for every leg below; the legs start once Slate's launch has
+            // settled (R-1 — its lines are the launch journey's to witness).
             using DesktopNotificationListener listener = ListenOnTheDesktop(automation, heard);
+            (registered, outcome) = (RegisteredAfterTheWindow, ListenerOutcome.Failed);
             window.SetForeground();
             WaitForVaultOpen(window);
             AutomationElement filesTree = WaitForElement(window, "FilesTree", TimeSpan.FromSeconds(10));
@@ -88,7 +92,7 @@ public sealed partial class ShellAccessibilityTests
             WaitForEditorText(window, automation, "note.md editor", "Original body.");
 
             // --- leg 1: a file created outside Slate --------------------------
-            int leg1 = LaunchDrainedMark(heard, process.Id, logFile);
+            int leg1 = LaunchSettledMark(heard, process.Id, logFile);
             File.WriteAllText(latePath, "# Late\n");
             InvokeFilesSidebarRefreshFromTheMenu(window);
 
@@ -131,20 +135,18 @@ public sealed partial class ShellAccessibilityTests
 
             // Once — the announcement counts the removal.
             AwaitHeardSince(heard, process.Id, leg3, [Refreshed(0, 1)], TimeSpan.FromSeconds(15), logFile);
+            outcome = ListenerOutcome.Completed;
         }
         finally
         {
             int slateId = process?.Id ?? -1;
             WriteAnnouncementEvidence(
                 "rescan",
-                RegisteredAfterTheWindow,
+                registered,
+                outcome,
                 HeardFrom(heard, slateId),
                 heard.Count(notification => notification.ProcessId != slateId),
-                [
-                    .. DiagnosticLines(logFile, "AnnouncementListenerState"),
-                    .. DiagnosticLines(logFile, "AnnouncementSource"),
-                    .. DiagnosticLines(logFile, "AnnouncementReplay"),
-                ]);
+                AnnouncementDiagnostics(logFile));
             if (process is not null && !process.HasExited)
             {
                 process.CloseMainWindow();

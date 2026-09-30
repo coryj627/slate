@@ -82,6 +82,9 @@ public sealed partial class ShellAccessibilityTests
         var received = new ConcurrentQueue<ReceivedNotification>();
         var clock = Stopwatch.StartNew();
         Process? process = null;
+        // #1326: the evidence records what happened, never a capture that did not.
+        string registered = NotRegistered;
+        ListenerOutcome outcome = ListenerOutcome.Aborted;
         try
         {
             using var automation = new UIA3Automation();
@@ -90,6 +93,7 @@ public sealed partial class ShellAccessibilityTests
             using var listener = new DesktopNotificationListener(automation, (processId, automationId, kind, processing, displayString, activityId) =>
                 received.Enqueue(new ReceivedNotification(
                     processId, automationId, kind, processing, displayString, activityId, clock.ElapsedMilliseconds)));
+            (registered, outcome) = (RegisteredBeforeLaunch, ListenerOutcome.Failed);
 
             string vaultRoot = Path.Combine(testRoot, vaultName);
             string logDirectory = Path.Combine(testRoot, "logs");
@@ -99,6 +103,8 @@ public sealed partial class ShellAccessibilityTests
             process = StartShellProcess(vaultRoot, logDirectory, LaunchQueueMilliseconds);
             if (!HasInteractiveDesktop(process, "announcements"))
             {
+                // A startup smoke: no window, nothing a listener could hear.
+                outcome = ListenerOutcome.Aborted;
                 return;
             }
 
@@ -158,6 +164,13 @@ public sealed partial class ShellAccessibilityTests
             Assert.True(
                 drains.Count(drain => drain.Contains("drained=", StringComparison.Ordinal)) == 1,
                 "The queued launch lines did not log exactly one drain: " + string.Join(" | ", drains));
+            // #1326: the launch settled once, as the switch forces — its lines
+            // queued and replayed whole, none lost.
+            string settled = Assert.Single(DiagnosticLines(logFile, "AnnouncementLaunchSettled"));
+            Assert.True(
+                settled.Contains("(outcome=drained,", StringComparison.Ordinal)
+                    && settled.Contains(", lost=0,", StringComparison.Ordinal),
+                "The queued launch did not settle as drained with nothing lost: " + settled);
 
             // The exact tuples: kind Other, the priority's processing (contract
             // 38 D-1 — every line here is Medium, All), and each its own
@@ -171,20 +184,20 @@ public sealed partial class ShellAccessibilityTests
                     NotificationProcessing.All,
                     $"slate-accessibility-announcement.{index + 1}")),
                 fromSlate.Select(notification => (notification.Kind, notification.Processing, notification.ActivityId)));
+            outcome = ListenerOutcome.Completed;
         }
         finally
         {
             int slateId = process?.Id ?? -1;
             WriteAnnouncementEvidence(
                 "launch",
-                RegisteredBeforeLaunch,
+                registered,
+                outcome,
                 [.. received.Where(notification => notification.ProcessId == slateId)],
                 received.Count(notification => notification.ProcessId != slateId),
                 [
                     .. attempts,
-                    .. DiagnosticLines(logFile, "AnnouncementListenerState"),
-                    .. DiagnosticLines(logFile, "AnnouncementSource"),
-                    .. DiagnosticLines(logFile, "AnnouncementReplay"),
+                    .. AnnouncementDiagnostics(logFile),
                 ]);
             if (process is not null)
             {
@@ -269,10 +282,21 @@ public sealed partial class ShellAccessibilityTests
             actual.SequenceEqual(expected),
             "The desktop listener did not hear exactly the expected lines, once each, in order. Expected: ["
             + string.Join(" | ", expected) + "]. Heard: [" + string.Join(" | ", actual) + "]. Logged: "
-            + string.Join(" | ", DiagnosticLines(logFile, "AnnouncementListenerState"))
-            + " | " + string.Join(" | ", DiagnosticLines(logFile, "AnnouncementSource"))
-            + " | " + string.Join(" | ", DiagnosticLines(logFile, "AnnouncementReplay")));
+            + string.Join(" | ", AnnouncementDiagnostics(logFile)));
     }
+
+    /// <summary>The announcement dispatcher's R-1 and OD-7 diagnostics in the
+    /// app log (under <c>SLATE_UIA_DIAGNOSTICS=1</c>), for a failure message
+    /// or an evidence artifact: the listener's states, the status provider's,
+    /// the drains, drops and expiry, and the launch's settled line
+    /// (#1326).</summary>
+    private static string[] AnnouncementDiagnostics(string logFile) =>
+    [
+        .. DiagnosticLines(logFile, "AnnouncementListenerState"),
+        .. DiagnosticLines(logFile, "AnnouncementSource"),
+        .. DiagnosticLines(logFile, "AnnouncementReplay"),
+        .. DiagnosticLines(logFile, "AnnouncementLaunchSettled"),
+    ];
 
     /// <summary>The activity ID every line Slate raises starts from
     /// (contract 38 D-1): a superseding (High) line keeps it, and a Medium
@@ -310,33 +334,44 @@ public sealed partial class ShellAccessibilityTests
     }
 
     /// <summary>
-    /// The first step's mark after a launch: Slate's launch lines are queued
-    /// until it is ready and then drained together (R-1, OD-7 — on UIA's
-    /// advise, or once the three-second hold after the status provider
-    /// connects runs out), so a step taken before the drain would count the
-    /// launch as its own. This waits for the drain in the app log (the
-    /// <c>AnnouncementReplay</c> diagnostic, written under
-    /// <c>SLATE_UIA_DIAGNOSTICS=1</c> once the queue is drained or expires),
-    /// then for a quiet second (<see cref="QuietMark"/>).
+    /// The first step's mark after a launch. Slate's launch settles once
+    /// (R-1, OD-7) and logs how, under <c>SLATE_UIA_DIAGNOSTICS=1</c>
+    /// (<c>AnnouncementLaunchSettled</c>, #1326): <c>drained</c> — the lines
+    /// posted before readiness queued and replayed together, on UIA's advise
+    /// or once the three-second hold ran out; <c>ready-empty</c> — ready at
+    /// its first line, nothing queued, every line raised as it was posted (the
+    /// CI shell gate's path: the journey's own listener is advised before the
+    /// first launch line, and no drain is ever logged); or a launch line lost
+    /// unspoken — <c>dropped</c> or <c>expired</c> — a defect this fails on at
+    /// once. A step taken before the launch settled would count its lines as
+    /// the step's own, so this waits for the settled line (the thirty-second
+    /// launch window bounds it), then for a quiet second (<see cref="QuietMark"/>).
     /// </summary>
-    private static int LaunchDrainedMark(ConcurrentQueue<ReceivedNotification> heard, int processId, string logFile)
+    private static int LaunchSettledMark(ConcurrentQueue<ReceivedNotification> heard, int processId, string logFile)
     {
-        Assert.True(
-            SpinWait.SpinUntil(
-                () =>
+        string settled = string.Empty;
+        bool logged = SpinWait.SpinUntil(
+            () =>
+            {
+                if (DiagnosticLines(logFile, "AnnouncementLaunchSettled") is [string line, ..])
                 {
-                    if (DiagnosticLines(logFile, "AnnouncementReplay").Length > 0)
-                    {
-                        return true;
-                    }
+                    settled = line;
+                    return true;
+                }
 
-                    Thread.Sleep(100);
-                    return false;
-                },
-                TimeSpan.FromSeconds(20)),
-            "Slate never drained its launch lines (no AnnouncementReplay diagnostic): "
-            + string.Join(" | ", DiagnosticLines(logFile, "AnnouncementListenerState"))
-            + " | " + string.Join(" | ", DiagnosticLines(logFile, "AnnouncementSource")));
+                Thread.Sleep(100);
+                return false;
+            },
+            TimeSpan.FromSeconds(45));
+        Assert.True(
+            logged,
+            "Slate's launch never settled (no AnnouncementLaunchSettled diagnostic): "
+            + string.Join(" | ", AnnouncementDiagnostics(logFile)));
+        Assert.True(
+            settled.Contains("(outcome=drained,", StringComparison.Ordinal)
+                || settled.Contains("(outcome=ready-empty,", StringComparison.Ordinal),
+            "Slate lost a launch line before it was spoken: "
+            + string.Join(" | ", AnnouncementDiagnostics(logFile)));
         return QuietMark(heard, processId);
     }
 
@@ -551,16 +586,45 @@ public sealed partial class ShellAccessibilityTests
 
     /// <summary>Every other journey's listener: registered once
     /// <c>WaitForMainWindow</c> had reached the window, its legs taken after the
-    /// launch drain (<see cref="LaunchDrainedMark"/>).</summary>
+    /// launch settled (<see cref="LaunchSettledMark"/>).</summary>
     private const string RegisteredAfterTheWindow = "registered after WaitForMainWindow reached the window";
+
+    /// <summary>#1326: a listener that was never registered — the journey
+    /// returned (no interactive desktop) or failed before its registration
+    /// returned. The evidence says so, with an aborted outcome, and claims no
+    /// capture.</summary>
+    private const string NotRegistered = "not registered";
+
+    /// <summary>#1326: how far a journey (or a leg) got with its desktop
+    /// listener, as its evidence records it.</summary>
+    private enum ListenerOutcome
+    {
+        /// <summary>Nothing could be heard: the listener was never registered,
+        /// or the run degraded to a startup smoke with no window.</summary>
+        Aborted,
+
+        /// <summary>Registered, and the journey stopped before its end: an
+        /// assertion failed or an exception escaped.</summary>
+        Failed,
+
+        /// <summary>Registered, and the journey reached its end.</summary>
+        Completed,
+    }
 
     /// <summary>Writes one surface's announcement evidence (under
     /// <c>SLATE_ACCESSIBILITY_EVIDENCE_DIR</c>): what Slate raised, how many
-    /// lines came from other processes, the app's diagnostics, and where the
-    /// listener was registered — <see cref="RegisteredBeforeLaunch"/> or
-    /// <see cref="RegisteredAfterTheWindow"/>.</summary>
+    /// lines came from other processes, the app's diagnostics, where the
+    /// listener was registered — <see cref="RegisteredBeforeLaunch"/>,
+    /// <see cref="RegisteredAfterTheWindow"/> or <see cref="NotRegistered"/> —
+    /// and how far the journey got (<see cref="ListenerOutcome"/>; a listener
+    /// never registered is always an aborted one).</summary>
     private static void WriteAnnouncementEvidence(
-        string surface, string registered, ReceivedNotification[] fromSlate, int otherProcesses, string[] diagnostics)
+        string surface,
+        string registered,
+        ListenerOutcome outcome,
+        ReceivedNotification[] fromSlate,
+        int otherProcesses,
+        string[] diagnostics)
     {
         string? directory = Environment.GetEnvironmentVariable("SLATE_ACCESSIBILITY_EVIDENCE_DIR");
         if (string.IsNullOrWhiteSpace(directory))
@@ -570,13 +634,14 @@ public sealed partial class ShellAccessibilityTests
 
         var evidence = new
         {
-            schemaVersion = 1,
+            schemaVersion = 2,
             surface,
             recordedAtUtc = DateTimeOffset.UtcNow,
             sourceRevision = Environment.GetEnvironmentVariable("GITHUB_SHA"),
             operatingSystem = Environment.OSVersion.VersionString,
             dotnetRuntime = Environment.Version.ToString(),
             listener = "IUIAutomation6 event-handler group on the desktop root, subtree scope, " + registered,
+            outcome = (registered == NotRegistered ? ListenerOutcome.Aborted : outcome).ToString().ToLowerInvariant(),
             received = fromSlate.Select(notification => new
             {
                 displayString = notification.DisplayString,

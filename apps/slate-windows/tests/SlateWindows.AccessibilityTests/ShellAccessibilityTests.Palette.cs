@@ -59,6 +59,9 @@ public sealed partial class ShellAccessibilityTests
         var heard = new ConcurrentQueue<ReceivedNotification>();
 
         Process? process = null;
+        // #1326: the evidence records what happened, never a capture that did not.
+        string registered = NotRegistered;
+        ListenerOutcome outcome = ListenerOutcome.Aborted;
         try
         {
             var startInfo = new ProcessStartInfo(SlateWindowsExe()) { UseShellExecute = false };
@@ -85,13 +88,14 @@ public sealed partial class ShellAccessibilityTests
             // PR 1's desktop-scoped notification listener (#1244; NVDA's
             // registration shape), registered once the window exists and kept
             // for both legs below. The launch lines are the launch journey's to
-            // witness (R-1); these legs start after Slate has drained them.
+            // witness (R-1); these legs start once Slate's launch has settled.
             using DesktopNotificationListener listener = ListenOnTheDesktop(automation, heard);
+            (registered, outcome) = (RegisteredAfterTheWindow, ListenerOutcome.Failed);
             window.SetForeground();
             WaitForVaultOpen(window);
 
             // --- leg 1: "split", typed fast ----------------------------------
-            int leg1 = LaunchDrainedMark(heard, process.Id, logFile);
+            int leg1 = LaunchSettledMark(heard, process.Id, logFile);
             (AutomationElement search, AutomationElement results) = OpenPaletteByChord(window);
             TypeIntoSearch(window, search, "split");
 
@@ -159,19 +163,19 @@ public sealed partial class ShellAccessibilityTests
 
             PressKey(VirtualKeyShort.ESCAPE);
             WaitForPaletteClosed(window, automation);
+            outcome = ListenerOutcome.Completed;
         }
         finally
         {
             int slateId = process?.Id ?? -1;
             WriteAnnouncementEvidence(
                 "palette-typing",
-                RegisteredAfterTheWindow,
+                registered,
+                outcome,
                 HeardFrom(heard, slateId),
                 heard.Count(notification => notification.ProcessId != slateId),
                 [
-                    .. DiagnosticLines(logFile, "AnnouncementListenerState"),
-                    .. DiagnosticLines(logFile, "AnnouncementSource"),
-                    .. DiagnosticLines(logFile, "AnnouncementReplay"),
+                    .. AnnouncementDiagnostics(logFile),
                     .. DiagnosticLines(logFile, "PaletteQueryChangeTimed"),
                 ]);
             if (process is not null && !process.HasExited)
@@ -235,7 +239,7 @@ public sealed partial class ShellAccessibilityTests
             $"The desktop listener did not hear one count for the final query, after at most one selection line naming "
             + $"\"{finalLabel}\". Expected: [({selected.Text}) | {count.Text}]. Heard: [{heardLines}]. Logged "
             + "(a publication settling past P10's 150 ms window lets a count speak before the next keystroke): "
-            + string.Join(" | ", DiagnosticLines(logFile, "AnnouncementReplay"))
+            + string.Join(" | ", AnnouncementDiagnostics(logFile))
             + " | " + string.Join(" | ", DiagnosticLines(logFile, "PaletteQueryChangeTimed")));
         AssertRaisedAsRendered(count, lines[^1]);
         if (lines.Length == 2)
