@@ -217,6 +217,10 @@ const MIGRATIONS: &[Migration] = &[
         description: "properties: preserve typed YAML source key identity (#1080)",
         sql: include_str!("../migrations/038_property_key_identity.sql"),
     },
+    Migration {
+        description: "files: Unicode fold index on names for the embed resolver (#1279)",
+        sql: include_str!("../migrations/039_file_name_fold_index.sql"),
+    },
 ];
 
 /// Open or create a SQLite database at `path` with Slate's standard PRAGMAs.
@@ -567,6 +571,50 @@ mod tests {
         }
     }
 
+    /// #1279: migration 039 indexes the Unicode fold of every file name,
+    /// and the embed resolver's candidate lookups — by path and by name,
+    /// over an IN list of probe keys — actually use the fold indexes
+    /// rather than scanning the table.
+    #[test]
+    fn migration_039_indexes_the_unicode_fold_of_every_file_name() {
+        let mut conn = fresh_db();
+        migrate(&mut conn).expect("migrate");
+        let present: i64 = conn
+            .query_row(
+                "SELECT COUNT(*) FROM sqlite_master \
+                 WHERE type = 'index' AND name = 'idx_files_name_fold'",
+                [],
+                |row| row.get(0),
+            )
+            .unwrap();
+        assert_eq!(present, 1);
+        for (column, index) in [
+            ("path", "idx_files_path_fold"),
+            ("name", "idx_files_name_fold"),
+        ] {
+            let plan: Vec<String> = conn
+                .prepare(&format!(
+                    "EXPLAIN QUERY PLAN SELECT path FROM files \
+                     WHERE slate_tree_sort_key({column}) IN (?1, ?2, ?3, ?4, ?5)"
+                ))
+                .unwrap()
+                .query_map(["a", "a.md", "a.markdown", "a.mdown", "a.mkd"], |row| {
+                    row.get::<_, String>(3)
+                })
+                .unwrap()
+                .map(|row| row.unwrap())
+                .collect();
+            assert!(
+                plan.iter().any(|step| step.contains(index)),
+                "the {column} lookup must use {index}: {plan:?}"
+            );
+            assert!(
+                !plan.iter().any(|step| step.starts_with("SCAN files")),
+                "the {column} lookup must not scan the files table: {plan:?}"
+            );
+        }
+    }
+
     /// #1078 Phase 0: the fence proceeds on a current cache and refuses
     /// skew in EITHER direction (U4), before anything is written.
     #[test]
@@ -643,8 +691,9 @@ mod tests {
             )
             .unwrap();
         // extension + mtime (001) + birthtime (030, #801) + parent tree order (033)
-        // + Unicode path fold for the collision gate (037, #1077).
-        assert_eq!(indexes, 5);
+        // + Unicode path fold for the collision gate (037, #1077)
+        // + Unicode name fold for the embed resolver (039, #1279).
+        assert_eq!(indexes, 6);
     }
 
     #[test]

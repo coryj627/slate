@@ -260,7 +260,8 @@ public static class SurfaceSerializer
             {
                 j.Raw(",");
             }
-            var preview = session.ResolveEmbedPreview(relPath, embedKeys[i], null);
+            using var cancel = new CancelToken();
+            var preview = session.ResolveEmbedPreview(relPath, embedKeys[i], null, cancel);
             j.Raw("{\"key\":").Str(embedKeys[i])
              .Raw(",\"truncated\":").Raw(preview.Truncated ? "true" : "false")
              .Raw(",\"resolution\":");
