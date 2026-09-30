@@ -22,7 +22,9 @@ public sealed partial class ShellAccessibilityTests
     /// real keys: Down through a folder row and two file rows keeps focus
     /// on each row while the editor shows the file in the one transient
     /// tab; Space toggles the focused row's batch check box (the row's
-    /// ItemStatus reports it, focus stays); Ctrl+Enter gives the note its
+    /// ItemStatus reports it, focus stays, and PR 1's desktop listener
+    /// (#1244) hears core's "1 item selected", then "No items selected");
+    /// Ctrl+Enter gives the note its
     /// own tab, so the next arrow shows its note in a new transient tab;
     /// Enter moves focus into the note; Enter and Ctrl+Enter open from the
     /// filter results, the tree and the dual pane; the Tags tree filters
@@ -110,14 +112,35 @@ public sealed partial class ShellAccessibilityTests
             Assert.Equal(1, TabCount(window, automation));
 
             // Space checks the focused row for batch actions — the row
-            // reports it, the check box follows, focus stays — and again
-            // unchecks it.
+            // reports it, the check box follows, focus stays, and a screen
+            // reader hears the count (spec §3.4: core's "1 item selected",
+            // through PR 1's desktop listener, #1244) — and again unchecks
+            // it: "No items selected".
             AutomationElement noteRow = WaitForTreeItemStartingWith(tree, automation, "note.md");
+            var batchHeard = new System.Collections.Concurrent.ConcurrentQueue<ReceivedNotification>();
+            using DesktopNotificationListener batchListener = ListenOnTheDesktop(automation, batchHeard);
+            int checkMark = QuietMark(batchHeard, process.Id);
             PressKey(VirtualKeyShort.SPACE);
             AssertBatchChecked(automation, noteRow, true);
             AssertFocusStaysOnRow(automation, tree, "note.md", "Space moved focus off the note.md row.");
+            AwaitHeardSince(
+                batchHeard,
+                process.Id,
+                checkMark,
+                [uniffi.slate_uniffi.SlateUniffiMethods.A11yRender(new uniffi.slate_uniffi.A11yEvent.ItemsSelected(1))],
+                TimeSpan.FromSeconds(10),
+                Path.Combine(logs, "slate-windows.log"));
+            int uncheckMark = QuietMark(batchHeard, process.Id);
             PressKey(VirtualKeyShort.SPACE);
             AssertBatchChecked(automation, noteRow, false);
+            AwaitHeardSince(
+                batchHeard,
+                process.Id,
+                uncheckMark,
+                [uniffi.slate_uniffi.SlateUniffiMethods.A11yRender(new uniffi.slate_uniffi.A11yEvent.NoItemsSelected())],
+                TimeSpan.FromSeconds(10),
+                Path.Combine(logs, "slate-windows.log"));
+            batchListener.Dispose();
 
             // Ctrl+Enter gives the note shown in the transient tab a tab of
             // its own (focus moves into it); back on the row, the next arrow

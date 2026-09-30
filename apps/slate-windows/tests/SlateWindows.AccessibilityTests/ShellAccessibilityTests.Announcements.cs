@@ -273,6 +273,126 @@ public sealed partial class ShellAccessibilityTests
             + " | " + string.Join(" | ", DiagnosticLines(logFile, "AnnouncementReplay")));
     }
 
+    /// <summary>The activity ID every line Slate raises starts from
+    /// (contract 38 D-1): a superseding (High) line keeps it, and a Medium
+    /// line carries its own numbered one.</summary>
+    private const string SlateActivityId = "slate-accessibility-announcement";
+
+    /// <summary>Everything a journey's desktop listener has heard from
+    /// Slate, in order.</summary>
+    private static ReceivedNotification[] HeardFrom(ConcurrentQueue<ReceivedNotification> heard, int processId) =>
+        [.. heard.Where(notification => notification.ProcessId == processId)];
+
+    /// <summary>
+    /// Where a step's own lines start: waits until nothing new has been heard
+    /// from Slate for a quiet second — whatever the steps before it raised has
+    /// arrived (at most fifteen seconds) — and returns how many lines have
+    /// been heard so far.
+    /// </summary>
+    private static int QuietMark(ConcurrentQueue<ReceivedNotification> heard, int processId)
+    {
+        int count = HeardFrom(heard, processId).Length;
+        var quiet = Stopwatch.StartNew();
+        var waited = Stopwatch.StartNew();
+        while (quiet.Elapsed < TimeSpan.FromSeconds(1) && waited.Elapsed < TimeSpan.FromSeconds(15))
+        {
+            Thread.Sleep(100);
+            int now = HeardFrom(heard, processId).Length;
+            if (now != count)
+            {
+                count = now;
+                quiet.Restart();
+            }
+        }
+
+        return count;
+    }
+
+    /// <summary>
+    /// The first step's mark after a launch: Slate's launch lines are queued
+    /// until it is ready and then drained together (R-1, OD-7 — on UIA's
+    /// advise, or once the three-second hold after the status provider
+    /// connects runs out), so a step taken before the drain would count the
+    /// launch as its own. This waits for the drain in the app log (the
+    /// <c>AnnouncementReplay</c> diagnostic, written under
+    /// <c>SLATE_UIA_DIAGNOSTICS=1</c> once the queue is drained or expires),
+    /// then for a quiet second (<see cref="QuietMark"/>).
+    /// </summary>
+    private static int LaunchDrainedMark(ConcurrentQueue<ReceivedNotification> heard, int processId, string logFile)
+    {
+        Assert.True(
+            SpinWait.SpinUntil(
+                () =>
+                {
+                    if (DiagnosticLines(logFile, "AnnouncementReplay").Length > 0)
+                    {
+                        return true;
+                    }
+
+                    Thread.Sleep(100);
+                    return false;
+                },
+                TimeSpan.FromSeconds(20)),
+            "Slate never drained its launch lines (no AnnouncementReplay diagnostic): "
+            + string.Join(" | ", DiagnosticLines(logFile, "AnnouncementListenerState"))
+            + " | " + string.Join(" | ", DiagnosticLines(logFile, "AnnouncementSource")));
+        return QuietMark(heard, processId);
+    }
+
+    /// <summary>
+    /// Waits until Slate has raised exactly <paramref name="expected"/> since
+    /// <paramref name="mark"/> — core's renderings, once each, in order, and
+    /// nothing else (<see cref="AwaitHeard"/>) — then checks each line's UIA
+    /// shape (<see cref="AssertRaisedAsRendered"/>).
+    /// </summary>
+    private static void AwaitHeardSince(
+        ConcurrentQueue<ReceivedNotification> heard,
+        int processId,
+        int mark,
+        RenderedAnnouncement[] expected,
+        TimeSpan timeout,
+        string logFile)
+    {
+        AwaitHeard(
+            () => [.. HeardFrom(heard, processId).Skip(mark).Select(notification => notification.DisplayString)],
+            [.. expected.Select(line => line.Text)],
+            timeout,
+            logFile);
+        ReceivedNotification[] lines = [.. HeardFrom(heard, processId).Skip(mark)];
+        for (int index = 0; index < expected.Length; index++)
+        {
+            AssertRaisedAsRendered(expected[index], lines[index]);
+        }
+    }
+
+    /// <summary>
+    /// A line Slate raised has the shape contract 38 D-1 gives core's
+    /// priority: kind Other; a High line ImportantMostRecent under the shared
+    /// activity ID (a newer one supersedes it); a Medium line All under a
+    /// numbered ID of its own, so NVDA's UIA rate limiter coalesces none
+    /// (#1244).
+    /// </summary>
+    private static void AssertRaisedAsRendered(RenderedAnnouncement expected, ReceivedNotification heard)
+    {
+        (NotificationProcessing processing, bool numbered) = expected.Priority switch
+        {
+            A11yPriority.High => (NotificationProcessing.ImportantMostRecent, false),
+            A11yPriority.Medium => (NotificationProcessing.All, true),
+            _ => throw new Xunit.Sdk.XunitException(
+                $"contract 38 D-1 maps no processing for {expected.Priority} (\"{expected.Text}\")."),
+        };
+        Assert.True(
+            heard.Kind == NotificationKind.Other
+                && heard.Processing == processing
+                && (numbered
+                    ? System.Text.RegularExpressions.Regex.IsMatch(
+                        heard.ActivityId, "^" + SlateActivityId + @"\.\d+$")
+                    : heard.ActivityId == SlateActivityId),
+            $"\"{heard.DisplayString}\" was raised as ({heard.Kind}, {heard.Processing}, {heard.ActivityId}); core's "
+            + $"{expected.Priority} line is (Other, {processing}, "
+            + (numbered ? SlateActivityId + ".<n>" : SlateActivityId) + ") (contract 38 D-1).");
+    }
+
     private static void StopProcess(Process process)
     {
         try

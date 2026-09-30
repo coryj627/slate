@@ -1,6 +1,7 @@
 // Copyright (C) 2026 Cory Joseph
 // SPDX-License-Identifier: AGPL-3.0-or-later
 
+using System.Collections.Concurrent;
 using System.Diagnostics;
 using FlaUI.Core.AutomationElements;
 using FlaUI.Core.Definitions;
@@ -8,6 +9,7 @@ using FlaUI.Core.Input;
 using FlaUI.Core.Tools;
 using FlaUI.Core.WindowsAPI;
 using FlaUI.UIA3;
+using uniffi.slate_uniffi;
 
 namespace SlateWindows.AccessibilityTests;
 
@@ -20,15 +22,15 @@ public sealed partial class ShellAccessibilityTests
     /// a deleted file leaves the tree after the one after that.
     /// </summary>
     /// <remarks>
-    /// TODO(#1244): the announcement legs — "Files refreshed. 1 new or
-    /// changed, 0 removed." after the first Refresh, the modification's
-    /// sentence after the second, and "Files refreshed. 0 new or changed, 1
-    /// removed." after the third, each heard exactly once and nothing else
-    /// spoken — wait for PR 1's desktop-scoped notification listener (R-1),
-    /// which this branch does not carry; see the TODO blocks below for where
-    /// it subscribes and what it asserts. Until then the journey pins what
-    /// the UI shows, and the whole-sequence speech is pinned by the hosted
-    /// <c>RescanTests</c> facts through the real lifecycle.
+    /// Each Refresh is heard through PR 1's desktop-scoped notification
+    /// listener (#1244, R-1: NVDA's registration shape, on the desktop root)
+    /// as exactly one line, core's rendering of its
+    /// <c>VaultRescanFinished</c>, and nothing else — no scan-family line, no
+    /// "missing from disk" line: "Files refreshed. 1 new or changed, 0
+    /// removed." after the first Refresh and after the second (the open
+    /// note's change), and "Files refreshed. 0 new or changed, 1 removed."
+    /// after the third. The hosted <c>RescanTests</c> facts pin the same
+    /// sentences through the real lifecycle.
     /// </remarks>
     [Fact]
     public void ExternalFiles_AppearAfterRefresh()
@@ -42,8 +44,10 @@ public sealed partial class ShellAccessibilityTests
         string latePath = Path.Combine(vaultRoot, "late.md");
         File.WriteAllText(notePath, "# Note\n\nOriginal body.\n");
 
-        // TODO(#1244): subscribe PR 1's desktop-scoped notification listener
-        // HERE, before launch (R-1), and keep it for every leg below.
+        string logFile = Path.Combine(logDirectory, "slate-windows.log");
+        var heard = new ConcurrentQueue<ReceivedNotification>();
+        RenderedAnnouncement Refreshed(ulong changed, ulong removed) => SlateUniffiMethods.A11yRender(
+            new A11yEvent.VaultRescanFinished(RescanReason.Explicit, changed, removed));
 
         Process? process = null;
         try
@@ -53,6 +57,9 @@ public sealed partial class ShellAccessibilityTests
             startInfo.Environment["SLATE_CENSUS_INSTANCE_ID"] =
                 $"slate-external-files-{Guid.NewGuid():N}";
             startInfo.Environment["SLATE_LOG_DIR"] = logDirectory;
+            // The announcement dispatcher's R-1 diagnostics, for the listener's
+            // failure message and the evidence artifact.
+            startInfo.Environment["SLATE_UIA_DIAGNOSTICS"] = "1";
             process = Process.Start(startInfo)
                 ?? throw new Xunit.Sdk.XunitException("SlateWindows.exe did not start.");
             if (!HasInteractiveDesktop(process, "external-files"))
@@ -64,8 +71,13 @@ public sealed partial class ShellAccessibilityTests
             Window window = WaitForMainWindow(
                 process,
                 automation,
-                Path.Combine(logDirectory, "slate-windows.log"),
+                logFile,
                 TimeSpan.FromSeconds(30));
+            // PR 1's desktop-scoped notification listener (#1244; NVDA's
+            // registration shape), registered once the window exists and kept
+            // for every leg below; the legs start after Slate has drained its
+            // launch lines (R-1 — the launch journey's to witness).
+            using DesktopNotificationListener listener = ListenOnTheDesktop(automation, heard);
             window.SetForeground();
             WaitForVaultOpen(window);
             AutomationElement filesTree = WaitForElement(window, "FilesTree", TimeSpan.FromSeconds(10));
@@ -76,22 +88,22 @@ public sealed partial class ShellAccessibilityTests
             WaitForEditorText(window, automation, "note.md editor", "Original body.");
 
             // --- leg 1: a file created outside Slate --------------------------
+            int leg1 = LaunchDrainedMark(heard, process.Id, logFile);
             File.WriteAllText(latePath, "# Late\n");
             InvokeFilesSidebarRefreshFromTheMenu(window);
 
             _ = WaitForTreeItemStartingWith(filesTree, automation, "late");
+            // Exactly one line since the Refresh — no "Scanning vault…" or
+            // "Scan complete…" (a rescan never speaks the scan family).
+            AwaitHeardSince(heard, process.Id, leg1, [Refreshed(1, 0)], TimeSpan.FromSeconds(15), logFile);
             AssertQuickOpenFinds(window, automation, "late", "late");
             // W7-7 PR 3 (#1246, R-4): the rows the rescan republished — the
             // tree's and every list's — are named speakably, never by a .NET
             // type name or a record dump.
             AssertItemNamesAreSpeakable(process, "rescan-refreshed-files");
 
-            // TODO(#1244), with the listener: exactly one notification since the
-            // Refresh — "Files refreshed. 1 new or changed, 0 removed." — and no
-            // "Scanning vault…" / "Scan complete…" line (a rescan never speaks
-            // the scan family).
-
             // --- leg 2: the OPEN note changed outside Slate --------------------
+            int leg2 = QuietMark(heard, process.Id);
             DateTime before = File.GetLastWriteTimeUtc(notePath);
             File.WriteAllText(notePath, "# Note\n\nChanged outside Slate.\n");
             File.SetLastWriteTimeUtc(notePath, before.AddSeconds(5));
@@ -103,10 +115,11 @@ public sealed partial class ShellAccessibilityTests
                 EditorText(window, automation, "note.md editor"),
                 StringComparison.Ordinal);
 
-            // TODO(#1244), with the listener: "Files refreshed. 1 new or changed,
-            // 0 removed." once, and no "missing from disk" line.
+            // One line, once, and no "missing from disk" line.
+            AwaitHeardSince(heard, process.Id, leg2, [Refreshed(1, 0)], TimeSpan.FromSeconds(15), logFile);
 
             // --- leg 3: a file deleted outside Slate ---------------------------
+            int leg3 = QuietMark(heard, process.Id);
             File.Delete(latePath);
             InvokeRefreshButton(window);
 
@@ -116,11 +129,21 @@ public sealed partial class ShellAccessibilityTests
                     TimeSpan.FromSeconds(15)),
                 "late.md stayed in the files tree after it was deleted and Refresh ran.");
 
-            // TODO(#1244), with the listener: "Files refreshed. 0 new or changed,
-            // 1 removed." once — the announcement counts the removal.
+            // Once — the announcement counts the removal.
+            AwaitHeardSince(heard, process.Id, leg3, [Refreshed(0, 1)], TimeSpan.FromSeconds(15), logFile);
         }
         finally
         {
+            int slateId = process?.Id ?? -1;
+            WriteAnnouncementEvidence(
+                "rescan",
+                HeardFrom(heard, slateId),
+                heard.Count(notification => notification.ProcessId != slateId),
+                [
+                    .. DiagnosticLines(logFile, "AnnouncementListenerState"),
+                    .. DiagnosticLines(logFile, "AnnouncementSource"),
+                    .. DiagnosticLines(logFile, "AnnouncementReplay"),
+                ]);
             if (process is not null && !process.HasExited)
             {
                 process.CloseMainWindow();

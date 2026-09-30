@@ -1,6 +1,7 @@
 // Copyright (C) 2026 Cory Joseph
 // SPDX-License-Identifier: AGPL-3.0-or-later
 
+using System.Collections.Concurrent;
 using System.Diagnostics;
 using System.Text.Json;
 using FlaUI.Core.AutomationElements;
@@ -9,6 +10,7 @@ using FlaUI.Core.Input;
 using FlaUI.Core.Tools;
 using FlaUI.Core.WindowsAPI;
 using FlaUI.UIA3;
+using uniffi.slate_uniffi;
 
 namespace SlateWindows.AccessibilityTests;
 
@@ -17,7 +19,9 @@ public sealed partial class ShellAccessibilityTests
     /// <summary>
     /// #1254 (R-11): typing into the palette at speed leaves exactly the
     /// view model's selection — never a row the user did not choose — and
-    /// the rows core ranked for the final query.
+    /// the rows core ranked for the final query, and a screen reader hears
+    /// exactly that: one count for the final query, and a selection line for
+    /// no row but the final selection.
     /// </summary>
     /// <remarks>
     /// <para>
@@ -27,12 +31,12 @@ public sealed partial class ShellAccessibilityTests
     /// per-keystroke path.
     /// </para>
     /// <para>
-    /// TODO(#1244): the announcement half of this journey waits for PR 1's
-    /// desktop-scoped notification listener (R-1), which this branch does
-    /// not carry; see the TODO blocks below for where it subscribes and what
-    /// it asserts. Until then the journey pins what the UI itself shows.
-    /// The stale-selection mechanism is pinned deterministically by the
-    /// hosted <c>CommandPaletteTests.TheShippedListAnnouncesOnlyTheViewModelsSelection</c>.
+    /// The announcement half runs through PR 1's desktop-scoped notification
+    /// listener (#1244, R-1: NVDA's registration shape, on the desktop root),
+    /// which hears each leg's lines as NVDA would — core's
+    /// renderings, compared exactly. The stale-selection mechanism is also
+    /// pinned deterministically by the hosted
+    /// <c>CommandPaletteTests.TheShippedListAnnouncesOnlyTheViewModelsSelection</c>.
     /// </para>
     /// </remarks>
     [Fact]
@@ -51,9 +55,8 @@ public sealed partial class ShellAccessibilityTests
         int splitMatches = PaletteMatchCount("split");
         Assert.True(splitMatches > 0, "no registered command matches \"split\"");
 
-        // TODO(#1244): subscribe PR 1's desktop-scoped notification listener
-        // HERE, before launch (R-1: announcements reach a listener from the
-        // first frame), and keep it for both legs below.
+        string logFile = Path.Combine(logDirectory, "slate-windows.log");
+        var heard = new ConcurrentQueue<ReceivedNotification>();
 
         Process? process = null;
         try
@@ -63,6 +66,9 @@ public sealed partial class ShellAccessibilityTests
             startInfo.Environment["SLATE_CENSUS_INSTANCE_ID"] =
                 $"slate-palette-typing-{Guid.NewGuid():N}";
             startInfo.Environment["SLATE_LOG_DIR"] = logDirectory;
+            // The announcement dispatcher's R-1 diagnostics, for the listener's
+            // failure message and the evidence artifact.
+            startInfo.Environment["SLATE_UIA_DIAGNOSTICS"] = "1";
             process = Process.Start(startInfo)
                 ?? throw new Xunit.Sdk.XunitException("SlateWindows.exe did not start.");
             if (!HasInteractiveDesktop(process, "palette-typing"))
@@ -74,12 +80,18 @@ public sealed partial class ShellAccessibilityTests
             Window window = WaitForMainWindow(
                 process,
                 automation,
-                Path.Combine(logDirectory, "slate-windows.log"),
+                logFile,
                 TimeSpan.FromSeconds(30));
+            // PR 1's desktop-scoped notification listener (#1244; NVDA's
+            // registration shape), registered once the window exists and kept
+            // for both legs below. The launch lines are the launch journey's to
+            // witness (R-1); these legs start after Slate has drained them.
+            using DesktopNotificationListener listener = ListenOnTheDesktop(automation, heard);
             window.SetForeground();
             WaitForVaultOpen(window);
 
             // --- leg 1: "split", typed fast ----------------------------------
+            int leg1 = LaunchDrainedMark(heard, process.Id, logFile);
             (AutomationElement search, AutomationElement results) = OpenPaletteByChord(window);
             TypeIntoSearch(window, search, "split");
 
@@ -100,11 +112,17 @@ public sealed partial class ShellAccessibilityTests
             // this journey's representative state.
             AssertItemNamesAreSpeakable(process, "palette-results");
 
-            // TODO(#1244), with the listener: across leg 1 exactly ONE
-            // PaletteFilterCount, rendered by core for (splitMatches,
-            // "split"), and no PaletteCommandSelected naming any row but
-            // selectedName — the trailing count window (P10) and R-11's
-            // selection guard, heard the way NVDA hears them.
+            // Across leg 1, exactly ONE PaletteFilterCount — core's rendering
+            // for (splitMatches, "split") — and no PaletteCommandSelected
+            // naming any row but selectedName: the trailing count window (P10)
+            // and R-11's selection guard, heard the way NVDA hears them.
+            AssertHeardOneCountAndOnlyTheFinalSelection(
+                heard,
+                process.Id,
+                leg1,
+                SlateUniffiMethods.A11yRender(new A11yEvent.PaletteFilterCount((uint)splitMatches, "split")),
+                LabelOf(selectedName),
+                logFile);
 
             // --- leg 2: a selection that survives without being first -------
             // End selects the last row, which a one-letter query from its
@@ -117,6 +135,9 @@ public sealed partial class ShellAccessibilityTests
             AutomationElement last = WaitForOneSelectedRow(results, automation);
             string lastName = last.Name;
             string letter = QueryLetterFor(LabelOf(lastName));
+            // End's own selection is the user's move, spoken before the typing
+            // this leg is about.
+            int leg2 = QuietMark(heard, process.Id);
             TypeIntoSearch(window, search, letter);
 
             AutomationElement kept = WaitForOneSelectedRow(results, automation);
@@ -125,15 +146,33 @@ public sealed partial class ShellAccessibilityTests
             string firstListed = WaitForListedRows(results, automation, minimum: 2)[0];
             Assert.NotEqual(lastName, firstListed);
 
-            // TODO(#1244), with the listener: across leg 2 NO
-            // PaletteCommandSelected at all — the id survived (P7) — and
-            // exactly one PaletteFilterCount, for `letter`.
+            // Across leg 2's typing, NO PaletteCommandSelected at all — the id
+            // survived (P7) — and exactly one PaletteFilterCount, for `letter`:
+            // core's rendering, and nothing else.
+            AwaitHeardSince(
+                heard,
+                process.Id,
+                leg2,
+                [SlateUniffiMethods.A11yRender(new A11yEvent.PaletteFilterCount((uint)PaletteMatchCount(letter), letter))],
+                TimeSpan.FromSeconds(10),
+                logFile);
 
             PressKey(VirtualKeyShort.ESCAPE);
             WaitForPaletteClosed(window, automation);
         }
         finally
         {
+            int slateId = process?.Id ?? -1;
+            WriteAnnouncementEvidence(
+                "palette-typing",
+                HeardFrom(heard, slateId),
+                heard.Count(notification => notification.ProcessId != slateId),
+                [
+                    .. DiagnosticLines(logFile, "AnnouncementListenerState"),
+                    .. DiagnosticLines(logFile, "AnnouncementSource"),
+                    .. DiagnosticLines(logFile, "AnnouncementReplay"),
+                    .. DiagnosticLines(logFile, "PaletteQueryChangeTimed"),
+                ]);
             if (process is not null && !process.HasExited)
             {
                 process.CloseMainWindow();
@@ -153,6 +192,54 @@ public sealed partial class ShellAccessibilityTests
             catch (UnauthorizedAccessException)
             {
             }
+        }
+    }
+
+    /// <summary>
+    /// R-11 and P10 as a screen reader hears them: since <paramref
+    /// name="mark"/>, Slate raised <paramref name="count"/> — core's rendering
+    /// of the final query's count — exactly once and last, and before it at
+    /// most one selection line, naming <paramref name="finalLabel"/> (core's
+    /// "Selected: …", with or without its unavailability clause); no other
+    /// line. A stale row's selection, a second count or a count for an
+    /// intermediate query fails with what was heard.
+    /// </summary>
+    private static void AssertHeardOneCountAndOnlyTheFinalSelection(
+        ConcurrentQueue<ReceivedNotification> heard,
+        int processId,
+        int mark,
+        RenderedAnnouncement count,
+        string finalLabel,
+        string logFile)
+    {
+        _ = SpinWait.SpinUntil(
+            () => HeardFrom(heard, processId).Skip(mark).Any(line => line.DisplayString == count.Text),
+            TimeSpan.FromSeconds(10));
+        // A settle past the count, so a late duplicate or stray line shows.
+        Thread.Sleep(TimeSpan.FromMilliseconds(500));
+        ReceivedNotification[] lines = [.. HeardFrom(heard, processId).Skip(mark)];
+        RenderedAnnouncement selected = SlateUniffiMethods.A11yRender(
+            new A11yEvent.PaletteCommandSelected(finalLabel, null));
+        // Core's unavailable form, read up to the reason it carries.
+        const string Reason = "\u0001";
+        string selectedUnavailable = SlateUniffiMethods.A11yRender(
+            new A11yEvent.PaletteCommandSelected(finalLabel, Reason)).Text.Split(Reason)[0];
+        bool NamesTheFinalSelection(string line) =>
+            line == selected.Text || line.StartsWith(selectedUnavailable, StringComparison.Ordinal);
+        string heardLines = string.Join(" | ", lines.Select(line => line.DisplayString));
+        Assert.True(
+            lines.Length is 1 or 2
+                && lines[^1].DisplayString == count.Text
+                && lines.SkipLast(1).All(line => NamesTheFinalSelection(line.DisplayString)),
+            $"The desktop listener did not hear one count for the final query, after at most one selection line naming "
+            + $"\"{finalLabel}\". Expected: [({selected.Text}) | {count.Text}]. Heard: [{heardLines}]. Logged "
+            + "(a publication settling past P10's 150 ms window lets a count speak before the next keystroke): "
+            + string.Join(" | ", DiagnosticLines(logFile, "AnnouncementReplay"))
+            + " | " + string.Join(" | ", DiagnosticLines(logFile, "PaletteQueryChangeTimed")));
+        AssertRaisedAsRendered(count, lines[^1]);
+        if (lines.Length == 2)
+        {
+            AssertRaisedAsRendered(selected, lines[0]);
         }
     }
 
