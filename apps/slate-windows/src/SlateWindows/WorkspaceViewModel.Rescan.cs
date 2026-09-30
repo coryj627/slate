@@ -383,7 +383,12 @@ internal sealed partial class WorkspaceViewModel
             }
 
             bool respelled = !string.Equals(stored, tab.Path, StringComparison.Ordinal);
-            if (tab.IsDirty)
+            // The merge with follow-up B (#1280): a Markdown tab with an
+            // admitted save — its write off the dispatcher — is re-seated as
+            // a dirty one is: it takes the stored spelling and keeps its
+            // buffer and its document, so the save publishes to the tab it
+            // was admitted for.
+            if (tab.IsDirty || (tab.IsMarkdown && tab.HasPendingSaves))
             {
                 if (respelled)
                 {
@@ -520,8 +525,14 @@ internal sealed partial class WorkspaceViewModel
         // Back on the dispatcher: the apply turn.
         HashSet<WorkspaceTabViewModel> live =
             new(Groups.SelectMany(group => group.Tabs), ReferenceEqualityComparer.Instance);
+        // The merge with follow-up B (#1280): a note's save now writes off
+        // the dispatcher, so one can be admitted — writing, or queued behind
+        // another save of the file — across this apply turn. A tab of the
+        // path with an admitted save is never reloaded under it, even one
+        // the reader has taken back to its baseline while the write runs:
+        // the save's publication owns the tab's next baseline.
         bool saveInFlight = PropertyWriteInFlightFor(path)
-            || live.Any(tab => IsMarkdownTabAt(tab, path) && tab.IsTaskToggleInFlight);
+            || live.Any(tab => IsMarkdownTabAt(tab, path) && (tab.IsTaskToggleInFlight || tab.HasPendingSaves));
         var reload = new List<WorkspaceTabViewModel>();
         var stale = new List<WorkspaceTabViewModel>();
         bool unvouched = false;
