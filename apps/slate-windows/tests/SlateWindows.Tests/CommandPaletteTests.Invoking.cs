@@ -193,6 +193,81 @@ public sealed partial class CommandPaletteTests
     });
 
     /// <summary>
+    /// P10 as amended at the W7-7 wave close: once its window has run out, the
+    /// count is posted below input (Background), so a key the user already
+    /// typed runs first. When that key closes the palette — Escape, or an
+    /// Enter whose command succeeds — the count still posted says nothing
+    /// afterwards: the dismissal cancels its window. When the command fails
+    /// and the palette stays up, the count is owed, so the query ranks again
+    /// and its count is spoken once, after the failure.
+    /// </summary>
+    [Theory]
+    [InlineData("Escape")]
+    [InlineData("Enter, the command succeeds")]
+    [InlineData("Enter, the command fails")]
+    public void ACountPostedBelowInputSaysNothingAfterTheKeyThatClosesThePalette(string key) => RunSta(() =>
+    {
+        LaneHost host = LaneHost.Opened();
+        CommandPaletteViewModel palette = host.Palette;
+        List<TaskCompletionSource> windows = host.HoldTheCountWindows();
+        palette.Query = "q";
+        Assert.True(
+            PumpedDispatcher.PumpUntil(() => !palette.IsRankPending, TimeSpan.FromSeconds(10)),
+            "the rank never published");
+        PumpedDispatcher.Drain();
+        Assert.Equal("slate.nav.quickOpen", palette.SelectedId);
+        host.Harness.Announcements.Clear();
+        if (key == "Enter, the command fails")
+        {
+            host.Harness.Source.InvokeFailures["slate.nav.quickOpen"] =
+                new CommandException.ActionFailed("Disk is full.");
+        }
+
+        // The window runs out and the count is posted, not yet spoken: the
+        // posting finishes off this thread, and nothing here pumps.
+        Assert.Single(windows).SetResult();
+        Assert.True(
+            palette.FilterCountCompletion.Wait(TimeSpan.FromSeconds(10)),
+            "the count was never posted");
+        Assert.Empty(host.Harness.Announcements);
+
+        // The key the user typed runs ahead of the posted count.
+        if (key == "Escape")
+        {
+            palette.Dismiss();
+        }
+        else
+        {
+            palette.InvokeSelected();
+        }
+
+        PumpedDispatcher.Drain();
+        if (key != "Enter, the command fails")
+        {
+            Assert.False(palette.IsOpen);
+            Assert.Empty(host.Harness.Announcements);
+            return;
+        }
+
+        Assert.True(palette.IsOpen, "a failure leaves the palette open (P9)");
+        Assert.Equal(2, windows.Count);
+        Assert.True(
+            PumpedDispatcher.PumpUntil(() => !palette.IsRankPending, TimeSpan.FromSeconds(10)),
+            "the failure never ranked the current query again");
+        windows[1].SetResult();
+        PumpedDispatcher.PumpUntilDrained(palette.FilterCountCompletion);
+        PumpedDispatcher.Drain();
+        Assert.Collection(
+            host.Harness.Announcements,
+            announced => Assert.IsType<A11yEvent.PaletteCommandFailed>(announced),
+            announced =>
+            {
+                var count = Assert.IsType<A11yEvent.PaletteFilterCount>(announced);
+                Assert.Equal((1u, "q"), (count.Count, count.Query));
+            });
+    });
+
+    /// <summary>
     /// Keys and the pointer can reach the palette inside a loop that is not
     /// modal to the shell. While the command runs they are refused — a
     /// selection move (the palette's selection is re-asserted to the list),
