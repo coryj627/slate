@@ -871,6 +871,129 @@ public sealed class ReadingFocusTests
         }
     });
 
+    /// <summary>#1279 × R-10: a refresh a landing waits on, retired by a newer
+    /// refresh of the same projection (a prefs change, a dependency's save,
+    /// the edit debounce), settles nothing — whether its fetch was still held
+    /// (let go, it stops at its first stage boundary and publishes nothing) or
+    /// had already queued its publication (which runs stale and returns
+    /// before any state moves, so the newer refresh keeps the loading state).
+    /// The landing is neither seated on the projection the newer refresh is
+    /// about to replace nor refused, and it is never left pending: the newer
+    /// refresh's own settle resolves it — the last streamed chunk (the edited
+    /// note) or the memo hit (the unchanged one) lands it, spoken once over
+    /// the current text, and a terminal failure refuses it.</summary>
+    [Theory]
+    [InlineData("at its first stage boundary", "edited")]
+    [InlineData("at its first stage boundary", "unchanged")]
+    [InlineData("at its first stage boundary", "failed")]
+    [InlineData("with its publication queued", "edited")]
+    [InlineData("with its publication queued", "unchanged")]
+    [InlineData("with its publication queued", "failed")]
+    public void AHeldLandingWaitsThroughARetiredRefresh(string retired, string successor) => RunSta(() =>
+    {
+        const string Edited = "An edited paragraph the reader has not heard yet.";
+        using var host = new Host();
+        host.Initialize(readingMode: true);
+        ReadingSurface surface = host.ShownSurface();
+        ReadingContentViewModel model = host.BindProjectionInFlight(surface);
+        host.ReleaseProjection();
+        // Settled before the fact starts: the release returns on the first
+        // post from another thread, and a vault-wide change under the first
+        // fetch costs it one more (unheld) try.
+        Assert.True(PumpedDispatcher.PumpUntil(() => !model.RefreshInFlight), "the first projection never settled");
+        Assert.Contains(NoteText, UiaDocumentText(surface));
+        surface.CaretPosition = surface.Document.ContentEnd;
+        int seated = surface.Document.ContentStart.GetOffsetToPosition(surface.CaretPosition);
+        Assert.True(seated > 2, "the fixture's seat must not be the document start");
+
+        // Out of reading mode, (an edit,) and back: the return's refresh is
+        // held at its fetch's entry, before the first stage, and a landing
+        // waits on it.
+        model.Deactivate();
+        if (successor == "edited")
+        {
+            host.Tab.Text = "# Reading focus\n\n" + Edited + "\n";
+        }
+        host.HoldNextFetch();
+        model.Activate();
+        host.WaitForTheHeldFetch();
+        Assert.True(host.Sentinel.Focus());
+        int spoken = 0;
+        int fellThrough = 0;
+        string? readWhenSpoken = null;
+        ShellRegionLanding landing = ((IShellRegionHost)host.Shell).TryLand(
+            ShellRegionKind.Editor,
+            () =>
+            {
+                spoken++;
+                readWhenSpoken = UiaDocumentText(surface);
+            },
+            () => fellThrough++);
+        PumpedDispatcher.Drain();
+        Assert.Equal(ShellRegionLanding.Pending, landing);
+        Assert.True(surface.IsFocusLandingPending);
+
+        // A newer refresh of the same projection retires the held one.
+        int cancelled = model.FetchesCancelledForTests;
+        if (retired == "at its first stage boundary")
+        {
+            int stagesRun = 0;
+            model.FetchStageHookForTests = _ => Interlocked.Increment(ref stagesRun);
+            host.HoldNextFetch();
+            model.Refresh();
+            host.WaitForTheHeldFetch();
+            host.ReleaseRetiredFetch();
+            model.FetchStageHookForTests = null;
+            Assert.Equal(0, Volatile.Read(ref stagesRun));
+            Assert.Equal(cancelled + 1, model.FetchesCancelledForTests);
+        }
+        else
+        {
+            // Its fetch finished and queued its publication; the newer
+            // refresh starts before that runs, and the pumps run it stale.
+            host.QueueHeldPublication(model);
+            host.HoldNextFetch();
+            model.Refresh();
+            host.WaitForTheHeldFetch();
+            PumpedDispatcher.Drain();
+            Assert.Equal(cancelled, model.FetchesCancelledForTests);
+        }
+
+        Assert.True(model.RefreshInFlight);
+        Assert.True(model.IsLoading, $"the retired refresh took the loading state ({retired})");
+        Assert.True(surface.IsFocusLandingPending, $"the retired refresh settled the held landing ({retired})");
+        Assert.Same(host.Sentinel, Keyboard.FocusedElement);
+        Assert.Equal(0, spoken);
+        Assert.Equal(0, fellThrough);
+
+        host.SetFetchesFail(successor == "failed");
+        host.ReleaseProjection();
+        Assert.True(
+            PumpedDispatcher.PumpUntil(() => !surface.IsFocusLandingPending),
+            $"the landing held through the retired refresh never settled ({retired}, {successor})");
+        if (successor == "failed")
+        {
+            Assert.Equal(1, fellThrough);
+            Assert.Equal(0, spoken);
+            Assert.Same(host.Sentinel, Keyboard.FocusedElement);
+            return;
+        }
+
+        AssertFocused(surface, $"the landing held through the retired refresh ({retired}, {successor})");
+        Assert.Equal(1, spoken);
+        Assert.Equal(0, fellThrough);
+        if (successor == "edited")
+        {
+            Assert.Contains(Edited, readWhenSpoken);
+            Assert.DoesNotContain(NoteText, readWhenSpoken);
+        }
+        else
+        {
+            Assert.Contains(NoteText, readWhenSpoken);
+            Assert.Equal(seated, surface.Document.ContentStart.GetOffsetToPosition(surface.CaretPosition));
+        }
+    });
+
     /// <summary>R-10: a route that activates another pane — here a
     /// directional pane move, through the one editor-focus funnel every open,
     /// tab switch and pane move takes — withdraws the landing the F6 ring
@@ -3651,13 +3774,14 @@ public sealed class ReadingFocusTests
 
         /// <summary>Tear the in-flight projection's model down before it
         /// applies — its own Dispose, as the tab's in-place navigation and
-        /// its close do — then let its fetch run out: the disposed model
-        /// publishes nothing.</summary>
+        /// its close do — then let its fetch go: retired with the model, it
+        /// stops at its first stage boundary and publishes nothing
+        /// (#1279).</summary>
         public void TearDownProjection()
         {
             TearDownProjectionNow();
             PumpedDispatcher.Drain();
-            ReleaseProjection();
+            ReleaseRetiredFetch();
         }
 
         /// <summary>Only the teardown, with nothing pumped after it (the
@@ -3959,6 +4083,55 @@ public sealed class ReadingFocusTests
             }
         }
 
+        /// <summary>Whether a held fetch let go from now on fails terminally
+        /// (<see cref="HoldNextFetch"/> sets it with its gate; a fact that lets
+        /// an earlier fetch go first sets it after).</summary>
+        public void SetFetchesFail(bool failsTerminally) => Volatile.Write(ref _fetchFails, failsTerminally);
+
+        /// <summary>#1279: pump until a fetch waits at the newest gate — the
+        /// refresh just started has reached its hold, so a gate added next is
+        /// the next refresh's.</summary>
+        public void WaitForTheHeldFetch()
+        {
+            ManualResetEventSlim newest;
+            lock (_fetchGates)
+            {
+                newest = _fetchGates[^1];
+            }
+            Assert.True(
+                PumpedDispatcher.PumpUntil(() =>
+                {
+                    lock (_fetchGates)
+                    {
+                        return _awaitedFetchGates.Contains(newest);
+                    }
+                }),
+                "the refresh never reached its held fetch");
+        }
+
+        /// <summary>#1279: let the oldest held fetch go and wait — WITHOUT
+        /// pumping — until it has queued its publication on this dispatcher,
+        /// so a fact can retire the refresh while that publication waits in
+        /// the queue: the next pump runs it stale.</summary>
+        public void QueueHeldPublication(ReadingContentViewModel model)
+        {
+            ManualResetEventSlim gate = FirstHeldFetchGate()
+                ?? throw new InvalidOperationException("No fetch is held.");
+            using var queued = new ManualResetEventSlim(false);
+            model.PublicationQueuedHookForTests = queued.Set;
+            try
+            {
+                gate.Set();
+                Assert.True(
+                    queued.Wait(TimeSpan.FromSeconds(30)),
+                    "the released fetch never queued its publication");
+            }
+            finally
+            {
+                model.PublicationQueuedHookForTests = null;
+            }
+        }
+
         /// <summary>A fetch starting now waits at the newest gate.</summary>
         private ManualResetEventSlim GateForTheFetch()
         {
@@ -4037,11 +4210,49 @@ public sealed class ReadingFocusTests
         }
 
         /// <summary>Open the oldest held gate and pump until the projection's
-        /// publish, posted from the pool, has run on this dispatcher.</summary>
+        /// publish, posted from the pool, has run on this dispatcher. A
+        /// projection torn down or unbound from its surface while its fetch
+        /// was held publishes nothing: its refresh was retired with it, and
+        /// the fetch stops at its first stage boundary (#1279).</summary>
         public void ReleaseProjection()
+        {
+            if (_inFlight is { IsDisposedForTests: false, RefreshInFlight: true })
+            {
+                LetTheHeldFetchRunOut(HeldFetchEnd.Published);
+            }
+            else
+            {
+                ReleaseRetiredFetch();
+            }
+        }
+
+        /// <summary>#1279: open the oldest held gate on a fetch whose refresh
+        /// was retired while it waited there — superseded, unbound from the
+        /// surface or torn down — and pump until it stopped at its first
+        /// stage boundary. It publishes nothing.</summary>
+        public void ReleaseRetiredFetch() => LetTheHeldFetchRunOut(HeldFetchEnd.Retired);
+
+        /// <summary>How a fetch let go from its gate ends.</summary>
+        private enum HeldFetchEnd
+        {
+            /// <summary>Its publication (or its terminal failure), posted
+            /// from the pool, has run on this dispatcher.</summary>
+            Published,
+
+            /// <summary>Retired while it waited: it stopped at its first stage
+            /// boundary and posted nothing (#1279).</summary>
+            Retired,
+
+            /// <summary>Whichever comes (the fixture's cleanup).</summary>
+            Either,
+        }
+
+        private void LetTheHeldFetchRunOut(HeldFetchEnd end)
         {
             ManualResetEventSlim gate = FirstHeldFetchGate()
                 ?? throw new InvalidOperationException("No fetch is held.");
+            ReadingContentViewModel? model = _inFlight;
+            int cancelled = model?.FetchesCancelledForTests ?? 0;
             Dispatcher dispatcher = Dispatcher.CurrentDispatcher;
             DispatcherOperation? published = null;
             void Posted(object? sender, DispatcherHookEventArgs args)
@@ -4051,14 +4262,26 @@ public sealed class ReadingFocusTests
                     Volatile.Write(ref published, args.Operation);
                 }
             }
+            bool Published() => Volatile.Read(ref published)
+                is { Status: DispatcherOperationStatus.Completed or DispatcherOperationStatus.Aborted };
+            bool Retired() => model is not null && model.FetchesCancelledForTests > cancelled;
             dispatcher.Hooks.OperationPosted += Posted;
             try
             {
                 gate.Set();
                 Assert.True(
-                    PumpedDispatcher.PumpUntil(() => Volatile.Read(ref published)
-                        is { Status: DispatcherOperationStatus.Completed or DispatcherOperationStatus.Aborted }),
-                    "the in-flight projection never published");
+                    PumpedDispatcher.PumpUntil(end switch
+                    {
+                        HeldFetchEnd.Published => Published,
+                        HeldFetchEnd.Retired => Retired,
+                        _ => () => Published() || Retired(),
+                    }),
+                    end switch
+                    {
+                        HeldFetchEnd.Published => "the in-flight projection never published",
+                        HeldFetchEnd.Retired => "the retired fetch never stopped at its stage boundary",
+                        _ => "the held fetch never ran out",
+                    });
                 PumpedDispatcher.Drain();
             }
             finally
@@ -4079,7 +4302,9 @@ public sealed class ReadingFocusTests
             {
                 // A fact that failed before releasing its projection must not
                 // leave the pool blocked on a gate, or fetching after the
-                // session below is gone.
+                // session below is gone. A fetch retired while it waited (its
+                // model torn down or unbound) stops at its first stage
+                // boundary instead of publishing (#1279).
                 while (_inFlight is not null && FirstHeldFetchGate() is { } held)
                 {
                     bool awaited;
@@ -4089,7 +4314,7 @@ public sealed class ReadingFocusTests
                     }
                     if (awaited)
                     {
-                        CleanUp(ReleaseProjection);
+                        CleanUp(() => LetTheHeldFetchRunOut(HeldFetchEnd.Either));
                     }
                     else
                     {

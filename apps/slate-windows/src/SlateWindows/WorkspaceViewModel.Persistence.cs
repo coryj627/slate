@@ -79,6 +79,7 @@ internal sealed partial class WorkspaceViewModel
                     startInteractionBackgroundWork: _startInteractionBackgroundWork)
                 {
                     TaskRepairs = _taskIndexRepairs,
+                    SaveCoordinator = _saves,
                 };
                 AttachTabDocumentsIfNeeded(restoredTab);
                 group.Tabs.Add(restoredTab);
@@ -160,7 +161,11 @@ internal sealed partial class WorkspaceViewModel
                 _persistencePending = false;
                 PersistCore();
             }
-            if (_persistenceBatchDepth == 0)
+            // #1280: a mutation that pumped (a save-before-close, a dirty
+            // gate's save) can outlive the workspace — a vault close ran
+            // inside its frame. The layout was persisted; the boundary's
+            // panel, mount and graph work belongs to a live workspace only.
+            if (_persistenceBatchDepth == 0 && !_workspaceDisposed)
             {
                 // Mutations can replace the active tab's item in place
                 // (current-tab navigation) — re-derive the panels'

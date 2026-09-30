@@ -20,6 +20,40 @@ internal enum VaultCloseDecision
     Cancel,
 }
 
+/// <summary>#1280 (codex round 2a): what a workspace teardown decided. What
+/// is spoken for it depends on the route that asked for it
+/// (<see cref="TeardownRoute"/>).</summary>
+internal enum WorkspaceTeardown
+{
+    /// <summary>The close was refused; the vault stays open.</summary>
+    Refused,
+
+    /// <summary>Nothing was left unsaved (a save the teardown settled may
+    /// have made it so).</summary>
+    Closed,
+
+    /// <summary>The user chose Save All and every note saved.</summary>
+    ClosedAllSaved,
+
+    /// <summary>The user chose to discard the unsaved edits.</summary>
+    ClosedChangesDiscarded,
+}
+
+/// <summary>#1280 (owner decision, codex round 2b): what asked for a
+/// workspace teardown. Only the explicit close speaks a close line.</summary>
+internal enum TeardownRoute
+{
+    /// <summary>Close Vault: the user returns to the welcome screen.</summary>
+    Close,
+
+    /// <summary>Opening a vault — over an open one, or with none open; the
+    /// open speaks VaultOpened.</summary>
+    Switch,
+
+    /// <summary>The application window closing.</summary>
+    ApplicationClose,
+}
+
 /// <summary>
 /// Owns the Windows vault lifecycle. The active FFI session remains alive for
 /// the complete open-vault state; callbacks only enqueue work for the UI
@@ -417,10 +451,12 @@ internal sealed partial class VaultLifecycleViewModel
             return;
         }
 
-        if (!TryCloseWorkspace())
+        WorkspaceTeardown teardown = TryCloseWorkspace();
+        if (teardown == WorkspaceTeardown.Refused)
         {
             return;
         }
+        AnnounceTeardown(teardown, TeardownRoute.Switch);
 
         // P14: dismissed AFTER the cancellable gate, matching CloseVault.
         // Dismissing before it meant a refused close — a dirty-tab prompt
@@ -553,8 +589,8 @@ internal sealed partial class VaultLifecycleViewModel
             return;
         }
 
-        bool hadDirtyTabs = Workspace?.HasDirtyTabs == true;
-        if (!TryCloseWorkspace())
+        WorkspaceTeardown teardown = TryCloseWorkspace();
+        if (teardown == WorkspaceTeardown.Refused)
         {
             return;
         }
@@ -577,10 +613,10 @@ internal sealed partial class VaultLifecycleViewModel
         ProgressMaximum = 1;
         IsProgressIndeterminate = false;
         StatusText = "Vault closed.";
-        if (!hadDirtyTabs)
-        {
-            _announce(new A11yEvent.VaultClosed());
-        }
+        // #1280: exactly one close line, from what the teardown decided —
+        // all saved, discarded, or "vault closed" for a close with nothing
+        // left unsaved (a save the teardown settled included).
+        AnnounceTeardown(teardown, TeardownRoute.Close);
 
         ReturnedToWelcome?.Invoke(this, EventArgs.Empty);
     }
@@ -592,7 +628,13 @@ internal sealed partial class VaultLifecycleViewModel
             return false;
         }
 
-        return TryCloseWorkspace();
+        WorkspaceTeardown teardown = TryCloseWorkspace();
+        if (teardown == WorkspaceTeardown.Refused)
+        {
+            return false;
+        }
+        AnnounceTeardown(teardown, TeardownRoute.ApplicationClose);
+        return true;
     }
 
     public void Dispose()
@@ -1282,14 +1324,88 @@ internal sealed partial class VaultLifecycleViewModel
         }));
     }
 
-    private bool TryCloseWorkspace()
+    /// <summary>#1280: true while a workspace teardown is deciding. Its
+    /// saves pump with the window enabled, so a second close, switch or
+    /// window close can arrive inside it; that one is refused rather than
+    /// run nested.</summary>
+    private bool _workspaceTeardownInProgress;
+
+    /// <summary>#1280 test seam: the open vault's session, so a fact can
+    /// rename or delete through core and have the change arrive as the
+    /// production event does.</summary>
+    internal VaultSession? SessionForTests => _session;
+
+    private WorkspaceTeardown TryCloseWorkspace()
+    {
+        if (_workspaceTeardownInProgress)
+        {
+            return WorkspaceTeardown.Refused;
+        }
+        _workspaceTeardownInProgress = true;
+        try
+        {
+            return TryCloseWorkspaceCore();
+        }
+        finally
+        {
+            _workspaceTeardownInProgress = false;
+        }
+    }
+
+    /// <summary>
+    /// The one place a successful teardown is spoken (#1280; owner decision
+    /// on codex round 2b; contract 38 D-10 as amended). Mac parity: only the
+    /// explicit close speaks, exactly one of VaultClosed, VaultClosedAllSaved
+    /// or VaultClosedChangesDiscarded (AppState.swift
+    /// <c>closeVaultFromUserAction</c> and its resolvers). Every one of those
+    /// sentences ends "Returned to the welcome screen.", which is false for
+    /// a switch — the open speaks VaultOpened, and mac's resolvers stay
+    /// silent when they complete a switch (<c>completesVaultSwitch</c>) — and
+    /// for the application closing (mac's quit posts nothing).
+    /// </summary>
+    private void AnnounceTeardown(WorkspaceTeardown teardown, TeardownRoute route)
+    {
+        if (route != TeardownRoute.Close)
+        {
+            return;
+        }
+        switch (teardown)
+        {
+            case WorkspaceTeardown.Closed:
+                _announce(new A11yEvent.VaultClosed());
+                break;
+            case WorkspaceTeardown.ClosedAllSaved:
+                _announce(new A11yEvent.VaultClosedAllSaved());
+                break;
+            case WorkspaceTeardown.ClosedChangesDiscarded:
+                _announce(new A11yEvent.VaultClosedChangesDiscarded());
+                break;
+        }
+    }
+
+    /// <summary>
+    /// The teardown admission (#1280; contract 35 A-1). The sidebar work
+    /// that refuses a close is checked first, before anything pumps; work
+    /// the sidebar starts later — the refresh our own saves schedule — is
+    /// joined by the session teardown, as it always was. Settling admitted
+    /// saves and Save All both pump with the window enabled, so the rest of
+    /// the admission runs in rounds and re-checks the admitted saves and the
+    /// dirty tabs after any frame before it answers. Every save admitted
+    /// before the prompt settles before the dirty state is evaluated, so the
+    /// prompt asks about what is really unsaved; Discard is accepted only for
+    /// exactly the dirty tabs, documents and edits read before the prompt
+    /// opened, with no save pending (codex round 2a) — anything that changed
+    /// while it was up is asked about again (a rename keeps a document). The session is disposed only after
+    /// <see cref="WorkspaceViewModel.Dispose"/> has joined every save worker.
+    /// </summary>
+    private WorkspaceTeardown TryCloseWorkspaceCore()
     {
         if (FileSidebar?.CancelTreeRefresh() == true)
         {
             ReportTerminalStatus(
                 "File tree refresh cancellation requested. Close the vault again after the current directory read finishes.",
                 A11yPriority.Medium);
-            return false;
+            return WorkspaceTeardown.Refused;
         }
 
         if (FileSidebar?.IsExpandingLoaded == true || FileSidebar?.IsLoadingChildren == true)
@@ -1299,7 +1415,7 @@ internal sealed partial class VaultLifecycleViewModel
             ReportTerminalStatus(
                 "Folder expansion cancellation requested. Close the vault again after the current directory read finishes.",
                 A11yPriority.Medium);
-            return false;
+            return WorkspaceTeardown.Refused;
         }
 
         if (FileSidebar?.IsImporting == true)
@@ -1308,7 +1424,7 @@ internal sealed partial class VaultLifecycleViewModel
             ReportTerminalStatus(
                 "Import cancellation requested. Close the vault again after completed copies finish reconciling.",
                 A11yPriority.Medium);
-            return false;
+            return WorkspaceTeardown.Refused;
         }
 
         if (FileSidebar?.CancelFilter() == true)
@@ -1316,38 +1432,79 @@ internal sealed partial class VaultLifecycleViewModel
             ReportTerminalStatus(
                 "File filter cancellation requested. Close the vault again after the current query finishes.",
                 A11yPriority.Medium);
-            return false;
+            return WorkspaceTeardown.Refused;
         }
 
-        if (Workspace?.HasDirtyTabs != true)
+        bool savedAll = false;
+        for (int round = 0; round < WorkspaceViewModel.MaxPumpedAdmissionRounds; round++)
         {
-            return true;
-        }
+            // Admitted saves settle first; the settle pumped, so the saves
+            // and the dirty state are checked again.
+            if (Workspace is WorkspaceViewModel settling && !settling.SavesIdle)
+            {
+                if (!settling.SettleSaves())
+                {
+                    return WorkspaceTeardown.Refused;
+                }
+                continue;
+            }
 
-        VaultCloseDecision decision = _confirmUnsavedClose();
-        if (decision == VaultCloseDecision.Cancel)
-        {
-            return false;
-        }
-
-        if (decision == VaultCloseDecision.SaveAll)
-        {
-            if (!Workspace.SaveAll())
+            // Codex round 4: a clean tab whose settled save faulted is not
+            // saved (D-10); the close would pass it without asking, so it
+            // stays open instead, with the existing line.
+            if (Workspace is WorkspaceViewModel faulted && faulted.HasCleanTabWithAFaultedSave)
             {
                 ReportTerminalStatus(
                     "Vault remains open because one or more notes could not be saved.",
                     A11yPriority.High);
-                return false;
+                return WorkspaceTeardown.Refused;
             }
 
-            _announce(new A11yEvent.VaultClosedAllSaved());
-        }
-        else
-        {
-            _announce(new A11yEvent.VaultClosedChangesDiscarded());
+            if (Workspace is not WorkspaceViewModel workspace || !workspace.HasDirtyTabs)
+            {
+                return savedAll ? WorkspaceTeardown.ClosedAllSaved : WorkspaceTeardown.Closed;
+            }
+
+            // What the prompt asks about, read BEFORE it opens.
+            IReadOnlyList<(WorkspaceTabViewModel Tab, int Identity, long Revision)> asked =
+                workspace.DirtyTabsForPrompt();
+            VaultCloseDecision decision = _confirmUnsavedClose();
+            if (decision == VaultCloseDecision.Cancel)
+            {
+                return WorkspaceTeardown.Refused;
+            }
+
+            if (decision == VaultCloseDecision.SaveAll)
+            {
+                if (Workspace is not WorkspaceViewModel saving || !saving.SaveAll())
+                {
+                    ReportTerminalStatus(
+                        "Vault remains open because one or more notes could not be saved.",
+                        A11yPriority.High);
+                    return WorkspaceTeardown.Refused;
+                }
+                // Save All pumped: an edit typed or a tab opened meanwhile is
+                // caught by the next round, never dropped.
+                savedAll = true;
+                continue;
+            }
+
+            // Discard: accepted only for exactly what was asked about, with
+            // nothing pending. A save admitted, or an edit made, while the
+            // prompt was up settles and is asked about again.
+            if (Workspace is not WorkspaceViewModel discarding
+                || !discarding.SavesIdle
+                || !discarding.DirtyTabsStill(asked))
+            {
+                continue;
+            }
+            return WorkspaceTeardown.ClosedChangesDiscarded;
         }
 
-        return true;
+        ReportTerminalStatus(
+            "Vault remains open because one or more notes could not be saved.",
+            A11yPriority.High);
+        return WorkspaceTeardown.Refused;
     }
 
     private void FileSidebar_OpenTargetRequested(

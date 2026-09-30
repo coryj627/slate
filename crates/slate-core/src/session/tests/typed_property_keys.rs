@@ -19,9 +19,11 @@ fn typed_key_cache_upgrade_reindexes_unchanged_files_and_never_guesses_old_ident
         .properties;
     let before = session.read_text("note.md").unwrap();
     // Freeze a real populated cache at schema 37, before identities existed.
+    // Every later version goes too: the migrator replays from MAX(version),
+    // so a cache that still records a newer migration would skip 38.
     {
         let conn = session.conn.lock().unwrap();
-        conn.execute_batch("ALTER TABLE properties DROP COLUMN key_identity; DELETE FROM schema_version WHERE version = 38;").unwrap();
+        conn.execute_batch("ALTER TABLE properties DROP COLUMN key_identity; DELETE FROM schema_version WHERE version >= 38;").unwrap();
     }
     drop(session);
     let reopened = VaultSession::from_filesystem(tmp.path().to_path_buf()).unwrap();

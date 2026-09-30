@@ -70,9 +70,6 @@ internal sealed partial class VaultLifecycleViewModel
 
     internal bool IsRescanActive => _rescanActive;
 
-    /// <summary>The open session — for the facts that write through it.</summary>
-    internal VaultSession? SessionForTests => _session;
-
     /// <summary>
     /// Run a rescan of the open vault for <paramref name="reason"/>.
     /// Refused — silently, nothing to reconcile yet — with no vault or a
