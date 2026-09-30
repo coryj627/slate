@@ -80,10 +80,21 @@ public sealed class ShellSealAdmissionCensus
     };
 
     /// <summary>Class handlers for routed events that carry no key, text or
-    /// pointer, each with why it cannot act on input the admission took
-    /// (file-scoped: the same registration anywhere else is an offender).</summary>
+    /// pointer — a keyboard FOCUS change — each with why it cannot act on
+    /// input the admission took (file-scoped: the same registration anywhere
+    /// else is an offender). A focus change is not an input the admission
+    /// takes: under the seal no key or press reaches the shell to move focus,
+    /// so what these see is a change the shell itself made — a running
+    /// command's rebuild taking the focused element away — and the guard lands
+    /// the keys, as it must then too.</summary>
     private static readonly Dictionary<(string File, string RoutedEvent), string> ClassHandlerAllowed = new()
     {
+        [("RegionFocusGuard.cs", "Keyboard.GotKeyboardFocusEvent")] =
+            "W7-7 PR 4b's guard (R-5, S3): records the scopes the focused element is in",
+        [("RegionFocusGuard.cs", "Keyboard.PreviewGotKeyboardFocusEvent")] =
+            "W7-7 PR 4b's guard: lands keys stranded by an element that went away, inside WPF's re-evaluation",
+        [("RegionFocusGuard.cs", "Keyboard.PreviewLostKeyboardFocusEvent")] =
+            "W7-7 PR 4b's guard: tells a direct focus request from WPF's re-evaluation",
         [("EditorLandingSlot.cs", "Keyboard.GotKeyboardFocusEvent")] = FocusDepartureObserver,
         [("EditorLandingSlot.cs", "Keyboard.LostKeyboardFocusEvent")] = FocusDepartureObserver,
     };
@@ -222,6 +233,7 @@ public sealed class ShellSealAdmissionCensus
     [InlineData("double-click-override", "class Other : ListBox { protected override void OnMouseDoubleClick(MouseButtonEventArgs e) => Run(); }")]
     [InlineData("click-count-read", "class Other { void Pressed(object s, MouseButtonEventArgs e) { if (e.ClickCount == 2) Run(); } }")]
     [InlineData("reviewed-bubble-past-handled", "class SelectorFocus { static void M() { EventManager.RegisterClassHandler(typeof(ListBox), Mouse.MouseDownEvent, new MouseButtonEventHandler(X), handledEventsToo: true); } }")]
+    [InlineData("focus-allowance-other-input", "class RegionFocusGuard { static void M() { EventManager.RegisterClassHandler(typeof(Window), Keyboard.PreviewKeyDownEvent, new KeyEventHandler(X), true); } }")]
     public void EachDetectorCatchesItsBypass(string bypass, string source)
     {
         const string Handlers = """
@@ -255,6 +267,7 @@ public sealed class ShellSealAdmissionCensus
             "second-seal-read" => SealReaderOffenders([handlers, new Unit("MainWindow.Extra.cs", Parse(source))]),
             "double-click-override" or "click-count-read" => DoubleClickOffenders([new Unit("Other.cs", Parse(source))]),
             "reviewed-bubble-past-handled" => PastHandledOffenders([new Unit("SelectorFocus.cs", Parse(source))]),
+            "focus-allowance-other-input" => PastHandledOffenders([new Unit("RegionFocusGuard.cs", Parse(source))]),
             _ => PastHandledOffenders([new Unit("Other.cs", Parse(source))]),
         };
         Assert.True(found.Count > 0, $"the census missed a planted {bypass} bypass");
@@ -262,6 +275,60 @@ public sealed class ShellSealAdmissionCensus
         // And the planted handlers alone are clean, so the finding above is
         // the bypass, not the scaffold.
         Assert.Empty(SealReaderOffenders([handlers]));
+    }
+
+    /// <summary>
+    /// The focus guard is admitted only in its exact shape (PR 4b codex round
+    /// 2, F7): <see cref="ClassHandlerAllowed"/> names its events, and
+    /// <see cref="FocusGuardShapeOffenders"/> holds its file to exactly the
+    /// intended registrations and recording callbacks. The real file is clean,
+    /// and each change planted in that same file is an offender.
+    /// </summary>
+    [Theory]
+    [InlineData("a wrong callback",
+        "new KeyboardFocusChangedEventHandler(Asked)",
+        "new KeyboardFocusChangedEventHandler(Recorded)")]
+    [InlineData("a wrong owner",
+        "typeof(UIElement), Keyboard.PreviewLostKeyboardFocusEvent",
+        "typeof(FrameworkElement), Keyboard.PreviewLostKeyboardFocusEvent")]
+    [InlineData("a duplicate registration",
+        "new KeyboardFocusChangedEventHandler(Guarded));",
+        "new KeyboardFocusChangedEventHandler(Guarded));\n"
+        + "        EventManager.RegisterClassHandler(\n"
+        + "            typeof(Window), Keyboard.PreviewGotKeyboardFocusEvent, new KeyboardFocusChangedEventHandler(Guarded));")]
+    [InlineData("the landing past handled",
+        "new KeyboardFocusChangedEventHandler(Guarded));",
+        "new KeyboardFocusChangedEventHandler(Guarded), handledEventsToo: true);")]
+    [InlineData("the record not past handled",
+        "new KeyboardFocusChangedEventHandler(Recorded), handledEventsToo: true);",
+        "new KeyboardFocusChangedEventHandler(Recorded), handledEventsToo: false);")]
+    [InlineData("a registration outside Register()",
+        "    internal static UIElement[] ScopesOf(DependencyObject element)",
+        "    internal static void Again() => EventManager.RegisterClassHandler(\n"
+        + "        typeof(Window), Keyboard.GotKeyboardFocusEvent, new KeyboardFocusChangedEventHandler(Recorded), handledEventsToo: true);\n\n"
+        + "    internal static UIElement[] ScopesOf(DependencyObject element)")]
+    [InlineData("a lambda handler added",
+        "new KeyboardFocusChangedEventHandler(Asked), handledEventsToo: true);",
+        "new KeyboardFocusChangedEventHandler(Asked), handledEventsToo: true);\n"
+        + "        EventManager.RegisterClassHandler(\n"
+        + "            typeof(Window), Keyboard.GotKeyboardFocusEvent, new KeyboardFocusChangedEventHandler((_, e) => e.Handled = true), handledEventsToo: true);")]
+    [InlineData("a side effect in the record",
+        "ScopesAtFocus.AddOrUpdate(input, ScopesOf(focused));",
+        "ScopesAtFocus.AddOrUpdate(input, ScopesOf(focused));\n            Keyboard.ClearFocus();")]
+    [InlineData("a side effect in the request's note",
+        "_directRequest = (new WeakReference<IInputElement>(old), new WeakReference<IInputElement>(requested));",
+        "_directRequest = (new WeakReference<IInputElement>(old), new WeakReference<IInputElement>(requested));\n            e.Handled = true;")]
+    public void TheFocusGuardIsAdmittedOnlyInItsExactShape(string bypass, string from, string to)
+    {
+        string real = File.ReadAllText(Path.Combine(SourceText.ShellSourceRoot(), FocusGuardFile));
+        Assert.Empty(FocusGuardShapeOffenders(new Unit(FocusGuardFile, Parse(real))));
+        Assert.Empty(PastHandledOffenders([new Unit(FocusGuardFile, Parse(real))]));
+        Assert.True(
+            real.Split(from).Length == 2,
+            $"the planted {bypass} no longer finds its one anchor in {FocusGuardFile} — update the row");
+
+        List<string> found = PastHandledOffenders([new Unit(FocusGuardFile, Parse(real.Replace(from, to, StringComparison.Ordinal)))]);
+        Assert.True(found.Count > 0, $"the census admitted {bypass} in the focus guard's own file");
     }
 
     /// <summary>
@@ -536,15 +603,106 @@ public sealed class ShellSealAdmissionCensus
                 offenders.Add($"{unit.Name}:{Line(hook)} hooks {CSharpSource.Normalize(hook)} — input seen ahead of the window's routes");
             }
 
+            offenders.AddRange(FocusGuardShapeOffenders(unit));
             offenders.AddRange(FocusObserverShapeOffenders(unit));
         }
 
         return offenders;
     }
 
-    /// <summary>W7-7 PR 8's departure observer (contract 40 OD-12) — the one
-    /// file whose focus class handlers <see cref="ClassHandlerAllowed"/>
-    /// names.</summary>
+    /// <summary>W7-7 PR 4b's focus guard (contract 40 R-5 (h)) — with
+    /// <see cref="FocusObserverFile"/>, one of the two files whose focus class
+    /// handlers <see cref="ClassHandlerAllowed"/> names.</summary>
+    private const string FocusGuardFile = "RegionFocusGuard.cs";
+
+    /// <summary>The guard's registrations, exactly, as the last statements of
+    /// its <c>Register()</c>: the scopes recorded past handled, the landing
+    /// on the window's preview of a focus change, and a direct request told
+    /// from WPF's re-evaluation past handled.</summary>
+    private static readonly string[] FocusGuardRegistrations =
+    [
+        "EventManager.RegisterClassHandler(typeof(Window),Keyboard.GotKeyboardFocusEvent,newKeyboardFocusChangedEventHandler(Recorded),handledEventsToo:true);",
+        "EventManager.RegisterClassHandler(typeof(Window),Keyboard.PreviewGotKeyboardFocusEvent,newKeyboardFocusChangedEventHandler(Guarded));",
+        "EventManager.RegisterClassHandler(typeof(UIElement),Keyboard.PreviewLostKeyboardFocusEvent,newKeyboardFocusChangedEventHandler(Asked),handledEventsToo:true);",
+    ];
+
+    /// <summary>The guard's two past-handled callbacks, whole: each only
+    /// records. <c>Guarded</c> is not pinned — it lands through the landings
+    /// the shell registers, and pinning its text would bound nothing (AR-53's
+    /// stance: a handler's body is code review's).</summary>
+    private static readonly Dictionary<string, string> FocusGuardCallbacks = new()
+    {
+        ["Recorded"] = "{if(e.NewFocusisDependencyObjectfocusedandIInputElementinput&&!ReferenceEquals(sender,e.NewFocus)){"
+            + "ScopesAtFocus.AddOrUpdate(input,ScopesOf(focused));"
+            + "if(((focusedasFrameworkElement)?.DataContext??(focusedasFrameworkContentElement)?.DataContext)is{}context)"
+            + "{ContextsAtFocus.AddOrUpdate(input,context);}else{ContextsAtFocus.Remove(input);}"
+            + "if(focusedisListBoxItemorTreeViewItem&&ItemsControl.ItemsControlFromItemContainer(focused)is{}rows){"
+            + "for(ItemsControllevel=rows;levelisTreeViewItemrow&&ItemsControl.ItemsControlFromItemContainer(row)is{}up;level=up){rows=up;}"
+            + "RowsAtFocus.AddOrUpdate(input,rows);}}}",
+        ["Asked"] = "{if(ReferenceEquals(sender,e.OriginalSource)&&e.OldFocusis{}old&&e.NewFocusis{}requested){"
+            + "_directRequest=(newWeakReference<IInputElement>(old),newWeakReference<IInputElement>(requested));}}",
+    };
+
+    /// <summary>
+    /// The focus guard in its exact shape (PR 4b codex round 2, F7; PR 8's
+    /// precedent for its departure observer): <see cref="FocusGuardFile"/>
+    /// registers exactly <see cref="FocusGuardRegistrations"/> — no other
+    /// class handler, and those as the last statements of <c>Register()</c> —
+    /// and its past-handled callbacks are exactly
+    /// <see cref="FocusGuardCallbacks"/>. A wrong owner or callback, a
+    /// registration more or elsewhere, a flipped <c>handledEventsToo</c>, or a
+    /// recording callback that does more is an offender, whatever
+    /// <see cref="ClassHandlerAllowed"/> names. Any other file: nothing.
+    /// </summary>
+    private static List<string> FocusGuardShapeOffenders(Unit unit)
+    {
+        var offenders = new List<string>();
+        if (unit.Name != FocusGuardFile)
+        {
+            return offenders;
+        }
+
+        int registrations = unit.Root.DescendantNodes()
+            .OfType<InvocationExpressionSyntax>()
+            .Count(invocation => invocation.Expression switch
+            {
+                IdentifierNameSyntax identifier => identifier.Identifier.ValueText == "RegisterClassHandler",
+                MemberAccessExpressionSyntax access => access.Name.Identifier.ValueText == "RegisterClassHandler",
+                _ => false,
+            });
+        MethodDeclarationSyntax[] register = unit.Root.DescendantNodes()
+            .OfType<MethodDeclarationSyntax>()
+            .Where(method => method.Identifier.ValueText == "Register")
+            .ToArray();
+        string[] registered = register is [{ Body: { } body }]
+            ? body.Statements.TakeLast(FocusGuardRegistrations.Length).Select(statement => CSharpSource.Normalize(statement)).ToArray()
+            : [];
+        if (!registered.SequenceEqual(FocusGuardRegistrations) || registrations != FocusGuardRegistrations.Length)
+        {
+            offenders.Add($"{unit.Name}: the focus guard's class handlers are not exactly its intended registrations — "
+                + $"{registrations} registration(s) in the file, and Register() ends [{string.Join(" ", registered)}]");
+        }
+
+        foreach ((string name, string expected) in FocusGuardCallbacks)
+        {
+            MethodDeclarationSyntax[] declared = unit.Root.DescendantNodes()
+                .OfType<MethodDeclarationSyntax>()
+                .Where(method => method.Identifier.ValueText == name)
+                .ToArray();
+            string actual = declared is [{ Body: { } callback }] ? CSharpSource.Normalize(callback) : "(not one method)";
+            if (declared is not [{ } only] || !only.Modifiers.Any(SyntaxKind.StaticKeyword) || actual != expected)
+            {
+                offenders.Add($"{unit.Name}: the focus guard's callback {name} is not exactly its intended handler, "
+                    + $"which only records — it is {actual}");
+            }
+        }
+
+        return offenders;
+    }
+
+    /// <summary>W7-7 PR 8's departure observer (contract 40 OD-12) — with
+    /// <see cref="FocusGuardFile"/>, one of the two files whose focus class
+    /// handlers <see cref="ClassHandlerAllowed"/> names.</summary>
     private const string FocusObserverFile = "EditorLandingSlot.cs";
 
     /// <summary>The observer's owners: every input element kind, so a popup's

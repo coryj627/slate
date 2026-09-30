@@ -260,11 +260,11 @@ public sealed partial class ShellAccessibilityTests
     /// app sees it (its log records <c>kb(laptop):numpad2</c>), so the
     /// journey would drive a key no user presses on the arrow
     /// cluster.</summary>
-    private static void PressDownArrow() => Keyboard.TypeScanCode(0x50, true);
+    private static void PressDownArrow() => PressKey(VirtualKeyShort.DOWN);
 
     /// <summary>The Up arrow as the keyboard's own arrow key (scan code
     /// 0x48, extended) — see <see cref="PressDownArrow"/>.</summary>
-    private static void PressUpArrow() => Keyboard.TypeScanCode(0x48, true);
+    private static void PressUpArrow() => PressKey(VirtualKeyShort.UP);
 
     /// <summary>R-2's observable: focus is on the row named
     /// <paramref name="prefix"/> inside <paramref name="container"/>, and

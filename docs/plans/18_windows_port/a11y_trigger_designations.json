@@ -223,6 +223,11 @@
         "decision": "docs/plans/18_windows_port/specs/w7_6_f6_region_cycling_spec.md",
         "status": "recorded"
       },
+      "SidebarResized": {
+        "reason": "W7-7 PR 4b (#1247, AR-38): the keyboard sidebar resize is a Windows-only affordance — Windows' splitters left the Tab order (R-5) and the Widen/Narrow Files Sidebar and Right Pane commands are the keyboard's route; mac's sidebars resize by pointer, so SidebarResized has no Mac construction site.",
+        "decision": "docs/plans/18_windows_port/specs/w7_7_nvda_matrix_remediation_spec.md",
+        "status": "recorded"
+      },
       "NoteSaveConflict": {
         "reason": "D-10 as amended (W7-7, #1249): Windows has no resolve dialog, so a write conflict speaks mac's conflict sentence without the dialog clause. Mac keeps posting SaveConflict with its Keep mine / Reload dialog; no change to Mac recovery behavior is claimed. Current Windows evidence is hosted (`ConflictingSaveSpeaksTheConflictSentence`); no journey observes its delivery until PR 1's desktop listener (#1244).",
         "decision": "docs/plans/38_notification_dispatcher_contracts.md",

@@ -286,6 +286,11 @@ internal static class SelectorFocus
         ? own!()
         : stop switch
         {
+            // W7-7 PR 4b (#1247; flag 3 of PR 4's S4): a tab takes the keys
+            // by SELECTING itself, which switches the document — a restore
+            // whose token is another tab's header lands on the active tab.
+            TabItem { IsSelected: false } tab when ItemsControl.ItemsControlFromItemContainer(tab) is TabControl owner =>
+                FocusFirstOrSelectedItem(owner),
             Selector list when IsListLanding(list) => FocusFirstOrSelectedItem(list),
             TreeView tree => FocusSelectedOrFirstRow(tree),
             DataGrid grid => AccessibleDataGrid.Owning(grid) is { } owner && owner.FocusCurrentOrFirstCell(),
@@ -486,6 +491,15 @@ internal static class SelectorFocus
         bool reLandPublications = true) =>
         new PublicationKeeper(scope, rows, notices, landInScope, reLandPublications).Attach();
 
+    /// <summary>The containers a publication keeper declines hand-overs
+    /// for.</summary>
+    private static readonly ConditionalWeakTable<UIElement, object> Kept = new();
+
+    /// <summary>Whether a publication keeper handles <paramref name="container"/>'s
+    /// removed rows' hand-overs (<see cref="RegionFocusGuard"/> leaves
+    /// them to it).</summary>
+    internal static bool HasPublicationKeeper(UIElement container) => Kept.TryGetValue(container, out _);
+
     private sealed class PublicationKeeper(
         UIElement scope,
         IReadOnlyList<ItemsControl> rows,
@@ -514,42 +528,54 @@ internal static class SelectorFocus
                 _held = (bool)e.NewValue || (_held && IsStranded(Keyboard.FocusedElement));
             scope.GotKeyboardFocus += (_, _) =>
                 _lastRows = rows.FirstOrDefault(container => container.IsKeyboardFocusWithin);
-            if (reLandPublications)
+            foreach (ItemsControl container in rows)
             {
-                foreach (ItemsControl container in rows)
+                Kept.AddOrUpdate(container, this);
+                ((INotifyCollectionChanged)container.Items).CollectionChanged += (_, _) =>
                 {
-                    ((INotifyCollectionChanged)container.Items).CollectionChanged += (_, _) =>
+                    _declined = false;
+                    // W7-7 PR 4b (the sweep's G13): an EMPTY publication
+                    // under the keys resolves too — a grid emptied under its
+                    // cell left them stranded, though the empty grid is its
+                    // own stop (AR-6).
+                    if (reLandPublications)
                     {
-                        _declined = false;
-                        if (container.HasItems)
-                        {
-                            ResolveLater();
-                        }
-                    };
+                        ResolveLater();
+                    }
+                };
 
-                    // A row removed from the tree hands its keys to its
-                    // container (ListBoxItem's own OnVisualParentChanged) —
-                    // at the layout after a republish, when the container
-                    // is POPULATED again: a UIA focus change on the bare
-                    // list. The hand-over is declined, once, and the keys,
-                    // still on the removed row, are re-landed on a row
-                    // (stranded: the rows they were in) at Loaded.
-                    container.PreviewGotKeyboardFocus += (_, e) =>
+                // A row removed from the tree hands its keys to its
+                // container (ListBoxItem's own OnVisualParentChanged) —
+                // at the layout after a republish, when the container
+                // is POPULATED again: a UIA focus change on the bare
+                // list. The hand-over is declined, once, and the keys,
+                // still on the removed row, are re-landed on a row
+                // (stranded: the rows they were in) at Loaded — the last
+                // open task, done, too: its list still counts its rows when
+                // the hand-over comes (ItemsControl updates HasItems after
+                // the generator removes the row), and Resolve lands the keys
+                // on the Done list's (G14). A region that restores its own
+                // publications (the Citations leaf) declines too — the bare
+                // list was a UIA focus change before its restore (the
+                // sweep's G11) — and restores them itself.
+                container.PreviewGotKeyboardFocus += (_, e) =>
+                {
+                    if (!_declined
+                        && ReferenceEquals(e.NewFocus, container)
+                        && container.HasItems
+                        && e.OldFocus is Visual removed
+                        && PresentationSource.FromVisual(removed) is null)
                     {
-                        if (!_declined
-                            && ReferenceEquals(e.NewFocus, container)
-                            && container.HasItems
-                            && e.OldFocus is Visual removed
-                            && PresentationSource.FromVisual(removed) is null)
+                        e.Handled = true;
+                        _declined = true;
+                        _held = true;
+                        _lastRows = container;
+                        if (reLandPublications)
                         {
-                            e.Handled = true;
-                            _declined = true;
-                            _held = true;
-                            _lastRows = container;
                             ResolveLater();
                         }
-                    };
-                }
+                    }
+                };
             }
 
             foreach (UIElement notice in notices)
@@ -608,6 +634,19 @@ internal static class SelectorFocus
 
             if ((bare ?? _lastRows) is Selector list && IsListLanding(list) && list.IsVisible)
             {
+                if (!list.HasItems && PopulatedSibling(list) is not null)
+                {
+                    // An EMPTY list while a sibling of the scope has rows (S5,
+                    // G14; codex PR 4b r1 F2): the scope's landing — the first
+                    // populated list's row. The keys can already be on the
+                    // bare empty list (a notice handed them there while it
+                    // loaded, AR-6) when a publication brings rows only to
+                    // the sibling: no row departs, so no hand-over is
+                    // declined, and only this lands them.
+                    _ = landInScope();
+                    return;
+                }
+
                 // A populated list: its row. An empty one: its notice once
                 // that is a stop; stranded keys come back to it even so.
                 if ((list.HasItems || stranded || notices.Any(IsAStop))
@@ -619,11 +658,31 @@ internal static class SelectorFocus
                 return;
             }
 
-            if (stranded || bare!.HasItems)
+            if (stranded)
+            {
+                // Keys stranded off something that was not one of the rows —
+                // "Load more" collapsed by the last page (the sweep's G4) —
+                // land the guard's way first: the element's own landing, its
+                // scopes' (RegionFocusGuard, which WPF's later re-evaluation
+                // would otherwise reach only after this).
+                if (!(focused is UIElement off && RegionFocusGuard.LandStranded(off)))
+                {
+                    _ = landInScope();
+                }
+
+                return;
+            }
+
+            if (bare!.HasItems)
             {
                 _ = landInScope();
             }
         }
+
+        /// <summary>Another visible list of the scope with rows, if
+        /// any.</summary>
+        private ItemsControl? PopulatedSibling(ItemsControl container) =>
+            rows.FirstOrDefault(other => !ReferenceEquals(other, container) && other.HasItems && other.IsVisible);
 
         /// <summary>A notice's keys go to its list: the row, another notice
         /// that is a stop, else the empty list itself (AR-6).</summary>
@@ -772,6 +831,12 @@ internal static class SelectorFocus
 
         return Landing.Refused;
     }
+
+    /// <summary>Focus <paramref name="item"/>'s row, realized if the list
+    /// will make it — without selecting it.</summary>
+    /// <returns>Whether the row took the keys now.</returns>
+    internal static bool FocusItem(Selector selector, object item) =>
+        RealizedContainer(selector, item) is { } row && row.Focus();
 
     private static UIElement? RealizedContainer(Selector selector, object item)
     {

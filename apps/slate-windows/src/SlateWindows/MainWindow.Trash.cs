@@ -59,7 +59,7 @@ public partial class MainWindow
             if (!ReferenceEquals(sidebar, _viewModel.FileSidebar) || OpenModalSurface is not null
                 || (Keyboard.FocusedElement is { } focused && !ReferenceEquals(focused, this)
                     && !ReferenceEquals(focused, button))) { return; }
-            if (target is null || !TryFocus(target)) { FocusActiveEditorPane(); }
+            if (!LandToken(target)) { FocusActiveEditorPane(); }
         }, DispatcherPriority.Input);
     }
 }

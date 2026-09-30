@@ -3150,6 +3150,199 @@ public sealed class ReadingFocusTests
         }
     });
 
+    /// <summary>
+    /// W7-7 PR 4b on OD-12 (R-5 (h)): the focus guard re-lands keys stranded
+    /// in the editor region WITHOUT withdrawing the editor landing the window
+    /// holds. The launch landing (R-1's launch line) is held while its content
+    /// arrives, the keys wait on the tab's item, and that item is disabled — or
+    /// made unfocusable — under them. The guard lands them where a refused
+    /// route's would (the tab strip, else the Files region: here the Files
+    /// tree, the item being what went away), and its move off an element that
+    /// can no longer hold the keys is WPF's recovery made explicit, not the
+    /// reader leaving. The content arriving then seats the launch landing, and
+    /// its line is spoken once.
+    /// </summary>
+    [Theory]
+    [InlineData("reading", "disabled")]
+    [InlineData("canvas", "disabled")]
+    [InlineData("graph", "disabled")]
+    [InlineData("canvas", "unfocusable")]
+    public void TheGuardLeavesAHeldEditorLandingToSeat(string kind, string stranded) => RunSta(() =>
+    {
+        using var host = new Host();
+        host.Initialize(kind);
+        host.ShowFilesPane();
+        host.HoldEditorLanding();
+        TabItem tabItem = host.FocusTabBar();
+        typeof(MainWindow)
+            .GetMethod("ViewModel_WorkspaceReady", BindingFlags.NonPublic | BindingFlags.Instance)!
+            .Invoke(host.Shell, [null, EventArgs.Empty]);
+        PumpedDispatcher.Drain();
+        HeldEditorLanding held = Assert.IsType<HeldEditorLanding>(host.Shell.EditorLandings.Held);
+        AssertFocused(tabItem, $"the launch landing, held ({kind})");
+        host.Announced.Clear();
+
+        if (stranded == "disabled")
+        {
+            tabItem.IsEnabled = false;
+        }
+        else
+        {
+            tabItem.Focusable = false;
+        }
+
+        PumpedDispatcher.Drain();
+
+        Assert.True(
+            host.Shell.FilesTree.IsKeyboardFocusWithin,
+            $"the guard left the keys on {Describe(Keyboard.FocusedElement)} ({kind}, {stranded})");
+        Assert.Same(held, host.Shell.EditorLandings.Held);
+        host.LetEditorLandingArrive();
+        Assert.True(host.EditorStop().IsKeyboardFocusWithin, $"the held landing never seated ({kind}, {stranded})");
+        Assert.Equal([host.EditorLine()], host.Announced.OfType<A11yEvent.EditorPaneFocused>());
+    });
+
+    /// <summary>W7-7 PR 4b on OD-12: with nothing held, the guard's own editor
+    /// landing is a route's that speaks nothing — never an F6 press's. Its hold
+    /// names no ring position (a press's position would make the next F6 skip
+    /// the editor), the keys wait on a live stop while the canvas loads, and
+    /// the load seats the landing without a line.</summary>
+    [Fact]
+    public void TheGuardsOwnEditorLandingIsASilentRouteNeverAPress() => RunSta(() =>
+    {
+        using var host = new Host();
+        host.Initialize("canvas");
+        host.ShowFilesPane();
+        host.HoldEditorLanding();
+        TabItem tabItem = host.FocusTabBar();
+        Assert.Null(host.Shell.EditorLandings.Held);
+        host.Announced.Clear();
+
+        tabItem.IsEnabled = false;
+        PumpedDispatcher.Drain();
+
+        Assert.True(host.Shell.FilesTree.IsKeyboardFocusWithin, $"the guard left the keys on {Describe(Keyboard.FocusedElement)}");
+        Assert.True(((IShellRegionHost)host.Shell).HoldsLanding, "the guard's landing held nothing for the loading canvas");
+        Assert.Null(((IShellRegionHost)host.Shell).HeldRingRegion);
+        Assert.False(host.Workspace.HoldsShellRegionLanding);
+        host.LetEditorLandingArrive();
+        Assert.True(host.EditorStop().IsKeyboardFocusWithin, "the guard's held landing never seated");
+        Assert.DoesNotContain(host.Announced, line => line is A11yEvent.EditorPaneFocused);
+    });
+
+    /// <summary>W7-7 PR 4b on OD-12: under a modal loop over the shell the
+    /// guard's editor landing creates nothing and moves nothing beneath it —
+    /// the one entry's rule — so WPF's own recovery is all that runs.</summary>
+    [Fact]
+    public void TheGuardsEditorLandingMovesNothingBeneathAModalLoop() => RunSta(() =>
+    {
+        using var host = new Host();
+        host.Initialize("canvas");
+        host.ShowFilesPane();
+        host.HoldEditorLanding();
+        TabItem tabItem = host.FocusTabBar();
+        System.Windows.Interop.ComponentDispatcher.PushModal();
+        try
+        {
+            Assert.True(host.Shell.ModalLoops.IsModalLoopActive, "premise: the shell's monitor saw the loop");
+
+            tabItem.IsEnabled = false;
+            PumpedDispatcher.Drain();
+
+            Assert.False(host.Shell.FilesTree.IsKeyboardFocusWithin, "the guard moved the keys beneath the modal loop");
+            Assert.False(((IShellRegionHost)host.Shell).HoldsLanding, "the guard created a landing under the modal loop");
+        }
+        finally
+        {
+            System.Windows.Interop.ComponentDispatcher.PopModal();
+        }
+    });
+
+    /// <summary>W7-7 PR 4b on OD-12 (the amended exception): the focus guard's
+    /// landing of keys stranded in ANOTHER region — on an element disabled or
+    /// made unfocusable while still shown — is WPF's recovery made explicit,
+    /// never the reader leaving, so it leaves a route's held editor landing to
+    /// seat. (A region of the fact's own, guarded like the shell's.)</summary>
+    [Theory]
+    [InlineData("disabled")]
+    [InlineData("unfocusable")]
+    public void TheGuardsRecoveryElsewhereLeavesAHeldEditorLandingToSeat(string stranded) => RunSta(() =>
+    {
+        using var host = new Host();
+        host.Initialize("canvas");
+        host.HoldEditorLanding();
+        var holding = new TextBox { Text = "Where the reader was" };
+        var next = new TextBox { Text = "The region's own landing" };
+        var region = new StackPanel();
+        region.Children.Add(holding);
+        region.Children.Add(next);
+        RegionFocusGuard.SetLanding(region, () => next.Focus());
+        host.Show(region);
+        try
+        {
+            Assert.True(holding.Focus(), "premise: the region took no keys");
+            PumpedDispatcher.Drain();
+            host.Workspace.RequestActiveEditorFocus();
+            PumpedDispatcher.Drain();
+            Assert.True(((IShellRegionHost)host.Shell).HoldsLanding, "premise: the route's canvas landing is not held");
+            AssertFocused(holding, "the route's held landing");
+
+            if (stranded == "disabled")
+            {
+                holding.IsEnabled = false;
+            }
+            else
+            {
+                holding.Focusable = false;
+            }
+
+            PumpedDispatcher.Drain();
+
+            AssertFocused(next, $"the guard's landing in the region ({stranded})");
+            Assert.True(((IShellRegionHost)host.Shell).HoldsLanding, $"the guard's recovery withdrew the held landing ({stranded})");
+            host.LetEditorLandingArrive();
+            Assert.True(host.EditorStop().IsKeyboardFocusWithin, $"the held landing never seated ({stranded})");
+        }
+        finally
+        {
+            host.Remove(region);
+        }
+    });
+
+    /// <summary>#1318's merge check, the guard's PARK: a dismissal's restore
+    /// whose token died in the editor region while its canvas loads — the keys
+    /// nowhere, as a dismissal leaves them — lands the canvas through the one
+    /// entry, which holds it and seats nothing yet, so the keys have no valid
+    /// place and the guard parks them on the tab's own item. The park is a
+    /// recovery (<c>EditorLandingSlot.Park</c>), not the reader leaving: the
+    /// landing stays held, and the load seats it without a line.</summary>
+    [Fact]
+    public void ARestoreIntoALoadingCanvasParksTheKeysAndKeepsItsLanding() => RunSta(() =>
+    {
+        using var host = new Host();
+        host.Initialize("canvas");
+        host.HoldEditorLanding();
+        var canvasView = Assert.IsType<CanvasSurfaceView>(host.EditorStop());
+        TextBox token = canvasView.FilterFieldForTests;
+        Assert.True(token.Focus(), "premise: the loading canvas's filter field took no keys");
+        PumpedDispatcher.Drain();
+        Keyboard.ClearFocus();
+        token.SetCurrentValue(UIElement.VisibilityProperty, Visibility.Collapsed);
+        PumpedDispatcher.Drain();
+        Assert.Null(Keyboard.FocusedElement);
+        Assert.False(((IShellRegionHost)host.Shell).HoldsLanding);
+        host.Announced.Clear();
+
+        Assert.True(host.Shell.LandToken(token), "the restore landed the keys nowhere");
+
+        AssertFocused(host.ActiveTabItem(), "the park of a restore into a loading canvas");
+        Assert.True(((IShellRegionHost)host.Shell).HoldsLanding, "the park withdrew the canvas landing");
+        Assert.NotNull(host.EditorLandingRequest());
+        host.LetEditorLandingArrive();
+        Assert.True(host.EditorStop().IsKeyboardFocusWithin, $"the loaded canvas never seated; the keys are on {Describe(Keyboard.FocusedElement)}");
+        Assert.DoesNotContain(host.Announced, line => line is A11yEvent.EditorPaneFocused);
+    });
+
     /// <summary>OD-12 (codex round 6's note): a route's refused landing whose
     /// group has no realized tab control still tries the Files tree — the
     /// chain's last resort — and the answer decides the line: focus on the
@@ -3894,8 +4087,18 @@ public sealed class ReadingFocusTests
             {
                 _canvasLoadGate.SetResult();
                 PumpedDispatcher.PumpUntilDrained(canvas.WhenAllWorkDrained());
+                // The load's tracked work ends on the pool once it has POSTED
+                // its publish (StartWork), so the drain can complete before
+                // the publish has run here — a loaded runner's yield between
+                // two frames hands the pool the core (#1318's CI). One frame
+                // then ran the publish, and the refusal's fall-through it
+                // posts at Background queued behind that frame's own close:
+                // the fact read the ring before the press resumed. Wait on
+                // the publish itself, then drain what it queued.
+                Assert.True(
+                    PumpedDispatcher.PumpUntil(() => canvas.State == CanvasLoadState.Ready),
+                    "the canvas load never published");
                 PumpedDispatcher.Drain();
-                Assert.Equal(CanvasLoadState.Ready, canvas.State);
                 return;
             }
 

@@ -297,6 +297,188 @@ public sealed class RightPaneNoticeLandingTests
     });
 
     /// <summary>
+    /// W7-7 PR 4b (the owner's S5; the completeness sweep's G14): a note whose
+    /// tasks are all done — the Tasks leaf's landing is the first POPULATED
+    /// list's row, the Done list's, not the empty "Open tasks" list above it
+    /// (AR-6 made that list its own stop while the rows sat one list below).
+    /// </summary>
+    [Fact]
+    public void ATasksLeafWhoseTasksAreAllDoneLandsOnTheDoneList() => RunSta(() =>
+    {
+        using var host = new Host();
+        host.Initialize("tasks", "empty");
+        host.AwaitFinalNotice("tasks");
+        PublishTasks(host.Panels, (false, 0), (true, 2));
+        PumpedDispatcher.Drain();
+        ListBox done = host.ElementWithId<ListBox>("PanelTasksDoneList");
+        Assert.False(host.List("tasks").HasItems, "premise: the Open list has rows");
+        Assert.True(host.Beside.Focus());
+        host.ForgetFocusAndSpeech();
+
+        host.Shell.LandInRightPane();
+
+        var row = Assert.IsType<ListBoxItem>(Keyboard.FocusedElement);
+        Assert.Same(done, ItemsControl.ItemsControlFromItemContainer(row));
+        Assert.Equal([row], host.FocusChanges);
+    });
+
+    /// <summary>
+    /// The sweep's G14 (b): Space on the last open task moves it to the Done
+    /// list, and its row's keys went to the now-empty Open list (no stop
+    /// notice there) — "Open tasks, list" with the rows one list below. The
+    /// hand-over is declined, and the keys land on the Done list's row, once.
+    /// </summary>
+    [Fact]
+    public void TheLastOpenTaskDoneLandsTheKeysOnTheDoneList() => RunSta(() =>
+    {
+        using var host = new Host();
+        host.Initialize("tasks", "empty");
+        host.AwaitFinalNotice("tasks");
+        PublishTasks(host.Panels, (false, 1), (true, 1));
+        PumpedDispatcher.Drain();
+        ListBox open = host.List("tasks");
+        ListBox done = host.ElementWithId<ListBox>("PanelTasksDoneList");
+        open.UpdateLayout();
+        Assert.True(((UIElement)open.ItemContainerGenerator.ContainerFromIndex(0)).Focus());
+        host.ForgetFocusAndSpeech();
+
+        PublishTasks(host.Panels, (false, 0), (true, 2));
+        PumpedDispatcher.Drain();
+
+        var row = Assert.IsType<ListBoxItem>(Keyboard.FocusedElement);
+        Assert.Same(done, ItemsControl.ItemsControlFromItemContainer(row));
+        Assert.DoesNotContain(open, host.FocusChanges);
+        Assert.Equal([row], host.FocusChanges);
+        host.AssertNeverStranded();
+    });
+
+    /// <summary>
+    /// Codex PR 4b r1 F2 (S5, G14): the keys already on the bare EMPTY "Open
+    /// tasks" list — handed there by the notice when a save's refresh turned
+    /// it to "Loading…" (AR-6) — and the publication that follows brings only
+    /// DONE tasks. No row departs, so the keeper declines no hand-over, and
+    /// the empty list, holding the keys, kept them while the rows sat one
+    /// list below. The keeper's resolve lands them on the Done list's row,
+    /// once, silently.
+    /// </summary>
+    [Fact]
+    public void ANoticeHandedToTheEmptyOpenListLandsOnTheDoneRowWhenOnlyDoneTasksArrive() => RunSta(() =>
+    {
+        using var host = new Host();
+        host.Initialize("tasks", "empty");
+        host.AwaitFinalNotice("tasks");
+        TextBlock notice = host.Notice("tasks");
+        ListBox open = host.List("tasks");
+        ListBox done = host.ElementWithId<ListBox>("PanelTasksDoneList");
+        Assert.True(host.Beside.Focus());
+        host.Shell.LandInRightPane();
+        Assert.Same(notice, Keyboard.FocusedElement);
+        SetLoading(host.Panels, "tasks", loading: true);
+        PumpedDispatcher.Drain();
+        Assert.Same(open, Keyboard.FocusedElement);
+        host.ForgetFocusAndSpeech();
+
+        PublishTasks(host.Panels, (false, 0), (true, 2));
+        PumpedDispatcher.Drain();
+
+        var row = Assert.IsType<ListBoxItem>(Keyboard.FocusedElement);
+        Assert.Same(done, ItemsControl.ItemsControlFromItemContainer(row));
+        Assert.Equal([row], host.FocusChanges);
+        Assert.Empty(host.Announced);
+    });
+
+    /// <summary>
+    /// The sweep's G20, through the shell's own restore
+    /// (<see cref="MainWindow.LandToken"/>, every dismissal's): the keys left
+    /// a task's row for a dialog, and while it was up the task was done — its
+    /// row gone. The restore lands in the leaf the row was in, on the Done
+    /// list's row, in one focus change — it used to fall back to the editor.
+    /// </summary>
+    [Fact]
+    public void ARestoreWhoseRowIsGoneLandsInItsLeaf() => RunSta(() =>
+    {
+        using var host = new Host();
+        host.Initialize("tasks", "empty");
+        host.AwaitFinalNotice("tasks");
+        PublishTasks(host.Panels, (false, 1), (true, 1));
+        PumpedDispatcher.Drain();
+        ListBox open = host.List("tasks");
+        ListBox done = host.ElementWithId<ListBox>("PanelTasksDoneList");
+        open.UpdateLayout();
+        Assert.True(((UIElement)open.ItemContainerGenerator.ContainerFromIndex(0)).Focus());
+        IInputElement token = Keyboard.FocusedElement;
+        Assert.True(host.Beside.Focus());
+        PublishTasks(host.Panels, (false, 0), (true, 2));
+        PumpedDispatcher.Drain();
+        Assert.Same(host.Beside, Keyboard.FocusedElement);
+        Assert.Null(PresentationSource.FromVisual((Visual)token));
+        host.ForgetFocusAndSpeech();
+
+        Assert.True(host.Shell.LandToken(token), "the restore took nothing");
+
+        var row = Assert.IsType<ListBoxItem>(Keyboard.FocusedElement);
+        Assert.Same(done, ItemsControl.ItemsControlFromItemContainer(row));
+        Assert.Equal([row], host.FocusChanges);
+    });
+
+    /// <summary>
+    /// W7-7 PR 4b (the completeness sweep's G11): a Citations republish under
+    /// the reader — any save — destroyed the row holding the keys, and its
+    /// hand-over put them on the bare list (a UIA focus change on "Citations,
+    /// list") before the leaf's own restore moved them to a row: two changes,
+    /// the first on the bare Selector. The hand-over is declined, and the
+    /// restore lands them on the reader's row: one focus change.
+    /// </summary>
+    [Fact]
+    public void ACitationsRepublishUnderTheReaderIsOneFocusChange() => RunSta(() =>
+    {
+        using var host = new Host();
+        host.Initialize("citations", "empty", note: "Cites [@knuth1984] and [@ghostkey].\n");
+        // The window's own publish restore (MainWindow.RestoreCitationFocus)
+        // observes the workspace's leaf.
+        host.AttachWorkspaceToTheWindow();
+        ListBox list = host.ElementWithId<ListBox>("PanelCitationsList");
+        Assert.True(PumpedDispatcher.PumpUntil(() => list.Items.Count >= 2 && list.IsVisible), "premise: the leaf never listed the note's citations.");
+        list.UpdateLayout();
+        Assert.True(((UIElement)list.ItemContainerGenerator.ContainerFromIndex(1)).Focus());
+        PumpedDispatcher.Drain();
+        host.ForgetFocusAndSpeech();
+
+        host.Citations.Refresh();
+        Assert.True(PumpedDispatcher.PumpUntil(() => list.Items.Count >= 2), "the republish never listed the citations again.");
+        PumpedDispatcher.Drain();
+
+        var row = Assert.IsType<ListBoxItem>(Keyboard.FocusedElement);
+        Assert.Same(list, ItemsControl.ItemsControlFromItemContainer(row));
+        Assert.Equal([row], host.FocusChanges);
+        host.AssertNeverOnAPopulatedList();
+    });
+
+    /// <summary>A Tasks leaf publication with <paramref name="open"/>'s and
+    /// <paramref name="done"/>'s counts of open and done tasks.</summary>
+    private static void PublishTasks(RightPanePanelsViewModel panels, (bool Completed, int Count) open, (bool Completed, int Count) done)
+    {
+        const BindingFlags any = BindingFlags.NonPublic | BindingFlags.Instance;
+        int requestId = (int)(typeof(RightPanePanelsViewModel).GetField("_tasksRequestId", any)
+            ?? throw new InvalidOperationException("_tasksRequestId is gone")).GetValue(panels)!;
+        TaskItem[] tasks =
+        [
+            .. Enumerable.Range(0, open.Count).Select(index => Task(index, open.Completed)),
+            .. Enumerable.Range(open.Count, done.Count).Select(index => Task(index, done.Completed)),
+        ];
+        panels.PublishTasks(
+            panels.LoadGenerationForTests,
+            requestId,
+            new NoteTasksPage(tasks, (uint)tasks.Length, (uint)tasks.Length, "hash"),
+            failure: null);
+
+        static TaskItem Task(int index, bool completed) => new(
+            Ordinal: (uint)index, Text: $"Task {index}", StatusChar: completed ? "x" : " ", Completed: completed,
+            DueMs: null, ScheduledMs: null, Priority: null, Recurrence: null,
+            Line: (uint)(index + 1), ByteOffset: 0, CheckboxStartByte: 2, CheckboxEndByte: 5);
+    }
+
+    /// <summary>
     /// Codex PR 4's final check: a double-click on the Citations list's EMPTY
     /// area — below the rows — expands nothing. Its first press lands the
     /// keys on the first row (the click rule), and the double-click expanded

@@ -156,6 +156,28 @@ public sealed class TasksReviewTests : IDisposable
         Assert.Equal(requestAfterFirst + 1, review.LoadRequestIdForTests);
     }
 
+    /// <summary>W7-7 PR 4b (AR-59, owner-decided): the rail's arrows reveal
+    /// the review on every pass, and an EMPTY published page — a vault with
+    /// no tasks, a filter that keeps none — re-ran the vault query on each,
+    /// because "loaded" was "has rows". A published page for the chosen
+    /// filter is loaded, empty or not.</summary>
+    [Fact]
+    public void EnsureLoadedDoesNotRequeryAnEmptyPublishedPage()
+    {
+        var review = MakeReview();
+        review.EnsureLoaded();
+        review.ApplyFilter(TaskReviewFilter.Overdue);
+        _ = _session.ToggleTaskStatus("a.md", 0, "x", null);
+        review.ForceReload();
+        Assert.Empty(review.Rows);
+        int published = review.LoadRequestIdForTests;
+
+        review.EnsureLoaded();
+        review.EnsureLoaded();
+
+        Assert.Equal(published, review.LoadRequestIdForTests);
+    }
+
     [Fact]
     public void DirectToggleAnnouncesAndRequeriesPageOne()
     {

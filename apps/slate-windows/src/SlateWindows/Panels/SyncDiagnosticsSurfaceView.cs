@@ -61,6 +61,7 @@ internal sealed class SyncDiagnosticsSurfaceView : UserControl
         _content = new StackPanel();
         var scroll = new ScrollViewer
         {
+            Focusable = false,
             VerticalScrollBarVisibility = ScrollBarVisibility.Auto,
             HorizontalScrollBarVisibility = ScrollBarVisibility.Disabled,
             Content = _content,

@@ -678,7 +678,7 @@ public partial class MainWindow
                     return;
                 }
 
-                if (target is not null && TryFocus(target))
+                if (LandToken(target))
                 {
                     return;
                 }

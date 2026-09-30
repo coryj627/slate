@@ -127,7 +127,7 @@ public sealed class RegionBoundaryCensus
         Assert.Equal("Contained", (string?)root.Attribute(Directional));
     }
 
-    private static XDocument Shell() =>
+    internal static XDocument Shell() =>
         XDocument.Load(Path.Combine(SourceText.ShellSourceRoot(), "MainWindow.xaml"), LoadOptions.SetLineInfo);
 
     /// <summary>The shell's region roots and what each may declare: the
@@ -136,7 +136,7 @@ public sealed class RegionBoundaryCensus
     /// pane leaf body (every column-0 child of the leaf host but the docked
     /// placeholder), the rail, the status bar's border, the welcome view,
     /// and every focus-scope overlay (a sheet may cycle).</summary>
-    private static IReadOnlyList<(XElement Root, string[] Allowed)> RegionRoots(XDocument window)
+    internal static IReadOnlyList<(XElement Root, string[] Allowed)> RegionRoots(XDocument window)
     {
         var roots = new List<(XElement, string[])>();
         foreach (XElement element in window.Descendants())
@@ -223,6 +223,38 @@ public sealed class RegionBoundaryCensus
         }
 
         return (offenders.ToArray(), judged);
+    }
+
+    /// <summary>Whether <paramref name="element"/> is, or holds, an element
+    /// that can take the keys: focusable by its type's default or its
+    /// declaration (a bound Focusable may be), a shell control that builds
+    /// its focusables in code, or an items control, whose rows are generated.
+    /// One that neither is nor holds such an element cannot take the keys
+    /// away when it goes (FocusIntegrityManifestCensus).</summary>
+    internal static bool HoldsAStop(XElement element)
+    {
+        XDocument? document = element.Document;
+        Dictionary<string, string> namespaces = document is null ? [] : ClrNamespaces(document);
+        return element.DescendantsAndSelf().Any(candidate =>
+        {
+            if (candidate.Name.LocalName.Contains('.', StringComparison.Ordinal)
+                || Resolve(candidate, namespaces) is not { } type)
+            {
+                return false;
+            }
+
+            bool focusable = (string?)candidate.Attribute("Focusable") switch
+            {
+                "False" => false,
+                "True" => true,
+                { } bound when bound.StartsWith('{') => true,
+                _ => DefaultFocusable(type),
+            };
+            return focusable
+                || (type.Assembly == typeof(MainWindow).Assembly && typeof(Control).IsAssignableFrom(type))
+                || typeof(ItemsControl).IsAssignableFrom(type)
+                || typeof(ContentControl).IsAssignableFrom(type) && candidate.Attribute("Content") is { } content && content.Value.StartsWith('{');
+        });
     }
 
     /// <summary>Elements that are not placed where they are written:

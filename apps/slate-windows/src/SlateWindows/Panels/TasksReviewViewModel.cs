@@ -170,6 +170,11 @@ internal sealed class TasksReviewViewModel : PanelWorkScheduler
 
     public bool HasMore => _nextCursor is not null;
 
+    /// <summary>The index of the first row the last load-more appended —
+    /// where the keys go when "Load more" disappears under them (W7-7 PR
+    /// 4b, the sweep's G4); null when it appended none.</summary>
+    internal int? LastAppendStart { get; private set; }
+
     internal int LoadRequestIdForTests => _loadRequestId;
 
     /// <summary>Mac header, verbatim: "Tasks Review, showing N of M"
@@ -260,11 +265,14 @@ internal sealed class TasksReviewViewModel : PanelWorkScheduler
     }
 
     /// <summary>Rail reveal (mac ensureVaultTasksLoaded): idempotent
-    /// — loads only when nothing is loaded, nothing is in flight,
-    /// and no error is showing.</summary>
+    /// — loads only when no page for the chosen filter has published,
+    /// nothing is in flight, and no error is showing. An EMPTY published
+    /// page counts as loaded (W7-7 PR 4b, AR-59): the rail's arrows reveal
+    /// the leaf on every pass, and testing for rows re-ran the query on
+    /// each.</summary>
     public void EnsureLoaded()
     {
-        if (Rows.Count > 0 || _isLoading || _loadError is not null)
+        if (_publishedFilter == ActiveFilter || _isLoading || _loadError is not null)
         {
             return;
         }
@@ -643,6 +651,7 @@ internal sealed class TasksReviewViewModel : PanelWorkScheduler
             RaiseStateChanges();
             return;
         }
+        LastAppendStart = page.Items.Length > 0 ? Rows.Count : null;
         foreach (TaskWithLocation row in page.Items)
         {
             Rows.Add(new ReviewTaskRowViewModel(row));

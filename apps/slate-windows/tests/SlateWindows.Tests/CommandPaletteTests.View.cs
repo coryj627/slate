@@ -126,6 +126,38 @@ public sealed partial class CommandPaletteTests
     });
 
     /// <summary>
+    /// W7-7 PR 4b round 3 (codex r2 F6; R-5 (h)): a query's publication swaps
+    /// the presenter's view into the list (<see cref="CommandPaletteResultsPresenter"/>'s
+    /// <c>Refresh</c>), and the row holding the keys goes with the old view.
+    /// The keys land on a row of the new view — never on the bare list, never
+    /// on the window.
+    /// </summary>
+    [Fact]
+    public void AQueryPublishedUnderTheKeysLandsThemOnARowOfTheNewView() => RunSta(() =>
+    {
+        using var host = new ShippedResultsList(StandardCommands());
+        CommandPaletteViewModel palette = host.Palette;
+        palette.Open();
+        host.Settle();
+        palette.Select(palette.Rows[3]);
+        host.Settle();
+        ListBox list = host.List;
+        var held = Assert.IsType<ListBoxItem>(list.ItemContainerGenerator.ContainerFromItem(palette.SelectedRow));
+        Assert.True(held.Focus(), "premise: the result row refused the keys");
+        var changes = new List<IInputElement>();
+        System.Windows.Input.Keyboard.AddGotKeyboardFocusHandler(
+            Window.GetWindow(list), (_, e) => changes.Add(e.NewFocus));
+
+        host.ChangeQuery("o");
+
+        Assert.Null(PresentationSource.FromVisual(held));
+        var now = Assert.IsType<ListBoxItem>(System.Windows.Input.Keyboard.FocusedElement);
+        Assert.Same(list, ItemsControl.ItemsControlFromItemContainer(now));
+        Assert.NotNull(PresentationSource.FromVisual(now));
+        Assert.DoesNotContain(changes, focus => focus is ListBox or Window);
+    });
+
+    /// <summary>
     /// The selection-sync guard alone keeps the swap silent (R-11). The
     /// shipped list is switched back to synchronizing its current item — as
     /// a later style, template or control could — so the swap really does

@@ -247,7 +247,7 @@ public partial class MainWindow
                 // fallback, stranding focus on the window root when
                 // the captured element had been destroyed (a panel
                 // republish) or collapsed (a dismissed picker box).
-                if (previous is null || !TryFocus(previous))
+                if (!LandToken(previous))
                 {
                     FocusActiveEditorPane();
                 }

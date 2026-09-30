@@ -175,7 +175,7 @@ public sealed class GridConformanceTests
                 "the first Menu-key press did not OPEN the row-actions menu; "
                     + "host log: "
                     + (actionLog.Properties.Name.ValueOrDefault ?? "<empty>"));
-            Keyboard.Type(VirtualKeyShort.DOWN);
+            NavigationKeys.Type(VirtualKeyShort.DOWN);
             Keyboard.Type(VirtualKeyShort.RETURN);
             Assert.True(
                 SpinWait.SpinUntil(
@@ -267,7 +267,11 @@ public sealed class GridConformanceTests
 
             EnsureForeground(window);
             FocusCell(grid.Patterns.Grid.Pattern.GetItem(0, 0));
-            Keyboard.TypeSimultaneously(VirtualKeyShort.CONTROL, VirtualKeyShort.END);
+            using (Keyboard.Pressing(VirtualKeyShort.CONTROL))
+            {
+                NavigationKeys.Type(VirtualKeyShort.END);
+            }
+
             Assert.True(
                 SpinWait.SpinUntil(
                     () => (grid.Patterns.Selection.Pattern.Selection.Value

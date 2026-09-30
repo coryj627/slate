@@ -356,6 +356,18 @@ internal sealed class SidebarTagViewModel : BindableBase
         get => _isSelected;
         set => SetField(ref _isSelected, value);
     }
+
+    /// <summary>The row's expansion, bound two-way (W7-7 PR 4b, codex r1
+    /// F4): a refresh rebuilds the tags, and the rebuild keeps what the
+    /// reader had open, so a nested applied tag's row is there for the keys
+    /// to land on.</summary>
+    public bool IsExpanded
+    {
+        get => _isExpanded;
+        set => SetField(ref _isExpanded, value);
+    }
+
+    private bool _isExpanded;
 }
 
 /// <summary>One shortcut slot. W7-7 PR 3 (#1246, R-4; codex PR 3 round 6,
@@ -1304,10 +1316,29 @@ internal sealed partial class FilesSidebarViewModel : BindableBase
     /// it in its one sentence.</summary>
     private void ApplyTags(TagLoadOutcome outcome, bool announce = true)
     {
+        // W7-7 PR 4b (#1247, R-5; the sweep's G7): the tag whose row is
+        // selected — the row stays selected while its tag is the filter — is
+        // selected again in the rebuilt tree, by name, so a refresh (every
+        // save reaches one) keeps the reader's row and the Tags landing
+        // finds it. Re-selecting an applied tag applies nothing new
+        // (ApplyTagActivation answers an unchanged filter with nothing). The
+        // rebuilt tree keeps the reader's expansion (codex PR 4b r1 F4): it
+        // came back collapsed, so a NESTED applied tag had no row and the
+        // landing fell to the first root. The applied tag's ancestors are
+        // among those kept — the tree selects only a row it shows, and
+        // collapsing an ancestor moves the selection to it.
+        string? selected = SelectedTagFull(Tags);
+        HashSet<string> expanded = ExpandedTagFulls(Tags);
         Tags.Clear();
         foreach (SidebarTagViewModel tag in outcome.Tags)
         {
             Tags.Add(tag);
+        }
+
+        ReExpand(Tags, expanded);
+        if (selected is not null && FindTag(Tags, selected) is { } again)
+        {
+            again.IsSelected = true;
         }
 
         if (outcome.Error is not null)
@@ -1327,6 +1358,71 @@ internal sealed partial class FilesSidebarViewModel : BindableBase
     private sealed record TagLoadOutcome(
         IReadOnlyList<SidebarTagViewModel> Tags,
         string? Error);
+
+    private static string? SelectedTagFull(IEnumerable<SidebarTagViewModel> level)
+    {
+        foreach (SidebarTagViewModel tag in level)
+        {
+            if (tag.IsSelected)
+            {
+                return tag.Full;
+            }
+
+            if (SelectedTagFull(tag.Children) is { } nested)
+            {
+                return nested;
+            }
+        }
+
+        return null;
+    }
+
+    private static SidebarTagViewModel? FindTag(IEnumerable<SidebarTagViewModel> level, string full)
+    {
+        foreach (SidebarTagViewModel tag in level)
+        {
+            if (string.Equals(tag.Full, full, StringComparison.Ordinal))
+            {
+                return tag;
+            }
+
+            if (FindTag(tag.Children, full) is { } nested)
+            {
+                return nested;
+            }
+        }
+
+        return null;
+    }
+
+    private static HashSet<string> ExpandedTagFulls(IEnumerable<SidebarTagViewModel> level)
+    {
+        var expanded = new HashSet<string>(StringComparer.Ordinal);
+        var pending = new Stack<SidebarTagViewModel>(level);
+        while (pending.TryPop(out SidebarTagViewModel? tag))
+        {
+            if (tag.IsExpanded)
+            {
+                _ = expanded.Add(tag.Full);
+            }
+
+            foreach (SidebarTagViewModel child in tag.Children)
+            {
+                pending.Push(child);
+            }
+        }
+
+        return expanded;
+    }
+
+    private static void ReExpand(IEnumerable<SidebarTagViewModel> level, HashSet<string> expanded)
+    {
+        foreach (SidebarTagViewModel tag in level)
+        {
+            tag.IsExpanded = expanded.Contains(tag.Full);
+            ReExpand(tag.Children, expanded);
+        }
+    }
 
     private void EditTag(bool add)
     {

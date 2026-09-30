@@ -303,6 +303,19 @@
                           Command="{Binding Workspace.FocusPreviousPaneCommand}" />
                 <MenuItem Header="Move Tab Left" InputGestureText="{cmd:ChordText slate.workspace.moveTabLeft}" AutomationProperties.AcceleratorKey="{Binding InputGestureText, RelativeSource={RelativeSource Self}}" Command="{Binding Workspace.MoveTabLeftCommand}" />
                 <MenuItem Header="Move Tab Right" InputGestureText="{cmd:ChordText slate.workspace.moveTabRight}" AutomationProperties.AcceleratorKey="{Binding InputGestureText, RelativeSource={RelativeSource Self}}" Command="{Binding Workspace.MoveTabRightCommand}" />
+                <!-- W7-7 PR 4b (#1247, AR-38): the keyboard's sidebar resize. -->
+                <MenuItem Header="Widen _Files Sidebar"
+                          AutomationProperties.AutomationId="WorkspaceWidenFilesSidebarMenuItem"
+                          Command="{Binding Workspace.WidenFilesSidebarCommand}" />
+                <MenuItem Header="Narrow F_iles Sidebar"
+                          AutomationProperties.AutomationId="WorkspaceNarrowFilesSidebarMenuItem"
+                          Command="{Binding Workspace.NarrowFilesSidebarCommand}" />
+                <MenuItem Header="Widen Right Pa_ne"
+                          AutomationProperties.AutomationId="WorkspaceWidenRightPaneMenuItem"
+                          Command="{Binding Workspace.WidenRightPaneCommand}" />
+                <MenuItem Header="Narrow Right Pan_e"
+                          AutomationProperties.AutomationId="WorkspaceNarrowRightPaneMenuItem"
+                          Command="{Binding Workspace.NarrowRightPaneCommand}" />
                 <MenuItem Header="_Grow Pane" InputGestureText="{cmd:ChordText slate.workspace.growPane}" AutomationProperties.AcceleratorKey="{Binding InputGestureText, RelativeSource={RelativeSource Self}}" Command="{Binding Workspace.GrowPaneCommand}" />
                 <MenuItem Header="_Shrink Pane" InputGestureText="{cmd:ChordText slate.workspace.shrinkPane}" AutomationProperties.AcceleratorKey="{Binding InputGestureText, RelativeSource={RelativeSource Self}}" Command="{Binding Workspace.ShrinkPaneCommand}" />
                 <Separator />
@@ -713,7 +726,7 @@
              to directional navigation, out of the region. Arrows from an
              element are judged in its PARENT's group, so the bar sits in a
              Contained border: they stay on it (ShellContainerLandingTests). -->
-        <Border DockPanel.Dock="Bottom"
+        <Border x:Name="ShellStatusBarBorder" DockPanel.Dock="Bottom"
                 KeyboardNavigation.DirectionalNavigation="Contained">
             <StatusBar x:Name="ShellStatusBar"
                        Focusable="True"
@@ -865,13 +878,17 @@
                         <TextBlock Text="{Binding VaultPath}" FontSize="12" Foreground="{DynamicResource Slate.SecondaryTextBrush}" TextTrimming="CharacterEllipsis" />
                     </StackPanel>
                 </Border>
-                <Grid Grid.Row="1">
+                <!-- W7-7 PR 4b (#1247, AR-38): the sidebar widths are the
+                     workspace's, so Widen/Narrow Files Sidebar and Widen/Narrow
+                     Right Pane step them from the keyboard and a splitter drag
+                     writes them back. -->
+                <Grid x:Name="WorkspaceColumns" Grid.Row="1" SizeChanged="WorkspaceColumns_SizeChanged">
                     <Grid.ColumnDefinitions>
-                        <ColumnDefinition Width="270" MinWidth="200" />
+                        <ColumnDefinition Width="{Binding Workspace.FilesSidebarWidth, Mode=TwoWay, Converter={StaticResource PixelGridLengthConverter}, FallbackValue=270}" MinWidth="200" MaxWidth="640" />
                         <ColumnDefinition Width="5" />
                         <ColumnDefinition Width="*" MinWidth="300" />
                         <ColumnDefinition Width="5" />
-                        <ColumnDefinition Width="280" MinWidth="200" />
+                        <ColumnDefinition Width="{Binding Workspace.RightPaneWidth, Mode=TwoWay, Converter={StaticResource PixelGridLengthConverter}, FallbackValue=280}" MinWidth="200" MaxWidth="640" />
                     </Grid.ColumnDefinitions>
                     <local:AutomationLandmarkBorder x:Name="FilesPaneBorder"
                             KeyboardNavigation.DirectionalNavigation="Contained"
@@ -997,6 +1014,10 @@
                                             <!-- W7-7 (R-3): two-way, so a filter clear releases the
                                                  selection and the same tag can be applied again. -->
                                             <Setter Property="IsSelected" Value="{Binding IsSelected, Mode=TwoWay}" />
+                                            <!-- W7-7 PR 4b (codex r1 F4): the refresh keeps what the
+                                                 reader had open, and opens a nested applied tag's
+                                                 ancestors, so its row is there to land on. -->
+                                            <Setter Property="IsExpanded" Value="{Binding IsExpanded, Mode=TwoWay}" />
                                         </Style>
                                     </local:LandingTreeView.ItemContainerStyle>
                                 </local:LandingTreeView>
@@ -1314,7 +1335,7 @@
                             <!-- W7-7 PR 4 (#1247, R-5; codex round 4): the leaf
                                  contains its arrows - an arrow from its notice, whose
                                  own group this body is, stays in the leaf. -->
-                            <DockPanel Grid.Column="0" Margin="12"
+                            <DockPanel x:Name="BacklinksLeafBody" Grid.Column="0" Margin="12"
                                        KeyboardNavigation.DirectionalNavigation="Contained">
                                 <DockPanel.Style>
                                     <Style TargetType="DockPanel">
@@ -1369,7 +1390,7 @@
                             <!-- W7-7 PR 4 (#1247, R-5; codex round 4): the leaf
                                  contains its arrows - an arrow from its notice, whose
                                  own group this body is, stays in the leaf. -->
-                            <DockPanel Grid.Column="0" Margin="12"
+                            <DockPanel x:Name="OutgoingLinksLeafBody" Grid.Column="0" Margin="12"
                                        KeyboardNavigation.DirectionalNavigation="Contained">
                                 <DockPanel.Style>
                                     <Style TargetType="DockPanel">
@@ -1456,7 +1477,7 @@
                             <!-- W7-7 PR 4 (#1247, R-5; codex round 4): the leaf
                                  contains its arrows - an arrow from its notice, whose
                                  own group this body is, stays in the leaf. -->
-                            <DockPanel Grid.Column="0" Margin="12"
+                            <DockPanel x:Name="OutlineLeafBody" Grid.Column="0" Margin="12"
                                        KeyboardNavigation.DirectionalNavigation="Contained">
                                 <DockPanel.Style>
                                     <Style TargetType="DockPanel">
@@ -1504,7 +1525,7 @@
                             <!-- W7-7 PR 4 (#1247, R-5; codex round 4): the leaf
                                  contains its arrows - an arrow from its notice, whose
                                  own group this body is, stays in the leaf. -->
-                            <DockPanel Grid.Column="0" Margin="12"
+                            <DockPanel x:Name="EmbedsLeafBody" Grid.Column="0" Margin="12"
                                        KeyboardNavigation.DirectionalNavigation="Contained">
                                 <DockPanel.Style>
                                     <Style TargetType="DockPanel">
@@ -1582,7 +1603,7 @@
                             <!-- W7-7 PR 4 (#1247, R-5; codex round 4): the leaf
                                  contains its arrows - an arrow from its notice, whose
                                  own group this body is, stays in the leaf. -->
-                            <DockPanel Grid.Column="0" Margin="12"
+                            <DockPanel x:Name="TasksLeafBody" Grid.Column="0" Margin="12"
                                        KeyboardNavigation.DirectionalNavigation="Contained">
                                 <DockPanel.Style>
                                     <Style TargetType="DockPanel">
@@ -1641,7 +1662,7 @@
                             <!-- W4-3 (#735): the vault-wide Tasks Review leaf — the
                                  mac TasksReviewPanel flow: pinned filter chips, a
                                  paged row list, and an explicit Load more row. -->
-                            <DockPanel Grid.Column="0" Margin="12"
+                            <DockPanel x:Name="TasksReviewLeafBody" Grid.Column="0" Margin="12"
                                        KeyboardNavigation.DirectionalNavigation="Contained">
                                 <DockPanel.Style>
                                     <Style TargetType="DockPanel">
@@ -1715,17 +1736,15 @@
                                         Click="PanelReviewLoadMore_Click"
                                         Visibility="{Binding TasksReview.HasMore, Converter={StaticResource BooleanToVisibilityConverter}}"
                                         AutomationProperties.Name="{Binding TasksReview.LoadMoreAutomationName}"
-                                        AutomationProperties.HelpText="{Binding TasksReview.LoadMoreHelpText}">
-                                    <Button.Style>
-                                        <Style TargetType="Button">
-                                            <Style.Triggers>
-                                                <DataTrigger Binding="{Binding TasksReview.IsLoadingMore}" Value="True">
-                                                    <Setter Property="IsEnabled" Value="False" />
-                                                </DataTrigger>
-                                            </Style.Triggers>
-                                        </Style>
-                                    </Button.Style>
-                                </Button>
+                                        AutomationProperties.HelpText="{Binding TasksReview.LoadMoreHelpText}" />
+                                <!-- W7-7 PR 4b (#1247, R-5; the sweep's G4): never
+                                     disabled under the keys. A trigger disabled the
+                                     focused button while a page loaded, and WPF
+                                     handed its keys to the window; LoadMore refuses
+                                     while loading, and the name says "Loading more
+                                     tasks". The last page collapses it, and its keys
+                                     go to the first row that page appended
+                                     (MainWindow.LandAfterLoadMore). -->
                                 <ListBox x:Name="PanelReviewList"
                                          Style="{StaticResource PanelListBox}"
                                          ItemsSource="{Binding TasksReview.Rows}"
@@ -1781,7 +1800,7 @@
                             <!-- W7-7 PR 4 (#1247, R-5; codex round 4): the leaf
                                  contains its arrows - an arrow from its notice, whose
                                  own group this body is, stays in the leaf. -->
-                            <DockPanel Grid.Column="0" Margin="12"
+                            <DockPanel x:Name="CitationsLeafBody" Grid.Column="0" Margin="12"
                                        KeyboardNavigation.DirectionalNavigation="Contained">
                                 <DockPanel.Style>
                                     <Style TargetType="DockPanel">
@@ -1874,7 +1893,7 @@
                                  bulk-rename preview is; export is null on
                                  both (D-7 / G29).
                                  ========================================== -->
-                            <DockPanel Grid.Column="0" Margin="12"
+                            <DockPanel x:Name="BibliographyLeafBody" Grid.Column="0" Margin="12"
                                        KeyboardNavigation.DirectionalNavigation="Contained">
                                 <DockPanel.Style>
                                     <Style TargetType="DockPanel">

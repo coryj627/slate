@@ -227,6 +227,7 @@ internal sealed class BaseSurfaceView : UserControl
         contentHost.Children.Add(_list);
         layout.Children.Add(contentHost);
         Content = layout;
+        RegionFocusGuard.SetLanding(this, LandInSurface);
     }
 
     public BaseDocumentViewModel? Model
@@ -496,23 +497,34 @@ internal sealed class BaseSurfaceView : UserControl
         _quickFilter.SelectAll();
     }
 
-    private void FocusContent()
+    private void FocusContent() => _ = LandInSurface();
+
+    /// <summary>
+    /// W7-7 PR 4b (#1247, R-5; the sweep's G3 and the owner's S3, S5): the
+    /// surface's ONE landing — Escape's from the quick filter, a tab
+    /// landing's (<c>MainWindow.FocusEditorPane</c>), and the guard's when
+    /// the element holding the keys goes away
+    /// (<see cref="RegionFocusGuard"/>): View as List collapsed the focused
+    /// grid, and WPF handed the keys up to the workspace tab control; View
+    /// as Table, a publication with no rows and a failed reload did the same
+    /// from the list. The shown renderer's current — else first — row or
+    /// cell, silently (a row, never the bare list, from which an arrow
+    /// walked into the menu bar, R-5); else the surface's stable stop, the
+    /// quick filter, or Refresh while the filter is unavailable.
+    /// </summary>
+    internal bool LandInSurface()
     {
-        if (_grid.Visibility == Visibility.Visible)
+        if (_grid.Visibility == Visibility.Visible && SelectorFocus.LandOnStop(_grid.Grid))
         {
-            _ = _grid.FocusFirstCell();
+            return true;
         }
-        else if (_list.Visibility == Visibility.Visible)
+
+        if (_list.Visibility == Visibility.Visible && SelectorFocus.FocusFirstOrSelectedItem(_list))
         {
-            // A row, never the bare list, from which an arrow walked
-            // into the menu bar (W7-7 PR 4, #1247, R-5). A row that cannot
-            // be landed leaves the keys on the surface's stable stop, the
-            // quick filter the Escape came from.
-            if (!SelectorFocus.FocusFirstOrSelectedItem(_list))
-            {
-                _ = _quickFilter.Focus();
-            }
+            return true;
         }
+
+        return (_quickFilter.IsEnabled && _quickFilter.Focus()) || _refresh.Focus();
     }
 
     private void OnResultPublished(object? sender, EventArgs e) => RenderAll();

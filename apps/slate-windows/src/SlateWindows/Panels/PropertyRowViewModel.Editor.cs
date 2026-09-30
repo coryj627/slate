@@ -131,7 +131,9 @@ internal sealed partial class PropertyRowViewModel
 
     /// <summary>The DatePicker projection (datePicker mode only —
     /// the stored value parsed at row construction, so this never
-    /// invents a date). Setting commits immediately (mac parity).</summary>
+    /// invents a date). Setting commits immediately; the picker sets it
+    /// once, when its calendar closes (CalendarCommit), never per
+    /// arrow.</summary>
     public DateTime? DateValue
     {
         get => _draft is PropertyDraft.ScalarText { Kind: "date" } scalar
@@ -299,6 +301,13 @@ internal sealed class PropertyListItemViewModel : INotifyPropertyChanged
         RemoveLabel = PropertyPhrase.RemoveItemLabel(row.Key, row.Kind, index + 1);
         RemoveCommand = new RelayCommand(_ => _row.RemoveItem(_index), _ => true);
     }
+
+    /// <summary>The row the item belongs to, and its place in the row's
+    /// list: a rebuild's landing finds the same place among the fresh items
+    /// (<see cref="PropertiesLanding"/>).</summary>
+    internal PropertyRowViewModel Row => _row;
+
+    internal int Index => _index;
 
     public string ItemLabel { get; }
 

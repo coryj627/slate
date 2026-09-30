@@ -1786,6 +1786,46 @@
   },
   {
     "Source": "MainWindow.xaml",
+    "Expression": "BacklinksLeafBody",
+    "Surface": "Right-pane leaf registry"
+  },
+  {
+    "Source": "MainWindow.xaml",
+    "Expression": "BibliographyLeafBody",
+    "Surface": "Right-pane leaf registry"
+  },
+  {
+    "Source": "MainWindow.xaml",
+    "Expression": "CitationsLeafBody",
+    "Surface": "Right-pane leaf registry"
+  },
+  {
+    "Source": "MainWindow.xaml",
+    "Expression": "EmbedsLeafBody",
+    "Surface": "Right-pane leaf registry"
+  },
+  {
+    "Source": "MainWindow.xaml",
+    "Expression": "OutgoingLinksLeafBody",
+    "Surface": "Right-pane leaf registry"
+  },
+  {
+    "Source": "MainWindow.xaml",
+    "Expression": "OutlineLeafBody",
+    "Surface": "Right-pane leaf registry"
+  },
+  {
+    "Source": "MainWindow.xaml",
+    "Expression": "TasksLeafBody",
+    "Surface": "Right-pane leaf registry"
+  },
+  {
+    "Source": "MainWindow.xaml",
+    "Expression": "TasksReviewLeafBody",
+    "Surface": "Right-pane leaf registry"
+  },
+  {
+    "Source": "MainWindow.xaml",
     "Expression": "RightPaneLeaves",
     "Surface": "Right-pane leaf registry"
   },
@@ -2086,12 +2126,42 @@
   },
   {
     "Source": "MainWindow.xaml",
+    "Expression": "WorkspaceColumns",
+    "Surface": "Main window and menu bar"
+  },
+  {
+    "Source": "MainWindow.xaml",
+    "Expression": "ShellStatusBarBorder",
+    "Surface": "Main window and menu bar"
+  },
+  {
+    "Source": "MainWindow.xaml",
     "Expression": "WorkspaceFocusNextRegionMenuItem",
     "Surface": "Main window and menu bar"
   },
   {
     "Source": "MainWindow.xaml",
     "Expression": "WorkspaceFocusPreviousRegionMenuItem",
+    "Surface": "Main window and menu bar"
+  },
+  {
+    "Source": "MainWindow.xaml",
+    "Expression": "WorkspaceNarrowFilesSidebarMenuItem",
+    "Surface": "Main window and menu bar"
+  },
+  {
+    "Source": "MainWindow.xaml",
+    "Expression": "WorkspaceNarrowRightPaneMenuItem",
+    "Surface": "Main window and menu bar"
+  },
+  {
+    "Source": "MainWindow.xaml",
+    "Expression": "WorkspaceWidenFilesSidebarMenuItem",
+    "Surface": "Main window and menu bar"
+  },
+  {
+    "Source": "MainWindow.xaml",
+    "Expression": "WorkspaceWidenRightPaneMenuItem",
     "Surface": "Main window and menu bar"
   },
   {

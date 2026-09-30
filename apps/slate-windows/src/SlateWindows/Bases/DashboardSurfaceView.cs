@@ -59,12 +59,16 @@ internal sealed class DashboardSurfaceView : UserControl
         AutomationProperties.SetHeadingLevel(
             _title, AutomationHeadingLevel.Level2);
 
+        // A stop (W7-7 PR 4b round 3, the banner's and the right-pane
+        // notices' precedent): an empty dashboard's surface has nothing else
+        // for the keys, and F6 and every restore land on it.
         _emptyState = new TextBlock
         {
             Margin = new Thickness(32),
             HorizontalAlignment = HorizontalAlignment.Center,
             Text = "No dashboard sections. Add a saved query section to show results.",
             Visibility = Visibility.Collapsed,
+            Focusable = true,
         };
         _emptyState.SetResourceReference(
             TextBlock.ForegroundProperty, "Slate.SecondaryTextBrush");
@@ -72,8 +76,12 @@ internal sealed class DashboardSurfaceView : UserControl
 
         _sections = new StackPanel { Margin = new Thickness(12, 0, 12, 12) };
 
+        // Not a stop of its own (W7-7 PR 4b, the sweep's G19): a focusable
+        // scroll viewer was the docked dashboard's unnamed first stop, and
+        // took the keys of a rebuilt section's cell.
         var scroll = new ScrollViewer
         {
+            Focusable = false,
             VerticalScrollBarVisibility = ScrollBarVisibility.Auto,
             HorizontalScrollBarVisibility = ScrollBarVisibility.Disabled,
             Content = _sections,
@@ -86,7 +94,110 @@ internal sealed class DashboardSurfaceView : UserControl
         layout.Children.Add(_emptyState);
         layout.Children.Add(scroll);
         Content = layout;
+        RegionFocusGuard.SetLanding(this, LandInSurface);
     }
+
+    /// <summary>The sections' stops — a banner, a grid, a list — in order,
+    /// with the section each is in, as the last render built them. A section
+    /// is named by what it shows — its saved query, its heading, and which
+    /// of the sections showing those it is — not by its index, which the
+    /// dashboard editor's reorder or insert hands to another section (codex
+    /// PR 4b r1 F6).</summary>
+    private readonly List<(string Section, UIElement Stop)> _sectionStops = [];
+
+    /// <summary>Where the reader was when a render replaced the sections:
+    /// the section, and the row of its grid or list.</summary>
+    private (string Section, BasesRow? Row)? _readerAt;
+
+    /// <summary>
+    /// W7-7 PR 4b (#1247, R-5; the sweep's G10): the dashboard's landing —
+    /// where the keys go when the element holding them goes away
+    /// (<see cref="RegionFocusGuard"/>). Every vault change reloads an open
+    /// dashboard and rebuilds its sections, destroying the grid or list the
+    /// reader was in: the keys land in the SAME section — on the same note's
+    /// row, silently, when it is still there, else on that section's current
+    /// or first row — else, the section gone, on the first section's stop.
+    /// A dashboard with no sections lands on its empty notice (round 3).
+    /// </summary>
+    internal bool LandInSurface()
+    {
+        string? section = _readerAt?.Section;
+        BasesRow? row = _readerAt?.Row;
+        // The reader's own section first, its grid or list ahead of its
+        // banner; every other section in document order (codex r2 F8: the
+        // promotion reached every section, and a later grid took the keys
+        // ahead of the first remaining section's banner).
+        IEnumerable<UIElement> order = _sectionStops
+            .OrderBy(entry => entry.Section == section ? 0 : 1)
+            .ThenBy(entry => entry.Section == section && row is not null && entry.Stop is AccessibleDataGrid or ListBox ? 0 : 1)
+            .Select(entry => entry.Stop);
+        foreach (UIElement stop in order)
+        {
+            if (!stop.IsVisible)
+            {
+                continue;
+            }
+
+            if (stop is AccessibleDataGrid grid)
+            {
+                if ((row is not null && grid.SelectRow(
+                        item => item is BaseGridRowViewModel candidate && SameRow(candidate.Row, row),
+                        moveFocus: true))
+                    || SelectorFocus.LandOnStop(grid.Grid))
+                {
+                    return true;
+                }
+
+                continue;
+            }
+
+            // The list's items are the rows it reads back (W7-7 PR 3's
+            // sibling-named list): the reader's row is found by its note and
+            // place in the rebuilt list.
+            if (row is not null
+                && stop is ListBox list
+                && list.Items.OfType<BasesRow>().FirstOrDefault(candidate => SameRow(candidate, row)) is { } match)
+            {
+                // The reader's row, selected again as the arrows had it (a
+                // dashboard list activates nothing), with the keys.
+                list.SelectedItem = match;
+                if (SelectorFocus.FocusItem(list, match))
+                {
+                    return true;
+                }
+            }
+
+            if (SelectorFocus.LandOnStop(stop))
+            {
+                return true;
+            }
+        }
+
+        return _emptyState.IsVisible && _emptyState.Focus();
+    }
+
+    private static bool SameRow(BasesRow candidate, BasesRow row) =>
+        string.Equals(candidate.FilePath, row.FilePath, StringComparison.Ordinal)
+            && candidate.TaskOrdinal == row.TaskOrdinal;
+
+    /// <summary>The section — and the grid's or list's row — holding the
+    /// keys, before a render replaces them.</summary>
+    private void CaptureReader()
+    {
+        (string Section, UIElement Stop) held = _sectionStops.FirstOrDefault(entry => entry.Stop.IsKeyboardFocusWithin);
+        _readerAt = held.Stop is null
+            ? null
+            : (held.Section, held.Stop switch
+            {
+                AccessibleDataGrid grid when grid.CurrentRowForTests() is BaseGridRowViewModel current => current.Row,
+                ListBox list when (SelectorFocus.FocusedItem(list) ?? list.SelectedItem) is BasesRow listed => listed,
+                _ => null,
+            });
+    }
+
+    /// <summary>A section's name for <see cref="_sectionStops"/>.</summary>
+    private static string SectionKey(DashboardSectionStatus status, int occurrence) =>
+        $"{status.SavedQueryId}\u001f{status.HeadingOverride}\u001f{occurrence}";
 
     public DashboardViewModel? Model
     {
@@ -95,6 +206,8 @@ internal sealed class DashboardSurfaceView : UserControl
     }
 
     internal StackPanel SectionsForTests => _sections;
+
+    internal TextBlock EmptyStateForTests => _emptyState;
 
     private static void OnModelChanged(
         DependencyObject d, DependencyPropertyChangedEventArgs e)
@@ -121,13 +234,23 @@ internal sealed class DashboardSurfaceView : UserControl
         }
         _title.Text = model.Name;
         AutomationProperties.SetName(_title, $"Dashboard {model.Name}");
+        CaptureReader();
+        _sectionStops.Clear();
         _sections.Children.Clear();
-        _emptyState.Visibility = model.Sections.Count == 0
+        // Only once a load has published: before that, no sections means
+        // "not loaded yet", and the notice — a stop — would claim a populated
+        // dashboard empty under the keys.
+        _emptyState.Visibility = model.HasPublished && model.Sections.Count == 0
             ? Visibility.Visible
             : Visibility.Collapsed;
         int index = 0;
+        var shown = new Dictionary<(string Query, string? Heading), int>();
         foreach (DashboardSectionViewModel section in model.Sections)
         {
+            (string, string?) shows = (section.Status.SavedQueryId, section.Status.HeadingOverride);
+            int occurrence = shown.GetValueOrDefault(shows);
+            shown[shows] = occurrence + 1;
+            string key = SectionKey(section.Status, occurrence);
             var header = new TextBlock
             {
                 Text = section.Title,
@@ -153,6 +276,7 @@ internal sealed class DashboardSurfaceView : UserControl
                 AutomationProperties.SetAutomationId(
                     banner, $"{_automationIdRoot}Section{index}Banner");
                 _sections.Children.Add(banner);
+                _sectionStops.Add((key, banner));
             }
             if (section.Result is { } result
                 && section.State is DashboardSectionState.Ready
@@ -162,12 +286,13 @@ internal sealed class DashboardSurfaceView : UserControl
                 // round 1: the editor persisted ViewOverride but
                 // nothing consumed it). Case-insensitive: the value
                 // may be hand-authored.
-                _sections.Children.Add(
-                    string.Equals(
+                UIElement content = string.Equals(
                         section.Status.ViewOverride, "list",
                         StringComparison.OrdinalIgnoreCase)
                         ? BuildSectionList(_automationIdRoot, index, result)
-                        : BuildSectionGrid(_automationIdRoot, index, result));
+                        : BuildSectionGrid(_automationIdRoot, index, result);
+                _sections.Children.Add(content);
+                _sectionStops.Add((key, content));
             }
             index++;
         }

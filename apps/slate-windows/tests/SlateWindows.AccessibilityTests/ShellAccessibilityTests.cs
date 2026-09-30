@@ -577,7 +577,7 @@ public sealed partial class ShellAccessibilityTests
                 "The folder did not expose the collapsed UIA state.");
 
             folderItem.Focus();
-            Keyboard.Press(VirtualKeyShort.RIGHT);
+            PressKey(VirtualKeyShort.RIGHT);
             _ = WaitForNamedElement(
                 window,
                 automation,
@@ -591,7 +591,7 @@ public sealed partial class ShellAccessibilityTests
             AssertEventuallyFocused(
                 folderItem,
                 "Right Arrow expansion moved focus away from its TreeItem.");
-            Keyboard.Press(VirtualKeyShort.LEFT);
+            PressKey(VirtualKeyShort.LEFT);
             Assert.True(
                 SpinWait.SpinUntil(
                     () => folderExpansion.ExpandCollapseState.Value == ExpandCollapseState.Collapsed,
@@ -732,7 +732,7 @@ public sealed partial class ShellAccessibilityTests
             AssertEventuallyFocused(
                 splitHandle,
                 "The recursive split resize handle could not receive keyboard focus.");
-            Keyboard.Press(VirtualKeyShort.RIGHT);
+            PressKey(VirtualKeyShort.RIGHT);
             AssertEventuallyFocused(
                 splitHandle,
                 "Arrow-key resizing unexpectedly moved focus off the split handle.");
@@ -8096,8 +8096,7 @@ public sealed partial class ShellAccessibilityTests
                 + ReadSharedLog(Path.Combine(logDirectory, "slate-windows.log")));
             AssertAxeClean(process, "canvas-move-mode-active");
 
-            Keyboard.Press(VirtualKeyShort.RIGHT);
-            Wait.UntilInputIsProcessed(TimeSpan.FromMilliseconds(250));
+            PressKey(VirtualKeyShort.RIGHT);
             Keyboard.Press(VirtualKeyShort.ENTER);
             Assert.True(
                 SpinWait.SpinUntil(
@@ -11887,9 +11886,12 @@ public sealed partial class ShellAccessibilityTests
                 TimeSpan.FromSeconds(5)),
             $"The editor caret did not move to '{text}'.");
     }
+    /// <summary>A key press; a navigation-cluster key goes out as the
+    /// keyboard's own key, not the numpad's (<see cref="NavigationKeys"/>),
+    /// so a running screen reader leaves it to the app.</summary>
     private static void PressKey(VirtualKeyShort key)
     {
-        Keyboard.Type(key);
+        NavigationKeys.Type(key);
         Wait.UntilInputIsProcessed(TimeSpan.FromMilliseconds(250));
     }
 

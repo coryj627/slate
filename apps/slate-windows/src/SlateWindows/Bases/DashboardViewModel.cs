@@ -107,6 +107,12 @@ internal sealed class DashboardViewModel : PanelWorkScheduler
 
     public event EventHandler? SectionsPublished;
 
+    /// <summary>Whether a load has published its sections — before that, an
+    /// empty <see cref="Sections"/> means "not loaded yet", not "no sections"
+    /// (W7-7 PR 4b round 3: the surface's empty notice is a stop, and must
+    /// not claim emptiness during the first load).</summary>
+    internal bool HasPublished { get; private set; }
+
     /// <summary>W7-7 PR 7 (#1252, round 29): <see cref="Load"/>, awaited
     /// to its publication (a published failure state included). The
     /// rescan's <paramref name="cancellation"/> (the ruling on finding 6)
@@ -174,6 +180,7 @@ internal sealed class DashboardViewModel : PanelWorkScheduler
                     _announcedFailure = failure.Message;
                     _announce(failedEvent);
                 }
+                HasPublished = true;
                 SectionsPublished?.Invoke(this, EventArgs.Empty);
             });
             return;
@@ -253,6 +260,7 @@ internal sealed class DashboardViewModel : PanelWorkScheduler
             {
                 Sections.Add(section);
             }
+            HasPublished = true;
             SectionsPublished?.Invoke(this, EventArgs.Empty);
         });
     }

@@ -310,6 +310,39 @@ public sealed class GridLandingTests
         Assert.Empty(announced);
     });
 
+    /// <summary>W7-7 PR 4b (the completeness sweep's G13): a publication
+    /// that EMPTIES the grid under the reader's cell — a canvas table's last
+    /// visible card deleted, a graph table filtered to nothing — lands the
+    /// keys on the empty grid, its own stop (AR-6), once: the keeper never
+    /// resolved an empty publication, and the keys stranded.</summary>
+    [Fact]
+    public void AGridEmptiedUnderTheReaderKeepsTheKeysOnTheGrid() => RunSta(() =>
+    {
+        var announced = new List<A11yEvent>();
+        AccessibleDataGrid grid = BoundGrid([new Row("one"), new Row("two")], announced);
+        using Hosted host = Host(grid);
+        Assert.True(grid.SelectRow(row => ((Row)row).Name == "two", moveFocus: true));
+        Assert.IsType<DataGridCell>(Keyboard.FocusedElement);
+        host.RecordFocus();
+        var stranded = new List<IInputElement?>();
+        Keyboard.AddLostKeyboardFocusHandler(grid, (_, e) =>
+        {
+            if (e.NewFocus is null or Window
+                || (e.NewFocus is System.Windows.Media.Visual visual && PresentationSource.FromVisual(visual) is null))
+            {
+                stranded.Add(e.NewFocus);
+            }
+        });
+        announced.Clear();
+
+        Rebind(grid, []);
+        PumpedDispatcher.Drain();
+
+        Assert.Same(grid.Grid, Keyboard.FocusedElement);
+        Assert.Empty(stranded);
+        Assert.Empty(announced);
+    });
+
     /// <summary>An EMPTY grid stays its own stop through the same landing
     /// (AnEmptyGridKeepsItsArrows).</summary>
     [Fact]

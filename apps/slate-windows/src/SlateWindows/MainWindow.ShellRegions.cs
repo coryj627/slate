@@ -7,6 +7,7 @@ using System.Windows.Controls;
 using System.Windows.Controls.Primitives;
 using System.Windows.Input;
 using System.Windows.Media;
+using System.Windows.Threading;
 
 namespace SlateWindows;
 
@@ -700,6 +701,17 @@ public partial class MainWindow : IShellRegionHost
         }
     }
 
+    /// <summary>W7-7 PR 4b (#1247, AR-38): the row the sidebars and the
+    /// editor share tells the workspace how much room a sidebar resize
+    /// step has.</summary>
+    private void WorkspaceColumns_SizeChanged(object sender, SizeChangedEventArgs e)
+    {
+        if (_viewModel.Workspace is WorkspaceViewModel workspace)
+        {
+            workspace.WorkspaceRowWidth = e.NewSize.Width;
+        }
+    }
+
     /// <summary>WPF's menu mode routes keys to the menu; F6 is handed to
     /// the ring so a press from the menu-bar region moves on (spec §4).</summary>
     private void MainMenu_PreviewKeyDown(object sender, KeyEventArgs e)
@@ -729,18 +741,236 @@ public partial class MainWindow : IShellRegionHost
             .Where(child => Grid.GetColumn(child) == 0 && child.IsVisible)
             .FirstOrDefault(child => !ReferenceEquals(child, RightPaneDockedPlaceholder));
 
+    /// <summary>
+    /// A leaf's first stop, in visual order. Layout is no stop: a border
+    /// never is, and every scroll viewer the code builds is unfocusable
+    /// (W7-7 PR 4b, the sweep's G19 — the Sync leaf's first stop was an
+    /// unnamed scroll viewer; <c>ScrollViewerStopCensus</c>). An EMPTY list
+    /// gives way to a populated list that follows it (the owner's S5, the
+    /// sweep's G14: a note whose tasks are all done landed on the empty
+    /// "Open tasks" list, its rows one list below); with nothing populated
+    /// after it, the empty list is the stop (AR-6).
+    /// </summary>
     private static UIElement? FirstFocusable(DependencyObject root)
     {
+        UIElement? emptyList = null;
         foreach (DependencyObject candidate in FindVisualDescendants<DependencyObject>(root))
         {
-            if (candidate is UIElement { Focusable: true, IsEnabled: true, IsVisible: true } element
-                && candidate is not Border)
+            if (candidate is not UIElement { Focusable: true, IsEnabled: true, IsVisible: true } element
+                || candidate is Border)
             {
-                return element;
+                continue;
+            }
+
+            bool list = element is Selector selector && SelectorFocus.IsListLanding(selector);
+            if (list && !((Selector)element).HasItems)
+            {
+                emptyList ??= element;
+                continue;
+            }
+
+            if (emptyList is not null && emptyList.IsAncestorOf(element))
+            {
+                continue;
+            }
+
+            return emptyList is null || list ? element : emptyList;
+        }
+
+        return emptyList;
+    }
+
+    /// <summary>
+    /// W7-7 PR 4b (#1247, R-5; the owner's S3): every region root owns its
+    /// landing, which <see cref="RegionFocusGuard"/> takes when the element
+    /// holding the keys in it goes away — disabled, collapsed, rebuilt —
+    /// instead of WPF's hand-up to the tab control, a scroll viewer or the
+    /// window. The Files pane, the editor, each right-pane leaf, the rail,
+    /// the status bar, the welcome view and every sheet
+    /// (<c>RegionGuardCensus</c>). The menu bar is not one: its items are
+    /// in their own popups, and it takes no arrows.
+    /// </summary>
+    private void GuardRegions()
+    {
+        // The welcome view and the workspace (codex PR 4b r1 F8's widened
+        // census): opening or closing the vault swaps them under the keys,
+        // and every scope inside the one that goes goes with it. The keys land
+        // in the one that replaced it. (No landing sits above both: the
+        // sheets share their parent, and a sheet's close is its own
+        // restore's.)
+        RegionFocusGuard.SetGoneLanding(
+            WorkspaceRoot, () => FirstFocusable(WelcomeRoot) is { } welcome && SelectorFocus.LandOnStop(welcome));
+        RegionFocusGuard.SetGoneLanding(WelcomeRoot, EditorRegionLanding);
+        // The three workspace columns (codex PR 4b r1 F1): when a
+        // whole region goes — the right pane hidden under the keys (Ctrl+Alt+I,
+        // the View menu, the palette) — every scope inside it is gone, and
+        // WPF's re-evaluation found no focusable ancestor short of the window.
+        // The keys land in the editor region, as the pane's own Left boundary
+        // does. A modal overlay (it disables the workspace) and the welcome
+        // view (it collapses it) leave this scope dead, and it takes nothing.
+        RegionFocusGuard.SetLanding(WorkspaceColumns, EditorRegionLanding);
+        RegionFocusGuard.SetLanding(FilesPaneBorder, () => LandRegion(ShellRegionKind.Files));
+        RegionFocusGuard.SetLanding(ContentPaneBorder, EditorRegionLanding);
+        RegionFocusGuard.SetLanding(RightPaneLeavesList, () => SelectorFocus.FocusFirstOrSelectedItem(RightPaneLeavesList));
+        // The leaves' host: a leaf switched under the keys (a command, a
+        // reveal, the model) collapses the leaf they were in; they land in
+        // the leaf now shown — its first stop, else the rail's row — not out
+        // of the right pane.
+        RegionFocusGuard.SetLanding(RightPaneLeafHost, () => VisibleLeafBody() is { } shown && LandInLeaf(shown));
+        foreach (FrameworkElement body in RightPaneLeafHost.Children.OfType<FrameworkElement>()
+            .Where(child => Grid.GetColumn(child) == 0 && !ReferenceEquals(child, RightPaneDockedPlaceholder)))
+        {
+            RegionFocusGuard.SetLanding(body, () => LandInLeaf(body));
+        }
+
+        RegionFocusGuard.SetLanding(
+            (UIElement)LogicalTreeHelper.GetParent(ShellStatusBar), () => LandRegion(ShellRegionKind.StatusBar));
+        RegionFocusGuard.SetLanding(WelcomeRoot, () => FirstFocusable(WelcomeRoot) is { } stop && SelectorFocus.LandOnStop(stop));
+        foreach (UIElement sheet in FocusScopeOverlays(this))
+        {
+            RegionFocusGuard.SetLanding(sheet, () => FirstFocusable(sheet) is { } stop && SelectorFocus.LandOnStop(stop));
+        }
+
+        // The query builder's conditions, a finer scope inside its sheet (codex
+        // PR 4b r1 F5; R-5 (h), "a removed row's keys come back to the rows
+        // they were in"): a condition removed from its own Remove button lands
+        // the keys in a remaining condition, not on the sheet's first stop —
+        // its footer. The last removal collapses the conditions, and the
+        // sheet's landing takes them.
+        ItemsControl conditions = FindWithAutomationId<ItemsControl>(BaseQueryBuilderOverlay, "BuilderConditions")
+            ?? throw new InvalidOperationException("BuilderConditions is not in the shell's XAML.");
+        RegionFocusGuard.SetLanding(conditions, () => SelectorFocus.LandOnStop(conditions));
+
+        // The review's "Load more" collapses under the keys when the last
+        // page arrives (the sweep's G4): they go to the first row it
+        // appended — where the reading continues — else the list's last
+        // row, else the leaf's landing.
+        RegionFocusGuard.SetStrandedLanding(PanelReviewLoadMore, LandAfterLoadMore);
+    }
+
+    /// <summary>A region whose landing is synchronous — never held, so its
+    /// callbacks never run — landed the ring's way, silently: whether the
+    /// keys are in it now.</summary>
+    private bool LandRegion(ShellRegionKind region) =>
+        ((IShellRegionHost)this).TryLand(region, static () => { }, static () => { }) == ShellRegionLanding.Landed;
+
+    /// <summary>
+    /// The editor region's landing for keys the focus guard re-lands (R-5
+    /// (h)): the EMPTY pane's own stop; else the active tab's stop, through
+    /// the one landing entry (<see cref="FocusEditorPane"/>), silently — a
+    /// route's landing that speaks nothing, never the ring's (a held press's
+    /// ring position is an F6 press's alone). W7-7 PR 4b on PR 8 (R-10,
+    /// OD-12): a landing that is PENDING with the keys already on a live stop
+    /// — a loading or refreshing graph's provisional seat (its state host, or
+    /// the grid it still shows), the reading park on the tab item — is done:
+    /// the keys stay there and the landing stays held for its content (#1318's
+    /// merge check: moving them on was the reader leaving, and withdrew it).
+    /// An editor landing the window already holds for the active tab is LEFT
+    /// to seat — its line and its fallback stay its route's or its press's,
+    /// and the launch landing's among them. Only when the keys are on nothing
+    /// valid — a landing that holds but seats nothing yet (a loading canvas),
+    /// a held landing, a refused one — does the guard PARK them where a
+    /// refused route's would wait (the tab's own item, else the tab strip,
+    /// else the Files region), never back on the element that went away,
+    /// whose own <c>Focus()</c> answers true while it still holds them; the
+    /// park is a recovery, which withdraws nothing
+    /// (<see cref="EditorLandingSlot.Park"/>). Nothing lands under a modal.
+    /// Answers whether the keys are on a stop now.
+    /// </summary>
+    private bool EditorRegionLanding()
+    {
+        if (_viewModel.Workspace is not WorkspaceViewModel workspace
+            || OpenModalSurface is not null
+            || _modalLoops.IsModalLoopActive)
+        {
+            return false;
+        }
+
+        WorkspaceGroupViewModel group = workspace.ActiveGroup;
+        if (group.ActiveTab is not { } tab)
+        {
+            return LandRegion(ShellRegionKind.EmptyEditor);
+        }
+
+        if (_editorLandings.Held is not { } held || !held.StillWhereAsked())
+        {
+            _ = _editorLandings.Withdraw();
+            ShellRegionLanding landing = FocusEditorPane(
+                group, onLanded: null, onRefused: static () => { }, forTheRing: false);
+            if (landing == ShellRegionLanding.Landed
+                || (landing == ShellRegionLanding.Pending && RegionFocusGuard.HolderLanded))
+            {
+                return true;
             }
         }
 
-        return null;
+        return EditorLandingSlot.Park(() =>
+            (FallBackFromEditor(group, tab) != EditorFallback.None && RegionFocusGuard.HolderLanded)
+            || (LandOnFilesTree() && RegionFocusGuard.HolderLanded));
+    }
+
+    /// <summary>An arrow in the rail is choosing the leaf, for the length of
+    /// its key press.</summary>
+    private bool _railArrow;
+
+    /// <summary>
+    /// W7-7 PR 4b (#1247; the completeness sweep's G21, AR-59): an arrow on
+    /// the rail CHOOSES the leaf — its selection switches the shown leaf — and
+    /// the row taking the keys says so ("Outline, 3 of 12"); the authored
+    /// "Outline panel." on top repeated it, one arrow, two utterances. The
+    /// line stays silent on the arrow route only (OD-11(d)'s rule for a radio
+    /// group's arrow); a reveal, a command, a click and the ring still speak
+    /// it. The flag lasts the key press: the list handles the arrow — its
+    /// selection, the leaf switch — inside the same input dispatch, and the
+    /// flag is cleared at Input priority, after it (never by a listener past
+    /// handled: #1275's seal, ShellSealAdmissionCensus).
+    /// </summary>
+    private void WatchRailArrows() =>
+        RightPaneLeavesList.PreviewKeyDown += (_, e) =>
+        {
+            _railArrow = e.KeyboardDevice.Modifiers == ModifierKeys.None
+                && e.Key is Key.Up or Key.Down or Key.Left or Key.Right or Key.Home or Key.End or Key.PageUp or Key.PageDown
+                && e.OriginalSource is ListBoxItem;
+            if (_railArrow)
+            {
+                _ = Dispatcher.BeginInvoke(() => _railArrow = false, DispatcherPriority.Input);
+            }
+        };
+
+    private bool LandAfterLoadMore()
+    {
+        if (!PanelReviewList.IsVisible || !PanelReviewList.HasItems || _viewModel.Workspace is not { } workspace)
+        {
+            return false;
+        }
+
+        int index = workspace.TasksReview.LastAppendStart is int start && start < PanelReviewList.Items.Count
+            ? start
+            : PanelReviewList.Items.Count - 1;
+        return SelectorFocus.FocusItem(PanelReviewList, PanelReviewList.Items[index]);
+    }
+
+    /// <summary>The window's sheets: every focus scope in its logical tree
+    /// but a menu.</summary>
+    private static IEnumerable<UIElement> FocusScopeOverlays(DependencyObject root)
+    {
+        foreach (object child in LogicalTreeHelper.GetChildren(root))
+        {
+            if (child is not DependencyObject element)
+            {
+                continue;
+            }
+
+            if (element is UIElement scope and not MenuBase && FocusManager.GetIsFocusScope(scope))
+            {
+                yield return scope;
+            }
+
+            foreach (UIElement nested in FocusScopeOverlays(element))
+            {
+                yield return nested;
+            }
+        }
     }
 
     /// <summary>

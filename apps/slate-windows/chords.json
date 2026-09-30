@@ -232,6 +232,54 @@
       "registered": true
     },
     {
+      "id": "slate.workspace.widenFilesSidebar",
+      "label": "Widen Files Sidebar",
+      "section": "View",
+      "hint": "Make the Files sidebar wider by one step.",
+      "macChord": null,
+      "mac": null,
+      "windows": null,
+      "windowsSpoken": null,
+      "scope": "None",
+      "registered": true
+    },
+    {
+      "id": "slate.workspace.narrowFilesSidebar",
+      "label": "Narrow Files Sidebar",
+      "section": "View",
+      "hint": "Make the Files sidebar narrower by one step.",
+      "macChord": null,
+      "mac": null,
+      "windows": null,
+      "windowsSpoken": null,
+      "scope": "None",
+      "registered": true
+    },
+    {
+      "id": "slate.workspace.widenRightPane",
+      "label": "Widen Right Pane",
+      "section": "View",
+      "hint": "Make the right pane wider by one step.",
+      "macChord": null,
+      "mac": null,
+      "windows": null,
+      "windowsSpoken": null,
+      "scope": "None",
+      "registered": true
+    },
+    {
+      "id": "slate.workspace.narrowRightPane",
+      "label": "Narrow Right Pane",
+      "section": "View",
+      "hint": "Make the right pane narrower by one step.",
+      "macChord": null,
+      "mac": null,
+      "windows": null,
+      "windowsSpoken": null,
+      "scope": "None",
+      "registered": true
+    },
+    {
       "id": "slate.workspace.closePane",
       "label": "Close Pane",
       "section": "View",

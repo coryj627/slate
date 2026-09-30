@@ -167,6 +167,47 @@ public sealed class SelectionCommitCensus
             "Selection-committing containers a row token would re-select (S4):\n  " + string.Join("\n  ", offenders));
     }
 
+    /// <summary>
+    /// W7-7 PR 4b (#1247; flag 3 of PR 4's S4): the selection-wired
+    /// containers the shell's TEMPLATES build — one per template use, so
+    /// none is the window's to register a landing on — each with the rule
+    /// that covers it, by type. A tab control's tab SELECTS itself when it
+    /// takes the keys, switching the document: LandOnStop lands a tab token
+    /// on the active tab (<c>TabTokenLandingTests</c>).
+    /// </summary>
+    private static readonly Dictionary<string, (string Type, string Covered)> TemplateCovered = new(StringComparer.Ordinal)
+    {
+        ["WorkspaceTabs"] = ("TabControl", "LandOnStop's tab arm: a tab token lands on the active tab, the bare control on its selected tab"),
+    };
+
+    [Fact]
+    public void EverySelectionCommittingContainerATemplateBuildsIsCovered()
+    {
+        var wired = new List<(string File, string Id, string Type)>();
+        foreach (string path in Directory.EnumerateFiles(SourceText.ShellSourceRoot(), "*.xaml", SearchOption.AllDirectories)
+            .Where(path => !path.Contains($"{Path.DirectorySeparatorChar}obj{Path.DirectorySeparatorChar}", StringComparison.OrdinalIgnoreCase)
+                && !string.Equals(Path.GetFileName(path), "MainWindow.xaml", StringComparison.Ordinal)))
+        {
+            foreach (XElement element in XDocument.Load(path).Descendants().Where(IsSelectionWired))
+            {
+                wired.Add((
+                    Path.GetFileName(path),
+                    (string?)element.Attribute("AutomationProperties.AutomationId")
+                        ?? (string?)element.Attribute(Xaml + "Name")
+                        ?? throw new Xunit.Sdk.XunitException($"a selection-wired <{element.Name.LocalName}> in {Path.GetFileName(path)} has no id"),
+                    element.Name.LocalName));
+            }
+        }
+
+        Assert.NotEmpty(wired);
+        string[] uncovered = wired
+            .Where(site => !TemplateCovered.TryGetValue(site.Id, out (string Type, string Covered) covered) || covered.Type != site.Type)
+            .Select(site => $"{site.File}: <{site.Type} {site.Id}> commits on selection and no landing rule covers it")
+            .ToArray();
+        Assert.True(uncovered.Length == 0, string.Join("\n", uncovered));
+        Assert.All(TemplateCovered.Keys, id => Assert.Contains(wired, site => site.Id == id));
+    }
+
     /// <summary>A selection handler, a TwoWay selection binding, or a row
     /// style binding IsSelected TwoWay — on anything but a combo box, which
     /// is its own stop.</summary>

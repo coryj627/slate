@@ -74,7 +74,7 @@ public sealed partial class ShellAccessibilityTests
             AssertEventuallyFocused(contentPane, "F6 from Files with no tab did not land on the empty editor pane.");
             foreach (VirtualKeyShort arrow in new[] { VirtualKeyShort.DOWN, VirtualKeyShort.UP, VirtualKeyShort.LEFT, VirtualKeyShort.RIGHT })
             {
-                PressArrow(arrow);
+                PressKey(arrow);
                 AssertFocusStays(automation, contentPane, $"{arrow} on the empty editor stop moved focus off it");
             }
 
@@ -90,9 +90,9 @@ public sealed partial class ShellAccessibilityTests
             AutomationElement lastMenu = fileMenu.Parent
                 .FindAllChildren(automation.ConditionFactory.ByControlType(ControlType.MenuItem))
                 .Last();
-            PressArrow(VirtualKeyShort.LEFT);
+            PressKey(VirtualKeyShort.LEFT);
             AssertEventuallyFocused(lastMenu, "Left on File did not wrap to the last menu.");
-            PressArrow(VirtualKeyShort.RIGHT);
+            PressKey(VirtualKeyShort.RIGHT);
             AssertEventuallyFocused(fileMenu, "Right on the last menu did not wrap to File.");
             PressKey(VirtualKeyShort.ESCAPE);
             AssertEventuallyFocused(statusBar, "Escape from the menu bar did not return to the status bar.");
@@ -123,7 +123,7 @@ public sealed partial class ShellAccessibilityTests
             AutomationElement all = WaitForElement(window, "PanelReviewFilterAll", TimeSpan.FromSeconds(10));
             AssertEventuallyFocused(all, "Ctrl+R did not land on the review's All filter.");
             Assert.True(IsChosen(all), "the All filter must start checked");
-            PressArrow(VirtualKeyShort.DOWN);
+            PressKey(VirtualKeyShort.DOWN);
             AutomationElement dueToday = WaitForElement(window, "PanelReviewFilterDueToday", TimeSpan.FromSeconds(10));
             AssertEventuallyFocused(dueToday, "Down from the All filter did not move to Due today.");
             AssertChosen(dueToday, all, "Down on the review's filters moved focus without checking the radio it reached.");
@@ -430,7 +430,7 @@ public sealed partial class ShellAccessibilityTests
             outline.Focus();
             AssertEventuallyFocused(outline, "The Outline choice did not take focus.");
 
-            PressArrow(VirtualKeyShort.RIGHT);
+            PressKey(VirtualKeyShort.RIGHT);
             // (a) The arrow's destination is the checked choice.
             AssertEventuallyFocused(table, "Right on Outline did not move to Table.");
             AssertChosen(table, outline, "Right on the canvas switcher moved focus to Table without checking it.");
@@ -496,7 +496,7 @@ public sealed partial class ShellAccessibilityTests
             tableChoice.Focus();
             AssertEventuallyFocused(tableChoice, "The Table choice did not take focus.");
 
-            PressArrow(VirtualKeyShort.RIGHT);
+            PressKey(VirtualKeyShort.RIGHT);
             // (a) The arrow's destination is the checked choice.
             AssertChosen(diagramChoice, tableChoice, "Right on the graph switcher moved focus to Diagram without checking it.");
             // (b) The view itself switched: the diagram replaces the table,
@@ -548,26 +548,6 @@ public sealed partial class ShellAccessibilityTests
     /// navigation runs inside the key's own input processing, which
     /// <see cref="PressKey"/> already waits out; the settle absorbs the UIA
     /// focus event's delivery before the focused element is read.</summary>
-    /// <summary>An arrow as the keyboard's own arrow key — its scan code
-    /// with the extended flag, as <see cref="PressDownArrow"/> does. A
-    /// virtual-key press goes out without that flag, which a running screen
-    /// reader reads as a numpad key and consumes as a review-cursor gesture
-    /// before the app sees it (measured: with NVDA running every
-    /// virtual-key arrow here was swallowed).</summary>
-    private static void PressArrow(VirtualKeyShort arrow)
-    {
-        ushort scanCode = arrow switch
-        {
-            VirtualKeyShort.UP => 0x48,
-            VirtualKeyShort.DOWN => 0x50,
-            VirtualKeyShort.LEFT => 0x4B,
-            VirtualKeyShort.RIGHT => 0x4D,
-            _ => throw new ArgumentOutOfRangeException(nameof(arrow), arrow, "not an arrow key"),
-        };
-        Keyboard.TypeScanCode(scanCode, true);
-        Wait.UntilInputIsProcessed(TimeSpan.FromMilliseconds(250));
-    }
-
     private static void AssertFocusStays(UIA3Automation automation, AutomationElement element, string message)
     {
         Thread.Sleep(300);

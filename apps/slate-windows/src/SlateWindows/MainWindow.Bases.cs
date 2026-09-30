@@ -207,8 +207,11 @@ public partial class MainWindow
                 }
 
                 // R-5 (#1247; codex round 4): a list, tree or grid token
-                // restores onto its row or cell, never the bare container.
-                if (token is UIElement { IsVisible: true } element && SelectorFocus.LandOnStop(element))
+                // restores onto its row or cell, never the bare container —
+                // and a DEAD token (a Queries row the save's refresh rebuilt,
+                // codex PR 4b r1 F3) onto the rows it was in, else the
+                // scopes it was in (LandToken), before the editor.
+                if (LandToken(token))
                 {
                     return;
                 }

@@ -570,6 +570,22 @@ pub enum CanvasFilterState {
     Active { matched: u32, total: u32 },
 }
 
+/// A shell sidebar the keyboard resize commands step (W7-7 PR 4b,
+/// #1247: the splitters are out of the Tab order, so Widen/Narrow Files
+/// Sidebar and Widen/Narrow Right Pane are the keyboard's resize route).
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum ShellSidebar {
+    Files,
+    RightPane,
+}
+
+/// A sidebar width limit a resize step was refused at.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum SidebarWidthLimit {
+    Narrowest,
+    Widest,
+}
+
 /// Why a rescan of the open vault ran (W7-7 PR 7, #1252; R-9). Hosts
 /// own the trigger and the gate — an explicit Refresh always speaks its
 /// outcome, a foreground rescan only when something changed or the scan
@@ -634,6 +650,14 @@ pub enum A11yEvent {
     NoSplitPanesToResize,
     PaneResized {
         percent: u32,
+    },
+    /// A sidebar resize command stepped the width, or — `limit` set — was
+    /// refused because the sidebar is already at that limit (W7-7 PR 4b).
+    /// `width` is the sidebar's width in device-independent pixels.
+    SidebarResized {
+        sidebar: ShellSidebar,
+        width: u32,
+        limit: Option<SidebarWidthLimit>,
     },
     GraphOpensSinglePane,
     RightPaneShown,
@@ -1886,6 +1910,25 @@ impl A11yEvent {
             },
             NoSplitPanesToResize => "No split panes to resize.".to_owned(),
             PaneResized { percent } => format!("Pane resized, {percent} percent."),
+            SidebarResized {
+                sidebar,
+                width,
+                limit,
+            } => {
+                let name = match sidebar {
+                    ShellSidebar::Files => "Files sidebar",
+                    ShellSidebar::RightPane => "Right pane",
+                };
+                match limit {
+                    None => format!("{name} resized, {width} pixels."),
+                    Some(SidebarWidthLimit::Narrowest) => {
+                        format!("{name} at its narrowest, {width} pixels.")
+                    }
+                    Some(SidebarWidthLimit::Widest) => {
+                        format!("{name} at its widest, {width} pixels.")
+                    }
+                }
+            }
             GraphOpensSinglePane => {
                 "The graph opens in a single pane. Split from a note instead.".to_owned()
             }
@@ -3913,6 +3956,21 @@ pub fn corpus() -> Vec<A11yEvent> {
         },
         NoSplitPanesToResize,
         PaneResized { percent: 60 },
+        SidebarResized {
+            sidebar: ShellSidebar::Files,
+            width: 310,
+            limit: None,
+        },
+        SidebarResized {
+            sidebar: ShellSidebar::RightPane,
+            width: 200,
+            limit: Some(SidebarWidthLimit::Narrowest),
+        },
+        SidebarResized {
+            sidebar: ShellSidebar::Files,
+            width: 600,
+            limit: Some(SidebarWidthLimit::Widest),
+        },
         GraphOpensSinglePane,
         RightPaneShown,
         RightPaneHidden,
@@ -6539,6 +6597,9 @@ mod tests {
             (Medium, "Closed draft.md."),
             (Medium, "No split panes to resize."),
             (Medium, "Pane resized, 60 percent."),
+            (Medium, "Files sidebar resized, 310 pixels."),
+            (Medium, "Right pane at its narrowest, 200 pixels."),
+            (Medium, "Files sidebar at its widest, 600 pixels."),
             (
                 Medium,
                 "The graph opens in a single pane. Split from a note instead.",
@@ -8044,8 +8105,10 @@ mod tests {
             // W7-7 (#1249, #1251): NoteSaveConflict and the six
             // popover/sheet outcome events, 206 → 213; W7-7 #1250
             // added SidebarFilterCleared, 214; W7-7 PR 7 (#1252):
-            // VaultRescanFinished and VaultRescanIncomplete, 214 → 216.
-            216,
+            // VaultRescanFinished and VaultRescanIncomplete, 214 → 216;
+            // W7-7 PR 4b (#1247) the keyboard sidebar resize,
+            // SidebarResized, 217.
+            217,
             "A11yEvent's top-level variant count moved; uniffi caps an enum at 256"
         );
     }
