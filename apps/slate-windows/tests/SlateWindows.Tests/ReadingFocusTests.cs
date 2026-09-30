@@ -3963,8 +3963,18 @@ public sealed class ReadingFocusTests
             {
                 _canvasLoadGate.SetResult();
                 PumpedDispatcher.PumpUntilDrained(canvas.WhenAllWorkDrained());
+                // The load's tracked work ends on the pool once it has POSTED
+                // its publish (StartWork), so the drain can complete before
+                // the publish has run here — a loaded runner's yield between
+                // two frames hands the pool the core (#1318's CI). One frame
+                // then ran the publish, and the refusal's fall-through it
+                // posts at Background queued behind that frame's own close:
+                // the fact read the ring before the press resumed. Wait on
+                // the publish itself, then drain what it queued.
+                Assert.True(
+                    PumpedDispatcher.PumpUntil(() => canvas.State == CanvasLoadState.Ready),
+                    "the canvas load never published");
                 PumpedDispatcher.Drain();
-                Assert.Equal(CanvasLoadState.Ready, canvas.State);
                 return;
             }
 

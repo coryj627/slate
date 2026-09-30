@@ -693,6 +693,21 @@ Witnesses: `ReadingFocusTests.TheGuardLeavesAHeldEditorLandingToSeat`, `TheGuard
 
 Mutations, each killed: the unconditional fallback after a Pending landing; the park counted as a departure; the launch queued at Input, and at Background; a tree's row read as a bare container; the slot's visibility-only rule; and, rerun on the new code, a park that counts the stranded holder, a held landing withdrawn, a ring-owned guard hold, and the modal check dropped.
 
+**Merge with main f7458426 and #1318's second CI run (2026-09-29; #1302, PR 3).** Three conflicts, kept both ways:
+- The dashboard's section list is PR 3's sibling-named list over its rows. 4b's landing and reader capture find the row among its items.
+- The W-C matrix was merged cell by cell.
+- This contract has PR 3's OD-9 ahead of OD-11 and OD-12.
+
+The focus manifest follows PR 3's host types and witnesses `AccessibleDataGrid.Clear`. 4b's landings on the graph table resolve through the table's one `LandingRow`: both the grid's own landing (`FocusProjection`) and the surface's seats (`SeatProjection`) take it. `ItemContainerNameCensus` and `EveryShellJourneyRunsTheItemNameCensus` pass. The CI run on b886cdfe failed two facts, and neither is 4b's:
+- `ReadingFocusTests.ATerminalSeatThatRefusesFocusIsARefusal` (the canvas onboarding, after its load) read `[Editor]` for `[Editor, RightPaneContent]`, in 154 ms. PR 8's fixture raced, and it is the same on main.
+  - The fixture's canvas arrival pumped until the load's tracked work drained, but that work ends on the pool once it has posted its publish.
+  - A yield on a loaded runner can hand the pool the core between two of the fixture's frames. The pool then posts and finishes there, and the wait ends with the publish still queued.
+  - The one frame after the wait ran the publish. The publish posts the refusal's fall-through at Background, so it queued behind that frame's own close.
+  - The fact then read the ring before the press resumed.
+
+  Letting the pool finish before the first frame fails the old fixture every time: 4 of 4 on 4b and 3 of 3 on main. The fixture now waits on the publish itself, then drains what it queued. The new fixture passes that ordering, and passed 21 of 21 runs on two cores contended by four spinners. The assembly runs its classes one at a time, so nothing else was in flight.
+- `ReadingViewTests.SyntheticAttributeWalkSurvivesHugeDocuments` overran its 60 s STA bound, at 63 s. None of 4b's code is on its path: the fact builds a reading surface and its peer with no window, shell or focus change. The branch's one reading-path change, `ClearForModelSwitch`, does not run. Locally it takes 10, 11 and 11 s on 4b, and 11, 10 and 10 s on main. The time is the synthetic style walk over 10,050 paragraphs: about 4 s for the whole range's style name, and about 3.2 s for each `FindAttribute`. That CI app lane took 18 min 17 s, against 13–15 min on main's last three runs. The bound stays at 60 s; raising it is the owner's call.
+
 ### PR 5 — #1248 sheet keyboard fence
 
 Branch `claude/w7-7-pr5-sheet-fence` (base 937dd3dd). Delivered: `SheetKeyboardFence` on all sixteen focus-scope overlays — one edge command binding per Tab command that refuses `TabForward`/`TabBackward` only when nothing inside answered and lets the key keep routing, plus a guard on a direct `Execute`; no key hook (controls that own Tab keep it; an IME-claimed Tab stays with the IME); `SheetFenceCensus` requiring the fence and `Cycle` in the element and style branches; contract 30 T4 amended. Follow-up #1259 (Ctrl+Z/Y/X reach the note behind a sheet).
