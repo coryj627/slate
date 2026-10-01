@@ -33,6 +33,12 @@ comparisons; a green result from an earlier revision is not final acceptance.
   the original physical arrow/reveal journey passes. Preserve peer identity
   and virtualization. The former hidden-board unit helper reset its cache
   manually, masking the missing production seam.
+- Check citation-sheet return focus through the live, exact logical row after
+  an unchanged-data republish. A real shell witness proves that the old provider
+  correctly retires while production Escape focuses the replacement selected
+  row. Retain the ten-second deadline and actual focus requirement; unrelated
+  errors and duplicate matches still fail. This lifecycle witness does not
+  reconstruct the exact publication schedule of the earlier hosted failure.
 - Preserve the structural-batch failure, but expose its original panic payload
   despite MathCAT's global silent panic hook. The original CI failure has not
   been reproduced or classified as a flake.

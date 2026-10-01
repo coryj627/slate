@@ -21,6 +21,7 @@ namespace SlateWindows.AccessibilityTests;
 public sealed partial class ShellAccessibilityTests
 {
     private const int AutomationTimeoutHResult = unchecked((int)0x80131505);
+    private const int UnavailableAutomationElementHResult = unchecked((int)0x80040201);
 
     [Fact]
     public void MainWindowDiscovery_RetriesTransientComTimeouts()
@@ -2325,6 +2326,59 @@ public sealed partial class ShellAccessibilityTests
         throw new Xunit.Sdk.XunitException($"{message} {FocusDiagnosis()}");
     }
 
+    private static AutomationElement AssertEventuallyFocused(
+        Func<AutomationElement?> resolveCurrentElement,
+        string message)
+    {
+        AutomationElement? focused = null;
+        int unavailableReads = 0;
+        bool restored = SpinWait.SpinUntil(
+            () =>
+            {
+                try
+                {
+                    AutomationElement? current = resolveCurrentElement();
+                    if (current?.Properties.HasKeyboardFocus.Value == true)
+                    {
+                        focused = current;
+                        return true;
+                    }
+                }
+                catch (Exception exception) when (IsUnavailableAutomationElement(exception))
+                {
+                    // A publish can retire a container between discovery and
+                    // the property read. Re-find the same logical target; do
+                    // not focus it or accept a different row as the landing.
+                    unavailableReads++;
+                }
+
+                return false;
+            },
+            TimeSpan.FromSeconds(10));
+
+        if (!restored)
+        {
+            throw new Xunit.Sdk.XunitException(
+                $"{message} {FocusDiagnosis()} Unavailable provider reads: {unavailableReads}.");
+        }
+
+        return focused!;
+    }
+
+    private static bool IsUnavailableAutomationElement(Exception exception)
+    {
+        for (Exception? current = exception; current is not null; current = current.InnerException)
+        {
+            if (current.HResult == UnavailableAutomationElementHResult
+                || current is FlaUI.Core.Exceptions.ElementNotAvailableException)
+            {
+                return true;
+            }
+        }
+
+        return false;
+    }
+
     /// <summary>
     /// Who owns the foreground, and whether it is this test's app — the
     /// difference between an environmental failure and a real one.
@@ -3325,6 +3379,7 @@ public sealed partial class ShellAccessibilityTests
             resolvedRow = republishedRow;
 
             // ---- Details sheet: in-window, and focus returns -------
+            string resolvedCitationName = resolvedRow!.Properties.Name.Value;
             resolvedRow!.Patterns.SelectionItem.Pattern.Select();
             resolvedRow.Focus();
             // The first witnessed step: once the launch has settled (contract
@@ -3475,8 +3530,19 @@ public sealed partial class ShellAccessibilityTests
 
             PressKey(VirtualKeyShort.ESCAPE);
             AssertElementDisappears(window, automation, "CitationDetailsSheet");
-            AssertEventuallyFocused(
-                resolvedRow, "Escape did not return focus to the citation row.");
+            // Citations republish into new containers, including while a
+            // details sheet is open. Assert the same logical row's landing
+            // through its live provider rather than requiring the old proxy
+            // to survive that legitimate lifecycle.
+            resolvedRow = AssertEventuallyFocused(
+                () => window
+                    .FindFirstDescendant(automation.ConditionFactory.ByAutomationId("PanelCitationsList"))?
+                    .FindAllDescendants(automation.ConditionFactory.ByControlType(ControlType.ListItem))
+                    .SingleOrDefault(item => string.Equals(
+                        item.Properties.Name.ValueOrDefault,
+                        resolvedCitationName,
+                        StringComparison.Ordinal)),
+                "Escape did not return focus to the same citation row.");
 
             // The Jump menu item after S11: its enable condition IS the
             // details sheet (CitationDetails non-null — the Windows
