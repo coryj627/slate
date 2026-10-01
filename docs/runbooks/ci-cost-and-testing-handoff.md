@@ -75,7 +75,7 @@ isolate a shared custom tag.
      cd apps/slate-mac
      SLATE_LINK_PROFILE=debug DYLD_LIBRARY_PATH="$repo_root/target/debug" swift test --parallel
    )
-   make swift-cli
+   PROFILE=debug make swift-cli
    git status --short
    ```
 

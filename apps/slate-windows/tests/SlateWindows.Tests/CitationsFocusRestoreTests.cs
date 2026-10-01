@@ -1,7 +1,6 @@
 // Copyright (C) 2026 Cory Joseph
 // SPDX-License-Identifier: AGPL-3.0-or-later
 
-using System.Reflection;
 using System.Runtime.InteropServices;
 using System.Windows;
 using System.Windows.Automation;
@@ -59,12 +58,11 @@ public sealed class CitationsFocusRestoreTests
         Assert.Same(oldContainer, Keyboard.FocusedElement);
         host.Settle();
 
-        // Connect the actual WPF root as WM_GETOBJECT does for a client.
-        // ProviderFromPeer then returns its real connected proxy, rather
-        // than a newly constructed peer whose initial validity is unknown.
+        // Connect the actual WPF root through WM_GETOBJECT, then walk the
+        // list's exposed logical items and request its public Selection
+        // provider, as a client does before reading the selected row.
         _ = SendMessage(new WindowInteropHelper(host.Shell).Handle, 0x003D, IntPtr.Zero, new IntPtr(-25));
-        AutomationPeer oldPeer = UIElementAutomationPeer.CreatePeerForElement(oldContainer);
-        IRawElementProviderSimple oldProvider = ProviderOf(oldPeer);
+        IRawElementProviderSimple oldProvider = SelectedProviderOf(list, oldRow, oldContainer);
         int[] oldRuntimeId = Assert.IsAssignableFrom<IRawElementProviderFragment>(oldProvider).GetRuntimeId();
         Assert.True((bool)oldProvider.GetPropertyValue(AutomationElement.HasKeyboardFocusProperty.Id));
 
@@ -91,7 +89,7 @@ public sealed class CitationsFocusRestoreTests
         Assert.Null(PresentationSource.FromVisual(oldContainer));
         Assert.Same(details, workspace.CitationDetails);
         Assert.Same(close, Keyboard.FocusedElement);
-        IRawElementProviderSimple freshProvider = ProviderOf(UIElementAutomationPeer.CreatePeerForElement(freshContainer));
+        IRawElementProviderSimple freshProvider = SelectedProviderOf(list, freshRow, freshContainer);
         int[] freshRuntimeId = Assert.IsAssignableFrom<IRawElementProviderFragment>(freshProvider).GetRuntimeId();
         Assert.False(oldRuntimeId.SequenceEqual(freshRuntimeId), "the rebuilt row retained its old provider identity.");
         AssertRetired(oldProvider);
@@ -215,11 +213,22 @@ public sealed class CitationsFocusRestoreTests
         host.Settle();
     }
 
-    private static IRawElementProviderSimple ProviderOf(AutomationPeer peer)
+    private static IRawElementProviderSimple SelectedProviderOf(
+        ListBox list, CitationRowViewModel row, ListBoxItem container)
     {
-        MethodInfo factory = typeof(AutomationPeer).GetMethod("ProviderFromPeer", BindingFlags.NonPublic | BindingFlags.Instance)
-            ?? throw new InvalidOperationException("WPF's connected-provider factory is gone.");
-        return Assert.IsAssignableFrom<IRawElementProviderSimple>(factory.Invoke(peer, [peer]));
+        // A ListBox exposes logical ItemAutomationPeers, with its container
+        // peers aggregated into them. Walk the actual list as a client does
+        // before requesting Selection, so the setup does not depend on an
+        // external client having initialized the container's EventsSource.
+        var listPeer = Assert.IsType<ListBoxAutomationPeer>(UIElementAutomationPeer.CreatePeerForElement(list));
+        ItemAutomationPeer itemPeer = Assert.Single(
+            (listPeer.GetChildren() ?? []).OfType<ItemAutomationPeer>(),
+            peer => ReferenceEquals(peer.Item, row));
+        AutomationPeer containerPeer = UIElementAutomationPeer.CreatePeerForElement(container);
+        Assert.Same(itemPeer, containerPeer.EventsSource);
+        Assert.Same(row, list.SelectedItem);
+        var selection = Assert.IsAssignableFrom<ISelectionProvider>(listPeer.GetPattern(PatternInterface.Selection));
+        return Assert.IsAssignableFrom<IRawElementProviderSimple>(Assert.Single(selection.GetSelection()));
     }
 
     private static void AssertRetired(IRawElementProviderSimple provider)
