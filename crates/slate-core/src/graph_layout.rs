@@ -506,17 +506,38 @@ impl LayoutEngine {
     fn repulsion_exact(&self, disp: &mut [[f64; 2]]) {
         let c_r = lerp(0.2, 5.0, self.forces.repel);
         let kk = self.k * self.k;
-        let n = self.positions.len();
-        for a in 0..n {
-            for b in (a + 1)..n {
-                let (dx, dy, d) = self.delta(a, b);
-                let f = c_r * kk / d;
-                let (ux, uy) = (dx / d, dy / d);
-                disp[a][0] += ux * f;
-                disp[a][1] += uy * f;
-                disp[b][0] -= ux * f;
-                disp[b][1] -= uy * f;
+        let strength = c_r * kk;
+        assert_eq!(self.positions.len(), disp.len());
+        for (a, &[ax, ay]) in self.positions.iter().enumerate() {
+            // Disjoint slices keep the current node's sum in registers while
+            // updating each other node once. The pair and addition orders
+            // remain exactly the key-sorted orders of the indexed loop.
+            let (head, tail) = disp.split_at_mut(a + 1);
+            let mut current = head[a];
+            for (offset, (&[bx, by], other)) in
+                self.positions[(a + 1)..].iter().zip(tail).enumerate()
+            {
+                let dx = ax - bx;
+                let dy = ay - by;
+                let distance_squared = dx * dx + dy * dy;
+                let (fx, fy) = if distance_squared < 4.0 * EPS * EPS {
+                    // Keep the original seeded separation and sqrt-based
+                    // epsilon decision, including pairs at the threshold.
+                    let (dx, dy, d) = self.delta(a, a + 1 + offset);
+                    let f = strength / d;
+                    ((dx / d) * f, (dy / d) * f)
+                } else {
+                    // (delta / d) * (strength / d) = delta * strength / d²:
+                    // one division and no square root for ordinary pairs.
+                    let scale = strength / distance_squared;
+                    (dx * scale, dy * scale)
+                };
+                current[0] += fx;
+                current[1] += fy;
+                other[0] -= fx;
+                other[1] -= fy;
             }
+            head[a] = current;
         }
     }
 
@@ -1028,6 +1049,78 @@ mod tests {
     }
 
     // ---- properties -----------------------------------------------------
+
+    #[test]
+    fn exact_repulsion_matches_the_scalar_distance_reference() {
+        // Keep the former sqrt/unit-vector formula as an independent
+        // reference. Cover the tier-A ceiling, slider extremes, seeds,
+        // coincident points and both sides of the epsilon boundary.
+        for (n, separation) in [
+            (2, [0.0, 0.0]),
+            (2, [(2.0 * EPS).next_down(), 0.0]),
+            (2, [(2.0 * EPS).next_up(), 0.0]),
+            (2, [f64::sqrt(2.0) * EPS, f64::sqrt(2.0) * EPS]),
+            (17, [0.0, 0.0]),
+            (1_500, [0.0, 0.0]),
+        ] {
+            let graph = ring_graph(n);
+            for seed in [0, 1, u64::MAX] {
+                for slider in [0.0, 0.5, 1.0] {
+                    let mut engine = LayoutEngine::new(
+                        &graph,
+                        &GraphFilter::default(),
+                        LayoutForces {
+                            repel: slider,
+                            link_distance: slider,
+                            ..LayoutForces::default()
+                        },
+                        LayoutConfig {
+                            seed,
+                            ..LayoutConfig::default()
+                        },
+                    );
+                    engine.positions[0] = [0.0, 0.0];
+                    engine.positions[1] = separation;
+                    if n >= 5 {
+                        engine.positions[2] = [EPS.next_down(), 0.0];
+                        engine.positions[3] = [EPS, 0.0];
+                        engine.positions[4] = [EPS.next_up(), 0.0];
+                    }
+                    let mut expected = vec![[1.25, -7.5]; n];
+                    let mut absolute_terms = vec![[1.25, 7.5]; n];
+                    let strength = lerp(0.2, 5.0, engine.forces.repel) * (engine.k * engine.k);
+                    for a in 0..n {
+                        for b in (a + 1)..n {
+                            let (dx, dy, distance) = engine.delta(a, b);
+                            let force = strength / distance;
+                            let pair = [(dx / distance) * force, (dy / distance) * force];
+                            for axis in 0..2 {
+                                expected[a][axis] += pair[axis];
+                                expected[b][axis] -= pair[axis];
+                                absolute_terms[a][axis] += pair[axis].abs();
+                                absolute_terms[b][axis] += pair[axis].abs();
+                            }
+                        }
+                    }
+                    let mut actual = vec![[1.25, -7.5]; n];
+                    engine.repulsion_exact(&mut actual);
+                    for node in 0..n {
+                        for axis in 0..2 {
+                            // Bound rounding by the contributing magnitudes,
+                            // including cancellation, rather than relative to
+                            // a possibly zero net force. Pair/sum order stays
+                            // fixed; only the distance formula is rearranged.
+                            let tolerance = 16.0 * f64::EPSILON * absolute_terms[node][axis];
+                            assert!(
+                                (actual[node][axis] - expected[node][axis]).abs() <= tolerance,
+                                "force drift: n={n}, separation={separation:?}, seed={seed}, slider={slider}, node={node}, axis={axis}"
+                            );
+                        }
+                    }
+                }
+            }
+        }
+    }
 
     #[test]
     fn positions_are_finite_bounded_and_centered() {

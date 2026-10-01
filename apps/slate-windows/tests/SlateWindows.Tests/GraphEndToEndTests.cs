@@ -959,11 +959,13 @@ public sealed class GraphEndToEndTests
         Assert.True(diagram.SelectNode(diagram.VisibleIds[Notes / 2], announce: false));
 
         // The warm tick through the model's admission gate (budget 100 ms).
+        uint settledIteration = model.LastFrame!.Iteration;
         clock.Restart();
         LayoutFrame? frame = model.WithSession<LayoutFrame?>(session => session.Tick(GraphLayoutDriver.IterationsPerStep), null);
         clock.Stop();
         Assert.NotNull(frame);
         double tickMs = clock.Elapsed.TotalMilliseconds;
+        Console.WriteLine($"BENCH graph warm tick {Notes} notes: {tickMs:F1} ms; iterations {frame.Iteration - settledIteration}; generation {frame.Generation}");
         Assert.True(tickMs < 100, $"the warm tick took {tickMs:F1} ms; the budget is 100 ms");
 
         // The first rebuild (budget 500 ms): the epoch cleared, the topology
