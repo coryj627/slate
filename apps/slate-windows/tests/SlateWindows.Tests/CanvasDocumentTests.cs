@@ -1716,7 +1716,7 @@ public sealed class CanvasDocumentTests : IDisposable
         Assert.Equal(
             SlateUniffiMethods.A11yRender(new A11yEvent.Canvas(
                 new CanvasA11yEvent.CanvasEmptyOnboarding(
-                    "Control Alt N", "Control Shift P"))).Text,
+                    "Control Alt T", "Control Shift P"))).Text,
             document.EmptyOnboardingText);
         Assert.Contains(
             "create your first card",

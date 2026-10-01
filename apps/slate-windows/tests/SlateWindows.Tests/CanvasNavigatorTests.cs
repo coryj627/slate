@@ -6358,7 +6358,8 @@ public sealed partial class CanvasNavigatorTests : IDisposable
     /// <summary>§E TE-11 (ED-1/E19): the canvas-scoped history
     /// chords DELIVER - Ctrl+Z reaches the undo verb through the
     /// ladder (the empty stack's spoken arm is the observable), and
-    /// Ctrl+Alt+N reaches New Card (the outline grows).</summary>
+    /// Ctrl+Alt+T and its legacy Ctrl+Alt+N alias reach New Card
+    /// (the outline grows once for each press).</summary>
     [Fact]
     public void HistoryAndNewCardChordsDeliverThroughTheLadder()
     {
@@ -6379,8 +6380,11 @@ public sealed partial class CanvasNavigatorTests : IDisposable
 
         int before = document.Outline.Count;
         Assert.True(document.Navigator.HandleKey(
-            Key.N, ModifierKeys.Control | ModifierKeys.Alt, presenter));
+            Key.T, ModifierKeys.Control | ModifierKeys.Alt, presenter));
         Assert.Equal(before + 1, document.Outline.Count);
+        Assert.True(document.Navigator.HandleKey(
+            Key.N, ModifierKeys.Control | ModifierKeys.Alt, presenter));
+        Assert.Equal(before + 2, document.Outline.Count);
         document.Shutdown();
     }
 
