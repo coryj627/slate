@@ -5534,27 +5534,191 @@ public sealed class CanvasDocumentTests : IDisposable
         document.Load();
         var surface = new CanvasSurfaceView { Model = document };
         using HostedWindow host = Host(surface);
-        host.UpdateLayout();
-        PumpUntil(() => surface.VisualForTests.Engine.Current is not null);
-        // The platform caches children until the cache is reset, so
-        // every read here resets first — production tree walks do the
-        // same through the peer's invalidation.
-        var peer = new CanvasRendererAutomationPeer(surface.VisualForTests);
-        System.Collections.Generic.List<
-            System.Windows.Automation.Peers.AutomationPeer>? Children()
+        try
         {
-            peer.ResetChildrenCache();
-            return peer.GetChildren();
+            host.UpdateLayout();
+            PumpUntil(() => surface.VisualForTests.Engine.Current is not null);
+            var peer = Assert.IsType<CanvasRendererAutomationPeer>(
+                UIElementAutomationPeer.CreatePeerForElement(surface.VisualForTests));
+            Assert.Empty(peer.GetChildren() ?? []);
+
+            document.ShowSurface(CanvasSurfaceKind.Visual);
+            host.UpdateLayout();
+            PumpUntil(() => surface.VisualForTests.Engine.Current is { } state
+                && state.Viewport.SameGeometry(surface.VisualForTests.Engine.CommittedViewport)
+                && state.Topology.Placements.Values.Any(placement => placement.Cell == CanvasPeerCell.Materialized));
+            PumpDispatcher();
+            Assert.NotEmpty(peer.GetChildren() ?? []);
         }
-
-        Assert.Empty(Children() ?? []);
-
-        document.ShowSurface(CanvasSurfaceKind.Visual);
-        host.UpdateLayout();
-        PumpUntil(() => (Children()?.Count ?? 0) > 0);
-        Assert.NotEmpty(Children() ?? []);
-        document.Shutdown();
+        finally
+        {
+            surface.VisualForTests.Shutdown();
+            document.Shutdown();
+        }
     });
+
+    /// <summary>The child's own Visibility still changes while its
+    /// ancestor is hidden, even though its effective IsVisible stays false.
+    /// The board peer's child policy follows that own Visibility.</summary>
+    [Fact]
+    public void TheBoardsCachedChildrenFollowOwnVisibilityUnderAHiddenAncestor() => RunSta(() =>
+    {
+        CanvasDocumentViewModel document = NewDocument("board.canvas");
+        document.Load();
+        var renderer = new CanvasRendererView { Model = document };
+        var ancestor = new Border { Child = renderer };
+        using HostedWindow host = Host(ancestor);
+        try
+        {
+            PumpUntil(() => renderer.Engine.Current is { } state
+                && state.Viewport.SameGeometry(renderer.Engine.CommittedViewport)
+                && state.Topology.Placements.Values.Any(placement => placement.Cell == CanvasPeerCell.Materialized));
+            var peer = Assert.IsType<CanvasRendererAutomationPeer>(
+                UIElementAutomationPeer.CreatePeerForElement(renderer));
+            AutomationPeer[] cards = [.. peer.GetChildren() ?? []];
+            Assert.NotEmpty(cards);
+
+            ancestor.Visibility = Visibility.Collapsed;
+            host.UpdateLayout();
+            Assert.False(renderer.IsVisible);
+            Assert.Equal(Visibility.Visible, renderer.Visibility);
+            Assert.Equal(cards, peer.GetChildren() ?? []);
+            CanvasPresentationState installed = Assert.IsType<CanvasPresentationState>(renderer.Engine.Current);
+
+            renderer.Visibility = Visibility.Collapsed;
+            Assert.False(renderer.IsVisible);
+            Assert.Empty(peer.GetChildren() ?? []);
+            Assert.Same(installed, renderer.Engine.Current);
+            renderer.Visibility = Visibility.Visible;
+            Assert.False(renderer.IsVisible);
+            Assert.Equal(cards, peer.GetChildren() ?? []);
+            Assert.Same(installed, renderer.Engine.Current);
+
+            ancestor.Visibility = Visibility.Visible;
+            host.UpdateLayout();
+            Assert.True(renderer.IsVisible);
+            Assert.Equal(cards, peer.GetChildren() ?? []);
+        }
+        finally
+        {
+            renderer.Shutdown();
+            document.Shutdown();
+        }
+    });
+
+    /// <summary>A card reached by the board's arrow must have a connected
+    /// selection provider even when the client's first child walk happened
+    /// before that card materialized. This uses WPF's real cached peer and
+    /// connected window root, without resetting the client's child cache.</summary>
+    [Fact]
+    public void ANewlyMaterializedSelectedCardRemainsReachableThroughTheBoardProvider() => RunSta(() =>
+    {
+        File.WriteAllText(
+            Path.Combine(_fixture.Root, "far-board.canvas"),
+            """
+            {"nodes":[
+              {"id":"question","type":"text","text":"Core question","x":0,"y":0,"width":240,"height":140},
+              {"id":"evidence","type":"text","text":"Evidence so far","x":5000,"y":0,"width":220,"height":140}
+            ],"edges":[]}
+            """);
+        CanvasDocumentViewModel document = NewDocument("far-board.canvas");
+        var surface = new CanvasSurfaceView { Model = document };
+        CanvasRendererView renderer = surface.VisualForTests;
+        try
+        {
+            document.Load();
+            document.ShowSurface(CanvasSurfaceKind.Visual);
+            // Derive the first near-card state before showing the window.
+            // A desktop client may otherwise cache the loading/zero-sized
+            // board before this witness can establish its connected seed.
+            surface.Measure(new Size(900, 700));
+            surface.Arrange(new Rect(0, 0, 900, 700));
+            surface.UpdateLayout();
+            document.SelectNode("question");
+            PumpUntil(() => renderer.Engine.Current is { Selection: "question" } state
+                && state.Viewport.SameGeometry(renderer.Engine.CommittedViewport)
+                && state.Topology.Placements.ContainsKey(CanvasPeerKey.Card("question"))
+                && !state.Topology.Placements.ContainsKey(CanvasPeerKey.Card("evidence")));
+            using HostedWindow host = Host(surface);
+            host.UpdateLayout();
+            PumpUntil(() => renderer.Engine.Current is { Selection: "question" } state
+                && state.Viewport.SameGeometry(renderer.Engine.CommittedViewport)
+                && state.Topology.Placements.ContainsKey(CanvasPeerKey.Card("question"))
+                && !state.Topology.Placements.ContainsKey(CanvasPeerKey.Card("evidence")));
+
+            // A UIA client's WM_GETOBJECT connects WPF's actual root and
+            // peer. A freshly constructed, unconnected test peer could
+            // return null for every provider and would prove nothing.
+            _ = BoardAutomationClient.SendMessage(
+                new System.Windows.Interop.WindowInteropHelper(
+                    Window.GetWindow(renderer) ?? throw new InvalidOperationException("the renderer is not hosted.")).Handle,
+                0x003D, IntPtr.Zero, new IntPtr(-25));
+            var board = Assert.IsType<CanvasRendererAutomationPeer>(
+                UIElementAutomationPeer.CreatePeerForElement(renderer));
+            CanvasCardAutomationPeer question = Assert.Single(
+                (board.GetChildren() ?? []).OfType<CanvasCardAutomationPeer>());
+            Assert.Equal("question", question.Key.Id);
+            var selection = (ISelectionProvider)board;
+            Assert.NotNull(Assert.Single(selection.GetSelection()));
+
+            Assert.True(renderer.Focus(), "premise: the board refused focus.");
+            Assert.True(surface.ProjectionHasFocus, "premise: the board does not hold the arrows.");
+            var down = new System.Windows.Input.KeyEventArgs(
+                System.Windows.Input.Keyboard.PrimaryDevice,
+                PresentationSource.FromVisual(renderer)
+                    ?? throw new InvalidOperationException("the renderer has no presentation source."),
+                0, System.Windows.Input.Key.Down)
+            {
+                RoutedEvent = System.Windows.Input.Keyboard.PreviewKeyDownEvent,
+            };
+            renderer.RaiseEvent(down);
+            Assert.True(down.Handled, "the board did not consume Down through its real key route.");
+            PumpUntil(() => renderer.Engine.Current is { Selection: "evidence" } state
+                && state.Viewport.SameGeometry(renderer.Engine.CommittedViewport)
+                && state.Topology.Placements.TryGetValue(CanvasPeerKey.Card("evidence"), out var placement)
+                && placement.Cell == CanvasPeerCell.Materialized);
+            PumpDispatcher();
+
+            Assert.Equal("evidence", document.Selection.Selected);
+            Assert.True(
+                Assert.Single(selection.GetSelection()) is not null,
+                "the installed selection is evidence, but WPF could not connect its provider "
+                + "through the board's earlier cached child list.");
+            CanvasCardAutomationPeer evidence = Assert.Single(
+                (board.GetChildren() ?? []).OfType<CanvasCardAutomationPeer>());
+            Assert.Equal("evidence", evidence.Key.Id);
+
+            // Visibility changes must refresh the same actual board peer,
+            // and a returning, materialized card must keep its identity.
+            document.ShowSurface(CanvasSurfaceKind.Outline);
+            host.UpdateLayout();
+            PumpDispatcher();
+            Assert.Empty(board.GetChildren() ?? []);
+            document.ShowSurface(CanvasSurfaceKind.Visual);
+            host.UpdateLayout();
+            PumpDispatcher();
+            Assert.Same(evidence, Assert.Single(
+                (board.GetChildren() ?? []).OfType<CanvasCardAutomationPeer>()));
+            renderer.Engine.CommitViewport(view => view.PannedTo(0, 0));
+            PumpUntil(() => renderer.Engine.Current!.Viewport.SameGeometry(renderer.Engine.CommittedViewport));
+            PumpDispatcher();
+            Assert.Same(question, Assert.Single(
+                (board.GetChildren() ?? []).OfType<CanvasCardAutomationPeer>()));
+            Assert.Null(evidence.GetPattern(PatternInterface.SelectionItem));
+            Assert.NotNull(evidence.GetPattern(PatternInterface.VirtualizedItem));
+        }
+        finally
+        {
+            renderer.Shutdown();
+            document.Shutdown();
+        }
+    });
+
+    private static class BoardAutomationClient
+    {
+        [System.Runtime.InteropServices.DllImport("user32.dll", CharSet = System.Runtime.InteropServices.CharSet.Unicode)]
+        internal static extern IntPtr SendMessage(IntPtr window, int message, IntPtr wParam, IntPtr lParam);
+    }
 
     /// <summary>
     /// Contract 34 D5 (#1276): ONE name namespace across the board — the

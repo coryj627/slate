@@ -27,6 +27,12 @@ comparisons; a green result from an earlier revision is not final acceptance.
   installed desktop restart shortcut. Keep the Mac chord, Reading table
   navigation and Create Connected Card bindings; reserve the old chord in the
   physical authoring witness rather than disabling the screen reader.
+- Refresh the Canvas board's existing WPF child-peer cache after a winning
+  installed state and its own visibility changes. Connected-provider and
+  hidden-ancestor regressions protect these boundaries without manual resets;
+  the original physical arrow/reveal journey passes. Preserve peer identity
+  and virtualization. The former hidden-board unit helper reset its cache
+  manually, masking the missing production seam.
 - Preserve the structural-batch failure, but expose its original panic payload
   despite MathCAT's global silent panic hook. The original CI failure has not
   been reproduced or classified as a flake.

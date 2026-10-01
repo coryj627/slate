@@ -126,6 +126,15 @@ internal sealed class CanvasRendererView : FrameworkElement
     /// verb acts on the pane it belongs to).</summary>
     internal CanvasPresentationEngine Engine => _engine;
 
+    protected override void OnPropertyChanged(DependencyPropertyChangedEventArgs e)
+    {
+        base.OnPropertyChanged(e);
+        if (e.Property == VisibilityProperty)
+        {
+            RefreshAutomationChildren();
+        }
+    }
+
     protected override int VisualChildrenCount => _visuals.Count;
 
     protected override Visual GetVisualChild(int index) => _visuals[index];
@@ -141,6 +150,7 @@ internal sealed class CanvasRendererView : FrameworkElement
         DrawCards(state);
         DrawEdges(state);
         DrawRing(state);
+        RefreshAutomationChildren();
         // The tooltip revalidates on EVERY install: the selection
         // trigger, the truncation set and the content's validity all
         // derive from the state that just landed (ID-9's
@@ -150,6 +160,14 @@ internal sealed class CanvasRendererView : FrameworkElement
         // the first install that has it (#1271, review round 2).
         PayOwedReveal();
     }
+
+    /// <summary>WPF caches the board's children. Refresh after the winning
+    /// install or its own visibility change, before a selection provider
+    /// needs to connect a newly materialized card through that child list.
+    /// Keep the existing peer identities and do not create a peer merely
+    /// because the renderer changed.</summary>
+    private void RefreshAutomationChildren() =>
+        System.Windows.Automation.Peers.UIElementAutomationPeer.FromElement(this)?.ResetChildrenCache();
 
     private void DrawCards(CanvasPresentationState state)
     {
