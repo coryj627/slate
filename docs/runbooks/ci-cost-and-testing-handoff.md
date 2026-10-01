@@ -17,6 +17,16 @@ comparisons; a green result from an earlier revision is not final acceptance.
   whose long-path registry policy is disabled. Preserve physical identity,
   containment and reparse protection. Deep media and 240/360-character metadata
   roots protect these boundaries; this does not certify every external launcher.
+- Post completed palette worker results below queued WPF input, retaining the
+  generation guard, legitimate selection speech, opening silence and the count
+  window. Real dispatcher witnesses cover a queued worker callback and a worker
+  task that completes before the owner's await. Both retain pending input ahead
+  of publication, distinguishing these schedules from ordinary supersession.
+- Give Windows Canvas New Card a canonical Ctrl+Alt+T binding, retaining
+  Ctrl+Alt+N as a Canvas-only legacy alias. The old chord conflicts with NVDA's
+  installed desktop restart shortcut. Keep the Mac chord, Reading table
+  navigation and Create Connected Card bindings; reserve the old chord in the
+  physical authoring witness rather than disabling the screen reader.
 - Preserve the structural-batch failure, but expose its original panic payload
   despite MathCAT's global silent panic hook. The original CI failure has not
   been reproduced or classified as a flake.
@@ -48,10 +58,10 @@ isolate a shared custom tag.
 
    ```bash
    repo_root="$PWD"
-   ./scripts/build-mac-app.sh --skip-a11y-check
+   PROFILE=debug ./scripts/build-mac-app.sh --skip-a11y-check
    (
      cd apps/slate-mac
-     DYLD_LIBRARY_PATH="$repo_root/target/debug" swift test --parallel
+     SLATE_LINK_PROFILE=debug DYLD_LIBRARY_PATH="$repo_root/target/debug" swift test --parallel
    )
    make swift-cli
    git status --short
@@ -70,6 +80,38 @@ isolate a shared custom tag.
    cancellation, root changes and close/reopen. Automated AX results and human
    VoiceOver acceptance are distinct evidence.
 
+Keep the composed Windows findings in the handoff too. On the Windows VM, the
+old Ctrl+Alt+N authoring journey restarted installed NVDA 2026.2; the global
+registration probe confirmed the chord was already owned. NV Access documents
+[that restart shortcut](https://download.nvaccess.org/documentation/en/keyCommands.html).
+Test the canonical replacement with NVDA running, preserving actual keyboard
+landing, editor scope and undo. A clean hosted desktop alone does not exercise
+this composition.
+
+The local desktop handler-group listener also captured no launch lines in one
+isolated run, while NVDA's existing log identified four fixture notifications
+and recorded all four complete matching speech payloads in order. The bounded
+slice retains the first notification's fixture prefix and activity ID rather
+than its complete text. Treat client capture,
+app-to-reader delivery and human audibility as distinct observations. Retain
+the failing capture evidence and investigate registration/client coexistence;
+do not weaken its assertion or infer missing speech from an empty capture.
+Hosted Windows build 26100 captured its complete journey after listener advice;
+the local build 26300 took the no-advice fallback. Those differences do not by
+themselves establish an OS cause.
+
+For the Windows client follow-up, retain the prelaunch desktop-root/subtree
+subscription and exact sequence before any post-window subscription. Record
+the actual COM apartment, selected automation class, registration/removal
+times, callback entries before cache reads, and cache HRESULTs. Compare with a
+single explicitly owned MTA client; the separate STA FluentShell fixture's
+event subscriptions also warrant that ownership review. Microsoft recommends
+[MTA event clients and removal on the registering thread](https://learn.microsoft.com/en-us/windows/win32/winauto/uiauto-threading).
+The existing [launch contract](../plans/40_nvda_matrix_remediation_contracts.md)
+already records the pre-window capture seam. Cache-read failures still enqueue
+an unknown sender, so zero callbacks and zero other-process records are a
+different boundary from failed sender classification.
+
 ## Measure infrastructure after the fixes
 
 Use the same source revision, toolchains, test inventory and native obligations.
@@ -86,6 +128,25 @@ and cache restore. Both Namespace candidates deliberately omit an attached
 Namespace volume. Their non-interactive session cannot replace the separately
 hosted FlaUI desktop check. GitHub job/step timing plus uploaded family reports
 and TRX provide the comparison evidence.
+
+The first cold hosted pilot, [run 36797768639](https://github.com/coryj627/slate/actions/runs/36797768639),
+executed 4,793 app tests: 4,791 passed and two failed. A graph warm tick took
+132.8 ms against its unchanged 100 ms budget; graph paging exposed 89 live
+containers against its 85 bound. Later model/format/shell stages did not run,
+so this is incomplete parity evidence. The app step took 29m05s and native build
+16m26s. Preserve both bounds and profile the measurement/cleanup boundaries
+before adopting hosted Windows; a timeout increase would not repair these
+assertions. The tests and relevant graph production sources were unchanged by
+that first revision.
+
+The regular Namespace app TRX from the first repaired revision passed all 4,793
+tests in 17m22s. Its largest class totals were GraphDiagramTests 172.7 seconds,
+CommandPaletteTests 159.5 seconds, GraphNavigatorCensus 82.3 seconds and
+ReadingFocusTests 64.3 seconds. These are profiling leads, not redundancy
+claims. In particular, the palette scaling fact performs 52 GC/finalizer
+barriers outside its measured query clocks; its complete test cost and query
+latency measure different work. Source/document checks also merit immutable
+inventory reuse only where equivalent symbol and input enforcement is retained.
 
 Record the Windows long-path registry policy as well. The existing deep-media
 fact passed the original runner image yet exposed a production portability bug
@@ -121,6 +182,19 @@ active snapshot meters separate. Verify alerts/quota behavior and obtain the
 effective Business transition/proration quote before selecting a subscription.
 Team, Business at $250, and hybrid remain candidates; compare complete-cycle
 demand and feedback quality after the execution repairs.
+
+Before introducing deferred checks or a provider cutover, inspect current main
+rules and require successful complete evidence for the final revision. The
+September audit found main unprotected. Stable aggregate names and fail-closed
+dependencies are prepared here; they do not create branch-rule enforcement.
+
+Choose the subscription after these observations. Business is justified if its
+effective full-cycle price and added concurrency buy useful feedback or absorb
+the retained native workload. Hosted or hybrid is justified only after the same
+native obligations and acceptable feedback latency pass on the candidate.
+Record compute, retained storage and active snapshots separately, and include
+other repositories in the workspace. The model phase reduction alone is not a
+monthly savings estimate or evidence that a cheaper plan will fit.
 
 ## Further testing-strategy experiments
 
