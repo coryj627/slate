@@ -1612,27 +1612,61 @@ fn crash_after_rewriting_a_moved_document_restores_its_original_path_and_bytes()
 }
 
 #[test]
+#[expect(
+    clippy::disallowed_macros,
+    reason = "libtest must capture this fixture's original panic despite MathCAT's silent hook"
+)]
 fn successful_batch_finalizes_one_undo_row_and_no_inflight_residue() {
-    let (tmp, session, _state) = fixture(&[("a.md", "a"), ("b.md", "b")], &["dest"]);
-    let report = session
-        .batch_move(BatchMoveRequest {
-            items: vec![file("a.md"), file("b.md")],
-            new_parent: "dest".into(),
-        })
-        .unwrap();
-    assert_eq!(report.state, BatchMoveState::Succeeded);
-    assert_eq!(structural_inflight_count(tmp.path()), 0);
-    let rows: i64 = session
-        .conn
-        .lock()
-        .unwrap()
-        .query_row(
-            "SELECT COUNT(*) FROM structural_ops WHERE kind = 'move_batch'",
-            [],
-            |row| row.get(0),
-        )
-        .unwrap();
-    assert_eq!(rows, 1);
+    // MathCAT installs a process-wide panic hook that captures its own panic
+    // details without printing them. When math tests have already initialized
+    // it, libtest can report this unrelated test as FAILED with no assertion
+    // payload (main run 36749141900). Emit the payload ourselves, then resume
+    // the original unwind: diagnostics must not turn a failure into a pass.
+    let result = std::panic::catch_unwind(|| {
+        let (tmp, session, state) = fixture(&[("a.md", "a"), ("b.md", "b")], &["dest"]);
+        let report = session
+            .batch_move(BatchMoveRequest {
+                items: vec![file("a.md"), file("b.md")],
+                new_parent: "dest".into(),
+            })
+            .expect("the successful batch fixture must complete without a session error");
+        assert_eq!(
+            report.state,
+            BatchMoveState::Succeeded,
+            "batch report: {report:#?}; provider calls: {:?}",
+            state.lock().unwrap().calls
+        );
+        assert_eq!(
+            structural_inflight_count(tmp.path()),
+            0,
+            "a successful batch must consume its inflight journal; report: {report:#?}"
+        );
+        let rows: i64 = session
+            .conn
+            .lock()
+            .unwrap()
+            .query_row(
+                "SELECT COUNT(*) FROM structural_ops WHERE kind = 'move_batch'",
+                [],
+                |row| row.get(0),
+            )
+            .expect("read the finalized structural undo rows");
+        assert_eq!(
+            rows, 1,
+            "a successful batch must finalize exactly one undo row"
+        );
+    });
+    if let Err(payload) = result {
+        let message = payload
+            .downcast_ref::<String>()
+            .map(String::as_str)
+            .or_else(|| payload.downcast_ref::<&str>().copied())
+            .unwrap_or("non-string panic payload");
+        // Fixture-only libtest failure output must survive the dependency's
+        // silent hook. This is not a runtime library diagnostic or user vault.
+        eprintln!("successful batch finalization failure: {message}");
+        std::panic::resume_unwind(payload);
+    }
 }
 
 #[test]

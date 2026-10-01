@@ -24,23 +24,12 @@
 # target/release); the structural fix, per-lane cache volumes, is a
 # deferred dashboard experiment.
 #
-# Cache-trust posture (windows.yml adversarial rounds 2–3, applied
-# repo-wide): this repository is PUBLIC, and a fork PR controls both
-# the build code and this YAML — so the runner PROFILE is
-# REF-CONDITIONAL: runs on refs/heads/main (pushes and crons) use the
-# protected arm64-fast profile (dashboard branch allow-list "main" —
-# Namespace enforces protection PER-PROFILE, so trusted and PR
-# traffic ride separate profiles); every other ref uses the
-# unprotected arm64-fast-pr twin. The slate-arm64 cache TAG remains
-# for lineage identity within each profile, because in-workflow
-# routing cannot bind PR-controlled YAML — the profile allow-list is
-# the enforcement. The tag names are public
-# before protection exists, so a fork PR could seed a trusted volume
-# first — the mandatory bootstrap runbook (quiesce, allow-list,
-# reset, verify-cold) is recorded in windows.yml's header.
-# audit.yml and nightly.yml share these lineages (they share this
-# profile's volume family); windows.yml documents the full reasoning.
-# The first run per new tag starts cold once.
+# Cache trust: main and other refs still route to distinct profiles, but
+# the shared custom slate-arm64 tag resolves to one volume across profiles.
+# Provider-enforced commit restrictions must cover every attach path; profile
+# names and PR-controlled labels alone do not prove isolation. See
+# docs/runbooks/ci-cache-policy.md. Nightly shares this native build lineage;
+# the lockfile-only audit uses standard hosted Linux without a paid volume.
 
 name: Rust
 
@@ -85,7 +74,7 @@ jobs:
         uses: actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0  # v7
 
       - name: Assert runner architecture matches the cache lineage
-        # The NVMe cache volume is keyed per profile+repo, NOT per
+        # The shared custom tag is not scoped per profile/repo or
         # architecture. The profile serves genuine ARM64 since the owner's
         # 2026-07-18 dashboard re-pin (it historically served amd64); if
         # the platform field ever flips again, arch-specific rlibs would

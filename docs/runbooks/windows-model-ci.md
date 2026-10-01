@@ -75,18 +75,35 @@ the full inventory digest, selected/completed ordinals, success status, family
 elapsed time and aggregated route/phase timings. The verification job summarizes
 family durations in its job summary. Reports remain available on failures.
 
+During execution each family also writes a bounded, atomically replaced
+`*.progress.txt` checkpoint containing the active case and phase. A completed
+family records at most sixteen slow cases with phase durations. These diagnostic
+text files do not change schema 1 JSON, the inventory digest, or the independent
+coverage verifier. They can identify where a stopped process last made progress;
+a hard runner termination can still prevent artifact upload.
+
 Artifact names include the workflow run and partition, with replacement enabled.
 This preserves a successful sibling's evidence when GitHub reruns only failed
 jobs; the rerun replaces the failed partition's report within the same run/SHA.
-The two build jobs retain the existing Namespace model cache lineage: private
-cache forks contain the same release/NuGet build graph, and trusted-main versus
-untrusted-PR profiles remain separate. Reports live outside that cache.
+The two build jobs retain the existing Namespace model tag: private forks contain
+the same release/NuGet build graph. A custom tag shares its persisted volume
+across profiles and repositories; main/PR profile names do not establish cache
+isolation. Verify provider enforcement as described in
+[CI cache policy](ci-cache-policy.md). Reports live outside that cache.
 
 The pre-change baseline was about 31 minutes executing the model plus two to
 three minutes of setup in runs 34769234555 and 34768717157. Two balanced partitions
 target roughly 18 minutes elapsed, subject to runner availability and scenario
 cost. This is an estimate until measured on the new CI jobs. It repeats some
 setup and uses two runners concurrently; it retains every scenario.
+
+The September 30 implementation removes a test-induced five-second shutdown
+fallback: a retained helper observes retirement, then releases the parked worker
+while owner-thread disposal waits for it. Helpers and workers are joined before
+their resources are disposed, including assertion-failure paths. Following work
+is now parked as well as pinned work. Production timeout policy is unchanged;
+the focused six-second rescan witness still exercises its real boundary. Compare
+the repaired full inventory on the same CI image before updating latency targets.
 
 Use the phase reports to decide whether further work on session setup,
 arrangement, persistence or cleanup is worthwhile. The other Windows lanes,

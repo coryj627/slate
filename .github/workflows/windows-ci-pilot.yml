@@ -1,0 +1,129 @@
+# Comparative evidence only. Production required checks keep their current
+# provider and full coverage while we measure the repaired native suite.
+name: Windows CI pilot
+
+on:
+  pull_request:
+    paths:
+      - '.github/workflows/windows-ci-pilot.yml'
+      - '.github/actions/windows-native-build/**'
+  workflow_dispatch:
+    inputs:
+      runner:
+        description: Runner for the same native verification (Namespace shapes have no attached volume).
+        type: choice
+        options: [hosted, namespace-8x16, namespace-4x8]
+        default: hosted
+      cache:
+        description: Restore GitHub-scoped caches; disable for a cold build.
+        type: boolean
+        default: true
+
+permissions:
+  contents: read
+
+concurrency:
+  group: windows-ci-pilot-${{ github.ref }}-${{ inputs.runner || 'hosted' }}
+  cancel-in-progress: ${{ github.event_name == 'pull_request' }}
+
+jobs:
+  native-verification:
+    name: Native Windows pilot (${{ inputs.runner || 'hosted' }})
+    # Direct Namespace labels are documented shapes; no new paid cache tags
+    # or dashboard profiles are created by this comparison.
+    runs-on: ${{ inputs.runner == 'namespace-4x8' && 'nscloud-windows-2022-amd64-4x8' || inputs.runner == 'namespace-8x16' && 'nscloud-windows-2022-amd64-8x16' || 'windows-latest' }}
+    timeout-minutes: 120
+    steps:
+      - name: Checkout with evidence ancestry
+        uses: actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0  # v7
+        with:
+          fetch-depth: 0
+      - name: Set up Python for the independent coverage verifier
+        uses: actions/setup-python@5fda3b95a4ea91299a34e894583c3862153e4b97  # v7.0.0
+        with:
+          python-version: '3.13'
+      - name: Record runner and toolchain
+        run: |
+          New-Item -ItemType Directory -Force "$env:RUNNER_TEMP\windows-pilot" | Out-Null
+          $metadata = [ordered]@{
+            revision = '${{ github.sha }}'
+            candidate = '${{ inputs.runner || 'hosted' }}'
+            cacheRequested = '${{ inputs.cache }}'
+            logicalProcessors = [Environment]::ProcessorCount
+            os = [Environment]::OSVersion.VersionString
+          }
+          $metadata | ConvertTo-Json | Set-Content "$env:RUNNER_TEMP\windows-pilot\runner.json"
+          rustc --version
+          cargo --version
+          dotnet --info
+      - name: Build pinned native Windows host
+        uses: ./.github/actions/windows-native-build
+        with:
+          cache: ${{ github.event_name == 'workflow_dispatch' && inputs.cache && 'true' || 'false' }}
+          cache-scope: windows-pilot-${{ inputs.runner || 'hosted' }}
+      - name: ARM64 FFI compile witness
+        run: |
+          rustup target add aarch64-pc-windows-msvc
+          if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
+          cargo check -p slate-uniffi --target aarch64-pc-windows-msvc --locked
+      - name: Windows Rust platform witnesses
+        run: >-
+          cargo test -p slate-core --profile ci --locked
+          -- --skip census_
+          --skip perf_guard_root_listing_under_100ms_on_10k_files
+      - name: Windows CLI witnesses
+        run: cargo test -p slate-cli --profile ci --locked
+      - name: Model verifier and parity contracts
+        run: |
+          python -m unittest discover -s scripts/tests -p test_windows_model_shards.py
+          if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
+          python scripts/generate-parity-matrix.py --check
+      - name: App tests
+        run: >-
+          dotnet test apps/slate-windows/tests/SlateWindows.Tests/SlateWindows.Tests.csproj
+          --configuration Release --no-build
+          --filter "FullyQualifiedName!~ConnectionsLeafTests.TheModelOf"
+          --logger "trx;LogFileName=app.trx"
+          --results-directory "${{ runner.temp }}\windows-pilot\app"
+          --blame-hang-timeout 10m --blame-hang-dump-type mini
+      - name: Format contract
+        run: dotnet format apps/slate-windows/SlateWindows.slnx --verify-no-changes --no-restore
+      - name: Complete Connections model
+        run: >-
+          dotnet test apps/slate-windows/tests/SlateWindows.Tests/SlateWindows.Tests.csproj
+          --configuration Release --no-build
+          --filter "FullyQualifiedName~ConnectionsLeafTests.TheModelOf"
+          --logger "trx;LogFileName=model.trx"
+          --results-directory "${{ runner.temp }}\windows-pilot\model"
+          --blame-hang-timeout 90m --blame-hang-dump-type mini
+        env:
+          SLATE_MODEL_SHARD_INDEX: '0'
+          SLATE_MODEL_SHARD_COUNT: '1'
+          SLATE_MODEL_REPORT_DIR: '${{ runner.temp }}\windows-pilot\model'
+          SLATE_MODEL_ONLY: ''
+      - name: Verify all 13,069 scenarios
+        run: >-
+          python scripts/verify_windows_model_shards.py
+          --reports-dir "${{ runner.temp }}\windows-pilot\model" --shard-count 1
+          --summary "${{ runner.temp }}\windows-pilot\model-summary.md"
+      - name: Shell accessibility gate (hosted desktop)
+        if: ${{ github.event_name == 'pull_request' || inputs.runner == 'hosted' }}
+        # Namespace's non-interactive session still needs the existing
+        # separately hosted FlaUI gate; do not interpret a skip as a pass.
+        run: >-
+          dotnet test apps/slate-windows/tests/SlateWindows.AccessibilityTests/SlateWindows.AccessibilityTests.csproj
+          --configuration Release --no-build
+          --logger "trx;LogFileName=shell.trx"
+          --results-directory "${{ runner.temp }}\windows-pilot\shell"
+        env:
+          SLATE_REQUIRE_UI_AUTOMATION: '1'
+          SLATE_ACCESSIBILITY_EVIDENCE_DIR: '${{ runner.temp }}\windows-pilot\shell-evidence'
+      - name: Upload pilot evidence
+        if: ${{ always() }}
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a  # v7
+        with:
+          name: windows-ci-pilot-${{ github.run_id }}
+          overwrite: true
+          path: '${{ runner.temp }}\windows-pilot\**\*'
+          if-no-files-found: warn
+          retention-days: 14
