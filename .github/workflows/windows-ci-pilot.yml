@@ -48,9 +48,11 @@ jobs:
           $metadata = [ordered]@{
             revision = '${{ github.sha }}'
             candidate = '${{ inputs.runner || 'hosted' }}'
-            cacheRequested = '${{ inputs.cache }}'
+            cacheRestore = '${{ github.event_name == 'workflow_dispatch' && inputs.cache && 'true' || 'false' }}'
             logicalProcessors = [Environment]::ProcessorCount
             os = [Environment]::OSVersion.VersionString
+            gcAvailableMemoryBytes = [GC]::GetGCMemoryInfo().TotalAvailableMemoryBytes
+            longPathsEnabled = (Get-ItemPropertyValue 'HKLM:\SYSTEM\CurrentControlSet\Control\FileSystem' -Name LongPathsEnabled -ErrorAction SilentlyContinue)
           }
           $metadata | ConvertTo-Json | Set-Content "$env:RUNNER_TEMP\windows-pilot\runner.json"
           rustc --version
@@ -61,6 +63,10 @@ jobs:
         with:
           cache: ${{ github.event_name == 'workflow_dispatch' && inputs.cache && 'true' || 'false' }}
           cache-scope: windows-pilot-${{ inputs.runner || 'hosted' }}
+      - name: Record effective build toolchain
+        run: |
+          rustc --version | Set-Content "$env:RUNNER_TEMP\windows-pilot\rust-version.txt"
+          dotnet --info | Set-Content "$env:RUNNER_TEMP\windows-pilot\dotnet-info.txt"
       - name: ARM64 FFI compile witness
         run: |
           rustup target add aarch64-pc-windows-msvc
@@ -115,6 +121,7 @@ jobs:
           --configuration Release --no-build
           --logger "trx;LogFileName=shell.trx"
           --results-directory "${{ runner.temp }}\windows-pilot\shell"
+          --blame-hang-timeout 5m --blame-hang-dump-type mini
         env:
           SLATE_REQUIRE_UI_AUTOMATION: '1'
           SLATE_ACCESSIBILITY_EVIDENCE_DIR: '${{ runner.temp }}\windows-pilot\shell-evidence'

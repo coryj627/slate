@@ -13,6 +13,10 @@ comparisons; a green result from an earlier revision is not final acceptance.
 - Replace repeated WPF text-adaptor paragraph traversal with a block traversal.
   Retain the original adaptor's query and endpoint semantics, checked by a
   192-span differential witness. Bound allocation for the large-document query.
+- Correct Canvas media and anchored metadata native long-path ingress on machines
+  whose long-path registry policy is disabled. Preserve physical identity,
+  containment and reparse protection. Deep media and 240/360-character metadata
+  roots protect these boundaries; this does not certify every external launcher.
 - Preserve the structural-batch failure, but expose its original panic payload
   despite MathCAT's global silent panic hook. The original CI failure has not
   been reproduced or classified as a flake.
@@ -82,6 +86,13 @@ and cache restore. Both Namespace candidates deliberately omit an attached
 Namespace volume. Their non-interactive session cannot replace the separately
 hosted FlaUI desktop check. GitHub job/step timing plus uploaded family reports
 and TRX provide the comparison evidence.
+
+Record the Windows long-path registry policy as well. The existing deep-media
+fact passed the original runner image yet exposed a production portability bug
+on a policy-off Windows machine. A policy-off witness guards this environment
+boundary; changing the VM setting would conceal that defect.
+See Microsoft's [native path-limit guidance](https://learn.microsoft.com/en-us/windows/win32/fileio/maximum-file-path-limitation)
+for the registry/manifest requirements and explicit extended-path form.
 
 Compare the current Namespace Mac shape with a hosted Apple Silicon candidate.
 Validate its actual Xcode/Swift version and memory before adopting it. Preserve

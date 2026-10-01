@@ -4494,6 +4494,32 @@ public sealed class CanvasDocumentTests : IDisposable
         Assert.NotNull(handed);
     }
 
+    /// <summary>The root identity query also crosses the native path
+    /// boundary. A vault whose own ordinary absolute path exceeds MAX_PATH
+    /// must work without depending on the host's long-path registry policy.</summary>
+    [Fact]
+    public void MediaOpensWhenTheVaultRootItselfRequiresAnExtendedPath()
+    {
+        string deepRoot = _fixture.Root;
+        for (int level = 0; level < 70; level++)
+        {
+            deepRoot = Path.Combine(deepRoot, $"d{level}");
+        }
+        Assert.True(deepRoot.Length >= 260);
+        Directory.CreateDirectory(deepRoot);
+        string leaf = Path.Combine(deepRoot, "photo.png");
+        File.WriteAllBytes(leaf, [0x89, 0x50, 0x4E, 0x47]);
+
+        string? resolved = CanvasMediaPolicy.ResolveInsideVault(deepRoot, "photo.png");
+        Assert.NotNull(resolved);
+        Assert.Equal(CanvasMediaPolicy.IdentityForTests(leaf),
+            CanvasMediaPolicy.IdentityForTests(resolved!));
+        string? handed = null;
+        Assert.True(CanvasMediaPolicy.OpenMediaInVault(deepRoot, "photo.png",
+            target => { handed = target; return true; }));
+        Assert.Equal(resolved, handed);
+    }
+
     /// <summary>
     /// Containment is decided by IDENTITY, so two adjacent directories
     /// that differ only in case — which a text prefix over an

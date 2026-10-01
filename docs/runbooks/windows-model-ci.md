@@ -82,6 +82,12 @@ text files do not change schema 1 JSON, the inventory digest, or the independent
 coverage verifier. They can identify where a stopped process last made progress;
 a hard runner termination can still prevent artifact upload.
 
+Checkpoint filesystem access is best effort: a Windows reader can briefly deny
+atomic replacement without invalidating model behavior. The canonical report
+records `missedProgressWrites`; inventory assertions, completion accounting and
+final coverage JSON writes remain strict. A checkpoint may therefore be stale
+even when canonical evidence establishes full completion.
+
 Artifact names include the workflow run and partition, with replacement enabled.
 This preserves a successful sibling's evidence when GitHub reruns only failed
 jobs; the rerun replaces the failed partition's report within the same run/SHA.
@@ -91,11 +97,15 @@ across profiles and repositories; main/PR profile names do not establish cache
 isolation. Verify provider enforcement as described in
 [CI cache policy](ci-cache-policy.md). Reports live outside that cache.
 
-The pre-change baseline was about 31 minutes executing the model plus two to
-three minutes of setup in runs 34769234555 and 34768717157. Two balanced partitions
-target roughly 18 minutes elapsed, subject to runner availability and scenario
-cost. This is an estimate until measured on the new CI jobs. It repeats some
-setup and uses two runners concurrently; it retains every scenario.
+The downloaded reports from [the September baseline](https://github.com/coryj627/slate/actions/runs/36749141900)
+sum to 1,851.423 seconds of family execution across both partitions. The first
+[repaired CI run](https://github.com/coryj627/slate/actions/runs/36797768521) sums to
+491.320 seconds, a 73.5% reduction in this observed pair. Shutdown drive fell from
+1,439.754 to 2.188 seconds. All six inventory digests and selected-ordinal lists
+match, and the verifier establishes exactly-once completion of all scenarios.
+The slower partition's family execution is about 4.25 minutes; setup, queue,
+build and downstream checks remain additional costs. These are observed runs,
+not stable tail latency or a monthly billing forecast.
 
 The September 30 implementation removes a test-induced five-second shutdown
 fallback: a retained helper observes retirement, then releases the parked worker

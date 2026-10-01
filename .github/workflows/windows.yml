@@ -703,6 +703,7 @@ jobs:
           apps/slate-windows/tests/SlateWindows.AccessibilityTests/bin/Release/net10.0-windows/SlateWindows.AccessibilityTests.dll
           --logger "trx;LogFileName=slate-windows-accessibility.trx"
           --results-directory "${{ runner.temp }}\slate-accessibility-results"
+          --blame-hang-timeout 5m --blame-hang-dump-type mini
         env:
           SLATE_REQUIRE_UI_AUTOMATION: '1'
           SLATE_ACCESSIBILITY_EVIDENCE_DIR: '${{ runner.temp }}\slate-accessibility-evidence'

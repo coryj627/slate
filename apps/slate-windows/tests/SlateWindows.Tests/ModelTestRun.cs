@@ -64,6 +64,7 @@ internal sealed class ModelTestRun<TCell> : IDisposable
     private readonly Dictionary<string, RouteTiming> _routes = new(StringComparer.Ordinal);
     private readonly List<SlowCase> _slowestCases = [];
     private Case? _activeCase;
+    private int _missedProgressWrites;
     private const int SlowCaseLimit = 16;
     private bool _inventoryVerified;
     private bool _success;
@@ -187,14 +188,15 @@ internal sealed class ModelTestRun<TCell> : IDisposable
     /// <summary>One atomically replaced checkpoint, not an unbounded log.
     /// Phase transitions identify a stalled cell even if the process is killed
     /// before Dispose can write its final coverage report. The .txt extension
-    /// keeps this diagnostic separate from the verifier's JSON evidence.</summary>
+    /// keeps this diagnostic separate from the verifier's JSON evidence.
+    /// A monitor can briefly deny replacement on Windows; such a diagnostic
+    /// failure must not abort a case or weaken final coverage reporting.</summary>
     private void WriteProgress(string phase)
     {
         if (_configuration.ReportDirectory is not { } directory)
         {
             return;
         }
-        Directory.CreateDirectory(directory);
         string path = Path.Combine(directory, $"{_family}-shard-{_configuration.Index}.progress.txt");
         var progress = new
         {
@@ -210,8 +212,19 @@ internal sealed class ModelTestRun<TCell> : IDisposable
             elapsedMilliseconds = _clock.Elapsed.TotalMilliseconds,
         };
         string temporary = path + ".tmp";
-        File.WriteAllText(temporary, JsonSerializer.Serialize(progress));
-        File.Move(temporary, path, overwrite: true);
+        string contents = JsonSerializer.Serialize(progress);
+        try
+        {
+            Directory.CreateDirectory(directory);
+            File.WriteAllText(temporary, contents);
+            File.Move(temporary, path, overwrite: true);
+        }
+        catch (Exception failure) when (failure is IOException or UnauthorizedAccessException)
+        {
+            // Reuse this same temporary file on the next checkpoint. The final
+            // JSON remains strict and records any missed diagnostic writes.
+            _missedProgressWrites++;
+        }
     }
 
     public void Dispose()
@@ -242,6 +255,7 @@ internal sealed class ModelTestRun<TCell> : IDisposable
             selectedOrdinals = SelectedCases.Select(modelCase => modelCase.Ordinal).ToArray(),
             completedOrdinals = _completed.ToArray(),
             success = _success,
+            missedProgressWrites = _missedProgressWrites,
             elapsedMilliseconds = _clock.Elapsed.TotalMilliseconds,
             routes = _routes.Values.OrderBy(route => route.Route, StringComparer.Ordinal),
             slowestCases = _slowestCases,
