@@ -1,532 +1,74 @@
-# Build once; preserve full native/app/model/shell coverage in independent jobs.
-# Production checks keep their providers; the aggregate requires every pilot gate.
-name: Windows CI pilot
+# PRIVATE proposal for a future isolated scratch branch only.
+# Replace the registered filename .github/workflows/windows-ci-pilot.yml there.
+name: CITATION-ONLY deferred-summary ownership diagnostic
 
-on:
-  pull_request:
-    paths:
-      - '.github/workflows/windows-ci-pilot.yml'
-      - '.github/actions/windows-native-build/**'
+'on':
   workflow_dispatch:
     inputs:
-      runner:
-        description: Native/app/model candidate; every candidate also runs the complete hosted shell gate.
+      build_mode:
+        description: Original projects preferred; explicit DLL-reference fallback is separately qualified.
+        required: true
         type: choice
-        options: [hosted, namespace-8x16, namespace-4x8]
-        default: hosted
-      cache:
-        description: Restore GitHub-scoped caches; disable for a cold build.
-        type: boolean
-        default: true
+        default: staged-projects
+        options: [staged-projects, exact-dll-references]
 
 permissions:
   contents: read
+  actions: read
 
 concurrency:
-  group: windows-ci-pilot-${{ github.ref }}-${{ inputs.runner || 'hosted' }}
-  cancel-in-progress: ${{ github.event_name == 'pull_request' }}
+  group: citation-deferred-diagnostic-${{ github.ref }}
+  cancel-in-progress: false
 
 jobs:
-  build-app:
-    name: Build, platform witnesses and app (${{ inputs.runner || 'hosted' }})
-    # Direct Namespace labels are documented shapes; no new paid cache tags
-    # or dashboard profiles are created by this comparison.
-    runs-on: ${{ inputs.runner == 'namespace-4x8' && 'nscloud-windows-2022-amd64-4x8' || inputs.runner == 'namespace-8x16' && 'nscloud-windows-2022-amd64-8x16' || 'windows-latest' }}
-    timeout-minutes: 120
-    outputs:
-      revision: ${{ steps.binary-manifest.outputs.revision }}
-      producer-attempt: ${{ steps.binary-manifest.outputs.producer-attempt }}
-      native-sha256: ${{ steps.binary-manifest.outputs.native-sha256 }}
-      manifest-sha256: ${{ steps.binary-manifest.outputs.manifest-sha256 }}
-      artifact-name: ${{ steps.binary-manifest.outputs.artifact-name }}
-    defaults:
-      run:
-        shell: pwsh
-    steps:
-      - name: Checkout with evidence ancestry
-        uses: actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0  # v7
-        with:
-          ref: ${{ github.sha }}
-          fetch-depth: 0
-      - name: Set up Python for the independent coverage verifier
-        uses: actions/setup-python@5fda3b95a4ea91299a34e894583c3862153e4b97  # v7.0.0
-        with:
-          python-version: '3.13'
-      - name: Record runner and toolchain
-        run: |
-          New-Item -ItemType Directory -Force "$env:RUNNER_TEMP\windows-pilot" | Out-Null
-          $revision = (git rev-parse HEAD).Trim()
-          if ($LASTEXITCODE -ne 0 -or $revision -ne '${{ github.sha }}') { throw 'Checkout SHA mismatch.' }
-          if ($env:PROCESSOR_ARCHITECTURE -ne 'AMD64') { throw 'Windows x64 required.' }
-          $metadata = [ordered]@{
-            runId = '${{ github.run_id }}'
-            runAttempt = '${{ github.run_attempt }}'
-            revision = '${{ github.sha }}'
-            candidate = '${{ inputs.runner || 'hosted' }}'
-            cacheRestore = '${{ github.event_name == 'workflow_dispatch' && inputs.cache && 'true' || 'false' }}'
-            logicalProcessors = [Environment]::ProcessorCount
-            os = [Environment]::OSVersion.VersionString
-            gcAvailableMemoryBytes = [GC]::GetGCMemoryInfo().TotalAvailableMemoryBytes
-            longPathsEnabled = (Get-ItemPropertyValue 'HKLM:\SYSTEM\CurrentControlSet\Control\FileSystem' -Name LongPathsEnabled -ErrorAction SilentlyContinue)
-          }
-          $metadata | ConvertTo-Json | Set-Content "$env:RUNNER_TEMP\windows-pilot\runner.json"
-          rustc --version
-          cargo --version
-          dotnet --info
-      - name: Upload runner metadata before the build
-        if: ${{ always() }}
-        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a  # v7
-        with:
-          name: windows-pilot-runner-${{ github.run_id }}-${{ github.run_attempt }}
-          path: '${{ runner.temp }}\windows-pilot\runner.json'
-          if-no-files-found: error
-          retention-days: 14
-      - name: Build pinned native Windows host
-        uses: ./.github/actions/windows-native-build
-        with:
-          cache: ${{ github.event_name == 'workflow_dispatch' && inputs.cache && 'true' || 'false' }}
-          cache-scope: windows-pilot-${{ inputs.runner || 'hosted' }}
-      - name: Record effective build toolchain
-        run: |
-          rustc --version | Set-Content "$env:RUNNER_TEMP\windows-pilot\rust-version.txt"
-          dotnet --info | Set-Content "$env:RUNNER_TEMP\windows-pilot\dotnet-info.txt"
-      - name: ARM64 FFI compile witness
-        run: |
-          rustup target add aarch64-pc-windows-msvc
-          if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
-          cargo check -p slate-uniffi --target aarch64-pc-windows-msvc --locked
-      - name: Windows Rust platform witnesses
-        run: >-
-          cargo test -p slate-core --profile ci --locked
-          -- --skip census_
-          --skip perf_guard_root_listing_under_100ms_on_10k_files
-      - name: Windows CLI witnesses
-        run: cargo test -p slate-cli --profile ci --locked
-      - name: Model verifier and parity contracts
-        run: |
-          python -m unittest discover -s scripts/tests -p test_windows_model_shards.py
-          if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
-          python scripts/generate-parity-matrix.py --check
-      - name: Upload toolchain evidence before the app phase
-        if: ${{ always() }}
-        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a  # v7
-        with:
-          name: windows-pilot-native-${{ github.run_id }}-${{ github.run_attempt }}
-          path: |
-            ${{ runner.temp }}\windows-pilot\runner.json
-            ${{ runner.temp }}\windows-pilot\rust-version.txt
-            ${{ runner.temp }}\windows-pilot\dotnet-info.txt
-          if-no-files-found: warn
-          retention-days: 14
-      - name: App tests
-        run: >-
-          dotnet test apps/slate-windows/tests/SlateWindows.Tests/SlateWindows.Tests.csproj
-          --configuration Release --no-build
-          --filter "FullyQualifiedName!~ConnectionsLeafTests.TheModelOf"
-          --logger "trx;LogFileName=app.trx"
-          --results-directory "${{ runner.temp }}\windows-pilot\app"
-          --blame-hang-timeout 10m --blame-hang-dump-type mini
-      - name: Upload app results immediately after the app phase
-        if: ${{ always() }}
-        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a  # v7
-        with:
-          name: windows-pilot-app-${{ github.run_id }}-${{ github.run_attempt }}
-          path: '${{ runner.temp }}\windows-pilot\app\**\*'
-          if-no-files-found: error
-          retention-days: 14
-      - name: Format contract
-        run: dotnet format apps/slate-windows/SlateWindows.slnx --verify-no-changes --no-restore
-      - name: Stage one Release build and hash every transferred file
-        id: binary-manifest
-        run: |
-          $artifactRoot = Join-Path $env:RUNNER_TEMP 'windows-pilot\binaries'
-          New-Item -ItemType Directory -Force $artifactRoot | Out-Null
-          # Preserve normal windows.yml's proven app/shell/grid relative layout.
-          # Add the app-test bin only for the three model facts.
-          $roots = @(
-            'src/SlateWindows/bin/Release',
-            'tests/SlateWindows.Tests/bin/Release',
-            'tests/SlateWindows.AccessibilityTests/bin/Release',
-            'tools/GridConformanceHost/bin/Release'
-          )
-          foreach ($relativeRoot in $roots) {
-            $sourceRoot = Join-Path "$env:GITHUB_WORKSPACE\apps\slate-windows" $relativeRoot
-            if (-not (Test-Path -LiteralPath $sourceRoot -PathType Container)) { throw "Missing output: $relativeRoot" }
-            foreach ($file in Get-ChildItem -LiteralPath $sourceRoot -File -Recurse -Force) {
-              $relative = "$relativeRoot/$([IO.Path]::GetRelativePath($sourceRoot, $file.FullName).Replace('\', '/'))"
-              $destination = Join-Path $artifactRoot $relative
-              New-Item -ItemType Directory -Force ([IO.Path]::GetDirectoryName($destination)) | Out-Null
-              Copy-Item -LiteralPath $file.FullName -Destination $destination
-            }
-          }
-          $required = @(
-            'src/SlateWindows/bin/Release/net10.0-windows/SlateWindows.exe',
-            'src/SlateWindows/bin/Release/net10.0-windows/slate_uniffi.dll',
-            'tests/SlateWindows.Tests/bin/Release/net10.0-windows/SlateWindows.Tests.dll',
-            'tests/SlateWindows.Tests/bin/Release/net10.0-windows/slate_uniffi.dll',
-            'tests/SlateWindows.AccessibilityTests/bin/Release/net10.0-windows/SlateWindows.AccessibilityTests.dll',
-            'tests/SlateWindows.AccessibilityTests/bin/Release/net10.0-windows/slate_uniffi.dll',
-            'tools/GridConformanceHost/bin/Release/net10.0-windows/GridConformanceHost.exe'
-          )
-          foreach ($relative in $required) {
-            if (-not (Test-Path -LiteralPath (Join-Path $artifactRoot $relative) -PathType Leaf)) { throw "Missing required binary: $relative" }
-          }
-          $files = @(Get-ChildItem -LiteralPath $artifactRoot -File -Recurse -Force |
-            Sort-Object FullName | ForEach-Object {
-              [ordered]@{
-                path = [IO.Path]::GetRelativePath($artifactRoot, $_.FullName).Replace('\', '/')
-                bytes = $_.Length
-                sha256 = (Get-FileHash -LiteralPath $_.FullName -Algorithm SHA256).Hash.ToLowerInvariant()
-              }
-            })
-          $nativeHashes = @($files | Where-Object { $_.path.EndsWith('/slate_uniffi.dll') } |
-            ForEach-Object { $_.sha256 } | Sort-Object -Unique)
-          if ($nativeHashes.Count -ne 1) { throw 'Native DLL copies differ.' }
-          $revision = (git rev-parse HEAD).Trim()
-          if ($LASTEXITCODE -ne 0 -or $revision -ne '${{ github.sha }}') { throw 'Producer SHA changed.' }
-          $manifestPath = Join-Path $artifactRoot 'pilot-binaries-manifest.json'
-          [ordered]@{
-            schemaVersion = 1
-            revision = $revision
-            runId = '${{ github.run_id }}'
-            producerAttempt = '${{ github.run_attempt }}'
-            candidate = '${{ inputs.runner || 'hosted' }}'
-            producerWorkspace = $env:GITHUB_WORKSPACE
-            relativeRoot = 'apps/slate-windows'
-            nativeSha256 = $nativeHashes[0]
-            requiredFiles = $required
-            files = $files
-          } | ConvertTo-Json -Depth 6 | Set-Content -Encoding utf8 $manifestPath
-          $manifestHash = (Get-FileHash -LiteralPath $manifestPath -Algorithm SHA256).Hash.ToLowerInvariant()
-          "revision=$revision" >> $env:GITHUB_OUTPUT
-          "producer-attempt=${{ github.run_attempt }}" >> $env:GITHUB_OUTPUT
-          "native-sha256=$($nativeHashes[0])" >> $env:GITHUB_OUTPUT
-          "manifest-sha256=$manifestHash" >> $env:GITHUB_OUTPUT
-          "artifact-name=windows-pilot-binaries-${{ github.run_id }}-${{ github.run_attempt }}" >> $env:GITHUB_OUTPUT
-      - name: Publish same-attempt binaries only after all producer gates pass
-        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a  # v7
-        with:
-          name: windows-pilot-binaries-${{ github.run_id }}-${{ github.run_attempt }}
-          path: '${{ runner.temp }}\windows-pilot\binaries\**\*'
-          include-hidden-files: true
-          if-no-files-found: error
-          retention-days: 1
-
-  model-shard:
-    name: Complete model (${{ inputs.runner || 'hosted' }}, shard ${{ matrix.shard }})
-    needs: [build-app]
-    runs-on: ${{ inputs.runner == 'namespace-4x8' && 'nscloud-windows-2022-amd64-4x8' || inputs.runner == 'namespace-8x16' && 'nscloud-windows-2022-amd64-8x16' || 'windows-latest' }}
-    strategy:
-      fail-fast: false
-      max-parallel: 2
-      matrix:
-        shard: [0, 1]
-    # Existing normal-workflow limits; no native/C# build in this lane.
-    timeout-minutes: 90
-    defaults:
-      run:
-        shell: pwsh
-    steps:
-      - name: Checkout exactly the producer SHA for model fixtures
-        uses: actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0  # v7
-        with:
-          ref: ${{ needs.build-app.outputs.revision }}
-          fetch-depth: 0
-      - name: Set up .NET 10
-        uses: actions/setup-dotnet@a98b56852c35b8e3190ac28c8c2271da59106c68  # v6.0.0
-        with:
-          dotnet-version: '10.0.x'
-      - name: Download the pinned producer-attempt binaries into the original layout
-        uses: actions/download-artifact@37930b1c2abaa49bbe596cd826c3c89aef350131  # v7
-        with:
-          name: ${{ needs.build-app.outputs.artifact-name }}
-          path: apps/slate-windows
-      - name: Verify every binary hash and exact source/run/producer provenance
-        run: |
-          $binaryRoot = Join-Path $env:GITHUB_WORKSPACE 'apps\slate-windows'
-          $manifestPath = Join-Path $binaryRoot 'pilot-binaries-manifest.json'
-          $manifestHash = (Get-FileHash -LiteralPath $manifestPath -Algorithm SHA256).Hash.ToLowerInvariant()
-          if ($manifestHash -ne '${{ needs.build-app.outputs.manifest-sha256 }}') { throw 'Binary manifest hash mismatch.' }
-          $manifest = Get-Content -LiteralPath $manifestPath -Raw | ConvertFrom-Json
-          $revision = (git rev-parse HEAD).Trim()
-          if ($LASTEXITCODE -ne 0 -or $revision -ne '${{ github.sha }}' -or $revision -ne $manifest.revision -or $revision -ne '${{ needs.build-app.outputs.revision }}') { throw 'Consumer/producer/source SHA mismatch.' }
-          if ($manifest.schemaVersion -ne 1 -or $manifest.runId -ne '${{ github.run_id }}' -or $manifest.producerAttempt -ne '${{ needs.build-app.outputs.producer-attempt }}' -or $manifest.relativeRoot -ne 'apps/slate-windows' -or $manifest.candidate -ne '${{ inputs.runner || 'hosted' }}') { throw 'Wrong run/attempt/candidate binary artifact.' }
-          if ($env:PROCESSOR_ARCHITECTURE -ne 'AMD64') { throw 'Windows x64 required.' }
-          if ($manifest.nativeSha256 -ne '${{ needs.build-app.outputs.native-sha256 }}') { throw 'Native digest differs from producer output.' }
-          if (@($manifest.files).Count -eq 0) { throw 'Empty binary manifest.' }
-          $paths = [Collections.Generic.HashSet[string]]::new([StringComparer]::OrdinalIgnoreCase)
-          foreach ($entry in $manifest.files) {
-            if ([IO.Path]::IsPathRooted($entry.path) -or $entry.path.Split('/') -contains '..' -or -not $paths.Add($entry.path)) { throw 'Invalid or duplicate manifest path.' }
-            $filePath = Join-Path $binaryRoot $entry.path
-            $file = Get-Item -LiteralPath $filePath -ErrorAction Stop
-            if ($file.PSIsContainer -or $file.Length -ne $entry.bytes -or (Get-FileHash -LiteralPath $filePath -Algorithm SHA256).Hash.ToLowerInvariant() -ne $entry.sha256) { throw "Binary mismatch: $($entry.path)" }
-          }
-          foreach ($required in $manifest.requiredFiles) {
-            if (-not $paths.Contains($required)) { throw "Required binary lacks a hash: $required" }
-          }
-          $actualPaths = @()
-          foreach ($relativeRoot in @(
-            'src/SlateWindows/bin/Release',
-            'tests/SlateWindows.Tests/bin/Release',
-            'tests/SlateWindows.AccessibilityTests/bin/Release',
-            'tools/GridConformanceHost/bin/Release'
-          )) {
-            $outputRoot = Join-Path $binaryRoot $relativeRoot
-            foreach ($file in Get-ChildItem -LiteralPath $outputRoot -File -Recurse -Force) {
-              $actualPaths += [IO.Path]::GetRelativePath($binaryRoot, $file.FullName).Replace('\', '/')
-            }
-          }
-          if (-not $paths.SetEquals([string[]]$actualPaths)) { throw 'Downloaded outputs contain missing or unrecorded files.' }
-          $coverageRoot = Join-Path $env:RUNNER_TEMP 'windows-pilot\model-coverage'
-          $diagnosticsRoot = Join-Path $env:RUNNER_TEMP 'windows-pilot\model-diagnostics'
-          New-Item -ItemType Directory -Force $coverageRoot, $diagnosticsRoot | Out-Null
-          # .txt keeps provenance outside the verifier's canonical *.json census.
-          [ordered]@{
-            revision = $revision
-            runId = '${{ github.run_id }}'
-            producerAttempt = $manifest.producerAttempt
-            executionAttempt = '${{ github.run_attempt }}'
-            candidate = '${{ inputs.runner || 'hosted' }}'
-            shardIndex = ${{ matrix.shard }}
-            shardCount = 2
-            manifestSha256 = $manifestHash
-            nativeSha256 = $manifest.nativeSha256
-            logicalProcessors = [Environment]::ProcessorCount
-            os = [Environment]::OSVersion.VersionString
-          } | ConvertTo-Json | Set-Content -Encoding utf8 "$coverageRoot\consumer-provenance.txt"
-          dotnet --info | Set-Content "$diagnosticsRoot\dotnet-info.txt"
-          Copy-Item -LiteralPath $manifestPath -Destination "$diagnosticsRoot\pilot-binaries-manifest.json"
-      - name: Execute all three model facts over this complete global-ordinal partition
-        # Assembly mode is normal windows.yml's shell-handoff CLI, without MSBuild.
-        # SourceText.RepoRoot finds this SHA checkout from this preserved bin layout.
-        # All compiled-input censuses stay on the complete producer app phase.
-        run: >-
-          dotnet test
-          apps/slate-windows/tests/SlateWindows.Tests/bin/Release/net10.0-windows/SlateWindows.Tests.dll
-          --filter "FullyQualifiedName~ConnectionsLeafTests.TheModelOf"
-          --logger "trx;LogFileName=model.trx"
-          --results-directory "${{ runner.temp }}\windows-pilot\model-diagnostics"
-          --blame-hang-timeout 45m --blame-hang-dump-type mini
-        env:
-          SLATE_MODEL_SHARD_INDEX: '${{ matrix.shard }}'
-          SLATE_MODEL_SHARD_COUNT: '2'
-          SLATE_MODEL_REPORT_DIR: '${{ runner.temp }}\windows-pilot\model-coverage'
-          SLATE_MODEL_ONLY: ''
-      - name: Upload model coverage and last progress immediately after this shard
-        if: ${{ always() }}
-        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a  # v7
-        with:
-          # One canonical coverage set per run/shard, replaced on a shard retry.
-          name: windows-pilot-model-${{ github.run_id }}-${{ matrix.shard }}
-          overwrite: true
-          path: '${{ runner.temp }}\windows-pilot\model-coverage\**\*'
-          if-no-files-found: error
-          retention-days: 14
-      - name: Preserve this execution attempt including coverage/progress before future retries
-        if: ${{ always() }}
-        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a  # v7
-        with:
-          name: windows-pilot-model-diagnostics-${{ github.run_id }}-${{ github.run_attempt }}-${{ matrix.shard }}
-          path: |
-            ${{ runner.temp }}\windows-pilot\model-diagnostics\**\*
-            ${{ runner.temp }}\windows-pilot\model-coverage\**\*
-          if-no-files-found: warn
-          retention-days: 14
-
-  model-coverage:
-    name: Strict complete model coverage (${{ inputs.runner || 'hosted' }})
-    needs: [build-app, model-shard]
-    if: ${{ always() }}
-    runs-on: ubuntu-latest
-    timeout-minutes: 5
-    steps:
-      - name: Require the producer and both model jobs to succeed
-        env:
-          BUILD_RESULT: '${{ needs.build-app.result }}'
-          MODEL_RESULT: '${{ needs.model-shard.result }}'
-        run: |
-          if [ "$BUILD_RESULT" != "success" ] || [ "$MODEL_RESULT" != "success" ]; then
-            echo "::error::producer=$BUILD_RESULT models=$MODEL_RESULT"
-            exit 1
-          fi
-      - name: Checkout exactly the producer SHA
-        uses: actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0  # v7
-        with:
-          ref: ${{ needs.build-app.outputs.revision }}
-      - name: Set up Python
-        uses: actions/setup-python@5fda3b95a4ea91299a34e894583c3862153e4b97  # v7.0.0
-        with:
-          python-version: '3.13'
-      - name: Download both canonical model shard reports
-        uses: actions/download-artifact@37930b1c2abaa49bbe596cd826c3c89aef350131  # v7
-        with:
-          # The literal run prefix cannot select model-diagnostics artifacts.
-          pattern: windows-pilot-model-${{ github.run_id }}-*
-          path: '${{ runner.temp }}/windows-pilot/model-reports'
-      - name: Verify both report sets match the exact producer before coverage
-        env:
-          REPORTS_ROOT: '${{ runner.temp }}/windows-pilot/model-reports'
-          EXPECTED_REVISION: '${{ needs.build-app.outputs.revision }}'
-          EXPECTED_MANIFEST: '${{ needs.build-app.outputs.manifest-sha256 }}'
-          EXPECTED_RUN: '${{ github.run_id }}'
-          EXPECTED_PRODUCER_ATTEMPT: '${{ needs.build-app.outputs.producer-attempt }}'
-          EXPECTED_NATIVE: '${{ needs.build-app.outputs.native-sha256 }}'
-          EXPECTED_CANDIDATE: "${{ inputs.runner || 'hosted' }}"
-        run: |
-          python - <<'PY'
-          import json
-          import os
-          from pathlib import Path
-          root = Path(os.environ["REPORTS_ROOT"])
-          files = sorted(root.rglob("consumer-provenance.txt"))
-          if len(files) != 2:
-              raise SystemExit("Expected exactly two model provenance records.")
-          seen = set()
-          native_hashes = set()
-          for path in files:
-              value = json.loads(path.read_text(encoding="utf-8-sig"))
-              expected = {
-                  "revision": os.environ["EXPECTED_REVISION"],
-                  "runId": os.environ["EXPECTED_RUN"],
-                  "producerAttempt": os.environ["EXPECTED_PRODUCER_ATTEMPT"],
-                  "nativeSha256": os.environ["EXPECTED_NATIVE"],
-                  "candidate": os.environ["EXPECTED_CANDIDATE"],
-                  "manifestSha256": os.environ["EXPECTED_MANIFEST"],
-                  "shardCount": 2,
-              }
-              if any(value.get(key) != item for key, item in expected.items()):
-                  raise SystemExit(f"Wrong source/run/binary provenance: {path}")
-              execution_attempt = value.get("executionAttempt")
-              if type(execution_attempt) is not str or not execution_attempt.isdecimal() or int(execution_attempt) < 1:
-                  raise SystemExit("Missing or invalid consumer execution attempt.")
-              index = value.get("shardIndex")
-              if type(index) is not int or index not in (0, 1) or index in seen:
-                  raise SystemExit("Invalid or duplicate model provenance shard.")
-              seen.add(index)
-              native_hashes.add(value.get("nativeSha256"))
-          if seen != {0, 1} or len(native_hashes) != 1 or None in native_hashes:
-              raise SystemExit("Missing shard or different native binaries.")
-          PY
-      - name: Verify all 13,069 scenarios exactly once
-        run: >-
-          python scripts/verify_windows_model_shards.py
-          --reports-dir "${{ runner.temp }}/windows-pilot/model-reports"
-          --shard-count 2 --summary "$GITHUB_STEP_SUMMARY"
-
-  shell:
-    name: Complete hosted shell gate (${{ inputs.runner || 'hosted' }})
-    # Includes Namespace candidates. No model dependency or desktop sharing.
-    needs: [build-app]
+  citation-diagnostic:
+    if: ${{ github.event_name == 'workflow_dispatch' && github.ref == 'refs/heads/codex/windows-citation-deferred-diagnostic' }}
+    name: CITATION-ONLY two-fact controls and identity-guard mutant
     runs-on: windows-latest
     timeout-minutes: 20
     defaults:
       run:
         shell: pwsh
     steps:
-      - name: Checkout the producer SHA for source provenance
-        uses: actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0  # v7
+      - name: Checkout reviewed diagnostic harness
+        uses: actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0
         with:
-          ref: ${{ needs.build-app.outputs.revision }}
-      - name: Set up .NET 10
-        uses: actions/setup-dotnet@a98b56852c35b8e3190ac28c8c2271da59106c68  # v6.0.0
+          path: harness
+          persist-credentials: false
+      - name: Checkout frozen original source98
+        uses: actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0
         with:
-          dotnet-version: '10.0.x'
-      - name: Download the pinned producer-attempt binaries in the normal shell layout
-        uses: actions/download-artifact@37930b1c2abaa49bbe596cd826c3c89aef350131  # v7
+          ref: '98c73f45ac2b81518ce652a0f6612bd3ef83c5e1'
+          path: source
+          fetch-depth: 1
+          persist-credentials: false
+      - name: Set up pinned effective original SDK
+        uses: actions/setup-dotnet@a98b56852c35b8e3190ac28c8c2271da59106c68
         with:
-          name: ${{ needs.build-app.outputs.artifact-name }}
-          path: apps/slate-windows
-      - name: Verify every binary hash and exact source/run/producer provenance
-        run: |
-          $binaryRoot = Join-Path $env:GITHUB_WORKSPACE 'apps\slate-windows'
-          $manifestPath = Join-Path $binaryRoot 'pilot-binaries-manifest.json'
-          $manifestHash = (Get-FileHash -LiteralPath $manifestPath -Algorithm SHA256).Hash.ToLowerInvariant()
-          if ($manifestHash -ne '${{ needs.build-app.outputs.manifest-sha256 }}') { throw 'Binary manifest hash mismatch.' }
-          $manifest = Get-Content -LiteralPath $manifestPath -Raw | ConvertFrom-Json
-          $revision = (git rev-parse HEAD).Trim()
-          if ($LASTEXITCODE -ne 0 -or $revision -ne '${{ github.sha }}' -or $revision -ne $manifest.revision -or $revision -ne '${{ needs.build-app.outputs.revision }}') { throw 'Consumer/producer/source SHA mismatch.' }
-          if ($manifest.schemaVersion -ne 1 -or $manifest.runId -ne '${{ github.run_id }}' -or $manifest.producerAttempt -ne '${{ needs.build-app.outputs.producer-attempt }}' -or $manifest.relativeRoot -ne 'apps/slate-windows' -or $manifest.candidate -ne '${{ inputs.runner || 'hosted' }}') { throw 'Wrong run/attempt/candidate binary artifact.' }
-          if ($env:PROCESSOR_ARCHITECTURE -ne 'AMD64') { throw 'Windows x64 required.' }
-          if ($manifest.nativeSha256 -ne '${{ needs.build-app.outputs.native-sha256 }}') { throw 'Native digest differs from producer output.' }
-          if (@($manifest.files).Count -eq 0) { throw 'Empty binary manifest.' }
-          $paths = [Collections.Generic.HashSet[string]]::new([StringComparer]::OrdinalIgnoreCase)
-          foreach ($entry in $manifest.files) {
-            if ([IO.Path]::IsPathRooted($entry.path) -or $entry.path.Split('/') -contains '..' -or -not $paths.Add($entry.path)) { throw 'Invalid or duplicate manifest path.' }
-            $filePath = Join-Path $binaryRoot $entry.path
-            $file = Get-Item -LiteralPath $filePath -ErrorAction Stop
-            if ($file.PSIsContainer -or $file.Length -ne $entry.bytes -or (Get-FileHash -LiteralPath $filePath -Algorithm SHA256).Hash.ToLowerInvariant() -ne $entry.sha256) { throw "Binary mismatch: $($entry.path)" }
-          }
-          foreach ($required in $manifest.requiredFiles) {
-            if (-not $paths.Contains($required)) { throw "Required binary lacks a hash: $required" }
-          }
-          $actualPaths = @()
-          foreach ($relativeRoot in @(
-            'src/SlateWindows/bin/Release',
-            'tests/SlateWindows.Tests/bin/Release',
-            'tests/SlateWindows.AccessibilityTests/bin/Release',
-            'tools/GridConformanceHost/bin/Release'
-          )) {
-            $outputRoot = Join-Path $binaryRoot $relativeRoot
-            foreach ($file in Get-ChildItem -LiteralPath $outputRoot -File -Recurse -Force) {
-              $actualPaths += [IO.Path]::GetRelativePath($binaryRoot, $file.FullName).Replace('\', '/')
-            }
-          }
-          if (-not $paths.SetEquals([string[]]$actualPaths)) { throw 'Downloaded outputs contain missing or unrecorded files.' }
-          $evidenceRoot = Join-Path $env:RUNNER_TEMP 'windows-pilot\shell-provenance'
-          New-Item -ItemType Directory -Force $evidenceRoot | Out-Null
-          [ordered]@{
-            revision = $revision
-            runId = '${{ github.run_id }}'
-            producerAttempt = $manifest.producerAttempt
-            executionAttempt = '${{ github.run_attempt }}'
-            candidate = '${{ inputs.runner || 'hosted' }}'
-            executionRunner = 'windows-latest'
-            manifestSha256 = $manifestHash
-            nativeSha256 = $manifest.nativeSha256
-            logicalProcessors = [Environment]::ProcessorCount
-            os = [Environment]::OSVersion.VersionString
-          } | ConvertTo-Json | Set-Content -Encoding utf8 "$evidenceRoot\consumer.json"
-          Copy-Item -LiteralPath $manifestPath -Destination "$evidenceRoot\pilot-binaries-manifest.json"
-          dotnet --info | Set-Content "$evidenceRoot\dotnet-info.txt"
-      - name: Complete shell accessibility gate with real UIA and axe-windows
-        # Same assembly-mode CLI and adapters as normal windows.yml.
-        run: >-
-          dotnet test
-          apps/slate-windows/tests/SlateWindows.AccessibilityTests/bin/Release/net10.0-windows/SlateWindows.AccessibilityTests.dll
-          --logger "trx;LogFileName=shell.trx"
-          --results-directory "${{ runner.temp }}\windows-pilot\shell"
-          --blame-hang-timeout 5m --blame-hang-dump-type mini
+          dotnet-version: '10.0.401'
+      - name: Set up Python for bounded diagnostic and strict evidence parser
+        uses: actions/setup-python@5fda3b95a4ea91299a34e894583c3862153e4b97
+        with:
+          python-version: '3.13'
+      - name: Hash fixed producer archive and payload, then retain all controls
+        timeout-minutes: 15
         env:
-          SLATE_REQUIRE_UI_AUTOMATION: '1'
-          SLATE_ACCESSIBILITY_EVIDENCE_DIR: '${{ runner.temp }}\windows-pilot\shell-evidence'
-      - name: Upload shell results, axe evidence and provenance immediately
+          GH_TOKEN: '${{ github.token }}'
+          BUILD_MODE: '${{ inputs.build_mode }}'
+          DOTNET_CLI_TELEMETRY_OPTOUT: '1'
+        run: |
+          python harness/scripts/windows-citation-deferred-diagnostic.py `
+            --source "$env:GITHUB_WORKSPACE/source" `
+            --evidence "$env:RUNNER_TEMP/citation-deferred-evidence" `
+            --patch "$env:GITHUB_WORKSPACE/harness/scripts/diagnostics/citation-deferred-summary-pumped.patch" `
+            --build-mode $env:BUILD_MODE
+          if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
+      - name: Preserve failures, exact C# mutations, assembly identities, and retained controls
         if: ${{ always() }}
-        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a  # v7
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a
         with:
-          name: windows-pilot-shell-${{ github.run_id }}-${{ github.run_attempt }}
-          path: |
-            ${{ runner.temp }}\windows-pilot\shell\**\*
-            ${{ runner.temp }}\windows-pilot\shell-evidence\**\*
-            ${{ runner.temp }}\windows-pilot\shell-provenance\**\*
+          name: citation-deferred-diagnostic-${{ github.run_id }}-${{ github.run_attempt }}
+          path: '${{ runner.temp }}/citation-deferred-evidence'
           if-no-files-found: error
           retention-days: 14
-
-  native-verification:
-    # The cheap aggregate retains the exact existing pilot check identity.
-    name: Native Windows pilot (${{ inputs.runner || 'hosted' }})
-    needs: [build-app, model-shard, model-coverage, shell]
-    if: ${{ always() }}
-    runs-on: ubuntu-latest
-    timeout-minutes: 5
-    steps:
-      - name: Require all platform, app, model, coverage and shell gates
-        env:
-          BUILD_RESULT: '${{ needs.build-app.result }}'
-          MODEL_RESULT: '${{ needs.model-shard.result }}'
-          COVERAGE_RESULT: '${{ needs.model-coverage.result }}'
-          SHELL_RESULT: '${{ needs.shell.result }}'
-        run: |
-          if [ "$BUILD_RESULT" != "success" ] || [ "$MODEL_RESULT" != "success" ] || [ "$COVERAGE_RESULT" != "success" ] || [ "$SHELL_RESULT" != "success" ]; then
-            echo "::error::producer=$BUILD_RESULT models=$MODEL_RESULT coverage=$COVERAGE_RESULT hosted-shell=$SHELL_RESULT"
-            exit 1
-          fi
+          compression-level: 6
