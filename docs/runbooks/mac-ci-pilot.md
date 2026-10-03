@@ -8,10 +8,13 @@ Keep the PR draft until fresh human accessibility acceptance is complete.
 ## Source and environment qualification
 
 Use the literal repaired application source
-`e6a8337be2905b3f43841e6ab456b0f57a7d91e4`. Its only change from the Windows
-reference `4958e62e61d012d0a6924ec38433a283999f00e1` is the Mac Release stripping
-repair. The pilot workflow and harness belong to a later commit; record both
-commits. Separate checkouts keep the tested application source unchanged, and
+`704ab907e0df753dd24c0c6af688dc3a8975e4e7`. It includes the Mac Release stripping
+repair and the deterministic Debug cancellation witness. Earlier pairs used
+`e6a8337be2905b3f43841e6ab456b0f57a7d91e4`; their results remain qualified to that older
+source. All pairs require the unchanged 3,032-case name inventory digest, and
+preflight pins the exact test source tree of this repaired reference. Do not
+compare a before/after witness repair as if it were one source. The pilot
+workflow and harness belong to a later commit; record both commits. Separate checkouts keep the tested application source unchanged, and
 preflight requires it to be an ancestor of the harness.
 
 Both candidates must provide ARM macOS and **Xcode 27.0 build 27A266a**. The
@@ -34,21 +37,23 @@ and [Namespace runner labels](https://namespace.so/docs/reference/github-actions
 
 ## Dispatch a bounded pair
 
-First publish the harness to the existing draft PR branch and allow its cheap
-Linux registration/parser check to pass. Dispatch one candidate at a time with
+Publish the harness to a recorded experiment branch or the existing draft PR
+branch. Run its parser tests before dispatch; PR pushes also run the cheap
+Linux registration check. Qualify repairs on an experiment branch before a PR
+push that would repeat unrelated native checks. Dispatch one candidate at a time with
 the same frozen source, harness revision and `pair_id`; a pair may execute on
 the providers concurrently. Verify each captured run head and its input values.
 
 ```bash
 gh workflow run mac-ci-pilot.yml --repo coryj627/slate \
   --ref codex/windows-ci-cost-and-test-repairs \
-  -f source_sha=e6a8337be2905b3f43841e6ab456b0f57a7d91e4 \
-  -f runner=hosted-xcode27 -f pair_id=mac-pair-1
+  -f source_sha=704ab907e0df753dd24c0c6af688dc3a8975e4e7 \
+  -f runner=hosted-xcode27 -f pair_id=mac-pair-current-1
 
 gh workflow run mac-ci-pilot.yml --repo coryj627/slate \
   --ref codex/windows-ci-cost-and-test-repairs \
-  -f source_sha=e6a8337be2905b3f43841e6ab456b0f57a7d91e4 \
-  -f runner=namespace-goldengate6x14 -f pair_id=mac-pair-1
+  -f source_sha=704ab907e0df753dd24c0c6af688dc3a8975e4e7 \
+  -f runner=namespace-goldengate6x14 -f pair_id=mac-pair-current-1
 ```
 
 Workflow serialization uses branch, candidate and pair identity with

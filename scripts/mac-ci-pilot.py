@@ -21,7 +21,7 @@ from datetime import datetime, timezone
 import xml.etree.ElementTree as ET
 
 
-REFERENCE = "e6a8337be2905b3f43841e6ab456b0f57a7d91e4"
+REFERENCE = "704ab907e0df753dd24c0c6af688dc3a8975e4e7"
 INVENTORY_SHA = "a145b175c021c7268815d3615659f65bf8889a13b09bbcd592c86b5d8b6ec316"
 ANALYZER = "bcaddd56931ce14d32cebcf42ea9f5b08ed5f7d8"
 CANDIDATES = {"hosted-xcode27", "namespace-goldengate6x14"}
