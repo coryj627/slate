@@ -1,7 +1,7 @@
-# MODEL-ONLY diagnostic on codex/windows-model-4x8-diagnostic.
+# MODEL-ONLY diagnostic on codex/windows-model-4x8-resources.
 # Existing registered windows-ci-pilot.yml filename reused for manual discovery.
 # Neither this workflow nor its checks certify a fresh complete native pipeline.
-name: MODEL-ONLY Namespace4x8 diagnostic
+name: MODEL-ONLY Namespace4x8 resources
 
 'on':
   workflow_dispatch:
@@ -11,7 +11,7 @@ permissions:
   actions: read
 
 concurrency:
-  group: namespace-4x8-model-${{ github.ref }}
+  group: namespace-4x8-resources-${{ github.ref }}
   cancel-in-progress: false
 
 env:
@@ -38,7 +38,7 @@ jobs:
           python3 - <<'PY'
           import datetime, json, os, urllib.request
           from pathlib import Path
-          if (os.environ.get("GITHUB_REPOSITORY") != "coryj627/slate" or os.environ.get("GITHUB_EVENT_NAME") != "workflow_dispatch" or os.environ.get("GITHUB_REF") != "refs/heads/codex/windows-model-4x8-diagnostic"):
+          if (os.environ.get("GITHUB_REPOSITORY") != "coryj627/slate" or os.environ.get("GITHUB_EVENT_NAME") != "workflow_dispatch" or os.environ.get("GITHUB_REF") != "refs/heads/codex/windows-model-4x8-resources"):
               raise SystemExit("This MODEL-ONLY diagnostic runs only by manual dispatch on the fixed scratch branch.")
           base = "https://api.github.com/repos/coryj627/slate"
           def get(route):
@@ -91,6 +91,17 @@ jobs:
         with:
           ref: '98c73f45ac2b81518ce652a0f6612bd3ef83c5e1'
           fetch-depth: 0
+      - name: Checkout exact new resource harness outside the immutable source
+        uses: actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0
+        with:
+          ref: '${{ github.sha }}'
+          path: resource-harness
+      - name: Prepare standalone observer Python without changing product PATH or runtime environment
+        id: observer-python
+        uses: actions/setup-python@5fda3b95a4ea91299a34e894583c3862153e4b97
+        with:
+          python-version: '3.13'
+          update-environment: false
       - name: Set up exactly the previously observed SDK
         uses: actions/setup-dotnet@a98b56852c35b8e3190ac28c8c2271da59106c68
         with:
@@ -205,20 +216,33 @@ jobs:
           } | ConvertTo-Json | Set-Content -Encoding utf8 "$coverageRoot\consumer-provenance.txt"
           dotnet --info | Set-Content "$diagnosticsRoot\dotnet-info.txt"
           Copy-Item -LiteralPath $manifestPath -Destination "$diagnosticsRoot\pilot-binaries-manifest.json"
-      - name: Execute unchanged three-fact DLL command over the complete partition
-        # No builds, project invocation, timer/scheduler changes, profiler or subset.
-        run: >-
-          dotnet test
-          apps/slate-windows/tests/SlateWindows.Tests/bin/Release/net10.0-windows/SlateWindows.Tests.dll
-          --filter "FullyQualifiedName~ConnectionsLeafTests.TheModelOf"
-          --logger "trx;LogFileName=model.trx"
-          --results-directory "${{ runner.temp }}\windows-pilot\model-diagnostics"
-          --blame-hang-timeout 45m --blame-hang-dump-type mini
+      - name: Execute unchanged complete partition with separate owned-process observation
+        # Exact product argv/flags/env/45m fact watchdog. No observer signals,
+        # injection, global name selection, timer, scheduler or cache changes.
+        run: |
+          $resourceHarnessRevision = (git -C resource-harness rev-parse HEAD).Trim()
+          if ($LASTEXITCODE -ne 0 -or $resourceHarnessRevision -ne $env:GITHUB_SHA) { throw 'Resource harness checkout differs from the current immutable execution.' }
+          $resourceHelper = Join-Path $env:GITHUB_WORKSPACE 'resource-harness\scripts\windows-model-resource-observer.py'
+          $resourceResults = Join-Path $env:RUNNER_TEMP 'windows-pilot\model-diagnostics'
+          $resourceReports = Join-Path $env:RUNNER_TEMP 'windows-pilot\model-coverage'
+          $resourceOutput = Join-Path $resourceResults 'resource-observer'
+          & $env:SLATE_RESOURCE_OBSERVER_PYTHON $resourceHelper `
+            --resources-root $resourceOutput --results-directory $resourceResults `
+            --report-directory $resourceReports --execution-run $env:GITHUB_RUN_ID `
+            --execution-attempt $env:GITHUB_RUN_ATTEMPT --harness-revision $env:GITHUB_SHA `
+            --shard $env:MODEL_SHARD_INDEX -- dotnet test `
+            apps/slate-windows/tests/SlateWindows.Tests/bin/Release/net10.0-windows/SlateWindows.Tests.dll `
+            --filter "FullyQualifiedName~ConnectionsLeafTests.TheModelOf" `
+            --logger "trx;LogFileName=model.trx" --results-directory $resourceResults `
+            --blame-hang-timeout 45m --blame-hang-dump-type mini
+          if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
         env:
           SLATE_MODEL_SHARD_INDEX: '${{ matrix.shard }}'
           SLATE_MODEL_SHARD_COUNT: '2'
           SLATE_MODEL_REPORT_DIR: '${{ runner.temp }}\windows-pilot\model-coverage'
           SLATE_MODEL_ONLY: ''
+          # Only this new locator is removed from the inner product environment.
+          SLATE_RESOURCE_OBSERVER_PYTHON: '${{ steps.observer-python.outputs.python-path }}'
       - name: Preserve canonical coverage, TRX, final progress and immutable provenance
         if: ${{ always() }}
         uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a
@@ -247,6 +271,11 @@ jobs:
         uses: actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0
         with:
           ref: '98c73f45ac2b81518ce652a0f6612bd3ef83c5e1'
+      - name: Checkout exact new observer for independent resource integrity verification
+        uses: actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0
+        with:
+          ref: '${{ github.sha }}'
+          path: resource-harness
       - name: Set up Python
         uses: actions/setup-python@5fda3b95a4ea91299a34e894583c3862153e4b97
         with:
@@ -383,12 +412,51 @@ jobs:
               f.write("MODEL-ONLY common-payload diagnostic: " + value["candidate"] + " passed all 13,069 scenarios exactly once. Original producer run 37138568771 / attempt 1; new execution run " + value["executionRunId"] + ". This is not a fresh native/app/shell pipeline certificate.\n")
           print(json.dumps(value, indent=2))
           PY
+      - name: Require complete owned testhost resource witnesses and exact observer integrity
+        env:
+          REPORTS_ROOT: '${{ runner.temp }}/common-payload/model-reports'
+        run: |
+          python - <<'PY_RESOURCE'
+          import hashlib, importlib.util, json, os, subprocess, sys
+          from pathlib import Path
+          harness = Path('resource-harness')
+          actual = subprocess.check_output(['git', '-C', str(harness), 'rev-parse', 'HEAD'], text=True).strip()
+          if actual != os.environ['GITHUB_SHA']:
+              raise SystemExit('Observer verification harness SHA differs from execution.')
+          helper = harness / 'scripts/windows-model-resource-observer.py'
+          digest = hashlib.sha256(helper.read_bytes()).hexdigest()
+          spec = importlib.util.spec_from_file_location('resource_gate', helper)
+          observer = importlib.util.module_from_spec(spec)
+          sys.modules[spec.name] = observer
+          spec.loader.exec_module(observer)
+          root = Path(os.environ['REPORTS_ROOT'])
+          summaries = sorted(root.rglob('resource-summary.json'))
+          if len(summaries) != 2 or len(list(root.rglob('resource-events.ndjson'))) != 2:
+              raise SystemExit('Both complete resource witnesses are mandatory.')
+          results = []
+          seen = set()
+          for summary in summaries:
+              artifact = summary.parent.parent.parent
+              provenance = json.loads((artifact / 'model-coverage/consumer-provenance.txt').read_text(encoding='utf-8-sig'))
+              index = provenance['shardIndex']
+              if type(index) is not int or index not in (0, 1) or index in seen:
+                  raise SystemExit('Missing or duplicate resource partition identity.')
+              seen.add(index)
+              result = observer.validate_report(summary.parent, os.environ['GITHUB_RUN_ID'], os.environ['GITHUB_RUN_ATTEMPT'], os.environ['GITHUB_SHA'], index, expected_observer_sha=digest, expected_physical_memory=provenance['physicalMemoryBytes'])
+              results.append(dict(result, shard=index))
+          if seen != {0, 1}:
+              raise SystemExit('Resource witnesses do not cover both complete partitions.')
+          Path('resource-only-result.txt').write_text(json.dumps({'observerScriptSha256': digest, 'partitions': results, 'scope': 'Observed process/machine resource bounds on the full13,069model control; not production adoption or full native shipping acceptance'}, indent=2))
+          print(json.dumps(results, indent=2))
+          PY_RESOURCE
       - name: Retain per-provider model-only verification
         if: ${{ always() }}
         uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a
         with:
           name: common-model-verification-${{ github.run_id }}-${{ github.run_attempt }}-${{ matrix.candidate }}
-          path: model-only-result.txt
+          path: |
+            model-only-result.txt
+            resource-only-result.txt
           if-no-files-found: warn
           retention-days: 14
       - name: Require every current trial job to succeed
@@ -400,7 +468,7 @@ jobs:
           test "$MODEL_RESULT" = success
 
   model-only-diagnostic-aggregate:
-    name: MODEL-ONLY Namespace4x8 aggregate (unchanged full inventory)
+    name: MODEL-ONLY Namespace4x8 resources aggregate (unchanged full inventory and resource gate)
     needs: [immutable-producer-preflight, model-shard, per-provider-model-union]
     if: ${{ always() }}
     runs-on: ubuntu-latest
@@ -415,4 +483,4 @@ jobs:
           test "$PREFLIGHT_RESULT" = success
           test "$MODEL_RESULT" = success
           test "$UNION_RESULT" = success
-          echo 'MODEL-ONLY common-payload diagnostic passed. Original native/app/shell evidence remains separately attributed to run 37138568771 / attempt 1. No fresh full pipeline certificate.' >> "$GITHUB_STEP_SUMMARY"
+          echo 'MODEL-ONLY common-payload diagnostic passed. Original native/app/shell evidence remains separately attributed to run 37138568771 / attempt 1. No fresh full pipeline certificate or production downsizing decision.' >> "$GITHUB_STEP_SUMMARY"
