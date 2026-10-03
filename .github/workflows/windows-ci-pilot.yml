@@ -227,7 +227,6 @@ jobs:
         candidate: [hosted, namespace-8x16]
     env:
       EXECUTION_CANDIDATE: '${{ matrix.candidate }}'
-      REPORTS_ROOT: '${{ runner.temp }}/common-payload/model-reports'
     steps:
       - name: Checkout the original reference inventory verifier
         uses: actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0
@@ -243,6 +242,8 @@ jobs:
           pattern: common-model-${{ github.run_id }}-${{ github.run_attempt }}-${{ matrix.candidate }}-*
           path: '${{ runner.temp }}/common-payload/model-reports'
       - name: Verify immutable producer plus new execution and all 13069 scenarios
+        env:
+          REPORTS_ROOT: '${{ runner.temp }}/common-payload/model-reports'
         run: |
           python - <<'PY'
           """MODEL-ONLY common-payload aggregate; original full gates remain separate."""
