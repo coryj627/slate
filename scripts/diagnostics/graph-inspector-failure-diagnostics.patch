@@ -1,0 +1,73 @@
+--- a/apps/slate-windows/tests/SlateWindows.AccessibilityTests/ShellAccessibilityTests.cs
++++ b/apps/slate-windows/tests/SlateWindows.AccessibilityTests/ShellAccessibilityTests.cs
+@@ -10316,12 +10316,59 @@
+                 return string.Empty;
+             }
+         }
++        Window? diagnosticsWindow = null;
++        string PersistenceFailure(string expected, string what)
++        {
++            // Capture only after the original ten-second predicate failed;
++            // these reads never intervene between the keypress and its gate.
++            DateTimeOffset sampledAt = DateTimeOffset.UtcNow;
++            string actual = ReadFile();
++            var observed = new List<string>();
++            try
++            {
++                AutomationElement? rendered = diagnosticsWindow?.FindFirstDescendant(
++                    condition => condition.ByAutomationId("GraphInspectorRepelValue"));
++                AutomationElement? slider = diagnosticsWindow?.FindFirstDescendant(
++                    condition => condition.ByAutomationId("GraphInspectorRepel"));
++                observed.Add($"model-rendered Repel text: {rendered?.Properties.Name.ValueOrDefault ?? "<not found>"}");
++                observed.Add($"UIA Repel RangeValue: {slider?.Patterns.RangeValue.Pattern.Value.ValueOrDefault}");
++            }
++            catch (Exception exception)
++            {
++                observed.Add($"UIA diagnostic read failed: {exception.GetType().Name}: {exception.Message}");
++            }
++            try
++            {
++                observed.Add($"config last write UTC: {File.GetLastWriteTimeUtc(configPath):O}");
++                string host = ReadSharedLog(Path.Combine(logDirectory, "slate-windows.log"));
++                observed.Add($"scoped app log (last 16384 characters):\n{host[Math.Max(0, host.Length - 16384)..]}");
++            }
++            catch (Exception exception)
++            {
++                observed.Add($"file/log diagnostic read failed: {exception.GetType().Name}: {exception.Message}");
++            }
++            string message = $"the config file never carried {what}; it reads:\n{actual}\nexpected:\n{expected}"
++                + $"\ndiagnostic sample UTC: {sampledAt:O}\n" + string.Join(Environment.NewLine, observed);
++            try
++            {
++                string? evidenceDirectory = Environment.GetEnvironmentVariable("SLATE_ACCESSIBILITY_EVIDENCE_DIR");
++                if (!string.IsNullOrWhiteSpace(evidenceDirectory))
++                {
++                    Directory.CreateDirectory(evidenceDirectory);
++                    File.WriteAllText(Path.Combine(evidenceDirectory, "graph-inspector-persistence-failure.txt"), message);
++                }
++            }
++            catch (Exception exception)
++            {
++                message += $"\nfailure artifact write failed: {exception.GetType().Name}: {exception.Message}";
++            }
++            return message;
++        }
+         void ExpectFile(uniffi.slate_uniffi.GraphConfig config, string what)
+         {
+             string expected = ExpectedFile(config);
+-            Assert.True(
+-                SpinWait.SpinUntil(() => ReadFile() == expected, TimeSpan.FromSeconds(10)),
+-                $"the config file never carried {what}; it reads:\n{ReadFile()}\nexpected:\n{expected}");
++            bool persisted = SpinWait.SpinUntil(() => ReadFile() == expected, TimeSpan.FromSeconds(10));
++            Assert.True(persisted, persisted ? string.Empty : PersistenceFailure(expected, what));
+         }
+ 
+         Process? process = null;
+@@ -10347,6 +10394,7 @@
+                 automation,
+                 Path.Combine(logDirectory, "slate-windows.log"),
+                 TimeSpan.FromSeconds(30));
++            diagnosticsWindow = window;
+             window.SetForeground();
+             window.Focus();
+             WaitForVaultOpen(window);
