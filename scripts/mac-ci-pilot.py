@@ -148,6 +148,8 @@ def preflight(source: Path, evidence: Path, layer: str) -> None:
         env = dict(os.environ, DEVELOPER_DIR=metadata["developer_dir"])
         metadata.update(swift=command(["xcrun", "swift", "--version"], env=env),
                         swift_path=command(["xcrun", "--find", "swift"], env=env),
+                        clang_path=command(["xcrun", "--find", "clang"], env=env),
+                        clangxx_path=command(["xcrun", "--find", "clang++"], env=env),
                         sdk_path=command(["xcrun", "--sdk", "macosx", "--show-sdk-path"], env=env),
                         sdk_version=command(["xcrun", "--sdk", "macosx", "--show-sdk-version"], env=env),
                         sdk_build=command(["xcrun", "--sdk", "macosx", "--show-sdk-build-version"], env=env),
@@ -175,7 +177,12 @@ class Runner:
         self.metadata = json.loads((evidence / "metadata.json").read_text())
         require(self.metadata.get("qualified") is True and self.metadata["layer"] == layer, "preflight is not qualified")
         require(all(self.metadata[key] == value for key, value in context().items()), "preflight identity mismatch")
-        self.env = dict(os.environ, DEVELOPER_DIR=self.metadata["developer_dir"])
+        # The qualified Swift directory also contains cc. Give C/C++ build
+        # scripts an absolute qualified compiler and SDK rather than relying
+        # on /usr/bin's xcrun wrapper or cc-rs resolving a bare PATH name.
+        self.env = dict(os.environ, DEVELOPER_DIR=self.metadata["developer_dir"],
+                        SDKROOT=self.metadata["sdk_path"], CC=self.metadata["clang_path"],
+                        CXX=self.metadata["clangxx_path"])
         self.env["PATH"] = os.pathsep.join([str(Path(self.metadata["swift_path"]).parent),
                                          str(Path.home() / ".cargo/bin"), self.env.get("PATH", "")])
         require(command(["swift", "--version"], env=self.env) == self.metadata["swift"], "bare Swift is not the qualified Xcode tool")
@@ -193,7 +200,7 @@ class Runner:
         error = (self.evidence / (name + ".stderr")) if stdout_file else log
         active_env = env or self.env
         record = {"command": args, "cwd": str(cwd or self.source), "started_utc": utc(), "status": "running",
-                  "environment": {key: active_env.get(key) for key in ["DEVELOPER_DIR", "PROFILE", "SLATE_LINK_PROFILE", "DYLD_LIBRARY_PATH", "PATH"]},
+                  "environment": {key: active_env.get(key) for key in ["DEVELOPER_DIR", "SDKROOT", "CC", "CXX", "PROFILE", "SLATE_LINK_PROFILE", "DYLD_LIBRARY_PATH", "PATH"]},
                   "machine_before": machine_memory()}
         self.summary["phases"][name] = record
         self.save()
