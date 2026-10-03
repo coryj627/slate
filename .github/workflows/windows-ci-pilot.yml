@@ -1,16 +1,17 @@
+# PRIVATE new full-app scope:45m job/40m step/40m wrapper; native/product/watchdog limits unchanged.
 # PRIVATE proposal for a future isolated scratch branch only.
 # Replace the registered filename .github/workflows/windows-ci-pilot.yml there.
-name: CITATION-ONLY deferred-summary ownership diagnostic
+name: Citation fixture full app qualification
 
 'on':
   workflow_dispatch:
     inputs:
       build_mode:
-        description: Original projects preferred; explicit DLL-reference fallback is separately qualified.
+        description: Original projects with exact support staging only; no fallback.
         required: true
         type: choice
         default: staged-projects
-        options: [staged-projects, exact-dll-references]
+        options: [staged-projects]
 
 permissions:
   contents: read
@@ -23,9 +24,9 @@ concurrency:
 jobs:
   citation-diagnostic:
     if: ${{ github.event_name == 'workflow_dispatch' && github.ref == 'refs/heads/codex/windows-citation-deferred-diagnostic' }}
-    name: CITATION-ONLY two-fact controls and identity-guard mutant
+    name: Original controls, candidate pairs, complete app reference and guard mutant
     runs-on: windows-latest
-    timeout-minutes: 20
+    timeout-minutes: 45
     defaults:
       run:
         shell: pwsh
@@ -50,8 +51,8 @@ jobs:
         uses: actions/setup-python@5fda3b95a4ea91299a34e894583c3862153e4b97
         with:
           python-version: '3.13'
-      - name: Hash fixed producer archive and payload, then retain all controls
-        timeout-minutes: 15
+      - name: Hash fixed payload, preserve controls and require complete candidate app suite before mutant
+        timeout-minutes: 40
         env:
           GH_TOKEN: '${{ github.token }}'
           BUILD_MODE: '${{ inputs.build_mode }}'
@@ -59,16 +60,17 @@ jobs:
         run: |
           python harness/scripts/windows-citation-deferred-diagnostic.py `
             --source "$env:GITHUB_WORKSPACE/source" `
-            --evidence "$env:RUNNER_TEMP/citation-deferred-evidence" `
+            --evidence "$env:RUNNER_TEMP/citation-full-app-evidence" `
             --patch "$env:GITHUB_WORKSPACE/harness/scripts/diagnostics/citation-deferred-summary-pumped.patch" `
-            --build-mode $env:BUILD_MODE
+            --build-mode $env:BUILD_MODE `
+            --app-reference "$env:GITHUB_WORKSPACE/harness/scripts/diagnostics/citation-app-reference-98.json"
           if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
       - name: Preserve failures, exact C# mutations, assembly identities, and retained controls
         if: ${{ always() }}
         uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a
         with:
-          name: citation-deferred-diagnostic-${{ github.run_id }}-${{ github.run_attempt }}
-          path: '${{ runner.temp }}/citation-deferred-evidence'
+          name: citation-candidate-full-app-${{ github.run_id }}-${{ github.run_attempt }}
+          path: '${{ runner.temp }}/citation-full-app-evidence'
           if-no-files-found: error
           retention-days: 14
           compression-level: 6

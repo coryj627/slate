@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""PRIVATE proposal. Two existing Windows facts only; not full acceptance."""
+"""PRIVATE full-app citation qualification variant; old focused history remains distinct."""
 import argparse
 import collections
 import datetime as dt
@@ -24,6 +24,9 @@ RUN, ATTEMPT, ARTIFACT = 37138568771, 1, 11280550921
 ARCHIVE = "6f1cd53f75d980e25f0629638867c839b01fbae740c58952e8b4ce3c80257f90"
 MANIFEST = "93a097242cb3dc0383c8db245411054189e9c7cc2571e88be8f7e420ad67b9dd"
 NATIVE = "8a0b43d62d760aabe6f37b216afb517b0f6c06b13ad047ac1e7a0be8f5ceb133"
+APP_REFERENCE_SHA = "2c8d892a2f9e881b829c6f6e17df40d014879267252019cae1f1d7c3c3291974"
+APP_FACTS = 4806
+APP_FILTER = "FullyQualifiedName!~ConnectionsLeafTests.TheModelOf"
 FACTS = (
     "SlateWindows.Tests.CitationAsyncInterleavingTests.ADeferredSummaryDoesNotAnswerForADifferentNote",
     "SlateWindows.Tests.CitationAsyncInterleavingTests.ADeferredSummaryStillAnswersForTheNoteItWasAskedAbout",
@@ -233,6 +236,48 @@ def verify_trx(path):
     return {"sha256": sha(path), "counters": c, "facts": result}
 
 
+def read_app_reference(path):
+    require(path.is_file() and not path.is_symlink() and sha(path) == APP_REFERENCE_SHA,
+            "Full app reference bytes changed")
+    value = read_json(path)
+    require(all(value.get(k) == v for k, v in {
+        "schemaVersion": 1, "sourceRevision": SOURCE, "producerRunId": RUN, "producerAttempt": ATTEMPT,
+        "manifestSha256": MANIFEST, "nativeSha256": NATIVE, "expectedTotal": APP_FACTS,
+        "originalTestAssemblySha256": "523ba3f79243456b40a796e1f946f15c1edca1abc3712330e5e0143b8ffd16b4",
+        "filter": APP_FILTER}.items()), "Wrong full app reference provenance")
+    counts = value.get("expectedNameCounts")
+    require(isinstance(counts, dict) and counts and all(isinstance(name, str) and name
+            and type(count) is int and count > 0 for name, count in counts.items())
+            and sum(counts.values()) == APP_FACTS, "Malformed full app name multiset")
+    return value
+
+
+def verify_full_app_trx(path, reference):
+    doc = ET.parse(path).getroot()
+    rows = [x for x in doc.iter() if x.tag.endswith("}UnitTestResult")]
+    counters = [x.attrib for x in doc.iter() if x.tag.endswith("}Counters")]
+    summaries = [x.attrib for x in doc.iter() if x.tag.endswith("}ResultSummary")]
+    require(len(rows) == APP_FACTS and len(counters) == len(summaries) == 1,
+            "Full app execution is missing, duplicated or incomplete")
+    require(collections.Counter(x.attrib.get("testName") for x in rows)
+            == collections.Counter(reference["expectedNameCounts"]), "Full app name multiset changed")
+    execution_ids = [x.attrib.get("executionId") for x in rows]
+    require(all(isinstance(value, str) and value.strip() for value in execution_ids)
+            and len(set(execution_ids)) == APP_FACTS, "Missing/duplicate full app execution ID")
+    c = counters[0]
+    require(c.get("total") == c.get("executed") == c.get("passed") == str(APP_FACTS)
+            and c.get("failed") == "0", "Full app pass/execution counters failed")
+    for key in ("error", "timeout", "aborted", "inconclusive", "passedButRunAborted", "notRunnable",
+                "notExecuted", "disconnected", "warning", "completed", "inProgress", "pending"):
+        require(c.get(key) == "0", "Missing/adverse full app TRX counter: " + key)
+    require(all(x.attrib.get("outcome") == "Passed" for x in rows), "Full app has failed, skipped or unclassified facts")
+    require(summaries[0].get("outcome") == "Completed", "Full app ResultSummary is not completed")
+    return {"trxSha256": sha(path), "counters": c, "executionIdCount": len(execution_ids),
+            "uniqueNameCount": len(reference["expectedNameCounts"]), "referenceNameMultisetMatches": True,
+            "referenceSha256": APP_REFERENCE_SHA, "referenceTrxSha256": reference["referenceTrxSha256"],
+            "scope": "Complete original4806 app reference; model facts remain separately excluded"}
+
+
 def mutant_was_killed(value, expected_line=None):
     wrong, legit = (value["facts"][fact] for fact in FACTS)
     require(wrong["outcome"] == "Failed" and legit["outcome"] == "Passed", "Expected wrong-note kill and legitimate delivery")
@@ -248,8 +293,8 @@ class Harness:
         self.source, self.evidence = source, evidence
         self.root = source / "apps/slate-windows"
         self.evidence.mkdir(parents=True, exist_ok=False)
-        self.deadline = time.monotonic() + 14 * 60
-        self.record = {"scope": "PRIVATE two-fact citation diagnostic; no full-suite acceptance",
+        self.deadline = time.monotonic() + 40 * 60
+        self.record = {"scope": "PRIVATE citation fixture plus mandatory full4806 app qualification; no complete model/shell/human acceptance", "diagnosticGlobalBudgetSeconds": 2400, "budgetQualification": "New full-app scope:40m wrapper/40m step/45m job; unchanged original app10m blame watchdog, focused90s watchdog and native/product bounds. Old14m/20m focused history remains distinct.",
             "status": "incomplete", "sourceRevision": SOURCE, "sourceTree": TREE,
             "producerRunId": RUN, "producerAttempt": ATTEMPT, "artifactId": ARTIFACT,
             "archiveSha256": ARCHIVE, "manifestSha256": MANIFEST, "nativeSha256": NATIVE,
@@ -262,6 +307,48 @@ class Harness:
 
     def native_unchanged(self):
         require(self.natives and all(p.is_file() and sha(p) == NATIVE for p in self.natives), "Native bytes changed")
+
+    def run_full_app(self, reference_path):
+        reference = read_app_reference(reference_path)
+        self.native_unchanged()
+        require(all(sha(self.root / project) == digest for project, digest in self.record["originalProjectSha256"].items()),
+                "Original project changed before full app qualification")
+        folder = self.evidence / "pumped-candidate-full-app"
+        folder.mkdir()
+        assembly = self.root / TEST_BIN / "SlateWindows.Tests.dll"
+        app = self.root / TEST_BIN / "SlateWindows.dll"
+        test_hash, app_hash = sha(assembly), sha(app)
+        candidate_runs = [value for value in self.record["runs"] if value["phase"] == "pumped-candidate"]
+        require(len(candidate_runs) == 5 and all(value["testAssemblySha256"] == test_hash
+                and value["appAssemblySha256"] == app_hash for value in candidate_runs),
+                "Full app is not the same freshly compiled five-pair candidate")
+        require(app_hash == self.record["originalAssemblies"]["appSha256"],
+                "Full app gate must precede any production guard mutation")
+        gate = {"status": "running", "filter": APP_FILTER, "expectedFacts": APP_FACTS,
+                "originalAppReferenceSha256": APP_REFERENCE_SHA, "testAssemblySha256": test_hash,
+                "appAssemblySha256": app_hash, "nativeSha256": NATIVE, "blameHangTimeout": "10m",
+                "diagnosticCommandBudgetSeconds": 2100}
+        self.record["fullAppGate"] = gate
+        self.save()
+        try:
+            code, _ = self.command("pumped-candidate-full-app", ["dotnet", "test", str(assembly),
+                "--filter", APP_FILTER, "--logger", "trx;LogFileName=app.trx", "--results-directory", str(folder),
+                "--blame-hang-timeout", "10m", "--blame-hang-dump-type", "mini"],
+                max_seconds=35 * 60, allow_test_failure=True)
+            self.native_unchanged()
+            require(sha(assembly) == test_hash and sha(app) == app_hash,
+                    "Full app candidate or production assembly changed during execution")
+            gate.update(verify_full_app_trx(folder / "app.trx", reference))
+            require(code == 0, "Full app process did not pass")
+            gate.update({"status": "success", "exitCode": code, "nativeUnchanged": True,
+                         "candidateAndOriginalProductionUnchanged": True})
+        except BaseException as error:
+            gate.update({"status": "failed-or-incomplete", "error": str(error)})
+            if (folder / "app.trx").is_file():
+                gate["failedOrIncompleteRawTrxSha256"] = sha(folder / "app.trx")
+            raise
+        finally:
+            self.save()
 
     def command(self, name, args, cwd=None, max_seconds=180, allow_test_failure=False):
         remaining = self.deadline - time.monotonic()
@@ -358,43 +445,21 @@ class Harness:
         self.native_unchanged()
 
 
-def substitute_project(original, references):
-    """Explicit fallback only. Preserve packages/settings; pin reference bytes separately."""
-    path = original.with_name(original.stem + ".diagnostic.csproj")
-    doc = ET.parse(original)
-    require(doc.getroot().tag == "Project", "Unexpected project XML namespace")
-    removed = []
-    for group in doc.getroot().findall("ItemGroup"):
-        for item in list(group):
-            if item.tag == "ProjectReference":
-                removed.append(item.attrib)
-                group.remove(item)
-    require(removed, "No project references to substitute")
-    properties = ET.SubElement(doc.getroot(), "PropertyGroup")
-    ET.SubElement(properties, "AssemblyName").text = original.stem
-    # Match the original SDK default if not already explicitly declared.
-    if doc.getroot().find(".//RootNamespace") is None:
-        ET.SubElement(properties, "RootNamespace").text = original.stem
-    group = ET.SubElement(doc.getroot(), "ItemGroup")
-    for name, target in references.items():
-        item = ET.SubElement(group, "Reference", {"Include": name})
-        ET.SubElement(item, "HintPath").text = str(target)
-        ET.SubElement(item, "Private").text = "true"
-    doc.write(path, encoding="utf-8", xml_declaration=True)
-    return path, removed
-
-
 def main():
     parser = argparse.ArgumentParser()
     parser.add_argument("--source", type=Path, required=True)
     parser.add_argument("--evidence", type=Path, required=True)
     parser.add_argument("--patch", type=Path, required=True)
-    parser.add_argument("--build-mode", choices=("staged-projects", "exact-dll-references"), default="staged-projects")
+    parser.add_argument("--build-mode", choices=("staged-projects",), default="staged-projects")
+    parser.add_argument("--app-reference", type=Path, required=True)
     args = parser.parse_args()
     h = Harness(args.source.resolve(), args.evidence.resolve())
     original_test = (h.source / TEST_FILE).read_bytes()
     original_app = (h.source / APP_FILE).read_bytes()
     try:
+        read_app_reference(args.app_reference)
+        h.record["originalProjectSha256"] = {TEST_PROJECT: sha(h.root / TEST_PROJECT), APP_PROJECT: sha(h.root / APP_PROJECT)}
+        h.save()
         require(os.name == "nt" and os.environ.get("PROCESSOR_ARCHITECTURE") == "AMD64", "Windows x64 required")
         require(os.cpu_count() == 4 and platform.win32_ver()[1] == "10.0.26100", "Original hosted topology/OS changed")
         h.record["runner"] = {"logicalProcessors": os.cpu_count(), "windowsVersion": platform.win32_ver(),
@@ -461,17 +526,6 @@ def main():
         shutil.copyfile(h.natives[0], generated_native)
         h.natives.append(generated_native)
         test_project, app_project = Path(TEST_PROJECT), Path(APP_PROJECT)
-        if args.build_mode == "exact-dll-references":
-            app_project, app_removed = substitute_project(h.root / APP_PROJECT, {"SlateUniffi": h.root / TEST_BIN / "SlateUniffi.dll"})
-            test_project, test_removed = substitute_project(h.root / TEST_PROJECT, {
-                "SlateUniffi": h.root / TEST_BIN / "SlateUniffi.dll", "SlateWindows": h.root / APP_BIN / "SlateWindows.dll",
-                "ParityHarness": h.root / TEST_BIN / "ParityHarness.dll"})
-            h.record["explicitSubstitutedProjects"] = {"appRemoved": app_removed, "testRemoved": test_removed,
-                "appSha256": sha(app_project), "testSha256": sha(test_project)}
-            shutil.copyfile(app_project, h.evidence / app_project.name)
-            shutil.copyfile(test_project, h.evidence / test_project.name)
-            h.command("restore-explicit-test-project", ["dotnet", "restore", str(test_project)], cwd=h.root, max_seconds=180)
-            h.command("restore-explicit-app-project", ["dotnet", "restore", str(app_project)], cwd=h.root, max_seconds=180)
         h.command("check-candidate-patch", ["git", "apply", "--check", str(args.patch.resolve())])
         h.command("apply-candidate-patch", ["git", "apply", str(args.patch.resolve())])
         candidate_text = (h.source / TEST_FILE).read_text(encoding="utf-8")
@@ -492,6 +546,7 @@ def main():
         candidate_runs = [h.run_pair("pumped-candidate", i) for i in range(1, 6)]
         require(all(x["outcome"] == "Passed" for run in candidate_runs for x in run["facts"].values()),
                 "Candidate failed; retain all five completed pair outcomes")
+        h.run_full_app(args.app_reference)
         guard = "string.Equals(Citations.Path, asked, StringComparison.Ordinal)"
         body = original_app.decode("utf-8")
         require(body.count(guard) == 1, "Guard mutation must target exactly one expression")
@@ -502,8 +557,8 @@ def main():
         require(sha(h.root / TEST_BIN / "SlateWindows.dll") != original_app_hash, "Mutant production assembly did not change")
         require(sha(h.root / TEST_BIN / "SlateWindows.dll") == sha(h.root / APP_BIN / "SlateWindows.dll"), "Mutant app was not copied to test execution")
         mutant_was_killed(h.run_pair("guard-removal-mutant", 1), expected_line=final_null_line)
-        h.record["status"] = "qualified-focused-diagnostic"
-        h.record["interpretation"] = "Candidate five pairs passed and targeted mutant killed; control outcomes retained. Not a causal repair or full-suite certificate."
+        h.record["status"] = "qualified-candidate-full-app-diagnostic"
+        h.record["interpretation"] = "Candidate five pairs and complete4806 app reference passed before targeted mutant kill; original controls retained. Not a sole-cause proof or complete model/shell/human certificate."
     except BaseException as error:
         h.record["status"] = "failed-or-incomplete"
         h.record["error"] = str(error)
@@ -513,6 +568,7 @@ def main():
         (h.source / TEST_FILE).write_bytes(original_test)
         (h.source / APP_FILE).write_bytes(original_app)
         h.record["ownedSourcesRestored"] = sha(h.source / TEST_FILE) == hashlib.sha256(original_test).hexdigest() and sha(h.source / APP_FILE) == hashlib.sha256(original_app).hexdigest()
+        h.record["originalProjectsStillOriginal"] = all(sha(h.root / project) == digest for project, digest in h.record.get("originalProjectSha256", {}).items())
         h.record["nativeBytesStillOriginal"] = bool(h.natives) and all(p.is_file() and sha(p) == NATIVE for p in h.natives)
         h.save()
 
