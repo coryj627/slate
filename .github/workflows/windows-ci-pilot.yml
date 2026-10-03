@@ -1,7 +1,7 @@
-# MODEL-ONLY diagnostic on codex/windows-model-common-payload.
+# MODEL-ONLY diagnostic on codex/windows-model-matched-2022.
 # Existing registered windows-ci-pilot.yml filename reused for manual discovery.
 # Neither this workflow nor its checks certify a fresh complete native pipeline.
-name: MODEL-ONLY common-payload diagnostic
+name: MODEL-ONLY matched Windows2022 diagnostic
 
 'on':
   workflow_dispatch:
@@ -11,7 +11,7 @@ permissions:
   actions: read
 
 concurrency:
-  group: common-payload-model-${{ github.ref }}
+  group: matched-2022-model-${{ github.ref }}
   cancel-in-progress: false
 
 env:
@@ -38,7 +38,7 @@ jobs:
           python3 - <<'PY'
           import datetime, json, os, urllib.request
           from pathlib import Path
-          if (os.environ.get("GITHUB_REPOSITORY") != "coryj627/slate" or os.environ.get("GITHUB_EVENT_NAME") != "workflow_dispatch" or os.environ.get("GITHUB_REF") != "refs/heads/codex/windows-model-common-payload"):
+          if (os.environ.get("GITHUB_REPOSITORY") != "coryj627/slate" or os.environ.get("GITHUB_EVENT_NAME") != "workflow_dispatch" or os.environ.get("GITHUB_REF") != "refs/heads/codex/windows-model-matched-2022"):
               raise SystemExit("This MODEL-ONLY diagnostic runs only by manual dispatch on the fixed scratch branch.")
           base = "https://api.github.com/repos/coryj627/slate"
           def get(route):
@@ -71,13 +71,13 @@ jobs:
   model-shard:
     name: MODEL-ONLY (${{ matrix.candidate }}, shard ${{ matrix.shard }})
     needs: [immutable-producer-preflight]
-    runs-on: ${{ matrix.candidate == 'namespace-8x16' && 'nscloud-windows-2022-amd64-8x16' || 'windows-latest' }}
+    runs-on: ${{ matrix.candidate == 'namespace-4x16' && 'nscloud-windows-2022-amd64-4x16' || 'windows-2022' }}
     timeout-minutes: 90
     strategy:
       fail-fast: false
       max-parallel: 4
       matrix:
-        candidate: [hosted, namespace-8x16]
+        candidate: [hosted-2022, namespace-4x16]
         shard: [0, 1]
     defaults:
       run:
@@ -141,8 +141,15 @@ jobs:
           if (-not $paths.SetEquals([string[]]$actualPaths)) { throw 'Downloaded outputs contain missing or unrecorded files.' }
           $tree = (git rev-parse 'HEAD^{tree}').Trim()
           if ($LASTEXITCODE -ne 0 -or $tree -ne $env:EXPECTED_TREE) { throw 'Source tree differs from the fixed original source.' }
-          $expectedCpu = if ($env:EXECUTION_CANDIDATE -eq 'hosted') { 4 } else { 8 }
+          $expectedCpu = 4
           if ([Environment]::ProcessorCount -ne $expectedCpu) { throw 'Consumer CPU topology changed.' }
+          $system = Get-CimInstance Win32_ComputerSystem
+          $windows = Get-CimInstance Win32_OperatingSystem
+          $cpu = @(Get-CimInstance Win32_Processor | Select-Object Name, Manufacturer, NumberOfCores, NumberOfLogicalProcessors)
+          $version = Get-ItemProperty 'HKLM:\SOFTWARE\Microsoft\Windows NT\CurrentVersion'
+          $physicalMemoryBytes = [long]$system.TotalPhysicalMemory
+          if ([Environment]::OSVersion.Version.Build -ne 20348 -or $windows.BuildNumber -ne '20348') { throw 'Windows Server2022 build20348 required.' }
+          if ($physicalMemoryBytes -lt 14GB -or $physicalMemoryBytes -gt 18GB) { throw 'Nominal16GB allocation required; preserve actual byte count.' }
           $sdk = (dotnet --version).Trim()
           if ($LASTEXITCODE -ne 0 -or $sdk -ne '10.0.401') { throw 'The effective SDK must be 10.0.401.' }
           $runtimes = @(dotnet --list-runtimes)
@@ -181,6 +188,14 @@ jobs:
             shardIndex = [int]$env:MODEL_SHARD_INDEX
             shardCount = 2
             logicalProcessors = [Environment]::ProcessorCount
+            physicalMemoryBytes = $physicalMemoryBytes
+            nominalShape = '4x16'
+            windowsBuild = [int]$windows.BuildNumber
+            windowsUbr = [int]$version.UBR
+            windowsVersion = $windows.Version
+            windowsCaption = $windows.Caption
+            processorMetadata = $cpu
+            matchingQualification = 'Same nominal CPU/RAM and Server2022 kernel build; image patch, hardware, storage and hypervisor are recorded rather than claimed identical.'
             os = [Environment]::OSVersion.VersionString
             gcAvailableMemoryBytes = [GC]::GetGCMemoryInfo().TotalAvailableMemoryBytes
             sdk = $sdk
@@ -224,7 +239,7 @@ jobs:
     strategy:
       fail-fast: false
       matrix:
-        candidate: [hosted, namespace-8x16]
+        candidate: [hosted-2022, namespace-4x16]
     env:
       EXECUTION_CANDIDATE: '${{ matrix.candidate }}'
     steps:
@@ -289,7 +304,7 @@ jobs:
               require(execution_run.isdecimal() and int(execution_run) > 0, "Invalid new execution run.")
               require(execution_run != PRODUCER["producerRunId"], "Supplemental execution must have a distinct run ID.")
               require(execution_attempt.isdecimal() and int(execution_attempt) > 0, "Invalid new execution attempt.")
-              require(candidate in ("hosted", "namespace-8x16"), "Unknown consumer provider.")
+              require(candidate in ("hosted-2022", "namespace-4x16"), "Unknown consumer provider.")
               import re
               require(re.fullmatch(r"[0-9a-f]{40}", harness_revision) is not None, "Invalid harness SHA.")
               records = sorted(root.rglob("consumer-provenance.txt"))
@@ -312,7 +327,13 @@ jobs:
                   seen.add(index)
                   require(type(v.get("verifiedPayloadFiles")) is int, "Payload count must be an integer.")
                   cpu = v.get("logicalProcessors")
-                  require(type(cpu) is int and cpu == (4 if candidate == "hosted" else 8), "Provider CPU topology changed.")
+                  require(type(cpu) is int and cpu == 4, "Provider CPU topology changed.")
+                  require(v.get("nominalShape") == "4x16", "Nominal shape changed.")
+                  memory = v.get("physicalMemoryBytes")
+                  require(type(memory) is int and 14*1024**3 <= memory <= 18*1024**3, "Nominal16GB physical-memory witness missing/changed.")
+                  require(type(v.get("windowsBuild")) is int and v["windowsBuild"] == 20348, "Server2022 build missing/changed.")
+                  require(type(v.get("windowsUbr")) is int and v["windowsUbr"] >= 0, "Image patch witness missing.")
+                  require(type(v.get("processorMetadata")) is list and bool(v["processorMetadata"]), "Processor metadata missing.")
                   require(v.get("sdk") == "10.0.401" and v.get("netCoreRuntime") == "10.0.12" and v.get("windowsDesktopRuntime") == "10.0.12", "Observable effective toolchain changed.")
                   artifact_root = p.parent.parent
                   manifests = list(artifact_root.rglob("pilot-binaries-manifest.json"))
