@@ -45,6 +45,17 @@ REQUIRED = {
 }
 
 
+# Exact seven missing original-project support files. No glob/name/hash fallback.
+SUPPORT_FILES = (
+    {'project': 'tools/HostLogProbe/HostLogProbe.csproj', 'source': 'tests/SlateWindows.Tests/bin/Release/net10.0-windows/HostLogProbe.runtimeconfig.json', 'target': 'tools/HostLogProbe/bin/Release/net10.0/HostLogProbe.runtimeconfig.json', 'bytes': 449, 'sha256': '2ca90a18bac3b48286c20acd3c1ae4f83fa38de5acf4b2f8cdd277bf90dc9bd7'},
+    {'project': 'tools/HostLogProbe/HostLogProbe.csproj', 'source': 'tests/SlateWindows.Tests/bin/Release/net10.0-windows/HostLogProbe.deps.json', 'target': 'tools/HostLogProbe/bin/Release/net10.0/HostLogProbe.deps.json', 'bytes': 813, 'sha256': '131cf40698be9a6efd92d97908150075bb22f7823e674897e9b3a9be3fa6f4c4'},
+    {'project': 'tools/HostLogProbe/HostLogProbe.csproj', 'source': 'tests/SlateWindows.Tests/bin/Release/net10.0-windows/HostLogProbe.exe', 'target': 'tools/HostLogProbe/obj/Release/net10.0/apphost.exe', 'bytes': 162304, 'sha256': '383253f23b240152f4a6303b1531a2503a1358033d87803c58fec56276a670b7'},
+    {'project': 'tools/ParityHarness/ParityHarness.csproj', 'source': 'tests/SlateWindows.Tests/bin/Release/net10.0-windows/ParityHarness.runtimeconfig.json', 'target': 'tools/ParityHarness/bin/Release/net10.0/ParityHarness.runtimeconfig.json', 'bytes': 449, 'sha256': '2ca90a18bac3b48286c20acd3c1ae4f83fa38de5acf4b2f8cdd277bf90dc9bd7'},
+    {'project': 'tools/ParityHarness/ParityHarness.csproj', 'source': 'tests/SlateWindows.Tests/bin/Release/net10.0-windows/ParityHarness.deps.json', 'target': 'tools/ParityHarness/bin/Release/net10.0/ParityHarness.deps.json', 'bytes': 816, 'sha256': 'a31f9e197dbcfcbc7e64b4640b9ae8be1501a5700adc574a393ad6299f77369c'},
+    {'project': 'tools/ParityHarness/ParityHarness.csproj', 'source': 'tests/SlateWindows.Tests/bin/Release/net10.0-windows/ParityHarness.exe', 'target': 'tools/ParityHarness/obj/Release/net10.0/apphost.exe', 'bytes': 162304, 'sha256': '894aa25b352c513eeab053194d9842ed8832a31aef2795b6a3fb16474ef5c625'},
+    {'project': 'src/SlateWindows/SlateWindows.csproj', 'source': 'src/SlateWindows/bin/Release/net10.0-windows/SlateWindows.exe', 'target': 'src/SlateWindows/obj/Release/net10.0-windows/apphost.exe', 'bytes': 163328, 'sha256': '3b240123866eabebdca5bc127b508b0ca81fd465c53ebaa2cb8ac2a082dba7b9'},
+)
+
 def require(ok, message):
     if not ok:
         raise ValueError(message)
@@ -141,6 +152,63 @@ def verify_payload(root):
               for folder in OUTPUT_ROOTS for p in (root / folder).rglob("*") if p.is_file()}
     require(actual == paths, "Missing or unrecorded output files")
     return m, natives
+
+
+def support_plan(manifest):
+    """Bind every source to its exact pinned payload row and original project."""
+    index = {}
+    for entry in manifest.get("files", []):
+        key = str(safe_relative(entry["path"]))
+        require(key.casefold() not in index, "Duplicate support manifest path")
+        index[key.casefold()] = entry
+    planned = []
+    for specification in SUPPORT_FILES:
+        source = str(safe_relative(specification["source"]))
+        target = str(safe_relative(specification["target"]))
+        entry = index.get(source.casefold())
+        require(entry is not None and entry["path"] == source,
+                "Missing exact support source: " + source)
+        require(type(entry.get("bytes")) is int and entry["bytes"] == specification["bytes"]
+                and entry.get("sha256") == specification["sha256"],
+                "Pinned support metadata changed: " + source)
+        planned.append(dict(specification, source=source, target=target))
+    return planned
+
+
+def stage_support_files(root, manifest):
+    """Copy only pinned verified support bytes; never rebuild dependencies."""
+    root = root.resolve()
+    manifest_file = root / "pilot-binaries-manifest.json"
+    require(sha(manifest_file) == MANIFEST and read_json(manifest_file) == manifest,
+            "Support staging requires the unchanged verified manifest")
+    plan = support_plan(manifest)
+    # Verify all inputs and destinations before the first directory/file write.
+    for entry in plan:
+        source, target = root / entry["source"], root / entry["target"]
+        require(source.resolve().is_relative_to(root) and source.is_file() and not source.is_symlink()
+                and source.stat().st_size == entry["bytes"] and sha(source) == entry["sha256"],
+                "Pinned support source missing/corrupt: " + entry["source"])
+        require(target.resolve().is_relative_to(root) and not target.is_symlink(),
+                "Unsafe support target: " + entry["target"])
+        require(not target.exists() or (target.is_file() and target.stat().st_size == entry["bytes"]
+                                       and sha(target) == entry["sha256"]),
+                "Existing support target has different bytes: " + entry["target"])
+    records = []
+    for entry in plan:
+        source, target = root / entry["source"], root / entry["target"]
+        already_present = target.exists()
+        target.parent.mkdir(parents=True, exist_ok=True)
+        if not already_present:
+            shutil.copyfile(source, target)
+        require(target.stat().st_size == entry["bytes"] and sha(target) == entry["sha256"],
+                "Staged support target mismatch: " + entry["target"])
+        records.append({"project": entry["project"], "sourcePath": entry["source"],
+                        "sourceAbsolutePath": str(source), "sourceBytes": entry["bytes"],
+                        "sourceSha256": entry["sha256"], "targetPath": entry["target"],
+                        "targetAbsolutePath": str(target), "targetBytes": target.stat().st_size,
+                        "targetSha256": sha(target), "alreadyPresent": already_present,
+                        "manifestSha256": MANIFEST, "sourceRevision": SOURCE})
+    return records
 
 
 def verify_trx(path):
@@ -382,6 +450,11 @@ def main():
                               (APP_PROJECT, "SlateWindows.dll"),
                               ("tools/ParityHarness/ParityHarness.csproj", "ParityHarness.dll")):
             h.stage_reference(project, h.root / TEST_BIN / name)
+        if args.build_mode == "staged-projects":
+            h.native_unchanged()
+            h.record["stagedSupportFiles"] = stage_support_files(h.root, manifest)
+            h.native_unchanged()
+            h.save()
         # Never create generated C# bindings; their absence makes accidental core compilation fail.
         generated_native = h.root / "src/SlateUniffi/generated/slate_uniffi.dll"
         generated_native.parent.mkdir(parents=True, exist_ok=True)
