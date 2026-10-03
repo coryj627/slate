@@ -12,6 +12,11 @@ TAIL_SECONDS=10.0
 TESTHOST_EXE_SHA='289a45b8fdcb0353f056432870494c56d8537e69a4312261625554e413228819'
 SOURCE='98c73f45ac2b81518ce652a0f6612bd3ef83c5e1'
 MANIFEST_SHA='93a097242cb3dc0383c8db245411054189e9c7cc2571e88be8f7e420ad67b9dd'
+CANDIDATE_GIB={'namespace-4x8':(6,10),'namespace-4x16':(14,18),'hosted-2022':(14,18)}
+def capacity_valid(value,candidate):
+ require(candidate in CANDIDATE_GIB,'unknown resource candidate')
+ lo,hi=CANDIDATE_GIB[candidate]
+ return type(value) is int and lo*1024**3<=value<=hi*1024**3
 DLL_RELATIVE='apps/slate-windows/tests/SlateWindows.Tests/bin/Release/net10.0-windows/SlateWindows.Tests.dll'
 HOST_RELATIVE='apps/slate-windows/tests/SlateWindows.Tests/bin/Release/net10.0-windows/testhost.exe'
 DWORD=ctypes.c_uint32; WORD=ctypes.c_uint16; SIZE_T=ctypes.c_uint64; HANDLE=ctypes.c_void_p
@@ -37,8 +42,8 @@ def validate_counter(c):
  keys=('workingSetBytes','peakWorkingSetBytes','privateCommitBytes','peakPrivateCommitBytes','kernel100ns','user100ns')
  require(set(c)==set(keys) and all(type(c[k]) is int and c[k]>=0 for k in keys),'invalid process counter')
  require(c['peakWorkingSetBytes']>=c['workingSetBytes'] and c['peakPrivateCommitBytes']>=c['privateCommitBytes'],'invalid high-water/current relation')
-def validate_machine(m):
- require(type(m['totalPhysicalBytes']) is int and 6*1024**3<=m['totalPhysicalBytes']<=10*1024**3,'unexpected physical capacity')
+def validate_machine(m,candidate='namespace-4x8'):
+ require(capacity_valid(m['totalPhysicalBytes'],candidate),'unexpected physical capacity')
  require(type(m['availablePhysicalBytes']) is int and 0<=m['availablePhysicalBytes']<=m['totalPhysicalBytes'],'invalid available physical memory')
  require(all(type(m[k]) is int and m[k]>=0 for k in ('idle100ns','kernel100ns','user100ns')),'invalid machine CPU times')
 @dataclass(frozen=True)
@@ -50,7 +55,8 @@ class Identity:
 
 class NativeWindows:
  """Only query/read rights. No process injection, signal, scheduler or timer calls."""
- def __init__(self):
+ def __init__(self,candidate='namespace-4x8'):
+  require(candidate in CANDIDATE_GIB,'unknown resource candidate');self.candidate=candidate
   require(os.name=='nt' and ctypes.sizeof(ctypes.c_void_p)==8,'Windows64 observer required')
   require(ctypes.sizeof(FILETIME)==8 and ctypes.sizeof(PMC_EX)==80 and ctypes.sizeof(MEMORY_STATUS)==64 and ctypes.sizeof(PROCESS_ENTRY)==568,'native64 ABI mismatch')
   self.k=ctypes.WinDLL('kernel32',use_last_error=True);self.handles={};self.unprovedOpenExclusions=[];self.unprovedOpenExclusionCount=0
@@ -130,7 +136,7 @@ class NativeWindows:
  def machine(self):
   ms=MEMORY_STATUS();ms.dwLength=ctypes.sizeof(ms);i,k,u=FILETIME(),FILETIME(),FILETIME()
   if not self.k.GlobalMemoryStatusEx(ctypes.byref(ms)) or not self.k.GetSystemTimes(ctypes.byref(i),ctypes.byref(k),ctypes.byref(u)):raise OSError('machine counters unavailable')
-  out={'totalPhysicalBytes':int(ms.ullTotalPhys),'availablePhysicalBytes':int(ms.ullAvailPhys),'idle100ns':ft(i),'kernel100ns':ft(k),'user100ns':ft(u)};validate_machine(out);return out
+  out={'totalPhysicalBytes':int(ms.ullTotalPhys),'availablePhysicalBytes':int(ms.ullAvailPhys),'idle100ns':ft(i),'kernel100ns':ft(k),'user100ns':ft(u)};validate_machine(out,self.candidate);return out
  def close(self):
   for h in self.handles.values():self.k.CloseHandle(h)
   self.handles.clear()
@@ -172,7 +178,7 @@ class OwnedCollector:
    c=self.b.counters(ident)
    if c is None:continue # Process exited during read; its unread tail remains excluded.
    validate_counter(c);rows.append(dict(c,pid=pid,birth100ns=ident.birth100ns,isVerifiedTesthost=self.hosts.get(pid)==ident.birth100ns))
-  machine=self.b.machine();validate_machine(machine)
+  machine=self.b.machine();validate_machine(machine,getattr(self.b,'candidate','namespace-4x8'))
   return {'offsetMilliseconds':offset,'processes':rows,'machine':machine,'sampledTreeWorkingSetSumBytes':sum(x['workingSetBytes'] for x in rows),'sampledTreePrivateCommitSumBytes':sum(x['privateCommitBytes'] for x in rows)}
 
 def final_observations(backend,owned,observer):
@@ -195,9 +201,9 @@ def final_observations(backend,owned,observer):
  return remaining,unknown,own,errors
 
 def command_expected(results):return ['dotnet','test',DLL_RELATIVE,'--filter','FullyQualifiedName~ConnectionsLeafTests.TheModelOf','--logger','trx;LogFileName=model.trx','--results-directory',str(results),'--blame-hang-timeout','45m','--blame-hang-dump-type','mini']
-def validate_report(root,run,attempt,harness,shard,expected_observer_sha=None,expected_physical_memory=None):
+def validate_report(root,run,attempt,harness,shard,expected_observer_sha=None,expected_physical_memory=None,candidate='namespace-4x8'):
  root=Path(root);meta=json.loads((root/'resource-summary.json').read_text());events=(root/'resource-events.ndjson').read_bytes()
- expected={'schemaVersion':1,'sourceRevision':SOURCE,'manifestSha256':MANIFEST_SHA,'executionRunId':run,'executionAttempt':attempt,'harnessRevision':harness,'shardIndex':shard,'shardCount':2,'executionCandidate':'namespace-4x8','observerComplete':True,'modelExitCode':0,'observationBudgetExhausted':False,'observerErrors':[],'remainingOwnedLiveProcessesAtStop':[],'unknownOwnedLivenessAtStop':[],'productCommandUnchanged':True}
+ expected={'schemaVersion':1,'sourceRevision':SOURCE,'manifestSha256':MANIFEST_SHA,'executionRunId':run,'executionAttempt':attempt,'harnessRevision':harness,'shardIndex':shard,'shardCount':2,'executionCandidate':candidate,'observerComplete':True,'modelExitCode':0,'observationBudgetExhausted':False,'observerErrors':[],'remainingOwnedLiveProcessesAtStop':[],'unknownOwnedLivenessAtStop':[],'productCommandUnchanged':True}
  require(all(meta.get(k)==v for k,v in expected.items()),'resource identity/completion/model status mismatch')
  require(meta['eventsSha256']==hashlib.sha256(events).hexdigest() and meta['eventsBytes']==len(events),'resource event integrity mismatch')
  require(meta['actualProductArgv']==command_expected(meta['resultsDirectory']),'product argv changed')
@@ -209,7 +215,7 @@ def validate_report(root,run,attempt,harness,shard,expected_observer_sha=None,ex
  admissions=meta['admissions'];require(1<=len(admissions)<=64 and admissions[0]['role']=='launchedDotnetRoot','missing actual launched root')
  known={};hosts=set()
  require(sum(x.get('role')=='launchedDotnetRoot' for x in admissions)==1,'multiple/unproved launched roots')
- capacity=meta['physicalCapacityBytes'];require(type(capacity) is int and 6*1024**3<=capacity<=10*1024**3 and (expected_physical_memory is None or capacity==expected_physical_memory),'resource capacity differs from independently verified provenance')
+ capacity=meta['physicalCapacityBytes'];require(capacity_valid(capacity,candidate) and (expected_physical_memory is None or capacity==expected_physical_memory),'resource capacity differs from independently verified provenance')
  for x in admissions:
   ident=(x['pid'],x['birth100ns']);require(type(x['pid']) is int and x['pid']>0 and type(x['birth100ns']) is int and x['birth100ns']>0 and ident not in known,'invalid/duplicate owned identity')
   if x['role']!='launchedDotnetRoot':
@@ -220,7 +226,7 @@ def validate_report(root,run,attempt,harness,shard,expected_observer_sha=None,ex
  require(hosts,'actual owned payload testhost PID+birth witness missing')
  previous={};host_counts={h:0 for h in hosts};last=-1;previous_machine=None
  for row in rows:
-  require(type(row['offsetMilliseconds']) in (int,float) and row['offsetMilliseconds']>last and 0<=row['offsetMilliseconds']<=3610*1000,'invalid sample timestamp');last=row['offsetMilliseconds'];validate_machine(row['machine'])
+  require(type(row['offsetMilliseconds']) in (int,float) and row['offsetMilliseconds']>last and 0<=row['offsetMilliseconds']<=3610*1000,'invalid sample timestamp');last=row['offsetMilliseconds'];validate_machine(row['machine'],candidate)
   machine=row['machine'];require(machine['totalPhysicalBytes']==capacity,'capacity changed within observation')
   if previous_machine is None:require(machine.get('busyFractionSincePrevious') is None,'first CPU fraction has no baseline')
   else:
@@ -238,13 +244,13 @@ def validate_report(root,run,attempt,harness,shard,expected_observer_sha=None,ex
  return {'verified':True,'ownedIdentities':len(known),'verifiedTesthostIdentities':len(hosts),'samples':len(rows),'minimumSampledAvailablePhysicalBytes':min(x['machine']['availablePhysicalBytes'] for x in rows),'maximumSampledTreePrivateCommitBytes':max(x['sampledTreePrivateCommitSumBytes'] for x in rows),'peakWorkingSetByIdentity':{f'{pid}:{birth}':max(x['peakWorkingSetBytes'] for row in rows for x in row['processes'] if (x['pid'],x['birth100ns'])==(pid,birth)) for pid,birth in previous},'scope':'Observed process peak lower bounds and sequential within-pass tree sums; sampled minimum available physical is an upper bound on the actual minimum; no full-lifetime/machine peak or adoption'}
 
 def main():
- ap=argparse.ArgumentParser();ap.add_argument('--resources-root',required=True);ap.add_argument('--results-directory',required=True);ap.add_argument('--report-directory',required=True);ap.add_argument('--execution-run',required=True);ap.add_argument('--execution-attempt',required=True);ap.add_argument('--harness-revision',required=True);ap.add_argument('--shard',type=int,required=True);ap.add_argument('command',nargs=argparse.REMAINDER);args=ap.parse_args();cmd=args.command[1:] if args.command[:1]==['--'] else args.command
+ ap=argparse.ArgumentParser();ap.add_argument('--resources-root',required=True);ap.add_argument('--results-directory',required=True);ap.add_argument('--report-directory',required=True);ap.add_argument('--execution-run',required=True);ap.add_argument('--execution-attempt',required=True);ap.add_argument('--harness-revision',required=True);ap.add_argument('--shard',type=int,required=True);ap.add_argument('--candidate',choices=tuple(CANDIDATE_GIB),required=True);ap.add_argument('command',nargs=argparse.REMAINDER);args=ap.parse_args();cmd=args.command[1:] if args.command[:1]==['--'] else args.command
  require(args.execution_run.isdecimal() and args.execution_attempt.isdecimal() and re.fullmatch(r'[0-9a-f]{40}',args.harness_revision) and args.shard in (0,1),'execution inputs invalid');require(cmd==command_expected(args.results_directory),'product argv changed');raw_env={k:os.environ.get(k) for k in ('SLATE_MODEL_SHARD_INDEX','SLATE_MODEL_SHARD_COUNT','SLATE_MODEL_REPORT_DIR','SLATE_MODEL_ONLY')};env=dict(raw_env)
  if env['SLATE_MODEL_ONLY'] is None:env['SLATE_MODEL_ONLY']=''
  require(env=={'SLATE_MODEL_SHARD_INDEX':str(args.shard),'SLATE_MODEL_SHARD_COUNT':'2','SLATE_MODEL_REPORT_DIR':args.report_directory,'SLATE_MODEL_ONLY':''},'product env changed')
  require(file_sha('apps/slate-windows/pilot-binaries-manifest.json')==MANIFEST_SHA and file_sha(HOST_RELATIVE)==TESTHOST_EXE_SHA,'frozen manifest/testhost bytes changed')
- provenance=json.loads((Path(args.report_directory)/'consumer-provenance.txt').read_text(encoding='utf-8-sig'));capacity=provenance['physicalMemoryBytes'];require(provenance['sourceRevision']==SOURCE and provenance['executionRunId']==args.execution_run and provenance['executionAttempt']==args.execution_attempt and provenance['harnessRevision']==args.harness_revision and provenance['shardIndex']==args.shard,'prior independently verified provenance differs')
- resource=Path(args.resources_root);resource.mkdir(parents=True,exist_ok=False);backend=NativeWindows();observer_identity=backend.identity(os.getpid());require(observer_identity is not None,'observer identity missing');observer_before=backend.counters(observer_identity);require(observer_before is not None,'observer own initial counters missing')
+ provenance=json.loads((Path(args.report_directory)/'consumer-provenance.txt').read_text(encoding='utf-8-sig'));capacity=provenance['physicalMemoryBytes'];require(provenance['sourceRevision']==SOURCE and provenance['executionRunId']==args.execution_run and provenance['executionAttempt']==args.execution_attempt and provenance['harnessRevision']==args.harness_revision and provenance['shardIndex']==args.shard and provenance['executionCandidate']==args.candidate and capacity_valid(capacity,args.candidate),'prior independently verified provenance differs')
+ resource=Path(args.resources_root);resource.mkdir(parents=True,exist_ok=False);backend=NativeWindows(args.candidate);observer_identity=backend.identity(os.getpid());require(observer_identity is not None,'observer identity missing');observer_before=backend.counters(observer_identity);require(observer_before is not None,'observer own initial counters missing')
  dotnet=shutil.which('dotnet');require(dotnet is not None,'dotnet executable missing');errors=[];exhausted=False;written=0;loop_wall=0;start=time.monotonic();product_process_env=os.environ.copy();product_process_env.pop('SLATE_RESOURCE_OBSERVER_PYTHON',None);proc=subprocess.Popen(cmd,executable=dotnet,shell=False,env=product_process_env,creationflags=0);root=None
  try:
   root=backend.identity(proc.pid)
@@ -276,9 +282,9 @@ def main():
   # sampling, waits for the original command under the unchanged job deadline,
   # then makes resource qualification fail independently.
   model_exit=proc.wait();end=time.monotonic();remaining,unknown,observer_after,final_errors=final_observations(backend,collector.owned.values() if collector else [],observer_identity);errors.extend(final_errors);events=(resource/'resource-events.ndjson').read_bytes()
-  meta={'schemaVersion':1,'sourceRevision':SOURCE,'manifestSha256':MANIFEST_SHA,'executionRunId':args.execution_run,'executionAttempt':args.execution_attempt,'harnessRevision':args.harness_revision,'shardIndex':args.shard,'shardCount':2,'executionCandidate':'namespace-4x8','observerScriptSha256':file_sha(__file__),'observerComplete':not exhausted and not errors and not remaining and not unknown,'modelExitCode':model_exit,'physicalCapacityBytes':capacity,'observationBudgetExhausted':exhausted,'observerErrors':errors,'remainingOwnedLiveProcessesAtStop':remaining,'unknownOwnedLivenessAtStop':unknown,'unprovedHandleOpenExclusions':backend.unprovedOpenExclusions,'unprovedHandleOpenExclusionCount':backend.unprovedOpenExclusionCount,'unprovedOpenExclusionsTruncated':backend.unprovedOpenExclusionCount>len(backend.unprovedOpenExclusions),'productCommandUnchanged':True,'actualProductArgv':cmd,'resolvedDotnetExecutable':dotnet,'resultsDirectory':args.results_directory,'reportDirectory':args.report_directory,'productEnvironment':env,'actualProductEnvironment':raw_env,'observerLocatorRemovedFromProductEnvironment':'SLATE_RESOURCE_OBSERVER_PYTHON' not in product_process_env,'observerPythonVersion':sys.version,'observerPythonExecutable':sys.executable,'observerPythonExecutableSha256':file_sha(sys.executable),'rootOwnershipWitness':'Popen-created PID remains live under Popen.poll after independent GetProcessTimes birth read','expectedTesthostPath':str(Path(HOST_RELATIVE).resolve()),'observerIntervalSeconds':INTERVAL_SECONDS,'observerMaxSeconds':MAX_OBSERVATION_SECONDS,'observerMaxIdentities':MAX_IDENTITIES,'samplesWritten':written,'eventsSha256':hashlib.sha256(events).hexdigest(),'eventsBytes':len(events),'admissions':collector.admissions if collector else [],'modelWallSeconds':(exit_seen or end)-start,'modelWallTimingQualification':'Observed root completion includes up to one5-second polling interval; use TRX/canonical family timings for product latency','observationWallSeconds':end-start,'observerLoopWallSeconds':loop_wall,'observerOwnCpuSeconds':((observer_after['kernel100ns']+observer_after['user100ns'])-(observer_before['kernel100ns']+observer_before['user100ns']))/10_000_000 if observer_after else None,'observerOwnObservedPeakWorkingSetBytes':observer_after['peakWorkingSetBytes'] if observer_after else None,'qualifications':['Observed process peaks are lower bounds on full lifetime if an unread tail remains.','Short-lived children between snapshots are excluded; parent PID alone never admits them.','Previously admitted still-same-birth children remain included if their parent exits; new children without live parent proof are excluded.','Sampled working-set sums can count shared pages multiple times; privateCommit is not swap/diskIO or resident private bytes.','Machine available physical is sampled; minimum is an upper bound on the actual lifetime minimum; unobserved short-lived process count is unknown.','Read-only observer affects allocation load; no causal RAM-pressure/latency/adoption conclusion.','No observer process termination, injection, priority, global timer, security or cache changes.']}
+  meta={'schemaVersion':1,'sourceRevision':SOURCE,'manifestSha256':MANIFEST_SHA,'executionRunId':args.execution_run,'executionAttempt':args.execution_attempt,'harnessRevision':args.harness_revision,'shardIndex':args.shard,'shardCount':2,'executionCandidate':args.candidate,'observerScriptSha256':file_sha(__file__),'observerComplete':not exhausted and not errors and not remaining and not unknown,'modelExitCode':model_exit,'physicalCapacityBytes':capacity,'observationBudgetExhausted':exhausted,'observerErrors':errors,'remainingOwnedLiveProcessesAtStop':remaining,'unknownOwnedLivenessAtStop':unknown,'unprovedHandleOpenExclusions':backend.unprovedOpenExclusions,'unprovedHandleOpenExclusionCount':backend.unprovedOpenExclusionCount,'unprovedOpenExclusionsTruncated':backend.unprovedOpenExclusionCount>len(backend.unprovedOpenExclusions),'productCommandUnchanged':True,'actualProductArgv':cmd,'resolvedDotnetExecutable':dotnet,'resultsDirectory':args.results_directory,'reportDirectory':args.report_directory,'productEnvironment':env,'actualProductEnvironment':raw_env,'observerLocatorRemovedFromProductEnvironment':'SLATE_RESOURCE_OBSERVER_PYTHON' not in product_process_env,'observerPythonVersion':sys.version,'observerPythonExecutable':sys.executable,'observerPythonExecutableSha256':file_sha(sys.executable),'rootOwnershipWitness':'Popen-created PID remains live under Popen.poll after independent GetProcessTimes birth read','expectedTesthostPath':str(Path(HOST_RELATIVE).resolve()),'observerIntervalSeconds':INTERVAL_SECONDS,'observerMaxSeconds':MAX_OBSERVATION_SECONDS,'observerMaxIdentities':MAX_IDENTITIES,'samplesWritten':written,'eventsSha256':hashlib.sha256(events).hexdigest(),'eventsBytes':len(events),'admissions':collector.admissions if collector else [],'modelWallSeconds':(exit_seen or end)-start,'modelWallTimingQualification':'Observed root completion includes up to one5-second polling interval; use TRX/canonical family timings for product latency','observationWallSeconds':end-start,'observerLoopWallSeconds':loop_wall,'observerOwnCpuSeconds':((observer_after['kernel100ns']+observer_after['user100ns'])-(observer_before['kernel100ns']+observer_before['user100ns']))/10_000_000 if observer_after else None,'observerOwnObservedPeakWorkingSetBytes':observer_after['peakWorkingSetBytes'] if observer_after else None,'qualifications':['Observed process peaks are lower bounds on full lifetime if an unread tail remains.','Short-lived children between snapshots are excluded; parent PID alone never admits them.','Previously admitted still-same-birth children remain included if their parent exits; new children without live parent proof are excluded.','Sampled working-set sums can count shared pages multiple times; privateCommit is not swap/diskIO or resident private bytes.','Machine available physical is sampled; minimum is an upper bound on the actual lifetime minimum; unobserved short-lived process count is unknown.','Read-only observer affects allocation load; no causal RAM-pressure/latency/adoption conclusion.','No observer process termination, injection, priority, global timer, security or cache changes.']}
   (resource/'resource-summary.json').write_text(json.dumps(meta,indent=2)+'\n')
-  try:validate_report(resource,args.execution_run,args.execution_attempt,args.harness_revision,args.shard,expected_physical_memory=capacity)
+  try:validate_report(resource,args.execution_run,args.execution_attempt,args.harness_revision,args.shard,expected_physical_memory=capacity,candidate=args.candidate)
   except Exception as failure:print('Resource qualification failed:',failure,file=sys.stderr);return model_exit if model_exit else 1
   return model_exit
  finally:backend.close()

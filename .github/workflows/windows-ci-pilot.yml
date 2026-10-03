@@ -1,7 +1,7 @@
-# MODEL-ONLY diagnostic on codex/windows-model-4x8-resources.
+# MODEL-ONLY diagnostic on codex/windows-model-matched-resources.
 # Existing registered windows-ci-pilot.yml filename reused for manual discovery.
 # Neither this workflow nor its checks certify a fresh complete native pipeline.
-name: MODEL-ONLY Namespace4x8 resources
+name: MODEL-ONLY three-candidate matched resources
 
 'on':
   workflow_dispatch:
@@ -11,7 +11,7 @@ permissions:
   actions: read
 
 concurrency:
-  group: namespace-4x8-resources-${{ github.ref }}
+  group: matched-model-resources-${{ github.ref }}
   cancel-in-progress: false
 
 env:
@@ -38,7 +38,7 @@ jobs:
           python3 - <<'PY'
           import datetime, json, os, urllib.request
           from pathlib import Path
-          if (os.environ.get("GITHUB_REPOSITORY") != "coryj627/slate" or os.environ.get("GITHUB_EVENT_NAME") != "workflow_dispatch" or os.environ.get("GITHUB_REF") != "refs/heads/codex/windows-model-4x8-resources"):
+          if (os.environ.get("GITHUB_REPOSITORY") != "coryj627/slate" or os.environ.get("GITHUB_EVENT_NAME") != "workflow_dispatch" or os.environ.get("GITHUB_REF") != "refs/heads/codex/windows-model-matched-resources"):
               raise SystemExit("This MODEL-ONLY diagnostic runs only by manual dispatch on the fixed scratch branch.")
           base = "https://api.github.com/repos/coryj627/slate"
           def get(route):
@@ -71,14 +71,21 @@ jobs:
   model-shard:
     name: MODEL-ONLY (${{ matrix.candidate }}, shard ${{ matrix.shard }})
     needs: [immutable-producer-preflight]
-    runs-on: nscloud-windows-2022-amd64-4x8
+    runs-on: ${{ matrix.runner }}
     timeout-minutes: 90
     strategy:
       fail-fast: false
-      max-parallel: 4
+      max-parallel: 6
       matrix:
-        candidate: [namespace-4x8]
+        candidate: [namespace-4x8, namespace-4x16, hosted-2022]
         shard: [0, 1]
+        include:
+          - candidate: namespace-4x8
+            runner: nscloud-windows-2022-amd64-4x8
+          - candidate: namespace-4x16
+            runner: nscloud-windows-2022-amd64-4x16
+          - candidate: hosted-2022
+            runner: windows-2022
     defaults:
       run:
         shell: pwsh
@@ -160,7 +167,11 @@ jobs:
           $version = Get-ItemProperty 'HKLM:\SOFTWARE\Microsoft\Windows NT\CurrentVersion'
           $physicalMemoryBytes = [long]$system.TotalPhysicalMemory
           if ([Environment]::OSVersion.Version.Build -ne 20348 -or $windows.BuildNumber -ne '20348') { throw 'Windows Server2022 build20348 required.' }
-          if ($physicalMemoryBytes -lt 6GB -or $physicalMemoryBytes -gt 10GB) { throw "Nominal8GB allocation required; actual bytes=$physicalMemoryBytes." }
+          if ($env:EXECUTION_CANDIDATE -notin @('namespace-4x8','namespace-4x16','hosted-2022')) { throw 'Unknown resource candidate.' }
+          $nominalShape = if ($env:EXECUTION_CANDIDATE -eq 'namespace-4x8') { '4x8' } else { '4x16' }
+          $minimumMemory = if ($nominalShape -eq '4x8') { 6GB } else { 14GB }
+          $maximumMemory = if ($nominalShape -eq '4x8') { 10GB } else { 18GB }
+          if ($physicalMemoryBytes -lt $minimumMemory -or $physicalMemoryBytes -gt $maximumMemory) { throw "Verified candidate capacity differs; shape=$nominalShape actual bytes=$physicalMemoryBytes." }
           $sdk = (dotnet --version).Trim()
           if ($LASTEXITCODE -ne 0 -or $sdk -ne '10.0.401') { throw 'The effective SDK must be 10.0.401.' }
           $runtimes = @(dotnet --list-runtimes)
@@ -200,13 +211,13 @@ jobs:
             shardCount = 2
             logicalProcessors = [Environment]::ProcessorCount
             physicalMemoryBytes = $physicalMemoryBytes
-            nominalShape = '4x8'
+            nominalShape = $nominalShape
             windowsBuild = [int]$windows.BuildNumber
             windowsUbr = [int]$version.UBR
             windowsVersion = $windows.Version
             windowsCaption = $windows.Caption
             processorMetadata = $cpu
-            matchingQualification = 'Namespace RAM-shape control: nominal4CPU/8GiB and Server2022 build20348. Prior4x16 allocation time, image patch, hardware, storage and hypervisor are not claimed identical.'
+            matchingQualification = 'All candidates require4logicalCPU and Server2022 build20348; Namespace4x8 requiresnominal8GiB, Namespace4x16/hosted2022 requirenominal16GiB. Exact patch, physical cores, hardware, allocation time, storage and hypervisor remain unmatched and recorded; equal observer implementation is not zero observer effect.'
             os = [Environment]::OSVersion.VersionString
             gcAvailableMemoryBytes = [GC]::GetGCMemoryInfo().TotalAvailableMemoryBytes
             sdk = $sdk
@@ -230,7 +241,7 @@ jobs:
             --resources-root $resourceOutput --results-directory $resourceResults `
             --report-directory $resourceReports --execution-run $env:GITHUB_RUN_ID `
             --execution-attempt $env:GITHUB_RUN_ATTEMPT --harness-revision $env:GITHUB_SHA `
-            --shard $env:MODEL_SHARD_INDEX -- dotnet test `
+            --shard $env:MODEL_SHARD_INDEX --candidate $env:EXECUTION_CANDIDATE -- dotnet test `
             apps/slate-windows/tests/SlateWindows.Tests/bin/Release/net10.0-windows/SlateWindows.Tests.dll `
             --filter "FullyQualifiedName~ConnectionsLeafTests.TheModelOf" `
             --logger "trx;LogFileName=model.trx" --results-directory $resourceResults `
@@ -263,7 +274,7 @@ jobs:
     strategy:
       fail-fast: false
       matrix:
-        candidate: [namespace-4x8]
+        candidate: [namespace-4x8, namespace-4x16, hosted-2022]
     env:
       EXECUTION_CANDIDATE: '${{ matrix.candidate }}'
     steps:
@@ -333,7 +344,7 @@ jobs:
               require(execution_run.isdecimal() and int(execution_run) > 0, "Invalid new execution run.")
               require(execution_run != PRODUCER["producerRunId"], "Supplemental execution must have a distinct run ID.")
               require(execution_attempt.isdecimal() and int(execution_attempt) > 0, "Invalid new execution attempt.")
-              require(candidate in ("namespace-4x8",), "Unknown consumer provider.")
+              require(candidate in ("namespace-4x8", "namespace-4x16", "hosted-2022"), "Unknown consumer provider.")
               import re
               require(re.fullmatch(r"[0-9a-f]{40}", harness_revision) is not None, "Invalid harness SHA.")
               records = sorted(root.rglob("consumer-provenance.txt"))
@@ -357,9 +368,10 @@ jobs:
                   require(type(v.get("verifiedPayloadFiles")) is int, "Payload count must be an integer.")
                   cpu = v.get("logicalProcessors")
                   require(type(cpu) is int and cpu == 4, "Provider CPU topology changed.")
-                  require(v.get("nominalShape") == "4x8", "Nominal shape changed.")
+                  shape, lo, hi = ("4x8", 6, 10) if candidate == "namespace-4x8" else ("4x16", 14, 18)
+                  require(v.get("nominalShape") == shape, "Nominal shape changed.")
                   memory = v.get("physicalMemoryBytes")
-                  require(type(memory) is int and 6*1024**3 <= memory <= 10*1024**3, "Nominal8GB physical-memory witness missing/changed.")
+                  require(type(memory) is int and lo*1024**3 <= memory <= hi*1024**3, "Verified candidate physical-memory witness missing/changed.")
                   require(type(v.get("windowsBuild")) is int and v["windowsBuild"] == 20348, "Server2022 build missing/changed.")
                   require(type(v.get("windowsUbr")) is int and v["windowsUbr"] >= 0, "Image patch witness missing.")
                   require(type(v.get("processorMetadata")) is list and bool(v["processorMetadata"]), "Processor metadata missing.")
@@ -442,7 +454,7 @@ jobs:
               if type(index) is not int or index not in (0, 1) or index in seen:
                   raise SystemExit('Missing or duplicate resource partition identity.')
               seen.add(index)
-              result = observer.validate_report(summary.parent, os.environ['GITHUB_RUN_ID'], os.environ['GITHUB_RUN_ATTEMPT'], os.environ['GITHUB_SHA'], index, expected_observer_sha=digest, expected_physical_memory=provenance['physicalMemoryBytes'])
+              result = observer.validate_report(summary.parent, os.environ['GITHUB_RUN_ID'], os.environ['GITHUB_RUN_ATTEMPT'], os.environ['GITHUB_SHA'], index, expected_observer_sha=digest, expected_physical_memory=provenance['physicalMemoryBytes'], candidate=os.environ['EXECUTION_CANDIDATE'])
               results.append(dict(result, shard=index))
           if seen != {0, 1}:
               raise SystemExit('Resource witnesses do not cover both complete partitions.')
@@ -468,13 +480,13 @@ jobs:
           test "$MODEL_RESULT" = success
 
   model-only-diagnostic-aggregate:
-    name: MODEL-ONLY Namespace4x8 resources aggregate (unchanged full inventory and resource gate)
+    name: MODEL-ONLY three-candidate matched resources aggregate (unchanged full inventory and resource gate)
     needs: [immutable-producer-preflight, model-shard, per-provider-model-union]
     if: ${{ always() }}
     runs-on: ubuntu-latest
     timeout-minutes: 5
     steps:
-      - name: Require the complete Namespace union and both current consumers
+      - name: Require all three complete candidate unions and all six current consumers
         env:
           PREFLIGHT_RESULT: '${{ needs.immutable-producer-preflight.result }}'
           MODEL_RESULT: '${{ needs.model-shard.result }}'
