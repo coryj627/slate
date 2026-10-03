@@ -1,6 +1,6 @@
-# Scratch-branch diagnostic only; never a full inventory or human acceptance gate.
-name: Mac CI pilot
-run-name: Finder single-case diagnostic / ${{ github.run_id }}
+# Scratch cancellation diagnostic only, using the existing registered mac-ci-pilot.yml identity.
+name: Mac Finder cancellation probe
+run-name: Finder cancellation probe / ${{ github.run_id }}
 
 on:
   workflow_dispatch:
@@ -9,7 +9,7 @@ permissions:
   contents: read
 
 concurrency:
-  group: mac-finder-diagnostic-${{ github.ref }}
+  group: mac-finder-cancellation-probe-${{ github.ref }}
   cancel-in-progress: false
 
 env:
@@ -22,7 +22,7 @@ jobs:
     if: github.event_name == 'workflow_dispatch' && github.ref == 'refs/heads/codex/mac-finder-goldengate-diagnostic'
     # Existing exact shape; no custom tag, cache suffix, volume, or profile change.
     runs-on: nscloud-macos-goldengate-arm64-6x14
-    timeout-minutes: 15
+    timeout-minutes: 10
     steps:
       - name: Checkout branch harness with ancestry
         timeout-minutes: 2
@@ -45,18 +45,18 @@ jobs:
           path: source
           fetch-depth: 0
           persist-credentials: false
-      - name: One existing native case, bounded observations, distinct direct probe
-        timeout-minutes: 10
+      - name: Single unchanged native case; root cancels actual CI run after CANCEL_PROBE_READY
+        timeout-minutes: 8
         run: |
-          exec python pilot-harness/scripts/mac-finder-diagnostic.py \
+          exec python pilot-harness/scripts/mac-finder-cancellation-probe.py \
             --source "$GITHUB_WORKSPACE/source" \
-            --evidence "$RUNNER_TEMP/mac-finder-diagnostic"
+            --evidence "$RUNNER_TEMP/mac-finder-cancellation-probe"
       - name: Preserve outcome and cancellation evidence
         if: always()
         timeout-minutes: 2
         uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a
         with:
-          name: mac-finder-diagnostic-${{ github.run_id }}-${{ github.run_attempt }}
-          path: '${{ runner.temp }}/mac-finder-diagnostic/*'
+          name: mac-finder-cancellation-probe-${{ github.run_id }}-${{ github.run_attempt }}
+          path: '${{ runner.temp }}/mac-finder-cancellation-probe/*'
           if-no-files-found: error
           retention-days: 14

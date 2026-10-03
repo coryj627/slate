@@ -279,6 +279,18 @@ raise SystemExit(pilot.main())
                             self.assertEqual(summary["status"], "incomplete", summary)
                             self.assertEqual(summary["phases"]["cold.signal-regression"]["status"], "running", summary)
                             continue
+                        # A second GitHub cancellation signal must not drop
+                        # the bounded cleanup evidence. The running record is
+                        # saved only after its temporary handlers are installed.
+                        deadline = time.monotonic() + 4
+                        while time.monotonic() < deadline and entry.poll() is None:
+                            summary = json.loads((evidence / "summary.json").read_text())
+                            cleanup = summary["phases"]["cold.signal-regression"].get("cancellation_cleanup", {})
+                            if cleanup.get("status") == "running":
+                                break
+                            time.sleep(0.01)
+                        self.assertEqual(cleanup.get("status"), "running", cleanup)
+                        os.kill(entry.pid, signal.SIGTERM)
                         output, _ = entry.communicate(timeout=7)
                         self.assertEqual(entry.returncode, 1, output)
                         summary = json.loads((evidence / "summary.json").read_text())
@@ -288,8 +300,10 @@ raise SystemExit(pilot.main())
                         cleanup = phase["cancellation_cleanup"]
                         self.assertTrue(cleanup["sigkill_sent"], cleanup)
                         self.assertIn(child_pid, cleanup["pids_after_term_grace"], cleanup)
-                        self.assertTrue(cleanup["group_has_no_live_members"], cleanup)
-                        self.assertEqual(cleanup["live_group_pids_after"], [], cleanup)
+                        self.assertTrue(cleanup["all_observed_owned_stopped"], cleanup)
+                        self.assertEqual(cleanup["live_owned_pids_after"], [], cleanup)
+                        self.assertTrue(cleanup["cleanup_complete"], cleanup)
+                        self.assertTrue(any(row["signal"] == signal.SIGTERM for row in cleanup["repeated_signals"]), cleanup)
                     finally:
                         # The negative control deliberately bypasses Python's
                         # cleanup. Never leave its isolated child behind.

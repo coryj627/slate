@@ -171,6 +171,196 @@ def cancelled(signum, frame):
     raise Cancelled(f"received signal {signum}")
 
 
+# PRIVATE PROPOSAL: inserted into mac-ci-pilot.py, not a separate runtime file.
+class ProcessBsdInfo(ctypes.Structure):
+    # Public Darwin sys/proc_info.h PROC_PIDTBSDINFO; fixed MAXCOMLEN=16.
+    _fields_ = [(name, ctypes.c_uint32) for name in ["flags", "status", "xstatus", "pid", "ppid", "uid", "gid", "ruid", "rgid", "svuid", "svgid", "reserved"]] + [
+        ("comm", ctypes.c_char * 16), ("name", ctypes.c_char * 32)] + [
+        (name, ctypes.c_uint32) for name in ["nfiles", "pgid", "jobc", "tdev", "tpgid"]] + [
+        ("nice", ctypes.c_int32), ("start_sec", ctypes.c_uint64), ("start_usec", ctypes.c_uint64)]
+
+
+_libproc = None
+
+
+def process_identity(pid: int) -> dict:
+    """Read birth identity, not a rounded ps start string; unknown is not absent."""
+    if sys.platform == "darwin":
+        global _libproc
+        if _libproc is None:
+            _libproc = ctypes.CDLL("/usr/lib/libproc.dylib", use_errno=True)
+            _libproc.proc_pidinfo.argtypes = [ctypes.c_int, ctypes.c_int, ctypes.c_uint64, ctypes.c_void_p, ctypes.c_int]
+            _libproc.proc_pidinfo.restype = ctypes.c_int
+        info = ProcessBsdInfo()
+        ctypes.set_errno(0)
+        count = _libproc.proc_pidinfo(pid, 3, 0, ctypes.byref(info), ctypes.sizeof(info))
+        if count != ctypes.sizeof(info):
+            error = ctypes.get_errno()
+            return {"pid": pid, "presence": "absent" if error == 3 else "unknown", "errno": error, "returned_bytes": count}
+        return {"pid": info.pid, "ppid": info.ppid, "pgid": info.pgid, "uid": info.uid,
+                "birth": [info.start_sec, info.start_usec], "presence": "zombie" if info.status == 5 else "live"}
+    if sys.platform.startswith("linux"):
+        try:
+            root = Path("/proc") / str(pid)
+            raw = (root / "stat").read_text()
+            bits = raw[raw.rfind(")") + 2:].split()
+            uid_line = next(line for line in (root / "status").read_text().splitlines() if line.startswith("Uid:"))
+            uid = int(uid_line.split()[2])  # effective UID
+            return {"pid": pid, "ppid": int(bits[1]), "pgid": int(bits[2]), "uid": uid,
+                    "birth": [int(bits[19])], "presence": "zombie" if bits[0] == "Z" else "live"}
+        except FileNotFoundError:
+            return {"pid": pid, "presence": "absent"}
+        except (OSError, ValueError, StopIteration) as exc:
+            return {"pid": pid, "presence": "unknown", "error": str(exc)}
+    return {"pid": pid, "presence": "unknown", "error": "unsupported birth-identity platform"}
+
+
+def ownership_rows() -> dict[int, int]:
+    result = subprocess.run(["ps", "-eo", "pid,ppid"], capture_output=True, text=True, timeout=0.5)
+    require(result.returncode == 0, "cannot observe process ancestry")
+    return {int(parts[0]): int(parts[1]) for line in result.stdout.splitlines()[1:]
+            if len(parts := line.split()) == 2 and all(x.isdigit() for x in parts)}
+
+
+class OwnedProcesses:
+    """Only witnessed descendants of the launched child; never adopt by name/group.
+
+    PPID ancestry must still match when the birth identity is read. Once bound,
+    identities survive setsid/setpgid/reparenting. Rapid unobserved reparenting is
+    outside this scope. Darwin birth-check+kill is not a kernel-atomic primitive.
+    """
+    def __init__(self, proc, reader=process_identity, rows=ownership_rows, killer=os.kill):
+        self.proc, self.reader, self.rows, self.killer = proc, reader, rows, killer
+        self.uid = os.geteuid()
+        self.owned, self.issues, self.signals = {}, [], []
+        self.anchor = self.read(proc.pid)
+        self.anchor_bound = self.anchor.get("presence") in ("live", "zombie") and self.anchor.get("uid") == self.uid and proc.pid not in (0, 1, os.getpid())
+        if self.anchor_bound:
+            self.owned[proc.pid] = dict(self.anchor, observed_utc=utc(), parent_birth=None, depth=0)
+        else:
+            self.issue("anchor identity not bound", self.anchor)
+
+    @staticmethod
+    def token(row):
+        return row.get("pid"), row.get("uid"), tuple(row.get("birth", []))
+
+    def issue(self, reason, row):
+        entry = {"reason": reason, "identity": row}
+        if entry not in self.issues and len(self.issues) < 32:
+            self.issues.append(entry)
+
+    def read(self, pid):
+        try:
+            return self.reader(pid)
+        except Exception as exc:
+            now = {"pid": pid, "presence": "unknown", "error": str(exc)}
+            self.issue("identity read failed; refuse signal/adoption", now)
+            return now
+
+    def current(self, pid):
+        now = self.read(pid)
+        known = self.owned[pid]
+        if now.get("presence") in ("live", "zombie") and self.token(now) != self.token(known):
+            self.issue("PID birth/UID changed; refuse signal/adoption", now)
+            return dict(now, presence="replaced")
+        if now.get("presence") == "unknown":
+            self.issue("identity unreadable; refuse signal", now)
+        return now
+
+    def observe(self, ancestry=None):
+        try:
+            ancestry = self.rows() if ancestry is None else ancestry
+            parents = {pid for pid in self.owned if self.current(pid).get("presence") == "live"}
+            while True:
+                added = set()
+                for pid, ppid in ancestry.items():
+                    if pid in self.owned or ppid not in parents or pid in (0, 1, os.getpid()):
+                        continue
+                    parent = self.current(ppid)
+                    child = self.read(pid)
+                    parent_after = self.current(ppid)
+                    if parent.get("presence") != "live" or parent_after.get("presence") != "live" or self.token(parent_after) != self.token(parent) or child.get("presence") not in ("live", "zombie"):
+                        continue
+                    if child.get("ppid") != ppid or child.get("uid") != self.uid or child.get("birth", []) < parent_after.get("birth", []):
+                        self.issue("ancestry/UID/birth changed before adoption", child)
+                        continue
+                    if len(self.owned) >= 128:
+                        self.issue("owned-identity bound exceeded", child)
+                        continue
+                    self.owned[pid] = dict(child, observed_utc=utc(), parent_birth=self.token(parent_after), depth=self.owned[ppid]["depth"] + 1)
+                    if child["presence"] == "live":
+                        added.add(pid)
+                if not added:
+                    break
+                parents |= added
+        except (OSError, subprocess.TimeoutExpired, ValueError) as exc:
+            self.issue("ancestry sampling failed; no broad fallback", {"error": str(exc)})
+        return self.snapshot()
+
+    def snapshot(self):
+        return {"scope": "observed descendant PID/UID/birth identities only; shared services and unobserved rapid reparenting excluded",
+                "anchor_bound": self.anchor_bound, "owned": list(self.owned.values()), "issues": list(self.issues)}
+
+    def signal(self, pid, sig):
+        now = self.current(pid)  # Revalidate immediately before individual signal.
+        if now.get("presence") != "live":
+            return
+        event = {"pid": pid, "uid": now["uid"], "birth": now["birth"], "signal": sig, "utc": utc()}
+        try:
+            self.killer(pid, sig)
+            event["result"] = "sent"
+        except ProcessLookupError:
+            event["result"] = "already gone"
+        except OSError as exc:
+            event.update(result="failed", error=str(exc))
+        self.signals.append(event)
+
+    def terminate(self, grace=3.0):
+        started = time.monotonic()
+        term_sent = set()
+        deadline = started + grace
+        while True:
+            self.proc.poll()
+            self.observe()
+            # Children first so a parent cannot disappear before an already
+            # observed child has its birth identity retained and signalled.
+            for pid in sorted(self.owned, key=lambda p: self.owned[p]["depth"], reverse=True):
+                token = self.token(self.owned[pid])
+                if token not in term_sent:
+                    self.signal(pid, signal.SIGTERM)
+                    term_sent.add(token)
+            live = [pid for pid in self.owned if self.current(pid).get("presence") == "live"]
+            if not live or time.monotonic() >= deadline:
+                break
+            time.sleep(0.05)
+        pids_after_term = live
+        for pid in sorted(live, key=lambda p: self.owned[p]["depth"], reverse=True):
+            self.signal(pid, signal.SIGKILL)
+        deadline = time.monotonic() + 1
+        while True:
+            self.proc.poll()
+            observed = {pid: self.current(pid) for pid in self.owned}
+            live = [pid for pid, row in observed.items() if row.get("presence") == "live"]
+            if not live or time.monotonic() >= deadline:
+                break
+            time.sleep(0.05)
+        unknown = [pid for pid, row in observed.items() if row.get("presence") in ("unknown", "replaced")]
+        zombies = [pid for pid, row in observed.items() if row.get("presence") == "zombie"]
+        try:
+            self.proc.wait(timeout=0.5)
+        except subprocess.TimeoutExpired:
+            pass
+        return {**self.snapshot(), "signals": self.signals, "pids_after_term_grace": pids_after_term,
+                "live_owned_pids_after": live, "unknown_or_reused_owned_pids_after": unknown, "zombie_owned_pids_after": zombies,
+                "all_observed_owned_stopped": self.anchor_bound and not live and not unknown,
+                "sigkill_sent": any(x["signal"] == signal.SIGKILL and x["result"] == "sent" for x in self.signals),
+                "wrapper_exit_code": self.proc.poll(), "cleanup_seconds": time.monotonic() - started,
+                "unobserved_descendants_proved_absent": False,
+                "identity_signal_atomic": False, "cleanup_complete": True}
+
+
+
+
 class Runner:
     def __init__(self, source: Path, evidence: Path, layer: str):
         self.source, self.evidence = source, evidence
@@ -207,6 +397,7 @@ class Runner:
         print(f"Mac pilot | phase {name} started", flush=True)
         start = time.monotonic()
         proc = None
+        owner = None
         peak_rss = 0
         try:
             with output.open("w") as out:
@@ -214,13 +405,25 @@ class Runner:
                     proc = subprocess.Popen(["/usr/bin/time", "-l", *args], cwd=cwd or self.source,
                                             env=active_env, stdout=out, stderr=err if stdout_file else subprocess.STDOUT,
                                             start_new_session=True)
+                    owner = OwnedProcesses(proc)
                     samples = self.evidence / (name + ".processes.jsonl")
                     with samples.open("w") as stream:
                         next_memory_sample = 0.0
                         while proc.poll() is None:
-                            snapshot = subprocess.run(["ps", "-eo", "pid,ppid,pcpu,rss,command"], capture_output=True, text=True)
+                            sampling_error = None
+                            try:
+                                snapshot = subprocess.run(["ps", "-eo", "pid,ppid,pcpu,rss,command"], capture_output=True, text=True, timeout=0.5)
+                                sampling_exit = snapshot.returncode
+                                if sampling_exit != 0:
+                                    sampling_error = "process sampler exited " + str(sampling_exit)
+                            except (OSError, subprocess.TimeoutExpired) as exc:
+                                sampling_error = str(exc)
+                                sampling_exit = None
+                                snapshot = None
+                            if sampling_error:
+                                owner.issue("process sampling failed; ancestry capture incomplete", {"error": sampling_error})
                             rows = {}
-                            for line in snapshot.stdout.splitlines()[1:]:
+                            for line in (snapshot.stdout.splitlines()[1:] if snapshot is not None and sampling_exit == 0 else []):
                                 bits = line.strip().split(None, 4)
                                 if len(bits) == 5 and bits[0].isdigit() and bits[1].isdigit():
                                     rows[int(bits[0])] = bits
@@ -230,9 +433,10 @@ class Runner:
                                 if extended == descendants:
                                     break
                                 descendants = extended
+                            ownership = owner.observe({pid: int(bits[1]) for pid, bits in rows.items()})
                             selected = [rows[pid] for pid in descendants if pid in rows]
                             peak_rss = max(peak_rss, sum(int(bits[3]) for bits in selected))
-                            sample = {"utc": utc(), "processes": selected, "sampling_exit": snapshot.returncode}
+                            sample = {"utc": utc(), "processes": selected, "sampling_exit": sampling_exit, "sampling_error": sampling_error, "ownership": ownership}
                             if time.monotonic() >= next_memory_sample:
                                 sample["machine_memory"] = machine_memory()
                                 next_memory_sample = time.monotonic() + 5
@@ -242,7 +446,28 @@ class Runner:
         except BaseException as exc:
             record.update(status="cancelled" if isinstance(exc, Cancelled) else "failed", error=str(exc))
             if proc:
-                record["cancellation_cleanup"] = terminate_group(proc)
+                owner = owner or OwnedProcesses(proc)
+                repeated_signals = []
+                previous_handlers = {sig: signal.getsignal(sig) for sig in (signal.SIGINT, signal.SIGTERM)}
+                def during_cleanup(signum, _frame):
+                    repeated_signals.append({"signal": signum, "utc": utc()})
+                # GitHub may deliver SIGTERM after SIGINT. Finish this bounded
+                # cleanup and retain each signal rather than lose its evidence.
+                record["cancellation_cleanup"] = {**owner.snapshot(), "cleanup_complete": False, "status": "running"}
+                try:
+                    for sig in previous_handlers:
+                        signal.signal(sig, during_cleanup)
+                    self.save()
+                    record["cancellation_cleanup"] = owner.terminate()
+                except BaseException as cleanup_error:
+                    record["cancellation_cleanup"] = {**owner.snapshot(), "signals": list(owner.signals),
+                                                      "cleanup_complete": False, "all_observed_owned_stopped": False,
+                                                      "error": str(cleanup_error)}
+                finally:
+                    record["cancellation_cleanup"]["repeated_signals"] = repeated_signals
+                    self.save()
+                    for sig, handler in previous_handlers.items():
+                        signal.signal(sig, handler)
                 record["exit_code"] = proc.returncode
             raise
         finally:
