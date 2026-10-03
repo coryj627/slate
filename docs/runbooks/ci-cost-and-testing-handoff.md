@@ -298,5 +298,17 @@ them. Extract source/document/ancestry checks only with equivalent semantic
 enforcement and complete input triggers. Separate controllable time policy from
 real dispatcher/timer delivery and hardware latency witnesses.
 
+The independent shard verifier pins the original inventory hashes as well as
+the census counts; agreement between shards alone cannot accept a changed
+inventory. The original SHA-256 values are:
+
+- routes: `e847440e2e4a1c18142b44faa91f8891209b2866296ea15fd31a5385657737fd`
+- reroot: `48c2daa03565b2e82a202e211d44b32555ef92d1b28a793fc4561a8b5912312e`
+- composed: `81ba0fdae0e51f8c33e110ea0d3ccd8278157f2f390560fdba268712472a629a`
+
+A deliberate model expansion or inventory change must update the model's
+counts and named exclusions, the verifier's `CENSUSES`/`INVENTORY_SHA256`, and
+the independently captured test fixtures together under model-change review.
+
 These experiments can justify a later portfolio change. Neither test counts nor
 passing shards establish equivalent fault detection for an untested subset.

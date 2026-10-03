@@ -13,11 +13,17 @@ import sys
 
 
 # Independent gate pins: a deliberate model expansion updates these alongside
-# the C# model's total, named exclusions and driven count.
+# the C# model's total, named exclusions, driven count and inventory hashes.
 CENSUSES = {
     "routes": (25200, 12812, 12388),
     "reroot": (5760, 5216, 544),
     "composed": (196, 59, 137),
+}
+
+INVENTORY_SHA256 = {
+    "routes": "e847440e2e4a1c18142b44faa91f8891209b2866296ea15fd31a5385657737fd",
+    "reroot": "48c2daa03565b2e82a202e211d44b32555ef92d1b28a793fc4561a8b5912312e",
+    "composed": "81ba0fdae0e51f8c33e110ea0d3ccd8278157f2f390560fdba268712472a629a",
 }
 
 
@@ -61,6 +67,9 @@ def verify(paths, shard_count):
         digest = report.get("inventorySha256")
         require(type(digest) is str and re.fullmatch(r"[0-9a-fA-F]{64}", digest),
                 f"{label}: invalid inventory digest")
+        require(digest.lower() == INVENTORY_SHA256[family],
+                f"{label}: inventory digest does not match the pinned reference "
+                f"({INVENTORY_SHA256[family]})")
         expected_ordinals = list(range(index + 1, CENSUSES[family][2] + 1, shard_count))
         for field in ("selectedOrdinals", "completedOrdinals"):
             ordinals = report.get(field)

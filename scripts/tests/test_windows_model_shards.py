@@ -16,6 +16,15 @@ verifier = importlib.util.module_from_spec(SPEC)
 SPEC.loader.exec_module(verifier)
 
 
+# Captured reference hashes are independent of the verifier's enforcement map.
+# Deliberate inventory changes update these fixtures as well as that map.
+REFERENCE_INVENTORIES = {
+    "routes": "e847440e2e4a1c18142b44faa91f8891209b2866296ea15fd31a5385657737fd",
+    "reroot": "48c2daa03565b2e82a202e211d44b32555ef92d1b28a793fc4561a8b5912312e",
+    "composed": "81ba0fdae0e51f8c33e110ea0d3ccd8278157f2f390560fdba268712472a629a",
+}
+
+
 class ModelShardVerificationTests(unittest.TestCase):
     def setUp(self):
         self.directory = tempfile.TemporaryDirectory()
@@ -29,7 +38,8 @@ class ModelShardVerificationTests(unittest.TestCase):
                     "schemaVersion": 1, "family": family,
                     "shardIndex": index, "shardCount": 2,
                     "totalCells": total, "unreachableCells": excluded,
-                    "reachableCells": reachable, "inventorySha256": "a" * 64,
+                    "reachableCells": reachable,
+                    "inventorySha256": REFERENCE_INVENTORIES[family],
                     "selectedOrdinals": selected, "completedOrdinals": selected.copy(),
                     "success": True, "elapsedMilliseconds": 1234.5,
                     "routes": [{"route": "sample", "cases": len(selected),
@@ -89,6 +99,41 @@ class ModelShardVerificationTests(unittest.TestCase):
                 with self.assertRaises(ValueError):
                     self.verify()
                 self.reports[0][field] = original
+
+    def test_same_changed_digest_in_both_complete_shards_fails(self):
+        for family in REFERENCE_INVENTORIES:
+            with self.subTest(family=family):
+                original = copy.deepcopy(self.reports)
+                try:
+                    for report in self.reports:
+                        if report["family"] == family:
+                            report["inventorySha256"] = "b" * 64
+                    # Counts, all selected/completed ordinals, successful runs,
+                    # and agreement between siblings remain intact.
+                    with self.assertRaisesRegex(ValueError, "pinned reference"):
+                        self.verify()
+                finally:
+                    self.reports = original
+
+    def test_other_family_reference_digest_in_both_shards_fails(self):
+        families = list(REFERENCE_INVENTORIES)
+        for index, family in enumerate(families):
+            with self.subTest(family=family):
+                original = copy.deepcopy(self.reports)
+                try:
+                    other_family = families[(index + 1) % len(families)]
+                    for report in self.reports:
+                        if report["family"] == family:
+                            report["inventorySha256"] = REFERENCE_INVENTORIES[other_family]
+                    with self.assertRaisesRegex(ValueError, "pinned reference"):
+                        self.verify()
+                finally:
+                    self.reports = original
+
+    def test_reference_digest_case_is_not_significant(self):
+        for report in self.reports:
+            report["inventorySha256"] = report["inventorySha256"].upper()
+        self.verify()
 
     def test_invalid_schema_and_metadata_fail(self):
         for field, value in (("schemaVersion", 2), ("family", "unknown"),
