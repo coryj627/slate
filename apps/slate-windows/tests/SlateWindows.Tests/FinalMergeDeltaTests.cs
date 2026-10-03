@@ -357,6 +357,7 @@ public sealed class FinalMergeDeltaTests
     /// the rerun's core calls run before the session is disposed.</summary>
     private static void CloseWhileTheRerunIsParked(PumpedSaveReentrancyTests.Host host, ManualResetEventSlim rerun)
     {
+        string before = CloseState(host);
         var clock = Stopwatch.StartNew();
         long releasedAt = 0;
         _ = Task.Run(async () =>
@@ -376,10 +377,24 @@ public sealed class FinalMergeDeltaTests
         long closedAt = clock.ElapsedMilliseconds;
 
         long released = Volatile.Read(ref releasedAt);
-        Assert.Null(host.Lifecycle.Workspace);
+        string diagnostics = $"CloseVault returned at {closedAt} ms; rerun released at {released} ms. "
+            + $"Before: {before}. After: {CloseState(host)}.";
+        Assert.True(host.Lifecycle.Workspace is null, $"The workspace remained open. {diagnostics}");
         Assert.True(
             released > 0 && closedAt >= released,
-            $"the close returned at {closedAt} ms, before the rerun was released at {released} ms");
+            $"The close returned before the rerun was released. {diagnostics}");
+    }
+
+    private static string CloseState(PumpedSaveReentrancyTests.Host host)
+    {
+        FilesSidebarViewModel? sidebar = host.Lifecycle.FileSidebar;
+        return $"busy={host.Lifecycle.IsBusy}, rescanActive={host.Lifecycle.IsRescanActive}, "
+            + $"status={host.Lifecycle.StatusText}, treeRefreshCompleted={sidebar?.TreeRefreshCompletion.IsCompleted}, "
+            + $"loadingChildren={sidebar?.IsLoadingChildren}, expandingLoaded={sidebar?.IsExpandingLoaded}, "
+            + $"importing={sidebar?.IsImporting}, trashing={sidebar?.IsTrashing}, filtering={sidebar?.IsFiltering}, "
+            + $"dirtyTabs={host.Workspace.HasDirtyTabs}, faultedCleanSave={host.Workspace.HasCleanTabWithAFaultedSave}, "
+            + $"savesIdle={host.Workspace.SavesIdle}, saveWorkers={host.Workspace.SavesForTests.LiveWorkersForTests}, "
+            + $"savesClosed={host.Workspace.SavesForTests.IsClosed}";
     }
 
     /// <summary>The link-and-task cache loads of the tabs the workspace

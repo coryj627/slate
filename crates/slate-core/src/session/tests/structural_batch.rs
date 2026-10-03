@@ -1159,51 +1159,111 @@ fn two_sessions_serialize_batch_and_legacy_folder_move_before_preflight() {
 }
 
 #[test]
+#[expect(
+    clippy::disallowed_macros,
+    reason = "libtest must capture this fixture's original panic despite MathCAT's silent hook"
+)]
 fn structural_operations_in_different_vaults_remain_independent() {
-    let (_first_tmp, first, _first_state) = fixture(&[("a.md", "a")], &["dest"]);
-    let (second_tmp, second, _second_state) = fixture(&[("b.md", "b")], &["dest"]);
-    let first = Arc::new(first);
-    let (entered_tx, entered_rx) = mpsc::channel();
-    let (release_tx, release_rx) = mpsc::channel();
-    let moving_first = Arc::clone(&first);
-    let (first_tx, first_rx) = mpsc::channel();
-    std::thread::spawn(move || {
-        let result = moving_first.batch_move_with_faults(
-            BatchMoveRequest {
-                items: vec![file("a.md")],
-                new_parent: "dest".into(),
-            },
-            &BlockingBatchFault {
-                point: BatchFaultPoint::MoveIndex,
-                entered: Mutex::new(Some(entered_tx)),
-                release: Mutex::new(release_rx),
-            },
+    fn panic_message(payload: &(dyn std::any::Any + Send)) -> &str {
+        payload
+            .downcast_ref::<String>()
+            .map(String::as_str)
+            .or_else(|| payload.downcast_ref::<&str>().copied())
+            .unwrap_or("non-string panic payload")
+    }
+
+    fn run_worker<T>(name: &str, started: std::time::Instant, work: impl FnOnce() -> T) -> T {
+        match std::panic::catch_unwind(std::panic::AssertUnwindSafe(work)) {
+            Ok(result) => result,
+            Err(payload) => {
+                eprintln!(
+                    "different-vault independence {name} panicked at {:?}: {}",
+                    started.elapsed(),
+                    panic_message(payload.as_ref())
+                );
+                std::panic::resume_unwind(payload);
+            }
+        }
+    }
+
+    // Keep the dependency's process-wide hook untouched. These fixture-only
+    // diagnostics print the original payload and then resume its unwind.
+    let started = std::time::Instant::now();
+    let phases = Mutex::new(Vec::new());
+    let mark = |phase| phases.lock().unwrap().push((phase, started.elapsed()));
+    let result = std::panic::catch_unwind(|| {
+        mark("opening and scanning fixtures");
+        let (_first_tmp, first, _first_state) = fixture(&[("a.md", "a")], &["dest"]);
+        let (second_tmp, second, _second_state) = fixture(&[("b.md", "b")], &["dest"]);
+        let first = Arc::new(first);
+        let (entered_tx, entered_rx) = mpsc::channel();
+        let (release_tx, release_rx) = mpsc::channel();
+        let moving_first = Arc::clone(&first);
+        let (first_tx, first_rx) = mpsc::channel();
+        mark("spawning first vault worker");
+        std::thread::spawn(move || {
+            run_worker("first vault worker", started, || {
+                let result = moving_first.batch_move_with_faults(
+                    BatchMoveRequest {
+                        items: vec![file("a.md")],
+                        new_parent: "dest".into(),
+                    },
+                    &BlockingBatchFault {
+                        point: BatchFaultPoint::MoveIndex,
+                        entered: Mutex::new(Some(entered_tx)),
+                        release: Mutex::new(release_rx),
+                    },
+                );
+                let _ = first_tx.send(result);
+            });
+        });
+        mark("waiting for first vault barrier");
+        entered_rx
+            .recv_timeout(LIVENESS)
+            .expect("first vault reached its barrier");
+
+        let (second_tx, second_rx) = mpsc::channel();
+        mark("spawning second vault worker");
+        std::thread::spawn(move || {
+            run_worker("second vault worker", started, || {
+                let _ = second_tx.send(second.batch_move(BatchMoveRequest {
+                    items: vec![file("b.md")],
+                    new_parent: "dest".into(),
+                }));
+            });
+        });
+        mark("waiting for independent second vault result");
+        let second_report = second_rx
+            .recv_timeout(LIVENESS)
+            .expect("a different vault must not wait on the first vault's sidecar")
+            .unwrap();
+        mark("checking second vault report and file");
+        assert_eq!(
+            second_report.state,
+            BatchMoveState::Succeeded,
+            "second vault report: {second_report:#?}"
         );
-        let _ = first_tx.send(result);
-    });
-    entered_rx
-        .recv_timeout(LIVENESS)
-        .expect("first vault reached its barrier");
+        assert!(second_tmp.path().join("dest/b.md").is_file());
 
-    let (second_tx, second_rx) = mpsc::channel();
-    std::thread::spawn(move || {
-        let _ = second_tx.send(second.batch_move(BatchMoveRequest {
-            items: vec![file("b.md")],
-            new_parent: "dest".into(),
-        }));
+        mark("releasing first vault barrier");
+        release_tx.send(()).unwrap();
+        mark("waiting for and checking first vault result");
+        let first_report = first_rx.recv_timeout(LIVENESS).unwrap().unwrap();
+        assert_eq!(
+            first_report.state,
+            BatchMoveState::Succeeded,
+            "first vault report: {first_report:#?}"
+        );
     });
-    let second_report = second_rx
-        .recv_timeout(LIVENESS)
-        .expect("a different vault must not wait on the first vault's sidecar")
-        .unwrap();
-    assert_eq!(second_report.state, BatchMoveState::Succeeded);
-    assert!(second_tmp.path().join("dest/b.md").is_file());
-
-    release_tx.send(()).unwrap();
-    assert_eq!(
-        first_rx.recv_timeout(LIVENESS).unwrap().unwrap().state,
-        BatchMoveState::Succeeded
-    );
+    if let Err(payload) = result {
+        eprintln!(
+            "different-vault independence failure at {:?}: {}; phases: {:?}",
+            started.elapsed(),
+            panic_message(payload.as_ref()),
+            phases.lock().unwrap()
+        );
+        std::panic::resume_unwind(payload);
+    }
 }
 
 #[test]

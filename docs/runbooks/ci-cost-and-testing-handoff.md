@@ -134,12 +134,50 @@ and persistence, cleanup after cancellation, and billed units. A few runs cannot
 establish stable p95 latency or flake rates.
 
 The Windows pilot automatically performs a hosted run with cache restore disabled
-when its workflow/action changes in a PR. Once the workflow is registered on the
-default branch, manual inputs select `hosted`, `namespace-8x16`, or `namespace-4x8`
+when its workflow/action changes in a PR. After a workflow has run once, the
+GitHub API/CLI can dispatch its existing branch version even when the web page
+has no **Run workflow** button. This was verified on October 3 before merging
+the pilot. Manual inputs select `hosted`, `namespace-8x16`, or `namespace-4x8`
 and cache restore. Both Namespace candidates deliberately omit an attached
 Namespace volume. Their non-interactive session cannot replace the separately
 hosted FlaUI desktop check. GitHub job/step timing plus uploaded family reports
 and TRX provide the comparison evidence.
+
+### Mac continuation: Release artifacts and fresh acceptance
+
+The separate [matched Mac pilot](mac-ci-pilot.md) freezes the repaired application
+source, keeps native and analyzer gates independent, and records cold products
+and same-VM incremental reuse without changing production routing or cache tags.
+
+The October 3 Mac continuation found a Release-only native artifact failure at
+`4958e62e61d012d0a6924ec38433a283999f00e1`: Xcode 27's linker and the native
+loader both rejected the Rust 1.97.1 dylib's misaligned Mach-O string table.
+Debug builds and static accessibility scans did not expose this shipping-artifact
+failure. The Mac build script now disables Cargo's Release stripping and uses
+Apple's `strip -x` on the generated dylib before Swift linking and bundling.
+The pinned Rust version and Release optimization settings remain unchanged.
+See the upstream [Rust issue](https://github.com/rust-lang/rust/issues/157750).
+
+At repair revision `e6a8337be2905b3f43841e6ab456b0f57a7d91e4`, the full Release
+bundle built successfully. Its signature, plist, relative dylib link, native
+load and FFI contract were checked independently. The complete native debug
+suite passed all 3,032 XCTest cases with zero failures, errors or skips, and
+the Swift CLI smoke passed. The separate pinned analyzer scored 100 with zero
+errors or warnings; its SwiftUI input tree is identical at baseline and repair.
+These automated results do not constitute fresh human VoiceOver acceptance.
+
+Earlier complete XCTest attempts encountered Finder Trash timeout/busy errors.
+Unchanged complete reruns passed, including runs at 18 and 6 workers, but no
+causal repair was established. Preserve those failures rather than classifying
+them as explained by a later green run. Finder Put Back remains part of the
+native Trash contract.
+
+Use the verified `.app` bundle for human acceptance. Hold Option while opening
+it until Welcome appears to use the existing restore-vault escape hatch, then
+open a disposable copied fixture. Record actual keyboard landing, words heard,
+task completion and disk effects. The canonical user vault must remain intact.
+Retain a real Release artifact load/link witness when evaluating build-toolchain
+or packaging changes; debug and analyzer results alone do not protect that seam.
 
 The first cold hosted pilot, [run 36797768639](https://github.com/coryj627/slate/actions/runs/36797768639),
 executed 4,793 app tests: 4,791 passed and two failed. A graph warm tick took
