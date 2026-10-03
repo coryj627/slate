@@ -97,7 +97,7 @@ jobs:
           retention-days: 14
       - name: Complete native cold and same-VM warm passes
         run: |
-          python pilot-harness/scripts/mac-ci-pilot.py native \
+          exec python pilot-harness/scripts/mac-ci-pilot.py native \
             --source "$GITHUB_WORKSPACE/source" --evidence "$RUNNER_TEMP/mac-pilot-native"
       - name: Preserve full or partial native evidence
         if: always()
@@ -148,7 +148,7 @@ jobs:
           retention-days: 14
       - name: Build exact analyzer and enforce every cold/warm scan
         run: |
-          python pilot-harness/scripts/mac-ci-pilot.py analyzer \
+          exec python pilot-harness/scripts/mac-ci-pilot.py analyzer \
             --source "$GITHUB_WORKSPACE/source" --evidence "$RUNNER_TEMP/mac-pilot-analyzer"
       - name: Preserve independent analyzer evidence
         if: always()

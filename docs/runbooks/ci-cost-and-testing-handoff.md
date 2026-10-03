@@ -172,6 +172,26 @@ causal repair was established. Preserve those failures rather than classifying
 them as explained by a later green run. Finder Put Back remains part of the
 native Trash contract.
 
+The paired Xcode 27 pilot exposed an ordering assumption in
+`testAwaitingACancelledPassAppliesNothingButSettleFollowsIt`: awaiting a
+cancelled seed also permits its valid replacement to paint before the test
+resumes. The repaired fixture holds both real passes at explicit barriers,
+installs the successor while settle awaits the seed, verifies that the
+cancelled seed paints nothing, and then requires settle to follow the successor
+to its repaint. Its name and the 3,032-case inventory are unchanged. Debug-only
+nil-default hooks provide the barriers; Release excludes them. A one-pass
+settle mutant and a missing final cancellation-guard mutant both fail the
+repaired assertions. Full provider qualification remains separate.
+
+The cold Namespace Golden Gate 27.0 attempt progressed slowly through repeated
+approximately two-minute Finder deletion requests and was cancelled with
+partial evidence preserved. The normal Namespace Mac workflow passed on Tahoe
+26.6.2. Preserve this image distinction and the unresolved Finder condition;
+do not infer a provider-wide limitation or replace Finder Put Back semantics.
+The pilot's long steps now replace their entry shell with Python so cancellation
+reaches its handler. Keep actual process cleanup and provider VM destruction as
+separate observations.
+
 Use the verified `.app` bundle for human acceptance. Hold Option while opening
 it until Welcome appears to use the existing restore-vault escape hatch, then
 open a disposable copied fixture. Record actual keyboard landing, words heard,

@@ -118,6 +118,15 @@ Finder are outside it. Unit verification does not establish actual hosted
 runner teardown. Preserve cancelled-run partial artifacts and inspect provider
 lifetime/destruction before claiming cancellation cleanup.
 
+The two long-running workflow steps use `exec python` so Python replaces the
+entry shell and receives the runner's cancellation signal directly. GitHub
+documents SIGINT to the step entry process, a 7.5-second grace, then SIGTERM
+and a further 2.5 seconds before killing its process tree; see
+[workflow cancellation](https://docs.github.com/en/actions/reference/workflows-and-actions/workflow-cancellation).
+The signal regression exercises the workflow entrypoint, cancelled summary and
+owned group cleanup. A destroyed provider VM is separate evidence; it does not
+prove that Python received a signal or ran its cleanup handler.
+
 Download private evidence promptly: preflight and final/partial native/analyzer
 artifacts retain for 14 days. Combine run/job pickup and step timing with
 authenticated Namespace instance/usage reports. GitHub job time alone is not

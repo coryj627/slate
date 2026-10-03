@@ -10,6 +10,7 @@ import signal
 import subprocess
 import sys
 import tempfile
+import time
 import unittest
 from unittest.mock import patch
 
@@ -195,6 +196,114 @@ class MacPilotGateTests(unittest.TestCase):
                     pass
             leader.wait(timeout=3)
             leader.stdout.close()
+
+    @unittest.skipUnless(os.name == "posix", "workflow signal contract requires Unix")
+    def test_workflow_entry_signal_reaches_main_and_records_phase_cleanup(self):
+        workflow = (Path(__file__).resolve().parents[2] / ".github/workflows/mac-ci-pilot.yml").read_text()
+        steps = [("native", "Complete native cold and same-VM warm passes"),
+                 ("analyzer", "Build exact analyzer and enforce every cold/warm scan")]
+        for layer, title in steps:
+            lines = workflow.splitlines()
+            start = lines.index("      - name: " + title)
+            self.assertEqual(lines[start + 1], "        run: |")
+            body = []
+            for line in lines[start + 2:]:
+                if line and not line.startswith("          "):
+                    break
+                body.append(line[10:])
+            actual_step = "\n".join(body) + "\n"
+            # Negative control: the old shell entry receives SIGINT while
+            # Python remains parked. Then exercise the actual fixed step.
+            for direct_entry in [False, True]:
+                with self.subTest(layer=layer, direct_entry=direct_entry), tempfile.TemporaryDirectory() as folder:
+                    root = Path(folder)
+                    source = root / "source"
+                    source.mkdir()
+                    evidence = root / "temp" / ("mac-pilot-" + layer)
+                    metadata = {"schema": 1, "layer": layer, **IDENTITY, "qualified": True,
+                                "developer_dir": "/signal-test/Xcode/Contents/Developer",
+                                "swift_path": "/usr/bin/swift", "swift": "signal-test Swift",
+                                "sdk_path": "/signal-test/MacOSX.sdk", "clang_path": "/usr/bin/cc",
+                                "clangxx_path": "/usr/bin/c++"}
+                    pilot.write_json(evidence / "metadata.json", metadata)
+                    ready = evidence / "controlled-child.json"
+                    bootstrap = root / "pilot-harness/scripts/mac-ci-pilot.py"
+                    bootstrap.parent.mkdir(parents=True)
+                    bootstrap.write_text(f'''import importlib.util,json,os,subprocess,sys
+from pathlib import Path
+spec=importlib.util.spec_from_file_location("pilot",{str(Path(SPEC.origin).resolve())!r})
+pilot=importlib.util.module_from_spec(spec)
+spec.loader.exec_module(pilot)
+real_command=pilot.command
+pilot.command=lambda args,*a,**k: "signal-test Swift" if args==["swift","--version"] else real_command(args,*a,**k)
+# Linux registration has GNU time; adapt only the resource wrapper, leaving
+# real main, signals, Runner.run and process-group ownership exercised.
+real_popen=subprocess.Popen
+def launch(args,*a,**k):
+    if sys.platform!="darwin" and args[:2]==["/usr/bin/time","-l"]:
+        args=args[2:]
+    return real_popen(args,*a,**k)
+pilot.subprocess.Popen=launch
+def controlled(runner):
+    child="import json,os,signal,time; from pathlib import Path; signal.signal(signal.SIGTERM,signal.SIG_IGN); Path(os.environ['MAC_PILOT_SIGNAL_READY']).write_text(json.dumps({{'pid':os.getpid(),'group':os.getpgrp()}})); time.sleep(60)"
+    runner.run("cold.signal-regression",[sys.executable,"-c",child])
+pilot.native=controlled
+pilot.analyzer=controlled
+raise SystemExit(pilot.main())
+''')
+                    script = root / "step.sh"
+                    script.write_text(actual_step if direct_entry else actual_step.replace("exec python ", "python ", 1))
+                    python_bin = root / "bin"
+                    python_bin.mkdir()
+                    (python_bin / "python").symlink_to(sys.executable)
+                    env = dict(os.environ, SOURCE_SHA=IDENTITY["source_sha"], GITHUB_SHA=IDENTITY["harness_sha"],
+                               CANDIDATE=IDENTITY["candidate"], PAIR_ID=IDENTITY["pair_id"],
+                               GITHUB_RUN_ID=IDENTITY["run_id"], GITHUB_RUN_ATTEMPT=IDENTITY["run_attempt"],
+                               GITHUB_WORKSPACE=str(root), RUNNER_TEMP=str(root / "temp"),
+                               MAC_PILOT_SIGNAL_READY=str(ready))
+                    env["PATH"] = str(python_bin) + os.pathsep + env.get("PATH", "")
+                    entry = subprocess.Popen(["bash", "--noprofile", "--norc", "-e", "-o", "pipefail", str(script)],
+                                             cwd=root, env=env, stdout=subprocess.PIPE, stderr=subprocess.STDOUT,
+                                             text=True, start_new_session=True)
+                    child_pid = None
+                    try:
+                        deadline = time.monotonic() + 10
+                        while not ready.exists() and entry.poll() is None and time.monotonic() < deadline:
+                            time.sleep(0.02)
+                        self.assertTrue(ready.exists(), "controlled phase child did not become ready")
+                        child_pid = json.loads(ready.read_text())["pid"]
+                        os.kill(entry.pid, signal.SIGINT)  # GitHub signals the step entry, not its whole group.
+                        if not direct_entry:
+                            time.sleep(0.3)
+                            summary = json.loads((evidence / "summary.json").read_text())
+                            self.assertEqual(summary["status"], "incomplete", summary)
+                            self.assertEqual(summary["phases"]["cold.signal-regression"]["status"], "running", summary)
+                            continue
+                        output, _ = entry.communicate(timeout=7)
+                        self.assertEqual(entry.returncode, 1, output)
+                        summary = json.loads((evidence / "summary.json").read_text())
+                        self.assertEqual(summary["status"], "cancelled", summary)
+                        phase = summary["phases"]["cold.signal-regression"]
+                        self.assertEqual(phase["status"], "cancelled", phase)
+                        cleanup = phase["cancellation_cleanup"]
+                        self.assertTrue(cleanup["sigkill_sent"], cleanup)
+                        self.assertIn(child_pid, cleanup["pids_after_term_grace"], cleanup)
+                        self.assertTrue(cleanup["group_has_no_live_members"], cleanup)
+                        self.assertEqual(cleanup["live_group_pids_after"], [], cleanup)
+                    finally:
+                        # The negative control deliberately bypasses Python's
+                        # cleanup. Never leave its isolated child behind.
+                        if child_pid is not None:
+                            try:
+                                os.kill(child_pid, signal.SIGKILL)
+                            except ProcessLookupError:
+                                pass
+                        try:
+                            os.killpg(entry.pid, signal.SIGKILL)
+                        except ProcessLookupError:
+                            pass
+                        entry.wait(timeout=3)
+                        entry.stdout.close()
 
 
 if __name__ == "__main__":
