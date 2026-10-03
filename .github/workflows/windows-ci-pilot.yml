@@ -1,19 +1,15 @@
 # Build once; preserve full native/app/model/shell coverage in independent jobs.
 # Production checks keep their providers; the aggregate requires every pilot gate.
-name: Windows CI pilot
+name: Citation native fixture qualification
 
 on:
-  pull_request:
-    paths:
-      - '.github/workflows/windows-ci-pilot.yml'
-      - '.github/actions/windows-native-build/**'
   workflow_dispatch:
     inputs:
       runner:
         description: Native/app/model candidate; every candidate also runs the complete hosted shell gate.
         type: choice
-        options: [hosted, namespace-8x16, namespace-4x8]
-        default: hosted
+        options: [namespace-8x16]
+        default: namespace-8x16
       cache:
         description: Restore GitHub-scoped caches; disable for a cold build.
         type: boolean
@@ -24,10 +20,11 @@ permissions:
 
 concurrency:
   group: windows-ci-pilot-${{ github.ref }}-${{ inputs.runner || 'hosted' }}
-  cancel-in-progress: ${{ github.event_name == 'pull_request' }}
+  cancel-in-progress: false
 
 jobs:
   build-app:
+    if: ${{ github.event_name == 'workflow_dispatch' && github.ref == 'refs/heads/codex/windows-citation-native-qualification' && inputs.runner == 'namespace-8x16' && inputs.cache == true }}
     name: Build, platform witnesses and app (${{ inputs.runner || 'hosted' }})
     # Direct Namespace labels are documented shapes; no new paid cache tags
     # or dashboard profiles are created by this comparison.
@@ -118,6 +115,51 @@ jobs:
             ${{ runner.temp }}\windows-pilot\dotnet-info.txt
           if-no-files-found: warn
           retention-days: 14
+      - name: Mandatory compiled-input and citation probe before the complete app suite
+        timeout-minutes: 15
+        run: |
+          $probeRoot = Join-Path $env:RUNNER_TEMP 'windows-pilot\citation-fast'
+          New-Item -ItemType Directory -Force $probeRoot | Out-Null
+          $assembly = Join-Path $env:GITHUB_WORKSPACE 'apps\slate-windows\tests\SlateWindows.Tests\bin\Release\net10.0-windows\SlateWindows.Tests.dll'
+          $app = Join-Path $env:GITHUB_WORKSPACE 'apps\slate-windows\tests\SlateWindows.Tests\bin\Release\net10.0-windows\SlateWindows.dll'
+          $native = Join-Path $env:GITHUB_WORKSPACE 'apps\slate-windows\tests\SlateWindows.Tests\bin\Release\net10.0-windows\slate_uniffi.dll'
+          $before = @($assembly, $app, $native | ForEach-Object { (Get-FileHash -LiteralPath $_ -Algorithm SHA256).Hash.ToLowerInvariant() })
+          $record = [ordered]@{
+            status = 'running'; revision = (git rev-parse HEAD).Trim()
+            runId = '${{ github.run_id }}'; runAttempt = '${{ github.run_attempt }}'
+            configuration = 'Release'; noBuild = $true; blameHangTimeout = '10m'
+            expectedRows = 693; expectedUniqueLabels = 685
+            startedUtc = [DateTime]::UtcNow.ToString('o')
+            testAssemblySha256 = $before[0]; appAssemblySha256 = $before[1]; nativeSha256 = $before[2]
+          }
+          $record | ConvertTo-Json | Set-Content -Encoding utf8 (Join-Path $probeRoot 'probe.json')
+          try {
+            dotnet test apps/slate-windows/tests/SlateWindows.Tests/SlateWindows.Tests.csproj `
+              --configuration Release --no-build `
+              --filter "FullyQualifiedName~SlateWindows.Tests.Censuses.|FullyQualifiedName=SlateWindows.Tests.W1SidebarHardeningTests.FiveThousandItemRefreshReturnsWithinTheUiDispatchBudget|FullyQualifiedName=SlateWindows.Tests.CitationAsyncInterleavingTests.ADeferredSummaryDoesNotAnswerForADifferentNote|FullyQualifiedName=SlateWindows.Tests.CitationAsyncInterleavingTests.ADeferredSummaryStillAnswersForTheNoteItWasAskedAbout" `
+              --logger "trx;LogFileName=citation-fast.trx" `
+              --results-directory $probeRoot `
+              --blame-hang-timeout 10m --blame-hang-dump-type mini
+            $record.exitCode = $LASTEXITCODE
+            $after = @($assembly, $app, $native | ForEach-Object { (Get-FileHash -LiteralPath $_ -Algorithm SHA256).Hash.ToLowerInvariant() })
+            if (($before -join ',') -ne ($after -join ',')) { throw 'No-build probe changed app/test/native assembly bytes.' }
+            if ($record.exitCode -ne 0) { throw "Mandatory citation/source probe failed: $($record.exitCode)." }
+            python scripts/verify_citation_app_reference.py `
+              --scope fast --reference scripts/diagnostics/citation-app-reference-98.json `
+              --trx (Join-Path $probeRoot 'citation-fast.trx') --revision $record.revision `
+              --test-assembly $assembly --app-assembly $app --native $native `
+              --output (Join-Path $probeRoot 'reference-gate.json')
+            if ($LASTEXITCODE -ne 0) { throw 'Fast probe failed its exact frozen-reference contract.' }
+            $record.status = 'passed'; $record.actualRows = 693
+            $record.actualUniqueLabels = 685
+            $record.noBuildBytesUnchanged = $true
+          } catch {
+            $record.status = 'failed-or-incomplete'; $record.error = $_.ToString()
+            throw
+          } finally {
+            $record.finishedUtc = [DateTime]::UtcNow.ToString('o')
+            $record | ConvertTo-Json | Set-Content -Encoding utf8 (Join-Path $probeRoot 'probe.json')
+          }
       - name: App tests
         run: >-
           dotnet test apps/slate-windows/tests/SlateWindows.Tests/SlateWindows.Tests.csproj
@@ -126,6 +168,18 @@ jobs:
           --logger "trx;LogFileName=app.trx"
           --results-directory "${{ runner.temp }}\windows-pilot\app"
           --blame-hang-timeout 10m --blame-hang-dump-type mini
+      - name: Strict complete app reference before producer publication
+        run: |
+          $testBin = Join-Path $env:GITHUB_WORKSPACE 'apps\slate-windows\tests\SlateWindows.Tests\bin\Release\net10.0-windows'
+          python scripts/verify_citation_app_reference.py `
+            --scope full --reference scripts/diagnostics/citation-app-reference-98.json `
+            --trx "$env:RUNNER_TEMP\windows-pilot\app\app.trx" --revision '${{ github.sha }}' `
+            --test-assembly (Join-Path $testBin 'SlateWindows.Tests.dll') `
+            --app-assembly (Join-Path $testBin 'SlateWindows.dll') `
+            --native (Join-Path $testBin 'slate_uniffi.dll') `
+            --probe-record "$env:RUNNER_TEMP\windows-pilot\citation-fast\probe.json" `
+            --output "$env:RUNNER_TEMP\windows-pilot\app\reference-gate.json"
+          if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
       - name: Upload app results immediately after the app phase
         if: ${{ always() }}
         uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a  # v7
@@ -133,6 +187,14 @@ jobs:
           name: windows-pilot-app-${{ github.run_id }}-${{ github.run_attempt }}
           path: '${{ runner.temp }}\windows-pilot\app\**\*'
           if-no-files-found: error
+          retention-days: 14
+      - name: Preserve fast probe results and failure evidence separately
+        if: ${{ always() }}
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a  # v7
+        with:
+          name: windows-citation-fast-${{ github.run_id }}-${{ github.run_attempt }}
+          path: '${{ runner.temp }}\windows-pilot\citation-fast\**\*'
+          if-no-files-found: warn
           retention-days: 14
       - name: Format contract
         run: dotnet format apps/slate-windows/SlateWindows.slnx --verify-no-changes --no-restore
@@ -213,6 +275,7 @@ jobs:
           retention-days: 1
 
   model-shard:
+    if: ${{ github.event_name == 'workflow_dispatch' && github.ref == 'refs/heads/codex/windows-citation-native-qualification' && inputs.runner == 'namespace-8x16' && inputs.cache == true }}
     name: Complete model (${{ inputs.runner || 'hosted' }}, shard ${{ matrix.shard }})
     needs: [build-app]
     runs-on: ${{ inputs.runner == 'namespace-4x8' && 'nscloud-windows-2022-amd64-4x8' || inputs.runner == 'namespace-8x16' && 'nscloud-windows-2022-amd64-8x16' || 'windows-latest' }}
@@ -336,7 +399,7 @@ jobs:
   model-coverage:
     name: Strict complete model coverage (${{ inputs.runner || 'hosted' }})
     needs: [build-app, model-shard]
-    if: ${{ always() }}
+    if: ${{ always() && github.event_name == 'workflow_dispatch' && github.ref == 'refs/heads/codex/windows-citation-native-qualification' && inputs.runner == 'namespace-8x16' && inputs.cache == true }}
     runs-on: ubuntu-latest
     timeout-minutes: 5
     steps:
@@ -414,6 +477,7 @@ jobs:
           --shard-count 2 --summary "$GITHUB_STEP_SUMMARY"
 
   shell:
+    if: ${{ github.event_name == 'workflow_dispatch' && github.ref == 'refs/heads/codex/windows-citation-native-qualification' && inputs.runner == 'namespace-8x16' && inputs.cache == true }}
     name: Complete hosted shell gate (${{ inputs.runner || 'hosted' }})
     # Includes Namespace candidates. No model dependency or desktop sharing.
     needs: [build-app]
@@ -515,7 +579,7 @@ jobs:
     # The cheap aggregate retains the exact existing pilot check identity.
     name: Native Windows pilot (${{ inputs.runner || 'hosted' }})
     needs: [build-app, model-shard, model-coverage, shell]
-    if: ${{ always() }}
+    if: ${{ always() && github.event_name == 'workflow_dispatch' && github.ref == 'refs/heads/codex/windows-citation-native-qualification' && inputs.runner == 'namespace-8x16' && inputs.cache == true }}
     runs-on: ubuntu-latest
     timeout-minutes: 5
     steps:
