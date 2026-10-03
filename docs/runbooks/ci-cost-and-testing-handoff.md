@@ -183,6 +183,17 @@ nil-default hooks provide the barriers; Release excludes them. A one-pass
 settle mutant and a missing final cancellation-guard mutant both fail the
 repaired assertions. Full provider qualification remains separate.
 
+The repaired application source `704ab907e0df753dd24c0c6af688dc3a8975e4e7`
+passed the complete [hosted Mac pilot](https://github.com/coryj627/slate/actions/runs/37141130833)
+with harness `8b538b890bd387b84bcc69ed6e76b83fec923b00` on October 3.
+Independent downloaded XML verification found all 3,032 cases, the unchanged
+inventory digest and zero failures/errors/skips in each cold and same-VM warm
+pass. Both passes completed Debug, CLI and actual Release load/link gates;
+the separate pinned analyzer scored 100 with zero errors or warnings in both.
+Native phase totals were 19m21s cold and 7m40s warm on a 3 CPU/7 GiB hosted M1.
+This is one successful qualification, not a latency distribution or a fresh-VM
+cache-restoration measurement. Fresh human VoiceOver acceptance remains open.
+
 The cold Namespace Golden Gate 27.0 attempt progressed slowly through repeated
 approximately two-minute Finder deletion requests and was cancelled with
 partial evidence preserved. The normal Namespace Mac workflow passed on Tahoe
@@ -191,6 +202,17 @@ do not infer a provider-wide limitation or replace Finder Put Back semantics.
 The pilot's long steps now replace their entry shell with Python so cancellation
 reaches its handler. Keep actual process cleanup and provider VM destruction as
 separate observations.
+
+The complete [hosted Windows pilot](https://github.com/coryj627/slate/actions/runs/37136112114)
+and [Namespace 8x16 pilot](https://github.com/coryj627/slate/actions/runs/37138568771)
+also passed on October 3. Hosted tested merge `85469b47f7ea54fb2d5abc27fa09520fe68096b4`;
+Namespace tested head `98c73f45ac2b81518ce652a0f6612bd3ef83c5e1`.
+Their complete source trees are identical, but their producers built separate
+binary payloads. Both restored no explicit build cache and retained the full
+app/model/hosted-shell obligations. Keep this source-tree qualification separate
+from literal same-commit or common-binary experiments and from the older
+unclassified failure attempts. The shell uses standard hosted Windows for both
+candidates; a candidate name on its job does not identify a Namespace VM.
 
 Use the verified `.app` bundle for human acceptance. Hold Option while opening
 it until Welcome appears to use the existing restore-vault escape hatch, then

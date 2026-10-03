@@ -141,6 +141,17 @@ an incomplete failed attempt's charge with a complete reference run's coverage.
 
 ## Human acceptance and adoption
 
+The repaired hosted qualification [37141130833](https://github.com/coryj627/slate/actions/runs/37141130833)
+passed every aggregate gate on October 3, using source `704ab907` and harness
+`8b538b89`. Independent raw XML verification confirms 3,032 cases with the
+reference digest and no failures/errors/skips in both passes. Native phase
+totals were 1,160.664 seconds cold and 460.398 seconds warm; the independent
+analyzer scored 100 with zero errors or warnings in both passes. Release
+verification includes actual native loading and FFI contract 30. These results
+qualify one hosted cold/same-VM-warm execution. The earlier Namespace Golden
+Gate Finder stall and provider cancellation cleanup remain unresolved, and
+fresh human VoiceOver acceptance is still required.
+
 Use the actual verified Release bundle and the existing feature VoiceOver
 runbook with a disposable copied vault. Record actual keyboard landing, words
 heard, task completion and disk effects; preserve the canonical user vault.
