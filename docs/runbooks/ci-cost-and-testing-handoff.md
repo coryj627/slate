@@ -312,3 +312,72 @@ the independently captured test fixtures together under model-change review.
 
 These experiments can justify a later portfolio change. Neither test counts nor
 passing shards establish equivalent fault detection for an untested subset.
+
+### Further continuation: native fixtures and model-consumer sizing
+
+The two deferred-summary citation facts now use an explicitly owned, pumped STA
+and `DispatcherSynchronizationContext`. They still require the initial null,
+the final wrong-note null and legitimate deferred delivery through the original
+5,000-entry native fixture. The [focused replay](https://github.com/coryj627/slate/actions/runs/37155288183)
+reproduced the original final-null signature; five candidate pairs passed. A
+production guard-removal mutant failed the final wrong-note assertion while
+legitimate delivery passed. This is specific fault-detection evidence, not a
+sole-cause explanation of the earlier CI event or permission to omit other tests.
+
+The [fresh native qualification](https://github.com/coryj627/slate/actions/runs/37161038529)
+at `0646a6ce2f935c36eb9ad467e85b4e49f534f6f0` completed all six workflow jobs.
+Its independent producer audit verifies the additive 693-row probe and original
+4,806-execution name multiset, including repeated names and distinct execution
+IDs. Both citation facts and the unchanged sidebar boundary pass in each. The
+independent downstream audit verifies all 13,069 original model scenarios exactly
+once, the 135-test shell reference, 58 axe scans with zero errors or waivers,
+and all 449 transferred files. The original native/platform/CLI producer,
+strict union and aggregate passed. Cache restoration was enabled, but the native
+graph missed and was seeded; only the binding-generator cache hit. The new producer payload is distinct
+from source 98's binaries. An [earlier reconstructed-package replay](https://github.com/coryj627/slate/actions/runs/37157223104)
+failed full acceptance: transferred runtime binaries did not supply complete
+generated/source/ancestry inputs, and a separate sidebar timing failure remains
+unclassified. Fresh faithful builds and revision-bound downstream artifact
+verification are necessary; neither focused passes nor rewritten compilation
+sidecars substitute for that closure.
+
+The [three-candidate model/resource matrix](https://github.com/coryj627/slate/actions/runs/37159865788),
+with harness `c942a1089c09de82177fefb729dc8ade56a78799`, reused the immutable
+producer payload from `98c73f45ac2b81518ce652a0f6612bd3ef83c5e1`. All six
+consumers independently verified the same archive and all 449 files. Namespace
+4×8, Namespace 4×16 and hosted Server 2022 each completed all 13,069 scenarios
+exactly once with the original three inventory digests; all six resource gates
+and eleven jobs passed. This supports
+evaluating smaller model consumers while preserving the complete reference.
+Authenticated billing attribution remains in the private investigation ledger.
+Producer, storage, subscription and other attempts remain separate; no integrated
+smaller-runner pipeline or monthly saving is inferred.
+
+The 4×8 route facts took 254.612/254.486 seconds versus 247.833/234.347 on 4×16.
+Observed resident/private-commit values support evaluating model consumers,
+not downsizing the producer. Samples can miss exit tails and sampled available
+RAM minima are upper bounds on actual minima. Hosted routes remained
+7.823×/9.821× slower despite identical product bytes; measured CPU grew only
+1.636×/1.754× while sampling intervals grew 8.039×/10.062×. Arrangement and
+cleanup contain 72.07% of recorded phase excess; explicit settle/verification
+contains 0.0272%. These mixed buckets do not identify timer, dispatcher or I/O
+causes. Hardware, patch levels and observer Python differ; preserve repeats,
+cancellation evidence and the unchanged 45-minute watchdog.
+
+Main/PR profile names do not isolate workspace-shared custom tags. Observed
+profile settings do not prove effective persistence protection across alternate
+profiles, repositories or direct labels. Verify that enforcement before any
+approved drained transition. Concurrency controls are not spend caps; alerts
+and quota behavior need independent verification. Right-size from generation
+maxima and headroom, not latest contents; requested capacity and attached
+snapshot time are separate meters. No policy change, reset or resize follows.
+
+The isolated Golden Gate 27 Finder request encountered an unanswered Automation
+consent gate and a 120-second TCC timeout. It does not establish a provider-wide
+limitation. The [cancellation probe](https://github.com/coryj627/slate/actions/runs/37152941647)
+removed all 38 witnessed owned identities, including the separate XCTest process
+group, in 3.017 seconds. The build tracker saturated its 128-identity bound, so
+full-build cleanup remains unqualified; VM destruction is separate. Fresh
+human VoiceOver keyboard landing, speech, task completion and file effects on
+the frozen Release app remain NOT RUN. Keep PR #1328 draft and every reference
+inventory while evaluating packaging or smaller portfolios.
