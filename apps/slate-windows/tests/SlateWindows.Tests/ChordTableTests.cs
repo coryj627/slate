@@ -181,6 +181,7 @@ public sealed class ChordTableTests
                 // while a canvas is focused, so a real collision. Owner
                 // decision D-2 disambiguates with Shift (G18 precedent).
                 "slate.canvas.createConnectedCard",
+                "slate.canvas.newCard",
                 "slate.canvas.whereAmI",
                 "slate.file.cancelImport",
                 "slate.file.rename",
@@ -528,6 +529,36 @@ public sealed class ChordTableTests
         Assert.Equal(
             32,
             ChordTable.Entries.Count(row => row.Scope == ChordScope.Reading));
+    }
+
+    [Fact]
+    public void NewCardAvoidsNVDARestartChordAndRetainsItsLegacyAlias()
+    {
+        ChordTableEntry canonical = RequireRow(ChordTable.Ids.CanvasNewCard);
+        Assert.Equal("Ctrl+Alt+T", canonical.WindowsChord);
+        Assert.Equal("Control Alt T", canonical.WindowsSpoken);
+        Assert.Equal("⌥⌘N", canonical.MacChord);
+        Assert.Equal(ChordScope.Canvas, canonical.Scope);
+        Assert.True(canonical.IsRegistered);
+        Assert.Contains("NVDA", canonical.Divergence);
+
+        ChordTableEntry legacy = RequireRow("windows.canvas.newCardLegacy");
+        Assert.Equal("Ctrl+Alt+N", legacy.WindowsChord);
+        Assert.Equal(ChordScope.Canvas, legacy.Scope);
+        Assert.False(legacy.IsRegistered);
+        Assert.Contains("slate.canvas.newCard", legacy.Reason);
+
+        ChordTableEntry connected = RequireRow(ChordTable.Ids.CanvasCreateConnectedCard);
+        Assert.Equal("Ctrl+Alt+Shift+N", connected.WindowsChord);
+        Assert.Equal(ChordScope.Canvas, connected.Scope);
+        ChordTableEntry nextTable = RequireRow("windows.reading.nextT");
+        Assert.Equal("Ctrl+Alt+T", nextTable.WindowsChord);
+        Assert.Equal(ChordScope.Reading, nextTable.Scope);
+        ChordTableEntry previousTable = RequireRow("windows.reading.previousT");
+        Assert.Equal("Ctrl+Alt+Shift+T", previousTable.WindowsChord);
+        Assert.Equal(ChordScope.Reading, previousTable.Scope);
+        Assert.DoesNotContain(ChordTable.Entries, row =>
+            row.Scope == ChordScope.Global && row.WindowsChord == canonical.WindowsChord);
     }
 
     /// <summary>§E TE-10 (IE-21): New Canvas is a FILE-section row on

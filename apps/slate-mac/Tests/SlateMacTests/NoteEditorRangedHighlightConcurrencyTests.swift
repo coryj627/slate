@@ -20,6 +20,37 @@ import XCTest
 @MainActor
 final class NoteEditorRangedHighlightConcurrencyTests: XCTestCase {
 
+    /// Main-actor barriers observe entry and release a pass without sleeps or
+    /// assumptions about which queued task resumes first.
+    @MainActor
+    private final class HighlightPassGate {
+        private var entered = false
+        private var released = false
+        private var entryWaiters: [CheckedContinuation<Void, Never>] = []
+        private var releaseWaiters: [CheckedContinuation<Void, Never>] = []
+
+        func arriveAndWait() async {
+            entered = true
+            let waiters = entryWaiters
+            entryWaiters.removeAll()
+            for waiter in waiters { waiter.resume() }
+            guard !released else { return }
+            await withCheckedContinuation { releaseWaiters.append($0) }
+        }
+
+        func waitUntilEntered() async {
+            guard !entered else { return }
+            await withCheckedContinuation { entryWaiters.append($0) }
+        }
+
+        func release() {
+            released = true
+            let waiters = releaseWaiters
+            releaseWaiters.removeAll()
+            for waiter in waiters { waiter.resume() }
+        }
+    }
+
     private func makeCoordinator(text: String) -> (
         NoteEditorView.Coordinator, NSTextView, NSTextStorage
     ) {
@@ -216,27 +247,56 @@ final class NoteEditorRangedHighlightConcurrencyTests: XCTestCase {
 
     // MARK: - The settle seam itself
 
-    /// The seam, stated directly: a pass cancelled before it applies finishes
-    /// its task having stamped NOTHING, so `await highlightTask?.value` is not
-    /// "the recolor landed". `settleHighlight()` follows the reschedule to the
-    /// pass that replaced it and reports the repaint.
+    /// A cancelled pass stamps nothing. A successor installed while settle is
+    /// awaiting that pass must still be followed to its actual repaint.
+    /// Barriers keep the successor from racing the zero-attribute observation.
     func testAwaitingACancelledPassAppliesNothingButSettleFollowsIt() async {
         let doc = "alpha bold here\n\nbeta [[L]] gamma\n\ndelta code epsilon\n"
         let (coordinator, textView, _) = makeCoordinator(text: doc)
         let lm = textView.layoutManager!
         let len = (doc as NSString).length
 
-        coordinator.scheduleHighlight(debounced: false)
-        let seed = coordinator.highlightTask
-        // Whatever else calls scheduleHighlight — here standing in for the
-        // appearance observer — cancels `seed` before it ever applies.
-        coordinator.scheduleHighlight(debounced: false)
-        await seed?.value
+        let seedGate = HighlightPassGate()
+        let successorGate = HighlightPassGate()
+        coordinator.highlightBeforeApplyForTesting = { await seedGate.arriveAndWait() }
+        defer {
+            coordinator.highlightBeforeApplyForTesting = nil
+            coordinator.highlightWillAwaitForTesting = nil
+            seedGate.release()
+            successorGate.release()
+            coordinator.highlightTask?.cancel()
+        }
 
+        coordinator.scheduleHighlight(debounced: false)
+        guard let seed = coordinator.highlightTask else {
+            XCTFail("seed highlight task was not installed")
+            return
+        }
+        await seedGate.waitUntilEntered()
+
+        var installedSuccessor = false
+        coordinator.highlightWillAwaitForTesting = { task in
+            guard task == seed, !installedSuccessor else { return }
+            installedSuccessor = true
+            // Settle has captured seed. An appearance-style reschedule now
+            // cancels it after compute and installs a separately held successor.
+            coordinator.highlightBeforeApplyForTesting = {
+                await successorGate.arriveAndWait()
+            }
+            coordinator.scheduleHighlight(debounced: false)
+            seedGate.release()
+        }
+        let settling = Task { @MainActor in await coordinator.settleHighlight() }
+        await successorGate.waitUntilEntered()
+        await seed.value
+
+        XCTAssertTrue(installedSuccessor, "reschedule must occur while settle is awaiting seed")
+        XCTAssertTrue(seed.isCancelled)
         XCTAssertEqual(
             foregroundMap(lm, len).compactMap { $0 }.count, 0,
             "awaiting the cancelled task must return with nothing stamped — the flake")
-        let settled = await coordinator.settleHighlight()
+        successorGate.release()
+        let settled = await settling.value
         XCTAssertTrue(settled, "settle must follow the reschedule and land a recolor")
         XCTAssertGreaterThan(
             foregroundMap(lm, len).compactMap { $0 }.count, 0,

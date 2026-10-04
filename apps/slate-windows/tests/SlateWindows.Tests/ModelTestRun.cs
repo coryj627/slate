@@ -51,7 +51,7 @@ internal sealed record ModelShardConfiguration(int Index, int Count, string[] On
 /// and runs on its caller's dispatcher with its own vault and session.</summary>
 internal sealed class ModelTestRun<TCell> : IDisposable
 {
-    internal sealed record Case(TCell Value, int Ordinal, string Route);
+    internal sealed record Case(TCell Value, int Ordinal, string Route, string Description);
 
     private sealed record InventoryEntry(string Cell, string Route, string? UnreachableReason);
 
@@ -62,6 +62,10 @@ internal sealed class ModelTestRun<TCell> : IDisposable
     private readonly HashSet<int> _started = [];
     private readonly Dictionary<int, Case> _selectedByOrdinal;
     private readonly Dictionary<string, RouteTiming> _routes = new(StringComparer.Ordinal);
+    private readonly List<SlowCase> _slowestCases = [];
+    private Case? _activeCase;
+    private int _missedProgressWrites;
+    private const int SlowCaseLimit = 16;
     private bool _inventoryVerified;
     private bool _success;
     private bool _disposed;
@@ -97,7 +101,7 @@ internal sealed class ModelTestRun<TCell> : IDisposable
             if ((ordinal - 1) % configuration.Count == configuration.Index
                 && configuration.Only.All(term => description.Contains(term, StringComparison.Ordinal)))
             {
-                selected.Add(new(cell, ordinal, routeName));
+                selected.Add(new(cell, ordinal, routeName, description));
             }
         }
         TotalCells = inventory.Count;
@@ -136,11 +140,35 @@ internal sealed class ModelTestRun<TCell> : IDisposable
             route = new(modelCase.Route);
             _routes.Add(modelCase.Route, route);
         }
-        using var timing = new CaseTiming(route);
-        body(timing);
-        if (timing.Completed)
+        _activeCase = modelCase;
+        WriteProgress("fixtureSetup");
+        using var timing = new CaseTiming(route, WriteProgress);
+        bool returned = false;
+        try
         {
-            _completed.Add(modelCase.Ordinal);
+            body(timing);
+            returned = true;
+            if (timing.Completed)
+            {
+                _completed.Add(modelCase.Ordinal);
+            }
+        }
+        finally
+        {
+            timing.Dispose();
+            _slowestCases.Add(new(modelCase.Ordinal, modelCase.Description, modelCase.Route,
+                returned && timing.Completed, timing.ElapsedMilliseconds,
+                new Dictionary<string, double>(timing.Phases, StringComparer.Ordinal)));
+            _slowestCases.Sort((left, right) =>
+            {
+                int elapsed = right.ElapsedMilliseconds.CompareTo(left.ElapsedMilliseconds);
+                return elapsed != 0 ? elapsed : left.Ordinal.CompareTo(right.Ordinal);
+            });
+            if (_slowestCases.Count > SlowCaseLimit)
+            {
+                _slowestCases.RemoveAt(SlowCaseLimit);
+            }
+            WriteProgress(returned && timing.Completed ? "caseCompleted" : "caseFailed");
         }
     }
 
@@ -153,6 +181,50 @@ internal sealed class ModelTestRun<TCell> : IDisposable
         }
         Assert.Equal(SelectedCases.Select(modelCase => modelCase.Ordinal), _completed);
         _success = true;
+        _activeCase = null;
+        WriteProgress("complete");
+    }
+
+    /// <summary>One atomically replaced checkpoint, not an unbounded log.
+    /// Phase transitions identify a stalled cell even if the process is killed
+    /// before Dispose can write its final coverage report. The .txt extension
+    /// keeps this diagnostic separate from the verifier's JSON evidence.
+    /// A monitor can briefly deny replacement on Windows; such a diagnostic
+    /// failure must not abort a case or weaken final coverage reporting.</summary>
+    private void WriteProgress(string phase)
+    {
+        if (_configuration.ReportDirectory is not { } directory)
+        {
+            return;
+        }
+        string path = Path.Combine(directory, $"{_family}-shard-{_configuration.Index}.progress.txt");
+        var progress = new
+        {
+            family = _family,
+            shardIndex = _configuration.Index,
+            shardCount = _configuration.Count,
+            selectedCases = SelectedCases.Count,
+            completedCases = _completed.Count,
+            activeOrdinal = _activeCase?.Ordinal,
+            activeCell = _activeCase?.Description,
+            phase,
+            success = _success,
+            elapsedMilliseconds = _clock.Elapsed.TotalMilliseconds,
+        };
+        string temporary = path + ".tmp";
+        string contents = JsonSerializer.Serialize(progress);
+        try
+        {
+            Directory.CreateDirectory(directory);
+            File.WriteAllText(temporary, contents);
+            File.Move(temporary, path, overwrite: true);
+        }
+        catch (Exception failure) when (failure is IOException or UnauthorizedAccessException)
+        {
+            // Reuse this same temporary file on the next checkpoint. The final
+            // JSON remains strict and records any missed diagnostic writes.
+            _missedProgressWrites++;
+        }
     }
 
     public void Dispose()
@@ -163,6 +235,7 @@ internal sealed class ModelTestRun<TCell> : IDisposable
         }
         _disposed = true;
         _clock.Stop();
+        WriteProgress(_success ? "complete" : "failed");
         if (_configuration.ReportDirectory is not { } directory)
         {
             return;
@@ -182,8 +255,10 @@ internal sealed class ModelTestRun<TCell> : IDisposable
             selectedOrdinals = SelectedCases.Select(modelCase => modelCase.Ordinal).ToArray(),
             completedOrdinals = _completed.ToArray(),
             success = _success,
+            missedProgressWrites = _missedProgressWrites,
             elapsedMilliseconds = _clock.Elapsed.TotalMilliseconds,
             routes = _routes.Values.OrderBy(route => route.Route, StringComparer.Ordinal),
+            slowestCases = _slowestCases,
         };
         File.WriteAllText(path, JsonSerializer.Serialize(report, new JsonSerializerOptions
         {
@@ -191,6 +266,9 @@ internal sealed class ModelTestRun<TCell> : IDisposable
             WriteIndented = true,
         }));
     }
+
+    private sealed record SlowCase(int Ordinal, string Cell, string Route, bool Completed,
+        double ElapsedMilliseconds, IReadOnlyDictionary<string, double> Phases);
 
     internal sealed class RouteTiming(string route)
     {
@@ -204,22 +282,28 @@ internal sealed class ModelTestRun<TCell> : IDisposable
     {
         private readonly RouteTiming _route;
         private readonly Stopwatch _clock = Stopwatch.StartNew();
+        private readonly Action<string> _progress;
+        private readonly Dictionary<string, double> _phases = new(StringComparer.Ordinal);
         private string _phase = "fixtureSetup";
         private double _phaseStarted;
         private bool _disposed;
 
-        internal CaseTiming(RouteTiming route)
+        internal CaseTiming(RouteTiming route, Action<string> progress)
         {
             _route = route;
+            _progress = progress;
             _route.Cases++;
         }
 
         internal bool Completed { get; private set; }
+        internal double ElapsedMilliseconds => _clock.Elapsed.TotalMilliseconds;
+        internal IReadOnlyDictionary<string, double> Phases => _phases;
 
         internal void Phase(string phase)
         {
             RecordPhase();
             _phase = phase;
+            _progress(phase);
         }
 
         internal void Complete() => Completed = true;
@@ -227,8 +311,11 @@ internal sealed class ModelTestRun<TCell> : IDisposable
         private void RecordPhase()
         {
             double elapsed = _clock.Elapsed.TotalMilliseconds;
+            double phaseElapsed = elapsed - _phaseStarted;
             _route.Phases.TryGetValue(_phase, out double previous);
-            _route.Phases[_phase] = previous + elapsed - _phaseStarted;
+            _route.Phases[_phase] = previous + phaseElapsed;
+            _phases.TryGetValue(_phase, out double casePrevious);
+            _phases[_phase] = casePrevious + phaseElapsed;
             _phaseStarted = elapsed;
         }
 

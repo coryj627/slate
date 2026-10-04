@@ -433,7 +433,7 @@ internal static class CanvasMediaPolicy
 
     private static SafeFileHandle OpenForQuery(string path) =>
         NativeIo.CreateFileW(
-            path,
+            WindowsNativePath.ForCreateFile(path),
             0,
             NativeIo.FileShareRead | NativeIo.FileShareWrite | NativeIo.FileShareDelete,
             IntPtr.Zero,

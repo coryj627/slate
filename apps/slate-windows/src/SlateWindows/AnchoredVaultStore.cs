@@ -249,7 +249,7 @@ internal sealed class AnchoredVaultStore : IDisposable
     private static SafeFileHandle? TryOpenDirectory(string path)
     {
         SafeFileHandle handle = CreateFileW(
-            path,
+            WindowsNativePath.ForCreateFile(path),
             FileReadAttributes,
             FileShare.Read | FileShare.Write,
             IntPtr.Zero,
@@ -297,7 +297,7 @@ internal sealed class AnchoredVaultStore : IDisposable
         uint flags)
     {
         SafeFileHandle handle = CreateFileW(
-            Path.Combine(_directoryPath, fileName),
+            WindowsNativePath.ForCreateFile(Path.Combine(_directoryPath, fileName)),
             desiredAccess,
             share,
             IntPtr.Zero,

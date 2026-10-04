@@ -155,6 +155,133 @@ public sealed class ModelTestRunTests
         Assert.NotEqual(original.InventorySha256, changedReason.InventorySha256);
     }
 
+    [Fact]
+    public void ACheckpointIdentifiesTheCurrentCellAndPhaseBeforeFinalCoverageExists()
+    {
+        using var directory = new ReportDirectory();
+        using (var run = Run(new(0, 1, [], directory.Path)))
+        {
+            run.AssertInventory(7, 2, 5);
+            var cell = run.SelectedCases[0];
+            run.RunCase(cell, timing =>
+            {
+                using (JsonDocument started = directory.ReadProgress())
+                {
+                    Assert.Equal(cell.Ordinal, started.RootElement.GetProperty("activeOrdinal").GetInt32());
+                    Assert.Equal(cell.Value.Name, started.RootElement.GetProperty("activeCell").GetString());
+                    Assert.Equal("fixtureSetup", started.RootElement.GetProperty("phase").GetString());
+                    Assert.Equal(0, started.RootElement.GetProperty("completedCases").GetInt32());
+                    Assert.False(started.RootElement.GetProperty("success").GetBoolean());
+                }
+                timing.Phase("drive");
+                using JsonDocument driving = directory.ReadProgress();
+                Assert.Equal("drive", driving.RootElement.GetProperty("phase").GetString());
+                Assert.False(File.Exists(System.IO.Path.Combine(directory.Path, "routes-shard-0.json")));
+                timing.Complete();
+            });
+            using JsonDocument checkpoint = directory.ReadProgress();
+            Assert.Equal(1, checkpoint.RootElement.GetProperty("completedCases").GetInt32());
+            Assert.Equal("caseCompleted", checkpoint.RootElement.GetProperty("phase").GetString());
+            Assert.False(checkpoint.RootElement.GetProperty("success").GetBoolean());
+        }
+        using JsonDocument failed = directory.ReadProgress();
+        Assert.Equal("failed", failed.RootElement.GetProperty("phase").GetString());
+        Assert.False(failed.RootElement.GetProperty("success").GetBoolean());
+        Assert.Single(Directory.GetFiles(directory.Path, "*.json"));
+        Assert.Empty(Directory.GetFiles(directory.Path, "*.tmp"));
+    }
+
+    [Fact]
+    public void SlowCellSamplesAreBoundedAndRetainPerCellPhaseAccounting()
+    {
+        using var directory = new ReportDirectory();
+        Cell[] cells = [.. Enumerable.Range(1, 40).Select(index => new Cell($"cell-{index}", "Open"))];
+        using (var run = Run(new(0, 1, [], directory.Path), cells))
+        {
+            run.AssertInventory(40, 0, 40);
+            foreach (var cell in run.SelectedCases)
+            {
+                run.RunCase(cell, timing =>
+                {
+                    timing.Phase("drive");
+                    timing.Phase("cleanup");
+                    timing.Complete();
+                });
+            }
+            run.Complete();
+        }
+        using JsonDocument report = directory.Read(0);
+        JsonElement samples = report.RootElement.GetProperty("slowestCases");
+        Assert.Equal(16, samples.GetArrayLength());
+        double previous = double.PositiveInfinity;
+        foreach (JsonElement sample in samples.EnumerateArray())
+        {
+            Assert.InRange(sample.GetProperty("ordinal").GetInt32(), 1, 40);
+            Assert.True(sample.GetProperty("completed").GetBoolean());
+            Assert.StartsWith("cell-", sample.GetProperty("cell").GetString());
+            Assert.Equal("Open", sample.GetProperty("route").GetString());
+            double elapsed = sample.GetProperty("elapsedMilliseconds").GetDouble();
+            Assert.True(elapsed <= previous);
+            previous = elapsed;
+            Assert.Equal(elapsed, sample.GetProperty("phases").EnumerateObject().Sum(phase => phase.Value.GetDouble()), precision: 6);
+        }
+        using JsonDocument checkpoint = directory.ReadProgress();
+        Assert.Equal("complete", checkpoint.RootElement.GetProperty("phase").GetString());
+        Assert.True(checkpoint.RootElement.GetProperty("success").GetBoolean());
+        Assert.Equal(JsonValueKind.Null, checkpoint.RootElement.GetProperty("activeOrdinal").ValueKind);
+    }
+
+    [Fact]
+    public void AReaderHoldingTheCheckpointCannotAbortModelCoverage()
+    {
+        using var directory = new ReportDirectory();
+        using (var run = Run(new(0, 1, [], directory.Path)))
+        {
+            run.AssertInventory(7, 2, 5);
+            foreach (var cell in run.SelectedCases)
+            {
+                run.RunCase(cell, timing =>
+                {
+                    if (cell.Ordinal == 1)
+                    {
+                        // Windows denies replacement while a reader lacks
+                        // delete sharing, just like a live checkpoint monitor.
+                        using var reader = new FileStream(directory.ProgressPath,
+                            FileMode.Open, FileAccess.Read, FileShare.ReadWrite);
+                        timing.Phase("drive");
+                    }
+                    timing.Complete();
+                });
+            }
+            run.Complete();
+        }
+        using JsonDocument report = directory.Read(0);
+        Assert.True(report.RootElement.GetProperty("success").GetBoolean());
+        Assert.Equal([1, 2, 3, 4, 5], report.RootElement.GetProperty("completedOrdinals")
+            .EnumerateArray().Select(value => value.GetInt32()));
+        Assert.Equal(1, report.RootElement.GetProperty("missedProgressWrites").GetInt32());
+        using JsonDocument progress = directory.ReadProgress();
+        Assert.True(progress.RootElement.GetProperty("success").GetBoolean());
+        Assert.Equal("complete", progress.RootElement.GetProperty("phase").GetString());
+        Assert.Empty(Directory.GetFiles(directory.Path, "*.tmp"));
+    }
+
+    [Fact]
+    public void ALockedFinalCoverageReportStillFailsTheRun()
+    {
+        using var directory = new ReportDirectory();
+        using var run = Run(new(0, 1, [], directory.Path));
+        run.AssertInventory(7, 2, 5);
+        foreach (var cell in run.SelectedCases)
+        {
+            run.RunCase(cell, timing => timing.Complete());
+        }
+        run.Complete();
+        using var lockedReport = new FileStream(System.IO.Path.Combine(directory.Path, "routes-shard-0.json"),
+            FileMode.Create, FileAccess.ReadWrite, FileShare.Read);
+        Assert.Throws<IOException>(run.Dispose);
+    }
+
     [Theory]
     [InlineData(false)]
     [InlineData(true)]
@@ -220,8 +347,13 @@ public sealed class ModelTestRunTests
     {
         internal string Path { get; } = System.IO.Path.Combine(System.IO.Path.GetTempPath(), $"slate-model-report-tests-{Guid.NewGuid():N}");
 
+        internal string ProgressPath => System.IO.Path.Combine(Path, "routes-shard-0.progress.txt");
+
         internal JsonDocument Read(int index) =>
             JsonDocument.Parse(File.ReadAllText(System.IO.Path.Combine(Path, $"routes-shard-{index}.json")));
+
+        internal JsonDocument ReadProgress() =>
+            JsonDocument.Parse(File.ReadAllText(ProgressPath));
 
         public void Dispose()
         {

@@ -4,6 +4,10 @@
 using System.Windows.Documents;
 using SlateWindows.Reading;
 using uniffi.slate_uniffi;
+using ITextRangeProvider = System.Windows.Automation.Provider.ITextRangeProvider;
+using IRawElementProviderSimple = System.Windows.Automation.Provider.IRawElementProviderSimple;
+using TextPatternRangeEndpoint = System.Windows.Automation.Text.TextPatternRangeEndpoint;
+using TextUnit = System.Windows.Automation.Text.TextUnit;
 
 namespace SlateWindows.Tests;
 
@@ -16,6 +20,10 @@ namespace SlateWindows.Tests;
 /// </summary>
 public sealed class ReadingViewTests
 {
+    private readonly Xunit.Abstractions.ITestOutputHelper _output;
+
+    public ReadingViewTests(Xunit.Abstractions.ITestOutputHelper output) => _output = output;
+
     private const string Fixture =
         "# Top heading\n"
         + "\n"
@@ -711,6 +719,450 @@ public sealed class ReadingViewTests
             Assert.Contains(
                 "a quoted line", backward!.GetText(-1), StringComparison.Ordinal);
         });
+    }
+
+    /// <summary>Formatting queries run synchronously on the reader's STA.
+    /// Budget the actual three full-document queries from #1320, excluding
+    /// document construction and text extraction. The allocation bound is
+    /// the stable regression signal. Record time without imposing an
+    /// unmeasured hardware-specific CI gate; the existing STA bound remains.</summary>
+    [Fact]
+    public void HugeDocumentSyntheticQueriesHaveBoundedCost()
+    {
+        RunSta(() =>
+        {
+            var source = new System.Text.StringBuilder();
+            for (int i = 0; i < 10_050; i++)
+            {
+                source.Append('p').Append(i).Append("\n\n");
+            }
+            source.Append("> a quoted line\n");
+            var surface = new ReadingSurface();
+            var peer = System.Windows.Automation.Peers.UIElementAutomationPeer
+                .CreatePeerForElement(surface);
+            surface.ApplyBuiltDocument(BuildSource(source.ToString()));
+            var provider = Assert.IsAssignableFrom<
+                System.Windows.Automation.Provider.ITextProvider>(peer!.GetPattern(
+                    System.Windows.Automation.Peers.PatternInterface.Text));
+            var whole = provider.DocumentRange;
+
+            long allocatedBefore = GC.GetAllocatedBytesForCurrentThread();
+            var timer = System.Diagnostics.Stopwatch.StartNew();
+            object? style = whole.GetAttributeValue(
+                HeadingStyleTextProvider.StyleNameAttribute);
+            var forward = whole.FindAttribute(
+                HeadingStyleTextProvider.StyleNameAttribute,
+                HeadingStyleTextProvider.QuoteStyleName, false);
+            var backward = whole.FindAttribute(
+                HeadingStyleTextProvider.StyleIdAttribute,
+                HeadingStyleTextProvider.StyleIdQuote, true);
+            timer.Stop();
+            long allocated = GC.GetAllocatedBytesForCurrentThread() - allocatedBefore;
+            string measurement = $"10,051 paragraphs, three queries: "
+                + $"{timer.Elapsed.TotalMilliseconds:F1} ms; {allocated:N0} allocated bytes";
+            _output.WriteLine(measurement);
+
+            Assert.Same(System.Windows.Automation.TextPattern.MixedAttributeValue, style);
+            Assert.NotNull(forward);
+            Assert.NotNull(backward);
+            Assert.Contains("a quoted line", forward!.GetText(-1), StringComparison.Ordinal);
+            Assert.Contains("a quoted line", backward!.GetText(-1), StringComparison.Ordinal);
+            Assert.True(allocated < 16 * 1024 * 1024, measurement);
+        });
+    }
+
+    [Fact]
+    public void SyntheticStyleSearchClampsBothRangeEndsAndLeavesTheQueryUnchanged()
+    {
+        RunSta(() =>
+        {
+            var surface = new ReadingSurface();
+            var peer = System.Windows.Automation.Peers.UIElementAutomationPeer
+                .CreatePeerForElement(surface);
+            surface.ApplyBuiltDocument(BuildSource(
+                "> first quoted paragraph\n\nbody paragraph\n\n> last quoted paragraph\n"));
+            var provider = Assert.IsAssignableFrom<
+                System.Windows.Automation.Provider.ITextProvider>(peer!.GetPattern(
+                    System.Windows.Automation.Peers.PatternInterface.Text));
+            Paragraph[] paragraphs = surface.Document.Blocks.OfType<Paragraph>().ToArray();
+            TextPointer start = paragraphs[0].ContentStart.GetPositionAtOffset(4)!;
+            TextPointer end = paragraphs[2].ContentStart.GetPositionAtOffset(8)!;
+            surface.Selection.Select(start, end);
+            var range = provider.GetSelection()[0];
+            var unchanged = range.Clone();
+            Assert.Same(System.Windows.Automation.TextPattern.MixedAttributeValue,
+                range.GetAttributeValue(HeadingStyleTextProvider.StyleNameAttribute));
+
+            var forward = range.FindAttribute(HeadingStyleTextProvider.StyleNameAttribute,
+                HeadingStyleTextProvider.QuoteStyleName, false);
+            var backward = range.FindAttribute(HeadingStyleTextProvider.StyleIdAttribute,
+                HeadingStyleTextProvider.StyleIdQuote, true);
+            Assert.NotNull(forward);
+            Assert.NotNull(backward);
+            Assert.Equal(0, forward!.CompareEndpoints(
+                System.Windows.Automation.Text.TextPatternRangeEndpoint.Start,
+                range, System.Windows.Automation.Text.TextPatternRangeEndpoint.Start));
+            Assert.Equal(0, backward!.CompareEndpoints(
+                System.Windows.Automation.Text.TextPatternRangeEndpoint.End,
+                range, System.Windows.Automation.Text.TextPatternRangeEndpoint.End));
+            Assert.Equal(new TextRange(paragraphs[2].ContentStart, end).Text,
+                backward.GetText(-1));
+            Assert.True(range.Compare(unchanged));
+
+            // A style beginning exactly at the exclusive end is outside
+            // the queried body paragraph; neither search direction sees it.
+            surface.Selection.Select(paragraphs[1].ContentStart, paragraphs[2].ContentStart);
+            var body = provider.GetSelection()[0];
+            Assert.NotSame(System.Windows.Automation.TextPattern.MixedAttributeValue,
+                body.GetAttributeValue(HeadingStyleTextProvider.StyleNameAttribute));
+            Assert.Null(body.FindAttribute(HeadingStyleTextProvider.StyleNameAttribute,
+                HeadingStyleTextProvider.QuoteStyleName, false));
+            Assert.Null(body.FindAttribute(HeadingStyleTextProvider.StyleNameAttribute,
+                HeadingStyleTextProvider.QuoteStyleName, true));
+        });
+    }
+
+    [Fact]
+    public void SyntheticStylesTraverseNestedSectionsListsAndTableCellsInDocumentOrder()
+    {
+        RunSta(() =>
+        {
+            var firstQuote = new Paragraph(new Run("list quote"));
+            var lastQuote = new Paragraph(new Run("table quote"));
+            ReadingSemantics.MarkQuote(firstQuote);
+            ReadingSemantics.MarkQuote(lastQuote);
+            var item = new ListItem();
+            item.Blocks.Add(new Section(firstQuote));
+            var list = new System.Windows.Documents.List(item);
+            var table = new Table();
+            var group = new TableRowGroup();
+            var row = new TableRow();
+            row.Cells.Add(new TableCell(new Paragraph(new Run("plain table cell"))));
+            row.Cells.Add(new TableCell(new Section(lastQuote)));
+            group.Rows.Add(row);
+            table.RowGroups.Add(group);
+            var document = new FlowDocument(new Paragraph(new Run("plain before")));
+            var section = new Section(list);
+            section.Blocks.Add(table);
+            document.Blocks.Add(section);
+            for (byte level = 1; level <= 9; level++)
+            {
+                var heading = new Paragraph(new Run($"heading {level}"));
+                ReadingSemantics.MarkHeading(heading, level);
+                document.Blocks.Add(heading);
+            }
+            var surface = new ReadingSurface();
+            var peer = System.Windows.Automation.Peers.UIElementAutomationPeer
+                .CreatePeerForElement(surface);
+            surface.ApplyBuiltDocument(document);
+            var provider = Assert.IsAssignableFrom<
+                System.Windows.Automation.Provider.ITextProvider>(peer!.GetPattern(
+                    System.Windows.Automation.Peers.PatternInterface.Text));
+            var whole = provider.DocumentRange;
+            Assert.Same(System.Windows.Automation.TextPattern.MixedAttributeValue,
+                whole.GetAttributeValue(HeadingStyleTextProvider.StyleIdAttribute));
+            Assert.Contains("list quote", whole.FindAttribute(
+                HeadingStyleTextProvider.StyleNameAttribute,
+                HeadingStyleTextProvider.QuoteStyleName, false)!.GetText(-1));
+            Assert.Contains("table quote", whole.FindAttribute(
+                HeadingStyleTextProvider.StyleNameAttribute,
+                HeadingStyleTextProvider.QuoteStyleName, true)!.GetText(-1));
+            for (byte level = 1; level <= 9; level++)
+            {
+                int style = HeadingStyleTextProvider.StyleIdHeading1 + level - 1;
+                Assert.Contains($"heading {level}", whole.FindAttribute(
+                    HeadingStyleTextProvider.StyleIdAttribute, style, false)!.GetText(-1));
+                Assert.Contains($"heading {level}", whole.FindAttribute(
+                    HeadingStyleTextProvider.StyleIdAttribute, style, true)!.GetText(-1));
+            }
+            surface.Selection.Select(firstQuote.ContentStart, firstQuote.ContentStart);
+            var caret = provider.GetSelection()[0];
+            Assert.Equal(HeadingStyleTextProvider.QuoteStyleName,
+                caret.GetAttributeValue(HeadingStyleTextProvider.StyleNameAttribute));
+            Assert.Null(caret.FindAttribute(HeadingStyleTextProvider.StyleNameAttribute,
+                HeadingStyleTextProvider.QuoteStyleName, false));
+        });
+    }
+
+    [Fact]
+    public void SyntheticStylesFallBackWhenTheAdaptorPointerIsUnavailable()
+    {
+        RunSta(() =>
+        {
+            var surface = new ReadingSurface();
+            var peer = System.Windows.Automation.Peers.UIElementAutomationPeer
+                .CreatePeerForElement(surface);
+            surface.ApplyBuiltDocument(BuildSource("> a quoted line\n"));
+            var provider = Assert.IsType<HeadingStyleTextProvider>(peer!.GetPattern(
+                System.Windows.Automation.Peers.PatternInterface.Text));
+            var raw = Assert.IsType<HeadingStyleTextRange>(provider.DocumentRange).Inner;
+            var opaque = new OpaqueTextRange(raw);
+            var decorated = new HeadingStyleTextRange(opaque);
+            Assert.Same(opaque.GetAttributeValue(HeadingStyleTextProvider.StyleIdAttribute),
+                decorated.GetAttributeValue(HeadingStyleTextProvider.StyleIdAttribute));
+            Assert.Null(decorated.FindAttribute(HeadingStyleTextProvider.StyleNameAttribute,
+                HeadingStyleTextProvider.QuoteStyleName, false));
+            Assert.Equal(raw.GetText(-1), decorated.GetText(-1));
+        });
+    }
+
+    /// <summary>The previous implementation is an independent reference
+    /// for this performance change: it walks with WPF range operations,
+    /// not the optimized block traversal. Compare endpoint behavior around
+    /// empty paragraphs, non-paragraph blocks and nested containers.</summary>
+    [Fact]
+    public void SyntheticStyleBlockWalkMatchesTheOriginalAdaptorWalkAtBoundaries()
+    {
+        RunSta(() =>
+        {
+            var plain = new Paragraph(new Run("plain"));
+            var emptyQuote = new Paragraph();
+            var quote = new Paragraph(new Run("nested quote"));
+            var emptyPlain = new Paragraph();
+            var listQuote = new Paragraph(new Run("list quote"));
+            var cellHeading = new Paragraph(new Run("cell heading"));
+            var cellQuote = new Paragraph(new Run("cell quote"));
+            var link = new Hyperlink(new Run("linked quote"));
+            var linkQuote = new Paragraph(link);
+            var embedded = new InlineUIContainer(new System.Windows.Controls.Button
+            {
+                Content = "inline button"
+            });
+            var inlineQuote = new Paragraph(embedded);
+            inlineQuote.Inlines.Add(new Run("inline quote"));
+            var finalHeading = new Paragraph(new Run("final heading"));
+            ReadingSemantics.MarkQuote(emptyQuote);
+            ReadingSemantics.MarkQuote(quote);
+            ReadingSemantics.MarkQuote(listQuote);
+            ReadingSemantics.MarkHeading(cellHeading, 1);
+            ReadingSemantics.MarkQuote(cellQuote);
+            ReadingSemantics.MarkQuote(linkQuote);
+            ReadingSemantics.MarkQuote(inlineQuote);
+            ReadingSemantics.MarkHeading(finalHeading, 9);
+            var document = new FlowDocument(plain);
+            document.Blocks.Add(emptyQuote);
+            var uiBlock = new BlockUIContainer(new System.Windows.Controls.Button());
+            document.Blocks.Add(uiBlock);
+            var section = new Section(quote);
+            section.Blocks.Add(emptyPlain);
+            section.Blocks.Add(new System.Windows.Documents.List(new ListItem(listQuote)));
+            var table = new Table();
+            var group = new TableRowGroup();
+            var row = new TableRow();
+            row.Cells.Add(new TableCell(cellHeading));
+            row.Cells.Add(new TableCell(cellQuote));
+            group.Rows.Add(row);
+            table.RowGroups.Add(group);
+            section.Blocks.Add(table);
+            document.Blocks.Add(section);
+            document.Blocks.Add(linkQuote);
+            document.Blocks.Add(inlineQuote);
+            document.Blocks.Add(finalHeading);
+            var surface = new ReadingSurface();
+            var peer = System.Windows.Automation.Peers.UIElementAutomationPeer
+                .CreatePeerForElement(surface);
+            surface.ApplyBuiltDocument(document);
+            document = surface.Document;
+            var provider = Assert.IsType<HeadingStyleTextProvider>(peer!.GetPattern(
+                System.Windows.Automation.Peers.PatternInterface.Text));
+            Paragraph[] paragraphs = [plain, emptyQuote, quote, emptyPlain,
+                listQuote, cellHeading, cellQuote, linkQuote, inlineQuote, finalHeading];
+            var points = new List<TextPointer>
+                { document.ContentStart, document.ContentEnd, uiBlock.ElementStart,
+                    uiBlock.ContentStart, uiBlock.ContentEnd, uiBlock.ElementEnd,
+                    link.ElementStart, link.ContentStart, link.ContentEnd, link.ElementEnd,
+                    embedded.ElementStart, embedded.ContentStart, embedded.ContentEnd, embedded.ElementEnd };
+            foreach (Paragraph paragraph in paragraphs)
+            {
+                points.AddRange([paragraph.ElementStart, paragraph.ContentStart,
+                    paragraph.ContentStart.GetInsertionPosition(LogicalDirection.Forward),
+                    paragraph.ContentEnd, paragraph.ElementEnd]);
+            }
+            var spans = points.SelectMany(point => new[]
+                { (point, point), (document.ContentStart, point), (point, document.ContentEnd) });
+            int count = 0;
+            foreach ((TextPointer start, TextPointer end) in spans)
+            {
+                surface.Selection.Select(start, end);
+                var actual = Assert.IsType<HeadingStyleTextRange>(provider.GetSelection()[0]);
+                var raw = actual.Inner;
+                var unchanged = raw.Clone();
+                foreach (int attribute in new[] { HeadingStyleTextProvider.StyleIdAttribute,
+                    HeadingStyleTextProvider.StyleNameAttribute })
+                {
+                    object? expected = OriginalSyntheticAttribute(raw, attribute);
+                    object? value = actual.GetAttributeValue(attribute);
+                    Assert.True(Equals(expected, value),
+                        $"Boundary span {count}, attribute {attribute}: "
+                        + $"expected {expected}, actual {value}");
+                }
+                foreach ((int attribute, object value) in new (int, object)[]
+                {
+                    (HeadingStyleTextProvider.StyleNameAttribute, HeadingStyleTextProvider.QuoteStyleName),
+                    (HeadingStyleTextProvider.StyleIdAttribute, HeadingStyleTextProvider.StyleIdQuote),
+                    (HeadingStyleTextProvider.StyleIdAttribute, HeadingStyleTextProvider.StyleIdHeading1),
+                    (HeadingStyleTextProvider.StyleIdAttribute, HeadingStyleTextProvider.StyleIdHeading1 + 8),
+                })
+                {
+                    foreach (bool backward in new[] { false, true })
+                    {
+                        ITextRangeProvider? expected = OriginalFindSynthetic(raw, attribute, value, backward);
+                        ITextRangeProvider? found = actual.FindAttribute(attribute, value, backward);
+                        Assert.True((expected is null) == (found is null),
+                            $"Boundary span {count}, find {attribute}/{value}, backward={backward}");
+                        if (expected is not null && found is not null)
+                        {
+                            int startComparison = found.CompareEndpoints(TextPatternRangeEndpoint.Start,
+                                expected, TextPatternRangeEndpoint.Start);
+                            int endComparison = found.CompareEndpoints(TextPatternRangeEndpoint.End,
+                                expected, TextPatternRangeEndpoint.End);
+                            if (startComparison != 0 || endComparison != 0)
+                            {
+                                Assert.Fail($"Boundary span {count}, find {attribute}/{value}, backward={backward}: "
+                                    + $"start compare {startComparison}, end compare {endComparison}; "
+                                    + $"span offsets {document.ContentStart.GetOffsetToPosition(start)}"
+                                    + $"..{document.ContentStart.GetOffsetToPosition(end)}; "
+                                    + $"expected text '{expected.GetText(-1)}', actual text '{found.GetText(-1)}'");
+                            }
+                        }
+                    }
+                }
+                Assert.True(raw.Compare(unchanged), $"Query changed at boundary span {count}");
+                count++;
+            }
+            _output.WriteLine($"Compared {count} boundary spans with the original adaptor walker.");
+        });
+    }
+
+    private static IEnumerable<(ITextRangeProvider Range, Paragraph Paragraph)>
+        OriginalParagraphRanges(ITextRangeProvider raw)
+    {
+        ITextRangeProvider cursor = raw.Clone();
+        cursor.MoveEndpointByRange(TextPatternRangeEndpoint.End, cursor, TextPatternRangeEndpoint.Start);
+        while (true)
+        {
+            ITextRangeProvider probe = cursor.Clone();
+            probe.ExpandToEnclosingUnit(TextUnit.Paragraph);
+            if (StartPointerField.ForType(probe.GetType())?.GetValue(probe)
+                is TextPointer { Paragraph: { } paragraph })
+            {
+                yield return (probe, paragraph);
+            }
+            ITextRangeProvider previous = cursor.Clone();
+            if (cursor.Move(TextUnit.Paragraph, 1) == 0
+                || cursor.CompareEndpoints(TextPatternRangeEndpoint.Start,
+                    previous, TextPatternRangeEndpoint.Start) <= 0
+                || cursor.CompareEndpoints(TextPatternRangeEndpoint.Start,
+                    raw, TextPatternRangeEndpoint.End) >= 0)
+            {
+                yield break;
+            }
+        }
+    }
+
+    private static object? OriginalStyleValue(Paragraph paragraph, int attribute)
+    {
+        if (attribute == HeadingStyleTextProvider.StyleNameAttribute)
+        {
+            return ReadingSemantics.IsQuote(paragraph) ? HeadingStyleTextProvider.QuoteStyleName : null;
+        }
+        byte level = ReadingSemantics.HeadingLevelOf(paragraph);
+        return level > 0 ? HeadingStyleTextProvider.StyleIdHeading1 + level - 1
+            : ReadingSemantics.IsQuote(paragraph) ? HeadingStyleTextProvider.StyleIdQuote : null;
+    }
+
+    private static object? OriginalSyntheticAttribute(ITextRangeProvider raw, int attribute)
+    {
+        bool haveFirst = false;
+        object? first = null;
+        foreach ((ITextRangeProvider _, Paragraph paragraph) in OriginalParagraphRanges(raw))
+        {
+            object? identity = OriginalStyleValue(paragraph, HeadingStyleTextProvider.StyleIdAttribute);
+            if (!haveFirst)
+            {
+                first = identity;
+                haveFirst = true;
+            }
+            else if (!Equals(first, identity))
+            {
+                return System.Windows.Automation.TextPattern.MixedAttributeValue;
+            }
+        }
+        if (first is null)
+        {
+            return raw.GetAttributeValue(attribute);
+        }
+        return attribute == HeadingStyleTextProvider.StyleIdAttribute ? first
+            : Equals(first, HeadingStyleTextProvider.StyleIdQuote)
+                ? HeadingStyleTextProvider.QuoteStyleName : raw.GetAttributeValue(attribute);
+    }
+
+    private static ITextRangeProvider? OriginalFindSynthetic(
+        ITextRangeProvider raw, int attribute, object value, bool backward)
+    {
+        if (raw.CompareEndpoints(TextPatternRangeEndpoint.Start, raw, TextPatternRangeEndpoint.End) == 0)
+        {
+            return null;
+        }
+        ITextRangeProvider? last = null;
+        foreach ((ITextRangeProvider candidate, Paragraph paragraph) in OriginalParagraphRanges(raw))
+        {
+            if (!Equals(OriginalStyleValue(paragraph, attribute), value))
+            {
+                continue;
+            }
+            if (candidate.CompareEndpoints(TextPatternRangeEndpoint.Start,
+                raw, TextPatternRangeEndpoint.Start) < 0)
+            {
+                candidate.MoveEndpointByRange(TextPatternRangeEndpoint.Start, raw, TextPatternRangeEndpoint.Start);
+            }
+            if (candidate.CompareEndpoints(TextPatternRangeEndpoint.End,
+                raw, TextPatternRangeEndpoint.End) > 0)
+            {
+                candidate.MoveEndpointByRange(TextPatternRangeEndpoint.End, raw, TextPatternRangeEndpoint.End);
+            }
+            if (!backward)
+            {
+                return candidate;
+            }
+            last = candidate;
+        }
+        return last;
+    }
+
+    // A provider with the same public range behavior and no private _start
+    // pointer. It models a renamed/internal adaptor shape without changing
+    // reflection globals or replacing the real WPF provider in other facts.
+    private sealed class OpaqueTextRange(ITextRangeProvider inner) : ITextRangeProvider
+    {
+        private static ITextRangeProvider Raw(ITextRangeProvider range) =>
+            range is OpaqueTextRange opaque ? opaque.Inner : range;
+        private ITextRangeProvider Inner => inner;
+        public ITextRangeProvider Clone() => new OpaqueTextRange(inner.Clone());
+        public bool Compare(ITextRangeProvider range) => inner.Compare(Raw(range));
+        public int CompareEndpoints(TextPatternRangeEndpoint endpoint,
+            ITextRangeProvider targetRange, TextPatternRangeEndpoint targetEndpoint) =>
+            inner.CompareEndpoints(endpoint, Raw(targetRange), targetEndpoint);
+        public void ExpandToEnclosingUnit(TextUnit unit) => inner.ExpandToEnclosingUnit(unit);
+        public ITextRangeProvider? FindAttribute(int attribute, object value, bool backward) =>
+            inner.FindAttribute(attribute, value, backward);
+        public ITextRangeProvider? FindText(string text, bool backward, bool ignoreCase) =>
+            inner.FindText(text, backward, ignoreCase);
+        public object? GetAttributeValue(int attributeId) => inner.GetAttributeValue(attributeId);
+        public double[] GetBoundingRectangles() => inner.GetBoundingRectangles();
+        public IRawElementProviderSimple[] GetChildren() => inner.GetChildren();
+        public IRawElementProviderSimple GetEnclosingElement() => inner.GetEnclosingElement();
+        public string GetText(int maxLength) => inner.GetText(maxLength);
+        public int Move(TextUnit unit, int count) => inner.Move(unit, count);
+        public int MoveEndpointByUnit(TextPatternRangeEndpoint endpoint, TextUnit unit, int count) =>
+            inner.MoveEndpointByUnit(endpoint, unit, count);
+        public void MoveEndpointByRange(TextPatternRangeEndpoint endpoint,
+            ITextRangeProvider targetRange, TextPatternRangeEndpoint targetEndpoint) =>
+            inner.MoveEndpointByRange(endpoint, Raw(targetRange), targetEndpoint);
+        public void Select() => inner.Select();
+        public void AddToSelection() => inner.AddToSelection();
+        public void RemoveFromSelection() => inner.RemoveFromSelection();
+        public void ScrollIntoView(bool alignToTop) => inner.ScrollIntoView(alignToTop);
     }
 
     /// <summary>FindAttribute resolves synthetic styles (adversarial

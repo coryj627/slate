@@ -20,6 +20,10 @@ public sealed partial class ConnectionsLeafTests
         PumpedDispatcher.Run(() =>
         {
             var host = new Host(vault.Root);
+            using var parked = new ManualResetEventSlim(false);
+            using var release = new ManualResetEventSlim(false);
+            using var stopRelease = new CancellationTokenSource();
+            Task? releaseHelper = null;
             bool disposed = false;
             try
             {
@@ -34,8 +38,6 @@ public sealed partial class ConnectionsLeafTests
                     _ = host.Session.Rescan(scan);
                 }
 
-                using var parked = new ManualResetEventSlim(false);
-                using var release = new ManualResetEventSlim(false);
                 host.Leaf.FetchGateForTests = () =>
                 {
                     parked.Set();
@@ -58,15 +60,28 @@ public sealed partial class ConnectionsLeafTests
 
                 var clock = System.Diagnostics.Stopwatch.StartNew();
                 long releasedAt = 0;
-                _ = Task.Run(async () =>
+                releaseHelper = Task.Run(async () =>
                 {
-                    await Task.Delay(6000);
-                    Volatile.Write(ref releasedAt, clock.ElapsedMilliseconds);
-                    release.Set();
+                    try
+                    {
+                        // This focused witness intentionally exceeds the
+                        // ordinary production five-second drain bound.
+                        await Task.Delay(6000, stopRelease.Token);
+                        Volatile.Write(ref releasedAt, clock.ElapsedMilliseconds);
+                    }
+                    catch (OperationCanceledException) when (stopRelease.IsCancellationRequested)
+                    {
+                    }
+                    finally
+                    {
+                        release.Set();
+                    }
                 });
                 host.Workspace.Dispose();
                 disposed = true;
                 long returnedAt = clock.ElapsedMilliseconds;
+                Assert.True(releaseHelper.Wait(TimeSpan.FromSeconds(10)), "the delayed release helper did not finish");
+                releaseHelper.GetAwaiter().GetResult();
 
                 long released = Volatile.Read(ref releasedAt);
                 Assert.True(
@@ -75,11 +90,18 @@ public sealed partial class ConnectionsLeafTests
             }
             finally
             {
+                stopRelease.Cancel();
+                release.Set();
+                if (releaseHelper is not null)
+                {
+                    Assert.True(releaseHelper.Wait(TimeSpan.FromSeconds(10)), "the delayed release helper did not unwind");
+                    releaseHelper.GetAwaiter().GetResult();
+                }
                 if (!disposed)
                 {
                     host.Workspace.Dispose();
                 }
-
+                host.Settle();
                 host.Session.Dispose();
             }
         });

@@ -1219,10 +1219,9 @@ internal static class ChordTable
             "Fill the visual board's view with the selected cards.",
             "⇧2", "Shift+2", ChordScope.Canvas),
 
-            // §E TE-11 (E19): the ONE new verb chord - mac's opt-cmd-N
-            // maps to Ctrl+Alt+N (Ctrl+N stays free for notes, mac's own
-            // allocation rule #368). Every other mutation verb is
-            // palette/menu/context-menu only (R1).
+            // §E TE-11 (E19): New Card advertises Ctrl+Alt+T, avoiding
+            // NVDA's default Ctrl+Alt+N launch/restart shortcut. The
+            // mapped N remains a canvas-only legacy alias below.
             // §F TF-4 (F9/M6): the spatial mode front doors, labels
             // byte-identical to mac (P3). R is mac's quick loop: during
             // resize it commits. The presets are palette rows - mac
@@ -1302,9 +1301,9 @@ internal static class ChordTable
                 CommandSection.Canvas,
                 "New text card below the selection, already connected, ready to type.",
                 "⌃⌥⌘N", "Ctrl+Alt+Shift+N", ChordScope.Canvas,
-                divergence: "mac's ⌃⌥⌘N; the modifier rule maps it onto Ctrl+Alt+N, "
-                    + "which New Card owns (mac's ⌥⌘N), so Shift disambiguates — the "
-                    + "spec's §7 allocation, free on Windows."),
+                divergence: "mac's ⌃⌥⌘N maps onto Ctrl+Alt+N, which New Card retains "
+                    + "as a legacy alias. Keep the established Shift disambiguation "
+                    + "while New Card advertises Ctrl+Alt+T to avoid NVDA's launch shortcut."),
             Reg(Ids.CanvasCreateConnectedCardDirectional,
                 "Canvas: Create Connected Card (Choose Direction)…", CommandSection.Canvas,
                 "Pick the side first, then the connected card is created there."),
@@ -1346,7 +1345,11 @@ internal static class ChordTable
             Reg(Ids.CanvasNewCard, "Canvas: New Card", CommandSection.Canvas,
                 "Create a text card next to the selection - placement is "
                 + "automatic and announced.",
-                "⌥⌘N", "Ctrl+Alt+N", ChordScope.Canvas),
+                "⌥⌘N", "Ctrl+Alt+T", ChordScope.Canvas,
+                divergence: "Ctrl+Alt+N is NVDA's default launch/restart shortcut. "
+                    + "Windows advertises T for a text card, retaining N as a "
+                    + "canvas-only legacy alias. Reading's next-table Ctrl+Alt+T "
+                    + "has a separate surface and input route."),
         Reg(Ids.CanvasFilterCards, "Canvas: Filter Cards…", CommandSection.Canvas,
             "Focus the filter field (Ctrl+F on a canvas): narrows by title, type, "
             + "group, or target.",
@@ -1715,6 +1718,13 @@ internal static class ChordTable
                 + "nothing filtering the key is left to the window. A KeyBinding would "
                 + "not do: WPF marks a matched plain-ICommand binding handled even when "
                 + "it cannot execute."),
+
+            Chord("windows.canvas.newCardLegacy",
+                "Canvas: New Card (legacy shortcut)",
+                "Ctrl+Alt+N", ChordScope.Canvas,
+                "Compatibility alias for slate.canvas.newCard, delivered only by "
+                + "CanvasNavigator. NVDA may reserve this chord globally, so menu, "
+                + "palette and onboarding advertise Ctrl+Alt+T."),
 
             // §E TE-11 (E19/ED-1, D-6 adopted): the canvas history
             // domain. Chord-only rows like the structural pair below: mac

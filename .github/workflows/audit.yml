@@ -3,7 +3,7 @@
 # unmaintained-crate warnings are reported but don't fail the gate.
 #
 # Cargo.lock is committed (CI Phase 3), so the audit scans the exact
-# resolved graph the build uses. Runs on a Namespace Linux runner — the
+# resolved graph the build uses. Runs on a standard hosted Linux runner — the
 # audit only inspects the dependency graph, which is platform-independent,
 # so it doesn't need the macOS pin the Swift build uses.
 
@@ -47,15 +47,9 @@ concurrency:
 jobs:
   audit:
     name: cargo audit
-    # Namespace Linux ARM64 runner (arm64-fast — high capacity + NVMe cache).
-    # cargo-audit is a Rust tool, so this needs a profile with the Rust
-    # toolchain preinstalled; arm64-fast ships cargo, x64-fast does not.
-    # Cache trust: runs ON MAIN (pushes and the cron, which executes
-    # the default branch) are trusted and share rust.yml's slate-arm64
-    # lineage; every other ref gets the -pr lineage (see rust.yml
-    # header; the trusted volume carries a dashboard branch
-    # allow-list).
-    runs-on: namespace-profile-arm64-fast${{ github.ref != 'refs/heads/main' && '-pr' || '' }};overrides.cache-tag=slate-arm64
+    # Lockfile audit is platform-independent; no native build volume is needed.
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
     permissions:
       contents: read
     steps:
@@ -96,66 +90,6 @@ jobs:
           fi
           if [ "$stale" -eq 1 ]; then exit 1; fi
           echo "Advisory ignores valid (today $today) — all review-by dates are in the future."
-
-      - name: Cache cargo (Namespace NVMe cache)
-        # Mirror rust.yml: the `rust` mode caches ~/.cargo/{registry,git},
-        # target/, and the global cache — deliberately NOT ~/.cargo/bin.
-        # cargo is preinstalled in the arm64-fast image at ~/.cargo/bin;
-        # mounting a cold cache volume over that dir shadows the toolchain
-        # (cargo: command not found), which is exactly what broke this job.
-        # cargo-audit therefore recompiles per run, but the cached registry
-        # keeps its dependency fetch fast, and audit is low-frequency (manifest
-        # changes + weekly cron), so the recompile is a non-issue.
-        uses: namespacelabs/nscloud-cache-action@c5f8dab7560444c4bf8dbc64f1b203431873c547  # v1
-        with:
-          cache: rust
-
-      - name: Cache mount state (pre-build)
-        # Bootstrap attestation (windows.yml runbook step 4): read
-        # BEFORE any build repopulates the volume, so a cold mount is
-        # distinguishable from a surviving stale generation. Measured
-        # at the VOLUME ROOT (adversarial round 4: the mount points are
-        # symlinks/junctions on mac/Windows and du reported link nodes,
-        # 0B even fully warm; NSC_CACHE_PATH holds the real content for
-        # every cache mode).
-        run: |
-          shopt -s nullglob dotglob
-          # Platform/vendor metadata is not cache content: skipped
-          # silently for both the cold decision and measurement
-          # (adversarial round 6: lost+found and containerscache on
-          # Linux, .Spotlight-V100/.Trashes/.fseventsd on macOS kept
-          # every attestation in the warning path, and permanent noise
-          # buries a real measurement failure).
-          is_metadata() {
-            case "$(basename "$1")" in
-              "lost+found"|containerscache|gitmirror|.Spotlight-V100|.Trashes|.fseventsd|.DS_Store) return 0 ;;
-              *) return 1 ;;
-            esac
-          }
-          root="${NSC_CACHE_PATH:?cache volume root missing}"
-          if [ ! -d "$root" ] || [ ! -r "$root" ]; then
-            # Fail CLOSED (adversarial round 7): with nullglob, a
-            # missing or unreadable root yields zero entries and the
-            # cold sentinel - a mount failure must never masquerade as
-            # bootstrap proof.
-            echo "::error::cache volume root $root is not an accessible directory - attestation impossible"
-            exit 1
-          fi
-          entries=()
-          for entry in "$root"/*; do
-            is_metadata "$entry" || entries+=("$entry")
-          done
-          if [ ${#entries[@]} -eq 0 ]; then
-            echo "cache volume empty (cold mount)"
-          else
-            for entry in "${entries[@]}"; do
-              # Per-entry measurement: one unreadable entry must not
-              # taint the rest, and emptiness is decided by
-              # enumeration, never by du's exit status (rounds 5-6).
-              du -sh "$entry" 2>/dev/null \
-                || echo "::warning::cannot measure $entry - measurement incomplete, NOT cold"
-            done
-          fi
 
       - name: Install cargo-audit
         # Prebuilt, checksum-verified binary in seconds instead of

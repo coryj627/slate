@@ -885,6 +885,43 @@ mod tests {
     }
 
     #[test]
+    fn csl_style_rejects_excessive_namespace_declarations() {
+        let archived = hayagriva::archive::ArchivedStyle::AmericanPsychologicalAssociation.get();
+        let xml = archived.to_xml().expect("archived APA serialises");
+        let root = xml.split('<').find(|tag| tag.starts_with("style")).unwrap();
+        assert!(!root.split('>').next().unwrap().contains("xmlns"));
+        let with_namespaces = |count| {
+            let declarations: String = (0..count)
+                .map(|index| format!(" xmlns:fixture{index}=\"urn:slate:fixture:{index}\""))
+                .collect();
+            xml.replacen("<style", &format!("<style{declarations}"), 1)
+        };
+
+        // Unused namespace declarations are valid XML. Keep a positive
+        // control so rejecting every user-provided style cannot pass.
+        assert!(style_from_xml("namespaces", "Namespaces", &with_namespaces(256)).is_ok());
+
+        // The released parser previously accepted an unbounded number of
+        // declarations before the consumer could inspect its first event
+        // (RUSTSEC-2026-0195). Exercise our actual CSL entry point, not an
+        // unrelated XML reader or a wall-clock timing threshold.
+        let flood = with_namespaces(257);
+        let err = style_from_xml("namespace-flood", "Namespace flood", &flood)
+            .expect_err("the CSL parser must bound namespace declarations on one element");
+        match err {
+            VaultError::CslStyleUnreadable { path, .. } => {
+                assert_eq!(path, "namespace-flood");
+            }
+            other => panic!("expected a typed CSL parse refusal, got {other:?}"),
+        }
+        // citationberg's user-facing Display omits the underlying cause.
+        // Inspect it separately so an unrelated CSL parse failure cannot pass.
+        let parser_error = IndependentStyle::from_xml(&flood).unwrap_err();
+        let cause = format!("{:?}", parser_error.source);
+        assert!(cause.contains("TooManyDeclarations(256)"), "{cause}");
+    }
+
+    #[test]
     fn load_style_returns_csl_style_unreadable_for_missing_file() {
         let err = load_style(Path::new("/definitely/not/here.csl")).unwrap_err();
         match err {

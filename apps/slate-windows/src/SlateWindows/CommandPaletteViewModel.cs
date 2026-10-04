@@ -329,10 +329,11 @@ internal sealed class CommandPaletteViewModel : BindableBase
         _ownerThreadId = Environment.CurrentManagedThreadId;
     }
 
-    /// <summary>P10 (amended at the W7-7 wave close): the dispatcher a count is
-    /// spoken on — at Background priority, below input, so the count is
-    /// spoken only after all queued input has been dispatched. Null without a
-    /// dispatcher context (the facts' synchronous or custom contexts).</summary>
+    /// <summary>The owning WPF dispatcher, captured for counts and worker
+    /// results. Both post at Background priority, below input, so queued keys
+    /// supersede candidate publications before their generation checks and
+    /// counts speak only after queued input has been dispatched. Null without
+    /// a dispatcher context (the facts' synchronous or custom contexts).</summary>
     private readonly System.Windows.Threading.Dispatcher? _countDispatcher;
 
     /// <summary>The open-time snapshot (contract P4): the command list and the
@@ -1205,13 +1206,21 @@ internal sealed class CommandPaletteViewModel : BindableBase
     }
 
     /// <summary>
-    /// Runs <paramref name="publish"/> on the thread that owns the palette:
-    /// at once when a synchronous lane finished there, otherwise through the
-    /// owner's synchronization context.
+    /// Runs <paramref name="publish"/> on the thread that owns the palette.
+    /// WPF results always post below input, even when an already-completed
+    /// worker task resumes on the owner, so queued keys can supersede them.
+    /// Other contexts retain synchronous-owner or synchronization-context delivery.
     /// </summary>
     private void OnOwnerThread(Action publish)
     {
-        if (Environment.CurrentManagedThreadId == _ownerThreadId)
+        if (_countDispatcher is not null)
+        {
+            // A completed worker rank is still only a candidate publication.
+            // Let input already queued advance the generation (or dismiss
+            // the palette) before Publish checks whether it is still current.
+            _ = _countDispatcher.BeginInvoke(System.Windows.Threading.DispatcherPriority.Background, publish);
+        }
+        else if (Environment.CurrentManagedThreadId == _ownerThreadId)
         {
             publish();
         }

@@ -9,6 +9,8 @@
 //!   single-threaded release on Apple silicon (Barnes–Hut tier).
 //! - `layout_warm_tick/300`: a single settled-graph force pass < 2 ms.
 //! - `layout_cold/{300, 1500}`: recorded baselines in `BENCHMARKS.md`.
+//! - `layout_warm_frame/1500`: `step(20)` after a fresh 300-iteration
+//!   settle, over the Windows fixture's ring-and-hub tier-A topology.
 //!
 //! Run directly: `cargo bench -p slate-core --bench layout_bench`.
 
@@ -93,5 +95,44 @@ fn bench_layout_warm_tick(c: &mut Criterion) {
     group.finish();
 }
 
-criterion_group!(layout_benches, bench_layout_cold, bench_layout_warm_tick);
+fn bench_layout_warm_frame(c: &mut Criterion) {
+    let mut group = c.benchmark_group("layout_warm_frame");
+    group.sample_size(10);
+    let n = 1_500usize;
+    let paths: Vec<String> = (0..n).map(|i| format!("note{i}.md")).collect();
+    let refs: Vec<&str> = paths.iter().map(String::as_str).collect();
+    let links: Vec<(usize, usize)> = (0..n).flat_map(|i| [(i, (i + 1) % n), (i, 0)]).collect();
+    let graph = GraphIndex::from_test_links(&refs, &links);
+    group.bench_with_input(BenchmarkId::from_parameter(n), &n, |b, _| {
+        b.iter_batched_ref(
+            || {
+                let mut engine = LayoutEngine::new(
+                    &graph,
+                    &GraphFilter::default(),
+                    LayoutForces::default(),
+                    LayoutConfig::default(),
+                );
+                engine.step(300);
+                engine
+            },
+            |engine| {
+                let before = engine.iteration();
+                let report = engine.step(20);
+                // The production convergence predicate may return early.
+                // Retain its report and actual iteration delta with the
+                // frame workload; no continued mutation across samples.
+                black_box((report, engine.iteration() - before));
+            },
+            BatchSize::PerIteration,
+        );
+    });
+    group.finish();
+}
+
+criterion_group!(
+    layout_benches,
+    bench_layout_cold,
+    bench_layout_warm_tick,
+    bench_layout_warm_frame
+);
 criterion_main!(layout_benches);

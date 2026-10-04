@@ -7,6 +7,33 @@ namespace SlateWindows.Tests;
 
 public sealed class W1AnchoredVaultStoreTests
 {
+    [Theory]
+    [InlineData(240)]
+    [InlineData(360)]
+    public void WorkspaceMetadataReadAndReplaceWorkWithAnOrdinaryLongVaultRoot(int rootLength)
+    {
+        using FixtureVault fixture = FixtureVault.Create(0, "workspace-anchor-long-root");
+        string deepRoot = fixture.Root;
+        for (int level = 0; deepRoot.Length < rootLength - 20; level++)
+        {
+            deepRoot = Path.Combine(deepRoot, $"d{level}");
+        }
+        deepRoot = Path.Combine(deepRoot, new string('d', rootLength - deepRoot.Length - 1));
+        Assert.Equal(rootLength, deepRoot.Length);
+        string directory = Path.Combine(deepRoot, ".slate");
+        Assert.True(Path.Combine(directory, "workspace.json").Length >= 260);
+        Directory.CreateDirectory(deepRoot);
+        var persistence = new WorkspacePersistence(deepRoot);
+
+        persistence.Save(Snapshot("before"));
+        WorkspaceSnapshot before = Assert.IsType<WorkspaceSnapshot>(persistence.Load());
+        Assert.Equal("before", before.ActiveLeaf);
+        persistence.Save(Snapshot("after"));
+        WorkspaceSnapshot after = Assert.IsType<WorkspaceSnapshot>(persistence.Load());
+        Assert.Equal("after", after.ActiveLeaf);
+        Assert.Empty(Directory.EnumerateFiles(directory, "workspace.json.tmp-*"));
+    }
+
     [Fact]
     public void WorkspaceReadAndReplaceDoNotFollowAnExternalFileReparsePoint()
     {

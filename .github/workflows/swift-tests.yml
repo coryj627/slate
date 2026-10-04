@@ -18,6 +18,12 @@ on:
       - 'rust-toolchain.toml'
       - '.github/workflows/swift-tests.yml'
       - 'examples/swift-cli/**'
+      # XCTest reads feature help and the shared accessibility corpus.
+      - 'docs/help/**'
+      - 'tests/fixtures/**'
+      - 'scripts/build-mac-app.sh'
+      - 'scripts/build-swift-cli.sh'
+      - 'Makefile'
   push:
     branches: [main]
     paths:
@@ -29,6 +35,11 @@ on:
       - 'rust-toolchain.toml'
       - '.github/workflows/swift-tests.yml'
       - 'examples/swift-cli/**'
+      - 'docs/help/**'
+      - 'tests/fixtures/**'
+      - 'scripts/build-mac-app.sh'
+      - 'scripts/build-swift-cli.sh'
+      - 'Makefile'
 
 permissions:
   contents: read
@@ -48,11 +59,9 @@ jobs:
     # (e.g. MainSplitView) require a current Swift toolchain — Swift 6.2.4
     # specifically regressed the expression type-checker and times out on
     # MainSplitView.body, so this profile must track latest Xcode.
-    # Cache trust: runs on main commit the trusted slate-mac lineage,
-    # every other ref the -pr lineage (windows.yml documents the full
-    # reasoning; the trusted volume carries a dashboard branch
-    # allow-list). First run per new tag is cold once - a full
-    # Xcode/SwiftPM rebuild here.
+    # Ref-conditional profiles route jobs, but the custom slate-mac tag
+    # shares a volume across those profiles. Commit restrictions require
+    # provider enforcement across every attach path; see ci-cache-policy.md.
     runs-on: namespace-profile-mac-actions${{ github.ref != 'refs/heads/main' && '-pr' || '' }};overrides.cache-tag=slate-mac
     permissions:
       contents: read

@@ -37,8 +37,9 @@ concurrency:
 jobs:
   check:
     name: SPDX header present on every .rs/.swift
-    # Namespace Linux x64 runner — no toolchain needed, just bash + grep + git.
-    runs-on: namespace-profile-x64-fast
+    # No native toolchain or paid cache needed: bash + grep + git suffice.
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
     permissions:
       contents: read
     steps:

@@ -1315,7 +1315,7 @@
       "windowsSpoken": "Control Alt Shift N",
       "scope": "Canvas",
       "registered": true,
-      "divergence": "mac's ⌃⌥⌘N; the modifier rule maps it onto Ctrl+Alt+N, which New Card owns (mac's ⌥⌘N), so Shift disambiguates — the spec's §7 allocation, free on Windows."
+      "divergence": "mac's ⌃⌥⌘N maps onto Ctrl+Alt+N, which New Card retains as a legacy alias. Keep the established Shift disambiguation while New Card advertises Ctrl+Alt+T to avoid NVDA's launch shortcut."
     },
     {
       "id": "slate.canvas.createConnectedCardDirectional",
@@ -1480,10 +1480,11 @@
       "hint": "Create a text card next to the selection - placement is automatic and announced.",
       "macChord": "⌥⌘N",
       "mac": "Option Command N",
-      "windows": "Ctrl+Alt+N",
-      "windowsSpoken": "Control Alt N",
+      "windows": "Ctrl+Alt+T",
+      "windowsSpoken": "Control Alt T",
       "scope": "Canvas",
-      "registered": true
+      "registered": true,
+      "divergence": "Ctrl+Alt+N is NVDA's default launch/restart shortcut. Windows advertises T for a text card, retaining N as a canvas-only legacy alias. Reading's next-table Ctrl+Alt+T has a separate surface and input route."
     },
     {
       "id": "slate.canvas.filterCards",
@@ -3975,6 +3976,19 @@
       "scope": "SidebarFilter",
       "registered": false,
       "reason": "W7-7 (R-3): Escape in the Files filter field runs Clear Sidebar Filter (slate.sidebar.clearFilter) while a filter or tag scope is active, delivered by MainWindow.SidebarFilterTextBox_PreviewKeyDown; with nothing filtering the key is left to the window. A KeyBinding would not do: WPF marks a matched plain-ICommand binding handled even when it cannot execute."
+    },
+    {
+      "id": "windows.canvas.newCardLegacy",
+      "label": "Canvas: New Card (legacy shortcut)",
+      "section": "View",
+      "hint": null,
+      "macChord": null,
+      "mac": null,
+      "windows": "Ctrl+Alt+N",
+      "windowsSpoken": "Control Alt N",
+      "scope": "Canvas",
+      "registered": false,
+      "reason": "Compatibility alias for slate.canvas.newCard, delivered only by CanvasNavigator. NVDA may reserve this chord globally, so menu, palette and onboarding advertise Ctrl+Alt+T."
     },
     {
       "id": "windows.canvas.undoHistory",
