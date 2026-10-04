@@ -3241,6 +3241,30 @@ fn failed_recovery_barrier_invalidates_both_undo_endpoints_in_session() {
 
 #[test]
 fn structural_undo_waits_for_failed_recovery_barrier_then_fails_closed() {
+    // Other marker-recovery fixtures inject process-wide faults for b.md.
+    // Keep those faults outside this fixture's deliberate barrier ordering.
+    let _env_guard = super::common::ENV_FAULT_GUARD.lock().unwrap();
+    let started = std::time::Instant::now();
+    let result = std::panic::catch_unwind(std::panic::AssertUnwindSafe(
+        structural_undo_recovery_barrier_fixture,
+    ));
+    if let Err(payload) = result {
+        // Preserve the assertion payload even if another library has
+        // replaced the process-global panic hook. Resume the same unwind.
+        let message = payload
+            .downcast_ref::<&str>()
+            .copied()
+            .or_else(|| payload.downcast_ref::<String>().map(String::as_str))
+            .unwrap_or("non-string panic payload");
+        eprintln!(
+            "structural recovery barrier failure at {:?}: {message}",
+            started.elapsed()
+        );
+        std::panic::resume_unwind(payload);
+    }
+}
+
+fn structural_undo_recovery_barrier_fixture() {
     let (_tmp, session, state) = fixture(
         &[("prior.md", "p"), ("a.md", "a"), ("b.md", "b")],
         &["prior-dest", "dest"],
