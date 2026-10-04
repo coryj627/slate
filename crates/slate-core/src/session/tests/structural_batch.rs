@@ -3240,6 +3240,10 @@ fn failed_recovery_barrier_invalidates_both_undo_endpoints_in_session() {
 }
 
 #[test]
+#[expect(
+    clippy::disallowed_macros,
+    reason = "libtest must capture this fixture's original panic despite MathCAT's silent hook"
+)]
 fn structural_undo_waits_for_failed_recovery_barrier_then_fails_closed() {
     // Other marker-recovery fixtures inject process-wide faults for b.md.
     // Keep those faults outside this fixture's deliberate barrier ordering.
