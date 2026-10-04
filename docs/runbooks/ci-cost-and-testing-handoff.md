@@ -381,3 +381,28 @@ full-build cleanup remains unqualified; VM destruction is separate. Fresh
 human VoiceOver keyboard landing, speech, task completion and file effects on
 the frozen Release app remain NOT RUN. Keep PR #1328 draft and every reference
 inventory while evaluating packaging or smaller portfolios.
+
+### October 4 security dependency qualification
+
+The advisory exception expired at the UTC date boundary and stopped the gate
+before its vulnerability scan. Re-review confirmed that shared or downloaded
+CSL styles are untrusted input to the affected namespace-aware parser. The
+released citationberg 0.7.0 dependency still selected quick-xml 0.38.4. Rather
+than renew the exceptions, the workspace pins upstream citationberg commit
+`06a591e2f237d25e1dfdedac3f3d1494c496c52d`, whose sole change from the published
+source is the quick-xml dependency update. The committed lock resolves 0.41.0;
+both advisory ignores are removed, and the existing deadline enforcement stays
+unchanged for any future exception. A fresh cargo-audit 0.22.2 scan found zero
+vulnerabilities, with existing unmaintained-crate warnings reported separately.
+
+The CSL entry-point regression accepts 256 namespace declarations and requires
+a typed refusal for 257, checking the underlying namespace-limit cause. The
+original parser accepted the excessive declarations; the repaired parser
+passes. This is fault-detection evidence for the namespace allocation advisory,
+not a CPU performance benchmark or a general resource bound on CSL input.
+Replace the Git patch only when a fixed registry release is admitted through
+the citation dependency chain, then commit the new registry lock/source and
+repeat the audit and native qualification. The dependency change requires new
+Mac Debug, complete XCTest, CLI, separate analyzer and actual Release-load
+evidence. Earlier Release bytes remain historical evidence; fresh human
+VoiceOver acceptance must use the newly qualified app. Keep this PR draft.
