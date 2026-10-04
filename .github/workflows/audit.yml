@@ -20,6 +20,8 @@ on:
       # Re-run the gate when the ignore list changes, so a newly-added
       # advisory ignore is validated (and a removed one re-checked).
       - '.cargo/audit.toml'
+      - 'scripts/verify_citation_dependency.py'
+      - 'scripts/test_citation_dependency.py'
   push:
     branches: [main]
     paths:
@@ -31,6 +33,8 @@ on:
       # Re-run the gate when the ignore list changes, so a newly-added
       # advisory ignore is validated (and a removed one re-checked).
       - '.cargo/audit.toml'
+      - 'scripts/verify_citation_dependency.py'
+      - 'scripts/test_citation_dependency.py'
   schedule:
     # Weekly, so a newly-disclosed advisory against an unchanged pinned
     # dependency is still caught without waiting for a manifest edit.
@@ -90,6 +94,24 @@ jobs:
           fi
           if [ "$stale" -eq 1 ]; then exit 1; fi
           echo "Advisory ignores valid (today $today) — all review-by dates are in the future."
+
+      - name: Set up pinned Python
+        uses: actions/setup-python@5fda3b95a4ea91299a34e894583c3862153e4b97  # v7.0.0
+        with:
+          python-version: '3.13'
+
+      - name: Install repository-pinned Rust
+        run: |
+          slate_toolchain=$(python3 -c 'import tomllib; print(tomllib.load(open("rust-toolchain.toml", "rb"))["toolchain"]["channel"])')
+          rustup toolchain install "$slate_toolchain" --profile minimal
+
+      - name: Verify temporary citation Git admission and resolved application paths
+        # Python uses the same runtime line as the existing Mac pilot.
+        # No compilation or native cache volume is needed. The checker owns
+        # cargo metadata --locked --all-features and never changes the lock.
+        run: |
+          python3 -m unittest discover -s scripts -p test_citation_dependency.py
+          python3 scripts/verify_citation_dependency.py
 
       - name: Install cargo-audit
         # Prebuilt, checksum-verified binary in seconds instead of

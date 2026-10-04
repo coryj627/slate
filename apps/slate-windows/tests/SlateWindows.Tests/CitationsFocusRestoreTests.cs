@@ -216,6 +216,7 @@ public sealed class CitationsFocusRestoreTests
     private static IRawElementProviderSimple SelectedProviderOf(
         ListBox list, CitationRowViewModel row, ListBoxItem container)
     {
+        Assert.Equal(SelectionMode.Single, list.SelectionMode);
         // A ListBox exposes logical ItemAutomationPeers, with its container
         // peers aggregated into them. Walk the actual list as a client does
         // before requesting Selection, so the setup does not depend on an
