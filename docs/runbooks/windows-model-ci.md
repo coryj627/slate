@@ -75,12 +75,17 @@ the full inventory digest, selected/completed ordinals, success status, family
 elapsed time and aggregated route/phase timings. The verification job summarizes
 family durations in its job summary. Reports remain available on failures.
 
-During execution each family also writes a bounded, atomically replaced
-`*.progress.txt` checkpoint containing the active case and phase. A completed
-family records at most sixteen slow cases with phase durations. These diagnostic
-text files do not change schema 1 JSON, the inventory digest, or the independent
-coverage verifier. They can identify where a stopped process last made progress;
-a hard runner termination can still prevent artifact upload.
+During execution each family also keeps a bounded, atomically replaced
+`*.progress.txt` checkpoint containing the active case and phase. A case thread
+only records each transition in memory; a background flusher writes the latest
+one about once a second, so no phase timing includes a write and a case stalled
+in a phase still reaches the file. A completed case clears the active case; one
+that threw stays named in the final `failed` checkpoint. A completed family
+records at most sixteen slow cases with phase durations. These diagnostic text
+files do not change schema 1 JSON, the inventory digest, or the independent
+coverage verifier. They can identify where a stopped process last made progress,
+up to a second behind it; a hard runner termination can still prevent artifact
+upload.
 
 Checkpoint filesystem access is best effort: a Windows reader can briefly deny
 atomic replacement without invalidating model behavior. The canonical report
