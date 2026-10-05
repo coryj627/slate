@@ -128,6 +128,8 @@ public sealed partial class ConnectionsLeafTests
     private const int ComposedCells = PinnedModes * ComposedRoutes;
     private const int ComposedUnreachable = 59;
     private const int ComposedDriven = 137;
+    private const string ComposedInventorySha256 =
+        "81ba0fdae0e51f8c33e110ea0d3ccd8278157f2f390560fdba268712472a629a";
 
     private static readonly Composed[] DialogRoutes =
     [
@@ -1023,7 +1025,7 @@ public sealed partial class ConnectionsLeafTests
         using var run = new ModelTestRun<ComposedCell>(
             "composed", cells, cell => cell.ToString(), cell => cell.Route.ToString(),
             UnreachableComposed, ModelShardConfiguration.FromEnvironment());
-        run.AssertInventory(ComposedCells, ComposedUnreachable, ComposedDriven);
+        run.AssertInventory(ComposedCells, ComposedUnreachable, ComposedDriven, ComposedInventorySha256);
         var failures = new List<string>();
         PumpedDispatcher.Run(() =>
         {

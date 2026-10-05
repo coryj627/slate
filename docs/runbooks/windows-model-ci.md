@@ -32,10 +32,13 @@ state, expected result or assertions.
 `SLATE_MODEL_ONLY` text filter cannot be combined with partitioning or report
 output. It must never substitute for a complete CI partition.
 
-When deliberately expanding the model, update its pinned counts and the
-independent `CENSUSES` in `scripts/verify_windows_model_shards.py`. Preserve the
-named exclusions; a previously impossible state becoming reachable must be
-reviewed as a model change.
+When deliberately changing the model, update both pins on each side: the
+counts and inventory digest passed to `AssertInventory` in the C# model facts,
+and the independent `CENSUSES` and `INVENTORY_SHA256` in
+`scripts/verify_windows_model_shards.py`. Renaming a route or rewording an
+exclusion reason changes only the digest. Preserve the named exclusions; a
+previously impossible state becoming reachable must be reviewed as a model
+change.
 
 ## Local verification
 

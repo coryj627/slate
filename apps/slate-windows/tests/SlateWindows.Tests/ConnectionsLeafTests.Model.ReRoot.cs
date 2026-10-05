@@ -63,6 +63,8 @@ public sealed partial class ConnectionsLeafTests
     private const int ReRootCells = PinnedModes * 2 * 2 * 3 * 4 * 5 * 3 * 2;
     private const int ReRootUnreachable = 5216;
     private const int ReRootDriven = 544;
+    private const string ReRootInventorySha256 =
+        "48c2daa03565b2e82a202e211d44b32555ef92d1b28a793fc4561a8b5912312e";
 
     /// <summary>A mutable dirty gate for the model: the decision to give,
     /// and what lands inside the dialog first (the composed routes).</summary>
@@ -532,7 +534,7 @@ public sealed partial class ConnectionsLeafTests
         using var run = new ModelTestRun<ReRootCell>(
             "reroot", cells, cell => cell.ToString(), cell => cell.Route.ToString(),
             UnreachableReRoot, ModelShardConfiguration.FromEnvironment());
-        run.AssertInventory(ReRootCells, ReRootUnreachable, ReRootDriven);
+        run.AssertInventory(ReRootCells, ReRootUnreachable, ReRootDriven, ReRootInventorySha256);
         var failures = new List<string>();
         PumpedDispatcher.Run(() =>
         {

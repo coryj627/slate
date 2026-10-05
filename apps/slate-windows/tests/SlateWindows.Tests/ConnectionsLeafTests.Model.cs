@@ -193,6 +193,8 @@ public sealed partial class ConnectionsLeafTests
     private const int PinnedCells = PinnedModes * 2 * 2 * 3 * 5 * 3 * PinnedRoutes;
     private const int PinnedUnreachable = 12812;
     private const int PinnedDriven = 12388;
+    private const string PinnedInventorySha256 =
+        "e847440e2e4a1c18142b44faa91f8891209b2866296ea15fd31a5385657737fd";
 
     private static readonly Route[] SecondTabRoutes =
     [
@@ -2221,7 +2223,7 @@ public sealed partial class ConnectionsLeafTests
         using var run = new ModelTestRun<Cell>(
             "routes", cells, cell => cell.ToString(), cell => cell.Route.ToString(),
             Unreachable, ModelShardConfiguration.FromEnvironment());
-        run.AssertInventory(PinnedCells, PinnedUnreachable, PinnedDriven);
+        run.AssertInventory(PinnedCells, PinnedUnreachable, PinnedDriven, PinnedInventorySha256);
         var failures = new List<string>();
         PumpedDispatcher.Run(() =>
         {

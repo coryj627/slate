@@ -20,6 +20,10 @@ public sealed class ModelTestRunTests
         new("fifth", "Open"),
     ];
 
+    /// <summary>The digest of <see cref="Inventory"/>, pinned as the model
+    /// families pin theirs.</summary>
+    private const string InventorySha256 = "577e047fb07bb252991fcce08bade6609c512ea8e6c13f797d2c080288555066";
+
     private static ModelTestRun<Cell> Run(ModelShardConfiguration configuration, IEnumerable<Cell>? inventory = null,
         TimeSpan? progressInterval = null) =>
         new("routes", inventory ?? Inventory, cell => cell.Name, cell => cell.Route, cell => cell.Exclusion, configuration,
@@ -38,7 +42,7 @@ public sealed class ModelTestRunTests
         Assert.Equal(0, configuration.Index);
         Assert.Equal(1, configuration.Count);
         using var run = Run(configuration);
-        run.AssertInventory(7, 2, 5);
+        run.AssertInventory(7, 2, 5, InventorySha256);
         Assert.Equal([1, 2, 3, 4, 5], run.SelectedCases.Select(cell => cell.Ordinal));
         foreach (var cell in run.SelectedCases)
         {
@@ -78,14 +82,14 @@ public sealed class ModelTestRunTests
     public void LocalDebugNarrowingStillChecksTheFullInventoryAndRequiresAMatch()
     {
         using var run = Run(Configuration(("SLATE_MODEL_ONLY", "third")));
-        run.AssertInventory(7, 2, 5);
+        run.AssertInventory(7, 2, 5, InventorySha256);
         var cell = Assert.Single(run.SelectedCases);
         Assert.Equal(3, cell.Ordinal);
         run.RunCase(cell, timing => timing.Complete());
         run.Complete();
 
         using var empty = Run(Configuration(("SLATE_MODEL_ONLY", "absent")));
-        empty.AssertInventory(7, 2, 5);
+        empty.AssertInventory(7, 2, 5, InventorySha256);
         Assert.ThrowsAny<Xunit.Sdk.XunitException>(empty.Complete);
     }
 
@@ -99,7 +103,7 @@ public sealed class ModelTestRunTests
         {
             using (var run = Run(new(index, 2, [], directory.Path)))
             {
-                run.AssertInventory(7, 2, 5);
+                run.AssertInventory(7, 2, 5, InventorySha256);
                 Assert.Equal(index == 0 ? [1, 3, 5] : [2, 4], run.SelectedCases.Select(cell => cell.Ordinal));
                 foreach (var cell in run.SelectedCases)
                 {
@@ -165,7 +169,7 @@ public sealed class ModelTestRunTests
         using var directory = new ReportDirectory();
         using (var run = Run(new(0, 1, [], directory.Path), progressInterval: Timeout.InfiniteTimeSpan))
         {
-            run.AssertInventory(7, 2, 5);
+            run.AssertInventory(7, 2, 5, InventorySha256);
             var cell = run.SelectedCases[0];
             run.RunCase(cell, timing =>
             {
@@ -212,7 +216,7 @@ public sealed class ModelTestRunTests
     {
         using var directory = new ReportDirectory();
         using var run = Run(new(0, 1, [], directory.Path), progressInterval: TimeSpan.FromMilliseconds(20));
-        run.AssertInventory(7, 2, 5);
+        run.AssertInventory(7, 2, 5, InventorySha256);
         var cell = run.SelectedCases[2];
         using var stalled = new ManualResetEventSlim();
         using var release = new ManualResetEventSlim();
@@ -262,7 +266,7 @@ public sealed class ModelTestRunTests
         Cell[] cells = [.. Enumerable.Range(1, 40).Select(index => new Cell($"cell-{index}", "Open"))];
         using (var run = Run(new(0, 1, [], directory.Path), cells))
         {
-            run.AssertInventory(40, 0, 40);
+            run.AssertInventory(40, 0, 40, "e3a9138c8ad7a19424d9ba35154be189ef84c3b972e34769928a9e383d5d85da");
             foreach (var cell in run.SelectedCases)
             {
                 run.RunCase(cell, timing =>
@@ -318,7 +322,7 @@ public sealed class ModelTestRunTests
         using var directory = new ReportDirectory();
         using (var run = Run(new(0, 1, [], directory.Path), progressInterval: Timeout.InfiniteTimeSpan))
         {
-            run.AssertInventory(7, 2, 5);
+            run.AssertInventory(7, 2, 5, InventorySha256);
             foreach (var cell in run.SelectedCases)
             {
                 run.RunCase(cell, timing =>
@@ -354,7 +358,7 @@ public sealed class ModelTestRunTests
     {
         using var directory = new ReportDirectory();
         using var run = Run(new(0, 1, [], directory.Path));
-        run.AssertInventory(7, 2, 5);
+        run.AssertInventory(7, 2, 5, InventorySha256);
         foreach (var cell in run.SelectedCases)
         {
             run.RunCase(cell, timing => timing.Complete());
@@ -376,7 +380,7 @@ public sealed class ModelTestRunTests
         using var directory = new ReportDirectory();
         using (var run = Run(new(0, 1, [], directory.Path)))
         {
-            run.AssertInventory(7, 2, 5);
+            run.AssertInventory(7, 2, 5, InventorySha256);
             run.RunCase(run.SelectedCases[0], timing => timing.Complete());
             Assert.Throws<InvalidOperationException>(() => run.RunCase(run.SelectedCases[1], timing =>
             {
@@ -406,7 +410,7 @@ public sealed class ModelTestRunTests
         using var directory = new ReportDirectory();
         using (var run = Run(new(0, 1, [], directory.Path)))
         {
-            run.AssertInventory(7, 2, 5);
+            run.AssertInventory(7, 2, 5, InventorySha256);
             foreach (var cell in run.SelectedCases)
             {
                 run.RunCase(cell, _ => { });
@@ -418,7 +422,10 @@ public sealed class ModelTestRunTests
         Assert.Empty(report.RootElement.GetProperty("completedOrdinals").EnumerateArray());
 
         using var drift = Run(Configuration());
-        Assert.ThrowsAny<Xunit.Sdk.XunitException>(() => drift.AssertInventory(7, 1, 6));
+        Assert.ThrowsAny<Xunit.Sdk.XunitException>(() => drift.AssertInventory(7, 1, 6, InventorySha256));
+        // The counts can hold while the inventory changes: a renamed route
+        // or reworded exclusion reason moves only the digest.
+        Assert.ThrowsAny<Xunit.Sdk.XunitException>(() => drift.AssertInventory(7, 2, 5, new string('0', 64)));
         Assert.ThrowsAny<Xunit.Sdk.XunitException>(() => drift.RunCase(drift.SelectedCases[0], timing => timing.Complete()));
     }
 

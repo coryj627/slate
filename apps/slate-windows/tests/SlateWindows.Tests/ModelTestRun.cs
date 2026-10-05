@@ -129,11 +129,20 @@ internal sealed class ModelTestRun<TCell> : IDisposable
     internal string InventorySha256 { get; }
     internal IReadOnlyList<Case> SelectedCases { get; }
 
-    internal void AssertInventory(int total, int unreachable, int reachable)
+    /// <summary>Pin the census and its digest. Counts alone let a renamed
+    /// route or a reworded exclusion reason pass locally and on both shards,
+    /// failing only later in the Linux aggregator, which pins the same
+    /// digests independently (scripts/verify_windows_model_shards.py).</summary>
+    internal void AssertInventory(int total, int unreachable, int reachable, string inventorySha256)
     {
         Assert.Equal(total, TotalCells);
         Assert.Equal(unreachable, UnreachableCells);
         Assert.Equal(reachable, ReachableCells);
+        Assert.True(
+            string.Equals(inventorySha256, InventorySha256, StringComparison.Ordinal),
+            $"The {_family} inventory digest is {InventorySha256}, pinned {inventorySha256}: a cell, "
+            + "route name or exclusion reason changed. Review the change, then update this pin and "
+            + "INVENTORY_SHA256 in scripts/verify_windows_model_shards.py.");
         _inventoryVerified = true;
     }
 
