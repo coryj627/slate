@@ -61,7 +61,7 @@ public sealed class CitationsFocusRestoreTests
         // Connect the actual WPF root through WM_GETOBJECT, then walk the
         // list's exposed logical items and request its public Selection
         // provider, as a client does before reading the selected row.
-        _ = SendMessage(new WindowInteropHelper(host.Shell).Handle, 0x003D, IntPtr.Zero, new IntPtr(-25));
+        NativeWindow.RequestUiaRoot(new WindowInteropHelper(host.Shell).Handle);
         IRawElementProviderSimple oldProvider = SelectedProviderOf(list, oldRow, oldContainer);
         int[] oldRuntimeId = Assert.IsAssignableFrom<IRawElementProviderFragment>(oldProvider).GetRuntimeId();
         Assert.True((bool)oldProvider.GetPropertyValue(AutomationElement.HasKeyboardFocusProperty.Id));
@@ -267,6 +267,4 @@ public sealed class CitationsFocusRestoreTests
         }
     }
 
-    [DllImport("user32.dll")]
-    private static extern IntPtr SendMessage(IntPtr window, uint message, IntPtr wParam, IntPtr lParam);
 }

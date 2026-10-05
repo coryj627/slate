@@ -5646,13 +5646,8 @@ public sealed class CanvasDocumentTests : IDisposable
                 && state.Topology.Placements.ContainsKey(CanvasPeerKey.Card("question"))
                 && !state.Topology.Placements.ContainsKey(CanvasPeerKey.Card("evidence")));
 
-            // A UIA client's WM_GETOBJECT connects WPF's actual root and
-            // peer. A freshly constructed, unconnected test peer could
-            // return null for every provider and would prove nothing.
-            _ = BoardAutomationClient.SendMessage(
-                new System.Windows.Interop.WindowInteropHelper(
-                    Window.GetWindow(renderer) ?? throw new InvalidOperationException("the renderer is not hosted.")).Handle,
-                0x003D, IntPtr.Zero, new IntPtr(-25));
+            NativeWindow.RequestUiaRoot(new System.Windows.Interop.WindowInteropHelper(
+                Window.GetWindow(renderer) ?? throw new InvalidOperationException("the renderer is not hosted.")).Handle);
             var board = Assert.IsType<CanvasRendererAutomationPeer>(
                 UIElementAutomationPeer.CreatePeerForElement(renderer));
             CanvasCardAutomationPeer question = Assert.Single(
@@ -5878,12 +5873,6 @@ public sealed class CanvasDocumentTests : IDisposable
         GC.Collect();
         GC.WaitForPendingFinalizers();
         GC.Collect();
-    }
-
-    private static class BoardAutomationClient
-    {
-        [System.Runtime.InteropServices.DllImport("user32.dll", CharSet = System.Runtime.InteropServices.CharSet.Unicode)]
-        internal static extern IntPtr SendMessage(IntPtr window, int message, IntPtr wParam, IntPtr lParam);
     }
 
     /// <summary>

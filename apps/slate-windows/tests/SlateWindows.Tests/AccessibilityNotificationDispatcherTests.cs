@@ -269,7 +269,7 @@ public sealed class AccessibilityNotificationDispatcherTests
                     + $"status peer provider {(connected ? "present" : "null")}");
             }
 
-            _ = NativeWindow.SendMessage(handle, NativeWindow.WmGetObject, IntPtr.Zero, NativeWindow.UiaRootObjectId);
+            NativeWindow.RequestUiaRoot(handle);
             Assert.True(
                 requests.To(handle) > asked,
                 "the thread hook never saw the WM_GETOBJECT this fact sent, so it cannot tell asked from unasked.");
@@ -348,43 +348,6 @@ public sealed class AccessibilityNotificationDispatcherTests
 
             return NativeWindow.CallNextHookEx(IntPtr.Zero, code, wParam, lParam);
         }
-    }
-
-    private static class NativeWindow
-    {
-        internal const int WmGetObject = 0x003D;
-
-        internal const int WhCallWndProc = 4;
-
-        // UiaRootObjectId: the object id a UIA client sends with WM_GETOBJECT.
-        internal static readonly IntPtr UiaRootObjectId = new(-25);
-
-        internal delegate IntPtr HookProc(int code, IntPtr wParam, IntPtr lParam);
-
-        /// <summary>CWPSTRUCT: a sent message as WH_CALLWNDPROC sees it.</summary>
-        [StructLayout(LayoutKind.Sequential)]
-        internal struct SentMessage
-        {
-            public IntPtr LParam;
-            public IntPtr WParam;
-            public int Message;
-            public IntPtr Window;
-        }
-
-        [DllImport("user32.dll", CharSet = CharSet.Unicode)]
-        internal static extern IntPtr SendMessage(IntPtr hWnd, int msg, IntPtr wParam, IntPtr lParam);
-
-        [DllImport("user32.dll", SetLastError = true)]
-        internal static extern IntPtr SetWindowsHookEx(int idHook, HookProc lpfn, IntPtr hMod, int dwThreadId);
-
-        [DllImport("user32.dll")]
-        internal static extern bool UnhookWindowsHookEx(IntPtr hhk);
-
-        [DllImport("user32.dll")]
-        internal static extern IntPtr CallNextHookEx(IntPtr hhk, int nCode, IntPtr wParam, IntPtr lParam);
-
-        [DllImport("kernel32.dll")]
-        internal static extern int GetCurrentThreadId();
     }
 
     private static void RunSta(Action body) =>
@@ -1272,7 +1235,7 @@ public sealed class AccessibilityNotificationDispatcherTests
                 Assert.Empty(raised);
                 tick!();
                 Assert.Empty(raised);
-                _ = NativeWindow.SendMessage(handle, NativeWindow.WmGetObject, IntPtr.Zero, NativeWindow.UiaRootObjectId);
+                NativeWindow.RequestUiaRoot(handle);
                 tick!();
             }
 
@@ -1394,7 +1357,7 @@ public sealed class AccessibilityNotificationDispatcherTests
                 (HostDiagnosticEvent.AnnouncementSource, connectedAtFirst ? "statusPeerProvider=connected" : "statusPeerProvider=null"),
                 Assert.Single(logged));
 
-            _ = NativeWindow.SendMessage(handle, NativeWindow.WmGetObject, IntPtr.Zero, NativeWindow.UiaRootObjectId);
+            NativeWindow.RequestUiaRoot(handle);
             listening = true;
             tick!();
             Assert.Equal(HostDiagnosticEvent.AnnouncementSource, logged[0].Event);
