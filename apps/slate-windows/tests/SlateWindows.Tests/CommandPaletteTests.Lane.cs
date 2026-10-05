@@ -368,6 +368,63 @@ public sealed partial class CommandPaletteTests
     });
 
     /// <summary>
+    /// Contract 28 T7 as amended (owner decision, 2026-10-05): a typed-ahead
+    /// Enter acts on the query it follows. Worker results post below input,
+    /// so a rank that has FINISHED for the latest query can still be
+    /// waiting behind a queued Enter. That publication runs first and Enter
+    /// runs its selection — Quick Open for "q", not the New Note on screen
+    /// a moment before. Its own turn then publishes nothing again: an
+    /// unavailable row keeps the palette open and unsealed, so a second
+    /// publication would land.
+    /// </summary>
+    [Theory]
+    [InlineData(false)]
+    [InlineData(true)]
+    public void AQueuedEnterPublishesTheFinishedRankFirstAndRunsItsSelection(bool unavailable) => RunSta(() =>
+    {
+        LaneHost host = LaneHost.Opened();
+        CommandPaletteViewModel palette = host.Palette;
+        Assert.Equal("slate.file.newNote", palette.SelectedId);
+        if (unavailable)
+        {
+            host.Harness.Source.DisabledReasons["slate.nav.quickOpen"] = "Open a vault first.";
+        }
+        var published = new List<string[]>();
+        palette.PropertyChanged += (_, change) =>
+        {
+            if (change.PropertyName == nameof(CommandPaletteViewModel.Rows) && palette.Rows.Count > 0)
+            {
+                published.Add([.. host.Harness.RowIds]);
+            }
+        };
+
+        palette.Query = "q";
+        Assert.True(palette.RankCompletion.Wait(TimeSpan.FromSeconds(10)), "the rank never finished");
+        Assert.True(palette.IsRankPending, "premise: the finished rank's publication has not run.");
+        Assert.Equal("slate.file.newNote", palette.SelectedId);
+
+        // Enter arrives as input, ahead of the Background publication.
+        _ = Dispatcher.CurrentDispatcher.BeginInvoke(DispatcherPriority.Input, palette.InvokeSelected);
+        PumpedDispatcher.Drain();
+
+        Assert.Equal([["slate.nav.quickOpen"]], published);
+        Assert.False(palette.IsRankPending);
+        if (unavailable)
+        {
+            Assert.Empty(host.Harness.Source.Invoked);
+            Assert.True(palette.IsOpen);
+            Assert.Equal("slate.nav.quickOpen", palette.SelectedId);
+            Assert.Contains(host.Harness.Announcements, announced =>
+                announced is A11yEvent.PaletteCommandUnavailable { Reason: "Open a vault first." });
+        }
+        else
+        {
+            Assert.Equal(["slate.nav.quickOpen"], host.Harness.Source.Invoked);
+            Assert.False(palette.IsOpen);
+        }
+    });
+
+    /// <summary>
     /// #1275 codex round 2, finding 1: with nothing published — the open's
     /// snapshot still loading — there is no selection, and Enter does
     /// nothing, then or later: the first rows landing run nothing and say

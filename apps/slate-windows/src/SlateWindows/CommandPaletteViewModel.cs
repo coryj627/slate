@@ -280,6 +280,10 @@ internal sealed class CommandPaletteViewModel : BindableBase
     private CancellationTokenSource? _rankCancellation;
     private int _rankGeneration;
     private int _publishedGeneration;
+
+    /// <summary>The newest finished rank whose publication is posted to the
+    /// owner, written by the worker continuation that finished it.</summary>
+    private FinishedRank? _finishedRank;
     private bool _isShutDown;
     private bool _isInvoking;
     private bool _inModalLoop;
@@ -765,18 +769,25 @@ internal sealed class CommandPaletteViewModel : BindableBase
     /// first.
     /// </summary>
     /// <remarks>
-    /// Acts on the PUBLISHED selection — the row on screen — at once,
-    /// whether or not a newer query's rows are still ranking (contract P7:
-    /// the keys operate the list the user sees). Nothing is deferred to a
-    /// publication the user has not seen, so Enter can never run a row
-    /// that was not on screen when it was pressed. With nothing published
-    /// yet (the open's snapshot still loading) there is no selection, and
-    /// Enter does nothing. While the palette is sealed — a command running, or
-    /// a modal loop over the shell — it does nothing either: one command at a
-    /// time, and none under a prompt.
+    /// Acts on the PUBLISHED selection at once, never waiting for a newer
+    /// query's rows still ranking (contract P7: the keys operate the list
+    /// the user sees). One case publishes first (T7 as amended, owner
+    /// decision 2026-10-05): worker results post below input, so the
+    /// latest query's rank can have FINISHED while its publication waits
+    /// behind this Enter. That publication runs now, and Enter runs its
+    /// selection, so a typed-ahead Enter acts on the query it follows.
+    /// With nothing published yet (the open's snapshot still loading)
+    /// there is no selection, and Enter does nothing. While the palette is
+    /// sealed — a command running, or a modal loop over the shell — it does
+    /// nothing either: one command at a time, and none under a prompt.
     /// </remarks>
     public void InvokeSelected()
     {
+        if (Volatile.Read(ref _finishedRank) is { } finished
+            && finished.Generation == _rankGeneration)
+        {
+            finished.Publish();
+        }
         if (_selectedRow is CommandPaletteRowViewModel row)
         {
             Invoke(row);
@@ -1199,12 +1210,46 @@ internal sealed class CommandPaletteViewModel : BindableBase
             return;
         }
 
-        OnOwnerThread(() => Publish(
+        var finished = new FinishedRank(generation, () => Publish(
             generation,
             query,
             snapshot,
             sections,
             timedChange is int change ? (change, requested, rankTicks) : null));
+        // Keep the newest: two finished ranks' continuations can race here.
+        for (FinishedRank? seen = Volatile.Read(ref _finishedRank);
+            seen is null || seen.Generation < generation;)
+        {
+            FinishedRank? swapped = Interlocked.CompareExchange(ref _finishedRank, finished, seen);
+            if (ReferenceEquals(swapped, seen))
+            {
+                break;
+            }
+            seen = swapped;
+        }
+        OnOwnerThread(finished.Publish);
+    }
+
+    /// <summary>
+    /// A finished rank's publication, run once on the owner thread: at its
+    /// own turn below input, or first, by an Enter that arrives before that
+    /// turn (T7 as amended).
+    /// </summary>
+    private sealed class FinishedRank(int generation, Action publish)
+    {
+        private bool _published;
+
+        internal int Generation { get; } = generation;
+
+        internal void Publish()
+        {
+            if (_published)
+            {
+                return;
+            }
+            _published = true;
+            publish();
+        }
     }
 
     /// <summary>
@@ -1220,6 +1265,8 @@ internal sealed class CommandPaletteViewModel : BindableBase
             // A completed worker rank is still only a candidate publication.
             // Let input already queued advance the generation (or dismiss
             // the palette) before Publish checks whether it is still current.
+            // An Enter in that queue publishes the latest finished rank
+            // first instead (InvokeSelected, T7 as amended).
             _ = _ownerDispatcher.BeginInvoke(System.Windows.Threading.DispatcherPriority.Background, publish);
         }
         else if (Environment.CurrentManagedThreadId == _ownerThreadId)
