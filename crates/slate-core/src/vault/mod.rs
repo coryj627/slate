@@ -44,6 +44,8 @@ mod trash_snapshot;
 
 pub use trash_snapshot::TrashSnapshot;
 
+#[cfg(windows)]
+pub(crate) use fs::windows_extended_path;
 pub use fs::{FsVaultProvider, content_hash};
 pub use provider::{
     DirEntry, EntryKind, FileEvent, FileEventSink, FileStat, VaultProvider, WatchHandle,

@@ -228,10 +228,33 @@ const MIGRATIONS: &[Migration] = &[
 /// `cache_size_pages` sets the SQLite page cache; per `SessionConfig` defaults
 /// this is 4096 on desktop and 512 on mobile (see `docs/plans/05` §9.3.5).
 pub fn open_database(path: &Path, cache_size_pages: u32) -> Result<Connection, DbError> {
-    let conn = Connection::open(path)?;
+    let conn = Connection::open(sqlite_open_path(path))?;
     register_connection_functions(&conn)?;
     apply_pragmas(&conn, cache_size_pages)?;
     Ok(conn)
+}
+
+/// The spelling SQLite opens `path` by.
+///
+/// Bundled SQLite hands its paths to CreateFileW unprefixed (its own
+/// prefixing is Cygwin-only), so on Windows a database whose path, or whose
+/// `-journal`, `-wal` or `-shm` sibling's, reaches MAX_PATH could not open:
+/// a vault root of 240 characters failed before any host long-path handling
+/// ran. Such a path takes the verbatim (`\\?\`) form the vault provider
+/// already uses, which SQLite accepts. Shorter paths keep their ordinary
+/// spelling, so the messages that quote them read as before. Rust's own
+/// file APIs add the prefix themselves and need nothing here.
+pub(crate) fn sqlite_open_path(path: &Path) -> std::borrow::Cow<'_, Path> {
+    #[cfg(windows)]
+    {
+        use std::os::windows::ffi::OsStrExt;
+        const MAX_PATH: usize = 260;
+        const LONGEST_SIBLING_SUFFIX: usize = "-journal".len();
+        if path.as_os_str().encode_wide().count() + LONGEST_SIBLING_SUFFIX >= MAX_PATH {
+            return std::borrow::Cow::Owned(crate::vault::windows_extended_path(path));
+        }
+    }
+    std::borrow::Cow::Borrowed(path)
 }
 
 /// Open an in-memory database for tests.
