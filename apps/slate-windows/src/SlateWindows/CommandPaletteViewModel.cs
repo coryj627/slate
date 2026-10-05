@@ -306,9 +306,11 @@ internal sealed class CommandPaletteViewModel : BindableBase
     /// <see cref="HostLog.Write"/> unless a fact listens. Called from the
     /// lane's worker as well as the owning thread.</param>
     /// <remarks>
-    /// Constructed on the thread that owns the palette — the dispatcher's
-    /// in the shell — whose synchronization context receives every
-    /// publication a worker completes.
+    /// Constructed on the thread that owns the palette. In the shell that
+    /// thread runs a WPF dispatcher, which receives every publication and
+    /// count a worker completes at Background priority; other owners
+    /// receive them on the owning thread or through their synchronization
+    /// context.
     /// </remarks>
     public CommandPaletteViewModel(IPaletteCommandSource source, Action<A11yEvent> announce,
         Func<CancellationToken, Task>? filterCountWindow = null,
@@ -323,7 +325,7 @@ internal sealed class CommandPaletteViewModel : BindableBase
         _rank = rank ?? SlateUniffiMethods.PaletteSections;
         _diagnostics = diagnostics ?? HostLog.Write;
         _uiContext = SynchronizationContext.Current;
-        _countDispatcher = _uiContext is System.Windows.Threading.DispatcherSynchronizationContext
+        _ownerDispatcher = _uiContext is System.Windows.Threading.DispatcherSynchronizationContext
             ? System.Windows.Threading.Dispatcher.CurrentDispatcher
             : null;
         _ownerThreadId = Environment.CurrentManagedThreadId;
@@ -334,7 +336,7 @@ internal sealed class CommandPaletteViewModel : BindableBase
     /// supersede candidate publications before their generation checks and
     /// counts speak only after queued input has been dispatched. Null without
     /// a dispatcher context (the facts' synchronous or custom contexts).</summary>
-    private readonly System.Windows.Threading.Dispatcher? _countDispatcher;
+    private readonly System.Windows.Threading.Dispatcher? _ownerDispatcher;
 
     /// <summary>The open-time snapshot (contract P4): the command list and the
     /// recents, loaded together off the UI thread.</summary>
@@ -1213,12 +1215,12 @@ internal sealed class CommandPaletteViewModel : BindableBase
     /// </summary>
     private void OnOwnerThread(Action publish)
     {
-        if (_countDispatcher is not null)
+        if (_ownerDispatcher is not null)
         {
             // A completed worker rank is still only a candidate publication.
             // Let input already queued advance the generation (or dismiss
             // the palette) before Publish checks whether it is still current.
-            _ = _countDispatcher.BeginInvoke(System.Windows.Threading.DispatcherPriority.Background, publish);
+            _ = _ownerDispatcher.BeginInvoke(System.Windows.Threading.DispatcherPriority.Background, publish);
         }
         else if (Environment.CurrentManagedThreadId == _ownerThreadId)
         {
@@ -1467,9 +1469,9 @@ internal sealed class CommandPaletteViewModel : BindableBase
         {
             Speak();
         }
-        else if (_countDispatcher is not null)
+        else if (_ownerDispatcher is not null)
         {
-            _ = _countDispatcher.BeginInvoke(System.Windows.Threading.DispatcherPriority.Background, Speak);
+            _ = _ownerDispatcher.BeginInvoke(System.Windows.Threading.DispatcherPriority.Background, Speak);
         }
         else
         {
