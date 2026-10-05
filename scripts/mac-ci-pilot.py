@@ -163,6 +163,17 @@ def preflight(source: Path, evidence: Path, layer: str) -> None:
         write_json(evidence / "metadata.json", metadata)
 
 
+def measurement_wrapper(env: dict) -> list[str]:
+    """time(1) prefix that still delivers DYLD_* to the measured command.
+
+    /usr/bin/time is SIP-protected, so dyld drops DYLD_* from its environment
+    and its child would never see them. env(1) re-exports them, so the
+    command receives what its phase record names.
+    """
+    dyld = [f"{key}={value}" for key, value in sorted(env.items()) if key.startswith("DYLD_")]
+    return ["/usr/bin/time", "-l", *(["/usr/bin/env", *dyld] if dyld else [])]
+
+
 class Cancelled(Exception):
     pass
 
@@ -199,7 +210,9 @@ class Runner:
         output = stdout_file or log
         error = (self.evidence / (name + ".stderr")) if stdout_file else log
         active_env = env or self.env
+        wrapper = measurement_wrapper(active_env)
         record = {"command": args, "cwd": str(cwd or self.source), "started_utc": utc(), "status": "running",
+                  "wrapper": wrapper,
                   "environment": {key: active_env.get(key) for key in ["DEVELOPER_DIR", "SDKROOT", "CC", "CXX", "PROFILE", "SLATE_LINK_PROFILE", "DYLD_LIBRARY_PATH", "PATH"]},
                   "machine_before": machine_memory()}
         self.summary["phases"][name] = record
@@ -211,7 +224,7 @@ class Runner:
         try:
             with output.open("w") as out:
                 with error.open("w") if stdout_file else open(os.devnull, "w") as err:
-                    proc = subprocess.Popen(["/usr/bin/time", "-l", *args], cwd=cwd or self.source,
+                    proc = subprocess.Popen([*wrapper, *args], cwd=cwd or self.source,
                                             env=active_env, stdout=out, stderr=err if stdout_file else subprocess.STDOUT,
                                             start_new_session=True)
                     samples = self.evidence / (name + ".processes.jsonl")
@@ -237,7 +250,12 @@ class Runner:
                                 sample["machine_memory"] = machine_memory()
                                 next_memory_sample = time.monotonic() + 5
                             stream.write(json.dumps(sample) + "\n")
-                            time.sleep(0.5)
+                            # Wake at exit rather than finishing a sleep, so
+                            # wall_seconds does not overstate the phase.
+                            try:
+                                proc.wait(timeout=0.5)
+                            except subprocess.TimeoutExpired:
+                                pass
                     record.update(exit_code=proc.returncode, status="success" if proc.returncode == 0 else "failed")
         except BaseException as exc:
             record.update(status="cancelled" if isinstance(exc, Cancelled) else "failed", error=str(exc))
@@ -431,14 +449,20 @@ def unchanged(runner: Runner) -> dict:
 
 def native(runner: Runner) -> None:
     runner.rust()
+    # Nothing runs between one pass's after-observation and the next pass's
+    # before-observation, so one cache walk serves both.
+    caches = inspect_caches(runner.source)
     for state in ["cold", "warm"]:
-        row = {"state": STATES[state], "status": "incomplete", "caches_before": inspect_caches(runner.source)}
+        row = {"state": STATES[state], "status": "incomplete", "caches_before": caches}
         runner.summary["passes"][state] = row
         runner.save()
-        env = dict(runner.env, PROFILE="debug", SLATE_LINK_PROFILE="debug", DYLD_LIBRARY_PATH=str(runner.source / "target/debug"))
+        env = dict(runner.env, PROFILE="debug", SLATE_LINK_PROFILE="debug")
         runner.run(state + ".debug", ["./scripts/build-mac-app.sh", "--skip-a11y-check"], env=env)
         xml = runner.evidence / (state + ".xctest.xml")
-        runner.run(state + ".xctest", ["swift", "test", "--parallel", "--num-workers", "3", "--xunit-output", str(xml)], runner.source / "apps/slate-mac", env)
+        # Like swift-tests.yml, give DYLD_LIBRARY_PATH to swift test alone. The
+        # build script and make enter through protected binaries that drop it.
+        xctest_env = dict(env, DYLD_LIBRARY_PATH=str(runner.source / "target/debug"))
+        runner.run(state + ".xctest", ["swift", "test", "--parallel", "--num-workers", "3", "--xunit-output", str(xml)], runner.source / "apps/slate-mac", xctest_env)
         row["xctest"] = parse_xctest(xml)
         runner.run(state + ".cli", ["make", "swift-cli"], env=env)
         cli_log = (runner.evidence / (state + ".cli.log")).read_text()
@@ -451,7 +475,8 @@ def native(runner: Runner) -> None:
         runner.run(state + ".release-witness", [sys.executable, str(Path(__file__).resolve()), "verify-release", "--source", str(runner.source), "--output", str(result)], env=release_env)
         row["release"] = json.loads(result.read_text())
         row["source_after"] = unchanged(runner)
-        row.update(status="success", caches_after=inspect_caches(runner.source))
+        caches = inspect_caches(runner.source)
+        row.update(status="success", caches_after=caches)
         runner.save()
 
 

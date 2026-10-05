@@ -54,6 +54,29 @@ def fixture(layer):
     return summary
 
 
+class MeasurementWrapperTests(unittest.TestCase):
+    def test_dyld_free_phases_keep_the_bare_time_wrapper(self):
+        self.assertEqual(pilot.measurement_wrapper({"PATH": "/usr/bin", "PROFILE": "debug"}),
+                         ["/usr/bin/time", "-l"])
+
+    def test_dyld_variables_are_reexported_after_protected_time(self):
+        env = {"PATH": "/usr/bin", "DYLD_LIBRARY_PATH": "/source/target/debug", "DYLD_PRINT_LIBRARIES": "1"}
+        self.assertEqual(pilot.measurement_wrapper(env),
+                         ["/usr/bin/time", "-l", "/usr/bin/env", "DYLD_LIBRARY_PATH=/source/target/debug",
+                          "DYLD_PRINT_LIBRARIES=1"])
+
+    @unittest.skipUnless(sys.platform == "darwin", "SIP environment purging is macOS behavior")
+    def test_measured_command_receives_the_recorded_dyld_path(self):
+        python = os.path.realpath(sys.executable)
+        if python.startswith(("/usr/", "/System/", "/bin/", "/sbin/")):
+            self.skipTest("this interpreter is SIP-protected and would drop DYLD_* itself")
+        env = dict(os.environ, DYLD_LIBRARY_PATH="/mac-pilot/dyld-probe")
+        probe = [python, "-c", "import os; print(os.environ.get('DYLD_LIBRARY_PATH'))"]
+        measured = subprocess.run([*pilot.measurement_wrapper(env), *probe], env=env,
+                                  capture_output=True, text=True, check=True)
+        self.assertEqual(measured.stdout.strip(), "/mac-pilot/dyld-probe")
+
+
 class MacPilotGateTests(unittest.TestCase):
     def test_complete_two_layers_are_accepted(self):
         for layer in ["native", "analyzer"]:

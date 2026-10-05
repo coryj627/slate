@@ -100,8 +100,10 @@ TERM-ignoring child whose wrapper exits before it.
 Cold is **cold products with no explicit cache restoration**. Fresh source
 `target/` and Swift `.build/` must be absent. Image/shared dependency caches may
 already contain data: record their paths, symlinks and measured contents before
-and after each pass. Do not call the first pass a fully cold dependency or OS
-cache experiment. No account cache reset is needed or authorized.
+and after each pass. Nothing runs between the cold pass's after-observation and
+the warm pass's before-observation, so one measurement serves both. Do not call
+the first pass a fully cold dependency or OS cache experiment. No account cache
+reset is needed or authorized.
 
 Warm is **same-VM incremental reuse**, following a successful complete cold pass.
 It is separate from a fresh runner restoring GitHub or Namespace caches. Native
@@ -111,8 +113,18 @@ not pool it with production's automatic XCTest worker count.
 
 Every command records UTC start/end, monotonic wall time, `/usr/bin/time -l`
 user/system time and child maximum RSS. Process-tree RSS is sampled every
-0.5 seconds; machine VM/swap observations occur every five seconds. These are
-command and sampled process-tree values, not proof of a whole-machine maximum.
+0.5 seconds; machine VM/swap observations occur every five seconds. Sampling
+wakes when the command exits, so wall time does not include an unfinished
+sampling interval. These are command and sampled process-tree values, not proof
+of a whole-machine maximum.
+
+`/usr/bin/time` is SIP-protected, so dyld removes `DYLD_*` variables from its
+environment before it launches the command. The harness re-exports them through
+`/usr/bin/env`, and each phase record names that wrapper beside the environment
+its command actually receives. As in `swift-tests.yml`, only XCTest receives
+`DYLD_LIBRARY_PATH`: the build script and `make` enter through protected
+binaries that would drop it anyway. Pilots recorded before this change list
+`DYLD_LIBRARY_PATH` for phases whose commands never received it.
 Retain raw observations and failed XML as well as summaries. If Release fails,
 retain the actual generated native dylib when available.
 
