@@ -915,69 +915,9 @@ public sealed class ReadingViewTests
     {
         RunSta(() =>
         {
-            var plain = new Paragraph(new Run("plain"));
-            var emptyQuote = new Paragraph();
-            var quote = new Paragraph(new Run("nested quote"));
-            var emptyPlain = new Paragraph();
-            var listQuote = new Paragraph(new Run("list quote"));
-            var cellHeading = new Paragraph(new Run("cell heading"));
-            var cellQuote = new Paragraph(new Run("cell quote"));
-            var link = new Hyperlink(new Run("linked quote"));
-            var linkQuote = new Paragraph(link);
-            var embedded = new InlineUIContainer(new System.Windows.Controls.Button
-            {
-                Content = "inline button"
-            });
-            var inlineQuote = new Paragraph(embedded);
-            inlineQuote.Inlines.Add(new Run("inline quote"));
-            var finalHeading = new Paragraph(new Run("final heading"));
-            ReadingSemantics.MarkQuote(emptyQuote);
-            ReadingSemantics.MarkQuote(quote);
-            ReadingSemantics.MarkQuote(listQuote);
-            ReadingSemantics.MarkHeading(cellHeading, 1);
-            ReadingSemantics.MarkQuote(cellQuote);
-            ReadingSemantics.MarkQuote(linkQuote);
-            ReadingSemantics.MarkQuote(inlineQuote);
-            ReadingSemantics.MarkHeading(finalHeading, 9);
-            var document = new FlowDocument(plain);
-            document.Blocks.Add(emptyQuote);
-            var uiBlock = new BlockUIContainer(new System.Windows.Controls.Button());
-            document.Blocks.Add(uiBlock);
-            var section = new Section(quote);
-            section.Blocks.Add(emptyPlain);
-            section.Blocks.Add(new System.Windows.Documents.List(new ListItem(listQuote)));
-            var table = new Table();
-            var group = new TableRowGroup();
-            var row = new TableRow();
-            row.Cells.Add(new TableCell(cellHeading));
-            row.Cells.Add(new TableCell(cellQuote));
-            group.Rows.Add(row);
-            table.RowGroups.Add(group);
-            section.Blocks.Add(table);
-            document.Blocks.Add(section);
-            document.Blocks.Add(linkQuote);
-            document.Blocks.Add(inlineQuote);
-            document.Blocks.Add(finalHeading);
-            var surface = new ReadingSurface();
-            var peer = System.Windows.Automation.Peers.UIElementAutomationPeer
-                .CreatePeerForElement(surface);
-            surface.ApplyBuiltDocument(document);
-            document = surface.Document;
-            var provider = Assert.IsType<HeadingStyleTextProvider>(peer!.GetPattern(
-                System.Windows.Automation.Peers.PatternInterface.Text));
-            Paragraph[] paragraphs = [plain, emptyQuote, quote, emptyPlain,
-                listQuote, cellHeading, cellQuote, linkQuote, inlineQuote, finalHeading];
-            var points = new List<TextPointer>
-                { document.ContentStart, document.ContentEnd, uiBlock.ElementStart,
-                    uiBlock.ContentStart, uiBlock.ContentEnd, uiBlock.ElementEnd,
-                    link.ElementStart, link.ContentStart, link.ContentEnd, link.ElementEnd,
-                    embedded.ElementStart, embedded.ContentStart, embedded.ContentEnd, embedded.ElementEnd };
-            foreach (Paragraph paragraph in paragraphs)
-            {
-                points.AddRange([paragraph.ElementStart, paragraph.ContentStart,
-                    paragraph.ContentStart.GetInsertionPosition(LogicalDirection.Forward),
-                    paragraph.ContentEnd, paragraph.ElementEnd]);
-            }
+            (ReadingSurface surface, HeadingStyleTextProvider provider, List<TextPointer> points) =
+                BoundaryFixture();
+            FlowDocument document = surface.Document;
             var spans = points.SelectMany(point => new[]
                 { (point, point), (document.ContentStart, point), (point, document.ContentEnd) });
             int count = 0;
@@ -1032,6 +972,85 @@ public sealed class ReadingViewTests
             }
             _output.WriteLine($"Compared {count} boundary spans with the original adaptor walker.");
         });
+    }
+
+    /// <summary>Empty paragraphs, a UI block, a section holding a list and a
+    /// table, a hyperlink, an inline UI element and two headings, applied to
+    /// a reading surface, with every element edge and first insertion
+    /// position as a boundary point.</summary>
+    private static (ReadingSurface Surface, HeadingStyleTextProvider Provider, List<TextPointer> Points)
+        BoundaryFixture()
+    {
+        var leadingHeading = new Paragraph(new Run("leading heading"));
+        var plain = new Paragraph(new Run("plain"));
+        var emptyQuote = new Paragraph();
+        var quote = new Paragraph(new Run("nested quote"));
+        var emptyPlain = new Paragraph();
+        var listQuote = new Paragraph(new Run("list quote"));
+        var cellHeading = new Paragraph(new Run("cell heading"));
+        var cellQuote = new Paragraph(new Run("cell quote"));
+        var link = new Hyperlink(new Run("linked quote"));
+        var linkQuote = new Paragraph(link);
+        var embedded = new InlineUIContainer(new System.Windows.Controls.Button
+        {
+            Content = "inline button"
+        });
+        var inlineQuote = new Paragraph(embedded);
+        inlineQuote.Inlines.Add(new Run("inline quote"));
+        var finalHeading = new Paragraph(new Run("final heading"));
+        var emptyFinalHeading = new Paragraph();
+        ReadingSemantics.MarkQuote(emptyQuote);
+        ReadingSemantics.MarkQuote(quote);
+        ReadingSemantics.MarkQuote(listQuote);
+        ReadingSemantics.MarkHeading(cellHeading, 1);
+        ReadingSemantics.MarkQuote(cellQuote);
+        ReadingSemantics.MarkQuote(linkQuote);
+        ReadingSemantics.MarkQuote(inlineQuote);
+        ReadingSemantics.MarkHeading(finalHeading, 9);
+        ReadingSemantics.MarkHeading(leadingHeading, 2);
+        ReadingSemantics.MarkHeading(emptyFinalHeading, 3);
+        var document = new FlowDocument(leadingHeading);
+        document.Blocks.Add(plain);
+        document.Blocks.Add(emptyQuote);
+        var uiBlock = new BlockUIContainer(new System.Windows.Controls.Button());
+        document.Blocks.Add(uiBlock);
+        var section = new Section(quote);
+        section.Blocks.Add(emptyPlain);
+        section.Blocks.Add(new System.Windows.Documents.List(new ListItem(listQuote)));
+        var table = new Table();
+        var group = new TableRowGroup();
+        var row = new TableRow();
+        row.Cells.Add(new TableCell(cellHeading));
+        row.Cells.Add(new TableCell(cellQuote));
+        group.Rows.Add(row);
+        table.RowGroups.Add(group);
+        section.Blocks.Add(table);
+        document.Blocks.Add(section);
+        document.Blocks.Add(linkQuote);
+        document.Blocks.Add(inlineQuote);
+        document.Blocks.Add(finalHeading);
+        document.Blocks.Add(emptyFinalHeading);
+        var surface = new ReadingSurface();
+        var peer = System.Windows.Automation.Peers.UIElementAutomationPeer
+            .CreatePeerForElement(surface);
+        surface.ApplyBuiltDocument(document);
+        document = surface.Document;
+        var provider = Assert.IsType<HeadingStyleTextProvider>(peer!.GetPattern(
+            System.Windows.Automation.Peers.PatternInterface.Text));
+        Paragraph[] paragraphs = [leadingHeading, plain, emptyQuote, quote, emptyPlain,
+                listQuote, cellHeading, cellQuote, linkQuote, inlineQuote, finalHeading, emptyFinalHeading];
+        var points = new List<TextPointer>
+                { document.ContentStart, document.ContentEnd, uiBlock.ElementStart,
+                    uiBlock.ContentStart, uiBlock.ContentEnd, uiBlock.ElementEnd,
+                    link.ElementStart, link.ContentStart, link.ContentEnd, link.ElementEnd,
+                    embedded.ElementStart, embedded.ContentStart, embedded.ContentEnd, embedded.ElementEnd };
+        foreach (Paragraph paragraph in paragraphs)
+        {
+            points.AddRange([paragraph.ElementStart, paragraph.ContentStart,
+                    paragraph.ContentStart.GetInsertionPosition(LogicalDirection.Forward),
+                    paragraph.ContentEnd, paragraph.ElementEnd]);
+        }
+        return (surface, provider, points);
     }
 
     private static IEnumerable<(ITextRangeProvider Range, Paragraph Paragraph)>
@@ -1256,6 +1275,152 @@ public sealed class ReadingViewTests
                 measurements.Add((measurement, deepBytes <= Math.Max(4 * shallowBytes, 32 * 1024)));
             }
             Assert.All(measurements, measured => Assert.True(measured.Bounded, measured.Line));
+        });
+    }
+
+    /// <summary>WPF normalizes a range's endpoints only inside some calls, so
+    /// a client that never triggered one holds RAW endpoints: DocumentRange's
+    /// container edges, or an endpoint copied with MoveEndpointByRange. NVDA
+    /// normalizes first; Narrator, JAWS and automation clients need not. The
+    /// synthetic answer must be the original adaptor walk's, and identical
+    /// before and after WPF normalizes the same range.</summary>
+    [Fact]
+    public void SyntheticStylesOnRawEndpointsAnswerAsTheirNormalizedRange()
+    {
+        RunSta(() =>
+        {
+            object notSupported = System.Windows.Automation.AutomationElementIdentifiers.NotSupported;
+
+            // A: DocumentRange's raw start, its end moved onto a caret before
+            // the heading's first character. Normalized, this is that caret.
+            (ReadingSurface surface, HeadingStyleTextProvider provider) = Surface("# Title\n\nbody\n");
+            Paragraph title = surface.Document.Blocks.OfType<Paragraph>().First();
+            Assert.Equal((byte)1, ReadingSemantics.HeadingLevelOf(title));
+            surface.Selection.Select(title.ContentStart, title.ContentStart);
+            ITextRangeProvider caret = provider.GetSelection()[0];
+            ITextRangeProvider toCaret = provider.DocumentRange;
+            toCaret.MoveEndpointByRange(TextPatternRangeEndpoint.End, caret, TextPatternRangeEndpoint.Start);
+            Assert.Equal(HeadingStyleTextProvider.StyleIdHeading1,
+                toCaret.GetAttributeValue(HeadingStyleTextProvider.StyleIdAttribute));
+            _ = toCaret.GetText(-1);
+            Assert.Equal(HeadingStyleTextProvider.StyleIdHeading1,
+                toCaret.GetAttributeValue(HeadingStyleTextProvider.StyleIdAttribute));
+
+            // B: a note ending in a bare `#`. The empty heading holds no
+            // character of the document's range, so the range is plain.
+            (surface, provider) = Surface("body\n\n#\n");
+            Assert.True(surface.Document.Blocks.LastBlock is Paragraph last
+                && ReadingSemantics.HeadingLevelOf(last) == 1
+                && new TextRange(last.ContentStart, last.ContentEnd).Text.Length == 0,
+                "premise: the note ends in an empty heading paragraph.");
+            surface.Selection.Select(surface.Document.ContentStart, surface.Document.ContentEnd);
+            foreach (Func<ITextRangeProvider> whole in new Func<ITextRangeProvider>[]
+                { () => provider.DocumentRange, () => provider.GetSelection()[0] })
+            {
+                foreach (int attribute in new[] { HeadingStyleTextProvider.StyleIdAttribute,
+                    HeadingStyleTextProvider.StyleNameAttribute })
+                {
+                    ITextRangeProvider raw = whole();
+                    Assert.Same(notSupported, raw.GetAttributeValue(attribute));
+                    _ = raw.GetText(-1);
+                    Assert.Same(notSupported, raw.GetAttributeValue(attribute));
+                }
+            }
+        });
+
+        static (ReadingSurface, HeadingStyleTextProvider) Surface(string source)
+        {
+            var surface = new ReadingSurface();
+            var peer = System.Windows.Automation.Peers.UIElementAutomationPeer
+                .CreatePeerForElement(surface);
+            surface.ApplyBuiltDocument(BuildSource(source));
+            return (surface, Assert.IsType<HeadingStyleTextProvider>(peer!.GetPattern(
+                System.Windows.Automation.Peers.PatternInterface.Text)));
+        }
+    }
+
+    /// <summary>The boundary differential, on RAW ranges: every boundary
+    /// point joined to DocumentRange's raw start or end, and DocumentRange
+    /// itself. The decorator answers FIRST, before anything normalizes the
+    /// range; the original adaptor walk answers on a clone.</summary>
+    [Fact]
+    public void SyntheticStylesOnRawBoundarySpansMatchTheOriginalAdaptorWalk()
+    {
+        RunSta(() =>
+        {
+            (ReadingSurface surface, HeadingStyleTextProvider provider, List<TextPointer> points) =
+                BoundaryFixture();
+            var spans = new List<(string Label, Func<ITextRangeProvider> Raw)>
+            {
+                ("DocumentRange", () => ((HeadingStyleTextRange)provider.DocumentRange).Inner),
+            };
+            FlowDocument document = surface.Document;
+            foreach (TextPointer point in points)
+            {
+                int offset = document.ContentStart.GetOffsetToPosition(point);
+                surface.Selection.Select(point, point);
+                ITextRangeProvider at = ((HeadingStyleTextRange)provider.GetSelection()[0]).Inner;
+                spans.Add(($"start..{offset}", () =>
+                {
+                    ITextRangeProvider raw = ((HeadingStyleTextRange)provider.DocumentRange).Inner;
+                    raw.MoveEndpointByRange(TextPatternRangeEndpoint.End, at, TextPatternRangeEndpoint.Start);
+                    return raw;
+                }
+                ));
+                spans.Add(($"{offset}..end", () =>
+                {
+                    ITextRangeProvider raw = ((HeadingStyleTextRange)provider.DocumentRange).Inner;
+                    raw.MoveEndpointByRange(TextPatternRangeEndpoint.Start, at, TextPatternRangeEndpoint.Start);
+                    return raw;
+                }
+                ));
+            }
+            int compared = 0;
+            foreach ((string label, Func<ITextRangeProvider> rawSpan) in spans)
+            {
+                foreach (int attribute in new[] { HeadingStyleTextProvider.StyleIdAttribute,
+                    HeadingStyleTextProvider.StyleNameAttribute })
+                {
+                    ITextRangeProvider raw = rawSpan();
+                    object? value = new HeadingStyleTextRange(raw).GetAttributeValue(attribute);
+                    object? expected = OriginalSyntheticAttribute(raw.Clone(), attribute);
+                    Assert.True(Equals(expected, value),
+                        $"Raw span {label}, attribute {attribute}: expected {expected}, actual {value}");
+                    _ = raw.GetText(-1);
+                    Assert.True(Equals(value, new HeadingStyleTextRange(raw).GetAttributeValue(attribute)),
+                        $"Raw span {label}, attribute {attribute}: the answer changed once WPF normalized it");
+                    compared++;
+                }
+                foreach ((int attribute, object value) in new (int, object)[]
+                {
+                    (HeadingStyleTextProvider.StyleNameAttribute, HeadingStyleTextProvider.QuoteStyleName),
+                    (HeadingStyleTextProvider.StyleIdAttribute, HeadingStyleTextProvider.StyleIdHeading1),
+                    (HeadingStyleTextProvider.StyleIdAttribute, HeadingStyleTextProvider.StyleIdHeading1 + 8),
+                })
+                {
+                    foreach (bool backward in new[] { false, true })
+                    {
+                        ITextRangeProvider raw = rawSpan();
+                        ITextRangeProvider? found = new HeadingStyleTextRange(raw).FindAttribute(attribute, value, backward);
+                        ITextRangeProvider? expected = OriginalFindSynthetic(rawSpan(), attribute, value, backward);
+                        Assert.True((expected is null) == (found is null),
+                            $"Raw span {label}, find {attribute}/{value}, backward={backward}: "
+                            + $"expected {(expected is null ? "none" : $"'{expected.GetText(-1)}'")}, "
+                            + $"actual {(found is null ? "none" : $"'{found.GetText(-1)}'")}");
+                        if (expected is not null && found is not null)
+                        {
+                            Assert.True(found.CompareEndpoints(TextPatternRangeEndpoint.Start, expected,
+                                    TextPatternRangeEndpoint.Start) == 0
+                                && found.CompareEndpoints(TextPatternRangeEndpoint.End, expected,
+                                    TextPatternRangeEndpoint.End) == 0,
+                                $"Raw span {label}, find {attribute}/{value}, backward={backward}: "
+                                + $"expected '{expected.GetText(-1)}', actual '{found.GetText(-1)}'");
+                        }
+                        compared++;
+                    }
+                }
+            }
+            _output.WriteLine($"Compared {compared} raw-span answers with the original adaptor walker.");
         });
     }
 

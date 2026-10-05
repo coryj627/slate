@@ -197,6 +197,15 @@ internal sealed class HeadingStyleTextRange : ITextRangeProvider
     /// </summary>
     /// <remarks>
     /// <para>
+    /// ENDPOINTS: WPF normalizes a range only inside some calls — never on
+    /// construction, Clone, MoveEndpointByRange or DocumentRange — so the
+    /// raw endpoints a client holds depend on what it called before. Every
+    /// decision here reads WPF's own normalization of a clone instead, so a
+    /// client that never normalized gets the answer of one that did, and the
+    /// caller's range keeps its endpoints. NVDA normalizes first; Narrator,
+    /// JAWS and automation clients need not.
+    /// </para>
+    /// <para>
     /// COST: WPF resolves the first paragraph and the endpoints once; the
     /// walk then moves forward from that paragraph in document order, so a
     /// query pays for the element edges between the paragraphs it touches,
@@ -227,11 +236,11 @@ internal sealed class HeadingStyleTextRange : ITextRangeProvider
             _first = StartPointerOf(firstRange)?.Paragraph;
         }
 
-        /// <summary>The caller's range as the query read it: what found
-        /// ranges are clamped to.</summary>
+        /// <summary>The caller's range, normalized: what found ranges are
+        /// clamped to.</summary>
         internal ITextRangeProvider Range { get; }
 
-        /// <summary>Empty by UIA definition.</summary>
+        /// <summary>Empty by UIA definition, after normalization.</summary>
         internal bool IsDegenerate => _start.CompareTo(_end) == 0;
 
         /// <summary>Null when the adaptor's start pointer is unreadable; the
@@ -239,6 +248,10 @@ internal sealed class HeadingStyleTextRange : ITextRangeProvider
         internal static ParagraphQuery? Of(ITextRangeProvider range)
         {
             ITextRangeProvider query = range.Clone();
+            // WPF's CompareEndpoints normalizes both operands in place: here
+            // only the private clone, never the caller's range.
+            _ = query.CompareEndpoints(
+                TextPatternRangeEndpoint.Start, query, TextPatternRangeEndpoint.Start);
             ITextRangeProvider endProbe = query.Clone();
             endProbe.MoveEndpointByRange(
                 TextPatternRangeEndpoint.Start, endProbe, TextPatternRangeEndpoint.End);
@@ -451,11 +464,7 @@ internal sealed class HeadingStyleTextRange : ITextRangeProvider
             // empty content has nothing to find — clamping would
             // otherwise return the caret itself as a zero-length
             // "match" an AT can rediscover forever.
-            if (_inner.CompareEndpoints(
-                TextPatternRangeEndpoint.Start,
-                _inner,
-                TextPatternRangeEndpoint.End) == 0
-                || ParagraphQuery.Of(_inner) is not { } query)
+            if (ParagraphQuery.Of(_inner) is not { IsDegenerate: false } query)
             {
                 return null;
             }
