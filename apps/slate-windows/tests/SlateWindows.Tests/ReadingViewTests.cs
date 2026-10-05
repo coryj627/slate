@@ -1165,6 +1165,100 @@ public sealed class ReadingViewTests
         public void ScrollIntoView(bool alignToTop) => inner.ScrollIntoView(alignToTop);
     }
 
+    /// <summary>NVDA asks StyleId for every line during say-all. A line deep
+    /// inside ONE large container — a note that is a single 2,000-item list,
+    /// a long Markdown table, an embed's section — must cost what a line at
+    /// its start costs; walking from the container's first item made say-all
+    /// quadratic. Allocation is the stable signal; time is recorded.</summary>
+    [Fact]
+    public void DeepLineQueriesInOneLargeContainerCostTheSameAsShallowOnes()
+    {
+        RunSta(() =>
+        {
+            const int Entries = 2_000;
+            var measurements = new List<(string Line, bool Bounded)>();
+            foreach ((string shape, Func<IReadOnlyList<Paragraph>, Block> container) in
+                new (string, Func<IReadOnlyList<Paragraph>, Block>)[]
+                {
+                    ("list", lines =>
+                    {
+                        var list = new System.Windows.Documents.List();
+                        foreach (Paragraph line in lines)
+                        {
+                            list.ListItems.Add(new ListItem(line));
+                        }
+                        return list;
+                    }),
+                    ("table", lines =>
+                    {
+                        var group = new TableRowGroup();
+                        foreach (Paragraph line in lines)
+                        {
+                            var row = new TableRow();
+                            row.Cells.Add(new TableCell(line));
+                            row.Cells.Add(new TableCell(new Paragraph(new Run("second column"))));
+                            group.Rows.Add(row);
+                        }
+                        var table = new Table();
+                        table.RowGroups.Add(group);
+                        return table;
+                    }),
+                    ("section", lines =>
+                    {
+                        var section = new Section();
+                        section.Blocks.AddRange(lines);
+                        return section;
+                    }),
+                })
+            {
+                Paragraph[] lines = [.. Enumerable.Range(0, Entries)
+                    .Select(index => new Paragraph(new Run($"{shape} line {index}")))];
+                var document = new FlowDocument(new Paragraph(new Run("before")));
+                document.Blocks.Add(container(lines));
+                var heading = new Paragraph(new Run("after"));
+                ReadingSemantics.MarkHeading(heading, 2);
+                document.Blocks.Add(heading);
+                var surface = new ReadingSurface();
+                var peer = System.Windows.Automation.Peers.UIElementAutomationPeer
+                    .CreatePeerForElement(surface);
+                surface.ApplyBuiltDocument(document);
+                var provider = Assert.IsAssignableFrom<
+                    System.Windows.Automation.Provider.ITextProvider>(peer!.GetPattern(
+                        System.Windows.Automation.Peers.PatternInterface.Text));
+
+                ITextRangeProvider LineRange(Paragraph line)
+                {
+                    surface.Selection.Select(line.ContentStart, line.ContentEnd);
+                    return provider.GetSelection()[0];
+                }
+
+                (long Bytes, double Milliseconds) Cost(Paragraph line)
+                {
+                    ITextRangeProvider range = LineRange(line);
+                    // Warm the same query first: the measured one is steady state.
+                    _ = range.GetAttributeValue(HeadingStyleTextProvider.StyleIdAttribute);
+                    long before = GC.GetAllocatedBytesForCurrentThread();
+                    var timer = System.Diagnostics.Stopwatch.StartNew();
+                    object? style = range.GetAttributeValue(HeadingStyleTextProvider.StyleIdAttribute);
+                    object? name = range.GetAttributeValue(HeadingStyleTextProvider.StyleNameAttribute);
+                    timer.Stop();
+                    long bytes = GC.GetAllocatedBytesForCurrentThread() - before;
+                    Assert.Same(System.Windows.Automation.AutomationElementIdentifiers.NotSupported, style);
+                    Assert.Same(System.Windows.Automation.AutomationElementIdentifiers.NotSupported, name);
+                    return (bytes, timer.Elapsed.TotalMilliseconds);
+                }
+
+                (long shallowBytes, double shallowMs) = Cost(lines[1]);
+                (long deepBytes, double deepMs) = Cost(lines[^1]);
+                string measurement = $"{shape} of {Entries}: line 2 {shallowBytes:N0} bytes, "
+                    + $"{shallowMs:F2} ms; line {Entries} {deepBytes:N0} bytes, {deepMs:F2} ms";
+                _output.WriteLine(measurement);
+                measurements.Add((measurement, deepBytes <= Math.Max(4 * shallowBytes, 32 * 1024)));
+            }
+            Assert.All(measurements, measured => Assert.True(measured.Bounded, measured.Line));
+        });
+    }
+
     /// <summary>FindAttribute resolves synthetic styles (adversarial
     /// round 1): WPF's own search cannot see the quote marker, so the
     /// decorator answers — both directions, headings too, and no
