@@ -999,12 +999,8 @@ public sealed partial class GraphTableTests
                     System.Windows.Controls.VirtualizingPanel.GetCacheLengthUnit(grid));
                 Assert.Equal(1.0, cache.CacheBeforeViewport);
                 Assert.Equal(1.0, cache.CacheAfterViewport);
-                double cacheItems = System.Windows.Controls.VirtualizingPanel.GetCacheLengthUnit(grid) switch
-                {
-                    System.Windows.Controls.VirtualizationCacheLengthUnit.Item => cache.CacheBeforeViewport + cache.CacheAfterViewport,
-                    System.Windows.Controls.VirtualizationCacheLengthUnit.Page => (cache.CacheBeforeViewport + cache.CacheAfterViewport) * viewportRows,
-                    _ => throw new InvalidOperationException("a pixel cache length has no row capacity"),
-                };
+                // Item units, asserted above: the cache lengths are rows.
+                double cacheItems = cache.CacheBeforeViewport + cache.CacheAfterViewport;
                 int capacity = viewportRows + (int)Math.Ceiling(cacheItems);
                 // The FIRST page needs only the capacity itself, with an
                 // allowance of two for a partially visible row at each edge.
