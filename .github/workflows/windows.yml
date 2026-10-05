@@ -368,12 +368,21 @@ jobs:
             }
           }
 
+      - name: Read the pinned uniffi-bindgen-cs tag
+        id: bindgen-pin
+        # apps/slate-windows/uniffi-bindgen-cs.version is the repository's one
+        # copy, shared with the windows-native-build action.
+        run: |
+          $tag = (Get-Content -LiteralPath apps/slate-windows/uniffi-bindgen-cs.version -Raw).Trim()
+          if ($tag -notmatch '^v\d+\.\d+\.\d+\+v\d+\.\d+\.\d+$') { throw "Malformed uniffi-bindgen-cs tag: $tag" }
+          "tag=$tag" >> $env:GITHUB_OUTPUT
+
       - name: Cache uniffi-bindgen-cs
         id: bindgen-cache
         uses: actions/cache@55cc8345863c7cc4c66a329aec7e433d2d1c52a9  # v6
         with:
           path: ~/.cargo/bin/uniffi-bindgen-cs.exe
-          key: uniffi-bindgen-cs-v0.11.0+v0.31.0-${{ runner.os }}-x64
+          key: uniffi-bindgen-cs-${{ steps.bindgen-pin.outputs.tag }}-${{ runner.os }}-x64
 
       - name: Install uniffi-bindgen-cs
         if: steps.bindgen-cache.outputs.cache-hit != 'true'
@@ -383,7 +392,7 @@ jobs:
         # rust.yml/taiki-e reasoning: never shadow the image toolchain),
         # so the binary keeps riding the GitHub cache, which Namespace
         # runners proxy.
-        run: cargo install --git https://github.com/NordSecurity/uniffi-bindgen-cs --tag v0.11.0+v0.31.0 uniffi-bindgen-cs --locked
+        run: cargo install --git https://github.com/NordSecurity/uniffi-bindgen-cs --tag '${{ steps.bindgen-pin.outputs.tag }}' uniffi-bindgen-cs --locked
 
       - name: Set up .NET 10
         uses: actions/setup-dotnet@a98b56852c35b8e3190ac28c8c2271da59106c68  # v6.0.0
@@ -577,12 +586,21 @@ jobs:
             }
           }
 
+      - name: Read the pinned uniffi-bindgen-cs tag
+        id: bindgen-pin
+        # apps/slate-windows/uniffi-bindgen-cs.version is the repository's one
+        # copy, shared with the windows-native-build action.
+        run: |
+          $tag = (Get-Content -LiteralPath apps/slate-windows/uniffi-bindgen-cs.version -Raw).Trim()
+          if ($tag -notmatch '^v\d+\.\d+\.\d+\+v\d+\.\d+\.\d+$') { throw "Malformed uniffi-bindgen-cs tag: $tag" }
+          "tag=$tag" >> $env:GITHUB_OUTPUT
+
       - name: Cache uniffi-bindgen-cs
         id: bindgen-cache
         uses: actions/cache@55cc8345863c7cc4c66a329aec7e433d2d1c52a9  # v6
         with:
           path: ~/.cargo/bin/uniffi-bindgen-cs.exe
-          key: uniffi-bindgen-cs-v0.11.0+v0.31.0-${{ runner.os }}-x64
+          key: uniffi-bindgen-cs-${{ steps.bindgen-pin.outputs.tag }}-${{ runner.os }}-x64
 
       - name: Install uniffi-bindgen-cs
         if: steps.bindgen-cache.outputs.cache-hit != 'true'
@@ -592,7 +610,7 @@ jobs:
         # rust.yml/taiki-e reasoning: never shadow the image toolchain),
         # so the binary keeps riding the GitHub cache, which Namespace
         # runners proxy.
-        run: cargo install --git https://github.com/NordSecurity/uniffi-bindgen-cs --tag v0.11.0+v0.31.0 uniffi-bindgen-cs --locked
+        run: cargo install --git https://github.com/NordSecurity/uniffi-bindgen-cs --tag '${{ steps.bindgen-pin.outputs.tag }}' uniffi-bindgen-cs --locked
 
       - name: Set up .NET 10
         uses: actions/setup-dotnet@a98b56852c35b8e3190ac28c8c2271da59106c68  # v6.0.0

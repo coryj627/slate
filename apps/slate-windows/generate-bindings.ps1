@@ -9,8 +9,9 @@
 # compiles managed projects in Debug.
 #
 # Prereqs: repo-pinned Rust toolchain (rust-toolchain.toml) and
-# uniffi-bindgen-cs matching the workspace's uniffi minor:
-#   cargo install --git https://github.com/NordSecurity/uniffi-bindgen-cs --tag v0.11.0+v0.31.0 uniffi-bindgen-cs --locked
+# uniffi-bindgen-cs at the tag pinned in uniffi-bindgen-cs.version (next to
+# this script), which matches the workspace's uniffi minor:
+#   cargo install --git https://github.com/NordSecurity/uniffi-bindgen-cs --tag <that tag> uniffi-bindgen-cs --locked
 #
 # Respects CARGO_TARGET_DIR. -Locked passes --locked to cargo (the CI
 # lanes' pin-everything convention).

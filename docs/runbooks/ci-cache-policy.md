@@ -53,6 +53,14 @@ GitHub caches retain GitHub's default/base and PR merge-ref scopes. It creates n
 new Namespace custom tag. A cold pilot disables both cache restore paths; record
 that choice and do not describe a single warm run as stable tail-latency evidence.
 
+The shared `windows-native-build` action keys its native graph on the toolchain,
+lock and project files alone. Its earlier per-commit key missed on every new
+SHA, and each successful run then uploaded another 1.7-2.6 GB archive (about
+four minutes of hosted post-step time). On October 4 that held the repository
+at 10.47 GB against GitHub's 10 GB default. An unchanged dependency graph now
+hits exactly and saves nothing. A changed graph builds cold once rather than
+inheriting stale artifacts.
+
 ## Remaining operating decisions
 
 Verify the effective account quota/alerts, cache policy, working sets, current
