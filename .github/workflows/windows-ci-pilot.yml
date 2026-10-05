@@ -7,6 +7,7 @@ on:
     paths:
       - '.github/workflows/windows-ci-pilot.yml'
       - '.github/actions/windows-native-build/**'
+      - '.github/actions/windows-pilot-binaries/**'
   workflow_dispatch:
     inputs:
       runner:
