@@ -109,10 +109,10 @@ def verify(paths, shard_count):
     summaries = []
     for family, (_, _, reachable) in CENSUSES.items():
         siblings = [reports[family, index] for index in range(shard_count)]
-        require(len({report["inventorySha256"].lower() for report in siblings}) == 1,
-                f"{family}: shard inventories differ")
-        # Exact per-shard equality above also proves no duplicates. Keep the
-        # union proof explicit so the aggregate cannot accept a partial census.
+        # Every report already matched the family's pinned inventory digest,
+        # so the shards agree on the inventory. Exact per-shard partition
+        # equality above also proves no duplicates. Keep the union proof
+        # explicit so the aggregate cannot accept a partial census.
         completed = sorted(ordinal for report in siblings for ordinal in report["completedOrdinals"])
         require(completed == list(range(1, reachable + 1)), f"{family}: incomplete or overlapping coverage")
         summaries.append({
