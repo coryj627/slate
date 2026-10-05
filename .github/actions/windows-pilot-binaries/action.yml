@@ -1,0 +1,72 @@
+name: Windows pilot producer binaries
+description: Download one producer attempt's binaries into the original layout and verify every hash plus the exact source, run and producer provenance.
+inputs:
+  artifact-name:
+    description: The producer's same-attempt binaries artifact.
+    required: true
+  manifest-sha256:
+    description: SHA-256 of the producer's binaries manifest.
+    required: true
+  revision:
+    description: The producer's source revision; the consumer checkout must match it.
+    required: true
+  producer-attempt:
+    description: The run attempt that produced the binaries.
+    required: true
+  native-sha256:
+    description: SHA-256 of the producer's native DLL.
+    required: true
+  candidate:
+    description: The pilot candidate the producer ran on.
+    required: true
+runs:
+  using: composite
+  steps:
+    - name: Download the pinned producer-attempt binaries into the original layout
+      uses: actions/download-artifact@37930b1c2abaa49bbe596cd826c3c89aef350131  # v7
+      with:
+        name: ${{ inputs.artifact-name }}
+        path: apps/slate-windows
+    - name: Verify every binary hash and exact source/run/producer provenance
+      # The one copy of this gate: the model shards and the hosted shell
+      # consume the same producer artifact under the same rules.
+      shell: pwsh
+      env:
+        EXPECTED_MANIFEST: ${{ inputs.manifest-sha256 }}
+        EXPECTED_REVISION: ${{ inputs.revision }}
+        EXPECTED_PRODUCER_ATTEMPT: ${{ inputs.producer-attempt }}
+        EXPECTED_NATIVE: ${{ inputs.native-sha256 }}
+        EXPECTED_CANDIDATE: ${{ inputs.candidate }}
+      run: |
+        $binaryRoot = Join-Path $env:GITHUB_WORKSPACE 'apps\slate-windows'
+        $manifestPath = Join-Path $binaryRoot 'pilot-binaries-manifest.json'
+        $manifestHash = (Get-FileHash -LiteralPath $manifestPath -Algorithm SHA256).Hash.ToLowerInvariant()
+        if ($manifestHash -ne $env:EXPECTED_MANIFEST) { throw 'Binary manifest hash mismatch.' }
+        $manifest = Get-Content -LiteralPath $manifestPath -Raw | ConvertFrom-Json
+        $revision = (git rev-parse HEAD).Trim()
+        if ($LASTEXITCODE -ne 0 -or $revision -ne $env:GITHUB_SHA -or $revision -ne $manifest.revision -or $revision -ne $env:EXPECTED_REVISION) { throw 'Consumer/producer/source SHA mismatch.' }
+        if ($manifest.schemaVersion -ne 2 -or $manifest.runId -ne $env:GITHUB_RUN_ID -or $manifest.producerAttempt -ne $env:EXPECTED_PRODUCER_ATTEMPT -or $manifest.relativeRoot -ne 'apps/slate-windows' -or $manifest.candidate -ne $env:EXPECTED_CANDIDATE) { throw 'Wrong run/attempt/candidate binary artifact.' }
+        if ($env:PROCESSOR_ARCHITECTURE -ne 'AMD64') { throw 'Windows x64 required.' }
+        if ($manifest.nativeSha256 -ne $env:EXPECTED_NATIVE) { throw 'Native digest differs from producer output.' }
+        if (@($manifest.files).Count -eq 0) { throw 'Empty binary manifest.' }
+        $paths = [Collections.Generic.HashSet[string]]::new([StringComparer]::OrdinalIgnoreCase)
+        foreach ($entry in $manifest.files) {
+          if ([IO.Path]::IsPathRooted($entry.path) -or $entry.path.Split('/') -contains '..' -or -not $paths.Add($entry.path)) { throw 'Invalid or duplicate manifest path.' }
+          $filePath = Join-Path $binaryRoot $entry.path
+          $file = Get-Item -LiteralPath $filePath -ErrorAction Stop
+          if ($file.PSIsContainer -or $file.Length -ne $entry.bytes -or (Get-FileHash -LiteralPath $filePath -Algorithm SHA256).Hash.ToLowerInvariant() -ne $entry.sha256) { throw "Binary mismatch: $($entry.path)" }
+        }
+        foreach ($required in $manifest.requiredFiles) {
+          if (-not $paths.Contains($required)) { throw "Required binary lacks a hash: $required" }
+        }
+        # The hash-verified manifest names the producer's output roots.
+        if (@($manifest.roots).Count -eq 0) { throw 'Binary manifest names no output roots.' }
+        $actualPaths = @()
+        foreach ($relativeRoot in $manifest.roots) {
+          if ([IO.Path]::IsPathRooted($relativeRoot) -or $relativeRoot.Split('/') -contains '..') { throw "Invalid output root: $relativeRoot" }
+          $outputRoot = Join-Path $binaryRoot $relativeRoot
+          foreach ($file in Get-ChildItem -LiteralPath $outputRoot -File -Recurse -Force) {
+            $actualPaths += [IO.Path]::GetRelativePath($binaryRoot, $file.FullName).Replace('\', '/')
+          }
+        }
+        if (-not $paths.SetEquals([string[]]$actualPaths)) { throw 'Downloaded outputs contain missing or unrecorded files.' }
