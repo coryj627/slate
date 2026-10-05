@@ -645,11 +645,38 @@ internal sealed class CanvasSurfaceView : UserControl, ICanvasSurfacePresenter
         {
             return;
         }
-        if (model.Navigator.HandleKey(key, Keyboard.Modifiers, this))
+        if (DeliverChord(model, key, Keyboard.Modifiers, Keyboard.IsKeyDown(Key.RightAlt), e.OriginalSource))
         {
             e.Handled = true;
         }
     }
+
+    /// <summary>
+    /// The chord half of <see cref="OnPreviewKeyDown"/>, with the keyboard
+    /// state stated rather than read: a synthesised event cannot set
+    /// <see cref="Keyboard.Modifiers"/> or the right Alt key, so the facts
+    /// drive this seam directly (the <see cref="TextEditingChords"/> rule).
+    /// </summary>
+    internal bool DeliverChord(Key key, ModifierKeys modifiers, bool rightAltDown, object? source) =>
+        Model is { } model && DeliverChord(model, key, modifiers, rightAltDown, source);
+
+    /// <summary>
+    /// AltGr in an editable field is the reader's character, never a chord.
+    /// </summary>
+    /// <remarks>
+    /// AltGr reaches WPF as Ctrl+Alt, and every Ctrl+Alt canvas chord is
+    /// live while the filter field holds the caret. There the press is
+    /// Romanian ț, Turkish ₺ or US-International þ, and a handled key-down
+    /// produces no WM_CHAR, so a chord would both lose the character and act
+    /// (an empty card from AltGr+T). The board, the outline and the table
+    /// type nothing, so the same press stays the chord there, and a left Alt
+    /// Ctrl+Alt is the chord everywhere.
+    /// </remarks>
+    private bool DeliverChord(
+        CanvasDocumentViewModel model, Key key, ModifierKeys modifiers, bool rightAltDown, object? source) =>
+        !(source is System.Windows.Controls.Primitives.TextBoxBase { IsReadOnly: false }
+            && TextEditingChords.IsAltGr(modifiers, rightAltDown))
+        && model.Navigator.HandleKey(key, modifiers, this);
 
     /// <summary>
     /// Escape dismisses an OPEN Where-am-I panel, ahead of the ladder
