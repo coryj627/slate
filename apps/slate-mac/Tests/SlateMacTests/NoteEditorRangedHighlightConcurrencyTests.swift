@@ -26,21 +26,32 @@ final class NoteEditorRangedHighlightConcurrencyTests: XCTestCase {
     private final class HighlightPassGate {
         private var entered = false
         private var released = false
-        private var entryWaiters: [CheckedContinuation<Void, Never>] = []
+        private var nextWaiterID = 0
+        private var entryWaiters: [Int: CheckedContinuation<Bool, Never>] = [:]
         private var releaseWaiters: [CheckedContinuation<Void, Never>] = []
 
         func arriveAndWait() async {
             entered = true
-            let waiters = entryWaiters
+            let waiters = entryWaiters.values
             entryWaiters.removeAll()
-            for waiter in waiters { waiter.resume() }
+            for waiter in waiters { waiter.resume(returning: true) }
             guard !released else { return }
             await withCheckedContinuation { releaseWaiters.append($0) }
         }
 
-        func waitUntilEntered() async {
-            guard !entered else { return }
-            await withCheckedContinuation { entryWaiters.append($0) }
+        /// Reports whether a pass arrived within `timeout`. A missed handoff
+        /// then fails the test instead of parking it for the job's lifetime;
+        /// the caller's `defer` releases both gates so held passes unwind.
+        func waitUntilEntered(timeout: Duration = .seconds(30)) async -> Bool {
+            guard !entered else { return true }
+            let id = nextWaiterID
+            nextWaiterID += 1
+            let deadline = Task { @MainActor [weak self] in
+                try? await Task.sleep(for: timeout)
+                self?.entryWaiters.removeValue(forKey: id)?.resume(returning: false)
+            }
+            defer { deadline.cancel() }
+            return await withCheckedContinuation { entryWaiters[id] = $0 }
         }
 
         func release() {
@@ -256,6 +267,18 @@ final class NoteEditorRangedHighlightConcurrencyTests: XCTestCase {
         let lm = textView.layoutManager!
         let len = (doc as NSString).length
 
+        // A real appearance or display-options notification would reschedule
+        // through the observer `attach` registered. That pass captures the
+        // seed's barrier, so settle would await it rather than `seed` and the
+        // handoff below would never run. Only this test's own reschedule may
+        // reach settle; the appearance test below covers the observer itself.
+        NotificationCenter.default.removeObserver(
+            coordinator, name: NSColor.systemColorsDidChangeNotification, object: nil)
+        NSWorkspace.shared.notificationCenter.removeObserver(
+            coordinator,
+            name: NSWorkspace.accessibilityDisplayOptionsDidChangeNotification,
+            object: nil)
+
         let seedGate = HighlightPassGate()
         let successorGate = HighlightPassGate()
         coordinator.highlightBeforeApplyForTesting = { await seedGate.arriveAndWait() }
@@ -272,7 +295,10 @@ final class NoteEditorRangedHighlightConcurrencyTests: XCTestCase {
             XCTFail("seed highlight task was not installed")
             return
         }
-        await seedGate.waitUntilEntered()
+        guard await seedGate.waitUntilEntered() else {
+            XCTFail("the seed pass never reached its apply barrier")
+            return
+        }
 
         var installedSuccessor = false
         coordinator.highlightWillAwaitForTesting = { task in
@@ -287,7 +313,12 @@ final class NoteEditorRangedHighlightConcurrencyTests: XCTestCase {
             seedGate.release()
         }
         let settling = Task { @MainActor in await coordinator.settleHighlight() }
-        await successorGate.waitUntilEntered()
+        guard await successorGate.waitUntilEntered() else {
+            XCTFail(
+                "settle never awaited seed, so no held successor replaced it "
+                    + "(installed successor: \(installedSuccessor))")
+            return
+        }
         await seed.value
 
         XCTAssertTrue(installedSuccessor, "reschedule must occur while settle is awaiting seed")
