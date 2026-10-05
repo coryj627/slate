@@ -153,10 +153,13 @@ The October 3 Mac continuation found a Release-only native artifact failure at
 `4958e62e61d012d0a6924ec38433a283999f00e1`: Xcode 27's linker and the native
 loader both rejected the Rust 1.97.1 dylib's misaligned Mach-O string table.
 Debug builds and static accessibility scans did not expose this shipping-artifact
-failure. The Mac build script now disables Cargo's Release stripping and uses
-Apple's `strip -x` on the generated dylib before Swift linking and bundling.
-The pinned Rust version and Release optimization settings remain unchanged.
-See the upstream [Rust issue](https://github.com/rust-lang/rust/issues/157750).
+failure. The workspace's `.cargo/config.toml` now disables rustc's Mach-O
+stripping for every macOS build. An October 4 review found that the original
+build-script override left other Release paths broken and made alternating
+builds recompile. The Mac build script uses Apple's `strip -x` on the generated
+dylib before Swift linking and bundling. The pinned Rust version and Release
+optimization settings remain unchanged. See the upstream
+[Rust issue](https://github.com/rust-lang/rust/issues/157750).
 
 At repair revision `e6a8337be2905b3f43841e6ab456b0f57a7d91e4`, the full Release
 bundle built successfully. Its signature, plist, relative dylib link, native
@@ -406,3 +409,87 @@ repeat the audit and native qualification. The dependency change requires new
 Mac Debug, complete XCTest, CLI, separate analyzer and actual Release-load
 evidence. Earlier Release bytes remain historical evidence; fresh human
 VoiceOver acceptance must use the newly qualified app. Keep this PR draft.
+
+### October 4 review repairs: Mac first, then Windows
+
+A review of `12427d28404e7c7a50df27fa9d5b1127c9763ae4` ranked 15 findings and
+verified several lower-priority items. The repairs below were made and checked
+on macOS 27.0.1 with Xcode 27.0 and the pinned Rust 1.97.1. Windows-only code
+waits for the Windows machine.
+
+Repaired on the Mac:
+
+- Marker-fault fixtures in `structural_batch.rs` set process-global triggers
+  (`b.md`, `x.md`, `y.md`, `a.md`, `left/`) that every session matches as a
+  path substring. Holding the old `b.md` trigger across the module failed 17
+  tests, including the two instrumented for the payload-less main failure. That
+  makes the shared trigger a likely cause; it is not a reproduction of the main
+  event. Each faulted fixture now names unique paths. With each new trigger held
+  across the module, every other test passed, and 30 module runs at four threads
+  passed. The barrier fixture no longer holds `ENV_FAULT_GUARD`, so its failure
+  cannot poison the guard, and one helper prints fixture panics.
+- The settle handoff XCTest detaches the appearance observer and bounds its
+  waits. A notification replayed after the seed capture hung the previous
+  version and passes now. The Tests tree changed, so a Mac pilot of a source
+  containing this repair needs a new reviewed `REFERENCE`; the frozen
+  `704ab907` qualification is unaffected.
+- cargo-audit skips Git sources. The gate now also scans a lock copy naming the
+  admitted citationberg revision by its published identity, and a synthetic
+  0.7.0 advisory fails it.
+- `.cargo/config.toml` disables rustc stripping on macOS. The Release app passed
+  the pilot's Release witness with an aligned dylib string table, the Release
+  Swift CLI linked and ran, and a plain Release build after the scripts
+  recompiled nothing.
+- The Mac pilot re-exports `DYLD_*` past SIP-protected `/usr/bin/time`, gives
+  `DYLD_LIBRARY_PATH` to XCTest alone as `swift-tests.yml` does, and no longer
+  counts an unfinished sampling interval as phase wall time.
+- The `windows-native-build` cache key no longer names the commit, and
+  `apps/slate-windows/uniffi-bindgen-cs.version` holds the generator tag for
+  every lane.
+- The Windows pilot verifies producer binaries through one composite action,
+  checks each model shard's runner class against its candidate, and keeps
+  producer binaries for seven days of retries. Hosted model shards get a
+  70-minute hang limit. Two of seven hosted runs (37147911816, 37167597172)
+  lost a still-progressing routes fact at 45 minutes, because VSTest's blame
+  timer resets only between tests. This is a hosted exception to the unchanged
+  45-minute watchdog above; Namespace candidates keep 45 minutes, and earlier
+  hosted runs measured under the shorter limit.
+
+Not run on this Mac: Finder answered no Apple Events from the review session
+(`AppleEvent timed out`, -1712). Of the library tests, 1,986 passed, 10 failed
+on that Finder timeout and 150 Trash, delete or census tests were skipped. The
+complete XCTest suite, the separate analyzer and human VoiceOver acceptance
+remain open; the changed XCTest class passed.
+
+Queued for the Windows machine from the same review:
+
+- `CanvasNavigator.cs`: Ctrl+Alt+T fires for AltGr+T typed in the canvas
+  filter (Romanian Programmers `ț`, Turkish Q `₺`, US-International `þ`),
+  creating a card and losing the character. Gate it like other text-entry
+  chords.
+- `CommandPaletteViewModel.cs`: completed ranks publish at Background priority,
+  so a queued Enter runs the previous query's selection even when the new rows
+  are ready. Decide whether that ordering is intended, and rename
+  `_countDispatcher`.
+- `HeadingStyleText.cs`: a query deep in one large list, table or section walks
+  from the block start, making say-all quadratic. Endpoints go unnormalized into
+  the end checks, so StyleId differs from base for clients other than NVDA.
+  Collapse the repeated expansion code and reconsider the reflection write to
+  `_start`.
+- `CanvasRendererView.cs`: every state install rebuilds child peers across all
+  scene nodes and never prunes `_peers`, against contract 34 D3.
+- `WindowsNativePath.cs`: `\??\` NT paths of 260 or more characters are
+  prefixed twice.
+- `ModelTestRun.cs` and `ModelTestRunTests.cs`: a failed checkpoint names the
+  last passing case. The slow-case test never checks which cases were kept.
+  Checkpoint writes are billed to the next phase, and the extra `using` hides
+  the load-bearing `_disposed` guard.
+- The C# model inventory check verifies counts only; add the pinned digests the
+  Python verifier checks.
+- `session.rs`: with the long-path policy off, a 240-character vault root fails
+  to open because the SQLite cache path lacks the extended-path prefix.
+- Lower priority: the fixed 250 ms negative check in
+  `ShellAccessibilityTests.cs`, dead switch arms in `GraphTableTests.cs`, and
+  duplicated `SendMessage` helpers.
+- Confirm the changed Windows workflows in CI: the pinned-tag step, the shared
+  binaries action, the runner check and the hosted pilot's cold run.
