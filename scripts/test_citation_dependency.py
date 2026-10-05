@@ -3,7 +3,7 @@
 import copy
 import unittest
 
-from verify_citation_dependency import verify
+from verify_citation_dependency import registry_audit_lock, verify
 
 
 REV = "06a591e2f237d25e1dfdedac3f3d1494c496c52d"
@@ -116,6 +116,40 @@ class DependencyPolicyTests(unittest.TestCase):
         self.metadata["workspace_members"].remove("native")
         with self.assertRaisesRegex(ValueError, "not the workspace application"):
             self.check()
+
+
+LOCK = f'''[[package]]
+name = "citationberg"
+version = "0.7.0"
+source = "{SOURCE}"
+dependencies = [
+ "quick-xml",
+]
+
+[[package]]
+name = "quick-xml"
+version = "0.41.0"
+source = "{REGISTRY}"
+checksum = "{CHECKSUM}"
+'''
+
+
+class RegistryAuditLockTests(unittest.TestCase):
+    """cargo-audit skips Git sources, so the gate audits citationberg's published identity."""
+
+    def test_names_only_the_admitted_revision_by_its_registry_source(self):
+        audited = registry_audit_lock(LOCK)
+        self.assertNotIn("git+", audited)
+        self.assertEqual(audited.count(f'source = "{REGISTRY}"'), 2)
+        self.assertEqual(audited, LOCK.replace(SOURCE, REGISTRY))
+
+    def test_rejects_a_lock_without_the_admitted_revision(self):
+        with self.assertRaisesRegex(ValueError, "admitted Git source exactly once"):
+            registry_audit_lock(LOCK.replace(REV, "0" * 40))
+
+    def test_rejects_a_lock_naming_the_admitted_revision_twice(self):
+        with self.assertRaisesRegex(ValueError, "admitted Git source exactly once"):
+            registry_audit_lock(LOCK + LOCK)
 
 
 if __name__ == "__main__":

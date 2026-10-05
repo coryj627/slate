@@ -109,18 +109,19 @@ jobs:
         # Python uses the same runtime line as the existing Mac pilot.
         # No compilation or native cache volume is needed. The checker owns
         # cargo metadata --locked --all-features and never changes the lock.
+        # It also writes the registry-identity lock audited below.
         run: |
           python3 -m unittest discover -s scripts -p test_citation_dependency.py
-          python3 scripts/verify_citation_dependency.py
+          python3 scripts/verify_citation_dependency.py \
+            --audit-lock "$RUNNER_TEMP/citation-audit/Cargo.lock"
 
       - name: Install cargo-audit
         # Prebuilt, checksum-verified binary in seconds instead of
-        # `cargo install` compiling from source every run (~/.cargo/bin
-        # is deliberately never cached — see the cache step above — so
-        # the compile used to repeat per run). Version stays pinned
-        # (repo pin-everything convention); the advisory database is
-        # still fetched fresh each run, so coverage is unchanged. Bump
-        # deliberately.
+        # `cargo install` compiling from source every run (this job
+        # caches nothing, so the compile would repeat per run). Version
+        # stays pinned (repo pin-everything convention); the advisory
+        # database is still fetched fresh each run, so coverage is
+        # unchanged. Bump deliberately.
         uses: taiki-e/install-action@07b4745e0c39a41822af610387492e3e53aa222b  # v2.83.4
         with:
           tool: cargo-audit@0.22.2
@@ -134,3 +135,12 @@ jobs:
         # Unmaintained-crate warnings (e.g. transitive paste / yaml-rust)
         # are informational and do not fail the build.
         run: cargo audit
+
+      - name: cargo audit (admitted citationberg as its published crate)
+        # cargo-audit matches advisories only against crates.io sources, so
+        # the scan above skips the admitted Git citationberg entirely. This
+        # lock copy differs only in naming that revision (published 0.7.0
+        # plus the reviewed quick-xml line) by its registry identity; an
+        # advisory against citationberg 0.7.0 fails here. Same database as
+        # the scan above, so no second fetch.
+        run: cargo audit --no-fetch --file "$RUNNER_TEMP/citation-audit/Cargo.lock"

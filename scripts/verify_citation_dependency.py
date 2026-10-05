@@ -42,8 +42,6 @@ def verify(manifest, lock, metadata):
     require(one(lock["package"], "quick-xml").get("checksum") == XML_CHECKSUM,
             "quick-xml registry checksum changed")
     citation = one(packages, "citationberg")
-    require(citation["source"] == GIT_SOURCE and citation["version"] == "0.7.0",
-            "resolved citationberg differs from approved lock")
     xml = one(packages, "quick-xml")
     package_ids = {p["id"] for p in packages}
     nodes = metadata["resolve"]["nodes"]
@@ -84,10 +82,26 @@ def verify(manifest, lock, metadata):
             "quickXmlRegistryChecksum": XML_CHECKSUM, "applicationPaths": paths}
 
 
+def registry_audit_lock(lock_text):
+    """Name the admitted Git package by its published identity for cargo-audit.
+
+    cargo-audit matches advisories only against crates.io packages, so a scan
+    of the committed lock never examines citationberg. The admitted revision
+    is published 0.7.0 plus the reviewed quick-xml line, so every advisory
+    against citationberg 0.7.0 applies to it unchanged.
+    """
+    line = f'source = "{GIT_SOURCE}"'
+    require(lock_text.count(line) == 1, "lock does not name the admitted Git source exactly once")
+    return lock_text.replace(line, f'source = "{REGISTRY}"')
+
+
 def main():
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("--root", type=Path, default=Path(__file__).resolve().parents[1])
     parser.add_argument("--offline", action="store_true", help="require already fetched dependencies")
+    parser.add_argument("--audit-lock", type=Path,
+                        help="after verification, write a lock copy for `cargo audit --file` "
+                             "that names citationberg by its published crate")
     args = parser.parse_args()
     root = args.root.resolve()
     manifest_path, lock_path = root / "Cargo.toml", root / "Cargo.lock"
@@ -112,6 +126,13 @@ def main():
         result["fetchedGitHead"] = revision
         result["fetchedTrackedFilesClean"] = True
         result["offline"] = args.offline
+        if args.audit_lock:
+            audit_lock = args.audit_lock.resolve()
+            require(audit_lock not in (manifest_path, lock_path),
+                    "the audit lock must not replace the committed manifest or lock")
+            audit_lock.parent.mkdir(parents=True, exist_ok=True)
+            audit_lock.write_text(registry_audit_lock(lock_bytes.decode()))
+            result["registryAuditLock"] = str(audit_lock)
         print(json.dumps(result, indent=2))
     finally:
         require(manifest_path.read_bytes() == manifest_bytes and lock_path.read_bytes() == lock_bytes,

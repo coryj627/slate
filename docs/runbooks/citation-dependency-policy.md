@@ -57,11 +57,22 @@ this gate; the existing weekly run remains. The checker:
 - refuses any manifest/lock mutation. It prints the actual resolved paths;
   it does not compile an app or replace native or RustSec validation.
 
+cargo-audit 0.22.2 matches advisories only against crates.io sources, so a scan
+of the committed lock never examines the Git citationberg; a synthetic advisory
+against citationberg 0.7.0 failed the base lock and passed this lock. With
+`--audit-lock <path>`, the checker also writes a lock copy that differs only in
+naming the admitted revision by its published registry identity, and the gate
+runs a second `cargo audit --file` on that copy. The revision is published 0.7.0
+plus the reviewed quick-xml line, so any citationberg 0.7.0 advisory applies to
+it unchanged and fails the gate. That synthetic advisory fails the copy.
+
 Use the repository-pinned Rust and Python 3.11+ to reproduce:
 
 ```sh
 python3 -m unittest discover -s scripts -p test_citation_dependency.py
-python3 scripts/verify_citation_dependency.py
+python3 scripts/verify_citation_dependency.py --audit-lock target/citation-audit/Cargo.lock
+cargo audit
+cargo audit --no-fetch --file target/citation-audit/Cargo.lock
 ```
 
 After fetching the complete locked dependencies, the same check supports
