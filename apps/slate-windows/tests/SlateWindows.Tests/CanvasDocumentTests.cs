@@ -5714,6 +5714,172 @@ public sealed class CanvasDocumentTests : IDisposable
         }
     });
 
+    /// <summary>
+    /// Contract 34 D3's retirement rule: the registry holds weak identity
+    /// only, and a tombstone lives only while its peer does. Once a client
+    /// has created the board peer, every install refreshes its children and
+    /// mints a peer for each windowed card. The registry kept all of them,
+    /// so the next realization committed every card the board ever windowed
+    /// as a retained tombstone, and every derive and draw walked them all.
+    /// </summary>
+    [Fact]
+    public void ARealizationRetainsLivePeersNotEveryCardTheBoardEverWindowed() => RunSta(() =>
+    {
+        const int Cards = 48;
+        WriteRowCanvas(Cards);
+        CanvasDocumentViewModel document = NewDocument("row.canvas");
+        var surface = new CanvasSurfaceView { Model = document };
+        CanvasRendererView renderer = surface.VisualForTests;
+        try
+        {
+            document.Load();
+            document.ShowSurface(CanvasSurfaceKind.Visual);
+            using HostedWindow host = Host(surface);
+            host.UpdateLayout();
+            bool Settled() => renderer.Engine.Current is { } state
+                && state.Viewport.SameGeometry(renderer.Engine.CommittedViewport);
+            PumpUntil(() => Settled() && renderer.Engine.Current!.Topology.Placements.Count > 0);
+            ConnectBoardPeer(renderer);
+
+            var windowed = new HashSet<CanvasPeerKey>();
+            for (int step = 0; step < Cards; step++)
+            {
+                double pan = -step * 1000.0;
+                renderer.Engine.CommitViewport(view => view.PannedTo(pan, 0));
+                PumpUntil(Settled);
+                windowed.UnionWith(MaterializedCards(renderer.Engine.Current!));
+            }
+            Assert.True(windowed.Count == Cards, $"premise: the pan windowed {windowed.Count} of {Cards} cards.");
+
+            // The middle card: off the window, and never in the board's
+            // first child list.
+            CollectGarbage();
+            CanvasPeerKey realizedKey = CanvasPeerKey.Card($"c{Cards / 2}");
+            (int retained, int materialized) = RealizeWhileHeld(renderer, realizedKey, Settled);
+            Assert.True(
+                retained <= materialized + 4,
+                $"the realization retained {retained} keys with {materialized} cards materialized; "
+                + $"the board windowed {windowed.Count} over the pan. {AutomationListeners()}");
+
+            // Released and windowed out, the realized card's tombstone goes
+            // with the next install.
+            renderer.Engine.CommitViewport(view => view.PannedTo(-(Cards - 1) * 1000.0, 0));
+            PumpUntil(Settled);
+            CollectGarbage();
+            renderer.Engine.CommitViewport(view => view.PannedTo(-(Cards - 2) * 1000.0, 0));
+            var budget = System.Diagnostics.Stopwatch.StartNew();
+            while (!(Settled() && !renderer.Engine.Current!.Retained.Contains(realizedKey))
+                && budget.Elapsed < TimeSpan.FromSeconds(10))
+            {
+                PumpDispatcher();
+                Thread.Yield();
+            }
+            Assert.False(
+                renderer.Engine.Current!.Retained.Contains(realizedKey),
+                $"the released card stayed retained: {renderer.Engine.Current.Retained.Count} keys. "
+                + AutomationListeners());
+            Assert.DoesNotContain(
+                renderer.Engine.Current.Topology.Placements,
+                placement => placement.Key == realizedKey);
+        }
+        finally
+        {
+            renderer.Shutdown();
+            document.Shutdown();
+        }
+
+        static IEnumerable<CanvasPeerKey> MaterializedCards(CanvasPresentationState state) =>
+            state.Topology.Placements
+                .Where(placement => !placement.Key.IsEdge && placement.Value.Cell == CanvasPeerCell.Materialized)
+                .Select(placement => placement.Key);
+
+        static string AutomationListeners() =>
+            $"StructureChanged listener: {AutomationPeer.ListenerExists(AutomationEvents.StructureChanged)}; "
+            + $"UIA clients: {System.Windows.Automation.Provider.AutomationInteropProvider.ClientsAreListening}.";
+    });
+
+    /// <summary>A client's first touch: the board peer and one child walk,
+    /// out of line so no caller frame keeps those children reachable.</summary>
+    [System.Runtime.CompilerServices.MethodImpl(System.Runtime.CompilerServices.MethodImplOptions.NoInlining)]
+    private static void ConnectBoardPeer(CanvasRendererView renderer)
+    {
+        var board = Assert.IsType<CanvasRendererAutomationPeer>(
+            UIElementAutomationPeer.CreatePeerForElement(renderer));
+        _ = board.GetChildren();
+    }
+
+    /// <summary>Realize a card and hold its peer, as a client keeps what it
+    /// realized, until the realization's state is installed. Out of line so
+    /// the peer is unreachable once this returns.</summary>
+    [System.Runtime.CompilerServices.MethodImpl(System.Runtime.CompilerServices.MethodImplOptions.NoInlining)]
+    private static (int Retained, int Materialized) RealizeWhileHeld(
+        CanvasRendererView renderer, CanvasPeerKey key, Func<bool> settled)
+    {
+        CanvasCardAutomationPeer? held = renderer.RealizePeer(key);
+        Assert.NotNull(held);
+        PumpUntil(() => settled() && renderer.Engine.Current!.Retained.Contains(key));
+        CanvasPresentationState state = renderer.Engine.Current!;
+        GC.KeepAlive(held);
+        return (state.Retained.Count, state.Topology.Placements.Count(placement =>
+            !placement.Key.IsEdge && placement.Value.Cell == CanvasPeerCell.Materialized));
+    }
+
+    /// <summary>D3: a changed child list raises the container's one
+    /// children-invalidated event, and an install that leaves the windowed
+    /// cards as they were raises none.</summary>
+    [Fact]
+    public void TheBoardAnnouncesAChangedChildListOnceAndAnUnchangedOneNever() => RunSta(() =>
+    {
+        WriteRowCanvas(12);
+        CanvasDocumentViewModel document = NewDocument("row.canvas");
+        var surface = new CanvasSurfaceView { Model = document };
+        CanvasRendererView renderer = surface.VisualForTests;
+        try
+        {
+            document.Load();
+            document.ShowSurface(CanvasSurfaceKind.Visual);
+            using HostedWindow host = Host(surface);
+            host.UpdateLayout();
+            bool Settled() => renderer.Engine.Current is { } state
+                && state.Viewport.SameGeometry(renderer.Engine.CommittedViewport);
+            PumpUntil(() => Settled() && renderer.Engine.Current!.Topology.Placements.Count > 0);
+            ConnectBoardPeer(renderer);
+            int announced = CanvasRendererAutomationPeer.ChildrenInvalidatedForTests;
+
+            renderer.Engine.CommitViewport(view => view.PannedTo(-10, 0));
+            PumpUntil(Settled);
+            Assert.Equal(announced, CanvasRendererAutomationPeer.ChildrenInvalidatedForTests);
+
+            renderer.Engine.CommitViewport(view => view.PannedTo(-6_000, 0));
+            PumpUntil(Settled);
+            Assert.Equal(announced + 1, CanvasRendererAutomationPeer.ChildrenInvalidatedForTests);
+
+            renderer.Visibility = Visibility.Collapsed;
+            Assert.Equal(announced + 2, CanvasRendererAutomationPeer.ChildrenInvalidatedForTests);
+        }
+        finally
+        {
+            renderer.Shutdown();
+            document.Shutdown();
+        }
+    });
+
+    /// <summary>Cards in one row 1,000 units apart: the window and its
+    /// margin hold a few at a time.</summary>
+    private void WriteRowCanvas(int cards) => File.WriteAllText(
+        Path.Combine(_fixture.Root, "row.canvas"),
+        "{\"nodes\":[" + string.Join(",", Enumerable.Range(0, cards).Select(index =>
+            $"{{\"id\":\"c{index}\",\"type\":\"text\",\"text\":\"Card {index}\","
+            + $"\"x\":{index * 1000},\"y\":0,\"width\":200,\"height\":100}}"))
+        + "],\"edges\":[]}");
+
+    private static void CollectGarbage()
+    {
+        GC.Collect();
+        GC.WaitForPendingFinalizers();
+        GC.Collect();
+    }
+
     private static class BoardAutomationClient
     {
         [System.Runtime.InteropServices.DllImport("user32.dll", CharSet = System.Runtime.InteropServices.CharSet.Unicode)]
