@@ -461,35 +461,102 @@ on that Finder timeout and 150 Trash, delete or census tests were skipped. The
 complete XCTest suite, the separate analyzer and human VoiceOver acceptance
 remain open; the changed XCTest class passed.
 
-Queued for the Windows machine from the same review:
+Queued for the Windows machine from the same review, and what happened to it
+on October 5. The machine: Windows 11 Pro 26H2 build 26300.9550,
+`LongPathsEnabled` = 1 (left as found), only the en-US keyboard layout,
+NVDA 2026.2, .NET SDK 10.0.401, Rust 1.97.1 through rustup. Baseline on
+`8974fb31` before any change: 4,806 app facts passed in 17 minutes, both model
+partitions passed (13,069 scenarios exactly once; routes about 1,669 s a
+shard), and the slate-core suite passed with CI's skips (2,087 library tests).
 
-- `CanvasNavigator.cs`: Ctrl+Alt+T fires for AltGr+T typed in the canvas
-  filter (Romanian Programmers `ț`, Turkish Q `₺`, US-International `þ`),
-  creating a card and losing the character. Gate it like other text-entry
-  chords.
-- `CommandPaletteViewModel.cs`: completed ranks publish at Background priority,
-  so a queued Enter runs the previous query's selection even when the new rows
-  are ready. Decide whether that ordering is intended, and rename
-  `_countDispatcher`.
-- `HeadingStyleText.cs`: a query deep in one large list, table or section walks
-  from the block start, making say-all quadratic. Endpoints go unnormalized into
-  the end checks, so StyleId differs from base for clients other than NVDA.
-  Collapse the repeated expansion code and reconsider the reflection write to
-  `_start`.
-- `CanvasRendererView.cs`: every state install rebuilds child peers across all
-  scene nodes and never prunes `_peers`, against contract 34 D3.
-- `WindowsNativePath.cs`: `\??\` NT paths of 260 or more characters are
-  prefixed twice.
-- `ModelTestRun.cs` and `ModelTestRunTests.cs`: a failed checkpoint names the
-  last passing case. The slow-case test never checks which cases were kept.
-  Checkpoint writes are billed to the next phase, and the extra `using` hides
-  the load-bearing `_disposed` guard.
-- The C# model inventory check verifies counts only; add the pinned digests the
-  Python verifier checks.
-- `session.rs`: with the long-path policy off, a 240-character vault root fails
-  to open because the SQLite cache path lacks the extended-path prefix.
-- Lower priority: the fixed 250 ms negative check in
-  `ShellAccessibilityTests.cs`, dead switch arms in `GraphTableTests.cs`, and
-  duplicated `SendMessage` helpers.
-- Confirm the changed Windows workflows in CI: the pinned-tag step, the shared
-  binaries action, the runner check and the hosted pilot's cold run.
+- Repaired (`99841283`). AltGr reaches WPF as Ctrl+Alt, so AltGr+T in the
+  canvas filter ran New Card and lost `ț`, `₺` or `þ`. The surface now uses the
+  modal surfaces' AltGr rule (`TextEditingChords.IsAltGr`): with right Alt down,
+  an editable field keeps every Ctrl+Alt canvas chord. A fact over every
+  Canvas-scope Ctrl+Alt row failed before the gate. With NVDA on the Release
+  build, left Ctrl and right Alt with T in "Filter cards" echoed only the keys
+  and the board kept three cards; the same keys on the outline announced
+  "Created text card "Untitled" above "Core question"", and left Ctrl and left
+  Alt with T in the filter still created a card.
+- Owner decision and repair (`28a46318`). A queued Enter now publishes the
+  latest query's finished rank first and acts on its selection; a rank still
+  running is not waited for. Contract 28's T7, its pending-state row and I3 are
+  amended. A fact queues Enter at Input priority behind a finished rank: it ran
+  New Note before and runs Quick Open now. `_countDispatcher` is
+  `_ownerDispatcher` (`30c7582e`).
+- Repaired (`8d3c2051`, `e0c999ca`). The StyleId walk starts at the query's
+  first paragraph and moves forward, so line 2,000 of one list, table or
+  section costs what line 2 does (73,672 bytes each in Debug; it was 2,026,648,
+  4,137,832 and 1,034,648 bytes). Decisions use WPF's normalization of a private
+  clone, so raw DocumentRange spans answer as base did (70001 and NotSupported
+  for the review's two scenarios, Ctrl+A included) without the caller's range
+  being normalized. 1,192 raw-span answers match the original adaptor walk.
+  Normalizing the clone costs about 28 KB of WPF work a query. The reflection
+  write to `TextRangeAdaptor._start` stays by owner decision: it touches only a
+  private clone and degrades to "no match" if the field disappears, but a
+  servicing change to its meaning could mis-position a found range or trip a
+  WPF assert, which fails fast. In reading view NVDA said "heading level 1,
+  Title", "body line one", "heading level 2, Second heading", "body line two"
+  and "a quoted line", and read Ctrl+A in `trailing.md` as "body selected".
+  Narrator said "heading level 2 Second heading" when arrowing onto the second
+  heading and "heading level 1 Title" for Narrator+I on the first line, gave
+  body lines no level, and read the empty last heading of `trailing.md` as
+  "heading level 1, blank".
+- Repaired (`9067e552`). Canvas card peers are held weakly, a realization
+  retains only live keys, and an install drops tombstones whose peers are gone.
+  The board's children are rebuilt without `ResetChildrenCache`'s per-child
+  diff, which handed every windowed card's provider to UIA whenever a
+  structure-changed listener existed; a changed child list raises one
+  ChildrenInvalidated event instead. Panning a 48-card row then realizing one
+  card retained 48 keys before and at most four beyond the materialized cards
+  after. With NVDA, Down and Up on the visual board of a 12-card row read
+  "Text card "Card 1", 2 of 12 in canvas" through "Card 5" and back to "Card
+  4", each with its position.
+- Repaired (`a3f99fe0`). `ForCreateFile` leaves every device spelling .NET
+  recognizes as given, so `\??\` and forward-slash device paths are no longer
+  prefixed again.
+- Repaired (`7f6ff956`, `728e08ab`). Model checkpoints are written by a
+  background flusher, the failed checkpoint names only an unfinished case, the
+  slow-case fact checks which cases were kept, and the C# facts pin the three
+  inventory digests. Summed over both shards, routes `settleAndVerify` fell from
+  15.6 s to 1.8 s; a reworded exclusion reason now fails the composed fact in
+  21 ms. Both partitions passed with no missed checkpoint writes.
+- Repaired (`4eefc19f`), not as the review suggested. SQLite's two opens take
+  the verbatim path only when the database or its `-journal` sibling would reach
+  MAX_PATH. A verbatim cache directory would have put `\\?\` into the path the
+  open-failure and prefs messages read out. A 240-character root failed with
+  SQLITE_CANTOPEN before and now opens, saves, compacts and reopens; the test
+  binary has no longPathAware manifest, so this policy-on machine reproduced it.
+- Repaired (`311baf9b`, `f2252b18`, `95780e7e`). The shell gate's editor-chord
+  check waits for a real row read and samples a one-second window; the graph
+  bound loses its unreachable arms; one `NativeWindow.RequestUiaRoot` replaces
+  three `WM_GETOBJECT` declarations.
+- Repaired (`21c96321`). The pilot runs on pull requests that change its
+  binaries action.
+
+Final verification: 4,831 app facts passed in 18 minutes on the app code of
+`28a46318`, and the shell accessibility gate passed 135 of 135 with
+`SLATE_REQUIRE_UI_AUTOMATION=1` on `95780e7e`. Both model partitions passed on
+the committed harness and pins, routes in about 1,580 s a shard; the later
+commits change nothing the model facts construct. The slate-core suite passed
+with CI's skips (2,090 library tests, three of them the new long-path tests).
+`dotnet format --verify-no-changes`, `cargo fmt --check` and clippy with
+`-D warnings` were clean.
+
+The screen-reader runs drove the Release build with SendInput and refused to
+type unless Slate held the foreground. NVDA's speech came from its log;
+Narrator's came from its copy-last-phrase command (Narrator+Ctrl+X). Narrator
+Home and its "Narrator updates" carousel take the foreground at every start, so
+the driver closes and minimizes them through UIA. Two results match the
+`8974fb31` build exactly and predate this work. NVDA took about 5.1 s to speak
+each line of the 2,000-item list at either end, and 28 s to speak at all after
+the switch to reading view, logging watchdog freezes on both builds; the
+StyleId walk is not the cause. Narrator spoke only the key echo for Ctrl+A in
+reading view on both builds.
+
+Not done here: no AltGr layout is installed, so the AltGr check used left Ctrl
+with right Alt on en-US, which reaches WPF as AltGr does but types nothing; a
+Romanian or Turkish layout run remains. The Mac session's two calls (the hosted
+70-minute model limit and the Mac pilot's duplicated jobs) stay as they are by
+owner decision. Still to confirm in CI on this push: the pinned-tag step, the
+shared binaries action, the runner check and the hosted pilot's cold run.
