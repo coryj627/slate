@@ -7224,13 +7224,33 @@ public sealed partial class ShellAccessibilityTests
 
             // The sheet is a sibling of the canvas surface. Its draft
             // owns this press: the canvas shortcut must not add another
-            // card or steal focus from the edit in progress.
-            int cardsBeforeEditorChord = Rows().Length;
-            Assert.True(cardsBeforeEditorChord > 0);
+            // card or steal focus from the edit in progress. Rows() reads
+            // empty on a transient COM fault, so the baseline waits for a
+            // real read and the negative check samples a window, ignoring
+            // empty reads: one fault can neither pass nor fail it.
+            int cardsBeforeEditorChord = 0;
+            Assert.True(
+                SpinWait.SpinUntil(
+                    () => (cardsBeforeEditorChord = Rows().Length) > 0,
+                    TimeSpan.FromSeconds(10)),
+                "the outline rows never read before the editor chord.");
             Keyboard.TypeSimultaneously(
                 VirtualKeyShort.CONTROL, VirtualKeyShort.ALT, VirtualKeyShort.KEY_T);
             Wait.UntilInputIsProcessed(TimeSpan.FromMilliseconds(250));
-            Assert.Equal(cardsBeforeEditorChord, Rows().Length);
+            var cardCounts = new List<int>();
+            var sampling = System.Diagnostics.Stopwatch.StartNew();
+            do
+            {
+                int count = Rows().Length;
+                if (count > 0)
+                {
+                    cardCounts.Add(count);
+                }
+                Thread.Sleep(50);
+            }
+            while (sampling.Elapsed < TimeSpan.FromSeconds(1));
+            Assert.NotEmpty(cardCounts);
+            Assert.All(cardCounts, count => Assert.Equal(cardsBeforeEditorChord, count));
             Assert.Equal("Hello from the journey", draft.Patterns.Value.Pattern.Value.Value);
             AssertEventuallyFocused(draft, "the canvas chord took focus from the open card editor.");
 
