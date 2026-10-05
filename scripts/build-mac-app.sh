@@ -17,10 +17,6 @@ PROFILE="${PROFILE:-debug}"
 CARGO_PROFILE_FLAG=""
 if [[ "$PROFILE" == "release" ]]; then
     CARGO_PROFILE_FLAG="--release"
-    # Rust 1.97.1's Mach-O stripping can misalign LINKEDIT on macOS 27
-    # (rust-lang/rust#157750). Keep Release optimization and use Apple's
-    # strip below for the dylib; this also protects Cargo's host artifacts.
-    export CARGO_PROFILE_RELEASE_STRIP=none
 fi
 
 RUN=0
@@ -80,6 +76,8 @@ cargo run -p slate-uniffi $CARGO_PROFILE_FLAG --bin uniffi-bindgen -- \
     --out-dir "$GENERATED_DIR"
 
 if [[ "$PROFILE" == "release" ]]; then
+    # .cargo/config.toml disables rustc's Mach-O stripping on macOS
+    # (rust-lang/rust#157750), so Release keeps its symbols until here.
     echo "==> Stripping Release dylib with Apple's Mach-O tool"
     xcrun strip -x "$TARGET_DIR/libslate_uniffi.dylib"
 fi

@@ -16,6 +16,8 @@ on:
       - 'Cargo.toml'
       - 'Cargo.lock'
       - 'rust-toolchain.toml'
+      # macOS rustflags (rustc stripping disabled) live here.
+      - '.cargo/config.toml'
       - '.github/workflows/swift-tests.yml'
       - 'examples/swift-cli/**'
       # XCTest reads feature help and the shared accessibility corpus.
@@ -33,6 +35,8 @@ on:
       - 'Cargo.toml'
       - 'Cargo.lock'
       - 'rust-toolchain.toml'
+      # macOS rustflags (rustc stripping disabled) live here.
+      - '.cargo/config.toml'
       - '.github/workflows/swift-tests.yml'
       - 'examples/swift-cli/**'
       - 'docs/help/**'

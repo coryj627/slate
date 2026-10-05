@@ -1,0 +1,17 @@
+# Workspace Cargo configuration.
+#
+# macOS: rustc must not strip Mach-O output. Rust 1.97.1 strips with
+# rust-objcopy, which can leave the LINKEDIT string table misaligned
+# (rust-lang/rust#157750); Xcode 27's ld refuses to link such a dylib and the
+# native loader refuses to load it. Cargo.toml keeps `strip = "symbols"` for
+# Release on every other platform. This flag follows the profile's on the
+# rustc command line, so it wins for every macOS build: the app and Swift CLI
+# scripts, plain `cargo build --release`, benches and host build artifacts all
+# share one fingerprint. scripts/build-mac-app.sh strips the shipped dylib
+# with Apple's `strip -x`.
+#
+# RUSTFLAGS or CARGO_ENCODED_RUSTFLAGS in the environment replace this table;
+# include -Cstrip=none in them on macOS. Remove the table once the pinned
+# toolchain's stripped Mach-O output links and loads.
+[target.'cfg(target_os = "macos")']
+rustflags = ["-Cstrip=none"]
