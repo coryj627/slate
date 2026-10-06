@@ -7,12 +7,14 @@ Keep the PR draft until fresh human accessibility acceptance is complete.
 
 ## Source and environment qualification
 
-Use the literal repaired application source
-`704ab907e0df753dd24c0c6af688dc3a8975e4e7`. It includes the Mac Release stripping
-repair and the deterministic Debug cancellation witness. Earlier pairs used
-`e6a8337be2905b3f43841e6ab456b0f57a7d91e4`; their results remain qualified to that older
-source. All pairs require the unchanged 3,032-case name inventory digest, and
-preflight pins the exact test source tree of this repaired reference. Do not
+Use the literal application source
+`a64eb393f5470b9cdb94f3f537a85ceeeda3f7c4`. It adds the bounded settle handoff
+witness and the citationberg pin that resolves quick-xml 0.41.0 to the Mac
+Release stripping repair and the deterministic Debug cancellation witness.
+The October 3 pair used `704ab907e0df753dd24c0c6af688dc3a8975e4e7` and earlier
+pairs `e6a8337be2905b3f43841e6ab456b0f57a7d91e4`; their results remain
+qualified to those older sources. All pairs require the unchanged 3,032-case
+name inventory digest, and preflight pins the exact test source tree of this repaired reference. Do not
 compare a before/after witness repair as if it were one source. The pilot
 workflow and harness belong to a later commit; record both commits. Separate checkouts keep the tested application source unchanged, and
 preflight requires it to be an ancestor of the harness.
@@ -47,12 +49,12 @@ the providers concurrently. Verify each captured run head and its input values.
 ```bash
 gh workflow run mac-ci-pilot.yml --repo coryj627/slate \
   --ref codex/windows-ci-cost-and-test-repairs \
-  -f source_sha=704ab907e0df753dd24c0c6af688dc3a8975e4e7 \
+  -f source_sha=a64eb393f5470b9cdb94f3f537a85ceeeda3f7c4 \
   -f runner=hosted-xcode27 -f pair_id=mac-pair-current-1
 
 gh workflow run mac-ci-pilot.yml --repo coryj627/slate \
   --ref codex/windows-ci-cost-and-test-repairs \
-  -f source_sha=704ab907e0df753dd24c0c6af688dc3a8975e4e7 \
+  -f source_sha=a64eb393f5470b9cdb94f3f537a85ceeeda3f7c4 \
   -f runner=namespace-goldengate6x14 -f pair_id=mac-pair-current-1
 ```
 
