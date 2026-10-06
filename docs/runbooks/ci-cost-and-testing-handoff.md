@@ -551,12 +551,18 @@ the driver closes and minimizes them through UIA. Two results match the
 `8974fb31` build exactly and predate this work. NVDA took about 5.1 s to speak
 each line of the 2,000-item list at either end, and 28 s to speak at all after
 the switch to reading view, logging watchdog freezes on both builds; the
-StyleId walk is not the cause. Narrator spoke only the key echo for Ctrl+A in
-reading view on both builds.
+StyleId walk is not the cause (#1329). Narrator spoke only the key echo for
+Ctrl+A in reading view on both builds (#1330).
 
 Not done here: no AltGr layout is installed, so the AltGr check used left Ctrl
-with right Alt on en-US, which reaches WPF as AltGr does but types nothing; a
-Romanian or Turkish layout run remains. The Mac session's two calls (the hosted
-70-minute model limit and the Mac pilot's duplicated jobs) stay as they are by
-owner decision. Still to confirm in CI on this push: the pinned-tag step, the
-shared binaries action, the runner check and the hosted pilot's cold run.
+with right Alt on en-US, which reaches WPF as AltGr does but types nothing. A
+Romanian or Turkish layout run is waived by owner decision (October 5). The Mac
+session's two calls (the hosted 70-minute model limit and the Mac pilot's
+duplicated jobs) stay as they are by owner decision.
+
+CI on `b4a6ff3b` passed all eight runs, including the hosted pilot's cold run
+(pull-request runs restore no caches), which took about two hours. The
+pinned-tag step, the shared binaries action and each shard's runner check ran
+and passed. An Actions incident that day left four `ubuntu-latest` jobs
+unassigned ("The job was not acquired by Runner of type hosted"); after GitHub
+recovered, `gh run rerun --failed` re-ran only those jobs, and they passed.
