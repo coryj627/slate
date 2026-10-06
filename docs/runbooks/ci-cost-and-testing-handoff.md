@@ -607,11 +607,21 @@ environment.
   quick-xml version. The CSL namespace-limit regression also passes in the
   Release profile.
 - `REFERENCE` now names `a64eb393` (`820cbd6e`), whose XCTest tree is the
-  one the settle handoff repair introduced. No pilot was dispatched, by owner
-  decision.
+  one the settle handoff repair introduced.
+- The hosted pilot of `a64eb393` with harness `94fbc23a`
+  ([run 37477410844](https://github.com/coryj627/slate/actions/runs/37477410844),
+  pair `mac-pair-oct6-1`) passed every gate on macOS 27.0 (26A428), a 3 CPU,
+  7 GiB virtual M1 with Xcode 27.0. Downloaded XML from each pass held
+  3,032 cases at digest `a145b175`, with no failures, errors or skips. Both
+  passes built quick-xml 0.41.0 and citationberg `06a591e2`, and loaded the
+  Release dylib with FFI contract 30. The analyzer scored 100 with zero
+  errors and warnings in both. Native phase totals were 1,844.5 seconds cold
+  and 576.6 seconds warm; the cold Release build alone took 984.7 seconds.
+  October 3 measured 1,160.7 and 460.4 seconds on a different source. One
+  run does not explain that difference.
 
 The Release bundle for human acceptance is
 `apps/slate-mac/.build/release/SlateMac.app` in that worktree. Its dylib
 SHA-256 begins `b1a04879`. `820cbd6e` and this section change no app source.
-Fresh human VoiceOver acceptance on that bundle remains open, and so does a
-hosted pilot of the new reference.
+Fresh human VoiceOver acceptance on that bundle remains open. A Namespace
+pilot of the new reference was not run.
