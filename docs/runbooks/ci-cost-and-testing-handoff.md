@@ -566,3 +566,52 @@ pinned-tag step, the shared binaries action and each shard's runner check ran
 and passed. An Actions incident that day left four `ubuntu-latest` jobs
 unassigned ("The job was not acquired by Runner of type hosted"); after GitHub
 recovered, `gh run rerun --failed` re-ran only those jobs, and they passed.
+
+### October 6 Mac qualification
+
+The Mac half of the dependency qualification ran on `a64eb393` in a clean
+detached worktree. The machine: macOS 27.0.1 (26A434) on an Apple M5 Max with
+18 logical CPUs and 36 GiB, Xcode 27.0 (27A266a), Swift 6.4, and rustc and
+cargo 1.97.1 through rustup. The tracked tree stayed clean after every step.
+
+Finder first answered no Apple Events here either: a request timed out after
+20 seconds, as on October 4. The requests come from Claude.app. The owner
+approved its Automation access to Finder, after which the same request
+answered in 0.1 seconds. The October 4 Finder failures on this Mac were
+therefore that unanswered consent gate. Nothing below was skipped for the
+environment.
+
+- Debug: `PROFILE=debug ./scripts/build-mac-app.sh --skip-a11y-check`
+  passed in 55 seconds.
+- XCTest: `swift test --parallel` with `DYLD_LIBRARY_PATH` alone, as in
+  `swift-tests.yml`, passed in 61 seconds on 18 workers. The pilot's own XML
+  parser counted 3,032 cases, the reference digest `a145b175` and zero
+  failures, errors and skips.
+- The slate-core library suite ran with no `--skip`: 2,146 passed and none
+  failed in 876 seconds. The one ignored test is the fixture generator
+  `regenerate_large_fixture`. The 10 Finder failures and 150 Trash, delete
+  and census tests not run on October 4 all passed.
+- The Swift CLI (`PROFILE=debug make swift-cli`) built and printed all three
+  sample headings.
+- The pinned analyzer `bcaddd56` was cloned and built with three jobs in
+  118 seconds. Its cold and warm passes ran version, human, JSON and SARIF
+  modes over `apps/slate-mac/Sources/SlateMac` with the same binary. Each
+  scored 100 with zero errors and zero warnings under the pilot's floor.
+- Release: `./scripts/build-and-launch.sh --no-open` built in 209 seconds,
+  compiling quick-xml 0.41.0 and citationberg at `06a591e2`. The pilot's
+  `verify-release` passed on the bundle: strict signature, valid plist,
+  arm64, the relative `@executable_path` link and ID, and a fresh process
+  that loaded the bundled dylib and read FFI contract 30. The dylib's
+  string table offset is 8-byte aligned. Its embedded crate paths name
+  `quick-xml-0.41.0` and the citationberg `06a591e` checkout, and no other
+  quick-xml version. The CSL namespace-limit regression also passes in the
+  Release profile.
+- `REFERENCE` now names `a64eb393` (`820cbd6e`), whose XCTest tree is the
+  one the settle handoff repair introduced. No pilot was dispatched, by owner
+  decision.
+
+The Release bundle for human acceptance is
+`apps/slate-mac/.build/release/SlateMac.app` in that worktree. Its dylib
+SHA-256 begins `b1a04879`. `820cbd6e` and this section change no app source.
+Fresh human VoiceOver acceptance on that bundle remains open, and so does a
+hosted pilot of the new reference.
