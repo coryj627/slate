@@ -641,3 +641,24 @@ provider: an image whose MDM privacy profile allows the test processes to
 send Apple Events to Finder, or another image with Xcode 27.0 (27A266a)
 that does. Skipping the Trash tests or changing Finder Put Back is not a
 fix. No runner, cache or provider setting was changed.
+
+The owner chose Namespace's Tahoe slim image instead, and `1ba80997` added
+it as candidate `namespace-tahoeslim6x14` on the direct label
+`nscloud-macos-tahoe-slim-arm64-6x14`. The `mac-actions` profile was not
+changed. The same Finder diagnostic passed there
+([run 37695427060](https://github.com/coryj627/slate/actions/runs/37695427060)):
+the permission query returned 0 and both deletes finished at once. The
+image is macOS 26.6.2 (25G83) with Xcode 27.0 (27A266a), SDK 26A425, and
+6 CPUs and 14 GiB on a virtual M4 Pro.
+
+The full Namespace pilot of `a64eb393` with harness `1ba80997`
+([run 37695877260](https://github.com/coryj627/slate/actions/runs/37695877260),
+pair `mac-pair-oct7-tahoe`) then passed every gate with no cache volume.
+Downloaded XML from each pass held 3,032 cases at digest `a145b175`, with
+no failures, errors or skips. Both passes built quick-xml 0.41.0 and
+citationberg `06a591e2`, and loaded the Release dylib with FFI contract 30.
+The analyzer scored 100 with zero errors and warnings in both. Native phase
+totals were 543.0 seconds cold and 279.0 seconds warm. This pairs with the
+October 6 hosted run in source but not in harness: the harness commits
+between them change only the runbooks and add this candidate. Fresh human
+VoiceOver acceptance remains open.
