@@ -13,6 +13,10 @@ GIT_REV = "06a591e2f237d25e1dfdedac3f3d1494c496c52d"
 GIT_SOURCE = f"git+{GIT_URL}?rev={GIT_REV}#{GIT_REV}"
 REGISTRY = "registry+https://github.com/rust-lang/crates.io-index"
 XML_CHECKSUM = "e660451e55124f798a69a5af3f49ccfbefbd41910eefd25caf2393e1f3473ec1"
+# A cold `cargo metadata` may fetch the index and the Git patch; the audit
+# job itself stops at ten minutes. These bounds name a hung command.
+CARGO_SECONDS = 300
+GIT_SECONDS = 30
 
 
 def require(condition, message):
@@ -110,17 +114,17 @@ def main():
     if args.offline:
         command.append("--offline")
     try:
-        metadata = json.loads(subprocess.run(command, cwd=root, check=True,
-                                            capture_output=True, text=True).stdout)
+        metadata = json.loads(subprocess.run(command, cwd=root, check=True, capture_output=True,
+                                            text=True, timeout=CARGO_SECONDS).stdout)
         result = verify(tomllib.loads(manifest_bytes.decode()),
                         tomllib.loads(lock_bytes.decode()), metadata)
         citation = one(metadata["packages"], "citationberg")
         checkout = Path(citation["manifest_path"]).parent
-        revision = subprocess.run(["git", "-C", str(checkout), "rev-parse", "HEAD"],
-                                  check=True, capture_output=True, text=True).stdout.strip()
+        revision = subprocess.run(["git", "-C", str(checkout), "rev-parse", "HEAD"], check=True,
+                                  capture_output=True, text=True, timeout=GIT_SECONDS).stdout.strip()
         dirty = subprocess.run(["git", "-C", str(checkout), "status", "--porcelain",
                                 "--untracked-files=no"], check=True,
-                               capture_output=True, text=True).stdout
+                               capture_output=True, text=True, timeout=GIT_SECONDS).stdout
         require(revision == GIT_REV and not dirty,
                 "fetched citationberg checkout is not clean at the admitted revision")
         result["fetchedGitHead"] = revision
@@ -142,5 +146,6 @@ def main():
 if __name__ == "__main__":
     try:
         main()
-    except (ValueError, KeyError, TypeError, OSError, subprocess.CalledProcessError) as error:
+    except (ValueError, KeyError, TypeError, OSError, subprocess.CalledProcessError,
+            subprocess.TimeoutExpired) as error:
         raise SystemExit(f"citation dependency policy failed: {error}") from error
