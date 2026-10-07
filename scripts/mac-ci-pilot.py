@@ -24,7 +24,9 @@ import xml.etree.ElementTree as ET
 REFERENCE = "a64eb393f5470b9cdb94f3f537a85ceeeda3f7c4"
 INVENTORY_SHA = "a145b175c021c7268815d3615659f65bf8889a13b09bbcd592c86b5d8b6ec316"
 ANALYZER = "bcaddd56931ce14d32cebcf42ea9f5b08ed5f7d8"
-CANDIDATES = {"hosted-xcode27", "namespace-goldengate6x14"}
+LABELS = {"hosted-xcode27": "xcode-27", "namespace-goldengate6x14": "nscloud-macos-goldengate-arm64-6x14",
+          "namespace-tahoeslim6x14": "nscloud-macos-tahoe-slim-arm64-6x14"}
+CANDIDATES = set(LABELS)
 STATES = {"cold": "cold-products-no-explicit-restore", "warm": "warm-same-vm-incremental"}
 NATIVE_PHASES = ("debug", "xctest", "cli", "release", "release-witness")
 ANALYZER_PHASES = ("version", "human", "json", "sarif")
@@ -131,7 +133,7 @@ def preflight(source: Path, evidence: Path, layer: str) -> None:
                         physical_memory_bytes=int(command(["sysctl", "-n", "hw.memsize"])),
                         disk=command(["df", "-k", str(source)]), caches=inspect_caches(source),
                         runner_image={key: os.environ.get(key) for key in ["ImageOS", "ImageVersion", "RUNNER_NAME", "RUNNER_ARCH", "NSC_CACHE_PATH", "NSC_INSTANCE_ID"]})
-        if identity["candidate"] == "namespace-goldengate6x14" and os.environ.get("NSC_CACHE_PATH"):
+        if identity["candidate"].startswith("namespace-") and os.environ.get("NSC_CACHE_PATH"):
             require(not os.path.lexists(os.environ["NSC_CACHE_PATH"]), "unexpected Namespace cache path present; no-volume comparison cannot qualify")
         developers = sorted({p.resolve() for p in Path("/Applications").glob("Xcode*.app/Contents/Developer")})
         attempts = []

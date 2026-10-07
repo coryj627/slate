@@ -30,6 +30,11 @@ substitute a compiler or change a shared profile to obtain a pass.
 | --- | --- | --- |
 | `hosted-xcode27` | `xcode-27` | Standard public GitHub ARM preview image; inspect actual image, hardware and OS. |
 | `namespace-goldengate6x14` | `nscloud-macos-goldengate-arm64-6x14` | Direct 6 CPU/14 GiB label without a cache suffix or custom tag; reject an existing Namespace cache mount. |
+| `namespace-tahoeslim6x14` | `nscloud-macos-tahoe-slim-arm64-6x14` | Tahoe image offering only current Xcodes (26.6.2 with Xcode 27 in the dashboard); same shape and cache rules. |
+
+Finder answered no Apple Events on the Golden Gate image (October 3 and 7),
+so the Tahoe slim label was added on October 7. The dashboard does not name
+its labels; preflight's recorded OS and Xcode builds confirm the image.
 
 CPU generation, allocated memory and OS builds may differ. This compares the
 available configurations; it does not isolate the provider name as a cause.

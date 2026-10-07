@@ -5,6 +5,7 @@ import importlib.util
 import json
 import os
 from pathlib import Path
+import re
 import select
 import signal
 import subprocess
@@ -176,6 +177,21 @@ class MacPilotGateTests(unittest.TestCase):
                 pilot.validate_inputs(source, "hosted-xcode27", "pair-1")
         with self.assertRaises(ValueError):
             pilot.validate_inputs(pilot.REFERENCE, "new-paid-profile", "pair-1")
+        for candidate in ["hosted-xcode27", "namespace-goldengate6x14", "namespace-tahoeslim6x14"]:
+            with self.subTest(candidate=candidate):
+                pilot.validate_inputs(pilot.REFERENCE, candidate, "pair-1")
+
+    def test_workflow_offers_and_routes_exactly_the_known_candidates(self):
+        workflow = (Path(__file__).resolve().parents[2] / ".github/workflows/mac-ci-pilot.yml").read_text()
+        options = re.search(r"options: \[([^\]]*)\]", workflow).group(1)
+        self.assertEqual(sorted(item.strip() for item in options.split(",")), sorted(pilot.CANDIDATES))
+        routes = re.findall(r"^    runs-on: (\$\{\{ inputs\.runner .*)$", workflow, re.M)
+        self.assertEqual(len(routes), 2)
+        for candidate, label in pilot.LABELS.items():
+            expected = f"|| '{label}'" if candidate == "hosted-xcode27" else f"inputs.runner == '{candidate}' && '{label}'"
+            for route in routes:
+                with self.subTest(candidate=candidate):
+                    self.assertIn(expected, route)
 
     def test_aggregate_requires_both_jobs_and_exact_attempt_artifacts(self):
         with tempfile.TemporaryDirectory() as folder, patch.object(pilot, "context", return_value=IDENTITY):
