@@ -625,3 +625,19 @@ The Release bundle for human acceptance is
 SHA-256 begins `b1a04879`. `820cbd6e` and this section change no app source.
 Fresh human VoiceOver acceptance on that bundle remains open. A Namespace
 pilot of the new reference was not run.
+
+Before dispatching one, the October 3 Golden Gate Finder diagnostic was
+rerun unchanged on October 7 from scratch branch
+`claude/mac-finder-goldengate-diag-oct7`
+([run 37662304155](https://github.com/coryj627/slate/actions/runs/37662304155)).
+It reproduced October 3 on the same image, macOS 27.0 (26A428) with 6 CPUs
+and 14 GiB. The non-prompting permission query for Finder returned -1744,
+which means the request needs user consent. The XCTest delete and a direct
+`osascript` delete each waited about 120 seconds and timed out with -1712.
+The TCC log found no `MDMOverrides.plist`, so the image grants no Apple
+Events in advance, and no one can answer the prompt. A full pilot would
+stall the same way, so it was not dispatched. The fix belongs to the
+provider: an image whose MDM privacy profile allows the test processes to
+send Apple Events to Finder, or another image with Xcode 27.0 (27A266a)
+that does. Skipping the Trash tests or changing Finder Put Back is not a
+fix. No runner, cache or provider setting was changed.
