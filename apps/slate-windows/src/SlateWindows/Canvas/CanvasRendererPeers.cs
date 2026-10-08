@@ -57,6 +57,28 @@ internal sealed class CanvasRendererAutomationPeer :
             ? _view.MaterializedPeers()
             : [];
 
+    /// <summary>D3: a structure change raises the container's one
+    /// children-invalidated event. It names only the container, so no card's
+    /// provider (which holds the card's peer) reaches UIA by being
+    /// announced.</summary>
+    internal void RaiseChildrenInvalidated()
+    {
+        ChildrenInvalidatedForTests++;
+        if (ListenerExists(AutomationEvents.StructureChanged)
+            && ProviderFromPeer(this) is IRawElementProviderFragment container)
+        {
+            AutomationInteropProvider.RaiseStructureChangedEvent(
+                container,
+                new StructureChangedEventArgs(
+                    StructureChangeType.ChildrenInvalidated, container.GetRuntimeId()));
+        }
+    }
+
+    /// <summary>Changed child lists announced on this thread — the facts'
+    /// count, listener or not.</summary>
+    [ThreadStatic]
+    internal static int ChildrenInvalidatedForTests;
+
     // --- Value (DD-5): the zoom a reader polls -------------------------
 
     bool IValueProvider.IsReadOnly => true;

@@ -140,7 +140,7 @@ internal sealed class HeadingStyleTextRange : ITextRangeProvider
         // whenever the style changes across the range.
         object? firstIdentity = null;
         bool haveFirst = false;
-        foreach ((ITextRangeProvider _, Paragraph paragraph) in ParagraphRanges())
+        foreach (Paragraph paragraph in ParagraphQuery.Of(_inner)?.Paragraphs() ?? [])
         {
             object? identity = SyntheticValueOf(
                 paragraph, HeadingStyleTextProvider.StyleIdAttribute);
@@ -192,61 +192,231 @@ internal sealed class HeadingStyleTextRange : ITextRangeProvider
     }
 
     /// <summary>
-    /// Paragraph sub-ranges overlapping this range, in document order,
-    /// built from PUBLIC range operations on fresh clones of the raw
-    /// adaptor range (no new reflection surface). The cursor stays
-    /// degenerate at paragraph starts; each yield expands a probe to
-    /// the enclosing paragraph. Non-paragraph positions (container
-    /// blocks) contribute nothing and the walk continues past them.
-    ///
-    /// Termination is STRICT FORWARD PROGRESS, not a count cap
-    /// (adversarial round 2: a 10k ceiling silently truncated
-    /// documents a single 64 KiB embed preview can legally exceed,
-    /// hiding later headings and quotes). Each iteration either
-    /// advances the cursor strictly forward or the walk ends; the
-    /// document is finite, so the walk is too.
+    /// One query's paragraph view, resolved once on PRIVATE clones of the
+    /// caller's range.
     /// </summary>
-    private IEnumerable<(ITextRangeProvider Range, Paragraph Paragraph)> ParagraphRanges()
+    /// <remarks>
+    /// <para>
+    /// ENDPOINTS: WPF normalizes a range only inside some calls — never on
+    /// construction, Clone, MoveEndpointByRange or DocumentRange — so the
+    /// raw endpoints a client holds depend on what it called before. Every
+    /// decision here reads WPF's own normalization of a clone instead, so a
+    /// client that never normalized gets the answer of one that did, and the
+    /// caller's range keeps its endpoints. NVDA normalizes first; Narrator,
+    /// JAWS and automation clients need not.
+    /// </para>
+    /// <para>
+    /// COST: WPF resolves the first paragraph and the endpoints once; the
+    /// walk then moves forward from that paragraph in document order, so a
+    /// query pays for the element edges between the paragraphs it touches,
+    /// never for the blocks before them. #1320's block walk began at the
+    /// outermost block, so a line deep inside one large list, table or
+    /// section walked every entry before it, and say-all, which queries
+    /// every line, was quadratic. There is no count ceiling: the finite
+    /// block tree is the bound.
+    /// </para>
+    /// </remarks>
+    private sealed class ParagraphQuery
     {
-        ITextRangeProvider cursor = _inner.Clone();
-        cursor.MoveEndpointByRange(
-            TextPatternRangeEndpoint.End, cursor, TextPatternRangeEndpoint.Start);
-        while (true)
+        private readonly TextPointer _start;
+        private readonly TextPointer _end;
+        private readonly ITextRangeProvider _firstRange;
+        private readonly Paragraph? _first;
+
+        private ParagraphQuery(
+            ITextRangeProvider range,
+            TextPointer start,
+            TextPointer end,
+            ITextRangeProvider firstRange)
         {
-            ITextRangeProvider probe = cursor.Clone();
-            probe.ExpandToEnclosingUnit(TextUnit.Paragraph);
-            if (ParagraphAtStartOf(probe) is { } paragraph)
+            Range = range;
+            _start = start;
+            _end = end;
+            _firstRange = firstRange;
+            _first = StartPointerOf(firstRange)?.Paragraph;
+        }
+
+        /// <summary>The caller's range, normalized: what found ranges are
+        /// clamped to.</summary>
+        internal ITextRangeProvider Range { get; }
+
+        /// <summary>Empty by UIA definition, after normalization.</summary>
+        internal bool IsDegenerate => _start.CompareTo(_end) == 0;
+
+        /// <summary>Null when the adaptor's start pointer is unreadable; the
+        /// decorator then keeps WPF's own answers.</summary>
+        internal static ParagraphQuery? Of(ITextRangeProvider range)
+        {
+            ITextRangeProvider query = range.Clone();
+            // WPF's CompareEndpoints normalizes both operands in place: here
+            // only the private clone, never the caller's range.
+            _ = query.CompareEndpoints(
+                TextPatternRangeEndpoint.Start, query, TextPatternRangeEndpoint.Start);
+            ITextRangeProvider endProbe = query.Clone();
+            endProbe.MoveEndpointByRange(
+                TextPatternRangeEndpoint.Start, endProbe, TextPatternRangeEndpoint.End);
+            if (StartPointerOf(query) is not { } start
+                || StartPointerOf(endProbe) is not { } end)
             {
-                yield return (probe, paragraph);
+                return null;
             }
-            ITextRangeProvider previous = cursor.Clone();
-            if (cursor.Move(TextUnit.Paragraph, 1) == 0)
+            // Later WPF calls move an adaptor's pointers in place. Keep
+            // immutable public copies of the boundaries for the walk.
+            return new(
+                query,
+                start.GetPositionAtOffset(0, start.LogicalDirection)!,
+                end.GetPositionAtOffset(0, end.LogicalDirection)!,
+                ParagraphAt(query));
+        }
+
+        /// <summary>
+        /// Paragraphs overlapping the range, in document order. A caret
+        /// contributes its enclosing paragraph, and the end is exclusive for
+        /// later ones.
+        /// </summary>
+        internal IEnumerable<Paragraph> Paragraphs()
+        {
+            if (IsDegenerate)
             {
+                if (_first is not null)
+                {
+                    yield return _first;
+                }
                 yield break;
             }
-            if (cursor.CompareEndpoints(
-                TextPatternRangeEndpoint.Start,
-                previous,
-                TextPatternRangeEndpoint.Start) <= 0)
+            Paragraph? endParagraph = _end.Paragraph;
+            for (Paragraph? paragraph = _first ?? _start.Paragraph ?? ParagraphFrom(_start);
+                paragraph is not null;
+                paragraph = ParagraphFrom(paragraph.ElementEnd))
             {
-                yield break;
+                // Endpoints are insertion positions. A Paragraph.ContentStart
+                // can precede its first Run's opening tag, even when the query
+                // ends at that first character; such a paragraph contributes
+                // no content.
+                if (paragraph.ContentStart.CompareTo(_end) >= 0
+                    || ReferenceEquals(paragraph, endParagraph)
+                        && paragraph.ContentStart.GetInsertionPosition(
+                            LogicalDirection.Forward).CompareTo(_end) >= 0)
+                {
+                    yield break;
+                }
+                yield return paragraph;
             }
-            if (cursor.CompareEndpoints(
-                TextPatternRangeEndpoint.Start,
-                _inner,
-                TextPatternRangeEndpoint.End) >= 0)
+        }
+
+        /// <summary>Build just the selected result using WPF's own paragraph
+        /// expansion and clamping. Reposition a private clone through the same
+        /// cached start field already used for reading; clone again before any
+        /// public operation so WPF owns mutable copies of both pointers. Never
+        /// write an endpoint of the query range or a document-owned pointer.</summary>
+        internal ITextRangeProvider? RangeOf(Paragraph paragraph)
+        {
+            // WPF's first expansion is sensitive to the query's position and
+            // logical direction, including a paragraph-end newline. Reuse that
+            // exact expansion when the first paragraph is the match.
+            if (ReferenceEquals(_first, paragraph))
             {
-                yield break;
+                return ClampToQuery(_firstRange);
             }
+            ITextRangeProvider repositioned = Range.Clone();
+            try
+            {
+                if (StartPointerField.ForType(repositioned.GetType()) is not { } field)
+                {
+                    return null;
+                }
+                field.SetValue(repositioned, paragraph.ContentStart);
+            }
+            catch
+            {
+                // The private adaptor shape is an optional compatibility seam.
+                // Pinned real-WPF facts detect a change; UIA callers never receive
+                // a reflection exception.
+                return null;
+            }
+            return ClampToQuery(ParagraphAt(repositioned));
+        }
+
+        /// <summary>FindAttribute results must stay inside the searched
+        /// range; a paragraph can begin before it or end after it.</summary>
+        private ITextRangeProvider ClampToQuery(ITextRangeProvider candidate)
+        {
+            if (candidate.CompareEndpoints(
+                TextPatternRangeEndpoint.Start, Range, TextPatternRangeEndpoint.Start) < 0)
+            {
+                candidate.MoveEndpointByRange(
+                    TextPatternRangeEndpoint.Start, Range, TextPatternRangeEndpoint.Start);
+            }
+            if (candidate.CompareEndpoints(
+                TextPatternRangeEndpoint.End, Range, TextPatternRangeEndpoint.End) > 0)
+            {
+                candidate.MoveEndpointByRange(
+                    TextPatternRangeEndpoint.End, Range, TextPatternRangeEndpoint.End);
+            }
+            return candidate;
+        }
+
+        /// <summary>WPF's paragraph expansion of a range's start, on a clone:
+        /// the expansion normalizes and moves the adaptor's pointers.</summary>
+        private static ITextRangeProvider ParagraphAt(ITextRangeProvider range)
+        {
+            ITextRangeProvider paragraph = range.Clone();
+            paragraph.MoveEndpointByRange(
+                TextPatternRangeEndpoint.End, paragraph, TextPatternRangeEndpoint.Start);
+            paragraph.ExpandToEnclosingUnit(TextUnit.Paragraph);
+            return paragraph;
+        }
+
+        /// <summary>
+        /// The first paragraph whose element starts at or after
+        /// <paramref name="position"/>, in document order. Steps into the
+        /// containers the reading view builds — sections, lists and their
+        /// items, tables and their row groups, rows and cells — and over every
+        /// other element whole, so a paragraph's inline content is never
+        /// walked. Every step moves strictly forward.
+        /// </summary>
+        private static Paragraph? ParagraphFrom(TextPointer position)
+        {
+            for (TextPointer? cursor = position; cursor is not null;)
+            {
+                TextPointerContext context = cursor.GetPointerContext(LogicalDirection.Forward);
+                if (context == TextPointerContext.None)
+                {
+                    return null;
+                }
+                if (context != TextPointerContext.ElementStart)
+                {
+                    cursor = cursor.GetNextContextPosition(LogicalDirection.Forward);
+                    continue;
+                }
+                switch (cursor.GetAdjacentElement(LogicalDirection.Forward))
+                {
+                    case Paragraph paragraph:
+                        return paragraph;
+                    case TextElement container when container is Section
+                        or System.Windows.Documents.List or ListItem
+                        or Table or TableRowGroup or TableRow or TableCell:
+                        cursor = container.ContentStart;
+                        break;
+                    case TextElement other:
+                        cursor = other.ElementEnd;
+                        break;
+                    default:
+                        cursor = cursor.GetNextContextPosition(LogicalDirection.Forward);
+                        break;
+                }
+            }
+            return null;
         }
     }
 
     /// <summary>
-    /// A range's paragraph, via the adaptor's internal start pointer.
-    /// Any failure — field missing, unexpected type — degrades to "no
-    /// style" rather than throwing into UIA marshalling.
+    /// The adaptor's internal start pointer, read by reflection as the
+    /// provider summary records. Any failure — field missing, unexpected
+    /// type — degrades to "no style" rather than throwing into UIA
+    /// marshalling.
     /// </summary>
-    private static Paragraph? ParagraphAtStartOf(ITextRangeProvider range)
+    private static TextPointer? StartPointerOf(ITextRangeProvider range)
     {
         try
         {
@@ -255,7 +425,7 @@ internal sealed class HeadingStyleTextRange : ITextRangeProvider
             {
                 return null;
             }
-            return start.Paragraph;
+            return start;
         }
         catch
         {
@@ -294,51 +464,28 @@ internal sealed class HeadingStyleTextRange : ITextRangeProvider
             // empty content has nothing to find — clamping would
             // otherwise return the caret itself as a zero-length
             // "match" an AT can rediscover forever.
-            if (_inner.CompareEndpoints(
-                TextPatternRangeEndpoint.Start,
-                _inner,
-                TextPatternRangeEndpoint.End) == 0)
+            if (ParagraphQuery.Of(_inner) is not { IsDegenerate: false } query)
             {
                 return null;
             }
-            ITextRangeProvider? last = null;
-            foreach ((ITextRangeProvider paragraphRange, Paragraph paragraph)
-                in ParagraphRanges())
+            Paragraph? match = null;
+            foreach (Paragraph paragraph in query.Paragraphs())
             {
                 if (!Equals(SyntheticValueOf(paragraph, attribute), value))
                 {
                     continue;
                 }
-                ITextRangeProvider found = ClampToThisRange(paragraphRange);
+                match = paragraph;
                 if (!backward)
                 {
-                    return new HeadingStyleTextRange(found);
+                    break;
                 }
-                last = found;
             }
-            return last is null ? null : new HeadingStyleTextRange(last);
+            ITextRangeProvider? found = match is null ? null : query.RangeOf(match);
+            return found is null ? null : new HeadingStyleTextRange(found);
         }
         ITextRangeProvider? foundInner = _inner.FindAttribute(attribute, value, backward);
         return foundInner is null ? null : new HeadingStyleTextRange(foundInner);
-    }
-
-    /// <summary>FindAttribute results must stay inside the searched
-    /// range; a paragraph can begin before it or end after it.</summary>
-    private ITextRangeProvider ClampToThisRange(ITextRangeProvider candidate)
-    {
-        if (candidate.CompareEndpoints(
-            TextPatternRangeEndpoint.Start, _inner, TextPatternRangeEndpoint.Start) < 0)
-        {
-            candidate.MoveEndpointByRange(
-                TextPatternRangeEndpoint.Start, _inner, TextPatternRangeEndpoint.Start);
-        }
-        if (candidate.CompareEndpoints(
-            TextPatternRangeEndpoint.End, _inner, TextPatternRangeEndpoint.End) > 0)
-        {
-            candidate.MoveEndpointByRange(
-                TextPatternRangeEndpoint.End, _inner, TextPatternRangeEndpoint.End);
-        }
-        return candidate;
     }
 
     public ITextRangeProvider? FindText(string text, bool backward, bool ignoreCase)

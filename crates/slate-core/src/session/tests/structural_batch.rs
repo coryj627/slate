@@ -27,6 +27,32 @@ use std::time::Duration;
 /// short windows: a slow runner can only make those more convincing.
 const LIVENESS: Duration = Duration::from_secs(30);
 
+/// Runs a fixture body and, if it panics, prints `context()` with the original
+/// payload before resuming the same unwind. MathCAT installs a process-wide
+/// panic hook that captures its own panic details without printing them. When
+/// math tests have already initialized it, libtest can report an unrelated
+/// test as FAILED with no assertion payload (main run 36749141900).
+/// Diagnostics must not turn a failure into a pass. Only this helper prints:
+/// the #507 macro ban still covers every fixture body.
+#[expect(
+    clippy::disallowed_macros,
+    reason = "libtest must capture a fixture's original panic despite MathCAT's silent hook"
+)]
+fn report_fixture_panic<T>(context: impl FnOnce() -> String, body: impl FnOnce() -> T) -> T {
+    match std::panic::catch_unwind(std::panic::AssertUnwindSafe(body)) {
+        Ok(value) => value,
+        Err(payload) => {
+            let message = payload
+                .downcast_ref::<String>()
+                .map(String::as_str)
+                .or_else(|| payload.downcast_ref::<&str>().copied())
+                .unwrap_or("non-string panic payload");
+            eprintln!("{}: {message}", context());
+            std::panic::resume_unwind(payload);
+        }
+    }
+}
+
 #[derive(Debug, Clone, PartialEq, Eq)]
 enum ProviderCall {
     PreflightRename(String, String),
@@ -1160,50 +1186,92 @@ fn two_sessions_serialize_batch_and_legacy_folder_move_before_preflight() {
 
 #[test]
 fn structural_operations_in_different_vaults_remain_independent() {
-    let (_first_tmp, first, _first_state) = fixture(&[("a.md", "a")], &["dest"]);
-    let (second_tmp, second, _second_state) = fixture(&[("b.md", "b")], &["dest"]);
-    let first = Arc::new(first);
-    let (entered_tx, entered_rx) = mpsc::channel();
-    let (release_tx, release_rx) = mpsc::channel();
-    let moving_first = Arc::clone(&first);
-    let (first_tx, first_rx) = mpsc::channel();
-    std::thread::spawn(move || {
-        let result = moving_first.batch_move_with_faults(
-            BatchMoveRequest {
-                items: vec![file("a.md")],
-                new_parent: "dest".into(),
-            },
-            &BlockingBatchFault {
-                point: BatchFaultPoint::MoveIndex,
-                entered: Mutex::new(Some(entered_tx)),
-                release: Mutex::new(release_rx),
-            },
+    let started = std::time::Instant::now();
+    let phases = Mutex::new(Vec::new());
+    let mark = |phase| phases.lock().unwrap().push((phase, started.elapsed()));
+    let failure = || {
+        format!(
+            "different-vault independence failure at {:?}; phases: {:?}",
+            started.elapsed(),
+            phases.lock().unwrap()
+        )
+    };
+    report_fixture_panic(failure, || {
+        mark("opening and scanning fixtures");
+        let (_first_tmp, first, _first_state) = fixture(&[("a.md", "a")], &["dest"]);
+        let (second_tmp, second, _second_state) = fixture(&[("b.md", "b")], &["dest"]);
+        let first = Arc::new(first);
+        let (entered_tx, entered_rx) = mpsc::channel();
+        let (release_tx, release_rx) = mpsc::channel();
+        let moving_first = Arc::clone(&first);
+        let (first_tx, first_rx) = mpsc::channel();
+        mark("spawning first vault worker");
+        std::thread::spawn(move || {
+            let failure = || {
+                format!(
+                    "different-vault independence first vault worker panicked at {:?}",
+                    started.elapsed()
+                )
+            };
+            report_fixture_panic(failure, || {
+                let result = moving_first.batch_move_with_faults(
+                    BatchMoveRequest {
+                        items: vec![file("a.md")],
+                        new_parent: "dest".into(),
+                    },
+                    &BlockingBatchFault {
+                        point: BatchFaultPoint::MoveIndex,
+                        entered: Mutex::new(Some(entered_tx)),
+                        release: Mutex::new(release_rx),
+                    },
+                );
+                let _ = first_tx.send(result);
+            });
+        });
+        mark("waiting for first vault barrier");
+        entered_rx
+            .recv_timeout(LIVENESS)
+            .expect("first vault reached its barrier");
+
+        let (second_tx, second_rx) = mpsc::channel();
+        mark("spawning second vault worker");
+        std::thread::spawn(move || {
+            let failure = || {
+                format!(
+                    "different-vault independence second vault worker panicked at {:?}",
+                    started.elapsed()
+                )
+            };
+            report_fixture_panic(failure, || {
+                let _ = second_tx.send(second.batch_move(BatchMoveRequest {
+                    items: vec![file("b.md")],
+                    new_parent: "dest".into(),
+                }));
+            });
+        });
+        mark("waiting for independent second vault result");
+        let second_report = second_rx
+            .recv_timeout(LIVENESS)
+            .expect("a different vault must not wait on the first vault's sidecar")
+            .unwrap();
+        mark("checking second vault report and file");
+        assert_eq!(
+            second_report.state,
+            BatchMoveState::Succeeded,
+            "second vault report: {second_report:#?}"
         );
-        let _ = first_tx.send(result);
-    });
-    entered_rx
-        .recv_timeout(LIVENESS)
-        .expect("first vault reached its barrier");
+        assert!(second_tmp.path().join("dest/b.md").is_file());
 
-    let (second_tx, second_rx) = mpsc::channel();
-    std::thread::spawn(move || {
-        let _ = second_tx.send(second.batch_move(BatchMoveRequest {
-            items: vec![file("b.md")],
-            new_parent: "dest".into(),
-        }));
+        mark("releasing first vault barrier");
+        release_tx.send(()).unwrap();
+        mark("waiting for and checking first vault result");
+        let first_report = first_rx.recv_timeout(LIVENESS).unwrap().unwrap();
+        assert_eq!(
+            first_report.state,
+            BatchMoveState::Succeeded,
+            "first vault report: {first_report:#?}"
+        );
     });
-    let second_report = second_rx
-        .recv_timeout(LIVENESS)
-        .expect("a different vault must not wait on the first vault's sidecar")
-        .unwrap();
-    assert_eq!(second_report.state, BatchMoveState::Succeeded);
-    assert!(second_tmp.path().join("dest/b.md").is_file());
-
-    release_tx.send(()).unwrap();
-    assert_eq!(
-        first_rx.recv_timeout(LIVENESS).unwrap().unwrap().state,
-        BatchMoveState::Succeeded
-    );
 }
 
 #[test]
@@ -1613,26 +1681,41 @@ fn crash_after_rewriting_a_moved_document_restores_its_original_path_and_bytes()
 
 #[test]
 fn successful_batch_finalizes_one_undo_row_and_no_inflight_residue() {
-    let (tmp, session, _state) = fixture(&[("a.md", "a"), ("b.md", "b")], &["dest"]);
-    let report = session
-        .batch_move(BatchMoveRequest {
-            items: vec![file("a.md"), file("b.md")],
-            new_parent: "dest".into(),
-        })
-        .unwrap();
-    assert_eq!(report.state, BatchMoveState::Succeeded);
-    assert_eq!(structural_inflight_count(tmp.path()), 0);
-    let rows: i64 = session
-        .conn
-        .lock()
-        .unwrap()
-        .query_row(
-            "SELECT COUNT(*) FROM structural_ops WHERE kind = 'move_batch'",
-            [],
-            |row| row.get(0),
-        )
-        .unwrap();
-    assert_eq!(rows, 1);
+    let failure = || "successful batch finalization failure".to_owned();
+    report_fixture_panic(failure, || {
+        let (tmp, session, state) = fixture(&[("a.md", "a"), ("b.md", "b")], &["dest"]);
+        let report = session
+            .batch_move(BatchMoveRequest {
+                items: vec![file("a.md"), file("b.md")],
+                new_parent: "dest".into(),
+            })
+            .expect("the successful batch fixture must complete without a session error");
+        assert_eq!(
+            report.state,
+            BatchMoveState::Succeeded,
+            "batch report: {report:#?}; provider calls: {:?}",
+            state.lock().unwrap().calls
+        );
+        assert_eq!(
+            structural_inflight_count(tmp.path()),
+            0,
+            "a successful batch must consume its inflight journal; report: {report:#?}"
+        );
+        let rows: i64 = session
+            .conn
+            .lock()
+            .unwrap()
+            .query_row(
+                "SELECT COUNT(*) FROM structural_ops WHERE kind = 'move_batch'",
+                [],
+                |row| row.get(0),
+            )
+            .expect("read the finalized structural undo rows");
+        assert_eq!(
+            rows, 1,
+            "a successful batch must finalize exactly one undo row"
+        );
+    });
 }
 
 #[test]
@@ -3147,6 +3230,21 @@ fn failed_recovery_barrier_invalidates_both_undo_endpoints_in_session() {
 
 #[test]
 fn structural_undo_waits_for_failed_recovery_barrier_then_fails_closed() {
+    // The marker-recovery fault fixtures below name their own paths, so their
+    // process-wide triggers cannot reach this fixture's a.md/b.md batch. It
+    // takes no ENV_FAULT_GUARD: a failure here must not poison that guard for
+    // every fixture that does set a fault.
+    let started = std::time::Instant::now();
+    let failure = || {
+        format!(
+            "structural recovery barrier failure at {:?}",
+            started.elapsed()
+        )
+    };
+    report_fixture_panic(failure, structural_undo_recovery_barrier_fixture);
+}
+
+fn structural_undo_recovery_barrier_fixture() {
     let (_tmp, session, state) = fixture(
         &[("prior.md", "p"), ("a.md", "a"), ("b.md", "b")],
         &["prior-dest", "dest"],
@@ -3738,12 +3836,15 @@ fn crashed_folder_recovery_marks_every_descendant_file() {
     // crash), a racing save around the reverse rename had no
     // reconciliation trigger. Recovery now plants from
     // `inflight.moved`, the per-file mapping.
-    let (tmp, session, _state) = fixture(&[("left/a.md", "- [ ] carried\n")], &["left", "dest"]);
+    let (tmp, session, _state) = fixture(
+        &[("crashed-folder/a.md", "- [ ] carried\n")],
+        &["crashed-folder", "dest"],
+    );
     let provider = Arc::clone(&session.provider);
     let crashed = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
         let _ = session.batch_move_with_faults(
             BatchMoveRequest {
-                items: vec![folder("left")],
+                items: vec![folder("crashed-folder")],
                 new_parent: "dest".into(),
             },
             &PanicBatchFault(BatchFaultPoint::MoveJournal),
@@ -3762,7 +3863,7 @@ fn crashed_folder_recovery_marks_every_descendant_file() {
 
     let reopened = VaultSession::open(provider, SessionConfig::new(tmp.path().join(".slate")))
         .expect("interrupted folder batch is rolled back");
-    assert!(tmp.path().join("left/a.md").is_file());
+    assert!(tmp.path().join("crashed-folder/a.md").is_file());
     assert_eq!(structural_inflight_count(tmp.path()), 0);
     {
         // Recovery planted per-FILE markers on both sides of the
@@ -3771,7 +3872,7 @@ fn crashed_folder_recovery_marks_every_descendant_file() {
         let descendant_markers: i64 = conn
             .query_row(
                 "SELECT COUNT(DISTINCT path) FROM text_write_intents
-                 WHERE path IN ('left/a.md', 'dest/left/a.md')",
+                 WHERE path IN ('crashed-folder/a.md', 'dest/crashed-folder/a.md')",
                 [],
                 |row| row.get(0),
             )
@@ -3784,13 +3885,13 @@ fn crashed_folder_recovery_marks_every_descendant_file() {
 
     // The markers age naturally; a zero-threshold sweep converges
     // both sides by reading and the restored file serves.
-    unsafe { std::env::set_var("SLATE_TEST_INTENT_ABANDON_ZERO_FOR", "a.md") };
+    unsafe { std::env::set_var("SLATE_TEST_INTENT_ABANDON_ZERO_FOR", "crashed-folder/a.md") };
     let page = reopened
         .tasks_in_vault(crate::TaskFilter::default(), Paging::first(50))
         .expect("the query succeeds");
     unsafe { std::env::remove_var("SLATE_TEST_INTENT_ABANDON_ZERO_FOR") };
     assert!(
-        page.items.iter().any(|r| r.path == "left/a.md"),
+        page.items.iter().any(|r| r.path == "crashed-folder/a.md"),
         "the restored descendant serves after the read"
     );
 }
@@ -3805,12 +3906,12 @@ fn recovery_marker_failure_defers_without_consuming_the_journal() {
     // The failure must return directly: this open fails, the
     // journal survives untouched, the filesystem is unmutated, and
     // the next open retries successfully.
-    let (tmp, session, _state) = fixture(&[("x.md", "- [ ] xray\n")], &["dest"]);
+    let (tmp, session, _state) = fixture(&[("deferred-plant.md", "- [ ] xray\n")], &["dest"]);
     let provider = Arc::clone(&session.provider);
     let crashed = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
         let _ = session.batch_move_with_faults(
             BatchMoveRequest {
-                items: vec![file("x.md")],
+                items: vec![file("deferred-plant.md")],
                 new_parent: "dest".into(),
             },
             &PanicBatchFault(BatchFaultPoint::MoveJournal),
@@ -3818,10 +3919,10 @@ fn recovery_marker_failure_defers_without_consuming_the_journal() {
     }));
     assert!(crashed.is_err());
     assert_eq!(structural_inflight_count(tmp.path()), 1);
-    assert!(tmp.path().join("dest/x.md").is_file());
+    assert!(tmp.path().join("dest/deferred-plant.md").is_file());
     drop(session);
 
-    unsafe { std::env::set_var("SLATE_TEST_FAULT_PLANT_MARKERS", "x.md") };
+    unsafe { std::env::set_var("SLATE_TEST_FAULT_PLANT_MARKERS", "deferred-plant.md") };
     let deferred = VaultSession::open(
         Arc::clone(&provider),
         SessionConfig::new(tmp.path().join(".slate")),
@@ -3838,14 +3939,14 @@ fn recovery_marker_failure_defers_without_consuming_the_journal() {
         "the journal must survive a deferred recovery"
     );
     assert!(
-        tmp.path().join("dest/x.md").is_file(),
+        tmp.path().join("dest/deferred-plant.md").is_file(),
         "the filesystem must be untouched by a deferred recovery"
     );
 
     let recovered = VaultSession::open(provider, SessionConfig::new(tmp.path().join(".slate")))
         .expect("the next open retries and completes recovery");
-    assert!(tmp.path().join("x.md").is_file());
-    assert!(!tmp.path().join("dest/x.md").exists());
+    assert!(tmp.path().join("deferred-plant.md").is_file());
+    assert!(!tmp.path().join("dest/deferred-plant.md").exists());
     assert_eq!(structural_inflight_count(tmp.path()), 0);
     drop(recovered);
 }
@@ -3866,16 +3967,16 @@ fn recovery_marker_failures_leave_no_partial_markers() {
     // (filesystem Forward, index Original).
     let (tmp, session, _state) = fixture(
         &[
-            ("left/a.md", "- [ ] alpha\n"),
-            ("left/b.md", "- [ ] beta\n"),
+            ("partial-markers/a.md", "- [ ] alpha\n"),
+            ("partial-markers/b.md", "- [ ] beta\n"),
         ],
-        &["left", "dest"],
+        &["partial-markers", "dest"],
     );
     let provider = Arc::clone(&session.provider);
     let crashed = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
         let _ = session.batch_move_with_faults(
             BatchMoveRequest {
-                items: vec![folder("left")],
+                items: vec![folder("partial-markers")],
                 new_parent: "dest".into(),
             },
             &PanicBatchFault(BatchFaultPoint::MoveIndex),
@@ -3892,7 +3993,7 @@ fn recovery_marker_failures_leave_no_partial_markers() {
         conn.execute("DELETE FROM text_write_intents", []).unwrap();
     }
 
-    unsafe { std::env::set_var("SLATE_TEST_FAULT_PLANT_MARKERS", "b.md") };
+    unsafe { std::env::set_var("SLATE_TEST_FAULT_PLANT_MARKERS", "partial-markers/b.md") };
     let deferred = VaultSession::open(
         Arc::clone(&provider),
         SessionConfig::new(tmp.path().join(".slate")),
@@ -3924,17 +4025,17 @@ fn recovery_marker_failures_leave_no_partial_markers() {
     // descendant indexed at the source, and the tasks converge.
     let recovered = VaultSession::open(provider, SessionConfig::new(tmp.path().join(".slate")))
         .expect("the next open retries and completes recovery");
-    assert!(tmp.path().join("left/a.md").is_file());
-    assert!(tmp.path().join("left/b.md").is_file());
-    assert!(!tmp.path().join("dest/left").exists());
+    assert!(tmp.path().join("partial-markers/a.md").is_file());
+    assert!(tmp.path().join("partial-markers/b.md").is_file());
+    assert!(!tmp.path().join("dest/partial-markers").exists());
     assert_eq!(structural_inflight_count(tmp.path()), 0);
-    unsafe { std::env::set_var("SLATE_TEST_INTENT_ABANDON_ZERO_FOR", "left/") };
+    unsafe { std::env::set_var("SLATE_TEST_INTENT_ABANDON_ZERO_FOR", "partial-markers/") };
     let page = recovered
         .tasks_in_vault(crate::TaskFilter::default(), Paging::first(50))
         .expect("the query succeeds");
     unsafe { std::env::remove_var("SLATE_TEST_INTENT_ABANDON_ZERO_FOR") };
-    assert!(page.items.iter().any(|r| r.path == "left/a.md"));
-    assert!(page.items.iter().any(|r| r.path == "left/b.md"));
+    assert!(page.items.iter().any(|r| r.path == "partial-markers/a.md"));
+    assert!(page.items.iter().any(|r| r.path == "partial-markers/b.md"));
 }
 
 #[test]
@@ -3949,12 +4050,12 @@ fn recovery_finalization_failure_defers_without_consuming_the_journal() {
     // deletion) and its failure defers: the journal survives, the
     // reversals are idempotent to re-enter, and the next open
     // completes recovery.
-    let (tmp, session, _state) = fixture(&[("y.md", "- [ ] yankee\n")], &["dest"]);
+    let (tmp, session, _state) = fixture(&[("deferred-finalize.md", "- [ ] yankee\n")], &["dest"]);
     let provider = Arc::clone(&session.provider);
     let crashed = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
         let _ = session.batch_move_with_faults(
             BatchMoveRequest {
-                items: vec![file("y.md")],
+                items: vec![file("deferred-finalize.md")],
                 new_parent: "dest".into(),
             },
             &PanicBatchFault(BatchFaultPoint::MoveJournal),
@@ -3964,7 +4065,7 @@ fn recovery_finalization_failure_defers_without_consuming_the_journal() {
     assert_eq!(structural_inflight_count(tmp.path()), 1);
     drop(session);
 
-    unsafe { std::env::set_var("SLATE_TEST_FAULT_RECOVERY_FINALIZE", "y.md") };
+    unsafe { std::env::set_var("SLATE_TEST_FAULT_RECOVERY_FINALIZE", "deferred-finalize.md") };
     let deferred = VaultSession::open(
         Arc::clone(&provider),
         SessionConfig::new(tmp.path().join(".slate")),
@@ -3982,12 +4083,12 @@ fn recovery_finalization_failure_defers_without_consuming_the_journal() {
     );
     // The reversals already ran before finalization — that is fine,
     // because re-entry is idempotent.
-    assert!(tmp.path().join("y.md").is_file());
+    assert!(tmp.path().join("deferred-finalize.md").is_file());
 
     let recovered = VaultSession::open(provider, SessionConfig::new(tmp.path().join(".slate")))
         .expect("the next open re-enters recovery and finalizes");
-    assert!(tmp.path().join("y.md").is_file());
-    assert!(!tmp.path().join("dest/y.md").exists());
+    assert!(tmp.path().join("deferred-finalize.md").is_file());
+    assert!(!tmp.path().join("dest/deferred-finalize.md").exists());
     assert_eq!(structural_inflight_count(tmp.path()), 0);
     drop(recovered);
 }

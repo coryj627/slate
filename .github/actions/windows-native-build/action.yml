@@ -1,0 +1,64 @@
+name: Windows native test build
+description: Build pinned Release native bindings and the Windows solution on a standard runner.
+inputs:
+  cache:
+    description: Restore GitHub-scoped dependency and native build caches; false measures a cold build.
+    default: 'true'
+  cache-scope:
+    description: Separate incompatible pilot build graphs without creating Namespace volumes.
+    default: windows-native
+runs:
+  using: composite
+  steps:
+    - name: Assert Windows x64
+      shell: pwsh
+      run: |
+        if ($env:PROCESSOR_ARCHITECTURE -ne 'AMD64') {
+          throw 'This build requires Windows x64.'
+        }
+    - name: Set up .NET 10
+      uses: actions/setup-dotnet@a98b56852c35b8e3190ac28c8c2271da59106c68  # v6.0.0
+      with:
+        dotnet-version: '10.0.x'
+    - name: Restore dependencies and native Release graph
+      if: inputs.cache == 'true'
+      uses: actions/cache@55cc8345863c7cc4c66a329aec7e433d2d1c52a9  # v6
+      with:
+        path: |
+          ~/.cargo/registry
+          ~/.cargo/git
+          ~/.nuget/packages
+          target/release
+          target/ci
+        # Dependency inputs only. A per-commit key missed on every new SHA,
+        # and each successful run then uploaded another 1.7-2.6 GB archive
+        # (about four minutes on hosted runners). That held the repository
+        # at its 10 GB cache limit. An unchanged graph now hits and saves
+        # nothing.
+        key: ${{ inputs.cache-scope }}-v1-${{ runner.os }}-${{ runner.arch }}-${{ hashFiles('rust-toolchain.toml', 'Cargo.lock', 'apps/slate-windows/**/*.csproj') }}
+    - name: Read the pinned C# binding generator tag
+      id: bindgen-pin
+      shell: pwsh
+      # The repository's one copy of the tag, shared with windows.yml. It
+      # moves in lockstep with the workspace uniffi dependency.
+      run: |
+        $tag = (Get-Content -LiteralPath apps/slate-windows/uniffi-bindgen-cs.version -Raw).Trim()
+        if ($tag -notmatch '^v\d+\.\d+\.\d+\+v\d+\.\d+\.\d+$') { throw "Malformed uniffi-bindgen-cs tag: $tag" }
+        "tag=$tag" >> $env:GITHUB_OUTPUT
+    - name: Cache pinned C# binding generator
+      id: bindgen-cache
+      if: inputs.cache == 'true'
+      uses: actions/cache@55cc8345863c7cc4c66a329aec7e433d2d1c52a9  # v6
+      with:
+        path: ~/.cargo/bin/uniffi-bindgen-cs.exe
+        key: uniffi-bindgen-cs-${{ steps.bindgen-pin.outputs.tag }}-${{ runner.os }}-x64
+    - name: Install pinned C# binding generator
+      if: steps.bindgen-cache.outputs.cache-hit != 'true'
+      shell: pwsh
+      run: cargo install --git https://github.com/NordSecurity/uniffi-bindgen-cs --tag '${{ steps.bindgen-pin.outputs.tag }}' uniffi-bindgen-cs --locked
+    - name: Generate Release bindings
+      shell: pwsh
+      run: ./apps/slate-windows/generate-bindings.ps1 -Locked
+    - name: Build Release solution
+      shell: pwsh
+      run: dotnet build apps/slate-windows/SlateWindows.slnx --configuration Release

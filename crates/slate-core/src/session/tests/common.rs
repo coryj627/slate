@@ -15,6 +15,12 @@ use std::sync::atomic::AtomicU32;
 /// vars (`SLATE_TEST_FAULT_AFTER_WRITE` and friends): two parallel
 /// tests setting different trigger values overwrite each other and
 /// the loser's fault never fires.
+///
+/// The guard does not isolate the many tests that never take it, and
+/// every session in the process matches a trigger as a path substring.
+/// Give each faulted fixture paths that no other test uses and set the
+/// trigger to one of them; a generic name such as `b.md` also fails
+/// unrelated batch moves running alongside the faulted open.
 pub(super) static ENV_FAULT_GUARD: std::sync::Mutex<()> = std::sync::Mutex::new(());
 
 pub(super) fn make_vault(

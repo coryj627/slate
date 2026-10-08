@@ -56,62 +56,17 @@
 # its dashboard-configured size — each lane ends with a footprint report;
 # watch the trend and grow the volume before the cliff.
 #
-# Cache-trust posture (adversarial rounds 1–2 on #1068; this
-# repository is PUBLIC, so fork PRs are possible even with
-# workflow-approval gates): the runner PROFILE is REF-CONDITIONAL.
-# Runs on refs/heads/main — pushes and main dispatches — use the
-# protected profile (winx64-fast, dashboard branch allow-list "main");
-# every other ref uses the unprotected -pr twin profile
-# (winx64-fast-pr). Namespace enforces cache-update protection
-# PER-PROFILE (dashboard-confirmed 2026-07-31, superseding the
-# per-tag-allow-list design — the allow-list field binds every volume
-# under a profile), so trusted and PR traffic must ride separate
-# profiles; the cache TAGS (slate-windows-rust / slate-windows-app /
-# slate-windows-model)
-# remain for per-lane lineage separation within each profile.
-# PR-controlled build code can therefore never write state a main
-# build consumes, while the 7–9 adversarial-review rounds per PR still
-# inherit each other's warm state inside the PR lineage (the blast
-# radius of a poisoned PR volume is other PR builds, never main
-# artifacts — the same bound GitHub's own cache scoping draws).
-# rust.yml, swift-tests.yml, audit.yml, and nightly.yml carry the
-# same ref-conditional profiles (#1068).
+# Cache trust: runner selection remains ref-conditional, but custom tags
+# share a volume across profiles/repositories. The main/-pr profile names
+# alone do not isolate slate-windows-rust/app/model. Enforced persistence
+# restrictions must cover every job/profile capable of attaching each tag.
+# The earlier per-profile isolation claim is superseded by the current
+# Namespace cache documentation (2026-09-22).
 #
-# The dashboard allow-list is MANDATORY enforcement, not optional
-# hardening: in-workflow routing cannot bind PR-controlled YAML, and
-# the trusted tag names are public before protection exists. The ONE
-# bootstrap runbook (adversarial round 2 on #1068):
-#   1. FREEZE — disable Actions for the ENTIRE repository
-#      (gh api -X PUT repos/OWNER/REPO/actions/permissions
-#      -F enabled=false), THEN drain by QUERY, not by a hand-written
-#      state list (adversarial round 5: "requested" and "pending" were
-#      missing and action_required is a conclusion, not a status):
-#      page through repos/OWNER/REPO/actions/runs and cancel or await
-#      every run whose status is not "completed"; proceed only when
-#      that count is zero and Actions is still disabled, and keep
-#      Actions disabled through steps 2—3. Per-workflow disable is NOT enough
-#      (adversarial round 4): completed runs stay re-runnable for 30
-#      days with their original main ref, so an old run re-run during
-#      the critical section would mount pre-reset and promote its
-#      fork on clean exit. The repo-level disable fences re-runs too;
-#   2. in the dashboard, set the PROFILE branch allow-list ("main",
-#      Show Advanced features) on the trusted profiles — winx64-fast,
-#      arm64-fast, mac-actions — and ensure the unprotected -pr twin
-#      profiles (winx64-fast-pr, arm64-fast-pr, mac-actions-pr) exist
-#      with the same platform/shape/cache size;
-#   3. RELEASE (reset) each trusted volume under the protected
-#      profiles — slate-windows-rust, slate-windows-app,
-#      slate-windows-model, slate-arm64,
-#      slate-mac — discarding any generation seeded before
-#      protection;
-#   4. RE-ENABLE Actions (enabled=true) and VERIFY on the next main
-#      run that
-#      every trusted lane's "Cache mount state (pre-build)" step reads
-#      absent/near-zero — that step runs BEFORE the build repopulates
-#      the volume, so it is the cold-mount proof (end-of-job reports
-#      only track growth and cannot distinguish a cold mount from a
-#      surviving stale generation). Its commit is the first protected
-#      generation. Leave every *-pr volume unprotected.
+# See docs/runbooks/ci-cache-policy.md for the provider verification and
+# drained transition. Workflow labels are routing, not a security boundary
+# against PR-controlled YAML. Do not reset volumes or claim protection from
+# these comments without verifying the effective provider policy.
 
 name: windows
 
@@ -179,7 +134,7 @@ jobs:
 
       - name: Assert runner architecture matches the cache lineage
         # Twin of rust.yml's guard: the NVMe cache volume is keyed per
-        # profile+repo+tag, NOT per architecture. If the profile's
+        # custom tag across profiles/repos, NOT per architecture. If the profile's
         # platform is ever re-pinned in the dashboard, arch-specific
         # rlibs would silently thrash the volume on every alternation.
         # Fail loudly instead; on a deliberate re-pin, update the
@@ -190,7 +145,7 @@ jobs:
             exit 1
           }
 
-      # rust-toolchain.toml pins 1.95.0; rustup materializes it (plus the
+      # rust-toolchain.toml pins 1.97.1; rustup materializes it (plus the
       # x86_64-pc-windows-msvc host target) on the first cargo call.
 
       - name: Cache Rust build (Namespace NVMe cache)
@@ -205,7 +160,7 @@ jobs:
           cache: rust
 
       - name: Cache mount state (pre-build)
-        # Bootstrap attestation (runbook step 4): read BEFORE any build
+        # Bootstrap attestation (docs/runbooks/ci-cache-policy.md step 3): read BEFORE any build
         # repopulates the volume, so a cold mount is distinguishable
         # from a surviving stale generation. Measured at the VOLUME
         # ROOT (adversarial round 4: junction/symlink mount points make
@@ -349,7 +304,7 @@ jobs:
             exit 1
           }
 
-      # rust-toolchain.toml pins 1.95.0; rustup materializes it (plus the
+      # rust-toolchain.toml pins 1.97.1; rustup materializes it (plus the
       # x86_64-pc-windows-msvc host target) on the first cargo call.
 
       - name: Cache Rust build + NuGet packages (Namespace NVMe cache)
@@ -365,7 +320,7 @@ jobs:
             ~/.nuget/packages
 
       - name: Cache mount state (pre-build)
-        # Bootstrap attestation (runbook step 4): read BEFORE any build
+        # Bootstrap attestation (docs/runbooks/ci-cache-policy.md step 3): read BEFORE any build
         # repopulates the volume, so a cold mount is distinguishable
         # from a surviving stale generation. Measured at the VOLUME
         # ROOT (adversarial round 4: junction/symlink mount points make
@@ -413,12 +368,21 @@ jobs:
             }
           }
 
+      - name: Read the pinned uniffi-bindgen-cs tag
+        id: bindgen-pin
+        # apps/slate-windows/uniffi-bindgen-cs.version is the repository's one
+        # copy, shared with the windows-native-build action.
+        run: |
+          $tag = (Get-Content -LiteralPath apps/slate-windows/uniffi-bindgen-cs.version -Raw).Trim()
+          if ($tag -notmatch '^v\d+\.\d+\.\d+\+v\d+\.\d+\.\d+$') { throw "Malformed uniffi-bindgen-cs tag: $tag" }
+          "tag=$tag" >> $env:GITHUB_OUTPUT
+
       - name: Cache uniffi-bindgen-cs
         id: bindgen-cache
         uses: actions/cache@55cc8345863c7cc4c66a329aec7e433d2d1c52a9  # v6
         with:
           path: ~/.cargo/bin/uniffi-bindgen-cs.exe
-          key: uniffi-bindgen-cs-v0.11.0+v0.31.0-${{ runner.os }}-x64
+          key: uniffi-bindgen-cs-${{ steps.bindgen-pin.outputs.tag }}-${{ runner.os }}-x64
 
       - name: Install uniffi-bindgen-cs
         if: steps.bindgen-cache.outputs.cache-hit != 'true'
@@ -428,7 +392,7 @@ jobs:
         # rust.yml/taiki-e reasoning: never shadow the image toolchain),
         # so the binary keeps riding the GitHub cache, which Namespace
         # runners proxy.
-        run: cargo install --git https://github.com/NordSecurity/uniffi-bindgen-cs --tag v0.11.0+v0.31.0 uniffi-bindgen-cs --locked
+        run: cargo install --git https://github.com/NordSecurity/uniffi-bindgen-cs --tag '${{ steps.bindgen-pin.outputs.tag }}' uniffi-bindgen-cs --locked
 
       - name: Set up .NET 10
         uses: actions/setup-dotnet@a98b56852c35b8e3190ac28c8c2271da59106c68  # v6.0.0
@@ -443,7 +407,23 @@ jobs:
 
       # The Connections model (W6-2 PR B2, B2-8) runs in its own lane below.
       - name: Test
-        run: dotnet test apps/slate-windows/tests/SlateWindows.Tests/SlateWindows.Tests.csproj --configuration Release --no-build --filter "FullyQualifiedName!~ConnectionsLeafTests.TheModelOf"
+        run: >-
+          dotnet test apps/slate-windows/tests/SlateWindows.Tests/SlateWindows.Tests.csproj
+          --configuration Release --no-build
+          --filter "FullyQualifiedName!~ConnectionsLeafTests.TheModelOf"
+          --logger "trx;LogFileName=slate-windows-app.trx"
+          --results-directory "${{ runner.temp }}\slate-app-results"
+          --blame-hang-timeout 10m --blame-hang-dump-type mini
+
+      - name: Upload app test results and hang evidence
+        if: ${{ always() }}
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a  # v7
+        with:
+          name: slate-windows-app-results-${{ github.run_id }}
+          overwrite: true
+          path: '${{ runner.temp }}\slate-app-results\**\*'
+          if-no-files-found: warn
+          retention-days: 7
 
       # Handoff to the flaui job: the exe resolver walks relative from
       # the test assembly, so the artifact root is apps/slate-windows
@@ -542,7 +522,7 @@ jobs:
             exit 1
           }
 
-      # rust-toolchain.toml pins 1.95.0; rustup materializes it (plus the
+      # rust-toolchain.toml pins 1.97.1; rustup materializes it (plus the
       # x86_64-pc-windows-msvc host target) on the first cargo call.
 
       - name: Cache Rust build + NuGet packages (Namespace NVMe cache)
@@ -558,7 +538,7 @@ jobs:
             ~/.nuget/packages
 
       - name: Cache mount state (pre-build)
-        # Bootstrap attestation (runbook step 4): read BEFORE any build
+        # Bootstrap attestation (docs/runbooks/ci-cache-policy.md step 3): read BEFORE any build
         # repopulates the volume, so a cold mount is distinguishable
         # from a surviving stale generation. Measured at the VOLUME
         # ROOT (adversarial round 4: junction/symlink mount points make
@@ -606,12 +586,21 @@ jobs:
             }
           }
 
+      - name: Read the pinned uniffi-bindgen-cs tag
+        id: bindgen-pin
+        # apps/slate-windows/uniffi-bindgen-cs.version is the repository's one
+        # copy, shared with the windows-native-build action.
+        run: |
+          $tag = (Get-Content -LiteralPath apps/slate-windows/uniffi-bindgen-cs.version -Raw).Trim()
+          if ($tag -notmatch '^v\d+\.\d+\.\d+\+v\d+\.\d+\.\d+$') { throw "Malformed uniffi-bindgen-cs tag: $tag" }
+          "tag=$tag" >> $env:GITHUB_OUTPUT
+
       - name: Cache uniffi-bindgen-cs
         id: bindgen-cache
         uses: actions/cache@55cc8345863c7cc4c66a329aec7e433d2d1c52a9  # v6
         with:
           path: ~/.cargo/bin/uniffi-bindgen-cs.exe
-          key: uniffi-bindgen-cs-v0.11.0+v0.31.0-${{ runner.os }}-x64
+          key: uniffi-bindgen-cs-${{ steps.bindgen-pin.outputs.tag }}-${{ runner.os }}-x64
 
       - name: Install uniffi-bindgen-cs
         if: steps.bindgen-cache.outputs.cache-hit != 'true'
@@ -621,7 +610,7 @@ jobs:
         # rust.yml/taiki-e reasoning: never shadow the image toolchain),
         # so the binary keeps riding the GitHub cache, which Namespace
         # runners proxy.
-        run: cargo install --git https://github.com/NordSecurity/uniffi-bindgen-cs --tag v0.11.0+v0.31.0 uniffi-bindgen-cs --locked
+        run: cargo install --git https://github.com/NordSecurity/uniffi-bindgen-cs --tag '${{ steps.bindgen-pin.outputs.tag }}' uniffi-bindgen-cs --locked
 
       - name: Set up .NET 10
         uses: actions/setup-dotnet@a98b56852c35b8e3190ac28c8c2271da59106c68  # v6.0.0
@@ -643,6 +632,7 @@ jobs:
           --filter "FullyQualifiedName~ConnectionsLeafTests.TheModelOf"
           --logger "trx;LogFileName=connections-model.trx"
           --results-directory "${{ runner.temp }}\slate-model-results"
+          --blame-hang-timeout 45m --blame-hang-dump-type mini
         env:
           SLATE_MODEL_SHARD_INDEX: '${{ matrix.shard }}'
           SLATE_MODEL_SHARD_COUNT: '2'
@@ -665,7 +655,7 @@ jobs:
     name: app model (windows x64)
     needs: [windows-model-shard]
     if: ${{ always() }}
-    runs-on: namespace-profile-x64-fast
+    runs-on: ubuntu-latest
     timeout-minutes: 5
     steps:
       - name: Require all model shards to succeed
@@ -731,6 +721,7 @@ jobs:
           apps/slate-windows/tests/SlateWindows.AccessibilityTests/bin/Release/net10.0-windows/SlateWindows.AccessibilityTests.dll
           --logger "trx;LogFileName=slate-windows-accessibility.trx"
           --results-directory "${{ runner.temp }}\slate-accessibility-results"
+          --blame-hang-timeout 5m --blame-hang-dump-type mini
         env:
           SLATE_REQUIRE_UI_AUTOMATION: '1'
           SLATE_ACCESSIBILITY_EVIDENCE_DIR: '${{ runner.temp }}\slate-accessibility-evidence'
@@ -752,15 +743,13 @@ jobs:
 
   # The historical required-check identity. Fails unless ALL lanes
   # succeed, so "build + test (windows x64)" green still means what it
-  # meant when the lanes were one serial job. Runs on the Namespace
-# Linux x64 profile (license-headers.yml's runner): it evaluates
-  # the lane results, and the vendor-standard runner boots fast and bills
-  # at 1x.
+  # meant when the lanes were one serial job. It evaluates the lane
+  # results on a standard hosted runner without an attached paid cache.
   gate:
     name: build + test (windows x64)
     needs: [rust-tests, windows, windows-model, flaui]
     if: ${{ always() }}
-    runs-on: namespace-profile-x64-fast
+    runs-on: ubuntu-latest
     timeout-minutes: 5
     steps:
       - name: Verify all windows lanes succeeded

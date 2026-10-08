@@ -9,27 +9,21 @@
 # and a concrete removal condition. Do not add to this list to silence
 # a fixable advisory; upgrade the dependency instead.
 #
-# Each ignore is TIMEBOXED, not permanent: CI (.github/workflows/audit.yml)
-# FAILS once the review-by date below passes, forcing the ignore to be
-# removed (if a fix shipped — see #480) or the date bumped with fresh
-# justification. An accepted-risk exception must never become silent debt.
-# review-by: 2026-10-03
+# Each active ignore MUST sit under a review-by date. CI
+# (.github/workflows/audit.yml) checks the file as a whole: it fails once any
+# review-by date has passed, or when active ignores exist and no date does.
+# One date may cover a group of related IDs, and the earliest date bounds
+# every ignore here. An accepted-risk exception must never become silent
+# debt. There are currently no active exceptions.
+# The quick-xml exceptions were removed by the immutable citationberg fix in
+# Cargo.toml; downloaded or shared CSL styles are untrusted parser input.
+# The temporary Git-source admission is NOT an advisory ignore: CI verifies
+# citationberg rev 06a591e2f237d25e1dfdedac3f3d1494c496c52d and the effective
+# quick-xml 0.41.0 graph. cargo-audit skips Git packages, so CI also audits a
+# lock copy naming that revision as published citationberg 0.7.0; advisories
+# against 0.7.0 still fail the gate. Provenance, offline packaging and the
+# fixed-registry removal milestone: docs/runbooks/citation-dependency-policy.md
+# (#480).
 
 [advisories]
-ignore = [
-    # quick-xml 0.38.4 — two high-severity (7.5) DoS advisories, pulled
-    # in transitively via hayagriva -> citationberg -> quick-xml. Both
-    # are fixed in quick-xml >= 0.41.0, but citationberg pins
-    # `quick-xml = "^0.38.1"` and NO released citationberg/hayagriva
-    # (checked through hayagriva 0.10.1 / citationberg 0.7.0) uses
-    # quick-xml 0.41 yet — so there is no upgrade path today.
-    #
-    # Practical exposure is low: quick-xml here only parses user-supplied
-    # CSL style XML in a local single-user app (attacker == the user).
-    #
-    # Tracking + removal criteria: https://github.com/coryj627/slate/issues/480
-    # Remove BOTH IDs once citationberg ships quick-xml >= 0.41 and we
-    # bump hayagriva (verify with `cargo tree -i quick-xml`).
-    "RUSTSEC-2026-0194", # quadratic runtime on duplicate start-tag attributes (CPU DoS)
-    "RUSTSEC-2026-0195", # unbounded namespace-declaration allocation in NsReader (memory DoS)
-]
+ignore = []

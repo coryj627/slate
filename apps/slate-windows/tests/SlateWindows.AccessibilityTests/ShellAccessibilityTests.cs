@@ -21,6 +21,7 @@ namespace SlateWindows.AccessibilityTests;
 public sealed partial class ShellAccessibilityTests
 {
     private const int AutomationTimeoutHResult = unchecked((int)0x80131505);
+    private const int UnavailableAutomationElementHResult = unchecked((int)0x80040201);
 
     [Fact]
     public void MainWindowDiscovery_RetriesTransientComTimeouts()
@@ -2325,6 +2326,59 @@ public sealed partial class ShellAccessibilityTests
         throw new Xunit.Sdk.XunitException($"{message} {FocusDiagnosis()}");
     }
 
+    private static AutomationElement AssertEventuallyFocused(
+        Func<AutomationElement?> resolveCurrentElement,
+        string message)
+    {
+        AutomationElement? focused = null;
+        int unavailableReads = 0;
+        bool restored = SpinWait.SpinUntil(
+            () =>
+            {
+                try
+                {
+                    AutomationElement? current = resolveCurrentElement();
+                    if (current?.Properties.HasKeyboardFocus.Value == true)
+                    {
+                        focused = current;
+                        return true;
+                    }
+                }
+                catch (Exception exception) when (IsUnavailableAutomationElement(exception))
+                {
+                    // A publish can retire a container between discovery and
+                    // the property read. Re-find the same logical target; do
+                    // not focus it or accept a different row as the landing.
+                    unavailableReads++;
+                }
+
+                return false;
+            },
+            TimeSpan.FromSeconds(10));
+
+        if (!restored)
+        {
+            throw new Xunit.Sdk.XunitException(
+                $"{message} {FocusDiagnosis()} Unavailable provider reads: {unavailableReads}.");
+        }
+
+        return focused!;
+    }
+
+    private static bool IsUnavailableAutomationElement(Exception exception)
+    {
+        for (Exception? current = exception; current is not null; current = current.InnerException)
+        {
+            if (current.HResult == UnavailableAutomationElementHResult
+                || current is FlaUI.Core.Exceptions.ElementNotAvailableException)
+            {
+                return true;
+            }
+        }
+
+        return false;
+    }
+
     /// <summary>
     /// Who owns the foreground, and whether it is this test's app — the
     /// difference between an environmental failure and a real one.
@@ -3325,6 +3379,7 @@ public sealed partial class ShellAccessibilityTests
             resolvedRow = republishedRow;
 
             // ---- Details sheet: in-window, and focus returns -------
+            string resolvedCitationName = resolvedRow!.Properties.Name.Value;
             resolvedRow!.Patterns.SelectionItem.Pattern.Select();
             resolvedRow.Focus();
             // The first witnessed step: once the launch has settled (contract
@@ -3475,8 +3530,19 @@ public sealed partial class ShellAccessibilityTests
 
             PressKey(VirtualKeyShort.ESCAPE);
             AssertElementDisappears(window, automation, "CitationDetailsSheet");
-            AssertEventuallyFocused(
-                resolvedRow, "Escape did not return focus to the citation row.");
+            // Citations republish into new containers, including while a
+            // details sheet is open. Assert the same logical row's landing
+            // through its live provider rather than requiring the old proxy
+            // to survive that legitimate lifecycle.
+            resolvedRow = AssertEventuallyFocused(
+                () => window
+                    .FindFirstDescendant(automation.ConditionFactory.ByAutomationId("PanelCitationsList"))?
+                    .FindAllDescendants(automation.ConditionFactory.ByControlType(ControlType.ListItem))
+                    .SingleOrDefault(item => string.Equals(
+                        item.Properties.Name.ValueOrDefault,
+                        resolvedCitationName,
+                        StringComparison.Ordinal)),
+                "Escape did not return focus to the same citation row.");
 
             // The Jump menu item after S11: its enable condition IS the
             // details sheet (CitationDetails non-null — the Windows
@@ -7010,7 +7076,8 @@ public sealed partial class ShellAccessibilityTests
     /// W6-1 §E TE-11e (E14/E19, the journeys): the AUTHORING journey,
     /// end to end through the real chrome — File menu New Canvas into
     /// its own tab, the onboarding region carrying core's chord
-    /// sentence, Ctrl+Alt+N creating the first card, activation opening
+    /// sentence, Ctrl+Alt+T creating the first card while the legacy
+    /// Ctrl+Alt+N shortcut is reserved, activation opening
     /// the card editor sheet (axe-scanned), Escape COMMITTING the
     /// draft (t0 §2 M8), and Ctrl+Z undoing through the history domain
     /// — every leg a real keystroke or UIA invoke, no test seams.
@@ -7046,6 +7113,11 @@ public sealed partial class ShellAccessibilityTests
                 return;
             }
 
+            // NVDA's installed shortcut owns N on an AT desktop. Hold
+            // that same reservation on clean CI, without changing or
+            // restarting an existing owner. Only T is physically sent.
+            using var legacyReservation = new ReservedLegacyCanvasNewCardChord();
+
             using var automation = new UIA3Automation();
             Window window = WaitForMainWindow(
                 process,
@@ -7063,9 +7135,15 @@ public sealed partial class ShellAccessibilityTests
             AutomationElement onboarding = WaitForElement(
                 window, "CanvasEmptyOnboarding", TimeSpan.FromSeconds(20));
             Assert.Contains(
-                "Control Alt N",
+                "Control Alt T",
                 onboarding.Properties.Name.Value,
                 StringComparison.Ordinal);
+
+            AutomationElement newCardMenuItem = WaitForMenuItem(
+                window, "CanvasMenu", "CanvasNewCardMenuItem", TimeSpan.FromSeconds(10));
+            Assert.Equal("Ctrl+Alt+T", newCardMenuItem.Properties.AcceleratorKey.Value);
+            WaitForElement(window, "CanvasMenu", TimeSpan.FromSeconds(10))
+                .Patterns.ExpandCollapse.Pattern.Collapse();
 
             // ---- The first card, by chord (E19) ---------------------
             // Every republish rebuilds the tree's items, so a cached
@@ -7095,7 +7173,7 @@ public sealed partial class ShellAccessibilityTests
             tree.Focus();
             Wait.UntilInputIsProcessed(TimeSpan.FromMilliseconds(250));
             Keyboard.TypeSimultaneously(
-                VirtualKeyShort.CONTROL, VirtualKeyShort.ALT, VirtualKeyShort.KEY_N);
+                VirtualKeyShort.CONTROL, VirtualKeyShort.ALT, VirtualKeyShort.KEY_T);
             AutomationElement? card = null;
             Assert.True(
                 SpinWait.SpinUntil(
@@ -7107,7 +7185,7 @@ public sealed partial class ShellAccessibilityTests
                         return card is not null;
                     },
                     TimeSpan.FromSeconds(15)),
-                "Ctrl+Alt+N never produced a text card row; exited="
+                "Ctrl+Alt+T never produced a text card row; exited="
                 + process.HasExited
                 + "; app log tail: "
                 + ReadSharedLog(Path.Combine(logDirectory, "slate-windows.log")));
@@ -7143,6 +7221,38 @@ public sealed partial class ShellAccessibilityTests
                 + draft.Patterns.Value.Pattern.Value.ValueOrDefault
                 + "'; box id: "
                 + draft.Properties.AutomationId.ValueOrDefault);
+
+            // The sheet is a sibling of the canvas surface. Its draft
+            // owns this press: the canvas shortcut must not add another
+            // card or steal focus from the edit in progress. Rows() reads
+            // empty on a transient COM fault, so the baseline waits for a
+            // real read and the negative check samples a window, ignoring
+            // empty reads: one fault can neither pass nor fail it.
+            int cardsBeforeEditorChord = 0;
+            Assert.True(
+                SpinWait.SpinUntil(
+                    () => (cardsBeforeEditorChord = Rows().Length) > 0,
+                    TimeSpan.FromSeconds(10)),
+                "the outline rows never read before the editor chord.");
+            Keyboard.TypeSimultaneously(
+                VirtualKeyShort.CONTROL, VirtualKeyShort.ALT, VirtualKeyShort.KEY_T);
+            Wait.UntilInputIsProcessed(TimeSpan.FromMilliseconds(250));
+            var cardCounts = new List<int>();
+            var sampling = System.Diagnostics.Stopwatch.StartNew();
+            do
+            {
+                int count = Rows().Length;
+                if (count > 0)
+                {
+                    cardCounts.Add(count);
+                }
+                Thread.Sleep(50);
+            }
+            while (sampling.Elapsed < TimeSpan.FromSeconds(1));
+            Assert.NotEmpty(cardCounts);
+            Assert.All(cardCounts, count => Assert.Equal(cardsBeforeEditorChord, count));
+            Assert.Equal("Hello from the journey", draft.Patterns.Value.Pattern.Value.Value);
+            AssertEventuallyFocused(draft, "the canvas chord took focus from the open card editor.");
 
             // Escape COMMITS (t0 §2 M8) — the sheet closes and the row
             // carries the new title.
@@ -7358,7 +7468,7 @@ public sealed partial class ShellAccessibilityTests
             {
                 window.SetForeground();
                 Keyboard.TypeSimultaneously(
-                    VirtualKeyShort.CONTROL, VirtualKeyShort.ALT, VirtualKeyShort.KEY_N);
+                    VirtualKeyShort.CONTROL, VirtualKeyShort.ALT, VirtualKeyShort.KEY_T);
                 if (TryWaitForElement(window, "CanvasCardEditorSheet", TimeSpan.FromSeconds(15)) is null)
                 {
                     Assert.Fail(
@@ -7377,8 +7487,8 @@ public sealed partial class ShellAccessibilityTests
                     what + " never produced a card row");
             }
 
-            NewCardByChord(1, "the first Ctrl+Alt+N");
-            NewCardByChord(2, "the second Ctrl+Alt+N");
+            NewCardByChord(1, "the first Ctrl+Alt+T");
+            NewCardByChord(2, "the second Ctrl+Alt+T");
 
             // ---- Mark both by chord; the rows say so to UIA (G1) ----
             Keyboard.TypeSimultaneously(
@@ -7751,7 +7861,7 @@ public sealed partial class ShellAccessibilityTests
             {
                 SeatTree();
                 Keyboard.TypeSimultaneously(
-                    VirtualKeyShort.CONTROL, VirtualKeyShort.ALT, VirtualKeyShort.KEY_N);
+                    VirtualKeyShort.CONTROL, VirtualKeyShort.ALT, VirtualKeyShort.KEY_T);
                 if (TryWaitForElement(window, "CanvasCardEditorSheet", TimeSpan.FromSeconds(15)) is null)
                 {
                     Assert.Fail(
@@ -7765,8 +7875,8 @@ public sealed partial class ShellAccessibilityTests
                     what + " never produced its card row; rows: " + RowsDump());
             }
 
-            NewCardByChord(1, "the first Ctrl+Alt+N");
-            NewCardByChord(2, "the second Ctrl+Alt+N");
+            NewCardByChord(1, "the first Ctrl+Alt+T");
+            NewCardByChord(2, "the second Ctrl+Alt+T");
             string[] twoCards = CardRows().Select(NameOf).ToArray();
             Assert.Equal(2, twoCards.Length);
             string firstCard = twoCards[0];
@@ -8170,7 +8280,7 @@ public sealed partial class ShellAccessibilityTests
             {
                 window.SetForeground();
                 Keyboard.TypeSimultaneously(
-                    VirtualKeyShort.CONTROL, VirtualKeyShort.ALT, VirtualKeyShort.KEY_N);
+                    VirtualKeyShort.CONTROL, VirtualKeyShort.ALT, VirtualKeyShort.KEY_T);
                 if (TryWaitForElement(window, "CanvasCardEditorSheet", TimeSpan.FromSeconds(15)) is null)
                 {
                     Assert.Fail(
@@ -8189,8 +8299,8 @@ public sealed partial class ShellAccessibilityTests
                     what + " never produced a card row");
             }
 
-            NewCardByChord(1, "the first Ctrl+Alt+N");
-            NewCardByChord(2, "the second Ctrl+Alt+N");
+            NewCardByChord(1, "the first Ctrl+Alt+T");
+            NewCardByChord(2, "the second Ctrl+Alt+T");
 
             // ---- Move mode: the M6 controls appear with the mode ----
             AutomationElement? Commit() =>
@@ -11593,6 +11703,43 @@ public sealed partial class ShellAccessibilityTests
     private const int ErrorHotkeyAlreadyRegistered = 1409;
 
     private static int _chordProbeId = 0x5131;
+
+    private sealed class ReservedLegacyCanvasNewCardChord : IDisposable
+    {
+        // Application-defined IDs stay below 0xC000. Accessibility facts
+        // run serially on the shared desktop; this ID is distinct from
+        // the short-lived availability probes above.
+        private const int ReservationId = 0x6171;
+        private readonly int _threadId = Environment.CurrentManagedThreadId;
+        private bool _owned;
+
+        public ReservedLegacyCanvasNewCardChord()
+        {
+            _owned = NativeHotkey.RegisterHotKey(
+                IntPtr.Zero, ReservationId,
+                NativeHotkey.ModControl | NativeHotkey.ModAlt, 0x4E);
+            if (!_owned)
+            {
+                int error = System.Runtime.InteropServices.Marshal.GetLastWin32Error();
+                Assert.True(error == ErrorHotkeyAlreadyRegistered,
+                    $"Legacy Canvas New Card reservation failed with Win32 error {error}; "
+                    + $"only an existing owner ({ErrorHotkeyAlreadyRegistered}) proves the premise.");
+            }
+        }
+
+        public void Dispose()
+        {
+            if (!_owned)
+            {
+                return;
+            }
+            Assert.Equal(_threadId, Environment.CurrentManagedThreadId);
+            bool released = NativeHotkey.UnregisterHotKey(IntPtr.Zero, ReservationId);
+            int error = System.Runtime.InteropServices.Marshal.GetLastWin32Error();
+            _owned = !released;
+            Assert.True(released, $"Legacy Canvas New Card reservation leaked; Win32 error {error}.");
+        }
+    }
 
     private static class NativeHotkey
     {

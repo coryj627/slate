@@ -506,9 +506,11 @@ fn validate_windows_relative_path(relative: &str) -> Result<(), &'static str> {
 /// Put an absolute Windows vault root into the verbatim namespace so every
 /// descendant operation can cross the legacy `MAX_PATH` boundary. Vault paths
 /// are validated before joining, which is important because verbatim paths
-/// otherwise permit Win32 spellings such as trailing dots and spaces.
+/// otherwise permit Win32 spellings such as trailing dots and spaces. A
+/// SQLite database path long enough to need it takes the same form
+/// (`db::sqlite_open_path`).
 #[cfg(windows)]
-fn windows_extended_path(path: &Path) -> PathBuf {
+pub(crate) fn windows_extended_path(path: &Path) -> PathBuf {
     use std::ffi::OsString;
     use std::os::windows::ffi::{OsStrExt, OsStringExt};
 

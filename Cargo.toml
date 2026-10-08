@@ -147,6 +147,15 @@ ctrlc = "3"
 assert_cmd = "2"
 predicates = "3"
 
+# citationberg 0.7.0 still resolves the vulnerable quick-xml 0.38 line.
+# This immutable upstream commit changes only that dependency to 0.41,
+# fixing RUSTSEC-2026-0194 and RUSTSEC-2026-0195 without an advisory ignore.
+# Replace with the released registry fix once it is admitted through the
+# citation dependency chain, then re-audit and qualify the native builds.
+# Tracking: https://github.com/coryj627/slate/issues/480
+[patch.crates-io]
+citationberg = { git = "https://github.com/typst/citationberg", rev = "06a591e2f237d25e1dfdedac3f3d1494c496c52d" }
+
 [profile.dev]
 # Faster incremental builds during development.
 opt-level = 0
@@ -155,6 +164,7 @@ debug = true
 [profile.release]
 opt-level = 3
 lto = "thin"
+# macOS overrides this to none in .cargo/config.toml (rust-lang/rust#157750).
 strip = "symbols"
 
 # CI test profile (`cargo test --profile ci`): optimized code with every

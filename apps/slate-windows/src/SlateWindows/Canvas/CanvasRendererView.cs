@@ -126,6 +126,15 @@ internal sealed class CanvasRendererView : FrameworkElement
     /// verb acts on the pane it belongs to).</summary>
     internal CanvasPresentationEngine Engine => _engine;
 
+    protected override void OnPropertyChanged(DependencyPropertyChangedEventArgs e)
+    {
+        base.OnPropertyChanged(e);
+        if (e.Property == VisibilityProperty)
+        {
+            RefreshAutomationChildren();
+        }
+    }
+
     protected override int VisualChildrenCount => _visuals.Count;
 
     protected override Visual GetVisualChild(int index) => _visuals[index];
@@ -141,6 +150,8 @@ internal sealed class CanvasRendererView : FrameworkElement
         DrawCards(state);
         DrawEdges(state);
         DrawRing(state);
+        RefreshAutomationChildren();
+        RetireReleasedTombstones(state);
         // The tooltip revalidates on EVERY install: the selection
         // trigger, the truncation set and the content's validity all
         // derive from the state that just landed (ID-9's
@@ -149,6 +160,51 @@ internal sealed class CanvasRendererView : FrameworkElement
         // A reveal owed to a card the previous state lacked is paid by
         // the first install that has it (#1271, review round 2).
         PayOwedReveal();
+    }
+
+    /// <summary>WPF caches the board's children. Refresh after the winning
+    /// install or its own visibility change, before a selection provider
+    /// needs to connect a newly materialized card through that child list.
+    /// Keep the existing peer identities and do not create a peer merely
+    /// because the renderer changed.</summary>
+    /// <remarks>
+    /// Not <c>ResetChildrenCache</c>: with a structure-changed listener
+    /// present, its per-child diff hands each newly windowed card's provider
+    /// to UIA, and a provider holds its peer strongly, so every card the
+    /// board ever windowed stayed live and became a retained tombstone at the
+    /// next realization. The cache is rebuilt without that diff, and a
+    /// changed child list raises the container's one children-invalidated
+    /// event instead (contract 34 D3), after which clients re-walk and hold
+    /// only what they keep.
+    /// </remarks>
+    private void RefreshAutomationChildren()
+    {
+        if (System.Windows.Automation.Peers.UIElementAutomationPeer.FromElement(this)
+            is not CanvasRendererAutomationPeer board)
+        {
+            return;
+        }
+        System.Collections.Generic.List<System.Windows.Automation.Peers.AutomationPeer> before =
+            board.GetChildren() ?? [];
+        WpfEditorPeerConnection.InvalidateChildren(board);
+        if (!before.SequenceEqual(board.GetChildren() ?? []))
+        {
+            board.RaiseChildrenInvalidated();
+        }
+    }
+
+    /// <summary>D3's retirement rule, the state half: a retained key whose
+    /// peer nothing holds any more loses its tombstone in the next install,
+    /// rather than riding every later derive and draw. Runs after the
+    /// children refresh, which holds every windowed card's peer.</summary>
+    private void RetireReleasedTombstones(CanvasPresentationState state)
+    {
+        if (state.Retained.All(PeerIsLive))
+        {
+            return;
+        }
+        _engine.CommitRetained(
+            System.Collections.Immutable.ImmutableHashSet.CreateRange(state.Retained.Where(PeerIsLive)));
     }
 
     private void DrawCards(CanvasPresentationState state)
@@ -457,16 +513,32 @@ internal sealed class CanvasRendererView : FrameworkElement
 
     // --- The peer surface (§D D3): identity-stable, state-read -----------
 
-    private readonly System.Collections.Generic.Dictionary<CanvasPeerKey, CanvasCardAutomationPeer>
+    /// <summary>
+    /// The registry holds weak identity only (D3's retirement rule). A peer
+    /// stays the same object for as long as anything holds it — a client's
+    /// provider, the board's cached children — and a key nothing holds is
+    /// reclaimed and minted afresh on its next use, which no holder can
+    /// observe. Every install refreshes the board's children and mints a
+    /// peer per windowed card, so a strong registry kept every card the
+    /// board ever windowed, and a realization made them all tombstones.
+    /// </summary>
+    private readonly System.Collections.Generic.Dictionary<CanvasPeerKey, WeakReference<CanvasCardAutomationPeer>>
         _peers = [];
+
+    /// <summary>The registry size that triggers the next sweep of reclaimed
+    /// identities: twice the entries the last sweep kept, so sweeping costs
+    /// amortized constant time per mint.</summary>
+    private int _peerSweepAt = PeerSweepFloor;
+
+    private const int PeerSweepFloor = 64;
 
     protected override System.Windows.Automation.Peers.AutomationPeer OnCreateAutomationPeer() =>
         new CanvasRendererAutomationPeer(this);
 
     /// <summary>The container's children: one peer per MATERIALIZED
-    /// placement, document order — minted on demand, identity-stable
-    /// per key within this renderer (D3), retained in the registry as
-    /// long as materialized or externally realized.</summary>
+    /// placement, document order — minted on demand and identity-stable
+    /// per key within this renderer while anything holds the peer
+    /// (D3).</summary>
     internal System.Collections.Generic.List<System.Windows.Automation.Peers.AutomationPeer>
         MaterializedPeers()
     {
@@ -489,13 +561,14 @@ internal sealed class CanvasRendererView : FrameworkElement
         return children;
     }
 
-    /// <summary>The registry read: an existing peer, or mint one for a
-    /// key the current population knows. Identity commits only with
-    /// use — a key nobody asked for holds nothing (the retirement
-    /// rule's registry half).</summary>
+    /// <summary>The registry read: a live peer, or mint one for a key the
+    /// current population knows. Identity commits only with use — a key
+    /// nobody asked for holds nothing (the retirement rule's registry
+    /// half).</summary>
     internal CanvasCardAutomationPeer? PeerFor(CanvasPeerKey key)
     {
-        if (_peers.TryGetValue(key, out CanvasCardAutomationPeer? existing))
+        if (_peers.TryGetValue(key, out WeakReference<CanvasCardAutomationPeer>? held)
+            && held.TryGetTarget(out CanvasCardAutomationPeer? existing))
         {
             return existing;
         }
@@ -506,9 +579,31 @@ internal sealed class CanvasRendererView : FrameworkElement
             return null;
         }
         var peer = new CanvasCardAutomationPeer(this, key);
-        _peers[key] = peer;
+        if (held is not null)
+        {
+            held.SetTarget(peer);
+            return peer;
+        }
+        _peers[key] = new WeakReference<CanvasCardAutomationPeer>(peer);
+        if (_peers.Count >= _peerSweepAt)
+        {
+            foreach (CanvasPeerKey reclaimed in _peers
+                .Where(entry => !entry.Value.TryGetTarget(out _))
+                .Select(entry => entry.Key)
+                .ToArray())
+            {
+                _ = _peers.Remove(reclaimed);
+            }
+            _peerSweepAt = Math.Max(PeerSweepFloor, _peers.Count * 2);
+        }
         return peer;
     }
+
+    /// <summary>Whether a client or the board still holds the key's
+    /// peer.</summary>
+    private bool PeerIsLive(CanvasPeerKey key) =>
+        _peers.TryGetValue(key, out WeakReference<CanvasCardAutomationPeer>? held)
+        && held.TryGetTarget(out _);
 
     /// <summary>The item-container search (D3's first-touch cell): by
     /// Name against the descriptor index, or the next card in document
@@ -563,7 +658,7 @@ internal sealed class CanvasRendererView : FrameworkElement
             return;
         }
         var retained = System.Collections.Immutable.ImmutableHashSet.CreateRange(
-            _peers.Keys).Add(key);
+            _peers.Keys.Where(PeerIsLive)).Add(key);
         _engine.CommitRetained(retained);
         _engine.CommitViewport(v => PanToContain(v, node));
     }

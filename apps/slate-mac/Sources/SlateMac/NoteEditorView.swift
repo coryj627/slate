@@ -460,6 +460,14 @@ struct NoteEditorView: NSViewRepresentable {
         /// completion alone can't distinguish "repainted" from "gave up".
         private(set) var highlightApplyCount: UInt64 = 0
 
+        #if DEBUG
+        /// Deterministic concurrency seams for tests. The apply hook is
+        /// captured per pass so a successor can use its own barrier. Both
+        /// hooks are nil in normal execution and introduce no suspension.
+        var highlightBeforeApplyForTesting: (@MainActor () async -> Void)?
+        var highlightWillAwaitForTesting: (@MainActor (Task<Void, Never>) -> Void)?
+        #endif
+
         /// Accumulated edited region since the last successful highlight
         /// apply, in **current-buffer UTF-16** coords — the `dirty` range
         /// the #379 ranged highlighter scopes the recompute to. Maintained
@@ -826,6 +834,9 @@ struct NoteEditorView: NSViewRepresentable {
             // snapshot` guard below, which drops a result computed against a
             // mid-flight-reset buffer. That guard is the sole barrier (#404).
             let buffer = documentBuffer
+            #if DEBUG
+            let beforeApplyForTesting = highlightBeforeApplyForTesting
+            #endif
             highlightTask = Task { @MainActor [weak self] in
                 if debounced {
                     try? await Task.sleep(nanoseconds: Self.highlightDebounceNanos)
@@ -834,6 +845,9 @@ struct NoteEditorView: NSViewRepresentable {
                 let prepared = await Task.detached(priority: .userInitiated) {
                     Self.computeHighlight(buffer: buffer, snapshot: snapshot, dirty: dirty)
                 }.value
+                #if DEBUG
+                if let beforeApplyForTesting { await beforeApplyForTesting() }
+                #endif
                 guard let self, !Task.isCancelled else { return }
                 guard self.textView?.string == snapshot else { return }
                 self.applyHighlight(prepared)
@@ -876,6 +890,9 @@ struct NoteEditorView: NSViewRepresentable {
             var awaited: Task<Void, Never>?
             for _ in 0..<64 {
                 guard let task = highlightTask, task != awaited else { break }
+                #if DEBUG
+                highlightWillAwaitForTesting?(task)
+                #endif
                 await task.value
                 awaited = task
             }

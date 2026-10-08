@@ -238,6 +238,9 @@ internal sealed class CanvasNavigator
         // §E TE-11 (E19/ED-1): the verb chord and the history
         // pair - canvas-scoped delivery, live exactly while a canvas
         // surface holds the keys (rule R2).
+        // Ctrl+Alt+N is NVDA's default launch/restart shortcut. Advertise
+        // T for a text card, retaining N only when Windows delivers it.
+        AddChord(Key.T, ModifierKeys.Control | ModifierKeys.Alt, NewCardFromKey);
         AddChord(Key.N, ModifierKeys.Control | ModifierKeys.Alt, NewCardFromKey);
         // §G2 TG2-4 (G2-1/G2-9): the connected-card chord, mac's ⌃⌥⌘N — the
         // presenter's owner rides into the operation (IG2-34).
@@ -269,7 +272,7 @@ internal sealed class CanvasNavigator
             WhereAmIFromKey);
     }
 
-    /// <summary>§E TE-11: Ctrl+Alt+N - the funnel owns every
+    /// <summary>§E TE-11: Ctrl+Alt+T (legacy Ctrl+Alt+N) - the funnel owns every
     /// refusal, so the key only relays the verb.</summary>
     private bool NewCardFromKey()
     {

@@ -1482,7 +1482,7 @@ struct OpenBaseState {
 /// busy_timeout make a second connection safe; the schema already
 /// exists (no migrations here).
 fn open_worker_connection(cache_dir: &std::path::Path) -> Result<Connection, rusqlite::Error> {
-    let conn = Connection::open(cache_dir.join("cache.sqlite"))?;
+    let conn = Connection::open(crate::db::sqlite_open_path(&cache_dir.join("cache.sqlite")))?;
     crate::db::register_connection_functions(&conn)?;
     conn.busy_timeout(std::time::Duration::from_secs(5))?;
     conn.pragma_update(None, "foreign_keys", "ON")?;
@@ -21839,6 +21839,9 @@ mod tests {
     #[path = "structural_identity.rs"]
     mod structural_identity;
     mod trash_confirmation;
+    #[cfg(windows)]
+    #[path = "windows_long_paths.rs"]
+    mod windows_long_paths;
 
     #[path = "link_integrity.rs"]
     mod link_integrity;

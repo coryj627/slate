@@ -1,0 +1,189 @@
+# Branch-only experiment; production Mac routing and account caches are untouched.
+name: Mac CI pilot
+run-name: Mac pilot ${{ inputs.runner || 'registration' }} / ${{ inputs.pair_id || 'registration' }}
+
+on:
+  pull_request:
+    paths:
+      - '.github/workflows/mac-ci-pilot.yml'
+      - 'scripts/mac-ci-pilot.py'
+      - 'scripts/tests/test_mac_ci_pilot.py'
+      - 'docs/runbooks/mac-ci-pilot.md'
+  workflow_dispatch:
+    inputs:
+      source_sha:
+        description: Frozen application source; literal full commit, ancestor of this harness.
+        type: string
+        default: a64eb393f5470b9cdb94f3f537a85ceeeda3f7c4
+      runner:
+        description: Complete native and independent analyzer candidate; no Namespace cache volume.
+        type: choice
+        options: [hosted-xcode27, namespace-tahoeslim6x14]
+        default: hosted-xcode27
+      pair_id:
+        description: Common identifier for the two provider runs; use a new identifier for each repetition.
+        type: string
+        default: mac-pair-1
+
+permissions:
+  contents: read
+
+concurrency:
+  group: mac-ci-pilot-${{ github.ref }}-${{ inputs.runner || 'registration' }}-${{ inputs.pair_id || 'registration' }}
+  cancel-in-progress: false
+
+env:
+  SOURCE_SHA: ${{ inputs.source_sha || 'a64eb393f5470b9cdb94f3f537a85ceeeda3f7c4' }}
+  CANDIDATE: ${{ inputs.runner || 'hosted-xcode27' }}
+  PAIR_ID: ${{ inputs.pair_id || 'registration' }}
+
+jobs:
+  registration:
+    name: Register pilot and verify fail-closed parser
+    if: github.event_name == 'pull_request'
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    steps:
+      - name: Checkout harness
+        uses: actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0  # v7
+        with:
+          persist-credentials: false
+      - name: Set up Python
+        uses: actions/setup-python@5fda3b95a4ea91299a34e894583c3862153e4b97  # v7.0.0
+        with:
+          python-version: '3.13'
+      - name: Validate inputs and parser failure boundaries
+        run: |
+          python scripts/mac-ci-pilot.py validate-inputs
+          python -m unittest discover -s scripts/tests -p test_mac_ci_pilot.py
+
+  native:
+    name: Full native cold and warm (${{ inputs.runner }})
+    if: github.event_name == 'workflow_dispatch'
+    runs-on: ${{ inputs.runner == 'namespace-tahoeslim6x14' && 'nscloud-macos-tahoe-slim-arm64-6x14' || 'xcode-27' }}
+    timeout-minutes: 60
+    steps:
+      - name: Checkout experiment harness with ancestry
+        uses: actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0  # v7
+        with:
+          ref: ${{ github.sha }}
+          path: pilot-harness
+          fetch-depth: 0
+          persist-credentials: false
+      - name: Set up Python
+        uses: actions/setup-python@5fda3b95a4ea91299a34e894583c3862153e4b97  # v7.0.0
+        with:
+          python-version: '3.13'
+      - name: Validate literal source and candidate before checkout
+        run: python pilot-harness/scripts/mac-ci-pilot.py validate-inputs
+      - name: Checkout frozen application source
+        uses: actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0  # v7
+        with:
+          ref: ${{ env.SOURCE_SHA }}
+          path: source
+          fetch-depth: 0
+          persist-credentials: false
+      - name: Qualify source, cold products, architecture and exact Xcode
+        run: |
+          python pilot-harness/scripts/mac-ci-pilot.py preflight --layer native \
+            --source "$GITHUB_WORKSPACE/source" --evidence "$RUNNER_TEMP/mac-pilot-native"
+      - name: Upload pre-build metadata
+        if: always()
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a  # v7
+        with:
+          name: mac-pilot-preflight-${{ github.run_id }}-${{ github.run_attempt }}-native
+          path: '${{ runner.temp }}/mac-pilot-native/metadata.json'
+          if-no-files-found: warn
+          retention-days: 14
+      - name: Complete native cold and same-VM warm passes
+        run: |
+          exec python pilot-harness/scripts/mac-ci-pilot.py native \
+            --source "$GITHUB_WORKSPACE/source" --evidence "$RUNNER_TEMP/mac-pilot-native"
+      - name: Preserve full or partial native evidence
+        if: always()
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a  # v7
+        with:
+          name: mac-pilot-result-${{ github.run_id }}-${{ github.run_attempt }}-native
+          path: '${{ runner.temp }}/mac-pilot-native/*'
+          if-no-files-found: error
+          retention-days: 14
+
+  analyzer:
+    name: Independent pinned analyzer cold and warm (${{ inputs.runner }})
+    if: github.event_name == 'workflow_dispatch'
+    runs-on: ${{ inputs.runner == 'namespace-tahoeslim6x14' && 'nscloud-macos-tahoe-slim-arm64-6x14' || 'xcode-27' }}
+    timeout-minutes: 30
+    steps:
+      - name: Checkout experiment harness with ancestry
+        uses: actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0  # v7
+        with:
+          ref: ${{ github.sha }}
+          path: pilot-harness
+          fetch-depth: 0
+          persist-credentials: false
+      - name: Set up Python
+        uses: actions/setup-python@5fda3b95a4ea91299a34e894583c3862153e4b97  # v7.0.0
+        with:
+          python-version: '3.13'
+      - name: Validate literal source and candidate before checkout
+        run: python pilot-harness/scripts/mac-ci-pilot.py validate-inputs
+      - name: Checkout frozen application source
+        uses: actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0  # v7
+        with:
+          ref: ${{ env.SOURCE_SHA }}
+          path: source
+          fetch-depth: 0
+          persist-credentials: false
+      - name: Qualify exact source and Xcode independently
+        run: |
+          python pilot-harness/scripts/mac-ci-pilot.py preflight --layer analyzer \
+            --source "$GITHUB_WORKSPACE/source" --evidence "$RUNNER_TEMP/mac-pilot-analyzer"
+      - name: Upload pre-build metadata
+        if: always()
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a  # v7
+        with:
+          name: mac-pilot-preflight-${{ github.run_id }}-${{ github.run_attempt }}-analyzer
+          path: '${{ runner.temp }}/mac-pilot-analyzer/metadata.json'
+          if-no-files-found: warn
+          retention-days: 14
+      - name: Build exact analyzer and enforce every cold/warm scan
+        run: |
+          exec python pilot-harness/scripts/mac-ci-pilot.py analyzer \
+            --source "$GITHUB_WORKSPACE/source" --evidence "$RUNNER_TEMP/mac-pilot-analyzer"
+      - name: Preserve independent analyzer evidence
+        if: always()
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a  # v7
+        with:
+          name: mac-pilot-result-${{ github.run_id }}-${{ github.run_attempt }}-analyzer
+          path: '${{ runner.temp }}/mac-pilot-analyzer/*'
+          if-no-files-found: error
+          retention-days: 14
+
+  aggregate:
+    name: Every Mac pilot gate
+    if: ${{ always() && github.event_name == 'workflow_dispatch' }}
+    needs: [native, analyzer]
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    steps:
+      - name: Checkout harness
+        uses: actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0  # v7
+        with:
+          ref: ${{ github.sha }}
+          persist-credentials: false
+      - name: Set up Python
+        uses: actions/setup-python@5fda3b95a4ea91299a34e894583c3862153e4b97  # v7.0.0
+        with:
+          python-version: '3.13'
+      - name: Download this exact attempt's final or partial evidence
+        uses: actions/download-artifact@37930b1c2abaa49bbe596cd826c3c89aef350131  # v7
+        with:
+          pattern: mac-pilot-result-${{ github.run_id }}-${{ github.run_attempt }}-*
+          path: mac-pilot-results
+      - name: Require both jobs and every source-bound cold/warm witness
+        env:
+          NATIVE_RESULT: ${{ needs.native.result }}
+          ANALYZER_RESULT: ${{ needs.analyzer.result }}
+        run: |
+          python scripts/mac-ci-pilot.py aggregate --evidence mac-pilot-results \
+            --native-result "$NATIVE_RESULT" --analyzer-result "$ANALYZER_RESULT"

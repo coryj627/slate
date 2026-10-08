@@ -497,24 +497,38 @@ internal static class TextEditingChords
                 or Key.Left or Key.Right or Key.Home or Key.End;
         }
 
-        // AltGr reaches WPF as Control|Alt, so a naive deny-list swallows
-        // it and an overlay silently drops ordinary letters on every
-        // layout that uses it — nine of them in Polish, plus @ and the
-        // euro sign in German. Distinguished from a real Ctrl+Alt chord by
-        // the RIGHT Alt key being physically down.
-        //
-        // Shift is STRIPPED before the comparison, not required absent.
-        // AltGr+Shift is how those same nine Polish letters are typed in
-        // UPPERCASE, and an exact-equality test on Control|Alt swallowed
-        // every one of them — the first version of this fix corrected the
-        // lowercase forms and left the capitals broken.
         if ((modifiers & ~ModifierKeys.Shift) == (ModifierKeys.Control | ModifierKeys.Alt))
         {
-            return rightAltDown;
+            return IsAltGr(modifiers, rightAltDown);
         }
 
         return false;
     }
+
+    /// <summary>
+    /// Whether the press is AltGr — the character key of most non-US
+    /// layouts — rather than a Ctrl+Alt chord.
+    /// </summary>
+    /// <remarks>
+    /// AltGr reaches WPF as Control|Alt, so a naive deny-list swallows
+    /// it and an overlay silently drops ordinary letters on every
+    /// layout that uses it — nine of them in Polish, plus @ and the
+    /// euro sign in German. Distinguished from a real Ctrl+Alt chord by
+    /// the RIGHT Alt key being physically down.
+    ///
+    /// Shift is STRIPPED before the comparison, not required absent.
+    /// AltGr+Shift is how those same nine Polish letters are typed in
+    /// UPPERCASE, and an exact-equality test on Control|Alt swallowed
+    /// every one of them — the first version of this fix corrected the
+    /// lowercase forms and left the capitals broken.
+    ///
+    /// Shared with the canvas surface, whose Ctrl+Alt chords are live
+    /// while its filter field holds the caret: the same press is
+    /// Romanian ț or Turkish ₺ there.
+    /// </remarks>
+    internal static bool IsAltGr(ModifierKeys modifiers, bool rightAltDown) =>
+        rightAltDown
+        && (modifiers & ~ModifierKeys.Shift) == (ModifierKeys.Control | ModifierKeys.Alt);
 
     /// <summary>
     /// Production entry point: reads the live right-Alt state.

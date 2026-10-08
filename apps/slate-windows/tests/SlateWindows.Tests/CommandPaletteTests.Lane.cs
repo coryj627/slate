@@ -110,6 +110,191 @@ public sealed partial class CommandPaletteTests
     });
 
     /// <summary>
+    /// A worker has finished ranking, but its publication is only queued.
+    /// Input the user already typed must run before that publication, so
+    /// the superseded rows and their selection never appear or announce.
+    /// The final query still publishes its selection and exactly one count.
+    /// </summary>
+    [Theory]
+    [InlineData(false)]
+    [InlineData(true)]
+    public void AWorkersPublicationWaitsForTheQueryAlreadyQueuedAheadOfIt(bool workerTaskAlreadyCompleted) => RunSta(() =>
+    {
+        int owner = Environment.CurrentManagedThreadId;
+        Assert.IsType<DispatcherSynchronizationContext>(SynchronizationContext.Current);
+        using var entered = new ManualResetEventSlim(false);
+        using var release = new ManualResetEventSlim(false);
+        var lane = new CompletionBeforeReturningLane();
+        var harness = new PaletteHarness(
+            SynchronizationContext.Current,
+            StandardCommands(),
+            productionLane: true,
+            rank: (commands, query, recents, pinned) =>
+            {
+                Assert.NotEqual(owner, Environment.CurrentManagedThreadId);
+                if (query == "o")
+                {
+                    entered.Set();
+                    if (!workerTaskAlreadyCompleted)
+                    {
+                        Assert.True(release.Wait(TimeSpan.FromSeconds(10)), "the prefix rank was never released");
+                    }
+                }
+
+                return SlateUniffiMethods.PaletteSections(commands, query, recents, pinned);
+            },
+            lane: lane);
+        CommandPaletteViewModel palette = harness.Palette;
+        var ranks = new List<Task>();
+        var counts = new List<Task>();
+        var registrations = new List<CancellationTokenRegistration>();
+        var windows = new List<TaskCompletionSource>();
+        var published = new List<string[]>();
+        bool inputRan = false;
+
+        void QueueFinalQuery()
+        {
+            Assert.Equal(owner, Environment.CurrentManagedThreadId);
+            _ = Dispatcher.CurrentDispatcher.BeginInvoke(DispatcherPriority.Input, () =>
+            {
+                inputRan = true;
+                counts.Add(palette.FilterCountCompletion);
+                palette.Query = "q";
+                ranks.Add(palette.RankCompletion);
+            });
+        }
+
+        try
+        {
+            palette.Open();
+            ranks.Add(palette.RankCompletion);
+            Assert.True(PumpedDispatcher.PumpUntil(() => !palette.IsRankPending), "the opening rank never published");
+            PumpedDispatcher.Drain();
+            Assert.Equal("slate.file.newNote", palette.SelectedId);
+            Assert.Empty(harness.Announcements);
+
+            // A deliberate user move must still announce. The prefix removes
+            // this row, so publishing it would announce an intermediate row.
+            palette.SelectLast();
+            Assert.Equal("slate.tasks.review", palette.SelectedId);
+            Assert.Equal(
+                "Tasks Review",
+                Assert.IsType<A11yEvent.PaletteCommandSelected>(Assert.Single(harness.Announcements)).Label);
+            harness.Announcements.Clear();
+            palette.PropertyChanged += (_, change) =>
+            {
+                if (change.PropertyName == nameof(CommandPaletteViewModel.Rows))
+                {
+                    published.Add([.. harness.RowIds]);
+                }
+            };
+            harness.Window = token =>
+            {
+                var window = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
+                registrations.Add(token.Register(() => window.TrySetCanceled(token)));
+                windows.Add(window);
+                return window.Task;
+            };
+
+            CommandPaletteRowViewModel[] before = [.. palette.Rows];
+            if (workerTaskAlreadyCompleted)
+            {
+                // The worker finishes while the owner cannot pump. Queue
+                // the later key before returning its already-completed
+                // task, so the await resumes inline with Input pending.
+                lane.QueueInputWhenWorkCompletes = QueueFinalQuery;
+            }
+            palette.Query = "o";
+            Task prefixRank = palette.RankCompletion;
+            ranks.Add(prefixRank);
+            Assert.True(entered.Wait(TimeSpan.FromSeconds(10)), "the prefix rank never entered the production lane");
+            release.Set();
+
+            // No dispatcher pump: the off-owner handoff has been queued,
+            // or the owner has resumed from an already-completed worker
+            // task. Neither candidate may publish ahead of pending Input.
+            Assert.True(
+                SpinWait.SpinUntil(() => prefixRank.IsCompleted, TimeSpan.FromSeconds(10)),
+                "the prefix publication was never queued");
+            prefixRank.GetAwaiter().GetResult();
+            Assert.False(inputRan);
+            Assert.Empty(published);
+            Assert.Equal(before, palette.Rows);
+            Assert.True(palette.IsRankPending);
+            Assert.Equal("slate.tasks.review", palette.SelectedId);
+            Assert.Empty(harness.Announcements);
+            Assert.Single(windows);
+
+            // The off-owner case queues its key after publication was
+            // posted; the completed-task case already queued it before
+            // returning to the owner. Both must dispatch Input first.
+            if (!workerTaskAlreadyCompleted)
+            {
+                QueueFinalQuery();
+            }
+            Assert.True(PumpedDispatcher.PumpUntil(() => !palette.IsRankPending), "the final rank never published");
+            PumpedDispatcher.Drain();
+
+            Assert.True(inputRan);
+            Assert.Equal([["slate.nav.quickOpen"]], published);
+            Assert.Equal(["slate.nav.quickOpen"], harness.RowIds);
+            Assert.Equal("slate.nav.quickOpen", palette.SelectedId);
+            Assert.Equal(
+                "Quick Open",
+                Assert.IsType<A11yEvent.PaletteCommandSelected>(Assert.Single(harness.Announcements)).Label);
+            Assert.Equal(2, windows.Count);
+            Assert.True(windows[0].Task.IsCanceled, "the superseded query's count window was not cancelled");
+            Assert.False(windows[1].Task.IsCompleted, "the final count did not wait for its own window");
+
+            windows[1].SetResult();
+            counts.Add(palette.FilterCountCompletion);
+            PumpedDispatcher.PumpUntilDrained(palette.FilterCountCompletion);
+            PumpedDispatcher.Drain();
+            Assert.Collection(
+                harness.Announcements,
+                announced => Assert.Equal(
+                    "Quick Open",
+                    Assert.IsType<A11yEvent.PaletteCommandSelected>(announced).Label),
+                announced => Assert.Equal(
+                    (1u, "q"),
+                    (Assert.IsType<A11yEvent.PaletteFilterCount>(announced).Count,
+                        ((A11yEvent.PaletteFilterCount)announced).Query)));
+        }
+        finally
+        {
+            // Unpark even when arrangement or an assertion fails. Shutdown
+            // cancels count windows and makes every queued publication stale;
+            // observe lane work and the owner-thread handoffs before gates go.
+            release.Set();
+            try
+            {
+                bool quiet = palette.Shutdown(CommandPaletteViewModel.ShutdownDrainBudget);
+                PumpedDispatcher.PumpUntilDrained(lane.WhenIdle());
+                PumpedDispatcher.Drain();
+                ranks.Add(palette.RankCompletion);
+                counts.Add(palette.FilterCountCompletion);
+                foreach (Task rank in ranks.ToArray())
+                {
+                    PumpedDispatcher.PumpUntilDrained(rank);
+                }
+                foreach (Task count in counts.ToArray())
+                {
+                    PumpedDispatcher.PumpUntilDrained(count);
+                }
+                PumpedDispatcher.Drain();
+                Assert.True(quiet, "the palette did not drain its lane within the shutdown budget");
+            }
+            finally
+            {
+                foreach (CancellationTokenRegistration registration in registrations)
+                {
+                    registration.Dispose();
+                }
+            }
+        }
+    });
+
+    /// <summary>
     /// The selection rule reads the row the user is on when the rows land,
     /// not when they were asked for: a move made while the rank runs is the
     /// selection the publication keeps, and keeping it says nothing (P7).
@@ -180,6 +365,63 @@ public sealed partial class CommandPaletteTests
         PumpedDispatcher.PumpUntilDrained(palette.RankCompletion);
         PumpedDispatcher.Drain();
         Assert.Equal(["slate.file.newNote", "slate.tasks.review"], host.Harness.Source.Invoked);
+    });
+
+    /// <summary>
+    /// Contract 28 T7 as amended (owner decision, 2026-10-05): a typed-ahead
+    /// Enter acts on the query it follows. Worker results post below input,
+    /// so a rank that has FINISHED for the latest query can still be
+    /// waiting behind a queued Enter. That publication runs first and Enter
+    /// runs its selection — Quick Open for "q", not the New Note on screen
+    /// a moment before. Its own turn then publishes nothing again: an
+    /// unavailable row keeps the palette open and unsealed, so a second
+    /// publication would land.
+    /// </summary>
+    [Theory]
+    [InlineData(false)]
+    [InlineData(true)]
+    public void AQueuedEnterPublishesTheFinishedRankFirstAndRunsItsSelection(bool unavailable) => RunSta(() =>
+    {
+        LaneHost host = LaneHost.Opened();
+        CommandPaletteViewModel palette = host.Palette;
+        Assert.Equal("slate.file.newNote", palette.SelectedId);
+        if (unavailable)
+        {
+            host.Harness.Source.DisabledReasons["slate.nav.quickOpen"] = "Open a vault first.";
+        }
+        var published = new List<string[]>();
+        palette.PropertyChanged += (_, change) =>
+        {
+            if (change.PropertyName == nameof(CommandPaletteViewModel.Rows) && palette.Rows.Count > 0)
+            {
+                published.Add([.. host.Harness.RowIds]);
+            }
+        };
+
+        palette.Query = "q";
+        Assert.True(palette.RankCompletion.Wait(TimeSpan.FromSeconds(10)), "the rank never finished");
+        Assert.True(palette.IsRankPending, "premise: the finished rank's publication has not run.");
+        Assert.Equal("slate.file.newNote", palette.SelectedId);
+
+        // Enter arrives as input, ahead of the Background publication.
+        _ = Dispatcher.CurrentDispatcher.BeginInvoke(DispatcherPriority.Input, palette.InvokeSelected);
+        PumpedDispatcher.Drain();
+
+        Assert.Equal([["slate.nav.quickOpen"]], published);
+        Assert.False(palette.IsRankPending);
+        if (unavailable)
+        {
+            Assert.Empty(host.Harness.Source.Invoked);
+            Assert.True(palette.IsOpen);
+            Assert.Equal("slate.nav.quickOpen", palette.SelectedId);
+            Assert.Contains(host.Harness.Announcements, announced =>
+                announced is A11yEvent.PaletteCommandUnavailable { Reason: "Open a vault first." });
+        }
+        else
+        {
+            Assert.Equal(["slate.nav.quickOpen"], host.Harness.Source.Invoked);
+            Assert.False(palette.IsOpen);
+        }
     });
 
     /// <summary>
@@ -710,6 +952,35 @@ public sealed partial class CommandPaletteTests
     }
 
     // --- helpers -------------------------------------------------------------
+
+    /// <summary>Runs the real production lane, optionally holding the owner
+    /// until one worker task completes. No dispatcher pump occurs during the
+    /// wait: this deterministically represents an owner preempted before its
+    /// await observes a very fast worker result.</summary>
+    private sealed class CompletionBeforeReturningLane : ICommandPaletteWorkLane
+    {
+        private readonly CommandPaletteWorkLane _inner = new();
+
+        public Action? QueueInputWhenWorkCompletes { get; set; }
+
+        public Task<T> Run<T>(Func<T> work, CancellationToken cancellationToken)
+        {
+            Action? queuedInput = QueueInputWhenWorkCompletes;
+            QueueInputWhenWorkCompletes = null;
+            Task<T> task = _inner.Run(work, cancellationToken);
+            if (queuedInput is not null)
+            {
+                Assert.True(
+                    SpinWait.SpinUntil(() => task.IsCompleted, TimeSpan.FromSeconds(10)),
+                    "the production worker did not complete before returning to its owner");
+                task.GetAwaiter().GetResult();
+                queuedInput();
+            }
+            return task;
+        }
+
+        public Task WhenIdle() => _inner.WhenIdle();
+    }
 
     /// <summary>
     /// Releases a parked lane item once teardown is WAITING on the lane —

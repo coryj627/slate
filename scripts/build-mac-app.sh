@@ -75,6 +75,13 @@ cargo run -p slate-uniffi $CARGO_PROFILE_FLAG --bin uniffi-bindgen -- \
     --language swift \
     --out-dir "$GENERATED_DIR"
 
+if [[ "$PROFILE" == "release" ]]; then
+    # .cargo/config.toml disables rustc's Mach-O stripping on macOS
+    # (rust-lang/rust#157750), so Release keeps its symbols until here.
+    echo "==> Stripping Release dylib with Apple's Mach-O tool"
+    xcrun strip -x "$TARGET_DIR/libslate_uniffi.dylib"
+fi
+
 echo "==> Staging generated bindings into $APP_DIR"
 cp "$GENERATED_DIR/slate_uniffi.swift"  "$APP_DIR/Sources/SlateMac/slate_uniffi.swift"
 cp "$GENERATED_DIR/slate_uniffiFFI.h"   "$APP_DIR/Sources/slate_uniffiFFI/slate_uniffiFFI.h"
@@ -134,11 +141,10 @@ if [[ "$BUNDLE" == "1" ]]; then
     else
         echo "warning: $APP_ICON missing — bundle will show the generic icon" >&2
     fi
-    # The binary links against the dylib at its build path (with `deps/`).
-    # We mirror that exact path inside the bundle for the rewrite below,
-    # using `target/$PROFILE/libslate_uniffi.dylib` as the source — both
-    # copies have the same content; we don't depend on `deps/` existing
-    # in the bundle.
+    # The binary records the dylib's build install name (with `deps/`).
+    # Bundle target/$PROFILE's copy, which has the Mac Release stripping
+    # applied, then rewrite that install name below. No deps/ directory
+    # is needed inside the bundle.
     cp -f "$WORKSPACE_ROOT/$TARGET_DIR/libslate_uniffi.dylib" \
         "$APP_BUNDLE/Contents/Frameworks/libslate_uniffi.dylib"
 

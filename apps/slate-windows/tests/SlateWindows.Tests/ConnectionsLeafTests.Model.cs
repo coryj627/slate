@@ -193,6 +193,8 @@ public sealed partial class ConnectionsLeafTests
     private const int PinnedCells = PinnedModes * 2 * 2 * 3 * 5 * 3 * PinnedRoutes;
     private const int PinnedUnreachable = 12812;
     private const int PinnedDriven = 12388;
+    private const string PinnedInventorySha256 =
+        "e847440e2e4a1c18142b44faa91f8891209b2866296ea15fd31a5385657737fd";
 
     private static readonly Route[] SecondTabRoutes =
     [
@@ -1105,7 +1107,7 @@ public sealed partial class ConnectionsLeafTests
     /// a tab beside, a split, the depth at its bound, a creator, a dirty
     /// tab, a canvas. Asserts the arranged state. Returns the parked
     /// fetch. Under a pin, <see cref="ArrangePinned"/>.</summary>
-    private static ParkedFetch? Arrange(Host host, Cell cell, Fixture fixture, int stamp)
+    private static ParkedFetch? Arrange(Host host, Cell cell, Fixture fixture, int stamp, Action<ParkedFetch>? ownParkedFetch = null)
     {
         host.Workspace.ActiveLeaf = Host.OutlineLeaf;
         bool rootInNewTab = false;
@@ -1146,12 +1148,12 @@ public sealed partial class ConnectionsLeafTests
         host.Settle();
         if (cell.Pinned)
         {
-            return ArrangePinned(host, cell, fixture, stamp);
+            return ArrangePinned(host, cell, fixture, stamp, ownParkedFetch);
         }
 
         string root = ArrangedNote(cell);
         ParkedFetch? parked = null;
-        bool park = cell.InFlight && cell.Route != Route.Shutdown;
+        bool park = cell.InFlight;
 
         // Park the NEXT fetch after its crossings; the wait, after the load
         // is issued, makes sure it HAS crossed — the tree it holds is the
@@ -1161,6 +1163,7 @@ public sealed partial class ConnectionsLeafTests
             if (park)
             {
                 parked = Park(host.Leaf);
+                ownParkedFetch?.Invoke(parked);
             }
         }
 
@@ -1419,14 +1422,18 @@ public sealed partial class ConnectionsLeafTests
     /// the route's props; Deeper's or the probe's reload parked; the leaf
     /// and the pane as the cell says. Nothing settles the leaf once a fetch
     /// is parked. Asserts the arranged state and the root mode.</summary>
-    private static ParkedFetch? ArrangePinned(Host host, Cell cell, Fixture fixture, int stamp)
+    private static ParkedFetch? ArrangePinned(Host host, Cell cell, Fixture fixture, int stamp, Action<ParkedFetch>? ownParkedFetch)
     {
         string pinnedPath = cell.Presentation == Presentation.Missing ? MissingRoot : Deep;
         string pin = PinBefore(cell);
         string? noteInView = NoteInViewBefore(cell);
         ParkedFetch? parked = null;
 
-        void Arm() => parked = Park(host.Leaf);
+        void Arm()
+        {
+            parked = Park(host.Leaf);
+            ownParkedFetch?.Invoke(parked);
+        }
 
         void WaitParked()
         {
@@ -1731,9 +1738,7 @@ public sealed partial class ConnectionsLeafTests
             Assert.True(
                 host.Leaf.PendingPolicyForTests == policy,
                 $"{cell}: the pending token's policy is {host.Leaf.PendingPolicyForTests}, not {policy}");
-            // The shutdown route leaves its load genuinely in flight, unparked:
-            // the leaf retires into the drain over it.
-            Assert.True(parked is not null || cell.Route == Route.Shutdown, $"{cell}: the load in flight was not parked");
+            Assert.NotNull(parked);
         }
         else
         {
@@ -1756,7 +1761,7 @@ public sealed partial class ConnectionsLeafTests
 
     /// <summary>Drive the route; returns the line captured mid-route where
     /// the derivation names one.</summary>
-    private static string? Drive(Host host, Cell cell, Fixture fixture, ParkedFetch? parked)
+    private static string? Drive(Host host, Cell cell, Fixture fixture, ParkedFetch? parked, Action? disposeWorkspace = null)
     {
         switch (cell.Route)
         {
@@ -1908,7 +1913,7 @@ public sealed partial class ConnectionsLeafTests
                 }
                 break;
             case Route.Shutdown:
-                host.Workspace.Dispose();
+                DisposeModelWorkspace(host, parked, disposeWorkspace ?? host.Workspace.Dispose);
                 break;
             case Route.Launch:
                 throw new InvalidOperationException("the launch is driven by the host's construction");
@@ -2024,6 +2029,190 @@ public sealed partial class ConnectionsLeafTests
         }
     }
 
+    /// <summary>Release a held completion only after the production teardown's
+    /// volatile retirement barrier. Dispose still runs on its owner thread;
+    /// the bounded helper is retained and joined before its gate can disappear.
+    /// The production five-second fallback remains unchanged.</summary>
+    private static void DisposeModelWorkspace(Host host, ParkedFetch? parked, Action disposeWorkspace)
+    {
+        if (parked is null || parked.Gate.IsSet)
+        {
+            // Ordinary routes already released and settled their fetch.
+            // Only a gate still holding work needs the retirement helper.
+            disposeWorkspace();
+            return;
+        }
+        using var stop = new CancellationTokenSource();
+        Task<bool> release = Task.Factory.StartNew(() =>
+        {
+            _ = SpinWait.SpinUntil(
+                () => host.Leaf.IsRetired || stop.IsCancellationRequested,
+                TimeSpan.FromSeconds(10));
+            bool retired = host.Leaf.IsRetired;
+            parked.Gate.Set();
+            return retired;
+        }, CancellationToken.None, TaskCreationOptions.LongRunning, TaskScheduler.Default);
+        bool observedRetirement;
+        try
+        {
+            disposeWorkspace();
+        }
+        finally
+        {
+            // Also unwind a drive that throws before retiring: its helper
+            // must stop, and the held worker must finish before case cleanup.
+            // Retire on the owner first, so failure cleanup cannot publish
+            // the held completion while draining it.
+            if (!host.Leaf.IsRetired)
+            {
+                host.Leaf.Retire();
+            }
+            stop.Cancel();
+            parked.Gate.Set();
+            Assert.True(release.Wait(TimeSpan.FromSeconds(10)), "the shutdown release helper did not finish");
+            observedRetirement = release.GetAwaiter().GetResult();
+            host.Settle();
+        }
+        Assert.True(observedRetirement, "the shutdown fetch was released without observing retirement");
+    }
+
+    /// <summary>Own resources as soon as they exist, including a gate created
+    /// inside an arrangement that throws before returning it. Every exit
+    /// releases and drains the worker before disposing the gate or session.</summary>
+    private sealed class ModelCaseResources : IDisposable
+    {
+        internal Host? Host { get; set; }
+        internal ParkedFetch? Parked { get; set; }
+        private bool _workspaceDisposed;
+        private bool _parkedDisposed;
+        private bool _disposed;
+
+        internal void DisposeWorkspace()
+        {
+            if (!_workspaceDisposed)
+            {
+                Host!.Workspace.Dispose();
+                _workspaceDisposed = true;
+            }
+        }
+
+        public void Dispose()
+        {
+            if (_disposed)
+            {
+                return;
+            }
+            if (Host is { } host)
+            {
+                if (!_workspaceDisposed)
+                {
+                    DisposeModelWorkspace(host, Parked, DisposeWorkspace);
+                }
+                else if (!_parkedDisposed)
+                {
+                    Parked?.Gate.Set();
+                }
+                host.Settle();
+            }
+            if (!_parkedDisposed)
+            {
+                Parked?.Dispose();
+                _parkedDisposed = true;
+            }
+            Host?.Session.Dispose();
+            _disposed = true;
+        }
+    }
+
+    [Theory]
+    [InlineData(false, false)]
+    [InlineData(false, true)]
+    [InlineData(true, false)]
+    [InlineData(true, true)]
+    public void TheShutdownModelDrainsItsParkedFetchBeforeTheDriverReturns(bool pinned, bool audible)
+    {
+        using GraphVault vault = GraphVault.Copy("model-shutdown-drain");
+        PumpedDispatcher.Run(() =>
+        {
+            using var resources = new ModelCaseResources { Host = ModelHost(vault.Root) };
+            Host host = resources.Host;
+            var cell = new Cell(
+                pinned ? Mode.PinnedFresh : Mode.Following,
+                Pane.Visible, LeafState.Connections, RootState.Note, Presentation.Current,
+                audible ? Pending.Audible : Pending.Silent, Route.Shutdown);
+            Fixture fixture = FixtureOf();
+            ParkedFetch parked = Assert.IsType<ParkedFetch>(Arrange(host, cell, fixture, 0, fetch => resources.Parked = fetch));
+            host.Clear();
+            _ = Drive(host, cell, fixture, parked, resources.DisposeWorkspace);
+            Assert.True(parked.Gate.IsSet, "the driver returned before its held fetch was released");
+            Assert.True(host.Leaf.WhenAllWorkDrained().IsCompleted, "tracked work outlived the shutdown driver");
+            PumpedDispatcher.Drain();
+            Assert.True(host.Leaf.IsRetired);
+            Assert.False(parked.TimedOut);
+            Assert.False(host.Leaf.InFlight);
+            Assert.Equal(ConnectionsLoadState.NoNote, host.Leaf.Publication.State);
+            Assert.Empty(host.Timeline);
+        });
+    }
+
+    [Fact]
+    public void TheModelDrainsARecordedFetchWhenTheArrangementFailsBeforeReturningIt()
+    {
+        using GraphVault vault = GraphVault.Copy("model-arrangement-unwind");
+        PumpedDispatcher.Run(() =>
+        {
+            using var resources = new ModelCaseResources { Host = ModelHost(vault.Root) };
+            Host host = resources.Host;
+            ParkedFetch? returned = null;
+            Assert.Throws<InvalidOperationException>(() => returned = FailedArrangement());
+            Assert.Null(returned);
+            ParkedFetch parked = Assert.IsType<ParkedFetch>(resources.Parked);
+            Assert.True(parked.Reached.IsSet);
+            Assert.False(parked.Gate.IsSet);
+            resources.Dispose();
+            Assert.True(parked.Gate.IsSet);
+            Assert.False(parked.TimedOut);
+            Assert.True(host.Leaf.IsRetired);
+            Assert.True(host.Leaf.WhenAllWorkDrained().IsCompleted);
+            Assert.Empty(host.Timeline);
+
+            ParkedFetch? FailedArrangement()
+            {
+                var cell = new Cell(Mode.PinnedFresh, Pane.Visible, LeafState.Connections,
+                    RootState.Note, Presentation.Current, Pending.Audible, Route.Shutdown);
+                _ = Arrange(host, cell, FixtureOf(), 0, fetch => resources.Parked = fetch);
+                host.Clear();
+                throw new InvalidOperationException("arrangement failed before returning its held fetch");
+            }
+        });
+    }
+
+    [Fact]
+    public void TheShutdownModelJoinsItsReleaseHelperWhenTheDriveThrowsBeforeRetirement()
+    {
+        using GraphVault vault = GraphVault.Copy("model-driver-unwind");
+        PumpedDispatcher.Run(() =>
+        {
+            using var resources = new ModelCaseResources { Host = ModelHost(vault.Root) };
+            Host host = resources.Host;
+            var cell = new Cell(Mode.PinnedFresh, Pane.Visible, LeafState.Connections,
+                RootState.Note, Presentation.Current, Pending.Audible, Route.Shutdown);
+            Fixture fixture = FixtureOf();
+            ParkedFetch parked = Assert.IsType<ParkedFetch>(Arrange(host, cell, fixture, 0, fetch => resources.Parked = fetch));
+            host.Clear();
+            InvalidOperationException failure = Assert.Throws<InvalidOperationException>(() =>
+                Drive(host, cell, fixture, parked, () => throw new InvalidOperationException("drive failed before retirement")));
+            Assert.Equal("drive failed before retirement", failure.Message);
+            Assert.True(parked.Gate.IsSet);
+            Assert.True(host.Leaf.WhenAllWorkDrained().IsCompleted);
+            Assert.False(parked.TimedOut);
+            Assert.True(host.Leaf.IsRetired);
+            Assert.Empty(host.Timeline);
+            resources.Dispose();
+            Assert.True(host.Leaf.IsRetired);
+        });
+    }
+
     [Fact]
     public void TheModelOfTermsTwoToNineDerivesEveryRoutesTimelineAcrossEveryState()
     {
@@ -2034,7 +2223,7 @@ public sealed partial class ConnectionsLeafTests
         using var run = new ModelTestRun<Cell>(
             "routes", cells, cell => cell.ToString(), cell => cell.Route.ToString(),
             Unreachable, ModelShardConfiguration.FromEnvironment());
-        run.AssertInventory(PinnedCells, PinnedUnreachable, PinnedDriven);
+        run.AssertInventory(PinnedCells, PinnedUnreachable, PinnedDriven, PinnedInventorySha256);
         var failures = new List<string>();
         PumpedDispatcher.Run(() =>
         {
@@ -2046,10 +2235,10 @@ public sealed partial class ConnectionsLeafTests
                     Cell cell = modelCase.Value;
                     int driven = modelCase.Ordinal;
                     using GraphVault vault = GraphVault.Copy($"model-{driven - 1}");
+                    using var resources = new ModelCaseResources();
                     fixture ??= FixtureOf();
                     Derivation expected = Derive(cell, fixture);
                     Host host;
-                    Host? created = null;
                     int before;
                     string? lineBefore = null;
                     string? captured = null;
@@ -2067,17 +2256,17 @@ public sealed partial class ConnectionsLeafTests
                             }
                             // The launch IS the construction: its timeline from the start.
                             timing.Phase("sessionSetup");
-                            host = created = ModelHost(vault.Root);
+                            host = resources.Host = ModelHost(vault.Root);
                             before = 0;
                         }
                         else
                         {
                             timing.Phase("sessionSetup");
-                            host = created = ModelHost(vault.Root);
+                            host = resources.Host = ModelHost(vault.Root);
                             try
                             {
                                 timing.Phase("arrangement");
-                                parked = Arrange(host, cell, fixture, driven);
+                                parked = Arrange(host, cell, fixture, driven, fetch => resources.Parked = fetch);
                             }
                             catch (Exception arrangement) when (arrangement is Xunit.Sdk.XunitException or InvalidOperationException)
                             {
@@ -2085,9 +2274,6 @@ public sealed partial class ConnectionsLeafTests
                                 // its own, reported with the rest rather than aborting
                                 // the run (the fact still fails).
                                 timing.Phase("cleanup");
-                                parked?.Gate.Set();
-                                parked?.Dispose();
-                                host.Dispose();
                                 failures.Add($"{cell}: the arrangement failed — {arrangement.Message.ReplaceLineEndings(" ")}");
                                 return;
                             }
@@ -2098,24 +2284,18 @@ public sealed partial class ConnectionsLeafTests
                             host.Clear();
                             before = host.Loads;
                             timing.Phase("drive");
-                            captured = Drive(host, cell, fixture, parked);
+                            captured = Drive(host, cell, fixture, parked, resources.DisposeWorkspace);
                             parked?.Gate.Set();
                         }
                     }
                     catch (Exception drive) when (drive is Xunit.Sdk.XunitException or InvalidOperationException)
                     {
                         timing.Phase("cleanup");
-                        parked?.Gate.Set();
-                        parked?.Dispose();
-                        created?.Dispose();
                         failures.Add($"{cell}: the drive failed — {drive.Message.ReplaceLineEndings(" ")}");
                         return;
                     }
                     timing.Phase("settleAndVerify");
-                    if (cell.Route != Route.Shutdown)
-                    {
-                        SettleTheDocuments(host);
-                    }
+                    SettleTheDocuments(host);
                     int loads = host.Loads - before;
 
                     uint depthAfter = cell.Route == Route.DepthChange ? DepthBefore(cell) + 1 : DepthBefore(cell);
@@ -2209,15 +2389,7 @@ public sealed partial class ConnectionsLeafTests
                         failures.Add($"{cell}: {string.Join("; ", mismatch)}{tabs}");
                     }
                     timing.Phase("cleanup");
-                    parked?.Dispose();
-                    if (cell.Route == Route.Shutdown)
-                    {
-                        host.Session.Dispose();
-                    }
-                    else
-                    {
-                        host.Dispose();
-                    }
+                    resources.Dispose();
                     timing.Complete();
                 });
             }

@@ -51,7 +51,7 @@ internal sealed record ModelShardConfiguration(int Index, int Count, string[] On
 /// and runs on its caller's dispatcher with its own vault and session.</summary>
 internal sealed class ModelTestRun<TCell> : IDisposable
 {
-    internal sealed record Case(TCell Value, int Ordinal, string Route);
+    internal sealed record Case(TCell Value, int Ordinal, string Route, string Description);
 
     private sealed record InventoryEntry(string Cell, string Route, string? UnreachableReason);
 
@@ -62,18 +62,33 @@ internal sealed class ModelTestRun<TCell> : IDisposable
     private readonly HashSet<int> _started = [];
     private readonly Dictionary<int, Case> _selectedByOrdinal;
     private readonly Dictionary<string, RouteTiming> _routes = new(StringComparer.Ordinal);
+    private readonly List<SlowCase> _slowestCases = [];
+    private readonly object _progressGate = new();
+    private readonly TimeSpan _progressInterval;
+    private System.Threading.Timer? _progressTimer;
+    private Checkpoint? _published;
+    private Checkpoint? _written;
+    private bool _progressStopped;
+    private Case? _activeCase;
+    private int _missedProgressWrites;
+    private const int SlowCaseLimit = 16;
     private bool _inventoryVerified;
     private bool _success;
     private bool _disposed;
 
+    /// <param name="progressInterval">How often the checkpoint flusher runs;
+    /// one second unless a fact supplies another (an infinite interval leaves
+    /// flushing to <see cref="FlushProgress"/>).</param>
     internal ModelTestRun(
         string family,
         IEnumerable<TCell> cells,
         Func<TCell, string> describe,
         Func<TCell, string> route,
         Func<TCell, string?> unreachable,
-        ModelShardConfiguration configuration)
+        ModelShardConfiguration configuration,
+        TimeSpan? progressInterval = null)
     {
+        _progressInterval = progressInterval ?? TimeSpan.FromSeconds(1);
         if (family is not ("routes" or "reroot" or "composed"))
         {
             throw new ArgumentException("Unknown model family.", nameof(family));
@@ -97,7 +112,7 @@ internal sealed class ModelTestRun<TCell> : IDisposable
             if ((ordinal - 1) % configuration.Count == configuration.Index
                 && configuration.Only.All(term => description.Contains(term, StringComparison.Ordinal)))
             {
-                selected.Add(new(cell, ordinal, routeName));
+                selected.Add(new(cell, ordinal, routeName, description));
             }
         }
         TotalCells = inventory.Count;
@@ -114,11 +129,20 @@ internal sealed class ModelTestRun<TCell> : IDisposable
     internal string InventorySha256 { get; }
     internal IReadOnlyList<Case> SelectedCases { get; }
 
-    internal void AssertInventory(int total, int unreachable, int reachable)
+    /// <summary>Pin the census and its digest. Counts alone let a renamed
+    /// route or a reworded exclusion reason pass locally and on both shards,
+    /// failing only later in the Linux aggregator, which pins the same
+    /// digests independently (scripts/verify_windows_model_shards.py).</summary>
+    internal void AssertInventory(int total, int unreachable, int reachable, string inventorySha256)
     {
         Assert.Equal(total, TotalCells);
         Assert.Equal(unreachable, UnreachableCells);
         Assert.Equal(reachable, ReachableCells);
+        Assert.True(
+            string.Equals(inventorySha256, InventorySha256, StringComparison.Ordinal),
+            $"The {_family} inventory digest is {InventorySha256}, pinned {inventorySha256}: a cell, "
+            + "route name or exclusion reason changed. Review the change, then update this pin and "
+            + "INVENTORY_SHA256 in scripts/verify_windows_model_shards.py.");
         _inventoryVerified = true;
     }
 
@@ -136,11 +160,43 @@ internal sealed class ModelTestRun<TCell> : IDisposable
             route = new(modelCase.Route);
             _routes.Add(modelCase.Route, route);
         }
-        using var timing = new CaseTiming(route);
-        body(timing);
-        if (timing.Completed)
+        _activeCase = modelCase;
+        PublishProgress("fixtureSetup");
+        var timing = new CaseTiming(route, PublishProgress);
+        bool returned = false;
+        try
         {
-            _completed.Add(modelCase.Ordinal);
+            body(timing);
+            returned = true;
+            if (timing.Completed)
+            {
+                _completed.Add(modelCase.Ordinal);
+            }
+        }
+        finally
+        {
+            timing.Dispose();
+            _slowestCases.Add(new(modelCase.Ordinal, modelCase.Description, modelCase.Route,
+                returned && timing.Completed, timing.ElapsedMilliseconds,
+                new Dictionary<string, double>(timing.Phases, StringComparer.Ordinal)));
+            _slowestCases.Sort((left, right) =>
+            {
+                int elapsed = right.ElapsedMilliseconds.CompareTo(left.ElapsedMilliseconds);
+                return elapsed != 0 ? elapsed : left.Ordinal.CompareTo(right.Ordinal);
+            });
+            if (_slowestCases.Count > SlowCaseLimit)
+            {
+                _slowestCases.RemoveAt(SlowCaseLimit);
+            }
+            bool completed = returned && timing.Completed;
+            if (completed)
+            {
+                // Only a completed case stops being the active one. A case
+                // that threw stays named, so the failed checkpoint Dispose
+                // writes still attributes the failure to it.
+                _activeCase = null;
+            }
+            PublishProgress(completed ? "caseCompleted" : "caseFailed");
         }
     }
 
@@ -153,6 +209,86 @@ internal sealed class ModelTestRun<TCell> : IDisposable
         }
         Assert.Equal(SelectedCases.Select(modelCase => modelCase.Ordinal), _completed);
         _success = true;
+        _activeCase = null;
+        PublishProgress("complete");
+    }
+
+    /// <summary>Record where the run is, with no I/O: a transition costs one
+    /// small allocation, and no phase's timing includes a checkpoint write.
+    /// Writing synchronously at every case start, phase and case end cost
+    /// about 52,000 file replacements a shard (2.5-3.9% of its time), billed
+    /// to the phase being entered.</summary>
+    private void PublishProgress(string phase)
+    {
+        if (_configuration.ReportDirectory is null)
+        {
+            return;
+        }
+        Volatile.Write(ref _published, Snapshot(phase));
+        _progressTimer ??= new System.Threading.Timer(
+            _ => FlushProgress(), null, _progressInterval, _progressInterval);
+    }
+
+    private Checkpoint Snapshot(string phase) => new(
+        phase, _activeCase?.Ordinal, _activeCase?.Description, _completed.Count, _success,
+        _clock.Elapsed.TotalMilliseconds);
+
+    /// <summary>The flusher's tick: write the latest checkpoint if it changed
+    /// since the last write. It runs on its own thread, so a case stalled in
+    /// a phase still reaches the file even though its thread writes
+    /// nothing.</summary>
+    internal void FlushProgress()
+    {
+        lock (_progressGate)
+        {
+            if (!_progressStopped
+                && Volatile.Read(ref _published) is { } checkpoint
+                && !ReferenceEquals(checkpoint, _written))
+            {
+                WriteCheckpoint(checkpoint);
+            }
+        }
+    }
+
+    /// <summary>One atomically replaced checkpoint, not an unbounded log.
+    /// It identifies a stalled cell even if the process is killed before
+    /// Dispose can write its final coverage report. The .txt extension
+    /// keeps this diagnostic separate from the verifier's JSON evidence.
+    /// A monitor can briefly deny replacement on Windows; such a diagnostic
+    /// failure must not abort a case or weaken final coverage reporting.
+    /// Callers hold the progress gate.</summary>
+    private void WriteCheckpoint(Checkpoint checkpoint)
+    {
+        string directory = _configuration.ReportDirectory!;
+        string path = Path.Combine(directory, $"{_family}-shard-{_configuration.Index}.progress.txt");
+        var progress = new
+        {
+            family = _family,
+            shardIndex = _configuration.Index,
+            shardCount = _configuration.Count,
+            selectedCases = SelectedCases.Count,
+            completedCases = checkpoint.CompletedCases,
+            activeOrdinal = checkpoint.ActiveOrdinal,
+            activeCell = checkpoint.ActiveCell,
+            phase = checkpoint.Phase,
+            success = checkpoint.Success,
+            elapsedMilliseconds = checkpoint.ElapsedMilliseconds,
+        };
+        string temporary = path + ".tmp";
+        string contents = JsonSerializer.Serialize(progress);
+        try
+        {
+            Directory.CreateDirectory(directory);
+            File.WriteAllText(temporary, contents);
+            File.Move(temporary, path, overwrite: true);
+            _written = checkpoint;
+        }
+        catch (Exception failure) when (failure is IOException or UnauthorizedAccessException)
+        {
+            // Reuse this same temporary file on the next checkpoint. The final
+            // JSON remains strict and records any missed diagnostic writes.
+            _missedProgressWrites++;
+        }
     }
 
     public void Dispose()
@@ -163,6 +299,20 @@ internal sealed class ModelTestRun<TCell> : IDisposable
         }
         _disposed = true;
         _clock.Stop();
+        lock (_progressGate)
+        {
+            _progressStopped = true;
+        }
+        _progressTimer?.Dispose();
+        int missedProgressWrites;
+        lock (_progressGate)
+        {
+            if (_configuration.ReportDirectory is not null)
+            {
+                WriteCheckpoint(Snapshot(_success ? "complete" : "failed"));
+            }
+            missedProgressWrites = _missedProgressWrites;
+        }
         if (_configuration.ReportDirectory is not { } directory)
         {
             return;
@@ -182,8 +332,10 @@ internal sealed class ModelTestRun<TCell> : IDisposable
             selectedOrdinals = SelectedCases.Select(modelCase => modelCase.Ordinal).ToArray(),
             completedOrdinals = _completed.ToArray(),
             success = _success,
+            missedProgressWrites,
             elapsedMilliseconds = _clock.Elapsed.TotalMilliseconds,
             routes = _routes.Values.OrderBy(route => route.Route, StringComparer.Ordinal),
+            slowestCases = _slowestCases,
         };
         File.WriteAllText(path, JsonSerializer.Serialize(report, new JsonSerializerOptions
         {
@@ -191,6 +343,12 @@ internal sealed class ModelTestRun<TCell> : IDisposable
             WriteIndented = true,
         }));
     }
+
+    private sealed record SlowCase(int Ordinal, string Cell, string Route, bool Completed,
+        double ElapsedMilliseconds, IReadOnlyDictionary<string, double> Phases);
+
+    private sealed record Checkpoint(string Phase, int? ActiveOrdinal, string? ActiveCell,
+        int CompletedCases, bool Success, double ElapsedMilliseconds);
 
     internal sealed class RouteTiming(string route)
     {
@@ -204,22 +362,28 @@ internal sealed class ModelTestRun<TCell> : IDisposable
     {
         private readonly RouteTiming _route;
         private readonly Stopwatch _clock = Stopwatch.StartNew();
+        private readonly Action<string> _progress;
+        private readonly Dictionary<string, double> _phases = new(StringComparer.Ordinal);
         private string _phase = "fixtureSetup";
         private double _phaseStarted;
         private bool _disposed;
 
-        internal CaseTiming(RouteTiming route)
+        internal CaseTiming(RouteTiming route, Action<string> progress)
         {
             _route = route;
+            _progress = progress;
             _route.Cases++;
         }
 
         internal bool Completed { get; private set; }
+        internal double ElapsedMilliseconds => _clock.Elapsed.TotalMilliseconds;
+        internal IReadOnlyDictionary<string, double> Phases => _phases;
 
         internal void Phase(string phase)
         {
             RecordPhase();
             _phase = phase;
+            _progress(phase);
         }
 
         internal void Complete() => Completed = true;
@@ -227,8 +391,11 @@ internal sealed class ModelTestRun<TCell> : IDisposable
         private void RecordPhase()
         {
             double elapsed = _clock.Elapsed.TotalMilliseconds;
+            double phaseElapsed = elapsed - _phaseStarted;
             _route.Phases.TryGetValue(_phase, out double previous);
-            _route.Phases[_phase] = previous + elapsed - _phaseStarted;
+            _route.Phases[_phase] = previous + phaseElapsed;
+            _phases.TryGetValue(_phase, out double casePrevious);
+            _phases[_phase] = casePrevious + phaseElapsed;
             _phaseStarted = elapsed;
         }
 

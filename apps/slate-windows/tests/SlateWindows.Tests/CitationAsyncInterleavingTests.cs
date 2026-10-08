@@ -408,28 +408,33 @@ public sealed class CitationAsyncInterleavingTests : IDisposable
     /// LATER, unrelated load.
     /// </summary>
     [Fact]
-    public async Task ADeferredSummaryDoesNotAnswerForADifferentNote()
+    public void ADeferredSummaryDoesNotAnswerForADifferentNote()
     {
-        var announced = new List<A11yEvent>();
-        using VaultSession session = OpenScanned();
-        using var workspace = MakeAsyncWorkspace(session, announced);
+        StaThread.RunPumped(() =>
+        {
+            Assert.True(PanelWorkScheduler.CurrentContextIsUiDispatcher(),
+                "The deferred summary fixture must own a serialized dispatcher context.");
+            var announced = new List<A11yEvent>();
+            using VaultSession session = OpenScanned();
+            using var workspace = MakeAsyncWorkspace(session, announced);
 
-        workspace.OpenPath("cited.md");
-        // Deterministic: Refresh sets IsLoading synchronously before
-        // queueing the gated body.
-        Assert.True(workspace.Citations.IsLoading);
+            workspace.OpenPath("cited.md");
+            // The owner dispatcher cannot apply a queued publication
+            // until this turn pumps; the note switch precedes its answer.
+            Assert.True(workspace.Citations.IsLoading);
 
-        workspace.OpenCitationSummary();
-        Assert.Null(workspace.CitationSummary);
+            workspace.OpenCitationSummary();
+            Assert.Null(workspace.CitationSummary);
 
-        // The user moves on before the answer arrives.
-        workspace.OpenPath("other.md");
-        await QuiesceAsync(workspace);
+            // The user moves on before the answer arrives.
+            workspace.OpenPath("other.md");
+            PumpedDispatcher.PumpUntilDrained(QuiesceAsync(workspace));
 
-        // No sheet, because the question was about cited.md and the
-        // only answer available is about other.md.
-        Assert.Null(workspace.CitationSummary);
-        Assert.Equal("other.md", workspace.Citations.Path);
+            // No sheet, because the question was about cited.md and the
+            // only answer available is about other.md.
+            Assert.Null(workspace.CitationSummary);
+            Assert.Equal("other.md", workspace.Citations.Path);
+        }, TimeSpan.FromSeconds(60), "The deferred citation summary fixture timed out.");
     }
 
     /// <summary>The defer must still DELIVER for the note it was asked
@@ -437,22 +442,27 @@ public sealed class CitationAsyncInterleavingTests : IDisposable
     /// the wrong-note test and reintroduce the dead keypress the defer
     /// exists to prevent.</summary>
     [Fact]
-    public async Task ADeferredSummaryStillAnswersForTheNoteItWasAskedAbout()
+    public void ADeferredSummaryStillAnswersForTheNoteItWasAskedAbout()
     {
-        var announced = new List<A11yEvent>();
-        using VaultSession session = OpenScanned();
-        using var workspace = MakeAsyncWorkspace(session, announced);
+        StaThread.RunPumped(() =>
+        {
+            Assert.True(PanelWorkScheduler.CurrentContextIsUiDispatcher(),
+                "The deferred summary fixture must own a serialized dispatcher context.");
+            var announced = new List<A11yEvent>();
+            using VaultSession session = OpenScanned();
+            using var workspace = MakeAsyncWorkspace(session, announced);
 
-        workspace.OpenPath("cited.md");
-        Assert.True(workspace.Citations.IsLoading);
-        workspace.OpenCitationSummary();
-        Assert.Null(workspace.CitationSummary);
+            workspace.OpenPath("cited.md");
+            Assert.True(workspace.Citations.IsLoading);
+            workspace.OpenCitationSummary();
+            Assert.Null(workspace.CitationSummary);
 
-        await QuiesceAsync(workspace);
+            PumpedDispatcher.PumpUntilDrained(QuiesceAsync(workspace));
 
-        Assert.NotNull(workspace.CitationSummary);
-        // cited.md's own counts, not some other note's.
-        Assert.Equal(2, workspace.CitationSummary!.Total);
+            Assert.NotNull(workspace.CitationSummary);
+            // cited.md's own counts, not some other note's.
+            Assert.Equal(2, workspace.CitationSummary!.Total);
+        }, TimeSpan.FromSeconds(60), "The deferred citation summary fixture timed out.");
     }
 
     /// <summary>

@@ -88,7 +88,20 @@ public sealed class ModalSurfaceTests
             TextEditingChords.Allows(key, modifiers, rightAltDown: false),
             "a real Ctrl+Alt chord was treated as text editing and would "
             + "fire the shell command underneath the overlay.");
+
+        Assert.True(TextEditingChords.IsAltGr(modifiers, rightAltDown: true));
+        Assert.False(TextEditingChords.IsAltGr(modifiers, rightAltDown: false));
     }
+
+    /// <summary>The canvas shares the AltGr predicate only: right Alt down
+    /// with any other modifier mix is not AltGr.</summary>
+    [Theory]
+    [InlineData(ModifierKeys.Alt)]
+    [InlineData(ModifierKeys.Control)]
+    [InlineData(ModifierKeys.Alt | ModifierKeys.Shift)]
+    [InlineData(ModifierKeys.Control | ModifierKeys.Alt | ModifierKeys.Windows)]
+    public void RightAltWithoutControlAndAltIsNotAltGr(ModifierKeys modifiers) =>
+        Assert.False(TextEditingChords.IsAltGr(modifiers, rightAltDown: true));
 
     /// <summary>
     /// The palette refuses to open beneath ANY sheet, supersedes Quick

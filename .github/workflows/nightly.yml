@@ -1,6 +1,6 @@
 # Nightly deep verification (CI Phase 3, decision 3).
 #
-# Two things the per-PR lanes deliberately don't pay for:
+# Deeper verification beyond the moderate per-PR tiers:
 #
 #   1. The FULL census tier. Every census file honors SLATE_CENSUS_FULL=1
 #      (48 -> 400 seeds); before this workflow the 400-seed tier ran
@@ -9,6 +9,8 @@
 #   2. The full thin-LTO bench compile. PR lanes compile benches with
 #      LTO off (compile-rot check only); main-push covers the full
 #      profile per merge, and this catches rot on merge-free days too.
+#   3. Windows expanded native/GC/callback/cancellation/buffer stress.
+#      Its CensusTier reads the same flag but needs a native Windows host.
 #
 # Failures surface via GitHub's scheduled-workflow failure notifications;
 # fix-forward with a normal PR.
@@ -45,13 +47,10 @@ concurrency:
 jobs:
   full-census:
     name: full-tier censuses (400 seeds)
-    # Cache trust (adversarial round 1: an event-based rule sent a
-    # maintainer's MAIN dispatch to the fork-writable -pr lineage -
-    # restoring untrusted artifacts in a trusted context): routing is
-    # by REF. The cron and any dispatch on main share rust.yml's
-    # trusted slate-arm64 lineage; a dispatch on any other ref routes
-    # to -pr (see rust.yml header; the trusted volume carries a
-    # dashboard branch allow-list).
+    # Main cron/dispatch and other refs use their respective profiles.
+    # The custom slate-arm64 tag shares the Rust build volume across them;
+    # enforced persistence restrictions must cover every attach path.
+    # See docs/runbooks/ci-cache-policy.md before relying on trusted cache.
     runs-on: namespace-profile-arm64-fast${{ github.ref != 'refs/heads/main' && '-pr' || '' }};overrides.cache-tag=slate-arm64
     # A hung census must not burn the runner all night; per-PR runs finish
     # in ~4 min, full tier is expected in the 15-30 min band.
@@ -79,7 +78,7 @@ jobs:
           cache: rust
 
       - name: Cache mount state (pre-build)
-        # Bootstrap attestation (windows.yml runbook step 4): read
+        # Bootstrap attestation (docs/runbooks/ci-cache-policy.md step 3): read
         # BEFORE any build repopulates the volume, so a cold mount is
         # distinguishable from a surviving stale generation. Measured
         # at the VOLUME ROOT (adversarial round 4: the mount points are
@@ -156,3 +155,34 @@ jobs:
       - name: cargo bench --no-run (full committed profile)
         # Thin-LTO bench compile — the rot class PR lanes skip.
         run: cargo bench --workspace --no-run --locked
+
+  windows-full-stress:
+    name: Windows full-tier native stress
+    runs-on: windows-latest
+    timeout-minutes: 90
+    env:
+      SLATE_CENSUS_FULL: '1'
+    steps:
+      - name: Checkout
+        uses: actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0  # v7
+      - name: Build native Windows test host
+        uses: ./.github/actions/windows-native-build
+      - name: Run expanded Windows stress families
+        # Every current C# CensusTier consumer belongs to these families,
+        # including the graph lifetime partial class. PR coverage is retained.
+        run: >-
+          dotnet test apps/slate-windows/tests/SlateWindows.Tests/SlateWindows.Tests.csproj
+          --configuration Release --no-build
+          --filter "FullyQualifiedName~HandleLifetimeCensus|FullyQualifiedName~CallbackConcurrencyCensus|FullyQualifiedName~CancellationCensus|FullyQualifiedName~AvalonDocumentBufferCensus"
+          --logger "trx;LogFileName=windows-full-stress.trx"
+          --results-directory "${{ runner.temp }}\windows-full-stress"
+          --blame-hang-timeout 10m --blame-hang-dump-type mini
+      - name: Upload expanded stress evidence
+        if: ${{ always() }}
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a  # v7
+        with:
+          name: windows-full-stress-${{ github.run_id }}
+          overwrite: true
+          path: '${{ runner.temp }}\windows-full-stress\**\*'
+          if-no-files-found: warn
+          retention-days: 7

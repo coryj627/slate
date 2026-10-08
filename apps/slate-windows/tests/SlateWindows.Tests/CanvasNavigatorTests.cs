@@ -6358,7 +6358,8 @@ public sealed partial class CanvasNavigatorTests : IDisposable
     /// <summary>§E TE-11 (ED-1/E19): the canvas-scoped history
     /// chords DELIVER - Ctrl+Z reaches the undo verb through the
     /// ladder (the empty stack's spoken arm is the observable), and
-    /// Ctrl+Alt+N reaches New Card (the outline grows).</summary>
+    /// Ctrl+Alt+T and its legacy Ctrl+Alt+N alias reach New Card
+    /// (the outline grows once for each press).</summary>
     [Fact]
     public void HistoryAndNewCardChordsDeliverThroughTheLadder()
     {
@@ -6379,10 +6380,65 @@ public sealed partial class CanvasNavigatorTests : IDisposable
 
         int before = document.Outline.Count;
         Assert.True(document.Navigator.HandleKey(
-            Key.N, ModifierKeys.Control | ModifierKeys.Alt, presenter));
+            Key.T, ModifierKeys.Control | ModifierKeys.Alt, presenter));
         Assert.Equal(before + 1, document.Outline.Count);
+        Assert.True(document.Navigator.HandleKey(
+            Key.N, ModifierKeys.Control | ModifierKeys.Alt, presenter));
+        Assert.Equal(before + 2, document.Outline.Count);
         document.Shutdown();
     }
+
+    /// <summary>
+    /// AltGr reaches WPF as Ctrl+Alt. With the caret in the filter field,
+    /// Romanian Programmers' ț (AltGr+T), Turkish ₺ and US-International þ
+    /// arrived as Ctrl+Alt+T: the character was lost and an empty card was
+    /// written. Every Ctrl+Alt row the chord table delivers on the canvas,
+    /// Shift forms included, must reach an editable field as the reader's
+    /// character. The board keeps the chord for the same press, and a left
+    /// Alt Ctrl+Alt from the field is still the chord.
+    /// </summary>
+    [Fact]
+    public void AltGrInTheFilterFieldTypesInsteadOfFiringACanvasChord() =>
+        RunSta(() =>
+        {
+            CanvasDocumentViewModel document = Open("board.canvas");
+            var surface = new CanvasSurfaceView { Model = document };
+            using var host = Host(surface);
+            host.UpdateLayout();
+            var gestures = new KeyGestureConverter();
+            (string Chord, KeyGesture Gesture)[] altChords = [.. SlateWindows.Commands.ChordTable.Entries
+                .Where(row => row.Scope == SlateWindows.Commands.ChordScope.Canvas
+                    && row.WindowsChord?.StartsWith("Ctrl+Alt+", StringComparison.Ordinal) == true)
+                .Select(row => (row.WindowsChord!,
+                    (KeyGesture)gestures.ConvertFromInvariantString(row.WindowsChord!)!))];
+            // T, its legacy N, G, R, C and M, plus Shift+N and Shift+I.
+            Assert.True(altChords.Length >= 8,
+                $"premise: only {altChords.Length} Ctrl+Alt canvas rows were read: "
+                + string.Join(", ", altChords.Select(chord => chord.Chord)));
+            int cards = document.Outline.Count;
+
+            foreach ((string chord, KeyGesture gesture) in altChords)
+            {
+                Assert.False(
+                    surface.DeliverChord(gesture.Key, gesture.Modifiers, rightAltDown: true,
+                        surface.FilterFieldForTests),
+                    $"AltGr in the filter field fired {chord}; the character it types was lost.");
+            }
+            Assert.Equal(cards, document.Outline.Count);
+            Assert.False(document.Modes.IsActive, "an AltGr press entered a canvas mode.");
+
+            Assert.True(
+                surface.DeliverChord(Key.T, ModifierKeys.Control | ModifierKeys.Alt, rightAltDown: true,
+                    surface.VisualForTests),
+                "Ctrl+Alt+T from the board must stay the chord, whichever Alt key makes it.");
+            Assert.Equal(cards + 1, document.Outline.Count);
+            Assert.True(
+                surface.DeliverChord(Key.T, ModifierKeys.Control | ModifierKeys.Alt, rightAltDown: false,
+                    surface.FilterFieldForTests),
+                "a left Alt Ctrl+Alt+T from the filter field is the chord, not text.");
+            Assert.Equal(cards + 2, document.Outline.Count);
+            document.Shutdown();
+        });
 
 
     /// <summary>The review round's R2 half: a bare Shift chord on the

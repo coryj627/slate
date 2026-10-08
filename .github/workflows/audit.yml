@@ -3,7 +3,7 @@
 # unmaintained-crate warnings are reported but don't fail the gate.
 #
 # Cargo.lock is committed (CI Phase 3), so the audit scans the exact
-# resolved graph the build uses. Runs on a Namespace Linux runner — the
+# resolved graph the build uses. Runs on a standard hosted Linux runner — the
 # audit only inspects the dependency graph, which is platform-independent,
 # so it doesn't need the macOS pin the Swift build uses.
 
@@ -20,6 +20,8 @@ on:
       # Re-run the gate when the ignore list changes, so a newly-added
       # advisory ignore is validated (and a removed one re-checked).
       - '.cargo/audit.toml'
+      - 'scripts/verify_citation_dependency.py'
+      - 'scripts/test_citation_dependency.py'
   push:
     branches: [main]
     paths:
@@ -31,6 +33,8 @@ on:
       # Re-run the gate when the ignore list changes, so a newly-added
       # advisory ignore is validated (and a removed one re-checked).
       - '.cargo/audit.toml'
+      - 'scripts/verify_citation_dependency.py'
+      - 'scripts/test_citation_dependency.py'
   schedule:
     # Weekly, so a newly-disclosed advisory against an unchanged pinned
     # dependency is still caught without waiting for a manifest edit.
@@ -47,15 +51,9 @@ concurrency:
 jobs:
   audit:
     name: cargo audit
-    # Namespace Linux ARM64 runner (arm64-fast — high capacity + NVMe cache).
-    # cargo-audit is a Rust tool, so this needs a profile with the Rust
-    # toolchain preinstalled; arm64-fast ships cargo, x64-fast does not.
-    # Cache trust: runs ON MAIN (pushes and the cron, which executes
-    # the default branch) are trusted and share rust.yml's slate-arm64
-    # lineage; every other ref gets the -pr lineage (see rust.yml
-    # header; the trusted volume carries a dashboard branch
-    # allow-list).
-    runs-on: namespace-profile-arm64-fast${{ github.ref != 'refs/heads/main' && '-pr' || '' }};overrides.cache-tag=slate-arm64
+    # Lockfile audit is platform-independent; no native build volume is needed.
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
     permissions:
       contents: read
     steps:
@@ -97,74 +95,33 @@ jobs:
           if [ "$stale" -eq 1 ]; then exit 1; fi
           echo "Advisory ignores valid (today $today) — all review-by dates are in the future."
 
-      - name: Cache cargo (Namespace NVMe cache)
-        # Mirror rust.yml: the `rust` mode caches ~/.cargo/{registry,git},
-        # target/, and the global cache — deliberately NOT ~/.cargo/bin.
-        # cargo is preinstalled in the arm64-fast image at ~/.cargo/bin;
-        # mounting a cold cache volume over that dir shadows the toolchain
-        # (cargo: command not found), which is exactly what broke this job.
-        # cargo-audit therefore recompiles per run, but the cached registry
-        # keeps its dependency fetch fast, and audit is low-frequency (manifest
-        # changes + weekly cron), so the recompile is a non-issue.
-        uses: namespacelabs/nscloud-cache-action@c5f8dab7560444c4bf8dbc64f1b203431873c547  # v1
+      - name: Set up pinned Python
+        uses: actions/setup-python@5fda3b95a4ea91299a34e894583c3862153e4b97  # v7.0.0
         with:
-          cache: rust
+          python-version: '3.13'
 
-      - name: Cache mount state (pre-build)
-        # Bootstrap attestation (windows.yml runbook step 4): read
-        # BEFORE any build repopulates the volume, so a cold mount is
-        # distinguishable from a surviving stale generation. Measured
-        # at the VOLUME ROOT (adversarial round 4: the mount points are
-        # symlinks/junctions on mac/Windows and du reported link nodes,
-        # 0B even fully warm; NSC_CACHE_PATH holds the real content for
-        # every cache mode).
+      - name: Install repository-pinned Rust
         run: |
-          shopt -s nullglob dotglob
-          # Platform/vendor metadata is not cache content: skipped
-          # silently for both the cold decision and measurement
-          # (adversarial round 6: lost+found and containerscache on
-          # Linux, .Spotlight-V100/.Trashes/.fseventsd on macOS kept
-          # every attestation in the warning path, and permanent noise
-          # buries a real measurement failure).
-          is_metadata() {
-            case "$(basename "$1")" in
-              "lost+found"|containerscache|gitmirror|.Spotlight-V100|.Trashes|.fseventsd|.DS_Store) return 0 ;;
-              *) return 1 ;;
-            esac
-          }
-          root="${NSC_CACHE_PATH:?cache volume root missing}"
-          if [ ! -d "$root" ] || [ ! -r "$root" ]; then
-            # Fail CLOSED (adversarial round 7): with nullglob, a
-            # missing or unreadable root yields zero entries and the
-            # cold sentinel - a mount failure must never masquerade as
-            # bootstrap proof.
-            echo "::error::cache volume root $root is not an accessible directory - attestation impossible"
-            exit 1
-          fi
-          entries=()
-          for entry in "$root"/*; do
-            is_metadata "$entry" || entries+=("$entry")
-          done
-          if [ ${#entries[@]} -eq 0 ]; then
-            echo "cache volume empty (cold mount)"
-          else
-            for entry in "${entries[@]}"; do
-              # Per-entry measurement: one unreadable entry must not
-              # taint the rest, and emptiness is decided by
-              # enumeration, never by du's exit status (rounds 5-6).
-              du -sh "$entry" 2>/dev/null \
-                || echo "::warning::cannot measure $entry - measurement incomplete, NOT cold"
-            done
-          fi
+          slate_toolchain=$(python3 -c 'import tomllib; print(tomllib.load(open("rust-toolchain.toml", "rb"))["toolchain"]["channel"])')
+          rustup toolchain install "$slate_toolchain" --profile minimal
+
+      - name: Verify temporary citation Git admission and resolved application paths
+        # Python uses the same runtime line as the existing Mac pilot.
+        # No compilation or native cache volume is needed. The checker owns
+        # cargo metadata --locked --all-features and never changes the lock.
+        # It also writes the registry-identity lock audited below.
+        run: |
+          python3 -m unittest discover -s scripts -p test_citation_dependency.py
+          python3 scripts/verify_citation_dependency.py \
+            --audit-lock "$RUNNER_TEMP/citation-audit/Cargo.lock"
 
       - name: Install cargo-audit
         # Prebuilt, checksum-verified binary in seconds instead of
-        # `cargo install` compiling from source every run (~/.cargo/bin
-        # is deliberately never cached — see the cache step above — so
-        # the compile used to repeat per run). Version stays pinned
-        # (repo pin-everything convention); the advisory database is
-        # still fetched fresh each run, so coverage is unchanged. Bump
-        # deliberately.
+        # `cargo install` compiling from source every run (this job
+        # caches nothing, so the compile would repeat per run). Version
+        # stays pinned (repo pin-everything convention); the advisory
+        # database is still fetched fresh each run, so coverage is
+        # unchanged. Bump deliberately.
         uses: taiki-e/install-action@07b4745e0c39a41822af610387492e3e53aa222b  # v2.83.4
         with:
           tool: cargo-audit@0.22.2
@@ -178,3 +135,12 @@ jobs:
         # Unmaintained-crate warnings (e.g. transitive paste / yaml-rust)
         # are informational and do not fail the build.
         run: cargo audit
+
+      - name: cargo audit (admitted citationberg as its published crate)
+        # cargo-audit matches advisories only against crates.io sources, so
+        # the scan above skips the admitted Git citationberg entirely. This
+        # lock copy differs only in naming that revision (published 0.7.0
+        # plus the reviewed quick-xml line) by its registry identity; an
+        # advisory against citationberg 0.7.0 fails here. Same database as
+        # the scan above, so no second fetch.
+        run: cargo audit --no-fetch --file "$RUNNER_TEMP/citation-audit/Cargo.lock"

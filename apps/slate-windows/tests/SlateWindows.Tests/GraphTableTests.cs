@@ -894,7 +894,23 @@ public sealed partial class GraphTableTests
     /// timed out at the harness's two-minute budget on ten thousand
     /// files; this box needed 110 seconds of it).</summary>
     [Fact]
-    public void TenThousandRowsStayVirtualisedAndTheActionInventoryStaysThree()
+    public void TenThousandRowsStayVirtualisedAndTheActionInventoryStaysThree() =>
+        AssertTenThousandRowsStayVirtualised(yieldOneCleanupSlice: false);
+
+    [Fact]
+    public void TenThousandRowsStayVirtualisedWhenStandardCleanupNeedsAnotherSlice() =>
+        AssertTenThousandRowsStayVirtualised(yieldOneCleanupSlice: true);
+
+    [Fact]
+    public void RowsThatRefuseUnloadingCannotPassTheVirtualisationBound()
+    {
+        Xunit.Sdk.TrueException failure = Assert.Throws<Xunit.Sdk.TrueException>(() =>
+            AssertTenThousandRowsStayVirtualised(yieldOneCleanupSlice: false, cancelCleanup: true));
+        Assert.Contains("row cleanup did not reach its bound", failure.Message);
+        Assert.Contains("unloaded 0", failure.Message);
+    }
+
+    private static void AssertTenThousandRowsStayVirtualised(bool yieldOneCleanupSlice, bool cancelCleanup = false)
     {
         RunSta(() =>
         {
@@ -927,6 +943,29 @@ public sealed partial class GraphTableTests
                 _ = kindsRealized.Add(((GraphTableRow)e.Row.Item).Kind);
             };
             grid.UnloadingRow += (_, _) => unloaded++;
+            bool yieldedCleanupSlice = false;
+            System.Windows.Controls.CleanUpVirtualizedItemEventHandler cleanupControl = (_, e) =>
+            {
+                if (cancelCleanup)
+                {
+                    e.Cancel = true;
+                    return;
+                }
+                if (!yieldOneCleanupSlice || yieldedCleanupSlice)
+                {
+                    return;
+                }
+                yieldedCleanupSlice = true;
+                // A real client callback can exceed WPF's 50 ms cleanup
+                // slice. The panel must finish via its own continuation;
+                // this callback neither cancels nor forces any removal.
+                var work = System.Diagnostics.Stopwatch.StartNew();
+                while (work.Elapsed < TimeSpan.FromMilliseconds(70))
+                {
+                    Thread.SpinWait(256);
+                }
+            };
+            System.Windows.Controls.VirtualizingStackPanel.AddCleanUpVirtualizedItemHandler(grid, cleanupControl);
             var window = new System.Windows.Window
             {
                 Content = view,
@@ -935,9 +974,9 @@ public sealed partial class GraphTableTests
                 ShowInTaskbar = false,
                 WindowStyle = System.Windows.WindowStyle.None,
             };
-            window.Show();
             try
             {
+                window.Show();
                 grid.UpdateLayout();
                 // The capacity is the frozen text's (A-15): the VIEWPORT's row
                 // capacity plus the PANEL's cache length, both READ from the
@@ -955,48 +994,55 @@ public sealed partial class GraphTableTests
                 Assert.Equal(System.Windows.Controls.ScrollUnit.Item, System.Windows.Controls.VirtualizingPanel.GetScrollUnit(grid));
                 int viewportRows = (int)Math.Ceiling(panel.ViewportHeight);
                 System.Windows.Controls.VirtualizationCacheLength cache = System.Windows.Controls.VirtualizingPanel.GetCacheLength(grid);
-                double cacheItems = System.Windows.Controls.VirtualizingPanel.GetCacheLengthUnit(grid) switch
-                {
-                    System.Windows.Controls.VirtualizationCacheLengthUnit.Item => cache.CacheBeforeViewport + cache.CacheAfterViewport,
-                    System.Windows.Controls.VirtualizationCacheLengthUnit.Page => (cache.CacheBeforeViewport + cache.CacheAfterViewport) * viewportRows,
-                    _ => throw new InvalidOperationException("a pixel cache length has no row capacity"),
-                };
+                Assert.Equal(
+                    System.Windows.Controls.VirtualizationCacheLengthUnit.Item,
+                    System.Windows.Controls.VirtualizingPanel.GetCacheLengthUnit(grid));
+                Assert.Equal(1.0, cache.CacheBeforeViewport);
+                Assert.Equal(1.0, cache.CacheAfterViewport);
+                // Item units, asserted above: the cache lengths are rows.
+                double cacheItems = cache.CacheBeforeViewport + cache.CacheAfterViewport;
                 int capacity = viewportRows + (int)Math.Ceiling(cacheItems);
-                // AT REST the panel holds the capacity itself, with an
-                // allowance of two for a partially visible row at each edge:
-                // that is A-15's sentence, asserted for the first page and
-                // again at the end, where nothing is in flight (IPF-2).
+                // The FIRST page needs only the capacity itself, with an
+                // allowance of two for a partially visible row at each edge.
+                // After paging, Standard mode can legally retain several
+                // pages even with no cleanup pending; that is a different
+                // predicate from the first-page count (IPF-2).
                 int restingBound = capacity + 2;
                 // WHILE PAGING, WPF's Standard virtualisation defers its
                 // cleanup: a jump's new containers join the old ones until
-                // the panel's own threshold trips, and no public API forces
-                // that pass (pumping does not). Measured here it peaks near
+                // the panel's own threshold trips, and one background frame
+                // need not finish its continuations. Measured here it peaks near
                 // four capacities before falling back to one. Five capacities
                 // is the transient ceiling — a stated empirical allowance
                 // over the contract's resting bound, not a reading of it —
                 // and a panel that never unloads exceeds it within five
-                // pages, which the sweep's `ipd3-never-unload` confirms.
+                // pages. The refusal control below proves that a grid which
+                // never unloads cannot pass even with the cleanup wait.
                 int pagingBound = capacity * 5;
                 Assert.True(viewportRows > 0 && viewportRows < document.Publication.Rows.Count / 10, $"the viewport holds {viewportRows} rows");
                 int live = loaded - unloaded;
                 Assert.True(live > 0 && live <= restingBound, $"{live} live containers for the first page against a capacity of {capacity}");
+                Assert.Equal(live, CountRealisedRows(panel));
                 // Page through: the live count stays bounded, never the row count.
                 for (int page = 0; page < 20; page++)
                 {
                     grid.ScrollIntoView(document.Publication.Rows[Math.Min(document.Publication.Rows.Count - 1, (page + 1) * 500)]);
                     grid.UpdateLayout();
-                    // A background frame for whatever cleanup the panel deferred.
+                    // One frame can run cache measurement while leaving a
+                    // cleanup continuation behind it. Keep the same ceiling,
+                    // but let the panel finish its own deferred work before
+                    // advancing to another page.
                     PumpedDispatcher.Drain();
-                    Assert.True(
-                        loaded - unloaded <= pagingBound,
-                        $"{loaded - unloaded} live containers after page {page} against a bound of {pagingBound} ({viewportRows} rows in the viewport, {cacheItems} cached)");
+                    AssertRowCleanupReachedBound(
+                        grid, panel, () => loaded - unloaded, pagingBound, $"after page {page}",
+                        () => $"loaded {loaded}, unloaded {unloaded}; initial viewport {viewportRows}, cache {cacheItems}");
                 }
                 grid.ScrollIntoView(document.Publication.Rows[^1]);
                 grid.UpdateLayout();
                 PumpedDispatcher.Drain();
-                Assert.True(
-                    loaded - unloaded <= pagingBound,
-                    $"{loaded - unloaded} live containers at the end against a bound of {pagingBound}");
+                AssertRowCleanupReachedBound(
+                    grid, panel, () => loaded - unloaded, pagingBound, "at the end",
+                    () => $"loaded {loaded}, unloaded {unloaded}; initial viewport {viewportRows}, cache {cacheItems}");
                 // Unloading HAPPENED — a panel that only realises would have
                 // twenty pages live — and never every row.
                 Assert.True(unloaded > 0, "no container was ever unloaded");
@@ -1008,14 +1054,102 @@ public sealed partial class GraphTableTests
                 // under links-in descending; the notes close the table).
                 Assert.Contains(GraphNodeKind.Ghost, kindsRealized);
                 Assert.Contains(GraphNodeKind.Note, kindsRealized);
+                Assert.Equal(yieldOneCleanupSlice, yieldedCleanupSlice);
             }
             finally
             {
+                System.Windows.Controls.VirtualizingStackPanel.RemoveCleanUpVirtualizedItemHandler(grid, cleanupControl);
                 window.Close();
             }
             Assert.Equal(3, document.ActionInventoryCrossings);
             Assert.Equal(3, document.CrossingsForTests["graph_row_actions"]);
         });
+    }
+
+    /// <summary>Wait for public row-unload/layout progress, never force
+    /// WPF's private cleanup or increase the original row ceiling.</summary>
+    private static void AssertRowCleanupReachedBound(
+        DataGrid grid,
+        System.Windows.Controls.VirtualizingStackPanel panel,
+        Func<int> liveRows,
+        int bound,
+        string phase,
+        Func<string> counts)
+    {
+        if (liveRows() > bound)
+        {
+            // WPF's Standard cleanup yields after a 50 ms slice and resumes
+            // on a 500 ms timer. Three seconds allows several continuations
+            // while retaining a finite failure for refusal/nonvirtualization.
+            // This is a deadline for real unload events, not a fixed sleep.
+            var frame = new System.Windows.Threading.DispatcherFrame();
+            System.Windows.Threading.Dispatcher dispatcher = grid.Dispatcher;
+            System.Windows.Threading.DispatcherOperation? pendingCheck = null;
+            void QueueCheck()
+            {
+                if (pendingCheck?.Status == System.Windows.Threading.DispatcherOperationStatus.Pending)
+                {
+                    return;
+                }
+                pendingCheck = dispatcher.BeginInvoke(
+                    System.Windows.Threading.DispatcherPriority.Background,
+                    () =>
+                    {
+                        if (liveRows() <= bound)
+                        {
+                            frame.Continue = false;
+                        }
+                    });
+            }
+            EventHandler<DataGridRowEventArgs> unloading = (_, _) => QueueCheck();
+            EventHandler layout = (_, _) => QueueCheck();
+            var deadline = new System.Windows.Threading.DispatcherTimer(
+                System.Windows.Threading.DispatcherPriority.Send)
+            {
+                Interval = TimeSpan.FromSeconds(3),
+            };
+            deadline.Tick += (_, _) => frame.Continue = false;
+            grid.UnloadingRow += unloading;
+            grid.LayoutUpdated += layout;
+            try
+            {
+                QueueCheck();
+                deadline.Start();
+                System.Windows.Threading.Dispatcher.PushFrame(frame);
+            }
+            finally
+            {
+                deadline.Stop();
+                grid.UnloadingRow -= unloading;
+                grid.LayoutUpdated -= layout;
+                if (pendingCheck?.Status == System.Windows.Threading.DispatcherOperationStatus.Pending)
+                {
+                    _ = pendingCheck.Abort();
+                }
+            }
+        }
+        int live = liveRows();
+        System.Windows.Controls.VirtualizationCacheLength cache = System.Windows.Controls.VirtualizingPanel.GetCacheLength(grid);
+        Assert.True(
+            live <= bound,
+            $"row cleanup did not reach its bound {bound} {phase}: {live} event-count rows, {CountRealisedRows(panel)} attached rows; "
+            + $"{counts()}; current viewport {panel.ViewportHeight}, cache {cache.CacheBeforeViewport}/{cache.CacheAfterViewport} "
+            + $"{System.Windows.Controls.VirtualizingPanel.GetCacheLengthUnit(grid)}, "
+            + $"mouse {System.Windows.Input.Mouse.LeftButton}, focus within {panel.IsKeyboardFocusWithin}");
+        Assert.Equal(live, CountRealisedRows(panel));
+    }
+
+    private static int CountRealisedRows(System.Windows.Controls.VirtualizingStackPanel panel)
+    {
+        int rows = 0;
+        for (int index = 0; index < System.Windows.Media.VisualTreeHelper.GetChildrenCount(panel); index++)
+        {
+            if (System.Windows.Media.VisualTreeHelper.GetChild(panel, index) is DataGridRow)
+            {
+                rows++;
+            }
+        }
+        return rows;
     }
 
     /// <summary>The grid's items panel — the substrate's virtualising
