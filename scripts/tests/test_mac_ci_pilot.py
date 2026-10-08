@@ -175,9 +175,11 @@ class MacPilotGateTests(unittest.TestCase):
         for source in ["main", "e6a8337b", "a" * 39, "$(date)", "A" * 40]:
             with self.subTest(source=source), self.assertRaises(ValueError):
                 pilot.validate_inputs(source, "hosted-xcode27", "pair-1")
-        with self.assertRaises(ValueError):
-            pilot.validate_inputs(pilot.REFERENCE, "new-paid-profile", "pair-1")
-        for candidate in ["hosted-xcode27", "namespace-goldengate6x14", "namespace-tahoeslim6x14"]:
+        # Golden Gate answers no Finder Apple Events; it is withdrawn until it does.
+        for candidate in ["new-paid-profile", "namespace-goldengate6x14"]:
+            with self.subTest(candidate=candidate), self.assertRaises(ValueError):
+                pilot.validate_inputs(pilot.REFERENCE, candidate, "pair-1")
+        for candidate in ["hosted-xcode27", "namespace-tahoeslim6x14"]:
             with self.subTest(candidate=candidate):
                 pilot.validate_inputs(pilot.REFERENCE, candidate, "pair-1")
 

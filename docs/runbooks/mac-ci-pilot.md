@@ -29,12 +29,13 @@ substitute a compiler or change a shared profile to obtain a pass.
 | Candidate input | Runner label | Comparison boundary |
 | --- | --- | --- |
 | `hosted-xcode27` | `xcode-27` | Standard public GitHub ARM preview image; inspect actual image, hardware and OS. |
-| `namespace-goldengate6x14` | `nscloud-macos-goldengate-arm64-6x14` | Direct 6 CPU/14 GiB label without a cache suffix or custom tag; reject an existing Namespace cache mount. |
-| `namespace-tahoeslim6x14` | `nscloud-macos-tahoe-slim-arm64-6x14` | Tahoe image offering only current Xcodes (26.6.2 with Xcode 27 in the dashboard); same shape and cache rules. |
+| `namespace-tahoeslim6x14` | `nscloud-macos-tahoe-slim-arm64-6x14` | Direct 6 CPU/14 GiB Tahoe image offering only current Xcodes (26.6.2 with Xcode 27 in the dashboard), without a cache suffix or custom tag; reject an existing Namespace cache mount. |
 
-Finder answered no Apple Events on the Golden Gate image (October 3 and 7),
-so the Tahoe slim label was added on October 7. The dashboard does not name
-its labels; preflight's recorded OS and Xcode builds confirm the image.
+Finder answered no Apple Events on the Golden Gate image
+(`nscloud-macos-goldengate-arm64-6x14`) on October 3 and 7, so the Tahoe
+slim label replaced it on October 7. The dashboard does not name its labels;
+preflight's recorded OS and Xcode builds confirm the image. Restore Golden
+Gate only after its Finder diagnostic passes.
 
 CPU generation, allocated memory and OS builds may differ. This compares the
 available configurations; it does not isolate the provider name as a cause.
@@ -60,7 +61,7 @@ gh workflow run mac-ci-pilot.yml --repo coryj627/slate \
 gh workflow run mac-ci-pilot.yml --repo coryj627/slate \
   --ref codex/windows-ci-cost-and-test-repairs \
   -f source_sha=a64eb393f5470b9cdb94f3f537a85ceeeda3f7c4 \
-  -f runner=namespace-goldengate6x14 -f pair_id=mac-pair-current-1
+  -f runner=namespace-tahoeslim6x14 -f pair_id=mac-pair-current-1
 ```
 
 Workflow serialization uses branch, candidate and pair identity with

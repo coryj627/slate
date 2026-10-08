@@ -18,7 +18,7 @@ on:
       runner:
         description: Complete native and independent analyzer candidate; no Namespace cache volume.
         type: choice
-        options: [hosted-xcode27, namespace-goldengate6x14, namespace-tahoeslim6x14]
+        options: [hosted-xcode27, namespace-tahoeslim6x14]
         default: hosted-xcode27
       pair_id:
         description: Common identifier for the two provider runs; use a new identifier for each repetition.
@@ -60,7 +60,7 @@ jobs:
   native:
     name: Full native cold and warm (${{ inputs.runner }})
     if: github.event_name == 'workflow_dispatch'
-    runs-on: ${{ inputs.runner == 'namespace-goldengate6x14' && 'nscloud-macos-goldengate-arm64-6x14' || inputs.runner == 'namespace-tahoeslim6x14' && 'nscloud-macos-tahoe-slim-arm64-6x14' || 'xcode-27' }}
+    runs-on: ${{ inputs.runner == 'namespace-tahoeslim6x14' && 'nscloud-macos-tahoe-slim-arm64-6x14' || 'xcode-27' }}
     timeout-minutes: 60
     steps:
       - name: Checkout experiment harness with ancestry
@@ -111,7 +111,7 @@ jobs:
   analyzer:
     name: Independent pinned analyzer cold and warm (${{ inputs.runner }})
     if: github.event_name == 'workflow_dispatch'
-    runs-on: ${{ inputs.runner == 'namespace-goldengate6x14' && 'nscloud-macos-goldengate-arm64-6x14' || inputs.runner == 'namespace-tahoeslim6x14' && 'nscloud-macos-tahoe-slim-arm64-6x14' || 'xcode-27' }}
+    runs-on: ${{ inputs.runner == 'namespace-tahoeslim6x14' && 'nscloud-macos-tahoe-slim-arm64-6x14' || 'xcode-27' }}
     timeout-minutes: 30
     steps:
       - name: Checkout experiment harness with ancestry
