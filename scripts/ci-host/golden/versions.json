@@ -1,0 +1,12 @@
+{
+  "runnerVersion": "2.338.0",
+  "runnerSha256": "f48e0750a21812bca5f82de5f7f5aeae71abee647fab5a582f1742d07eba455f",
+  "rustToolchain": "1.97.1",
+  "bindgenTag": "v0.11.0+v0.31.0",
+  "dotnetChannel": "10.0",
+  "pythonVersion": "3.13.15",
+  "gitVersion": "2.55.0.5",
+  "gitTag": "v2.55.0.windows.5",
+  "vsBuildToolsUrl": "https://aka.ms/vs/17/release/vs_BuildTools.exe",
+  "dns": "1.1.1.1,8.8.8.8"
+}

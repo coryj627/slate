@@ -693,6 +693,37 @@ function Select-SlateKvpItems {
     return $items
 }
 
+function New-RandomPassword {
+    # Host-only. Alphanumeric so it survives every quoting context the
+    # unattend, winlogon registry and scheduled-task registration use.
+    [CmdletBinding()]
+    param([int]$Length = 24)
+    $alphabet = 'ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789'
+    $chars = New-Object char[] $Length
+    for ($i = 0; $i -lt $Length; $i++) {
+        $chars[$i] = $alphabet[[System.Security.Cryptography.RandomNumberGenerator]::GetInt32(0, $alphabet.Length)]
+    }
+    return (-join $chars)
+}
+
+function Expand-UnattendTemplate {
+    [CmdletBinding()]
+    param(
+        [Parameter(Mandatory)][string]$TemplatePath,
+        [Parameter(Mandatory)][string]$ProductKey,
+        [Parameter(Mandatory)][string]$ProvisionPassword,
+        [Parameter(Mandatory)][string]$RunnerPassword
+    )
+    if ($ProductKey -notmatch '^[A-Z0-9]{5}(-[A-Z0-9]{5}){4}$') { throw 'product key must look like XXXXX-XXXXX-XXXXX-XXXXX-XXXXX' }
+    $text = Get-Content -Raw -LiteralPath $TemplatePath
+    $text = $text.Replace('__PRODUCT_KEY__', $ProductKey)
+    $text = $text.Replace('__PROVISION_PASSWORD__', [System.Security.SecurityElement]::Escape($ProvisionPassword))
+    $text = $text.Replace('__RUNNER_PASSWORD__', [System.Security.SecurityElement]::Escape($RunnerPassword))
+    if ($text -match '__[A-Z_]+__') { throw "unattend placeholder left unrendered: $($Matches[0])" }
+    return $text
+}
+
 Export-ModuleMember -Function Get-LaneFromLabels, New-RunnerName, Split-KvpChunks, Join-KvpChunks,
     ConvertTo-DateTimeOffset, Select-QueuedLaneJobs, Select-JobsToAdmit, Register-JobRetry, Test-VmExpired, Get-StaleRunnerNames, Test-CommitEligible, Resolve-RunnerJob, Get-CiHostConfig, New-Journal, Read-Journal, Write-Journal, Write-CiLog,
-    Get-FreeSlots, Remove-ActiveVm, Test-SiblingRunning, Complete-ActiveVm, Update-ActiveVm, Invoke-Admission, Invoke-OrchestratorTick, Invoke-StartupSweep, Select-SlateKvpItems
+    Get-FreeSlots, Remove-ActiveVm, Test-SiblingRunning, Complete-ActiveVm, Update-ActiveVm, Invoke-Admission, Invoke-OrchestratorTick, Invoke-StartupSweep, Select-SlateKvpItems,
+    New-RandomPassword, Expand-UnattendTemplate
