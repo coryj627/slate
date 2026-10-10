@@ -43,15 +43,24 @@ foreach ($dir in 'bin', 'golden', 'cache', 'vms', 'state', 'logs') {
 
 Write-Host "3/9 account $Account (Hyper-V Administrators only, no interactive logon)"
 $existing = Get-LocalUser -Name $Account -ErrorAction SilentlyContinue
-$tasksPresent = @('slate-ci-orchestrator', 'slate-ci-store-token' | Where-Object { Get-ScheduledTask -TaskName $_ -ErrorAction SilentlyContinue }).Count -eq 2
+$taskNames = @('slate-ci-orchestrator', 'slate-ci-store-token')
+$presentTasks = @($taskNames | Where-Object { Get-ScheduledTask -TaskName $_ -ErrorAction SilentlyContinue })
 # A re-run keeps the password: a reset strands the DPAPI-protected token
 # and the tasks' stored credential. A missing task (an interrupted first
 # run) can only be registered with a new password, so that path resets.
-$keepAccount = $existing -and $tasksPresent -and -not $ResetAccount
+$keepAccount = $existing -and $presentTasks.Count -eq $taskNames.Count -and -not $ResetAccount
 if ($keepAccount) {
     Write-Host '  account and tasks kept; pass -ResetAccount to rotate the password, which also requires store-token.ps1 again'
 } else {
     if ($existing -and -not $ResetAccount) { Write-Host '  a scheduled task is missing: the password is reset so both can be registered' }
+    # The tasks go before the password changes: a run interrupted between
+    # here and step 9 leaves them missing, which a plain re-run repairs,
+    # never registered with a password that no longer works.
+    foreach ($task in $taskNames) { Unregister-ScheduledTask -TaskName $task -Confirm:$false -ErrorAction SilentlyContinue }
+    if (@($taskNames | Where-Object { Get-ScheduledTask -TaskName $_ -ErrorAction SilentlyContinue }).Count -gt 0) {
+        throw 'the scheduled tasks could not be removed before the password reset'
+    }
+    if ($presentTasks.Count -gt 0) { Write-Host "  removed $($presentTasks -join ' and ') for re-registration in step 9" }
     $password = New-RandomPassword -Length 32
     $secure = ConvertTo-SecureString -String $password -AsPlainText -Force
     if ($existing) {
@@ -86,7 +95,8 @@ Write-Host '4/9 ACLs'
 # folders) and grants Administrators, SYSTEM and the account explicitly;
 # everything below inherits that. No /T: it would also stamp an explicit
 # Modify on golden that /inheritance:r keeps; /grant:r leaves the account
-# read-only there whatever it held before.
+# read-only there whatever it held before. bin gets the same read-only
+# grant in step 8, after the mirror.
 & icacls.exe $Root /inheritance:r /grant 'Administrators:(OI)(CI)F' /grant 'SYSTEM:(OI)(CI)F' /grant "${Account}:(OI)(CI)M" | Out-Null
 if ($LASTEXITCODE -ne 0) { throw "icacls exited $LASTEXITCODE securing $Root" }
 & icacls.exe (Join-Path $Root 'golden') /inheritance:r /grant 'Administrators:(OI)(CI)F' /grant 'SYSTEM:(OI)(CI)F' /grant:r "${Account}:(OI)(CI)RX" | Out-Null
@@ -133,8 +143,17 @@ foreach ($lane in $CacheLanes) {
     $disk = Mount-VHD -Path $path -Passthru | Get-Disk
     try {
         Initialize-Disk -Number $disk.Number -PartitionStyle GPT
-        $partition = New-Partition -DiskNumber $disk.Number -UseMaximumSize -AssignDriveLetter
+        # Formatted before it gets a drive letter: a letter on a raw volume
+        # makes Explorer ask to format it, a dialog that takes focus (and
+        # the screen reader) from whatever the owner is doing.
+        $partition = New-Partition -DiskNumber $disk.Number -UseMaximumSize
         Format-Volume -Partition $partition -FileSystem NTFS -NewFileSystemLabel 'slate-cache' -Confirm:$false | Out-Null
+        $partition = Get-Partition -DiskNumber $disk.Number -PartitionNumber $partition.PartitionNumber
+        if (-not $partition.DriveLetter) {
+            Add-PartitionAccessPath -DiskNumber $disk.Number -PartitionNumber $partition.PartitionNumber -AssignDriveLetter
+            $partition = Get-Partition -DiskNumber $disk.Number -PartitionNumber $partition.PartitionNumber
+        }
+        if (-not $partition.DriveLetter) { throw "the $lane cache volume got no drive letter" }
         New-Item -ItemType Directory -Force -Path ('{0}:\cache' -f $partition.DriveLetter) | Out-Null
     } finally {
         Dismount-VHD -Path $path
@@ -144,9 +163,18 @@ foreach ($lane in $CacheLanes) {
 }
 
 Write-Host "8/9 bin <- $source"
+# Resolved before the mirror: a source that is not a checkout (such as the
+# installed copy itself) stops here, and no empty commit file is written.
+$commit = & git -C $source rev-parse HEAD
+if ($LASTEXITCODE -ne 0) { throw "git rev-parse HEAD exited $LASTEXITCODE in $source (run this from the repository checkout)" }
 & robocopy.exe $source (Join-Path $Root 'bin') /MIR /XD tests /NFL /NDL /NJH /NJS | Out-Null
 if ($LASTEXITCODE -ge 8) { throw "robocopy exited $LASTEXITCODE" }
-(& git -C $source rev-parse HEAD) | Set-Content -LiteralPath (Join-Path $Root 'bin\install-commit.txt')
+Set-Content -LiteralPath (Join-Path $Root 'bin\install-commit.txt') -Value $commit
+# The orchestrator only reads bin: read-only for the account, so the code
+# that runs as a Hyper-V Administrator is only written by an elevated
+# administrator. Applied after the mirror, so a re-run refreshes bin first.
+& icacls.exe (Join-Path $Root 'bin') /inheritance:r /grant 'Administrators:(OI)(CI)F' /grant 'SYSTEM:(OI)(CI)F' /grant:r "${Account}:(OI)(CI)RX" | Out-Null
+if ($LASTEXITCODE -ne 0) { throw "icacls exited $LASTEXITCODE restricting $Root\bin" }
 
 Write-Host '9/9 scheduled tasks'
 if ($keepAccount) {
@@ -155,8 +183,11 @@ if ($keepAccount) {
     $pwsh = (Get-Command pwsh).Source
     # A zero ExecutionTimeLimit means "no limit" (PT0S); the runbook verifies
     # the task's "Stop the task if it runs longer than" box is unchecked.
+    # The battery switches keep the loop running on a UPS, which Windows
+    # reports as a battery.
     $loopSettings = New-ScheduledTaskSettingsSet -RestartCount 999 -RestartInterval (New-TimeSpan -Minutes 1) `
-        -ExecutionTimeLimit (New-TimeSpan -Seconds 0) -MultipleInstances IgnoreNew -StartWhenAvailable
+        -ExecutionTimeLimit (New-TimeSpan -Seconds 0) -MultipleInstances IgnoreNew -StartWhenAvailable `
+        -AllowStartIfOnBatteries -DontStopIfGoingOnBatteries
     # Relaunch every minute if the loop has exited (RestartCount covers a
     # failed start; a non-zero exit is not reliably retried). IgnoreNew
     # keeps a single instance while one is running. No -RepetitionDuration:

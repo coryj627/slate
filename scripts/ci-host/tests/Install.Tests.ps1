@@ -71,6 +71,30 @@ Describe 'install scripts' {
         $text | Should -Match ([regex]::Escape('-Trigger @($loopTrigger, $repeatTrigger)'))
         $text | Should -Match ([regex]::Escape('[switch]$ResetAccount'))
     }
+    It 'a reset removes both tasks before the password changes' {
+        $text = Get-Content -Raw (Join-Path $installDir 'setup-host.ps1')
+        $unregister = $text.IndexOf('Unregister-ScheduledTask')
+        $unregister | Should -BeGreaterOrEqual 0
+        $unregister | Should -BeLessThan $text.IndexOf('Set-LocalUser -Name')
+        $unregister | Should -BeLessThan $text.IndexOf('New-LocalUser -Name')
+    }
+    It 'bin becomes read-only for the account after the mirror' {
+        $text = Get-Content -Raw (Join-Path $installDir 'setup-host.ps1')
+        $binLine = 'icacls.exe (Join-Path $Root ''bin'') /inheritance:r /grant ''Administrators:(OI)(CI)F'' /grant ''SYSTEM:(OI)(CI)F'' /grant:r "${Account}:(OI)(CI)RX"'
+        $text | Should -Match ([regex]::Escape($binLine))
+        $text.IndexOf($binLine) | Should -BeGreaterThan $text.IndexOf('robocopy.exe')
+    }
+    It 'a cache volume is formatted before it gets a drive letter' {
+        $text = Get-Content -Raw (Join-Path $installDir 'setup-host.ps1')
+        $text | Should -Not -Match 'New-Partition[^\r\n]*-AssignDriveLetter'
+        $text | Should -Match 'Add-PartitionAccessPath -DiskNumber'
+    }
+    It 'the loop task runs on battery power and the install commit must resolve' {
+        $text = Get-Content -Raw (Join-Path $installDir 'setup-host.ps1')
+        $text | Should -Match '-AllowStartIfOnBatteries'
+        $text | Should -Match '-DontStopIfGoingOnBatteries'
+        $text | Should -Match 'rev-parse HEAD\r?\nif \(\$LASTEXITCODE -ne 0\) \{ throw'
+    }
     It 'store-token only accepts a fine-grained PAT and removes the plaintext' {
         $text = Get-Content -Raw (Join-Path $installDir 'store-token.ps1')
         $text | Should -Match 'github_pat_'
