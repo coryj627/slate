@@ -122,9 +122,16 @@ if (-not (Get-NetNat -Name $SwitchName -ErrorAction SilentlyContinue)) {
 }
 
 Write-Host '6/9 host firewall: VM subnet may route through the host, never talk to it'
+# The host's own addresses on the switch: the gateway, and the multicast
+# and broadcast destinations its discovery services answer on (the port
+# ACL drops those too). Forwarded NAT traffic is addressed elsewhere, so
+# the rule leaves it alone. A re-run brings an existing rule up to date.
 $ruleName = 'slate-ci: block VM subnet to host'
-if (-not (Get-NetFirewallRule -DisplayName $ruleName -ErrorAction SilentlyContinue)) {
-    New-NetFirewallRule -DisplayName $ruleName -Direction Inbound -Action Block -RemoteAddress $NatPrefix -LocalAddress $Gateway -InterfaceAlias $alias -Profile Any | Out-Null
+$localAddresses = @($Gateway, '224.0.0.0/4', '255.255.255.255')
+if (Get-NetFirewallRule -DisplayName $ruleName -ErrorAction SilentlyContinue) {
+    Set-NetFirewallRule -DisplayName $ruleName -Direction Inbound -Action Block -RemoteAddress $NatPrefix -LocalAddress $localAddresses -InterfaceAlias $alias -Profile Any
+} else {
+    New-NetFirewallRule -DisplayName $ruleName -Direction Inbound -Action Block -RemoteAddress $NatPrefix -LocalAddress $localAddresses -InterfaceAlias $alias -Profile Any | Out-Null
 }
 
 Write-Host "7/9 cache parents ($CacheGB GB dynamic, NTFS, label slate-cache)"

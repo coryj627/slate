@@ -11,10 +11,14 @@
 function Get-ExtendedAclRules {
     # Higher weight is evaluated first. Deny every private, CGNAT
     # (Tailscale), link-local and IPv6 range in both directions, then
-    # allow the rest (the Internet). ARP is not IP, so the NAT gateway
-    # still resolves as a next hop while 10.77.0.1 itself is unreachable.
+    # allow the rest (the Internet). Multicast, limited broadcast and
+    # 0.0.0.0/8 are not private, yet they reach the host itself (mDNS,
+    # LLMNR, SSDP, NetBIOS), so they are denied too: 18 deny rules, then
+    # the two allow-alls. ARP is not IP, so the NAT gateway still resolves
+    # as a next hop while 10.77.0.1 itself is unreachable.
     [CmdletBinding()]
-    param([string[]]$DenyRanges = @('10.0.0.0/8', '172.16.0.0/12', '192.168.0.0/16', '100.64.0.0/10', '169.254.0.0/16'))
+    param([string[]]$DenyRanges = @('10.0.0.0/8', '172.16.0.0/12', '192.168.0.0/16', '100.64.0.0/10', '169.254.0.0/16',
+            '224.0.0.0/4', '255.255.255.255/32', '0.0.0.0/8'))
     $rules = @()
     $weight = 200
     foreach ($range in ($DenyRanges + @('::/0'))) {

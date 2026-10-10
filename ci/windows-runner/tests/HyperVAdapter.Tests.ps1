@@ -35,17 +35,25 @@ BeforeAll {
 }
 
 Describe 'Get-ExtendedAclRules' {
-    It 'denies every private, CGNAT, link-local and IPv6 range both ways above a catch-all allow' {
+    It 'denies every private, CGNAT, link-local, multicast, broadcast, this-network and IPv6 range both ways above a catch-all allow' {
+        # Multicast and broadcast are not private ranges, yet they reach the
+        # host itself (mDNS, LLMNR, SSDP, NetBIOS) and the catch-all allow
+        # would pass them.
+        $ranges = '10.0.0.0/8', '172.16.0.0/12', '192.168.0.0/16', '100.64.0.0/10', '169.254.0.0/16',
+            '224.0.0.0/4', '255.255.255.255/32', '0.0.0.0/8', '::/0'
         $rules = @(Get-ExtendedAclRules)
-        $rules.Count | Should -Be 14
+        # 18 deny rules (nine ranges, both directions), then the two allow-alls.
+        $rules.Count | Should -Be 20
         $denies = @($rules | Where-Object Action -eq 'Deny')
-        $denies.Count | Should -Be 12
-        foreach ($range in '10.0.0.0/8', '172.16.0.0/12', '192.168.0.0/16', '100.64.0.0/10', '169.254.0.0/16', '::/0') {
+        $denies.Count | Should -Be 18
+        foreach ($range in $ranges) {
             foreach ($direction in 'Outbound', 'Inbound') {
                 @($denies | Where-Object { $_.RemoteIPAddress -eq $range -and $_.Direction -eq $direction }).Count | Should -Be 1
             }
         }
-        ($denies | ForEach-Object { $_.Weight } | Measure-Object -Minimum).Minimum | Should -BeGreaterThan 1
+        # In that order, highest weight first, each weight used once.
+        @($denies | ForEach-Object { $_.RemoteIPAddress } | Select-Object -Unique) | Should -Be $ranges
+        @($denies | ForEach-Object { $_.Weight }) | Should -Be @(200..183)
         $allows = @($rules | Where-Object Action -eq 'Allow')
         $allows.Count | Should -Be 2
         foreach ($a in $allows) { $a.Weight | Should -Be 1; $a.RemoteIPAddress | Should -Be '0.0.0.0/0' }
@@ -76,7 +84,7 @@ Describe 'New-RunnerVm' {
         Mock New-VHD {}; Mock New-VM {}; Mock Set-VM {}; Mock Set-VMFirmware {}; Mock Set-VMKeyProtector {}
         Mock Enable-VMTPM {}; Mock Set-VMVideo {}; Mock Add-VMHardDiskDrive {}; Mock Add-VMNetworkAdapterExtendedAcl {}
     }
-    It 'forks the golden and the lane cache, defines a 4 vCPU / 12 GB Gen2 VM with vTPM and 14 ACL rules' {
+    It 'forks the golden and the lane cache, defines a 4 vCPU / 12 GB Gen2 VM with vTPM and all 20 ACL rules' {
         Set-CacheGeneration -CacheDir $config.CacheDir -Lane 'app' -Value 7
         $r = New-RunnerVm -Name 'slate-win-app-deadbeef' -Lane 'app' -Config $config
         $r.Dir | Should -Be (Join-Path $config.VmDir 'slate-win-app-deadbeef')
@@ -90,7 +98,11 @@ Describe 'New-RunnerVm' {
         Should -Invoke Enable-VMTPM -Times 1
         Should -Invoke Set-VMVideo -Times 1 -ParameterFilter { $HorizontalResolution -eq 1920 -and $VerticalResolution -eq 1080 }
         Should -Invoke Add-VMHardDiskDrive -Times 1 -ParameterFilter { $Path -eq $r.CachePath }
-        Should -Invoke Add-VMNetworkAdapterExtendedAcl -Times 14 -Exactly
+        Should -Invoke Add-VMNetworkAdapterExtendedAcl -Times 20 -Exactly
+        Should -Invoke Add-VMNetworkAdapterExtendedAcl -Times 18 -Exactly -ParameterFilter { $Action -eq 'Deny' }
+        foreach ($range in '224.0.0.0/4', '255.255.255.255/32', '0.0.0.0/8') {
+            Should -Invoke Add-VMNetworkAdapterExtendedAcl -Times 2 -Exactly -ParameterFilter { $Action -eq 'Deny' -and $RemoteIPAddress -eq $range }
+        }
     }
     It 'gives the shell lane no cache disk' {
         $r = New-RunnerVm -Name 'slate-win-shell-deadbeef' -Lane 'shell' -Config $config

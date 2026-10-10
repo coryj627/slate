@@ -84,6 +84,15 @@ Describe 'install scripts' {
         $text | Should -Match ([regex]::Escape($binLine))
         $text.IndexOf($binLine) | Should -BeGreaterThan $text.IndexOf('robocopy.exe')
     }
+    It 'the host firewall rule covers the gateway, multicast and broadcast addresses the VM subnet can reach' {
+        # The port ACL drops them too; the rule is the second layer.
+        # Forwarded NAT traffic is addressed elsewhere and stays untouched.
+        $text = Get-Content -Raw (Join-Path $installDir 'setup-host.ps1')
+        $text | Should -Match ([regex]::Escape("`$localAddresses = @(`$Gateway, '224.0.0.0/4', '255.255.255.255')"))
+        # A new rule gets them, and a re-run brings an existing rule up to date.
+        @([regex]::Matches($text, '(New|Set)-NetFirewallRule -DisplayName \$ruleName [^\r\n]*-LocalAddress \$localAddresses ')).Count | Should -Be 2
+        $text | Should -Not -Match '-LocalAddress \$Gateway\b'
+    }
     It 'a cache volume is formatted before it gets a drive letter' {
         $text = Get-Content -Raw (Join-Path $installDir 'setup-host.ps1')
         $text | Should -Not -Match 'New-Partition[^\r\n]*-AssignDriveLetter'
