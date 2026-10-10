@@ -88,7 +88,7 @@ def run(cmd, timeout=120, check=False, input_bytes=None):
     try:
         return subprocess.run(cmd, env=env, input=input_bytes, capture_output=True, timeout=timeout, check=check)
     except subprocess.TimeoutExpired as exc:
-        return subprocess.CompletedProcess(cmd, 124, exc.stdout or b"", (exc.stderr or b"") + b"\ntimed out after {}s".format(timeout).encode())
+        return subprocess.CompletedProcess(cmd, 124, exc.stdout or b"", (exc.stderr or b"") + "\ntimed out after {}s".format(timeout).encode())
 
 
 def flag(name):
