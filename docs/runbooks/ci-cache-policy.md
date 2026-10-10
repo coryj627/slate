@@ -2,9 +2,10 @@
 
 Namespace custom tags share a volume across profiles and repositories in the
 same workspace. Main and PR profile names therefore do not isolate the custom
-`slate-windows-rust`, `slate-windows-app`, `slate-windows-model`, `slate-arm64`, or
-`slate-mac` tags. This supersedes the earlier workflow comments claiming distinct
-per-profile lineages for the same tag.
+`slate-windows-rust`, `slate-windows-app`, `slate-windows-model` or `slate-arm64`
+tags. This supersedes the earlier workflow comments claiming distinct
+per-profile lineages for the same tag. The `slate-mac` tag has no consumer
+since 2026-10-10 (see "Mac lane retired" below).
 
 Workflow routing and optional job labels cannot enforce a boundary against a PR
 that controls its YAML. Rely on a provider policy only after verifying its scope
@@ -60,6 +61,29 @@ four minutes of hosted post-step time). On October 4 that held the repository
 at 10.47 GB against GitHub's 10 GB default. An unchanged dependency graph now
 hits exactly and saves nothing. A changed graph builds cold once rather than
 inheriting stale artifacts.
+
+## Mac lane retired (2026-10-10)
+
+`swift-tests.yml` and `a11y-check.yml` run on the owner's Mac Studio through
+the self-hosted runner of `docs/plans/42_self_hosted_mac_runner_plan.md`, with
+automatic fallback to the direct label `nscloud-macos-tahoe-slim-arm64-6x14`
+and no Namespace volume. Nothing in `.github/` names the `mac-actions` or
+`mac-actions-pr` profiles or the `slate-mac` tag any more, and pull requests
+take the workflow from their merge commit, so even branches opened before the
+change run the new lanes. Drained state on 2026-10-10: no open pull requests,
+no mac run in flight.
+
+Retirement follows the inspection rule above: look before deleting.
+
+1. `nsc volume list` shows the workspace's volumes with their tags and last
+   use. The `slate-mac` volume should show no attachment after 2026-10-10.
+2. `nsc volume release slate-mac` frees it; the command takes the tag as its
+   argument (requested capacity stops metering; snapshots go with it). Only
+   the owner's login can do this (`nsc auth check-login` tells).
+3. In the Namespace dashboard, delete the `mac-actions` and `mac-actions-pr`
+   runner profiles. Nothing selects them; a leftover profile costs nothing but
+   invites a stale `runs-on` to work again by accident.
+4. The Windows tags are untouched by this: `windows.yml` still uses them.
 
 ## Remaining operating decisions
 
