@@ -158,7 +158,7 @@ jobs:
 
   windows-full-stress:
     name: Windows full-tier native stress
-    runs-on: windows-latest
+    runs-on: ${{ vars.WINDOWS_RUNNER_MODE == 'namespace' && 'windows-latest' || 'slate-win-app' }}
     timeout-minutes: 90
     env:
       SLATE_CENSUS_FULL: '1'
@@ -167,6 +167,11 @@ jobs:
         uses: actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0  # v7
       - name: Build native Windows test host
         uses: ./.github/actions/windows-native-build
+        with:
+          # On home the cargo target and NuGet folders already live on the
+          # lane's cache volume (CARGO_TARGET_DIR / NUGET_PACKAGES from the
+          # guest); the GitHub-cache restore would only waste minutes.
+          cache: ${{ vars.WINDOWS_RUNNER_MODE == 'namespace' && 'true' || 'false' }}
       - name: Run expanded Windows stress families
         # Every current C# CensusTier consumer belongs to these families,
         # including the graph lifetime partial class. PR coverage is retained.

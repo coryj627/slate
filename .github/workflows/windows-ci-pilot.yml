@@ -11,9 +11,9 @@ on:
   workflow_dispatch:
     inputs:
       runner:
-        description: Native/app/model candidate; every candidate also runs the complete hosted shell gate.
+        description: Native/app/model candidate; every candidate also runs the complete hosted shell gate (home runs its own shell gate on slate-win-shell).
         type: choice
-        options: [hosted, namespace-8x16, namespace-4x8]
+        options: [hosted, namespace-8x16, namespace-4x8, home]
         default: hosted
       cache:
         description: Restore GitHub-scoped caches; disable for a cold build.
@@ -32,7 +32,7 @@ jobs:
     name: Build, platform witnesses and app (${{ inputs.runner || 'hosted' }})
     # Direct Namespace labels are documented shapes; no new paid cache tags
     # or dashboard profiles are created by this comparison.
-    runs-on: ${{ inputs.runner == 'namespace-4x8' && 'nscloud-windows-2022-amd64-4x8' || inputs.runner == 'namespace-8x16' && 'nscloud-windows-2022-amd64-8x16' || 'windows-latest' }}
+    runs-on: ${{ inputs.runner == 'home' && 'slate-win-app' || inputs.runner == 'namespace-4x8' && 'nscloud-windows-2022-amd64-4x8' || inputs.runner == 'namespace-8x16' && 'nscloud-windows-2022-amd64-8x16' || 'windows-latest' }}
     timeout-minutes: 120
     outputs:
       revision: ${{ steps.binary-manifest.outputs.revision }}
@@ -64,7 +64,7 @@ jobs:
             runAttempt = '${{ github.run_attempt }}'
             revision = '${{ github.sha }}'
             candidate = '${{ inputs.runner || 'hosted' }}'
-            cacheRestore = '${{ github.event_name == 'workflow_dispatch' && inputs.cache && 'true' || 'false' }}'
+            cacheRestore = '${{ github.event_name == 'workflow_dispatch' && inputs.cache && inputs.runner != 'home' && 'true' || 'false' }}'
             logicalProcessors = [Environment]::ProcessorCount
             os = [Environment]::OSVersion.VersionString
             gcAvailableMemoryBytes = [GC]::GetGCMemoryInfo().TotalAvailableMemoryBytes
@@ -74,6 +74,28 @@ jobs:
           rustc --version
           cargo --version
           dotnet --info
+      - name: Isolation evidence (home pool only)
+        if: ${{ inputs.runner == 'home' }}
+        # The job VM must reach the Internet and nothing else: not the
+        # host's NAT address, not the LAN, not the WSL/Default Switch
+        # ranges, not the tailnet. Any private target that answers fails
+        # the pilot; the result is recorded with the runner metadata.
+        run: |
+          $forbidden = @('10.77.0.1', '192.168.0.1', '192.168.0.49', '172.24.160.1', '172.19.80.1', '100.100.100.100')
+          $report = [ordered]@{}
+          $leak = $false
+          foreach ($target in $forbidden) {
+            $reachable = Test-NetConnection -ComputerName $target -Port 445 -InformationLevel Quiet -WarningAction SilentlyContinue
+            $ping = Test-Connection -ComputerName $target -Count 1 -Quiet -ErrorAction SilentlyContinue
+            $report[$target] = @{ tcp445 = [bool]$reachable; icmp = [bool]$ping }
+            if ($reachable -or $ping) { $leak = $true }
+          }
+          $github = Test-NetConnection -ComputerName 'github.com' -Port 443 -InformationLevel Quiet -WarningAction SilentlyContinue
+          $report['github.com:443'] = [bool]$github
+          $report | ConvertTo-Json | Set-Content "$env:RUNNER_TEMP\windows-pilot\isolation.json"
+          $report | ConvertTo-Json
+          if ($leak) { throw 'a private address answered from inside the job VM' }
+          if (-not $github) { throw 'github.com:443 unreachable from inside the job VM' }
       - name: Upload runner metadata before the build
         if: ${{ always() }}
         uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a  # v7
@@ -85,7 +107,7 @@ jobs:
       - name: Build pinned native Windows host
         uses: ./.github/actions/windows-native-build
         with:
-          cache: ${{ github.event_name == 'workflow_dispatch' && inputs.cache && 'true' || 'false' }}
+          cache: ${{ github.event_name == 'workflow_dispatch' && inputs.cache && inputs.runner != 'home' && 'true' || 'false' }}
           cache-scope: windows-pilot-${{ inputs.runner || 'hosted' }}
       - name: Record effective build toolchain
         run: |
@@ -117,6 +139,7 @@ jobs:
             ${{ runner.temp }}\windows-pilot\runner.json
             ${{ runner.temp }}\windows-pilot\rust-version.txt
             ${{ runner.temp }}\windows-pilot\dotnet-info.txt
+            ${{ runner.temp }}\windows-pilot\isolation.json
           if-no-files-found: warn
           retention-days: 14
       - name: App tests
@@ -220,7 +243,7 @@ jobs:
   model-shard:
     name: Complete model (${{ inputs.runner || 'hosted' }}, shard ${{ matrix.shard }})
     needs: [build-app]
-    runs-on: ${{ inputs.runner == 'namespace-4x8' && 'nscloud-windows-2022-amd64-4x8' || inputs.runner == 'namespace-8x16' && 'nscloud-windows-2022-amd64-8x16' || 'windows-latest' }}
+    runs-on: ${{ inputs.runner == 'home' && 'slate-win-model' || inputs.runner == 'namespace-4x8' && 'nscloud-windows-2022-amd64-4x8' || inputs.runner == 'namespace-8x16' && 'nscloud-windows-2022-amd64-8x16' || 'windows-latest' }}
     strategy:
       fail-fast: false
       max-parallel: 2
@@ -400,7 +423,7 @@ jobs:
     name: Complete hosted shell gate (${{ inputs.runner || 'hosted' }})
     # Includes Namespace candidates. No model dependency or desktop sharing.
     needs: [build-app]
-    runs-on: windows-latest
+    runs-on: ${{ inputs.runner == 'home' && 'slate-win-shell' || 'windows-latest' }}
     timeout-minutes: 20
     defaults:
       run:
@@ -433,7 +456,7 @@ jobs:
             producerAttempt = '${{ needs.build-app.outputs.producer-attempt }}'
             executionAttempt = '${{ github.run_attempt }}'
             candidate = '${{ inputs.runner || 'hosted' }}'
-            executionRunner = 'windows-latest'
+            executionRunner = '${{ inputs.runner == 'home' && 'slate-win-shell' || 'windows-latest' }}'
             manifestSha256 = '${{ needs.build-app.outputs.manifest-sha256 }}'
             nativeSha256 = '${{ needs.build-app.outputs.native-sha256 }}'
             logicalProcessors = [Environment]::ProcessorCount
