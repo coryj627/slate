@@ -358,10 +358,12 @@ saw before changing anything.
   ```
 
   Expect the remote address `10.77.0.0/24`, which Windows may print with the
-  mask `255.255.255.0`, and three local addresses: the gateway `10.77.0.1`,
-  multicast `224.0.0.0/4`, which Windows may print as
-  `224.0.0.0/240.0.0.0`, and broadcast `255.255.255.255`. Traffic the host
-  forwards for the NAT is addressed elsewhere, so the rule leaves it alone.
+  mask `255.255.255.0`, and the local address `Any`: whichever of the
+  host's addresses a packet from the VM subnet names on that interface (the
+  gateway, the LAN or tailnet address, multicast, broadcast), it is dropped.
+  Traffic the host forwards for the NAT never meets an inbound rule; the
+  pilot's isolation step, which reaches `github.com:443` from a job VM,
+  confirms the rule did not block it.
 - [ ] The cache parents came up without a prompt. Step 7/9 printed
   `rust created`, `app created` and `model created`. No "format the disk"
   dialog took focus while it ran; if one did, Windows lettered the raw
@@ -437,9 +439,9 @@ about commits need the first main push.
   gh api rate_limit --jq .resources.core
   ```
 
-  The loop costs two listing calls a tick plus one jobs call per queued or
-  in-progress run of `windows.yml`, `nightly.yml` and the pilot, so a busy
-  hour should spend a few hundred of the 5,000, never thousands. If
+  The loop's listing calls are conditional: an unchanged answer is a `304`,
+  which GitHub does not count, so an idle hour spends almost nothing and a
+  busy hour a few hundred of the 5,000, never thousands. If
   `remaining` fell by more than a thousand with nothing else signed in as
   you busy, record the `used` figures and look for runs of other
   workflows in the jobs calls (the `RoutedWorkflows` filter in
@@ -517,18 +519,22 @@ gh workflow run windows.yml --ref <branch> --repo coryj627/slate
   `home`.
 - [ ] The guest has its interactive desktop: the shell gate (`flaui`)
   passes. It drives the app through UI Automation, which needs a desktop.
-- [ ] A restart is clean. With no job VM running, restart the loop (the
-  restart's sweep would turn any job VM off):
+- [ ] A restart keeps the job in flight. While one job VM is running and
+  its log shows `handed off`, restart the loop:
 
   ```powershell
   Stop-ScheduledTask -TaskName slate-ci-orchestrator
   ```
 
-  Within a minute the log shows a new `orchestrator start` and no
-  `startup:` or `journal:` error. That proves the relaunch and the
-  journal's read-back. `C:\slate-ci\state` holds no `journal.json.corrupt-*`.
-- [ ] No offline `slate-win-*` runner is left after that restart. Only the
-  startup sweep removes them, never a running loop.
+  Within a minute the log shows a new `orchestrator start`, then
+  `sweep: kept running vm <vm> (job <id>, handed off)`, and no `startup:`
+  or `journal:` error. The job finishes and settles as usual (`commit` or
+  `discard`, never `shut down without running a job`). That proves the
+  relaunch, the journal's read-back and the reconciliation.
+  `C:\slate-ci\state` holds no `journal.json.corrupt-*`.
+- [ ] No `slate-win-*` runner is left after that job settles. The sweep
+  removes every runner no kept VM owns, online or offline; a running loop
+  never touches a runner that may still take a job.
 
   ```powershell
   gh api repos/coryj627/slate/actions/runners --jq '.runners[] | {name, status}'
@@ -801,7 +807,8 @@ This checks how `Get-VM` reports a VM that no longer exists, as
   one.
 - **State.** `C:\slate-ci\state\journal.json` lists the active VMs, retries
   and seen jobs. The loop rewrites it every tick and reads it only at start,
-  where the startup sweep empties it, so editing it changes nothing. A
+  where the startup sweep keeps only the entries of handed-off VMs that are
+  still running and drops the rest, so editing it changes nothing. A
   journal that does not parse is moved to `journal.json.corrupt-<UTC time>`
   at start. `token.xml` is the encrypted PAT; a `token.txt` should never be
   there.
@@ -817,9 +824,10 @@ This checks how `Get-VM` reports a VM that no longer exists, as
   copy under the task's account logs
   `another orchestrator instance holds the mutex; exiting` and exits with
   code 3.
-- **Stale runners.** Only the startup sweep removes offline `slate-win-*`
-  runners from GitHub. After a crash or a reboot, a few may stay listed as
-  offline until the next start. An offline runner takes no job.
+- **Stale runners.** Only the startup sweep removes `slate-win-*` runners
+  from GitHub, and it removes every one that no kept VM owns, online or
+  offline, so nothing is left behind after a restart. A running loop never
+  touches a runner that may still take a job.
 - **Activation.** Job VMs may report Windows as not activated. The key was
   cleared from the image with `slmgr /cpky` so no job can read it. This is
   cosmetic, by design.
@@ -859,8 +867,8 @@ This checks how `Get-VM` reports a VM that no longer exists, as
   Repeat the three steps with `app.vhdx` and `model.vhdx`.
 - **Host reboot or Windows Update.** Jobs in flight fail on GitHub as lost
   runners: their VMs are turned off with the host. At boot the loop starts,
-  and its sweep removes those VMs and the runners already offline. Re-run
-  the failed jobs. Drain first when you can.
+  and its sweep removes those VMs and their runners. Re-run the failed
+  jobs. Drain first when you can.
 - **Power.** Keep host sleep and hibernation off on AC power. A sleeping
   host stalls every job.
 - **Watching a live job VM.** `vmconnect.exe localhost <vm>` opens its
@@ -875,9 +883,11 @@ This checks how `Get-VM` reports a VM that no longer exists, as
 The loop task has two triggers: one at startup, and one that began a minute
 after the task was registered. Both repeat every minute without end, and
 the task keeps one instance at a time. A loop that exits is back within a
-minute. So `Stop-ScheduledTask` on its own is a restart, not a pause. Every
-restart's sweep turns off and deletes every job VM, and their jobs fail as
-lost runners. To keep the loop stopped, disable the task first.
+minute. So `Stop-ScheduledTask` on its own is a restart, not a pause. A
+restart's sweep keeps the VMs whose handoff completed and that are still
+running, and their jobs finish; a VM still waiting for its handoff is
+discarded and its job retried. To keep the loop stopped, disable the task
+first.
 
 Drain before maintenance:
 
@@ -1407,7 +1417,7 @@ when the loop resumes.
 |---|---|
 | Who can run code here | Only approved workflows. Every fork pull request waits for an owner click, every time. Only `WINDOWS_RUNNER_MODE=home` routes here, so a fork or Dependabot run that cannot read the variable goes to Namespace and `windows-latest`. Non-fork branches are the owner's own commits (and Renovate's). |
 | What a job can touch | A VM that exists for that job only, as the standard user `runner`, with no secret valid outside the VM. Its JIT runner config is single-use. |
-| Where a job can connect | The Internet, through the host's NAT. Hyper-V port ACLs drop everything to and from 10/8, 172.16/12, 192.168/16, 100.64/10 (Tailscale), 169.254/16, multicast 224/4, broadcast 255.255.255.255, 0/8 and all IPv6; the image also turns IPv6 off. The host firewall drops inbound traffic from the VM subnet to the host's own addresses there: `10.77.0.1`, multicast and broadcast. |
+| Where a job can connect | The Internet, through the host's NAT. Hyper-V port ACLs drop everything to and from 10/8, 172.16/12, 192.168/16, 100.64/10 (Tailscale), 169.254/16, multicast 224/4, broadcast 255.255.255.255, 0/8 and all IPv6; the image also turns IPv6 off. The host firewall drops inbound traffic from the VM subnet to any address of the host on that interface. |
 | What survives a job | Only a cache merge, and only after the host verifies from GitHub's API: a green push, schedule or dispatch on `main` of this repository, a VM the loop did not force off, and an unchanged parent generation. |
 | What the host account can do | `slate-ci-host` is a Hyper-V Administrator, not an Administrator, but Microsoft treats membership in Hyper-V Administrators as equivalent to administrator rights on the host. Its limits stop mistakes and interactive use; they do not contain a compromise of the account or of the code it runs. It cannot log on interactively or remotely. Inside `C:\slate-ci` it writes `state`, `cache`, `vms` and `logs`; `bin` and `golden` are read-only for it. Like any standard account, it can still create folders elsewhere on `C:\`. It holds the one PAT: Actions read, Administration read and write, this repository only. |
 | Who can change what runs | Only an elevated administrator writes `C:\slate-ci\bin`, the golden disk and the tasks. In the guest, only Administrators and SYSTEM can write the bootstrap scripts in `C:\slate-guest`. |

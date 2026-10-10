@@ -143,10 +143,12 @@ Network:
   multicast and broadcast addresses the host's discovery services answer
   on are dropped at the switch port.
 - Host Windows Firewall: block inbound on the `vEthernet (slate-ci)`
-  interface from `10.77.0.0/24` to the host's own addresses there: local
-  `10.77.0.1`, `224.0.0.0/4` and `255.255.255.255`. Traffic the host
-  forwards for the NAT is addressed elsewhere, so the rule leaves it
-  untouched.
+  interface from `10.77.0.0/24` to any address of the host (local address
+  `Any`): the gateway, the LAN and tailnet addresses a packet can reach on
+  any interface under Windows' weak-host model, multicast and broadcast.
+  Traffic the host forwards for the NAT never meets an inbound rule: it is
+  addressed elsewhere and translated below the firewall's connection
+  layer.
 
 Resources: two VM slots, each 4 vCPU and 12 GB static memory. Guest video
 pinned to 1920×1080 with `Set-VMVideo`. Host power plan already never sleeps
@@ -173,10 +175,13 @@ State machine per job, run by a single-threaded loop with a 10 s tick:
    `GET /runs/{id}/jobs?filter=latest`; keep jobs with `status == queued`
    whose `labels` contain exactly one `slate-win-*` label. Record `job_id`,
    `run_id`, lane, `created_at`. Budget: two listing calls per tick plus
-   one jobs call per queued or in-progress run of a routed workflow, and at
-   settle one job lookup per seen job of the VM's lane. The 5,000 requests
-   an hour are the owner's own, shared with `gh`; the host logs a warning
-   when fewer than 500 remain.
+   one jobs call per queued or in-progress run of a routed workflow, each
+   a conditional request (`If-None-Match` with the last `ETag`): an
+   unchanged answer is a `304`, which GitHub does not count against the
+   limit, so an idle loop spends next to nothing. At settle, one job lookup
+   per seen job of the VM's lane. The 5,000 requests an hour are the
+   owner's own, shared with `gh`; the host logs a warning when fewer than
+   500 remain.
 2. **Admit.** While a slot is free, take the oldest queued job not already
    assigned. One VM per job at a time; a job that already has a VM is never
    admitted again (a discarded job is re-admitted after its back-off).
@@ -193,8 +198,9 @@ State machine per job, run by a single-threaded loop with a 10 s tick:
    `Msvm_VirtualSystemManagementService.AddKvpItems` as items
    `slate.jit.count`, `slate.jit.0 … slate.jit.N` (each ≤ 1,000 characters;
    `Msvm_KvpExchangeDataItem.Data` has MAXLEN 1024), plus `slate.lane`,
-   `slate.ip`, `slate.gateway`, `slate.dns`, `slate.cache` (`1` or `0`)
-   and `slate.job`.
+   `slate.ip`, `slate.gateway`, `slate.prefix` (the length of the NAT
+   prefix, `NatPrefix` in `config.json`), `slate.dns`, `slate.cache` (`1`
+   or `0`) and `slate.job`.
 6. **Run (guest).** Two tasks baked into the golden image, both no-ops
    until the golden build's completion marker exists.
    `slate-bootstrap-system` (SYSTEM, at startup) polls
@@ -222,7 +228,11 @@ State machine per job, run by a single-threaded loop with a 10 s tick:
    `runner_name`); while GitHub does not yet report that job `completed`,
    wait up to six ticks; then fetch its run, apply the commit predicate
    (section 3), `Merge-VHD` or delete the cache child, `Remove-VM`, delete
-   the directory, release the slot.
+   the directory, release the slot. A commit that must wait for a same-lane
+   sibling (`Merge-VHD` cannot write a parent another VM holds a child of)
+   is remembered as pending; the Off VM's slot serves the next job
+   meanwhile, and the merge happens once no same-lane VM runs, or is
+   discarded if the parent generation moved in between.
 
 Failure handling:
 
@@ -232,19 +242,27 @@ Failure handling:
   30), which already includes 10 min over the longest `timeout-minutes`
   that windows.yml and nightly.yml give the lane (for app, the nightly
   stress job's 90); the host adds a further 10 min grace on top.
-- Runner registered but no job claims it within 5 min and the admitted job
-  is no longer queued: `DELETE /actions/runners/{id}`, turn off, discard.
+- Runner registered but no job claims it within 5 min (checked once a
+  minute from then on) and the admitted job is no longer queued:
+  `DELETE /actions/runners/{id}`, turn off, discard.
 - Heartbeat never arrives, KVP never read, or any API error during
   provisioning: discard and retry the job on the next tick, with a
   10 min back-off and at most three provisioning attempts per job in total
   (the initial attempt plus two retries; `RetryCap` 3 counts failures), then
   log and stop admitting that job (it fails GitHub's 24 h queue wait, which
   the fallback variable is for).
-- Orchestrator start: delete every offline runner named `slate-win-*`,
-  remove every VM named `slate-win-*` and its directory, and delete orphaned
-  cache children (never parents).
-- Host reboot mid-job: the job fails on GitHub as a lost runner; the start
-  sweep cleans up; the owner re-runs the job.
+- Orchestrator start: reconcile the journal with the host. A VM the
+  journal shows handed off that Hyper-V still reports Running is kept, with
+  its slot, the seen jobs and the retries, so a loop relaunch after a crash
+  does not kill the jobs in flight. Every other VM named `slate-win-*` is
+  removed with its directory (orphaned cache children go with it, never
+  parents), every runner named `slate-win-*` that no kept VM owns is
+  deleted whatever its status, and the journal keeps only the kept entries.
+  A VM still waiting for its handoff is never kept: the handoff is not
+  idempotent.
+- Host reboot mid-job: the job fails on GitHub as a lost runner (the host
+  turns every VM off); at boot nothing is kept, the sweep cleans up, and
+  the owner re-runs the job.
 
 ### 3. Cache trust
 
@@ -438,8 +456,10 @@ ci/windows-runner/
 
 Every GitHub and Hyper-V call goes through an adapter function so the module
 is testable without a VM or a token. The journal under `C:\slate-ci\state`
-is rewritten every tick; at start the sweep removes every `slate-win-*` VM
-and offline runner, so nothing in-flight survives a restart. Logs are
+is rewritten every tick; at start the sweep keeps only the handed-off VMs
+that are still running and removes every other `slate-win-*` VM and
+runner, so a loop restart keeps the jobs in flight and a host reboot
+starts clean. Logs are
 plain text with one line per state transition and never contain a JIT
 config or token.
 

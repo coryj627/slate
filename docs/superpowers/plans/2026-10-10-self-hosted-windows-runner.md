@@ -16,7 +16,7 @@
 - Runner names are `slate-win-<lane>-<8 hex>`.
 - Two VM slots, 4 vCPU and 12 GB static each; slot IPs `10.77.0.11` and `10.77.0.12`; gateway `10.77.0.1`; NAT prefix `10.77.0.0/24`; switch name `slate-ci`.
 - Per-VM extended ACLs deny `10.0.0.0/8`, `172.16.0.0/12`, `192.168.0.0/16`, `100.64.0.0/10`, `169.254.0.0/16`, `224.0.0.0/4`, `255.255.255.255/32`, `0.0.0.0/8`, `::/0`, both directions (18 deny rules); allow everything else (final-review ruling, 2026-10-10).
-- KVP values are at most 1,000 characters (Hyper-V MAXLEN is 1024); keys `slate.jit.count`, `slate.jit.<n>`, `slate.lane`, `slate.ip`, `slate.gateway`, `slate.dns`, `slate.cache`, `slate.job`.
+- KVP values are at most 1,000 characters (Hyper-V MAXLEN is 1024); keys `slate.jit.count`, `slate.jit.<n>`, `slate.lane`, `slate.ip`, `slate.gateway`, `slate.prefix` (code-review fix, 2026-10-10), `slate.dns`, `slate.cache`, `slate.job`.
 - Commit predicate: job `conclusion == success`, run `event ∈ {push, schedule, workflow_dispatch}`, `head_branch == main`, `head_repository.full_name == coryj627/slate`, the loop did not force the guest off, parent generation unchanged since fork.
 - Lane caps: rust 70 min, app 100 min, model 100 min, shell 30 min (lane `timeout-minutes` + 10, app covers the 90-min nightly stress job); `shell` has no cache disk.
 - Heartbeat wait 180 s; unclaimed-runner check at 300 s; retry cap 3 with 600 s back-off; tick 10 s.
