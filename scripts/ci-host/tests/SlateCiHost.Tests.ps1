@@ -83,3 +83,114 @@ Describe 'Split-KvpChunks / Join-KvpChunks' {
         Join-KvpChunks -Items $items -Prefix 'p' | Should -Be 'hello'
     }
 }
+
+Describe 'Select-QueuedLaneJobs' {
+    BeforeAll {
+        $script:job = {
+            param($id, $run, $labels, $status, $created)
+            [pscustomobject]@{ id = $id; run_id = $run; labels = $labels; status = $status; created_at = $created }
+        }
+    }
+    It 'keeps only queued jobs with exactly one lane label, oldest first' {
+        $jobs = @(
+            (& $job 3 10 @('slate-win-app') 'queued' '2026-10-10T10:00:05Z'),
+            (& $job 1 10 @('slate-win-rust') 'queued' '2026-10-10T10:00:01Z'),
+            (& $job 2 11 @('slate-win-app', 'slate-win-model') 'queued' '2026-10-10T10:00:00Z'),
+            (& $job 4 11 @('slate-win-model') 'in_progress' '2026-10-10T09:00:00Z'),
+            (& $job 5 12 @('ubuntu-latest') 'queued' '2026-10-10T09:00:00Z')
+        )
+        $result = Select-QueuedLaneJobs -Jobs $jobs
+        @($result).Count | Should -Be 2
+        $result[0].JobId | Should -Be 1
+        $result[0].Lane | Should -Be 'rust'
+        $result[1].JobId | Should -Be 3
+        $result[1].RunId | Should -Be 10
+        $result[1].CreatedAt | Should -BeOfType [datetimeoffset]
+    }
+    It 'returns an empty array for no jobs' {
+        @(Select-QueuedLaneJobs -Jobs @()).Count | Should -Be 0
+    }
+    It 'tolerates a job with no labels property value' {
+        $jobs = @((& $job 9 10 @() 'queued' '2026-10-10T10:00:00Z'))
+        @(Select-QueuedLaneJobs -Jobs $jobs).Count | Should -Be 0
+    }
+}
+
+Describe 'Select-JobsToAdmit' {
+    BeforeAll {
+        $script:now = [datetimeoffset]::Parse('2026-10-10T12:00:00Z')
+        $script:cand = {
+            param($id, $lane)
+            [pscustomobject]@{ JobId = [int64]$id; RunId = [int64]1; Lane = $lane; CreatedAt = $script:now }
+        }
+    }
+    It 'admits up to the free slot count in order' {
+        $c = @((& $cand 1 'app'), (& $cand 2 'rust'), (& $cand 3 'model'))
+        $r = Select-JobsToAdmit -Candidates $c -ActiveVms @{} -FreeSlots 2 -Retries @{} -Now $now
+        @($r).Count | Should -Be 2
+        $r[0].JobId | Should -Be 1
+        $r[1].JobId | Should -Be 2
+    }
+    It 'admits nothing when no slot is free' {
+        $c = @((& $cand 1 'app'))
+        @(Select-JobsToAdmit -Candidates $c -ActiveVms @{} -FreeSlots 0 -Retries @{} -Now $now).Count | Should -Be 0
+    }
+    It 'skips a job that already has a VM' {
+        $c = @((& $cand 1 'app'), (& $cand 2 'rust'))
+        $active = @{ 'slate-win-app-00000001' = @{ JobId = [int64]1 } }
+        $r = Select-JobsToAdmit -Candidates $c -ActiveVms $active -FreeSlots 2 -Retries @{} -Now $now
+        @($r).Count | Should -Be 1
+        $r[0].JobId | Should -Be 2
+    }
+    It 'skips a job in back-off and admits it once the back-off elapses' {
+        $c = @((& $cand 1 'app'))
+        $retries = @{ '1' = @{ Count = 1; NextAt = $now.AddSeconds(60).ToString('o') } }
+        @(Select-JobsToAdmit -Candidates $c -ActiveVms @{} -FreeSlots 1 -Retries $retries -Now $now).Count | Should -Be 0
+        @(Select-JobsToAdmit -Candidates $c -ActiveVms @{} -FreeSlots 1 -Retries $retries -Now $now.AddSeconds(61)).Count | Should -Be 1
+    }
+    It 'never admits a job at the retry cap' {
+        $c = @((& $cand 1 'app'))
+        $retries = @{ '1' = @{ Count = 3; NextAt = $now.AddDays(-1).ToString('o') } }
+        @(Select-JobsToAdmit -Candidates $c -ActiveVms @{} -FreeSlots 1 -Retries $retries -Now $now -RetryCap 3).Count | Should -Be 0
+    }
+}
+
+Describe 'Register-JobRetry' {
+    It 'creates and increments the retry record with a back-off' {
+        $now = [datetimeoffset]::Parse('2026-10-10T12:00:00Z')
+        $retries = @{}
+        Register-JobRetry -Retries $retries -JobId 42 -Now $now -BackoffSeconds 600
+        $retries['42'].Count | Should -Be 1
+        [datetimeoffset]$retries['42'].NextAt | Should -Be $now.AddSeconds(600)
+        Register-JobRetry -Retries $retries -JobId 42 -Now $now.AddSeconds(700) -BackoffSeconds 600
+        $retries['42'].Count | Should -Be 2
+    }
+}
+
+Describe 'Test-VmExpired' {
+    It 'expires at max plus grace, not before' {
+        $start = [datetimeoffset]::Parse('2026-10-10T12:00:00Z')
+        Test-VmExpired -StartedAt $start -MaxMinutes 100 -Now $start.AddMinutes(109) | Should -BeFalse
+        Test-VmExpired -StartedAt $start -MaxMinutes 100 -Now $start.AddMinutes(110) | Should -BeTrue
+    }
+    It 'honours a custom grace' {
+        $start = [datetimeoffset]::Parse('2026-10-10T12:00:00Z')
+        Test-VmExpired -StartedAt $start -MaxMinutes 30 -Now $start.AddMinutes(31) -GraceMinutes 0 | Should -BeTrue
+    }
+}
+
+Describe 'Get-StaleRunnerNames' {
+    It 'returns offline slate-win runners that are not active' {
+        $runners = @(
+            [pscustomobject]@{ id = 1; name = 'slate-win-app-aaaaaaaa'; status = 'offline' },
+            [pscustomobject]@{ id = 2; name = 'slate-win-rust-bbbbbbbb'; status = 'online' },
+            [pscustomobject]@{ id = 3; name = 'other-runner'; status = 'offline' },
+            [pscustomobject]@{ id = 4; name = 'slate-win-model-cccccccc'; status = 'offline' }
+        )
+        $stale = @(Get-StaleRunnerNames -Runners $runners -ActiveNames @('slate-win-model-cccccccc'))
+        $stale | Should -Be @('slate-win-app-aaaaaaaa')
+    }
+    It 'returns nothing for an empty list' {
+        @(Get-StaleRunnerNames -Runners @()).Count | Should -Be 0
+    }
+}
