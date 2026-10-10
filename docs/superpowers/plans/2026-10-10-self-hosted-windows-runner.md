@@ -1930,7 +1930,11 @@ BeforeAll {
         return $a
     }
 
-    function Get-Calls([string]$Name) { @($script:calls | Where-Object { $_.Name -eq $Name }) }
+    function Get-Calls([string]$Name) {
+        # The leading comma keeps a single match wrapped as a one-element
+        # array; a bare hashtable's .Count would be its number of keys.
+        , @($script:calls | Where-Object { $_.Name -eq $Name })
+    }
 
     function New-QueuedJob([int64]$Id, [int64]$RunId, [string]$Lane, [string]$Created = '2026-10-10T12:00:00Z') {
         [pscustomobject]@{ id = $Id; run_id = $RunId; status = 'queued'; labels = @('self-hosted', "slate-win-$Lane"); created_at = $Created }
@@ -2268,6 +2272,14 @@ Context 'handed-phase guards' {
         Invoke-OrchestratorTick -Config $config -Journal $journal -Adapters $adapters -Now $t0.AddSeconds(320)
         $journal.Vms[$name].Claimed | Should -BeTrue
     }
+    It 'treats a job that already completed on this runner as claimed and waits for Off (no teardown, no lost commit)' {
+        $world.Runner = $null
+        $world.Jobs['1'] = [pscustomobject]@{ id = 1; run_id = 10; status = 'completed'; conclusion = 'success'; runner_name = $name }
+        Invoke-OrchestratorTick -Config $config -Journal $journal -Adapters $adapters -Now $t0.AddSeconds(320)
+        $journal.Vms[$name].Claimed | Should -BeTrue
+        (Get-Calls 'StopVmForce').Count | Should -Be 0
+        $journal.Vms.Count | Should -Be 1
+    }
     It 'keeps waiting while the job stays queued, then retries after three timeouts' {
         $world.Jobs['1'] = [pscustomobject]@{ id = 1; run_id = 10; status = 'queued'; conclusion = $null; runner_name = $null }
         Invoke-OrchestratorTick -Config $config -Journal $journal -Adapters $adapters -Now $t0.AddSeconds(320)
@@ -2482,9 +2494,12 @@ function Update-ActiveVm {
                 return
             }
             $job = & $Adapters.GetJob ([int64]$vm.JobId)
-            if ($null -ne $job -and $job.status -eq 'in_progress' -and [string]$job.runner_name -eq $Name) {
+            if ($null -ne $job -and [string]$job.runner_name -eq $Name) {
+                # Running or already completed on this runner: the VM is on
+                # its way to Off, so settle it then (a completed single-use
+                # runner is already deleted and would otherwise look unclaimed).
                 $vm.Claimed = $true
-                & $Adapters.Log 'info' "${Name}: claimed (job in progress)"
+                & $Adapters.Log 'info' "${Name}: claimed (job $($job.status) on this runner)"
                 return
             }
             if ($null -eq $job -or $job.status -ne 'queued') {
@@ -3848,9 +3863,14 @@ $pwsh = (Get-Command pwsh).Source
 # the task's "Stop the task if it runs longer than" box is unchecked.
 $loopSettings = New-ScheduledTaskSettingsSet -RestartCount 999 -RestartInterval (New-TimeSpan -Minutes 1) `
     -ExecutionTimeLimit (New-TimeSpan -Seconds 0) -MultipleInstances IgnoreNew -StartWhenAvailable
+# Relaunch every minute if the loop has exited (RestartCount covers a
+# failed start; a non-zero exit is not reliably retried). IgnoreNew
+# keeps a single instance while one is running.
+$loopTrigger = New-ScheduledTaskTrigger -AtStartup
+$loopTrigger.Repetition = (New-ScheduledTaskTrigger -Once -At (Get-Date) -RepetitionInterval (New-TimeSpan -Minutes 1) -RepetitionDuration ([TimeSpan]::MaxValue)).Repetition
 Register-ScheduledTask -TaskName 'slate-ci-orchestrator' -Force `
     -Action (New-ScheduledTaskAction -Execute $pwsh -Argument "-NoProfile -NonInteractive -ExecutionPolicy Bypass -File `"$Root\bin\orchestrator.ps1`"" -WorkingDirectory "$Root\bin") `
-    -Trigger (New-ScheduledTaskTrigger -AtStartup) -User $Account -Password $password -RunLevel Limited -Settings $loopSettings | Out-Null
+    -Trigger $loopTrigger -User $Account -Password $password -RunLevel Limited -Settings $loopSettings | Out-Null
 Register-ScheduledTask -TaskName 'slate-ci-store-token' -Force `
     -Action (New-ScheduledTaskAction -Execute $pwsh -Argument "-NoProfile -NonInteractive -ExecutionPolicy Bypass -File `"$Root\bin\install\store-token.ps1`" -Convert -Root `"$Root`"") `
     -User $Account -Password $password -RunLevel Limited -Settings (New-ScheduledTaskSettingsSet -ExecutionTimeLimit (New-TimeSpan -Minutes 5)) | Out-Null
