@@ -33,16 +33,29 @@
 # serial job did (adversarial review: GitHub evaluates required checks
 # individually, not by sibling status).
 #
-# Runner selection recorded per §W0-2 item 3, revised 2026-07-31: the
-# Namespace Windows profile namespace-profile-winx64-fast (dashboard-
-# configured, Cache Volumes enabled — owner-confirmed with Namespace
-# support) replaces GitHub-hosted windows-latest for the build/test
-# lanes, joining every other lane on the vendor-standard runners
-# (owner call: full Namespace + artifact handoff over a hybrid).
-# Windows on Namespace is early access (Server 2022, amd64 only; Cache
-# Volumes reached Windows 2026-07-29) — if the lanes regress on image
-# parity, the per-attempt actions/cache scheme this replaces is in git
-# history at a5037b35.
+# Runner selection, revised 2026-10-10: the repository variable
+# WINDOWS_RUNNER_MODE routes every Windows lane, `home` only when the
+# variable is exactly `home` (GitHub compares it ignoring case); anything
+# else, including unset, is today's providers. `home` targets the
+# self-hosted pool on the owner's desktop — one throwaway Hyper-V VM per
+# job with labels slate-win-{rust,app,model,shell};
+# docs/runbooks/self-hosted-windows-runner.md has the design, the
+# fallback flip and the trust model. Today's providers are the
+# 2026-07-31 arrangement, verbatim: namespace-profile-winx64-fast[-pr]
+# (dashboard-configured, Cache Volumes enabled) for the build/test lanes
+# and GitHub-hosted windows-latest for the shell gate, so a run that
+# cannot read repository variables (a fork or Dependabot pull request)
+# never waits on the home host. Flip with
+# `gh variable set WINDOWS_RUNNER_MODE --body namespace` (and back with
+# `--body home`); nothing else changes. The per-attempt actions/cache
+# scheme both replaced is in git history at a5037b35.
+#
+# On `home` the cache is a per-lane VHDX forked copy-on-write for every
+# job and merged back by the host ONLY after GitHub's record shows a
+# green push/schedule/dispatch on main of this repository — labels
+# carry no trust there either. The attestation/footprint steps below
+# read NSC_CACHE_PATH on both pools (the guest exports it for the
+# mounted cache volume).
 #
 # Cache: Namespace NVMe cache volumes — fork-on-mount, commit-on-clean-
 # exit, last-write-wins (namespace.so/docs/architecture/storage/
@@ -126,7 +139,7 @@ permissions:
 jobs:
   rust-tests:
     name: rust tests (windows x64)
-    runs-on: namespace-profile-winx64-fast${{ github.ref != 'refs/heads/main' && '-pr' || '' }};overrides.cache-tag=slate-windows-rust
+    runs-on: ${{ vars.WINDOWS_RUNNER_MODE == 'home' && 'slate-win-rust' || format('namespace-profile-winx64-fast{0};overrides.cache-tag=slate-windows-rust', github.ref != 'refs/heads/main' && '-pr' || '') }}
     timeout-minutes: 60
     steps:
       - name: Checkout
@@ -149,6 +162,7 @@ jobs:
       # x86_64-pc-windows-msvc host target) on the first cargo call.
 
       - name: Cache Rust build (Namespace NVMe cache)
+        if: ${{ vars.WINDOWS_RUNNER_MODE != 'home' }}
         # `rust` mode mounts ~/.cargo/{registry,git,.global-cache} and
         # the cargo target dir onto the volume — no upload/download, no
         # save step, no exact-key freeze class (the 2026-07 incident the
@@ -285,7 +299,7 @@ jobs:
 
   windows:
     name: app build + test (windows x64)
-    runs-on: namespace-profile-winx64-fast${{ github.ref != 'refs/heads/main' && '-pr' || '' }};overrides.cache-tag=slate-windows-app
+    runs-on: ${{ vars.WINDOWS_RUNNER_MODE == 'home' && 'slate-win-app' || format('namespace-profile-winx64-fast{0};overrides.cache-tag=slate-windows-app', github.ref != 'refs/heads/main' && '-pr' || '') }}
     timeout-minutes: 60
     steps:
       - name: Checkout
@@ -308,6 +322,7 @@ jobs:
       # x86_64-pc-windows-msvc host target) on the first cargo call.
 
       - name: Cache Rust build + NuGet packages (Namespace NVMe cache)
+        if: ${{ vars.WINDOWS_RUNNER_MODE != 'home' }}
         # `rust` mode as in the rust-tests lane (this lineage carries the
         # RELEASE graph the bindings build needs), plus the NuGet
         # global-packages folder as an explicit path — the action unions
@@ -494,7 +509,7 @@ jobs:
 
   windows-model-shard:
     name: app model (windows x64, shard ${{ matrix.shard }})
-    runs-on: namespace-profile-winx64-fast${{ github.ref != 'refs/heads/main' && '-pr' || '' }};overrides.cache-tag=slate-windows-model
+    runs-on: ${{ vars.WINDOWS_RUNNER_MODE == 'home' && 'slate-win-model' || format('namespace-profile-winx64-fast{0};overrides.cache-tag=slate-windows-model', github.ref != 'refs/heads/main' && '-pr' || '') }}
     strategy:
       fail-fast: false
       max-parallel: 2
@@ -526,6 +541,7 @@ jobs:
       # x86_64-pc-windows-msvc host target) on the first cargo call.
 
       - name: Cache Rust build + NuGet packages (Namespace NVMe cache)
+        if: ${{ vars.WINDOWS_RUNNER_MODE != 'home' }}
         # `rust` mode as in the rust-tests lane (this lineage carries the
         # RELEASE graph the bindings build needs), plus the NuGet
         # global-packages folder as an explicit path — the action unions
@@ -696,7 +712,7 @@ jobs:
   flaui:
     name: shell accessibility gate (windows x64)
     needs: [windows]
-    runs-on: windows-latest
+    runs-on: ${{ vars.WINDOWS_RUNNER_MODE == 'home' && 'slate-win-shell' || 'windows-latest' }}
     timeout-minutes: 20
     steps:
       - name: Set up .NET 10
