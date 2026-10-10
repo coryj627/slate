@@ -914,6 +914,16 @@ parallel with them.
   (launchd restarted it; the wrapper now reports a timeout as a failure and
   the loop survives any exception). The real allow-list was restored
   afterwards.
+- **Live test, round 2 (05:41 UTC), with the hook that kills the runner on
+  refusal:** the `always()` steps still ran. The step log showed the DENY
+  line followed at once by "Process completed with exit code 1" and none of
+  the hook's own messages: the runner invokes the hook with `bash -e`, so
+  errexit ended the script at the failing check before the kill lines. The
+  shim now disables errexit first and, on refusal, SIGKILLs the listener,
+  the worker and its own parent (SIGTERM would only cancel the job, which
+  still runs `always()` steps). A new in-place stage, `03e-hook.pkr.hcl`
+  with `refresh-hook.sh`, rolls a hook change into the toolchain and warm
+  layers in about four minutes. Round 3 follows.
 - **PR A opened 2026-10-10:** coryj627/slate#1335, branch
   `ci/mac-runner-phase2`, with everything above. Its hosted checks are the
   first runs under the workflow execution policy.
