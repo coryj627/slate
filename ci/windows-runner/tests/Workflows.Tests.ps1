@@ -15,32 +15,47 @@ BeforeAll {
 }
 
 Describe 'windows.yml pool switch' {
-    It 'routes every Windows lane by the variable with today''s Namespace strings kept verbatim' {
+    It 'routes a Windows lane home only on home, and to today''s Namespace strings, verbatim, otherwise' {
         foreach ($pair in @(@('rust', 'slate-windows-rust'), @('app', 'slate-windows-app'), @('model', 'slate-windows-model'))) {
             $lane = $pair[0]; $tag = $pair[1]
-            $expected = "runs-on: `${{ vars.WINDOWS_RUNNER_MODE == 'namespace' && format('namespace-profile-winx64-fast{0};overrides.cache-tag=$tag', github.ref != 'refs/heads/main' && '-pr' || '') || 'slate-win-$lane' }}"
+            $expected = "runs-on: `${{ vars.WINDOWS_RUNNER_MODE == 'home' && 'slate-win-$lane' || format('namespace-profile-winx64-fast{0};overrides.cache-tag=$tag', github.ref != 'refs/heads/main' && '-pr' || '') }}"
             $windows.Contains($expected) | Should -BeTrue -Because "lane $lane must carry the exact expression"
         }
-        $windows.Contains("runs-on: `${{ vars.WINDOWS_RUNNER_MODE == 'namespace' && 'windows-latest' || 'slate-win-shell' }}") | Should -BeTrue
+        $windows.Contains("runs-on: `${{ vars.WINDOWS_RUNNER_MODE == 'home' && 'slate-win-shell' || 'windows-latest' }}") | Should -BeTrue
+    }
+    It 'compares the variable with home only, so unset or unknown routes to Namespace/windows-latest' {
+        # A run that cannot read repository variables (a fork or Dependabot
+        # pull request) must never wait on a host that may be down.
+        foreach ($text in $windows, $nightly) {
+            ([regex]::Matches($text, "WINDOWS_RUNNER_MODE == 'namespace'")).Count | Should -Be 0
+        }
+        # windows.yml: four runs-on and three cache gates; nightly.yml: runs-on and cache.
+        $reads = @([regex]::Matches($windows + "`n" + $nightly, "vars\.WINDOWS_RUNNER_MODE (==|!=) '([^']*)'"))
+        $reads.Count | Should -Be 9
+        foreach ($read in $reads) { $read.Groups[2].Value | Should -BeExactly 'home' }
     }
     It 'keeps no bare Namespace or windows-latest runs-on for the Windows lanes' {
         ([regex]::Matches($windows, 'runs-on: namespace-profile')).Count | Should -Be 0
         ([regex]::Matches($windows, 'runs-on: windows-latest')).Count | Should -Be 0
     }
-    It 'gates all three Namespace cache mounts on the namespace pool' {
+    It 'gates all three Namespace cache mounts off the home pool' {
         ([regex]::Matches($windows, 'namespacelabs/nscloud-cache-action')).Count | Should -Be 3
-        ([regex]::Matches($windows, [regex]::Escape("if: `${{ vars.WINDOWS_RUNNER_MODE == 'namespace' }}"))).Count | Should -Be 3
+        ([regex]::Matches($windows, [regex]::Escape("if: `${{ vars.WINDOWS_RUNNER_MODE != 'home' }}"))).Count | Should -Be 3
     }
-    It 'documents the switch in the header' {
+    It 'documents the switch and its default in the header' {
         $windows | Should -Match 'WINDOWS_RUNNER_MODE'
         $windows | Should -Match 'self-hosted-windows-runner\.md'
+        # Comment lines joined, so a wrapped sentence still matches.
+        $joined = $windows -replace '\r?\n#\s*', ' '
+        $joined | Should -Match ([regex]::Escape('`home` only when the variable is exactly `home`'))
+        $joined | Should -Match ([regex]::Escape("anything else, including unset, is today's providers"))
     }
 }
 
 Describe 'nightly.yml pool switch' {
-    It 'routes the Windows stress job and disables the GitHub-cache restore on home' {
-        $nightly.Contains("runs-on: `${{ vars.WINDOWS_RUNNER_MODE == 'namespace' && 'windows-latest' || 'slate-win-app' }}") | Should -BeTrue
-        $nightly.Contains("cache: `${{ vars.WINDOWS_RUNNER_MODE == 'namespace' && 'true' || 'false' }}") | Should -BeTrue
+    It 'routes the Windows stress job home only on home, and restores the GitHub cache everywhere else' {
+        $nightly.Contains("runs-on: `${{ vars.WINDOWS_RUNNER_MODE == 'home' && 'slate-win-app' || 'windows-latest' }}") | Should -BeTrue
+        $nightly.Contains("cache: `${{ vars.WINDOWS_RUNNER_MODE != 'home' && 'true' || 'false' }}") | Should -BeTrue
     }
 }
 
