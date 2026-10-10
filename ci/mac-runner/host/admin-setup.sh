@@ -87,16 +87,35 @@ echo "standard account, home ${RUNNER_HOME} (mode 700), hidden from the login wi
 
 # --- 2. Root-owned Softnet --------------------------------------------------
 step "Root-owned Softnet copy"
-# SOFTNET_SOURCE overrides the Homebrew binary, for a release that Homebrew
-# does not carry yet. The caller is responsible for having verified it.
+# Source: SOFTNET_SOURCE if given; otherwise the newest of Homebrew's binary
+# and any verified release under slate-ci's cache (softnet-<ver>/softnet).
+# Never downgrades an installed copy unless FORCE_SOFTNET=1: on 2026-10-10 a
+# plain re-run put Homebrew's 0.24.0 back over the 0.24.1 that fixes the
+# inbound-drop bug (openai/softnet#213).
+softnet_version() { "$1" --version 2>/dev/null | awk '{print $2}' | cut -d- -f1; }
 if [[ -n "${SOFTNET_SOURCE:-}" ]]; then
   [[ -f "$SOFTNET_SOURCE" ]] || die "SOFTNET_SOURCE=$SOFTNET_SOURCE is not a file"
   SOFTNET_SRC="$(realpath "$SOFTNET_SOURCE")"
 else
-  [[ -e /opt/homebrew/bin/softnet ]] || die "Softnet is not installed (brew install openai/tools/softnet)"
-  SOFTNET_SRC="$(realpath /opt/homebrew/bin/softnet)"
+  SOFTNET_SRC=""
+  for cand in /opt/homebrew/bin/softnet "$RUNNER_HOME"/.slate-runner/cache/softnet-*/softnet; do
+    [[ -x "$cand" ]] || continue
+    if [[ -z "$SOFTNET_SRC" ]] || [[ "$(printf '%s\n%s\n' "$(softnet_version "$SOFTNET_SRC")" "$(softnet_version "$cand")" | sort -V | tail -1)" == "$(softnet_version "$cand")" ]]; then
+      SOFTNET_SRC="$(realpath "$cand")"
+    fi
+  done
+  [[ -n "$SOFTNET_SRC" ]] || die "Softnet is not installed (brew install openai/tools/softnet)"
 fi
-echo "source: $SOFTNET_SRC ($("$SOFTNET_SRC" --version 2>/dev/null || echo 'version unknown'))"
+src_ver="$(softnet_version "$SOFTNET_SRC")"
+echo "source: $SOFTNET_SRC (${src_ver:-version unknown})"
+if [[ -x "$SOFTNET_DST" ]]; then
+  dst_ver="$(softnet_version "$SOFTNET_DST")"
+  newest="$(printf '%s\n%s\n' "$dst_ver" "$src_ver" | sort -V | tail -1)"
+  if [[ "$newest" == "$dst_ver" && "$dst_ver" != "$src_ver" && "${FORCE_SOFTNET:-0}" != 1 ]]; then
+    echo "installed copy is $dst_ver, newer than the source; keeping it (FORCE_SOFTNET=1 to downgrade)"
+    SOFTNET_SRC="$SOFTNET_DST"
+  fi
+fi
 
 for d in /usr/local/libexec "$LIBEXEC" "${LIBEXEC}/bin"; do
   mkdir -p "$d"

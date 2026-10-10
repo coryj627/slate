@@ -180,13 +180,26 @@ def check_panic_breaker():
 
 
 def unlock_keychain():
+    """Virtualization.framework (macOS 15+) wants this user's login keychain
+    unlocked when there is no GUI session, which is the case under launchd.
+    Phase 0 found that a keychain named login.keychain refuses its own
+    password for this account, so admin-setup designates slate.keychain as
+    the login keychain instead; unlock whichever is designated."""
     try:
         with open(KEYCHAIN_PW, "r", encoding="utf-8") as handle:
             password = handle.read().strip()
-        res = run(["security", "unlock-keychain", "-p", password, "login.keychain"], timeout=20)
-        log("keychain unlock: {}".format("ok" if res.returncode == 0 else "not unlocked (macOS guests have run without it)"))
     except OSError:
         log("keychain: no password file; skipping")
+        return
+    designated = run(["security", "login-keychain", "-d", "user"], timeout=20).stdout.decode(errors="replace").strip().strip('"')
+    target = designated or "login.keychain"
+    res = run(["security", "unlock-keychain", "-p", password, target], timeout=20)
+    if res.returncode == 0:
+        log("keychain: unlocked {}".format(target))
+    else:
+        log("keychain: could NOT unlock {}: {}".format(target, res.stderr.decode(errors="replace").strip()))
+    listing = run(["security", "list-keychains", "-d", "user"], timeout=20).stdout.decode(errors="replace")
+    log("keychain: search list {}".format(" ".join(listing.split())))
 
 
 # --- heartbeat --------------------------------------------------------------
@@ -320,18 +333,23 @@ class RunnerOutput(threading.Thread):
                 log("[{}] {}".format(self.vm, line.strip()))
 
 
+class CycleAbort(Exception):
+    """A cycle that ends before the runner served a job; the message is the outcome."""
+
+
 def one_cycle(hb):
     vm = "job-" + time.strftime("%Y%m%d-%H%M%S", time.gmtime())
     runner_id = None
     outcome = "no job"
+    vm_proc = None
     try:
         allowlist = fetch_allowlist()
         if allowlist is None:
-            return "idle: no allow-list"
+            raise CycleAbort("idle: no allow-list")
 
         res = tart("clone", WARM_VM, vm, timeout=300)
         if res.returncode != 0:
-            return "clone failed: " + res.stderr.decode(errors="replace").strip()
+            raise CycleAbort("clone failed: " + res.stderr.decode(errors="replace").strip())
         tart("set", vm, "--cpu", str(CPU), "--memory", str(MEMORY_MB))
 
         env = dict(os.environ, PATH=PATH, HOME=HOME)
@@ -341,20 +359,21 @@ def one_cycle(hb):
         deadline = time.time() + BOOT_TIMEOUT
         while time.time() < deadline:
             if vm_proc.poll() is not None:
-                return "vm exited during boot: " + vm_proc.stderr.read().decode(errors="replace").strip()[:300]
+                err = vm_proc.stderr.read().decode(errors="replace").strip()
+                raise CycleAbort("vm exited during boot (code {}): {}".format(vm_proc.returncode, err[:600] or "no stderr"))
             if exec_ready(vm):
                 break
             time.sleep(2)
         else:
-            return "guest agent did not answer within {} s".format(BOOT_TIMEOUT)
+            raise CycleAbort("guest agent did not answer within {} s".format(BOOT_TIMEOUT))
 
         if not guest_write(vm, GUEST_STATE + "/allowlist.json", allowlist, mode="644"):
-            return "could not write allow-list into the guest"
+            raise CycleAbort("could not write allow-list into the guest")
         encoded, runner_id = jit_config(vm)
         if not encoded:
-            return "no jit config"
+            raise CycleAbort("no jit config")
         if not guest_write(vm, GUEST_STATE + "/jit", encoded.encode()):
-            return "could not write jit config into the guest"
+            raise CycleAbort("could not write jit config into the guest")
 
         runner = subprocess.Popen(
             ["tart", "exec", vm, "/bin/bash", "-lc",
@@ -391,7 +410,16 @@ def one_cycle(hb):
                 outcome = "runner exited without a job (code {})".format(runner.returncode)
         clear_flag("recycle")
         return outcome
+    except CycleAbort as exc:
+        outcome = str(exc)
+        return outcome
     finally:
+        if vm_proc is not None and vm_proc.poll() is None:
+            tart("stop", vm, timeout=90)
+            try:
+                vm_proc.wait(timeout=60)
+            except subprocess.TimeoutExpired:
+                vm_proc.kill()
         stop_and_delete(vm)
         deregister(vm, runner_id)
         log("[{}] {}".format(vm, outcome))
