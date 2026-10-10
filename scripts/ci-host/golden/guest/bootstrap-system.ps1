@@ -37,13 +37,15 @@ try {
     $jit = $null
     while ((Get-Date) -lt $deadline) {
         if (Test-Path -LiteralPath $kvpKey) {
-            $items = Select-SlateKvpItems -Properties (Get-ItemProperty -LiteralPath $kvpKey)
+            $items = Select-SlateKvpItems -Properties (Get-ItemProperty -LiteralPath $kvpKey -ErrorAction SilentlyContinue)
             $jit = Join-KvpChunks -Items $items
             if ($jit -and @($requiredItems | Where-Object { -not $items.Contains($_) }).Count -eq 0) { break }
         }
         Start-Sleep -Seconds 2
     }
-    if (-not $jit) { throw 'no JIT config arrived within 300 s' }
+    if (-not $jit) {
+        throw 'no JIT config arrived within 300 s'
+    }
     foreach ($required in $requiredItems) {
         if (-not $items.Contains($required)) { throw "KVP item $required missing" }
     }
@@ -53,7 +55,7 @@ try {
     $adapter = $null
     $adapterDeadline = (Get-Date).AddSeconds(60)
     while (-not $adapter -and (Get-Date) -lt $adapterDeadline) {
-        $adapter = Get-NetAdapter | Where-Object { $_.Status -eq 'Up' } | Sort-Object ifIndex | Select-Object -First 1
+        $adapter = Get-NetAdapter -ErrorAction SilentlyContinue | Where-Object { $_.Status -eq 'Up' } | Sort-Object ifIndex | Select-Object -First 1
         if (-not $adapter) { Start-Sleep -Seconds 2 }
     }
     if (-not $adapter) { throw 'no network adapter came up within 60 s' }
@@ -63,7 +65,7 @@ try {
     Get-NetRoute -InterfaceIndex $adapter.ifIndex -DestinationPrefix '0.0.0.0/0' -ErrorAction SilentlyContinue |
         Remove-NetRoute -Confirm:$false -ErrorAction SilentlyContinue
     New-NetIPAddress -InterfaceIndex $adapter.ifIndex -IPAddress $items['slate.ip'] -PrefixLength 24 -DefaultGateway $items['slate.gateway'] | Out-Null
-    Set-DnsClientServerAddress -InterfaceIndex $adapter.ifIndex -ServerAddresses ($items['slate.dns'] -split ',')
+    Set-DnsClientServerAddress -InterfaceIndex $adapter.ifIndex -ServerAddresses ($items['slate.dns'] -split ',' | ForEach-Object { $_.Trim() } | Where-Object { $_ })
     Write-Log ('network: {0} via {1}' -f $items['slate.ip'], $items['slate.gateway'])
 
     $envLines = @()
@@ -106,20 +108,35 @@ try {
     Set-Content -LiteralPath (Join-Path $runnerDir '.env') -Value $envLines -Encoding ascii
 
     $cfgPath = Join-Path $runnerDir 'jit.cfg'
-    Set-Content -LiteralPath $cfgPath -Value $jit -NoNewline -Encoding ascii
+    # Restrict the file while it is still empty, then write the config into
+    # it: the secret never sits under the directory's inherited ACL.
+    New-Item -ItemType File -Path $cfgPath -Force | Out-Null
     & icacls.exe $cfgPath /inheritance:r /grant 'runner:R' /grant 'SYSTEM:F' | Out-Null
     # A native command's failure never throws, even under Stop: check it,
     # so jit.cfg is never handed over with its inherited ACL.
     if ($LASTEXITCODE -ne 0) { throw "icacls exited $LASTEXITCODE restricting jit.cfg" }
+    Set-Content -LiteralPath $cfgPath -Value $jit -NoNewline -Encoding ascii
     Set-Content -LiteralPath (Join-Path $runnerDir 'ready') -Value 'ok'
     Write-Log 'ready'
 } catch {
     $failure = [string]$_
     try {
+        # Publish the failure as the guest KVP item slate.error for the host's
+        # log: this VM, and the logs on its disk, are discarded. No New-Item
+        # -Force: on an existing key it deletes the key's values and subkeys
+        # (Guest\Parameter holds the host's data).
+        try {
+            $guestPool = 'HKLM:\SOFTWARE\Microsoft\Virtual Machine\Guest'
+            if (-not (Test-Path -LiteralPath $guestPool)) { New-Item -Path $guestPool | Out-Null }
+            Set-ItemProperty -LiteralPath $guestPool -Name 'slate.error' -Value $failure.Substring(0, [math]::Min(1000, $failure.Length))
+        } catch {
+            # Best effort only: it must never keep the VM from shutting down.
+        }
         Write-Log "ERROR: $failure"
         Set-Content -LiteralPath (Join-Path $runnerDir 'bootstrap-error.txt') -Value $failure
     } finally {
         # Shut down even when the log or the error file cannot be written.
         & shutdown.exe /s /f /t 5 /c 'slate bootstrap failed'
+        Write-Log "shutdown requested (exit $LASTEXITCODE)"
     }
 }

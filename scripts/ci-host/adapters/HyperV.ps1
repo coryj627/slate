@@ -161,6 +161,37 @@ function Send-RunnerVmKvp {
     }
 }
 
+function ConvertFrom-GuestKvpXml {
+    # Msvm_KvpExchangeComponent.GuestExchangeItems holds one CIM-XML
+    # Msvm_KvpExchangeDataItem instance per item the guest pushed. Returns
+    # the Data of the item called $Name, or $null; an unparsable item is skipped.
+    [CmdletBinding()]
+    param([string[]]$Items = @(), [Parameter(Mandatory)][string]$Name)
+    foreach ($item in @($Items)) {
+        if (-not $item) { continue }
+        try { $xml = [xml]$item } catch { continue }
+        $nameNode = $xml.SelectSingleNode("/INSTANCE/PROPERTY[@NAME='Name']/VALUE")
+        if ($null -eq $nameNode -or $nameNode.InnerText -ne $Name) { continue }
+        $dataNode = $xml.SelectSingleNode("/INSTANCE/PROPERTY[@NAME='Data']/VALUE")
+        if ($null -eq $dataNode) { return '' }
+        return $dataNode.InnerText
+    }
+    return $null
+}
+
+function Get-RunnerVmGuestError {
+    # The guest SYSTEM bootstrap publishes its failure as the guest KVP item
+    # slate.error (HKLM\SOFTWARE\Microsoft\Virtual Machine\Guest). Reads only;
+    # the caller treats any failure here as "no guest error known".
+    [CmdletBinding()]
+    param([Parameter(Mandatory)][string]$Name)
+    $vm = Get-CimInstance -Namespace 'root\virtualization\v2' -ClassName Msvm_ComputerSystem -Filter "ElementName='$Name'"
+    if ($null -eq $vm) { return $null }
+    $kvp = $vm | Get-CimAssociatedInstance -ResultClassName Msvm_KvpExchangeComponent
+    if ($null -eq $kvp) { return $null }
+    return (ConvertFrom-GuestKvpXml -Items @($kvp.GuestExchangeItems) -Name 'slate.error')
+}
+
 function Stop-RunnerVmForce {
     [CmdletBinding()]
     param([Parameter(Mandatory)][string]$Name)
@@ -222,8 +253,8 @@ function New-HyperVAdapters {
     # scope that defined it.
     $commands = @{}
     foreach ($command in 'New-RunnerVm', 'Start-RunnerVm', 'Get-RunnerVmState', 'Get-RunnerVmHeartbeat', 'Send-RunnerVmKvp',
-        'Stop-RunnerVmForce', 'Remove-RunnerVm', 'Get-RunnerVmNames', 'Clear-RunnerVmDirs', 'Get-CacheGeneration',
-        'Merge-RunnerCache', 'Remove-RunnerCache') {
+        'Get-RunnerVmGuestError', 'Stop-RunnerVmForce', 'Remove-RunnerVm', 'Get-RunnerVmNames', 'Clear-RunnerVmDirs',
+        'Get-CacheGeneration', 'Merge-RunnerCache', 'Remove-RunnerCache') {
         $commands[$command] = Get-Command -Name $command -CommandType Function -ErrorAction Stop
     }
     $adapters = @{
@@ -232,6 +263,7 @@ function New-HyperVAdapters {
         GetVmState    = { param($name) & $commands['Get-RunnerVmState'] -Name $name }
         GetHeartbeat  = { param($name) & $commands['Get-RunnerVmHeartbeat'] -Name $name }
         SendKvp       = { param($name, $items) & $commands['Send-RunnerVmKvp'] -Name $name -Items $items }
+        GetGuestError = { param($name) & $commands['Get-RunnerVmGuestError'] -Name $name }
         StopVmForce   = { param($name) & $commands['Stop-RunnerVmForce'] -Name $name }
         RemoveVm      = { param($name, $dir) & $commands['Remove-RunnerVm'] -Name $name -Dir $dir }
         ListVms       = { & $commands['Get-RunnerVmNames'] }

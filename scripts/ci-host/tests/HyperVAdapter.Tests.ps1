@@ -154,6 +154,24 @@ Describe 'Get-RunnerVmHeartbeat' {
     }
 }
 
+Describe 'ConvertFrom-GuestKvpXml' {
+    BeforeAll {
+        # Two Msvm_KvpExchangeDataItem instances as Hyper-V embeds them (CIM-XML)
+        # in Msvm_KvpExchangeComponent.GuestExchangeItems.
+        $script:otherItem = '<INSTANCE CLASSNAME="Msvm_KvpExchangeDataItem"><PROPERTY NAME="Caption" PROPAGATED="true" TYPE="string"></PROPERTY><PROPERTY NAME="Data" TYPE="string"><VALUE>10.77.0.11</VALUE></PROPERTY><PROPERTY NAME="Description" PROPAGATED="true" TYPE="string"></PROPERTY><PROPERTY NAME="ElementName" PROPAGATED="true" TYPE="string"></PROPERTY><PROPERTY NAME="Name" TYPE="string"><VALUE>other.item</VALUE></PROPERTY><PROPERTY NAME="Source" TYPE="uint16"><VALUE>2</VALUE></PROPERTY></INSTANCE>'
+        $script:errorItem = '<INSTANCE CLASSNAME="Msvm_KvpExchangeDataItem"><PROPERTY NAME="Caption" PROPAGATED="true" TYPE="string"></PROPERTY><PROPERTY NAME="Data" TYPE="string"><VALUE>KVP item slate.ip missing &amp; no &lt;cache&gt;</VALUE></PROPERTY><PROPERTY NAME="Description" PROPAGATED="true" TYPE="string"></PROPERTY><PROPERTY NAME="ElementName" PROPAGATED="true" TYPE="string"></PROPERTY><PROPERTY NAME="Name" TYPE="string"><VALUE>slate.error</VALUE></PROPERTY><PROPERTY NAME="Source" TYPE="uint16"><VALUE>2</VALUE></PROPERTY></INSTANCE>'
+    }
+    It 'returns the Data of the named item, XML entities decoded' {
+        ConvertFrom-GuestKvpXml -Items @($otherItem, $errorItem) -Name 'slate.error' | Should -BeExactly 'KVP item slate.ip missing & no <cache>'
+    }
+    It 'returns null when no item has the name or there are none, and reads past an unparsable item' {
+        ConvertFrom-GuestKvpXml -Items @($otherItem) -Name 'slate.error' | Should -Be $null
+        ConvertFrom-GuestKvpXml -Items @() -Name 'slate.error' | Should -Be $null
+        ConvertFrom-GuestKvpXml -Items $null -Name 'slate.error' | Should -Be $null
+        ConvertFrom-GuestKvpXml -Items @('not <xml', $errorItem) -Name 'slate.error' | Should -BeExactly 'KVP item slate.ip missing & no <cache>'
+    }
+}
+
 Describe 'Merge-RunnerCache' {
     It 'merges the child into the lane parent and bumps the generation' {
         Mock Merge-VHD {}
@@ -194,7 +212,7 @@ Describe 'Remove-RunnerVm / Clear-RunnerVmDirs / Remove-RunnerCache' {
 
 Describe 'New-HyperVAdapters' {
     It 'exposes exactly the keys the orchestrator invokes' {
-        @((New-HyperVAdapters -Config $config).Keys | Sort-Object) | Should -Be @('CleanVmDirs', 'CommitCache', 'DiscardCache', 'GetGeneration', 'GetHeartbeat', 'GetVmState', 'ListVms', 'NewVm', 'RemoveVm', 'SendKvp', 'StartVm', 'StopVmForce')
+        @((New-HyperVAdapters -Config $config).Keys | Sort-Object) | Should -Be @('CleanVmDirs', 'CommitCache', 'DiscardCache', 'GetGeneration', 'GetGuestError', 'GetHeartbeat', 'GetVmState', 'ListVms', 'NewVm', 'RemoveVm', 'SendKvp', 'StartVm', 'StopVmForce')
     }
     It 'binds the config into the closures' {
         Set-CacheGeneration -CacheDir $config.CacheDir -Lane 'app' -Value 3

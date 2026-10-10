@@ -421,7 +421,11 @@ function Complete-ActiveVm {
     foreach ($key in @($Journal.SeenJobs.Keys)) { $candidates += [int64]$key }
     $job = Resolve-RunnerJob -RunnerName $Name -AdmittedJobId ([int64]$vm.JobId) -CandidateJobIds $candidates -GetJob $Adapters.GetJob
     if ($null -eq $job) {
-        & $Adapters.Log 'warn' "${Name}: shut down without running a job (guest bootstrap failure?)"
+        # The guest bootstrap publishes its failure as the KVP item
+        # slate.error; reading it is best effort and never stops the teardown.
+        $guestError = $null
+        try { $guestError = & $Adapters.GetGuestError $Name } catch { }
+        & $Adapters.Log 'warn' "${Name}: shut down without running a job (guest bootstrap failure?) guest error: $guestError"
         if ($vm.RunnerId) { try { & $Adapters.RemoveRunner $vm.RunnerId } catch { & $Adapters.Log 'warn' "${Name}: RemoveRunner: $_" } }
         if ($vm.CachePath) { & $Adapters.DiscardCache $vm.CachePath }
         & $Adapters.RemoveVm $Name $vm.Dir

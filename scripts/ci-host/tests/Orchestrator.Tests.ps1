@@ -17,6 +17,7 @@ BeforeAll {
             Vms        = @()
             Generation = 3
             JitConfig  = ('j' * 2500)
+            GuestError = $null
         }
         $script:calls = [System.Collections.ArrayList]::new()
         $script:logs = [System.Collections.ArrayList]::new()
@@ -40,6 +41,7 @@ BeforeAll {
             StartVm       = { param($name) & $script:record 'StartVm' @($name) }
             GetVmState    = { param($name) & $script:record 'GetVmState' @($name); if ($script:world.VmStates.ContainsKey($name)) { $script:world.VmStates[$name] } else { 'Running' } }
             GetHeartbeat  = { param($name) & $script:record 'GetHeartbeat' @($name); $script:world.Heartbeat }
+            GetGuestError = { param($name) & $script:record 'GetGuestError' @($name); $script:world.GuestError }
             SendKvp       = { param($name, $items) & $script:record 'SendKvp' @($name, $items) }
             StopVmForce   = { param($name) & $script:record 'StopVmForce' @($name) }
             RemoveVm      = { param($name, $dir) & $script:record 'RemoveVm' @($name, $dir) }
@@ -313,6 +315,8 @@ Context 'settle' {
         # running here (it returns nothing) and job 1 is still queued.
         $world.VmStates[$name] = 'Off'
         $world.Queued = @((New-QueuedJob 1 10 'app'))
+        # The guest published its bootstrap failure as the KVP item slate.error.
+        $world.GuestError = 'no JIT config arrived within 300 s'
         Invoke-OrchestratorTick -Config $config -Journal $journal -Adapters $adapters -Now $t0.AddMinutes(20)
         (Get-Calls 'RemoveRunner')[0].Args[0] | Should -Be 77
         $journal.Retries['1'].Count | Should -Be 1
@@ -320,6 +324,19 @@ Context 'settle' {
         (Get-Calls 'CommitCache').Count | Should -Be 0
         $journal.Vms.Count | Should -Be 0
         (Get-Calls 'NewVm').Count | Should -Be 1
+        (Get-Calls 'GetGuestError')[0].Args[0] | Should -Be $name
+        @($logs | Where-Object { $_.Contains("${name}: shut down without running a job (guest bootstrap failure?) guest error: no JIT config arrived within 300 s") }).Count | Should -Be 1
+    }
+    It 'still tears down a jobless VM when its guest error cannot be read' {
+        $world.VmStates[$name] = 'Off'
+        $world.Queued = @((New-QueuedJob 1 10 'app'))
+        $adapters.GetGuestError = { param($n) & $script:record 'GetGuestError' @($n); throw 'wmi unavailable' }
+        Invoke-OrchestratorTick -Config $config -Journal $journal -Adapters $adapters -Now $t0.AddMinutes(20)
+        (Get-Calls 'GetGuestError').Count | Should -Be 1
+        $journal.Retries['1'].Count | Should -Be 1
+        (Get-Calls 'RemoveVm').Count | Should -Be 1
+        $journal.Vms.Count | Should -Be 0
+        @($logs | Where-Object { $_.Contains("${name}: shut down without running a job (guest bootstrap failure?) guest error: ") }).Count | Should -Be 1
     }
     It 'waits to commit while a same-lane sibling is still running, then commits without more API calls' {
         # A second app job is admitted into slot 2 and keeps running.
