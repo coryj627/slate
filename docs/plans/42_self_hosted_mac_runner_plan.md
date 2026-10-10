@@ -942,7 +942,14 @@ parallel with them.
   layer now does the same for the 3.13 series using the same
   actions/python-versions tarball and its `setup.sh`, run as root at build
   time (`scripts/toolchain-python.sh`; in place as `03f-python.pkr.hcl`,
-  rolled out with `refresh-inplace.sh`). Attempt 2 follows.
+  rolled out with `refresh-inplace.sh`).
+- **Pilot attempt 2 (06:06 UTC, run 38029754403)** failed at the same step:
+  "Version 3.13 was not found in the local cache". The cache sat under the
+  runner's default `_work/_tool`, but `setup-python` hard-codes
+  `/Users/runner/hostedtoolcache` on macOS, the hosted images' path, and
+  the runner itself takes `RUNNER_TOOL_CACHE` from its environment. The
+  cache now lives at `/Users/runner/hostedtoolcache` and the runner's `.env`
+  names it, so the runner and every setup action agree. Attempt 3 follows.
 - **PR A opened 2026-10-10:** coryj627/slate#1335, branch
   `ci/mac-runner-phase2`, with everything above. Its hosted checks are the
   first runs under the workflow execution policy.

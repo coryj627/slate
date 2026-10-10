@@ -14,7 +14,12 @@
 set -euo pipefail
 
 SERIES="${PYTHON_SERIES:-3.13}"
-TOOLCACHE=/Users/runner/actions-runner/_work/_tool
+# setup-python hard-codes this path on macOS (src/setup-python.ts: IS_MAC ->
+# AGENT_TOOLSDIRECTORY=/Users/runner/hostedtoolcache), and the runner takes
+# RUNNER_TOOL_CACHE from its environment, so the runner's .env names the same
+# place. Pilot attempt 2 failed with the cache under _work/_tool instead.
+TOOLCACHE=/Users/runner/hostedtoolcache
+RUNNER_ENV=/Users/runner/actions-runner/.env
 
 sudo_() {
   if sudo -n /usr/bin/true 2>/dev/null; then sudo "$@"
@@ -39,8 +44,18 @@ tar -xzf "$asset"
 [ -f setup.sh ] || { echo "tarball has no setup.sh" >&2; ls; exit 1; }
 
 echo "==> setup.sh as root with RUNNER_TOOL_CACHE=$TOOLCACHE"
+sudo_ install -d -o runner -g staff -m 755 "$TOOLCACHE"
 sudo_ env RUNNER_TOOL_CACHE="$TOOLCACHE" HOME=/var/root bash ./setup.sh 2>&1 | grep -vE "^\s*$|Requirement already|WARNING: Running pip" | tail -15
 sudo_ chown -R runner:staff "$TOOLCACHE"
+# An earlier layout under _work/_tool is dead weight; the runner looks where .env says.
+sudo_ rm -rf /Users/runner/actions-runner/_work/_tool/Python
+
+echo "==> runner .env names the tool cache"
+if ! sudo_ grep -q '^RUNNER_TOOL_CACHE=' "$RUNNER_ENV"; then
+  echo "RUNNER_TOOL_CACHE=$TOOLCACHE" | sudo_ tee -a "$RUNNER_ENV" >/dev/null
+fi
+sudo_ chown runner:staff "$RUNNER_ENV"
+sudo_ cat "$RUNNER_ENV" | sed 's/^/    /'
 
 echo "==> check"
 "$TOOLCACHE/Python/$ver/arm64/bin/python3" --version

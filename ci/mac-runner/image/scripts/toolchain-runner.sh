@@ -28,6 +28,7 @@ sudo -u runner tee /Users/runner/actions-runner/.env >/dev/null <<'EOF'
 ACTIONS_RUNNER_HOOK_JOB_STARTED=/usr/local/slate-runner/hooks/job-started.sh
 CARGO_HOME=/Users/runner/toolchains/cargo
 RUSTUP_HOME=/Users/runner/toolchains/rustup
+RUNNER_TOOL_CACHE=/Users/runner/hostedtoolcache
 EOF
 sudo -u runner tee /Users/runner/actions-runner/.path >/dev/null <<'EOF'
 /usr/local/slate-runner/bin:/Users/runner/toolchains/cargo/bin:/usr/local/bin:/usr/bin:/bin:/usr/sbin:/sbin
