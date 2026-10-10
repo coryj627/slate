@@ -342,7 +342,7 @@ Expected: every test passes, `Failed: 0`.
 `.github/workflows/windows-runner-tests.yml`:
 
 ```yaml
-# Pester suite for scripts/ci-host (the self-hosted Windows runner host).
+# Pester suite for ci/windows-runner (the self-hosted Windows runner host).
 # Pure logic only: adapters are faked, so hosted Linux is enough and no
 # runner or cache volume is involved (docs/runbooks/ci-cache-policy.md
 # keeps cheap verifier lanes on standard hosted Linux).
@@ -3768,7 +3768,7 @@ Add `Add-SidToUserRight, Set-LocalUserRights` to `Export-ModuleMember`.
 # (idempotent: re-run after a reboot or to refresh C:\slate-ci\bin).
 # Creates the unprivileged orchestrator account, the directory tree and
 # ACLs, the isolated NAT switch and host firewall rule, the formatted
-# cache parents, copies scripts/ci-host into place and registers the
+# cache parents, copies ci/windows-runner into place and registers the
 # scheduled tasks. Everything after this runs as slate-ci-host.
 [CmdletBinding()]
 param(
