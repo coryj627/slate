@@ -83,20 +83,20 @@ Retirement follows the inspection rule above: look before deleting.
 3. In the Namespace dashboard, delete the `mac-actions` and `mac-actions-pr`
    runner profiles. Nothing selects them; a leftover profile costs nothing but
    invites a stale `runs-on` to work again by accident.
-4. The Windows tags are untouched by this. They stay in use only while
-   `WINDOWS_RUNNER_MODE` is `namespace` (see "Windows lanes on the home
-   pool" below).
+4. The Windows tags are untouched by this. They stay in use whenever
+   `WINDOWS_RUNNER_MODE` is anything but `home`, including unset (see
+   "Windows lanes on the home pool" below).
 
 ## Windows lanes on the home pool (2026-10-10)
 
-While the repository variable `WINDOWS_RUNNER_MODE` is `home`, or unset,
+While the repository variable `WINDOWS_RUNNER_MODE` is exactly `home`,
 the Windows lanes of `windows.yml` and `nightly.yml` run on the self-hosted
 pool of `docs/runbooks/self-hosted-windows-runner.md`, with no Namespace
 volume. Its per-lane VHDX parents (`rust`, `app`, `model`; the shell gate
 has none) are forked copy-on-write for every job and merged back only after
 the host verifies, from GitHub's API, that the job was a green
-push/schedule/dispatch on `main` of this repository and that the guest shut
-itself down. That decision is made by the host, never by a label a PR can
+push/schedule/dispatch on `main` of this repository and that the host's
+loop did not force the guest off. That decision is made by the host, never by a label a PR can
 request, so no provider policy needs establishing for it. The only GitHub
 cache those lanes still touch is the pinned `uniffi-bindgen-cs` binary in
 `windows.yml`'s app and model lanes, as on Namespace.
@@ -105,8 +105,8 @@ cache those lanes still touch is the pinned `uniffi-bindgen-cs` binary in
    volumes sit idle while the home pool serves, and keep metering their
    requested capacity. Releasing one stops that, but makes the next
    fallback run cold.
-2. When the variable is flipped to `namespace`, those tags are in use again
-   and everything in this document applies unchanged.
+2. When the variable is anything but `home` (`namespace`, or unset), those
+   tags are in use and everything in this document applies unchanged.
 
 ## Remaining operating decisions
 

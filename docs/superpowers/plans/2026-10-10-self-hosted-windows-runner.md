@@ -15,9 +15,9 @@
 - Lane labels are exactly `slate-win-rust`, `slate-win-app`, `slate-win-model`, `slate-win-shell`; a job must carry exactly one.
 - Runner names are `slate-win-<lane>-<8 hex>`.
 - Two VM slots, 4 vCPU and 12 GB static each; slot IPs `10.77.0.11` and `10.77.0.12`; gateway `10.77.0.1`; NAT prefix `10.77.0.0/24`; switch name `slate-ci`.
-- Per-VM extended ACLs deny `10.0.0.0/8`, `172.16.0.0/12`, `192.168.0.0/16`, `100.64.0.0/10`, `169.254.0.0/16`, `::/0`, both directions; allow everything else.
+- Per-VM extended ACLs deny `10.0.0.0/8`, `172.16.0.0/12`, `192.168.0.0/16`, `100.64.0.0/10`, `169.254.0.0/16`, `224.0.0.0/4`, `255.255.255.255/32`, `0.0.0.0/8`, `::/0`, both directions (18 deny rules); allow everything else (final-review ruling, 2026-10-10).
 - KVP values are at most 1,000 characters (Hyper-V MAXLEN is 1024); keys `slate.jit.count`, `slate.jit.<n>`, `slate.lane`, `slate.ip`, `slate.gateway`, `slate.dns`, `slate.cache`, `slate.job`.
-- Commit predicate: job `conclusion == success`, run `event ∈ {push, schedule, workflow_dispatch}`, `head_branch == main`, `head_repository.full_name == coryj627/slate`, guest shut down by itself, parent generation unchanged since fork.
+- Commit predicate: job `conclusion == success`, run `event ∈ {push, schedule, workflow_dispatch}`, `head_branch == main`, `head_repository.full_name == coryj627/slate`, the loop did not force the guest off, parent generation unchanged since fork.
 - Lane caps: rust 70 min, app 100 min, model 100 min, shell 30 min (lane `timeout-minutes` + 10, app covers the 90-min nightly stress job); `shell` has no cache disk.
 - Heartbeat wait 180 s; unclaimed-runner check at 300 s; retry cap 3 with 600 s back-off; tick 10 s.
 - Cache parents are dynamic VHDX, 60 GB maximum, NTFS, volume label `slate-cache`, generation counter in `<lane>.gen` next to the parent.
@@ -3967,7 +3967,7 @@ git commit -m "feat(ci-host): host setup — unprivileged account, NAT switch, c
 - Create: `ci/windows-runner/tests/Workflows.Tests.ps1`
 
 **Interfaces:**
-- Consumes: repository variable `WINDOWS_RUNNER_MODE` (`home` default, `namespace` fallback), lane labels from the Global Constraints, `NSC_CACHE_PATH` exported by the guest (Task 9).
+- Consumes: repository variable `WINDOWS_RUNNER_MODE` (only `home` selects the home pool; anything else, including unset, is Namespace — final-review ruling), lane labels from the Global Constraints, `NSC_CACHE_PATH` exported by the guest (Task 9).
 - Produces: workflows that route by the variable; the Namespace strings are kept verbatim so `namespace` reproduces today's runs exactly.
 
 - [ ] **Step 1: Write the failing tests**

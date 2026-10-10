@@ -400,6 +400,24 @@ saw before changing anything.
   ```
 
   Expect the line `Password expires` to end in `Never`.
+- [ ] IPv6 is off inside a job VM, not only on the build VM's adapter. The
+  image sets `Tcpip6\Parameters\DisabledComponents` to `0xFF`, which
+  applies to the new adapter every job VM gets. In the same console:
+
+  ```powershell
+  Get-NetIPAddress -AddressFamily IPv6 -ErrorAction SilentlyContinue; Get-NetAdapterBinding -ComponentID ms_tcpip6
+  ```
+
+  Expect no IPv6 address at all, and `Enabled` reading `False` for the
+  adapter.
+- [ ] The guest's clock did not jump after boot. The bootstrap waits run on
+  a stopwatch, so a jump cannot cut them short, but a jump still shows
+  where the guest came from. Read the bootstrap log of a finished job VM
+  (see "Reading a job VM's logs") and compare its first and last
+  timestamps with the VM's `StartedAt` in `C:\slate-ci\state\journal.json`,
+  which is UTC: the log should start within a minute of it and run for
+  about the job's length. A step of hours between two neighbouring lines
+  means Hyper-V corrected the clock; record it.
 - [ ] The loop starts by itself within a minute of step 7's
   `Enable-ScheduledTask`, with no `Start-ScheduledTask`. This proves the
   per-minute relaunch.
@@ -408,6 +426,22 @@ saw before changing anything.
 
 Start with a branch run on `home`, which never commits a cache. The items
 about commits need the first main push.
+
+- [ ] The loop's share of the API budget is small. Note the remaining
+  budget before a busy hour (several jobs queued or running) and again
+  after it:
+
+  ```powershell
+  gh api rate_limit --jq .resources.core
+  ```
+
+  The loop costs two listing calls a tick plus one jobs call per queued or
+  in-progress run of `windows.yml`, `nightly.yml` and the pilot, so a busy
+  hour should spend a few hundred of the 5,000, never thousands. If
+  `remaining` fell by more than a thousand with nothing else signed in as
+  you busy, record the `used` figures and look for runs of other
+  workflows in the jobs calls (the `RoutedWorkflows` filter in
+  `config.json` should keep them out).
 
 ```powershell
 gh workflow run windows.yml --ref <branch> --repo coryj627/slate
@@ -1141,8 +1175,9 @@ and `"status": "401"`. Rotate it before then.
   A failed API call logs the prefixed line, then GitHub's reply on the next
   lines, without timestamps. `"message": "Bad credentials"` with
   `"status": "401"` means the PAT expired or was revoked: rotate it.
-  `"status": "403"` with `"message": "API rate limit exceeded for user ID …"`
-  means the hourly budget is spent; GitHub's response carried
+  `"status": "403"` or `"status": "429"` with
+  `"message": "API rate limit exceeded for user ID …"` means the hourly
+  budget is spent; GitHub's response carried
   `x-ratelimit-remaining: 0`. The budget is your personal 5,000 requests an
   hour, shared with `gh` and anything else signed in as you, and it refills
   at the reset time. Any other `"status": "403"` means the PAT lacks a
@@ -1150,7 +1185,7 @@ and `"status": "401"`. Rotate it before then.
   four lines before each:
 
   ```powershell
-  Select-String -Path C:\slate-ci\logs\orchestrator-*.log -Pattern '"status": "40[13]"' -Context 4,0
+  Select-String -Path C:\slate-ci\logs\orchestrator-*.log -Pattern '"status": "(40[13]|429)"' -Context 4,0
   ```
 - **`GitHub API budget low: <n> requests left until the reset at <time> …`.**
   Fewer than 500 requests are left in the current hour of the budget the
