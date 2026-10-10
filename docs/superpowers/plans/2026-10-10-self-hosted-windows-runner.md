@@ -4484,15 +4484,26 @@ Start-Process pwsh -Verb RunAs -ArgumentList '-NoProfile -ExecutionPolicy Bypass
 
 Enter the Windows 11 Pro key at the hidden prompt. Expected: "Applying 'Windows 11 Pro'", a stream of `provisioning (Running)` lines, the tail of `provision.log` ending in `phase 1 complete`, then "Golden image ready and read-only". If the loop exceeds 150 min, open `vmconnect.exe localhost slate-golden-build` and read the logs named in the runbook before deciding anything.
 
-- [ ] **Step 6: Start the orchestrator and watch the sweep**
+- [ ] **Step 6: Confirm the orchestrator is running and swept**
+
+The task relaunches itself every minute, so it is normally already running
+by now (between steps 4 and 5 it logs `golden disk missing or not sealed`
+every minute; before step 4, `token missing`). Starting it by hand is
+harmless:
 
 ```bash
 Start-ScheduledTask slate-ci-orchestrator; Start-Sleep 15; Get-Content (Get-ChildItem C:\slate-ci\logs\orchestrator-*.log | Sort-Object LastWriteTime | Select-Object -Last 1).FullName -Tail 10
 ```
 
-Expected: `orchestrator start (pid …, user slate-ci-host …)` and no `error` lines. `gh api repos/coryj627/slate/actions/runners --jq .total_count` is `0` (nothing registered until a job queues).
+(Reading `C:\slate-ci\logs` needs an elevated prompt.) Expected: the last
+`orchestrator start (pid …, user slate-ci-host …)` is followed by sweep
+lines and no `error` lines. `gh api repos/coryj627/slate/actions/runners --jq .total_count` is `0` (nothing registered until a job queues).
 
 - [ ] **Step 7: First home run on the branch (main is untouched: its windows.yml still hardcodes Namespace)**
+
+First run the runbook's "first golden build" checklist, in particular the
+product-key check on the sealed image (the key must be unreadable from a
+job). Then:
 
 ```bash
 gh variable set WINDOWS_RUNNER_MODE --body home --repo coryj627/slate
@@ -4515,6 +4526,11 @@ Get-Content (Get-ChildItem C:\slate-ci\logs\orchestrator-*.log | Sort-Object Las
 Expected log sequence per job: `provisioned for job …` → `handed off (runner …)` → (optionally `claimed`) → `discard (event: workflow_dispatch … branch: claude/…)` — a branch dispatch is not `main`, so caches are discarded by design. Expected GitHub: all four lanes plus the shell gate green on runners named `slate-win-*`. If a lane fails, its artifact `slate-windows-app-results-*` and the VM's `bootstrap-*.log` (visible in the orchestrator log only as the discard reason; connect to a live VM with `vmconnect` to read them) are the first stops.
 
 - [ ] **Step 8: Isolation evidence through the pilot**
+
+The pilot's isolation step names the WSL and Default Switch gateway
+addresses, which Windows re-randomises at host boot. Refresh them in
+`windows-ci-pilot.yml` from `Get-NetIPAddress -InterfaceAlias 'vEthernet*'`
+and commit before dispatching.
 
 ```bash
 gh workflow run windows-ci-pilot.yml --ref claude/windows-github-actions-runner-a0acb4 -f runner=home -f cache=false
