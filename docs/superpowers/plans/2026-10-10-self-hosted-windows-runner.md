@@ -1427,7 +1427,8 @@ git commit -m "feat(ci-host): GitHub REST adapter — queued jobs, JIT runners, 
 
 **Interfaces:**
 - Consumes: `$Config` from `Get-CiHostConfig` (Task 5): `GoldenPath, CacheDir, VmDir, SwitchName, Vcpu, MemoryGB, Lanes`.
-- Produces: `Get-ExtendedAclRules` → array of `@{ Direction; Action; RemoteIPAddress; Weight }` (14 rules); `ConvertTo-VmStateLabel -State` → `Off|Running|Other`; `Get-CacheGeneration -CacheDir -Lane` / `Set-CacheGeneration -CacheDir -Lane -Value`; `New-RunnerVm -Name -Lane -Config` → `@{ Dir; CachePath; ForkGeneration }`; `Start-RunnerVm`, `Get-RunnerVmState` (`Missing` when absent), `Get-RunnerVmHeartbeat` (`OK|NoContact`), `Send-RunnerVmKvp -Name -Items`, `Stop-RunnerVmForce`, `Remove-RunnerVm -Name -Dir`, `Get-RunnerVmNames`, `Clear-RunnerVmDirs -VmDir -ActiveNames`, `Merge-RunnerCache -Config -Lane -ChildPath` → new generation, `Remove-RunnerCache -ChildPath`; `New-HyperVAdapters -Config` → hashtable with keys `NewVm, StartVm, GetVmState, GetHeartbeat, SendKvp, StopVmForce, RemoveVm, ListVms, CleanVmDirs, GetGeneration, CommitCache, DiscardCache`.
+- Rulings applied during execution (the committed adapter differs from the code below in these ways): `New-HyperVAdapters` captures the twelve adapter functions in a `$commands` table and the closures call `& $commands[...]` (GetNewClosure blocks resolve only global functions); every mutating function starts with `$ErrorActionPreference = 'Stop'`; `Get-RunnerVmState` returns `Unknown` for any failure other than not-found; the heartbeat compares `PrimaryOperationalStatus`.
+- Produces: `Get-ExtendedAclRules` → array of `@{ Direction; Action; RemoteIPAddress; Weight }` (14 rules); `ConvertTo-VmStateLabel -State` → `Off|Running|Other`; `Get-RunnerVmState` → `Off|Running|Other|Missing|Unknown` (`Missing` only when the VM is absent; any other Hyper-V failure is `Unknown`); `Get-CacheGeneration -CacheDir -Lane` / `Set-CacheGeneration -CacheDir -Lane -Value`; `New-RunnerVm -Name -Lane -Config` → `@{ Dir; CachePath; ForkGeneration }`; `Start-RunnerVm`, `Get-RunnerVmState` (`Missing` when absent), `Get-RunnerVmHeartbeat` (`OK|NoContact`), `Send-RunnerVmKvp -Name -Items`, `Stop-RunnerVmForce`, `Remove-RunnerVm -Name -Dir`, `Get-RunnerVmNames`, `Clear-RunnerVmDirs -VmDir -ActiveNames`, `Merge-RunnerCache -Config -Lane -ChildPath` → new generation, `Remove-RunnerCache -ChildPath`; `New-HyperVAdapters -Config` → hashtable with keys `NewVm, StartVm, GetVmState, GetHeartbeat, SendKvp, StopVmForce, RemoveVm, ListVms, CleanVmDirs, GetGeneration, CommitCache, DiscardCache`.
 
 - [ ] **Step 1: Write the failing tests (Hyper-V cmdlets stubbed so the suite runs on Linux)**
 
@@ -1867,6 +1868,7 @@ git commit -m "feat(ci-host): Hyper-V adapter — forked disks, Gen2 vTPM VM, po
 - Produces: `Invoke-OrchestratorTick -Config -Journal -Adapters [hashtable] -Now [datetimeoffset]`; `Invoke-StartupSweep -Config -Journal -Adapters`; helpers `Get-FreeSlots`, `Remove-ActiveVm`, `Complete-ActiveVm`, `Update-ActiveVm`, `Invoke-Admission` (exported for tests).
 - Journal VM entry written here: `@{ Name; Lane; Slot; SlotIp; JobId; RunId; Dir; CachePath; ForkGeneration; Phase; StartedAt; HandedAt; RunnerId; Claimed }`.
 - KVP items sent: `slate.jit.count`, `slate.jit.<n>`, `slate.lane`, `slate.ip`, `slate.gateway`, `slate.dns`, `slate.cache` (`'1'|'0'`), `slate.job`.
+- `GetVmState` may return `Unknown` (Hyper-V unreachable): the VM is left alone for that tick. A journal entry gains `PendingCommit` (bool): once the decision is commit but a same-lane VM is not `Off`, the merge waits (Merge-VHD cannot write a parent while a sibling holds a child of it open); later ticks skip the API lookups, re-check the parent generation and merge when the sibling is off. A discard never waits.
 
 - [ ] **Step 1: Write the failing tests with fake adapters**
 
@@ -2044,6 +2046,16 @@ Context 'handoff' {
         $journal.Vms.Count | Should -Be 0
         $journal.Retries['1'].Count | Should -Be 1
     }
+    It 'leaves the VM alone while Hyper-V does not answer' {
+        $world.VmStates[$name] = 'Unknown'
+        $world.Heartbeat = 'OK'
+        Invoke-OrchestratorTick -Config $config -Journal $journal -Adapters $adapters -Now $t0.AddSeconds(30)
+        $journal.Vms.Count | Should -Be 1
+        $journal.Vms[$name].Phase | Should -Be 'provisioned'
+        (Get-Calls 'NewJitRunner').Count | Should -Be 0
+        (Get-Calls 'StopVmForce').Count | Should -Be 0
+        ($logs -join "`n") | Should -Match 'did not answer'
+    }
 }
 
 Context 'settle' {
@@ -2114,6 +2126,64 @@ Context 'settle' {
         Invoke-OrchestratorTick -Config $config -Journal $journal -Adapters $adapters -Now $t0.AddMinutes(20)
         (Get-Calls 'DiscardCache').Count | Should -Be 1
         $journal.Retries.Count | Should -Be 0
+    }
+    It 'waits to commit while a same-lane sibling is still running, then commits without more API calls' {
+        # A second app job is admitted into slot 2 and keeps running.
+        $world.Queued = @((New-QueuedJob 2 11 'app'))
+        $world.VmStates[$name] = 'Running'
+        Invoke-OrchestratorTick -Config $config -Journal $journal -Adapters $adapters -Now $t0.AddMinutes(1)
+        $sibling = @($journal.Vms.Keys | Where-Object { $_ -ne $name })[0]
+        $world.Queued = @()
+        $world.VmStates[$name] = 'Off'
+        Set-DoneJob 1 10 $name
+        Set-Run 10
+        Invoke-OrchestratorTick -Config $config -Journal $journal -Adapters $adapters -Now $t0.AddMinutes(20)
+        (Get-Calls 'CommitCache').Count | Should -Be 0
+        $journal.Vms[$name].PendingCommit | Should -BeTrue
+        ($logs -join "`n") | Should -Match "waits until sibling $sibling"
+        $apiCallsBefore = (Get-Calls 'GetJob').Count + (Get-Calls 'GetRun').Count
+        Invoke-OrchestratorTick -Config $config -Journal $journal -Adapters $adapters -Now $t0.AddMinutes(21)
+        (Get-Calls 'CommitCache').Count | Should -Be 0
+        ((Get-Calls 'GetJob').Count + (Get-Calls 'GetRun').Count) | Should -Be $apiCallsBefore
+        $world.VmStates[$sibling] = 'Off'
+        Set-DoneJob 2 11 $sibling 'failure'
+        Set-Run 11
+        Invoke-OrchestratorTick -Config $config -Journal $journal -Adapters $adapters -Now $t0.AddMinutes(22)
+        (Get-Calls 'CommitCache').Count | Should -Be 1
+        (Get-Calls 'CommitCache')[0].Args[1] | Should -Be "C:\slate-ci\vms\$name\cache.vhdx"
+        $journal.Vms.Count | Should -Be 0
+    }
+    It 'discards a pending commit when the parent generation moved while waiting' {
+        $world.Queued = @((New-QueuedJob 2 11 'app'))
+        $world.VmStates[$name] = 'Running'
+        Invoke-OrchestratorTick -Config $config -Journal $journal -Adapters $adapters -Now $t0.AddMinutes(1)
+        $sibling = @($journal.Vms.Keys | Where-Object { $_ -ne $name })[0]
+        $world.Queued = @()
+        $world.VmStates[$name] = 'Off'
+        Set-DoneJob 1 10 $name
+        Set-Run 10
+        Invoke-OrchestratorTick -Config $config -Journal $journal -Adapters $adapters -Now $t0.AddMinutes(20)
+        $journal.Vms[$name].PendingCommit | Should -BeTrue
+        $world.VmStates[$sibling] = 'Off'
+        $world.Generation = 4
+        Set-DoneJob 2 11 $sibling 'failure'
+        Set-Run 11
+        Invoke-OrchestratorTick -Config $config -Journal $journal -Adapters $adapters -Now $t0.AddMinutes(22)
+        (Get-Calls 'CommitCache').Count | Should -Be 0
+        ($logs -join "`n") | Should -Match 'generation moved while waiting'
+        $journal.Vms.ContainsKey($name) | Should -BeFalse
+    }
+    It 'never makes a discard wait for a sibling' {
+        $world.Queued = @((New-QueuedJob 2 11 'app'))
+        $world.VmStates[$name] = 'Running'
+        Invoke-OrchestratorTick -Config $config -Journal $journal -Adapters $adapters -Now $t0.AddMinutes(1)
+        $world.Queued = @()
+        $world.VmStates[$name] = 'Off'
+        Set-DoneJob 1 10 $name
+        Set-Run 10 'pull_request'
+        Invoke-OrchestratorTick -Config $config -Journal $journal -Adapters $adapters -Now $t0.AddMinutes(20)
+        (Get-Calls 'DiscardCache').Count | Should -Be 1
+        $journal.Vms.ContainsKey($name) | Should -BeFalse
     }
 }
 
@@ -2255,13 +2325,42 @@ function Remove-ActiveVm {
     $Journal.Vms.Remove($Name)
 }
 
+function Test-SiblingRunning {
+    # Merge-VHD cannot write a cache parent while another VM holds a child
+    # of it open, so a commit waits until every same-lane sibling is Off.
+    [CmdletBinding()]
+    param($Journal, [hashtable]$Adapters, [string]$Name, [string]$Lane)
+    foreach ($other in @($Journal.Vms.Values)) {
+        if ($other.Name -eq $Name -or $other.Lane -ne $Lane -or -not $other.CachePath) { continue }
+        if ((& $Adapters.GetVmState $other.Name) -ne 'Off') { return $other.Name }
+    }
+    return $null
+}
+
 function Complete-ActiveVm {
     # The VM reached Off by itself. Ask GitHub what ran, then commit or
     # discard. An API failure propagates: the entry stays in the journal
     # and the next tick tries again (never orphan, never commit blindly).
+    # A commit that must wait for a same-lane sibling is remembered as
+    # PendingCommit so later ticks skip the API lookups.
     [CmdletBinding()]
     param($Config, $Journal, [hashtable]$Adapters, [string]$Name)
     $vm = $Journal.Vms[$Name]
+    if ($vm.PendingCommit) {
+        $sibling = Test-SiblingRunning -Journal $Journal -Adapters $Adapters -Name $Name -Lane $vm.Lane
+        if ($sibling) { return }
+        $parentGeneration = [int](& $Adapters.GetGeneration $vm.Lane)
+        if ($parentGeneration -eq [int]$vm.ForkGeneration) {
+            $generation = & $Adapters.CommitCache $vm.Lane $vm.CachePath
+            & $Adapters.Log 'info' "${Name}: commit $($vm.Lane) generation $generation (after waiting for a sibling)"
+        } else {
+            & $Adapters.DiscardCache $vm.CachePath
+            & $Adapters.Log 'info' "${Name}: discard (generation moved while waiting: fork $($vm.ForkGeneration), parent $parentGeneration)"
+        }
+        & $Adapters.RemoveVm $Name $vm.Dir
+        $Journal.Vms.Remove($Name)
+        return
+    }
     $candidates = @()
     foreach ($key in @($Journal.SeenJobs.Keys)) { $candidates += [int64]$key }
     $job = Resolve-RunnerJob -RunnerName $Name -AdmittedJobId ([int64]$vm.JobId) -CandidateJobIds $candidates -GetJob $Adapters.GetJob
@@ -2273,6 +2372,13 @@ function Complete-ActiveVm {
             -ParentGeneration $parentGeneration -ForkGeneration ([int]$vm.ForkGeneration) `
             -TrustedRepo $Config.TrustedRepo -TrustedBranch $Config.TrustedBranch -TrustedEvents @($Config.TrustedEvents)
         if ($decision.Eligible) {
+            $sibling = Test-SiblingRunning -Journal $Journal -Adapters $Adapters -Name $Name -Lane $vm.Lane
+            if ($sibling) {
+                $vm.PendingCommit = $true
+                if ($null -ne $job) { $Journal.SeenJobs.Remove([string]$job.id) }
+                & $Adapters.Log 'info' "${Name}: commit of $($vm.Lane) waits until sibling $sibling is off"
+                return
+            }
             $generation = & $Adapters.CommitCache $vm.Lane $vm.CachePath
             & $Adapters.Log 'info' "${Name}: commit $($vm.Lane) generation $generation ($($decision.Reason))"
         } else {
@@ -2294,6 +2400,10 @@ function Update-ActiveVm {
     param($Config, $Journal, [hashtable]$Adapters, [string]$Name, [datetimeoffset]$Now)
     $vm = $Journal.Vms[$Name]
     $state = & $Adapters.GetVmState $Name
+    if ($state -eq 'Unknown') {
+        & $Adapters.Log 'warn' "${Name}: Hyper-V did not answer; leaving the VM alone until the next tick"
+        return
+    }
     if ($state -eq 'Off') {
         Complete-ActiveVm -Config $Config -Journal $Journal -Adapters $Adapters -Name $Name
         return
@@ -2382,7 +2492,7 @@ function Invoke-Admission {
                 Name = $name; Lane = $job.Lane; Slot = [int]$slot.Index; SlotIp = [string]$slot.Ip
                 JobId = [int64]$job.JobId; RunId = [int64]$job.RunId
                 Dir = [string]$created.Dir; CachePath = $created.CachePath; ForkGeneration = [int]$created.ForkGeneration
-                Phase = 'provisioned'; StartedAt = $Now.ToString('o'); HandedAt = $null; RunnerId = $null; Claimed = $false
+                Phase = 'provisioned'; StartedAt = $Now.ToString('o'); HandedAt = $null; RunnerId = $null; Claimed = $false; PendingCommit = $false
             }
             & $Adapters.StartVm $name
             & $Adapters.Log 'info' "${name}: provisioned for job $($job.JobId) (lane $($job.Lane), slot $($slot.Index), fork generation $($created.ForkGeneration))"
@@ -2444,7 +2554,7 @@ function Invoke-StartupSweep {
 }
 ```
 
-Add `Get-FreeSlots, Remove-ActiveVm, Complete-ActiveVm, Update-ActiveVm, Invoke-Admission, Invoke-OrchestratorTick, Invoke-StartupSweep` to `Export-ModuleMember`.
+Add `Get-FreeSlots, Remove-ActiveVm, Test-SiblingRunning, Complete-ActiveVm, Update-ActiveVm, Invoke-Admission, Invoke-OrchestratorTick, Invoke-StartupSweep` to `Export-ModuleMember`.
 
 - [ ] **Step 4: Run the tests to verify they pass**
 
