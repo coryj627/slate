@@ -723,7 +723,75 @@ function Expand-UnattendTemplate {
     return $text
 }
 
+function Add-SidToUserRight {
+    # secedit INF surgery: make sure "*<sid>" is listed under <right> in
+    # [Privilege Rights]. Pure so it can be tested; Set-LocalUserRights
+    # applies it.
+    [CmdletBinding()]
+    param(
+        [Parameter(Mandatory)][AllowEmptyString()][string]$IniText,
+        [Parameter(Mandatory)][string]$Right,
+        [Parameter(Mandatory)][string]$Sid
+    )
+    $entry = "*$Sid"
+    $lines = @($IniText -split "`r?`n")
+    $out = @()
+    $inSection = $false
+    $sectionSeen = $false
+    $done = $false
+    foreach ($line in $lines) {
+        if ($line -match '^\[(.+)\]\s*$') {
+            if ($inSection -and -not $done) { $out += "$Right = $entry"; $done = $true }
+            $inSection = ($Matches[1] -eq 'Privilege Rights')
+            if ($inSection) { $sectionSeen = $true }
+            $out += $line
+            continue
+        }
+        if ($inSection -and $line -match ('^\s*' + [regex]::Escape($Right) + '\s*=\s*(.*)$')) {
+            $values = @($Matches[1] -split ',' | ForEach-Object { $_.Trim() } | Where-Object { $_ })
+            if ($values -notcontains $entry) { $values += $entry }
+            $out += "$Right = $($values -join ',')"
+            $done = $true
+            continue
+        }
+        $out += $line
+    }
+    if (-not $sectionSeen) { $out += '[Privilege Rights]' }
+    if (-not $done) { $out += "$Right = $entry" }
+    return ($out -join "`r`n")
+}
+
+function Set-LocalUserRights {
+    # Host-only, elevated. Deny interactive and remote-interactive logon,
+    # grant batch logon (scheduled tasks) for the orchestrator account.
+    [CmdletBinding()]
+    param([Parameter(Mandatory)][string]$Sid)
+    # secedit sets each listed right to exactly its listed holders, so a
+    # template that lost the exported rights (a failed read, an export
+    # without the section) would strip every other holder: any failure
+    # throws before /configure, whatever the caller's preference.
+    $ErrorActionPreference = 'Stop'
+    $dir = Join-Path $env:TEMP ('slate-secedit-' + [guid]::NewGuid().ToString('N'))
+    New-Item -ItemType Directory -Force -Path $dir | Out-Null
+    try {
+        $inf = Join-Path $dir 'rights.inf'
+        $db = Join-Path $dir 'rights.sdb'
+        & secedit.exe /export /cfg $inf /areas USER_RIGHTS | Out-Null
+        if ($LASTEXITCODE -ne 0) { throw "secedit /export exited $LASTEXITCODE" }
+        $text = Get-Content -Raw -LiteralPath $inf
+        if ($text -notmatch '(?m)^\[Privilege Rights\]') { throw "secedit /export wrote no [Privilege Rights] section to $inf" }
+        foreach ($right in 'SeDenyInteractiveLogonRight', 'SeDenyRemoteInteractiveLogonRight', 'SeBatchLogonRight') {
+            $text = Add-SidToUserRight -IniText $text -Right $right -Sid $Sid
+        }
+        Set-Content -LiteralPath $inf -Value $text -Encoding unicode
+        & secedit.exe /configure /db $db /cfg $inf /areas USER_RIGHTS | Out-Null
+        if ($LASTEXITCODE -ne 0) { throw "secedit /configure exited $LASTEXITCODE" }
+    } finally {
+        Remove-Item -LiteralPath $dir -Recurse -Force -ErrorAction SilentlyContinue
+    }
+}
+
 Export-ModuleMember -Function Get-LaneFromLabels, New-RunnerName, Split-KvpChunks, Join-KvpChunks,
     ConvertTo-DateTimeOffset, Select-QueuedLaneJobs, Select-JobsToAdmit, Register-JobRetry, Test-VmExpired, Get-StaleRunnerNames, Test-CommitEligible, Resolve-RunnerJob, Get-CiHostConfig, New-Journal, Read-Journal, Write-Journal, Write-CiLog,
     Get-FreeSlots, Remove-ActiveVm, Test-SiblingRunning, Complete-ActiveVm, Update-ActiveVm, Invoke-Admission, Invoke-OrchestratorTick, Invoke-StartupSweep, Select-SlateKvpItems,
-    New-RandomPassword, Expand-UnattendTemplate
+    New-RandomPassword, Expand-UnattendTemplate, Add-SidToUserRight, Set-LocalUserRights
