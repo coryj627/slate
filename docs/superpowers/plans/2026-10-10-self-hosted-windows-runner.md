@@ -2482,7 +2482,7 @@ git commit -m "feat(ci-host): orchestrator state machine, startup sweep, loop sc
 - Create: `scripts/ci-host/tests/Guest.Tests.ps1`
 
 **Interfaces:**
-- Consumes: `Join-KvpChunks` (Task 2); KVP item names from Task 8; the golden image layout from Task 10 (`C:\actions-runner`, module copied beside the scripts, marker `C:\Users\runner\.slate-golden-complete`, cache volume label `slate-cache`).
+- Consumes: `Join-KvpChunks` (Task 2); KVP item names from Task 8; the golden image layout from Task 10 (`C:\actions-runner` for runtime files; the two scripts and `SlateCiHost.psm1` in `C:\slate-guest`, writable only by Administrators and SYSTEM; marker `C:\Users\runner\.slate-golden-complete`; cache volume label `slate-cache`).
 - Produces: `Select-SlateKvpItems -Properties [psobject]` → hashtable of every `slate.*` property; files in `C:\actions-runner`: `.env`, `jit.cfg`, `ready`, `bootstrap-error.txt`, `bootstrap-system.log`, `bootstrap-runner.log`.
 - Both scripts are Windows PowerShell 5.1 (the guest has no pwsh).
 
@@ -2535,6 +2535,8 @@ Describe 'guest scripts' {
         foreach ($v in 'NSC_CACHE_PATH', 'CARGO_TARGET_DIR', 'NUGET_PACKAGES', 'SLATE_CACHE_ROOT') { $text | Should -Match $v }
         $text | Should -Match 'Select-SlateKvpItems'
         $text | Should -Match 'Join-KvpChunks'
+        $text | Should -Match 'Add-MpPreference -ExclusionPath \$root'
+        $text | Should -Match 'C:\\slate-guest\\SlateCiHost\.psm1'
     }
     It 'runner bootstrap never recurses into a junction, launches run.cmd --jitconfig and always shuts down' {
         $text = Get-Content -Raw (Join-Path $guestDir 'bootstrap-runner.ps1')
@@ -2607,7 +2609,7 @@ function Write-Log([string]$Message) {
 }
 
 if (-not (Test-Path -LiteralPath $marker)) { exit 0 }
-Import-Module (Join-Path $runnerDir 'SlateCiHost.psm1') -Force
+Import-Module 'C:\slate-guest\SlateCiHost.psm1' -Force
 
 try {
     foreach ($stale in 'ready', 'jit.cfg', 'bootstrap-error.txt') {
@@ -2661,6 +2663,8 @@ try {
         $envLines += "CARGO_TARGET_DIR=$root\target"
         $envLines += "NUGET_PACKAGES=$root\nuget"
         $envLines += "SLATE_CACHE_ROOT=$root"
+        # The volume letter is not fixed, so the Defender exclusion is added here.
+        Add-MpPreference -ExclusionPath $root -ErrorAction SilentlyContinue
         Write-Log "cache at $root"
     }
     Set-Content -LiteralPath (Join-Path $runnerDir '.env') -Value $envLines -Encoding ascii
@@ -2776,7 +2780,7 @@ git commit -m "feat(ci-host): guest bootstrap — SYSTEM network/cache/config ta
 - Create: `scripts/ci-host/tests/Golden.Tests.ps1`
 
 **Interfaces:**
-- Produces: `New-RandomPassword -Length [int]` → string from `[A-Za-z0-9]` (host-only, .NET `RandomNumberGenerator`); `Expand-UnattendTemplate -TemplatePath -ProductKey -ProvisionPassword -RunnerPassword` → rendered XML string (throws on a malformed key or a leftover placeholder); the golden VHDX at `C:\slate-ci\golden\win11-runner.vhdx` with: users `provision` (admin) and `runner` (standard, auto-logon), `C:\actions-runner` (runner 2.338.0 + the two guest scripts + `SlateCiHost.psm1`), scheduled tasks `slate-bootstrap-system` and `slate-runner-logon`, `C:\dotnet`, VS 2022 Build Tools, Python, Git, rustup 1.97.1 with the ARM64 target under `C:\Users\runner`, `uniffi-bindgen-cs` in `C:\Users\runner\.cargo\bin`, marker `C:\Users\runner\.slate-golden-complete`.
+- Produces: `New-RandomPassword -Length [int]` → string from `[A-Za-z0-9]` (host-only, .NET `RandomNumberGenerator`); `Expand-UnattendTemplate -TemplatePath -ProductKey -ProvisionPassword -RunnerPassword` → rendered XML string (throws on a malformed key or a leftover placeholder); the golden VHDX at `C:\slate-ci\golden\win11-runner.vhdx` with: users `provision` (admin) and `runner` (standard, auto-logon), `C:\actions-runner` (runner 2.338.0, owned by `runner`), `C:\slate-guest` (the two guest scripts + `SlateCiHost.psm1`, writable only by Administrators and SYSTEM), scheduled tasks `slate-bootstrap-system` and `slate-runner-logon`, `C:\dotnet`, VS 2022 Build Tools, Python, Git, rustup 1.97.1 with the ARM64 target under `C:\Users\runner`, `uniffi-bindgen-cs` in `C:\Users\runner\.cargo\bin`, marker `C:\Users\runner\.slate-golden-complete`.
 
 - [ ] **Step 1: Write the pinned versions**
 
@@ -2824,6 +2828,11 @@ git commit -m "feat(ci-host): guest bootstrap — SYSTEM network/cache/config ta
           <Order>1</Order>
           <Path>reg add HKLM\SOFTWARE\Microsoft\Windows\CurrentVersion\OOBE /v BypassNRO /t REG_DWORD /d 1 /f</Path>
           <Description>Allow OOBE without a Microsoft account</Description>
+        </RunSynchronousCommand>
+        <RunSynchronousCommand wcm:action="add">
+          <Order>2</Order>
+          <Path>reg add HKLM\SYSTEM\CurrentControlSet\Control\BitLocker /v PreventDeviceEncryption /t REG_DWORD /d 1 /f</Path>
+          <Description>Never auto-encrypt a disposable disk because of the vTPM</Description>
         </RunSynchronousCommand>
       </RunSynchronous>
     </component>
@@ -2945,6 +2954,7 @@ Describe 'unattend template' {
         $text | Should -Match '<ComputerName>slate-win</ComputerName>'
         $text | Should -Match '<Username>provision</Username>'
         $text | Should -Match 'provision-guest\.ps1'
+        $text | Should -Match 'PreventDeviceEncryption'
     }
     It 'renders with escaped values and no placeholder left' {
         $out = Expand-UnattendTemplate -TemplatePath (Join-Path $goldenDir 'unattend.xml') -ProductKey 'ABCDE-FGHIJ-KLMNO-PQRST-UVWXY' -ProvisionPassword 'p<&>w' -RunnerPassword 'r"w'
@@ -2973,6 +2983,9 @@ Describe 'golden scripts' {
         $text | Should -Match "secrets\.json'\) -Force"
         $text | Should -Match 'Panther\\unattend\.xml'
         $text | Should -Match 'provision-runner-user\.ps1'
+        $text | Should -Match 'slmgr\.vbs /cpky'
+        $text | Should -Match "Destination 'C:\\\\slate-guest'"
+        $text | Should -Match 'C:\\slate-guest\\bootstrap-system\.ps1'
     }
     It 'the per-user script installs the pinned toolchain and writes the completion marker last' {
         $text = Get-Content -Raw (Join-Path $goldenDir 'provision-runner-user.ps1')
@@ -3091,7 +3104,7 @@ try {
     Set-ItemProperty -Path 'HKLM:\SYSTEM\CurrentControlSet\Control\FileSystem' -Name LongPathsEnabled -Value 1 -Type DWord
     New-Item -Path 'HKLM:\SOFTWARE\Policies\Microsoft\Windows\WindowsUpdate\AU' -Force | Out-Null
     Set-ItemProperty -Path 'HKLM:\SOFTWARE\Policies\Microsoft\Windows\WindowsUpdate\AU' -Name NoAutoUpdate -Value 1 -Type DWord
-    Add-MpPreference -ExclusionPath 'C:\actions-runner', 'C:\dotnet', 'C:\Users\runner\.cargo', 'C:\Users\runner\.rustup', 'D:\' -ErrorAction SilentlyContinue
+    Add-MpPreference -ExclusionPath 'C:\actions-runner', 'C:\dotnet', 'C:\Users\runner\.cargo', 'C:\Users\runner\.rustup' -ErrorAction SilentlyContinue
     Get-NetAdapter | Disable-NetAdapterBinding -ComponentID ms_tcpip6 -ErrorAction SilentlyContinue
 
     # Visual Studio 2022 Build Tools: C++ x64 + ARM64 and the Windows 11 SDK.
@@ -3124,18 +3137,21 @@ try {
     Get-Download ('https://github.com/actions/runner/releases/download/v{0}/actions-runner-win-x64-{0}.zip' -f $versions.runnerVersion) $zip $versions.runnerSha256
     New-Item -ItemType Directory -Force -Path 'C:\actions-runner' | Out-Null
     Expand-Archive -Path $zip -DestinationPath 'C:\actions-runner' -Force
-    Copy-Item -LiteralPath (Join-Path $root 'guest\bootstrap-system.ps1'), (Join-Path $root 'guest\bootstrap-runner.ps1'), (Join-Path $root 'SlateCiHost.psm1') -Destination 'C:\actions-runner'
+    # Scripts SYSTEM will run live where runner cannot write them.
+    New-Item -ItemType Directory -Force -Path 'C:\slate-guest' | Out-Null
+    Copy-Item -LiteralPath (Join-Path $root 'guest\bootstrap-system.ps1'), (Join-Path $root 'guest\bootstrap-runner.ps1'), (Join-Path $root 'SlateCiHost.psm1') -Destination 'C:\slate-guest'
+    & icacls.exe 'C:\slate-guest' /inheritance:r /grant 'Administrators:(OI)(CI)F' /grant 'SYSTEM:(OI)(CI)F' /grant 'runner:(OI)(CI)RX' | Out-Null
     foreach ($dir in 'C:\actions-runner', 'C:\dotnet') {
         & icacls.exe $dir /setowner runner /T /C | Out-Null
         & icacls.exe $dir /grant 'runner:(OI)(CI)F' /T /C | Out-Null
     }
     & icacls.exe $root /grant 'runner:(OI)(CI)RX' /T /C | Out-Null
 
-    $systemAction = New-ScheduledTaskAction -Execute 'powershell.exe' -Argument '-NoProfile -ExecutionPolicy Bypass -File C:\actions-runner\bootstrap-system.ps1'
+    $systemAction = New-ScheduledTaskAction -Execute 'powershell.exe' -Argument '-NoProfile -ExecutionPolicy Bypass -File C:\slate-guest\bootstrap-system.ps1'
     Register-ScheduledTask -TaskName 'slate-bootstrap-system' -Action $systemAction -Trigger (New-ScheduledTaskTrigger -AtStartup) `
         -Principal (New-ScheduledTaskPrincipal -UserId 'NT AUTHORITY\SYSTEM' -RunLevel Highest) `
         -Settings (New-ScheduledTaskSettingsSet -ExecutionTimeLimit (New-TimeSpan -Hours 1) -StartWhenAvailable) -Force | Out-Null
-    $runnerAction = New-ScheduledTaskAction -Execute 'powershell.exe' -Argument '-NoProfile -ExecutionPolicy Bypass -WindowStyle Hidden -File C:\actions-runner\bootstrap-runner.ps1'
+    $runnerAction = New-ScheduledTaskAction -Execute 'powershell.exe' -Argument '-NoProfile -ExecutionPolicy Bypass -WindowStyle Hidden -File C:\slate-guest\bootstrap-runner.ps1'
     Register-ScheduledTask -TaskName 'slate-runner-logon' -Action $runnerAction -Trigger (New-ScheduledTaskTrigger -AtLogOn -User 'runner') `
         -Principal (New-ScheduledTaskPrincipal -UserId 'runner' -LogonType Interactive -RunLevel Limited) `
         -Settings (New-ScheduledTaskSettingsSet -ExecutionTimeLimit (New-TimeSpan -Hours 4) -StartWhenAvailable) -Force | Out-Null
@@ -3154,6 +3170,9 @@ try {
         -Value 'powershell.exe -NoProfile -ExecutionPolicy Bypass -File C:\provision\provision-runner-user.ps1'
     Set-ItemProperty -Path 'HKLM:\SOFTWARE\Microsoft\Windows\CurrentVersion\Policies\System' -Name EnableLUA -Value 1 -Type DWord
 
+    # Windows keeps an installed retail key readable by standard users in
+    # DigitalProductId; clear it now (the image is activated) so no job can read it.
+    & cscript.exe //B C:\Windows\System32\slmgr.vbs /cpky | Out-Null
     Remove-Item -LiteralPath (Join-Path $root 'secrets.json') -Force
     Remove-Item -LiteralPath 'C:\Windows\Panther\unattend.xml' -Force -ErrorAction SilentlyContinue
     Remove-Item -LiteralPath $dl -Recurse -Force
@@ -4076,6 +4095,9 @@ touches caches on either side.
   the sweep rebuilds from live state.
 - **Cache generations:** `Get-Content C:\slate-ci\cache\*.gen`. They move
   only on trusted commits.
+- **Activation:** job VMs may report Windows as not activated: the key is
+  cleared from the image with `slmgr /cpky` after activation so no job can
+  read it. Cosmetic, by design.
 - **Capacity:** two slots (4 vCPU + 12 GB each). A main push runs app →
   shell in one slot and rust → model 0 → model 1 in the other.
 - **Disk:** golden ~40 GB, cache parents up to 60 GB each, live children
