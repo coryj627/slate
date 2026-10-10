@@ -24,7 +24,7 @@ case "${1:-status}" in
       if [ -e "$flags/$f" ]; then printf '%-11s yes %s\n' "$f:" "$(head -c 200 "$flags/$f" | tr '\n' ' ')"; else printf '%-11s no\n' "$f:"; fi
     done
     if [ -e "$flags/last-clean-job" ]; then
-      echo "last clean job: $(cat "$flags/last-clean-job" | tr -d '\n') at $(date -r "$flags/last-clean-job" '+%Y-%m-%d %H:%M:%S')"
+      echo "last clean job: $(tr -d '\n' < "$flags/last-clean-job") at $(date -r "$flags/last-clean-job" '+%Y-%m-%d %H:%M:%S')"
     else
       echo "last clean job: none yet"
     fi

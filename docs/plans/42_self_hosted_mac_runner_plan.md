@@ -848,6 +848,9 @@ parallel with them.
   image now installs the real hook from `ci/mac-runner/hook/`, so the
   toolchain and warm layers must be rebuilt before Phase 3.
 - **D8** stays open until the LaunchDaemon test has run.
+- **PR A opened 2026-10-10:** coryj627/slate#1335, branch
+  `ci/mac-runner-phase2`, with everything above. Its hosted checks are the
+  first runs under the workflow execution policy.
 - **Pilot candidate.** `self-hosted-tart` (label `slate-mac-tart`) added to
   `scripts/mac-ci-pilot.py`, `mac-ci-pilot.yml`, the pilot's tests and its
   runbook. The pilot checks out `source` fresh and runs a Release build, so it

@@ -56,7 +56,7 @@ echo "==> Record"
 # that reads stdin itself (tee, cat). Build the record in a file and install it.
 record="$(mktemp)"
 {
-  grep -v '^layer=\|^built=\|^warm_' /etc/slate-image-info
+  grep -v '^layer=\|^built=\|^warm_\|^runner=' /etc/slate-image-info
   echo "built=$(date -u +%Y-%m-%dT%H:%M:%SZ)"
   echo "layer=warm"
   echo "warm_ref=$REF"

@@ -19,6 +19,7 @@ touch "$marker"
 count_panics() { find /Library/Logs/DiagnosticReports -name '*.panic' 2>/dev/null | wc -l | tr -d ' '; }
 panics_before="$(count_panics)"
 
+# shellcheck disable=SC2329,SC2317  # invoked through the EXIT trap
 cleanup() { tart stop "$VM" >/dev/null 2>&1 || true; sleep 1; tart delete "$VM" >/dev/null 2>&1 || true; }
 trap cleanup EXIT
 

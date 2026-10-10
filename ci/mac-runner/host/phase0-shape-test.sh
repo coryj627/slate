@@ -15,6 +15,7 @@ VM="shape-test-$$"
 REPO=/Users/runner/actions-runner/_work/slate/slate
 shapes=("$@"); [ ${#shapes[@]} -gt 0 ] || shapes=(8:12 12:16 14:20)
 
+# shellcheck disable=SC2329,SC2317  # invoked through the EXIT trap and per shape
 cleanup() { tart stop "$VM" >/dev/null 2>&1 || true; sleep 1; tart delete "$VM" >/dev/null 2>&1 || true; }
 trap cleanup EXIT
 

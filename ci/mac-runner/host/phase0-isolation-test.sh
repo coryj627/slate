@@ -28,7 +28,7 @@ say()  { printf '%s\n' "$*"; }
 pass() { say "PASS  $*"; }
 fail() { say "FAIL  $*"; fails=$((fails + 1)); }
 
-# shellcheck disable=SC2329  # invoked through the EXIT trap
+# shellcheck disable=SC2329,SC2317  # invoked through the EXIT trap
 cleanup() {
   tart stop "$VM" >/dev/null 2>&1 || true
   sleep 1
