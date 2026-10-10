@@ -12,6 +12,7 @@
 # marker exists this is a no-op, and must never reach the shutdown below.
 if (Test-Path -LiteralPath (Join-Path $env:USERPROFILE '.slate-golden-complete')) { exit 0 }
 $ErrorActionPreference = 'Stop'
+$ProgressPreference = 'SilentlyContinue'
 $logPath = Join-Path $env:USERPROFILE 'provision-runner-user.log'
 function Write-Log([string]$Message) { Add-Content -LiteralPath $logPath -Value ('{0:o} {1}' -f (Get-Date), $Message) }
 

@@ -9,6 +9,7 @@
 # Pins come from versions.json; the auto-logon password from secrets.json
 # (deleted at the end, together with the rendered unattend).
 $ErrorActionPreference = 'Stop'
+$ProgressPreference = 'SilentlyContinue'
 $root = 'C:\provision'
 $logPath = Join-Path $root 'provision.log'
 $dl = Join-Path $root 'dl'
@@ -83,12 +84,17 @@ try {
     # Scripts SYSTEM will run live where runner cannot write them.
     New-Item -ItemType Directory -Force -Path 'C:\slate-guest' | Out-Null
     Copy-Item -LiteralPath (Join-Path $root 'guest\bootstrap-system.ps1'), (Join-Path $root 'guest\bootstrap-runner.ps1'), (Join-Path $root 'SlateCiHost.psm1') -Destination 'C:\slate-guest'
+    # A native command's failure never throws, even under Stop: check each one.
     & icacls.exe 'C:\slate-guest' /inheritance:r /grant 'Administrators:(OI)(CI)F' /grant 'SYSTEM:(OI)(CI)F' /grant 'runner:(OI)(CI)RX' | Out-Null
+    if ($LASTEXITCODE -ne 0) { throw "icacls exited $LASTEXITCODE for C:\slate-guest" }
     foreach ($dir in 'C:\actions-runner', 'C:\dotnet') {
         & icacls.exe $dir /setowner runner /T /C | Out-Null
+        if ($LASTEXITCODE -ne 0) { throw "icacls exited $LASTEXITCODE for $dir (owner)" }
         & icacls.exe $dir /grant 'runner:(OI)(CI)F' /T /C | Out-Null
+        if ($LASTEXITCODE -ne 0) { throw "icacls exited $LASTEXITCODE for $dir (grant)" }
     }
     & icacls.exe $root /grant 'runner:(OI)(CI)RX' /T /C | Out-Null
+    if ($LASTEXITCODE -ne 0) { throw "icacls exited $LASTEXITCODE for $root" }
 
     $systemAction = New-ScheduledTaskAction -Execute 'powershell.exe' -Argument '-NoProfile -NonInteractive -ExecutionPolicy Bypass -File C:\slate-guest\bootstrap-system.ps1'
     Register-ScheduledTask -TaskName 'slate-bootstrap-system' -Action $systemAction -Trigger (New-ScheduledTaskTrigger -AtStartup) `
@@ -124,6 +130,9 @@ try {
     Remove-Item -LiteralPath (Join-Path $root 'secrets.json') -Force
     Remove-Item -LiteralPath 'C:\Windows\Panther\unattend.xml' -Force -ErrorAction SilentlyContinue
     Remove-Item -LiteralPath $dl -Recurse -Force
+    # Auto-logon is runner's now and nothing needs the temporary admin again;
+    # disabling the logged-on account takes effect at its next logon.
+    Disable-LocalUser -Name 'provision'
     Write-Log 'phase 1 complete; rebooting into runner'
     Restart-Computer -Force
 } catch {

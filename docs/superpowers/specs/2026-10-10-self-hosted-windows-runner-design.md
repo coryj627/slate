@@ -261,8 +261,9 @@ index of `install.wim` to a new 120 GB dynamic VHDX with
 for downloads). The unattend creates `provision` (admin, auto-logon once)
 and `runner` (standard), and its first-logon command runs
 `provision-guest.ps1`; that script installs the machine-wide toolchain,
-registers the two guest tasks, switches auto-logon to `runner`, sets a
-RunOnce for `provision-runner-user.ps1` (per-user rustup and
+registers the two guest tasks, switches auto-logon to `runner`, registers
+a logon task `slate-provision-runner-user` for `provision-runner-user.ps1`
+(an HKLM RunOnce does not run for a standard user) (per-user rustup and
 uniffi-bindgen-cs), and reboots. The specialize pass also sets
 `PreventDeviceEncryption=1`, so the vTPM every VM carries never triggers
 Windows 11 automatic device encryption of a disposable disk. The same pass
@@ -297,7 +298,7 @@ Toolchain, matching the Namespace image the lanes run on today:
 - `rustup` installed per-user as `runner` (so `rustup target add` and
   `cargo install` write to `runner`'s own profile); VS Build Tools and
   Python are machine-wide.
-- Python 3.13, git, 7-Zip.
+- Python 3.13, git.
 - `actions-runner` 2.338.0 unpacked at `C:\actions-runner`, owned by
   `runner` (its runtime files: `.env`, `jit.cfg`, `ready`,
   `bootstrap-error.txt`, the two bootstrap logs, `_work`). The guest scripts

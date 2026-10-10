@@ -132,4 +132,34 @@ Describe 'golden scripts' {
         $format | Should -BeGreaterThan -1
         $text.IndexOf("Set-Partition -GptType '$esp'") | Should -BeGreaterThan $format
     }
+    It 'both phase scripts turn the progress bar off right after the error preference' {
+        # Windows PowerShell 5.1 downloads crawl while Invoke-WebRequest draws it.
+        foreach ($f in 'provision-guest.ps1', 'provision-runner-user.ps1') {
+            $code = @((Get-Content -Raw (Join-Path $goldenDir $f)) -split "`n" | Where-Object { $_ -notmatch '^\s*#' })
+            $eap = @(0..($code.Count - 1) | Where-Object { $code[$_] -match ('^\s*' + [regex]::Escape('$ErrorActionPreference = ''Stop''')) })
+            $eap.Count | Should -Be 1 -Because $f
+            $code[$eap[0] + 1] | Should -Match ('^\s*' + [regex]::Escape('$ProgressPreference = ''SilentlyContinue''')) -Because $f
+        }
+    }
+    It 'provisioning checks the exit code of every icacls call' {
+        # A native command's failure never throws, even under Stop; an unchecked
+        # one would leave C:\slate-guest writable by every user.
+        $code = @((Get-Content -Raw (Join-Path $goldenDir 'provision-guest.ps1')) -split "`n" | Where-Object { $_ -notmatch '^\s*#' })
+        $calls = @(0..($code.Count - 1) | Where-Object { $code[$_] -match 'icacls\.exe' })
+        $calls.Count | Should -Be 4
+        foreach ($i in $calls) { $code[$i + 1] | Should -Match '\$LASTEXITCODE -ne 0' }
+    }
+    It 'provisioning disables the temporary admin after auto-logon moves to runner and before the restart' {
+        $text = Get-Content -Raw (Join-Path $goldenDir 'provision-guest.ps1')
+        $disable = $text.IndexOf("Disable-LocalUser -Name 'provision'")
+        $disable | Should -BeGreaterThan $text.IndexOf("DefaultUserName -Value 'runner'")
+        $disable | Should -BeLessThan $text.IndexOf('Restart-Computer -Force')
+    }
+    It 'the build script resolves -IsoPath to an absolute path before mounting it' {
+        # Mount-DiskImage and Dismount-DiskImage need an absolute path.
+        $text = Get-Content -Raw (Join-Path $goldenDir 'build-golden.ps1')
+        $resolve = $text.IndexOf('$IsoPath = (Resolve-Path -LiteralPath $IsoPath).Path')
+        $resolve | Should -BeGreaterThan -1
+        $resolve | Should -BeLessThan $text.IndexOf('Mount-DiskImage -ImagePath')
+    }
 }

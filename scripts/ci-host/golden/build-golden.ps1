@@ -24,6 +24,8 @@ $ErrorActionPreference = 'Stop'
 Import-Module (Join-Path $PSScriptRoot '..' 'SlateCiHost.psm1') -Force
 $goldenDir = $PSScriptRoot
 $vmName = 'slate-golden-build'
+# Mount-DiskImage and Dismount-DiskImage need an absolute path.
+$IsoPath = (Resolve-Path -LiteralPath $IsoPath).Path
 
 if (Test-Path -LiteralPath $OutPath) { throw "$OutPath exists; move it aside to rebuild" }
 if (Get-VM -Name $vmName -ErrorAction SilentlyContinue) { throw "VM $vmName exists; remove it first" }
