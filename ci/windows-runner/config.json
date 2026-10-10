@@ -24,5 +24,10 @@
   "RetryBackoffSeconds": 600,
   "TrustedRepo": "coryj627/slate",
   "TrustedBranch": "main",
-  "TrustedEvents": [ "push", "schedule", "workflow_dispatch" ]
+  "TrustedEvents": [ "push", "schedule", "workflow_dispatch" ],
+  "RoutedWorkflows": [
+    ".github/workflows/windows.yml",
+    ".github/workflows/nightly.yml",
+    ".github/workflows/windows-ci-pilot.yml"
+  ]
 }

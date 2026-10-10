@@ -300,6 +300,20 @@ Context 'settle' {
         (Get-Calls 'CommitCache').Count | Should -Be 1
         $journal.SeenJobs.ContainsKey('2') | Should -BeFalse
     }
+    It 'looks up only seen jobs of the VM''s own lane when resolving which job ran on it' {
+        # The runner carries its lane's label only, so no other lane's job
+        # can have taken it; looking those up would spend API budget. Job 1
+        # (admitted) and job 2 (app) ran elsewhere; job 5 is a rust job.
+        $journal.SeenJobs['2'] = @{ RunId = 11; Lane = 'app'; FirstSeenAt = $t0.ToString('o') }
+        $journal.SeenJobs['5'] = @{ RunId = 12; Lane = 'rust'; FirstSeenAt = $t0.ToString('o') }
+        Set-DoneJob 1 10 'slate-win-app-elsewhere'
+        Set-DoneJob 2 11 'slate-win-app-another'
+        Set-DoneJob 5 12 'slate-win-rust-third'
+        Invoke-OrchestratorTick -Config $config -Journal $journal -Adapters $adapters -Now $t0.AddMinutes(20)
+        @((Get-Calls 'GetJob') | ForEach-Object { [int64]$_.Args[0] } | Sort-Object) | Should -Be @(1, 2)
+        $journal.Vms.Count | Should -Be 0
+        ($logs -join "`n") | Should -Match 'shut down without running a job'
+    }
     It 'leaves the Off VM in the journal when the API fails during settle and settles on the next tick' {
         $adapters.GetJob = { param($id) $script:flakyCalls++; if ($script:flakyCalls -eq 1) { throw '502' }; $script:world.Jobs[[string]$id] }
         $script:flakyCalls = 0
@@ -535,5 +549,13 @@ Describe 'orchestrator.ps1' {
         $golden = $text.IndexOf('golden disk missing or not sealed')
         $golden | Should -BeGreaterThan $text.IndexOf('token missing at')
         $golden | Should -BeLessThan $text.IndexOf('Initialize-GitHubAdapter')
+    }
+    It 'polls only the configured routed workflows and logs a low API budget at warn' {
+        $text = Get-Content -Raw (Join-Path $PSScriptRoot '..' 'orchestrator.ps1')
+        $text | Should -Match ([regex]::Escape('New-GitHubAdapters -RoutedWorkflows @($config.RoutedWorkflows)'))
+        $hook = '$script:GhLowBudgetWarning = { param($message) & $log ''warn'' $message }'
+        $text | Should -Match ([regex]::Escape($hook))
+        # Dot-sourcing the adapter resets the hook, so it is set afterwards.
+        $text.IndexOf($hook) | Should -BeGreaterThan $text.IndexOf("'GitHub.ps1')")
     }
 }

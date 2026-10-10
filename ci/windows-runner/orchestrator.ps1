@@ -23,6 +23,8 @@ $log = {
     param($level, $message)
     Write-CiLog -Path (Join-Path $config.LogDir ('orchestrator-{0}.log' -f (Get-Date -Format 'yyyy-MM-dd'))) -Level $level -Message $message
 }
+# The GitHub adapter warns through this when the PAT's hourly budget runs low.
+$script:GhLowBudgetWarning = { param($message) & $log 'warn' $message }
 
 # One loop per host: the journal, its .tmp file and the slots are not
 # shared, so a second instance (a manual run beside the task) refuses.
@@ -54,7 +56,7 @@ try {
         Initialize-GitHubAdapter -Owner $config.Owner -Repo $config.Repo -Token (Import-Clixml -LiteralPath $tokenPath)
 
         $adapters = @{}
-        foreach ($set in (New-GitHubAdapters), (New-HyperVAdapters -Config $config)) {
+        foreach ($set in (New-GitHubAdapters -RoutedWorkflows @($config.RoutedWorkflows)), (New-HyperVAdapters -Config $config)) {
             foreach ($key in $set.Keys) { $adapters[$key] = $set[$key] }
         }
         $adapters['Log'] = $log

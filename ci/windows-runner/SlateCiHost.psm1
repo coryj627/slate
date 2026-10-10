@@ -255,9 +255,16 @@ function Get-CiHostConfig {
     $config = Get-Content -Raw -LiteralPath $Path | ConvertFrom-Json -AsHashtable
     $required = 'Owner', 'Repo', 'Root', 'SwitchName', 'Gateway', 'Dns', 'Slots', 'Vcpu', 'MemoryGB', 'Lanes',
         'TickSeconds', 'HeartbeatTimeoutSeconds', 'UnclaimedTimeoutSeconds', 'RetryCap', 'RetryBackoffSeconds',
-        'TrustedRepo', 'TrustedBranch', 'TrustedEvents'
+        'TrustedRepo', 'TrustedBranch', 'TrustedEvents', 'RoutedWorkflows'
     foreach ($key in $required) {
         if (-not $config.Contains($key)) { throw "config ${Path}: missing required key '$key'" }
+    }
+    # Discovery reads the jobs of these workflows' runs only, so an empty or
+    # malformed list would admit nothing, silently.
+    $routed = $config.RoutedWorkflows
+    if (-not ($routed -is [System.Collections.IList]) -or $routed.Count -lt 1 -or
+        @($routed | Where-Object { -not ($_ -is [string]) -or -not $_ }).Count -gt 0) {
+        throw "config ${Path}: RoutedWorkflows must be a non-empty array of workflow paths"
     }
     if (-not ($config.Lanes -is [System.Collections.IDictionary])) { throw "config ${Path}: Lanes must be an object" }
     foreach ($lane in @($config.Lanes.Keys)) {
@@ -417,8 +424,13 @@ function Complete-ActiveVm {
         $Journal.Vms.Remove($Name)
         return
     }
+    # The runner carries its lane's label only, so a seen job of another
+    # lane cannot have taken it: those are never looked up (API budget).
     $candidates = @()
-    foreach ($key in @($Journal.SeenJobs.Keys)) { $candidates += [int64]$key }
+    foreach ($key in @($Journal.SeenJobs.Keys)) {
+        $seen = $Journal.SeenJobs[$key]
+        if ($null -ne $seen -and [string]$seen['Lane'] -ceq [string]$vm.Lane) { $candidates += [int64]$key }
+    }
     $job = Resolve-RunnerJob -RunnerName $Name -AdmittedJobId ([int64]$vm.JobId) -CandidateJobIds $candidates -GetJob $Adapters.GetJob
     if ($null -eq $job) {
         # The guest's slate.error was kept by Update-ActiveVm while the VM ran.

@@ -346,6 +346,22 @@ Describe 'Get-CiHostConfig' {
         $cfg.StateDir | Should -Be 'C:\slate-ci\state'
         $cfg.LogDir | Should -Be 'C:\slate-ci\logs'
         @($cfg.TrustedEvents) | Should -Be @('push', 'schedule', 'workflow_dispatch')
+        @($cfg.RoutedWorkflows) | Should -Be @('.github/workflows/windows.yml', '.github/workflows/nightly.yml', '.github/workflows/windows-ci-pilot.yml')
+    }
+    It 'requires RoutedWorkflows as a non-empty array of workflow paths' {
+        # Discovery reads the jobs of these workflows' runs only: an empty or
+        # malformed list would quietly admit nothing at all.
+        $p = Join-Path $TestDrive 'routed.json'
+        $raw = Get-Content -Raw (Join-Path $PSScriptRoot '..' 'config.json') | ConvertFrom-Json -AsHashtable
+        $raw.Remove('RoutedWorkflows')
+        $raw | ConvertTo-Json -Depth 6 | Set-Content $p
+        { Get-CiHostConfig -Path $p } | Should -Throw "*missing required key 'RoutedWorkflows'*"
+        # Four bad values: an empty array, a bare string, an empty path, a number.
+        foreach ($bad in @(@(), '.github/workflows/windows.yml', @(''), @(7))) {
+            $raw['RoutedWorkflows'] = $bad
+            $raw | ConvertTo-Json -Depth 6 | Set-Content $p
+            { Get-CiHostConfig -Path $p } | Should -Throw '*RoutedWorkflows must be a non-empty array of workflow paths*'
+        }
     }
     It 'rejects a config missing a required key' {
         $p = Join-Path $TestDrive 'bad.json'

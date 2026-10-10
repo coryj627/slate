@@ -11,6 +11,10 @@
 
 $script:GhBase = $null
 $script:GhToken = $null
+# Set by orchestrator.ps1 after it dot-sources this file: a scriptblock
+# that takes one message and logs it at warn. Test-GhRateBudget calls it.
+$script:GhLowBudgetWarning = $null
+$script:GhLowBudgetWarnedReset = $null
 
 function Initialize-GitHubAdapter {
     [CmdletBinding()]
@@ -37,13 +41,15 @@ function Invoke-GhApi {
     # headers (the token) and the response body (a JIT config), so neither
     # -Debug nor an inherited $DebugPreference may trace this call.
     # OperationTimeoutSeconds: since 7.4 TimeoutSec bounds only the connection and response headers; a stalled body would block the loop.
-    $params = @{ Method = $Method; Uri = "$($script:GhBase)$Path"; Headers = $headers; TimeoutSec = 30; OperationTimeoutSeconds = 30; UserAgent = 'slate-ci-host'; Debug = $false }
+    # ResponseHeadersVariable: the cmdlet sets ghResponseHeaders in this scope (the rate-limit headers).
+    $ghResponseHeaders = $null
+    $params = @{ Method = $Method; Uri = "$($script:GhBase)$Path"; Headers = $headers; TimeoutSec = 30; OperationTimeoutSeconds = 30; UserAgent = 'slate-ci-host'; Debug = $false; ResponseHeadersVariable = 'ghResponseHeaders' }
     if ($null -ne $Body) {
         $params.Body = $Body | ConvertTo-Json -Compress -Depth 5
         $params.ContentType = 'application/json'
     }
     try {
-        return Invoke-RestMethod @params
+        $response = Invoke-RestMethod @params
     } catch {
         # A failed request's error record keeps the request as its
         # TargetObject (the same object as the response's RequestMessage),
@@ -54,16 +60,55 @@ function Invoke-GhApi {
         if ($_.TargetObject -is [System.Net.Http.HttpRequestMessage]) { [void]$_.TargetObject.Headers.Remove('Authorization') }
         throw
     }
+    Test-GhRateBudget -Headers $ghResponseHeaders
+    return $response
+}
+
+function Get-GhHeader {
+    # One response header's first value; header names ignore case.
+    [CmdletBinding()]
+    param($Headers, [Parameter(Mandatory)][string]$Name)
+    if ($null -eq $Headers) { return $null }
+    foreach ($key in @($Headers.Keys)) {
+        if ([string]::Equals([string]$key, $Name, [System.StringComparison]::OrdinalIgnoreCase)) { return (@($Headers[$key]) | Select-Object -First 1) }
+    }
+    return $null
+}
+
+function Test-GhRateBudget {
+    # The PAT draws on the owner's personal budget of 5,000 requests an
+    # hour, shared with gh and anything else signed in as the owner. When
+    # fewer than 500 remain, warn through $script:GhLowBudgetWarning, once
+    # per rate-limit window (the reset time names it). A failing warning
+    # never fails the call that succeeded.
+    [CmdletBinding()]
+    param($Headers, [int]$Threshold = 500)
+    if ($null -eq $script:GhLowBudgetWarning) { return }
+    $remaining = [string](Get-GhHeader -Headers $Headers -Name 'X-RateLimit-Remaining')
+    if ($remaining -notmatch '^\d+$' -or [int64]$remaining -ge $Threshold) { return }
+    $reset = [string](Get-GhHeader -Headers $Headers -Name 'X-RateLimit-Reset')
+    if ($null -ne $script:GhLowBudgetWarnedReset -and $reset -eq $script:GhLowBudgetWarnedReset) { return }
+    $script:GhLowBudgetWarnedReset = $reset
+    $resetAt = 'an unknown time'
+    if ($reset -match '^\d+$') { $resetAt = [datetimeoffset]::FromUnixTimeSeconds([int64]$reset).ToString('o') }
+    try {
+        & $script:GhLowBudgetWarning "GitHub API budget low: $remaining requests left until the reset at $resetAt (the PAT shares the owner's 5,000 an hour with gh)"
+    } catch {
+        # Logging is best effort here.
+    }
 }
 
 function Get-GhQueuedLaneJobs {
     # A run is in_progress while later jobs of it are still queued, so
-    # both run states are listed. Idle cost: two calls per tick. A run
-    # that moves from queued to in_progress between the two listings is
-    # in both; it is read once, or its queued jobs would come back twice
-    # and one job could be admitted into two VMs.
+    # both run states are listed. A run that moves from queued to
+    # in_progress between the two listings is in both; it is read once, or
+    # its queued jobs would come back twice and one job could be admitted
+    # into two VMs. Only the routed workflows (config RoutedWorkflows)
+    # carry lane labels, so only their runs' jobs are read. Cost per tick:
+    # two listing calls plus one jobs call per queued or in-progress
+    # routed run.
     [CmdletBinding()]
-    param()
+    param([Parameter(Mandatory)][string[]]$RoutedWorkflows)
     $jobs = @()
     $seenRuns = @{}
     foreach ($status in 'queued', 'in_progress') {
@@ -72,6 +117,12 @@ function Get-GhQueuedLaneJobs {
             $runKey = [string]$run.id
             if ($seenRuns.ContainsKey($runKey)) { continue }
             $seenRuns[$runKey] = $true
+            # path is the workflow file, such as .github/workflows/windows.yml.
+            # The part before any @<ref> suffix is compared, exactly (git
+            # paths keep their case).
+            $workflow = ''
+            if ($run.PSObject.Properties['path']) { $workflow = ([string]$run.path -split '@', 2)[0] }
+            if ($RoutedWorkflows -cnotcontains $workflow) { continue }
             $page = Invoke-GhApi -Path "/actions/runs/$($run.id)/jobs?filter=latest&per_page=100"
             foreach ($job in @($page.jobs)) {
                 if ($job.status -eq 'queued') { $jobs += $job }
@@ -129,14 +180,27 @@ function Get-GhRunners {
 
 function New-GitHubAdapters {
     [CmdletBinding()]
-    param()
-    return @{
-        GetQueuedJobs = { Get-GhQueuedLaneJobs }
-        GetJob        = { param($id) Get-GhJob -JobId $id }
-        GetRun        = { param($id) Get-GhRun -RunId $id }
-        NewJitRunner  = { param($name, $labels) New-GhJitRunner -Name $name -Labels $labels }
-        RemoveRunner  = { param($id) Remove-GhRunner -RunnerId $id }
-        GetRunner     = { param($id) Get-GhRunner -RunnerId $id }
-        ListRunners   = { Get-GhRunners }
+    param([Parameter(Mandatory)][string[]]$RoutedWorkflows)
+    # As in New-HyperVAdapters: GetNewClosure() runs a block in a new
+    # dynamic module that sees only its captured locals and the global
+    # scope, so the functions are captured as locals too and invoked with
+    # &; each still runs in the scope that defined it.
+    $commands = @{}
+    foreach ($command in 'Get-GhQueuedLaneJobs', 'Get-GhJob', 'Get-GhRun', 'New-GhJitRunner', 'Remove-GhRunner', 'Get-GhRunner', 'Get-GhRunners') {
+        $commands[$command] = Get-Command -Name $command -CommandType Function -ErrorAction Stop
     }
+    $routed = @($RoutedWorkflows)
+    $adapters = @{
+        GetQueuedJobs = { & $commands['Get-GhQueuedLaneJobs'] -RoutedWorkflows $routed }
+        GetJob        = { param($id) & $commands['Get-GhJob'] -JobId $id }
+        GetRun        = { param($id) & $commands['Get-GhRun'] -RunId $id }
+        NewJitRunner  = { param($name, $labels) & $commands['New-GhJitRunner'] -Name $name -Labels $labels }
+        RemoveRunner  = { param($id) & $commands['Remove-GhRunner'] -RunnerId $id }
+        GetRunner     = { param($id) & $commands['Get-GhRunner'] -RunnerId $id }
+        ListRunners   = { & $commands['Get-GhRunners'] }
+    }
+    # Bind the routed workflows and the commands into each scriptblock: the
+    # module invokes them long after this function has returned.
+    foreach ($key in @($adapters.Keys)) { $adapters[$key] = $adapters[$key].GetNewClosure() }
+    return $adapters
 }
