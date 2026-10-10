@@ -37,8 +37,12 @@ variable "admin_password" {
 }
 
 variable "repo_url" {
-  type    = string
-  default = "https://github.com/coryj627/slate.git"
+  type = string
+  # Exactly the URL actions/checkout expects to find as remote.origin.url:
+  # https://github.com/<owner>/<repo>, no ".git". With any other string the
+  # action treats the warm checkout as foreign, deletes it and clones cold
+  # (actions/checkout src/git-directory-helper.ts, prepareExistingDirectory).
+  default = "https://github.com/coryj627/slate"
 }
 
 variable "ref" {

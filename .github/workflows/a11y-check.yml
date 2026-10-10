@@ -5,8 +5,14 @@
 # WCAG 2.2 criteria; the run fails if the score drops below the floor
 # defined in MIN_SCORE.
 #
-# The a11y-check binary is built from a pinned commit and cached so
-# subsequent runs skip the (~3 minute) swift build.
+# Where it runs (docs/plans/42_self_hosted_mac_runner_plan.md §6): a route
+# job on hosted Linux picks the self-hosted Mac Studio runner while its
+# controller's heartbeat is fresh, and Namespace's Tahoe runner otherwise.
+# The Studio image bakes the analyzer at the pinned commit; Namespace builds
+# it from source and caches the binary. The analysis job holds a read-only
+# token (plan §3.2 control 9); the SARIF upload, the PR comment and the
+# score floor run afterwards on hosted Linux, where the write permissions
+# never reach a self-hosted machine.
 
 name: Accessibility Check
 
@@ -33,8 +39,9 @@ concurrency:
 
 env:
   # Pin to a specific cvs-health/ios-swiftui-accessibility-techniques
-  # commit. Bump deliberately when you want newer rules; cache key
-  # includes this SHA so changing it invalidates the cache.
+  # commit. Bump deliberately when you want newer rules; the Namespace cache
+  # key includes this SHA, and the Studio image bakes the same commit
+  # (ci/mac-runner/image/03-toolchain.pkr.hcl, a11y_check_ref), so bump both.
   A11Y_CHECK_REF: bcaddd56931ce14d32cebcf42ea9f5b08ed5f7d8
   A11Y_PATHS: "apps/slate-mac/Sources/SlateMac"
   # Score floor on the 0–100 a11y-check scale. Must be a non-empty
@@ -42,34 +49,73 @@ env:
   # loudly on malformed/missing values rather than silently weakening
   # the gate. We're at 100/100 today; treat any drop as a real signal.
   MIN_SCORE: "100"
+  # The Xcode build the analyzer is built with on a cache miss; see
+  # swift-tests.yml for why it is pinned and where the image pins it.
+  XCODE_BUILD: 27A266a
 
 jobs:
-  a11y-check:
-    name: SwiftUI Accessibility Check
-    # Namespace macOS runner (mac-actions — Apple Silicon, Xcode 26.3 /
-    # Swift 6.2.4). Builds the a11y-check tool from source (cached), then runs
-    # it over the SwiftUI sources.
-    runs-on: namespace-profile-mac-actions
-    # actions: read is only needed by codeql-action/upload-sarif within
-    # this job; scoping it here keeps the workflow-level grant minimal.
+  route:
+    name: Route mac jobs
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
     permissions:
       contents: read
-      security-events: write
-      pull-requests: write
-      actions: read
+    outputs:
+      label: ${{ steps.route.outputs.label }}
+      route: ${{ steps.route.outputs.route }}
+    steps:
+      - name: Checkout the route script
+        uses: actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0  # v7
+        with:
+          sparse-checkout: ci/mac-runner/route
+          persist-credentials: false
+      - name: Pick the runner from MAC_RUNNER_MODE and the heartbeat
+        id: route
+        env:
+          MAC_RUNNER_MODE: ${{ vars.MAC_RUNNER_MODE }}
+          MAC_RUNNER_HEARTBEAT: ${{ vars.MAC_RUNNER_HEARTBEAT }}
+        run: python3 ci/mac-runner/route/route.py
+
+  analyze:
+    name: SwiftUI Accessibility Check
+    needs: route
+    # Same-repo heads only; see swift-tests.yml.
+    if: github.event_name != 'pull_request' || github.event.pull_request.head.repo.full_name == github.repository
+    runs-on: ${{ needs.route.outputs.label }}
+    timeout-minutes: 20
+    # Read-only on the mac runner: nothing here writes to GitHub.
+    permissions:
+      contents: read
     steps:
       - name: Checkout Slate
         uses: actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0  # v7
+        with:
+          clean: ${{ needs.route.outputs.route != 'studio' }}
+          persist-credentials: false
 
-      - name: Restore cached a11y-check binary
+      - name: Select Xcode ${{ env.XCODE_BUILD }}
+        run: |
+          for app in /Applications/Xcode*.app; do
+            build="$(/usr/libexec/PlistBuddy -c 'Print :ProductBuildVersion' "$app/Contents/version.plist" 2>/dev/null || true)"
+            if [ "$build" = "$XCODE_BUILD" ]; then
+              echo "DEVELOPER_DIR=$app/Contents/Developer" >> "$GITHUB_ENV"
+              echo "using $app ($build)"
+              exit 0
+            fi
+          done
+          echo "::error::no Xcode with build $XCODE_BUILD under /Applications; bump XCODE_BUILD together with the image"
+          exit 1
+
+      - name: Restore cached a11y-check binary (Namespace)
+        if: needs.route.outputs.route != 'studio'
         id: cache-bin
         uses: actions/cache@55cc8345863c7cc4c66a329aec7e433d2d1c52a9  # v6
         with:
           path: .a11y-bin
           key: a11y-check-${{ env.A11Y_CHECK_REF }}-${{ runner.os }}-${{ runner.arch }}
 
-      - name: Build a11y-check (cache miss)
-        if: steps.cache-bin.outputs.cache-hit != 'true'
+      - name: Build a11y-check (Namespace, cache miss)
+        if: needs.route.outputs.route != 'studio' && steps.cache-bin.outputs.cache-hit != 'true'
         run: |
           set -euo pipefail
           git clone --filter=blob:none --no-checkout \
@@ -83,8 +129,27 @@ jobs:
           cp tmp-a11y/a11y-check/.build/release/a11y-check .a11y-bin/
           rm -rf tmp-a11y
 
-      - name: Add a11y-check to PATH
+      - name: Add a11y-check to PATH (Namespace)
+        if: needs.route.outputs.route != 'studio'
         run: echo "$GITHUB_WORKSPACE/.a11y-bin" >> "$GITHUB_PATH"
+
+      - name: Check the baked analyzer's pin (Studio)
+        if: needs.route.outputs.route == 'studio'
+        # The image bakes a11y-check root-owned at /usr/local/slate-runner/bin
+        # and records the commit next to it (toolchain-analyzer.sh).
+        run: |
+          ref_file=/usr/local/slate-runner/bin/a11y-check.ref
+          if [ -r "$ref_file" ]; then
+            baked="$(cat "$ref_file")"
+            if [ "$baked" != "$A11Y_CHECK_REF" ]; then
+              echo "::error::the Studio image bakes a11y-check at $baked but this workflow pins $A11Y_CHECK_REF; rebuild the toolchain layer or align the pin"
+              exit 1
+            fi
+            echo "baked analyzer at $baked, as pinned"
+          else
+            echo "::warning::the image records no analyzer pin (toolchain layer built before the .ref file); cannot confirm it matches $A11Y_CHECK_REF"
+          fi
+          command -v a11y-check
 
       - name: Show version
         run: a11y-check --version
@@ -100,16 +165,6 @@ jobs:
         if: always()
         run: a11y-check "$A11Y_PATHS" --format sarif --no-trend > a11y-results.sarif
 
-      - name: Upload SARIF to GitHub Code Scanning
-        if: always()
-        # Pinned to SHA for supply-chain hardening; corresponds to
-        # github/codeql-action/upload-sarif@v4.35.5. Bump deliberately
-        # when picking up new versions.
-        uses: github/codeql-action/upload-sarif@9e0d7b8d25671d64c341c19c0152d693099fb5ba
-        with:
-          sarif_file: a11y-results.sarif
-        continue-on-error: true
-
       - name: Upload result artifacts
         if: always()
         uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a  # v7
@@ -118,9 +173,50 @@ jobs:
           path: |
             a11y-results.json
             a11y-results.sarif
+          if-no-files-found: warn
+
+  report:
+    name: Report and enforce the floor
+    needs: analyze
+    # Runs after the analysis whether it passed or failed, so a drop below
+    # the floor still gets its comment and its red check; only a cancelled
+    # run skips it.
+    if: ${{ !cancelled() && needs.analyze.result != 'skipped' }}
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    # actions: read is only needed by codeql-action/upload-sarif within
+    # this job; scoping it here keeps the workflow-level grant minimal.
+    permissions:
+      contents: read
+      security-events: write
+      pull-requests: write
+      actions: read
+    steps:
+      - name: Checkout Slate
+        uses: actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0  # v7
+        with:
+          persist-credentials: false
+
+      - name: Download the analysis results
+        uses: actions/download-artifact@37930b1c2abaa49bbe596cd826c3c89aef350131  # v7
+        with:
+          name: a11y-results
+        # A missing artifact means the analysis died before producing
+        # results; the floor step below reports that in plain words.
+        continue-on-error: true
+
+      - name: Upload SARIF to GitHub Code Scanning
+        if: hashFiles('a11y-results.sarif') != ''
+        # Pinned to SHA for supply-chain hardening; corresponds to
+        # github/codeql-action/upload-sarif@v4.35.5. Bump deliberately
+        # when picking up new versions.
+        uses: github/codeql-action/upload-sarif@9e0d7b8d25671d64c341c19c0152d693099fb5ba
+        with:
+          sarif_file: a11y-results.sarif
+        continue-on-error: true
 
       - name: Post score summary on PR
-        if: github.event_name == 'pull_request' && !cancelled()
+        if: github.event_name == 'pull_request' && hashFiles('a11y-results.json') != ''
         uses: actions/github-script@3a2844b7e9c422d3c10d287c895573f7108da1b3  # v9
         with:
           script: |
@@ -185,7 +281,6 @@ jobs:
         continue-on-error: true
 
       - name: Enforce score floor
-        if: ${{ !cancelled() }}
         uses: actions/github-script@3a2844b7e9c422d3c10d287c895573f7108da1b3  # v9
         env:
           MIN_SCORE: ${{ env.MIN_SCORE }}
@@ -197,8 +292,8 @@ jobs:
             const resultsPath = 'a11y-results.json';
             if (!fs.existsSync(resultsPath)) {
               core.setFailed(
-                `${resultsPath} was not produced — a11y-check likely crashed. ` +
-                `See the "Run a11y-check (JSON for downstream steps)" step output.`
+                `${resultsPath} was not produced — a11y-check likely crashed, or the analysis job ` +
+                `never reached it. See the "SwiftUI Accessibility Check" job.`
               );
               return;
             }
