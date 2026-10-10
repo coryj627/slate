@@ -4,7 +4,7 @@
 
 **Goal:** Run every Windows CI job for `coryj627/slate` in a throwaway Hyper-V VM on the owner's desktop, with provenance-gated cache merges and a one-variable fallback to today's Namespace and `windows-latest` providers.
 
-**Architecture:** A PowerShell orchestrator (`scripts/ci-host/`) runs on the host as an unprivileged Hyper-V Administrator, polls the repository's queued `slate-win-*` jobs, and for each one clones a VM from a read-only golden Windows 11 disk plus a copy-on-write fork of that lane's cache disk, hands a single-use JIT runner config into the guest over Hyper-V KVP, and after the guest shuts itself down merges the cache fork only when GitHub's record shows a green push/schedule/dispatch on `main` of this repository. All GitHub and Hyper-V calls sit behind adapter scriptblocks so the state machine is unit-tested with fakes. Workflows select the pool with one repository variable.
+**Architecture:** A PowerShell orchestrator (`ci/windows-runner/`) runs on the host as an unprivileged Hyper-V Administrator, polls the repository's queued `slate-win-*` jobs, and for each one clones a VM from a read-only golden Windows 11 disk plus a copy-on-write fork of that lane's cache disk, hands a single-use JIT runner config into the guest over Hyper-V KVP, and after the guest shuts itself down merges the cache fork only when GitHub's record shows a green push/schedule/dispatch on `main` of this repository. All GitHub and Hyper-V calls sit behind adapter scriptblocks so the state machine is unit-tested with fakes. Workflows select the pool with one repository variable.
 
 **Tech Stack:** PowerShell 7.6 on the host (module written 5.1-compatible because the guest runs Windows PowerShell), Pester 5 on `ubuntu-latest`, Hyper-V (Gen2, vTPM, extended port ACLs, NetNat), GitHub REST (`generate-jitconfig`, runs/jobs), DISM `Expand-WindowsImage` for the golden disk, GitHub Actions YAML.
 
@@ -24,7 +24,7 @@
 - Host paths: `C:\slate-ci\{bin,golden,cache,vms,state,logs}`; golden disk `C:\slate-ci\golden\win11-runner.vhdx`.
 - Host account `slate-ci-host`: member of Hyper-V Administrators only, denied interactive logon; PAT stored as `C:\slate-ci\state\token.xml` via `Export-Clixml` under that account.
 - Guest: standard user `runner`, auto-logon, runner at `C:\actions-runner` (2.338.0, sha256 `f48e0750a21812bca5f82de5f7f5aeae71abee647fab5a582f1742d07eba455f`), .NET at `C:\dotnet`, rustup 1.97.1 with `aarch64-pc-windows-msvc`, uniffi-bindgen-cs `v0.11.0+v0.31.0`, Python 3.13.15, Git 2.55.0.5.
-- Workflows read `vars.SLATE_WINDOWS_POOL`; `namespace` reproduces today's `runs-on` verbatim; anything else (including unset) means `home`.
+- Workflows read `vars.WINDOWS_RUNNER_MODE`; `namespace` reproduces today's `runs-on` verbatim; anything else (including unset) means `home`.
 - New `.ps1` files carry the SPDX header used by `apps/slate-windows/generate-bindings.ps1`; commit messages follow the repo's `type(scope): summary` style.
 - Nothing in the module may use PowerShell 7-only syntax (`??`, ternary, `-Parallel`); `-AsHashtable` is allowed only in host-only functions (journal, config).
 
@@ -79,7 +79,7 @@ In section "3. Cache trust", replace the bullet beginning "the guest reported" w
 In section "4. Guest golden image", replace the first paragraph with:
 
 ```markdown
-Built once by `scripts/ci-host/golden/build-golden.ps1` (elevated) without
+Built once by `ci/windows-runner/golden/build-golden.ps1` (elevated) without
 running Windows Setup: it mounts the ISO, applies the "Windows 11 Pro"
 index of `install.wim` to a new 120 GB dynamic VHDX with
 `Expand-WindowsImage`, makes it bootable with `bcdboot`, drops a rendered
@@ -112,10 +112,10 @@ git commit -m "docs(specs): self-hosted runner — two guest tasks, host-observe
 ### Task 2: Module skeleton, Pester harness, CI lane, labels and KVP chunking
 
 **Files:**
-- Create: `scripts/ci-host/SlateCiHost.psm1`
-- Create: `scripts/ci-host/tests/SlateCiHost.Tests.ps1`
-- Create: `scripts/ci-host/tests/Invoke-Tests.ps1`
-- Create: `.github/workflows/ci-host.yml`
+- Create: `ci/windows-runner/SlateCiHost.psm1`
+- Create: `ci/windows-runner/tests/SlateCiHost.Tests.ps1`
+- Create: `ci/windows-runner/tests/Invoke-Tests.ps1`
+- Create: `.github/workflows/windows-runner-tests.yml`
 
 **Interfaces:**
 - Produces: `Get-LaneFromLabels -Labels [string[]] -Lanes [string[]]` → lane string or `$null`; `New-RunnerName -Lane [string]` → `slate-win-<lane>-<8 hex>`; `Split-KvpChunks -Text [string] -Prefix [string] -ChunkSize [int]` → `IDictionary` of `<prefix>.0..n` plus `<prefix>.count`; `Join-KvpChunks -Items [IDictionary] -Prefix [string]` → string or `$null`.
@@ -130,14 +130,14 @@ Expected: a version `5.x` printed.
 
 - [ ] **Step 2: Write the test runner script**
 
-`scripts/ci-host/tests/Invoke-Tests.ps1`:
+`ci/windows-runner/tests/Invoke-Tests.ps1`:
 
 ```powershell
 # Copyright (C) 2026 Cory Joseph
 # SPDX-License-Identifier: AGPL-3.0-or-later
 #
 # Runs the ci-host Pester suite with Pester 5 (the host's built-in 3.4 is
-# ignored). Exits non-zero on any failure; used locally and by ci-host.yml.
+# ignored). Exits non-zero on any failure; used locally and by windows-runner-tests.yml.
 param([string]$Path = $PSScriptRoot, [string]$Filter)
 
 $ErrorActionPreference = 'Stop'
@@ -152,7 +152,7 @@ Invoke-Pester -Configuration $config
 
 - [ ] **Step 3: Write the failing tests**
 
-`scripts/ci-host/tests/SlateCiHost.Tests.ps1`:
+`ci/windows-runner/tests/SlateCiHost.Tests.ps1`:
 
 ```powershell
 # Copyright (C) 2026 Cory Joseph
@@ -242,14 +242,14 @@ Describe 'Split-KvpChunks / Join-KvpChunks' {
 - [ ] **Step 4: Run the tests to verify they fail**
 
 ```bash
-pwsh -NoProfile -File scripts/ci-host/tests/Invoke-Tests.ps1
+pwsh -NoProfile -File ci/windows-runner/tests/Invoke-Tests.ps1
 ```
 
 Expected: FAIL, "Could not load module" or "The term 'Get-LaneFromLabels' is not recognized".
 
 - [ ] **Step 5: Write the module skeleton with these four functions**
 
-`scripts/ci-host/SlateCiHost.psm1`:
+`ci/windows-runner/SlateCiHost.psm1`:
 
 ```powershell
 # Copyright (C) 2026 Cory Joseph
@@ -257,7 +257,7 @@ Expected: FAIL, "Could not load module" or "The term 'Get-LaneFromLabels' is not
 #
 # Pure logic for the self-hosted Windows runner host (spec:
 # docs/superpowers/specs/2026-10-10-self-hosted-windows-runner-design.md).
-# Every GitHub and Hyper-V call lives in scripts/ci-host/adapters and is
+# Every GitHub and Hyper-V call lives in ci/windows-runner/adapters and is
 # passed in as a scriptblock, so this module is tested without a VM or a
 # token. The guest imports this module too (Windows PowerShell 5.1), so
 # keep the syntax 5.1-compatible; -AsHashtable appears only in host-only
@@ -332,32 +332,32 @@ Export-ModuleMember -Function Get-LaneFromLabels, New-RunnerName, Split-KvpChunk
 - [ ] **Step 6: Run the tests to verify they pass**
 
 ```bash
-pwsh -NoProfile -File scripts/ci-host/tests/Invoke-Tests.ps1
+pwsh -NoProfile -File ci/windows-runner/tests/Invoke-Tests.ps1
 ```
 
 Expected: every test passes, `Failed: 0`.
 
 - [ ] **Step 7: Add the CI lane**
 
-`.github/workflows/ci-host.yml`:
+`.github/workflows/windows-runner-tests.yml`:
 
 ```yaml
 # Pester suite for scripts/ci-host (the self-hosted Windows runner host).
 # Pure logic only: adapters are faked, so hosted Linux is enough and no
 # runner or cache volume is involved (docs/runbooks/ci-cache-policy.md
 # keeps cheap verifier lanes on standard hosted Linux).
-name: ci-host
+name: windows-runner-tests
 
 on:
   pull_request:
     paths:
-      - 'scripts/ci-host/**'
-      - '.github/workflows/ci-host.yml'
+      - 'ci/windows-runner/**'
+      - '.github/workflows/windows-runner-tests.yml'
   push:
     branches: [main]
     paths:
-      - 'scripts/ci-host/**'
-      - '.github/workflows/ci-host.yml'
+      - 'ci/windows-runner/**'
+      - '.github/workflows/windows-runner-tests.yml'
 
 permissions:
   contents: read
@@ -368,7 +368,7 @@ concurrency:
 
 jobs:
   pester:
-    name: ci-host pester
+    name: windows-runner tests
     runs-on: ubuntu-latest
     timeout-minutes: 10
     steps:
@@ -384,13 +384,13 @@ jobs:
 
       - name: Run the suite
         shell: pwsh
-        run: ./scripts/ci-host/tests/Invoke-Tests.ps1
+        run: ./ci/windows-runner/tests/Invoke-Tests.ps1
 ```
 
 - [ ] **Step 8: Commit**
 
 ```bash
-git add scripts/ci-host/SlateCiHost.psm1 scripts/ci-host/tests/SlateCiHost.Tests.ps1 scripts/ci-host/tests/Invoke-Tests.ps1 .github/workflows/ci-host.yml
+git add ci/windows-runner/SlateCiHost.psm1 ci/windows-runner/tests/SlateCiHost.Tests.ps1 ci/windows-runner/tests/Invoke-Tests.ps1 .github/workflows/windows-runner-tests.yml
 git commit -m "feat(ci-host): module skeleton — lane labels, runner names, KVP chunking; Pester lane"
 ```
 
@@ -399,8 +399,8 @@ git commit -m "feat(ci-host): module skeleton — lane labels, runner names, KVP
 ### Task 3: Queue selection, admission, retries, deadlines, stale runners
 
 **Files:**
-- Modify: `scripts/ci-host/SlateCiHost.psm1`
-- Modify: `scripts/ci-host/tests/SlateCiHost.Tests.ps1`
+- Modify: `ci/windows-runner/SlateCiHost.psm1`
+- Modify: `ci/windows-runner/tests/SlateCiHost.Tests.ps1`
 
 **Interfaces:**
 - Consumes: `Get-LaneFromLabels` (Task 2).
@@ -410,7 +410,7 @@ git commit -m "feat(ci-host): module skeleton — lane labels, runner names, KVP
 
 - [ ] **Step 1: Append the failing tests**
 
-Append to `scripts/ci-host/tests/SlateCiHost.Tests.ps1`:
+Append to `ci/windows-runner/tests/SlateCiHost.Tests.ps1`:
 
 ```powershell
 Describe 'ConvertTo-DateTimeOffset' {
@@ -548,14 +548,14 @@ Describe 'Get-StaleRunnerNames' {
 - [ ] **Step 2: Run the tests to verify the new ones fail**
 
 ```bash
-pwsh -NoProfile -File scripts/ci-host/tests/Invoke-Tests.ps1
+pwsh -NoProfile -File ci/windows-runner/tests/Invoke-Tests.ps1
 ```
 
 Expected: the 17 earlier tests pass; the new ones fail with "not recognized".
 
 - [ ] **Step 3: Implement the five functions**
 
-Insert before the `Export-ModuleMember` line in `scripts/ci-host/SlateCiHost.psm1`:
+Insert before the `Export-ModuleMember` line in `ci/windows-runner/SlateCiHost.psm1`:
 
 ```powershell
 function ConvertTo-DateTimeOffset {
@@ -675,7 +675,7 @@ Export-ModuleMember -Function Get-LaneFromLabels, New-RunnerName, Split-KvpChunk
 - [ ] **Step 4: Run the tests to verify they pass**
 
 ```bash
-pwsh -NoProfile -File scripts/ci-host/tests/Invoke-Tests.ps1
+pwsh -NoProfile -File ci/windows-runner/tests/Invoke-Tests.ps1
 ```
 
 Expected: every test in the suite passes.
@@ -683,7 +683,7 @@ Expected: every test in the suite passes.
 - [ ] **Step 5: Commit**
 
 ```bash
-git add scripts/ci-host/SlateCiHost.psm1 scripts/ci-host/tests/SlateCiHost.Tests.ps1
+git add ci/windows-runner/SlateCiHost.psm1 ci/windows-runner/tests/SlateCiHost.Tests.ps1
 git commit -m "feat(ci-host): queue selection, admission with retry back-off, deadlines, stale-runner selection"
 ```
 
@@ -692,8 +692,8 @@ git commit -m "feat(ci-host): queue selection, admission with retry back-off, de
 ### Task 4: Commit predicate and runner-to-job resolution
 
 **Files:**
-- Modify: `scripts/ci-host/SlateCiHost.psm1`
-- Modify: `scripts/ci-host/tests/SlateCiHost.Tests.ps1`
+- Modify: `ci/windows-runner/SlateCiHost.psm1`
+- Modify: `ci/windows-runner/tests/SlateCiHost.Tests.ps1`
 
 **Interfaces:**
 - Produces: `Test-CommitEligible -Job -Run -RunnerName [string] -ForcedOff [bool] -ParentGeneration [int] -ForkGeneration [int] -TrustedRepo [string] -TrustedBranch [string] -TrustedEvents [string[]]` → `[pscustomobject]@{ Eligible [bool]; Reason [string] }`; `Resolve-RunnerJob -RunnerName [string] -AdmittedJobId [int64] -CandidateJobIds [int64[]] -GetJob [scriptblock]` → the API job object whose `runner_name` matches, or `$null`.
@@ -798,7 +798,7 @@ Describe 'Resolve-RunnerJob' {
 - [ ] **Step 2: Run the tests to verify the new ones fail**
 
 ```bash
-pwsh -NoProfile -File scripts/ci-host/tests/Invoke-Tests.ps1
+pwsh -NoProfile -File ci/windows-runner/tests/Invoke-Tests.ps1
 ```
 
 Expected: new tests fail with "not recognized".
@@ -870,7 +870,7 @@ Add `Test-CommitEligible, Resolve-RunnerJob` to `Export-ModuleMember`.
 - [ ] **Step 4: Run the tests to verify they pass**
 
 ```bash
-pwsh -NoProfile -File scripts/ci-host/tests/Invoke-Tests.ps1
+pwsh -NoProfile -File ci/windows-runner/tests/Invoke-Tests.ps1
 ```
 
 Expected: every test in the suite passes.
@@ -878,7 +878,7 @@ Expected: every test in the suite passes.
 - [ ] **Step 5: Commit**
 
 ```bash
-git add scripts/ci-host/SlateCiHost.psm1 scripts/ci-host/tests/SlateCiHost.Tests.ps1
+git add ci/windows-runner/SlateCiHost.psm1 ci/windows-runner/tests/SlateCiHost.Tests.ps1
 git commit -m "feat(ci-host): provenance commit predicate and runner-to-job resolution"
 ```
 
@@ -887,9 +887,9 @@ git commit -m "feat(ci-host): provenance commit predicate and runner-to-job reso
 ### Task 5: Config, journal and log
 
 **Files:**
-- Create: `scripts/ci-host/config.json`
-- Modify: `scripts/ci-host/SlateCiHost.psm1`
-- Modify: `scripts/ci-host/tests/SlateCiHost.Tests.ps1`
+- Create: `ci/windows-runner/config.json`
+- Modify: `ci/windows-runner/SlateCiHost.psm1`
+- Modify: `ci/windows-runner/tests/SlateCiHost.Tests.ps1`
 
 **Interfaces:**
 - Produces: `Get-CiHostConfig -Path [string]` → `IDictionary` with keys `Owner, Repo, Root, SwitchName, Gateway, Dns, Slots (array of @{Index; Ip}), Vcpu, MemoryGB, Lanes (lane → @{Cache [bool]; MaxMinutes [int]}), TickSeconds, HeartbeatTimeoutSeconds, UnclaimedTimeoutSeconds, RetryCap, RetryBackoffSeconds, TrustedRepo, TrustedBranch, TrustedEvents, GoldenPath, CacheDir, VmDir, StateDir, LogDir`; `New-Journal` → `@{ Vms = @{}; Retries = @{}; SeenJobs = @{} }`; `Read-Journal -Path` (corrupt file → moved to `<path>.corrupt-<timestamp>` and a fresh journal returned); `Write-Journal -Path -Journal` (atomic via temp file + move); `Write-CiLog -Path [string] -Level [string] -Message [string]`.
@@ -897,7 +897,7 @@ git commit -m "feat(ci-host): provenance commit predicate and runner-to-job reso
 
 - [ ] **Step 1: Write the config file**
 
-`scripts/ci-host/config.json`:
+`ci/windows-runner/config.json`:
 
 ```json
 {
@@ -1017,7 +1017,7 @@ Describe 'Write-CiLog' {
 - [ ] **Step 3: Run the tests to verify the new ones fail**
 
 ```bash
-pwsh -NoProfile -File scripts/ci-host/tests/Invoke-Tests.ps1
+pwsh -NoProfile -File ci/windows-runner/tests/Invoke-Tests.ps1
 ```
 
 Expected: new tests fail with "not recognized".
@@ -1134,7 +1134,7 @@ Add `Get-CiHostConfig, New-Journal, Read-Journal, Write-Journal, Write-CiLog` to
 - [ ] **Step 5: Run the tests to verify they pass**
 
 ```bash
-pwsh -NoProfile -File scripts/ci-host/tests/Invoke-Tests.ps1
+pwsh -NoProfile -File ci/windows-runner/tests/Invoke-Tests.ps1
 ```
 
 Expected: every test in the suite passes.
@@ -1142,7 +1142,7 @@ Expected: every test in the suite passes.
 - [ ] **Step 6: Commit**
 
 ```bash
-git add scripts/ci-host/config.json scripts/ci-host/SlateCiHost.psm1 scripts/ci-host/tests/SlateCiHost.Tests.ps1
+git add ci/windows-runner/config.json ci/windows-runner/SlateCiHost.psm1 ci/windows-runner/tests/SlateCiHost.Tests.ps1
 git commit -m "feat(ci-host): config loader, crash-safe journal, log writer"
 ```
 
@@ -1151,8 +1151,8 @@ git commit -m "feat(ci-host): config loader, crash-safe journal, log writer"
 ### Task 6: GitHub REST adapter
 
 **Files:**
-- Create: `scripts/ci-host/adapters/GitHub.ps1`
-- Create: `scripts/ci-host/tests/GitHubAdapter.Tests.ps1`
+- Create: `ci/windows-runner/adapters/GitHub.ps1`
+- Create: `ci/windows-runner/tests/GitHubAdapter.Tests.ps1`
 
 **Interfaces:**
 - Produces: `Initialize-GitHubAdapter -Owner -Repo -Token [securestring]`; `Invoke-GhApi -Method -Path -Body`; `Get-GhQueuedLaneJobs` → REST job objects with `status == queued`; `Get-GhJob -JobId`; `Get-GhRun -RunId`; `New-GhJitRunner -Name -Labels` → `@{ RunnerId [int64]; EncodedJitConfig [string] }`; `Remove-GhRunner -RunnerId`; `Get-GhRunner -RunnerId` (null on 404); `Get-GhRunners`; `New-GitHubAdapters` → hashtable with keys `GetQueuedJobs, GetJob, GetRun, NewJitRunner, RemoveRunner, GetRunner, ListRunners` (the exact keys Task 8 invokes).
@@ -1160,7 +1160,7 @@ git commit -m "feat(ci-host): config loader, crash-safe journal, log writer"
 
 - [ ] **Step 1: Write the failing tests**
 
-`scripts/ci-host/tests/GitHubAdapter.Tests.ps1`:
+`ci/windows-runner/tests/GitHubAdapter.Tests.ps1`:
 
 ```powershell
 # Copyright (C) 2026 Cory Joseph
@@ -1270,14 +1270,14 @@ Describe 'New-GitHubAdapters' {
 - [ ] **Step 2: Run the tests to verify they fail**
 
 ```bash
-pwsh -NoProfile -File scripts/ci-host/tests/Invoke-Tests.ps1 -Path scripts/ci-host/tests/GitHubAdapter.Tests.ps1
+pwsh -NoProfile -File ci/windows-runner/tests/Invoke-Tests.ps1 -Path ci/windows-runner/tests/GitHubAdapter.Tests.ps1
 ```
 
 Expected: FAIL, the adapter file does not exist.
 
 - [ ] **Step 3: Write the adapter**
 
-`scripts/ci-host/adapters/GitHub.ps1`:
+`ci/windows-runner/adapters/GitHub.ps1`:
 
 ```powershell
 #Requires -Version 7
@@ -1405,7 +1405,7 @@ function New-GitHubAdapters {
 - [ ] **Step 4: Run the tests to verify they pass**
 
 ```bash
-pwsh -NoProfile -File scripts/ci-host/tests/Invoke-Tests.ps1
+pwsh -NoProfile -File ci/windows-runner/tests/Invoke-Tests.ps1
 ```
 
 Expected: every test in the suite passes.
@@ -1413,7 +1413,7 @@ Expected: every test in the suite passes.
 - [ ] **Step 5: Commit**
 
 ```bash
-git add scripts/ci-host/adapters/GitHub.ps1 scripts/ci-host/tests/GitHubAdapter.Tests.ps1
+git add ci/windows-runner/adapters/GitHub.ps1 ci/windows-runner/tests/GitHubAdapter.Tests.ps1
 git commit -m "feat(ci-host): GitHub REST adapter — queued jobs, JIT runners, runner lifecycle"
 ```
 
@@ -1422,8 +1422,8 @@ git commit -m "feat(ci-host): GitHub REST adapter — queued jobs, JIT runners, 
 ### Task 7: Hyper-V adapter
 
 **Files:**
-- Create: `scripts/ci-host/adapters/HyperV.ps1`
-- Create: `scripts/ci-host/tests/HyperVAdapter.Tests.ps1`
+- Create: `ci/windows-runner/adapters/HyperV.ps1`
+- Create: `ci/windows-runner/tests/HyperVAdapter.Tests.ps1`
 
 **Interfaces:**
 - Consumes: `$Config` from `Get-CiHostConfig` (Task 5): `GoldenPath, CacheDir, VmDir, SwitchName, Vcpu, MemoryGB, Lanes`.
@@ -1432,7 +1432,7 @@ git commit -m "feat(ci-host): GitHub REST adapter — queued jobs, JIT runners, 
 
 - [ ] **Step 1: Write the failing tests (Hyper-V cmdlets stubbed so the suite runs on Linux)**
 
-`scripts/ci-host/tests/HyperVAdapter.Tests.ps1`:
+`ci/windows-runner/tests/HyperVAdapter.Tests.ps1`:
 
 ```powershell
 # Copyright (C) 2026 Cory Joseph
@@ -1615,14 +1615,14 @@ Describe 'New-HyperVAdapters' {
 - [ ] **Step 2: Run the tests to verify they fail**
 
 ```bash
-pwsh -NoProfile -File scripts/ci-host/tests/Invoke-Tests.ps1 -Path scripts/ci-host/tests/HyperVAdapter.Tests.ps1
+pwsh -NoProfile -File ci/windows-runner/tests/Invoke-Tests.ps1 -Path ci/windows-runner/tests/HyperVAdapter.Tests.ps1
 ```
 
 Expected: FAIL, adapter file missing.
 
 - [ ] **Step 3: Write the adapter**
 
-`scripts/ci-host/adapters/HyperV.ps1`:
+`ci/windows-runner/adapters/HyperV.ps1`:
 
 ```powershell
 #Requires -Version 7
@@ -1842,7 +1842,7 @@ function New-HyperVAdapters {
 - [ ] **Step 4: Run the tests to verify they pass**
 
 ```bash
-pwsh -NoProfile -File scripts/ci-host/tests/Invoke-Tests.ps1
+pwsh -NoProfile -File ci/windows-runner/tests/Invoke-Tests.ps1
 ```
 
 Expected: every test in the suite passes.
@@ -1850,7 +1850,7 @@ Expected: every test in the suite passes.
 - [ ] **Step 5: Commit**
 
 ```bash
-git add scripts/ci-host/adapters/HyperV.ps1 scripts/ci-host/tests/HyperVAdapter.Tests.ps1
+git add ci/windows-runner/adapters/HyperV.ps1 ci/windows-runner/tests/HyperVAdapter.Tests.ps1
 git commit -m "feat(ci-host): Hyper-V adapter — forked disks, Gen2 vTPM VM, port ACLs, KVP, cache merge"
 ```
 
@@ -1859,9 +1859,9 @@ git commit -m "feat(ci-host): Hyper-V adapter — forked disks, Gen2 vTPM VM, po
 ### Task 8: Orchestrator state machine, startup sweep and the loop script
 
 **Files:**
-- Modify: `scripts/ci-host/SlateCiHost.psm1`
-- Create: `scripts/ci-host/tests/Orchestrator.Tests.ps1`
-- Create: `scripts/ci-host/orchestrator.ps1`
+- Modify: `ci/windows-runner/SlateCiHost.psm1`
+- Create: `ci/windows-runner/tests/Orchestrator.Tests.ps1`
+- Create: `ci/windows-runner/orchestrator.ps1`
 
 **Interfaces:**
 - Consumes: every function from Tasks 2–5; adapter hashtables from Tasks 6–7 merged into one `$Adapters` plus `Log = { param($level, $message) }`.
@@ -1873,7 +1873,7 @@ git commit -m "feat(ci-host): Hyper-V adapter — forked disks, Gen2 vTPM VM, po
 
 - [ ] **Step 1: Write the failing tests with fake adapters**
 
-`scripts/ci-host/tests/Orchestrator.Tests.ps1`:
+`ci/windows-runner/tests/Orchestrator.Tests.ps1`:
 
 ```powershell
 # Copyright (C) 2026 Cory Joseph
@@ -2318,7 +2318,7 @@ Context 'Invoke-StartupSweep' {
 - [ ] **Step 2: Run the tests to verify they fail**
 
 ```bash
-pwsh -NoProfile -File scripts/ci-host/tests/Invoke-Tests.ps1 -Path scripts/ci-host/tests/Orchestrator.Tests.ps1
+pwsh -NoProfile -File ci/windows-runner/tests/Invoke-Tests.ps1 -Path ci/windows-runner/tests/Orchestrator.Tests.ps1
 ```
 
 Expected: FAIL with "Invoke-OrchestratorTick is not recognized".
@@ -2606,14 +2606,14 @@ Add `Get-FreeSlots, Remove-ActiveVm, Test-SiblingRunning, Complete-ActiveVm, Upd
 - [ ] **Step 4: Run the tests to verify they pass**
 
 ```bash
-pwsh -NoProfile -File scripts/ci-host/tests/Invoke-Tests.ps1
+pwsh -NoProfile -File ci/windows-runner/tests/Invoke-Tests.ps1
 ```
 
 Expected: every test in the suite passes.
 
 - [ ] **Step 5: Write the loop script**
 
-`scripts/ci-host/orchestrator.ps1`:
+`ci/windows-runner/orchestrator.ps1`:
 
 ```powershell
 #Requires -Version 7
@@ -2672,7 +2672,7 @@ do {
 - [ ] **Step 6: Syntax-check the loop script without running it**
 
 ```bash
-pwsh -NoProfile -Command "[void][System.Management.Automation.Language.Parser]::ParseFile('scripts/ci-host/orchestrator.ps1', [ref]$null, [ref]$e); if ($e) { $e; exit 1 } else { 'ok' }"
+pwsh -NoProfile -Command "[void][System.Management.Automation.Language.Parser]::ParseFile('ci/windows-runner/orchestrator.ps1', [ref]$null, [ref]$e); if ($e) { $e; exit 1 } else { 'ok' }"
 ```
 
 Expected: `ok`.
@@ -2680,7 +2680,7 @@ Expected: `ok`.
 - [ ] **Step 7: Commit**
 
 ```bash
-git add scripts/ci-host/SlateCiHost.psm1 scripts/ci-host/tests/Orchestrator.Tests.ps1 scripts/ci-host/orchestrator.ps1
+git add ci/windows-runner/SlateCiHost.psm1 ci/windows-runner/tests/Orchestrator.Tests.ps1 ci/windows-runner/orchestrator.ps1
 git commit -m "feat(ci-host): orchestrator state machine, startup sweep, loop script"
 ```
 
@@ -2689,10 +2689,10 @@ git commit -m "feat(ci-host): orchestrator state machine, startup sweep, loop sc
 ### Task 9: Guest bootstrap scripts
 
 **Files:**
-- Create: `scripts/ci-host/golden/guest/bootstrap-system.ps1`
-- Create: `scripts/ci-host/golden/guest/bootstrap-runner.ps1`
-- Modify: `scripts/ci-host/SlateCiHost.psm1` (add `Select-SlateKvpItems`)
-- Create: `scripts/ci-host/tests/Guest.Tests.ps1`
+- Create: `ci/windows-runner/golden/guest/bootstrap-system.ps1`
+- Create: `ci/windows-runner/golden/guest/bootstrap-runner.ps1`
+- Modify: `ci/windows-runner/SlateCiHost.psm1` (add `Select-SlateKvpItems`)
+- Create: `ci/windows-runner/tests/Guest.Tests.ps1`
 
 **Interfaces:**
 - Consumes: `Join-KvpChunks` (Task 2); KVP item names from Task 8; the golden image layout from Task 10 (`C:\actions-runner` for runtime files; the two scripts and `SlateCiHost.psm1` in `C:\slate-guest`, writable only by Administrators and SYSTEM; marker `C:\Users\runner\.slate-golden-complete`; cache volume label `slate-cache`).
@@ -2702,7 +2702,7 @@ git commit -m "feat(ci-host): orchestrator state machine, startup sweep, loop sc
 
 - [ ] **Step 1: Write the failing tests**
 
-`scripts/ci-host/tests/Guest.Tests.ps1`:
+`ci/windows-runner/tests/Guest.Tests.ps1`:
 
 ```powershell
 # Copyright (C) 2026 Cory Joseph
@@ -2773,14 +2773,14 @@ Describe 'guest scripts' {
 - [ ] **Step 2: Run the tests to verify they fail**
 
 ```bash
-pwsh -NoProfile -File scripts/ci-host/tests/Invoke-Tests.ps1 -Path scripts/ci-host/tests/Guest.Tests.ps1
+pwsh -NoProfile -File ci/windows-runner/tests/Invoke-Tests.ps1 -Path ci/windows-runner/tests/Guest.Tests.ps1
 ```
 
 Expected: FAIL ("Select-SlateKvpItems is not recognized", files missing).
 
 - [ ] **Step 3: Add the module helper**
 
-Insert before `Export-ModuleMember` in `scripts/ci-host/SlateCiHost.psm1`:
+Insert before `Export-ModuleMember` in `ci/windows-runner/SlateCiHost.psm1`:
 
 ```powershell
 function Select-SlateKvpItems {
@@ -2800,7 +2800,7 @@ Add `Select-SlateKvpItems` to `Export-ModuleMember`.
 
 - [ ] **Step 4: Write the SYSTEM bootstrap**
 
-`scripts/ci-host/golden/guest/bootstrap-system.ps1`:
+`ci/windows-runner/golden/guest/bootstrap-system.ps1`:
 
 ```powershell
 # Copyright (C) 2026 Cory Joseph
@@ -2897,7 +2897,7 @@ try {
 
 - [ ] **Step 5: Write the runner bootstrap**
 
-`scripts/ci-host/golden/guest/bootstrap-runner.ps1`:
+`ci/windows-runner/golden/guest/bootstrap-runner.ps1`:
 
 ```powershell
 # Copyright (C) 2026 Cory Joseph
@@ -2968,7 +2968,7 @@ try {
 - [ ] **Step 6: Run the tests to verify they pass**
 
 ```bash
-pwsh -NoProfile -File scripts/ci-host/tests/Invoke-Tests.ps1
+pwsh -NoProfile -File ci/windows-runner/tests/Invoke-Tests.ps1
 ```
 
 Expected: every test in the suite passes.
@@ -2976,7 +2976,7 @@ Expected: every test in the suite passes.
 - [ ] **Step 7: Commit**
 
 ```bash
-git add scripts/ci-host/golden/guest scripts/ci-host/SlateCiHost.psm1 scripts/ci-host/tests/Guest.Tests.ps1
+git add ci/windows-runner/golden/guest ci/windows-runner/SlateCiHost.psm1 ci/windows-runner/tests/Guest.Tests.ps1
 git commit -m "feat(ci-host): guest bootstrap — SYSTEM network/cache/config task and the interactive runner task"
 ```
 
@@ -2985,13 +2985,13 @@ git commit -m "feat(ci-host): guest bootstrap — SYSTEM network/cache/config ta
 ### Task 10: Golden image — versions, unattend template, provisioning, build script
 
 **Files:**
-- Create: `scripts/ci-host/golden/versions.json`
-- Create: `scripts/ci-host/golden/unattend.xml`
-- Create: `scripts/ci-host/golden/provision-guest.ps1`
-- Create: `scripts/ci-host/golden/provision-runner-user.ps1`
-- Create: `scripts/ci-host/golden/build-golden.ps1`
-- Modify: `scripts/ci-host/SlateCiHost.psm1` (add `New-RandomPassword`, `Expand-UnattendTemplate`)
-- Create: `scripts/ci-host/tests/Golden.Tests.ps1`
+- Create: `ci/windows-runner/golden/versions.json`
+- Create: `ci/windows-runner/golden/unattend.xml`
+- Create: `ci/windows-runner/golden/provision-guest.ps1`
+- Create: `ci/windows-runner/golden/provision-runner-user.ps1`
+- Create: `ci/windows-runner/golden/build-golden.ps1`
+- Modify: `ci/windows-runner/SlateCiHost.psm1` (add `New-RandomPassword`, `Expand-UnattendTemplate`)
+- Create: `ci/windows-runner/tests/Golden.Tests.ps1`
 
 **Interfaces:**
 - Rulings applied during execution (the committed scripts differ from the code below in these ways): phase 2 is started by a logon task `slate-provision-runner-user` registered in phase 1 (an HKLM RunOnce does not run for a standard user; the task exits at once when the completion marker exists); the EFI partition is created as basic data, formatted FAT32, then retyped to the ESP GUID (Format-Volume refuses an ESP); both phase scripts set `$ProgressPreference = 'SilentlyContinue'`; phase 1 checks every `icacls` exit code and disables the `provision` account before its final reboot; `build-golden.ps1` resolves `-IsoPath` to an absolute path.
@@ -2999,7 +2999,7 @@ git commit -m "feat(ci-host): guest bootstrap — SYSTEM network/cache/config ta
 
 - [ ] **Step 1: Write the pinned versions**
 
-`scripts/ci-host/golden/versions.json`:
+`ci/windows-runner/golden/versions.json`:
 
 ```json
 {
@@ -3018,7 +3018,7 @@ git commit -m "feat(ci-host): guest bootstrap — SYSTEM network/cache/config ta
 
 - [ ] **Step 2: Write the unattend template**
 
-`scripts/ci-host/golden/unattend.xml` (placeholders are replaced by `Expand-UnattendTemplate`; never commit a rendered copy):
+`ci/windows-runner/golden/unattend.xml` (placeholders are replaced by `Expand-UnattendTemplate`; never commit a rendered copy):
 
 ```xml
 <?xml version="1.0" encoding="utf-8"?>
@@ -3115,7 +3115,7 @@ git commit -m "feat(ci-host): guest bootstrap — SYSTEM network/cache/config ta
 
 - [ ] **Step 3: Write the failing tests**
 
-`scripts/ci-host/tests/Golden.Tests.ps1`:
+`ci/windows-runner/tests/Golden.Tests.ps1`:
 
 ```powershell
 # Copyright (C) 2026 Cory Joseph
@@ -3223,7 +3223,7 @@ Describe 'golden scripts' {
 - [ ] **Step 4: Run the tests to verify they fail**
 
 ```bash
-pwsh -NoProfile -File scripts/ci-host/tests/Invoke-Tests.ps1 -Path scripts/ci-host/tests/Golden.Tests.ps1
+pwsh -NoProfile -File ci/windows-runner/tests/Invoke-Tests.ps1 -Path ci/windows-runner/tests/Golden.Tests.ps1
 ```
 
 Expected: FAIL ("New-RandomPassword is not recognized", scripts missing).
@@ -3268,7 +3268,7 @@ Add `New-RandomPassword, Expand-UnattendTemplate` to `Export-ModuleMember`.
 
 - [ ] **Step 6: Write the in-guest machine provisioning script (runs once as `provision`, UAC off)**
 
-`scripts/ci-host/golden/provision-guest.ps1`:
+`ci/windows-runner/golden/provision-guest.ps1`:
 
 ```powershell
 # Copyright (C) 2026 Cory Joseph
@@ -3402,7 +3402,7 @@ try {
 
 - [ ] **Step 7: Write the per-user provisioning script (runs once as `runner`)**
 
-`scripts/ci-host/golden/provision-runner-user.ps1`:
+`ci/windows-runner/golden/provision-runner-user.ps1`:
 
 ```powershell
 # Copyright (C) 2026 Cory Joseph
@@ -3453,7 +3453,7 @@ try {
 
 - [ ] **Step 8: Write the host-side build script (elevated)**
 
-`scripts/ci-host/golden/build-golden.ps1`:
+`ci/windows-runner/golden/build-golden.ps1`:
 
 ```powershell
 #Requires -Version 7
@@ -3570,7 +3570,7 @@ Write-Host "Golden image ready and read-only: $OutPath"
 - [ ] **Step 9: Run the tests to verify they pass**
 
 ```bash
-pwsh -NoProfile -File scripts/ci-host/tests/Invoke-Tests.ps1
+pwsh -NoProfile -File ci/windows-runner/tests/Invoke-Tests.ps1
 ```
 
 Expected: every test in the suite passes.
@@ -3578,7 +3578,7 @@ Expected: every test in the suite passes.
 - [ ] **Step 10: Commit**
 
 ```bash
-git add scripts/ci-host/golden scripts/ci-host/SlateCiHost.psm1 scripts/ci-host/tests/Golden.Tests.ps1
+git add ci/windows-runner/golden ci/windows-runner/SlateCiHost.psm1 ci/windows-runner/tests/Golden.Tests.ps1
 git commit -m "feat(ci-host): golden image — pinned versions, unattend template, two-phase provisioning, DISM build script"
 ```
 
@@ -3587,18 +3587,18 @@ git commit -m "feat(ci-host): golden image — pinned versions, unattend templat
 ### Task 11: Host install scripts
 
 **Files:**
-- Create: `scripts/ci-host/install/setup-host.ps1`
-- Create: `scripts/ci-host/install/store-token.ps1`
-- Modify: `scripts/ci-host/SlateCiHost.psm1` (add `Add-SidToUserRight`, `Set-LocalUserRights`)
-- Create: `scripts/ci-host/tests/Install.Tests.ps1`
+- Create: `ci/windows-runner/install/setup-host.ps1`
+- Create: `ci/windows-runner/install/store-token.ps1`
+- Modify: `ci/windows-runner/SlateCiHost.psm1` (add `Add-SidToUserRight`, `Set-LocalUserRights`)
+- Create: `ci/windows-runner/tests/Install.Tests.ps1`
 
 **Interfaces:**
 - Consumes: `New-RandomPassword` (Task 10), `config.json` values (Task 5), `orchestrator.ps1` (Task 8).
-- Produces: `Add-SidToUserRight -IniText -Right -Sid` → secedit INF text with `*<sid>` listed under the right (pure); `Set-LocalUserRights -Sid` (host-only: deny interactive and remote-interactive logon, grant batch logon); host objects: account `slate-ci-host`, `C:\slate-ci` tree with ACLs, switch `slate-ci` + NAT + firewall rule, three formatted cache parents with `<lane>.gen = 0`, `C:\slate-ci\bin` (copy of `scripts/ci-host` minus tests, plus `install-commit.txt`), scheduled tasks `slate-ci-orchestrator` (at startup) and `slate-ci-store-token` (on demand), `C:\slate-ci\state\token.xml`.
+- Produces: `Add-SidToUserRight -IniText -Right -Sid` → secedit INF text with `*<sid>` listed under the right (pure); `Set-LocalUserRights -Sid` (host-only: deny interactive and remote-interactive logon, grant batch logon); host objects: account `slate-ci-host`, `C:\slate-ci` tree with ACLs, switch `slate-ci` + NAT + firewall rule, three formatted cache parents with `<lane>.gen = 0`, `C:\slate-ci\bin` (copy of `ci/windows-runner` minus tests, plus `install-commit.txt`), scheduled tasks `slate-ci-orchestrator` (at startup) and `slate-ci-store-token` (on demand), `C:\slate-ci\state\token.xml`.
 
 - [ ] **Step 1: Write the failing tests**
 
-`scripts/ci-host/tests/Install.Tests.ps1`:
+`ci/windows-runner/tests/Install.Tests.ps1`:
 
 ```powershell
 # Copyright (C) 2026 Cory Joseph
@@ -3679,7 +3679,7 @@ Describe 'install scripts' {
 - [ ] **Step 2: Run the tests to verify they fail**
 
 ```bash
-pwsh -NoProfile -File scripts/ci-host/tests/Invoke-Tests.ps1 -Path scripts/ci-host/tests/Install.Tests.ps1
+pwsh -NoProfile -File ci/windows-runner/tests/Invoke-Tests.ps1 -Path ci/windows-runner/tests/Install.Tests.ps1
 ```
 
 Expected: FAIL ("Add-SidToUserRight is not recognized", scripts missing).
@@ -3756,7 +3756,7 @@ Add `Add-SidToUserRight, Set-LocalUserRights` to `Export-ModuleMember`.
 
 - [ ] **Step 4: Write the host setup script**
 
-`scripts/ci-host/install/setup-host.ps1`:
+`ci/windows-runner/install/setup-host.ps1`:
 
 ```powershell
 #Requires -Version 7
@@ -3888,7 +3888,7 @@ Write-Host "  3. Start-ScheduledTask slate-ci-orchestrator; Get-Content $Root\lo
 
 - [ ] **Step 5: Write the token store script**
 
-`scripts/ci-host/install/store-token.ps1`:
+`ci/windows-runner/install/store-token.ps1`:
 
 ```powershell
 #Requires -Version 7
@@ -3942,7 +3942,7 @@ Write-Host "token stored at $xmlPath (readable only by slate-ci-host via DPAPI)"
 - [ ] **Step 6: Run the tests to verify they pass**
 
 ```bash
-pwsh -NoProfile -File scripts/ci-host/tests/Invoke-Tests.ps1
+pwsh -NoProfile -File ci/windows-runner/tests/Invoke-Tests.ps1
 ```
 
 Expected: every test in the suite passes.
@@ -3950,7 +3950,7 @@ Expected: every test in the suite passes.
 - [ ] **Step 7: Commit**
 
 ```bash
-git add scripts/ci-host/install scripts/ci-host/SlateCiHost.psm1 scripts/ci-host/tests/Install.Tests.ps1
+git add ci/windows-runner/install ci/windows-runner/SlateCiHost.psm1 ci/windows-runner/tests/Install.Tests.ps1
 git commit -m "feat(ci-host): host setup — unprivileged account, NAT switch, cache parents, tasks; DPAPI token store"
 ```
 
@@ -3958,25 +3958,27 @@ git commit -m "feat(ci-host): host setup — unprivileged account, NAT switch, c
 
 ### Task 12: Workflow pool switch
 
+> Convention note (ruled after the mac self-hosted runner merged to `main`): the Windows host code lives in `ci/windows-runner/` beside `ci/mac-runner/`, its test lane is `windows-runner-tests.yml` beside `mac-runner-tests.yml`, and the pool variable is `WINDOWS_RUNNER_MODE` (values `home` | `namespace`) beside `MAC_RUNNER_MODE`. Tasks 2–11 were executed under the earlier names; a mechanical rename task moved them before this task ran.
+
 **Files:**
 - Modify: `.github/workflows/windows.yml` (header comment; `runs-on` of `rust-tests`, `windows`, `windows-model-shard`, `flaui`; `if:` on the three `nscloud-cache-action` steps)
 - Modify: `.github/workflows/nightly.yml` (`windows-full-stress` `runs-on` and the native-build `cache` input)
 - Modify: `.github/workflows/windows-ci-pilot.yml` (`home` candidate; isolation evidence step)
-- Create: `scripts/ci-host/tests/Workflows.Tests.ps1`
+- Create: `ci/windows-runner/tests/Workflows.Tests.ps1`
 
 **Interfaces:**
-- Consumes: repository variable `SLATE_WINDOWS_POOL` (`home` default, `namespace` fallback), lane labels from the Global Constraints, `NSC_CACHE_PATH` exported by the guest (Task 9).
+- Consumes: repository variable `WINDOWS_RUNNER_MODE` (`home` default, `namespace` fallback), lane labels from the Global Constraints, `NSC_CACHE_PATH` exported by the guest (Task 9).
 - Produces: workflows that route by the variable; the Namespace strings are kept verbatim so `namespace` reproduces today's runs exactly.
 
 - [ ] **Step 1: Write the failing tests**
 
-`scripts/ci-host/tests/Workflows.Tests.ps1`:
+`ci/windows-runner/tests/Workflows.Tests.ps1`:
 
 ```powershell
 # Copyright (C) 2026 Cory Joseph
 # SPDX-License-Identifier: AGPL-3.0-or-later
 #
-# Text-level guards over the three workflows that read SLATE_WINDOWS_POOL.
+# Text-level guards over the three workflows that read WINDOWS_RUNNER_MODE.
 # YAML parsing happens on push (GitHub refuses a malformed workflow at
 # the first run); these tests pin the routing contract itself.
 
@@ -3991,10 +3993,10 @@ Describe 'windows.yml pool switch' {
     It 'routes every Windows lane by the variable with today''s Namespace strings kept verbatim' {
         foreach ($pair in @(@('rust', 'slate-windows-rust'), @('app', 'slate-windows-app'), @('model', 'slate-windows-model'))) {
             $lane = $pair[0]; $tag = $pair[1]
-            $expected = "runs-on: `${{ vars.SLATE_WINDOWS_POOL == 'namespace' && format('namespace-profile-winx64-fast{0};overrides.cache-tag=$tag', github.ref != 'refs/heads/main' && '-pr' || '') || 'slate-win-$lane' }}"
+            $expected = "runs-on: `${{ vars.WINDOWS_RUNNER_MODE == 'namespace' && format('namespace-profile-winx64-fast{0};overrides.cache-tag=$tag', github.ref != 'refs/heads/main' && '-pr' || '') || 'slate-win-$lane' }}"
             $windows.Contains($expected) | Should -BeTrue -Because "lane $lane must carry the exact expression"
         }
-        $windows.Contains("runs-on: `${{ vars.SLATE_WINDOWS_POOL == 'namespace' && 'windows-latest' || 'slate-win-shell' }}") | Should -BeTrue
+        $windows.Contains("runs-on: `${{ vars.WINDOWS_RUNNER_MODE == 'namespace' && 'windows-latest' || 'slate-win-shell' }}") | Should -BeTrue
     }
     It 'keeps no bare Namespace or windows-latest runs-on for the Windows lanes' {
         ([regex]::Matches($windows, 'runs-on: namespace-profile')).Count | Should -Be 0
@@ -4002,18 +4004,18 @@ Describe 'windows.yml pool switch' {
     }
     It 'gates all three Namespace cache mounts on the namespace pool' {
         ([regex]::Matches($windows, 'namespacelabs/nscloud-cache-action')).Count | Should -Be 3
-        ([regex]::Matches($windows, [regex]::Escape("if: `${{ vars.SLATE_WINDOWS_POOL == 'namespace' }}"))).Count | Should -Be 3
+        ([regex]::Matches($windows, [regex]::Escape("if: `${{ vars.WINDOWS_RUNNER_MODE == 'namespace' }}"))).Count | Should -Be 3
     }
     It 'documents the switch in the header' {
-        $windows | Should -Match 'SLATE_WINDOWS_POOL'
+        $windows | Should -Match 'WINDOWS_RUNNER_MODE'
         $windows | Should -Match 'self-hosted-windows-runner\.md'
     }
 }
 
 Describe 'nightly.yml pool switch' {
     It 'routes the Windows stress job and disables the GitHub-cache restore on home' {
-        $nightly.Contains("runs-on: `${{ vars.SLATE_WINDOWS_POOL == 'namespace' && 'windows-latest' || 'slate-win-app' }}") | Should -BeTrue
-        $nightly.Contains("cache: `${{ vars.SLATE_WINDOWS_POOL == 'namespace' && 'true' || 'false' }}") | Should -BeTrue
+        $nightly.Contains("runs-on: `${{ vars.WINDOWS_RUNNER_MODE == 'namespace' && 'windows-latest' || 'slate-win-app' }}") | Should -BeTrue
+        $nightly.Contains("cache: `${{ vars.WINDOWS_RUNNER_MODE == 'namespace' && 'true' || 'false' }}") | Should -BeTrue
     }
 }
 
@@ -4035,7 +4037,7 @@ Describe 'windows-ci-pilot.yml home candidate' {
 - [ ] **Step 2: Run the tests to verify they fail**
 
 ```bash
-pwsh -NoProfile -File scripts/ci-host/tests/Invoke-Tests.ps1 -Path scripts/ci-host/tests/Workflows.Tests.ps1
+pwsh -NoProfile -File ci/windows-runner/tests/Invoke-Tests.ps1 -Path ci/windows-runner/tests/Workflows.Tests.ps1
 ```
 
 Expected: FAIL on every `Should -BeTrue`.
@@ -4051,7 +4053,7 @@ Replace, in job `rust-tests`:
 with:
 
 ```yaml
-    runs-on: ${{ vars.SLATE_WINDOWS_POOL == 'namespace' && format('namespace-profile-winx64-fast{0};overrides.cache-tag=slate-windows-rust', github.ref != 'refs/heads/main' && '-pr' || '') || 'slate-win-rust' }}
+    runs-on: ${{ vars.WINDOWS_RUNNER_MODE == 'namespace' && format('namespace-profile-winx64-fast{0};overrides.cache-tag=slate-windows-rust', github.ref != 'refs/heads/main' && '-pr' || '') || 'slate-win-rust' }}
 ```
 
 In job `windows`, the same line with `slate-windows-app` / `slate-win-app`. In job `windows-model-shard`, with `slate-windows-model` / `slate-win-model`.
@@ -4067,7 +4069,7 @@ with:
 
 ```yaml
     needs: [windows]
-    runs-on: ${{ vars.SLATE_WINDOWS_POOL == 'namespace' && 'windows-latest' || 'slate-win-shell' }}
+    runs-on: ${{ vars.WINDOWS_RUNNER_MODE == 'namespace' && 'windows-latest' || 'slate-win-shell' }}
 ```
 
 - [ ] **Step 4: Edit windows.yml — gate the three Namespace cache mounts**
@@ -4075,14 +4077,14 @@ with:
 For the step `- name: Cache Rust build (Namespace NVMe cache)` (rust-tests) and both steps named `- name: Cache Rust build + NuGet packages (Namespace NVMe cache)` (windows, windows-model-shard), insert this line directly after the `- name:` line, before the comment and `uses:`:
 
 ```yaml
-        if: ${{ vars.SLATE_WINDOWS_POOL == 'namespace' }}
+        if: ${{ vars.WINDOWS_RUNNER_MODE == 'namespace' }}
 ```
 
 Resulting shape for the first one:
 
 ```yaml
       - name: Cache Rust build (Namespace NVMe cache)
-        if: ${{ vars.SLATE_WINDOWS_POOL == 'namespace' }}
+        if: ${{ vars.WINDOWS_RUNNER_MODE == 'namespace' }}
         # `rust` mode mounts ~/.cargo/{registry,git,.global-cache} and
 ```
 
@@ -4094,7 +4096,7 @@ Replace the paragraph that begins `# Runner selection recorded per §W0-2 item 3
 
 ```yaml
 # Runner selection, revised 2026-10-10: the repository variable
-# SLATE_WINDOWS_POOL routes every Windows lane. `home` (the default when
+# WINDOWS_RUNNER_MODE routes every Windows lane. `home` (the default when
 # unset) targets the self-hosted pool on the owner's desktop — one
 # throwaway Hyper-V VM per job with labels slate-win-{rust,app,model,
 # shell}; docs/runbooks/self-hosted-windows-runner.md has the design,
@@ -4102,7 +4104,7 @@ Replace the paragraph that begins `# Runner selection recorded per §W0-2 item 3
 # 2026-07-31 arrangement verbatim: namespace-profile-winx64-fast[-pr]
 # (dashboard-configured, Cache Volumes enabled) for the build/test lanes
 # and GitHub-hosted windows-latest for the shell gate. Flip with
-# `gh variable set SLATE_WINDOWS_POOL --body namespace` (and back with
+# `gh variable set WINDOWS_RUNNER_MODE --body namespace` (and back with
 # `--body home`); nothing else changes. The per-attempt actions/cache
 # scheme both replaced is in git history at a5037b35.
 #
@@ -4125,7 +4127,7 @@ In job `windows-full-stress` replace:
 with:
 
 ```yaml
-    runs-on: ${{ vars.SLATE_WINDOWS_POOL == 'namespace' && 'windows-latest' || 'slate-win-app' }}
+    runs-on: ${{ vars.WINDOWS_RUNNER_MODE == 'namespace' && 'windows-latest' || 'slate-win-app' }}
 ```
 
 and replace:
@@ -4144,7 +4146,7 @@ with:
           # On home the cargo target and NuGet folders already live on the
           # lane's cache volume (CARGO_TARGET_DIR / NUGET_PACKAGES from the
           # guest); the GitHub-cache restore would only waste minutes.
-          cache: ${{ vars.SLATE_WINDOWS_POOL == 'namespace' && 'true' || 'false' }}
+          cache: ${{ vars.WINDOWS_RUNNER_MODE == 'namespace' && 'true' || 'false' }}
 ```
 
 - [ ] **Step 7: Edit windows-ci-pilot.yml**
@@ -4186,7 +4188,7 @@ and add `${{ runner.temp }}\windows-pilot\isolation.json` to the `path:` list of
 - [ ] **Step 8: Run the tests to verify they pass**
 
 ```bash
-pwsh -NoProfile -File scripts/ci-host/tests/Invoke-Tests.ps1
+pwsh -NoProfile -File ci/windows-runner/tests/Invoke-Tests.ps1
 ```
 
 Expected: every test in the suite passes.
@@ -4194,11 +4196,11 @@ Expected: every test in the suite passes.
 - [ ] **Step 9: Create the variable BEFORE the branch is merged, set to today's providers**
 
 ```bash
-gh variable set SLATE_WINDOWS_POOL --body namespace --repo coryj627/slate
+gh variable set WINDOWS_RUNNER_MODE --body namespace --repo coryj627/slate
 ```
 
 ```bash
-gh variable get SLATE_WINDOWS_POOL --repo coryj627/slate
+gh variable get WINDOWS_RUNNER_MODE --repo coryj627/slate
 ```
 
 Expected: `namespace`. With this value every job resolves to exactly what it runs on today, so merging the workflow change is a no-op until the host is live (Task 14 flips it).
@@ -4206,8 +4208,8 @@ Expected: `namespace`. With this value every job resolves to exactly what it run
 - [ ] **Step 10: Commit**
 
 ```bash
-git add .github/workflows/windows.yml .github/workflows/nightly.yml .github/workflows/windows-ci-pilot.yml scripts/ci-host/tests/Workflows.Tests.ps1
-git commit -m "ci(windows): SLATE_WINDOWS_POOL routes every Windows lane to the home pool or verbatim to Namespace/windows-latest"
+git add .github/workflows/windows.yml .github/workflows/nightly.yml .github/workflows/windows-ci-pilot.yml ci/windows-runner/tests/Workflows.Tests.ps1
+git commit -m "ci(windows): WINDOWS_RUNNER_MODE routes every Windows lane to the home pool or verbatim to Namespace/windows-latest"
 ```
 
 ---
@@ -4229,7 +4231,7 @@ git commit -m "ci(windows): SLATE_WINDOWS_POOL routes every Windows lane to the 
 # Self-hosted Windows runner (CDESK)
 
 Design: `docs/superpowers/specs/2026-10-10-self-hosted-windows-runner-design.md`.
-Code: `scripts/ci-host/` (installed copy at `C:\slate-ci\bin`, commit in
+Code: `ci/windows-runner/` (installed copy at `C:\slate-ci\bin`, commit in
 `C:\slate-ci\bin\install-commit.txt`).
 
 Every Windows job runs in a throwaway Hyper-V VM on the owner's desktop.
@@ -4243,7 +4245,7 @@ or dispatch on `main` of `coryj627/slate`. Labels carry no trust.
 
 ## Pool switch (fallback and return)
 
-The repository variable `SLATE_WINDOWS_POOL` routes `windows.yml`,
+The repository variable `WINDOWS_RUNNER_MODE` routes `windows.yml`,
 `nightly.yml` and the pilot. `home` (also when unset) is this host;
 `namespace` is the 2026-07-31 arrangement verbatim (Namespace profiles
 for the four lanes, `windows-latest` for the shell gate and the nightly
@@ -4251,11 +4253,11 @@ stress job).
 
 Fallback when the host is down, being rebuilt or misbehaving:
 
-    gh variable set SLATE_WINDOWS_POOL --body namespace --repo coryj627/slate
+    gh variable set WINDOWS_RUNNER_MODE --body namespace --repo coryj627/slate
 
 Return:
 
-    gh variable set SLATE_WINDOWS_POOL --body home --repo coryj627/slate
+    gh variable set WINDOWS_RUNNER_MODE --body home --repo coryj627/slate
 
 Jobs already queued for `slate-win-*` keep waiting for the home pool for
 up to 24 h; cancel and re-run them after flipping. The flip never
@@ -4270,19 +4272,19 @@ touches caches on either side.
 2. **Host setup (elevated, one UAC prompt).** From the repository
    checkout:
 
-       Start-Process pwsh -Verb RunAs -ArgumentList '-NoProfile -ExecutionPolicy Bypass -NoExit -File scripts\ci-host\install\setup-host.ps1'
+       Start-Process pwsh -Verb RunAs -ArgumentList '-NoProfile -ExecutionPolicy Bypass -NoExit -File ci\windows-runner\install\setup-host.ps1'
 
    Creates `slate-ci-host`, `C:\slate-ci`, the `slate-ci` switch with NAT
    `10.77.0.0/24`, the host firewall rule, the three cache parents and
    both scheduled tasks. Re-run any time to refresh `C:\slate-ci\bin`
-   from the checkout (it mirrors `scripts/ci-host` minus tests).
+   from the checkout (it mirrors `ci/windows-runner` minus tests).
 3. **Token (elevated).** `C:\slate-ci\bin\install\store-token.ps1`,
    paste the PAT at the hidden prompt. It is stored DPAPI-bound to
    `slate-ci-host` at `C:\slate-ci\state\token.xml`; the plaintext file
    exists for seconds and the script verifies it is gone.
 4. **Golden image (elevated, ~40–60 min).**
 
-       scripts\ci-host\golden\build-golden.ps1 -IsoPath C:\Users\cory\Downloads\Win11_25H2_English_x64_v2.iso
+       ci\windows-runner\golden\build-golden.ps1 -IsoPath C:\Users\cory\Downloads\Win11_25H2_English_x64_v2.iso
 
    Prompts for the Windows 11 Pro key (hidden). Applies `install.wim`
    with DISM, boots once on the Default Switch to install the toolchain,
@@ -4341,7 +4343,7 @@ touches caches on either side.
 Rebuild when any of these change: `rust-toolchain.toml` channel,
 `apps/slate-windows/uniffi-bindgen-cs.version`, the runner version
 (GitHub refuses runners outside its support window), the .NET SDK band,
-or Windows itself needs servicing. Update `scripts/ci-host/golden/versions.json`
+or Windows itself needs servicing. Update `ci/windows-runner/golden/versions.json`
 (the Pester suite checks it against the repository pins), merge, then:
 
 1. Flip the pool to `namespace` and wait for zero active VMs.
@@ -4433,7 +4435,7 @@ gh pr create --draft --title "ci(windows): self-hosted runner on CDESK — throw
 ```
 
 ```bash
-gh run list --workflow ci-host.yml --limit 1
+gh run list --workflow windows-runner-tests.yml --limit 1
 ```
 
 Expected: `success`. The `windows.yml` run on the PR still routes to Namespace because the variable is `namespace` (Task 12 step 9); it must be green too.
@@ -4455,7 +4457,7 @@ Expected: `{"approval_policy":"all_external_contributors"}`.
 From the checkout root in a normal pwsh:
 
 ```bash
-Start-Process pwsh -Verb RunAs -ArgumentList '-NoProfile -ExecutionPolicy Bypass -NoExit -File scripts\ci-host\install\setup-host.ps1'
+Start-Process pwsh -Verb RunAs -ArgumentList '-NoProfile -ExecutionPolicy Bypass -NoExit -File ci\windows-runner\install\setup-host.ps1'
 ```
 
 Expected in the elevated window: lines `1/9` … `9/9`, "Host setup complete", no red. Verify as a normal user:
@@ -4477,7 +4479,7 @@ Paste the PAT at the hidden prompt. Expected: `token stored at C:\slate-ci\state
 - [ ] **Step 5: Build the golden image (owner, elevated, ~40–60 min)**
 
 ```bash
-Start-Process pwsh -Verb RunAs -ArgumentList '-NoProfile -ExecutionPolicy Bypass -NoExit -File scripts\ci-host\golden\build-golden.ps1 -IsoPath C:\Users\cory\Downloads\Win11_25H2_English_x64_v2.iso'
+Start-Process pwsh -Verb RunAs -ArgumentList '-NoProfile -ExecutionPolicy Bypass -NoExit -File ci\windows-runner\golden\build-golden.ps1 -IsoPath C:\Users\cory\Downloads\Win11_25H2_English_x64_v2.iso'
 ```
 
 Enter the Windows 11 Pro key at the hidden prompt. Expected: "Applying 'Windows 11 Pro'", a stream of `provisioning (Running)` lines, the tail of `provision.log` ending in `phase 1 complete`, then "Golden image ready and read-only". If the loop exceeds 150 min, open `vmconnect.exe localhost slate-golden-build` and read the logs named in the runbook before deciding anything.
@@ -4493,7 +4495,7 @@ Expected: `orchestrator start (pid …, user slate-ci-host …)` and no `error` 
 - [ ] **Step 7: First home run on the branch (main is untouched: its windows.yml still hardcodes Namespace)**
 
 ```bash
-gh variable set SLATE_WINDOWS_POOL --body home --repo coryj627/slate
+gh variable set WINDOWS_RUNNER_MODE --body home --repo coryj627/slate
 ```
 
 ```bash
@@ -4523,13 +4525,13 @@ Expected: the `Isolation evidence (home pool only)` step prints `false` for ever
 - [ ] **Step 9: Fallback round trip**
 
 ```bash
-gh variable set SLATE_WINDOWS_POOL --body namespace --repo coryj627/slate && gh workflow run windows.yml --ref claude/windows-github-actions-runner-a0acb4
+gh variable set WINDOWS_RUNNER_MODE --body namespace --repo coryj627/slate && gh workflow run windows.yml --ref claude/windows-github-actions-runner-a0acb4
 ```
 
 Expected: the lanes run on `namespace-profile-winx64-fast-pr` and `windows-latest` exactly as before this branch, green, and the orchestrator log shows nothing new. Then:
 
 ```bash
-gh variable set SLATE_WINDOWS_POOL --body home --repo coryj627/slate
+gh variable set WINDOWS_RUNNER_MODE --body home --repo coryj627/slate
 ```
 
 - [ ] **Step 10: Merge and watch the first trusted commits**
@@ -4580,4 +4582,4 @@ git commit -m "docs(runbooks): self-hosted Windows runner — observed timings f
 git push
 ```
 
-Expected end state: `SLATE_WINDOWS_POOL=home`, three cache generations ≥ 2, the orchestrator task `Running`, the runbook's table filled, and Namespace one `gh variable set` away.
+Expected end state: `WINDOWS_RUNNER_MODE=home`, three cache generations ≥ 2, the orchestrator task `Running`, the runbook's table filled, and Namespace one `gh variable set` away.
