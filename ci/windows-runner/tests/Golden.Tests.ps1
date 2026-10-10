@@ -149,6 +149,23 @@ Describe 'golden scripts' {
         $calls.Count | Should -Be 4
         foreach ($i in $calls) { $code[$i + 1] | Should -Match '\$LASTEXITCODE -ne 0' }
     }
+    It 'provisioning makes the runner password never expire, before the restart' {
+        # Auto-logon stops working once the password expires (42 days by
+        # default) and every job would then end unclaimed.
+        $text = Get-Content -Raw (Join-Path $goldenDir 'provision-guest.ps1')
+        $line = 'Set-LocalUser -Name runner -PasswordNeverExpires $true'
+        $text | Should -Match ([regex]::Escape($line))
+        $text.IndexOf($line) | Should -BeLessThan $text.IndexOf('Restart-Computer -Force')
+    }
+    It 'provisioning turns IPv6 off by policy for every adapter, not only the build adapter' {
+        # A job VM gets a new network adapter; the binding change below
+        # applies only to the adapters the build VM had.
+        $text = Get-Content -Raw (Join-Path $goldenDir 'provision-guest.ps1')
+        $text | Should -Match ([regex]::Escape("Set-ItemProperty -Path 'HKLM:\SYSTEM\CurrentControlSet\Services\Tcpip6\Parameters' -Name DisabledComponents -Value 0xFF -Type DWord"))
+        $text | Should -Match 'Disable-NetAdapterBinding -ComponentID ms_tcpip6'
+        # New-Item -Force on an existing key would delete its values.
+        @($text -split "`n" | Where-Object { $_ -match 'New-Item' -and $_ -match 'Tcpip6' }) | Should -BeNullOrEmpty
+    }
     It 'provisioning disables the temporary admin after auto-logon moves to runner and before the restart' {
         $text = Get-Content -Raw (Join-Path $goldenDir 'provision-guest.ps1')
         $disable = $text.IndexOf("Disable-LocalUser -Name 'provision'")

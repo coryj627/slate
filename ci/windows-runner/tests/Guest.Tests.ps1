@@ -90,8 +90,26 @@ Describe 'guest scripts' {
     }
     It 'system bootstrap waits up to 60 s for the network adapter to come up' {
         $text = Get-Content -Raw (Join-Path $guestDir 'bootstrap-system.ps1')
-        $text | Should -Match ([regex]::Escape('AddSeconds(60)'))
+        $text | Should -Match '\.Elapsed\.TotalSeconds -lt 60\b'
         $text | Should -Match 'no network adapter came up within 60 s'
+    }
+    It 'every wait runs on a monotonic stopwatch, never against the wall clock' {
+        # The guest runs in UTC on a host that may not, and Hyper-V time
+        # sync can step the clock at boot: a Get-Date deadline could then
+        # expire at once or hours late. Get-Date stays for log timestamps.
+        foreach ($f in 'bootstrap-system.ps1', 'bootstrap-runner.ps1') {
+            $code = @((Get-Content -Raw (Join-Path $guestDir $f)) -split "`n" | Where-Object { $_ -notmatch '^\s*#' })
+            @($code | Where-Object { $_ -match '(?i)deadline|AddSeconds\(|AddMinutes\(' }) | Should -BeNullOrEmpty -Because $f
+            @($code | Where-Object { $_ -match 'Get-Date' -and $_ -match '-(lt|le|gt|ge)\b' }) | Should -BeNullOrEmpty -Because $f
+            @($code | Where-Object { $_ -match ([regex]::Escape('[System.Diagnostics.Stopwatch]::StartNew()')) }).Count | Should -BeGreaterThan 0 -Because $f
+        }
+        # Every limit is unchanged: KVP items 300 s, adapter 60 s, cache volume 90 s, ready 480 s.
+        $system = Get-Content -Raw (Join-Path $guestDir 'bootstrap-system.ps1')
+        foreach ($limit in 300, 60, 90) { $system | Should -Match ('\.Elapsed\.TotalSeconds -lt {0}\b' -f $limit) }
+        @([regex]::Matches($system, '\.Elapsed\.TotalSeconds -lt ')).Count | Should -Be 3
+        $runner = Get-Content -Raw (Join-Path $guestDir 'bootstrap-runner.ps1')
+        $runner | Should -Match '\.Elapsed\.TotalSeconds -lt 480\b'
+        @([regex]::Matches($runner, '\.Elapsed\.TotalSeconds -lt ')).Count | Should -Be 1
     }
     It 'system bootstrap lets runner write the cache and checks the exit code of every icacls call' {
         $text = Get-Content -Raw (Join-Path $guestDir 'bootstrap-system.ps1')
@@ -161,7 +179,7 @@ Describe 'guest scripts' {
         $system | Should -Match ([regex]::Escape('Get-ItemProperty -LiteralPath $kvpKey -ErrorAction SilentlyContinue'))
         $system | Should -Match ([regex]::Escape('Get-NetAdapter -ErrorAction SilentlyContinue'))
         $runner = Get-Content -Raw (Join-Path $guestDir 'bootstrap-runner.ps1')
-        $runner | Should -Match ([regex]::Escape('AddSeconds(480)'))
+        $runner | Should -Match '\.Elapsed\.TotalSeconds -lt 480\b'
         $runner | Should -Match 'ready signal did not arrive within 480 s'
     }
     It 'system bootstrap trims the DNS list and drops empty entries' {

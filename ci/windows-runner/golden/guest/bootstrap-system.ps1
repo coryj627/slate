@@ -32,11 +32,14 @@ try {
     # The host sends the JIT chunks first and these items after them in
     # one AddKvpItems call; the guest applies items one at a time, so a
     # poll can see the whole JIT config before the rest. Wait for all.
+    # Every wait here runs on a stopwatch, never Get-Date: the guest clock
+    # is UTC and Hyper-V time sync can step it at boot, which would end a
+    # wall-clock wait at once or far too late.
     $requiredItems = 'slate.ip', 'slate.gateway', 'slate.dns', 'slate.cache', 'slate.lane'
-    $deadline = (Get-Date).AddSeconds(300)
+    $kvpWait = [System.Diagnostics.Stopwatch]::StartNew()
     $items = @{}
     $jit = $null
-    while ((Get-Date) -lt $deadline) {
+    while ($kvpWait.Elapsed.TotalSeconds -lt 300) {
         if (Test-Path -LiteralPath $kvpKey) {
             $items = Select-SlateKvpItems -Properties (Get-ItemProperty -LiteralPath $kvpKey -ErrorAction SilentlyContinue)
             $jit = Join-KvpChunks -Items $items
@@ -54,8 +57,8 @@ try {
 
     # A fork's synthetic NIC is a new device on its first boot; give it time.
     $adapter = $null
-    $adapterDeadline = (Get-Date).AddSeconds(60)
-    while (-not $adapter -and (Get-Date) -lt $adapterDeadline) {
+    $adapterWait = [System.Diagnostics.Stopwatch]::StartNew()
+    while (-not $adapter -and $adapterWait.Elapsed.TotalSeconds -lt 60) {
         $adapter = Get-NetAdapter -ErrorAction SilentlyContinue | Where-Object { $_.Status -eq 'Up' } | Sort-Object ifIndex | Select-Object -First 1
         if (-not $adapter) { Start-Sleep -Seconds 2 }
     }
@@ -72,8 +75,8 @@ try {
     $envLines = @()
     if ($items['slate.cache'] -eq '1') {
         $volume = $null
-        $volumeDeadline = (Get-Date).AddSeconds(90)
-        while (-not $volume -and (Get-Date) -lt $volumeDeadline) {
+        $volumeWait = [System.Diagnostics.Stopwatch]::StartNew()
+        while (-not $volume -and $volumeWait.Elapsed.TotalSeconds -lt 90) {
             $volume = Get-Volume -FileSystemLabel 'slate-cache' -ErrorAction SilentlyContinue |
                 Where-Object { $_.DriveLetter } | Select-Object -First 1
             if (-not $volume) { Start-Sleep -Seconds 3 }

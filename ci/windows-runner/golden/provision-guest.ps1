@@ -49,6 +49,11 @@ try {
     New-Item -Path 'HKLM:\SOFTWARE\Policies\Microsoft\Windows\WindowsUpdate\AU' -Force | Out-Null
     Set-ItemProperty -Path 'HKLM:\SOFTWARE\Policies\Microsoft\Windows\WindowsUpdate\AU' -Name NoAutoUpdate -Value 1 -Type DWord
     Add-MpPreference -ExclusionPath 'C:\actions-runner', 'C:\dotnet', 'C:\Users\runner\.cargo', 'C:\Users\runner\.rustup' -ErrorAction SilentlyContinue
+    # Each job VM boots with a new network adapter, so the binding change
+    # covers only this build; DisabledComponents 0xFF turns IPv6 off for
+    # every adapter from the next boot. The key always exists: no New-Item
+    # (-Force on an existing key deletes its values).
+    Set-ItemProperty -Path 'HKLM:\SYSTEM\CurrentControlSet\Services\Tcpip6\Parameters' -Name DisabledComponents -Value 0xFF -Type DWord
     Get-NetAdapter | Disable-NetAdapterBinding -ComponentID ms_tcpip6 -ErrorAction SilentlyContinue
 
     # Visual Studio 2022 Build Tools: C++ x64 + ARM64 and the Windows 11 SDK.
@@ -113,6 +118,9 @@ try {
     # Not an HKLM RunOnce: Windows runs those only when an administrator logs
     # on, and runner is a standard user. The logon task stays in the image;
     # provision-runner-user.ps1 is a no-op once the completion marker exists.
+    # Auto-logon fails once the password expires (42 days by default), and
+    # every job VM would then sit at the logon screen until the host gives up.
+    Set-LocalUser -Name runner -PasswordNeverExpires $true
     $winlogon = 'HKLM:\SOFTWARE\Microsoft\Windows NT\CurrentVersion\Winlogon'
     Set-ItemProperty -Path $winlogon -Name AutoAdminLogon -Value '1'
     Set-ItemProperty -Path $winlogon -Name DefaultUserName -Value 'runner'

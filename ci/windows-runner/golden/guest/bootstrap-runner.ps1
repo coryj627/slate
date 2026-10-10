@@ -21,8 +21,10 @@ if (-not (Test-Path -LiteralPath $marker)) { exit 0 }
 try {
     $ready = Join-Path $runnerDir 'ready'
     $errorFile = Join-Path $runnerDir 'bootstrap-error.txt'
-    $deadline = (Get-Date).AddSeconds(480)
-    while (-not (Test-Path -LiteralPath $ready) -and (Get-Date) -lt $deadline) {
+    # A stopwatch, never Get-Date: the guest clock is UTC and Hyper-V time
+    # sync can step it at boot, which would end a wall-clock wait at once.
+    $readyWait = [System.Diagnostics.Stopwatch]::StartNew()
+    while (-not (Test-Path -LiteralPath $ready) -and $readyWait.Elapsed.TotalSeconds -lt 480) {
         if (Test-Path -LiteralPath $errorFile) { throw ('system bootstrap failed: ' + (Get-Content -LiteralPath $errorFile -Raw)) }
         Start-Sleep -Seconds 2
     }
