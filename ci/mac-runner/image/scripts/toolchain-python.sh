@@ -51,11 +51,14 @@ sudo_ chown -R runner:staff "$TOOLCACHE"
 sudo_ rm -rf /Users/runner/actions-runner/_work/_tool/Python
 
 echo "==> runner .env names the tool cache"
+# sudo_ feeds the password on stdin, so never pipe data into a command it
+# wraps (tee would read the password, not the line). Append from the shell.
 if ! sudo_ grep -q '^RUNNER_TOOL_CACHE=' "$RUNNER_ENV"; then
-  echo "RUNNER_TOOL_CACHE=$TOOLCACHE" | sudo_ tee -a "$RUNNER_ENV" >/dev/null
+  sudo_ /bin/sh -c "printf '%s\n' 'RUNNER_TOOL_CACHE=$TOOLCACHE' >> '$RUNNER_ENV'"
 fi
 sudo_ chown runner:staff "$RUNNER_ENV"
-sudo_ cat "$RUNNER_ENV" | sed 's/^/    /'
+sudo_ grep -q "^RUNNER_TOOL_CACHE=$TOOLCACHE\$" "$RUNNER_ENV" || { echo ".env did not take the tool cache line" >&2; exit 1; }
+sed 's/^/    /' "$RUNNER_ENV"
 
 echo "==> check"
 "$TOOLCACHE/Python/$ver/arm64/bin/python3" --version

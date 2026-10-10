@@ -949,7 +949,16 @@ parallel with them.
   `/Users/runner/hostedtoolcache` on macOS, the hosted images' path, and
   the runner itself takes `RUNNER_TOOL_CACHE` from its environment. The
   cache now lives at `/Users/runner/hostedtoolcache` and the runner's `.env`
-  names it, so the runner and every setup action agree. Attempt 3 follows.
+  names it, so the runner and every setup action agree.
+- **Pilot attempt 3 (06:14 UTC, run 38030237144):** Python and both
+  checkouts passed; the pilot's own preflight then failed its ancestry check
+  with "Not a valid commit name a64eb393". That frozen source lived on the
+  Codex branch, which was deleted after PR 1328 was squash-merged, so a
+  checkout of branch refs cannot fetch it; this is a harness problem, not a
+  runner one, and would hit the hosted candidates equally. The reference and
+  the workflow default moved to c247b865, the same change on `main`, with the
+  identical `apps/slate-mac/Tests` tree (5a12505b) and inventory digest.
+  Attempt 4 follows.
 - **PR A opened 2026-10-10:** coryj627/slate#1335, branch
   `ci/mac-runner-phase2`, with everything above. Its hosted checks are the
   first runs under the workflow execution policy.
