@@ -64,6 +64,13 @@ Describe 'install scripts' {
         $text | Should -Match 'New-NetNat'
         $text | Should -Match 'Set-LocalUserRights'
     }
+    It 'setup cuts the tree off from inherited ACLs, starts the loop repeating at once and keeps the account on a re-run' {
+        $text = Get-Content -Raw (Join-Path $installDir 'setup-host.ps1')
+        $text | Should -Match 'icacls\.exe \$Root /inheritance:r '
+        $text | Should -Match ([regex]::Escape('-At (Get-Date).AddMinutes(1)'))
+        $text | Should -Match ([regex]::Escape('-Trigger @($loopTrigger, $repeatTrigger)'))
+        $text | Should -Match ([regex]::Escape('[switch]$ResetAccount'))
+    }
     It 'store-token only accepts a fine-grained PAT and removes the plaintext' {
         $text = Get-Content -Raw (Join-Path $installDir 'store-token.ps1')
         $text | Should -Match 'github_pat_'

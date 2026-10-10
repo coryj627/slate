@@ -9,6 +9,9 @@
 # ACLs, the isolated NAT switch and host firewall rule, the formatted
 # cache parents, copies scripts/ci-host into place and registers the
 # scheduled tasks. Everything after this runs as slate-ci-host.
+# A re-run keeps the account's password and both tasks (and so the
+# stored token); -ResetAccount rotates the password and re-registers the
+# tasks, after which store-token.ps1 must run again.
 [CmdletBinding()]
 param(
     [string]$Root = 'C:\slate-ci',
@@ -17,7 +20,8 @@ param(
     [string]$NatPrefix = '10.77.0.0/24',
     [string]$Gateway = '10.77.0.1',
     [string[]]$CacheLanes = @('rust', 'app', 'model'),
-    [int]$CacheGB = 60
+    [int]$CacheGB = 60,
+    [switch]$ResetAccount
 )
 
 $ErrorActionPreference = 'Stop'
@@ -38,23 +42,34 @@ foreach ($dir in 'bin', 'golden', 'cache', 'vms', 'state', 'logs') {
 }
 
 Write-Host "3/9 account $Account (Hyper-V Administrators only, no interactive logon)"
-$password = New-RandomPassword -Length 32
-$secure = ConvertTo-SecureString -String $password -AsPlainText -Force
-if (Get-LocalUser -Name $Account -ErrorAction SilentlyContinue) {
-    Set-LocalUser -Name $Account -Password $secure -PasswordNeverExpires $true
-    # An administrator's reset (not a change) of a local account's password
-    # leaves the DPAPI master key the stored token was encrypted with
-    # unreadable: remove the token so the orchestrator reports it missing
-    # instead of failing to decrypt it.
-    $tokenPath = Join-Path $Root 'state\token.xml'
-    if (Test-Path -LiteralPath $tokenPath) {
-        Remove-Item -LiteralPath $tokenPath -Force
-        Write-Warning "the password reset makes the stored token unreadable for ${Account}; it was removed: run store-token.ps1 again"
-    }
+$existing = Get-LocalUser -Name $Account -ErrorAction SilentlyContinue
+$tasksPresent = @('slate-ci-orchestrator', 'slate-ci-store-token' | Where-Object { Get-ScheduledTask -TaskName $_ -ErrorAction SilentlyContinue }).Count -eq 2
+# A re-run keeps the password: a reset strands the DPAPI-protected token
+# and the tasks' stored credential. A missing task (an interrupted first
+# run) can only be registered with a new password, so that path resets.
+$keepAccount = $existing -and $tasksPresent -and -not $ResetAccount
+if ($keepAccount) {
+    Write-Host '  account and tasks kept; pass -ResetAccount to rotate the password, which also requires store-token.ps1 again'
 } else {
-    # -Description accepts at most 48 characters.
-    New-LocalUser -Name $Account -Password $secure -PasswordNeverExpires -UserMayNotChangePassword -AccountNeverExpires `
-        -Description 'Slate CI orchestrator (Hyper-V Administrators)' | Out-Null
+    if ($existing -and -not $ResetAccount) { Write-Host '  a scheduled task is missing: the password is reset so both can be registered' }
+    $password = New-RandomPassword -Length 32
+    $secure = ConvertTo-SecureString -String $password -AsPlainText -Force
+    if ($existing) {
+        Set-LocalUser -Name $Account -Password $secure -PasswordNeverExpires $true
+        # An administrator's reset (not a change) of a local account's password
+        # leaves the DPAPI master key the stored token was encrypted with
+        # unreadable: remove the token so the orchestrator reports it missing
+        # instead of failing to decrypt it.
+        $tokenPath = Join-Path $Root 'state\token.xml'
+        if (Test-Path -LiteralPath $tokenPath) {
+            Remove-Item -LiteralPath $tokenPath -Force
+            Write-Warning "the password reset makes the stored token unreadable for ${Account}; it was removed: run store-token.ps1 again"
+        }
+    } else {
+        # -Description accepts at most 48 characters.
+        New-LocalUser -Name $Account -Password $secure -PasswordNeverExpires -UserMayNotChangePassword -AccountNeverExpires `
+            -Description 'Slate CI orchestrator (Hyper-V Administrators)' | Out-Null
+    }
 }
 if (-not (Get-LocalGroupMember -Group 'Hyper-V Administrators' -Member $Account -ErrorAction SilentlyContinue)) {
     Add-LocalGroupMember -Group 'Hyper-V Administrators' -Member $Account
@@ -65,11 +80,15 @@ if (Get-LocalGroupMember -Group 'Administrators' -Member $Account -ErrorAction S
 Set-LocalUserRights -Sid (Get-LocalUser -Name $Account).SID.Value
 
 Write-Host '4/9 ACLs'
-# The grant reaches everything below by inheritance. No /T: it would also
-# stamp an explicit Modify on golden that /inheritance:r keeps; /grant:r
-# leaves the account read-only there whatever it held before.
-& icacls.exe $Root /grant "${Account}:(OI)(CI)M" | Out-Null
-if ($LASTEXITCODE -ne 0) { throw "icacls exited $LASTEXITCODE granting $Account on $Root" }
+# Only administrators may edit code that runs as a Hyper-V Administrator,
+# and only the orchestrator may write the cache parents: the tree stops
+# inheriting from C:\ (which gives Authenticated Users Modify on new
+# folders) and grants Administrators, SYSTEM and the account explicitly;
+# everything below inherits that. No /T: it would also stamp an explicit
+# Modify on golden that /inheritance:r keeps; /grant:r leaves the account
+# read-only there whatever it held before.
+& icacls.exe $Root /inheritance:r /grant 'Administrators:(OI)(CI)F' /grant 'SYSTEM:(OI)(CI)F' /grant "${Account}:(OI)(CI)M" | Out-Null
+if ($LASTEXITCODE -ne 0) { throw "icacls exited $LASTEXITCODE securing $Root" }
 & icacls.exe (Join-Path $Root 'golden') /inheritance:r /grant 'Administrators:(OI)(CI)F' /grant 'SYSTEM:(OI)(CI)F' /grant:r "${Account}:(OI)(CI)RX" | Out-Null
 if ($LASTEXITCODE -ne 0) { throw "icacls exited $LASTEXITCODE restricting $Root\golden" }
 
@@ -130,28 +149,40 @@ if ($LASTEXITCODE -ge 8) { throw "robocopy exited $LASTEXITCODE" }
 (& git -C $source rev-parse HEAD) | Set-Content -LiteralPath (Join-Path $Root 'bin\install-commit.txt')
 
 Write-Host '9/9 scheduled tasks'
-$pwsh = (Get-Command pwsh).Source
-# A zero ExecutionTimeLimit means "no limit" (PT0S); the runbook verifies
-# the task's "Stop the task if it runs longer than" box is unchecked.
-$loopSettings = New-ScheduledTaskSettingsSet -RestartCount 999 -RestartInterval (New-TimeSpan -Minutes 1) `
-    -ExecutionTimeLimit (New-TimeSpan -Seconds 0) -MultipleInstances IgnoreNew -StartWhenAvailable
-# Relaunch every minute if the loop has exited (RestartCount covers a
-# failed start; a non-zero exit is not reliably retried). IgnoreNew
-# keeps a single instance while one is running. No -RepetitionDuration:
-# an empty duration means indefinitely ([TimeSpan]::MaxValue becomes
-# P99999999DT23H59M59S, which Task Scheduler rejects as out of range).
-$loopTrigger = New-ScheduledTaskTrigger -AtStartup
-$loopTrigger.Repetition = (New-ScheduledTaskTrigger -Once -At (Get-Date) -RepetitionInterval (New-TimeSpan -Minutes 1)).Repetition
-Register-ScheduledTask -TaskName 'slate-ci-orchestrator' -Force `
-    -Action (New-ScheduledTaskAction -Execute $pwsh -Argument "-NoProfile -NonInteractive -ExecutionPolicy Bypass -File `"$Root\bin\orchestrator.ps1`"" -WorkingDirectory "$Root\bin") `
-    -Trigger $loopTrigger -User $Account -Password $password -RunLevel Limited -Settings $loopSettings | Out-Null
-Register-ScheduledTask -TaskName 'slate-ci-store-token' -Force `
-    -Action (New-ScheduledTaskAction -Execute $pwsh -Argument "-NoProfile -NonInteractive -ExecutionPolicy Bypass -File `"$Root\bin\install\store-token.ps1`" -Convert -Root `"$Root`"") `
-    -User $Account -Password $password -RunLevel Limited -Settings (New-ScheduledTaskSettingsSet -ExecutionTimeLimit (New-TimeSpan -Minutes 5)) | Out-Null
-Remove-Variable password, secure
+if ($keepAccount) {
+    Write-Host '  kept (they hold the current password; -ResetAccount re-registers them)'
+} else {
+    $pwsh = (Get-Command pwsh).Source
+    # A zero ExecutionTimeLimit means "no limit" (PT0S); the runbook verifies
+    # the task's "Stop the task if it runs longer than" box is unchecked.
+    $loopSettings = New-ScheduledTaskSettingsSet -RestartCount 999 -RestartInterval (New-TimeSpan -Minutes 1) `
+        -ExecutionTimeLimit (New-TimeSpan -Seconds 0) -MultipleInstances IgnoreNew -StartWhenAvailable
+    # Relaunch every minute if the loop has exited (RestartCount covers a
+    # failed start; a non-zero exit is not reliably retried). IgnoreNew
+    # keeps a single instance while one is running. No -RepetitionDuration:
+    # an empty duration means indefinitely ([TimeSpan]::MaxValue becomes
+    # P99999999DT23H59M59S, which Task Scheduler rejects as out of range).
+    # The startup trigger's repetition only begins at a boot, so a time
+    # trigger also repeats from a minute after registration: the loop runs
+    # and is relaunched without waiting for a reboot.
+    $loopTrigger = New-ScheduledTaskTrigger -AtStartup
+    $loopTrigger.Repetition = (New-ScheduledTaskTrigger -Once -At (Get-Date) -RepetitionInterval (New-TimeSpan -Minutes 1)).Repetition
+    $repeatTrigger = New-ScheduledTaskTrigger -Once -At (Get-Date).AddMinutes(1) -RepetitionInterval (New-TimeSpan -Minutes 1)
+    Register-ScheduledTask -TaskName 'slate-ci-orchestrator' -Force `
+        -Action (New-ScheduledTaskAction -Execute $pwsh -Argument "-NoProfile -NonInteractive -ExecutionPolicy Bypass -File `"$Root\bin\orchestrator.ps1`"" -WorkingDirectory "$Root\bin") `
+        -Trigger @($loopTrigger, $repeatTrigger) -User $Account -Password $password -RunLevel Limited -Settings $loopSettings | Out-Null
+    Register-ScheduledTask -TaskName 'slate-ci-store-token' -Force `
+        -Action (New-ScheduledTaskAction -Execute $pwsh -Argument "-NoProfile -NonInteractive -ExecutionPolicy Bypass -File `"$Root\bin\install\store-token.ps1`" -Convert -Root `"$Root`"") `
+        -User $Account -Password $password -RunLevel Limited -Settings (New-ScheduledTaskSettingsSet -ExecutionTimeLimit (New-TimeSpan -Minutes 5)) | Out-Null
+    Remove-Variable password, secure
+}
 
 Write-Host ''
-Write-Host 'Host setup complete. Next:'
-Write-Host "  1. $Root\bin\install\store-token.ps1   (elevated; stores the PAT for $Account)"
-Write-Host "  2. $source\golden\build-golden.ps1 -IsoPath <Win11 ISO>   (elevated; ~40 min)"
-Write-Host "  3. Start-ScheduledTask slate-ci-orchestrator; Get-Content $Root\logs\orchestrator-*.log -Tail 20"
+if ($keepAccount) {
+    Write-Host "Host refreshed; $Account, its password and both tasks were kept."
+} else {
+    Write-Host 'Host setup complete. Next:'
+    Write-Host "  1. $Root\bin\install\store-token.ps1   (elevated; stores the PAT for $Account)"
+    Write-Host "  2. $source\golden\build-golden.ps1 -IsoPath <Win11 ISO>   (elevated; ~40 min)"
+    Write-Host "  3. The loop task starts by itself within a minute (Start-ScheduledTask slate-ci-orchestrator is optional); Get-Content $Root\logs\orchestrator-*.log -Tail 20"
+}

@@ -30,8 +30,8 @@ if (-not (Get-ScheduledTask -TaskName 'slate-ci-store-token' -ErrorAction Silent
 $secure = Read-Host -Prompt 'Fine-grained PAT for coryj627/slate (hidden)' -AsSecureString
 $plain = [System.Net.NetworkCredential]::new('', $secure).Password.Trim()
 if ($plain -notmatch '^github_pat_[A-Za-z0-9_]{20,}$') { throw 'that is not a fine-grained PAT (github_pat_...)' }
-# Restricted while still empty: everything under C:\slate-ci inherits read
-# for Users from C:\, so the token is never written under that ACL.
+# Restricted while still empty, so the token is only ever written under
+# this ACL (Administrators and slate-ci-host), never the inherited one.
 # slate-ci-host deletes the file after reading it: Remove-Item -Force
 # needs delete and write-attributes on the file, because the Modify it
 # holds on state\ does not include delete-child.
