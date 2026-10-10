@@ -1156,6 +1156,7 @@ git commit -m "feat(ci-host): config loader, crash-safe journal, log writer"
 
 **Interfaces:**
 - Produces: `Initialize-GitHubAdapter -Owner -Repo -Token [securestring]`; `Invoke-GhApi -Method -Path -Body`; `Get-GhQueuedLaneJobs` → REST job objects with `status == queued`; `Get-GhJob -JobId`; `Get-GhRun -RunId`; `New-GhJitRunner -Name -Labels` → `@{ RunnerId [int64]; EncodedJitConfig [string] }`; `Remove-GhRunner -RunnerId`; `Get-GhRunner -RunnerId` (null on 404); `Get-GhRunners`; `New-GitHubAdapters` → hashtable with keys `GetQueuedJobs, GetJob, GetRun, NewJitRunner, RemoveRunner, GetRunner, ListRunners` (the exact keys Task 8 invokes).
+- Rulings applied during execution (the code below is the original brief; the committed adapter also has these): `Get-GhQueuedLaneJobs` skips a run id already listed (a run can move queued → in_progress between the two listings); `Invoke-GhApi` passes `Debug = $false` and `OperationTimeoutSeconds = 30` (file is `#Requires -Version 7.4`), builds the Authorization header inline so no variable ever holds the decoded token, and on error removes the Authorization header from the error record's `HttpRequestMessage` TargetObject before rethrowing.
 
 - [ ] **Step 1: Write the failing tests**
 
