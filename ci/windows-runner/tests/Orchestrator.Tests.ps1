@@ -98,9 +98,10 @@ Context 'admission' {
         $vm.SlotIp | Should -Be '10.77.0.11'
         $vm.ForkGeneration | Should -Be 3
         $journal.SeenJobs['1'].Lane | Should -Be 'app'
-        # The journal entry's shape: 16 keys, every one present from admission.
-        @($vm.Keys | Sort-Object) | Should -Be @('CachePath', 'Claimed', 'Dir', 'ForkGeneration', 'GuestError', 'HandedAt', 'JobId', 'Lane', 'Name', 'PendingCommit', 'Phase', 'RunId', 'RunnerId', 'Slot', 'SlotIp', 'StartedAt')
+        # The journal entry's shape: 17 keys, every one present from admission.
+        @($vm.Keys | Sort-Object) | Should -Be @('CachePath', 'Claimed', 'Dir', 'ForkGeneration', 'GuestError', 'HandedAt', 'JobId', 'Lane', 'Name', 'PendingCommit', 'Phase', 'RunId', 'RunnerId', 'SettleWaits', 'Slot', 'SlotIp', 'StartedAt')
         $vm.GuestError | Should -Be $null
+        $vm.SettleWaits | Should -Be 0
     }
     It 'never runs more VMs than slots' {
         $world.Queued = @((New-QueuedJob 1 10 'app' '2026-10-10T11:00:00Z'), (New-QueuedJob 2 10 'rust' '2026-10-10T11:00:01Z'), (New-QueuedJob 3 10 'model' '2026-10-10T11:00:02Z'))
@@ -327,6 +328,41 @@ Context 'settle' {
         Invoke-OrchestratorTick -Config $config -Journal $journal -Adapters $adapters -Now $t0.AddMinutes(21)
         $journal.Vms.Count | Should -Be 0
         (Get-Calls 'CommitCache').Count | Should -Be 1
+    }
+    It 'waits while GitHub still reports the job in progress at Off, then commits once it reports completed' {
+        # GitHub's record can lag the guest's shutdown by a few seconds.
+        $world.Jobs['1'] = [pscustomobject]@{ id = 1; run_id = 10; status = 'in_progress'; conclusion = $null; runner_name = $name }
+        Set-Run 10
+        Invoke-OrchestratorTick -Config $config -Journal $journal -Adapters $adapters -Now $t0.AddMinutes(20)
+        $journal.Vms.ContainsKey($name) | Should -BeTrue
+        $journal.Vms[$name].SettleWaits | Should -Be 1
+        (Get-Calls 'DiscardCache').Count | Should -Be 0
+        (Get-Calls 'CommitCache').Count | Should -Be 0
+        (Get-Calls 'RemoveVm').Count | Should -Be 0
+        (Get-Calls 'GetRun').Count | Should -Be 0
+        Invoke-OrchestratorTick -Config $config -Journal $journal -Adapters $adapters -Now $t0.AddMinutes(20).AddSeconds(10)
+        $journal.Vms[$name].SettleWaits | Should -Be 2
+        Set-DoneJob 1 10 $name
+        Invoke-OrchestratorTick -Config $config -Journal $journal -Adapters $adapters -Now $t0.AddMinutes(20).AddSeconds(20)
+        (Get-Calls 'CommitCache').Count | Should -Be 1
+        (Get-Calls 'DiscardCache').Count | Should -Be 0
+        $journal.Vms.Count | Should -Be 0
+        # Logged once, on the first wait.
+        @($logs | Where-Object { $_.Contains("${name}: job 1 is in_progress on GitHub") }).Count | Should -Be 1
+    }
+    It 'stops waiting after six ticks and decides on what GitHub reports then' {
+        $world.Jobs['1'] = [pscustomobject]@{ id = 1; run_id = 10; status = 'in_progress'; conclusion = $null; runner_name = $name }
+        Set-Run 10
+        for ($i = 0; $i -lt 6; $i++) {
+            Invoke-OrchestratorTick -Config $config -Journal $journal -Adapters $adapters -Now $t0.AddMinutes(20).AddSeconds(10 * $i)
+        }
+        $journal.Vms[$name].SettleWaits | Should -Be 6
+        (Get-Calls 'DiscardCache').Count | Should -Be 0
+        Invoke-OrchestratorTick -Config $config -Journal $journal -Adapters $adapters -Now $t0.AddMinutes(21)
+        (Get-Calls 'DiscardCache').Count | Should -Be 1
+        (Get-Calls 'CommitCache').Count | Should -Be 0
+        ($logs -join "`n") | Should -Match "${name}: discard \(conclusion: \)"
+        $journal.Vms.Count | Should -Be 0
     }
     It 'discards when the job failed' {
         Set-DoneJob 1 10 $name 'failure'

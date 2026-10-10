@@ -398,14 +398,17 @@ function Test-SiblingRunning {
 }
 
 function Complete-ActiveVm {
-    # The VM reached Off by itself. Ask GitHub what ran, then commit or
-    # discard. An API failure propagates: the entry stays in the journal
-    # and the next tick tries again (never orphan, never commit blindly).
-    # A commit that must wait for a same-lane sibling is remembered as
-    # PendingCommit so later ticks skip the API lookups. Off with no job
-    # resolved means the guest never ran one (a bootstrap failure): the
-    # runner is freed and the job retried with back-off, so a broken
-    # image cannot provision VMs in a tight loop.
+    # The VM reached Off and the loop did not force it off. Ask GitHub what
+    # ran, then commit or discard. An API failure propagates: the entry
+    # stays in the journal and the next tick tries again (never orphan,
+    # never commit blindly). GitHub's record can lag the guest's shutdown,
+    # so a job not yet completed gets up to six ticks (SettleWaits) before
+    # the predicate runs on whatever GitHub reports then. A commit that
+    # must wait for a same-lane sibling is remembered as PendingCommit so
+    # later ticks skip the API lookups. Off with no job resolved means the
+    # guest never ran one (a bootstrap failure): the runner is freed and
+    # the job retried with back-off, so a broken image cannot provision VMs
+    # in a tight loop.
     [CmdletBinding()]
     param($Config, $Journal, [hashtable]$Adapters, [string]$Name, [datetimeoffset]$Now)
     $vm = $Journal.Vms[$Name]
@@ -446,6 +449,15 @@ function Complete-ActiveVm {
         & $Adapters.RemoveVm $Name $vm.Dir
         Register-JobRetry -Retries $Journal.Retries -JobId ([int64]$vm.JobId) -Now $Now -BackoffSeconds ([int]$Config.RetryBackoffSeconds)
         $Journal.Vms.Remove($Name)
+        return
+    }
+    $status = ''
+    if ($job.PSObject.Properties['status']) { $status = [string]$job.status }
+    if ($status -cne 'completed' -and [int]$vm['SettleWaits'] -lt 6) {
+        $vm['SettleWaits'] = [int]$vm['SettleWaits'] + 1
+        if ([int]$vm['SettleWaits'] -eq 1) {
+            & $Adapters.Log 'info' "${Name}: job $($job.id) is $status on GitHub while its VM is off; waiting up to 6 ticks for it to complete"
+        }
         return
     }
     $run = $null
@@ -629,7 +641,7 @@ function Invoke-Admission {
                 JobId = [int64]$job.JobId; RunId = [int64]$job.RunId
                 Dir = [string]$created.Dir; CachePath = $created.CachePath; ForkGeneration = [int]$created.ForkGeneration
                 Phase = 'provisioned'; StartedAt = $Now.ToString('o'); HandedAt = $null; RunnerId = $null; Claimed = $false; PendingCommit = $false
-                GuestError = $null
+                GuestError = $null; SettleWaits = 0
             }
             & $Adapters.StartVm $name
             & $Adapters.Log 'info' "${name}: provisioned for job $($job.JobId) (lane $($job.Lane), slot $($slot.Index), fork generation $($created.ForkGeneration))"
