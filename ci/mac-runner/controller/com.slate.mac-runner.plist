@@ -32,6 +32,15 @@
   </dict>
   <key>WorkingDirectory</key>
   <string>/Users/slate-ci</string>
+  <!--
+    A fresh security (audit) session for the job. Virtualization.framework
+    keeps its host key in the account's login keychain and asks securityd
+    for it; without a session of its own the daemon's processes cannot unlock
+    that keychain (Phase 3 log: VZErrorDomain -9, "Failed to create new
+    HostKey").
+  -->
+  <key>SessionCreate</key>
+  <true/>
   <key>RunAtLoad</key>
   <true/>
   <key>KeepAlive</key>

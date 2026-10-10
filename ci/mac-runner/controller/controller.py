@@ -200,12 +200,14 @@ def unlock_keychain():
     if not os.path.exists(login_kc):
         log("keychain: {} does not exist; log in once as this account to create it".format(login_kc))
         return
-    res = run(["security", "unlock-keychain", "-p", password, "login.keychain"], timeout=20)
+    # Full path: the short name resolves through the user's keychain search
+    # list, which a login may rewrite.
+    res = run(["security", "unlock-keychain", "-p", password, login_kc], timeout=20)
     if res.returncode == 0:
-        run(["security", "set-keychain-settings", "login.keychain"], timeout=20)  # no auto-lock
-        log("keychain: unlocked login.keychain")
+        run(["security", "set-keychain-settings", login_kc], timeout=20)  # no auto-lock
+        log("keychain: unlocked {}".format(login_kc))
     else:
-        log("keychain: could NOT unlock login.keychain: {}".format(res.stderr.decode(errors="replace").strip()))
+        log("keychain: could NOT unlock {}: {}".format(login_kc, res.stderr.decode(errors="replace").strip()))
 
 
 # --- heartbeat --------------------------------------------------------------
