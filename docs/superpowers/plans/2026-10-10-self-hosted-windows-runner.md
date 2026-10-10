@@ -3187,11 +3187,11 @@ try {
     }
     & icacls.exe $root /grant 'runner:(OI)(CI)RX' /T /C | Out-Null
 
-    $systemAction = New-ScheduledTaskAction -Execute 'powershell.exe' -Argument '-NoProfile -ExecutionPolicy Bypass -File C:\slate-guest\bootstrap-system.ps1'
+    $systemAction = New-ScheduledTaskAction -Execute 'powershell.exe' -Argument '-NoProfile -NonInteractive -ExecutionPolicy Bypass -File C:\slate-guest\bootstrap-system.ps1'
     Register-ScheduledTask -TaskName 'slate-bootstrap-system' -Action $systemAction -Trigger (New-ScheduledTaskTrigger -AtStartup) `
         -Principal (New-ScheduledTaskPrincipal -UserId 'NT AUTHORITY\SYSTEM' -RunLevel Highest) `
         -Settings (New-ScheduledTaskSettingsSet -ExecutionTimeLimit (New-TimeSpan -Hours 1) -StartWhenAvailable) -Force | Out-Null
-    $runnerAction = New-ScheduledTaskAction -Execute 'powershell.exe' -Argument '-NoProfile -ExecutionPolicy Bypass -WindowStyle Hidden -File C:\slate-guest\bootstrap-runner.ps1'
+    $runnerAction = New-ScheduledTaskAction -Execute 'powershell.exe' -Argument '-NoProfile -NonInteractive -ExecutionPolicy Bypass -WindowStyle Hidden -File C:\slate-guest\bootstrap-runner.ps1'
     Register-ScheduledTask -TaskName 'slate-runner-logon' -Action $runnerAction -Trigger (New-ScheduledTaskTrigger -AtLogOn -User 'runner') `
         -Principal (New-ScheduledTaskPrincipal -UserId 'runner' -LogonType Interactive -RunLevel Limited) `
         -Settings (New-ScheduledTaskSettingsSet -ExecutionTimeLimit (New-TimeSpan -Hours 4) -StartWhenAvailable) -Force | Out-Null
@@ -3692,10 +3692,10 @@ $pwsh = (Get-Command pwsh).Source
 $loopSettings = New-ScheduledTaskSettingsSet -RestartCount 999 -RestartInterval (New-TimeSpan -Minutes 1) `
     -ExecutionTimeLimit (New-TimeSpan -Seconds 0) -MultipleInstances IgnoreNew -StartWhenAvailable
 Register-ScheduledTask -TaskName 'slate-ci-orchestrator' -Force `
-    -Action (New-ScheduledTaskAction -Execute $pwsh -Argument "-NoProfile -ExecutionPolicy Bypass -File `"$Root\bin\orchestrator.ps1`"" -WorkingDirectory "$Root\bin") `
+    -Action (New-ScheduledTaskAction -Execute $pwsh -Argument "-NoProfile -NonInteractive -ExecutionPolicy Bypass -File `"$Root\bin\orchestrator.ps1`"" -WorkingDirectory "$Root\bin") `
     -Trigger (New-ScheduledTaskTrigger -AtStartup) -User $Account -Password $password -RunLevel Limited -Settings $loopSettings | Out-Null
 Register-ScheduledTask -TaskName 'slate-ci-store-token' -Force `
-    -Action (New-ScheduledTaskAction -Execute $pwsh -Argument "-NoProfile -ExecutionPolicy Bypass -File `"$Root\bin\install\store-token.ps1`" -Convert -Root `"$Root`"") `
+    -Action (New-ScheduledTaskAction -Execute $pwsh -Argument "-NoProfile -NonInteractive -ExecutionPolicy Bypass -File `"$Root\bin\install\store-token.ps1`" -Convert -Root `"$Root`"") `
     -User $Account -Password $password -RunLevel Limited -Settings (New-ScheduledTaskSettingsSet -ExecutionTimeLimit (New-TimeSpan -Minutes 5)) | Out-Null
 Remove-Variable password, secure
 
