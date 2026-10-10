@@ -162,7 +162,8 @@ State machine per job, run by a single-threaded loop with a 10 s tick:
    label. Record `job_id`, `run_id`, lane, `created_at`. Budget: ~3 API
    calls per tick when idle, well inside the 5,000/h limit.
 2. **Admit.** While a slot is free, take the oldest queued job not already
-   assigned. One VM per job; a job is never admitted twice.
+   assigned. One VM per job at a time; a job that already has a VM is never
+   admitted again (a discarded job is re-admitted after its back-off).
 3. **Provision.** `New-VHD -Differencing` for `os.vhdx` from the golden disk
    and `cache.vhdx` from the lane parent; read and record the parent's
    generation number. `New-VM` Gen2, 4 vCPU, 12 GB static, `slate-ci`
@@ -402,7 +403,8 @@ ci/windows-runner/
 
 Every GitHub and Hyper-V call goes through an adapter function so the module
 is testable without a VM or a token. The journal under `C:\slate-ci\state`
-survives restarts so an in-flight VM is settled, not orphaned. Logs are
+is rewritten every tick; at start the sweep removes every `slate-win-*` VM
+and offline runner, so nothing in-flight survives a restart. Logs are
 plain text with one line per state transition and never contain a JIT
 config or token.
 
