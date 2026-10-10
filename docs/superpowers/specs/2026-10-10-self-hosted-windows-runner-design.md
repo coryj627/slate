@@ -176,17 +176,21 @@ State machine per job, run by a single-threaded loop with a 10 s tick:
    `slate.jit.count`, `slate.jit.0 … slate.jit.N` (each ≤ 1,000 characters;
    `Msvm_KvpExchangeDataItem.Data` has MAXLEN 1024), plus `slate.lane`,
    `slate.ip`, `slate.job`.
-6. **Run (guest).** The golden image auto-logs on the standard user `runner`
-   and a logon-triggered task runs `C:\actions-runner\bootstrap.ps1`:
-   poll `HKLM:\SOFTWARE\Microsoft\Virtual Machine\External` for the chunks
-   (max 5 min), set the static IP, bring the cache disk online as `D:` and
-   create `D:\cache\{cargo\registry,cargo\git,target,nuget}` if absent,
-   junction `%USERPROFILE%\.cargo\registry` and `.cargo\git` onto it, write
-   `C:\actions-runner\.env` with `NSC_CACHE_PATH=D:\cache`,
-   `CARGO_TARGET_DIR=D:\cache\target`, `NUGET_PACKAGES=D:\cache\nuget`,
-   then `run.cmd --jitconfig <config>` in the interactive session. When the
-   runner process exits the task writes `slate.done=<exit code>` to the
-   guest KVP and runs `shutdown /s /t 0`.
+6. **Run (guest).** Two tasks baked into the golden image, both no-ops
+   until the golden build's completion marker exists. `slate-bootstrap-
+   system` (SYSTEM, at startup) polls
+   `HKLM:\SOFTWARE\Microsoft\Virtual Machine\External` for the chunks
+   (max 5 min), sets the static IP, gateway and DNS from the KVP items,
+   locates the cache volume by its `slate-cache` label, creates
+   `cache\{cargo\registry,cargo\git,target,nuget}` on it, writes
+   `C:\actions-runner\.env` (`NSC_CACHE_PATH`, `CARGO_TARGET_DIR`,
+   `NUGET_PACKAGES`, `SLATE_CACHE_ROOT`), writes the config to
+   `C:\actions-runner\jit.cfg` readable only by `runner`, and touches
+   `ready`. `slate-runner-logon` (`runner`, interactive, at logon) waits
+   for `ready`, junctions `%USERPROFILE%\.cargo\{registry,git}` onto the
+   cache, runs `run.cmd --jitconfig <config>` in the interactive session,
+   deletes `jit.cfg`, and runs `shutdown /s /t 0`. A bootstrap failure
+   writes `bootstrap-error.txt` and shuts down.
 7. **Settle (host).** On VM state `Off`: look up which job ran on this
    runner name (first the admitted `job_id`, else any recently seen
    candidate, via `GET /actions/jobs/{job_id}` → `runner_name`), fetch its
@@ -220,8 +224,8 @@ Commit predicate, evaluated on the host from the API after the VM is off:
 - the job that ran on this runner name has `conclusion == success`;
 - its run has `event ∈ {push, schedule, workflow_dispatch}`,
   `head_branch == main`, `head_repository.full_name == coryj627/slate`;
-- the guest reported `slate.done=0` and shut down itself (the host did not
-  turn it off);
+- the host did not force the VM off (the guest reached `Off` by its own
+  `shutdown`), which is the host's own record, not a guest claim;
 - the parent's generation number equals the one recorded at fork time.
 
 If all hold: `Merge-VHD` child → parent, increment `<lane>.gen`. Otherwise
@@ -238,13 +242,25 @@ parents is a monthly runbook item.
 
 ### 4. Guest golden image
 
-Built once by `scripts/ci-host/golden/build-golden.ps1` with an unattend file
-(`autounattend.xml`): Windows 11 Pro from the ISO, product key from a
-parameter (never committed), local admin `provision` used only during the
-build, standard user `runner` with auto-logon, computer name `slate-win`,
-no sleep, Windows Update deferred, BitLocker off, Defender real-time
-scanning excluded for `C:\actions-runner` and `D:\`, long paths enabled,
-display 1920×1080, IPv6 off, static public DNS.
+Built once by `scripts/ci-host/golden/build-golden.ps1` (elevated) without
+running Windows Setup: it mounts the ISO, applies the "Windows 11 Pro"
+index of `install.wim` to a new 120 GB dynamic VHDX with
+`Expand-WindowsImage`, makes it bootable with `bcdboot`, drops a rendered
+`unattend.xml` into `Windows\Panther` and the provisioning scripts into
+`C:\provision`, then boots the disk once on the Default Switch (Internet
+for downloads). The unattend creates `provision` (admin, auto-logon once)
+and `runner` (standard), and its first-logon command runs
+`provision-guest.ps1`; that script installs the machine-wide toolchain,
+registers the two guest tasks, switches auto-logon to `runner`, sets a
+RunOnce for `provision-runner-user.ps1` (per-user rustup and
+uniffi-bindgen-cs), and reboots. The per-user script writes the
+completion marker `C:\Users\runner\.slate-golden-complete` and shuts
+down. The host verifies the marker, removes the build VM and marks the
+VHDX read-only. Product key, auto-logon password and the `provision`
+password live only in the rendered unattend and `C:\provision\secrets.json`,
+both deleted by the provisioning script before the final reboot (the
+auto-logon password remains in the guest registry, as auto-logon
+requires; the VM is isolated and disposable).
 
 Toolchain, matching the Namespace image the lanes run on today:
 
