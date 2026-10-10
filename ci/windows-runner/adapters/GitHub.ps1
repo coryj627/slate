@@ -84,13 +84,15 @@ function Test-GhRateBudget {
     [CmdletBinding()]
     param($Headers, [int]$Threshold = 500)
     if ($null -eq $script:GhLowBudgetWarning) { return }
+    # The digit limits keep every cast and conversion below in range, so an
+    # odd header can only cost the warning, never the call.
     $remaining = [string](Get-GhHeader -Headers $Headers -Name 'X-RateLimit-Remaining')
-    if ($remaining -notmatch '^\d+$' -or [int64]$remaining -ge $Threshold) { return }
+    if ($remaining -notmatch '^\d{1,9}$' -or [int]$remaining -ge $Threshold) { return }
     $reset = [string](Get-GhHeader -Headers $Headers -Name 'X-RateLimit-Reset')
     if ($null -ne $script:GhLowBudgetWarnedReset -and $reset -eq $script:GhLowBudgetWarnedReset) { return }
     $script:GhLowBudgetWarnedReset = $reset
     $resetAt = 'an unknown time'
-    if ($reset -match '^\d+$') { $resetAt = [datetimeoffset]::FromUnixTimeSeconds([int64]$reset).ToString('o') }
+    if ($reset -match '^\d{1,11}$') { $resetAt = [datetimeoffset]::FromUnixTimeSeconds([int64]$reset).ToString('o') }
     try {
         & $script:GhLowBudgetWarning "GitHub API budget low: $remaining requests left until the reset at $resetAt (the PAT shares the owner's 5,000 an hour with gh)"
     } catch {

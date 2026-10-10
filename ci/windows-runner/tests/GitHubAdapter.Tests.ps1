@@ -118,6 +118,21 @@ Describe 'Invoke-GhApi rate budget' {
         }
         (Invoke-GhApi -Path '/x').ok | Should -BeTrue
     }
+    It 'never turns a successful call into a failure over a malformed budget header' {
+        Mock Invoke-RestMethod {
+            Set-ResponseHeaders $ResponseHeadersVariable @{ 'X-RateLimit-Remaining' = @('99999999999999999999'); 'X-RateLimit-Reset' = @('1791640800') }
+            [pscustomobject]@{ ok = $true }
+        }
+        (Invoke-GhApi -Path '/x').ok | Should -BeTrue
+        $budgetWarnings.Count | Should -Be 0
+        Mock Invoke-RestMethod {
+            Set-ResponseHeaders $ResponseHeadersVariable @{ 'X-RateLimit-Remaining' = @('7'); 'X-RateLimit-Reset' = @('99999999999999999') }
+            [pscustomobject]@{ ok = $true }
+        }
+        (Invoke-GhApi -Path '/x').ok | Should -BeTrue
+        $budgetWarnings.Count | Should -Be 1
+        $budgetWarnings[0] | Should -Match 'an unknown time'
+    }
     It 'never turns a successful call into a failure when the warning itself throws' {
         $script:GhLowBudgetWarning = { param($message) throw 'log volume full' }
         Mock Invoke-RestMethod {
