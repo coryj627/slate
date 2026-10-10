@@ -11,8 +11,11 @@ sudo systemsetup -setdisplaysleep Off 2>/dev/null || true
 sudo systemsetup -setharddisksleep Off 2>/dev/null || true
 sudo defaults write /Library/Preferences/com.apple.screensaver loginWindowIdleTime -int 0
 defaults -currentHost write com.apple.screensaver idleTime -int 0
-# Screen lock off for the logged-in admin (needs the account password).
-sysadminctl -screenLock off -password "$ADMIN_PASSWORD" 2>/dev/null || true
+# No screen-lock step. `sysadminctl -screenLock off -password` put the account
+# password in a process argument (review finding, 2026-10-10), and running
+# here as admin it only ever set admin's own lock: jobs run in the runner
+# session, which toolchain-accounts.sh sets up (auto-login, screensaver off)
+# and which never locked through the Phase 0 soak and the Phase 3 pilots.
 
 echo "==> Spotlight off"
 sudo mdutil -a -i off >/dev/null

@@ -375,6 +375,17 @@ credentials.
   Softnet copy and both rules, and checks each one. The owner runs it once
   with sudo.
 - **Disk.** `~/.tart` lives in `slate-ci`'s home, on the same volume.
+- **Two secrets pass through process arguments.** Tart's provisioning API
+  takes the guest admin password as a `tart run` argument, so it is readable
+  in the host's process list for the minutes the first boot of a base build
+  takes; Tart has no file or stdin form for it. `security unlock-keychain`
+  likewise takes the keychain password as an argument, for a fraction of a
+  second at controller start. The host's accounts are the owner, `slate-ci`
+  and root; the guest password opens only a guest whose SSH the host alone
+  reaches; the keychain guards only the VM host key. Both accepted after
+  the 2026-10-10 review. Inside the guest every script hands the password
+  to sudo on stdin from the printf builtin, never as an argument, because
+  main's own build runs as `builder` while the warm build's root steps run.
 
 ### 4.2 Why a custom controller
 
@@ -1010,6 +1021,24 @@ parallel with them.
   is being rebuilt from the IPSW with an 80 GB disk (`DISK_SIZE`,
   `REBUILD_VANILLA=1` in `build-base.sh`), the cap §5.4 names. Host cost
   stays what is written, not the logical size.
+
+- **Review of PR A (2026-10-10).** Codoki left 16 inline findings and a
+  summary. Changed: the hook names head or base repo in its denial;
+  `route.py` falls back to defaults on a malformed `ROUTE_NOW` or
+  `ROUTE_STALE_SECONDS`; the base image no longer runs `sysadminctl
+  -screenLock` with the password as an argument (sleep and screensaver are
+  off, so nothing locks); `toolchain-python.sh` pins one python-versions
+  release and checks its SHA-256 instead of taking the newest 3.13, and its
+  log filter can no longer fail a good build; the analyzer pin check
+  resolves the ref; the controller logs a failed `set-keychain-settings`;
+  the hook live test scopes every `gh` call to the repository; the refresh
+  scripts drop the password variable once Packer is done. Refuted on the
+  threads: `set -e` in the job hook (the runner runs it with `bash -e`, and
+  errexit is what stopped the kill in live test round 2); `/opt/homebrew/bin`
+  on the guest `PATH` (the guest has no Homebrew by design); mode 600 for the
+  allow-list cache and `.env`, both public content; the two argument-passed
+  secrets, documented in §4.1 instead; and the `bytes.format` bug, fixed
+  earlier in bef4ae95.
 
 ### Phase 1: GitHub settings (owner, before any runner registers)
 

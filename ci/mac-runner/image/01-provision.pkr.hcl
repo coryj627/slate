@@ -53,6 +53,14 @@ source "tart-cli" "provision" {
   # Tart's guest provisioning API (macOS 27 host and guest, Tart 2.33+): on the
   # clone's first boot it creates the admin account, logs it in and turns on
   # Remote Login, so no keystrokes are typed into Setup Assistant.
+  #
+  # Known exposure: the password travels in `tart run`'s arguments, so it is
+  # readable in the host's process list for the minutes this first boot takes.
+  # Tart offers no file or stdin form for these options. The host has three
+  # accounts (the owner, slate-ci, root) and the password only means anything
+  # inside the guest, whose SSH the host alone can reach; accepted, and
+  # recorded in the plan (§4.1). Inside the guest, scripts hand the password
+  # to sudo on stdin from the printf builtin, never as an argument.
   run_extra_args = [
     "--provisioning-opts=fullName=Slate CI admin,username=admin,password=${var.admin_password},logsInAutomatically=true,enablesRemoteLogin=true",
   ]
@@ -72,6 +80,7 @@ build {
     inline_shebang   = "/bin/bash -e"
     environment_vars = ["ADMIN_PASSWORD=${var.admin_password}"]
     inline = [
+      # The password reaches sudo on stdin from the printf builtin: never an argument.
       "printf '%s\\n' \"$ADMIN_PASSWORD\" | sudo -S -p '' /bin/sh -c 'mkdir -p /etc/sudoers.d && printf \"admin ALL=(ALL) NOPASSWD: ALL\\n\" > /etc/sudoers.d/90-admin-build && chmod 440 /etc/sudoers.d/90-admin-build && visudo -c -q'",
       "sudo -n /usr/bin/true",
     ]

@@ -16,7 +16,10 @@ set -euo pipefail
 here="$(cd "$(dirname "$0")/.." && pwd)"
 state=/Users/slate-ci/.slate-runner/state
 BRANCH="${BRANCH:-ci/mac-runner-phase2}"
+REPO="$(/usr/bin/python3 -I -c 'import json,sys; print(json.load(open(sys.argv[1]))["repository"])' "$here/allowlist.json")"
 as_ci() { sudo -n -u slate-ci -H "$@"; }
+# gh is always scoped to the repository explicitly, so the script works from any directory.
+gh_() { gh "$@" --repo "$REPO"; }
 
 wait_for_new_runner() {
   local old="$1" vm="" n=0
@@ -25,7 +28,7 @@ wait_for_new_runner() {
     sleep 3
     vm="$(as_ci env PATH=/opt/homebrew/bin:/usr/bin:/bin tart list 2>/dev/null | awk '/ job-/ {print $2}' | head -1)"
     if [ -z "$vm" ] || [ "$vm" = "$old" ]; then continue; fi
-    n="$(gh api repos/coryj627/slate/actions/runners --jq "[.runners[] | select(.name == \"$vm\" and .status == \"online\")] | length")"
+    n="$(gh api "repos/$REPO/actions/runners" --jq "[.runners[] | select(.name == \"$vm\" and .status == \"online\")] | length")"
     [ "$n" = 1 ] && { echo "online: $vm"; return 0; }
   done
   echo "no replacement runner came online" >&2; return 1
@@ -45,9 +48,9 @@ PY
     echo "cache now allows only 'ghost'"
     "$here/host/runnerctl" recycle
     wait_for_new_runner "$old"
-    gh workflow run mac-ci-pilot.yml --ref "$BRANCH" -f runner=self-hosted-tart -f pair_id="$pair"
+    gh_ workflow run mac-ci-pilot.yml --ref "$BRANCH" -f runner=self-hosted-tart -f pair_id="$pair"
     sleep 8
-    gh run list --workflow mac-ci-pilot.yml --branch "$BRANCH" --limit 1 --json databaseId,url --jq '.[0] | "run \(.databaseId) \(.url)"'
+    gh_ run list --workflow mac-ci-pilot.yml --branch "$BRANCH" --limit 1 --json databaseId,url --jq '.[0] | "run \(.databaseId) \(.url)"'
     echo "then: $0 check <run-id>   and afterwards   $0 restore"
     ;;
   restore)
@@ -57,7 +60,7 @@ PY
     ;;
   check)
     run="${2:?run id}"
-    gh run view "$run" --json status,conclusion,jobs --jq '"run \(.status) \(.conclusion // "-")", (.jobs[] | select(.name | test("self-hosted-tart")) | "  job \(.name): \(.status) \(.conclusion // "-")", (.steps[]? | select(.conclusion != null and .conclusion != "skipped") | "      step \(.name): \(.conclusion)"))'
+    gh_ run view "$run" --json status,conclusion,jobs --jq '"run \(.status) \(.conclusion // "-")", (.jobs[] | select(.name | test("self-hosted-tart")) | "  job \(.name): \(.status) \(.conclusion // "-")", (.steps[]? | select(.conclusion != null and .conclusion != "skipped") | "      step \(.name): \(.conclusion)"))'
     echo
     echo "pass = every mac job shows only 'Set up job' (success) and 'Set up runner' (failure), nothing after"
     ;;

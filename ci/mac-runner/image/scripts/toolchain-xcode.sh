@@ -4,8 +4,8 @@
 set -euo pipefail
 
 echo "==> Xcode from tarball"
-# -o: files belong to root, not to the host account that owned them.
-sudo tar -C /Applications -xof "$HOME/stage/Xcode.tar"
+# Files belong to root, not to the host account that owned them.
+sudo tar --no-same-owner -C /Applications -xf "$HOME/stage/Xcode.tar"
 rm -f "$HOME/stage/Xcode.tar"
 sudo xattr -dr com.apple.quarantine /Applications/Xcode.app 2>/dev/null || true
 

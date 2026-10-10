@@ -100,6 +100,13 @@ class Main(unittest.TestCase):
         env = {"MAC_RUNNER_MODE": "auto", "MAC_RUNNER_HEARTBEAT": "", "ROUTE_NOW": str(NOW)}
         self.assertEqual(route.main(env), 0)
 
+    def test_malformed_overrides_fall_back(self):
+        env = {"MAC_RUNNER_MODE": "auto", "MAC_RUNNER_HEARTBEAT": "", "ROUTE_NOW": "abc", "ROUTE_STALE_SECONDS": "soon"}
+        self.assertEqual(route.main(env), 0)
+        self.assertEqual(route._int_env({"X": "abc"}, "X", 7), 7)
+        self.assertEqual(route._int_env({"X": " 42 "}, "X", 7), 42)
+        self.assertEqual(route._int_env({}, "X", 7), 7)
+
 
 if __name__ == "__main__":
     unittest.main()

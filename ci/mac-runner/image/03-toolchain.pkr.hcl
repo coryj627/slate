@@ -81,9 +81,16 @@ variable "a11y_check_ref" {
   default = "bcaddd56931ce14d32cebcf42ea9f5b08ed5f7d8"
 }
 
-variable "python_series" {
+# Empty means the pin inside scripts/toolchain-python.sh (one
+# actions/python-versions release tag and the SHA-256 of its darwin-arm64 asset).
+variable "python_tag" {
   type    = string
-  default = "3.13"
+  default = ""
+}
+
+variable "python_sha256" {
+  type    = string
+  default = ""
 }
 
 variable "net_args" {
@@ -183,7 +190,7 @@ build {
   # Python in the runner tool cache, so actions/setup-python never needs sudo.
   provisioner "shell" {
     inline_shebang   = "/bin/bash -e"
-    environment_vars = ["PYTHON_SERIES=${var.python_series}"]
+    environment_vars = ["PYTHON_TAG=${var.python_tag}", "PYTHON_SHA256=${var.python_sha256}"]
     script           = "scripts/toolchain-python.sh"
     timeout          = "20m"
   }

@@ -122,7 +122,7 @@ class Decide(unittest.TestCase):
         self.deny(env_for("pull_request"), pr_payload(author=OTHER), "author id")
 
     def test_pr_against_other_base_repo_denied(self):
-        self.deny(env_for("pull_request"), pr_payload(base_repo=FORK), "head repo")
+        self.deny(env_for("pull_request"), pr_payload(base_repo=FORK), "base repo")
 
     # Events
     def test_push_to_other_branch_denied(self):

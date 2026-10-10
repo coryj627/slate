@@ -120,8 +120,10 @@ def decide(env, payload, allowlist):
     if event == "pull_request":
         head_repo = _int(_get(payload, ("pull_request", "head", "repo", "id"), "head repository id"), "head repo id")
         base_repo = _int(_get(payload, ("pull_request", "base", "repo", "id"), "base repository id"), "base repo id")
-        if head_repo != repo_id or base_repo != repo_id:
+        if head_repo != repo_id:
             raise Deny(f"pull request head repo {head_repo} is not this repository")
+        if base_repo != repo_id:
+            raise Deny(f"pull request base repo {base_repo} is not this repository")
         author = _int(_get(payload, ("pull_request", "user", "id"), "pull request author id"), "author id")
         if author not in allowlist["actor_ids"]:
             raise Deny(f"pull request author id {author} is not on the allow-list")

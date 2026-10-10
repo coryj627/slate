@@ -67,10 +67,22 @@ def label_for(route):
     return STUDIO_LABEL if route == "studio" else NAMESPACE_LABEL
 
 
+def _int_env(env, name, default):
+    """An integer from the environment, or the default when unset or malformed."""
+    value = (env.get(name) or "").strip()
+    if not value:
+        return default
+    try:
+        return int(value)
+    except ValueError:
+        print(f"ignoring malformed {name}={value!r}")
+        return default
+
+
 def main(env=None):
     env = os.environ if env is None else env
-    now = int(env.get("ROUTE_NOW") or time.time())
-    stale = int(env.get("ROUTE_STALE_SECONDS") or DEFAULT_STALE_SECONDS)
+    now = _int_env(env, "ROUTE_NOW", int(time.time()))
+    stale = _int_env(env, "ROUTE_STALE_SECONDS", DEFAULT_STALE_SECONDS)
     route, reason = decide(env.get("MAC_RUNNER_MODE"), env.get("MAC_RUNNER_HEARTBEAT"), now, stale)
     label = label_for(route)
     lines = [f"route={route}", f"label={label}"]

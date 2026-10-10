@@ -25,6 +25,7 @@ for stage in "$@"; do
   packer init "$stage" >/dev/null
   packer build "$stage"
 done
+unset PKR_VAR_admin_password   # build-warm.sh reads the file itself
 
 echo "== warm layer"
 bash "$tree/image/build-warm.sh"

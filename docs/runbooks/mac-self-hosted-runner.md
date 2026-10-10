@@ -21,6 +21,12 @@ Guest accounts: `admin` (provisioning only, sudo asks the host-held password),
 `runner` (auto-logged in, runs hook and job, no sudo), `builder` (nightly
 warm build over SSH, never logged in).
 
+The runner's environment comes from `/Users/runner/actions-runner/.env`
+alone, installed from `ci/mac-runner/image/data/runner.env`: the hook path,
+`PATH`, the Rust homes and the tool cache. The runner never reads `.path`.
+The guest has no Homebrew, so `PATH` has no `/opt/homebrew/bin`; a job that
+needs a tool gets it from the toolchain image, not from `brew`.
+
 ## Everyday
 
 ```bash

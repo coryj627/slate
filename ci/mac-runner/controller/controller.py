@@ -207,10 +207,17 @@ def unlock_keychain():
         return
     # Full path: the short name resolves through the user's keychain search
     # list, which a login may rewrite.
+    # `security` takes the password only as an argument (no stdin form). It is
+    # visible in the process list for the fraction of a second the command
+    # runs, to the host's three accounts; the keychain guards only the VM host
+    # key, and the same string sits in a file only slate-ci can read. Accepted.
     res = run(["security", "unlock-keychain", "-p", password, login_kc], timeout=20)
     if res.returncode == 0:
-        run(["security", "set-keychain-settings", login_kc], timeout=20)  # no auto-lock
         log("keychain: unlocked {}".format(login_kc))
+        settings = run(["security", "set-keychain-settings", login_kc], timeout=20)  # no auto-lock
+        if settings.returncode != 0:
+            log("keychain: could not clear the auto-lock timeout on {}: {}".format(
+                login_kc, settings.stderr.decode(errors="replace").strip()))
     else:
         log("keychain: could NOT unlock {}: {}".format(login_kc, res.stderr.decode(errors="replace").strip()))
 

@@ -20,6 +20,7 @@ PKR_VAR_admin_password="$(cat "$state/guest-admin-password")"
 echo "== stage 3e: hook into slate-mac-toolchain (in place)"
 packer init 03e-hook.pkr.hcl >/dev/null
 packer build 03e-hook.pkr.hcl
+unset PKR_VAR_admin_password   # build-warm.sh reads the file itself
 
 echo "== warm layer"
 bash "$tree/image/build-warm.sh"

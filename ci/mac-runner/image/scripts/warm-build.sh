@@ -9,6 +9,10 @@ REPO_DIR="$WORK/slate/slate"            # where actions/checkout puts coryj627/s
 TOOLCHAINS=/Users/runner/toolchains
 export CARGO_HOME="$TOOLCHAINS/cargo" RUSTUP_HOME="$TOOLCHAINS/rustup"
 
+# The password goes to sudo on stdin from the printf builtin, which spawns no
+# process. It must never be a process argument: main's own build runs as builder while these commands run,
+# and macOS shows every user's process arguments, so an argument would hand a
+# hostile build step the admin password, and with it `su admin` and root.
 as_root() { printf '%s\n' "$ADMIN_PASSWORD" | sudo -S -p '' "$@"; }
 as_builder() {
   # builder's environment is set explicitly; it has no login shell history.

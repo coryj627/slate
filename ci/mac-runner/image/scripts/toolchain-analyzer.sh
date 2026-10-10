@@ -6,6 +6,7 @@
 set -euo pipefail
 
 sudo_() {
+  # Password on stdin from the printf builtin, never as an argument (see warm-build.sh).
   if sudo -n /usr/bin/true 2>/dev/null; then sudo "$@"
   else printf '%s\n' "${ADMIN_PASSWORD:?admin sudo needs a password}" | sudo -S -p '' "$@"; fi
 }
@@ -16,7 +17,8 @@ echo "==> cvs-health/ios-swiftui-accessibility-techniques @ $A11Y_CHECK_REF"
 git clone --quiet --filter=blob:none --no-checkout \
   https://github.com/cvs-health/ios-swiftui-accessibility-techniques.git "$src"
 git -C "$src" checkout --quiet "$A11Y_CHECK_REF"
-[ "$(git -C "$src" rev-parse HEAD)" = "$A11Y_CHECK_REF" ]
+# The pin is a full SHA in practice; resolving it lets a tag or branch work too.
+[ "$(git -C "$src" rev-parse HEAD)" = "$(git -C "$src" rev-parse --verify "$A11Y_CHECK_REF^{commit}")" ]
 
 echo "==> swift build -c release"
 start=$(date +%s)
