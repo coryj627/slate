@@ -1040,6 +1040,28 @@ parallel with them.
   secrets, documented in §4.1 instead; and the `bytes.format` bug, fixed
   earlier in bef4ae95.
 
+- **Second review (2026-10-10, Claude, 13 findings), all addressed in one
+  commit.** `tart run`'s stderr goes to a file instead of a pipe nobody
+  drained, which once full would have blocked tart or Softnet. The heartbeat
+  says 0 while paused or building even with a job running, so nothing new
+  queues on the Studio's label meanwhile, and it comes back without the
+  five-minute gap that followed every 0. At start the controller sweeps
+  `job-*` VMs and registrations a crashed or killed predecessor left. "Runner
+  exited without a job" and "job ended without a result" back off a minute
+  like the other failures instead of looping through JIT registrations. A
+  refused job (listener killed by the hook, so no result line) is logged as
+  such and no longer counts as a clean job. `build-warm.sh` sets
+  `state/building`: the controller takes the idle VM down and idles until the
+  marker goes (stale after 2 h), so the nightly build never runs beside a job
+  VM, which would have put two 16 GB guests on a 36 GB host. The controller's
+  decision logic has unit tests in `controller/tests`, run by the same
+  workflow as the hook's. `run-as-slate-ci.sh` swaps in a fresh tree instead
+  of extracting over the old one. The dead fetch branch in `warm-build.sh`,
+  the stale `unlock_keychain` docstring, the per-cycle runner listing and the
+  duplicate launchd log are gone. Found on the way: with no token file the
+  idle heartbeat raised and launchd restarted the daemon every 30 s;
+  `github()` now logs and skips.
+
 ### Phase 1: GitHub settings (owner, before any runner registers)
 
 - Confirm PR creation stays limited to collaborators.

@@ -20,7 +20,7 @@ mkdir -p "$flags"
 case "${1:-status}" in
   status)
     echo "user:       $(id -un)"
-    for f in paused tripped recycle; do
+    for f in paused tripped recycle building job-running; do
       if [ -e "$flags/$f" ]; then printf '%-11s yes %s\n' "$f:" "$(head -c 200 "$flags/$f" | tr '\n' ' ')"; else printf '%-11s no\n' "$f:"; fi
     done
     if [ -e "$flags/last-clean-job" ]; then

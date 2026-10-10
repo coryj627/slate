@@ -13,7 +13,7 @@ recover. Everything here runs on the Mac Studio unless it says GitHub.
 | Images `slate-mac-{vanilla,base,toolchain,warm}` | `slate-ci`'s `~/.tart/vms` | slate-ci |
 | Token, guest passwords, builder SSH key, keychain password | `/Users/slate-ci/.slate-runner/` (mode 600) | slate-ci |
 | Flags, allow-list cache, markers | `/Users/slate-ci/.slate-runner/state/` | slate-ci |
-| Logs | `/Users/slate-ci/.slate-runner/logs/` | slate-ci |
+| Logs: `controller.log` (rotated at 20 MB), `controller.out` (launchd; crash output only), `tart-last-failure.log` (stderr of the last VM that failed to boot) | `/Users/slate-ci/.slate-runner/logs/` | slate-ci |
 | Synced copy of `ci/mac-runner` for builds | `/Users/slate-ci/.slate-runner/mac-runner/` | slate-ci, written by `run-as-slate-ci.sh` |
 | Allow-list of record | `ci/mac-runner/allowlist.json` on `main` | the repo |
 
@@ -38,7 +38,14 @@ ci/mac-runner/host/runnerctl logs 200
 
 Pausing clears the heartbeat at once, so new mac jobs route to Namespace
 within the route job's 10-minute window. Use it before heavy local work, a
-call, or a reboot.
+call, or a reboot. A job already running finishes first.
+
+`build-warm.sh` (nightly, or `runnerctl rebuild-warm`) sets `state/building`
+while it runs: the controller lets a running job finish, takes the idle VM
+down, clears the heartbeat and boots nothing until the marker goes, so the
+build VM never runs beside a job VM. A marker older than two hours is ignored
+and cleared. At start the controller also removes any `job-*` VM or runner
+registration a previous run left behind.
 
 Routing override, on GitHub: repository variable `MAC_RUNNER_MODE` set to
 `studio`, `namespace` or `auto` (`gh variable set MAC_RUNNER_MODE --body namespace`).

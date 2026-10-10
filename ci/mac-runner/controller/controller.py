@@ -21,6 +21,7 @@ import base64
 import datetime
 import json
 import os
+import re
 import shutil
 import signal
 import subprocess
@@ -53,6 +54,11 @@ BOOT_TIMEOUT = 180            # seconds until the guest agent must answer
 JOB_TIMEOUT = 75 * 60         # watchdog once a job is running
 IDLE_RECYCLE = 6 * 3600       # replace an idle VM so it picks up new images
 IDLE_SLEEP = 30
+BUILDING_STALE = 2 * 3600     # a `building` marker older than this is ignored
+# Cycle outcomes after which the loop waits a minute instead of trying again at once.
+BACKOFF_PREFIXES = ("clone failed", "vm exited", "guest agent", "no jit", "could not",
+                    "idle: no allow-list", "cycle crashed", "runner exited without a job",
+                    "job ended without a result")
 MIN_FREE_GB_WARN = 40
 MIN_FREE_GB_STOP = 20
 GUEST_RUNNER_HOME = "/Users/runner"
@@ -67,7 +73,8 @@ _stop = threading.Event()
 def log(msg):
     stamp = time.strftime("%Y-%m-%dT%H:%M:%SZ", time.gmtime())
     line = "{} {}".format(stamp, msg)
-    print(line, flush=True)
+    if sys.stdout.isatty():   # under launchd the file below is the log; stdout would only duplicate it
+        print(line, flush=True)
     try:
         os.makedirs(LOGS, exist_ok=True)
         path = os.path.join(LOGS, "controller.log")
@@ -116,6 +123,37 @@ def read_state(name, default=""):
         return default
 
 
+def building_active():
+    """True while build-warm.sh's marker is present and fresh. A marker older
+    than BUILDING_STALE comes from a build that died without cleaning up; it
+    is cleared and logged so the runner does not idle forever."""
+    path = os.path.join(STATE, "building")
+    try:
+        age = time.time() - os.path.getmtime(path)
+    except OSError:
+        return False
+    if age > BUILDING_STALE:
+        log("building marker is {:.1f} h old; clearing it".format(age / 3600))
+        clear_flag("building")
+        return False
+    return True
+
+
+def stop_reason():
+    """Why an idle VM should be replaced now, or None."""
+    for name in ("paused", "tripped", "recycle"):
+        if flag(name):
+            return name
+    if building_active():
+        return "building"
+    return None
+
+
+def advertise_healthy():
+    """Whether the heartbeat may say the Studio takes jobs."""
+    return not (flag("paused") or flag("tripped") or building_active())
+
+
 def token():
     with open(TOKEN_FILE, "r", encoding="utf-8") as handle:
         return handle.read().strip()
@@ -132,7 +170,11 @@ def github(method, path, body=None, auth=True, timeout=30):
     if data is not None:
         req.add_header("Content-Type", "application/json")
     if auth:
-        req.add_header("Authorization", "Bearer " + token())
+        try:
+            req.add_header("Authorization", "Bearer " + token())
+        except OSError as exc:
+            log("github {} {} skipped: token unreadable ({})".format(method, path, exc))
+            return 0, None
     try:
         with urllib.request.urlopen(req, timeout=timeout) as resp:
             raw = resp.read()
@@ -185,11 +227,11 @@ def check_panic_breaker():
 
 
 def unlock_keychain():
-    """Virtualization.framework (macOS 15+) wants this user's login keychain
-    unlocked when there is no GUI session, which is the case under launchd.
-    Phase 0 found that a keychain named login.keychain refuses its own
-    password for this account, so admin-setup designates slate.keychain as
-    the login keychain instead; unlock whichever is designated."""
+    """Virtualization.framework (macOS 15+) keeps its host key in this user's
+    login keychain and needs it unlocked, which under launchd nobody else does.
+    The keychain is the one loginwindow created when the account logged in
+    once (Phase 3); its password is the account password, kept in
+    ~/.slate-runner/keychain-password."""
     try:
         with open(KEYCHAIN_PW, "r", encoding="utf-8") as handle:
             password = handle.read().strip()
@@ -225,15 +267,21 @@ def unlock_keychain():
 # --- heartbeat --------------------------------------------------------------
 
 class Heartbeat:
-    def __init__(self):
+    """Writes the MAC_RUNNER_HEARTBEAT variable: the time while healthy, "0" when
+    not. A healthy beat is throttled to one per HEARTBEAT_INTERVAL, except right
+    after a "0": the route job must see the Studio come back without a gap."""
+
+    def __init__(self, clock=time.time):
+        self.clock = clock
         self.last_sent = 0.0
         self.last_value = None
 
     def send(self, healthy):
-        value = time.strftime("%Y-%m-%dT%H:%M:%SZ", time.gmtime()) if healthy else "0"
+        now = self.clock()
+        value = time.strftime("%Y-%m-%dT%H:%M:%SZ", time.gmtime(now)) if healthy else "0"
         if not healthy and self.last_value == "0":
             return
-        if healthy and time.time() - self.last_sent < HEARTBEAT_INTERVAL:
+        if healthy and self.last_value not in (None, "0") and now - self.last_sent < HEARTBEAT_INTERVAL:
             return
         status, _ = github("PATCH", "/repos/{}/actions/variables/{}".format(REPO, HEARTBEAT_VAR),
                            {"name": HEARTBEAT_VAR, "value": value})
@@ -241,7 +289,7 @@ class Heartbeat:
             status, _ = github("POST", "/repos/{}/actions/variables".format(REPO),
                                {"name": HEARTBEAT_VAR, "value": value})
         if status in (201, 204):
-            self.last_sent = time.time()
+            self.last_sent = now
             self.last_value = value
         else:
             log("heartbeat not updated (status {})".format(status))
@@ -279,13 +327,19 @@ def tart(*args, timeout=120):
     return run(["tart"] + list(args), timeout=timeout)
 
 
-def vm_exists(name):
+def list_vms():
+    """VM names from `tart list`, header dropped; empty when tart fails."""
     res = tart("list")
+    names = []
     for line in res.stdout.decode(errors="replace").splitlines()[1:]:
         parts = line.split()
-        if len(parts) >= 2 and parts[1] == name:
-            return True
-    return False
+        if len(parts) >= 2:
+            names.append(parts[1])
+    return names
+
+
+def vm_exists(name):
+    return name in list_vms()
 
 
 def stop_and_delete(vm):
@@ -305,6 +359,25 @@ def guest_write(vm, path, content, mode="600"):
     script = "umask 077; mkdir -p \"$(dirname '{p}')\" && cat > '{p}' && chmod {m} '{p}'".format(p=path, m=mode)
     res = run(["tart", "exec", "-i", vm, "/bin/sh", "-c", script], input_bytes=content, timeout=60)
     return res.returncode == 0
+
+
+def tail_of(path, limit=600):
+    try:
+        with open(path, "rb") as handle:
+            return handle.read().decode(errors="replace").strip()[-limit:]
+    except OSError:
+        return ""
+
+
+def keep_tart_log(path, failed):
+    """One file for the last VM that failed to boot; a good cycle leaves nothing."""
+    try:
+        if failed:
+            os.replace(path, os.path.join(LOGS, "tart-last-failure.log"))
+        else:
+            os.remove(path)
+    except OSError:
+        pass
 
 
 # --- runner registration ----------------------------------------------------
@@ -333,13 +406,16 @@ def deregister(name, runner_id):
 # --- one job --------------------------------------------------------------
 
 class RunnerOutput(threading.Thread):
-    """Reads the runner's output, notices when a job starts."""
+    """Reads the runner's output: notices when a job starts and how it ended."""
+
+    RESULT = re.compile(r"\bJob .* completed with result: (\w+)")
 
     def __init__(self, proc, vm):
         super().__init__(daemon=True)
         self.proc = proc
         self.vm = vm
         self.job_started_at = None
+        self.job_result = None      # Succeeded, Failed, Canceled; None if the runner died first
         self.lines = 0
 
     def run(self):
@@ -348,9 +424,28 @@ class RunnerOutput(threading.Thread):
             self.lines += 1
             if "Running job:" in line and self.job_started_at is None:
                 self.job_started_at = time.time()
+                set_flag("job-running", self.vm + "\n")   # build-warm.sh waits on this
                 log("[{}] {}".format(self.vm, line.strip()))
-            elif "Listening for Jobs" in line or "Job " in line and ("completed" in line or "result" in line):
+                continue
+            match = self.RESULT.search(line)
+            if match:
+                self.job_result = match.group(1)
                 log("[{}] {}".format(self.vm, line.strip()))
+            elif "Listening for Jobs" in line or "unknown error code" in line:
+                log("[{}] {}".format(self.vm, line.strip()))
+
+
+def runner_outcome(reader, returncode):
+    """How the runner process ended, from what it printed."""
+    if reader.job_started_at is None:
+        return "runner exited without a job (code {})".format(returncode)
+    took = int(time.time() - reader.job_started_at)
+    if reader.job_result is not None:
+        return "job finished in {} s: {}".format(took, reader.job_result)
+    # The listener prints the result line before it exits. Without one it was
+    # killed, which is what the admission hook does on a refusal.
+    return "job ended without a result after {} s (runner killed: admission refusal or crash, code {})".format(
+        took, returncode)
 
 
 class CycleAbort(Exception):
@@ -360,8 +455,11 @@ class CycleAbort(Exception):
 def one_cycle(hb):
     vm = "job-" + time.strftime("%Y%m%d-%H%M%S", time.gmtime())
     runner_id = None
+    registered = False
     outcome = "no job"
     vm_proc = None
+    vm_err = None
+    vm_log = os.path.join(LOGS, vm + ".tart.log")
     try:
         allowlist = fetch_allowlist()
         if allowlist is None:
@@ -370,17 +468,23 @@ def one_cycle(hb):
         res = tart("clone", WARM_VM, vm, timeout=300)
         if res.returncode != 0:
             raise CycleAbort("clone failed: " + res.stderr.decode(errors="replace").strip())
-        tart("set", vm, "--cpu", str(CPU), "--memory", str(MEMORY_MB))
+        res = tart("set", vm, "--cpu", str(CPU), "--memory", str(MEMORY_MB))
+        if res.returncode != 0:
+            raise CycleAbort("could not set the VM shape: " + res.stderr.decode(errors="replace").strip())
 
         env = dict(os.environ, PATH=PATH, HOME=HOME)
+        # tart's stderr goes to a file, never a pipe: nothing would read a pipe
+        # for the hours a VM may live, and once full it blocks tart or Softnet.
+        os.makedirs(LOGS, exist_ok=True)
+        vm_err = open(vm_log, "wb")
         vm_proc = subprocess.Popen(
             ["tart", "run", vm, "--no-graphics", "--net-softnet-block=@host", "--root-disk-opts=sync=none"],
-            env=env, stdout=subprocess.DEVNULL, stderr=subprocess.PIPE)
+            env=env, stdout=subprocess.DEVNULL, stderr=vm_err)
         deadline = time.time() + BOOT_TIMEOUT
         while time.time() < deadline:
             if vm_proc.poll() is not None:
-                err = vm_proc.stderr.read().decode(errors="replace").strip()
-                raise CycleAbort("vm exited during boot (code {}): {}".format(vm_proc.returncode, err[:600] or "no stderr"))
+                raise CycleAbort("vm exited during boot (code {}): {}".format(
+                    vm_proc.returncode, tail_of(vm_log) or "no stderr"))
             if exec_ready(vm):
                 break
             time.sleep(2)
@@ -392,6 +496,7 @@ def one_cycle(hb):
         encoded, runner_id = jit_config(vm)
         if not encoded:
             raise CycleAbort("no jit config")
+        registered = True   # generate-jitconfig registers the runner at once
         if not guest_write(vm, GUEST_STATE + "/jit", encoded.encode()):
             raise CycleAbort("could not write jit config into the guest")
 
@@ -408,11 +513,14 @@ def one_cycle(hb):
             if _stop.is_set():
                 outcome = "controller stopping"
                 break
-            hb.send(healthy=True)
+            # Paused or building: a running job finishes, but the Studio stops
+            # advertising itself, so nothing new queues on its label meanwhile.
+            hb.send(healthy=advertise_healthy())
             now = time.time()
             if reader.job_started_at is None:
-                if flag("paused") or flag("tripped") or flag("recycle"):
-                    outcome = "idle VM replaced ({})".format("paused" if flag("paused") else "tripped" if flag("tripped") else "recycle")
+                reason = stop_reason()
+                if reason:
+                    outcome = "idle VM replaced ({})".format(reason)
                     break
                 if now - started > IDLE_RECYCLE:
                     outcome = "idle VM recycled after {} h".format(IDLE_RECYCLE // 3600)
@@ -423,11 +531,10 @@ def one_cycle(hb):
                 break
             time.sleep(5)
         else:
-            if reader.job_started_at is not None:
-                outcome = "job finished in {} s".format(int(time.time() - reader.job_started_at))
+            reader.join(timeout=15)   # the last lines may still be in flight
+            outcome = runner_outcome(reader, runner.returncode)
+            if reader.job_result is not None:
                 set_flag("last-clean-job", vm + "\n")
-            else:
-                outcome = "runner exited without a job (code {})".format(runner.returncode)
         clear_flag("recycle")
         return outcome
     except CycleAbort as exc:
@@ -441,7 +548,12 @@ def one_cycle(hb):
             except subprocess.TimeoutExpired:
                 vm_proc.kill()
         stop_and_delete(vm)
-        deregister(vm, runner_id)
+        if registered:
+            deregister(vm, runner_id)
+        clear_flag("job-running")
+        if vm_err is not None:
+            vm_err.close()
+            keep_tart_log(vm_log, failed=outcome.startswith(("vm exited", "guest agent")))
         log("[{}] {}".format(vm, outcome))
 
 
@@ -452,6 +564,49 @@ def handle_signal(signum, _frame):
     _stop.set()
 
 
+def sweep_leftovers():
+    """VMs and registrations a previous controller left behind: a crash, or
+    launchd's SIGKILL when a cleanup outran ExitTimeOut. At startup none of
+    ours can legitimately exist."""
+    for name in list_vms():
+        if name.startswith("job-"):
+            log("sweep: removing leftover VM {}".format(name))
+            stop_and_delete(name)
+    if os.path.exists(TOKEN_FILE):
+        status, body = github("GET", "/repos/{}/actions/runners?per_page=100".format(REPO))
+        runners = body.get("runners", []) if status == 200 and body else []
+        for runner in runners:
+            if str(runner.get("name", "")).startswith("job-"):
+                github("DELETE", "/repos/{}/actions/runners/{}".format(REPO, runner["id"]))
+                log("sweep: removed leftover registration {} ({})".format(runner["name"], runner["id"]))
+    clear_flag("job-running")
+
+
+def needs_backoff(outcome):
+    """A cycle that ended this way is retried after a pause, not at once."""
+    return outcome.startswith(BACKOFF_PREFIXES)
+
+
+def idle_reason():
+    """Why no VM should boot right now, or None."""
+    if flag("paused"):
+        return "paused"
+    if flag("tripped"):
+        return "tripped: " + read_state("tripped")
+    if building_active():
+        return "warm image rebuilding (state/building)"
+    if not os.path.exists(TOKEN_FILE):
+        return "no token at {}".format(TOKEN_FILE)
+    if not softnet_ok():
+        return "softnet root rule failed"
+    free = free_gb()
+    if free < MIN_FREE_GB_STOP:
+        return "free disk {:.0f} GB under {} GB".format(free, MIN_FREE_GB_STOP)
+    if not vm_exists(WARM_VM):
+        return "warm image {} missing".format(WARM_VM)
+    return None
+
+
 def main():
     os.makedirs(STATE, exist_ok=True)
     signal.signal(signal.SIGTERM, handle_signal)
@@ -460,24 +615,12 @@ def main():
         os.environ.get("USER", "?"), REPO, WARM_VM, CPU, MEMORY_MB))
     unlock_keychain()
     check_panic_breaker()
+    sweep_leftovers()
     hb = Heartbeat()
     idle_logged = None
 
     while not _stop.is_set():
-        reason = None
-        if flag("paused"):
-            reason = "paused"
-        elif flag("tripped"):
-            reason = "tripped: " + read_state("tripped")
-        elif not os.path.exists(TOKEN_FILE):
-            reason = "no token at {}".format(TOKEN_FILE)
-        elif not softnet_ok():
-            reason = "softnet root rule failed"
-        elif free_gb() < MIN_FREE_GB_STOP:
-            reason = "free disk {:.0f} GB under {} GB".format(free_gb(), MIN_FREE_GB_STOP)
-        elif not vm_exists(WARM_VM):
-            reason = "warm image {} missing".format(WARM_VM)
-
+        reason = idle_reason()
         if reason:
             if idle_logged != reason:
                 log("idle: " + reason)
@@ -486,8 +629,9 @@ def main():
             _stop.wait(IDLE_SLEEP)
             continue
         idle_logged = None
-        if free_gb() < MIN_FREE_GB_WARN:
-            log("warning: free disk {:.0f} GB".format(free_gb()))
+        free = free_gb()
+        if free < MIN_FREE_GB_WARN:
+            log("warning: free disk {:.0f} GB".format(free))
 
         try:
             outcome = one_cycle(hb)
@@ -495,7 +639,7 @@ def main():
             import traceback
             log("cycle crashed: {}: {}\n{}".format(type(exc).__name__, exc, traceback.format_exc()))
             outcome = "cycle crashed"
-        if outcome.startswith(("clone failed", "vm exited", "guest agent", "no jit", "could not", "idle: no allow-list", "cycle crashed")):
+        if needs_backoff(outcome):
             hb.send(healthy=False)
             _stop.wait(60)
 

@@ -32,13 +32,10 @@ as_root install -d -o runner -g staff -m 755 "$WORK"
 as_root chown -R builder:staff "$TOOLCHAINS" "$WORK"
 
 echo "==> Checkout $REPO_URL @ $REF"
-if [ -d "$REPO_DIR/.git" ]; then
-  as_builder git -C "$REPO_DIR" fetch --depth 1 origin "$REF"
-  as_builder git -C "$REPO_DIR" checkout -q --detach FETCH_HEAD
-else
-  as_builder install -d "$WORK/slate"
-  as_builder git clone --depth 1 --branch "$REF" "$REPO_URL" "$REPO_DIR"
-fi
+# Always a fresh clone: this stage starts from slate-mac-toolchain, which has
+# no checkout, so there is nothing to fetch into.
+as_builder install -d "$WORK/slate"
+as_builder git clone --depth 1 --branch "$REF" "$REPO_URL" "$REPO_DIR"
 as_builder git -C "$REPO_DIR" log -1 --format='   %H %s'
 # Read while builder still owns the tree; afterwards git refuses the
 # ownership mismatch ("dubious ownership").

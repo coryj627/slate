@@ -45,6 +45,9 @@ jobs:
       - name: Route decision tests
         run: python -I -m unittest discover -v -s ci/mac-runner/route/tests -t ci/mac-runner/route
 
+      - name: Controller tests
+        run: python -I -m unittest discover -v -s ci/mac-runner/controller/tests -t ci/mac-runner/controller
+
       - name: Allow-list is valid for the hook
         run: |
           python -I - <<'PY'

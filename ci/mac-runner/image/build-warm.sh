@@ -54,6 +54,23 @@ esac
 vm_exists slate-mac-toolchain || { echo "slate-mac-toolchain does not exist; run build-toolchain.sh first" >&2; exit 1; }
 vm_exists "$stage" && tart delete "$stage"
 
+# Tell the controller a build is on. It lets a running job finish, takes the
+# idle VM down, clears the heartbeat (jobs route to Namespace meanwhile) and
+# boots nothing until the marker goes. Without this the 16 GB build VM could
+# run beside a 16 GB job VM on a 36 GB host. The controller ignores a marker
+# older than two hours, in case this script dies without reaching the trap.
+marker="$state/state/building"
+mkdir -p "$state/state"
+printf 'build-warm.sh pid %s started %s\n' "$$" "$(date -u +%Y-%m-%dT%H:%M:%SZ)" > "$marker"
+trap 'rm -f "$marker"' EXIT
+job_vms() { tart list 2>/dev/null | awk 'NR>1 && $2 ~ /^job-/ {print $2}'; }
+echo "== waiting for the controller to finish its job and release its VM"
+for _ in $(seq 1 170); do   # up to 85 min: a job may run 75 under the watchdog
+  [ -e "$state/state/job-running" ] || [ -n "$(job_vms)" ] || break
+  sleep 30
+done
+[ -z "$(job_vms)" ] || echo "a job VM is still up after 85 min; building anyway" >&2
+
 echo "== stage 4: checkout and build $REF as builder"
 packer init 04-warm.pkr.hcl >/dev/null
 start=$(date +%s)
@@ -69,9 +86,8 @@ if vm_exists slate-mac-warm; then
   tart rename slate-mac-warm slate-mac-warm.prev
 fi
 tart rename "$stage" slate-mac-warm
-# Tell the controller to replace its idle VM with one from the new image.
-mkdir -p "$state/state"
+# The next VM the controller boots, once the EXIT trap removes the building
+# marker, comes from this image; no recycle flag is needed.
 date -u +%Y-%m-%dT%H:%M:%SZ > "$state/state/warm-stamp"
-touch "$state/state/recycle"
 tart list
 echo "== done: slate-mac-warm"
