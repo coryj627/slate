@@ -365,14 +365,24 @@ Describe 'Get-CiHostConfig' {
         $raw.Lanes.Remove('app')
         $raw.Lanes['App'] = @{ Cache = $true; MaxMinutes = 100 }
         $raw | ConvertTo-Json -Depth 6 | Set-Content $p
-        { Get-CiHostConfig -Path $p } | Should -Throw '*App*'
+        { Get-CiHostConfig -Path $p } | Should -Throw "*unknown lane 'App'*"
     }
     It 'rejects a null Slots value' {
         $p = Join-Path $TestDrive 'noslots.json'
         $raw = Get-Content -Raw (Join-Path $PSScriptRoot '..' 'config.json') | ConvertFrom-Json -AsHashtable
         $raw.Slots = $null
         $raw | ConvertTo-Json -Depth 6 | Set-Content $p
-        { Get-CiHostConfig -Path $p } | Should -Throw '*slot*'
+        { Get-CiHostConfig -Path $p } | Should -Throw '*at least one slot is required*'
+    }
+    It 'throws when the file is missing' {
+        { Get-CiHostConfig -Path (Join-Path $TestDrive 'absent.json') -ErrorAction Continue } | Should -Throw '*absent.json*'
+    }
+    It 'rejects a Lanes value that is not an object' {
+        $p = Join-Path $TestDrive 'lanesnull.json'
+        $raw = Get-Content -Raw (Join-Path $PSScriptRoot '..' 'config.json') | ConvertFrom-Json -AsHashtable
+        $raw.Lanes = $null
+        $raw | ConvertTo-Json -Depth 6 | Set-Content $p
+        { Get-CiHostConfig -Path $p } | Should -Throw '*Lanes must be an object*'
     }
 }
 
@@ -422,6 +432,30 @@ Describe 'Journal' {
         Write-Journal -Path $p -Journal $j
         (Read-Journal -Path $p).Retries['1'].Count | Should -Be 2
         Test-Path "$p.tmp" | Should -BeFalse
+    }
+    It 'never replaces the journal when the temp write fails' {
+        $p = Join-Path $TestDrive 'guarded.json'
+        $j = New-Journal
+        $j.Retries['1'] = @{ Count = 1; NextAt = '2026-10-10T12:00:00.0000000+00:00' }
+        Write-Journal -Path $p -Journal $j
+        $before = Get-Content -Raw $p
+        # A stale read-only temp file makes the real Set-Content fail. The
+        # caller runs in its own runspace with default error handling (no
+        # try/catch, preference Continue): inside Pester every call is under
+        # a try/catch, and the runner's global Stop would hide the bug.
+        'stale' | Set-Content "$p.tmp"
+        Set-ItemProperty -LiteralPath "$p.tmp" -Name IsReadOnly -Value $true
+        $j.Retries['1'].Count = 2
+        $ps = [powershell]::Create()
+        try {
+            $null = $ps.AddScript({
+                param($module, $path, $journal)
+                Import-Module $module -Force
+                Write-Journal -Path $path -Journal $journal
+            }).AddArgument((Join-Path $PSScriptRoot '..' 'SlateCiHost.psm1')).AddArgument($p).AddArgument($j)
+            { $null = $ps.Invoke() } | Should -Throw
+        } finally { $ps.Dispose() }
+        Get-Content -Raw $p | Should -Be $before
     }
 }
 
