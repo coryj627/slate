@@ -1075,7 +1075,9 @@ function Read-Journal {
     if (-not (Test-Path -LiteralPath $Path)) { return (New-Journal) }
     $journal = $null
     try {
-        $journal = Get-Content -Raw -LiteralPath $Path | ConvertFrom-Json -AsHashtable
+        # -ErrorAction Stop: a locked file is otherwise a non-terminating
+        # error and the IOException clause below would never run.
+        $journal = Get-Content -Raw -LiteralPath $Path -ErrorAction Stop | ConvertFrom-Json -AsHashtable
         if ($null -eq $journal -or -not ($journal -is [System.Collections.IDictionary])) { throw 'journal is not an object' }
     } catch [System.IO.IOException] {
         # Unreadable (locked) is not corrupt: never overwrite a journal we
