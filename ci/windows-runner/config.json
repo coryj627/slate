@@ -1,0 +1,33 @@
+{
+  "Owner": "coryj627",
+  "Repo": "slate",
+  "Root": "C:\\slate-ci",
+  "SwitchName": "slate-ci",
+  "Gateway": "10.77.0.1",
+  "Dns": "1.1.1.1,8.8.8.8",
+  "Slots": [
+    { "Index": 1, "Ip": "10.77.0.11" },
+    { "Index": 2, "Ip": "10.77.0.12" }
+  ],
+  "Vcpu": 4,
+  "MemoryGB": 12,
+  "Lanes": {
+    "rust":  { "Cache": true,  "MaxMinutes": 70 },
+    "app":   { "Cache": true,  "MaxMinutes": 100 },
+    "model": { "Cache": true,  "MaxMinutes": 100 },
+    "shell": { "Cache": false, "MaxMinutes": 30 }
+  },
+  "TickSeconds": 10,
+  "HeartbeatTimeoutSeconds": 180,
+  "UnclaimedTimeoutSeconds": 300,
+  "RetryCap": 3,
+  "RetryBackoffSeconds": 600,
+  "TrustedRepo": "coryj627/slate",
+  "TrustedBranch": "main",
+  "TrustedEvents": [ "push", "schedule", "workflow_dispatch" ],
+  "RoutedWorkflows": [
+    ".github/workflows/windows.yml",
+    ".github/workflows/nightly.yml",
+    ".github/workflows/windows-ci-pilot.yml"
+  ]
+}

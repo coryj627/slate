@@ -1,0 +1,64 @@
+# Tests for the self-hosted Windows runner's host-side code
+# (ci/windows-runner/**): the orchestrator module, the GitHub and Hyper-V
+# adapters (faked), the guest and golden scripts (parsed). Hosted Linux,
+# no runner, VM or cache volume involved.
+# docs/superpowers/specs/2026-10-10-self-hosted-windows-runner-design.md.
+
+name: Windows runner tests
+
+on:
+  pull_request:
+    paths:
+      - 'ci/windows-runner/**'
+      - '.github/workflows/windows-runner-tests.yml'
+      # The Workflows guards must run when a routed workflow changes.
+      - '.github/workflows/windows.yml'
+      - '.github/workflows/nightly.yml'
+      - '.github/workflows/windows-ci-pilot.yml'
+  push:
+    branches: [main]
+    paths:
+      - 'ci/windows-runner/**'
+      - '.github/workflows/windows-runner-tests.yml'
+      # The Workflows guards must run when a routed workflow changes.
+      - '.github/workflows/windows.yml'
+      - '.github/workflows/nightly.yml'
+      - '.github/workflows/windows-ci-pilot.yml'
+
+permissions:
+  contents: read
+
+concurrency:
+  group: ${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: ${{ github.event_name == 'pull_request' }}
+
+jobs:
+  tests:
+    name: module, adapters, scripts
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    steps:
+      - name: Checkout
+        uses: actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0  # v7
+        with:
+          persist-credentials: false
+
+      - name: Ensure Pester 5
+        # Pinned to the newest 5.x on the gallery (Find-Module Pester
+        # -AllVersions, 2026-10-10): an unpinned install takes whatever it
+        # serves that day. Prints the Pester version, then the pwsh version.
+        shell: pwsh
+        run: |
+          if (-not (Get-Module -ListAvailable Pester | Where-Object { $_.Version -eq [version]'5.9.1' })) {
+            Install-Module Pester -RequiredVersion 5.9.1 -Force -Scope CurrentUser -SkipPublisherCheck
+          }
+          (Get-Module -ListAvailable Pester | Where-Object { $_.Version -eq [version]'5.9.1' } | Select-Object -First 1).Version.ToString()
+          $PSVersionTable.PSVersion.ToString()
+
+      - name: Run the suite
+        # Each step is a new pwsh, so the pin is imported here; Invoke-Tests.ps1
+        # keeps a Pester 5 that is already loaded.
+        shell: pwsh
+        run: |
+          Import-Module Pester -RequiredVersion 5.9.1 -Force
+          ./ci/windows-runner/tests/Invoke-Tests.ps1

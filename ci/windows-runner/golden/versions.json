@@ -1,0 +1,21 @@
+{
+  "runnerVersion": "2.338.0",
+  "runnerSha256": "f48e0750a21812bca5f82de5f7f5aeae71abee647fab5a582f1742d07eba455f",
+  "rustToolchain": "1.97.1",
+  "bindgenTag": "v0.11.0+v0.31.0",
+  "dotnetChannel": "10.0",
+  "pythonVersion": "3.13.15",
+  "pythonSha256": "edec09c4853aeae9ac36efb8c9f95b6b8e2fee65eee56d9767a8b7c69c574403",
+  "gitVersion": "2.55.0.5",
+  "gitTag": "v2.55.0.windows.5",
+  "gitSha256": "d065a4e23c3d9a6b5073d609b5be0830227ec3ca053c083ba385061ddfaf94c6",
+  "rustupVersion": "1.29.1",
+  "rustupInitSha256": "6f4bef66261261fcb43131be8720bab817d403a09edec7455c371974b90bdb7e",
+  "vsBuildToolsUrl": "https://aka.ms/vs/17/release/vs_BuildTools.exe",
+  "dns": "1.1.1.1,8.8.8.8",
+  "sources": {
+    "pythonSha256": "https://www.python.org/downloads/release/python-31315/",
+    "gitSha256": "https://github.com/git-for-windows/git/releases/tag/v2.55.0.windows.5",
+    "rustupInitSha256": "https://static.rust-lang.org/rustup/archive/1.29.1/x86_64-pc-windows-msvc/rustup-init.exe.sha256"
+  }
+}
