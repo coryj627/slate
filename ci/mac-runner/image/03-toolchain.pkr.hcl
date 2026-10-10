@@ -81,6 +81,11 @@ variable "a11y_check_ref" {
   default = "bcaddd56931ce14d32cebcf42ea9f5b08ed5f7d8"
 }
 
+variable "python_series" {
+  type    = string
+  default = "3.13"
+}
+
 variable "net_args" {
   type = list(string)
   # Build mode: the guest may not open connections to the host, but the host
@@ -173,6 +178,14 @@ build {
     environment_vars = ["A11Y_CHECK_REF=${var.a11y_check_ref}"]
     script           = "scripts/toolchain-analyzer.sh"
     timeout          = "30m"
+  }
+
+  # Python in the runner tool cache, so actions/setup-python never needs sudo.
+  provisioner "shell" {
+    inline_shebang   = "/bin/bash -e"
+    environment_vars = ["PYTHON_SERIES=${var.python_series}"]
+    script           = "scripts/toolchain-python.sh"
+    timeout          = "20m"
   }
 
   provisioner "shell" {

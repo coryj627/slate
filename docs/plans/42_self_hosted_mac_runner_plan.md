@@ -932,6 +932,17 @@ parallel with them.
   within ten seconds. **Phase 3 step 2 is met.** `phase3-hook-livetest.sh`
   (`deny`, `check`, `restore`) repeats the test in a few minutes whenever
   the hook changes.
+- **Phase 3 step 3, pilot attempt 1 (05:55 UTC, run 38029129798).** With
+  the real allow-list back, the hook admitted both mac jobs ("Set up runner"
+  succeeded, the admit path live). Both then failed at `actions/setup-python`:
+  on a self-hosted Mac it installs the requested Python with `sudo
+  installer`, and the runner account has no sudo by design. GitHub's hosted
+  images avoid this by pre-installing Pythons in the runner tool cache, where
+  `setup-python` finds a matching version and installs nothing. The toolchain
+  layer now does the same for the 3.13 series using the same
+  actions/python-versions tarball and its `setup.sh`, run as root at build
+  time (`scripts/toolchain-python.sh`; in place as `03f-python.pkr.hcl`,
+  rolled out with `refresh-inplace.sh`). Attempt 2 follows.
 - **PR A opened 2026-10-10:** coryj627/slate#1335, branch
   `ci/mac-runner-phase2`, with everything above. Its hosted checks are the
   first runs under the workflow execution policy.
