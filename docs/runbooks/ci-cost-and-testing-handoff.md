@@ -567,6 +567,18 @@ and passed. An Actions incident that day left four `ubuntu-latest` jobs
 unassigned ("The job was not acquired by Runner of type hosted"); after GitHub
 recovered, `gh run rerun --failed` re-ran only those jobs, and they passed.
 
+### October 10: mac lanes moved to the Mac Studio
+
+Superseding the mac provider comparison below: `swift-tests.yml` and
+`a11y-check.yml` now run on the owner's Mac Studio through the self-hosted
+Tart runner of `docs/plans/42_self_hosted_mac_runner_plan.md` (warm Swift
+tests job about 2 minutes against 4 to 9 cold on providers), with automatic
+fallback to Namespace's Tahoe slim label and no cache volume. Operating
+notes live in `docs/runbooks/mac-self-hosted-runner.md`; the `slate-mac`
+tag and the `mac-actions` profiles are retired per
+`docs/runbooks/ci-cache-policy.md`. The pilot harness and its candidates
+stay as the qualification gate.
+
 ### October 6 Mac qualification
 
 The Mac half of the dependency qualification ran on `a64eb393` in a clean

@@ -33,6 +33,9 @@ Done means all of the following hold:
   step.
 - The Namespace mac profile and the `slate-mac` cache tag are retired.
 
+Status (2026-10-10): the first four hold, proven in Phase 4; the fifth is
+Phase 5, in progress (PR C).
+
 ## 2. Facts measured on 2026-10-09
 
 ### 2.1 Host
@@ -1104,6 +1107,23 @@ parallel with them.
   neither so a Softnet refresh can never widen it by accident, and the
   Softnet knobs are documented as `sudo FORCE_SOFTNET=1 bash ...`. The
   owner re-runs with `--narrow` from this PR's checkout.
+
+#### Phase 5 progress (2026-10-10)
+
+- **Repository side done in PR B.** After it merged, nothing in `.github/`
+  names `mac-actions`, `mac-actions-pr` or `cache-tag=slate-mac`; pull
+  requests take the workflow from their merge commit, so older branches run
+  the new lanes too. Drained state at retirement time: no open pull requests
+  and no mac run in flight. `mac-ci-pilot.yml` keeps its
+  `namespace-tahoeslim6x14` candidate: that is the fallback image, not the
+  retired profile.
+- **PR C** adds the retirement steps to `docs/runbooks/ci-cache-policy.md`
+  (`nsc volume list`, then `nsc volume release slate-mac`, then delete
+  the two profiles in the dashboard), drops `slate-mac` from its list of
+  live tags, updates plan 41's status and verification lanes, and dates the
+  cost handoff runbook's mac section. The Namespace-side deletions are the
+  owner's: they need the owner's Namespace login and are not reversible.
+- **Plan 41 resumes at Wave 1.**
 
 ### Phase 1: GitHub settings (owner, before any runner registers)
 
