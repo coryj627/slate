@@ -359,6 +359,21 @@ Describe 'Get-CiHostConfig' {
         $raw | ConvertTo-Json -Depth 6 | Set-Content $p
         { Get-CiHostConfig -Path $p } | Should -Throw '*bogus*'
     }
+    It 'rejects a lane key that differs from a lane only by case' {
+        $p = Join-Path $TestDrive 'lanecase.json'
+        $raw = Get-Content -Raw (Join-Path $PSScriptRoot '..' 'config.json') | ConvertFrom-Json -AsHashtable
+        $raw.Lanes.Remove('app')
+        $raw.Lanes['App'] = @{ Cache = $true; MaxMinutes = 100 }
+        $raw | ConvertTo-Json -Depth 6 | Set-Content $p
+        { Get-CiHostConfig -Path $p } | Should -Throw '*App*'
+    }
+    It 'rejects a null Slots value' {
+        $p = Join-Path $TestDrive 'noslots.json'
+        $raw = Get-Content -Raw (Join-Path $PSScriptRoot '..' 'config.json') | ConvertFrom-Json -AsHashtable
+        $raw.Slots = $null
+        $raw | ConvertTo-Json -Depth 6 | Set-Content $p
+        { Get-CiHostConfig -Path $p } | Should -Throw '*slot*'
+    }
 }
 
 Describe 'Journal' {
@@ -397,6 +412,16 @@ Describe 'Journal' {
         $j = Read-Journal -Path $p
         $j.Retries.Count | Should -Be 0
         $j.SeenJobs.Count | Should -Be 0
+    }
+    It 'replaces the journal in place on repeated writes' {
+        $p = Join-Path $TestDrive 'repeat.json'
+        $j = New-Journal
+        $j.Retries['1'] = @{ Count = 1; NextAt = '2026-10-10T12:00:00.0000000+00:00' }
+        Write-Journal -Path $p -Journal $j
+        $j.Retries['1'].Count = 2
+        Write-Journal -Path $p -Journal $j
+        (Read-Journal -Path $p).Retries['1'].Count | Should -Be 2
+        Test-Path "$p.tmp" | Should -BeFalse
     }
 }
 
