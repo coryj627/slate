@@ -24,6 +24,16 @@ param(
 )
 
 $ErrorActionPreference = 'Stop'
+# The MSI build of PowerShell 7 only. The Store (MSIX) build runs in a
+# package context where the Dism module's COM classes are not registered
+# (Get-WindowsOptionalFeature fails with "Class not registered"), and its
+# pwsh alias under WindowsApps is one the task account cannot start. Both
+# builds can be installed side by side; the tasks are registered with the
+# MSI build whichever window runs this.
+$msiPwsh = Join-Path $env:ProgramFiles 'PowerShell\7\pwsh.exe'
+if (-not (Test-Path -LiteralPath $msiPwsh)) { throw "PowerShell 7 from the MSI is required at $msiPwsh (the Store build cannot run the host); install it, then run this from it" }
+$thisHost = (Get-Process -Id $PID).Path
+if ($thisHost -like '*\WindowsApps\*') { throw "this is the Store build of PowerShell ($thisHost); start the MSI build elevated instead: Start-Process '$msiPwsh' -Verb RunAs" }
 $source = (Resolve-Path (Join-Path $PSScriptRoot '..')).Path
 Import-Module (Join-Path $source 'SlateCiHost.psm1') -Force
 
@@ -42,9 +52,16 @@ $prefixLength = [int]$config.PrefixLength
 $CacheLanes = @($config.Lanes.Keys | Where-Object { $config.Lanes[$_].Cache })
 
 Write-Host '1/9 Hyper-V'
-$feature = Get-WindowsOptionalFeature -Online -FeatureName Microsoft-Hyper-V-All
-if ($feature.State -ne 'Enabled') {
-    Enable-WindowsOptionalFeature -Online -FeatureName Microsoft-Hyper-V-All -All -NoRestart | Out-Null
+# dism.exe rather than the Dism PowerShell module, which depends on COM
+# registrations a packaged PowerShell cannot see. /English keeps the
+# output parseable whatever the display language.
+$featureInfo = @(& dism.exe /Online /English /Get-FeatureInfo /FeatureName:Microsoft-Hyper-V-All 2>&1)
+if ($LASTEXITCODE -ne 0) { throw "dism /Get-FeatureInfo exited ${LASTEXITCODE}: $($featureInfo -join ' ')" }
+$state = ''
+foreach ($line in $featureInfo) { if ([string]$line -match '^\s*State\s*:\s*(\S+)') { $state = $Matches[1]; break } }
+if ($state -ne 'Enabled') {
+    & dism.exe /Online /English /Enable-Feature /FeatureName:Microsoft-Hyper-V-All /All /NoRestart | Out-Null
+    if ($LASTEXITCODE -ne 0 -and $LASTEXITCODE -ne 3010) { throw "dism /Enable-Feature exited $LASTEXITCODE" }
     Write-Warning 'Hyper-V was enabled. Reboot, then run this script again.'
     exit 3
 }
@@ -202,7 +219,7 @@ Write-Host '9/9 scheduled tasks'
 if ($keepAccount) {
     Write-Host '  kept (they hold the current password; -ResetAccount re-registers them)'
 } else {
-    $pwsh = (Get-Command pwsh).Source
+    $pwsh = $msiPwsh
     # A zero ExecutionTimeLimit means "no limit" (PT0S); the runbook verifies
     # the task's "Stop the task if it runs longer than" box is unchecked.
     # The battery switches keep the loop running on a UPS, which Windows

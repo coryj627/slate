@@ -81,10 +81,14 @@ down. Every fork pull request still waits for your approval first (see
 
 Before you start:
 
-- PowerShell 7.4 or later, installed from the MSI. Setup registers the
-  tasks with whatever `pwsh` resolves to, and the Microsoft Store build
-  resolves to a `WindowsApps` alias that `slate-ci-host` cannot start. This
-  should print `C:\Program Files\PowerShell\7\pwsh.exe`:
+- PowerShell 7.4 or later, installed from the MSI, at
+  `C:\Program Files\PowerShell\7\pwsh.exe`. Setup registers the tasks with
+  that build and refuses to run under the Microsoft Store build: its
+  `pwsh` alias under `WindowsApps` is one `slate-ci-host` cannot start, and
+  its packaged context cannot reach the Dism module (`Class not
+  registered`). Both builds can be installed side by side; what matters is
+  which one your elevated window runs, which step 2 checks. This should
+  print the MSI path:
 
   ```powershell
   (Get-Command pwsh).Source
@@ -120,14 +124,22 @@ Before you start:
 
    Keep it in the password manager. You paste it in step 4, and again after
    any `-ResetAccount`.
-2. **Elevated window.** From any pwsh, open an elevated one and approve the
-   UAC prompt:
+2. **Elevated window.** From any pwsh, open an elevated one running the MSI
+   build by its full path (a bare `pwsh` can resolve to the Store build),
+   and approve the UAC prompt:
 
    ```powershell
-   Start-Process pwsh -Verb RunAs
+   Start-Process 'C:\Program Files\PowerShell\7\pwsh.exe' -Verb RunAs
    ```
 
-   In the new window, go to the checkout:
+   In the new window, confirm which build it is. Expect
+   `C:\Program Files\PowerShell\7\pwsh.exe`, never a `WindowsApps` path:
+
+   ```powershell
+   (Get-Process -Id $PID).Path
+   ```
+
+   Then go to the checkout:
 
    ```powershell
    Set-Location C:\dev\slate
@@ -1176,6 +1188,12 @@ and `"status": "401"`. Rotate it before then.
 
 ## When things go wrong
 
+- **`Get-WindowsOptionalFeature: … Class not registered` at `1/9 Hyper-V`,
+  or `this is the Store build of PowerShell`.** The elevated window is the
+  Microsoft Store build of PowerShell 7, whose packaged context cannot
+  reach the Dism module. Close it and open the MSI build as in Install,
+  step 2. Setup reads Hyper-V through `dism.exe` and refuses the Store
+  build before it creates anything, so nothing was changed.
 - **`token missing at …` every minute.** No token is stored: run
   `store-token.ps1`. After `-ResetAccount`, store the token before you
   enable the loop task.

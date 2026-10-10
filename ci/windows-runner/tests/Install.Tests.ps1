@@ -85,6 +85,23 @@ Describe 'install scripts' {
         $next | Should -Match 'product-key check'
         $next | Should -Match 'Enable-ScheduledTask -TaskName slate-ci-orchestrator'
     }
+    It 'setup runs only under the MSI build of PowerShell 7, reads Hyper-V through dism.exe and registers the tasks with that build' {
+        # The Store (MSIX) build cannot see the Dism module's COM classes
+        # ("Class not registered") and its WindowsApps alias is one the task
+        # account cannot start.
+        $text = Get-Content -Raw (Join-Path $installDir 'setup-host.ps1')
+        $text | Should -Match ([regex]::Escape("`$msiPwsh = Join-Path `$env:ProgramFiles 'PowerShell\7\pwsh.exe'"))
+        $text | Should -Match ([regex]::Escape("if (`$thisHost -like '*\WindowsApps\*') { throw"))
+        $text | Should -Match 'dism\.exe /Online /English /Get-FeatureInfo /FeatureName:Microsoft-Hyper-V-All'
+        $text | Should -Match 'dism\.exe /Online /English /Enable-Feature /FeatureName:Microsoft-Hyper-V-All /All /NoRestart'
+        # Code lines only: a comment names the cmdlet that fails.
+        $code = @($text -split "`n" | Where-Object { $_ -notmatch '^\s*#' })
+        @($code | Where-Object { $_ -match 'Get-WindowsOptionalFeature|Enable-WindowsOptionalFeature' }) | Should -BeNullOrEmpty
+        $text | Should -Match ([regex]::Escape('$pwsh = $msiPwsh'))
+        $text | Should -Not -Match ([regex]::Escape('(Get-Command pwsh).Source'))
+        # The guard sits before anything is created.
+        $text.IndexOf('WindowsApps') | Should -BeLessThan $text.IndexOf('1/9 Hyper-V')
+    }
     It 'a reset removes both tasks before the password changes' {
         $text = Get-Content -Raw (Join-Path $installDir 'setup-host.ps1')
         $unregister = $text.IndexOf('Unregister-ScheduledTask')
