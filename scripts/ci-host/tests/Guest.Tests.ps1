@@ -94,6 +94,15 @@ Describe 'guest scripts' {
         $calls.Count | Should -Be 2
         foreach ($i in $calls) { $code[$i + 1] | Should -Match '\$LASTEXITCODE -ne 0' }
     }
+    It 'system bootstrap grants runner the cache root only when the root lacks that grant' {
+        # The grant re-walks the whole cache tree; once a trusted commit carries
+        # the ACE into the lane parent, later boots must skip it.
+        $text = Get-Content -Raw (Join-Path $guestDir 'bootstrap-system.ps1')
+        $check = $text.IndexOf('Get-Acl -LiteralPath $root')
+        $check | Should -BeGreaterThan -1
+        $text.IndexOf("icacls.exe `$root /grant 'runner:(OI)(CI)M'") | Should -BeGreaterThan $check
+        $text | Should -Match ([regex]::Escape('if (-not $hasAce)'))
+    }
     It 'neither script contains PowerShell 7-only syntax' {
         foreach ($f in 'bootstrap-system.ps1', 'bootstrap-runner.ps1') {
             $text = Get-Content -Raw (Join-Path $guestDir $f)

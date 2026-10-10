@@ -82,8 +82,19 @@ try {
         }
         # SYSTEM created these and runner builds into them (CARGO_TARGET_DIR,
         # NUGET_PACKAGES, the cargo junctions), whatever the volume root grants.
-        & icacls.exe $root /grant 'runner:(OI)(CI)M' | Out-Null
-        if ($LASTEXITCODE -ne 0) { throw "icacls exited $LASTEXITCODE granting runner the cache" }
+        # The grant re-walks the whole cache tree, so it runs once: a trusted
+        # commit carries the ACE into the lane parent and later boots skip it.
+        $hasAce = @((Get-Acl -LiteralPath $root).Access | Where-Object {
+                $_.IdentityReference.Value -like '*\runner' -and $_.AccessControlType -eq 'Allow' -and
+                (($_.FileSystemRights -band [System.Security.AccessControl.FileSystemRights]::Modify) -eq [System.Security.AccessControl.FileSystemRights]::Modify)
+            }).Count -gt 0
+        if (-not $hasAce) {
+            & icacls.exe $root /grant 'runner:(OI)(CI)M' | Out-Null
+            if ($LASTEXITCODE -ne 0) { throw "icacls exited $LASTEXITCODE granting runner the cache" }
+            Write-Log 'cache acl: granted runner modify on the cache root'
+        } else {
+            Write-Log 'cache acl: runner already has modify on the cache root; grant skipped'
+        }
         $envLines += "NSC_CACHE_PATH=$root"
         $envLines += "CARGO_TARGET_DIR=$root\target"
         $envLines += "NUGET_PACKAGES=$root\nuget"
