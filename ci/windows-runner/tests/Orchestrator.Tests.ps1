@@ -532,6 +532,14 @@ Context 'handed-phase guards' {
         Invoke-OrchestratorTick -Config $config -Journal $journal -Adapters $adapters -Now $t0.AddSeconds(320)
         $journal.Vms[$name].Claimed | Should -BeTrue
     }
+    It 'does not claim a job whose runner name differs only in case (ordinal, as the commit predicate compares)' {
+        $world.Jobs['1'] = [pscustomobject]@{ id = 1; run_id = 10; status = 'in_progress'; conclusion = $null; runner_name = $name.ToUpperInvariant() }
+        Invoke-OrchestratorTick -Config $config -Journal $journal -Adapters $adapters -Now $t0.AddSeconds(320)
+        # Another runner took the job, so this VM is unclaimed with its job no longer queued: torn down, no retry.
+        $journal.Vms.ContainsKey($name) | Should -BeFalse
+        (Get-Calls 'RemoveRunner').Count | Should -Be 1
+        $journal.Retries.Count | Should -Be 0
+    }
     It 'treats a job that already completed on this runner as claimed and waits for Off (no teardown, no lost commit)' {
         $world.Runner = $null
         $world.Jobs['1'] = [pscustomobject]@{ id = 1; run_id = 10; status = 'completed'; conclusion = 'success'; runner_name = $name }

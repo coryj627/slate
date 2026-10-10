@@ -68,6 +68,8 @@ try {
         Remove-NetIPAddress -Confirm:$false -ErrorAction SilentlyContinue
     Get-NetRoute -InterfaceIndex $adapter.ifIndex -DestinationPrefix '0.0.0.0/0' -ErrorAction SilentlyContinue |
         Remove-NetRoute -Confirm:$false -ErrorAction SilentlyContinue
+    # /24: the slot addresses and the gateway in the host's config.json share
+    # one /24 (setup-host.ps1 derives the host side from -NatPrefix).
     New-NetIPAddress -InterfaceIndex $adapter.ifIndex -IPAddress $items['slate.ip'] -PrefixLength 24 -DefaultGateway $items['slate.gateway'] | Out-Null
     Set-DnsClientServerAddress -InterfaceIndex $adapter.ifIndex -ServerAddresses ($items['slate.dns'] -split ',' | ForEach-Object { $_.Trim() } | Where-Object { $_ })
     Write-Log ('network: {0} via {1}' -f $items['slate.ip'], $items['slate.gateway'])

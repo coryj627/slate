@@ -232,12 +232,48 @@ function Resolve-RunnerJob {
     foreach ($id in @($CandidateJobIds)) { if ($ids -notcontains $id) { $ids += $id } }
     foreach ($id in $ids) {
         $job = & $GetJob $id
-        if ($null -ne $job -and [string]$job.runner_name -eq $RunnerName) { return $job }
+        if ($null -ne $job -and [string]::Equals([string]$job.runner_name, $RunnerName, [System.StringComparison]::Ordinal)) { return $job }
     }
     return $null
 }
 
 # ---- host-only: config, journal, log (pwsh 7; -AsHashtable) ----
+
+function ConvertTo-IPv4UInt32 {
+    # The address as a big-endian unsigned integer, so prefixes compare by
+    # shifting. Anything but a dotted IPv4 address throws.
+    param([Parameter(Mandatory)][string]$Address)
+    # IPAddress.TryParse also accepts short forms such as '10.77.0', so the
+    # dotted-quad shape is checked first.
+    $parsed = $null
+    if ($Address -notmatch '^\d{1,3}(\.\d{1,3}){3}$' -or -not [System.Net.IPAddress]::TryParse($Address, [ref]$parsed) -or $parsed.AddressFamily -ne [System.Net.Sockets.AddressFamily]::InterNetwork) {
+        throw "'$Address' is not a dotted IPv4 address"
+    }
+    $bytes = $parsed.GetAddressBytes()
+    [Array]::Reverse($bytes)
+    return [BitConverter]::ToUInt32($bytes, 0)
+}
+
+function Test-IPv4InPrefix {
+    # True when an IPv4 address lies inside a CIDR prefix. The host install
+    # uses it to refuse a gateway outside the NAT prefix it is asked to
+    # create: New-NetNat does not check the pair, and a mismatch leaves the
+    # job VMs without a route. Malformed input throws instead of answering.
+    param(
+        [Parameter(Mandatory)][string]$Address,
+        [Parameter(Mandatory)][string]$Prefix
+    )
+    $parts = $Prefix -split '/', 2
+    if ($parts.Count -ne 2 -or $parts[1] -notmatch '^\d{1,2}$' -or [int]$parts[1] -gt 32) {
+        throw "prefix '$Prefix' is not a.b.c.d/n with n from 0 to 32"
+    }
+    $length = [int]$parts[1]
+    $network = [int64](ConvertTo-IPv4UInt32 -Address $parts[0])
+    $candidate = [int64](ConvertTo-IPv4UInt32 -Address $Address)
+    if ($length -eq 0) { return $true }
+    $shift = 32 - $length
+    return (($network -shr $shift) -eq ($candidate -shr $shift))
+}
 
 function Join-WinPath {
     # Host paths are Windows paths even when the suite runs on Linux CI,
@@ -596,7 +632,7 @@ function Update-ActiveVm {
                 return
             }
             $job = & $Adapters.GetJob ([int64]$vm.JobId)
-            if ($null -ne $job -and [string]$job.runner_name -eq $Name) {
+            if ($null -ne $job -and [string]::Equals([string]$job.runner_name, $Name, [System.StringComparison]::Ordinal)) {
                 # Running or already completed on this runner: the VM is on
                 # its way to Off, so settle it then (a completed single-use
                 # runner is already deleted and would otherwise look unclaimed).
@@ -816,6 +852,6 @@ function Set-LocalUserRights {
 }
 
 Export-ModuleMember -Function Get-LaneFromLabels, New-RunnerName, Split-KvpChunks, Join-KvpChunks,
-    ConvertTo-DateTimeOffset, Select-QueuedLaneJobs, Select-JobsToAdmit, Register-JobRetry, Test-VmExpired, Get-StaleRunnerNames, Test-CommitEligible, Resolve-RunnerJob, Get-CiHostConfig, New-Journal, Read-Journal, Write-Journal, Write-CiLog,
+    ConvertTo-DateTimeOffset, Select-QueuedLaneJobs, Select-JobsToAdmit, Register-JobRetry, Test-VmExpired, Get-StaleRunnerNames, Test-CommitEligible, Resolve-RunnerJob, Test-IPv4InPrefix, Get-CiHostConfig, New-Journal, Read-Journal, Write-Journal, Write-CiLog,
     Get-FreeSlots, Remove-ActiveVm, Test-SiblingRunning, Complete-ActiveVm, Update-ActiveVm, Invoke-Admission, Invoke-OrchestratorTick, Invoke-StartupSweep, Select-SlateKvpItems,
     New-RandomPassword, Expand-UnattendTemplate, Add-SidToUserRight, Set-LocalUserRights

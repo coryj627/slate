@@ -20,6 +20,8 @@ param(
     [string]$Root = 'C:\slate-ci',
     [string]$Account = 'slate-ci-host',
     [string]$SwitchName = 'slate-ci',
+    # a.b.c.d/n; the host address on the switch takes its prefix length from it
+    [ValidatePattern('^(\d{1,3}\.){3}\d{1,3}/([1-9]|[12]\d|3[0-2])$')]
     [string]$NatPrefix = '10.77.0.0/24',
     [string]$Gateway = '10.77.0.1',
     [string[]]$CacheLanes = @('rust', 'app', 'model'),
@@ -30,6 +32,13 @@ param(
 $ErrorActionPreference = 'Stop'
 $source = (Resolve-Path (Join-Path $PSScriptRoot '..')).Path
 Import-Module (Join-Path $source 'SlateCiHost.psm1') -Force
+
+# The gateway must sit inside the NAT prefix, and the host address on the
+# switch takes the prefix's length: New-NetNat checks neither, and either
+# mistake leaves the job VMs without a route. The guest configures its slot
+# address as a /24, the subnet config.json names.
+if (-not (Test-IPv4InPrefix -Address $Gateway -Prefix $NatPrefix)) { throw "gateway $Gateway is outside the NAT prefix $NatPrefix" }
+$prefixLength = [int]($NatPrefix -split '/')[1]
 
 Write-Host '1/9 Hyper-V'
 $feature = Get-WindowsOptionalFeature -Online -FeatureName Microsoft-Hyper-V-All
@@ -118,7 +127,7 @@ $alias = "vEthernet ($SwitchName)"
 $deadline = (Get-Date).AddSeconds(30)
 while (-not (Get-NetAdapter -Name $alias -ErrorAction SilentlyContinue) -and (Get-Date) -lt $deadline) { Start-Sleep -Seconds 1 }
 if (-not (Get-NetIPAddress -InterfaceAlias $alias -IPAddress $Gateway -ErrorAction SilentlyContinue)) {
-    New-NetIPAddress -InterfaceAlias $alias -IPAddress $Gateway -PrefixLength 24 | Out-Null
+    New-NetIPAddress -InterfaceAlias $alias -IPAddress $Gateway -PrefixLength $prefixLength | Out-Null
 }
 if (-not (Get-NetNat -Name $SwitchName -ErrorAction SilentlyContinue)) {
     New-NetNat -Name $SwitchName -InternalIPInterfaceAddressPrefix $NatPrefix | Out-Null

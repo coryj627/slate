@@ -107,6 +107,17 @@ Describe 'install scripts' {
         @([regex]::Matches($text, '(New|Set)-NetFirewallRule -DisplayName \$ruleName [^\r\n]*-LocalAddress \$localAddresses ')).Count | Should -Be 2
         $text | Should -Not -Match '-LocalAddress \$Gateway\b'
     }
+    It 'the host address on the switch takes its prefix length from -NatPrefix, and the gateway must lie inside it' {
+        $text = Get-Content -Raw (Join-Path $installDir 'setup-host.ps1')
+        $text | Should -Not -Match 'New-NetIPAddress[^\r\n]*-PrefixLength 24\b'
+        $text | Should -Match 'New-NetIPAddress -InterfaceAlias \$alias -IPAddress \$Gateway -PrefixLength \$prefixLength'
+        $text | Should -Match ([regex]::Escape('$prefixLength = [int]($NatPrefix -split ''/'')[1]'))
+        $text | Should -Match ([regex]::Escape('[ValidatePattern(''^(\d{1,3}\.){3}\d{1,3}/([1-9]|[12]\d|3[0-2])$'')]'))
+        $text | Should -Match ([regex]::Escape('if (-not (Test-IPv4InPrefix -Address $Gateway -Prefix $NatPrefix)) { throw'))
+        # The check needs the module and must run before the switch step creates anything.
+        $text.IndexOf('Test-IPv4InPrefix') | Should -BeGreaterThan $text.IndexOf('Import-Module')
+        $text.IndexOf('Test-IPv4InPrefix') | Should -BeLessThan $text.IndexOf('5/9 switch')
+    }
     It 'a cache volume is formatted before it gets a drive letter' {
         $text = Get-Content -Raw (Join-Path $installDir 'setup-host.ps1')
         $text | Should -Not -Match 'New-Partition[^\r\n]*-AssignDriveLetter'

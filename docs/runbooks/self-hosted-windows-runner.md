@@ -148,7 +148,9 @@ Before you start:
      full control, `slate-ci-host` has Modify, and `bin` and `golden` are
      read-only for it;
    - the internal switch `slate-ci`, host address `10.77.0.1`, NAT
-     `10.77.0.0/24`;
+     `10.77.0.0/24` (the host address takes the prefix's length, and the
+     script refuses a gateway outside the prefix before it creates
+     anything);
    - the host firewall rule `slate-ci: block VM subnet to host`;
    - the cache parents `rust.vhdx`, `app.vhdx` and `model.vhdx` in
      `C:\slate-ci\cache`: 60 GB dynamic, NTFS, label `slate-cache`, each

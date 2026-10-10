@@ -330,6 +330,35 @@ Describe 'Resolve-RunnerJob' {
     It 'returns null when nothing matches' {
         Resolve-RunnerJob -RunnerName 'slate-win-app-deadbeef' -AdmittedJobId 1 -CandidateJobIds @() -GetJob { param($id) $null } | Should -BeNullOrEmpty
     }
+    It 'compares the runner name ordinally, as the commit predicate does' {
+        # GitHub echoes the registered name byte for byte; a name that differs
+        # in case is a different runner, never a match.
+        $jobs = @{ 1 = [pscustomobject]@{ id = 1; runner_name = 'SLATE-WIN-APP-DEADBEEF' } }
+        Resolve-RunnerJob -RunnerName 'slate-win-app-deadbeef' -AdmittedJobId 1 -CandidateJobIds @() -GetJob { param($id) $jobs[[int]$id] } | Should -BeNullOrEmpty
+    }
+}
+
+Describe 'Test-IPv4InPrefix' {
+    It 'accepts the gateway inside the NAT prefix' {
+        Test-IPv4InPrefix -Address '10.77.0.1' -Prefix '10.77.0.0/24' | Should -BeTrue
+    }
+    It 'rejects an address in a neighbouring subnet' {
+        Test-IPv4InPrefix -Address '10.77.1.1' -Prefix '10.77.0.0/24' | Should -BeFalse
+    }
+    It 'follows the prefix length rather than a fixed /24' {
+        Test-IPv4InPrefix -Address '10.0.200.1' -Prefix '10.0.0.0/16' | Should -BeTrue
+        Test-IPv4InPrefix -Address '10.77.0.200' -Prefix '10.77.0.0/25' | Should -BeFalse
+        Test-IPv4InPrefix -Address '10.77.0.1' -Prefix '10.77.0.1/32' | Should -BeTrue
+        Test-IPv4InPrefix -Address '10.77.0.2' -Prefix '10.77.0.1/32' | Should -BeFalse
+        Test-IPv4InPrefix -Address '192.0.2.1' -Prefix '0.0.0.0/0' | Should -BeTrue
+    }
+    It 'throws on malformed input instead of answering' {
+        { Test-IPv4InPrefix -Address '10.77.0.1' -Prefix '10.77.0.0' } | Should -Throw
+        { Test-IPv4InPrefix -Address '10.77.0.1' -Prefix '10.77.0.0/33' } | Should -Throw
+        { Test-IPv4InPrefix -Address '10.77.0.1' -Prefix '10.77.0/24' } | Should -Throw
+        { Test-IPv4InPrefix -Address 'fe80::1' -Prefix '10.77.0.0/24' } | Should -Throw
+        { Test-IPv4InPrefix -Address 'gateway' -Prefix '10.77.0.0/24' } | Should -Throw
+    }
 }
 
 Describe 'Get-CiHostConfig' {
