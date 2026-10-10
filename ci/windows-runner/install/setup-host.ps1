@@ -7,7 +7,7 @@
 # (idempotent: re-run after a reboot or to refresh C:\slate-ci\bin).
 # Creates the unprivileged orchestrator account, the directory tree and
 # ACLs, the isolated NAT switch and host firewall rule, the formatted
-# cache parents, copies scripts/ci-host into place and registers the
+# cache parents, copies ci/windows-runner into place and registers the
 # scheduled tasks. Everything after this runs as slate-ci-host.
 # A re-run keeps the account's password and both tasks (and so the
 # stored token); -ResetAccount rotates the password and re-registers the

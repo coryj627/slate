@@ -1,19 +1,21 @@
-# Pester suite for scripts/ci-host (the self-hosted Windows runner host).
-# Pure logic only: adapters are faked, so hosted Linux is enough and no
-# runner or cache volume is involved (docs/runbooks/ci-cache-policy.md
-# keeps cheap verifier lanes on standard hosted Linux).
-name: ci-host
+# Tests for the self-hosted Windows runner's host-side code
+# (ci/windows-runner/**): the orchestrator module, the GitHub and Hyper-V
+# adapters (faked), the guest and golden scripts (parsed). Hosted Linux,
+# no runner, VM or cache volume involved.
+# docs/superpowers/specs/2026-10-10-self-hosted-windows-runner-design.md.
+
+name: Windows runner tests
 
 on:
   pull_request:
     paths:
-      - 'scripts/ci-host/**'
-      - '.github/workflows/ci-host.yml'
+      - 'ci/windows-runner/**'
+      - '.github/workflows/windows-runner-tests.yml'
   push:
     branches: [main]
     paths:
-      - 'scripts/ci-host/**'
-      - '.github/workflows/ci-host.yml'
+      - 'ci/windows-runner/**'
+      - '.github/workflows/windows-runner-tests.yml'
 
 permissions:
   contents: read
@@ -23,13 +25,15 @@ concurrency:
   cancel-in-progress: ${{ github.event_name == 'pull_request' }}
 
 jobs:
-  pester:
-    name: ci-host pester
+  tests:
+    name: module, adapters, scripts
     runs-on: ubuntu-latest
     timeout-minutes: 10
     steps:
       - name: Checkout
         uses: actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0  # v7
+        with:
+          persist-credentials: false
 
       - name: Ensure Pester 5
         shell: pwsh
@@ -37,7 +41,8 @@ jobs:
           $have = Get-Module -ListAvailable Pester | Where-Object { $_.Version -ge [version]'5.5.0' }
           if (-not $have) { Install-Module Pester -MinimumVersion 5.5.0 -Force -Scope CurrentUser -SkipPublisherCheck }
           (Get-Module -ListAvailable Pester | Sort-Object Version -Descending | Select-Object -First 1).Version.ToString()
+          $PSVersionTable.PSVersion.ToString()
 
       - name: Run the suite
         shell: pwsh
-        run: ./scripts/ci-host/tests/Invoke-Tests.ps1
+        run: ./ci/windows-runner/tests/Invoke-Tests.ps1

@@ -2,7 +2,8 @@
 # SPDX-License-Identifier: AGPL-3.0-or-later
 #
 # Runs the ci-host Pester suite with Pester 5 (the host's built-in 3.4 is
-# ignored). Exits non-zero on any failure; used locally and by ci-host.yml.
+# ignored). Exits non-zero on any failure; used locally and by
+# windows-runner-tests.yml.
 param([string]$Path = $PSScriptRoot, [string]$Filter)
 
 $ErrorActionPreference = 'Stop'

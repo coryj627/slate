@@ -3,7 +3,7 @@
 #
 # Pure logic for the self-hosted Windows runner host (spec:
 # docs/superpowers/specs/2026-10-10-self-hosted-windows-runner-design.md).
-# Every GitHub and Hyper-V call lives in scripts/ci-host/adapters and is
+# Every GitHub and Hyper-V call lives in ci/windows-runner/adapters and is
 # passed in as a scriptblock, so this module is tested without a VM or a
 # token. The guest imports this module too (Windows PowerShell 5.1), so
 # keep the syntax 5.1-compatible; -AsHashtable appears only in host-only

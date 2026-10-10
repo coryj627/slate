@@ -99,7 +99,7 @@ Paths (all on the NVMe):
 
 ```
 C:\slate-ci\
-  bin\            pinned copy of scripts/ci-host/ from the repo (install step records the commit)
+  bin\            pinned copy of ci/windows-runner/ from the repo (install step records the commit)
   golden\win11-runner.vhdx        read-only golden guest disk
   cache\rust.vhdx  app.vhdx  model.vhdx   per-lane cache parents (dynamic VHDX, NTFS, volume label slate-cache, formatted by install/setup-host.ps1) + <lane>.gen counters
   vms\<runner-name>\              os.vhdx and cache.vhdx differencing children, VM config
@@ -252,7 +252,7 @@ monthly runbook item.
 
 ### 4. Guest golden image
 
-Built once by `scripts/ci-host/golden/build-golden.ps1` (elevated) without
+Built once by `ci/windows-runner/golden/build-golden.ps1` (elevated) without
 running Windows Setup: it mounts the ISO, applies the "Windows 11 Pro"
 index of `install.wim` to a new 120 GB dynamic VHDX with
 `Expand-WindowsImage`, makes it bootable with `bcdboot`, drops a rendered
@@ -311,7 +311,7 @@ Toolchain, matching the Namespace image the lanes run on today:
 - `uniffi-bindgen-cs` at the tag pinned in
   `apps/slate-windows/uniffi-bindgen-cs.version`, in `%USERPROFILE%\.cargo\bin`
   of `runner`.
-- `scripts/ci-host/golden/versions.json` is the golden image's single pin
+- `ci/windows-runner/golden/versions.json` is the golden image's single pin
   file (runner version and SHA-256, Rust toolchain, uniffi-bindgen-cs tag,
   .NET channel, Python and Git versions, resolvers); the Pester suite
   asserts its Rust and bindgen pins equal `rust-toolchain.toml` and
@@ -324,9 +324,10 @@ cache parents are untouched.
 
 ### 5. Workflow changes
 
-Repository variable `SLATE_WINDOWS_POOL`: `home` (default) or `namespace`.
+Repository variable `WINDOWS_RUNNER_MODE`: `home` (default) or `namespace`.
 Every Windows `runs-on` becomes an expression on it; nothing else about job
-topology changes.
+topology changes. The name mirrors `MAC_RUNNER_MODE`; the Windows variable
+has no `auto` mode (D-3 chose manual).
 
 | Job | `home` | `namespace` (today's value, verbatim) |
 |---|---|---|
@@ -338,7 +339,7 @@ topology changes.
 | windows-ci-pilot.yml candidates | new `home` choice: `build-app` → `slate-win-app`, `model-shard` → `slate-win-model`, `shell` → `slate-win-shell` (the other candidates keep their hosted shell) | unchanged |
 
 Cache steps: the two `namespacelabs/nscloud-cache-action` steps gain
-`if: ${{ vars.SLATE_WINDOWS_POOL == 'namespace' }}`. The attestation and
+`if: ${{ vars.WINDOWS_RUNNER_MODE == 'namespace' }}`. The attestation and
 footprint steps run on both pools unchanged. The `actions/cache` step for
 `uniffi-bindgen-cs` stays; on `home` the binary is already present and the
 GitHub cache (shared across runners) hits anyway. The "Assert runner
@@ -356,11 +357,11 @@ part of this change.
 Fallback and return:
 
 ```bash
-gh variable set SLATE_WINDOWS_POOL --body namespace
+gh variable set WINDOWS_RUNNER_MODE --body namespace
 ```
 
 ```bash
-gh variable set SLATE_WINDOWS_POOL --body home
+gh variable set WINDOWS_RUNNER_MODE --body home
 ```
 
 Header comments in windows.yml and nightly.yml record the pool switch and
@@ -373,17 +374,17 @@ point at the runbook; the 2026-07-31 Namespace rationale stays as history.
   with `approval_policy: all_external_contributors`).
 - Default `GITHUB_TOKEN` permission stays read-only (already the case).
 - No new repository secrets. The only new repository object is the
-  `SLATE_WINDOWS_POOL` variable.
+  `WINDOWS_RUNNER_MODE` variable.
 - Recommended, recorded in the runbook, not done by this work: branch
   protection on `main` requiring "build + test (windows x64)".
 
 ### 7. Orchestrator design
 
-Location in the repo: `scripts/ci-host/` (PowerShell 7, SPDX headers as in
+Location in the repo: `ci/windows-runner/` (PowerShell 7, SPDX headers as in
 `generate-bindings.ps1`).
 
 ```
-scripts/ci-host/
+ci/windows-runner/
   SlateCiHost.psm1          pure logic: queue selection, label parsing, admission,
                             commit predicate, KVP chunking, timeouts, state journal
   adapters/GitHub.ps1       REST calls (Invoke-RestMethod with the PAT)
@@ -424,7 +425,7 @@ These are estimates; acceptance records real numbers.
 ## Testing
 
 - **Unit (Pester 5, CI on `ubuntu-latest` with pwsh, path-filtered to
-  `scripts/ci-host/**`):** queue selection and ordering, exactly-one-label
+  `ci/windows-runner/**`):** queue selection and ordering, exactly-one-label
   rule, admission with slot limits and retry caps, the commit predicate for
   every event/branch/repository/conclusion/shutdown/generation combination,
   KVP chunking at the 1,000-character boundary and reassembly, timeout
