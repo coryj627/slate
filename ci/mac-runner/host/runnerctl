@@ -1,0 +1,5 @@
+#!/bin/bash
+# Owner-side wrapper: run runnerctl as slate-ci through the sudoers rule that
+# admin-setup.sh installs (broad in Phases 0 to 3, runnerctl-only after
+# admin-setup.sh --narrow). See controller/runnerctl.sh for the subcommands.
+exec sudo -n -u slate-ci -H /usr/local/libexec/slate-runner/bin/runnerctl "$@"

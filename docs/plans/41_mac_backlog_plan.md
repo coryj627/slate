@@ -1,9 +1,11 @@
 # Mac backlog plan: open, unmilestoned issues
 
-Status: adopted 2026-10-09. Owner decisions D1 to D5 are recorded in §5 and
-the §6 housekeeping is done. Source: every open issue with no milestone (76
-on 2026-10-08), read in full and cross-checked against `main` at c247b865.
-No implementation PR has started.
+Status: adopted 2026-10-09; on ice until the self-hosted mac runner existed;
+resumed 2026-10-10 at Wave 1 with plan 42 Phases 0 to 5 complete (the mac
+lanes run on the Mac Studio, Namespace only as fallback). Owner decisions D1
+to D5 are recorded in §5 and the §6 housekeeping is done. Source: every open
+issue with no milestone (76 on 2026-10-08), read in full and cross-checked
+against `main` at c247b865. No implementation PR has started.
 
 ## 1. Triage
 
@@ -103,8 +105,9 @@ Not mac, or no action (5):
 - Every chunk closes its register lines in `docs/plans/*_contracts.md`
   (CD-, C-D, SD-, PD-, AR-, TGC- entries) in the same PR, the way the
   Windows close-outs did.
-- Verification lanes: `swift-tests.yml` (XCTest on the Namespace mac
-  runner), `a11y-check.yml` (static score floor), `rust.yml` for core,
+- Verification lanes: `swift-tests.yml` (XCTest on the Mac Studio runner,
+  about 2 minutes warm; Namespace Tahoe when the Studio is offline),
+  `a11y-check.yml` (static score floor, same routing), `rust.yml` for core,
   `windows.yml` whenever an FFI signature changes, and a VoiceOver field
   pass through `scripts/vo.sh` with
   `docs/runbooks/voiceover-feature-test.md` for anything that changes what

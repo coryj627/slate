@@ -5,6 +5,8 @@ standard GitHub ARM runner and a direct Namespace ARM runner. It does not change
 production routing, subscription terms, cache tags, cache sizes or branch rules.
 Keep the PR draft until fresh human accessibility acceptance is complete.
 
+> **Reference moved (2026-10-10).** `REFERENCE` and the workflow default `source_sha` now name `c247b865d5146f006b914bf9ba68fe3ecb648632`, the squash-merge of PR 1328 on `main`. The earlier reference `a64eb393f5470b9cdb94f3f537a85ceeeda3f7c4` lived on the Codex branch, which was deleted after the merge, so a checkout of branch refs no longer has it (the Studio pilot attempt 3 failed on exactly that). Both commits have the same `apps/slate-mac/Tests` tree (5a12505b) and inventory digest a145b175.
+
 ## Source and environment qualification
 
 Use the literal application source
@@ -30,6 +32,7 @@ substitute a compiler or change a shared profile to obtain a pass.
 | --- | --- | --- |
 | `hosted-xcode27` | `xcode-27` | Standard public GitHub ARM preview image; inspect actual image, hardware and OS. |
 | `namespace-tahoeslim6x14` | `nscloud-macos-tahoe-slim-arm64-6x14` | Direct 6 CPU/14 GiB Tahoe image offering only current Xcodes (26.6.2 with Xcode 27 in the dashboard), without a cache suffix or custom tag; reject an existing Namespace cache mount. |
+| `self-hosted-tart` | `slate-mac-tart` | The owner's Mac Studio: a throwaway Tart VM per job (12 vCPU, 16 GB, macOS 27.0.1 with Xcode 27.0 27A266a), host and LAN blocked; see `docs/plans/42_self_hosted_mac_runner_plan.md` and `docs/runbooks/mac-self-hosted-runner.md`. The pilot checks out `source` fresh, so it measures a cold build on the Studio, not the warm tree PR jobs get. |
 
 Finder answered no Apple Events on the Golden Gate image
 (`nscloud-macos-goldengate-arm64-6x14`) on October 3 and 7, so the Tahoe

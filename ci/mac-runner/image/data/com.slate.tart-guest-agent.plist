@@ -1,0 +1,37 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
+<!--
+  Tart guest agent inside the guest, as a LaunchAgent: it runs in the
+  logged-in user's GUI session (runner), so `tart exec` commands run as
+  runner with no extra privileges. The daemon variant, which would serve
+  `tart exec` as root, is deliberately not installed (plan §4.4).
+  After cirruslabs/macos-image-templates data/tart-guest-agent.plist.
+-->
+<plist version="1.0">
+<dict>
+  <key>Label</key>
+  <string>com.slate.tart-guest-agent</string>
+  <key>ProgramArguments</key>
+  <array>
+    <string>/usr/local/bin/tart-guest-agent</string>
+    <string>--run-agent</string>
+  </array>
+  <key>EnvironmentVariables</key>
+  <dict>
+    <key>PATH</key>
+    <string>/usr/local/slate-runner/bin:/usr/local/bin:/usr/bin:/bin:/usr/sbin:/sbin</string>
+    <key>TERM</key>
+    <string>xterm-256color</string>
+  </dict>
+  <key>WorkingDirectory</key>
+  <string>/Users/runner</string>
+  <key>RunAtLoad</key>
+  <true/>
+  <key>KeepAlive</key>
+  <true/>
+  <key>StandardOutPath</key>
+  <string>/tmp/tart-guest-agent.log</string>
+  <key>StandardErrorPath</key>
+  <string>/tmp/tart-guest-agent.log</string>
+</dict>
+</plist>

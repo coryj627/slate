@@ -1,0 +1,57 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
+<!--
+  The mac runner controller as a LaunchDaemon running as slate-ci (plan §4.1,
+  D5). Installed by ci/mac-runner/host/admin-setup.sh. Starts at boot once
+  FileVault is unlocked; launchd restarts it if it exits.
+-->
+<plist version="1.0">
+<dict>
+  <key>Label</key>
+  <string>com.slate.mac-runner</string>
+  <key>UserName</key>
+  <string>slate-ci</string>
+  <key>GroupName</key>
+  <string>staff</string>
+  <key>ProgramArguments</key>
+  <array>
+    <string>/usr/bin/python3</string>
+    <string>-I</string>
+    <string>/usr/local/libexec/slate-runner/bin/controller.py</string>
+  </array>
+  <key>EnvironmentVariables</key>
+  <dict>
+    <key>HOME</key>
+    <string>/Users/slate-ci</string>
+    <key>USER</key>
+    <string>slate-ci</string>
+    <key>PATH</key>
+    <string>/usr/local/libexec/slate-runner/bin:/opt/homebrew/bin:/usr/bin:/bin:/usr/sbin:/sbin</string>
+    <key>SLATE_RUNNER_TREE</key>
+    <string>/Users/slate-ci/.slate-runner/mac-runner</string>
+  </dict>
+  <key>WorkingDirectory</key>
+  <string>/Users/slate-ci</string>
+  <!--
+    A fresh security (audit) session for the job. Virtualization.framework
+    keeps its host key in the account's login keychain and asks securityd
+    for it; without a session of its own the daemon's processes cannot unlock
+    that keychain (Phase 3 log: VZErrorDomain -9, "Failed to create new
+    HostKey").
+  -->
+  <key>SessionCreate</key>
+  <true/>
+  <key>RunAtLoad</key>
+  <true/>
+  <key>KeepAlive</key>
+  <true/>
+  <key>ThrottleInterval</key>
+  <integer>30</integer>
+  <key>ExitTimeOut</key>
+  <integer>120</integer>
+  <key>StandardOutPath</key>
+  <string>/Users/slate-ci/.slate-runner/logs/controller.out</string>
+  <key>StandardErrorPath</key>
+  <string>/Users/slate-ci/.slate-runner/logs/controller.out</string>
+</dict>
+</plist>
