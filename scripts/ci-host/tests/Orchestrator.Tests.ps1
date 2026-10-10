@@ -393,6 +393,14 @@ Context 'handed-phase guards' {
         Invoke-OrchestratorTick -Config $config -Journal $journal -Adapters $adapters -Now $t0.AddSeconds(320)
         $journal.Vms[$name].Claimed | Should -BeTrue
     }
+    It 'treats a job that already completed on this runner as claimed and waits for Off (no teardown, no lost commit)' {
+        $world.Runner = $null
+        $world.Jobs['1'] = [pscustomobject]@{ id = 1; run_id = 10; status = 'completed'; conclusion = 'success'; runner_name = $name }
+        Invoke-OrchestratorTick -Config $config -Journal $journal -Adapters $adapters -Now $t0.AddSeconds(320)
+        $journal.Vms[$name].Claimed | Should -BeTrue
+        (Get-Calls 'StopVmForce').Count | Should -Be 0
+        $journal.Vms.Count | Should -Be 1
+    }
     It 'keeps waiting while the job stays queued, then retries after three timeouts' {
         $world.Jobs['1'] = [pscustomobject]@{ id = 1; run_id = 10; status = 'queued'; conclusion = $null; runner_name = $null }
         Invoke-OrchestratorTick -Config $config -Journal $journal -Adapters $adapters -Now $t0.AddSeconds(320)

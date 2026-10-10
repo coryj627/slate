@@ -505,9 +505,12 @@ function Update-ActiveVm {
                 return
             }
             $job = & $Adapters.GetJob ([int64]$vm.JobId)
-            if ($null -ne $job -and $job.status -eq 'in_progress' -and [string]$job.runner_name -eq $Name) {
+            if ($null -ne $job -and [string]$job.runner_name -eq $Name) {
+                # Running or already completed on this runner: the VM is on
+                # its way to Off, so settle it then (a completed single-use
+                # runner is already deleted and would otherwise look unclaimed).
                 $vm.Claimed = $true
-                & $Adapters.Log 'info' "${Name}: claimed (job in progress)"
+                & $Adapters.Log 'info' "${Name}: claimed (job $($job.status) on this runner)"
                 return
             }
             if ($null -eq $job -or $job.status -ne 'queued') {
