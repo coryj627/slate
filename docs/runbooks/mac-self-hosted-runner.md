@@ -167,7 +167,10 @@ in a second job on hosted Linux.
 1. Hook proven live: a job dispatched against an image whose allow-list
    lacks the owner fails at "Set up runner" with no workflow step run.
 2. `mac-ci-pilot.yml` candidate `self-hosted-tart` passes every gate.
-3. `NARROW=1 sudo bash ci/mac-runner/host/admin-setup.sh`: the owner can then
+3. `sudo bash ci/mac-runner/host/admin-setup.sh --narrow`: the owner can then
    run only `runnerctl` as slate-ci. `run-as-slate-ci.sh` stops working by
    design; image rebuilds go through `runnerctl rebuild-warm` or the
-   LaunchDaemon.
+   LaunchDaemon. A flag, not `NARROW=1` in front of sudo: sudo resets the
+   environment and the script never saw it (2026-10-10). Plain re-runs keep
+   the installed rule; `--widen` restores the broad one. Likewise the Softnet
+   knobs go after sudo: `sudo FORCE_SOFTNET=1 bash ci/mac-runner/host/admin-setup.sh`.

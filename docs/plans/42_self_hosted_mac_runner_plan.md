@@ -863,7 +863,9 @@ parallel with them.
   plus malformed inputs; `route/route.py` with 20 tests; `controller/` with
   the controller, `runnerctl`, and the two LaunchDaemon plists;
   `admin-setup.sh` now installs the controller files root-owned and takes
-  `NARROW=1` for the Phase 3 sudo rule; `host/runnerctl` wraps the sudo;
+  `--narrow` for the Phase 3 sudo rule (first written as `NARROW=1`, which
+  sudo's environment reset swallowed; see Phase 4); `host/runnerctl` wraps
+  the sudo;
   `.github/workflows/mac-runner-tests.yml` runs the tests and ShellCheck on
   hosted Linux; `docs/runbooks/mac-self-hosted-runner.md`. The toolchain
   image now installs the real hook from `ci/mac-runner/hook/`, so the
@@ -1061,6 +1063,47 @@ parallel with them.
   duplicate launchd log are gone. Found on the way: with no token file the
   idle heartbeat raised and launchd restarted the daemon every 30 s;
   `github()` now logs and skips.
+
+#### Phase 4 progress (2026-10-10)
+
+- **PR A merged** as f4cf9117 (coryj627/slate#1335). **PR B opened and
+  merged the same day** as e6d1bbe2 (coryj627/slate#1336): the route job in
+  both mac workflows, the same-repo-head guard, Xcode pinned by build
+  number through `DEVELOPER_DIR`, `clean: false` on the Studio, and the
+  a11y lane split into a read-only analysis job on the mac runner and a
+  report job on hosted Linux that holds the write permissions.
+- **Caught while writing PR B.** actions/checkout compares its expected URL
+  `https://github.com/coryj627/slate` byte for byte with the existing
+  clone's `remote.origin.url` and, on a mismatch, deletes the checkout and
+  clones cold. The warm layer cloned with a `.git` suffix, so every Studio
+  job would have thrown the warm build away. `04-warm.pkr.hcl` lost the
+  suffix and the warm image was rebuilt (158 s). `toolchain-analyzer.sh`
+  now records the analyzer's commit next to the binary, and the a11y job
+  fails on the Studio if it differs from the workflow's pin.
+- **Proofs, on PR B's own runs.** Fallback: with `MAC_RUNNER_MODE=namespace`
+  both lanes ran and passed on `nscloud-macos-tahoe-slim-arm64-6x14` without
+  a cache volume (Swift tests 227 s cold). Studio: with `auto` and a fresh
+  heartbeat both lanes ran on `slate-mac-tart`; the Swift tests job took
+  113 s with the warm tree kept (checkout 2 s, cargo 0.5 s, swift build
+  15 s, tests 65 s), the a11y analysis 26 s. Pause: `runnerctl pause`
+  cleared the heartbeat within 5 s and the next a11y run went to Namespace.
+  Resume: the heartbeat was back 31 s after `runnerctl resume` (no
+  five-minute gap, the second-review fix) and the run after that went to
+  the Studio. Also exercised: the `building` marker during the warm rebuild
+  (idle VM taken down, new one booted 24 s after the build), the
+  controller's result parsing, and a 24 s runner turnaround between two
+  queued jobs. Code scanning keeps its alert history because the report
+  job carries the old job id `a11y-check`.
+- **`MAC_RUNNER_MODE` is `auto`** since 14:39 UTC. The first runs from main
+  after the merge went to the Studio and passed.
+- **Narrowing the sudo rule (Phase 3 step 4) misfired once.** The owner ran
+  `NARROW=1 sudo bash ci/mac-runner/host/admin-setup.sh` as documented;
+  sudo resets the environment, so the script never saw the variable and
+  reinstalled the broad rule, which its own check line reported. The script
+  now takes `--narrow` (and `--widen`), keeps the installed rule when given
+  neither so a Softnet refresh can never widen it by accident, and the
+  Softnet knobs are documented as `sudo FORCE_SOFTNET=1 bash ...`. The
+  owner re-runs with `--narrow` from this PR's checkout.
 
 ### Phase 1: GitHub settings (owner, before any runner registers)
 
