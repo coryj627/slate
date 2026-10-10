@@ -125,8 +125,9 @@ Network:
 
 - Internal vSwitch `slate-ci` with host NAT `10.77.0.0/24` (`New-NetNat`);
   the host owns `10.77.0.1`. Each VM slot has a fixed address (`10.77.0.11`,
-  `10.77.0.12`) handed to the guest over KVP. DNS is static public resolvers
-  in the golden image. IPv6 disabled in the guest.
+  `10.77.0.12`) handed to the guest over KVP. DNS is the static public
+  resolvers the host hands over in `slate.dns` (the golden image carries
+  the same defaults). IPv6 disabled in the guest.
 - Per-VM extended ACLs (`Add-VMNetworkAdapterExtendedAcl`), outbound deny to
   `10.0.0.0/8`, `172.16.0.0/12`, `192.168.0.0/16`, `100.64.0.0/10`,
   `169.254.0.0/16`, `::/0`; then allow all else. Packets to the Internet
@@ -175,10 +176,11 @@ State machine per job, run by a single-threaded loop with a 10 s tick:
    `Msvm_VirtualSystemManagementService.AddKvpItems` as items
    `slate.jit.count`, `slate.jit.0 … slate.jit.N` (each ≤ 1,000 characters;
    `Msvm_KvpExchangeDataItem.Data` has MAXLEN 1024), plus `slate.lane`,
-   `slate.ip`, `slate.job`.
+   `slate.ip`, `slate.gateway`, `slate.dns`, `slate.cache` (`1` or `0`)
+   and `slate.job`.
 6. **Run (guest).** Two tasks baked into the golden image, both no-ops
-   until the golden build's completion marker exists. `slate-bootstrap-
-   system` (SYSTEM, at startup) polls
+   until the golden build's completion marker exists.
+   `slate-bootstrap-system` (SYSTEM, at startup) polls
    `HKLM:\SOFTWARE\Microsoft\Virtual Machine\External` for the chunks
    (max 5 min), sets the static IP, gateway and DNS from the KVP items,
    locates the cache volume by its `slate-cache` label, creates
@@ -237,8 +239,9 @@ corrupting the chain.
 Capacity: each parent is a dynamic VHDX with a 60 GB maximum. The existing
 "Cache mount state (pre-build)" and "Cache footprint report" steps measure
 `NSC_CACHE_PATH` and already filter `$RECYCLE.BIN` and `System Volume
-Information`, so they work unchanged on `D:\cache`. `Optimize-VHD` on the
-parents is a monthly runbook item.
+Information`, so they work unchanged on the cache volume (the guest exports
+its actual `<letter>:\cache` path). `Optimize-VHD` on the parents is a
+monthly runbook item.
 
 ### 4. Guest golden image
 
@@ -253,10 +256,12 @@ and `runner` (standard), and its first-logon command runs
 `provision-guest.ps1`; that script installs the machine-wide toolchain,
 registers the two guest tasks, switches auto-logon to `runner`, sets a
 RunOnce for `provision-runner-user.ps1` (per-user rustup and
-uniffi-bindgen-cs), and reboots. The per-user script writes the
-completion marker `C:\Users\runner\.slate-golden-complete` and shuts
-down. The host verifies the marker, removes the build VM and marks the
-VHDX read-only. Product key, auto-logon password and the `provision`
+uniffi-bindgen-cs), and reboots. The specialize pass also sets
+`PreventDeviceEncryption=1`, so the vTPM every VM carries never triggers
+Windows 11 automatic device encryption of a disposable disk. The per-user
+script writes the completion marker `C:\Users\runner\.slate-golden-complete`
+and shuts down. The host verifies the marker, removes the build VM and marks
+the VHDX read-only. Product key, auto-logon password and the `provision`
 password live only in the rendered unattend and `C:\provision\secrets.json`,
 both deleted by the provisioning script before the final reboot (the
 auto-logon password remains in the guest registry, as auto-logon
@@ -280,7 +285,10 @@ Toolchain, matching the Namespace image the lanes run on today:
   Python are machine-wide.
 - Python 3.13, git, 7-Zip.
 - `actions-runner` 2.338.0 unpacked at `C:\actions-runner`, owned by
-  `runner`, `bootstrap.ps1` and the logon task installed.
+  `runner`, `bootstrap-system.ps1`, `bootstrap-runner.ps1`, a copy of
+  `SlateCiHost.psm1`, and the two scheduled tasks `slate-bootstrap-system`
+  (SYSTEM, at startup) and `slate-runner-logon` (`runner`, interactive, at
+  logon) installed.
 - `uniffi-bindgen-cs` at the tag pinned in
   `apps/slate-windows/uniffi-bindgen-cs.version`, in `%USERPROFILE%\.cargo\bin`
   of `runner`.
@@ -360,7 +368,7 @@ scripts/ci-host/
   install/setup-host.ps1    one-time elevated steps (features, account, switch, NAT,
                             ACL template, firewall rule, task, directories, ACLs)
   install/store-token.ps1   runs as slate-ci-host; stores the PAT
-  golden/build-golden.ps1   golden image build; golden/autounattend.xml; golden/guest/bootstrap.ps1
+  golden/build-golden.ps1   golden image build; golden/unattend.xml (template), versions.json, provision-guest.ps1, provision-runner-user.ps1, guest/bootstrap-system.ps1, guest/bootstrap-runner.ps1
   tests/*.Tests.ps1         Pester 5, adapters mocked
 ```
 
@@ -397,8 +405,8 @@ These are estimates; acceptance records real numbers.
 - **Host integration (manual, recorded in the runbook):** provision a VM
   from the golden disk, confirm from inside the guest that `10.77.0.1`,
   `192.168.0.49`, the tailnet and WSL ranges are unreachable while
-  `github.com` is, confirm `D:` mounts and the junctions resolve, confirm the
-  desktop session exists (`query session`).
+  `github.com` is, confirm the `slate-cache` volume mounts and the
+  junctions resolve, confirm the desktop session exists (`query session`).
 - **Acceptance:**
   1. `workflow_dispatch` of windows.yml on a branch runs green on `home`.
   2. A push to `main` runs green and the orchestrator log shows three
