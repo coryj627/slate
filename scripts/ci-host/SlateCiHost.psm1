@@ -237,5 +237,91 @@ function Resolve-RunnerJob {
     return $null
 }
 
+# ---- host-only: config, journal, log (pwsh 7; -AsHashtable) ----
+
+function Join-WinPath {
+    # Host paths are Windows paths even when the suite runs on Linux CI,
+    # where Join-Path would insert a forward slash.
+    [CmdletBinding()]
+    param([Parameter(Mandatory)][string]$Base, [Parameter(Mandatory)][string]$Child)
+    return ($Base.TrimEnd('\') + '\' + $Child.TrimStart('\'))
+}
+
+function Get-CiHostConfig {
+    [CmdletBinding()]
+    param([Parameter(Mandatory)][string]$Path)
+    $config = Get-Content -Raw -LiteralPath $Path | ConvertFrom-Json -AsHashtable
+    $required = 'Owner', 'Repo', 'Root', 'SwitchName', 'Gateway', 'Dns', 'Slots', 'Vcpu', 'MemoryGB', 'Lanes',
+        'TickSeconds', 'HeartbeatTimeoutSeconds', 'UnclaimedTimeoutSeconds', 'RetryCap', 'RetryBackoffSeconds',
+        'TrustedRepo', 'TrustedBranch', 'TrustedEvents'
+    foreach ($key in $required) {
+        if (-not $config.Contains($key)) { throw "config ${Path}: missing required key '$key'" }
+    }
+    foreach ($lane in @($config.Lanes.Keys)) {
+        if ($script:DefaultLanes -notcontains $lane) { throw "config ${Path}: unknown lane '$lane'" }
+        foreach ($k in 'Cache', 'MaxMinutes') {
+            if (-not $config.Lanes[$lane].Contains($k)) { throw "config ${Path}: lane '$lane' missing '$k'" }
+        }
+    }
+    if (@($config.Slots).Count -lt 1) { throw "config ${Path}: at least one slot is required" }
+    $config['GoldenPath'] = Join-WinPath $config.Root 'golden\win11-runner.vhdx'
+    $config['CacheDir'] = Join-WinPath $config.Root 'cache'
+    $config['VmDir'] = Join-WinPath $config.Root 'vms'
+    $config['StateDir'] = Join-WinPath $config.Root 'state'
+    $config['LogDir'] = Join-WinPath $config.Root 'logs'
+    return $config
+}
+
+function New-Journal {
+    return @{ Vms = @{}; Retries = @{}; SeenJobs = @{} }
+}
+
+function Read-Journal {
+    # A corrupt journal must never stop the host: it is moved aside with a
+    # timestamp (for forensics) and an empty one takes its place. The
+    # startup sweep then reconciles live VMs and runners from scratch.
+    [CmdletBinding()]
+    param([Parameter(Mandatory)][string]$Path)
+    if (-not (Test-Path -LiteralPath $Path)) { return (New-Journal) }
+    $journal = $null
+    try {
+        $journal = Get-Content -Raw -LiteralPath $Path | ConvertFrom-Json -AsHashtable
+        if ($null -eq $journal -or -not ($journal -is [System.Collections.IDictionary])) { throw 'journal is not an object' }
+    } catch {
+        $aside = '{0}.corrupt-{1}' -f $Path, (Get-Date).ToUniversalTime().ToString('yyyyMMddTHHmmssZ')
+        Move-Item -LiteralPath $Path -Destination $aside -Force
+        return (New-Journal)
+    }
+    foreach ($key in 'Vms', 'Retries', 'SeenJobs') {
+        if (-not $journal.Contains($key) -or $null -eq $journal[$key]) { $journal[$key] = @{} }
+    }
+    return $journal
+}
+
+function Write-Journal {
+    [CmdletBinding()]
+    param([Parameter(Mandatory)][string]$Path, [Parameter(Mandatory)]$Journal)
+    $dir = Split-Path -Parent $Path
+    if ($dir -and -not (Test-Path -LiteralPath $dir)) { New-Item -ItemType Directory -Force -Path $dir | Out-Null }
+    $tmp = "$Path.tmp"
+    $Journal | ConvertTo-Json -Depth 10 | Set-Content -LiteralPath $tmp -Encoding utf8
+    Move-Item -LiteralPath $tmp -Destination $Path -Force
+}
+
+function Write-CiLog {
+    # One line per state transition; callers never pass a JIT config or
+    # token into Message.
+    [CmdletBinding()]
+    param(
+        [Parameter(Mandatory)][string]$Path,
+        [Parameter(Mandatory)][ValidateSet('info', 'warn', 'error')][string]$Level,
+        [Parameter(Mandatory)][AllowEmptyString()][string]$Message
+    )
+    $dir = Split-Path -Parent $Path
+    if ($dir -and -not (Test-Path -LiteralPath $dir)) { New-Item -ItemType Directory -Force -Path $dir | Out-Null }
+    $line = '{0} [{1}] {2}' -f [datetimeoffset]::Now.ToString('o'), $Level, $Message
+    Add-Content -LiteralPath $Path -Value $line -Encoding utf8
+}
+
 Export-ModuleMember -Function Get-LaneFromLabels, New-RunnerName, Split-KvpChunks, Join-KvpChunks,
-    ConvertTo-DateTimeOffset, Select-QueuedLaneJobs, Select-JobsToAdmit, Register-JobRetry, Test-VmExpired, Get-StaleRunnerNames, Test-CommitEligible, Resolve-RunnerJob
+    ConvertTo-DateTimeOffset, Select-QueuedLaneJobs, Select-JobsToAdmit, Register-JobRetry, Test-VmExpired, Get-StaleRunnerNames, Test-CommitEligible, Resolve-RunnerJob, Get-CiHostConfig, New-Journal, Read-Journal, Write-Journal, Write-CiLog

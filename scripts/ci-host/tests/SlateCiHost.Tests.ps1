@@ -331,3 +331,83 @@ Describe 'Resolve-RunnerJob' {
         Resolve-RunnerJob -RunnerName 'slate-win-app-deadbeef' -AdmittedJobId 1 -CandidateJobIds @() -GetJob { param($id) $null } | Should -BeNullOrEmpty
     }
 }
+
+Describe 'Get-CiHostConfig' {
+    It 'loads the repository config and derives the paths' {
+        $cfg = Get-CiHostConfig -Path (Join-Path $PSScriptRoot '..' 'config.json')
+        $cfg.Owner | Should -Be 'coryj627'
+        @($cfg.Slots).Count | Should -Be 2
+        $cfg.Slots[1].Ip | Should -Be '10.77.0.12'
+        $cfg.Lanes['shell'].Cache | Should -BeFalse
+        $cfg.Lanes['app'].MaxMinutes | Should -Be 100
+        $cfg.GoldenPath | Should -Be 'C:\slate-ci\golden\win11-runner.vhdx'
+        $cfg.CacheDir | Should -Be 'C:\slate-ci\cache'
+        $cfg.VmDir | Should -Be 'C:\slate-ci\vms'
+        $cfg.StateDir | Should -Be 'C:\slate-ci\state'
+        $cfg.LogDir | Should -Be 'C:\slate-ci\logs'
+        @($cfg.TrustedEvents) | Should -Be @('push', 'schedule', 'workflow_dispatch')
+    }
+    It 'rejects a config missing a required key' {
+        $p = Join-Path $TestDrive 'bad.json'
+        '{ "Owner": "x" }' | Set-Content $p
+        { Get-CiHostConfig -Path $p } | Should -Throw '*Repo*'
+    }
+    It 'rejects an unknown lane' {
+        $p = Join-Path $TestDrive 'lane.json'
+        $raw = Get-Content -Raw (Join-Path $PSScriptRoot '..' 'config.json') | ConvertFrom-Json -AsHashtable
+        $raw.Lanes['bogus'] = @{ Cache = $true; MaxMinutes = 5 }
+        $raw | ConvertTo-Json -Depth 6 | Set-Content $p
+        { Get-CiHostConfig -Path $p } | Should -Throw '*bogus*'
+    }
+}
+
+Describe 'Journal' {
+    It 'returns a fresh journal when the file does not exist' {
+        $j = Read-Journal -Path (Join-Path $TestDrive 'none.json')
+        $j.Vms.Count | Should -Be 0
+        $j.Retries.Count | Should -Be 0
+        $j.SeenJobs.Count | Should -Be 0
+    }
+    It 'round-trips VM entries, retries and seen jobs' {
+        $p = Join-Path $TestDrive 'journal.json'
+        $j = New-Journal
+        $j.Vms['slate-win-app-00000001'] = @{ Name = 'slate-win-app-00000001'; Lane = 'app'; Slot = 1; SlotIp = '10.77.0.11'; JobId = [int64]123456789012; RunId = [int64]5; Dir = 'C:\slate-ci\vms\x'; CachePath = 'C:\slate-ci\vms\x\cache.vhdx'; ForkGeneration = 7; Phase = 'handed'; StartedAt = '2026-10-10T12:00:00.0000000+00:00'; HandedAt = '2026-10-10T12:01:00.0000000+00:00'; RunnerId = 99; Claimed = $true }
+        $j.Retries['42'] = @{ Count = 2; NextAt = '2026-10-10T12:10:00.0000000+00:00' }
+        $j.SeenJobs['42'] = @{ RunId = [int64]5; Lane = 'app'; FirstSeenAt = '2026-10-10T12:00:00.0000000+00:00' }
+        Write-Journal -Path $p -Journal $j
+        $back = Read-Journal -Path $p
+        $back.Vms['slate-win-app-00000001'].JobId | Should -Be 123456789012
+        $back.Vms['slate-win-app-00000001'].Claimed | Should -BeTrue
+        $back.Vms['slate-win-app-00000001'].ForkGeneration | Should -Be 7
+        $back.Retries['42'].Count | Should -Be 2
+        $back.SeenJobs['42'].Lane | Should -Be 'app'
+        (Get-ChildItem $TestDrive -Filter '*.tmp').Count | Should -Be 0
+    }
+    It 'moves a corrupt journal aside and starts fresh' {
+        $p = Join-Path $TestDrive 'corrupt.json'
+        '{ "Vms": { "x": ' | Set-Content $p
+        $j = Read-Journal -Path $p
+        $j.Vms.Count | Should -Be 0
+        (Get-ChildItem $TestDrive -Filter 'corrupt.json.corrupt-*').Count | Should -Be 1
+        Test-Path $p | Should -BeFalse
+    }
+    It 'fills in missing top-level keys from an older journal' {
+        $p = Join-Path $TestDrive 'old.json'
+        '{ "Vms": {} }' | Set-Content $p
+        $j = Read-Journal -Path $p
+        $j.Retries.Count | Should -Be 0
+        $j.SeenJobs.Count | Should -Be 0
+    }
+}
+
+Describe 'Write-CiLog' {
+    It 'appends a timestamped line and creates the file' {
+        $p = Join-Path $TestDrive 'logs' 'o.log'
+        Write-CiLog -Path $p -Level 'info' -Message 'hello'
+        Write-CiLog -Path $p -Level 'warn' -Message 'again'
+        $lines = Get-Content $p
+        $lines.Count | Should -Be 2
+        $lines[0] | Should -Match '^\d{4}-\d{2}-\d{2}T[0-9:.]+(\+|-)\d{2}:\d{2} \[info\] hello$'
+        $lines[1] | Should -Match '\[warn\] again$'
+    }
+}
