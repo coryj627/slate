@@ -2698,6 +2698,7 @@ git commit -m "feat(ci-host): orchestrator state machine, startup sweep, loop sc
 - Consumes: `Join-KvpChunks` (Task 2); KVP item names from Task 8; the golden image layout from Task 10 (`C:\actions-runner` for runtime files; the two scripts and `SlateCiHost.psm1` in `C:\slate-guest`, writable only by Administrators and SYSTEM; marker `C:\Users\runner\.slate-golden-complete`; cache volume label `slate-cache`).
 - Produces: `Select-SlateKvpItems -Properties [psobject]` → hashtable of every `slate.*` property; files in `C:\actions-runner`: `.env`, `jit.cfg`, `ready`, `bootstrap-error.txt`, `bootstrap-system.log`, `bootstrap-runner.log`.
 - Both scripts are Windows PowerShell 5.1 (the guest has no pwsh).
+- Rulings applied during execution (the committed scripts differ from the code below in these ways): `Select-SlateKvpItems` tolerates a null property set (an empty KVP key on 5.1); the SYSTEM script waits for ALL required items (the host writes the JIT chunks before the network/cache items), imports the module inside its try, shuts down from a finally on the error path, checks every `icacls` exit code, waits up to 60 s for an Up adapter, and grants `runner:(OI)(CI)M` on the cache root; the runner script waits with `$process.WaitForExit()` (not `-Wait`, which waits for the whole process tree), deletes `jit.cfg` without `-Force` (the file is R-only), and both scripts shut down with `/f`.
 
 - [ ] **Step 1: Write the failing tests**
 
