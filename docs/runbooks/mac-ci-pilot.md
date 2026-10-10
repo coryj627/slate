@@ -5,6 +5,8 @@ standard GitHub ARM runner and a direct Namespace ARM runner. It does not change
 production routing, subscription terms, cache tags, cache sizes or branch rules.
 Keep the PR draft until fresh human accessibility acceptance is complete.
 
+> **Reference moved (2026-10-10).** `REFERENCE` and the workflow default `source_sha` now name `c247b865d5146f006b914bf9ba68fe3ecb648632`, the squash-merge of PR 1328 on `main`. The earlier reference `a64eb393f5470b9cdb94f3f537a85ceeeda3f7c4` lived on the Codex branch, which was deleted after the merge, so a checkout of branch refs no longer has it (the Studio pilot attempt 3 failed on exactly that). Both commits have the same `apps/slate-mac/Tests` tree (5a12505b) and inventory digest a145b175.
+
 ## Source and environment qualification
 
 Use the literal application source

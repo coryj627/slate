@@ -14,7 +14,7 @@ on:
       source_sha:
         description: Frozen application source; literal full commit, ancestor of this harness.
         type: string
-        default: a64eb393f5470b9cdb94f3f537a85ceeeda3f7c4
+        default: c247b865d5146f006b914bf9ba68fe3ecb648632
       runner:
         description: Complete native and independent analyzer candidate; no Namespace cache volume.
         type: choice
@@ -33,7 +33,7 @@ concurrency:
   cancel-in-progress: false
 
 env:
-  SOURCE_SHA: ${{ inputs.source_sha || 'a64eb393f5470b9cdb94f3f537a85ceeeda3f7c4' }}
+  SOURCE_SHA: ${{ inputs.source_sha || 'c247b865d5146f006b914bf9ba68fe3ecb648632' }}
   CANDIDATE: ${{ inputs.runner || 'hosted-xcode27' }}
   PAIR_ID: ${{ inputs.pair_id || 'registration' }}
 
