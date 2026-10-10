@@ -184,7 +184,7 @@ Describe 'Get-LaneFromLabels' {
 }
 
 Describe 'New-RunnerName' {
-    It 'produces slate-win-<lane>-<8 hex>' {
+    It 'produces slate-win-`<lane`>-`<8 hex`>' {
         New-RunnerName -Lane 'model' | Should -Match '^slate-win-model-[0-9a-f]{8}$'
     }
     It 'is unique across calls' {
