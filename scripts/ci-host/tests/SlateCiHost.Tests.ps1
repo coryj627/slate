@@ -84,6 +84,21 @@ Describe 'Split-KvpChunks / Join-KvpChunks' {
     }
 }
 
+Describe 'ConvertTo-DateTimeOffset' {
+    It 'keeps the instant for a Z string, an offset string, and every datetime kind' {
+        $expected = [datetimeoffset]::Parse('2026-10-10T10:00:00Z', [cultureinfo]::InvariantCulture)
+        (ConvertTo-DateTimeOffset -Value '2026-10-10T10:00:00Z').UtcDateTime | Should -Be $expected.UtcDateTime
+        (ConvertTo-DateTimeOffset -Value '2026-10-10T12:00:00+02:00').UtcDateTime | Should -Be $expected.UtcDateTime
+        (ConvertTo-DateTimeOffset -Value ([datetime]::SpecifyKind([datetime]'2026-10-10T10:00:00', 'Utc'))).UtcDateTime | Should -Be $expected.UtcDateTime
+        (ConvertTo-DateTimeOffset -Value ([datetime]::SpecifyKind([datetime]'2026-10-10T10:00:00', 'Utc')).ToLocalTime()).UtcDateTime | Should -Be $expected.UtcDateTime
+        (ConvertTo-DateTimeOffset -Value ([datetime]'2026-10-10T10:00:00')).UtcDateTime | Should -Be $expected.UtcDateTime
+        (ConvertTo-DateTimeOffset -Value $expected) | Should -Be $expected
+    }
+    It 'treats a zone-less string as UTC' {
+        (ConvertTo-DateTimeOffset -Value '2026-10-10T10:00:00').Offset | Should -Be ([timespan]::Zero)
+    }
+}
+
 Describe 'Select-QueuedLaneJobs' {
     BeforeAll {
         $script:job = {
@@ -109,6 +124,11 @@ Describe 'Select-QueuedLaneJobs' {
     }
     It 'returns an empty array for no jobs' {
         @(Select-QueuedLaneJobs -Jobs @()).Count | Should -Be 0
+    }
+    It 'reads created_at as the right instant when the job came through ConvertFrom-Json' {
+        $jobs = @('{"id":7,"run_id":10,"labels":["slate-win-app"],"status":"queued","created_at":"2026-10-10T10:00:00Z"}' | ConvertFrom-Json)
+        $result = Select-QueuedLaneJobs -Jobs $jobs
+        $result[0].CreatedAt.UtcDateTime.ToString('o') | Should -Be '2026-10-10T10:00:00.0000000Z'
     }
     It 'tolerates a job with no labels property value' {
         $jobs = @((& $job 9 10 @() 'queued' '2026-10-10T10:00:00Z'))

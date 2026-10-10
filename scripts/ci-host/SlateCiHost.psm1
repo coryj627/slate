@@ -75,6 +75,21 @@ function Join-KvpChunks {
     return $builder.ToString()
 }
 
+function ConvertTo-DateTimeOffset {
+    # pwsh's JSON deserialiser turns ISO strings into [datetime] (Kind Utc
+    # for a trailing Z); a [string] cast would then drop the zone and a
+    # later Parse would read it as local time. Accept every shape once.
+    [CmdletBinding()]
+    param([Parameter(Mandatory)]$Value)
+    if ($Value -is [datetimeoffset]) { return $Value }
+    if ($Value -is [datetime]) {
+        if ($Value.Kind -eq [System.DateTimeKind]::Unspecified) { $Value = [datetime]::SpecifyKind($Value, [System.DateTimeKind]::Utc) }
+        return [datetimeoffset]$Value
+    }
+    $styles = [System.Globalization.DateTimeStyles]::AssumeUniversal -bor [System.Globalization.DateTimeStyles]::RoundtripKind
+    return [datetimeoffset]::Parse([string]$Value, [cultureinfo]::InvariantCulture, $styles)
+}
+
 function Select-QueuedLaneJobs {
     # Flattens the API's job objects into the admission shape; drops
     # anything not queued or not carrying exactly one lane label.
@@ -91,7 +106,7 @@ function Select-QueuedLaneJobs {
             JobId     = [int64]$job.id
             RunId     = [int64]$job.run_id
             Lane      = $lane
-            CreatedAt = [datetimeoffset]::Parse([string]$job.created_at, [cultureinfo]::InvariantCulture)
+            CreatedAt = ConvertTo-DateTimeOffset -Value $job.created_at
         }
     }
     return @($result | Sort-Object CreatedAt, JobId)
@@ -121,7 +136,7 @@ function Select-JobsToAdmit {
         if ($Retries.Contains($key)) {
             $retry = $Retries[$key]
             if ([int]$retry['Count'] -ge $RetryCap) { continue }
-            if ([datetimeoffset]::Parse([string]$retry['NextAt'], [cultureinfo]::InvariantCulture) -gt $Now) { continue }
+            if ((ConvertTo-DateTimeOffset -Value $retry['NextAt']) -gt $Now) { continue }
         }
         $admit += $candidate
     }
@@ -167,4 +182,4 @@ function Get-StaleRunnerNames {
 }
 
 Export-ModuleMember -Function Get-LaneFromLabels, New-RunnerName, Split-KvpChunks, Join-KvpChunks,
-    Select-QueuedLaneJobs, Select-JobsToAdmit, Register-JobRetry, Test-VmExpired, Get-StaleRunnerNames
+    ConvertTo-DateTimeOffset, Select-QueuedLaneJobs, Select-JobsToAdmit, Register-JobRetry, Test-VmExpired, Get-StaleRunnerNames
