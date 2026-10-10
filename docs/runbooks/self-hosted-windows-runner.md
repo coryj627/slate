@@ -744,9 +744,10 @@ This checks how `Get-VM` reports a VM that no longer exists, as
   3. `<vm>: claimed`, or `<vm>: claimed (job <status> on this runner)`,
      only for a job still running five minutes after the handoff.
   4. Sometimes
-     `<vm>: job <id> is in_progress on GitHub while its VM is off; waiting up to 6 ticks for it to complete`:
-     GitHub's record lagged the guest's shutdown. The loop asks again every
-     tick and decides within a minute on what GitHub reports then.
+     `<vm>: job <id> is <status> on GitHub while its VM is off; waiting up to 6 ticks for it to complete`,
+     usually with `in_progress`: GitHub's record lagged the guest's
+     shutdown. The loop asks again every tick and decides within a minute
+     on what GitHub reports then.
   5. One of `<vm>: commit <lane> generation <n> (trusted main)`,
      `<vm>: discard (<reason>)`, or, for the shell lane,
      `<vm>: done, lane shell has no cache (conclusion: <conclusion>)`.

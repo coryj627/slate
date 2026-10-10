@@ -115,7 +115,9 @@ Accounts and secrets:
   Task runs it with a stored credential).
 - The orchestrator runs from a Scheduled Task "At startup", as
   `slate-ci-host`, whether or not a user is logged on, restart on failure
-  every minute, PowerShell 7.
+  every minute, PowerShell 7. Setup registers the task disabled; the
+  runbook enables it only once the sealed golden disk passes its
+  product-key check, and disables it again around a golden refresh.
 - One fine-grained PAT scoped to `coryj627/slate` with **Actions: read** (list
   runs and jobs) and **Administration: write** (generate JIT configs, delete
   stale runners), one-year expiry. Stored with `Export-Clixml` of a
