@@ -4,6 +4,13 @@
 # Swift sources or the Rust crates the app links against. The test
 # target imports SlateMac which depends on the slate_uniffi dylib, so we
 # need cargo build + uniffi-bindgen before `swift test`.
+#
+# Where it runs (docs/plans/42_self_hosted_mac_runner_plan.md §6): a short
+# route job on hosted Linux picks the self-hosted Mac Studio runner
+# (label slate-mac-tart) while its controller's heartbeat is fresh, and
+# Namespace's Tahoe runner otherwise. The Studio job starts in the warm
+# image's checkout of main with its build products, so it rebuilds only
+# what the PR changed; Namespace starts cold.
 
 name: Swift Tests
 
@@ -54,91 +61,76 @@ concurrency:
   group: ${{ github.workflow }}-${{ github.ref }}
   cancel-in-progress: ${{ github.event_name == 'pull_request' }}
 
+env:
+  # The Xcode build every mac runner must offer. The Studio image bakes this
+  # one (ci/mac-runner/image/scripts/toolchain-xcode.sh); Namespace's image
+  # carries several. Bump the workflow and the image together. The app's
+  # SwiftUI bodies need a current Swift: 6.2.4 (Xcode 26.3) times out
+  # type-checking MainSplitView.body.
+  XCODE_BUILD: 27A266a
+
 jobs:
+  route:
+    name: Route mac jobs
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    outputs:
+      label: ${{ steps.route.outputs.label }}
+      route: ${{ steps.route.outputs.route }}
+    steps:
+      - name: Checkout the route script
+        uses: actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0  # v7
+        with:
+          sparse-checkout: ci/mac-runner/route
+          persist-credentials: false
+      - name: Pick the runner from MAC_RUNNER_MODE and the heartbeat
+        id: route
+        env:
+          MAC_RUNNER_MODE: ${{ vars.MAC_RUNNER_MODE }}
+          MAC_RUNNER_HEARTBEAT: ${{ vars.MAC_RUNNER_HEARTBEAT }}
+        run: python3 ci/mac-runner/route/route.py
+
   swift-tests:
     name: Mac app XCTest suite
-    # Namespace macOS runner (mac-actions — Apple Silicon, latest Xcode,
-    # cargo preinstalled) with NVMe caching. Faster + cheaper than the GitHub
-    # macOS pool for the cargo + SwiftPM build. NB: the app's SwiftUI bodies
-    # (e.g. MainSplitView) require a current Swift toolchain — Swift 6.2.4
-    # specifically regressed the expression type-checker and times out on
-    # MainSplitView.body, so this profile must track latest Xcode.
-    # Ref-conditional profiles route jobs, but the custom slate-mac tag
-    # shares a volume across those profiles. Commit restrictions require
-    # provider enforcement across every attach path; see ci-cache-policy.md.
-    runs-on: namespace-profile-mac-actions${{ github.ref != 'refs/heads/main' && '-pr' || '' }};overrides.cache-tag=slate-mac
+    needs: route
+    # Same-repo heads only. Routing is not a security control (plan §6.1);
+    # the workflow execution policy and the runner's admission hook are. This
+    # keeps a fork PR, should one ever be approved, off the mac runners.
+    if: github.event_name != 'pull_request' || github.event.pull_request.head.repo.full_name == github.repository
+    runs-on: ${{ needs.route.outputs.label }}
+    timeout-minutes: 30
     permissions:
       contents: read
     steps:
       - name: Checkout
         uses: actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0  # v7
-
-      - name: Cache Rust + SwiftPM + Xcode (Namespace NVMe cache)
-        # Namespace cross-invocation cache. The action unions `cache:` modes
-        # with `path:` entries (src/action.ts passes both --mode and --path to
-        # spacectl), so these all cache together:
-        #   rust     — ~/.cargo + target/ (keeps the slate-uniffi build warm)
-        #   swiftpm  — the SwiftPM dependency clones / resolved-package cache
-        #   xcode    — the Xcode module/derived-data cache
-        # Plus one explicit path for the project-local compiled build products
-        # (apps/slate-mac/.build) that no generic mode can know about, so the
-        # SwiftPM deps (SwiftDraw, MathJaxSwift, LaTeXSwiftUI, SwiftMath) don't
-        # recompile every run.
-        uses: namespacelabs/nscloud-cache-action@c5f8dab7560444c4bf8dbc64f1b203431873c547  # v1
         with:
-          cache: |
-            rust
-            swiftpm
-            xcode
-          path: |
-            apps/slate-mac/.build
+          # On the Studio the workspace is the warm image's checkout of main
+          # with target/ and apps/slate-mac/.build already built (plan §4.5);
+          # a clean would delete them. Namespace starts empty, so clean is moot.
+          clean: ${{ needs.route.outputs.route != 'studio' }}
+          persist-credentials: false
 
-      - name: Cache mount state (pre-build)
-        # Bootstrap attestation (docs/runbooks/ci-cache-policy.md step 3): read
-        # BEFORE any build repopulates the volume, so a cold mount is
-        # distinguishable from a surviving stale generation. Measured
-        # at the VOLUME ROOT (adversarial round 4: the mount points are
-        # symlinks/junctions on mac/Windows and du reported link nodes,
-        # 0B even fully warm; NSC_CACHE_PATH holds the real content for
-        # every cache mode).
+      - name: Select Xcode ${{ env.XCODE_BUILD }}
         run: |
-          shopt -s nullglob dotglob
-          # Platform/vendor metadata is not cache content: skipped
-          # silently for both the cold decision and measurement
-          # (adversarial round 6: lost+found and containerscache on
-          # Linux, .Spotlight-V100/.Trashes/.fseventsd on macOS kept
-          # every attestation in the warning path, and permanent noise
-          # buries a real measurement failure).
-          is_metadata() {
-            case "$(basename "$1")" in
-              "lost+found"|containerscache|gitmirror|.Spotlight-V100|.Trashes|.fseventsd|.DS_Store) return 0 ;;
-              *) return 1 ;;
-            esac
-          }
-          root="${NSC_CACHE_PATH:?cache volume root missing}"
-          if [ ! -d "$root" ] || [ ! -r "$root" ]; then
-            # Fail CLOSED (adversarial round 7): with nullglob, a
-            # missing or unreadable root yields zero entries and the
-            # cold sentinel - a mount failure must never masquerade as
-            # bootstrap proof.
-            echo "::error::cache volume root $root is not an accessible directory - attestation impossible"
-            exit 1
-          fi
-          entries=()
-          for entry in "$root"/*; do
-            is_metadata "$entry" || entries+=("$entry")
+          for app in /Applications/Xcode*.app; do
+            build="$(/usr/libexec/PlistBuddy -c 'Print :ProductBuildVersion' "$app/Contents/version.plist" 2>/dev/null || true)"
+            if [ "$build" = "$XCODE_BUILD" ]; then
+              echo "DEVELOPER_DIR=$app/Contents/Developer" >> "$GITHUB_ENV"
+              echo "using $app ($build)"
+              exit 0
+            fi
           done
-          if [ ${#entries[@]} -eq 0 ]; then
-            echo "cache volume empty (cold mount)"
-          else
-            for entry in "${entries[@]}"; do
-              # Per-entry measurement: one unreadable entry must not
-              # taint the rest, and emptiness is decided by
-              # enumeration, never by du's exit status (rounds 5-6).
-              du -sh "$entry" 2>/dev/null \
-                || echo "::warning::cannot measure $entry - measurement incomplete, NOT cold"
-            done
-          fi
+          echo "::error::no Xcode with build $XCODE_BUILD under /Applications; bump XCODE_BUILD together with the image"
+          exit 1
+
+      - name: Rust on PATH
+        # Namespace's image keeps rustup under ~/.cargo/bin, off PATH in a
+        # non-login shell; rustup then installs the rust-toolchain.toml pin on
+        # first use. The Studio's runner has its toolchain on PATH already.
+        run: |
+          if [ -d "$HOME/.cargo/bin" ]; then echo "$HOME/.cargo/bin" >> "$GITHUB_PATH"; fi
+          echo "route: ${{ needs.route.outputs.route }} ($(id -un) on $(hostname))"
 
       - name: Build slate-uniffi + generate Swift bindings + swift build
         # scripts/build-mac-app.sh runs:
@@ -169,47 +161,3 @@ jobs:
         # that isn't handled fails to compile. Building it here turns that
         # into a red CI run instead of a silently-rotting example (#390).
         run: make swift-cli
-
-      - name: Cache footprint report
-        # Growth monitoring (the volume resets to EMPTY past its
-        # configured size - the windows.yml/rust.yml doctrine; this
-        # lane previously had no report at all).
-        if: ${{ always() }}
-        run: |
-          shopt -s nullglob dotglob
-          # Platform/vendor metadata is not cache content: skipped
-          # silently for both the cold decision and measurement
-          # (adversarial round 6: lost+found and containerscache on
-          # Linux, .Spotlight-V100/.Trashes/.fseventsd on macOS kept
-          # every attestation in the warning path, and permanent noise
-          # buries a real measurement failure).
-          is_metadata() {
-            case "$(basename "$1")" in
-              "lost+found"|containerscache|gitmirror|.Spotlight-V100|.Trashes|.fseventsd|.DS_Store) return 0 ;;
-              *) return 1 ;;
-            esac
-          }
-          root="${NSC_CACHE_PATH:?cache volume root missing}"
-          if [ ! -d "$root" ] || [ ! -r "$root" ]; then
-            # Fail CLOSED (adversarial round 7): with nullglob, a
-            # missing or unreadable root yields zero entries and the
-            # cold sentinel - a mount failure must never masquerade as
-            # bootstrap proof.
-            echo "::error::cache volume root $root is not an accessible directory - attestation impossible"
-            exit 1
-          fi
-          entries=()
-          for entry in "$root"/*; do
-            is_metadata "$entry" || entries+=("$entry")
-          done
-          if [ ${#entries[@]} -eq 0 ]; then
-            echo "cache volume empty (cold mount)"
-          else
-            for entry in "${entries[@]}"; do
-              # Per-entry measurement: one unreadable entry must not
-              # taint the rest, and emptiness is decided by
-              # enumeration, never by du's exit status (rounds 5-6).
-              du -sh "$entry" 2>/dev/null \
-                || echo "::warning::cannot measure $entry - measurement incomplete, NOT cold"
-            done
-          fi

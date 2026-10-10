@@ -33,7 +33,9 @@ as_root chown -R builder:staff "$TOOLCHAINS" "$WORK"
 
 echo "==> Checkout $REPO_URL @ $REF"
 # Always a fresh clone: this stage starts from slate-mac-toolchain, which has
-# no checkout, so there is nothing to fetch into.
+# no checkout, so there is nothing to fetch into. REPO_URL must stay byte for
+# byte what actions/checkout compares against (see 04-warm.pkr.hcl), or the
+# job's checkout step throws the warm products away.
 as_builder install -d "$WORK/slate"
 as_builder git clone --depth 1 --branch "$REF" "$REPO_URL" "$REPO_DIR"
 as_builder git -C "$REPO_DIR" log -1 --format='   %H %s'

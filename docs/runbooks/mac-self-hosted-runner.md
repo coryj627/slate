@@ -139,6 +139,29 @@ The controller reads the file on every API call, so no restart is needed.
   in the warm build (the VM shape is set on the warm image) and in
   `controller.py`'s `SLATE_VM_CPU`.
 
+## Cut-over (plan Phase 4)
+
+`swift-tests.yml` and `a11y-check.yml` start with a `route` job on hosted
+Linux that runs `ci/mac-runner/route/route.py`: with `MAC_RUNNER_MODE=auto`
+the mac jobs go to the Studio (`slate-mac-tart`) while `MAC_RUNNER_HEARTBEAT`
+is under 10 minutes old, else to Namespace (`nscloud-macos-tahoe-slim-arm64-6x14`,
+no cache volume). `studio` and `namespace` force a side. Change it with
+`gh variable set MAC_RUNNER_MODE --body auto`.
+
+Pins the workflows and the image share, bumped together: `XCODE_BUILD`
+(image: `build-toolchain.sh`, `toolchain-xcode.sh`), `A11Y_CHECK_REF`
+(image: `03-toolchain.pkr.hcl` `a11y_check_ref`; the a11y job on the Studio
+fails if the image's `a11y-check.ref` disagrees), and the warm image's
+`repo_url` in `04-warm.pkr.hcl`, which must be exactly
+`https://github.com/coryj627/slate` or actions/checkout discards the warm
+build products on every job.
+
+Proving the fallback: `runnerctl pause`, push to a PR, watch its mac jobs run
+and pass on Namespace; `runnerctl resume`, push again, watch them run on the
+Studio (the route job's log names the side). The a11y workflow's analysis
+job holds a read-only token; the SARIF upload, PR comment and score floor run
+in a second job on hosted Linux.
+
 ## Checks before cut-over (plan Phase 3)
 
 1. Hook proven live: a job dispatched against an image whose allow-list
