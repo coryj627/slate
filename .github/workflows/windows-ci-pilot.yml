@@ -66,6 +66,10 @@ jobs:
             runAttempt = '${{ github.run_attempt }}'
             revision = '${{ github.sha }}'
             candidate = '${{ inputs.runner || 'hosted' }}'
+            # The GitHub-scoped cache restore only. On home it is always false,
+            # yet the build is not cold: CARGO_TARGET_DIR and NUGET_PACKAGES live
+            # on the lane's warm cache disk, and a dispatch on main is a trusted
+            # run whose cache fork the host commits.
             cacheRestore = '${{ github.event_name == 'workflow_dispatch' && inputs.cache && inputs.runner != 'home' && 'true' || 'false' }}'
             logicalProcessors = [Environment]::ProcessorCount
             os = [Environment]::OSVersion.VersionString
@@ -81,7 +85,10 @@ jobs:
         # The job VM must reach the Internet and nothing else: not the
         # host's NAT address, not the LAN, not the WSL/Default Switch
         # ranges, not the tailnet. Any private target that answers fails
-        # the pilot; the result is recorded with the runner metadata.
+        # the pilot; the result is recorded with the runner metadata. The
+        # router's public address is checked by hand, never listed here:
+        # this file and the run log are public (the runbook's "Refreshing
+        # the pilot's isolation targets").
         run: |
           $forbidden = @('10.77.0.1', '192.168.0.1', '192.168.0.49', '172.24.160.1', '172.19.80.1', '100.100.100.100')
           $report = [ordered]@{}

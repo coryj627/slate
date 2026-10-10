@@ -24,7 +24,7 @@
 - Host paths: `C:\slate-ci\{bin,golden,cache,vms,state,logs}`; golden disk `C:\slate-ci\golden\win11-runner.vhdx`.
 - Host account `slate-ci-host`: member of Hyper-V Administrators only, denied interactive logon; PAT stored as `C:\slate-ci\state\token.xml` via `Export-Clixml` under that account.
 - Guest: standard user `runner`, auto-logon, runner at `C:\actions-runner` (2.338.0, sha256 `f48e0750a21812bca5f82de5f7f5aeae71abee647fab5a582f1742d07eba455f`), .NET at `C:\dotnet`, rustup 1.97.1 with `aarch64-pc-windows-msvc`, uniffi-bindgen-cs `v0.11.0+v0.31.0`, Python 3.13.15, Git 2.55.0.5.
-- Workflows read `vars.WINDOWS_RUNNER_MODE`; `namespace` reproduces today's `runs-on` verbatim; anything else (including unset) means `home`.
+- Workflows read `vars.WINDOWS_RUNNER_MODE`; only `home` selects the home pool; `namespace` and anything else (including unset) reproduce today's `runs-on` verbatim (final-review ruling, 2026-10-10).
 - New `.ps1` files carry the SPDX header used by `apps/slate-windows/generate-bindings.ps1`; commit messages follow the repo's `type(scope): summary` style.
 - Nothing in the module may use PowerShell 7-only syntax (`??`, ternary, `-Parallel`); `-AsHashtable` is allowed only in host-only functions (journal, config).
 

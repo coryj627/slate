@@ -8,13 +8,16 @@ Tests: `.github/workflows/windows-runner-tests.yml` (check
 
 Every Windows job runs in a throwaway Hyper-V VM on the owner's desktop.
 The orchestrator loop is the scheduled task `slate-ci-orchestrator`. It runs
-as the account `slate-ci-host`, a member of Hyper-V Administrators only.
-Every 10 seconds it polls the repository for queued jobs labelled
-`slate-win-*`. For each job it forks a VM from the read-only golden disk and
-a copy-on-write child of the lane's cache disk. It hands in a single-use JIT
-runner config over KVP. After the guest shuts itself down, the loop merges
-the cache child only when GitHub's record shows a green push, schedule or
-dispatch on `main` of `coryj627/slate`. Labels carry no trust.
+as the account `slate-ci-host`, a member of Hyper-V Administrators only,
+which Microsoft treats as equivalent to an administrator (see "Security
+model in one screen"). Every 10 seconds it polls the routed workflows,
+`RoutedWorkflows` in `ci/windows-runner/config.json`, for queued jobs
+labelled `slate-win-*`. For each job it forks a VM from the read-only golden
+disk and a copy-on-write child of the lane's cache disk. It hands in a
+single-use JIT runner config over KVP. The guest shuts down when its job
+ends. The loop then merges the cache child only when GitHub's record shows
+a green push, schedule or dispatch on `main` of `coryj627/slate`, and the
+loop did not force the VM off. Labels carry no trust.
 
 Run every command that touches Hyper-V, the scheduled tasks or anything
 under `C:\slate-ci` in an elevated PowerShell 7 window. `C:\slate-ci` does
@@ -34,12 +37,17 @@ The repository variable `WINDOWS_RUNNER_MODE` routes `windows.yml` and
   (`-fast-pr` off `main`), with the cache tags `slate-windows-rust`,
   `slate-windows-app` and `slate-windows-model`. The shell gate and the
   nightly stress job run on GitHub-hosted `windows-latest`.
-- Any value other than `namespace` means `home`, a typo or an unset
-  variable included. The comparison ignores case, so `Namespace` also
-  selects Namespace.
+- Only `home` selects this host. Any other value, a typo or an unset
+  variable included, means the `namespace` arrangement. The comparison
+  ignores case, so `Home` also selects this host.
 
 The pilot, `windows-ci-pilot.yml`, ignores the variable. Its `runner` input
-picks the pool, and `home` is one of the choices.
+picks the pool, and `home` is one of the choices. On `home`, its `cache`
+input only switches the GitHub-scoped cache restore. `cache=false` is not a
+cold build there: `CARGO_TARGET_DIR` and `NUGET_PACKAGES` live on the
+lane's warm cache disk. A dispatch on `main` is also a trusted run, so the
+host commits its cache fork like any other. Dispatch the pilot from a
+branch unless you mean to warm the caches.
 
 Fallback, when the host is down, being rebuilt or misbehaving:
 
@@ -63,11 +71,11 @@ Jobs already queued for `slate-win-*` keep waiting for the home pool for up
 to 24 hours. Cancel them and re-run them after the flip. The flip never
 touches caches on either side.
 
-Fork and Dependabot pull requests may not receive repository variables.
-Their Windows jobs then route to `home`, whatever the mode says. Every fork
-pull request waits for your approval first (Install, step 7). If the mode
-is `namespace` because the host is down, cancel such a run and re-run it
-once the host is back.
+Fork and Dependabot pull requests may not receive repository variables. A
+run that cannot read the variable routes to Namespace and `windows-latest`,
+whatever the mode says, so it never waits on this host, even while it is
+down. Every fork pull request still waits for your approval first (see
+"Before you start" under Install).
 
 ## Install (one time, in order)
 
@@ -89,6 +97,18 @@ Before you start:
   and the Windows 11 Pro product key in the password manager.
 - A clean checkout of the commit to install, normally an up-to-date `main`.
   Setup copies the working tree but records only `HEAD`.
+- Fork pull requests need approval before any job can run here. Require it
+  for all external contributors:
+
+  ```powershell
+  gh api -X PUT repos/coryj627/slate/actions/permissions/fork-pr-contributor-approval -f approval_policy=all_external_contributors
+  ```
+
+  Check it. Expect `{"approval_policy":"all_external_contributors"}`.
+
+  ```powershell
+  gh api repos/coryj627/slate/actions/permissions/fork-pr-contributor-approval
+  ```
 
 1. **PAT.** On GitHub, create a fine-grained personal access token:
    - name `slate-ci-host-cdesk`;
@@ -113,7 +133,7 @@ Before you start:
    Set-Location C:\dev\slate
    ```
 
-   Use this window for steps 3 to 6.
+   Use this window for steps 3 to 7.
 3. **Host setup.**
 
    ```powershell
@@ -134,15 +154,23 @@ Before you start:
      `C:\slate-ci\cache`: 60 GB dynamic, NTFS, label `slate-cache`, each
      with a `.gen` file at 0;
    - `C:\slate-ci\bin`, a mirror of `ci/windows-runner` without the tests;
-   - two scheduled tasks: `slate-ci-orchestrator`, the loop, and
-     `slate-ci-store-token`, which step 4 runs.
+   - two scheduled tasks: `slate-ci-orchestrator`, the loop, registered
+     disabled, and `slate-ci-store-token`, which step 4 runs.
 
    If Hyper-V was off, the script enables it, asks for a reboot and exits.
    Reboot, open the elevated window again and re-run it.
 
-   From now on the loop task launches every minute. Until step 4 it logs
-   this and exits, which is expected:
-   `token missing at C:\slate-ci\state\token.xml (run install/store-token.ps1)`.
+   The loop stays disabled until step 7, so nothing runs before the golden
+   disk passes its product-key check.
+
+   Then exclude the VM disks from the host's Defender real-time scanning,
+   which otherwise scans every write to them, as Microsoft recommends for
+   Hyper-V hosts. In the same elevated window:
+
+   ```powershell
+   Add-MpPreference -ExclusionPath C:\slate-ci\golden, C:\slate-ci\cache, C:\slate-ci\vms
+   ```
+
 4. **Token.**
 
    ```powershell
@@ -156,10 +184,6 @@ Before you start:
    plaintext is deleted whatever happens. If the script says the conversion
    task did not consume the token, run it again: the account's first
    profile load can outlast its 60-second wait.
-
-   From now on, until step 5 seals the disk, the loop logs this every
-   minute, which is also expected:
-   `golden disk missing or not sealed (read-only) at C:\slate-ci\golden\win11-runner.vhdx (run golden/build-golden.ps1); exiting until it is sealed`.
 5. **Golden image** (40 to 60 minutes; the script gives up after 150):
 
    ```powershell
@@ -179,7 +203,18 @@ Before you start:
    `Golden image ready and read-only: C:\slate-ci\golden\win11-runner.vhdx`.
 
    If it fails, see "The golden build fails" under "When things go wrong".
-6. **The loop starts by itself.** Within a minute of the seal, the log shows
+6. **Product-key check.** Follow "Checking the product key in the golden
+   image" below on the sealed disk. It passes when its step 9 counts `0` and
+   its step 11 prints `absent`, or five characters other than your key's
+   last group. No job may run on the image before it passes. If it fails,
+   leave the loop disabled and record it as a finding.
+7. **Enable the loop**, only after step 6 passed:
+
+   ```powershell
+   Enable-ScheduledTask -TaskName slate-ci-orchestrator
+   ```
+
+   Within a minute the log shows
    `orchestrator start (pid …, user slate-ci-host, config C:\slate-ci\bin\config.json)`.
    `sweep:` lines follow only if there was something to remove. Find the
    newest log:
@@ -200,23 +235,7 @@ Before you start:
    Start-ScheduledTask -TaskName slate-ci-orchestrator
    ```
 
-7. **Fork pull requests need approval.** Require it for all external
-   contributors:
-
-   ```powershell
-   gh api -X PUT repos/coryj627/slate/actions/permissions/fork-pr-contributor-approval -f approval_policy=all_external_contributors
-   ```
-
-   Check it. Expect `{"approval_policy":"all_external_contributors"}`.
-
-   ```powershell
-   gh api repos/coryj627/slate/actions/permissions/fork-pr-contributor-approval
-   ```
-
-8. **Flip the pool to `home`** (see "Pool switch"). Do the product-key
-   check first: the first-golden-build item of the host integration pass,
-   with its procedure "Checking the product key in the golden image". No
-   job may run on the image before it passes.
+8. **Flip the pool to `home`** (see "Pool switch").
 
 ## Host integration pass
 
@@ -280,6 +299,12 @@ saw before changing anything.
      ```powershell
      $task.Triggers.Repetition | Select-Object Interval, Duration
      ```
+- [ ] The loop task stays disabled until Install, step 7. Before that step,
+  this prints `Disabled`, and no `orchestrator-*.log` exists yet:
+
+  ```powershell
+  (Get-ScheduledTask -TaskName slate-ci-orchestrator).State
+  ```
 - [ ] The loop task has no time limit, keeps one instance and runs on
   battery, which is what a UPS looks like to Windows:
 
@@ -331,7 +356,10 @@ saw before changing anything.
   ```
 
   Expect the remote address `10.77.0.0/24`, which Windows may print with the
-  mask `255.255.255.0`, and the local address `10.77.0.1`.
+  mask `255.255.255.0`, and three local addresses: the gateway `10.77.0.1`,
+  multicast `224.0.0.0/4`, which Windows may print as
+  `224.0.0.0/240.0.0.0`, and broadcast `255.255.255.255`. Traffic the host
+  forwards for the NAT is addressed elsewhere, so the rule leaves it alone.
 - [ ] The cache parents came up without a prompt. Step 7/9 printed
   `rust created`, `app created` and `model created`. No "format the disk"
   dialog took focus while it ran; if one did, Windows lettered the raw
@@ -348,19 +376,33 @@ saw before changing anything.
 - [ ] The EFI partition gets a letter after its retype. The build gets past
   `Applying 'Windows 11 Pro'` without `the EFI system partition got no drive letter`
   or `bcdboot exited`, and the VM boots.
-- [ ] The runner download matches its pin: phase 1 gets past it without
-  `sha256 mismatch`. If it stops there, compare `runnerSha256` in
-  `ci/windows-runner/golden/versions.json` with the SHA-256 that the
-  runner's GitHub release page lists for
-  `actions-runner-win-x64-2.338.0.zip`, before changing either.
+- [ ] The hash-pinned downloads match their pins: phase 1 gets past the
+  Python, Git and runner downloads, and phase 2 past rustup-init, without
+  `sha256 mismatch`. If one stops there, compare its hash in
+  `ci/windows-runner/golden/versions.json` (`pythonSha256`, `gitSha256`,
+  `runnerSha256`, `rustupInitSha256`) with the one published where its
+  `sources` entry points; for the runner, the SHA-256 that its GitHub
+  release page lists for `actions-runner-win-x64-2.338.0.zip`. Do that
+  before changing either.
 - [ ] Every `icacls … /setowner runner /T /C` in phase 1 exits 0: the build
   does not stop on `icacls exited <n> for C:\actions-runner (owner)` or
   `icacls exited <n> for C:\dotnet (owner)`.
-- [ ] `slmgr /cpky` left no readable product key. Read `DigitalProductId` in
-  the sealed image before step 8 flips the pool to `home`. See "Checking
-  the product key in the golden image" below.
-- [ ] The loop starts by itself within a minute of the seal, with no
-  `Start-ScheduledTask`. This proves the per-minute relaunch.
+- [ ] `slmgr /cpky` left no readable product key. This is Install, step 6,
+  before step 7 enables the loop. See "Checking the product key in the
+  golden image" below.
+- [ ] The `runner` password never expires; auto-logon would stop working
+  once it did, 42 days after the build by default. Inside a job VM, or the
+  build VM while phase 2 runs, open its console
+  (`vmconnect.exe localhost <vm>`), start PowerShell and run:
+
+  ```powershell
+  net user runner
+  ```
+
+  Expect the line `Password expires` to end in `Never`.
+- [ ] The loop starts by itself within a minute of step 7's
+  `Enable-ScheduledTask`, with no `Start-ScheduledTask`. This proves the
+  per-minute relaunch.
 
 ### First home runs
 
@@ -373,7 +415,8 @@ gh workflow run windows.yml --ref <branch> --repo coryj627/slate
 
 - [ ] The vTPM works as `slate-ci-host`. The first
   `provisioned for job …` line appears, with no `vTPM could not be enabled`.
-- [ ] A live job VM carries all 14 port ACL rules, IPv6 included.
+- [ ] A live job VM carries all 20 port ACL rules: 18 Deny rules, IPv6
+  included, then 2 Allow rules.
   1. Pick a job VM:
 
      ```powershell
@@ -386,10 +429,11 @@ gh workflow run windows.yml --ref <branch> --repo coryj627/slate
      Get-VMNetworkAdapterExtendedAcl -VMName $vm.Name | Select-Object Direction, Action, RemoteIPAddress, Weight
      ```
 
-  Expect 12 Deny rows at weights 200 down to 189: inbound and outbound for
+  Expect 18 Deny rows at weights 200 down to 183: inbound and outbound for
   each of `10.0.0.0/8`, `172.16.0.0/12`, `192.168.0.0/16`, `100.64.0.0/10`,
-  `169.254.0.0/16` and `::/0`. Then 2 Allow rows for `0.0.0.0/0` at
-  weight 1.
+  `169.254.0.0/16`, `224.0.0.0/4` (multicast), `255.255.255.255/32`
+  (broadcast), `0.0.0.0/8` and `::/0`. Then 2 Allow rows for `0.0.0.0/0`
+  at weight 1.
 - [ ] The KVP handoff works: `handed off (runner …, job …)` follows
   `provisioned`, with no `handoff failed: KVP: …`. This proves that
   `AddKvpItems` accepts the serialised client-only instances.
@@ -427,7 +471,9 @@ gh workflow run windows.yml --ref <branch> --repo coryj627/slate
   Expect the step `Isolation evidence (home pool only)` to print `false`
   for every private target and `true` for `github.com:443`, and the whole
   pilot green. Keep `isolation.json` from the artifact
-  `windows-pilot-native-<run id>-<attempt>` with the pull request.
+  `windows-pilot-native-<run id>-<attempt>` with the pull request. While
+  the pilot's build runs, also check the router's public address by hand
+  (step 4 of "Refreshing the pilot's isolation targets").
 - [ ] The cache volume mounts in the guest. Each cached lane's step "Cache
   mount state (pre-build)" lists `cargo`, `target` and `nuget` under the
   cache root. A cold parent shows `0.00 GiB` rows: the guest creates the
@@ -483,7 +529,9 @@ gh workflow run windows.yml --ref <branch> --repo coryj627/slate
 ### Checking the product key in the golden image
 
 `slmgr /cpky` should leave no product key that a job could read. Check the
-sealed disk before any job runs on it.
+sealed disk before any job runs on it: at Install, step 6, and after every
+rebuild (see "Refreshing the golden image"), while the loop task is
+disabled.
 
 1. Mount the disk read-only:
 
@@ -573,8 +621,9 @@ sealed disk before any job runs on it.
     Remove-Item "$env:TEMP\golden-SOFTWARE*" -Force
     ```
 
-If step 9 or 11 finds the key, keep the pool on `namespace` and record it
-as a finding before any job runs on the image.
+If step 9 or 11 finds the key, leave the loop task disabled, keep the pool
+on `namespace`, and record it as a finding before any job runs on the
+image.
 
 ### Refreshing the pilot's isolation targets
 
@@ -595,6 +644,31 @@ Switch gateways on 2026-10-10. Windows picks new ones at every host boot.
 3. If they differ, put the current ones in the list on the branch you
    dispatch from, then commit and push. The dispatch runs that branch's
    copy of the workflow.
+4. Check the home router's public (WAN) address too. It is a public
+   address, so the port ACL lets a job reach it, and with it whatever the
+   router serves there: remote administration, UPnP, or ports forwarded
+   into the LAN. Never put it in the list: the repository, the run's log
+   and `isolation.json` are all public. Check it by hand instead, while the
+   pilot's build runs:
+   1. Read the address from the router's status page.
+   2. Open the console of the pilot build's job VM, the `slate-win-app-*`
+      one that `Get-VM` lists:
+
+      ```powershell
+      vmconnect.exe localhost <vm>
+      ```
+
+   3. On the `runner` desktop, start PowerShell and probe each port the
+      router serves or forwards, 443 and 80 at least. `<wan>` is the
+      address:
+
+      ```powershell
+      Test-NetConnection <wan> -Port 443
+      ```
+
+   Expect `TcpTestSucceeded : False` for every port. A port that answers is
+   reachable from every job: turn the service off on the router, or record
+   it as an accepted risk in "Security model in one screen".
 
 ### Removing a job VM by hand
 
@@ -669,7 +743,11 @@ This checks how `Get-VM` reports a VM that no longer exists, as
   2. `<vm>: handed off (runner <id>, job <id>)`
   3. `<vm>: claimed`, or `<vm>: claimed (job <status> on this runner)`,
      only for a job still running five minutes after the handoff.
-  4. One of `<vm>: commit <lane> generation <n> (trusted main)`,
+  4. Sometimes
+     `<vm>: job <id> is in_progress on GitHub while its VM is off; waiting up to 6 ticks for it to complete`:
+     GitHub's record lagged the guest's shutdown. The loop asks again every
+     tick and decides within a minute on what GitHub reports then.
+  5. One of `<vm>: commit <lane> generation <n> (trusted main)`,
      `<vm>: discard (<reason>)`, or, for the shell lane,
      `<vm>: done, lane shell has no cache (conclusion: <conclusion>)`.
 
@@ -751,7 +829,9 @@ This checks how `Get-VM` reports a VM that no longer exists, as
 - **Watching a live job VM.** `vmconnect.exe localhost <vm>` opens its
   console, the interactive `runner` desktop. The console is a picture of the
   guest's screen; NVDA's OCR (`NVDA+R`) reads it. Do not stop a VM by hand
-  unless you mean its job to fail and its cache fork to be discarded.
+  unless you mean its job to fail and its cache fork to be discarded. The
+  loop knows only that it did not force a VM off itself: a VM you turn off
+  just after a green main job looks to it like one that shut down cleanly.
 
 ## Pausing and draining
 
@@ -839,10 +919,14 @@ the runner version first.
 
 For a pin change, update `ci/windows-runner/golden/versions.json` on a
 branch and merge it. The Pester suite checks its Rust and bindgen pins
-against the repository's. Have the Windows 11 Pro key ready: the build asks
-for it again.
+against the repository's. The runner, Python, Git and rustup-init pins each
+carry a SHA-256 (`runnerSha256`, `pythonSha256`, `gitSha256`,
+`rustupInitSha256`): when a version moves, take its new hash from the page
+its `sources` entry names, and update that entry too. Have the Windows 11
+Pro key ready: the build asks for it again.
 
-1. Drain and pause the loop (see "Pausing and draining").
+1. Drain and pause the loop (see "Pausing and draining"). The task stays
+   disabled until step 7.
 2. Pull the merged `main` into the checkout, and open the elevated window
    there.
 3. Move the old disk aside. It is read-only, but a rename still works:
@@ -851,7 +935,8 @@ for it again.
    Rename-Item C:\slate-ci\golden\win11-runner.vhdx win11-runner.prev.vhdx
    ```
 
-4. Refresh `bin`:
+4. Refresh `bin`. A plain re-run keeps both tasks as they are, so the loop
+   stays disabled:
 
    ```powershell
    .\ci\windows-runner\install\setup-host.ps1
@@ -863,20 +948,22 @@ for it again.
    .\ci\windows-runner\golden\build-golden.ps1 -IsoPath C:\Users\cory\Downloads\Win11_25H2_English_x64_v2.iso
    ```
 
-6. Enable the task. The new disk is sealed, so the loop starts within a
-   minute. Check the log for `orchestrator start`.
+6. Check the product key on the rebuilt disk: "Checking the product key in
+   the golden image". If it finds the key, roll back (below).
+7. Enable the task, only after step 6 passed. The new disk is sealed, so
+   the loop starts within a minute. Check the log for `orchestrator start`.
 
    ```powershell
    Enable-ScheduledTask -TaskName slate-ci-orchestrator
    ```
 
-7. Flip the pool back to `home`, then dispatch `windows.yml` on a branch:
+8. Flip the pool back to `home`, then dispatch `windows.yml` on a branch:
 
    ```powershell
    gh workflow run windows.yml --ref <branch> --repo coryj627/slate
    ```
 
-8. Once that run is green, delete the old disk:
+9. Once that run is green, delete the old disk:
 
    ```powershell
    Remove-Item C:\slate-ci\golden\win11-runner.prev.vhdx -Force
@@ -886,11 +973,11 @@ Cache parents survive a golden rebuild untouched.
 
 ### Rolling back a refresh
 
-If the build fails, or the branch run on the new disk is red, put the old
-disk back.
+If the build fails, the product-key check finds the key, or the branch run
+on the new disk is red, put the old disk back.
 
-1. If step 7 flipped the pool to `home`, flip it back to `namespace`. If
-   step 6 resumed the loop, pause it again: steps 3 to 6 of the drain.
+1. If step 8 flipped the pool to `home`, flip it back to `namespace`. If
+   step 7 enabled the loop, pause it again: steps 3 to 6 of the drain.
 2. If the build left its VM, remove it:
 
    ```powershell
@@ -910,7 +997,8 @@ disk back.
    Rename-Item -LiteralPath C:\slate-ci\golden\win11-runner.prev.vhdx -NewName win11-runner.vhdx
    ```
 
-5. Enable the task. The loop starts within a minute, on the old disk:
+5. Enable the task, only now that the old disk is back. The loop starts
+   within a minute, on the old disk:
 
    ```powershell
    Enable-ScheduledTask -TaskName slate-ci-orchestrator
@@ -932,8 +1020,9 @@ refresh.
 
 If a task is missing, a plain re-run takes the reset path. It prints
 `a scheduled task is missing: the password is reset so both can be registered`,
-sets a new password, registers both tasks again and deletes `token.xml`.
-Run `store-token.ps1` again afterwards.
+sets a new password, registers both tasks again, the loop task disabled,
+and deletes `token.xml`. Run `store-token.ps1` again afterwards, then
+enable the loop task (`Enable-ScheduledTask -TaskName slate-ci-orchestrator`).
 
 To install new host code (the module, the adapters, `orchestrator.ps1`,
 `config.json` or the install scripts), follow the steps below. If the
@@ -965,9 +1054,9 @@ scripts or the module's KVP functions, rebuild the golden image instead
 
 Changes to the task definitions (triggers, settings, the `pwsh` path) take
 effect only with `-ResetAccount`. It removes both tasks, sets a new random
-password and registers both tasks again, enabled. An administrator's
-password reset makes the stored token unreadable, so it also deletes
-`token.xml`.
+password and registers both tasks again, the loop task disabled. An
+administrator's password reset makes the stored token unreadable, so it
+also deletes `token.xml`.
 
 1. Drain and pause the loop. Pausing first matters: whether
    `Unregister-ScheduledTask` removes the task while the loop runs is
@@ -984,8 +1073,13 @@ password reset makes the stored token unreadable, so it also deletes
    C:\slate-ci\bin\install\store-token.ps1
    ```
 
-4. The new task is already enabled. Within a minute the log shows
-   `orchestrator start`. Until step 3, it shows `token missing` instead.
+4. Enable the new loop task, which setup registered disabled. Within a
+   minute the log shows `orchestrator start`:
+
+   ```powershell
+   Enable-ScheduledTask -TaskName slate-ci-orchestrator
+   ```
+
 5. Flip the pool back to `home`.
 
 Any re-run rebuilds a cache parent that is missing or has no `.gen` file,
@@ -1027,11 +1121,17 @@ and `"status": "401"`. Rotate it before then.
 
 ## When things go wrong
 
-- **`token missing at …` every minute.** No token is stored. Run
-  `store-token.ps1`. This is expected after `-ResetAccount` until you do.
+- **`token missing at …` every minute.** No token is stored: run
+  `store-token.ps1`. After `-ResetAccount`, store the token before you
+  enable the loop task.
 - **`golden disk missing or not sealed (read-only) at …` every minute.** The
-  golden disk does not exist yet, is being rebuilt, or its build failed
-  before sealing it. The loop starts within a minute of a seal.
+  loop task is enabled, but the golden disk does not exist yet, is being
+  rebuilt, or its build failed before sealing it. Disable the task until a
+  sealed disk has passed its product-key check (Install, step 6):
+
+  ```powershell
+  Disable-ScheduledTask -TaskName slate-ci-orchestrator
+  ```
 - **`startup: …` every minute.** The loop failed before its first tick, and
   the task retries every minute. `Key not valid for use in specified state`
   means `slate-ci-host` cannot decrypt the token: store it again. If
@@ -1040,11 +1140,25 @@ and `"status": "401"`. Rotate it before then.
   A failed API call logs the prefixed line, then GitHub's reply on the next
   lines, without timestamps. `"message": "Bad credentials"` with
   `"status": "401"` means the PAT expired or was revoked: rotate it.
-  `"status": "403"` means it lacks a permission: compare it with Install,
-  step 1. This finds them, with the four lines before each:
+  `"status": "403"` with `"message": "API rate limit exceeded for user ID …"`
+  means the hourly budget is spent; GitHub's response carried
+  `x-ratelimit-remaining: 0`. The budget is your personal 5,000 requests an
+  hour, shared with `gh` and anything else signed in as you, and it refills
+  at the reset time. Any other `"status": "403"` means the PAT lacks a
+  permission: compare it with Install, step 1. This finds them, with the
+  four lines before each:
 
   ```powershell
   Select-String -Path C:\slate-ci\logs\orchestrator-*.log -Pattern '"status": "40[13]"' -Context 4,0
+  ```
+- **`GitHub API budget low: <n> requests left until the reset at <time> …`.**
+  Fewer than 500 requests are left in the current hour of the budget the
+  PAT shares with `gh`. The loop warns once per hourly window. Something
+  else signed in as you is busy, or the loop is polling more runs than
+  usual. Check the remaining budget (this call does not count against it):
+
+  ```powershell
+  gh api rate_limit --jq .resources.core
   ```
 - **`<vm>: provisioning failed: … vTPM could not be enabled …`.** The VM
   could not get its virtual TPM as `slate-ci-host`, and the job is retried.
@@ -1084,7 +1198,9 @@ and `"status": "401"`. Rotate it before then.
   minutes past its lane's cap, counted from provisioning. It is discarded
   and its job is not retried.
 - **A job stays queued and the log says nothing about it.** Check the mode,
-  then that the loop runs (recent log lines). Then the retry cap: after three
+  then that the loop runs (recent log lines), then that the job's workflow
+  is listed in `RoutedWorkflows` in `ci/windows-runner/config.json`: the
+  loop reads no other workflow's jobs. Then the retry cap: after three
   failed attempts the loop stops admitting that job without a log line.
   Cancel the run and re-run it; to the loop its jobs are then new. A restart
   also clears the retry table.
@@ -1169,6 +1285,14 @@ Remove-Item -LiteralPath C:\slate-ci\golden\win11-runner.vhdx -Force
 
 ### Reading a job VM's logs
 
+A job VM's disk is untrusted: its job could have written anything to it,
+including files made to attack whatever opens them on the host. Mount it
+only when its job never started (`shut down without running a job`) or
+ran your own branch. For any other VM, above all one that ran a fork pull
+request, watch it live with `vmconnect` instead. The procedure mounts the
+disk read-only and without drive letters, on a folder, so Explorer,
+AutoPlay and the search indexer never open it.
+
 The loop deletes a job VM's disk when it settles the VM. To keep one and
 read its logs with a screen reader, pause the loop first. If the VM is
 running a job, that job fails. Any other job VM is removed, uncommitted,
@@ -1181,56 +1305,75 @@ when the loop resumes.
    Stop-VM -Name <vm> -TurnOff -Force
    ```
 
-3. Mount its system disk read-only:
+3. Mount its system disk read-only, without drive letters:
 
    ```powershell
-   $disk = Mount-VHD -Path C:\slate-ci\vms\<vm>\os.vhdx -ReadOnly -Passthru | Get-Disk
+   $disk = Mount-VHD -Path C:\slate-ci\vms\<vm>\os.vhdx -ReadOnly -NoDriveLetter -Passthru | Get-Disk
    ```
 
-4. List its drive letters. The EFI partition may have one as well as the
-   Windows volume:
+4. Pick its Windows volume, the one basic-data partition. The EFI and
+   reserved partitions have other types:
 
    ```powershell
-   $letters = ($disk | Get-Partition | Where-Object DriveLetter).DriveLetter
+   $windows = $disk | Get-Partition | Where-Object GptType -eq '{ebd0a0a2-b9e5-4433-87c0-68b6b72699c7}'
    ```
 
-5. Keep the Windows volume:
+5. Make an empty folder to mount it on:
 
    ```powershell
-   $letter = $letters | Where-Object { Test-Path "$($_):\Windows\System32" }
+   $mount = New-Item -ItemType Directory -Path "$env:TEMP\slate-vm-logs"
    ```
 
-6. Read the runner task's log:
+6. Mount the volume on the folder:
 
    ```powershell
-   Get-Content "${letter}:\actions-runner\bootstrap-runner.log"
+   $windows | Add-PartitionAccessPath -AccessPath $mount.FullName
    ```
 
-7. Read the SYSTEM task's log:
+7. Read the runner task's log:
 
    ```powershell
-   Get-Content "${letter}:\actions-runner\bootstrap-system.log"
+   Get-Content "$($mount.FullName)\actions-runner\bootstrap-runner.log"
+   ```
+
+8. Read the SYSTEM task's log:
+
+   ```powershell
+   Get-Content "$($mount.FullName)\actions-runner\bootstrap-system.log"
    ```
 
    The runner's own logs are in `actions-runner\_diag` on the same volume.
-8. Dismount:
+9. Take the volume off the folder:
 
    ```powershell
-   Dismount-VHD -Path C:\slate-ci\vms\<vm>\os.vhdx
+   $windows | Remove-PartitionAccessPath -AccessPath $mount.FullName
    ```
 
-9. Resume the loop. Its startup sweep removes the VM.
+10. Dismount:
+
+    ```powershell
+    Dismount-VHD -Path C:\slate-ci\vms\<vm>\os.vhdx
+    ```
+
+11. Delete the folder, now empty again:
+
+    ```powershell
+    Remove-Item $mount.FullName
+    ```
+
+12. Resume the loop. Its startup sweep removes the VM.
 
 ## Security model in one screen
 
 | Boundary | Control |
 |---|---|
-| Who can run code here | Only approved workflows. Every fork pull request waits for an owner click, every time; fork and Dependabot runs may route to `home` whatever the mode. Non-fork branches are the owner's own commits (and Renovate's). |
+| Who can run code here | Only approved workflows. Every fork pull request waits for an owner click, every time. Only `WINDOWS_RUNNER_MODE=home` routes here, so a fork or Dependabot run that cannot read the variable goes to Namespace and `windows-latest`. Non-fork branches are the owner's own commits (and Renovate's). |
 | What a job can touch | A VM that exists for that job only, as the standard user `runner`, with no secret valid outside the VM. Its JIT runner config is single-use. |
-| Where a job can connect | The Internet, through the host's NAT. Hyper-V port ACLs drop everything to and from 10/8, 172.16/12, 192.168/16, 100.64/10 (Tailscale), 169.254/16 and all IPv6. The host firewall drops inbound traffic from the VM subnet to the host. |
-| What survives a job | Only a cache merge, and only after the host verifies from GitHub's API: a green push, schedule or dispatch on `main` of this repository, a guest that shut itself down, and an unchanged parent generation. |
-| What the host account can do | `slate-ci-host` is a Hyper-V Administrator, not an Administrator. It cannot log on interactively or remotely. Inside `C:\slate-ci` it writes `state`, `cache`, `vms` and `logs`; `bin` and `golden` are read-only for it. Like any standard account, it can still create folders elsewhere on `C:\`. It holds the one PAT: Actions read, Administration read and write, this repository only. |
+| Where a job can connect | The Internet, through the host's NAT. Hyper-V port ACLs drop everything to and from 10/8, 172.16/12, 192.168/16, 100.64/10 (Tailscale), 169.254/16, multicast 224/4, broadcast 255.255.255.255, 0/8 and all IPv6; the image also turns IPv6 off. The host firewall drops inbound traffic from the VM subnet to the host's own addresses there: `10.77.0.1`, multicast and broadcast. |
+| What survives a job | Only a cache merge, and only after the host verifies from GitHub's API: a green push, schedule or dispatch on `main` of this repository, a VM the loop did not force off, and an unchanged parent generation. |
+| What the host account can do | `slate-ci-host` is a Hyper-V Administrator, not an Administrator, but Microsoft treats membership in Hyper-V Administrators as equivalent to administrator rights on the host. Its limits stop mistakes and interactive use; they do not contain a compromise of the account or of the code it runs. It cannot log on interactively or remotely. Inside `C:\slate-ci` it writes `state`, `cache`, `vms` and `logs`; `bin` and `golden` are read-only for it. Like any standard account, it can still create folders elsewhere on `C:\`. It holds the one PAT: Actions read, Administration read and write, this repository only. |
 | Who can change what runs | Only an elevated administrator writes `C:\slate-ci\bin`, the golden disk and the tasks. In the guest, only Administrators and SYSTEM can write the bootstrap scripts in `C:\slate-guest`. |
+| Residual risk, accepted | A job reaches the Internet with a read-only `GITHUB_TOKEN`, as on GitHub-hosted runners. The home router's public (WAN) address is a public destination, so the port ACL passes it: whatever the router serves there (remote administration, UPnP, ports forwarded into the LAN) is reachable from a job. Keep those off, and check by hand (step 4 of "Refreshing the pilot's isolation targets"). |
 
 Recommended, not done by the runner work: branch protection on `main`
 requiring "build + test (windows x64)".

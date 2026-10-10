@@ -79,11 +79,11 @@ builds) and the read-only `GITHUB_TOKEN`.
 |---|---|
 | Fork PR runs arbitrary code on the runner | Fork-PR approval policy set to "all external contributors"; every fork PR waits for an owner click, every time. |
 | Approved-but-malicious job escapes the runner | Job runs as a standard user inside a Gen2 Hyper-V VM that exists only for that job and is deleted afterwards. |
-| Job reaches the host, LAN or tailnet | Hyper-V extended port ACLs on the VM adapter deny RFC1918, 100.64/10, 169.254/16 and all IPv6; host firewall drops inbound from the VM subnet. The host is a router for the VM, never a server. |
+| Job reaches the host, LAN or tailnet | Hyper-V extended port ACLs on the VM adapter deny RFC1918, 100.64/10, 169.254/16, multicast 224/4, broadcast 255.255.255.255, 0/8 and all IPv6; host firewall drops inbound from the VM subnet to the host's own addresses (10.77.0.1, multicast, broadcast). The host is a router for the VM, never a server. |
 | Job steals a credential | No secret valid outside the VM exists in it: the product key is cleared with `slmgr /cpky`, the auto-logon password only opens a disposable isolated guest. The JIT config is single-use and expires with the job. The orchestrator's PAT lives DPAPI-encrypted on the host under a dedicated account the VM cannot reach. |
-| Job poisons a trusted cache | Every job gets a copy-on-write fork; the fork is merged only when the host verifies provenance (push/schedule/dispatch on `main` of `coryj627/slate`, conclusion success, clean guest shutdown). Labels carry no trust. |
+| Job poisons a trusted cache | Every job gets a copy-on-write fork; the fork is merged only when the host verifies provenance (push/schedule/dispatch on `main` of `coryj627/slate`, conclusion success, a VM the loop did not force off). Labels carry no trust. |
 | One runner serves two jobs | JIT runners are ephemeral by construction; GitHub assigns at most one job. The host additionally deletes the VM after the first job. |
-| Host compromise via the orchestrator account | `slate-ci-host` is a member of Hyper-V Administrators only, has no interactive logon, and can write only under `C:\slate-ci`. |
+| Host compromise via the orchestrator account | `slate-ci-host` is a member of Hyper-V Administrators only, has no interactive logon, and can write only under `C:\slate-ci`. Microsoft treats Hyper-V Administrators membership as equivalent to administrator rights, so these limits stop mistakes and interactive use, not a compromise of the account or of the code it runs. |
 | Renovate branch pulls a malicious crate whose build script runs | Same VM isolation; the PR fork is discarded. After merge the code is in `main` regardless. |
 
 Residual risk accepted by the owner: an approved fork PR, or the owner's own
@@ -109,7 +109,8 @@ C:\slate-ci\
 
 Accounts and secrets:
 
-- `slate-ci-host`: local account, member of Hyper-V Administrators only,
+- `slate-ci-host`: local account, member of Hyper-V Administrators only
+  (which Microsoft treats as administrator-equivalent; see the threat model),
   "deny log on locally", password stored nowhere after setup (the Scheduled
   Task runs it with a stored credential).
 - The orchestrator runs from a Scheduled Task "At startup", as
@@ -127,15 +128,23 @@ Network:
   the host owns `10.77.0.1`. Each VM slot has a fixed address (`10.77.0.11`,
   `10.77.0.12`) handed to the guest over KVP. DNS is the static public
   resolvers the host hands over in `slate.dns` (the golden image carries
-  the same defaults). IPv6 disabled in the guest.
-- Per-VM extended ACLs (`Add-VMNetworkAdapterExtendedAcl`), outbound deny to
-  `10.0.0.0/8`, `172.16.0.0/12`, `192.168.0.0/16`, `100.64.0.0/10`,
-  `169.254.0.0/16`, `::/0`; then allow all else. Packets to the Internet
-  carry public destinations and pass; packets addressed to the host's
-  `10.77.0.1`, the LAN (`192.168.0.0/24` here), WSL/Default Switch ranges
-  and Tailscale are dropped at the switch port.
+  the same defaults). IPv6 is disabled in the image by the
+  `DisabledComponents` policy (`0xFF`, which also covers the new adapter
+  every job VM boots with) and dropped by the port ACL (`::/0`).
+- Per-VM extended ACLs (`Add-VMNetworkAdapterExtendedAcl`) deny, in both
+  directions, `10.0.0.0/8`, `172.16.0.0/12`, `192.168.0.0/16`,
+  `100.64.0.0/10`, `169.254.0.0/16`, `224.0.0.0/4` (multicast),
+  `255.255.255.255/32` (broadcast), `0.0.0.0/8` and `::/0` (18 rules); then
+  allow all else. Packets to the Internet carry public destinations and
+  pass; packets addressed to the host's `10.77.0.1`, the LAN
+  (`192.168.0.0/24` here), WSL/Default Switch ranges, Tailscale, and the
+  multicast and broadcast addresses the host's discovery services answer
+  on are dropped at the switch port.
 - Host Windows Firewall: block inbound on the `vEthernet (slate-ci)`
-  interface from `10.77.0.0/24`.
+  interface from `10.77.0.0/24` to the host's own addresses there: local
+  `10.77.0.1`, `224.0.0.0/4` and `255.255.255.255`. Traffic the host
+  forwards for the NAT is addressed elsewhere, so the rule leaves it
+  untouched.
 
 Resources: two VM slots, each 4 vCPU and 12 GB static memory. Guest video
 pinned to 1920×1080 with `Set-VMVideo`. Host power plan already never sleeps
@@ -157,10 +166,15 @@ State machine per job, run by a single-threaded loop with a 10 s tick:
 
 1. **Discover.** `GET /repos/coryj627/slate/actions/runs?status=queued` and
    `?status=in_progress` (a run is `in_progress` while later jobs are still
-   queued), then `GET /runs/{id}/jobs?filter=latest`; keep jobs with
-   `status == queued` whose `labels` contain exactly one `slate-win-*`
-   label. Record `job_id`, `run_id`, lane, `created_at`. Budget: ~3 API
-   calls per tick when idle, well inside the 5,000/h limit.
+   queued), then, for each run of a routed workflow (`RoutedWorkflows` in
+   `config.json`: `windows.yml`, `nightly.yml`, `windows-ci-pilot.yml`),
+   `GET /runs/{id}/jobs?filter=latest`; keep jobs with `status == queued`
+   whose `labels` contain exactly one `slate-win-*` label. Record `job_id`,
+   `run_id`, lane, `created_at`. Budget: two listing calls per tick plus
+   one jobs call per queued or in-progress run of a routed workflow, and at
+   settle one job lookup per seen job of the VM's lane. The 5,000 requests
+   an hour are the owner's own, shared with `gh`; the host logs a warning
+   when fewer than 500 remain.
 2. **Admit.** While a slot is free, take the oldest queued job not already
    assigned. One VM per job at a time; a job that already has a VM is never
    admitted again (a discarded job is re-admitted after its back-off).
@@ -202,14 +216,20 @@ State machine per job, run by a single-threaded loop with a 10 s tick:
    the SYSTEM task publishing `slate.error` over guest KVP).
 7. **Settle (host).** On VM state `Off`: look up which job ran on this
    runner name (first the admitted `job_id`, else any recently seen
-   candidate, via `GET /actions/jobs/{job_id}` → `runner_name`), fetch its
-   run, apply the commit predicate (section 3), `Merge-VHD` or delete the
-   cache child, `Remove-VM`, delete the directory, release the slot.
+   candidate of the same lane, via `GET /actions/jobs/{job_id}` →
+   `runner_name`); while GitHub does not yet report that job `completed`,
+   wait up to six ticks; then fetch its run, apply the commit predicate
+   (section 3), `Merge-VHD` or delete the cache child, `Remove-VM`, delete
+   the directory, release the slot.
 
 Failure handling:
 
-- VM still running past the lane's `timeout-minutes` + 10 min: `Stop-VM
-  -TurnOff`, discard, log at error.
+- VM still running past its lane cap plus a 10 min grace, counted from
+  provisioning: `Stop-VM -TurnOff`, discard, log at error. The cap is the
+  lane's `MaxMinutes` in `config.json` (rust 70, app 100, model 100, shell
+  30), which already includes 10 min over the longest `timeout-minutes`
+  that windows.yml and nightly.yml give the lane (for app, the nightly
+  stress job's 90); the host adds a further 10 min grace on top.
 - Runner registered but no job claims it within 5 min and the admitted job
   is no longer queued: `DELETE /actions/runners/{id}`, turn off, discard.
 - Heartbeat never arrives, KVP never read, or any API error during
@@ -234,8 +254,11 @@ Commit predicate, evaluated on the host from the API after the VM is off:
 - the job that ran on this runner name has `conclusion == success`;
 - its run has `event ∈ {push, schedule, workflow_dispatch}`,
   `head_branch == main`, `head_repository.full_name == coryj627/slate`;
-- the host did not force the VM off (the guest reached `Off` by its own
-  `shutdown`), which is the host's own record, not a guest claim;
+- the loop did not force the VM off, which is the host's own record, not a
+  guest claim: a VM the loop turns off (timeout, unclaimed runner, failed
+  handoff) is discarded on that path and never reaches the predicate. The
+  loop does not otherwise learn how the VM stopped, so a VM turned off by
+  hand looks the same as a guest `shutdown`;
 - the parent's generation number equals the one recorded at fork time.
 
 If all hold: `Merge-VHD` child → parent, increment `<lane>.gen`. Otherwise
@@ -313,8 +336,9 @@ Toolchain, matching the Namespace image the lanes run on today:
   `apps/slate-windows/uniffi-bindgen-cs.version`, in `%USERPROFILE%\.cargo\bin`
   of `runner`.
 - `ci/windows-runner/golden/versions.json` is the golden image's single pin
-  file (runner version and SHA-256, Rust toolchain, uniffi-bindgen-cs tag,
-  .NET channel, Python and Git versions, resolvers); the Pester suite
+  file (runner, Python, Git and rustup-init versions, each with its
+  SHA-256 and, in `sources`, where the hash was published; Rust toolchain,
+  uniffi-bindgen-cs tag, .NET channel, resolvers); the Pester suite
   asserts its Rust and bindgen pins equal `rust-toolchain.toml` and
   `apps/slate-windows/uniffi-bindgen-cs.version`.
 
@@ -325,12 +349,18 @@ cache parents are untouched.
 
 ### 5. Workflow changes
 
-Repository variable `WINDOWS_RUNNER_MODE`: `home` (default) or `namespace`.
-Every Windows `runs-on` becomes an expression on it; nothing else about job
-topology changes. The name mirrors `MAC_RUNNER_MODE`; the Windows variable
-has no `auto` mode (D-3 chose manual).
+Repository variable `WINDOWS_RUNNER_MODE`: `home` or `namespace`. Only the
+exact value `home` selects the home pool (GitHub compares it ignoring case);
+`namespace`, unset or any other value reproduces today's runners verbatim,
+so a run that cannot read repository variables (a fork or Dependabot pull
+request) never waits on the host (owner ruling, 2026-10-10). Every Windows
+`runs-on` becomes an expression on it,
+`vars.WINDOWS_RUNNER_MODE == 'home' && <home label> || <today's runner>`;
+nothing else about job topology changes. The name mirrors
+`MAC_RUNNER_MODE`; the Windows variable has no `auto` mode (D-3 chose
+manual).
 
-| Job | `home` | `namespace` (today's value, verbatim) |
+| Job | `home` | `namespace`, unset or any other value (today's runners, verbatim) |
 |---|---|---|
 | windows.yml `rust-tests` | `slate-win-rust` | `namespace-profile-winx64-fast[-pr];overrides.cache-tag=slate-windows-rust` |
 | windows.yml `windows` | `slate-win-app` | `…;overrides.cache-tag=slate-windows-app` |
@@ -339,8 +369,9 @@ has no `auto` mode (D-3 chose manual).
 | nightly.yml `windows-full-stress` | `slate-win-app` | `windows-latest` |
 | windows-ci-pilot.yml candidates | new `home` choice: `build-app` → `slate-win-app`, `model-shard` → `slate-win-model`, `shell` → `slate-win-shell` (the other candidates keep their hosted shell) | unchanged |
 
-Cache steps: the two `namespacelabs/nscloud-cache-action` steps gain
-`if: ${{ vars.WINDOWS_RUNNER_MODE == 'namespace' }}`. The attestation and
+Cache steps: the three `namespacelabs/nscloud-cache-action` steps gain
+`if: ${{ vars.WINDOWS_RUNNER_MODE != 'home' }}`, and the nightly stress
+job's GitHub-cache restore runs unless the mode is `home`. The attestation and
 footprint steps run on both pools unchanged. The `actions/cache` step for
 `uniffi-bindgen-cs` stays; on `home` the binary is already present and the
 GitHub cache (shared across runners) hits anyway. The "Assert runner
@@ -355,7 +386,9 @@ its four `needs`, so "build + test (windows x64)" means what it meant.
 Collapsing the shell gate into the app lane on `home` is a follow-up, not
 part of this change.
 
-Fallback and return:
+Fallback and return (the fallback is also the default: with the variable
+unset or set to anything but `home`, every Windows job runs on today's
+runners):
 
 ```bash
 gh variable set WINDOWS_RUNNER_MODE --body namespace
@@ -443,8 +476,8 @@ These are estimates; acceptance records real numbers.
      commits (rust, app, model) with generation increments; the shell lane
      shows no cache.
   3. The next `main` run's pre-build attestation reads warm for all three.
-  4. A branch run after that reads warm and the log shows "discard
-     (provenance: pull_request)".
+  4. A pull request run after that reads warm and the log shows "discard
+     (event: pull_request)".
   5. Flip to `namespace`, dispatch, green; flip back, dispatch, green.
   6. Nightly dispatch runs the stress job on `slate-win-app`.
   7. Kill a VM mid-job: the job fails on GitHub, the sweep cleans up, the
