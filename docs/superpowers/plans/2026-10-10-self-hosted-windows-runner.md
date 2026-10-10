@@ -404,7 +404,7 @@ git commit -m "feat(ci-host): module skeleton — lane labels, runner names, KVP
 
 **Interfaces:**
 - Consumes: `Get-LaneFromLabels` (Task 2).
-- Produces: `Select-QueuedLaneJobs -Jobs [object[]] -Lanes [string[]]` → `[pscustomobject[]]` with `JobId [int64]`, `RunId [int64]`, `Lane [string]`, `CreatedAt [datetimeoffset]`, sorted oldest first; `Select-JobsToAdmit -Candidates -ActiveVms [IDictionary] -FreeSlots [int] -Retries [IDictionary] -Now [datetimeoffset] -RetryCap [int]` → subset of candidates; `Register-JobRetry -Retries [IDictionary] -JobId [int64] -Now [datetimeoffset] -BackoffSeconds [int]`; `Test-VmExpired -StartedAt [datetimeoffset] -MaxMinutes [int] -Now [datetimeoffset] -GraceMinutes [int]` → bool; `Get-StaleRunnerNames -Runners [object[]] -ActiveNames [string[]]` → `[string[]]`.
+- Produces: `ConvertTo-DateTimeOffset -Value` → `[datetimeoffset]` from a datetimeoffset, a `[datetime]` (Unspecified kind treated as UTC) or an ISO string; `Select-QueuedLaneJobs -Jobs [object[]] -Lanes [string[]]` → `[pscustomobject[]]` with `JobId [int64]`, `RunId [int64]`, `Lane [string]`, `CreatedAt [datetimeoffset]`, sorted oldest first; `Select-JobsToAdmit -Candidates -ActiveVms [IDictionary] -FreeSlots [int] -Retries [IDictionary] -Now [datetimeoffset] -RetryCap [int]` → subset of candidates; `Register-JobRetry -Retries [IDictionary] -JobId [int64] -Now [datetimeoffset] -BackoffSeconds [int]`; `Test-VmExpired -StartedAt [datetimeoffset] -MaxMinutes [int] -Now [datetimeoffset] -GraceMinutes [int]` → bool; `Get-StaleRunnerNames -Runners [object[]] -ActiveNames [string[]]` → `[string[]]`.
 - Retry entry shape (journal): `Retries['<jobId>'] = @{ Count = [int]; NextAt = '<ISO 8601>' }`.
 - Active VM entry shape used here: `ActiveVms['<name>'].JobId`.
 
@@ -413,6 +413,21 @@ git commit -m "feat(ci-host): module skeleton — lane labels, runner names, KVP
 Append to `scripts/ci-host/tests/SlateCiHost.Tests.ps1`:
 
 ```powershell
+Describe 'ConvertTo-DateTimeOffset' {
+    It 'keeps the instant for a Z string, an offset string, and every datetime kind' {
+        $expected = [datetimeoffset]::Parse('2026-10-10T10:00:00Z', [cultureinfo]::InvariantCulture)
+        (ConvertTo-DateTimeOffset -Value '2026-10-10T10:00:00Z').UtcDateTime | Should -Be $expected.UtcDateTime
+        (ConvertTo-DateTimeOffset -Value '2026-10-10T12:00:00+02:00').UtcDateTime | Should -Be $expected.UtcDateTime
+        (ConvertTo-DateTimeOffset -Value ([datetime]::SpecifyKind([datetime]'2026-10-10T10:00:00', 'Utc'))).UtcDateTime | Should -Be $expected.UtcDateTime
+        (ConvertTo-DateTimeOffset -Value ([datetime]::SpecifyKind([datetime]'2026-10-10T10:00:00', 'Utc')).ToLocalTime()).UtcDateTime | Should -Be $expected.UtcDateTime
+        (ConvertTo-DateTimeOffset -Value ([datetime]'2026-10-10T10:00:00')).UtcDateTime | Should -Be $expected.UtcDateTime
+        (ConvertTo-DateTimeOffset -Value $expected) | Should -Be $expected
+    }
+    It 'treats a zone-less string as UTC' {
+        (ConvertTo-DateTimeOffset -Value '2026-10-10T10:00:00').Offset | Should -Be ([timespan]::Zero)
+    }
+}
+
 Describe 'Select-QueuedLaneJobs' {
     BeforeAll {
         $script:job = {
@@ -438,6 +453,11 @@ Describe 'Select-QueuedLaneJobs' {
     }
     It 'returns an empty array for no jobs' {
         @(Select-QueuedLaneJobs -Jobs @()).Count | Should -Be 0
+    }
+    It 'reads created_at as the right instant when the job came through ConvertFrom-Json' {
+        $jobs = @('{"id":7,"run_id":10,"labels":["slate-win-app"],"status":"queued","created_at":"2026-10-10T10:00:00Z"}' | ConvertFrom-Json)
+        $result = Select-QueuedLaneJobs -Jobs $jobs
+        $result[0].CreatedAt.UtcDateTime.ToString('o') | Should -Be '2026-10-10T10:00:00.0000000'
     }
     It 'tolerates a job with no labels property value' {
         $jobs = @((& $job 9 10 @() 'queued' '2026-10-10T10:00:00Z'))
@@ -538,6 +558,21 @@ Expected: the 17 earlier tests pass; the new ones fail with "not recognized".
 Insert before the `Export-ModuleMember` line in `scripts/ci-host/SlateCiHost.psm1`:
 
 ```powershell
+function ConvertTo-DateTimeOffset {
+    # pwsh's JSON deserialiser turns ISO strings into [datetime] (Kind Utc
+    # for a trailing Z); a [string] cast would then drop the zone and a
+    # later Parse would read it as local time. Accept every shape once.
+    [CmdletBinding()]
+    param([Parameter(Mandatory)]$Value)
+    if ($Value -is [datetimeoffset]) { return $Value }
+    if ($Value -is [datetime]) {
+        if ($Value.Kind -eq [System.DateTimeKind]::Unspecified) { $Value = [datetime]::SpecifyKind($Value, [System.DateTimeKind]::Utc) }
+        return [datetimeoffset]$Value
+    }
+    $styles = [System.Globalization.DateTimeStyles]::AssumeUniversal -bor [System.Globalization.DateTimeStyles]::RoundtripKind
+    return [datetimeoffset]::Parse([string]$Value, [cultureinfo]::InvariantCulture, $styles)
+}
+
 function Select-QueuedLaneJobs {
     # Flattens the API's job objects into the admission shape; drops
     # anything not queued or not carrying exactly one lane label.
@@ -554,7 +589,7 @@ function Select-QueuedLaneJobs {
             JobId     = [int64]$job.id
             RunId     = [int64]$job.run_id
             Lane      = $lane
-            CreatedAt = [datetimeoffset]::Parse([string]$job.created_at, [cultureinfo]::InvariantCulture)
+            CreatedAt = ConvertTo-DateTimeOffset -Value $job.created_at
         }
     }
     return @($result | Sort-Object CreatedAt, JobId)
@@ -584,7 +619,7 @@ function Select-JobsToAdmit {
         if ($Retries.Contains($key)) {
             $retry = $Retries[$key]
             if ([int]$retry['Count'] -ge $RetryCap) { continue }
-            if ([datetimeoffset]::Parse([string]$retry['NextAt'], [cultureinfo]::InvariantCulture) -gt $Now) { continue }
+            if ((ConvertTo-DateTimeOffset -Value $retry['NextAt']) -gt $Now) { continue }
         }
         $admit += $candidate
     }
@@ -634,7 +669,7 @@ Update the export line:
 
 ```powershell
 Export-ModuleMember -Function Get-LaneFromLabels, New-RunnerName, Split-KvpChunks, Join-KvpChunks,
-    Select-QueuedLaneJobs, Select-JobsToAdmit, Register-JobRetry, Test-VmExpired, Get-StaleRunnerNames
+    ConvertTo-DateTimeOffset, Select-QueuedLaneJobs, Select-JobsToAdmit, Register-JobRetry, Test-VmExpired, Get-StaleRunnerNames
 ```
 
 - [ ] **Step 4: Run the tests to verify they pass**
@@ -2246,7 +2281,7 @@ function Update-ActiveVm {
         Remove-ActiveVm -Config $Config -Journal $Journal -Adapters $Adapters -Name $Name -Reason "vm state $state" -Retry $true -Now $Now
         return
     }
-    $startedAt = [datetimeoffset]::Parse([string]$vm.StartedAt, [cultureinfo]::InvariantCulture)
+    $startedAt = ConvertTo-DateTimeOffset -Value $vm.StartedAt
     if ($vm.Phase -eq 'provisioned') {
         $heartbeat = & $Adapters.GetHeartbeat $Name
         if ($heartbeat -eq 'OK') {
@@ -2274,7 +2309,7 @@ function Update-ActiveVm {
         return
     }
     if (-not $vm.Claimed) {
-        $handedAt = [datetimeoffset]::Parse([string]$vm.HandedAt, [cultureinfo]::InvariantCulture)
+        $handedAt = ConvertTo-DateTimeOffset -Value $vm.HandedAt
         $waited = ($Now - $handedAt).TotalSeconds
         $timeout = [int]$Config.UnclaimedTimeoutSeconds
         if ($waited -ge $timeout) {
@@ -2311,7 +2346,7 @@ function Invoke-Admission {
         }
     }
     foreach ($key in @($Journal.SeenJobs.Keys)) {
-        $seen = [datetimeoffset]::Parse([string]$Journal.SeenJobs[$key].FirstSeenAt, [cultureinfo]::InvariantCulture)
+        $seen = ConvertTo-DateTimeOffset -Value $Journal.SeenJobs[$key].FirstSeenAt
         if ($Now -gt $seen.AddHours(24)) { $Journal.SeenJobs.Remove($key) }
     }
     $free = @(Get-FreeSlots -Config $Config -Journal $Journal)
