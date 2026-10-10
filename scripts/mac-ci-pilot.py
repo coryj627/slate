@@ -21,10 +21,11 @@ from datetime import datetime, timezone
 import xml.etree.ElementTree as ET
 
 
-REFERENCE = "a64eb393f5470b9cdb94f3f537a85ceeeda3f7c4"
+REFERENCE = "c247b865d5146f006b914bf9ba68fe3ecb648632"
 INVENTORY_SHA = "a145b175c021c7268815d3615659f65bf8889a13b09bbcd592c86b5d8b6ec316"
 ANALYZER = "bcaddd56931ce14d32cebcf42ea9f5b08ed5f7d8"
-LABELS = {"hosted-xcode27": "xcode-27", "namespace-tahoeslim6x14": "nscloud-macos-tahoe-slim-arm64-6x14"}
+LABELS = {"hosted-xcode27": "xcode-27", "namespace-tahoeslim6x14": "nscloud-macos-tahoe-slim-arm64-6x14",
+          "self-hosted-tart": "slate-mac-tart"}
 CANDIDATES = set(LABELS)
 STATES = {"cold": "cold-products-no-explicit-restore", "warm": "warm-same-vm-incremental"}
 NATIVE_PHASES = ("debug", "xctest", "cli", "release", "release-witness")

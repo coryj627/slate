@@ -1,0 +1,42 @@
+# Diagnostic for the self-hosted mac runner: shows a job's real environment
+# on the Studio (PATH, tool cache, Rust, Xcode, the admission hook's view).
+# Manual only; it changes nothing. docs/plans/42_self_hosted_mac_runner_plan.md.
+
+name: Mac runner diag
+
+on:
+  workflow_dispatch: {}
+
+permissions:
+  contents: read
+
+jobs:
+  diag:
+    name: environment on the Studio
+    runs-on: slate-mac-tart
+    timeout-minutes: 10
+    steps:
+      - name: Who, where, PATH
+        run: |
+          echo "user=$(id -un) uid=$(id -u) home=$HOME pwd=$PWD"
+          echo "session=$(launchctl managername 2>/dev/null || echo unknown)"
+          echo "PATH=$PATH"
+          echo "RUNNER_TOOL_CACHE=${RUNNER_TOOL_CACHE:-unset}"
+          echo "CARGO_HOME=${CARGO_HOME:-unset} RUSTUP_HOME=${RUSTUP_HOME:-unset}"
+          echo "hook=${ACTIONS_RUNNER_HOOK_JOB_STARTED:-unset}"
+      - name: Runner files
+        run: |
+          echo "--- .path"; cat "$HOME/actions-runner/.path" 2>&1
+          echo "--- .env (names only)"; cut -d= -f1 "$HOME/actions-runner/.env" 2>&1
+      - name: Toolchains
+        run: |
+          for t in rustup cargo rustc swift xcodebuild python3 a11y-check git; do
+            printf '%-10s %s\n' "$t" "$(command -v "$t" 2>/dev/null || echo MISSING)"
+          done
+          ls /Users/runner/toolchains/cargo/bin 2>&1 | tr '\n' ' '; echo
+          ls "${RUNNER_TOOL_CACHE:-/Users/runner/hostedtoolcache}/Python" 2>&1 | tr '\n' ' '; echo
+          xcodebuild -version 2>&1 | tr '\n' ' '; echo
+          sudo -n true 2>&1 || echo "sudo: none (expected)"
+          df -h / | tail -1
+      - name: Finder Apple Events from a job
+        run: perl -e 'alarm 20; exec @ARGV' osascript -e 'tell application "Finder" to get name of startup disk'

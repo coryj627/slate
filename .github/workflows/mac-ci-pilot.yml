@@ -14,11 +14,11 @@ on:
       source_sha:
         description: Frozen application source; literal full commit, ancestor of this harness.
         type: string
-        default: a64eb393f5470b9cdb94f3f537a85ceeeda3f7c4
+        default: c247b865d5146f006b914bf9ba68fe3ecb648632
       runner:
         description: Complete native and independent analyzer candidate; no Namespace cache volume.
         type: choice
-        options: [hosted-xcode27, namespace-tahoeslim6x14]
+        options: [hosted-xcode27, namespace-tahoeslim6x14, self-hosted-tart]
         default: hosted-xcode27
       pair_id:
         description: Common identifier for the two provider runs; use a new identifier for each repetition.
@@ -33,7 +33,7 @@ concurrency:
   cancel-in-progress: false
 
 env:
-  SOURCE_SHA: ${{ inputs.source_sha || 'a64eb393f5470b9cdb94f3f537a85ceeeda3f7c4' }}
+  SOURCE_SHA: ${{ inputs.source_sha || 'c247b865d5146f006b914bf9ba68fe3ecb648632' }}
   CANDIDATE: ${{ inputs.runner || 'hosted-xcode27' }}
   PAIR_ID: ${{ inputs.pair_id || 'registration' }}
 
@@ -60,7 +60,7 @@ jobs:
   native:
     name: Full native cold and warm (${{ inputs.runner }})
     if: github.event_name == 'workflow_dispatch'
-    runs-on: ${{ inputs.runner == 'namespace-tahoeslim6x14' && 'nscloud-macos-tahoe-slim-arm64-6x14' || 'xcode-27' }}
+    runs-on: ${{ inputs.runner == 'namespace-tahoeslim6x14' && 'nscloud-macos-tahoe-slim-arm64-6x14' || inputs.runner == 'self-hosted-tart' && 'slate-mac-tart' || 'xcode-27' }}
     timeout-minutes: 60
     steps:
       - name: Checkout experiment harness with ancestry
@@ -111,7 +111,7 @@ jobs:
   analyzer:
     name: Independent pinned analyzer cold and warm (${{ inputs.runner }})
     if: github.event_name == 'workflow_dispatch'
-    runs-on: ${{ inputs.runner == 'namespace-tahoeslim6x14' && 'nscloud-macos-tahoe-slim-arm64-6x14' || 'xcode-27' }}
+    runs-on: ${{ inputs.runner == 'namespace-tahoeslim6x14' && 'nscloud-macos-tahoe-slim-arm64-6x14' || inputs.runner == 'self-hosted-tart' && 'slate-mac-tart' || 'xcode-27' }}
     timeout-minutes: 30
     steps:
       - name: Checkout experiment harness with ancestry

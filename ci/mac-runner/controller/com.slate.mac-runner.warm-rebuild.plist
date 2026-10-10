@@ -1,0 +1,48 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
+<!--
+  Nightly rebuild of slate-mac-warm from main, 03:00 local, as slate-ci
+  (plan §4.5). Independent of the controller: an idle job VM keeps waiting
+  while this builds (two macOS guests at most), and the controller replaces
+  the idle VM when build-warm.sh stamps a new image. Installed by
+  ci/mac-runner/host/admin-setup.sh.
+-->
+<plist version="1.0">
+<dict>
+  <key>Label</key>
+  <string>com.slate.mac-runner.warm-rebuild</string>
+  <key>UserName</key>
+  <string>slate-ci</string>
+  <key>GroupName</key>
+  <string>staff</string>
+  <key>ProgramArguments</key>
+  <array>
+    <string>/bin/bash</string>
+    <string>/Users/slate-ci/.slate-runner/mac-runner/image/build-warm.sh</string>
+  </array>
+  <key>EnvironmentVariables</key>
+  <dict>
+    <key>HOME</key>
+    <string>/Users/slate-ci</string>
+    <key>USER</key>
+    <string>slate-ci</string>
+    <key>PATH</key>
+    <string>/usr/local/libexec/slate-runner/bin:/opt/homebrew/bin:/usr/bin:/bin:/usr/sbin:/sbin</string>
+    <key>SLATE_RUNNER_TREE</key>
+    <string>/Users/slate-ci/.slate-runner/mac-runner</string>
+  </dict>
+  <key>WorkingDirectory</key>
+  <string>/Users/slate-ci</string>
+  <key>StartCalendarInterval</key>
+  <dict>
+    <key>Hour</key>
+    <integer>3</integer>
+    <key>Minute</key>
+    <integer>0</integer>
+  </dict>
+  <key>StandardOutPath</key>
+  <string>/Users/slate-ci/.slate-runner/logs/warm-rebuild.log</string>
+  <key>StandardErrorPath</key>
+  <string>/Users/slate-ci/.slate-runner/logs/warm-rebuild.log</string>
+</dict>
+</plist>
