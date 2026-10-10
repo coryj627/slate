@@ -33,7 +33,9 @@ jobs:
     # Direct Namespace labels are documented shapes; no new paid cache tags
     # or dashboard profiles are created by this comparison.
     runs-on: ${{ inputs.runner == 'home' && 'slate-win-app' || inputs.runner == 'namespace-4x8' && 'nscloud-windows-2022-amd64-4x8' || inputs.runner == 'namespace-8x16' && 'nscloud-windows-2022-amd64-8x16' || 'windows-latest' }}
-    timeout-minutes: 120
+    # The home pool reclaims an app-lane VM after 100 min plus a 10 min
+    # grace, so a home build must time out on GitHub's side first.
+    timeout-minutes: ${{ inputs.runner == 'home' && 100 || 120 }}
     outputs:
       revision: ${{ steps.binary-manifest.outputs.revision }}
       producer-attempt: ${{ steps.binary-manifest.outputs.producer-attempt }}

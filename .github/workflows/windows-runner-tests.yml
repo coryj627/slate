@@ -11,11 +11,19 @@ on:
     paths:
       - 'ci/windows-runner/**'
       - '.github/workflows/windows-runner-tests.yml'
+      # The Workflows guards must run when a routed workflow changes.
+      - '.github/workflows/windows.yml'
+      - '.github/workflows/nightly.yml'
+      - '.github/workflows/windows-ci-pilot.yml'
   push:
     branches: [main]
     paths:
       - 'ci/windows-runner/**'
       - '.github/workflows/windows-runner-tests.yml'
+      # The Workflows guards must run when a routed workflow changes.
+      - '.github/workflows/windows.yml'
+      - '.github/workflows/nightly.yml'
+      - '.github/workflows/windows-ci-pilot.yml'
 
 permissions:
   contents: read

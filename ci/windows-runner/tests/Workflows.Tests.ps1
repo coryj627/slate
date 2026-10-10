@@ -3,13 +3,15 @@
 #
 # Text-level guards over the three workflows that read WINDOWS_RUNNER_MODE.
 # YAML parsing happens on push (GitHub refuses a malformed workflow at
-# the first run); these tests pin the routing contract itself.
+# the first run); these tests pin the routing contract itself, and the
+# path filters that make windows-runner-tests.yml run them.
 
 BeforeAll {
     $script:wf = Join-Path $PSScriptRoot '..' '..' '..' '.github' 'workflows'
     $script:windows = Get-Content -Raw (Join-Path $wf 'windows.yml')
     $script:nightly = Get-Content -Raw (Join-Path $wf 'nightly.yml')
     $script:pilot = Get-Content -Raw (Join-Path $wf 'windows-ci-pilot.yml')
+    $script:lane = Get-Content -Raw (Join-Path $wf 'windows-runner-tests.yml')
 }
 
 Describe 'windows.yml pool switch' {
@@ -53,5 +55,16 @@ Describe 'windows-ci-pilot.yml home candidate' {
         $pilot | Should -Match 'Isolation evidence'
         $pilot | Should -Match '10\.77\.0\.1'
         $pilot | Should -Match 'github\.com'
+    }
+    It 'times a home build out before the host reclaims the app-lane VM' {
+        $pilot.Contains("timeout-minutes: `${{ inputs.runner == 'home' && 100 || 120 }}") | Should -BeTrue
+    }
+}
+
+Describe 'windows-runner-tests.yml path filters' {
+    It 'runs these guards when a routed workflow changes, on pull requests and on main' {
+        foreach ($routed in @('windows.yml', 'nightly.yml', 'windows-ci-pilot.yml')) {
+            ([regex]::Matches($lane, [regex]::Escape("- '.github/workflows/$routed'"))).Count | Should -Be 2 -Because "$routed must be in both the pull_request and push path filters"
+        }
     }
 }
