@@ -8,10 +8,13 @@
 # Creates the unprivileged orchestrator account, the directory tree and
 # ACLs, the isolated NAT switch and host firewall rule, the formatted
 # cache parents, copies ci/windows-runner into place and registers the
-# scheduled tasks. Everything after this runs as slate-ci-host.
+# scheduled tasks. Everything after this runs as slate-ci-host. The loop
+# task is registered disabled: the runbook enables it once the sealed
+# golden disk passes its product-key check.
 # A re-run keeps the account's password and both tasks (and so the
 # stored token); -ResetAccount rotates the password and re-registers the
-# tasks, after which store-token.ps1 must run again.
+# tasks, after which store-token.ps1 must run again and the loop task be
+# enabled again.
 [CmdletBinding()]
 param(
     [string]$Root = 'C:\slate-ci',
@@ -209,6 +212,10 @@ if ($keepAccount) {
     Register-ScheduledTask -TaskName 'slate-ci-orchestrator' -Force `
         -Action (New-ScheduledTaskAction -Execute $pwsh -Argument "-NoProfile -NonInteractive -ExecutionPolicy Bypass -File `"$Root\bin\orchestrator.ps1`"" -WorkingDirectory "$Root\bin") `
         -Trigger @($loopTrigger, $repeatTrigger) -User $Account -Password $password -RunLevel Limited -Settings $loopSettings | Out-Null
+    # Disabled before its first trigger (a minute away): no job may run until
+    # the runbook's product-key check passes on the sealed golden disk, and
+    # the runbook enables the task then.
+    Disable-ScheduledTask -TaskName 'slate-ci-orchestrator' | Out-Null
     Register-ScheduledTask -TaskName 'slate-ci-store-token' -Force `
         -Action (New-ScheduledTaskAction -Execute $pwsh -Argument "-NoProfile -NonInteractive -ExecutionPolicy Bypass -File `"$Root\bin\install\store-token.ps1`" -Convert -Root `"$Root`"") `
         -User $Account -Password $password -RunLevel Limited -Settings (New-ScheduledTaskSettingsSet -ExecutionTimeLimit (New-TimeSpan -Minutes 5)) | Out-Null
@@ -221,6 +228,9 @@ if ($keepAccount) {
 } else {
     Write-Host 'Host setup complete. Next:'
     Write-Host "  1. $Root\bin\install\store-token.ps1   (elevated; stores the PAT for $Account)"
-    Write-Host "  2. $source\golden\build-golden.ps1 -IsoPath <Win11 ISO>   (elevated; ~40 min)"
-    Write-Host "  3. The loop task starts by itself within a minute (Start-ScheduledTask slate-ci-orchestrator is optional); Get-Content $Root\logs\orchestrator-*.log -Tail 20"
+    Write-Host "  2. $source\golden\build-golden.ps1 -IsoPath <Win11 ISO>   (elevated; ~40 min), unless a sealed golden disk is in place"
+    Write-Host '  3. The loop task slate-ci-orchestrator is registered disabled. Run the runbook''s product-key check on the'
+    Write-Host '     sealed golden disk; only once it passes, enable the task:'
+    Write-Host '       Enable-ScheduledTask -TaskName slate-ci-orchestrator'
+    Write-Host "     The loop starts within a minute; Get-Content $Root\logs\orchestrator-*.log -Tail 20"
 }

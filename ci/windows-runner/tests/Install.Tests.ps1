@@ -71,6 +71,20 @@ Describe 'install scripts' {
         $text | Should -Match ([regex]::Escape('-Trigger @($loopTrigger, $repeatTrigger)'))
         $text | Should -Match ([regex]::Escape('[switch]$ResetAccount'))
     }
+    It 'registers the loop task, then disables it until the runbook enables it after the product-key check' {
+        # No job may run on the golden disk before its product-key check.
+        $text = Get-Content -Raw (Join-Path $installDir 'setup-host.ps1')
+        $register = $text.IndexOf("Register-ScheduledTask -TaskName 'slate-ci-orchestrator'")
+        $disable = $text.IndexOf("Disable-ScheduledTask -TaskName 'slate-ci-orchestrator'")
+        $register | Should -BeGreaterThan -1
+        $disable | Should -BeGreaterThan $register
+        $text | Should -Not -Match 'Enable-ScheduledTask -TaskName ''slate-ci-orchestrator'''
+        # The closing message says so and names the command.
+        $next = $text.Substring($text.IndexOf("'Host setup complete. Next:'"))
+        $next | Should -Match 'disabled'
+        $next | Should -Match 'product-key check'
+        $next | Should -Match 'Enable-ScheduledTask -TaskName slate-ci-orchestrator'
+    }
     It 'a reset removes both tasks before the password changes' {
         $text = Get-Content -Raw (Join-Path $installDir 'setup-host.ps1')
         $unregister = $text.IndexOf('Unregister-ScheduledTask')
