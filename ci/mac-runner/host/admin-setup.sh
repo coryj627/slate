@@ -38,9 +38,17 @@
 #    /Library/LaunchDaemons. Loading them is a separate, explicit step:
 #      sudo launchctl bootstrap system /Library/LaunchDaemons/com.slate.mac-runner.plist
 #      sudo launchctl bootstrap system /Library/LaunchDaemons/com.slate.mac-runner.warm-rebuild.plist
-# 6. With NARROW=1, replaces the broad "owner may run anything as slate-ci"
+# 6. With --narrow, replaces the broad "owner may run anything as slate-ci"
 #    rule by one that allows only runnerctl (Phase 3 step 4, before any real
-#    job). Without NARROW the broad Phase 0 to 3 rule stays.
+#    job):
+#      sudo bash ci/mac-runner/host/admin-setup.sh --narrow
+#    A flag, not an environment variable: sudo resets the environment, so
+#    `NARROW=1 sudo bash ...` silently kept the broad rule (2026-10-10).
+#    Once narrowed, plain re-runs keep the narrow rule; --widen restores the
+#    broad one. The Softnet knobs are environment variables and must follow
+#    sudo for the same reason:
+#      sudo FORCE_SOFTNET=1 bash ci/mac-runner/host/admin-setup.sh
+#      sudo SOFTNET_SOURCE=/path/to/softnet bash ci/mac-runner/host/admin-setup.sh
 
 set -euo pipefail
 
@@ -54,6 +62,17 @@ REPO_TREE="$(cd "$(dirname "$0")/.." && pwd)"   # ci/mac-runner in the owner's c
 
 die() { echo "error: $*" >&2; exit 1; }
 step() { echo; echo "==> $*"; }
+
+# --narrow / --widen pick the owner's rule; with neither, the installed rule
+# stays as it is (a re-run to refresh Softnet must never widen it again).
+NARROW="${NARROW:-}"
+for arg in "$@"; do
+  case "$arg" in
+    --narrow) NARROW=1 ;;
+    --widen)  NARROW=0 ;;
+    *) die "unknown argument: $arg (accepted: --narrow, --widen)" ;;
+  esac
+done
 
 [[ $EUID -eq 0 ]] || die "run this with sudo"
 OWNER="${SUDO_USER:-}"
@@ -142,12 +161,19 @@ grep -Eq '^[#@]includedir /(private/)?etc/sudoers\.d' /etc/sudoers \
 
 tmp="$(mktemp)"
 trap 'rm -f "$tmp"' EXIT
-if [[ "${NARROW:-0}" == 1 ]]; then
+if [[ -z "$NARROW" ]]; then
+  if [[ -f "$SUDOERS_FILE" ]] && grep -q "NOPASSWD: ${RUNNERCTL_DST}\$" "$SUDOERS_FILE"; then
+    NARROW=1; echo "keeping the installed narrow rule (--widen to change it)"
+  else
+    NARROW=0; echo "keeping the broad Phase 0 to 3 rule (--narrow to replace it)"
+  fi
+fi
+if [[ "$NARROW" == 1 ]]; then
   owner_rule="${OWNER} ALL=(${RUNNER_USER}) NOPASSWD: ${RUNNERCTL_DST}"
   owner_note="# The owner may run runnerctl as slate-ci, and nothing else (Phase 3 step 4)."
 else
   owner_rule="${OWNER} ALL=(${RUNNER_USER}) NOPASSWD: ALL"
-  owner_note="# The owner may act as slate-ci (Phases 0 to 3 only; NARROW=1 replaces this). Never grants root."
+  owner_note="# The owner may act as slate-ci (Phases 0 to 3 only; --narrow replaces this). Never grants root."
 fi
 cat >"$tmp" <<EOF
 # Self-hosted mac runner: docs/plans/42_self_hosted_mac_runner_plan.md §4.1.
@@ -181,16 +207,16 @@ echo "ok: ${RUNNER_USER} cannot run anything else as root"
 
 # Read the owner's rules back instead of trying them: the password this
 # terminal just cached would make a live test pass even without the rule.
-if [[ "${NARROW:-0}" == 1 ]]; then
+if [[ "$NARROW" == 1 ]]; then
   sudo -l -U "$OWNER" | grep -Eq "\(${RUNNER_USER}\) NOPASSWD: ${RUNNERCTL_DST}" \
     || die "sudo does not list the runnerctl rule for ${OWNER}"
   sudo -l -U "$OWNER" | grep -Eq "\(${RUNNER_USER}\) NOPASSWD: ALL" \
     && die "the broad rule is still present"
-  echo "ok: ${OWNER} can run only runnerctl as ${RUNNER_USER}"
+  echo "ok: ${OWNER} can run only runnerctl as ${RUNNER_USER} (narrow rule)"
 else
   sudo -l -U "$OWNER" | grep -Eq "\(${RUNNER_USER}\) NOPASSWD: ALL" \
     || die "sudo does not list the rule letting ${OWNER} act as ${RUNNER_USER}"
-  echo "ok: ${OWNER} can act as ${RUNNER_USER} without a password (broad rule; NARROW=1 later)"
+  echo "ok: ${OWNER} can act as ${RUNNER_USER} without a password (broad rule; --narrow replaces it)"
 fi
 
 # --- 5. Controller, runnerctl, hook sources, LaunchDaemons -------------------
