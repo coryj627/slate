@@ -5,8 +5,21 @@
 # fails the job before any workflow step runs. Fail closed on any error.
 set -u
 dir="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
-if [ ! -r "$dir/admission.py" ]; then
+if [ -r "$dir/admission.py" ]; then
+  /usr/bin/python3 -I "$dir/admission.py"
+  rc=$?
+else
   echo "::error::slate mac runner admission: hook implementation missing"
-  exit 1
+  rc=1
 fi
-exec /usr/bin/python3 -I "$dir/admission.py"
+[ "$rc" -eq 0 ] && exit 0
+
+# A failed hook marks the job failed, but GitHub still runs steps guarded by
+# if: always() or if: failure() (Phase 3 live test, 2026-10-10). Nothing from
+# a refused job may run at all, so end the runner here: the worker dies with
+# this job, the single-use listener exits, and the controller destroys the VM.
+echo "::error::slate mac runner admission: refused; stopping the runner so no step runs"
+me="$(id -un)"
+pkill -TERM -u "$me" -f 'bin/Runner.Listener' 2>/dev/null || true
+pkill -TERM -u "$me" -f 'bin/Runner.Worker' 2>/dev/null || true
+exit 1

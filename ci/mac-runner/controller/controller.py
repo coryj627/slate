@@ -82,8 +82,13 @@ def log(msg):
 # --- small helpers --------------------------------------------------------
 
 def run(cmd, timeout=120, check=False, input_bytes=None):
+    """subprocess.run that never raises on a timeout: a command that hangs
+    (tart exec before the guest agent is up, for one) comes back as exit 124."""
     env = dict(os.environ, PATH=PATH, HOME=HOME)
-    return subprocess.run(cmd, env=env, input=input_bytes, capture_output=True, timeout=timeout, check=check)
+    try:
+        return subprocess.run(cmd, env=env, input=input_bytes, capture_output=True, timeout=timeout, check=check)
+    except subprocess.TimeoutExpired as exc:
+        return subprocess.CompletedProcess(cmd, 124, exc.stdout or b"", (exc.stderr or b"") + b"\ntimed out after {}s".format(timeout).encode())
 
 
 def flag(name):
@@ -477,8 +482,13 @@ def main():
         if free_gb() < MIN_FREE_GB_WARN:
             log("warning: free disk {:.0f} GB".format(free_gb()))
 
-        outcome = one_cycle(hb)
-        if outcome.startswith(("clone failed", "vm exited", "guest agent", "no jit", "could not", "idle: no allow-list")):
+        try:
+            outcome = one_cycle(hb)
+        except Exception as exc:  # a bug must not take the controller down with it
+            import traceback
+            log("cycle crashed: {}: {}\n{}".format(type(exc).__name__, exc, traceback.format_exc()))
+            outcome = "cycle crashed"
+        if outcome.startswith(("clone failed", "vm exited", "guest agent", "no jit", "could not", "idle: no allow-list", "cycle crashed")):
             hb.send(healthy=False)
             _stop.wait(60)
 

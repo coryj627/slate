@@ -172,6 +172,16 @@ one repository.
    grows as §3.6 describes. The hook still stops a fork job if all three
    server-side controls failed at once.
 
+   One nuance, found in the Phase 3 live test: when the hook fails, GitHub
+   marks the job failed and skips its ordinary steps, but steps guarded by
+   `if: always()` or `if: failure()` still run, without a checkout and with
+   the read-only token. A fork PR could put a payload in such a step. So on
+   refusal the hook also terminates the runner process itself, which ends
+   the job before any further step and makes the controller destroy the VM.
+   Either way the hook is the last line, not the first: controls 1 to 3
+   stop fork code from ever being dispatched, and the VM boundary contains
+   anything that does run.
+
 **Enforced by the VM design:**
 
 6. **A fresh VM for every job (T3).** Each job gets a new APFS clone of the
@@ -868,6 +878,42 @@ parallel with them.
   start. Two defects found on the way were fixed first: a controller log
   line that swallowed the failure reason, and `admin-setup.sh` reinstalling
   Homebrew's Softnet 0.24.0 over 0.24.1 on a plain re-run.
+- **Resolution (2026-10-10, 05:19 UTC).** Three things were needed together.
+  (1) A known account password: `sysadminctl -resetPasswordFor` needs a
+  secure-token admin to authorise it on a FileVault Mac, so the owner ran it
+  with `-adminUser cory -adminPassword -` and typed their own password.
+  (2) A real login keychain: a keychain created by `security
+  create-keychain` under the name `login.keychain` refuses its password on
+  macOS 27 whatever the password is; the owner logged in once as `slate-ci`
+  at the login window (account temporarily unhidden; `CGSession -suspend`
+  gets to the login window) and loginwindow created a 35 KB one bound to the
+  account password. (3) A security session for the daemon: even that
+  keychain refuses to unlock from a `sudo -u slate-ci` shell inside the
+  owner's session, but with `SessionCreate` in the LaunchDaemon plist the
+  controller's own `security unlock-keychain` succeeded and the first VM
+  stayed up. The controller unlocks the keychain by full path, since the
+  short name goes through a search list that a login rewrites. D5 holds:
+  the controller runs as `slate-ci` from launchd, no GUI session of its own.
+  The account's password was on the owner's screen during this and is to be
+  rotated once Phase 3 passes.
+- **Phase 3 step 1 met (05:20 UTC).** The first VM under the daemon booted
+  in 18 s, the JIT registration (id 10468) came online as
+  `job-20261010-051941` and the heartbeat variable updated. Note for Phase
+  4: a JIT runner carries **only** the labels the controller asks for, here
+  `slate-mac-tart`, with none of the usual `self-hosted`, `macOS`, `ARM64`
+  defaults, so `runs-on` must name `slate-mac-tart` alone.
+- **Phase 3 step 2, the hook live (05:23 UTC).** With the controller's
+  cached allow-list swapped for one naming only a non-existent user, the
+  pilot was dispatched to `self-hosted-tart` (run 38027327498). Both its
+  mac jobs landed on fresh VMs and failed at "Set up runner" with `DENY ...
+  actor id 933688 is not on the allow-list`; no checkout happened. Two
+  findings: the job's `if: always()` upload steps still ran after the
+  refusal (see §3.2 control 5; the hook now terminates the runner on
+  refusal, which needs a toolchain and warm rebuild), and the controller
+  crashed on a `tart exec` that blocked past its 15 s timeout during boot
+  (launchd restarted it; the wrapper now reports a timeout as a failure and
+  the loop survives any exception). The real allow-list was restored
+  afterwards.
 - **PR A opened 2026-10-10:** coryj627/slate#1335, branch
   `ci/mac-runner-phase2`, with everything above. Its hosted checks are the
   first runs under the workflow execution policy.
