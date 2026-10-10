@@ -2026,6 +2026,27 @@ Context 'handoff' {
         $journal.Vms[$name].RunnerId | Should -Be 77
         $journal.Vms[$name].HandedAt | Should -Not -BeNullOrEmpty
     }
+    It 'discards the VM, deregisters the runner and retries the job when the KVP handoff fails' {
+        $world.Heartbeat = 'OK'
+        $adapters.SendKvp = { param($n, $items) & $script:record 'SendKvp' @($n, $items); throw 'AddKvpItems returned 32768' }
+        Invoke-OrchestratorTick -Config $config -Journal $journal -Adapters $adapters -Now $t0.AddSeconds(30)
+        $journal.Vms.Count | Should -Be 0
+        (Get-Calls 'RemoveRunner').Count | Should -Be 1
+        (Get-Calls 'RemoveRunner')[0].Args[0] | Should -Be 77
+        (Get-Calls 'StopVmForce').Count | Should -Be 1
+        (Get-Calls 'DiscardCache').Count | Should -Be 1
+        $journal.Retries['1'].Count | Should -Be 1
+        ($logs -join "`n") | Should -Match 'handoff failed'
+    }
+    It 'discards and retries without a runner to deregister when registration itself fails' {
+        $world.Heartbeat = 'OK'
+        $adapters.NewJitRunner = { param($n, $l) throw '422' }
+        Invoke-OrchestratorTick -Config $config -Journal $journal -Adapters $adapters -Now $t0.AddSeconds(30)
+        $journal.Vms.Count | Should -Be 0
+        (Get-Calls 'RemoveRunner').Count | Should -Be 0
+        (Get-Calls 'SendKvp').Count | Should -Be 0
+        $journal.Retries['1'].Count | Should -Be 1
+    }
     It 'keeps waiting for a heartbeat inside the timeout' {
         Invoke-OrchestratorTick -Config $config -Journal $journal -Adapters $adapters -Now $t0.AddSeconds(179)
         $journal.Vms[$name].Phase | Should -Be 'provisioned'
@@ -2416,16 +2437,26 @@ function Update-ActiveVm {
     if ($vm.Phase -eq 'provisioned') {
         $heartbeat = & $Adapters.GetHeartbeat $Name
         if ($heartbeat -eq 'OK') {
-            $registration = & $Adapters.NewJitRunner $Name @("slate-win-$($vm.Lane)")
-            $vm.RunnerId = $registration.RunnerId
-            $items = Split-KvpChunks -Text ([string]$registration.EncodedJitConfig)
-            $items['slate.lane'] = [string]$vm.Lane
-            $items['slate.ip'] = [string]$vm.SlotIp
-            $items['slate.gateway'] = [string]$Config.Gateway
-            $items['slate.dns'] = [string]$Config.Dns
-            $items['slate.cache'] = $(if ($vm.CachePath) { '1' } else { '0' })
-            $items['slate.job'] = [string]$vm.JobId
-            & $Adapters.SendKvp $Name $items
+            # The handoff is not retryable in place: AddKvpItems rejects
+            # keys that already exist and a second registration would leak
+            # a JIT runner per tick. Any failure discards this VM and
+            # schedules the job for a fresh one.
+            try {
+                $registration = & $Adapters.NewJitRunner $Name @("slate-win-$($vm.Lane)")
+                $vm.RunnerId = $registration.RunnerId
+                $items = Split-KvpChunks -Text ([string]$registration.EncodedJitConfig)
+                $items['slate.lane'] = [string]$vm.Lane
+                $items['slate.ip'] = [string]$vm.SlotIp
+                $items['slate.gateway'] = [string]$Config.Gateway
+                $items['slate.dns'] = [string]$Config.Dns
+                $items['slate.cache'] = $(if ($vm.CachePath) { '1' } else { '0' })
+                $items['slate.job'] = [string]$vm.JobId
+                & $Adapters.SendKvp $Name $items
+            } catch {
+                & $Adapters.Log 'error' "${Name}: handoff failed: $_"
+                Remove-ActiveVm -Config $Config -Journal $Journal -Adapters $Adapters -Name $Name -Reason 'handoff failed' -Retry $true -Now $Now
+                return
+            }
             $vm.Phase = 'handed'
             $vm.HandedAt = $Now.ToString('o')
             & $Adapters.Log 'info' "${Name}: handed off (runner $($registration.RunnerId), job $($vm.JobId))"
