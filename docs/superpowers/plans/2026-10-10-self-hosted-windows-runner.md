@@ -457,7 +457,7 @@ Describe 'Select-QueuedLaneJobs' {
     It 'reads created_at as the right instant when the job came through ConvertFrom-Json' {
         $jobs = @('{"id":7,"run_id":10,"labels":["slate-win-app"],"status":"queued","created_at":"2026-10-10T10:00:00Z"}' | ConvertFrom-Json)
         $result = Select-QueuedLaneJobs -Jobs $jobs
-        $result[0].CreatedAt.UtcDateTime.ToString('o') | Should -Be '2026-10-10T10:00:00.0000000'
+        $result[0].CreatedAt.UtcDateTime.ToString('o') | Should -Be '2026-10-10T10:00:00.0000000Z'
     }
     It 'tolerates a job with no labels property value' {
         $jobs = @((& $job 9 10 @() 'queued' '2026-10-10T10:00:00Z'))
