@@ -33,23 +33,44 @@ function Invoke-GhApi {
         Accept                 = 'application/vnd.github+json'
         'X-GitHub-Api-Version' = '2022-11-28'
     }
-    $params = @{ Method = $Method; Uri = "$($script:GhBase)$Path"; Headers = $headers; TimeoutSec = 30; UserAgent = 'slate-ci-host' }
+    # Debug = $false: the web cmdlets' debug stream prints the request
+    # headers (the token) and the response body (a JIT config), so neither
+    # -Debug nor an inherited $DebugPreference may trace this call.
+    $params = @{ Method = $Method; Uri = "$($script:GhBase)$Path"; Headers = $headers; TimeoutSec = 30; UserAgent = 'slate-ci-host'; Debug = $false }
     if ($null -ne $Body) {
         $params.Body = $Body | ConvertTo-Json -Compress -Depth 5
         $params.ContentType = 'application/json'
     }
-    return Invoke-RestMethod @params
+    try {
+        return Invoke-RestMethod @params
+    } catch {
+        # A failed request's error record keeps the request as its
+        # TargetObject (the same object as the response's RequestMessage),
+        # whose ToString() prints the Authorization header, so Get-Error,
+        # Format-List * or serialising the record would show the token.
+        # Drop the header before rethrowing; the status code stays readable
+        # for Get-GhRunner. A plain exception has no TargetObject.
+        if ($_.TargetObject -is [System.Net.Http.HttpRequestMessage]) { [void]$_.TargetObject.Headers.Remove('Authorization') }
+        throw
+    }
 }
 
 function Get-GhQueuedLaneJobs {
     # A run is in_progress while later jobs of it are still queued, so
-    # both run states are listed. Idle cost: two calls per tick.
+    # both run states are listed. Idle cost: two calls per tick. A run
+    # that moves from queued to in_progress between the two listings is
+    # in both; it is read once, or its queued jobs would come back twice
+    # and one job could be admitted into two VMs.
     [CmdletBinding()]
     param()
     $jobs = @()
+    $seenRuns = @{}
     foreach ($status in 'queued', 'in_progress') {
         $runs = Invoke-GhApi -Path "/actions/runs?status=$status&per_page=100"
         foreach ($run in @($runs.workflow_runs)) {
+            $runKey = [string]$run.id
+            if ($seenRuns.ContainsKey($runKey)) { continue }
+            $seenRuns[$runKey] = $true
             $page = Invoke-GhApi -Path "/actions/runs/$($run.id)/jobs?filter=latest&per_page=100"
             foreach ($job in @($page.jobs)) {
                 if ($job.status -eq 'queued') { $jobs += $job }

@@ -23,6 +23,26 @@ Describe 'Invoke-GhApi' {
         Invoke-GhApi -Method 'POST' -Path '/x' -Body @{ a = 1 } | Out-Null
         Should -Invoke Invoke-RestMethod -Times 1 -ParameterFilter { $Method -eq 'POST' -and $ContentType -eq 'application/json' -and ($Body | ConvertFrom-Json).a -eq 1 }
     }
+    It 'never enables debug tracing' {
+        # Pester does not set $PSBoundParameters inside a ParameterFilter;
+        # $PesterBoundParameters holds the call's bound parameters.
+        Mock Invoke-RestMethod { [pscustomobject]@{} }
+        Invoke-GhApi -Path '/actions/runners' -Debug | Out-Null
+        Should -Invoke Invoke-RestMethod -Times 1 -Exactly -ParameterFilter { $PesterBoundParameters.ContainsKey('Debug') -and -not $Debug }
+    }
+    It 'removes the token from the request kept in the error record' {
+        Mock Invoke-RestMethod {
+            $request = [System.Net.Http.HttpRequestMessage]::new([System.Net.Http.HttpMethod]::Get, 'https://api.github.com/repos/coryj627/slate/x')
+            $request.Headers.Authorization = [System.Net.Http.Headers.AuthenticationHeaderValue]::new('Bearer', 'ghp_test')
+            Write-Error -Message 'boom' -TargetObject $request -ErrorAction Stop
+        }
+        $record = $null
+        try { Invoke-GhApi -Path '/x' } catch { $record = $_ }
+        "$record" | Should -Be 'boom'
+        $record.TargetObject | Should -BeOfType [System.Net.Http.HttpRequestMessage]
+        $record.TargetObject.Headers.Contains('Authorization') | Should -BeFalse
+        "$($record.TargetObject)" | Should -Not -BeLike '*ghp_test*'
+    }
 }
 
 Describe 'New-GhJitRunner' {
@@ -63,6 +83,20 @@ Describe 'Get-GhQueuedLaneJobs' {
     It 'returns an empty array when nothing is queued' {
         Mock Invoke-RestMethod { [pscustomobject]@{ workflow_runs = @() } }
         @(Get-GhQueuedLaneJobs).Count | Should -Be 0
+    }
+    It 'returns a run''s queued jobs once when it appears in both listings' {
+        # The run moved from queued to in_progress between the two listings.
+        Mock Invoke-RestMethod {
+            if ($Uri -like '*actions/runs?status=*') { return [pscustomobject]@{ workflow_runs = @([pscustomobject]@{ id = 1 }) } }
+            if ($Uri -like '*/runs/1/jobs?filter=latest*') {
+                return [pscustomobject]@{ jobs = @([pscustomobject]@{ id = 11; run_id = 1; status = 'queued'; labels = @('slate-win-app'); created_at = '2026-10-10T10:00:00Z' }) }
+            }
+            throw "unexpected $Uri"
+        }
+        $jobs = @(Get-GhQueuedLaneJobs)
+        $jobs.Count | Should -Be 1
+        $jobs[0].id | Should -Be 11
+        Should -Invoke Invoke-RestMethod -Times 3 -Exactly
     }
 }
 
