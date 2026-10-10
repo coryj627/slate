@@ -49,8 +49,14 @@ try {
     }
     Write-Log ('config received: lane {0}, job {1}' -f $items['slate.lane'], $items['slate.job'])
 
-    $adapter = Get-NetAdapter | Where-Object { $_.Status -eq 'Up' } | Sort-Object ifIndex | Select-Object -First 1
-    if (-not $adapter) { throw 'no network adapter is up' }
+    # A fork's synthetic NIC is a new device on its first boot; give it time.
+    $adapter = $null
+    $adapterDeadline = (Get-Date).AddSeconds(60)
+    while (-not $adapter -and (Get-Date) -lt $adapterDeadline) {
+        $adapter = Get-NetAdapter | Where-Object { $_.Status -eq 'Up' } | Sort-Object ifIndex | Select-Object -First 1
+        if (-not $adapter) { Start-Sleep -Seconds 2 }
+    }
+    if (-not $adapter) { throw 'no network adapter came up within 60 s' }
     Set-NetIPInterface -InterfaceIndex $adapter.ifIndex -AddressFamily IPv4 -Dhcp Disabled
     Get-NetIPAddress -InterfaceIndex $adapter.ifIndex -AddressFamily IPv4 -ErrorAction SilentlyContinue |
         Remove-NetIPAddress -Confirm:$false -ErrorAction SilentlyContinue
@@ -74,6 +80,10 @@ try {
         foreach ($sub in 'cargo\registry', 'cargo\git', 'target', 'nuget') {
             New-Item -ItemType Directory -Force -Path (Join-Path $root $sub) | Out-Null
         }
+        # SYSTEM created these and runner builds into them (CARGO_TARGET_DIR,
+        # NUGET_PACKAGES, the cargo junctions), whatever the volume root grants.
+        & icacls.exe $root /grant 'runner:(OI)(CI)M' | Out-Null
+        if ($LASTEXITCODE -ne 0) { throw "icacls exited $LASTEXITCODE granting runner the cache" }
         $envLines += "NSC_CACHE_PATH=$root"
         $envLines += "CARGO_TARGET_DIR=$root\target"
         $envLines += "NUGET_PACKAGES=$root\nuget"
@@ -99,6 +109,6 @@ try {
         Set-Content -LiteralPath (Join-Path $runnerDir 'bootstrap-error.txt') -Value $failure
     } finally {
         # Shut down even when the log or the error file cannot be written.
-        & shutdown.exe /s /t 5 /c 'slate bootstrap failed'
+        & shutdown.exe /s /f /t 5 /c 'slate bootstrap failed'
     }
 }

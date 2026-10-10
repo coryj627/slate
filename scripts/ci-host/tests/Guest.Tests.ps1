@@ -55,7 +55,7 @@ Describe 'guest scripts' {
         $text | Should -Match 'ReparsePoint'
         $text | Should -Match "'--jitconfig'"
         $text | Should -Match 'finally'
-        $text | Should -Match 'shutdown\.exe /s /t 0'
+        $text | Should -Match 'shutdown\.exe /s /f /t 0'
     }
     It 'runner bootstrap deletes jit.cfg without -Force (it may read the file, not rewrite its attributes)' {
         # jit.cfg grants runner only R; the delete itself is allowed by the
@@ -64,6 +64,35 @@ Describe 'guest scripts' {
         $line = @($text -split "`n" | Where-Object { $_ -match 'Remove-Item' -and $_ -match 'jit\.cfg' })
         $line.Count | Should -Be 1
         $line[0] | Should -Not -Match '-Force'
+    }
+    It 'runner bootstrap waits for the runner process only, never its whole process tree' {
+        # On 5.1 the Start-Process wait switch waits for every descendant, so a
+        # process a job leaves behind would hold the VM until the lane cap.
+        $text = Get-Content -Raw (Join-Path $guestDir 'bootstrap-runner.ps1')
+        $text | Should -Match 'WaitForExit\(\)'
+        $text | Should -Not -Match '-Wait'
+        # Without a cached handle 5.1 reports no ExitCode once the process is gone.
+        $text | Should -Match '\$process\.Handle'
+    }
+    It 'both scripts force the shutdown so no application can veto it' {
+        foreach ($f in 'bootstrap-system.ps1', 'bootstrap-runner.ps1') {
+            $lines = @((Get-Content -Raw (Join-Path $guestDir $f)) -split "`n" | Where-Object { $_ -match 'shutdown\.exe' })
+            $lines.Count | Should -BeGreaterThan 0
+            foreach ($line in $lines) { $line | Should -Match ' /f ' }
+        }
+    }
+    It 'system bootstrap waits up to 60 s for the network adapter to come up' {
+        $text = Get-Content -Raw (Join-Path $guestDir 'bootstrap-system.ps1')
+        $text | Should -Match ([regex]::Escape('AddSeconds(60)'))
+        $text | Should -Match 'no network adapter came up within 60 s'
+    }
+    It 'system bootstrap lets runner write the cache and checks the exit code of every icacls call' {
+        $text = Get-Content -Raw (Join-Path $guestDir 'bootstrap-system.ps1')
+        $text | Should -Match ([regex]::Escape("icacls.exe `$root /grant 'runner:(OI)(CI)M'"))
+        $code = @($text -split "`n" | Where-Object { $_ -notmatch '^\s*#' })
+        $calls = @(0..($code.Count - 1) | Where-Object { $code[$_] -match 'icacls\.exe' })
+        $calls.Count | Should -Be 2
+        foreach ($i in $calls) { $code[$i + 1] | Should -Match '\$LASTEXITCODE -ne 0' }
     }
     It 'neither script contains PowerShell 7-only syntax' {
         foreach ($f in 'bootstrap-system.ps1', 'bootstrap-runner.ps1') {

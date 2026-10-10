@@ -52,8 +52,13 @@ try {
 
     $jit = Get-Content -LiteralPath (Join-Path $runnerDir 'jit.cfg') -Raw
     Write-Log 'starting runner'
+    # Wait for run.cmd itself, not its process tree: on 5.1 the Start-Process
+    # wait switch also waits for anything a job leaves running. Take the
+    # handle at once, or 5.1 reports no ExitCode after the process is gone.
     $process = Start-Process -FilePath (Join-Path $runnerDir 'run.cmd') -ArgumentList @('--jitconfig', $jit) `
-        -WorkingDirectory $runnerDir -NoNewWindow -PassThru -Wait
+        -WorkingDirectory $runnerDir -NoNewWindow -PassThru
+    $null = $process.Handle
+    $process.WaitForExit()
     Write-Log ('runner exited {0}' -f $process.ExitCode)
 } catch {
     Write-Log "ERROR: $_"
@@ -61,5 +66,5 @@ try {
     # No -Force: it first rewrites the file's attributes, which runner (R on
     # jit.cfg) may not do; the delete itself rides on the directory's rights.
     Remove-Item -LiteralPath (Join-Path $runnerDir 'jit.cfg') -ErrorAction SilentlyContinue
-    & shutdown.exe /s /t 0 /c 'slate job finished'
+    & shutdown.exe /s /f /t 0 /c 'slate job finished'
 }
