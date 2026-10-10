@@ -97,9 +97,22 @@ Describe 'golden scripts' {
     }
     It 'phase 1 checks the runner, Python and Git downloads against their pinned SHA-256' {
         $code = @((Get-Content -Raw (Join-Path $goldenDir 'provision-guest.ps1')) -split "`n" | Where-Object { $_ -notmatch '^\s*#' })
-        @($code | Where-Object { $_ -match '^\s*Get-Download .*\(Join-Path \$dl ''python\.exe''\) \$versions\.pythonSha256\s*$' }).Count | Should -Be 1
-        @($code | Where-Object { $_ -match '^\s*Get-Download .*\(Join-Path \$dl ''git\.exe''\) \$versions\.gitSha256\s*$' }).Count | Should -Be 1
-        @($code | Where-Object { $_ -match '^\s*Get-Download .*\$zip \$versions\.runnerSha256\s*$' }).Count | Should -Be 1
+        @($code | Where-Object { $_ -match '^\s*Get-Download -Url .*-Path \(Join-Path \$dl ''python\.exe''\) -Sha256 \$versions\.pythonSha256\s*$' }).Count | Should -Be 1
+        @($code | Where-Object { $_ -match '^\s*Get-Download -Url .*-Path \(Join-Path \$dl ''git\.exe''\) -Sha256 \$versions\.gitSha256\s*$' }).Count | Should -Be 1
+        @($code | Where-Object { $_ -match '^\s*Get-Download -Url .*-Path \$zip -Sha256 \$versions\.runnerSha256\s*$' }).Count | Should -Be 1
+    }
+    It 'phase 1 verifies the Authenticode signature of the two evergreen downloads, which no hash can pin' {
+        # aka.ms/vs and dot.net serve a new build at every release; both
+        # installers run with administrator rights in the image.
+        $text = Get-Content -Raw (Join-Path $goldenDir 'provision-guest.ps1')
+        $code = @($text -split "`n" | Where-Object { $_ -notmatch '^\s*#' })
+        @($code | Where-Object { $_ -match '^\s*Get-Download -Url \$versions\.vsBuildToolsUrl .*-Signer ''Microsoft Corporation''\s*$' }).Count | Should -Be 1
+        @($code | Where-Object { $_ -match '^\s*Get-Download -Url ''https://dot\.net/v1/dotnet-install\.ps1'' .*-Signer ''Microsoft Corporation''\s*$' }).Count | Should -Be 1
+        # Every download is checked one way or the other.
+        @($code | Where-Object { $_ -match '^\s*Get-Download ' -and $_ -notmatch '-Sha256 |-Signer ' }) | Should -BeNullOrEmpty
+        $text | Should -Match 'Get-AuthenticodeSignature -LiteralPath \$Path'
+        $text | Should -Match ([regex]::Escape("if (`$signature.Status -ne 'Valid')"))
+        $text | Should -Match ([regex]::Escape('O=') + "' \+ \[regex\]::Escape\(\`$Signer\)")
     }
     It 'phase 2 downloads the pinned rustup-init and checks its SHA-256 before running it' {
         # The unversioned rustup-init URL changes with every rustup release,
@@ -211,7 +224,10 @@ Describe 'golden scripts' {
         $guest | Should -Match ([regex]::Escape("Remove-Item -LiteralPath 'C:\Windows\Panther\Unattend' -Recurse -Force"))
         $guest | Should -Match ([regex]::Escape("Get-ChildItem -LiteralPath 'C:\Windows\System32\Sysprep\Panther' -Filter '*.xml'"))
         $build = Get-Content -Raw (Join-Path $goldenDir 'build-golden.ps1')
-        foreach ($cached in 'Windows\Panther\unattend.xml', 'Windows\Panther\Unattend"', 'Windows\System32\Sysprep\Panther\unattend.xml') {
+        # The full quoted strings: -Match ignores case, so a bare
+        # Windows\Panther\Unattend would also match the unattend.xml entry
+        # and prove nothing about the directory check.
+        foreach ($cached in '"$w\Windows\Panther\unattend.xml"', '"$w\Windows\Panther\Unattend"', '"$w\Windows\System32\Sysprep\Panther\unattend.xml"') {
             $build | Should -Match ([regex]::Escape($cached)) -Because $cached
         }
         $build | Should -Match 'rendered unattend still present in the image'

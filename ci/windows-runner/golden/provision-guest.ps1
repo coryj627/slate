@@ -18,13 +18,23 @@ function Write-Log([string]$Message) {
     Add-Content -LiteralPath $logPath -Value ('{0:o} {1}' -f (Get-Date), $Message)
     Write-Host $Message
 }
-function Get-Download([string]$Url, [string]$Path, [string]$Sha256) {
+function Get-Download([string]$Url, [string]$Path, [string]$Sha256, [string]$Signer) {
+    # Every download is checked one way or the other: a pinned SHA-256 for
+    # a versioned URL, or the Authenticode signature for an evergreen one
+    # (aka.ms/vs and dot.net serve a new build at every release, which no
+    # hash can pin). Both run with administrator rights in the image.
     Write-Log "download $Url"
     [Net.ServicePointManager]::SecurityProtocol = [Net.SecurityProtocolType]::Tls12
     Invoke-WebRequest -Uri $Url -OutFile $Path -UseBasicParsing
     if ($Sha256) {
         $actual = (Get-FileHash -LiteralPath $Path -Algorithm SHA256).Hash.ToLowerInvariant()
         if ($actual -ne $Sha256.ToLowerInvariant()) { throw "sha256 mismatch for ${Path}: $actual" }
+    }
+    if ($Signer) {
+        $signature = Get-AuthenticodeSignature -LiteralPath $Path
+        if ($signature.Status -ne 'Valid') { throw "signature of $Path is $($signature.Status): $($signature.StatusMessage)" }
+        $subject = [string]$signature.SignerCertificate.Subject
+        if ($subject -notmatch ('(^|, )O=' + [regex]::Escape($Signer) + '(,|$)')) { throw "$Path is signed by '$subject', not by $Signer" }
     }
 }
 function Invoke-Installer([string]$File, [string]$Arguments) {
@@ -57,7 +67,7 @@ try {
     Get-NetAdapter | Disable-NetAdapterBinding -ComponentID ms_tcpip6 -ErrorAction SilentlyContinue
 
     # Visual Studio 2022 Build Tools: C++ x64 + ARM64 and the Windows 11 SDK.
-    Get-Download $versions.vsBuildToolsUrl (Join-Path $dl 'vs_BuildTools.exe')
+    Get-Download -Url $versions.vsBuildToolsUrl -Path (Join-Path $dl 'vs_BuildTools.exe') -Signer 'Microsoft Corporation'
     Invoke-Installer (Join-Path $dl 'vs_BuildTools.exe') ('--quiet --wait --norestart --nocache ' +
         '--add Microsoft.VisualStudio.Workload.VCTools ' +
         '--add Microsoft.VisualStudio.Component.VC.Tools.x86.x64 ' +
@@ -66,7 +76,7 @@ try {
 
     # .NET SDK into C:\dotnet, owned by runner later, so setup-dotnet can
     # update it without elevation.
-    Get-Download 'https://dot.net/v1/dotnet-install.ps1' (Join-Path $dl 'dotnet-install.ps1')
+    Get-Download -Url 'https://dot.net/v1/dotnet-install.ps1' -Path (Join-Path $dl 'dotnet-install.ps1') -Signer 'Microsoft Corporation'
     & powershell.exe -NoProfile -ExecutionPolicy Bypass -File (Join-Path $dl 'dotnet-install.ps1') -Channel $versions.dotnetChannel -InstallDir 'C:\dotnet' -NoPath
     if ($LASTEXITCODE -ne 0) { throw "dotnet-install exited $LASTEXITCODE" }
     [Environment]::SetEnvironmentVariable('DOTNET_ROOT', 'C:\dotnet', 'Machine')
@@ -76,15 +86,15 @@ try {
     [Environment]::SetEnvironmentVariable('Path', "C:\dotnet;$machinePath", 'Machine')
 
     # Hash-pinned in versions.json (its sources object names where each was published).
-    Get-Download ('https://www.python.org/ftp/python/{0}/python-{0}-amd64.exe' -f $versions.pythonVersion) (Join-Path $dl 'python.exe') $versions.pythonSha256
+    Get-Download -Url ('https://www.python.org/ftp/python/{0}/python-{0}-amd64.exe' -f $versions.pythonVersion) -Path (Join-Path $dl 'python.exe') -Sha256 $versions.pythonSha256
     Invoke-Installer (Join-Path $dl 'python.exe') '/quiet InstallAllUsers=1 PrependPath=1 Include_test=0'
 
-    Get-Download ('https://github.com/git-for-windows/git/releases/download/{0}/Git-{1}-64-bit.exe' -f $versions.gitTag, $versions.gitVersion) (Join-Path $dl 'git.exe') $versions.gitSha256
+    Get-Download -Url ('https://github.com/git-for-windows/git/releases/download/{0}/Git-{1}-64-bit.exe' -f $versions.gitTag, $versions.gitVersion) -Path (Join-Path $dl 'git.exe') -Sha256 $versions.gitSha256
     Invoke-Installer (Join-Path $dl 'git.exe') '/VERYSILENT /NORESTART /NOCANCEL /SP- /o:PathOption=Cmd'
 
     # The runner, hash-verified, plus the guest tasks' scripts and the module.
     $zip = Join-Path $dl 'runner.zip'
-    Get-Download ('https://github.com/actions/runner/releases/download/v{0}/actions-runner-win-x64-{0}.zip' -f $versions.runnerVersion) $zip $versions.runnerSha256
+    Get-Download -Url ('https://github.com/actions/runner/releases/download/v{0}/actions-runner-win-x64-{0}.zip' -f $versions.runnerVersion) -Path $zip -Sha256 $versions.runnerSha256
     New-Item -ItemType Directory -Force -Path 'C:\actions-runner' | Out-Null
     Expand-Archive -Path $zip -DestinationPath 'C:\actions-runner' -Force
     # Scripts SYSTEM will run live where runner cannot write them.

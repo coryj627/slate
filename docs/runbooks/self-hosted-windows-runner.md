@@ -388,6 +388,14 @@ saw before changing anything.
   `sources` entry points; for the runner, the SHA-256 that its GitHub
   release page lists for `actions-runner-win-x64-2.338.0.zip`. Do that
   before changing either.
+- [ ] The two evergreen downloads pass their signature check: phase 1 gets
+  past `vs_BuildTools.exe` and `dotnet-install.ps1` without `signature of`
+  or `is signed by`. Microsoft serves a new build of each at every release,
+  which no hash can pin, so the build requires a valid Authenticode
+  signature from `Microsoft Corporation` instead. If the check stops the
+  build, do not bypass it: a bad signature means the download was altered
+  or redirected, or the image's root certificates or Internet access are
+  broken.
 - [ ] Every `icacls … /setowner runner /T /C` in phase 1 exits 0: the build
   does not stop on `icacls exited <n> for C:\actions-runner (owner)` or
   `icacls exited <n> for C:\dotnet (owner)`.

@@ -360,7 +360,11 @@ Toolchain, matching the Namespace image the lanes run on today:
   SHA-256 and, in `sources`, where the hash was published; Rust toolchain,
   uniffi-bindgen-cs tag, .NET channel, resolvers); the Pester suite
   asserts its Rust and bindgen pins equal `rust-toolchain.toml` and
-  `apps/slate-windows/uniffi-bindgen-cs.version`.
+  `apps/slate-windows/uniffi-bindgen-cs.version`. The two evergreen
+  downloads (the VS Build Tools bootstrapper and `dotnet-install.ps1`,
+  which Microsoft replaces at every release, so no hash can pin them)
+  must carry a valid Authenticode signature from `Microsoft Corporation`
+  instead; every download is checked one way or the other.
 
 Refresh triggers (runbook): the Rust toolchain pin, the uniffi-bindgen-cs
 tag, the runner version (GitHub refuses runners older than its support
