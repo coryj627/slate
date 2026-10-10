@@ -103,24 +103,53 @@ Describe 'New-RunnerVm' {
         Mock Enable-VMTPM { throw 'no key protector' }
         { New-RunnerVm -Name 'slate-win-app-cafecafe' -Lane 'app' -Config $config } | Should -Throw '*vTPM*'
     }
+    It 'fails loudly when an ACL rule cannot be applied, even under a Continue error preference' {
+        # A real cmdlet failure is non-terminating: under the caller's
+        # Continue it would hand back a VM without its network isolation.
+        # The runner's global Stop would hide that, so the test sets Continue.
+        $ErrorActionPreference = 'Continue'
+        Mock Add-VMNetworkAdapterExtendedAcl { Write-Error 'acl failed' }
+        { New-RunnerVm -Name 'slate-win-app-acl00000' -Lane 'app' -Config $config } | Should -Throw '*acl failed*'
+    }
 }
 
 Describe 'Get-RunnerVmState' {
     It 'reports Missing for an absent VM and maps states otherwise' {
-        Mock Get-VM { throw 'not found' }
+        # Get-VM -Name writes this record for a name it cannot find:
+        # InvalidArgument, ErrorId InvalidParameter, the name as the target.
+        Mock Get-VM { Write-Error -Message 'Hyper-V was unable to find a virtual machine with name "x".' -Category InvalidArgument -ErrorId 'InvalidParameter' -TargetObject 'x' }
+        Get-RunnerVmState -Name 'x' | Should -Be 'Missing'
+        Mock Get-VM { $null }
         Get-RunnerVmState -Name 'x' | Should -Be 'Missing'
         Mock Get-VM { [pscustomobject]@{ State = 'Off' } }
         Get-RunnerVmState -Name 'x' | Should -Be 'Off'
         Mock Get-VM { [pscustomobject]@{ State = 'Saved' } }
         Get-RunnerVmState -Name 'x' | Should -Be 'Other'
     }
+    It 'reports Unknown when Get-VM fails for any reason other than not-found' {
+        Mock Get-VM { Write-Error -Message 'denied' -Category PermissionDenied }
+        Get-RunnerVmState -Name 'x' | Should -Be 'Unknown'
+        Mock Get-VM { throw 'boom' }
+        Get-RunnerVmState -Name 'x' | Should -Be 'Unknown'
+        # What an unelevated non-member gets: NotSpecified, ErrorId Unspecified, no target.
+        Mock Get-VM { Write-Error -Message 'You do not have the required permission to complete this task.' -Category NotSpecified -ErrorId 'Unspecified' }
+        Get-RunnerVmState -Name 'x' | Should -Be 'Unknown'
+        # ObjectNotFound is the management stack failing ("the object was not
+        # found ... verify that the Virtual Machine Management service is
+        # running"), not the name lookup; it carries no target.
+        Mock Get-VM { Write-Error -Message 'Hyper-V encountered an error trying to access an object because the object was not found.' -Category ObjectNotFound -ErrorId 'ObjectNotFound' }
+        Get-RunnerVmState -Name 'x' | Should -Be 'Unknown'
+        # An invalid-argument failure that is not about this name.
+        Mock Get-VM { Write-Error -Message 'invalid parameter' -Category InvalidArgument -ErrorId 'InvalidParameter' }
+        Get-RunnerVmState -Name 'x' | Should -Be 'Unknown'
+    }
 }
 
 Describe 'Get-RunnerVmHeartbeat' {
     It 'is OK only when the integration service says OK' {
-        Mock Get-VMIntegrationService { [pscustomobject]@{ PrimaryStatusDescription = 'OK' } }
+        Mock Get-VMIntegrationService { [pscustomobject]@{ PrimaryOperationalStatus = 'Ok' } }
         Get-RunnerVmHeartbeat -Name 'x' | Should -Be 'OK'
-        Mock Get-VMIntegrationService { [pscustomobject]@{ PrimaryStatusDescription = 'No Contact' } }
+        Mock Get-VMIntegrationService { [pscustomobject]@{ PrimaryOperationalStatus = 'NoContact' } }
         Get-RunnerVmHeartbeat -Name 'x' | Should -Be 'NoContact'
     }
 }

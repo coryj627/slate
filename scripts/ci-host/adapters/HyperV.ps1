@@ -61,6 +61,10 @@ function New-RunnerVm {
     # checkpoints, TurnOff on host shutdown, port ACLs from the table.
     [CmdletBinding()]
     param([Parameter(Mandatory)][string]$Name, [Parameter(Mandatory)][string]$Lane, [Parameter(Mandatory)]$Config)
+    # Every function here that changes state sets Stop first: it must fail
+    # loudly whatever the caller's preference is. A cmdlet failure is
+    # non-terminating, and a VM without its vTPM or ACLs must never start.
+    $ErrorActionPreference = 'Stop'
     $dir = Join-Path $Config.VmDir $Name
     New-Item -ItemType Directory -Force -Path $dir | Out-Null
     $os = Join-Path $dir 'os.vhdx'
@@ -90,13 +94,26 @@ function New-RunnerVm {
 function Start-RunnerVm {
     [CmdletBinding()]
     param([Parameter(Mandatory)][string]$Name)
+    $ErrorActionPreference = 'Stop'
     Start-VM -Name $Name | Out-Null
 }
 
 function Get-RunnerVmState {
+    # Missing only when Hyper-V answered and has no VM by this name. Get-VM
+    # -Name reports that as InvalidArgument (ErrorId InvalidParameter) with
+    # the name as the target object. Every other failure is Unknown, which
+    # the orchestrator must not treat as gone: a permission error, the
+    # management service down or timing out, or its ObjectNotFound ("the
+    # object was not found ... verify that the Virtual Machine Management
+    # service is running"), which carries no target.
     [CmdletBinding()]
     param([Parameter(Mandatory)][string]$Name)
-    try { $vm = Get-VM -Name $Name -ErrorAction Stop } catch { return 'Missing' }
+    try {
+        $vm = Get-VM -Name $Name -ErrorAction Stop
+    } catch {
+        if ($_.CategoryInfo.Category -eq 'InvalidArgument' -and [string]$_.TargetObject -eq $Name) { return 'Missing' }
+        return 'Unknown'
+    }
     if ($null -eq $vm) { return 'Missing' }
     return (ConvertTo-VmStateLabel -State ([string]$vm.State))
 }
@@ -105,7 +122,8 @@ function Get-RunnerVmHeartbeat {
     [CmdletBinding()]
     param([Parameter(Mandatory)][string]$Name)
     $service = Get-VMIntegrationService -VMName $Name -Name 'Heartbeat' -ErrorAction Stop
-    if ([string]$service.PrimaryStatusDescription -eq 'OK') { return 'OK' }
+    # The operational-status enum, not the localisable description text.
+    if ([string]$service.PrimaryOperationalStatus -eq 'Ok') { return 'OK' }
     return 'NoContact'
 }
 
@@ -115,6 +133,7 @@ function Send-RunnerVmKvp {
     # at most 1024 characters (the module chunks at 1000).
     [CmdletBinding()]
     param([Parameter(Mandatory)][string]$Name, [Parameter(Mandatory)][System.Collections.IDictionary]$Items)
+    $ErrorActionPreference = 'Stop'
     $ns = 'root\virtualization\v2'
     $vmms = Get-CimInstance -Namespace $ns -ClassName Msvm_VirtualSystemManagementService
     $vm = Get-CimInstance -Namespace $ns -ClassName Msvm_ComputerSystem -Filter "ElementName='$Name'"
@@ -151,6 +170,7 @@ function Stop-RunnerVmForce {
 function Remove-RunnerVm {
     [CmdletBinding()]
     param([Parameter(Mandatory)][string]$Name, [string]$Dir)
+    $ErrorActionPreference = 'Stop'
     if ($null -ne (Get-VM -Name $Name -ErrorAction SilentlyContinue)) { Remove-VM -Name $Name -Force }
     if ($Dir -and (Test-Path -LiteralPath $Dir)) { Remove-Item -LiteralPath $Dir -Recurse -Force }
 }
@@ -164,6 +184,7 @@ function Get-RunnerVmNames {
 function Clear-RunnerVmDirs {
     [CmdletBinding()]
     param([Parameter(Mandatory)][string]$VmDir, [string[]]$ActiveNames = @())
+    $ErrorActionPreference = 'Stop'
     if (-not (Test-Path -LiteralPath $VmDir)) { return }
     foreach ($entry in Get-ChildItem -LiteralPath $VmDir -Directory) {
         if ($ActiveNames -notcontains $entry.Name) { Remove-Item -LiteralPath $entry.FullName -Recurse -Force }
@@ -171,10 +192,11 @@ function Clear-RunnerVmDirs {
 }
 
 function Merge-RunnerCache {
-    # Child → parent merge, then the generation counter moves. Only the
+    # Child -> parent merge, then the generation counter moves. Only the
     # orchestrator (single process) writes these files.
     [CmdletBinding()]
     param([Parameter(Mandatory)]$Config, [Parameter(Mandatory)][string]$Lane, [Parameter(Mandatory)][string]$ChildPath)
+    $ErrorActionPreference = 'Stop'
     $parent = Join-Path $Config.CacheDir "$Lane.vhdx"
     Merge-VHD -Path $ChildPath -DestinationPath $parent
     $next = (Get-CacheGeneration -CacheDir $Config.CacheDir -Lane $Lane) + 1
@@ -185,6 +207,7 @@ function Merge-RunnerCache {
 function Remove-RunnerCache {
     [CmdletBinding()]
     param([string]$ChildPath)
+    $ErrorActionPreference = 'Stop'
     if ($ChildPath -and (Test-Path -LiteralPath $ChildPath)) { Remove-Item -LiteralPath $ChildPath -Force }
 }
 
