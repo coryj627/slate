@@ -97,6 +97,22 @@ Before you start:
 - About 200 GB free on `C:`.
 - No other Windows NAT. Windows supports one per host, so setup stops if
   `Get-NetNat` lists anything but `slate-ci`.
+- No third-party NDIS protocol driver bound to the network adapters.
+  Realtek's Ethernet diagnostic and teaming utility installs three
+  (`rtk_vlanpt`, `rtk_teampt`, `rtk_ndisprot`), and with them present
+  Hyper-V cannot create the switch's host adapter: step 5/9 fails with
+  `Internal miniport create failed … Cannot create a file when that file
+  already exists`. This should print nothing:
+
+  ```powershell
+  netcfg -s n | Select-String 'rtk_'
+  ```
+
+  If it lists them and no VLAN or team is in use, remove them in the
+  elevated window, one at a time: `netcfg -u rtk_vlanpt`, then
+  `netcfg -u rtk_teampt`, then `netcfg -u rtk_ndisprot`. Adapters rebind
+  for a moment after each. Reinstalling the Realtek utility puts them
+  back.
 - The ISO, here `C:\Users\cory\Downloads\Win11_25H2_English_x64_v2.iso`,
   and the Windows 11 Pro product key in the password manager.
 - A clean checkout of the commit to install, normally an up-to-date `main`.
@@ -1194,6 +1210,15 @@ and `"status": "401"`. Rotate it before then.
   reach the Dism module. Close it and open the MSI build as in Install,
   step 2. Setup reads Hyper-V through `dism.exe` and refuses the Store
   build before it creates anything, so nothing was changed.
+- **`New-VMSwitch: … Internal miniport create failed … Cannot create a file
+  when that file already exists (0x800700B7)` at `5/9`.** The System log
+  holds `Microsoft-Windows-Hyper-V-VmSwitch` event 76,
+  `Create Non-Lightweight Miniport NIC … Object Name already exists`: a
+  third-party NDIS protocol driver bound to every adapter kept Hyper-V
+  from creating the switch's host adapter. On this host it was Realtek's
+  three (see "Before you start"). Hyper-V rolls the switch back, so nothing
+  is left behind: remove the drivers and run the setup again. If it fails
+  the same way without them, reboot and run it again.
 - **`token missing at …` every minute.** No token is stored: run
   `store-token.ps1`. After `-ResetAccount`, store the token before you
   enable the loop task.
