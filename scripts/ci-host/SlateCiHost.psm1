@@ -181,5 +181,56 @@ function Get-StaleRunnerNames {
     return @($names)
 }
 
+function Test-CommitEligible {
+    # The whole cache-trust decision, from GitHub's record of what ran and
+    # the host's own record of how the VM stopped. Labels play no part.
+    [CmdletBinding()]
+    param(
+        $Job,
+        $Run,
+        [Parameter(Mandatory)][string]$RunnerName,
+        [bool]$ForcedOff = $false,
+        [int]$ParentGeneration = 0,
+        [int]$ForkGeneration = 0,
+        [string]$TrustedRepo = 'coryj627/slate',
+        [string]$TrustedBranch = 'main',
+        [string[]]$TrustedEvents = @('push', 'schedule', 'workflow_dispatch')
+    )
+    function Deny([string]$reason) { return [pscustomobject]@{ Eligible = $false; Reason = $reason } }
+    if ($null -eq $Job) { return (Deny 'no job resolved for runner') }
+    if ([string]$Job.runner_name -ne $RunnerName) { return (Deny "runner mismatch: $($Job.runner_name)") }
+    if ([string]$Job.conclusion -ne 'success') { return (Deny "conclusion: $($Job.conclusion)") }
+    if ($ForcedOff) { return (Deny 'guest was forced off') }
+    if ($null -eq $Run) { return (Deny 'no run') }
+    if ($TrustedEvents -notcontains [string]$Run.event) { return (Deny "event: $($Run.event)") }
+    if ([string]$Run.head_branch -ne $TrustedBranch) { return (Deny "branch: $($Run.head_branch)") }
+    $repoName = ''
+    if ($null -ne $Run.head_repository -and $Run.head_repository.PSObject.Properties['full_name']) { $repoName = [string]$Run.head_repository.full_name }
+    if ($repoName -ne $TrustedRepo) { return (Deny "repository: $repoName") }
+    if ($ParentGeneration -ne $ForkGeneration) { return (Deny "generation moved: fork $ForkGeneration, parent $ParentGeneration") }
+    return [pscustomobject]@{ Eligible = $true; Reason = 'trusted main' }
+}
+
+function Resolve-RunnerJob {
+    # Any queued job with matching labels may have taken this runner, so
+    # ask GitHub which one did: the admitted job first, then every other
+    # recently seen candidate.
+    [CmdletBinding()]
+    param(
+        [Parameter(Mandatory)][string]$RunnerName,
+        [int64]$AdmittedJobId = 0,
+        [int64[]]$CandidateJobIds = @(),
+        [Parameter(Mandatory)][scriptblock]$GetJob
+    )
+    $ids = @()
+    if ($AdmittedJobId -gt 0) { $ids += $AdmittedJobId }
+    foreach ($id in @($CandidateJobIds)) { if ($ids -notcontains $id) { $ids += $id } }
+    foreach ($id in $ids) {
+        $job = & $GetJob $id
+        if ($null -ne $job -and [string]$job.runner_name -eq $RunnerName) { return $job }
+    }
+    return $null
+}
+
 Export-ModuleMember -Function Get-LaneFromLabels, New-RunnerName, Split-KvpChunks, Join-KvpChunks,
-    ConvertTo-DateTimeOffset, Select-QueuedLaneJobs, Select-JobsToAdmit, Register-JobRetry, Test-VmExpired, Get-StaleRunnerNames
+    ConvertTo-DateTimeOffset, Select-QueuedLaneJobs, Select-JobsToAdmit, Register-JobRetry, Test-VmExpired, Get-StaleRunnerNames, Test-CommitEligible, Resolve-RunnerJob

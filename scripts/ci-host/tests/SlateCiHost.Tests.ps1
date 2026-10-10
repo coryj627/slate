@@ -214,3 +214,95 @@ Describe 'Get-StaleRunnerNames' {
         @(Get-StaleRunnerNames -Runners @()).Count | Should -Be 0
     }
 }
+
+Describe 'Test-CommitEligible' {
+    BeforeAll {
+        $script:goodJob = [pscustomobject]@{ id = 1; status = 'completed'; conclusion = 'success'; runner_name = 'slate-win-app-deadbeef'; run_id = 10 }
+        $script:goodRun = [pscustomobject]@{ event = 'push'; head_branch = 'main'; head_repository = [pscustomobject]@{ full_name = 'coryj627/slate' } }
+        $script:eligible = {
+            param($job, $run, [bool]$forced, [int]$parent, [int]$fork)
+            Test-CommitEligible -Job $job -Run $run -RunnerName 'slate-win-app-deadbeef' -ForcedOff $forced -ParentGeneration $parent -ForkGeneration $fork
+        }
+    }
+    It 'commits a green push to main of the trusted repository with an unchanged generation' {
+        $d = & $eligible $goodJob $goodRun $false 3 3
+        $d.Eligible | Should -BeTrue
+        $d.Reason | Should -Be 'trusted main'
+    }
+    It 'commits schedule and workflow_dispatch events on main' {
+        foreach ($event in 'schedule', 'workflow_dispatch') {
+            $run = [pscustomobject]@{ event = $event; head_branch = 'main'; head_repository = [pscustomobject]@{ full_name = 'coryj627/slate' } }
+            (& $eligible $goodJob $run $false 0 0).Eligible | Should -BeTrue
+        }
+    }
+    It 'discards a pull_request event' {
+        $run = [pscustomobject]@{ event = 'pull_request'; head_branch = 'main'; head_repository = [pscustomobject]@{ full_name = 'coryj627/slate' } }
+        $d = & $eligible $goodJob $run $false 3 3
+        $d.Eligible | Should -BeFalse
+        $d.Reason | Should -Be 'event: pull_request'
+    }
+    It 'discards a push to another branch' {
+        $run = [pscustomobject]@{ event = 'push'; head_branch = 'feature'; head_repository = [pscustomobject]@{ full_name = 'coryj627/slate' } }
+        (& $eligible $goodJob $run $false 3 3).Reason | Should -Be 'branch: feature'
+    }
+    It 'discards a run from another repository' {
+        $run = [pscustomobject]@{ event = 'push'; head_branch = 'main'; head_repository = [pscustomobject]@{ full_name = 'someone/slate' } }
+        (& $eligible $goodJob $run $false 3 3).Reason | Should -Be 'repository: someone/slate'
+    }
+    It 'discards when head_repository is null (deleted fork) without throwing' {
+        $run = [pscustomobject]@{ event = 'push'; head_branch = 'main'; head_repository = $null }
+        $d = & $eligible $goodJob $run $false 3 3
+        $d.Eligible | Should -BeFalse
+        $d.Reason | Should -Be 'repository: '
+    }
+    It 'discards a failed or cancelled job' {
+        foreach ($c in 'failure', 'cancelled', $null) {
+            $job = [pscustomobject]@{ id = 1; status = 'completed'; conclusion = $c; runner_name = 'slate-win-app-deadbeef'; run_id = 10 }
+            $d = & $eligible $job $goodRun $false 3 3
+            $d.Eligible | Should -BeFalse
+            $d.Reason | Should -Be "conclusion: $c"
+        }
+    }
+    It 'discards when the host forced the VM off' {
+        (& $eligible $goodJob $goodRun $true 3 3).Reason | Should -Be 'guest was forced off'
+    }
+    It 'discards when the parent generation moved since the fork' {
+        (& $eligible $goodJob $goodRun $false 4 3).Reason | Should -Be 'generation moved: fork 3, parent 4'
+    }
+    It 'discards when no job resolved' {
+        (& $eligible $null $goodRun $false 3 3).Reason | Should -Be 'no job resolved for runner'
+    }
+    It 'discards when the job ran on a different runner' {
+        $job = [pscustomobject]@{ id = 1; status = 'completed'; conclusion = 'success'; runner_name = 'other'; run_id = 10 }
+        (& $eligible $job $goodRun $false 3 3).Reason | Should -Be 'runner mismatch: other'
+    }
+    It 'discards when the run is missing' {
+        (& $eligible $goodJob $null $false 3 3).Reason | Should -Be 'no run'
+    }
+    It 'honours custom trusted repo, branch and events' {
+        $run = [pscustomobject]@{ event = 'push'; head_branch = 'release'; head_repository = [pscustomobject]@{ full_name = 'x/y' } }
+        $d = Test-CommitEligible -Job $goodJob -Run $run -RunnerName 'slate-win-app-deadbeef' -ForcedOff $false -ParentGeneration 1 -ForkGeneration 1 -TrustedRepo 'x/y' -TrustedBranch 'release' -TrustedEvents @('push')
+        $d.Eligible | Should -BeTrue
+    }
+}
+
+Describe 'Resolve-RunnerJob' {
+    It 'returns the admitted job when it ran on this runner' {
+        $jobs = @{ 1 = [pscustomobject]@{ id = 1; runner_name = 'slate-win-app-deadbeef' } }
+        $r = Resolve-RunnerJob -RunnerName 'slate-win-app-deadbeef' -AdmittedJobId 1 -CandidateJobIds @(2, 3) -GetJob { param($id) $jobs[[int]$id] }
+        $r.id | Should -Be 1
+    }
+    It 'falls back to a candidate when another job took the runner' {
+        $jobs = @{
+            1 = [pscustomobject]@{ id = 1; runner_name = 'slate-win-app-other' }
+            2 = [pscustomobject]@{ id = 2; runner_name = 'slate-win-app-deadbeef' }
+        }
+        $calls = [System.Collections.ArrayList]::new()
+        $r = Resolve-RunnerJob -RunnerName 'slate-win-app-deadbeef' -AdmittedJobId 1 -CandidateJobIds @(1, 2, 3) -GetJob { param($id) [void]$calls.Add($id); $jobs[[int]$id] }
+        $r.id | Should -Be 2
+        @($calls) | Should -Be @(1, 2)
+    }
+    It 'returns null when nothing matches' {
+        Resolve-RunnerJob -RunnerName 'slate-win-app-deadbeef' -AdmittedJobId 1 -CandidateJobIds @() -GetJob { param($id) $null } | Should -BeNullOrEmpty
+    }
+}
