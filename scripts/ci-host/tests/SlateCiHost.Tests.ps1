@@ -245,6 +245,14 @@ Describe 'Test-CommitEligible' {
         $run = [pscustomobject]@{ event = 'push'; head_branch = 'feature'; head_repository = [pscustomobject]@{ full_name = 'coryj627/slate' } }
         (& $eligible $goodJob $run $false 3 3).Reason | Should -Be 'branch: feature'
     }
+    It 'discards a case variant of the trusted branch (git refs are case-sensitive)' {
+        $run = [pscustomobject]@{ event = 'push'; head_branch = 'Main'; head_repository = [pscustomobject]@{ full_name = 'coryj627/slate' } }
+        (& $eligible $goodJob $run $false 3 3).Reason | Should -Be 'branch: Main'
+    }
+    It 'discards a case variant of a trusted event' {
+        $run = [pscustomobject]@{ event = 'PUSH'; head_branch = 'main'; head_repository = [pscustomobject]@{ full_name = 'coryj627/slate' } }
+        (& $eligible $goodJob $run $false 3 3).Reason | Should -Be 'event: PUSH'
+    }
     It 'discards a run from another repository' {
         $run = [pscustomobject]@{ event = 'push'; head_branch = 'main'; head_repository = [pscustomobject]@{ full_name = 'someone/slate' } }
         (& $eligible $goodJob $run $false 3 3).Reason | Should -Be 'repository: someone/slate'

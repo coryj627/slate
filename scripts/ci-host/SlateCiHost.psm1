@@ -184,6 +184,9 @@ function Get-StaleRunnerNames {
 function Test-CommitEligible {
     # The whole cache-trust decision, from GitHub's record of what ran and
     # the host's own record of how the VM stopped. Labels play no part.
+    # Git refs are compared case-sensitively because branch names are (Main
+    # is not main), and so is the event; the repository is not, because
+    # GitHub repository names are case-insensitive.
     [CmdletBinding()]
     param(
         $Job,
@@ -202,8 +205,8 @@ function Test-CommitEligible {
     if ([string]$Job.conclusion -ne 'success') { return (Deny "conclusion: $($Job.conclusion)") }
     if ($ForcedOff) { return (Deny 'guest was forced off') }
     if ($null -eq $Run) { return (Deny 'no run') }
-    if ($TrustedEvents -notcontains [string]$Run.event) { return (Deny "event: $($Run.event)") }
-    if ([string]$Run.head_branch -ne $TrustedBranch) { return (Deny "branch: $($Run.head_branch)") }
+    if ($TrustedEvents -cnotcontains [string]$Run.event) { return (Deny "event: $($Run.event)") }
+    if ([string]$Run.head_branch -cne $TrustedBranch) { return (Deny "branch: $($Run.head_branch)") }
     $repoName = ''
     if ($null -ne $Run.head_repository -and $Run.head_repository.PSObject.Properties['full_name']) { $repoName = [string]$Run.head_repository.full_name }
     if ($repoName -ne $TrustedRepo) { return (Deny "repository: $repoName") }
