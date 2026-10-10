@@ -524,15 +524,15 @@ Context 'Invoke-StartupSweep' {
 }
 
 Describe 'orchestrator.ps1' {
-    It 'exits 2 at startup while the golden disk is missing, right after the token check' {
+    It 'exits 2 at startup until the golden disk exists and is sealed, right after the token check' {
         # Text-level: the script is never run here.
         $path = Join-Path $PSScriptRoot '..' 'orchestrator.ps1'
         $errors = $null
         [void][System.Management.Automation.Language.Parser]::ParseFile($path, [ref]$null, [ref]$errors)
         @($errors).Count | Should -Be 0
         $text = Get-Content -Raw $path
-        $text | Should -Match 'if \(-not \(Test-Path -LiteralPath \$config\.GoldenPath\)\) \{\s+& \$log ''error'' "golden disk missing at [^"\r\n]*"\s+exit 2\s+\}'
-        $golden = $text.IndexOf('golden disk missing at')
+        $text | Should -Match 'if \(-not \(\(Test-Path -LiteralPath \$config\.GoldenPath\) -and \(Get-Item -LiteralPath \$config\.GoldenPath\)\.IsReadOnly\)\) \{\s+& \$log ''error'' "golden disk missing or not sealed \(read-only\) at [^"\r\n]*"\s+exit 2\s+\}'
+        $golden = $text.IndexOf('golden disk missing or not sealed')
         $golden | Should -BeGreaterThan $text.IndexOf('token missing at')
         $golden | Should -BeLessThan $text.IndexOf('Initialize-GitHubAdapter')
     }

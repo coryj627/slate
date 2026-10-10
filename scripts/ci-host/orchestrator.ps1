@@ -44,10 +44,11 @@ try {
             & $log 'error' "token missing at $tokenPath (run install/store-token.ps1)"
             exit 2
         }
-        # No job may burn its retries against a missing golden disk: exit,
-        # and the per-minute relaunch retries until build-golden.ps1 made it.
-        if (-not (Test-Path -LiteralPath $config.GoldenPath)) {
-            & $log 'error' "golden disk missing at $($config.GoldenPath) (run golden/build-golden.ps1); exiting until it exists"
+        # No job may burn its retries against a golden disk that is missing
+        # or still being built: build-golden.ps1 marks it read-only only once
+        # it is sealed. Exit, and the per-minute relaunch retries until then.
+        if (-not ((Test-Path -LiteralPath $config.GoldenPath) -and (Get-Item -LiteralPath $config.GoldenPath).IsReadOnly)) {
+            & $log 'error' "golden disk missing or not sealed (read-only) at $($config.GoldenPath) (run golden/build-golden.ps1); exiting until it is sealed"
             exit 2
         }
         Initialize-GitHubAdapter -Owner $config.Owner -Repo $config.Repo -Token (Import-Clixml -LiteralPath $tokenPath)
