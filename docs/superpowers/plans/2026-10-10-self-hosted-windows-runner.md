@@ -1048,12 +1048,12 @@ function Get-CiHostConfig {
         if (-not $config.Contains($key)) { throw "config ${Path}: missing required key '$key'" }
     }
     foreach ($lane in @($config.Lanes.Keys)) {
-        if ($script:DefaultLanes -notcontains $lane) { throw "config ${Path}: unknown lane '$lane'" }
+        if ($script:DefaultLanes -cnotcontains $lane) { throw "config ${Path}: unknown lane '$lane'" }
         foreach ($k in 'Cache', 'MaxMinutes') {
             if (-not $config.Lanes[$lane].Contains($k)) { throw "config ${Path}: lane '$lane' missing '$k'" }
         }
     }
-    if (@($config.Slots).Count -lt 1) { throw "config ${Path}: at least one slot is required" }
+    if ($null -eq $config.Slots -or @($config.Slots).Count -lt 1) { throw "config ${Path}: at least one slot is required" }
     $config['GoldenPath'] = Join-WinPath $config.Root 'golden\win11-runner.vhdx'
     $config['CacheDir'] = Join-WinPath $config.Root 'cache'
     $config['VmDir'] = Join-WinPath $config.Root 'vms'
@@ -1077,6 +1077,10 @@ function Read-Journal {
     try {
         $journal = Get-Content -Raw -LiteralPath $Path | ConvertFrom-Json -AsHashtable
         if ($null -eq $journal -or -not ($journal -is [System.Collections.IDictionary])) { throw 'journal is not an object' }
+    } catch [System.IO.IOException] {
+        # Unreadable (locked) is not corrupt: never overwrite a journal we
+        # could not read; the task restarts and retries.
+        throw
     } catch {
         $aside = '{0}.corrupt-{1}' -f $Path, (Get-Date).ToUniversalTime().ToString('yyyyMMddTHHmmssZ')
         Move-Item -LiteralPath $Path -Destination $aside -Force
@@ -1095,7 +1099,9 @@ function Write-Journal {
     if ($dir -and -not (Test-Path -LiteralPath $dir)) { New-Item -ItemType Directory -Force -Path $dir | Out-Null }
     $tmp = "$Path.tmp"
     $Journal | ConvertTo-Json -Depth 10 | Set-Content -LiteralPath $tmp -Encoding utf8
-    Move-Item -LiteralPath $tmp -Destination $Path -Force
+    # The three-argument overload replaces the destination atomically
+    # (Move-Item -Force deletes, then renames).
+    [System.IO.File]::Move($tmp, $Path, $true)
 }
 
 function Write-CiLog {
