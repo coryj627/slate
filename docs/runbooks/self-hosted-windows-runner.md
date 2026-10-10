@@ -181,11 +181,17 @@ Before you start:
    If it fails, see "The golden build fails" under "When things go wrong".
 6. **The loop starts by itself.** Within a minute of the seal, the log shows
    `orchestrator start (pid …, user slate-ci-host, config C:\slate-ci\bin\config.json)`.
-   `sweep:` lines follow only if there was something to remove. Read the
+   `sweep:` lines follow only if there was something to remove. Find the
    newest log:
 
    ```powershell
-   Get-Content (Get-ChildItem C:\slate-ci\logs\orchestrator-*.log | Sort-Object Name | Select-Object -Last 1).FullName -Tail 20
+   $log = Get-ChildItem C:\slate-ci\logs\orchestrator-*.log | Sort-Object Name | Select-Object -Last 1
+   ```
+
+   Read its end:
+
+   ```powershell
+   Get-Content $log.FullName -Tail 20
    ```
 
    Starting the task by hand is optional:
@@ -207,7 +213,10 @@ Before you start:
    gh api repos/coryj627/slate/actions/permissions/fork-pr-contributor-approval
    ```
 
-8. **Flip the pool to `home`** (see "Pool switch").
+8. **Flip the pool to `home`** (see "Pool switch"). Do the product-key
+   check first: the first-golden-build item of the host integration pass,
+   with its procedure "Checking the product key in the golden image". No
+   job may run on the image before it passes.
 
 ## Host integration pass
 
@@ -227,11 +236,18 @@ saw before changing anything.
 
 - [ ] That run's pwsh on `ubuntu-latest` is 7.4 or later. The GitHub adapter
   and `orchestrator.ps1` require 7.4. The step "Ensure Pester 5" prints the
-  Pester version, then the pwsh version:
+  Pester version, then the pwsh version.
+  1. Get the run's id:
 
-  ```powershell
-  gh run view (gh run list --workflow windows-runner-tests.yml --repo coryj627/slate --limit 1 --json databaseId --jq '.[0].databaseId') --repo coryj627/slate --log | Select-String 'Ensure Pester 5' | Select-Object -Last 2
-  ```
+     ```powershell
+     $run = gh run list --workflow windows-runner-tests.yml --repo coryj627/slate --limit 1 --json databaseId --jq '.[0].databaseId'
+     ```
+
+  2. Print the step's last two lines:
+
+     ```powershell
+     gh run view $run --repo coryj627/slate --log | Select-String 'Ensure Pester 5' | Select-Object -Last 2
+     ```
 
 ### First install
 
@@ -245,14 +261,25 @@ saw before changing anything.
   and rules out a name-plus-SID double entry. See "Checking the logon
   rights" below.
 - [ ] The loop task has both triggers, each repeating every minute with no
-  end:
+  end.
+  1. Get the task:
 
-  ```powershell
-  (Get-ScheduledTask -TaskName slate-ci-orchestrator).Triggers | Select-Object @{ n = 'Type'; e = { $_.CimClass.CimClassName } }, @{ n = 'Every'; e = { $_.Repetition.Interval } }, @{ n = 'For'; e = { $_.Repetition.Duration } }
-  ```
+     ```powershell
+     $task = Get-ScheduledTask -TaskName slate-ci-orchestrator
+     ```
 
-  Expect `MSFT_TaskBootTrigger` and `MSFT_TaskTimeTrigger`, each `PT1M`,
-  with an empty duration.
+  2. List the trigger types. Expect `MSFT_TaskBootTrigger` and
+     `MSFT_TaskTimeTrigger`:
+
+     ```powershell
+     $task.Triggers.CimClass.CimClassName
+     ```
+
+  3. List their repetition. Expect `PT1M` twice, with empty durations:
+
+     ```powershell
+     $task.Triggers.Repetition | Select-Object Interval, Duration
+     ```
 - [ ] The loop task has no time limit, keeps one instance and runs on
   battery, which is what a UPS looks like to Windows:
 
@@ -265,7 +292,7 @@ saw before changing anything.
 - [ ] Both tasks start the MSI pwsh, not the Store alias:
 
   ```powershell
-  Get-ScheduledTask -TaskName slate-ci-orchestrator, slate-ci-store-token | ForEach-Object { $_.Actions.Execute }
+  (Get-ScheduledTask -TaskName slate-ci-orchestrator, slate-ci-store-token).Actions.Execute
   ```
 
   Expect `C:\Program Files\PowerShell\7\pwsh.exe` twice. A path under
@@ -346,11 +373,18 @@ gh workflow run windows.yml --ref <branch> --repo coryj627/slate
 
 - [ ] The vTPM works as `slate-ci-host`. The first
   `provisioned for job …` line appears, with no `vTPM could not be enabled`.
-- [ ] A live job VM carries all 14 port ACL rules, IPv6 included:
+- [ ] A live job VM carries all 14 port ACL rules, IPv6 included.
+  1. Pick a job VM:
 
-  ```powershell
-  Get-VMNetworkAdapterExtendedAcl -VMName (Get-VM | Where-Object Name -like 'slate-win-*' | Select-Object -First 1).Name | Select-Object Direction, Action, RemoteIPAddress, Weight
-  ```
+     ```powershell
+     $vm = Get-VM | Where-Object Name -like 'slate-win-*' | Select-Object -First 1
+     ```
+
+  2. List its rules:
+
+     ```powershell
+     Get-VMNetworkAdapterExtendedAcl -VMName $vm.Name | Select-Object Direction, Action, RemoteIPAddress, Weight
+     ```
 
   Expect 12 Deny rows at weights 200 down to 189: inbound and outbound for
   each of `10.0.0.0/8`, `172.16.0.0/12`, `192.168.0.0/16`, `100.64.0.0/10`,
@@ -363,10 +397,17 @@ gh workflow run windows.yml --ref <branch> --repo coryj627/slate
   `C:\slate-ci`. A `provisioned` line proves `New-VHD` in `vms`. The first
   main push's `commit <lane> generation 1` proves `Merge-VHD` and the
   `.gen` write in `cache`. An empty `vms` after the runs proves the
-  deletes. Any `Access is denied` in those lines is a permission gap.
+  deletes:
 
   ```powershell
   Get-ChildItem C:\slate-ci\vms
+  ```
+
+  A permission gap shows as `denied` or `0x80070005` in the log. Expect no
+  match:
+
+  ```powershell
+  Select-String -Path C:\slate-ci\logs\orchestrator-*.log -Pattern 'denied|0x80070005'
   ```
 
 - [ ] A trusted commit never collides with a running same-lane sibling. On
@@ -450,64 +491,90 @@ sealed disk before any job runs on it.
    $disk = Mount-VHD -Path C:\slate-ci\golden\win11-runner.vhdx -ReadOnly -Passthru | Get-Disk
    ```
 
-2. Find its Windows volume:
+2. List its drive letters. The EFI partition may have one as well as the
+   Windows volume:
 
    ```powershell
-   $letter = ($disk | Get-Partition | Where-Object { $_.DriveLetter -and (Test-Path "$($_.DriveLetter):\Windows\System32") }).DriveLetter
+   $letters = ($disk | Get-Partition | Where-Object DriveLetter).DriveLetter
    ```
 
-3. Copy the software hive out:
+3. Keep the Windows volume, as the golden build does:
+
+   ```powershell
+   $letter = $letters | Where-Object { Test-Path "$($_):\Windows\System32" }
+   ```
+
+4. Copy the software hive out:
 
    ```powershell
    Copy-Item "${letter}:\Windows\System32\config\SOFTWARE" "$env:TEMP\golden-SOFTWARE"
    ```
 
-4. Dismount the disk:
+5. Dismount the disk:
 
    ```powershell
    Dismount-VHD -Path C:\slate-ci\golden\win11-runner.vhdx
    ```
 
-5. Load the copy:
+6. Load the copy:
 
    ```powershell
    reg load HKLM\slate-golden "$env:TEMP\golden-SOFTWARE"
    ```
 
-6. Count the key bytes left in `DigitalProductId`:
+7. Name the key you will read:
 
    ```powershell
-   $id = (Get-ItemProperty 'HKLM:\slate-golden\Microsoft\Windows NT\CurrentVersion').DigitalProductId; if ($null -eq $id) { 'absent' } else { 'non-zero key bytes: ' + @($id[52..66] | Where-Object { $_ -ne 0 }).Count }
+   $cv = 'HKLM:\slate-golden\Microsoft\Windows NT\CurrentVersion'
    ```
 
-   Expect `absent` or `non-zero key bytes: 0`. Any other count means the
-   key may still decode from the image.
-7. Look for a clear-text copy. This prints only the last five characters:
+8. Read `DigitalProductId`:
 
    ```powershell
-   $k = (Get-ItemProperty 'HKLM:\slate-golden\Microsoft\Windows NT\CurrentVersion\SoftwareProtectionPlatform' -ErrorAction SilentlyContinue).BackupProductKeyDefault; if ($k) { $k.Substring($k.Length - 5) } else { 'absent' }
+   $id = (Get-ItemProperty $cv).DigitalProductId
    ```
 
-   If they match the last group of your key, the image holds the key in
-   clear text.
-8. Release the hive:
+9. Count the key bytes still set, bytes 52 to 66. Expect `0`; a missing
+   value also counts `0`. Any other count means the key may still decode
+   from the image.
 
    ```powershell
-   [gc]::Collect()
+   @($id | Select-Object -Skip 52 -First 15 | Where-Object { $_ -ne 0 }).Count
    ```
 
-   ```powershell
-   reg unload HKLM\slate-golden
-   ```
+10. Read the clear-text copy Windows may keep:
 
-9. Delete the copy:
+    ```powershell
+    $k = (Get-ItemProperty "$cv\SoftwareProtectionPlatform" -ErrorAction SilentlyContinue).BackupProductKeyDefault
+    ```
 
-   ```powershell
-   Remove-Item "$env:TEMP\golden-SOFTWARE*" -Force
-   ```
+11. Print only its last five characters, or `absent`. If they match the
+    last group of your key, the image holds the key in clear text.
 
-If step 6 or 7 finds the key, keep the pool on `namespace` and record it as
-a finding before any job runs on the image.
+    ```powershell
+    if ($k) { $k.Substring($k.Length - 5) } else { 'absent' }
+    ```
+
+12. Release the hive:
+
+    ```powershell
+    [gc]::Collect()
+    ```
+
+13. Unload it:
+
+    ```powershell
+    reg unload HKLM\slate-golden
+    ```
+
+14. Delete the copy:
+
+    ```powershell
+    Remove-Item "$env:TEMP\golden-SOFTWARE*" -Force
+    ```
+
+If step 9 or 11 finds the key, keep the pool on `namespace` and record it
+as a finding before any job runs on the image.
 
 ### Refreshing the pilot's isolation targets
 
@@ -534,21 +601,43 @@ Switch gateways on 2026-10-10. Windows picks new ones at every host boot.
 This checks how `Get-VM` reports a VM that no longer exists, as
 `slate-ci-host`. Use a branch run, because its job fails.
 
-1. Start a branch run on `home` and wait for a `handed off` line.
-2. Pick the VM:
+1. Start a branch run on `home`:
 
    ```powershell
-   $vm = Get-VM | Where-Object Name -like 'slate-win-*' | Select-Object -First 1
+   gh workflow run windows.yml --ref <branch> --repo coryj627/slate
    ```
 
-3. Turn it off and remove it in one go, faster than the loop's 10-second
+2. A few seconds later, get its id:
+
+   ```powershell
+   $run = gh run list --workflow windows.yml --repo coryj627/slate --limit 1 --json databaseId --jq '.[0].databaseId'
+   ```
+
+3. Repeat this until a job shows `in_progress` with a `slate-win-*`
+   runner:
+
+   ```powershell
+   gh api "repos/coryj627/slate/actions/runs/$run/jobs" --jq '.jobs[] | {name, status, runner_name}'
+   ```
+
+   A `handed off` line alone is too early. A VM whose job is still queued
+   is the wrong target: removing it only logs `discard (vm state Missing)`
+   with a retry, and the job runs on a fresh VM after the 10-minute
+   back-off.
+4. Pick that job's VM. `<vm>` is its `runner_name`:
+
+   ```powershell
+   $vm = Get-VM -Name <vm>
+   ```
+
+5. Turn it off and remove it in one go, faster than the loop's 10-second
    tick:
 
    ```powershell
    $vm | Stop-VM -TurnOff -Force -Passthru | Remove-VM -Force
    ```
 
-4. Expect `<vm>: discard (vm state Missing)` within a few seconds, and the
+6. Expect `<vm>: discard (vm state Missing)` within a few seconds, and the
    job failing on GitHub as a lost runner. If
    `<vm>: Hyper-V did not answer; leaving the VM alone until the next tick`
    repeats instead, `Get-VM`'s not-found error has another shape for
@@ -560,11 +649,19 @@ This checks how `Get-VM` reports a VM that no longer exists, as
 ## Daily operation
 
 - **Logs.** `C:\slate-ci\logs\orchestrator-<yyyy-MM-dd>.log`, one file per
-  day. Each line is a timestamp, `[info]`, `[warn]` or `[error]`, then the
-  message. Read the newest file (add `-Wait` to follow it):
+  day. Each entry starts with a timestamp, `[info]`, `[warn]` or `[error]`,
+  then the message. A message that spans lines continues on the following
+  lines without a timestamp: GitHub's JSON reply to a failed call does.
+  Find the newest file:
 
   ```powershell
-  Get-Content (Get-ChildItem C:\slate-ci\logs\orchestrator-*.log | Sort-Object Name | Select-Object -Last 1).FullName -Tail 20
+  $log = Get-ChildItem C:\slate-ci\logs\orchestrator-*.log | Sort-Object Name | Select-Object -Last 1
+  ```
+
+  Read its end (add `-Wait` to follow it):
+
+  ```powershell
+  Get-Content $log.FullName -Tail 20
   ```
 
   VMs are named `slate-win-<lane>-<8 hex>`. A job's lines, in order:
@@ -623,14 +720,28 @@ This checks how `Get-VM` reports a VM that no longer exists, as
   with it (see "Re-running setup").
 - **Disk.** The golden disk is about 40 GB. Each cache parent grows to at
   most 60 GB, and each live child to about 15 GB. Plan for 200 GB. Monthly,
-  with the loop paused (see "Pausing and draining"), compact the parents:
+  with the loop paused (see "Pausing and draining"), compact each parent.
+  Mounting it read-only first lets `Optimize-VHD` reclaim deleted files'
+  space, not only zeroed blocks. For the rust lane:
+  1. Mount it read-only, without a drive letter:
 
-  ```powershell
-  foreach ($lane in 'rust', 'app', 'model') { $p = "C:\slate-ci\cache\$lane.vhdx"; Mount-VHD -Path $p -ReadOnly -NoDriveLetter; Optimize-VHD -Path $p -Mode Full; Dismount-VHD -Path $p }
-  ```
+     ```powershell
+     Mount-VHD -Path C:\slate-ci\cache\rust.vhdx -ReadOnly -NoDriveLetter
+     ```
 
-  Mounting read-only first lets `Optimize-VHD` reclaim deleted files' space,
-  not only zeroed blocks.
+  2. Compact it:
+
+     ```powershell
+     Optimize-VHD -Path C:\slate-ci\cache\rust.vhdx -Mode Full
+     ```
+
+  3. Dismount it:
+
+     ```powershell
+     Dismount-VHD -Path C:\slate-ci\cache\rust.vhdx
+     ```
+
+  Repeat the three steps with `app.vhdx` and `model.vhdx`.
 - **Host reboot or Windows Update.** Jobs in flight fail on GitHub as lost
   runners: their VMs are turned off with the host. At boot the loop starts,
   and its sweep removes those VMs and the runners already offline. Re-run
@@ -712,15 +823,24 @@ Resume:
 
 Rebuild when one of these changes: the `rust-toolchain.toml` channel,
 `apps/slate-windows/uniffi-bindgen-cs.version`, the runner version (GitHub
-refuses runners outside its support window), or the .NET SDK band. Rebuild
-from a newer ISO when Windows itself needs servicing: the image takes no
-Windows updates. If every VM starts logging
+refuses runners outside its support window), or the .NET SDK band.
+
+Rebuild too when the guest scripts, the provisioning scripts, or the
+module's KVP functions (`Select-SlateKvpItems`, `Join-KvpChunks`, and their
+host-side partner `Split-KvpChunks`) change. The image carries its own
+copies of the guest scripts and the module, so reinstalling only the host
+code leaves the guest out of step. If the KVP format moves on one side
+only, every handoff ends in `no JIT config arrived within 300 s`.
+
+Rebuild from a newer ISO when Windows itself needs servicing: the image
+takes no Windows updates. If every VM starts logging
 `shut down without running a job` after a GitHub runner release, suspect
 the runner version first.
 
-Update `ci/windows-runner/golden/versions.json` on a branch and merge it.
-The Pester suite checks its Rust and bindgen pins against the repository's.
-Have the Windows 11 Pro key ready: the build asks for it again.
+For a pin change, update `ci/windows-runner/golden/versions.json` on a
+branch and merge it. The Pester suite checks its Rust and bindgen pins
+against the repository's. Have the Windows 11 Pro key ready: the build asks
+for it again.
 
 1. Drain and pause the loop (see "Pausing and draining").
 2. Pull the merged `main` into the checkout, and open the elevated window
@@ -764,15 +884,62 @@ Have the Windows 11 Pro key ready: the build asks for it again.
 
 Cache parents survive a golden rebuild untouched.
 
+### Rolling back a refresh
+
+If the build fails, or the branch run on the new disk is red, put the old
+disk back.
+
+1. If step 7 flipped the pool to `home`, flip it back to `namespace`. If
+   step 6 resumed the loop, pause it again: steps 3 to 6 of the drain.
+2. If the build left its VM, remove it:
+
+   ```powershell
+   Remove-VM -Name slate-golden-build -Force
+   ```
+
+3. Remove the new disk, if there is one. `-Force` also removes a sealed,
+   read-only disk:
+
+   ```powershell
+   Remove-Item -LiteralPath C:\slate-ci\golden\win11-runner.vhdx -Force
+   ```
+
+4. Put the old disk back:
+
+   ```powershell
+   Rename-Item -LiteralPath C:\slate-ci\golden\win11-runner.prev.vhdx -NewName win11-runner.vhdx
+   ```
+
+5. Enable the task. The loop starts within a minute, on the old disk:
+
+   ```powershell
+   Enable-ScheduledTask -TaskName slate-ci-orchestrator
+   ```
+
+6. Flip the pool back to `home`.
+
+If the same change also moved host code that the old image cannot talk to,
+such as the KVP functions, put the previous commit's host code back too
+(see "Re-running setup").
+
 ## Re-running setup
 
 A plain re-run of `setup-host.ps1` keeps `slate-ci-host`, its password and
-both tasks, and so the stored token. It refreshes `C:\slate-ci\bin` from the
-checkout and repairs anything missing. The running loop keeps the code it
-started with, so restart it after a refresh.
+both tasks, and so the stored token, as long as both tasks exist. It
+refreshes `C:\slate-ci\bin` from the checkout and repairs anything missing.
+The running loop keeps the code it started with, so restart it after a
+refresh.
 
-To install new host code, anything under `ci/windows-runner` that is not
-the golden image:
+If a task is missing, a plain re-run takes the reset path. It prints
+`a scheduled task is missing: the password is reset so both can be registered`,
+sets a new password, registers both tasks again and deletes `token.xml`.
+Run `store-token.ps1` again afterwards.
+
+To install new host code (the module, the adapters, `orchestrator.ps1`,
+`config.json` or the install scripts), follow the steps below. If the
+change touches what the guest runs, which is the guest or provisioning
+scripts or the module's KVP functions, rebuild the golden image instead
+(see "Refreshing the golden image"). That procedure refreshes `bin` too.
 
 1. Merge it, pull `main` into the checkout, and open the elevated window
    there.
@@ -831,11 +998,13 @@ Remove-Item C:\slate-ci\cache\app.vhdx
 
 ## Rotating the token
 
-The PAT expires a year after you create it. An expired or revoked PAT
-shows as `401 (Unauthorized)` in every tick's error, and nothing runs.
-Rotate it before then.
+The PAT expires a year after you create it. Once it has expired or been
+revoked, nothing runs. Every tick then logs an `admission:` error, and the
+lines after it, which carry no timestamp, read `"message": "Bad credentials"`
+and `"status": "401"`. Rotate it before then.
 
-1. Create the new PAT exactly as in Install, step 1.
+1. Create the new PAT as in Install, step 1. If GitHub rejects the old
+   name, give it a date, such as `slate-ci-host-cdesk-2027-10`.
 2. Store it. The running loop keeps the old token in memory until it
    restarts:
 
@@ -865,11 +1034,18 @@ Rotate it before then.
   before sealing it. The loop starts within a minute of a seal.
 - **`startup: …` every minute.** The loop failed before its first tick, and
   the task retries every minute. `Key not valid for use in specified state`
-  means `slate-ci-host` cannot decrypt the token: store it again. A `401` or
-  `403` is the PAT, as in the next item.
-- **`401` or `403` in `admission:` lines or `<vm>:` lines.** A `401` means
-  the PAT expired or was revoked: rotate it. A `403` means it lacks a
-  permission: compare it with Install, step 1.
+  means `slate-ci-host` cannot decrypt the token: store it again. If
+  GitHub's JSON reply follows the line, read it as in the next item.
+- **GitHub's JSON reply after an `admission:`, `startup:` or `<vm>:` line.**
+  A failed API call logs the prefixed line, then GitHub's reply on the next
+  lines, without timestamps. `"message": "Bad credentials"` with
+  `"status": "401"` means the PAT expired or was revoked: rotate it.
+  `"status": "403"` means it lacks a permission: compare it with Install,
+  step 1. This finds them, with the four lines before each:
+
+  ```powershell
+  Select-String -Path C:\slate-ci\logs\orchestrator-*.log -Pattern '"status": "40[13]"' -Context 4,0
+  ```
 - **`<vm>: provisioning failed: … vTPM could not be enabled …`.** The VM
   could not get its virtual TPM as `slate-ci-host`, and the job is retried.
   The error names two causes. Neither has been seen yet, so record what
@@ -914,51 +1090,82 @@ Rotate it before then.
   also clears the retry table.
 - **`journal: …` every tick.** The journal cannot be written. A leftover
   `C:\slate-ci\state\journal.json.tmp` that cannot be replaced, for example
-  one made read-only, blocks every write. Delete it.
+  one made read-only, blocks every write. After a restart the same fault
+  stops the start itself, so it shows as `startup: …` every minute. Delete
+  the file:
+
+  ```powershell
+  Remove-Item -LiteralPath C:\slate-ci\state\journal.json.tmp -Force
+  ```
 - **`Hyper-V did not answer` every tick.** Check that the Virtual Machine
   Management service runs: `Get-Service vmms`. The slot stays held until
   Hyper-V answers.
 - **`teardown failed, will retry`.** Hyper-V would not delete a VM. Its slot
   stays held, and the loop tries again every tick.
-- **The golden build fails.** The script prints the error and leaves the VM
-  `slate-golden-build`. Inside the image, the phase 1 log is
-  `C:\provision\provision.log` and its error `C:\provision\provision-error.txt`.
-  The phase 2 log is `C:\Users\runner\provision-runner-user.log` and its
-  error `C:\Users\runner\provision-runner-user-error.txt`. To read them from
-  the host, first turn the VM off if it still runs:
+- **The golden build fails.** See "The golden build fails" below.
 
-  ```powershell
-  Stop-VM -Name slate-golden-build -TurnOff -Force
-  ```
+### The golden build fails
 
-  Mount the disk read-only. This prints its drive letter:
+The script prints the error and leaves the VM `slate-golden-build`. Inside
+the image, the phase 1 log is `C:\provision\provision.log` and its error
+`C:\provision\provision-error.txt`. The phase 2 log is
+`C:\Users\runner\provision-runner-user.log` and its error
+`C:\Users\runner\provision-runner-user-error.txt`. To read them from the
+host:
 
-  ```powershell
-  Mount-VHD -Path C:\slate-ci\golden\win11-runner.vhdx -ReadOnly -Passthru | Get-Disk | Get-Partition | Where-Object DriveLetter | Select-Object DriveLetter
-  ```
+1. Turn the VM off, if it still runs:
 
-  Read the logs, for example on `E:`:
+   ```powershell
+   Stop-VM -Name slate-golden-build -TurnOff -Force
+   ```
 
-  ```powershell
-  Get-Content E:\provision\provision.log -Tail 40
-  ```
+2. Mount the disk read-only:
 
-  Then dismount:
+   ```powershell
+   $disk = Mount-VHD -Path C:\slate-ci\golden\win11-runner.vhdx -ReadOnly -Passthru | Get-Disk
+   ```
 
-  ```powershell
-  Dismount-VHD -Path C:\slate-ci\golden\win11-runner.vhdx
-  ```
+3. List its drive letters. The EFI partition may have one as well as the
+   Windows volume:
 
-  To try again, remove the VM if there is one, and the unsealed disk. Then
-  repeat Install, step 5:
+   ```powershell
+   $letters = ($disk | Get-Partition | Where-Object DriveLetter).DriveLetter
+   ```
 
-  ```powershell
-  Remove-VM -Name slate-golden-build -Force
-  ```
+4. Keep the Windows volume, as the golden build does:
 
-  ```powershell
-  Remove-Item C:\slate-ci\golden\win11-runner.vhdx
-  ```
+   ```powershell
+   $letter = $letters | Where-Object { Test-Path "$($_):\Windows\System32" }
+   ```
+
+5. Read the end of the phase 1 log:
+
+   ```powershell
+   Get-Content "${letter}:\provision\provision.log" -Tail 40
+   ```
+
+6. Read the end of the phase 2 log, if phase 1 finished:
+
+   ```powershell
+   Get-Content "${letter}:\Users\runner\provision-runner-user.log" -Tail 40
+   ```
+
+7. Dismount:
+
+   ```powershell
+   Dismount-VHD -Path C:\slate-ci\golden\win11-runner.vhdx
+   ```
+
+To try again, remove the VM if there is one, and the unsealed disk. Then
+repeat Install, step 5:
+
+```powershell
+Remove-VM -Name slate-golden-build -Force
+```
+
+```powershell
+Remove-Item -LiteralPath C:\slate-ci\golden\win11-runner.vhdx -Force
+```
 
 ### Reading a job VM's logs
 
@@ -974,27 +1181,45 @@ when the loop resumes.
    Stop-VM -Name <vm> -TurnOff -Force
    ```
 
-3. Mount its system disk read-only. This prints its drive letter:
+3. Mount its system disk read-only:
 
    ```powershell
-   Mount-VHD -Path C:\slate-ci\vms\<vm>\os.vhdx -ReadOnly -Passthru | Get-Disk | Get-Partition | Where-Object DriveLetter | Select-Object DriveLetter
+   $disk = Mount-VHD -Path C:\slate-ci\vms\<vm>\os.vhdx -ReadOnly -Passthru | Get-Disk
    ```
 
-4. Read the logs, for example on `E:`:
+4. List its drive letters. The EFI partition may have one as well as the
+   Windows volume:
 
    ```powershell
-   Get-Content E:\actions-runner\bootstrap-runner.log
+   $letters = ($disk | Get-Partition | Where-Object DriveLetter).DriveLetter
    ```
 
-   `bootstrap-system.log` is beside it, and the runner's own logs are in
-   `E:\actions-runner\_diag`.
-5. Dismount:
+5. Keep the Windows volume:
+
+   ```powershell
+   $letter = $letters | Where-Object { Test-Path "$($_):\Windows\System32" }
+   ```
+
+6. Read the runner task's log:
+
+   ```powershell
+   Get-Content "${letter}:\actions-runner\bootstrap-runner.log"
+   ```
+
+7. Read the SYSTEM task's log:
+
+   ```powershell
+   Get-Content "${letter}:\actions-runner\bootstrap-system.log"
+   ```
+
+   The runner's own logs are in `actions-runner\_diag` on the same volume.
+8. Dismount:
 
    ```powershell
    Dismount-VHD -Path C:\slate-ci\vms\<vm>\os.vhdx
    ```
 
-6. Resume the loop. Its startup sweep removes the VM.
+9. Resume the loop. Its startup sweep removes the VM.
 
 ## Security model in one screen
 
@@ -1004,7 +1229,7 @@ when the loop resumes.
 | What a job can touch | A VM that exists for that job only, as the standard user `runner`, with no secret valid outside the VM. Its JIT runner config is single-use. |
 | Where a job can connect | The Internet, through the host's NAT. Hyper-V port ACLs drop everything to and from 10/8, 172.16/12, 192.168/16, 100.64/10 (Tailscale), 169.254/16 and all IPv6. The host firewall drops inbound traffic from the VM subnet to the host. |
 | What survives a job | Only a cache merge, and only after the host verifies from GitHub's API: a green push, schedule or dispatch on `main` of this repository, a guest that shut itself down, and an unchanged parent generation. |
-| What the host account can do | `slate-ci-host` is a Hyper-V Administrator, not an Administrator. It cannot log on interactively or remotely. Beyond a standard account's own profile, it can modify only `C:\slate-ci`, where it only reads `bin` and `golden`. It holds the one PAT: Actions read, Administration read and write, this repository only. |
+| What the host account can do | `slate-ci-host` is a Hyper-V Administrator, not an Administrator. It cannot log on interactively or remotely. Inside `C:\slate-ci` it writes `state`, `cache`, `vms` and `logs`; `bin` and `golden` are read-only for it. Like any standard account, it can still create folders elsewhere on `C:\`. It holds the one PAT: Actions read, Administration read and write, this repository only. |
 | Who can change what runs | Only an elevated administrator writes `C:\slate-ci\bin`, the golden disk and the tasks. In the guest, only Administrators and SYSTEM can write the bootstrap scripts in `C:\slate-guest`. |
 
 Recommended, not done by the runner work: branch protection on `main`
