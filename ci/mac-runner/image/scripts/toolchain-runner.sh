@@ -22,17 +22,12 @@ echo "==> Actions runner, owned by runner"
 sudo install -d -o runner -g staff -m 755 /Users/runner/actions-runner
 sudo tar -C /Users/runner/actions-runner -xzf "$S/actions-runner.tar.gz"
 sudo chown -R runner:staff /Users/runner/actions-runner
-# .env and .path are read by the runner at start and shape every job's
-# environment. The hook path is what control 5 of the plan relies on.
-sudo -u runner tee /Users/runner/actions-runner/.env >/dev/null <<'EOF'
-ACTIONS_RUNNER_HOOK_JOB_STARTED=/usr/local/slate-runner/hooks/job-started.sh
-CARGO_HOME=/Users/runner/toolchains/cargo
-RUSTUP_HOME=/Users/runner/toolchains/rustup
-RUNNER_TOOL_CACHE=/Users/runner/hostedtoolcache
-EOF
-sudo -u runner tee /Users/runner/actions-runner/.path >/dev/null <<'EOF'
-/usr/local/slate-runner/bin:/Users/runner/toolchains/cargo/bin:/usr/local/bin:/usr/bin:/bin:/usr/sbin:/sbin
-EOF
+# The runner reads .env at start (Runner.Listener/Program.cs, LoadAndSetEnv)
+# and sets every line as an environment variable for itself and its jobs;
+# that is where the hook path (plan control 5), PATH, the Rust homes and the
+# tool cache come from. A .path file is honoured only by the service wrapper
+# script, which the controller does not use, so PATH lives in .env.
+sudo install -o runner -g staff -m 644 "$S/data/runner.env" /Users/runner/actions-runner/.env
 ls /Users/runner/actions-runner/bin/Runner.Listener >/dev/null
 
 echo "==> Admission hook, root-owned (shim + implementation; tests live in ci/mac-runner/hook/tests)"

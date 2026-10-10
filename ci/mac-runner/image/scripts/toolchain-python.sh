@@ -50,15 +50,8 @@ sudo_ chown -R runner:staff "$TOOLCACHE"
 # An earlier layout under _work/_tool is dead weight; the runner looks where .env says.
 sudo_ rm -rf /Users/runner/actions-runner/_work/_tool/Python
 
-echo "==> runner .env names the tool cache"
-# sudo_ feeds the password on stdin, so never pipe data into a command it
-# wraps (tee would read the password, not the line). Append from the shell.
-if ! sudo_ grep -q '^RUNNER_TOOL_CACHE=' "$RUNNER_ENV"; then
-  sudo_ /bin/sh -c "printf '%s\n' 'RUNNER_TOOL_CACHE=$TOOLCACHE' >> '$RUNNER_ENV'"
-fi
-sudo_ chown runner:staff "$RUNNER_ENV"
-sudo_ grep -q "^RUNNER_TOOL_CACHE=$TOOLCACHE\$" "$RUNNER_ENV" || { echo ".env did not take the tool cache line" >&2; exit 1; }
-sed 's/^/    /' "$RUNNER_ENV"
+echo "==> runner .env (installed from data/runner.env by the runner stage) names the tool cache?"
+grep -q "^RUNNER_TOOL_CACHE=$TOOLCACHE\$" "$RUNNER_ENV" && echo "    yes" || echo "    NOT YET: install data/runner.env (03e-hook stage or a toolchain rebuild)"
 
 echo "==> check"
 "$TOOLCACHE/Python/$ver/arm64/bin/python3" --version

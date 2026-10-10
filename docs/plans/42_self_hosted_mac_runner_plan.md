@@ -958,7 +958,48 @@ parallel with them.
   runner one, and would hit the hosted candidates equally. The reference and
   the workflow default moved to c247b865, the same change on `main`, with the
   identical `apps/slate-mac/Tests` tree (5a12505b) and inventory digest.
-  Attempt 4 follows.
+- **Pilot attempt 4 (06:21 UTC, run 38030627634):** ancestry passed; the
+  preflight then found no `rustup`. The image's `.path` file was right, but
+  the runner never reads it: `Runner.Listener/Program.cs` loads only `.env`
+  (every line becomes an environment variable); `.path` is honoured by the
+  service wrapper script, which the controller does not use. PATH now lives
+  in `.env`, from `image/data/runner.env`, the one source both the fresh
+  build and the in-place hook stage install.
+- **Pilot attempt 5 (06:36 UTC, run 38031513462): passed every gate.** The
+  native job, cold build plus XCTest plus CLI plus Release plus the same-VM
+  warm pass, took 11 min 44 s wall; the analyzer job 2 min 53 s; the
+  aggregate's source-bound cold and warm witnesses all held. **Phase 3 step
+  3 is met.** Five attempts were needed, none for the runner's core design:
+  a pilot default that pointed at a deleted branch, Python and PATH
+  conventions the hosted images bake in, and the runner's own `.env`
+  behaviour.
+
+  The pilot's phase times on the Studio, against the two earlier candidates
+  (the pilot fixes `swift test` at 3 workers, so its XCTest figure is not
+  the 60 s the 12-worker shape grid measured):
+
+  | Phase | Studio (12 vCPU) | Namespace Tahoe 6x14 (Oct 7) | Hosted xcode-27 (Oct 6) |
+  |---|---|---|---|
+  | cold debug build | 67 s | | |
+  | cold XCTest, 3,032 cases | 146 s | | |
+  | cold CLI | 10 s | | |
+  | cold Release build | 217 s | | 985 s |
+  | **cold native total** | **about 440 s** | **543 s** | **1,845 s** |
+  | warm debug build | 14 s | | |
+  | warm XCTest | 141 s | | |
+  | warm Release build | 81 s | | |
+  | **warm native total** | **about 244 s** | **279 s** | **577 s** |
+  | analyzer job (clone, build, 4 scans × 2) | 173 s | | |
+
+  Same 3,032 cases and inventory digest a145b175 as both earlier runs. Phase
+  3 steps 1 to 3 are met; step 4, the narrowed sudo rule, is the owner's,
+  and the plan recommends doing it right before the Phase 4 cut-over so
+  image fixes during Phase 4 stay cheap.
+- **Cost note.** `windows.yml` runs on every PR push that touches
+  `docs/plans/**` or `scripts/**`, and this PR touches both. The sixteen
+  pushes on 2026-10-10 each started a Windows run on Namespace that the next
+  push cancelled after 2 to 23 minutes. Pushes to this PR are batched from
+  here on, and plan edits stay local until a batch.
 - **PR A opened 2026-10-10:** coryj627/slate#1335, branch
   `ci/mac-runner-phase2`, with everything above. Its hosted checks are the
   first runs under the workflow execution policy.

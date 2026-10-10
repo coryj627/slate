@@ -51,6 +51,11 @@ build {
     destination = "/Users/admin/hook-stage"
   }
 
+  provisioner "file" {
+    source      = "data/runner.env"
+    destination = "/Users/admin/hook-stage/runner.env"
+  }
+
   provisioner "shell" {
     inline_shebang   = "/bin/bash -e"
     environment_vars = ["ADMIN_PASSWORD=${var.admin_password}"]
@@ -58,6 +63,8 @@ build {
       "as_root() { printf '%s\\n' \"$ADMIN_PASSWORD\" | sudo -S -p '' \"$@\"; }",
       "as_root install -o root -g wheel -m 755 ~/hook-stage/job-started.sh /usr/local/slate-runner/hooks/job-started.sh",
       "as_root install -o root -g wheel -m 644 ~/hook-stage/admission.py  /usr/local/slate-runner/hooks/admission.py",
+      "as_root install -o runner -g staff -m 644 ~/hook-stage/runner.env /Users/runner/actions-runner/.env",
+      "echo '.env:'; sed 's/^/  /' /Users/runner/actions-runner/.env",
       "/usr/bin/python3 -I -c 'import ast,sys; ast.parse(open(sys.argv[1]).read())' /usr/local/slate-runner/hooks/admission.py",
       "bash -n /usr/local/slate-runner/hooks/job-started.sh",
       "rm -rf ~/hook-stage",
