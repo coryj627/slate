@@ -206,7 +206,13 @@ function Remove-RunnerVm {
     [CmdletBinding()]
     param([Parameter(Mandatory)][string]$Name, [string]$Dir)
     $ErrorActionPreference = 'Stop'
-    if ($null -ne (Get-VM -Name $Name -ErrorAction SilentlyContinue)) { Remove-VM -Name $Name -Force }
+    # The directory goes only once Hyper-V has answered: a lookup that fails
+    # (service down, access denied) must not delete the disks a VM that is
+    # still registered points at. The throw makes Remove-ActiveVm keep the
+    # entry in phase discarding and retry on a later tick.
+    $state = Get-RunnerVmState -Name $Name
+    if ($state -eq 'Unknown') { throw "${Name}: Hyper-V did not answer; the VM and its directory are kept for a later attempt" }
+    if ($state -ne 'Missing') { Remove-VM -Name $Name -Force }
     if ($Dir -and (Test-Path -LiteralPath $Dir)) { Remove-Item -LiteralPath $Dir -Recurse -Force }
 }
 

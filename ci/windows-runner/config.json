@@ -4,6 +4,7 @@
   "Root": "C:\\slate-ci",
   "SwitchName": "slate-ci",
   "Gateway": "10.77.0.1",
+  "NatPrefix": "10.77.0.0/24",
   "Dns": "1.1.1.1,8.8.8.8",
   "Slots": [
     { "Index": 1, "Ip": "10.77.0.11" },

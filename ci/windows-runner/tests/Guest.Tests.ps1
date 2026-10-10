@@ -50,6 +50,12 @@ Describe 'guest scripts' {
         $text | Should -Match 'Add-MpPreference -ExclusionPath \$root'
         $text | Should -Match 'C:\\slate-guest\\SlateCiHost\.psm1'
     }
+    It 'system bootstrap takes the subnet length from the host (slate.prefix) instead of a fixed /24' {
+        $text = Get-Content -Raw (Join-Path $guestDir 'bootstrap-system.ps1')
+        $text | Should -Match ([regex]::Escape("`$items.Contains('slate.prefix')"))
+        $text | Should -Match 'New-NetIPAddress[^\r\n]*-PrefixLength \$prefixLength'
+        $text | Should -Not -Match 'New-NetIPAddress[^\r\n]*-PrefixLength 24\b'
+    }
     It 'runner bootstrap never recurses into a junction, launches run.cmd --jitconfig and always shuts down' {
         $text = Get-Content -Raw (Join-Path $guestDir 'bootstrap-runner.ps1')
         $text | Should -Match 'ReparsePoint'

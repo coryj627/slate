@@ -20,6 +20,10 @@ BeforeAll {
     function global:Remove-VM { [CmdletBinding()] param($Name, [switch]$Force) }
     function global:Get-VMIntegrationService { [CmdletBinding()] param($VMName, $Name) }
     function global:Merge-VHD { [CmdletBinding()] param($Path, $DestinationPath) }
+    # Removed again in AfterAll: left in place they would shadow the real
+    # Hyper-V cmdlets for later test files and for the session that ran this.
+    $script:stubs = 'New-VHD', 'New-VM', 'Set-VM', 'Set-VMFirmware', 'Set-VMKeyProtector', 'Enable-VMTPM', 'Set-VMVideo', 'Add-VMHardDiskDrive',
+        'Add-VMNetworkAdapterExtendedAcl', 'Start-VM', 'Get-VM', 'Stop-VM', 'Remove-VM', 'Get-VMIntegrationService', 'Merge-VHD'
     . (Join-Path $PSScriptRoot '..' 'adapters' 'HyperV.ps1')
 
     $script:config = @{
@@ -32,6 +36,10 @@ BeforeAll {
         Lanes      = @{ app = @{ Cache = $true; MaxMinutes = 100 }; shell = @{ Cache = $false; MaxMinutes = 30 } }
     }
     New-Item -ItemType Directory -Force -Path $script:config.CacheDir, $script:config.VmDir | Out-Null
+}
+
+AfterAll {
+    foreach ($stub in $script:stubs) { Remove-Item -LiteralPath "function:global:$stub" -ErrorAction SilentlyContinue }
 }
 
 Describe 'Get-ExtendedAclRules' {
@@ -195,7 +203,7 @@ Describe 'Merge-RunnerCache' {
 }
 
 Describe 'Remove-RunnerVm / Clear-RunnerVmDirs / Remove-RunnerCache' {
-    It 'removes the VM when present and always deletes the directory' {
+    It 'removes the VM when present and deletes the directory once Hyper-V has answered' {
         Mock Get-VM { $null }
         Mock Remove-VM {}
         $dir = Join-Path $config.VmDir 'slate-win-app-11111111'
@@ -203,6 +211,23 @@ Describe 'Remove-RunnerVm / Clear-RunnerVmDirs / Remove-RunnerCache' {
         Remove-RunnerVm -Name 'slate-win-app-11111111' -Dir $dir
         Test-Path $dir | Should -BeFalse
         Should -Invoke Remove-VM -Times 0
+        Mock Get-VM { [pscustomobject]@{ State = 'Off' } }
+        New-Item -ItemType Directory -Force $dir | Out-Null
+        Remove-RunnerVm -Name 'slate-win-app-11111111' -Dir $dir
+        Test-Path $dir | Should -BeFalse
+        Should -Invoke Remove-VM -Times 1 -Exactly -ParameterFilter { $Name -eq 'slate-win-app-11111111' -and $Force }
+    }
+    It 'keeps the directory and throws when the VM lookup fails, so the teardown is retried' {
+        # A VM Hyper-V still registers must not lose its disks because the
+        # management service was down or the lookup was denied.
+        Mock Get-VM { Write-Error -Message 'denied' -Category PermissionDenied }
+        Mock Remove-VM {}
+        $dir = Join-Path $config.VmDir 'slate-win-app-22222222'
+        New-Item -ItemType Directory -Force $dir | Out-Null
+        { Remove-RunnerVm -Name 'slate-win-app-22222222' -Dir $dir } | Should -Throw '*did not answer*'
+        Test-Path $dir | Should -BeTrue
+        Should -Invoke Remove-VM -Times 0
+        Remove-Item -LiteralPath $dir -Recurse -Force
     }
     It 'clears directories that are not active' {
         $keep = Join-Path $config.VmDir 'slate-win-app-keep0000'

@@ -17,14 +17,8 @@
 # enabled again.
 [CmdletBinding()]
 param(
-    [string]$Root = 'C:\slate-ci',
+    [string]$ConfigPath = (Join-Path $PSScriptRoot '..' 'config.json'),
     [string]$Account = 'slate-ci-host',
-    [string]$SwitchName = 'slate-ci',
-    # a.b.c.d/n; the host address on the switch takes its prefix length from it
-    [ValidatePattern('^(\d{1,3}\.){3}\d{1,3}/([1-9]|[12]\d|3[0-2])$')]
-    [string]$NatPrefix = '10.77.0.0/24',
-    [string]$Gateway = '10.77.0.1',
-    [string[]]$CacheLanes = @('rust', 'app', 'model'),
     [int]$CacheGB = 60,
     [switch]$ResetAccount
 )
@@ -33,12 +27,19 @@ $ErrorActionPreference = 'Stop'
 $source = (Resolve-Path (Join-Path $PSScriptRoot '..')).Path
 Import-Module (Join-Path $source 'SlateCiHost.psm1') -Force
 
-# The gateway must sit inside the NAT prefix, and the host address on the
-# switch takes the prefix's length: New-NetNat checks neither, and either
-# mistake leaves the job VMs without a route. The guest configures its slot
-# address as a /24, the subnet config.json names.
-if (-not (Test-IPv4InPrefix -Address $Gateway -Prefix $NatPrefix)) { throw "gateway $Gateway is outside the NAT prefix $NatPrefix" }
-$prefixLength = [int]($NatPrefix -split '/')[1]
+# One source of truth for the tree, the switch and the subnet: config.json,
+# which the loop reads and whose gateway, slots and prefix length reach the
+# guests over KVP. Loading it validates NatPrefix and puts the gateway and
+# every slot inside it, so a mismatch stops here, before anything exists.
+# New-NetNat checks none of that, and a mismatch leaves the VMs without a
+# route. The host address on the switch takes the prefix's length.
+$config = Get-CiHostConfig -Path $ConfigPath
+$Root = [string]$config.Root
+$SwitchName = [string]$config.SwitchName
+$Gateway = [string]$config.Gateway
+$NatPrefix = [string]$config.NatPrefix
+$prefixLength = [int]$config.PrefixLength
+$CacheLanes = @($config.Lanes.Keys | Where-Object { $config.Lanes[$_].Cache })
 
 Write-Host '1/9 Hyper-V'
 $feature = Get-WindowsOptionalFeature -Online -FeatureName Microsoft-Hyper-V-All
@@ -134,16 +135,18 @@ if (-not (Get-NetNat -Name $SwitchName -ErrorAction SilentlyContinue)) {
 }
 
 Write-Host '6/9 host firewall: VM subnet may route through the host, never talk to it'
-# The host's own addresses on the switch: the gateway, and the multicast
-# and broadcast destinations its discovery services answer on (the port
-# ACL drops those too). Forwarded NAT traffic is addressed elsewhere, so
-# the rule leaves it alone. A re-run brings an existing rule up to date.
+# Any packet from the VM subnet that arrives on the switch interface and is
+# addressed to the host itself is dropped, whichever of the host's
+# addresses it names: the gateway, the LAN or tailnet address (reachable on
+# any interface under Windows' weak-host model), multicast or broadcast.
+# The traffic the host forwards for the NAT never meets an inbound rule: it
+# is addressed elsewhere and translated below the firewall's connection
+# layer. A re-run brings an existing rule up to date.
 $ruleName = 'slate-ci: block VM subnet to host'
-$localAddresses = @($Gateway, '224.0.0.0/4', '255.255.255.255')
 if (Get-NetFirewallRule -DisplayName $ruleName -ErrorAction SilentlyContinue) {
-    Set-NetFirewallRule -DisplayName $ruleName -Direction Inbound -Action Block -RemoteAddress $NatPrefix -LocalAddress $localAddresses -InterfaceAlias $alias -Profile Any
+    Set-NetFirewallRule -DisplayName $ruleName -Direction Inbound -Action Block -RemoteAddress $NatPrefix -LocalAddress Any -InterfaceAlias $alias -Profile Any
 } else {
-    New-NetFirewallRule -DisplayName $ruleName -Direction Inbound -Action Block -RemoteAddress $NatPrefix -LocalAddress $localAddresses -InterfaceAlias $alias -Profile Any | Out-Null
+    New-NetFirewallRule -DisplayName $ruleName -Direction Inbound -Action Block -RemoteAddress $NatPrefix -LocalAddress Any -InterfaceAlias $alias -Profile Any | Out-Null
 }
 
 Write-Host "7/9 cache parents ($CacheGB GB dynamic, NTFS, label slate-cache)"

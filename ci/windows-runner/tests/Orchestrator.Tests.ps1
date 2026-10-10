@@ -98,10 +98,20 @@ Context 'admission' {
         $vm.SlotIp | Should -Be '10.77.0.11'
         $vm.ForkGeneration | Should -Be 3
         $journal.SeenJobs['1'].Lane | Should -Be 'app'
-        # The journal entry's shape: 17 keys, every one present from admission.
-        @($vm.Keys | Sort-Object) | Should -Be @('CachePath', 'Claimed', 'Dir', 'ForkGeneration', 'GuestError', 'HandedAt', 'JobId', 'Lane', 'Name', 'PendingCommit', 'Phase', 'RunId', 'RunnerId', 'SettleWaits', 'Slot', 'SlotIp', 'StartedAt')
+        # The journal entry's shape: 18 keys, every one present from admission.
+        @($vm.Keys | Sort-Object) | Should -Be @('CachePath', 'ClaimCheckedAt', 'Claimed', 'Dir', 'ForkGeneration', 'GuestError', 'HandedAt', 'JobId', 'Lane', 'Name', 'PendingCommit', 'Phase', 'RunId', 'RunnerId', 'SettleWaits', 'Slot', 'SlotIp', 'StartedAt')
         $vm.GuestError | Should -Be $null
         $vm.SettleWaits | Should -Be 0
+        $vm.ClaimCheckedAt | Should -Be $null
+    }
+    It 'drops retry entries a day after their back-off and keeps the rest' {
+        # GitHub drops a job from its queue after 24 h, so an older entry can
+        # only block a job id that no longer exists and grow the journal.
+        $journal.Retries['7'] = @{ Count = 3; NextAt = $t0.AddHours(-25).ToString('o') }
+        $journal.Retries['8'] = @{ Count = 1; NextAt = $t0.AddHours(-23).ToString('o') }
+        Invoke-OrchestratorTick -Config $config -Journal $journal -Adapters $adapters -Now $t0
+        $journal.Retries.ContainsKey('7') | Should -BeFalse
+        $journal.Retries.ContainsKey('8') | Should -BeTrue
     }
     It 'never runs more VMs than slots' {
         $world.Queued = @((New-QueuedJob 1 10 'app' '2026-10-10T11:00:00Z'), (New-QueuedJob 2 10 'rust' '2026-10-10T11:00:01Z'), (New-QueuedJob 3 10 'model' '2026-10-10T11:00:02Z'))
@@ -158,6 +168,7 @@ Context 'handoff' {
         $kvp['slate.lane'] | Should -Be 'app'
         $kvp['slate.ip'] | Should -Be '10.77.0.11'
         $kvp['slate.gateway'] | Should -Be '10.77.0.1'
+        $kvp['slate.prefix'] | Should -Be '24'
         $kvp['slate.dns'] | Should -Be '1.1.1.1,8.8.8.8'
         $kvp['slate.cache'] | Should -Be '1'
         $kvp['slate.job'] | Should -Be '1'
@@ -469,6 +480,29 @@ Context 'settle' {
         (Get-Calls 'DiscardCache').Count | Should -Be 1
         $journal.Vms.ContainsKey($name) | Should -BeFalse
     }
+    It 'frees the slot of an Off VM waiting to commit, so a third job runs meanwhile' {
+        # The waiting VM holds no CPU, memory or address; only its cache
+        # child waits for the merge.
+        $world.Queued = @((New-QueuedJob 2 11 'app'))
+        $world.VmStates[$name] = 'Running'
+        Invoke-OrchestratorTick -Config $config -Journal $journal -Adapters $adapters -Now $t0.AddMinutes(1)
+        $sibling = @($journal.Vms.Keys | Where-Object { $_ -ne $name })[0]
+        $world.Queued = @()
+        $world.VmStates[$name] = 'Off'
+        Set-DoneJob 1 10 $name
+        Set-Run 10
+        Invoke-OrchestratorTick -Config $config -Journal $journal -Adapters $adapters -Now $t0.AddMinutes(20)
+        $journal.Vms[$name].PendingCommit | Should -BeTrue
+        @(Get-FreeSlots -Config $config -Journal $journal).Count | Should -Be 1
+        $world.Queued = @((New-QueuedJob 3 12 'app'))
+        Invoke-OrchestratorTick -Config $config -Journal $journal -Adapters $adapters -Now $t0.AddMinutes(21)
+        $journal.Vms.Count | Should -Be 3
+        $third = @($journal.Vms.Keys | Where-Object { $_ -ne $name -and $_ -ne $sibling })[0]
+        $journal.Vms[$third].Slot | Should -Be $journal.Vms[$name].Slot
+        # The pending commit still waits: the new VM is a same-lane sibling.
+        (Get-Calls 'CommitCache').Count | Should -Be 0
+        $journal.Vms[$name].PendingCommit | Should -BeTrue
+    }
 }
 
 Context 'shell lane' {
@@ -556,10 +590,37 @@ Context 'handed-phase guards' {
         $journal.Vms.Count | Should -Be 0
         $journal.Retries['1'].Count | Should -Be 1
     }
+    It 'checks for a claim at most once a minute' {
+        # Nothing changes between ticks, and each check is two API calls.
+        $world.Jobs['1'] = [pscustomobject]@{ id = 1; run_id = 10; status = 'queued'; conclusion = $null; runner_name = $null }
+        Invoke-OrchestratorTick -Config $config -Journal $journal -Adapters $adapters -Now $t0.AddSeconds(320)
+        (Get-Calls 'GetRunner').Count | Should -Be 1
+        (Get-Calls 'GetJob').Count | Should -Be 1
+        $journal.Vms[$name].ClaimCheckedAt | Should -Not -BeNullOrEmpty
+        Invoke-OrchestratorTick -Config $config -Journal $journal -Adapters $adapters -Now $t0.AddSeconds(330)
+        Invoke-OrchestratorTick -Config $config -Journal $journal -Adapters $adapters -Now $t0.AddSeconds(370)
+        (Get-Calls 'GetRunner').Count | Should -Be 1
+        (Get-Calls 'GetJob').Count | Should -Be 1
+        Invoke-OrchestratorTick -Config $config -Journal $journal -Adapters $adapters -Now $t0.AddSeconds(381)
+        (Get-Calls 'GetRunner').Count | Should -Be 2
+        $journal.Vms.Count | Should -Be 1
+    }
+    It 'stops reading the guest error once the runner is claimed' {
+        # The bootstrap is behind a claimed runner; the WMI read each tick
+        # would run for the whole job for nothing.
+        $world.Runner = [pscustomobject]@{ status = 'online'; busy = $true }
+        Invoke-OrchestratorTick -Config $config -Journal $journal -Adapters $adapters -Now $t0.AddSeconds(320)
+        $journal.Vms[$name].Claimed | Should -BeTrue
+        $reads = (Get-Calls 'GetGuestError').Count
+        $reads | Should -BeGreaterThan 0
+        Invoke-OrchestratorTick -Config $config -Journal $journal -Adapters $adapters -Now $t0.AddSeconds(330)
+        Invoke-OrchestratorTick -Config $config -Journal $journal -Adapters $adapters -Now $t0.AddSeconds(340)
+        (Get-Calls 'GetGuestError').Count | Should -Be $reads
+    }
 }
 
 Context 'Invoke-StartupSweep' {
-    It 'removes stale slate-win runners and leftover VMs, cleans directories, resets the journal' {
+    It 'removes every slate-win runner and VM it does not keep, cleans directories, resets the journal' {
         $world.Runners = @(
             [pscustomobject]@{ id = 1; name = 'slate-win-app-aaaaaaaa'; status = 'offline' },
             [pscustomobject]@{ id = 2; name = 'slate-win-rust-bbbbbbbb'; status = 'online' },
@@ -569,13 +630,55 @@ Context 'Invoke-StartupSweep' {
         $journal.Vms['stale'] = @{ Name = 'stale' }
         $journal.Retries['9'] = @{ Count = 1; NextAt = $t0.ToString('o') }
         Invoke-StartupSweep -Config $config -Journal $journal -Adapters $adapters
-        @((Get-Calls 'RemoveRunner') | ForEach-Object { $_.Args[0] }) | Should -Be @(1)
+        # Online or offline: the runner of a VM that is about to go stays
+        # listed online for a while after the VM is turned off.
+        @((Get-Calls 'RemoveRunner') | ForEach-Object { $_.Args[0] }) | Should -Be @(1, 2)
         (Get-Calls 'StopVmForce').Count | Should -Be 2
         (Get-Calls 'RemoveVm').Count | Should -Be 2
         (Get-Calls 'RemoveVm')[1].Args[1] | Should -Be 'C:\slate-ci\vms\slate-win-model-cccccccc'
         (Get-Calls 'CleanVmDirs').Count | Should -Be 1
         $journal.Vms.Count | Should -Be 0
         $journal.Retries.Count | Should -Be 0
+    }
+    It 'keeps a handed-off VM that is still running, with its runner, seen job and retries' {
+        # A loop relaunch after a crash, or a manual run, must not kill the
+        # jobs in flight: the journal is reconciled with Hyper-V, not reset.
+        $world.Queued = @((New-QueuedJob 1 10 'app'))
+        Invoke-OrchestratorTick -Config $config -Journal $journal -Adapters $adapters -Now $t0                   # provision
+        $name = @($journal.Vms.Keys)[0]
+        Invoke-OrchestratorTick -Config $config -Journal $journal -Adapters $adapters -Now $t0.AddSeconds(10)   # handoff
+        $journal.Vms[$name].Phase | Should -Be 'handed'
+        $world.Queued = @()
+        $world.Runners = @(
+            [pscustomobject]@{ id = 77; name = $name; status = 'online' },
+            [pscustomobject]@{ id = 5; name = 'slate-win-app-gone0000'; status = 'online' }
+        )
+        $world.Vms = @($name, 'slate-win-app-gone0000')
+        $journal.Retries['9'] = @{ Count = 1; NextAt = $t0.ToString('o') }
+        Invoke-StartupSweep -Config $config -Journal $journal -Adapters $adapters
+        $journal.Vms.ContainsKey($name) | Should -BeTrue
+        $journal.Vms[$name].Phase | Should -Be 'handed'
+        $journal.SeenJobs.ContainsKey('1') | Should -BeTrue
+        $journal.Retries.ContainsKey('9') | Should -BeTrue
+        @((Get-Calls 'RemoveRunner') | ForEach-Object { $_.Args[0] }) | Should -Be @(5)
+        @((Get-Calls 'StopVmForce') | ForEach-Object { $_.Args[0] }) | Should -Be @('slate-win-app-gone0000')
+        @((Get-Calls 'RemoveVm') | ForEach-Object { $_.Args[0] }) | Should -Be @('slate-win-app-gone0000')
+        @((Get-Calls 'CleanVmDirs')[0].Args) | Should -Be @($name)
+        @(Get-FreeSlots -Config $config -Journal $journal).Count | Should -Be 1
+        ($logs -join "`n") | Should -Match "sweep: kept running vm $name \(job 1, handed off\)"
+    }
+    It 'never keeps a VM still waiting for its handoff, nor one that is not running' {
+        # The handoff is not idempotent (a second AddKvpItems fails, a second
+        # JIT registration leaks a runner), so a provisioned VM goes.
+        $world.Queued = @((New-QueuedJob 1 10 'app'), (New-QueuedJob 2 11 'rust'))
+        $world.Heartbeat = 'NoContact'
+        Invoke-OrchestratorTick -Config $config -Journal $journal -Adapters $adapters -Now $t0
+        $names = @($journal.Vms.Keys)
+        $world.Vms = $names
+        Invoke-StartupSweep -Config $config -Journal $journal -Adapters $adapters
+        $journal.Vms.Count | Should -Be 0
+        $journal.SeenJobs.Count | Should -Be 0
+        @((Get-Calls 'StopVmForce') | ForEach-Object { $_.Args[0] } | Sort-Object) | Should -Be @($names | Sort-Object)
     }
 }
 

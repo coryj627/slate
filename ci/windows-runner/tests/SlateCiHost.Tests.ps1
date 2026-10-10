@@ -213,6 +213,18 @@ Describe 'Get-StaleRunnerNames' {
     It 'returns nothing for an empty list' {
         @(Get-StaleRunnerNames -Runners @()).Count | Should -Be 0
     }
+    It 'includes online runners only when asked, never an active VM''s runner' {
+        # The startup sweep asks: every VM it does not keep is about to go,
+        # and GitHub still reports such a VM's runner online for a while.
+        $runners = @(
+            [pscustomobject]@{ id = 1; name = 'slate-win-app-aaaaaaaa'; status = 'online' },
+            [pscustomobject]@{ id = 2; name = 'slate-win-app-bbbbbbbb'; status = 'offline' },
+            [pscustomobject]@{ id = 3; name = 'slate-win-app-kept0000'; status = 'online' },
+            [pscustomobject]@{ id = 4; name = 'other-runner'; status = 'online' }
+        )
+        @(Get-StaleRunnerNames -Runners $runners -ActiveNames @('slate-win-app-kept0000')) | Should -Be @('slate-win-app-bbbbbbbb')
+        @(Get-StaleRunnerNames -Runners $runners -ActiveNames @('slate-win-app-kept0000') -IncludeOnline) | Should -Be @('slate-win-app-aaaaaaaa', 'slate-win-app-bbbbbbbb')
+    }
 }
 
 Describe 'Test-CommitEligible' {
@@ -418,6 +430,35 @@ Describe 'Get-CiHostConfig' {
         $raw.Slots = $null
         $raw | ConvertTo-Json -Depth 6 | Set-Content $p
         { Get-CiHostConfig -Path $p } | Should -Throw '*at least one slot is required*'
+    }
+    It 'derives the prefix length and requires the gateway and every slot inside NatPrefix' {
+        # setup-host.ps1 creates the subnet from this file and the guests get
+        # its length as slate.prefix: one source of truth, checked on load.
+        $cfg = Get-CiHostConfig -Path (Join-Path $PSScriptRoot '..' 'config.json')
+        $cfg.NatPrefix | Should -Be '10.77.0.0/24'
+        $cfg.PrefixLength | Should -Be 24
+        $p = Join-Path $TestDrive 'nat.json'
+        $raw = Get-Content -Raw (Join-Path $PSScriptRoot '..' 'config.json') | ConvertFrom-Json -AsHashtable
+        foreach ($bad in '10.77.0.0', '10.77.0.0/0', '10.77.0.0/33', '10.77.0/24') {
+            $raw['NatPrefix'] = $bad
+            $raw | ConvertTo-Json -Depth 6 | Set-Content $p
+            { Get-CiHostConfig -Path $p } | Should -Throw '*NatPrefix*' -Because $bad
+        }
+        $raw['NatPrefix'] = '10.77.0.0/24'
+        $raw['Gateway'] = '10.77.1.1'
+        $raw | ConvertTo-Json -Depth 6 | Set-Content $p
+        { Get-CiHostConfig -Path $p } | Should -Throw '*Gateway 10.77.1.1 is outside NatPrefix 10.77.0.0/24*'
+        $raw['Gateway'] = '10.77.0.1'
+        $raw['Slots'][1]['Ip'] = '10.77.2.12'
+        $raw | ConvertTo-Json -Depth 6 | Set-Content $p
+        { Get-CiHostConfig -Path $p } | Should -Throw '*slot 2 address 10.77.2.12 is outside NatPrefix 10.77.0.0/24*'
+        $raw['Slots'][1]['Ip'] = '10.77.0.1'
+        $raw | ConvertTo-Json -Depth 6 | Set-Content $p
+        { Get-CiHostConfig -Path $p } | Should -Throw '*slot 2 uses the gateway address*'
+        $raw['Slots'][1]['Ip'] = '10.77.0.12'
+        $raw.Remove('NatPrefix')
+        $raw | ConvertTo-Json -Depth 6 | Set-Content $p
+        { Get-CiHostConfig -Path $p } | Should -Throw "*missing required key 'NatPrefix'*"
     }
     It 'throws when the file is missing' {
         { Get-CiHostConfig -Path (Join-Path $TestDrive 'absent.json') -ErrorAction Continue } | Should -Throw '*absent.json*'

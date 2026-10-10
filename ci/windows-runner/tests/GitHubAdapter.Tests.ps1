@@ -17,6 +17,11 @@ BeforeAll {
         }
         throw "no caller scope holds `$$Name"
     }
+    function Set-OkStatus([string]$Name) {
+        # A conditional call reads its status from -StatusCodeVariable; an
+        # unconditional one binds no such parameter, so there is nothing to set.
+        if ($Name) { Set-ResponseHeaders $Name 200 }
+    }
 }
 
 Describe 'Invoke-GhApi' {
@@ -143,6 +148,58 @@ Describe 'Invoke-GhApi rate budget' {
     }
 }
 
+Describe 'Invoke-GhApi conditional requests' {
+    BeforeEach { $script:GhEtags = @{} }
+    AfterAll { $script:GhEtags = @{} }
+    It 'sends the last ETag back and answers a 304 from its cache' {
+        $script:conditionalCalls = 0
+        Mock Invoke-RestMethod {
+            $script:conditionalCalls++
+            Set-ResponseHeaders $ResponseHeadersVariable @{ ETag = @('W/"abc"') }
+            if ($script:conditionalCalls -eq 1) {
+                Set-ResponseHeaders $StatusCodeVariable 200
+                return [pscustomobject]@{ workflow_runs = @([pscustomobject]@{ id = 1 }) }
+            }
+            Set-ResponseHeaders $StatusCodeVariable 304
+            return $null
+        }
+        $first = Invoke-GhApi -Path '/actions/runs?status=queued' -Conditional
+        $first.workflow_runs[0].id | Should -Be 1
+        $second = Invoke-GhApi -Path '/actions/runs?status=queued' -Conditional
+        $second.workflow_runs[0].id | Should -Be 1
+        Should -Invoke Invoke-RestMethod -Times 1 -Exactly -ParameterFilter { -not $Headers.ContainsKey('If-None-Match') -and $SkipHttpErrorCheck -and $StatusCodeVariable -eq 'ghStatusCode' }
+        Should -Invoke Invoke-RestMethod -Times 1 -Exactly -ParameterFilter { $Headers['If-None-Match'] -eq 'W/"abc"' -and $SkipHttpErrorCheck }
+        $script:GhEtags.Count | Should -Be 1
+    }
+    It 'raises any other status itself, with GitHub''s reply' {
+        Mock Invoke-RestMethod {
+            Set-ResponseHeaders $StatusCodeVariable 403
+            [pscustomobject]@{ message = 'API rate limit exceeded for user ID 1.'; status = '403' }
+        }
+        { Invoke-GhApi -Path '/actions/runs?status=queued' -Conditional } | Should -Throw '*403*API rate limit exceeded*'
+        $script:GhEtags.Count | Should -Be 0
+    }
+    It 'never skips the error check, sends an ETag or caches on an unconditional call' {
+        Mock Invoke-RestMethod { [pscustomobject]@{ ok = $true } }
+        Invoke-GhApi -Path '/actions/jobs/1' | Out-Null
+        Should -Invoke Invoke-RestMethod -Times 1 -Exactly -ParameterFilter {
+            -not $PesterBoundParameters.ContainsKey('SkipHttpErrorCheck') -and -not $PesterBoundParameters.ContainsKey('StatusCodeVariable') -and -not $Headers.ContainsKey('If-None-Match')
+        }
+        $script:GhEtags.Count | Should -Be 0
+    }
+    It 'keeps the cache to the paths used in the last hour once it grows' {
+        for ($i = 0; $i -lt 201; $i++) { $script:GhEtags["/old/$i"] = @{ ETag = 'x'; Body = $null; UsedAt = [datetimeoffset]::UtcNow.AddHours(-2) } }
+        Mock Invoke-RestMethod {
+            Set-ResponseHeaders $ResponseHeadersVariable @{ ETag = @('"n"') }
+            Set-ResponseHeaders $StatusCodeVariable 200
+            [pscustomobject]@{}
+        }
+        Invoke-GhApi -Path '/new' -Conditional | Out-Null
+        $script:GhEtags.Count | Should -Be 1
+        $script:GhEtags.ContainsKey('/new') | Should -BeTrue
+    }
+}
+
 Describe 'New-GhJitRunner' {
     It 'posts name, runner_group_id 1, labels and work_folder, returning id and config' {
         Mock Invoke-RestMethod { [pscustomobject]@{ runner = [pscustomobject]@{ id = 77 }; encoded_jit_config = 'abc' } }
@@ -159,8 +216,9 @@ Describe 'New-GhJitRunner' {
 }
 
 Describe 'Get-GhQueuedLaneJobs' {
-    It 'lists queued and in-progress runs and returns only their queued jobs' {
+    It 'lists queued and in-progress runs and returns only their queued jobs, all as conditional requests' {
         Mock Invoke-RestMethod {
+            Set-OkStatus $StatusCodeVariable
             if ($Uri -like '*actions/runs?status=queued*') { return [pscustomobject]@{ workflow_runs = @([pscustomobject]@{ id = 1; path = '.github/workflows/windows.yml' }) } }
             if ($Uri -like '*actions/runs?status=in_progress*') { return [pscustomobject]@{ workflow_runs = @([pscustomobject]@{ id = 2; path = '.github/workflows/nightly.yml' }) } }
             if ($Uri -like '*/runs/1/jobs?filter=latest*') {
@@ -177,14 +235,17 @@ Describe 'Get-GhQueuedLaneJobs' {
         $jobs = @(Get-GhQueuedLaneJobs -RoutedWorkflows $routed)
         @($jobs | ForEach-Object { $_.id }) | Should -Be @(11, 22)
         Should -Invoke Invoke-RestMethod -Times 4 -Exactly
+        # Every listing and jobs call is conditional: a 304 costs no budget.
+        Should -Invoke Invoke-RestMethod -Times 4 -Exactly -ParameterFilter { $SkipHttpErrorCheck -and $StatusCodeVariable -eq 'ghStatusCode' }
     }
     It 'returns an empty array when nothing is queued' {
-        Mock Invoke-RestMethod { [pscustomobject]@{ workflow_runs = @() } }
+        Mock Invoke-RestMethod { Set-OkStatus $StatusCodeVariable; [pscustomobject]@{ workflow_runs = @() } }
         @(Get-GhQueuedLaneJobs -RoutedWorkflows $routed).Count | Should -Be 0
     }
     It 'returns a run''s queued jobs once when it appears in both listings' {
         # The run moved from queued to in_progress between the two listings.
         Mock Invoke-RestMethod {
+            Set-OkStatus $StatusCodeVariable
             if ($Uri -like '*actions/runs?status=*') { return [pscustomobject]@{ workflow_runs = @([pscustomobject]@{ id = 1; path = '.github/workflows/windows.yml' }) } }
             if ($Uri -like '*/runs/1/jobs?filter=latest*') {
                 return [pscustomobject]@{ jobs = @([pscustomobject]@{ id = 11; run_id = 1; status = 'queued'; labels = @('slate-win-app'); created_at = '2026-10-10T10:00:00Z' }) }
@@ -200,6 +261,7 @@ Describe 'Get-GhQueuedLaneJobs' {
         # Every other workflow's runs cost a jobs call per tick for nothing:
         # only the routed workflows carry slate-win-* labels.
         Mock Invoke-RestMethod {
+            Set-OkStatus $StatusCodeVariable
             if ($Uri -like '*actions/runs?status=queued*') {
                 return [pscustomobject]@{ workflow_runs = @(
                     [pscustomobject]@{ id = 1; path = '.github/workflows/rust.yml' },
@@ -268,6 +330,7 @@ Describe 'New-GitHubAdapters' {
     }
     It 'binds the routed workflows into the closures the module invokes later' {
         Mock Invoke-RestMethod {
+            Set-OkStatus $StatusCodeVariable
             if ($Uri -like '*actions/runs?status=queued*') {
                 return [pscustomobject]@{ workflow_runs = @([pscustomobject]@{ id = 1; path = '.github/workflows/windows.yml' }, [pscustomobject]@{ id = 2; path = '.github/workflows/nightly.yml' }) }
             }

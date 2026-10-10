@@ -98,25 +98,34 @@ Describe 'install scripts' {
         $text | Should -Match ([regex]::Escape($binLine))
         $text.IndexOf($binLine) | Should -BeGreaterThan $text.IndexOf('robocopy.exe')
     }
-    It 'the host firewall rule covers the gateway, multicast and broadcast addresses the VM subnet can reach' {
-        # The port ACL drops them too; the rule is the second layer.
-        # Forwarded NAT traffic is addressed elsewhere and stays untouched.
+    It 'the host firewall rule covers every address of the host on the switch interface' {
+        # The second layer under the port ACL: whichever host address a packet
+        # from the VM subnet names (the gateway, the LAN or tailnet address
+        # under the weak-host model, multicast, broadcast), it is dropped on
+        # that interface. Forwarded NAT traffic never meets an inbound rule.
         $text = Get-Content -Raw (Join-Path $installDir 'setup-host.ps1')
-        $text | Should -Match ([regex]::Escape("`$localAddresses = @(`$Gateway, '224.0.0.0/4', '255.255.255.255')"))
-        # A new rule gets them, and a re-run brings an existing rule up to date.
-        @([regex]::Matches($text, '(New|Set)-NetFirewallRule -DisplayName \$ruleName [^\r\n]*-LocalAddress \$localAddresses ')).Count | Should -Be 2
-        $text | Should -Not -Match '-LocalAddress \$Gateway\b'
+        # A new rule gets it, and a re-run brings an existing rule up to date.
+        @([regex]::Matches($text, '(New|Set)-NetFirewallRule -DisplayName \$ruleName -Direction Inbound -Action Block -RemoteAddress \$NatPrefix -LocalAddress Any -InterfaceAlias \$alias -Profile Any')).Count | Should -Be 2
+        $text | Should -Not -Match '-LocalAddress \$'
     }
-    It 'the host address on the switch takes its prefix length from -NatPrefix, and the gateway must lie inside it' {
+    It 'reads the tree, the switch and the subnet from config.json, so the host, the loop and the guests agree' {
+        # Get-CiHostConfig validates NatPrefix and puts the gateway and every
+        # slot inside it; the host address takes the prefix length from it.
         $text = Get-Content -Raw (Join-Path $installDir 'setup-host.ps1')
-        $text | Should -Not -Match 'New-NetIPAddress[^\r\n]*-PrefixLength 24\b'
+        $text | Should -Match ([regex]::Escape('$config = Get-CiHostConfig -Path $ConfigPath'))
+        foreach ($line in '$Root = [string]$config.Root', '$SwitchName = [string]$config.SwitchName', '$Gateway = [string]$config.Gateway',
+            '$NatPrefix = [string]$config.NatPrefix', '$prefixLength = [int]$config.PrefixLength',
+            '$CacheLanes = @($config.Lanes.Keys | Where-Object { $config.Lanes[$_].Cache })') {
+            $text | Should -Match ([regex]::Escape($line))
+        }
+        foreach ($p in 'Root', 'SwitchName', 'Gateway', 'NatPrefix', 'CacheLanes') {
+            $text | Should -Not -Match ('\[string(\[\])?\]\$' + $p + ' = ') -Because "$p is not a parameter any more"
+        }
         $text | Should -Match 'New-NetIPAddress -InterfaceAlias \$alias -IPAddress \$Gateway -PrefixLength \$prefixLength'
-        $text | Should -Match ([regex]::Escape('$prefixLength = [int]($NatPrefix -split ''/'')[1]'))
-        $text | Should -Match ([regex]::Escape('[ValidatePattern(''^(\d{1,3}\.){3}\d{1,3}/([1-9]|[12]\d|3[0-2])$'')]'))
-        $text | Should -Match ([regex]::Escape('if (-not (Test-IPv4InPrefix -Address $Gateway -Prefix $NatPrefix)) { throw'))
-        # The check needs the module and must run before the switch step creates anything.
-        $text.IndexOf('Test-IPv4InPrefix') | Should -BeGreaterThan $text.IndexOf('Import-Module')
-        $text.IndexOf('Test-IPv4InPrefix') | Should -BeLessThan $text.IndexOf('5/9 switch')
+        $text | Should -Not -Match 'New-NetIPAddress[^\r\n]*-PrefixLength 24\b'
+        # Loaded after the module and before anything is created.
+        $text.IndexOf('Get-CiHostConfig') | Should -BeGreaterThan $text.IndexOf('Import-Module')
+        $text.IndexOf('Get-CiHostConfig') | Should -BeLessThan $text.IndexOf('1/9 Hyper-V')
     }
     It 'a cache volume is formatted before it gets a drive letter' {
         $text = Get-Content -Raw (Join-Path $installDir 'setup-host.ps1')
@@ -134,5 +143,16 @@ Describe 'install scripts' {
         $text | Should -Match 'github_pat_'
         $text | Should -Match 'Export-Clixml'
         $text | Should -Match 'Remove-Item -LiteralPath \$plainPath'
+    }
+    It 'store-token grants the account the task runs as and waits for the plaintext to be consumed' {
+        # The account comes from the task setup-host.ps1 (-Account) registered,
+        # never a literal; and Start-ScheduledTask returns before the task's
+        # state reads Running, so the wait watches the file, not the state.
+        $text = Get-Content -Raw (Join-Path $installDir 'store-token.ps1')
+        $text | Should -Match ([regex]::Escape('$account = [string]$task.Principal.UserId'))
+        $text | Should -Match ([regex]::Escape('/grant "${account}:(R,D,WA)"'))
+        $text | Should -Not -Match 'slate-ci-host:'
+        $text | Should -Match ([regex]::Escape('while ((Test-Path -LiteralPath $plainPath) -and (Get-Date) -lt $deadline) { Start-Sleep -Seconds 1 }'))
+        $text | Should -Not -Match "State -eq 'Running'"
     }
 }

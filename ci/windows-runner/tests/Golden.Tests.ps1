@@ -203,6 +203,19 @@ Describe 'golden scripts' {
         $disable | Should -BeGreaterThan $text.IndexOf("DefaultUserName -Value 'runner'")
         $disable | Should -BeLessThan $text.IndexOf('Restart-Computer -Force')
     }
+    It 'phase 1 removes every cached copy of the answer file and the build checks all three' {
+        # Setup caches the processed unattend, product key included, under
+        # Panther\Unattend and Sysprep\Panther as well as the file it ran from.
+        $guest = Get-Content -Raw (Join-Path $goldenDir 'provision-guest.ps1')
+        $guest | Should -Match ([regex]::Escape("Remove-Item -LiteralPath 'C:\Windows\Panther\unattend.xml' -Force"))
+        $guest | Should -Match ([regex]::Escape("Remove-Item -LiteralPath 'C:\Windows\Panther\Unattend' -Recurse -Force"))
+        $guest | Should -Match ([regex]::Escape("Get-ChildItem -LiteralPath 'C:\Windows\System32\Sysprep\Panther' -Filter '*.xml'"))
+        $build = Get-Content -Raw (Join-Path $goldenDir 'build-golden.ps1')
+        foreach ($cached in 'Windows\Panther\unattend.xml', 'Windows\Panther\Unattend"', 'Windows\System32\Sysprep\Panther\unattend.xml') {
+            $build | Should -Match ([regex]::Escape($cached)) -Because $cached
+        }
+        $build | Should -Match 'rendered unattend still present in the image'
+    }
     It 'the build script resolves -IsoPath to an absolute path before mounting it' {
         # Mount-DiskImage and Dismount-DiskImage need an absolute path.
         $text = Get-Content -Raw (Join-Path $goldenDir 'build-golden.ps1')

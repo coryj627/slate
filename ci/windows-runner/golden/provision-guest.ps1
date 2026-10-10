@@ -137,7 +137,12 @@ try {
     # DigitalProductId; clear it now (the image is activated) so no job can read it.
     & cscript.exe //B C:\Windows\System32\slmgr.vbs /cpky | Out-Null
     Remove-Item -LiteralPath (Join-Path $root 'secrets.json') -Force
+    # Setup keeps copies of the processed answer file, product key included
+    # (it blanks the passwords, not the key): the one it ran from, and its
+    # caches under Panther\Unattend and Sysprep\Panther.
     Remove-Item -LiteralPath 'C:\Windows\Panther\unattend.xml' -Force -ErrorAction SilentlyContinue
+    Remove-Item -LiteralPath 'C:\Windows\Panther\Unattend' -Recurse -Force -ErrorAction SilentlyContinue
+    Get-ChildItem -LiteralPath 'C:\Windows\System32\Sysprep\Panther' -Filter '*.xml' -ErrorAction SilentlyContinue | Remove-Item -Force -ErrorAction SilentlyContinue
     Remove-Item -LiteralPath $dl -Recurse -Force
     # Auto-logon is runner's now and nothing needs the temporary admin again;
     # disabling the logged-on account takes effect at its next logon.

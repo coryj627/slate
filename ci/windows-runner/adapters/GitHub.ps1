@@ -15,6 +15,8 @@ $script:GhToken = $null
 # that takes one message and logs it at warn. Test-GhRateBudget calls it.
 $script:GhLowBudgetWarning = $null
 $script:GhLowBudgetWarnedReset = $null
+# Path -> @{ ETag; Body; UsedAt } for the conditional listing calls.
+$script:GhEtags = @{}
 
 function Initialize-GitHubAdapter {
     [CmdletBinding()]
@@ -29,7 +31,7 @@ function Initialize-GitHubAdapter {
 
 function Invoke-GhApi {
     [CmdletBinding()]
-    param([string]$Method = 'GET', [Parameter(Mandatory)][string]$Path, $Body)
+    param([string]$Method = 'GET', [Parameter(Mandatory)][string]$Path, $Body, [switch]$Conditional)
     if (-not $script:GhBase) { throw 'Initialize-GitHubAdapter has not been called' }
     # Decoded inline, never into a variable: Set-PSDebug -Trace 2 prints every assignment.
     $headers = @{
@@ -37,13 +39,29 @@ function Invoke-GhApi {
         Accept                 = 'application/vnd.github+json'
         'X-GitHub-Api-Version' = '2022-11-28'
     }
+    # Conditional: the listings the loop repeats every tick send back the
+    # ETag GitHub gave last time. An unchanged answer is a 304 with no body,
+    # served from the cache here, and GitHub does not count it against the
+    # hourly limit.
+    $cached = $null
+    if ($Conditional -and $script:GhEtags.ContainsKey($Path)) {
+        $cached = $script:GhEtags[$Path]
+        $headers['If-None-Match'] = [string]$cached.ETag
+    }
     # Debug = $false: the web cmdlets' debug stream prints the request
     # headers (the token) and the response body (a JIT config), so neither
     # -Debug nor an inherited $DebugPreference may trace this call.
     # OperationTimeoutSeconds: since 7.4 TimeoutSec bounds only the connection and response headers; a stalled body would block the loop.
     # ResponseHeadersVariable: the cmdlet sets ghResponseHeaders in this scope (the rate-limit headers).
     $ghResponseHeaders = $null
+    $ghStatusCode = 0
     $params = @{ Method = $Method; Uri = "$($script:GhBase)$Path"; Headers = $headers; TimeoutSec = 30; OperationTimeoutSeconds = 30; UserAgent = 'slate-ci-host'; Debug = $false; ResponseHeadersVariable = 'ghResponseHeaders' }
+    if ($Conditional) {
+        # The cmdlet would raise a 304 as a failure; every status is read here
+        # instead, and any failure is raised below from what GitHub reported.
+        $params.SkipHttpErrorCheck = $true
+        $params.StatusCodeVariable = 'ghStatusCode'
+    }
     if ($null -ne $Body) {
         $params.Body = $Body | ConvertTo-Json -Compress -Depth 5
         $params.ContentType = 'application/json'
@@ -61,7 +79,33 @@ function Invoke-GhApi {
         throw
     }
     Test-GhRateBudget -Headers $ghResponseHeaders
+    if (-not $Conditional) { return $response }
+    if ($ghStatusCode -eq 304 -and $null -ne $cached) {
+        $cached.UsedAt = [datetimeoffset]::UtcNow
+        return $cached.Body
+    }
+    if ($ghStatusCode -lt 200 -or $ghStatusCode -ge 300) {
+        # The shape the web cmdlets give a failure: the status, then GitHub's
+        # reply on the following lines (the runbook greps "status": "403").
+        throw "GitHub API $ghStatusCode for ${Path}: $($response | ConvertTo-Json -Depth 3)"
+    }
+    $etag = [string](Get-GhHeader -Headers $ghResponseHeaders -Name 'ETag')
+    if ($etag) { $script:GhEtags[$Path] = @{ ETag = $etag; Body = $response; UsedAt = [datetimeoffset]::UtcNow } }
+    else { $script:GhEtags.Remove($Path) }
+    Limit-GhEtagCache
     return $response
+}
+
+function Limit-GhEtagCache {
+    # Paths come and go with the runs they name: once the cache passes 200
+    # entries, only the ones used in the last hour stay.
+    [CmdletBinding()]
+    param()
+    if ($script:GhEtags.Count -le 200) { return }
+    $cutoff = [datetimeoffset]::UtcNow.AddHours(-1)
+    foreach ($key in @($script:GhEtags.Keys)) {
+        if ($script:GhEtags[$key].UsedAt -lt $cutoff) { $script:GhEtags.Remove($key) }
+    }
 }
 
 function Get-GhHeader {
@@ -108,13 +152,15 @@ function Get-GhQueuedLaneJobs {
     # into two VMs. Only the routed workflows (config RoutedWorkflows)
     # carry lane labels, so only their runs' jobs are read. Cost per tick:
     # two listing calls plus one jobs call per queued or in-progress
-    # routed run.
+    # routed run, each conditional: an unchanged answer is a 304, which
+    # GitHub does not count against the hourly limit, so an idle loop
+    # spends next to nothing.
     [CmdletBinding()]
     param([Parameter(Mandatory)][string[]]$RoutedWorkflows)
     $jobs = @()
     $seenRuns = @{}
     foreach ($status in 'queued', 'in_progress') {
-        $runs = Invoke-GhApi -Path "/actions/runs?status=$status&per_page=100"
+        $runs = Invoke-GhApi -Path "/actions/runs?status=$status&per_page=100" -Conditional
         foreach ($run in @($runs.workflow_runs)) {
             $runKey = [string]$run.id
             if ($seenRuns.ContainsKey($runKey)) { continue }
@@ -125,7 +171,7 @@ function Get-GhQueuedLaneJobs {
             $workflow = ''
             if ($run.PSObject.Properties['path']) { $workflow = ([string]$run.path -split '@', 2)[0] }
             if ($RoutedWorkflows -cnotcontains $workflow) { continue }
-            $page = Invoke-GhApi -Path "/actions/runs/$($run.id)/jobs?filter=latest&per_page=100"
+            $page = Invoke-GhApi -Path "/actions/runs/$($run.id)/jobs?filter=latest&per_page=100" -Conditional
             foreach ($job in @($page.jobs)) {
                 if ($job.status -eq 'queued') { $jobs += $job }
             }

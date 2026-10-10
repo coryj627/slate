@@ -110,7 +110,11 @@ try {
     if (Test-Path -LiteralPath "$w\Users\runner\provision-runner-user-error.txt") { throw ('phase 2 failed: ' + (Get-Content -LiteralPath "$w\Users\runner\provision-runner-user-error.txt" -Raw)) }
     if (-not (Test-Path -LiteralPath "$w\Users\runner\.slate-golden-complete")) { throw 'completion marker C:\Users\runner\.slate-golden-complete missing' }
     if (Test-Path -LiteralPath "$w\provision\secrets.json") { throw 'secrets.json still present in the image' }
-    if (Test-Path -LiteralPath "$w\Windows\Panther\unattend.xml") { throw 'rendered unattend still present in the image' }
+    # The answer file Setup ran from and the copies it caches (the product
+    # key survives in them; phase 1 removes all three).
+    foreach ($cached in "$w\Windows\Panther\unattend.xml", "$w\Windows\Panther\Unattend", "$w\Windows\System32\Sysprep\Panther\unattend.xml") {
+        if (Test-Path -LiteralPath $cached) { throw "rendered unattend still present in the image: $cached" }
+    }
 } finally {
     Dismount-VHD -Path $OutPath
 }

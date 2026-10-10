@@ -169,12 +169,17 @@ function Test-VmExpired {
 }
 
 function Get-StaleRunnerNames {
+    # slate-win-* runners that no active VM owns. Offline ones by default: a
+    # running loop never touches a runner that may still take a job. The
+    # startup sweep passes -IncludeOnline, because every VM it does not keep
+    # is about to be turned off, and GitHub keeps reporting such a runner
+    # online for a while after that.
     [CmdletBinding()]
-    param([object[]]$Runners = @(), [string[]]$ActiveNames = @())
+    param([object[]]$Runners = @(), [string[]]$ActiveNames = @(), [switch]$IncludeOnline)
     $names = @()
     foreach ($runner in @($Runners)) {
         if ($null -eq $runner) { continue }
-        if ($runner.name -like 'slate-win-*' -and $runner.status -eq 'offline' -and ($ActiveNames -notcontains $runner.name)) {
+        if ($runner.name -like 'slate-win-*' -and ($IncludeOnline -or $runner.status -eq 'offline') -and ($ActiveNames -notcontains $runner.name)) {
             $names += [string]$runner.name
         }
     }
@@ -291,7 +296,7 @@ function Get-CiHostConfig {
     $config = Get-Content -Raw -LiteralPath $Path | ConvertFrom-Json -AsHashtable
     $required = 'Owner', 'Repo', 'Root', 'SwitchName', 'Gateway', 'Dns', 'Slots', 'Vcpu', 'MemoryGB', 'Lanes',
         'TickSeconds', 'HeartbeatTimeoutSeconds', 'UnclaimedTimeoutSeconds', 'RetryCap', 'RetryBackoffSeconds',
-        'TrustedRepo', 'TrustedBranch', 'TrustedEvents', 'RoutedWorkflows'
+        'TrustedRepo', 'TrustedBranch', 'TrustedEvents', 'RoutedWorkflows', 'NatPrefix'
     foreach ($key in $required) {
         if (-not $config.Contains($key)) { throw "config ${Path}: missing required key '$key'" }
     }
@@ -311,6 +316,18 @@ function Get-CiHostConfig {
         }
     }
     if ($null -eq $config.Slots -or @($config.Slots).Count -lt 1) { throw "config ${Path}: at least one slot is required" }
+    # One subnet for the host, the NAT and the guests: setup-host.ps1 creates
+    # NatPrefix, the loop hands its length to each guest as slate.prefix, so
+    # the gateway and every slot must lie inside it, or the VMs have no route.
+    $natPrefix = [string]$config.NatPrefix
+    if ($natPrefix -notmatch '^(\d{1,3}\.){3}\d{1,3}/([1-9]|[12]\d|3[0-2])$') { throw "config ${Path}: NatPrefix must be a.b.c.d/n with n from 1 to 32, got '$natPrefix'" }
+    if (-not (Test-IPv4InPrefix -Address ([string]$config.Gateway) -Prefix $natPrefix)) { throw "config ${Path}: Gateway $($config.Gateway) is outside NatPrefix $natPrefix" }
+    foreach ($slot in @($config.Slots)) {
+        if ($null -eq $slot -or -not ($slot -is [System.Collections.IDictionary]) -or -not $slot.Contains('Index') -or -not $slot.Contains('Ip')) { throw "config ${Path}: every slot needs Index and Ip" }
+        if (-not (Test-IPv4InPrefix -Address ([string]$slot.Ip) -Prefix $natPrefix)) { throw "config ${Path}: slot $($slot.Index) address $($slot.Ip) is outside NatPrefix $natPrefix" }
+        if ([string]$slot.Ip -eq [string]$config.Gateway) { throw "config ${Path}: slot $($slot.Index) uses the gateway address $($slot.Ip)" }
+    }
+    $config['PrefixLength'] = [int]($natPrefix -split '/')[1]
     $config['GoldenPath'] = Join-WinPath $config.Root 'golden\win11-runner.vhdx'
     $config['CacheDir'] = Join-WinPath $config.Root 'cache'
     $config['VmDir'] = Join-WinPath $config.Root 'vms'
@@ -387,7 +404,12 @@ function Get-FreeSlots {
     [CmdletBinding()]
     param([Parameter(Mandatory)]$Config, [Parameter(Mandatory)]$Journal)
     $used = @{}
-    foreach ($vm in $Journal.Vms.Values) { $used[[string]$vm.Slot] = $true }
+    foreach ($vm in $Journal.Vms.Values) {
+        # An Off VM waiting to merge its cache (PendingCommit) holds no CPU,
+        # memory or address: its slot serves the next job meanwhile.
+        if ($vm.Contains('PendingCommit') -and $vm['PendingCommit']) { continue }
+        $used[[string]$vm.Slot] = $true
+    }
     $free = @()
     foreach ($slot in @($Config.Slots | Sort-Object { [int]$_.Index })) {
         if (-not $used.ContainsKey([string]$slot.Index)) { $free += $slot }
@@ -571,11 +593,12 @@ function Update-ActiveVm {
         Remove-ActiveVm -Config $Config -Journal $Journal -Adapters $Adapters -Name $Name -Reason "vm state $state" -Retry $true -Now $Now
         return
     }
-    if ($vm.Phase -eq 'provisioned' -or $vm.Phase -eq 'handed') {
+    if (($vm.Phase -eq 'provisioned' -or $vm.Phase -eq 'handed') -and -not $vm.Claimed) {
         # A failed guest bootstrap publishes slate.error and stays up 30 s;
         # Hyper-V exposes guest KVP items only while the VM runs, so keep it
-        # now for the settle log. Best effort, never fatal. Index syntax: a
-        # missing key would throw under strict mode as a property.
+        # now for the settle log. Best effort, never fatal. Once the runner
+        # is claimed the bootstrap is behind it, so the WMI read stops. Index
+        # syntax: a missing key would throw under strict mode as a property.
         try { $guestError = & $Adapters.GetGuestError $Name } catch { $guestError = $null }
         if ($guestError -and [string]$guestError -ne [string]$vm['GuestError']) {
             $vm['GuestError'] = [string]$guestError
@@ -597,6 +620,7 @@ function Update-ActiveVm {
                 $items['slate.lane'] = [string]$vm.Lane
                 $items['slate.ip'] = [string]$vm.SlotIp
                 $items['slate.gateway'] = [string]$Config.Gateway
+                $items['slate.prefix'] = [string]$Config.PrefixLength
                 $items['slate.dns'] = [string]$Config.Dns
                 $items['slate.cache'] = $(if ($vm.CachePath) { '1' } else { '0' })
                 $items['slate.job'] = [string]$vm.JobId
@@ -625,6 +649,11 @@ function Update-ActiveVm {
         $waited = ($Now - $handedAt).TotalSeconds
         $timeout = [int]$Config.UnclaimedTimeoutSeconds
         if ($waited -ge $timeout) {
+            # Once a minute, not every tick: nothing changes between ticks and
+            # each check is two API calls (ClaimCheckedAt; index syntax, see above).
+            $checkedAt = $vm['ClaimCheckedAt']
+            if ($checkedAt -and ($Now - (ConvertTo-DateTimeOffset -Value $checkedAt)).TotalSeconds -lt 60) { return }
+            $vm['ClaimCheckedAt'] = $Now.ToString('o')
             $runner = & $Adapters.GetRunner $vm.RunnerId
             if ($null -ne $runner -and $runner.busy) {
                 $vm.Claimed = $true
@@ -664,6 +693,13 @@ function Invoke-Admission {
         $seen = ConvertTo-DateTimeOffset -Value $Journal.SeenJobs[$key].FirstSeenAt
         if ($Now -gt $seen.AddHours(24)) { $Journal.SeenJobs.Remove($key) }
     }
+    # A retry entry outlives its job by at most a day: GitHub drops a job
+    # from the queue after 24 h, so an older entry can only block a job id
+    # that no longer exists and grow the journal.
+    foreach ($key in @($Journal.Retries.Keys)) {
+        $next = ConvertTo-DateTimeOffset -Value $Journal.Retries[$key]['NextAt']
+        if ($Now -gt $next.AddHours(24)) { $Journal.Retries.Remove($key) }
+    }
     $free = @(Get-FreeSlots -Config $Config -Journal $Journal)
     $admit = @(Select-JobsToAdmit -Candidates $queued -ActiveVms $Journal.Vms -FreeSlots $free.Count -Retries $Journal.Retries -Now $Now -RetryCap ([int]$Config.RetryCap))
     for ($i = 0; $i -lt $admit.Count; $i++) {
@@ -677,7 +713,7 @@ function Invoke-Admission {
                 JobId = [int64]$job.JobId; RunId = [int64]$job.RunId
                 Dir = [string]$created.Dir; CachePath = $created.CachePath; ForkGeneration = [int]$created.ForkGeneration
                 Phase = 'provisioned'; StartedAt = $Now.ToString('o'); HandedAt = $null; RunnerId = $null; Claimed = $false; PendingCommit = $false
-                GuestError = $null; SettleWaits = 0
+                GuestError = $null; SettleWaits = 0; ClaimCheckedAt = $null
             }
             & $Adapters.StartVm $name
             & $Adapters.Log 'info' "${name}: provisioned for job $($job.JobId) (lane $($job.Lane), slot $($slot.Index), fork generation $($created.ForkGeneration))"
@@ -713,29 +749,51 @@ function Invoke-OrchestratorTick {
 }
 
 function Invoke-StartupSweep {
-    # After a host restart nothing in the journal can be trusted: every
-    # slate-win-* runner that is offline and every slate-win-* VM is
-    # removed (cache children die with their VM directory; parents are
-    # never touched) and the journal starts empty.
+    # Reconcile the journal with the host instead of trusting either. A VM
+    # the journal shows handed off (its JIT config delivered) that Hyper-V
+    # still reports Running is kept, with its slot, the seen jobs and the
+    # retries: a loop relaunch after a crash, or a manual run, must not
+    # kill the jobs in flight. Everything else goes: every other slate-win-*
+    # VM is turned off and removed (cache children die with their VM
+    # directory; parents are never touched), every slate-win-* runner no
+    # kept VM owns is deleted whatever its status (its VM is gone or about
+    # to be), and the journal keeps only the kept entries. A host reboot
+    # turns every VM off (AutomaticStopAction TurnOff), so after one nothing
+    # is kept and the journal starts empty. A VM still waiting for its
+    # handoff is never kept: the handoff is not idempotent (AddKvpItems
+    # rejects existing keys, a second JIT registration would leak a runner).
     [CmdletBinding()]
     param([Parameter(Mandatory)]$Config, [Parameter(Mandatory)]$Journal, [Parameter(Mandatory)][hashtable]$Adapters)
+    $kept = @{}
+    foreach ($name in @($Journal.Vms.Keys)) {
+        $vm = $Journal.Vms[$name]
+        if ($null -ne $vm -and $vm.Contains('Phase') -and $vm['Phase'] -eq 'handed' -and (& $Adapters.GetVmState $name) -eq 'Running') {
+            $kept[$name] = $true
+            & $Adapters.Log 'info' "sweep: kept running vm $name (job $($vm['JobId']), handed off)"
+        }
+    }
     $runners = @(& $Adapters.ListRunners)
-    foreach ($name in @(Get-StaleRunnerNames -Runners $runners)) {
+    foreach ($name in @(Get-StaleRunnerNames -Runners $runners -ActiveNames @($kept.Keys) -IncludeOnline)) {
         $runner = $runners | Where-Object { $_.name -eq $name } | Select-Object -First 1
         try { & $Adapters.RemoveRunner $runner.id; & $Adapters.Log 'info' "sweep: removed stale runner $name" }
         catch { & $Adapters.Log 'warn' "sweep: runner ${name}: $_" }
     }
     foreach ($name in @(& $Adapters.ListVms)) {
+        if ($kept.ContainsKey($name)) { continue }
         try {
             & $Adapters.StopVmForce $name
             & $Adapters.RemoveVm $name (Join-WinPath $Config.VmDir $name)
             & $Adapters.Log 'info' "sweep: removed vm $name"
         } catch { & $Adapters.Log 'warn' "sweep: vm ${name}: $_" }
     }
-    try { & $Adapters.CleanVmDirs @() } catch { & $Adapters.Log 'warn' "sweep: CleanVmDirs: $_" }
-    $Journal.Vms = @{}
-    $Journal.Retries = @{}
-    $Journal.SeenJobs = @{}
+    try { & $Adapters.CleanVmDirs @($kept.Keys) } catch { & $Adapters.Log 'warn' "sweep: CleanVmDirs: $_" }
+    foreach ($name in @($Journal.Vms.Keys)) {
+        if (-not $kept.ContainsKey($name)) { $Journal.Vms.Remove($name) }
+    }
+    if ($kept.Count -eq 0) {
+        $Journal.Retries = @{}
+        $Journal.SeenJobs = @{}
+    }
 }
 
 function Select-SlateKvpItems {
