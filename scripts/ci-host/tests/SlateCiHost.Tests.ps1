@@ -265,7 +265,10 @@ Describe 'Test-CommitEligible' {
         (& $eligible $goodJob $run $false 3 3).Eligible | Should -BeTrue
     }
     It 'refuses to decide without the forced-off flag and both generations' {
-        { Test-CommitEligible -Job $goodJob -Run $goodRun -RunnerName 'slate-win-app-deadbeef' } | Should -Throw
+        $parameters = (Get-Command Test-CommitEligible).Parameters
+        foreach ($name in 'ForcedOff', 'ParentGeneration', 'ForkGeneration') {
+            @($parameters[$name].Attributes | Where-Object { $_ -is [System.Management.Automation.ParameterAttribute] } | ForEach-Object { $_.Mandatory }) | Should -Contain $true -Because "$name must be supplied"
+        }
     }
     It 'discards a run from another repository' {
         $run = [pscustomobject]@{ event = 'push'; head_branch = 'main'; head_repository = [pscustomobject]@{ full_name = 'someone/slate' } }
