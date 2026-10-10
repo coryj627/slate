@@ -23,8 +23,14 @@ try {
     [Net.ServicePointManager]::SecurityProtocol = [Net.SecurityProtocolType]::Tls12
     Write-Log 'phase 2 start'
 
+    # The archived build of the pinned rustup version: the unversioned dist
+    # URL serves whatever rustup released last, which no hash can pin.
     $rustupInit = Join-Path $dl 'rustup-init.exe'
-    Invoke-WebRequest -Uri 'https://static.rust-lang.org/rustup/dist/x86_64-pc-windows-msvc/rustup-init.exe' -OutFile $rustupInit -UseBasicParsing
+    Invoke-WebRequest -Uri ('https://static.rust-lang.org/rustup/archive/{0}/x86_64-pc-windows-msvc/rustup-init.exe' -f $versions.rustupVersion) -OutFile $rustupInit -UseBasicParsing
+    if ($versions.rustupInitSha256) {
+        $actual = (Get-FileHash -LiteralPath $rustupInit -Algorithm SHA256).Hash.ToLowerInvariant()
+        if ($actual -ne ([string]$versions.rustupInitSha256).ToLowerInvariant()) { throw "sha256 mismatch for ${rustupInit}: $actual" }
+    }
     $process = Start-Process -FilePath $rustupInit -ArgumentList @('-y', '--no-modify-path', '--profile', 'minimal',
         '--default-toolchain', $versions.rustToolchain, '--component', 'rustfmt', '--component', 'clippy',
         '--target', 'aarch64-pc-windows-msvc') -Wait -PassThru -NoNewWindow

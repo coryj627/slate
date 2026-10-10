@@ -15,10 +15,23 @@ BeforeAll {
 Describe 'versions.json' {
     BeforeAll { $script:versions = Get-Content -Raw (Join-Path $goldenDir 'versions.json') | ConvertFrom-Json }
     It 'has every key the provisioning scripts read' {
-        foreach ($k in 'runnerVersion', 'runnerSha256', 'rustToolchain', 'bindgenTag', 'dotnetChannel', 'pythonVersion', 'gitVersion', 'gitTag', 'vsBuildToolsUrl', 'dns') {
-            $versions.PSObject.Properties[$k] | Should -Not -BeNullOrEmpty
+        foreach ($k in 'runnerVersion', 'runnerSha256', 'rustToolchain', 'bindgenTag', 'dotnetChannel', 'pythonVersion', 'pythonSha256',
+            'gitVersion', 'gitTag', 'gitSha256', 'rustupVersion', 'rustupInitSha256', 'vsBuildToolsUrl', 'dns') {
+            $versions.PSObject.Properties[$k] | Should -Not -BeNullOrEmpty -Because $k
         }
-        $versions.runnerSha256 | Should -Match '^[0-9a-f]{64}$'
+        foreach ($k in 'runnerSha256', 'pythonSha256', 'gitSha256', 'rustupInitSha256') {
+            $versions.$k | Should -Match '^[0-9a-f]{64}$' -Because $k
+        }
+        $versions.rustupVersion | Should -Match '^\d+\.\d+\.\d+$'
+    }
+    It 'records where each pinned download hash was published, for the pinned version' {
+        # JSON has no comments: the sources object names each hash's origin.
+        foreach ($k in 'pythonSha256', 'gitSha256', 'rustupInitSha256') {
+            $versions.sources.$k | Should -Match '^https://' -Because $k
+        }
+        $versions.sources.pythonSha256 | Should -BeLike ('*/python-{0}/' -f ($versions.pythonVersion -replace '\.', ''))
+        $versions.sources.gitSha256 | Should -BeLike "*/releases/tag/$($versions.gitTag)"
+        $versions.sources.rustupInitSha256 | Should -BeLike "*/rustup/archive/$($versions.rustupVersion)/x86_64-pc-windows-msvc/rustup-init.exe.sha256"
     }
     It 'pins the Rust toolchain the repository pins' {
         $toml = Get-Content -Raw (Join-Path $repoRoot 'rust-toolchain.toml')
@@ -81,6 +94,24 @@ Describe 'golden scripts' {
         $text | Should -Match 'slmgr\.vbs /cpky'
         $text | Should -Match "Destination 'C:\\slate-guest'"
         $text | Should -Match 'C:\\slate-guest\\bootstrap-system\.ps1'
+    }
+    It 'phase 1 checks the runner, Python and Git downloads against their pinned SHA-256' {
+        $code = @((Get-Content -Raw (Join-Path $goldenDir 'provision-guest.ps1')) -split "`n" | Where-Object { $_ -notmatch '^\s*#' })
+        @($code | Where-Object { $_ -match '^\s*Get-Download .*\(Join-Path \$dl ''python\.exe''\) \$versions\.pythonSha256\s*$' }).Count | Should -Be 1
+        @($code | Where-Object { $_ -match '^\s*Get-Download .*\(Join-Path \$dl ''git\.exe''\) \$versions\.gitSha256\s*$' }).Count | Should -Be 1
+        @($code | Where-Object { $_ -match '^\s*Get-Download .*\$zip \$versions\.runnerSha256\s*$' }).Count | Should -Be 1
+    }
+    It 'phase 2 downloads the pinned rustup-init and checks its SHA-256 before running it' {
+        # The unversioned rustup-init URL changes with every rustup release,
+        # so the hash pins the archived build of rustupVersion.
+        $text = Get-Content -Raw (Join-Path $goldenDir 'provision-runner-user.ps1')
+        $text | Should -Match ([regex]::Escape("'https://static.rust-lang.org/rustup/archive/{0}/x86_64-pc-windows-msvc/rustup-init.exe' -f `$versions.rustupVersion"))
+        $text | Should -Not -Match ([regex]::Escape('rustup/dist/'))
+        $hash = $text.IndexOf('Get-FileHash -LiteralPath $rustupInit -Algorithm SHA256')
+        $hash | Should -BeGreaterThan $text.IndexOf('Invoke-WebRequest')
+        $hash | Should -BeLessThan $text.IndexOf('Start-Process -FilePath $rustupInit')
+        $text | Should -Match ([regex]::Escape('$versions.rustupInitSha256'))
+        $text | Should -Match 'sha256 mismatch'
     }
     It 'the per-user script installs the pinned toolchain and writes the completion marker last' {
         $text = Get-Content -Raw (Join-Path $goldenDir 'provision-runner-user.ps1')

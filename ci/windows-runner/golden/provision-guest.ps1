@@ -75,10 +75,11 @@ try {
     $machinePath = [Environment]::GetEnvironmentVariable('Path', 'Machine')
     [Environment]::SetEnvironmentVariable('Path', "C:\dotnet;$machinePath", 'Machine')
 
-    Get-Download ('https://www.python.org/ftp/python/{0}/python-{0}-amd64.exe' -f $versions.pythonVersion) (Join-Path $dl 'python.exe')
+    # Hash-pinned in versions.json (its sources object names where each was published).
+    Get-Download ('https://www.python.org/ftp/python/{0}/python-{0}-amd64.exe' -f $versions.pythonVersion) (Join-Path $dl 'python.exe') $versions.pythonSha256
     Invoke-Installer (Join-Path $dl 'python.exe') '/quiet InstallAllUsers=1 PrependPath=1 Include_test=0'
 
-    Get-Download ('https://github.com/git-for-windows/git/releases/download/{0}/Git-{1}-64-bit.exe' -f $versions.gitTag, $versions.gitVersion) (Join-Path $dl 'git.exe')
+    Get-Download ('https://github.com/git-for-windows/git/releases/download/{0}/Git-{1}-64-bit.exe' -f $versions.gitTag, $versions.gitVersion) (Join-Path $dl 'git.exe') $versions.gitSha256
     Invoke-Installer (Join-Path $dl 'git.exe') '/VERYSILENT /NORESTART /NOCANCEL /SP- /o:PathOption=Cmd'
 
     # The runner, hash-verified, plus the guest tasks' scripts and the module.
