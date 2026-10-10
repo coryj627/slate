@@ -16,12 +16,15 @@ $script:DefaultLanes = @('rust', 'app', 'model', 'shell')
 function Get-LaneFromLabels {
     # Exactly one slate-win-<lane> label selects a lane; zero or two mean
     # the job is not ours (a PR can put any label it likes in runs-on).
+    # GitHub matches labels case-insensitively, so the lane is lower-cased:
+    # it becomes a config key and part of the runner name.
     [CmdletBinding()]
     param([string[]]$Labels = @(), [string[]]$Lanes = $script:DefaultLanes)
     $found = @()
     foreach ($label in @($Labels)) {
-        if ($label -match '^slate-win-([a-z]+)$' -and $Lanes -contains $Matches[1]) {
-            $found += $Matches[1]
+        if ($label -match '^slate-win-([a-z]+)$') {
+            $lane = $Matches[1].ToLowerInvariant()
+            if ($Lanes -contains $lane) { $found += $lane }
         }
     }
     if ($found.Count -eq 1) { return $found[0] }

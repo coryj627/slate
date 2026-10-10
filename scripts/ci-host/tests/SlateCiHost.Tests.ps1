@@ -24,6 +24,9 @@ Describe 'Get-LaneFromLabels' {
     It 'handles an empty label list' {
         Get-LaneFromLabels -Labels @() | Should -BeNullOrEmpty
     }
+    It 'normalises the lane to lower case' {
+        Get-LaneFromLabels -Labels @('SLATE-WIN-APP') | Should -BeExactly 'app'
+    }
 }
 
 Describe 'New-RunnerName' {
