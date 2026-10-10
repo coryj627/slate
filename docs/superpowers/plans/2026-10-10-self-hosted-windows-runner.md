@@ -1842,29 +1842,31 @@ BeforeAll {
     }
 
     function New-FakeAdapters {
-        $record = { param($name, $arguments) [void]$script:calls.Add(@{ Name = $name; Args = @($arguments) }) }
+        # The module invokes these long after this function returned, so
+        # everything they touch lives at $script: scope (never a local).
+        $script:record = { param($name, $arguments) [void]$script:calls.Add(@{ Name = $name; Args = @($arguments) }) }
         $a = @{
-            GetQueuedJobs = { & $record 'GetQueuedJobs' @(); @($script:world.Queued) }
-            GetJob        = { param($id) & $record 'GetJob' @($id); $script:world.Jobs[[string]$id] }
-            GetRun        = { param($id) & $record 'GetRun' @($id); $script:world.Runs[[string]$id] }
-            NewJitRunner  = { param($name, $labels) & $record 'NewJitRunner' @($name, $labels); @{ RunnerId = 77; EncodedJitConfig = $script:world.JitConfig } }
-            RemoveRunner  = { param($id) & $record 'RemoveRunner' @($id) }
-            GetRunner     = { param($id) & $record 'GetRunner' @($id); $script:world.Runner }
-            ListRunners   = { & $record 'ListRunners' @(); @($script:world.Runners) }
-            NewVm         = { param($name, $lane) & $record 'NewVm' @($name, $lane)
+            GetQueuedJobs = { & $script:record 'GetQueuedJobs' @(); @($script:world.Queued) }
+            GetJob        = { param($id) & $script:record 'GetJob' @($id); $script:world.Jobs[[string]$id] }
+            GetRun        = { param($id) & $script:record 'GetRun' @($id); $script:world.Runs[[string]$id] }
+            NewJitRunner  = { param($name, $labels) & $script:record 'NewJitRunner' @($name, $labels); @{ RunnerId = 77; EncodedJitConfig = $script:world.JitConfig } }
+            RemoveRunner  = { param($id) & $script:record 'RemoveRunner' @($id) }
+            GetRunner     = { param($id) & $script:record 'GetRunner' @($id); $script:world.Runner }
+            ListRunners   = { & $script:record 'ListRunners' @(); @($script:world.Runners) }
+            NewVm         = { param($name, $lane) & $script:record 'NewVm' @($name, $lane)
                               $cache = $null; if ($lane -ne 'shell') { $cache = "C:\slate-ci\vms\$name\cache.vhdx" }
                               @{ Dir = "C:\slate-ci\vms\$name"; CachePath = $cache; ForkGeneration = $script:world.Generation } }
-            StartVm       = { param($name) & $record 'StartVm' @($name) }
-            GetVmState    = { param($name) & $record 'GetVmState' @($name); if ($script:world.VmStates.ContainsKey($name)) { $script:world.VmStates[$name] } else { 'Running' } }
-            GetHeartbeat  = { param($name) & $record 'GetHeartbeat' @($name); $script:world.Heartbeat }
-            SendKvp       = { param($name, $items) & $record 'SendKvp' @($name, $items) }
-            StopVmForce   = { param($name) & $record 'StopVmForce' @($name) }
-            RemoveVm      = { param($name, $dir) & $record 'RemoveVm' @($name, $dir) }
-            ListVms       = { & $record 'ListVms' @(); @($script:world.Vms) }
-            CleanVmDirs   = { param($active) & $record 'CleanVmDirs' @($active) }
-            GetGeneration = { param($lane) & $record 'GetGeneration' @($lane); $script:world.Generation }
-            CommitCache   = { param($lane, $child) & $record 'CommitCache' @($lane, $child); $script:world.Generation + 1 }
-            DiscardCache  = { param($child) & $record 'DiscardCache' @($child) }
+            StartVm       = { param($name) & $script:record 'StartVm' @($name) }
+            GetVmState    = { param($name) & $script:record 'GetVmState' @($name); if ($script:world.VmStates.ContainsKey($name)) { $script:world.VmStates[$name] } else { 'Running' } }
+            GetHeartbeat  = { param($name) & $script:record 'GetHeartbeat' @($name); $script:world.Heartbeat }
+            SendKvp       = { param($name, $items) & $script:record 'SendKvp' @($name, $items) }
+            StopVmForce   = { param($name) & $script:record 'StopVmForce' @($name) }
+            RemoveVm      = { param($name, $dir) & $script:record 'RemoveVm' @($name, $dir) }
+            ListVms       = { & $script:record 'ListVms' @(); @($script:world.Vms) }
+            CleanVmDirs   = { param($active) & $script:record 'CleanVmDirs' @($active) }
+            GetGeneration = { param($lane) & $script:record 'GetGeneration' @($lane); $script:world.Generation }
+            CommitCache   = { param($lane, $child) & $script:record 'CommitCache' @($lane, $child); $script:world.Generation + 1 }
+            DiscardCache  = { param($child) & $script:record 'DiscardCache' @($child) }
             Log           = { param($level, $message) [void]$script:logs.Add("[$level] $message") }
         }
         return $a
@@ -1887,6 +1889,8 @@ BeforeAll {
     $script:t0 = [datetimeoffset]::Parse('2026-10-10T12:00:00Z')
 }
 
+Describe 'orchestrator' {
+
 BeforeEach {
     New-World
     $script:config = Get-CiHostConfig -Path (Join-Path $PSScriptRoot '..' 'config.json')
@@ -1894,7 +1898,7 @@ BeforeEach {
     $script:adapters = New-FakeAdapters
 }
 
-Describe 'admission' {
+Context 'admission' {
     It 'admits a queued app job into slot 1 and starts a VM' {
         $world.Queued = @((New-QueuedJob 1 10 'app'))
         Invoke-OrchestratorTick -Config $config -Journal $journal -Adapters $adapters -Now $t0
@@ -1938,7 +1942,7 @@ Describe 'admission' {
     }
 }
 
-Describe 'handoff' {
+Context 'handoff' {
     BeforeEach {
         $world.Queued = @((New-QueuedJob 1 10 'app'))
         $world.Heartbeat = 'NoContact'
@@ -1986,7 +1990,7 @@ Describe 'handoff' {
     }
 }
 
-Describe 'settle' {
+Context 'settle' {
     BeforeEach {
         $world.Queued = @((New-QueuedJob 1 10 'app'))
         Invoke-OrchestratorTick -Config $config -Journal $journal -Adapters $adapters -Now $t0                   # tick 1: provision
@@ -2057,7 +2061,7 @@ Describe 'settle' {
     }
 }
 
-Describe 'shell lane' {
+Context 'shell lane' {
     It 'has no cache: neither commit nor discard on completion' {
         $world.Queued = @((New-QueuedJob 5 50 'shell'))
         Invoke-OrchestratorTick -Config $config -Journal $journal -Adapters $adapters -Now $t0                   # provision
@@ -2076,7 +2080,7 @@ Describe 'shell lane' {
     }
 }
 
-Describe 'handed-phase guards' {
+Context 'handed-phase guards' {
     BeforeEach {
         $world.Queued = @((New-QueuedJob 1 10 'model'))
         Invoke-OrchestratorTick -Config $config -Journal $journal -Adapters $adapters -Now $t0                   # provision
@@ -2127,7 +2131,7 @@ Describe 'handed-phase guards' {
     }
 }
 
-Describe 'Invoke-StartupSweep' {
+Context 'Invoke-StartupSweep' {
     It 'removes stale slate-win runners and leftover VMs, cleans directories, resets the journal' {
         $world.Runners = @(
             [pscustomobject]@{ id = 1; name = 'slate-win-app-aaaaaaaa'; status = 'offline' },
@@ -2146,6 +2150,8 @@ Describe 'Invoke-StartupSweep' {
         $journal.Vms.Count | Should -Be 0
         $journal.Retries.Count | Should -Be 0
     }
+}
+
 }
 ```
 
