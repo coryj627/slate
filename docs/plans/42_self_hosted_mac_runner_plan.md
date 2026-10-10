@@ -848,6 +848,26 @@ parallel with them.
   image now installs the real hook from `ci/mac-runner/hook/`, so the
   toolchain and warm layers must be rebuilt before Phase 3.
 - **D8** stays open until the LaunchDaemon test has run.
+- **Phase 3 step 1, first controller start (2026-10-10).** The owner loaded
+  both LaunchDaemons. The controller ran as `slate-ci` under launchd,
+  reached GitHub with the token, read the cached allow-list, cloned the warm
+  image, and then every `tart run` failed within seconds:
+  `VZErrorDomain Code=-9 "The virtual machine encountered a security
+  error" ... Failed to get current host key ... Failed to create new
+  HostKey`. The same command succeeds from the owner's session via sudo.
+  Virtualization.framework stores a per-user host key in the **login**
+  keychain, so a daemon needs that keychain unlockable (Tart FAQ, "headless
+  machines", added 2025-10-08 after openai/tart#1132). A different keychain
+  set as default and unlocked does not satisfy it, and `security
+  login-keychain -s` is refused on macOS 27. `slate-ci`'s
+  `login.keychain-db`, created by `security create-keychain`, refuses its
+  own password, which fits the login keychain being bound to the account
+  password; `slate-ci`'s was random and discarded. Fix in progress: the
+  owner sets `slate-ci`'s account password to the stored keychain password,
+  the login keychain is recreated with it, and the controller unlocks it at
+  start. Two defects found on the way were fixed first: a controller log
+  line that swallowed the failure reason, and `admin-setup.sh` reinstalling
+  Homebrew's Softnet 0.24.0 over 0.24.1 on a plain re-run.
 - **PR A opened 2026-10-10:** coryj627/slate#1335, branch
   `ci/mac-runner-phase2`, with everything above. Its hosted checks are the
   first runs under the workflow execution policy.

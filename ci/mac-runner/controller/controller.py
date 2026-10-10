@@ -191,31 +191,21 @@ def unlock_keychain():
     except OSError:
         log("keychain: no password file; skipping")
         return
-    # `security login-keychain -s` is refused on macOS 27, so slate.keychain is
-    # made the default keychain and first in the search list instead; created
-    # here with the stored password if it does not exist yet.
-    slate_kc = os.path.join(HOME, "Library/Keychains/slate.keychain-db")
+    # The framework stores its host key in the *login* keychain, so that is
+    # the one to unlock. A login keychain made with `security create-keychain`
+    # refuses its own password on macOS 27; the account has to log in once so
+    # loginwindow creates it, with the account password (Tart FAQ, "headless
+    # machines"). The stored password is that account password.
     login_kc = os.path.join(HOME, "Library/Keychains/login.keychain-db")
-    if not os.path.exists(slate_kc):
-        res = run(["security", "create-keychain", "-p", password, slate_kc], timeout=20)
-        log("keychain: created slate.keychain ({})".format("ok" if res.returncode == 0 else res.stderr.decode(errors="replace").strip()))
-        run(["security", "set-keychain-settings", slate_kc], timeout=20)
-    default = run(["security", "default-keychain", "-d", "user"], timeout=20).stdout.decode(errors="replace").strip().strip('"')
-    if default != slate_kc:
-        run(["security", "default-keychain", "-d", "user", "-s", slate_kc], timeout=20)
-        search = [slate_kc] + ([login_kc] if os.path.exists(login_kc) else [])
-        run(["security", "list-keychains", "-d", "user", "-s"] + search, timeout=20)
-        default = run(["security", "default-keychain", "-d", "user"], timeout=20).stdout.decode(errors="replace").strip().strip('"')
-        log("keychain: default set to {}".format(default))
-    targets = [t for t in (default, "login.keychain") if t]
-    for target in targets:
-        res = run(["security", "unlock-keychain", "-p", password, target], timeout=20)
-        if res.returncode == 0:
-            log("keychain: unlocked {}".format(target))
-        else:
-            log("keychain: could NOT unlock {}: {}".format(target, res.stderr.decode(errors="replace").strip()))
-    listing = run(["security", "list-keychains", "-d", "user"], timeout=20).stdout.decode(errors="replace")
-    log("keychain: search list {}".format(" ".join(listing.split())))
+    if not os.path.exists(login_kc):
+        log("keychain: {} does not exist; log in once as this account to create it".format(login_kc))
+        return
+    res = run(["security", "unlock-keychain", "-p", password, "login.keychain"], timeout=20)
+    if res.returncode == 0:
+        run(["security", "set-keychain-settings", "login.keychain"], timeout=20)  # no auto-lock
+        log("keychain: unlocked login.keychain")
+    else:
+        log("keychain: could NOT unlock login.keychain: {}".format(res.stderr.decode(errors="replace").strip()))
 
 
 # --- heartbeat --------------------------------------------------------------
