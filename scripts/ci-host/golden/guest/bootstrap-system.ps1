@@ -1,0 +1,104 @@
+# Copyright (C) 2026 Cory Joseph
+# SPDX-License-Identifier: AGPL-3.0-or-later
+#
+# Guest task slate-bootstrap-system: SYSTEM, at startup, Windows
+# PowerShell 5.1. A no-op until the golden build's completion marker
+# exists (so it stays quiet during the image build). Reads the host's
+# KVP items, configures the static network, finds the cache volume,
+# writes .env and jit.cfg for the runner task, then signals `ready`.
+# Any failure writes bootstrap-error.txt and shuts the VM down; the host
+# sees Off, resolves no successful job, and discards.
+$ErrorActionPreference = 'Stop'
+$runnerDir = 'C:\actions-runner'
+$marker = 'C:\Users\runner\.slate-golden-complete'
+$logPath = Join-Path $runnerDir 'bootstrap-system.log'
+
+function Write-Log([string]$Message) {
+    Add-Content -LiteralPath $logPath -Value ('{0:o} {1}' -f (Get-Date), $Message)
+}
+
+if (-not (Test-Path -LiteralPath $marker)) { exit 0 }
+
+try {
+    foreach ($stale in 'ready', 'jit.cfg', 'bootstrap-error.txt') {
+        Remove-Item -LiteralPath (Join-Path $runnerDir $stale) -Force -ErrorAction SilentlyContinue
+    }
+    # Inside the try: a missing or unloadable module copy is a bootstrap
+    # failure like any other (error file and shutdown), not a silent exit.
+    Import-Module 'C:\slate-guest\SlateCiHost.psm1' -Force
+    Write-Log 'waiting for KVP items'
+    $kvpKey = 'HKLM:\SOFTWARE\Microsoft\Virtual Machine\External'
+    # The host sends the JIT chunks first and these items after them in
+    # one AddKvpItems call; the guest applies items one at a time, so a
+    # poll can see the whole JIT config before the rest. Wait for all.
+    $requiredItems = 'slate.ip', 'slate.gateway', 'slate.dns', 'slate.cache', 'slate.lane'
+    $deadline = (Get-Date).AddSeconds(300)
+    $items = @{}
+    $jit = $null
+    while ((Get-Date) -lt $deadline) {
+        if (Test-Path -LiteralPath $kvpKey) {
+            $items = Select-SlateKvpItems -Properties (Get-ItemProperty -LiteralPath $kvpKey)
+            $jit = Join-KvpChunks -Items $items
+            if ($jit -and @($requiredItems | Where-Object { -not $items.Contains($_) }).Count -eq 0) { break }
+        }
+        Start-Sleep -Seconds 2
+    }
+    if (-not $jit) { throw 'no JIT config arrived within 300 s' }
+    foreach ($required in $requiredItems) {
+        if (-not $items.Contains($required)) { throw "KVP item $required missing" }
+    }
+    Write-Log ('config received: lane {0}, job {1}' -f $items['slate.lane'], $items['slate.job'])
+
+    $adapter = Get-NetAdapter | Where-Object { $_.Status -eq 'Up' } | Sort-Object ifIndex | Select-Object -First 1
+    if (-not $adapter) { throw 'no network adapter is up' }
+    Set-NetIPInterface -InterfaceIndex $adapter.ifIndex -AddressFamily IPv4 -Dhcp Disabled
+    Get-NetIPAddress -InterfaceIndex $adapter.ifIndex -AddressFamily IPv4 -ErrorAction SilentlyContinue |
+        Remove-NetIPAddress -Confirm:$false -ErrorAction SilentlyContinue
+    Get-NetRoute -InterfaceIndex $adapter.ifIndex -DestinationPrefix '0.0.0.0/0' -ErrorAction SilentlyContinue |
+        Remove-NetRoute -Confirm:$false -ErrorAction SilentlyContinue
+    New-NetIPAddress -InterfaceIndex $adapter.ifIndex -IPAddress $items['slate.ip'] -PrefixLength 24 -DefaultGateway $items['slate.gateway'] | Out-Null
+    Set-DnsClientServerAddress -InterfaceIndex $adapter.ifIndex -ServerAddresses ($items['slate.dns'] -split ',')
+    Write-Log ('network: {0} via {1}' -f $items['slate.ip'], $items['slate.gateway'])
+
+    $envLines = @()
+    if ($items['slate.cache'] -eq '1') {
+        $volume = $null
+        $volumeDeadline = (Get-Date).AddSeconds(90)
+        while (-not $volume -and (Get-Date) -lt $volumeDeadline) {
+            $volume = Get-Volume -FileSystemLabel 'slate-cache' -ErrorAction SilentlyContinue |
+                Where-Object { $_.DriveLetter } | Select-Object -First 1
+            if (-not $volume) { Start-Sleep -Seconds 3 }
+        }
+        if (-not $volume) { throw 'cache volume slate-cache did not mount' }
+        $root = '{0}:\cache' -f $volume.DriveLetter
+        foreach ($sub in 'cargo\registry', 'cargo\git', 'target', 'nuget') {
+            New-Item -ItemType Directory -Force -Path (Join-Path $root $sub) | Out-Null
+        }
+        $envLines += "NSC_CACHE_PATH=$root"
+        $envLines += "CARGO_TARGET_DIR=$root\target"
+        $envLines += "NUGET_PACKAGES=$root\nuget"
+        $envLines += "SLATE_CACHE_ROOT=$root"
+        # The volume letter is not fixed, so the Defender exclusion is added here.
+        Add-MpPreference -ExclusionPath $root -ErrorAction SilentlyContinue
+        Write-Log "cache at $root"
+    }
+    Set-Content -LiteralPath (Join-Path $runnerDir '.env') -Value $envLines -Encoding ascii
+
+    $cfgPath = Join-Path $runnerDir 'jit.cfg'
+    Set-Content -LiteralPath $cfgPath -Value $jit -NoNewline -Encoding ascii
+    & icacls.exe $cfgPath /inheritance:r /grant 'runner:R' /grant 'SYSTEM:F' | Out-Null
+    # A native command's failure never throws, even under Stop: check it,
+    # so jit.cfg is never handed over with its inherited ACL.
+    if ($LASTEXITCODE -ne 0) { throw "icacls exited $LASTEXITCODE restricting jit.cfg" }
+    Set-Content -LiteralPath (Join-Path $runnerDir 'ready') -Value 'ok'
+    Write-Log 'ready'
+} catch {
+    $failure = [string]$_
+    try {
+        Write-Log "ERROR: $failure"
+        Set-Content -LiteralPath (Join-Path $runnerDir 'bootstrap-error.txt') -Value $failure
+    } finally {
+        # Shut down even when the log or the error file cannot be written.
+        & shutdown.exe /s /t 5 /c 'slate bootstrap failed'
+    }
+}

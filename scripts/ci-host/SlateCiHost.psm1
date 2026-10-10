@@ -659,6 +659,21 @@ function Invoke-StartupSweep {
     $Journal.SeenJobs = @{}
 }
 
+function Select-SlateKvpItems {
+    # Guest side: the host's KVP items appear as registry values under
+    # HKLM\SOFTWARE\Microsoft\Virtual Machine\External. Keep ours.
+    # Get-ItemProperty outputs nothing for a key with no values yet (the
+    # key can exist before the host's items arrive): that is no items.
+    [CmdletBinding()]
+    param([Parameter(Mandatory)][AllowNull()]$Properties)
+    $items = @{}
+    if ($null -eq $Properties) { return $items }
+    foreach ($property in $Properties.PSObject.Properties) {
+        if ($property.Name -like 'slate.*') { $items[$property.Name] = [string]$property.Value }
+    }
+    return $items
+}
+
 Export-ModuleMember -Function Get-LaneFromLabels, New-RunnerName, Split-KvpChunks, Join-KvpChunks,
     ConvertTo-DateTimeOffset, Select-QueuedLaneJobs, Select-JobsToAdmit, Register-JobRetry, Test-VmExpired, Get-StaleRunnerNames, Test-CommitEligible, Resolve-RunnerJob, Get-CiHostConfig, New-Journal, Read-Journal, Write-Journal, Write-CiLog,
-    Get-FreeSlots, Remove-ActiveVm, Test-SiblingRunning, Complete-ActiveVm, Update-ActiveVm, Invoke-Admission, Invoke-OrchestratorTick, Invoke-StartupSweep
+    Get-FreeSlots, Remove-ActiveVm, Test-SiblingRunning, Complete-ActiveVm, Update-ActiveVm, Invoke-Admission, Invoke-OrchestratorTick, Invoke-StartupSweep, Select-SlateKvpItems
