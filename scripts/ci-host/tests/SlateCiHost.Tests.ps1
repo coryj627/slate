@@ -253,6 +253,20 @@ Describe 'Test-CommitEligible' {
         $run = [pscustomobject]@{ event = 'PUSH'; head_branch = 'main'; head_repository = [pscustomobject]@{ full_name = 'coryj627/slate' } }
         (& $eligible $goodJob $run $false 3 3).Reason | Should -Be 'event: PUSH'
     }
+    It 'discards a branch that differs from main only by a default-ignorable code point' {
+        $branch = "ma$([char]0x00AD)in"
+        $run = [pscustomobject]@{ event = 'push'; head_branch = $branch; head_repository = [pscustomobject]@{ full_name = 'coryj627/slate' } }
+        $d = & $eligible $goodJob $run $false 3 3
+        $d.Eligible | Should -BeFalse
+        $d.Reason | Should -BeExactly "branch: $branch"
+    }
+    It 'accepts a repository name that differs only by case' {
+        $run = [pscustomobject]@{ event = 'push'; head_branch = 'main'; head_repository = [pscustomobject]@{ full_name = 'CoryJ627/Slate' } }
+        (& $eligible $goodJob $run $false 3 3).Eligible | Should -BeTrue
+    }
+    It 'refuses to decide without the forced-off flag and both generations' {
+        { Test-CommitEligible -Job $goodJob -Run $goodRun -RunnerName 'slate-win-app-deadbeef' } | Should -Throw
+    }
     It 'discards a run from another repository' {
         $run = [pscustomobject]@{ event = 'push'; head_branch = 'main'; head_repository = [pscustomobject]@{ full_name = 'someone/slate' } }
         (& $eligible $goodJob $run $false 3 3).Reason | Should -Be 'repository: someone/slate'

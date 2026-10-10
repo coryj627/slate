@@ -184,32 +184,34 @@ function Get-StaleRunnerNames {
 function Test-CommitEligible {
     # The whole cache-trust decision, from GitHub's record of what ran and
     # the host's own record of how the VM stopped. Labels play no part.
-    # Git refs are compared case-sensitively because branch names are (Main
-    # is not main), and so is the event; the repository is not, because
-    # GitHub repository names are case-insensitive.
     [CmdletBinding()]
     param(
         $Job,
         $Run,
         [Parameter(Mandatory)][string]$RunnerName,
-        [bool]$ForcedOff = $false,
-        [int]$ParentGeneration = 0,
-        [int]$ForkGeneration = 0,
-        [string]$TrustedRepo = 'coryj627/slate',
-        [string]$TrustedBranch = 'main',
-        [string[]]$TrustedEvents = @('push', 'schedule', 'workflow_dispatch')
+        [Parameter(Mandatory)][bool]$ForcedOff,
+        [Parameter(Mandatory)][int]$ParentGeneration,
+        [Parameter(Mandatory)][int]$ForkGeneration,
+        [ValidateNotNullOrEmpty()][string]$TrustedRepo = 'coryj627/slate',
+        [ValidateNotNullOrEmpty()][string]$TrustedBranch = 'main',
+        [ValidateNotNullOrEmpty()][string[]]$TrustedEvents = @('push', 'schedule', 'workflow_dispatch')
     )
+    # Comparisons are ordinal: PowerShell's string operators compare
+    # linguistically and drop default-ignorable code points (a soft hyphen
+    # inside 'main' would match). Git refs, runner names and the event are
+    # compared exactly; the repository ignores case because GitHub
+    # repository names do.
     function Deny([string]$reason) { return [pscustomobject]@{ Eligible = $false; Reason = $reason } }
     if ($null -eq $Job) { return (Deny 'no job resolved for runner') }
-    if ([string]$Job.runner_name -ne $RunnerName) { return (Deny "runner mismatch: $($Job.runner_name)") }
-    if ([string]$Job.conclusion -ne 'success') { return (Deny "conclusion: $($Job.conclusion)") }
+    if (-not [string]::Equals([string]$Job.runner_name, $RunnerName, [System.StringComparison]::Ordinal)) { return (Deny "runner mismatch: $($Job.runner_name)") }
+    if (-not [string]::Equals([string]$Job.conclusion, 'success', [System.StringComparison]::Ordinal)) { return (Deny "conclusion: $($Job.conclusion)") }
     if ($ForcedOff) { return (Deny 'guest was forced off') }
     if ($null -eq $Run) { return (Deny 'no run') }
-    if ($TrustedEvents -cnotcontains [string]$Run.event) { return (Deny "event: $($Run.event)") }
-    if ([string]$Run.head_branch -cne $TrustedBranch) { return (Deny "branch: $($Run.head_branch)") }
+    if ([Array]::IndexOf([string[]]$TrustedEvents, [string]$Run.event) -lt 0) { return (Deny "event: $($Run.event)") }
+    if (-not [string]::Equals([string]$Run.head_branch, $TrustedBranch, [System.StringComparison]::Ordinal)) { return (Deny "branch: $($Run.head_branch)") }
     $repoName = ''
     if ($null -ne $Run.head_repository -and $Run.head_repository.PSObject.Properties['full_name']) { $repoName = [string]$Run.head_repository.full_name }
-    if ($repoName -ne $TrustedRepo) { return (Deny "repository: $repoName") }
+    if (-not [string]::Equals($repoName, $TrustedRepo, [System.StringComparison]::OrdinalIgnoreCase)) { return (Deny "repository: $repoName") }
     if ($ParentGeneration -ne $ForkGeneration) { return (Deny "generation moved: fork $ForkGeneration, parent $ParentGeneration") }
     return [pscustomobject]@{ Eligible = $true; Reason = 'trusted main' }
 }
