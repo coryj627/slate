@@ -15,7 +15,8 @@ Describe 'Invoke-GhApi' {
             $Method -eq 'GET' -and
             $Headers.Authorization -eq 'Bearer ghp_test' -and
             $Headers['X-GitHub-Api-Version'] -eq '2022-11-28' -and
-            $Headers.Accept -eq 'application/vnd.github+json'
+            $Headers.Accept -eq 'application/vnd.github+json' -and
+            $OperationTimeoutSeconds -eq 30
         }
     }
     It 'serialises a body as JSON for POST' {

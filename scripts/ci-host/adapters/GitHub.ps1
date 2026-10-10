@@ -1,4 +1,4 @@
-#Requires -Version 7
+#Requires -Version 7.4
 # Copyright (C) 2026 Cory Joseph
 # SPDX-License-Identifier: AGPL-3.0-or-later
 #
@@ -27,16 +27,17 @@ function Invoke-GhApi {
     [CmdletBinding()]
     param([string]$Method = 'GET', [Parameter(Mandatory)][string]$Path, $Body)
     if (-not $script:GhBase) { throw 'Initialize-GitHubAdapter has not been called' }
-    $plain = [System.Net.NetworkCredential]::new('', $script:GhToken).Password
+    # Decoded inline, never into a variable: Set-PSDebug -Trace 2 prints every assignment.
     $headers = @{
-        Authorization          = "Bearer $plain"
+        Authorization          = 'Bearer ' + [System.Net.NetworkCredential]::new('', $script:GhToken).Password
         Accept                 = 'application/vnd.github+json'
         'X-GitHub-Api-Version' = '2022-11-28'
     }
     # Debug = $false: the web cmdlets' debug stream prints the request
     # headers (the token) and the response body (a JIT config), so neither
     # -Debug nor an inherited $DebugPreference may trace this call.
-    $params = @{ Method = $Method; Uri = "$($script:GhBase)$Path"; Headers = $headers; TimeoutSec = 30; UserAgent = 'slate-ci-host'; Debug = $false }
+    # OperationTimeoutSeconds: since 7.4 TimeoutSec bounds only the connection and response headers; a stalled body would block the loop.
+    $params = @{ Method = $Method; Uri = "$($script:GhBase)$Path"; Headers = $headers; TimeoutSec = 30; OperationTimeoutSeconds = 30; UserAgent = 'slate-ci-host'; Debug = $false }
     if ($null -ne $Body) {
         $params.Body = $Body | ConvertTo-Json -Compress -Depth 5
         $params.ContentType = 'application/json'
