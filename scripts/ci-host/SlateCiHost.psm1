@@ -354,7 +354,10 @@ function Get-FreeSlots {
 
 function Remove-ActiveVm {
     # Every failure path: deregister, power off, drop the cache fork,
-    # delete the VM, optionally schedule a retry. Never commits.
+    # optionally schedule a retry, then delete the VM. Never commits. If
+    # the delete fails, the entry stays in phase 'discarding' (its slot
+    # stays held) and Update-ActiveVm finishes the teardown on a later
+    # tick; the retry is registered here, once, before that can happen.
     [CmdletBinding()]
     param($Config, $Journal, [hashtable]$Adapters, [string]$Name, [string]$Reason, [bool]$Retry, [datetimeoffset]$Now)
     $vm = $Journal.Vms[$Name]
@@ -362,9 +365,15 @@ function Remove-ActiveVm {
     if ($vm.RunnerId) { try { & $Adapters.RemoveRunner $vm.RunnerId } catch { & $Adapters.Log 'warn' "${Name}: RemoveRunner: $_" } }
     try { & $Adapters.StopVmForce $Name } catch { & $Adapters.Log 'warn' "${Name}: StopVmForce: $_" }
     if ($vm.CachePath) { try { & $Adapters.DiscardCache $vm.CachePath } catch { & $Adapters.Log 'warn' "${Name}: DiscardCache: $_" } }
-    try { & $Adapters.RemoveVm $Name $vm.Dir } catch { & $Adapters.Log 'warn' "${Name}: RemoveVm: $_" }
     if ($Retry -and $vm.JobId) {
         Register-JobRetry -Retries $Journal.Retries -JobId ([int64]$vm.JobId) -Now $Now -BackoffSeconds ([int]$Config.RetryBackoffSeconds)
+    }
+    try {
+        & $Adapters.RemoveVm $Name $vm.Dir
+    } catch {
+        & $Adapters.Log 'error' "${Name}: teardown failed, will retry: $_"
+        $vm.Phase = 'discarding'
+        return
     }
     $Journal.Vms.Remove($Name)
 }
@@ -386,9 +395,12 @@ function Complete-ActiveVm {
     # discard. An API failure propagates: the entry stays in the journal
     # and the next tick tries again (never orphan, never commit blindly).
     # A commit that must wait for a same-lane sibling is remembered as
-    # PendingCommit so later ticks skip the API lookups.
+    # PendingCommit so later ticks skip the API lookups. Off with no job
+    # resolved means the guest never ran one (a bootstrap failure): the
+    # runner is freed and the job retried with back-off, so a broken
+    # image cannot provision VMs in a tight loop.
     [CmdletBinding()]
-    param($Config, $Journal, [hashtable]$Adapters, [string]$Name)
+    param($Config, $Journal, [hashtable]$Adapters, [string]$Name, [datetimeoffset]$Now)
     $vm = $Journal.Vms[$Name]
     if ($vm.PendingCommit) {
         $sibling = Test-SiblingRunning -Journal $Journal -Adapters $Adapters -Name $Name -Lane $vm.Lane
@@ -408,6 +420,15 @@ function Complete-ActiveVm {
     $candidates = @()
     foreach ($key in @($Journal.SeenJobs.Keys)) { $candidates += [int64]$key }
     $job = Resolve-RunnerJob -RunnerName $Name -AdmittedJobId ([int64]$vm.JobId) -CandidateJobIds $candidates -GetJob $Adapters.GetJob
+    if ($null -eq $job) {
+        & $Adapters.Log 'warn' "${Name}: shut down without running a job (guest bootstrap failure?)"
+        if ($vm.RunnerId) { try { & $Adapters.RemoveRunner $vm.RunnerId } catch { & $Adapters.Log 'warn' "${Name}: RemoveRunner: $_" } }
+        if ($vm.CachePath) { & $Adapters.DiscardCache $vm.CachePath }
+        & $Adapters.RemoveVm $Name $vm.Dir
+        Register-JobRetry -Retries $Journal.Retries -JobId ([int64]$vm.JobId) -Now $Now -BackoffSeconds ([int]$Config.RetryBackoffSeconds)
+        $Journal.Vms.Remove($Name)
+        return
+    }
     $run = $null
     if ($null -ne $job) { $run = & $Adapters.GetRun ([int64]$job.run_id) }
     if ($vm.CachePath) {
@@ -443,13 +464,40 @@ function Update-ActiveVm {
     [CmdletBinding()]
     param($Config, $Journal, [hashtable]$Adapters, [string]$Name, [datetimeoffset]$Now)
     $vm = $Journal.Vms[$Name]
+    if ($vm.Phase -eq 'discarding') {
+        # An earlier teardown could not delete the VM: finish it. The
+        # runner and the retry were handled then. This VM never settles
+        # or commits, and its slot stays held until it is gone. A VM that
+        # Hyper-V no longer has is dropped as it is; the CleanVmDirs of
+        # the startup sweep removes any directory left behind.
+        $state = & $Adapters.GetVmState $Name
+        if ($state -eq 'Missing') {
+            $Journal.Vms.Remove($Name)
+            & $Adapters.Log 'info' "${Name}: teardown finished (the VM is gone)"
+            return
+        }
+        if ($state -eq 'Unknown') {
+            & $Adapters.Log 'warn' "${Name}: Hyper-V did not answer; the teardown waits for the next tick"
+            return
+        }
+        try {
+            & $Adapters.StopVmForce $Name
+            & $Adapters.RemoveVm $Name $vm.Dir
+        } catch {
+            & $Adapters.Log 'error' "${Name}: teardown failed, will retry: $_"
+            return
+        }
+        $Journal.Vms.Remove($Name)
+        & $Adapters.Log 'info' "${Name}: teardown finished"
+        return
+    }
     $state = & $Adapters.GetVmState $Name
     if ($state -eq 'Unknown') {
         & $Adapters.Log 'warn' "${Name}: Hyper-V did not answer; leaving the VM alone until the next tick"
         return
     }
     if ($state -eq 'Off') {
-        Complete-ActiveVm -Config $Config -Journal $Journal -Adapters $Adapters -Name $Name
+        Complete-ActiveVm -Config $Config -Journal $Journal -Adapters $Adapters -Name $Name -Now $Now
         return
     }
     if ($state -ne 'Running') {
@@ -490,6 +538,7 @@ function Update-ActiveVm {
     }
     $maxMinutes = [int]$Config.Lanes[$vm.Lane].MaxMinutes
     if (Test-VmExpired -StartedAt $startedAt -MaxMinutes $maxMinutes -Now $Now) {
+        & $Adapters.Log 'error' "${Name}: expired after $maxMinutes min + grace; forcing off"
         Remove-ActiveVm -Config $Config -Journal $Journal -Adapters $Adapters -Name $Name -Reason "expired after $maxMinutes min + grace" -Retry $false -Now $Now
         return
     }

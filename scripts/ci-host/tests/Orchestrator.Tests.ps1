@@ -186,6 +186,41 @@ Context 'handoff' {
         (Get-Calls 'RemoveVm').Count | Should -Be 1
         $journal.Retries['1'].Count | Should -Be 1
     }
+    It 'keeps a VM whose teardown failed in the journal and finishes the teardown on a later tick' {
+        $world.Heartbeat = 'NoContact'
+        $adapters.RemoveVm = { param($n, $d) & $script:record 'RemoveVm' @($n, $d); if ((Get-Calls 'RemoveVm').Count -eq 1) { throw 'vmms timeout' } }
+        Invoke-OrchestratorTick -Config $config -Journal $journal -Adapters $adapters -Now $t0.AddSeconds(180)
+        $journal.Vms[$name].Phase | Should -Be 'discarding'
+        $journal.Retries['1'].Count | Should -Be 1
+        $journal.Vms.Count | Should -Be 1
+        @(Get-FreeSlots -Config $config -Journal $journal).Count | Should -Be 1
+        ($logs -join "`n") | Should -Match 'teardown failed, will retry: vmms timeout'
+        Invoke-OrchestratorTick -Config $config -Journal $journal -Adapters $adapters -Now $t0.AddSeconds(190)
+        $journal.Vms.Count | Should -Be 0
+        (Get-Calls 'RemoveVm').Count | Should -Be 2
+        $journal.Retries['1'].Count | Should -Be 1
+    }
+    It 'drops a VM whose teardown failed once Hyper-V reports it missing, without another RemoveVm' {
+        $world.Heartbeat = 'NoContact'
+        $adapters.RemoveVm = { param($n, $d) & $script:record 'RemoveVm' @($n, $d); if ((Get-Calls 'RemoveVm').Count -eq 1) { throw 'vmms timeout' } }
+        Invoke-OrchestratorTick -Config $config -Journal $journal -Adapters $adapters -Now $t0.AddSeconds(180)
+        $journal.Vms[$name].Phase | Should -Be 'discarding'
+        $world.VmStates[$name] = 'Missing'
+        Invoke-OrchestratorTick -Config $config -Journal $journal -Adapters $adapters -Now $t0.AddSeconds(190)
+        $journal.Vms.Count | Should -Be 0
+        (Get-Calls 'RemoveVm').Count | Should -Be 1
+        $journal.Retries['1'].Count | Should -Be 1
+    }
+    It 'leaves a VM whose teardown failed alone while Hyper-V does not answer' {
+        $world.Heartbeat = 'NoContact'
+        $adapters.RemoveVm = { param($n, $d) & $script:record 'RemoveVm' @($n, $d); throw 'vmms timeout' }
+        Invoke-OrchestratorTick -Config $config -Journal $journal -Adapters $adapters -Now $t0.AddSeconds(180)
+        $world.VmStates[$name] = 'Unknown'
+        Invoke-OrchestratorTick -Config $config -Journal $journal -Adapters $adapters -Now $t0.AddSeconds(190)
+        $journal.Vms[$name].Phase | Should -Be 'discarding'
+        (Get-Calls 'RemoveVm').Count | Should -Be 1
+        (Get-Calls 'StopVmForce').Count | Should -Be 1
+    }
     It 'discards and retries when the VM has vanished' {
         $world.VmStates[$name] = 'Missing'
         Invoke-OrchestratorTick -Config $config -Journal $journal -Adapters $adapters -Now $t0.AddSeconds(30)
@@ -272,6 +307,19 @@ Context 'settle' {
         Invoke-OrchestratorTick -Config $config -Journal $journal -Adapters $adapters -Now $t0.AddMinutes(20)
         (Get-Calls 'DiscardCache').Count | Should -Be 1
         $journal.Retries.Count | Should -Be 0
+    }
+    It 'deregisters the runner, registers a retry and discards when the guest shut down without running a job' {
+        # Bootstrap failure: the VM is Off, GetJob finds no record of job 1
+        # running here (it returns nothing) and job 1 is still queued.
+        $world.VmStates[$name] = 'Off'
+        $world.Queued = @((New-QueuedJob 1 10 'app'))
+        Invoke-OrchestratorTick -Config $config -Journal $journal -Adapters $adapters -Now $t0.AddMinutes(20)
+        (Get-Calls 'RemoveRunner')[0].Args[0] | Should -Be 77
+        $journal.Retries['1'].Count | Should -Be 1
+        (Get-Calls 'DiscardCache').Count | Should -Be 1
+        (Get-Calls 'CommitCache').Count | Should -Be 0
+        $journal.Vms.Count | Should -Be 0
+        (Get-Calls 'NewVm').Count | Should -Be 1
     }
     It 'waits to commit while a same-lane sibling is still running, then commits without more API calls' {
         # A second app job is admitted into slot 2 and keeps running.
@@ -368,6 +416,7 @@ Context 'handed-phase guards' {
         (Get-Calls 'DiscardCache').Count | Should -Be 1
         (Get-Calls 'RemoveRunner').Count | Should -Be 1
         $journal.Retries.Count | Should -Be 0
+        ($logs -join "`n") | Should -Match '\[error\].*expired'
     }
     # HandedAt is t0+10s, so the 300 s unclaimed check first fires at t0+310s.
     It 'does not check for a claim before the unclaimed timeout' {
