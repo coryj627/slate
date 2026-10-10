@@ -175,7 +175,9 @@ jobs:
             a11y-results.sarif
           if-no-files-found: warn
 
-  report:
+  # Job id kept from the single-job days: code scanning files SARIF under
+  # "<workflow file>:<job id>", so this keeps the alert history continuous.
+  a11y-check:
     name: Report and enforce the floor
     needs: analyze
     # Runs after the analysis whether it passed or failed, so a drop below
