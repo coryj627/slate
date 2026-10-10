@@ -1352,7 +1352,7 @@ function New-GitHubAdapters {
 pwsh -NoProfile -File scripts/ci-host/tests/Invoke-Tests.ps1
 ```
 
-Expected: all pass (the whole suite, 66 tests).
+Expected: every test in the suite passes.
 
 - [ ] **Step 5: Commit**
 
