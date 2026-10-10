@@ -213,9 +213,10 @@ Failure handling:
   is no longer queued: `DELETE /actions/runners/{id}`, turn off, discard.
 - Heartbeat never arrives, KVP never read, or any API error during
   provisioning: discard and retry the job on the next tick, with a
-  per-job retry cap of 3 and a 10 min back-off, then log and stop admitting
-  that job (it fails GitHub's 24 h queue wait, which the fallback variable
-  is for).
+  10 min back-off and at most three provisioning attempts per job in total
+  (the initial attempt plus two retries; `RetryCap` 3 counts failures), then
+  log and stop admitting that job (it fails GitHub's 24 h queue wait, which
+  the fallback variable is for).
 - Orchestrator start: delete every offline runner named `slate-win-*`,
   remove every VM named `slate-win-*` and its directory, and delete orphaned
   cache children (never parents).
