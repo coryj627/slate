@@ -44,13 +44,21 @@ jobs:
           persist-credentials: false
 
       - name: Ensure Pester 5
+        # Pinned to the newest 5.x on the gallery (Find-Module Pester
+        # -AllVersions, 2026-10-10): an unpinned install takes whatever it
+        # serves that day. Prints the Pester version, then the pwsh version.
         shell: pwsh
         run: |
-          $have = Get-Module -ListAvailable Pester | Where-Object { $_.Version -ge [version]'5.5.0' }
-          if (-not $have) { Install-Module Pester -MinimumVersion 5.5.0 -Force -Scope CurrentUser -SkipPublisherCheck }
-          (Get-Module -ListAvailable Pester | Sort-Object Version -Descending | Select-Object -First 1).Version.ToString()
+          if (-not (Get-Module -ListAvailable Pester | Where-Object { $_.Version -eq [version]'5.9.1' })) {
+            Install-Module Pester -RequiredVersion 5.9.1 -Force -Scope CurrentUser -SkipPublisherCheck
+          }
+          (Get-Module -ListAvailable Pester | Where-Object { $_.Version -eq [version]'5.9.1' } | Select-Object -First 1).Version.ToString()
           $PSVersionTable.PSVersion.ToString()
 
       - name: Run the suite
+        # Each step is a new pwsh, so the pin is imported here; Invoke-Tests.ps1
+        # keeps a Pester 5 that is already loaded.
         shell: pwsh
-        run: ./ci/windows-runner/tests/Invoke-Tests.ps1
+        run: |
+          Import-Module Pester -RequiredVersion 5.9.1 -Force
+          ./ci/windows-runner/tests/Invoke-Tests.ps1

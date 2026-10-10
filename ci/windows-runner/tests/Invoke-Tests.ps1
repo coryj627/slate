@@ -7,7 +7,11 @@
 param([string]$Path = $PSScriptRoot, [string]$Filter)
 
 $ErrorActionPreference = 'Stop'
-Import-Module Pester -MinimumVersion 5.5.0 -Force
+# A Pester 5 the caller already imported stays (windows-runner-tests.yml
+# imports its pinned version first); otherwise the newest from 5.5.0 loads.
+if (-not (Get-Module Pester | Where-Object { $_.Version -ge [version]'5.5.0' })) {
+    Import-Module Pester -MinimumVersion 5.5.0 -Force
+}
 $config = New-PesterConfiguration
 $config.Run.Path = $Path
 $config.Run.Exit = $true

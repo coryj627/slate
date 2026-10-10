@@ -76,6 +76,25 @@ Describe 'windows-ci-pilot.yml home candidate' {
     }
 }
 
+Describe 'windows-runner-tests.yml Pester pin' {
+    It 'installs and imports one pinned Pester 5 before the suite runs' {
+        $lane | Should -Match 'Install-Module Pester -RequiredVersion 5\.\d+\.\d+ '
+        $lane | Should -Not -Match 'Install-Module Pester -MinimumVersion'
+        $import = $lane.IndexOf('Import-Module Pester -RequiredVersion ')
+        $import | Should -BeGreaterThan -1
+        $import | Should -BeLessThan $lane.IndexOf('./ci/windows-runner/tests/Invoke-Tests.ps1')
+        # One version throughout: the install, its presence check and the import.
+        $pins = @([regex]::Matches($lane, "(?:-RequiredVersion |\[version\]')(\d+\.\d+\.\d+)") | ForEach-Object { $_.Groups[1].Value })
+        $pins.Count | Should -BeGreaterOrEqual 3
+        @($pins | Select-Object -Unique) | Should -Be @('5.9.1')
+    }
+    It 'Invoke-Tests.ps1 keeps the Pester 5 a caller imported, and otherwise loads the newest from 5.5.0' {
+        $runner = Get-Content -Raw (Join-Path $PSScriptRoot 'Invoke-Tests.ps1')
+        $runner | Should -Match ([regex]::Escape('Import-Module Pester -MinimumVersion 5.5.0 -Force'))
+        $runner | Should -Match ([regex]::Escape("if (-not (Get-Module Pester | Where-Object { `$_.Version -ge [version]'5.5.0' }))"))
+    }
+}
+
 Describe 'windows-runner-tests.yml path filters' {
     It 'runs these guards when a routed workflow changes, on pull requests and on main' {
         foreach ($routed in @('windows.yml', 'nightly.yml', 'windows-ci-pilot.yml')) {
