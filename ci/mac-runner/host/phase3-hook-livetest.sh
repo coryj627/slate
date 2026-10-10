@@ -24,7 +24,7 @@ wait_for_new_runner() {
   for _ in $(seq 1 50); do
     sleep 3
     vm="$(as_ci env PATH=/opt/homebrew/bin:/usr/bin:/bin tart list 2>/dev/null | awk '/ job-/ {print $2}' | head -1)"
-    [ -n "$vm" ] && [ "$vm" != "$old" ] || continue
+    if [ -z "$vm" ] || [ "$vm" = "$old" ]; then continue; fi
     n="$(gh api repos/coryj627/slate/actions/runners --jq "[.runners[] | select(.name == \"$vm\" and .status == \"online\")] | length")"
     [ "$n" = 1 ] && { echo "online: $vm"; return 0; }
   done
