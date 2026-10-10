@@ -80,7 +80,7 @@ builds) and the read-only `GITHUB_TOKEN`.
 | Fork PR runs arbitrary code on the runner | Fork-PR approval policy set to "all external contributors"; every fork PR waits for an owner click, every time. |
 | Approved-but-malicious job escapes the runner | Job runs as a standard user inside a Gen2 Hyper-V VM that exists only for that job and is deleted afterwards. |
 | Job reaches the host, LAN or tailnet | Hyper-V extended port ACLs on the VM adapter deny RFC1918, 100.64/10, 169.254/16 and all IPv6; host firewall drops inbound from the VM subnet. The host is a router for the VM, never a server. |
-| Job steals a credential | No secrets exist in the VM. The JIT config is single-use and expires with the job. The orchestrator's PAT lives DPAPI-encrypted on the host under a dedicated account the VM cannot reach. |
+| Job steals a credential | No secret valid outside the VM exists in it: the product key is cleared with `slmgr /cpky`, the auto-logon password only opens a disposable isolated guest. The JIT config is single-use and expires with the job. The orchestrator's PAT lives DPAPI-encrypted on the host under a dedicated account the VM cannot reach. |
 | Job poisons a trusted cache | Every job gets a copy-on-write fork; the fork is merged only when the host verifies provenance (push/schedule/dispatch on `main` of `coryj627/slate`, conclusion success, clean guest shutdown). Labels carry no trust. |
 | One runner serves two jobs | JIT runners are ephemeral by construction; GitHub assigns at most one job. The host additionally deletes the VM after the first job. |
 | Host compromise via the orchestrator account | `slate-ci-host` is a member of Hyper-V Administrators only, has no interactive logon, and can write only under `C:\slate-ci`. |
@@ -101,7 +101,7 @@ Paths (all on the NVMe):
 C:\slate-ci\
   bin\            pinned copy of scripts/ci-host/ from the repo (install step records the commit)
   golden\win11-runner.vhdx        read-only golden guest disk
-  cache\rust.vhdx  app.vhdx  model.vhdx   per-lane cache parents + <lane>.gen counters
+  cache\rust.vhdx  app.vhdx  model.vhdx   per-lane cache parents (dynamic VHDX, NTFS, volume label slate-cache, formatted by install/setup-host.ps1) + <lane>.gen counters
   vms\<runner-name>\              os.vhdx and cache.vhdx differencing children, VM config
   state\                          orchestrator journal (seen jobs, active VMs)
   logs\                           rolling orchestrator logs
@@ -183,16 +183,22 @@ State machine per job, run by a single-threaded loop with a 10 s tick:
    `slate-bootstrap-system` (SYSTEM, at startup) polls
    `HKLM:\SOFTWARE\Microsoft\Virtual Machine\External` for the chunks
    (max 5 min), sets the static IP, gateway and DNS from the KVP items,
-   locates the cache volume by its `slate-cache` label, creates
-   `cache\{cargo\registry,cargo\git,target,nuget}` on it, writes
-   `C:\actions-runner\.env` (`NSC_CACHE_PATH`, `CARGO_TARGET_DIR`,
-   `NUGET_PACKAGES`, `SLATE_CACHE_ROOT`), writes the config to
-   `C:\actions-runner\jit.cfg` readable only by `runner`, and touches
-   `ready`. `slate-runner-logon` (`runner`, interactive, at logon) waits
-   for `ready`, junctions `%USERPROFILE%\.cargo\{registry,git}` onto the
-   cache, runs `run.cmd --jitconfig <config>` in the interactive session,
-   deletes `jit.cfg`, and runs `shutdown /s /t 0`. A bootstrap failure
-   writes `bootstrap-error.txt` and shuts down.
+   and, when `slate.cache` is `1`, locates the cache volume by its
+   `slate-cache` label, adds a Defender real-time exclusion for its resolved
+   root, creates `cache\{cargo\registry,cargo\git,target,nuget}` on it and
+   writes `C:\actions-runner\.env` (`NSC_CACHE_PATH`, `CARGO_TARGET_DIR`,
+   `NUGET_PACKAGES`, `SLATE_CACHE_ROOT`); with `0` (the shell lane) it
+   writes an empty `.env` and skips the volume. It then writes the config to
+   `C:\actions-runner\jit.cfg` readable only by `runner` and touches
+   `C:\actions-runner\ready`. `slate-runner-logon` (`runner`, interactive,
+   at logon) waits for `ready`, junctions
+   `%USERPROFILE%\.cargo\{registry,git}` onto `SLATE_CACHE_ROOT` when `.env`
+   defines it, runs `run.cmd --jitconfig <config>` in the interactive
+   session, deletes `jit.cfg`, and runs `shutdown /s /t 0`. A bootstrap
+   failure writes `bootstrap-error.txt` and shuts down. The host does not
+   read the guest's logs; a repeated bootstrap failure is diagnosed by
+   connecting to a live VM with `vmconnect` before it shuts down (follow-up:
+   the SYSTEM task publishing `slate.error` over guest KVP).
 7. **Settle (host).** On VM state `Off`: look up which job ran on this
    runner name (first the admitted `job_id`, else any recently seen
    candidate, via `GET /actions/jobs/{job_id}` → `runner_name`), fetch its
@@ -258,14 +264,21 @@ registers the two guest tasks, switches auto-logon to `runner`, sets a
 RunOnce for `provision-runner-user.ps1` (per-user rustup and
 uniffi-bindgen-cs), and reboots. The specialize pass also sets
 `PreventDeviceEncryption=1`, so the vTPM every VM carries never triggers
-Windows 11 automatic device encryption of a disposable disk. The per-user
-script writes the completion marker `C:\Users\runner\.slate-golden-complete`
-and shuts down. The host verifies the marker, removes the build VM and marks
-the VHDX read-only. Product key, auto-logon password and the `provision`
-password live only in the rendered unattend and `C:\provision\secrets.json`,
-both deleted by the provisioning script before the final reboot (the
-auto-logon password remains in the guest registry, as auto-logon
-requires; the VM is isolated and disposable).
+Windows 11 automatic device encryption of a disposable disk. The same pass
+names the computer `slate-win`; phase 1 disables sleep and hibernation,
+defers Windows Update, enables long paths, excludes `C:\actions-runner`,
+`C:\dotnet` and the `runner` profile's cargo and rustup trees from Defender
+real-time scanning (the cache root is excluded at job time, since its drive
+letter is not fixed), and uses the `provision` account only during the
+build. The per-user script writes the completion marker
+`C:\Users\runner\.slate-golden-complete` and shuts down. The host verifies
+the marker, removes the build VM and marks the VHDX read-only. Before the
+final reboot the provisioning script runs `slmgr /cpky`, which clears the
+product key from the registry (Windows keeps an installed retail key
+readable by standard users in `DigitalProductId` until then), and deletes
+the rendered unattend and `C:\provision\secrets.json`. The auto-logon
+password remains in the guest registry, as auto-logon requires; it is useful
+only inside a VM that is isolated and disposable.
 
 Toolchain, matching the Namespace image the lanes run on today:
 
@@ -285,13 +298,22 @@ Toolchain, matching the Namespace image the lanes run on today:
   Python are machine-wide.
 - Python 3.13, git, 7-Zip.
 - `actions-runner` 2.338.0 unpacked at `C:\actions-runner`, owned by
-  `runner`, `bootstrap-system.ps1`, `bootstrap-runner.ps1`, a copy of
-  `SlateCiHost.psm1`, and the two scheduled tasks `slate-bootstrap-system`
-  (SYSTEM, at startup) and `slate-runner-logon` (`runner`, interactive, at
-  logon) installed.
+  `runner` (its runtime files: `.env`, `jit.cfg`, `ready`,
+  `bootstrap-error.txt`, the two bootstrap logs, `_work`). The guest scripts
+  `bootstrap-system.ps1` and `bootstrap-runner.ps1` and a copy of
+  `SlateCiHost.psm1` live in `C:\slate-guest`, writable only by
+  Administrators and SYSTEM (`runner` reads), so a job cannot alter what
+  SYSTEM runs at the next boot. The two scheduled tasks
+  `slate-bootstrap-system` (SYSTEM, at startup) and `slate-runner-logon`
+  (`runner`, interactive, at logon) run those scripts.
 - `uniffi-bindgen-cs` at the tag pinned in
   `apps/slate-windows/uniffi-bindgen-cs.version`, in `%USERPROFILE%\.cargo\bin`
   of `runner`.
+- `scripts/ci-host/golden/versions.json` is the golden image's single pin
+  file (runner version and SHA-256, Rust toolchain, uniffi-bindgen-cs tag,
+  .NET channel, Python and Git versions, resolvers); the Pester suite
+  asserts its Rust and bindgen pins equal `rust-toolchain.toml` and
+  `apps/slate-windows/uniffi-bindgen-cs.version`.
 
 Refresh triggers (runbook): the Rust toolchain pin, the uniffi-bindgen-cs
 tag, the runner version (GitHub refuses runners older than its support
@@ -368,7 +390,10 @@ scripts/ci-host/
   install/setup-host.ps1    one-time elevated steps (features, account, switch, NAT,
                             ACL template, firewall rule, task, directories, ACLs)
   install/store-token.ps1   runs as slate-ci-host; stores the PAT
-  golden/build-golden.ps1   golden image build; golden/unattend.xml (template), versions.json, provision-guest.ps1, provision-runner-user.ps1, guest/bootstrap-system.ps1, guest/bootstrap-runner.ps1
+  golden/build-golden.ps1   golden image build (elevated, DISM-applied install.wim)
+  golden/unattend.xml       template; golden/versions.json pins
+  golden/provision-guest.ps1, golden/provision-runner-user.ps1   the two in-guest phases
+  golden/guest/bootstrap-system.ps1, golden/guest/bootstrap-runner.ps1   the job-VM tasks
   tests/*.Tests.ps1         Pester 5, adapters mocked
 ```
 
