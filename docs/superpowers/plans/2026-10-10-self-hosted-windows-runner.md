@@ -1040,6 +1040,8 @@ function Join-WinPath {
 function Get-CiHostConfig {
     [CmdletBinding()]
     param([Parameter(Mandatory)][string]$Path)
+    # A missing or unreadable file must throw, never yield a half config.
+    $ErrorActionPreference = 'Stop'
     $config = Get-Content -Raw -LiteralPath $Path | ConvertFrom-Json -AsHashtable
     $required = 'Owner', 'Repo', 'Root', 'SwitchName', 'Gateway', 'Dns', 'Slots', 'Vcpu', 'MemoryGB', 'Lanes',
         'TickSeconds', 'HeartbeatTimeoutSeconds', 'UnclaimedTimeoutSeconds', 'RetryCap', 'RetryBackoffSeconds',
@@ -1047,8 +1049,10 @@ function Get-CiHostConfig {
     foreach ($key in $required) {
         if (-not $config.Contains($key)) { throw "config ${Path}: missing required key '$key'" }
     }
+    if (-not ($config.Lanes -is [System.Collections.IDictionary])) { throw "config ${Path}: Lanes must be an object" }
     foreach ($lane in @($config.Lanes.Keys)) {
         if ($script:DefaultLanes -cnotcontains $lane) { throw "config ${Path}: unknown lane '$lane'" }
+        if (-not ($config.Lanes[$lane] -is [System.Collections.IDictionary])) { throw "config ${Path}: lane '$lane' must be an object" }
         foreach ($k in 'Cache', 'MaxMinutes') {
             if (-not $config.Lanes[$lane].Contains($k)) { throw "config ${Path}: lane '$lane' missing '$k'" }
         }
@@ -1079,9 +1083,9 @@ function Read-Journal {
         # error and the IOException clause below would never run.
         $journal = Get-Content -Raw -LiteralPath $Path -ErrorAction Stop | ConvertFrom-Json -AsHashtable
         if ($null -eq $journal -or -not ($journal -is [System.Collections.IDictionary])) { throw 'journal is not an object' }
-    } catch [System.IO.IOException] {
-        # Unreadable (locked) is not corrupt: never overwrite a journal we
-        # could not read; the task restarts and retries.
+    } catch [System.IO.IOException], [System.UnauthorizedAccessException] {
+        # Unreadable (locked, access denied) is not corrupt: never overwrite
+        # a journal we could not read; the task restarts and retries.
         throw
     } catch {
         $aside = '{0}.corrupt-{1}' -f $Path, (Get-Date).ToUniversalTime().ToString('yyyyMMddTHHmmssZ')
@@ -1097,6 +1101,9 @@ function Read-Journal {
 function Write-Journal {
     [CmdletBinding()]
     param([Parameter(Mandatory)][string]$Path, [Parameter(Mandatory)]$Journal)
+    # A failed temp write or open must throw before the replace, or a bad
+    # temp file would be published (cmdlet errors are non-terminating).
+    $ErrorActionPreference = 'Stop'
     $dir = Split-Path -Parent $Path
     if ($dir -and -not (Test-Path -LiteralPath $dir)) { New-Item -ItemType Directory -Force -Path $dir | Out-Null }
     $tmp = "$Path.tmp"
