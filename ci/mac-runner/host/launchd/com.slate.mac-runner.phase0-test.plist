@@ -1,0 +1,54 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
+<!--
+  Phase 0 step 2 of docs/plans/42_self_hosted_mac_runner_plan.md: run the
+  isolation test once as slate-ci from a LaunchDaemon, the same context the
+  real controller will use (no GUI session, launchd environment).
+
+  Install and run (admin, one time):
+    sudo install -o root -g wheel -m 644 \
+      ci/mac-runner/host/launchd/com.slate.mac-runner.phase0-test.plist /Library/LaunchDaemons/
+    sudo launchctl bootstrap system /Library/LaunchDaemons/com.slate.mac-runner.phase0-test.plist
+  The result lands in /Users/slate-ci/.slate-runner/phase0-daemon.log.
+  Remove afterwards:
+    sudo launchctl bootout system/com.slate.mac-runner.phase0-test
+    sudo rm /Library/LaunchDaemons/com.slate.mac-runner.phase0-test.plist
+
+  The script must sit where slate-ci can read it; the owner's home is not
+  readable by other accounts, so it is copied to slate-ci's home first.
+-->
+<plist version="1.0">
+<dict>
+  <key>Label</key>
+  <string>com.slate.mac-runner.phase0-test</string>
+  <key>UserName</key>
+  <string>slate-ci</string>
+  <key>GroupName</key>
+  <string>staff</string>
+  <key>ProgramArguments</key>
+  <array>
+    <string>/bin/bash</string>
+    <string>/Users/slate-ci/.slate-runner/bin/phase0-isolation-test.sh</string>
+    <string>192.168.0.1</string>
+    <string>192.168.0.22</string>
+    <string>192.168.0.11</string>
+  </array>
+  <key>EnvironmentVariables</key>
+  <dict>
+    <key>HOME</key>
+    <string>/Users/slate-ci</string>
+    <key>PATH</key>
+    <string>/usr/local/libexec/slate-runner/bin:/opt/homebrew/bin:/usr/bin:/bin:/usr/sbin:/sbin</string>
+  </dict>
+  <key>WorkingDirectory</key>
+  <string>/Users/slate-ci</string>
+  <key>RunAtLoad</key>
+  <true/>
+  <key>KeepAlive</key>
+  <false/>
+  <key>StandardOutPath</key>
+  <string>/Users/slate-ci/.slate-runner/phase0-daemon.log</string>
+  <key>StandardErrorPath</key>
+  <string>/Users/slate-ci/.slate-runner/phase0-daemon.log</string>
+</dict>
+</plist>

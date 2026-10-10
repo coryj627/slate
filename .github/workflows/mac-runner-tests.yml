@@ -1,0 +1,73 @@
+# Tests for the self-hosted mac runner's host-side code (ci/mac-runner/**):
+# the admission hook, the route decision and the shell scripts. Hosted Linux,
+# no runner or VM involved. docs/plans/42_self_hosted_mac_runner_plan.md,
+# Phase 2.
+
+name: Mac runner tests
+
+on:
+  pull_request:
+    paths:
+      - 'ci/mac-runner/**'
+      - '.github/workflows/mac-runner-tests.yml'
+  push:
+    branches: [main]
+    paths:
+      - 'ci/mac-runner/**'
+      - '.github/workflows/mac-runner-tests.yml'
+
+permissions:
+  contents: read
+
+concurrency:
+  group: ${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: ${{ github.event_name == 'pull_request' }}
+
+jobs:
+  tests:
+    name: hook, route, scripts
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    steps:
+      - name: Checkout
+        uses: actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0  # v7
+        with:
+          persist-credentials: false
+
+      - name: Set up Python
+        uses: actions/setup-python@5fda3b95a4ea91299a34e894583c3862153e4b97  # v7.0.0
+        with:
+          python-version: '3.13'
+
+      - name: Admission hook tests
+        run: python -I -m unittest discover -v -s ci/mac-runner/hook/tests -t ci/mac-runner/hook
+
+      - name: Route decision tests
+        run: python -I -m unittest discover -v -s ci/mac-runner/route/tests -t ci/mac-runner/route
+
+      - name: Allow-list is valid for the hook
+        run: |
+          python -I - <<'PY'
+          import json, sys
+          sys.path.insert(0, "ci/mac-runner/hook")
+          import admission
+          data = json.load(open("ci/mac-runner/allowlist.json"))
+          out = admission.validate_allowlist(data)
+          assert data["repository_id"] == 1241111067, "repository id changed"
+          assert 933688 in out["actor_ids"], "owner missing from actors"
+          assert "schedule" not in out["hook_events"], "the hook must not admit schedule"
+          print("allow-list ok:", sorted(out["actor_logins"]), sorted(out["hook_events"]))
+          PY
+
+      - name: ShellCheck
+        run: shellcheck -x $(git ls-files 'ci/mac-runner/*.sh' 'ci/mac-runner/**/*.sh')
+
+      - name: Plists parse
+        run: |
+          python -I - <<'PY'
+          import glob, plistlib
+          for path in glob.glob("ci/mac-runner/**/*.plist", recursive=True):
+              with open(path, "rb") as handle:
+                  plistlib.load(handle)
+              print("ok", path)
+          PY

@@ -179,7 +179,7 @@ class MacPilotGateTests(unittest.TestCase):
         for candidate in ["new-paid-profile", "namespace-goldengate6x14"]:
             with self.subTest(candidate=candidate), self.assertRaises(ValueError):
                 pilot.validate_inputs(pilot.REFERENCE, candidate, "pair-1")
-        for candidate in ["hosted-xcode27", "namespace-tahoeslim6x14"]:
+        for candidate in ["hosted-xcode27", "namespace-tahoeslim6x14", "self-hosted-tart"]:
             with self.subTest(candidate=candidate):
                 pilot.validate_inputs(pilot.REFERENCE, candidate, "pair-1")
 
