@@ -421,10 +421,13 @@ function Complete-ActiveVm {
     foreach ($key in @($Journal.SeenJobs.Keys)) { $candidates += [int64]$key }
     $job = Resolve-RunnerJob -RunnerName $Name -AdmittedJobId ([int64]$vm.JobId) -CandidateJobIds $candidates -GetJob $Adapters.GetJob
     if ($null -eq $job) {
-        # The guest bootstrap publishes its failure as the KVP item
-        # slate.error; reading it is best effort and never stops the teardown.
-        $guestError = $null
-        try { $guestError = & $Adapters.GetGuestError $Name } catch { }
+        # The guest's slate.error was kept by Update-ActiveVm while the VM ran.
+        # One last read is only a fallback (Hyper-V has no guest items for an
+        # Off VM, so it normally finds nothing); it never stops the teardown.
+        $guestError = [string]$vm['GuestError']
+        if (-not $guestError) {
+            try { $guestError = [string](& $Adapters.GetGuestError $Name) } catch { $guestError = '' }
+        }
         & $Adapters.Log 'warn' "${Name}: shut down without running a job (guest bootstrap failure?) guest error: $guestError"
         if ($vm.RunnerId) { try { & $Adapters.RemoveRunner $vm.RunnerId } catch { & $Adapters.Log 'warn' "${Name}: RemoveRunner: $_" } }
         if ($vm.CachePath) { & $Adapters.DiscardCache $vm.CachePath }
@@ -507,6 +510,17 @@ function Update-ActiveVm {
     if ($state -ne 'Running') {
         Remove-ActiveVm -Config $Config -Journal $Journal -Adapters $Adapters -Name $Name -Reason "vm state $state" -Retry $true -Now $Now
         return
+    }
+    if ($vm.Phase -eq 'provisioned' -or $vm.Phase -eq 'handed') {
+        # A failed guest bootstrap publishes slate.error and stays up 30 s;
+        # Hyper-V exposes guest KVP items only while the VM runs, so keep it
+        # now for the settle log. Best effort, never fatal. Index syntax: a
+        # missing key would throw under strict mode as a property.
+        try { $guestError = & $Adapters.GetGuestError $Name } catch { $guestError = $null }
+        if ($guestError -and [string]$guestError -ne [string]$vm['GuestError']) {
+            $vm['GuestError'] = [string]$guestError
+            & $Adapters.Log 'warn' "${Name}: guest reports: $guestError"
+        }
     }
     $startedAt = ConvertTo-DateTimeOffset -Value $vm.StartedAt
     if ($vm.Phase -eq 'provisioned') {
@@ -603,6 +617,7 @@ function Invoke-Admission {
                 JobId = [int64]$job.JobId; RunId = [int64]$job.RunId
                 Dir = [string]$created.Dir; CachePath = $created.CachePath; ForkGeneration = [int]$created.ForkGeneration
                 Phase = 'provisioned'; StartedAt = $Now.ToString('o'); HandedAt = $null; RunnerId = $null; Claimed = $false; PendingCommit = $false
+                GuestError = $null
             }
             & $Adapters.StartVm $name
             & $Adapters.Log 'info' "${name}: provisioned for job $($job.JobId) (lane $($job.Lane), slot $($slot.Index), fork generation $($created.ForkGeneration))"

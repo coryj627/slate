@@ -6,7 +6,8 @@
 # exists (so it stays quiet during the image build). Reads the host's
 # KVP items, configures the static network, finds the cache volume,
 # writes .env and jit.cfg for the runner task, then signals `ready`.
-# Any failure writes bootstrap-error.txt and shuts the VM down; the host
+# Any failure publishes slate.error as a guest KVP item (the host logs it),
+# writes bootstrap-error.txt and shuts the VM down 30 s later; the host
 # sees Off, resolves no successful job, and discards.
 $ErrorActionPreference = 'Stop'
 $runnerDir = 'C:\actions-runner'
@@ -135,8 +136,10 @@ try {
         Write-Log "ERROR: $failure"
         Set-Content -LiteralPath (Join-Path $runnerDir 'bootstrap-error.txt') -Value $failure
     } finally {
-        # Shut down even when the log or the error file cannot be written.
-        & shutdown.exe /s /f /t 5 /c 'slate bootstrap failed'
-        Write-Log "shutdown requested (exit $LASTEXITCODE)"
+        # Shut down even when the log or the error file cannot be written. In
+        # 30 s, not at once: the host ticks every 10 s and can read slate.error
+        # only while the VM runs.
+        & shutdown.exe /s /f /t 30 /c 'slate bootstrap failed'
+        Write-Log "shutdown in 30 s, so the host can read slate.error while the VM runs (exit $LASTEXITCODE)"
     }
 }

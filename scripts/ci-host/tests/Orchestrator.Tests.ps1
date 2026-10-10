@@ -98,6 +98,9 @@ Context 'admission' {
         $vm.SlotIp | Should -Be '10.77.0.11'
         $vm.ForkGeneration | Should -Be 3
         $journal.SeenJobs['1'].Lane | Should -Be 'app'
+        # The journal entry's shape: 16 keys, every one present from admission.
+        @($vm.Keys | Sort-Object) | Should -Be @('CachePath', 'Claimed', 'Dir', 'ForkGeneration', 'GuestError', 'HandedAt', 'JobId', 'Lane', 'Name', 'PendingCommit', 'Phase', 'RunId', 'RunnerId', 'Slot', 'SlotIp', 'StartedAt')
+        $vm.GuestError | Should -Be $null
     }
     It 'never runs more VMs than slots' {
         $world.Queued = @((New-QueuedJob 1 10 'app' '2026-10-10T11:00:00Z'), (New-QueuedJob 2 10 'rust' '2026-10-10T11:00:01Z'), (New-QueuedJob 3 10 'model' '2026-10-10T11:00:02Z'))
@@ -133,6 +136,14 @@ Context 'handoff' {
         $world.Heartbeat = 'NoContact'
         Invoke-OrchestratorTick -Config $config -Journal $journal -Adapters $adapters -Now $t0
         $script:name = @($journal.Vms.Keys)[0]
+    }
+    It 'hands off even when reading the guest error throws' {
+        $world.Heartbeat = 'OK'
+        $adapters.GetGuestError = { param($n) & $script:record 'GetGuestError' @($n); throw 'wmi unavailable' }
+        Invoke-OrchestratorTick -Config $config -Journal $journal -Adapters $adapters -Now $t0.AddSeconds(30)
+        (Get-Calls 'GetGuestError').Count | Should -BeGreaterThan 0
+        $journal.Vms[$name].Phase | Should -Be 'handed'
+        $journal.Vms[$name].GuestError | Should -Be $null
     }
     It 'registers a JIT runner with the lane label and sends chunked KVP once the heartbeat is OK' {
         $world.Heartbeat = 'OK'
@@ -311,12 +322,21 @@ Context 'settle' {
         $journal.Retries.Count | Should -Be 0
     }
     It 'deregisters the runner, registers a retry and discards when the guest shut down without running a job' {
-        # Bootstrap failure: the VM is Off, GetJob finds no record of job 1
-        # running here (it returns nothing) and job 1 is still queued.
+        # Bootstrap failure: the guest publishes slate.error while it still
+        # runs (Hyper-V exposes guest KVP items only then) and the host keeps
+        # it. Later the VM is Off, GetJob finds no record of job 1 running here
+        # (it returns nothing) and job 1 is still queued.
+        $world.VmStates[$name] = 'Running'
+        $world.GuestError = 'no JIT config arrived within 300 s'
+        Invoke-OrchestratorTick -Config $config -Journal $journal -Adapters $adapters -Now $t0.AddSeconds(20)
+        $journal.Vms[$name].GuestError | Should -Be 'no JIT config arrived within 300 s'
+        # The same report on a later tick is not logged again.
+        Invoke-OrchestratorTick -Config $config -Journal $journal -Adapters $adapters -Now $t0.AddSeconds(30)
+        @($logs | Where-Object { $_.Contains("[warn] ${name}: guest reports: no JIT config arrived within 300 s") }).Count | Should -Be 1
+        $readsWhileRunning = (Get-Calls 'GetGuestError').Count
+        $world.GuestError = $null
         $world.VmStates[$name] = 'Off'
         $world.Queued = @((New-QueuedJob 1 10 'app'))
-        # The guest published its bootstrap failure as the KVP item slate.error.
-        $world.GuestError = 'no JIT config arrived within 300 s'
         Invoke-OrchestratorTick -Config $config -Journal $journal -Adapters $adapters -Now $t0.AddMinutes(20)
         (Get-Calls 'RemoveRunner')[0].Args[0] | Should -Be 77
         $journal.Retries['1'].Count | Should -Be 1
@@ -324,15 +344,18 @@ Context 'settle' {
         (Get-Calls 'CommitCache').Count | Should -Be 0
         $journal.Vms.Count | Should -Be 0
         (Get-Calls 'NewVm').Count | Should -Be 1
-        (Get-Calls 'GetGuestError')[0].Args[0] | Should -Be $name
+        # The stored report is logged; no fallback read is needed at Off.
+        (Get-Calls 'GetGuestError').Count | Should -Be $readsWhileRunning
         @($logs | Where-Object { $_.Contains("${name}: shut down without running a job (guest bootstrap failure?) guest error: no JIT config arrived within 300 s") }).Count | Should -Be 1
     }
     It 'still tears down a jobless VM when its guest error cannot be read' {
+        # Nothing was captured while it ran, so settle tries one last read.
         $world.VmStates[$name] = 'Off'
         $world.Queued = @((New-QueuedJob 1 10 'app'))
+        $readsBefore = (Get-Calls 'GetGuestError').Count
         $adapters.GetGuestError = { param($n) & $script:record 'GetGuestError' @($n); throw 'wmi unavailable' }
         Invoke-OrchestratorTick -Config $config -Journal $journal -Adapters $adapters -Now $t0.AddMinutes(20)
-        (Get-Calls 'GetGuestError').Count | Should -Be 1
+        (Get-Calls 'GetGuestError').Count | Should -Be ($readsBefore + 1)
         $journal.Retries['1'].Count | Should -Be 1
         (Get-Calls 'RemoveVm').Count | Should -Be 1
         $journal.Vms.Count | Should -Be 0

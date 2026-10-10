@@ -123,6 +123,15 @@ Describe 'guest scripts' {
         $creates.Count | Should -Be 1
         $creates[0] | Should -Not -Match '-Force'
     }
+    It 'system bootstrap keeps a failed VM up 30 s so the host can read slate.error while it runs' {
+        # The host ticks every 10 s and Hyper-V exposes guest KVP items only
+        # while the VM runs.
+        $text = Get-Content -Raw (Join-Path $guestDir 'bootstrap-system.ps1')
+        $calls = @($text -split "`n" | Where-Object { $_ -match '^\s*&\s*shutdown\.exe' })
+        $calls.Count | Should -Be 1
+        $calls[0] | Should -Match ([regex]::Escape('shutdown.exe /s /f /t 30 '))
+        $text | Should -Match 'Write-Log .*30 s'
+    }
     It 'runner bootstrap holds a failed VM up for 600 s for vmconnect, then still shuts down' {
         $text = Get-Content -Raw (Join-Path $guestDir 'bootstrap-runner.ps1')
         $text | Should -Match 'holding the VM up for 600 s'
