@@ -923,7 +923,15 @@ parallel with them.
   the worker and its own parent (SIGTERM would only cancel the job, which
   still runs `always()` steps). A new in-place stage, `03e-hook.pkr.hcl`
   with `refresh-hook.sh`, rolls a hook change into the toolchain and warm
-  layers in about four minutes. Round 3 follows.
+  layers in about four minutes.
+- **Live test, round 3 (05:51 UTC): passed.** Run 38028908109, both mac
+  jobs refused. GitHub recorded "Set up job" as the only completed step; "Set
+  up runner" and every later step, the `always()` uploads included, ended
+  with no result, because the worker was killed mid-step. The listener
+  reported the job failed and exited, and the controller destroyed the VM
+  within ten seconds. **Phase 3 step 2 is met.** `phase3-hook-livetest.sh`
+  (`deny`, `check`, `restore`) repeats the test in a few minutes whenever
+  the hook changes.
 - **PR A opened 2026-10-10:** coryj627/slate#1335, branch
   `ci/mac-runner-phase2`, with everything above. Its hosted checks are the
   first runs under the workflow execution policy.
