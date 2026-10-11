@@ -532,8 +532,12 @@ pull-requests: read }`) lists every `refs/heads/claude/*` branch with its
 requests as head and as base, and its tip's committer date, each branch
 handled in its own error scope and its name URL-encoded; it writes the
 table to its summary and, with `delete`, deletes only branches whose tip
-`main` contains and that are the base of no open pull request, asserting
-the `claude/` prefix. Unmerged branches are never deleted by it (the
+`main` contains and that are neither the base nor the head of any open
+pull request (deleting a head would close its pull request), asserting
+the `claude/` prefix; the table names why each branch was kept. A failed
+branch listing fails the run, so an empty report is never silent; a
+failed compare or delete for one branch warns, the loop continues, and
+the run fails at the end. Unmerged branches are never deleted by it (the
 repository already deletes merged heads; what remains is unmerged work).
 Its guard runs in a small workflow of its own, filtered to the file.
 
@@ -583,7 +587,7 @@ Its guard runs in a small workflow of its own, filtered to the file.
 `nightly.yml` and the pilot keep their rules and can adopt the router
 later (its deadline formula is `windows.yml`'s). Whether the model
 coverage inventories differ by operating system is unverified. The
-heartbeat's two-minute window after a crash is accepted.
+heartbeat's three-minute window after a crash is accepted.
 
 ## 14. Planning deviations (2026-10-11)
 
@@ -600,8 +604,7 @@ heartbeat's two-minute window after a crash is accepted.
 - Staleness is measured against the router's own clock with a 180 s window;
   the run's creation time is read for nothing (GitHub resolves `vars` at job
   start, verified on a11y-check run 38060200124 attempt 4; `created_at`
-  never moves across re-runs). §13's "two-minute window" is this 180 s
-  window, three minutes.
+  never moves across re-runs). §13's three-minute window is this one.
 - Earlier routers are replayed through the same allocation instead of being
   assumed to place two lanes; a router that completed at most 30 s before
   the published state still counts.
