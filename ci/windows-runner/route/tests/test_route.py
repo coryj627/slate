@@ -277,6 +277,17 @@ class Constants(unittest.TestCase):
             self.assertIn(host_lane, route.DURATIONS)
         self.assertIn("shell", route.DURATIONS)
 
+    def test_workflow_routes_exactly_the_lane_table(self):
+        path = os.path.join(os.path.dirname(__file__), "..", "..", "..", "..", ".github", "workflows", "windows.yml")
+        if not os.path.exists(path):
+            self.skipTest("windows.yml is not beside this checkout")
+        with open(path, encoding="utf-8") as handle:
+            text = handle.read()
+        match = re.search(r"ROUTE_LANES: ([a-z0-9,-]+)", text)
+        self.assertIsNotNone(match)
+        self.assertEqual(match.group(1).split(","), ["rust", "app", "model-0", "model-1"])
+        self.assertEqual(sorted(match.group(1).split(",")), sorted(route.LANES))
+
 
 class Reads(unittest.TestCase):
     def test_fetch_run_created(self):

@@ -33,21 +33,36 @@
 # serial job did (adversarial review: GitHub evaluates required checks
 # individually, not by sibling status).
 #
-# Runner selection, revised 2026-10-10: the repository variable
-# WINDOWS_RUNNER_MODE routes every Windows lane, `home` only when the
-# variable is exactly `home` (GitHub compares it ignoring case); anything
-# else, including unset, is today's providers. `home` targets the
-# self-hosted pool on the owner's desktop — one throwaway Hyper-V VM per
-# job with labels slate-win-{rust,app,model,shell};
+# Runner selection, revised 2026-10-11: the repository variable
+# WINDOWS_RUNNER_MODE and the routing job `route` decide per lane, from
+# the state the home host publishes every tick in the repository variable
+# WINDOWS_HOME_STATE (heartbeat, slots, what runs, what is queued).
+# `home` means home first: a lane takes a free slot of the self-hosted
+# pool on the owner's desktop (one throwaway Hyper-V VM per job, labels
+# slate-win-{rust,app,model}); when none is free it queues there only if
+# it would still finish inside the run's critical path (the app lane plus
+# the shell gate), and otherwise runs on Namespace at once. A state older
+# than two minutes, or one that says the host is not serving, sends every
+# lane to Namespace by itself. `home-only` queues every lane at home
+# (golden-image validation, fidelity runs). `namespace` or anything else,
+# including unset, is today's providers, verbatim, and the routing job
+# does not run at all: a run that cannot read repository variables (a
+# fork or Dependabot pull request) never waits on the home host, and a
+# fork pull request is sent to Namespace by the router and refused and
+# evicted by the host even if its copy of the router says otherwise. The
+# shell gate stays on GitHub-hosted windows-latest in every mode but
+# home-only: free on a public repository and faster than the home pool.
+# ci/windows-runner/route/route.py is the rule; its step summary shows
+# what each run saw and decided, with a replay line. A lane trusts the
+# router's answer only in the attempt it ran in, so "Re-run failed jobs"
+# (which reuses it) always lands on Namespace: after a flip or an outage
+# use "Re-run all jobs" (`gh run rerun <id>`). The runbook
 # docs/runbooks/self-hosted-windows-runner.md has the design, the
-# fallback flip and the trust model. Today's providers are the
-# 2026-07-31 arrangement, verbatim: namespace-profile-winx64-fast[-pr]
-# (dashboard-configured, Cache Volumes enabled) for the build/test lanes
-# and GitHub-hosted windows-latest for the shell gate, so a run that
-# cannot read repository variables (a fork or Dependabot pull request)
-# never waits on the home host. Flip with
-# `gh variable set WINDOWS_RUNNER_MODE --body namespace` (and back with
-# `--body home`); nothing else changes. The per-attempt actions/cache
+# fallback flip and the trust model; today's providers are the 2026-07-31
+# arrangement: namespace-profile-winx64-fast[-pr] (dashboard-configured,
+# Cache Volumes enabled) for the build/test lanes and windows-latest for
+# the shell gate. Flip with `gh variable set WINDOWS_RUNNER_MODE --body
+# namespace` (and back with `--body home`). The per-attempt actions/cache
 # scheme both replaced is in git history at a5037b35.
 #
 # On `home` the cache is a per-lane VHDX forked copy-on-write for every
@@ -92,6 +107,7 @@ on:
       - 'Cargo.lock'
       - 'rust-toolchain.toml'
       - '.github/workflows/windows.yml'
+      - 'ci/windows-runner/route/**'
       - 'scripts/verify_windows_model_shards.py'
       - 'scripts/tests/test_windows_model_shards.py'
       # W6-2 PR F (IPJ-5-1): the lane's censuses read the plan documents,
@@ -114,6 +130,7 @@ on:
       - 'Cargo.lock'
       - 'rust-toolchain.toml'
       - '.github/workflows/windows.yml'
+      - 'ci/windows-runner/route/**'
       - 'scripts/verify_windows_model_shards.py'
       - 'scripts/tests/test_windows_model_shards.py'
       # W6-2 PR F (IPJ-5-1): the lane's censuses read the plan documents,
@@ -137,11 +154,58 @@ permissions:
   contents: read
 
 jobs:
+  # The rule lives in ci/windows-runner/route/route.py (spec §3–§5): it
+  # reads the state the host publishes (vars) and decides a pool per lane.
+  # It runs only when the mode is home or home-only and never fails the
+  # run: both steps continue on error, and every routed lane falls back to
+  # the vendor when an output is missing or was written by an earlier
+  # attempt.
+  route:
+    name: Route Windows lanes
+    if: ${{ vars.WINDOWS_RUNNER_MODE == 'home' || vars.WINDOWS_RUNNER_MODE == 'home-only' }}
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    permissions:
+      actions: read
+      contents: read
+    outputs:
+      attempt: ${{ steps.route.outputs.attempt }}
+      rust-pool: ${{ steps.route.outputs.rust-pool }}
+      app-pool: ${{ steps.route.outputs.app-pool }}
+      model-0-pool: ${{ steps.route.outputs.model-0-pool }}
+      model-1-pool: ${{ steps.route.outputs.model-1-pool }}
+    steps:
+      - name: Checkout the route script
+        continue-on-error: true
+        uses: actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0  # v7
+        with:
+          sparse-checkout: ci/windows-runner/route
+          persist-credentials: false
+      - name: Pick a pool for each lane from the mode and the host's published state
+        id: route
+        continue-on-error: true
+        env:
+          GH_TOKEN: ${{ github.token }}
+          WINDOWS_RUNNER_MODE: ${{ vars.WINDOWS_RUNNER_MODE }}
+          WINDOWS_HOME_STATE: ${{ vars.WINDOWS_HOME_STATE }}
+          ROUTE_LANES: rust,app,model-0,model-1
+          ROUTE_ATTEMPT: ${{ github.run_attempt }}
+          ROUTE_RUN_ID: ${{ github.run_id }}
+          ROUTE_EVENT: ${{ github.event_name }}
+          ROUTE_HEAD_REPO: ${{ github.event.pull_request.head.repo.full_name }}
+          ROUTE_REPO: ${{ github.repository }}
+        run: python3 ci/windows-runner/route/route.py
+
   rust-tests:
     name: rust tests (windows x64)
-    runs-on: ${{ vars.WINDOWS_RUNNER_MODE == 'home' && 'slate-win-rust' || format('namespace-profile-winx64-fast{0};overrides.cache-tag=slate-windows-rust', github.ref != 'refs/heads/main' && '-pr' || '') }}
+    needs: [route]
+    if: ${{ !cancelled() }}
+    runs-on: ${{ (needs.route.outputs.attempt == github.run_attempt && needs.route.outputs.rust-pool == 'home') && 'slate-win-rust' || format('namespace-profile-winx64-fast{0};overrides.cache-tag=slate-windows-rust', github.ref != 'refs/heads/main' && '-pr' || '') }}
     timeout-minutes: 60
     steps:
+      - name: Record the runner
+        run: Write-Host "runner=${{ runner.name }} environment=${{ runner.environment }} attempt=${{ github.run_attempt }} router-attempt=${{ needs.route.outputs.attempt }}"
+
       - name: Checkout
         uses: actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0  # v7
 
@@ -162,7 +226,7 @@ jobs:
       # x86_64-pc-windows-msvc host target) on the first cargo call.
 
       - name: Cache Rust build (Namespace NVMe cache)
-        if: ${{ vars.WINDOWS_RUNNER_MODE != 'home' }}
+        if: ${{ !(needs.route.outputs.attempt == github.run_attempt && needs.route.outputs.rust-pool == 'home') }}
         # `rust` mode mounts ~/.cargo/{registry,git,.global-cache} and
         # the cargo target dir onto the volume — no upload/download, no
         # save step, no exact-key freeze class (the 2026-07 incident the
@@ -299,9 +363,14 @@ jobs:
 
   windows:
     name: app build + test (windows x64)
-    runs-on: ${{ vars.WINDOWS_RUNNER_MODE == 'home' && 'slate-win-app' || format('namespace-profile-winx64-fast{0};overrides.cache-tag=slate-windows-app', github.ref != 'refs/heads/main' && '-pr' || '') }}
+    needs: [route]
+    if: ${{ !cancelled() }}
+    runs-on: ${{ (needs.route.outputs.attempt == github.run_attempt && needs.route.outputs.app-pool == 'home') && 'slate-win-app' || format('namespace-profile-winx64-fast{0};overrides.cache-tag=slate-windows-app', github.ref != 'refs/heads/main' && '-pr' || '') }}
     timeout-minutes: 60
     steps:
+      - name: Record the runner
+        run: Write-Host "runner=${{ runner.name }} environment=${{ runner.environment }} attempt=${{ github.run_attempt }} router-attempt=${{ needs.route.outputs.attempt }}"
+
       - name: Checkout
         uses: actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0  # v7
         with:
@@ -322,7 +391,7 @@ jobs:
       # x86_64-pc-windows-msvc host target) on the first cargo call.
 
       - name: Cache Rust build + NuGet packages (Namespace NVMe cache)
-        if: ${{ vars.WINDOWS_RUNNER_MODE != 'home' }}
+        if: ${{ !(needs.route.outputs.attempt == github.run_attempt && needs.route.outputs.app-pool == 'home') }}
         # `rust` mode as in the rust-tests lane (this lineage carries the
         # RELEASE graph the bindings build needs), plus the NuGet
         # global-packages folder as an explicit path — the action unions
@@ -509,7 +578,9 @@ jobs:
 
   windows-model-shard:
     name: app model (windows x64, shard ${{ matrix.shard }})
-    runs-on: ${{ vars.WINDOWS_RUNNER_MODE == 'home' && 'slate-win-model' || format('namespace-profile-winx64-fast{0};overrides.cache-tag=slate-windows-model', github.ref != 'refs/heads/main' && '-pr' || '') }}
+    needs: [route]
+    if: ${{ !cancelled() }}
+    runs-on: ${{ (needs.route.outputs.attempt == github.run_attempt && ((matrix.shard == 0 && needs.route.outputs.model-0-pool == 'home') || (matrix.shard == 1 && needs.route.outputs.model-1-pool == 'home'))) && 'slate-win-model' || format('namespace-profile-winx64-fast{0};overrides.cache-tag=slate-windows-model', github.ref != 'refs/heads/main' && '-pr' || '') }}
     strategy:
       fail-fast: false
       max-parallel: 2
@@ -521,6 +592,9 @@ jobs:
     # release/NuGet graph, so the existing lineage stays useful to either.
     # Results live outside the cache. Trusted-main/PR routing is unchanged.
     steps:
+      - name: Record the runner
+        run: Write-Host "runner=${{ runner.name }} environment=${{ runner.environment }} attempt=${{ github.run_attempt }} router-attempt=${{ needs.route.outputs.attempt }}"
+
       - name: Checkout
         uses: actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0  # v7
         with:
@@ -541,7 +615,7 @@ jobs:
       # x86_64-pc-windows-msvc host target) on the first cargo call.
 
       - name: Cache Rust build + NuGet packages (Namespace NVMe cache)
-        if: ${{ vars.WINDOWS_RUNNER_MODE != 'home' }}
+        if: ${{ !(needs.route.outputs.attempt == github.run_attempt && ((matrix.shard == 0 && needs.route.outputs.model-0-pool == 'home') || (matrix.shard == 1 && needs.route.outputs.model-1-pool == 'home'))) }}
         # `rust` mode as in the rust-tests lane (this lineage carries the
         # RELEASE graph the bindings build needs), plus the NuGet
         # global-packages folder as an explicit path — the action unions
@@ -712,7 +786,8 @@ jobs:
   flaui:
     name: shell accessibility gate (windows x64)
     needs: [windows]
-    runs-on: ${{ vars.WINDOWS_RUNNER_MODE == 'home' && 'slate-win-shell' || 'windows-latest' }}
+    if: ${{ !cancelled() && needs.windows.result == 'success' }}
+    runs-on: ${{ vars.WINDOWS_RUNNER_MODE == 'home-only' && 'slate-win-shell' || 'windows-latest' }}
     timeout-minutes: 20
     steps:
       - name: Set up .NET 10
@@ -763,7 +838,7 @@ jobs:
   # results on a standard hosted runner without an attached paid cache.
   gate:
     name: build + test (windows x64)
-    needs: [rust-tests, windows, windows-model, flaui]
+    needs: [route, rust-tests, windows, windows-model, flaui]
     if: ${{ always() }}
     runs-on: ubuntu-latest
     timeout-minutes: 5
@@ -771,6 +846,6 @@ jobs:
       - name: Verify all windows lanes succeeded
         run: |
           if [ "${{ needs.rust-tests.result }}" != "success" ] || [ "${{ needs.windows.result }}" != "success" ] || [ "${{ needs.windows-model.result }}" != "success" ] || [ "${{ needs.flaui.result }}" != "success" ]; then
-            echo "::error::rust-tests=${{ needs.rust-tests.result }} app=${{ needs.windows.result }} model=${{ needs.windows-model.result }} flaui=${{ needs.flaui.result }}"
+            echo "::error::rust-tests=${{ needs.rust-tests.result }} app=${{ needs.windows.result }} model=${{ needs.windows-model.result }} flaui=${{ needs.flaui.result }} pools: rust=${{ needs.route.outputs.rust-pool }} app=${{ needs.route.outputs.app-pool }} model-0=${{ needs.route.outputs.model-0-pool }} model-1=${{ needs.route.outputs.model-1-pool }} (router attempt ${{ needs.route.outputs.attempt }} of ${{ github.run_attempt }})"
             exit 1
           fi
