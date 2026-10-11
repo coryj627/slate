@@ -226,6 +226,15 @@ Set-Content -LiteralPath (Join-Path $Root 'bin\install-commit.txt') -Value $comm
 if ($LASTEXITCODE -ne 0) { throw "icacls exited $LASTEXITCODE restricting $Root\bin" }
 
 Write-Host '9/9 scheduled tasks'
+# The previous golden image is deleted by an elevated task on the module's
+# predicate (install/prune-golden.ps1): the account the loop runs as has
+# read and execute on golden by policy (plus WDAC for Hyper-V's chain
+# ACLs). Registered on every run: it holds no password, so it stays outside
+# the keepAccount pair and an older install gains it on a plain re-run.
+Register-ScheduledTask -TaskName 'slate-ci-golden-prune' -Force `
+    -Action (New-ScheduledTaskAction -Execute $msiPwsh -Argument "-NoProfile -NonInteractive -ExecutionPolicy Bypass -File `"$Root\bin\install\prune-golden.ps1`" -Root `"$Root`"" -WorkingDirectory "$Root\bin") `
+    -Trigger (New-ScheduledTaskTrigger -Daily -At 4am) -User 'NT AUTHORITY\SYSTEM' -RunLevel Highest `
+    -Settings (New-ScheduledTaskSettingsSet -ExecutionTimeLimit (New-TimeSpan -Minutes 10) -StartWhenAvailable) | Out-Null
 if ($keepAccount) {
     Write-Host '  kept (they hold the current password; -ResetAccount re-registers them)'
 } else {
@@ -272,4 +281,5 @@ if ($keepAccount) {
     Write-Host '     sealed golden disk; only once it passes, enable the task:'
     Write-Host '       Enable-ScheduledTask -TaskName slate-ci-orchestrator'
     Write-Host "     The loop starts within a minute; Get-Content $Root\logs\orchestrator-*.log -Tail 20"
+    Write-Host '  The previous golden image is pruned daily at 04:00 by slate-ci-golden-prune once the loop has accepted the current one on every lane.'
 }

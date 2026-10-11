@@ -173,6 +173,18 @@ Describe 'golden scripts' {
         $text | Should -Match 'IsReadOnly -Value \$true'
         $text | Should -Match '\.slate-golden-complete'
     }
+    It 'the build script rotates only a sealed image to .prev with -Rotate, after the VM-exists check, through the shared helper' {
+        $text = Get-Content -Raw (Join-Path $goldenDir 'build-golden.ps1')
+        $text | Should -Match ([regex]::Escape('[switch]$Rotate'))
+        $rotate = $text.IndexOf('if ($Rotate')
+        $rotate | Should -BeGreaterThan $text.IndexOf('VM $vmName exists')
+        $rotate | Should -BeLessThan $text.IndexOf('exists; move it aside to rebuild')
+        $block = $text.Substring($rotate, 700)
+        $block | Should -Match 'IsReadOnly\) \{ throw'
+        $block | Should -Match 'Remove-SealedFile -Path \$prevPath'
+        $block | Should -Match 'Rename-Item -LiteralPath \$OutPath -NewName ''win11-runner\.prev\.vhdx'''
+        $block | Should -Not -Match 'Remove-Item'
+    }
     It 'provisioning hands phase 2 to a runner logon task, because HKLM RunOnce runs only when an administrator logs on' {
         # runner is a standard user, so an HKLM RunOnce entry would never run
         # and the build would sit at runner's desktop until its timeout.

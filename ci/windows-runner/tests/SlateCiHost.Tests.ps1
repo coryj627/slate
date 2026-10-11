@@ -661,3 +661,33 @@ Describe 'Test-GoldenPrevRemovable' {
         Test-GoldenPrevRemovable -Accepted $null -CurrentStamp $accepted.Golden -CurrentSealed $true -VmCreationTimes @() | Should -BeFalse
     }
 }
+
+Describe 'Get-CiHostPaths and Read-JournalSnapshot' {
+    It 'derives every path of the tree from the root, and Get-CiHostConfig uses them' {
+        $paths = Get-CiHostPaths -Root 'C:\slate-ci'
+        $paths.GoldenPath | Should -Be 'C:\slate-ci\golden\win11-runner.vhdx'
+        $paths.GoldenPrevPath | Should -Be 'C:\slate-ci\golden\win11-runner.prev.vhdx'
+        $paths.JournalPath | Should -Be 'C:\slate-ci\state\journal.json'
+        $paths.LogDir | Should -Be 'C:\slate-ci\logs'
+        $cfg = Get-CiHostConfig -Path (Join-Path $PSScriptRoot '..' 'config.json')
+        foreach ($key in 'GoldenPath', 'GoldenPrevPath', 'CacheDir', 'VmDir', 'StateDir', 'LogDir', 'JournalPath') { $cfg[$key] | Should -Be $paths[$key] }
+    }
+    It 'a snapshot reads a journal without moving anything, and reads a missing or broken file as a new journal' {
+        $p = Join-Path $TestDrive 'j.json'
+        $j = New-Journal; $j.GoldenAccepted = @{ Golden = '2026-10-10T22:55:00Z'; Lanes = @('rust'); Complete = $false }
+        Write-Journal -Path $p -Journal $j
+        (Read-JournalSnapshot -Path $p).GoldenAccepted.Lanes | Should -Be @('rust')
+        'not json' | Set-Content $p
+        (Read-JournalSnapshot -Path $p).GoldenAccepted | Should -Be $null
+        Test-Path $p | Should -BeTrue -Because 'a snapshot never moves the loop''s journal aside'
+        @(Get-ChildItem $TestDrive -Filter 'j.json.corrupt-*').Count | Should -Be 0
+        (Read-JournalSnapshot -Path (Join-Path $TestDrive 'none.json')).Vms.Count | Should -Be 0
+    }
+    It 'Remove-SealedFile deletes a read-only file and tolerates a missing one' {
+        $f = Join-Path $TestDrive 'sealed.bin'; 'x' | Set-Content $f
+        Set-ItemProperty -LiteralPath $f -Name IsReadOnly -Value $true
+        Remove-SealedFile -Path $f
+        Test-Path $f | Should -BeFalse
+        { Remove-SealedFile -Path $f } | Should -Not -Throw
+    }
+}

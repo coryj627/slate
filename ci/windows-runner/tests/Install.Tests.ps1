@@ -63,6 +63,7 @@ Describe 'install scripts' {
     It 'parse as PowerShell' {
         Test-ScriptParses (Join-Path $installDir 'setup-host.ps1') | Should -BeTrue
         Test-ScriptParses (Join-Path $installDir 'store-token.ps1') | Should -BeTrue
+        Test-ScriptParses (Join-Path $installDir 'prune-golden.ps1') | Should -BeTrue
     }
     It 'setup never adds the account to Administrators and registers both tasks' {
         $text = Get-Content -Raw (Join-Path $installDir 'setup-host.ps1')
@@ -187,5 +188,83 @@ Describe 'install scripts' {
         $text | Should -Not -Match 'slate-ci-host:'
         $text | Should -Match ([regex]::Escape('while ((Test-Path -LiteralPath $plainPath) -and (Get-Date) -lt $deadline) { Start-Sleep -Seconds 1 }'))
         $text | Should -Not -Match "State -eq 'Running'"
+    }
+    It 'setup registers the elevated prune task for the previous golden image, daily, as SYSTEM, on every run and outside the password-bound pair' {
+        $text = Get-Content -Raw (Join-Path $installDir 'setup-host.ps1')
+        $start = $text.IndexOf("Register-ScheduledTask -TaskName 'slate-ci-golden-prune'")
+        $start | Should -BeGreaterThan -1
+        $end = $text.IndexOf("-User 'NT AUTHORITY\SYSTEM'", $start)
+        $end | Should -BeGreaterThan $start
+        $prune = $text.Substring($start, $end - $start)
+        $prune | Should -Match 'prune-golden\.ps1'
+        $prune | Should -Match '-Daily -At 4am'
+        $prune | Should -Not -Match '\$Account'
+        $text.Substring($end, 120) | Should -Match '-RunLevel Highest'
+        $text | Should -Match ([regex]::Escape("`$taskNames = @('slate-ci-orchestrator', 'slate-ci-store-token')"))
+        $nine = $text.IndexOf("'9/9 scheduled tasks'")
+        $start | Should -BeGreaterThan $nine
+        $start | Should -BeLessThan $text.IndexOf('if ($keepAccount) {', $nine)
+        $text | Should -Match 'slate-ci-golden-prune once the loop has accepted'
+    }
+}
+
+Describe 'prune-golden.ps1' {
+    BeforeEach {
+        $script:root = Join-Path $TestDrive ('root-' + [guid]::NewGuid().ToString('N'))
+        foreach ($d in 'golden', 'state', 'vms', 'logs', 'bin', 'bin\adapters') { New-Item -ItemType Directory -Force (Join-Path $root $d) | Out-Null }
+        Copy-Item (Join-Path $PSScriptRoot '..' 'SlateCiHost.psm1') (Join-Path $root 'bin')
+        Copy-Item (Join-Path $PSScriptRoot '..' 'adapters' 'HyperV.ps1') (Join-Path $root 'bin\adapters')
+        $script:golden = Join-Path $root 'golden\win11-runner.vhdx'; 'new' | Set-Content $golden
+        $script:prev = Join-Path $root 'golden\win11-runner.prev.vhdx'; 'old' | Set-Content $prev
+        (Get-Item $prev).LastWriteTimeUtc = [datetime]'2026-10-10T20:00:00Z'
+        (Get-Item $golden).LastWriteTimeUtc = [datetime]'2026-10-10T22:55:00Z'
+        Set-ItemProperty -LiteralPath $prev -Name IsReadOnly -Value $true
+        Set-ItemProperty -LiteralPath $golden -Name IsReadOnly -Value $true
+        $script:journalPath = Join-Path $root 'state\journal.json'
+        $script:prune = Join-Path $installDir 'prune-golden.ps1'
+        function Set-Accepted([string]$Stamp, [string[]]$Lanes = @('rust', 'app', 'model', 'shell')) {
+            $j = New-Journal
+            $j.GoldenAccepted = @{ Golden = $Stamp; Lanes = $Lanes; Complete = ($Lanes.Count -eq 4) }
+            Write-Journal -Path $script:journalPath -Journal $j
+        }
+        function Get-PruneLog { Get-Content -Raw (Get-ChildItem (Join-Path $root 'logs') | Select-Object -First 1).FullName }
+    }
+    It 'deletes the previous image once the current, sealed image is accepted on every lane' {
+        Set-Accepted '2026-10-10T22:55:00.0000000Z'
+        & $prune -Root $root
+        Test-Path $prev | Should -BeFalse
+        Test-Path $golden | Should -BeTrue
+        Get-PruneLog | Should -Match 'golden: removed win11-runner.prev.vhdx'
+    }
+    It 'keeps it when the acceptance is of another image (the previous one, right after a rotation)' {
+        Set-Accepted '2026-10-10T20:00:00.0000000Z'
+        & $prune -Root $root
+        Test-Path $prev | Should -BeTrue
+        Get-PruneLog | Should -Match 'the previous image stays'
+    }
+    It 'keeps it while the current image is unsealed, a lane is missing, or a VM older than the image exists' {
+        Set-ItemProperty -LiteralPath $golden -Name IsReadOnly -Value $false
+        Set-Accepted '2026-10-10T22:55:00.0000000Z'
+        & $prune -Root $root
+        Test-Path $prev | Should -BeTrue
+        Set-ItemProperty -LiteralPath $golden -Name IsReadOnly -Value $true
+        Set-Accepted '2026-10-10T22:55:00.0000000Z' @('rust', 'app', 'model')
+        & $prune -Root $root
+        Test-Path $prev | Should -BeTrue
+        Set-Accepted '2026-10-10T22:55:00.0000000Z'
+        $old = Join-Path $root 'vms\slate-win-app-00000000'; New-Item -ItemType Directory -Force $old | Out-Null
+        (Get-Item $old).CreationTimeUtc = [datetime]'2026-10-10T21:00:00Z'
+        & $prune -Root $root
+        Test-Path $prev | Should -BeTrue
+    }
+    It 'does nothing without a previous image, and survives a broken journal' {
+        Remove-Item $prev -Force
+        Set-Accepted '2026-10-10T22:55:00.0000000Z'
+        { & $prune -Root $root } | Should -Not -Throw
+        'broken' | Set-Content $journalPath
+        'old' | Set-Content $prev
+        { & $prune -Root $root } | Should -Not -Throw
+        Test-Path $prev | Should -BeTrue
+        Test-Path $journalPath | Should -BeTrue
     }
 }

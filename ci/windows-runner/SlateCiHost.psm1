@@ -309,6 +309,22 @@ function Join-WinPath {
     return ($Base.TrimEnd('\') + '\' + $Child.TrimStart('\'))
 }
 
+function Get-CiHostPaths {
+    # The one statement of the host tree: the loop, the install scripts and
+    # the prune task derive every path from it.
+    [CmdletBinding()]
+    param([Parameter(Mandatory)][string]$Root)
+    return @{
+        GoldenPath     = Join-WinPath $Root 'golden\win11-runner.vhdx'
+        GoldenPrevPath = Join-WinPath $Root 'golden\win11-runner.prev.vhdx'
+        CacheDir       = Join-WinPath $Root 'cache'
+        VmDir          = Join-WinPath $Root 'vms'
+        StateDir       = Join-WinPath $Root 'state'
+        LogDir         = Join-WinPath $Root 'logs'
+        JournalPath    = Join-WinPath $Root 'state\journal.json'
+    }
+}
+
 function Get-CiHostConfig {
     [CmdletBinding()]
     param([Parameter(Mandatory)][string]$Path)
@@ -357,11 +373,8 @@ function Get-CiHostConfig {
         if ([string]$slot.Ip -eq [string]$config.Gateway) { throw "config ${Path}: slot $($slot.Index) uses the gateway address $($slot.Ip)" }
     }
     $config['PrefixLength'] = [int]($natPrefix -split '/')[1]
-    $config['GoldenPath'] = Join-WinPath $config.Root 'golden\win11-runner.vhdx'
-    $config['CacheDir'] = Join-WinPath $config.Root 'cache'
-    $config['VmDir'] = Join-WinPath $config.Root 'vms'
-    $config['StateDir'] = Join-WinPath $config.Root 'state'
-    $config['LogDir'] = Join-WinPath $config.Root 'logs'
+    $paths = Get-CiHostPaths -Root $config.Root
+    foreach ($key in $paths.Keys) { $config[$key] = $paths[$key] }
     return $config
 }
 
@@ -406,6 +419,32 @@ function Read-Journal {
         elseif ($null -eq $journal[$key] -and $script:JournalDefaults[$key] -is [hashtable]) { $journal[$key] = @{} }
     }
     return $journal
+}
+
+function Read-JournalSnapshot {
+    # A reader's view (the prune task): never moves a broken journal aside,
+    # never writes; a missing or unparseable file is an empty journal.
+    [CmdletBinding()]
+    param([Parameter(Mandatory)][string]$Path)
+    if (-not (Test-Path -LiteralPath $Path)) { return (New-Journal) }
+    try {
+        $journal = Get-Content -Raw -LiteralPath $Path -ErrorAction Stop | ConvertFrom-Json -AsHashtable
+        if ($null -eq $journal -or -not ($journal -is [System.Collections.IDictionary])) { return (New-Journal) }
+    } catch { return (New-Journal) }
+    foreach ($key in $script:JournalDefaults.Keys) {
+        if (-not $journal.Contains($key)) { $journal[$key] = $(if ($script:JournalDefaults[$key] -is [hashtable]) { @{} } else { $null }) }
+    }
+    return $journal
+}
+
+function Remove-SealedFile {
+    # A sealed image is read-only: clear the bit, then delete. Missing is fine.
+    [CmdletBinding()]
+    param([Parameter(Mandatory)][string]$Path)
+    $ErrorActionPreference = 'Stop'
+    if (-not (Test-Path -LiteralPath $Path)) { return }
+    Set-ItemProperty -LiteralPath $Path -Name IsReadOnly -Value $false
+    Remove-Item -LiteralPath $Path -Force
 }
 
 function Write-Journal {
@@ -1156,4 +1195,5 @@ Export-ModuleMember -Function Get-LaneFromLabels, New-RunnerName, Split-KvpChunk
     ConvertTo-DateTimeOffset, Select-QueuedLaneJobs, Select-JobsToAdmit, Register-JobRetry, Test-VmExpired, Get-StaleRunnerNames, Test-CommitEligible, Resolve-RunnerJob, Test-IPv4InPrefix, Get-CiHostConfig, New-Journal, Read-Journal, Write-Journal, Write-CiLog,
     Get-FreeSlots, Remove-ActiveVm, Test-SiblingRunning, Complete-ActiveVm, Update-ActiveVm, Invoke-Admission, Invoke-OrchestratorTick, Invoke-StartupSweep, Select-SlateKvpItems,
     Get-PublishedState, Publish-HomeState, Get-RunRepository, Test-TrustedRun, Get-ExpiredLogNames, Invoke-LogPrune, Register-GoldenAcceptance, Test-GoldenPrevRemovable,
+    Get-CiHostPaths, Read-JournalSnapshot, Remove-SealedFile,
     New-RandomPassword, Expand-UnattendTemplate, Add-SidToUserRight, Set-LocalUserRights
