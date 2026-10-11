@@ -414,11 +414,14 @@ optional API reads; nothing in `namespace` mode.
   `SeenJobs` first, a failed read logged once a minute); if it is
   foreign, or the job carries no lane label, the VM is forced off at once
   with the log line
-  `handoff: <vm> runs job <id> of <repo> (not the trusted repository); forcing it off`
+  `handoff: <vm> runs job <id> of <repo> (<why>); forcing it off`
   and the discard reason
-  `runner taken by job <id> of <repo> (not the trusted repository)`, no
-  retry strike, and the trusted job it was provisioned for stays queued
-  for the next VM.
+  `runner taken by job <id> of <repo> (<why>)`, where `<why>` is
+  `not the trusted repository` for a foreign job and `no lane label` for
+  an unlabelled job of the trusted repository; no retry strike, and the
+  trusted job it was provisioned for stays queued for the next VM. A VM
+  whose runner was seen busy but ran no job the host knows of is logged
+  as such and gets no retry strike either.
 - **Log retention (OR-D7).** `Get-ExpiredLogNames -Names -Today
   -RetentionDays` (pure; local dates, as the writer names files;
   unparseable names kept), run at the first tick of each local day and
@@ -462,12 +465,13 @@ optional API reads; nothing in `namespace` mode.
 ## 8. Failure modes and observability
 
 - **The router never fails a run.** The routing job is skipped in
-  `namespace` mode, its two steps are `continue-on-error`, every exception
+  `namespace` mode, the job and its two steps are `continue-on-error`
+  (so a timeout or a lost runner cannot fail the run either), every exception
   becomes vendor pools with a warning annotation, and a lane whose outputs
   are empty, stale or missing takes the vendor expression in the workflow
   file and still runs. The shell gate's own condition keeps it running
   after a routing-job failure.
-- **Dead host** (OR-D4): stale within two minutes of a crash, including a
+- **Dead host** (OR-D4): stale within three minutes of a crash, including a
   crash mid-job; recovers as soon as the loop publishes again. No run
   strands to discover it. The only strand left is a lane already queued
   home when the host dies: the runbook says flip to `namespace`, cancel
