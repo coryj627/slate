@@ -539,7 +539,9 @@ branch listing fails the run, so an empty report is never silent; a
 failed compare or delete for one branch warns, the loop continues, and
 the run fails at the end. Unmerged branches are never deleted by it (the
 repository already deletes merged heads; what remains is unmerged work).
-Its guard runs in a small workflow of its own, filtered to the file.
+Its guard is a describe in `Workflows.Tests.ps1`, and
+`windows-runner-tests.yml`'s path filters include the file so the guard
+runs when it changes.
 
 ## 11. Testing
 
