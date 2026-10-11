@@ -215,8 +215,8 @@ Describe 'New-GhJitRunner' {
     }
 }
 
-Describe 'Get-GhQueuedLaneJobs' {
-    It 'lists queued and in-progress runs and returns only their queued jobs, all as conditional requests' {
+Describe 'Get-GhLaneJobs' {
+    It 'lists queued and in-progress runs and returns their queued and running jobs, all as conditional requests' {
         Mock Invoke-RestMethod {
             Set-OkStatus $StatusCodeVariable
             if ($Uri -like '*actions/runs?status=queued*') { return [pscustomobject]@{ workflow_runs = @([pscustomobject]@{ id = 1; path = '.github/workflows/windows.yml' }) } }
@@ -232,15 +232,16 @@ Describe 'Get-GhQueuedLaneJobs' {
             }
             throw "unexpected $Uri"
         }
-        $jobs = @(Get-GhQueuedLaneJobs -RoutedWorkflows $routed)
-        @($jobs | ForEach-Object { $_.id }) | Should -Be @(11, 22)
+        $jobs = @(Get-GhLaneJobs -RoutedWorkflows $routed)
+        # The running job carries runner_name: it tells the host which job its runner took.
+        @($jobs | ForEach-Object { $_.id }) | Should -Be @(11, 21, 22)
         Should -Invoke Invoke-RestMethod -Times 4 -Exactly
         # Every listing and jobs call is conditional: a 304 costs no budget.
         Should -Invoke Invoke-RestMethod -Times 4 -Exactly -ParameterFilter { $SkipHttpErrorCheck -and $StatusCodeVariable -eq 'ghStatusCode' }
     }
     It 'returns an empty array when nothing is queued' {
         Mock Invoke-RestMethod { Set-OkStatus $StatusCodeVariable; [pscustomobject]@{ workflow_runs = @() } }
-        @(Get-GhQueuedLaneJobs -RoutedWorkflows $routed).Count | Should -Be 0
+        @(Get-GhLaneJobs -RoutedWorkflows $routed).Count | Should -Be 0
     }
     It 'returns a run''s queued jobs once when it appears in both listings' {
         # The run moved from queued to in_progress between the two listings.
@@ -252,7 +253,7 @@ Describe 'Get-GhQueuedLaneJobs' {
             }
             throw "unexpected $Uri"
         }
-        $jobs = @(Get-GhQueuedLaneJobs -RoutedWorkflows $routed)
+        $jobs = @(Get-GhLaneJobs -RoutedWorkflows $routed)
         $jobs.Count | Should -Be 1
         $jobs[0].id | Should -Be 11
         Should -Invoke Invoke-RestMethod -Times 3 -Exactly
@@ -283,7 +284,7 @@ Describe 'Get-GhQueuedLaneJobs' {
             }
             throw "unexpected $Uri"
         }
-        $jobs = @(Get-GhQueuedLaneJobs -RoutedWorkflows $routed)
+        $jobs = @(Get-GhLaneJobs -RoutedWorkflows $routed)
         @($jobs | ForEach-Object { $_.id }) | Should -Be @(21, 51)
         foreach ($skipped in 1, 3, 4) {
             Should -Invoke Invoke-RestMethod -Times 0 -Exactly -ParameterFilter { $Uri -like "*/runs/$skipped/jobs*" }
@@ -291,7 +292,7 @@ Describe 'Get-GhQueuedLaneJobs' {
         Should -Invoke Invoke-RestMethod -Times 4 -Exactly
     }
     It 'requires the routed workflow list' {
-        $parameter = (Get-Command Get-GhQueuedLaneJobs).Parameters['RoutedWorkflows']
+        $parameter = (Get-Command Get-GhLaneJobs).Parameters['RoutedWorkflows']
         @($parameter.Attributes | Where-Object { $_ -is [System.Management.Automation.ParameterAttribute] } | ForEach-Object { $_.Mandatory }) | Should -Contain $true
     }
 }
@@ -322,7 +323,7 @@ Describe 'Remove-GhRunner / Get-GhRunners' {
 
 Describe 'New-GitHubAdapters' {
     It 'exposes exactly the keys the orchestrator invokes' {
-        @((New-GitHubAdapters -RoutedWorkflows $routed).Keys | Sort-Object) | Should -Be @('GetJob', 'GetQueuedJobs', 'GetRun', 'GetRunner', 'ListRunners', 'NewJitRunner', 'RemoveRunner')
+        @((New-GitHubAdapters -RoutedWorkflows $routed).Keys | Sort-Object) | Should -Be @('GetJob', 'GetLaneJobs', 'GetRun', 'GetRunner', 'ListRunners', 'NewJitRunner', 'RemoveRunner')
     }
     It 'requires the routed workflow list' {
         $parameter = (Get-Command New-GitHubAdapters).Parameters['RoutedWorkflows']
@@ -342,7 +343,7 @@ Describe 'New-GitHubAdapters' {
             throw "unexpected $Uri"
         }
         $a = New-GitHubAdapters -RoutedWorkflows @('.github/workflows/windows.yml')
-        @(& $a.GetQueuedJobs | ForEach-Object { $_.id }) | Should -Be @(11)
+        @(& $a.GetLaneJobs | ForEach-Object { $_.id }) | Should -Be @(11)
         Should -Invoke Invoke-RestMethod -Times 0 -Exactly -ParameterFilter { $Uri -like '*/runs/2/jobs*' }
         (& $a.GetJob 7).runner_name | Should -Be 'slate-win-app-deadbeef'
     }

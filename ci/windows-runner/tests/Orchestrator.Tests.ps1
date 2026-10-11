@@ -8,6 +8,7 @@ BeforeAll {
         # Mutable fake of GitHub + Hyper-V; the adapters read it.
         $script:world = @{
             Queued     = @()
+            InProgress = @()
             Jobs       = @{}
             Runs       = @{}
             VmStates   = @{}
@@ -28,7 +29,7 @@ BeforeAll {
         # everything they touch lives at $script: scope (never a local).
         $script:record = { param($name, $arguments) [void]$script:calls.Add(@{ Name = $name; Args = @($arguments) }) }
         $a = @{
-            GetQueuedJobs = { & $script:record 'GetQueuedJobs' @(); @($script:world.Queued) }
+            GetLaneJobs   = { & $script:record 'GetLaneJobs' @(); @($script:world.Queued) + @($script:world.InProgress) }
             GetJob        = { param($id) & $script:record 'GetJob' @($id); $script:world.Jobs[[string]$id] }
             GetRun        = { param($id) & $script:record 'GetRun' @($id); $script:world.Runs[[string]$id] }
             NewJitRunner  = { param($name, $labels) & $script:record 'NewJitRunner' @($name, $labels); @{ RunnerId = 77; EncodedJitConfig = $script:world.JitConfig } }
@@ -126,8 +127,8 @@ Context 'admission' {
         Invoke-OrchestratorTick -Config $config -Journal $journal -Adapters $adapters -Now $t0
         $journal.Vms.Count | Should -Be 0
     }
-    It 'survives a GetQueuedJobs failure' {
-        $adapters.GetQueuedJobs = { throw 'api down' }
+    It 'survives a GetLaneJobs failure' {
+        $adapters.GetLaneJobs = { throw 'api down' }
         { Invoke-OrchestratorTick -Config $config -Journal $journal -Adapters $adapters -Now $t0 } | Should -Not -Throw
         ($logs -join "`n") | Should -Match 'admission: api down'
     }
@@ -502,6 +503,59 @@ Context 'settle' {
         # The pending commit still waits: the new VM is a same-lane sibling.
         (Get-Calls 'CommitCache').Count | Should -Be 0
         $journal.Vms[$name].PendingCommit | Should -BeTrue
+    }
+}
+
+Context 'handoff reconciliation' {
+    It 'frees the provisioned job for a VM of its own once the listing shows its runner on another job' {
+        # GitHub hands a runner whichever queued job matches its label first.
+        # Two model shards queued together: the first VM is provisioned for
+        # job 1 and GitHub gives it job 2; job 1 must not wait for that VM.
+        $world.Queued = @((New-QueuedJob 3 10 'shell' '2026-10-10T10:59:00Z'), (New-QueuedJob 1 10 'model' '2026-10-10T11:00:00Z'), (New-QueuedJob 2 10 'model' '2026-10-10T11:00:01Z'))
+        Invoke-OrchestratorTick -Config $config -Journal $journal -Adapters $adapters -Now $t0                    # shell -> slot 1, model job 1 -> slot 2
+        $journal.Vms.Count | Should -Be 2
+        $modelVm = @($journal.Vms.Values | Where-Object { $_.Lane -eq 'model' })[0]
+        $modelVm.JobId | Should -Be 1
+        Invoke-OrchestratorTick -Config $config -Journal $journal -Adapters $adapters -Now $t0.AddSeconds(10)    # handoff
+        $modelVm.Phase | Should -Be 'handed'
+        # GitHub gave the model VM job 2; job 1 is still queued.
+        $world.Queued = @((New-QueuedJob 1 10 'model' '2026-10-10T11:00:00Z'))
+        $world.InProgress = @([pscustomobject]@{ id = 2; run_id = 10; status = 'in_progress'; labels = @('slate-win-model'); created_at = '2026-10-10T11:00:01Z'; runner_name = $modelVm.Name })
+        Invoke-OrchestratorTick -Config $config -Journal $journal -Adapters $adapters -Now $t0.AddSeconds(20)
+        $modelVm.JobId | Should -Be 2
+        $modelVm.RunId | Should -Be 10
+        $modelVm.Claimed | Should -BeTrue
+        $journal.SeenJobs.ContainsKey('2') | Should -BeTrue
+        ($logs -join "`n") | Should -Match "$($modelVm.Name): runs job 2, not job 1 it was provisioned for"
+        $journal.Vms.Count | Should -Be 2
+        (Get-Calls 'GetRunner').Count | Should -Be 0
+        # The shell VM finishes: its slot goes to job 1 at once.
+        $shellVm = @($journal.Vms.Values | Where-Object { $_.Lane -eq 'shell' })[0]
+        $world.VmStates[$shellVm.Name] = 'Off'
+        Set-DoneJob 3 10 $shellVm.Name
+        Set-Run 10
+        Invoke-OrchestratorTick -Config $config -Journal $journal -Adapters $adapters -Now $t0.AddSeconds(30)
+        $journal.Vms.Count | Should -Be 2
+        $third = @($journal.Vms.Values | Where-Object { $_.Name -ne $modelVm.Name })[0]
+        $third.Lane | Should -Be 'model'
+        $third.JobId | Should -Be 1
+        $third.Slot | Should -Be $shellVm.Slot
+        (Get-Calls 'NewVm').Count | Should -Be 3
+    }
+    It 'claims a handed VM from the listing without the runner lookup, and leaves its job alone when they agree' {
+        $world.Queued = @((New-QueuedJob 1 10 'app'))
+        Invoke-OrchestratorTick -Config $config -Journal $journal -Adapters $adapters -Now $t0
+        $name = @($journal.Vms.Keys)[0]
+        Invoke-OrchestratorTick -Config $config -Journal $journal -Adapters $adapters -Now $t0.AddSeconds(10)
+        $world.Queued = @()
+        $world.InProgress = @([pscustomobject]@{ id = 1; run_id = 10; status = 'in_progress'; labels = @('slate-win-app'); created_at = '2026-10-10T12:00:00Z'; runner_name = $name })
+        Invoke-OrchestratorTick -Config $config -Journal $journal -Adapters $adapters -Now $t0.AddSeconds(20)
+        $journal.Vms[$name].Claimed | Should -BeTrue
+        $journal.Vms[$name].JobId | Should -Be 1
+        ($logs -join "`n") | Should -Match "${name}: claimed \(job 1 in progress\)"
+        ($logs -join "`n") | Should -Not -Match 'runs job'
+        Invoke-OrchestratorTick -Config $config -Journal $journal -Adapters $adapters -Now $t0.AddSeconds(320)
+        (Get-Calls 'GetRunner').Count | Should -Be 0
     }
 }
 

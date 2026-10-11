@@ -852,8 +852,14 @@ This checks how `Get-VM` reports a VM that no longer exists, as
   VMs are named `slate-win-<lane>-<8 hex>`. A job's lines, in order:
   1. `<vm>: provisioned for job <id> (lane <lane>, slot <n>, fork generation <g>)`
   2. `<vm>: handed off (runner <id>, job <id>)`
-  3. `<vm>: claimed`, or `<vm>: claimed (job <status> on this runner)`,
-     only for a job still running five minutes after the handoff.
+  3. `<vm>: claimed (job <id> in progress)` as soon as a poll's listing
+     shows the runner on a job, usually within a minute of the handoff.
+     Before it, sometimes
+     `<vm>: runs job <y>, not job <x> it was provisioned for, which stays queued for a VM of its own`:
+     GitHub hands a runner whichever queued job of the lane matches first,
+     and job `<x>` then gets the next free slot. `<vm>: claimed`, or
+     `<vm>: claimed (job <status> on this runner)`, comes from the
+     five-minute check instead, when the listing showed nothing.
   4. Sometimes
      `<vm>: job <id> is <status> on GitHub while its VM is off; waiting up to 6 ticks for it to complete`,
      usually with `in_progress`: GitHub's record lagged the guest's
@@ -893,6 +899,15 @@ This checks how `Get-VM` reports a VM that no longer exists, as
   copy under the task's account logs
   `another orchestrator instance holds the mutex; exiting` and exits with
   code 3.
+- **The task's last result.** While the loop runs,
+  `Get-ScheduledTaskInfo -TaskName slate-ci-orchestrator` shows
+  `LastTaskResult` `2147946720` (`0x800710E0`, "the operator or
+  administrator has refused the request") and a `LastRunTime` within the
+  last minute. That is the steady state, not a failure: the task's
+  triggers fire every minute and each new launch is refused while an
+  instance is running. `0` with an older `LastRunTime` means the loop is
+  not being relaunched; `267009` (`0x41301`) means it is running and no
+  trigger has fired since.
 - **Stale runners.** Only the startup sweep removes `slate-win-*` runners
   from GitHub, and it removes every one that no kept VM owns, online or
   offline, so nothing is left behind after a restart. A running loop never
@@ -937,7 +952,18 @@ This checks how `Get-VM` reports a VM that no longer exists, as
 - **Host reboot or Windows Update.** Jobs in flight fail on GitHub as lost
   runners: their VMs are turned off with the host. At boot the loop starts,
   and its sweep removes those VMs and their runners. Re-run the failed
-  jobs. Drain first when you can.
+  jobs. Drain first when you can. Windows Update restarts this host on
+  its own for servicing updates (it did on 2026-10-11 at 03:29, with no
+  one logged on); set active hours wide, or "notify me when a restart is
+  required", under Settings, Windows Update, Advanced options, if an
+  overnight restart would cost a run. Nobody needs to log on afterwards:
+  the loop runs as a task. What it does need is the network: on that
+  reboot the 10GbE adapter had no link for 47 minutes (`aqnic650` events
+  14 and 15 in the System log), the loop logged
+  `startup: No such host is known` every 30 s and exited, and it came
+  back by itself within a minute of the link returning. If that repeats,
+  look at the adapter's power and Energy-Efficient Ethernet settings
+  (`Get-NetAdapterAdvancedProperty -Name 'Ethernet 4'`).
 - **Power.** Keep host sleep and hibernation off on AC power. A sleeping
   host stalls every job.
 - **Watching a live job VM.** `vmconnect.exe localhost <vm>` opens its
@@ -1285,6 +1311,12 @@ and `"status": "401"`. Rotate it before then.
   runners have it as administrators, and the image grants it to `runner`
   in phase 1. A job that fails this way runs on an image built before
   that. Rebuild the golden disk.
+- **`startup: No such host is known` every 30 s.** The host cannot
+  resolve `api.github.com`: no network, most often after a reboot while
+  the LAN adapter has no link yet. The loop exits and is relaunched each
+  minute, and starts by itself once the network is back; nothing to do
+  but find out why the network was down (see "Host reboot or Windows
+  Update"). The same line once, between normal ticks, is a DNS blip.
 - **`token missing at …` every minute.** No token is stored: run
   `store-token.ps1`. After `-ResetAccount`, store the token before you
   enable the loop task.

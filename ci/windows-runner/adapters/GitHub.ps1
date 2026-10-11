@@ -144,17 +144,19 @@ function Test-GhRateBudget {
     }
 }
 
-function Get-GhQueuedLaneJobs {
-    # A run is in_progress while later jobs of it are still queued, so
-    # both run states are listed. A run that moves from queued to
-    # in_progress between the two listings is in both; it is read once, or
-    # its queued jobs would come back twice and one job could be admitted
-    # into two VMs. Only the routed workflows (config RoutedWorkflows)
-    # carry lane labels, so only their runs' jobs are read. Cost per tick:
-    # two listing calls plus one jobs call per queued or in-progress
-    # routed run, each conditional: an unchanged answer is a 304, which
-    # GitHub does not count against the hourly limit, so an idle loop
-    # spends next to nothing.
+function Get-GhLaneJobs {
+    # The queued and running jobs of every queued or in-progress run of a
+    # routed workflow. A run is in_progress while later jobs of it are
+    # still queued, so both run states are listed. A run that moves from
+    # queued to in_progress between the two listings is in both; it is
+    # read once, or its queued jobs would come back twice and one job could
+    # be admitted into two VMs. Only the routed workflows (config
+    # RoutedWorkflows) carry lane labels, so only their runs' jobs are
+    # read. The running jobs carry runner_name, which tells the host which
+    # job each of its runners took. Cost per tick: two listing calls plus
+    # one jobs call per queued or in-progress routed run, each conditional:
+    # an unchanged answer is a 304, which GitHub does not count against the
+    # hourly limit, so an idle loop spends next to nothing.
     [CmdletBinding()]
     param([Parameter(Mandatory)][string[]]$RoutedWorkflows)
     $jobs = @()
@@ -173,7 +175,7 @@ function Get-GhQueuedLaneJobs {
             if ($RoutedWorkflows -cnotcontains $workflow) { continue }
             $page = Invoke-GhApi -Path "/actions/runs/$($run.id)/jobs?filter=latest&per_page=100" -Conditional
             foreach ($job in @($page.jobs)) {
-                if ($job.status -eq 'queued') { $jobs += $job }
+                if ($job.status -eq 'queued' -or $job.status -eq 'in_progress') { $jobs += $job }
             }
         }
     }
@@ -234,12 +236,12 @@ function New-GitHubAdapters {
     # scope, so the functions are captured as locals too and invoked with
     # &; each still runs in the scope that defined it.
     $commands = @{}
-    foreach ($command in 'Get-GhQueuedLaneJobs', 'Get-GhJob', 'Get-GhRun', 'New-GhJitRunner', 'Remove-GhRunner', 'Get-GhRunner', 'Get-GhRunners') {
+    foreach ($command in 'Get-GhLaneJobs', 'Get-GhJob', 'Get-GhRun', 'New-GhJitRunner', 'Remove-GhRunner', 'Get-GhRunner', 'Get-GhRunners') {
         $commands[$command] = Get-Command -Name $command -CommandType Function -ErrorAction Stop
     }
     $routed = @($RoutedWorkflows)
     $adapters = @{
-        GetQueuedJobs = { & $commands['Get-GhQueuedLaneJobs'] -RoutedWorkflows $routed }
+        GetLaneJobs   = { & $commands['Get-GhLaneJobs'] -RoutedWorkflows $routed }
         GetJob        = { param($id) & $commands['Get-GhJob'] -JobId $id }
         GetRun        = { param($id) & $commands['Get-GhRun'] -RunId $id }
         NewJitRunner  = { param($name, $labels) & $commands['New-GhJitRunner'] -Name $name -Labels $labels }

@@ -134,6 +134,20 @@ Describe 'Select-QueuedLaneJobs' {
         $jobs = @((& $job 9 10 @() 'queued' '2026-10-10T10:00:00Z'))
         @(Select-QueuedLaneJobs -Jobs $jobs).Count | Should -Be 0
     }
+    It 'includes running jobs, with their runner, only when asked' {
+        $running = (& $job 4 11 @('slate-win-model') 'in_progress' '2026-10-10T09:00:00Z')
+        $running | Add-Member -NotePropertyName runner_name -NotePropertyValue 'slate-win-model-abcd1234'
+        $jobs = @((& $job 3 10 @('slate-win-app') 'queued' '2026-10-10T10:00:05Z'), $running, (& $job 6 12 @('slate-win-app') 'completed' '2026-10-10T08:00:00Z'))
+        @(Select-QueuedLaneJobs -Jobs $jobs).Count | Should -Be 1
+        $all = @(Select-QueuedLaneJobs -Jobs $jobs -IncludeInProgress)
+        $all.Count | Should -Be 2
+        $all[0].JobId | Should -Be 4
+        $all[0].Status | Should -Be 'in_progress'
+        $all[0].RunnerName | Should -Be 'slate-win-model-abcd1234'
+        $all[1].JobId | Should -Be 3
+        $all[1].Status | Should -Be 'queued'
+        $all[1].RunnerName | Should -Be ''
+    }
 }
 
 Describe 'Select-JobsToAdmit' {
