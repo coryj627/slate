@@ -115,6 +115,28 @@ try {
     foreach ($cached in "$w\Windows\Panther\unattend.xml", "$w\Windows\Panther\Unattend", "$w\Windows\System32\Sysprep\Panther\unattend.xml") {
         if (Test-Path -LiteralPath $cached) { throw "rendered unattend still present in the image: $cached" }
     }
+    # The product key must not survive in the image's registry: the key
+    # bytes of DigitalProductId cleared (slmgr /cpky) and no clear-text
+    # SoftwareProtectionPlatform\BackupProductKeyDefault, which Users can
+    # read. Read from a copy of the SOFTWARE hive, loaded under a temporary
+    # name; the runbook's manual check does the same.
+    $hiveCopy = Join-Path $env:TEMP ('golden-verify-' + [guid]::NewGuid().ToString('N'))
+    Copy-Item -LiteralPath "$w\Windows\System32\config\SOFTWARE" -Destination $hiveCopy
+    $hiveName = 'HKLM\slate-golden-verify'
+    & reg.exe load $hiveName $hiveCopy | Out-Null
+    if ($LASTEXITCODE -ne 0) { throw "reg load exited $LASTEXITCODE" }
+    try {
+        $cv = 'HKLM:\slate-golden-verify\Microsoft\Windows NT\CurrentVersion'
+        $id = (Get-ItemProperty -Path $cv -ErrorAction SilentlyContinue).DigitalProductId
+        $keyBytes = @($id | Select-Object -Skip 52 -First 15 | Where-Object { $_ -ne 0 }).Count
+        if ($keyBytes -ne 0) { throw "DigitalProductId still holds $keyBytes key bytes: slmgr /cpky did not clear the product key" }
+        $backup = (Get-ItemProperty -Path "$cv\SoftwareProtectionPlatform" -ErrorAction SilentlyContinue).BackupProductKeyDefault
+        if ($backup) { throw 'SoftwareProtectionPlatform\BackupProductKeyDefault still holds a product key in clear text' }
+    } finally {
+        [gc]::Collect()
+        & reg.exe unload $hiveName | Out-Null
+        Remove-Item -LiteralPath "$hiveCopy*" -Force -ErrorAction SilentlyContinue
+    }
 } finally {
     Dismount-VHD -Path $OutPath
 }

@@ -146,6 +146,10 @@ try {
     # Windows keeps an installed retail key readable by standard users in
     # DigitalProductId; clear it now (the image is activated) so no job can read it.
     & cscript.exe //B C:\Windows\System32\slmgr.vbs /cpky | Out-Null
+    # /cpky clears the key bytes of DigitalProductId but leaves the
+    # clear-text copy SoftwareProtectionPlatform\BackupProductKeyDefault,
+    # which BUILTIN\Users can read; the build verifies both are gone.
+    Remove-ItemProperty -Path 'HKLM:\SOFTWARE\Microsoft\Windows NT\CurrentVersion\SoftwareProtectionPlatform' -Name BackupProductKeyDefault -Force -ErrorAction SilentlyContinue
     Remove-Item -LiteralPath (Join-Path $root 'secrets.json') -Force
     # Setup keeps copies of the processed answer file, product key included
     # (it blanks the passwords, not the key): the one it ran from, and its

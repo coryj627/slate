@@ -233,11 +233,13 @@ Before you start:
    `Golden image ready and read-only: C:\slate-ci\golden\win11-runner.vhdx`.
 
    If it fails, see "The golden build fails" under "When things go wrong".
-6. **Product-key check.** Follow "Checking the product key in the golden
-   image" below on the sealed disk. It passes when its step 9 counts `0` and
-   its step 11 prints `absent`, or five characters other than your key's
-   last group. No job may run on the image before it passes. If it fails,
-   leave the loop disabled and record it as a finding.
+6. **Product-key check.** The build refuses to seal an image whose
+   registry still holds the key (see "Checking the product key in the
+   golden image": its steps 9 and 11 are what the build runs). Confirm it
+   by hand on the sealed disk all the same: the check passes when step 9
+   counts `0` and step 11 prints `absent`. No job may run on the image
+   before it passes. If it fails, leave the loop disabled and record it as
+   a finding.
 7. **Enable the loop**, only after step 6 passed:
 
    ```powershell
@@ -674,8 +676,17 @@ disabled.
     $k = (Get-ItemProperty "$cv\SoftwareProtectionPlatform" -ErrorAction SilentlyContinue).BackupProductKeyDefault
     ```
 
-11. Print only its last five characters, or `absent`. If they match the
-    last group of your key, the image holds the key in clear text.
+11. Print only its last five characters, or `absent`. Phase 1 deletes
+    this value, so an image built from the current scripts prints `absent`.
+    On an older image, Windows may keep its own default key for the
+    edition here rather than yours: compare with the host's value, which
+    is the same edition default, and with the last group of your key. Five
+    characters that match your key mean the image holds it in clear text,
+    readable by every user in the guest.
+
+    ```powershell
+    (Get-ItemProperty 'HKLM:\SOFTWARE\Microsoft\Windows NT\CurrentVersion\SoftwareProtectionPlatform').BackupProductKeyDefault.Substring(24)
+    ```
 
     ```powershell
     if ($k) { $k.Substring($k.Length - 5) } else { 'absent' }
