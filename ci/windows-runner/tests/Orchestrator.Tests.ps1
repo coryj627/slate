@@ -173,6 +173,15 @@ Context 'admission' {
         Invoke-OrchestratorTick -Config $config -Journal $journal -Adapters $adapters -Now $t0
         (Get-Calls 'NewVm').Count | Should -Be 0
         $journal.SeenJobs['1'].Foreign | Should -BeTrue
+        @($logs) | Should -Contain '[warn] admission: skipped job 1 of an unknown repository (not the trusted repository)'
+    }
+    It 'treats a head repository without a name as foreign, and names an unknown repository' {
+        $world.Queued = @((New-QueuedJob 1 10 'app'), (New-QueuedJob 2 11 'rust'))
+        $world.Runs['10'] = [pscustomobject]@{ id = 10; event = 'pull_request'; head_branch = 'x'; head_repository = [pscustomobject]@{ id = 5 } }
+        Invoke-OrchestratorTick -Config $config -Journal $journal -Adapters $adapters -Now $t0
+        $journal.SeenJobs['1'].Foreign | Should -BeTrue
+        @($journal.Vms.Values | ForEach-Object { $_.JobId }) | Should -Be @(2)
+        @($logs) | Should -Contain '[warn] admission: skipped job 1 of an unknown repository (not the trusted repository)'
     }
     It 'retries a run read that failed at most once a minute, logging the first failure only, then admits' {
         $world.Queued = @((New-QueuedJob 1 10 'app'))
@@ -617,10 +626,105 @@ Context 'handoff reconciliation' {
         $world.InProgress = @([pscustomobject]@{ id = 2; run_id = 99; status = 'in_progress'; labels = @('slate-win-model'); created_at = $t0.ToString('o'); runner_name = $name })
         Invoke-OrchestratorTick -Config $config -Journal $journal -Adapters $adapters -Now $t0.AddSeconds(20)
         (Get-Calls 'StopVmForce').Count | Should -Be 1
+        (Get-Calls 'RemoveRunner').Count | Should -Be 1
+        (Get-Calls 'DiscardCache').Count | Should -Be 1
+        (Get-Calls 'CommitCache').Count | Should -Be 0
         $journal.Vms.ContainsKey($name) | Should -BeFalse
         $journal.SeenJobs.ContainsKey('1') | Should -BeTrue
         $journal.Retries.ContainsKey('1') | Should -BeFalse
-        ($logs -join "`n") | Should -Match "handoff: ${name} runs job 2 of someone/slate \(not the trusted repository\); forcing it off"
+        $journal.SeenJobs['2'].Foreign | Should -BeTrue
+        @($logs) | Should -Contain "[warn] handoff: ${name} runs job 2 of someone/slate (not the trusted repository); forcing it off"
+        @($logs) | Should -Contain "[warn] ${name}: discard (runner taken by job 2 of someone/slate (not the trusted repository))"
+        # The job it was provisioned for gets a VM of its own in the same tick.
+        (Get-Calls 'NewVm').Count | Should -Be 2
+        @($journal.Vms.Values)[0].JobId | Should -Be 1
+    }
+    It 'forces a handed VM off when its runner runs a job without a lane label, which the lane listing never shows' {
+        # A JIT runner carries only its lane label today, so this is defence
+        # in depth: the reconciliation reads the whole listing, not the queue.
+        $world.Queued = @((New-QueuedJob 1 10 'model'))
+        Invoke-OrchestratorTick -Config $config -Journal $journal -Adapters $adapters -Now $t0
+        $name = @($journal.Vms.Keys)[0]
+        Invoke-OrchestratorTick -Config $config -Journal $journal -Adapters $adapters -Now $t0.AddSeconds(10)
+        Set-Run 99 'pull_request' 'feature' 'someone/slate'
+        $world.InProgress = @([pscustomobject]@{ id = 2; run_id = 99; status = 'in_progress'; labels = @('self-hosted'); created_at = $t0.ToString('o'); runner_name = $name })
+        Invoke-OrchestratorTick -Config $config -Journal $journal -Adapters $adapters -Now $t0.AddSeconds(20)
+        (Get-Calls 'StopVmForce').Count | Should -Be 1
+        (Get-Calls 'DiscardCache').Count | Should -Be 1
+        (Get-Calls 'CommitCache').Count | Should -Be 0
+        $journal.Vms.ContainsKey($name) | Should -BeFalse
+        $journal.Retries.ContainsKey('1') | Should -BeFalse
+        $journal.SeenJobs.ContainsKey('2') | Should -BeFalse -Because 'it is no lane job, so it never becomes a settle candidate'
+        @($logs) | Should -Contain "[warn] handoff: ${name} runs job 2 of someone/slate (not the trusted repository); forcing it off"
+        @($logs) | Should -Contain "[warn] ${name}: discard (runner taken by job 2 of someone/slate (not the trusted repository))"
+        (Get-Calls 'NewVm').Count | Should -Be 2
+    }
+    It 'forces a VM off at once for a job without a lane label even when its run cannot be read, naming an unknown repository' {
+        $world.Queued = @((New-QueuedJob 1 10 'model'))
+        Invoke-OrchestratorTick -Config $config -Journal $journal -Adapters $adapters -Now $t0
+        $name = @($journal.Vms.Keys)[0]
+        Invoke-OrchestratorTick -Config $config -Journal $journal -Adapters $adapters -Now $t0.AddSeconds(10)
+        $adapters.GetRun = { param($id) & $script:record 'GetRun' @($id); throw '502' }
+        $world.InProgress = @([pscustomobject]@{ id = 2; run_id = 99; status = 'in_progress'; labels = @('self-hosted', 'Windows'); created_at = $t0.ToString('o'); runner_name = $name })
+        Invoke-OrchestratorTick -Config $config -Journal $journal -Adapters $adapters -Now $t0.AddSeconds(20)
+        $journal.Vms.ContainsKey($name) | Should -BeFalse
+        $journal.Retries.ContainsKey('1') | Should -BeFalse
+        @($logs) | Should -Contain "[warn] handoff: ${name} runs job 2 of an unknown repository (not the trusted repository); forcing it off"
+    }
+    It 'decides from the answer admission remembered, without reading the run again' {
+        # Job 2 was seen queued (no slot was free for it), so its run was read then.
+        $world.Queued = @((New-QueuedJob 3 12 'shell' '2026-10-10T10:59:00Z'), (New-QueuedJob 1 10 'model' '2026-10-10T11:00:00Z'), (New-QueuedJob 2 11 'model' '2026-10-10T11:00:01Z'))
+        Invoke-OrchestratorTick -Config $config -Journal $journal -Adapters $adapters -Now $t0
+        $journal.SeenJobs['2'].Foreign | Should -BeFalse
+        $modelVm = @($journal.Vms.Values | Where-Object { $_.Lane -eq 'model' })[0]
+        Invoke-OrchestratorTick -Config $config -Journal $journal -Adapters $adapters -Now $t0.AddSeconds(10)
+        $world.Queued = @((New-QueuedJob 1 10 'model' '2026-10-10T11:00:00Z'))
+        $world.InProgress = @([pscustomobject]@{ id = 2; run_id = 11; status = 'in_progress'; labels = @('slate-win-model'); created_at = '2026-10-10T11:00:01Z'; runner_name = $modelVm.Name })
+        Invoke-OrchestratorTick -Config $config -Journal $journal -Adapters $adapters -Now $t0.AddSeconds(20)
+        $modelVm.JobId | Should -Be 2
+        @((Get-Calls 'GetRun') | Where-Object { [int64]$_.Args[0] -eq 11 }).Count | Should -Be 1
+    }
+    It 'forces a VM off on the answer admission remembered when the run can no longer be read' {
+        # Admission refused job 2 (a fork's run); GitHub then gave it this
+        # VM's runner, and by now the API cannot read the run.
+        $world.Queued = @((New-QueuedJob 3 12 'shell' '2026-10-10T10:59:00Z'), (New-QueuedJob 1 10 'model' '2026-10-10T11:00:00Z'), (New-QueuedJob 2 99 'model' '2026-10-10T11:00:01Z'))
+        Set-Run 99 'pull_request' 'feature' 'someone/slate'
+        Invoke-OrchestratorTick -Config $config -Journal $journal -Adapters $adapters -Now $t0
+        $journal.SeenJobs['2'].Foreign | Should -BeTrue
+        $modelVm = @($journal.Vms.Values | Where-Object { $_.Lane -eq 'model' })[0]
+        Invoke-OrchestratorTick -Config $config -Journal $journal -Adapters $adapters -Now $t0.AddSeconds(10)
+        $adapters.GetRun = { param($id) & $script:record 'GetRun' @($id); throw '502' }
+        $world.Queued = @((New-QueuedJob 1 10 'model' '2026-10-10T11:00:00Z'))
+        $world.InProgress = @([pscustomobject]@{ id = 2; run_id = 99; status = 'in_progress'; labels = @('slate-win-model'); created_at = '2026-10-10T11:00:01Z'; runner_name = $modelVm.Name })
+        Invoke-OrchestratorTick -Config $config -Journal $journal -Adapters $adapters -Now $t0.AddSeconds(20)
+        $journal.Vms.ContainsKey($modelVm.Name) | Should -BeFalse
+        $journal.Retries.ContainsKey('1') | Should -BeFalse
+        @($logs) | Should -Contain "[warn] handoff: $($modelVm.Name) runs job 2 of an unknown repository (not the trusted repository); forcing it off"
+    }
+    It 'leaves a VM alone while the run of the job on it cannot be read, says so once a minute, and forces it off once the run reads foreign' {
+        $world.Queued = @((New-QueuedJob 1 10 'model'))
+        Invoke-OrchestratorTick -Config $config -Journal $journal -Adapters $adapters -Now $t0
+        $name = @($journal.Vms.Keys)[0]
+        Invoke-OrchestratorTick -Config $config -Journal $journal -Adapters $adapters -Now $t0.AddSeconds(10)
+        Set-Run 99 'pull_request' 'feature' 'someone/slate'
+        $script:runReadable = $false
+        $adapters.GetRun = { param($id) & $script:record 'GetRun' @($id); if (-not $script:runReadable) { throw '502' }; $script:world.Runs[[string]$id] }
+        $world.InProgress = @([pscustomobject]@{ id = 2; run_id = 99; status = 'in_progress'; labels = @('slate-win-model'); created_at = $t0.ToString('o'); runner_name = $name })
+        $failed = "handoff: ${name}: run 99 of job 2 could not be read"
+        foreach ($s in 20, 30, 50) { Invoke-OrchestratorTick -Config $config -Journal $journal -Adapters $adapters -Now $t0.AddSeconds($s) }
+        @((Get-Calls 'GetRun') | Where-Object { [int64]$_.Args[0] -eq 99 }).Count | Should -Be 1
+        @($logs | Where-Object { $_.Contains($failed) }).Count | Should -Be 1
+        $journal.Vms.ContainsKey($name) | Should -BeTrue
+        $journal.Vms[$name].Claimed | Should -BeFalse
+        (Get-Calls 'StopVmForce').Count | Should -Be 0
+        Invoke-OrchestratorTick -Config $config -Journal $journal -Adapters $adapters -Now $t0.AddSeconds(80)
+        @((Get-Calls 'GetRun') | Where-Object { [int64]$_.Args[0] -eq 99 }).Count | Should -Be 2
+        @($logs | Where-Object { $_.Contains($failed) }).Count | Should -Be 2
+        $script:runReadable = $true
+        Invoke-OrchestratorTick -Config $config -Journal $journal -Adapters $adapters -Now $t0.AddSeconds(140)
+        $journal.Vms.ContainsKey($name) | Should -BeFalse
+        $journal.Retries.ContainsKey('1') | Should -BeFalse
+        @($logs) | Should -Contain "[warn] handoff: ${name} runs job 2 of someone/slate (not the trusted repository); forcing it off"
     }
 }
 
@@ -672,6 +776,22 @@ Context 'handed-phase guards' {
         Invoke-OrchestratorTick -Config $config -Journal $journal -Adapters $adapters -Now $t0.AddSeconds(320)
         $journal.Vms[$name].Claimed | Should -BeTrue
         (Get-Calls 'StopVmForce').Count | Should -Be 0
+    }
+    It 'registers no retry when a VM whose runner was seen busy shuts down without a job the host can resolve' {
+        # The runner ran something, so the image works: a job the host never
+        # saw must not strike the job this VM was provisioned for.
+        $world.Runner = [pscustomobject]@{ status = 'online'; busy = $true }
+        Invoke-OrchestratorTick -Config $config -Journal $journal -Adapters $adapters -Now $t0.AddSeconds(320)
+        $journal.Vms[$name].Claimed | Should -BeTrue
+        $world.VmStates[$name] = 'Off'
+        Invoke-OrchestratorTick -Config $config -Journal $journal -Adapters $adapters -Now $t0.AddMinutes(20)
+        $journal.Vms.Count | Should -Be 0
+        $journal.Retries.Count | Should -Be 0
+        (Get-Calls 'RemoveRunner').Count | Should -Be 1
+        (Get-Calls 'DiscardCache').Count | Should -Be 1
+        (Get-Calls 'CommitCache').Count | Should -Be 0
+        @($logs) | Should -Contain "[warn] ${name}: shut down without a job the host can resolve, although its runner was seen busy; no retry"
+        ($logs -join "`n") | Should -Not -Match 'guest bootstrap failure'
     }
     It 'tears down an unclaimed runner whose job vanished' {
         $world.Jobs['1'] = [pscustomobject]@{ id = 1; run_id = 10; status = 'completed'; conclusion = 'cancelled'; runner_name = $null }

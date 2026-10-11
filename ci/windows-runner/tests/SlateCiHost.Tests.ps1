@@ -134,19 +134,27 @@ Describe 'Select-QueuedLaneJobs' {
         $jobs = @((& $job 9 10 @() 'queued' '2026-10-10T10:00:00Z'))
         @(Select-QueuedLaneJobs -Jobs $jobs).Count | Should -Be 0
     }
-    It 'includes running jobs, with their runner, only when asked' {
-        $running = (& $job 4 11 @('slate-win-model') 'in_progress' '2026-10-10T09:00:00Z')
-        $running | Add-Member -NotePropertyName runner_name -NotePropertyValue 'slate-win-model-abcd1234'
-        $jobs = @((& $job 3 10 @('slate-win-app') 'queued' '2026-10-10T10:00:05Z'), $running, (& $job 6 12 @('slate-win-app') 'completed' '2026-10-10T08:00:00Z'))
-        @(Select-QueuedLaneJobs -Jobs $jobs).Count | Should -Be 1
-        $all = @(Select-QueuedLaneJobs -Jobs $jobs -IncludeInProgress)
-        $all.Count | Should -Be 2
-        $all[0].JobId | Should -Be 4
-        $all[0].Status | Should -Be 'in_progress'
-        $all[0].RunnerName | Should -Be 'slate-win-model-abcd1234'
-        $all[1].JobId | Should -Be 3
-        $all[1].Status | Should -Be 'queued'
-        $all[1].RunnerName | Should -Be ''
+}
+
+Describe 'Select-HostRunnerJobs' {
+    It 'lists the in-progress jobs on the given runners from the whole listing, lane label or not, matching runner names exactly' {
+        $jobs = @(
+            [pscustomobject]@{ id = 1; run_id = 10; status = 'in_progress'; labels = @('slate-win-app'); runner_name = 'slate-win-app-aaaaaaaa' },
+            [pscustomobject]@{ id = 2; run_id = 11; status = 'in_progress'; labels = @('self-hosted'); runner_name = 'slate-win-model-bbbbbbbb' },
+            [pscustomobject]@{ id = 3; run_id = 12; status = 'queued'; labels = @('slate-win-app'); runner_name = $null },
+            [pscustomobject]@{ id = 4; run_id = 13; status = 'in_progress'; labels = @('slate-win-app'); runner_name = 'SLATE-WIN-APP-AAAAAAAA' },
+            [pscustomobject]@{ id = 5; run_id = 14; status = 'in_progress'; labels = @('slate-win-app'); runner_name = 'slate-win-app-cccccccc' },
+            [pscustomobject]@{ id = 6; run_id = 15; status = 'in_progress'; runner_name = 'slate-win-rust-dddddddd' },
+            [pscustomobject]@{ id = 7; run_id = 16; status = 'in_progress'; labels = @('slate-win-app', 'slate-win-rust'); runner_name = 'slate-win-rust-dddddddd' },
+            [pscustomobject]@{ id = 8; run_id = 17; status = 'in_progress'; labels = @('ubuntu-latest'); runner_name = 'GitHub Actions 3' }
+        )
+        $result = @(Select-HostRunnerJobs -Jobs $jobs -RunnerNames @('slate-win-app-aaaaaaaa', 'slate-win-model-bbbbbbbb', 'slate-win-rust-dddddddd', 'GitHub Actions 3'))
+        @($result | ForEach-Object { '{0}/{1}/{2}/{3}' -f $_.JobId, $_.RunId, $_.Lane, $_.RunnerName }) |
+            Should -Be @('1/10/app/slate-win-app-aaaaaaaa', '2/11//slate-win-model-bbbbbbbb', '6/15//slate-win-rust-dddddddd', '7/16//slate-win-rust-dddddddd')
+    }
+    It 'returns an empty array for no jobs or no runners' {
+        @(Select-HostRunnerJobs -Jobs @() -RunnerNames @('slate-win-app-aaaaaaaa')).Count | Should -Be 0
+        @(Select-HostRunnerJobs -Jobs @([pscustomobject]@{ id = 1; run_id = 10; status = 'in_progress'; labels = @('slate-win-app'); runner_name = 'slate-win-app-aaaaaaaa' }) -RunnerNames @()).Count | Should -Be 0
     }
 }
 
@@ -674,6 +682,7 @@ Describe 'Test-TrustedRun' {
         @{ Case = 'no run'; Expected = $false; Run = $null }
         @{ Case = 'a run without a head_repository property'; Expected = $false; Run = [pscustomobject]@{ id = 10 } }
         @{ Case = 'a null head repository (a deleted fork)'; Expected = $false; Run = [pscustomobject]@{ head_repository = $null } }
+        @{ Case = 'a head repository without a full_name property'; Expected = $false; Run = [pscustomobject]@{ head_repository = [pscustomobject]@{ id = 5 } } }
         @{ Case = 'a lookalike name'; Expected = $false; Run = [pscustomobject]@{ head_repository = [pscustomobject]@{ full_name = 'coryj627/slate-evil' } } }
         @{ Case = 'a fork of the same name'; Expected = $false; Run = [pscustomobject]@{ head_repository = [pscustomobject]@{ full_name = 'someone/slate' } } }
     ) {

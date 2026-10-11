@@ -91,33 +91,53 @@ function ConvertTo-DateTimeOffset {
 }
 
 function Select-QueuedLaneJobs {
-    # Flattens the API's job objects into the admission shape; drops
-    # anything not carrying exactly one lane label, and anything not queued
-    # unless -IncludeInProgress asks for the running ones as well (with the
-    # runner each is on, for the handoff reconciliation).
+    # Flattens the API's queued job objects into the admission shape; drops
+    # anything not queued and anything not carrying exactly one lane label.
     [CmdletBinding()]
-    param([object[]]$Jobs = @(), [string[]]$Lanes = $script:DefaultLanes, [switch]$IncludeInProgress)
+    param([object[]]$Jobs = @(), [string[]]$Lanes = $script:DefaultLanes)
     $result = @()
     foreach ($job in @($Jobs)) {
         if ($null -eq $job) { continue }
-        $status = [string]$job.status
-        if ($status -ne 'queued' -and -not ($IncludeInProgress -and $status -eq 'in_progress')) { continue }
+        if ([string]$job.status -ne 'queued') { continue }
         $labels = @()
         if ($job.PSObject.Properties['labels'] -and $null -ne $job.labels) { $labels = @($job.labels) }
         $lane = Get-LaneFromLabels -Labels $labels -Lanes $Lanes
         if (-not $lane) { continue }
-        $runnerName = ''
-        if ($job.PSObject.Properties['runner_name'] -and $null -ne $job.runner_name) { $runnerName = [string]$job.runner_name }
         $result += [pscustomobject]@{
-            JobId      = [int64]$job.id
-            RunId      = [int64]$job.run_id
-            Lane       = $lane
-            CreatedAt  = ConvertTo-DateTimeOffset -Value $job.created_at
-            Status     = $status
-            RunnerName = $runnerName
+            JobId     = [int64]$job.id
+            RunId     = [int64]$job.run_id
+            Lane      = $lane
+            CreatedAt = ConvertTo-DateTimeOffset -Value $job.created_at
         }
     }
     return @($result | Sort-Object CreatedAt, JobId)
+}
+
+function Select-HostRunnerJobs {
+    # The in-progress jobs on this host's runners (slate-win-* runners named
+    # in -RunnerNames, compared ordinally), from the whole listing rather
+    # than the lane-filtered queue: a job without exactly one lane label can
+    # take a runner too, and the handoff reconciliation must see it. Lane is
+    # $null for such a job.
+    [CmdletBinding()]
+    param([object[]]$Jobs = @(), [string[]]$RunnerNames = @(), [string[]]$Lanes = $script:DefaultLanes)
+    $ours = [System.Collections.Generic.HashSet[string]]::new([string[]]@($RunnerNames), [System.StringComparer]::Ordinal)
+    $result = @()
+    foreach ($job in @($Jobs)) {
+        if ($null -eq $job -or [string]$job.status -ne 'in_progress') { continue }
+        if (-not $job.PSObject.Properties['runner_name'] -or $null -eq $job.runner_name) { continue }
+        $runnerName = [string]$job.runner_name
+        if (-not $runnerName.StartsWith('slate-win-', [System.StringComparison]::Ordinal) -or -not $ours.Contains($runnerName)) { continue }
+        $labels = @()
+        if ($job.PSObject.Properties['labels'] -and $null -ne $job.labels) { $labels = @($job.labels) }
+        $result += [pscustomobject]@{
+            JobId      = [int64]$job.id
+            RunId      = [int64]$job.run_id
+            Lane       = Get-LaneFromLabels -Labels $labels -Lanes $Lanes
+            RunnerName = $runnerName
+        }
+    }
+    return @($result)
 }
 
 function Select-JobsToAdmit {
@@ -230,9 +250,20 @@ function Test-CommitEligible {
 }
 
 function Get-RunRepository {
+    # The run's head repository, or '' when it has none (a deleted fork) or
+    # GitHub left the name out: a missing property would throw under strict mode.
     param($Run)
     if ($null -eq $Run -or -not $Run.PSObject.Properties['head_repository'] -or $null -eq $Run.head_repository) { return '' }
+    if (-not $Run.head_repository.PSObject.Properties['full_name']) { return '' }
     return [string]$Run.head_repository.full_name
+}
+
+function Format-RunRepository {
+    # The head repository for a log line, never an empty name.
+    param($Run)
+    $repo = Get-RunRepository -Run $Run
+    if ($repo) { return $repo }
+    return 'an unknown repository'
 }
 
 function Test-TrustedRun {
@@ -691,7 +722,9 @@ function Complete-ActiveVm {
     # later ticks skip the API lookups. Off with no job resolved means the
     # guest never ran one (a bootstrap failure): the runner is freed and
     # the job retried with back-off, so a broken image cannot provision VMs
-    # in a tight loop.
+    # in a tight loop. A runner seen busy (Claimed) did run a job, one the
+    # host cannot resolve: the image works, so no retry is struck against
+    # the job the VM was provisioned for.
     [CmdletBinding()]
     param($Config, $Journal, [hashtable]$Adapters, [string]$Name, [datetimeoffset]$Now)
     $vm = $Journal.Vms[$Name]
@@ -720,18 +753,25 @@ function Complete-ActiveVm {
     }
     $job = Resolve-RunnerJob -RunnerName $Name -AdmittedJobId ([int64]$vm.JobId) -CandidateJobIds $candidates -GetJob $Adapters.GetJob
     if ($null -eq $job) {
-        # The guest's slate.error was kept by Update-ActiveVm while the VM ran.
-        # One last read is only a fallback (Hyper-V has no guest items for an
-        # Off VM, so it normally finds nothing); it never stops the teardown.
-        $guestError = [string]$vm['GuestError']
-        if (-not $guestError) {
-            try { $guestError = [string](& $Adapters.GetGuestError $Name) } catch { $guestError = '' }
+        $seenBusy = [bool]$vm['Claimed']
+        if ($seenBusy) {
+            & $Adapters.Log 'warn' "${Name}: shut down without a job the host can resolve, although its runner was seen busy; no retry"
+        } else {
+            # The guest's slate.error was kept by Update-ActiveVm while the VM ran.
+            # One last read is only a fallback (Hyper-V has no guest items for an
+            # Off VM, so it normally finds nothing); it never stops the teardown.
+            $guestError = [string]$vm['GuestError']
+            if (-not $guestError) {
+                try { $guestError = [string](& $Adapters.GetGuestError $Name) } catch { $guestError = '' }
+            }
+            & $Adapters.Log 'warn' "${Name}: shut down without running a job (guest bootstrap failure?) guest error: $guestError"
         }
-        & $Adapters.Log 'warn' "${Name}: shut down without running a job (guest bootstrap failure?) guest error: $guestError"
         if ($vm.RunnerId) { try { & $Adapters.RemoveRunner $vm.RunnerId } catch { & $Adapters.Log 'warn' "${Name}: RemoveRunner: $_" } }
         if ($vm.CachePath) { & $Adapters.DiscardCache $vm.CachePath }
         & $Adapters.RemoveVm $Name $vm.Dir
-        Register-JobRetry -Retries $Journal.Retries -JobId ([int64]$vm.JobId) -Now $Now -BackoffSeconds ([int]$Config.RetryBackoffSeconds)
+        if (-not $seenBusy) {
+            Register-JobRetry -Retries $Journal.Retries -JobId ([int64]$vm.JobId) -Now $Now -BackoffSeconds ([int]$Config.RetryBackoffSeconds)
+        }
         $Journal.Vms.Remove($Name)
         return
     }
@@ -907,12 +947,44 @@ function Update-ActiveVm {
     }
 }
 
+function Update-SeenJob {
+    # A lane job's SeenJobs entry (created on first sight; an older entry
+    # gains Foreign and RunCheckedAt), and while its run is unknown
+    # (Foreign $null), one read of the run at most once a minute
+    # (RunCheckedAt), whose answer is remembered as Foreign and never read
+    # again. Admission and the handoff reconciliation both learn a job's run
+    # through here. Returns, for the caller's log: Seen (the entry), Learned
+    # (this call read the run), Run (that run), Failure (the error of a read
+    # that failed now) and FirstTry (no read had been tried before).
+    [CmdletBinding()]
+    param([Parameter(Mandatory)]$Config, [Parameter(Mandatory)]$Journal, [Parameter(Mandatory)][hashtable]$Adapters, [Parameter(Mandatory)]$Job, [Parameter(Mandatory)][datetimeoffset]$Now)
+    $key = [string]$Job.JobId
+    if (-not $Journal.SeenJobs.Contains($key)) {
+        $Journal.SeenJobs[$key] = @{ RunId = [int64]$Job.RunId; Lane = $Job.Lane; FirstSeenAt = $Now.ToString('o'); Foreign = $null; RunCheckedAt = $null }
+    }
+    $seen = $Journal.SeenJobs[$key]
+    if (-not $seen.Contains('Foreign')) { $seen['Foreign'] = $null; $seen['RunCheckedAt'] = $null }
+    $result = [pscustomobject]@{ Seen = $seen; Learned = $false; Run = $null; Failure = $null; FirstTry = $false }
+    if ($null -ne $seen['Foreign']) { return $result }
+    $checked = $seen['RunCheckedAt']
+    if ($checked -and ($Now - (ConvertTo-DateTimeOffset -Value $checked)).TotalSeconds -lt 60) { return $result }
+    $seen['RunCheckedAt'] = $Now.ToString('o')
+    $result.FirstTry = -not $checked
+    try {
+        $result.Run = & $Adapters.GetRun ([int64]$Job.RunId)
+        $seen['Foreign'] = -not (Test-TrustedRun -Run $result.Run -TrustedRepo $Config.TrustedRepo)
+        $result.Learned = $true
+    } catch {
+        $result.Failure = $_
+    }
+    return $result
+}
+
 function Invoke-Admission {
     [CmdletBinding()]
     param($Config, $Journal, [hashtable]$Adapters, [datetimeoffset]$Now)
     $raw = @(& $Adapters.GetLaneJobs)
-    $laneJobs = @(Select-QueuedLaneJobs -Jobs $raw -Lanes @($Config.Lanes.Keys) -IncludeInProgress)
-    $queued = @($laneJobs | Where-Object { $_.Status -eq 'queued' })
+    $queued = @(Select-QueuedLaneJobs -Jobs $raw -Lanes @($Config.Lanes.Keys))
     # Only this repository's runs get a VM (overflow spec OR-D5): a fork
     # pull request runs its own workflow file and can name the home label,
     # so the check lives here, where the fork cannot edit it. Each job's run
@@ -924,30 +996,15 @@ function Invoke-Admission {
     $admissible = @()
     $publishable = @()
     foreach ($q in $queued) {
-        $key = [string]$q.JobId
-        if (-not $Journal.SeenJobs.Contains($key)) {
-            $Journal.SeenJobs[$key] = @{ RunId = [int64]$q.RunId; Lane = $q.Lane; FirstSeenAt = $Now.ToString('o'); Foreign = $null; RunCheckedAt = $null }
+        $check = Update-SeenJob -Config $Config -Journal $Journal -Adapters $Adapters -Job $q -Now $Now
+        if ($check.Failure -and $check.FirstTry) {
+            & $Adapters.Log 'warn' "admission: job $($q.JobId): run $($q.RunId) could not be read: $($check.Failure)"
         }
-        $seen = $Journal.SeenJobs[$key]
-        if (-not $seen.Contains('Foreign')) { $seen['Foreign'] = $null; $seen['RunCheckedAt'] = $null }
-        if ($null -eq $seen['Foreign']) {
-            $checked = $seen['RunCheckedAt']
-            if (-not $checked -or ($Now - (ConvertTo-DateTimeOffset -Value $checked)).TotalSeconds -ge 60) {
-                $seen['RunCheckedAt'] = $Now.ToString('o')
-                $run = $null
-                try {
-                    $run = & $Adapters.GetRun ([int64]$q.RunId)
-                    $seen['Foreign'] = -not (Test-TrustedRun -Run $run -TrustedRepo $Config.TrustedRepo)
-                } catch {
-                    if (-not $checked) { & $Adapters.Log 'warn' "admission: job $($q.JobId): run $($q.RunId) could not be read: $_" }
-                }
-                if ($seen['Foreign']) {
-                    & $Adapters.Log 'warn' "admission: skipped job $($q.JobId) of $(Get-RunRepository -Run $run) (not the trusted repository)"
-                }
-            }
+        if ($check.Learned -and $check.Seen['Foreign']) {
+            & $Adapters.Log 'warn' "admission: skipped job $($q.JobId) of $(Format-RunRepository -Run $check.Run) (not the trusted repository)"
         }
-        if ($seen['Foreign'] -eq $false) { $admissible += $q }
-        if ($seen['Foreign'] -ne $true) { $publishable += $q }
+        if ($check.Seen['Foreign'] -eq $false) { $admissible += $q }
+        if ($check.Seen['Foreign'] -ne $true) { $publishable += $q }
     }
     # GitHub hands a runner whichever queued job matches its label first,
     # not the job this host provisioned the VM for. A handed VM whose
@@ -955,27 +1012,43 @@ function Invoke-Admission {
     # the job it was provisioned for is still queued and free to get a VM
     # of its own. Without this, two model shards queued together ran one
     # after the other: the second was held as "already has a VM" until the
-    # first VM, which had taken it, finished.
+    # first VM, which had taken it, finished. The jobs on the host's
+    # runners come from the whole listing, not the lane-filtered queue: a
+    # job without a lane label can take a runner too (overflow spec §7).
+    $onRunners = @(Select-HostRunnerJobs -Jobs $raw -RunnerNames @($Journal.Vms.Keys) -Lanes @($Config.Lanes.Keys))
     foreach ($name in @($Journal.Vms.Keys)) {
         $vm = $Journal.Vms[$name]
         if ($vm.Phase -ne 'handed') { continue }
-        $running = @($laneJobs | Where-Object { $_.Status -eq 'in_progress' -and [string]::Equals($_.RunnerName, $name, [System.StringComparison]::Ordinal) })
+        $running = @($onRunners | Where-Object { [string]::Equals($_.RunnerName, $name, [System.StringComparison]::Ordinal) })
         if ($running.Count -eq 0) { continue }
         $job = $running[0]
         if ([int64]$job.JobId -ne [int64]$vm.JobId) {
-            $takenRun = $null
-            try { $takenRun = & $Adapters.GetRun ([int64]$job.RunId) } catch { & $Adapters.Log 'warn' "handoff: ${name}: run $($job.RunId) could not be read: $_"; continue }
-            if (-not (Test-TrustedRun -Run $takenRun -TrustedRepo $Config.TrustedRepo)) {
-                & $Adapters.Log 'warn' "handoff: ${name} runs job $($job.JobId) of $(Get-RunRepository -Run $takenRun) (not the trusted repository); forcing it off"
-                Remove-ActiveVm -Config $Config -Journal $Journal -Adapters $Adapters -Name $name -Reason "runner taken by job $($job.JobId) of another repository" -Retry $false -Now $Now
+            # Not the job it was provisioned for. A job without a lane label
+            # is never one this host would admit, whatever its run. For a
+            # lane job the answer remembered on SeenJobs comes first; an
+            # unknown run is read at most once a minute, each failed read is
+            # logged, and the VM is left alone until the answer is known.
+            $run = $null
+            $foreign = $true
+            if ($job.Lane) {
+                $check = Update-SeenJob -Config $Config -Journal $Journal -Adapters $Adapters -Job $job -Now $Now
+                if ($check.Failure) { & $Adapters.Log 'warn' "handoff: ${name}: run $($job.RunId) of job $($job.JobId) could not be read: $($check.Failure)" }
+                if ($null -eq $check.Seen['Foreign']) { continue }
+                $foreign = [bool]$check.Seen['Foreign']
+                $run = $check.Run
+            }
+            if ($foreign) {
+                # The run only names the repository in the log: a failed read
+                # never delays forcing the VM off.
+                if ($null -eq $run) { try { $run = & $Adapters.GetRun ([int64]$job.RunId) } catch { $run = $null } }
+                $repo = Format-RunRepository -Run $run
+                & $Adapters.Log 'warn' "handoff: ${name} runs job $($job.JobId) of $repo (not the trusted repository); forcing it off"
+                Remove-ActiveVm -Config $Config -Journal $Journal -Adapters $Adapters -Name $name -Reason "runner taken by job $($job.JobId) of $repo (not the trusted repository)" -Retry $false -Now $Now
                 continue
             }
             & $Adapters.Log 'info' "${name}: runs job $($job.JobId), not job $($vm.JobId) it was provisioned for, which stays queued for a VM of its own"
             $vm.JobId = [int64]$job.JobId
             $vm.RunId = [int64]$job.RunId
-            if (-not $Journal.SeenJobs.Contains([string]$job.JobId)) {
-                $Journal.SeenJobs[[string]$job.JobId] = @{ RunId = [int64]$job.RunId; Lane = $job.Lane; FirstSeenAt = $Now.ToString('o'); Foreign = $false; RunCheckedAt = $Now.ToString('o') }
-            }
         }
         if (-not $vm.Claimed) {
             $vm.Claimed = $true
@@ -1223,7 +1296,7 @@ function Set-LocalUserRights {
 }
 
 Export-ModuleMember -Function Get-LaneFromLabels, New-RunnerName, Split-KvpChunks, Join-KvpChunks,
-    ConvertTo-DateTimeOffset, Select-QueuedLaneJobs, Select-JobsToAdmit, Register-JobRetry, Test-VmExpired, Get-StaleRunnerNames, Test-CommitEligible, Resolve-RunnerJob, Test-IPv4InPrefix, Get-CiHostConfig, New-Journal, Read-Journal, Write-Journal, Write-CiLog,
+    ConvertTo-DateTimeOffset, Select-QueuedLaneJobs, Select-HostRunnerJobs, Select-JobsToAdmit, Register-JobRetry, Test-VmExpired, Get-StaleRunnerNames, Test-CommitEligible, Resolve-RunnerJob, Test-IPv4InPrefix, Get-CiHostConfig, New-Journal, Read-Journal, Write-Journal, Write-CiLog,
     Get-FreeSlots, Remove-ActiveVm, Test-SiblingRunning, Complete-ActiveVm, Update-ActiveVm, Invoke-Admission, Invoke-OrchestratorTick, Invoke-StartupSweep, Select-SlateKvpItems,
     Get-PublishedState, Publish-HomeState, Get-RunRepository, Test-TrustedRun, Get-ExpiredLogNames, Invoke-LogPrune, Register-GoldenAcceptance, Test-GoldenPrevRemovable,
     Get-CiHostPaths, Read-JournalSnapshot, Remove-SealedFile,
