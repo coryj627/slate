@@ -3,8 +3,10 @@
 # SPDX-License-Identifier: AGPL-3.0-or-later
 #
 # GitHub REST adapter for the self-hosted runner host. The only file that
-# talks to api.github.com. The PAT (fine-grained: Actions read,
-# Administration read/write, this repository only) is held as a
+# talks to api.github.com. The PAT (fine-grained, this repository only,
+# issued with the mac controller's permission set: Actions read,
+# Administration read and write, Variables read and write for the
+# published state; GitHub adds Metadata read by itself) is held as a
 # SecureString and decoded per call; nothing here ever logs it or a JIT
 # config. orchestrator.ps1 dot-sources this file and passes
 # New-GitHubAdapters into the module.

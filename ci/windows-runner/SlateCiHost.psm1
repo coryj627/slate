@@ -529,24 +529,33 @@ function Get-FreeSlots {
 }
 
 function ConvertTo-StateTime {
+    # Invariant culture: a calendar or time separator of the host's locale
+    # would publish a state the router cannot parse.
     param([Parameter(Mandatory)][datetimeoffset]$Value)
-    return $Value.ToUniversalTime().ToString('yyyy-MM-ddTHH:mm:ssZ')
+    return $Value.ToUniversalTime().ToString('yyyy-MM-ddTHH:mm:ssZ', [cultureinfo]::InvariantCulture)
 }
 
 function Get-PublishedState {
     # The state the router reads (overflow spec §4): the heartbeat, the
     # slots the host can serve with (a VM in teardown holds one it cannot),
     # every VM that holds a slot with its provisioning time, and the jobs it
-    # would admit with unlimited slots, oldest first. A PendingCommit VM is
+    # would admit with unlimited slots, oldest first (admission counts the
+    # ones whose run is still unknown among them). A PendingCommit VM is
     # Off and holds no slot (Get-FreeSlots agrees).
     [CmdletBinding()]
     param([Parameter(Mandatory)]$Config, [Parameter(Mandatory)]$Journal, [object[]]$Queued = @(), [Parameter(Mandatory)][datetimeoffset]$Now)
     $held = 0
-    $running = @()
-    foreach ($vm in @($Journal.Vms.Values | Sort-Object { [string]$_['StartedAt'] })) {
+    $holding = @()
+    foreach ($vm in @($Journal.Vms.Values)) {
         if ($vm.Contains('PendingCommit') -and $vm['PendingCommit']) { continue }
         if ([string]$vm['Phase'] -eq 'discarding') { $held++; continue }
-        $running += [ordered]@{ lane = [string]$vm['Lane']; since = ConvertTo-StateTime (ConvertTo-DateTimeOffset -Value $vm['StartedAt']) }
+        $holding += [pscustomobject]@{ Lane = [string]$vm['Lane']; Since = ConvertTo-DateTimeOffset -Value $vm['StartedAt'] }
+    }
+    # Ordered by instant, never by text: a journal round trip turns the
+    # times into [datetime], whose text order is not their order in time.
+    $running = @()
+    foreach ($entry in @($holding | Sort-Object Since, Lane)) {
+        $running += [ordered]@{ lane = $entry.Lane; since = ConvertTo-StateTime $entry.Since }
     }
     $slots = @($Config.Slots).Count - $held
     # Not $queued: PowerShell names ignore case, so it would be $Queued, the parameter.
@@ -576,12 +585,19 @@ function Publish-HomeState {
         $Journal['PublishedAt'] = $Now.ToString('o')
         $Journal['PublishFailedAt'] = $null
     } catch {
-        $failedAt = $Journal['PublishFailedAt']
-        if (-not $failedAt -or ($Now - (ConvertTo-DateTimeOffset -Value $failedAt)).TotalSeconds -ge 60) {
-            $Journal['PublishFailedAt'] = $Now.ToString('o')
-            & $Adapters.Log 'warn' "publish: $_"
-        }
+        Write-PublishFailure -Journal $Journal -Adapters $Adapters -Now $Now -Level 'warn' -Failure $_
     }
+}
+
+function Write-PublishFailure {
+    # One log line a minute (PublishFailedAt) for a publish that keeps
+    # failing, whether the write failed or the state could not be built.
+    [CmdletBinding()]
+    param([Parameter(Mandatory)]$Journal, [Parameter(Mandatory)][hashtable]$Adapters, [Parameter(Mandatory)][datetimeoffset]$Now, [Parameter(Mandatory)][string]$Level, [Parameter(Mandatory)]$Failure)
+    $failedAt = $Journal['PublishFailedAt']
+    if ($failedAt -and ($Now - (ConvertTo-DateTimeOffset -Value $failedAt)).TotalSeconds -lt 60) { return }
+    $Journal['PublishFailedAt'] = $Now.ToString('o')
+    & $Adapters.Log $Level "publish: $Failure"
 }
 
 function Remove-ActiveVm {
@@ -590,20 +606,22 @@ function Remove-ActiveVm {
     # the delete fails, the entry stays in phase 'discarding' (its slot
     # stays held) and Update-ActiveVm finishes the teardown on a later
     # tick; the retry is registered here, once, before that can happen.
+    # Every adapter call is voided: admission calls this, and admission's
+    # output is the queue it publishes.
     [CmdletBinding()]
     param($Config, $Journal, [hashtable]$Adapters, [string]$Name, [string]$Reason, [bool]$Retry, [datetimeoffset]$Now)
     $vm = $Journal.Vms[$Name]
-    & $Adapters.Log 'warn' "${Name}: discard ($Reason)"
-    if ($vm.RunnerId) { try { & $Adapters.RemoveRunner $vm.RunnerId } catch { & $Adapters.Log 'warn' "${Name}: RemoveRunner: $_" } }
-    try { & $Adapters.StopVmForce $Name } catch { & $Adapters.Log 'warn' "${Name}: StopVmForce: $_" }
-    if ($vm.CachePath) { try { & $Adapters.DiscardCache $vm.CachePath } catch { & $Adapters.Log 'warn' "${Name}: DiscardCache: $_" } }
+    $null = & $Adapters.Log 'warn' "${Name}: discard ($Reason)"
+    if ($vm.RunnerId) { try { $null = & $Adapters.RemoveRunner $vm.RunnerId } catch { $null = & $Adapters.Log 'warn' "${Name}: RemoveRunner: $_" } }
+    try { $null = & $Adapters.StopVmForce $Name } catch { $null = & $Adapters.Log 'warn' "${Name}: StopVmForce: $_" }
+    if ($vm.CachePath) { try { $null = & $Adapters.DiscardCache $vm.CachePath } catch { $null = & $Adapters.Log 'warn' "${Name}: DiscardCache: $_" } }
     if ($Retry -and $vm.JobId) {
         Register-JobRetry -Retries $Journal.Retries -JobId ([int64]$vm.JobId) -Now $Now -BackoffSeconds ([int]$Config.RetryBackoffSeconds)
     }
     try {
-        & $Adapters.RemoveVm $Name $vm.Dir
+        $null = & $Adapters.RemoveVm $Name $vm.Dir
     } catch {
-        & $Adapters.Log 'error' "${Name}: teardown failed, will retry: $_"
+        $null = & $Adapters.Log 'error' "${Name}: teardown failed, will retry: $_"
         $vm.Phase = 'discarding'
         return
     }
@@ -900,7 +918,11 @@ function Invoke-Admission {
     # so the check lives here, where the fork cannot edit it. Each job's run
     # is read once and remembered; a read that fails is retried once a
     # minute and logged on its first failure, and the job waits meanwhile.
+    # A job whose run is still unknown is never admitted but counts in the
+    # published queue (the conservative direction: the router must not see
+    # a slot free that this job will take once its run is read).
     $admissible = @()
+    $publishable = @()
     foreach ($q in $queued) {
         $key = [string]$q.JobId
         if (-not $Journal.SeenJobs.Contains($key)) {
@@ -910,20 +932,22 @@ function Invoke-Admission {
         if (-not $seen.Contains('Foreign')) { $seen['Foreign'] = $null; $seen['RunCheckedAt'] = $null }
         if ($null -eq $seen['Foreign']) {
             $checked = $seen['RunCheckedAt']
-            if ($checked -and ($Now - (ConvertTo-DateTimeOffset -Value $checked)).TotalSeconds -lt 60) { continue }
-            $seen['RunCheckedAt'] = $Now.ToString('o')
-            try {
-                $run = & $Adapters.GetRun ([int64]$q.RunId)
-                $seen['Foreign'] = -not (Test-TrustedRun -Run $run -TrustedRepo $Config.TrustedRepo)
-            } catch {
-                if (-not $checked) { & $Adapters.Log 'warn' "admission: job $($q.JobId): run $($q.RunId) could not be read: $_" }
-                continue
-            }
-            if ($seen['Foreign']) {
-                & $Adapters.Log 'warn' "admission: skipped job $($q.JobId) of $(Get-RunRepository -Run $run) (not the trusted repository)"
+            if (-not $checked -or ($Now - (ConvertTo-DateTimeOffset -Value $checked)).TotalSeconds -ge 60) {
+                $seen['RunCheckedAt'] = $Now.ToString('o')
+                $run = $null
+                try {
+                    $run = & $Adapters.GetRun ([int64]$q.RunId)
+                    $seen['Foreign'] = -not (Test-TrustedRun -Run $run -TrustedRepo $Config.TrustedRepo)
+                } catch {
+                    if (-not $checked) { & $Adapters.Log 'warn' "admission: job $($q.JobId): run $($q.RunId) could not be read: $_" }
+                }
+                if ($seen['Foreign']) {
+                    & $Adapters.Log 'warn' "admission: skipped job $($q.JobId) of $(Get-RunRepository -Run $run) (not the trusted repository)"
+                }
             }
         }
         if ($seen['Foreign'] -eq $false) { $admissible += $q }
+        if ($seen['Foreign'] -ne $true) { $publishable += $q }
     }
     # GitHub hands a runner whichever queued job matches its label first,
     # not the job this host provisioned the VM for. A handed VM whose
@@ -984,7 +1008,8 @@ function Invoke-Admission {
                 Phase = 'provisioned'; StartedAt = $Now.ToString('o'); HandedAt = $null; RunnerId = $null; Claimed = $false; PendingCommit = $false
                 GuestError = $null; SettleWaits = 0; ClaimCheckedAt = $null
             }
-            & $Adapters.StartVm $name
+            # Voided, as in Remove-ActiveVm: this function's output is the queue it publishes.
+            $null = & $Adapters.StartVm $name
             & $Adapters.Log 'info' "${name}: provisioned for job $($job.JobId) (lane $($job.Lane), slot $($slot.Index), fork generation $($created.ForkGeneration))"
         } catch {
             & $Adapters.Log 'error' "${name}: provisioning failed: $_"
@@ -992,17 +1017,21 @@ function Invoke-Admission {
                 Remove-ActiveVm -Config $Config -Journal $Journal -Adapters $Adapters -Name $name -Reason 'provisioning failed' -Retry $true -Now $Now
             } else {
                 Register-JobRetry -Retries $Journal.Retries -JobId ([int64]$job.JobId) -Now $Now -BackoffSeconds ([int]$Config.RetryBackoffSeconds)
-                try { & $Adapters.RemoveVm $name (Join-WinPath $Config.VmDir $name) } catch { & $Adapters.Log 'warn' "${name}: RemoveVm: $_" }
+                try { $null = & $Adapters.RemoveVm $name (Join-WinPath $Config.VmDir $name) } catch { & $Adapters.Log 'warn' "${name}: RemoveVm: $_" }
             }
         }
     }
-    return @(Select-JobsToAdmit -Candidates $admissible -ActiveVms $Journal.Vms -FreeSlots ([int]::MaxValue) -Retries $Journal.Retries -Now $Now -RetryCap ([int]$Config.RetryCap))
+    return @(Select-JobsToAdmit -Candidates $publishable -ActiveVms $Journal.Vms -FreeSlots ([int]::MaxValue) -Retries $Journal.Retries -Now $Now -RetryCap ([int]$Config.RetryCap))
 }
 
 function Invoke-OrchestratorTick {
-    # One pass: advance or settle every active VM, then admit queued jobs.
-    # A failure in one VM never blocks the others; a discovery failure
-    # just means no admission this tick.
+    # One pass: advance or settle every active VM, admit queued jobs, then
+    # publish the pool's state for the router (overflow spec §4). A failure
+    # in one VM never blocks the others. A discovery failure means no
+    # admission this tick, and no publish either: the last state ages into
+    # stale, so a host that cannot list or admit routes away by itself
+    # instead of looking idle. A state that cannot be built or written is
+    # logged once a minute and never stops the tick.
     [CmdletBinding()]
     param(
         [Parameter(Mandatory)]$Config,
@@ -1016,11 +1045,13 @@ function Invoke-OrchestratorTick {
         try { Update-ActiveVm -Config $Config -Journal $Journal -Adapters $Adapters -Name $name -Now $Now }
         catch { & $Adapters.Log 'error' "${name}: $_" }
     }
-    $queued = @()
+    $queued = $null
     try { $queued = @(Invoke-Admission -Config $Config -Journal $Journal -Adapters $Adapters -Now $Now) }
     catch { & $Adapters.Log 'error' "admission: $_" }
-    try { Publish-HomeState -Config $Config -Journal $Journal -Adapters $Adapters -State (Get-PublishedState -Config $Config -Journal $Journal -Queued $queued -Now $Now) -Now $Now }
-    catch { & $Adapters.Log 'error' "publish: $_" }
+    if ($null -ne $queued) {
+        try { Publish-HomeState -Config $Config -Journal $Journal -Adapters $Adapters -State (Get-PublishedState -Config $Config -Journal $Journal -Queued $queued -Now $Now) -Now $Now }
+        catch { Write-PublishFailure -Journal $Journal -Adapters $Adapters -Now $Now -Level 'error' -Failure $_ }
+    }
 }
 
 function Invoke-StartupSweep {

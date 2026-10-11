@@ -113,7 +113,8 @@ Context 'admission' {
         $vm.ForkGeneration | Should -Be 3
         $journal.SeenJobs['1'].Lane | Should -Be 'app'
         $journal.SeenJobs['1'].Foreign | Should -BeFalse
-        $journal.SeenJobs['1'].Keys.Count | Should -Be 5
+        # The SeenJobs entry's shape (both sides sorted: Sort-Object ignores case).
+        @($journal.SeenJobs['1'].Keys | Sort-Object) | Should -Be @('FirstSeenAt', 'Foreign', 'Lane', 'RunCheckedAt', 'RunId' | Sort-Object)
         # The journal entry's shape: 18 keys, every one present from admission.
         @($vm.Keys | Sort-Object) | Should -Be @('CachePath', 'ClaimCheckedAt', 'Claimed', 'Dir', 'ForkGeneration', 'GuestError', 'HandedAt', 'JobId', 'Lane', 'Name', 'PendingCommit', 'Phase', 'RunId', 'RunnerId', 'SettleWaits', 'Slot', 'SlotIp', 'StartedAt')
         $vm.GuestError | Should -Be $null
@@ -773,6 +774,75 @@ Context 'publishing the state' {
         Invoke-OrchestratorTick -Config $config -Journal $journal -Adapters $adapters -Now $t0.AddSeconds(70)
         ([regex]::Matches(($logs -join "`n"), 'publish: 403')).Count | Should -Be 2
         $journal.PublishedState | Should -Be $null
+    }
+    It 'publishes nothing on a tick whose admission threw, so the state ages into stale, and publishes again on the next good tick' {
+        Invoke-OrchestratorTick -Config $config -Journal $journal -Adapters $adapters -Now $t0
+        (Get-Calls 'PublishState').Count | Should -Be 1
+        $listing = $adapters.GetLaneJobs
+        $adapters.GetLaneJobs = { & $script:record 'GetLaneJobs' @(); throw 'api down' }
+        for ($s = 10; $s -le 130; $s += 10) {
+            Invoke-OrchestratorTick -Config $config -Journal $journal -Adapters $adapters -Now $t0.AddSeconds($s)
+        }
+        (Get-Calls 'GetLaneJobs').Count | Should -Be 14
+        (Get-Calls 'PublishState').Count | Should -Be 1 -Because 'a host that cannot list or admit must look dead to the router, not idle'
+        ([regex]::Matches(($logs -join "`n"), '\[error\] admission: api down')).Count | Should -Be 13
+        $adapters.GetLaneJobs = $listing
+        Invoke-OrchestratorTick -Config $config -Journal $journal -Adapters $adapters -Now $t0.AddSeconds(140)
+        (Get-Calls 'PublishState').Count | Should -Be 2
+        $journal.PublishedState | Should -Be '{"v":1,"at":"2026-10-10T12:02:20Z","serving":true,"slots":2,"running":[],"queued":[]}'
+    }
+    It 'logs a state that cannot be built once a minute, as it logs a failed write' {
+        # A hand-edited journal: the VM's provisioning time does not parse.
+        $journal.Vms['slate-win-app-broken00'] = @{
+            Name = 'slate-win-app-broken00'; Lane = 'app'; Slot = 1; SlotIp = '10.77.0.11'; JobId = [int64]1; RunId = [int64]10
+            Dir = 'C:\slate-ci\vms\slate-win-app-broken00'; CachePath = $null; ForkGeneration = 3
+            Phase = 'handed'; StartedAt = 'not a time'; HandedAt = $t0.ToString('o'); RunnerId = 77; Claimed = $true; PendingCommit = $false
+            GuestError = $null; SettleWaits = 0; ClaimCheckedAt = $null
+        }
+        { Invoke-OrchestratorTick -Config $config -Journal $journal -Adapters $adapters -Now $t0 } | Should -Not -Throw
+        Invoke-OrchestratorTick -Config $config -Journal $journal -Adapters $adapters -Now $t0.AddSeconds(10)
+        ([regex]::Matches(($logs -join "`n"), '\[error\] publish: ')).Count | Should -Be 1
+        Invoke-OrchestratorTick -Config $config -Journal $journal -Adapters $adapters -Now $t0.AddSeconds(70)
+        ([regex]::Matches(($logs -join "`n"), '\[error\] publish: ')).Count | Should -Be 2
+        (Get-Calls 'PublishState').Count | Should -Be 0
+    }
+    It 'counts a job whose run is still unknown in the published queue, without admitting it' {
+        # The conservative direction: the router must not see a free slot
+        # that the host will hand to this job once its run is read.
+        $world.Queued = @((New-QueuedJob 1 10 'app' '2026-10-10T11:58:00Z'))
+        $adapters.GetRun = { param($id) & $script:record 'GetRun' @($id); throw '502' }
+        Invoke-OrchestratorTick -Config $config -Journal $journal -Adapters $adapters -Now $t0
+        (Get-Calls 'NewVm').Count | Should -Be 0
+        $journal.SeenJobs['1'].Foreign | Should -Be $null
+        $journal.PublishedState | Should -Be '{"v":1,"at":"2026-10-10T12:00:00Z","serving":true,"slots":2,"running":[],"queued":[{"lane":"app","since":"2026-10-10T11:58:00Z"}]}'
+        # The next tick does not read the run again, and the job still counts:
+        # the state is unchanged, so nothing is written.
+        Invoke-OrchestratorTick -Config $config -Journal $journal -Adapters $adapters -Now $t0.AddSeconds(10)
+        (Get-Calls 'GetRun').Count | Should -Be 1
+        (Get-Calls 'NewVm').Count | Should -Be 0
+        (Get-Calls 'PublishState').Count | Should -Be 1
+    }
+    It 'never publishes stray adapter output as a queued job' {
+        # Admission returns the publishable queue as its output, so anything
+        # an adapter writes to the pipeline inside it would join that queue.
+        $world.Queued = @((New-QueuedJob 1 10 'app'))
+        $adapters.StartVm = { param($n) & $script:record 'StartVm' @($n); throw 'start failed' }
+        $adapters.StopVmForce = { param($n) & $script:record 'StopVmForce' @($n); 'stopped' }
+        $adapters.DiscardCache = { param($c) & $script:record 'DiscardCache' @($c); 'discarded' }
+        $adapters.RemoveVm = { param($n, $d) & $script:record 'RemoveVm' @($n, $d); 'removed' }
+        Invoke-OrchestratorTick -Config $config -Journal $journal -Adapters $adapters -Now $t0
+        $journal.Vms.Count | Should -Be 0
+        $journal.Retries['1'].Count | Should -Be 1
+        (Get-Calls 'PublishState').Count | Should -Be 1
+        $journal.PublishedState | Should -Be '{"v":1,"at":"2026-10-10T12:00:00Z","serving":true,"slots":2,"running":[],"queued":[]}'
+        # A provisioning that succeeds, with a chatty StartVm.
+        $adapters.StartVm = { param($n) & $script:record 'StartVm' @($n); 'started' }
+        $world.Queued = @((New-QueuedJob 1 10 'app'), (New-QueuedJob 2 11 'rust'))
+        Invoke-OrchestratorTick -Config $config -Journal $journal -Adapters $adapters -Now $t0.AddSeconds(10)
+        $journal.Vms.Count | Should -Be 1
+        (Get-Calls 'PublishState').Count | Should -Be 2
+        $journal.PublishedState | Should -Be '{"v":1,"at":"2026-10-10T12:00:10Z","serving":true,"slots":2,"running":[{"lane":"rust","since":"2026-10-10T12:00:10Z"}],"queued":[]}'
+        ($logs -join "`n") | Should -Not -Match 'publish:'
     }
 }
 

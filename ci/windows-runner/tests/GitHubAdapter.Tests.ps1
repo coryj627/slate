@@ -342,11 +342,15 @@ Describe 'Set-GhVariable' {
             $Method -eq 'POST' -and $Uri -like '*/actions/variables' -and
             ($Body | ConvertFrom-Json).name -eq 'WINDOWS_HOME_STATE' -and ($Body | ConvertFrom-Json).value -eq '{"v":1}'
         }
+    }
+    It 'rethrows a patch that fails with anything but 404, and never tries POST then' {
         Mock Invoke-RestMethod {
             $response = [System.Net.Http.HttpResponseMessage]::new([System.Net.HttpStatusCode]::Forbidden)
             throw [Microsoft.PowerShell.Commands.HttpResponseException]::new('forbidden', $response)
         }
-        { Set-GhVariable -Name 'WINDOWS_HOME_STATE' -Value '{"v":1}' } | Should -Throw
+        { Set-GhVariable -Name 'WINDOWS_HOME_STATE' -Value '{"v":1}' } | Should -Throw '*forbidden*'
+        Should -Invoke Invoke-RestMethod -Times 1 -Exactly -ParameterFilter { $Method -eq 'PATCH' }
+        Should -Invoke Invoke-RestMethod -Times 0 -Exactly -ParameterFilter { $Method -eq 'POST' }
     }
 }
 

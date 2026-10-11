@@ -614,6 +614,71 @@ Describe 'Get-PublishedState' {
         $s = Get-PublishedState -Config $cfg -Journal (New-Journal) -Queued $queued -Now $now
         @($s.queued | ForEach-Object { "$($_.lane)@$($_.since)" }) | Should -Be @('rust@2026-10-11T14:39:00Z', 'model@2026-10-11T14:40:00Z')
     }
+    It 'orders running by instant, never by string, whatever type the journal holds the time in' {
+        # A [datetime] (here of Kind Local) prints as 10/11/2026 …, which
+        # sorts before any ISO string of the same year as text.
+        $j = New-Journal
+        $j.Vms['a'] = @{ Name = 'a'; Lane = 'app'; Phase = 'handed'; StartedAt = '2026-10-11T14:40:00Z'; PendingCommit = $false }
+        $j.Vms['b'] = @{ Name = 'b'; Lane = 'model'; Phase = 'handed'; StartedAt = [datetimeoffset]::Parse('2026-10-11T14:48:51Z').LocalDateTime; PendingCommit = $false }
+        $s = Get-PublishedState -Config $cfg -Journal $j -Queued @() -Now $now
+        @($s.running | ForEach-Object { "$($_.lane)@$($_.since)" }) | Should -Be @('app@2026-10-11T14:40:00Z', 'model@2026-10-11T14:48:51Z')
+    }
+    It 'publishes the same state from a journal written and read back' {
+        # The round trip turns every time into a [datetime]; across a year
+        # boundary their text order is not their order in time.
+        $p = Join-Path $TestDrive 'published.json'
+        $j = New-Journal
+        $j.Vms['a'] = @{ Name = 'a'; Lane = 'app'; Phase = 'handed'; StartedAt = '2025-12-31T23:59:00Z'; PendingCommit = $false }
+        $j.Vms['b'] = @{ Name = 'b'; Lane = 'model'; Phase = 'provisioned'; StartedAt = '2026-01-01T00:01:00+00:00'; PendingCommit = $false }
+        $j.Vms['c'] = @{ Name = 'c'; Lane = 'rust'; Phase = 'handed'; StartedAt = '2025-12-31T23:00:00Z'; PendingCommit = $true }
+        $j.Vms['d'] = @{ Name = 'd'; Lane = 'shell'; Phase = 'discarding'; StartedAt = '2025-12-31T22:00:00Z'; PendingCommit = $false }
+        $expected = '{"v":1,"at":"2026-10-11T15:04:05Z","serving":true,"slots":1,"running":[{"lane":"app","since":"2025-12-31T23:59:00Z"},{"lane":"model","since":"2026-01-01T00:01:00Z"}],"queued":[]}'
+        (Get-PublishedState -Config $cfg -Journal $j -Queued @() -Now $now | ConvertTo-Json -Compress -Depth 5) | Should -Be $expected
+        Write-Journal -Path $p -Journal $j
+        $back = Read-Journal -Path $p
+        $back.Vms['a'].StartedAt | Should -BeOfType [datetime]
+        (Get-PublishedState -Config $cfg -Journal $back -Queued @() -Now $now | ConvertTo-Json -Compress -Depth 5) | Should -Be $expected
+    }
+    It 'writes every time in the invariant form whatever the culture of the thread (<Culture>)' -ForEach @(@{ Culture = 'th-TH' }, @{ Culture = 'fi-FI' }) {
+        # th-TH counts years in the Buddhist era (2569); fi-FI separates the
+        # time with dots. Either would publish a state the router cannot read.
+        try { $info = [cultureinfo]::GetCultureInfo($Culture) }
+        catch { Set-ItResult -Skipped -Because "culture $Culture is not available on this host ($($_.Exception.Message))"; return }
+        $thread = [System.Threading.Thread]::CurrentThread
+        $before = $thread.CurrentCulture
+        $beforeUi = $thread.CurrentUICulture
+        try {
+            $thread.CurrentCulture = $info
+            $thread.CurrentUICulture = $info
+            # ConvertTo-StateTime is private: call it inside the module this
+            # file imported (InModuleScope is ambiguous when another test file
+            # has loaded a second copy).
+            $module = (Get-Command Get-PublishedState).Module
+            & $module { param($At) ConvertTo-StateTime -Value $At } $now | Should -BeExactly '2026-10-11T15:04:05Z'
+            $j = New-Journal
+            $j.Vms['a'] = @{ Name = 'a'; Lane = 'app'; Phase = 'handed'; StartedAt = '2026-10-11T14:48:51Z'; PendingCommit = $false }
+            $queued = @([pscustomobject]@{ JobId = 1; Lane = 'model'; CreatedAt = [datetimeoffset]::Parse('2026-10-11T14:40:00Z') })
+            (Get-PublishedState -Config $cfg -Journal $j -Queued $queued -Now $now | ConvertTo-Json -Compress -Depth 5) |
+                Should -BeExactly '{"v":1,"at":"2026-10-11T15:04:05Z","serving":true,"slots":2,"running":[{"lane":"app","since":"2026-10-11T14:48:51Z"}],"queued":[{"lane":"model","since":"2026-10-11T14:40:00Z"}]}'
+        } finally {
+            $thread.CurrentCulture = $before
+            $thread.CurrentUICulture = $beforeUi
+        }
+    }
+}
+
+Describe 'Test-TrustedRun' {
+    It 'is <Expected> for <Case>' -ForEach @(
+        @{ Case = 'the trusted repository'; Expected = $true; Run = [pscustomobject]@{ head_repository = [pscustomobject]@{ full_name = 'coryj627/slate' } } }
+        @{ Case = 'the trusted repository in another case'; Expected = $true; Run = [pscustomobject]@{ head_repository = [pscustomobject]@{ full_name = 'CoryJ627/SLATE' } } }
+        @{ Case = 'no run'; Expected = $false; Run = $null }
+        @{ Case = 'a run without a head_repository property'; Expected = $false; Run = [pscustomobject]@{ id = 10 } }
+        @{ Case = 'a null head repository (a deleted fork)'; Expected = $false; Run = [pscustomobject]@{ head_repository = $null } }
+        @{ Case = 'a lookalike name'; Expected = $false; Run = [pscustomobject]@{ head_repository = [pscustomobject]@{ full_name = 'coryj627/slate-evil' } } }
+        @{ Case = 'a fork of the same name'; Expected = $false; Run = [pscustomobject]@{ head_repository = [pscustomobject]@{ full_name = 'someone/slate' } } }
+    ) {
+        Test-TrustedRun -Run $Run -TrustedRepo 'coryj627/slate' | Should -Be $Expected
+    }
 }
 
 Describe 'Write-CiLog' {
