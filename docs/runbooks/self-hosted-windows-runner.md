@@ -454,6 +454,16 @@ saw before changing anything.
   ```
 
   Expect the line `Password expires` to end in `Never`.
+- [ ] `runner` can create symbolic links. Inside a job VM, or the build VM
+  once phase 2 runs, in the same console:
+
+  ```powershell
+  whoami /priv
+  ```
+
+  Expect `SeCreateSymbolicLinkPrivilege` in the list. Without it the three
+  `livesync_windows_*symlink*` tests of `slate-core` fail with os error
+  1314 while every other test passes.
 - [ ] IPv6 is off inside a job VM, not only on the build VM's adapter. The
   image sets `Tcpip6\Parameters\DisabledComponents` to `0xFF`, which
   applies to the new adapter every job VM gets. In the same console:
@@ -1269,6 +1279,12 @@ and `"status": "401"`. Rotate it before then.
   every lane's `shell: pwsh` needs. An image built from the current scripts
   carries the pinned PowerShell 7 MSI (`pwshVersion`, `pwshSha256`); a job
   that fails this way runs on an older one. Rebuild the golden disk.
+- **The Rust platform witnesses fail only the three
+  `sync_detect::tests::livesync_windows_*symlink*` tests.** They create
+  symbolic links, which needs `SeCreateSymbolicLinkPrivilege`; hosted
+  runners have it as administrators, and the image grants it to `runner`
+  in phase 1. A job that fails this way runs on an image built before
+  that. Rebuild the golden disk.
 - **`token missing at …` every minute.** No token is stored: run
   `store-token.ps1`. After `-ResetAccount`, store the token before you
   enable the loop task.

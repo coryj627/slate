@@ -166,6 +166,13 @@ try {
     # Auto-logon fails once the password expires (42 days by default), and
     # every job VM would then sit at the logon screen until the host gives up.
     Set-LocalUser -Name runner -PasswordNeverExpires $true
+    # Jobs create symbolic links (std::os::windows::fs::symlink_* in the
+    # vault tests), which hosted runners can because they run as an
+    # administrator: runner, a standard user, gets that one privilege. It
+    # applies at runner's next logon, which the reboot below brings.
+    Import-Module (Join-Path $root 'SlateCiHost.psm1') -Force
+    $runnerSid = (New-Object System.Security.Principal.NTAccount('runner')).Translate([System.Security.Principal.SecurityIdentifier]).Value
+    Set-LocalUserRights -Sid $runnerSid -Rights 'SeCreateSymbolicLinkPrivilege'
     $winlogon = 'HKLM:\SOFTWARE\Microsoft\Windows NT\CurrentVersion\Winlogon'
     Set-ItemProperty -Path $winlogon -Name AutoAdminLogon -Value '1'
     Set-ItemProperty -Path $winlogon -Name DefaultUserName -Value 'runner'

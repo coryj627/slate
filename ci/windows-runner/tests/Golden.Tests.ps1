@@ -224,6 +224,19 @@ Describe 'golden scripts' {
         $calls.Count | Should -Be 4
         foreach ($i in $calls) { $code[$i + 1] | Should -Match '\$LASTEXITCODE -ne 0' }
     }
+    It 'provisioning grants runner the symbolic-link privilege through the module, before the restart' {
+        # Three vault tests create symbolic links with std::os::windows::fs;
+        # hosted runners pass them as administrators, and a standard user
+        # without SeCreateSymbolicLinkPrivilege gets os error 1314.
+        $text = Get-Content -Raw (Join-Path $goldenDir 'provision-guest.ps1')
+        $grant = $text.IndexOf("Set-LocalUserRights -Sid `$runnerSid -Rights 'SeCreateSymbolicLinkPrivilege'")
+        $grant | Should -BeGreaterThan -1
+        $import = $text.IndexOf("Import-Module (Join-Path `$root 'SlateCiHost.psm1') -Force")
+        $import | Should -BeGreaterThan -1
+        $import | Should -BeLessThan $grant
+        $grant | Should -BeLessThan $text.IndexOf('Restart-Computer -Force')
+        $text | Should -Match ([regex]::Escape("NTAccount('runner')"))
+    }
     It 'provisioning makes the runner password never expire, before the restart' {
         # Auto-logon stops working once the password expires (42 days by
         # default) and every job would then end unclaimed.

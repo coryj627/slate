@@ -352,6 +352,11 @@ Toolchain, matching the Namespace image the lanes run on today:
   running as `runner` lacks (it would wait on a UAC prompt for ever), and a
   matching version in the cache makes it install nothing. The same
   directory is on the machine `PATH`.
+- `runner` holds one privilege beyond a standard user's:
+  `SeCreateSymbolicLinkPrivilege`, granted by phase 1 through the module's
+  `Set-LocalUserRights`. The vault tests create symbolic links with
+  `std::os::windows::fs`, which hosted runners can because they run as an
+  administrator.
 - `actions-runner` 2.338.0 unpacked at `C:\actions-runner`, owned by
   `runner` (its runtime files: `.env`, `jit.cfg`, `ready`,
   `bootstrap-error.txt`, the two bootstrap logs, `_work`). The guest scripts
