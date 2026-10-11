@@ -52,11 +52,11 @@
 - Produces, for Task 2: outputs `attempt`, `rust-pool`, `app-pool`, `model-0-pool`, `model-1-pool`; the env names `WINDOWS_RUNNER_MODE`, `WINDOWS_HOME_STATE`, `ROUTE_LANES`, `ROUTE_ATTEMPT`, `ROUTE_RUN_ID`, `ROUTE_EVENT`, `ROUTE_HEAD_REPO`, `ROUTE_REPO`, `GH_TOKEN`; the job name `Route Windows lanes` (`ROUTE_JOB_NAME`, which `fetch_concurrent` looks for).
 - Consumes, from Task 3: the state shape of spec §4 (`parse_state`).
 
-The two files below were written and run as a whole before this plan was committed: 50 tests, one skipped outside the repository (`test_workflow_routes_exactly_the_lane_table` needs `windows.yml` beside the checkout, which Task 2 provides).
+The two files below were written and run as a whole before this plan was committed (50 tests), and the plan was then executed once in a scratch worktree, suite by suite; the corrections that run produced are already folded in.
 
 - [ ] **Step 1: Write the tests**
 
-Create `ci/windows-runner/route/tests/__init__.py` empty, and `ci/windows-runner/route/tests/test_route.py`:
+Create `ci/windows-runner/route/tests/__init__.py` empty, and `ci/windows-runner/route/tests/test_route.py`. One method of `class Constants`, `test_workflow_routes_exactly_the_lane_table`, is NOT written here: it reads `windows.yml`, which gains `ROUTE_LANES` only in Task 2, and Task 2 adds the method. Everything else verbatim:
 
 ```python
 # Copyright (C) 2026 Cory Joseph
@@ -338,16 +338,6 @@ class Constants(unittest.TestCase):
             self.assertIn(host_lane, route.DURATIONS)
         self.assertIn("shell", route.DURATIONS)
 
-    def test_workflow_routes_exactly_the_lane_table(self):
-        path = os.path.join(os.path.dirname(__file__), "..", "..", "..", "..", ".github", "workflows", "windows.yml")
-        if not os.path.exists(path):
-            self.skipTest("windows.yml is not beside this checkout")
-        with open(path, encoding="utf-8") as handle:
-            text = handle.read()
-        match = re.search(r"ROUTE_LANES: ([a-z0-9,-]+)", text)
-        self.assertIsNotNone(match)
-        self.assertEqual(match.group(1).split(","), ["rust", "app", "model-0", "model-1"])
-        self.assertEqual(sorted(match.group(1).split(",")), sorted(route.LANES))
 
 
 class Reads(unittest.TestCase):
@@ -913,23 +903,29 @@ if __name__ == "__main__":
 - [ ] **Step 4: Run the tests to verify they pass**
 
 Run: `python -I -m unittest discover -v -s ci/windows-runner/route/tests -t ci/windows-runner/route`
-Expected: `OK (skipped=1)` until Task 2 lands (`windows.yml` has no `ROUTE_LANES` yet); `OK` after it.
+Expected: `Ran 49 tests … OK`.
 
 - [ ] **Step 5: Replay two decisions by hand**
 
-Run:
+Run (on Windows `python`; `python3` on the owner's machine is the Microsoft Store stub; on Linux and macOS `python3`):
 
 ```bash
-WINDOWS_RUNNER_MODE=home WINDOWS_HOME_STATE='{"v":1,"at":"2026-10-11T15:00:00Z","serving":true,"slots":2,"running":[],"queued":[]}' ROUTE_LANES=rust,app,model-0,model-1 ROUTE_NOW=1791730800 ROUTE_RUN_CREATED=1791730800 ROUTE_CONCURRENT='[]' ROUTE_REPO=coryj627/slate python3 ci/windows-runner/route/route.py
+WINDOWS_RUNNER_MODE=home WINDOWS_HOME_STATE='{"v":1,"at":"2026-10-11T15:00:00Z","serving":true,"slots":2,"running":[],"queued":[]}' ROUTE_LANES=rust,app,model-0,model-1 ROUTE_NOW=1791730800 ROUTE_RUN_CREATED=1791730800 ROUTE_CONCURRENT='[]' ROUTE_REPO=coryj627/slate python ci/windows-runner/route/route.py
 ```
 
 Expected: `rust-pool=home`, `app-pool=home`, `model-0-pool=home`, `model-1-pool=vendor`, and a `Replay:` line. Then the same with `"at":"2026-10-11T14:00:00Z"`: every pool `vendor` and the reason `state is 3600 s old at the run's creation`.
 
 - [ ] **Step 6: Run the router's tests in CI**
 
-In `.github/workflows/windows-runner-tests.yml`, after the `Run the suite` step, add:
+In `.github/workflows/windows-runner-tests.yml`, after the `Run the suite` step, add (the same pinned setup-python as `mac-runner-tests.yml`):
 
 ```yaml
+      - name: Set up Python
+        if: ${{ !cancelled() }}
+        uses: actions/setup-python@5fda3b95a4ea91299a34e894583c3862153e4b97  # v7.0.0
+        with:
+          python-version: '3.13'
+
       - name: Run the router's tests
         # The Windows lane router (ci/windows-runner/route/route.py) is
         # Python, like the mac runner's; same discover shape as
@@ -960,7 +956,22 @@ git commit -m "feat(ci-route): the Windows lane router over the state the host p
 - Produces: the predicate each lane uses twice, verbatim (rust):
   `(needs.route.outputs.attempt == github.run_attempt && needs.route.outputs.rust-pool == 'home')`.
 
-- [ ] **Step 1: Rewrite the guards so they fail against today's workflows**
+- [ ] **Step 1: Rewrite the guards so they fail against today's workflows, and add the lane-table test**
+
+In `ci/windows-runner/route/tests/test_route.py`, `class Constants`, after `test_lane_table_is_consistent`, add the method Task 1 left out (it fails until Step 5 adds `ROUTE_LANES`):
+
+```python
+    def test_workflow_routes_exactly_the_lane_table(self):
+        path = os.path.join(os.path.dirname(__file__), "..", "..", "..", "..", ".github", "workflows", "windows.yml")
+        if not os.path.exists(path):
+            self.skipTest("windows.yml is not beside this checkout")
+        with open(path, encoding="utf-8") as handle:
+            text = handle.read()
+        match = re.search(r"ROUTE_LANES: ([a-z0-9,-]+)", text)
+        self.assertIsNotNone(match)
+        self.assertEqual(match.group(1).split(","), ["rust", "app", "model-0", "model-1"])
+        self.assertEqual(sorted(match.group(1).split(",")), sorted(route.LANES))
+```
 
 In `ci/windows-runner/tests/Workflows.Tests.ps1`, add to `BeforeAll` a helper that slices one job's block (from `\n  <job>:` to the next line that starts a top-level or two-space key), so key order and comments inside a job do not break the pins:
 
@@ -1238,12 +1249,12 @@ The `windows-model-shard` job head becomes:
 
 `nightly.yml` line 163 becomes
 `runs-on: ${{ (vars.WINDOWS_RUNNER_MODE == 'home' || vars.WINDOWS_RUNNER_MODE == 'home-only') && 'slate-win-app' || 'windows-latest' }}`
-and line 176 `cache: ${{ (vars.WINDOWS_RUNNER_MODE != 'home' && vars.WINDOWS_RUNNER_MODE != 'home-only') && 'true' || 'false' }}`; its comment at lines 161–162 says "home or home-only".
+and line 176 `cache: ${{ (vars.WINDOWS_RUNNER_MODE != 'home' && vars.WINDOWS_RUNNER_MODE != 'home-only') && 'true' || 'false' }}`; its comment line 161 becomes `    # The home pool when WINDOWS_RUNNER_MODE is `home` or `home-only`; unset or` (line 162 unchanged).
 
 - [ ] **Step 9: Run both suites to verify they pass**
 
 Run: `pwsh -NoProfile -NonInteractive -File ci/windows-runner/tests/Invoke-Tests.ps1` and `python -I -m unittest discover -v -s ci/windows-runner/route/tests -t ci/windows-runner/route`
-Expected: all green, the Python suite now with no skip. Then `python3 -c "import yaml; yaml.safe_load(open('.github/workflows/windows.yml')); yaml.safe_load(open('.github/workflows/nightly.yml'))"` prints nothing (install PyYAML with `python3 -m pip install --user pyyaml` if absent).
+Expected: all green; the Python suite `Ran 50 tests … OK`. Then `python -c "import yaml,sys; [yaml.safe_load(open(p, encoding='utf-8')) for p in sys.argv[1:]]" .github/workflows/windows.yml .github/workflows/nightly.yml` prints nothing (`python -m pip install --user pyyaml` if PyYAML is absent; `encoding='utf-8'` matters on Windows, the files hold UTF-8 punctuation).
 
 - [ ] **Step 10: Commit**
 
@@ -1273,7 +1284,8 @@ git commit -m "ci(windows): route every lane through the router's pools, trust i
     It 'New-Journal and Read-Journal share one set of top-level keys' {
         $p = Join-Path $TestDrive 'bare.json'
         '{"Vms":{},"Retries":{},"SeenJobs":{}}' | Set-Content $p
-        @((New-Journal).Keys | Sort-Object) | Should -Be @('PublishFailedAt', 'PublishedAt', 'PublishedState', 'Retries', 'SeenJobs', 'Vms')
+        # The expected side is sorted the same way: Sort-Object ignores case, ordinal order differs.
+        @((New-Journal).Keys | Sort-Object) | Should -Be @('PublishFailedAt', 'PublishedAt', 'PublishedState', 'Retries', 'SeenJobs', 'Vms' | Sort-Object)
         @((Read-Journal -Path $p).Keys | Sort-Object) | Should -Be @((New-Journal).Keys | Sort-Object)
         (Read-Journal -Path $p).PublishedState | Should -Be $null
     }
@@ -1377,15 +1389,36 @@ Context 'publishing the state' {
 
 ```powershell
 Describe 'Set-GhVariable' {
-    It 'patches the variable, and creates it with POST when the patch answers 404' {
-        # Mock Invoke-RestMethod as the other describes do: record Method, Uri and Body; the first PATCH throws a 404.
-        # Expect: PATCH /actions/variables/WINDOWS_HOME_STATE with body {"name":"WINDOWS_HOME_STATE","value":"<json>"},
-        # then on 404 a POST /actions/variables with the same body; any other failure rethrown.
+    It 'patches the variable, creates it with POST when the patch answers 404, and rethrows anything else' {
+        Mock Invoke-RestMethod { [pscustomobject]@{} }
+        Set-GhVariable -Name 'WINDOWS_HOME_STATE' -Value '{"v":1}'
+        Should -Invoke Invoke-RestMethod -Times 1 -Exactly -ParameterFilter {
+            $Method -eq 'PATCH' -and $Uri -like '*/actions/variables/WINDOWS_HOME_STATE' -and
+            ($Body | ConvertFrom-Json).name -eq 'WINDOWS_HOME_STATE' -and ($Body | ConvertFrom-Json).value -eq '{"v":1}'
+        }
+        Should -Invoke Invoke-RestMethod -Times 0 -Exactly -ParameterFilter { $Method -eq 'POST' }
+        Mock Invoke-RestMethod {
+            if ($Method -eq 'PATCH') {
+                $response = [System.Net.Http.HttpResponseMessage]::new([System.Net.HttpStatusCode]::NotFound)
+                throw [Microsoft.PowerShell.Commands.HttpResponseException]::new('not found', $response)
+            }
+            [pscustomobject]@{}
+        }
+        Set-GhVariable -Name 'WINDOWS_HOME_STATE' -Value '{"v":1}'
+        Should -Invoke Invoke-RestMethod -Times 1 -Exactly -ParameterFilter {
+            $Method -eq 'POST' -and $Uri -like '*/actions/variables' -and
+            ($Body | ConvertFrom-Json).name -eq 'WINDOWS_HOME_STATE' -and ($Body | ConvertFrom-Json).value -eq '{"v":1}'
+        }
+        Mock Invoke-RestMethod {
+            $response = [System.Net.Http.HttpResponseMessage]::new([System.Net.HttpStatusCode]::Forbidden)
+            throw [Microsoft.PowerShell.Commands.HttpResponseException]::new('forbidden', $response)
+        }
+        { Set-GhVariable -Name 'WINDOWS_HOME_STATE' -Value '{"v":1}' } | Should -Throw
     }
 }
 ```
 
-(Write the two expectations with the file's real mocking helpers; the `Get-GhRunner` describe shows how a 404 is produced there.) Also add `'PublishState'` to `New-GitHubAdapters`'s expected key list in that file's `New-GitHubAdapters` describe.
+(That file's `BeforeAll` already initialises the adapter with a fake token, as the other describes rely on.) Also add `'PublishState'` to `New-GitHubAdapters`'s expected key list in that file's `New-GitHubAdapters` describe.
 
 - [ ] **Step 2: Run the tests to verify they fail**
 
@@ -1425,8 +1458,10 @@ New functions after `Get-FreeSlots`:
 
 ```powershell
 function ConvertTo-StateTime {
+    # Invariant culture: a calendar or time separator of the host's locale
+    # would publish a state the router cannot parse.
     param([Parameter(Mandatory)][datetimeoffset]$Value)
-    return $Value.ToUniversalTime().ToString('yyyy-MM-ddTHH:mm:ssZ')
+    return $Value.ToUniversalTime().ToString('yyyy-MM-ddTHH:mm:ssZ', [cultureinfo]::InvariantCulture)
 }
 
 function Get-PublishedState {
@@ -1445,11 +1480,12 @@ function Get-PublishedState {
         $running += [ordered]@{ lane = [string]$vm['Lane']; since = ConvertTo-StateTime (ConvertTo-DateTimeOffset -Value $vm['StartedAt']) }
     }
     $slots = @($Config.Slots).Count - $held
-    $queued = @()
+    # Not $queued: PowerShell names ignore case, so that would be $Queued, the parameter, emptied.
+    $waiting = @()
     foreach ($job in @($Queued | Sort-Object CreatedAt, JobId)) {
-        $queued += [ordered]@{ lane = [string]$job.Lane; since = ConvertTo-StateTime $job.CreatedAt }
+        $waiting += [ordered]@{ lane = [string]$job.Lane; since = ConvertTo-StateTime $job.CreatedAt }
     }
-    return [ordered]@{ v = 1; at = ConvertTo-StateTime $Now; serving = ($slots -ge 1); slots = [int]$slots; running = @($running); queued = @($queued) }
+    return [ordered]@{ v = 1; at = ConvertTo-StateTime $Now; serving = ($slots -ge 1); slots = [int]$slots; running = @($running); queued = @($waiting) }
 }
 
 function Publish-HomeState {
@@ -1516,7 +1552,20 @@ function Set-GhVariable {
 }
 ```
 
-where `Test-GhNotFound` is the 404 test `Get-GhRunner` already applies, lifted into a small function both call (`Get-GhRunner` keeps its behaviour and its tests). Add `'Set-GhVariable'` to `New-GitHubAdapters`'s command list and `PublishState = { param($json) & $commands['Set-GhVariable'] -Name 'WINDOWS_HOME_STATE' -Value $json }` to its hashtable.
+with, placed before `Get-GhRunner`, the 404 test that function already applies lifted into one helper both call (`Get-GhRunner`'s catch becomes `if (Test-GhNotFound -ErrorRecord $_) { return $null }; throw`, and its tests keep passing):
+
+```powershell
+function Test-GhNotFound {
+    # True when a failed Invoke-GhApi call was GitHub answering 404 (the web
+    # cmdlets keep the response on the exception).
+    [CmdletBinding()]
+    param([Parameter(Mandatory)][System.Management.Automation.ErrorRecord]$ErrorRecord)
+    $response = $ErrorRecord.Exception.Response
+    return ($null -ne $response -and [int]$response.StatusCode -eq 404)
+}
+```
+
+Add `'Set-GhVariable'` to `New-GitHubAdapters`'s command list and `PublishState = { param($json) & $commands['Set-GhVariable'] -Name 'WINDOWS_HOME_STATE' -Value $json }` to its hashtable.
 
 - [ ] **Step 4: Run both suites to verify they pass**
 
@@ -1615,11 +1664,11 @@ Add to `Context 'handoff reconciliation'` (it exists; see its swap test for the 
 - [ ] **Step 2: Run the tests to verify they fail**
 
 Run: `pwsh -NoProfile -NonInteractive -File ci/windows-runner/tests/Invoke-Tests.ps1`
-Expected: the four new tests fail; everything else passes (the default trusted run keeps the old tests green).
+Expected: the four new tests and the extended first admission test fail (five); everything else passes (the default trusted run keeps the old tests green).
 
 - [ ] **Step 3: Implement**
 
-In `Invoke-Admission`, replace the block that records seen jobs and the reconciliation loop:
+In `Invoke-Admission`, replace from `$queued = @($laneJobs | …)` through the end of the `foreach ($q in $queued) { … }` loop that records seen jobs (the reconciliation loop below it stays, and is edited afterwards) with:
 
 ```powershell
     $queued = @($laneJobs | Where-Object { $_.Status -eq 'queued' })
@@ -1641,20 +1690,21 @@ In `Invoke-Admission`, replace the block that records seen jobs and the reconcil
             if ($checked -and ($Now - (ConvertTo-DateTimeOffset -Value $checked)).TotalSeconds -lt 60) { continue }
             $seen['RunCheckedAt'] = $Now.ToString('o')
             try {
-                $seen['Foreign'] = -not (Test-TrustedRun -Run (& $Adapters.GetRun ([int64]$q.RunId)) -TrustedRepo $Config.TrustedRepo)
+                $run = & $Adapters.GetRun ([int64]$q.RunId)
+                $seen['Foreign'] = -not (Test-TrustedRun -Run $run -TrustedRepo $Config.TrustedRepo)
             } catch {
                 if (-not $checked) { & $Adapters.Log 'warn' "admission: job $($q.JobId): run $($q.RunId) could not be read: $_" }
                 continue
             }
             if ($seen['Foreign']) {
-                & $Adapters.Log 'warn' "admission: skipped job $($q.JobId) of $(Get-RunRepository -Run (& $Adapters.GetRun ([int64]$q.RunId))) (not the trusted repository)"
+                & $Adapters.Log 'warn' "admission: skipped job $($q.JobId) of $(Get-RunRepository -Run $run) (not the trusted repository)"
             }
         }
         if ($seen['Foreign'] -eq $false) { $admissible += $q }
     }
 ```
 
-(The second `GetRun` in the skip line is served from the adapter's conditional cache; if that bothers the reviewer, keep the run in a local and pass it to `Get-RunRepository`.) Then two small pure functions, next to `Test-CommitEligible`:
+(One `GetRun` per job: `Get-GhRun` is not a conditional request, so a second read would be a second counted call.) Then two small pure functions, next to `Test-CommitEligible`:
 
 ```powershell
 function Get-RunRepository {
@@ -1712,7 +1762,7 @@ git commit -m "fix(ci-host): never provision for, and evict within a tick, a job
 
 - [ ] **Step 1: Write the failing tests**
 
-`SlateCiHost.Tests.ps1`: extend the journal key list of Task 3's shape test with `'LogsPrunedOn'` (sorted position: after `GoldenAccepted` once Task 6 adds it; for now `'LogsPrunedOn', 'PublishFailedAt', …`), and add:
+`SlateCiHost.Tests.ps1`: the expected list of Task 3's journal shape test becomes `@('LogsPrunedOn', 'PublishFailedAt', 'PublishedAt', 'PublishedState', 'Retries', 'SeenJobs', 'Vms' | Sort-Object)`, and add:
 
 ```powershell
 Describe 'Get-ExpiredLogNames' {
@@ -1759,7 +1809,7 @@ Context 'log retention' {
         Invoke-OrchestratorTick -Config $config -Journal $journal -Adapters $adapters -Now $t0
         (Get-Calls 'RemoveLog').Count | Should -Be 1
         (Get-Calls 'RemoveLog')[0].Args[0] | Should -Be 'orchestrator-2026-09-01.log'
-        $journal.LogsPrunedOn | Should -Be $t0.ToLocalTime().ToString('yyyy-MM-dd')
+        $journal.LogsPrunedOn | Should -Be $t0.ToLocalTime().ToString('yyyy-MM-dd', [cultureinfo]::InvariantCulture)
         Invoke-OrchestratorTick -Config $config -Journal $journal -Adapters $adapters -Now $t0.AddMinutes(5)
         (Get-Calls 'ListLogs').Count | Should -Be 1
         Invoke-OrchestratorTick -Config $config -Journal $journal -Adapters $adapters -Now $t0.AddDays(1)
@@ -1855,11 +1905,11 @@ function Invoke-LogPrune {
 In `Invoke-OrchestratorTick`, first thing:
 
 ```powershell
-    try { Invoke-LogPrune -Config $Config -Journal $Journal -Adapters $Adapters -Today $Now.ToLocalTime().ToString('yyyy-MM-dd') }
+    try { Invoke-LogPrune -Config $Config -Journal $Journal -Adapters $Adapters -Today $Now.ToLocalTime().ToString('yyyy-MM-dd', [cultureinfo]::InvariantCulture) }
     catch { & $Adapters.Log 'error' "logs: $_" }
 ```
 
-In `Invoke-StartupSweep`, as its last line: `$Journal['LogsPrunedOn'] = $null`. Export `Get-ExpiredLogNames, Invoke-LogPrune`.
+(The `log retention` test's expected `LogsPrunedOn` uses the same invariant format.) In `Invoke-StartupSweep`, as its last line: `$Journal['LogsPrunedOn'] = $null`. Export `Get-ExpiredLogNames, Invoke-LogPrune`.
 
 `adapters/HyperV.ps1`, before `New-HyperVAdapters`:
 
@@ -1872,11 +1922,12 @@ function Get-OrchestratorLogNames {
 }
 
 function Remove-OrchestratorLog {
-    # By bare name only, inside LogDir: a name with a path separator is refused.
+    # By bare name only, inside LogDir: a name with either path separator is
+    # refused (on Linux GetFileName keeps a backslash, so both are checked).
     [CmdletBinding()]
     param([Parameter(Mandatory)][string]$LogDir, [Parameter(Mandatory)][string]$Name)
     $ErrorActionPreference = 'Stop'
-    if ($Name -ne [System.IO.Path]::GetFileName($Name)) { throw "log name '$Name' is not a bare file name" }
+    if ($Name -match '[\\/]' -or $Name -ne [System.IO.Path]::GetFileName($Name)) { throw "log name '$Name' is not a bare file name" }
     Remove-Item -LiteralPath (Join-Path $LogDir $Name) -Force
 }
 ```
@@ -1994,7 +2045,7 @@ Context 'golden acceptance' {
 }
 ```
 
-`SlateCiHost.Tests.ps1`: extend the journal shape list with `'GoldenAccepted'`, and add:
+`SlateCiHost.Tests.ps1`: the journal shape test's expected list becomes `@('GoldenAccepted', 'LogsPrunedOn', 'PublishFailedAt', 'PublishedAt', 'PublishedState', 'Retries', 'SeenJobs', 'Vms' | Sort-Object)`, and add:
 
 ```powershell
 Describe 'Test-GoldenPrevRemovable' {
@@ -2022,7 +2073,8 @@ Describe 'Test-GoldenPrevRemovable' {
 
 ```powershell
 Describe 'golden adapters' {
-    It 'read the golden stamp and seal and every VM directory creation time as ISO UTC' {
+    It 'read the golden stamp and seal and every VM directory creation time as ISO UTC' -Skip:(-not $IsWindows) {
+        # Windows only: the test sets directory creation times, which Linux cannot.
         $golden = Join-Path $TestDrive 'golden.vhdx'; 'g' | Set-Content $golden
         (Get-Item $golden).LastWriteTimeUtc = [datetime]'2026-10-10T22:55:00Z'
         Get-GoldenStamp -GoldenPath $golden | Should -Be '2026-10-10T22:55:00.0000000Z'
@@ -2217,17 +2269,21 @@ and a describe that runs the script against a fake tree:
 ```powershell
 Describe 'prune-golden.ps1' {
     BeforeEach {
+        # One Join-Path segment per directory: the suite also runs on Linux,
+        # where a backslash inside a segment is part of the name for .NET
+        # (Write-Journal's File.Move) though not for the cmdlets.
         $script:root = Join-Path $TestDrive ('root-' + [guid]::NewGuid().ToString('N'))
-        foreach ($d in 'golden', 'state', 'vms', 'logs', 'bin', 'bin\adapters') { New-Item -ItemType Directory -Force (Join-Path $root $d) | Out-Null }
+        foreach ($d in 'golden', 'state', 'vms', 'logs', 'bin') { New-Item -ItemType Directory -Force (Join-Path $root $d) | Out-Null }
+        New-Item -ItemType Directory -Force (Join-Path $root 'bin' 'adapters') | Out-Null
         Copy-Item (Join-Path $PSScriptRoot '..' 'SlateCiHost.psm1') (Join-Path $root 'bin')
-        Copy-Item (Join-Path $PSScriptRoot '..' 'adapters' 'HyperV.ps1') (Join-Path $root 'bin\adapters')
-        $script:golden = Join-Path $root 'golden\win11-runner.vhdx'; 'new' | Set-Content $golden
-        $script:prev = Join-Path $root 'golden\win11-runner.prev.vhdx'; 'old' | Set-Content $prev
+        Copy-Item (Join-Path $PSScriptRoot '..' 'adapters' 'HyperV.ps1') (Join-Path $root 'bin' 'adapters')
+        $script:golden = Join-Path $root 'golden' 'win11-runner.vhdx'; 'new' | Set-Content $golden
+        $script:prev = Join-Path $root 'golden' 'win11-runner.prev.vhdx'; 'old' | Set-Content $prev
         (Get-Item $prev).LastWriteTimeUtc = [datetime]'2026-10-10T20:00:00Z'
         (Get-Item $golden).LastWriteTimeUtc = [datetime]'2026-10-10T22:55:00Z'
         Set-ItemProperty -LiteralPath $prev -Name IsReadOnly -Value $true
         Set-ItemProperty -LiteralPath $golden -Name IsReadOnly -Value $true
-        $script:journalPath = Join-Path $root 'state\journal.json'
+        $script:journalPath = Join-Path $root 'state' 'journal.json'
         $script:prune = Join-Path $installDir 'prune-golden.ps1'
         function Set-Accepted([string]$Stamp, [string[]]$Lanes = @('rust', 'app', 'model', 'shell')) {
             $j = New-Journal
@@ -2249,7 +2305,7 @@ Describe 'prune-golden.ps1' {
         Test-Path $prev | Should -BeTrue
         Get-PruneLog | Should -Match 'the previous image stays'
     }
-    It 'keeps it while the current image is unsealed, a lane is missing, or a VM older than the image exists' {
+    It 'keeps it while the current image is unsealed or a lane is missing' {
         Set-ItemProperty -LiteralPath $golden -Name IsReadOnly -Value $false
         Set-Accepted '2026-10-10T22:55:00.0000000Z'
         & $prune -Root $root
@@ -2258,8 +2314,12 @@ Describe 'prune-golden.ps1' {
         Set-Accepted '2026-10-10T22:55:00.0000000Z' @('rust', 'app', 'model')
         & $prune -Root $root
         Test-Path $prev | Should -BeTrue
+    }
+    It 'keeps it while a VM older than the image exists' -Skip:(-not $IsWindows) {
+        # Windows only: setting a directory's creation time is a Windows
+        # file-system operation (Linux reports a birth time it cannot set).
         Set-Accepted '2026-10-10T22:55:00.0000000Z'
-        $old = Join-Path $root 'vms\slate-win-app-00000000'; New-Item -ItemType Directory -Force $old | Out-Null
+        $old = Join-Path $root 'vms' 'slate-win-app-00000000'; New-Item -ItemType Directory -Force $old | Out-Null
         (Get-Item $old).CreationTimeUtc = [datetime]'2026-10-10T21:00:00Z'
         & $prune -Root $root
         Test-Path $prev | Should -BeTrue
@@ -2284,9 +2344,10 @@ Describe 'prune-golden.ps1' {
         $text = Get-Content -Raw (Join-Path $goldenDir 'build-golden.ps1')
         $text | Should -Match ([regex]::Escape('[switch]$Rotate'))
         $rotate = $text.IndexOf('if ($Rotate')
-        $rotate | Should -BeGreaterThan $text.IndexOf("VM $vmName exists")
+        # Single quotes: the test has no $vmName, and "VM $vmName exists" would search for "VM  exists" and always pass.
+        $rotate | Should -BeGreaterThan $text.IndexOf('VM $vmName exists')
         $rotate | Should -BeLessThan $text.IndexOf('exists; move it aside to rebuild')
-        $block = $text.Substring($rotate, 700)
+        $block = $text.Substring($rotate, $text.IndexOf('exists; move it aside to rebuild') - $rotate)
         $block | Should -Match 'IsReadOnly\) \{ throw'
         $block | Should -Match 'Remove-SealedFile -Path \$prevPath'
         $block | Should -Match 'Rename-Item -LiteralPath \$OutPath -NewName ''win11-runner\.prev\.vhdx'''
@@ -2375,7 +2436,8 @@ Create `ci/windows-runner/install/prune-golden.ps1`:
 # before it exists. Runs as SYSTEM from the slate-ci-golden-prune task
 # (install/setup-host.ps1), daily: the orchestrator's account has read and
 # execute on golden by policy. Reads the journal without side effects.
-# Appends one line to the orchestrator log either way. Never fails the task.
+# Appends one line to the orchestrator log whenever a previous image exists
+# (nothing when there is none). Never fails the task.
 [CmdletBinding()]
 param([string]$Root = 'C:\slate-ci')
 
@@ -2422,7 +2484,13 @@ Register-ScheduledTask -TaskName 'slate-ci-golden-prune' -Force `
     -Settings (New-ScheduledTaskSettingsSet -ExecutionTimeLimit (New-TimeSpan -Minutes 10) -StartWhenAvailable) | Out-Null
 ```
 
-and the closing `'Host setup complete. Next:'` message gains the line `the previous golden image is pruned daily at 04:00 by slate-ci-golden-prune once the loop has accepted the current one on every lane`. (`robocopy /MIR … /XD tests` already mirrors `install\prune-golden.ps1` into `bin`.)
+and the `'Host setup complete. Next:'` branch gains, as its last `Write-Host`:
+
+```powershell
+    Write-Host '  The previous golden image is pruned daily at 04:00 by slate-ci-golden-prune once the loop has accepted the current one on every lane.'
+```
+
+(`robocopy /MIR … /XD tests` already mirrors `install\prune-golden.ps1` into `bin`.)
 
 - [ ] **Step 6: Rotate in the build**
 

@@ -75,7 +75,10 @@ job queues home under `home` and `home-only` alike.
   (`all_external_contributors`, verified) remains the gate that decides
   whether a fork's workflow runs at all; what the host adds is that a
   fork's job gets at most seconds on a throwaway VM with the fork's own
-  read-only token.
+  read-only token. One gap stays, by design of the listing: the host reads
+  only the routed workflows' jobs, so a fork that adds a workflow of its
+  own naming the home labels is not evicted (its cache fork is still
+  refused); the approval click is the control for that case.
 - **OR-D6 A partial re-run never trusts a stale decision.** GitHub reuses
   a successful routing job's outputs when only failed jobs are re-run, so
   each lane uses the routed pool only when the router ran in the lane's
