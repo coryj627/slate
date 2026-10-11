@@ -15,12 +15,15 @@ Inputs, from the environment:
   WINDOWS_HOME_STATE    the state the host publishes (vars context, JSON)
   ROUTE_LANES           comma list: rust,app,model-0,model-1
   ROUTE_ATTEMPT         github.run_attempt, echoed as `attempt`
-  ROUTE_RUN_ID          github.run_id (the creation-time read, the summary)
+  ROUTE_RUN_ID          github.run_id (the start-time read, the summary)
   ROUTE_EVENT, ROUTE_HEAD_REPO, ROUTE_REPO   the fork rule
-  ROUTE_STALE_SECONDS   120: a state older than this at run creation is dead
+  ROUTE_STALE_SECONDS   180: a state whose `at` is older than this by the router's clock is dead
   ROUTE_SLOTS_MAX       8: a published slot count above it is not serving
-  ROUTE_NOW, ROUTE_RUN_CREATED   epoch seconds (tests, replay)
-  ROUTE_CONCURRENT      JSON list of earlier routers' run ids (tests, replay)
+  ROUTE_NOW, ROUTE_RUN_STARTED   epoch seconds (tests, replay); ROUTE_NOW is the
+                        clock every age is measured against, the start only
+                        orders concurrent routers
+  ROUTE_CONCURRENT      JSON list of [run id, routing job completion epoch or
+                        null] pairs for the earlier routers (tests, replay)
   GH_TOKEN              for the two optional reads
   GITHUB_OUTPUT, GITHUB_STEP_SUMMARY
 
@@ -57,16 +60,22 @@ DURATIONS = {
 }
 HANDOVER_SECONDS = 110        # settle, provision, hand off, runner online (94-131 s measured)
 OVERRUN_FLOOR_SECONDS = 300   # a job past its duration is assumed to need five more minutes
-DEFAULT_STALE_SECONDS = 120
+DEFAULT_STALE_SECONDS = 180
 DEFAULT_SLOTS_MAX = 8
 STATE_VERSION = 1
 ROUTE_JOB_NAME = "Route Windows lanes"
 API_TIMEOUT_SECONDS = 15
-CONCURRENT_RUNS_MAX = 10
+CONCURRENT_RUNS_MAX = 10                    # earlier runs inspected: the newest ten
+CONCURRENT_COMPLETION_MARGIN_SECONDS = 30   # a router done this long before the state's `at` may not be in it yet
 
 
 def minutes(value):
     return int(value) * 60
+
+
+def in_minutes(seconds):
+    """Seconds as minutes with one decimal, the way spec §3 writes a schedule (26.8, 37.8)."""
+    return "%.1f min" % (seconds / 60)
 
 
 def parse_time(value):
@@ -126,13 +135,19 @@ def parse_state(text):
             "running": entries["running"], "queued": entries["queued"]}, ""
 
 
-def state_death(state, error, run_created, stale_seconds, slots_max):
-    """Why the pool cannot serve (spec OR-D4), or None when it can."""
+def state_death(state, error, now, stale_seconds, slots_max):
+    """Why the pool cannot serve (spec OR-D4), or None when it can.
+
+    The age is measured against the router's own clock: GitHub resolves vars
+    when the job starts, and a run's creation time never moves across a
+    re-run or a concurrency hold. A future `at` (the host's clock ahead)
+    counts as fresh.
+    """
     if state is None:
         return error
-    age = run_created - state["at"]
+    age = now - state["at"]
     if age > stale_seconds:
-        return "state is %d s old at the run's creation (stale after %d s)" % (age, stale_seconds)
+        return "state is %d s old by the router's clock (stale after %d s)" % (age, stale_seconds)
     if not state["serving"]:
         return "the host reports it is not serving"
     if state["slots"] < 1:
@@ -146,41 +161,46 @@ def home_duration(lane_key, durations):
     return minutes(durations[lane_key]["home"])
 
 
-def simulate(state, now, concurrent, durations):
-    """Seconds from now at which each slot frees, ascending.
+def entry_duration(entry, durations):
+    """A published entry's home duration; the longest in the table when its
+    lane is unknown or its time unreadable (spec §3: finite and conservative)."""
+    if entry["lane"] in durations and entry["since"] is not None:
+        return home_duration(entry["lane"], durations)
+    return max(home_duration(lane_key, durations) for lane_key in durations)
+
+
+def simulate(state, now, durations):
+    """Seconds from now at which each slot frees, ascending, from what the host published.
 
     A running entry occupies its slot to max(since + duration, now + overrun
     floor) plus a handover; more running entries than slots keep the
-    latest-ending ones. The host's queued entries take slots oldest first;
-    then each router that started before this one is assumed to place an
-    app lane and a model shard (the idle-pool outcome), so concurrent
-    routers resolve by age.
+    latest-ending ones. The host's queued entries take slots oldest first.
     """
     slots = state["slots"]
     busy = []
     for entry in state["running"]:
-        duration = home_duration(entry["lane"], durations) if entry["lane"] in durations else OVERRUN_FLOOR_SECONDS
         since = entry["since"] if entry["since"] is not None else now
-        until = max(since + duration, now + OVERRUN_FLOOR_SECONDS) + HANDOVER_SECONDS
+        until = max(since + entry_duration(entry, durations), now + OVERRUN_FLOOR_SECONDS) + HANDOVER_SECONDS
         busy.append(until - now)
     busy.sort()
     if len(busy) > slots:
         busy = busy[-slots:]
     while len(busy) < slots:
         busy.insert(0, 0)
-    demand = [entry["lane"] for entry in sorted(state["queued"], key=lambda e: (e["since"] if e["since"] is not None else 0))]
-    demand += ["app", "model"] * len(concurrent)
-    for lane in demand:
-        duration = home_duration(lane, durations) if lane in durations else OVERRUN_FLOOR_SECONDS
+    for entry in sorted(state["queued"], key=lambda e: (e["since"] if e["since"] is not None else 0)):
         busy.sort()
-        busy[0] = max(busy[0], 0) + duration + HANDOVER_SECONDS
+        busy[0] = max(busy[0], 0) + entry_duration(entry, durations) + HANDOVER_SECONDS
     return sorted(busy)
 
 
 def allocate(lanes, free_slots, free_at, durations):
     """OR-D3: the app lane takes a free slot (counted, never estimated) or
     the vendor; every other lane, in cost order, queues at home only when the
-    simulated schedule finishes it inside the deadline (app plus shell)."""
+    simulated schedule finishes it inside the deadline (app plus shell).
+
+    Returns the decisions, the deadline and the schedule with the home lanes
+    placed (each slot busy to its lane's finish plus a handover).
+    """
     slots = sorted(free_at)
     decisions = {}
     wanted = sorted((lane for lane in lanes if lane in LANES), key=lambda lane: LANES[lane][1])
@@ -205,16 +225,53 @@ def allocate(lanes, free_slots, free_at, durations):
             if slots:
                 slots[0] = finish + HANDOVER_SECONDS
             what = "free slot" if start == 0 else "queues at home"
-            decisions[lane] = {"pool": "home", "reason": "%s: starts at %d min, finishes at %d min, deadline %d min" % (
-                what, start // 60, finish // 60, deadline // 60)}
+            decisions[lane] = {"pool": "home", "reason": "%s: starts at %s, finishes at %s, deadline %s" % (
+                what, in_minutes(start), in_minutes(finish), in_minutes(deadline))}
         else:
-            decisions[lane] = {"pool": "vendor", "reason": "would start at %d min and finish at %d min, past the deadline of %d min" % (
-                start // 60, finish // 60, deadline // 60)}
-    return {lane: decisions[lane] for lane in lanes if lane in decisions}, deadline
+            decisions[lane] = {"pool": "vendor", "reason": "would start at %s and finish at %s, past the deadline of %s" % (
+                in_minutes(start), in_minutes(finish), in_minutes(deadline))}
+    return {lane: decisions[lane] for lane in lanes if lane in decisions}, deadline, sorted(slots)
+
+
+def replay_earlier_routers(free_at, free_slots, earlier, durations):
+    """Spec §3: each earlier router's own allocation, oldest first, against the schedule so far.
+
+    Each one sees the free slots the routers before it left, allocates the
+    routed lanes as this run does, and its home lanes stay in the schedule,
+    so concurrent routers resolve by age for any slot count. Returns this
+    run's free slots and schedule.
+    """
+    schedule = sorted(free_at)
+    for _ in earlier:
+        _, _, schedule = allocate(list(LANES), free_slots, schedule, durations)
+        free_slots = min(free_slots, sum(1 for until in schedule if until <= 0))
+    return free_slots, schedule
 
 
 def _everything(lanes, pool, reason):
     return {lane: {"pool": pool, "reason": reason} for lane in lanes if lane in LANES}
+
+
+def normalize_mode(mode):
+    return (mode or "").strip().lower()
+
+
+def is_fork(event, head_repo, repo):
+    """OR-D5: a pull request whose head repository is unknown or another one."""
+    return event == "pull_request" and (not head_repo or head_repo != repo)
+
+
+def occupancy_decides(mode, state_text, now, *, stale_seconds, slots_max, event, head_repo, repo):
+    """Whether decide reaches the occupancy rule, the only one the two optional reads feed.
+
+    It does not when the fork rule, the mode or a dead state (missing,
+    unparseable, stale, not serving, no slot) already settles every lane;
+    main then makes no read.
+    """
+    if is_fork(event, head_repo, repo) or normalize_mode(mode) != "home":
+        return False
+    state, error = parse_state(state_text)
+    return state_death(state, error, now, stale_seconds, slots_max) is None
 
 
 def _summary(mode):
@@ -222,48 +279,61 @@ def _summary(mode):
             "concurrent": None, "free": None, "deadline": None, "dead": False, "unknown_lanes": [], "reason": ""}
 
 
-def decide(mode, lanes, state_text, now, run_created, concurrent, *, stale_seconds, slots_max, event, head_repo, repo,
+def decide(mode, lanes, state_text, now, run_started, concurrent, *, stale_seconds, slots_max, event, head_repo, repo,
            durations=None):
-    """The whole rule (spec §3) as a pure function."""
+    """The whole rule (spec §3) as a pure function.
+
+    Every age is measured against `now`, the router's clock. `run_started`
+    (this attempt's start) moves no age: it is what fetch_concurrent ordered
+    the earlier routers by, and the replay line records it.
+    """
     durations = DURATIONS if durations is None else durations
-    normalized = (mode or "").strip().lower()
+    normalized = normalize_mode(mode)
     summary = _summary(normalized or "(unset)")
     summary["unknown_lanes"] = [lane for lane in lanes if lane not in LANES]
     lanes = [lane for lane in lanes if lane in LANES]
+    if is_fork(event, head_repo, repo):
+        summary["reason"] = "pull request from %s: the vendor in every mode, whatever the pool says" % (
+            head_repo or "an unknown repository")
+        return _everything(lanes, "vendor", summary["reason"]), summary
     if normalized == "home-only":
         summary["reason"] = "WINDOWS_RUNNER_MODE=home-only: every lane queues at home"
         return _everything(lanes, "home", summary["reason"]), summary
     if normalized != "home":
         summary["reason"] = "WINDOWS_RUNNER_MODE=%s routes every lane to the vendor" % summary["mode"]
         return _everything(lanes, "vendor", summary["reason"]), summary
-    if event == "pull_request" and (not head_repo or head_repo != repo):
-        summary["reason"] = "pull request from %s: the vendor, whatever the pool says" % (head_repo or "an unknown repository")
-        return _everything(lanes, "vendor", summary["reason"]), summary
     state, error = parse_state(state_text)
-    death = state_death(state, error, run_created, stale_seconds, slots_max)
+    death = state_death(state, error, now, stale_seconds, slots_max)
+    skew = ""
     if state is not None:
-        summary.update({"state_age": run_created - state["at"], "serving": state["serving"], "slots": state["slots"],
+        summary.update({"state_age": now - state["at"], "serving": state["serving"], "slots": state["slots"],
                         "running": len(state["running"]), "queued": len(state["queued"])})
+        if summary["state_age"] < 0:
+            skew = "; the state's 'at' is %d s in the future (clock skew), counted as fresh" % -summary["state_age"]
     if death:
         summary["dead"] = True
-        summary["reason"] = "the pool cannot serve: %s" % death
+        summary["reason"] = "the pool cannot serve: %s%s" % (death, skew)
         return _everything(lanes, "vendor", summary["reason"]), summary
-    concurrent = list(concurrent or [])
-    summary["concurrent"] = len(concurrent)
-    free_slots = max(0, state["slots"] - len(state["running"]) - len(state["queued"]) - 2 * len(concurrent))
+    # An earlier router counts while its routing job is queued or running, and after it completed only when that was
+    # at most the margin before the state's `at`: its lanes may not be in the state yet.
+    earlier = [run for run, completed in concurrent or []
+               if completed is None or completed >= state["at"] - CONCURRENT_COMPLETION_MARGIN_SECONDS]
+    summary["concurrent"] = len(earlier)
+    free_slots = max(0, state["slots"] - len(state["running"]) - len(state["queued"]))
+    free_slots, schedule = replay_earlier_routers(simulate(state, now, durations), free_slots, earlier, durations)
     summary["free"] = free_slots
-    decisions, deadline = allocate(lanes, free_slots, simulate(state, now, concurrent, durations), durations)
+    decisions, deadline, _ = allocate(lanes, free_slots, schedule, durations)
     summary["deadline"] = deadline
-    summary["reason"] = "home first; a lane queues only inside the deadline"
+    summary["reason"] = "home first; a lane queues only inside the deadline" + skew
     return decisions, summary
 
 
-def gh_api(path, timeout=API_TIMEOUT_SECONDS):
-    """One GET through gh (GH_TOKEN from the step's env), one retry, stderr in the error."""
+def gh_api(path, timeout=API_TIMEOUT_SECONDS, run=subprocess.run):
+    """One GET through gh (GH_TOKEN from the step's env), one retry, stderr in the error; `run` is the test seam."""
     last = None
-    for attempt in (1, 2):
+    for _ in (1, 2):
         try:
-            completed = subprocess.run(["gh", "api", path], capture_output=True, text=True, timeout=timeout, check=False)
+            completed = run(["gh", "api", path], capture_output=True, text=True, timeout=timeout, check=False)
         except (OSError, subprocess.TimeoutExpired) as failure:
             last = RuntimeError("gh api %s: %s" % (path, failure))
             continue
@@ -273,43 +343,75 @@ def gh_api(path, timeout=API_TIMEOUT_SECONDS):
     raise last
 
 
-def fetch_run_created(repo, run_id, get):
-    """The run's creation time (the moment the vars snapshot was taken)."""
-    body = get("/repos/%s/actions/runs/%s" % (repo, run_id))
-    created = parse_time(body.get("created_at"))
-    if created is None:
-        raise ValueError("run %s has no readable created_at" % run_id)
-    return created
+def run_start(run):
+    """A run's latest attempt start: run_started_at (it resets on a re-run), else created_at; None when neither reads."""
+    started = parse_time(run.get("run_started_at"))
+    return started if started is not None else parse_time(run.get("created_at"))
 
 
-def fetch_concurrent(repo, run_id, run_created, get):
-    """Ids of windows.yml runs created before this one whose routing job is still queued or running."""
-    earlier = []
+def fetch_run_started(repo, run_id, get):
+    """This attempt's start time; it orders concurrent routers and moves no age."""
+    started = run_start(get("/repos/%s/actions/runs/%s" % (repo, run_id)))
+    if started is None:
+        raise ValueError("run %s has no readable run_started_at or created_at" % run_id)
+    return started
+
+
+def fetch_concurrent(repo, run_id, run_started, get):
+    """The windows.yml runs that started before this one, as (run id, routing job completion epoch or None) pairs.
+
+    "Before" compares attempt starts (run_start), ties going to the lower
+    id, so every router agrees on the order. Only the newest ten are
+    inspected, and a run counts when its routing job is queued or in
+    progress (None) or completed (its completion time; decide keeps it only
+    inside the margin before the state's `at`). A completed job without a
+    readable completion time counts as still running: toward the vendor.
+    Oldest first.
+    """
+    this = int(run_id)
+    starts = {}
     seen = set()
     for status in ("queued", "in_progress"):
         body = get("/repos/%s/actions/workflows/windows.yml/runs?status=%s&per_page=30" % (repo, status))
         for run in body.get("workflow_runs") or []:
             other = run.get("id")
-            if other is None or other == int(run_id) or other in seen:
+            if other is None or other == this or other in seen:
                 continue
             seen.add(other)
-            created = parse_time(run.get("created_at"))
-            if created is None or created > run_created or (created == run_created and other > int(run_id)):
-                continue
-            earlier.append(other)
+            started = run_start(run)
+            if started is not None and (started, other) < (run_started, this):
+                starts[other] = started
+    newest = sorted(starts, key=lambda other: (starts[other], other))[-CONCURRENT_RUNS_MAX:]
     concurrent = []
-    for other in sorted(earlier)[:CONCURRENT_RUNS_MAX]:
+    for other in newest:
         jobs = get("/repos/%s/actions/runs/%s/jobs?filter=latest&per_page=100" % (repo, other)).get("jobs") or []
-        if any(job.get("name") == ROUTE_JOB_NAME and job.get("status") in ("queued", "in_progress") for job in jobs):
-            concurrent.append(other)
+        for job in jobs:
+            if job.get("name") != ROUTE_JOB_NAME:
+                continue
+            if job.get("status") in ("queued", "in_progress"):
+                concurrent.append((other, None))
+            elif job.get("status") == "completed":
+                concurrent.append((other, parse_time(job.get("completed_at"))))
+            break
     return concurrent
 
 
-def replay_line(env, now, run_created, concurrent):
+def parse_concurrent(text):
+    """ROUTE_CONCURRENT: a JSON list of [run id, routing job completion epoch or null] pairs."""
+    pairs = []
+    for item in json.loads(text):
+        if not isinstance(item, list) or len(item) != 2:
+            raise ValueError("ROUTE_CONCURRENT entry %r is not a [run id, completion epoch or null] pair" % (item,))
+        run, completed = item
+        pairs.append((int(run), None if completed is None else int(completed)))
+    return pairs
+
+
+def replay_line(env, now, run_started, concurrent):
     parts = ["WINDOWS_RUNNER_MODE=%s" % json.dumps(env.get("WINDOWS_RUNNER_MODE") or ""),
              "WINDOWS_HOME_STATE=%s" % json.dumps(env.get("WINDOWS_HOME_STATE") or ""),
              "ROUTE_LANES=%s" % (env.get("ROUTE_LANES") or ""),
-             "ROUTE_NOW=%d" % now, "ROUTE_RUN_CREATED=%d" % run_created,
+             "ROUTE_NOW=%d" % now, "ROUTE_RUN_STARTED=%d" % run_started,
              "ROUTE_CONCURRENT=%s" % json.dumps(json.dumps(concurrent)),
              "ROUTE_EVENT=%s" % (env.get("ROUTE_EVENT") or ""),
              "ROUTE_HEAD_REPO=%s" % (env.get("ROUTE_HEAD_REPO") or ""),
@@ -320,13 +422,13 @@ def replay_line(env, now, run_created, concurrent):
 def render_summary(summary, decisions, lanes, run_id, attempt, replay):
     lines = ["## Windows lanes: mode %s (run %s, attempt %s)" % (summary["mode"], run_id, attempt), ""]
     if summary["slots"] is not None:
-        lines += ["| state age at creation | serving | slots | running | queued | earlier routers | free slots | deadline |",
+        lines += ["| state age | serving | slots | running | queued | earlier routers | free slots | deadline |",
                   "|---|---|---|---|---|---|---|---|",
                   "| %s s | %s | %s | %s | %s | %s | %s | %s |" % (
                       summary["state_age"], summary["serving"], summary["slots"], summary["running"], summary["queued"],
                       "-" if summary["concurrent"] is None else summary["concurrent"],
                       "-" if summary["free"] is None else summary["free"],
-                      "-" if summary["deadline"] is None else "%d min" % (summary["deadline"] // 60)), ""]
+                      "-" if summary["deadline"] is None else in_minutes(summary["deadline"])), ""]
     lines += [summary["reason"], "", "| lane | pool | reason |", "|---|---|---|"]
     for lane in lanes:
         decision = decisions.get(lane)
@@ -359,6 +461,12 @@ def _int_env(env, name, default):
         return default
 
 
+def annotation_text(message):
+    """A message escaped for a workflow command (::warning::, ::notice::): `%`
+    first, then CR and LF, so a multi-line gh stderr stays one annotation."""
+    return message.replace("%", "%25").replace("\r", "%0D").replace("\n", "%0A")
+
+
 def main(env=None, get=gh_api, clock=time.time):
     env = os.environ if env is None else env
     lanes = [lane.strip() for lane in (env.get("ROUTE_LANES") or "").split(",") if lane.strip()]
@@ -366,43 +474,52 @@ def main(env=None, get=gh_api, clock=time.time):
     run_id = (env.get("ROUTE_RUN_ID") or "").strip() or "0"
     repo = env.get("ROUTE_REPO") or ""
     mode = env.get("WINDOWS_RUNNER_MODE")
+    state_text = env.get("WINDOWS_HOME_STATE")
     now = _int_env(env, "ROUTE_NOW", int(clock()))
-    run_created = now
+    run_started = now
     concurrent = []
     try:
-        normalized = (mode or "").strip().lower()
-        if normalized == "home":
-            if (env.get("ROUTE_RUN_CREATED") or "").strip():
-                run_created = _int_env(env, "ROUTE_RUN_CREATED", now)
+        rule = dict(stale_seconds=_int_env(env, "ROUTE_STALE_SECONDS", DEFAULT_STALE_SECONDS),
+                    slots_max=_int_env(env, "ROUTE_SLOTS_MAX", DEFAULT_SLOTS_MAX),
+                    event=env.get("ROUTE_EVENT") or "", head_repo=env.get("ROUTE_HEAD_REPO") or "", repo=repo)
+        # The fork rule and the state come first: the reads (or their replayed values) matter only when occupancy decides.
+        if occupancy_decides(mode, state_text, now, **rule):
+            if (env.get("ROUTE_RUN_STARTED") or "").strip():
+                run_started = _int_env(env, "ROUTE_RUN_STARTED", now)
             else:
                 try:
-                    run_created = fetch_run_created(repo, run_id, get)
+                    run_started = fetch_run_started(repo, run_id, get)
                 except Exception as failure:  # noqa: BLE001 - optional read; the clock stands in
-                    print("::notice::run creation time unavailable (%s); using now" % failure)
+                    print("::notice::%s" % annotation_text("run start time unavailable (%s); using now" % failure))
             if (env.get("ROUTE_CONCURRENT") or "").strip():
-                concurrent = [int(item) for item in json.loads(env["ROUTE_CONCURRENT"])]
+                concurrent = parse_concurrent(env["ROUTE_CONCURRENT"])
             else:
                 try:
-                    concurrent = fetch_concurrent(repo, run_id, run_created, get)
+                    concurrent = fetch_concurrent(repo, run_id, run_started, get)
                 except Exception as failure:  # noqa: BLE001 - optional read; assume no earlier router
-                    print("::notice::earlier routers unknown (%s); assuming none" % failure)
-        decisions, summary = decide(mode, lanes, env.get("WINDOWS_HOME_STATE"), now, run_created, concurrent,
-                                    stale_seconds=_int_env(env, "ROUTE_STALE_SECONDS", DEFAULT_STALE_SECONDS),
-                                    slots_max=_int_env(env, "ROUTE_SLOTS_MAX", DEFAULT_SLOTS_MAX),
-                                    event=env.get("ROUTE_EVENT") or "", head_repo=env.get("ROUTE_HEAD_REPO") or "", repo=repo)
+                    print("::notice::%s" % annotation_text("earlier routers unknown (%s); assuming none" % failure))
+        decisions, summary = decide(mode, lanes, state_text, now, run_started, concurrent, **rule)
     except Exception as failure:  # noqa: BLE001 - every failure routes to the vendor, never fails the run
         reason = "%s: %s; every lane goes to the vendor" % (type(failure).__name__, failure)
-        print("::warning title=Windows lane router::%s" % reason)
+        print("::warning title=Windows lane router::%s" % annotation_text(reason))
         decisions = _everything(lanes, "vendor", reason)
-        summary = _summary((mode or "").strip().lower() or "(unset)")
+        summary = _summary(normalize_mode(mode) or "(unset)")
         summary["reason"] = reason
-    text = render_summary(summary, decisions, lanes, run_id, attempt, replay_line(env, now, run_created, concurrent))
+    # The outputs first: a summary that cannot be written must not cost the pools.
+    try:
+        write_outputs(env, decisions, attempt)
+    except OSError as failure:
+        print("::warning title=Windows lane router::%s" % annotation_text(
+            "outputs not written (%s); every routed lane takes the workflow's vendor fallback" % failure))
+    text = render_summary(summary, decisions, lanes, run_id, attempt, replay_line(env, now, run_started, concurrent))
     print(text)
     step_summary = env.get("GITHUB_STEP_SUMMARY")
     if step_summary:
-        with open(step_summary, "a", encoding="utf-8") as handle:
-            handle.write(text)
-    write_outputs(env, decisions, attempt)
+        try:
+            with open(step_summary, "a", encoding="utf-8") as handle:
+                handle.write(text)
+        except OSError as failure:
+            print("::warning title=Windows lane router::%s" % annotation_text("step summary not written (%s)" % failure))
     return 0
 
 
