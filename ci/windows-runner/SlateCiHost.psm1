@@ -92,21 +92,29 @@ function ConvertTo-DateTimeOffset {
 
 function Select-QueuedLaneJobs {
     # Flattens the API's job objects into the admission shape; drops
-    # anything not queued or not carrying exactly one lane label.
+    # anything not carrying exactly one lane label, and anything not queued
+    # unless -IncludeInProgress asks for the running ones as well (with the
+    # runner each is on, for the handoff reconciliation).
     [CmdletBinding()]
-    param([object[]]$Jobs = @(), [string[]]$Lanes = $script:DefaultLanes)
+    param([object[]]$Jobs = @(), [string[]]$Lanes = $script:DefaultLanes, [switch]$IncludeInProgress)
     $result = @()
     foreach ($job in @($Jobs)) {
-        if ($null -eq $job -or $job.status -ne 'queued') { continue }
+        if ($null -eq $job) { continue }
+        $status = [string]$job.status
+        if ($status -ne 'queued' -and -not ($IncludeInProgress -and $status -eq 'in_progress')) { continue }
         $labels = @()
         if ($job.PSObject.Properties['labels'] -and $null -ne $job.labels) { $labels = @($job.labels) }
         $lane = Get-LaneFromLabels -Labels $labels -Lanes $Lanes
         if (-not $lane) { continue }
+        $runnerName = ''
+        if ($job.PSObject.Properties['runner_name'] -and $null -ne $job.runner_name) { $runnerName = [string]$job.runner_name }
         $result += [pscustomobject]@{
-            JobId     = [int64]$job.id
-            RunId     = [int64]$job.run_id
-            Lane      = $lane
-            CreatedAt = ConvertTo-DateTimeOffset -Value $job.created_at
+            JobId      = [int64]$job.id
+            RunId      = [int64]$job.run_id
+            Lane       = $lane
+            CreatedAt  = ConvertTo-DateTimeOffset -Value $job.created_at
+            Status     = $status
+            RunnerName = $runnerName
         }
     }
     return @($result | Sort-Object CreatedAt, JobId)
@@ -681,12 +689,39 @@ function Update-ActiveVm {
 function Invoke-Admission {
     [CmdletBinding()]
     param($Config, $Journal, [hashtable]$Adapters, [datetimeoffset]$Now)
-    $raw = @(& $Adapters.GetQueuedJobs)
-    $queued = @(Select-QueuedLaneJobs -Jobs $raw -Lanes @($Config.Lanes.Keys))
+    $raw = @(& $Adapters.GetLaneJobs)
+    $laneJobs = @(Select-QueuedLaneJobs -Jobs $raw -Lanes @($Config.Lanes.Keys) -IncludeInProgress)
+    $queued = @($laneJobs | Where-Object { $_.Status -eq 'queued' })
     foreach ($q in $queued) {
         $key = [string]$q.JobId
         if (-not $Journal.SeenJobs.Contains($key)) {
             $Journal.SeenJobs[$key] = @{ RunId = [int64]$q.RunId; Lane = $q.Lane; FirstSeenAt = $Now.ToString('o') }
+        }
+    }
+    # GitHub hands a runner whichever queued job matches its label first,
+    # not the job this host provisioned the VM for. A handed VM whose
+    # runner the listing shows on another job is claimed by that job, and
+    # the job it was provisioned for is still queued and free to get a VM
+    # of its own. Without this, two model shards queued together ran one
+    # after the other: the second was held as "already has a VM" until the
+    # first VM, which had taken it, finished.
+    foreach ($name in @($Journal.Vms.Keys)) {
+        $vm = $Journal.Vms[$name]
+        if ($vm.Phase -ne 'handed') { continue }
+        $running = @($laneJobs | Where-Object { $_.Status -eq 'in_progress' -and [string]::Equals($_.RunnerName, $name, [System.StringComparison]::Ordinal) })
+        if ($running.Count -eq 0) { continue }
+        $job = $running[0]
+        if ([int64]$job.JobId -ne [int64]$vm.JobId) {
+            & $Adapters.Log 'info' "${name}: runs job $($job.JobId), not job $($vm.JobId) it was provisioned for, which stays queued for a VM of its own"
+            $vm.JobId = [int64]$job.JobId
+            $vm.RunId = [int64]$job.RunId
+            if (-not $Journal.SeenJobs.Contains([string]$job.JobId)) {
+                $Journal.SeenJobs[[string]$job.JobId] = @{ RunId = [int64]$job.RunId; Lane = $job.Lane; FirstSeenAt = $Now.ToString('o') }
+            }
+        }
+        if (-not $vm.Claimed) {
+            $vm.Claimed = $true
+            & $Adapters.Log 'info' "${name}: claimed (job $($job.JobId) in progress)"
         }
     }
     foreach ($key in @($Journal.SeenJobs.Keys)) {

@@ -185,6 +185,13 @@ State machine per job, run by a single-threaded loop with a 10 s tick:
 2. **Admit.** While a slot is free, take the oldest queued job not already
    assigned. One VM per job at a time; a job that already has a VM is never
    admitted again (a discarded job is re-admitted after its back-off).
+   GitHub hands a runner whichever queued job of its lane matches first,
+   not the job the VM was provisioned for, so each tick the listing's
+   in-progress jobs are matched to the handed VMs by `runner_name`: a VM
+   found on another job is claimed by it and re-recorded with that job,
+   and the job it was provisioned for, still queued, is free to get a VM
+   of its own (without this, two model shards queued together ran one
+   after the other).
 3. **Provision.** `New-VHD -Differencing` for `os.vhdx` from the golden disk
    and `cache.vhdx` from the lane parent; read and record the parent's
    generation number. `New-VM` Gen2, 4 vCPU, 12 GB static, `slate-ci`
