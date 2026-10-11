@@ -88,7 +88,11 @@ job queues home under `home` and `home-only` alike.
   read-only token. One gap stays, by design of the listing: the host reads
   only the routed workflows' jobs, so a fork that adds a workflow of its
   own naming the home labels is not evicted (its cache fork is still
-  refused); the approval click is the control for that case.
+  refused); the approval click is the control for that case. A second,
+  smaller residue: a job that starts and finishes between two ticks is
+  never seen in progress, so the VM settles as "ran no job the host knows
+  of", is discarded, and the trusted job it was provisioned for takes one
+  retry strike.
 - **OR-D6 A partial re-run never trusts a stale decision.** GitHub reuses
   a successful routing job's outputs when only failed jobs are re-run, so
   each lane uses the routed pool only when the router ran in the lane's
@@ -237,8 +241,10 @@ Repository variable `WINDOWS_HOME_STATE`, JSON, one line, for example:
   (`discarding`). `running`: every journal VM in phase `provisioned` or
   `handed` that holds a slot (a `PendingCommit` VM holds none), with its
   provisioning time. `queued`: the queued jobs the host would admit if it
-  had slots, oldest first (admissible lane label, this repository, not at
-  the retry cap, not in back-off), with their `created_at`.
+  had slots, oldest first (admissible lane label, this repository or a
+  repository not yet read, not at the retry cap, not in back-off), with
+  their `created_at`. A job whose run the host has not yet read counts
+  here, the conservative direction, but is never admitted until it has.
 - Written by the orchestrator at the end of every tick in which the
   serialised value changed, and at least every 60 s otherwise, through
   `PATCH /repos/{owner}/{repo}/actions/variables/WINDOWS_HOME_STATE`
@@ -459,8 +465,8 @@ optional API reads; nothing in `namespace` mode.
 - **Journal schema.** One `$script:JournalDefaults` feeds `New-Journal`
   and `Read-Journal`; a shape test pins the top-level keys (`Vms`,
   `Retries`, `SeenJobs`, `LogsPrunedOn`, `GoldenAccepted`,
-  `PublishedState`, `PublishedAt`) and the `SeenJobs` entry keys; the
-  runbook's "State" bullet lists them.
+  `PublishedState`, `PublishedAt`, `PublishFailedAt`) and the `SeenJobs`
+  entry keys; the runbook's "State" bullet lists them.
 
 ## 8. Failure modes and observability
 
