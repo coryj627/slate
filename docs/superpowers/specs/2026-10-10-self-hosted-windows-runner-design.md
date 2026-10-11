@@ -341,8 +341,15 @@ Toolchain, matching the Namespace image the lanes run on today:
   (the default `C:\Program Files\dotnet` would fail for a standard user).
 - `rustup` installed per-user as `runner` (so `rustup target add` and
   `cargo install` write to `runner`'s own profile); VS Build Tools and
-  Python are machine-wide.
-- Python 3.13, git.
+  git are machine-wide.
+- Python 3.13 in the runner's tool cache
+  (`C:\actions-runner\_work\_tool\Python\<version>\x64`), the
+  `actions/python-versions` build that `actions/setup-python` would
+  install, placed there by the image build as an administrator:
+  setup-python's Windows installer needs administrator rights, which a job
+  running as `runner` lacks (it would wait on a UAC prompt for ever), and a
+  matching version in the cache makes it install nothing. The same
+  directory is on the machine `PATH`.
 - `actions-runner` 2.338.0 unpacked at `C:\actions-runner`, owned by
   `runner` (its runtime files: `.env`, `jit.cfg`, `ready`,
   `bootstrap-error.txt`, the two bootstrap logs, `_work`). The guest scripts
