@@ -78,7 +78,12 @@ running, queued, earlier routers), the free slots and the deadline, and a
 row per lane with its pool and reason. It ends with one `Replay:` line to
 paste into a Bash shell at the repository root, which reproduces the
 decision. Each routed lane's first step prints `runner=…`, the runner it
-landed on, and the aggregate gate's failure line names the pools.
+landed on, and the aggregate gate's failure line prints
+`route=<result> router-attempt='<attempt>'` and the pools. GitHub reports
+a `continue-on-error` job's result as it sees fit (it can read `success`
+for a routing job that failed); an empty `router-attempt=''` in that line
+is the sign the router produced nothing, and the lanes then took the
+vendor.
 
 Fork pull requests never run on the pool, in any mode, `home-only`
 included: the router sends them to the vendor, the host never provisions
@@ -1004,7 +1009,9 @@ This checks how `Get-VM` reports a VM that no longer exists, as
     (which lanes went green on the current golden: its stamp, `Lanes` and
     `Complete`);
   - a `SeenJobs` entry's keys: `FirstSeenAt`, `Lane`, `RunId`,
-    `RunCheckedAt` and `Foreign`, which stays null until its run was read;
+    `RunCheckedAt`, `Foreign` and `Repo` (the run's head repository,
+    stored when the run is read; empty when GitHub names none). `Foreign`
+    and `Repo` stay null until the entry's run was read;
   - the published-state keys: `PublishedState` (the last published JSON),
     `PublishedAt` and `PublishFailedAt`. A `PublishedAt` or
     `PublishFailedAt` that does not parse counts as never and is rewritten

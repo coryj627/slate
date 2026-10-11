@@ -370,8 +370,12 @@ table is consistent and equals the workflow's `ROUTE_LANES`.
   routing-job failure cannot skip it.
 - **`gate`**: `needs` gains `route`; it keeps `if: ${{ always() }}`,
   pinned by a guard, because a gate skipped with its `route` need would
-  count as a passing required check; its failure line names the pools,
-  the router's attempt and the routing job's result.
+  count as a passing required check; its failure line prints
+  `route=<result> router-attempt='<attempt>'` and the pools. GitHub
+  reports a `continue-on-error` job's result as it sees fit (it can read
+  `success` for a routing job that failed), so nothing depends on it; an
+  empty `router-attempt=''` in that line is the sign the router produced
+  nothing, and the lanes then took the vendor.
 - **`nightly.yml`**: `home-only` routes home like `home`
   (`vars.WINDOWS_RUNNER_MODE == 'home' || vars.WINDOWS_RUNNER_MODE == 'home-only'`),
   in both its `runs-on` and its cache condition.

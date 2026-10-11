@@ -93,13 +93,15 @@ Describe 'windows.yml routing through the router' {
         $flaui | Should -Match (Get-JobLine "runs-on: `${{ (vars.WINDOWS_RUNNER_MODE == 'home-only' && (github.event_name != 'pull_request' || github.event.pull_request.head.repo.full_name == github.repository)) && 'slate-win-shell' || 'windows-latest' }}")
         $flaui | Should -Match (Get-JobLine "if: `${{ !cancelled() && needs.windows.result == 'success' }}")
     }
-    It 'the gate waits on route too, runs whatever route did, and names the pools and the routing job''s result when it fails' {
+    It 'the gate waits on route too, runs whatever route did, and names the pools, the routing job''s result and the router''s attempt, quoted, when it fails' {
         $gate = Get-JobBlock $windows 'gate'
         $gate | Should -Match ([regex]::Escape('needs: [route, rust-tests, windows, windows-model, flaui]'))
         # Without always() the gate is skipped with a skipped route (every run outside home and home-only), and a
         # skipped required check counts as passing.
         $gate | Should -Match (Get-JobLine 'if: ${{ always() }}')
-        $gate.Contains('echo "::error::rust-tests=${{ needs.rust-tests.result }} app=${{ needs.windows.result }} model=${{ needs.windows-model.result }} flaui=${{ needs.flaui.result }} route=$ROUTE_RESULT pools: rust=$RUST_POOL app=$APP_POOL model-0=$MODEL_0_POOL model-1=$MODEL_1_POOL (router attempt $ROUTER_ATTEMPT of ${{ github.run_attempt }})"') | Should -BeTrue
+        # GitHub reports a continue-on-error job's result as it sees fit; an empty router-attempt='' is the sign the
+        # router produced nothing and the lanes took the vendor.
+        $gate.Contains('echo "::error::rust-tests=${{ needs.rust-tests.result }} app=${{ needs.windows.result }} model=${{ needs.windows-model.result }} flaui=${{ needs.flaui.result }} route=$ROUTE_RESULT router-attempt=''$ROUTER_ATTEMPT'' attempt=${{ github.run_attempt }} pools: rust=$RUST_POOL app=$APP_POOL model-0=$MODEL_0_POOL model-1=$MODEL_1_POOL"') | Should -BeTrue
         foreach ($entry in 'ROUTE_RESULT: ${{ needs.route.result }}', 'ROUTER_ATTEMPT: ${{ needs.route.outputs.attempt }}', 'RUST_POOL: ${{ needs.route.outputs.rust-pool }}',
             'APP_POOL: ${{ needs.route.outputs.app-pool }}', 'MODEL_0_POOL: ${{ needs.route.outputs.model-0-pool }}', 'MODEL_1_POOL: ${{ needs.route.outputs.model-1-pool }}') {
             $gate | Should -Match ('(?m)^          ' + [regex]::Escape($entry) + '[ \t]*\r?$') -Because "the gate reads $entry through its step's environment"
@@ -115,7 +117,7 @@ Describe 'windows.yml routing through the router' {
     It 'never expands the routing job''s outputs or result inside a script: a fork''s route.py writes them' {
         # Each run: with its block, which runs while the following lines are indented deeper than the key.
         $runs = @([regex]::Matches($windows, '(?m)^(?<indent>[ ]+)run:[^\n]*(?:\n(?:\k<indent>[ ]+\S[^\n]*|[ \t]*(?=\n)))*') | ForEach-Object { $_.Value })
-        @($runs | Where-Object { $_.Contains('router-attempt=') }).Count | Should -Be 3 -Because 'the three Record the runner scripts are among the blocks'
+        @($runs | Where-Object { $_.Contains('router-attempt=$env:ROUTER_ATTEMPT') }).Count | Should -Be 3 -Because 'the three Record the runner scripts are among the blocks'
         @($runs | Where-Object { $_.Contains('echo "::error::rust-tests=') }).Count | Should -Be 1 -Because 'the gate''s multi-line script is among the blocks'
         foreach ($run in $runs) {
             # needs.route (any case, dotted or indexed) anywhere inside one ${{ }} expression, format() arguments included.
