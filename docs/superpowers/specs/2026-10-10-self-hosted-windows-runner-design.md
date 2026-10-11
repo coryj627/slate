@@ -340,8 +340,10 @@ Toolchain, matching the Namespace image the lanes run on today:
   when a newer 10.0.x patch exists it can install it without elevation
   (the default `C:\Program Files\dotnet` would fail for a standard user).
 - `rustup` installed per-user as `runner` (so `rustup target add` and
-  `cargo install` write to `runner`'s own profile); VS Build Tools and
-  git are machine-wide.
+  `cargo install` write to `runner`'s own profile); VS Build Tools, git
+  and PowerShell 7 (the MSI, on the machine `PATH`: every Windows lane
+  runs its steps with `shell: pwsh`, and the image otherwise has Windows
+  PowerShell 5.1 only) are machine-wide.
 - Python 3.13 in the runner's tool cache
   (`C:\actions-runner\_work\_tool\Python\<version>\x64`), the
   `actions/python-versions` build that `actions/setup-python` would
