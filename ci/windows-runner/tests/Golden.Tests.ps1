@@ -173,6 +173,57 @@ Describe 'golden scripts' {
         $text | Should -Match 'IsReadOnly -Value \$true'
         $text | Should -Match '\.slate-golden-complete'
     }
+    It 'the build script rotates only a sealed image to .prev with -Rotate, after the VM-exists check, and never with Remove-Item' {
+        $text = Get-Content -Raw (Join-Path $goldenDir 'build-golden.ps1')
+        $text | Should -Match ([regex]::Escape('[switch]$Rotate'))
+        $rotate = $text.IndexOf('if ($Rotate')
+        # Single quotes: the test has no $vmName, and "VM $vmName exists" would search for "VM  exists" and always pass.
+        $rotate | Should -BeGreaterThan $text.IndexOf('VM $vmName exists')
+        $rotate | Should -BeLessThan $text.IndexOf('exists; move it aside to rebuild')
+        $block = $text.Substring($rotate, $text.IndexOf('exists; move it aside to rebuild') - $rotate)
+        $block | Should -Match 'IsReadOnly\) \{ throw'
+        $block | Should -Not -Match 'Remove-Item'
+    }
+    It 'the rotation refuses while runner VMs exist, before anything destructive' {
+        # A runner VM's disk is a differencing child of the live image.
+        $text = Get-Content -Raw (Join-Path $goldenDir 'build-golden.ps1')
+        $rotate = $text.IndexOf('if ($Rotate')
+        $block = $text.Substring($rotate, $text.IndexOf('exists; move it aside to rebuild') - $rotate)
+        $check = $block.IndexOf("if (Get-VM -Name 'slate-win-*' -ErrorAction SilentlyContinue) { throw 'runner VMs exist; stop the loop and let them finish first' }")
+        $check | Should -BeGreaterThan -1
+        foreach ($destructive in 'Rename-Item', 'Remove-SealedFile') {
+            $check | Should -BeLessThan $block.IndexOf($destructive) -Because "the check precedes every $destructive"
+        }
+    }
+    It 'the rotation refuses while an earlier rotation''s set-aside file exists, before it renames or deletes anything' {
+        # The leftover is the older rollback of an interrupted rotation: another pass would overwrite or delete it.
+        $text = Get-Content -Raw (Join-Path $goldenDir 'build-golden.ps1')
+        $rotate = $text.IndexOf('if ($Rotate')
+        $block = $text.Substring($rotate, $text.IndexOf('exists; move it aside to rebuild') - $rotate)
+        $path = $block.IndexOf('$rotatingPath = Join-Path $outDir ''win11-runner.prev.rotating.vhdx''')
+        $guard = $block.IndexOf('if (Test-Path -LiteralPath $rotatingPath) { throw "$rotatingPath exists (an earlier rotation stopped part-way)')
+        $path | Should -BeGreaterThan -1
+        $guard | Should -BeGreaterThan $path
+        foreach ($destructive in 'Rename-Item', 'Remove-SealedFile') {
+            $guard | Should -BeLessThan $block.IndexOf($destructive) -Because "the guard precedes every $destructive"
+        }
+    }
+    It 'the rotation renames the live image before it deletes the older rollback, and puts that back when the rename fails' {
+        $text = Get-Content -Raw (Join-Path $goldenDir 'build-golden.ps1')
+        $rotate = $text.IndexOf('if ($Rotate')
+        $block = $text.Substring($rotate, $text.IndexOf('exists; move it aside to rebuild') - $rotate)
+        $aside = $block.IndexOf('Rename-Item -LiteralPath $prevPath -NewName ''win11-runner.prev.rotating.vhdx''')
+        $live = $block.IndexOf('Rename-Item -LiteralPath $OutPath -NewName ''win11-runner.prev.vhdx''')
+        $restore = $block.IndexOf('Rename-Item -LiteralPath $rotatingPath -NewName ''win11-runner.prev.vhdx''')
+        $delete = $block.IndexOf('Remove-SealedFile -Path $rotatingPath')
+        $aside | Should -BeGreaterThan -1
+        $live | Should -BeGreaterThan $aside
+        $restore | Should -BeGreaterThan $live
+        $delete | Should -BeGreaterThan $restore
+        # The restore runs only when the live rename threw, and rethrows.
+        $block.Substring($live, $delete - $live) | Should -Match '\} catch \{\s+if \(Test-Path -LiteralPath \$rotatingPath\) \{ Rename-Item -LiteralPath \$rotatingPath -NewName ''win11-runner\.prev\.vhdx'' \}\s+throw\s+\}'
+        @([regex]::Matches($block, 'Remove-SealedFile')).Count | Should -Be 1
+    }
     It 'provisioning hands phase 2 to a runner logon task, because HKLM RunOnce runs only when an administrator logs on' {
         # runner is a standard user, so an HKLM RunOnce entry would never run
         # and the build would sit at runner's desktop until its timeout.

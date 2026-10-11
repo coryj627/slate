@@ -134,19 +134,27 @@ Describe 'Select-QueuedLaneJobs' {
         $jobs = @((& $job 9 10 @() 'queued' '2026-10-10T10:00:00Z'))
         @(Select-QueuedLaneJobs -Jobs $jobs).Count | Should -Be 0
     }
-    It 'includes running jobs, with their runner, only when asked' {
-        $running = (& $job 4 11 @('slate-win-model') 'in_progress' '2026-10-10T09:00:00Z')
-        $running | Add-Member -NotePropertyName runner_name -NotePropertyValue 'slate-win-model-abcd1234'
-        $jobs = @((& $job 3 10 @('slate-win-app') 'queued' '2026-10-10T10:00:05Z'), $running, (& $job 6 12 @('slate-win-app') 'completed' '2026-10-10T08:00:00Z'))
-        @(Select-QueuedLaneJobs -Jobs $jobs).Count | Should -Be 1
-        $all = @(Select-QueuedLaneJobs -Jobs $jobs -IncludeInProgress)
-        $all.Count | Should -Be 2
-        $all[0].JobId | Should -Be 4
-        $all[0].Status | Should -Be 'in_progress'
-        $all[0].RunnerName | Should -Be 'slate-win-model-abcd1234'
-        $all[1].JobId | Should -Be 3
-        $all[1].Status | Should -Be 'queued'
-        $all[1].RunnerName | Should -Be ''
+}
+
+Describe 'Select-HostRunnerJobs' {
+    It 'lists the in-progress jobs on the given runners from the whole listing, lane label or not, matching runner names exactly' {
+        $jobs = @(
+            [pscustomobject]@{ id = 1; run_id = 10; status = 'in_progress'; labels = @('slate-win-app'); runner_name = 'slate-win-app-aaaaaaaa' },
+            [pscustomobject]@{ id = 2; run_id = 11; status = 'in_progress'; labels = @('self-hosted'); runner_name = 'slate-win-model-bbbbbbbb' },
+            [pscustomobject]@{ id = 3; run_id = 12; status = 'queued'; labels = @('slate-win-app'); runner_name = $null },
+            [pscustomobject]@{ id = 4; run_id = 13; status = 'in_progress'; labels = @('slate-win-app'); runner_name = 'SLATE-WIN-APP-AAAAAAAA' },
+            [pscustomobject]@{ id = 5; run_id = 14; status = 'in_progress'; labels = @('slate-win-app'); runner_name = 'slate-win-app-cccccccc' },
+            [pscustomobject]@{ id = 6; run_id = 15; status = 'in_progress'; runner_name = 'slate-win-rust-dddddddd' },
+            [pscustomobject]@{ id = 7; run_id = 16; status = 'in_progress'; labels = @('slate-win-app', 'slate-win-rust'); runner_name = 'slate-win-rust-dddddddd' },
+            [pscustomobject]@{ id = 8; run_id = 17; status = 'in_progress'; labels = @('ubuntu-latest'); runner_name = 'GitHub Actions 3' }
+        )
+        $result = @(Select-HostRunnerJobs -Jobs $jobs -RunnerNames @('slate-win-app-aaaaaaaa', 'slate-win-model-bbbbbbbb', 'slate-win-rust-dddddddd', 'GitHub Actions 3'))
+        @($result | ForEach-Object { '{0}/{1}/{2}/{3}' -f $_.JobId, $_.RunId, $_.Lane, $_.RunnerName }) |
+            Should -Be @('1/10/app/slate-win-app-aaaaaaaa', '2/11//slate-win-model-bbbbbbbb', '6/15//slate-win-rust-dddddddd', '7/16//slate-win-rust-dddddddd')
+    }
+    It 'returns an empty array for no jobs or no runners' {
+        @(Select-HostRunnerJobs -Jobs @() -RunnerNames @('slate-win-app-aaaaaaaa')).Count | Should -Be 0
+        @(Select-HostRunnerJobs -Jobs @([pscustomobject]@{ id = 1; run_id = 10; status = 'in_progress'; labels = @('slate-win-app'); runner_name = 'slate-win-app-aaaaaaaa' }) -RunnerNames @()).Count | Should -Be 0
     }
 }
 
@@ -484,9 +492,25 @@ Describe 'Get-CiHostConfig' {
         $raw | ConvertTo-Json -Depth 6 | Set-Content $p
         { Get-CiHostConfig -Path $p } | Should -Throw '*Lanes must be an object*'
     }
+    It 'defaults LogRetentionDays to 30 when the file predates the key, and rejects a bad value' {
+        $cfg = Get-Content -Raw (Join-Path $PSScriptRoot '..' 'config.json') | ConvertFrom-Json -AsHashtable
+        $cfg.Remove('LogRetentionDays')
+        $p = Join-Path $TestDrive 'old.json'; $cfg | ConvertTo-Json -Depth 5 | Set-Content $p
+        (Get-CiHostConfig -Path $p).LogRetentionDays | Should -Be 30
+        $cfg['LogRetentionDays'] = 0
+        $cfg | ConvertTo-Json -Depth 5 | Set-Content $p
+        { Get-CiHostConfig -Path $p } | Should -Throw '*LogRetentionDays*'
+    }
 }
 
 Describe 'Journal' {
+    It 'New-Journal and Read-Journal share one set of top-level keys' {
+        $p = Join-Path $TestDrive 'bare.json'
+        '{"Vms":{},"Retries":{},"SeenJobs":{}}' | Set-Content $p
+        @((New-Journal).Keys | Sort-Object) | Should -Be @('GoldenAccepted', 'LogsPrunedOn', 'PublishFailedAt', 'PublishedAt', 'PublishedState', 'Retries', 'SeenJobs', 'Vms' | Sort-Object)
+        @((Read-Journal -Path $p).Keys | Sort-Object) | Should -Be @((New-Journal).Keys | Sort-Object)
+        (Read-Journal -Path $p).PublishedState | Should -Be $null
+    }
     It 'returns a fresh journal when the file does not exist' {
         $j = Read-Journal -Path (Join-Path $TestDrive 'none.json')
         $j.Vms.Count | Should -Be 0
@@ -559,6 +583,113 @@ Describe 'Journal' {
     }
 }
 
+Describe 'Get-PublishedState' {
+    BeforeAll {
+        $script:cfg = Get-CiHostConfig -Path (Join-Path $PSScriptRoot '..' 'config.json')
+        $script:now = [datetimeoffset]::Parse('2026-10-11T15:04:05Z')
+    }
+    It 'reports an idle pool' {
+        $s = Get-PublishedState -Config $cfg -Journal (New-Journal) -Queued @() -Now $now
+        $s.v | Should -Be 1
+        $s.at | Should -Be '2026-10-11T15:04:05Z'
+        $s.serving | Should -BeTrue
+        $s.slots | Should -Be 2
+        @($s.running).Count | Should -Be 0
+        @($s.queued).Count | Should -Be 0
+        ($s | ConvertTo-Json -Compress -Depth 5) | Should -Be '{"v":1,"at":"2026-10-11T15:04:05Z","serving":true,"slots":2,"running":[],"queued":[]}'
+    }
+    It 'lists every VM that holds a slot with its provisioning time, skips a pending commit, and counts a VM in teardown against the slots' {
+        $j = New-Journal
+        $j.Vms['a'] = @{ Name = 'a'; Lane = 'app'; Phase = 'handed'; StartedAt = '2026-10-11T14:48:51+00:00'; PendingCommit = $false }
+        $j.Vms['b'] = @{ Name = 'b'; Lane = 'model'; Phase = 'handed'; StartedAt = '2026-10-11T14:50:00Z'; PendingCommit = $true }
+        $j.Vms['c'] = @{ Name = 'c'; Lane = 'rust'; Phase = 'discarding'; StartedAt = '2026-10-11T14:00:00Z'; PendingCommit = $false }
+        $s = Get-PublishedState -Config $cfg -Journal $j -Queued @() -Now $now
+        $s.slots | Should -Be 1
+        $s.serving | Should -BeTrue
+        @($s.running | ForEach-Object { "$($_.lane)@$($_.since)" }) | Should -Be @('app@2026-10-11T14:48:51Z')
+    }
+    It 'is not serving when every slot is held by a teardown' {
+        $j = New-Journal
+        $j.Vms['c'] = @{ Name = 'c'; Lane = 'rust'; Phase = 'discarding'; StartedAt = '2026-10-11T14:00:00Z'; PendingCommit = $false }
+        $j.Vms['d'] = @{ Name = 'd'; Lane = 'app'; Phase = 'discarding'; StartedAt = '2026-10-11T14:00:00Z'; PendingCommit = $false }
+        $s = Get-PublishedState -Config $cfg -Journal $j -Queued @() -Now $now
+        $s.slots | Should -Be 0
+        $s.serving | Should -BeFalse
+    }
+    It 'lists the queue oldest first with creation times' {
+        $queued = @([pscustomobject]@{ JobId = 2; Lane = 'model'; CreatedAt = [datetimeoffset]::Parse('2026-10-11T14:40:00Z') },
+                    [pscustomobject]@{ JobId = 1; Lane = 'rust'; CreatedAt = [datetimeoffset]::Parse('2026-10-11T14:39:00Z') })
+        $s = Get-PublishedState -Config $cfg -Journal (New-Journal) -Queued $queued -Now $now
+        @($s.queued | ForEach-Object { "$($_.lane)@$($_.since)" }) | Should -Be @('rust@2026-10-11T14:39:00Z', 'model@2026-10-11T14:40:00Z')
+    }
+    It 'orders running by instant, never by string, whatever type the journal holds the time in' {
+        # A [datetime] (here of Kind Local) prints as 10/11/2026 …, which
+        # sorts before any ISO string of the same year as text.
+        $j = New-Journal
+        $j.Vms['a'] = @{ Name = 'a'; Lane = 'app'; Phase = 'handed'; StartedAt = '2026-10-11T14:40:00Z'; PendingCommit = $false }
+        $j.Vms['b'] = @{ Name = 'b'; Lane = 'model'; Phase = 'handed'; StartedAt = [datetimeoffset]::Parse('2026-10-11T14:48:51Z').LocalDateTime; PendingCommit = $false }
+        $s = Get-PublishedState -Config $cfg -Journal $j -Queued @() -Now $now
+        @($s.running | ForEach-Object { "$($_.lane)@$($_.since)" }) | Should -Be @('app@2026-10-11T14:40:00Z', 'model@2026-10-11T14:48:51Z')
+    }
+    It 'publishes the same state from a journal written and read back' {
+        # The round trip turns every time into a [datetime]; across a year
+        # boundary their text order is not their order in time.
+        $p = Join-Path $TestDrive 'published.json'
+        $j = New-Journal
+        $j.Vms['a'] = @{ Name = 'a'; Lane = 'app'; Phase = 'handed'; StartedAt = '2025-12-31T23:59:00Z'; PendingCommit = $false }
+        $j.Vms['b'] = @{ Name = 'b'; Lane = 'model'; Phase = 'provisioned'; StartedAt = '2026-01-01T00:01:00+00:00'; PendingCommit = $false }
+        $j.Vms['c'] = @{ Name = 'c'; Lane = 'rust'; Phase = 'handed'; StartedAt = '2025-12-31T23:00:00Z'; PendingCommit = $true }
+        $j.Vms['d'] = @{ Name = 'd'; Lane = 'shell'; Phase = 'discarding'; StartedAt = '2025-12-31T22:00:00Z'; PendingCommit = $false }
+        $expected = '{"v":1,"at":"2026-10-11T15:04:05Z","serving":true,"slots":1,"running":[{"lane":"app","since":"2025-12-31T23:59:00Z"},{"lane":"model","since":"2026-01-01T00:01:00Z"}],"queued":[]}'
+        (Get-PublishedState -Config $cfg -Journal $j -Queued @() -Now $now | ConvertTo-Json -Compress -Depth 5) | Should -Be $expected
+        Write-Journal -Path $p -Journal $j
+        $back = Read-Journal -Path $p
+        $back.Vms['a'].StartedAt | Should -BeOfType [datetime]
+        (Get-PublishedState -Config $cfg -Journal $back -Queued @() -Now $now | ConvertTo-Json -Compress -Depth 5) | Should -Be $expected
+    }
+    It 'writes every time in the invariant form whatever the culture of the thread (<Culture>)' -ForEach @(@{ Culture = 'th-TH' }, @{ Culture = 'fi-FI' }) {
+        # th-TH counts years in the Buddhist era (2569); fi-FI separates the
+        # time with dots. Either would publish a state the router cannot read.
+        try { $info = [cultureinfo]::GetCultureInfo($Culture) }
+        catch { Set-ItResult -Skipped -Because "culture $Culture is not available on this host ($($_.Exception.Message))"; return }
+        $thread = [System.Threading.Thread]::CurrentThread
+        $before = $thread.CurrentCulture
+        $beforeUi = $thread.CurrentUICulture
+        try {
+            $thread.CurrentCulture = $info
+            $thread.CurrentUICulture = $info
+            # ConvertTo-StateTime is private: call it inside the module this
+            # file imported (InModuleScope is ambiguous when another test file
+            # has loaded a second copy).
+            $module = (Get-Command Get-PublishedState).Module
+            & $module { param($At) ConvertTo-StateTime -Value $At } $now | Should -BeExactly '2026-10-11T15:04:05Z'
+            $j = New-Journal
+            $j.Vms['a'] = @{ Name = 'a'; Lane = 'app'; Phase = 'handed'; StartedAt = '2026-10-11T14:48:51Z'; PendingCommit = $false }
+            $queued = @([pscustomobject]@{ JobId = 1; Lane = 'model'; CreatedAt = [datetimeoffset]::Parse('2026-10-11T14:40:00Z') })
+            (Get-PublishedState -Config $cfg -Journal $j -Queued $queued -Now $now | ConvertTo-Json -Compress -Depth 5) |
+                Should -BeExactly '{"v":1,"at":"2026-10-11T15:04:05Z","serving":true,"slots":2,"running":[{"lane":"app","since":"2026-10-11T14:48:51Z"}],"queued":[{"lane":"model","since":"2026-10-11T14:40:00Z"}]}'
+        } finally {
+            $thread.CurrentCulture = $before
+            $thread.CurrentUICulture = $beforeUi
+        }
+    }
+}
+
+Describe 'Test-TrustedRun' {
+    It 'is <Expected> for <Case>' -ForEach @(
+        @{ Case = 'the trusted repository'; Expected = $true; Run = [pscustomobject]@{ head_repository = [pscustomobject]@{ full_name = 'coryj627/slate' } } }
+        @{ Case = 'the trusted repository in another case'; Expected = $true; Run = [pscustomobject]@{ head_repository = [pscustomobject]@{ full_name = 'CoryJ627/SLATE' } } }
+        @{ Case = 'no run'; Expected = $false; Run = $null }
+        @{ Case = 'a run without a head_repository property'; Expected = $false; Run = [pscustomobject]@{ id = 10 } }
+        @{ Case = 'a null head repository (a deleted fork)'; Expected = $false; Run = [pscustomobject]@{ head_repository = $null } }
+        @{ Case = 'a head repository without a full_name property'; Expected = $false; Run = [pscustomobject]@{ head_repository = [pscustomobject]@{ id = 5 } } }
+        @{ Case = 'a lookalike name'; Expected = $false; Run = [pscustomobject]@{ head_repository = [pscustomobject]@{ full_name = 'coryj627/slate-evil' } } }
+        @{ Case = 'a fork of the same name'; Expected = $false; Run = [pscustomobject]@{ head_repository = [pscustomobject]@{ full_name = 'someone/slate' } } }
+    ) {
+        Test-TrustedRun -Run $Run -TrustedRepo 'coryj627/slate' | Should -Be $Expected
+    }
+}
+
 Describe 'Write-CiLog' {
     It 'appends a timestamped line and creates the file' {
         $p = Join-Path $TestDrive 'logs' 'o.log'
@@ -568,5 +699,134 @@ Describe 'Write-CiLog' {
         $lines.Count | Should -Be 2
         $lines[0] | Should -Match '^\d{4}-\d{2}-\d{2}T[0-9:.]+(\+|-)\d{2}:\d{2} \[info\] hello$'
         $lines[1] | Should -Match '\[warn\] again$'
+    }
+}
+
+Describe 'Get-ExpiredLogNames' {
+    It 'selects dated log names older than the retention, by the date in the name' {
+        $names = 'orchestrator-2026-09-10.log', 'orchestrator-2026-09-11.log', 'orchestrator-2026-09-12.log', 'orchestrator-2026-10-11.log'
+        @(Get-ExpiredLogNames -Names $names -Today '2026-10-11' -RetentionDays 30) | Should -Be @('orchestrator-2026-09-10.log')
+    }
+    It 'keeps today, names that do not parse and other files' {
+        $names = 'orchestrator-2026-10-11.log', 'orchestrator-yesterday.log', 'notes.txt', 'orchestrator-2026-13-40.log'
+        @(Get-ExpiredLogNames -Names $names -Today '2026-10-11' -RetentionDays 1).Count | Should -Be 0
+    }
+    It 'returns nothing for an empty directory' {
+        @(Get-ExpiredLogNames -Names @() -Today '2026-10-11' -RetentionDays 30).Count | Should -Be 0
+    }
+}
+
+Describe 'Get-OrchestratorLogName and Get-OrchestratorLogDate' {
+    BeforeAll {
+        # Mid-June: no common zone changes its offset within 40 days of it, so
+        # the absolute days added below are the local days they look like.
+        $script:at = [datetimeoffset]::Parse('2026-06-10T23:30:00Z', [cultureinfo]::InvariantCulture)
+    }
+    It 'name the daily file by the local date, in the invariant culture' {
+        $day = $at.ToLocalTime().ToString('yyyy-MM-dd', [cultureinfo]::InvariantCulture)
+        Get-OrchestratorLogDate -Now $at | Should -BeExactly $day
+        Get-OrchestratorLogName -Now $at | Should -BeExactly "orchestrator-$day.log"
+    }
+    It 'name the day by the local date, not the UTC one, for <Case>' -ForEach @(
+        # East of UTC the first falls on a later local day than its UTC day, west of UTC the second falls on an
+        # earlier one: between them the UTC date is wrong in every zone but UTC itself, whatever zone the host is in.
+        @{ Case = 'an instant half an hour before UTC midnight'; Utc = '2026-06-10T23:30:00Z' }
+        @{ Case = 'an instant half an hour after UTC midnight'; Utc = '2026-06-11T00:30:00Z' }
+    ) {
+        $now = [datetimeoffset]::Parse($Utc, [cultureinfo]::InvariantCulture)
+        $day = $now.ToLocalTime().ToString('yyyy-MM-dd', [cultureinfo]::InvariantCulture)
+        Get-OrchestratorLogDate -Now $now | Should -BeExactly $day
+        Get-OrchestratorLogName -Now $now | Should -BeExactly "orchestrator-$day.log"
+    }
+    It 'agree with the reader: the name the writer gives expires after the retention, never before' {
+        $name = Get-OrchestratorLogName -Now $at
+        @(Get-ExpiredLogNames -Names @($name) -Today (Get-OrchestratorLogDate -Now $at.AddDays(30)) -RetentionDays 30).Count | Should -Be 0
+        @(Get-ExpiredLogNames -Names @($name) -Today (Get-OrchestratorLogDate -Now $at.AddDays(31)) -RetentionDays 30) | Should -Be @($name)
+    }
+    It 'write a Gregorian year whatever the culture of the thread (th-TH)' {
+        # th-TH counts years in the Buddhist era (2569): Get-ExpiredLogNames
+        # would read such a name as another date.
+        try { $info = [cultureinfo]::GetCultureInfo('th-TH') }
+        catch { Set-ItResult -Skipped -Because "culture th-TH is not available on this host ($($_.Exception.Message))"; return }
+        $thread = [System.Threading.Thread]::CurrentThread
+        $before = $thread.CurrentCulture
+        try {
+            $thread.CurrentCulture = $info
+            Get-OrchestratorLogName -Now $at | Should -Match '^orchestrator-2026-06-1[01]\.log$'
+        } finally { $thread.CurrentCulture = $before }
+    }
+}
+
+Describe 'Test-RecentlyAt' {
+    BeforeAll {
+        $script:now = [datetimeoffset]::Parse('2026-10-11T12:00:00Z', [cultureinfo]::InvariantCulture)
+        # Private: call it inside the module this file imported (InModuleScope
+        # is ambiguous when another test file has loaded a second copy).
+        $script:module = (Get-Command Get-PublishedState).Module
+        function Test-Recently($Value) { & $script:module { param($v, $n) Test-RecentlyAt -Value $v -Now $n -WithinSeconds 60 } $Value $script:now }
+    }
+    It 'is <Expected> for <Case>' -ForEach @(
+        @{ Case = 'null'; Value = $null; Expected = $false }
+        @{ Case = 'an empty string'; Value = ''; Expected = $false }
+        @{ Case = 'a value that does not parse'; Value = 'garbage'; Expected = $false }
+        @{ Case = '59 s ago'; Value = '2026-10-11T11:59:01.0000000+00:00'; Expected = $true }
+        @{ Case = '60 s ago'; Value = '2026-10-11T11:59:00.0000000+00:00'; Expected = $false }
+        @{ Case = '61 s ago'; Value = '2026-10-11T11:58:59.0000000+00:00'; Expected = $false }
+    ) {
+        Test-Recently $Value | Should -Be $Expected
+    }
+    It 'reads a journal round trip''s [datetime] as the instant it was' {
+        Test-Recently ([datetime]::SpecifyKind([datetime]'2026-10-11T11:59:30', [System.DateTimeKind]::Utc)) | Should -BeTrue
+        Test-Recently ([datetime]::SpecifyKind([datetime]'2026-10-11T11:58:30', [System.DateTimeKind]::Utc)) | Should -BeFalse
+    }
+}
+
+Describe 'Test-GoldenPrevRemovable' {
+    BeforeAll { $script:accepted = @{ Golden = '2026-10-10T22:55:00.0000000Z'; Lanes = @('rust', 'app', 'model', 'shell'); Complete = $true } }
+    It 'is true only for a complete acceptance of the current, sealed golden with no older VM' {
+        Test-GoldenPrevRemovable -Accepted $accepted -CurrentStamp '2026-10-10T22:55:00.0000000Z' -CurrentSealed $true -VmCreationTimes @('2026-10-11T01:00:00Z') | Should -BeTrue
+    }
+    It 'compares the stamps as instants, so a journal round trip (a [datetime]) still matches' {
+        $roundTripped = @{ Golden = [datetime]::Parse('2026-10-10T22:55:00Z').ToUniversalTime(); Lanes = $accepted.Lanes; Complete = $true }
+        Test-GoldenPrevRemovable -Accepted $roundTripped -CurrentStamp '2026-10-10T22:55:00.0000000Z' -CurrentSealed $true -VmCreationTimes @() | Should -BeTrue
+    }
+    It 'is false for an acceptance of another image (the previous one, after a rotation)' {
+        Test-GoldenPrevRemovable -Accepted $accepted -CurrentStamp '2026-10-12T01:00:00Z' -CurrentSealed $true -VmCreationTimes @() | Should -BeFalse
+    }
+    It 'is false while the current golden is not sealed, for a missing lane, for a VM older than the golden, and without an acceptance' {
+        Test-GoldenPrevRemovable -Accepted $accepted -CurrentStamp '2026-10-10T22:55:00.0000000Z' -CurrentSealed $false -VmCreationTimes @() | Should -BeFalse
+        Test-GoldenPrevRemovable -Accepted @{ Golden = $accepted.Golden; Lanes = @('rust', 'app', 'model'); Complete = $false } -CurrentStamp $accepted.Golden -CurrentSealed $true -VmCreationTimes @() | Should -BeFalse
+        Test-GoldenPrevRemovable -Accepted $accepted -CurrentStamp $accepted.Golden -CurrentSealed $true -VmCreationTimes @('2026-10-10T22:00:00Z') | Should -BeFalse
+        Test-GoldenPrevRemovable -Accepted $null -CurrentStamp $accepted.Golden -CurrentSealed $true -VmCreationTimes @() | Should -BeFalse
+    }
+}
+
+Describe 'Get-CiHostPaths and Read-JournalSnapshot' {
+    It 'derives every path of the tree from the root, and Get-CiHostConfig uses them' {
+        $paths = Get-CiHostPaths -Root 'C:\slate-ci'
+        $paths.GoldenPath | Should -Be 'C:\slate-ci\golden\win11-runner.vhdx'
+        $paths.GoldenPrevPath | Should -Be 'C:\slate-ci\golden\win11-runner.prev.vhdx'
+        $paths.JournalPath | Should -Be 'C:\slate-ci\state\journal.json'
+        $paths.LogDir | Should -Be 'C:\slate-ci\logs'
+        $cfg = Get-CiHostConfig -Path (Join-Path $PSScriptRoot '..' 'config.json')
+        foreach ($key in 'GoldenPath', 'GoldenPrevPath', 'CacheDir', 'VmDir', 'StateDir', 'LogDir', 'JournalPath') { $cfg[$key] | Should -Be $paths[$key] }
+    }
+    It 'a snapshot reads a journal without moving anything, and reads a missing or broken file as a new journal' {
+        $p = Join-Path $TestDrive 'j.json'
+        $j = New-Journal; $j.GoldenAccepted = @{ Golden = '2026-10-10T22:55:00Z'; Lanes = @('rust'); Complete = $false }
+        Write-Journal -Path $p -Journal $j
+        (Read-JournalSnapshot -Path $p).GoldenAccepted.Lanes | Should -Be @('rust')
+        'not json' | Set-Content $p
+        (Read-JournalSnapshot -Path $p).GoldenAccepted | Should -Be $null
+        Test-Path $p | Should -BeTrue -Because 'a snapshot never moves the loop''s journal aside'
+        @(Get-ChildItem $TestDrive -Filter 'j.json.corrupt-*').Count | Should -Be 0
+        (Read-JournalSnapshot -Path (Join-Path $TestDrive 'none.json')).Vms.Count | Should -Be 0
+    }
+    It 'Remove-SealedFile deletes a read-only file and tolerates a missing one' {
+        $f = Join-Path $TestDrive 'sealed.bin'; 'x' | Set-Content $f
+        Set-ItemProperty -LiteralPath $f -Name IsReadOnly -Value $true
+        Remove-SealedFile -Path $f
+        Test-Path $f | Should -BeFalse
+        { Remove-SealedFile -Path $f } | Should -Not -Throw
     }
 }

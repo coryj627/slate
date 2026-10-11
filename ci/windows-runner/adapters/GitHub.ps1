@@ -3,8 +3,10 @@
 # SPDX-License-Identifier: AGPL-3.0-or-later
 #
 # GitHub REST adapter for the self-hosted runner host. The only file that
-# talks to api.github.com. The PAT (fine-grained: Actions read,
-# Administration read/write, this repository only) is held as a
+# talks to api.github.com. The PAT (fine-grained, this repository only,
+# issued with the mac controller's permission set: Actions read,
+# Administration read and write, Variables read and write for the
+# published state; GitHub adds Metadata read by itself) is held as a
 # SecureString and decoded per call; nothing here ever logs it or a JIT
 # config. orchestrator.ps1 dot-sources this file and passes
 # New-GitHubAdapters into the module.
@@ -210,14 +212,22 @@ function Remove-GhRunner {
     Invoke-GhApi -Method 'DELETE' -Path "/actions/runners/$RunnerId" | Out-Null
 }
 
+function Test-GhNotFound {
+    # True when a failed Invoke-GhApi call was GitHub answering 404 (the web
+    # cmdlets keep the response on the exception).
+    [CmdletBinding()]
+    param([Parameter(Mandatory)][System.Management.Automation.ErrorRecord]$ErrorRecord)
+    $response = $ErrorRecord.Exception.Response
+    return ($null -ne $response -and [int]$response.StatusCode -eq 404)
+}
+
 function Get-GhRunner {
     [CmdletBinding()]
     param([Parameter(Mandatory)][int64]$RunnerId)
     try {
         return Invoke-GhApi -Path "/actions/runners/$RunnerId"
     } catch {
-        $response = $_.Exception.Response
-        if ($null -ne $response -and [int]$response.StatusCode -eq 404) { return $null }
+        if (Test-GhNotFound -ErrorRecord $_) { return $null }
         throw
     }
 }
@@ -228,6 +238,20 @@ function Get-GhRunners {
     return @((Invoke-GhApi -Path '/actions/runners?per_page=100').runners)
 }
 
+function Set-GhVariable {
+    # The published state (overflow spec §4). PATCH updates; a 404 means the
+    # variable does not exist yet and POST creates it. The token needs the
+    # Variables permission (read and write).
+    [CmdletBinding()]
+    param([Parameter(Mandatory)][string]$Name, [Parameter(Mandatory)][AllowEmptyString()][string]$Value)
+    try {
+        Invoke-GhApi -Method PATCH -Path "/actions/variables/$Name" -Body @{ name = $Name; value = $Value } | Out-Null
+    } catch {
+        if (-not (Test-GhNotFound -ErrorRecord $_)) { throw }
+        Invoke-GhApi -Method POST -Path '/actions/variables' -Body @{ name = $Name; value = $Value } | Out-Null
+    }
+}
+
 function New-GitHubAdapters {
     [CmdletBinding()]
     param([Parameter(Mandatory)][string[]]$RoutedWorkflows)
@@ -236,7 +260,7 @@ function New-GitHubAdapters {
     # scope, so the functions are captured as locals too and invoked with
     # &; each still runs in the scope that defined it.
     $commands = @{}
-    foreach ($command in 'Get-GhLaneJobs', 'Get-GhJob', 'Get-GhRun', 'New-GhJitRunner', 'Remove-GhRunner', 'Get-GhRunner', 'Get-GhRunners') {
+    foreach ($command in 'Get-GhLaneJobs', 'Get-GhJob', 'Get-GhRun', 'New-GhJitRunner', 'Remove-GhRunner', 'Get-GhRunner', 'Get-GhRunners', 'Set-GhVariable') {
         $commands[$command] = Get-Command -Name $command -CommandType Function -ErrorAction Stop
     }
     $routed = @($RoutedWorkflows)
@@ -248,6 +272,7 @@ function New-GitHubAdapters {
         RemoveRunner  = { param($id) & $commands['Remove-GhRunner'] -RunnerId $id }
         GetRunner     = { param($id) & $commands['Get-GhRunner'] -RunnerId $id }
         ListRunners   = { & $commands['Get-GhRunners'] }
+        PublishState  = { param($json) & $commands['Set-GhVariable'] -Name 'WINDOWS_HOME_STATE' -Value $json }
     }
     # Bind the routed workflows and the commands into each scriptblock: the
     # module invokes them long after this function has returned.

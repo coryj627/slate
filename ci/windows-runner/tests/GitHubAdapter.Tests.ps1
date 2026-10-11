@@ -321,9 +321,42 @@ Describe 'Remove-GhRunner / Get-GhRunners' {
     }
 }
 
+Describe 'Set-GhVariable' {
+    It 'patches the variable, and creates it with POST when the patch answers 404' {
+        Mock Invoke-RestMethod { [pscustomobject]@{} }
+        Set-GhVariable -Name 'WINDOWS_HOME_STATE' -Value '{"v":1}'
+        Should -Invoke Invoke-RestMethod -Times 1 -Exactly -ParameterFilter {
+            $Method -eq 'PATCH' -and $Uri -like '*/actions/variables/WINDOWS_HOME_STATE' -and
+            ($Body | ConvertFrom-Json).name -eq 'WINDOWS_HOME_STATE' -and ($Body | ConvertFrom-Json).value -eq '{"v":1}'
+        }
+        Should -Invoke Invoke-RestMethod -Times 0 -Exactly -ParameterFilter { $Method -eq 'POST' }
+        Mock Invoke-RestMethod {
+            if ($Method -eq 'PATCH') {
+                $response = [System.Net.Http.HttpResponseMessage]::new([System.Net.HttpStatusCode]::NotFound)
+                throw [Microsoft.PowerShell.Commands.HttpResponseException]::new('not found', $response)
+            }
+            [pscustomobject]@{}
+        }
+        Set-GhVariable -Name 'WINDOWS_HOME_STATE' -Value '{"v":1}'
+        Should -Invoke Invoke-RestMethod -Times 1 -Exactly -ParameterFilter {
+            $Method -eq 'POST' -and $Uri -like '*/actions/variables' -and
+            ($Body | ConvertFrom-Json).name -eq 'WINDOWS_HOME_STATE' -and ($Body | ConvertFrom-Json).value -eq '{"v":1}'
+        }
+    }
+    It 'rethrows a patch that fails with anything but 404, and never tries POST then' {
+        Mock Invoke-RestMethod {
+            $response = [System.Net.Http.HttpResponseMessage]::new([System.Net.HttpStatusCode]::Forbidden)
+            throw [Microsoft.PowerShell.Commands.HttpResponseException]::new('forbidden', $response)
+        }
+        { Set-GhVariable -Name 'WINDOWS_HOME_STATE' -Value '{"v":1}' } | Should -Throw '*forbidden*'
+        Should -Invoke Invoke-RestMethod -Times 1 -Exactly -ParameterFilter { $Method -eq 'PATCH' }
+        Should -Invoke Invoke-RestMethod -Times 0 -Exactly -ParameterFilter { $Method -eq 'POST' }
+    }
+}
+
 Describe 'New-GitHubAdapters' {
     It 'exposes exactly the keys the orchestrator invokes' {
-        @((New-GitHubAdapters -RoutedWorkflows $routed).Keys | Sort-Object) | Should -Be @('GetJob', 'GetLaneJobs', 'GetRun', 'GetRunner', 'ListRunners', 'NewJitRunner', 'RemoveRunner')
+        @((New-GitHubAdapters -RoutedWorkflows $routed).Keys | Sort-Object) | Should -Be @('GetJob', 'GetLaneJobs', 'GetRun', 'GetRunner', 'ListRunners', 'NewJitRunner', 'PublishState', 'RemoveRunner')
     }
     It 'requires the routed workflow list' {
         $parameter = (Get-Command New-GitHubAdapters).Parameters['RoutedWorkflows']

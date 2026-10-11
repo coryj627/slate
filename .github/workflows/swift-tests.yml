@@ -128,9 +128,13 @@ jobs:
         # Namespace's image keeps rustup under ~/.cargo/bin, off PATH in a
         # non-login shell; rustup then installs the rust-toolchain.toml pin on
         # first use. The Studio's runner has its toolchain on PATH already.
+        # The route is the routing job's output, written by this head's own
+        # route.py: it reaches the script as data, never as an expression.
+        env:
+          ROUTE: ${{ needs.route.outputs.route }}
         run: |
           if [ -d "$HOME/.cargo/bin" ]; then echo "$HOME/.cargo/bin" >> "$GITHUB_PATH"; fi
-          echo "route: ${{ needs.route.outputs.route }} ($(id -un) on $(hostname))"
+          echo "route: $ROUTE ($(id -un) on $(hostname))"
 
       - name: Build slate-uniffi + generate Swift bindings + swift build
         # scripts/build-mac-app.sh runs:

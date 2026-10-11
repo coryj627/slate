@@ -19,6 +19,9 @@ BeforeAll {
             Generation = 3
             JitConfig  = ('j' * 2500)
             GuestError = $null
+            Published  = [System.Collections.ArrayList]::new()
+            Logs       = @('orchestrator-2026-09-01.log', 'orchestrator-2026-10-10.log')
+            GoldenStamp = '2026-10-10T11:00:00Z'
         }
         $script:calls = [System.Collections.ArrayList]::new()
         $script:logs = [System.Collections.ArrayList]::new()
@@ -31,7 +34,9 @@ BeforeAll {
         $a = @{
             GetLaneJobs   = { & $script:record 'GetLaneJobs' @(); @($script:world.Queued) + @($script:world.InProgress) }
             GetJob        = { param($id) & $script:record 'GetJob' @($id); $script:world.Jobs[[string]$id] }
-            GetRun        = { param($id) & $script:record 'GetRun' @($id); $script:world.Runs[[string]$id] }
+            GetRun        = { param($id) & $script:record 'GetRun' @($id)
+                              if ($script:world.Runs.ContainsKey([string]$id)) { $script:world.Runs[[string]$id] }
+                              else { [pscustomobject]@{ id = $id; event = 'push'; head_branch = 'main'; head_repository = [pscustomobject]@{ full_name = 'coryj627/slate' } } } }
             NewJitRunner  = { param($name, $labels) & $script:record 'NewJitRunner' @($name, $labels); @{ RunnerId = 77; EncodedJitConfig = $script:world.JitConfig } }
             RemoveRunner  = { param($id) & $script:record 'RemoveRunner' @($id) }
             GetRunner     = { param($id) & $script:record 'GetRunner' @($id); $script:world.Runner }
@@ -51,7 +56,11 @@ BeforeAll {
             GetGeneration = { param($lane) & $script:record 'GetGeneration' @($lane); $script:world.Generation }
             CommitCache   = { param($lane, $child) & $script:record 'CommitCache' @($lane, $child); $script:world.Generation + 1 }
             DiscardCache  = { param($child) & $script:record 'DiscardCache' @($child) }
-            Log           = { param($level, $message) [void]$script:logs.Add("[$level] $message") }
+            PublishState  = { param($json) & $script:record 'PublishState' @($json); [void]$script:world.Published.Add($json) }
+            ListLogs      = { & $script:record 'ListLogs' @(); @($script:world.Logs) }
+            RemoveLog     = { param($name) & $script:record 'RemoveLog' @($name); $script:world.Logs = @($script:world.Logs | Where-Object { $_ -ne $name }) }
+            GetGoldenStamp = { & $script:record 'GetGoldenStamp' @(); $script:world.GoldenStamp }
+            Log           ={ param($level, $message) [void]$script:logs.Add("[$level] $message") }
         }
         return $a
     }
@@ -99,6 +108,10 @@ Context 'admission' {
         $vm.SlotIp | Should -Be '10.77.0.11'
         $vm.ForkGeneration | Should -Be 3
         $journal.SeenJobs['1'].Lane | Should -Be 'app'
+        $journal.SeenJobs['1'].Foreign | Should -BeFalse
+        $journal.SeenJobs['1'].Repo | Should -Be 'coryj627/slate'
+        # The SeenJobs entry's shape (both sides sorted: Sort-Object ignores case).
+        @($journal.SeenJobs['1'].Keys | Sort-Object) | Should -Be @('FirstSeenAt', 'Foreign', 'Lane', 'Repo', 'RunCheckedAt', 'RunId' | Sort-Object)
         # The journal entry's shape: 18 keys, every one present from admission.
         @($vm.Keys | Sort-Object) | Should -Be @('CachePath', 'ClaimCheckedAt', 'Claimed', 'Dir', 'ForkGeneration', 'GuestError', 'HandedAt', 'JobId', 'Lane', 'Name', 'PendingCommit', 'Phase', 'RunId', 'RunnerId', 'SettleWaits', 'Slot', 'SlotIp', 'StartedAt')
         $vm.GuestError | Should -Be $null
@@ -139,6 +152,60 @@ Context 'admission' {
         $journal.Vms.Count | Should -Be 0
         $journal.Retries['1'].Count | Should -Be 1
         (Get-Calls 'RemoveVm').Count | Should -Be 1
+    }
+    It 'never admits a job whose run comes from another repository, says so once, and keeps it out of the published queue' {
+        $world.Queued = @((New-QueuedJob 1 10 'app'))
+        Set-Run 10 'pull_request' 'feature' 'someone/slate'
+        Invoke-OrchestratorTick -Config $config -Journal $journal -Adapters $adapters -Now $t0
+        Invoke-OrchestratorTick -Config $config -Journal $journal -Adapters $adapters -Now $t0.AddSeconds(10)
+        (Get-Calls 'NewVm').Count | Should -Be 0
+        (Get-Calls 'GetRun').Count | Should -Be 1
+        $journal.SeenJobs['1'].Foreign | Should -BeTrue
+        ([regex]::Matches(($logs -join "`n"), 'admission: skipped job 1 of someone/slate \(not the trusted repository\)')).Count | Should -Be 1
+        @(($journal.PublishedState | ConvertFrom-Json).queued).Count | Should -Be 0
+    }
+    It 'treats a run without a head repository as foreign' {
+        $world.Queued = @((New-QueuedJob 1 10 'app'))
+        $world.Runs['10'] = [pscustomobject]@{ id = 10; event = 'pull_request'; head_branch = 'x'; head_repository = $null }
+        Invoke-OrchestratorTick -Config $config -Journal $journal -Adapters $adapters -Now $t0
+        (Get-Calls 'NewVm').Count | Should -Be 0
+        $journal.SeenJobs['1'].Foreign | Should -BeTrue
+        $journal.SeenJobs['1'].Repo | Should -BeExactly '' -Because 'the repository is remembered as unknown, not as missing'
+        @($logs) | Should -Contain '[warn] admission: skipped job 1 of an unknown repository (not the trusted repository)'
+    }
+    It 'treats a head repository without a name as foreign, and names an unknown repository' {
+        $world.Queued = @((New-QueuedJob 1 10 'app'), (New-QueuedJob 2 11 'rust'))
+        $world.Runs['10'] = [pscustomobject]@{ id = 10; event = 'pull_request'; head_branch = 'x'; head_repository = [pscustomobject]@{ id = 5 } }
+        Invoke-OrchestratorTick -Config $config -Journal $journal -Adapters $adapters -Now $t0
+        $journal.SeenJobs['1'].Foreign | Should -BeTrue
+        @($journal.Vms.Values | ForEach-Object { $_.JobId }) | Should -Be @(2)
+        @($logs) | Should -Contain '[warn] admission: skipped job 1 of an unknown repository (not the trusted repository)'
+    }
+    It 'retries a run read that failed at most once a minute, logging the first failure only, then admits' {
+        $world.Queued = @((New-QueuedJob 1 10 'app'))
+        $script:runCalls = 0
+        $adapters.GetRun = { param($id) $script:runCalls++; if ($script:runCalls -le 2) { throw '502' }; [pscustomobject]@{ id = $id; event = 'push'; head_branch = 'main'; head_repository = [pscustomobject]@{ full_name = 'coryj627/slate' } } }
+        Invoke-OrchestratorTick -Config $config -Journal $journal -Adapters $adapters -Now $t0
+        Invoke-OrchestratorTick -Config $config -Journal $journal -Adapters $adapters -Now $t0.AddSeconds(10)
+        $script:runCalls | Should -Be 1
+        (Get-Calls 'NewVm').Count | Should -Be 0
+        ([regex]::Matches(($logs -join "`n"), 'admission: job 1: run 10 could not be read')).Count | Should -Be 1
+        Invoke-OrchestratorTick -Config $config -Journal $journal -Adapters $adapters -Now $t0.AddSeconds(61)
+        $script:runCalls | Should -Be 2
+        Invoke-OrchestratorTick -Config $config -Journal $journal -Adapters $adapters -Now $t0.AddSeconds(122)
+        $script:runCalls | Should -Be 3
+        (Get-Calls 'NewVm').Count | Should -Be 1
+    }
+    It 'reads the run of a job whose RunCheckedAt does not parse as if it was never checked, without throwing out of admission' {
+        # A hand-edited journal: the once-a-minute gate must not throw on it.
+        $world.Queued = @((New-QueuedJob 1 10 'app'))
+        $journal.SeenJobs['1'] = @{ RunId = [int64]10; Lane = 'app'; FirstSeenAt = $t0.ToString('o'); Foreign = $null; Repo = $null; RunCheckedAt = 'garbage' }
+        Invoke-OrchestratorTick -Config $config -Journal $journal -Adapters $adapters -Now $t0
+        ($logs -join "`n") | Should -Not -Match 'admission:'
+        (Get-Calls 'GetRun').Count | Should -Be 1
+        $journal.SeenJobs['1'].Foreign | Should -BeFalse
+        (ConvertTo-DateTimeOffset -Value $journal.SeenJobs['1'].RunCheckedAt) | Should -Be $t0
+        (Get-Calls 'NewVm').Count | Should -Be 1
     }
 }
 
@@ -342,6 +409,7 @@ Context 'settle' {
         (Get-Calls 'CommitCache').Count | Should -Be 1
     }
     It 'waits while GitHub still reports the job in progress at Off, then commits once it reports completed' {
+        $before = (Get-Calls 'GetRun').Count
         # GitHub's record can lag the guest's shutdown by a few seconds.
         $world.Jobs['1'] = [pscustomobject]@{ id = 1; run_id = 10; status = 'in_progress'; conclusion = $null; runner_name = $name }
         Set-Run 10
@@ -351,7 +419,7 @@ Context 'settle' {
         (Get-Calls 'DiscardCache').Count | Should -Be 0
         (Get-Calls 'CommitCache').Count | Should -Be 0
         (Get-Calls 'RemoveVm').Count | Should -Be 0
-        (Get-Calls 'GetRun').Count | Should -Be 0
+        (Get-Calls 'GetRun').Count | Should -Be $before
         Invoke-OrchestratorTick -Config $config -Journal $journal -Adapters $adapters -Now $t0.AddMinutes(20).AddSeconds(10)
         $journal.Vms[$name].SettleWaits | Should -Be 2
         Set-DoneJob 1 10 $name
@@ -557,6 +625,146 @@ Context 'handoff reconciliation' {
         Invoke-OrchestratorTick -Config $config -Journal $journal -Adapters $adapters -Now $t0.AddSeconds(320)
         (Get-Calls 'GetRunner').Count | Should -Be 0
     }
+    It 'forces a handed VM off when the job that took its runner comes from another repository, and leaves its own job queued' {
+        $world.Queued = @((New-QueuedJob 1 10 'model'))
+        Invoke-OrchestratorTick -Config $config -Journal $journal -Adapters $adapters -Now $t0
+        $name = @($journal.Vms.Keys)[0]
+        Invoke-OrchestratorTick -Config $config -Journal $journal -Adapters $adapters -Now $t0.AddSeconds(10)
+        $journal.Vms[$name].Phase | Should -Be 'handed'
+        Set-Run 99 'pull_request' 'feature' 'someone/slate'
+        $world.InProgress = @([pscustomobject]@{ id = 2; run_id = 99; status = 'in_progress'; labels = @('slate-win-model'); created_at = $t0.ToString('o'); runner_name = $name })
+        Invoke-OrchestratorTick -Config $config -Journal $journal -Adapters $adapters -Now $t0.AddSeconds(20)
+        (Get-Calls 'StopVmForce').Count | Should -Be 1
+        (Get-Calls 'RemoveRunner').Count | Should -Be 1
+        (Get-Calls 'DiscardCache').Count | Should -Be 1
+        (Get-Calls 'CommitCache').Count | Should -Be 0
+        $journal.Vms.ContainsKey($name) | Should -BeFalse
+        $journal.SeenJobs.ContainsKey('1') | Should -BeTrue
+        $journal.Retries.ContainsKey('1') | Should -BeFalse
+        $journal.SeenJobs['2'].Foreign | Should -BeTrue
+        @($logs) | Should -Contain "[warn] handoff: ${name} runs job 2 of someone/slate (not the trusted repository); forcing it off"
+        @($logs) | Should -Contain "[warn] ${name}: discard (runner taken by job 2 of someone/slate (not the trusted repository))"
+        # The job it was provisioned for gets a VM of its own in the same tick.
+        (Get-Calls 'NewVm').Count | Should -Be 2
+        @($journal.Vms.Values)[0].JobId | Should -Be 1
+    }
+    It 'forces a handed VM off when its runner runs a job without a lane label, which the lane listing never shows' {
+        # A JIT runner carries only its lane label today, so this is defence
+        # in depth: the reconciliation reads the whole listing, not the queue.
+        $world.Queued = @((New-QueuedJob 1 10 'model'))
+        Invoke-OrchestratorTick -Config $config -Journal $journal -Adapters $adapters -Now $t0
+        $name = @($journal.Vms.Keys)[0]
+        Invoke-OrchestratorTick -Config $config -Journal $journal -Adapters $adapters -Now $t0.AddSeconds(10)
+        Set-Run 99 'pull_request' 'feature' 'someone/slate'
+        $world.InProgress = @([pscustomobject]@{ id = 2; run_id = 99; status = 'in_progress'; labels = @('self-hosted'); created_at = $t0.ToString('o'); runner_name = $name })
+        Invoke-OrchestratorTick -Config $config -Journal $journal -Adapters $adapters -Now $t0.AddSeconds(20)
+        (Get-Calls 'StopVmForce').Count | Should -Be 1
+        (Get-Calls 'DiscardCache').Count | Should -Be 1
+        (Get-Calls 'CommitCache').Count | Should -Be 0
+        $journal.Vms.ContainsKey($name) | Should -BeFalse
+        $journal.Retries.ContainsKey('1') | Should -BeFalse
+        $journal.SeenJobs.ContainsKey('2') | Should -BeFalse -Because 'it is no lane job, so it never becomes a settle candidate'
+        @($logs) | Should -Contain "[warn] handoff: ${name} runs job 2 of someone/slate (not the trusted repository); forcing it off"
+        @($logs) | Should -Contain "[warn] ${name}: discard (runner taken by job 2 of someone/slate (not the trusted repository))"
+        (Get-Calls 'NewVm').Count | Should -Be 2
+    }
+    It 'forces a handed VM off when its runner runs a job of the trusted repository with <Case>, and says so' -ForEach @(
+        @{ Case = 'no lane label'; Labels = @('self-hosted') }
+        @{ Case = 'two lane labels'; Labels = @('slate-win-model', 'slate-win-rust') }
+    ) {
+        # The log says what is true: the run is the trusted repository's, so
+        # the job goes for its labels, not its repository.
+        $world.Queued = @((New-QueuedJob 1 10 'model'))
+        Invoke-OrchestratorTick -Config $config -Journal $journal -Adapters $adapters -Now $t0
+        $name = @($journal.Vms.Keys)[0]
+        Invoke-OrchestratorTick -Config $config -Journal $journal -Adapters $adapters -Now $t0.AddSeconds(10)
+        Set-Run 98
+        $world.InProgress = @([pscustomobject]@{ id = 2; run_id = 98; status = 'in_progress'; labels = $Labels; created_at = $t0.ToString('o'); runner_name = $name })
+        Invoke-OrchestratorTick -Config $config -Journal $journal -Adapters $adapters -Now $t0.AddSeconds(20)
+        (Get-Calls 'StopVmForce').Count | Should -Be 1
+        (Get-Calls 'DiscardCache').Count | Should -Be 1
+        (Get-Calls 'CommitCache').Count | Should -Be 0
+        $journal.Vms.ContainsKey($name) | Should -BeFalse
+        $journal.Retries.ContainsKey('1') | Should -BeFalse
+        @($logs) | Should -Contain "[warn] handoff: ${name} runs job 2 of coryj627/slate (no lane label); forcing it off"
+        @($logs) | Should -Contain "[warn] ${name}: discard (runner taken by job 2 of coryj627/slate (no lane label))"
+        ($logs -join "`n") | Should -Not -Match 'not the trusted repository'
+        (Get-Calls 'NewVm').Count | Should -Be 2
+    }
+    It 'forces a VM off at once for a job without a lane label even when its run cannot be read, naming an unknown repository' {
+        # Only the missing label is known, so that is what the log says.
+        $world.Queued = @((New-QueuedJob 1 10 'model'))
+        Invoke-OrchestratorTick -Config $config -Journal $journal -Adapters $adapters -Now $t0
+        $name = @($journal.Vms.Keys)[0]
+        Invoke-OrchestratorTick -Config $config -Journal $journal -Adapters $adapters -Now $t0.AddSeconds(10)
+        $adapters.GetRun = { param($id) & $script:record 'GetRun' @($id); throw '502' }
+        $world.InProgress = @([pscustomobject]@{ id = 2; run_id = 99; status = 'in_progress'; labels = @('self-hosted', 'Windows'); created_at = $t0.ToString('o'); runner_name = $name })
+        Invoke-OrchestratorTick -Config $config -Journal $journal -Adapters $adapters -Now $t0.AddSeconds(20)
+        (Get-Calls 'CommitCache').Count | Should -Be 0
+        $journal.Vms.ContainsKey($name) | Should -BeFalse
+        $journal.Retries.ContainsKey('1') | Should -BeFalse
+        @($logs) | Should -Contain "[warn] handoff: ${name} runs job 2 of an unknown repository (no lane label); forcing it off"
+        @($logs) | Should -Contain "[warn] ${name}: discard (runner taken by job 2 of an unknown repository (no lane label))"
+        (Get-Calls 'NewVm').Count | Should -Be 2
+    }
+    It 'decides from the answer admission remembered, without reading the run again' {
+        # Job 2 was seen queued (no slot was free for it), so its run was read then.
+        $world.Queued = @((New-QueuedJob 3 12 'shell' '2026-10-10T10:59:00Z'), (New-QueuedJob 1 10 'model' '2026-10-10T11:00:00Z'), (New-QueuedJob 2 11 'model' '2026-10-10T11:00:01Z'))
+        Invoke-OrchestratorTick -Config $config -Journal $journal -Adapters $adapters -Now $t0
+        $journal.SeenJobs['2'].Foreign | Should -BeFalse
+        $modelVm = @($journal.Vms.Values | Where-Object { $_.Lane -eq 'model' })[0]
+        Invoke-OrchestratorTick -Config $config -Journal $journal -Adapters $adapters -Now $t0.AddSeconds(10)
+        $world.Queued = @((New-QueuedJob 1 10 'model' '2026-10-10T11:00:00Z'))
+        $world.InProgress = @([pscustomobject]@{ id = 2; run_id = 11; status = 'in_progress'; labels = @('slate-win-model'); created_at = '2026-10-10T11:00:01Z'; runner_name = $modelVm.Name })
+        Invoke-OrchestratorTick -Config $config -Journal $journal -Adapters $adapters -Now $t0.AddSeconds(20)
+        $modelVm.JobId | Should -Be 2
+        @((Get-Calls 'GetRun') | Where-Object { [int64]$_.Args[0] -eq 11 }).Count | Should -Be 1
+    }
+    It 'forces a VM off on the answer admission remembered, naming the repository it remembered, without reading the run again' {
+        # Admission refused job 2 (a fork's run); GitHub then gave it this
+        # VM's runner, and by now the API cannot read the run.
+        $world.Queued = @((New-QueuedJob 3 12 'shell' '2026-10-10T10:59:00Z'), (New-QueuedJob 1 10 'model' '2026-10-10T11:00:00Z'), (New-QueuedJob 2 99 'model' '2026-10-10T11:00:01Z'))
+        Set-Run 99 'pull_request' 'feature' 'someone/slate'
+        Invoke-OrchestratorTick -Config $config -Journal $journal -Adapters $adapters -Now $t0
+        $journal.SeenJobs['2'].Foreign | Should -BeTrue
+        $journal.SeenJobs['2'].Repo | Should -Be 'someone/slate'
+        $modelVm = @($journal.Vms.Values | Where-Object { $_.Lane -eq 'model' })[0]
+        Invoke-OrchestratorTick -Config $config -Journal $journal -Adapters $adapters -Now $t0.AddSeconds(10)
+        $adapters.GetRun = { param($id) & $script:record 'GetRun' @($id); throw '502' }
+        $world.Queued = @((New-QueuedJob 1 10 'model' '2026-10-10T11:00:00Z'))
+        $world.InProgress = @([pscustomobject]@{ id = 2; run_id = 99; status = 'in_progress'; labels = @('slate-win-model'); created_at = '2026-10-10T11:00:01Z'; runner_name = $modelVm.Name })
+        Invoke-OrchestratorTick -Config $config -Journal $journal -Adapters $adapters -Now $t0.AddSeconds(20)
+        $journal.Vms.ContainsKey($modelVm.Name) | Should -BeFalse
+        $journal.Retries.ContainsKey('1') | Should -BeFalse
+        @((Get-Calls 'GetRun') | Where-Object { [int64]$_.Args[0] -eq 99 }).Count | Should -Be 1 -Because 'admission read the run once; the eviction uses what it remembered'
+        @($logs) | Should -Contain "[warn] handoff: $($modelVm.Name) runs job 2 of someone/slate (not the trusted repository); forcing it off"
+        @($logs) | Should -Contain "[warn] $($modelVm.Name): discard (runner taken by job 2 of someone/slate (not the trusted repository))"
+    }
+    It 'leaves a VM alone while the run of the job on it cannot be read, says so once a minute, and forces it off once the run reads foreign' {
+        $world.Queued = @((New-QueuedJob 1 10 'model'))
+        Invoke-OrchestratorTick -Config $config -Journal $journal -Adapters $adapters -Now $t0
+        $name = @($journal.Vms.Keys)[0]
+        Invoke-OrchestratorTick -Config $config -Journal $journal -Adapters $adapters -Now $t0.AddSeconds(10)
+        Set-Run 99 'pull_request' 'feature' 'someone/slate'
+        $script:runReadable = $false
+        $adapters.GetRun = { param($id) & $script:record 'GetRun' @($id); if (-not $script:runReadable) { throw '502' }; $script:world.Runs[[string]$id] }
+        $world.InProgress = @([pscustomobject]@{ id = 2; run_id = 99; status = 'in_progress'; labels = @('slate-win-model'); created_at = $t0.ToString('o'); runner_name = $name })
+        $failed = "handoff: ${name}: run 99 of job 2 could not be read"
+        foreach ($s in 20, 30, 50) { Invoke-OrchestratorTick -Config $config -Journal $journal -Adapters $adapters -Now $t0.AddSeconds($s) }
+        @((Get-Calls 'GetRun') | Where-Object { [int64]$_.Args[0] -eq 99 }).Count | Should -Be 1
+        @($logs | Where-Object { $_.Contains($failed) }).Count | Should -Be 1
+        $journal.Vms.ContainsKey($name) | Should -BeTrue
+        $journal.Vms[$name].Claimed | Should -BeFalse
+        (Get-Calls 'StopVmForce').Count | Should -Be 0
+        Invoke-OrchestratorTick -Config $config -Journal $journal -Adapters $adapters -Now $t0.AddSeconds(80)
+        @((Get-Calls 'GetRun') | Where-Object { [int64]$_.Args[0] -eq 99 }).Count | Should -Be 2
+        @($logs | Where-Object { $_.Contains($failed) }).Count | Should -Be 2
+        $script:runReadable = $true
+        Invoke-OrchestratorTick -Config $config -Journal $journal -Adapters $adapters -Now $t0.AddSeconds(140)
+        $journal.Vms.ContainsKey($name) | Should -BeFalse
+        $journal.Retries.ContainsKey('1') | Should -BeFalse
+        @($logs) | Should -Contain "[warn] handoff: ${name} runs job 2 of someone/slate (not the trusted repository); forcing it off"
+    }
 }
 
 Context 'shell lane' {
@@ -607,6 +815,22 @@ Context 'handed-phase guards' {
         Invoke-OrchestratorTick -Config $config -Journal $journal -Adapters $adapters -Now $t0.AddSeconds(320)
         $journal.Vms[$name].Claimed | Should -BeTrue
         (Get-Calls 'StopVmForce').Count | Should -Be 0
+    }
+    It 'registers no retry when a VM whose runner was seen busy shuts down without a job the host can resolve' {
+        # The runner ran something, so the image works: a job the host never
+        # saw must not strike the job this VM was provisioned for.
+        $world.Runner = [pscustomobject]@{ status = 'online'; busy = $true }
+        Invoke-OrchestratorTick -Config $config -Journal $journal -Adapters $adapters -Now $t0.AddSeconds(320)
+        $journal.Vms[$name].Claimed | Should -BeTrue
+        $world.VmStates[$name] = 'Off'
+        Invoke-OrchestratorTick -Config $config -Journal $journal -Adapters $adapters -Now $t0.AddMinutes(20)
+        $journal.Vms.Count | Should -Be 0
+        $journal.Retries.Count | Should -Be 0
+        (Get-Calls 'RemoveRunner').Count | Should -Be 1
+        (Get-Calls 'DiscardCache').Count | Should -Be 1
+        (Get-Calls 'CommitCache').Count | Should -Be 0
+        @($logs) | Should -Contain "[warn] ${name}: shut down without a job the host can resolve, although its runner was seen busy; no retry"
+        ($logs -join "`n") | Should -Not -Match 'guest bootstrap failure'
     }
     It 'tears down an unclaimed runner whose job vanished' {
         $world.Jobs['1'] = [pscustomobject]@{ id = 1; run_id = 10; status = 'completed'; conclusion = 'cancelled'; runner_name = $null }
@@ -659,6 +883,15 @@ Context 'handed-phase guards' {
         (Get-Calls 'GetRunner').Count | Should -Be 2
         $journal.Vms.Count | Should -Be 1
     }
+    It 'checks for a claim when ClaimCheckedAt does not parse, as if it was never checked' {
+        # A hand-edited journal: the gate must not throw out of the VM's update.
+        $world.Jobs['1'] = [pscustomobject]@{ id = 1; run_id = 10; status = 'queued'; conclusion = $null; runner_name = $null }
+        $journal.Vms[$name]['ClaimCheckedAt'] = 'garbage'
+        Invoke-OrchestratorTick -Config $config -Journal $journal -Adapters $adapters -Now $t0.AddSeconds(320)
+        ($logs -join "`n") | Should -Not -Match '\[error\]'
+        (Get-Calls 'GetRunner').Count | Should -Be 1
+        (ConvertTo-DateTimeOffset -Value $journal.Vms[$name].ClaimCheckedAt) | Should -Be $t0.AddSeconds(320)
+    }
     It 'stops reading the guest error once the runner is claimed' {
         # The bootstrap is behind a claimed runner; the WMI read each tick
         # would run for the whole job for nothing.
@@ -670,6 +903,252 @@ Context 'handed-phase guards' {
         Invoke-OrchestratorTick -Config $config -Journal $journal -Adapters $adapters -Now $t0.AddSeconds(330)
         Invoke-OrchestratorTick -Config $config -Journal $journal -Adapters $adapters -Now $t0.AddSeconds(340)
         (Get-Calls 'GetGuestError').Count | Should -Be $reads
+    }
+}
+
+Context 'publishing the state' {
+    It 'publishes after the first tick, again only when the state changed, and at least once a minute' {
+        Invoke-OrchestratorTick -Config $config -Journal $journal -Adapters $adapters -Now $t0
+        (Get-Calls 'PublishState').Count | Should -Be 1
+        $journal.PublishedState | Should -Be ([string]$world.Published[0])
+        ($journal.PublishedState | ConvertFrom-Json).slots | Should -Be 2
+        Invoke-OrchestratorTick -Config $config -Journal $journal -Adapters $adapters -Now $t0.AddSeconds(10)
+        (Get-Calls 'PublishState').Count | Should -Be 1
+        $world.Queued = @((New-QueuedJob 1 10 'app'))
+        Invoke-OrchestratorTick -Config $config -Journal $journal -Adapters $adapters -Now $t0.AddSeconds(20)
+        (Get-Calls 'PublishState').Count | Should -Be 2
+        $state = $journal.PublishedState | ConvertFrom-Json
+        @($state.running).Count | Should -Be 1
+        $state.running[0].lane | Should -Be 'app'
+        $world.Queued = @()
+        Invoke-OrchestratorTick -Config $config -Journal $journal -Adapters $adapters -Now $t0.AddSeconds(30)
+        (Get-Calls 'PublishState').Count | Should -Be 2
+        Invoke-OrchestratorTick -Config $config -Journal $journal -Adapters $adapters -Now $t0.AddSeconds(81)
+        (Get-Calls 'PublishState').Count | Should -Be 3 -Because 'the heartbeat refreshes after 60 s even when nothing changed'
+    }
+    It 'publishes the queue it would admit with unlimited slots, not the jobs it skipped' {
+        $world.Queued = @((New-QueuedJob 1 10 'app'), (New-QueuedJob 2 10 'rust'), (New-QueuedJob 3 10 'model'), (New-QueuedJob 4 10 'app'))
+        $journal.Retries['4'] = @{ Count = 3; NextAt = $t0.AddDays(-1).ToString('o') }
+        Invoke-OrchestratorTick -Config $config -Journal $journal -Adapters $adapters -Now $t0
+        $state = $journal.PublishedState | ConvertFrom-Json
+        @($state.running).Count | Should -Be 2
+        @($state.queued | ForEach-Object { $_.lane }) | Should -Be @('model')
+    }
+    It 'logs a failed publish once a minute and keeps ticking' {
+        $adapters.PublishState = { param($json) throw '403' }
+        { Invoke-OrchestratorTick -Config $config -Journal $journal -Adapters $adapters -Now $t0 } | Should -Not -Throw
+        Invoke-OrchestratorTick -Config $config -Journal $journal -Adapters $adapters -Now $t0.AddSeconds(10)
+        ([regex]::Matches(($logs -join "`n"), 'publish: 403')).Count | Should -Be 1
+        Invoke-OrchestratorTick -Config $config -Journal $journal -Adapters $adapters -Now $t0.AddSeconds(70)
+        ([regex]::Matches(($logs -join "`n"), 'publish: 403')).Count | Should -Be 2
+        $journal.PublishedState | Should -Be $null
+    }
+    It 'after a failed publish, tries again only once the failure is a minute old, even for a changed state, then publishes' {
+        $script:publishFails = $true
+        $adapters.PublishState = { param($json) & $script:record 'PublishState' @($json); if ($script:publishFails) { throw '403' }; [void]$script:world.Published.Add($json) }
+        $attempts = @()
+        for ($s = 0; $s -le 130; $s += 10) {
+            # The state changes at t0+70 (a job is admitted): no reason to try sooner.
+            if ($s -eq 70) { $world.Queued = @((New-QueuedJob 1 10 'app')) }
+            $before = (Get-Calls 'PublishState').Count
+            Invoke-OrchestratorTick -Config $config -Journal $journal -Adapters $adapters -Now $t0.AddSeconds($s)
+            if ((Get-Calls 'PublishState').Count -gt $before) { $attempts += $s }
+        }
+        $attempts | Should -Be @(0, 60, 120)
+        ([regex]::Matches(($logs -join "`n"), 'publish: 403')).Count | Should -Be 3
+        $journal.PublishedState | Should -Be $null
+        $script:publishFails = $false
+        Invoke-OrchestratorTick -Config $config -Journal $journal -Adapters $adapters -Now $t0.AddSeconds(180)
+        (Get-Calls 'PublishState').Count | Should -Be 4
+        $journal.PublishedState | Should -Be ([string]$world.Published[0])
+        @(($journal.PublishedState | ConvertFrom-Json).running).Count | Should -Be 1
+        $journal.PublishFailedAt | Should -Be $null
+    }
+    It 'Publish-HomeState takes no -Config (it never read one)' {
+        (Get-Command Publish-HomeState).Parameters.ContainsKey('Config') | Should -BeFalse
+    }
+    It 'counts a PublishFailedAt that does not parse as never, so a failed publish cannot throw out of the tick' {
+        # A hand-edited journal: the failure gate runs inside the tick's last
+        # catch, so reading it must never throw.
+        $journal.PublishFailedAt = 'garbage'
+        $adapters.PublishState = { param($json) & $script:record 'PublishState' @($json); throw '403' }
+        { Invoke-OrchestratorTick -Config $config -Journal $journal -Adapters $adapters -Now $t0 } | Should -Not -Throw
+        { Invoke-OrchestratorTick -Config $config -Journal $journal -Adapters $adapters -Now $t0.AddSeconds(10) } | Should -Not -Throw
+        (Get-Calls 'PublishState').Count | Should -Be 1 -Because 'the garbage counts as no failure, and the failure at t0 holds the next attempt for a minute'
+        ([regex]::Matches(($logs -join "`n"), 'publish: 403')).Count | Should -Be 1
+        ($logs -join "`n") | Should -Not -Match 'not recognized as a valid DateTime'
+        (ConvertTo-DateTimeOffset -Value $journal.PublishFailedAt) | Should -Be $t0
+    }
+    It 'counts a PublishedAt that does not parse as never published, so the next tick publishes and overwrites it' {
+        # A hand-edited journal: without the guard every publish attempt
+        # threw on the read, and the host stayed stale to the router.
+        $journal.PublishedAt = 'garbage'
+        { Invoke-OrchestratorTick -Config $config -Journal $journal -Adapters $adapters -Now $t0 } | Should -Not -Throw
+        (Get-Calls 'PublishState').Count | Should -Be 1
+        ($logs -join "`n") | Should -Not -Match 'publish:'
+        (ConvertTo-DateTimeOffset -Value $journal.PublishedAt) | Should -Be $t0
+        Invoke-OrchestratorTick -Config $config -Journal $journal -Adapters $adapters -Now $t0.AddSeconds(10)
+        (Get-Calls 'PublishState').Count | Should -Be 1 -Because 'the overwritten PublishedAt is a fresh heartbeat again'
+    }
+    It 'publishes nothing on a tick whose admission threw, so the state ages into stale, and publishes again on the next good tick' {
+        Invoke-OrchestratorTick -Config $config -Journal $journal -Adapters $adapters -Now $t0
+        (Get-Calls 'PublishState').Count | Should -Be 1
+        $listing = $adapters.GetLaneJobs
+        $adapters.GetLaneJobs = { & $script:record 'GetLaneJobs' @(); throw 'api down' }
+        for ($s = 10; $s -le 130; $s += 10) {
+            Invoke-OrchestratorTick -Config $config -Journal $journal -Adapters $adapters -Now $t0.AddSeconds($s)
+        }
+        (Get-Calls 'GetLaneJobs').Count | Should -Be 14
+        (Get-Calls 'PublishState').Count | Should -Be 1 -Because 'a host that cannot list or admit must look dead to the router, not idle'
+        ([regex]::Matches(($logs -join "`n"), '\[error\] admission: api down')).Count | Should -Be 13
+        $adapters.GetLaneJobs = $listing
+        Invoke-OrchestratorTick -Config $config -Journal $journal -Adapters $adapters -Now $t0.AddSeconds(140)
+        (Get-Calls 'PublishState').Count | Should -Be 2
+        $journal.PublishedState | Should -Be '{"v":1,"at":"2026-10-10T12:02:20Z","serving":true,"slots":2,"running":[],"queued":[]}'
+    }
+    It 'logs a state that cannot be built once a minute, as it logs a failed write' {
+        # A hand-edited journal: the VM's provisioning time does not parse.
+        $journal.Vms['slate-win-app-broken00'] = @{
+            Name = 'slate-win-app-broken00'; Lane = 'app'; Slot = 1; SlotIp = '10.77.0.11'; JobId = [int64]1; RunId = [int64]10
+            Dir = 'C:\slate-ci\vms\slate-win-app-broken00'; CachePath = $null; ForkGeneration = 3
+            Phase = 'handed'; StartedAt = 'not a time'; HandedAt = $t0.ToString('o'); RunnerId = 77; Claimed = $true; PendingCommit = $false
+            GuestError = $null; SettleWaits = 0; ClaimCheckedAt = $null
+        }
+        { Invoke-OrchestratorTick -Config $config -Journal $journal -Adapters $adapters -Now $t0 } | Should -Not -Throw
+        Invoke-OrchestratorTick -Config $config -Journal $journal -Adapters $adapters -Now $t0.AddSeconds(10)
+        ([regex]::Matches(($logs -join "`n"), '\[error\] publish: ')).Count | Should -Be 1
+        Invoke-OrchestratorTick -Config $config -Journal $journal -Adapters $adapters -Now $t0.AddSeconds(70)
+        ([regex]::Matches(($logs -join "`n"), '\[error\] publish: ')).Count | Should -Be 2
+        (Get-Calls 'PublishState').Count | Should -Be 0
+    }
+    It 'counts a job whose run is still unknown in the published queue, without admitting it' {
+        # The conservative direction: the router must not see a free slot
+        # that the host will hand to this job once its run is read.
+        $world.Queued = @((New-QueuedJob 1 10 'app' '2026-10-10T11:58:00Z'))
+        $adapters.GetRun = { param($id) & $script:record 'GetRun' @($id); throw '502' }
+        Invoke-OrchestratorTick -Config $config -Journal $journal -Adapters $adapters -Now $t0
+        (Get-Calls 'NewVm').Count | Should -Be 0
+        $journal.SeenJobs['1'].Foreign | Should -Be $null
+        $journal.PublishedState | Should -Be '{"v":1,"at":"2026-10-10T12:00:00Z","serving":true,"slots":2,"running":[],"queued":[{"lane":"app","since":"2026-10-10T11:58:00Z"}]}'
+        # The next tick does not read the run again, and the job still counts:
+        # the state is unchanged, so nothing is written.
+        Invoke-OrchestratorTick -Config $config -Journal $journal -Adapters $adapters -Now $t0.AddSeconds(10)
+        (Get-Calls 'GetRun').Count | Should -Be 1
+        (Get-Calls 'NewVm').Count | Should -Be 0
+        (Get-Calls 'PublishState').Count | Should -Be 1
+    }
+    It 'never publishes stray adapter output as a queued job' {
+        # Admission returns the publishable queue as its output, so anything
+        # an adapter writes to the pipeline inside it would join that queue.
+        $world.Queued = @((New-QueuedJob 1 10 'app'))
+        $adapters.StartVm = { param($n) & $script:record 'StartVm' @($n); throw 'start failed' }
+        $adapters.StopVmForce = { param($n) & $script:record 'StopVmForce' @($n); 'stopped' }
+        $adapters.DiscardCache = { param($c) & $script:record 'DiscardCache' @($c); 'discarded' }
+        $adapters.RemoveVm = { param($n, $d) & $script:record 'RemoveVm' @($n, $d); 'removed' }
+        Invoke-OrchestratorTick -Config $config -Journal $journal -Adapters $adapters -Now $t0
+        $journal.Vms.Count | Should -Be 0
+        $journal.Retries['1'].Count | Should -Be 1
+        (Get-Calls 'PublishState').Count | Should -Be 1
+        $journal.PublishedState | Should -Be '{"v":1,"at":"2026-10-10T12:00:00Z","serving":true,"slots":2,"running":[],"queued":[]}'
+        # A provisioning that succeeds, with a chatty StartVm.
+        $adapters.StartVm = { param($n) & $script:record 'StartVm' @($n); 'started' }
+        $world.Queued = @((New-QueuedJob 1 10 'app'), (New-QueuedJob 2 11 'rust'))
+        Invoke-OrchestratorTick -Config $config -Journal $journal -Adapters $adapters -Now $t0.AddSeconds(10)
+        $journal.Vms.Count | Should -Be 1
+        (Get-Calls 'PublishState').Count | Should -Be 2
+        $journal.PublishedState | Should -Be '{"v":1,"at":"2026-10-10T12:00:10Z","serving":true,"slots":2,"running":[{"lane":"rust","since":"2026-10-10T12:00:10Z"}],"queued":[]}'
+        ($logs -join "`n") | Should -Not -Match 'publish:'
+    }
+}
+
+Context 'log retention' {
+    It 'prunes once per local day, at the first tick, and remembers the day in the journal' {
+        Invoke-OrchestratorTick -Config $config -Journal $journal -Adapters $adapters -Now $t0
+        (Get-Calls 'RemoveLog').Count | Should -Be 1
+        (Get-Calls 'RemoveLog')[0].Args[0] | Should -Be 'orchestrator-2026-09-01.log'
+        $journal.LogsPrunedOn | Should -Be $t0.ToLocalTime().ToString('yyyy-MM-dd', [cultureinfo]::InvariantCulture)
+        Invoke-OrchestratorTick -Config $config -Journal $journal -Adapters $adapters -Now $t0.AddMinutes(5)
+        (Get-Calls 'ListLogs').Count | Should -Be 1
+        Invoke-OrchestratorTick -Config $config -Journal $journal -Adapters $adapters -Now $t0.AddDays(1)
+        (Get-Calls 'ListLogs').Count | Should -Be 2
+    }
+    It 'logs and continues when a delete fails' {
+        $adapters.RemoveLog = { param($name) throw 'in use' }
+        { Invoke-OrchestratorTick -Config $config -Journal $journal -Adapters $adapters -Now $t0 } | Should -Not -Throw
+        ($logs -join "`n") | Should -Match 'logs: orchestrator-2026-09-01.log: in use'
+        $journal.LogsPrunedOn | Should -Not -Be $null
+    }
+    It 'the startup sweep forgets the day so the first tick prunes again' {
+        $journal.LogsPrunedOn = '2026-10-10'
+        Invoke-StartupSweep -Config $config -Journal $journal -Adapters $adapters
+        $journal.LogsPrunedOn | Should -Be $null
+    }
+}
+
+Context 'golden acceptance' {
+    BeforeAll {
+        function Complete-GreenJob([string]$Lane, [datetimeoffset]$At, [string]$Conclusion = 'success', [string]$Event = 'push') {
+            $script:jobId++
+            $runId = $script:jobId * 10
+            $script:world.Queued = @((New-QueuedJob $script:jobId $runId $Lane))
+            Set-Run $runId $Event $(if ($Event -eq 'push') { 'main' } else { 'feature' })
+            Invoke-OrchestratorTick -Config $script:config -Journal $script:journal -Adapters $script:adapters -Now $At
+            $name = @($script:journal.Vms.Keys | Where-Object { $script:journal.Vms[$_].JobId -eq $script:jobId })[0]
+            Invoke-OrchestratorTick -Config $script:config -Journal $script:journal -Adapters $script:adapters -Now $At.AddSeconds(10)
+            $script:world.Queued = @()
+            $script:world.VmStates[$name] = 'Off'
+            Set-DoneJob $script:jobId $runId $name $Conclusion
+            Invoke-OrchestratorTick -Config $script:config -Journal $script:journal -Adapters $script:adapters -Now $At.AddMinutes(20)
+        }
+    }
+    BeforeEach { $script:jobId = 100 }
+    It 'records each lane that went green on a VM newer than the golden, and logs once when all four did' {
+        Complete-GreenJob 'rust' $t0
+        $journal.GoldenAccepted.Golden | Should -Be '2026-10-10T11:00:00Z'
+        @($journal.GoldenAccepted.Lanes) | Should -Be @('rust')
+        $journal.GoldenAccepted.Complete | Should -BeFalse
+        Complete-GreenJob 'app' $t0.AddHours(1)
+        Complete-GreenJob 'rust' $t0.AddHours(2)
+        Complete-GreenJob 'model' $t0.AddHours(3)
+        @($journal.GoldenAccepted.Lanes | Sort-Object) | Should -Be @('app', 'model', 'rust')
+        $journal.GoldenAccepted.Complete | Should -BeFalse
+        Complete-GreenJob 'shell' $t0.AddHours(4)
+        $journal.GoldenAccepted.Complete | Should -BeTrue
+        ([regex]::Matches(($logs -join "`n"), 'golden: rust, app, model and shell are green on the current image')).Count | Should -Be 1
+        Complete-GreenJob 'app' $t0.AddHours(5)
+        ([regex]::Matches(($logs -join "`n"), 'green on the current image')).Count | Should -Be 1
+    }
+    It 'survives the journal being written and read back between two green jobs' {
+        Complete-GreenJob 'rust' $t0
+        $p = Join-Path $TestDrive 'journal.json'
+        Write-Journal -Path $p -Journal $journal
+        $script:journal = Read-Journal -Path $p
+        Complete-GreenJob 'app' $t0.AddHours(1)
+        @($journal.GoldenAccepted.Lanes | Sort-Object) | Should -Be @('app', 'rust')
+    }
+    It 'ignores a green job on a VM provisioned before the golden was sealed' {
+        $world.GoldenStamp = $t0.AddMinutes(5).ToString('o')
+        Complete-GreenJob 'rust' $t0
+        @($journal.GoldenAccepted.Lanes).Count | Should -Be 0
+    }
+    It 'starts over when the golden changes' {
+        Complete-GreenJob 'rust' $t0
+        $world.GoldenStamp = '2026-10-12T01:00:00Z'
+        Complete-GreenJob 'rust' $t0.AddDays(2)
+        $journal.GoldenAccepted.Golden | Should -Be '2026-10-12T01:00:00Z'
+        @($journal.GoldenAccepted.Lanes) | Should -Be @('rust')
+    }
+    It 'records nothing for a red job, and records a green pull-request job (the image ran it, whatever the cache did)' {
+        Complete-GreenJob 'app' $t0 'failure'
+        $journal.GoldenAccepted | Should -Be $null
+        Complete-GreenJob 'app' $t0.AddHours(1) 'success' 'pull_request'
+        @($journal.GoldenAccepted.Lanes) | Should -Be @('app')
+    }
+    It 'a failing stamp read never wedges the settle' {
+        $adapters.GetGoldenStamp = { throw 'disk gone' }
+        Complete-GreenJob 'rust' $t0
+        $journal.Vms.Count | Should -Be 0
+        ($logs -join "`n") | Should -Match 'golden: disk gone'
     }
 }
 
@@ -750,6 +1229,15 @@ Describe 'orchestrator.ps1' {
         $golden = $text.IndexOf('golden disk missing or not sealed')
         $golden | Should -BeGreaterThan $text.IndexOf('token missing at')
         $golden | Should -BeLessThan $text.IndexOf('Initialize-GitHubAdapter')
+    }
+    It 'names the daily log file through the module''s helper, as the log pruner parses it' {
+        # Text-level: under ar-SA or th-TH, Get-Date -Format writes a Hijri or
+        # Buddhist year, a name Get-ExpiredLogNames reads as another date. The
+        # module names the file once (Get-OrchestratorLogName, tested there).
+        $text = Get-Content -Raw (Join-Path $PSScriptRoot '..' 'orchestrator.ps1')
+        $text | Should -Match ([regex]::Escape('Write-CiLog -Path (Join-Path $config.LogDir (Get-OrchestratorLogName -Now ([datetimeoffset]::Now)))'))
+        $text | Should -Not -Match 'orchestrator-\{0\}'
+        $text | Should -Not -Match 'Get-Date\s+-Format'
     }
     It 'polls only the configured routed workflows and logs a low API budget at warn' {
         $text = Get-Content -Raw (Join-Path $PSScriptRoot '..' 'orchestrator.ps1')
