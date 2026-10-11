@@ -156,9 +156,10 @@ points at the table.
 `max(since + duration_home(lane), now + OVERRUN_FLOOR) + HANDOVER`; more
 running entries than slots keep the latest-ending ones. Each queued entry,
 oldest first, takes the earliest-free slot for `duration_home(lane) +
-HANDOVER`. A running or queued entry whose lane the router does not know, or whose
-time it cannot read, occupies its slot for the longest home duration in
-the table: finite and conservative. Then every other run whose routing
+HANDOVER`. A running entry whose time the router cannot read is taken as having
+just started (its own home duration from now); an entry whose lane the
+router does not know occupies its slot for the longest home duration in
+the table: finite and conservative either way. Then every other run whose routing
 job started before this run's, or completed less than 30 s before the
 state's `at` (its lanes may not be published yet), has its own allocation
 replayed, oldest first, against the schedule so far: its free count, this
@@ -286,7 +287,7 @@ at the matching path.
 **Decision.** A pure function
 
 ```
-decide(mode, lanes, state_text, now, run_started, concurrent, *,
+decide(mode, lanes, state_text, now, concurrent, *,
        stale_seconds, slots_max, event, head_repo, repo, durations)
   -> {lane: Decision(pool, reason)}, Summary
 ```
@@ -304,8 +305,10 @@ mode table with case and spaces; an empty lane list; a lane missing from
 the table (rejected with a reason, outputs withheld, so the lane takes the
 vendor fallback); a replay line that reproduces a decision. `main()` wraps
 it in the two optional reads (`gh api`, 15 s each, one retry, `stderr` in
-the error, both pinned through an injected `run=`), made only after the
-fork rule and the state's parse have not already settled the answer; then
+the error, both pinned through an injected `run=`), made only when neither
+the fork rule nor the state's death test has already settled the answer
+(the run's start time is read only to order the listing, so `decide`
+never sees it); then
 the outputs, written first, and the summary, whose failure is a warning;
 any exception makes every lane a vendor lane with the exception's text in
 the reason and a `::warning::` annotation (escaped for the annotation
