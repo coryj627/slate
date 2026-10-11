@@ -26,25 +26,36 @@ BeforeAll {
         model = "format('namespace-profile-winx64-fast{0};overrides.cache-tag=slate-windows-model', github.ref != 'refs/heads/main' && '-pr' || '')"
     }
     function Get-Predicate([string]$Pool) { "(needs.route.outputs.attempt == github.run_attempt && needs.route.outputs.${Pool} == 'home')" }
+    # One whole line at job-key indentation, so a step-level copy of it does not count.
+    function Get-JobLine([string]$Line) { '(?m)^    ' + [regex]::Escape($Line) + '[ \t]*\r?$' }
+    # The Namespace cache step: the predicate's negation as its `if`, then its `uses`, with only comment lines between.
+    function Get-CacheGate([string]$Predicate) {
+        '(?m)^        ' + [regex]::Escape("if: `${{ !$Predicate }}") + '[ \t]*\r?\n(?:[ \t]*#[^\n]*\n)*        uses: namespacelabs/nscloud-cache-action@'
+    }
 }
 
 Describe 'windows.yml routing through the router' {
-    It 'has one routing job on hosted Linux that runs only on home or home-only, with both permissions, the sparse checkout, the token and continue-on-error on both steps' {
+    It 'has one routing job on hosted Linux that runs only on home or home-only, with both permissions, the sparse checkout, the token, the step id the outputs read, a five-minute timeout and continue-on-error on the job and both steps' {
         $route = Get-JobBlock $windows 'route'
         $route | Should -Not -BeNullOrEmpty
         $route | Should -Match 'name: Route Windows lanes'
         $route.Contains("if: `${{ vars.WINDOWS_RUNNER_MODE == 'home' || vars.WINDOWS_RUNNER_MODE == 'home-only' }}") | Should -BeTrue
         $route | Should -Match 'runs-on: ubuntu-latest'
+        $route | Should -Match (Get-JobLine 'timeout-minutes: 5')
+        # On the job, so a timeout or a lost runner cannot fail the run either; and on each of the two steps.
+        $route | Should -Match (Get-JobLine 'continue-on-error: true') -Because 'step-level continue-on-error does not cover a job timeout or a lost runner'
+        ([regex]::Matches($route, '(?m)^        continue-on-error: true[ \t]*\r?$')).Count | Should -Be 2
         $route | Should -Match '(?m)^\s+permissions:\r?\n\s+actions: read\r?\n\s+contents: read'
         $route | Should -Match 'sparse-checkout: ci/windows-runner/route'
         $route | Should -Match 'persist-credentials: false'
-        ([regex]::Matches($route, 'continue-on-error: true')).Count | Should -Be 2
-        foreach ($env in 'GH_TOKEN: ${{ github.token }}', 'WINDOWS_RUNNER_MODE: ${{ vars.WINDOWS_RUNNER_MODE }}', 'WINDOWS_HOME_STATE: ${{ vars.WINDOWS_HOME_STATE }}',
+        foreach ($entry in 'GH_TOKEN: ${{ github.token }}', 'WINDOWS_RUNNER_MODE: ${{ vars.WINDOWS_RUNNER_MODE }}', 'WINDOWS_HOME_STATE: ${{ vars.WINDOWS_HOME_STATE }}',
             'ROUTE_LANES: rust,app,model-0,model-1', 'ROUTE_ATTEMPT: ${{ github.run_attempt }}', 'ROUTE_RUN_ID: ${{ github.run_id }}',
             'ROUTE_EVENT: ${{ github.event_name }}', 'ROUTE_HEAD_REPO: ${{ github.event.pull_request.head.repo.full_name }}', 'ROUTE_REPO: ${{ github.repository }}') {
-            $route.Contains($env) | Should -BeTrue -Because "the routing step needs $env"
+            $route.Contains($entry) | Should -BeTrue -Because "the routing step needs $entry"
         }
         $route | Should -Match 'run: python3 ci/windows-runner/route/route\.py'
+        # Every output below reads steps.route: without this id they are all empty and every lane takes the vendor.
+        $route | Should -Match '(?m)^        id: route[ \t]*\r?$'
         foreach ($output in 'attempt', 'rust-pool', 'app-pool', 'model-0-pool', 'model-1-pool') {
             $route.Contains("      ${output}: `${{ steps.route.outputs.$output }}") | Should -BeTrue -Because "output $output"
         }
@@ -53,31 +64,36 @@ Describe 'windows.yml routing through the router' {
         foreach ($pair in @(@('rust-tests', 'rust', 'rust'), @('windows', 'app', 'app'))) {
             $block = Get-JobBlock $windows $pair[0]
             $block | Should -Match '(?m)^    needs: \[route\]'
-            $block.Contains("if: `${{ !cancelled() }}") | Should -BeTrue
+            $block | Should -Match (Get-JobLine 'if: ${{ !cancelled() }}') -Because "lane $($pair[0]) must run when route was skipped or failed"
             $block.Contains("runs-on: `${{ $(Get-Predicate "$($pair[1])-pool") && 'slate-win-$($pair[1])' || $($vendor[$pair[2]]) }}") | Should -BeTrue -Because "lane $($pair[0])"
-            $block.Contains("if: `${{ !$(Get-Predicate "$($pair[1])-pool") }}") | Should -BeTrue -Because "the cache gate of $($pair[0])"
+            $block | Should -Match (Get-CacheGate (Get-Predicate "$($pair[1])-pool")) -Because "the cache gate of $($pair[0])"
         }
         $shards = Get-JobBlock $windows 'windows-model-shard'
         $shards | Should -Match '(?m)^    needs: \[route\]'
-        $shards.Contains("if: `${{ !cancelled() }}") | Should -BeTrue
+        $shards | Should -Match (Get-JobLine 'if: ${{ !cancelled() }}') -Because 'the model shards must run when route was skipped or failed'
         $selector = "(needs.route.outputs.attempt == github.run_attempt && ((matrix.shard == 0 && needs.route.outputs.model-0-pool == 'home') || (matrix.shard == 1 && needs.route.outputs.model-1-pool == 'home')))"
         $shards.Contains("runs-on: `${{ $selector && 'slate-win-model' || $($vendor.model) }}") | Should -BeTrue
-        $shards.Contains("if: `${{ !$selector }}") | Should -BeTrue
+        $shards | Should -Match (Get-CacheGate $selector) -Because 'the cache gate of windows-model-shard'
         ([regex]::Matches($windows, 'namespacelabs/nscloud-cache-action')).Count | Should -Be 3
     }
-    It 'runs the shell gate on windows-latest in every mode but home-only, and only after a green app build whatever happened to route' {
+    It 'runs the shell gate on windows-latest in every mode but home-only, and for a fork pull request even then, and only after a green app build whatever happened to route' {
         $flaui = Get-JobBlock $windows 'flaui'
-        $flaui.Contains("runs-on: `${{ vars.WINDOWS_RUNNER_MODE == 'home-only' && 'slate-win-shell' || 'windows-latest' }}") | Should -BeTrue
-        $flaui.Contains("if: `${{ !cancelled() && needs.windows.result == 'success' }}") | Should -BeTrue
+        $flaui | Should -Match '(?m)^    runs-on: \$\{\{ .* \|\| ''windows-latest'' \}\}[ \t]*\r?$' -Because 'today''s provider is the fallback, verbatim'
+        # home-only sends it home only for a run of this repository: a fork never goes home.
+        $flaui | Should -Match (Get-JobLine "runs-on: `${{ (vars.WINDOWS_RUNNER_MODE == 'home-only' && (github.event_name != 'pull_request' || github.event.pull_request.head.repo.full_name == github.repository)) && 'slate-win-shell' || 'windows-latest' }}")
+        $flaui | Should -Match (Get-JobLine "if: `${{ !cancelled() && needs.windows.result == 'success' }}")
     }
-    It 'the gate waits on route too and names the pools when it fails' {
+    It 'the gate waits on route too, runs whatever route did, and names the pools and the routing job''s result when it fails' {
         $gate = Get-JobBlock $windows 'gate'
         $gate | Should -Match ([regex]::Escape('needs: [route, rust-tests, windows, windows-model, flaui]'))
-        $gate | Should -Match 'pools: rust=\$\{\{ needs\.route\.outputs\.rust-pool \}\}'
+        # Without always() the gate is skipped with a skipped route (every run outside home and home-only), and a
+        # skipped required check counts as passing.
+        $gate | Should -Match (Get-JobLine 'if: ${{ always() }}')
+        $gate.Contains('echo "::error::rust-tests=${{ needs.rust-tests.result }} app=${{ needs.windows.result }} model=${{ needs.windows-model.result }} flaui=${{ needs.flaui.result }} route=${{ needs.route.result }} pools: rust=${{ needs.route.outputs.rust-pool }} app=${{ needs.route.outputs.app-pool }} model-0=${{ needs.route.outputs.model-0-pool }} model-1=${{ needs.route.outputs.model-1-pool }} (router attempt ${{ needs.route.outputs.attempt }} of ${{ github.run_attempt }})"') | Should -BeTrue
     }
     It 'every routed lane prints its runner first' {
         foreach ($job in 'rust-tests', 'windows', 'windows-model-shard') {
-            (Get-JobBlock $windows $job) | Should -Match '- name: Record the runner'
+            (Get-JobBlock $windows $job) | Should -Match '(?m)^    steps:\r?\n      - name: Record the runner\r?\n        run: [^\n]*\$\{\{ runner\.name \}\}' -Because "$job's first step names the effective pool"
         }
     }
     It 'keeps no bare vendor runs-on, never compares the variable with namespace, and reads it only where the spec says' {
@@ -93,8 +109,13 @@ Describe 'windows.yml routing through the router' {
         ([regex]::Matches($windows, [regex]::Escape("- 'ci/windows-runner/route/**'"))).Count | Should -Be 2
     }
     It 'documents the modes, the published state and the full re-run in the header' {
-        $windows | Should -Match 'self-hosted-windows-runner\.md'
-        $joined = $windows -replace '\r?\n#\s*', ' '
+        # The header is the comment block before the first key; code lines also say home-only and WINDOWS_HOME_STATE.
+        $end = $windows.IndexOf("`nname: windows")
+        $end | Should -BeGreaterThan 0
+        $header = $windows.Substring(0, $end)
+        $header | Should -Not -Match '(?m)^[ \t]*[^#\s]' -Because 'everything before name: windows is the header comment'
+        $header | Should -Match 'self-hosted-windows-runner\.md'
+        $joined = $header -replace '\r?\n#\s*', ' '
         foreach ($phrase in 'home-only', 'WINDOWS_HOME_STATE', 'Re-run all jobs', "anything else, including unset, is today's providers") {
             $joined | Should -Match ([regex]::Escape($phrase))
         }
@@ -152,7 +173,9 @@ Describe 'windows-runner-tests.yml path filters' {
     }
     It 'runs the router''s Python tests even when Pester failed' {
         $lane | Should -Match ([regex]::Escape('python -I -m unittest discover -v -s ci/windows-runner/route/tests -t ci/windows-runner/route'))
-        $step = $lane.Substring($lane.IndexOf("Run the router's tests"))
-        $step.Substring(0, 400) | Should -Match ([regex]::Escape('if: ${{ !cancelled() }}'))
+        # The step runs to the next step or the end of the file.
+        $step = [regex]::Match($lane, "(?s)- name: Run the router's tests.*?(?=\n      - name:|\z)").Value
+        $step | Should -Not -BeNullOrEmpty
+        $step | Should -Match '(?m)^        if: \$\{\{ !cancelled\(\) \}\}[ \t]*\r?$'
     }
 }

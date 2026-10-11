@@ -41,17 +41,22 @@
 # pool on the owner's desktop (one throwaway Hyper-V VM per job, labels
 # slate-win-{rust,app,model}); when none is free it queues there only if
 # it would still finish inside the run's critical path (the app lane plus
-# the shell gate), and otherwise runs on Namespace at once. A state older
-# than two minutes, or one that says the host is not serving, sends every
-# lane to Namespace by itself. `home-only` queues every lane at home
-# (golden-image validation, fidelity runs). `namespace` or anything else,
-# including unset, is today's providers, verbatim, and the routing job
-# does not run at all: a run that cannot read repository variables (a
-# fork or Dependabot pull request) never waits on the home host, and a
-# fork pull request is sent to Namespace by the router and refused and
-# evicted by the host even if its copy of the router says otherwise. The
-# shell gate stays on GitHub-hosted windows-latest in every mode but
-# home-only: free on a public repository and faster than the home pool.
+# the shell gate), and otherwise runs on Namespace at once. A state whose
+# `at` is more than 180 s (three minutes) before the routing job's own
+# clock is stale; a stale state, or one that says the host is not
+# serving, sends every lane to Namespace by itself. `home-only` queues
+# every lane at home (golden-image validation, fidelity runs).
+# `namespace` or anything else, including unset, is today's providers,
+# verbatim, and the routing job does not run at all: a run that cannot
+# read repository variables (a fork or Dependabot pull request) never
+# waits on the home host. A fork
+# pull request runs on today's providers in every mode, home-only
+# included: the router applies its fork rule before the mode, the shell
+# gate's runs-on carries the same rule, and the host refuses and evicts
+# a fork's job even if its copy of the router or of this workflow says
+# otherwise. The shell gate stays on GitHub-hosted windows-latest in
+# every mode but home-only: free on a public repository and faster than
+# the home pool.
 # ci/windows-runner/route/route.py is the rule; its step summary shows
 # what each run saw and decided, with a replay line. A lane trusts the
 # router's answer only in the attempt it ran in, so "Re-run failed jobs"
@@ -157,14 +162,16 @@ jobs:
   # The rule lives in ci/windows-runner/route/route.py (spec §3–§5): it
   # reads the state the host publishes (vars) and decides a pool per lane.
   # It runs only when the mode is home or home-only and never fails the
-  # run: both steps continue on error, and every routed lane falls back to
-  # the vendor when an output is missing or was written by an earlier
-  # attempt.
+  # run: the job and both steps continue on error (on the job, a timeout or
+  # a lost runner cannot fail the run either, and needs.route.result still
+  # reports it), and every routed lane falls back to the vendor when an
+  # output is missing or was written by an earlier attempt.
   route:
     name: Route Windows lanes
     if: ${{ vars.WINDOWS_RUNNER_MODE == 'home' || vars.WINDOWS_RUNNER_MODE == 'home-only' }}
     runs-on: ubuntu-latest
     timeout-minutes: 5
+    continue-on-error: true
     permissions:
       actions: read
       contents: read
@@ -787,7 +794,7 @@ jobs:
     name: shell accessibility gate (windows x64)
     needs: [windows]
     if: ${{ !cancelled() && needs.windows.result == 'success' }}
-    runs-on: ${{ vars.WINDOWS_RUNNER_MODE == 'home-only' && 'slate-win-shell' || 'windows-latest' }}
+    runs-on: ${{ (vars.WINDOWS_RUNNER_MODE == 'home-only' && (github.event_name != 'pull_request' || github.event.pull_request.head.repo.full_name == github.repository)) && 'slate-win-shell' || 'windows-latest' }}
     timeout-minutes: 20
     steps:
       - name: Set up .NET 10
@@ -846,6 +853,6 @@ jobs:
       - name: Verify all windows lanes succeeded
         run: |
           if [ "${{ needs.rust-tests.result }}" != "success" ] || [ "${{ needs.windows.result }}" != "success" ] || [ "${{ needs.windows-model.result }}" != "success" ] || [ "${{ needs.flaui.result }}" != "success" ]; then
-            echo "::error::rust-tests=${{ needs.rust-tests.result }} app=${{ needs.windows.result }} model=${{ needs.windows-model.result }} flaui=${{ needs.flaui.result }} pools: rust=${{ needs.route.outputs.rust-pool }} app=${{ needs.route.outputs.app-pool }} model-0=${{ needs.route.outputs.model-0-pool }} model-1=${{ needs.route.outputs.model-1-pool }} (router attempt ${{ needs.route.outputs.attempt }} of ${{ github.run_attempt }})"
+            echo "::error::rust-tests=${{ needs.rust-tests.result }} app=${{ needs.windows.result }} model=${{ needs.windows-model.result }} flaui=${{ needs.flaui.result }} route=${{ needs.route.result }} pools: rust=${{ needs.route.outputs.rust-pool }} app=${{ needs.route.outputs.app-pool }} model-0=${{ needs.route.outputs.model-0-pool }} model-1=${{ needs.route.outputs.model-1-pool }} (router attempt ${{ needs.route.outputs.attempt }} of ${{ github.run_attempt }})"
             exit 1
           fi
