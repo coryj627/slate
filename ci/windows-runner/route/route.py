@@ -395,10 +395,10 @@ def fetch_concurrent(repo, run_id, run_started, get):
     "Before" compares attempt starts (run_start), ties going to the lower
     id, so every router agrees on the order. Only the newest ten are
     inspected, and a run counts when its routing job is queued or in
-    progress (None) or completed (its completion time; decide keeps it only
-    inside the margin before the state's `at`). A completed job without a
-    readable completion time counts as still running: toward the vendor.
-    Oldest first.
+    progress (None) or completed (its completion time; decide_from_occupancy
+    keeps it only inside the margin before the state's `at`). A completed
+    job without a readable completion time counts as still running: toward
+    the vendor. Oldest first.
     """
     this = int(run_id)
     starts = {}

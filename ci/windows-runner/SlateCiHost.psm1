@@ -1067,7 +1067,7 @@ function Invoke-Admission {
             # unknown run is read at most once a minute, each failed read is
             # logged, and the VM is left alone until the answer is known.
             $evict = $true
-            $repo = 'an unknown repository'
+            $repo = Format-RunRepository -Run $null
             $why = 'not the trusted repository'
             if ($job.Lane) {
                 $check = Update-SeenJob -Config $Config -Journal $Journal -Adapters $Adapters -Job $job -Now $Now

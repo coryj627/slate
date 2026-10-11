@@ -717,11 +717,26 @@ Describe 'Get-ExpiredLogNames' {
 }
 
 Describe 'Get-OrchestratorLogName and Get-OrchestratorLogDate' {
-    BeforeAll { $script:at = [datetimeoffset]::Parse('2026-10-10T23:30:00Z', [cultureinfo]::InvariantCulture) }
+    BeforeAll {
+        # Mid-June: no common zone changes its offset within 40 days of it, so
+        # the absolute days added below are the local days they look like.
+        $script:at = [datetimeoffset]::Parse('2026-06-10T23:30:00Z', [cultureinfo]::InvariantCulture)
+    }
     It 'name the daily file by the local date, in the invariant culture' {
         $day = $at.ToLocalTime().ToString('yyyy-MM-dd', [cultureinfo]::InvariantCulture)
         Get-OrchestratorLogDate -Now $at | Should -BeExactly $day
         Get-OrchestratorLogName -Now $at | Should -BeExactly "orchestrator-$day.log"
+    }
+    It 'name the day by the local date, not the UTC one, for <Case>' -ForEach @(
+        # East of UTC the first falls on a later local day than its UTC day, west of UTC the second falls on an
+        # earlier one: between them the UTC date is wrong in every zone but UTC itself, whatever zone the host is in.
+        @{ Case = 'an instant half an hour before UTC midnight'; Utc = '2026-06-10T23:30:00Z' }
+        @{ Case = 'an instant half an hour after UTC midnight'; Utc = '2026-06-11T00:30:00Z' }
+    ) {
+        $now = [datetimeoffset]::Parse($Utc, [cultureinfo]::InvariantCulture)
+        $day = $now.ToLocalTime().ToString('yyyy-MM-dd', [cultureinfo]::InvariantCulture)
+        Get-OrchestratorLogDate -Now $now | Should -BeExactly $day
+        Get-OrchestratorLogName -Now $now | Should -BeExactly "orchestrator-$day.log"
     }
     It 'agree with the reader: the name the writer gives expires after the retention, never before' {
         $name = Get-OrchestratorLogName -Now $at
@@ -737,7 +752,7 @@ Describe 'Get-OrchestratorLogName and Get-OrchestratorLogDate' {
         $before = $thread.CurrentCulture
         try {
             $thread.CurrentCulture = $info
-            Get-OrchestratorLogName -Now $at | Should -Match '^orchestrator-2026-10-1[01]\.log$'
+            Get-OrchestratorLogName -Now $at | Should -Match '^orchestrator-2026-06-1[01]\.log$'
         } finally { $thread.CurrentCulture = $before }
     }
 }

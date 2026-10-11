@@ -1239,7 +1239,9 @@ rights. Have the Windows 11 Pro key ready: the build asks for it again.
    ```
 
 5. Build. `-Rotate` makes the build rename the sealed disk first, and it
-   prints `Rotated the sealed image to …`:
+   prints `Rotated the sealed image to …`. It refuses while any
+   `slate-win-*` VM exists, so stop the loop and let them finish first
+   (step 1):
 
    ```powershell
    .\ci\windows-runner\golden\build-golden.ps1 -IsoPath C:\Users\cory\Downloads\Windows11_Client_x64_en-us_26300_9457.iso -Rotate
@@ -1696,7 +1698,11 @@ Remove-Item -LiteralPath C:\slate-ci\golden\win11-runner.vhdx -Force
 
 A `-Rotate` refuses an unsealed leftover; remove `win11-runner.vhdx` by
 hand, then rebuild. In a refresh the sealed disk is already at
-`win11-runner.prev.vhdx`, and the rebuild leaves it there.
+`win11-runner.prev.vhdx`, and the rebuild leaves it there. A leftover
+`win11-runner.prev.rotating.vhdx` from an interrupted rotation makes the
+next `-Rotate` refuse; if `win11-runner.prev.vhdx` is missing, rename the
+leftover back to it by hand (it is the older rollback) and run the build
+again.
 
 ### Reading a job VM's logs
 

@@ -215,7 +215,7 @@ class Allocate(unittest.TestCase):
 
 
 class Replay(unittest.TestCase):
-    """Spec §3: each earlier router's own allocation, oldest first, against the schedule so far."""
+    """Spec §3: each earlier router's own allocation, the same for every one, against the schedule so far."""
 
     def test_no_earlier_router_leaves_the_schedule_as_published(self):
         self.assertEqual(route.replay_earlier_routers([0, 0], 2, 0, TEST_DURATIONS), (2, [0, 0]))
@@ -299,6 +299,15 @@ class Decide(unittest.TestCase):
         self.assertEqual(pools(decisions), {"app": "home", "model-0": "home", "model-1": "vendor", "rust": "home"})
         self.assertFalse(summary["dead"])
         self.assertIn("40 s in the future (clock skew)", summary["reason"])
+
+    def test_a_dead_state_with_a_future_at_still_names_the_skew(self):
+        # Not serving, and its `at` 40 s ahead of the router's clock: the death is the reason, the skew is its note.
+        decisions, summary = decide(text=state(at=NOW + 40, serving=False))
+        self.assertEqual(set(pools(decisions).values()), {"vendor"})
+        self.assertTrue(summary["dead"])
+        self.assertIn("not serving", summary["reason"])
+        self.assertIn("40 s in the future (clock skew)", summary["reason"])
+        self.assertNotIn("clock skew", decide(text=state(serving=False))[1]["reason"])
 
     def test_home_only_ignores_the_state(self):
         decisions, summary = decide(mode="home-only", text="")
@@ -508,16 +517,18 @@ class Reads(unittest.TestCase):
                 status, page = re.search(r"status=(\w+)&per_page=100&page=(\d+)$", path).groups()
                 pages.append((status, int(page)))
                 if (status, page) == ("in_progress", "1"):
-                    # GitHub lists newest first: a full page of runs that started after this one.
-                    return {"workflow_runs": [{"id": 1000 + n, "run_started_at": iso(NOW + 60)} for n in range(100)]}
+                    # GitHub lists newest first: a full page of runs that started after this one, and one earlier run
+                    # (40) among them; page 2 holds another (41). Both must come back: the pages accumulate.
+                    return {"workflow_runs": [{"id": 40, "run_started_at": iso(NOW - 120)}] +
+                                             [{"id": 1000 + n, "run_started_at": iso(NOW + 60)} for n in range(99)]}
                 if (status, page) == ("in_progress", "2"):
                     return {"workflow_runs": [{"id": 41, "run_started_at": iso(NOW - 60)}]}
                 return {"workflow_runs": []}
-            if "/runs/41/jobs" in path:
+            if "/runs/40/jobs" in path or "/runs/41/jobs" in path:
                 return {"jobs": [{"name": route.ROUTE_JOB_NAME, "status": "in_progress"}]}
             raise AssertionError(path)
 
-        self.assertEqual(route.fetch_concurrent(REPO, "9", NOW, get), [(41, None)])
+        self.assertEqual(route.fetch_concurrent(REPO, "9", NOW, get), [(40, None), (41, None)])
         self.assertEqual(pages, [("queued", 1), ("in_progress", 1), ("in_progress", 2)])
 
     def test_fetch_concurrent_keeps_what_it_read_when_a_later_page_fails(self):
@@ -528,7 +539,7 @@ class Reads(unittest.TestCase):
                 return {"workflow_runs": [{"id": 41, "run_started_at": iso(NOW - 60)}] +
                                          [{"id": 1000 + n, "run_started_at": iso(NOW + 60)} for n in range(99)]}
             if "status=in_progress" in path:
-                raise RuntimeError("gh api %s exited 1: HTTP 502: Bad Gateway" % path)
+                raise RuntimeError("gh api exited 1: HTTP 502 at 100%\nBad Gateway")
             if "/runs/41/jobs" in path:
                 return {"jobs": [{"name": route.ROUTE_JOB_NAME, "status": "in_progress"}]}
             raise AssertionError(path)
@@ -536,8 +547,12 @@ class Reads(unittest.TestCase):
         buffer = io.StringIO()
         with redirect_stdout(buffer):
             self.assertEqual(route.fetch_concurrent(REPO, "9", NOW, get), [(41, None)])
-        self.assertIn("::notice::", buffer.getvalue())
-        self.assertIn("HTTP 502: Bad Gateway", buffer.getvalue())
+        # One notice line, escaped like the others (test_annotation_text_is_escaped): % first, then the line break.
+        notices = [line for line in buffer.getvalue().splitlines() if line.startswith("::notice::")]
+        self.assertEqual(len(notices), 1)
+        self.assertIn("HTTP 502 at 100%25%0ABad Gateway", notices[0])
+        self.assertIn("using the 100 read", notices[0])
+        self.assertFalse(any(line.startswith("Bad Gateway") for line in buffer.getvalue().splitlines()))
 
     def test_fetch_concurrent_reads_at_most_five_pages_per_status(self):
         paths = []

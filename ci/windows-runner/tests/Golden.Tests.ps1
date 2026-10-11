@@ -195,6 +195,19 @@ Describe 'golden scripts' {
             $check | Should -BeLessThan $block.IndexOf($destructive) -Because "the check precedes every $destructive"
         }
     }
+    It 'the rotation refuses while an earlier rotation''s set-aside file exists, before it renames or deletes anything' {
+        # The leftover is the older rollback of an interrupted rotation: another pass would overwrite or delete it.
+        $text = Get-Content -Raw (Join-Path $goldenDir 'build-golden.ps1')
+        $rotate = $text.IndexOf('if ($Rotate')
+        $block = $text.Substring($rotate, $text.IndexOf('exists; move it aside to rebuild') - $rotate)
+        $path = $block.IndexOf('$rotatingPath = Join-Path $outDir ''win11-runner.prev.rotating.vhdx''')
+        $guard = $block.IndexOf('if (Test-Path -LiteralPath $rotatingPath) { throw "$rotatingPath exists (an earlier rotation stopped part-way)')
+        $path | Should -BeGreaterThan -1
+        $guard | Should -BeGreaterThan $path
+        foreach ($destructive in 'Rename-Item', 'Remove-SealedFile') {
+            $guard | Should -BeLessThan $block.IndexOf($destructive) -Because "the guard precedes every $destructive"
+        }
+    }
     It 'the rotation renames the live image before it deletes the older rollback, and puts that back when the rename fails' {
         $text = Get-Content -Raw (Join-Path $goldenDir 'build-golden.ps1')
         $rotate = $text.IndexOf('if ($Rotate')
