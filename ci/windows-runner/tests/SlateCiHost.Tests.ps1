@@ -716,6 +716,56 @@ Describe 'Get-ExpiredLogNames' {
     }
 }
 
+Describe 'Get-OrchestratorLogName and Get-OrchestratorLogDate' {
+    BeforeAll { $script:at = [datetimeoffset]::Parse('2026-10-10T23:30:00Z', [cultureinfo]::InvariantCulture) }
+    It 'name the daily file by the local date, in the invariant culture' {
+        $day = $at.ToLocalTime().ToString('yyyy-MM-dd', [cultureinfo]::InvariantCulture)
+        Get-OrchestratorLogDate -Now $at | Should -BeExactly $day
+        Get-OrchestratorLogName -Now $at | Should -BeExactly "orchestrator-$day.log"
+    }
+    It 'agree with the reader: the name the writer gives expires after the retention, never before' {
+        $name = Get-OrchestratorLogName -Now $at
+        @(Get-ExpiredLogNames -Names @($name) -Today (Get-OrchestratorLogDate -Now $at.AddDays(30)) -RetentionDays 30).Count | Should -Be 0
+        @(Get-ExpiredLogNames -Names @($name) -Today (Get-OrchestratorLogDate -Now $at.AddDays(31)) -RetentionDays 30) | Should -Be @($name)
+    }
+    It 'write a Gregorian year whatever the culture of the thread (th-TH)' {
+        # th-TH counts years in the Buddhist era (2569): Get-ExpiredLogNames
+        # would read such a name as another date.
+        try { $info = [cultureinfo]::GetCultureInfo('th-TH') }
+        catch { Set-ItResult -Skipped -Because "culture th-TH is not available on this host ($($_.Exception.Message))"; return }
+        $thread = [System.Threading.Thread]::CurrentThread
+        $before = $thread.CurrentCulture
+        try {
+            $thread.CurrentCulture = $info
+            Get-OrchestratorLogName -Now $at | Should -Match '^orchestrator-2026-10-1[01]\.log$'
+        } finally { $thread.CurrentCulture = $before }
+    }
+}
+
+Describe 'Test-RecentlyAt' {
+    BeforeAll {
+        $script:now = [datetimeoffset]::Parse('2026-10-11T12:00:00Z', [cultureinfo]::InvariantCulture)
+        # Private: call it inside the module this file imported (InModuleScope
+        # is ambiguous when another test file has loaded a second copy).
+        $script:module = (Get-Command Get-PublishedState).Module
+        function Test-Recently($Value) { & $script:module { param($v, $n) Test-RecentlyAt -Value $v -Now $n -WithinSeconds 60 } $Value $script:now }
+    }
+    It 'is <Expected> for <Case>' -ForEach @(
+        @{ Case = 'null'; Value = $null; Expected = $false }
+        @{ Case = 'an empty string'; Value = ''; Expected = $false }
+        @{ Case = 'a value that does not parse'; Value = 'garbage'; Expected = $false }
+        @{ Case = '59 s ago'; Value = '2026-10-11T11:59:01.0000000+00:00'; Expected = $true }
+        @{ Case = '60 s ago'; Value = '2026-10-11T11:59:00.0000000+00:00'; Expected = $false }
+        @{ Case = '61 s ago'; Value = '2026-10-11T11:58:59.0000000+00:00'; Expected = $false }
+    ) {
+        Test-Recently $Value | Should -Be $Expected
+    }
+    It 'reads a journal round trip''s [datetime] as the instant it was' {
+        Test-Recently ([datetime]::SpecifyKind([datetime]'2026-10-11T11:59:30', [System.DateTimeKind]::Utc)) | Should -BeTrue
+        Test-Recently ([datetime]::SpecifyKind([datetime]'2026-10-11T11:58:30', [System.DateTimeKind]::Utc)) | Should -BeFalse
+    }
+}
+
 Describe 'Test-GoldenPrevRemovable' {
     BeforeAll { $script:accepted = @{ Golden = '2026-10-10T22:55:00.0000000Z'; Lanes = @('rust', 'app', 'model', 'shell'); Complete = $true } }
     It 'is true only for a complete acceptance of the current, sealed golden with no older VM' {

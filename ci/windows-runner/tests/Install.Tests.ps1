@@ -236,6 +236,7 @@ Describe 'prune-golden.ps1' {
     It 'deletes the previous image once the current, sealed image is accepted on every lane' {
         Set-Accepted '2026-10-10T22:55:00.0000000Z'
         & $prune -Root $root
+        $LASTEXITCODE | Should -Be 0
         Test-Path $prev | Should -BeFalse
         Test-Path $golden | Should -BeTrue
         Get-PruneLog | Should -Match 'golden: removed win11-runner.prev.vhdx'
@@ -243,6 +244,7 @@ Describe 'prune-golden.ps1' {
     It 'keeps it when the acceptance is of another image (the previous one, right after a rotation)' {
         Set-Accepted '2026-10-10T20:00:00.0000000Z'
         & $prune -Root $root
+        $LASTEXITCODE | Should -Be 0
         Test-Path $prev | Should -BeTrue
         Get-PruneLog | Should -Match 'the previous image stays'
     }
@@ -265,17 +267,28 @@ Describe 'prune-golden.ps1' {
         & $prune -Root $root
         Test-Path $prev | Should -BeTrue
     }
-    It 'names its log line''s daily file with the invariant culture, as the log pruner parses it' {
+    It 'names its log line''s daily file through the module''s helper, as the log pruner parses it' {
         # Text-level: under ar-SA or th-TH, Get-Date -Format writes a Hijri or
-        # Buddhist year, a name Get-ExpiredLogNames reads as another date.
+        # Buddhist year, a name Get-ExpiredLogNames reads as another date. The
+        # module names the file once (Get-OrchestratorLogName, tested there).
         $text = Get-Content -Raw $prune
-        $text | Should -Match ([regex]::Escape("(Get-Date).ToString('yyyy-MM-dd', [cultureinfo]::InvariantCulture)"))
+        $text | Should -Match ([regex]::Escape('Write-CiLog -Path (Join-Path $paths.LogDir (Get-OrchestratorLogName -Now ([datetimeoffset]::Now)))'))
+        $text | Should -Not -Match 'orchestrator-\{0\}'
         $text | Should -Not -Match 'Get-Date\s+-Format'
+    }
+    It 'exits 1 when the prune fails, after logging it, so the task history shows the failure' {
+        # An acceptance stamp that does not parse makes the predicate throw.
+        Set-Accepted 'garbage'
+        & $prune -Root $root
+        $LASTEXITCODE | Should -Be 1
+        Test-Path $prev | Should -BeTrue
+        Get-PruneLog | Should -Match '\[error\] golden: prune failed: '
     }
     It 'does nothing without a previous image, and survives a broken journal' {
         Remove-Item $prev -Force
         Set-Accepted '2026-10-10T22:55:00.0000000Z'
         { & $prune -Root $root } | Should -Not -Throw
+        $LASTEXITCODE | Should -Be 0
         'broken' | Set-Content $journalPath
         'old' | Set-Content $prev
         { & $prune -Root $root } | Should -Not -Throw

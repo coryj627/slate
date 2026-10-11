@@ -30,14 +30,28 @@ $IsoPath = (Resolve-Path -LiteralPath $IsoPath).Path
 
 if (Get-VM -Name $vmName -ErrorAction SilentlyContinue) { throw "VM $vmName exists; remove it first" }
 if ($Rotate -and (Test-Path -LiteralPath $OutPath)) {
+    # Nothing moves while a runner VM exists: its disk is a differencing
+    # child of the live image.
+    if (Get-VM -Name 'slate-win-*' -ErrorAction SilentlyContinue) { throw 'runner VMs exist; stop the loop and let them finish first' }
     # Only a sealed image becomes the rollback; an unsealed one is a failed
     # build's leftover and must be removed by hand first (runbook: "The
-    # golden build fails"). The older rollback goes through the shared
-    # helper. This is the one elevated moment in a refresh.
+    # golden build fails"). This is the one elevated moment in a refresh.
     if (-not (Get-Item -LiteralPath $OutPath).IsReadOnly) { throw "$OutPath is not sealed (a failed build left it); remove it first, see the runbook 'The golden build fails'" }
-    $prevPath = Join-Path (Split-Path -Parent $OutPath) 'win11-runner.prev.vhdx'
-    Remove-SealedFile -Path $prevPath
-    Rename-Item -LiteralPath $OutPath -NewName 'win11-runner.prev.vhdx'
+    $outDir = Split-Path -Parent $OutPath
+    $prevPath = Join-Path $outDir 'win11-runner.prev.vhdx'
+    $rotatingPath = Join-Path $outDir 'win11-runner.prev.rotating.vhdx'
+    if (Test-Path -LiteralPath $rotatingPath) { throw "$rotatingPath exists (an earlier rotation stopped part-way): rename it back to win11-runner.prev.vhdx if that file is missing, else delete it, then retry" }
+    # The older rollback is set aside, not deleted, until the live image has
+    # become the rollback: a failed rename puts it back. It then goes
+    # through the shared helper.
+    if (Test-Path -LiteralPath $prevPath) { Rename-Item -LiteralPath $prevPath -NewName 'win11-runner.prev.rotating.vhdx' }
+    try {
+        Rename-Item -LiteralPath $OutPath -NewName 'win11-runner.prev.vhdx'
+    } catch {
+        if (Test-Path -LiteralPath $rotatingPath) { Rename-Item -LiteralPath $rotatingPath -NewName 'win11-runner.prev.vhdx' }
+        throw
+    }
+    Remove-SealedFile -Path $rotatingPath
     Write-Host "Rotated the sealed image to $prevPath"
 }
 if (Test-Path -LiteralPath $OutPath) { throw "$OutPath exists; move it aside to rebuild, or pass -Rotate for a sealed image" }

@@ -9,7 +9,8 @@
 # (install/setup-host.ps1), daily: the orchestrator's account has read and
 # execute on golden by policy. Reads the journal without side effects.
 # Appends one line to the orchestrator log whenever a previous image exists
-# (nothing when there is none). Never fails the task.
+# (nothing when there is none). Exits 1 on a failure so the task history
+# shows it.
 [CmdletBinding()]
 param([string]$Root = 'C:\slate-ci')
 
@@ -19,7 +20,7 @@ Import-Module (Join-Path $Root 'bin' 'SlateCiHost.psm1') -Force
 $paths = Get-CiHostPaths -Root $Root
 $log = {
     param($level, $message)
-    Write-CiLog -Path (Join-Path $paths.LogDir ('orchestrator-{0}.log' -f (Get-Date).ToString('yyyy-MM-dd', [cultureinfo]::InvariantCulture))) -Level $level -Message $message
+    Write-CiLog -Path (Join-Path $paths.LogDir (Get-OrchestratorLogName -Now ([datetimeoffset]::Now))) -Level $level -Message $message
 }
 try {
     if (-not (Test-Path -LiteralPath $paths.GoldenPrevPath)) { exit 0 }
@@ -36,5 +37,6 @@ try {
     & $log 'info' 'golden: removed win11-runner.prev.vhdx (the current image is accepted on every lane)'
 } catch {
     try { & $log 'error' "golden: prune failed: $_" } catch { }
+    exit 1
 }
 exit 0

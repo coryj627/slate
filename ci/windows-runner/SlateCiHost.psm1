@@ -468,6 +468,18 @@ function Read-JournalSnapshot {
     return $journal
 }
 
+function Test-RecentlyAt {
+    # The once-a-minute gates: true only when a journal timestamp parses and
+    # is less than -WithinSeconds old. Null, empty or a value that does not
+    # parse (a hand-edited journal) counts as never, so it cannot throw out
+    # of a gate or hold one shut.
+    [CmdletBinding()]
+    param([AllowNull()]$Value, [Parameter(Mandatory)][datetimeoffset]$Now, [Parameter(Mandatory)][int]$WithinSeconds)
+    if ($null -eq $Value -or ($Value -is [string] -and -not $Value)) { return $false }
+    try { $at = ConvertTo-DateTimeOffset -Value $Value } catch { return $false }
+    return (($Now - $at).TotalSeconds -lt $WithinSeconds)
+}
+
 function Remove-SealedFile {
     # A sealed image is read-only: clear the bit, then delete. Missing is fine.
     [CmdletBinding()]
@@ -508,10 +520,27 @@ function Write-CiLog {
     Add-Content -LiteralPath $Path -Value $line -Encoding utf8
 }
 
+function Get-OrchestratorLogDate {
+    # The local day the daily log file is named by, in the invariant
+    # culture: a Hijri or Buddhist year (ar-SA, th-TH) would name a file the
+    # retention reads as another date.
+    [CmdletBinding()]
+    param([Parameter(Mandatory)][datetimeoffset]$Now)
+    return $Now.ToLocalTime().ToString('yyyy-MM-dd', [cultureinfo]::InvariantCulture)
+}
+
+function Get-OrchestratorLogName {
+    # The one statement of the daily log file's name: the loop and the prune
+    # task write it, Get-ExpiredLogNames parses it.
+    [CmdletBinding()]
+    param([Parameter(Mandatory)][datetimeoffset]$Now)
+    return ('orchestrator-{0}.log' -f (Get-OrchestratorLogDate -Now $Now))
+}
+
 function Get-ExpiredLogNames {
     # Dated orchestrator logs older than the retention, by the local date in
-    # the name (orchestrator.ps1 names them with the local date). Names that
-    # do not parse are kept: a human can decide about those.
+    # the name (Get-OrchestratorLogName names them with the local date).
+    # Names that do not parse are kept: a human can decide about those.
     [CmdletBinding()]
     param([string[]]$Names = @(), [Parameter(Mandatory)][string]$Today, [Parameter(Mandatory)][int]$RetentionDays)
     $cutoff = [datetime]::ParseExact($Today, 'yyyy-MM-dd', [cultureinfo]::InvariantCulture).AddDays(-$RetentionDays)
@@ -599,19 +628,18 @@ function Get-PublishedState {
 
 function Publish-HomeState {
     # Once per change, and at least once a minute as a heartbeat; a failed
-    # write is logged once a minute and never stops the tick (the router
-    # treats a stale state as a dead host, the conservative outcome). A
-    # PublishedAt that does not parse (a hand-edited journal) counts as never
-    # published: the next publish overwrites it, so it cannot stop publishing.
+    # write is logged and never stops the tick (the router treats a stale
+    # state as a dead host, the conservative outcome), and the next attempt
+    # waits until that failure (PublishFailedAt) is a minute old, whatever
+    # changed meanwhile. A PublishedAt that does not parse (a hand-edited
+    # journal) counts as never published: the next publish overwrites it, so
+    # it cannot stop publishing.
     [CmdletBinding()]
-    param([Parameter(Mandatory)]$Config, [Parameter(Mandatory)]$Journal, [Parameter(Mandatory)][hashtable]$Adapters, [Parameter(Mandatory)]$State, [Parameter(Mandatory)][datetimeoffset]$Now)
+    param([Parameter(Mandatory)]$Journal, [Parameter(Mandatory)][hashtable]$Adapters, [Parameter(Mandatory)]$State, [Parameter(Mandatory)][datetimeoffset]$Now)
+    if (Test-RecentlyAt -Value $Journal['PublishFailedAt'] -Now $Now -WithinSeconds 60) { return }
     $json = $State | ConvertTo-Json -Compress -Depth 5
     $previous = [string]$Journal['PublishedState']
-    $publishedAt = $null
-    if ($Journal['PublishedAt']) {
-        try { $publishedAt = ConvertTo-DateTimeOffset -Value $Journal['PublishedAt'] } catch { $publishedAt = $null }
-    }
-    $fresh = $null -ne $publishedAt -and ($Now - $publishedAt).TotalSeconds -lt 60
+    $fresh = Test-RecentlyAt -Value $Journal['PublishedAt'] -Now $Now -WithinSeconds 60
     # The heartbeat field alone differs every tick: compare without it.
     $sameButTime = $previous -and (($previous -replace '"at":"[^"]*"', '') -eq ($json -replace '"at":"[^"]*"', ''))
     if ($sameButTime -and $fresh) { return }
@@ -632,11 +660,7 @@ function Write-PublishFailure {
     # does not parse (a hand-edited journal) counts as no earlier failure.
     [CmdletBinding()]
     param([Parameter(Mandatory)]$Journal, [Parameter(Mandatory)][hashtable]$Adapters, [Parameter(Mandatory)][datetimeoffset]$Now, [Parameter(Mandatory)][string]$Level, [Parameter(Mandatory)]$Failure)
-    $failedAt = $null
-    if ($Journal['PublishFailedAt']) {
-        try { $failedAt = ConvertTo-DateTimeOffset -Value $Journal['PublishFailedAt'] } catch { $failedAt = $null }
-    }
-    if ($null -ne $failedAt -and ($Now - $failedAt).TotalSeconds -lt 60) { return }
+    if (Test-RecentlyAt -Value $Journal['PublishFailedAt'] -Now $Now -WithinSeconds 60) { return }
     $Journal['PublishFailedAt'] = $Now.ToString('o')
     & $Adapters.Log $Level "publish: $Failure"
 }
@@ -929,9 +953,9 @@ function Update-ActiveVm {
         $timeout = [int]$Config.UnclaimedTimeoutSeconds
         if ($waited -ge $timeout) {
             # Once a minute, not every tick: nothing changes between ticks and
-            # each check is two API calls (ClaimCheckedAt; index syntax, see above).
-            $checkedAt = $vm['ClaimCheckedAt']
-            if ($checkedAt -and ($Now - (ConvertTo-DateTimeOffset -Value $checkedAt)).TotalSeconds -lt 60) { return }
+            # each check is two API calls (ClaimCheckedAt; index syntax, see
+            # above; a value that does not parse counts as never checked).
+            if (Test-RecentlyAt -Value $vm['ClaimCheckedAt'] -Now $Now -WithinSeconds 60) { return }
             $vm['ClaimCheckedAt'] = $Now.ToString('o')
             $runner = & $Adapters.GetRunner $vm.RunnerId
             if ($null -ne $runner -and $runner.busy) {
@@ -959,29 +983,33 @@ function Update-ActiveVm {
 
 function Update-SeenJob {
     # A lane job's SeenJobs entry (created on first sight; an older entry
-    # gains Foreign and RunCheckedAt), and while its run is unknown
+    # gains Foreign, Repo and RunCheckedAt), and while its run is unknown
     # (Foreign $null), one read of the run at most once a minute
-    # (RunCheckedAt), whose answer is remembered as Foreign and never read
-    # again. Admission and the handoff reconciliation both learn a job's run
-    # through here. Returns, for the caller's log: Seen (the entry), Learned
-    # (this call read the run), Run (that run), Failure (the error of a read
-    # that failed now) and FirstTry (no read had been tried before).
+    # (RunCheckedAt; a value that does not parse counts as never checked),
+    # whose answer is remembered as Foreign, with the run's head repository
+    # as Repo ('' when GitHub names none), and never read again. Admission
+    # and the handoff reconciliation both learn a job's run through here.
+    # Returns, for the caller's log: Seen (the entry), Learned (this call
+    # read the run), Run (that run), Failure (the error of a read that
+    # failed now) and FirstTry (no earlier read was recorded).
     [CmdletBinding()]
     param([Parameter(Mandatory)]$Config, [Parameter(Mandatory)]$Journal, [Parameter(Mandatory)][hashtable]$Adapters, [Parameter(Mandatory)]$Job, [Parameter(Mandatory)][datetimeoffset]$Now)
     $key = [string]$Job.JobId
     if (-not $Journal.SeenJobs.Contains($key)) {
-        $Journal.SeenJobs[$key] = @{ RunId = [int64]$Job.RunId; Lane = $Job.Lane; FirstSeenAt = $Now.ToString('o'); Foreign = $null; RunCheckedAt = $null }
+        $Journal.SeenJobs[$key] = @{ RunId = [int64]$Job.RunId; Lane = $Job.Lane; FirstSeenAt = $Now.ToString('o'); Foreign = $null; Repo = $null; RunCheckedAt = $null }
     }
     $seen = $Journal.SeenJobs[$key]
     if (-not $seen.Contains('Foreign')) { $seen['Foreign'] = $null; $seen['RunCheckedAt'] = $null }
+    if (-not $seen.Contains('Repo')) { $seen['Repo'] = $null }
     $result = [pscustomobject]@{ Seen = $seen; Learned = $false; Run = $null; Failure = $null; FirstTry = $false }
     if ($null -ne $seen['Foreign']) { return $result }
     $checked = $seen['RunCheckedAt']
-    if ($checked -and ($Now - (ConvertTo-DateTimeOffset -Value $checked)).TotalSeconds -lt 60) { return $result }
+    if (Test-RecentlyAt -Value $checked -Now $Now -WithinSeconds 60) { return $result }
     $seen['RunCheckedAt'] = $Now.ToString('o')
     $result.FirstTry = -not $checked
     try {
         $result.Run = & $Adapters.GetRun ([int64]$Job.RunId)
+        $seen['Repo'] = Get-RunRepository -Run $result.Run
         $seen['Foreign'] = -not (Test-TrustedRun -Run $result.Run -TrustedRepo $Config.TrustedRepo)
         $result.Learned = $true
     } catch {
@@ -1038,24 +1066,28 @@ function Invoke-Admission {
             # lane job the answer remembered on SeenJobs comes first; an
             # unknown run is read at most once a minute, each failed read is
             # logged, and the VM is left alone until the answer is known.
-            $run = $null
             $evict = $true
+            $repo = 'an unknown repository'
+            $why = 'not the trusted repository'
             if ($job.Lane) {
                 $check = Update-SeenJob -Config $Config -Journal $Journal -Adapters $Adapters -Job $job -Now $Now
                 if ($check.Failure) { & $Adapters.Log 'warn' "handoff: ${name}: run $($job.RunId) of job $($job.JobId) could not be read: $($check.Failure)" }
                 if ($null -eq $check.Seen['Foreign']) { continue }
                 $evict = [bool]$check.Seen['Foreign']
-                $run = $check.Run
+                # The repository remembered with the answer names it in the
+                # log: the run is never read again for that.
+                if ($check.Seen['Repo']) { $repo = [string]$check.Seen['Repo'] }
+            } else {
+                # A job without a lane label has no SeenJobs entry: its run is
+                # read here, only to name the repository, so a failed read
+                # never delays forcing the VM off. The log says what is true:
+                # it goes for the label, unless its run is read as foreign.
+                $run = $null
+                try { $run = & $Adapters.GetRun ([int64]$job.RunId) } catch { $run = $null }
+                $repo = Format-RunRepository -Run $run
+                if ($null -eq $run -or (Test-TrustedRun -Run $run -TrustedRepo $Config.TrustedRepo)) { $why = 'no lane label' }
             }
             if ($evict) {
-                # The run only names the repository in the log: a failed read
-                # never delays forcing the VM off. The log says what is true:
-                # a lane job goes for its foreign run; a job without a lane
-                # label goes for the label, unless its run is read as foreign.
-                if ($null -eq $run) { try { $run = & $Adapters.GetRun ([int64]$job.RunId) } catch { $run = $null } }
-                $repo = Format-RunRepository -Run $run
-                $why = 'not the trusted repository'
-                if (-not $job.Lane -and ($null -eq $run -or (Test-TrustedRun -Run $run -TrustedRepo $Config.TrustedRepo))) { $why = 'no lane label' }
                 & $Adapters.Log 'warn' "handoff: ${name} runs job $($job.JobId) of $repo ($why); forcing it off"
                 Remove-ActiveVm -Config $Config -Journal $Journal -Adapters $Adapters -Name $name -Reason "runner taken by job $($job.JobId) of $repo ($why)" -Retry $false -Now $Now
                 continue
@@ -1126,7 +1158,7 @@ function Invoke-OrchestratorTick {
         [Parameter(Mandatory)][hashtable]$Adapters,
         [datetimeoffset]$Now = [datetimeoffset]::UtcNow
     )
-    try { Invoke-LogPrune -Config $Config -Journal $Journal -Adapters $Adapters -Today $Now.ToLocalTime().ToString('yyyy-MM-dd', [cultureinfo]::InvariantCulture) }
+    try { Invoke-LogPrune -Config $Config -Journal $Journal -Adapters $Adapters -Today (Get-OrchestratorLogDate -Now $Now) }
     catch { & $Adapters.Log 'error' "logs: $_" }
     foreach ($name in @($Journal.Vms.Keys)) {
         try { Update-ActiveVm -Config $Config -Journal $Journal -Adapters $Adapters -Name $name -Now $Now }
@@ -1136,7 +1168,7 @@ function Invoke-OrchestratorTick {
     try { $queued = @(Invoke-Admission -Config $Config -Journal $Journal -Adapters $Adapters -Now $Now) }
     catch { & $Adapters.Log 'error' "admission: $_" }
     if ($null -ne $queued) {
-        try { Publish-HomeState -Config $Config -Journal $Journal -Adapters $Adapters -State (Get-PublishedState -Config $Config -Journal $Journal -Queued $queued -Now $Now) -Now $Now }
+        try { Publish-HomeState -Journal $Journal -Adapters $Adapters -State (Get-PublishedState -Config $Config -Journal $Journal -Queued $queued -Now $Now) -Now $Now }
         catch { Write-PublishFailure -Journal $Journal -Adapters $Adapters -Now $Now -Level 'error' -Failure $_ }
     }
 }
@@ -1312,6 +1344,6 @@ function Set-LocalUserRights {
 Export-ModuleMember -Function Get-LaneFromLabels, New-RunnerName, Split-KvpChunks, Join-KvpChunks,
     ConvertTo-DateTimeOffset, Select-QueuedLaneJobs, Select-HostRunnerJobs, Select-JobsToAdmit, Register-JobRetry, Test-VmExpired, Get-StaleRunnerNames, Test-CommitEligible, Resolve-RunnerJob, Test-IPv4InPrefix, Get-CiHostConfig, New-Journal, Read-Journal, Write-Journal, Write-CiLog,
     Get-FreeSlots, Remove-ActiveVm, Test-SiblingRunning, Complete-ActiveVm, Update-ActiveVm, Invoke-Admission, Invoke-OrchestratorTick, Invoke-StartupSweep, Select-SlateKvpItems,
-    Get-PublishedState, Publish-HomeState, Get-RunRepository, Test-TrustedRun, Get-ExpiredLogNames, Invoke-LogPrune, Register-GoldenAcceptance, Test-GoldenPrevRemovable,
+    Get-PublishedState, Publish-HomeState, Get-RunRepository, Test-TrustedRun, Get-OrchestratorLogDate, Get-OrchestratorLogName, Get-ExpiredLogNames, Invoke-LogPrune, Register-GoldenAcceptance, Test-GoldenPrevRemovable,
     Get-CiHostPaths, Read-JournalSnapshot, Remove-SealedFile,
     New-RandomPassword, Expand-UnattendTemplate, Add-SidToUserRight, Set-LocalUserRights

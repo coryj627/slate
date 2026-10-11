@@ -277,6 +277,8 @@ function Get-GoldenStamp {
 }
 
 function Get-GoldenSealed {
+    # This and Get-VmCreationTimes serve install/prune-golden.ps1, which
+    # calls them directly: the loop never reads them, so no adapter wraps them.
     [CmdletBinding()]
     param([Parameter(Mandatory)][string]$GoldenPath)
     if (-not (Test-Path -LiteralPath $GoldenPath)) { return $false }
@@ -303,7 +305,7 @@ function New-HyperVAdapters {
     foreach ($command in 'New-RunnerVm', 'Start-RunnerVm', 'Get-RunnerVmState', 'Get-RunnerVmHeartbeat', 'Send-RunnerVmKvp',
         'Get-RunnerVmGuestError', 'Stop-RunnerVmForce', 'Remove-RunnerVm', 'Get-RunnerVmNames', 'Clear-RunnerVmDirs',
         'Get-CacheGeneration', 'Merge-RunnerCache', 'Remove-RunnerCache', 'Get-OrchestratorLogNames', 'Remove-OrchestratorLog',
-        'Get-GoldenStamp', 'Get-GoldenSealed', 'Get-VmCreationTimes') {
+        'Get-GoldenStamp') {
         $commands[$command] = Get-Command -Name $command -CommandType Function -ErrorAction Stop
     }
     $adapters = @{
@@ -322,9 +324,7 @@ function New-HyperVAdapters {
         DiscardCache  = { param($child) & $commands['Remove-RunnerCache'] -ChildPath $child }
         ListLogs      = { & $commands['Get-OrchestratorLogNames'] -LogDir $Config.LogDir }
         RemoveLog     = { param($name) & $commands['Remove-OrchestratorLog'] -LogDir $Config.LogDir -Name $name }
-        GetGoldenStamp     = { & $commands['Get-GoldenStamp'] -GoldenPath $Config.GoldenPath }
-        GetGoldenSealed    = { & $commands['Get-GoldenSealed'] -GoldenPath $Config.GoldenPath }
-        GetVmCreationTimes = { & $commands['Get-VmCreationTimes'] -VmDir $Config.VmDir }
+        GetGoldenStamp = { & $commands['Get-GoldenStamp'] -GoldenPath $Config.GoldenPath }
     }
     # Bind $Config and the commands into each scriptblock: the module
     # invokes them long after this function has returned.

@@ -250,10 +250,11 @@ Repository variable `WINDOWS_HOME_STATE`, JSON, one line, for example:
   serialised value changed, and at least every 60 s otherwise, through
   `PATCH /repos/{owner}/{repo}/actions/variables/WINDOWS_HOME_STATE`
   (`POST /actions/variables` once when it does not exist). A failed write
-  is logged once a minute and never stops the tick: the router then sees a
-  stale heartbeat and routes away, the conservative outcome. Budget: at
-  most six writes a minute, in practice one or two; the PAT's 5 000 an
-  hour is untouched by reads, which stay conditional.
+  is logged and never stops the tick, and the next attempt waits until
+  that failure is a minute old, even for a changed state: the router then
+  sees a stale heartbeat and routes away, the conservative outcome.
+  Budget: at most six writes a minute, in practice one or two; the PAT's
+  5 000 an hour is untouched by reads, which stay conditional.
 - Pure function `Get-PublishedState -Config -Journal -Queued -Now` returns
   the hashtable; `Publish-HomeState` compares its JSON with the last
   published one and the last publish time and calls the adapter.
@@ -397,7 +398,8 @@ optional API reads; nothing in `namespace` mode.
 ## 7. Host changes
 
 - **Publishing (OR-D2).** `Get-PublishedState` (pure, tested) and
-  `Publish-HomeState` (throttled, logs a failed write once a minute) in
+  `Publish-HomeState` (throttled; a failed write is logged and retried a
+  minute later at the soonest) in
   the module; `Set-GhVariable -Name -Value` in `adapters/GitHub.ps1`
   (PATCH, POST on 404) exposed as the `PublishState` adapter; called at
   the end of `Invoke-OrchestratorTick`, except on a tick whose admission
@@ -409,7 +411,8 @@ optional API reads; nothing in `namespace` mode.
   JSON), `PublishedAt` and `PublishFailedAt`.
 - **Admission (OR-D5 a).** `Invoke-Admission` reads the run of each
   candidate job once (`GetRun`; the answer is remembered on the `SeenJobs`
-  entry as `Foreign`, present from creation as `$null` = unknown; a read
+  entry as `Foreign`, present from creation as `$null` = unknown, with the
+  head repository as `Repo`, which a handoff eviction names; a read
   that fails is retried at most once a minute and logged on the first
   failure only) and never admits a foreign job:
   `admission: skipped job <id> of <repo> (not the trusted repository)`. A
@@ -456,10 +459,13 @@ optional API reads; nothing in `namespace` mode.
   reads the journal without side effects (a read-only parse, not
   `Read-Journal`), derives every path from `Get-CiHostConfig`, evaluates
   the predicate, and only then clears the read-only bit and deletes
-  `win11-runner.prev.vhdx`; one log line either way; exit 0 always.
-- **Rotation.** `build-golden.ps1 -Rotate`, after the VM-exists check:
-  only when the current image is sealed (`IsReadOnly`) does it replace an
-  older prev and rename the current image to prev; an unsealed leftover is
+  `win11-runner.prev.vhdx`; one log line either way; exit 0, or exit 1 on
+  a failure so the task history shows it.
+- **Rotation.** `build-golden.ps1 -Rotate`, after the VM-exists check,
+  refuses while any `slate-win-*` VM exists; only when the current image is
+  sealed (`IsReadOnly`) does it set an older prev aside under a temporary
+  name, rename the current image to prev, and only then delete the older
+  one (a failed rename puts it back); an unsealed leftover is
   refused with a pointer to "The golden build fails". One shared helper
   (`Remove-SealedFile`) clears the read-only bit and deletes, used by the
   rotation and the prune and tested on `TestDrive`.

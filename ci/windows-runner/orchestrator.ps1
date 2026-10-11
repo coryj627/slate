@@ -21,7 +21,7 @@ Import-Module (Join-Path $PSScriptRoot 'SlateCiHost.psm1') -Force
 $config = Get-CiHostConfig -Path $ConfigPath
 $log = {
     param($level, $message)
-    Write-CiLog -Path (Join-Path $config.LogDir ('orchestrator-{0}.log' -f (Get-Date).ToString('yyyy-MM-dd', [cultureinfo]::InvariantCulture))) -Level $level -Message $message
+    Write-CiLog -Path (Join-Path $config.LogDir (Get-OrchestratorLogName -Now ([datetimeoffset]::Now))) -Level $level -Message $message
 }
 # The GitHub adapter warns through this when the PAT's hourly budget runs low.
 $script:GhLowBudgetWarning = { param($message) & $log 'warn' $message }

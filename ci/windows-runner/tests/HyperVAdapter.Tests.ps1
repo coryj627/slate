@@ -280,7 +280,7 @@ Describe 'golden adapters' {
 
 Describe 'New-HyperVAdapters' {
     It 'exposes exactly the keys the orchestrator invokes' {
-        @((New-HyperVAdapters -Config $config).Keys | Sort-Object) | Should -Be @('CleanVmDirs', 'CommitCache', 'DiscardCache', 'GetGeneration', 'GetGoldenSealed', 'GetGoldenStamp', 'GetGuestError', 'GetHeartbeat', 'GetVmCreationTimes', 'GetVmState', 'ListLogs', 'ListVms', 'NewVm', 'RemoveLog', 'RemoveVm', 'SendKvp', 'StartVm', 'StopVmForce')
+        @((New-HyperVAdapters -Config $config).Keys | Sort-Object) | Should -Be @('CleanVmDirs', 'CommitCache', 'DiscardCache', 'GetGeneration', 'GetGoldenStamp', 'GetGuestError', 'GetHeartbeat', 'GetVmState', 'ListLogs', 'ListVms', 'NewVm', 'RemoveLog', 'RemoveVm', 'SendKvp', 'StartVm', 'StopVmForce')
     }
     It 'binds the config into the closures' {
         Set-CacheGeneration -CacheDir $config.CacheDir -Lane 'app' -Value 3
