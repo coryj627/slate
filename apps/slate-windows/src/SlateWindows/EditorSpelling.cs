@@ -22,64 +22,44 @@ internal interface IEditorSpellingService : IDisposable
     IReadOnlyList<EditorSpellingError> Check(string text);
 }
 
-internal sealed class UnavailableEditorSpellingService : IEditorSpellingService
-{
-    public bool IsAvailable => false;
-    public IReadOnlyList<EditorSpellingError> Check(string text) => [];
-    public void Dispose()
-    {
-    }
-}
-
+/// <summary>The Windows Spell Checking API's checker for the current user,
+/// bound on the FIRST call that needs one. Every workspace owns an
+/// <see cref="EditorPreferencesViewModel"/> and so one of these; binding in
+/// the constructor made every workspace pay for a checker it might never
+/// consult, and releasing a bound checker costs about 180 ms on Windows 11
+/// (2026-10-11: the Connections model builds a workspace per case and spent
+/// 24 s of a 36 s family in that release — invisible on the Windows Server
+/// images CI ran on, which offer no checker at all). A checker nobody asked
+/// for is never created and costs nothing to dispose.</summary>
 internal sealed class WindowsEditorSpellingService : IEditorSpellingService
 {
     private ISpellChecker? _checker;
+    private bool _bound;
+    private bool _disposed;
 
-    private WindowsEditorSpellingService(ISpellChecker checker)
+    private WindowsEditorSpellingService()
     {
-        _checker = checker;
     }
 
-    public bool IsAvailable => _checker is not null;
+    /// <summary>Whether the platform offers a checker for one of the
+    /// user's languages; asks it on the first call.</summary>
+    public bool IsAvailable => Checker() is not null;
 
-    public static IEditorSpellingService CreateForCurrentUser()
-    {
-        ISpellCheckerFactory? factory = null;
-        try
-        {
-            Type type = Type.GetTypeFromCLSID(
-                new Guid("7AB36653-1796-484B-BDFA-E74F1DB7C1DC"),
-                throwOnError: true)!;
-            factory = (ISpellCheckerFactory)Activator.CreateInstance(type)!;
-            foreach (string languageTag in CandidateLanguageTags())
-            {
-                if (factory.IsSupported(languageTag))
-                {
-                    return new WindowsEditorSpellingService(
-                        factory.CreateSpellChecker(languageTag));
-                }
-            }
-        }
-        catch (Exception exception) when (
-            exception is COMException
-                or InvalidCastException
-                or PlatformNotSupportedException
-                or TypeLoadException)
-        {
-        }
-        finally
-        {
-            Release(factory);
-        }
+    /// <summary>Test seam: whether the platform has been asked yet.</summary>
+    internal bool IsBoundForTests => _bound;
 
-        return new UnavailableEditorSpellingService();
-    }
+    public static IEditorSpellingService CreateForCurrentUser() => new WindowsEditorSpellingService();
 
     public IReadOnlyList<EditorSpellingError> Check(string text)
     {
         ArgumentNullException.ThrowIfNull(text);
-        ISpellChecker? checker = _checker;
-        if (checker is null || text.Length == 0)
+        if (text.Length == 0)
+        {
+            return [];
+        }
+
+        ISpellChecker? checker = Checker();
+        if (checker is null)
         {
             return [];
         }
@@ -131,8 +111,54 @@ internal sealed class WindowsEditorSpellingService : IEditorSpellingService
 
     public void Dispose()
     {
+        _disposed = true;
         Release(_checker);
         _checker = null;
+    }
+
+    /// <summary>The bound checker, binding it on the first call. A
+    /// disposed service, or a platform without a checker, answers null.</summary>
+    private ISpellChecker? Checker()
+    {
+        if (!_bound && !_disposed)
+        {
+            _bound = true;
+            _checker = BindForCurrentUser();
+        }
+
+        return _checker;
+    }
+
+    private static ISpellChecker? BindForCurrentUser()
+    {
+        ISpellCheckerFactory? factory = null;
+        try
+        {
+            Type type = Type.GetTypeFromCLSID(
+                new Guid("7AB36653-1796-484B-BDFA-E74F1DB7C1DC"),
+                throwOnError: true)!;
+            factory = (ISpellCheckerFactory)Activator.CreateInstance(type)!;
+            foreach (string languageTag in CandidateLanguageTags())
+            {
+                if (factory.IsSupported(languageTag))
+                {
+                    return factory.CreateSpellChecker(languageTag);
+                }
+            }
+        }
+        catch (Exception exception) when (
+            exception is COMException
+                or InvalidCastException
+                or PlatformNotSupportedException
+                or TypeLoadException)
+        {
+        }
+        finally
+        {
+            Release(factory);
+        }
+
+        return null;
     }
 
     private static IEnumerable<string> CandidateLanguageTags() =>
