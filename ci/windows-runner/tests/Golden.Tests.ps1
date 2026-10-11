@@ -15,21 +15,23 @@ BeforeAll {
 Describe 'versions.json' {
     BeforeAll { $script:versions = Get-Content -Raw (Join-Path $goldenDir 'versions.json') | ConvertFrom-Json }
     It 'has every key the provisioning scripts read' {
-        foreach ($k in 'runnerVersion', 'runnerSha256', 'rustToolchain', 'bindgenTag', 'dotnetChannel', 'pythonVersion', 'pythonSha256',
+        foreach ($k in 'runnerVersion', 'runnerSha256', 'rustToolchain', 'bindgenTag', 'dotnetChannel', 'pythonVersion', 'pythonToolcacheUrl', 'pythonToolcacheSha256',
             'gitVersion', 'gitTag', 'gitSha256', 'rustupVersion', 'rustupInitSha256', 'vsBuildToolsUrl', 'dns') {
             $versions.PSObject.Properties[$k] | Should -Not -BeNullOrEmpty -Because $k
         }
-        foreach ($k in 'runnerSha256', 'pythonSha256', 'gitSha256', 'rustupInitSha256') {
+        foreach ($k in 'runnerSha256', 'pythonToolcacheSha256', 'gitSha256', 'rustupInitSha256') {
             $versions.$k | Should -Match '^[0-9a-f]{64}$' -Because $k
         }
         $versions.rustupVersion | Should -Match '^\d+\.\d+\.\d+$'
+        # The build setup-python would install: actions/python-versions' win32-x64 archive of the pinned version.
+        $versions.pythonToolcacheUrl | Should -BeLike "https://github.com/actions/python-versions/releases/download/$($versions.pythonVersion)-*/python-$($versions.pythonVersion)-win32-x64.zip"
     }
     It 'records where each pinned download hash was published, for the pinned version' {
         # JSON has no comments: the sources object names each hash's origin.
-        foreach ($k in 'pythonSha256', 'gitSha256', 'rustupInitSha256') {
+        foreach ($k in 'pythonToolcacheSha256', 'gitSha256', 'rustupInitSha256') {
             $versions.sources.$k | Should -Match '^https://' -Because $k
         }
-        $versions.sources.pythonSha256 | Should -BeLike ('*/python-{0}/' -f ($versions.pythonVersion -replace '\.', ''))
+        $versions.sources.pythonToolcacheSha256 | Should -BeLike "*/actions/python-versions/releases/tag/$($versions.pythonVersion)-*"
         $versions.sources.gitSha256 | Should -BeLike "*/releases/tag/$($versions.gitTag)"
         $versions.sources.rustupInitSha256 | Should -BeLike "*/rustup/archive/$($versions.rustupVersion)/x86_64-pc-windows-msvc/rustup-init.exe.sha256"
     }
@@ -97,9 +99,24 @@ Describe 'golden scripts' {
     }
     It 'phase 1 checks the runner, Python and Git downloads against their pinned SHA-256' {
         $code = @((Get-Content -Raw (Join-Path $goldenDir 'provision-guest.ps1')) -split "`n" | Where-Object { $_ -notmatch '^\s*#' })
-        @($code | Where-Object { $_ -match '^\s*Get-Download -Url .*-Path \(Join-Path \$dl ''python\.exe''\) -Sha256 \$versions\.pythonSha256\s*$' }).Count | Should -Be 1
+        @($code | Where-Object { $_ -match '^\s*Get-Download -Url \$versions\.pythonToolcacheUrl -Path \$pyZip -Sha256 \$versions\.pythonToolcacheSha256\s*$' }).Count | Should -Be 1
         @($code | Where-Object { $_ -match '^\s*Get-Download -Url .*-Path \(Join-Path \$dl ''git\.exe''\) -Sha256 \$versions\.gitSha256\s*$' }).Count | Should -Be 1
         @($code | Where-Object { $_ -match '^\s*Get-Download -Url .*-Path \$zip -Sha256 \$versions\.runnerSha256\s*$' }).Count | Should -Be 1
+    }
+    It 'phase 1 installs Python into the runner tool cache as an administrator, before the tree is handed to runner' {
+        # actions/setup-python's Windows installer needs administrator rights
+        # (InstallAllUsers=1, HKLM); as `runner` a job would wait on a UAC
+        # prompt for ever. A 3.13 already in the cache makes it install nothing.
+        $text = Get-Content -Raw (Join-Path $goldenDir 'provision-guest.ps1')
+        $code = @($text -split "`n" | Where-Object { $_ -notmatch '^\s*#' })
+        @($code | Where-Object { $_ -match 'python\.org/ftp' }) | Should -BeNullOrEmpty
+        $text | Should -Match ([regex]::Escape("`$toolCache = 'C:\actions-runner\_work\_tool'"))
+        $text | Should -Match ([regex]::Escape('$env:AGENT_TOOLSDIRECTORY = $toolCache'))
+        $text | Should -Match ([regex]::Escape("-File (Join-Path `$pyDir 'setup.ps1')"))
+        $text | Should -Match ([regex]::Escape('if (-not (Test-Path -LiteralPath "$pyHome.complete"))'))
+        $install = $text.IndexOf('$env:AGENT_TOOLSDIRECTORY = $toolCache')
+        $install | Should -BeGreaterThan $text.IndexOf("Expand-Archive -Path `$zip -DestinationPath 'C:\actions-runner'")
+        $install | Should -BeLessThan $text.IndexOf('/setowner runner /T /C')
     }
     It 'phase 1 verifies the Authenticode signature of the two evergreen downloads, which no hash can pin' {
         # aka.ms/vs and dot.net serve a new build at every release; both

@@ -5,7 +5,8 @@
   "bindgenTag": "v0.11.0+v0.31.0",
   "dotnetChannel": "10.0",
   "pythonVersion": "3.13.15",
-  "pythonSha256": "edec09c4853aeae9ac36efb8c9f95b6b8e2fee65eee56d9767a8b7c69c574403",
+  "pythonToolcacheUrl": "https://github.com/actions/python-versions/releases/download/3.13.15-31064747964/python-3.13.15-win32-x64.zip",
+  "pythonToolcacheSha256": "73c2a2935597f8181e9bc60bc3a35cd2be28698d8f64b965055a29b43425a2b7",
   "gitVersion": "2.55.0.5",
   "gitTag": "v2.55.0.windows.5",
   "gitSha256": "d065a4e23c3d9a6b5073d609b5be0830227ec3ca053c083ba385061ddfaf94c6",
@@ -14,7 +15,7 @@
   "vsBuildToolsUrl": "https://aka.ms/vs/17/release/vs_BuildTools.exe",
   "dns": "1.1.1.1,8.8.8.8",
   "sources": {
-    "pythonSha256": "https://www.python.org/downloads/release/python-31315/",
+    "pythonToolcacheSha256": "https://github.com/actions/python-versions/releases/tag/3.13.15-31064747964",
     "gitSha256": "https://github.com/git-for-windows/git/releases/tag/v2.55.0.windows.5",
     "rustupInitSha256": "https://static.rust-lang.org/rustup/archive/1.29.1/x86_64-pc-windows-msvc/rustup-init.exe.sha256"
   }

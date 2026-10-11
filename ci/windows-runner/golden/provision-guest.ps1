@@ -86,9 +86,6 @@ try {
     [Environment]::SetEnvironmentVariable('Path', "C:\dotnet;$machinePath", 'Machine')
 
     # Hash-pinned in versions.json (its sources object names where each was published).
-    Get-Download -Url ('https://www.python.org/ftp/python/{0}/python-{0}-amd64.exe' -f $versions.pythonVersion) -Path (Join-Path $dl 'python.exe') -Sha256 $versions.pythonSha256
-    Invoke-Installer (Join-Path $dl 'python.exe') '/quiet InstallAllUsers=1 PrependPath=1 Include_test=0'
-
     Get-Download -Url ('https://github.com/git-for-windows/git/releases/download/{0}/Git-{1}-64-bit.exe' -f $versions.gitTag, $versions.gitVersion) -Path (Join-Path $dl 'git.exe') -Sha256 $versions.gitSha256
     Invoke-Installer (Join-Path $dl 'git.exe') '/VERYSILENT /NORESTART /NOCANCEL /SP- /o:PathOption=Cmd'
 
@@ -97,6 +94,25 @@ try {
     Get-Download -Url ('https://github.com/actions/runner/releases/download/v{0}/actions-runner-win-x64-{0}.zip' -f $versions.runnerVersion) -Path $zip -Sha256 $versions.runnerSha256
     New-Item -ItemType Directory -Force -Path 'C:\actions-runner' | Out-Null
     Expand-Archive -Path $zip -DestinationPath 'C:\actions-runner' -Force
+    # Python lives in the runner's tool cache, installed for all users now:
+    # actions/setup-python's installer needs administrator rights, which a
+    # job running as `runner` does not have (it waits on a UAC prompt for
+    # ever). This is the build setup-python itself would install, from
+    # actions/python-versions, so a job asking for 3.13 finds it in the
+    # cache and installs nothing. Done before the tree is handed to runner.
+    $toolCache = 'C:\actions-runner\_work\_tool'
+    $pyZip = Join-Path $dl 'python-toolcache.zip'
+    Get-Download -Url $versions.pythonToolcacheUrl -Path $pyZip -Sha256 $versions.pythonToolcacheSha256
+    $pyDir = Join-Path $dl 'python-toolcache'
+    Expand-Archive -Path $pyZip -DestinationPath $pyDir -Force
+    New-Item -ItemType Directory -Force -Path $toolCache | Out-Null
+    $env:AGENT_TOOLSDIRECTORY = $toolCache
+    & powershell.exe -NoProfile -ExecutionPolicy Bypass -File (Join-Path $pyDir 'setup.ps1')
+    if ($LASTEXITCODE -ne 0) { throw "python tool-cache setup.ps1 exited $LASTEXITCODE" }
+    $pyHome = Join-Path $toolCache ('Python\{0}\x64' -f $versions.pythonVersion)
+    if (-not (Test-Path -LiteralPath "$pyHome.complete")) { throw "python tool-cache install left no $pyHome.complete marker" }
+    # On the machine PATH too, for anything that calls python without setup-python.
+    [Environment]::SetEnvironmentVariable('Path', "$pyHome;$pyHome\Scripts;" + [Environment]::GetEnvironmentVariable('Path', 'Machine'), 'Machine')
     # Scripts SYSTEM will run live where runner cannot write them.
     New-Item -ItemType Directory -Force -Path 'C:\slate-guest' | Out-Null
     Copy-Item -LiteralPath (Join-Path $root 'guest\bootstrap-system.ps1'), (Join-Path $root 'guest\bootstrap-runner.ps1'), (Join-Path $root 'SlateCiHost.psm1') -Destination 'C:\slate-guest'

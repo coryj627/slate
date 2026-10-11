@@ -113,7 +113,7 @@ Before you start:
   `netcfg -u rtk_teampt`, then `netcfg -u rtk_ndisprot`. Adapters rebind
   for a moment after each. Reinstalling the Realtek utility puts them
   back.
-- The ISO, here `C:\Users\cory\Downloads\Win11_25H2_English_x64_v2.iso`,
+- The ISO, here `C:\Users\cory\Downloads\Windows11_Client_x64_en-us_26300_9457.iso`,
   and the Windows 11 Pro product key in the password manager.
 - A clean checkout of the commit to install, normally an up-to-date `main`.
   Setup copies the working tree but records only `HEAD`.
@@ -219,7 +219,7 @@ Before you start:
 5. **Golden image** (40 to 60 minutes; the script gives up after 150):
 
    ```powershell
-   .\ci\windows-runner\golden\build-golden.ps1 -IsoPath C:\Users\cory\Downloads\Win11_25H2_English_x64_v2.iso
+   .\ci\windows-runner\golden\build-golden.ps1 -IsoPath C:\Users\cory\Downloads\Windows11_Client_x64_en-us_26300_9457.iso
    ```
 
    Type the Windows 11 Pro key at the hidden prompt. The script applies
@@ -425,8 +425,8 @@ saw before changing anything.
 - [ ] The hash-pinned downloads match their pins: phase 1 gets past the
   Python, Git and runner downloads, and phase 2 past rustup-init, without
   `sha256 mismatch`. If one stops there, compare its hash in
-  `ci/windows-runner/golden/versions.json` (`pythonSha256`, `gitSha256`,
-  `runnerSha256`, `rustupInitSha256`) with the one published where its
+  `ci/windows-runner/golden/versions.json` (`pythonToolcacheSha256`,
+  `gitSha256`, `runnerSha256`, `rustupInitSha256`) with the one published where its
   `sources` entry points; for the runner, the SHA-256 that its GitHub
   release page lists for `actions-runner-win-x64-2.338.0.zip`. Do that
   before changing either.
@@ -1026,10 +1026,14 @@ the runner version first.
 For a pin change, update `ci/windows-runner/golden/versions.json` on a
 branch and merge it. The Pester suite checks its Rust and bindgen pins
 against the repository's. The runner, Python, Git and rustup-init pins each
-carry a SHA-256 (`runnerSha256`, `pythonSha256`, `gitSha256`,
+carry a SHA-256 (`runnerSha256`, `pythonToolcacheSha256`, `gitSha256`,
 `rustupInitSha256`): when a version moves, take its new hash from the page
-its `sources` entry names, and update that entry too. Have the Windows 11
-Pro key ready: the build asks for it again.
+its `sources` entry names, and update that entry too. Python is the
+`win32-x64` archive of `actions/python-versions` for the pinned version
+(`pythonToolcacheUrl`, whose release tag carries a build number): the
+build setup-python would install, placed in the runner's tool cache by
+the image build because setup-python's installer needs administrator
+rights. Have the Windows 11 Pro key ready: the build asks for it again.
 
 1. Drain and pause the loop (see "Pausing and draining"). The task stays
    disabled until step 7.
@@ -1051,7 +1055,7 @@ Pro key ready: the build asks for it again.
 5. Build:
 
    ```powershell
-   .\ci\windows-runner\golden\build-golden.ps1 -IsoPath C:\Users\cory\Downloads\Win11_25H2_English_x64_v2.iso
+   .\ci\windows-runner\golden\build-golden.ps1 -IsoPath C:\Users\cory\Downloads\Windows11_Client_x64_en-us_26300_9457.iso
    ```
 
 6. Check the product key on the rebuilt disk: "Checking the product key in
@@ -1252,6 +1256,14 @@ and `"status": "401"`. Rotate it before then.
   `setup-host.ps1` again from an updated checkout, then enable the task.
   The restart resets the job's retry count, and the job, still queued on
   GitHub, is admitted again.
+- **A job sits in `Set up Python` for ever.** `actions/setup-python`
+  installs Python on Windows with an all-users installer that needs
+  administrator rights; as `runner` the job waits on a UAC prompt on the
+  VM's desktop (visible with `vmconnect.exe localhost <vm>`) until the lane
+  cap reclaims it. The image build puts the pinned Python into the runner's
+  tool cache so the step finds it and installs nothing; a job that hangs
+  there runs on an image built before that, so rebuild the golden disk
+  ("Refreshing the golden image") and cancel the run.
 - **`token missing at …` every minute.** No token is stored: run
   `store-token.ps1`. After `-ResetAccount`, store the token before you
   enable the loop task.
