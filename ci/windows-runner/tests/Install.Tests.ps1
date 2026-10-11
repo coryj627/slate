@@ -67,6 +67,12 @@ Describe 'install scripts' {
     It 'setup cuts the tree off from inherited ACLs, starts the loop repeating at once and keeps the account on a re-run' {
         $text = Get-Content -Raw (Join-Path $installDir 'setup-host.ps1')
         $text | Should -Match 'icacls\.exe \$Root /inheritance:r '
+        # Hyper-V, acting as the caller, writes each VM's access entry onto
+        # every disk of a differencing chain when it attaches the child: the
+        # account needs WDAC on the golden disk and the cache parents, no more.
+        $text | Should -Match ([regex]::Escape('(Join-Path $Root ''golden'') /inheritance:r /grant ''Administrators:(OI)(CI)F'' /grant ''SYSTEM:(OI)(CI)F'' /grant:r "${Account}:(OI)(CI)(RX,WDAC)"'))
+        $text | Should -Match ([regex]::Escape('(Join-Path $Root ''cache'') /grant:r "${Account}:(OI)(CI)(M,WDAC)"'))
+        $text | Should -Not -Match 'golden[^\r\n]*\(OI\)\(CI\)(RX|M)"'
         $text | Should -Match ([regex]::Escape('-At (Get-Date).AddMinutes(1)'))
         $text | Should -Match ([regex]::Escape('-Trigger @($loopTrigger, $repeatTrigger)'))
         $text | Should -Match ([regex]::Escape('[switch]$ResetAccount'))
