@@ -65,6 +65,8 @@ DEFAULT_SLOTS_MAX = 8
 STATE_VERSION = 1
 ROUTE_JOB_NAME = "Route Windows lanes"
 API_TIMEOUT_SECONDS = 15
+RUNS_PER_PAGE = 100                         # the runs listing, per status: pages of 100 ...
+RUNS_PAGES_MAX = 5                          # ... until a short page, five at most
 CONCURRENT_RUNS_MAX = 10                    # earlier runs inspected: the newest ten
 CONCURRENT_COMPLETION_MARGIN_SECONDS = 30   # a router done this long before the state's `at` may not be in it yet
 
@@ -233,16 +235,17 @@ def allocate(lanes, free_slots, free_at, durations):
     return {lane: decisions[lane] for lane in lanes if lane in decisions}, deadline, sorted(slots)
 
 
-def replay_earlier_routers(free_at, free_slots, earlier, durations):
-    """Spec §3: each earlier router's own allocation, oldest first, against the schedule so far.
+def replay_earlier_routers(free_at, free_slots, count, durations):
+    """Spec §3: `count` earlier routers' allocations replayed against the schedule so far.
 
-    Each one sees the free slots the routers before it left, allocates the
-    routed lanes as this run does, and its home lanes stay in the schedule,
-    so concurrent routers resolve by age for any slot count. Returns this
-    run's free slots and schedule.
+    Each earlier router is replayed with the same allocation this run makes;
+    every router routes the same lanes, so oldest first is immaterial to the
+    result. Each one sees the free slots the routers before it left, and its
+    home lanes stay in the schedule, so concurrent routers resolve by age
+    for any slot count. Returns this run's free slots and schedule.
     """
     schedule = sorted(free_at)
-    for _ in earlier:
+    for _ in range(count):
         _, _, schedule = allocate(list(LANES), free_slots, schedule, durations)
         free_slots = min(free_slots, sum(1 for until in schedule if until <= 0))
     return free_slots, schedule
@@ -261,65 +264,75 @@ def is_fork(event, head_repo, repo):
     return event == "pull_request" and (not head_repo or head_repo != repo)
 
 
-def occupancy_decides(mode, state_text, now, *, stale_seconds, slots_max, event, head_repo, repo):
-    """Whether decide reaches the occupancy rule, the only one the two optional reads feed.
-
-    It does not when the fork rule, the mode or a dead state (missing,
-    unparseable, stale, not serving, no slot) already settles every lane;
-    main then makes no read.
-    """
-    if is_fork(event, head_repo, repo) or normalize_mode(mode) != "home":
-        return False
-    state, error = parse_state(state_text)
-    return state_death(state, error, now, stale_seconds, slots_max) is None
-
-
 def _summary(mode):
     return {"mode": mode, "state_age": None, "serving": None, "slots": None, "running": None, "queued": None,
             "concurrent": None, "free": None, "deadline": None, "dead": False, "unknown_lanes": [], "reason": ""}
 
 
-def decide(mode, lanes, state_text, now, concurrent, *, stale_seconds, slots_max, event, head_repo, repo, durations=None):
-    """The whole rule (spec §3) as a pure function; every age is measured against `now`, the router's clock."""
-    durations = DURATIONS if durations is None else durations
+def _skew(state_age):
+    """The reason's note for a state whose `at` is ahead of the router's clock, else nothing."""
+    if state_age is None or state_age >= 0:
+        return ""
+    return "; the state's 'at' is %d s in the future (clock skew), counted as fresh" % -state_age
+
+
+def settle_early(mode, lanes, state_text, now, *, stale_seconds, slots_max, event, head_repo, repo):
+    """The decision before occupancy (spec §3), shared by decide and main.
+
+    Returns (decisions, summary, None) when the fork rule, the mode or the
+    state's death (missing, unparseable, stale, not serving, no slot)
+    settles every lane, else (None, summary, state) with the state parsed
+    once for decide_from_occupancy. Only in the second case do main's two
+    reads matter.
+    """
     normalized = normalize_mode(mode)
     summary = _summary(normalized or "(unset)")
     summary["unknown_lanes"] = [lane for lane in lanes if lane not in LANES]
-    lanes = [lane for lane in lanes if lane in LANES]
     if is_fork(event, head_repo, repo):
         summary["reason"] = "pull request from %s: the vendor in every mode, whatever the pool says" % (
             head_repo or "an unknown repository")
-        return _everything(lanes, "vendor", summary["reason"]), summary
+        return _everything(lanes, "vendor", summary["reason"]), summary, None
     if normalized == "home-only":
         summary["reason"] = "WINDOWS_RUNNER_MODE=home-only: every lane queues at home"
-        return _everything(lanes, "home", summary["reason"]), summary
+        return _everything(lanes, "home", summary["reason"]), summary, None
     if normalized != "home":
         summary["reason"] = "WINDOWS_RUNNER_MODE=%s routes every lane to the vendor" % summary["mode"]
-        return _everything(lanes, "vendor", summary["reason"]), summary
+        return _everything(lanes, "vendor", summary["reason"]), summary, None
     state, error = parse_state(state_text)
     death = state_death(state, error, now, stale_seconds, slots_max)
-    skew = ""
     if state is not None:
         summary.update({"state_age": now - state["at"], "serving": state["serving"], "slots": state["slots"],
                         "running": len(state["running"]), "queued": len(state["queued"])})
-        if summary["state_age"] < 0:
-            skew = "; the state's 'at' is %d s in the future (clock skew), counted as fresh" % -summary["state_age"]
     if death:
         summary["dead"] = True
-        summary["reason"] = "the pool cannot serve: %s%s" % (death, skew)
-        return _everything(lanes, "vendor", summary["reason"]), summary
+        summary["reason"] = "the pool cannot serve: %s%s" % (death, _skew(summary["state_age"]))
+        return _everything(lanes, "vendor", summary["reason"]), summary, None
+    return None, summary, state
+
+
+def decide_from_occupancy(lanes, state, now, concurrent, summary, durations):
+    """OR-D3 over a live state: the earlier routers replayed, then this run's allocation; completes `summary`."""
     # An earlier router counts while its routing job is queued or running, and after it completed only when that was
     # at most the margin before the state's `at`: its lanes may not be in the state yet.
-    earlier = [run for run, completed in concurrent or []
-               if completed is None or completed >= state["at"] - CONCURRENT_COMPLETION_MARGIN_SECONDS]
-    summary["concurrent"] = len(earlier)
+    earlier = sum(1 for _, completed in concurrent or []
+                  if completed is None or completed >= state["at"] - CONCURRENT_COMPLETION_MARGIN_SECONDS)
+    summary["concurrent"] = earlier
     free_slots = max(0, state["slots"] - len(state["running"]) - len(state["queued"]))
     free_slots, schedule = replay_earlier_routers(simulate(state, now, durations), free_slots, earlier, durations)
     summary["free"] = free_slots
     decisions, deadline, _ = allocate(lanes, free_slots, schedule, durations)
     summary["deadline"] = deadline
-    summary["reason"] = "home first; a lane queues only inside the deadline" + skew
+    summary["reason"] = "home first; a lane queues only inside the deadline" + _skew(summary["state_age"])
     return decisions, summary
+
+
+def decide(mode, lanes, state_text, now, concurrent, *, stale_seconds, slots_max, event, head_repo, repo, durations=None):
+    """The whole rule (spec §3) as a pure function; every age is measured against `now`, the router's clock."""
+    decisions, summary, state = settle_early(mode, lanes, state_text, now, stale_seconds=stale_seconds,
+                                             slots_max=slots_max, event=event, head_repo=head_repo, repo=repo)
+    if state is None:
+        return decisions, summary
+    return decide_from_occupancy(lanes, state, now, concurrent, summary, DURATIONS if durations is None else durations)
 
 
 def gh_api(path, timeout=API_TIMEOUT_SECONDS, run=subprocess.run):
@@ -351,6 +364,31 @@ def fetch_run_started(repo, run_id, get):
     return started
 
 
+def list_runs(repo, status, get):
+    """windows.yml's runs with this status, page by page until a short page or RUNS_PAGES_MAX pages.
+
+    A failing first page raises (the caller then assumes no earlier
+    router); a later page that fails keeps the runs already read, since
+    nothing safer is known, and says so in a notice.
+    """
+    runs = []
+    for page in range(1, RUNS_PAGES_MAX + 1):
+        path = "/repos/%s/actions/workflows/windows.yml/runs?status=%s&per_page=%d&page=%d" % (
+            repo, status, RUNS_PER_PAGE, page)
+        try:
+            batch = get(path).get("workflow_runs") or []
+        except Exception as failure:  # noqa: BLE001 - a later page: keep what was read
+            if page == 1:
+                raise
+            print("::notice::%s" % annotation_text("%s runs past page %d unreadable (%s); using the %d read" % (
+                status, page - 1, failure, len(runs))))
+            break
+        runs += batch
+        if len(batch) < RUNS_PER_PAGE:
+            break
+    return runs
+
+
 def fetch_concurrent(repo, run_id, run_started, get):
     """The windows.yml runs that started before this one, as (run id, routing job completion epoch or None) pairs.
 
@@ -366,8 +404,7 @@ def fetch_concurrent(repo, run_id, run_started, get):
     starts = {}
     seen = set()
     for status in ("queued", "in_progress"):
-        body = get("/repos/%s/actions/workflows/windows.yml/runs?status=%s&per_page=30" % (repo, status))
-        for run in body.get("workflow_runs") or []:
+        for run in list_runs(repo, status, get):
             other = run.get("id")
             if other is None or other == this or other in seen:
                 continue
@@ -476,8 +513,10 @@ def main(env=None, get=gh_api, clock=time.time):
         rule = dict(stale_seconds=_int_env(env, "ROUTE_STALE_SECONDS", DEFAULT_STALE_SECONDS),
                     slots_max=_int_env(env, "ROUTE_SLOTS_MAX", DEFAULT_SLOTS_MAX),
                     event=env.get("ROUTE_EVENT") or "", head_repo=env.get("ROUTE_HEAD_REPO") or "", repo=repo)
-        # The fork rule and the state come first: the reads (or their replayed values) matter only when occupancy decides.
-        if occupancy_decides(mode, state_text, now, **rule):
+        # The fork rule, the mode and the state come first: the reads (or their replayed values) matter only when
+        # occupancy decides, and the state parsed here is the one occupancy uses.
+        decisions, summary, state = settle_early(mode, lanes, state_text, now, **rule)
+        if state is not None:
             if (env.get("ROUTE_RUN_STARTED") or "").strip():
                 run_started = _int_env(env, "ROUTE_RUN_STARTED", now)
             else:
@@ -492,7 +531,7 @@ def main(env=None, get=gh_api, clock=time.time):
                     concurrent = fetch_concurrent(repo, run_id, run_started, get)
                 except Exception as failure:  # noqa: BLE001 - optional read; assume no earlier router
                     print("::notice::%s" % annotation_text("earlier routers unknown (%s); assuming none" % failure))
-        decisions, summary = decide(mode, lanes, state_text, now, concurrent, **rule)
+            decisions, summary = decide_from_occupancy(lanes, state, now, concurrent, summary, DURATIONS)
     except Exception as failure:  # noqa: BLE001 - every failure routes to the vendor, never fails the run
         reason = "%s: %s; every lane goes to the vendor" % (type(failure).__name__, failure)
         print("::warning title=Windows lane router::%s" % annotation_text(reason))

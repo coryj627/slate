@@ -217,19 +217,56 @@ class Allocate(unittest.TestCase):
 class Replay(unittest.TestCase):
     """Spec §3: each earlier router's own allocation, oldest first, against the schedule so far."""
 
+    def test_no_earlier_router_leaves_the_schedule_as_published(self):
+        self.assertEqual(route.replay_earlier_routers([0, 0], 2, 0, TEST_DURATIONS), (2, [0, 0]))
+
     def test_one_earlier_router_on_two_idle_slots_places_its_app_model_and_rust(self):
         # Its app (26 + H) and model-0 (25 + H) take both slots; its rust queues behind model-0 (+ 11 + H).
-        free, schedule = route.replay_earlier_routers([0, 0], 2, [41], TEST_DURATIONS)
+        free, schedule = route.replay_earlier_routers([0, 0], 2, 1, TEST_DURATIONS)
         self.assertEqual((free, schedule), (0, [26 * M + H, 25 * M + H + 11 * M + H]))
 
     def test_a_second_earlier_router_sees_only_what_the_first_left(self):
         # No free slot for the second: its app goes to the vendor and nothing of its fits the vendor deadline.
-        free, schedule = route.replay_earlier_routers([0, 0], 2, [41, 43], TEST_DURATIONS)
+        free, schedule = route.replay_earlier_routers([0, 0], 2, 2, TEST_DURATIONS)
         self.assertEqual((free, schedule), (0, [26 * M + H, 25 * M + H + 11 * M + H]))
 
     def test_one_earlier_router_on_three_idle_slots_places_all_four_lanes(self):
-        free, schedule = route.replay_earlier_routers([0, 0, 0], 3, [41], TEST_DURATIONS)
+        free, schedule = route.replay_earlier_routers([0, 0, 0], 3, 1, TEST_DURATIONS)
         self.assertEqual((free, schedule), (0, [25 * M + H, 26 * M + H, 25 * M + H + 11 * M + H]))
+
+    def test_each_earlier_router_counts_on_five_slots(self):
+        # The first places all four lanes at once and leaves one slot free.
+        self.assertEqual(route.replay_earlier_routers([0] * 5, 5, 1, TEST_DURATIONS),
+                         (1, [0, 11 * M + H, 25 * M + H, 25 * M + H, 26 * M + H]))
+        # The second takes it with its app, queues model-0 behind the first's rust and its rust behind a model shard.
+        self.assertEqual(route.replay_earlier_routers([0] * 5, 5, 2, TEST_DURATIONS),
+                         (0, [25 * M + H, 26 * M + H, 26 * M + H, 11 * M + H + 25 * M + H, 25 * M + H + 11 * M + H]))
+
+
+class SettleEarly(unittest.TestCase):
+    """The decision before occupancy, shared by decide and main: the fork rule, the mode and the state's death."""
+
+    def settle(self, mode="home", text=None, **overrides):
+        kwargs = dict(stale_seconds=180, slots_max=8, event="push", head_repo="", repo=REPO)
+        kwargs.update(overrides)
+        return route.settle_early(mode, LANES + ["shell"], state() if text is None else text, NOW, **kwargs)
+
+    def test_a_fork_the_mode_or_a_dead_state_settles_every_lane(self):
+        cases = {"fork": dict(event="pull_request", head_repo="someone/slate"), "home-only": dict(mode="home-only"),
+                 "namespace": dict(mode="namespace"), "stale state": dict(text=state(at=NOW - 181)),
+                 "unparseable state": dict(text="{")}
+        for name, overrides in cases.items():
+            decisions, summary, parsed = self.settle(**overrides)
+            self.assertIsNone(parsed, name)
+            self.assertEqual(sorted(decisions), sorted(LANES), name)
+            self.assertEqual(summary["unknown_lanes"], ["shell"], name)
+
+    def test_a_live_state_is_handed_on_parsed_for_occupancy(self):
+        text = state(running=[("app", NOW - 600)])
+        decisions, summary, parsed = self.settle(text=text)
+        self.assertIsNone(decisions)
+        self.assertEqual(parsed, route.parse_state(text)[0])
+        self.assertEqual((summary["state_age"], summary["slots"], summary["running"], summary["dead"]), (5, 2, 1, False))
 
 
 class Decide(unittest.TestCase):
@@ -462,6 +499,56 @@ class Reads(unittest.TestCase):
         pairs = route.fetch_concurrent(REPO, "999", NOW, get)
         self.assertEqual([run for run, _ in pairs], list(range(102, 112)))
         self.assertEqual(sorted(jobs_read), list(range(102, 112)))
+
+    def test_fetch_concurrent_follows_the_runs_listing_to_a_short_page(self):
+        pages = []
+
+        def get(path):
+            if "/runs?status=" in path:
+                status, page = re.search(r"status=(\w+)&per_page=100&page=(\d+)$", path).groups()
+                pages.append((status, int(page)))
+                if (status, page) == ("in_progress", "1"):
+                    # GitHub lists newest first: a full page of runs that started after this one.
+                    return {"workflow_runs": [{"id": 1000 + n, "run_started_at": iso(NOW + 60)} for n in range(100)]}
+                if (status, page) == ("in_progress", "2"):
+                    return {"workflow_runs": [{"id": 41, "run_started_at": iso(NOW - 60)}]}
+                return {"workflow_runs": []}
+            if "/runs/41/jobs" in path:
+                return {"jobs": [{"name": route.ROUTE_JOB_NAME, "status": "in_progress"}]}
+            raise AssertionError(path)
+
+        self.assertEqual(route.fetch_concurrent(REPO, "9", NOW, get), [(41, None)])
+        self.assertEqual(pages, [("queued", 1), ("in_progress", 1), ("in_progress", 2)])
+
+    def test_fetch_concurrent_keeps_what_it_read_when_a_later_page_fails(self):
+        def get(path):
+            if "status=queued" in path:
+                return {"workflow_runs": []}
+            if "status=in_progress" in path and path.endswith("&page=1"):
+                return {"workflow_runs": [{"id": 41, "run_started_at": iso(NOW - 60)}] +
+                                         [{"id": 1000 + n, "run_started_at": iso(NOW + 60)} for n in range(99)]}
+            if "status=in_progress" in path:
+                raise RuntimeError("gh api %s exited 1: HTTP 502: Bad Gateway" % path)
+            if "/runs/41/jobs" in path:
+                return {"jobs": [{"name": route.ROUTE_JOB_NAME, "status": "in_progress"}]}
+            raise AssertionError(path)
+
+        buffer = io.StringIO()
+        with redirect_stdout(buffer):
+            self.assertEqual(route.fetch_concurrent(REPO, "9", NOW, get), [(41, None)])
+        self.assertIn("::notice::", buffer.getvalue())
+        self.assertIn("HTTP 502: Bad Gateway", buffer.getvalue())
+
+    def test_fetch_concurrent_reads_at_most_five_pages_per_status(self):
+        paths = []
+
+        def get(path):
+            paths.append(path)
+            return {"workflow_runs": [{"id": 1000 + n, "run_started_at": iso(NOW + 60)} for n in range(100)]}
+
+        self.assertEqual(route.fetch_concurrent(REPO, "9", NOW, get), [])
+        self.assertEqual(len(paths), 10)
+        self.assertTrue(paths[4].endswith("status=queued&per_page=100&page=5"))
 
 
 class Main(unittest.TestCase):
