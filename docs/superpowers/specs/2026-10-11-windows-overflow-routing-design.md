@@ -1,10 +1,13 @@
 # Windows overflow routing and host cleanup — design
 
-Date: 2026-10-11, revised the same day after an independent red team
-(23 findings, none critical; every high and medium is resolved below and
-named where it changed the design). Extends
+Date: 2026-10-11. Revision 3: after a design red team (23 findings) and a
+four-way plan red team (correctness, reliability, maintainability,
+performance; 76 findings, one critical). The one structural change in this
+revision is where the router learns the pool's state: from the host itself,
+not from GitHub's jobs listing (OR-D2). Extends
 `docs/superpowers/specs/2026-10-10-self-hosted-windows-runner-design.md`
 (the home pool, its orchestrator and its manual fallback, D-3 there).
+Decisions here are prefixed `OR-` so they never collide with that spec's.
 
 ## 1. Goal
 
@@ -12,470 +15,506 @@ A `windows.yml` lane waits for a home slot only when waiting costs the run
 no time. When a slot is free, the lane that would cost the most on the
 vendor takes it; when none is free, a lane queues at home if it would still
 finish inside the run's critical path, and otherwise runs on Namespace at
-once. The owner's words: concurrency over a queue, first in first out, with
-the expensive lanes preferred for home; the revision adds "and never pay the
-vendor to save no time".
+once. The owner's words: concurrency over a queue, first in first out, the
+expensive lanes preferred for home, and never pay the vendor to save no
+time.
 
-The shell gate always runs on `windows-latest`: it is free on a public
-repository and measured faster there (10–14 min) than at home (15–17 min),
-so a home slot would buy nothing and cost a paid lane its place.
+The shell gate always runs on `windows-latest`: free on a public
+repository and measured faster there (10–14 min, median 13) than at home
+(15–17 min), so a home slot would buy nothing and cost a paid lane its
+place.
 
-Two things ride along because the owner asked for them in the same breath:
-the host cleans up after itself without a hand where that is safe, and the
-public repository keeps revealing nothing it did not already reveal.
+Two things ride along: the host cleans up after itself where that is safe
+(logs; the previous golden image, through an elevated task on the host's
+own evidence), and the public repository keeps revealing nothing it did
+not already reveal.
 
-`nightly.yml` and the pilot keep their own rules (§11): with the mode on
-`home` the nightly stress job still queues home unconditionally.
+`nightly.yml` and the pilot keep their own rules (§12); the nightly stress
+job queues home under `home` and `home-only` alike.
 
 ## 2. Decisions
 
-- **D-1 Overflow, not a blind queue.** `WINDOWS_RUNNER_MODE=home` now means
-  "home first; queue only when it costs no time; vendor otherwise". A new
+- **OR-D1 Overflow, not a blind queue.** `WINDOWS_RUNNER_MODE=home` means
+  "home first; queue only when it costs no time; vendor otherwise". The new
   value `home-only` keeps today's behaviour (every lane queues home) for
-  golden-refresh validation and fidelity runs. `namespace`, unset or any
-  other value still sends every lane to the vendor exactly as before, and
-  does so without running any router code (M-5).
-- **D-2 The decision is made per job, when it becomes schedulable,** by a
-  routing job on hosted Linux that reads the Actions jobs queue — the shape
-  of the mac runner's `ci/mac-runner/route/route.py`. GitHub fixes a job's
-  runner at queue time and offers no fallback, so this is the only place a
-  dynamic choice can be made.
-- **D-3 Cost ranking with a critical-path bound.** Lanes are considered in
-  vendor-cost order (app build + test, model shard 0, model shard 1, rust
-  tests). A free slot goes to the next lane in that order. A lane with no
-  free slot queues at home when the pool's simulated schedule finishes it
-  no later than the run's critical path (the app lane plus the shell gate);
-  otherwise it goes to the vendor now. The app lane never queues: any wait
-  on it lengthens the run.
-- **D-4 A dead or crippled host routes away by itself.** An admissible
-  `slate-win-*` job queued for more than five minutes while fewer jobs are
-  in progress than there are slots means the pool cannot serve, and the
-  router sends everything to the vendor until the host takes its queue
-  again. Queued jobs older than two hours are stuck, not demand, and are
-  ignored (H-1, L-6).
-- **D-5 Fork pull requests never route home, enforced by the host.** A fork
-  runs its own workflow file and its own router, so the workflow-side rule
-  is only defence in depth (H-2). The control is the host: at admission it
-  skips any job whose run's head repository is not `TrustedRepo`. The
-  approval policy for outside contributors (`all_external_contributors`,
-  verified) stays the gate that decides whether a fork's workflow runs at
-  all. The first spec's allowance of an approved fork on a throwaway VM is
-  withdrawn.
-- **D-6 A partial re-run never trusts a stale decision.** GitHub reuses a
-  successful routing job's outputs when only failed jobs are re-run (H-3),
-  so each lane uses the routed label only when the router ran in the lane's
-  own attempt and otherwise takes the vendor expression. "Re-run all jobs"
-  is the way to re-route; the runbook says so.
-- **D-7 Cleanup stays within each actor's rights.** The orchestrator prunes
-  its own logs. It decides when the previous golden image is no longer
-  needed, and an elevated task registered by `setup-host.ps1` deletes it,
-  because the orchestrator's account has read and execute on `golden` by
-  design (H-4). The branch sweep reports; it deletes only what `main`
-  already contains, and only on an explicit dispatch (H-5).
+  golden-image validation and fidelity runs. `namespace`, unset or any
+  other value sends every lane to the vendor exactly as before, and the
+  routing job does not run at all.
+- **OR-D2 The host publishes its state; the router reads it.** Every tick
+  the orchestrator writes the repository variable `WINDOWS_HOME_STATE`: a
+  heartbeat, whether it is serving, how many slots it has, what runs in
+  them and what it has queued (§4). The router reads the variable from the
+  `vars` context, with no API call, and decides. This is the mac runner's
+  pattern (`MAC_RUNNER_HEARTBEAT`, written by the Studio controller).
+  Inferring the pool from GitHub's jobs listing was tried in revision 2
+  and shown unreliable: a dead host could only be noticed after a run had
+  stranded on it, every normal slot handover looked like a dead host, and
+  the router had to mirror admission rules it could not see. The cost is
+  one more fine-grained permission on the host's token, Variables read and
+  write, as the mac controller already holds.
+- **OR-D3 Cost ranking with a critical-path bound.** Lanes are considered
+  in vendor-cost order (app build + test, model shard 0, model shard 1,
+  rust tests). The app lane takes a free slot or the vendor; it never
+  queues, and "free" is counted from occupancy, never estimated. Every
+  other lane queues at home when the simulated schedule finishes it no
+  later than the run's deadline (the app lane plus the shell gate); else
+  the vendor now. Durations are measured constants in one table, injected
+  into the rule so tests do not pin production numbers.
+- **OR-D4 A dead or crippled host routes away by itself.** The published
+  state is stale (older than 120 s relative to the run's creation), says
+  it is not serving, or offers no slot: every lane goes to the vendor. No
+  run has to strand to discover an outage; a crashed host is stale within
+  two minutes.
+- **OR-D5 Fork pull requests never run on the pool, and the host enforces
+  what it can.** A fork runs its own workflow file and its own router, so
+  the workflow-side rule is defence in depth. The host (a) never
+  provisions a VM for a job whose run comes from another repository and
+  (b) forces a VM off within one tick when GitHub hands its runner to such
+  a job, which GitHub may do because a JIT runner goes to whichever queued
+  job matches its label. The approval policy for outside contributors
+  (`all_external_contributors`, verified) remains the gate that decides
+  whether a fork's workflow runs at all; what the host adds is that a
+  fork's job gets at most seconds on a throwaway VM with the fork's own
+  read-only token.
+- **OR-D6 A partial re-run never trusts a stale decision.** GitHub reuses
+  a successful routing job's outputs when only failed jobs are re-run, so
+  each lane uses the routed pool only when the router ran in the lane's
+  own attempt and otherwise takes the vendor expression that lives in the
+  workflow file. "Re-run all jobs" (`gh run rerun <id>` without `--failed`)
+  is the way to re-route; the runbook says so and says to flip the mode
+  first when the host is down.
+- **OR-D7 Cleanup stays within each actor's rights, on facts not
+  verdicts.** The orchestrator prunes its own logs and records which lanes
+  went green on which golden image. An elevated task registered by
+  `setup-host.ps1` decides at deletion time, with one pure predicate the
+  module owns, whether the previous image can go, against the current,
+  sealed image. `build-golden.ps1 -Rotate` is the only thing that creates
+  the previous image, and only from a sealed one. The branch sweep reports;
+  it deletes only what `main` already contains, only on an explicit
+  dispatch, and lands as its own pull request.
 
 ## 3. The routing rule
 
 **Decision point.** One per `windows.yml` run: the `route` job at the
 start, for rust tests, app build + test, model shard 0 and model shard 1.
-The shell gate is fixed to `windows-latest` (goal) and needs no routing;
-the two Ubuntu gates are not Windows lanes.
+It runs only when the mode is `home` or `home-only`. The shell gate is
+`windows-latest` (goal) and the two Ubuntu gates are not Windows lanes.
 
-**Admissible job.** A job whose labels contain exactly one label matching
-`^slate-win-(rust|app|model|shell)$` (case-insensitive) and no other
-`slate-win-*` label — the host's own admission predicate
-(`SlateCiHost.psm1`, `Resolve-RunnerJob`); the Pester and Python suites
-share test vectors for it. Jobs of runs whose `head_repository.full_name`
-is not the repository are excluded (D-5). A queued admissible job whose
-`created_at` is more than `ROUTE_STALE_SECONDS` (7 200) old is **stuck**:
-listed in the summary, counted nowhere.
+**Inputs.** The mode; the published state (§4); the lane list; the run's
+attempt; the run's creation time (one API read, `GET /actions/runs/{id}`,
+optional: `now` when it fails); the fork inputs; and, optionally, the
+other runs whose routing job started before this one (one listing read of
+`windows.yml`'s queued and in-progress runs plus their jobs, ignored on
+failure).
 
-**Occupancy.** Every admissible, non-stuck job with status `queued` or
-`in_progress` in any run of the three routed workflows (`windows.yml`,
-`nightly.yml`, `windows-ci-pilot.yml`), the run being routed included: its
-own already-routed lanes genuinely hold or wait for slots (M-1); its
-unrouted lanes are absent from GitHub's listing while they wait on `needs`
-(verified live). Liveness comes from `status` only; a queued job's
-`started_at` equals its `created_at` and means nothing (L-8).
+**Dead or crippled host (OR-D4).** The state is missing, does not parse,
+has `v` other than 1, has `at` older than `ROUTE_STALE_SECONDS` (120)
+before the run's creation time, has `serving` false, or has `slots` below
+1. Then every lane goes to the vendor and the summary says which test
+failed. In `home-only` the state is ignored: every lane queues home.
 
-**Free slots** = `ROUTE_SLOTS` − occupancy, floored at zero. `ROUTE_SLOTS`
-defaults to 2 and a unit test asserts it equals the `Slots` count in the
-repository's `ci/windows-runner/config.json` (L-5); drift against the
-host's installed copy is the runbook's capacity step.
+**Occupancy** is what the host published: `running` (one entry per slot
+in use: lane and the time the VM was provisioned) and `queued` (the
+admissible jobs the host will serve, oldest first: lane and the time the
+job was created). The host already excludes what it will never serve
+(other repositories, jobs at the retry cap or in back-off), so the router
+mirrors no admission rule. Free slots = `slots − len(running) −
+len(queued)`, floored at zero.
 
-**Dead or crippled host (D-4).** If some admissible, non-stuck queued job
-is older than `ROUTE_DEAD_SECONDS` (300) while the number of in-progress
-admissible jobs is below `ROUTE_SLOTS`, free slots are zero and no lane
-may queue: everything goes to the vendor. Normal handoff is one to two
-minutes (12–14 s to hand off, up to a minute for the runner to come
-online, up to a minute for GitHub to report), so five minutes leaves
-margin, and "below the slot count" catches a host with one wedged slot
-(a VM stuck in teardown, an unclaimed VM after a cancellation) as well as
-a dead one.
+**Durations**, one table in the router, injected into the rule:
 
-**Allocation (D-3).** Constants, one table in the module, revised as the
-warm-cache figures come in:
-
-| lane | home duration | vendor duration | vendor target |
+| lane | home (min) | vendor (min) | basis (2026-10-11 runs, 30-day Namespace history) |
 |---|---|---|---|
-| app build + test | 25 min | 22 min (measured 19–25) | `namespace-profile-winx64-fast[-pr];overrides.cache-tag=slate-windows-app` |
-| model shard (each) | 20 min (17 idle, 26 beside the app job) | 6 min | `namespace-profile-winx64-fast[-pr];overrides.cache-tag=slate-windows-model` |
-| rust tests | 10 min | 2 min | `namespace-profile-winx64-fast[-pr];overrides.cache-tag=slate-windows-rust` |
-| shell gate | — | 13 min (measured 10–14) | `windows-latest`, always |
+| app build + test | 26 | 22 | home 22–27 beside a neighbour; Namespace 19–25 |
+| model shard (each) | 25 | 6 | home 25.3 median beside a neighbour, 15–17 alone |
+| rust tests | 11 | 2 | home 10–11 cold |
+| shell gate | — | 13 | windows-latest median of 10, 13, 14 |
 
-The router simulates the home pool: each slot is busy until the expected
-finish of its in-progress job (`started_at` plus the home duration of the
-job's lane, never earlier than now), then the queued admissible jobs, oldest
-first, take slots as they free (FIFO across runs). The run's **deadline**
-is the app lane's expected finish plus the shell gate's duration, where the
-app lane's finish is `now` plus its home duration if it gets a free slot
-and `now` plus its vendor duration otherwise. Then, in cost order:
+plus `HANDOVER` = 110 s (a slot's turnover: settle, provision, hand off,
+runner online; measured 94–131 s) and `OVERRUN_FLOOR` = 300 s (a job past
+its duration is not free; it is assumed to need five more minutes). These
+are revised from the artifacts, not from the runbook, and the runbook
+points at the table.
 
-1. **app**: a free slot → home; none → vendor. It never queues.
-2. **model-0, model-1, rust**, each in turn: its expected start is the
-   earliest slot free in the simulation after everything already placed;
-   if start + home duration ≤ deadline → home (and the slot is busy until
-   then for the next lane); otherwise → vendor now.
+**Simulation.** Each running entry occupies its slot until
+`max(since + duration_home(lane), now + OVERRUN_FLOOR) + HANDOVER`; more
+running entries than slots keep the latest-ending ones. Each queued entry,
+oldest first, takes the earliest-free slot for `duration_home(lane) +
+HANDOVER`. Then every other run whose routing job started before this
+run's and whose lanes are not yet queued is assumed to place its app lane
+and its model shard 0 at the front of the queue (the idle-pool outcome),
+so concurrent routers resolve by age instead of all taking the same slots.
 
-Worked example, idle pool, cold constants: app home (slot 1 busy 25 min),
-model-0 home (slot 2 busy 20 min), model-1 would start at 20 and finish at
-40 against a deadline of 38 → vendor (6 paid minutes), rust starts at 20
-and finishes at 30 → home. Pool busy with another run's app lane 10 min
-in: app → vendor (deadline 35), model-0 starts at 15 on the freed slot and
-finishes at 35 → home, model-1 → vendor, rust starts at 35 → vendor. With
-warm constants (shard 15 min) model-1 fits and the floor is zero.
+**Allocation (OR-D3).** Deadline = (app home duration if the app lane gets
+a free slot, else app vendor duration) + shell vendor duration. In cost
+order: the app lane goes home when free slots > 0 and otherwise to the
+vendor; each other lane's expected start is the earliest free slot in the
+simulation, and it goes home when start + its home duration ≤ deadline
+(the slot then stays busy to that finish plus `HANDOVER`), else to the
+vendor.
 
-**Cost floor stated (M-6).** With cold constants the rule pays the vendor
-about 6 minutes per idle-pool run (model shard 1); with warm ones nothing.
-Pure overflow would have paid about 8 per run, roughly 1 700 a month at
-the current rate of about 214 completed runs a month, which is why D-3
-bounds the queue by the critical path instead of forbidding it.
+Worked example, idle pool: app home (slot busy to 26 + 1.8), model-0 home
+(slot busy to 25 + 1.8), deadline 26 + 13 = 39; model-1 would start at
+26.8 and finish at 51.8 → vendor; rust starts at 26.8 and finishes at
+37.8 → home. Two running entries 10 and 5 min in (busy to 17.8 and 21.8):
+app → vendor (deadline 35), model-0 starts 17.8 and finishes 42.8 →
+vendor, model-1 the same → vendor, rust starts 17.8 and finishes 28.8 →
+home.
 
-**Fork pull requests (D-5, workflow side).** When the event is
-`pull_request` and the head repository is not `github.repository`, every
-lane gets its vendor target and the summary says why. This is defence in
-depth only; the host check is the control.
+**What it costs and saves (measured, 30-day history).** Expected Namespace
+spend under this rule about 3 900 minutes a month at 214 completed runs
+(14.6 per run: about 27 % of app lanes find the pool busy); plain overflow
+about 4 500; all-Namespace about 10 350; today's queueing nothing, at an
+average run of about 128 minutes. A single push on an idle pool takes
+about 40 minutes under the rule against about 35 all-Namespace: the home
+pool is slower per lane and is chosen for cost. Warm caches shorten setup
+by about 4.5 minutes but the test steps dominate, so shard 1 keeps going
+to the vendor (about 6 minutes a run); the revision-2 claim that warm
+caches made it free was wrong.
 
-**Modes.** The variable is compared trimmed and case-insensitively, the
-semantics GitHub's `==` already gave `Home` (L-1); `github.ref` is compared
-exactly, so only `refs/heads/main` gets the main vendor profile:
+**Fork pull requests (OR-D5, workflow side).** When the event is
+`pull_request` and the head repository is empty or differs from
+`github.repository`, every lane goes to the vendor before anything else
+is read.
+
+**Modes.** The router compares the mode trimmed and case-insensitively;
+GitHub's `==` in the workflow ignores case but not spaces, so the runbook
+says to set the value without spaces:
 
 | value | behaviour |
 |---|---|
 | `home` | the rule above |
-| `home-only` | every lane to its home label, queueing as today (validation and fidelity runs, M-8) |
-| `namespace` | every lane to its vendor target; no API call is made |
-| unset or anything else | as `namespace`; the summary names the value |
+| `home-only` | every lane home, queueing as today; the state is ignored |
+| `namespace` | every lane to the vendor; the routing job is skipped |
+| unset or anything else | as `namespace` |
 
 **Caches and provenance follow the chosen pool.** A lane sent to the vendor
 runs its Namespace cache step; a lane sent home runs none and gets the
-lane's cache disk; the host's commit rule (trusted repo, `main`, push /
-schedule / dispatch, success, generation unchanged) is untouched.
+lane's cache disk; the host's commit rule is untouched.
 
-**Two operating systems (M-3).** Under `home`, a lane runs on Windows 11
-Pro as a standard user at home or on Windows Server as administrator on the
+**Two operating systems.** Under `home`, a lane runs on Windows 11 Pro as
+a standard user at home or on Windows Server as administrator on the
 vendor, chosen by occupancy, and a commit can pass on one and fail on the
-other. The trade is accepted: each lane's first step prints its pool, the
-aggregate gate's failure line names the pool per lane, and the nightly
-stress job (home, unconditionally) plus `home-only` runs after a golden
-refresh keep the home environment exercised on schedule.
+other. The trade is accepted: each lane's first step prints its runner,
+the aggregate gate's failure line names the pools, and the nightly stress
+job plus `home-only` runs after a golden refresh keep the home environment
+exercised on schedule.
 
-## 4. The router
+## 4. The published state
+
+Repository variable `WINDOWS_HOME_STATE`, JSON, one line, for example:
+
+```json
+{"v":1,"at":"2026-10-11T15:04:05Z","serving":true,"slots":2,
+ "running":[{"lane":"app","since":"2026-10-11T14:48:51Z"}],
+ "queued":[{"lane":"model","since":"2026-10-11T14:40:00Z"}]}
+```
+
+- `at`: the tick's UTC time. `serving`: `slots ≥ 1`. `slots`: the
+  configured slot count minus slots held by VMs in teardown
+  (`discarding`). `running`: every journal VM in phase `provisioned` or
+  `handed` that holds a slot (a `PendingCommit` VM holds none), with its
+  provisioning time. `queued`: the queued jobs the host would admit if it
+  had slots, oldest first (admissible lane label, this repository, not at
+  the retry cap, not in back-off), with their `created_at`.
+- Written by the orchestrator at the end of every tick in which the
+  serialised value changed, and at least every 60 s otherwise, through
+  `PATCH /repos/{owner}/{repo}/actions/variables/WINDOWS_HOME_STATE`
+  (`POST /actions/variables` once when it does not exist). A failed write
+  is logged once a minute and never stops the tick: the router then sees a
+  stale heartbeat and routes away, the conservative outcome. Budget: at
+  most six writes a minute, in practice one or two; the PAT's 5 000 an
+  hour is untouched by reads, which stay conditional.
+- Pure function `Get-PublishedState -Config -Journal -Queued -Now` returns
+  the hashtable; `Publish-HomeState` compares its JSON with the last
+  published one and the last publish time and calls the adapter.
+- Read by the router from `${{ vars.WINDOWS_HOME_STATE }}`. The variable
+  is public on a public repository; it states occupancy counts and ages
+  that the public job timings already imply.
+- The owner creates the variable once with
+  `gh variable set WINDOWS_HOME_STATE --body '{"v":1,"at":"1970-01-01T00:00:00Z","serving":false,"slots":0,"running":[],"queued":[]}'`
+  (or the host's first POST does), and re-issues the PAT with Variables
+  read and write before enabling the loop on the new code.
+
+## 5. The router
 
 **Location.** `ci/windows-runner/route/route.py`, tests in
 `ci/windows-runner/route/tests/test_route.py`, run by
 `windows-runner-tests.yml` with
 `python -I -m unittest discover -v -s ci/windows-runner/route/tests -t ci/windows-runner/route`
-next to the Pester suite. The mac router lives at the matching path and the
-two workflows call theirs the same way.
+in a step that runs even when the Pester step failed. The mac router lives
+at the matching path.
 
-**Inputs, all from the environment**, with test seams:
+**Inputs, from the environment:**
 
 | variable | meaning |
 |---|---|
 | `WINDOWS_RUNNER_MODE` | the repository variable |
-| `ROUTE_LANES` | comma list of the lanes to route: `rust,app,model-0,model-1` |
-| `ROUTE_REF` | `github.ref`, for the `-pr` suffix |
-| `ROUTE_ATTEMPT` | `github.run_attempt`, echoed as the `attempt` output (D-6) |
-| `ROUTE_RUN_ID` | `github.run_id`, for the summary only |
-| `ROUTE_EVENT`, `ROUTE_HEAD_REPO`, `ROUTE_REPO` | the fork rule's inputs |
-| `ROUTE_SLOTS` | pool size, default 2 |
-| `ROUTE_DEAD_SECONDS`, `ROUTE_STALE_SECONDS` | defaults 300 and 7 200 |
-| `ROUTE_NOW` | epoch seconds, for tests |
-| `ROUTE_JOBS_JSON` | a path to a reduced listing to use instead of the API, for tests and for replaying a decision |
-| `GH_TOKEN` | `${{ github.token }}`, set explicitly in the step's `env` (M-4) |
-| `GITHUB_REPOSITORY`, `GITHUB_OUTPUT`, `GITHUB_STEP_SUMMARY` | the usual |
-
-**Reads.** With `gh api` and the token above, under the job permissions
-`actions: read` and `contents: read` (M-4): for each routed workflow,
-`GET /repos/{repo}/actions/workflows/{file}/runs?status=queued` and
-`?status=in_progress` (both, because a run's status does not track its
-jobs' — a run listed as `queued` held two in-progress jobs live), then
-`GET /repos/{repo}/actions/runs/{id}/jobs` for each run returned, every
-call paginated at `per_page=100` and given a 15-second timeout, 60 seconds
-in all (M-5). The listing is reduced to
-`(job id, run id, head repository, status, labels, created_at)` before any
-rule runs, and the reduced listing is written to the log and the summary
-so `ROUTE_JOBS_JSON` can replay the decision a day later (L-4). A
-`created_at` that does not parse keeps the job in occupancy and out of
-every age test (L-8).
+| `WINDOWS_HOME_STATE` | the published state (`vars`) |
+| `ROUTE_LANES` | `rust,app,model-0,model-1` (a test asserts it equals the router's lane list) |
+| `ROUTE_ATTEMPT` | `github.run_attempt`, echoed as `attempt` |
+| `ROUTE_RUN_ID` | `github.run_id`, for the creation-time read and the summary |
+| `ROUTE_EVENT`, `ROUTE_HEAD_REPO`, `ROUTE_REPO` | the fork rule |
+| `ROUTE_SLOTS_MAX` | upper clamp on `slots`, default 8 (a published value above it is treated as not serving) |
+| `ROUTE_STALE_SECONDS` | 120 |
+| `ROUTE_NOW`, `ROUTE_RUN_CREATED` | epoch seconds, for tests and replay |
+| `ROUTE_CONCURRENT` | a JSON list of earlier routers' run ids, for tests and replay (replaces the listing read) |
+| `GH_TOKEN` | `${{ github.token }}`, for the two optional reads |
+| `GITHUB_OUTPUT`, `GITHUB_STEP_SUMMARY` | the usual |
 
 **Decision.** A pure function
 
 ```
-decide(mode, lanes, jobs, now, *, slots, dead_seconds, stale_seconds,
-       ref, event, head_repo, repo, durations)
-  -> {lane: Decision(pool, label, reason)},
-     Occupancy(in_progress, queued, stuck, oldest_queued_age, dead, deadline)
+decide(mode, lanes, state_text, now, run_created, concurrent, *,
+       stale_seconds, slots_max, event, head_repo, repo, durations)
+  -> {lane: Decision(pool, reason)}, Summary
 ```
 
-with no I/O, so every rule in §3 is a unit test on a hand-written listing:
-free slots; the cost order; the critical-path simulation with the worked
-examples above and at the deadline boundary; the app lane never queueing;
-the dead-host rule at 299, 300 and 301 seconds with in-progress counts of
-0, 1 and 2; a wedged slot; a stuck job ignored; the admissibility
-predicate (shared vectors with the Pester suite, including `slate-win-x`,
-two labels, `SLATE-WIN-APP`); fork runs excluded and the fork rule; mode
-`home-only`; mode `namespace`; `Home ` with case and whitespace; an unknown
-mode; an empty listing; the routed run's own lanes counted; a malformed
-timestamp; every vendor string verbatim for `refs/heads/main` and for a
-branch (M-7); `DEFAULT_SLOTS` and `ROUTED_WORKFLOWS` against
-`config.json`. `main()` wraps `decide` in the reads and the writes; any
-exception on the way makes every lane a vendor lane with the exception's
-type in the reason and a `::warning::` annotation on the run (M-4), never
-a failed step.
+with no I/O; `durations` defaults to the production table and tests pass
+a frozen copy. Every rule in §3 is a unit test: the state's five death
+conditions each at the boundary; `home-only` ignoring a dead state;
+occupancy-based free slots; the overrun floor; the handover; the worked
+examples; the deadline boundary; the concurrent-router demand; the fork
+rule; the mode table with case and spaces; an empty lane list; a lane
+missing from the table (rejected with a reason, outputs withheld, so the
+lane takes the vendor fallback); a replay line that reproduces a decision.
+`main()` wraps it in the two optional reads (`gh api`, 15 s each, one
+retry, `stderr` in the error), the outputs and the summary; any exception
+makes every lane a vendor lane with the exception's text in the reason and
+a `::warning::` annotation, never a failed step. Test seams are injected
+(`get=`, `clock=`), never monkeypatched.
 
-**Outputs**, appended to `$GITHUB_OUTPUT` and echoed when it is unset:
+**Outputs** (`$GITHUB_OUTPUT`, echoed when unset): `attempt`, then
+`<lane>-pool` = `home` or `vendor` for every requested lane. The router
+emits no labels: both labels live in the workflow file, so a vendor rename
+is one edit pinned by one guard.
 
-| output | value |
-|---|---|
-| `<lane>` | the full `runs-on` string for the lane |
-| `<lane>-pool` | `home` or `vendor` |
-| `attempt` | `ROUTE_ATTEMPT`, so a lane can tell a reused output from its own (D-6) |
+**Summary.** Mode; the state as read (age, serving, slots, running,
+queued); free slots and the deadline; a row per lane (pool, reason); and
+one copy-paste replay line (`WINDOWS_RUNNER_MODE=… WINDOWS_HOME_STATE='…'
+ROUTE_NOW=… ROUTE_RUN_CREATED=… ROUTE_CONCURRENT='…' ROUTE_LANES=…
+python3 ci/windows-runner/route/route.py`) that reproduces the decision.
 
-Lane names in outputs are `rust`, `app`, `model-0`, `model-1`.
+**Constants**: `LANES` (one table: lane → host lane, cost rank), the
+durations table, `HANDOVER_SECONDS`, `OVERRUN_FLOOR_SECONDS`,
+`DEFAULT_STALE_SECONDS`, `DEFAULT_SLOTS_MAX`; an invariant test checks the
+table is consistent and equals the workflow's `ROUTE_LANES`.
 
-**Summary.** One table in `$GITHUB_STEP_SUMMARY`: mode, occupancy (in
-progress, queued, stuck, oldest queued age), free slots, the deadline, then
-a row per lane with pool, label and reason, then the reduced listing. The
-title names the mode, not the host's state (L-9).
+## 6. Workflow changes (`windows.yml`)
 
-**Constants**, declared at the top of the module with the measurements
-that justify them: `HOME_LABELS`, `VENDOR_TARGETS`, `COST_ORDER`,
-`DURATIONS` (the table in §3), `DEFAULT_SLOTS = 2`,
-`DEFAULT_DEAD_SECONDS = 300`, `DEFAULT_STALE_SECONDS = 7200`,
-`ROUTED_WORKFLOWS` (the three paths, equal to the host's `config.json`).
-
-## 5. Workflow changes (`windows.yml`)
-
-- **`route`**: first job, `name: Route Windows lanes`, `runs-on:
-  ubuntu-latest`, `timeout-minutes: 5`, `permissions: { actions: read,
-  contents: read }`, sparse checkout of `ci/windows-runner/route` with
-  `persist-credentials: false`, one step running the router with
-  `continue-on-error: true` (M-5), `env` carrying `GH_TOKEN: ${{ github.token }}`,
-  `WINDOWS_RUNNER_MODE: ${{ vars.WINDOWS_RUNNER_MODE }}`,
-  `ROUTE_LANES: rust,app,model-0,model-1`, `ROUTE_ATTEMPT: ${{ github.run_attempt }}`
-  and the rest of §4's inputs; job outputs `rust`, `app`, `model-0`,
-  `model-1`, their `-pool` twins and `attempt`.
-- **Every routed lane** gains `needs: [route]` (the model matrix job has
-  no `needs` today and gains this one), `if: ${{ !cancelled() }}` so a
-  failed routing job does not skip it (M-5), and a `runs-on` that trusts the
-  router only in its own attempt and falls back to today's vendor expression
-  otherwise (D-6, M-5), for example for rust:
-  `${{ needs.route.outputs.attempt == github.run_attempt && needs.route.outputs.rust || format('namespace-profile-winx64-fast{0};overrides.cache-tag=slate-windows-rust', github.ref != 'refs/heads/main' && '-pr' || '') }}`.
-  The model matrix picks `model-0` or `model-1` by `matrix.shard` inside
-  the same shape. The three Namespace cache steps run unless the lane is
-  home in this attempt:
+- **`route`**: first job, `name: Route Windows lanes`,
+  `if: ${{ vars.WINDOWS_RUNNER_MODE == 'home' || vars.WINDOWS_RUNNER_MODE == 'home-only' }}`,
+  `runs-on: ubuntu-latest`, `timeout-minutes: 5`,
+  `permissions: { actions: read, contents: read }`, a sparse checkout of
+  `ci/windows-runner/route` with `persist-credentials: false` and
+  `continue-on-error: true`, then the routing step with
+  `continue-on-error: true` and `env` carrying `GH_TOKEN`,
+  `WINDOWS_RUNNER_MODE`, `WINDOWS_HOME_STATE`, `ROUTE_LANES`,
+  `ROUTE_ATTEMPT`, `ROUTE_RUN_ID`, `ROUTE_EVENT`, `ROUTE_HEAD_REPO`,
+  `ROUTE_REPO`; job outputs `attempt`, `rust-pool`, `app-pool`,
+  `model-0-pool`, `model-1-pool`.
+- **Every routed lane**: `needs: [route]`, `if: ${{ !cancelled() }}` (a
+  skipped or failed routing job must not skip it), and one predicate used
+  twice, for example rust:
+  `runs-on: ${{ (needs.route.outputs.attempt == github.run_attempt && needs.route.outputs.rust-pool == 'home') && 'slate-win-rust' || format('namespace-profile-winx64-fast{0};overrides.cache-tag=slate-windows-rust', github.ref != 'refs/heads/main' && '-pr' || '') }}`
+  and the Namespace cache step
   `if: ${{ !(needs.route.outputs.attempt == github.run_attempt && needs.route.outputs.rust-pool == 'home') }}`.
-- **Each routed lane's first step prints its pool** (M-3), and the
-  aggregate gate's failure message names the pool per lane.
-- **The shell gate** (`flaui`): `runs-on: ${{ vars.WINDOWS_RUNNER_MODE == 'home-only' && 'slate-win-shell' || 'windows-latest' }}`
-  — `windows-latest` in every mode but `home-only` (goal, M-2); its
-  `needs` and its `needs.windows.result == 'success'` condition are
-  unchanged.
-- **Unchanged**: job and check names, the aggregate gate's `needs`, the
-  concurrency group, every `timeout-minutes`, the model coverage gate,
-  `nightly.yml`, the pilot, and the host's `RoutedWorkflows`.
-- **Path filter**: `ci/windows-runner/route/**` is added to `windows.yml`'s
-  own filter so a router change runs the workflow it steers (L-3).
-- **The header comment** describes the four modes, the critical-path rule,
-  the fork rule, "Re-run all jobs" after a flip, and where to read a run's
-  routing.
-- **`ci/windows-runner/tests/Workflows.Tests.ps1`** is rewritten for the
-  new shape and keeps every pin it has today or moves it to the Python
-  suite (M-7): the routing job exists with both permissions, the sparse
-  checkout, `continue-on-error`, `GH_TOKEN`, the mode variable in `env`
-  and `ROUTE_LANES`; every routed lane's `runs-on` has the attempt-guarded
-  shape above with today's vendor expression verbatim as the fallback; the
-  three cache gates have the attempt-guarded shape; every routed lane has
-  `if: ${{ !cancelled() }}`; the shell gate's `runs-on` is the `home-only`
-  expression; `vars.WINDOWS_RUNNER_MODE` appears in `windows.yml` only in
-  the routing job's `env` and the shell gate's `runs-on`; `nightly.yml`
-  and the pilot keep their guards verbatim; `windows-runner-tests.yml` runs
-  the router's unit tests; `windows.yml`'s path filter names the router.
-- **`windows-runner-tests.yml`** gains the Python step;
-  `ci/windows-runner/route/**` is inside its filter already.
+  The model matrix selects per shard with explicit booleans:
+  `((matrix.shard == 0 && needs.route.outputs.model-0-pool == 'home') || (matrix.shard == 1 && needs.route.outputs.model-1-pool == 'home'))`.
+  Each routed lane's first step prints `runner.name`, the effective pool.
+- **The shell gate**: `runs-on: ${{ vars.WINDOWS_RUNNER_MODE == 'home-only' && 'slate-win-shell' || 'windows-latest' }}`
+  and, new, `if: ${{ !cancelled() && needs.windows.result == 'success' }}`,
+  so a routing-job failure cannot skip it.
+- **`gate`**: `needs` gains `route`; its failure line names the pools and
+  the router's attempt.
+- **`nightly.yml`**: `home-only` routes home like `home`
+  (`vars.WINDOWS_RUNNER_MODE == 'home' || vars.WINDOWS_RUNNER_MODE == 'home-only'`),
+  in both its `runs-on` and its cache condition.
+- **Path filters**: `ci/windows-runner/route/**` in `windows.yml`'s.
+- **The header comment** describes the four modes, the published state,
+  the critical-path rule, the fork rule, "Re-run all jobs", and where to
+  read a run's routing.
+- **Guards** (`Workflows.Tests.ps1`): job blocks are sliced by a helper
+  that finds the next job key, so key order and comments do not break
+  them; the pins are the predicates and verbatim fallback strings, the
+  routing job's `if`, permissions, `continue-on-error` on both steps, the
+  env names, the shell gate's `if`, the model selector, the gate's
+  `needs`, `nightly.yml`'s two `home-only` reads, one cross-workflow pin
+  that every `vars.WINDOWS_RUNNER_MODE` comparison in the three workflows
+  is with `home` or `home-only`, the path filters, and that
+  `windows-runner-tests.yml` runs the router's tests with
+  `if: ${{ !cancelled() }}`.
 
-Latency added per run: the `route` job before the lanes (API reads of a
-few seconds; hosted pickup measured 5–10 s).
+Latency: the routing job's hosted pickup (5–10 s measured) plus two
+optional API reads; nothing in `namespace` mode.
 
-## 6. Host changes
+## 7. Host changes
 
-- **Admission skips other repositories (D-5).** `Invoke-Admission` reads
-  the run of each candidate job (`GetRun`, Actions read, already granted,
-  conditional request) and skips any whose `head_repository.full_name`
-  differs from `TrustedRepo`, logging
-  `admission: skipped job <id> of <repo> (not the trusted repository)` once
-  per job. Such a job stays queued until GitHub drops it; the approval
-  policy is what keeps it from existing.
-- **Log retention (D-7).** `Get-ExpiredLogNames -Names -Today -RetentionDays`
-  is pure and tested: names of the form `orchestrator-YYYY-MM-DD.log` whose
-  local date (the writer uses local dates) is older than `RetentionDays`
-  (config key `LogRetentionDays`, **defaulted to 30 when absent** so an
-  older `config.json` keeps working, L-7); names that do not parse are
-  kept. Runs at startup and at the first tick after local midnight
-  (journal key `LogsPrunedOn`, a local date); a delete that fails logs
-  and continues.
-- **Golden acceptance (D-7).** At settle with conclusion `success`, when
-  the VM's `CreationTime` is later than the golden's `LastWriteTime`, the
-  orchestrator records the lane in journal key `GoldenAccepted`
-  (`{ Golden = <LastWriteTime>; Lanes = @(...) }`, reset when the golden's
-  `LastWriteTime` changes). Once `rust`, `app` and `model` are all present
-  and no VM directory holds a VM created before the golden, it logs once:
-  `golden: the previous image is no longer needed (rust, app and model are
-  green on the current one)` and writes `GoldenPrevRemovableAt`. The
-  orchestrator never deletes under `golden`.
-- **The prune task.** `setup-host.ps1` registers `slate-ci-golden-prune`,
-  daily at 04:00 local, running as SYSTEM, which deletes
-  `golden\win11-runner.prev.vhdx` only when the journal's
-  `GoldenPrevRemovableAt` is later than the prev's `LastWriteTime` and no
-  VM directory predates the current golden; it appends one line to the
-  orchestrator log either way. `build-golden.ps1` gains `-Rotate`: an
-  existing `win11-runner.vhdx` is renamed to `.prev` (replacing an older
-  prev) before the build, which is the only moment someone elevated is
-  present; the runbook's manual rename becomes that switch, and its
-  rollback (rename the prev back) is unchanged and still possible until the
-  prune task runs after a green rust, app and model.
+- **Publishing (OR-D2).** `Get-PublishedState` (pure, tested) and
+  `Publish-HomeState` (throttled, logs a failed write once a minute) in
+  the module; `Set-GhVariable -Name -Value` in `adapters/GitHub.ps1`
+  (PATCH, POST on 404) exposed as the `PublishState` adapter; called at
+  the end of `Invoke-OrchestratorTick`. The journal remembers
+  `PublishedState` (the last JSON) and `PublishedAt`.
+- **Admission (OR-D5 a).** `Invoke-Admission` reads the run of each
+  candidate job once (`GetRun`; the answer is remembered on the `SeenJobs`
+  entry as `Foreign`, present from creation as `$null` = unknown; a read
+  that fails is retried at most once a minute and logged on the first
+  failure only) and never admits a foreign job:
+  `admission: skipped job <id> of <repo> (not the trusted repository)`. A
+  null head repository is foreign.
+- **Handoff (OR-D5 b).** In the reconciliation, when a handed VM's runner
+  is seen on a job the host did not provision for, the job's run is read;
+  if it is foreign the VM is forced off at once with reason
+  `runner taken by job <id> of <repo> (not the trusted repository)`, no
+  retry, and the trusted job it was provisioned for stays queued for the
+  next VM.
+- **Log retention (OR-D7).** `Get-ExpiredLogNames -Names -Today
+  -RetentionDays` (pure; local dates, as the writer names files;
+  unparseable names kept), run at the first tick of each local day and
+  after every start (`LogsPrunedOn` in the journal, cleared by the startup
+  sweep); `LogRetentionDays` defaults to 30 when absent; a failed delete
+  is logged and the day still counts.
+- **Golden acceptance (OR-D7).** At every green completion
+  (`conclusion == success`, whatever the cache outcome) on a VM provisioned
+  after the current golden's seal time, the orchestrator records the lane
+  under the golden's stamp: `GoldenAccepted = @{ Golden = <stamp>; Lanes =
+  @(...) }`, reset when the stamp differs (compared as instants through
+  `ConvertTo-DateTimeOffset`, never as strings: the journal's JSON round
+  trip turns them into dates). It records facts only and logs once when
+  all four lanes (rust, app, model, shell) are present:
+  `golden: rust, app, model and shell are green on the current image`.
+  Wrapped so a failure never wedges a settle.
+- **One predicate.** `Test-GoldenPrevRemovable -Accepted -CurrentStamp
+  -CurrentSealed -VmCreationTimes -Lanes` is true only when the accepted
+  stamp equals the current golden's stamp, the current golden is sealed,
+  every lane in the list is present, and no VM directory predates the
+  stamp. The module owns it; the prune calls it.
+- **The prune task.** `install/prune-golden.ps1 -Root`, registered by
+  `setup-host.ps1` on every run (outside the password-bound task pair) as
+  `slate-ci-golden-prune`, SYSTEM, daily at 04:00 local, 10-minute limit:
+  reads the journal without side effects (a read-only parse, not
+  `Read-Journal`), derives every path from `Get-CiHostConfig`, evaluates
+  the predicate, and only then clears the read-only bit and deletes
+  `win11-runner.prev.vhdx`; one log line either way; exit 0 always.
+- **Rotation.** `build-golden.ps1 -Rotate`, after the VM-exists check:
+  only when the current image is sealed (`IsReadOnly`) does it replace an
+  older prev and rename the current image to prev; an unsealed leftover is
+  refused with a pointer to "The golden build fails". One shared helper
+  (`Remove-SealedFile`) clears the read-only bit and deletes, used by the
+  rotation and the prune and tested on `TestDrive`.
+- **Journal schema.** One `$script:JournalDefaults` feeds `New-Journal`
+  and `Read-Journal`; a shape test pins the top-level keys (`Vms`,
+  `Retries`, `SeenJobs`, `LogsPrunedOn`, `GoldenAccepted`,
+  `PublishedState`, `PublishedAt`) and the `SeenJobs` entry keys; the
+  runbook's "State" bullet lists them.
 
-## 7. Failure modes and observability
+## 8. Failure modes and observability
 
-- **The router never fails a run** (M-5): the routing step is
-  `continue-on-error`, every API call has a timeout, every exception becomes
-  vendor labels with a warning annotation, and a lane whose router output is
-  empty, stale or missing takes today's vendor expression and still runs.
-  `namespace` mode runs no router code at all (D-1).
-- **Dead or crippled host** (D-4) recovers by itself once the host takes
-  its queue; a stuck job cannot hold the pool off (H-1).
-- **Stranded lanes.** D-4 stops future routing only; a lane already queued
-  home when the host dies waits until it is cancelled. The runbook's pool
-  switch says: flip to `namespace`, cancel the run, **re-run all jobs**
-  (not "failed jobs", D-6), and notes that the main concurrency group
-  holds later main runs while a stranded lane waits.
-- **Double booking.** Two runs routing within the same seconds can both
-  see the last slot free; the loser queues one lane's length, which the
-  critical-path bound already tolerates for the lanes it would have
-  queued, and both summaries show what each saw.
-- **The settle window.** A VM holds its slot until GitHub reports the
-  completion and the host settles it (up to a minute); the router counts
-  that slot free; the next home lane may wait that minute.
-- **Reduced capacity** (L-6) is covered by the "in progress below the
-  slot count" form of D-4.
-- **Pool size drift** between the repository's `config.json` and the
-  host's installed copy: the runbook's capacity step.
-- **Namespace outages** are untouched.
-- **Reading a run's routing**: the summary table and the reduced listing;
-  the host log's new lines (`admission: skipped job …`, `golden: …`); a
-  runbook section beside the log-line list.
+- **The router never fails a run.** The routing job is skipped in
+  `namespace` mode, its two steps are `continue-on-error`, every exception
+  becomes vendor pools with a warning annotation, and a lane whose outputs
+  are empty, stale or missing takes the vendor expression in the workflow
+  file and still runs. The shell gate's own condition keeps it running
+  after a routing-job failure.
+- **Dead host** (OR-D4): stale within two minutes of a crash, including a
+  crash mid-job; recovers as soon as the loop publishes again. No run
+  strands to discover it. The only strand left is a lane already queued
+  home when the host dies: the runbook says flip to `namespace`, cancel
+  the run, then "Re-run all jobs", and notes that the `main` concurrency
+  group holds later `main` runs while a stranded lane waits.
+- **Concurrent routers**: ordered by age through the optional listing
+  read; when that read fails both routers see the same state and the
+  loser's app lane queues one lane's length, the revision-2 behaviour.
+- **A failed publish**: the router routes away after two minutes; the log
+  says why once a minute; the loop keeps serving queued home jobs.
+- **Pool size**: published by the host, so there is nothing to keep in
+  step; the router only clamps absurd values.
+- **Partial re-runs** always take the vendor (OR-D6); the runbook states
+  the cost and the UI and CLI names of the full re-run.
+- **Reading a run's routing**: the routing job's summary and its replay
+  line; the host log's new lines (`admission: skipped job …`, `handoff:
+  runner taken …`, `publish: …`, `golden: …`, `logs: …`); a runbook
+  section beside the log-line list.
 
-## 8. Security
+## 9. Security
 
-- **What the public repository reveals is unchanged.** `config.json`
-  carries an RFC 1918 NAT prefix, slot addresses on it, lane caps,
-  timeouts, the trusted repo, branch and events, and the routed workflow
-  paths; it never carried the token, the product key or the router's public
-  address. The new module adds the ranking, the durations, the pool size
-  and the label templates the workflow file already publishes. The routing
-  summary publishes occupancy counts and ages that the public job timings
-  already imply (L-9).
-- **What the router sees** is the jobs listing of a public repository,
-  public already, read with the run's `GITHUB_TOKEN` under `actions: read`
-  and `contents: read`. A fork PR's token is read-only.
+- **What the public repository reveals is unchanged** but for the state
+  variable, which states occupancy counts and ages the public job timings
+  already imply; `config.json` never carried the token, the product key or
+  the router's public address.
+- **What the router reads** is the `vars` context and, optionally, this
+  repository's runs listing and one run, with the run's own token under
+  `actions: read` and `contents: read`. A fork PR's token is read-only.
 - **What the router decides** is which of two already-trusted targets a
-  lane runs on; a fork can rewrite the router, which is why the fork rule
-  lives on the host (D-5). Labels still carry no trust: the host still
-  commits caches only for trusted events on `main`, every VM is still
-  thrown away, and the approval policy still gates outside contributors.
-- **What a malicious workflow edit could do** is unchanged: it could
-  already choose `runs-on`; the approval policy and now the host's
-  repository check answer it.
-- **The host's PAT** keeps its scope (Actions read, Administration read
-  and write); the router never uses it; `GetRun` is a read it already has.
-  No new secret anywhere.
+  lane runs on; a fork can rewrite the router, which is why the fork rules
+  live on the host and the approval policy stays the gate (OR-D5).
+- **The host's PAT** gains Variables read and write; it keeps Actions read
+  and Administration read and write; it is re-issued through
+  `store-token.ps1` and never appears in the repository.
 - **The prune task** runs as SYSTEM but acts on one fixed path under a
-  condition the unprivileged orchestrator wrote; the orchestrator's account
-  gains no right on `golden`.
+  predicate evaluated against the current image; the orchestrator's
+  account gains no right on `golden`.
 - **`pull_request_target`** is not used by any Windows workflow and the
-  fork rule does not cover it; adding it would need its own review (L-8).
+  fork rule does not cover it.
 
-## 9. Branch cleanup
+## 10. Branch cleanup (its own pull request)
 
-A weekly workflow `.github/workflows/branch-cleanup.yml` (`schedule`,
-Mondays 06:00 UTC, and `workflow_dispatch` with a boolean input `delete`,
-default false; `permissions: { contents: write, pull-requests: read }`)
-lists every `refs/heads/claude/*` branch with, for each, whether its tip is
-contained in `main` (`compare main...<branch>`, `ahead_by == 0`), whether
-it is the head or the base of an open pull request, and its tip's committer
-date. It writes the list to its summary. With `delete=true` it deletes only
-branches whose tip is contained in `main` and that are the base of no open
-pull request, asserting the `claude/` prefix on every name before the call.
-Unmerged branches are never deleted by it: the repository already deletes
-merged heads, so the `claude/*` branches that remain are exactly the
-unmerged ones (two with never-reviewed work today, H-5), and no branch is
-protected. The four present on 2026-10-11
-(`claude/1285-deferred-summary-wip`, `claude/home-pilot-smoke`,
-`claude/laughing-meitner-86n5do`, `claude/runbook-realtek-ndis`) are the
-owner's one-off; the runbook change lists them with their ahead-by counts.
+`.github/workflows/branch-cleanup.yml` (`schedule` Mondays 06:00 UTC;
+`workflow_dispatch` with boolean `delete`, default false, read as
+`inputs.delete && 'true' || 'false'`; `permissions: { contents: write,
+pull-requests: read }`) lists every `refs/heads/claude/*` branch with its
+`ahead_by` against `main` (`compare`, `per_page=1`), its open pull
+requests as head and as base, and its tip's committer date, each branch
+handled in its own error scope and its name URL-encoded; it writes the
+table to its summary and, with `delete`, deletes only branches whose tip
+`main` contains and that are the base of no open pull request, asserting
+the `claude/` prefix. Unmerged branches are never deleted by it (the
+repository already deletes merged heads; what remains is unmerged work).
+Its guard runs in a small workflow of its own, filtered to the file.
 
-## 10. Testing
+## 11. Testing
 
-- `route.py`: the unit tests of §4, run in `windows-runner-tests.yml`.
-- Host: Pester tests for the admission repository check (skipped with the
-  log line; trusted admitted; `GetRun` conditional), `Get-ExpiredLogNames`,
-  the once-a-day gate across a restart, the default for a missing
-  `LogRetentionDays`, the golden acceptance (lanes recorded only for VMs
-  newer than the golden; reset on a new golden; the signal once all three
-  lanes are present and no older VM exists; never a delete), the prune
-  task's registration in `Install.Tests.ps1`, and `-Rotate` in
-  `Golden.Tests.ps1`.
-- Guards: `Workflows.Tests.ps1` as rewritten in §5.
-- Integration, on the host, in the runbook's integration pass: with one
-  run in flight, dispatch a second and read its summary: its app lane went
-  to the vendor, its shards queued or overflowed as the deadline says, its
-  rust lane queued home; with the loop stopped, dispatch a run and read
-  that it routed everything away within the five-minute rule; after a
-  golden refresh, run with `home-only` and read that every lane ran home
-  and the acceptance line appeared.
+- `route.py`: the unit tests of §5 (frozen durations; injected seams).
+- Host: Pester for `Get-PublishedState`, the publish throttle and its
+  failure log, the admission repository check (with a default trusted run
+  in the fakes so only foreign-run tests define a run), the handoff kill,
+  `Get-ExpiredLogNames`, the once-a-day gate across a restart, golden
+  acceptance including a `Write-Journal`/`Read-Journal` round trip, the
+  predicate (every clause), the prune script against a `TestDrive` tree
+  including the "signal from the previous image" vector, `-Rotate` on a
+  sealed and on an unsealed image, the journal shape, the adapter key
+  lists.
+- Guards: `Workflows.Tests.ps1` as in §6.
+- Integration, on the host (runbook): re-issue the PAT and create the
+  variable; after `setup-host.ps1` and the loop restart, read
+  `gh variable get WINDOWS_HOME_STATE` and see it move every tick with a
+  job; with one run in flight dispatch a second only after the first's
+  lanes show and read both summaries; stop the loop, wait three minutes,
+  dispatch a run and read that it routed away with "state stale"; restart
+  the loop; after a golden refresh run `home-only`, read the acceptance
+  line, run the prune task by hand and read its line.
 
-## 11. Documents touched
+## 12. Documents touched
 
 - `docs/runbooks/self-hosted-windows-runner.md`: the routing section
-  (modes including `home-only`, the critical-path rule, the fork rule),
-  "Reading a run's routing", the pool switch ("re-run all jobs"; stranded
-  lanes), the capacity step (both places), the refresh steps (`-Rotate`,
-  `home-only` validation, the acceptance line, the prune task), the cleanup
-  section (what is automatic now, the one-off branch list), the log-line
-  list, and the hosted shell figure (10–14 min, not 17).
+  (modes, the published state, the rule, the fork rule, the measured
+  costs), "Reading a run's routing", the pool switch (flip first, then
+  cancel, then "Re-run jobs → Re-run all jobs" or `gh run rerun <id>`),
+  the token section (Variables read and write), the "Capacity" bullet and
+  the security row, "both tasks" → the three tasks and that the prune task
+  re-registers on every run, the refresh steps (`-Rotate`, `home-only`,
+  the acceptance line, the prune task), the cleanup section, the log-line
+  list, the state keys, the branch-cleanup subsection.
 - `docs/superpowers/specs/2026-10-10-self-hosted-windows-runner-design.md`:
-  D-3's "manual" and the parked `auto` follow-up point here; the fork-PR
-  allowance is withdrawn (D-5).
-- The `windows.yml` header comment.
+  D-3 points here; §5 notes the router; the threat model's fork residual
+  risk points at OR-D5.
+- This spec gains a dated "Planning deviations" list whenever the plan
+  departs from it.
 
-## 12. Out of scope
+## 13. Out of scope
 
-`nightly.yml` and the pilot keep their own rules: the nightly stress job
-queues home unconditionally under `home`, so it can overbook the pool or
-strand when the host is down, and can adopt the router later (L-10). A
-heartbeat from the host is unnecessary while the queue itself carries the
-dead-host signal. Mitigating the double-booking race is not worth a host
-change. Whether the model coverage inventories differ by operating system
-is unverified and worth one check when the first `home` run of a PR lands
-on the vendor for a shard (M-3).
+`nightly.yml` and the pilot keep their rules and can adopt the router
+later (its deadline formula is `windows.yml`'s). Whether the model
+coverage inventories differ by operating system is unverified. The
+heartbeat's two-minute window after a crash is accepted.
