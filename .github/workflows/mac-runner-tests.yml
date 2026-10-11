@@ -10,11 +10,17 @@ on:
     paths:
       - 'ci/mac-runner/**'
       - '.github/workflows/mac-runner-tests.yml'
+      # The workflow guards must run when a routed workflow changes.
+      - '.github/workflows/swift-tests.yml'
+      - '.github/workflows/a11y-check.yml'
   push:
     branches: [main]
     paths:
       - 'ci/mac-runner/**'
       - '.github/workflows/mac-runner-tests.yml'
+      # The workflow guards must run when a routed workflow changes.
+      - '.github/workflows/swift-tests.yml'
+      - '.github/workflows/a11y-check.yml'
 
 permissions:
   contents: read
