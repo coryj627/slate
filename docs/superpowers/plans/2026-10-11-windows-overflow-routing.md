@@ -12,11 +12,12 @@
 
 ## Global Constraints
 
-- The router runs only on `ubuntu-latest`, only when the mode is `home` or `home-only`, and never fails a run: both of its steps are `continue-on-error: true`, every exception becomes vendor pools plus a `::warning::`, every routed lane has `if: ${{ !cancelled() }}` and a `runs-on` whose fallback is today's vendor expression, verbatim (spec §6, §8).
+- The router runs only on `ubuntu-latest`, only when the mode is `home` or `home-only`, and never fails a run: the job and both of its steps are `continue-on-error: true`, every exception becomes vendor pools plus a `::warning::`, every routed lane has `if: ${{ !cancelled() }}` and a `runs-on` whose fallback is today's vendor expression, verbatim (spec §6, §8).
+- Every age the router measures is against its own clock (`now`), never the run's creation time: GitHub resolves `vars` when the job starts (verified on a11y-check run 38060200124 attempt 4), and `created_at` never moves across re-runs or a concurrency hold (spec OR-D4, §3; revision 4).
 - The router emits pools (`<lane>-pool` = `home` | `vendor`) and `attempt`; it never emits a label. Both labels live in `windows.yml` (spec OR-D6, §5).
 - The host publishes `WINDOWS_HOME_STATE` (spec §4) with the PAT's Variables permission, which the token already holds (it was issued with the mac controller's permission set); a failed publish never stops a tick.
 - The host never provisions for, and evicts within a tick, a job of another repository (spec OR-D5). A null head repository is foreign.
-- Durations and timing constants live in `route.py` alone (app 26/22, model 25/6, rust 11/2, shell 13; handover 110 s; overrun floor 300 s; stale 120 s); tests inject a frozen copy (spec §3, §5).
+- Durations and timing constants live in `route.py` alone (app 26/22, model 25/6, rust 11/2, shell 16/13; handover 110 s; overrun floor 300 s; stale 180 s; completion margin 30 s); tests inject a frozen copy (spec §3, §5).
 - The orchestrator's account never gains a right on `golden`; only `slate-ci-golden-prune` (SYSTEM) deletes the previous image, and only on `Test-GoldenPrevRemovable` against the current, sealed image (spec OR-D7, §7).
 - Timestamps that pass through the journal are compared as instants through `ConvertTo-DateTimeOffset`, never as strings (the JSON round trip turns them into dates).
 - The branch sweep is its own pull request (Task 9): never merged with the rest.
@@ -37,6 +38,49 @@
 - The gate's `needs` gains `route` so its failure line can name the pools (spec §6 says so; the first spec said "unchanged"). Cost if wrong: one edge in the graph.
 - Revision 2's three router tasks are one task here: the router's two files were written and run as a whole (50 tests) before this plan was committed, and an "append in order" plan was where the previous revision's test defects came from.
 - Revision 2's branch cleanup stays as Task 9 but on its own branch and pull request (`claude/branch-cleanup` from `main`), committed last.
+
+## Revision 4: rulings from the dry-run worktree review (2026-10-11)
+
+Tasks 1–7 were executed once, on a throwaway branch, against revision 3, and the seven commits were then reviewed by four independent reviewers against this plan and the spec (one reviewer per slice: Task 1; Task 2; Tasks 3–4; Tasks 5–7). Every slice came back "adopt with fixes". The seven commits are adopted as they are (rebased onto this revision, one commit per task) and each slice then gets a fix round through the subagent loop, with the reviewer's report beside the rulings below as the implementer's brief. Where a ruling conflicts with code or a test embedded in Tasks 1–7, the ruling wins; the embedded blocks are left as the record of revision 3 and are not rewritten here. The spec (OR-D4, OR-D5, §3, §5, §6, §7, §8) was amended in the same commit as this section.
+
+Two facts verified during the review, which several rulings rest on:
+
+- GitHub resolves `vars` when a job starts, not when the run is created: a11y-check run 38060200124, attempt 4, whose routing job started 658 s after the run's `created_at`, read a `MAC_RUNNER_HEARTBEAT` written 23 s before the job started.
+- A JIT runner carries only the labels in its configuration: the live listing of the mac JIT runner shows `["slate-mac-tart"]` and no `self-hosted`, OS or architecture label; `GitHub.ps1` requests one lane label.
+
+**Task 1, the router.**
+
+- R4-1 (Critical). Staleness is measured against the router's clock: `state_death(state, error, now, stale_seconds, slots_max)` computes `age = now - state["at"]`; `DEFAULT_STALE_SECONDS = 180`. `run_created` becomes `run_started` everywhere: `fetch_run_started(repo, run_id, get)` reads `run_started_at` and falls back to `created_at`; the env name is `ROUTE_RUN_STARTED`; `decide(mode, lanes, state_text, now, run_started, concurrent, …)`; the replay line says `ROUTE_RUN_STARTED=`. It is used only to order concurrent routers. A future `at` is fresh and the summary says `<n> s in the future (clock skew)`. Tests: a re-run attempt (attempt 2, run started a day ago, `at` an hour before `now`) sends every lane to the vendor; 170 s old is alive and 190 s is dead; a future `at` is fresh and named; `fetch_run_started` prefers `run_started_at`. Why: with `created_at` as the reference, a "Re-run all jobs" or a `main` run held by the concurrency group saw a dead host as alive and stranded lanes on it. Cost if wrong: a slow checkout before the Python step makes a live host look dead and the run takes the vendor, which costs minutes, not a strand.
+- R4-2 (Important). `fetch_concurrent(repo, run_id, run_started, get)` returns `[(id, completed_epoch_or_None), …]` for the earlier runs whose routing job is queued, in progress, or completed; `decide` keeps a completed one only when `completed >= at - CONCURRENT_COMPLETION_MARGIN_SECONDS` (30), so a router that finished just before the host published is still counted. `ROUTE_CONCURRENT` carries the pairs. The cap keeps the newest ten. Tests on both sides of the margin, on the cap, and on the id tie-break.
+- R4-3 (Important). Earlier routers are replayed, not assumed: for each earlier run, oldest first, compute its free count against the schedule so far, run this allocation for its four lanes, and place its home lanes into the schedule. The `["app", "model"] * len(concurrent)` demand and the `2 * len(concurrent)` discount go. Tests with two and three slots; the brief's worked-example expectations change where the earlier router's rust lane now occupies a slot.
+- R4-4 (Important). A running or queued entry whose lane is unknown occupies `max(d["home"] for d in durations.values())`; add the running-entry test the Review Focus promised; update the queued expectation.
+- R4-5 (Important, worktree behind the brief). `windows-runner-tests.yml` gets the pinned `actions/setup-python@5fda3b95a4ea91299a34e894583c3862153e4b97  # v7.0.0` step (Python 3.13, `if: ${{ !cancelled() }}`) before the router tests, as Step 6 says.
+- R4-6 (Minor, all adopted). The fork rule is applied before `home-only` in `decide`, and in `main` before the API reads, which are skipped when the fork rule or a failed parse has already settled every lane; `gh_api(path, run=subprocess.run)` gains that seam and two tests (a failure then a success; two failures with `stderr` in the error); annotation text is escaped (`%` → `%25`, `\r` → `%0D`, `\n` → `%0A`); the outputs are written before the summary and both writes are guarded; slot boundaries are tested on both sides (`slots=1` alive, `slots=slots_max` alive, one above dead); the "namespace makes no read" test pops `ROUTE_RUN_STARTED` and `ROUTE_CONCURRENT` and asserts a recording `get` was never called; reasons print minutes with one decimal; the handover on the app lane's slot is pinned; `_int_env`'s warning is captured in its test; a sibling of `test_workflow_routes_exactly_the_lane_table` asserts `"name: " + route.ROUTE_JOB_NAME` is in `windows.yml`. `DURATIONS["shell"]["home"]` stays 16.
+
+**Task 2, the workflows.**
+
+- R4-7 (Important). The "gate waits on route" test also asserts `if: ${{ always() }}` in the gate block: with `needs: [route, …]`, a gate without it is skipped whenever `route` is skipped, and GitHub counts a skipped required check as passing.
+- R4-8. The `route` job gets job-level `continue-on-error: true`, pinned. flaui's `home-only` term becomes `(vars.WINDOWS_RUNNER_MODE == 'home-only' && (github.event_name != 'pull_request' || github.event.pull_request.head.repo.full_name == github.repository))`, fallback `windows-latest`, pinned. The gate's failure line gains `route=${{ needs.route.result }}` and its pin follows. The header's fork sentence holds in every mode.
+- R4-9 (guard precision). New pins: `id: route` and `timeout-minutes: 5` in the route block; `Record the runner` as the first step of each routed lane, printing `${{ runner.name }}`; job-level `if: ${{ !cancelled() }}` matched at job indentation; the cache gate's `if` immediately followed by the `nscloud-cache-action` `uses` line (comments allowed between); the router-tests step sliced to the next `- name:` instead of 400 characters; the header test sliced to the comment block before `name: windows`; the loop variable `$env` renamed `$entry`.
+- Plan text, corrected below in place: Task 2's Files list and Step 10's `git add` include `ci/windows-runner/route/tests/test_route.py`; Step 2 runs `Invoke-Tests.ps1` without `-Filter` and runs the Python suite.
+
+**Task 3, publishing.**
+
+- R4-10 (Important). A tick whose admission threw publishes nothing: `$queued = $null` before the `try`, and `Publish-HomeState` runs only when `$null -ne $queued`, so the last state ages into stale and a host that cannot list or admit routes away by itself. Test: `GetLaneJobs` throws on every tick for more than 60 s; the `PublishState` count stops growing; the next good tick publishes.
+- R4-11 (Important, worktree behind the brief). `ConvertTo-StateTime` formats with `[cultureinfo]::InvariantCulture` (the brief's line); a test sets the thread's `CurrentCulture` to `th-TH` and then `fi-FI` in `try`/`finally` and expects the invariant string.
+- R4-12 (Minor, all adopted). `running` is sorted through `ConvertTo-DateTimeOffset`; the outer publish failure goes through the once-a-minute `PublishFailedAt` gate; jobs whose run is still unknown (`Foreign = $null`) count in the published queue without being admitted; `Remove-ActiveVm` voids its adapter calls so nothing stray becomes a queued job; the missing tests are added (`SeenJobs` key names; a `Test-TrustedRun` table with case, null, a missing property and a lookalike; `Get-PublishedState` after a `Write-Journal`/`Read-Journal` round trip; a 403 makes no POST); `GitHub.ps1`'s header lists the issued token set; the tick's comment mentions publishing.
+
+**Task 4, admission and handoff.**
+
+- R4-13 (hardening). The handoff reconciliation matches in-progress jobs to the host's runners from the full listing, not the lane-filtered one; a job on a host runner without exactly one lane label is forced off with the same log line and no retry strike; the retry strike is skipped whenever the runner was seen busy; test with `labels = @('self-hosted')`. The JIT-label fact above makes this defence in depth, not a gate.
+- R4-14. The discard reason names the repository, `runner taken by job <id> of <repo> (not the trusted repository)` (spec §7 binds; the brief said "another repository"); at handoff the remembered `Foreign` is consulted first and a failing read is logged once a minute; `Get-RunRepository` guards a missing `full_name`; an empty name prints `an unknown repository`.
+
+**Tasks 5–7, cleanup and golden.**
+
+- R4-15 (Important, worktree behind the briefs). Adopt the corrected briefs verbatim: `Remove-OrchestratorLog`'s `[\\/]` branch; `-Skip:(-not $IsWindows)` on the HyperVAdapter golden-adapters test, and the Install VM-older case split into its own Windows-only `It`; one `Join-Path` segment per directory in the Install prune describe; `Invoke-OrchestratorTick`'s `Today` formatted with InvariantCulture, and the test expectation; the `Golden.Tests` rotate slice bounded by `IndexOf(…)`.
+- R4-16 (Minor). `orchestrator.ps1` reuses `$config.JournalPath`; the unused `$Now` on `Register-GoldenAcceptance` goes; `prune-golden.ps1`'s header says it logs only when a previous image exists.
+
+**Task 8.** The runbook's log-line list uses §7 and §8 as amended (`handoff: <vm> runs job … forcing it off`, the discard reason with the repository), and the stale window reads 180 s, "three minutes".
 
 ---
 
@@ -950,6 +994,7 @@ git commit -m "feat(ci-route): the Windows lane router over the state the host p
 - Modify: `.github/workflows/windows.yml` (header comment lines 36–51; both path filters; a `route` job after `jobs:`; the four routed lanes; `flaui`; `gate`)
 - Modify: `.github/workflows/nightly.yml` (lines 163 and 176: `home-only` routes home like `home`)
 - Modify: `ci/windows-runner/tests/Workflows.Tests.ps1` (replace `Describe 'windows.yml pool switch'` and `Describe 'nightly.yml pool switch'`; add a block-slicing helper)
+- Modify: `ci/windows-runner/route/tests/test_route.py` (the lane-table test of Step 1)
 
 **Interfaces:**
 - Consumes: Task 1's outputs and env names.
@@ -1088,8 +1133,8 @@ Add to `Describe 'windows-runner-tests.yml path filters'`:
 
 - [ ] **Step 2: Run the guards to verify they fail**
 
-Run: `pwsh -NoProfile -NonInteractive -File ci/windows-runner/tests/Invoke-Tests.ps1 -Filter 'windows.yml routing*'`
-Expected: every `It` in the new describe fails; `nightly.yml pool switch` fails on both strings.
+Run: `pwsh -NoProfile -NonInteractive -File ci/windows-runner/tests/Invoke-Tests.ps1` (no filter: one pattern cannot select both describes) and `python -I -m unittest discover -v -s ci/windows-runner/route/tests -t ci/windows-runner/route`
+Expected: every `It` in the new describe fails; `nightly.yml pool switch` fails on both strings; the lane-table test fails because `windows.yml` has no `ROUTE_LANES` yet.
 
 - [ ] **Step 3: Rewrite the header comment**
 
@@ -1259,7 +1304,7 @@ Expected: all green; the Python suite `Ran 50 tests … OK`. Then `python -c "im
 - [ ] **Step 10: Commit**
 
 ```bash
-git add .github/workflows/windows.yml .github/workflows/nightly.yml ci/windows-runner/tests/Workflows.Tests.ps1
+git add .github/workflows/windows.yml .github/workflows/nightly.yml ci/windows-runner/tests/Workflows.Tests.ps1 ci/windows-runner/route/tests/test_route.py
 git commit -m "ci(windows): route every lane through the router's pools, trust it only in its own attempt, keep the shell gate hosted"
 ```
 

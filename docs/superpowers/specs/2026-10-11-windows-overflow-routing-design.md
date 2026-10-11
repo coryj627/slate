@@ -62,17 +62,26 @@ job queues home under `home` and `home-only` alike.
   the vendor now. Durations are measured constants in one table, injected
   into the rule so tests do not pin production numbers.
 - **OR-D4 A dead or crippled host routes away by itself.** The published
-  state is stale (older than 120 s relative to the run's creation), says
-  it is not serving, or offers no slot: every lane goes to the vendor. No
-  run has to strand to discover an outage; a crashed host is stale within
-  two minutes.
+  state is stale (its `at` more than 180 s before the routing job's own
+  clock), says it is not serving, or offers no slot: every lane goes to
+  the vendor. No run has to strand to discover an outage; a crashed host
+  is stale within three minutes. The reference is the router's clock, not
+  the run's creation time: GitHub resolves `vars` when the job starts
+  (verified on a re-run whose routing job read a heartbeat written eleven
+  minutes after the run was created), and a run's creation time never
+  moves across re-runs or a concurrency hold, so measuring against it let
+  a dead host look alive on exactly the recovery path the runbook
+  prescribes.
 - **OR-D5 Fork pull requests never run on the pool, and the host enforces
   what it can.** A fork runs its own workflow file and its own router, so
   the workflow-side rule is defence in depth. The host (a) never
   provisions a VM for a job whose run comes from another repository and
   (b) forces a VM off within one tick when GitHub hands its runner to such
   a job, which GitHub may do because a JIT runner goes to whichever queued
-  job matches its label. The approval policy for outside contributors
+  job matches its label (a JIT runner carries only the labels in its
+  configuration, here one lane label, verified on the live runner
+  listing; so only a job naming that label can take it, and the host
+  matches runners against the full in-progress listing regardless). The approval policy for outside contributors
   (`all_external_contributors`, verified) remains the gate that decides
   whether a fork's workflow runs at all; what the host adds is that a
   fork's job gets at most seconds on a throwaway VM with the fork's own
@@ -105,17 +114,20 @@ It runs only when the mode is `home` or `home-only`. The shell gate is
 `windows-latest` (goal) and the two Ubuntu gates are not Windows lanes.
 
 **Inputs.** The mode; the published state (§4); the lane list; the run's
-attempt; the run's creation time (one API read, `GET /actions/runs/{id}`,
-optional: `now` when it fails); the fork inputs; and, optionally, the
-other runs whose routing job started before this one (one listing read of
-`windows.yml`'s queued and in-progress runs plus their jobs, ignored on
-failure).
+attempt; the router's own clock, which every age is measured against; the
+start time of this attempt (`run_started_at`, one API read,
+`GET /actions/runs/{id}`, optional: `now` when it fails; used only to
+order concurrent routers); the fork inputs; and, optionally, the other
+runs whose routing job started before this one or completed less than
+30 s before the state's `at` (one listing read of `windows.yml`'s queued
+and in-progress runs plus their jobs, ignored on failure).
 
 **Dead or crippled host (OR-D4).** The state is missing, does not parse,
-has `v` other than 1, has `at` older than `ROUTE_STALE_SECONDS` (120)
-before the run's creation time, has `serving` false, or has `slots` below
-1. Then every lane goes to the vendor and the summary says which test
-failed. In `home-only` the state is ignored: every lane queues home.
+has `v` other than 1, has `at` more than `ROUTE_STALE_SECONDS` (180)
+before the router's clock, has `serving` false, or has `slots` below 1.
+Then every lane goes to the vendor and the summary says which test
+failed. An `at` in the future counts as fresh and the summary names the
+skew. In `home-only` the state is ignored: every lane queues home.
 
 **Occupancy** is what the host published: `running` (one entry per slot
 in use: lane and the time the VM was provisioned) and `queued` (the
@@ -132,7 +144,7 @@ len(queued)`, floored at zero.
 | app build + test | 26 | 22 | home 22–27 beside a neighbour; Namespace 19–25 |
 | model shard (each) | 25 | 6 | home 25.3 median beside a neighbour, 15–17 alone |
 | rust tests | 11 | 2 | home 10–11 cold |
-| shell gate | — | 13 | windows-latest median of 10, 13, 14 |
+| shell gate | 16 (`home-only` only) | 13 | windows-latest median of 10, 13, 14; home 15.8 on the acceptance run |
 
 plus `HANDOVER` = 110 s (a slot's turnover: settle, provision, hand off,
 runner online; measured 94–131 s) and `OVERRUN_FLOOR` = 300 s (a job past
@@ -144,10 +156,15 @@ points at the table.
 `max(since + duration_home(lane), now + OVERRUN_FLOOR) + HANDOVER`; more
 running entries than slots keep the latest-ending ones. Each queued entry,
 oldest first, takes the earliest-free slot for `duration_home(lane) +
-HANDOVER`. Then every other run whose routing job started before this
-run's and whose lanes are not yet queued is assumed to place its app lane
-and its model shard 0 at the front of the queue (the idle-pool outcome),
-so concurrent routers resolve by age instead of all taking the same slots.
+HANDOVER`. A running or queued entry whose lane the router does not know, or whose
+time it cannot read, occupies its slot for the longest home duration in
+the table: finite and conservative. Then every other run whose routing
+job started before this run's, or completed less than 30 s before the
+state's `at` (its lanes may not be published yet), has its own allocation
+replayed, oldest first, against the schedule so far: its free count, this
+same allocation for its lanes, and its home lanes placed where they land.
+Concurrent routers thus resolve by age instead of all taking the same
+slots, and the replay holds for any slot count.
 
 **Allocation (OR-D3).** Deadline = (app home duration if the app lane gets
 a free slot, else app vendor duration) + shell vendor duration. In cost
@@ -179,7 +196,7 @@ caches made it free was wrong.
 **Fork pull requests (OR-D5, workflow side).** When the event is
 `pull_request` and the head repository is empty or differs from
 `github.repository`, every lane goes to the vendor before anything else
-is read.
+is read, in every mode including `home-only`.
 
 **Modes.** The router compares the mode trimmed and case-insensitively;
 GitHub's `==` in the workflow ignores case but not spaces, so the runbook
@@ -188,7 +205,7 @@ says to set the value without spaces:
 | value | behaviour |
 |---|---|
 | `home` | the rule above |
-| `home-only` | every lane home, queueing as today; the state is ignored |
+| `home-only` | every lane home, queueing as today; the state is ignored; a fork still goes to the vendor |
 | `namespace` | every lane to the vendor; the routing job is skipped |
 | unset or anything else | as `namespace` |
 
@@ -257,36 +274,43 @@ at the matching path.
 | `WINDOWS_HOME_STATE` | the published state (`vars`) |
 | `ROUTE_LANES` | `rust,app,model-0,model-1` (a test asserts it equals the router's lane list) |
 | `ROUTE_ATTEMPT` | `github.run_attempt`, echoed as `attempt` |
-| `ROUTE_RUN_ID` | `github.run_id`, for the creation-time read and the summary |
+| `ROUTE_RUN_ID` | `github.run_id`, for the start-time read and the summary |
 | `ROUTE_EVENT`, `ROUTE_HEAD_REPO`, `ROUTE_REPO` | the fork rule |
 | `ROUTE_SLOTS_MAX` | upper clamp on `slots`, default 8 (a published value above it is treated as not serving) |
-| `ROUTE_STALE_SECONDS` | 120 |
-| `ROUTE_NOW`, `ROUTE_RUN_CREATED` | epoch seconds, for tests and replay |
-| `ROUTE_CONCURRENT` | a JSON list of earlier routers' run ids, for tests and replay (replaces the listing read) |
+| `ROUTE_STALE_SECONDS` | 180 |
+| `ROUTE_NOW`, `ROUTE_RUN_STARTED` | epoch seconds, for tests and replay (`ROUTE_NOW` is the clock every age is measured against) |
+| `ROUTE_CONCURRENT` | a JSON list of `[run id, routing job completion epoch or null]` pairs for the earlier routers, the newest ten, for tests and replay (replaces the listing read) |
 | `GH_TOKEN` | `${{ github.token }}`, for the two optional reads |
 | `GITHUB_OUTPUT`, `GITHUB_STEP_SUMMARY` | the usual |
 
 **Decision.** A pure function
 
 ```
-decide(mode, lanes, state_text, now, run_created, concurrent, *,
+decide(mode, lanes, state_text, now, run_started, concurrent, *,
        stale_seconds, slots_max, event, head_repo, repo, durations)
   -> {lane: Decision(pool, reason)}, Summary
 ```
 
 with no I/O; `durations` defaults to the production table and tests pass
 a frozen copy. Every rule in §3 is a unit test: the state's five death
-conditions each at the boundary; `home-only` ignoring a dead state;
-occupancy-based free slots; the overrun floor; the handover; the worked
-examples; the deadline boundary; the concurrent-router demand; the fork
-rule; the mode table with case and spaces; an empty lane list; a lane
-missing from the table (rejected with a reason, outputs withheld, so the
-lane takes the vendor fallback); a replay line that reproduces a decision.
-`main()` wraps it in the two optional reads (`gh api`, 15 s each, one
-retry, `stderr` in the error), the outputs and the summary; any exception
-makes every lane a vendor lane with the exception's text in the reason and
-a `::warning::` annotation, never a failed step. Test seams are injected
-(`get=`, `clock=`), never monkeypatched.
+conditions each at the boundary, on both sides; a re-run attempt with an
+old creation time and a dead state; a future `at`; `home-only` ignoring a
+dead state; occupancy-based free slots; the overrun floor; the handover
+on the app lane's slot; the worked examples; the deadline boundary; the
+concurrent-router replay on two and three slots and on both sides of the
+30 s completion margin; the newest-ten cap and the id tie-break; a running
+entry with an unknown lane; the fork rule in `home` and `home-only`; the
+mode table with case and spaces; an empty lane list; a lane missing from
+the table (rejected with a reason, outputs withheld, so the lane takes the
+vendor fallback); a replay line that reproduces a decision. `main()` wraps
+it in the two optional reads (`gh api`, 15 s each, one retry, `stderr` in
+the error, both pinned through an injected `run=`), made only after the
+fork rule and the state's parse have not already settled the answer; then
+the outputs, written first, and the summary, whose failure is a warning;
+any exception makes every lane a vendor lane with the exception's text in
+the reason and a `::warning::` annotation (escaped for the annotation
+syntax), never a failed step. Test seams are injected (`get=`, `clock=`,
+`run=`), never monkeypatched.
 
 **Outputs** (`$GITHUB_OUTPUT`, echoed when unset): `attempt`, then
 `<lane>-pool` = `home` or `vendor` for every requested lane. The router
@@ -296,7 +320,7 @@ is one edit pinned by one guard.
 **Summary.** Mode; the state as read (age, serving, slots, running,
 queued); free slots and the deadline; a row per lane (pool, reason); and
 one copy-paste replay line (`WINDOWS_RUNNER_MODE=… WINDOWS_HOME_STATE='…'
-ROUTE_NOW=… ROUTE_RUN_CREATED=… ROUTE_CONCURRENT='…' ROUTE_LANES=…
+ROUTE_NOW=… ROUTE_RUN_STARTED=… ROUTE_CONCURRENT='…' ROUTE_LANES=…
 python3 ci/windows-runner/route/route.py`) that reproduces the decision.
 
 **Constants**: `LANES` (one table: lane → host lane, cost rank), the
@@ -308,8 +332,9 @@ table is consistent and equals the workflow's `ROUTE_LANES`.
 
 - **`route`**: first job, `name: Route Windows lanes`,
   `if: ${{ vars.WINDOWS_RUNNER_MODE == 'home' || vars.WINDOWS_RUNNER_MODE == 'home-only' }}`,
-  `runs-on: ubuntu-latest`, `timeout-minutes: 5`,
-  `permissions: { actions: read, contents: read }`, a sparse checkout of
+  `runs-on: ubuntu-latest`, `timeout-minutes: 5`, job-level
+  `continue-on-error: true` (a timeout or a lost runner then cannot fail
+  the run), `permissions: { actions: read, contents: read }`, a sparse checkout of
   `ci/windows-runner/route` with `persist-credentials: false` and
   `continue-on-error: true`, then the routing step with
   `continue-on-error: true` and `env` carrying `GH_TOKEN`,
@@ -326,11 +351,14 @@ table is consistent and equals the workflow's `ROUTE_LANES`.
   The model matrix selects per shard with explicit booleans:
   `((matrix.shard == 0 && needs.route.outputs.model-0-pool == 'home') || (matrix.shard == 1 && needs.route.outputs.model-1-pool == 'home'))`.
   Each routed lane's first step prints `runner.name`, the effective pool.
-- **The shell gate**: `runs-on: ${{ vars.WINDOWS_RUNNER_MODE == 'home-only' && 'slate-win-shell' || 'windows-latest' }}`
-  and, new, `if: ${{ !cancelled() && needs.windows.result == 'success' }}`,
-  so a routing-job failure cannot skip it.
-- **`gate`**: `needs` gains `route`; its failure line names the pools and
-  the router's attempt.
+- **The shell gate**: `runs-on: ${{ (vars.WINDOWS_RUNNER_MODE == 'home-only' && (github.event_name != 'pull_request' || github.event.pull_request.head.repo.full_name == github.repository)) && 'slate-win-shell' || 'windows-latest' }}`
+  (a fork never goes home, even under `home-only`) and, new,
+  `if: ${{ !cancelled() && needs.windows.result == 'success' }}`, so a
+  routing-job failure cannot skip it.
+- **`gate`**: `needs` gains `route`; it keeps `if: ${{ always() }}`,
+  pinned by a guard, because a gate skipped with its `route` need would
+  count as a passing required check; its failure line names the pools,
+  the router's attempt and the routing job's result.
 - **`nightly.yml`**: `home-only` routes home like `home`
   (`vars.WINDOWS_RUNNER_MODE == 'home' || vars.WINDOWS_RUNNER_MODE == 'home-only'`),
   in both its `runs-on` and its cache condition.
@@ -341,9 +369,13 @@ table is consistent and equals the workflow's `ROUTE_LANES`.
 - **Guards** (`Workflows.Tests.ps1`): job blocks are sliced by a helper
   that finds the next job key, so key order and comments do not break
   them; the pins are the predicates and verbatim fallback strings, the
-  routing job's `if`, permissions, `continue-on-error` on both steps, the
-  env names, the shell gate's `if`, the model selector, the gate's
-  `needs`, `nightly.yml`'s two `home-only` reads, one cross-workflow pin
+  routing job's `if`, permissions, `continue-on-error` on the job and both
+  steps, the routing step's `id` and the job's timeout, the env names,
+  the first step of every routed lane printing `runner.name`, job-level
+  `!cancelled()` anchored at job indentation, the shell gate's `if`, the
+  model selector, the gate's `needs` and `always()`, the routing job's
+  name equal to the router's `ROUTE_JOB_NAME`, `nightly.yml`'s two
+  `home-only` reads, one cross-workflow pin
   that every `vars.WINDOWS_RUNNER_MODE` comparison in the three workflows
   is with `home` or `home-only`, the path filters, and that
   `windows-runner-tests.yml` runs the router's tests with
@@ -358,8 +390,13 @@ optional API reads; nothing in `namespace` mode.
   `Publish-HomeState` (throttled, logs a failed write once a minute) in
   the module; `Set-GhVariable -Name -Value` in `adapters/GitHub.ps1`
   (PATCH, POST on 404) exposed as the `PublishState` adapter; called at
-  the end of `Invoke-OrchestratorTick`. The journal remembers
-  `PublishedState` (the last JSON) and `PublishedAt`.
+  the end of `Invoke-OrchestratorTick`, except on a tick whose admission
+  threw: then nothing is published and the last state ages into stale,
+  so a host that cannot list or admit routes away by itself. Jobs whose
+  run is still unknown count in the published queue (the conservative
+  direction) without being admitted, and `running` is ordered by instant,
+  never by string. The journal remembers `PublishedState` (the last
+  JSON), `PublishedAt` and `PublishFailedAt`.
 - **Admission (OR-D5 a).** `Invoke-Admission` reads the run of each
   candidate job once (`GetRun`; the answer is remembered on the `SeenJobs`
   entry as `Foreign`, present from creation as `$null` = unknown; a read
@@ -367,12 +404,18 @@ optional API reads; nothing in `namespace` mode.
   failure only) and never admits a foreign job:
   `admission: skipped job <id> of <repo> (not the trusted repository)`. A
   null head repository is foreign.
-- **Handoff (OR-D5 b).** In the reconciliation, when a handed VM's runner
-  is seen on a job the host did not provision for, the job's run is read;
-  if it is foreign the VM is forced off at once with reason
+- **Handoff (OR-D5 b).** In the reconciliation, in-progress jobs are
+  matched to the host's runners from the full job listing, not the
+  lane-filtered one; when a handed VM's runner is seen on a job the host
+  did not provision for, the job's run is read (the answer remembered on
+  `SeenJobs` first, a failed read logged once a minute); if it is
+  foreign, or the job carries no lane label, the VM is forced off at once
+  with the log line
+  `handoff: <vm> runs job <id> of <repo> (not the trusted repository); forcing it off`
+  and the discard reason
   `runner taken by job <id> of <repo> (not the trusted repository)`, no
-  retry, and the trusted job it was provisioned for stays queued for the
-  next VM.
+  retry strike, and the trusted job it was provisioned for stays queued
+  for the next VM.
 - **Log retention (OR-D7).** `Get-ExpiredLogNames -Names -Today
   -RetentionDays` (pure; local dates, as the writer names files;
   unparseable names kept), run at the first tick of each local day and
@@ -430,15 +473,17 @@ optional API reads; nothing in `namespace` mode.
 - **Concurrent routers**: ordered by age through the optional listing
   read; when that read fails both routers see the same state and the
   loser's app lane queues one lane's length, the revision-2 behaviour.
-- **A failed publish**: the router routes away after two minutes; the log
-  says why once a minute; the loop keeps serving queued home jobs.
+- **A failed publish**, or a tick whose admission threw: the router
+  routes away after three minutes; the log says why once a minute; the
+  loop keeps serving queued home jobs.
 - **Pool size**: published by the host, so there is nothing to keep in
   step; the router only clamps absurd values.
 - **Partial re-runs** always take the vendor (OR-D6); the runbook states
   the cost and the UI and CLI names of the full re-run.
 - **Reading a run's routing**: the routing job's summary and its replay
-  line; the host log's new lines (`admission: skipped job …`, `handoff:
-  runner taken …`, `publish: …`, `golden: …`, `logs: …`); a runbook
+  line; the host log's new lines (`admission: skipped job …`,
+  `handoff: <vm> runs job … forcing it off`, `publish: …`, `golden: …`,
+  `logs: …`); a runbook
   section beside the log-line list.
 
 ## 9. Security
