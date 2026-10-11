@@ -17,7 +17,8 @@
 # only reports); GITHUB_STEP_SUMMARY (the table); BRANCH_MIN_AGE_DAYS
 # (default 7). GitHub is reached only through the gh on PATH:
 # ci/windows-runner/tests/BranchCleanup.Tests.ps1 puts a fake one first
-# and pins every call. Spec:
+# and pins every call. Besides gh it needs only bash, awk, date and mktemp
+# (gh's own --jq does the JSON), so the same test runs in Git Bash. Spec:
 # docs/superpowers/specs/2026-10-11-windows-overflow-routing-design.md §10.
 
 set -uo pipefail
@@ -42,6 +43,20 @@ row() {
   printf '%s\n' "$line" >>"$GITHUB_STEP_SUMMARY"
 }
 
+# A branch name as one URL path segment: byte by byte (LC_ALL=C), unreserved
+# characters kept, every other byte as %XX, so a / in the name is %2F.
+urlencode() {
+  local LC_ALL=C text=$1 encoded='' char i
+  for ((i = 0; i < ${#text}; i++)); do
+    char=${text:i:1}
+    case $char in
+      [A-Za-z0-9._~-]) encoded+=$char ;;
+      *) printf -v char '%%%02X' "'$char"; encoded+=$char ;;
+    esac
+  done
+  printf '%s' "$encoded"
+}
+
 # The run fails the same way whatever failed: an ::error:: (with gh's text,
 # if any) and a red-run note under the table.
 fail_run() {
@@ -60,7 +75,7 @@ min_age_days=${BRANCH_MIN_AGE_DAYS:-7}
 
 errlog=$(mktemp) || fail_run "could not create a temporary file; nothing was classified or deleted"
 trap 'rm -f "$errlog"' EXIT
-# Why a gh or jq read failed: its error text, or else the answer it gave.
+# Why a read failed: its error text, or else the answer it gave.
 why() {
   local text
   text=$(<"$errlog")
@@ -83,13 +98,20 @@ if [ -z "$refs" ]; then
   exit 0
 fi
 
-# One snapshot of the open pull requests before any branch is looked at. Every
-# delete decision depends on it, so a snapshot that fails, is not a JSON array,
-# or may have been cut at the limit fails the run.
-if ! prs=$(gh pr list --repo "$REPO" --state open --limit 1000 --json headRefName,baseRefName 2>"$errlog"); then
+# One snapshot of the open pull requests before any branch is looked at, as
+# tab-separated lines through gh's own --jq: "open<TAB>N", then N lines of
+# "head<TAB>base". Every delete decision depends on it, so a snapshot that
+# fails, is empty or malformed, is shorter than its own count, or may have
+# been cut at the limit fails the run. (Without the count line, an empty
+# answer would read as no open pull request.)
+if ! prs=$(gh pr list --repo "$REPO" --state open --limit 1000 --json headRefName,baseRefName \
+  --jq '"open\t\(length)", (.[] | "\(.headRefName)\t\(.baseRefName)")' 2>"$errlog"); then
   fail_run "could not read the open pull requests; nothing was classified or deleted" "$(why "$prs")"
 fi
-if ! jq -e 'type == "array" and length < 1000' <<<"$prs" >/dev/null 2>"$errlog"; then
+if ! awk -F'\t' '
+    NR == 1 { if (NF != 2 || $1 != "open" || $2 !~ /^[0-9]+$/) bad = 1; n = $2; next }
+    NF != 2 || $1 == "" || $2 == "" { bad = 1 }
+    END { exit (bad || NR - 1 != n || n >= 1000) }' <<<"$prs" 2>"$errlog"; then
   fail_run "the open pull requests could not be read as one complete list; nothing was classified or deleted" "$(why "$prs")"
 fi
 
@@ -104,12 +126,7 @@ while IFS= read -r ref <&3; do
     row "$ref" '?' '?' '?' '?' '?' 'skipped: not a claude/* branch'
     failures=$((failures + 1)); continue
   fi
-  encoded=$(printf '%s' "$branch" | jq -sRr @uri)
-  if [ -z "$encoded" ]; then
-    annotate warning "could not URL-encode $branch"
-    row "$branch" '?' '?' '?' '?' '?' 'skipped: name encoding failed'
-    failures=$((failures + 1)); continue
-  fi
+  encoded=$(urlencode "$branch")
 
   # The tip as classified: its sha (compared with main, and re-read before any
   # delete) and its committer date (the age floor).
@@ -138,13 +155,15 @@ while IFS= read -r ref <&3; do
   young=''
   [ $((now - tip_epoch)) -ge $((min_age_days * 86400)) ] || young=1
 
-  as_head=$(jq --arg b "$branch" '[.[] | select(.headRefName == $b)] | length' <<<"$prs" 2>"$errlog")
+  # Exact-name matches in the snapshot (the name reaches awk through the
+  # environment, so no escape in it is interpreted).
+  as_head=$(BRANCH=$branch awk -F'\t' 'NR > 1 && $1 == ENVIRON["BRANCH"] { n++ } END { print n + 0 }' <<<"$prs" 2>"$errlog")
   if [[ ! $as_head =~ ^[0-9]+$ ]]; then
     annotate warning "could not count the open pull requests from $branch: $(why "$as_head")"
     row "$branch" "${sha:0:8}" "$ahead" "$last" '?' '?' 'skipped: pull request lookup failed'
     failures=$((failures + 1)); continue
   fi
-  as_base=$(jq --arg b "$branch" '[.[] | select(.baseRefName == $b)] | length' <<<"$prs" 2>"$errlog")
+  as_base=$(BRANCH=$branch awk -F'\t' 'NR > 1 && $2 == ENVIRON["BRANCH"] { n++ } END { print n + 0 }' <<<"$prs" 2>"$errlog")
   if [[ ! $as_base =~ ^[0-9]+$ ]]; then
     annotate warning "could not count the open pull requests into $branch: $(why "$as_base")"
     row "$branch" "${sha:0:8}" "$ahead" "$last" "$as_head" '?' 'skipped: pull request lookup failed'

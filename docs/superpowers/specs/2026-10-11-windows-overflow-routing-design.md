@@ -543,16 +543,24 @@ optional API reads; nothing in `namespace` mode.
 pull-requests: read }`) checks out only `ci/branch-cleanup` and runs
 `ci/branch-cleanup/branch-cleanup.sh`, which reads `REPO`, `DELETE`,
 `GITHUB_STEP_SUMMARY` and `BRANCH_MIN_AGE_DAYS` (default 7) and reaches
-GitHub only through `gh`. The script lists every `refs/heads/claude/*`
+GitHub only through `gh`; besides `gh` it needs only bash, awk, `date`
+and `mktemp` (gh's own `--jq` does the JSON, and names are URL-encoded
+byte by byte in bash). The script lists every `refs/heads/claude/*`
 branch (`per_page=100`, paginated) and, before looking at any branch,
 takes one snapshot of the open pull requests (`gh pr list --limit
-1000`); a snapshot that fails, is not a JSON array or may be cut at the
-limit fails the run, since every delete decision depends on it. For each
+1000`, printed by `--jq` as an `open<TAB>N` line and then one
+`head<TAB>base` line each); a snapshot that fails, is empty or
+malformed, is shorter than its own count or may be cut at the limit
+fails the run, since every delete decision depends on it. For each
 branch, in its own error scope with its name URL-encoded, it reads the
 tip's sha and committer date, compares that sha with `main` (`ahead_by`,
 `per_page=1`) and counts the branch as head and as base in the snapshot;
 every value read is validated, and an empty or malformed one is a failed
-lookup, never a zero. It writes the table (with the tip's short sha) to
+lookup, never a zero. The compare names the recorded sha, not the
+branch, so the commit `main` was checked against is the one a delete
+removes. The age floor reads the tip's committer date, the best the API
+offers: a branch just cut from a `main` tip older than the floor is not
+protected by it. It writes the table (with the tip's short sha) to
 its summary and, with `delete`, deletes only a branch whose tip `main`
 contains, whose tip is at least `BRANCH_MIN_AGE_DAYS` old, and that is
 neither the base nor the head of any open pull request (deleting a head
@@ -566,8 +574,9 @@ delete for one branch warns, the loop continues, and the run fails at
 the end. Unmerged branches are never deleted by it (the repository
 already deletes merged heads; what remains is unmerged work). Its
 behaviour test is `ci/windows-runner/tests/BranchCleanup.Tests.ps1`,
-which runs the script under bash with a fake `gh` that answers from
-files and records every call; a describe in `Workflows.Tests.ps1` pins
+which runs the script under bash (Git for Windows' bash on Windows) with
+a fake `gh` that answers canned text from files and records every call;
+a describe in `Workflows.Tests.ps1` pins
 what the workflow still owns, and `windows-runner-tests.yml`'s path
 filters include `branch-cleanup.yml` and `ci/branch-cleanup/**` so both
 run when either changes.

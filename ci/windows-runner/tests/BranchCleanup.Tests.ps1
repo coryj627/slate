@@ -9,10 +9,11 @@
 # is pinned in order). Each case reads the exit code, the summary table, the
 # annotations and log lines on stdout, and the calls.
 #
-# Needs bash and jq: ubuntu-latest has both. On Windows it is Git for
-# Windows' bash, found beside git, because the bash on PATH there can be
-# WSL's, a different machine. Without bash or jq every case is skipped and
-# says why.
+# Needs only bash (the script uses awk, date and mktemp, and gh's own --jq,
+# which the fake answers as canned text). On Linux that is bash on PATH; on
+# Windows it is Git for Windows' bash, found beside git, because the bash on
+# PATH there can be WSL's, a different machine. Without it every case is
+# skipped and says why.
 
 BeforeAll {
     $script:repo = 'fake-owner/fake-repo'
@@ -30,18 +31,13 @@ BeforeAll {
     else {
         $script:bash = (Get-Command bash -CommandType Application -ErrorAction SilentlyContinue | Select-Object -First 1).Source
     }
-    $script:skipReason = $null
-    if (-not $bash) {
-        $script:skipReason = 'no bash was found (on Windows, Git for Windows'' bash beside git)'
-    }
-    else {
-        & $bash -c 'command -v jq >/dev/null'
-        if ($LASTEXITCODE -ne 0) { $script:skipReason = "jq is not on the PATH of $bash" }
-    }
+    $script:skipReason = if ($bash) { $null } else { 'no bash was found (on Windows, Git for Windows'' bash beside git)' }
 
-    # The fake gh: records each call, then answers it from $FAKE_GH_DIR/answers.tsv (a key, then
-    # the answer's number n: n.out goes to stdout, n.err to stderr, n.code is the exit status).
-    # The key is the method and path of `gh api`, or `pr list`; anything else has no answer.
+    # The fake gh: records each call, then answers it with canned text from $FAKE_GH_DIR/answers.tsv
+    # (a key, then the answer's number n: n.out goes to stdout, n.err to stderr, n.code is the exit
+    # status). The key is the method and path of `gh api`, or `pr list`; anything else has no answer.
+    # It never evaluates --jq: each answer is the text gh would print after it, and each endpoint is
+    # read one way only, so the path is key enough (the calls pin every --jq expression).
     $script:fakeBin = Join-Path $TestDrive 'fake-bin'
     New-Item -ItemType Directory -Path $fakeBin | Out-Null
     [IO.File]::WriteAllText((Join-Path $fakeBin 'gh'), @'
@@ -96,17 +92,18 @@ export PATH="$fake_bin:$PATH"
     function Get-DeleteKey([string]$Name) { "DELETE repos/$repo/git/refs/heads/$([uri]::EscapeDataString($Name))" }
     # The calls the script must make, verbatim (gh's arguments joined by spaces).
     function Get-ListingCall { "api repos/$repo/git/matching-refs/heads/claude/?per_page=100 --paginate --jq .[].ref" }
-    function Get-SnapshotCall { "pr list --repo $repo --state open --limit 1000 --json headRefName,baseRefName" }
+    function Get-SnapshotCall { "pr list --repo $repo --state open --limit 1000 --json headRefName,baseRefName --jq " + '"open\t\(length)", (.[] | "\(.headRefName)\t\(.baseRefName)")' }
     function Get-TipCall([string]$Encoded) { "api repos/$repo/branches/$Encoded --jq .commit.sha + `" `" + .commit.commit.committer.date" }
     function Get-CompareCall([string]$Sha) { "api repos/$repo/compare/main...${Sha}?per_page=1 --jq .ahead_by" }
     function Get-RecheckCall([string]$Encoded) { "api repos/$repo/git/ref/heads/$Encoded --jq .object.sha" }
     function Get-DeleteCall([string]$Encoded) { "api -X DELETE repos/$repo/git/refs/heads/$Encoded" }
 
-    # A listing of these branches and an open-pull-request snapshot.
-    function New-Answers([string[]]$Refs = @(), [string]$Pulls = '[]') {
+    # A listing of these refs and the open-pull-request snapshot as gh's --jq prints it: "open<TAB>N",
+    # then one "head<TAB>base" line per pull request.
+    function New-Answers([string[]]$Refs = @(), [string[]]$Pulls = @()) {
         $answers = [ordered]@{}
         $answers[(Get-ListingKey)] = @{ Out = (@($Refs | ForEach-Object { "$_`n" }) -join ''); Err = ''; Code = 0 }
-        $answers['pr list'] = @{ Out = $Pulls; Err = ''; Code = 0 }
+        $answers['pr list'] = @{ Out = "open`t$(@($Pulls).Count)`n" + (@($Pulls | ForEach-Object { "$_`n" }) -join ''); Err = ''; Code = 0 }
         $answers
     }
     # One branch's answers: its tip (sha, committed DaysAgo days ago), the compare, the same sha at the
@@ -223,11 +220,13 @@ Describe 'branch-cleanup.sh' {
             Assert-Calls $r @((Get-ListingCall), (Get-SnapshotCall))
         }
         It 'reads a snapshot answer that is <Label> as a failure, never as no open pull request' -ForEach @(
-            @{ Label = 'empty'; Pulls = '' }
-            @{ Label = 'not an array'; Pulls = '{"message":"Bad credentials"}' }
-            @{ Label = 'cut at the limit'; Pulls = '[' + ((1..1000 | ForEach-Object { '{"headRefName":"claude/x","baseRefName":"main"}' }) -join ',') + ']' }
+            @{ Label = 'empty'; Snapshot = '' }
+            @{ Label = 'without its count line'; Snapshot = '{"message":"Bad credentials"}' }
+            @{ Label = 'shorter than its count'; Snapshot = "open`t2`nclaude/x`tmain`n" }
+            @{ Label = 'cut at the limit'; Snapshot = "open`t1000`n" + ((1..1000 | ForEach-Object { "claude/x`tmain`n" }) -join '') }
         ) {
-            $answers = New-Answers @('refs/heads/claude/old') -Pulls $Pulls
+            $answers = New-Answers @('refs/heads/claude/old')
+            $answers['pr list'] = @{ Out = $Snapshot; Err = ''; Code = 0 }
             $null = Add-Branch $answers 'claude/old'
             $r = Invoke-Cleanup $answers -Delete 'true'
             $r.Code | Should -Be 1
@@ -280,7 +279,7 @@ Describe 'branch-cleanup.sh' {
             Assert-Calls $r @((Get-ListingCall), (Get-SnapshotCall), (Get-TipCall 'claude%2Fold'), (Get-CompareCall $a40))
         }
         It 'keeps a branch an open pull request comes from, and counts only that exact name' {
-            $answers = New-Answers @('refs/heads/claude/old') -Pulls '[{"headRefName":"claude/old","baseRefName":"main"},{"headRefName":"claude/old-2","baseRefName":"claude/older"}]'
+            $answers = New-Answers @('refs/heads/claude/old') -Pulls @("claude/old`tmain", "claude/old-2`tclaude/older")
             $date = Add-Branch $answers 'claude/old'
             $r = Invoke-Cleanup $answers -Delete 'true'
             $r.Code | Should -Be 0
@@ -288,7 +287,7 @@ Describe 'branch-cleanup.sh' {
             Assert-Calls $r @((Get-ListingCall), (Get-SnapshotCall), (Get-TipCall 'claude%2Fold'), (Get-CompareCall $a40))
         }
         It 'keeps a branch an open pull request goes into' {
-            $answers = New-Answers @('refs/heads/claude/old') -Pulls '[{"headRefName":"claude/next","baseRefName":"claude/old"}]'
+            $answers = New-Answers @('refs/heads/claude/old') -Pulls @("claude/next`tclaude/old")
             $date = Add-Branch $answers 'claude/old'
             $r = Invoke-Cleanup $answers -Delete 'true'
             $r.Code | Should -Be 0
@@ -310,7 +309,7 @@ Describe 'branch-cleanup.sh' {
             $r.Calls[-1] | Should -BeExactly (Get-DeleteCall 'claude%2Fnew')
         }
         It 'names every reason it kept a branch' {
-            $answers = New-Answers @('refs/heads/claude/busy') -Pulls '[{"headRefName":"claude/busy","baseRefName":"main"},{"headRefName":"claude/next","baseRefName":"claude/busy"}]'
+            $answers = New-Answers @('refs/heads/claude/busy') -Pulls @("claude/busy`tmain", "claude/next`tclaude/busy")
             $date = Add-Branch $answers 'claude/busy' -DaysAgo 1 -Ahead '2'
             $r = Invoke-Cleanup $answers -Delete 'true'
             $r.Code | Should -Be 0
@@ -410,6 +409,16 @@ Describe 'branch-cleanup.sh' {
             Assert-Annotations $r @('::warning::could not compare claude/a|b%25c with main: 100%25 gone%0D%0Asecond line', '::error::1 branch(es) could not be classified or deleted')
             $r.Out | Should -Not -Match "`r"
             Assert-Calls $r @((Get-ListingCall), (Get-SnapshotCall), (Get-TipCall 'claude%2Fa%7Cb%25c'), (Get-CompareCall $a40))
+        }
+        It 'encodes a branch name for the URL byte by byte, keeping only unreserved characters' {
+            # claude/, e-acute (UTF-8 C3 A9), then ~x_y.z-1+2: / and + and both bytes of the e-acute are encoded.
+            $name = "claude/$([char]0xE9)~x_y.z-1+2"
+            $answers = New-Answers @("refs/heads/$name")
+            $date = Add-Branch $answers $name
+            $r = Invoke-Cleanup $answers
+            $r.Code | Should -Be 0
+            $r.Summary | Should -Match (Get-RowPattern @($name, 'aaaaaaaa', '0', $date, '0', '0', 'would delete'))
+            Assert-Calls $r @((Get-ListingCall), (Get-SnapshotCall), (Get-TipCall 'claude%2F%C3%A9~x_y.z-1%2B2'), (Get-CompareCall $a40))
         }
     }
 
