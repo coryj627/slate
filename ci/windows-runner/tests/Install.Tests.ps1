@@ -265,6 +265,13 @@ Describe 'prune-golden.ps1' {
         & $prune -Root $root
         Test-Path $prev | Should -BeTrue
     }
+    It 'names its log line''s daily file with the invariant culture, as the log pruner parses it' {
+        # Text-level: under ar-SA or th-TH, Get-Date -Format writes a Hijri or
+        # Buddhist year, a name Get-ExpiredLogNames reads as another date.
+        $text = Get-Content -Raw $prune
+        $text | Should -Match ([regex]::Escape("(Get-Date).ToString('yyyy-MM-dd', [cultureinfo]::InvariantCulture)"))
+        $text | Should -Not -Match 'Get-Date\s+-Format'
+    }
     It 'does nothing without a previous image, and survives a broken journal' {
         Remove-Item $prev -Force
         Set-Accepted '2026-10-10T22:55:00.0000000Z'

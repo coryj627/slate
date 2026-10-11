@@ -934,6 +934,17 @@ Context 'publishing the state' {
         ($logs -join "`n") | Should -Not -Match 'not recognized as a valid DateTime'
         (ConvertTo-DateTimeOffset -Value $journal.PublishFailedAt) | Should -Be $t0
     }
+    It 'counts a PublishedAt that does not parse as never published, so the next tick publishes and overwrites it' {
+        # A hand-edited journal: without the guard every publish attempt
+        # threw on the read, and the host stayed stale to the router.
+        $journal.PublishedAt = 'garbage'
+        { Invoke-OrchestratorTick -Config $config -Journal $journal -Adapters $adapters -Now $t0 } | Should -Not -Throw
+        (Get-Calls 'PublishState').Count | Should -Be 1
+        ($logs -join "`n") | Should -Not -Match 'publish:'
+        (ConvertTo-DateTimeOffset -Value $journal.PublishedAt) | Should -Be $t0
+        Invoke-OrchestratorTick -Config $config -Journal $journal -Adapters $adapters -Now $t0.AddSeconds(10)
+        (Get-Calls 'PublishState').Count | Should -Be 1 -Because 'the overwritten PublishedAt is a fresh heartbeat again'
+    }
     It 'publishes nothing on a tick whose admission threw, so the state ages into stale, and publishes again on the next good tick' {
         Invoke-OrchestratorTick -Config $config -Journal $journal -Adapters $adapters -Now $t0
         (Get-Calls 'PublishState').Count | Should -Be 1
@@ -1173,6 +1184,13 @@ Describe 'orchestrator.ps1' {
         $golden = $text.IndexOf('golden disk missing or not sealed')
         $golden | Should -BeGreaterThan $text.IndexOf('token missing at')
         $golden | Should -BeLessThan $text.IndexOf('Initialize-GitHubAdapter')
+    }
+    It 'names the daily log file with the invariant culture, as the log pruner parses it' {
+        # Text-level: under ar-SA or th-TH, Get-Date -Format writes a Hijri or
+        # Buddhist year, a name Get-ExpiredLogNames reads as another date.
+        $text = Get-Content -Raw (Join-Path $PSScriptRoot '..' 'orchestrator.ps1')
+        $text | Should -Match ([regex]::Escape("(Get-Date).ToString('yyyy-MM-dd', [cultureinfo]::InvariantCulture)"))
+        $text | Should -Not -Match 'Get-Date\s+-Format'
     }
     It 'polls only the configured routed workflows and logs a low API budget at warn' {
         $text = Get-Content -Raw (Join-Path $PSScriptRoot '..' 'orchestrator.ps1')

@@ -19,7 +19,7 @@ Import-Module (Join-Path $Root 'bin' 'SlateCiHost.psm1') -Force
 $paths = Get-CiHostPaths -Root $Root
 $log = {
     param($level, $message)
-    Write-CiLog -Path (Join-Path $paths.LogDir ('orchestrator-{0}.log' -f (Get-Date -Format 'yyyy-MM-dd'))) -Level $level -Message $message
+    Write-CiLog -Path (Join-Path $paths.LogDir ('orchestrator-{0}.log' -f (Get-Date).ToString('yyyy-MM-dd', [cultureinfo]::InvariantCulture))) -Level $level -Message $message
 }
 try {
     if (-not (Test-Path -LiteralPath $paths.GoldenPrevPath)) { exit 0 }

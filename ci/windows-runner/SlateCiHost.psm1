@@ -600,13 +600,18 @@ function Get-PublishedState {
 function Publish-HomeState {
     # Once per change, and at least once a minute as a heartbeat; a failed
     # write is logged once a minute and never stops the tick (the router
-    # treats a stale state as a dead host, the conservative outcome).
+    # treats a stale state as a dead host, the conservative outcome). A
+    # PublishedAt that does not parse (a hand-edited journal) counts as never
+    # published: the next publish overwrites it, so it cannot stop publishing.
     [CmdletBinding()]
     param([Parameter(Mandatory)]$Config, [Parameter(Mandatory)]$Journal, [Parameter(Mandatory)][hashtable]$Adapters, [Parameter(Mandatory)]$State, [Parameter(Mandatory)][datetimeoffset]$Now)
     $json = $State | ConvertTo-Json -Compress -Depth 5
     $previous = [string]$Journal['PublishedState']
-    $publishedAt = $Journal['PublishedAt']
-    $fresh = $publishedAt -and ($Now - (ConvertTo-DateTimeOffset -Value $publishedAt)).TotalSeconds -lt 60
+    $publishedAt = $null
+    if ($Journal['PublishedAt']) {
+        try { $publishedAt = ConvertTo-DateTimeOffset -Value $Journal['PublishedAt'] } catch { $publishedAt = $null }
+    }
+    $fresh = $null -ne $publishedAt -and ($Now - $publishedAt).TotalSeconds -lt 60
     # The heartbeat field alone differs every tick: compare without it.
     $sameButTime = $previous -and (($previous -replace '"at":"[^"]*"', '') -eq ($json -replace '"at":"[^"]*"', ''))
     if ($sameButTime -and $fresh) { return }
