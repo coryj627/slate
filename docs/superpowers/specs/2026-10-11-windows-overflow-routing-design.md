@@ -124,8 +124,10 @@ start time of this attempt (`run_started_at`, one API read,
 `GET /actions/runs/{id}`, optional: `now` when it fails; used only to
 order concurrent routers); the fork inputs; and, optionally, the other
 runs whose routing job started before this one or completed at most
-30 s before the state's `at` (one listing read of `windows.yml`'s queued
-and in-progress runs plus their jobs, ignored on failure).
+30 s before the state's `at` (a paged listing of `windows.yml`'s queued
+and in-progress runs, 100 a page up to five pages, plus their jobs; a
+failure on the first page means no earlier router is assumed, a failure
+on a later page keeps what was read).
 
 **Dead or crippled host (OR-D4).** The state is missing, does not parse,
 has `v` other than 1, has `at` more than `ROUTE_STALE_SECONDS` (180)
