@@ -540,21 +540,37 @@ optional API reads; nothing in `namespace` mode.
 `.github/workflows/branch-cleanup.yml` (`schedule` Mondays 06:00 UTC;
 `workflow_dispatch` with boolean `delete`, default false, read as
 `inputs.delete && 'true' || 'false'`; `permissions: { contents: write,
-pull-requests: read }`) lists every `refs/heads/claude/*` branch with its
-`ahead_by` against `main` (`compare`, `per_page=1`), its open pull
-requests as head and as base, and its tip's committer date, each branch
-handled in its own error scope and its name URL-encoded; it writes the
-table to its summary and, with `delete`, deletes only branches whose tip
-`main` contains and that are neither the base nor the head of any open
-pull request (deleting a head would close its pull request), asserting
-the `claude/` prefix; the table names why each branch was kept. A failed
-branch listing fails the run, so an empty report is never silent; a
-failed compare or delete for one branch warns, the loop continues, and
-the run fails at the end. Unmerged branches are never deleted by it (the
-repository already deletes merged heads; what remains is unmerged work).
-Its guard is a describe in `Workflows.Tests.ps1`, and
-`windows-runner-tests.yml`'s path filters include `branch-cleanup.yml` so the guard
-runs when it changes.
+pull-requests: read }`) checks out only `ci/branch-cleanup` and runs
+`ci/branch-cleanup/branch-cleanup.sh`, which reads `REPO`, `DELETE`,
+`GITHUB_STEP_SUMMARY` and `BRANCH_MIN_AGE_DAYS` (default 7) and reaches
+GitHub only through `gh`. The script lists every `refs/heads/claude/*`
+branch (`per_page=100`, paginated) and, before looking at any branch,
+takes one snapshot of the open pull requests (`gh pr list --limit
+1000`); a snapshot that fails, is not a JSON array or may be cut at the
+limit fails the run, since every delete decision depends on it. For each
+branch, in its own error scope with its name URL-encoded, it reads the
+tip's sha and committer date, compares that sha with `main` (`ahead_by`,
+`per_page=1`) and counts the branch as head and as base in the snapshot;
+every value read is validated, and an empty or malformed one is a failed
+lookup, never a zero. It writes the table (with the tip's short sha) to
+its summary and, with `delete`, deletes only a branch whose tip `main`
+contains, whose tip is at least `BRANCH_MIN_AGE_DAYS` old, and that is
+neither the base nor the head of any open pull request (deleting a head
+would close its pull request), asserting the `claude/` prefix; just
+before the delete it re-reads the ref and keeps the branch, as a
+failure, if its sha moved since classification. The table names why each
+branch was kept; table cells and annotations are escaped. A failed
+listing or snapshot fails the run with the red-run note under the
+table, so an empty report is never silent; a failed lookup, re-check or
+delete for one branch warns, the loop continues, and the run fails at
+the end. Unmerged branches are never deleted by it (the repository
+already deletes merged heads; what remains is unmerged work). Its
+behaviour test is `ci/windows-runner/tests/BranchCleanup.Tests.ps1`,
+which runs the script under bash with a fake `gh` that answers from
+files and records every call; a describe in `Workflows.Tests.ps1` pins
+what the workflow still owns, and `windows-runner-tests.yml`'s path
+filters include `branch-cleanup.yml` and `ci/branch-cleanup/**` so both
+run when either changes.
 
 ## 11. Testing
 

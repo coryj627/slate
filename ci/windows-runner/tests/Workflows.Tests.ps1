@@ -2,11 +2,11 @@
 # SPDX-License-Identifier: AGPL-3.0-or-later
 #
 # Text-level guards over the three workflows that read WINDOWS_RUNNER_MODE
-# and over branch-cleanup.yml (the weekly claude/* branch report, whose
-# delete step must stay fail-closed). YAML parsing happens on push
-# (GitHub refuses a malformed workflow at the first run); these tests pin
-# the routing and deletion contracts themselves, and the path filters
-# that make windows-runner-tests.yml run them.
+# and over what branch-cleanup.yml owns (the weekly claude/* branch report;
+# its script's behaviour is BranchCleanup.Tests.ps1). YAML parsing happens
+# on push (GitHub refuses a malformed workflow at the first run); these
+# tests pin the routing contract and the delete switch themselves, and the
+# path filters that make windows-runner-tests.yml run them.
 
 BeforeAll {
     $script:wf = Join-Path $PSScriptRoot '..' '..' '..' '.github' 'workflows'
@@ -201,6 +201,9 @@ Describe 'windows-runner-tests.yml path filters' {
             ([regex]::Matches($lane, [regex]::Escape("- '.github/workflows/$routed'"))).Count | Should -Be 2 -Because "$routed must be in both the pull_request and push path filters"
         }
     }
+    It 'runs the branch-cleanup behaviour test when its script changes, on pull requests and on main' {
+        ([regex]::Matches($lane, (Get-Lines @("      - 'ci/branch-cleanup/**'")))).Count | Should -Be 2
+    }
     It 'runs the router''s Python tests even when Pester failed' {
         $lane | Should -Match ([regex]::Escape('python -I -m unittest discover -v -s ci/windows-runner/route/tests -t ci/windows-runner/route'))
         # The step runs to the next step or the end of the file.
@@ -211,104 +214,34 @@ Describe 'windows-runner-tests.yml path filters' {
 }
 
 Describe 'branch-cleanup.yml' {
+    # The workflow owns when the script runs, with which token, and DELETE; what the script does with them
+    # is BranchCleanup.Tests.ps1. (One BeforeAll: Pester 5 keeps only the last of several in a block.)
     BeforeAll {
         $script:cleanup = Get-Content -Raw (Join-Path $wf 'branch-cleanup.yml')
-        # Where one whole, live line of the workflow starts, or -1. A commented-out copy ("# ...") or a
-        # fragment of a longer line does not count, so a pin cannot be met by text that no longer runs.
-        # (One BeforeAll: Pester 5 keeps only the last of several in a block.)
-        function Get-LineAt([string]$Text, [string]$Line) {
-            $found = [regex]::Match($Text, '(?m)^[ \t]*' + [regex]::Escape($Line) + '[ \t]*\r?$')
-            if ($found.Success) { $found.Index } else { -1 }
-        }
+        $script:report = Get-JobBlock $cleanup 'report'
     }
-    It 'reports weekly and deletes only on an explicit dispatch, only claude/* tips main already contains' {
-        $cleanup | Should -Match '(?m)^    - cron: ''0 6 \* \* 1'''
-        $cleanup | Should -Match '(?m)^      delete:\r?\n        description:'
-        $cleanup | Should -Match '(?m)^        type: boolean\r?\n        default: false'
-        $cleanup | Should -Match '(?m)^  contents: write\r?\n  pull-requests: read'
-        # DELETE is true only for a dispatch with the input set: this one live definition, and no other
-        # (a commented-out copy above a live DELETE: 'true' would let the schedule delete).
-        Get-LineAt $cleanup 'DELETE: ${{ github.event_name == ''workflow_dispatch'' && inputs.delete && ''true'' || ''false'' }}' | Should -BeGreaterThan -1
-        ([regex]::Matches($cleanup, '(?m)^[ \t]*DELETE:')).Count | Should -Be 1
-        $cleanup | Should -Not -Match '(?-i)\bDELETE='
-        # Only claude/* names get past the prefix line (its neighbours are pinned in the order test below).
-        Get-LineAt $cleanup '[[ "$branch" == claude/* ]] || { echo "::error::unexpected branch name $branch"; failures=$((failures + 1)); continue; }' | Should -BeGreaterThan -1
-        $cleanup | Should -Not -Match '(?i)(^|\s)--force\b'
+    It 'reports weekly and deletes only on an explicit dispatch with the delete input' {
+        $cleanup | Should -Match (Get-Lines @('  schedule:', "    - cron: '0 6 * * 1'", '  workflow_dispatch:', '    inputs:', '      delete:'))
+        $cleanup | Should -Match (Get-Lines @('        type: boolean', '        default: false'))
+        $cleanup | Should -Match (Get-Lines @('permissions:', '  contents: write', '  pull-requests: read'))
+        # DELETE is 'true' only for a dispatch with the input set: this one live definition, at job level beside
+        # the token and the repository, and no other (a second one, even in a step's env, could let the schedule delete).
+        $report | Should -Match (Get-Lines @(
+                '    env:',
+                '      GH_TOKEN: ${{ github.token }}',
+                '      REPO: ${{ github.repository }}',
+                '      DELETE: ${{ github.event_name == ''workflow_dispatch'' && inputs.delete && ''true'' || ''false'' }}'))
+        ([regex]::Matches($cleanup, '(?m)^(?![ \t]*#)[^\r\n]*\bDELETE[ \t]*:')).Count | Should -Be 1
+        $cleanup | Should -Not -Match '(?-i)\bDELETE[ \t]*='
     }
-    It 'never deletes a branch an open pull request uses, as head or as base, and says why it kept each one' {
-        # The one condition that guards the delete: ahead_by 0 and no open pull request on either side.
-        Get-LineAt $cleanup 'if [ "$ahead" = "0" ] && [ "$as_head" = "0" ] && [ "$as_base" = "0" ]; then' | Should -BeGreaterThan -1
-        # One delete call, behind that gate and inside the DELETE check (the order is pinned below).
-        ([regex]::Matches($cleanup, '-X DELETE')).Count | Should -Be 1
-        # The table names what happened to a branch, or why it was kept.
-        Get-LineAt $cleanup 'action="deleted"' | Should -BeGreaterThan -1
-        Get-LineAt $cleanup 'action="would delete"' | Should -BeGreaterThan -1
-        Get-LineAt $cleanup '[ "$ahead" = "0" ] || reasons="ahead $ahead"' | Should -BeGreaterThan -1
-        Get-LineAt $cleanup '[ "$as_head" = "0" ] || [ "$as_head" = "?" ] || reasons="${reasons:+$reasons, }open PR head"' | Should -BeGreaterThan -1
-        Get-LineAt $cleanup '[ "$as_base" = "0" ] || [ "$as_base" = "?" ] || reasons="${reasons:+$reasons, }open PR base"' | Should -BeGreaterThan -1
-    }
-    It 'fails the run, never a quiet empty report, when the listing fails or any branch could not be handled' {
-        # A failed listing: the bash form of core.setFailed (an ::error:: annotation and a non-zero exit).
-        $cleanup | Should -Match '(?m)^[ \t]*refs=\$\(gh api "repos/\$REPO/git/matching-refs/heads/claude/" --paginate --jq ''\.\[\]\.ref''\) \|\| \{ echo "::error::[^"\r\n]*"; exit 1; \}[ \t]*\r?$'
-        # One branch that cannot be handled warns, the loop goes on, and the step fails at the end.
-        $cleanup | Should -Match '(?m)^[ \t]*\[ "\$failures" -eq 0 \] \|\| \{ echo "::error::[^"\r\n]*"; exit 1; \}[ \t]*\r?$'
-    }
-    It 'reads a failed open-pull-request lookup as an open pull request, never as none' {
-        Get-LineAt $cleanup 'as_head=$(gh pr list --repo "$REPO" --state open --head "$branch" --json number --jq ''length'' 2>/dev/null || echo ''?'')' | Should -BeGreaterThan -1
-        Get-LineAt $cleanup 'as_base=$(gh pr list --repo "$REPO" --state open --base "$branch" --json number --jq ''length'' 2>/dev/null || echo ''?'')' | Should -BeGreaterThan -1
-        # Every gh pr list falls back to ?, which the gate reads as not-zero: a fallback of 0 would read as no open PR.
-        $fallbacks = @([regex]::Matches($cleanup, "gh pr list[^\r\n]*\|\| echo '([^']*)'\)"))
-        $fallbacks.Count | Should -Be 2
-        foreach ($fallback in $fallbacks) { $fallback.Groups[1].Value | Should -BeExactly '?' }
-        # Nothing else assigns them.
-        ([regex]::Matches($cleanup, '\bas_head=')).Count | Should -Be 1
-        ([regex]::Matches($cleanup, '\bas_base=')).Count | Should -Be 1
-        # The failed lookup warns, is counted, and is named in the kept reason.
-        Get-LineAt $cleanup 'if [ "$as_head" = "?" ] || [ "$as_base" = "?" ]; then' | Should -BeGreaterThan -1
-        Get-LineAt $cleanup 'echo "::warning::could not look up the open pull requests of $branch"; lookup_failed=1; failures=$((failures + 1))' | Should -BeGreaterThan -1
-        Get-LineAt $cleanup '[ -z "$lookup_failed" ] || reasons="${reasons:+$reasons, }open PR lookup failed"' | Should -BeGreaterThan -1
-    }
-    It 'reads a failed compare as a failure, never as ahead 0' {
-        # The compare line through its failure handling: a fallback such as `|| echo 0` inside the command
-        # substitution would turn a failed compare into 0 and leave the warn block as dead code.
-        Get-LineAt $cleanup 'if [ -z "$encoded" ] || ! ahead=$(gh api "repos/$REPO/compare/main...$encoded?per_page=1" --jq ''.ahead_by'' 2>&1) || [[ ! "$ahead" =~ ^[0-9]+$ ]]; then' | Should -BeGreaterThan -1
-        Get-LineAt $cleanup 'echo "::warning::could not compare $branch with main: ${ahead//$''\n''/ }"' | Should -BeGreaterThan -1
-        Get-LineAt $cleanup 'echo "| $branch | ? | ? | ? | ? | skipped: compare failed |" >> "$GITHUB_STEP_SUMMARY"; failures=$((failures + 1)); continue' | Should -BeGreaterThan -1
-        # Only the empty initialisation and the compare itself assign ahead.
-        ([regex]::Matches($cleanup, '\bahead=')).Count | Should -Be 2
-    }
-    It 'says why a delete or a tip-date lookup failed, and counts both' {
-        # The delete keeps its error text (no /dev/null), as the compare does.
-        Get-LineAt $cleanup 'if out=$(gh api -X DELETE "repos/$REPO/git/refs/heads/$encoded" 2>&1); then' | Should -BeGreaterThan -1
-        Get-LineAt $cleanup 'echo "::warning::could not delete $branch: ${out//$''\n''/ }"; action="delete failed"; failures=$((failures + 1))' | Should -BeGreaterThan -1
-        $cleanup | Should -Not -Match 'DELETE[^\r\n]*/dev/null'
-        # The tip date is a lookup like the others: a failure warns, is counted, and skips the branch (so it
-        # cannot be deleted in a run whose lookups are failing) instead of becoming a quiet ?.
-        Get-LineAt $cleanup 'if ! last=$(gh api "repos/$REPO/branches/$encoded" --jq ''.commit.commit.committer.date'' 2>&1) || [[ ! "$last" =~ ^[0-9]{4}-[0-9]{2}-[0-9]{2}T ]]; then' | Should -BeGreaterThan -1
-        Get-LineAt $cleanup 'echo "::warning::could not read the last commit date of $branch: ${last//$''\n''/ }"' | Should -BeGreaterThan -1
-        Get-LineAt $cleanup 'echo "| $branch | $ahead | ? | ? | ? | skipped: last commit lookup failed |" >> "$GITHUB_STEP_SUMMARY"; failures=$((failures + 1)); continue' | Should -BeGreaterThan -1
-        ([regex]::Matches($cleanup, '\blast=')).Count | Should -Be 1
-    }
-    It 'looks at a branch in a safe order: name, compare, tip date, pull requests, gate, then the one delete' {
-        # Whole, live lines (a commented-out copy has no index), each strictly after the one before.
-        $order = [ordered]@{
-            'the claude/ prefix check' = Get-LineAt $cleanup '[[ "$branch" == claude/* ]] || { echo "::error::unexpected branch name $branch"; failures=$((failures + 1)); continue; }'
-            'the URL-encoded name'     = Get-LineAt $cleanup 'encoded=$(printf ''%s'' "$branch" | jq -sRr @uri)'
-            'the compare'              = Get-LineAt $cleanup 'if [ -z "$encoded" ] || ! ahead=$(gh api "repos/$REPO/compare/main...$encoded?per_page=1" --jq ''.ahead_by'' 2>&1) || [[ ! "$ahead" =~ ^[0-9]+$ ]]; then'
-            'the tip date'             = Get-LineAt $cleanup 'if ! last=$(gh api "repos/$REPO/branches/$encoded" --jq ''.commit.commit.committer.date'' 2>&1) || [[ ! "$last" =~ ^[0-9]{4}-[0-9]{2}-[0-9]{2}T ]]; then'
-            'the head lookup'          = Get-LineAt $cleanup 'as_head=$(gh pr list --repo "$REPO" --state open --head "$branch" --json number --jq ''length'' 2>/dev/null || echo ''?'')'
-            'the base lookup'          = Get-LineAt $cleanup 'as_base=$(gh pr list --repo "$REPO" --state open --base "$branch" --json number --jq ''length'' 2>/dev/null || echo ''?'')'
-            'the lookup-failure check' = Get-LineAt $cleanup 'if [ "$as_head" = "?" ] || [ "$as_base" = "?" ]; then'
-            'the gate'                 = Get-LineAt $cleanup 'if [ "$ahead" = "0" ] && [ "$as_head" = "0" ] && [ "$as_base" = "0" ]; then'
-            'the DELETE check'         = Get-LineAt $cleanup 'if [ "$DELETE" = "true" ]; then'
-            'the delete'               = Get-LineAt $cleanup 'if out=$(gh api -X DELETE "repos/$REPO/git/refs/heads/$encoded" 2>&1); then'
-        }
-        $previous = -1
-        $previousName = 'the start of the script'
-        foreach ($name in $order.Keys) {
-            $order[$name] | Should -BeGreaterThan $previous -Because "$name must be a live line after $previousName"
-            $previous = $order[$name]
-            $previousName = $name
-        }
+    It 'checks out only the script, with the pinned checkout and no persisted token, and runs it as its one command' {
+        # The same checkout pin as the other workflows (this lane's).
+        $pin = [regex]::Match($lane, 'uses: actions/checkout@[0-9a-f]{40}  # v\d+').Value
+        $pin | Should -Not -BeNullOrEmpty
+        $steps = Get-Steps $report
+        $steps.Count | Should -Be 2
+        $steps[0] | Should -Match (Get-Lines @("        $pin", '        with:', '          sparse-checkout: ci/branch-cleanup', '          persist-credentials: false'))
+        $steps[1] | Should -Match (Get-Lines @('        run: bash ci/branch-cleanup/branch-cleanup.sh'))
+        ([regex]::Matches($cleanup, '(?m)^[ \t]*(?:- )?run:')).Count | Should -Be 1
     }
 }

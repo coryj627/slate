@@ -1,11 +1,8 @@
 # Stale claude/* branches: a weekly report, and a delete only when asked.
-# The repository already deletes merged pull-request branches, so the
-# claude/* branches that remain are unmerged work or never-reviewed WIP.
-# Nothing here deletes a tip main does not already contain, or a branch an
-# open pull request is based on or comes from (deleting a head closes its
-# pull request). A listing that fails, or a branch that cannot be compared,
-# looked up or deleted, turns the run red instead of leaving a quiet
-# report. Spec:
+# The logic is ci/branch-cleanup/branch-cleanup.sh, whose behaviour test is
+# ci/windows-runner/tests/BranchCleanup.Tests.ps1. This file owns when it
+# runs, with which token, and DELETE, which is 'true' only for a dispatch
+# with the delete input set. Spec:
 # docs/superpowers/specs/2026-10-11-windows-overflow-routing-design.md §10.
 
 name: Branch cleanup
@@ -16,7 +13,7 @@ on:
   workflow_dispatch:
     inputs:
       delete:
-        description: Delete the claude/* branches whose tip main already contains and that no open pull request uses (never anything else).
+        description: Delete the claude/* branches whose tip main already contains, that are at least seven days old and that no open pull request uses (never anything else).
         type: boolean
         default: false
 
@@ -38,58 +35,10 @@ jobs:
       REPO: ${{ github.repository }}
       DELETE: ${{ github.event_name == 'workflow_dispatch' && inputs.delete && 'true' || 'false' }}
     steps:
+      - name: Checkout the script
+        uses: actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0  # v7
+        with:
+          sparse-checkout: ci/branch-cleanup
+          persist-credentials: false
       - name: List, classify and (on dispatch) delete
-        run: |
-          set -uo pipefail
-          {
-            echo "## claude/* branches ($(date -u +%Y-%m-%dT%H:%MZ), delete=$DELETE)"
-            echo
-            echo "| branch | ahead of main | last commit | open PR as head | open PR as base | action |"
-            echo "|---|---|---|---|---|---|"
-          } >> "$GITHUB_STEP_SUMMARY"
-          # A failed listing fails the run: an empty report must never read as a clean one.
-          refs=$(gh api "repos/$REPO/git/matching-refs/heads/claude/" --paginate --jq '.[].ref') || { echo "::error::could not list the claude/* branches; nothing was classified or deleted"; exit 1; }
-          [ -n "$refs" ] || echo "| (none) | | | | | no claude/* branches |" >> "$GITHUB_STEP_SUMMARY"
-          failures=0
-          while read -r branch; do
-            [ -n "$branch" ] || continue
-            [[ "$branch" == claude/* ]] || { echo "::error::unexpected branch name $branch"; failures=$((failures + 1)); continue; }
-            encoded=$(printf '%s' "$branch" | jq -sRr @uri)
-            ahead=''
-            if [ -z "$encoded" ] || ! ahead=$(gh api "repos/$REPO/compare/main...$encoded?per_page=1" --jq '.ahead_by' 2>&1) || [[ ! "$ahead" =~ ^[0-9]+$ ]]; then
-              echo "::warning::could not compare $branch with main: ${ahead//$'\n'/ }"
-              echo "| $branch | ? | ? | ? | ? | skipped: compare failed |" >> "$GITHUB_STEP_SUMMARY"; failures=$((failures + 1)); continue
-            fi
-            if ! last=$(gh api "repos/$REPO/branches/$encoded" --jq '.commit.commit.committer.date' 2>&1) || [[ ! "$last" =~ ^[0-9]{4}-[0-9]{2}-[0-9]{2}T ]]; then
-              echo "::warning::could not read the last commit date of $branch: ${last//$'\n'/ }"
-              echo "| $branch | $ahead | ? | ? | ? | skipped: last commit lookup failed |" >> "$GITHUB_STEP_SUMMARY"; failures=$((failures + 1)); continue
-            fi
-            as_head=$(gh pr list --repo "$REPO" --state open --head "$branch" --json number --jq 'length' 2>/dev/null || echo '?')
-            as_base=$(gh pr list --repo "$REPO" --state open --base "$branch" --json number --jq 'length' 2>/dev/null || echo '?')
-            lookup_failed=''
-            if [ "$as_head" = "?" ] || [ "$as_base" = "?" ]; then
-              echo "::warning::could not look up the open pull requests of $branch"; lookup_failed=1; failures=$((failures + 1))
-            fi
-            if [ "$ahead" = "0" ] && [ "$as_head" = "0" ] && [ "$as_base" = "0" ]; then
-              if [ "$DELETE" = "true" ]; then
-                if out=$(gh api -X DELETE "repos/$REPO/git/refs/heads/$encoded" 2>&1); then
-                  action="deleted"
-                else
-                  echo "::warning::could not delete $branch: ${out//$'\n'/ }"; action="delete failed"; failures=$((failures + 1))
-                fi
-              else
-                action="would delete"
-              fi
-            else
-              reasons=''
-              [ "$ahead" = "0" ] || reasons="ahead $ahead"
-              [ "$as_head" = "0" ] || [ "$as_head" = "?" ] || reasons="${reasons:+$reasons, }open PR head"
-              [ "$as_base" = "0" ] || [ "$as_base" = "?" ] || reasons="${reasons:+$reasons, }open PR base"
-              [ -z "$lookup_failed" ] || reasons="${reasons:+$reasons, }open PR lookup failed"
-              action="kept: $reasons"
-            fi
-            echo "| $branch | $ahead | $last | $as_head | $as_base | $action |" >> "$GITHUB_STEP_SUMMARY"
-            echo "$branch: $action"
-          done < <(printf '%s\n' "$refs" | sed 's#^refs/heads/##')
-          if [ "$failures" -ne 0 ]; then printf '\n%s branch(es) could not be classified or deleted; this run is red.\n' "$failures" >> "$GITHUB_STEP_SUMMARY"; fi
-          [ "$failures" -eq 0 ] || { echo "::error::$failures branch(es) could not be classified or deleted"; exit 1; }
+        run: bash ci/branch-cleanup/branch-cleanup.sh
