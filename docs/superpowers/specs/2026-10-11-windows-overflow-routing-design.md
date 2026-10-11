@@ -49,9 +49,10 @@ job queues home under `home` and `home-only` alike.
   Inferring the pool from GitHub's jobs listing was tried in revision 2
   and shown unreliable: a dead host could only be noticed after a run had
   stranded on it, every normal slot handover looked like a dead host, and
-  the router had to mirror admission rules it could not see. The cost is
-  one more fine-grained permission on the host's token, Variables read and
-  write, as the mac controller already holds.
+  the router had to mirror admission rules it could not see. It costs no
+  new permission: the host's token was issued with the mac controller's
+  set (Actions read, Administration read and write, Variables read and
+  write), so it already writes repository variables.
 - **OR-D3 Cost ranking with a critical-path bound.** Lanes are considered
   in vendor-cost order (app build + test, model shard 0, model shard 1,
   rust tests). The app lane takes a free slot or the vendor; it never
@@ -236,8 +237,8 @@ Repository variable `WINDOWS_HOME_STATE`, JSON, one line, for example:
   that the public job timings already imply.
 - The owner creates the variable once with
   `gh variable set WINDOWS_HOME_STATE --body '{"v":1,"at":"1970-01-01T00:00:00Z","serving":false,"slots":0,"running":[],"queued":[]}'`
-  (or the host's first POST does), and re-issues the PAT with Variables
-  read and write before enabling the loop on the new code.
+  (or the host's first POST does). The token already holds Variables read
+  and write; nothing is re-issued.
 
 ## 5. The router
 
@@ -452,9 +453,11 @@ optional API reads; nothing in `namespace` mode.
 - **What the router decides** is which of two already-trusted targets a
   lane runs on; a fork can rewrite the router, which is why the fork rules
   live on the host and the approval policy stays the gate (OR-D5).
-- **The host's PAT** gains Variables read and write; it keeps Actions read
-  and Administration read and write; it is re-issued through
-  `store-token.ps1` and never appears in the repository.
+- **The host's PAT** keeps the permissions it was issued with, the mac
+  controller's set: Actions read, Administration read and write, Variables
+  read and write. Nothing is re-issued and it never appears in the
+  repository; the runbook's issuance step, which listed only the first
+  two, is corrected to the set actually granted.
 - **The prune task** runs as SYSTEM but acts on one fixed path under a
   predicate evaluated against the current image; the orchestrator's
   account gains no right on `golden`.
@@ -489,7 +492,8 @@ Its guard runs in a small workflow of its own, filtered to the file.
   sealed and on an unsealed image, the journal shape, the adapter key
   lists.
 - Guards: `Workflows.Tests.ps1` as in §6.
-- Integration, on the host (runbook): re-issue the PAT and create the
+- Integration, on the host (runbook): confirm the token lists Variables
+  read and write on GitHub's fine-grained tokens page and create the
   variable; after `setup-host.ps1` and the loop restart, read
   `gh variable get WINDOWS_HOME_STATE` and see it move every tick with a
   job; with one run in flight dispatch a second only after the first's
@@ -504,7 +508,8 @@ Its guard runs in a small workflow of its own, filtered to the file.
   (modes, the published state, the rule, the fork rule, the measured
   costs), "Reading a run's routing", the pool switch (flip first, then
   cancel, then "Re-run jobs → Re-run all jobs" or `gh run rerun <id>`),
-  the token section (Variables read and write), the "Capacity" bullet and
+  the token section (the issued set, Variables read and write included,
+  corrected from the two it listed), the "Capacity" bullet and
   the security row, "both tasks" → the three tasks and that the prune task
   re-registers on every run, the refresh steps (`-Rotate`, `home-only`,
   the acceptance line, the prune task), the cleanup section, the log-line
