@@ -659,7 +659,31 @@ Context 'handoff reconciliation' {
         @($logs) | Should -Contain "[warn] ${name}: discard (runner taken by job 2 of someone/slate (not the trusted repository))"
         (Get-Calls 'NewVm').Count | Should -Be 2
     }
+    It 'forces a handed VM off when its runner runs a job of the trusted repository with <Case>, and says so' -ForEach @(
+        @{ Case = 'no lane label'; Labels = @('self-hosted') }
+        @{ Case = 'two lane labels'; Labels = @('slate-win-model', 'slate-win-rust') }
+    ) {
+        # The log says what is true: the run is the trusted repository's, so
+        # the job goes for its labels, not its repository.
+        $world.Queued = @((New-QueuedJob 1 10 'model'))
+        Invoke-OrchestratorTick -Config $config -Journal $journal -Adapters $adapters -Now $t0
+        $name = @($journal.Vms.Keys)[0]
+        Invoke-OrchestratorTick -Config $config -Journal $journal -Adapters $adapters -Now $t0.AddSeconds(10)
+        Set-Run 98
+        $world.InProgress = @([pscustomobject]@{ id = 2; run_id = 98; status = 'in_progress'; labels = $Labels; created_at = $t0.ToString('o'); runner_name = $name })
+        Invoke-OrchestratorTick -Config $config -Journal $journal -Adapters $adapters -Now $t0.AddSeconds(20)
+        (Get-Calls 'StopVmForce').Count | Should -Be 1
+        (Get-Calls 'DiscardCache').Count | Should -Be 1
+        (Get-Calls 'CommitCache').Count | Should -Be 0
+        $journal.Vms.ContainsKey($name) | Should -BeFalse
+        $journal.Retries.ContainsKey('1') | Should -BeFalse
+        @($logs) | Should -Contain "[warn] handoff: ${name} runs job 2 of coryj627/slate (no lane label); forcing it off"
+        @($logs) | Should -Contain "[warn] ${name}: discard (runner taken by job 2 of coryj627/slate (no lane label))"
+        ($logs -join "`n") | Should -Not -Match 'not the trusted repository'
+        (Get-Calls 'NewVm').Count | Should -Be 2
+    }
     It 'forces a VM off at once for a job without a lane label even when its run cannot be read, naming an unknown repository' {
+        # Only the missing label is known, so that is what the log says.
         $world.Queued = @((New-QueuedJob 1 10 'model'))
         Invoke-OrchestratorTick -Config $config -Journal $journal -Adapters $adapters -Now $t0
         $name = @($journal.Vms.Keys)[0]
@@ -669,7 +693,8 @@ Context 'handoff reconciliation' {
         Invoke-OrchestratorTick -Config $config -Journal $journal -Adapters $adapters -Now $t0.AddSeconds(20)
         $journal.Vms.ContainsKey($name) | Should -BeFalse
         $journal.Retries.ContainsKey('1') | Should -BeFalse
-        @($logs) | Should -Contain "[warn] handoff: ${name} runs job 2 of an unknown repository (not the trusted repository); forcing it off"
+        @($logs) | Should -Contain "[warn] handoff: ${name} runs job 2 of an unknown repository (no lane label); forcing it off"
+        @($logs) | Should -Contain "[warn] ${name}: discard (runner taken by job 2 of an unknown repository (no lane label))"
     }
     It 'decides from the answer admission remembered, without reading the run again' {
         # Job 2 was seen queued (no slot was free for it), so its run was read then.

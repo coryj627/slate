@@ -1029,21 +1029,25 @@ function Invoke-Admission {
             # unknown run is read at most once a minute, each failed read is
             # logged, and the VM is left alone until the answer is known.
             $run = $null
-            $foreign = $true
+            $evict = $true
             if ($job.Lane) {
                 $check = Update-SeenJob -Config $Config -Journal $Journal -Adapters $Adapters -Job $job -Now $Now
                 if ($check.Failure) { & $Adapters.Log 'warn' "handoff: ${name}: run $($job.RunId) of job $($job.JobId) could not be read: $($check.Failure)" }
                 if ($null -eq $check.Seen['Foreign']) { continue }
-                $foreign = [bool]$check.Seen['Foreign']
+                $evict = [bool]$check.Seen['Foreign']
                 $run = $check.Run
             }
-            if ($foreign) {
+            if ($evict) {
                 # The run only names the repository in the log: a failed read
-                # never delays forcing the VM off.
+                # never delays forcing the VM off. The log says what is true:
+                # a lane job goes for its foreign run; a job without a lane
+                # label goes for the label, unless its run is read as foreign.
                 if ($null -eq $run) { try { $run = & $Adapters.GetRun ([int64]$job.RunId) } catch { $run = $null } }
                 $repo = Format-RunRepository -Run $run
-                & $Adapters.Log 'warn' "handoff: ${name} runs job $($job.JobId) of $repo (not the trusted repository); forcing it off"
-                Remove-ActiveVm -Config $Config -Journal $Journal -Adapters $Adapters -Name $name -Reason "runner taken by job $($job.JobId) of $repo (not the trusted repository)" -Retry $false -Now $Now
+                $why = 'not the trusted repository'
+                if (-not $job.Lane -and ($null -eq $run -or (Test-TrustedRun -Run $run -TrustedRepo $Config.TrustedRepo))) { $why = 'no lane label' }
+                & $Adapters.Log 'warn' "handoff: ${name} runs job $($job.JobId) of $repo ($why); forcing it off"
+                Remove-ActiveVm -Config $Config -Journal $Journal -Adapters $Adapters -Name $name -Reason "runner taken by job $($job.JobId) of $repo ($why)" -Retry $false -Now $Now
                 continue
             }
             & $Adapters.Log 'info' "${name}: runs job $($job.JobId), not job $($vm.JobId) it was provisioned for, which stays queued for a VM of its own"
