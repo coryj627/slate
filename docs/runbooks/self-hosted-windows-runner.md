@@ -1581,13 +1581,40 @@ Task 14 of the plan fills the home columns from the acceptance runs. The
 spec estimated app 12–15 min, shell 6–8 min, and a main push at about
 25 min.
 
-| Job | Namespace / hosted (2026-10-09) | home (first green) | home (warm) |
+| Job | Namespace / hosted (2026-10-09) | home (first green, 2026-10-11) | home (warm) |
 |---|---|---|---|
-| rust tests | 2 min | | |
-| app build + test | 28 min | | |
-| app model shard (each) | 6 min | | |
-| shell accessibility gate | 17 min | | |
-| main push, wall | 45 min | | |
+| rust tests | 2 min | 10 min 34 s | |
+| app build + test | 28 min | 27 min 18 s | |
+| app model shard (each) | 6 min | 38 min 16 s and 38 min 53 s | |
+| shell accessibility gate | 17 min | 15 min 48 s | |
+| main push, wall | 45 min | 1 h 25 min (a branch dispatch, see below) | |
+
+### windows.yml, first green run on the home pool
+
+Run 38125616320 (2026-10-11): a `workflow_dispatch` of the branch
+`claude/home-pilot-smoke` with the pool already flipped to `home`, so
+every cache parent was still empty and the run's forks were discarded.
+Rust tests 10 min 34 s, app build + test 27 min 18 s, the model shards
+38 min 16 s and 38 min 53 s, the shell gate 15 min 48 s; 1 h 25 min wall
+through two slots. Every handoff took 12–14 s, and each slot turned over
+6–14 s after the host saw its job end (GitHub reports the completion
+first, which adds up to a minute).
+
+The model shards took 8× their hosted time because every workspace
+created a Windows spell checker and the model harness builds a workspace
+per case: releasing the checker costs about 180 ms on Windows 11, and the
+Windows Server images Namespace uses offer no checker at all, so the cost
+never showed there. PR #1350 binds it on first use. With that fix (run
+38129938362, a branch run) a shard took 17 min 9 s with the other slot
+idle and 26 min 21 s beside the app job's tests: the test step 11 min and
+19 min against 31, cleanup 27 ms a case against 159 (hosted: 4.7). The
+rest of the gap is the VM itself: `sessionSetup` and `arrangement` run
+3–8× their hosted time, worst beside a busy neighbour, and that part is
+not yet attributed. One candidate is
+cheap to test in the next golden build: the runner user's `%TEMP%`, where
+the harness copies a vault per case and the session writes its index,
+lies outside the guest's Defender exclusions (`provision-guest.ps1`
+excludes the runner, .NET, cargo and rustup trees, and the job volume).
 
 ### Pilot comparison (windows-ci-pilot.yml)
 
