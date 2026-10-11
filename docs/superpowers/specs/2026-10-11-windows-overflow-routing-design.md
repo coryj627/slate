@@ -40,8 +40,9 @@ job queues home under `home` and `home-only` alike.
   golden-image validation and fidelity runs. `namespace`, unset or any
   other value sends every lane to the vendor exactly as before, and the
   routing job does not run at all.
-- **OR-D2 The host publishes its state; the router reads it.** Every tick
-  the orchestrator writes the repository variable `WINDOWS_HOME_STATE`: a
+- **OR-D2 The host publishes its state; the router reads it.** Whenever
+  its state changes, and at least once a minute, the orchestrator writes
+  the repository variable `WINDOWS_HOME_STATE`: a
   heartbeat, whether it is serving, how many slots it has, what runs in
   them and what it has queued (§4). The router reads the variable from the
   `vars` context, with no API call, and decides. This is the mac runner's
@@ -540,7 +541,7 @@ failed compare or delete for one branch warns, the loop continues, and
 the run fails at the end. Unmerged branches are never deleted by it (the
 repository already deletes merged heads; what remains is unmerged work).
 Its guard is a describe in `Workflows.Tests.ps1`, and
-`windows-runner-tests.yml`'s path filters include the file so the guard
+`windows-runner-tests.yml`'s path filters include `branch-cleanup.yml` so the guard
 runs when it changes.
 
 ## 11. Testing
@@ -559,7 +560,7 @@ runs when it changes.
 - Integration, on the host (runbook): confirm the token lists Variables
   read and write on GitHub's fine-grained tokens page and create the
   variable; after `setup-host.ps1` and the loop restart, read
-  `gh variable get WINDOWS_HOME_STATE` and see it move every tick with a
+  `gh variable get WINDOWS_HOME_STATE` and see it move within a minute of a
   job; with one run in flight dispatch a second only after the first's
   lanes show and read both summaries; stop the loop, wait three minutes,
   dispatch a run and read that it routed away with "state stale"; restart
