@@ -129,8 +129,18 @@ Write-Host '4/9 ACLs'
 # grant in step 8, after the mirror.
 & icacls.exe $Root /inheritance:r /grant 'Administrators:(OI)(CI)F' /grant 'SYSTEM:(OI)(CI)F' /grant "${Account}:(OI)(CI)M" | Out-Null
 if ($LASTEXITCODE -ne 0) { throw "icacls exited $LASTEXITCODE securing $Root" }
-& icacls.exe (Join-Path $Root 'golden') /inheritance:r /grant 'Administrators:(OI)(CI)F' /grant 'SYSTEM:(OI)(CI)F' /grant:r "${Account}:(OI)(CI)RX" | Out-Null
+# WDAC on golden and cache: when a VM attaches a differencing child,
+# Hyper-V writes an access entry for the VM's virtual account onto every
+# disk in the chain, acting as the caller, so the account must be able to
+# change permissions on the golden disk and the cache parents (it owns
+# the children it creates). Without it the attach fails with "Failed to
+# set security info … Access is denied". WDAC changes the DACL, not the
+# data: golden stays read-only (RX, plus the sealed file's read-only
+# attribute), and cache keeps Modify for the merges.
+& icacls.exe (Join-Path $Root 'golden') /inheritance:r /grant 'Administrators:(OI)(CI)F' /grant 'SYSTEM:(OI)(CI)F' /grant:r "${Account}:(OI)(CI)(RX,WDAC)" | Out-Null
 if ($LASTEXITCODE -ne 0) { throw "icacls exited $LASTEXITCODE restricting $Root\golden" }
+& icacls.exe (Join-Path $Root 'cache') /grant:r "${Account}:(OI)(CI)(M,WDAC)" | Out-Null
+if ($LASTEXITCODE -ne 0) { throw "icacls exited $LASTEXITCODE granting WDAC on $Root\cache" }
 
 Write-Host "5/9 switch $SwitchName with NAT $NatPrefix"
 # WinNAT supports one NAT per host and a second one leaves both in an

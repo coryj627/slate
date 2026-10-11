@@ -173,8 +173,10 @@ Before you start:
      and remote interactive logon, allowed to log on as a batch job;
    - `C:\slate-ci` with `bin`, `golden`, `cache`, `vms`, `state` and `logs`.
      The tree does not inherit from `C:\`. Administrators and SYSTEM have
-     full control, `slate-ci-host` has Modify, and `bin` and `golden` are
-     read-only for it;
+     full control, `slate-ci-host` has Modify, `bin` and `golden` are
+     read-only for it, and on `golden` and `cache` it may also change
+     permissions: Hyper-V, acting as the account, writes each VM's access
+     entry onto every disk of the chain it attaches;
    - the internal switch `slate-ci`, host address `10.77.0.1`, NAT
      `10.77.0.0/24` (the host address takes the prefix's length, and the
      script refuses a gateway outside the prefix before it creates
@@ -370,11 +372,21 @@ saw before changing anything.
   icacls C:\slate-ci\bin
   ```
 
+  Expect `slate-ci-host` with `(OI)(CI)(RX)`.
+
   ```powershell
   icacls C:\slate-ci\golden
   ```
 
-  Expect `slate-ci-host` with `(OI)(CI)(RX)` on both.
+  Expect `slate-ci-host` with `(OI)(CI)(RX,WDAC)`: read, plus the right to
+  change permissions, which Hyper-V needs when it attaches a chain of
+  differencing disks.
+
+  ```powershell
+  icacls C:\slate-ci\cache
+  ```
+
+  Expect `slate-ci-host` with `(OI)(CI)(M,WDAC)`.
 - [ ] The firewall rule sits on the switch's interface:
 
   ```powershell
@@ -1230,6 +1242,16 @@ and `"status": "401"`. Rotate it before then.
   three (see "Before you start"). Hyper-V rolls the switch back, so nothing
   is left behind: remove the drivers and run the setup again. If it fails
   the same way without them, reboot and run it again.
+- **`<vm>: provisioning failed: Failed to add device 'Virtual Hard Disk' …
+  Failed to set security info for 'C:\slate-ci\golden\win11-runner.vhdx':
+  'Access is denied'`.** Hyper-V writes an access entry for the VM's
+  virtual account onto every disk of the differencing chain, acting as
+  `slate-ci-host`, which could not change permissions on the golden disk
+  (or, for a cached lane, on the cache parent). Setup grants that right
+  (`WDAC` on `golden` and `cache`): disable the loop task, run
+  `setup-host.ps1` again from an updated checkout, then enable the task.
+  The restart resets the job's retry count, and the job, still queued on
+  GitHub, is admitted again.
 - **`token missing at …` every minute.** No token is stored: run
   `store-token.ps1`. After `-ResetAccount`, store the token before you
   enable the loop task.
@@ -1481,7 +1503,7 @@ when the loop resumes.
 | What a job can touch | A VM that exists for that job only, as the standard user `runner`, with no secret valid outside the VM. Its JIT runner config is single-use. |
 | Where a job can connect | The Internet, through the host's NAT. Hyper-V port ACLs drop everything to and from 10/8, 172.16/12, 192.168/16, 100.64/10 (Tailscale), 169.254/16, multicast 224/4, broadcast 255.255.255.255, 0/8 and all IPv6; the image also turns IPv6 off. The host firewall drops inbound traffic from the VM subnet to any address of the host on that interface. |
 | What survives a job | Only a cache merge, and only after the host verifies from GitHub's API: a green push, schedule or dispatch on `main` of this repository, a VM the loop did not force off, and an unchanged parent generation. |
-| What the host account can do | `slate-ci-host` is a Hyper-V Administrator, not an Administrator, but Microsoft treats membership in Hyper-V Administrators as equivalent to administrator rights on the host. Its limits stop mistakes and interactive use; they do not contain a compromise of the account or of the code it runs. It cannot log on interactively or remotely. Inside `C:\slate-ci` it writes `state`, `cache`, `vms` and `logs`; `bin` and `golden` are read-only for it. Like any standard account, it can still create folders elsewhere on `C:\`. It holds the one PAT: Actions read, Administration read and write, this repository only. |
+| What the host account can do | `slate-ci-host` is a Hyper-V Administrator, not an Administrator, but Microsoft treats membership in Hyper-V Administrators as equivalent to administrator rights on the host. Its limits stop mistakes and interactive use; they do not contain a compromise of the account or of the code it runs. It cannot log on interactively or remotely. Inside `C:\slate-ci` it writes `state`, `cache`, `vms` and `logs`; `bin` and `golden` are read-only for it, though on `golden` and `cache` it can change permissions, which Hyper-V needs when it attaches a disk chain. Like any standard account, it can still create folders elsewhere on `C:\`. It holds the one PAT: Actions read, Administration read and write, this repository only. |
 | Who can change what runs | Only an elevated administrator writes `C:\slate-ci\bin`, the golden disk and the tasks. In the guest, only Administrators and SYSTEM can write the bootstrap scripts in `C:\slate-guest`. |
 | Residual risk, accepted | A job reaches the Internet with a read-only `GITHUB_TOKEN`, as on GitHub-hosted runners. The home router's public (WAN) address is a public destination, so the port ACL passes it: whatever the router serves there (remote administration, UPnP, ports forwarded into the LAN) is reachable from a job. Keep those off, and check by hand (step 4 of "Refreshing the pilot's isolation targets"). |
 
