@@ -1556,3 +1556,22 @@ spec estimated app 12–15 min, shell 6–8 min, and a main push at about
 | app model shard (each) | 6 min | | |
 | shell accessibility gate | 17 min | | |
 | main push, wall | 45 min | | |
+
+### Pilot comparison (windows-ci-pilot.yml)
+
+The pilot's `home` candidate first went green on 2026-10-11 (run
+38106842944: a branch dispatch with `cache=false`, every cache parent
+still empty). The `hosted` column is run 38080504707 of 2026-10-10 on
+`windows-latest`; its later jobs were cancelled by a newer push, so only
+the build job compares.
+
+| Job | hosted (`windows-latest`) | home, cold cache |
+|---|---|---|
+| Build, platform witnesses and app | 53 min 37 s | 41 min 31 s, of which app tests 19 min 48 s |
+| Complete hosted shell gate | not run | 15 min 54 s |
+| Complete model, each shard | not run | 28 min 47 s |
+| Handoff to the job's first step | | 14 s |
+| Whole run, wall | | 1 h 44 min: four VM jobs through two slots |
+
+The whole-run figure is bounded by the two slots, not by the VMs: the
+second model shard waited for a slot.
