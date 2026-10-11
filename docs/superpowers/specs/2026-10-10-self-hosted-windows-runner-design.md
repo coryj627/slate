@@ -86,11 +86,13 @@ builds) and the read-only `GITHUB_TOKEN`.
 | Host compromise via the orchestrator account | `slate-ci-host` is a member of Hyper-V Administrators only, has no interactive logon, and can write only under `C:\slate-ci`. Microsoft treats Hyper-V Administrators membership as equivalent to administrator rights, so these limits stop mistakes and interactive use, not a compromise of the account or of the code it runs. |
 | Renovate branch pulls a malicious crate whose build script runs | Same VM isolation; the PR fork is discarded. After merge the code is in `main` regardless. |
 
-Residual risk accepted by the owner: an approved fork PR (withdrawn
-2026-10-11: OR-D5 of the overflow design has the host refuse and evict such
-jobs), or the owner's own branch, can run code in a throwaway VM with
-outbound Internet access and a read-only `GITHUB_TOKEN`. That is the same exposure GitHub-hosted runners
-have.
+Residual risk accepted by the owner: an approved fork PR (narrowed
+2026-10-11: OR-D5 of the overflow design has the host refuse such jobs and
+evict one within a tick, so a fork gets seconds on a VM; a fork's own
+workflow that names a home label is not evicted, so the approval click
+stays the control), or the owner's own branch, can run code in a throwaway
+VM with outbound Internet access and a read-only `GITHUB_TOKEN`. That is
+the same exposure GitHub-hosted runners have.
 
 ## Architecture
 
@@ -404,7 +406,8 @@ request) never waits on the host (owner ruling, 2026-10-10). Every Windows
 `vars.WINDOWS_RUNNER_MODE == 'home' && <home label> || <today's runner>`;
 nothing else about job topology changes. The name mirrors
 `MAC_RUNNER_MODE`; the Windows variable has no `auto` mode (D-3 chose
-manual).
+manual; superseded on 2026-10-11, when the router made fallback automatic
+and `home-only` joined the values).
 
 | Job | `home` | `namespace`, unset or any other value (today's runners, verbatim) |
 |---|---|---|
@@ -421,9 +424,11 @@ pool; the table's expressions remain the vendor fallback inside the lanes'
 
 Cache steps: the three `namespacelabs/nscloud-cache-action` steps gain
 `if: ${{ vars.WINDOWS_RUNNER_MODE != 'home' }}`, and the nightly stress
-job's GitHub-cache restore runs unless the mode is `home`. The attestation and
-footprint steps run on both pools unchanged. The `actions/cache` step for
-`uniffi-bindgen-cs` stays; on `home` the binary is already present and the
+job's GitHub-cache restore runs unless the mode is `home`. (Superseded on
+2026-10-11: in `windows.yml` the cache step runs unless the lane's routed
+pool is home, and `nightly.yml` treats `home-only` like `home`.) The
+attestation and footprint steps run on both pools unchanged. The
+`actions/cache` step for `uniffi-bindgen-cs` stays; on `home` the binary is already present and the
 GitHub cache (shared across runners) hits anyway. The "Assert runner
 architecture" steps are pool-neutral.
 

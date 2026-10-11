@@ -6,11 +6,12 @@ commit it came from is in `C:\slate-ci\bin\install-commit.txt`.
 Tests: `.github/workflows/windows-runner-tests.yml` (check
 `module, adapters, scripts`). Cache policy: `docs/runbooks/ci-cache-policy.md`.
 
-Every Windows job runs in a throwaway Hyper-V VM on the owner's desktop.
-The orchestrator loop is the scheduled task `slate-ci-orchestrator`. It runs
-as the account `slate-ci-host`, a member of Hyper-V Administrators only,
-which Microsoft treats as equivalent to an administrator (see "Security
-model in one screen"). Every 10 seconds it polls the routed workflows,
+A Windows lane routed home runs in a throwaway Hyper-V VM on the owner's
+desktop. The orchestrator loop is the scheduled task
+`slate-ci-orchestrator`. It runs as the account `slate-ci-host`, a member
+of Hyper-V Administrators only, which Microsoft treats as equivalent to an
+administrator (see "Security model in one screen"). Every 10 seconds it
+polls the routed workflows,
 `RoutedWorkflows` in `ci/windows-runner/config.json`, for queued jobs
 labelled `slate-win-*`. For each job it forks a VM from the read-only golden
 disk and a copy-on-write child of the lane's cache disk. It hands in a
@@ -29,13 +30,14 @@ logs. `gh` commands work in any prompt.
 The repository variable `WINDOWS_RUNNER_MODE` routes `windows.yml` and
 `nightly.yml`. In `windows.yml` a routing job (`Route Windows lanes`,
 `ci/windows-runner/route/route.py`) reads it together with the state this
-host publishes every tick in the repository variable `WINDOWS_HOME_STATE`
-(a heartbeat, whether it serves, its slots, what runs, what it has
-queued), and decides a pool per lane. The shell gate runs on
-GitHub-hosted `windows-latest` in every mode but `home-only`. A lane that
-goes home carries one of the labels `slate-win-rust`, `slate-win-app`,
-`slate-win-model` or `slate-win-shell`. The routing job cannot fail a
-run: if it errors, times out or does not run, each lane takes the vendor.
+host publishes, when its state changes and at least once a minute, in the
+repository variable `WINDOWS_HOME_STATE` (a heartbeat, whether it serves,
+its slots, what runs, what it has queued), and decides a pool per lane.
+The shell gate runs on GitHub-hosted `windows-latest` in every mode but
+`home-only`. A lane that goes home carries one of the labels
+`slate-win-rust`, `slate-win-app`, `slate-win-model` or `slate-win-shell`.
+The routing job cannot fail a run: if it errors, times out or does not
+run, each lane takes the vendor.
 
 - `home`: home first. A lane takes a free slot; when none is free it queues
   at home only if it would still finish inside the run's critical path (the
@@ -44,20 +46,14 @@ run: if it errors, times out or does not run, each lane takes the vendor.
   0, model shard 1, rust tests; the app lane never queues. The router's
   estimates live in `route.py`'s `DURATIONS` table (app 26 min at home,
   model 25, rust 11; the shell gate 13 on `windows-latest`), with 110 s per
-  slot handover. With those figures an idle pool keeps app, shard 0 and
-  rust home and pays Namespace about six minutes for shard 1. Over a month
-  at the 2026 run rate the rule spends about 3 900 Namespace minutes,
-  against about 4 500 for plain overflow and about 10 350 for
-  all-Namespace. A single push on an idle pool takes about 40 minutes,
-  against about 35 all-Namespace. A state whose `at` is more than 180 s
-  (three minutes) before the routing job's own clock, or one that says the
-  host is not serving or has no slot, sends every lane to Namespace by
-  itself. Routing resumes as soon as the loop publishes again, and no run
-  has to strand to discover an outage. The reference is the routing job's
-  clock because GitHub resolves `vars` when the job starts, and a run's
-  creation time never moves across re-runs or a concurrency hold. The
-  nightly stress job queues home unconditionally, with the label
-  `slate-win-app`.
+  slot handover. A state whose `at` is more than 180 s (three minutes)
+  before the routing job's own clock, or one that says the host is not
+  serving or has no slot, sends every lane to Namespace by itself. Routing
+  resumes as soon as the loop publishes again, and no run has to strand to
+  discover an outage. The reference is the routing job's clock because
+  GitHub resolves `vars` when the job starts, and a run's creation time
+  never moves across re-runs or a concurrency hold. The nightly stress job
+  queues home unconditionally, with the label `slate-win-app`.
 - `home-only`: every lane queues home, as `home` did before 2026-10-11, and
   the shell gate runs home too. The published state is ignored. It is for
   validating a golden refresh and for fidelity runs.
@@ -68,6 +64,13 @@ run: if it errors, times out or does not run, each lane takes the vendor.
   The shell gate and the nightly stress job run on `windows-latest`.
 - Any other value, a typo or an unset variable included, means `namespace`.
   The comparison ignores case but not spaces: set the value without them.
+
+What `home` costs and saves, from the 2026 runs. With the durations above,
+an idle pool keeps app, shard 0 and rust home and pays Namespace about six
+minutes for shard 1. Over a month at the 2026 run rate the rule spends
+about 3,900 Namespace minutes. Plain overflow would spend about 4,500, and
+all-Namespace about 10,350. A single push on an idle pool takes about 40
+minutes, against about 35 all-Namespace.
 
 Reading a run's routing: the routing job's step summary has the mode, the
 state it read (its age against the routing job's clock, serving, slots,
@@ -146,10 +149,10 @@ read yet; the host admits none of them until it has. The loop writes the
 variable with its token, which needs Variables: Read and write (see
 Install, step 1).
 
-You create it once, before the loop first runs on this code. The value
-below says the host is not serving, so every lane goes to Namespace until
-the loop publishes. If you skip this step, the host's first publish
-creates the variable.
+You create it once, before the loop first runs on this code. Under `home`,
+the value below says the host is not serving, so every lane goes to
+Namespace until the loop publishes; `home-only` ignores the state. If you
+skip this step, the host's first publish creates the variable.
 
 ```powershell
 gh variable set WINDOWS_HOME_STATE --repo coryj627/slate --body '{"v":1,"at":"1970-01-01T00:00:00Z","serving":false,"slots":0,"running":[],"queued":[]}'
@@ -324,7 +327,11 @@ Before you start:
    counts `0` and step 11 prints `absent`. No job may run on the image
    before it passes. If it fails, leave the loop disabled and record it as
    a finding.
-7. **Enable the loop**, only after step 6 passed:
+7. **Enable the loop**, only after step 6 passed. Before you enable the
+   loop, create the published state once with the command under "Pool
+   switch". If you skip it, the host creates the variable on its first
+   publish; until then a missing state sends every lane to Namespace.
+   Then enable the loop:
 
    ```powershell
    Enable-ScheduledTask -TaskName slate-ci-orchestrator
@@ -594,6 +601,15 @@ about commits need the first main push.
 gh workflow run windows.yml --ref <branch> --repo coryj627/slate
 ```
 
+- [ ] The published state works. Within a minute of a job starting, the
+  value changes (its `at` and its `running` list):
+
+  ```powershell
+  gh variable get WINDOWS_HOME_STATE --repo coryj627/slate
+  ```
+
+  The token's page on GitHub (Settings, Developer settings, Personal access
+  tokens, Fine-grained tokens) lists Variables: Read and write.
 - [ ] The vTPM works as `slate-ci-host`. The first
   `provisioned for job …` line appears, with no `vTPM could not be enabled`.
 - [ ] A live job VM carries all 20 port ACL rules: 18 Deny rules, IPv6
@@ -982,21 +998,25 @@ This checks how `Get-VM` reports a VM that no longer exists, as
   and SYSTEM can write. A VM's disk is deleted when the loop settles it;
   "Reading a job VM's logs" under "When things go wrong" shows how to keep
   one.
-- **State.** `C:\slate-ci\state\journal.json` lists the active VMs
-  (`Vms`), retries (`Retries`) and seen jobs (`SeenJobs`). It also holds the
-  day the logs were last pruned (`LogsPrunedOn`); which lanes went green on
-  the current golden (`GoldenAccepted`: its stamp, `Lanes` and `Complete`);
-  and the last published state and when (`PublishedState`, `PublishedAt`,
-  `PublishFailedAt`). A `SeenJobs` entry carries `FirstSeenAt`, `Lane`,
-  `RunId`, `RunCheckedAt` and `Foreign`, which stays null until its run was
-  read. A `PublishedAt` or `PublishFailedAt` that does not parse counts as
-  never and is rewritten on the next tick. The `slate-ci-golden-prune` task
-  reads `GoldenAccepted` and never writes the journal. The loop rewrites
-  the journal every tick and reads it only at start, where the startup
-  sweep keeps only the entries of handed-off VMs that are still running and
-  drops the rest, so editing those entries changes nothing. A journal that
-  does not parse is moved to `journal.json.corrupt-<UTC time>` at start.
-  `token.xml` is the encrypted PAT; a `token.txt` should never be there.
+- **State.** `C:\slate-ci\state\journal.json` holds:
+  - the journal keys: `Vms` (the active VMs), `Retries`, `SeenJobs`,
+    `LogsPrunedOn` (the day the logs were last pruned) and `GoldenAccepted`
+    (which lanes went green on the current golden: its stamp, `Lanes` and
+    `Complete`);
+  - a `SeenJobs` entry's keys: `FirstSeenAt`, `Lane`, `RunId`,
+    `RunCheckedAt` and `Foreign`, which stays null until its run was read;
+  - the published-state keys: `PublishedState` (the last published JSON),
+    `PublishedAt` and `PublishFailedAt`. A `PublishedAt` or
+    `PublishFailedAt` that does not parse counts as never and is rewritten
+    on the next tick.
+
+  The loop rewrites the journal every tick and reads it only at start,
+  where the startup sweep keeps only the entries of handed-off VMs that are
+  still running and drops the rest, so editing those entries changes
+  nothing. The `slate-ci-golden-prune` task reads `GoldenAccepted` and never
+  writes the journal. A journal that does not parse is moved to
+  `journal.json.corrupt-<UTC time>` at start. `token.xml` is the encrypted
+  PAT; a `token.txt` should never be there.
 - **Cache generations.** They move only on trusted commits:
 
   ```powershell
@@ -1063,12 +1083,14 @@ This checks how `Get-VM` reports a VM that no longer exists, as
 - **Host reboot or Windows Update.** Jobs in flight fail on GitHub as lost
   runners: their VMs are turned off with the host. At boot the loop starts,
   and its sweep removes those VMs and their runners. Re-run the failed
-  jobs. Drain first when you can. Windows Update restarts this host on
-  its own for servicing updates (it did on 2026-10-11 at 03:29, with no
-  one logged on); set active hours wide, or "notify me when a restart is
-  required", under Settings, Windows Update, Advanced options, if an
-  overnight restart would cost a run. Nobody needs to log on afterwards:
-  the loop runs as a task. What it does need is the network: on that
+  jobs (a partial re-run takes the vendor; use "Re-run all jobs" to route
+  again, see "Pool switch"). Drain first when you can. Windows Update
+  restarts this host on its own for servicing updates (it did on
+  2026-10-11 at 03:29, with no one logged on); set active hours wide, or
+  "notify me when a restart is required", under Settings, Windows Update,
+  Advanced options, if an overnight restart would cost a run. Nobody needs
+  to log on afterwards: the loop runs as a task. What it does need is the
+  network: on that
   reboot the 10GbE adapter had no link for 47 minutes (`aqnic650` events
   14 and 15 in the System log), the loop logged
   `startup: No such host is known` every 30 s and exited, and it came
@@ -1083,6 +1105,19 @@ This checks how `Get-VM` reports a VM that no longer exists, as
   unless you mean its job to fail and its cache fork to be discarded. The
   loop knows only that it did not force a VM off itself: a VM you turn off
   just after a green main job looks to it like one that shut down cleanly.
+
+### Host cleanup
+
+Three mechanisms tidy up. The loop prunes its own logs once a day and
+deletes those older than `LogRetentionDays` (30): see the "Logs" bullet
+above. The elevated `slate-ci-golden-prune` task deletes the previous
+golden image once the current one is accepted on every lane: see step 9 of
+"Refreshing the golden image" and its row in "Security model in one
+screen". The weekly branch report is a GitHub workflow, not part of this
+host. It lists `claude/*` branches and deletes only when dispatched with
+`delete`. It is described in section 10 of
+`docs/superpowers/specs/2026-10-11-windows-overflow-routing-design.md` and
+ships in its own pull request.
 
 ## Pausing and draining
 
@@ -1323,7 +1358,10 @@ scripts or the module's KVP functions, rebuild the golden image instead
    git rev-parse HEAD
    ```
 
-5. Resume the loop and flip the pool back to `home`.
+5. If this is the first time the host publishes its state, create
+   `WINDOWS_HOME_STATE` once first (the command is under "Pool switch").
+   Until the new code runs, a missing or stale state sends every lane to
+   Namespace. Then resume the loop and flip the pool back to `home`.
 
 Changes to the task definitions (triggers, settings, the `pwsh` path) take
 effect only with `-ResetAccount`. It removes the orchestrator and
@@ -1552,9 +1590,10 @@ and `"status": "401"`. Rotate it before then.
   queued on GitHub and runs nowhere here.
 - **`admission: job <id>: run <run> could not be read: <error>`.** The host
   reads each queued job's run once, to learn which repository it comes
-  from, and admits nothing before it has. It retries once a minute, logs
-  only the first failure, and the job waits meanwhile. GitHub's reply
-  follows the line: read it as in "GitHub's JSON reply" above.
+  from, and does not admit that job before it has. It retries once a
+  minute, logs only the first failure, and the job waits meanwhile.
+  GitHub's reply follows the line: read it as in "GitHub's JSON reply"
+  above.
 - **`handoff: <vm> runs job <id> of <repo> (<why>); forcing it off`.**
   GitHub handed the VM's runner to a job this host does not serve.
   `<why>` is `not the trusted repository` for a job of another repository,

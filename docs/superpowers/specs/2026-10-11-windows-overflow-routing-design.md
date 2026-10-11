@@ -632,6 +632,9 @@ heartbeat's three-minute window after a crash is accepted.
   re-issued.
 - The runbook writes "the orchestrator and store-token tasks" where §12
   says "the three tasks": the prune task holds no password and sits outside
-  that pair. The runbook changes of this commit cover the Windows pool
-  only; §12's branch-cleanup subsection is not among them (§10 lands on
-  its own pull request).
+  that pair. The runbook has no "cleanup section" or "branch-cleanup
+  subsection" of the size §12 implies: one short "Host cleanup" subsection
+  under "Daily operation" names the three mechanisms (log retention, the
+  prune task, the weekly branch report) and points at where each is
+  described; the branch report itself is §10 and lands on its own pull
+  request.
