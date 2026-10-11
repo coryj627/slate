@@ -17,8 +17,8 @@
 # only reports); GITHUB_STEP_SUMMARY (the table); BRANCH_MIN_AGE_DAYS
 # (default 7). GitHub is reached only through the gh on PATH:
 # ci/windows-runner/tests/BranchCleanup.Tests.ps1 puts a fake one first
-# and pins every call. Besides gh it needs only bash, awk, date and mktemp
-# (gh's own --jq does the JSON), so the same test runs in Git Bash. Spec:
+# and pins every call. Besides gh it needs only bash, awk, date, mktemp and
+# rm (gh's own --jq does the JSON), so the same test runs in Git Bash. Spec:
 # docs/superpowers/specs/2026-10-11-windows-overflow-routing-design.md §10.
 
 set -uo pipefail
@@ -71,7 +71,9 @@ if [ -z "${GITHUB_STEP_SUMMARY:-}" ]; then
 fi
 [[ ${REPO:-} =~ ^[A-Za-z0-9_.-]+/[A-Za-z0-9_.-]+$ ]] || fail_run "REPO is not owner/name; nothing was classified or deleted"
 min_age_days=${BRANCH_MIN_AGE_DAYS:-7}
-[[ $min_age_days =~ ^[0-9]+$ ]] || fail_run "BRANCH_MIN_AGE_DAYS is not a whole number of days; nothing was classified or deleted"
+# 0 to 9999 days, no leading zero: bash arithmetic reads 08 as bad octal, and a
+# huge value overflows the floor negative.
+[[ $min_age_days =~ ^(0|[1-9][0-9]{0,3})$ ]] || fail_run "BRANCH_MIN_AGE_DAYS is not a whole number of days from 0 to 9999; nothing was classified or deleted"
 
 errlog=$(mktemp) || fail_run "could not create a temporary file; nothing was classified or deleted"
 trap 'rm -f "$errlog"' EXIT

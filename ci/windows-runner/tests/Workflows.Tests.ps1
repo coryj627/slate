@@ -225,14 +225,14 @@ Describe 'branch-cleanup.yml' {
         $cleanup | Should -Match (Get-Lines @('        type: boolean', '        default: false'))
         $cleanup | Should -Match (Get-Lines @('permissions:', '  contents: write', '  pull-requests: read'))
         # DELETE is 'true' only for a dispatch with the input set: this one live definition, at job level beside
-        # the token and the repository, and no other (a second one, even in a step's env, could let the schedule delete).
-        $report | Should -Match (Get-Lines @(
-                '    env:',
-                '      GH_TOKEN: ${{ github.token }}',
-                '      REPO: ${{ github.repository }}',
-                '      DELETE: ${{ github.event_name == ''workflow_dispatch'' && inputs.delete && ''true'' || ''false'' }}'))
-        ([regex]::Matches($cleanup, '(?m)^(?![ \t]*#)[^\r\n]*\bDELETE[ \t]*:')).Count | Should -Be 1
-        $cleanup | Should -Not -Match '(?-i)\bDELETE[ \t]*='
+        # the token and the repository, and no other. A second one in any form (a step's env, a quoted
+        # "DELETE": key, DELETE=) would override it and could let the schedule delete, so the only live
+        # (non-comment) line of the workflow that names DELETE at all is that job-level line.
+        $line = '      DELETE: ${{ github.event_name == ''workflow_dispatch'' && inputs.delete && ''true'' || ''false'' }}'
+        $report | Should -Match (Get-Lines @('    env:', '      GH_TOKEN: ${{ github.token }}', '      REPO: ${{ github.repository }}', $line))
+        $live = @([regex]::Matches($cleanup, '(?m)^(?![ \t]*#)[^\r\n]*\bDELETE\b[^\r\n]*') | ForEach-Object { $_.Value.TrimEnd("`r") })
+        $live.Count | Should -Be 1 -Because "only the job-level env line may name DELETE; found: $($live -join ' | ')"
+        $live[0] | Should -BeExactly $line
     }
     It 'checks out only the script, with the pinned checkout and no persisted token, and runs it as its one command' {
         # The same checkout pin as the other workflows (this lane's).

@@ -9,11 +9,12 @@
 # is pinned in order). Each case reads the exit code, the summary table, the
 # annotations and log lines on stdout, and the calls.
 #
-# Needs only bash (the script uses awk, date and mktemp, and gh's own --jq,
-# which the fake answers as canned text). On Linux that is bash on PATH; on
-# Windows it is Git for Windows' bash, found beside git, because the bash on
-# PATH there can be WSL's, a different machine. Without it every case is
-# skipped and says why.
+# Needs only bash (the script uses awk, date, mktemp and rm, and gh's own
+# --jq, which the fake answers as canned text). On Linux that is bash on
+# PATH; on Windows it is Git for Windows' bash, found beside git, because the
+# bash on PATH there can be WSL's, a different machine. Without it every case
+# is skipped and says why, except on CI (GITHUB_ACTIONS=true), where bash is
+# guaranteed and its absence fails every case instead.
 
 BeforeAll {
     $script:repo = 'fake-owner/fake-repo'
@@ -116,7 +117,7 @@ export PATH="$fake_bin:$PATH"
         $Answers[(Get-DeleteKey $Name)] = @{ Out = ''; Err = ''; Code = 0 }
         $date
     }
-    function Invoke-Cleanup([System.Collections.IDictionary]$Answers, [string]$Delete = 'false', [string]$MinAge = '') {
+    function Invoke-Cleanup([System.Collections.IDictionary]$Answers, [string]$Delete = 'false', [string]$MinAge = '', [string]$Repository = $repo) {
         $case = Join-Path $TestDrive ([guid]::NewGuid().ToString('N'))
         New-Item -ItemType Directory -Path $case | Out-Null
         $index = [System.Text.StringBuilder]::new()
@@ -132,7 +133,7 @@ export PATH="$fake_bin:$PATH"
         [IO.File]::WriteAllText((Join-Path $case 'calls.log'), '')
         $summary = Join-Path $case 'summary.md'
         # An empty value removes the variable, so the script's default applies.
-        $vars = @{ REPO = $repo; DELETE = $Delete; GITHUB_STEP_SUMMARY = ($summary -replace '\\', '/'); BRANCH_MIN_AGE_DAYS = $MinAge }
+        $vars = @{ REPO = $Repository; DELETE = $Delete; GITHUB_STEP_SUMMARY = ($summary -replace '\\', '/'); BRANCH_MIN_AGE_DAYS = $MinAge }
         $saved = @{}
         foreach ($name in $vars.Keys) {
             $saved[$name] = [Environment]::GetEnvironmentVariable($name)
@@ -172,7 +173,11 @@ export PATH="$fake_bin:$PATH"
 
 Describe 'branch-cleanup.sh' {
     BeforeEach {
-        if ($skipReason) { Set-ItResult -Skipped -Because $skipReason }
+        if ($skipReason) {
+            # The runner always has bash: on CI a missing one fails, so the guard never vanishes quietly.
+            if ($env:GITHUB_ACTIONS -eq 'true') { throw "$skipReason; on CI (GITHUB_ACTIONS=true) that is a failure, not a skip" }
+            Set-ItResult -Skipped -Because $skipReason
+        }
     }
 
     Context 'the listing' {
@@ -276,6 +281,7 @@ Describe 'branch-cleanup.sh' {
             $r.Code | Should -Be 0
             $r.Summary | Should -Match (Get-RowPattern @('claude/old', 'aaaaaaaa', '3', $date, '0', '0', 'kept: ahead 3'))
             ($r.Logged -join "`n") | Should -BeExactly 'claude/old: kept: ahead 3'
+            Assert-Annotations $r @()
             Assert-Calls $r @((Get-ListingCall), (Get-SnapshotCall), (Get-TipCall 'claude%2Fold'), (Get-CompareCall $a40))
         }
         It 'keeps a branch an open pull request comes from, and counts only that exact name' {
@@ -284,6 +290,7 @@ Describe 'branch-cleanup.sh' {
             $r = Invoke-Cleanup $answers -Delete 'true'
             $r.Code | Should -Be 0
             $r.Summary | Should -Match (Get-RowPattern @('claude/old', 'aaaaaaaa', '0', $date, '1', '0', 'kept: open PR head'))
+            Assert-Annotations $r @()
             Assert-Calls $r @((Get-ListingCall), (Get-SnapshotCall), (Get-TipCall 'claude%2Fold'), (Get-CompareCall $a40))
         }
         It 'keeps a branch an open pull request goes into' {
@@ -292,6 +299,7 @@ Describe 'branch-cleanup.sh' {
             $r = Invoke-Cleanup $answers -Delete 'true'
             $r.Code | Should -Be 0
             $r.Summary | Should -Match (Get-RowPattern @('claude/old', 'aaaaaaaa', '0', $date, '0', '1', 'kept: open PR base'))
+            Assert-Annotations $r @()
             Assert-Calls $r @((Get-ListingCall), (Get-SnapshotCall), (Get-TipCall 'claude%2Fold'), (Get-CompareCall $a40))
         }
         It 'keeps a branch younger than the age floor; BRANCH_MIN_AGE_DAYS moves the floor' {
@@ -301,12 +309,14 @@ Describe 'branch-cleanup.sh' {
             $r.Code | Should -Be 0
             $r.Summary | Should -Match (Get-RowPattern @('claude/new', 'aaaaaaaa', '0', $date, '0', '0', 'kept: too young'))
             ($r.Logged -join "`n") | Should -BeExactly 'claude/new: kept: too young'
+            Assert-Annotations $r @()
             Assert-Calls $r @((Get-ListingCall), (Get-SnapshotCall), (Get-TipCall 'claude%2Fnew'), (Get-CompareCall $a40))
             $r = Invoke-Cleanup $answers -Delete 'true' -MinAge '1'
             $r.Code | Should -Be 0
             $r.Summary | Should -Match '(?m)^## claude/\* branches \([^)]*, minimum age 1 days\)$'
             $r.Summary | Should -Match (Get-RowPattern @('claude/new', 'aaaaaaaa', '0', $date, '0', '0', 'deleted'))
             $r.Calls[-1] | Should -BeExactly (Get-DeleteCall 'claude%2Fnew')
+            Assert-Annotations $r @()
         }
         It 'names every reason it kept a branch' {
             $answers = New-Answers @('refs/heads/claude/busy') -Pulls @("claude/busy`tmain", "claude/next`tclaude/busy")
@@ -314,6 +324,7 @@ Describe 'branch-cleanup.sh' {
             $r = Invoke-Cleanup $answers -Delete 'true'
             $r.Code | Should -Be 0
             $r.Summary | Should -Match (Get-RowPattern @('claude/busy', 'aaaaaaaa', '2', $date, '1', '1', 'kept: ahead 2, too young, open PR head, open PR base'))
+            Assert-Annotations $r @()
             Assert-Calls $r @((Get-ListingCall), (Get-SnapshotCall), (Get-TipCall 'claude%2Fbusy'), (Get-CompareCall $a40))
         }
         It 'keeps a branch whose tip moved since classification, and fails the run' {
@@ -382,6 +393,7 @@ Describe 'branch-cleanup.sh' {
             $r.Code | Should -Be 1
             $r.Summary | Should -Match (Get-RowPattern @('claude/old', 'aaaaaaaa', '0', $date, '0', '0', 'delete failed'))
             Assert-Annotations $r @('::warning::could not delete claude/old: HTTP 422: Reference does not exist', '::error::1 branch(es) could not be classified or deleted')
+            Assert-Calls $r @((Get-ListingCall), (Get-SnapshotCall), (Get-TipCall 'claude%2Fold'), (Get-CompareCall $a40), (Get-RecheckCall 'claude%2Fold'), (Get-DeleteCall 'claude%2Fold'))
         }
         It 'goes on to the next branch after one fails, and fails the run at the end' {
             $answers = New-Answers @('refs/heads/claude/broken', 'refs/heads/claude/old')
@@ -418,17 +430,36 @@ Describe 'branch-cleanup.sh' {
             $r = Invoke-Cleanup $answers
             $r.Code | Should -Be 0
             $r.Summary | Should -Match (Get-RowPattern @($name, 'aaaaaaaa', '0', $date, '0', '0', 'would delete'))
+            Assert-Annotations $r @()
             Assert-Calls $r @((Get-ListingCall), (Get-SnapshotCall), (Get-TipCall 'claude%2F%C3%A9~x_y.z-1%2B2'), (Get-CompareCall $a40))
         }
     }
 
     Context 'its environment' {
-        It 'fails before any call when BRANCH_MIN_AGE_DAYS is not a whole number of days' {
+        It 'fails before any call when BRANCH_MIN_AGE_DAYS is <Label>' -ForEach @(
+            @{ Label = 'not a number'; MinAge = 'seven' }
+            @{ Label = '08 (a leading zero is bad octal to bash arithmetic)'; MinAge = '08' }
+            @{ Label = '15 digits (the floor in seconds would overflow negative)'; MinAge = '123456789012345' }
+        ) {
+            $answers = New-Answers @('refs/heads/claude/new')
+            $null = Add-Branch $answers 'claude/new' -DaysAgo 2
+            $r = Invoke-Cleanup $answers -Delete 'true' -MinAge $MinAge
+            $r.Code | Should -Be 1
+            Assert-Annotations $r @('::error::BRANCH_MIN_AGE_DAYS is not a whole number of days from 0 to 9999; nothing was classified or deleted')
+            $r.Summary | Should -Match (Get-RedNote 'BRANCH_MIN_AGE_DAYS is not a whole number of days from 0 to 9999; nothing was classified or deleted')
+            Assert-Calls $r @()
+        }
+        It 'fails before any call when REPO is <Label>' -ForEach @(
+            # An empty value removes the variable (as .NET sets it), and the script reads ${REPO:-}: one path.
+            @{ Label = 'unset or empty'; Repository = '' }
+            @{ Label = 'not owner/name'; Repository = 'fake-owner' }
+        ) {
             $answers = New-Answers @('refs/heads/claude/old')
             $null = Add-Branch $answers 'claude/old'
-            $r = Invoke-Cleanup $answers -Delete 'true' -MinAge 'seven'
+            $r = Invoke-Cleanup $answers -Delete 'true' -Repository $Repository
             $r.Code | Should -Be 1
-            Assert-Annotations $r @('::error::BRANCH_MIN_AGE_DAYS is not a whole number of days; nothing was classified or deleted')
+            Assert-Annotations $r @('::error::REPO is not owner/name; nothing was classified or deleted')
+            $r.Summary | Should -Match (Get-RedNote 'REPO is not owner/name; nothing was classified or deleted')
             Assert-Calls $r @()
         }
     }
