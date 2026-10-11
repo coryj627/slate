@@ -118,7 +118,7 @@ attempt; the router's own clock, which every age is measured against; the
 start time of this attempt (`run_started_at`, one API read,
 `GET /actions/runs/{id}`, optional: `now` when it fails; used only to
 order concurrent routers); the fork inputs; and, optionally, the other
-runs whose routing job started before this one or completed less than
+runs whose routing job started before this one or completed at most
 30 s before the state's `at` (one listing read of `windows.yml`'s queued
 and in-progress runs plus their jobs, ignored on failure).
 
@@ -160,7 +160,7 @@ HANDOVER`. A running entry whose time the router cannot read is taken as having
 just started (its own home duration from now); an entry whose lane the
 router does not know occupies its slot for the longest home duration in
 the table: finite and conservative either way. Then every other run whose routing
-job started before this run's, or completed less than 30 s before the
+job started before this run's, or completed at most 30 s before the
 state's `at` (its lanes may not be published yet), has its own allocation
 replayed, oldest first, against the schedule so far: its free count, this
 same allocation for its lanes, and its home lanes placed where they land.
