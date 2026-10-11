@@ -17,7 +17,8 @@ param(
     [int]$SizeGB = 120,
     [string]$SwitchName = 'Default Switch',
     [string]$ImageName = 'Windows 11 Pro',
-    [int]$TimeoutMinutes = 150
+    [int]$TimeoutMinutes = 150,
+    [switch]$Rotate
 )
 
 $ErrorActionPreference = 'Stop'
@@ -27,8 +28,33 @@ $vmName = 'slate-golden-build'
 # Mount-DiskImage and Dismount-DiskImage need an absolute path.
 $IsoPath = (Resolve-Path -LiteralPath $IsoPath).Path
 
-if (Test-Path -LiteralPath $OutPath) { throw "$OutPath exists; move it aside to rebuild" }
 if (Get-VM -Name $vmName -ErrorAction SilentlyContinue) { throw "VM $vmName exists; remove it first" }
+if ($Rotate -and (Test-Path -LiteralPath $OutPath)) {
+    # Nothing moves while a runner VM exists: its disk is a differencing
+    # child of the live image.
+    if (Get-VM -Name 'slate-win-*' -ErrorAction SilentlyContinue) { throw 'runner VMs exist; stop the loop and let them finish first' }
+    # Only a sealed image becomes the rollback; an unsealed one is a failed
+    # build's leftover and must be removed by hand first (runbook: "The
+    # golden build fails"). This is the one elevated moment in a refresh.
+    if (-not (Get-Item -LiteralPath $OutPath).IsReadOnly) { throw "$OutPath is not sealed (a failed build left it); remove it first, see the runbook 'The golden build fails'" }
+    $outDir = Split-Path -Parent $OutPath
+    $prevPath = Join-Path $outDir 'win11-runner.prev.vhdx'
+    $rotatingPath = Join-Path $outDir 'win11-runner.prev.rotating.vhdx'
+    if (Test-Path -LiteralPath $rotatingPath) { throw "$rotatingPath exists (an earlier rotation stopped part-way): rename it back to win11-runner.prev.vhdx if that file is missing, else delete it, then retry" }
+    # The older rollback is set aside, not deleted, until the live image has
+    # become the rollback: a failed rename puts it back. It then goes
+    # through the shared helper.
+    if (Test-Path -LiteralPath $prevPath) { Rename-Item -LiteralPath $prevPath -NewName 'win11-runner.prev.rotating.vhdx' }
+    try {
+        Rename-Item -LiteralPath $OutPath -NewName 'win11-runner.prev.vhdx'
+    } catch {
+        if (Test-Path -LiteralPath $rotatingPath) { Rename-Item -LiteralPath $rotatingPath -NewName 'win11-runner.prev.vhdx' }
+        throw
+    }
+    Remove-SealedFile -Path $rotatingPath
+    Write-Host "Rotated the sealed image to $prevPath"
+}
+if (Test-Path -LiteralPath $OutPath) { throw "$OutPath exists; move it aside to rebuild, or pass -Rotate for a sealed image" }
 
 $keySecure = Read-Host -Prompt 'Windows 11 Pro product key (XXXXX-XXXXX-XXXXX-XXXXX-XXXXX, hidden)' -AsSecureString
 $productKey = [System.Net.NetworkCredential]::new('', $keySecure).Password.Trim().ToUpperInvariant()
