@@ -1702,7 +1702,8 @@ hand, then rebuild. In a refresh the sealed disk is already at
 `win11-runner.prev.rotating.vhdx` from an interrupted rotation makes the
 next `-Rotate` refuse; if `win11-runner.prev.vhdx` is missing, rename the
 leftover back to it by hand (it is the older rollback) and run the build
-again.
+again. If `win11-runner.prev.vhdx` is present, the rotation had already
+moved the live image there; delete the leftover instead.
 
 ### Reading a job VM's logs
 
