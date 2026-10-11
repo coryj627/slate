@@ -32,6 +32,10 @@ BeforeAll {
     function Get-CacheGate([string]$Predicate) {
         '(?m)^        ' + [regex]::Escape("if: `${{ !$Predicate }}") + '[ \t]*\r?\n(?:[ \t]*#[^\n]*\n)*        uses: namespacelabs/nscloud-cache-action@'
     }
+    # Consecutive whole lines, each verbatim.
+    function Get-Lines([string[]]$Lines) { '(?m)^' + (($Lines | ForEach-Object { [regex]::Escape($_) }) -join '[ \t]*\r?\n') + '[ \t]*\r?$' }
+    # The steps of a job block, each from its `      - ` to the next one or the end of the block.
+    function Get-Steps([string]$Block) { @([regex]::Matches($Block, '(?ms)^      - .*?(?=^      - |\z)') | ForEach-Object { $_.Value }) }
 }
 
 Describe 'windows.yml routing through the router' {
@@ -53,9 +57,15 @@ Describe 'windows.yml routing through the router' {
             'ROUTE_EVENT: ${{ github.event_name }}', 'ROUTE_HEAD_REPO: ${{ github.event.pull_request.head.repo.full_name }}', 'ROUTE_REPO: ${{ github.repository }}') {
             $route.Contains($entry) | Should -BeTrue -Because "the routing step needs $entry"
         }
-        $route | Should -Match 'run: python3 ci/windows-runner/route/route\.py'
-        # Every output below reads steps.route: without this id they are all empty and every lane takes the vendor.
-        $route | Should -Match '(?m)^        id: route[ \t]*\r?$'
+        # Every output below reads steps.route: the id belongs to the step that runs the router, or every output is
+        # empty and every lane takes the vendor without a word.
+        $steps = Get-Steps $route
+        $router = @($steps | Where-Object { $_ -match '(?m)^        run: python3 ci/windows-runner/route/route\.py[ \t]*\r?$' })
+        $router.Count | Should -Be 1 -Because 'one step runs the router'
+        $router[0] | Should -Match '(?m)^        id: route[ \t]*\r?$' -Because 'the step that runs the router is the one the outputs read'
+        $checkout = @($steps | Where-Object { $_.Contains('sparse-checkout: ci/windows-runner/route') })
+        $checkout.Count | Should -Be 1
+        $checkout[0] | Should -Not -Match '(?m)^        id:' -Because 'the checkout step carries no id'
         foreach ($output in 'attempt', 'rust-pool', 'app-pool', 'model-0-pool', 'model-1-pool') {
             $route.Contains("      ${output}: `${{ steps.route.outputs.$output }}") | Should -BeTrue -Because "output $output"
         }
@@ -89,11 +99,27 @@ Describe 'windows.yml routing through the router' {
         # Without always() the gate is skipped with a skipped route (every run outside home and home-only), and a
         # skipped required check counts as passing.
         $gate | Should -Match (Get-JobLine 'if: ${{ always() }}')
-        $gate.Contains('echo "::error::rust-tests=${{ needs.rust-tests.result }} app=${{ needs.windows.result }} model=${{ needs.windows-model.result }} flaui=${{ needs.flaui.result }} route=${{ needs.route.result }} pools: rust=${{ needs.route.outputs.rust-pool }} app=${{ needs.route.outputs.app-pool }} model-0=${{ needs.route.outputs.model-0-pool }} model-1=${{ needs.route.outputs.model-1-pool }} (router attempt ${{ needs.route.outputs.attempt }} of ${{ github.run_attempt }})"') | Should -BeTrue
+        $gate.Contains('echo "::error::rust-tests=${{ needs.rust-tests.result }} app=${{ needs.windows.result }} model=${{ needs.windows-model.result }} flaui=${{ needs.flaui.result }} route=$ROUTE_RESULT pools: rust=$RUST_POOL app=$APP_POOL model-0=$MODEL_0_POOL model-1=$MODEL_1_POOL (router attempt $ROUTER_ATTEMPT of ${{ github.run_attempt }})"') | Should -BeTrue
+        foreach ($entry in 'ROUTE_RESULT: ${{ needs.route.result }}', 'ROUTER_ATTEMPT: ${{ needs.route.outputs.attempt }}', 'RUST_POOL: ${{ needs.route.outputs.rust-pool }}',
+            'APP_POOL: ${{ needs.route.outputs.app-pool }}', 'MODEL_0_POOL: ${{ needs.route.outputs.model-0-pool }}', 'MODEL_1_POOL: ${{ needs.route.outputs.model-1-pool }}') {
+            $gate | Should -Match ('(?m)^          ' + [regex]::Escape($entry) + '[ \t]*\r?$') -Because "the gate reads $entry through its step's environment"
+        }
     }
-    It 'every routed lane prints its runner first' {
+    It 'every routed lane prints its runner first, and the router''s attempt only through the environment' {
+        $record = '    steps:', '      - name: Record the runner', '        env:', '          ROUTER_ATTEMPT: ${{ needs.route.outputs.attempt }}',
+            '        run: Write-Host "runner=${{ runner.name }} environment=${{ runner.environment }} attempt=${{ github.run_attempt }} router-attempt=$env:ROUTER_ATTEMPT"'
         foreach ($job in 'rust-tests', 'windows', 'windows-model-shard') {
-            (Get-JobBlock $windows $job) | Should -Match '(?m)^    steps:\r?\n      - name: Record the runner\r?\n        run: [^\n]*\$\{\{ runner\.name \}\}' -Because "$job's first step names the effective pool"
+            (Get-JobBlock $windows $job) | Should -Match (Get-Lines $record) -Because "$job's first step names the effective pool"
+        }
+    }
+    It 'never expands the routing job''s outputs or result inside a script: a fork''s route.py writes them' {
+        # Each run: with its block, which runs while the following lines are indented deeper than the key.
+        $runs = @([regex]::Matches($windows, '(?m)^(?<indent>[ ]+)run:[^\n]*(?:\n(?:\k<indent>[ ]+\S[^\n]*|[ \t]*(?=\n)))*') | ForEach-Object { $_.Value })
+        @($runs | Where-Object { $_.Contains('router-attempt=') }).Count | Should -Be 3 -Because 'the three Record the runner scripts are among the blocks'
+        @($runs | Where-Object { $_.Contains('echo "::error::rust-tests=') }).Count | Should -Be 1 -Because 'the gate''s multi-line script is among the blocks'
+        foreach ($run in $runs) {
+            # needs.route (any case, dotted or indexed) anywhere inside one ${{ }} expression, format() arguments included.
+            $run | Should -Not -Match '(?i)\$\{\{(?:(?!\}\}).)*needs\s*(?:\.\s*route\b|\[\s*''route''\s*\])' -Because 'a router output in a script runs as shell; pass it through env:'
         }
     }
     It 'keeps no bare vendor runs-on, never compares the variable with namespace, and reads it only where the spec says' {

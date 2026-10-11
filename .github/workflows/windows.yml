@@ -211,7 +211,9 @@ jobs:
     timeout-minutes: 60
     steps:
       - name: Record the runner
-        run: Write-Host "runner=${{ runner.name }} environment=${{ runner.environment }} attempt=${{ github.run_attempt }} router-attempt=${{ needs.route.outputs.attempt }}"
+        env:
+          ROUTER_ATTEMPT: ${{ needs.route.outputs.attempt }}
+        run: Write-Host "runner=${{ runner.name }} environment=${{ runner.environment }} attempt=${{ github.run_attempt }} router-attempt=$env:ROUTER_ATTEMPT"
 
       - name: Checkout
         uses: actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0  # v7
@@ -376,7 +378,9 @@ jobs:
     timeout-minutes: 60
     steps:
       - name: Record the runner
-        run: Write-Host "runner=${{ runner.name }} environment=${{ runner.environment }} attempt=${{ github.run_attempt }} router-attempt=${{ needs.route.outputs.attempt }}"
+        env:
+          ROUTER_ATTEMPT: ${{ needs.route.outputs.attempt }}
+        run: Write-Host "runner=${{ runner.name }} environment=${{ runner.environment }} attempt=${{ github.run_attempt }} router-attempt=$env:ROUTER_ATTEMPT"
 
       - name: Checkout
         uses: actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0  # v7
@@ -600,7 +604,9 @@ jobs:
     # Results live outside the cache. Trusted-main/PR routing is unchanged.
     steps:
       - name: Record the runner
-        run: Write-Host "runner=${{ runner.name }} environment=${{ runner.environment }} attempt=${{ github.run_attempt }} router-attempt=${{ needs.route.outputs.attempt }}"
+        env:
+          ROUTER_ATTEMPT: ${{ needs.route.outputs.attempt }}
+        run: Write-Host "runner=${{ runner.name }} environment=${{ runner.environment }} attempt=${{ github.run_attempt }} router-attempt=$env:ROUTER_ATTEMPT"
 
       - name: Checkout
         uses: actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0  # v7
@@ -851,8 +857,17 @@ jobs:
     timeout-minutes: 5
     steps:
       - name: Verify all windows lanes succeeded
+        # The routing job's outputs are written by the pull request's own
+        # route.py: they reach the script as data, never as expressions.
+        env:
+          ROUTE_RESULT: ${{ needs.route.result }}
+          ROUTER_ATTEMPT: ${{ needs.route.outputs.attempt }}
+          RUST_POOL: ${{ needs.route.outputs.rust-pool }}
+          APP_POOL: ${{ needs.route.outputs.app-pool }}
+          MODEL_0_POOL: ${{ needs.route.outputs.model-0-pool }}
+          MODEL_1_POOL: ${{ needs.route.outputs.model-1-pool }}
         run: |
           if [ "${{ needs.rust-tests.result }}" != "success" ] || [ "${{ needs.windows.result }}" != "success" ] || [ "${{ needs.windows-model.result }}" != "success" ] || [ "${{ needs.flaui.result }}" != "success" ]; then
-            echo "::error::rust-tests=${{ needs.rust-tests.result }} app=${{ needs.windows.result }} model=${{ needs.windows-model.result }} flaui=${{ needs.flaui.result }} route=${{ needs.route.result }} pools: rust=${{ needs.route.outputs.rust-pool }} app=${{ needs.route.outputs.app-pool }} model-0=${{ needs.route.outputs.model-0-pool }} model-1=${{ needs.route.outputs.model-1-pool }} (router attempt ${{ needs.route.outputs.attempt }} of ${{ github.run_attempt }})"
+            echo "::error::rust-tests=${{ needs.rust-tests.result }} app=${{ needs.windows.result }} model=${{ needs.windows-model.result }} flaui=${{ needs.flaui.result }} route=$ROUTE_RESULT pools: rust=$RUST_POOL app=$APP_POOL model-0=$MODEL_0_POOL model-1=$MODEL_1_POOL (router attempt $ROUTER_ATTEMPT of ${{ github.run_attempt }})"
             exit 1
           fi
