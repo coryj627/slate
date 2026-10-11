@@ -27,19 +27,73 @@ logs. `gh` commands work in any prompt.
 ## Pool switch (fallback and return)
 
 The repository variable `WINDOWS_RUNNER_MODE` routes `windows.yml` and
-`nightly.yml`.
+`nightly.yml`. In `windows.yml` a routing job (`Route Windows lanes`,
+`ci/windows-runner/route/route.py`) reads it together with the state this
+host publishes every tick in the repository variable `WINDOWS_HOME_STATE`
+(a heartbeat, whether it serves, its slots, what runs, what it has
+queued), and decides a pool per lane. The shell gate runs on
+GitHub-hosted `windows-latest` in every mode but `home-only`. A lane that
+goes home carries one of the labels `slate-win-rust`, `slate-win-app`,
+`slate-win-model` or `slate-win-shell`. The routing job cannot fail a
+run: if it errors, times out or does not run, each lane takes the vendor.
 
-- `home` sends every Windows job to this host, with the labels
-  `slate-win-rust`, `slate-win-app`, `slate-win-model` and
-  `slate-win-shell`. The nightly stress job uses `slate-win-app`.
-- `namespace` is the 2026-07-31 arrangement, verbatim. The rust, app and
-  model lanes run on the Namespace profile `namespace-profile-winx64-fast`
-  (`-fast-pr` off `main`), with the cache tags `slate-windows-rust`,
-  `slate-windows-app` and `slate-windows-model`. The shell gate and the
-  nightly stress job run on GitHub-hosted `windows-latest`.
-- Only `home` selects this host. Any other value, a typo or an unset
-  variable included, means the `namespace` arrangement. The comparison
-  ignores case, so `Home` also selects this host.
+- `home`: home first. A lane takes a free slot; when none is free it queues
+  at home only if it would still finish inside the run's critical path (the
+  app lane plus the shell gate), and otherwise runs on Namespace at once.
+  Lanes are considered in vendor-cost order: app build + test, model shard
+  0, model shard 1, rust tests; the app lane never queues. The router's
+  estimates live in `route.py`'s `DURATIONS` table (app 26 min at home,
+  model 25, rust 11; the shell gate 13 on `windows-latest`), with 110 s per
+  slot handover. With those figures an idle pool keeps app, shard 0 and
+  rust home and pays Namespace about six minutes for shard 1. Over a month
+  at the 2026 run rate the rule spends about 3 900 Namespace minutes,
+  against about 4 500 for plain overflow and about 10 350 for
+  all-Namespace. A single push on an idle pool takes about 40 minutes,
+  against about 35 all-Namespace. A state whose `at` is more than 180 s
+  (three minutes) before the routing job's own clock, or one that says the
+  host is not serving or has no slot, sends every lane to Namespace by
+  itself. Routing resumes as soon as the loop publishes again, and no run
+  has to strand to discover an outage. The reference is the routing job's
+  clock because GitHub resolves `vars` when the job starts, and a run's
+  creation time never moves across re-runs or a concurrency hold. The
+  nightly stress job queues home unconditionally, with the label
+  `slate-win-app`.
+- `home-only`: every lane queues home, as `home` did before 2026-10-11, and
+  the shell gate runs home too. The published state is ignored. It is for
+  validating a golden refresh and for fidelity runs.
+- `namespace`: the 2026-07-31 arrangement, verbatim; the routing job does
+  not run. The rust, app and model lanes run on the Namespace profile
+  `namespace-profile-winx64-fast` (`-fast-pr` off `main`), with the cache
+  tags `slate-windows-rust`, `slate-windows-app` and `slate-windows-model`.
+  The shell gate and the nightly stress job run on `windows-latest`.
+- Any other value, a typo or an unset variable included, means `namespace`.
+  The comparison ignores case but not spaces: set the value without them.
+
+Reading a run's routing: the routing job's step summary has the mode, the
+state it read (its age against the routing job's clock, serving, slots,
+running, queued, earlier routers), the free slots and the deadline, and a
+row per lane with its pool and reason. It ends with one `Replay:` line to
+paste into a Bash shell at the repository root, which reproduces the
+decision. Each routed lane's first step prints `runner=…`, the runner it
+landed on, and the aggregate gate's failure line names the pools.
+
+Fork pull requests never run on the pool, in any mode, `home-only`
+included: the router sends them to the vendor, the host never provisions
+for a job whose run comes from another repository (`admission: skipped job
+<id> of <repo> (not the trusted repository)`), and a VM whose runner GitHub
+handed to such a job is forced off within a tick (`handoff: <vm> runs job
+<id> of <repo> (not the trusted repository); forcing it off`). Every fork
+pull request still waits for your approval first (see "Before you start"
+under Install), and that approval is the control: what the host adds is
+that a fork gets at most seconds on a throwaway VM. One gap stays: the host
+reads only the routed workflows' jobs, so a fork that adds a workflow of
+its own naming a home label is not evicted. The approval click is the
+control for that case.
+
+A fork or Dependabot run that cannot read repository variables sees the
+mode as unset. The routing job does not run, every lane takes the vendor
+whatever the mode says, and the run never waits on this host, even while it
+is down.
 
 The pilot, `windows-ci-pilot.yml`, ignores the variable. Its `runner` input
 picks the pool, and `home` is one of the choices. On `home`, its `cache`
@@ -68,14 +122,38 @@ gh variable get WINDOWS_RUNNER_MODE --repo coryj627/slate
 ```
 
 Jobs already queued for `slate-win-*` keep waiting for the home pool for up
-to 24 hours. Cancel them and re-run them after the flip. The flip never
+to 24 hours; nothing re-routes a queued job. Flip to `namespace` first,
+then cancel the run, then re-run it in full: in the run's page choose
+"Re-run jobs", then "Re-run all jobs", or run `gh run rerun <id>` (not
+`--failed`). A partial re-run reuses the routing job's earlier answer and
+the lanes then take the vendor expression, which is safe, but it cannot
+bring a cancelled lane back. While a stranded lane waits, the `main`
+concurrency group holds later `main` runs behind it. The flip never
 touches caches on either side.
 
-Fork and Dependabot pull requests may not receive repository variables. A
-run that cannot read the variable routes to Namespace and `windows-latest`,
-whatever the mode says, so it never waits on this host, even while it is
-down. Every fork pull request still waits for your approval first (see
-"Before you start" under Install).
+The published state, the repository variable `WINDOWS_HOME_STATE`, shows
+the last tick's view of the pool. It changes whenever a VM or the queue
+changes, and at least once a minute. Read it with:
+
+```powershell
+gh variable get WINDOWS_HOME_STATE --repo coryj627/slate
+```
+
+It is one line of JSON: `v` (always 1), `at` (the tick's UTC time),
+`serving`, `slots`, `running` and `queued`, the last two being lists of
+`lane` and `since`. `queued` also counts jobs whose run the host has not
+read yet; the host admits none of them until it has. The loop writes the
+variable with its token, which needs Variables: Read and write (see
+Install, step 1).
+
+You create it once, before the loop first runs on this code. The value
+below says the host is not serving, so every lane goes to Namespace until
+the loop publishes. If you skip this step, the host's first publish
+creates the variable.
+
+```powershell
+gh variable set WINDOWS_HOME_STATE --repo coryj627/slate --body '{"v":1,"at":"1970-01-01T00:00:00Z","serving":false,"slots":0,"running":[],"queued":[]}'
+```
 
 ## Install (one time, in order)
 
@@ -134,10 +212,12 @@ Before you start:
    - name `slate-ci-host-cdesk`;
    - resource owner `coryj627`;
    - repository access: only `coryj627/slate`;
-   - permissions: Actions read-only, and Administration read and write
-     (GitHub adds Metadata read-only by itself);
+   - permissions: Actions: Read; Administration: Read and write;
+     Variables: Read and write (the published state); GitHub adds Metadata
+     read-only by itself;
    - expiry: one year.
 
+   This is the mac controller's set, so one token recipe serves both hosts.
    Keep it in the password manager. You paste it in step 4, and again after
    any `-ResetAccount`.
 2. **Elevated window.** From any pwsh, open an elevated one running the MSI
@@ -186,8 +266,10 @@ Before you start:
      `C:\slate-ci\cache`: 60 GB dynamic, NTFS, label `slate-cache`, each
      with a `.gen` file at 0;
    - `C:\slate-ci\bin`, a mirror of `ci/windows-runner` without the tests;
-   - two scheduled tasks: `slate-ci-orchestrator`, the loop, registered
-     disabled, and `slate-ci-store-token`, which step 4 runs.
+   - three scheduled tasks: `slate-ci-orchestrator`, the loop, registered
+     disabled; `slate-ci-store-token`, which step 4 runs; and
+     `slate-ci-golden-prune`, which removes the previous golden image once
+     the current one is proven (see "Refreshing the golden image").
 
    If Hyper-V was off, the script enables it, asks for a reboot and exits.
    Reboot, open the elevated window again and re-run it.
@@ -348,7 +430,8 @@ saw before changing anything.
 
   Expect `PT0S`, `IgnoreNew`, `False`, `False`. `PT0S` is Task Scheduler's
   unchecked "Stop the task if it runs longer than" box.
-- [ ] Both tasks start the MSI pwsh, not the Store alias:
+- [ ] The orchestrator and store-token tasks start the MSI pwsh, not the
+  Store alias:
 
   ```powershell
   (Get-ScheduledTask -TaskName slate-ci-orchestrator, slate-ci-store-token).Actions.Execute
@@ -868,11 +951,30 @@ This checks how `Get-VM` reports a VM that no longer exists, as
   5. One of `<vm>: commit <lane> generation <n> (trusted main)`,
      `<vm>: discard (<reason>)`, or, for the shell lane,
      `<vm>: done, lane shell has no cache (conclusion: <conclusion>)`.
+  6. After a green job on a VM provisioned after the current golden's seal,
+     the lane counts as accepted on that image; once rust, app, model and
+     shell all do (a `home-only` run does all four):
+     `golden: rust, app, model and shell are green on the current image`.
+     The `slate-ci-golden-prune` task (SYSTEM, daily at 04:00) then deletes
+     `win11-runner.prev.vhdx` and logs
+     `golden: removed win11-runner.prev.vhdx (the current image is accepted on every lane)`,
+     or `golden: the previous image stays (…)`, naming what is missing: the
+     current image is not yet accepted on every lane, is unsealed, or an
+     older VM exists. The task logs nothing when there is no previous image,
+     and a failed prune logs `golden: prune failed: …`.
 
   Normal discard reasons: `event: pull_request` and `branch: <name>` (not a
   trusted main run), `conclusion: failure`, and
   `generation moved: fork <f>, parent <p>` (another job committed first).
   The others are under "When things go wrong".
+
+  Other lines, outside a job's sequence:
+  - `admission: skipped job` and `handoff: … forcing it off` name jobs this
+    host refuses to serve. Both are under "When things go wrong".
+  - `publish: …` is a failed state publish, logged at most once a minute.
+  - `logs: removed <name>` is the once-a-day pruning of log files older than
+    `LogRetentionDays` (30, in `config.json`). `logs: <name>: <error>` is a
+    file it could not delete; it is tried again the next day.
 - **Inside a VM.** `C:\actions-runner\bootstrap-system.log` is the SYSTEM
   task's log, `C:\actions-runner\bootstrap-runner.log` the `runner` task's,
   and `C:\actions-runner\_diag\` holds the runner's own logs. The guest
@@ -880,13 +982,21 @@ This checks how `Get-VM` reports a VM that no longer exists, as
   and SYSTEM can write. A VM's disk is deleted when the loop settles it;
   "Reading a job VM's logs" under "When things go wrong" shows how to keep
   one.
-- **State.** `C:\slate-ci\state\journal.json` lists the active VMs, retries
-  and seen jobs. The loop rewrites it every tick and reads it only at start,
-  where the startup sweep keeps only the entries of handed-off VMs that are
-  still running and drops the rest, so editing it changes nothing. A
-  journal that does not parse is moved to `journal.json.corrupt-<UTC time>`
-  at start. `token.xml` is the encrypted PAT; a `token.txt` should never be
-  there.
+- **State.** `C:\slate-ci\state\journal.json` lists the active VMs
+  (`Vms`), retries (`Retries`) and seen jobs (`SeenJobs`). It also holds the
+  day the logs were last pruned (`LogsPrunedOn`); which lanes went green on
+  the current golden (`GoldenAccepted`: its stamp, `Lanes` and `Complete`);
+  and the last published state and when (`PublishedState`, `PublishedAt`,
+  `PublishFailedAt`). A `SeenJobs` entry carries `FirstSeenAt`, `Lane`,
+  `RunId`, `RunCheckedAt` and `Foreign`, which stays null until its run was
+  read. A `PublishedAt` or `PublishFailedAt` that does not parse counts as
+  never and is rewritten on the next tick. The `slate-ci-golden-prune` task
+  reads `GoldenAccepted` and never writes the journal. The loop rewrites
+  the journal every tick and reads it only at start, where the startup
+  sweep keeps only the entries of handed-off VMs that are still running and
+  drops the rest, so editing those entries changes nothing. A journal that
+  does not parse is moved to `journal.json.corrupt-<UTC time>` at start.
+  `token.xml` is the encrypted PAT; a `token.txt` should never be there.
 - **Cache generations.** They move only on trusted commits:
 
   ```powershell
@@ -916,9 +1026,10 @@ This checks how `Get-VM` reports a VM that no longer exists, as
   cleared from the image with `slmgr /cpky` so no job can read it. This is
   cosmetic, by design.
 - **Capacity.** Two slots, 4 vCPU and 12 GB each. Queued jobs are admitted
-  oldest first. A main push has five Windows jobs, which run two at a time.
-  The spec expected app then shell in one slot, and rust then both model
-  shards in the other.
+  oldest first. The router sends a lane here only when a slot is free or
+  the queue costs the run no time; the host publishes its slot count, so
+  nothing else needs to know it. Under `home-only` the spec expected app
+  then shell in one slot, and rust then both model shards in the other.
 - **Time caps.** `MaxMinutes` in `ci/windows-runner/config.json` is 70 for
   rust, 100 for app and model, and 30 for shell. Ten minutes past its lane's
   cap, counted from provisioning, the loop forces a VM off and discards it
@@ -989,7 +1100,8 @@ Drain before maintenance:
 1. Flip the pool to `namespace` (see "Pool switch").
 2. Let the home pool finish its work. Jobs queued for it before the flip
    still run there as slots free up. To move a waiting run to Namespace
-   instead, cancel it and re-run it. Recent runs and their state:
+   instead, cancel it and re-run it in full (see "Pool switch"). Recent
+   runs and their state:
 
    ```powershell
    gh run list --repo coryj627/slate --limit 10
@@ -1075,23 +1187,20 @@ rights. Have the Windows 11 Pro key ready: the build asks for it again.
    disabled until step 7.
 2. Pull the merged `main` into the checkout, and open the elevated window
    there.
-3. Move the old disk aside. It is read-only, but a rename still works:
-
-   ```powershell
-   Rename-Item C:\slate-ci\golden\win11-runner.vhdx win11-runner.prev.vhdx
-   ```
-
-4. Refresh `bin`. A plain re-run keeps both tasks as they are, so the loop
-   stays disabled:
+3. Nothing to move: the build rotates the sealed disk to
+   `win11-runner.prev.vhdx` itself (step 5), replacing an older rollback.
+4. Refresh `bin`. A plain re-run keeps the orchestrator and store-token
+   tasks as they are, so the loop stays disabled:
 
    ```powershell
    .\ci\windows-runner\install\setup-host.ps1
    ```
 
-5. Build:
+5. Build. `-Rotate` makes the build rename the sealed disk first, and it
+   prints `Rotated the sealed image to …`:
 
    ```powershell
-   .\ci\windows-runner\golden\build-golden.ps1 -IsoPath C:\Users\cory\Downloads\Windows11_Client_x64_en-us_26300_9457.iso
+   .\ci\windows-runner\golden\build-golden.ps1 -IsoPath C:\Users\cory\Downloads\Windows11_Client_x64_en-us_26300_9457.iso -Rotate
    ```
 
 6. Check the product key on the rebuilt disk: "Checking the product key in
@@ -1103,16 +1212,28 @@ rights. Have the Windows 11 Pro key ready: the build asks for it again.
    Enable-ScheduledTask -TaskName slate-ci-orchestrator
    ```
 
-8. Flip the pool back to `home`, then dispatch `windows.yml` on a branch:
+8. Set the pool to `home-only`, then dispatch `windows.yml` on a branch:
+   every lane, the shell gate included, runs on the new image.
+
+   ```powershell
+   gh variable set WINDOWS_RUNNER_MODE --body home-only --repo coryj627/slate
+   ```
 
    ```powershell
    gh workflow run windows.yml --ref <branch> --repo coryj627/slate
    ```
 
-9. Once that run is green, delete the old disk:
+9. Once that run is green, set the pool back to `home`:
 
    ```powershell
-   Remove-Item C:\slate-ci\golden\win11-runner.prev.vhdx -Force
+   gh variable set WINDOWS_RUNNER_MODE --body home --repo coryj627/slate
+   ```
+
+   The loop logs `golden: rust, app, model and shell are green on the current image`,
+   and the prune task deletes the old disk at 04:00. To delete it sooner:
+
+   ```powershell
+   Start-ScheduledTask -TaskName slate-ci-golden-prune
    ```
 
 Cache parents survive a golden rebuild untouched.
@@ -1122,7 +1243,7 @@ Cache parents survive a golden rebuild untouched.
 If the build fails, the product-key check finds the key, or the branch run
 on the new disk is red, put the old disk back.
 
-1. If step 8 flipped the pool to `home`, flip it back to `namespace`. If
+1. If step 8 set the pool to `home-only`, set it to `namespace`. If
    step 7 enabled the loop, pause it again: steps 3 to 6 of the drain.
 2. If the build left its VM, remove it:
 
@@ -1143,6 +1264,9 @@ on the new disk is red, put the old disk back.
    Rename-Item -LiteralPath C:\slate-ci\golden\win11-runner.prev.vhdx -NewName win11-runner.vhdx
    ```
 
+   The prune task cannot remove a rollback you have just restored: the
+   acceptance it reads is of the image it was recorded on, and a restored
+   image has a different stamp.
 5. Enable the task, only now that the old disk is back. The loop starts
    within a minute, on the old disk:
 
@@ -1150,7 +1274,7 @@ on the new disk is red, put the old disk back.
    Enable-ScheduledTask -TaskName slate-ci-orchestrator
    ```
 
-6. Flip the pool back to `home`.
+6. Set the pool back to `home`.
 
 If the same change also moved host code that the old image cannot talk to,
 such as the KVP functions, put the previous commit's host code back too
@@ -1159,16 +1283,19 @@ such as the KVP functions, put the previous commit's host code back too
 ## Re-running setup
 
 A plain re-run of `setup-host.ps1` keeps `slate-ci-host`, its password and
-both tasks, and so the stored token, as long as both tasks exist. It
-refreshes `C:\slate-ci\bin` from the checkout and repairs anything missing.
-The running loop keeps the code it started with, so restart it after a
-refresh.
+the orchestrator and store-token tasks, and so the stored token, as long as
+those two tasks exist. It refreshes `C:\slate-ci\bin` from the checkout and
+repairs anything missing. The running loop keeps the code it started with,
+so restart it after a refresh. `slate-ci-golden-prune` holds no password
+and re-registers on every run.
 
-If a task is missing, a plain re-run takes the reset path. It prints
+If the orchestrator or store-token task is missing, a plain re-run takes
+the reset path. It prints
 `a scheduled task is missing: the password is reset so both can be registered`,
-sets a new password, registers both tasks again, the loop task disabled,
-and deletes `token.xml`. Run `store-token.ps1` again afterwards, then
-enable the loop task (`Enable-ScheduledTask -TaskName slate-ci-orchestrator`).
+sets a new password, registers the orchestrator and store-token tasks
+again, the loop task disabled, and deletes `token.xml`. Run
+`store-token.ps1` again afterwards, then enable the loop task
+(`Enable-ScheduledTask -TaskName slate-ci-orchestrator`).
 
 To install new host code (the module, the adapters, `orchestrator.ps1`,
 `config.json` or the install scripts), follow the steps below. If the
@@ -1199,10 +1326,10 @@ scripts or the module's KVP functions, rebuild the golden image instead
 5. Resume the loop and flip the pool back to `home`.
 
 Changes to the task definitions (triggers, settings, the `pwsh` path) take
-effect only with `-ResetAccount`. It removes both tasks, sets a new random
-password and registers both tasks again, the loop task disabled. An
-administrator's password reset makes the stored token unreadable, so it
-also deletes `token.xml`.
+effect only with `-ResetAccount`. It removes the orchestrator and
+store-token tasks, sets a new random password and registers those tasks
+again, the loop task disabled. An administrator's password reset makes the
+stored token unreadable, so it also deletes `token.xml`.
 
 1. Drain and pause the loop. Pausing first matters: whether
    `Unregister-ScheduledTask` removes the task while the loop runs is
@@ -1243,7 +1370,9 @@ revoked, nothing runs. Every tick then logs an `admission:` error, and the
 lines after it, which carry no timestamp, read `"message": "Bad credentials"`
 and `"status": "401"`. Rotate it before then.
 
-1. Create the new PAT as in Install, step 1. If GitHub rejects the old
+1. Create the new PAT as in Install, step 1, with the same three
+   permissions: without Variables, the host cannot publish its state and
+   the router sends every lane to Namespace. If GitHub rejects the old
    name, give it a date, such as `slate-ci-host-cdesk-2027-10`.
 2. Store it. The running loop keeps the old token in memory until it
    restarts:
@@ -1332,7 +1461,8 @@ and `"status": "401"`. Rotate it before then.
   the task retries every minute. `Key not valid for use in specified state`
   means `slate-ci-host` cannot decrypt the token: store it again. If
   GitHub's JSON reply follows the line, read it as in the next item.
-- **GitHub's JSON reply after an `admission:`, `startup:` or `<vm>:` line.**
+- **GitHub's JSON reply after an `admission:`, `handoff:`, `publish:`,
+  `startup:` or `<vm>:` line.**
   A failed API call logs the prefixed line, then GitHub's reply on the next
   lines, without timestamps. `"message": "Bad credentials"` with
   `"status": "401"` means the PAT expired or was revoked: rotate it.
@@ -1415,6 +1545,44 @@ and `"status": "401"`. Rotate it before then.
   Hyper-V answers.
 - **`teardown failed, will retry`.** Hyper-V would not delete a VM. Its slot
   stays held, and the loop tries again every tick.
+- **`admission: skipped job <id> of <repo> (not the trusted repository)`.**
+  The job's run comes from another repository, such as a fork pull request
+  whose copy of the workflow named a home label. The host never provisions
+  a VM for it and logs this once per job. Nothing to do. The job stays
+  queued on GitHub and runs nowhere here.
+- **`admission: job <id>: run <run> could not be read: <error>`.** The host
+  reads each queued job's run once, to learn which repository it comes
+  from, and admits nothing before it has. It retries once a minute, logs
+  only the first failure, and the job waits meanwhile. GitHub's reply
+  follows the line: read it as in "GitHub's JSON reply" above.
+- **`handoff: <vm> runs job <id> of <repo> (<why>); forcing it off`.**
+  GitHub handed the VM's runner to a job this host does not serve.
+  `<why>` is `not the trusted repository` for a job of another repository,
+  and `no lane label` for a job of this repository without exactly one
+  lane label. The VM is forced off within a tick and its cache fork is
+  discarded, with
+  `<vm>: discard (runner taken by job <id> of <repo> (<why>))` after it. No
+  retry strike is given. The job the VM was provisioned for stays queued
+  and is admitted again in the same tick. When the run cannot be read and
+  the job has no lane label, `<repo>` reads `an unknown repository`.
+- **`handoff: <vm>: run <run> of job <id> could not be read: <error>`.**
+  The host cannot yet tell whether the job that took the runner is a
+  fork's. It logs this at most once a minute per job, and the VM keeps
+  running that job until the run can be read.
+- **`<vm>: shut down without a job the host can resolve, although its runner was seen busy; no retry`.**
+  The runner was seen on a job, but the host cannot say which one, for
+  example a job it does not track. The image works, so no retry strike is
+  given against the job the VM was provisioned for, and the cache fork is
+  discarded. A job that started and finished between two ticks is never
+  seen on the runner: it ends as `shut down without running a job` above,
+  and the job the VM was provisioned for takes one retry strike.
+- **`publish: <error>`.** The host could not write `WINDOWS_HOME_STATE`.
+  The loop logs it at most once a minute and keeps serving. Once the
+  published state is three minutes old, the router sends every lane to
+  Namespace. A `"status": "403"` after the line usually means the PAT lacks
+  Variables: Read and write (Install, step 1). A tick whose admission
+  threw publishes nothing, so a host that cannot list or admit jobs routes
+  away within three minutes too.
 - **The golden build fails.** See "The golden build fails" below.
 
 ### The golden build fails
@@ -1479,6 +1647,10 @@ Remove-VM -Name slate-golden-build -Force
 ```powershell
 Remove-Item -LiteralPath C:\slate-ci\golden\win11-runner.vhdx -Force
 ```
+
+A `-Rotate` refuses an unsealed leftover; remove `win11-runner.vhdx` by
+hand, then rebuild. In a refresh the sealed disk is already at
+`win11-runner.prev.vhdx`, and the rebuild leaves it there.
 
 ### Reading a job VM's logs
 
@@ -1564,11 +1736,12 @@ when the loop resumes.
 
 | Boundary | Control |
 |---|---|
-| Who can run code here | Only approved workflows. Every fork pull request waits for an owner click, every time. Only `WINDOWS_RUNNER_MODE=home` routes here, so a fork or Dependabot run that cannot read the variable goes to Namespace and `windows-latest`. Non-fork branches are the owner's own commits (and Renovate's). |
+| Who can run code here | Only approved workflows. Every fork pull request waits for an owner click, every time. Only `home` and `home-only` route here; a fork pull request is sent to the vendor by the router in every mode, refused at admission and evicted at handoff by this host, and still waits for an owner click first. A fork or Dependabot run that cannot read the variable goes to Namespace and `windows-latest`. Non-fork branches are the owner's own commits (and Renovate's). |
 | What a job can touch | A VM that exists for that job only, as the standard user `runner`, with no secret valid outside the VM. Its JIT runner config is single-use. |
 | Where a job can connect | The Internet, through the host's NAT. Hyper-V port ACLs drop everything to and from 10/8, 172.16/12, 192.168/16, 100.64/10 (Tailscale), 169.254/16, multicast 224/4, broadcast 255.255.255.255, 0/8 and all IPv6; the image also turns IPv6 off. The host firewall drops inbound traffic from the VM subnet to any address of the host on that interface. |
 | What survives a job | Only a cache merge, and only after the host verifies from GitHub's API: a green push, schedule or dispatch on `main` of this repository, a VM the loop did not force off, and an unchanged parent generation. |
-| What the host account can do | `slate-ci-host` is a Hyper-V Administrator, not an Administrator, but Microsoft treats membership in Hyper-V Administrators as equivalent to administrator rights on the host. Its limits stop mistakes and interactive use; they do not contain a compromise of the account or of the code it runs. It cannot log on interactively or remotely. Inside `C:\slate-ci` it writes `state`, `cache`, `vms` and `logs`; `bin` and `golden` are read-only for it, though on `golden` and `cache` it can change permissions, which Hyper-V needs when it attaches a disk chain. Like any standard account, it can still create folders elsewhere on `C:\`. It holds the one PAT: Actions read, Administration read and write, this repository only. |
+| What the host account can do | `slate-ci-host` is a Hyper-V Administrator, not an Administrator, but Microsoft treats membership in Hyper-V Administrators as equivalent to administrator rights on the host. Its limits stop mistakes and interactive use; they do not contain a compromise of the account or of the code it runs. It cannot log on interactively or remotely. Inside `C:\slate-ci` it writes `state`, `cache`, `vms` and `logs`; `bin` and `golden` are read-only for it, though on `golden` and `cache` it can change permissions, which Hyper-V needs when it attaches a disk chain. Like any standard account, it can still create folders elsewhere on `C:\`. It holds the one PAT: Actions read, Administration read and write, Variables read and write, this repository only. Variables write reaches every repository variable, not only `WINDOWS_HOME_STATE`. |
+| `slate-ci-golden-prune` task | SYSTEM, daily at 04:00; deletes one fixed path only when the module's predicate holds for the current, sealed image; the orchestrator's account gains no right on `golden`. |
 | Who can change what runs | Only an elevated administrator writes `C:\slate-ci\bin`, the golden disk and the tasks. In the guest, only Administrators and SYSTEM can write the bootstrap scripts in `C:\slate-guest`. |
 | Residual risk, accepted | A job reaches the Internet with a read-only `GITHUB_TOKEN`, as on GitHub-hosted runners. The home router's public (WAN) address is a public destination, so the port ACL passes it: whatever the router serves there (remote administration, UPnP, ports forwarded into the LAN) is reachable from a job. Keep those off, and check by hand (step 4 of "Refreshing the pilot's isolation targets"). |
 

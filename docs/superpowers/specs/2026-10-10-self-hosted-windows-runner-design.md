@@ -33,9 +33,9 @@ Critical path of a main push today: app lane (28 min) → shell gate (17 min)
   nightly stress job, not only the Namespace lanes.
 - **D-2 Capacity:** CI may use half the box at all times: 8 vCPU and 24 GB
   across at most two concurrent VMs (4 vCPU + 12 GB each).
-- **D-3 Fallback:** manual. One repository variable selects the pool; the
-  owner flips it with one `gh` command. No automatic watchdog, no new
-  secrets in the repository.
+- **D-3 Fallback:** manual at first; automatic since the overflow routing
+  design of 2026-10-11 (`2026-10-11-windows-overflow-routing-design.md`,
+  OR-D2/OR-D4: the host publishes its state, the router reads it).
 - **D-4 Guest OS:** Windows 11 Pro, licensed, built from the
   `Win11_25H2_English_x64_v2.iso` already on the host. The owner supplies a
   Windows 11 Pro product key for the VM image (spare or purchased). This
@@ -86,9 +86,10 @@ builds) and the read-only `GITHUB_TOKEN`.
 | Host compromise via the orchestrator account | `slate-ci-host` is a member of Hyper-V Administrators only, has no interactive logon, and can write only under `C:\slate-ci`. Microsoft treats Hyper-V Administrators membership as equivalent to administrator rights, so these limits stop mistakes and interactive use, not a compromise of the account or of the code it runs. |
 | Renovate branch pulls a malicious crate whose build script runs | Same VM isolation; the PR fork is discarded. After merge the code is in `main` regardless. |
 
-Residual risk accepted by the owner: an approved fork PR, or the owner's own
-branch, can run code in a throwaway VM with outbound Internet access and a
-read-only `GITHUB_TOKEN`. That is the same exposure GitHub-hosted runners
+Residual risk accepted by the owner: an approved fork PR (withdrawn
+2026-10-11: OR-D5 of the overflow design has the host refuse and evict such
+jobs), or the owner's own branch, can run code in a throwaway VM with
+outbound Internet access and a read-only `GITHUB_TOKEN`. That is the same exposure GitHub-hosted runners
 have.
 
 ## Architecture
@@ -414,6 +415,10 @@ manual).
 | nightly.yml `windows-full-stress` | `slate-win-app` | `windows-latest` |
 | windows-ci-pilot.yml candidates | new `home` choice: `build-app` → `slate-win-app`, `model-shard` → `slate-win-model`, `shell` → `slate-win-shell` (the other candidates keep their hosted shell) | unchanged |
 
+Superseded on 2026-10-11 for `windows.yml`: a routing job sets each lane's
+pool; the table's expressions remain the vendor fallback inside the lanes'
+`runs-on`, verbatim.
+
 Cache steps: the three `namespacelabs/nscloud-cache-action` steps gain
 `if: ${{ vars.WINDOWS_RUNNER_MODE != 'home' }}`, and the nightly stress
 job's GitHub-cache restore runs unless the mode is `home`. The attestation and
@@ -542,7 +547,7 @@ and what a host reboot does to in-flight jobs.
 
 ## Out of scope
 
-- Automatic fallback (D-3).
+- Automatic fallback (D-3): done on 2026-10-11.
 - Collapsing the shell gate into the app lane.
 - Moving mac or Linux lanes.
 - Branch protection on `main` (recommended only).

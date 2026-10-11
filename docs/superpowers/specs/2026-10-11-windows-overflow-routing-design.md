@@ -584,3 +584,49 @@ Its guard runs in a small workflow of its own, filtered to the file.
 later (its deadline formula is `windows.yml`'s). Whether the model
 coverage inventories differ by operating system is unverified. The
 heartbeat's two-minute window after a crash is accepted.
+
+## 14. Planning deviations (2026-10-11)
+
+- The gate's `needs` gains `route` (§6) so its failure line can name the
+  pools.
+- The router's three tasks of revision 2 are one task: its two files were
+  run as a whole before the plan was committed.
+- `Get-CiHostPaths` is the one statement of the host tree; `Get-CiHostConfig`
+  derives its path keys from it, and `GoldenPrevPath` and `JournalPath` are
+  new derived keys.
+- The acceptance record carries a `Complete` flag so the "all four lanes"
+  line is logged once; the prune's predicate ignores it and checks the
+  lanes itself.
+- Staleness is measured against the router's own clock with a 180 s window;
+  the run's creation time is read for nothing (GitHub resolves `vars` at job
+  start, verified on a11y-check run 38060200124 attempt 4; `created_at`
+  never moves across re-runs). §13's "two-minute window" is this 180 s
+  window, three minutes.
+- Earlier routers are replayed through the same allocation instead of being
+  assumed to place two lanes; a router that completed at most 30 s before
+  the published state still counts.
+- A running entry whose time cannot be read counts from now; an unknown
+  lane occupies the longest home duration.
+- The fork rule precedes `home-only`, in the router and in the shell gate's
+  `runs-on`.
+- The route job is `continue-on-error` at job level; the gate keeps
+  `if: ${{ always() }}`, pinned, because a gate skipped with its `route`
+  need would count as a passing required check.
+- A tick whose admission threw publishes nothing; jobs whose run is unknown
+  count as queued; `PublishedAt` and `PublishFailedAt` that do not parse are
+  treated as never.
+- Handoff reconciliation matches runners against the full in-progress
+  listing; a job without a lane label is evicted with `(no lane label)`; a
+  VM whose runner was seen busy gets no retry strike. JIT runners carry
+  only the label in their configuration (verified on the live listing), so
+  this is defence in depth.
+- Log files are named with the invariant culture, as the retention parser
+  reads them.
+- The host's token already held Variables read and write (the mac
+  controller's set); the runbook's issuance step was corrected, nothing
+  re-issued.
+- The runbook writes "the orchestrator and store-token tasks" where §12
+  says "the three tasks": the prune task holds no password and sits outside
+  that pair. The runbook changes of this commit cover the Windows pool
+  only; §12's branch-cleanup subsection is not among them (§10 lands on
+  its own pull request).
