@@ -232,6 +232,25 @@ Describe 'golden scripts' {
         }
         $build | Should -Match 'rendered unattend still present in the image'
     }
+    It 'phase 1 deletes the clear-text backup of the product key and the build checks the registry for both copies' {
+        # slmgr /cpky clears DigitalProductId's key bytes only; Windows keeps
+        # SoftwareProtectionPlatform\BackupProductKeyDefault, which Users can read.
+        $guest = Get-Content -Raw (Join-Path $goldenDir 'provision-guest.ps1')
+        $cpky = $guest.IndexOf('slmgr.vbs /cpky')
+        $remove = $guest.IndexOf("Remove-ItemProperty -Path 'HKLM:\SOFTWARE\Microsoft\Windows NT\CurrentVersion\SoftwareProtectionPlatform' -Name BackupProductKeyDefault")
+        $cpky | Should -BeGreaterThan -1
+        $remove | Should -BeGreaterThan $cpky
+        $remove | Should -BeLessThan $guest.IndexOf('Restart-Computer -Force')
+        $build = Get-Content -Raw (Join-Path $goldenDir 'build-golden.ps1')
+        $build | Should -Match ([regex]::Escape('Copy-Item -LiteralPath "$w\Windows\System32\config\SOFTWARE"'))
+        $build | Should -Match 'reg\.exe load \$hiveName \$hiveCopy'
+        $build | Should -Match ([regex]::Escape('Select-Object -Skip 52 -First 15 | Where-Object { $_ -ne 0 }'))
+        $build | Should -Match 'DigitalProductId still holds'
+        $build | Should -Match 'BackupProductKeyDefault still holds a product key in clear text'
+        # Unloaded and deleted whatever the result.
+        $build | Should -Match 'finally \{\s+\[gc\]::Collect\(\)\s+& reg\.exe unload \$hiveName'
+        $build | Should -Match ([regex]::Escape('Remove-Item -LiteralPath "$hiveCopy*" -Force'))
+    }
     It 'the build script resolves -IsoPath to an absolute path before mounting it' {
         # Mount-DiskImage and Dismount-DiskImage need an absolute path.
         $text = Get-Content -Raw (Join-Path $goldenDir 'build-golden.ps1')
