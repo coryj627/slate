@@ -32,7 +32,9 @@ BeforeAll {
         $a = @{
             GetLaneJobs   = { & $script:record 'GetLaneJobs' @(); @($script:world.Queued) + @($script:world.InProgress) }
             GetJob        = { param($id) & $script:record 'GetJob' @($id); $script:world.Jobs[[string]$id] }
-            GetRun        = { param($id) & $script:record 'GetRun' @($id); $script:world.Runs[[string]$id] }
+            GetRun        = { param($id) & $script:record 'GetRun' @($id)
+                              if ($script:world.Runs.ContainsKey([string]$id)) { $script:world.Runs[[string]$id] }
+                              else { [pscustomobject]@{ id = $id; event = 'push'; head_branch = 'main'; head_repository = [pscustomobject]@{ full_name = 'coryj627/slate' } } } }
             NewJitRunner  = { param($name, $labels) & $script:record 'NewJitRunner' @($name, $labels); @{ RunnerId = 77; EncodedJitConfig = $script:world.JitConfig } }
             RemoveRunner  = { param($id) & $script:record 'RemoveRunner' @($id) }
             GetRunner     = { param($id) & $script:record 'GetRunner' @($id); $script:world.Runner }
@@ -101,6 +103,8 @@ Context 'admission' {
         $vm.SlotIp | Should -Be '10.77.0.11'
         $vm.ForkGeneration | Should -Be 3
         $journal.SeenJobs['1'].Lane | Should -Be 'app'
+        $journal.SeenJobs['1'].Foreign | Should -BeFalse
+        $journal.SeenJobs['1'].Keys.Count | Should -Be 5
         # The journal entry's shape: 18 keys, every one present from admission.
         @($vm.Keys | Sort-Object) | Should -Be @('CachePath', 'ClaimCheckedAt', 'Claimed', 'Dir', 'ForkGeneration', 'GuestError', 'HandedAt', 'JobId', 'Lane', 'Name', 'PendingCommit', 'Phase', 'RunId', 'RunnerId', 'SettleWaits', 'Slot', 'SlotIp', 'StartedAt')
         $vm.GuestError | Should -Be $null
@@ -141,6 +145,39 @@ Context 'admission' {
         $journal.Vms.Count | Should -Be 0
         $journal.Retries['1'].Count | Should -Be 1
         (Get-Calls 'RemoveVm').Count | Should -Be 1
+    }
+    It 'never admits a job whose run comes from another repository, says so once, and keeps it out of the published queue' {
+        $world.Queued = @((New-QueuedJob 1 10 'app'))
+        Set-Run 10 'pull_request' 'feature' 'someone/slate'
+        Invoke-OrchestratorTick -Config $config -Journal $journal -Adapters $adapters -Now $t0
+        Invoke-OrchestratorTick -Config $config -Journal $journal -Adapters $adapters -Now $t0.AddSeconds(10)
+        (Get-Calls 'NewVm').Count | Should -Be 0
+        (Get-Calls 'GetRun').Count | Should -Be 1
+        $journal.SeenJobs['1'].Foreign | Should -BeTrue
+        ([regex]::Matches(($logs -join "`n"), 'admission: skipped job 1 of someone/slate \(not the trusted repository\)')).Count | Should -Be 1
+        @(($journal.PublishedState | ConvertFrom-Json).queued).Count | Should -Be 0
+    }
+    It 'treats a run without a head repository as foreign' {
+        $world.Queued = @((New-QueuedJob 1 10 'app'))
+        $world.Runs['10'] = [pscustomobject]@{ id = 10; event = 'pull_request'; head_branch = 'x'; head_repository = $null }
+        Invoke-OrchestratorTick -Config $config -Journal $journal -Adapters $adapters -Now $t0
+        (Get-Calls 'NewVm').Count | Should -Be 0
+        $journal.SeenJobs['1'].Foreign | Should -BeTrue
+    }
+    It 'retries a run read that failed at most once a minute, logging the first failure only, then admits' {
+        $world.Queued = @((New-QueuedJob 1 10 'app'))
+        $script:runCalls = 0
+        $adapters.GetRun = { param($id) $script:runCalls++; if ($script:runCalls -le 2) { throw '502' }; [pscustomobject]@{ id = $id; event = 'push'; head_branch = 'main'; head_repository = [pscustomobject]@{ full_name = 'coryj627/slate' } } }
+        Invoke-OrchestratorTick -Config $config -Journal $journal -Adapters $adapters -Now $t0
+        Invoke-OrchestratorTick -Config $config -Journal $journal -Adapters $adapters -Now $t0.AddSeconds(10)
+        $script:runCalls | Should -Be 1
+        (Get-Calls 'NewVm').Count | Should -Be 0
+        ([regex]::Matches(($logs -join "`n"), 'admission: job 1: run 10 could not be read')).Count | Should -Be 1
+        Invoke-OrchestratorTick -Config $config -Journal $journal -Adapters $adapters -Now $t0.AddSeconds(61)
+        $script:runCalls | Should -Be 2
+        Invoke-OrchestratorTick -Config $config -Journal $journal -Adapters $adapters -Now $t0.AddSeconds(122)
+        $script:runCalls | Should -Be 3
+        (Get-Calls 'NewVm').Count | Should -Be 1
     }
 }
 
@@ -344,6 +381,7 @@ Context 'settle' {
         (Get-Calls 'CommitCache').Count | Should -Be 1
     }
     It 'waits while GitHub still reports the job in progress at Off, then commits once it reports completed' {
+        $before = (Get-Calls 'GetRun').Count
         # GitHub's record can lag the guest's shutdown by a few seconds.
         $world.Jobs['1'] = [pscustomobject]@{ id = 1; run_id = 10; status = 'in_progress'; conclusion = $null; runner_name = $name }
         Set-Run 10
@@ -353,7 +391,7 @@ Context 'settle' {
         (Get-Calls 'DiscardCache').Count | Should -Be 0
         (Get-Calls 'CommitCache').Count | Should -Be 0
         (Get-Calls 'RemoveVm').Count | Should -Be 0
-        (Get-Calls 'GetRun').Count | Should -Be 0
+        (Get-Calls 'GetRun').Count | Should -Be $before
         Invoke-OrchestratorTick -Config $config -Journal $journal -Adapters $adapters -Now $t0.AddMinutes(20).AddSeconds(10)
         $journal.Vms[$name].SettleWaits | Should -Be 2
         Set-DoneJob 1 10 $name
@@ -558,6 +596,21 @@ Context 'handoff reconciliation' {
         ($logs -join "`n") | Should -Not -Match 'runs job'
         Invoke-OrchestratorTick -Config $config -Journal $journal -Adapters $adapters -Now $t0.AddSeconds(320)
         (Get-Calls 'GetRunner').Count | Should -Be 0
+    }
+    It 'forces a handed VM off when the job that took its runner comes from another repository, and leaves its own job queued' {
+        $world.Queued = @((New-QueuedJob 1 10 'model'))
+        Invoke-OrchestratorTick -Config $config -Journal $journal -Adapters $adapters -Now $t0
+        $name = @($journal.Vms.Keys)[0]
+        Invoke-OrchestratorTick -Config $config -Journal $journal -Adapters $adapters -Now $t0.AddSeconds(10)
+        $journal.Vms[$name].Phase | Should -Be 'handed'
+        Set-Run 99 'pull_request' 'feature' 'someone/slate'
+        $world.InProgress = @([pscustomobject]@{ id = 2; run_id = 99; status = 'in_progress'; labels = @('slate-win-model'); created_at = $t0.ToString('o'); runner_name = $name })
+        Invoke-OrchestratorTick -Config $config -Journal $journal -Adapters $adapters -Now $t0.AddSeconds(20)
+        (Get-Calls 'StopVmForce').Count | Should -Be 1
+        $journal.Vms.ContainsKey($name) | Should -BeFalse
+        $journal.SeenJobs.ContainsKey('1') | Should -BeTrue
+        $journal.Retries.ContainsKey('1') | Should -BeFalse
+        ($logs -join "`n") | Should -Match "handoff: ${name} runs job 2 of someone/slate \(not the trusted repository\); forcing it off"
     }
 }
 

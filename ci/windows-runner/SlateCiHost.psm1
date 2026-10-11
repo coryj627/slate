@@ -229,6 +229,19 @@ function Test-CommitEligible {
     return [pscustomobject]@{ Eligible = $true; Reason = 'trusted main' }
 }
 
+function Get-RunRepository {
+    param($Run)
+    if ($null -eq $Run -or -not $Run.PSObject.Properties['head_repository'] -or $null -eq $Run.head_repository) { return '' }
+    return [string]$Run.head_repository.full_name
+}
+
+function Test-TrustedRun {
+    # A null head repository (a deleted fork) is not trusted.
+    param($Run, [Parameter(Mandatory)][string]$TrustedRepo)
+    $repo = Get-RunRepository -Run $Run
+    return [bool]$repo -and [string]::Equals($repo, $TrustedRepo, [System.StringComparison]::OrdinalIgnoreCase)
+}
+
 function Resolve-RunnerJob {
     # Any queued job with matching labels may have taken this runner, so
     # ask GitHub which one did: the admitted job first, then every other
@@ -759,11 +772,35 @@ function Invoke-Admission {
     $raw = @(& $Adapters.GetLaneJobs)
     $laneJobs = @(Select-QueuedLaneJobs -Jobs $raw -Lanes @($Config.Lanes.Keys) -IncludeInProgress)
     $queued = @($laneJobs | Where-Object { $_.Status -eq 'queued' })
+    # Only this repository's runs get a VM (overflow spec OR-D5): a fork
+    # pull request runs its own workflow file and can name the home label,
+    # so the check lives here, where the fork cannot edit it. Each job's run
+    # is read once and remembered; a read that fails is retried once a
+    # minute and logged on its first failure, and the job waits meanwhile.
+    $admissible = @()
     foreach ($q in $queued) {
         $key = [string]$q.JobId
         if (-not $Journal.SeenJobs.Contains($key)) {
-            $Journal.SeenJobs[$key] = @{ RunId = [int64]$q.RunId; Lane = $q.Lane; FirstSeenAt = $Now.ToString('o') }
+            $Journal.SeenJobs[$key] = @{ RunId = [int64]$q.RunId; Lane = $q.Lane; FirstSeenAt = $Now.ToString('o'); Foreign = $null; RunCheckedAt = $null }
         }
+        $seen = $Journal.SeenJobs[$key]
+        if (-not $seen.Contains('Foreign')) { $seen['Foreign'] = $null; $seen['RunCheckedAt'] = $null }
+        if ($null -eq $seen['Foreign']) {
+            $checked = $seen['RunCheckedAt']
+            if ($checked -and ($Now - (ConvertTo-DateTimeOffset -Value $checked)).TotalSeconds -lt 60) { continue }
+            $seen['RunCheckedAt'] = $Now.ToString('o')
+            try {
+                $run = & $Adapters.GetRun ([int64]$q.RunId)
+                $seen['Foreign'] = -not (Test-TrustedRun -Run $run -TrustedRepo $Config.TrustedRepo)
+            } catch {
+                if (-not $checked) { & $Adapters.Log 'warn' "admission: job $($q.JobId): run $($q.RunId) could not be read: $_" }
+                continue
+            }
+            if ($seen['Foreign']) {
+                & $Adapters.Log 'warn' "admission: skipped job $($q.JobId) of $(Get-RunRepository -Run $run) (not the trusted repository)"
+            }
+        }
+        if ($seen['Foreign'] -eq $false) { $admissible += $q }
     }
     # GitHub hands a runner whichever queued job matches its label first,
     # not the job this host provisioned the VM for. A handed VM whose
@@ -779,11 +816,18 @@ function Invoke-Admission {
         if ($running.Count -eq 0) { continue }
         $job = $running[0]
         if ([int64]$job.JobId -ne [int64]$vm.JobId) {
+            $takenRun = $null
+            try { $takenRun = & $Adapters.GetRun ([int64]$job.RunId) } catch { & $Adapters.Log 'warn' "handoff: ${name}: run $($job.RunId) could not be read: $_"; continue }
+            if (-not (Test-TrustedRun -Run $takenRun -TrustedRepo $Config.TrustedRepo)) {
+                & $Adapters.Log 'warn' "handoff: ${name} runs job $($job.JobId) of $(Get-RunRepository -Run $takenRun) (not the trusted repository); forcing it off"
+                Remove-ActiveVm -Config $Config -Journal $Journal -Adapters $Adapters -Name $name -Reason "runner taken by job $($job.JobId) of another repository" -Retry $false -Now $Now
+                continue
+            }
             & $Adapters.Log 'info' "${name}: runs job $($job.JobId), not job $($vm.JobId) it was provisioned for, which stays queued for a VM of its own"
             $vm.JobId = [int64]$job.JobId
             $vm.RunId = [int64]$job.RunId
             if (-not $Journal.SeenJobs.Contains([string]$job.JobId)) {
-                $Journal.SeenJobs[[string]$job.JobId] = @{ RunId = [int64]$job.RunId; Lane = $job.Lane; FirstSeenAt = $Now.ToString('o') }
+                $Journal.SeenJobs[[string]$job.JobId] = @{ RunId = [int64]$job.RunId; Lane = $job.Lane; FirstSeenAt = $Now.ToString('o'); Foreign = $false; RunCheckedAt = $Now.ToString('o') }
             }
         }
         if (-not $vm.Claimed) {
@@ -803,7 +847,7 @@ function Invoke-Admission {
         if ($Now -gt $next.AddHours(24)) { $Journal.Retries.Remove($key) }
     }
     $free = @(Get-FreeSlots -Config $Config -Journal $Journal)
-    $admit = @(Select-JobsToAdmit -Candidates $queued -ActiveVms $Journal.Vms -FreeSlots $free.Count -Retries $Journal.Retries -Now $Now -RetryCap ([int]$Config.RetryCap))
+    $admit = @(Select-JobsToAdmit -Candidates $admissible -ActiveVms $Journal.Vms -FreeSlots $free.Count -Retries $Journal.Retries -Now $Now -RetryCap ([int]$Config.RetryCap))
     for ($i = 0; $i -lt $admit.Count; $i++) {
         $job = $admit[$i]
         $slot = $free[$i]
@@ -829,7 +873,7 @@ function Invoke-Admission {
             }
         }
     }
-    return @(Select-JobsToAdmit -Candidates $queued -ActiveVms $Journal.Vms -FreeSlots ([int]::MaxValue) -Retries $Journal.Retries -Now $Now -RetryCap ([int]$Config.RetryCap))
+    return @(Select-JobsToAdmit -Candidates $admissible -ActiveVms $Journal.Vms -FreeSlots ([int]::MaxValue) -Retries $Journal.Retries -Now $Now -RetryCap ([int]$Config.RetryCap))
 }
 
 function Invoke-OrchestratorTick {
@@ -1024,5 +1068,5 @@ function Set-LocalUserRights {
 Export-ModuleMember -Function Get-LaneFromLabels, New-RunnerName, Split-KvpChunks, Join-KvpChunks,
     ConvertTo-DateTimeOffset, Select-QueuedLaneJobs, Select-JobsToAdmit, Register-JobRetry, Test-VmExpired, Get-StaleRunnerNames, Test-CommitEligible, Resolve-RunnerJob, Test-IPv4InPrefix, Get-CiHostConfig, New-Journal, Read-Journal, Write-Journal, Write-CiLog,
     Get-FreeSlots, Remove-ActiveVm, Test-SiblingRunning, Complete-ActiveVm, Update-ActiveVm, Invoke-Admission, Invoke-OrchestratorTick, Invoke-StartupSweep, Select-SlateKvpItems,
-    Get-PublishedState, Publish-HomeState,
+    Get-PublishedState, Publish-HomeState, Get-RunRepository, Test-TrustedRun,
     New-RandomPassword, Expand-UnattendTemplate, Add-SidToUserRight, Set-LocalUserRights
