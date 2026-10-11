@@ -193,13 +193,24 @@ Before you start:
    The loop stays disabled until step 7, so nothing runs before the golden
    disk passes its product-key check.
 
-   Then exclude the VM disks from the host's Defender real-time scanning,
+   Then exclude the VM disks from the host's real-time antivirus scanning,
    which otherwise scans every write to them, as Microsoft recommends for
-   Hyper-V hosts. In the same elevated window:
+   Hyper-V hosts. With Microsoft Defender active, in the same elevated
+   window:
 
    ```powershell
    Add-MpPreference -ExclusionPath C:\slate-ci\golden, C:\slate-ci\cache, C:\slate-ci\vms
    ```
+
+   If that fails with `0x800106ba`, Defender is not the active antivirus:
+   another product owns real-time scanning and Defender's service is
+   stopped (`Get-MpComputerStatus` shows `AMRunningMode` as
+   `Not running`; `Get-CimInstance -Namespace root/SecurityCenter2 -ClassName AntiVirusProduct`
+   names the product). Add the same three folders as exclusions in that
+   product instead. For ESET Security, which CDESK runs: Advanced setup
+   (F5), Detection engine, Exclusions, Performance exclusions, Edit, Add,
+   one folder per entry. The guest image has its own Defender exclusions
+   and is unaffected.
 
 4. **Token.**
 
