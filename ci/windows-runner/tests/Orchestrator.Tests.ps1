@@ -21,6 +21,9 @@ BeforeAll {
             GuestError = $null
             Published  = [System.Collections.ArrayList]::new()
             Logs       = @('orchestrator-2026-09-01.log', 'orchestrator-2026-10-10.log')
+            GoldenStamp = '2026-10-10T11:00:00Z'
+            GoldenSealed = $true
+            VmTimes    = @()
         }
         $script:calls = [System.Collections.ArrayList]::new()
         $script:logs = [System.Collections.ArrayList]::new()
@@ -58,6 +61,9 @@ BeforeAll {
             PublishState  = { param($json) & $script:record 'PublishState' @($json); [void]$script:world.Published.Add($json) }
             ListLogs      = { & $script:record 'ListLogs' @(); @($script:world.Logs) }
             RemoveLog     = { param($name) & $script:record 'RemoveLog' @($name); $script:world.Logs = @($script:world.Logs | Where-Object { $_ -ne $name }) }
+            GetGoldenStamp     = { & $script:record 'GetGoldenStamp' @(); $script:world.GoldenStamp }
+            GetGoldenSealed    = { & $script:record 'GetGoldenSealed' @(); $script:world.GoldenSealed }
+            GetVmCreationTimes = { & $script:record 'GetVmCreationTimes' @(); @($script:world.VmTimes) }
             Log           = { param($level, $message) [void]$script:logs.Add("[$level] $message") }
         }
         return $a
@@ -791,6 +797,73 @@ Context 'log retention' {
         $journal.LogsPrunedOn = '2026-10-10'
         Invoke-StartupSweep -Config $config -Journal $journal -Adapters $adapters
         $journal.LogsPrunedOn | Should -Be $null
+    }
+}
+
+Context 'golden acceptance' {
+    BeforeAll {
+        function Complete-GreenJob([string]$Lane, [datetimeoffset]$At, [string]$Conclusion = 'success', [string]$Event = 'push') {
+            $script:jobId++
+            $runId = $script:jobId * 10
+            $script:world.Queued = @((New-QueuedJob $script:jobId $runId $Lane))
+            Set-Run $runId $Event $(if ($Event -eq 'push') { 'main' } else { 'feature' })
+            Invoke-OrchestratorTick -Config $script:config -Journal $script:journal -Adapters $script:adapters -Now $At
+            $name = @($script:journal.Vms.Keys | Where-Object { $script:journal.Vms[$_].JobId -eq $script:jobId })[0]
+            Invoke-OrchestratorTick -Config $script:config -Journal $script:journal -Adapters $script:adapters -Now $At.AddSeconds(10)
+            $script:world.Queued = @()
+            $script:world.VmStates[$name] = 'Off'
+            Set-DoneJob $script:jobId $runId $name $Conclusion
+            Invoke-OrchestratorTick -Config $script:config -Journal $script:journal -Adapters $script:adapters -Now $At.AddMinutes(20)
+        }
+    }
+    BeforeEach { $script:jobId = 100 }
+    It 'records each lane that went green on a VM newer than the golden, and logs once when all four did' {
+        Complete-GreenJob 'rust' $t0
+        $journal.GoldenAccepted.Golden | Should -Be '2026-10-10T11:00:00Z'
+        @($journal.GoldenAccepted.Lanes) | Should -Be @('rust')
+        $journal.GoldenAccepted.Complete | Should -BeFalse
+        Complete-GreenJob 'app' $t0.AddHours(1)
+        Complete-GreenJob 'rust' $t0.AddHours(2)
+        Complete-GreenJob 'model' $t0.AddHours(3)
+        @($journal.GoldenAccepted.Lanes | Sort-Object) | Should -Be @('app', 'model', 'rust')
+        $journal.GoldenAccepted.Complete | Should -BeFalse
+        Complete-GreenJob 'shell' $t0.AddHours(4)
+        $journal.GoldenAccepted.Complete | Should -BeTrue
+        ([regex]::Matches(($logs -join "`n"), 'golden: rust, app, model and shell are green on the current image')).Count | Should -Be 1
+        Complete-GreenJob 'app' $t0.AddHours(5)
+        ([regex]::Matches(($logs -join "`n"), 'green on the current image')).Count | Should -Be 1
+    }
+    It 'survives the journal being written and read back between two green jobs' {
+        Complete-GreenJob 'rust' $t0
+        $p = Join-Path $TestDrive 'journal.json'
+        Write-Journal -Path $p -Journal $journal
+        $script:journal = Read-Journal -Path $p
+        Complete-GreenJob 'app' $t0.AddHours(1)
+        @($journal.GoldenAccepted.Lanes | Sort-Object) | Should -Be @('app', 'rust')
+    }
+    It 'ignores a green job on a VM provisioned before the golden was sealed' {
+        $world.GoldenStamp = $t0.AddMinutes(5).ToString('o')
+        Complete-GreenJob 'rust' $t0
+        @($journal.GoldenAccepted.Lanes).Count | Should -Be 0
+    }
+    It 'starts over when the golden changes' {
+        Complete-GreenJob 'rust' $t0
+        $world.GoldenStamp = '2026-10-12T01:00:00Z'
+        Complete-GreenJob 'rust' $t0.AddDays(2)
+        $journal.GoldenAccepted.Golden | Should -Be '2026-10-12T01:00:00Z'
+        @($journal.GoldenAccepted.Lanes) | Should -Be @('rust')
+    }
+    It 'records nothing for a red job, and records a green pull-request job (the image ran it, whatever the cache did)' {
+        Complete-GreenJob 'app' $t0 'failure'
+        $journal.GoldenAccepted | Should -Be $null
+        Complete-GreenJob 'app' $t0.AddHours(1) 'success' 'pull_request'
+        @($journal.GoldenAccepted.Lanes) | Should -Be @('app')
+    }
+    It 'a failing stamp read never wedges the settle' {
+        $adapters.GetGoldenStamp = { throw 'disk gone' }
+        Complete-GreenJob 'rust' $t0
+        $journal.Vms.Count | Should -Be 0
+        ($logs -join "`n") | Should -Match 'golden: disk gone'
     }
 }
 

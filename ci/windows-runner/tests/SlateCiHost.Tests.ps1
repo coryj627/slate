@@ -499,7 +499,7 @@ Describe 'Journal' {
     It 'New-Journal and Read-Journal share one set of top-level keys' {
         $p = Join-Path $TestDrive 'bare.json'
         '{"Vms":{},"Retries":{},"SeenJobs":{}}' | Set-Content $p
-        @((New-Journal).Keys | Sort-Object) | Should -Be @('LogsPrunedOn', 'PublishFailedAt', 'PublishedAt', 'PublishedState', 'Retries', 'SeenJobs', 'Vms' | Sort-Object)
+        @((New-Journal).Keys | Sort-Object) | Should -Be @('GoldenAccepted', 'LogsPrunedOn', 'PublishFailedAt', 'PublishedAt', 'PublishedState', 'Retries', 'SeenJobs', 'Vms' | Sort-Object)
         @((Read-Journal -Path $p).Keys | Sort-Object) | Should -Be @((New-Journal).Keys | Sort-Object)
         (Read-Journal -Path $p).PublishedState | Should -Be $null
     }
@@ -639,5 +639,25 @@ Describe 'Get-ExpiredLogNames' {
     }
     It 'returns nothing for an empty directory' {
         @(Get-ExpiredLogNames -Names @() -Today '2026-10-11' -RetentionDays 30).Count | Should -Be 0
+    }
+}
+
+Describe 'Test-GoldenPrevRemovable' {
+    BeforeAll { $script:accepted = @{ Golden = '2026-10-10T22:55:00.0000000Z'; Lanes = @('rust', 'app', 'model', 'shell'); Complete = $true } }
+    It 'is true only for a complete acceptance of the current, sealed golden with no older VM' {
+        Test-GoldenPrevRemovable -Accepted $accepted -CurrentStamp '2026-10-10T22:55:00.0000000Z' -CurrentSealed $true -VmCreationTimes @('2026-10-11T01:00:00Z') | Should -BeTrue
+    }
+    It 'compares the stamps as instants, so a journal round trip (a [datetime]) still matches' {
+        $roundTripped = @{ Golden = [datetime]::Parse('2026-10-10T22:55:00Z').ToUniversalTime(); Lanes = $accepted.Lanes; Complete = $true }
+        Test-GoldenPrevRemovable -Accepted $roundTripped -CurrentStamp '2026-10-10T22:55:00.0000000Z' -CurrentSealed $true -VmCreationTimes @() | Should -BeTrue
+    }
+    It 'is false for an acceptance of another image (the previous one, after a rotation)' {
+        Test-GoldenPrevRemovable -Accepted $accepted -CurrentStamp '2026-10-12T01:00:00Z' -CurrentSealed $true -VmCreationTimes @() | Should -BeFalse
+    }
+    It 'is false while the current golden is not sealed, for a missing lane, for a VM older than the golden, and without an acceptance' {
+        Test-GoldenPrevRemovable -Accepted $accepted -CurrentStamp '2026-10-10T22:55:00.0000000Z' -CurrentSealed $false -VmCreationTimes @() | Should -BeFalse
+        Test-GoldenPrevRemovable -Accepted @{ Golden = $accepted.Golden; Lanes = @('rust', 'app', 'model'); Complete = $false } -CurrentStamp $accepted.Golden -CurrentSealed $true -VmCreationTimes @() | Should -BeFalse
+        Test-GoldenPrevRemovable -Accepted $accepted -CurrentStamp $accepted.Golden -CurrentSealed $true -VmCreationTimes @('2026-10-10T22:00:00Z') | Should -BeFalse
+        Test-GoldenPrevRemovable -Accepted $null -CurrentStamp $accepted.Golden -CurrentSealed $true -VmCreationTimes @() | Should -BeFalse
     }
 }

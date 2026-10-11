@@ -260,9 +260,26 @@ Describe 'log adapters' {
     }
 }
 
+Describe 'golden adapters' {
+    It 'read the golden stamp and seal and every VM directory creation time as ISO UTC' {
+        $golden = Join-Path $TestDrive 'golden.vhdx'; 'g' | Set-Content $golden
+        (Get-Item $golden).LastWriteTimeUtc = [datetime]'2026-10-10T22:55:00Z'
+        Get-GoldenStamp -GoldenPath $golden | Should -Be '2026-10-10T22:55:00.0000000Z'
+        Get-GoldenSealed -GoldenPath $golden | Should -BeFalse
+        Set-ItemProperty -LiteralPath $golden -Name IsReadOnly -Value $true
+        Get-GoldenSealed -GoldenPath $golden | Should -BeTrue
+        Get-GoldenStamp -GoldenPath (Join-Path $TestDrive 'none.vhdx') | Should -Be $null
+        $vmDir = Join-Path $TestDrive 'vms'; New-Item -ItemType Directory -Force (Join-Path $vmDir 'a'), (Join-Path $vmDir 'b') | Out-Null
+        (Get-Item (Join-Path $vmDir 'a')).CreationTimeUtc = [datetime]'2026-10-11T01:00:00Z'
+        (Get-Item (Join-Path $vmDir 'b')).CreationTimeUtc = [datetime]'2026-10-11T02:00:00Z'
+        @(Get-VmCreationTimes -VmDir $vmDir | Sort-Object) | Should -Be @('2026-10-11T01:00:00.0000000Z', '2026-10-11T02:00:00.0000000Z')
+        @(Get-VmCreationTimes -VmDir (Join-Path $TestDrive 'none')).Count | Should -Be 0
+    }
+}
+
 Describe 'New-HyperVAdapters' {
     It 'exposes exactly the keys the orchestrator invokes' {
-        @((New-HyperVAdapters -Config $config).Keys | Sort-Object) | Should -Be @('CleanVmDirs', 'CommitCache', 'DiscardCache', 'GetGeneration', 'GetGuestError', 'GetHeartbeat', 'GetVmState', 'ListLogs', 'ListVms', 'NewVm', 'RemoveLog', 'RemoveVm', 'SendKvp', 'StartVm', 'StopVmForce')
+        @((New-HyperVAdapters -Config $config).Keys | Sort-Object) | Should -Be @('CleanVmDirs', 'CommitCache', 'DiscardCache', 'GetGeneration', 'GetGoldenSealed', 'GetGoldenStamp', 'GetGuestError', 'GetHeartbeat', 'GetVmCreationTimes', 'GetVmState', 'ListLogs', 'ListVms', 'NewVm', 'RemoveLog', 'RemoveVm', 'SendKvp', 'StartVm', 'StopVmForce')
     }
     It 'binds the config into the closures' {
         Set-CacheGeneration -CacheDir $config.CacheDir -Lane 'app' -Value 3

@@ -368,7 +368,7 @@ function Get-CiHostConfig {
 # Every top-level journal key, present from creation and after a read of
 # an older file: the state machine reads them with index syntax and a
 # missing key would throw under strict mode.
-$script:JournalDefaults = @{ Vms = @{}; Retries = @{}; SeenJobs = @{}; PublishedState = $null; PublishedAt = $null; PublishFailedAt = $null; LogsPrunedOn = $null }
+$script:JournalDefaults = @{ Vms = @{}; Retries = @{}; SeenJobs = @{}; PublishedState = $null; PublishedAt = $null; PublishFailedAt = $null; LogsPrunedOn = $null; GoldenAccepted = $null }
 
 function New-Journal {
     $journal = @{}
@@ -583,6 +583,46 @@ function Test-SiblingRunning {
     return $null
 }
 
+$script:AcceptanceLanes = 'rust', 'app', 'model', 'shell'
+
+function Register-GoldenAcceptance {
+    # Facts only (overflow spec OR-D7): a green job on a VM provisioned after
+    # the golden's seal vouches for its lane on that image. A new seal starts
+    # over. Stamps are compared as instants: a journal round trip turns them
+    # into [datetime]. Deletion is decided elsewhere, by Test-GoldenPrevRemovable.
+    [CmdletBinding()]
+    param([Parameter(Mandatory)]$Journal, [Parameter(Mandatory)][hashtable]$Adapters, [Parameter(Mandatory)]$Vm, [Parameter(Mandatory)][datetimeoffset]$Now)
+    $stamp = & $Adapters.GetGoldenStamp
+    if (-not $stamp) { return }
+    $sealed = ConvertTo-DateTimeOffset -Value $stamp
+    $accepted = $Journal['GoldenAccepted']
+    if ($null -eq $accepted -or (ConvertTo-DateTimeOffset -Value $accepted['Golden']) -ne $sealed) {
+        $accepted = @{ Golden = [string]$stamp; Lanes = @(); Complete = $false }
+        $Journal['GoldenAccepted'] = $accepted
+    }
+    if ((ConvertTo-DateTimeOffset -Value $Vm.StartedAt) -le $sealed) { return }
+    if (@($accepted['Lanes']) -notcontains [string]$Vm.Lane) { $accepted['Lanes'] = @(@($accepted['Lanes']) + [string]$Vm.Lane) }
+    if ($accepted['Complete']) { return }
+    foreach ($lane in $script:AcceptanceLanes) { if (@($accepted['Lanes']) -notcontains $lane) { return } }
+    $accepted['Complete'] = $true
+    & $Adapters.Log 'info' "golden: $($script:AcceptanceLanes[0..2] -join ', ') and $($script:AcceptanceLanes[3]) are green on the current image"
+}
+
+function Test-GoldenPrevRemovable {
+    # The one statement of when the previous image may go: the acceptance is
+    # of THIS image (stamps equal as instants), this image is sealed, every
+    # lane vouched, and no VM directory predates the seal.
+    [CmdletBinding()]
+    param($Accepted, [AllowNull()][string]$CurrentStamp, [bool]$CurrentSealed, [string[]]$VmCreationTimes = @(), [string[]]$Lanes = $script:AcceptanceLanes)
+    if ($null -eq $Accepted -or -not $CurrentStamp -or -not $CurrentSealed) { return $false }
+    if ($null -eq $Accepted['Golden']) { return $false }
+    $sealed = ConvertTo-DateTimeOffset -Value $CurrentStamp
+    if ((ConvertTo-DateTimeOffset -Value $Accepted['Golden']) -ne $sealed) { return $false }
+    foreach ($lane in $Lanes) { if (@($Accepted['Lanes']) -notcontains $lane) { return $false } }
+    foreach ($created in @($VmCreationTimes)) { if ((ConvertTo-DateTimeOffset -Value $created) -le $sealed) { return $false } }
+    return $true
+}
+
 function Complete-ActiveVm {
     # The VM reached Off and the loop did not force it off. Ask GitHub what
     # ran, then commit or discard. An API failure propagates: the entry
@@ -605,6 +645,7 @@ function Complete-ActiveVm {
         if ($parentGeneration -eq [int]$vm.ForkGeneration) {
             $generation = & $Adapters.CommitCache $vm.Lane $vm.CachePath
             & $Adapters.Log 'info' "${Name}: commit $($vm.Lane) generation $generation (after waiting for a sibling)"
+            try { Register-GoldenAcceptance -Journal $Journal -Adapters $Adapters -Vm $vm -Now $Now } catch { & $Adapters.Log 'warn' "golden: $_" }
         } else {
             & $Adapters.DiscardCache $vm.CachePath
             & $Adapters.Log 'info' "${Name}: discard (generation moved while waiting: fork $($vm.ForkGeneration), parent $parentGeneration)"
@@ -645,6 +686,9 @@ function Complete-ActiveVm {
             & $Adapters.Log 'info' "${Name}: job $($job.id) is $status on GitHub while its VM is off; waiting up to 6 ticks for it to complete"
         }
         return
+    }
+    if ($null -ne $job -and [string]$job.conclusion -eq 'success') {
+        try { Register-GoldenAcceptance -Journal $Journal -Adapters $Adapters -Vm $vm -Now $Now } catch { & $Adapters.Log 'warn' "golden: $_" }
     }
     $run = $null
     if ($null -ne $job) { $run = & $Adapters.GetRun ([int64]$job.run_id) }
@@ -1111,5 +1155,5 @@ function Set-LocalUserRights {
 Export-ModuleMember -Function Get-LaneFromLabels, New-RunnerName, Split-KvpChunks, Join-KvpChunks,
     ConvertTo-DateTimeOffset, Select-QueuedLaneJobs, Select-JobsToAdmit, Register-JobRetry, Test-VmExpired, Get-StaleRunnerNames, Test-CommitEligible, Resolve-RunnerJob, Test-IPv4InPrefix, Get-CiHostConfig, New-Journal, Read-Journal, Write-Journal, Write-CiLog,
     Get-FreeSlots, Remove-ActiveVm, Test-SiblingRunning, Complete-ActiveVm, Update-ActiveVm, Invoke-Admission, Invoke-OrchestratorTick, Invoke-StartupSweep, Select-SlateKvpItems,
-    Get-PublishedState, Publish-HomeState, Get-RunRepository, Test-TrustedRun, Get-ExpiredLogNames, Invoke-LogPrune,
+    Get-PublishedState, Publish-HomeState, Get-RunRepository, Test-TrustedRun, Get-ExpiredLogNames, Invoke-LogPrune, Register-GoldenAcceptance, Test-GoldenPrevRemovable,
     New-RandomPassword, Expand-UnattendTemplate, Add-SidToUserRight, Set-LocalUserRights

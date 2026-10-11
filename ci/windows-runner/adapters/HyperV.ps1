@@ -268,6 +268,27 @@ function Remove-OrchestratorLog {
     Remove-Item -LiteralPath (Join-Path $LogDir $Name) -Force
 }
 
+function Get-GoldenStamp {
+    [CmdletBinding()]
+    param([Parameter(Mandatory)][string]$GoldenPath)
+    if (-not (Test-Path -LiteralPath $GoldenPath)) { return $null }
+    return (Get-Item -LiteralPath $GoldenPath).LastWriteTimeUtc.ToString('o')
+}
+
+function Get-GoldenSealed {
+    [CmdletBinding()]
+    param([Parameter(Mandatory)][string]$GoldenPath)
+    if (-not (Test-Path -LiteralPath $GoldenPath)) { return $false }
+    return [bool](Get-Item -LiteralPath $GoldenPath).IsReadOnly
+}
+
+function Get-VmCreationTimes {
+    [CmdletBinding()]
+    param([Parameter(Mandatory)][string]$VmDir)
+    if (-not (Test-Path -LiteralPath $VmDir)) { return @() }
+    return @(Get-ChildItem -LiteralPath $VmDir -Directory | ForEach-Object { $_.CreationTimeUtc.ToString('o') })
+}
+
 function New-HyperVAdapters {
     [CmdletBinding()]
     param([Parameter(Mandatory)]$Config)
@@ -280,7 +301,8 @@ function New-HyperVAdapters {
     $commands = @{}
     foreach ($command in 'New-RunnerVm', 'Start-RunnerVm', 'Get-RunnerVmState', 'Get-RunnerVmHeartbeat', 'Send-RunnerVmKvp',
         'Get-RunnerVmGuestError', 'Stop-RunnerVmForce', 'Remove-RunnerVm', 'Get-RunnerVmNames', 'Clear-RunnerVmDirs',
-        'Get-CacheGeneration', 'Merge-RunnerCache', 'Remove-RunnerCache', 'Get-OrchestratorLogNames', 'Remove-OrchestratorLog') {
+        'Get-CacheGeneration', 'Merge-RunnerCache', 'Remove-RunnerCache', 'Get-OrchestratorLogNames', 'Remove-OrchestratorLog',
+        'Get-GoldenStamp', 'Get-GoldenSealed', 'Get-VmCreationTimes') {
         $commands[$command] = Get-Command -Name $command -CommandType Function -ErrorAction Stop
     }
     $adapters = @{
@@ -299,6 +321,9 @@ function New-HyperVAdapters {
         DiscardCache  = { param($child) & $commands['Remove-RunnerCache'] -ChildPath $child }
         ListLogs      = { & $commands['Get-OrchestratorLogNames'] -LogDir $Config.LogDir }
         RemoveLog     = { param($name) & $commands['Remove-OrchestratorLog'] -LogDir $Config.LogDir -Name $name }
+        GetGoldenStamp     = { & $commands['Get-GoldenStamp'] -GoldenPath $Config.GoldenPath }
+        GetGoldenSealed    = { & $commands['Get-GoldenSealed'] -GoldenPath $Config.GoldenPath }
+        GetVmCreationTimes = { & $commands['Get-VmCreationTimes'] -VmDir $Config.VmDir }
     }
     # Bind $Config and the commands into each scriptblock: the module
     # invokes them long after this function has returned.
