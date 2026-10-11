@@ -19,6 +19,7 @@ BeforeAll {
             Generation = 3
             JitConfig  = ('j' * 2500)
             GuestError = $null
+            Published  = [System.Collections.ArrayList]::new()
         }
         $script:calls = [System.Collections.ArrayList]::new()
         $script:logs = [System.Collections.ArrayList]::new()
@@ -51,6 +52,7 @@ BeforeAll {
             GetGeneration = { param($lane) & $script:record 'GetGeneration' @($lane); $script:world.Generation }
             CommitCache   = { param($lane, $child) & $script:record 'CommitCache' @($lane, $child); $script:world.Generation + 1 }
             DiscardCache  = { param($child) & $script:record 'DiscardCache' @($child) }
+            PublishState  = { param($json) & $script:record 'PublishState' @($json); [void]$script:world.Published.Add($json) }
             Log           = { param($level, $message) [void]$script:logs.Add("[$level] $message") }
         }
         return $a
@@ -670,6 +672,45 @@ Context 'handed-phase guards' {
         Invoke-OrchestratorTick -Config $config -Journal $journal -Adapters $adapters -Now $t0.AddSeconds(330)
         Invoke-OrchestratorTick -Config $config -Journal $journal -Adapters $adapters -Now $t0.AddSeconds(340)
         (Get-Calls 'GetGuestError').Count | Should -Be $reads
+    }
+}
+
+Context 'publishing the state' {
+    It 'publishes after the first tick, again only when the state changed, and at least once a minute' {
+        Invoke-OrchestratorTick -Config $config -Journal $journal -Adapters $adapters -Now $t0
+        (Get-Calls 'PublishState').Count | Should -Be 1
+        $journal.PublishedState | Should -Be ([string]$world.Published[0])
+        ($journal.PublishedState | ConvertFrom-Json).slots | Should -Be 2
+        Invoke-OrchestratorTick -Config $config -Journal $journal -Adapters $adapters -Now $t0.AddSeconds(10)
+        (Get-Calls 'PublishState').Count | Should -Be 1
+        $world.Queued = @((New-QueuedJob 1 10 'app'))
+        Invoke-OrchestratorTick -Config $config -Journal $journal -Adapters $adapters -Now $t0.AddSeconds(20)
+        (Get-Calls 'PublishState').Count | Should -Be 2
+        $state = $journal.PublishedState | ConvertFrom-Json
+        @($state.running).Count | Should -Be 1
+        $state.running[0].lane | Should -Be 'app'
+        $world.Queued = @()
+        Invoke-OrchestratorTick -Config $config -Journal $journal -Adapters $adapters -Now $t0.AddSeconds(30)
+        (Get-Calls 'PublishState').Count | Should -Be 2
+        Invoke-OrchestratorTick -Config $config -Journal $journal -Adapters $adapters -Now $t0.AddSeconds(81)
+        (Get-Calls 'PublishState').Count | Should -Be 3 -Because 'the heartbeat refreshes after 60 s even when nothing changed'
+    }
+    It 'publishes the queue it would admit with unlimited slots, not the jobs it skipped' {
+        $world.Queued = @((New-QueuedJob 1 10 'app'), (New-QueuedJob 2 10 'rust'), (New-QueuedJob 3 10 'model'), (New-QueuedJob 4 10 'app'))
+        $journal.Retries['4'] = @{ Count = 3; NextAt = $t0.AddDays(-1).ToString('o') }
+        Invoke-OrchestratorTick -Config $config -Journal $journal -Adapters $adapters -Now $t0
+        $state = $journal.PublishedState | ConvertFrom-Json
+        @($state.running).Count | Should -Be 2
+        @($state.queued | ForEach-Object { $_.lane }) | Should -Be @('model')
+    }
+    It 'logs a failed publish once a minute and keeps ticking' {
+        $adapters.PublishState = { param($json) throw '403' }
+        { Invoke-OrchestratorTick -Config $config -Journal $journal -Adapters $adapters -Now $t0 } | Should -Not -Throw
+        Invoke-OrchestratorTick -Config $config -Journal $journal -Adapters $adapters -Now $t0.AddSeconds(10)
+        ([regex]::Matches(($logs -join "`n"), 'publish: 403')).Count | Should -Be 1
+        Invoke-OrchestratorTick -Config $config -Journal $journal -Adapters $adapters -Now $t0.AddSeconds(70)
+        ([regex]::Matches(($logs -join "`n"), 'publish: 403')).Count | Should -Be 2
+        $journal.PublishedState | Should -Be $null
     }
 }
 

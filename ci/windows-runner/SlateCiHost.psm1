@@ -344,8 +344,18 @@ function Get-CiHostConfig {
     return $config
 }
 
+# Every top-level journal key, present from creation and after a read of
+# an older file: the state machine reads them with index syntax and a
+# missing key would throw under strict mode.
+$script:JournalDefaults = @{ Vms = @{}; Retries = @{}; SeenJobs = @{}; PublishedState = $null; PublishedAt = $null; PublishFailedAt = $null }
+
 function New-Journal {
-    return @{ Vms = @{}; Retries = @{}; SeenJobs = @{} }
+    $journal = @{}
+    foreach ($key in $script:JournalDefaults.Keys) {
+        $value = $script:JournalDefaults[$key]
+        $journal[$key] = $(if ($value -is [hashtable]) { @{} } else { $value })
+    }
+    return $journal
 }
 
 function Read-Journal {
@@ -370,8 +380,9 @@ function Read-Journal {
         Move-Item -LiteralPath $Path -Destination $aside -Force
         return (New-Journal)
     }
-    foreach ($key in 'Vms', 'Retries', 'SeenJobs') {
-        if (-not $journal.Contains($key) -or $null -eq $journal[$key]) { $journal[$key] = @{} }
+    foreach ($key in $script:JournalDefaults.Keys) {
+        if (-not $journal.Contains($key)) { $journal[$key] = $(if ($script:JournalDefaults[$key] -is [hashtable]) { @{} } else { $null }) }
+        elseif ($null -eq $journal[$key] -and $script:JournalDefaults[$key] -is [hashtable]) { $journal[$key] = @{} }
     }
     return $journal
 }
@@ -423,6 +434,62 @@ function Get-FreeSlots {
         if (-not $used.ContainsKey([string]$slot.Index)) { $free += $slot }
     }
     return @($free)
+}
+
+function ConvertTo-StateTime {
+    param([Parameter(Mandatory)][datetimeoffset]$Value)
+    return $Value.ToUniversalTime().ToString('yyyy-MM-ddTHH:mm:ssZ')
+}
+
+function Get-PublishedState {
+    # The state the router reads (overflow spec §4): the heartbeat, the
+    # slots the host can serve with (a VM in teardown holds one it cannot),
+    # every VM that holds a slot with its provisioning time, and the jobs it
+    # would admit with unlimited slots, oldest first. A PendingCommit VM is
+    # Off and holds no slot (Get-FreeSlots agrees).
+    [CmdletBinding()]
+    param([Parameter(Mandatory)]$Config, [Parameter(Mandatory)]$Journal, [object[]]$Queued = @(), [Parameter(Mandatory)][datetimeoffset]$Now)
+    $held = 0
+    $running = @()
+    foreach ($vm in @($Journal.Vms.Values | Sort-Object { [string]$_['StartedAt'] })) {
+        if ($vm.Contains('PendingCommit') -and $vm['PendingCommit']) { continue }
+        if ([string]$vm['Phase'] -eq 'discarding') { $held++; continue }
+        $running += [ordered]@{ lane = [string]$vm['Lane']; since = ConvertTo-StateTime (ConvertTo-DateTimeOffset -Value $vm['StartedAt']) }
+    }
+    $slots = @($Config.Slots).Count - $held
+    # Not $queued: PowerShell names ignore case, so it would be $Queued, the parameter.
+    $waiting = @()
+    foreach ($job in @($Queued | Sort-Object CreatedAt, JobId)) {
+        $waiting += [ordered]@{ lane = [string]$job.Lane; since = ConvertTo-StateTime $job.CreatedAt }
+    }
+    return [ordered]@{ v = 1; at = ConvertTo-StateTime $Now; serving = ($slots -ge 1); slots = [int]$slots; running = @($running); queued = @($waiting) }
+}
+
+function Publish-HomeState {
+    # Once per change, and at least once a minute as a heartbeat; a failed
+    # write is logged once a minute and never stops the tick (the router
+    # treats a stale state as a dead host, the conservative outcome).
+    [CmdletBinding()]
+    param([Parameter(Mandatory)]$Config, [Parameter(Mandatory)]$Journal, [Parameter(Mandatory)][hashtable]$Adapters, [Parameter(Mandatory)]$State, [Parameter(Mandatory)][datetimeoffset]$Now)
+    $json = $State | ConvertTo-Json -Compress -Depth 5
+    $previous = [string]$Journal['PublishedState']
+    $publishedAt = $Journal['PublishedAt']
+    $fresh = $publishedAt -and ($Now - (ConvertTo-DateTimeOffset -Value $publishedAt)).TotalSeconds -lt 60
+    # The heartbeat field alone differs every tick: compare without it.
+    $sameButTime = $previous -and (($previous -replace '"at":"[^"]*"', '') -eq ($json -replace '"at":"[^"]*"', ''))
+    if ($sameButTime -and $fresh) { return }
+    try {
+        & $Adapters.PublishState $json
+        $Journal['PublishedState'] = $json
+        $Journal['PublishedAt'] = $Now.ToString('o')
+        $Journal['PublishFailedAt'] = $null
+    } catch {
+        $failedAt = $Journal['PublishFailedAt']
+        if (-not $failedAt -or ($Now - (ConvertTo-DateTimeOffset -Value $failedAt)).TotalSeconds -ge 60) {
+            $Journal['PublishFailedAt'] = $Now.ToString('o')
+            & $Adapters.Log 'warn' "publish: $_"
+        }
+    }
 }
 
 function Remove-ActiveVm {
@@ -762,6 +829,7 @@ function Invoke-Admission {
             }
         }
     }
+    return @(Select-JobsToAdmit -Candidates $queued -ActiveVms $Journal.Vms -FreeSlots ([int]::MaxValue) -Retries $Journal.Retries -Now $Now -RetryCap ([int]$Config.RetryCap))
 }
 
 function Invoke-OrchestratorTick {
@@ -779,8 +847,11 @@ function Invoke-OrchestratorTick {
         try { Update-ActiveVm -Config $Config -Journal $Journal -Adapters $Adapters -Name $name -Now $Now }
         catch { & $Adapters.Log 'error' "${name}: $_" }
     }
-    try { Invoke-Admission -Config $Config -Journal $Journal -Adapters $Adapters -Now $Now }
+    $queued = @()
+    try { $queued = @(Invoke-Admission -Config $Config -Journal $Journal -Adapters $Adapters -Now $Now) }
     catch { & $Adapters.Log 'error' "admission: $_" }
+    try { Publish-HomeState -Config $Config -Journal $Journal -Adapters $Adapters -State (Get-PublishedState -Config $Config -Journal $Journal -Queued $queued -Now $Now) -Now $Now }
+    catch { & $Adapters.Log 'error' "publish: $_" }
 }
 
 function Invoke-StartupSweep {
@@ -953,4 +1024,5 @@ function Set-LocalUserRights {
 Export-ModuleMember -Function Get-LaneFromLabels, New-RunnerName, Split-KvpChunks, Join-KvpChunks,
     ConvertTo-DateTimeOffset, Select-QueuedLaneJobs, Select-JobsToAdmit, Register-JobRetry, Test-VmExpired, Get-StaleRunnerNames, Test-CommitEligible, Resolve-RunnerJob, Test-IPv4InPrefix, Get-CiHostConfig, New-Journal, Read-Journal, Write-Journal, Write-CiLog,
     Get-FreeSlots, Remove-ActiveVm, Test-SiblingRunning, Complete-ActiveVm, Update-ActiveVm, Invoke-Admission, Invoke-OrchestratorTick, Invoke-StartupSweep, Select-SlateKvpItems,
+    Get-PublishedState, Publish-HomeState,
     New-RandomPassword, Expand-UnattendTemplate, Add-SidToUserRight, Set-LocalUserRights

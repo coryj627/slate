@@ -487,6 +487,13 @@ Describe 'Get-CiHostConfig' {
 }
 
 Describe 'Journal' {
+    It 'New-Journal and Read-Journal share one set of top-level keys' {
+        $p = Join-Path $TestDrive 'bare.json'
+        '{"Vms":{},"Retries":{},"SeenJobs":{}}' | Set-Content $p
+        @((New-Journal).Keys | Sort-Object) | Should -Be @('PublishFailedAt', 'PublishedAt', 'PublishedState', 'Retries', 'SeenJobs', 'Vms' | Sort-Object)
+        @((Read-Journal -Path $p).Keys | Sort-Object) | Should -Be @((New-Journal).Keys | Sort-Object)
+        (Read-Journal -Path $p).PublishedState | Should -Be $null
+    }
     It 'returns a fresh journal when the file does not exist' {
         $j = Read-Journal -Path (Join-Path $TestDrive 'none.json')
         $j.Vms.Count | Should -Be 0
@@ -556,6 +563,47 @@ Describe 'Journal' {
             { $null = $ps.Invoke() } | Should -Throw
         } finally { $ps.Dispose() }
         Get-Content -Raw $p | Should -Be $before
+    }
+}
+
+Describe 'Get-PublishedState' {
+    BeforeAll {
+        $script:cfg = Get-CiHostConfig -Path (Join-Path $PSScriptRoot '..' 'config.json')
+        $script:now = [datetimeoffset]::Parse('2026-10-11T15:04:05Z')
+    }
+    It 'reports an idle pool' {
+        $s = Get-PublishedState -Config $cfg -Journal (New-Journal) -Queued @() -Now $now
+        $s.v | Should -Be 1
+        $s.at | Should -Be '2026-10-11T15:04:05Z'
+        $s.serving | Should -BeTrue
+        $s.slots | Should -Be 2
+        @($s.running).Count | Should -Be 0
+        @($s.queued).Count | Should -Be 0
+        ($s | ConvertTo-Json -Compress -Depth 5) | Should -Be '{"v":1,"at":"2026-10-11T15:04:05Z","serving":true,"slots":2,"running":[],"queued":[]}'
+    }
+    It 'lists every VM that holds a slot with its provisioning time, skips a pending commit, and counts a VM in teardown against the slots' {
+        $j = New-Journal
+        $j.Vms['a'] = @{ Name = 'a'; Lane = 'app'; Phase = 'handed'; StartedAt = '2026-10-11T14:48:51+00:00'; PendingCommit = $false }
+        $j.Vms['b'] = @{ Name = 'b'; Lane = 'model'; Phase = 'handed'; StartedAt = '2026-10-11T14:50:00Z'; PendingCommit = $true }
+        $j.Vms['c'] = @{ Name = 'c'; Lane = 'rust'; Phase = 'discarding'; StartedAt = '2026-10-11T14:00:00Z'; PendingCommit = $false }
+        $s = Get-PublishedState -Config $cfg -Journal $j -Queued @() -Now $now
+        $s.slots | Should -Be 1
+        $s.serving | Should -BeTrue
+        @($s.running | ForEach-Object { "$($_.lane)@$($_.since)" }) | Should -Be @('app@2026-10-11T14:48:51Z')
+    }
+    It 'is not serving when every slot is held by a teardown' {
+        $j = New-Journal
+        $j.Vms['c'] = @{ Name = 'c'; Lane = 'rust'; Phase = 'discarding'; StartedAt = '2026-10-11T14:00:00Z'; PendingCommit = $false }
+        $j.Vms['d'] = @{ Name = 'd'; Lane = 'app'; Phase = 'discarding'; StartedAt = '2026-10-11T14:00:00Z'; PendingCommit = $false }
+        $s = Get-PublishedState -Config $cfg -Journal $j -Queued @() -Now $now
+        $s.slots | Should -Be 0
+        $s.serving | Should -BeFalse
+    }
+    It 'lists the queue oldest first with creation times' {
+        $queued = @([pscustomobject]@{ JobId = 2; Lane = 'model'; CreatedAt = [datetimeoffset]::Parse('2026-10-11T14:40:00Z') },
+                    [pscustomobject]@{ JobId = 1; Lane = 'rust'; CreatedAt = [datetimeoffset]::Parse('2026-10-11T14:39:00Z') })
+        $s = Get-PublishedState -Config $cfg -Journal (New-Journal) -Queued $queued -Now $now
+        @($s.queued | ForEach-Object { "$($_.lane)@$($_.since)" }) | Should -Be @('rust@2026-10-11T14:39:00Z', 'model@2026-10-11T14:40:00Z')
     }
 }
 
