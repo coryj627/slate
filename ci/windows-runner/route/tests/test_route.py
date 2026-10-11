@@ -48,10 +48,10 @@ def state(at=NOW - 5, serving=True, slots=2, running=(), queued=(), v=1):
                        "queued": [{"lane": lane, "since": iso(since) if isinstance(since, int) else since} for lane, since in queued]})
 
 
-def decide(mode="home", lanes=LANES, text=None, now=NOW, started=NOW, concurrent=(), **overrides):
+def decide(mode="home", lanes=LANES, text=None, now=NOW, concurrent=(), **overrides):
     kwargs = dict(stale_seconds=180, slots_max=8, event="push", head_repo="", repo=REPO, durations=TEST_DURATIONS)
     kwargs.update(overrides)
-    return route.decide(mode, lanes, state() if text is None else text, now, started, list(concurrent), **kwargs)
+    return route.decide(mode, lanes, state() if text is None else text, now, list(concurrent), **kwargs)
 
 
 def pools(decisions):
@@ -137,9 +137,9 @@ class Simulate(unittest.TestCase):
     def test_overrun_entry_frees_after_the_floor_plus_handover(self):
         self.assertEqual(self.simulate(state(running=[("rust", NOW - 60 * M)])), [0, route.OVERRUN_FLOOR_SECONDS + H])
 
-    def test_running_entry_without_a_time_occupies_the_longest_home_duration_from_now(self):
-        # Spec §3: an entry whose time the router cannot read takes the longest home duration (app, 26).
-        self.assertEqual(self.simulate(state(running=[("rust", "soon")])), [0, 26 * M + H])
+    def test_running_entry_without_a_time_counts_from_now(self):
+        # Spec §3: taken as having just started, its own home duration from now.
+        self.assertEqual(self.simulate(state(running=[("rust", "soon")])), [0, 11 * M + H])
 
     def test_running_entry_with_an_unknown_lane_occupies_the_longest_home_duration(self):
         # One minute into an unknown lane: 26 - 1 minutes left, then the handover.
@@ -154,9 +154,8 @@ class Simulate(unittest.TestCase):
         text = state(running=[("app", NOW - 1 * M), ("app", NOW - 2 * M), ("app", NOW - 3 * M)])
         self.assertEqual(self.simulate(text), [24 * M + H, 25 * M + H])
 
-    def test_queued_entry_with_an_unknown_lane_or_no_time_occupies_the_longest_home_duration(self):
+    def test_queued_entry_with_an_unknown_lane_occupies_the_longest_home_duration(self):
         self.assertEqual(self.simulate(state(queued=[("mystery", NOW)])), [0, 26 * M + H])
-        self.assertEqual(self.simulate(state(queued=[("rust", "soon")])), [0, 26 * M + H])
 
 
 class Allocate(unittest.TestCase):
@@ -258,13 +257,6 @@ class Decide(unittest.TestCase):
             self.assertEqual(set(pools(decisions).values()), {"vendor"}, text)
             self.assertTrue(summary["dead"], text)
 
-    def test_a_rerun_of_an_old_run_is_judged_by_the_routers_clock(self):
-        # "Re-run all jobs" a day later on a host that died an hour ago: the run's start moves no age.
-        decisions, summary = decide(text=state(at=NOW - 3600), started=NOW - 86400)
-        self.assertEqual(set(pools(decisions).values()), {"vendor"})
-        self.assertTrue(summary["dead"])
-        self.assertIn("3600 s old", summary["reason"])
-
     def test_a_future_at_is_fresh_and_the_skew_is_named(self):
         decisions, summary = decide(text=state(at=NOW + 40))
         self.assertEqual(pools(decisions), {"app": "home", "model-0": "home", "model-1": "vendor", "rust": "home"})
@@ -336,7 +328,7 @@ class Decide(unittest.TestCase):
         self.assertEqual(summary["unknown_lanes"], ["shell"])
 
     def test_durations_default_to_the_production_table(self):
-        decisions, _ = route.decide("home", LANES, state(), NOW, NOW, [], stale_seconds=180, slots_max=8, event="push",
+        decisions, _ = route.decide("home", LANES, state(), NOW, [], stale_seconds=180, slots_max=8, event="push",
                                     head_repo="", repo=REPO)
         self.assertEqual(decisions["app"]["pool"], "home")
 

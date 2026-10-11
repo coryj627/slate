@@ -163,8 +163,8 @@ def home_duration(lane_key, durations):
 
 def entry_duration(entry, durations):
     """A published entry's home duration; the longest in the table when its
-    lane is unknown or its time unreadable (spec §3: finite and conservative)."""
-    if entry["lane"] in durations and entry["since"] is not None:
+    lane is unknown (spec §3: finite and conservative)."""
+    if entry["lane"] in durations:
         return home_duration(entry["lane"], durations)
     return max(home_duration(lane_key, durations) for lane_key in durations)
 
@@ -279,14 +279,8 @@ def _summary(mode):
             "concurrent": None, "free": None, "deadline": None, "dead": False, "unknown_lanes": [], "reason": ""}
 
 
-def decide(mode, lanes, state_text, now, run_started, concurrent, *, stale_seconds, slots_max, event, head_repo, repo,
-           durations=None):
-    """The whole rule (spec §3) as a pure function.
-
-    Every age is measured against `now`, the router's clock. `run_started`
-    (this attempt's start) moves no age: it is what fetch_concurrent ordered
-    the earlier routers by, and the replay line records it.
-    """
+def decide(mode, lanes, state_text, now, concurrent, *, stale_seconds, slots_max, event, head_repo, repo, durations=None):
+    """The whole rule (spec §3) as a pure function; every age is measured against `now`, the router's clock."""
     durations = DURATIONS if durations is None else durations
     normalized = normalize_mode(mode)
     summary = _summary(normalized or "(unset)")
@@ -498,7 +492,7 @@ def main(env=None, get=gh_api, clock=time.time):
                     concurrent = fetch_concurrent(repo, run_id, run_started, get)
                 except Exception as failure:  # noqa: BLE001 - optional read; assume no earlier router
                     print("::notice::%s" % annotation_text("earlier routers unknown (%s); assuming none" % failure))
-        decisions, summary = decide(mode, lanes, state_text, now, run_started, concurrent, **rule)
+        decisions, summary = decide(mode, lanes, state_text, now, concurrent, **rule)
     except Exception as failure:  # noqa: BLE001 - every failure routes to the vendor, never fails the run
         reason = "%s: %s; every lane goes to the vendor" % (type(failure).__name__, failure)
         print("::warning title=Windows lane router::%s" % annotation_text(reason))
