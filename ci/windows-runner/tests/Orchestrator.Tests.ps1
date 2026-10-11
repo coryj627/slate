@@ -691,10 +691,12 @@ Context 'handoff reconciliation' {
         $adapters.GetRun = { param($id) & $script:record 'GetRun' @($id); throw '502' }
         $world.InProgress = @([pscustomobject]@{ id = 2; run_id = 99; status = 'in_progress'; labels = @('self-hosted', 'Windows'); created_at = $t0.ToString('o'); runner_name = $name })
         Invoke-OrchestratorTick -Config $config -Journal $journal -Adapters $adapters -Now $t0.AddSeconds(20)
+        (Get-Calls 'CommitCache').Count | Should -Be 0
         $journal.Vms.ContainsKey($name) | Should -BeFalse
         $journal.Retries.ContainsKey('1') | Should -BeFalse
         @($logs) | Should -Contain "[warn] handoff: ${name} runs job 2 of an unknown repository (no lane label); forcing it off"
         @($logs) | Should -Contain "[warn] ${name}: discard (runner taken by job 2 of an unknown repository (no lane label))"
+        (Get-Calls 'NewVm').Count | Should -Be 2
     }
     It 'decides from the answer admission remembered, without reading the run again' {
         # Job 2 was seen queued (no slot was free for it), so its run was read then.
@@ -919,6 +921,18 @@ Context 'publishing the state' {
         Invoke-OrchestratorTick -Config $config -Journal $journal -Adapters $adapters -Now $t0.AddSeconds(70)
         ([regex]::Matches(($logs -join "`n"), 'publish: 403')).Count | Should -Be 2
         $journal.PublishedState | Should -Be $null
+    }
+    It 'counts a PublishFailedAt that does not parse as never, so a failed publish cannot throw out of the tick' {
+        # A hand-edited journal: the failure gate runs inside the tick's last
+        # catch, so reading it must never throw.
+        $journal.PublishFailedAt = 'garbage'
+        $adapters.PublishState = { param($json) & $script:record 'PublishState' @($json); throw '403' }
+        { Invoke-OrchestratorTick -Config $config -Journal $journal -Adapters $adapters -Now $t0 } | Should -Not -Throw
+        { Invoke-OrchestratorTick -Config $config -Journal $journal -Adapters $adapters -Now $t0.AddSeconds(10) } | Should -Not -Throw
+        (Get-Calls 'PublishState').Count | Should -Be 2
+        ([regex]::Matches(($logs -join "`n"), 'publish: 403')).Count | Should -Be 1
+        ($logs -join "`n") | Should -Not -Match 'not recognized as a valid DateTime'
+        (ConvertTo-DateTimeOffset -Value $journal.PublishFailedAt) | Should -Be $t0
     }
     It 'publishes nothing on a tick whose admission threw, so the state ages into stale, and publishes again on the next good tick' {
         Invoke-OrchestratorTick -Config $config -Journal $journal -Adapters $adapters -Now $t0

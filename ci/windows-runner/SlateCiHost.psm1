@@ -623,10 +623,15 @@ function Publish-HomeState {
 function Write-PublishFailure {
     # One log line a minute (PublishFailedAt) for a publish that keeps
     # failing, whether the write failed or the state could not be built.
+    # It runs inside the tick's last catch, so it never throws: a value that
+    # does not parse (a hand-edited journal) counts as no earlier failure.
     [CmdletBinding()]
     param([Parameter(Mandatory)]$Journal, [Parameter(Mandatory)][hashtable]$Adapters, [Parameter(Mandatory)][datetimeoffset]$Now, [Parameter(Mandatory)][string]$Level, [Parameter(Mandatory)]$Failure)
-    $failedAt = $Journal['PublishFailedAt']
-    if ($failedAt -and ($Now - (ConvertTo-DateTimeOffset -Value $failedAt)).TotalSeconds -lt 60) { return }
+    $failedAt = $null
+    if ($Journal['PublishFailedAt']) {
+        try { $failedAt = ConvertTo-DateTimeOffset -Value $Journal['PublishFailedAt'] } catch { $failedAt = $null }
+    }
+    if ($null -ne $failedAt -and ($Now - $failedAt).TotalSeconds -lt 60) { return }
     $Journal['PublishFailedAt'] = $Now.ToString('o')
     & $Adapters.Log $Level "publish: $Failure"
 }
