@@ -112,7 +112,10 @@ Describe 'golden scripts' {
         @($code | Where-Object { $_ -match 'python\.org/ftp' }) | Should -BeNullOrEmpty
         $text | Should -Match ([regex]::Escape("`$toolCache = 'C:\actions-runner\_work\_tool'"))
         $text | Should -Match ([regex]::Escape('$env:AGENT_TOOLSDIRECTORY = $toolCache'))
-        $text | Should -Match ([regex]::Escape("-File (Join-Path `$pyDir 'setup.ps1')"))
+        # setup.ps1 copies the installer by a path relative to the current directory.
+        $text | Should -Match ([regex]::Escape("'-File', (Join-Path `$pyDir 'setup.ps1')"))
+        $text | Should -Match ([regex]::Escape('-WorkingDirectory $pyDir -Wait -PassThru -NoNewWindow -RedirectStandardOutput $setupOut -RedirectStandardError $setupErr'))
+        $text | Should -Match ([regex]::Escape('Write-Log "  python-toolcache: $_"'))
         $text | Should -Match ([regex]::Escape('if (-not (Test-Path -LiteralPath "$pyHome.complete"))'))
         $install = $text.IndexOf('$env:AGENT_TOOLSDIRECTORY = $toolCache')
         $install | Should -BeGreaterThan $text.IndexOf("Expand-Archive -Path `$zip -DestinationPath 'C:\actions-runner'")
