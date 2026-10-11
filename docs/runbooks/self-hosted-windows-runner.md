@@ -426,7 +426,7 @@ saw before changing anything.
   Python, Git and runner downloads, and phase 2 past rustup-init, without
   `sha256 mismatch`. If one stops there, compare its hash in
   `ci/windows-runner/golden/versions.json` (`pythonToolcacheSha256`,
-  `gitSha256`, `runnerSha256`, `rustupInitSha256`) with the one published where its
+  `gitSha256`, `pwshSha256`, `runnerSha256`, `rustupInitSha256`) with the one published where its
   `sources` entry points; for the runner, the SHA-256 that its GitHub
   release page lists for `actions-runner-win-x64-2.338.0.zip`. Do that
   before changing either.
@@ -1027,7 +1027,7 @@ For a pin change, update `ci/windows-runner/golden/versions.json` on a
 branch and merge it. The Pester suite checks its Rust and bindgen pins
 against the repository's. The runner, Python, Git and rustup-init pins each
 carry a SHA-256 (`runnerSha256`, `pythonToolcacheSha256`, `gitSha256`,
-`rustupInitSha256`): when a version moves, take its new hash from the page
+`pwshSha256`, `rustupInitSha256`): when a version moves, take its new hash from the page
 its `sources` entry names, and update that entry too. Python is the
 `win32-x64` archive of `actions/python-versions` for the pinned version
 (`pythonToolcacheUrl`, whose release tag carries a build number): the
@@ -1264,6 +1264,11 @@ and `"status": "401"`. Rotate it before then.
   tool cache so the step finds it and installs nothing; a job that hangs
   there runs on an image built before that, so rebuild the golden disk
   ("Refreshing the golden image") and cancel the run.
+- **A job fails its first step with `##[error]pwsh: command not found`.**
+  The image has Windows PowerShell 5.1 only and no PowerShell 7, which
+  every lane's `shell: pwsh` needs. An image built from the current scripts
+  carries the pinned PowerShell 7 MSI (`pwshVersion`, `pwshSha256`); a job
+  that fails this way runs on an older one. Rebuild the golden disk.
 - **`token missing at …` every minute.** No token is stored: run
   `store-token.ps1`. After `-ResetAccount`, store the token before you
   enable the loop task.

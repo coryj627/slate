@@ -89,6 +89,14 @@ try {
     Get-Download -Url ('https://github.com/git-for-windows/git/releases/download/{0}/Git-{1}-64-bit.exe' -f $versions.gitTag, $versions.gitVersion) -Path (Join-Path $dl 'git.exe') -Sha256 $versions.gitSha256
     Invoke-Installer (Join-Path $dl 'git.exe') '/VERYSILENT /NORESTART /NOCANCEL /SP- /o:PathOption=Cmd'
 
+    # PowerShell 7: every Windows lane runs its steps with `shell: pwsh`,
+    # which the runner resolves from PATH (ADD_PATH=1). No Microsoft
+    # Update hook, no telemetry.
+    $pwshMsi = Join-Path $dl 'pwsh.msi'
+    Get-Download -Url ('https://github.com/PowerShell/PowerShell/releases/download/v{0}/PowerShell-{0}-win-x64.msi' -f $versions.pwshVersion) -Path $pwshMsi -Sha256 $versions.pwshSha256
+    Invoke-Installer 'msiexec.exe' ('/i "{0}" /quiet /norestart ADD_PATH=1 REGISTER_MANIFEST=1 USE_MU=0 ENABLE_MU=0 DISABLE_TELEMETRY=1' -f $pwshMsi)
+    if (-not (Test-Path -LiteralPath 'C:\Program Files\PowerShell\7\pwsh.exe')) { throw 'PowerShell 7 did not install to C:\Program Files\PowerShell\7' }
+
     # The runner, hash-verified, plus the guest tasks' scripts and the module.
     $zip = Join-Path $dl 'runner.zip'
     Get-Download -Url ('https://github.com/actions/runner/releases/download/v{0}/actions-runner-win-x64-{0}.zip' -f $versions.runnerVersion) -Path $zip -Sha256 $versions.runnerSha256

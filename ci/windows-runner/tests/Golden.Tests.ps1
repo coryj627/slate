@@ -16,22 +16,24 @@ Describe 'versions.json' {
     BeforeAll { $script:versions = Get-Content -Raw (Join-Path $goldenDir 'versions.json') | ConvertFrom-Json }
     It 'has every key the provisioning scripts read' {
         foreach ($k in 'runnerVersion', 'runnerSha256', 'rustToolchain', 'bindgenTag', 'dotnetChannel', 'pythonVersion', 'pythonToolcacheUrl', 'pythonToolcacheSha256',
-            'gitVersion', 'gitTag', 'gitSha256', 'rustupVersion', 'rustupInitSha256', 'vsBuildToolsUrl', 'dns') {
+            'gitVersion', 'gitTag', 'gitSha256', 'pwshVersion', 'pwshSha256', 'rustupVersion', 'rustupInitSha256', 'vsBuildToolsUrl', 'dns') {
             $versions.PSObject.Properties[$k] | Should -Not -BeNullOrEmpty -Because $k
         }
-        foreach ($k in 'runnerSha256', 'pythonToolcacheSha256', 'gitSha256', 'rustupInitSha256') {
+        foreach ($k in 'runnerSha256', 'pythonToolcacheSha256', 'gitSha256', 'pwshSha256', 'rustupInitSha256') {
             $versions.$k | Should -Match '^[0-9a-f]{64}$' -Because $k
         }
         $versions.rustupVersion | Should -Match '^\d+\.\d+\.\d+$'
+        $versions.pwshVersion | Should -Match '^7\.\d+\.\d+$'
         # The build setup-python would install: actions/python-versions' win32-x64 archive of the pinned version.
         $versions.pythonToolcacheUrl | Should -BeLike "https://github.com/actions/python-versions/releases/download/$($versions.pythonVersion)-*/python-$($versions.pythonVersion)-win32-x64.zip"
     }
     It 'records where each pinned download hash was published, for the pinned version' {
         # JSON has no comments: the sources object names each hash's origin.
-        foreach ($k in 'pythonToolcacheSha256', 'gitSha256', 'rustupInitSha256') {
+        foreach ($k in 'pythonToolcacheSha256', 'gitSha256', 'pwshSha256', 'rustupInitSha256') {
             $versions.sources.$k | Should -Match '^https://' -Because $k
         }
         $versions.sources.pythonToolcacheSha256 | Should -BeLike "*/actions/python-versions/releases/tag/$($versions.pythonVersion)-*"
+        $versions.sources.pwshSha256 | Should -BeLike "*/PowerShell/PowerShell/releases/tag/v$($versions.pwshVersion)"
         $versions.sources.gitSha256 | Should -BeLike "*/releases/tag/$($versions.gitTag)"
         $versions.sources.rustupInitSha256 | Should -BeLike "*/rustup/archive/$($versions.rustupVersion)/x86_64-pc-windows-msvc/rustup-init.exe.sha256"
     }
@@ -102,6 +104,15 @@ Describe 'golden scripts' {
         @($code | Where-Object { $_ -match '^\s*Get-Download -Url \$versions\.pythonToolcacheUrl -Path \$pyZip -Sha256 \$versions\.pythonToolcacheSha256\s*$' }).Count | Should -Be 1
         @($code | Where-Object { $_ -match '^\s*Get-Download -Url .*-Path \(Join-Path \$dl ''git\.exe''\) -Sha256 \$versions\.gitSha256\s*$' }).Count | Should -Be 1
         @($code | Where-Object { $_ -match '^\s*Get-Download -Url .*-Path \$zip -Sha256 \$versions\.runnerSha256\s*$' }).Count | Should -Be 1
+        @($code | Where-Object { $_ -match '^\s*Get-Download -Url .*PowerShell-\{0\}-win-x64\.msi.*-Path \$pwshMsi -Sha256 \$versions\.pwshSha256\s*$' }).Count | Should -Be 1
+    }
+    It 'phase 1 installs PowerShell 7 on the machine PATH, which every lane''s `shell: pwsh` resolves' {
+        # The first home job failed its first pwsh step with "pwsh: command
+        # not found": the image had Windows PowerShell 5.1 only.
+        $text = Get-Content -Raw (Join-Path $goldenDir 'provision-guest.ps1')
+        $text | Should -Match ([regex]::Escape("Invoke-Installer 'msiexec.exe' ('/i `"{0}`" /quiet /norestart ADD_PATH=1 REGISTER_MANIFEST=1 USE_MU=0 ENABLE_MU=0 DISABLE_TELEMETRY=1' -f `$pwshMsi)"))
+        $text | Should -Match ([regex]::Escape("if (-not (Test-Path -LiteralPath 'C:\Program Files\PowerShell\7\pwsh.exe'))"))
+        $text.IndexOf('$pwshMsi') | Should -BeLessThan $text.IndexOf('Restart-Computer -Force')
     }
     It 'phase 1 installs Python into the runner tool cache as an administrator, before the tree is handed to runner' {
         # actions/setup-python's Windows installer needs administrator rights
