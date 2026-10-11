@@ -880,10 +880,16 @@ function Add-SidToUserRight {
 }
 
 function Set-LocalUserRights {
-    # Host-only, elevated. Deny interactive and remote-interactive logon,
-    # grant batch logon (scheduled tasks) for the orchestrator account.
+    # Elevated. By default the orchestrator account's rights: deny
+    # interactive and remote-interactive logon, grant batch logon (scheduled
+    # tasks). The golden build's phase 1 uses it too, to give runner the
+    # one privilege a job needs beyond a standard user's: creating symbolic
+    # links (Windows PowerShell 5.1 there, so nothing 7-only here).
     [CmdletBinding()]
-    param([Parameter(Mandatory)][string]$Sid)
+    param(
+        [Parameter(Mandatory)][string]$Sid,
+        [string[]]$Rights = @('SeDenyInteractiveLogonRight', 'SeDenyRemoteInteractiveLogonRight', 'SeBatchLogonRight')
+    )
     # secedit sets each listed right to exactly its listed holders, so a
     # template that lost the exported rights (a failed read, an export
     # without the section) would strip every other holder: any failure
@@ -898,7 +904,7 @@ function Set-LocalUserRights {
         if ($LASTEXITCODE -ne 0) { throw "secedit /export exited $LASTEXITCODE" }
         $text = Get-Content -Raw -LiteralPath $inf
         if ($text -notmatch '(?m)^\[Privilege Rights\]') { throw "secedit /export wrote no [Privilege Rights] section to $inf" }
-        foreach ($right in 'SeDenyInteractiveLogonRight', 'SeDenyRemoteInteractiveLogonRight', 'SeBatchLogonRight') {
+        foreach ($right in $Rights) {
             $text = Add-SidToUserRight -IniText $text -Right $right -Sid $Sid
         }
         Set-Content -LiteralPath $inf -Value $text -Encoding unicode

@@ -47,6 +47,16 @@ Revision=1
         $out = Add-SidToUserRight -IniText "[Unicode]`r`nUnicode=yes" -Right 'SeBatchLogonRight' -Sid 'S-1-5-21-9'
         $out | Should -Match '\[Privilege Rights\]\r?\nSeBatchLogonRight = \*S-1-5-21-9'
     }
+    It 'Set-LocalUserRights applies the orchestrator account''s three rights by default and takes others for the guest' {
+        # The golden build grants runner SeCreateSymbolicLinkPrivilege through it.
+        $parameter = (Get-Command Set-LocalUserRights).Parameters['Rights']
+        $parameter | Should -Not -BeNullOrEmpty
+        $parameter.ParameterType | Should -Be ([string[]])
+        $default = ((Get-Command Set-LocalUserRights).ScriptBlock.Ast.Body.ParamBlock.Parameters | Where-Object { $_.Name.VariablePath.UserPath -eq 'Rights' }).DefaultValue.Extent.Text
+        $default | Should -Match 'SeDenyInteractiveLogonRight'
+        $default | Should -Match 'SeDenyRemoteInteractiveLogonRight'
+        $default | Should -Match 'SeBatchLogonRight'
+    }
 }
 
 Describe 'install scripts' {
