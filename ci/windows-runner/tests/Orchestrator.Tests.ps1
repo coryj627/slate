@@ -996,7 +996,7 @@ Context 'log retention' {
         Invoke-OrchestratorTick -Config $config -Journal $journal -Adapters $adapters -Now $t0
         (Get-Calls 'RemoveLog').Count | Should -Be 1
         (Get-Calls 'RemoveLog')[0].Args[0] | Should -Be 'orchestrator-2026-09-01.log'
-        $journal.LogsPrunedOn | Should -Be $t0.ToLocalTime().ToString('yyyy-MM-dd')
+        $journal.LogsPrunedOn | Should -Be $t0.ToLocalTime().ToString('yyyy-MM-dd', [cultureinfo]::InvariantCulture)
         Invoke-OrchestratorTick -Config $config -Journal $journal -Adapters $adapters -Now $t0.AddMinutes(5)
         (Get-Calls 'ListLogs').Count | Should -Be 1
         Invoke-OrchestratorTick -Config $config -Journal $journal -Adapters $adapters -Now $t0.AddDays(1)

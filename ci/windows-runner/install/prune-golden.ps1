@@ -8,7 +8,8 @@
 # before it exists. Runs as SYSTEM from the slate-ci-golden-prune task
 # (install/setup-host.ps1), daily: the orchestrator's account has read and
 # execute on golden by policy. Reads the journal without side effects.
-# Appends one line to the orchestrator log either way. Never fails the task.
+# Appends one line to the orchestrator log whenever a previous image exists
+# (nothing when there is none). Never fails the task.
 [CmdletBinding()]
 param([string]$Root = 'C:\slate-ci')
 

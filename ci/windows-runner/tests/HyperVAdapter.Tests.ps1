@@ -261,7 +261,8 @@ Describe 'log adapters' {
 }
 
 Describe 'golden adapters' {
-    It 'read the golden stamp and seal and every VM directory creation time as ISO UTC' {
+    It 'read the golden stamp and seal and every VM directory creation time as ISO UTC' -Skip:(-not $IsWindows) {
+        # Windows only: the test sets directory creation times, which Linux cannot.
         $golden = Join-Path $TestDrive 'golden.vhdx'; 'g' | Set-Content $golden
         (Get-Item $golden).LastWriteTimeUtc = [datetime]'2026-10-10T22:55:00Z'
         Get-GoldenStamp -GoldenPath $golden | Should -Be '2026-10-10T22:55:00.0000000Z'

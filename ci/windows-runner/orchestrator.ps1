@@ -61,7 +61,7 @@ try {
         }
         $adapters['Log'] = $log
 
-        $journalPath = Join-Path $config.StateDir 'journal.json'
+        $journalPath = $config.JournalPath
         $journal = Read-Journal -Path $journalPath
         & $log 'info' "orchestrator start (pid $PID, user $env:USERNAME, config $ConfigPath)"
         Invoke-StartupSweep -Config $config -Journal $journal -Adapters $adapters

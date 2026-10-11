@@ -177,9 +177,10 @@ Describe 'golden scripts' {
         $text = Get-Content -Raw (Join-Path $goldenDir 'build-golden.ps1')
         $text | Should -Match ([regex]::Escape('[switch]$Rotate'))
         $rotate = $text.IndexOf('if ($Rotate')
+        # Single quotes: the test has no $vmName, and "VM $vmName exists" would search for "VM  exists" and always pass.
         $rotate | Should -BeGreaterThan $text.IndexOf('VM $vmName exists')
         $rotate | Should -BeLessThan $text.IndexOf('exists; move it aside to rebuild')
-        $block = $text.Substring($rotate, 700)
+        $block = $text.Substring($rotate, $text.IndexOf('exists; move it aside to rebuild') - $rotate)
         $block | Should -Match 'IsReadOnly\) \{ throw'
         $block | Should -Match 'Remove-SealedFile -Path \$prevPath'
         $block | Should -Match 'Rename-Item -LiteralPath \$OutPath -NewName ''win11-runner\.prev\.vhdx'''

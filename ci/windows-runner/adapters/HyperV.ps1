@@ -260,11 +260,12 @@ function Get-OrchestratorLogNames {
 }
 
 function Remove-OrchestratorLog {
-    # By bare name only, inside LogDir: a name with a path separator is refused.
+    # By bare name only, inside LogDir: a name with either path separator is
+    # refused (on Linux GetFileName keeps a backslash, so both are checked).
     [CmdletBinding()]
     param([Parameter(Mandatory)][string]$LogDir, [Parameter(Mandatory)][string]$Name)
     $ErrorActionPreference = 'Stop'
-    if ($Name -ne [System.IO.Path]::GetFileName($Name)) { throw "log name '$Name' is not a bare file name" }
+    if ($Name -match '[\\/]' -or $Name -ne [System.IO.Path]::GetFileName($Name)) { throw "log name '$Name' is not a bare file name" }
     Remove-Item -LiteralPath (Join-Path $LogDir $Name) -Force
 }
 

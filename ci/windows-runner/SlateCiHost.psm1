@@ -679,7 +679,7 @@ function Register-GoldenAcceptance {
     # over. Stamps are compared as instants: a journal round trip turns them
     # into [datetime]. Deletion is decided elsewhere, by Test-GoldenPrevRemovable.
     [CmdletBinding()]
-    param([Parameter(Mandatory)]$Journal, [Parameter(Mandatory)][hashtable]$Adapters, [Parameter(Mandatory)]$Vm, [Parameter(Mandatory)][datetimeoffset]$Now)
+    param([Parameter(Mandatory)]$Journal, [Parameter(Mandatory)][hashtable]$Adapters, [Parameter(Mandatory)]$Vm)
     $stamp = & $Adapters.GetGoldenStamp
     if (-not $stamp) { return }
     $sealed = ConvertTo-DateTimeOffset -Value $stamp
@@ -735,7 +735,7 @@ function Complete-ActiveVm {
         if ($parentGeneration -eq [int]$vm.ForkGeneration) {
             $generation = & $Adapters.CommitCache $vm.Lane $vm.CachePath
             & $Adapters.Log 'info' "${Name}: commit $($vm.Lane) generation $generation (after waiting for a sibling)"
-            try { Register-GoldenAcceptance -Journal $Journal -Adapters $Adapters -Vm $vm -Now $Now } catch { & $Adapters.Log 'warn' "golden: $_" }
+            try { Register-GoldenAcceptance -Journal $Journal -Adapters $Adapters -Vm $vm } catch { & $Adapters.Log 'warn' "golden: $_" }
         } else {
             & $Adapters.DiscardCache $vm.CachePath
             & $Adapters.Log 'info' "${Name}: discard (generation moved while waiting: fork $($vm.ForkGeneration), parent $parentGeneration)"
@@ -785,7 +785,7 @@ function Complete-ActiveVm {
         return
     }
     if ($null -ne $job -and [string]$job.conclusion -eq 'success') {
-        try { Register-GoldenAcceptance -Journal $Journal -Adapters $Adapters -Vm $vm -Now $Now } catch { & $Adapters.Log 'warn' "golden: $_" }
+        try { Register-GoldenAcceptance -Journal $Journal -Adapters $Adapters -Vm $vm } catch { & $Adapters.Log 'warn' "golden: $_" }
     }
     $run = $null
     if ($null -ne $job) { $run = & $Adapters.GetRun ([int64]$job.run_id) }
@@ -1116,7 +1116,7 @@ function Invoke-OrchestratorTick {
         [Parameter(Mandatory)][hashtable]$Adapters,
         [datetimeoffset]$Now = [datetimeoffset]::UtcNow
     )
-    try { Invoke-LogPrune -Config $Config -Journal $Journal -Adapters $Adapters -Today $Now.ToLocalTime().ToString('yyyy-MM-dd') }
+    try { Invoke-LogPrune -Config $Config -Journal $Journal -Adapters $Adapters -Today $Now.ToLocalTime().ToString('yyyy-MM-dd', [cultureinfo]::InvariantCulture) }
     catch { & $Adapters.Log 'error' "logs: $_" }
     foreach ($name in @($Journal.Vms.Keys)) {
         try { Update-ActiveVm -Config $Config -Journal $Journal -Adapters $Adapters -Name $name -Now $Now }

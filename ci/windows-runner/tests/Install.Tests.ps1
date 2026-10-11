@@ -210,17 +210,21 @@ Describe 'install scripts' {
 
 Describe 'prune-golden.ps1' {
     BeforeEach {
+        # One Join-Path segment per directory: the suite also runs on Linux,
+        # where a backslash inside a segment is part of the name for .NET
+        # (Write-Journal's File.Move) though not for the cmdlets.
         $script:root = Join-Path $TestDrive ('root-' + [guid]::NewGuid().ToString('N'))
-        foreach ($d in 'golden', 'state', 'vms', 'logs', 'bin', 'bin\adapters') { New-Item -ItemType Directory -Force (Join-Path $root $d) | Out-Null }
+        foreach ($d in 'golden', 'state', 'vms', 'logs', 'bin') { New-Item -ItemType Directory -Force (Join-Path $root $d) | Out-Null }
+        New-Item -ItemType Directory -Force (Join-Path $root 'bin' 'adapters') | Out-Null
         Copy-Item (Join-Path $PSScriptRoot '..' 'SlateCiHost.psm1') (Join-Path $root 'bin')
-        Copy-Item (Join-Path $PSScriptRoot '..' 'adapters' 'HyperV.ps1') (Join-Path $root 'bin\adapters')
-        $script:golden = Join-Path $root 'golden\win11-runner.vhdx'; 'new' | Set-Content $golden
-        $script:prev = Join-Path $root 'golden\win11-runner.prev.vhdx'; 'old' | Set-Content $prev
+        Copy-Item (Join-Path $PSScriptRoot '..' 'adapters' 'HyperV.ps1') (Join-Path $root 'bin' 'adapters')
+        $script:golden = Join-Path $root 'golden' 'win11-runner.vhdx'; 'new' | Set-Content $golden
+        $script:prev = Join-Path $root 'golden' 'win11-runner.prev.vhdx'; 'old' | Set-Content $prev
         (Get-Item $prev).LastWriteTimeUtc = [datetime]'2026-10-10T20:00:00Z'
         (Get-Item $golden).LastWriteTimeUtc = [datetime]'2026-10-10T22:55:00Z'
         Set-ItemProperty -LiteralPath $prev -Name IsReadOnly -Value $true
         Set-ItemProperty -LiteralPath $golden -Name IsReadOnly -Value $true
-        $script:journalPath = Join-Path $root 'state\journal.json'
+        $script:journalPath = Join-Path $root 'state' 'journal.json'
         $script:prune = Join-Path $installDir 'prune-golden.ps1'
         function Set-Accepted([string]$Stamp, [string[]]$Lanes = @('rust', 'app', 'model', 'shell')) {
             $j = New-Journal
@@ -242,7 +246,7 @@ Describe 'prune-golden.ps1' {
         Test-Path $prev | Should -BeTrue
         Get-PruneLog | Should -Match 'the previous image stays'
     }
-    It 'keeps it while the current image is unsealed, a lane is missing, or a VM older than the image exists' {
+    It 'keeps it while the current image is unsealed or a lane is missing' {
         Set-ItemProperty -LiteralPath $golden -Name IsReadOnly -Value $false
         Set-Accepted '2026-10-10T22:55:00.0000000Z'
         & $prune -Root $root
@@ -251,8 +255,12 @@ Describe 'prune-golden.ps1' {
         Set-Accepted '2026-10-10T22:55:00.0000000Z' @('rust', 'app', 'model')
         & $prune -Root $root
         Test-Path $prev | Should -BeTrue
+    }
+    It 'keeps it while a VM older than the image exists' -Skip:(-not $IsWindows) {
+        # Windows only: setting a directory's creation time is a Windows
+        # file-system operation (Linux reports a birth time it cannot set).
         Set-Accepted '2026-10-10T22:55:00.0000000Z'
-        $old = Join-Path $root 'vms\slate-win-app-00000000'; New-Item -ItemType Directory -Force $old | Out-Null
+        $old = Join-Path $root 'vms' 'slate-win-app-00000000'; New-Item -ItemType Directory -Force $old | Out-Null
         (Get-Item $old).CreationTimeUtc = [datetime]'2026-10-10T21:00:00Z'
         & $prune -Root $root
         Test-Path $prev | Should -BeTrue
