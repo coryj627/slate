@@ -484,13 +484,22 @@ Describe 'Get-CiHostConfig' {
         $raw | ConvertTo-Json -Depth 6 | Set-Content $p
         { Get-CiHostConfig -Path $p } | Should -Throw '*Lanes must be an object*'
     }
+    It 'defaults LogRetentionDays to 30 when the file predates the key, and rejects a bad value' {
+        $cfg = Get-Content -Raw (Join-Path $PSScriptRoot '..' 'config.json') | ConvertFrom-Json -AsHashtable
+        $cfg.Remove('LogRetentionDays')
+        $p = Join-Path $TestDrive 'old.json'; $cfg | ConvertTo-Json -Depth 5 | Set-Content $p
+        (Get-CiHostConfig -Path $p).LogRetentionDays | Should -Be 30
+        $cfg['LogRetentionDays'] = 0
+        $cfg | ConvertTo-Json -Depth 5 | Set-Content $p
+        { Get-CiHostConfig -Path $p } | Should -Throw '*LogRetentionDays*'
+    }
 }
 
 Describe 'Journal' {
     It 'New-Journal and Read-Journal share one set of top-level keys' {
         $p = Join-Path $TestDrive 'bare.json'
         '{"Vms":{},"Retries":{},"SeenJobs":{}}' | Set-Content $p
-        @((New-Journal).Keys | Sort-Object) | Should -Be @('PublishFailedAt', 'PublishedAt', 'PublishedState', 'Retries', 'SeenJobs', 'Vms' | Sort-Object)
+        @((New-Journal).Keys | Sort-Object) | Should -Be @('LogsPrunedOn', 'PublishFailedAt', 'PublishedAt', 'PublishedState', 'Retries', 'SeenJobs', 'Vms' | Sort-Object)
         @((Read-Journal -Path $p).Keys | Sort-Object) | Should -Be @((New-Journal).Keys | Sort-Object)
         (Read-Journal -Path $p).PublishedState | Should -Be $null
     }
@@ -616,5 +625,19 @@ Describe 'Write-CiLog' {
         $lines.Count | Should -Be 2
         $lines[0] | Should -Match '^\d{4}-\d{2}-\d{2}T[0-9:.]+(\+|-)\d{2}:\d{2} \[info\] hello$'
         $lines[1] | Should -Match '\[warn\] again$'
+    }
+}
+
+Describe 'Get-ExpiredLogNames' {
+    It 'selects dated log names older than the retention, by the date in the name' {
+        $names = 'orchestrator-2026-09-10.log', 'orchestrator-2026-09-11.log', 'orchestrator-2026-09-12.log', 'orchestrator-2026-10-11.log'
+        @(Get-ExpiredLogNames -Names $names -Today '2026-10-11' -RetentionDays 30) | Should -Be @('orchestrator-2026-09-10.log')
+    }
+    It 'keeps today, names that do not parse and other files' {
+        $names = 'orchestrator-2026-10-11.log', 'orchestrator-yesterday.log', 'notes.txt', 'orchestrator-2026-13-40.log'
+        @(Get-ExpiredLogNames -Names $names -Today '2026-10-11' -RetentionDays 1).Count | Should -Be 0
+    }
+    It 'returns nothing for an empty directory' {
+        @(Get-ExpiredLogNames -Names @() -Today '2026-10-11' -RetentionDays 30).Count | Should -Be 0
     }
 }

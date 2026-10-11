@@ -247,9 +247,22 @@ Describe 'Remove-RunnerVm / Clear-RunnerVmDirs / Remove-RunnerCache' {
     }
 }
 
+Describe 'log adapters' {
+    It 'list only dated orchestrator logs and delete by bare name inside LogDir' {
+        $logDir = Join-Path $TestDrive 'logs'; New-Item -ItemType Directory -Force $logDir | Out-Null
+        'x' | Set-Content (Join-Path $logDir 'orchestrator-2026-09-01.log')
+        'x' | Set-Content (Join-Path $logDir 'notes.txt')
+        @(Get-OrchestratorLogNames -LogDir $logDir) | Should -Be @('orchestrator-2026-09-01.log')
+        Remove-OrchestratorLog -LogDir $logDir -Name 'orchestrator-2026-09-01.log'
+        Test-Path (Join-Path $logDir 'orchestrator-2026-09-01.log') | Should -BeFalse
+        { Remove-OrchestratorLog -LogDir $logDir -Name '..\notes.txt' } | Should -Throw
+        @(Get-OrchestratorLogNames -LogDir (Join-Path $TestDrive 'none')).Count | Should -Be 0
+    }
+}
+
 Describe 'New-HyperVAdapters' {
     It 'exposes exactly the keys the orchestrator invokes' {
-        @((New-HyperVAdapters -Config $config).Keys | Sort-Object) | Should -Be @('CleanVmDirs', 'CommitCache', 'DiscardCache', 'GetGeneration', 'GetGuestError', 'GetHeartbeat', 'GetVmState', 'ListVms', 'NewVm', 'RemoveVm', 'SendKvp', 'StartVm', 'StopVmForce')
+        @((New-HyperVAdapters -Config $config).Keys | Sort-Object) | Should -Be @('CleanVmDirs', 'CommitCache', 'DiscardCache', 'GetGeneration', 'GetGuestError', 'GetHeartbeat', 'GetVmState', 'ListLogs', 'ListVms', 'NewVm', 'RemoveLog', 'RemoveVm', 'SendKvp', 'StartVm', 'StopVmForce')
     }
     It 'binds the config into the closures' {
         Set-CacheGeneration -CacheDir $config.CacheDir -Lane 'app' -Value 3

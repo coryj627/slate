@@ -328,6 +328,14 @@ function Get-CiHostConfig {
         @($routed | Where-Object { -not ($_ -is [string]) -or -not $_ }).Count -gt 0) {
         throw "config ${Path}: RoutedWorkflows must be a non-empty array of workflow paths"
     }
+    # Older config files predate the key: default it rather than crash-loop
+    # a host installed before it existed.
+    if (-not $config.Contains('LogRetentionDays')) { $config['LogRetentionDays'] = 30 }
+    $days = $config.LogRetentionDays
+    if (-not ($days -is [int] -or $days -is [int64] -or $days -is [double]) -or [double]$days -ne [math]::Floor([double]$days) -or [int]$days -lt 1) {
+        throw "config ${Path}: LogRetentionDays must be a whole number of days, 1 or more"
+    }
+    $config['LogRetentionDays'] = [int]$days
     if (-not ($config.Lanes -is [System.Collections.IDictionary])) { throw "config ${Path}: Lanes must be an object" }
     foreach ($lane in @($config.Lanes.Keys)) {
         if ($script:DefaultLanes -cnotcontains $lane) { throw "config ${Path}: unknown lane '$lane'" }
@@ -360,7 +368,7 @@ function Get-CiHostConfig {
 # Every top-level journal key, present from creation and after a read of
 # an older file: the state machine reads them with index syntax and a
 # missing key would throw under strict mode.
-$script:JournalDefaults = @{ Vms = @{}; Retries = @{}; SeenJobs = @{}; PublishedState = $null; PublishedAt = $null; PublishFailedAt = $null }
+$script:JournalDefaults = @{ Vms = @{}; Retries = @{}; SeenJobs = @{}; PublishedState = $null; PublishedAt = $null; PublishFailedAt = $null; LogsPrunedOn = $null }
 
 function New-Journal {
     $journal = @{}
@@ -428,6 +436,38 @@ function Write-CiLog {
     if ($dir -and -not (Test-Path -LiteralPath $dir)) { New-Item -ItemType Directory -Force -Path $dir | Out-Null }
     $line = '{0} [{1}] {2}' -f [datetimeoffset]::Now.ToString('o'), $Level, $Message
     Add-Content -LiteralPath $Path -Value $line -Encoding utf8
+}
+
+function Get-ExpiredLogNames {
+    # Dated orchestrator logs older than the retention, by the local date in
+    # the name (orchestrator.ps1 names them with the local date). Names that
+    # do not parse are kept: a human can decide about those.
+    [CmdletBinding()]
+    param([string[]]$Names = @(), [Parameter(Mandatory)][string]$Today, [Parameter(Mandatory)][int]$RetentionDays)
+    $cutoff = [datetime]::ParseExact($Today, 'yyyy-MM-dd', [cultureinfo]::InvariantCulture).AddDays(-$RetentionDays)
+    $expired = @()
+    foreach ($name in @($Names)) {
+        if ($name -notmatch '^orchestrator-(\d{4}-\d{2}-\d{2})\.log$') { continue }
+        $date = [datetime]::MinValue
+        if (-not [datetime]::TryParseExact($Matches[1], 'yyyy-MM-dd', [cultureinfo]::InvariantCulture, [System.Globalization.DateTimeStyles]::None, [ref]$date)) { continue }
+        if ($date -lt $cutoff) { $expired += $name }
+    }
+    return @($expired)
+}
+
+function Invoke-LogPrune {
+    # Once per local day (journal LogsPrunedOn), and at the first tick after
+    # a start (the sweep clears the day). A delete that fails is logged and
+    # the day still counts as done: the file is tried again tomorrow.
+    [CmdletBinding()]
+    param([Parameter(Mandatory)]$Config, [Parameter(Mandatory)]$Journal, [Parameter(Mandatory)][hashtable]$Adapters, [Parameter(Mandatory)][string]$Today)
+    if ([string]$Journal['LogsPrunedOn'] -eq $Today) { return }
+    $names = @(& $Adapters.ListLogs)
+    foreach ($name in @(Get-ExpiredLogNames -Names $names -Today $Today -RetentionDays ([int]$Config.LogRetentionDays))) {
+        try { & $Adapters.RemoveLog $name; & $Adapters.Log 'info' "logs: removed $name" }
+        catch { & $Adapters.Log 'warn' "logs: ${name}: $_" }
+    }
+    $Journal['LogsPrunedOn'] = $Today
 }
 
 # ---- orchestrator state machine (host-only; adapters injected) ----
@@ -887,6 +927,8 @@ function Invoke-OrchestratorTick {
         [Parameter(Mandatory)][hashtable]$Adapters,
         [datetimeoffset]$Now = [datetimeoffset]::UtcNow
     )
+    try { Invoke-LogPrune -Config $Config -Journal $Journal -Adapters $Adapters -Today $Now.ToLocalTime().ToString('yyyy-MM-dd') }
+    catch { & $Adapters.Log 'error' "logs: $_" }
     foreach ($name in @($Journal.Vms.Keys)) {
         try { Update-ActiveVm -Config $Config -Journal $Journal -Adapters $Adapters -Name $name -Now $Now }
         catch { & $Adapters.Log 'error' "${name}: $_" }
@@ -944,6 +986,7 @@ function Invoke-StartupSweep {
         $Journal.Retries = @{}
         $Journal.SeenJobs = @{}
     }
+    $Journal['LogsPrunedOn'] = $null
 }
 
 function Select-SlateKvpItems {
@@ -1068,5 +1111,5 @@ function Set-LocalUserRights {
 Export-ModuleMember -Function Get-LaneFromLabels, New-RunnerName, Split-KvpChunks, Join-KvpChunks,
     ConvertTo-DateTimeOffset, Select-QueuedLaneJobs, Select-JobsToAdmit, Register-JobRetry, Test-VmExpired, Get-StaleRunnerNames, Test-CommitEligible, Resolve-RunnerJob, Test-IPv4InPrefix, Get-CiHostConfig, New-Journal, Read-Journal, Write-Journal, Write-CiLog,
     Get-FreeSlots, Remove-ActiveVm, Test-SiblingRunning, Complete-ActiveVm, Update-ActiveVm, Invoke-Admission, Invoke-OrchestratorTick, Invoke-StartupSweep, Select-SlateKvpItems,
-    Get-PublishedState, Publish-HomeState, Get-RunRepository, Test-TrustedRun,
+    Get-PublishedState, Publish-HomeState, Get-RunRepository, Test-TrustedRun, Get-ExpiredLogNames, Invoke-LogPrune,
     New-RandomPassword, Expand-UnattendTemplate, Add-SidToUserRight, Set-LocalUserRights

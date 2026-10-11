@@ -3,7 +3,7 @@
 # SPDX-License-Identifier: AGPL-3.0-or-later
 #
 # Hyper-V adapter for the self-hosted runner host: the only file that
-# touches Hyper-V. Runs as slate-ci-host (Hyper-V Administrators, not an
+# touches Hyper-V and the host's own files. Runs as slate-ci-host (Hyper-V Administrators, not an
 # admin). The pure helpers are unit-tested with stubbed cmdlets; the
 # wrappers are exercised by the host integration pass in
 # docs/runbooks/self-hosted-windows-runner.md.
@@ -252,6 +252,22 @@ function Remove-RunnerCache {
     if ($ChildPath -and (Test-Path -LiteralPath $ChildPath)) { Remove-Item -LiteralPath $ChildPath -Force }
 }
 
+function Get-OrchestratorLogNames {
+    [CmdletBinding()]
+    param([Parameter(Mandatory)][string]$LogDir)
+    if (-not (Test-Path -LiteralPath $LogDir)) { return @() }
+    return @(Get-ChildItem -LiteralPath $LogDir -File -Filter 'orchestrator-*.log' | ForEach-Object { $_.Name })
+}
+
+function Remove-OrchestratorLog {
+    # By bare name only, inside LogDir: a name with a path separator is refused.
+    [CmdletBinding()]
+    param([Parameter(Mandatory)][string]$LogDir, [Parameter(Mandatory)][string]$Name)
+    $ErrorActionPreference = 'Stop'
+    if ($Name -ne [System.IO.Path]::GetFileName($Name)) { throw "log name '$Name' is not a bare file name" }
+    Remove-Item -LiteralPath (Join-Path $LogDir $Name) -Force
+}
+
 function New-HyperVAdapters {
     [CmdletBinding()]
     param([Parameter(Mandatory)]$Config)
@@ -264,7 +280,7 @@ function New-HyperVAdapters {
     $commands = @{}
     foreach ($command in 'New-RunnerVm', 'Start-RunnerVm', 'Get-RunnerVmState', 'Get-RunnerVmHeartbeat', 'Send-RunnerVmKvp',
         'Get-RunnerVmGuestError', 'Stop-RunnerVmForce', 'Remove-RunnerVm', 'Get-RunnerVmNames', 'Clear-RunnerVmDirs',
-        'Get-CacheGeneration', 'Merge-RunnerCache', 'Remove-RunnerCache') {
+        'Get-CacheGeneration', 'Merge-RunnerCache', 'Remove-RunnerCache', 'Get-OrchestratorLogNames', 'Remove-OrchestratorLog') {
         $commands[$command] = Get-Command -Name $command -CommandType Function -ErrorAction Stop
     }
     $adapters = @{
@@ -281,6 +297,8 @@ function New-HyperVAdapters {
         GetGeneration = { param($lane) & $commands['Get-CacheGeneration'] -CacheDir $Config.CacheDir -Lane $lane }
         CommitCache   = { param($lane, $child) & $commands['Merge-RunnerCache'] -Config $Config -Lane $lane -ChildPath $child }
         DiscardCache  = { param($child) & $commands['Remove-RunnerCache'] -ChildPath $child }
+        ListLogs      = { & $commands['Get-OrchestratorLogNames'] -LogDir $Config.LogDir }
+        RemoveLog     = { param($name) & $commands['Remove-OrchestratorLog'] -LogDir $Config.LogDir -Name $name }
     }
     # Bind $Config and the commands into each scriptblock: the module
     # invokes them long after this function has returned.

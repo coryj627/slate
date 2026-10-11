@@ -23,6 +23,7 @@
   "UnclaimedTimeoutSeconds": 300,
   "RetryCap": 3,
   "RetryBackoffSeconds": 600,
+  "LogRetentionDays": 30,
   "TrustedRepo": "coryj627/slate",
   "TrustedBranch": "main",
   "TrustedEvents": [ "push", "schedule", "workflow_dispatch" ],

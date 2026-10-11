@@ -20,6 +20,7 @@ BeforeAll {
             JitConfig  = ('j' * 2500)
             GuestError = $null
             Published  = [System.Collections.ArrayList]::new()
+            Logs       = @('orchestrator-2026-09-01.log', 'orchestrator-2026-10-10.log')
         }
         $script:calls = [System.Collections.ArrayList]::new()
         $script:logs = [System.Collections.ArrayList]::new()
@@ -55,6 +56,8 @@ BeforeAll {
             CommitCache   = { param($lane, $child) & $script:record 'CommitCache' @($lane, $child); $script:world.Generation + 1 }
             DiscardCache  = { param($child) & $script:record 'DiscardCache' @($child) }
             PublishState  = { param($json) & $script:record 'PublishState' @($json); [void]$script:world.Published.Add($json) }
+            ListLogs      = { & $script:record 'ListLogs' @(); @($script:world.Logs) }
+            RemoveLog     = { param($name) & $script:record 'RemoveLog' @($name); $script:world.Logs = @($script:world.Logs | Where-Object { $_ -ne $name }) }
             Log           = { param($level, $message) [void]$script:logs.Add("[$level] $message") }
         }
         return $a
@@ -764,6 +767,30 @@ Context 'publishing the state' {
         Invoke-OrchestratorTick -Config $config -Journal $journal -Adapters $adapters -Now $t0.AddSeconds(70)
         ([regex]::Matches(($logs -join "`n"), 'publish: 403')).Count | Should -Be 2
         $journal.PublishedState | Should -Be $null
+    }
+}
+
+Context 'log retention' {
+    It 'prunes once per local day, at the first tick, and remembers the day in the journal' {
+        Invoke-OrchestratorTick -Config $config -Journal $journal -Adapters $adapters -Now $t0
+        (Get-Calls 'RemoveLog').Count | Should -Be 1
+        (Get-Calls 'RemoveLog')[0].Args[0] | Should -Be 'orchestrator-2026-09-01.log'
+        $journal.LogsPrunedOn | Should -Be $t0.ToLocalTime().ToString('yyyy-MM-dd')
+        Invoke-OrchestratorTick -Config $config -Journal $journal -Adapters $adapters -Now $t0.AddMinutes(5)
+        (Get-Calls 'ListLogs').Count | Should -Be 1
+        Invoke-OrchestratorTick -Config $config -Journal $journal -Adapters $adapters -Now $t0.AddDays(1)
+        (Get-Calls 'ListLogs').Count | Should -Be 2
+    }
+    It 'logs and continues when a delete fails' {
+        $adapters.RemoveLog = { param($name) throw 'in use' }
+        { Invoke-OrchestratorTick -Config $config -Journal $journal -Adapters $adapters -Now $t0 } | Should -Not -Throw
+        ($logs -join "`n") | Should -Match 'logs: orchestrator-2026-09-01.log: in use'
+        $journal.LogsPrunedOn | Should -Not -Be $null
+    }
+    It 'the startup sweep forgets the day so the first tick prunes again' {
+        $journal.LogsPrunedOn = '2026-10-10'
+        Invoke-StartupSweep -Config $config -Journal $journal -Adapters $adapters
+        $journal.LogsPrunedOn | Should -Be $null
     }
 }
 
