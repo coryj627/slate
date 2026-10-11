@@ -107,8 +107,18 @@ try {
     Expand-Archive -Path $pyZip -DestinationPath $pyDir -Force
     New-Item -ItemType Directory -Force -Path $toolCache | Out-Null
     $env:AGENT_TOOLSDIRECTORY = $toolCache
-    & powershell.exe -NoProfile -ExecutionPolicy Bypass -File (Join-Path $pyDir 'setup.ps1')
-    if ($LASTEXITCODE -ne 0) { throw "python tool-cache setup.ps1 exited $LASTEXITCODE" }
+    # setup.ps1 copies the installer by a path relative to the current
+    # directory, so it runs from its own folder. Its output goes to files
+    # and then into this log (a 2>&1 on a native command would be raised as
+    # an error under Stop on 5.1), so a failure can be read on the host.
+    $setupOut = Join-Path $dl 'python-toolcache.out.txt'
+    $setupErr = Join-Path $dl 'python-toolcache.err.txt'
+    $process = Start-Process -FilePath 'powershell.exe' -ArgumentList @('-NoProfile', '-NonInteractive', '-ExecutionPolicy', 'Bypass', '-File', (Join-Path $pyDir 'setup.ps1')) `
+        -WorkingDirectory $pyDir -Wait -PassThru -NoNewWindow -RedirectStandardOutput $setupOut -RedirectStandardError $setupErr
+    foreach ($f in $setupOut, $setupErr) {
+        if (Test-Path -LiteralPath $f) { Get-Content -LiteralPath $f | ForEach-Object { Write-Log "  python-toolcache: $_" } }
+    }
+    if ($process.ExitCode -ne 0) { throw "python tool-cache setup.ps1 exited $($process.ExitCode)" }
     $pyHome = Join-Path $toolCache ('Python\{0}\x64' -f $versions.pythonVersion)
     if (-not (Test-Path -LiteralPath "$pyHome.complete")) { throw "python tool-cache install left no $pyHome.complete marker" }
     # On the machine PATH too, for anything that calls python without setup-python.
