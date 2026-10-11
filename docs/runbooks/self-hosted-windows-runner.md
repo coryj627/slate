@@ -113,7 +113,7 @@ Before you start:
   `netcfg -u rtk_teampt`, then `netcfg -u rtk_ndisprot`. Adapters rebind
   for a moment after each. Reinstalling the Realtek utility puts them
   back.
-- The ISO, here `C:\Users\cory\Downloads\Win11_25H2_English_x64_v2.iso`,
+- The ISO, here `C:\Users\cory\Downloads\Windows11_Client_x64_en-us_26300_9457.iso`,
   and the Windows 11 Pro product key in the password manager.
 - A clean checkout of the commit to install, normally an up-to-date `main`.
   Setup copies the working tree but records only `HEAD`.
@@ -219,7 +219,7 @@ Before you start:
 5. **Golden image** (40 to 60 minutes; the script gives up after 150):
 
    ```powershell
-   .\ci\windows-runner\golden\build-golden.ps1 -IsoPath C:\Users\cory\Downloads\Win11_25H2_English_x64_v2.iso
+   .\ci\windows-runner\golden\build-golden.ps1 -IsoPath C:\Users\cory\Downloads\Windows11_Client_x64_en-us_26300_9457.iso
    ```
 
    Type the Windows 11 Pro key at the hidden prompt. The script applies
@@ -1055,7 +1055,7 @@ rights. Have the Windows 11 Pro key ready: the build asks for it again.
 5. Build:
 
    ```powershell
-   .\ci\windows-runner\golden\build-golden.ps1 -IsoPath C:\Users\cory\Downloads\Win11_25H2_English_x64_v2.iso
+   .\ci\windows-runner\golden\build-golden.ps1 -IsoPath C:\Users\cory\Downloads\Windows11_Client_x64_en-us_26300_9457.iso
    ```
 
 6. Check the product key on the rebuilt disk: "Checking the product key in
