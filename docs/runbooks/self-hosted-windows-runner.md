@@ -1122,7 +1122,8 @@ golden image once the current one is accepted on every lane: see step 9 of
 "Refreshing the golden image" and its row in "Security model in one
 screen". The weekly branch report is a GitHub workflow, not part of this
 host. It lists `claude/*` branches and deletes only when dispatched with
-`delete`. It is described in section 10 of
+`delete`; branches younger than seven days are kept. It is described in
+section 10 of
 `docs/superpowers/specs/2026-10-11-windows-overflow-routing-design.md` and
 ships in its own pull request.
 

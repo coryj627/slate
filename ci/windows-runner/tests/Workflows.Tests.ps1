@@ -1,9 +1,11 @@
 # Copyright (C) 2026 Cory Joseph
 # SPDX-License-Identifier: AGPL-3.0-or-later
 #
-# Text-level guards over the three workflows that read WINDOWS_RUNNER_MODE.
-# YAML parsing happens on push (GitHub refuses a malformed workflow at
-# the first run); these tests pin the routing contract itself, and the
+# Text-level guards over the three workflows that read WINDOWS_RUNNER_MODE
+# and over what branch-cleanup.yml owns (the weekly claude/* branch report;
+# its script's behaviour is BranchCleanup.Tests.ps1). YAML parsing happens
+# on push (GitHub refuses a malformed workflow at the first run); these
+# tests pin the routing contract and the delete switch themselves, and the
 # path filters that make windows-runner-tests.yml run them.
 
 BeforeAll {
@@ -195,9 +197,12 @@ Describe 'windows-runner-tests.yml Pester pin' {
 
 Describe 'windows-runner-tests.yml path filters' {
     It 'runs these guards when a routed workflow changes, on pull requests and on main' {
-        foreach ($routed in @('windows.yml', 'nightly.yml', 'windows-ci-pilot.yml')) {
+        foreach ($routed in @('windows.yml', 'nightly.yml', 'windows-ci-pilot.yml', 'branch-cleanup.yml')) {
             ([regex]::Matches($lane, [regex]::Escape("- '.github/workflows/$routed'"))).Count | Should -Be 2 -Because "$routed must be in both the pull_request and push path filters"
         }
+    }
+    It 'runs the branch-cleanup behaviour test when its script changes, on pull requests and on main' {
+        ([regex]::Matches($lane, (Get-Lines @("      - 'ci/branch-cleanup/**'")))).Count | Should -Be 2
     }
     It 'runs the router''s Python tests even when Pester failed' {
         $lane | Should -Match ([regex]::Escape('python -I -m unittest discover -v -s ci/windows-runner/route/tests -t ci/windows-runner/route'))
@@ -205,5 +210,38 @@ Describe 'windows-runner-tests.yml path filters' {
         $step = [regex]::Match($lane, "(?s)- name: Run the router's tests.*?(?=\n      - name:|\z)").Value
         $step | Should -Not -BeNullOrEmpty
         $step | Should -Match '(?m)^        if: \$\{\{ !cancelled\(\) \}\}[ \t]*\r?$'
+    }
+}
+
+Describe 'branch-cleanup.yml' {
+    # The workflow owns when the script runs, with which token, and DELETE; what the script does with them
+    # is BranchCleanup.Tests.ps1. (One BeforeAll: Pester 5 keeps only the last of several in a block.)
+    BeforeAll {
+        $script:cleanup = Get-Content -Raw (Join-Path $wf 'branch-cleanup.yml')
+        $script:report = Get-JobBlock $cleanup 'report'
+    }
+    It 'reports weekly and deletes only on an explicit dispatch with the delete input' {
+        $cleanup | Should -Match (Get-Lines @('  schedule:', "    - cron: '0 6 * * 1'", '  workflow_dispatch:', '    inputs:', '      delete:'))
+        $cleanup | Should -Match (Get-Lines @('        type: boolean', '        default: false'))
+        $cleanup | Should -Match (Get-Lines @('permissions:', '  contents: write', '  pull-requests: read'))
+        # DELETE is 'true' only for a dispatch with the input set: this one live definition, at job level beside
+        # the token and the repository, and no other. A second one in any form (a step's env, a quoted
+        # "DELETE": key, DELETE=) would override it and could let the schedule delete, so the only live
+        # (non-comment) line of the workflow that names DELETE at all is that job-level line.
+        $line = '      DELETE: ${{ github.event_name == ''workflow_dispatch'' && inputs.delete && ''true'' || ''false'' }}'
+        $report | Should -Match (Get-Lines @('    env:', '      GH_TOKEN: ${{ github.token }}', '      REPO: ${{ github.repository }}', $line))
+        $live = @([regex]::Matches($cleanup, '(?m)^(?![ \t]*#)[^\r\n]*\bDELETE\b[^\r\n]*') | ForEach-Object { $_.Value.TrimEnd("`r") })
+        $live.Count | Should -Be 1 -Because "only the job-level env line may name DELETE; found: $($live -join ' | ')"
+        $live[0] | Should -BeExactly $line
+    }
+    It 'checks out only the script, with the pinned checkout and no persisted token, and runs it as its one command' {
+        # The same checkout pin as the other workflows (this lane's).
+        $pin = [regex]::Match($lane, 'uses: actions/checkout@[0-9a-f]{40}  # v\d+').Value
+        $pin | Should -Not -BeNullOrEmpty
+        $steps = Get-Steps $report
+        $steps.Count | Should -Be 2
+        $steps[0] | Should -Match (Get-Lines @("        $pin", '        with:', '          sparse-checkout: ci/branch-cleanup', '          persist-credentials: false'))
+        $steps[1] | Should -Match (Get-Lines @('        run: bash ci/branch-cleanup/branch-cleanup.sh'))
+        ([regex]::Matches($cleanup, '(?m)^[ \t]*(?:- )?run:')).Count | Should -Be 1
     }
 }

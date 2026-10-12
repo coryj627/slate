@@ -1,0 +1,44 @@
+# Stale claude/* branches: a weekly report, and a delete only when asked.
+# The logic is ci/branch-cleanup/branch-cleanup.sh, whose behaviour test is
+# ci/windows-runner/tests/BranchCleanup.Tests.ps1. This file owns when it
+# runs, with which token, and DELETE, which is 'true' only for a dispatch
+# with the delete input set. Spec:
+# docs/superpowers/specs/2026-10-11-windows-overflow-routing-design.md §10.
+
+name: Branch cleanup
+
+on:
+  schedule:
+    - cron: '0 6 * * 1'
+  workflow_dispatch:
+    inputs:
+      delete:
+        description: Delete the claude/* branches whose tip main already contains, that are at least seven days old and that no open pull request uses (never anything else).
+        type: boolean
+        default: false
+
+permissions:
+  contents: write
+  pull-requests: read
+
+concurrency:
+  group: branch-cleanup
+  cancel-in-progress: false
+
+jobs:
+  report:
+    name: Report stale claude/* branches
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    env:
+      GH_TOKEN: ${{ github.token }}
+      REPO: ${{ github.repository }}
+      DELETE: ${{ github.event_name == 'workflow_dispatch' && inputs.delete && 'true' || 'false' }}
+    steps:
+      - name: Checkout the script
+        uses: actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0  # v7
+        with:
+          sparse-checkout: ci/branch-cleanup
+          persist-credentials: false
+      - name: List, classify and (on dispatch) delete
+        run: bash ci/branch-cleanup/branch-cleanup.sh
