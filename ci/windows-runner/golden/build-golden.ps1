@@ -158,10 +158,32 @@ try {
         if ($keyBytes -ne 0) { throw "DigitalProductId still holds $keyBytes key bytes: slmgr /cpky did not clear the product key" }
         $backup = (Get-ItemProperty -Path "$cv\SoftwareProtectionPlatform" -ErrorAction SilentlyContinue).BackupProductKeyDefault
         if ($backup) { throw 'SoftwareProtectionPlatform\BackupProductKeyDefault still holds a product key in clear text' }
+        # Nothing may pop over Slate during the shell gate: OneDrive off by
+        # policy (phase 1), or its sign-in window takes the keystrokes.
+        $oneDrive = (Get-ItemProperty -Path 'HKLM:\slate-golden-verify\Policies\Microsoft\Windows\OneDrive' -ErrorAction SilentlyContinue).DisableFileSyncNGSC
+        if ($oneDrive -ne 1) { throw 'OneDrive is not off by policy (Policies\Microsoft\Windows\OneDrive\DisableFileSyncNGSC is not 1): its sign-in window would take the shell gate''s keystrokes' }
     } finally {
         [gc]::Collect()
         & reg.exe unload $hiveName | Out-Null
         Remove-Item -LiteralPath "$hiveCopy*" -Force -ErrorAction SilentlyContinue
+    }
+    # And nothing starts OneDrive from runner's profile at logon (phase 2
+    # removes the Run entries its setup leaves). Same method, on a copy of
+    # the profile hive.
+    $userHiveCopy = Join-Path $env:TEMP ('golden-verify-' + [guid]::NewGuid().ToString('N'))
+    Copy-Item -LiteralPath "$w\Users\runner\NTUSER.DAT" -Destination $userHiveCopy
+    $userHiveName = 'HKLM\slate-golden-verify-runner'
+    & reg.exe load $userHiveName $userHiveCopy | Out-Null
+    if ($LASTEXITCODE -ne 0) { throw "reg load exited $LASTEXITCODE for runner's profile hive" }
+    try {
+        $run = Get-ItemProperty -Path 'HKLM:\slate-golden-verify-runner\Software\Microsoft\Windows\CurrentVersion\Run' -ErrorAction SilentlyContinue
+        foreach ($name in 'OneDrive', 'OneDriveSetup') {
+            if ($run -and $run.PSObject.Properties[$name]) { throw "runner's Run key still starts $name at logon: its window would take the shell gate's keystrokes" }
+        }
+    } finally {
+        [gc]::Collect()
+        & reg.exe unload $userHiveName | Out-Null
+        Remove-Item -LiteralPath "$userHiveCopy*" -Force -ErrorAction SilentlyContinue
     }
 } finally {
     Dismount-VHD -Path $OutPath

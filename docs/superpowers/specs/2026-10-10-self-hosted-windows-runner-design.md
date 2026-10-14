@@ -157,6 +157,12 @@ Resources: two VM slots, each 4 vCPU and 12 GB static memory. Guest video
 pinned to 1920×1080 with `Set-VMVideo`. Host power plan already never sleeps
 on AC; the runbook records that and the hibernate-off requirement.
 
+The job VM's desktop stays quiet: the shell gate's typed keystrokes go to
+whatever window is in front, so the image turns OneDrive off by policy and
+takes its Run entries and Windows' sign-in pages out of the runner profile,
+and the build verifies both in the sealed disk. A gate failure at a typed
+step names the foreground window, which is how a new one gets found.
+
 Disk budget: golden ~40 GB, three cache parents 60 GB max each (dynamic),
 two live children up to ~15 GB each. Plan for 200 GB against the 311 GB
 currently free; the footprint report in every lane shows the trend.

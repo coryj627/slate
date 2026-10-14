@@ -45,6 +45,21 @@ try {
     if ($LASTEXITCODE -ne 0) { throw "cargo install uniffi-bindgen-cs exited $LASTEXITCODE" }
     Write-Log (& uniffi-bindgen-cs --version)
 
+    # Nothing in this session may pop over Slate during the shell gate
+    # (phase 1 turns OneDrive off by policy; see there). Every job VM boots
+    # into this profile as it is left here, so what starts at this logon
+    # starts in every job: OneDrive's Run entries go, in case its setup ran
+    # anyway, and so do Windows' own sign-in pages, the welcome experience
+    # ("occasionally when I sign in") and the finish-setting-up page.
+    Remove-ItemProperty -Path 'HKCU:\Software\Microsoft\Windows\CurrentVersion\Run' -Name OneDrive, OneDriveSetup -ErrorAction SilentlyContinue
+    $contentDelivery = 'HKCU:\Software\Microsoft\Windows\CurrentVersion\ContentDeliveryManager'
+    if (-not (Test-Path -LiteralPath $contentDelivery)) { New-Item -Path $contentDelivery | Out-Null }
+    Set-ItemProperty -Path $contentDelivery -Name SubscribedContent-310093Enabled -Value 0 -Type DWord
+    $engagement = 'HKCU:\Software\Microsoft\Windows\CurrentVersion\UserProfileEngagement'
+    if (-not (Test-Path -LiteralPath $engagement)) { New-Item -Path $engagement | Out-Null }
+    Set-ItemProperty -Path $engagement -Name ScoobeSystemSettingEnabled -Value 0 -Type DWord
+    Write-Log 'profile quiet: OneDrive Run entries removed, sign-in pages off'
+
     Remove-Item -LiteralPath $dl -Recurse -Force
     Set-Content -LiteralPath (Join-Path $env:USERPROFILE '.slate-golden-complete') -Value ('{0:o}' -f (Get-Date))
     Write-Log 'golden complete'

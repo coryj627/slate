@@ -66,6 +66,30 @@ try {
     Set-ItemProperty -Path 'HKLM:\SYSTEM\CurrentControlSet\Services\Tcpip6\Parameters' -Name DisabledComponents -Value 0xFF -Type DWord
     Get-NetAdapter | Disable-NetAdapterBinding -ComponentID ms_tcpip6 -ErrorAction SilentlyContinue
 
+    # Nothing in runner's session may pop over Slate: the shell gate types
+    # into the app, and the foreground window gets the keystrokes, whatever
+    # it is. OneDrive's sign-in window did, a few minutes after a job VM's
+    # auto-logon (the gate's failure message names the foreground window).
+    # OneDrive goes off by policy, which OneDrive.exe and OneDriveSetup.exe
+    # both honour, and the Default profile loses the Run entry that installs
+    # OneDrive at a user's first logon, before runner's. The hive is loaded
+    # in place: no process holds it until that logon. Phase 2 clears
+    # runner's own profile, and the build verifies both.
+    $oneDrivePolicy = 'HKLM:\SOFTWARE\Policies\Microsoft\Windows\OneDrive'
+    if (-not (Test-Path -LiteralPath $oneDrivePolicy)) { New-Item -Path $oneDrivePolicy | Out-Null }
+    Set-ItemProperty -Path 'HKLM:\SOFTWARE\Policies\Microsoft\Windows\OneDrive' -Name DisableFileSyncNGSC -Value 1 -Type DWord
+    $defaultHive = 'HKU\slate-default-profile'
+    & reg.exe load $defaultHive 'C:\Users\Default\NTUSER.DAT' | Out-Null
+    if ($LASTEXITCODE -ne 0) { throw "reg load exited $LASTEXITCODE for the Default profile" }
+    try {
+        Remove-ItemProperty -Path 'Registry::HKEY_USERS\slate-default-profile\Software\Microsoft\Windows\CurrentVersion\Run' -Name OneDriveSetup -ErrorAction SilentlyContinue
+    } finally {
+        [gc]::Collect()
+        & reg.exe unload $defaultHive | Out-Null
+        if ($LASTEXITCODE -ne 0) { Write-Log "reg unload exited $LASTEXITCODE for the Default profile (the restart releases it)" }
+    }
+    Write-Log 'OneDrive off by policy; Default profile Run\OneDriveSetup removed'
+
     # Visual Studio 2022 Build Tools: C++ x64 + ARM64 and the Windows 11 SDK.
     Get-Download -Url $versions.vsBuildToolsUrl -Path (Join-Path $dl 'vs_BuildTools.exe') -Signer 'Microsoft Corporation'
     Invoke-Installer (Join-Path $dl 'vs_BuildTools.exe') ('--quiet --wait --norestart --nocache ' +
