@@ -28,6 +28,42 @@ $vmName = 'slate-golden-build'
 # Mount-DiskImage and Dismount-DiskImage need an absolute path.
 $IsoPath = (Resolve-Path -LiteralPath $IsoPath).Path
 
+function Use-GoldenHive([string]$HivePath, [string]$Name, [scriptblock]$Script, [switch]$Copy) {
+    # Loads one of the image's hives under HKLM\<Name>, runs $Script with
+    # the provider path, unloads it whatever happened, and checks both
+    # exit codes. -Copy works on a copy (with the transaction logs reg.exe
+    # replays), for a disk mounted read-only; the copy and the files
+    # reg.exe adds beside it go afterwards (-Path: a literal * matches
+    # nothing, and a SOFTWARE copy holds runner's auto-logon password).
+    $path = $HivePath
+    if ($Copy) {
+        $path = Join-Path $env:TEMP ('golden-verify-' + [guid]::NewGuid().ToString('N'))
+        Copy-Item -LiteralPath $HivePath -Destination $path
+        foreach ($log in 'LOG1', 'LOG2') {
+            if (Test-Path -LiteralPath "$HivePath.$log") { Copy-Item -LiteralPath "$HivePath.$log" -Destination "$path.$log" }
+        }
+    }
+    & reg.exe load "HKLM\$Name" $path | Out-Null
+    if ($LASTEXITCODE -ne 0) { throw "reg load exited $LASTEXITCODE for $HivePath" }
+    try {
+        & $Script "HKLM:\$Name"
+    } finally {
+        [gc]::Collect()
+        [gc]::WaitForPendingFinalizers()
+        & reg.exe unload "HKLM\$Name" | Out-Null
+        $unloadExit = $LASTEXITCODE
+        if ($Copy) { Remove-Item -Path "$path*" -Force -ErrorAction SilentlyContinue }
+    }
+    if ($unloadExit -ne 0) { throw "reg unload exited $unloadExit for HKLM\$Name ($path): unload it by hand before the next build" }
+}
+function New-GoldenRegistryKey([string]$Path) {
+    # New-Item makes one key under an existing parent, and -Force on an
+    # existing key deletes its values: walk the path instead.
+    $parent = Split-Path -Parent $Path
+    if ($parent -and -not (Test-Path -LiteralPath $parent)) { New-GoldenRegistryKey -Path $parent }
+    if (-not (Test-Path -LiteralPath $Path)) { New-Item -Path $Path | Out-Null }
+}
+
 if (Get-VM -Name $vmName -ErrorAction SilentlyContinue) { throw "VM $vmName exists; remove it first" }
 if ($Rotate -and (Test-Path -LiteralPath $OutPath)) {
     # Nothing moves while a runner VM exists: its disk is a differencing
@@ -96,6 +132,34 @@ try {
         Expand-WindowsImage -ImagePath $wim.FullName -Index $index -ApplyPath "$w\" | Out-Null
         & bcdboot.exe "$w\Windows" /s $s /f UEFI | Out-Null
         if ($LASTEXITCODE -ne 0) { throw "bcdboot exited $LASTEXITCODE" }
+        # Nothing may pop over Slate on a job VM's desktop: the shell gate's
+        # typed keystrokes go to the foreground window, whatever it is, and
+        # OneDrive's sign-in window took them (a gate failure names the
+        # window). Done here, offline and before any logon, in the image's
+        # own hives: OneDrive off by policy, which OneDrive.exe honours
+        # (whether OneDriveSetup.exe does is not documented), and the Default
+        # profile's two OneDrive entries removed, so no first logon, the
+        # temporary admin's included, installs or starts it. Phase 2 clears
+        # what runner's profile still holds; the verification below checks it all.
+        Use-GoldenHive -HivePath "$w\Windows\System32\config\SOFTWARE" -Name 'slate-golden-image' -Script {
+            param([string]$hive)
+            $policy = "$hive\Policies\Microsoft\Windows\OneDrive"
+            New-GoldenRegistryKey -Path $policy
+            Set-ItemProperty -Path $policy -Name DisableFileSyncNGSC -Value 1 -Type DWord
+        }
+        Use-GoldenHive -HivePath "$w\Users\Default\NTUSER.DAT" -Name 'slate-golden-image-default' -Script {
+            param([string]$hive)
+            $cv = "$hive\Software\Microsoft\Windows\CurrentVersion"
+            foreach ($entry in @(@('Run', 'OneDriveSetup'), @('RunOnce', 'OneDrive'))) {
+                $values = Get-ItemProperty -Path "$cv\$($entry[0])" -ErrorAction SilentlyContinue
+                if ($values -and $values.PSObject.Properties[$entry[1]]) {
+                    Remove-ItemProperty -Path "$cv\$($entry[0])" -Name $entry[1]
+                    Write-Host ('Default profile: removed {0}\{1} ({2})' -f $entry[0], $entry[1], $values.($entry[1]))
+                } else {
+                    Write-Host ('Default profile: no {0}\{1}' -f $entry[0], $entry[1])
+                }
+            }
+        }
         New-Item -ItemType Directory -Force -Path "$w\Windows\Panther", "$w\provision\guest" | Out-Null
         Set-Content -LiteralPath "$w\Windows\Panther\unattend.xml" -Value $unattend -Encoding utf8
         Copy-Item -LiteralPath (Join-Path $goldenDir 'provision-guest.ps1'), (Join-Path $goldenDir 'provision-runner-user.ps1'), (Join-Path $goldenDir 'versions.json') -Destination "$w\provision"
@@ -145,46 +209,37 @@ try {
     # bytes of DigitalProductId cleared (slmgr /cpky) and no clear-text
     # SoftwareProtectionPlatform\BackupProductKeyDefault, which Users can
     # read. Read from a copy of the SOFTWARE hive, loaded under a temporary
-    # name; the runbook's manual check does the same.
-    $hiveCopy = Join-Path $env:TEMP ('golden-verify-' + [guid]::NewGuid().ToString('N'))
-    Copy-Item -LiteralPath "$w\Windows\System32\config\SOFTWARE" -Destination $hiveCopy
-    $hiveName = 'HKLM\slate-golden-verify'
-    & reg.exe load $hiveName $hiveCopy | Out-Null
-    if ($LASTEXITCODE -ne 0) { throw "reg load exited $LASTEXITCODE" }
-    try {
-        $cv = 'HKLM:\slate-golden-verify\Microsoft\Windows NT\CurrentVersion'
+    # name; the runbook's manual check does the same. The same hive holds
+    # the OneDrive policy and the task cache: nothing may pop over Slate
+    # during the shell gate, so OneDrive is off by policy and registered no
+    # startup task (see the offline edit before the first boot).
+    Use-GoldenHive -HivePath "$w\Windows\System32\config\SOFTWARE" -Name 'slate-golden-verify' -Copy -Script {
+        param([string]$hive)
+        $cv = "$hive\Microsoft\Windows NT\CurrentVersion"
         $id = (Get-ItemProperty -Path $cv -ErrorAction SilentlyContinue).DigitalProductId
         $keyBytes = @($id | Select-Object -Skip 52 -First 15 | Where-Object { $_ -ne 0 }).Count
         if ($keyBytes -ne 0) { throw "DigitalProductId still holds $keyBytes key bytes: slmgr /cpky did not clear the product key" }
         $backup = (Get-ItemProperty -Path "$cv\SoftwareProtectionPlatform" -ErrorAction SilentlyContinue).BackupProductKeyDefault
         if ($backup) { throw 'SoftwareProtectionPlatform\BackupProductKeyDefault still holds a product key in clear text' }
-        # Nothing may pop over Slate during the shell gate: OneDrive off by
-        # policy (phase 1), or its sign-in window takes the keystrokes.
-        $oneDrive = (Get-ItemProperty -Path 'HKLM:\slate-golden-verify\Policies\Microsoft\Windows\OneDrive' -ErrorAction SilentlyContinue).DisableFileSyncNGSC
+        $oneDrive = (Get-ItemProperty -Path "$hive\Policies\Microsoft\Windows\OneDrive" -ErrorAction SilentlyContinue).DisableFileSyncNGSC
         if ($oneDrive -ne 1) { throw 'OneDrive is not off by policy (Policies\Microsoft\Windows\OneDrive\DisableFileSyncNGSC is not 1): its sign-in window would take the shell gate''s keystrokes' }
-    } finally {
-        [gc]::Collect()
-        & reg.exe unload $hiveName | Out-Null
-        Remove-Item -LiteralPath "$hiveCopy*" -Force -ErrorAction SilentlyContinue
+        $tasks = @(Get-ChildItem -Path "$cv\Schedule\TaskCache\Tree" -ErrorAction SilentlyContinue | Where-Object { $_.PSChildName -like 'OneDrive*' })
+        if ($tasks.Count -ne 0) { throw ('OneDrive registered a scheduled task in the image ({0}): it would start OneDrive after logon' -f ($tasks.PSChildName -join ', ')) }
     }
-    # And nothing starts OneDrive from runner's profile at logon (phase 2
-    # removes the Run entries its setup leaves). Same method, on a copy of
-    # the profile hive.
-    $userHiveCopy = Join-Path $env:TEMP ('golden-verify-' + [guid]::NewGuid().ToString('N'))
-    Copy-Item -LiteralPath "$w\Users\runner\NTUSER.DAT" -Destination $userHiveCopy
-    $userHiveName = 'HKLM\slate-golden-verify-runner'
-    & reg.exe load $userHiveName $userHiveCopy | Out-Null
-    if ($LASTEXITCODE -ne 0) { throw "reg load exited $LASTEXITCODE for runner's profile hive" }
-    try {
-        $run = Get-ItemProperty -Path 'HKLM:\slate-golden-verify-runner\Software\Microsoft\Windows\CurrentVersion\Run' -ErrorAction SilentlyContinue
-        foreach ($name in 'OneDrive', 'OneDriveSetup') {
-            if ($run -and $run.PSObject.Properties[$name]) { throw "runner's Run key still starts $name at logon: its window would take the shell gate's keystrokes" }
+    # Nothing starts OneDrive from runner's profile at logon, and Windows'
+    # sign-in pages are off there (phase 2); a copy of the profile hive.
+    Use-GoldenHive -HivePath "$w\Users\runner\NTUSER.DAT" -Name 'slate-golden-verify-runner' -Copy -Script {
+        param([string]$hive)
+        $cv = "$hive\Software\Microsoft\Windows\CurrentVersion"
+        foreach ($entry in @(@('Run', 'OneDrive'), @('Run', 'OneDriveSetup'), @('RunOnce', 'OneDrive'))) {
+            $values = Get-ItemProperty -Path "$cv\$($entry[0])" -ErrorAction SilentlyContinue
+            if ($values -and $values.PSObject.Properties[$entry[1]]) { throw "runner's $($entry[0])\$($entry[1]) still starts OneDrive at logon: its window would take the shell gate's keystrokes" }
         }
-    } finally {
-        [gc]::Collect()
-        & reg.exe unload $userHiveName | Out-Null
-        Remove-Item -LiteralPath "$userHiveCopy*" -Force -ErrorAction SilentlyContinue
+        if ((Get-ItemProperty -Path "$cv\ContentDeliveryManager" -ErrorAction SilentlyContinue).'SubscribedContent-310093Enabled' -ne 0) { throw 'the Windows welcome experience is still on for runner (ContentDeliveryManager\SubscribedContent-310093Enabled is not 0)' }
+        if ((Get-ItemProperty -Path "$cv\UserProfileEngagement" -ErrorAction SilentlyContinue).ScoobeSystemSettingEnabled -ne 0) { throw 'the finish-setting-up page is still on for runner (UserProfileEngagement\ScoobeSystemSettingEnabled is not 0)' }
     }
+    # And OneDrive's per-user setup never ran for runner.
+    if (Test-Path -LiteralPath "$w\Users\runner\AppData\Local\Microsoft\OneDrive\OneDrive.exe") { throw 'OneDrive is installed in runner''s profile (AppData\Local\Microsoft\OneDrive\OneDrive.exe): its first-logon setup ran despite the Default profile edit' }
 } finally {
     Dismount-VHD -Path $OutPath
 }

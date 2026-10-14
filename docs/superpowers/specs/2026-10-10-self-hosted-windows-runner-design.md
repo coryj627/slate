@@ -158,10 +158,12 @@ pinned to 1920×1080 with `Set-VMVideo`. Host power plan already never sleeps
 on AC; the runbook records that and the hibernate-off requirement.
 
 The job VM's desktop stays quiet: the shell gate's typed keystrokes go to
-whatever window is in front, so the image turns OneDrive off by policy and
-takes its Run entries and Windows' sign-in pages out of the runner profile,
-and the build verifies both in the sealed disk. A gate failure at a typed
-step names the foreground window, which is how a new one gets found.
+whatever window is in front, so the build turns OneDrive off by policy and
+drops its first-logon entries from the Default profile before the image's
+first boot, phase 2 takes its logon entries, its startup task and Windows'
+sign-in pages out of the runner profile, and the build verifies all of it
+in the sealed disk. The gate's focus waits and key-driven disk assertions
+name the foreground window when they fail, which is how a new one gets found.
 
 Disk budget: golden ~40 GB, three cache parents 60 GB max each (dynamic),
 two live children up to ~15 GB each. Plan for 200 GB against the 311 GB

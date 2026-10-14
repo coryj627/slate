@@ -45,20 +45,25 @@ try {
     if ($LASTEXITCODE -ne 0) { throw "cargo install uniffi-bindgen-cs exited $LASTEXITCODE" }
     Write-Log (& uniffi-bindgen-cs --version)
 
-    # Nothing in this session may pop over Slate during the shell gate
-    # (phase 1 turns OneDrive off by policy; see there). Every job VM boots
-    # into this profile as it is left here, so what starts at this logon
-    # starts in every job: OneDrive's Run entries go, in case its setup ran
-    # anyway, and so do Windows' own sign-in pages, the welcome experience
-    # ("occasionally when I sign in") and the finish-setting-up page.
-    Remove-ItemProperty -Path 'HKCU:\Software\Microsoft\Windows\CurrentVersion\Run' -Name OneDrive, OneDriveSetup -ErrorAction SilentlyContinue
-    $contentDelivery = 'HKCU:\Software\Microsoft\Windows\CurrentVersion\ContentDeliveryManager'
+    # Nothing in this session may pop over Slate during the shell gate (the
+    # image build turns OneDrive off by policy; see build-golden.ps1). Every
+    # job VM boots into this profile as it is left here, so what starts at
+    # this logon starts in every job: OneDrive's logon entries and its
+    # startup task go, in case its setup ran anyway, and so do Windows' own
+    # sign-in pages, the welcome experience ("occasionally when I sign in")
+    # and the finish-setting-up page. The build checks all of it in the
+    # sealed disk.
+    $currentVersion = 'HKCU:\Software\Microsoft\Windows\CurrentVersion'
+    Remove-ItemProperty -Path "$currentVersion\Run" -Name OneDrive, OneDriveSetup -ErrorAction SilentlyContinue
+    Remove-ItemProperty -Path "$currentVersion\RunOnce" -Name OneDrive -ErrorAction SilentlyContinue
+    Get-ScheduledTask -TaskName 'OneDrive*' -ErrorAction SilentlyContinue | Unregister-ScheduledTask -Confirm:$false
+    $contentDelivery = "$currentVersion\ContentDeliveryManager"
     if (-not (Test-Path -LiteralPath $contentDelivery)) { New-Item -Path $contentDelivery | Out-Null }
     Set-ItemProperty -Path $contentDelivery -Name SubscribedContent-310093Enabled -Value 0 -Type DWord
-    $engagement = 'HKCU:\Software\Microsoft\Windows\CurrentVersion\UserProfileEngagement'
+    $engagement = "$currentVersion\UserProfileEngagement"
     if (-not (Test-Path -LiteralPath $engagement)) { New-Item -Path $engagement | Out-Null }
     Set-ItemProperty -Path $engagement -Name ScoobeSystemSettingEnabled -Value 0 -Type DWord
-    Write-Log 'profile quiet: OneDrive Run entries removed, sign-in pages off'
+    Write-Log 'profile quiet: OneDrive logon entries and tasks removed, sign-in pages off'
 
     Remove-Item -LiteralPath $dl -Recurse -Force
     Set-Content -LiteralPath (Join-Path $env:USERPROFILE '.slate-golden-complete') -Value ('{0:o}' -f (Get-Date))

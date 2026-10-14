@@ -337,56 +337,79 @@ Describe 'golden scripts' {
         $remove | Should -BeGreaterThan $cpky
         $remove | Should -BeLessThan $guest.IndexOf('Restart-Computer -Force')
         $build = Get-Content -Raw (Join-Path $goldenDir 'build-golden.ps1')
-        $build | Should -Match ([regex]::Escape('Copy-Item -LiteralPath "$w\Windows\System32\config\SOFTWARE"'))
-        $build | Should -Match 'reg\.exe load \$hiveName \$hiveCopy'
+        $build | Should -Match ([regex]::Escape('Use-GoldenHive -HivePath "$w\Windows\System32\config\SOFTWARE" -Name ''slate-golden-verify'' -Copy'))
         $build | Should -Match ([regex]::Escape('Select-Object -Skip 52 -First 15 | Where-Object { $_ -ne 0 }'))
         $build | Should -Match 'DigitalProductId still holds'
         $build | Should -Match 'BackupProductKeyDefault still holds a product key in clear text'
-        # Unloaded and deleted whatever the result.
-        $build | Should -Match 'finally \{\s+\[gc\]::Collect\(\)\s+& reg\.exe unload \$hiveName'
-        $build | Should -Match ([regex]::Escape('Remove-Item -LiteralPath "$hiveCopy*" -Force'))
     }
-    It 'phase 1 turns OneDrive off by policy and drops its first-logon installer from the Default profile, before the restart' {
+    It 'the build turns OneDrive off by policy and drops its two first-logon entries from the Default profile, offline, before the first boot' {
         # Keystrokes go to the foreground window, whatever it is: the shell
         # gate failed when OneDrive's sign-in window popped over Slate on a
-        # job VM (run 38491884857). The policy stops OneDrive.exe and
-        # OneDriveSetup.exe; the Default profile's Run entry is what installs
-        # OneDrive at runner's first logon.
-        $guest = Get-Content -Raw (Join-Path $goldenDir 'provision-guest.ps1')
-        $policy = $guest.IndexOf("Set-ItemProperty -Path 'HKLM:\SOFTWARE\Policies\Microsoft\Windows\OneDrive' -Name DisableFileSyncNGSC -Value 1 -Type DWord")
-        $policy | Should -BeGreaterThan -1
-        $policy | Should -BeLessThan $guest.IndexOf('Restart-Computer -Force')
-        $guest | Should -Match ([regex]::Escape('reg.exe load $defaultHive ''C:\Users\Default\NTUSER.DAT'''))
-        $guest | Should -Match ([regex]::Escape("CurrentVersion\Run' -Name OneDriveSetup"))
-        # Unloaded whatever the result.
-        $guest | Should -Match 'finally \{\s+\[gc\]::Collect\(\)\s+& reg\.exe unload \$defaultHive'
-        # New-Item -Force on an existing key would delete its values.
-        @($guest -split "`n" | Where-Object { $_ -match 'New-Item' -and $_ -match 'OneDrive' -and $_ -match '-Force' }) | Should -BeNullOrEmpty
+        # job VM (run 38491884857). Offline, so no first logon (the
+        # temporary admin's included) installs or starts it; the Default
+        # profile carries Run\OneDriveSetup and, after a per-machine
+        # install, RunOnce\OneDrive.
+        $build = Get-Content -Raw (Join-Path $goldenDir 'build-golden.ps1')
+        $policy = $build.IndexOf('Use-GoldenHive -HivePath "$w\Windows\System32\config\SOFTWARE" -Name ''slate-golden-image'' -Script')
+        $default = $build.IndexOf('Use-GoldenHive -HivePath "$w\Users\Default\NTUSER.DAT" -Name ''slate-golden-image-default'' -Script')
+        foreach ($at in $policy, $default) {
+            $at | Should -BeGreaterThan $build.IndexOf('Expand-WindowsImage')
+            $at | Should -BeLessThan $build.IndexOf('Start-VM -Name $vmName')
+        }
+        $build | Should -Match ([regex]::Escape('Set-ItemProperty -Path $policy -Name DisableFileSyncNGSC -Value 1 -Type DWord'))
+        $build | Should -Match ([regex]::Escape("@(@('Run', 'OneDriveSetup'), @('RunOnce', 'OneDrive'))"))
+        # The key is made level by level: New-Item makes one key under an
+        # existing parent, and -Force on an existing key deletes its values.
+        $build | Should -Match 'New-GoldenRegistryKey -Path \$policy'
+        @($build -split "`n" | Where-Object { $_ -match 'New-Item -Path' -and $_ -match '-Force' }) | Should -BeNullOrEmpty
     }
-    It 'phase 2 removes OneDrive''s Run entries and Windows'' sign-in pages from the runner profile, before the completion marker' {
+    It 'phase 2 removes OneDrive''s logon entries and startup task and Windows'' sign-in pages from the runner profile, before the completion marker' {
         # The sealed image boots every job VM into runner's profile as phase
         # 2 left it: what starts at that logon starts in every job.
         $user = Get-Content -Raw (Join-Path $goldenDir 'provision-runner-user.ps1')
-        $run = $user.IndexOf("Remove-ItemProperty -Path 'HKCU:\Software\Microsoft\Windows\CurrentVersion\Run' -Name OneDrive, OneDriveSetup")
-        $run | Should -BeGreaterThan -1
-        $run | Should -BeLessThan $user.LastIndexOf('.slate-golden-complete')
-        $user | Should -Match 'ContentDeliveryManager'
-        $user | Should -Match 'SubscribedContent-310093Enabled -Value 0 -Type DWord'
-        $user | Should -Match 'UserProfileEngagement'
-        $user | Should -Match 'ScoobeSystemSettingEnabled -Value 0 -Type DWord'
-        @($user -split "`n" | Where-Object { $_ -match 'New-Item' -and $_ -match 'HKCU' -and $_ -match '-Force' }) | Should -BeNullOrEmpty
+        $marker = $user.LastIndexOf('.slate-golden-complete')
+        foreach ($line in 'Remove-ItemProperty -Path "$currentVersion\Run" -Name OneDrive, OneDriveSetup',
+                          'Remove-ItemProperty -Path "$currentVersion\RunOnce" -Name OneDrive',
+                          "Get-ScheduledTask -TaskName 'OneDrive*' -ErrorAction SilentlyContinue | Unregister-ScheduledTask -Confirm:`$false",
+                          'Set-ItemProperty -Path $contentDelivery -Name SubscribedContent-310093Enabled -Value 0 -Type DWord',
+                          'Set-ItemProperty -Path $engagement -Name ScoobeSystemSettingEnabled -Value 0 -Type DWord') {
+            $at = $user.IndexOf($line)
+            $at | Should -BeGreaterThan -1 -Because $line
+            $at | Should -BeLessThan $marker -Because $line
+        }
+        $user | Should -Match ([regex]::Escape("`$currentVersion = 'HKCU:\Software\Microsoft\Windows\CurrentVersion'"))
+        # Both keys are made without -Force (it deletes an existing key's values).
+        $newItems = @($user -split "`n" | Where-Object { $_ -match 'New-Item -Path \$(contentDelivery|engagement)' })
+        $newItems.Count | Should -Be 2
+        @($newItems | Where-Object { $_ -match '-Force' }) | Should -BeNullOrEmpty
     }
-    It 'the build checks the OneDrive policy in the SOFTWARE hive and runner''s Run key in a copy of the profile hive' {
+    It 'the build verifies the policy, the task cache, runner''s logon entries, the sign-in pages and the per-user install in the sealed disk' {
         $build = Get-Content -Raw (Join-Path $goldenDir 'build-golden.ps1')
-        $build | Should -Match ([regex]::Escape('HKLM:\slate-golden-verify\Policies\Microsoft\Windows\OneDrive'))
-        $build | Should -Match 'DisableFileSyncNGSC'
-        $build | Should -Match ([regex]::Escape('Copy-Item -LiteralPath "$w\Users\runner\NTUSER.DAT"'))
-        $build | Should -Match 'reg\.exe load \$userHiveName \$userHiveCopy'
-        $build | Should -Match ([regex]::Escape('HKLM:\slate-golden-verify-runner\Software\Microsoft\Windows\CurrentVersion\Run'))
-        foreach ($name in 'OneDrive', 'OneDriveSetup') { $build | Should -Match ("'$name'") -Because $name }
-        # Unloaded and deleted whatever the result.
-        $build | Should -Match 'finally \{\s+\[gc\]::Collect\(\)\s+& reg\.exe unload \$userHiveName'
-        $build | Should -Match ([regex]::Escape('Remove-Item -LiteralPath "$userHiveCopy*" -Force'))
+        $verify = $build.IndexOf('Mount-VHD -Path $OutPath -ReadOnly')
+        $software = $build.IndexOf('Use-GoldenHive -HivePath "$w\Windows\System32\config\SOFTWARE" -Name ''slate-golden-verify'' -Copy -Script')
+        $runner = $build.IndexOf('Use-GoldenHive -HivePath "$w\Users\runner\NTUSER.DAT" -Name ''slate-golden-verify-runner'' -Copy -Script')
+        $software | Should -BeGreaterThan $verify
+        $runner | Should -BeGreaterThan $software
+        $build | Should -Match 'DisableFileSyncNGSC is not 1'
+        $build | Should -Match ([regex]::Escape('Schedule\TaskCache\Tree'))
+        $build | Should -Match ([regex]::Escape("-like 'OneDrive*'"))
+        $build | Should -Match ([regex]::Escape("@(@('Run', 'OneDrive'), @('Run', 'OneDriveSetup'), @('RunOnce', 'OneDrive'))"))
+        $build | Should -Match 'SubscribedContent-310093Enabled is not 0'
+        $build | Should -Match 'ScoobeSystemSettingEnabled is not 0'
+        $build | Should -Match ([regex]::Escape('Test-Path -LiteralPath "$w\Users\runner\AppData\Local\Microsoft\OneDrive\OneDrive.exe"'))
+    }
+    It 'Use-GoldenHive checks both reg.exe exit codes, unloads in finally after a full collection, and removes a copy with its transaction logs' {
+        $build = Get-Content -Raw (Join-Path $goldenDir 'build-golden.ps1')
+        $build | Should -Match 'if \(\$LASTEXITCODE -ne 0\) \{ throw "reg load exited'
+        $build | Should -Match 'finally \{\s+\[gc\]::Collect\(\)\s+\[gc\]::WaitForPendingFinalizers\(\)\s+& reg\.exe unload "HKLM\\\$Name"'
+        $build | Should -Match '\$unloadExit = \$LASTEXITCODE'
+        $build | Should -Match 'if \(\$unloadExit -ne 0\) \{ throw "reg unload exited'
+        # reg.exe replays LOG1/LOG2 beside a copy, and adds files beside it:
+        # the copy goes by -Path (a literal * removes nothing), with -Force
+        # for the hidden+system attributes a profile hive carries.
+        $build | Should -Match ([regex]::Escape("foreach (`$log in 'LOG1', 'LOG2')"))
+        $build | Should -Match ([regex]::Escape('Remove-Item -Path "$path*" -Force'))
+        $build | Should -Not -Match 'Remove-Item -LiteralPath "[^"]*\*"'
     }
     It 'the build script resolves -IsoPath to an absolute path before mounting it' {
         # Mount-DiskImage and Dismount-DiskImage need an absolute path.

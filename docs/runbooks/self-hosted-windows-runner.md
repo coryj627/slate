@@ -569,18 +569,21 @@ saw before changing anything.
 
   Expect no IPv6 address at all, and `Enabled` reading `False` for the
   adapter.
-- [ ] Nothing pops over the desktop of a job VM. The image turns OneDrive
-  off by policy and takes its Run entries and Windows' sign-in pages out
-  of the runner profile, and the build checks the policy and the Run key
-  in the sealed disk. In a job VM's console, a few minutes after logon:
+- [ ] Nothing pops over the desktop of a job VM. The build turns OneDrive
+  off by policy and drops its first-logon entries from the Default profile
+  before the first boot, phase 2 takes its logon entries, its startup task
+  and Windows' sign-in pages out of the runner profile, and the build
+  checks all of it in the sealed disk (OneDrive's startup task fires ten
+  minutes after logon, so look late). In a job VM's console, twelve
+  minutes or more after logon:
 
   ```powershell
-  Get-Process OneDrive -ErrorAction SilentlyContinue; Get-ItemProperty HKCU:\Software\Microsoft\Windows\CurrentVersion\Run
+  Get-Process OneDrive -ErrorAction SilentlyContinue; Get-ScheduledTask -TaskName 'OneDrive*' -ErrorAction SilentlyContinue; Get-ItemProperty HKCU:\Software\Microsoft\Windows\CurrentVersion\Run, HKCU:\Software\Microsoft\Windows\CurrentVersion\RunOnce
   ```
 
-  Expect no process and no `OneDrive` or `OneDriveSetup` value. The
-  shell gate is the stronger check: a keyboard-driven test that fails
-  names the foreground window in its message (see "When things go wrong").
+  Expect no process, no task and no `OneDrive` or `OneDriveSetup` value.
+  The shell gate's focus waits and its key-driven disk assertions name
+  the foreground window when they fail (see "When things go wrong").
 - [ ] The guest's clock did not jump after boot. The bootstrap waits run on
   a stopwatch, so a jump cannot cut them short, but a jump still shows
   where the guest came from. Read the bootstrap log of a finished job VM
@@ -1506,12 +1509,16 @@ and `"status": "401"`. Rotate it before then.
   Slate on the job VM's desktop and took the keystrokes. Steps driven by
   UI Automation patterns do not care which window is in front; typed ones
   do, so which test fails depends on when the window came, and a re-run
-  passes. An image built from the current scripts turns OneDrive off by
-  policy (phase 1) and takes its Run entries and Windows' sign-in pages
-  out of the runner profile (phase 2); a job that fails this way runs on
-  an older one. Rebuild the golden disk. A different window's name in the
-  message is a new one: turn it off next to OneDrive in the two phase
-  scripts, add it to the build's check, and rebuild.
+  passes. The gate's focus waits and its key-driven disk assertions name
+  the foreground window when they fail. An image built from the current
+  scripts turns OneDrive off by policy and drops its first-logon entries
+  from the Default profile before the first boot, takes its logon entries,
+  its startup task and Windows' sign-in pages out of the runner profile
+  (phase 2), and verifies all of it in the sealed disk; a job that fails
+  this way runs on an older one. Rebuild the golden disk. A different
+  window's name in the message is a new one: turn it off beside OneDrive
+  (the offline edit in `build-golden.ps1`, or phase 2 for a per-user
+  switch), add it to the build's checks, and rebuild.
 - **`startup: No such host is known` every 30 s.** The host cannot
   resolve `api.github.com`: no network, most often after a reboot while
   the LAN adapter has no link yet. The loop exits and is relaunched each
