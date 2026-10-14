@@ -571,10 +571,11 @@ saw before changing anything.
   adapter.
 - [ ] Nothing pops over the desktop of a job VM. The build turns OneDrive
   off by policy and drops its first-logon entries from the Default profile
-  before the first boot, phase 2 takes its logon entries, its startup task
-  and Windows' sign-in pages out of the runner profile, and the build
-  checks all of it in the sealed disk (OneDrive's startup task fires ten
-  minutes after logon, so look late). In a job VM's console, twelve
+  before the first boot, phase 2 takes its logon entries and Windows'
+  sign-in pages out of the runner profile, and the build checks all of it
+  in the sealed disk, rejecting an image where OneDrive installed itself
+  or registered a task (its startup task fires ten minutes after logon, so
+  look late). In a job VM's console, twelve
   minutes or more after logon:
 
   ```powershell
@@ -1512,10 +1513,11 @@ and `"status": "401"`. Rotate it before then.
   passes. The gate's focus waits and its key-driven disk assertions name
   the foreground window when they fail. An image built from the current
   scripts turns OneDrive off by policy and drops its first-logon entries
-  from the Default profile before the first boot, takes its logon entries,
-  its startup task and Windows' sign-in pages out of the runner profile
-  (phase 2), and verifies all of it in the sealed disk; a job that fails
-  this way runs on an older one. Rebuild the golden disk. A different
+  from the Default profile before the first boot, takes its logon entries
+  and Windows' sign-in pages out of the runner profile (phase 2), and
+  verifies all of it in the sealed disk, rejecting an image where OneDrive
+  installed itself or registered a task; a job that fails this way runs
+  on an older one. Rebuild the golden disk. A different
   window's name in the message is a new one: turn it off beside OneDrive
   (the offline edit in `build-golden.ps1`, or phase 2 for a per-user
   switch), add it to the build's checks, and rebuild.

@@ -52,6 +52,9 @@ function Use-GoldenHive([string]$HivePath, [string]$Name, [scriptblock]$Script, 
         [gc]::WaitForPendingFinalizers()
         & reg.exe unload "HKLM\$Name" | Out-Null
         $unloadExit = $LASTEXITCODE
+        # Reported here too: a verification failure is the usual way $Script
+        # throws, and the throw below is skipped while one is in flight.
+        if ($unloadExit -ne 0) { Write-Warning "reg unload exited $unloadExit for HKLM\$Name ($path): unload it by hand before the next build" }
         if ($Copy) { Remove-Item -Path "$path*" -Force -ErrorAction SilentlyContinue }
     }
     if ($unloadExit -ne 0) { throw "reg unload exited $unloadExit for HKLM\$Name ($path): unload it by hand before the next build" }

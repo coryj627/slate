@@ -363,14 +363,13 @@ Describe 'golden scripts' {
         $build | Should -Match 'New-GoldenRegistryKey -Path \$policy'
         @($build -split "`n" | Where-Object { $_ -match 'New-Item -Path' -and $_ -match '-Force' }) | Should -BeNullOrEmpty
     }
-    It 'phase 2 removes OneDrive''s logon entries and startup task and Windows'' sign-in pages from the runner profile, before the completion marker' {
+    It 'phase 2 removes OneDrive''s logon entries and Windows'' sign-in pages from the runner profile, before the completion marker, and no task' {
         # The sealed image boots every job VM into runner's profile as phase
         # 2 left it: what starts at that logon starts in every job.
         $user = Get-Content -Raw (Join-Path $goldenDir 'provision-runner-user.ps1')
         $marker = $user.LastIndexOf('.slate-golden-complete')
         foreach ($line in 'Remove-ItemProperty -Path "$currentVersion\Run" -Name OneDrive, OneDriveSetup',
                           'Remove-ItemProperty -Path "$currentVersion\RunOnce" -Name OneDrive',
-                          "Get-ScheduledTask -TaskName 'OneDrive*' -ErrorAction SilentlyContinue | Unregister-ScheduledTask -Confirm:`$false",
                           'Set-ItemProperty -Path $contentDelivery -Name SubscribedContent-310093Enabled -Value 0 -Type DWord',
                           'Set-ItemProperty -Path $engagement -Name ScoobeSystemSettingEnabled -Value 0 -Type DWord') {
             $at = $user.IndexOf($line)
@@ -378,6 +377,9 @@ Describe 'golden scripts' {
             $at | Should -BeLessThan $marker -Because $line
         }
         $user | Should -Match ([regex]::Escape("`$currentVersion = 'HKCU:\Software\Microsoft\Windows\CurrentVersion'"))
+        # The build rejects an image with an OneDrive* task; removing one here
+        # would hide that, and runner cannot remove a SYSTEM-owned one anyway.
+        $user | Should -Not -Match 'Unregister-ScheduledTask'
         # Both keys are made without -Force (it deletes an existing key's values).
         $newItems = @($user -split "`n" | Where-Object { $_ -match 'New-Item -Path \$(contentDelivery|engagement)' })
         $newItems.Count | Should -Be 2
@@ -403,6 +405,9 @@ Describe 'golden scripts' {
         $build | Should -Match 'if \(\$LASTEXITCODE -ne 0\) \{ throw "reg load exited'
         $build | Should -Match 'finally \{\s+\[gc\]::Collect\(\)\s+\[gc\]::WaitForPendingFinalizers\(\)\s+& reg\.exe unload "HKLM\\\$Name"'
         $build | Should -Match '\$unloadExit = \$LASTEXITCODE'
+        # Warned inside the finally (a throw there is skipped while the
+        # script block's own exception is in flight) and thrown after it.
+        $build | Should -Match 'if \(\$unloadExit -ne 0\) \{ Write-Warning "reg unload exited'
         $build | Should -Match 'if \(\$unloadExit -ne 0\) \{ throw "reg unload exited'
         # reg.exe replays LOG1/LOG2 beside a copy, and adds files beside it:
         # the copy goes by -Path (a literal * removes nothing), with -Force

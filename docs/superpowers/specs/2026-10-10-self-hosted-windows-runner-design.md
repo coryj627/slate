@@ -160,9 +160,9 @@ on AC; the runbook records that and the hibernate-off requirement.
 The job VM's desktop stays quiet: the shell gate's typed keystrokes go to
 whatever window is in front, so the build turns OneDrive off by policy and
 drops its first-logon entries from the Default profile before the image's
-first boot, phase 2 takes its logon entries, its startup task and Windows'
-sign-in pages out of the runner profile, and the build verifies all of it
-in the sealed disk. The gate's focus waits and key-driven disk assertions
+first boot, phase 2 takes its logon entries and Windows' sign-in pages out
+of the runner profile, and the build verifies all of it in the sealed disk,
+rejecting an image where OneDrive installed itself or registered a task. The gate's focus waits and key-driven disk assertions
 name the foreground window when they fail, which is how a new one gets found.
 
 Disk budget: golden ~40 GB, three cache parents 60 GB max each (dynamic),
