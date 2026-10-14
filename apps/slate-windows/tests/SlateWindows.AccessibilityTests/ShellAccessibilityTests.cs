@@ -2426,6 +2426,19 @@ public sealed partial class ShellAccessibilityTests
     /// </remarks>
     private static string KeyInputDiagnosis(UIA3Automation automation)
     {
+        // FocusDiagnosis reads the foreground owner's process, which can
+        // exit in between (InvalidOperationException); a throw here would
+        // replace the failure this diagnosis is meant to explain.
+        string foreground;
+        try
+        {
+            foreground = FocusDiagnosis();
+        }
+        catch (Exception exception)
+        {
+            foreground = $"<foreground unreadable: {exception.GetType().Name}>";
+        }
+
         string focused;
         try
         {
@@ -2452,13 +2465,14 @@ public sealed partial class ShellAccessibilityTests
             (0x71, "F2"),
             (0x0D, "Return"),
             (0x09, "Tab"),
+            (0x20, "Space"),
         ];
         string[] down = watched
             .Where(key => (NativeForeground.GetAsyncKeyState(key.VirtualKey) & 0x8000) != 0)
             .Select(key => key.Name)
             .ToArray();
 
-        return $"{FocusDiagnosis()} The UIA focused element: {focused}. "
+        return $"{foreground} The UIA focused element: {focused}. "
             + "Keys down now (GetAsyncKeyState): "
             + (down.Length == 0 ? "none" : string.Join(", ", down))
             + ".";
@@ -2489,6 +2503,22 @@ public sealed partial class ShellAccessibilityTests
         }
         catch (Exception exception) when (
             exception is IOException or UnauthorizedAccessException)
+        {
+            return $"<unreadable: {exception.GetType().Name}>";
+        }
+    }
+
+    /// <summary>
+    /// Whether Slate has exited, for a failure message; never throws, so
+    /// it cannot replace the failure it describes.
+    /// </summary>
+    private static string ExitedForDiagnosis(Process process)
+    {
+        try
+        {
+            return process.HasExited ? "true" : "false";
+        }
+        catch (Exception exception)
         {
             return $"<unreadable: {exception.GetType().Name}>";
         }
@@ -3000,14 +3030,22 @@ public sealed partial class ShellAccessibilityTests
             {
                 // A miss says where the Space went: what todo.md holds,
                 // who had the foreground and focus, and which keys the
-                // system still reports down. The app log is kept.
-                string spaceMiss = "the Space toggle never reached disk. "
-                    + $"todo.md reads: {DiagnosticFileHead(todoPath)}. "
-                    + KeyInputDiagnosis(automation);
-                PreserveEvidence(
-                    nameof(TaskPanels_RowsToggleAndReviewCarriesTheMacShapes),
-                    logDirectory);
-                throw new Xunit.Sdk.XunitException(spaceMiss);
+                // system still reports down. The app log is kept even if
+                // building this message throws.
+                try
+                {
+                    throw new Xunit.Sdk.XunitException(
+                        "the Space toggle never reached disk. "
+                        + $"todo.md reads: {DiagnosticFileHead(todoPath)}. "
+                        + $"Slate exited: {ExitedForDiagnosis(process)}. "
+                        + KeyInputDiagnosis(automation));
+                }
+                finally
+                {
+                    PreserveEvidence(
+                        nameof(TaskPanels_RowsToggleAndReviewCarriesTheMacShapes),
+                        logDirectory);
+                }
             }
 
             // The vault-wide review: header, filter chips, and the
@@ -6771,41 +6809,48 @@ public sealed partial class ShellAccessibilityTests
                 // A miss says where the typed name went: the name box's
                 // text, whether it landed in the new note's body instead,
                 // what the vault root holds, and the key-input state. The
-                // app log is kept.
-                string nameBoxText;
+                // app log is kept even if building this message throws.
                 try
                 {
-                    nameBoxText = $"'{nameBox.Patterns.Value.Pattern.Value.ValueOrDefault}'";
-                }
-                catch (Exception exception)
-                {
-                    nameBoxText = $"<unreadable: {exception.GetType().Name}>";
-                }
+                    string nameBoxText;
+                    try
+                    {
+                        nameBoxText = $"'{nameBox.Patterns.Value.Pattern.Value.ValueOrDefault}'";
+                    }
+                    catch (Exception exception)
+                    {
+                        nameBoxText = $"<unreadable: {exception.GetType().Name}>";
+                    }
 
-                string vaultNotes;
-                try
-                {
-                    vaultNotes = string.Join(
-                        ", ",
-                        Directory.EnumerateFiles(vaultRoot, "*.md")
-                            .Select(path => Path.GetFileName(path)));
-                }
-                catch (Exception exception) when (
-                    exception is IOException or UnauthorizedAccessException)
-                {
-                    vaultNotes = $"<unlistable: {exception.GetType().Name}>";
-                }
+                    string vaultNotes;
+                    try
+                    {
+                        vaultNotes = string.Join(
+                            ", ",
+                            Directory.EnumerateFiles(vaultRoot, "*.md")
+                                .Select(path => Path.GetFileName(path)));
+                    }
+                    catch (Exception exception) when (
+                        exception is IOException or UnauthorizedAccessException)
+                    {
+                        vaultNotes = $"<unlistable: {exception.GetType().Name}>";
+                    }
 
-                string untitledPath = Path.Combine(vaultRoot, "Untitled.md");
-                string renameMiss = "the inline-rename commit never landed on disk (F1/F3). "
-                    + $"The name box reads {nameBoxText}. "
-                    + $"Untitled.md reads: {DiagnosticFileHead(untitledPath)}. "
-                    + $"The vault root's notes: {(vaultNotes.Length == 0 ? "none" : vaultNotes)}. "
-                    + KeyInputDiagnosis(automation);
-                PreserveEvidence(
-                    nameof(FileManagement_CreateRenameDuplicateMoveDelete_IsClean),
-                    logDirectory);
-                throw new Xunit.Sdk.XunitException(renameMiss);
+                    string untitledPath = Path.Combine(vaultRoot, "Untitled.md");
+                    throw new Xunit.Sdk.XunitException(
+                        "the inline-rename commit never landed on disk (F1/F3). "
+                        + $"The name box reads {nameBoxText}. "
+                        + $"Untitled.md reads: {DiagnosticFileHead(untitledPath)}. "
+                        + $"The vault root's notes: {(vaultNotes.Length == 0 ? "none" : vaultNotes)}. "
+                        + $"Slate exited: {ExitedForDiagnosis(process)}. "
+                        + KeyInputDiagnosis(automation));
+                }
+                finally
+                {
+                    PreserveEvidence(
+                        nameof(FileManagement_CreateRenameDuplicateMoveDelete_IsClean),
+                        logDirectory);
+                }
             }
 
             AssertAxeClean(process, "file-management-sidebar");
