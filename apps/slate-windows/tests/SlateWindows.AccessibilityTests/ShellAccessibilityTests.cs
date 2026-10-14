@@ -2412,6 +2412,171 @@ public sealed partial class ShellAccessibilityTests
             + "environmental.";
     }
 
+    /// <summary>
+    /// Where a keyboard-driven step's keys could have gone: the foreground
+    /// owner, the UIA focused element, and the keys the system reports down
+    /// right now. Computed on a failure only.
+    /// </summary>
+    /// <remarks>
+    /// Some sites in this suite call <c>Keyboard.Press</c> without a
+    /// <c>Release</c> (Escape, F2, Enter, Tab), which leaves the key logically
+    /// down for the rest of the process; a key still down is named here
+    /// rather than inferred. <c>GetAsyncKeyState</c> reads zero for every
+    /// key when this process's desktop is not the active one.
+    /// </remarks>
+    private static string KeyInputDiagnosis(UIA3Automation automation)
+    {
+        // FocusDiagnosis reads the foreground owner's process, which can
+        // exit in between (InvalidOperationException); a throw here would
+        // replace the failure this diagnosis is meant to explain.
+        string foreground;
+        try
+        {
+            foreground = FocusDiagnosis();
+        }
+        catch (Exception exception)
+        {
+            foreground = $"<foreground unreadable: {exception.GetType().Name}>";
+        }
+
+        string focused;
+        try
+        {
+            AutomationElement? element = automation.FocusedElement();
+            focused = element is null
+                ? "none"
+                : $"automation id '{element.Properties.AutomationId.ValueOrDefault}', "
+                    + $"name '{element.Properties.Name.ValueOrDefault}', "
+                    + $"control type {element.Properties.ControlType.ValueOrDefault}";
+        }
+        catch (Exception exception)
+        {
+            focused = $"unreadable ({exception.GetType().Name}: {exception.Message})";
+        }
+
+        (int VirtualKey, string Name)[] watched =
+        [
+            (0x11, "Control"),
+            (0x12, "Alt"),
+            (0x10, "Shift"),
+            (0x5B, "left Windows"),
+            (0x5C, "right Windows"),
+            (0x1B, "Escape"),
+            (0x71, "F2"),
+            (0x0D, "Return"),
+            (0x09, "Tab"),
+            (0x20, "Space"),
+        ];
+        string[] down = watched
+            .Where(key => (NativeForeground.GetAsyncKeyState(key.VirtualKey) & 0x8000) != 0)
+            .Select(key => key.Name)
+            .ToArray();
+
+        return $"{foreground} The UIA focused element: {focused}. "
+            + "Keys down now (GetAsyncKeyState): "
+            + (down.Length == 0 ? "none" : string.Join(", ", down))
+            + ".";
+    }
+
+    /// <summary>
+    /// The first 120 characters of <paramref name="path"/> for a failure
+    /// message, line breaks shown as escapes, or why there are none.
+    /// </summary>
+    private static string DiagnosticFileHead(string path)
+    {
+        try
+        {
+            if (!File.Exists(path))
+            {
+                return "<absent>";
+            }
+
+            using var stream = new FileStream(
+                path,
+                FileMode.Open,
+                FileAccess.Read,
+                FileShare.ReadWrite | FileShare.Delete);
+            using var reader = new StreamReader(stream);
+            string content = reader.ReadToEnd();
+            string head = content.Length > 120 ? content[..120] + "…" : content;
+            return "\"" + head.Replace("\r", "\\r").Replace("\n", "\\n") + "\"";
+        }
+        catch (Exception exception) when (
+            exception is IOException or UnauthorizedAccessException)
+        {
+            return $"<unreadable: {exception.GetType().Name}>";
+        }
+    }
+
+    /// <summary>
+    /// Whether Slate has exited, for a failure message; never throws, so
+    /// it cannot replace the failure it describes.
+    /// </summary>
+    private static string ExitedForDiagnosis(Process process)
+    {
+        try
+        {
+            return process.HasExited ? "true" : "false";
+        }
+        catch (Exception exception)
+        {
+            return $"<unreadable: {exception.GetType().Name}>";
+        }
+    }
+
+    /// <summary>
+    /// On a failure, copies the app's log directory into
+    /// <c>SLATE_ACCESSIBILITY_EVIDENCE_DIR\&lt;testName&gt;</c> (the
+    /// directory the CI job uploads) before the test's <c>finally</c>
+    /// deletes it. A no-op when the variable is unset; best effort, so a
+    /// copy error never replaces the failure being reported.
+    /// </summary>
+    /// <remarks>
+    /// The app holds <c>slate-windows.log</c> open for writing, so each
+    /// file is read through a shared stream rather than
+    /// <see cref="File.Copy(string, string, bool)"/>, which would hit a
+    /// sharing violation.
+    /// </remarks>
+    private static void PreserveEvidence(string testName, string logDirectory)
+    {
+        string? evidenceDirectory = Environment.GetEnvironmentVariable(
+            "SLATE_ACCESSIBILITY_EVIDENCE_DIR");
+        if (string.IsNullOrWhiteSpace(evidenceDirectory))
+        {
+            return;
+        }
+
+        try
+        {
+            string destination = Path.Combine(evidenceDirectory, testName);
+            Directory.CreateDirectory(destination);
+            foreach (string file in Directory.EnumerateFiles(logDirectory))
+            {
+                try
+                {
+                    using var source = new FileStream(
+                        file,
+                        FileMode.Open,
+                        FileAccess.Read,
+                        FileShare.ReadWrite | FileShare.Delete);
+                    using FileStream copy = File.Create(
+                        Path.Combine(destination, Path.GetFileName(file)));
+                    source.CopyTo(copy);
+                }
+                catch (Exception exception) when (
+                    exception is IOException or UnauthorizedAccessException)
+                {
+                    // Best effort: keep copying the rest.
+                }
+            }
+        }
+        catch (Exception exception) when (
+            exception is IOException or UnauthorizedAccessException)
+        {
+            // Best effort: the assertion that follows is the failure.
+        }
+    }
+
     private static class NativeForeground
     {
         [System.Runtime.InteropServices.DllImport("user32.dll")]
@@ -2425,6 +2590,9 @@ public sealed partial class ShellAccessibilityTests
         [System.Runtime.InteropServices.DllImport("user32.dll")]
         internal static extern uint GetWindowThreadProcessId(
             IntPtr hWnd, out uint processId);
+
+        [System.Runtime.InteropServices.DllImport("user32.dll")]
+        internal static extern short GetAsyncKeyState(int virtualKey);
     }
 
 
@@ -2840,25 +3008,45 @@ public sealed partial class ShellAccessibilityTests
             // guarded tab path — the DISK flip is the observable.
             openRow.Patterns.SelectionItem.Pattern.Select();
             openRow.Focus();
+            AssertEventuallyFocused(
+                openRow, "the open task row never took keyboard focus before Space");
             Keyboard.Type(VirtualKeyShort.SPACE);
-            Assert.True(
-                SpinWait.SpinUntil(
-                    () =>
+            if (!SpinWait.SpinUntil(
+                () =>
+                {
+                    // Tolerant of the app's atomic temp+rename
+                    // write racing this poll.
+                    try
                     {
-                        // Tolerant of the app's atomic temp+rename
-                        // write racing this poll.
-                        try
-                        {
-                            return File.ReadAllText(todoPath)
-                                .Contains("- [x] first open");
-                        }
-                        catch (IOException)
-                        {
-                            return false;
-                        }
-                    },
-                    TimeSpan.FromSeconds(20)),
-                "the Space toggle never reached disk");
+                        return File.ReadAllText(todoPath)
+                            .Contains("- [x] first open");
+                    }
+                    catch (IOException)
+                    {
+                        return false;
+                    }
+                },
+                TimeSpan.FromSeconds(20)))
+            {
+                // A miss says where the Space went: what todo.md holds,
+                // who had the foreground and focus, and which keys the
+                // system still reports down. The app log is kept even if
+                // building this message throws.
+                try
+                {
+                    throw new Xunit.Sdk.XunitException(
+                        "the Space toggle never reached disk. "
+                        + $"todo.md reads: {DiagnosticFileHead(todoPath)}. "
+                        + $"Slate exited: {ExitedForDiagnosis(process)}. "
+                        + KeyInputDiagnosis(automation));
+                }
+                finally
+                {
+                    PreserveEvidence(
+                        nameof(TaskPanels_RowsToggleAndReviewCarriesTheMacShapes),
+                        logDirectory);
+                }
+            }
 
             // The vault-wide review: header, filter chips, and the
             // filename-led row shape (the other note's task proves
@@ -6613,12 +6801,57 @@ public sealed partial class ShellAccessibilityTests
             Keyboard.Type("journey");
             Wait.UntilInputIsProcessed(TimeSpan.FromMilliseconds(250));
             PressKey(VirtualKeyShort.ENTER);
-            Assert.True(
-                SpinWait.SpinUntil(
-                    () => File.Exists(Path.Combine(vaultRoot, "journey.md"))
-                        && !File.Exists(Path.Combine(vaultRoot, "Untitled.md")),
-                    TimeSpan.FromSeconds(10)),
-                "the inline-rename commit never landed on disk (F1/F3).");
+            if (!SpinWait.SpinUntil(
+                () => File.Exists(Path.Combine(vaultRoot, "journey.md"))
+                    && !File.Exists(Path.Combine(vaultRoot, "Untitled.md")),
+                TimeSpan.FromSeconds(10)))
+            {
+                // A miss says where the typed name went: the name box's
+                // text, whether it landed in the new note's body instead,
+                // what the vault root holds, and the key-input state. The
+                // app log is kept even if building this message throws.
+                try
+                {
+                    string nameBoxText;
+                    try
+                    {
+                        nameBoxText = $"'{nameBox.Patterns.Value.Pattern.Value.ValueOrDefault}'";
+                    }
+                    catch (Exception exception)
+                    {
+                        nameBoxText = $"<unreadable: {exception.GetType().Name}>";
+                    }
+
+                    string vaultNotes;
+                    try
+                    {
+                        vaultNotes = string.Join(
+                            ", ",
+                            Directory.EnumerateFiles(vaultRoot, "*.md")
+                                .Select(path => Path.GetFileName(path)));
+                    }
+                    catch (Exception exception) when (
+                        exception is IOException or UnauthorizedAccessException)
+                    {
+                        vaultNotes = $"<unlistable: {exception.GetType().Name}>";
+                    }
+
+                    string untitledPath = Path.Combine(vaultRoot, "Untitled.md");
+                    throw new Xunit.Sdk.XunitException(
+                        "the inline-rename commit never landed on disk (F1/F3). "
+                        + $"The name box reads {nameBoxText}. "
+                        + $"Untitled.md reads: {DiagnosticFileHead(untitledPath)}. "
+                        + $"The vault root's notes: {(vaultNotes.Length == 0 ? "none" : vaultNotes)}. "
+                        + $"Slate exited: {ExitedForDiagnosis(process)}. "
+                        + KeyInputDiagnosis(automation));
+                }
+                finally
+                {
+                    PreserveEvidence(
+                        nameof(FileManagement_CreateRenameDuplicateMoveDelete_IsClean),
+                        logDirectory);
+                }
+            }
 
             AssertAxeClean(process, "file-management-sidebar");
 
