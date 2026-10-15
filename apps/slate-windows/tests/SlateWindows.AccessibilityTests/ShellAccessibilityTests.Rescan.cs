@@ -227,7 +227,7 @@ public sealed partial class ShellAccessibilityTests
                 }
             },
             TimeSpan.FromSeconds(10));
-        Keyboard.Press(VirtualKeyShort.ESCAPE);
+        PressKey(VirtualKeyShort.ESCAPE);
         AssertQuickSwitcherDisappears(window, automation);
         Assert.True(
             found,
