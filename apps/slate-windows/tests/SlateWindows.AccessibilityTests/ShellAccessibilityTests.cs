@@ -573,7 +573,7 @@ public sealed partial class ShellAccessibilityTests
                     AnnouncementDiagnostics(Path.Combine(logDirectory, "slate-windows.log")));
             }
             citationListener.Dispose();
-            Keyboard.Press(VirtualKeyShort.ESCAPE);
+            PressKey(VirtualKeyShort.ESCAPE);
             Assert.True(
                 SpinWait.SpinUntil(
                     () => window.FindFirstDescendant(
@@ -584,13 +584,13 @@ public sealed partial class ShellAccessibilityTests
             AssertEventuallyFocused(
                 editor,
                 "Escape did not return focus from the popover to the editor.");
-            Keyboard.Press(VirtualKeyShort.F2);
+            PressKey(VirtualKeyShort.F2);
             AssertEventuallyFocused(
                 editor,
                 "F2 escaped the editor even though the Files tree did not own focus.");
             noteItem.Focus();
             AssertEventuallyFocused(noteItem, "The note TreeItem could not receive focus.");
-            Keyboard.Press(VirtualKeyShort.F2);
+            PressKey(VirtualKeyShort.F2);
             AutomationElement renameInput = WaitForElement(
                 window,
                 "SidebarMutationName",
@@ -599,7 +599,7 @@ public sealed partial class ShellAccessibilityTests
                 renameInput,
                 "F2 from the Files tree did not focus the rename field.");
             Assert.Equal("note.md", renameInput.Patterns.Value.Pattern.Value);
-            Keyboard.Press(VirtualKeyShort.ESCAPE);
+            PressKey(VirtualKeyShort.ESCAPE);
             AutomationElement folderItem = treeItems.FirstOrDefault(item =>
                 item.Name.StartsWith("Folder", StringComparison.OrdinalIgnoreCase))
                 ?? throw new Xunit.Sdk.XunitException("The folder TreeItem is absent.");
@@ -861,11 +861,11 @@ public sealed partial class ShellAccessibilityTests
                 "QuickSwitcherClose",
                 TimeSpan.FromSeconds(10));
             Assert.True(closeQuick.Patterns.Invoke.IsSupported);
-            Keyboard.Press(VirtualKeyShort.TAB);
+            PressKey(VirtualKeyShort.TAB);
             AssertEventuallyFocused(
                 closeQuick,
                 "Tab did not remain inside Quick Open or reach its Close button.");
-            Keyboard.Press(VirtualKeyShort.ESCAPE);
+            PressKey(VirtualKeyShort.ESCAPE);
             AssertQuickSwitcherDisappears(window, automation);
             AssertEventuallyFocused(
                 sidebarFilter,
@@ -880,7 +880,7 @@ public sealed partial class ShellAccessibilityTests
             AssertEventuallyFocused(
                 quickSearch,
                 "Quick Open did not refocus search on its second invocation.");
-            Keyboard.Press(VirtualKeyShort.ENTER);
+            PressKey(VirtualKeyShort.ENTER);
             AssertQuickSwitcherDisappears(window, automation);
             editor = WaitForEditor(
                 window,
@@ -4336,8 +4336,7 @@ public sealed partial class ShellAccessibilityTests
                     TimeSpan.FromSeconds(10)),
                 $"the filtered count never arrived; readout: {countReadout.Name}");
             // Escape clears and returns focus to the content.
-            Keyboard.Press(VirtualKeyShort.ESCAPE);
-            Keyboard.Release(VirtualKeyShort.ESCAPE);
+            PressKey(VirtualKeyShort.ESCAPE);
             Assert.True(
                 SpinWait.SpinUntil(
                     () => !countReadout.Name.Contains(
@@ -4360,8 +4359,7 @@ public sealed partial class ShellAccessibilityTests
                 ?? throw new Xunit.Sdk.XunitException(
                     "No editable status cell in the base grid.");
             statusCell.Focus();
-            Keyboard.Press(VirtualKeyShort.F2);
-            Keyboard.Release(VirtualKeyShort.F2);
+            PressKey(VirtualKeyShort.F2);
             AutomationElement? cellEditor = null;
             Assert.True(
                 SpinWait.SpinUntil(
@@ -4379,8 +4377,7 @@ public sealed partial class ShellAccessibilityTests
                     TimeSpan.FromSeconds(10)),
                 "the cell editor did not take focus");
             Keyboard.Type("todo-edited");
-            Keyboard.Press(VirtualKeyShort.RETURN);
-            Keyboard.Release(VirtualKeyShort.RETURN);
+            PressKey(VirtualKeyShort.RETURN);
             Assert.True(
                 SpinWait.SpinUntil(
                     () =>
@@ -4531,8 +4528,7 @@ public sealed partial class ShellAccessibilityTests
                     $"the builder refused the save: '{builderError.Name}'");
             }
 
-            Keyboard.Press(VirtualKeyShort.ESCAPE);
-            Keyboard.Release(VirtualKeyShort.ESCAPE);
+            PressKey(VirtualKeyShort.ESCAPE);
             Assert.True(
                 SpinWait.SpinUntil(
                     () => window.FindFirstDescendant(
@@ -5690,7 +5686,7 @@ public sealed partial class ShellAccessibilityTests
             PressChord(
                 VirtualKeyShort.CONTROL, VirtualKeyShort.SHIFT, VirtualKeyShort.KEY_P);
             _ = WaitForElement(window, "CommandPalette", TimeSpan.FromSeconds(10));
-            Keyboard.Press(VirtualKeyShort.ESCAPE);
+            PressKey(VirtualKeyShort.ESCAPE);
             Wait.UntilInputIsProcessed(TimeSpan.FromMilliseconds(250));
 
             Assert.True(
@@ -6070,7 +6066,7 @@ public sealed partial class ShellAccessibilityTests
                     TimeSpan.FromSeconds(10)),
                 "the reopened overlay did not focus its search box");
 
-            Keyboard.Press(VirtualKeyShort.ESCAPE);
+            PressKey(VirtualKeyShort.ESCAPE);
             Wait.UntilInputIsProcessed(TimeSpan.FromMilliseconds(250));
 
             Assert.True(
@@ -6226,7 +6222,7 @@ public sealed partial class ShellAccessibilityTests
                 + "hides.");
 
             window.SetForeground();
-            Keyboard.Press(VirtualKeyShort.ESCAPE);
+            PressKey(VirtualKeyShort.ESCAPE);
             Assert.True(
                 SpinWait.SpinUntil(
                     () =>
@@ -6280,7 +6276,7 @@ public sealed partial class ShellAccessibilityTests
                 window, "SearchOverlayResults", TimeSpan.FromSeconds(10));
 
             window.SetForeground();
-            Keyboard.Press(VirtualKeyShort.ESCAPE);
+            PressKey(VirtualKeyShort.ESCAPE);
             Wait.UntilInputIsProcessed(TimeSpan.FromMilliseconds(250));
 
             // --- teardown: nothing of the overlay survives in the
@@ -6487,7 +6483,7 @@ public sealed partial class ShellAccessibilityTests
             // --- Esc cancels the picker; nothing is written (T7) ------
             string[] filesBeforeCancel = VaultUserFiles(vaultRoot);
             window.SetForeground();
-            Keyboard.Press(VirtualKeyShort.ESCAPE);
+            PressKey(VirtualKeyShort.ESCAPE);
             Assert.True(
                 SpinWait.SpinUntil(
                     () =>
@@ -6521,7 +6517,7 @@ public sealed partial class ShellAccessibilityTests
             PressKey(VirtualKeyShort.ENTER);
             _ = WaitForElement(window, "TemplateFlowSheet", TimeSpan.FromSeconds(10));
             window.SetForeground();
-            Keyboard.Press(VirtualKeyShort.ESCAPE);
+            PressKey(VirtualKeyShort.ESCAPE);
             Assert.True(
                 SpinWait.SpinUntil(
                     () =>
@@ -7427,7 +7423,7 @@ public sealed partial class ShellAccessibilityTests
             card!.Patterns.SelectionItem.Pattern.Select();
             card.Focus();
             Wait.UntilInputIsProcessed(TimeSpan.FromMilliseconds(250));
-            Keyboard.Press(VirtualKeyShort.ENTER);
+            PressKey(VirtualKeyShort.ENTER);
             AutomationElement sheet = WaitForElement(
                 window, "CanvasCardEditorSheet", TimeSpan.FromSeconds(10));
             AssertAxeClean(process, "canvas-card-editor");
@@ -7491,7 +7487,7 @@ public sealed partial class ShellAccessibilityTests
             // carries the new title.
             draft.Focus();
             Wait.UntilInputIsProcessed(TimeSpan.FromMilliseconds(250));
-            Keyboard.Press(VirtualKeyShort.ESCAPE);
+            PressKey(VirtualKeyShort.ESCAPE);
             Assert.True(
                 SpinWait.SpinUntil(
                     () => Rows().Any(item =>
@@ -8551,7 +8547,7 @@ public sealed partial class ShellAccessibilityTests
             AssertAxeClean(process, "canvas-move-mode-active");
 
             PressKey(VirtualKeyShort.RIGHT);
-            Keyboard.Press(VirtualKeyShort.ENTER);
+            PressKey(VirtualKeyShort.ENTER);
             Assert.True(
                 SpinWait.SpinUntil(
                     () => Commit() is null or { Properties.IsOffscreen.Value: true },
@@ -8566,7 +8562,7 @@ public sealed partial class ShellAccessibilityTests
                     () => Commit() is { } button && !button.Properties.IsOffscreen,
                     TimeSpan.FromSeconds(10)),
                 "resize mode never showed the commit control");
-            Keyboard.Press(VirtualKeyShort.ESCAPE);
+            PressKey(VirtualKeyShort.ESCAPE);
             Assert.True(
                 SpinWait.SpinUntil(
                     () => Commit() is null or { Properties.IsOffscreen.Value: true },
@@ -8580,7 +8576,7 @@ public sealed partial class ShellAccessibilityTests
                 window, "CanvasCardPickerSheet", TimeSpan.FromSeconds(10));
             Assert.NotNull(picker);
             AssertAxeClean(process, "canvas-card-picker");
-            Keyboard.Press(VirtualKeyShort.ESCAPE);
+            PressKey(VirtualKeyShort.ESCAPE);
             Assert.True(
                 SpinWait.SpinUntil(
                     () => window.FindFirstDescendant(
@@ -8765,7 +8761,7 @@ public sealed partial class ShellAccessibilityTests
             // Escape COMMITS (no changes here) and closes — the modal
             // must not swallow the legs below.
             draft.Focus();
-            Keyboard.Press(VirtualKeyShort.ESCAPE);
+            PressKey(VirtualKeyShort.ESCAPE);
             Assert.True(
                 SpinWait.SpinUntil(
                     () => window.FindFirstDescendant(
@@ -8790,7 +8786,7 @@ public sealed partial class ShellAccessibilityTests
             // the legs below are not under a modal.
             _ = WaitForElement(
                 window, "CanvasCardEditorSheet", TimeSpan.FromSeconds(10));
-            Keyboard.Press(VirtualKeyShort.ESCAPE);
+            PressKey(VirtualKeyShort.ESCAPE);
             Assert.True(
                 SpinWait.SpinUntil(
                     () => window.FindFirstDescendant(
