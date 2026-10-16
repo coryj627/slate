@@ -484,11 +484,12 @@ extension CanvasRendererTests {
 
     /// The layers between the cards hold their place through the same
     /// cycle. Plain connections paint beneath every card; coloured
-    /// connections and label chips paint above them, which is where
-    /// every first build has always drawn them (they are created after
-    /// the cards they connect). Stamping the cards' document order must
-    /// not bury a chip under a card, and a card coming back must not
-    /// cover one either.
+    /// connections paint above them and label chips above those, which
+    /// is where every first build has always drawn them (each kind is
+    /// created after the one beneath it). Stamping the cards' document
+    /// order must not bury a chip under a card, a card coming back must
+    /// not cover one, and neither may a colour that first appears after
+    /// the chip exists.
     func testConnectionLayersKeepTheirPlaceAcrossAPanCycle() async throws {
         let fixture = """
             {"nodes":[
@@ -499,14 +500,15 @@ extension CanvasRendererTests {
             {"id":"tinted","fromNode":"b","toNode":"a","color":"1","label":"link"}
             ]}
             """
-        let (_, doc, view) = try await makeView(canvasJSON: fixture, offset: Self.windowOverAOnly)
+        let (state, doc, view) = try await makeView(
+            canvasJSON: fixture, offset: Self.windowOverAOnly)
 
-        func assertLayering(_ label: String) {
+        func assertLayering(_ label: String, tint: String = "edges:1") {
             let order = view.paintOrderForTesting()
             let cards = order.indices.filter { order[$0] == "a" || order[$0] == "b" }
             guard let lowestCard = cards.min(), let highestCard = cards.max(),
                 let plain = order.firstIndex(of: "edges"),
-                let tinted = order.firstIndex(of: "edges:1"),
+                let tinted = order.firstIndex(of: tint),
                 let chip = order.firstIndex(of: "chip:tinted")
             else {
                 return XCTFail("\(label): a layer is missing from \(order)")
@@ -514,7 +516,8 @@ extension CanvasRendererTests {
             XCTAssertLessThan(plain, lowestCard, "\(label): plain connections beneath: \(order)")
             XCTAssertGreaterThan(
                 tinted, highestCard, "\(label): coloured connections above: \(order)")
-            XCTAssertGreaterThan(chip, highestCard, "\(label): label chips above: \(order)")
+            XCTAssertGreaterThan(
+                chip, tinted, "\(label): label chips above coloured connections: \(order)")
         }
 
         assertLayering("A alone")
@@ -528,5 +531,21 @@ extension CanvasRendererTests {
         assertLayering("B rematerialized")
         XCTAssertEqual(
             view.paintOrderForTesting().filter { $0 == "a" || $0 == "b" }, ["b", "a"])
+
+        // A colour that first appears now gets a fresh layer, inserted
+        // after the chip that already exists; the chip still paints above.
+        let plain = try XCTUnwrap(doc.scene.edges.first { $0.edgeId == "plain" })
+        XCTAssertTrue(
+            state.canvasApply(
+                CanvasAction(
+                    name: "tint the plain connection",
+                    ops: [
+                        .updateEdge(
+                            id: "plain", fromSide: plain.fromSide, toSide: plain.toSide,
+                            fromEnd: .none, toEnd: .arrow, label: nil, color: "2")
+                    ]),
+                to: doc))
+        view.rebuildVisible()
+        assertLayering("a colour added after the chip", tint: "edges:2")
     }
 }

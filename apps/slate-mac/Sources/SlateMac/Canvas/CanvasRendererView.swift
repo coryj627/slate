@@ -172,8 +172,9 @@ final class CanvasRendererNSView: NSView {
         layer?.addSublayer(contentLayer)
         // #961: `contentLayer` composites by `zPosition`, never by when a
         // layer was inserted — plain connections beneath every card,
-        // cards at their document index, coloured connections and label
-        // chips above the cards (`rebuildVisible`, `rebuildEdges`).
+        // cards at their document index, coloured connections above the
+        // cards and label chips above those (`rebuildVisible`,
+        // `rebuildEdges`).
         edgeLayer.zPosition = -1
         contentLayer.addSublayer(edgeLayer)
         selectionLayer.fillColor = nil
@@ -513,10 +514,12 @@ final class CanvasRendererNSView: NSView {
         }
         let increaseContrast = NSWorkspace.shared.accessibilityDisplayShouldIncreaseContrast
         let lineWidth = max(1, 1.5 * (viewport?.scale ?? 1))
-        // #961: coloured connections and label chips paint above every
-        // card, where each first build has always drawn them (they were
-        // inserted after the cards). Stamped rather than inserted, so a
-        // card that rematerializes later cannot cover them.
+        // #961: coloured connections paint above every card and label
+        // chips above them — the order each first build has always drawn
+        // (cards, then coloured paths, then chips, inserted in that
+        // order). Stamped rather than inserted, so a card that
+        // rematerializes later cannot cover a connection, and a colour
+        // that first appears after a chip exists cannot cover the chip.
         let aboveCards = CGFloat(document.scene.nodes.count)
         edgeLayer.path = path
         edgeLayer.strokeColor = CanvasColorPalette.edgeStroke(
@@ -555,7 +558,7 @@ final class CanvasRendererNSView: NSView {
             let chip = edgeLabelLayers[id] ?? CATextLayer()
             edgeLabelLayers[id] = chip
             if chip.superlayer == nil { contentLayer.addSublayer(chip) }
-            chip.zPosition = aboveCards
+            chip.zPosition = aboveCards + 1
             chip.string = entry.label
             chip.fontSize = labelFont
             chip.truncationMode = .end
