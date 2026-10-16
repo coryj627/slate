@@ -145,6 +145,7 @@ final class A11yCorpusCensusTests: XCTestCase {
             .noteSaveBlocked(filename: "notes.md", detail: "modified externally"),
             .noteSaveBlocked(filename: "notes.md", detail: "Something named notes.md already exists there."),
             .noteSaveConflict(filename: "notes.md"),
+            .createPublishedUnindexed(name: "notes.md", reason: "the index is locked."),
             .restoredVersionFrom(formattedDate: "July 19, 2026 at 9:41 AM"),
             .restoredFile(filename: "notes.md"),
             .restoredFileAs(sourceName: "notes.md", filename: "notes-restored.md"),
@@ -669,6 +670,66 @@ final class A11yCorpusCensusTests: XCTestCase {
                 priority, entry.priority,
                 "priority mismatch at corpus[\(index)] (\(entry.event))"
             )
+        }
+    }
+
+    /// #1140 (owner decision D9): the landed-but-unindexed create caveat is
+    /// a corpus row both hosts CONSUME, not one they merely mirror. The
+    /// artifact carries core's row; mac's one production construction is the
+    /// create helper every create funnel calls; Windows'
+    /// `CreateOutcomes.PublishedUnindexedCaveat` renders the same event; and
+    /// neither host spells the sentence itself any more (Windows did, as a
+    /// W0.5-3 residue, until this change).
+    func testTheUnindexedCreateCaveatRowIsConsumedByMacAndWindows() throws {
+        let entries = try JSONDecoder().decode(
+            [CorpusEntry].self, from: Data(contentsOf: Self.corpusURL))
+        let event = A11yEvent.createPublishedUnindexed(
+            name: "notes.md", reason: "the index is locked.")
+        let row = try XCTUnwrap(
+            entries.first { $0.event == a11yEventIdentity(event: event) },
+            "the committed corpus has no CreatePublishedUnindexed row")
+        XCTAssertEqual(row.priority, "medium", "spoken after the created sentence")
+        XCTAssertEqual(a11yRender(event: event).text, row.text)
+
+        let repoRoot = Self.corpusURL
+            .deletingLastPathComponent()  // a11y
+            .deletingLastPathComponent()  // fixtures
+            .deletingLastPathComponent()  // tests
+            .deletingLastPathComponent()  // repo root
+        let sentence = "was written but not indexed"
+
+        // Mac: the helper constructs it, nothing else does, nothing spells it.
+        let mac = repoRoot.appendingPathComponent("apps/slate-mac/Sources/SlateMac")
+        var constructing: [String] = []
+        let macFiles = try XCTUnwrap(
+            FileManager.default.enumerator(at: mac, includingPropertiesForKeys: nil))
+        for case let url as URL in macFiles where url.pathExtension == "swift" {
+            // The generated bindings are machinery, not consumers.
+            if url.lastPathComponent == "slate_uniffi.swift" { continue }
+            let source = try String(contentsOf: url, encoding: .utf8)
+            XCTAssertFalse(
+                source.contains(sentence), "\(url.lastPathComponent) spells core's caveat")
+            if SwiftSourceStripping.strippingCommentsAndStrings(source)
+                .contains(".createPublishedUnindexed(")
+            {
+                constructing.append(url.lastPathComponent)
+            }
+        }
+        XCTAssertEqual(constructing, ["AppState+CreateReporting.swift"])
+
+        // Windows: the caveat is the render of the same event, and no shell
+        // source composes it.
+        let windows = repoRoot.appendingPathComponent("apps/slate-windows/src/SlateWindows")
+        let outcomes = try String(
+            contentsOf: windows.appendingPathComponent("CreateOutcomes.cs"), encoding: .utf8)
+        XCTAssertTrue(outcomes.contains("new A11yEvent.CreatePublishedUnindexed("))
+        XCTAssertTrue(outcomes.contains("SlateUniffiMethods.A11yRender("))
+        let windowsFiles = try XCTUnwrap(
+            FileManager.default.enumerator(at: windows, includingPropertiesForKeys: nil))
+        for case let url as URL in windowsFiles where url.pathExtension == "cs" {
+            let source = try String(contentsOf: url, encoding: .utf8)
+            XCTAssertFalse(
+                source.contains(sentence), "\(url.lastPathComponent) spells core's caveat")
         }
     }
 

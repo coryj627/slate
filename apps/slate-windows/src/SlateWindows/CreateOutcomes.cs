@@ -16,12 +16,12 @@ namespace SlateWindows;
 /// </summary>
 internal static class CreateOutcomes
 {
-    /// <summary>W0.5-3 residue: the post-publish caveat — spoken after
-    /// the ordinary "created" sentence, never instead of it, because the
-    /// create DID happen.</summary>
+    /// <summary>The post-publish caveat, core's CreatePublishedUnindexed
+    /// rendered (#1140, D9) — spoken after the ordinary "created"
+    /// sentence, never instead of it, because the create DID happen.</summary>
     internal static string PublishedUnindexedCaveat(string name, string reason) =>
-        $"{name} was written but not indexed: {reason} "
-        + "It will appear in listings after the next scan; do not recreate it.";
+        SlateUniffiMethods.A11yRender(
+            new A11yEvent.CreatePublishedUnindexed(Name: name, Reason: reason)).Text;
 
     /// <summary>Runs a create and separates the two landed arms from the
     /// refusal: returns the landed path's caveat (null when committed);

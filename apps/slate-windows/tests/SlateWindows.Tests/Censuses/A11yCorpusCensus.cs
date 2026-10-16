@@ -152,6 +152,7 @@ public sealed class A11yCorpusCensus
         new A11yEvent.NoteSaveBlocked(Filename: "notes.md", Detail: "modified externally"),
         new A11yEvent.NoteSaveBlocked(Filename: "notes.md", Detail: "Something named notes.md already exists there."),
         new A11yEvent.NoteSaveConflict(Filename: "notes.md"),
+        new A11yEvent.CreatePublishedUnindexed(Name: "notes.md", Reason: "the index is locked."),
         new A11yEvent.RestoredVersionFrom(FormattedDate: "July 19, 2026 at 9:41 AM"),
         new A11yEvent.RestoredFile(Filename: "notes.md"),
         new A11yEvent.RestoredFileAs(SourceName: "notes.md", Filename: "notes-restored.md"),

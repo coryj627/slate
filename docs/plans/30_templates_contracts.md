@@ -476,7 +476,25 @@ both discarded with the workspace.
   as a create — the created sentence, then a caveat, then the open —
   and never retries under another name; the
   `SLATE_TEST_FAULT_AFTER_WRITE` seam drives the arm. mac's adoption
-  is #1140.
+  is #1140. *Mac half retired by #1140 (plan 43 PR 9):* the five mac
+  create funnels — this flow (`performCreateNoteFromTemplate`), the
+  untitled note (`createNote(in:)`), the folder note
+  (`createFolderNote(at:)`), Duplicate's candidate loop
+  (`duplicateEntry(path:)`) and Restore As… from a version
+  (`commitRestoreAs`) — call `createExclusiveReporting` through
+  `AppState.createReporting`, the twin of Windows'
+  `CreateOutcomes.CreateReporting`. On the landed arm each speaks its
+  created sentence, then the caveat, then opens the note (Duplicate
+  selects its copy, as it always has). It shows no name sheet or alert
+  and never retries. A refusal still throws, so `DestinationExists`
+  keeps driving Duplicate's auto-suffix and the name sheet. Owner
+  decision D9 moved the caveat into core as
+  `A11yEvent::CreatePublishedUnindexed { name, reason }` (medium),
+  byte-identical to the Windows string, which
+  `CreateOutcomes.PublishedUnindexedCaveat` now renders, so its W0.5-3
+  residue is gone. Out of scope, as before: the file-drop import
+  funnels, which keep their own batch report. The two mac creates the
+  spec did not list, New Canvas and the ghost-row note, are #1394.
 - **TR-6 — Case-alias identity is #1077's, inherited not forked**
   (codex round 2). A parked tab of a deleted `Ghost.md` plus a
   create of `ghost.md` addresses one physical file under two ordinal
