@@ -62,11 +62,20 @@ job queues home under `home` and `home-only` alike.
   later than the run's deadline (the app lane plus the shell gate); else
   the vendor now. Durations are measured constants in one table, injected
   into the rule so tests do not pin production numbers.
-- **OR-D4 A dead or crippled host routes away by itself.** The published
+- **OR-D4 A dead or failing host routes away by itself.** The published
   state is stale (its `at` more than 180 s before the routing job's own
   clock), says it is not serving, or offers no slot: every lane goes to
   the vendor. No run has to strand to discover an outage; a crashed host
-  is stale within three minutes. The reference is the router's clock, not
+  is stale within three minutes. A host whose loop runs but whose VMs
+  never come up says it is not serving through a breaker: three discards
+  of its own making in a row (a VM it could not provision, hand off or
+  hear from, or that shut down without running a job) with no runner
+  taking its job between them trip it, and the log says why once. It
+  serves again after a fifteen-minute cool-down (the next failure trips
+  it at once) or when the loop restarts, which is what follows a repair;
+  a runner taking its job forgets the failures. `BreakerFailures` and
+  `BreakerCooldownSeconds` in `config.json`, 3 and 900 when absent. The
+  reference for staleness is the router's clock, not
   the run's creation time: GitHub resolves `vars` when the job starts
   (verified on a re-run whose routing job read a heartbeat written eleven
   minutes after the run was created), and a run's creation time never
@@ -129,7 +138,7 @@ and in-progress runs, 100 a page up to five pages, plus their jobs; a
 failure on the first page means no earlier router is assumed, a failure
 on a later page keeps what was read).
 
-**Dead or crippled host (OR-D4).** The state is missing, does not parse,
+**Dead or failing host (OR-D4).** The state is missing, does not parse,
 has `v` other than 1, has `at` more than `ROUTE_STALE_SECONDS` (180)
 before the router's clock, has `serving` false, or has `slots` below 1.
 Then every lane goes to the vendor and the summary says which test
@@ -239,7 +248,8 @@ Repository variable `WINDOWS_HOME_STATE`, JSON, one line, for example:
  "queued":[{"lane":"model","since":"2026-10-11T14:40:00Z"}]}
 ```
 
-- `at`: the tick's UTC time. `serving`: `slots ≥ 1`. `slots`: the
+- `at`: the tick's UTC time. `serving`: `slots ≥ 1` and the breaker not
+  tripped (OR-D4). `slots`: the
   configured slot count minus slots held by VMs in teardown
   (`discarding`). `running`: every journal VM in phase `provisioned` or
   `handed` that holds a slot (a `PendingCommit` VM holds none), with its
@@ -502,6 +512,11 @@ optional API reads; nothing in `namespace` mode.
 - **A failed publish**, or a tick whose admission threw: the router
   routes away after three minutes; the log says why once a minute; the
   loop keeps serving queued home jobs.
+- **Failing host** (OR-D4): the third discard of the host's making in a
+  row trips the breaker; the next state says not serving and the log
+  says why once; the jobs already queued home keep their retries. The
+  state says serving again after the cool-down (one lane's worth comes
+  home to try; a failure trips it at once) or after a loop restart.
 - **Pool size**: published by the host, so there is nothing to keep in
   step; the router only clamps absurd values.
 - **Partial re-runs** always take the vendor (OR-D6); the runbook states

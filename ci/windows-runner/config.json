@@ -23,6 +23,8 @@
   "UnclaimedTimeoutSeconds": 300,
   "RetryCap": 3,
   "RetryBackoffSeconds": 600,
+  "BreakerFailures": 3,
+  "BreakerCooldownSeconds": 900,
   "LogRetentionDays": 30,
   "TrustedRepo": "coryj627/slate",
   "TrustedBranch": "main",

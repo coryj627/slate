@@ -185,6 +185,94 @@ function Register-JobRetry {
     $Retries[$key] = @{ Count = $count + 1; NextAt = $Now.AddSeconds($BackoffSeconds).ToString('o') }
 }
 
+function Get-HostHealth {
+    # The breaker's record in the journal (overflow spec OR-D4): failures
+    # in a row since a runner last took its job, the last one's time and
+    # reason, when the breaker tripped, and when it half-opened after the
+    # cool-down. A journal from before the record reads as healthy.
+    [CmdletBinding()]
+    param([Parameter(Mandatory)]$Journal)
+    if (-not ($Journal['Health'] -is [System.Collections.IDictionary])) { $Journal['Health'] = @{} }
+    $health = $Journal['Health']
+    foreach ($key in 'Failures', 'LastFailureAt', 'LastReason', 'TrippedAt', 'HalfOpenAt') {
+        if (-not $health.Contains($key)) { $health[$key] = $(if ($key -eq 'Failures') { 0 } else { $null }) }
+    }
+    if ($null -eq $health['Failures']) { $health['Failures'] = 0 }
+    return $health
+}
+
+function Test-HostCooledDown {
+    # True when the breaker never tripped, or tripped a full cool-down ago.
+    [CmdletBinding()]
+    param([Parameter(Mandatory)]$Config, [Parameter(Mandatory)]$Health, [Parameter(Mandatory)][datetimeoffset]$Now)
+    if ($null -eq $Health['TrippedAt']) { return $true }
+    $tripped = ConvertTo-DateTimeOffset -Value $Health['TrippedAt']
+    return ($Now -ge $tripped.AddSeconds([int]$Config.BreakerCooldownSeconds))
+}
+
+function Test-HostServing {
+    # The breaker's verdict for the published state: serving while the
+    # failures in a row stay under the cap, or once the cool-down has
+    # passed (half-open: the router sends one lane's worth to try, and
+    # the next failure trips it again at once).
+    [CmdletBinding()]
+    param([Parameter(Mandatory)]$Config, [Parameter(Mandatory)]$Journal, [Parameter(Mandatory)][datetimeoffset]$Now)
+    $health = Get-HostHealth -Journal $Journal
+    if ([int]$health['Failures'] -lt [int]$Config.BreakerFailures) { return $true }
+    return (Test-HostCooledDown -Config $Config -Health $health -Now $Now)
+}
+
+function Register-HostFailure {
+    # One more discard the host is to blame for (a VM it could not
+    # provision, hand off, hear from, or that shut down without running a
+    # job). At the cap, with no trip in force, the breaker trips: the next
+    # published state says not serving, and the log says why, once.
+    [CmdletBinding()]
+    param([Parameter(Mandatory)]$Config, [Parameter(Mandatory)]$Journal, [Parameter(Mandatory)][hashtable]$Adapters, [Parameter(Mandatory)][string]$Reason, [Parameter(Mandatory)][datetimeoffset]$Now)
+    $health = Get-HostHealth -Journal $Journal
+    $health['Failures'] = [int]$health['Failures'] + 1
+    $health['LastFailureAt'] = $Now.ToString('o')
+    $health['LastReason'] = $Reason
+    if ([int]$health['Failures'] -lt [int]$Config.BreakerFailures) { return }
+    if (-not (Test-HostCooledDown -Config $Config -Health $health -Now $Now)) { return }
+    $health['TrippedAt'] = $Now.ToString('o')
+    $health['HalfOpenAt'] = $null
+    $minutes = [int][math]::Round([int]$Config.BreakerCooldownSeconds / 60.0)
+    & $Adapters.Log 'warn' ("health: not serving for {0} min: {1} failures in a row, last '{2}' (the router sends every lane to the vendor until then; fix the host and restart the loop, or wait)" -f $minutes, $health['Failures'], $Reason)
+}
+
+function Register-HostSuccess {
+    # A runner took its job: provisioning, boot, handoff, network and
+    # registration all worked, so the failures before it are forgotten.
+    [CmdletBinding()]
+    param([Parameter(Mandatory)]$Journal, [Parameter(Mandatory)][hashtable]$Adapters)
+    $health = Get-HostHealth -Journal $Journal
+    $failures = [int]$health['Failures']
+    if ($failures -gt 0) { & $Adapters.Log 'info' "health: a runner took its job; $failures failures in a row forgotten" }
+    Reset-HostHealth -Journal $Journal
+}
+
+function Reset-HostHealth {
+    [CmdletBinding()]
+    param([Parameter(Mandatory)]$Journal)
+    $health = Get-HostHealth -Journal $Journal
+    foreach ($key in 'LastFailureAt', 'LastReason', 'TrippedAt', 'HalfOpenAt') { $health[$key] = $null }
+    $health['Failures'] = 0
+}
+
+function Update-HostHealth {
+    # Once a tick: the moment the cool-down passes is logged, once, so the
+    # log explains why the router started sending work home again.
+    [CmdletBinding()]
+    param([Parameter(Mandatory)]$Config, [Parameter(Mandatory)]$Journal, [Parameter(Mandatory)][hashtable]$Adapters, [Parameter(Mandatory)][datetimeoffset]$Now)
+    $health = Get-HostHealth -Journal $Journal
+    if ($null -eq $health['TrippedAt'] -or $null -ne $health['HalfOpenAt']) { return }
+    if (-not (Test-HostCooledDown -Config $Config -Health $health -Now $Now)) { return }
+    $health['HalfOpenAt'] = $Now.ToString('o')
+    $minutes = [int][math]::Round([int]$Config.BreakerCooldownSeconds / 60.0)
+    & $Adapters.Log 'info' "health: serving again after the $minutes min cool-down; the next failure trips it at once"
+}
+
 function Test-VmExpired {
     [CmdletBinding()]
     param(
@@ -383,6 +471,18 @@ function Get-CiHostConfig {
         throw "config ${Path}: LogRetentionDays must be a whole number of days, 1 or more"
     }
     $config['LogRetentionDays'] = [int]$days
+    # The health breaker (overflow spec OR-D4): failures in a row that make
+    # the host publish "not serving", and for how long. Older files
+    # predate both keys.
+    foreach ($pair in @(@('BreakerFailures', 3), @('BreakerCooldownSeconds', 900))) {
+        $key = $pair[0]
+        if (-not $config.Contains($key)) { $config[$key] = $pair[1] }
+        $value = $config[$key]
+        if (-not ($value -is [int] -or $value -is [int64] -or $value -is [double]) -or [double]$value -ne [math]::Floor([double]$value) -or [int]$value -lt 1) {
+            throw "config ${Path}: $key must be a whole number, 1 or more"
+        }
+        $config[$key] = [int]$value
+    }
     if (-not ($config.Lanes -is [System.Collections.IDictionary])) { throw "config ${Path}: Lanes must be an object" }
     foreach ($lane in @($config.Lanes.Keys)) {
         if ($script:DefaultLanes -cnotcontains $lane) { throw "config ${Path}: unknown lane '$lane'" }
@@ -412,7 +512,7 @@ function Get-CiHostConfig {
 # Every top-level journal key, present from creation and after a read of
 # an older file: the state machine reads them with index syntax and a
 # missing key would throw under strict mode.
-$script:JournalDefaults = @{ Vms = @{}; Retries = @{}; SeenJobs = @{}; PublishedState = $null; PublishedAt = $null; PublishFailedAt = $null; LogsPrunedOn = $null; GoldenAccepted = $null }
+$script:JournalDefaults = @{ Vms = @{}; Retries = @{}; SeenJobs = @{}; PublishedState = $null; PublishedAt = $null; PublishFailedAt = $null; LogsPrunedOn = $null; GoldenAccepted = $null; Health = @{} }
 
 function New-Journal {
     $journal = @{}
@@ -623,7 +723,10 @@ function Get-PublishedState {
     foreach ($job in @($Queued | Sort-Object CreatedAt, JobId)) {
         $waiting += [ordered]@{ lane = [string]$job.Lane; since = ConvertTo-StateTime $job.CreatedAt }
     }
-    return [ordered]@{ v = 1; at = ConvertTo-StateTime $Now; serving = ($slots -ge 1); slots = [int]$slots; running = @($running); queued = @($waiting) }
+    # Not serving while the breaker is tripped (OR-D4): the router then
+    # sends every lane to the vendor instead of queueing on a failing host.
+    $serving = ($slots -ge 1) -and (Test-HostServing -Config $Config -Journal $Journal -Now $Now)
+    return [ordered]@{ v = 1; at = ConvertTo-StateTime $Now; serving = $serving; slots = [int]$slots; running = @($running); queued = @($waiting) }
 }
 
 function Publish-HomeState {
@@ -682,6 +785,7 @@ function Remove-ActiveVm {
     if ($vm.CachePath) { try { $null = & $Adapters.DiscardCache $vm.CachePath } catch { $null = & $Adapters.Log 'warn' "${Name}: DiscardCache: $_" } }
     if ($Retry -and $vm.JobId) {
         Register-JobRetry -Retries $Journal.Retries -JobId ([int64]$vm.JobId) -Now $Now -BackoffSeconds ([int]$Config.RetryBackoffSeconds)
+        Register-HostFailure -Config $Config -Journal $Journal -Adapters $Adapters -Reason $Reason -Now $Now
     }
     try {
         $null = & $Adapters.RemoveVm $Name $vm.Dir
@@ -805,6 +909,7 @@ function Complete-ActiveVm {
         & $Adapters.RemoveVm $Name $vm.Dir
         if (-not $seenBusy) {
             Register-JobRetry -Retries $Journal.Retries -JobId ([int64]$vm.JobId) -Now $Now -BackoffSeconds ([int]$Config.RetryBackoffSeconds)
+            Register-HostFailure -Config $Config -Journal $Journal -Adapters $Adapters -Reason 'shut down without running a job' -Now $Now
         }
         $Journal.Vms.Remove($Name)
         return
@@ -961,6 +1066,7 @@ function Update-ActiveVm {
             if ($null -ne $runner -and $runner.busy) {
                 $vm.Claimed = $true
                 & $Adapters.Log 'info' "${Name}: claimed"
+                Register-HostSuccess -Journal $Journal -Adapters $Adapters
                 return
             }
             $job = & $Adapters.GetJob ([int64]$vm.JobId)
@@ -970,6 +1076,7 @@ function Update-ActiveVm {
                 # runner is already deleted and would otherwise look unclaimed).
                 $vm.Claimed = $true
                 & $Adapters.Log 'info' "${Name}: claimed (job $($job.status) on this runner)"
+                Register-HostSuccess -Journal $Journal -Adapters $Adapters
                 return
             }
             if ($null -eq $job -or $job.status -ne 'queued') {
@@ -1099,6 +1206,7 @@ function Invoke-Admission {
         if (-not $vm.Claimed) {
             $vm.Claimed = $true
             & $Adapters.Log 'info' "${name}: claimed (job $($job.JobId) in progress)"
+            Register-HostSuccess -Journal $Journal -Adapters $Adapters
         }
     }
     foreach ($key in @($Journal.SeenJobs.Keys)) {
@@ -1136,6 +1244,7 @@ function Invoke-Admission {
                 Remove-ActiveVm -Config $Config -Journal $Journal -Adapters $Adapters -Name $name -Reason 'provisioning failed' -Retry $true -Now $Now
             } else {
                 Register-JobRetry -Retries $Journal.Retries -JobId ([int64]$job.JobId) -Now $Now -BackoffSeconds ([int]$Config.RetryBackoffSeconds)
+                Register-HostFailure -Config $Config -Journal $Journal -Adapters $Adapters -Reason 'provisioning failed' -Now $Now
                 try { $null = & $Adapters.RemoveVm $name (Join-WinPath $Config.VmDir $name) } catch { & $Adapters.Log 'warn' "${name}: RemoveVm: $_" }
             }
         }
@@ -1167,6 +1276,8 @@ function Invoke-OrchestratorTick {
     $queued = $null
     try { $queued = @(Invoke-Admission -Config $Config -Journal $Journal -Adapters $Adapters -Now $Now) }
     catch { & $Adapters.Log 'error' "admission: $_" }
+    try { Update-HostHealth -Config $Config -Journal $Journal -Adapters $Adapters -Now $Now }
+    catch { & $Adapters.Log 'error' "health: $_" }
     if ($null -ne $queued) {
         try { Publish-HomeState -Journal $Journal -Adapters $Adapters -State (Get-PublishedState -Config $Config -Journal $Journal -Queued $queued -Now $Now) -Now $Now }
         catch { Write-PublishFailure -Journal $Journal -Adapters $Adapters -Now $Now -Level 'error' -Failure $_ }
@@ -1220,6 +1331,11 @@ function Invoke-StartupSweep {
         $Journal.SeenJobs = @{}
     }
     $Journal['LogsPrunedOn'] = $null
+    # The breaker: a restart is what follows a repair, so the failures in a
+    # row are forgotten and the next state says serving.
+    $failures = [int](Get-HostHealth -Journal $Journal)['Failures']
+    if ($failures -gt 0) { & $Adapters.Log 'info' "health: $failures failures in a row forgotten at start" }
+    Reset-HostHealth -Journal $Journal
 }
 
 function Select-SlateKvpItems {
@@ -1342,7 +1458,7 @@ function Set-LocalUserRights {
 }
 
 Export-ModuleMember -Function Get-LaneFromLabels, New-RunnerName, Split-KvpChunks, Join-KvpChunks,
-    ConvertTo-DateTimeOffset, Select-QueuedLaneJobs, Select-HostRunnerJobs, Select-JobsToAdmit, Register-JobRetry, Test-VmExpired, Get-StaleRunnerNames, Test-CommitEligible, Resolve-RunnerJob, Test-IPv4InPrefix, Get-CiHostConfig, New-Journal, Read-Journal, Write-Journal, Write-CiLog,
+    ConvertTo-DateTimeOffset, Select-QueuedLaneJobs, Select-HostRunnerJobs, Select-JobsToAdmit, Register-JobRetry, Get-HostHealth, Test-HostServing, Register-HostFailure, Register-HostSuccess, Reset-HostHealth, Update-HostHealth, Test-VmExpired, Get-StaleRunnerNames, Test-CommitEligible, Resolve-RunnerJob, Test-IPv4InPrefix, Get-CiHostConfig, New-Journal, Read-Journal, Write-Journal, Write-CiLog,
     Get-FreeSlots, Remove-ActiveVm, Test-SiblingRunning, Complete-ActiveVm, Update-ActiveVm, Invoke-Admission, Invoke-OrchestratorTick, Invoke-StartupSweep, Select-SlateKvpItems,
     Get-PublishedState, Publish-HomeState, Get-RunRepository, Test-TrustedRun, Get-OrchestratorLogDate, Get-OrchestratorLogName, Get-ExpiredLogNames, Invoke-LogPrune, Register-GoldenAcceptance, Test-GoldenPrevRemovable,
     Get-CiHostPaths, Read-JournalSnapshot, Remove-SealedFile,

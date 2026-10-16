@@ -1675,6 +1675,22 @@ and `"status": "401"`. Rotate it before then.
   discarded. A job that started and finished between two ticks is never
   seen on the runner: it ends as `shut down without running a job` above,
   and the job the VM was provisioned for takes one retry strike.
+- **`health: not serving for 15 min: 3 failures in a row, last '<reason>' …`.**
+  Three VMs in a row ended in a discard of the host's making
+  (`provisioning failed`, `handoff failed`, `no heartbeat`,
+  `shut down without running a job`, a VM unclaimed while its job stayed
+  queued, a VM that died) with no runner taking its job between them.
+  The host publishes `serving: false`, so the router sends every lane to
+  Namespace; the jobs already queued home keep their retries. The cause
+  is in the lines just before it (Hyper-V, the golden or cache disks, the
+  NAT, the PAT's runner permission). Fix it and restart the loop
+  (Disable, Stop, Enable): the restart forgets the failures and logs
+  `health: N failures in a row forgotten at start`. Left alone, the host
+  logs `health: serving again after the 15 min cool-down; the next failure
+  trips it at once` and the router sends one lane's worth home to try;
+  `health: a runner took its job; N failures in a row forgotten` means it
+  recovered by itself. `BreakerFailures` (3) and `BreakerCooldownSeconds`
+  (900) in `config.json`.
 - **`publish: <error>`.** The host could not write `WINDOWS_HOME_STATE`.
   The loop logs it at most once a minute and keeps serving. Once the
   published state is three minutes old, the router sends every lane to

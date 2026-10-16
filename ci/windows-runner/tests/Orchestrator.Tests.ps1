@@ -1215,6 +1215,143 @@ Context 'Invoke-StartupSweep' {
     }
 }
 
+Context 'health breaker' {
+    # Three retryable discards in a row with no runner claiming its job
+    # between them mean the host, not the jobs, is failing: it publishes
+    # serving false for the cool-down so the router sends every lane to
+    # the vendor, and says so once.
+    BeforeEach {
+        $script:breakerVm = {
+            # A handed-off VM in the journal, claimed, old enough to expire.
+            param([string]$Name, [datetimeoffset]$StartedAt)
+            $script:journal.Vms[$Name] = @{
+                Name = $Name; Lane = 'app'; Slot = 1; SlotIp = '10.77.0.11'; JobId = [int64]1; RunId = [int64]10
+                Dir = "C:\slate-ci\vms\$Name"; CachePath = $null; ForkGeneration = 3
+                Phase = 'handed'; StartedAt = $StartedAt.ToString('o'); HandedAt = $StartedAt.AddSeconds(10).ToString('o'); RunnerId = 77; Claimed = $true; PendingCommit = $false
+                GuestError = $null; SettleWaits = 0; ClaimCheckedAt = $null
+            }
+        }
+    }
+    It 'trips on the third failure across different jobs, publishes serving false, and says why once' {
+        $adapters.NewVm = { param($n, $l) & $script:record 'NewVm' @($n, $l); throw 'vmms down' }
+        $world.Queued = @((New-QueuedJob 1 10 'app'), (New-QueuedJob 2 11 'rust'), (New-QueuedJob 3 12 'model'))
+        Invoke-OrchestratorTick -Config $config -Journal $journal -Adapters $adapters -Now $t0
+        $journal.Health.Failures | Should -Be 2
+        $journal.PublishedState | Should -Match '"serving":true'
+        Invoke-OrchestratorTick -Config $config -Journal $journal -Adapters $adapters -Now $t0.AddSeconds(10)
+        $journal.Health.Failures | Should -Be 3
+        $journal.Health.LastReason | Should -Be 'provisioning failed'
+        $journal.PublishedState | Should -Be '{"v":1,"at":"2026-10-10T12:00:10Z","serving":false,"slots":2,"running":[],"queued":[]}'
+        ($logs -join "`n") | Should -Match "\[warn\] health: not serving for 15 min: 3 failures in a row, last 'provisioning failed'"
+        # Said once; the next tick changes nothing and writes nothing.
+        Invoke-OrchestratorTick -Config $config -Journal $journal -Adapters $adapters -Now $t0.AddSeconds(20)
+        ([regex]::Matches(($logs -join "`n"), 'health:')).Count | Should -Be 1
+        (Get-Calls 'PublishState').Count | Should -Be 2
+    }
+    It 'counts every discard the host is to blame for, through the journal''s retry sites' {
+        # A handoff that fails, a VM without a heartbeat, a VM that shuts
+        # down without running a job: each is a failure, whatever the job.
+        $world.Queued = @((New-QueuedJob 1 10 'app'))
+        Invoke-OrchestratorTick -Config $config -Journal $journal -Adapters $adapters -Now $t0
+        $adapters.SendKvp = { param($n, $i) & $script:record 'SendKvp' @($n, $i); throw 'kvp refused' }
+        Invoke-OrchestratorTick -Config $config -Journal $journal -Adapters $adapters -Now $t0.AddSeconds(10)
+        $journal.Health.Failures | Should -Be 1
+        $journal.Health.LastReason | Should -Be 'handoff failed'
+        $adapters.SendKvp = { param($n, $i) & $script:record 'SendKvp' @($n, $i) }
+        # The guest's heartbeat gates the handoff: none within the timeout
+        # of provisioning is a discard of the host's making.
+        $world.Queued = @((New-QueuedJob 2 11 'rust'))
+        Invoke-OrchestratorTick -Config $config -Journal $journal -Adapters $adapters -Now $t0.AddSeconds(20)
+        $world.Heartbeat = $null
+        Invoke-OrchestratorTick -Config $config -Journal $journal -Adapters $adapters -Now $t0.AddSeconds(20 + 181)
+        $journal.Health.Failures | Should -Be 2
+        $journal.Health.LastReason | Should -Be 'no heartbeat'
+        $journal.PublishedState | Should -Match '"serving":true'
+    }
+    It 'does not count a discard that is not the host''s fault' {
+        # A VM past its lane cap: the job ran too long, the host served it.
+        & $script:breakerVm 'slate-win-app-old00000' $t0.AddMinutes(-200)
+        Invoke-OrchestratorTick -Config $config -Journal $journal -Adapters $adapters -Now $t0
+        ($logs -join "`n") | Should -Match 'expired after'
+        $journal.Health.Failures | Should -Be 0
+        $journal.PublishedState | Should -Match '"serving":true'
+    }
+    It 'forgets the failures when a runner takes its job, and logs the recovery' {
+        $newVm = $adapters.NewVm
+        $adapters.NewVm = { param($n, $l) & $script:record 'NewVm' @($n, $l); throw 'vmms down' }
+        $world.Queued = @((New-QueuedJob 1 10 'app'), (New-QueuedJob 2 11 'rust'))
+        Invoke-OrchestratorTick -Config $config -Journal $journal -Adapters $adapters -Now $t0
+        $journal.Health.Failures | Should -Be 2
+        $adapters.NewVm = $newVm
+        $world.Queued = @((New-QueuedJob 3 12 'model'))
+        Invoke-OrchestratorTick -Config $config -Journal $journal -Adapters $adapters -Now $t0.AddSeconds(10)     # provisioned
+        Invoke-OrchestratorTick -Config $config -Journal $journal -Adapters $adapters -Now $t0.AddSeconds(20)     # handed off
+        $journal.Health.Failures | Should -Be 2 -Because 'a handoff is not yet a runner at work'
+        $world.Runner = [pscustomobject]@{ status = 'online'; busy = $true }
+        Invoke-OrchestratorTick -Config $config -Journal $journal -Adapters $adapters -Now $t0.AddSeconds(20 + 310)
+        @($journal.Vms.Values)[0].Claimed | Should -BeTrue
+        $journal.Health.Failures | Should -Be 0
+        $journal.Health.LastReason | Should -Be $null
+        ($logs -join "`n") | Should -Match '\[info\] health: a runner took its job; 2 failures in a row forgotten'
+    }
+    It 'serves again after the cool-down, and trips at once on the next failure' {
+        $adapters.NewVm = { param($n, $l) & $script:record 'NewVm' @($n, $l); throw 'vmms down' }
+        $world.Queued = @((New-QueuedJob 1 10 'app'), (New-QueuedJob 2 11 'rust'), (New-QueuedJob 3 12 'model'))
+        Invoke-OrchestratorTick -Config $config -Journal $journal -Adapters $adapters -Now $t0
+        Invoke-OrchestratorTick -Config $config -Journal $journal -Adapters $adapters -Now $t0.AddSeconds(10)
+        $journal.PublishedState | Should -Match '"serving":false'
+        # The jobs were cancelled meanwhile: nothing to admit during the cool-down.
+        $world.Queued = @()
+        Invoke-OrchestratorTick -Config $config -Journal $journal -Adapters $adapters -Now $t0.AddSeconds(10 + 899)
+        $journal.PublishedState | Should -Match '"serving":false'
+        Invoke-OrchestratorTick -Config $config -Journal $journal -Adapters $adapters -Now $t0.AddSeconds(10 + 900)
+        $journal.PublishedState | Should -Be '{"v":1,"at":"2026-10-10T12:15:10Z","serving":true,"slots":2,"running":[],"queued":[]}'
+        ($logs -join "`n") | Should -Match '\[info\] health: serving again after the 15 min cool-down; the next failure trips it at once'
+        Invoke-OrchestratorTick -Config $config -Journal $journal -Adapters $adapters -Now $t0.AddSeconds(10 + 910)
+        ([regex]::Matches(($logs -join "`n"), 'serving again')).Count | Should -Be 1
+        $world.Queued = @((New-QueuedJob 4 13 'app'))
+        Invoke-OrchestratorTick -Config $config -Journal $journal -Adapters $adapters -Now $t0.AddSeconds(10 + 920)
+        $journal.Health.Failures | Should -Be 4
+        $journal.PublishedState | Should -Match '"at":"2026-10-10T12:15:30Z","serving":false'
+        ([regex]::Matches(($logs -join "`n"), '\[warn\] health: not serving')).Count | Should -Be 2
+        ($logs -join "`n") | Should -Match "not serving for 15 min: 4 failures in a row, last 'provisioning failed'"
+    }
+    It 'keeps the record across a journal round trip' {
+        $adapters.NewVm = { param($n, $l) & $script:record 'NewVm' @($n, $l); throw 'vmms down' }
+        $world.Queued = @((New-QueuedJob 1 10 'app'), (New-QueuedJob 2 11 'rust'), (New-QueuedJob 3 12 'model'))
+        Invoke-OrchestratorTick -Config $config -Journal $journal -Adapters $adapters -Now $t0
+        Invoke-OrchestratorTick -Config $config -Journal $journal -Adapters $adapters -Now $t0.AddSeconds(10)
+        $p = Join-Path $TestDrive 'journal.json'
+        Write-Journal -Path $p -Journal $journal
+        $script:journal = Read-Journal -Path $p
+        $world.Queued = @()
+        Invoke-OrchestratorTick -Config $config -Journal $journal -Adapters $adapters -Now $t0.AddSeconds(10 + 899)
+        $journal.PublishedState | Should -Match '"serving":false'
+        Invoke-OrchestratorTick -Config $config -Journal $journal -Adapters $adapters -Now $t0.AddSeconds(10 + 900)
+        $journal.PublishedState | Should -Match '"serving":true'
+    }
+    It 'forgets the failures at the startup sweep, which is what follows a repair' {
+        $adapters.NewVm = { param($n, $l) & $script:record 'NewVm' @($n, $l); throw 'vmms down' }
+        $world.Queued = @((New-QueuedJob 1 10 'app'), (New-QueuedJob 2 11 'rust'), (New-QueuedJob 3 12 'model'))
+        Invoke-OrchestratorTick -Config $config -Journal $journal -Adapters $adapters -Now $t0
+        Invoke-OrchestratorTick -Config $config -Journal $journal -Adapters $adapters -Now $t0.AddSeconds(10)
+        $journal.Health.Failures | Should -Be 3
+        Invoke-StartupSweep -Config $config -Journal $journal -Adapters $adapters
+        $journal.Health.Failures | Should -Be 0
+        $journal.Health.TrippedAt | Should -Be $null
+        ($logs -join "`n") | Should -Match '\[info\] health: 3 failures in a row forgotten at start'
+        $world.Queued = @()
+        Invoke-OrchestratorTick -Config $config -Journal $journal -Adapters $adapters -Now $t0.AddSeconds(20)
+        $journal.PublishedState | Should -Match '"serving":true'
+    }
+    It 'reads an older journal without a health record as healthy' {
+        $journal.Remove('Health')
+        Invoke-OrchestratorTick -Config $config -Journal $journal -Adapters $adapters -Now $t0
+        $journal.PublishedState | Should -Match '"serving":true'
+        $journal.Health.Failures | Should -Be 0
+    }
+}
+
 }
 
 Describe 'orchestrator.ps1' {
