@@ -19,6 +19,12 @@ internal static class CreateOutcomes
     /// <summary>The post-publish caveat, core's CreatePublishedUnindexed
     /// rendered (#1140, D9) — spoken after the ordinary "created"
     /// sentence, never instead of it, because the create DID happen.</summary>
+    /// <param name="name">The created file's LEAF, as the user sees it —
+    /// never a vault-relative path (every caller passes one;
+    /// <c>EveryFunnelPassesALeafNameToTheCaveat</c>). Non-null.</param>
+    /// <param name="reason">The <c>PublishedUnindexed</c> arm's
+    /// <c>ErrorMessage</c>, spliced verbatim; core renders an empty or
+    /// blank one without the colon. Non-null.</param>
     internal static string PublishedUnindexedCaveat(string name, string reason) =>
         SlateUniffiMethods.A11yRender(
             new A11yEvent.CreatePublishedUnindexed(Name: name, Reason: reason)).Text;
