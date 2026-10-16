@@ -64,6 +64,84 @@ Describe 'Invoke-GhApi' {
     }
 }
 
+Describe 'Invoke-GhApi transient retry' {
+    BeforeEach {
+        $script:retryNotices = [System.Collections.ArrayList]::new()
+        $script:GhRetryNotice = { param($message) [void]$script:retryNotices.Add($message) }
+        Mock Start-Sleep {}
+    }
+    AfterAll {
+        $script:GhRetryNotice = $null
+    }
+    It 'tries a GET again after a connection reset, waiting 1 s then 2 s, and reports the retry once it succeeds' {
+        # The web cmdlets surface the inner exception of the
+        # HttpRequestException: a reset mid-response arrives as the IOException.
+        $script:calls = 0
+        Mock Invoke-RestMethod {
+            $script:calls++
+            if ($script:calls -lt 3) {
+                throw [System.IO.IOException]::new('Unable to read data from the transport connection: An existing connection was forcibly closed by the remote host.', [System.Net.Sockets.SocketException]::new(10054))
+            }
+            [pscustomobject]@{ ok = $true }
+        }
+        (Invoke-GhApi -Path '/actions/runs?status=queued').ok | Should -BeTrue
+        Should -Invoke Invoke-RestMethod -Times 3 -Exactly
+        Should -Invoke Start-Sleep -Times 1 -Exactly -ParameterFilter { $Seconds -eq 1 }
+        Should -Invoke Start-Sleep -Times 1 -Exactly -ParameterFilter { $Seconds -eq 2 }
+        Should -Invoke Start-Sleep -Times 2 -Exactly
+        @($script:retryNotices).Count | Should -Be 1
+        $script:retryNotices[0] | Should -Be 'GitHub API: GET /actions/runs?status=queued succeeded on attempt 3 after a connection failure'
+    }
+    It 'gives up after the third attempt, rethrowing with the token removed from the kept request' {
+        Mock Invoke-RestMethod {
+            $request = [System.Net.Http.HttpRequestMessage]::new([System.Net.Http.HttpMethod]::Get, 'https://api.github.com/repos/coryj627/slate/x')
+            $request.Headers.Authorization = [System.Net.Http.Headers.AuthenticationHeaderValue]::new('Bearer', 'ghp_test')
+            # The wrapper itself, for a caller that keeps it: the inner exception decides.
+            $exception = [System.Net.Http.HttpRequestException]::new('An error occurred while sending the request.', [System.IO.IOException]::new('reset'))
+            Write-Error -Exception $exception -TargetObject $request -ErrorAction Stop
+        }
+        $record = $null
+        try { Invoke-GhApi -Path '/x' } catch { $record = $_ }
+        $record | Should -Not -BeNullOrEmpty
+        Should -Invoke Invoke-RestMethod -Times 3 -Exactly
+        Should -Invoke Start-Sleep -Times 2 -Exactly
+        $record.TargetObject.Headers.Contains('Authorization') | Should -BeFalse
+        "$($record.TargetObject)" | Should -Not -BeLike '*ghp_test*'
+        @($script:retryNotices).Count | Should -Be 0
+    }
+    It 'never retries a POST, an HTTP status error or a timeout' {
+        # A retried generate-jitconfig would register a second runner.
+        Mock Invoke-RestMethod { throw [System.IO.IOException]::new('reset') }
+        { Invoke-GhApi -Method 'POST' -Path '/actions/runners/generate-jitconfig' -Body @{ name = 'x' } } | Should -Throw
+        Should -Invoke Invoke-RestMethod -Times 1 -Exactly
+        # GitHub answered: the caller decides (Get-GhRunner reads a 404).
+        Mock Invoke-RestMethod {
+            $response = [System.Net.Http.HttpResponseMessage]::new([System.Net.HttpStatusCode]::Forbidden)
+            throw [Microsoft.PowerShell.Commands.HttpResponseException]::new('forbidden', $response)
+        }
+        { Invoke-GhApi -Path '/x' } | Should -Throw
+        Should -Invoke Invoke-RestMethod -Times 2 -Exactly
+        # A stalled body must not triple the stall.
+        Mock Invoke-RestMethod { throw [System.Threading.Tasks.TaskCanceledException]::new('The request was canceled due to the configured HttpClient.Timeout of 30 seconds elapsing.', [System.TimeoutException]::new('timeout')) }
+        { Invoke-GhApi -Path '/x' } | Should -Throw
+        Should -Invoke Invoke-RestMethod -Times 3 -Exactly
+        Should -Invoke Start-Sleep -Times 0 -Exactly
+        @($script:retryNotices).Count | Should -Be 0
+    }
+    It 'retries a refused connection too, and stays quiet when no notice is wired' {
+        $script:GhRetryNotice = $null
+        $script:calls = 0
+        Mock Invoke-RestMethod {
+            $script:calls++
+            if ($script:calls -eq 1) { throw [System.Net.Sockets.SocketException]::new(10061) }
+            [pscustomobject]@{ ok = $true }
+        }
+        (Invoke-GhApi -Path '/x').ok | Should -BeTrue
+        Should -Invoke Invoke-RestMethod -Times 2 -Exactly
+        Should -Invoke Start-Sleep -Times 1 -Exactly
+    }
+}
+
 Describe 'Invoke-GhApi rate budget' {
     BeforeEach {
         $script:budgetWarnings = [System.Collections.ArrayList]::new()

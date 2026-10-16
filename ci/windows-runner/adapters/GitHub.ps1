@@ -17,6 +17,12 @@ $script:GhToken = $null
 # that takes one message and logs it at warn. Test-GhRateBudget calls it.
 $script:GhLowBudgetWarning = $null
 $script:GhLowBudgetWarnedReset = $null
+# Set by orchestrator.ps1 too: a scriptblock that takes one message and
+# logs it at info. Invoke-GhApi reports a GET that needed a retry through it.
+$script:GhRetryNotice = $null
+# A GET that fails at the connection level is tried again after each of
+# these waits, in seconds: three attempts in all, under the 10 s tick.
+$script:GhRetryDelays = @(1, 2)
 # Path -> @{ ETag; Body; UsedAt } for the conditional listing calls.
 $script:GhEtags = @{}
 
@@ -29,6 +35,22 @@ function Initialize-GitHubAdapter {
     )
     $script:GhBase = "https://api.github.com/repos/$Owner/$Repo"
     $script:GhToken = $Token
+}
+
+function Test-GhConnectionFailure {
+    # True when a failed call never got GitHub's answer: the connection was
+    # reset mid-response, refused, or dropped. The web cmdlets surface the
+    # inner exception of the HttpRequestException, so a reset arrives as
+    # the IOException and a refused connection as the SocketException; a
+    # caller that kept the wrapper is read through it. A timeout
+    # (TaskCanceledException) is not one: a stalled body must not be
+    # waited for three times over. An HTTP status (HttpResponseException,
+    # no inner exception) is GitHub's answer, for the caller to read.
+    [CmdletBinding()]
+    param([Parameter(Mandatory)]$ErrorRecord)
+    $exception = $ErrorRecord.Exception
+    if ($exception -is [System.Net.Http.HttpRequestException]) { $exception = $exception.InnerException }
+    return ($exception -is [System.IO.IOException] -or $exception -is [System.Net.Sockets.SocketException])
 }
 
 function Invoke-GhApi {
@@ -68,17 +90,32 @@ function Invoke-GhApi {
         $params.Body = $Body | ConvertTo-Json -Compress -Depth 5
         $params.ContentType = 'application/json'
     }
-    try {
-        $response = Invoke-RestMethod @params
-    } catch {
-        # A failed request's error record keeps the request as its
-        # TargetObject (the same object as the response's RequestMessage),
-        # whose ToString() prints the Authorization header, so Get-Error,
-        # Format-List * or serialising the record would show the token.
-        # Drop the header before rethrowing; the status code stays readable
-        # for Get-GhRunner. A plain exception has no TargetObject.
-        if ($_.TargetObject -is [System.Net.Http.HttpRequestMessage]) { [void]$_.TargetObject.Headers.Remove('Authorization') }
-        throw
+    $attempt = 0
+    while ($true) {
+        $attempt++
+        try {
+            $response = Invoke-RestMethod @params
+            break
+        } catch {
+            # A failed request's error record keeps the request as its
+            # TargetObject (the same object as the response's RequestMessage),
+            # whose ToString() prints the Authorization header, so Get-Error,
+            # Format-List * or serialising the record would show the token.
+            # Drop the header before rethrowing; the status code stays readable
+            # for Get-GhRunner. A plain exception has no TargetObject.
+            if ($_.TargetObject -is [System.Net.Http.HttpRequestMessage]) { [void]$_.TargetObject.Headers.Remove('Authorization') }
+            # A GET that lost its connection goes again after a short wait:
+            # api.github.com resets one now and then, and without this each
+            # reset cost the loop a tick's admission. Only GET: a repeated
+            # generate-jitconfig would register a second runner, and the
+            # variable writes and the runner delete have their own retry on
+            # a later tick. The last attempt, and anything else, is raised.
+            if ($Method -ne 'GET' -or $attempt -gt $script:GhRetryDelays.Count -or -not (Test-GhConnectionFailure -ErrorRecord $_)) { throw }
+            Start-Sleep -Seconds ([int]$script:GhRetryDelays[$attempt - 1])
+        }
+    }
+    if ($attempt -gt 1 -and $null -ne $script:GhRetryNotice) {
+        & $script:GhRetryNotice "GitHub API: $Method $Path succeeded on attempt $attempt after a connection failure"
     }
     Test-GhRateBudget -Headers $ghResponseHeaders
     if (-not $Conditional) { return $response }

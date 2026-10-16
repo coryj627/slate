@@ -23,8 +23,10 @@ $log = {
     param($level, $message)
     Write-CiLog -Path (Join-Path $config.LogDir (Get-OrchestratorLogName -Now ([datetimeoffset]::Now))) -Level $level -Message $message
 }
-# The GitHub adapter warns through this when the PAT's hourly budget runs low.
+# The GitHub adapter warns through this when the PAT's hourly budget runs
+# low, and notes through the second a GET that went through on a retry.
 $script:GhLowBudgetWarning = { param($message) & $log 'warn' $message }
+$script:GhRetryNotice = { param($message) & $log 'info' $message }
 
 # One loop per host: the journal, its .tmp file and the slots are not
 # shared, so a second instance (a manual run beside the task) refuses.

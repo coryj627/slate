@@ -1239,12 +1239,14 @@ Describe 'orchestrator.ps1' {
         $text | Should -Not -Match 'orchestrator-\{0\}'
         $text | Should -Not -Match 'Get-Date\s+-Format'
     }
-    It 'polls only the configured routed workflows and logs a low API budget at warn' {
+    It 'polls only the configured routed workflows, logs a low API budget at warn and a retried GET at info' {
         $text = Get-Content -Raw (Join-Path $PSScriptRoot '..' 'orchestrator.ps1')
         $text | Should -Match ([regex]::Escape('New-GitHubAdapters -RoutedWorkflows @($config.RoutedWorkflows)'))
-        $hook = '$script:GhLowBudgetWarning = { param($message) & $log ''warn'' $message }'
-        $text | Should -Match ([regex]::Escape($hook))
-        # Dot-sourcing the adapter resets the hook, so it is set afterwards.
-        $text.IndexOf($hook) | Should -BeGreaterThan $text.IndexOf("'GitHub.ps1')")
+        # Dot-sourcing the adapter resets the hooks, so they are set afterwards.
+        foreach ($hook in '$script:GhLowBudgetWarning = { param($message) & $log ''warn'' $message }',
+                          '$script:GhRetryNotice = { param($message) & $log ''info'' $message }') {
+            $text | Should -Match ([regex]::Escape($hook)) -Because $hook
+            $text.IndexOf($hook) | Should -BeGreaterThan $text.IndexOf("'GitHub.ps1')") -Because $hook
+        }
     }
 }

@@ -1527,6 +1527,17 @@ and `"status": "401"`. Rotate it before then.
   minute, and starts by itself once the network is back; nothing to do
   but find out why the network was down (see "Host reboot or Windows
   Update"). The same line once, between normal ticks, is a DNS blip.
+- **`GitHub API: GET … succeeded on attempt 2 after a connection failure`
+  now and then.** api.github.com reset or dropped the connection before
+  its answer arrived; the adapter tried the GET again after a second (then
+  two more) and it went through. A few a day are normal and cost nothing.
+  `admission: Unable to read data from the transport connection …` (or
+  `No connection could be made …`) means all three attempts failed in a
+  row: that tick admits nothing and publishes nothing, and the next tick
+  tries afresh. Many of either close together point at the host's network
+  (see "Host reboot or Windows Update"). Only GETs are retried: a repeated
+  `generate-jitconfig` would register a second runner, and the variable
+  writes and the runner delete retry on a later tick by themselves.
 - **`token missing at …` every minute.** No token is stored: run
   `store-token.ps1`. After `-ResetAccount`, store the token before you
   enable the loop task.
