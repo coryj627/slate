@@ -1535,15 +1535,16 @@ and `"status": "401"`. Rotate it before then.
   `admission: Unable to read data from the transport connection …`,
   `… The response ended prematurely`, `… No connection could be made …`
   or `… No such host is known` means the attempts failed in a row: three
-  fast ones; or a slow one (5 s or longer) after the request went out; or
-  a slow one that never went out (the connection, its TLS handshake or
-  the name lookup failed) and a second slow failure after it; or one that
-  can never be repeated, a connect Windows gave up on after 21 s
-  (`A connection attempt failed because the connected party did not
-  properly respond …`) or an attempt at 25 s or beyond. That tick admits
-  nothing and publishes nothing, and the next tick tries afresh. What
-  this host has seen is a TLS handshake that stalls 19 s on a new
-  connection and is then reset
+  in all, fast ones, with at most one slow one (5 s or longer) among them
+  whose connection failed while being set up (the connect, the TLS
+  handshake or the name lookup); or a slow one after the connection was
+  up, which is not repeated; or one that can never be repeated, a socket
+  that timed out (a connect Windows gave up on after 21 s: `A connection
+  attempt failed because the connected party did not properly respond …`)
+  or an attempt at 25 s or beyond. A call takes about a minute at worst.
+  That tick admits nothing and publishes nothing, and the next tick tries
+  afresh. What this host has seen is a TLS handshake that stalls 19 s on
+  a new connection and is then reset
   (`HttpRequestException(SecureConnectionError) > IOException >
   SocketException(ConnectionReset)`), while the next tick connects at
   once; such a failure is tried again once, and a run of them points at
@@ -1554,8 +1555,8 @@ and `"status": "401"`. Rotate it before then.
   a failed runner delete is logged at warn and left to the next startup
   sweep. Every GET that fails without an HTTP status and is not retried
   leaves one `info` line first: `GitHub API: GET … gave up on attempt N
-  of 3 after X s (the last attempt | a slow failure after the request
-  went out | a second slow failure | a connect that timed out | too slow
+  of 3 after X s (the last attempt | a slow failure after the connection
+  was up | a second slow failure | a socket that timed out | too slow
   to try again | not a connection failure): <exception types>`, where
   `X s` is that attempt's own time, not the call's. That line is the
   evidence for tuning the rule: the reason says which branch refused the

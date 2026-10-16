@@ -25,16 +25,20 @@ $script:GhRetryNotice = $null
 # these waits, in seconds: three attempts in all; the waits add 3 s to a
 # tick, and a fast failure's own time is bounded below.
 # A fast failure is one that took less than this. A slow one is tried
-# again once, and only when the request never went out (the connection,
-# its TLS handshake or the name lookup failed): nothing was lost but the
-# wait, and a new connection usually succeeds at once. That is what
-# api.github.com shows this host: a handshake that stalls 19 s on a new
-# connection and is then reset, while the next tick connects fine. A slow
-# failure after the request went out is not tried again (the server may
-# have acted on it, and the wait was not the whole cost), nor is a second
-# slow failure. Never tried again: a connect Windows gave up on
-# (SocketException TimedOut, 21 s), or an attempt at the cap or beyond,
-# so a dead network costs one attempt.
+# again once, and only when its last connection failed while being set
+# up (the connect, the TLS handshake or the name lookup): nothing was
+# lost but the wait, and a new connection usually succeeds at once. (The
+# .NET handler may already have sent the GET on an earlier connection
+# that the server reset before answering; harmless for a GET.) That is
+# what api.github.com shows this host: a handshake that stalls 19 s on a
+# new connection and is then reset, while the next tick connects fine.
+# A slow failure after the connection was up is not tried again (the
+# wait was not the whole cost), nor is a second slow failure. Never
+# tried again: a socket that timed out (a connect Windows gave up on
+# after 21 s), or an attempt at the cap or beyond. A timed-out connect
+# costs one attempt, a timed-out lookup two. The worst case for one call
+# is about a minute: a slow attempt just under the cap, a fast failure,
+# then a last attempt up to the 30 s request timeout.
 $script:GhRetryDelays = @(1, 2)
 $script:GhRetryFastFailureSeconds = 5
 $script:GhRetrySlowCapSeconds = 25
@@ -71,10 +75,10 @@ function Test-GhConnectionFailure {
 }
 
 function Test-GhRequestUnsent {
-    # True when the failure came before the request went out: the cmdlet's
-    # wrapper says the connection, its TLS handshake or the name lookup
+    # True when the last connection failed while being set up: the cmdlet's
+    # wrapper says the connect, the TLS handshake or the name lookup
     # failed. A wrapper without that detail, or a bare exception, is read
-    # as "the request may have gone out".
+    # as "the connection was up".
     [CmdletBinding()]
     param([Parameter(Mandatory)]$ErrorRecord)
     $exception = $ErrorRecord.Exception
@@ -85,7 +89,8 @@ function Test-GhRequestUnsent {
 
 function Test-GhConnectTimedOut {
     # True when a socket in the chain timed out: a connect that Windows
-    # gave up on after 21 s, which a retry would only repeat.
+    # gave up on after 21 s, or a read that waited out its timeout; a
+    # retry would only repeat the wait.
     [CmdletBinding()]
     param([Parameter(Mandatory)]$ErrorRecord)
     $exception = $ErrorRecord.Exception
@@ -184,8 +189,8 @@ function Invoke-GhApi {
             # repeated generate-jitconfig would register a second runner;
             # the variable write retries after a minute by itself, and a
             # failed runner delete is logged and left to the startup sweep.
-            # The last attempt, a slow failure after the request went out,
-            # a second slow failure, a connect that timed out, an attempt at
+            # The last attempt, a slow failure after the connection was up,
+            # a second slow failure, a socket that timed out, an attempt at
             # the cap, and anything else, is raised (the rule is set out at
             # the top of this file beside its numbers).
             $elapsed = $stopwatch.Elapsed.TotalSeconds
@@ -201,10 +206,10 @@ function Invoke-GhApi {
                 # its time: the evidence the retry rule is tuned from. An
                 # HTTP status is GitHub's answer, for the caller, and no news.
                 $why = if (-not $connection) { 'not a connection failure' }
-                       elseif ($timedOut) { 'a connect that timed out' }
+                       elseif ($timedOut) { 'a socket that timed out' }
                        elseif ($tooSlow) { 'too slow to try again' }
                        elseif ($last) { 'the last attempt' }
-                       elseif (-not $unsent) { 'a slow failure after the request went out' }
+                       elseif (-not $unsent) { 'a slow failure after the connection was up' }
                        else { 'a second slow failure' }
                 try {
                     Send-GhRetryNotice ('GitHub API: {0} {1} gave up on attempt {2} of {3} after {4} s ({5}): {6}' -f $Method, $Path, $attempt, ($script:GhRetryDelays.Count + 1), $elapsed.ToString('F1', [cultureinfo]::InvariantCulture), $why, (Format-GhExceptionChain -Exception $_.Exception))
