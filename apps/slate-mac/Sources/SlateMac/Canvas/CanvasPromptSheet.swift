@@ -417,7 +417,7 @@ struct CanvasPromptSheet: View {
     ) -> some View {
         Text(heading).font(Tokens.Typography.body.weight(.semibold))
         HStack(spacing: Tokens.Spacing.xs) {
-            ForEach(1...6, id: \.self) { preset in
+            ForEach(CanvasColorPalette.presetIDs, id: \.self) { preset in
                 Button(
                     canvasColorName(color: .preset(preset: UInt8(preset)))
                         .capitalized
