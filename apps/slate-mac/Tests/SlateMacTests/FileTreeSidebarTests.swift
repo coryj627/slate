@@ -1602,8 +1602,8 @@ final class FileTreeSidebarTests: XCTestCase {
             selection: selection, state: state, "folder, after the rescan")
 
         // The replay is the consumer's rename arm: pin it to the source.
-        let source = try appSource("FileTreeSidebar.swift")
-        let consumer = try functionBody(named: "handleTreeMutation", in: source)
+        let lines = codeLines(try appSource("FileTreeSidebar.swift"))
+        let consumer = try functionLines("handleTreeMutation", in: lines)
         for step in [
             "tree.rootLevelInvalidation()",
             "tree.treeInvalidation(parent: parentID)",
@@ -1611,15 +1611,17 @@ final class FileTreeSidebarTests: XCTestCase {
             "remapSelectionForKnownMove(oldPath: oldPath, newPath: newPath)",
             "applyPostMutationFocus(",
         ] {
-            XCTAssertTrue(consumer.contains(step), "handleTreeMutation no longer runs \(step)")
+            XCTAssertTrue(
+                consumer.contains { $0.hasPrefix(step) },
+                "handleTreeMutation no longer runs \(step)")
         }
         XCTAssertTrue(
-            try functionBody(named: "applyPostMutationFocus", in: source)
+            try functionLines("applyPostMutationFocus", in: lines)
                 .contains("case let .rename(_, newPath):"),
             "a rename's focus targets its new path")
         XCTAssertTrue(
-            try functionBody(named: "restorePendingPostMutationFocus", in: source)
-                .contains("Self.restorePendingPostMutationSelection("),
+            try functionLines("restorePendingPostMutationFocus", in: lines)
+                .contains { $0.contains("Self.restorePendingPostMutationSelection(") },
             "the level edge installs the focus through the shared restore")
     }
 
@@ -1678,12 +1680,21 @@ final class FileTreeSidebarTests: XCTestCase {
         XCTAssertEqual(tree.visibleRows.map(\.path).sorted(), ["journey.md", "other.md"])
 
         // The two edges this fact replays are the sidebar's.
-        let source = squeezed(try appSource("FileTreeSidebar.swift"))
+        let lines = codeLines(try appSource("FileTreeSidebar.swift"))
         for wiring in [
-            ".onChange(of: appState.sidebarMutationToken) { _, _ in filterModel.refreshAfterStructuralMutation()",
-            "} else { tree.authoritativeTreeInvalidation() }",
+            [
+                ".onChange(of: appState.sidebarMutationToken) { _, _ in",
+                "filterModel.refreshAfterStructuralMutation()",
+            ],
+            [
+                "if appState.consumeImportOwnedScanCompletion() != nil {",
+                "} else {",
+                "tree.authoritativeTreeInvalidation()",
+            ],
         ] {
-            XCTAssertTrue(source.contains(wiring), "the sidebar no longer runs \(wiring)")
+            XCTAssertTrue(
+                lines.indices.contains { lines[$0...].starts(with: wiring) },
+                "the sidebar no longer runs \(wiring.joined(separator: " "))")
         }
     }
 
@@ -2000,7 +2011,7 @@ final class FileTreeSidebarTests: XCTestCase {
         let suite = "FileTreeSidebarTests.filter.\(UUID().uuidString)"
         let defaults = UserDefaults(suiteName: suite)!
         defaults.removePersistentDomain(forName: suite)
-        addTeardownBlock { UserDefaults.standard.removePersistentDomain(forName: suite) }
+        addTeardownBlock { defaults.removePersistentDomain(forName: suite) }
         let model = SidebarFilterModel()
         model.bind(SidebarFilterModel.Dependencies(
             requirements: { try session.sidebarFilterDateRequirements(query: $0) },
@@ -2035,27 +2046,25 @@ final class FileTreeSidebarTests: XCTestCase {
             encoding: .utf8)
     }
 
-    private func functionBody(named name: String, in source: String) throws -> Substring {
-        let start = try XCTUnwrap(source.range(of: "func \(name)("), "no func \(name)")
-        let tail = source[start.lowerBound...]
-        let openBrace = try XCTUnwrap(tail.firstIndex(of: "{"))
-        var depth = 0
-        for index in tail.indices[openBrace...] {
-            switch tail[index] {
-            case "{": depth += 1
-            case "}":
-                depth -= 1
-                if depth == 0 { return tail[...index] }
-            default: break
-            }
-        }
-        return try XCTUnwrap(nil as Substring?, "unbalanced function body for \(name)")
+    /// The source's code lines, trimmed, with blank and comment lines dropped:
+    /// a pin matches a whole line of code, so neither re-indentation nor a
+    /// comment that mentions the call can satisfy or break it.
+    private func codeLines(_ source: String) -> [String] {
+        source.split(separator: "\n")
+            .map { $0.trimmingCharacters(in: .whitespaces) }
+            .filter { !$0.isEmpty && !$0.hasPrefix("//") }
     }
 
-    /// Source text with every whitespace run folded to one space, so a pin
-    /// survives re-indentation.
-    private func squeezed(_ source: String) -> String {
-        source.split(whereSeparator: \.isWhitespace).joined(separator: " ")
+    /// The code lines of `func name(`, from its signature line up to the next
+    /// function declaration. Scoped by lines, not by counting braces, so a
+    /// brace inside a string literal cannot cut the function short.
+    private func functionLines(_ name: String, in lines: [String]) throws -> [String] {
+        let start = try XCTUnwrap(
+            lines.firstIndex { $0.contains("func \(name)(") }, "no func \(name)")
+        let end = lines[(start + 1)...].firstIndex {
+            $0.range(of: #"^(?:[@\w()]+\s+)*func\s"#, options: .regularExpression) != nil
+        } ?? lines.endIndex
+        return Array(lines[start..<end])
     }
 
     // MARK: - Type-select buffer semantics (Codex round 2)
