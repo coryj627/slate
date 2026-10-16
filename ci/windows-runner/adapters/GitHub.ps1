@@ -18,7 +18,8 @@ $script:GhToken = $null
 $script:GhLowBudgetWarning = $null
 $script:GhLowBudgetWarnedReset = $null
 # Set by orchestrator.ps1 too: a scriptblock that takes one message and
-# logs it at info. Invoke-GhApi reports a GET that needed a retry through it.
+# logs it at info. Invoke-GhApi reports through it a GET that was answered
+# on a retry, and one it gave up on.
 $script:GhRetryNotice = $null
 # A GET that fails at the connection level is tried again after each of
 # these waits, in seconds: three attempts in all; the waits add 3 s to a
@@ -58,6 +59,33 @@ function Test-GhConnectionFailure {
     $exception = $ErrorRecord.Exception
     if ($exception -is [System.Net.Http.HttpRequestException]) { $exception = $exception.InnerException }
     return ($exception -is [System.IO.IOException] -or $exception -is [System.Net.Sockets.SocketException])
+}
+
+function Send-GhRetryNotice {
+    # Through the loop's hook, when one is wired; a notice that throws must
+    # not turn an answer into a failure.
+    [CmdletBinding()]
+    param([Parameter(Mandatory)][string]$Message)
+    if ($null -eq $script:GhRetryNotice) { return }
+    try { & $script:GhRetryNotice $Message } catch { }
+}
+
+function Format-GhExceptionChain {
+    # The failure's shape as type names, outer to inner, a socket error's
+    # code included: "HttpRequestException > IOException > SocketException(ConnectionReset)".
+    # Types only: a message could carry a URL or a reply, never needed here.
+    [CmdletBinding()]
+    param([Parameter(Mandatory)]$Exception)
+    $names = @()
+    $e = $Exception
+    while ($null -ne $e -and $names.Count -lt 6) {
+        $name = $e.GetType().Name
+        if ($e -is [System.Net.Sockets.SocketException]) { $name = '{0}({1})' -f $name, $e.SocketErrorCode }
+        elseif ($e -is [System.Net.Http.HttpRequestException] -and $e.PSObject.Properties['HttpRequestError'] -and [string]$e.HttpRequestError -ne 'Unknown') { $name = '{0}({1})' -f $name, $e.HttpRequestError }
+        $names += $name
+        $e = $e.InnerException
+    }
+    return ($names -join ' > ')
 }
 
 function Invoke-GhApi {
@@ -119,16 +147,25 @@ function Invoke-GhApi {
             # the variable write retries after a minute by itself, and a
             # failed runner delete is logged and left to the startup sweep.
             # The last attempt, a slow failure, and anything else, is raised.
-            $slow = $stopwatch.Elapsed.TotalSeconds -ge $script:GhRetryFastFailureSeconds
-            if ($Method -ne 'GET' -or $attempt -gt $script:GhRetryDelays.Count -or $slow -or -not (Test-GhConnectionFailure -ErrorRecord $_)) { throw }
+            $elapsed = $stopwatch.Elapsed.TotalSeconds
+            $connection = Test-GhConnectionFailure -ErrorRecord $_
+            $slow = $elapsed -ge $script:GhRetryFastFailureSeconds
+            $last = $attempt -gt $script:GhRetryDelays.Count
+            if ($Method -eq 'GET' -and ($last -or $slow -or -not $connection) -and -not ($_.Exception -is [Microsoft.PowerShell.Commands.HttpResponseException])) {
+                # Why this GET goes unretried, with the failure's shape and
+                # its time: the evidence the retry rule is tuned from. An
+                # HTTP status is GitHub's answer, for the caller, and no news.
+                $why = if (-not $connection) { 'not a connection failure' } elseif ($slow) { 'a slow failure' } else { 'the last attempt' }
+                try {
+                    Send-GhRetryNotice ('GitHub API: {0} {1} gave up on attempt {2} of {3} after {4} s ({5}): {6}' -f $Method, $Path, $attempt, ($script:GhRetryDelays.Count + 1), $elapsed.ToString('F1', [cultureinfo]::InvariantCulture), $why, (Format-GhExceptionChain -Exception $_.Exception))
+                } catch { }
+            }
+            if ($Method -ne 'GET' -or $last -or $slow -or -not $connection) { throw }
             Start-Sleep -Seconds ([int]$script:GhRetryDelays[$attempt - 1])
         }
     }
-    if ($attempt -gt 1 -and $null -ne $script:GhRetryNotice) {
-        # "answered": a conditional call may still raise the status below.
-        # A notice that throws must not turn the answer into a failure.
-        try { & $script:GhRetryNotice "GitHub API: $Method $Path answered on attempt $attempt after a connection failure" } catch { }
-    }
+    # "answered": a conditional call may still raise the status below.
+    if ($attempt -gt 1) { Send-GhRetryNotice "GitHub API: $Method $Path answered on attempt $attempt after a connection failure" }
     Test-GhRateBudget -Headers $ghResponseHeaders
     if (-not $Conditional) { return $response }
     if ($ghStatusCode -eq 304 -and $null -ne $cached) {

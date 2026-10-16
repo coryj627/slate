@@ -1543,7 +1543,16 @@ and `"status": "401"`. Rotate it before then.
   Only GETs are retried: a repeated `generate-jitconfig` would register a
   second runner; the variable write retries after a minute by itself, and
   a failed runner delete is logged at warn and left to the next startup
-  sweep.
+  sweep. Every GET that fails without an HTTP status and is not retried
+  leaves one `info` line first: `GitHub API: GET … gave up on attempt N
+  of 3 after X s (the last attempt | a slow failure | not a connection
+  failure): <exception types>`, where `X s` is that attempt's own time,
+  not the call's. That line is the evidence for tuning the rule: a slow
+  failure at a few seconds with a `SocketException(ConnectionReset)`
+  inside says the 5 s bound is too tight for that request; an
+  unfamiliar type says the classifier does not know the shape. A GET
+  that GitHub answered with a status (a 403, Get-GhRunner's 404) leaves
+  no such line.
 - **`token missing at …` every minute.** No token is stored: run
   `store-token.ps1`. After `-ResetAccount`, store the token before you
   enable the loop task.

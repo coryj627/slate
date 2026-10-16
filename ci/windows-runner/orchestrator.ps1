@@ -24,7 +24,8 @@ $log = {
     Write-CiLog -Path (Join-Path $config.LogDir (Get-OrchestratorLogName -Now ([datetimeoffset]::Now))) -Level $level -Message $message
 }
 # The GitHub adapter warns through this when the PAT's hourly budget runs
-# low, and notes through the second a GET that went through on a retry.
+# low, and notes through the second a GET that went through on a retry,
+# or that it gave up on.
 $script:GhLowBudgetWarning = { param($message) & $log 'warn' $message }
 $script:GhRetryNotice = { param($message) & $log 'info' $message }
 
