@@ -439,7 +439,11 @@ D4: test more and build the matrix before any policy call.
 ## 6. Housekeeping (done 2026-10-09)
 
 - #1332 filed: SidebarOrganization collapses duplicate shortcut slots and
-  drops a converging rename, from #1301's note.
+  drops a converging rename, from #1301's note. Delivered 2026-10-16 by
+  plan 43 PR 25 under D6 (converge to the Windows slot model): every
+  authored slot is a row with a composed spoken name, through a restart,
+  a rename and a move, a 64-slot decode cap replaces the collapse, and a
+  slot's removal names it.
 - #1333 filed: the mac Refresh and foreground rescan baseline, split from
   #1267; PR 19.
 - #480 retitled to the registry migration with the on-main state recorded;
