@@ -427,6 +427,7 @@ D4: test more and build the matrix before any policy call.
   the properties-source Apply button (`NotePropertiesHeader.swift:489`,
   window-scoped), so the overlay's monitor claims ⌘Return only while a
   result or recent row is focused and passes it through otherwise.
+  Delivered 2026-10-16 by plan 43 PR 7 (#1113), as recorded here.
 - D3 (#784): **pre-authorized**: close if quit is safe, retitle if not. The
   check found quit unsafe (§1.3), so #784 is retitled to the quit residual,
   labelled tester-feedback, and scheduled as PR 15b.
