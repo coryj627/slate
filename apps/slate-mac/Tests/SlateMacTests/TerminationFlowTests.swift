@@ -448,6 +448,50 @@ final class TerminationFlowTests: XCTestCase {
         XCTAssertEqual(second.values, [])
     }
 
+    /// Codoki review on #1404: a clean quit that waits on the sidebar fence
+    /// alone is not a prompt, but it is still an outstanding reply.
+    func testASecondQuitDuringTheFenceOnlyWaitIsRefusedAndTheReplyIsSentOnce()
+        async throws
+    {
+        let gate = GateBox()
+        defer { gate.open() }
+        let (state, vault) = try await openVault(announcer: RecordingAnnouncer())
+        state.selectedFilePath = "note.md"
+        await state.noteLoadTask?.value
+        XCTAssertFalse(state.hasUnsavedChanges)
+        state.enqueueSidebarOrganizationWriteForTesting { root in
+            gate.wait()
+            root["landedBeforeQuit"] = true
+        }
+        let first = ReplyRecorder()
+        let second = ReplyRecorder()
+
+        XCTAssertEqual(
+            quit(state, first), .terminateLater,
+            "the queued sidebar write holds a clean quit")
+        XCTAssertNil(state.pendingVaultClose, "nothing is dirty, so nothing is asked")
+        XCTAssertNil(state.pendingNavigation)
+        XCTAssertFalse(state.isTerminationPending, "the fence is not a prompt")
+        let fence = try XCTUnwrap(state.terminationFenceTaskForTesting)
+        XCTAssertEqual(
+            quit(state, second), .terminateCancel,
+            "AppKit never waits on two replies")
+
+        gate.open()
+        await fence.value
+
+        XCTAssertEqual(first.values, [true], "the first quit replies once, after the fence")
+        XCTAssertEqual(second.values, [])
+        let data = try Data(
+            contentsOf: vault.appendingPathComponent(".slate/sidebar.json"))
+        let json = try XCTUnwrap(
+            JSONSerialization.jsonObject(with: data) as? [String: Any])
+        XCTAssertEqual(json["landedBeforeQuit"] as? Bool, true)
+        XCTAssertEqual(
+            quit(state, second), .terminateNow,
+            "once answered, the next quit is admitted afresh")
+    }
+
     func testQuitWhileASaveIsInFlightIsRefusedWithTheCloseVaultReason()
         async throws
     {

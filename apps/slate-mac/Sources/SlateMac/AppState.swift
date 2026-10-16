@@ -11089,12 +11089,15 @@ final class AppState: ObservableObject {
     // silent for the same reason (`VaultLifecycleViewModel.AnnounceTeardown`).
 
     /// The reply `admitTermination` owes AppKit while the prompt is up. Set
-    /// only there; called exactly once, by `finishPendingTermination`.
+    /// only there; called exactly once, by `finishPendingTermination`. Nil
+    /// while a quit waits on the sidebar fence alone: the fence is not a
+    /// prompt, so nothing supersedes it, and it always ends with true.
     private var pendingTerminationReply: (@MainActor (Bool) -> Void)?
 
-    /// True from a `.terminateLater` until its reply is sent, through the
-    /// prompt and the sidebar fence after it. A second ⌘Q in that window is
-    /// refused, so AppKit never waits on two replies.
+    /// True from a `.terminateLater` until its reply is sent: through the
+    /// prompt and the sidebar fence after it, and through a clean quit that
+    /// waits on the fence alone. A second ⌘Q in that window is refused, so
+    /// AppKit never waits on two replies.
     private var isTerminationReplyOutstanding = false
 
     /// Test hook: the sidebar-fence wait that ends a quit (rounds 31–32).
@@ -11208,7 +11211,10 @@ final class AppState: ObservableObject {
 
     /// A newer request that takes the prompt over — a vault close, switch
     /// or open, or a file switch — answers a waiting quit first (false: the
-    /// app keeps running), so AppKit's pending reply is never dropped.
+    /// app keeps running), so AppKit's pending reply is never dropped. A quit
+    /// already past its prompt, or a clean one waiting on the sidebar fence
+    /// alone, has no prompt to take over: this is a no-op for it, and the
+    /// fence's reply (true) stands, as it did before the prompt existed.
     private func supersedePendingTermination() {
         finishPendingTermination(proceed: false)
     }
