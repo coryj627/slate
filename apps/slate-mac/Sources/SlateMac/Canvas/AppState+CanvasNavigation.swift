@@ -176,15 +176,35 @@ extension AppState {
     }
 
     /// Move selection to the next/previous card in reading order.
+    ///
+    /// Never silent (CD-46, #1167). The document is discovered in any
+    /// state and asked the read mapping, like every other read verb —
+    /// the Windows `SelectAdjacent` shape, which admits through
+    /// `AdmitStructuralRead` before it walks — so a loading, unreadable
+    /// or retarget-failed canvas answers with its state's sentence. This
+    /// verb has no selection question to put first: with no caret it
+    /// seats the first or last row.
+    ///
+    /// The mapping's `.reopening` is the one answer that does not stop
+    /// the walk. That window is `.ready` with its rows on screen, and
+    /// walking them asks core nothing `FilterView` cannot answer from
+    /// what is displayed — the decision VA-2 records for this verb, which
+    /// VA-1's filter test drives with a changed needle.
     func canvasSelectAdjacent(offset: Int) {
-        guard let doc = activeCanvasDocument else { return }
+        guard let doc = activeCanvasDocumentAnyState else { return }
+        if let refusal = canvasReadRefusal(for: doc), refusal != .reopening {
+            canvasAnnouncer.announce(.canvasStatus(note: refusal))
+            return
+        }
         // #373: movement walks the FILTERED set while a filter is on
         // (a view, never a mutation — Esc restores the full canvas).
         let rows = doc.filteredOutline(session: currentSession)
         guard !rows.isEmpty else {
-            if doc.filterActive {
-                canvasAnnouncer.announce(.canvasStatus(note: .noCardsMatchFilter))
-            }
+            // Nowhere to move is two different facts with two sentences
+            // (Windows' `AnnounceNothingToMoveThrough`): the filter
+            // matched nothing, or the canvas has no cards at all.
+            canvasAnnouncer.announce(
+                .canvasStatus(note: doc.filterActive ? .noCardsMatchFilter : .empty))
             return
         }
         let order = rows.map(\.nodeId)
