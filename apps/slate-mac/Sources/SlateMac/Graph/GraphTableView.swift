@@ -194,10 +194,8 @@ struct GraphContainerView: View {
     private var appStateTextFilterBinding: Binding<String> {
         Binding(
             get: { appState.graphTableTextFilter },
-            set: {
-                appState.graphTableTextFilter = $0
-                appState.scheduleGraphConfigSave()  // persist the name filter (P2-4)
-            })
+            // The needle's setter persists its own field (#1218).
+            set: { appState.setGraphTableNameQuery($0) })
     }
 
     /// A toggle bound to one field of the backend `GraphFilter`; setting

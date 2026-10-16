@@ -259,4 +259,101 @@ final class GraphConfigTests: XCTestCase {
         state.graphAnnouncer.verbosity = .verbose
         XCTAssertEqual(state.graphConfigSaveAggregate().verbosity, .verbose)
     }
+
+    // MARK: - Persist by field (#1218; contract 35 Term W7, C-D7)
+
+    /// A real session over a three-note vault under `tempDir` — a.md ↔ b.md
+    /// and the orphan solo.md — whose `.slate/graph.json` holds `graphJSON`
+    /// when one is given.
+    @MainActor
+    private func makeVaultState(graphJSON: String? = nil) async throws -> AppState {
+        let vault = tempDir.appendingPathComponent("vault")
+        try FileManager.default.createDirectory(
+            at: vault.appendingPathComponent(".slate"), withIntermediateDirectories: true)
+        try Data("[[b]]".utf8).write(to: vault.appendingPathComponent("a.md"))
+        try Data("[[a]]".utf8).write(to: vault.appendingPathComponent("b.md"))
+        try Data("A lone note.".utf8).write(to: vault.appendingPathComponent("solo.md"))
+        if let graphJSON {
+            try Data(graphJSON.utf8).write(to: vault.appendingPathComponent(".slate/graph.json"))
+        }
+        let store = RecentVaultsStore(fileURL: tempDir.appendingPathComponent("recents.json"))
+        let state = AppState(recentsStore: store, externalOpener: { _ in true })
+        state.openVault(at: vault)
+        await state.scanTask?.value
+        return state
+    }
+
+    /// What `.slate/graph.json` holds once the save the last trigger
+    /// scheduled has run (the debounced write, awaited, then read back).
+    @MainActor
+    private func persistedConfig(_ state: AppState) async throws -> GraphConfig {
+        let vault = try XCTUnwrap(state.currentVaultURL)
+        let save = try XCTUnwrap(state.graphConfigSaveTasks[vault], "the trigger scheduled a save")
+        await save.value
+        return try GraphConfigStore(vaultRoot: vault).read()
+    }
+
+    /// #1218 (Term W7; C-D7): the needle typed under a transient preset
+    /// persists ITS field — `filters.nameQuery` — and nothing of the preset:
+    /// the backend flags on disk are the ones from before the preset. The
+    /// save aggregate used to fold the live filter in, so the orphans
+    /// preset's flags reached `graph.json` with the needle.
+    @MainActor
+    func testANeedleTypedUnderAPresetLeavesThePersistedFlagsUnchanged() async throws {
+        let state = try await makeVaultState()
+        let before = state.graphConfig.filters.backend
+        state.openGraphPreset(.orphans)
+        XCTAssertTrue(state.graphTableFilter.orphansOnly, "the preset's filter is live")
+        XCTAssertNotEqual(state.graphTableFilter, before, "and differs from the persisted flags")
+        state.setGraphTableNameQuery("so")
+        XCTAssertEqual(state.graphTableTextFilter, "so", "the needle is live")
+        let written = try await persistedConfig(state)
+        XCTAssertEqual(
+            written.filters.backend, before, "the preset's transient flags never reach graph.json")
+        XCTAssertEqual(written.filters.nameQuery, "so", "the needle persists its own field")
+    }
+
+    /// #1218's guard (Term W7): a USER flag change under a preset still
+    /// persists. The filter the toggle hands over is the reader's own — the
+    /// three backend flags as set, the changed one among them (Windows'
+    /// `SetFilters`) — and the needle's field is left as it was.
+    @MainActor
+    func testAUserFlagChangeUnderAPresetPersistsThatFlag() async throws {
+        let state = try await makeVaultState()
+        state.openGraphPreset(.orphans)
+        var flags = state.graphTableFilter
+        flags.includeAttachments.toggle()
+        state.setGraphTableFilter(flags)
+        let written = try await persistedConfig(state)
+        XCTAssertEqual(
+            written.filters.includeAttachments, flags.includeAttachments, "the reader's flag persists")
+        XCTAssertEqual(written.filters.backend, flags, "the three flags as the reader set them")
+        XCTAssertEqual(written.filters.nameQuery, "", "the needle's field is untouched")
+    }
+
+    /// The restore is unchanged (C-10; a regression guard for the
+    /// per-field rule): a plain open — the first, and the one after a
+    /// preset's tab closed — applies `graph.json`'s flags and needle to the
+    /// live state, the preset's kind overlay gone.
+    @MainActor
+    func testAPlainOpenReappliesThePersistedFilters() async throws {
+        let state = try await makeVaultState(
+            graphJSON: #"{"version":1,"filters":{"includeAttachments":true,"includeGhosts":false,"orphansOnly":false,"nameQuery":"a"}}"#
+        )
+        let persisted = GraphFilter(includeAttachments: true, includeGhosts: false, orphansOnly: false)
+        XCTAssertEqual(state.graphConfig.filters.backend, persisted, "graph.json loads with the vault")
+        state.openGraphTab()
+        XCTAssertEqual(state.graphTableFilter, persisted, "a plain open applies the persisted flags")
+        XCTAssertEqual(state.graphTableTextFilter, "a", "and the persisted needle")
+        state.requestCloseTab(try XCTUnwrap(state.workspace.activeTab?.id))
+
+        state.openGraphPreset(.unresolved)
+        XCTAssertEqual(state.graphTableKindFilter, .ghost, "the preset's overlay is live")
+        state.requestCloseTab(try XCTUnwrap(state.workspace.activeTab?.id))
+        state.openGraphTab()
+        XCTAssertEqual(
+            state.graphTableFilter, persisted, "a plain open after the preset re-applies the flags")
+        XCTAssertEqual(state.graphTableTextFilter, "a")
+        XCTAssertNil(state.graphTableKindFilter, "the preset's overlay is never persisted")
+    }
 }

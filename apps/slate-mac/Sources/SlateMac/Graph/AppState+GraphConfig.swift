@@ -56,37 +56,39 @@ extension AppState {
         graphConfigWritable = false
     }
 
-    /// The aggregate a save persists: the live filter, depth and the
-    /// announcer's verbosity folded into the config (0b-14).
+    /// The aggregate a save persists IS the config (contract 35 Term W7;
+    /// #1218). Every trigger writes ITS field of `graphConfig` before it
+    /// schedules — the needle `filters.nameQuery`, a flag change the three
+    /// backend flags, the mode switch `mode`, the inspector its groups,
+    /// display and forces — and the live Table filter and needle are NOT
+    /// folded in, so a transient preset never reaches graph.json. Two fields
+    /// are still folded from their live holders: the Connections depth, and
+    /// the announcer's verbosity until its setter writes the field (#1216).
     func graphConfigSaveAggregate() -> GraphConfig {
         var cfg = graphConfig
-        cfg.filters = GraphFilterConfig(
-            includeAttachments: graphTableFilter.includeAttachments,
-            includeGhosts: graphTableFilter.includeGhosts,
-            orphansOnly: graphTableFilter.orphansOnly,
-            nameQuery: graphTableTextFilter)
         cfg.connectionsDepth = UInt32(Self.clampConnectionsDepth(connectionsDepth))
         cfg.verbosity = graphAnnouncer.verbosity
         return cfg
     }
 
-    /// Apply the persisted backend + name filter to the live Table state
-    /// (which the Diagram also reads) and CLEAR any transient preset kind
-    /// filter. Called on each PLAIN Graph-tab activation — one with no
-    /// pending preset — so close→reopen and preset→plain BOTH restore the
-    /// saved view rather than leaving a transient preset installed. The
-    /// `.ghost` kind filter is a preset-only overlay, never persisted, so a
-    /// plain open must drop it too (finding 4).
+    /// The restore: apply the persisted backend + name filter to the live
+    /// Table state (which the Diagram also reads) and CLEAR any transient
+    /// preset kind filter. Called on each PLAIN Graph-tab activation — one
+    /// with no pending preset — so close→reopen and preset→plain BOTH
+    /// restore the saved view rather than leaving a transient preset
+    /// installed. The `.ghost` kind filter is a preset-only overlay, never
+    /// persisted, so a plain open must drop it too (finding 4).
     func applyPersistedGraphFilter() {
         graphTableFilter = graphConfig.filters.backend
         graphTableTextFilter = graphConfig.filters.nameQuery
         graphTableKindFilter = nil
     }
 
-    /// Snapshot the live filter / depth into `graphConfig` and persist the
-    /// whole aggregate, debounced (rapid slider drags coalesce to one
-    /// write) and off the main actor via the serializing `GraphConfigWriter`
-    /// (so overlapping saves can't lose an update — finding 3).
+    /// Fold the depth and the verbosity into `graphConfig` — every other
+    /// field its trigger already wrote — and persist the whole aggregate,
+    /// debounced (rapid slider drags coalesce to one write) and off the
+    /// main actor via the serializing `GraphConfigWriter` (so overlapping
+    /// saves can't lose an update — finding 3).
     ///
     /// Refuses to save unless the current vault's config is actually loaded
     /// (`graphConfigVaultURL == currentVaultURL`) and writable — this is
