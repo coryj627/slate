@@ -64,9 +64,19 @@ struct SidebarSectionsView: View {
                     placeholderRow(
                         "No shortcuts — right-click a file to add one")
                 } else {
-                    ForEach(Array(shortcuts.enumerated()), id: \.element) {
-                        index, shortcut in
-                        shortcutRow(shortcut, slot: index + 1)
+                    // #1332 (D6): a row is its SLOT. Keyed by the slot,
+                    // two slots on one note are two rows; keyed by the
+                    // target they were one identity SwiftUI could not
+                    // tell apart.
+                    ForEach(SidebarShortcutRow.rows(for: shortcuts)) { row in
+                        shortcutRow(row, slotCount: shortcuts.count)
+                    }
+                    // Slots past the decode cap are counted, never
+                    // dropped silently.
+                    if let status = SidebarShortcutRow.overflowStatus(
+                        count: appState.sidebarOrganization.shortcutOverflowCount)
+                    {
+                        placeholderRow(status)
                     }
                 }
             }
@@ -142,7 +152,9 @@ struct SidebarSectionsView: View {
     /// FL5-2 review round: tag/untagged shortcuts are CONTAINERS with
     /// their own presentation — a blank "file" row for an empty-path
     /// untagged entry would be wrong visually and in the AX tree.
-    /// Static so tests pin the exact strings per kind.
+    /// Static so tests pin the exact strings per kind. `label` is the
+    /// visible text; `value` is the kind phrase the row's spoken name
+    /// carries (`SidebarShortcutNames.spokenName`, #1332).
     static func shortcutPresentation(
         for shortcut: SidebarShortcut
     ) -> (label: String, value: String, hint: String, symbol: SlateSymbol) {
@@ -169,7 +181,10 @@ struct SidebarSectionsView: View {
         }
     }
 
-    private func shortcutRow(_ shortcut: SidebarShortcut, slot: Int) -> some View {
+    private func shortcutRow(
+        _ row: SidebarShortcutRow, slotCount: Int
+    ) -> some View {
+        let shortcut = row.shortcut
         let presentation = Self.shortcutPresentation(for: shortcut)
         return Button {
             activateShortcut(shortcut)
@@ -194,21 +209,24 @@ struct SidebarSectionsView: View {
         .buttonStyle(.plain)
         .padding(.horizontal, Tokens.Spacing.lg)
         .padding(.vertical, Tokens.Spacing.xs)
-        .accessibilityLabel(presentation.label)
-        .accessibilityValue(presentation.value)
+        // #1332 (D6): the row's spoken name is its composed name — the
+        // Windows name shape, "{name}, {kind} shortcut", told apart from
+        // an alike row by its path and then its slot (R-4) — so the kind
+        // rides in the label rather than a separate value.
+        .accessibilityLabel(row.spokenName)
         .accessibilityHint(presentation.hint)
         .contextMenu {
             Button("Move Up") {
-                appState.moveSidebarShortcut(shortcut, delta: -1)
+                appState.moveSidebarShortcut(slot: row.slot, delta: -1)
             }
-            .disabled(slot == 1)
+            .disabled(row.slot == 1)
             Button("Move Down") {
-                appState.moveSidebarShortcut(shortcut, delta: 1)
+                appState.moveSidebarShortcut(slot: row.slot, delta: 1)
             }
-            .disabled(slot == appState.sidebarOrganization.shortcuts.count)
+            .disabled(row.slot == slotCount)
             Divider()
             Button("Remove from Shortcuts") {
-                try? appState.removeSidebarShortcutDirect(shortcut)
+                try? appState.removeSidebarShortcutDirect(slot: row.slot)
             }
         }
     }

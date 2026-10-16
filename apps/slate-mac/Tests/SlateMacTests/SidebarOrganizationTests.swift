@@ -744,6 +744,73 @@ final class SidebarOrganizationTests: XCTestCase {
     XCTAssertEqual(pins.paths(forFolder: "f"), ["f/a.md"])
   }
 
+  // MARK: - Shortcut slots (#1332, D6)
+
+  /// D6: the adversarial-repetition bound on shortcuts is a decode cap,
+  /// not a collapse. 65 authored slots — every one the same note, with a
+  /// kind this build cannot decode among them — are adopted (no recovery
+  /// notice), decode to 64 rows that each keep their own name, and the one
+  /// slot past the cap is counted for the Shortcuts section's status line
+  /// instead of vanishing. Rewrites keep it: it is still in the file.
+  func testTheDecodeCapRefusesOverflowWithoutCollapsing() {
+    var entries: [Any] = Array(
+      repeating: ["kind": "file", "path": "a.md"] as [String: Any], count: 65)
+    entries.insert(["kind": "future", "path": "x"] as [String: Any], at: 10)
+    let root: [String: Any] = ["shortcuts": entries]
+    XCTAssertTrue(
+      SidebarOrganizationSchema.knownSectionShapesAreValid(root: root),
+      "an over-cap list is adopted, not routed into recovery")
+
+    let decoded = SidebarOrganizationSchema.decode(root: root)
+    XCTAssertEqual(SidebarOrganizationSchema.maxDecodedShortcuts, 64)
+    XCTAssertEqual(
+      decoded.shortcuts,
+      Array(repeating: SidebarShortcut(kind: .file, path: "a.md"), count: 64))
+    XCTAssertEqual(decoded.shortcutOverflowCount, 1)
+    XCTAssertEqual(decoded.shortcutRawCount, 66)
+
+    let rows = SidebarShortcutRow.rows(for: decoded.shortcuts)
+    XCTAssertEqual(rows.map(\.id), Array(1...64))
+    XCTAssertEqual(Set(rows.map(\.spokenName)).count, 64)
+    XCTAssertEqual(rows.first?.spokenName, "a.md, file shortcut, a.md, shortcut 1")
+    XCTAssertEqual(rows.last?.spokenName, "a.md, file shortcut, a.md, shortcut 64")
+    XCTAssertEqual(
+      SidebarShortcutRow.overflowStatus(count: decoded.shortcutOverflowCount),
+      "Showing the first 64 shortcuts. 1 more isn't shown.")
+    XCTAssertEqual(
+      SidebarShortcutRow.overflowStatus(count: 3),
+      "Showing the first 64 shortcuts. 3 more aren't shown.")
+    XCTAssertNil(SidebarShortcutRow.overflowStatus(count: 0))
+
+    // At the cap exactly, nothing overflows and no status line shows.
+    let atCap = SidebarOrganizationSchema.decode(root: [
+      "shortcuts": Array(
+        repeating: ["kind": "file", "path": "a.md"] as [String: Any], count: 64)
+    ])
+    XCTAssertEqual(atCap.shortcuts.count, 64)
+    XCTAssertEqual(atCap.shortcutOverflowCount, 0)
+  }
+
+  /// The pins rule is untouched by D6: a pin set is a set, so a repeated
+  /// pin still collapses at decode (round-12 finding 1, first authored
+  /// occurrence wins) and pins its row once.
+  func testPinsStillCollapseDuplicates() {
+    let root: [String: Any] = [
+      "pins": ["P": ["P/a.md", "P/b.md", "P/a.md", "P/a.md", "P/b.md"]]
+    ]
+    let decoded = SidebarOrganizationSchema.decode(root: root)
+    XCTAssertEqual(decoded.pins.paths(forFolder: "P"), ["P/a.md", "P/b.md"])
+
+    let level = organize(
+      [file(path: "P/a.md"), file(path: "P/b.md"), file(path: "P/c.md")],
+      choice: .init(sort: .init(field: .name, direction: .asc), grouping: .none),
+      pins: ["P/b.md", "P/b.md"],
+      now: instant(2026, 10, 16, timeZone: "UTC"),
+      calendar: gregorian("UTC"))
+    XCTAssertEqual(paths(level), ["P/b.md", "P/a.md", "P/c.md"])
+    XCTAssertEqual(level.pinnedCount, 1)
+  }
+
   func testPrefsStructuralReplayRekeysAndDropsFolderOverrides() {
     var prefs = SidebarOrganizationPrefs()
     prefs.folderOverrides["Projects"] = SidebarOrganizationOverride(

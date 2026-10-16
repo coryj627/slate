@@ -305,8 +305,8 @@ final class SidebarNavigationTests: XCTestCase {
            {"kind": "untagged", "path": ""},
            {"kind": "file", "path": "b.md"}]}
         """)
-    state.moveSidebarShortcut(
-      SidebarShortcut(kind: .file, path: "b.md"), delta: -1)
+    // #1332: moves address a slot; b.md is slot 3.
+    state.moveSidebarShortcut(slot: 3, delta: -1)
     await state.sidebarOrganizationPersistTaskForTesting?.value
     // FL5-2: the untagged entry is a visible row — b.md's nearest
     // neighbor — so they swap directly.
@@ -326,8 +326,11 @@ final class SidebarNavigationTests: XCTestCase {
     // Review round: the shape guard caps the RAW array (reserved kinds
     // included) — acknowledgement must gate on the same count, not the
     // decoded file/folder subset.
+    // #1332: the filler is a kind this build cannot decode. Tag entries
+    // have been visible slots since FL5-2, and 199 of them would meet the
+    // 64-slot decode cap long before this raw ceiling.
     let reserved = (0..<199).map {
-      #"{"kind": "tag", "path": "t\#($0)"}"#
+      #"{"kind": "future", "path": "t\#($0)"}"#
     }.joined(separator: ",")
     let (state, _) = try openVault(
       named: "cap-raw", files: ["x.md"], folders: ["Y"],
@@ -357,8 +360,9 @@ final class SidebarNavigationTests: XCTestCase {
     // Codoki review: reflects keep the raw counter in lockstep, so a
     // second add issued BEFORE the first persist settles still preflights
     // against the incremented count.
+    // #1332: reserved filler, as above.
     let reserved = (0..<198).map {
-      #"{"kind": "tag", "path": "t\#($0)"}"#
+      #"{"kind": "future", "path": "t\#($0)"}"#
     }.joined(separator: ",")
     let (state, _) = try openVault(
       named: "cap-race", files: ["x.md"], folders: ["Y", "Z"],
@@ -405,6 +409,78 @@ final class SidebarNavigationTests: XCTestCase {
     XCTAssertTrue(
       state.sidebarOrganization.shortcuts.contains(
         SidebarShortcut(kind: .folder, path: "Z")))
+  }
+
+  func testAddShortcutRefusesAtTheDecodeCap() async throws {
+    // #1332 (D6): decode shows the first 64 slots, so a slot added past
+    // them would never appear. Add refuses at the cap with the reason —
+    // from the catalog and from a tag row alike — and a removal makes
+    // room again.
+    let slots = Array(
+      repeating: #"{"kind": "file", "path": "x.md"}"#,
+      count: SidebarOrganizationSchema.maxDecodedShortcuts
+    ).joined(separator: ",")
+    let (state, vault) = try openVault(
+      named: "cap-decode", files: ["x.md"], folders: ["Y", "Z"],
+      sidebarJSON: """
+        {"version": 1, "shortcuts": [\(slots)]}
+        """)
+    XCTAssertEqual(state.sidebarOrganization.shortcuts.count, 64)
+    func select(_ folder: String) throws {
+      _ = state.publishSidebarSelectionSnapshot(
+        SidebarSelectionSnapshot(
+          sessionIdentity: ObjectIdentifier(
+            try XCTUnwrap(state.currentSession)),
+          items: [
+            SidebarSelectionItem(
+              path: folder, isDirectory: true, isMarkdown: false)
+          ],
+          focusedPath: folder,
+          creationParent: folder))
+    }
+    let atCap = "Shortcut limit reached (64). Remove one to add another."
+    try select("Y")
+    XCTAssertThrowsError(
+      try state.dispatchSidebarAction(id: SlateCommandID.sidebarAddShortcut)
+    ) { error in
+      XCTAssertEqual(error.sidebarActionAnnouncement, atCap)
+    }
+    state.addSidebarTagShortcutDirect(kind: .tag, path: "research")
+    XCTAssertEqual(state.lastMutationAnnouncement, atCap)
+    XCTAssertEqual(state.sidebarOrganization.shortcuts.count, 64)
+
+    try state.removeSidebarShortcutDirect(slot: 64)
+    await state.sidebarOrganizationPersistTaskForTesting?.value
+    _ = try state.dispatchSidebarAction(id: SlateCommandID.sidebarAddShortcut)
+    await state.sidebarOrganizationPersistTaskForTesting?.value
+    XCTAssertEqual(state.sidebarOrganization.shortcuts.count, 64)
+    XCTAssertEqual(
+      state.sidebarOrganization.shortcuts.last,
+      SidebarShortcut(kind: .folder, path: "Y"))
+
+    // Another writer fills the last slot behind this window's back: the
+    // locked write finds the cap met on disk, refuses with the same
+    // reason, and the sidebar shows the file as it is.
+    try state.removeSidebarShortcutDirect(slot: 64)
+    await state.sidebarOrganizationPersistTaskForTesting?.value
+    XCTAssertEqual(state.sidebarOrganization.shortcuts.count, 63)
+    let full = Array(
+      repeating: #"{"kind": "file", "path": "x.md"}"#, count: 64
+    ).joined(separator: ",")
+    try """
+      {"version": 1, "shortcuts": [\(full)]}
+      """.write(
+        to: vault.appendingPathComponent(".slate/sidebar.json"),
+        atomically: true, encoding: .utf8)
+    try select("Z")
+    _ = try state.dispatchSidebarAction(id: SlateCommandID.sidebarAddShortcut)
+    await state.sidebarOrganizationPersistTaskForTesting?.value
+    XCTAssertEqual(state.lastMutationAnnouncement, atCap)
+    XCTAssertEqual(state.sidebarOrganization.shortcuts.count, 64)
+    XCTAssertFalse(
+      state.sidebarOrganization.shortcuts.contains(
+        SidebarShortcut(kind: .folder, path: "Z")),
+      "the refused slot is not shown as added")
   }
 
   func testProductionRenameRespectsShortcutKindNamespaces() async throws {
