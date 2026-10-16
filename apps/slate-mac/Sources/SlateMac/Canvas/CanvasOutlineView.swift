@@ -29,9 +29,8 @@ struct CanvasCardRef: Equatable {
 /// - Selection drives the shared `CanvasSelection` (single source of
 ///   truth; surfaces never hold local selection).
 /// - Activation opens the card: markdown file → note tab; link →
-///   browser; text → interim read-only detail panel (replaced by the
-///   real editor in Wave 4, t2 R14); media → deferred to Wave 4
-///   actions, announced honestly.
+///   browser; text → the card editor; media → its default app; any
+///   other file type is refused, audibly (CD-38).
 /// - Returning from an opened card restores focus to its row
 ///   (WCAG 2.4.3).
 /// - Virtualized: `List` materializes rows lazily; the 2,000-node
@@ -219,9 +218,9 @@ struct CanvasOutlineView: View {
         }
         .contentShape(Rectangle())
         .accessibilityElement(children: .ignore)
-        .accessibilityLabel(CanvasCardRef(kind: row.kind, title: row.title).phrase)
+        .accessibilityLabel(Self.rowLabel(row))
         .accessibilityValue(nodeValue(row))
-        .accessibilityHint(activationHint(row))
+        .accessibilityHint(Self.activationHint(kind: row.kind))
         .accessibilityAddTraits(.isButton)
         .accessibilityAction(named: "Open") { onActivate(row) }
         .accessibilityAction(named: "Toggle Mark") {
@@ -470,12 +469,25 @@ struct CanvasOutlineView: View {
         appState.canvasMutationDisabledReason(for: document)
     }
 
-    private func activationHint(_ row: CanvasOutlineRow) -> String {
-        switch row.kind {
+    /// The row's accessible name: the t0 §1.1 card reference spelled with
+    /// core's `speakableName` (CD-30), not the raw title. Two cards titled
+    /// "Research" are "Research" and "Research 2" here, as they already
+    /// are on the visual board's peers and on Windows, so a dictated
+    /// "click Research 2" has one target (t0 §4). The visible text stays
+    /// the title.
+    static func rowLabel(_ row: CanvasOutlineRow) -> String {
+        CanvasCardRef(kind: row.kind, title: row.speakableName).phrase
+    }
+
+    /// The per-kind activation hint — the §W-C label inventory Windows
+    /// takes verbatim (`CanvasPhrase.ActivationHint`). The image hint
+    /// says what activation does (CD-36): media opens in its default app.
+    static func activationHint(kind: String) -> String {
+        switch kind {
         case "group": return "Group. Cards inside follow in the outline."
         case "text": return "Opens the card text."
         case "file": return "Opens the note in this tab."
-        case "image": return "Media cards open with canvas actions, arriving in a later milestone slice."
+        case "image": return "Opens the media file in its default app."
         case "link": return "Opens the link in your browser."
         default: return ""
         }
