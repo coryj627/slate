@@ -18,7 +18,8 @@ $script:GhToken = $null
 $script:GhLowBudgetWarning = $null
 $script:GhLowBudgetWarnedReset = $null
 # Set by orchestrator.ps1 too: a scriptblock that takes one message and
-# logs it at info. Invoke-GhApi reports a GET that needed a retry through it.
+# logs it at info. Invoke-GhApi reports through it a GET that was answered
+# on a retry, and one it gave up on.
 $script:GhRetryNotice = $null
 # A GET that fails at the connection level is tried again after each of
 # these waits, in seconds: three attempts in all; the waits add 3 s to a
@@ -80,6 +81,7 @@ function Format-GhExceptionChain {
     while ($null -ne $e -and $names.Count -lt 6) {
         $name = $e.GetType().Name
         if ($e -is [System.Net.Sockets.SocketException]) { $name = '{0}({1})' -f $name, $e.SocketErrorCode }
+        elseif ($e -is [System.Net.Http.HttpRequestException] -and $e.PSObject.Properties['HttpRequestError'] -and [string]$e.HttpRequestError -ne 'Unknown') { $name = '{0}({1})' -f $name, $e.HttpRequestError }
         $names += $name
         $e = $e.InnerException
     }
@@ -154,7 +156,9 @@ function Invoke-GhApi {
                 # its time: the evidence the retry rule is tuned from. An
                 # HTTP status is GitHub's answer, for the caller, and no news.
                 $why = if (-not $connection) { 'not a connection failure' } elseif ($slow) { 'a slow failure' } else { 'the last attempt' }
-                Send-GhRetryNotice ('GitHub API: {0} {1} gave up on attempt {2} after {3} s ({4}): {5}' -f $Method, $Path, $attempt, $elapsed.ToString('F1', [cultureinfo]::InvariantCulture), $why, (Format-GhExceptionChain -Exception $_.Exception))
+                try {
+                    Send-GhRetryNotice ('GitHub API: {0} {1} gave up on attempt {2} of {3} after {4} s ({5}): {6}' -f $Method, $Path, $attempt, ($script:GhRetryDelays.Count + 1), $elapsed.ToString('F1', [cultureinfo]::InvariantCulture), $why, (Format-GhExceptionChain -Exception $_.Exception))
+                } catch { }
             }
             if ($Method -ne 'GET' -or $last -or $slow -or -not $connection) { throw }
             Start-Sleep -Seconds ([int]$script:GhRetryDelays[$attempt - 1])
