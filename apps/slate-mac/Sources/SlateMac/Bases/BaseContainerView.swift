@@ -215,8 +215,14 @@ struct BaseContainerView: View {
         switch document.state {
         case .loading:
             placeholder("Loading base…")
-        case .failed(let message):
-            placeholder(message)
+        case .failed:
+            // #786: what failed and how to repair it, never a bare
+            // placeholder. Non-nil in this arm: it reads the same state.
+            if let failure = appState.baseLoadFailure(for: document) {
+                BaseLoadFailedView(failure: failure) {
+                    appState.basesEditViewFilters()
+                }
+            }
         case .ready, .degraded:
             if let result = document.result {
                 switch BaseResultContentState(result: result) {
@@ -682,6 +688,57 @@ struct BaseContainerView: View {
             .foregroundStyle(Tokens.ColorRole.textSecondary)
             .textSelection(.enabled)
             .frame(maxWidth: .infinity, maxHeight: .infinity)
+    }
+}
+
+/// The failure a Base's error view renders (#786): core's message, and the
+/// reason its Edit button cannot open the definition, if any.
+struct BaseLoadFailure: Equatable {
+    let message: String
+    let editDisabledReason: String?
+}
+
+/// The content of a Base that could not be loaded (#786): a group led by a
+/// heading, core's message, and the way to repair it. Edit runs the toolbar's
+/// Edit filters action (the mac has no raw-definition editor) under the same
+/// availability, so where the definition cannot be edited the reason takes
+/// the repair sentence's place rather than inviting an unavailable action.
+struct BaseLoadFailedView: View {
+    let failure: BaseLoadFailure
+    let edit: () -> Void
+
+    var body: some View {
+        VStack(alignment: .leading, spacing: Tokens.Spacing.sm) {
+            Text("This base could not be loaded")
+                .font(Tokens.Typography.sectionHeader)
+                .foregroundStyle(Tokens.ColorRole.textPrimary)
+                .accessibilityAddTraits(.isHeader)
+            Text(failure.message)
+                .font(Tokens.Typography.body)
+                .foregroundStyle(Tokens.ColorRole.textPrimary)
+                .textSelection(.enabled)
+            if let reason = failure.editDisabledReason {
+                Text(reason)
+                    .font(Tokens.Typography.callout)
+                    .foregroundStyle(Tokens.ColorRole.textSecondary)
+            } else {
+                Text("Edit the base definition to repair it.")
+                    .font(Tokens.Typography.callout)
+                    .foregroundStyle(Tokens.ColorRole.textSecondary)
+            }
+            Button("Edit", action: edit)
+                .disabled(failure.editDisabledReason != nil)
+                .accessibilityHint(
+                    failure.editDisabledReason
+                        ?? "Opens the base definition in the query builder.")
+                .help(
+                    failure.editDisabledReason
+                        ?? "Opens the base definition in the query builder.")
+        }
+        .frame(maxWidth: Tokens.Layout.readingMeasure, alignment: .leading)
+        .padding(Tokens.Spacing.lg)
+        .frame(maxWidth: .infinity, maxHeight: .infinity)
+        .accessibilityElement(children: .contain)
     }
 }
 

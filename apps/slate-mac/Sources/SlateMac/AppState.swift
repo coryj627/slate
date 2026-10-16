@@ -12650,8 +12650,9 @@ final class AppState: ObservableObject {
     /// Off-actor mirror of `humanReadable(_:)` — used inside the
     /// detached resolver loop where `self` isn't available. Keeps
     /// the per-embed `ReadError` message shape consistent with
-    /// what the main-actor error surface produces.
-    private nonisolated static func humanReadableVaultError(_ error: VaultError) -> String {
+    /// what the main-actor error surface produces. Bases failures
+    /// route their detail through it too (`BaseDocument.failureDetail`).
+    nonisolated static func humanReadableVaultError(_ error: VaultError) -> String {
         switch error {
         case .Io(let m), .Db(let m), .Trash(let m), .InvalidQuery(let m),
             .InvalidArgument(let m), .TrashConfirmationChanged(let m):

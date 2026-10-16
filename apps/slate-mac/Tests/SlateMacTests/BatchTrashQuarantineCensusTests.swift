@@ -212,7 +212,10 @@ final class BatchTrashQuarantineCensusTests: XCTestCase {
     func testEveryKnownNativeDocumentReopenUsesTheCentralQuarantine() throws {
         let quarantine = "isBatchTrashPathQuarantined"
         let baseLoad = "loadBaseDocumentIfAllowed("
-        let baseInteractionGate = "baseDocumentInteractionDisabledReason(for:"
+        // #786: Edit filters admits on the definition-editing reason, whose
+        // path half is the same quarantine check the interaction reason uses.
+        let baseDefinitionGate = "baseDefinitionEditingDisabledReason(for:"
+        let basePathGate = "baseDocumentPathDisabledReason(for:"
         let builderInteractionGate = "baseQueryBuilderSaveToViewDisabledReason"
         try assertFunnels([
             Funnel(
@@ -242,7 +245,23 @@ final class BatchTrashQuarantineCensusTests: XCTestCase {
             Funnel(
                 file: "Bases/AppState+Bases.swift",
                 declaration: "func basesEditViewFilters",
-                requiredCode: [baseInteractionGate]),
+                requiredCode: [baseDefinitionGate]),
+            Funnel(
+                file: "Bases/AppState+Bases.swift",
+                declaration: "func baseDefinitionEditingDisabledReason",
+                requiredCode: [basePathGate]),
+            Funnel(
+                file: "Bases/AppState+Bases.swift",
+                declaration: "func baseDocumentInteractionDisabledReason",
+                requiredCode: [basePathGate]),
+            Funnel(
+                file: "Bases/AppState+Bases.swift",
+                declaration: "private func baseDocumentPathDisabledReason",
+                requiredCode: ["batchTrashPathCapability(for:"]),
+            Funnel(
+                file: "Bases/AppState+Bases.swift",
+                declaration: "private func baseDefinitionBuilder",
+                requiredCode: [baseLoad]),
             Funnel(
                 file: "Bases/AppState+Bases.swift",
                 declaration: "func basesBuilderSaveToView",
