@@ -463,4 +463,64 @@ extension AppState {
             }
         }
     }
+
+    // MARK: File and image card activation (the media gate, CD-38)
+
+    /// Activating a file or image card, from whichever surface the row
+    /// was activated on (the outline and the table route here through
+    /// the container's one activation switch). Windows'
+    /// `ActivateFileCard` order, with mac's Markdown arm first as it
+    /// always was:
+    ///
+    /// 1. a Markdown target is a note: it opens in this tab, at its
+    ///    `#heading` anchor when the card carries one;
+    /// 2. an empty target, or one that is not in the vault, says the
+    ///    file is missing (Locate File repoints it);
+    /// 3. a target core does not classify as media is REFUSED, audibly,
+    ///    and never reaches the opener. A canvas is untrusted input — it
+    ///    arrives over sync, from a shared vault, from Obsidian — and the
+    ///    default-app hand-off opens whatever it is given: an app bundle,
+    ///    a script, an installer. Core's answer decides (the same
+    ///    classification that names image cards and titles audio and
+    ///    video), so neither host keeps a copy of the set;
+    /// 4. media goes to its default app. When the opener declines, the
+    ///    file exists and is media, so the answer is the generic
+    ///    failed-action sentence with the target as its detail — never
+    ///    "missing", which would send the user to repoint a card that is
+    ///    fine.
+    func canvasActivateFileCard(nodeId: String, title: String, in document: CanvasDocument) {
+        let target = document.target(of: nodeId)
+        if target.lowercased().hasSuffix(".md") || target.lowercased().hasSuffix(".markdown") {
+            // #525: `#heading` subpath cards open to the anchor.
+            let subpath = document.scene.nodes
+                .first { $0.nodeId == nodeId }?.subpath?
+                .trimmingCharacters(in: CharacterSet(charactersIn: "#"))
+            if let subpath, !subpath.isEmpty {
+                canvasOpenFileAtHeading(path: target, heading: subpath)
+            } else {
+                openFile(target, target: .currentTab)
+            }
+            return
+        }
+        // An empty target is missing rather than the vault folder itself,
+        // which is what appending nothing to the vault URL would name.
+        guard !target.isEmpty, let vault = currentVaultURL,
+            FileManager.default.fileExists(atPath: vault.appendingPathComponent(target).path)
+        else {
+            canvasAnnouncer.announce(
+                .canvasFileNotFound(target: target.isEmpty ? title : target))
+            return
+        }
+        guard canvasMediaClass(path: target) != nil else {
+            canvasAnnouncer.announce(
+                .canvasBlocked(reason: .fileTypeNotOpenable(target: target)))
+            return
+        }
+        if externalOpener(vault.appendingPathComponent(target)) {
+            canvasAnnouncer.announce(.canvasOpened(title: title, target: .defaultApp))
+        } else {
+            canvasAnnouncer.announce(
+                .canvasActionFailed(action: .canvasAction, detail: target))
+        }
+    }
 }
