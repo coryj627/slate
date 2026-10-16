@@ -8,8 +8,9 @@ import SwiftUI
 /// Standalone renderer for one `EmbedResolution`. The host (the
 /// read pane today, the editor's NSTextAttachment cell later)
 /// passes in the resolution + optional "jump to source" callback;
-/// this view owns the disclosure shell, the AT label, and the
-/// per-variant content layout.
+/// this view owns the disclosure shell, its label (core's card
+/// title for what the embed resolved to), and the per-variant
+/// content layout.
 ///
 /// Standalone by design (no `@EnvironmentObject AppState`) so it
 /// can render inside both SwiftUI hierarchies and AppKit
@@ -64,13 +65,19 @@ struct EmbedView: View {
 
     // MARK: Variants
 
+    // Each variant builds the `ResolvedEmbed` it resolved to and labels its
+    // disclosure with core's title for it (`resolvedEmbedTitle`, #1286;
+    // locked §1.1, contract 38): core words every card, bounds authored text
+    // (a heading, an alt) and names an image without a usable alt by its
+    // file name, so the host spells no title.
+
     private func fullNoteView(
         targetPath: String,
         text: String,
         nested: [NestedEmbed]
     ) -> some View {
         EmbedDisclosure(
-            label: "Embedded note: \(targetPath)",
+            label: resolvedEmbedTitle(resolved: .note(targetPath: targetPath)),
             jumpToSourceAction: jumpToSourceAction,
             jumpToTarget: targetPath,
             initiallyExpanded: depth == 0
@@ -91,7 +98,8 @@ struct EmbedView: View {
         nested: [NestedEmbed]
     ) -> some View {
         EmbedDisclosure(
-            label: "Embedded section: \(heading) from \(targetPath)",
+            label: resolvedEmbedTitle(
+                resolved: .section(targetPath: targetPath, heading: heading)),
             jumpToSourceAction: jumpToSourceAction,
             jumpToTarget: targetPath,
             initiallyExpanded: depth == 0
@@ -111,7 +119,7 @@ struct EmbedView: View {
         text: String
     ) -> some View {
         EmbedDisclosure(
-            label: "Embedded block from \(targetPath)",
+            label: resolvedEmbedTitle(resolved: .block(targetPath: targetPath)),
             jumpToSourceAction: jumpToSourceAction,
             jumpToTarget: targetPath,
             initiallyExpanded: depth == 0
@@ -139,9 +147,11 @@ struct EmbedView: View {
     ) -> some View {
         // Audit #196: image embeds wrap in the same EmbedDisclosure
         // shell as the other variants so sighted users see the
-        // "Embedded image: <…>" title and everyone gets a
-        // Jump-to-source affordance.
-        let title = Self.imageEmbedTitle(targetPath: targetPath, alt: alt)
+        // card's title and everyone gets a Jump-to-source affordance.
+        // The author's alt text is the description (WCAG 1.1.1, #419);
+        // the file name is only the fallback, and an empty or
+        // whitespace alt falls back too (audit #198) — core's rule.
+        let title = resolvedEmbedTitle(resolved: .image(targetPath: targetPath, alt: alt))
         return EmbedDisclosure(
             label: title,
             jumpToSourceAction: jumpToSourceAction,
@@ -161,20 +171,6 @@ struct EmbedView: View {
         }
     }
 
-    /// AT/visible title for an image embed. The author's alt text is
-    /// the description (WCAG 1.1.1, #419 — "alt text becomes the AT
-    /// label" per M10); the filename is only the fallback.
-    /// Audit #198: an empty/whitespace alt collapses to the filename,
-    /// never to "Embedded image: ".
-    static func imageEmbedTitle(targetPath: String, alt: String?) -> String {
-        let trimmedAlt = alt?.trimmingCharacters(in: .whitespaces)
-        let altText: String? =
-            (trimmedAlt?.isEmpty == false) ? trimmedAlt : nil
-        let descriptor =
-            altText ?? (targetPath as NSString).lastPathComponent
-        return "Embedded image: \(descriptor)"
-    }
-
     private func imageDecodeFailureView(mime: String) -> some View {
         // Audit #192: conveying error state by red color alone
         // dropped contrast below 4.5:1. Lead with an SF Symbol
@@ -183,7 +179,7 @@ struct EmbedView: View {
         // contrast trivially.
         //
         // The EmbedDisclosure wrapper already labels this region
-        // with "Embedded image: <descriptor>"; the inner view only
+        // with the image card's title; the inner view only
         // needs to carry the failure detail, not re-state the
         // outer label (audit fixup PR #191).
         let message =
