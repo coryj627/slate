@@ -220,39 +220,20 @@ struct CanvasPromptSheet: View {
                         .accessibilityLabel(disabledReason)
                 }
             case .setColor:
-                Text("Set Color").font(Tokens.Typography.body.weight(.semibold))
-                // Color is never color-alone: named buttons (1.4.1).
-                // The NAMES come from core (`canvas::color_name` through
-                // the FFI) — the literal preset list that stood here was
-                // the third Swift copy of the backend's table
-                // (contracts doc 0a-11).
-                HStack(spacing: Tokens.Spacing.xs) {
-                    ForEach(1...6, id: \.self) { preset in
-                        Button(
-                            canvasColorName(color: .preset(preset: UInt8(preset)))
-                                .capitalized
-                        ) {
-                            commitMutation {
-                                appState.canvasSetColor(preset: preset)
-                            }
-                        }
-                        .disabled(mutationDisabledReason != nil)
-                        .accessibilityHint(
-                            mutationDisabledReason ?? "Set the selected card’s color.")
-                        .help(mutationDisabledReason ?? "Set the selected card’s color.")
-                    }
-                }
-                HStack {
-                    Button("Clear Color") {
-                        commitMutation { appState.canvasSetColor(preset: nil) }
-                    }
-                    .disabled(mutationDisabledReason != nil)
-                    .accessibilityHint(
-                        mutationDisabledReason ?? "Clear the selected card’s color.")
-                    .help(mutationDisabledReason ?? "Clear the selected card’s color.")
-                    Spacer()
-                    dismissButton
-                }
+                colorBody(
+                    heading: "Set Color",
+                    setHint: "Set the selected card’s color.",
+                    clearHint: "Clear the selected card’s color."
+                ) { appState.canvasSetColor(preset: $0) }
+            case .colorMarked:
+                // #1165: the same sheet over the MARKED set; the title
+                // carries no count (Windows' IG-55: the commit's snapshot
+                // is the truth, a title count would be a stale reading).
+                colorBody(
+                    heading: "Set Color for Marked Cards",
+                    setHint: "Set every marked card’s color.",
+                    clearHint: "Clear every marked card’s color."
+                ) { appState.canvasColorMarked(preset: $0) }
             }
             if let mutationDisabledReason {
                 Text(mutationDisabledReason)
@@ -316,6 +297,7 @@ struct CanvasPromptSheet: View {
         case .editConnection: return "Edit Connection"
         case .marksList: return "Marked Cards"
         case .groupMarked: return "Group Marked Cards"
+        case .colorMarked: return "Set Color for Marked Cards"
         case .addNote: return "Add Note to Canvas"
         case .addMedia: return "Add Media"
         case .addLink: return "Add Link Card"
@@ -417,6 +399,43 @@ struct CanvasPromptSheet: View {
                 "\(filtered.count) of \(CountCopy.counted(files.count, "file", "files"))")
                 .font(Tokens.Typography.caption)
                 .foregroundStyle(Tokens.ColorRole.textSecondary)
+            Spacer()
+            dismissButton
+        }
+    }
+
+    /// The color sheet's body, over the selection (Set Color…) or the
+    /// marked set (Color Marked Cards…). Color is never color-alone:
+    /// named buttons (1.4.1). The NAMES come from core
+    /// (`canvas::color_name` through the FFI) — the literal preset list
+    /// that stood here was the third Swift copy of the backend's table
+    /// (contracts doc 0a-11).
+    @ViewBuilder
+    private func colorBody(
+        heading: String, setHint: String, clearHint: String,
+        apply: @escaping (Int?) -> Void
+    ) -> some View {
+        Text(heading).font(Tokens.Typography.body.weight(.semibold))
+        HStack(spacing: Tokens.Spacing.xs) {
+            ForEach(1...6, id: \.self) { preset in
+                Button(
+                    canvasColorName(color: .preset(preset: UInt8(preset)))
+                        .capitalized
+                ) {
+                    commitMutation { apply(preset) }
+                }
+                .disabled(mutationDisabledReason != nil)
+                .accessibilityHint(mutationDisabledReason ?? setHint)
+                .help(mutationDisabledReason ?? setHint)
+            }
+        }
+        HStack {
+            Button("Clear Color") {
+                commitMutation { apply(nil) }
+            }
+            .disabled(mutationDisabledReason != nil)
+            .accessibilityHint(mutationDisabledReason ?? clearHint)
+            .help(mutationDisabledReason ?? clearHint)
             Spacer()
             dismissButton
         }
