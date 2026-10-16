@@ -24,11 +24,20 @@ $script:GhRetryNotice = $null
 # A GET that fails at the connection level is tried again after each of
 # these waits, in seconds: three attempts in all; the waits add 3 s to a
 # tick, and a fast failure's own time is bounded below.
-# Only a fast failure is: an attempt that ran this long or longer before
-# failing (a connect that Windows gives up after 21 s, a DNS resolver that
-# times out) is not waited for three times over.
+# A fast failure is one that took less than this. A slow one is tried
+# again once, and only when the request never went out (the connection,
+# its TLS handshake or the name lookup failed): nothing was lost but the
+# wait, and a new connection usually succeeds at once. That is what
+# api.github.com shows this host: a handshake that stalls 19 s on a new
+# connection and is then reset, while the next tick connects fine. A slow
+# failure after the request went out is not tried again (the server may
+# have acted on it, and the wait was not the whole cost), nor is a second
+# slow failure. Never tried again: a connect Windows gave up on
+# (SocketException TimedOut, 21 s), or an attempt at the cap or beyond,
+# so a dead network costs one attempt.
 $script:GhRetryDelays = @(1, 2)
 $script:GhRetryFastFailureSeconds = 5
+$script:GhRetrySlowCapSeconds = 25
 # Path -> @{ ETag; Body; UsedAt } for the conditional listing calls.
 $script:GhEtags = @{}
 
@@ -59,6 +68,34 @@ function Test-GhConnectionFailure {
     $exception = $ErrorRecord.Exception
     if ($exception -is [System.Net.Http.HttpRequestException]) { $exception = $exception.InnerException }
     return ($exception -is [System.IO.IOException] -or $exception -is [System.Net.Sockets.SocketException])
+}
+
+function Test-GhRequestUnsent {
+    # True when the failure came before the request went out: the cmdlet's
+    # wrapper says the connection, its TLS handshake or the name lookup
+    # failed. A wrapper without that detail, or a bare exception, is read
+    # as "the request may have gone out".
+    [CmdletBinding()]
+    param([Parameter(Mandatory)]$ErrorRecord)
+    $exception = $ErrorRecord.Exception
+    if (-not ($exception -is [System.Net.Http.HttpRequestException])) { return $false }
+    if (-not $exception.PSObject.Properties['HttpRequestError']) { return $false }
+    return ([string]$exception.HttpRequestError -in 'ConnectionError', 'SecureConnectionError', 'NameResolutionError')
+}
+
+function Test-GhConnectTimedOut {
+    # True when a socket in the chain timed out: a connect that Windows
+    # gave up on after 21 s, which a retry would only repeat.
+    [CmdletBinding()]
+    param([Parameter(Mandatory)]$ErrorRecord)
+    $exception = $ErrorRecord.Exception
+    $depth = 0
+    while ($null -ne $exception -and $depth -lt 6) {
+        if ($exception -is [System.Net.Sockets.SocketException] -and [string]$exception.SocketErrorCode -eq 'TimedOut') { return $true }
+        $exception = $exception.InnerException
+        $depth++
+    }
+    return $false
 }
 
 function Send-GhRetryNotice {
@@ -126,6 +163,7 @@ function Invoke-GhApi {
         $params.ContentType = 'application/json'
     }
     $attempt = 0
+    $slowRetries = 0
     while ($true) {
         $attempt++
         $stopwatch = [System.Diagnostics.Stopwatch]::StartNew()
@@ -146,21 +184,34 @@ function Invoke-GhApi {
             # repeated generate-jitconfig would register a second runner;
             # the variable write retries after a minute by itself, and a
             # failed runner delete is logged and left to the startup sweep.
-            # The last attempt, a slow failure, and anything else, is raised.
+            # The last attempt, a slow failure after the request went out,
+            # a second slow failure, a connect that timed out, an attempt at
+            # the cap, and anything else, is raised (the rule is set out at
+            # the top of this file beside its numbers).
             $elapsed = $stopwatch.Elapsed.TotalSeconds
             $connection = Test-GhConnectionFailure -ErrorRecord $_
+            $timedOut = Test-GhConnectTimedOut -ErrorRecord $_
+            $tooSlow = $elapsed -ge $script:GhRetrySlowCapSeconds
             $slow = $elapsed -ge $script:GhRetryFastFailureSeconds
+            $unsent = Test-GhRequestUnsent -ErrorRecord $_
             $last = $attempt -gt $script:GhRetryDelays.Count
-            if ($Method -eq 'GET' -and ($last -or $slow -or -not $connection) -and -not ($_.Exception -is [Microsoft.PowerShell.Commands.HttpResponseException])) {
+            $again = $connection -and -not $timedOut -and -not $tooSlow -and -not $last -and (-not $slow -or ($unsent -and $slowRetries -eq 0))
+            if ($Method -eq 'GET' -and -not $again -and -not ($_.Exception -is [Microsoft.PowerShell.Commands.HttpResponseException])) {
                 # Why this GET goes unretried, with the failure's shape and
                 # its time: the evidence the retry rule is tuned from. An
                 # HTTP status is GitHub's answer, for the caller, and no news.
-                $why = if (-not $connection) { 'not a connection failure' } elseif ($slow) { 'a slow failure' } else { 'the last attempt' }
+                $why = if (-not $connection) { 'not a connection failure' }
+                       elseif ($timedOut) { 'a connect that timed out' }
+                       elseif ($tooSlow) { 'too slow to try again' }
+                       elseif ($last) { 'the last attempt' }
+                       elseif (-not $unsent) { 'a slow failure after the request went out' }
+                       else { 'a second slow failure' }
                 try {
                     Send-GhRetryNotice ('GitHub API: {0} {1} gave up on attempt {2} of {3} after {4} s ({5}): {6}' -f $Method, $Path, $attempt, ($script:GhRetryDelays.Count + 1), $elapsed.ToString('F1', [cultureinfo]::InvariantCulture), $why, (Format-GhExceptionChain -Exception $_.Exception))
                 } catch { }
             }
-            if ($Method -ne 'GET' -or $last -or $slow -or -not $connection) { throw }
+            if ($Method -ne 'GET' -or -not $again) { throw }
+            if ($slow) { $slowRetries++ }
             Start-Sleep -Seconds ([int]$script:GhRetryDelays[$attempt - 1])
         }
     }
