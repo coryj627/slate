@@ -1,6 +1,8 @@
 // Copyright (C) 2026 Cory Joseph
 // SPDX-License-Identifier: AGPL-3.0-or-later
 
+import AppKit
+import SwiftUI
 import XCTest
 
 @testable import SlateMac
@@ -11,8 +13,24 @@ import XCTest
 /// `crates/slate-core/src/graph_queries.rs`). What remains here is the
 /// grid's consumption — the column adapters over `cells`, the identity by
 /// `stableKey`, the action set through core's list, the busy-state
-/// admission overlay (0bD-8), and the external-sort lifecycle (0b-14).
+/// admission overlay (0bD-8), and the external-sort lifecycle (0b-14) —
+/// and the tab body's mode line (#1220), over a real session with the
+/// body mounted.
 final class GraphTableViewTests: XCTestCase {
+    private var vaultRoot: URL?
+    /// The window a fact mounted the tab body in, closed at teardown (a
+    /// close deferred inside a throwing async fact masks the fact's error).
+    private var hostWindow: NSWindow?
+
+    override func tearDownWithError() throws {
+        MainActor.assumeIsolated {
+            hostWindow?.close()
+            hostWindow = nil
+        }
+        if let vaultRoot { try? FileManager.default.removeItem(at: vaultRoot) }
+        try super.tearDownWithError()
+    }
+
     private static func source(_ relativePath: String) throws -> String {
         let root = URL(fileURLWithPath: #filePath)
             .deletingLastPathComponent()
@@ -240,5 +258,140 @@ final class GraphTableViewTests: XCTestCase {
         XCTAssertEqual(
             state.graphPresetEvent(.mostLinked, rows: hubsFirst),
             .graphPreset(outcome: .mostLinked(label: "hub", inLinks: 9)))
+    }
+
+    // MARK: - The mode line (#1220; contract 35 DD-18, Term M1)
+
+    /// A real session over a two-note vault whose `.slate/graph.json` holds
+    /// `graphJSON` when one is given.
+    @MainActor
+    private func makeGraphState(graphJSON: String? = nil) async throws -> AppState {
+        let root = FileManager.default.temporaryDirectory
+            .appendingPathComponent("slate-graph-mode-\(UUID().uuidString)")
+        vaultRoot = root
+        let vault = root.appendingPathComponent("vault")
+        try FileManager.default.createDirectory(
+            at: vault.appendingPathComponent(".slate"), withIntermediateDirectories: true)
+        try Data("[[b]]".utf8).write(to: vault.appendingPathComponent("a.md"))
+        try Data("[[a]]".utf8).write(to: vault.appendingPathComponent("b.md"))
+        if let graphJSON {
+            try Data(graphJSON.utf8).write(to: vault.appendingPathComponent(".slate/graph.json"))
+        }
+        let store = RecentVaultsStore(fileURL: root.appendingPathComponent("recents.json"))
+        let state = AppState(recentsStore: store, externalOpener: { _ in true })
+        state.openVault(at: vault)
+        await state.scanTask?.value
+        return state
+    }
+
+    /// Open the Graph tab and mount its body as the editor area hosts it.
+    @MainActor
+    private func mountGraphTab(_ state: AppState) async throws {
+        // A control's action dispatches through `NSApp.sendAction`, a silent
+        // no-op until `NSApplication.shared` exists (AccessibleDataGridTests).
+        _ = NSApplication.shared
+        state.openGraphTab()
+        let tabID = try XCTUnwrap(state.workspace.activeTab?.id)
+        let appeared = XCTestExpectation(description: "the Graph tab body mounted")
+        let window = NSWindow(
+            contentRect: NSRect(x: 0, y: 0, width: 960, height: 640),
+            styleMask: [.titled], backing: .buffered, defer: false)
+        window.isReleasedWhenClosed = false
+        window.contentView = NSHostingView(
+            rootView: GraphContainerView(tabID: tabID).environmentObject(state)
+                .onAppear { appeared.fulfill() })
+        hostWindow = window
+        window.makeKeyAndOrderFront(nil)
+        await fulfillment(of: [appeared], timeout: 30)
+    }
+
+    /// The reader's own switch: the mode picker is AppKit's segmented control
+    /// under SwiftUI, and selecting a segment then sending the control's
+    /// action is what a click does.
+    @MainActor
+    private func switchMode(to mode: GraphSurfaceMode) throws {
+        let content = try XCTUnwrap(hostWindow?.contentView, "the tab body is mounted")
+        let picker = try XCTUnwrap(
+            Self.firstSubview(of: NSSegmentedControl.self, in: content), "the mode picker is mounted")
+        picker.selectedSegment = try XCTUnwrap(GraphSurfaceMode.allCases.firstIndex(of: mode))
+        XCTAssertTrue(picker.sendAction(picker.action, to: picker.target), "the click reached the picker")
+    }
+
+    private static func firstSubview<T: NSView>(of type: T.Type, in root: NSView) -> T? {
+        if let match = root as? T { return match }
+        for child in root.subviews {
+            if let match = firstSubview(of: type, in: child) { return match }
+        }
+        return nil
+    }
+
+    private struct Timeout: Error, CustomStringConvertible {
+        let description: String
+    }
+
+    /// Turn the main run loop — where the body's updates and their
+    /// `onChange` actions run — until `condition` holds.
+    @MainActor
+    private func waitFor(
+        _ what: String, timeout: TimeInterval = 15, _ condition: () -> Bool
+    ) async throws {
+        let deadline = Date().addingTimeInterval(timeout)
+        while !condition() {
+            guard Date() < deadline else { throw Timeout(description: "timed out waiting for \(what)") }
+            let turned = XCTestExpectation(description: "the main run loop turned")
+            DispatchQueue.main.asyncAfter(deadline: .now() + 0.02) { turned.fulfill() }
+            await fulfillment(of: [turned], timeout: 30)
+        }
+    }
+
+    private static func modeLine(_ mode: GraphSurfaceMode) -> String {
+        a11yRender(event: .graph(event: .graphMode(mode: mode))).text
+    }
+
+    /// #1220 (contract 35 DD-18; Term M1): a persisted Diagram mode is
+    /// RESTORED at the seat and speaks no mode line — `GraphMode` is the
+    /// switch's line. The restore-driven `onChange(of: mode)` used to skip
+    /// only the focus bump and speak "Diagram mode." over the open. The
+    /// restore's flag is spent by the restore, so the reader's own next
+    /// switch still speaks.
+    @MainActor
+    func testARestoredDiagramSpeaksNoModeLine() async throws {
+        let state = try await makeGraphState(graphJSON: #"{"version":1,"mode":"diagram"}"#)
+        XCTAssertEqual(state.graphConfig.mode, .diagram, "the persisted mode loads with the vault")
+        let vault = try XCTUnwrap(state.currentVaultURL)
+        var posts: [String] = []
+        state.graphAnnouncer = GraphAnnouncer(post: { text, _ in posts.append(text) })
+        try await mountGraphTab(state)
+        // The restore's `onChange(of: mode)` persists the mode it restored;
+        // the save it schedules is the sign that the restore has run.
+        try await waitFor("the restore's mode change") { state.graphConfigSaveGen[vault] != nil }
+        state.graphAnnouncer.flushForTests()
+        XCTAssertFalse(
+            posts.contains(Self.modeLine(.diagram)), "a restored Diagram speaks no mode line: \(posts)")
+
+        try switchMode(to: .table)
+        try await waitFor("the reader's switch to Table to speak") {
+            posts.contains(Self.modeLine(.table))
+        }
+        XCTAssertFalse(posts.contains(Self.modeLine(.diagram)), "the restore stayed silent: \(posts)")
+    }
+
+    /// #1220's other half: the silence is the restore's alone. The reader's
+    /// own switch to Diagram speaks `GraphMode{Diagram}` once and persists
+    /// the mode.
+    @MainActor
+    func testAUserSwitchToDiagramSpeaksTheModeLine() async throws {
+        let state = try await makeGraphState()
+        XCTAssertEqual(state.graphConfig.mode, .table, "no graph.json: the Table default")
+        var posts: [String] = []
+        state.graphAnnouncer = GraphAnnouncer(post: { text, _ in posts.append(text) })
+        try await mountGraphTab(state)
+        try switchMode(to: .diagram)
+        try await waitFor("the reader's switch to Diagram to speak") {
+            posts.contains(Self.modeLine(.diagram))
+        }
+        XCTAssertEqual(
+            posts.filter { $0 == Self.modeLine(.diagram) }.count, 1, "spoken once: \(posts)")
+        XCTAssertEqual(state.graphConfig.mode, .diagram, "the switch persists its mode")
     }
 }
