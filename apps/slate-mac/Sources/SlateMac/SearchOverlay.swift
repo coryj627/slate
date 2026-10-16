@@ -721,11 +721,15 @@ extension SearchOverlay {
     /// `SearchOverlayKeyRoutingTests` pins every decision.
     ///
     /// - An input method composing owns every key (checked first: the
-    ///   candidate window takes Return and the arrows); a key typed in
-    ///   another window or a sheet is not the overlay's; and while the
-    ///   command palette is up nothing is claimed (red-team F2 — the
-    ///   parent window keeps its first responder during sheets, so the
-    ///   overlay's focus can still read as a row).
+    ///   candidate window takes Return and the arrows). A key typed in
+    ///   another window or in a sheet is not the overlay's: the parent
+    ///   window keeps its first responder while a sheet is up, so the
+    ///   overlay's focus can still read as the field or a row. And while
+    ///   the command palette is up nothing is claimed (red-team F2). The
+    ///   window check already covers keys typed in the palette's sheet;
+    ///   the palette flag stays for keys typed between the palette's
+    ///   request and its sheet becoming key, which still arrive in the
+    ///   overlay's window. It is not redundant: keep it.
     /// - Return and keypad Enter: bare, or exactly ⌘ (D2), and only on
     ///   a focused row. Return on the field stays the field's (its
     ///   onSubmit opens the top result); ⌘Return anywhere else passes

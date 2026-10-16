@@ -140,7 +140,7 @@ Each path: steps → expected utterance (quote what VO must speak) → probe. Ad
 2. Type `xyzzyplover` (planted ×3 in `Search bait.md`) → `wait-phrase "Search returned"` → **"Search returned N results."**
 3. `key 125` (Down) from the field → the first row takes focus: VO reads the row, **"<file>.md: …<snippet>"**, and the overlay announces **"Selected: <file>.md"** (either can land in `last`; match substrings). Down again walks down the list (it holds on the last row), `key 126` (Up) walks back, and Up on the first row returns to the field (#1113, SD-1). The three-Tab path still works when a query is present (Clear and Close buttons sit between field and list; Clear appears only with text). Both need Keyboard navigation on (System Settings ▸ Keyboard ▸ Keyboard navigation): a plain button takes focus only then (#1377).
 4. Return **on the field** → **"Opened <file>, line N: …"**.
-5. From the editor, reopen the overlay (`keys f cmd shift`), then `key 53` (Esc) → the overlay closes and focus is back in the editor: **"Note content for <file>. edit text"** (#1113, SD-2).
+5. Put focus back in the editor (`key 48`, Tab once: an activation leaves it on the window, #1378), reopen the overlay (`keys f cmd shift`), then `key 53` (Esc) → the overlay closes and focus is back in the editor: **"Note content for <file>. edit text"** (#1113, SD-2).
 6. Reopen, Down to a row, then `key 36 cmd` (⌘Return) → the row opens in a new tab: **"Opened <file>, line N: …"**, and the tab strip has one more tab (#1113, plan 41 D2).
 
 ### F — Editing (M6) — baseline FAIL #409, re-run after fix
