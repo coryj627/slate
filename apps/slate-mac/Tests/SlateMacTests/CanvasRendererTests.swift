@@ -42,10 +42,15 @@ final class CanvasRendererTests: XCTestCase {
         ]}
         """
 
-    private func makeView() async throws -> (AppState, CanvasDocument, CanvasRendererNSView) {
+    /// `offset` is where the viewport sits when the view first binds, so
+    /// the FIRST materialization can be a window that leaves cards out.
+    private func makeView(
+        canvasJSON: String? = nil, offset: CGPoint = .zero
+    ) async throws -> (AppState, CanvasDocument, CanvasRendererNSView) {
         let vault = tempDir.appendingPathComponent("vault-\(UUID().uuidString)")
         try FileManager.default.createDirectory(at: vault, withIntermediateDirectories: true)
-        try Data(Self.fixture.utf8).write(to: vault.appendingPathComponent("r.canvas"))
+        try Data((canvasJSON ?? Self.fixture).utf8)
+            .write(to: vault.appendingPathComponent("r.canvas"))
         try Data("# n".utf8).write(to: vault.appendingPathComponent("n.md"))
         let store = RecentVaultsStore(
             fileURL: tempDir.appendingPathComponent("recents-\(UUID().uuidString).json"))
@@ -54,6 +59,7 @@ final class CanvasRendererTests: XCTestCase {
         await state.scanTask?.value
         state.openFile("r.canvas", target: .currentTab)
         let doc = state.canvasDocument(for: "r.canvas")
+        doc.viewport.offset = offset
         let view = CanvasRendererNSView(frame: NSRect(x: 0, y: 0, width: 800, height: 600))
         view.configure(document: doc, appState: state)
         view.refreshFromDocument()
@@ -419,5 +425,108 @@ extension CanvasRendererTests {
                 band, max(cardFrame.height, band),
                 "label band fits or truncates, never overlaps neighbours: \(id)")
         }
+    }
+}
+
+/// #961: the board paints in DOCUMENT order after any pan cycle — the
+/// order `hitTestNode` already picks by, and JSON Canvas's own z-order
+/// (array order). Windowing evicts a card's layer when it leaves the
+/// materialization window and re-adds it on the way back, and a re-added
+/// sublayer lands at the TOP of the stack, so insertion order cannot be
+/// what decides paint order.
+@MainActor
+extension CanvasRendererTests {
+    /// The issue's repro: B (document index 0) is small and overlaps the
+    /// left end of A (index 1), which is wide. A window over A's far end
+    /// holds A and none of B.
+    private static let paintOrderFixture = """
+        {"nodes":[
+        {"id":"b","type":"text","text":"Small","x":-50,"y":0,"width":100,"height":100},
+        {"id":"a","type":"text","text":"Wide","x":0,"y":0,"width":1000,"height":100}
+        ],"edges":[]}
+        """
+
+    /// The 800×600 view materializes its viewport plus one viewport on
+    /// every side: at x 1300 that is canvas x 500…2900 — A's far end, and
+    /// nothing of B (−50…50). At the origin both cards are in it.
+    private static let windowOverAOnly = CGPoint(x: 1300, y: 0)
+    private static let windowOverBoth = CGPoint.zero
+
+    func testRematerializedCardsPaintInDocumentOrder() async throws {
+        let (_, doc, view) = try await makeView(
+            canvasJSON: Self.paintOrderFixture, offset: Self.windowOverAOnly)
+        func cards() -> [String] {
+            view.paintOrderForTesting().filter { $0 == "a" || $0 == "b" }
+        }
+        XCTAssertEqual(cards(), ["a"], "the first window materializes A alone")
+
+        doc.viewport.offset = Self.windowOverBoth
+        view.rebuildVisible()
+        XCTAssertEqual(
+            cards(), ["b", "a"],
+            "B materializes AFTER A but is earlier in document order, so it paints beneath A")
+
+        doc.viewport.offset = Self.windowOverAOnly
+        view.rebuildVisible()
+        XCTAssertEqual(cards(), ["a"], "panning away evicts B's layer")
+
+        doc.viewport.offset = Self.windowOverBoth
+        view.rebuildVisible()
+        XCTAssertEqual(
+            cards(), ["b", "a"],
+            "a returning card is re-added at the top of the stack and still paints beneath A")
+
+        // What paints on top is what a click selects: the overlap
+        // (canvas x 0…50, the view's own coordinates at this offset)
+        // belongs to A, the later card.
+        XCTAssertEqual(view.hitTestNode(atViewPoint: CGPoint(x: 25, y: 50))?.nodeId, "a")
+    }
+
+    /// The layers between the cards hold their place through the same
+    /// cycle. Plain connections paint beneath every card; coloured
+    /// connections and label chips paint above them, which is where
+    /// every first build has always drawn them (they are created after
+    /// the cards they connect). Stamping the cards' document order must
+    /// not bury a chip under a card, and a card coming back must not
+    /// cover one either.
+    func testConnectionLayersKeepTheirPlaceAcrossAPanCycle() async throws {
+        let fixture = """
+            {"nodes":[
+            {"id":"b","type":"text","text":"Small","x":-50,"y":0,"width":100,"height":100},
+            {"id":"a","type":"text","text":"Wide","x":0,"y":0,"width":1000,"height":100}
+            ],"edges":[
+            {"id":"plain","fromNode":"b","toNode":"a"},
+            {"id":"tinted","fromNode":"b","toNode":"a","color":"1","label":"link"}
+            ]}
+            """
+        let (_, doc, view) = try await makeView(canvasJSON: fixture, offset: Self.windowOverAOnly)
+
+        func assertLayering(_ label: String) {
+            let order = view.paintOrderForTesting()
+            let cards = order.indices.filter { order[$0] == "a" || order[$0] == "b" }
+            guard let lowestCard = cards.min(), let highestCard = cards.max(),
+                let plain = order.firstIndex(of: "edges"),
+                let tinted = order.firstIndex(of: "edges:1"),
+                let chip = order.firstIndex(of: "chip:tinted")
+            else {
+                return XCTFail("\(label): a layer is missing from \(order)")
+            }
+            XCTAssertLessThan(plain, lowestCard, "\(label): plain connections beneath: \(order)")
+            XCTAssertGreaterThan(
+                tinted, highestCard, "\(label): coloured connections above: \(order)")
+            XCTAssertGreaterThan(chip, highestCard, "\(label): label chips above: \(order)")
+        }
+
+        assertLayering("A alone")
+        doc.viewport.offset = Self.windowOverBoth
+        view.rebuildVisible()
+        assertLayering("B materialized")
+        doc.viewport.offset = Self.windowOverAOnly
+        view.rebuildVisible()
+        doc.viewport.offset = Self.windowOverBoth
+        view.rebuildVisible()
+        assertLayering("B rematerialized")
+        XCTAssertEqual(
+            view.paintOrderForTesting().filter { $0 == "a" || $0 == "b" }, ["b", "a"])
     }
 }

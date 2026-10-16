@@ -78,8 +78,10 @@ final class CanvasViewport: ObservableObject {
 ///   in a screen-space overlay at a minimum 3 pt thickness — never a
 ///   scaled sub-pixel ring at low zoom. View focus (first responder)
 ///   keeps the system focus ring, distinct from card selection.
-/// - **Z-order:** overlapping cards hit-test topmost-by-document-order
-///   (the t1 tiebreak).
+/// - **Z-order:** overlapping cards paint AND hit-test
+///   topmost-by-document-order (the t1 tiebreak). Paint order is the
+///   stamped `zPosition`, never insertion order, so windowing's
+///   evict-and-re-add cannot reorder the board (#961).
 /// - **Reduce Motion:** all layer updates run with implicit animations
 ///   disabled; pans/zooms are instant transforms.
 struct CanvasRendererView: NSViewRepresentable {
@@ -168,6 +170,11 @@ final class CanvasRendererNSView: NSView {
         layer?.masksToBounds = true
         contentLayer.anchorPoint = .zero
         layer?.addSublayer(contentLayer)
+        // #961: `contentLayer` composites by `zPosition`, never by when a
+        // layer was inserted — plain connections beneath every card,
+        // cards at their document index, coloured connections and label
+        // chips above the cards (`rebuildVisible`, `rebuildEdges`).
+        edgeLayer.zPosition = -1
         contentLayer.addSublayer(edgeLayer)
         selectionLayer.fillColor = nil
         selectionLayer.lineWidth = 3  // minimum screen-space thickness
@@ -304,7 +311,7 @@ final class CanvasRendererNSView: NSView {
         // Tooltips re-register with the frames they describe (#371).
         removeAllToolTips()
 
-        for node in document.scene.nodes {
+        for (documentIndex, node) in document.scene.nodes.enumerated() {
             // #521: an active move/resize mode's hypothetical geometry
             // overrides the committed scene rect.
             let transient = document.transientRects?[node.nodeId]
@@ -323,6 +330,13 @@ final class CanvasRendererNSView: NSView {
             let cardLayer = cardLayers[node.nodeId] ?? makeCardLayer(for: node)
             cardLayers[node.nodeId] = cardLayer
             if cardLayer.superlayer == nil { contentLayer.addSublayer(cardLayer) }
+            // #961: paint order IS document order — JSON Canvas's z-order,
+            // and the order `hitTestNode` picks by. A card returning to
+            // the window is re-added at the TOP of the sublayer stack, so
+            // insertion order cannot carry it; Core Animation composites
+            // siblings by `zPosition` first, so every pass stamps the
+            // index and a pan cycle cannot reorder what the user sees.
+            cardLayer.zPosition = CGFloat(documentIndex)
             cardLayer.frame = viewRect
             // #370: color paints EVERY pass — cached layers must track
             // color edits, appearance flips, and Increase Contrast.
@@ -499,6 +513,11 @@ final class CanvasRendererNSView: NSView {
         }
         let increaseContrast = NSWorkspace.shared.accessibilityDisplayShouldIncreaseContrast
         let lineWidth = max(1, 1.5 * (viewport?.scale ?? 1))
+        // #961: coloured connections and label chips paint above every
+        // card, where each first build has always drawn them (they were
+        // inserted after the cards). Stamped rather than inserted, so a
+        // card that rematerializes later cannot cover them.
+        let aboveCards = CGFloat(document.scene.nodes.count)
         edgeLayer.path = path
         edgeLayer.strokeColor = CanvasColorPalette.edgeStroke(
             raw: nil, increaseContrast: increaseContrast, appearance: effectiveAppearance
@@ -513,6 +532,7 @@ final class CanvasRendererNSView: NSView {
             let layer = coloredEdgeLayers[raw] ?? CAShapeLayer()
             coloredEdgeLayers[raw] = layer
             if layer.superlayer == nil { contentLayer.addSublayer(layer) }
+            layer.zPosition = aboveCards
             layer.path = coloredPath
             layer.strokeColor = CanvasColorPalette.edgeStroke(
                 raw: raw, increaseContrast: increaseContrast, appearance: effectiveAppearance
@@ -535,6 +555,7 @@ final class CanvasRendererNSView: NSView {
             let chip = edgeLabelLayers[id] ?? CATextLayer()
             edgeLabelLayers[id] = chip
             if chip.superlayer == nil { contentLayer.addSublayer(chip) }
+            chip.zPosition = aboveCards
             chip.string = entry.label
             chip.fontSize = labelFont
             chip.truncationMode = .end
@@ -805,5 +826,22 @@ final class CanvasRendererNSView: NSView {
             if let fill = layer.backgroundColor { out[id] = fill }
         }
         return out
+    }
+
+    /// #961 test seam: what `contentLayer` composites, bottom to top.
+    /// Core Animation sorts sibling layers by `zPosition` and breaks ties
+    /// by sublayer order, so this is the order the user sees them paint,
+    /// whatever order the window happened to insert them in. A card is its
+    /// node id; `edges` is the plain-connection layer, `edges:<color>` a
+    /// coloured one, `chip:<edge id>` a connection label.
+    func paintOrderForTesting() -> [String] {
+        var names: [ObjectIdentifier: String] = [ObjectIdentifier(edgeLayer): "edges"]
+        for (id, layer) in cardLayers { names[ObjectIdentifier(layer)] = id }
+        for (raw, layer) in coloredEdgeLayers { names[ObjectIdentifier(layer)] = "edges:\(raw)" }
+        for (id, layer) in edgeLabelLayers { names[ObjectIdentifier(layer)] = "chip:\(id)" }
+        let sublayers = contentLayer.sublayers ?? []
+        return sublayers.indices
+            .sorted { (sublayers[$0].zPosition, $0) < (sublayers[$1].zPosition, $1) }
+            .compactMap { names[ObjectIdentifier(sublayers[$0])] }
     }
 }
