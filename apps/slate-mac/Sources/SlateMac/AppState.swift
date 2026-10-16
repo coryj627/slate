@@ -2965,6 +2965,9 @@ final class AppState: ObservableObject {
     /// path, so a note switch never shows B's header over A's rows
     /// (review round 1 finding 9).
     @Published var connectionsLoadedPath: String?
+    /// A load is in flight: set when one is issued, cleared when the newest
+    /// lands, whether or not it publishes. The panel renders its loading
+    /// row from it (#1217).
     @Published var connectionsLoading: Bool = false
     @Published var connectionsError: String?
     /// Last graph generation the leaf refreshed against — the P0-3
