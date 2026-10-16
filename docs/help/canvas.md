@@ -78,7 +78,7 @@ Every mode announces how to get out when you enter it, shows its state on the ca
 
 Selection moves; **marks stick**. Press **⌃⌘M** on any card to mark it ("Marked — 3 cards marked"), on any view. The **Marks List** shows everything marked, lets you unmark or jump, and *Clear All Marks* resets.
 
-*Group Marked Cards…* and *Delete Marked Cards* act on the whole set at once — one announcement, and one ⌘Z brings it all back. Marked cards also move as a unit: enter Move Mode or use a placement command and the whole set travels together, keeping its shape.
+*Group Marked Cards…*, *Color Marked Cards…* and *Delete Marked Cards* act on the whole set at once — one announcement, and one ⌘Z brings it all back. Marked cards also move as a unit: enter Move Mode or use a placement command and the whole set travels together, keeping its shape.
 
 ## The visual view
 

@@ -154,6 +154,146 @@ final class CanvasNavigatorTests: XCTestCase {
         XCTAssertEqual(doc.selection.selected, "c")
     }
 
+    /// CD-46 (#1167): Next and Previous Card answer every document state
+    /// outside `.ready` with the sentence the read mapping owes it — the
+    /// Windows `SelectAdjacent` shape, which admits through
+    /// `AdmitStructuralRead` before it walks. They used to resolve the
+    /// document through `activeCanvasDocument`, which is `.ready`-only,
+    /// and return without a word.
+    ///
+    /// Each state is reached through its real lifecycle method, and each
+    /// expectation is taken FROM the mapping (`canvasReadRefusal(for:)`),
+    /// so the test follows the table rather than restating it; the two
+    /// handwritten sentences pin what the table says, so a swap of its
+    /// arms fails here too. The verbs have no selection precondition —
+    /// with no caret they seat the first or last row — so both columns,
+    /// a card selected and none, owe the state's sentence, and neither
+    /// may move the caret.
+    ///
+    /// The reopening window is the one refusal that does not stop the
+    /// walk, and the last leg pins it: that window is `.ready`, its rows
+    /// stay on screen, and walking them asks core nothing the filter
+    /// view cannot answer (VA-2's recorded non-exclusion; VA-1's filter
+    /// test drives it with a changed needle).
+    func testNextCardSpeaksTheDocumentStateOutsideReady() async throws {
+        func assertSpeaksTheState(
+            _ label: String, _ state: AppState, _ doc: CanvasDocument,
+            handwritten: String
+        ) throws {
+            XCTAssertNil(state.activeCanvasDocument, "\(label): the state is not `.ready`")
+            let note = try XCTUnwrap(
+                state.canvasReadRefusal(for: doc), "\(label): the mapping owes a sentence")
+            let sentence = a11yRender(event: .canvas(event: .canvasStatus(note: note))).text
+            XCTAssertEqual(sentence, handwritten, "\(label): the mapping's arm")
+            for selected in ["c", nil] as [String?] {
+                for (verb, offset) in [("next card", 1), ("previous card", -1)] {
+                    doc.selection.selected = selected
+                    self.posted = []
+                    state.canvasSelectAdjacent(offset: offset)
+                    state.canvasAnnouncer.flushForTests()
+                    let column = selected == nil ? "no selection" : "selected"
+                    XCTAssertEqual(
+                        self.posted, [sentence], "\(label) / \(column) / \(verb)")
+                    XCTAssertEqual(
+                        doc.selection.selected, selected,
+                        "\(label) / \(column) / \(verb): the caret moved")
+                }
+            }
+        }
+        let loading = "This canvas is loading. Try again in a moment."
+        let notReadable = "Canvas is not readable."
+
+        // `.loading` — a prepared replacement over an open tab (VA-2).
+        let loadingState = try await makeState()
+        let loadingDoc = try XCTUnwrap(loadingState.activeCanvasDocument)
+        _ = loadingDoc.beginPreparedReplacement()
+        guard case .loading = loadingDoc.state else {
+            return XCTFail("expected .loading, got \(loadingDoc.state)")
+        }
+        try assertSpeaksTheState("loading", loadingState, loadingDoc, handwritten: loading)
+
+        // `.degraded` — the file is not valid JSON Canvas.
+        let degradedState = try await makeState()
+        let degradedDoc = try XCTUnwrap(degradedState.activeCanvasDocument)
+        degradedDoc.applyPreparedLoad(
+            .degraded(warnings: [], message: "the file is not valid JSON Canvas"))
+        guard case .degraded = degradedDoc.state else {
+            return XCTFail("expected .degraded, got \(degradedDoc.state)")
+        }
+        try assertSpeaksTheState(
+            "degraded", degradedState, degradedDoc, handwritten: notReadable)
+
+        // `.failed` — moved to Trash: the outline survives, the view
+        // shows only the message.
+        let trashedState = try await makeState()
+        let trashedDoc = try XCTUnwrap(trashedState.activeCanvasDocument)
+        trashedDoc.markMovedToTrash(session: trashedState.currentSession)
+        guard case .failed = trashedDoc.state else {
+            return XCTFail("expected .failed, got \(trashedDoc.state)")
+        }
+        XCTAssertFalse(trashedDoc.outline.isEmpty, "rows survive; they are not walkable")
+        try assertSpeaksTheState("failed", trashedState, trashedDoc, handwritten: notReadable)
+
+        // `.retargetFailed` — a moved canvas that could not reopen keeps
+        // its last snapshot on screen, read-only, with no handle.
+        let retargetState = try await makeState()
+        let retargetDoc = try XCTUnwrap(retargetState.activeCanvasDocument)
+        let reservation = retargetDoc.beginBatchRetarget(to: retargetDoc.path)
+        let generation = try XCTUnwrap(retargetDoc.claimRetargetPreparation())
+        XCTAssertEqual(generation, reservation.generation)
+        XCTAssertTrue(
+            retargetDoc.applyRetargetPreparation(
+                .failed("could not reopen"), generation: generation, path: retargetDoc.path))
+        guard case .retargetFailed = retargetDoc.state else {
+            return XCTFail("expected .retargetFailed, got \(retargetDoc.state)")
+        }
+        try assertSpeaksTheState(
+            "retargetFailed", retargetState, retargetDoc, handwritten: notReadable)
+
+        // The reopening window, for contrast: `.ready` with the handle
+        // detached. The mapping's `.reopening` does not stop the walk.
+        let windowState = try await makeState()
+        let windowDoc = try XCTUnwrap(windowState.activeCanvasDocument)
+        _ = windowDoc.beginBatchRetarget(to: windowDoc.path)
+        XCTAssertEqual(windowState.canvasReadRefusal(for: windowDoc), .reopening)
+        windowDoc.selection.selected = nil
+        posted = []
+        windowState.canvasSelectAdjacent(offset: 1)
+        windowState.canvasAnnouncer.flushForTests()
+        XCTAssertEqual(windowDoc.selection.selected, "g1", "the window's rows are walked")
+        XCTAssertFalse(
+            posted.contains("This canvas is reopening. Try again in a moment."), "\(posted)")
+    }
+
+    /// CD-46's second half (#1167): an EMPTY canvas, which is `.ready`
+    /// and owes no state sentence, answers with the empty canvas's own
+    /// arm — Windows' `AnEmptyCanvasAnswersRatherThanMovingNowhere`. A
+    /// filter that matches nothing is a different fact with its own
+    /// sentence, and keeps it.
+    func testNextCardOnAnEmptyCanvasSpeaksTheEmptyArm() async throws {
+        let state = try await makeState(canvasJSON: #"{"nodes":[],"edges":[]}"#)
+        let doc = try XCTUnwrap(state.activeCanvasDocument)
+        XCTAssertTrue(doc.outline.isEmpty)
+        XCTAssertNil(state.canvasReadRefusal(for: doc), "a ready canvas owes no state sentence")
+        let empty = a11yRender(event: .canvas(event: .canvasStatus(note: .empty))).text
+        XCTAssertEqual(empty, "Canvas is empty.")
+
+        for (verb, offset) in [("next card", 1), ("previous card", -1)] {
+            posted = []
+            state.canvasSelectAdjacent(offset: offset)
+            state.canvasAnnouncer.flushForTests()
+            XCTAssertEqual(posted, [empty], verb)
+            XCTAssertNil(doc.selection.selected, "\(verb): nothing to seat")
+        }
+
+        doc.filterText = "zzz"
+        posted = []
+        state.canvasSelectAdjacent(offset: 1)
+        state.canvasAnnouncer.flushForTests()
+        XCTAssertEqual(posted, ["No cards match the filter."], "the filter's own fact")
+        doc.filterText = ""
+    }
+
     /// The state machine behind "which documents can the navigator
     /// verbs even reach" — the coverage whose absence let W6-1 0b-2
     /// describe the wrong states in its own report.

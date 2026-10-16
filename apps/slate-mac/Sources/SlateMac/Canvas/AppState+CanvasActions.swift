@@ -26,6 +26,8 @@ enum CanvasPrompt: Identifiable, Equatable {
     case marksList
     /// #524: label prompt for Group Marked Cards.
     case groupMarked
+    /// #1165: the Set Color sheet over the MARKED set (Color Marked Cards…).
+    case colorMarked
     /// #368 R5: vault-note picker for Add Note to Canvas….
     case addNote(files: [String])
     /// #368 R5: vault-media picker for Add Media….
@@ -50,6 +52,7 @@ enum CanvasPrompt: Identifiable, Equatable {
         case .editConnection: return "editConnection"
         case .marksList: return "marksList"
         case .groupMarked: return "groupMarked"
+        case .colorMarked: return "colorMarked"
         case .addNote: return "addNote"
         case .addMedia: return "addMedia"
         case .addLink: return "addLink"
@@ -920,5 +923,19 @@ extension AppState {
         }
         guard admitCanvasMutation(for: doc) else { return }
         presentCanvasPrompt(.groupMarked)
+    }
+
+    /// #1165 (W6-1 D-4): Color Marked's front door, the marked-set twin
+    /// of Set Color… — Windows' `RequestColorMarked`. With nothing marked
+    /// it says so and opens nothing, exactly as Group Marked Cards… does;
+    /// otherwise the color sheet opens over the marked set, and its
+    /// choice applies `canvasColorMarked(preset:)` as one action.
+    func canvasPromptColorMarked() {
+        guard let doc = activeCanvasDocument, !doc.selection.marked.isEmpty else {
+            canvasAnnouncer.announce(.canvasStatus(note: .noMarks))
+            return
+        }
+        guard admitCanvasMutation(for: doc) else { return }
+        presentCanvasPrompt(.colorMarked)
     }
 }

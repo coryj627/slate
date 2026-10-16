@@ -512,6 +512,8 @@ final class A11yCorpusCensusTests: XCTestCase {
             .canvas(event: .canvasBlocked(reason: .noteRetargetFailed(path: "notes/research.md", message: "io error"))),
             .canvas(event: .canvasBlocked(reason: .headingNotFound(heading: "Roadmap", filename: "notes.md"))),
             .canvas(event: .canvasBlocked(reason: .reopenFailed(message: "The file moved."))),
+            // Consumed on mac since #1169: the canvas file-card gate's refusal
+            // (`testTheFileTypeNotOpenableRowsAreConsumedByAMacSite`).
             .canvas(event: .canvasBlocked(reason: .fileTypeNotOpenable(target: "setup.exe"))),
             .canvas(event: .canvasBlocked(reason: .fileTypeNotOpenable(target: "tools/setup.exe"))),
             .canvas(event: .canvasActionFailed(action: .newCard, detail: "the file is read-only")),
@@ -670,6 +672,70 @@ final class A11yCorpusCensusTests: XCTestCase {
                 "priority mismatch at corpus[\(index)] (\(entry.event))"
             )
         }
+    }
+
+    /// Plan 43 PR 2 (#1169, CD-38): the corpus's two `FileTypeNotOpenable`
+    /// rows are CONSUMED on mac. The trigger ledger (contract 34, H4) names
+    /// a mac site for the key instead of the Windows-only designation it
+    /// carried until mac adopted the gate (E13D-2), and that site spells
+    /// the reason inside the member it names — the shape
+    /// `CanvasTriggerParityCensus.EveryMacSiteSpellsItsKey` checks on the
+    /// Windows lane, held here on the mac lane too.
+    func testTheFileTypeNotOpenableRowsAreConsumedByAMacSite() throws {
+        let repoRoot = Self.corpusURL
+            .deletingLastPathComponent()  // strips corpus.json → a11y
+            .deletingLastPathComponent()  // fixtures
+            .deletingLastPathComponent()  // tests
+            .deletingLastPathComponent()  // repo root
+        let ledger = try String(
+            contentsOf: repoRoot.appendingPathComponent("docs/plans/34_canvas_contracts.md"),
+            encoding: .utf8)
+        let row = try XCTUnwrap(
+            ledger.split(separator: "\n").first {
+                $0.hasPrefix("| `CanvasBlocked/FileTypeNotOpenable` |")
+            },
+            "the trigger ledger has no row for the key")
+        let cells = row.split(separator: "|", omittingEmptySubsequences: false)
+            .map { $0.trimmingCharacters(in: .whitespaces) }
+        XCTAssertEqual(cells.count, 7, "a ledger row has five cells: \(row)")
+        XCTAssertEqual(cells[2], "`AppState+CanvasExtras.swift#canvasActivateFileCard`")
+        XCTAssertFalse(cells[5].contains("mac designated"), "the designation outlived the gate")
+
+        let source = try String(
+            contentsOf: repoRoot.appendingPathComponent(
+                "apps/slate-mac/Sources/SlateMac/Canvas/AppState+CanvasExtras.swift"),
+            encoding: .utf8)
+        let member = try XCTUnwrap(
+            Self.swiftMemberSpan(source, named: "canvasActivateFileCard"),
+            "the ledger's mac site names no member")
+        XCTAssertTrue(
+            member.contains(".fileTypeNotOpenable(target:"),
+            "the named member does not construct the refusal")
+    }
+
+    /// The census's Swift member span, mirrored: from the declaration —
+    /// a type-level `func`/`var`/`let` at four spaces or fewer — to the
+    /// next declaration at the same or a shallower indentation.
+    private static func swiftMemberSpan(_ source: String, named member: String) -> String? {
+        let declaration = try? NSRegularExpression(
+            pattern: #"^ {0,4}(?:@\w+\s+)*(?:(?:private|fileprivate|internal|public|open)(?:\(set\))?\s+)?(?:static\s+|final\s+|override\s+|mutating\s+)*(?:func|var|let|init|subscript)\s+(\w+)"#)
+        guard let declaration else { return nil }
+        let lines = source.components(separatedBy: "\n")
+        func declared(_ line: String) -> String? {
+            let range = NSRange(line.startIndex..., in: line)
+            guard let match = declaration.firstMatch(in: line, range: range),
+                let name = Range(match.range(at: 1), in: line)
+            else { return nil }
+            return String(line[name])
+        }
+        func indent(_ line: String) -> Int { line.prefix { $0 == " " }.count }
+        guard let start = lines.firstIndex(where: { declared($0) == member }) else { return nil }
+        var span = [lines[start]]
+        for line in lines[(start + 1)...] {
+            if declared(line) != nil, indent(line) <= indent(lines[start]) { break }
+            span.append(line)
+        }
+        return span.joined(separator: "\n")
     }
 
     /// The poster path itself: posting an event routes core's rendered
