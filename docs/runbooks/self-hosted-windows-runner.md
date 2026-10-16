@@ -1534,25 +1534,35 @@ and `"status": "401"`. Rotate it before then.
   and got an answer. A few a day are normal and cost nothing.
   `admission: Unable to read data from the transport connection …`,
   `… The response ended prematurely`, `… No connection could be made …`
-  or `… No such host is known` means the attempts failed in a row (three
-  fast ones, or one that took 5 s or longer to fail, such as a connect
-  Windows gives up after 21 s with `A connection attempt failed because
-  the connected party did not properly respond …`): that tick admits
-  nothing and publishes nothing, and the next tick tries afresh. Many of either close together
+  or `… No such host is known` means the attempts failed in a row: three
+  in all, fast ones, with at most one slow one (5 s or longer) among them
+  whose connection failed while being set up (the connect, the TLS
+  handshake or the name lookup); or a slow one after the connection was
+  up, which is not repeated; or one that can never be repeated, a socket
+  that timed out (a connect Windows gave up on after 21 s: `A connection
+  attempt failed because the connected party did not properly respond …`)
+  or an attempt at 25 s or beyond. A call takes about a minute at worst.
+  That tick admits nothing and publishes nothing, and the next tick tries
+  afresh. What this host has seen is a TLS handshake that stalls 19 s on
+  a new connection and is then reset
+  (`HttpRequestException(SecureConnectionError) > IOException >
+  SocketException(ConnectionReset)`), while the next tick connects at
+  once; such a failure is tried again once, and a run of them points at
+  the host's network path rather than at GitHub. Many of either close together
   point at the host's network (see "Host reboot or Windows Update").
   Only GETs are retried: a repeated `generate-jitconfig` would register a
   second runner; the variable write retries after a minute by itself, and
   a failed runner delete is logged at warn and left to the next startup
   sweep. Every GET that fails without an HTTP status and is not retried
   leaves one `info` line first: `GitHub API: GET … gave up on attempt N
-  of 3 after X s (the last attempt | a slow failure | not a connection
-  failure): <exception types>`, where `X s` is that attempt's own time,
-  not the call's. That line is the evidence for tuning the rule: a slow
-  failure at a few seconds with a `SocketException(ConnectionReset)`
-  inside says the 5 s bound is too tight for that request; an
-  unfamiliar type says the classifier does not know the shape. A GET
-  that GitHub answered with a status (a 403, Get-GhRunner's 404) leaves
-  no such line.
+  of 3 after X s (the last attempt | a slow failure after the connection
+  was up | a second slow failure | a socket that timed out | too slow
+  to try again | not a connection failure): <exception types>`, where
+  `X s` is that attempt's own time, not the call's. That line is the
+  evidence for tuning the rule: the reason says which branch refused the
+  retry, and an unfamiliar type says the classifier does not know the
+  shape. A GET that GitHub answered with a status (a 403, Get-GhRunner's
+  404) leaves no such line.
 - **`token missing at …` every minute.** No token is stored: run
   `store-token.ps1`. After `-ResetAccount`, store the token before you
   enable the loop task.

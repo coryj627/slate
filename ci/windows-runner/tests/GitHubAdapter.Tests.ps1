@@ -67,13 +67,21 @@ Describe 'Invoke-GhApi' {
 Describe 'Invoke-GhApi transient retry' {
     BeforeAll {
         $script:fastFailureDefault = $script:GhRetryFastFailureSeconds
-        function New-GhConnectionError([System.Exception]$Inner) {
+        $script:slowCapDefault = $script:GhRetrySlowCapSeconds
+        function New-GhConnectionError([System.Exception]$Inner, [string]$RequestError = 'Unknown') {
             # The shape a failure before the response has: the cmdlet keeps
             # its HttpRequestException wrapper and the request as TargetObject.
+            # The wrapper's HttpRequestError says whether the request ever
+            # went out (ConnectionError, SecureConnectionError, NameResolutionError).
             $request = [System.Net.Http.HttpRequestMessage]::new([System.Net.Http.HttpMethod]::Get, 'https://api.github.com/repos/coryj627/slate/x')
             $request.Headers.Authorization = [System.Net.Http.Headers.AuthenticationHeaderValue]::new('Bearer', 'ghp_test')
-            $exception = [System.Net.Http.HttpRequestException]::new('An error occurred while sending the request.', $Inner)
+            $exception = [System.Net.Http.HttpRequestException]::new([System.Net.Http.HttpRequestError]$RequestError, 'An error occurred while sending the request.', $Inner)
             Write-Error -Exception $exception -TargetObject $request -ErrorAction Stop
+        }
+        function New-GhTlsStall {
+            # What api.github.com shows this host: the TLS handshake stalls
+            # for 19 s on a new connection and is then reset.
+            New-GhConnectionError -RequestError SecureConnectionError -Inner ([System.IO.IOException]::new('Unable to read data from the transport connection: An existing connection was forcibly closed by the remote host.', [System.Net.Sockets.SocketException]::new(10054)))
         }
     }
     BeforeEach {
@@ -84,6 +92,7 @@ Describe 'Invoke-GhApi transient retry' {
     }
     AfterEach {
         $script:GhRetryFastFailureSeconds = $script:fastFailureDefault
+        $script:GhRetrySlowCapSeconds = $script:slowCapDefault
     }
     AfterAll {
         $script:GhRetryNotice = $null
@@ -158,15 +167,70 @@ Describe 'Invoke-GhApi transient retry' {
         $script:retryNotices[0] | Should -Match '^GitHub API: GET /x gave up on attempt 1 of 3 after [0-9]+\.[0-9] s \(not a connection failure\): TaskCanceledException > TimeoutException$'
         $script:retryNotices[1] | Should -Match '\(not a connection failure\): TimeoutException$'
     }
-    It 'never retries an attempt that took long to fail, such as a connect Windows gives up after 21 s' {
-        # Measured, not typed: the bound is lowered to 0 s so any attempt counts as slow.
-        $script:GhRetryFastFailureSeconds = 0
-        Mock Invoke-RestMethod { New-GhConnectionError -Inner ([System.Net.Sockets.SocketException]::new(10060)) }
+    It 'never retries a connect Windows gave up on after 21 s, nor an attempt at the slow cap or beyond' {
+        # The socket error names the first: at 21 s it is slow, and its
+        # connection failed while being set up, so without the name it
+        # would be tried once more.
+        Mock Invoke-RestMethod { New-GhConnectionError -RequestError ConnectionError -Inner ([System.Net.Sockets.SocketException]::new(10060)) }
         { Invoke-GhApi -Path '/x' } | Should -Throw
         Should -Invoke Invoke-RestMethod -Times 1 -Exactly
         @($script:sleeps).Count | Should -Be 0
-        @($script:retryNotices).Count | Should -Be 1
-        $script:retryNotices[0] | Should -Match '\(a slow failure\): HttpRequestException > SocketException\(TimedOut\)$'
+        $script:retryNotices[0] | Should -Match '\(a socket that timed out\): HttpRequestException\(ConnectionError\) > SocketException\(TimedOut\)$'
+        # Measured, not typed: the cap is lowered to 0 s so any attempt is at it.
+        $script:GhRetrySlowCapSeconds = 0
+        $script:GhRetryFastFailureSeconds = 0
+        Mock Invoke-RestMethod { New-GhTlsStall }
+        { Invoke-GhApi -Path '/x' } | Should -Throw
+        Should -Invoke Invoke-RestMethod -Times 2 -Exactly
+        @($script:sleeps).Count | Should -Be 0
+        $script:retryNotices[1] | Should -Match '\(too slow to try again\): HttpRequestException\(SecureConnectionError\) > IOException > SocketException\(ConnectionReset\)$'
+    }
+    It 'tries a slow failure again once when the request never went out, such as a TLS handshake that stalled and was reset' {
+        # Measured, not typed: the bound is lowered to 0 s so any attempt counts as slow.
+        $script:GhRetryFastFailureSeconds = 0
+        foreach ($kind in 'SecureConnectionError', 'ConnectionError', 'NameResolutionError') {
+            $script:calls = 0
+            $script:failWith = $kind
+            Mock Invoke-RestMethod {
+                $script:calls++
+                # A failed lookup carries its own socket error; the others a reset.
+                $inner = if ($script:failWith -eq 'NameResolutionError') { [System.Net.Sockets.SocketException]::new(11001) } else { [System.IO.IOException]::new('stalled', [System.Net.Sockets.SocketException]::new(10054)) }
+                if ($script:calls -eq 1) { New-GhConnectionError -RequestError $script:failWith -Inner $inner }
+                [pscustomobject]@{ ok = $true }
+            }
+            (Invoke-GhApi -Path '/x').ok | Should -BeTrue -Because $kind
+        }
+        Should -Invoke Invoke-RestMethod -Times 6 -Exactly
+        @($script:sleeps) | Should -Be @(1, 1, 1)
+        @($script:retryNotices).Count | Should -Be 3
+        $script:retryNotices[0] | Should -Be 'GitHub API: GET /x answered on attempt 2 after a connection failure'
+    }
+    It 'counts only slow retries: a fast failure, then a slow one whose connection failed while being set up, is still tried again' {
+        $script:calls = 0
+        Mock Invoke-RestMethod {
+            $script:calls++
+            if ($script:calls -eq 1) { New-GhConnectionError -Inner ([System.Net.Sockets.SocketException]::new(10061)) }
+            if ($script:calls -eq 2) { $script:GhRetryFastFailureSeconds = 0; New-GhTlsStall }
+            [pscustomobject]@{ ok = $true }
+        }
+        (Invoke-GhApi -Path '/x').ok | Should -BeTrue
+        Should -Invoke Invoke-RestMethod -Times 3 -Exactly
+        @($script:sleeps) | Should -Be @(1, 2)
+    }
+    It 'gives up on a second slow failure, and at once on a slow failure after the connection was up' {
+        $script:GhRetryFastFailureSeconds = 0
+        Mock Invoke-RestMethod { New-GhTlsStall }
+        { Invoke-GhApi -Path '/x' } | Should -Throw
+        Should -Invoke Invoke-RestMethod -Times 2 -Exactly
+        @($script:sleeps) | Should -Be @(1)
+        $script:retryNotices[0] | Should -Match '^GitHub API: GET /x gave up on attempt 2 of 3 after [0-9]+\.[0-9] s \(a second slow failure\): HttpRequestException\(SecureConnectionError\)'
+        # A reset while the body was read: the connection was up, so the
+        # wait was not the whole cost.
+        Mock Invoke-RestMethod { throw [System.IO.IOException]::new('Unable to read data from the transport connection', [System.Net.Sockets.SocketException]::new(10054)) }
+        { Invoke-GhApi -Path '/x' } | Should -Throw
+        Should -Invoke Invoke-RestMethod -Times 3 -Exactly
+        @($script:sleeps) | Should -Be @(1)
+        $script:retryNotices[1] | Should -Match '\(a slow failure after the connection was up\): IOException > SocketException\(ConnectionReset\)$'
     }
     It 'names a failure shape the rule does not know, so the rule can be tuned from the log' {
         Mock Invoke-RestMethod { throw [System.Security.Authentication.AuthenticationException]::new('The remote certificate is invalid.') }
@@ -179,7 +243,7 @@ Describe 'Invoke-GhApi transient retry' {
         $script:GhRetryFastFailureSeconds = 0
         Mock Invoke-RestMethod { New-GhConnectionError -Inner ([System.IO.IOException]::new('Unable to read data from the transport connection', [System.Net.Sockets.SocketException]::new(10054))) }
         { Invoke-GhApi -Path '/actions/runs?status=queued' } | Should -Throw
-        $script:retryNotices[0] | Should -Match '^GitHub API: GET /actions/runs\?status=queued gave up on attempt 1 of 3 after [0-9]+\.[0-9] s \(a slow failure\): HttpRequestException > IOException > SocketException\(ConnectionReset\)$'
+        $script:retryNotices[0] | Should -Match '^GitHub API: GET /actions/runs\?status=queued gave up on attempt 1 of 3 after [0-9]+\.[0-9] s \(a slow failure after the connection was up\): HttpRequestException > IOException > SocketException\(ConnectionReset\)$'
     }
     It 'writes the line with a dot for the seconds whatever the culture, with types only, and survives a throwing hook' {
         $culture = [cultureinfo]::CurrentCulture
