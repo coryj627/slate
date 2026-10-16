@@ -64,6 +64,157 @@ Describe 'Invoke-GhApi' {
     }
 }
 
+Describe 'Invoke-GhApi transient retry' {
+    BeforeAll {
+        $script:fastFailureDefault = $script:GhRetryFastFailureSeconds
+        function New-GhConnectionError([System.Exception]$Inner) {
+            # The shape a failure before the response has: the cmdlet keeps
+            # its HttpRequestException wrapper and the request as TargetObject.
+            $request = [System.Net.Http.HttpRequestMessage]::new([System.Net.Http.HttpMethod]::Get, 'https://api.github.com/repos/coryj627/slate/x')
+            $request.Headers.Authorization = [System.Net.Http.Headers.AuthenticationHeaderValue]::new('Bearer', 'ghp_test')
+            $exception = [System.Net.Http.HttpRequestException]::new('An error occurred while sending the request.', $Inner)
+            Write-Error -Exception $exception -TargetObject $request -ErrorAction Stop
+        }
+    }
+    BeforeEach {
+        $script:retryNotices = [System.Collections.ArrayList]::new()
+        $script:GhRetryNotice = { param($message) [void]$script:retryNotices.Add($message) }
+        $script:sleeps = [System.Collections.ArrayList]::new()
+        Mock Start-Sleep { [void]$script:sleeps.Add($Seconds) }
+    }
+    AfterEach {
+        $script:GhRetryFastFailureSeconds = $script:fastFailureDefault
+    }
+    AfterAll {
+        $script:GhRetryNotice = $null
+    }
+    It 'tries a GET again after a reset mid-body, waiting 1 s then 2 s, and reports the retry once it is answered' {
+        # A reset or early end while the body is read arrives bare, as an
+        # IOException (HttpIOException), with no TargetObject.
+        $script:calls = 0
+        Mock Invoke-RestMethod {
+            $script:calls++
+            if ($script:calls -lt 3) {
+                throw [System.IO.IOException]::new('Unable to read data from the transport connection: An existing connection was forcibly closed by the remote host.', [System.Net.Sockets.SocketException]::new(10054))
+            }
+            [pscustomobject]@{ ok = $true }
+        }
+        (Invoke-GhApi -Path '/actions/runs?status=queued').ok | Should -BeTrue
+        Should -Invoke Invoke-RestMethod -Times 3 -Exactly
+        @($script:sleeps) | Should -Be @(1, 2)
+        @($script:retryNotices).Count | Should -Be 1
+        $script:retryNotices[0] | Should -Be 'GitHub API: GET /actions/runs?status=queued answered on attempt 3 after a connection failure'
+    }
+    It 'retries a refused connection and a failed name lookup, which keep the cmdlet''s wrapper' {
+        foreach ($inner in [System.Net.Sockets.SocketException]::new(10061), [System.Net.Sockets.SocketException]::new(11001)) {
+            $script:calls = 0
+            $script:failWith = $inner
+            Mock Invoke-RestMethod {
+                $script:calls++
+                if ($script:calls -eq 1) { New-GhConnectionError -Inner $script:failWith }
+                [pscustomobject]@{ ok = $true }
+            }
+            (Invoke-GhApi -Path '/x').ok | Should -BeTrue -Because $inner.SocketErrorCode
+        }
+        Should -Invoke Invoke-RestMethod -Times 4 -Exactly
+        @($script:sleeps) | Should -Be @(1, 1)
+    }
+    It 'gives up after the third attempt, rethrowing with the token removed from the kept request' {
+        Mock Invoke-RestMethod { New-GhConnectionError -Inner ([System.IO.IOException]::new('reset')) }
+        $record = $null
+        try { Invoke-GhApi -Path '/x' } catch { $record = $_ }
+        $record | Should -Not -BeNullOrEmpty
+        Should -Invoke Invoke-RestMethod -Times 3 -Exactly
+        @($script:sleeps) | Should -Be @(1, 2)
+        $record.TargetObject.Headers.Contains('Authorization') | Should -BeFalse
+        "$($record.TargetObject)" | Should -Not -BeLike '*ghp_test*'
+        @($script:retryNotices).Count | Should -Be 0
+    }
+    It 'never retries a POST, an HTTP status error or a timeout' {
+        # A retried generate-jitconfig would register a second runner.
+        Mock Invoke-RestMethod { New-GhConnectionError -Inner ([System.IO.IOException]::new('reset')) }
+        { Invoke-GhApi -Method 'POST' -Path '/actions/runners/generate-jitconfig' -Body @{ name = 'x' } } | Should -Throw
+        Should -Invoke Invoke-RestMethod -Times 1 -Exactly
+        # GitHub answered: the caller decides (Get-GhRunner reads a 404).
+        Mock Invoke-RestMethod {
+            $response = [System.Net.Http.HttpResponseMessage]::new([System.Net.HttpStatusCode]::Forbidden)
+            throw [Microsoft.PowerShell.Commands.HttpResponseException]::new('forbidden', $response)
+        }
+        { Invoke-GhApi -Path '/x' } | Should -Throw
+        Should -Invoke Invoke-RestMethod -Times 2 -Exactly
+        # A stalled body must not triple the stall: both timeout shapes.
+        Mock Invoke-RestMethod { throw [System.Threading.Tasks.TaskCanceledException]::new('The request was canceled due to the configured HttpClient.Timeout of 30 seconds elapsing.', [System.TimeoutException]::new('timeout')) }
+        { Invoke-GhApi -Path '/x' } | Should -Throw
+        Mock Invoke-RestMethod { throw [System.TimeoutException]::new('The operation timed out.') }
+        { Invoke-GhApi -Path '/x' } | Should -Throw
+        Should -Invoke Invoke-RestMethod -Times 4 -Exactly
+        @($script:sleeps).Count | Should -Be 0
+        @($script:retryNotices).Count | Should -Be 0
+    }
+    It 'never retries an attempt that took long to fail, such as a connect Windows gives up after 21 s' {
+        # Measured, not typed: the bound is lowered to 0 s so any attempt counts as slow.
+        $script:GhRetryFastFailureSeconds = 0
+        Mock Invoke-RestMethod { New-GhConnectionError -Inner ([System.Net.Sockets.SocketException]::new(10060)) }
+        { Invoke-GhApi -Path '/x' } | Should -Throw
+        Should -Invoke Invoke-RestMethod -Times 1 -Exactly
+        @($script:sleeps).Count | Should -Be 0
+    }
+    It 'stays quiet when the first attempt is answered, and when no notice is wired' {
+        Mock Invoke-RestMethod { [pscustomobject]@{ ok = $true } }
+        (Invoke-GhApi -Path '/x').ok | Should -BeTrue
+        @($script:retryNotices).Count | Should -Be 0
+        $script:GhRetryNotice = $null
+        $script:calls = 0
+        Mock Invoke-RestMethod {
+            $script:calls++
+            if ($script:calls -eq 1) { New-GhConnectionError -Inner ([System.Net.Sockets.SocketException]::new(10061)) }
+            [pscustomobject]@{ ok = $true }
+        }
+        (Invoke-GhApi -Path '/x').ok | Should -BeTrue
+        Should -Invoke Invoke-RestMethod -Times 3 -Exactly
+        @($script:sleeps) | Should -Be @(1)
+    }
+    It 'never turns an answered call into a failure when the notice itself throws' {
+        $script:GhRetryNotice = { throw 'log disk full' }
+        $script:calls = 0
+        Mock Invoke-RestMethod {
+            $script:calls++
+            if ($script:calls -eq 1) { New-GhConnectionError -Inner ([System.IO.IOException]::new('reset')) }
+            [pscustomobject]@{ ok = $true }
+        }
+        (Invoke-GhApi -Path '/x').ok | Should -BeTrue
+    }
+    It 'resends the ETag on a retried conditional call and still answers a 304 from its cache' {
+        $script:GhEtags = @{}
+        try {
+            $script:calls = 0
+            Mock Invoke-RestMethod {
+                $script:calls++
+                # Attempts 1 and 3 lose the connection; 2 answers with an ETag; 4 is a 304.
+                if ($script:calls -in 1, 3) { throw [System.IO.IOException]::new('The response ended prematurely.') }
+                Set-ResponseHeaders $ResponseHeadersVariable @{ ETag = @('W/"abc"') }
+                if ($script:calls -eq 2) {
+                    Set-ResponseHeaders $StatusCodeVariable 200
+                    return [pscustomobject]@{ workflow_runs = @([pscustomobject]@{ id = 1 }) }
+                }
+                Set-ResponseHeaders $StatusCodeVariable 304
+                return $null
+            }
+            $first = Invoke-GhApi -Path '/actions/runs?status=queued' -Conditional
+            $first.workflow_runs[0].id | Should -Be 1
+            $second = Invoke-GhApi -Path '/actions/runs?status=queued' -Conditional
+            $second.workflow_runs[0].id | Should -Be 1
+            Should -Invoke Invoke-RestMethod -Times 4 -Exactly
+            Should -Invoke Invoke-RestMethod -Times 2 -Exactly -ParameterFilter { -not $Headers.ContainsKey('If-None-Match') }
+            Should -Invoke Invoke-RestMethod -Times 2 -Exactly -ParameterFilter { $Headers['If-None-Match'] -eq 'W/"abc"' -and $SkipHttpErrorCheck }
+            @($script:retryNotices).Count | Should -Be 2
+            $script:GhEtags.Count | Should -Be 1
+        } finally {
+            $script:GhEtags = @{}
+        }
+    }
+}
+
 Describe 'Invoke-GhApi rate budget' {
     BeforeEach {
         $script:budgetWarnings = [System.Collections.ArrayList]::new()

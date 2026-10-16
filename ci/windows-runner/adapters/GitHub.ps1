@@ -17,6 +17,17 @@ $script:GhToken = $null
 # that takes one message and logs it at warn. Test-GhRateBudget calls it.
 $script:GhLowBudgetWarning = $null
 $script:GhLowBudgetWarnedReset = $null
+# Set by orchestrator.ps1 too: a scriptblock that takes one message and
+# logs it at info. Invoke-GhApi reports a GET that needed a retry through it.
+$script:GhRetryNotice = $null
+# A GET that fails at the connection level is tried again after each of
+# these waits, in seconds: three attempts in all; the waits add 3 s to a
+# tick, and a fast failure's own time is bounded below.
+# Only a fast failure is: an attempt that ran this long or longer before
+# failing (a connect that Windows gives up after 21 s, a DNS resolver that
+# times out) is not waited for three times over.
+$script:GhRetryDelays = @(1, 2)
+$script:GhRetryFastFailureSeconds = 5
 # Path -> @{ ETag; Body; UsedAt } for the conditional listing calls.
 $script:GhEtags = @{}
 
@@ -29,6 +40,24 @@ function Initialize-GitHubAdapter {
     )
     $script:GhBase = "https://api.github.com/repos/$Owner/$Repo"
     $script:GhToken = $Token
+}
+
+function Test-GhConnectionFailure {
+    # True when a failed call never got GitHub's answer: the connection was
+    # reset, refused, or dropped, or the name did not resolve. A failure
+    # before the response keeps the cmdlet's HttpRequestException wrapper
+    # (its inner IOException or SocketException says what happened; the
+    # cmdlet copies that message into the record, which is what the log
+    # shows); a reset or early end mid-body arrives bare, as an IOException.
+    # Not one: a timeout (TaskCanceledException or TimeoutException; a
+    # stalled body must not be waited for three times over), a TLS failure
+    # (AuthenticationException), and an HTTP status (HttpResponseException,
+    # no inner exception), which is GitHub's answer for the caller to read.
+    [CmdletBinding()]
+    param([Parameter(Mandatory)]$ErrorRecord)
+    $exception = $ErrorRecord.Exception
+    if ($exception -is [System.Net.Http.HttpRequestException]) { $exception = $exception.InnerException }
+    return ($exception -is [System.IO.IOException] -or $exception -is [System.Net.Sockets.SocketException])
 }
 
 function Invoke-GhApi {
@@ -68,17 +97,37 @@ function Invoke-GhApi {
         $params.Body = $Body | ConvertTo-Json -Compress -Depth 5
         $params.ContentType = 'application/json'
     }
-    try {
-        $response = Invoke-RestMethod @params
-    } catch {
-        # A failed request's error record keeps the request as its
-        # TargetObject (the same object as the response's RequestMessage),
-        # whose ToString() prints the Authorization header, so Get-Error,
-        # Format-List * or serialising the record would show the token.
-        # Drop the header before rethrowing; the status code stays readable
-        # for Get-GhRunner. A plain exception has no TargetObject.
-        if ($_.TargetObject -is [System.Net.Http.HttpRequestMessage]) { [void]$_.TargetObject.Headers.Remove('Authorization') }
-        throw
+    $attempt = 0
+    while ($true) {
+        $attempt++
+        $stopwatch = [System.Diagnostics.Stopwatch]::StartNew()
+        try {
+            $response = Invoke-RestMethod @params
+            break
+        } catch {
+            # A failed request's error record keeps the request as its
+            # TargetObject (the same object as the response's RequestMessage),
+            # whose ToString() prints the Authorization header, so Get-Error,
+            # Format-List * or serialising the record would show the token.
+            # Drop the header before rethrowing; the status code stays readable
+            # for Get-GhRunner. A plain exception has no TargetObject.
+            if ($_.TargetObject -is [System.Net.Http.HttpRequestMessage]) { [void]$_.TargetObject.Headers.Remove('Authorization') }
+            # A GET that lost its connection quickly goes again after a short
+            # wait: api.github.com resets one now and then, and without this
+            # each reset cost the loop a tick's admission. Only GET: a
+            # repeated generate-jitconfig would register a second runner;
+            # the variable write retries after a minute by itself, and a
+            # failed runner delete is logged and left to the startup sweep.
+            # The last attempt, a slow failure, and anything else, is raised.
+            $slow = $stopwatch.Elapsed.TotalSeconds -ge $script:GhRetryFastFailureSeconds
+            if ($Method -ne 'GET' -or $attempt -gt $script:GhRetryDelays.Count -or $slow -or -not (Test-GhConnectionFailure -ErrorRecord $_)) { throw }
+            Start-Sleep -Seconds ([int]$script:GhRetryDelays[$attempt - 1])
+        }
+    }
+    if ($attempt -gt 1 -and $null -ne $script:GhRetryNotice) {
+        # "answered": a conditional call may still raise the status below.
+        # A notice that throws must not turn the answer into a failure.
+        try { & $script:GhRetryNotice "GitHub API: $Method $Path answered on attempt $attempt after a connection failure" } catch { }
     }
     Test-GhRateBudget -Headers $ghResponseHeaders
     if (-not $Conditional) { return $response }
