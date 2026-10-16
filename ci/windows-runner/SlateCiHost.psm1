@@ -197,7 +197,9 @@ function Get-HostHealth {
     foreach ($key in 'Failures', 'LastFailureAt', 'LastReason', 'TrippedAt', 'HalfOpenAt') {
         if (-not $health.Contains($key)) { $health[$key] = $(if ($key -eq 'Failures') { 0 } else { $null }) }
     }
-    if ($null -eq $health['Failures']) { $health['Failures'] = 0 }
+    # A count that does not parse (a hand-edited journal) reads as zero, so
+    # neither the startup sweep nor a claim nor a failure stumbles on it.
+    try { $health['Failures'] = [int]$health['Failures'] } catch { $health['Failures'] = 0 }
     return $health
 }
 
@@ -247,10 +249,7 @@ function Register-HostFailure {
     [CmdletBinding()]
     param([Parameter(Mandatory)]$Config, [Parameter(Mandatory)]$Journal, [Parameter(Mandatory)][hashtable]$Adapters, [Parameter(Mandatory)][string]$Reason, [Parameter(Mandatory)][datetimeoffset]$Now)
     $health = Get-HostHealth -Journal $Journal
-    # A count that does not parse (a hand-edited journal) starts again at one.
-    $count = 0
-    try { $count = [int]$health['Failures'] } catch { $count = 0 }
-    $health['Failures'] = $count + 1
+    $health['Failures'] = [int]$health['Failures'] + 1
     $health['LastFailureAt'] = $Now.ToString('o')
     $health['LastReason'] = $Reason
     if ([int]$health['Failures'] -lt [int]$Config.BreakerFailures) { return }

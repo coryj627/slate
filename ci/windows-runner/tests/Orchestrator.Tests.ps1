@@ -1465,6 +1465,10 @@ Context 'health breaker' {
         Invoke-OrchestratorTick -Config $config -Journal $journal -Adapters $adapters -Now $t0.AddSeconds(20)
         $journal.Health.Failures | Should -Be 1
         ($logs -join "`n") | Should -Not -Match '\[error\] health:'
+        # The startup sweep reads the same record: a bad count must not stop the loop from starting.
+        $journal.Health = @{ Failures = 'many'; TrippedAt = 'not a time' }
+        { Invoke-StartupSweep -Config $config -Journal $journal -Adapters $adapters } | Should -Not -Throw
+        $journal.Health.Failures | Should -Be 0
     }
 }
 
