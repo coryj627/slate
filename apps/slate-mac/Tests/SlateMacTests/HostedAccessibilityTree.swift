@@ -53,8 +53,8 @@ struct AXElementSnapshot: CustomStringConvertible {
 /// Every client call stays on the main actor. A request this process makes
 /// of itself is answered synchronously on the calling thread, and SwiftUI
 /// refreshes its accessibility nodes while answering; off the main thread
-/// that refresh traps in `MainActor.assumeIsolated` as soon as the tree has
-/// changed (an expanded disclosure, a selected segment).
+/// that refresh can trap in `MainActor.assumeIsolated` once the tree has
+/// changed (reading the sync panel after expanding a disclosure did).
 @MainActor
 enum HostedAccessibilityTree {
     struct NotReady: Error, CustomStringConvertible {
@@ -135,7 +135,8 @@ enum HostedAccessibilityTree {
         line: UInt = #line,
         where match: (AXElementSnapshot) -> Bool
     ) throws {
-        var pending = clientWindow(of: window).map { [$0] } ?? []
+        let root = clientWindow(of: window)
+        var pending = root.map { [$0] } ?? []
         var budget = 2_000
         while !pending.isEmpty, budget > 0 {
             budget -= 1
@@ -146,7 +147,9 @@ enum HostedAccessibilityTree {
             }
             pending += (attribute(element, kAXChildrenAttribute) as? [AXUIElement]) ?? []
         }
-        let failure = NotReady(description: "no element in the hosted tree accepts the press")
+        let failure = NotReady(
+            description: "no element in the hosted tree accepts the press; client read:\n"
+                + (root.map { tree(of: $0).description } ?? "(no window answered)"))
         XCTFail(failure.description, file: file, line: line)
         throw failure
     }
