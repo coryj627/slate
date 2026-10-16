@@ -90,4 +90,23 @@ final class CanvasColorPaletteTests: XCTestCase {
             XCTAssertNotNil(CanvasColorPalette.baseColor(forRaw: preset), preset)
         }
     }
+
+    /// The one Swift spelling of the preset set is exactly the ids core
+    /// names: every id in `presetIDs` gets a preset name from
+    /// `canvasColorName`, and the ids just outside it get core's
+    /// out-of-set answer, so a preset added (or dropped) core-side fails
+    /// here instead of drifting from the color sheets that iterate it.
+    func testThePresetRangeIsExactlyTheIdsCoreNames() {
+        let outside = canvasColorName(color: .preset(preset: 0))
+        XCTAssertEqual(outside, "custom color", "core's answer for a non-preset id")
+        let names = CanvasColorPalette.presetIDs.map {
+            canvasColorName(color: .preset(preset: UInt8($0)))
+        }
+        XCTAssertEqual(names, ["red", "orange", "yellow", "green", "cyan", "purple"])
+        let after = UInt8(CanvasColorPalette.presetIDs.upperBound + 1)
+        XCTAssertEqual(canvasColorName(color: .preset(preset: after)), outside)
+        for id in CanvasColorPalette.presetIDs {
+            XCTAssertNotNil(CanvasColorPalette.baseColor(forRaw: String(id)), "preset \(id) paints")
+        }
+    }
 }

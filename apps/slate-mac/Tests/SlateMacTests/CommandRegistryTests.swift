@@ -223,3 +223,120 @@ final class CommandRegistryTests: XCTestCase {
         }
     }
 }
+
+// MARK: - The Slate catalog: Canvas: Color Marked Cards… (#1165, D-4)
+
+/// W6-1 owner decision D-4: parity is the registry, so the bulk color verb
+/// gets the front door every other canvas verb has — a command id in the
+/// canvas section (the id Windows' chord table already mints), a palette
+/// row, a hint and a menu item — and it behaves as Windows'
+/// `RequestColorMarked` does: nothing marked says so, marked cards open the
+/// Set Color sheet over the marked set, and the sheet's choice is ONE
+/// action with ONE summary.
+@MainActor
+extension CommandRegistryTests {
+    private static let colorMarkedID = "slate.canvas.colorMarked"
+
+    func testColorMarkedIsRegisteredInTheCanvasSectionWithAHint() throws {
+        let appState = AppState()
+        let command = try XCTUnwrap(
+            appState.commandRegistry.list().first { $0.id == Self.colorMarkedID },
+            "the bulk color verb has no registry row")
+        XCTAssertEqual(command.label, "Canvas: Color Marked Cards…")
+        XCTAssertEqual(command.section, .canvas)
+        XCTAssertFalse((command.accessibilityHint ?? "").isEmpty, "the palette row needs a hint")
+        XCTAssertNil(command.hotkeyHint, "mac allocates no chord to the marked-set verbs")
+        // Palette availability mirrors Group/Delete Marked: one canvas
+        // authoring reason when the canvas cannot be edited.
+        XCTAssertTrue(SlateCommandID.canvasMutationCommands.contains(Self.colorMarkedID))
+        XCTAssertTrue(SlateCommandID.all.contains(Self.colorMarkedID))
+    }
+
+    func testColorMarkedWithNothingMarkedSaysSoAndOpensNoSheet() async throws {
+        let (state, cleanup) = try await Self.canvasState()
+        defer { cleanup() }
+        var posted: [String] = []
+        state.canvasAnnouncer = CanvasAnnouncer(verbosity: .standard, coalesceWindow: 60) {
+            text, _ in posted.append(text)
+        }
+
+        try state.commandRegistry.invokeById(id: Self.colorMarkedID)
+        state.canvasAnnouncer.flushForTests()
+
+        XCTAssertNil(state.canvasPrompt, "nothing to color opens nothing")
+        XCTAssertEqual(
+            posted, [a11yRender(event: .canvas(event: .canvasStatus(note: .noMarks))).text])
+    }
+
+    func testColorMarkedOpensTheColorSheetOverTheMarkedSet() async throws {
+        let (state, cleanup) = try await Self.canvasState()
+        defer { cleanup() }
+        let doc = try XCTUnwrap(state.activeCanvasDocument)
+        doc.selection.marked = ["a", "b"]
+        var posted: [String] = []
+        state.canvasAnnouncer = CanvasAnnouncer(verbosity: .standard, coalesceWindow: 60) {
+            text, _ in posted.append(text)
+        }
+
+        try state.commandRegistry.invokeById(id: Self.colorMarkedID)
+        XCTAssertEqual(state.canvasPrompt?.id, "colorMarked", "the marked set's color sheet")
+
+        // The sheet's choice: the bulk verb through the prompt-commit seam.
+        let undoBefore = doc.undoStack.count
+        XCTAssertTrue(state.commitCanvasPromptMutation { state.canvasColorMarked(preset: 4) })
+        state.canvasAnnouncer.flushForTests()
+        XCTAssertEqual(doc.undoStack.count, undoBefore + 1, "one action, one undo")
+        XCTAssertEqual(posted, ["Set 2 cards to green."])
+        XCTAssertEqual(doc.tableRows.first { $0.nodeId == "a" }?.colorName, "green")
+        XCTAssertEqual(doc.tableRows.first { $0.nodeId == "b" }?.colorName, "green")
+        XCTAssertEqual(doc.selection.marked, ["a", "b"], "coloring keeps the marks")
+    }
+
+    /// The menu item: mac's Canvas verbs live in the View menu's toolbar
+    /// group (the group `MacCatalogParityTests` reads as mac's Canvas
+    /// menu); Color Marked sits there with the registry's label and opens
+    /// the same sheet the palette row does.
+    func testTheCanvasMenuCarriesColorMarkedBesideTheMarkVerb() throws {
+        let app = try Self.macSource("SlateMacApp.swift")
+        let start = try XCTUnwrap(app.range(of: "CommandGroup(after: .toolbar)"))
+        let rest = app[start.upperBound...]
+        let group = rest.range(of: "CommandGroup(").map { rest[..<$0.lowerBound] } ?? rest
+        XCTAssertTrue(group.contains("Button(\"Canvas: Color Marked Cards…\")"), "no menu item")
+        XCTAssertTrue(group.contains("appState.canvasPromptColorMarked()"))
+        XCTAssertTrue(group.contains("appState.canvasToggleMark()"))
+    }
+
+    // MARK: Fixtures
+
+    private static func canvasState() async throws -> (AppState, () -> Void) {
+        let root = FileManager.default.temporaryDirectory
+            .appendingPathComponent("color-marked-\(UUID().uuidString)")
+        let vault = root.appendingPathComponent("vault")
+        try FileManager.default.createDirectory(at: vault, withIntermediateDirectories: true)
+        try Data(
+            """
+            {"nodes":[
+            {"id":"a","type":"text","text":"Alpha","x":0,"y":0,"width":200,"height":100},
+            {"id":"b","type":"text","text":"Beta","x":220,"y":0,"width":200,"height":100},
+            {"id":"c","type":"text","text":"Gamma","x":440,"y":0,"width":200,"height":100}
+            ],"edges":[]}
+            """.utf8
+        ).write(to: vault.appendingPathComponent("board.canvas"))
+        let store = RecentVaultsStore(fileURL: root.appendingPathComponent("recents.json"))
+        let state = AppState(recentsStore: store, externalOpener: { _ in true })
+        state.openVault(at: vault)
+        await state.scanTask?.value
+        state.openFile("board.canvas", target: .currentTab)
+        return (state, { try? FileManager.default.removeItem(at: root) })
+    }
+
+    private static func macSource(_ name: String) throws -> String {
+        let url = URL(fileURLWithPath: #filePath)
+            .deletingLastPathComponent()  // SlateMacTests
+            .deletingLastPathComponent()  // Tests
+            .deletingLastPathComponent()  // slate-mac
+            .appendingPathComponent("Sources/SlateMac")
+            .appendingPathComponent(name)
+        return try String(contentsOf: url, encoding: .utf8)
+    }
+}
