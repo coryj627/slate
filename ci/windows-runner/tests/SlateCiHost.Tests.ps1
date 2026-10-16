@@ -501,13 +501,27 @@ Describe 'Get-CiHostConfig' {
         $cfg | ConvertTo-Json -Depth 5 | Set-Content $p
         { Get-CiHostConfig -Path $p } | Should -Throw '*LogRetentionDays*'
     }
+    It 'defaults the breaker to 3 failures and a 900 s cool-down when the file predates the keys, and rejects bad values' {
+        $cfg = Get-Content -Raw (Join-Path $PSScriptRoot '..' 'config.json') | ConvertFrom-Json -AsHashtable
+        $cfg.Remove('BreakerFailures'); $cfg.Remove('BreakerCooldownSeconds')
+        $p = Join-Path $TestDrive 'old-breaker.json'; $cfg | ConvertTo-Json -Depth 5 | Set-Content $p
+        $loaded = Get-CiHostConfig -Path $p
+        $loaded.BreakerFailures | Should -Be 3
+        $loaded.BreakerCooldownSeconds | Should -Be 900
+        $cfg['BreakerFailures'] = 0
+        $cfg | ConvertTo-Json -Depth 5 | Set-Content $p
+        { Get-CiHostConfig -Path $p } | Should -Throw '*BreakerFailures*'
+        $cfg['BreakerFailures'] = 3; $cfg['BreakerCooldownSeconds'] = 'soon'
+        $cfg | ConvertTo-Json -Depth 5 | Set-Content $p
+        { Get-CiHostConfig -Path $p } | Should -Throw '*BreakerCooldownSeconds*'
+    }
 }
 
 Describe 'Journal' {
     It 'New-Journal and Read-Journal share one set of top-level keys' {
         $p = Join-Path $TestDrive 'bare.json'
         '{"Vms":{},"Retries":{},"SeenJobs":{}}' | Set-Content $p
-        @((New-Journal).Keys | Sort-Object) | Should -Be @('GoldenAccepted', 'LogsPrunedOn', 'PublishFailedAt', 'PublishedAt', 'PublishedState', 'Retries', 'SeenJobs', 'Vms' | Sort-Object)
+        @((New-Journal).Keys | Sort-Object) | Should -Be @('GoldenAccepted', 'Health', 'LogsPrunedOn', 'PublishFailedAt', 'PublishedAt', 'PublishedState', 'Retries', 'SeenJobs', 'Vms' | Sort-Object)
         @((Read-Journal -Path $p).Keys | Sort-Object) | Should -Be @((New-Journal).Keys | Sort-Object)
         (Read-Journal -Path $p).PublishedState | Should -Be $null
     }
