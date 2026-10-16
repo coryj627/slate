@@ -412,13 +412,15 @@ final class SidebarNavigationTests: XCTestCase {
   }
 
   func testAddShortcutRefusesAtTheDecodeCap() async throws {
-    // #1332 (D6): decode shows the first 64 slots, so a slot added past
-    // them would never appear. Add refuses at the cap with the reason —
-    // from the catalog and from a tag row alike — and a removal makes
-    // room again. The file holds one slot past the cap, on Y.
+    // #1332 (D6): decode shows the first `maxDecodedShortcuts` slots, so
+    // a slot added past them would never appear. Add refuses at the cap
+    // with the reason — from the catalog and from a tag row alike — and a
+    // removal makes room again. The file holds one slot past the cap, on Y.
+    // One assertion is the golden (the first refusal: the cap and the
+    // sentence verbatim); every other one derives from the constant.
+    let cap = SidebarOrganizationSchema.maxDecodedShortcuts
     let slots = Array(
-      repeating: #"{"kind": "file", "path": "x.md"}"#,
-      count: SidebarOrganizationSchema.maxDecodedShortcuts
+      repeating: #"{"kind": "file", "path": "x.md"}"#, count: cap
     ).joined(separator: ",")
     let (state, vault) = try openVault(
       named: "cap-decode", files: ["x.md"], folders: ["Y", "Z"],
@@ -426,7 +428,7 @@ final class SidebarNavigationTests: XCTestCase {
         {"version": 1,
          "shortcuts": [\(slots), {"kind": "folder", "path": "Y"}]}
         """)
-    XCTAssertEqual(state.sidebarOrganization.shortcuts.count, 64)
+    XCTAssertEqual(state.sidebarOrganization.shortcuts.count, cap)
     XCTAssertEqual(state.sidebarOrganization.shortcutOverflowCount, 1)
     func select(_ folder: String) throws {
       _ = state.publishSidebarSelectionSnapshot(
@@ -440,15 +442,19 @@ final class SidebarNavigationTests: XCTestCase {
           focusedPath: folder,
           creationParent: folder))
     }
-    let atCap = "Shortcut limit reached (64). Remove one to add another."
     // Y's only slot is past the cap: the refusal says why nothing can be
     // added, not "Already in Shortcuts." about a row no one can see.
+    // The golden: the user-facing refusal at the cap, verbatim — an
+    // accidental change to the cap or to the copy fails here.
     try select("Y")
     XCTAssertThrowsError(
       try state.dispatchSidebarAction(id: SlateCommandID.sidebarAddShortcut)
     ) { error in
-      XCTAssertEqual(error.sidebarActionAnnouncement, atCap)
+      XCTAssertEqual(
+        error.sidebarActionAnnouncement,
+        "Shortcut limit reached (64). Remove one to add another.")
     }
+    let atCap = AppState.sidebarShortcutCapacityReason(limit: cap)
     try select("Z")
     XCTAssertThrowsError(
       try state.dispatchSidebarAction(id: SlateCommandID.sidebarAddShortcut)
@@ -457,23 +463,23 @@ final class SidebarNavigationTests: XCTestCase {
     }
     state.addSidebarTagShortcutDirect(kind: .tag, path: "research")
     XCTAssertEqual(state.lastMutationAnnouncement, atCap)
-    XCTAssertEqual(state.sidebarOrganization.shortcuts.count, 64)
+    XCTAssertEqual(state.sidebarOrganization.shortcuts.count, cap)
 
     // Removing a slot brings the one past the cap into view...
-    try state.removeSidebarShortcutDirect(slot: 64)
+    try state.removeSidebarShortcutDirect(slot: cap)
     await state.sidebarOrganizationPersistTaskForTesting?.value
-    XCTAssertEqual(state.sidebarOrganization.shortcuts.count, 64)
+    XCTAssertEqual(state.sidebarOrganization.shortcuts.count, cap)
     XCTAssertEqual(state.sidebarOrganization.shortcutOverflowCount, 0)
     XCTAssertEqual(
       state.sidebarOrganization.shortcuts.last,
       SidebarShortcut(kind: .folder, path: "Y"))
     // ...and the next removal makes room.
-    try state.removeSidebarShortcutDirect(slot: 64)
+    try state.removeSidebarShortcutDirect(slot: cap)
     await state.sidebarOrganizationPersistTaskForTesting?.value
-    XCTAssertEqual(state.sidebarOrganization.shortcuts.count, 63)
+    XCTAssertEqual(state.sidebarOrganization.shortcuts.count, cap - 1)
     _ = try state.dispatchSidebarAction(id: SlateCommandID.sidebarAddShortcut)
     await state.sidebarOrganizationPersistTaskForTesting?.value
-    XCTAssertEqual(state.sidebarOrganization.shortcuts.count, 64)
+    XCTAssertEqual(state.sidebarOrganization.shortcuts.count, cap)
     XCTAssertEqual(
       state.sidebarOrganization.shortcuts.last,
       SidebarShortcut(kind: .folder, path: "Z"))
@@ -481,14 +487,11 @@ final class SidebarNavigationTests: XCTestCase {
     // Another writer fills the last slot behind this window's back: the
     // locked write finds the cap met on disk, refuses with the same
     // reason, and the sidebar shows the file as it is.
-    try state.removeSidebarShortcutDirect(slot: 64)
+    try state.removeSidebarShortcutDirect(slot: cap)
     await state.sidebarOrganizationPersistTaskForTesting?.value
-    XCTAssertEqual(state.sidebarOrganization.shortcuts.count, 63)
-    let full = Array(
-      repeating: #"{"kind": "file", "path": "x.md"}"#, count: 64
-    ).joined(separator: ",")
+    XCTAssertEqual(state.sidebarOrganization.shortcuts.count, cap - 1)
     try """
-      {"version": 1, "shortcuts": [\(full)]}
+      {"version": 1, "shortcuts": [\(slots)]}
       """.write(
         to: vault.appendingPathComponent(".slate/sidebar.json"),
         atomically: true, encoding: .utf8)
@@ -496,7 +499,7 @@ final class SidebarNavigationTests: XCTestCase {
     _ = try state.dispatchSidebarAction(id: SlateCommandID.sidebarAddShortcut)
     await state.sidebarOrganizationPersistTaskForTesting?.value
     XCTAssertEqual(state.lastMutationAnnouncement, atCap)
-    XCTAssertEqual(state.sidebarOrganization.shortcuts.count, 64)
+    XCTAssertEqual(state.sidebarOrganization.shortcuts.count, cap)
     XCTAssertFalse(
       state.sidebarOrganization.shortcuts.contains(
         SidebarShortcut(kind: .folder, path: "Z")),

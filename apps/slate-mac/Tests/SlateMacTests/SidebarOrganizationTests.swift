@@ -752,9 +752,14 @@ final class SidebarOrganizationTests: XCTestCase {
   /// notice), decode to 64 rows that each keep their own name, and the one
   /// slot past the cap is counted for the Shortcuts section's status line
   /// instead of vanishing. Rewrites keep it: it is still in the file.
+  /// The goldens are the cap itself and the status line verbatim; every
+  /// size and count below derives from the constant.
   func testTheDecodeCapRefusesOverflowWithoutCollapsing() {
+    let cap = SidebarOrganizationSchema.maxDecodedShortcuts
+    XCTAssertEqual(cap, 64, "golden: the owner-recorded cap")
     var entries: [Any] = Array(
-      repeating: ["kind": "file", "path": "a.md"] as [String: Any], count: 65)
+      repeating: ["kind": "file", "path": "a.md"] as [String: Any],
+      count: cap + 1)
     entries.insert(["kind": "future", "path": "x"] as [String: Any], at: 10)
     let root: [String: Any] = ["shortcuts": entries]
     XCTAssertTrue(
@@ -762,32 +767,33 @@ final class SidebarOrganizationTests: XCTestCase {
       "an over-cap list is adopted, not routed into recovery")
 
     let decoded = SidebarOrganizationSchema.decode(root: root)
-    XCTAssertEqual(SidebarOrganizationSchema.maxDecodedShortcuts, 64)
     XCTAssertEqual(
       decoded.shortcuts,
-      Array(repeating: SidebarShortcut(kind: .file, path: "a.md"), count: 64))
+      Array(repeating: SidebarShortcut(kind: .file, path: "a.md"), count: cap))
     XCTAssertEqual(decoded.shortcutOverflowCount, 1)
-    XCTAssertEqual(decoded.shortcutRawCount, 66)
+    XCTAssertEqual(decoded.shortcutRawCount, cap + 2)
 
     let rows = SidebarShortcutRow.rows(for: decoded.shortcuts)
-    XCTAssertEqual(rows.map(\.id), Array(1...64))
-    XCTAssertEqual(Set(rows.map(\.spokenName)).count, 64)
+    XCTAssertEqual(rows.map(\.id), Array(1...cap))
+    XCTAssertEqual(Set(rows.map(\.spokenName)).count, cap)
     XCTAssertEqual(rows.first?.spokenName, "a.md, file shortcut, a.md, shortcut 1")
-    XCTAssertEqual(rows.last?.spokenName, "a.md, file shortcut, a.md, shortcut 64")
+    XCTAssertEqual(
+      rows.last?.spokenName, "a.md, file shortcut, a.md, shortcut \(cap)")
     XCTAssertEqual(
       SidebarShortcutRow.overflowStatus(count: decoded.shortcutOverflowCount),
-      "Showing the first 64 shortcuts. 1 more isn't shown.")
+      "Showing the first 64 shortcuts. 1 more isn't shown.",
+      "golden: the status line a reader meets at the cap")
     XCTAssertEqual(
       SidebarShortcutRow.overflowStatus(count: 3),
-      "Showing the first 64 shortcuts. 3 more aren't shown.")
+      "Showing the first \(cap) shortcuts. 3 more aren't shown.")
     XCTAssertNil(SidebarShortcutRow.overflowStatus(count: 0))
 
     // At the cap exactly, nothing overflows and no status line shows.
     let atCap = SidebarOrganizationSchema.decode(root: [
       "shortcuts": Array(
-        repeating: ["kind": "file", "path": "a.md"] as [String: Any], count: 64)
+        repeating: ["kind": "file", "path": "a.md"] as [String: Any], count: cap)
     ])
-    XCTAssertEqual(atCap.shortcuts.count, 64)
+    XCTAssertEqual(atCap.shortcuts.count, cap)
     XCTAssertEqual(atCap.shortcutOverflowCount, 0)
   }
 
