@@ -300,19 +300,34 @@ final class SearchOverlayKeyRoutingTests: XCTestCase {
 
     /// Red-team F2, kept: the parent window keeps its first responder
     /// while the palette sheet is up, so the overlay's focus can still
-    /// read as a row.
+    /// read as a row. The keys here arrive in the overlay's own window
+    /// (the fixture's `isInOverlayWindow` default), as they do between
+    /// the palette's request and its sheet becoming key: the window
+    /// check cannot refuse them, so the palette flag must.
     func testKeysPassThroughWhileThePaletteIsOpen() {
-        let rows = SearchOverlay.RowList.results(count: 2)
-        XCTAssertEqual(
-            route(Self.down, focus: .field, rows: rows, isCommandPaletteOpen: true),
-            .passThrough)
-        XCTAssertEqual(
-            route(Self.returnKey, focus: .result(0), rows: rows, isCommandPaletteOpen: true),
-            .passThrough)
-        XCTAssertEqual(
-            route(Self.returnKey, .command, focus: .result(0), rows: rows,
-                isCommandPaletteOpen: true),
-            .passThrough)
+        for rows in [SearchOverlay.RowList.results(count: 2), .recents(count: 2)] {
+            let row: SearchOverlay.FocusTarget =
+                rows == .results(count: 2) ? .result(1) : .recent(1)
+            for focus in [SearchOverlay.FocusTarget.field, row] {
+                for key in [Self.down, Self.up] {
+                    XCTAssertEqual(
+                        route(key, Self.arrowNoise, focus: focus, rows: rows,
+                            isCommandPaletteOpen: true),
+                        .passThrough,
+                        "arrow \(key) on \(focus) must not move focus under the palette")
+                }
+                for key in [Self.returnKey, Self.keypadEnter] {
+                    for modifiers: NSEvent.ModifierFlags in [[], .command] {
+                        XCTAssertEqual(
+                            route(key, modifiers, focus: focus, rows: rows,
+                                isCommandPaletteOpen: true),
+                            .passThrough,
+                            "Return \(key) (\(modifiers.rawValue)) on \(focus) must not "
+                                + "open or run a row under the palette")
+                    }
+                }
+            }
+        }
     }
 
     /// The monitor is app-wide: a key typed in a sheet over the overlay
