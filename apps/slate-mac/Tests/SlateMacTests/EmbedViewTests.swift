@@ -231,11 +231,33 @@ final class EmbedViewTests: XCTestCase {
 
     // MARK: - hosted accessibility
 
+    /// The hosted walk's knobs, tuned in one place.
+    private enum HostedWalk {
+        /// How long the view may take to appear, and SwiftUI to publish
+        /// its accessibility tree once it has.
+        static let deadline: Duration = .seconds(30)
+        /// The pause between reads while the tree is still publishing.
+        static let poll: Duration = .milliseconds(20)
+        /// The most elements one read visits. These few cards build a tree
+        /// of a few dozen elements, so a read that reaches the limit has
+        /// gone wrong: it fails at once rather than waiting out the deadline.
+        static let elementLimit = 2_000
+        /// The most lines of the searched tree a failure reports.
+        static let reportedLines = 120
+    }
+
     private struct ExposedLabels {
         /// Each disclosure's label, in document order.
         var disclosures: [String] = []
         /// Each picture's label, in document order.
         var images: [String] = []
+        /// How many elements the read visited, and whether it stopped at
+        /// `HostedWalk.elementLimit` with elements still unread.
+        var visited = 0
+        var truncated = false
+        /// The tree as read, one indented `role label` line per element,
+        /// for a failure to show what was searched.
+        var outline: [String] = []
     }
 
     private struct HostedAccessibilityError: Error, CustomStringConvertible {
@@ -245,7 +267,17 @@ final class EmbedViewTests: XCTestCase {
     /// Host one top-level `EmbedView` per resolution in a real window and
     /// read the labels its accessibility tree exposes: one disclosure per
     /// card, and an image for each picture that decodes.
-    private func hostedLabels(of resolutions: [EmbedResolution]) async throws -> ExposedLabels {
+    ///
+    /// A failure is recorded through `XCTFail` at the caller's line, with
+    /// what the walk searched and how far it got, before the throw: once a
+    /// SwiftUI view is hosted, XCTest can report an escaping error as an
+    /// internal framework error instead of the one thrown (PR 1's
+    /// `HostedAccessibilityTree` records the same way).
+    private func hostedLabels(
+        of resolutions: [EmbedResolution],
+        file: StaticString = #filePath,
+        line: UInt = #line
+    ) async throws -> ExposedLabels {
         _ = Self.hostApplication
         let appeared = expectation(description: "hosted embeds appeared")
         let host = NSHostingView(rootView: AnyView(
@@ -262,8 +294,15 @@ final class EmbedViewTests: XCTestCase {
         window.isReleasedWhenClosed = false
         window.contentView = host
         window.makeKeyAndOrderFront(nil)
-        await fulfillment(of: [appeared], timeout: 30)
+        await fulfillment(
+            of: [appeared], timeout: TimeInterval(HostedWalk.deadline.components.seconds))
         host.layoutSubtreeIfNeeded()
+
+        func fail(_ description: String) -> HostedAccessibilityError {
+            window.close()
+            XCTFail(description, file: file, line: line)
+            return HostedAccessibilityError(description: description)
+        }
 
         // A real client request materializes SwiftUI's lazy accessibility
         // tree; run the self-process request off the main actor so AppKit
@@ -274,27 +313,51 @@ final class EmbedViewTests: XCTestCase {
             return AXUIElementCopyAttributeValue(application, kAXWindowsAttribute as CFString, &windows)
         }.value
         guard initialized == .success else {
-            window.close()
-            throw HostedAccessibilityError(description:
-                "self-process accessibility initialization failed: AXError \(initialized.rawValue)")
+            throw fail(
+                "self-process accessibility initialization failed (AXError \(initialized.rawValue)) "
+                    + "before any read of the hosted window")
         }
 
-        // SwiftUI publishes the tree on a later pass: wait for every card.
-        let deadline = ContinuousClock.now.advanced(by: .seconds(30))
+        // SwiftUI publishes the tree on a later pass: wait for every card
+        // and every picture that decodes.
+        let pictures = resolutions.filter {
+            if case .image(_, let bytes, _, _) = $0 { return NSImage(data: bytes) != nil }
+            return false
+        }.count
+        let deadline = ContinuousClock.now.advanced(by: HostedWalk.deadline)
         var exposed = ExposedLabels()
         repeat {
             window.contentView?.layoutSubtreeIfNeeded()
             exposed = Self.exposedLabels(in: window)
-            if exposed.disclosures.count >= resolutions.count { break }
-            try await Task.sleep(for: .milliseconds(20))
+            if exposed.truncated {
+                throw fail(
+                    "the accessibility walk stopped at its \(HostedWalk.elementLimit)-element limit "
+                        + "with elements unread, having found \(exposed.disclosures.count) of "
+                        + "\(resolutions.count) disclosures and \(exposed.images.count) of "
+                        + "\(pictures) pictures; it searched:\n" + Self.report(exposed))
+            }
+            if exposed.disclosures.count >= resolutions.count, exposed.images.count >= pictures {
+                break
+            }
+            try await Task.sleep(for: HostedWalk.poll)
         } while ContinuousClock.now < deadline
-        window.close()
-        guard exposed.disclosures.count == resolutions.count else {
-            throw HostedAccessibilityError(description:
-                "expected \(resolutions.count) disclosures, found \(exposed.disclosures.count): "
-                + "\(exposed.disclosures.map { String($0.prefix(60)) })")
+        guard exposed.disclosures.count == resolutions.count, exposed.images.count == pictures else {
+            throw fail(
+                "expected \(resolutions.count) disclosures and \(pictures) pictures within "
+                    + "\(HostedWalk.deadline); the last read visited \(exposed.visited) elements "
+                    + "and found \(exposed.disclosures.count) and \(exposed.images.count):\n"
+                    + Self.report(exposed))
         }
+        window.close()
         return exposed
+    }
+
+    /// The searched tree for a failure message, cut to
+    /// `HostedWalk.reportedLines` lines.
+    private static func report(_ exposed: ExposedLabels) -> String {
+        let shown = exposed.outline.prefix(HostedWalk.reportedLines)
+        let rest = exposed.outline.count - shown.count
+        return shown.joined(separator: "\n") + (rest > 0 ? "\n… \(rest) more elements" : "")
     }
 
     /// A depth-first walk of the window's accessibility tree, children before
@@ -302,27 +365,35 @@ final class EmbedViewTests: XCTestCase {
     private static func exposedLabels(in window: NSWindow) -> ExposedLabels {
         var exposed = ExposedLabels()
         var visited = Set<ObjectIdentifier>()
-        var stack: [Any] = [window]
-        while let node = stack.popLast() {
+        var stack: [(node: Any, depth: Int)] = [(window, 0)]
+        while let (node, depth) = stack.popLast() {
             let element = node as AnyObject
-            guard visited.count < 2000, visited.insert(ObjectIdentifier(element)).inserted
-            else { continue }
+            guard visited.insert(ObjectIdentifier(element)).inserted else { continue }
+            guard visited.count <= HostedWalk.elementLimit else {
+                exposed.truncated = true
+                break
+            }
             // AppKit supports these accessibility methods without formal
             // protocol conformance; the optional calls dispatch them.
             let role = element.accessibilityRole?()
-            if role == .disclosureTriangle, let label = element.accessibilityLabel?() {
+            let label = element.accessibilityLabel?()
+            if role == .disclosureTriangle, let label {
                 exposed.disclosures.append(label)
-            } else if role == .image, let label = element.accessibilityLabel?() {
+            } else if role == .image, let label {
                 exposed.images.append(label)
             }
+            exposed.outline.append(
+                String(repeating: "  ", count: depth) + (role?.rawValue ?? "?")
+                    + (label.map { " " + String($0.prefix(60)).debugDescription } ?? ""))
             var children = accessibilityChildren(of: element)
             if let view = element as? NSView {
                 children += view.subviews.map { $0 as Any }
             } else if let window = element as? NSWindow, let content = window.contentView {
                 children.append(content)
             }
-            stack.append(contentsOf: children.reversed())
+            stack.append(contentsOf: children.reversed().map { ($0, depth + 1) })
         }
+        exposed.visited = min(visited.count, HostedWalk.elementLimit)
         return exposed
     }
 
