@@ -249,9 +249,10 @@ public sealed class MacCatalogParityTests
     private static readonly Dictionary<string, string> WindowsOnlyIds =
         new(StringComparer.Ordinal)
         {
-            ["slate.canvas.colorMarked"] =
-                "§G GD-5: mac's canvasColorMarked has no palette row or chord — a recorded "
-                + "divergence assigned to the mac lane; Windows lands the front door.",
+            // slate.canvas.colorMarked left this list with #1165 (plan 43
+            // PR 2): mac registers the id with the same label, so it is a
+            // shared id and P3 checks its label like any other (§G GD-5's
+            // recorded divergence, closed on the mac lane).
             ["slate.workspace.widenFilesSidebar"] =
                 "Windows-only keyboard sidebar resize (W7-7 PR 4b, AR-38): the splitters left the Tab order; mac's sidebars resize by pointer.",
             ["slate.workspace.narrowFilesSidebar"] =

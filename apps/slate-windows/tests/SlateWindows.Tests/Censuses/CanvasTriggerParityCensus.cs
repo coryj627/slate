@@ -41,6 +41,10 @@ public sealed class CanvasTriggerParityCensus
         "CanvasMutationRefused/CardEditorUnavailable",
     ];
 
+    /// <remarks><c>CanvasBlocked/FileTypeNotOpenable</c> left this set with
+    /// #1169 (plan 43 PR 2): mac adopted the media gate (E13D-2), so the
+    /// key's row names a mac site and the census checks it like any
+    /// other.</remarks>
     private static readonly HashSet<string> MacDesignated =
     [
         "CanvasViewportNoPane",
@@ -48,7 +52,6 @@ public sealed class CanvasTriggerParityCensus
         "CanvasBlocked/UndoQuarantined",
         "CanvasBlocked/RedoQuarantined",
         "CanvasMutationRefused/RefreshPending",
-        "CanvasBlocked/FileTypeNotOpenable",
     ];
 
     private static readonly Regex Site = new("`([^`#]+)#([^`]+)`", RegexOptions.Compiled);

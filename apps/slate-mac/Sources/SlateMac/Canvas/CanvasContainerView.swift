@@ -155,36 +155,17 @@ struct CanvasContainerView: View {
 
     // MARK: Activation (one semantic across surfaces, t2 §#362)
 
-    /// Per-kind activation: text → the #368 card editor; markdown file
-    /// → note tab; media file → default app; link → browser.
+    /// Per-kind activation: text → the #368 card editor; file and image
+    /// cards → `canvasActivateFileCard` (a note opens in this tab, media
+    /// in its default app, any other file type is refused); link →
+    /// browser.
     private func activate(nodeId: String, kind: String, title: String) {
         document.lastActivatedNode = nodeId
         switch kind {
         case "text":
             appState.canvasInspectCard(nodeId: nodeId)
         case "file", "image":
-            let target = document.target(of: nodeId)
-            if target.lowercased().hasSuffix(".md") || target.lowercased().hasSuffix(".markdown") {
-                // #525: `#heading` subpath cards open to the anchor.
-                let subpath = document.scene.nodes
-                    .first { $0.nodeId == nodeId }?.subpath?
-                    .trimmingCharacters(in: CharacterSet(charactersIn: "#"))
-                if let subpath, !subpath.isEmpty {
-                    appState.canvasOpenFileAtHeading(path: target, heading: subpath)
-                } else {
-                    appState.openFile(target, target: .currentTab)
-                }
-            } else if let vault = appState.currentVaultURL,
-                FileManager.default.fileExists(
-                    atPath: vault.appendingPathComponent(target).path),
-                appState.externalOpener(vault.appendingPathComponent(target))
-            {
-                appState.canvasAnnouncer.announce(
-                    .canvasOpened(title: title, target: .defaultApp))
-            } else {
-                appState.canvasAnnouncer.announce(
-                    .canvasFileNotFound(target: target.isEmpty ? title : target))
-            }
+            appState.canvasActivateFileCard(nodeId: nodeId, title: title, in: document)
         case "link":
             let target = document.target(of: nodeId)
             if let url = URL(string: target), appState.externalOpener(url) {
