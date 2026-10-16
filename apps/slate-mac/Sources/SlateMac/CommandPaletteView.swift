@@ -23,6 +23,9 @@ import SwiftUI
 ///   (`Shift+↓`, `Cmd+↓`, `Ctrl+Option+↓` for VoiceOver Quick Nav,
 ///   etc.) pass through so text-editing chords and VoiceOver
 ///   keystrokes keep working.
+/// - Home / End select the first / last row; Page Up / Page Down
+///   (fn+↑ / fn+↓ on Apple keyboards) move ten rows, stopping at the
+///   ends (#1105, Windows parity). Chorded, they pass through too.
 /// - `Enter` invokes the selected command. On success the palette
 ///   dismisses; on `ActionFailed` / `UnknownId` it **stays open**
 ///   and posts an assertive VoiceOver announcement.
@@ -45,18 +48,19 @@ struct CommandPaletteView: View {
     @StateObject private var model = CommandPaletteModel()
 
     /// Local `.keyDown` monitor. Handles ↑/↓ selection navigation
-    /// (#315/#339) AND bare Escape dismissal: a focused search field
+    /// (#315/#339), Home / End / Page Up / Page Down (#1105), AND bare
+    /// Escape dismissal: a focused search field
     /// swallows the raw Escape key before SwiftUI's
     /// `.onExitCommand` fires, so the monitor — which sees the
     /// keyDown first — intercepts Escape and dismisses. (Cmd-. still
     /// reaches `.onExitCommand`, but no user discovers that.)
     @State private var keyDownMonitor: Any? = nil
 
-    /// Timestamp of the most recent arrow-key selection change.
-    /// Hover-update only fires when the mouse moves AFTER this —
-    /// prevents stationary-cursor flicker from yanking selection
-    /// back to the row under the pointer while the user is
-    /// arrow-navigating.
+    /// Timestamp of the most recent keyboard (arrow or page key)
+    /// selection change. Hover-update only fires when the mouse moves
+    /// AFTER this — prevents stationary-cursor flicker from yanking
+    /// selection back to the row under the pointer while the user is
+    /// navigating by keyboard.
     @State private var lastKeyboardNavAt: Date = .distantPast
 
     /// True between `.onAppear` and the first user-driven selection
@@ -423,7 +427,7 @@ struct CommandPaletteView: View {
         return "\(command.label), \(HotkeySpoken.spoken(for: hint))"
     }
 
-    // MARK: - Arrow-key monitor
+    // MARK: - Key monitor (arrows, page keys, Escape)
 
     /// macOS virtual key codes for the two arrow keys we intercept.
     /// Values match Carbon's `kVK_UpArrow` (126) / `kVK_DownArrow`
@@ -471,12 +475,47 @@ struct CommandPaletteView: View {
         }
     }
 
-    /// Modifier mask: any of these on an arrow key means "let it
-    /// through" — Shift+↓ extends text-field selection, Cmd+↓
-    /// jumps caret to end-of-text, **Ctrl+Option+↓ is VoiceOver
-    /// Quick Nav** (the one we absolutely must not steal), and
-    /// Fn+↓ is macOS Page Down. Only bare ↑ / ↓ moves palette
-    /// selection.
+    /// Carbon virtual key codes for the four page-navigation keys
+    /// (#1105): `kVK_Home` 115, `kVK_End` 119, `kVK_PageUp` 116 and
+    /// `kVK_PageDown` 121, the same stable HIToolbox ABI as the arrow
+    /// codes above.
+    ///
+    /// fn+↑ / fn+↓ / fn+← / fn+→ arrive as these codes, not as arrows:
+    /// Apple's keyboard drivers rewrite fn+arrow to the page key before
+    /// any event exists (`FnKeyboardUsageMap` in AppleHIDKeyboard.kext
+    /// and the built-in keyboard's driver: ↑ → Page Up, ↓ → Page Down,
+    /// ← → Home, → → End). So fn+arrow pages with no arrow rule at all.
+    enum PageKey {
+        static let home: UInt16 = 115     // kVK_Home
+        static let end: UInt16 = 119      // kVK_End
+        static let pageUp: UInt16 = 116   // kVK_PageUp
+        static let pageDown: UInt16 = 121 // kVK_PageDown
+    }
+
+    /// The selection move a bare page key makes (#1105): Windows'
+    /// `HandleCommandPaletteKey` arms, Home → `SelectFirst`, End →
+    /// `SelectLast`, Page Up / Page Down → `MovePage(-1)` / `MovePage(1)`.
+    enum PageMove: Equatable {
+        case first
+        case last
+        case pageUp
+        case pageDown
+    }
+
+    /// The chord modifiers: any of these held on an arrow or a page key
+    /// means "let it through" — Shift+↓ and Shift+Home extend text-field
+    /// selection, Cmd+↓ jumps caret to end-of-text, **Ctrl+Option+↓ is
+    /// VoiceOver Quick Nav** (the one we absolutely must not steal).
+    /// Only a bare key moves palette selection, Windows'
+    /// `ModifierKeys.None` rule (contract 28 P7). One mask for both
+    /// families, so their chord rules cannot drift apart.
+    ///
+    /// `.function` is not a chord (#1105). macOS puts it on these keys
+    /// itself: the system's own key events carry `[.numericPad,
+    /// .function]` for a bare ↑ / ↓ and `[.function]` for Home, End,
+    /// Page Up and Page Down. A mask that held `.function` passed every
+    /// such arrow through to the field. fn+arrow still pages, because
+    /// it arrives as a page key (`PageKey`).
     ///
     /// Device-dependent flags like `.capsLock` and `.numericPad`
     /// are deliberately not in the mask. We don't normalize them
@@ -489,8 +528,8 @@ struct CommandPaletteView: View {
     /// not because the input is sanitised; the regression tests
     /// (`testCapsLockOnBareArrowIsStillConsumed`, etc.) lock in
     /// the narrowness so it can't drift.
-    private static let arrowModifierMask: NSEvent.ModifierFlags =
-        [.shift, .control, .option, .command, .function]
+    private nonisolated static let chordModifierMask: NSEvent.ModifierFlags =
+        [.shift, .control, .option, .command]
 
     /// Decide whether a `.keyDown` event should pass through the
     /// monitor unconsumed. Pure function — no `@State` access — so
@@ -501,9 +540,9 @@ struct CommandPaletteView: View {
     /// - Key is not a navigable arrow (`ArrowKey.direction(for:)`
     ///   returns `nil`)
     /// - Key IS a navigable arrow but any modifier in
-    ///   `arrowModifierMask` is held (Shift, Ctrl, Option, Cmd, Fn
-    ///   — covers text-field selection, caret-jump, Page-Up/Down,
-    ///   and VoiceOver Quick Nav).
+    ///   `chordModifierMask` is held (Shift, Ctrl, Option, Cmd —
+    ///   covers text-field selection, caret-jump, and VoiceOver
+    ///   Quick Nav).
     ///
     /// Consume (returns false) only for a bare navigable arrow.
     /// "Navigable" is defined solely by `direction(for:)` (#339), so
@@ -515,7 +554,73 @@ struct CommandPaletteView: View {
         modifierFlags: NSEvent.ModifierFlags
     ) -> Bool {
         guard ArrowKey.direction(for: keyCode) != nil else { return true }
-        return !modifierFlags.intersection(arrowModifierMask).isEmpty
+        return !modifierFlags.intersection(chordModifierMask).isEmpty
+    }
+
+    /// Map a `.keyDown` to the page move it makes, or `nil` when the key
+    /// is not a page key or a chord modifier is held (#1105). Pure, like
+    /// `shouldPassThroughArrow`, so the modifier rule is unit-testable.
+    /// A chord (Shift+Home, Cmd+End, VoiceOver's Control+Option keys)
+    /// belongs to the search field or the AT, so it passes through;
+    /// `.function`, which these keys carry themselves, and device state
+    /// such as Caps Lock are not chords.
+    nonisolated static func pageNavigation(
+        keyCode: UInt16,
+        modifierFlags: NSEvent.ModifierFlags
+    ) -> PageMove? {
+        guard modifierFlags.intersection(chordModifierMask).isEmpty else { return nil }
+        switch keyCode {
+        case PageKey.home: return .first
+        case PageKey.end: return .last
+        case PageKey.pageUp: return .pageUp
+        case PageKey.pageDown: return .pageDown
+        default: return nil
+        }
+    }
+
+    /// What the keyDown monitor does with one key event (#1105).
+    enum KeyRoute: Equatable {
+        /// Let the event reach the search field (or the input method).
+        case passThrough
+        /// Bare Escape: close the palette.
+        case dismiss
+        /// A bare page key: move the selection by page, or to an end.
+        case page(PageMove)
+        /// A bare ↑ / ↓: move the selection one row, wrapping.
+        case arrow(ArrowKey.Direction)
+    }
+
+    /// The monitor's whole decision for one `.keyDown`, pure so its
+    /// order of checks is unit-testable without live `NSEvent`s (#1105):
+    ///
+    /// 1. **Marked text passes everything through.** While an input
+    ///    method is composing, Escape must reach the input context to
+    ///    cancel the composition and the arrow and page keys drive the
+    ///    candidate window, so intercepting nothing keeps an IME user
+    ///    from being stranded mid-composition (red-team, #393).
+    /// 2. Bare Escape dismisses (`isDismissKey`), ahead of the field
+    ///    that would otherwise eat it.
+    /// 3. A bare page key moves by page (`pageNavigation`).
+    /// 4. A bare ↑ / ↓ moves one row (`shouldPassThroughArrow`,
+    ///    `ArrowKey.direction(for:)`).
+    /// 5. Anything else passes through: typing, Return (the field's
+    ///    `onSubmit` runs it) and every chord.
+    nonisolated static func keyRoute(
+        keyCode: UInt16,
+        modifierFlags: NSEvent.ModifierFlags,
+        hasMarkedText: Bool
+    ) -> KeyRoute {
+        if hasMarkedText { return .passThrough }
+        if isDismissKey(keyCode: keyCode, modifierFlags: modifierFlags) { return .dismiss }
+        if let move = pageNavigation(keyCode: keyCode, modifierFlags: modifierFlags) {
+            return .page(move)
+        }
+        if !shouldPassThroughArrow(keyCode: keyCode, modifierFlags: modifierFlags),
+            let direction = ArrowKey.direction(for: keyCode)
+        {
+            return .arrow(direction)
+        }
+        return .passThrough
     }
 
     /// Carbon virtual key code for Escape (`kVK_Escape`). Stable
@@ -541,11 +646,10 @@ struct CommandPaletteView: View {
     /// Only BARE Escape dismisses — any modifier (e.g. a system
     /// Cmd+Esc) passes through untouched.
     ///
-    /// The check-set omits `.function` (unlike `arrowModifierMask`,
-    /// which includes it): arrow keys carry `.function` intrinsically —
-    /// they're in the `NSFunctionKey` Unicode range — so the arrow mask
-    /// has to list it, but Escape never carries `.function`. fn+Escape
-    /// therefore still dismisses, which is intentional and harmless.
+    /// The check-set omits `.function`, as `chordModifierMask` does:
+    /// it is no chord (macOS sets it on the arrow and page keys
+    /// itself), and Escape never carries it. fn+Escape therefore still
+    /// dismisses, which is intentional and harmless.
     nonisolated static func isDismissKey(
         keyCode: UInt16,
         modifierFlags: NSEvent.ModifierFlags
@@ -563,51 +667,48 @@ struct CommandPaletteView: View {
         // session (red-team hardening).
         guard keyDownMonitor == nil else { return }
         keyDownMonitor = NSEvent.addLocalMonitorForEvents(matching: .keyDown) { event in
-            // While an input method is composing (marked text in the
-            // field editor), intercept nothing: Escape must reach the
-            // input context to cancel the composition, and ↑/↓ drive the
-            // candidate window. Pass the event through untouched so we
-            // don't strand an IME user mid-composition (red-team).
-            if let editor = event.window?.firstResponder as? NSTextView,
-                editor.hasMarkedText()
-            {
-                return event
-            }
-            // Bare Escape → dismiss. Checked before the arrow logic
-            // because the focused search field would otherwise eat
-            // it (see `isDismissKey`).
-            if Self.isDismissKey(
+            // `keyRoute` decides (pure, unit-tested): marked text in
+            // the field editor first, then Escape, the page keys and
+            // the bare arrows; everything else passes through.
+            let hasMarkedText =
+                (event.window?.firstResponder as? NSTextView)?.hasMarkedText() == true
+            switch Self.keyRoute(
                 keyCode: event.keyCode,
-                modifierFlags: event.modifierFlags
+                modifierFlags: event.modifierFlags,
+                hasMarkedText: hasMarkedText
             ) {
+            case .passThrough:
+                return event
+            case .dismiss:
                 appState.isCommandPaletteOpen = false
                 return nil
+            case .page(let move):
+                lastKeyboardNavAt = Date()
+                switch move {
+                case .first:
+                    model.selectFirst()
+                case .last:
+                    model.selectLast()
+                case .pageUp:
+                    model.movePage(-1)
+                case .pageDown:
+                    model.movePage(1)
+                }
+                return nil
+            case .arrow(let direction):
+                lastKeyboardNavAt = Date()
+                // Exhaustive over `Direction` (#339): when a future
+                // `.left` / `.right` case is added, this switch stops
+                // compiling until the new case is handled, so a new
+                // arrow can't silently fall through to the wrong action.
+                switch direction {
+                case .up:
+                    model.selectPrevious()
+                case .down:
+                    model.selectNext()
+                }
+                return nil
             }
-            if Self.shouldPassThroughArrow(
-                keyCode: event.keyCode,
-                modifierFlags: event.modifierFlags
-            ) {
-                return event
-            }
-            lastKeyboardNavAt = Date()
-            // Dispatch via the Direction switch (#339). Exhaustive
-            // over `Direction?` today; when a future `.left` /
-            // `.right` case is added to `Direction`, this switch
-            // stops compiling until the new case is handled — so a
-            // new arrow can't silently fall through to the wrong
-            // action. `nil` is the not-a-navigable-arrow case;
-            // `shouldPassThroughArrow` already filtered those out
-            // above, so it's an explicit no-op rather than a path
-            // we expect to hit.
-            switch Self.ArrowKey.direction(for: event.keyCode) {
-            case .up:
-                model.selectPrevious()
-            case .down:
-                model.selectNext()
-            case nil:
-                break
-            }
-            return nil
         }
     }
 

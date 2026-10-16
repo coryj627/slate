@@ -116,8 +116,8 @@ final class CommandPaletteModel: ObservableObject {
     }
 
     /// Flat list of commands in display (section-flattened) order.
-    /// Feeds arrow-nav so the visual flow and selection cycle
-    /// match exactly.
+    /// Feeds arrow and page navigation so the visual flow and
+    /// selection cycle match exactly.
     var displayOrder: [Command] {
         sections.flatMap { $0.commands }
     }
@@ -141,9 +141,10 @@ final class CommandPaletteModel: ObservableObject {
     ///
     /// **Not a display or navigation order.** Selection and arrow-key
     /// movement never read this property — `selectNext` /
-    /// `selectPrevious` / `invokeSelected` operate exclusively on
-    /// `displayOrder`, the section-grouped flatten of `sections`, so
-    /// keyboard navigation always matches the rendered rows. This
+    /// `selectPrevious` / `selectFirst` / `selectLast` / `movePage` /
+    /// `invokeSelected` operate exclusively on `displayOrder`, the
+    /// section-grouped flatten of `sections`, so keyboard navigation
+    /// always matches the rendered rows. This
     /// global ordering has exactly two consumers: the filter-count
     /// announcement (count only) and the strongest-match-overall
     /// contract pinned by `MilestoneQIntegrationTests`.
@@ -177,6 +178,49 @@ final class CommandPaletteModel: ObservableObject {
         let idx = order.firstIndex { $0.id == selectedID } ?? order.count
         let prev = (idx - 1 + order.count) % order.count
         selectedID = order[prev].id
+    }
+
+    // MARK: - Home / End / Page Up / Page Down (#1105)
+
+    /// Rows one Page Up / Page Down moves: Windows' `PageSize`
+    /// (`CommandPaletteViewModel.cs`), ten by default and never fewer
+    /// than one. A `var` so a fact can shrink it to fit a fixture.
+    var pageSize: Int = 10 {
+        didSet {
+            if pageSize < 1 { pageSize = 1 }
+        }
+    }
+
+    /// Home: select the first visible row. No rows, no move (Windows'
+    /// `SelectFirst`).
+    func selectFirst() {
+        guard let first = displayOrder.first else { return }
+        selectedID = first.id
+    }
+
+    /// End: select the last visible row. No rows, no move (Windows'
+    /// `SelectLast`).
+    func selectLast() {
+        guard let last = displayOrder.last else { return }
+        selectedID = last.id
+    }
+
+    /// Page Down (`delta = 1`) / Page Up (`delta = -1`), Windows'
+    /// `MovePage`: `pageSize` rows through `displayOrder`, clamped at
+    /// the ends rather than wrapping, which is why these are not
+    /// `selectNext` / `selectPrevious` with a bigger step. No rows or a
+    /// zero delta is a no-op. From no selection (none, or one that is no
+    /// longer a visible row) Page Down lands on the first row and Page Up
+    /// on the last, the arrows' no-selection rule (contract 28 P7).
+    func movePage(_ delta: Int) {
+        let order = displayOrder
+        guard !order.isEmpty, delta != 0 else { return }
+        guard let index = order.firstIndex(where: { $0.id == selectedID }) else {
+            selectedID = (delta > 0 ? order.first : order.last)?.id
+            return
+        }
+        let target = min(max(index + delta * pageSize, 0), order.count - 1)
+        selectedID = order[target].id
     }
 
     /// Invoke the command currently selected via the supplied
