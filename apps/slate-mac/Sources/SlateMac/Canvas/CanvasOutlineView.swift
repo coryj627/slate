@@ -30,7 +30,8 @@ struct CanvasCardRef: Equatable {
 ///   truth; surfaces never hold local selection).
 /// - Activation opens the card: markdown file → note tab; link →
 ///   browser; text → the card editor; media → its default app; any
-///   other file type is refused, audibly (CD-38).
+///   other file type is refused, audibly, and never handed to the
+///   default app (CD-38).
 /// - Returning from an opened card restores focus to its row
 ///   (WCAG 2.4.3).
 /// - Virtualized: `List` materializes rows lazily; the 2,000-node
