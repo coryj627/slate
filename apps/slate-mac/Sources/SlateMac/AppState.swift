@@ -23922,15 +23922,16 @@ final class AppState: ObservableObject {
         return !next.isLetter && !next.isNumber
     }
 
-    /// Post a polite announcement through AppKit's accessibility
-    /// bus and capture it for the test target. Same shape as
-    /// `announceScan` but without the per-second rate guard —
-    /// template events are user-driven and never rapid-fire.
+    /// Post a template announcement and capture its text for the test
+    /// target (no rate guard: template events are user-driven). This
+    /// string overload carries only the availability and admission
+    /// reasons; the picker-open and created announcements are core's
+    /// typed events (#1122), posted through the overload below.
     private func announceTemplate(
         _ message: String,
         priority: AnnouncementPriority = .medium
     ) {
-        // W0.5-3 residue: template-flow announcement builders (via announceTemplate)
+        // W0.5-3 residue: template availability and admission reasons (a11y.rs double-duty carve-out)
         announceTemplate(
             .hostComposed(
                 text: message, priority: priority == .high ? .high : .medium))
