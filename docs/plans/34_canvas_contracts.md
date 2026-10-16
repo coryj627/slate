@@ -3604,7 +3604,7 @@ where a platform never fires the key.
 | `CanvasStatus/PickDifferentTarget` | `AppState+CanvasConnect.swift#canvasConnect` | `CanvasDocumentViewModel.cs#CanvasAlignWith`, `CanvasDocumentViewModel.cs#CanvasPlaceRelative`, `CanvasDocumentViewModel.cs#HandleCardPick` (+3) | `A11yCorpusCensus.cs#Corpus` |  |
 | `CanvasStatus/NoChanges` | `AppState+CanvasCreate.swift#canvasCommitCardEdit` | `CanvasCardEditorViewModel.cs#CommitOnEscape`, `CanvasDocumentViewModel.cs#CanvasAlignWith` | `A11yCorpusCensus.cs#Corpus` |  |
 | `CanvasStatus/NotReadable` | `AppState+Canvas.swift#canvasWhereAmI`, `AppState+CanvasNavigation.swift#activeCanvasDocumentAnyState`, `AppState+CanvasNavigation.swift#canvasReadRefusal` | `CanvasDocumentViewModel.cs#NodeTextOf`, `CanvasDocumentViewModel.cs#ProjectMarkedRows`, `CanvasDocumentViewModel.cs#ReadRefusalFor` (+1) | `A11yCorpusCensus.cs#Corpus`, `CanvasNavigatorTests.cs#TheReadMappingAnswersEveryLoadState` |  |
-| `CanvasStatus/Empty` | `AppState+Canvas.swift#canvasWhereAmI` | `CanvasNavigator.cs#AnnounceNothingToMoveThrough`, `CanvasNavigator.cs#MoveThroughTheScene`, `CanvasNavigator.cs#WhereAmI` | `A11yCorpusCensus.cs#Corpus`, `CanvasContextMenuTests.cs#AKeyboardRequestOnAnEmptyOutlineSaysWhyThereIsNoMenu`, `CanvasNavigatorTests.cs#AnEmptyCanvasAnswersRatherThanMovingNowhere` (+2) |  |
+| `CanvasStatus/Empty` | `AppState+Canvas.swift#canvasWhereAmI`, `AppState+CanvasNavigation.swift#canvasSelectAdjacent` | `CanvasNavigator.cs#AnnounceNothingToMoveThrough`, `CanvasNavigator.cs#MoveThroughTheScene`, `CanvasNavigator.cs#WhereAmI` | `A11yCorpusCensus.cs#Corpus`, `CanvasContextMenuTests.cs#AKeyboardRequestOnAnEmptyOutlineSaysWhyThereIsNoMenu`, `CanvasNavigatorTests.cs#AnEmptyCanvasAnswersRatherThanMovingNowhere` (+2) |  |
 | `CanvasStatus/EndOfCanvas` | `AppState+CanvasNavigation.swift#canvasSelectAdjacent` | `CanvasNavigator.cs#ArrowMove`, `CanvasNavigator.cs#StepThrough` | `A11yCorpusCensus.cs#Corpus`, `CanvasNavigatorTests.cs#AFilteredOutSeatStepsThroughTheSceneOnTheBoardAndIntoTheFilteredSetByTheVerbs`, `CanvasNavigatorTests.cs#MovementCrossesTheWholeLargeCanvasWithoutRederivingOrder` (+5) |  |
 | `CanvasStatus/StartOfCanvas` | `AppState+CanvasNavigation.swift#canvasSelectAdjacent` | `CanvasNavigator.cs#ArrowMove`, `CanvasNavigator.cs#StepThrough` | `A11yCorpusCensus.cs#Corpus`, `CanvasNavigatorTests.cs#AFilteredOutSeatStepsThroughTheSceneOnTheBoardAndIntoTheFilteredSetByTheVerbs`, `CanvasNavigatorTests.cs#TheBoardsArrowsAnswerAtTheEndsAndWithNothingToMoveThrough` (+1) |  |
 | `CanvasStatus/AtCanvasLevel` | `AppState+CanvasNavigation.swift#canvasExitGroup` | `CanvasNavigator.cs#ExitGroup` | `A11yCorpusCensus.cs#Corpus`, `CanvasNavigatorTests.cs#AnUnresolvableSelectionIsNeverReportedAsAnEmptyAnswer`, `CanvasNavigatorTests.cs#GroupBoundariesUseCoresParentAndChildrenNeverADepthWalk` |  |
@@ -15467,6 +15467,24 @@ onboarding region already renders, so again no vocabulary work. Both
 halves go upstream together: the state gap and the empty-canvas gap are
 the same never-silent hole seen from two sides.
 
+**Closed on mac, 2026-10-16 (#1167, plan 43 PR 3).** Both halves.
+`canvasSelectAdjacent` now discovers its document in any state and asks
+`canvasReadRefusal(for:)` before it walks, so `.loading` answers
+`.loading` and `.degraded`, `.failed` and `.retargetFailed` answer
+`.notReadable` — the sentences the other read verbs already speak in
+those states, and the arms `AdmitStructuralRead` speaks on Windows. With
+nothing to walk, a canvas with no cards answers `Canvas is empty.` and a
+filter that matches nothing keeps `No cards match the filter.`, the two
+facts Windows' `AnnounceNothingToMoveThrough` keeps apart. One answer of
+the mapping does not stop the walk: `.reopening`. That window is
+`.ready`, its rows stay on screen, and walking them asks core nothing
+`FilterView` cannot answer from what is displayed — the decision VA-2
+records for this verb and VA-1's filter test drives. Windows has no such
+window to reach (CD-32), so the hosts agree wherever both can be. No new
+copy. Pinned by `CanvasNavigatorTests.testNextCardSpeaksTheDocumentStateOutsideReady`,
+`CanvasNavigatorTests.testNextCardOnAnEmptyCanvasSpeaksTheEmptyArm` and
+`CanvasAnnouncerTests.testNextCardSentencesAreTheCorpusRows`.
+
 **CD-47 — Escape inside the Where-am-I panel is the PANEL's, not the
 ladder's; t0 §2 M5 has no clause for a focused transient region.**
 Ruled panel-first, on mac parity and on the spec's own build text.
@@ -15677,6 +15695,18 @@ adding a residue site of its own — the count is 29, not 30.
   mutation is a host fix — file the mac issue. Windows must not copy it:
   PR E's mutation funnel should drop a selection its reload cannot
   resolve.
+  **Resolved on mac, 2026-10-16 (#1166, plan 43 PR 3):**
+  `reloadAfterMutation` now ends by dropping a selection the refreshed
+  outline cannot resolve, as the Windows funnel does (a kept selection
+  over a deleted node resolves to no seat). Undo a create, then
+  Duplicate: it answers `Nothing selected.` and writes no undo entry.
+  By the time of the fix the zero count itself was no longer reachable:
+  Duplicate sent the stale id to core's children query, which refused
+  it, and the user heard a raw "not found in this canvas" failure — the
+  sentence the fix replaces. Only an id the outline no longer holds is
+  dropped, a verb that seats a node after its own apply runs after the
+  reload, and marks are not reconciled here. Pinned by
+  `CanvasScenarioTests.testUndoingACreateDropsTheSelectionAndDuplicateRefuses`.
 - **`Deleted connection ` with a trailing space** is reachable on mac
   when the edge lookup misses (`AppState+CanvasConnect.swift:149`'s
   `?? ""`). The typed event cannot express it. **0a-2's resolution:**
@@ -15800,6 +15830,10 @@ close-out**:
   there). Windows routes both verbs through its state mapping (CD-46)
   using arms already in the corpus, so closing it upstream needs no
   vocabulary work.
+  **Resolved on mac, 2026-10-16 (#1167, plan 43 PR 3):** CD-46's closing
+  note has the detail. The verb asks the read mapping in every state, an
+  empty canvas answers `Canvas is empty.`, and the reopening window keeps
+  walking its displayed rows, as VA-2 records.
 
 ---
 
@@ -19380,7 +19414,7 @@ not keyed is not claimed as keyed.
 | CD-43 | Clear Filter always answers; mac stays silent when nothing is filtered. | Recorded divergences, line 15323 |
 | CD-44 | `nextCard` the CHORD and `nextCard` the COMMAND visit different rows, deliberately. | Recorded divergences, line 15341 |
 | CD-45 | A survivor whose containing group was filtered out is promoted to a ROOT; the intermediate "nests under a surviving GRANDparent" case cannot… | Recorded divergences, line 15357 |
-| CD-46 | Next/previous card route through the read mapping; mac returns silently outside `.ready`. | Recorded divergences, line 15436 |
+| CD-46 | Next/previous card route through the read mapping; mac returns silently outside `.ready`. | Recorded divergences, line 15436; closed on mac 2026-10-16 (#1167, plan 43 PR 3) |
 | CD-47 | Escape inside the Where-am-I panel is the PANEL's, not the ladder's; t0 §2 M5 has no clause for a focused transient region. | Recorded divergences, line 15459 |
 | CD-48 | Right/Left FOLLOW unconditionally; the spec's "as mac does" premise was false. | Recorded divergences, line 15517 |
 
