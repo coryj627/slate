@@ -1527,17 +1527,22 @@ and `"status": "401"`. Rotate it before then.
   minute, and starts by itself once the network is back; nothing to do
   but find out why the network was down (see "Host reboot or Windows
   Update"). The same line once, between normal ticks, is a DNS blip.
-- **`GitHub API: GET … succeeded on attempt 2 after a connection failure`
-  now and then.** api.github.com reset or dropped the connection before
-  its answer arrived; the adapter tried the GET again after a second (then
-  two more) and it went through. A few a day are normal and cost nothing.
-  `admission: Unable to read data from the transport connection …` (or
-  `No connection could be made …`) means all three attempts failed in a
-  row: that tick admits nothing and publishes nothing, and the next tick
-  tries afresh. Many of either close together point at the host's network
-  (see "Host reboot or Windows Update"). Only GETs are retried: a repeated
-  `generate-jitconfig` would register a second runner, and the variable
-  writes and the runner delete retry on a later tick by themselves.
+- **`GitHub API: GET … answered on attempt 2 after a connection failure`
+  now and then.** The GET lost its connection before GitHub's answer
+  arrived (a reset mid-response, a refused or dropped connection, a name
+  that did not resolve) and the adapter sent it again after 1 s, then 2 s,
+  and got an answer. A few a day are normal and cost nothing.
+  `admission: Unable to read data from the transport connection …`,
+  `… The response ended prematurely`, `… No connection could be made …`
+  or `… No such host is known` means the attempts failed in a row (three
+  fast ones, or one that took 5 s or longer to fail, such as a connect
+  Windows gives up after 21 s): that tick admits nothing and publishes
+  nothing, and the next tick tries afresh. Many of either close together
+  point at the host's network (see "Host reboot or Windows Update").
+  Only GETs are retried: a repeated `generate-jitconfig` would register a
+  second runner; the variable write retries after a minute by itself, and
+  a failed runner delete is logged at warn and left to the next startup
+  sweep.
 - **`token missing at …` every minute.** No token is stored: run
   `store-token.ps1`. After `-ResetAccount`, store the token before you
   enable the loop task.
