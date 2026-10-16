@@ -116,6 +116,22 @@ final class AccessibleDataGridTests: XCTestCase {
             "row actions must surface as AX custom actions")
     }
 
+    /// #446 (WCAG 1.3.1): the container name is a required parameter, the
+    /// way Windows' `AccessibleDataGrid.Bind` takes `accessibilityLabel`. A
+    /// generic grid has no right default: the old one named every grid that
+    /// forgot its own a "Property rename preview". Construction without a
+    /// name (`AccessibleDataGrid(columns:rows:summary:)`) no longer
+    /// compiles, so the compiler is that census and no fact can state it.
+    /// This one pins the name the rename preview, the only site that leaned
+    /// on the default, now passes for itself.
+    @MainActor
+    func testBulkRenamePreviewGridPassesItsOwnContainerName() {
+        let grid = BulkRenameSheet.previewGrid(
+            rows: [], summary: "0 files will be renamed, 0 skipped, 0 errors.")
+        XCTAssertEqual(grid.accessibilityLabel, "Property rename preview, data grid")
+        XCTAssertEqual(grid.columns.map(\.header), ["Path", "Status", "Before", "After"])
+    }
+
     // MARK: v2 behavior (#519) — coordinator seams, no window needed.
 
     private func makeGrid(
