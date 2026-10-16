@@ -262,6 +262,17 @@ def _first_clause(head_line: str) -> str:
     return clause[:140] + ("…" if len(clause) > 140 else "")
 
 
+# Divergences a later PR closed on the host that diverged, by id: the index
+# row carries the closure after where the divergence is recorded, so the
+# register reads closed without re-writing the owner-recorded record itself
+# (the canvas index's convention, plan 43 PR 2).
+CLOSED = {
+    "B-D11": "**closed on mac** by #1217 (plan 43 PR 5): the mac's mounted leaf loads on a rail switch to a STALE publication too",
+    "C-D7": "**retired** by #1218 (plan 43 PR 5): the mac persists by field too, and its save aggregate no longer reads the live filter",
+    "D-D12": "**closed on mac** by #1220 (plan 43 PR 5): the mac's restore of a persisted Diagram speaks no mode line either",
+}
+
+
 def register_index(doc: str, ident_prefix: str) -> list[str]:
     rows: list[str] = []
     for label, prefix in PR_SECTIONS:
@@ -272,7 +283,8 @@ def register_index(doc: str, ident_prefix: str) -> list[str]:
             # the line in the document: find the head's first occurrence in the section
             at = text.find(m.group(0))
             line = doc.count(NL, 0, base + at) + 1 if at >= 0 else 0
-            rows.append(f"| {m.group(1)} | {_first_clause(head)} | §{label}, line {line} |")
+            closed = f"; {CLOSED[m.group(1)]}" if m.group(1) in CLOSED else ""
+            rows.append(f"| {m.group(1)} | {_first_clause(head)} | §{label}, line {line}{closed} |")
     return rows
 
 
