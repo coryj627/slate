@@ -20,26 +20,74 @@ extension CancelImportCommandContract {
 /// Open…" (the documents users open all day are notes; #863) — on the
 /// welcome screen it falls through to the vault picker, so the chord
 /// works globally; "Open Vault…" itself lives on ⇧⌘O.
+/// #784 (PR 15b): unsaved edits first. A quit with a dirty tab or an
+/// uncommitted draft goes through the Close Vault flow — its refusals, its
+/// prompt (one note's "Save changes?" or Save All / Discard All / Cancel)
+/// and its resolvers — and waits with `.terminateLater` until they answer:
+/// true after the edits are saved or discarded, false on Cancel or a save
+/// conflict or error. Nothing is discarded silently.
 /// Rounds 31–32: quit fence. Queued sidebar-organization writes and
 /// in-flight structural operations are the user's committed intent —
-/// normal termination waits for sidebar writes for up to five seconds.
+/// normal termination waits for sidebar writes for up to five seconds,
+/// after any unsaved edits have been answered for.
 /// Admitted Trash work is cancelled cooperatively and drained without a
 /// deadline, because an OS operation may still be changing files. Durable cross-launch
 /// recovery of writes that already FAILED is tracked in #944.
 final class SlateAppDelegate: NSObject, NSApplicationDelegate {
+    /// The window's state, handed over when the root view appears (#784).
+    /// Weak: the App's `@StateObject` owns it.
+    weak var appState: AppState?
+
     func applicationShouldTerminate(
         _ sender: NSApplication
     ) -> NSApplication.TerminateReply {
         MainActor.assumeIsolated {
-            guard AppState.hasPendingSidebarWorkAtTermination else {
-                return .terminateNow
+            let decision = Self.terminationDecision(
+                appState: appState,
+                reply: { sender.reply(toApplicationShouldTerminate: $0) })
+            // A quit from the Dock, or with Settings in front, would otherwise
+            // ask behind another window, unseen and unannounced. With the
+            // window closed (the vault stays open behind it), reopen it as a
+            // Dock click does; it presents the waiting prompt.
+            if decision == .terminateLater, let appState,
+                appState.isTerminationPending
+            {
+                sender.activate()
+                if let window = appState.promptHostWindow {
+                    window.makeKeyAndOrderFront(nil)
+                } else {
+                    DispatchQueue.main.async { Self.reopenMainWindow() }
+                }
             }
-            Task { @MainActor in
-                await AppState.settleSidebarWriterChainsForTermination()
-                sender.reply(toApplicationShouldTerminate: true)
-            }
-            return .terminateLater
+            return decision
         }
+    }
+
+    /// The Dock click's reopen event, sent to this process: the window group
+    /// answers it by opening its window when none is open.
+    private static func reopenMainWindow() {
+        let reopen = NSAppleEventDescriptor(
+            eventClass: AEEventClass(kCoreEventClass),
+            eventID: AEEventID(kAEReopenApplication),
+            targetDescriptor: NSAppleEventDescriptor(
+                processIdentifier: ProcessInfo.processInfo.processIdentifier),
+            returnID: AEReturnID(kAutoGenerateReturnID),
+            transactionID: AETransactionID(kAnyTransactionID))
+        _ = try? reopen.sendEvent(options: [.noReply], timeout: 5)
+    }
+
+    /// ⌘Q's decision, the seam `TerminationFlowTests` drive. `reply` stands
+    /// in for `NSApp.reply(toApplicationShouldTerminate:)` and is called
+    /// exactly once after a `.terminateLater`, never after `.terminateNow`
+    /// or `.terminateCancel`.
+    @MainActor
+    static func terminationDecision(
+        appState: AppState?,
+        reply: @escaping @MainActor (Bool) -> Void
+    ) -> NSApplication.TerminateReply {
+        if let appState { return appState.admitTermination(reply: reply) }
+        return AppState.settleSidebarFenceThenReply(reply) == nil
+            ? .terminateNow : .terminateLater
     }
 }
 
@@ -185,6 +233,9 @@ struct SlateMacApp: App {
             RootView()
                 .environmentObject(appState)
                 .frame(minWidth: 640, minHeight: 480)
+                // #784: ⌘Q routes through this window's Close Vault flow,
+                // so the delegate needs the state that owns the prompt.
+                .onAppear { appDelegate.appState = appState }
                 // #872: reopen the last vault on cold launch (HIG
                 // launching.md — "Restore previous state on restart …
                 // avoid making people retrace steps"; Obsidian / VS Code

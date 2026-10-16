@@ -5151,6 +5151,19 @@ final class AppState: ObservableObject {
         }
     }
 
+    /// The fence as a quit's last wait (#784): settle, then reply true. Nil
+    /// when nothing is pending — the caller terminates now or replies itself.
+    @MainActor
+    static func settleSidebarFenceThenReply(
+        _ reply: @escaping @MainActor (Bool) -> Void
+    ) -> Task<Void, Never>? {
+        guard hasPendingSidebarWorkAtTermination else { return nil }
+        return Task { @MainActor in
+            await settleSidebarWriterChainsForTermination()
+            reply(true)
+        }
+    }
+
     /// Ownership generation for queued persists. Bumped on every vault
     /// teardown/switch; a queued task whose captured generation no longer
     /// matches skips its disk I/O and publishes nothing.
@@ -9202,6 +9215,9 @@ final class AppState: ObservableObject {
             !BaseExactIdentity.matches(path, loadedFilePath),
             !dirtyBufferSurvivesElsewhere
         {
+            // #784: the newer request owns the prompt; a waiting quit is
+            // answered first.
+            supersedePendingTermination()
             pendingNavigation = .selectFile(path)
             // Roll the selection back so the file list re-highlights
             // the dirty file while the alert is up. The async hop is
@@ -9788,6 +9804,7 @@ final class AppState: ObservableObject {
             switchToRecent(RecentVault(url: url))
             return
         }
+        supersedePendingTermination()
         cancelPendingNavigationSave()
         // MainSplitView posts the initial open announcement when the newly
         // mounted interface is ready. It stays mounted during a direct A→B
@@ -10630,6 +10647,7 @@ final class AppState: ObservableObject {
             return
         }
         supersedePendingTabCloseForVaultTransition()
+        supersedePendingTermination()
         pendingVaultSwitchTarget = entry
         let parkedDirty = workspace.dirtyParkedDocuments()
         let recoveryPaths = uncommittedNoteDraftPaths()
@@ -10857,6 +10875,7 @@ final class AppState: ObservableObject {
             return
         }
         supersedePendingTabCloseForVaultTransition()
+        supersedePendingTermination()
         // U1-2: the dirty check aggregates over every tab. With no parked
         // dirty documents the flow is exactly the pre-tabs behavior (the
         // active document routes through the existing single-file alert).
@@ -10924,11 +10943,13 @@ final class AppState: ObservableObject {
     /// "Save All": save every dirty tab through the STANDARD save path
     /// (activate → saveCurrentNote → await), sequentially. Aborts on the
     /// first conflict/error, leaving the user on that tab with the standard
-    /// resolution dialog up; the vault stays open. Closes on full success.
+    /// resolution dialog up; the vault stays open. Closes on full success —
+    /// or, for a quit (#784), lets the quit go ahead with the vault open.
     func resolveVaultCloseSaveAll() {
         guard pendingVaultClose != nil, let session = currentSession else { return }
         guard !rejectVaultTransitionDuringNativeImport() else { return }
         if let reason = authoredPropertyPublicationRecoveryReason {
+            finishPendingTermination(proceed: false)
             pendingVaultClose = nil
             postMutationAnnouncement(reason)
             return
@@ -10958,6 +10979,9 @@ final class AppState: ObservableObject {
                     // re-present the prompt and stop on a nil admission.
                     guard let save = self.saveCurrentNote() else {
                         let dirtyCount = self.dirtyVaultClosePaths().count
+                        if dirtyCount == 0 {
+                            self.finishPendingTermination(proceed: false)
+                        }
                         self.pendingVaultClose = dirtyCount > 0 ? dirtyCount : nil
                         return
                     }
@@ -10976,6 +11000,8 @@ final class AppState: ObservableObject {
                         // surprise-open the other vault (the same leak class
                         // as the U1-2 save-then-close scope).
                         self.pendingVaultSwitchTarget = nil
+                        // #784: a quit stops here too; the app keeps running.
+                        self.finishPendingTermination(proceed: false)
                         return  // standard dialog owns recovery; vault stays open
                     }
                 }
@@ -10999,6 +11025,11 @@ final class AppState: ObservableObject {
                 generation: generation, session: session)
             else { return }
             self.pendingVaultClose = nil
+            if self.isTerminationPending {
+                // #784: every note is saved; the quit goes ahead.
+                self.finishPendingTermination(proceed: true)
+                return
+            }
             let completesVaultSwitch = self.pendingVaultSwitchTarget != nil
             if self.closeVault(), !completesVaultSwitch {
                 self.announcer.post(.vaultClosedAllSaved)
@@ -11008,16 +11039,22 @@ final class AppState: ObservableObject {
     }
 
     /// "Discard All": close without saving any tab. The per-tab buffers are
-    /// dropped by `closeVault`'s workspace reset.
+    /// dropped by `closeVault`'s workspace reset — or, for a quit (#784),
+    /// with the process.
     func resolveVaultCloseDiscardAll() {
         guard !rejectVaultTransitionDuringNativeImport() else { return }
         if let reason = authoredPropertyPublicationRecoveryReason {
+            finishPendingTermination(proceed: false)
             pendingVaultClose = nil
             postMutationAnnouncement(reason)
             return
         }
         if let reason = inFlightDraftDiscardDisabledReason {
             postMutationAnnouncement(reason)
+            return
+        }
+        if isTerminationPending {
+            finishPendingTermination(proceed: true)
             return
         }
         pendingVaultClose = nil
@@ -11029,10 +11066,166 @@ final class AppState: ObservableObject {
     }
 
     func resolveVaultCloseCancel() {
+        finishPendingTermination(proceed: false)
         pendingVaultClose = nil
         // U4-3: same as the single-dirty cancel — a cancelled multi-tab close
         // cancels the switch and drops the parked target.
         pendingVaultSwitchTarget = nil
+    }
+
+    // MARK: - Quit (#784, PR 15b)
+    //
+    // ⌘Q with unsaved edits goes through the Close Vault flow: its refusals,
+    // its dirty aggregation and its prompts (the single note's "Save
+    // changes?" alert, or Save All / Discard All / Cancel). While a quit
+    // waits on that prompt (termination mode) the resolvers answer the quit
+    // instead of closing the vault: true once Save All or Discard All (or the
+    // note's Save or Discard) succeeds and the sidebar fence has settled;
+    // false on Cancel, or on a save conflict or error, where the standard
+    // dialog owns recovery and the app keeps running. A newer request that
+    // takes the prompt over answers the quit false first. A quit adds no line
+    // of its own: the Close Vault lines end "Returned to the welcome screen",
+    // which a quit never reaches, and the Windows application-close route is
+    // silent for the same reason (`VaultLifecycleViewModel.AnnounceTeardown`).
+
+    /// The reply `admitTermination` owes AppKit while the prompt is up. Set
+    /// only there; called exactly once, by `finishPendingTermination`.
+    private var pendingTerminationReply: (@MainActor (Bool) -> Void)?
+
+    /// True from a `.terminateLater` until its reply is sent, through the
+    /// prompt and the sidebar fence after it. A second ⌘Q in that window is
+    /// refused, so AppKit never waits on two replies.
+    private var isTerminationReplyOutstanding = false
+
+    /// Test hook: the sidebar-fence wait that ends a quit (rounds 31–32).
+    private(set) var terminationFenceTaskForTesting: Task<Void, Never>?
+
+    /// True while ⌘Q waits on the Close Vault prompt (termination mode).
+    var isTerminationPending: Bool { pendingTerminationReply != nil }
+
+    /// The window that hosts the vault's prompts (the root view's), so a
+    /// quit can bring its prompt to the front.
+    var promptHostWindow: NSWindow? { templateShortcutHostWindow }
+
+    /// ⌘Q's admission, through `SlateAppDelegate.terminationDecision`:
+    /// `.terminateNow` only when nothing is dirty and the sidebar fence is
+    /// clear; `.terminateLater` while the prompt, then the fence, holds the
+    /// quit; `.terminateCancel` when Close Vault would refuse (its reason is
+    /// spoken) or a quit is already waiting.
+    func admitTermination(
+        reply: @escaping @MainActor (Bool) -> Void
+    ) -> NSApplication.TerminateReply {
+        guard !isTerminationReplyOutstanding else { return .terminateCancel }
+        if isVaultOpen {
+            switch presentTerminationPrompt() {
+            case .refused:
+                return .terminateCancel
+            case .presented:
+                isTerminationReplyOutstanding = true
+                pendingTerminationReply = reply
+                return .terminateLater
+            case .clean:
+                break
+            }
+        }
+        guard let fence = Self.settleSidebarFenceThenReply(
+            terminationAnswer(reply))
+        else { return .terminateNow }
+        isTerminationReplyOutstanding = true
+        terminationFenceTaskForTesting = fence
+        return .terminateLater
+    }
+
+    private enum TerminationPrompt { case clean, presented, refused }
+
+    /// Close Vault's front half for a quit. The quit supersedes a narrower
+    /// prompt (a tab close, a file switch) and a vault switch in progress,
+    /// so exactly one prompt owns the answer.
+    private func presentTerminationPrompt() -> TerminationPrompt {
+        if let reason = authoredPropertyPublicationRecoveryReason {
+            postMutationAnnouncement(reason)
+            return .refused
+        }
+        if let reason = inFlightDraftDiscardDisabledReason {
+            postMutationAnnouncement(reason)
+            return .refused
+        }
+        let parkedDirty = workspace.dirtyParkedDocuments()
+        let recoveryPaths = uncommittedNoteDraftPaths()
+        guard hasUnsavedChanges || !parkedDirty.isEmpty || !recoveryPaths.isEmpty
+        else { return .clean }
+        supersedePendingTabCloseForVaultTransition()
+        if case .selectFile? = pendingNavigation {
+            resolvePendingNavigationCancel()
+        }
+        pendingVaultSwitchTarget = nil
+        if parkedDirty.isEmpty, recoveryPaths.isEmpty {
+            pendingVaultClose = nil
+            pendingNavigation = .closeVault
+        } else {
+            if case .closeVault? = pendingNavigation {
+                pendingNavigation = nil
+            }
+            pendingVaultClose = dirtyVaultClosePaths().count
+        }
+        return .presented
+    }
+
+    /// Clears the outstanding mark as the reply goes out.
+    private func terminationAnswer(
+        _ reply: @escaping @MainActor (Bool) -> Void
+    ) -> @MainActor (Bool) -> Void {
+        { [weak self] proceed in
+            self?.isTerminationReplyOutstanding = false
+            reply(proceed)
+        }
+    }
+
+    /// Answers a waiting quit exactly once and retires its prompt, so the
+    /// prompt can never turn into a plain Close Vault. `proceed` runs the
+    /// sidebar fence (rounds 31–32) before it replies true — dirty tabs
+    /// first, then the fence; otherwise the app keeps running. A no-op when
+    /// no quit is waiting.
+    private func finishPendingTermination(proceed: Bool) {
+        guard let reply = pendingTerminationReply else { return }
+        pendingTerminationReply = nil
+        pendingVaultClose = nil
+        if case .closeVault? = pendingNavigation {
+            pendingNavigation = nil
+        }
+        let answer = terminationAnswer(reply)
+        guard proceed else {
+            answer(false)
+            return
+        }
+        pendingVaultSwitchTarget = nil
+        if let fence = Self.settleSidebarFenceThenReply(answer) {
+            terminationFenceTaskForTesting = fence
+        } else {
+            answer(true)
+        }
+    }
+
+    /// A newer request that takes the prompt over — a vault close, switch
+    /// or open, or a file switch — answers a waiting quit first (false: the
+    /// app keeps running), so AppKit's pending reply is never dropped.
+    private func supersedePendingTermination() {
+        finishPendingTermination(proceed: false)
+    }
+
+    /// The quit's single-note Save ended without completing: a conflict, an
+    /// error, a refused admission, or a note that changed owner meanwhile.
+    /// Unless a newer request took the prompt over (it then owns the
+    /// answer), the app keeps running and the standard dialog owns recovery.
+    private func refuseTerminationAfterNavigationSave(
+        _ pending: PendingNavigation,
+        generation: UInt64
+    ) {
+        guard case .closeVault = pending,
+            pendingNavigationSaveGeneration == generation,
+            pendingNavigation == pending
+        else { return }
+        finishPendingTermination(proceed: false)
     }
 
     /// Property/source recovery identities are vault-owned even though their
@@ -11055,6 +11248,10 @@ final class AppState: ObservableObject {
     @discardableResult
     func closeVault() -> Bool {
         guard !rejectVaultTransitionDuringNativeImport() else { return false }
+        // #784: a quit never closes the vault; a close that reaches here while
+        // a quit waits answers it first, whether the close is refused below or
+        // tears the vault down.
+        supersedePendingTermination()
         if let reason = authoredPropertyPublicationRecoveryReason {
             pendingVaultSwitchTarget = nil
             pendingVaultClose = nil
@@ -22959,8 +23156,14 @@ final class AppState: ObservableObject {
             session: session,
             pending: pending,
             noteOwner: noteOwner)
-        else { return }
-        guard let save = saveCurrentNote() else { return }
+        else {
+            refuseTerminationAfterNavigationSave(pending, generation: generation)
+            return
+        }
+        guard let save = saveCurrentNote() else {
+            refuseTerminationAfterNavigationSave(pending, generation: generation)
+            return
+        }
         await save.value
         // Save can complete in one of three states; only proceed
         // with the navigation when the save genuinely succeeded
@@ -22975,6 +23178,7 @@ final class AppState: ObservableObject {
             saveError == nil,
             loadedFilePath.map({ !hasDirtyNoteRecovery(for: $0) }) ?? true
         else {
+            refuseTerminationAfterNavigationSave(pending, generation: generation)
             return
         }
         applyPendingNavigation(pending)
@@ -22992,6 +23196,7 @@ final class AppState: ObservableObject {
         if case .closeVault = pending,
             let reason = authoredPropertyPublicationRecoveryReason
         {
+            finishPendingTermination(proceed: false)
             pendingNavigation = nil
             pendingVaultSwitchTarget = nil
             postMutationAnnouncement(reason)
@@ -23025,6 +23230,9 @@ final class AppState: ObservableObject {
     /// "Save changes?" prompt: Cancel → clear the pending
     /// navigation without saving. The dirty buffer stays.
     func resolvePendingNavigationCancel() {
+        if case .closeVault? = pendingNavigation {
+            finishPendingTermination(proceed: false)
+        }
         cancelPendingNavigationSave()
         if case .selectFile(let path) = pendingNavigation,
             deferredTemplateCursorLanding?.path == path
@@ -23043,6 +23251,12 @@ final class AppState: ObservableObject {
     /// navigation.
     private func applyPendingNavigation(_ pending: PendingNavigation) {
         cancelPendingNavigationSave()
+        if case .closeVault = pending, isTerminationPending {
+            // #784: the quit's prompt resolved; the quit goes ahead with the
+            // vault open, as a clean quit does.
+            finishPendingTermination(proceed: true)
+            return
+        }
         pendingNavigation = nil
         switch pending {
         case .closeVault:
@@ -23107,6 +23321,7 @@ final class AppState: ObservableObject {
             return
         }
         supersedePendingTabCloseForVaultTransition()
+        supersedePendingTermination()
         let recoveryPaths = uncommittedNoteDraftPaths()
         if !recoveryPaths.isEmpty {
             pendingVaultClose = dirtyVaultClosePaths().count
