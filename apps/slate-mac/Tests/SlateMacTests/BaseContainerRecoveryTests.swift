@@ -239,6 +239,34 @@ final class BaseContainerRecoveryTests: XCTestCase {
         XCTAssertNil(state.activeBaseQueryBuilder)
         XCTAssertEqual(state.lastMutationAnnouncement, unavailable)
 
+        // Detached after a read, then deleted: the edit's reopen fails, says
+        // why, and leaves the edit disabled with the unavailable reason.
+        let session = try XCTUnwrap(state.currentSession)
+        try Data("views:\n  - type: table\n    name: Reading\n    order: [file.name]\n".utf8)
+            .write(
+                to: try XCTUnwrap(vaultURL).appendingPathComponent("Queries/Reading.base"))
+        reading.load(session: session)
+        XCTAssertNotNil(reading.handle)
+        struct Fault: Error {}
+        reading.executeFaultForTests = { Fault() }
+        reading.rollbackFaultForTests = { Fault() }
+        XCTAssertFalse(
+            reading.setTransientSort(
+                DataGridSortState(columnIndex: 0, ascending: true), session: session))
+        reading.executeFaultForTests = nil
+        reading.rollbackFaultForTests = nil
+        XCTAssertNil(reading.handle)
+        XCTAssertNil(state.baseDefinitionEditingDisabledReason(for: reading))
+        try FileManager.default.removeItem(
+            at: try XCTUnwrap(vaultURL).appendingPathComponent("Queries/Reading.base"))
+        state.basesEditViewFilters()
+        XCTAssertNil(state.activeBaseQueryBuilder)
+        XCTAssertEqual(
+            state.lastBaseActionAnnouncement,
+            "Base filters could not be opened in the builder: "
+                + "Reading could not be read — it may have been moved or deleted.")
+        XCTAssertEqual(state.baseDefinitionEditingDisabledReason(for: reading), unavailable)
+
         // Moved to Trash: the batch-Trash reconciliation's definite absence.
         state.openBaseFile("Queries/Trashed.base")
         let trashed = state.baseDocument(for: "Queries/Trashed.base")
@@ -252,7 +280,6 @@ final class BaseContainerRecoveryTests: XCTestCase {
         XCTAssertEqual(state.baseDefinitionEditingDisabledReason(for: trashed), unavailable)
 
         // A reopen that failed keeps its own reason, not the unavailable one.
-        let session = try XCTUnwrap(state.currentSession)
         try Data("views: []\n".utf8).write(
             to: try XCTUnwrap(vaultURL).appendingPathComponent("Queries/Trashed.base"))
         trashed.load(session: session)
