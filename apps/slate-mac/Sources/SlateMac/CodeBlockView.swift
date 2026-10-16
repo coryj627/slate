@@ -12,7 +12,7 @@ import SwiftUI
 ///   drawn from `CodeTokenTheme`. Matches Xcode's default palette
 ///   closely enough that a developer scanning the read pane sees
 ///   familiar highlighting.
-/// - **Accessibility** — the container carries a `"Code block,
+/// - **Accessibility** — the container carries core's `"Code block,
 ///   <language>, N lines"` preamble so VoiceOver users know what
 ///   they're entering before they drill in. `accessibilityElement(
 ///   children: .contain)` lets VO walk the source itself once
@@ -90,50 +90,13 @@ struct CodeBlockView: View {
             // selection at the proper scope.
     }
 
-    /// VoiceOver preamble. Language defaults to "plain text" when
-    /// the block is fenced without a tag or indented; line count
-    /// uses 1-based counting (matches how a code editor numbers
-    /// rows).
+    /// VoiceOver preamble, rendered by core (`code_block_preamble`,
+    /// W3-4; #1053) so both hosts speak one string: the language as
+    /// authored, "plain text" when the block is fenced without a tag
+    /// or indented, and the line count, where a trailing newline ends
+    /// the last line rather than starting another.
     var preambleLabel: String {
-        let language = displayLanguage
-        let lines = lineCount
-        let suffix = lines == 1 ? "line" : "lines"
-        return "Code block, \(language), \(lines) \(suffix)."
-    }
-
-    var displayLanguage: String {
-        if let lang = block.language?.trimmingCharacters(in: .whitespacesAndNewlines),
-            !lang.isEmpty
-        {
-            return lang
-        }
-        return "plain text"
-    }
-
-    /// Source line count. A trailing newline is treated as
-    /// terminating the last line, not adding an empty one — matches
-    /// what an editor would show ("N lines").
-    var lineCount: Int {
-        if block.source.isEmpty {
-            return 0
-        }
-        var count = 0
-        var sawAny = false
-        for ch in block.source {
-            sawAny = true
-            if ch == "\n" {
-                count += 1
-            }
-        }
-        if !sawAny {
-            return 0
-        }
-        // Trailing newline closes the previous line; no trailing
-        // newline means the last line still counts.
-        if !block.source.hasSuffix("\n") {
-            count += 1
-        }
-        return count
+        codeBlockPreamble(language: block.language, source: block.source)
     }
 
     /// #854: the visible copy affordance. Quiet chrome (caption font,
