@@ -247,10 +247,7 @@ final class EmbedViewTests: XCTestCase {
 
         /// `deadline` for XCTest's `TimeInterval` waits, fraction of a
         /// second included.
-        static var deadlineInterval: TimeInterval {
-            let parts = deadline.components
-            return TimeInterval(parts.seconds) + TimeInterval(parts.attoseconds) / 1e18
-        }
+        static var deadlineInterval: TimeInterval { deadline / .seconds(1) }
     }
 
     private struct ExposedLabels {
