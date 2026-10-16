@@ -128,7 +128,10 @@ Describe 'Invoke-GhApi transient retry' {
         @($script:sleeps) | Should -Be @(1, 2)
         $record.TargetObject.Headers.Contains('Authorization') | Should -BeFalse
         "$($record.TargetObject)" | Should -Not -BeLike '*ghp_test*'
-        @($script:retryNotices).Count | Should -Be 0
+        # The evidence line: why the GET was not tried again, the failure's
+        # shape as exception types (no messages: nothing to leak), the time.
+        @($script:retryNotices).Count | Should -Be 1
+        $script:retryNotices[0] | Should -Match '^GitHub API: GET /x gave up on attempt 3 of 3 after [0-9]+\.[0-9] s \(the last attempt\): HttpRequestException > IOException$'
     }
     It 'never retries a POST, an HTTP status error or a timeout' {
         # A retried generate-jitconfig would register a second runner.
@@ -149,7 +152,11 @@ Describe 'Invoke-GhApi transient retry' {
         { Invoke-GhApi -Path '/x' } | Should -Throw
         Should -Invoke Invoke-RestMethod -Times 4 -Exactly
         @($script:sleeps).Count | Should -Be 0
-        @($script:retryNotices).Count | Should -Be 0
+        # A status is GitHub's answer and a POST is never retried by design:
+        # no line for either. A timeout is named, with its shape.
+        @($script:retryNotices).Count | Should -Be 2
+        $script:retryNotices[0] | Should -Match '^GitHub API: GET /x gave up on attempt 1 of 3 after [0-9]+\.[0-9] s \(not a connection failure\): TaskCanceledException > TimeoutException$'
+        $script:retryNotices[1] | Should -Match '\(not a connection failure\): TimeoutException$'
     }
     It 'never retries an attempt that took long to fail, such as a connect Windows gives up after 21 s' {
         # Measured, not typed: the bound is lowered to 0 s so any attempt counts as slow.
@@ -158,6 +165,50 @@ Describe 'Invoke-GhApi transient retry' {
         { Invoke-GhApi -Path '/x' } | Should -Throw
         Should -Invoke Invoke-RestMethod -Times 1 -Exactly
         @($script:sleeps).Count | Should -Be 0
+        @($script:retryNotices).Count | Should -Be 1
+        $script:retryNotices[0] | Should -Match '\(a slow failure\): HttpRequestException > SocketException\(TimedOut\)$'
+    }
+    It 'names a failure shape the rule does not know, so the rule can be tuned from the log' {
+        Mock Invoke-RestMethod { throw [System.Security.Authentication.AuthenticationException]::new('The remote certificate is invalid.') }
+        { Invoke-GhApi -Path '/x' } | Should -Throw
+        Should -Invoke Invoke-RestMethod -Times 1 -Exactly
+        @($script:retryNotices).Count | Should -Be 1
+        $script:retryNotices[0] | Should -Match '^GitHub API: GET /x gave up on attempt 1 of 3 after [0-9]+\.[0-9] s \(not a connection failure\): AuthenticationException$'
+        # A reset wrapped two deep still reads as a chain, inner error code included.
+        $script:retryNotices.Clear()
+        $script:GhRetryFastFailureSeconds = 0
+        Mock Invoke-RestMethod { New-GhConnectionError -Inner ([System.IO.IOException]::new('Unable to read data from the transport connection', [System.Net.Sockets.SocketException]::new(10054))) }
+        { Invoke-GhApi -Path '/actions/runs?status=queued' } | Should -Throw
+        $script:retryNotices[0] | Should -Match '^GitHub API: GET /actions/runs\?status=queued gave up on attempt 1 of 3 after [0-9]+\.[0-9] s \(a slow failure\): HttpRequestException > IOException > SocketException\(ConnectionReset\)$'
+    }
+    It 'writes the line with a dot for the seconds whatever the culture, with types only, and survives a throwing hook' {
+        $culture = [cultureinfo]::CurrentCulture
+        try {
+            [cultureinfo]::CurrentCulture = [cultureinfo]::new('de-DE')
+            # The messages carry the test token: the line must not.
+            Mock Invoke-RestMethod { throw [System.IO.IOException]::new('reset while sending Bearer ghp_test', [System.Net.Sockets.SocketException]::new(10054)) }
+            $script:GhRetryFastFailureSeconds = 0
+            { Invoke-GhApi -Path '/x' } | Should -Throw
+            $script:retryNotices[0] | Should -Match ' after [0-9]+\.[0-9] s '
+            $script:retryNotices[0] | Should -Not -BeLike '*ghp_test*'
+            $script:retryNotices[0] | Should -Match ': IOException > SocketException\(ConnectionReset\)$'
+        } finally {
+            [cultureinfo]::CurrentCulture = $culture
+        }
+        # A hook that throws on the give-up line leaves the original failure to the caller.
+        $script:GhRetryNotice = { throw 'log disk full' }
+        $record = $null
+        try { Invoke-GhApi -Path '/x' } catch { $record = $_ }
+        $record.Exception | Should -BeOfType [System.IO.IOException]
+    }
+    It 'formats an exception chain as type names with the socket and request error codes, six deep at most' {
+        $deep = [System.Exception]::new('0')
+        1..9 | ForEach-Object { $deep = [System.Exception]::new("$_", $deep) }
+        (Format-GhExceptionChain -Exception $deep) | Should -Be 'Exception > Exception > Exception > Exception > Exception > Exception'
+        (Format-GhExceptionChain -Exception ([System.IO.IOException]::new('bare'))) | Should -Be 'IOException'
+        $wrapped = [System.Net.Http.HttpRequestException]::new([System.Net.Http.HttpRequestError]::ConnectionError, 'sending', [System.Net.Sockets.SocketException]::new(10061))
+        (Format-GhExceptionChain -Exception $wrapped) | Should -Be 'HttpRequestException(ConnectionError) > SocketException(ConnectionRefused)'
+        (Format-GhExceptionChain -Exception ([System.Net.Http.HttpRequestException]::new('plain'))) | Should -Be 'HttpRequestException'
     }
     It 'stays quiet when the first attempt is answered, and when no notice is wired' {
         Mock Invoke-RestMethod { [pscustomobject]@{ ok = $true } }
