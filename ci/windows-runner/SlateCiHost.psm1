@@ -202,22 +202,38 @@ function Get-HostHealth {
 }
 
 function Test-HostCooledDown {
-    # True when the breaker never tripped, or tripped a full cool-down ago.
+    # True when the breaker never tripped, or a full cool-down has passed
+    # since it last tripped or restarted. A trip time that does not parse
+    # (a hand-edited journal) counts as cooled down, as Test-RecentlyAt
+    # treats a bad value: the next failure trips it again, and nothing
+    # here stops a tick or a teardown.
     [CmdletBinding()]
     param([Parameter(Mandatory)]$Config, [Parameter(Mandatory)]$Health, [Parameter(Mandatory)][datetimeoffset]$Now)
-    if ($null -eq $Health['TrippedAt']) { return $true }
-    $tripped = ConvertTo-DateTimeOffset -Value $Health['TrippedAt']
+    if (-not $Health.Contains('TrippedAt') -or $null -eq $Health['TrippedAt']) { return $true }
+    try { $tripped = ConvertTo-DateTimeOffset -Value $Health['TrippedAt'] } catch { return $true }
     return ($Now -ge $tripped.AddSeconds([int]$Config.BreakerCooldownSeconds))
+}
+
+function Format-BreakerCooldown {
+    # "15 min" for a whole number of minutes, else the seconds.
+    [CmdletBinding()]
+    param([Parameter(Mandatory)]$Config)
+    $seconds = [int]$Config.BreakerCooldownSeconds
+    if ($seconds % 60 -eq 0) { return ('{0} min' -f ($seconds / 60)) }
+    return ('{0} s' -f $seconds)
 }
 
 function Test-HostServing {
     # The breaker's verdict for the published state: serving while the
-    # failures in a row stay under the cap, or once the cool-down has
-    # passed (half-open: the router sends one lane's worth to try, and
-    # the next failure trips it again at once).
+    # failures in a row stay under the cap, or once a full cool-down has
+    # passed since the last failure. The state then looks healthy, so the
+    # next run routes as usual and its home lanes are the probe; the next
+    # failure trips the breaker again at once. Reads the record without
+    # creating it: the state is built from the journal, never into it.
     [CmdletBinding()]
     param([Parameter(Mandatory)]$Config, [Parameter(Mandatory)]$Journal, [Parameter(Mandatory)][datetimeoffset]$Now)
-    $health = Get-HostHealth -Journal $Journal
+    $health = $Journal['Health']
+    if (-not ($health -is [System.Collections.IDictionary]) -or -not $health.Contains('Failures') -or $null -eq $health['Failures']) { return $true }
     if ([int]$health['Failures'] -lt [int]$Config.BreakerFailures) { return $true }
     return (Test-HostCooledDown -Config $Config -Health $health -Now $Now)
 }
@@ -234,11 +250,14 @@ function Register-HostFailure {
     $health['LastFailureAt'] = $Now.ToString('o')
     $health['LastReason'] = $Reason
     if ([int]$health['Failures'] -lt [int]$Config.BreakerFailures) { return }
-    if (-not (Test-HostCooledDown -Config $Config -Health $health -Now $Now)) { return }
+    # A failure during the cool-down restarts it, quietly: the retries of
+    # the jobs already queued home are the probes meanwhile, and the host
+    # must go a full cool-down without one before the state says serving.
+    $cooled = Test-HostCooledDown -Config $Config -Health $health -Now $Now
     $health['TrippedAt'] = $Now.ToString('o')
     $health['HalfOpenAt'] = $null
-    $minutes = [int][math]::Round([int]$Config.BreakerCooldownSeconds / 60.0)
-    & $Adapters.Log 'warn' ("health: not serving for {0} min: {1} failures in a row, last '{2}' (the router sends every lane to the vendor until then; fix the host and restart the loop, or wait)" -f $minutes, $health['Failures'], $Reason)
+    if (-not $cooled) { return }
+    $null = & $Adapters.Log 'warn' ("health: not serving for at least {0}: {1} failures in a row, last '{2}' (the router sends every lane to the vendor until then; fix the host and restart the loop, or wait)" -f (Format-BreakerCooldown -Config $Config), $health['Failures'], $Reason)
 }
 
 function Register-HostSuccess {
@@ -265,12 +284,13 @@ function Update-HostHealth {
     # log explains why the router started sending work home again.
     [CmdletBinding()]
     param([Parameter(Mandatory)]$Config, [Parameter(Mandatory)]$Journal, [Parameter(Mandatory)][hashtable]$Adapters, [Parameter(Mandatory)][datetimeoffset]$Now)
-    $health = Get-HostHealth -Journal $Journal
-    if ($null -eq $health['TrippedAt'] -or $null -ne $health['HalfOpenAt']) { return }
+    # Read without creating the record: a journal that never tripped is left as it is.
+    $health = $Journal['Health']
+    if (-not ($health -is [System.Collections.IDictionary]) -or -not $health.Contains('TrippedAt') -or $null -eq $health['TrippedAt']) { return }
+    if ($health.Contains('HalfOpenAt') -and $null -ne $health['HalfOpenAt']) { return }
     if (-not (Test-HostCooledDown -Config $Config -Health $health -Now $Now)) { return }
     $health['HalfOpenAt'] = $Now.ToString('o')
-    $minutes = [int][math]::Round([int]$Config.BreakerCooldownSeconds / 60.0)
-    & $Adapters.Log 'info' "health: serving again after the $minutes min cool-down; the next failure trips it at once"
+    & $Adapters.Log 'info' "health: serving again after $(Format-BreakerCooldown -Config $Config) without a failure; the next failure trips it at once"
 }
 
 function Test-VmExpired {
@@ -923,6 +943,8 @@ function Complete-ActiveVm {
         }
         return
     }
+    # Whatever the job's conclusion, a runner ran it: the host works.
+    Register-HostSuccess -Journal $Journal -Adapters $Adapters
     if ($null -ne $job -and [string]$job.conclusion -eq 'success') {
         try { Register-GoldenAcceptance -Journal $Journal -Adapters $Adapters -Vm $vm } catch { & $Adapters.Log 'warn' "golden: $_" }
     }
@@ -1196,6 +1218,7 @@ function Invoke-Admission {
             }
             if ($evict) {
                 & $Adapters.Log 'warn' "handoff: ${name} runs job $($job.JobId) of $repo ($why); forcing it off"
+                Register-HostSuccess -Journal $Journal -Adapters $Adapters
                 Remove-ActiveVm -Config $Config -Journal $Journal -Adapters $Adapters -Name $name -Reason "runner taken by job $($job.JobId) of $repo ($why)" -Retry $false -Now $Now
                 continue
             }

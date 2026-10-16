@@ -69,11 +69,17 @@ job queues home under `home` and `home-only` alike.
   is stale within three minutes. A host whose loop runs but whose VMs
   never come up says it is not serving through a breaker: three discards
   of its own making in a row (a VM it could not provision, hand off or
-  hear from, or that shut down without running a job) with no runner
-  taking its job between them trip it, and the log says why once. It
-  serves again after a fifteen-minute cool-down (the next failure trips
-  it at once) or when the loop restarts, which is what follows a repair;
-  a runner taking its job forgets the failures. `BreakerFailures` and
+  hear from, one unclaimed while its job stayed queued, one that died, or
+  one that shut down without running a job) with no runner taking its job
+  between them trip it, and the log says why once. It says serving again
+  fifteen minutes after its last failure (a failure during the cool-down
+  restarts it quietly; the retries of the jobs already queued home are
+  the probes meanwhile), or when the loop restarts, which is what follows
+  a repair; a runner taking its job forgets the failures. The state then
+  looks healthy, so the next run routes as usual: its home lanes are the
+  probe, and they strand through their retries if the host still fails.
+  No run has to strand to discover a dead host; for a failing one, the
+  first run after the cool-down can. `BreakerFailures` and
   `BreakerCooldownSeconds` in `config.json`, 3 and 900 when absent. The
   reference for staleness is the router's clock, not
   the run's creation time: GitHub resolves `vars` when the job starts
@@ -514,9 +520,11 @@ optional API reads; nothing in `namespace` mode.
   loop keeps serving queued home jobs.
 - **Failing host** (OR-D4): the third discard of the host's making in a
   row trips the breaker; the next state says not serving and the log
-  says why once; the jobs already queued home keep their retries. The
-  state says serving again after the cool-down (one lane's worth comes
-  home to try; a failure trips it at once) or after a loop restart.
+  says why once; the jobs already queued home keep their retries, and a
+  failure among them restarts the cool-down quietly. Fifteen minutes
+  after the last failure the state says serving again and the next run
+  routes as usual: its home lanes are the probe, and a failure trips the
+  breaker at once. A loop restart resets it.
 - **Pool size**: published by the host, so there is nothing to keep in
   step; the router only clamps absurd values.
 - **Partial re-runs** always take the vendor (OR-D6); the runbook states
