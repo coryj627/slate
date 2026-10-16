@@ -295,6 +295,70 @@ private final class CanvasActivationFixture {
     }
 }
 
+/// #1166 (contract 34, "A stale selection survives undo"): a mutation's
+/// reload never leaves the shared selection naming a node the refreshed
+/// outline no longer holds. This scenario runs through the real verbs
+/// and the real funnel rather than the harness's bare applies, because
+/// the defect is the HOST's: core's undo removes the card correctly, and
+/// it was the selection the host kept afterwards that let a verb whose
+/// guard tests the raw selection act on nothing.
+extension CanvasScenarioTests {
+    @MainActor
+    func testUndoingACreateDropsTheSelectionAndDuplicateRefuses() async throws {
+        let tmp = FileManager.default.temporaryDirectory
+            .appendingPathComponent("canvas-undo-create-\(UUID().uuidString)")
+        let vault = tmp.appendingPathComponent("vault")
+        try FileManager.default.createDirectory(at: vault, withIntermediateDirectories: true)
+        defer { try? FileManager.default.removeItem(at: tmp) }
+        try Data(
+            #"{"nodes":[{"id":"a","type":"text","text":"Alpha","x":0,"y":0,"width":200,"height":100}],"edges":[]}"#
+                .utf8
+        ).write(to: vault.appendingPathComponent("board.canvas"))
+        let state = AppState(
+            recentsStore: RecentVaultsStore(fileURL: tmp.appendingPathComponent("recents.json")),
+            externalOpener: { _ in true })
+        state.openVault(at: vault)
+        await state.scanTask?.value
+        state.openFile("board.canvas", target: .currentTab)
+        var heard: [String] = []
+        state.canvasAnnouncer = CanvasAnnouncer(verbosity: .standard, coalesceWindow: 60) {
+            text, _ in heard.append(text)
+        }
+        let doc = try XCTUnwrap(state.activeCanvasDocument)
+
+        // Create a card: the verb selects it and opens its editor, which
+        // the user then closes.
+        state.canvasNewCard()
+        let created = try XCTUnwrap(doc.selection.selected, "a new card is selected")
+        XCTAssertTrue(doc.outline.contains { $0.nodeId == created })
+        state.dismissCanvasCardEditor()
+
+        // Undo it: the card is gone, and so is the selection that named it.
+        state.canvasUndo()
+        XCTAssertFalse(doc.outline.contains { $0.nodeId == created }, "the undo removed the card")
+        XCTAssertNil(
+            doc.selection.selected,
+            "the reload dropped a selection the refreshed outline cannot resolve")
+        XCTAssertEqual(doc.undoStack.map(\.name), [], "the create was the only entry")
+        state.canvasAnnouncer.flushForTests()
+
+        // Duplicate now has nothing selected, and says so with the arm
+        // every selection verb already speaks.
+        let beforeDuplicate = heard.count
+        state.canvasDuplicate()
+        state.canvasAnnouncer.flushForTests()
+        XCTAssertEqual(
+            Array(heard[beforeDuplicate...]),
+            [a11yRender(event: .canvas(event: .canvasStatus(note: .nothingSelected))).text])
+        XCTAssertEqual(Array(heard[beforeDuplicate...]), ["Nothing selected."])
+        XCTAssertEqual(doc.undoStack.map(\.name), [], "a refused duplicate writes no undo entry")
+        XCTAssertFalse(doc.undoStack.contains { $0.name == "duplicate 0 cards" })
+        XCTAssertFalse(
+            heard.contains { $0.contains("Duplicated 0 cards") },
+            "a zero count is never spoken: \(heard)")
+    }
+}
+
 /// The driver's own failure — E18's rules, refused audibly.
 struct CanvasScenarioDriverError: Error {
     let message: String

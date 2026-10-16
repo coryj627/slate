@@ -670,8 +670,6 @@ final class CanvasDocument: ObservableObject {
         viewport.followSelection = true
     }
 
-    /// Refresh outline/table/targets after a committed mutation —
-    /// same fetches as load, but the handle (and stacks) survive.
     /// The funnel's success note: the apply's post-write hash becomes
     /// this document's basis (W6-1 §E TE-0 — the same value core keeps
     /// as the handle's CAS basis, tracked so drafts and history can
@@ -680,6 +678,23 @@ final class CanvasDocument: ObservableObject {
         contentHash = newContentHash
     }
 
+    /// Refresh outline/table/scene/targets after a committed mutation —
+    /// same fetches as load, but the handle (and stacks) survive.
+    ///
+    /// #1166 (contract 34, "A stale selection survives undo"): the
+    /// selection is reconciled against the REFRESHED outline last. A
+    /// mutation that removed the selected node — an undone create, a
+    /// delete — must not leave the shared selection naming it: a verb
+    /// whose guard tests the raw selection would pass while everything
+    /// it resolves against the outline is gone, and Duplicate spoke a
+    /// failure about a node "not found in this canvas" where it owed
+    /// `Nothing selected.`. Windows' funnel does the same (a kept
+    /// selection over a deleted node resolves to no seat). Only an id
+    /// the outline no longer holds is dropped: a node that survives
+    /// keeps its selection, and a verb that seats a node after its own
+    /// apply — a create selecting what it made — runs after this
+    /// reload. Marks are a separate set, read with their own rules by
+    /// the verbs that use them, and are not reconciled here.
     func reloadAfterMutation(session: VaultSession) {
         guard let handle else { return }
         outline = (try? session.canvasOutline(handle: handle)) ?? outline
@@ -689,6 +704,11 @@ final class CanvasDocument: ObservableObject {
             uniqueKeysWithValues: tableRows.map { ($0.nodeId, $0.target) })
         neighborsCache = [:]
         filterMatchCache = nil
+        if let selected = selection.selected,
+            !outline.contains(where: { $0.nodeId == selected })
+        {
+            selection.selected = nil
+        }
     }
 
     /// Release the FFI handle (idempotent).
