@@ -1351,6 +1351,43 @@ Context 'health breaker' {
         $journal.Health.Failures | Should -Be 0
         ($logs -join "`n") | Should -Match 'a runner took its job; 2 failures in a row forgotten'
     }
+    It 'resets once per completed VM, so a teardown that keeps failing cannot hide the failures beside it' {
+        # The reviewer's reproduction: one VM is Off with its job done but
+        # its cache merge throws every tick, so it stays in the journal and
+        # settles again each tick, while the other slot fails provisioning.
+        $world.Queued = @((New-QueuedJob 3 12 'model'))
+        Invoke-OrchestratorTick -Config $config -Journal $journal -Adapters $adapters -Now $t0
+        Invoke-OrchestratorTick -Config $config -Journal $journal -Adapters $adapters -Now $t0.AddSeconds(10)
+        $name = @($journal.Vms.Keys)[0]
+        $journal.Vms[$name].Phase | Should -Be 'handed'
+        Set-DoneJob 3 12 $name 'success'
+        Set-Run 12
+        $world.VmStates[$name] = 'Off'
+        $adapters.CommitCache = { param($lane, $child) & $script:record 'CommitCache' @($lane, $child); throw 'merge failed: disk full' }
+        $adapters.NewVm = $failingNewVm
+        $world.Queued = @((New-QueuedJob 1 10 'app'), (New-QueuedJob 2 11 'rust'), (New-QueuedJob 5 13 'shell'), (New-QueuedJob 6 14 'app' '2026-10-10T12:00:01Z'))
+        $max = 0
+        foreach ($s in 20, 30, 40, 50, 60) {
+            Invoke-OrchestratorTick -Config $config -Journal $journal -Adapters $adapters -Now $t0.AddSeconds($s)
+            $max = [math]::Max($max, [int]$journal.Health.Failures)
+        }
+        $journal.Vms.ContainsKey($name) | Should -BeTrue -Because 'the merge keeps failing'
+        $max | Should -BeGreaterOrEqual 3
+        $journal.PublishedState | Should -Match '"serving":false'
+        # The one reset came before any failure (nothing to forget, no line);
+        # the later ticks settle the same VM again and forget nothing.
+        $journal.Vms[$name].Claimed | Should -BeTrue
+        ([regex]::Matches(($logs -join "`n"), 'a runner took its job')).Count | Should -Be 0
+    }
+    It 'forgets the failures when a foreign job took the runner, which still proves the host works' {
+        $name = & $script:twoFailuresThenAVm 'model'
+        Set-Run 99 'pull_request' 'feature' 'someone/slate'
+        $world.Queued = @((New-QueuedJob 3 12 'model'))
+        $world.InProgress = @([pscustomobject]@{ id = 4; run_id = 99; status = 'in_progress'; labels = @('slate-win-model'); created_at = $t0.ToString('o'); runner_name = $name })
+        Invoke-OrchestratorTick -Config $config -Journal $journal -Adapters $adapters -Now $t0.AddSeconds(30)
+        @($logs) | Should -Contain "[warn] handoff: ${name} runs job 4 of someone/slate (not the trusted repository); forcing it off"
+        $journal.Health.Failures | Should -Be 0
+    }
     It 'serves again fifteen minutes after the last failure, and trips at once on the next one' {
         & $script:tripNow
         $journal.PublishedState | Should -Match '"serving":false'
@@ -1415,11 +1452,19 @@ Context 'health breaker' {
         # Nothing was recorded, so nothing was written: the state is built from the journal, not into it.
         $journal.ContainsKey('Health') | Should -BeFalse
     }
-    It 'treats a hand-edited trip time that does not parse as cooled down, without failing the tick' {
+    It 'treats a hand-edited record that does not parse as healthy, without failing the tick' {
         $journal.Health = @{ Failures = 3; TrippedAt = 'not a time'; LastReason = 'provisioning failed' }
         Invoke-OrchestratorTick -Config $config -Journal $journal -Adapters $adapters -Now $t0
         $journal.PublishedState | Should -Match '"serving":true'
-        ($logs -join "`n") | Should -Not -Match '\[error\]'
+        $journal.Health = @{ Failures = 'many'; TrippedAt = $null }
+        Invoke-OrchestratorTick -Config $config -Journal $journal -Adapters $adapters -Now $t0.AddSeconds(10)
+        $journal.PublishedState | Should -Match '"serving":true'
+        # The next failure counts from one again.
+        $adapters.NewVm = $failingNewVm
+        $world.Queued = @((New-QueuedJob 1 10 'app'))
+        Invoke-OrchestratorTick -Config $config -Journal $journal -Adapters $adapters -Now $t0.AddSeconds(20)
+        $journal.Health.Failures | Should -Be 1
+        ($logs -join "`n") | Should -Not -Match '\[error\] health:'
     }
 }
 

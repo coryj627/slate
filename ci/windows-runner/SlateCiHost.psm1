@@ -234,7 +234,8 @@ function Test-HostServing {
     param([Parameter(Mandatory)]$Config, [Parameter(Mandatory)]$Journal, [Parameter(Mandatory)][datetimeoffset]$Now)
     $health = $Journal['Health']
     if (-not ($health -is [System.Collections.IDictionary]) -or -not $health.Contains('Failures') -or $null -eq $health['Failures']) { return $true }
-    if ([int]$health['Failures'] -lt [int]$Config.BreakerFailures) { return $true }
+    try { $failures = [int]$health['Failures'] } catch { return $true }
+    if ($failures -lt [int]$Config.BreakerFailures) { return $true }
     return (Test-HostCooledDown -Config $Config -Health $health -Now $Now)
 }
 
@@ -246,7 +247,10 @@ function Register-HostFailure {
     [CmdletBinding()]
     param([Parameter(Mandatory)]$Config, [Parameter(Mandatory)]$Journal, [Parameter(Mandatory)][hashtable]$Adapters, [Parameter(Mandatory)][string]$Reason, [Parameter(Mandatory)][datetimeoffset]$Now)
     $health = Get-HostHealth -Journal $Journal
-    $health['Failures'] = [int]$health['Failures'] + 1
+    # A count that does not parse (a hand-edited journal) starts again at one.
+    $count = 0
+    try { $count = [int]$health['Failures'] } catch { $count = 0 }
+    $health['Failures'] = $count + 1
     $health['LastFailureAt'] = $Now.ToString('o')
     $health['LastReason'] = $Reason
     if ([int]$health['Failures'] -lt [int]$Config.BreakerFailures) { return }
@@ -943,8 +947,13 @@ function Complete-ActiveVm {
         }
         return
     }
-    # Whatever the job's conclusion, a runner ran it: the host works.
-    Register-HostSuccess -Journal $Journal -Adapters $Adapters
+    # Whatever the job's conclusion, a runner ran it: the host works. Once
+    # per VM: a teardown that keeps throwing below brings this VM back
+    # every tick, and that must not keep forgetting the failures beside it.
+    if (-not [bool]$vm['Claimed']) {
+        $vm['Claimed'] = $true
+        Register-HostSuccess -Journal $Journal -Adapters $Adapters
+    }
     if ($null -ne $job -and [string]$job.conclusion -eq 'success') {
         try { Register-GoldenAcceptance -Journal $Journal -Adapters $Adapters -Vm $vm } catch { & $Adapters.Log 'warn' "golden: $_" }
     }

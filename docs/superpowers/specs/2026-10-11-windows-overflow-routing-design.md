@@ -65,8 +65,8 @@ job queues home under `home` and `home-only` alike.
 - **OR-D4 A dead or failing host routes away by itself.** The published
   state is stale (its `at` more than 180 s before the routing job's own
   clock), says it is not serving, or offers no slot: every lane goes to
-  the vendor. No run has to strand to discover an outage; a crashed host
-  is stale within three minutes. A host whose loop runs but whose VMs
+  the vendor. No run has to strand to discover a dead host: a crashed
+  one is stale within three minutes. A host whose loop runs but whose VMs
   never come up says it is not serving through a breaker: three discards
   of its own making in a row (a VM it could not provision, hand off or
   hear from, one unclaimed while its job stayed queued, one that died, or
@@ -78,8 +78,8 @@ job queues home under `home` and `home-only` alike.
   a repair; a runner taking its job forgets the failures. The state then
   looks healthy, so the next run routes as usual: its home lanes are the
   probe, and they strand through their retries if the host still fails.
-  No run has to strand to discover a dead host; for a failing one, the
-  first run after the cool-down can. `BreakerFailures` and
+  For a failing host, then, the runs whose lanes trip the breaker and the
+  first run after each cool-down can strand. `BreakerFailures` and
   `BreakerCooldownSeconds` in `config.json`, 3 and 900 when absent. The
   reference for staleness is the router's clock, not
   the run's creation time: GitHub resolves `vars` when the job starts
