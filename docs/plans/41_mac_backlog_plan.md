@@ -6,6 +6,9 @@ lanes run on the Mac Studio, Namespace only as fallback). Owner decisions D1
 to D5 are recorded in §5 and the §6 housekeeping is done. Source: every open
 issue with no milestone (76 on 2026-10-08), read in full and cross-checked
 against `main` at c247b865. No implementation PR has started.
+Delivery specification: `43_mac_backlog_delivery/` (adopted 2026-10-16)
+supersedes §3 with one spec per PR and records decisions D6 to D9; §1,
+§5 and §6 here stay authoritative.
 
 ## 1. Triage
 
