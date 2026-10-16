@@ -244,6 +244,13 @@ final class EmbedViewTests: XCTestCase {
         static let elementLimit = 2_000
         /// The most lines of the searched tree a failure reports.
         static let reportedLines = 120
+
+        /// `deadline` for XCTest's `TimeInterval` waits, fraction of a
+        /// second included.
+        static var deadlineInterval: TimeInterval {
+            let parts = deadline.components
+            return TimeInterval(parts.seconds) + TimeInterval(parts.attoseconds) / 1e18
+        }
     }
 
     private struct ExposedLabels {
@@ -294,8 +301,7 @@ final class EmbedViewTests: XCTestCase {
         window.isReleasedWhenClosed = false
         window.contentView = host
         window.makeKeyAndOrderFront(nil)
-        await fulfillment(
-            of: [appeared], timeout: TimeInterval(HostedWalk.deadline.components.seconds))
+        await fulfillment(of: [appeared], timeout: HostedWalk.deadlineInterval)
         host.layoutSubtreeIfNeeded()
 
         func fail(_ description: String) -> HostedAccessibilityError {
