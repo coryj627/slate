@@ -514,7 +514,8 @@ extension AppState {
     /// Persists by field (contract 35 Term W7; #1218): the three backend
     /// flags of `graphConfig.filters` take the filter handed in — the
     /// reader's own, the changed flag among them — and nothing else does;
-    /// the needle keeps its field (Windows' `SetFilters`).
+    /// the needle keeps its field (Windows' `SetFilters`). It schedules the
+    /// save itself, so a caller adds none.
     func setGraphTableFilter(_ filter: GraphFilter) {
         // A manual filter-bar toggle is the user overriding any preset: drop
         // the preset kind filter so it can't linger as hidden state the
@@ -545,7 +546,8 @@ extension AppState {
     /// and persists ITS field, `graphConfig.filters.nameQuery`, and no other
     /// (contract 35 Term W7, Windows' `SetNameQuery`; #1218), so a needle
     /// typed under a transient preset never carries the preset's flags to
-    /// graph.json. A no-op for the needle already live.
+    /// graph.json. A no-op for the needle already live. It schedules the
+    /// save itself, so a caller adds none.
     func setGraphTableNameQuery(_ raw: String) {
         guard raw != graphTableTextFilter else { return }
         graphTableTextFilter = raw

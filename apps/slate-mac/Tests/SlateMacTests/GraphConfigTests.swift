@@ -1,6 +1,7 @@
 // Copyright (C) 2026 Cory Joseph
 // SPDX-License-Identifier: AGPL-3.0-or-later
 
+import Combine
 import XCTest
 
 @testable import SlateMac
@@ -355,5 +356,25 @@ final class GraphConfigTests: XCTestCase {
             state.graphTableFilter, persisted, "a plain open after the preset re-applies the flags")
         XCTAssertEqual(state.graphTableTextFilter, "a")
         XCTAssertNil(state.graphTableKindFilter, "the preset's overlay is never persisted")
+    }
+
+    /// A trigger publishes `graphConfig` once (#1218's per-field rule). The
+    /// trigger writes its field, and the save folds in only the depth and
+    /// the verbosity, so the save republishes only when one of those moved.
+    /// The diagram rebuilds and re-settles on every publish of the config,
+    /// so a needle keystroke that published twice rebuilt it twice.
+    @MainActor
+    func testATriggerPublishesTheConfigOnce() async throws {
+        let state = try await makeVaultState()
+        var publishes = 0
+        let watch = state.$graphConfig.dropFirst().sink { _ in publishes += 1 }
+        defer { watch.cancel() }
+        state.setGraphTableNameQuery("a")
+        XCTAssertEqual(publishes, 1, "a needle keystroke publishes the config once")
+        state.setGraphTableFilter(
+            GraphFilter(includeAttachments: true, includeGhosts: true, orphansOnly: false))
+        XCTAssertEqual(publishes, 2, "a flag change publishes it once")
+        state.setConnectionsDepth(2)
+        XCTAssertEqual(publishes, 3, "a depth change publishes the fold once")
     }
 }

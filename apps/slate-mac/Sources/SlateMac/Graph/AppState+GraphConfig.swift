@@ -97,8 +97,11 @@ extension AppState {
     func scheduleGraphConfigSave() {
         guard let root = currentVaultURL, graphConfigVaultURL == root, graphConfigWritable
         else { return }
-        graphConfig = graphConfigSaveAggregate()
-        let snapshot = graphConfig
+        // The trigger already wrote its field, so the fold changes the
+        // config only when the depth or the verbosity moved — and only then
+        // is it republished (the diagram rebuilds on every publish).
+        let snapshot = graphConfigSaveAggregate()
+        if snapshot != graphConfig { graphConfig = snapshot }
         // Coalesce ONLY this vault's still-pending save (per-vault keyed);
         // a pending save for a DIFFERENT vault keeps its own entry and runs
         // to completion, so a fast vault switch loses no edit and no stale
