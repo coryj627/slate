@@ -16595,9 +16595,9 @@ final class AppState: ObservableObject {
             else { return }
             switch outcome {
             case .success(let caveat):
-                // The landed arm finishes exactly as a committed create: the
-                // refresh's scan indexes the note, so its row and the rename
-                // hand-off land as usual; the caveat follows the sentence.
+                // The landed arm finishes as a committed create, its caveat
+                // after the sentence. The refresh is a scan, which normally
+                // indexes the landed note, so its row and the rename land.
                 await refresher(self)
                 guard !Task.isCancelled,
                     self.ownsStructuralMutation(token, session: session)
@@ -16607,9 +16607,15 @@ final class AppState: ObservableObject {
                     path,
                     target: .currentTab,
                     advancesSidebarSelectionRevision: false)
-                // Drop the user straight into renaming the fresh note's title.
-                self.installRenameForCreatedEntry(
-                    path: path, isDirectory: false, session: session)
+                // Drop the user straight into renaming the fresh note's title
+                // — on the landed arm only once the refresh indexed it: a
+                // rename owner with no row to render on would strand
+                // invisibly and switch off the tree's key handling until
+                // something cleared it.
+                if caveat == nil || self.files.contains(where: { $0.path == path }) {
+                    self.installRenameForCreatedEntry(
+                        path: path, isDirectory: false, session: session)
+                }
                 self.postMutationAnnouncement(
                     "Created note \((path as NSString).lastPathComponent).")
                 if let caveat { self.postMutationAnnouncement(caveat) }

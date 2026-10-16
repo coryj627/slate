@@ -338,6 +338,37 @@ extension CreateNoteRaceTests {
         XCTAssertNil(state.lastError)
     }
 
+    /// When the funnel's refresh does not index the landed note either (a
+    /// persistent index failure, here a refresh that does nothing), the
+    /// create still finishes as one, but the rename hand-off waits: a rename
+    /// owner with no row to render on would strand invisibly and switch off
+    /// the tree's keys.
+    func testAnUnindexedUntitledCreateTheRefreshCannotIndexStagesNoRename() async throws {
+        let folder = "landed-\(UUID().uuidString)"
+        let (state, dir) = try await openVault { dir in
+            try FileManager.default.createDirectory(
+                at: dir.appendingPathComponent(folder), withIntermediateDirectories: true)
+        }
+        state.structuralBatchRefreshRunner = { _ in }
+        let path = "\(folder)/Untitled.md"
+        let (subscription, sentences) = recordMutationSentences(state)
+        defer { subscription.cancel() }
+
+        await AfterWriteFault.during(folder) {
+            await state.createNote(in: folder)?.value
+        }
+
+        XCTAssertTrue(
+            FileManager.default.fileExists(atPath: dir.appendingPathComponent(path).path))
+        XCTAssertEqual(
+            sentences(),
+            ["Created note Untitled.md.", AfterWriteFault.caveat(for: "Untitled.md")])
+        XCTAssertEqual(state.selectedFilePath, path)
+        XCTAssertFalse(state.files.contains { $0.path == path }, "the index never learned it")
+        XCTAssertNil(state.renamingNode, "no rename owner without a row to render on")
+        XCTAssertNil(state.lastError)
+    }
+
     /// The folder note (`createFolderNote(at:)`, FL6-1 rule 4).
     func testAnUnindexedFolderNoteCreateFinishesAsACreate() async throws {
         let folder = "Project-\(UUID().uuidString)"
