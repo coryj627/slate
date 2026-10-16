@@ -376,5 +376,12 @@ final class GraphConfigTests: XCTestCase {
         XCTAssertEqual(publishes, 2, "a flag change publishes it once")
         state.setConnectionsDepth(2)
         XCTAssertEqual(publishes, 3, "a depth change publishes the fold once")
+        // The verbosity is folded from the announcer until its setter writes
+        // the field (#1216).
+        state.graphAnnouncer.verbosity = .verbose
+        state.scheduleGraphConfigSave()
+        XCTAssertEqual(publishes, 4, "a verbosity change publishes the fold once")
+        state.scheduleGraphConfigSave()
+        XCTAssertEqual(publishes, 4, "a save with nothing new to fold publishes nothing")
     }
 }
