@@ -284,6 +284,16 @@ def _first_clause(head_line: str) -> str:
     return clause[:140] + ("…" if len(clause) > 140 else "")
 
 
+# Divergences a later PR closed on the host that diverged, by id: the index
+# row carries the closure after where the divergence is recorded, so the
+# register reads closed without re-writing the owner-recorded record itself.
+CLOSED = {
+    "CD-30": "**closed on mac** by #1168 (plan 43 PR 2): mac's outline row Name spells `speakable_name` too",
+    "CD-36": "**closed on mac** by #1170 (plan 43 PR 2): mac's image hint is Windows' sentence, \"Opens the media file in its default app.\"",
+    "CD-38": "**closed on mac** by #1169 (plan 43 PR 2): mac opens a non-Markdown file card only when core classifies it as media, and refuses the rest with `CanvasBlocked/FileTypeNotOpenable`, never reaching the opener",
+}
+
+
 def register_index(doc: str, prefix: str, ident_prefix: str, where: str) -> tuple[str, int]:
     text, base = section_text(doc, prefix)
     rows = ["| Id | Head | Recorded |", "|---|---|---|"]
@@ -291,7 +301,8 @@ def register_index(doc: str, prefix: str, ident_prefix: str, where: str) -> tupl
     for m in re.finditer(r"^\*\*(" + ident_prefix + r"-\d+) — ", text, re.M):
         head = text[m.start():m.start() + 400].replace(NL, " ")
         line = doc.count(NL, 0, base + m.start()) + 1
-        rows.append(f"| {m.group(1)} | {_first_clause(head)} | {where}, line {line} |")
+        closed = f"; {CLOSED[m.group(1)]}" if m.group(1) in CLOSED else ""
+        rows.append(f"| {m.group(1)} | {_first_clause(head)} | {where}, line {line}{closed} |")
         n += 1
     return NL.join(rows), n
 
@@ -300,7 +311,7 @@ DECISION_EVIDENCE = {
     "D-1": "Held: §W-G's register closed in PR H (TH-7) — no reading-order, containment, placement or phrasing math in the Windows canvas; the two demotions recorded as divergences (HD-D3).",
     "D-2": "Held: `whereAmI` = Ctrl+Alt+Shift+I and `connectTo` = Ctrl+Alt+C in `chords.json` with delivery evidence; `ChordsJson_IsExactlyTheTablesProjection` pins the projection (TH-9).",
     "D-3": "Settled in 0b-1's second branch: ordinals renumber on delete identically on both hosts (CD-20).",
-    "D-4": "Action performed: the mac issue is filed (the mac list below, item 1); Windows offers no Color Marked row — the registry is the parity.",
+    "D-4": "Action performed: the mac issue is filed (the mac list below, item 1). Windows' Color Marked row landed with §G (GD-5); mac registered the same id, `slate.canvas.colorMarked`, with #1165 (plan 43 PR 2) — a shared registry row now, so Windows ships it as parity. The registry is the parity.",
     "D-5": "Held: the identical placeholder formula on both hosts, host-designated (PR F's resize preset facts).",
     "D-6": "Held: Ctrl+Z / Ctrl+Y on the canvas domain (`CanvasUndo` / `CanvasRedo` rows in `chords.json`; the E2E undo chain, TH-0).",
     "D-7": "Held: Windows Voice Access (\"show numbers\") is the recorded twin in the AT checklist's row 6, Narrator smoke only (TH-10).",

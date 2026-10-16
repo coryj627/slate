@@ -39,11 +39,11 @@ final class CanvasOutlineTests: XCTestCase {
         ]}
         """
 
-    private func makeState() async throws -> AppState {
+    private func makeState(canvas: String = CanvasOutlineTests.sample) async throws -> AppState {
         let vault = tempDir.appendingPathComponent("vault-\(UUID().uuidString)")
         try FileManager.default.createDirectory(
             at: vault.appendingPathComponent("notes"), withIntermediateDirectories: true)
-        try Data(Self.sample.utf8).write(to: vault.appendingPathComponent("board.canvas"))
+        try Data(canvas.utf8).write(to: vault.appendingPathComponent("board.canvas"))
         try Data("---\ntitle: Target Note\n---\n# Details\n".utf8)
             .write(to: vault.appendingPathComponent("notes/target.md"))
         let store = RecentVaultsStore(
@@ -155,6 +155,59 @@ final class CanvasOutlineTests: XCTestCase {
         guard case .markdown = state.workspace.activeTab?.item else {
             return XCTFail("expected a markdown tab after file-card activation")
         }
+    }
+
+    // MARK: - Plan 43 PR 2: the media hint (#1170, CD-36), the row name (#1168, CD-30)
+
+    /// The image row's hint says what activation does, byte-identical to
+    /// Windows' `CanvasPhrase.ActivationHint("image")`; the rest of the
+    /// shared inventory is pinned beside it so the two hosts keep one.
+    func testTheImageCardHintSaysItOpensTheMediaFileInItsDefaultApp() {
+        XCTAssertEqual(
+            CanvasOutlineView.activationHint(kind: "image"),
+            "Opens the media file in its default app.")
+        XCTAssertEqual(
+            CanvasOutlineView.activationHint(kind: "group"),
+            "Group. Cards inside follow in the outline.")
+        XCTAssertEqual(CanvasOutlineView.activationHint(kind: "text"), "Opens the card text.")
+        XCTAssertEqual(
+            CanvasOutlineView.activationHint(kind: "file"), "Opens the note in this tab.")
+        XCTAssertEqual(
+            CanvasOutlineView.activationHint(kind: "link"), "Opens the link in your browser.")
+    }
+
+    /// Two cards titled alike are two rows with two names: the label is
+    /// built from core's `speakableName` — the spelling the visual
+    /// board's peers already carry — so a dictated "click Research 2"
+    /// has exactly one target on every surface (t0 §4).
+    func testTwoCardsTitledAlikeCarryDistinctLabelsBuiltFromSpeakableName() async throws {
+        let state = try await makeState(
+            canvas: """
+                {"nodes":[
+                {"id":"r1","type":"text","text":"# Research","x":0,"y":0,"width":200,"height":100},
+                {"id":"r2","type":"text","text":"Research","x":0,"y":140,"width":200,"height":100}
+                ],"edges":[]}
+                """)
+        state.openFile("board.canvas", target: .currentTab)
+        let doc = state.canvasDocument(for: "board.canvas")
+        let first = try XCTUnwrap(doc.outline.first { $0.nodeId == "r1" })
+        let second = try XCTUnwrap(doc.outline.first { $0.nodeId == "r2" })
+
+        // The premise: the TITLES collide.
+        XCTAssertEqual(first.title, "Research")
+        XCTAssertEqual(second.title, "Research")
+        // Core's spelling: a free name verbatim, the repeat ordinal'd.
+        XCTAssertEqual(first.speakableName, "Research")
+        XCTAssertEqual(second.speakableName, "Research 2")
+
+        XCTAssertEqual(CanvasOutlineView.rowLabel(first), "Text card \"Research\"")
+        XCTAssertEqual(CanvasOutlineView.rowLabel(second), "Text card \"Research 2\"")
+        XCTAssertEqual(
+            Set(doc.outline.map(CanvasOutlineView.rowLabel)).count, doc.outline.count,
+            "no two outline rows share a name")
+        // The same spelling the renderer's peers read.
+        XCTAssertEqual(
+            doc.scene.nodes.first { $0.nodeId == "r2" }?.speakableName, second.speakableName)
     }
 
     // MARK: - #861: Return activates the selected outline row

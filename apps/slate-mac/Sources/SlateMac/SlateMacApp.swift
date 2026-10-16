@@ -665,6 +665,26 @@ struct SlateMacApp: App {
                 .keyboardShortcut("m", modifiers: [.control, .command])
                 .disabled(appState.activeCanvasDocument == nil)
 
+                // #1165 (W6-1 D-4): Color Marked's menu home beside the
+                // mark verb — the registry row's front door, opening the
+                // same color sheet over the marked set the palette row
+                // opens. No chord (mac allocates none to the marked-set
+                // verbs). Enablement is the canvas verbs' own; with
+                // nothing marked the verb says so rather than going
+                // silently dim on a set this menu does not observe.
+                Button("Canvas: Color Marked Cards…") {
+                    appState.canvasPromptColorMarked()
+                }
+                .disabled(
+                    appState.activeCanvasDocument == nil
+                        || appState.activeCanvasMutationDisabledReason != nil)
+                .accessibilityHint(
+                    appState.activeCanvasMutationDisabledReason
+                        ?? "Set every marked card’s color at once.")
+                .help(
+                    appState.activeCanvasMutationDisabledReason
+                        ?? "Set every marked card’s color at once.")
+
                 Button("Canvas: Create Connected Card") {
                     appState.canvasCreateConnectedCard()
                 }
