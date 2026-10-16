@@ -6179,14 +6179,28 @@ impl VaultSession {
     /// `FullNote` or `Section` resolution are pre-resolved up to
     /// `MAX_EMBED_DEPTH` (3) so the UI doesn't have to track
     /// recursion itself.
+    ///
+    /// Cancellable like [`Self::resolve_embed_preview`] (locked decision
+    /// 05 §4; #1287, contract 40 AR-24): `cancel` is the caller's batch or
+    /// request token, polled before each node, each nested embed, each
+    /// read and each connection wait, so a walk whose note went away stops
+    /// at its next node and returns `VaultError::Cancelled` — never a
+    /// partial result. A pre-cancelled token touches nothing.
     pub fn resolve_embed(
         &self,
         host_path: &str,
         target: &str,
         alt: Option<String>,
+        cancel: &CancelToken,
     ) -> Result<crate::EmbedResolution, VaultError> {
+        cancel.check()?;
         let mut budget = crate::embeds::EmbedResolveBudget::Unlimited;
-        self.resolve_embed_at_depth(host_path, target, 0, alt, &mut budget, &CancelToken::new())
+        let resolution =
+            self.resolve_embed_at_depth(host_path, target, 0, alt, &mut budget, cancel)?;
+        // A cancel that landed during the last read is still a cancel: the
+        // result is never handed back (the #1279 preview contract).
+        cancel.check()?;
+        Ok(resolution)
     }
 
     /// Resolve an editor popover preview under a shared text/node/image budget.
