@@ -21,7 +21,8 @@ $script:GhLowBudgetWarnedReset = $null
 # logs it at info. Invoke-GhApi reports a GET that needed a retry through it.
 $script:GhRetryNotice = $null
 # A GET that fails at the connection level is tried again after each of
-# these waits, in seconds: three attempts in all, under the 10 s tick.
+# these waits, in seconds: three attempts in all; the waits add 3 s to a
+# tick, and a fast failure's own time is bounded below.
 # Only a fast failure is: an attempt that ran this long or longer before
 # failing (a connect that Windows gives up after 21 s, a DNS resolver that
 # times out) is not waited for three times over.

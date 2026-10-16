@@ -1536,8 +1536,9 @@ and `"status": "401"`. Rotate it before then.
   `… The response ended prematurely`, `… No connection could be made …`
   or `… No such host is known` means the attempts failed in a row (three
   fast ones, or one that took 5 s or longer to fail, such as a connect
-  Windows gives up after 21 s): that tick admits nothing and publishes
-  nothing, and the next tick tries afresh. Many of either close together
+  Windows gives up after 21 s with `A connection attempt failed because
+  the connected party did not properly respond …`): that tick admits
+  nothing and publishes nothing, and the next tick tries afresh. Many of either close together
   point at the host's network (see "Host reboot or Windows Update").
   Only GETs are retried: a repeated `generate-jitconfig` would register a
   second runner; the variable write retries after a minute by itself, and
