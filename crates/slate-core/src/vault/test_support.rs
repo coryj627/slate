@@ -15,6 +15,15 @@ use windows_sys::Win32::Storage::FileSystem::{
     FILE_SHARE_DELETE, FILE_SHARE_READ, FILE_SHARE_WRITE, FILE_WRITE_ATTRIBUTES,
 };
 
+/// `IO_REPARSE_TAG_MOUNT_POINT` (MS-FSCC 2.1.2.1): a junction. These two are
+/// named here rather than by enabling more `windows-sys` features for test
+/// constants.
+const IO_REPARSE_TAG_MOUNT_POINT: u32 = 0xA000_0003;
+
+/// `FSCTL_SET_REPARSE_POINT` (MS-FSCC 2.3.65), the control code that writes
+/// the reparse buffer.
+const FSCTL_SET_REPARSE_POINT: u32 = 0x0009_00A4;
+
 /// Convert the empty directory `path` into a junction (a mount-point reparse
 /// point) to `target`, through a handle that holds only attribute access, as
 /// an unprivileged writer can.
@@ -36,7 +45,7 @@ pub(super) fn junction(path: &Path, target: &Path) {
     let print_len = printable.len() * 2;
     let mut buffer = vec![0u8; 16 + sub_len + 2 + print_len + 2];
     let data_len = (buffer.len() - 8) as u16;
-    buffer[0..4].copy_from_slice(&0xa0000003u32.to_le_bytes());
+    buffer[0..4].copy_from_slice(&IO_REPARSE_TAG_MOUNT_POINT.to_le_bytes());
     buffer[4..6].copy_from_slice(&data_len.to_le_bytes());
     buffer[10..12].copy_from_slice(&(sub_len as u16).to_le_bytes());
     buffer[12..14].copy_from_slice(&((sub_len + 2) as u16).to_le_bytes());
@@ -51,11 +60,11 @@ pub(super) fn junction(path: &Path, target: &Path) {
     }
     let mut returned = 0;
     // SAFETY: live handle, initialized mount-point reparse buffer, synchronous
-    // call, no output buffer. FSCTL_SET_REPARSE_POINT from MS-FSCC.
+    // call, no output buffer.
     let result = unsafe {
         windows_sys::Win32::System::IO::DeviceIoControl(
             file.as_raw_handle(),
-            0x000900a4,
+            FSCTL_SET_REPARSE_POINT,
             buffer.as_ptr().cast(),
             buffer.len() as u32,
             std::ptr::null_mut(),
