@@ -35,6 +35,7 @@ final class MenusObservabilityTests: XCTestCase {
 
         _ = SidebarNavigationMenuItems(appState: state).body
         _ = SidebarSortMenu(appState: state).body
+        _ = GraphMenu(appState: state).body
     }
 
     // MARK: - #868: the workspace → appState bridge
