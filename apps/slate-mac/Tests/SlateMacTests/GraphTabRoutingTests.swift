@@ -482,6 +482,10 @@ final class GraphTabRoutingTests: XCTestCase {
             await withCheckedContinuation { entranceWaiters.append($0) }
         }
 
+        /// Whether a caller has reached the gate — what the BOUNDED
+        /// entrance wait (`awaitEntrance`) polls.
+        var hasEntered: Bool { entered }
+
         func release() {
             released = true
             releaseWaiter?.resume()
@@ -497,6 +501,36 @@ final class GraphTabRoutingTests: XCTestCase {
             state.graphTableSnapshot != nil && !state.graphTableLoading
                 && state.graphTablePublishedRequest == state.graphTableRequest
         }
+    }
+
+    private struct GateNeverReached: Error, CustomStringConvertible {
+        let description: String
+    }
+
+    /// The BOUNDED wait for a gate's entrance (contract 35 TGC-17, TGC-19):
+    /// a fact parked on a gate the design never reaches fails here in
+    /// seconds instead of holding the swift lane, which an unbounded
+    /// `waitUntilEntered()` did for five hours (TGC-17). Every fact D1
+    /// rewrote or added waits through this.
+    private func awaitEntrance(
+        _ gate: AsyncGate, _ what: String, timeout: TimeInterval = 5
+    ) async throws {
+        let deadline = Date().addingTimeInterval(timeout)
+        while !(await gate.hasEntered) {
+            guard Date() < deadline else {
+                XCTFail("\(what): the gate was never reached within \(timeout)s")
+                throw GateNeverReached(description: what)
+            }
+            try await Task.sleep(nanoseconds: 20_000_000)
+        }
+    }
+
+    /// A snapshot no vault produced: a candidate a stale pair could carry,
+    /// at `generation`, so an install of it would show by value.
+    private static func candidateSnapshot(generation: UInt64) -> GraphSnapshot {
+        GraphSnapshot(
+            nodes: [], edges: [], generation: generation, audioSummary: "",
+            summaryCounts: GraphSnapshotCounts(notes: 0, links: 0, orphans: 0, unresolved: 0, filtered: false))
     }
 
     /// C-2 (i): after a preset's own field writes the ONE composed-query
@@ -642,63 +676,159 @@ final class GraphTabRoutingTests: XCTestCase {
             "a superseded rows failure spoke: \(posts)")
     }
 
-    /// IPG-9 (rule Q, Terms Q2/Q7; C-2 (iii)): a pair superseded by a ROWS
-    /// request installs its snapshot only while those rows are UNANSWERED.
-    /// The rule is read off `pairResultInstalls` rather than driven end to
-    /// end: the interleaving needs the vault to move while the pair is still
-    /// to fetch, and a moving vault wakes the event listener's own refresh,
-    /// whose load supersedes the pair before it can arrive — the same reason
-    /// `shouldRefreshGraphTable` is extracted.
-    func testASupersededPairInstallsOnlyWhileTheNewerRequestIsUnanswered() async throws {
+    /// D1 (contract 35 TGC-19; A-2 (i)): a PAIR whose token is no longer the
+    /// current one installs NOTHING — no snapshot, no filter, no seen
+    /// generation — whatever became of the request that superseded it:
+    /// still unanswered, published, or failed. The three arrangements are
+    /// IPG-9's and IPG-29's. They pinned the pair-first exception D1 retires
+    /// (a superseded pair installing while the newer request was
+    /// unanswered), under the name
+    /// testASupersededPairInstallsOnlyWhileTheNewerRequestIsUnanswered; they
+    /// assert the rule now, under its name. The superseded pair is handed to
+    /// the receiver directly, carrying a candidate from a NEWER generation so
+    /// that an install would show by value: arranging it end to end needs
+    /// the vault to move while the pair is still to fetch, and a vault that
+    /// moves wakes the event listener's own refresh, whose load supersedes
+    /// the pair before it can arrive.
+    func testASupersededPairInstallsNothing() async throws {
         let state = try await makeAppState()
         try await openQuiescentGraph(state)
-        let answered = try XCTUnwrap(state.graphTableRequest)
-        // The CURRENT token installs, as every quiescent publication does.
-        XCTAssertTrue(
-            state.pairResultInstalls(
-                token: GraphTableToken(request: answered, seq: state.graphTableSeq)))
-        let stale = GraphTableToken(request: answered, seq: state.graphTableSeq)
+        let seen = state.graphTableSeenGraphGeneration
+        let stale = GraphTableToken(request: try XCTUnwrap(state.graphTableRequest), seq: state.graphTableSeq)
+        let candidate = Self.candidateSnapshot(generation: seen &+ 7)
+        let candidateRows = GraphTableRows(generation: seen &+ 7, total: 0, rows: [])
+        var installs: [GraphTablePublication] = []
+        let watch = state.$graphTablePublication.dropFirst().sink { installs.append($0) }
+        defer { watch.cancel() }
 
-        // A needle issued and PARKED: the newer request is unanswered, so the
-        // superseded pair may still install — C-2 (iii)'s pair-first order.
+        // (1) A needle issued and PARKED: the newer request is unanswered —
+        // the case C-2 (iii)'s pair-first order let a superseded pair install
+        // in (IPG-9).
         let gate = AsyncGate()
         state.graphTableRowsPublishGate = { _ in await gate.suspend() }
         state.graphTableTextFilter = "a"
         state.requestGraphTableRowsIfQueryChanged()
-        await gate.waitUntilEntered()
+        try await awaitEntrance(gate, "the needle's rows")
         XCTAssertNotEqual(stale.seq, state.graphTableSeq, "the needle issued its own token")
         XCTAssertNotEqual(
-            state.graphTablePublishedRequest, state.graphTableRequest,
-            "the needle has not published while it is parked")
-        XCTAssertTrue(state.pairResultInstalls(token: stale), "pair-first must still install")
-
-        // Released and published: the same superseded pair now installs
-        // nothing, so the seen mark stays where the probe can repair from.
-        await gate.release()
-        state.graphTableRowsPublishGate = nil
-        try await pollUntil { state.graphTablePublishedRequest == state.graphTableRequest }
+            state.graphTableAnsweredSeq, state.graphTableSeq, "the needle is unanswered while it is parked")
+        let parked = state.graphTablePublication
         XCTAssertFalse(
-            state.pairResultInstalls(token: stale),
-            "a superseded pair installed over an answered request")
+            state.receiveGraphTablePair(token: stale, snapshot: candidate, rows: candidateRows),
+            "a superseded pair published while the newer request was unanswered")
+        XCTAssertEqual(installs, [], "a superseded pair assigned the record while the newer request was unanswered")
+        XCTAssertEqual(state.graphTablePublication, parked)
+        XCTAssertEqual(state.graphTableSeenGraphGeneration, seen, "a superseded pair moved the seen mark")
 
-        // ANSWERED covers a FAILURE too (IPG-29): a rows request that failed
-        // never publishes, so `graphTablePublishedRequest` stays behind the
-        // current request for ever — which read as "still pending" and let a
-        // superseded pair install its authority over the rows the failure had
-        // left standing.
-        let answeredAfterSuccess = state.graphTableAnsweredSeq
+        // (2) Released and published.
+        state.graphTableRowsPublishGate = nil
+        await gate.release()
+        try await pollUntil { state.graphTablePublishedRequest == state.graphTableRequest }
+        let published = state.graphTablePublication
+        installs.removeAll()
+        XCTAssertFalse(
+            state.receiveGraphTablePair(token: stale, snapshot: candidate, rows: candidateRows),
+            "a superseded pair published over an answered request")
+        XCTAssertEqual(installs, [], "a superseded pair assigned the record over an answered request")
+        XCTAssertEqual(state.graphTablePublication, published)
+        XCTAssertEqual(state.graphTableSeenGraphGeneration, seen)
+
+        // (3) A newer request that FAILED (IPG-29): it never publishes, so
+        // the published request trails the current one for ever — which once
+        // read as "still pending" and let a superseded pair install.
         state.graphTableRowsFailureForTests = .Io(message: "disk gone")
         state.graphTableTextFilter = "ab"
         state.requestGraphTableRowsIfQueryChanged()
-        try await pollUntil { state.graphTableAnsweredSeq != answeredAfterSuccess }
         state.graphTableRowsFailureForTests = nil
+        try await pollUntil { state.graphTableAnsweredSeq == state.graphTableSeq }
         XCTAssertNotEqual(
-            state.graphTablePublishedRequest, state.graphTableRequest,
-            "the failed request never published, which is the trap")
-        XCTAssertEqual(state.graphTableAnsweredSeq, state.graphTableSeq, "the failure answered it")
+            state.graphTablePublishedRequest, state.graphTableRequest, "the failed request never published")
+        let failedOver = state.graphTablePublication
+        installs.removeAll()
         XCTAssertFalse(
-            state.pairResultInstalls(token: stale),
-            "a superseded pair installed after the newer request FAILED")
+            state.receiveGraphTablePair(token: stale, snapshot: candidate, rows: candidateRows),
+            "a superseded pair published after the newer request FAILED")
+        XCTAssertEqual(installs, [], "a superseded pair assigned the record after the newer request failed")
+        XCTAssertEqual(state.graphTablePublication, failedOver)
+        XCTAssertEqual(state.graphTableSeenGraphGeneration, seen)
+    }
+
+    /// IPG-15 (#1189), the mixed publication, under D1 (contract 35 TGC-19):
+    /// a pair superseded by a ROWS request, then that request FAILING. The
+    /// pair-first install put the pair's snapshot and its seen generation in
+    /// place while the rows were unanswered, and the failure arm undid
+    /// nothing — old rows under a new authority, the published request
+    /// trailing the current one, Where-am-I unavailable and the probe with
+    /// nothing to repair. Now the superseded pair installs nothing, the
+    /// failure rolls the pending sort back and answers the request, and the
+    /// old publication stands WHOLE, so the readback — which reads the held
+    /// publication — answers over it. The failing request is a SORT: a
+    /// needle would move the live query, and a cached row then rightly
+    /// cannot answer (testTheSoleCachedRowCannotAnswerAChangedLiveQueryOrFailedRequest).
+    func testARowsFailureAfterASupersededPairLeavesTheOldPublicationWholeAndWhereAmIAnswers() async throws {
+        let state = try await makeAppState()
+        try await openQuiescentGraph(state)
+        let before = state.graphTablePublication
+        let seen = state.graphTableSeenGraphGeneration
+        XCTAssertNotNil(state.graphDiagramWhereAmIEvent(), "quiescent, the readback answers")
+        var posts: [String] = []
+        state.graphAnnouncer = GraphAnnouncer(post: { text, _ in posts.append(text) })
+        var installs: [GraphTablePublication] = []
+        let watch = state.$graphTablePublication.dropFirst().sink { installs.append($0) }
+        defer { watch.cancel() }
+
+        // A: a refresh pair, held at its gate.
+        let pairGate = AsyncGate()
+        state.graphTablePublishGate = { _ in await pairGate.suspend() }
+        state.loadGraphTable(announce: .silent)
+        let pairSeq = state.graphTableSeq
+        try await awaitEntrance(pairGate, "the refresh pair")
+        state.graphTablePublishGate = nil
+        // B: a sort that supersedes it and will FAIL, held at its gate.
+        let byNote = GraphTableSort(column: .note, ascending: true)
+        XCTAssertNotEqual(byNote, state.graphTableSort)
+        let rowsGate = AsyncGate()
+        state.graphTableRowsPublishGate = { _ in await rowsGate.suspend() }
+        state.graphTableRowsFailureForTests = .Io(message: "disk gone")
+        state.setGraphTableSort(byNote)
+        state.graphTableRowsFailureForTests = nil
+        XCTAssertNotEqual(state.graphTableSeq, pairSeq, "the sort superseded the pair")
+        XCTAssertEqual(state.graphTableRequestedSort, byNote, "the sort is pending")
+        try await awaitEntrance(rowsGate, "the failing sort's rows")
+        state.graphTableRowsPublishGate = nil
+
+        // The superseded pair lands first, while the sort is unanswered: it
+        // installs NOTHING (the pair-first install IPG-15 needed is gone).
+        await pairGate.release()
+        try await pollUntil { !state.graphTableLoading }
+        XCTAssertEqual(installs, [], "the superseded pair installed: \(installs)")
+        XCTAssertEqual(state.graphTableSeenGraphGeneration, seen, "the superseded pair moved the seen mark")
+
+        // The sort fails.
+        await rowsGate.release()
+        try await pollUntil { state.graphTableAnsweredSeq == state.graphTableSeq }
+        state.graphAnnouncer.flushForTests()
+        XCTAssertNil(state.graphTableRequestedSort, "the failure rolled the pending sort back")
+        XCTAssertEqual(state.graphTableSort, before.sort, "the accepted sort stands")
+        // The OLD publication stands whole: its authority, its rows, the
+        // request they answer — and the seen mark the probe repairs from.
+        XCTAssertEqual(state.graphTableSnapshot, before.snapshot)
+        XCTAssertEqual(state.graphTableSnapshotFilter, before.filter)
+        XCTAssertEqual(state.graphTablePublication.generation, before.generation)
+        XCTAssertEqual(state.graphTableRows, before.rows)
+        XCTAssertEqual(state.graphTableTotal, before.total)
+        XCTAssertEqual(state.graphTablePublishedRequest, before.request)
+        XCTAssertEqual(state.graphTableSeenGraphGeneration, seen)
+        XCTAssertNil(state.graphTableError, "a rows failure installs no error")
+        XCTAssertEqual(installs.count, 1, "one assignment, the failure's answer: \(installs)")
+        // …and Where-am-I answers over it (Term Q7): quiescent, a snapshot
+        // held, its rows the live query's.
+        XCTAssertNotNil(
+            state.graphDiagramWhereAmIEvent(), "the readback stayed unavailable over the standing publication")
+        // Speak only what published: the superseded pair said nothing, the
+        // failure its block once.
+        XCTAssertEqual(posts.filter { $0.hasPrefix("Couldn't load the graph") }.count, 1, "\(posts)")
+        XCTAssertFalse(posts.contains { $0.contains("shown") }, "\(posts)")
     }
 
     /// IPG-31's reachable half: a CURRENT rows publish answers the error a
@@ -741,6 +871,107 @@ final class GraphTabRoutingTests: XCTestCase {
                 event: .graphFilterCount(
                     shown: UInt32(state.graphTableRows.count), total: UInt32(state.graphTableTotal))))
         XCTAssertEqual(posts, [expected.text], "recovery speaks the current count exactly once")
+    }
+
+    /// #1190 under D1 (contract 35 TGC-19; A-2's rows-only arm): a CURRENT
+    /// rows result with no authority held — before the first pair has
+    /// landed, or after a failed pair dropped it — never publishes. The
+    /// receiver used to admit it and then ask for a snapshot back (IPG-36);
+    /// it re-fetches as a PAIR under the rows' own request instead, and that
+    /// pair's install is the ONE record observed: a snapshot with the
+    /// needle's rows, the count spoken once and no summary.
+    func testARowsResultWithNoHeldSnapshotRefetchesAsAPair() async throws {
+        for afterFailure in [false, true] {
+            let order = afterFailure ? "after a failed pair" : "before the first pair"
+            let state = try await makeAppState()
+            let firstPair = AsyncGate()
+            if afterFailure {
+                try await openQuiescentGraph(state)
+                state.graphTableLoadFailureForTests = .Io(message: "disk gone")
+                state.loadGraphTable(announce: .silent)
+                state.graphTableLoadFailureForTests = nil
+                try await pollUntil { !state.graphTableLoading && state.graphTableAnsweredSeq == state.graphTableSeq }
+                XCTAssertNotNil(state.graphTableError, order)
+            } else {
+                // The graph opens with its first pair held: nothing has published.
+                state.graphTablePublishGate = { _ in await firstPair.suspend() }
+                state.openGraphTab()
+                try await awaitEntrance(firstPair, "\(order): the first pair")
+                state.graphTablePublishGate = nil
+            }
+            XCTAssertNil(state.graphTableSnapshot, "\(order): no authority is held")
+            var posts: [String] = []
+            state.graphAnnouncer = GraphAnnouncer(post: { text, _ in posts.append(text) })
+            var installs: [GraphTablePublication] = []
+            let watch = state.$graphTablePublication.dropFirst().sink { installs.append($0) }
+
+            state.graphTableTextFilter = "a"
+            state.requestGraphTableRowsIfQueryChanged()
+            let needle = try XCTUnwrap(state.graphTableRequest)
+            try await pollUntil { !state.graphTableLoading && state.graphTablePublishedRequest == needle }
+            state.graphAnnouncer.flushForTests()
+            watch.cancel()
+            // Everything below holds while the first pair (if any) is still
+            // held: it is stale by then, and released only at the end.
+            XCTAssertEqual(installs.count, 1, "\(order): one install, the pair's: \(installs)")
+            XCTAssertNotNil(installs.first?.snapshot, "\(order): rows published with no authority behind them")
+            XCTAssertEqual(installs.first?.request, needle, "\(order): the pair answers the needle's request")
+            XCTAssertEqual(state.graphTableRows.map(\.label), ["a"], order)
+            XCTAssertNil(state.graphTableError, "\(order): the pair's install answers the error")
+            XCTAssertNotNil(state.graphDiagramWhereAmIEvent(), "\(order): the readback answers over the authority")
+            XCTAssertEqual(posts.filter { $0.contains("shown") }.count, 1, "\(order): the count once: \(posts)")
+            let summary = try XCTUnwrap(state.graphTableSnapshot?.audioSummary)
+            XCTAssertFalse(posts.contains(summary), "\(order): a summary for a pair nobody saw: \(posts)")
+            await firstPair.release()
+        }
+    }
+
+    /// A-2's rows-only arm under D1 (contract 35 TGC-19): a CURRENT rows
+    /// result at another generation than the held authority's never
+    /// publishes. It re-fetches as a PAIR under its own request — its sort
+    /// included, which the mac's generation arm used to drop (C-D17,
+    /// narrowed), and its announce inherited (C-2 (iv)) — and the pair's
+    /// install adopts the sort and speaks the count once. The stale result
+    /// is handed to the receiver for the sort's own token while its real
+    /// rows are held, for the reason testASupersededPairInstallsNothing
+    /// gives: a vault moved under a fact wakes the probe's own refresh.
+    func testAGenerationMismatchRefetchesAsAPair() async throws {
+        let state = try await makeAppState()
+        try await openQuiescentGraph(state)
+        let held = state.graphTablePublication
+        var posts: [String] = []
+        state.graphAnnouncer = GraphAnnouncer(post: { text, _ in posts.append(text) })
+        let byNote = GraphTableSort(column: .note, ascending: true)
+        XCTAssertNotEqual(byNote, state.graphTableSort)
+        let gate = AsyncGate()
+        state.graphTableRowsPublishGate = { _ in await gate.suspend() }
+        state.setGraphTableSort(byNote)
+        try await awaitEntrance(gate, "the sort's rows")
+        state.graphTableRowsPublishGate = nil
+        let token = GraphTableToken(request: try XCTUnwrap(state.graphTableRequest), seq: state.graphTableSeq)
+        XCTAssertEqual(token.request.sort, byNote)
+        var installs: [GraphTablePublication] = []
+        let watch = state.$graphTablePublication.dropFirst().sink { installs.append($0) }
+        defer { watch.cancel() }
+
+        let stale = GraphTableRows(generation: held.generation &+ 1, total: 0, rows: [])
+        XCTAssertFalse(state.receiveGraphTableRows(token: token, result: stale), "rows at another generation published")
+        XCTAssertEqual(installs, [], "the stale rows assigned the record")
+        XCTAssertNotEqual(state.graphTableSeq, token.seq, "the receiver issued its replacement")
+        XCTAssertEqual(state.graphTableRequest, token.request, "under the rows' own request, the sort included")
+        XCTAssertEqual(state.graphTableRequestedSort, byNote, "the pending sort survives the re-fetch")
+        XCTAssertTrue(state.graphTableLoading, "as a PAIR")
+        XCTAssertEqual(state.graphTableInFlightAnnounce, .filterCount, "inheriting the sort's announce")
+        // The held rows belong to the replaced token now: they are dropped.
+        await gate.release()
+        try await pollUntil { !state.graphTableLoading && state.graphTableAnsweredSeq == state.graphTableSeq }
+        state.graphAnnouncer.flushForTests()
+        XCTAssertEqual(installs.count, 1, "one install, the pair's: \(installs)")
+        XCTAssertEqual(installs.first?.request, token.request)
+        XCTAssertEqual(installs.first?.generation, held.generation, "the authority at the vault's generation")
+        XCTAssertEqual(state.graphTableSort, byNote, "the pair adopted the sort")
+        XCTAssertNil(state.graphTableRequestedSort)
+        XCTAssertEqual(posts.filter { $0.contains("shown") }.count, 1, "the count once: \(posts)")
     }
 
     /// IPG-38 (rule Q, Term Q2): the rows ROLLBACK belongs to the current
@@ -871,17 +1102,24 @@ final class GraphTabRoutingTests: XCTestCase {
             "B's own count is the one line: \(posts)")
     }
 
-    /// C-2 (iii)/(iv): a needle typed during a backend-changing pair, in
-    /// BOTH completion orders, ends with one snapshot under the preset's
-    /// filter, the rows under the needle's request, the count spoken once
-    /// and no headline (rule Q, Term Q4) — never a snapshot with another
-    /// request's rows. Rows first: the mismatch arm re-fetches under the
-    /// needle's request with its announce. Pair first: the pair's rows drop
-    /// at the seq guard and the needle's publish over the fresh snapshot.
+    /// C-2 (iii)/(iv) under D1 (contract 35 TGC-19): a needle typed during a
+    /// backend-changing pair, in BOTH completion orders, ends with one
+    /// snapshot under the preset's filter, the rows under the needle's
+    /// request, the count spoken once and no headline (rule Q, Term Q4) —
+    /// never a snapshot with another request's rows. Rows first: the rows
+    /// find no authority under their filter and re-fetch as a PAIR under the
+    /// needle's request, which publishes while the preset's pair is held.
+    /// Pair first: the preset's pair, superseded by the needle, is dropped
+    /// WHOLE — it used to install its snapshot while the needle's rows were
+    /// held, the install D1 removes — and the released rows re-fetch the
+    /// same way. Both orders await the needle's PAIR publish, and every gate
+    /// wait is bounded (TGC-17).
     func testANeedleDuringAnOrphansPairRefetchesUnderItsOwnRequest() async throws {
         for pairFirst in [false, true] {
+            let order = pairFirst ? "pair first" : "rows first"
             let state = try await makeAppState()
             try await openQuiescentGraph(state)
+            let quiescent = state.graphTablePublication
             var posts: [String] = []
             state.graphAnnouncer = GraphAnnouncer(post: { text, _ in posts.append(text) })
             let gate = AsyncGate()
@@ -904,21 +1142,29 @@ final class GraphTabRoutingTests: XCTestCase {
                     if token.seq == presetSeq { await gate.suspend() }
                 }
             }
-            await gate.waitUntilEntered()
+            try await awaitEntrance(gate, "\(order): the held result's gate")
             if pairFirst {
-                // The pair published its snapshot; its rows dropped at the seq guard.
-                try await pollUntil { state.graphTableSnapshotFilter?.orphansOnly == true && !state.graphTableLoading }
-                XCTAssertNotEqual(state.graphTablePublishedRequest, state.graphTableRequest, "pair first: the needle's rows are still held")
+                // The preset's pair lands while the needle's rows are held and
+                // installs NOTHING — no snapshot under the preset's filter (D1).
+                try await pollUntil { !state.graphTableLoading }
+                XCTAssertEqual(state.graphTablePublication, quiescent, "\(order): the superseded pair installed")
+                XCTAssertNotEqual(
+                    state.graphTablePublishedRequest, state.graphTableRequest, "\(order): the needle's rows are still held")
             } else {
-                // The rows landed under the old snapshot and re-fetched under their own request.
+                // The rows re-fetched as the needle's PAIR, which published while
+                // the preset's pair is held.
                 try await pollUntil { state.graphTablePublishedRequest?.query.nameQuery == "a" }
             }
             await gate.release()
-            try await pollUntil { !state.graphTableLoading && state.graphTablePublishedRequest == state.graphTableRequest }
+            // The needle's PAIR publish: the snapshot under the preset's filter
+            // and the rows under the needle's request, from one record.
+            try await pollUntil {
+                !state.graphTableLoading && state.graphTablePublishedRequest == state.graphTableRequest
+                    && state.graphTableSnapshotFilter?.orphansOnly == true
+            }
             state.graphTablePublishGate = nil
             state.graphTableRowsPublishGate = nil
             state.graphAnnouncer.flushForTests()
-            let order = pairFirst ? "pair first" : "rows first"
             XCTAssertEqual(state.graphTableSnapshotFilter?.orphansOnly, true, order)
             XCTAssertEqual(state.graphTablePublishedRequest?.query.nameQuery, "a", "\(order): the rows are the needle's request's")
             XCTAssertEqual(state.graphTablePublishedRequest?.query.filter.orphansOnly, true, order)
@@ -929,14 +1175,19 @@ final class GraphTabRoutingTests: XCTestCase {
         }
     }
 
-    /// C-2 (iii): a sort typed during a backend-changing pair, in BOTH
-    /// completion orders, ends adopted — the re-fetch carries the sort as
-    /// the request's own — with the count once and no headline.
+    /// C-2 (iii) under D1 (contract 35 TGC-19): a sort typed during a
+    /// backend-changing pair, in BOTH completion orders, ends adopted — the
+    /// re-fetch carries the sort as the request's own — with the count once
+    /// and no headline. Pair first, the superseded preset pair installs
+    /// nothing; both orders await the sort's PAIR publish, every gate wait
+    /// bounded.
     func testASortDuringAnOrphansPairRefetchesUnderItsOwnRequest() async throws {
         let byNote = GraphTableSort(column: .note, ascending: true)
         for pairFirst in [false, true] {
+            let order = pairFirst ? "pair first" : "rows first"
             let state = try await makeAppState()
             try await openQuiescentGraph(state)
+            let quiescent = state.graphTablePublication
             var posts: [String] = []
             state.graphAnnouncer = GraphAnnouncer(post: { text, _ in posts.append(text) })
             let gate = AsyncGate()
@@ -954,18 +1205,21 @@ final class GraphTabRoutingTests: XCTestCase {
                     if token.seq == presetSeq { await gate.suspend() }
                 }
             }
-            await gate.waitUntilEntered()
+            try await awaitEntrance(gate, "\(order): the held result's gate")
             if pairFirst {
-                try await pollUntil { state.graphTableSnapshotFilter?.orphansOnly == true && !state.graphTableLoading }
+                try await pollUntil { !state.graphTableLoading }
+                XCTAssertEqual(state.graphTablePublication, quiescent, "\(order): the superseded pair installed")
             } else {
                 try await pollUntil { state.graphTablePublishedRequest?.sort == byNote }
             }
             await gate.release()
-            try await pollUntil { !state.graphTableLoading && state.graphTablePublishedRequest == state.graphTableRequest }
+            try await pollUntil {
+                !state.graphTableLoading && state.graphTablePublishedRequest == state.graphTableRequest
+                    && state.graphTableSnapshotFilter?.orphansOnly == true
+            }
             state.graphTablePublishGate = nil
             state.graphTableRowsPublishGate = nil
             state.graphAnnouncer.flushForTests()
-            let order = pairFirst ? "pair first" : "rows first"
             XCTAssertEqual(state.graphTableSort, byNote, "\(order): the sort adopted under its own request")
             XCTAssertNil(state.graphTableRequestedSort, order)
             XCTAssertEqual(state.graphTableSnapshotFilter?.orphansOnly, true, order)

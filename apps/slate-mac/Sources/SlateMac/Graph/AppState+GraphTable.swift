@@ -16,10 +16,87 @@ struct GraphTableRequest: Equatable {
 
 /// A load token: the request and the sequence it was issued under. A
 /// result publishes only when its token equals the current one in every
-/// field AND its generation equals the held snapshot's (0b-2b).
+/// field AND, for rows alone, a held publication carries the token's
+/// backend filter and the result's generation (0b-2b; A-2, D1).
 struct GraphTableToken: Equatable {
     let request: GraphTableRequest
     let seq: UInt64
+}
+
+/// The table's ONE publication (contract 35 A-2, adopted for the mac by the
+/// owner's D1 on 2026-10-09 — TGC-19; #1189, #1190): the authority — the
+/// snapshot, the backend filter it was fetched under, its generation — with
+/// the rows core ordered, their total, the accepted sort, the request they
+/// answer and the sequence of the last token to reach a terminal state.
+/// Immutable and built only by the transitions below, it is installed in
+/// ONE assignment, so no observer can see a candidate snapshot over old
+/// rows or new rows under an old request (IPG-15). The Windows twin is
+/// `GraphPublication` (`FromPair`, `WithRows`, `AsPairFailure`).
+struct GraphTablePublication: Equatable {
+    /// The authority; nil before the first pair and after a pair failure.
+    let snapshot: GraphSnapshot?
+    /// The backend filter the snapshot was fetched under; nil without one.
+    let filter: GraphFilter?
+    /// The snapshot's generation; 0 when none is held.
+    let generation: UInt64
+    /// Core's rows for `request`, in its sort — kept, hidden under the
+    /// error, when a pair fails (A-2's first failure arm).
+    let rows: [GraphTableRow]
+    let total: UInt64
+    /// The ACCEPTED sort: the one the rows are in.
+    let sort: GraphTableSort
+    /// The request the rows were received under (C-8).
+    let request: GraphTableRequest?
+    /// The seq of the last token to reach a TERMINAL state over this record,
+    /// published or failed (rule Q, Term Q2; IPG-29).
+    let answeredSeq: UInt64
+
+    /// Nothing asked for yet: no authority, no rows, the default sort.
+    static func initial() -> GraphTablePublication {
+        GraphTablePublication(
+            snapshot: nil, filter: nil, generation: 0, rows: [], total: 0,
+            sort: graphTableDefaultSort(), request: nil, answeredSeq: 0)
+    }
+
+    /// A PAIR result: a new authority with its rows, all from one token.
+    static func fromPair(
+        _ token: GraphTableToken, snapshot: GraphSnapshot, rows: GraphTableRows
+    ) -> GraphTablePublication {
+        GraphTablePublication(
+            snapshot: snapshot, filter: token.request.query.filter, generation: snapshot.generation,
+            rows: rows.rows, total: rows.total, sort: token.request.sort,
+            request: token.request, answeredSeq: token.seq)
+    }
+
+    /// Whether a ROWS result may publish over this record: it holds an
+    /// authority fetched under `filter`, at `generation`.
+    func holdsAuthority(filter: GraphFilter, generation: UInt64) -> Bool {
+        snapshot != nil && self.filter == filter && self.generation == generation
+    }
+
+    /// A ROWS result over this, the held authority.
+    func withRows(_ token: GraphTableToken, rows: GraphTableRows) -> GraphTablePublication {
+        GraphTablePublication(
+            snapshot: snapshot, filter: filter, generation: generation,
+            rows: rows.rows, total: rows.total, sort: token.request.sort,
+            request: token.request, answeredSeq: token.seq)
+    }
+
+    /// A PAIR failure: the authority dropped, the rows kept hidden under the
+    /// error — so the next pair shows LOADING — and the token answered.
+    func failingPair(_ token: GraphTableToken) -> GraphTablePublication {
+        GraphTablePublication(
+            snapshot: nil, filter: nil, generation: 0, rows: rows, total: total, sort: sort,
+            request: request, answeredSeq: token.seq)
+    }
+
+    /// A ROWS failure: this record stands WHOLE; only the lineage's terminal
+    /// mark moves.
+    func failingRows(_ token: GraphTableToken) -> GraphTablePublication {
+        GraphTablePublication(
+            snapshot: snapshot, filter: filter, generation: generation, rows: rows, total: total,
+            sort: sort, request: request, answeredSeq: token.seq)
+    }
 }
 
 /// Graph tab, Table mode (Milestone P, P1-2 #555): the whole vault
@@ -118,11 +195,7 @@ extension AppState {
     /// a snapshot or the seen-generation high-water mark from one vault —
     /// or a stale preset filter — never bleeds into the next.
     func resetGraphTableState() {
-        graphTableSnapshot = nil
-        graphTableSnapshotFilter = nil
-        graphTableRows = []
-        graphTableTotal = 0
-        graphTableSort = graphTableDefaultSort()
+        graphTablePublication = .initial()
         graphTableRequestedSort = nil
         graphTableRequest = nil
         graphTableSeq += 1
@@ -132,7 +205,6 @@ extension AppState {
         graphTableKindFilter = nil
         graphTablePendingPreset = nil
         graphTableInFlightAnnounce = nil
-        graphTablePublishedRequest = nil
         // Drop the shared cross-projection selection (P2-5 #561) so a key
         // from the closing vault / prior graph tab can't bleed into the next.
         graphSelectedNodeKey = nil
@@ -164,14 +236,16 @@ extension AppState {
     /// or the default under a pending preset (design A).
     func loadGraphTable(announce: GraphTableLoadAnnounce = .summary, sort: GraphTableSort? = nil) {
         guard let session = currentSession else {
-            graphTableSnapshot = nil
+            // No session, nothing to fetch: nothing is installed either (D1,
+            // TGC-19 — only a current result installs), so a receiver's
+            // re-fetch on a bare state leaves the held publication standing.
+            // A vault close resets the publication itself.
             graphTableError = nil
             graphTableLoading = false
             return
         }
         graphTableLoadSeq += 1
         let seq = graphTableLoadSeq
-        let filter = graphTableFilter
         // A preset is a request like any other (design A): it sets the
         // DEFAULT sort in the same token as its filter, kind and needle.
         let token = issueGraphTableToken(
@@ -191,7 +265,9 @@ extension AppState {
                 await Task.detached(priority: .userInitiated) {
                     if let injectedFailure { return .failure(injectedFailure) }
                     do {
-                        let snap = try session.graphSnapshot(filter: filter)
+                        // The snapshot under the token's own backend filter: the
+                        // authority's identity (design A) is the request's.
+                        let snap = try session.graphSnapshot(filter: token.request.query.filter)
                         let rows = try session.graphTableRows(
                             query: token.request.query, sort: token.request.sort)
                         return .success((snap, rows))
@@ -216,21 +292,10 @@ extension AppState {
             let speak = announce != .silent && self.graphTabActive
             switch result {
             case .success(let (snap, rows)):
-                // (IPG-9) The pair's outer guard is the LOAD sequence,
-                // which a rows request does not advance, so a superseded
-                // pair still arrives here; whether it may install is the
-                // rule below.
-                guard self.pairResultInstalls(token: token) else { return }
-                // The snapshot and the filter it was fetched under publish
-                // together — the authority's identity (design A).
-                self.graphTableSnapshot = snap
-                self.graphTableSnapshotFilter = filter
-                self.graphTableError = nil
-                self.graphTableSeenGraphGeneration = snap.generation
-                // ONE publish (design A): rows, then the accepted sort. A
-                // token that no longer matches drops the rows and keeps the
-                // snapshot; the reissue is the newer token's load.
-                let published = self.receiveGraphTableRows(token: token, result: rows)
+                // The pair's outer guard is the LOAD sequence, which a rows
+                // request does not advance, so a superseded pair still arrives
+                // here (IPG-9); the receiver drops it WHOLE (D1).
+                let published = self.receiveGraphTablePair(token: token, snapshot: snap, rows: rows)
                 // (iv) This token published or dropped as the current one: the
                 // in-flight announce is spent — unless the receiver issued a
                 // replacing load, which recorded its own.
@@ -238,8 +303,9 @@ extension AppState {
                 // Drop a shared selection whose node is gone from the fresh
                 // snapshot — at the PUBLISH point, so it fires even while the
                 // Table view isn't mounted (e.g. a delete during Diagram
-                // mode; P2-5 review finding 4).
-                self.revalidateGraphSelection(against: snap)
+                // mode; P2-5 review finding 4). A dropped pair installed no
+                // snapshot, so it judges nothing.
+                if published { self.revalidateGraphSelection(against: snap) }
                 // A pending preset consumes THIS load's fresh snapshot for
                 // its headline; clear it unconditionally so a later refresh
                 // can't replay a stale preset announcement (P1-3 #556).
@@ -286,8 +352,7 @@ extension AppState {
                     token.request == self.graphTableRequest
                 else { return }
                 self.graphTableError = self.humanReadable(error)
-                self.graphTableSnapshot = nil
-                self.failGraphTableRows(token: token)
+                self.failGraphTablePair(token: token)
                 // (ii) A failed pair forgets the preset as the success arm
                 // does (contracts doc §PR C C-2 (ii); rule P, Term P4):
                 // nothing remembers a headline a later refresh could replay.
@@ -315,72 +380,65 @@ extension AppState {
         return GraphTableToken(request: request, seq: graphTableSeq)
     }
 
-    /// Publish a rows result under its token (design A): the token must
-    /// equal the current one in EVERY field and the result's generation
-    /// must equal the held snapshot's, else the result is dropped whole
-    /// (0b-2b) — and, on a generation mismatch, the snapshot is re-fetched
-    /// so the held value catches up. On success the rows and the accepted
-    /// sort publish in ONE synchronous assignment, rows first. Returns
-    /// whether the result published.
+    /// Publish a PAIR result under its token (contract 35 A-2; D1, TGC-19 —
+    /// #1189): the token must equal the current one in EVERY field, else the
+    /// result is dropped WHOLE — no snapshot, no filter, no seen generation —
+    /// whatever became of the request that superseded it. That is what makes
+    /// IPG-15 unreachable: a superseded pair installed its snapshot while the
+    /// newer rows were unanswered (IPG-9's pair-first order), and when those
+    /// rows then failed, the table was left with old rows under a new
+    /// authority. A current pair whose two crossings disagree on the
+    /// generation straddled a rebuild: it installs nothing and re-fetches as
+    /// its own replacement (A-2 (ii)), its sort and announce inherited (Term
+    /// Q9; C-2 (iv)). Otherwise the record installs in ONE assignment and the
+    /// seen generation follows it. Returns whether the result published.
     @discardableResult
-    func receiveGraphTableRows(token: GraphTableToken, result: GraphTableRows) -> Bool {
+    func receiveGraphTablePair(
+        token: GraphTableToken, snapshot: GraphSnapshot, rows: GraphTableRows
+    ) -> Bool {
         guard token.seq == graphTableSeq, token.request == graphTableRequest else { return false }
-        // The authority's identity (design A): the filter the held snapshot
-        // was fetched under AND its generation. Filter-B rows never land
-        // on a filter-A snapshot; a generation mismatch re-fetches.
-        if let held = graphTableSnapshotFilter, held != token.request.query.filter {
-            // (iii) A result under another backend filter re-fetches UNDER
-            // ITS OWN REQUEST — sort included — instead of returning bare,
-            // so a needle or a sort typed during a backend-changing pair
-            // whose result lands first never leaves a snapshot with another
-            // request's rows (contracts doc §PR C C-2 (iii); rule Q, Term
-            // Q3's compatible-snapshot rule). The announce is the replaced
-            // token's (iv).
+        guard rows.generation == snapshot.generation else {
             loadGraphTable(announce: graphTableInFlightAnnounce ?? .silent, sort: token.request.sort)
             return false
         }
-        if let snap = graphTableSnapshot, snap.generation != result.generation {
-            // The generation arm keeps the mac's sort rule (contracts doc
-            // §PR C, C-D17) and inherits the announce (C-2 (iv)).
-            graphTableRequestedSort = nil
-            loadGraphTable(announce: graphTableInFlightAnnounce ?? .silent)
-            return false
-        }
-        graphTableRows = result.rows
-        graphTableTotal = result.total
-        graphTableSort = token.request.sort
         graphTableRequestedSort = nil
-        // The publication is CURRENT while this equals the newest request
-        // (W6-2 PR C, C-8: the table's Where-am-I reads it).
-        graphTablePublishedRequest = token.request
-        graphTableAnsweredSeq = token.seq
-        // A CURRENT result answers the error a failed pair installed
-        // (IPG-31's reachable half): the rows arm never cleared it, so a
-        // needle typed after a failure published its rows UNDER the old
-        // error and the reader kept the failure view over a successful
-        // request. Recorded divergence: Windows REFUSES rows with no held
-        // snapshot and re-fetches (A-2's rows-only arm), while the mac's
-        // receiver admits them — PR A's frozen token facts drive it on a
-        // bare state and require that admission, so the two hosts differ
-        // here until the owner says otherwise.
+        // A current pair answers the error a failed one installed: the error
+        // and an authority never stand together.
         graphTableError = nil
-        if graphTableSnapshot == nil {
-            // Rows are current with NO authority behind them — the state a
-            // pair failure leaves, which the receiver admits because PR A's
-            // token facts require it. Clearing the error made that state
-            // VISIBLE, and a visible table whose Where-am-I can never answer
-            // is worse than the error it replaced (IPG-36, created by
-            // TGC-17): ask for the authority back. The replacing load must
-            // inherit this request's announcement: advancing the sequence
-            // makes the rows callback's queued count obsolete.
-            // `loadGraphTable` no-ops without a session, so the bare-state
-            // token facts are untouched.
-            loadGraphTable(announce: graphTableInFlightAnnounce ?? .silent, sort: token.request.sort)
-        }
+        graphTablePublication = .fromPair(token, snapshot: snapshot, rows: rows)
+        graphTableSeenGraphGeneration = snapshot.generation
         return true
     }
 
-    /// A failed query rolls the request back to the accepted state.
+    /// Publish a ROWS result under its token (design A; A-2's rows-only arm,
+    /// D1 — #1190): the token must equal the current one in EVERY field, and
+    /// a held publication must carry the token's backend filter and the
+    /// result's generation — the authority's identity — else the rows never
+    /// land. With no authority held (before the first pair, after a pair
+    /// failure), another filter's (C-2 (iii): a needle or a sort typed during
+    /// a backend-changing pair) or a stale one, the result re-fetches as a
+    /// PAIR UNDER ITS OWN REQUEST — its sort included, which the generation
+    /// arm used to drop (C-D17, narrowed) — inheriting the replaced token's
+    /// announce (C-2 (iv); Term Q9). Since an error stands only without an
+    /// authority, a rows result never publishes under one. On success the
+    /// held authority, the rows, the accepted sort and the request install in
+    /// ONE assignment. Returns whether the result published.
+    @discardableResult
+    func receiveGraphTableRows(token: GraphTableToken, result: GraphTableRows) -> Bool {
+        guard token.seq == graphTableSeq, token.request == graphTableRequest else { return false }
+        let held = graphTablePublication
+        guard held.holdsAuthority(filter: token.request.query.filter, generation: result.generation) else {
+            loadGraphTable(announce: graphTableInFlightAnnounce ?? .silent, sort: token.request.sort)
+            return false
+        }
+        graphTableRequestedSort = nil
+        graphTablePublication = held.withRows(token, rows: result)
+        return true
+    }
+
+    /// A failed query rolls the request back to the accepted state; the held
+    /// publication stands WHOLE (A-2's rows-only failure arm — with D1 there
+    /// is no half-installed state for it to repair).
     func failGraphTableRows(token: GraphTableToken) {
         // The FULL currency, not the sequence alone (IPG-38): a token whose
         // sequence matches but whose request does not is not the lineage's,
@@ -388,10 +446,19 @@ extension AppState {
         // answered before the caller's own guard could turn it away.
         guard token.seq == graphTableSeq, token.request == graphTableRequest else { return }
         graphTableRequestedSort = nil
-        // Terminal (Term Q2): the request is ANSWERED, badly. A pair that
-        // arrives afterwards is not entitled to install over what stands
-        // (IPG-29) — failing is not the same as still being in flight.
-        graphTableAnsweredSeq = token.seq
+        // Terminal (Term Q2): the request is ANSWERED, badly — the record's
+        // terminal mark moves and nothing else of it does.
+        graphTablePublication = graphTablePublication.failingRows(token)
+    }
+
+    /// A failed PAIR (A-2's first failure arm): the pending sort rolled back
+    /// and the authority dropped, its rows kept hidden under the error the
+    /// caller installs — so the next pair shows LOADING — and the token
+    /// answered, in the record's one assignment.
+    func failGraphTablePair(token: GraphTableToken) {
+        guard token.seq == graphTableSeq, token.request == graphTableRequest else { return }
+        graphTableRequestedSort = nil
+        graphTablePublication = graphTablePublication.failingPair(token)
     }
 
     /// (i) The table's ONE observer on the composed query (contracts doc
@@ -404,9 +471,9 @@ extension AppState {
         guard graphTableRequest?.query != graphVisibilityQuery else { return }
         // ROWS ONLY, always — the mac's kind rule is C-2 (iii)'s, not the
         // Windows document's Term Q3 (IPG-31, refuted at the ISSUE): the
-        // receiver's mismatch arms re-fetch under this request when the
-        // authority cannot hold it, which is exactly what "a needle typed
-        // during a backend-changing pair" is pinned to do
+        // receiver re-fetches as a PAIR under this request when no held
+        // authority can take the rows (D1, TGC-19), which is exactly what "a
+        // needle typed during a backend-changing pair" is pinned to do
         // (testANeedleDuringAnOrphansPairRefetchesUnderItsOwnRequest). Making
         // the issue choose a pair instead left that fact waiting on a rows
         // gate no rows request would ever reach, and the suite hung.
@@ -663,30 +730,6 @@ extension AppState {
     /// replaying.
     func pairConsumesThePendingPreset(token: GraphTableToken) -> Bool {
         graphTableSeq == token.seq
-    }
-
-    /// Whether a PAIR result may install its snapshot (rule Q, Terms Q2 and
-    /// Q7; C-2 (iii)). A pair superseded by a ROWS request may install while
-    /// those rows are UNANSWERED — the pair-first order C-2 (iii) relies on,
-    /// where they will land on this fresher authority — and never once they
-    /// have published: installing then attaches a newer snapshot, and its
-    /// seen generation, to rows fetched at an older one, so the two disagree,
-    /// the published request still reads current, and the generation probe
-    /// finds nothing to repair because the seen mark moved (IPG-9). Extracted
-    /// so the rule is unit-testable without racing the async task, as
-    /// `shouldRefreshGraphTable` is: arranging it end to end needs the vault
-    /// to move while the pair is still to fetch, and a vault that moves wakes
-    /// the event listener's own refresh, whose load supersedes the pair
-    /// before it can arrive.
-    func pairResultInstalls(token: GraphTableToken) -> Bool {
-        let superseded = token.seq != graphTableSeq || token.request != graphTableRequest
-        // PENDING means neither published NOR failed (IPG-29): a failed rows
-        // request leaves `graphTablePublishedRequest` behind the current one
-        // for ever, which read as "still unanswered" and let a superseded
-        // pair install its snapshot, its filter and its seen generation over
-        // the rows the failure had left standing.
-        let newerIsPending = graphTableAnsweredSeq != graphTableSeq
-        return !superseded || newerIsPending
     }
 
     /// Whether a generation-refresh that has finished probing should
