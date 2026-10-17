@@ -93,6 +93,12 @@ final class SidebarOrganizationDispatchTests: XCTestCase {
     await state.sidebarOrganizationPersistTaskForTesting?.value
   }
 
+  /// PR 23 (#944): an organization command is spoken once its journal line
+  /// is durable — after the tree already shows it, off the main actor.
+  private func awaitAcknowledgement(_ state: AppState) async {
+    await state.sidebarOrganizationAcknowledgementTaskForTesting?.value
+  }
+
   private func sidebarJSON(at vault: URL) throws -> [String: Any] {
     let data = try Data(
       contentsOf: vault.appendingPathComponent(".slate/sidebar.json"))
@@ -124,6 +130,7 @@ final class SidebarOrganizationDispatchTests: XCTestCase {
     XCTAssertEqual(
       state.sidebarOrganization.prefs.vaultChoice.sort,
       SidebarSortOption(field: .modified, direction: .desc))
+    await awaitAcknowledgement(state)
     XCTAssertTrue(announcer.messages.contains("Sorted by modified, newest first."))
 
     await awaitPersist(state)
@@ -165,6 +172,7 @@ final class SidebarOrganizationDispatchTests: XCTestCase {
 
     _ = try state.dispatchSidebarAction(id: SlateCommandID.sidebarToggleDateGrouping)
     XCTAssertEqual(state.sidebarOrganization.prefs.vaultChoice.grouping, .dateBuckets)
+    await awaitAcknowledgement(state)
     XCTAssertTrue(
       announcer.messages.contains(
         "Sorted by modified, newest first, grouped by date."))
@@ -222,6 +230,7 @@ final class SidebarOrganizationDispatchTests: XCTestCase {
     XCTAssertTrue(
       state.sidebarOrganization.pins.isPinned(
         "Projects/note.md", inFolder: "Projects"))
+    await awaitAcknowledgement(state)
     XCTAssertTrue(announcer.messages.contains("Pinned."))
 
     // Pin is now the unavailable direction; the context menu omits it.
@@ -244,6 +253,7 @@ final class SidebarOrganizationDispatchTests: XCTestCase {
     XCTAssertFalse(
       state.sidebarOrganization.pins.isPinned(
         "Projects/note.md", inFolder: "Projects"))
+    await awaitAcknowledgement(state)
     XCTAssertTrue(announcer.messages.contains("Unpinned."))
     await awaitPersist(state)
   }
@@ -276,6 +286,7 @@ final class SidebarOrganizationDispatchTests: XCTestCase {
     _ = try state.dispatchSidebarAction(id: SlateCommandID.sidebarUnpinAll)
     XCTAssertEqual(
       state.sidebarOrganization.pins.paths(forFolder: "Projects"), [])
+    await awaitAcknowledgement(state)
     XCTAssertTrue(announcer.messages.contains("Unpinned 2 notes."))
     await awaitPersist(state)
   }
