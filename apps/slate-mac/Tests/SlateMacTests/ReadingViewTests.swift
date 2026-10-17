@@ -1849,19 +1849,24 @@ final class ReadingViewTests: XCTestCase {
 
     /// The fixture's two tasks as the tasks pipeline reports them, matched
     /// to their rows by 1-based line, so the rows render the toggle button.
+    /// Each line is found by its exact authored text; a line that is missing
+    /// or authored twice fails the fact instead of matching the wrong row.
     private static func listFixtureTasks() -> [TaskItem] {
         let lines = listFixture.components(separatedBy: "\n")
-        func task(_ text: String, completed: Bool, ordinal: UInt32) -> TaskItem {
-            let line = (lines.firstIndex { $0.hasSuffix(text) } ?? 0) + 1
+        func task(_ authored: String, text: String, completed: Bool, ordinal: UInt32) -> TaskItem {
+            let matches = lines.indices.filter { lines[$0] == authored }
+            if matches.count != 1 {
+                XCTFail("the list fixture must author \"\(authored)\" exactly once")
+            }
             return TaskItem(
                 ordinal: ordinal, text: text, statusChar: completed ? "x" : " ",
                 completed: completed, dueMs: nil, scheduledMs: nil, priority: nil,
-                recurrence: nil, line: UInt32(line), byteOffset: 0,
+                recurrence: nil, line: UInt32((matches.first ?? 0) + 1), byteOffset: 0,
                 checkboxStartByte: 0, checkboxEndByte: 0)
         }
         return [
-            task("Open task", completed: false, ordinal: 0),
-            task("Done task", completed: true, ordinal: 1),
+            task("- [ ] Open task", text: "Open task", completed: false, ordinal: 0),
+            task("- [x] Done task", text: "Done task", completed: true, ordinal: 1),
         ]
     }
 
@@ -1969,43 +1974,93 @@ final class ReadingViewTests: XCTestCase {
             "an item's value would replace its text in VoiceOver's read:\n\(tree)")
     }
 
-    /// A list renders in its own hosting view, which inherits no SwiftUI
-    /// environment, so the reading view's link router is carried across
-    /// (`ReadingListRows`): a link in a list item activates through the
-    /// same `openURL` action as a link in a paragraph, at every nesting
-    /// level. The probe calls the action it reads, as a link's activation
-    /// does.
+    /// A list's rows render in a hosting view of their own, and SwiftUI
+    /// carries the reading view's environment into it, so nothing is
+    /// bridged by hand (`ReadingListRows`' doc). Pinned for the three kinds
+    /// of value the rows read, an action (the link router), a scheme and a
+    /// size, at two nesting levels, with values that differ from the hosting
+    /// view's own defaults, and again after a change made once the rows have
+    /// rendered. The probe calls the `openURL` it reads, as a link's
+    /// activation does. If this fails on a new SDK, the values the rows read
+    /// have to be passed across in `ReadingListRows` explicitly.
     @MainActor
-    func testAListsRowsUseTheReadingViewsLinkRouter() async throws {
-        final class Recorder { var urls: [URL] = [] }
-        let recorder = Recorder()
+    func testAListsRowsInheritTheReadingViewsEnvironment() async throws {
+        struct Seen: Equatable {
+            let url: URL
+            let colorScheme: ColorScheme
+            let dynamicTypeSize: DynamicTypeSize
+        }
+        final class Recorder { var seen: [Seen] = []; var opened: [URL] = [] }
+        final class Model: ObservableObject { @Published var dark = true }
         struct Probe: View {
             let url: URL
+            let recorder: Recorder
             @Environment(\.openURL) private var openURL
+            @Environment(\.colorScheme) private var colorScheme
+            @Environment(\.dynamicTypeSize) private var dynamicTypeSize
             var body: some View {
-                Text(url.absoluteString).onAppear { openURL(url) }
+                Text(url.absoluteString)
+                    .onAppear {
+                        record()
+                        openURL(url)
+                    }
+                    .onChange(of: colorScheme) { record() }
+            }
+            private func record() {
+                recorder.seen.append(
+                    Seen(url: url, colorScheme: colorScheme, dynamicTypeSize: dynamicTypeSize))
             }
         }
+        struct Host: View {
+            @ObservedObject var model: Model
+            let recorder: Recorder
+            let outer: URL
+            let nested: URL
+            var body: some View {
+                ReadingListContainer(
+                    rows: AnyView(
+                        VStack {
+                            Probe(url: outer, recorder: recorder)
+                            ReadingListContainer(
+                                rows: AnyView(Probe(url: nested, recorder: recorder)))
+                        }))
+                    .environment(
+                        \.openURL,
+                        OpenURLAction { url in
+                            recorder.opened.append(url)
+                            return .handled
+                        })
+                    .environment(\.colorScheme, model.dark ? .dark : .light)
+                    .environment(\.dynamicTypeSize, .accessibility2)
+            }
+        }
+        let recorder = Recorder()
+        let model = Model()
         let outer = URL(string: "slate-wiki://Item")!
         let nested = URL(string: "slate-wiki://Nested")!
         let window = HostedAccessibilityTree.host(
-            ReadingListContainer(
-                rows: AnyView(
-                    VStack {
-                        Probe(url: outer)
-                        ReadingListContainer(rows: AnyView(Probe(url: nested)))
-                    }))
-                .environment(
-                    \.openURL,
-                    OpenURLAction { url in
-                        recorder.urls.append(url)
-                        return .handled
-                    }))
+            Host(model: model, recorder: recorder, outer: outer, nested: nested))
         defer { window.close() }
+        func latest(_ url: URL) -> Seen? { recorder.seen.last { $0.url == url } }
         _ = try await HostedAccessibilityTree.snapshot(of: window) { _ in
-            recorder.urls.count == 2
+            recorder.opened.count == 2 && latest(outer) != nil && latest(nested) != nil
         }
-        XCTAssertEqual(Set(recorder.urls), [outer, nested])
+        XCTAssertEqual(Set(recorder.opened), [outer, nested], "links route through the router")
+        for url in [outer, nested] {
+            XCTAssertEqual(
+                latest(url), Seen(url: url, colorScheme: .dark, dynamicTypeSize: .accessibility2),
+                "the rows at \(url) see the reading view's colour scheme and type size")
+        }
+
+        model.dark = false
+        _ = try await HostedAccessibilityTree.snapshot(of: window) { _ in
+            latest(outer)?.colorScheme == .light && latest(nested)?.colorScheme == .light
+        }
+        for url in [outer, nested] {
+            XCTAssertEqual(
+                latest(url), Seen(url: url, colorScheme: .light, dynamicTypeSize: .accessibility2),
+                "a change above the list reaches the rows at \(url)")
+        }
     }
 
     /// A unit's scroll identity (#856) is its first block, so the eager

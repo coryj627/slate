@@ -174,22 +174,28 @@ final class ReadingListHostingView: NSHostingView<ReadingListRows> {
 
 /// A list's rows inside its hosting view, pinned to the width the list was
 /// offered, so the hosting view's ideal size is the height the rows wrap
-/// to. The rows sit in their own hosting view, which inherits no SwiftUI
-/// environment, so the values the rows read are carried across: the link
-/// router (`openURL`), the colour scheme and the type size.
+/// to.
+///
+/// **The environment needs no bridge.** The hosting view sits in the
+/// reading view's SwiftUI graph through `ReadingListContainer`, and SwiftUI
+/// carries that graph's environment into it. That covers everything the
+/// rows read: the link router every link run calls (`openURL`), a
+/// colour-scheme or type-size override above the reading view, and any
+/// value a row reads later. It arrives on first render and on every change.
+/// Measured while building PR 16: with nothing passed across, the hosted
+/// rows saw all three values at two nesting levels, and a scheme change
+/// made after the first render reached them.
+/// `ReadingViewTests.testAListsRowsInheritTheReadingViewsEnvironment` pins
+/// that. If a release stops carrying the environment into a hosted view,
+/// that fact fails, and the values the rows read must be passed across here
+/// explicitly. A row that starts to read a new value needs nothing more
+/// than a line in that fact if the value matters.
 struct ReadingListRows: View {
     let rows: AnyView
     let width: CGFloat?
-    let openURL: OpenURLAction
-    let colorScheme: ColorScheme
-    let dynamicTypeSize: DynamicTypeSize
 
     var body: some View {
-        rows
-            .frame(width: width, alignment: .leading)
-            .environment(\.openURL, openURL)
-            .environment(\.colorScheme, colorScheme)
-            .environment(\.dynamicTypeSize, dynamicTypeSize)
+        rows.frame(width: width, alignment: .leading)
     }
 }
 
@@ -206,13 +212,13 @@ struct ReadingListContainer: NSViewRepresentable {
     func makeCoordinator() -> Coordinator { Coordinator() }
 
     func makeNSView(context: Context) -> ReadingListHostingView {
-        let view = ReadingListHostingView(rootView: pinnedRows(nil, context))
+        let view = ReadingListHostingView(rootView: ReadingListRows(rows: rows, width: nil))
         view.sizingOptions = [.intrinsicContentSize]
         return view
     }
 
     func updateNSView(_ view: ReadingListHostingView, context: Context) {
-        view.rootView = pinnedRows(context.coordinator.width, context)
+        view.rootView = ReadingListRows(rows: rows, width: context.coordinator.width)
     }
 
     /// The height the rows take at the offered width. A probe with no real
@@ -226,16 +232,9 @@ struct ReadingListContainer: NSViewRepresentable {
             width != context.coordinator.width
         {
             context.coordinator.width = width
-            view.rootView = pinnedRows(width, context)
+            view.rootView = ReadingListRows(rows: rows, width: width)
         }
         let ideal = view.intrinsicContentSize
         return CGSize(width: context.coordinator.width ?? ideal.width, height: ideal.height)
-    }
-
-    private func pinnedRows(_ width: CGFloat?, _ context: Context) -> ReadingListRows {
-        ReadingListRows(
-            rows: rows, width: width, openURL: context.environment.openURL,
-            colorScheme: context.environment.colorScheme,
-            dynamicTypeSize: context.environment.dynamicTypeSize)
     }
 }
