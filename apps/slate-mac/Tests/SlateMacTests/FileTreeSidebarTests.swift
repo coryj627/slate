@@ -1529,6 +1529,544 @@ final class FileTreeSidebarTests: XCTestCase {
         XCTAssertFalse(vm.pendingExpandedPaths.contains("src/pack"))
     }
 
+    // MARK: - A renamed row keeps its row (#785, plan 43 PR 14)
+
+    /// #785 on mac, the twin of Windows'
+    /// `FileManagementTests.APublicationDuringInlineRenameKeepsTheTypedName`
+    /// (which ends on `SelectedNode?.Path == "journey.md"`). Renaming the
+    /// selected file from the file list leaves its row present under the new
+    /// name, selected, with no stale row for the old path: at the root (a
+    /// targeted root reload, which keeps the old rows on screen until the
+    /// replacement lands) and inside an expanded folder (a child-level reset,
+    /// which drops them at once). The renamed note is open, as a click leaves
+    /// it, so its tab retarget drives the path mirror too. The two renames run
+    /// the consumer and that mirror in opposite orders, because SwiftUI does
+    /// not promise which of the two handlers runs first; the pending focus
+    /// owns the next level edge either way. The row must then survive the
+    /// rename's own rescan.
+    func testARenamedRowStaysPresentSelectedAndUnduplicated() async throws {
+        let state = try await renameVault(
+            ["journal.md", "other.md", "Notes/inner.md", "Notes/kept.md"])
+        let session = try XCTUnwrap(state.currentSession)
+        let tree = FileTreeViewModel()
+        defer { tree.cancelPendingLoads() }
+        tree.bind(to: session)
+        await settle(tree)
+        tree.expand(try XCTUnwrap(tree.rootLevel.first { $0.path == "Notes" }))
+        await settle(tree)
+        var selection = RenameSelection()
+
+        // At the root: the consumer, then the path mirror.
+        var before = tree.visibleRows.map(\.path)
+        XCTAssertEqual(
+            before.sorted(),
+            ["Notes", "Notes/inner.md", "Notes/kept.md", "journal.md", "other.md"])
+        try await click("journal.md", tree: tree, selection: &selection, state: state)
+        var rename = try await renameFromFileList("journal.md", to: "journey.md", state: state)
+        XCTAssertEqual(
+            rename.mutation.kind, .rename(oldPath: "journal.md", newPath: "journey.md"))
+        XCTAssertEqual(state.selectedFilePath, "journey.md", "the open tab followed the rename")
+        try consumeRename(rename.mutation, tree: tree, selection: &selection, state: state)
+        XCTAssertNotNil(
+            selection.pending,
+            "the refetch is asynchronous, as in the app: the focus waits for its row")
+        mirrorSelectedPath(tree: tree, selection: &selection, state: state)
+        await settle(tree)
+        landRefetch(tree: tree, selection: &selection, state: state)
+        assertRenamedRow(
+            "journal.md", "journey.md", rowsBefore: before, tree: tree,
+            selection: selection, state: state, "root, after the refetch")
+        await finishRescan(rename.rescan, tree: tree, selection: &selection, state: state)
+        assertRenamedRow(
+            "journal.md", "journey.md", rowsBefore: before, tree: tree,
+            selection: selection, state: state, "root, after the rescan")
+
+        // In an expanded folder: the path mirror, then the consumer.
+        before = tree.visibleRows.map(\.path)
+        try await click("Notes/inner.md", tree: tree, selection: &selection, state: state)
+        rename = try await renameFromFileList("Notes/inner.md", to: "outer.md", state: state)
+        XCTAssertEqual(
+            rename.mutation.kind,
+            .rename(oldPath: "Notes/inner.md", newPath: "Notes/outer.md"))
+        mirrorSelectedPath(tree: tree, selection: &selection, state: state)
+        try consumeRename(rename.mutation, tree: tree, selection: &selection, state: state)
+        XCTAssertNotNil(selection.pending, "the folder's level is refetching")
+        await settle(tree)
+        landRefetch(tree: tree, selection: &selection, state: state)
+        assertRenamedRow(
+            "Notes/inner.md", "Notes/outer.md", rowsBefore: before, tree: tree,
+            selection: selection, state: state, "folder, after the refetch")
+        await finishRescan(rename.rescan, tree: tree, selection: &selection, state: state)
+        assertRenamedRow(
+            "Notes/inner.md", "Notes/outer.md", rowsBefore: before, tree: tree,
+            selection: selection, state: state, "folder, after the rescan")
+
+        // The replay is the consumer's rename arm: pin it to the source.
+        let lines = codeLines(try appSource("FileTreeSidebar.swift"))
+        let consumer = try functionLines("handleTreeMutation", in: lines)
+        for step in [
+            "tree.rootLevelInvalidation()",
+            "tree.treeInvalidation(parent: parentID)",
+            "tree.remapExpansion(fromPrefix: oldPath, to: newPath)",
+            "remapSelectionForKnownMove(oldPath: oldPath, newPath: newPath)",
+            "applyPostMutationFocus(",
+        ] {
+            XCTAssertTrue(
+                consumer.contains { $0.hasPrefix(step) },
+                "handleTreeMutation no longer runs \(step)")
+        }
+        XCTAssertTrue(
+            try functionLines("applyPostMutationFocus", in: lines)
+                .contains("case let .rename(_, newPath):"),
+            "a rename's focus targets its new path")
+        XCTAssertTrue(
+            try functionLines("restorePendingPostMutationFocus", in: lines)
+                .contains { $0.contains("Self.restorePendingPostMutationSelection(") },
+            "the level edge installs the focus through the shared restore")
+    }
+
+    /// #785's filter criterion on mac. The tree has no in-place filter: a
+    /// committed sidebar filter (FL-09) overlays it with core's result list,
+    /// which the sidebar re-runs on every mutation announcement
+    /// (`refreshAfterStructuralMutation` on `sidebarMutationToken`). One
+    /// rename from the file list, two active filters, core's own matcher: the
+    /// one that matched the old name and matches the new one keeps the row,
+    /// under its new name; the one the new name no longer matches hides it;
+    /// neither keeps a row for the old path. The tree beneath, whose mutation
+    /// consumer is unmounted while the overlay shows, holds the row under its
+    /// new name once the rename's rescan re-invalidates it, so clearing the
+    /// filter finds it.
+    func testARenamedRowRespectsTheActiveFilter() async throws {
+        let state = try await renameVault(["journal.md", "other.md"])
+        let session = try XCTUnwrap(state.currentSession)
+        let tree = FileTreeViewModel()
+        defer { tree.cancelPendingLoads() }
+        tree.bind(to: session)
+        await settle(tree)
+        let stillMatches = filter(over: session, committing: "journ")
+        let noLongerMatches = filter(over: session, committing: "journal")
+        XCTAssertEqual(resultPaths(stillMatches), ["journal.md"])
+        XCTAssertEqual(resultPaths(noLongerMatches), ["journal.md"])
+
+        let announcements = state.sidebarMutationToken
+        let rename = try await renameFromFileList("journal.md", to: "journey.md", state: state)
+        XCTAssertEqual(
+            rename.mutation.kind, .rename(oldPath: "journal.md", newPath: "journey.md"))
+        XCTAssertNotEqual(
+            state.sidebarMutationToken, announcements,
+            "the rename announced: the edge the overlay re-runs on")
+        stillMatches.refreshAfterStructuralMutation()
+        noLongerMatches.refreshAfterStructuralMutation()
+
+        XCTAssertEqual(
+            resultPaths(stillMatches), ["journey.md"],
+            "kept, under its new name, with no stale row for journal.md")
+        XCTAssertEqual(stillMatches.results?.total, 1)
+        XCTAssertEqual(
+            resultPaths(noLongerMatches), [],
+            "hidden by the filter it no longer matches, with no stale row either")
+        XCTAssertEqual(noLongerMatches.results?.total, 0)
+        for filter in [stillMatches, noLongerMatches] {
+            XCTAssertTrue(filter.isActive, "the filter stays applied")
+            XCTAssertNil(filter.inlineError)
+        }
+
+        // The tree beneath: only the rescan edge reaches it while the
+        // overlay shows.
+        await rename.rescan.value
+        XCTAssertFalse(state.isScanning)
+        tree.authoritativeTreeInvalidation()
+        await settle(tree)
+        XCTAssertEqual(tree.visibleRows.map(\.path).sorted(), ["journey.md", "other.md"])
+
+        // The two edges this fact replays are the sidebar's.
+        let lines = codeLines(try appSource("FileTreeSidebar.swift"))
+        for wiring in [
+            [
+                ".onChange(of: appState.sidebarMutationToken) { _, _ in",
+                "filterModel.refreshAfterStructuralMutation()",
+            ],
+            [
+                "if appState.consumeImportOwnedScanCompletion() != nil {",
+                "} else {",
+                "tree.authoritativeTreeInvalidation()",
+            ],
+        ] {
+            XCTAssertTrue(
+                lines.indices.contains { lines[$0...].starts(with: wiring) },
+                "the sidebar no longer runs \(wiring.joined(separator: " "))")
+        }
+    }
+
+    /// A real vault behind a scanned `AppState`, so both facts run the
+    /// production funnel (the inline field's commit, core's structural
+    /// rename, the `.rename` publication) over the production tree binding,
+    /// whose fetcher is core's own listing: the post-rename listing is the
+    /// one the app fetches.
+    private func renameVault(_ files: [String]) async throws -> AppState {
+        let tempDir = FileManager.default.temporaryDirectory
+            .appendingPathComponent("rename-row-\(UUID().uuidString)")
+        addTeardownBlock { try? FileManager.default.removeItem(at: tempDir) }
+        let vault = tempDir.appendingPathComponent("vault")
+        for path in files {
+            let url = vault.appendingPathComponent(path)
+            try FileManager.default.createDirectory(
+                at: url.deletingLastPathComponent(), withIntermediateDirectories: true)
+            try "\((path as NSString).lastPathComponent)\n".write(
+                to: url, atomically: true, encoding: .utf8)
+        }
+        let state = AppState(
+            recentsStore: RecentVaultsStore(
+                fileURL: tempDir.appendingPathComponent("recents.json")),
+            externalOpener: { _ in true })
+        state.openVault(at: vault)
+        await state.scanTask?.value
+        XCTAssertNotNil(state.currentSession)
+        return state
+    }
+
+    /// What the tree view owns while it consumes a mutation: the semantic
+    /// selection (the native List carrier always comes to rest on its focus)
+    /// and the one create/rename/move focus waiting for its refetched row.
+    private struct RenameSelection {
+        var model = FileTreeSidebar.SelectionModel()
+        var pending: FileTreeSidebar.PendingPostMutationFocus?
+    }
+
+    /// `FileTreeSidebar.visibleSelectionRows`.
+    private func selectionRows(_ tree: FileTreeViewModel) -> [FileTreeSidebar.SelectionRow] {
+        tree.visibleRows.map {
+            FileTreeSidebar.SelectionRow(
+                identity: .node($0.nodeID), path: $0.path,
+                isDirectory: $0.isDirectory, isMarkdown: $0.isMarkdown)
+        }
+    }
+
+    /// `FileTreeSidebar.selectionRow(for:)`.
+    private func selectionRow(
+        _ rowID: FileTreeSidebar.RowID, in tree: FileTreeViewModel
+    ) -> FileTreeSidebar.SelectionRow? {
+        guard case let .node(nodeID) = rowID, let node = tree.node(for: nodeID) else {
+            return nil
+        }
+        return FileTreeSidebar.SelectionRow(
+            identity: rowID, path: node.path,
+            isDirectory: node.isDirectory, isMarkdown: node.isMarkdown)
+    }
+
+    /// The view's one semantic-selection write seam, as the view calls it.
+    private func publish(
+        _ selection: inout RenameSelection, tree: FileTreeViewModel, state: AppState,
+        _ mutation: (inout FileTreeSidebar.SelectionModel) -> Void
+    ) {
+        FileTreeSidebar.mutateSelectionAndPublish(
+            model: &selection.model,
+            capturedSessionIdentity: tree.sessionIdentity,
+            visibleRows: selectionRows(tree),
+            appState: state,
+            mutation: mutation)
+    }
+
+    private func settle(
+        _ tree: FileTreeViewModel, file: StaticString = #filePath, line: UInt = #line
+    ) async {
+        let settled = await tree.settleLevelLoadsForTesting()
+        XCTAssertTrue(settled, "the tree's level loads settle", file: file, line: line)
+    }
+
+    /// A plain click on a file row: the List's user edge reveals it, which
+    /// publishes the command target, and opens it in the current tab.
+    private func click(
+        _ path: String, tree: FileTreeViewModel,
+        selection: inout RenameSelection, state: AppState
+    ) async throws {
+        let row = try XCTUnwrap(selectionRows(tree).first { $0.path == path })
+        publish(&selection, tree: tree, state: state) { $0.revealFromUserIntent(row) }
+        state.openFile(path, target: .currentTab, advancesSidebarSelectionRevision: false)
+        await state.noteLoadTask?.value
+        XCTAssertEqual(state.sidebarSelectionSnapshot?.focusedPath, path)
+        XCTAssertEqual(state.selectedFilePath, path)
+    }
+
+    /// Rename from the file list: the one staging resolver every row surface
+    /// routes through (F2, the context menu, VoiceOver), then the inline
+    /// field's commit. It returns at the publication edge, the first
+    /// main-actor turn after the `.rename` publishes, which is where SwiftUI
+    /// runs the sidebar's `onChange` handlers, together with the rename's
+    /// task, which ends with the rename's rescan.
+    private func renameFromFileList(
+        _ path: String, to newName: String, state: AppState
+    ) async throws -> (mutation: AppState.TreeMutation, rescan: Task<Void, Never>) {
+        let published = expectation(description: "the rename of \(path) publishes")
+        let observer = state.$treeMutation.dropFirst().sink { mutation in
+            if case let .rename(oldPath, _)? = mutation?.kind, oldPath == path {
+                published.fulfill()
+            }
+        }
+        defer { observer.cancel() }
+        XCTAssertTrue(state.requestRename(path: path, isDirectory: false))
+        let field = try XCTUnwrap(state.renamingNode)
+        XCTAssertTrue(state.commitPendingRename(id: field.id, to: newName))
+        let rescan = try XCTUnwrap(state.pendingStructuralTaskForTesting)
+        await fulfillment(of: [published], timeout: 10)
+        XCTAssertNil(state.renamingNode, "the inline field closed on success")
+        XCTAssertNil(state.structuralRenameError)
+        return (try XCTUnwrap(state.treeMutation), rescan)
+    }
+
+    /// `FileTreeSidebar.handleTreeMutation`'s arm for one `.rename`
+    /// publication. The view method is private; the seams it drives are not.
+    /// It invalidates the dirtied level, follows expansion, remaps the known
+    /// move (`remapSelectionForKnownMove`), then installs the post-mutation
+    /// focus or leaves it pending on the refetch (`applyPostMutationFocus`).
+    /// `testARenamedRowStaysPresentSelectedAndUnduplicated` pins the arm by
+    /// inspection, so this replay cannot drift from the consumer unnoticed.
+    private func consumeRename(
+        _ mutation: AppState.TreeMutation, tree: FileTreeViewModel,
+        selection: inout RenameSelection, state: AppState
+    ) throws {
+        guard case let .rename(oldPath, newPath) = mutation.kind else {
+            return XCTFail("expected a .rename publication, got \(mutation.kind)")
+        }
+        FileTreeSidebar.cancelPendingPostMutationFocus(&selection.pending)
+        for parent in mutation.affectedParents {
+            if let parent {
+                // `parentNodeID(forPath:)`: the materialized folder's id.
+                let parentID = try XCTUnwrap(tree.focusTarget(forPath: parent))
+                tree.treeInvalidation(parent: parentID)
+            } else {
+                tree.rootLevelInvalidation()
+            }
+        }
+        tree.remapExpansion(fromPrefix: oldPath, to: newPath)
+        let model = selection.model
+        if !model.selected.isEmpty || model.rangeAnchor != nil {
+            let remapped = FileTreeSidebar.remapSelectionForMove(
+                selection: model.selected, snapshot: model.selectionPathSnapshots,
+                focus: model.focused, anchor: model.rangeAnchor,
+                anchorSnapshot: model.rangeAnchorPathSnapshot,
+                oldPath: oldPath, newPath: newPath)
+            publish(&selection, tree: tree, state: state) {
+                $0 = FileTreeSidebar.SelectionModel(
+                    focused: remapped.focus,
+                    selected: remapped.selection,
+                    selectionPathSnapshots: remapped.snapshot,
+                    rangeAnchor: remapped.anchor,
+                    rangeAnchorPathSnapshot: remapped.anchorSnapshot,
+                    selectionRevision: model.selectionRevision)
+            }
+        }
+        let pending = FileTreeSidebar.PendingPostMutationFocus(
+            targetPath: newPath, capturedDeleteRow: nil, suppressOpen: false,
+            ownerSessionIdentity: tree.sessionIdentity,
+            ownerMutationToken: mutation.token)
+        let rows = selectionRows(tree)
+        if let installed = FileTreeSidebar.installPendingPostMutationFocus(
+            pending, model: &selection.model,
+            capturedSessionIdentity: tree.sessionIdentity,
+            visibleRows: rows, appState: state)
+        {
+            selection.pending = FileTreeSidebar.pendingPostMutationFocusAfterInstall(
+                pending, installedRow: installed, visibleRows: rows)
+        } else {
+            selection.pending = pending
+        }
+    }
+
+    /// `.onChange(of: appState.selectedFilePath)`: the rename retargeted the
+    /// open tab, and the path mirror reveals that path's row, which is not
+    /// there while its level refetches, so the selection empties until the
+    /// pending focus lands.
+    private func mirrorSelectedPath(
+        tree: FileTreeViewModel, selection: inout RenameSelection, state: AppState
+    ) {
+        // `rowID(forPath:)`: a file row's id is its path, once materialized.
+        let mirrored = state.selectedFilePath
+            .flatMap { tree.focusTarget(forPath: $0) }
+            .map { FileTreeSidebar.RowID.node($0) }
+        let outcome = FileTreeSidebar.programmaticSelectionOutcome(
+            currentListSelection: selection.model.focused, mirroredSelection: mirrored)
+        publish(&selection, tree: tree, state: state) {
+            $0.reveal(outcome.listSelection.flatMap { self.selectionRow($0, in: tree) })
+        }
+    }
+
+    /// `.onChange(of: tree.visibleRows)` once a refetch lands: a pending
+    /// create/rename/move focus owns the edge until its row materializes,
+    /// otherwise the generic reconcile runs; either way the single-item
+    /// command mirror re-syncs (`mirrorTreeSelectionToAppState`).
+    private func landRefetch(
+        tree: FileTreeViewModel, selection: inout RenameSelection, state: AppState
+    ) {
+        let currentSession = state.currentSession.map(ObjectIdentifier.init)
+        var ownedByPendingFocus = false
+        if selection.pending != nil {
+            let outcome = FileTreeSidebar.restorePendingPostMutationSelection(
+                pending: &selection.pending,
+                model: &selection.model,
+                capturedSessionIdentity: tree.sessionIdentity,
+                visibleRows: selectionRows(tree),
+                appState: state,
+                currentSessionIdentity: currentSession,
+                currentMutationToken: state.treeMutation?.token,
+                resolveCurrentRow: { self.selectionRow($0, in: tree) })
+            ownedByPendingFocus = outcome != .cancelAndReconcile
+        }
+        if !ownedByPendingFocus {
+            // `reconcileSelectionAfterTreeChange`, resolving through
+            // `resolvedPath(of:)`.
+            let rows = selectionRows(tree)
+            publish(&selection, tree: tree, state: state) {
+                $0.reconcile(visibleRows: rows) { rowID in
+                    guard case let .node(nodeID) = rowID else { return nil }
+                    if case let .file(path) = nodeID { return path }
+                    return tree.node(for: nodeID)?.path
+                }
+            }
+        }
+        // `pathValidatedNode(for:)` over the carrier, which rests on the focus.
+        let model = selection.model
+        let resolved = model.focused.flatMap { rowID -> AppState.TreeSelection? in
+            guard case let .node(nodeID) = rowID, let node = tree.node(for: nodeID),
+                model.isSelected(rowID, currentPath: node.path)
+            else { return nil }
+            return AppState.TreeSelection(path: node.path, isDirectory: node.isDirectory)
+        }
+        FileTreeSidebar.publishGuardAwareTreeSelectionMirror(
+            pending: selection.pending,
+            model: model,
+            currentSessionIdentity: currentSession,
+            currentMutationToken: state.treeMutation?.token,
+            resolvedSelection: resolved,
+            appState: state)
+    }
+
+    /// `.onChange(of: appState.isScanning)`: the rename's own rescan finishes
+    /// and the sidebar re-invalidates the whole tree; that refetch lands
+    /// through the same edge.
+    private func finishRescan(
+        _ rescan: Task<Void, Never>, tree: FileTreeViewModel,
+        selection: inout RenameSelection, state: AppState
+    ) async {
+        await rescan.value
+        XCTAssertFalse(state.isScanning)
+        tree.authoritativeTreeInvalidation()
+        await settle(tree)
+        landRefetch(tree: tree, selection: &selection, state: state)
+    }
+
+    /// #785's criteria for one rename from the file list: the renamed row is
+    /// present once, under its new name; no row remains for the old path and
+    /// no other row came or went; and it is the selected row, in the semantic
+    /// model, in the published command target, and in the single-item mirror
+    /// the file commands read.
+    private func assertRenamedRow(
+        _ oldPath: String, _ newPath: String, rowsBefore: [String],
+        tree: FileTreeViewModel, selection: RenameSelection, state: AppState,
+        _ moment: String, file: StaticString = #filePath, line: UInt = #line
+    ) {
+        let rows = tree.visibleRows
+        let paths = rows.map(\.path)
+        XCTAssertEqual(
+            paths.filter { $0 == newPath }.count, 1,
+            "\(moment): one row for \(newPath)", file: file, line: line)
+        XCTAssertEqual(
+            rows.first { $0.path == newPath }?.name, (newPath as NSString).lastPathComponent,
+            "\(moment): the row shows its new name", file: file, line: line)
+        XCTAssertFalse(
+            paths.contains(oldPath),
+            "\(moment): no stale row for \(oldPath)", file: file, line: line)
+        XCTAssertEqual(
+            paths.sorted(), rowsBefore.map { $0 == oldPath ? newPath : $0 }.sorted(),
+            "\(moment): no other row came or went", file: file, line: line)
+        let renamed = FileTreeSidebar.RowID.node(.file(path: newPath))
+        XCTAssertEqual(
+            selection.model.focused, renamed,
+            "\(moment): the renamed row has the focus", file: file, line: line)
+        XCTAssertEqual(
+            selection.model.selected, [renamed],
+            "\(moment): and is the only selection", file: file, line: line)
+        XCTAssertEqual(
+            selection.model.selectedVisibleRows(in: selectionRows(tree)).map(\.path), [newPath],
+            "\(moment): the visible selection is the renamed row", file: file, line: line)
+        XCTAssertNil(
+            selection.pending,
+            "\(moment): the post-mutation focus landed", file: file, line: line)
+        XCTAssertEqual(
+            state.sidebarSelectionSnapshot?.items.map(\.path), [newPath],
+            "\(moment): the command target names the new path", file: file, line: line)
+        XCTAssertEqual(
+            state.sidebarSelectionSnapshot?.focusedPath, newPath,
+            "\(moment): the focused target too", file: file, line: line)
+        XCTAssertEqual(
+            state.treeSelectedNode, AppState.TreeSelection(path: newPath, isDirectory: false),
+            "\(moment): and the single-item mirror", file: file, line: line)
+    }
+
+    /// A sidebar filter over the vault, bound the way `AppState` binds the
+    /// sidebar's own in the tree layout (core's date requirements and
+    /// matcher) but with private defaults, so a committed query never
+    /// persists into the test host.
+    private func filter(over session: VaultSession, committing query: String) -> SidebarFilterModel {
+        let suite = "FileTreeSidebarTests.filter.\(UUID().uuidString)"
+        let defaults = UserDefaults(suiteName: suite)!
+        defaults.removePersistentDomain(forName: suite)
+        addTeardownBlock { defaults.removePersistentDomain(forName: suite) }
+        let model = SidebarFilterModel()
+        model.bind(SidebarFilterModel.Dependencies(
+            requirements: { try session.sidebarFilterDateRequirements(query: $0) },
+            perform: { query, scopeTag, windows, paging in
+                try session.filterFiles(
+                    query: query, scopeDir: nil, scopeTag: scopeTag,
+                    dateWindows: windows, paging: paging)
+            },
+            performUntagged: { try session.untaggedFiles(paging: $0) },
+            announce: { _ in },
+            now: { Date() },
+            timeZone: { TimeZone.current },
+            resolver: SidebarProductionCivilDateResolver(),
+            defaults: defaults,
+            debounceNanoseconds: 0))
+        model.fieldText = query
+        model.commitNow()
+        return model
+    }
+
+    private func resultPaths(_ filter: SidebarFilterModel) -> [String] {
+        filter.results?.files.map(\.path) ?? []
+    }
+
+    private func appSource(_ name: String) throws -> String {
+        let packageRoot = URL(fileURLWithPath: #filePath)
+            .deletingLastPathComponent()
+            .deletingLastPathComponent()
+            .deletingLastPathComponent()
+        return try String(
+            contentsOf: packageRoot.appendingPathComponent("Sources/SlateMac/\(name)"),
+            encoding: .utf8)
+    }
+
+    /// The source's code lines, trimmed, with blank and comment lines dropped:
+    /// a pin matches a whole line of code, so neither re-indentation nor a
+    /// comment that mentions the call can satisfy or break it.
+    private func codeLines(_ source: String) -> [String] {
+        source.split(separator: "\n")
+            .map { $0.trimmingCharacters(in: .whitespaces) }
+            .filter { !$0.isEmpty && !$0.hasPrefix("//") }
+    }
+
+    /// The code lines of `func name(`, from its signature line up to the next
+    /// function declaration. Scoped by lines, not by counting braces, so a
+    /// brace inside a string literal cannot cut the function short.
+    private func functionLines(_ name: String, in lines: [String]) throws -> [String] {
+        let start = try XCTUnwrap(
+            lines.firstIndex { $0.contains("func \(name)(") }, "no func \(name)")
+        let end = lines[(start + 1)...].firstIndex {
+            $0.range(of: #"^(?:[@\w()]+\s+)*func\s"#, options: .regularExpression) != nil
+        } ?? lines.endIndex
+        return Array(lines[start..<end])
+    }
+
     // MARK: - Type-select buffer semantics (Codex round 2)
 
     /// Repeating the same character cycles (buffer holds ONE char, so the
