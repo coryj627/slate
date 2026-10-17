@@ -1636,6 +1636,7 @@ final class AppState: ObservableObject {
         @Sendable (VaultSession, Int64) async throws -> BatchMoveReport
     typealias StructuralBatchRefreshRunner =
         @MainActor @Sendable (AppState) async -> Void
+    typealias CanonicalPathProbe = (VaultSession, String) throws -> String?
     typealias ImportRefreshRunner =
         @MainActor @Sendable (AppState, VaultSession) async throws -> Void
     typealias StructuralRenameRunner =
@@ -1684,6 +1685,14 @@ final class AppState: ObservableObject {
     }
     var structuralBatchRefreshRunner: StructuralBatchRefreshRunner = { state in
         await state.loadFiles()
+    }
+    /// #1077 contracts I6 and I7 (#1147): the stored-spelling probe the
+    /// missing-tab re-seat asks (`reseatMissingTabs`). Production is core's
+    /// `canonical_path`, the filesystem's own answer and never a case rule. A
+    /// test makes it throw to prove the re-seat fails closed, the seam Windows'
+    /// rescan keeps as `CanonicalPathForTests`.
+    var canonicalPathProbe: CanonicalPathProbe = { session, path in
+        try session.canonicalPath(path: path)
     }
     /// Clean import landings need only the indexed file inventory. This seam is
     /// intentionally separate from every pre-existing structural operation,
@@ -14005,6 +14014,14 @@ final class AppState: ObservableObject {
     ///
     /// Returns through `saveTask` so tests can `await` to
     /// deterministically observe the post-save state.
+    ///
+    /// #1077 contract I8 (#1147): a buffer with no content hash has never
+    /// loaded bytes from the path it names, so it has no basis to overwrite
+    /// whatever is there now. Its save is a create (`writeNoteSave`): it
+    /// lands only on a free path, and `DestinationExists` is the save
+    /// conflict. Filling a free path is a structural create, so it takes the
+    /// structural gate, its recovery admission and its refresh exactly as the
+    /// missing-file Keep Mine does. A buffer with a hash saves as before.
     @discardableResult
     func saveCurrentNote() -> Task<Void, Never>? {
         guard !isSaving else { return nil }
@@ -14016,23 +14033,48 @@ final class AppState: ObservableObject {
             postMutationAnnouncement(reason)
             return nil
         }
-        guard admitBatchTrashWrite(to: [path]) else { return nil }
+        let expected = currentNoteContentHash
+        let structuralToken: Int?
+        let structuralRefresher: StructuralBatchRefreshRunner?
+        if expected == nil {
+            guard admitStructuralMutationRequest(),
+                let recoveryReservation = admitStructuralRecoveryRecreation(path),
+                admitBatchTrashWrite(to: [path])
+            else { return nil }
+            structuralToken = beginStructuralMutation(
+                recoveryReservation: recoveryReservation)
+            structuralRefresher = structuralBatchRefreshRunner
+        } else {
+            guard admitBatchTrashWrite(to: [path]) else { return nil }
+            structuralToken = nil
+            structuralRefresher = nil
+        }
         let generation = beginSaveOwnership()
         saveError = nil
-        let expected = currentNoteContentHash
         let fmSource = currentNoteFMSource
         let task: Task<Void, Never> = Task { [weak self] in
-            await self?.performSave(
+            guard let self else { return }
+            defer {
+                if let structuralToken {
+                    self.endStructuralMutation(structuralToken)
+                }
+            }
+            await self.performSave(
                 session: session,
                 path: path,
                 contents: contents,
                 fmSource: fmSource,
                 expectedHash: expected,
-                saveGeneration: generation
+                saveGeneration: generation,
+                structuralToken: structuralToken,
+                structuralRefresher: structuralRefresher
             )
             return
         }
         saveTask = task
+        if structuralToken != nil {
+            recordPendingStructuralTask(task)
+        }
         return task
     }
 
@@ -14149,16 +14191,21 @@ final class AppState: ObservableObject {
         // actor while disk IO + tree rewrites run. U3-3 (#469): `contents`
         // is the BODY; `save_composed` reassembles fm ⊕ body through the
         // one Rust composer and then runs the existing save_text machinery
-        // verbatim (conflict detection, atomic write, index, op-log).
-        let outcome: Result<SaveReport, VaultError> = await Task.detached(priority: .userInitiated) {
+        // verbatim (conflict detection, atomic write, index, op-log). A
+        // hashless buffer is a create instead (#1147, I8: `writeNoteSave`).
+        let displayName = filename(of: path)
+        let outcome: Result<NoteSaveLanding, VaultError> = await Task.detached(
+            priority: .userInitiated
+        ) {
             do {
-                let report = try session.saveComposed(
-                    path: path,
-                    fmSource: fmSource,
-                    body: contents,
-                    expectedContentHash: expectedHash
-                )
-                return .success(report)
+                return .success(
+                    try AppState.writeNoteSave(
+                        session: session,
+                        path: path,
+                        fmSource: fmSource,
+                        body: contents,
+                        expectedContentHash: expectedHash,
+                        displayName: displayName))
             } catch let error as VaultError {
                 return .failure(error)
             } catch {
@@ -14229,12 +14276,14 @@ final class AppState: ObservableObject {
             // purpose: a same-vault note/tab switch mid-write trips that guard and
             // would otherwise skip the clear, leaving a stale inverse armed against
             // the recreated path. A NORMAL save of an existing file (non-empty
-            // expected hash) leaves the history intact.
-            if expectedHash?.isEmpty == true {
+            // expected hash) leaves the history intact. A hashless save that
+            // landed (#1147, I8) is an exclusive create of a free path: the
+            // same barrier.
+            if expectedHash?.isEmpty ?? true {
                 barrierStructuralUndoForCreatedVaultPath(
                     relativePath: path, existedBefore: false)
             }
-            if case .success(let report) = outcome {
+            if case .success(let landing) = outcome {
                 // File truth is path-owned, not active-tab-owned. Publish the
                 // committed baseline/hash to every exact-path parked document
                 // before the live-note guard so an unexpected programmatic
@@ -14242,7 +14291,7 @@ final class AppState: ObservableObject {
                 workspace.mirrorSaveResult(
                     path: path,
                     baseline: contents,
-                    contentHash: report.newContentHash)
+                    contentHash: landing.newContentHash)
             }
         }
         guard BaseExactIdentity.matches(loadedFilePath, path) else {
@@ -14251,8 +14300,8 @@ final class AppState: ObservableObject {
         }
 
         switch outcome {
-        case .success(let report):
-            currentNoteContentHash = report.newContentHash
+        case .success(let landing):
+            currentNoteContentHash = landing.newContentHash
             savedBaselineText = contents
             // Defensive newest-buffer check even though the visible editor is
             // read-only during Save. A queued/programmatic producer must never
@@ -14311,6 +14360,12 @@ final class AppState: ObservableObject {
                 session: session, path: path
             )
             postAccessibilityAnnouncement(.noteSaved(filename: filename(of: path)))
+            // #1147 (I8): a hashless save whose create landed but was not
+            // indexed is still a save; core's caveat follows the saved
+            // sentence, as it follows a created one (#1140).
+            if let caveat = landing.caveat {
+                postMutationAnnouncement(caveat)
+            }
         case .failure(.WriteConflict(let currentHash, let expected, let currentMtimeMs)):
             // U1-2: a save-then-close chain aborts on conflict — the tab
             // must stay open while the user resolves the dialog.
@@ -16802,6 +16857,13 @@ final class AppState: ObservableObject {
             break
         case .createFolder, .createNote, .delete, .batchTrash:
             clearStructuralUndoStacks()
+        }
+        // #1077 contract I6 (#1147): a create or a rename can bring a missing
+        // tab's note back, under its own spelling or another the volume
+        // treats as the same file. Identity is corrected once, here, where
+        // the path enters the host's state; every comparator stays exact.
+        if kind.publishesCreatedOrRenamedPaths {
+            reseatMissingTabs()
         }
     }
 
@@ -22288,6 +22350,74 @@ final class AppState: ObservableObject {
         if announce {
             postMutationAnnouncement("Recovered drafts discarded.")
         }
+    }
+
+    // MARK: Canonical identity re-seat (#1147, contract 32 I6)
+
+    /// Every tab on `old` takes the stored spelling `new`, by the steps a
+    /// rename takes for its open tabs (`applyRetargets`): to every exact
+    /// comparison, a note that came back under another spelling is a renamed
+    /// one. Path-owned drafts and recovery move first, then the workspace
+    /// (item, title, parked identity), then the active document's live
+    /// fields. A buffer the active tab holds rebinds as a rename's does; a
+    /// missing tab with no buffer only moves the selection mirror, because
+    /// its reload is the caller's (`reloadActiveNoteForReseat`).
+    func retargetTabsForReseat(from old: String, to new: String) {
+        rekeyNoteRecoveryPaths([
+            NoteRecoveryPathRetarget(oldPath: old, newPath: new, includesDescendants: false)
+        ])
+        let changed = workspace.retarget(old: old, new: new)
+        guard let activeID = workspace.model.activeGroup.activeTabID,
+            changed.contains(activeID)
+        else { return }
+        if BaseExactIdentity.matches(loadedFilePath, old) {
+            rebindActiveIfRetargeted(changed, to: new)
+        } else if !BaseExactIdentity.matches(selectedFilePath, new) {
+            // The latch `activateTab` uses for the same mirror: the sidebar
+            // follows without the selection funnel running a second load.
+            isActivatingTab = true
+            defer { isActivatingTab = false }
+            selectedFilePath = new
+        }
+    }
+
+    /// A missing tab that holds a buffer was just retargeted to the spelling
+    /// its note came back under (`path`): it stops being missing and keeps
+    /// the buffer, never reloaded over it. The recovery copy the Trash flip
+    /// kept goes, because the buffer is editable again behind the ordinary
+    /// unsaved-changes gates, and its next save names an existing file: a
+    /// compare-and-swap when the buffer remembers a hash, otherwise a hashless
+    /// create, which I8 makes the save conflict. The retarget's rebind already
+    /// refreshed the active note's panels.
+    func releaseMissingNoteForReseat(at path: String) {
+        missingNoteRecoveryDrafts[missingNoteRecoveryKey(path)] = nil
+        workspace.markDocumentsBackOnDisk(forPath: path)
+        guard noteLoadError != nil,
+            case .markdown(let activePath)? = workspace.activeTab?.item,
+            BaseExactIdentity.matches(activePath, path),
+            BaseExactIdentity.matches(loadedFilePath, path),
+            currentNoteText != nil
+        else { return }
+        noteLoadError = nil
+    }
+
+    /// The same-path reload of an active tab with no buffer whose note is
+    /// back at `path` (the template target's precedent,
+    /// `startAuthoritativeTemplateTargetLoad`). Its error stays up until the
+    /// read lands, so a read that fails again changes nothing on screen, and
+    /// one that succeeds refreshes the text, the content hash and the panels.
+    func reloadActiveNoteForReseat(path: String) {
+        noteLoadTask?.cancel()
+        let task: Task<Void, Never> = Task { [weak self] in
+            guard let self else { return }
+            await self.loadCurrentNote(path: path)
+            guard !Task.isCancelled,
+                self.noteLoadError == nil,
+                BaseExactIdentity.matches(self.loadedFilePath, path)
+            else { return }
+            self.fireCollectionLoads(path: path)
+        }
+        noteLoadTask = task
     }
 
     /// The widget's single-writer seam for the mirror above — the view
