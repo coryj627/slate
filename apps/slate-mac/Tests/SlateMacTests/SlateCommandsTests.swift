@@ -1648,21 +1648,26 @@ extension SlateCommandsTests {
             "the orphans closure is replaced with a refusing one")
         let failed = A11yEvent.paletteCommandFailed(label: "Graph: Orphaned Notes", detail: "Boom")
         XCTAssertEqual(state.invokeRegisteredCommand(SlateCommandID.graphOrphans), failed)
+        let expected = [a11yRender(event: notFound), a11yRender(event: failed)]
         XCTAssertEqual(
-            spoken.lines, [a11yRender(event: notFound).text, a11yRender(event: failed).text],
-            "each failure is spoken once, in core's words")
+            spoken.lines, expected.map(\.text), "each failure is spoken once, in core's words")
+        XCTAssertEqual(
+            spoken.priorities, expected.map { AnnouncementPriority($0.priority) },
+            "at core's priority, never one the host picks")
         let quiet = try XCTUnwrap(state.commandRegistry.findById(id: SlateCommandID.graphUnresolved))
         XCTAssertTrue(state.commandRegistry.register(command: quiet, action: CountingMenuAction()))
         XCTAssertNil(state.invokeRegisteredCommand(SlateCommandID.graphUnresolved))
         XCTAssertEqual(spoken.lines.count, 2, "a command that ran speaks nothing here")
     }
 
-    /// Records what reached the announcement seam.
+    /// Records what reached the announcement seam, and at what priority.
     private final class SpokenLines: AnnouncementPosting {
         private(set) var lines: [String] = []
+        private(set) var priorities: [AnnouncementPriority] = []
 
         func post(_ message: String, priority: AnnouncementPriority) {
             lines.append(message)
+            priorities.append(priority)
         }
     }
 }
