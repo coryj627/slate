@@ -1051,3 +1051,17 @@ verified current path of the held root: Some("<run>/V2")
 re-armed at the verified path; write V2/c.md: Create(File)/Modify on V2/c.md  [delivered]
 a new directory appears at V and V/x.md is written: old stream reports "root changed" then V/x.md
 ```
+
+## 11. Owner decisions (2026-10-17)
+
+The owner answered §10 in a decision interview on 2026-10-17. Every answer below is the recommendation.
+
+- **Q1.** The unix-VFS syscall hook replaces `/dev/fd/<rootfd>/…`, which was disproven on macOS. There is no second Linux `/proc/self/fd` path.
+- **Q2.** The hook is a process-global `xSetSystemCall` override, not a per-session `sqlite3_vfs`.
+- **Q3.** After a legitimate root rename, the watcher re-arms once at the held root's verified current path. A true identity mismatch still ends the watch.
+- **Q4.** `root_display_path()` is added to the FFI, and hosts show a moved vault's verified current path.
+- **Q5.** The structural-lock registry is re-keyed by the `.slate` identity.
+- **Q6.** macOS and Linux ship now (22a, 22b), and the Windows `FsRoot` body (22W) follows under Milestone W.
+- **Q7.** Settled by PR 20's Q6 (rc.5 pinned) and Q7 (the mac host's integration fact), so the re-arm fact rides that witness.
+- **Q8.** #1442 (four mac stores recreate a renamed vault's old path) is fixed now with that issue's small change. The shared `fs_root` convention is then carried into the host stores once core has it.
+- **Plan.** §8's split is queued after 20a: 22a, then 22b; 22W waits for Milestone W.
