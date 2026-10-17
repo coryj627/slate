@@ -269,40 +269,6 @@ fn a_failed_lookup_leaves_a_create_published_but_unindexed() {
     assert_eq!(rows, 0, "the failed create committed an index row");
 }
 
-/// The files the equivalence censuses resolve against: every shape the
-/// resolver tells apart — duplicate basenames at several depths, implied
-/// and explicit extensions, attachments, case, and Unicode (composed,
-/// decomposed, non-ASCII case).
-const CENSUS_FILES: &[&str] = &[
-    "alpha.md",
-    "notes/beta.md",
-    "gamma.md",
-    "a/shared.md",
-    "notes/shared.md",
-    "z/shared.md",
-    "notes/deep/shared.md",
-    "img/pic.png",
-    "pic.png",
-    "docs/report.pdf",
-    "other.markdown",
-    "c.mdown",
-    "d.mkd",
-    "x.y.md",
-    "foo.txt",
-    "foo.txt.md",
-    "space name.md",
-    "\u{dc}ber.md",
-    "folder \u{c4}/Stra\u{df}e.md",
-    "e\u{301}cole.md",
-    "\u{130}stanbul.md",
-    "notes/\u{c6}ON.md",
-    "Notes2/Mixed Case.MD",
-    "Kelvin.md",
-    "index.md",
-    "a/index.md",
-    "notes/index.md",
-];
-
 /// One note naming every target shape: bare names, folder paths,
 /// vault-root and `./` paths, relative `../` paths, targets without an
 /// extension, anchors and aliases, embeds and attachments, Markdown links,
@@ -318,11 +284,12 @@ const CENSUS_BODY: &str = "# Census\n\n\
 [[\u{130}stanbul]] [[i\u{307}stanbul]] [[istanbul]] [[\u{e6}on]] [[notes/\u{e6}on]] [[\u{212a}elvin]]\n\
 [[other]] [[c]] [[d]] [[x.y]] [[x.y.md]] [[foo.txt]] [[foo]] [[space name]] [[mixed case]] [[index]]\n";
 
-/// A scanned vault of [`CENSUS_FILES`], with [`CENSUS_BODY`] at each of
-/// `census_notes`.
+/// A scanned vault of the shared census fixtures' files
+/// (`link_resolver::census_fixtures::INDEXED_PATHS`), with [`CENSUS_BODY`]
+/// at each of `census_notes`.
 fn census_vault(census_notes: &[&str]) -> (tempfile::TempDir, VaultSession) {
     let (tmp, session) = make_vault(|provider| {
-        for path in CENSUS_FILES {
+        for path in crate::link_resolver::census_fixtures::INDEXED_PATHS {
             provider.write_file(path, b"# t\n\n## Intro\n").unwrap();
         }
         for path in census_notes {
@@ -421,21 +388,8 @@ fn a_create_writes_the_links_a_scan_writes() {
     }
 }
 
-/// Rows a case-insensitive volume (APFS, NTFS) cannot hold side by side —
-/// case twins, composed and decomposed twins, and a name spelled with the
-/// Kelvin sign — inserted straight into the index, each pair in the reverse
-/// of path order, so a lookup that broke a path tie by row order instead of
-/// path order would answer differently from the snapshot.
-const INDEX_ONLY_ROWS: &[&str] = &[
-    "twin/case.md",
-    "Twin/Case.md",
-    "Caf\u{e9}.md",
-    "Cafe\u{301}.md",
-    "dup.md",
-    "DUP.md",
-    "\u{212a}m.md",
-];
-
+/// Write `path` straight into `files`, as only a case-sensitive volume's
+/// scan could (no file behind it: the lookup reads rows, not disk).
 fn insert_index_only_row(conn: &rusqlite::Connection, path: &str) {
     let name = path.rsplit('/').next().unwrap();
     let extension = name
@@ -451,183 +405,99 @@ fn insert_index_only_row(conn: &rusqlite::Connection, path: &str) {
     .unwrap();
 }
 
-/// The targets the lookup census resolves: every shape the resolver tells
-/// apart, the index-only twins, and targets that never reach a lookup.
-const LOOKUP_TARGETS: &[&str] = &[
-    // Bare names; implied and explicit extensions; case.
-    "alpha",
-    "Alpha",
-    "ALPHA.md",
-    "alpha.md",
-    "beta",
-    "gamma",
-    "other",
-    "OTHER.markdown",
-    "c",
-    "d",
-    "x.y",
-    "x.y.md",
-    "foo",
-    "foo.txt",
-    "foo.txt.md",
-    "space name",
-    "space name.md",
-    "mixed case",
-    "Mixed Case.MD",
-    "index",
-    "ghost",
-    // Folder paths; vault-root and `./` paths.
-    "notes/beta",
-    "Notes/Beta.md",
-    "notes/beta.md",
-    "./notes/beta",
-    "/notes/beta",
-    "/alpha",
-    "/alpha.md",
-    "./alpha",
-    "/gamma",
-    "a/index",
-    "/index",
-    "Notes2/mixed case",
-    "notes/ghost",
-    // The same name in many folders.
-    "shared",
-    "SHARED.md",
-    "a/shared",
-    "/shared",
-    "deep/shared",
-    "notes/deep/shared",
-    // Relative `../` paths: a vault has no parent, so none resolves.
-    "../alpha",
-    "../alpha.md",
-    "notes/../alpha",
-    "./../alpha",
-    // Attachments.
-    "pic.png",
-    "img/pic.png",
-    "PIC.PNG",
-    "/pic.png",
-    "report.pdf",
-    "docs/report.pdf",
-    "report",
-    // Unicode: composed, decomposed, non-ASCII case.
-    "\u{fc}ber",
-    "\u{dc}BER",
-    "u\u{308}ber",
-    "e\u{301}cole",
-    "\u{e9}cole",
-    "stra\u{df}e",
-    "STRASSE",
-    "folder \u{e4}/stra\u{df}e",
-    "Folder \u{c4}/Stra\u{df}e.md",
-    "\u{130}stanbul",
-    "i\u{307}stanbul",
-    "istanbul",
-    "\u{e6}on",
-    "notes/\u{e6}on",
-    "\u{212a}elvin",
-    "kelvin",
-    // The index-only twins.
-    "twin/case",
-    "Twin/Case",
-    "TWIN/CASE.MD",
-    "/twin/case",
-    "case",
-    "Case.md",
-    "caf\u{e9}",
-    "cafe\u{301}",
-    "CAF\u{c9}",
-    "dup",
-    "DUP.md",
-    "Dup",
-    "km",
-    "\u{212a}m",
-    // External, empty and padded targets.
-    "https://example.com/a",
-    "mailto:a@example.com",
-    "#top",
-    "//host/x",
-    "C:\\notes\\alpha.md",
-    "2024:report.md",
-    "",
-    "   ",
-    " alpha ",
-];
-
-/// The sources the lookup census resolves from: the root and folders at
-/// several depths, one of them a case twin's.
-const LOOKUP_SOURCES: &[&str] = &[
-    "",
-    "host.md",
-    "notes/host.md",
-    "notes/deep/host.md",
-    "Twin/host.md",
-    "a/b/c/host.md",
-];
-
-/// #1295: the save lookup resolves exactly as `resolve_link` over the whole
-/// index, across the resolver fixtures — bare names, folder paths,
-/// vault-root paths, relative `../` paths, targets without an extension,
-/// attachments, the same name in many folders, case and Unicode folding, and
-/// the twins only a case-sensitive volume holds — from six sources, anchors
-/// carried through, whether it reads the rows or answers from its memo, and
-/// whether one resolver serves one source or all of them.
+/// #1295: the save's folded-name lookup resolves exactly as a resolution
+/// over the whole index, across the shared resolver fixtures
+/// (`link_resolver::census_fixtures`: bare names, folder paths, vault-root
+/// paths, relative `../` paths, targets without an extension, attachments,
+/// the same name in many folders, case and Unicode folding, and the twins
+/// only a case-sensitive volume holds), from six sources, anchors carried
+/// through, its memo cold and warm — and the scan's snapshot, drawn through
+/// the same seam, answers alike.
 #[test]
 fn the_save_lookup_resolves_exactly_as_the_whole_index_does() {
-    use crate::links_db::LinkResolver;
+    use crate::link_resolver::census_fixtures::{
+        DECISIVE_CASES, INDEX_ONLY_TWINS, SOURCES, TARGETS, resolve_by_full_offer, winner,
+    };
+    use crate::links_db::{FoldedNameLookup, resolve_remembered};
+    use std::collections::HashMap;
 
     let (_tmp, session) = census_vault(&[]);
     let conn = session.conn.lock().unwrap();
-    for path in INDEX_ONLY_ROWS {
+    for path in INDEX_ONLY_TWINS {
         insert_index_only_row(&conn, path);
     }
-    // The snapshot exactly as scan and rename build it (and saves did).
-    let whole = crate::InMemoryVaultIndex::new(
-        conn.prepare("SELECT path FROM files")
-            .unwrap()
-            .query_map([], |row| row.get(0))
-            .unwrap()
-            .map(|row| row.unwrap())
-            .collect(),
-    );
+    // The whole index as a whole-table snapshot reads it — what scan and
+    // rename resolve over, and saves did — in path order.
+    let whole: Vec<String> = conn
+        .prepare("SELECT path FROM files")
+        .unwrap()
+        .query_map([], |row| row.get(0))
+        .unwrap()
+        .map(|row| row.unwrap())
+        .collect();
+    let mut in_path_order = whole.clone();
+    in_path_order.sort();
+    assert_eq!(whole, in_path_order, "the snapshot reads in path order");
+    let snapshot = crate::InMemoryVaultIndex::new(whole.clone());
+
     let anchors = [
         None,
         Some(crate::LinkAnchor::Heading("Intro".into())),
         Some(crate::LinkAnchor::Block("blk".into())),
     ];
-    let shared = crate::links_db::LookupLinkResolver::default();
-    for source in LOOKUP_SOURCES {
-        let own = crate::links_db::LookupLinkResolver::default();
-        for pass in ["read", "memo"] {
-            for (n, target) in LOOKUP_TARGETS.iter().enumerate() {
+    for source in SOURCES {
+        let mut looked_up_winners = HashMap::new();
+        let mut snapshot_winners = HashMap::new();
+        for pass in ["cold memo", "warm memo"] {
+            for (n, target) in TARGETS.iter().enumerate() {
                 let anchor = anchors[n % anchors.len()].clone();
-                let expected = crate::resolve_link(target, anchor.clone(), source, &whole);
-                let got = own.resolve(&conn, target, anchor.clone(), source).unwrap();
-                assert_eq!(got, expected, "{target:?} from {source:?} ({pass})");
-                let got = shared.resolve(&conn, target, anchor, source).unwrap();
-                assert_eq!(got, expected, "{target:?} from {source:?} (shared, {pass})");
+                let expected = resolve_by_full_offer(target, anchor.clone(), source, &whole);
+                let looked_up = resolve_remembered(
+                    &FoldedNameLookup,
+                    &mut looked_up_winners,
+                    &conn,
+                    target,
+                    anchor.clone(),
+                    source,
+                )
+                .unwrap();
+                assert_eq!(
+                    looked_up, expected,
+                    "{target:?} from {source:?}: lookup, {pass}"
+                );
+                let drawn = resolve_remembered(
+                    &snapshot,
+                    &mut snapshot_winners,
+                    &conn,
+                    target,
+                    anchor.clone(),
+                    source,
+                )
+                .unwrap();
+                assert_eq!(
+                    drawn, expected,
+                    "{target:?} from {source:?}: snapshot, {pass}"
+                );
+                assert_eq!(
+                    crate::resolve_link(target, anchor, source, &snapshot),
+                    expected,
+                    "{target:?} from {source:?}: resolve_link"
+                );
             }
         }
     }
 
-    // The census reaches the cases that decide equivalence: a path tie
-    // between case twins goes to the first in path order, composed and
-    // decomposed twins stay apart, the Kelvin sign folds, a basename three
-    // folders carry goes to the nearest, and `../` names nothing.
-    for (target, source, winner) in [
-        ("twin/case", "", Some("Twin/Case.md")),
-        ("dup", "", Some("DUP.md")),
-        ("caf\u{e9}", "", Some("Caf\u{e9}.md")),
-        ("cafe\u{301}", "", Some("Cafe\u{301}.md")),
-        ("\u{212a}elvin", "", Some("Kelvin.md")),
-        ("km", "", Some("\u{212a}m.md")),
-        ("shared", "notes/deep/host.md", Some("notes/deep/shared.md")),
-        ("../alpha", "notes/host.md", None),
-    ] {
-        let winner_now = match shared.resolve(&conn, target, None, source).unwrap() {
-            crate::ResolvedLink::Resolved { target_path, .. } => Some(target_path),
-            _ => None,
-        };
-        assert_eq!(winner_now.as_deref(), winner, "{target:?} from {source:?}");
+    // The census reaches the cases that decide equivalence.
+    for (target, source, expected) in DECISIVE_CASES {
+        let resolved = resolve_remembered(
+            &FoldedNameLookup,
+            &mut HashMap::new(),
+            &conn,
+            target,
+            None,
+            source,
+        )
+        .unwrap();
+        assert_eq!(winner(&resolved), *expected, "{target:?} from {source:?}");
     }
 }

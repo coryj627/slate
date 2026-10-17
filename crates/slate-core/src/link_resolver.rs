@@ -566,6 +566,224 @@ fn has_extension(name: &str) -> bool {
     final_component(name).contains('.')
 }
 
+/// The resolver fixtures the equivalence censuses share (#1295): every
+/// shape the rule tells apart, and the oracle they are checked against — a
+/// selector offered every path in a whole-table snapshot's order. The save
+/// lookup's census (`session/tests/save_link_lookup.rs`) runs them through
+/// the index; a narrower snapshot offer (#1429) can run them in memory.
+#[cfg(test)]
+pub(crate) mod census_fixtures {
+    use super::{LinkAnchor, ResolvedLink, resolve_link_through};
+
+    /// Files any volume can hold: duplicate basenames at several depths,
+    /// implied and explicit extensions, attachments, case, and Unicode
+    /// (composed, decomposed, non-ASCII case, the Kelvin sign's fold).
+    pub(crate) const INDEXED_PATHS: &[&str] = &[
+        "alpha.md",
+        "notes/beta.md",
+        "gamma.md",
+        "a/shared.md",
+        "notes/shared.md",
+        "z/shared.md",
+        "notes/deep/shared.md",
+        "img/pic.png",
+        "pic.png",
+        "docs/report.pdf",
+        "other.markdown",
+        "c.mdown",
+        "d.mkd",
+        "x.y.md",
+        "foo.txt",
+        "foo.txt.md",
+        "space name.md",
+        "\u{dc}ber.md",
+        "folder \u{c4}/Stra\u{df}e.md",
+        "e\u{301}cole.md",
+        "\u{130}stanbul.md",
+        "notes/\u{c6}ON.md",
+        "Notes2/Mixed Case.MD",
+        "Kelvin.md",
+        "index.md",
+        "a/index.md",
+        "notes/index.md",
+    ];
+
+    /// Index rows a case-insensitive volume (APFS, NTFS) cannot hold side by
+    /// side — case twins, composed and decomposed twins, a name spelled with
+    /// the Kelvin sign — each pair listed in the reverse of path order, so a
+    /// source written in this order and read in row order breaks a path tie
+    /// differently from the snapshot.
+    pub(crate) const INDEX_ONLY_TWINS: &[&str] = &[
+        "twin/case.md",
+        "Twin/Case.md",
+        "Caf\u{e9}.md",
+        "Cafe\u{301}.md",
+        "dup.md",
+        "DUP.md",
+        "\u{212a}m.md",
+    ];
+
+    /// Targets: bare names, folder paths, vault-root and `./` paths,
+    /// relative `../` paths, targets without an extension, attachments, the
+    /// same name in many folders, case and Unicode forms, the twins, and
+    /// targets that never reach a lookup (external, empty, padded).
+    pub(crate) const TARGETS: &[&str] = &[
+        "alpha",
+        "Alpha",
+        "ALPHA.md",
+        "alpha.md",
+        "beta",
+        "gamma",
+        "other",
+        "OTHER.markdown",
+        "c",
+        "d",
+        "x.y",
+        "x.y.md",
+        "foo",
+        "foo.txt",
+        "foo.txt.md",
+        "space name",
+        "space name.md",
+        "mixed case",
+        "Mixed Case.MD",
+        "index",
+        "ghost",
+        "notes/beta",
+        "Notes/Beta.md",
+        "notes/beta.md",
+        "./notes/beta",
+        "/notes/beta",
+        "/alpha",
+        "/alpha.md",
+        "./alpha",
+        "/gamma",
+        "a/index",
+        "/index",
+        "Notes2/mixed case",
+        "notes/ghost",
+        "shared",
+        "SHARED.md",
+        "a/shared",
+        "/shared",
+        "deep/shared",
+        "notes/deep/shared",
+        "../alpha",
+        "../alpha.md",
+        "notes/../alpha",
+        "./../alpha",
+        "pic.png",
+        "img/pic.png",
+        "PIC.PNG",
+        "/pic.png",
+        "report.pdf",
+        "docs/report.pdf",
+        "report",
+        "\u{fc}ber",
+        "\u{dc}BER",
+        "u\u{308}ber",
+        "e\u{301}cole",
+        "\u{e9}cole",
+        "stra\u{df}e",
+        "STRASSE",
+        "folder \u{e4}/stra\u{df}e",
+        "Folder \u{c4}/Stra\u{df}e.md",
+        "\u{130}stanbul",
+        "i\u{307}stanbul",
+        "istanbul",
+        "\u{e6}on",
+        "notes/\u{e6}on",
+        "\u{212a}elvin",
+        "kelvin",
+        "twin/case",
+        "Twin/Case",
+        "TWIN/CASE.MD",
+        "/twin/case",
+        "case",
+        "Case.md",
+        "caf\u{e9}",
+        "cafe\u{301}",
+        "CAF\u{c9}",
+        "dup",
+        "DUP.md",
+        "Dup",
+        "km",
+        "\u{212a}m",
+        "https://example.com/a",
+        "mailto:a@example.com",
+        "#top",
+        "//host/x",
+        "C:\\notes\\alpha.md",
+        "2024:report.md",
+        "",
+        "   ",
+        " alpha ",
+    ];
+
+    /// Sources: the root and folders at several depths, one of them a case
+    /// twin's (the basename tiebreak is by distance from the source).
+    pub(crate) const SOURCES: &[&str] = &[
+        "",
+        "host.md",
+        "notes/host.md",
+        "notes/deep/host.md",
+        "Twin/host.md",
+        "a/b/c/host.md",
+    ];
+
+    /// `(target, source, winner)` cases a census must reach for its
+    /// equivalence to mean anything: a path tie between case twins goes to
+    /// the first in path order, composed and decomposed twins stay apart,
+    /// the Kelvin sign folds, a basename three folders carry goes to the
+    /// nearest, and `../` names nothing.
+    pub(crate) const DECISIVE_CASES: &[(&str, &str, Option<&str>)] = &[
+        ("twin/case", "", Some("Twin/Case.md")),
+        ("dup", "", Some("DUP.md")),
+        ("caf\u{e9}", "", Some("Caf\u{e9}.md")),
+        ("cafe\u{301}", "", Some("Cafe\u{301}.md")),
+        ("\u{212a}elvin", "", Some("Kelvin.md")),
+        ("km", "", Some("\u{212a}m.md")),
+        ("shared", "notes/deep/host.md", Some("notes/deep/shared.md")),
+        ("../alpha", "notes/host.md", None),
+    ];
+
+    /// Every fixture path in a whole-table snapshot's order: path order.
+    pub(crate) fn snapshot_paths() -> Vec<String> {
+        let mut paths: Vec<String> = INDEXED_PATHS
+            .iter()
+            .chain(INDEX_ONLY_TWINS)
+            .map(|path| path.to_string())
+            .collect();
+        paths.sort();
+        paths
+    }
+
+    /// The oracle: the rule with every one of `paths` offered, in order —
+    /// what a resolution over a whole-table snapshot answers.
+    pub(crate) fn resolve_by_full_offer(
+        target_raw: &str,
+        anchor: Option<LinkAnchor>,
+        source_path: &str,
+        paths: &[String],
+    ) -> ResolvedLink {
+        let Ok(resolved) = resolve_link_through(target_raw, anchor, source_path, |mut selector| {
+            for path in paths {
+                selector.offer(path);
+            }
+            Ok::<_, std::convert::Infallible>(selector.into_winner())
+        });
+        resolved
+    }
+
+    /// The winner `resolved` names, if any.
+    pub(crate) fn winner(resolved: &ResolvedLink) -> Option<&str> {
+        match resolved {
+            ResolvedLink::Resolved { target_path, .. } => Some(target_path),
+            _ => None,
+        }
+    }
+}
+
 #[cfg(test)]
 mod rooted_semantics_tests {
     use super::*;
@@ -972,5 +1190,26 @@ mod tests {
         let index = idx(&["Notes/foo.md", "archive/foo.md"]);
         let r = resolve_link("foo", None, "notes/journal/today.md", &index);
         assert_eq!(resolved_path(&r), "Notes/foo.md");
+    }
+
+    /// #1295: the shared census fixtures mean what they claim over an
+    /// in-memory snapshot in path order — every decisive case is reached,
+    /// by `resolve_link` and by the full-offer oracle alike.
+    #[test]
+    fn the_census_fixtures_reach_their_decisive_cases() {
+        use super::census_fixtures::{
+            DECISIVE_CASES, resolve_by_full_offer, snapshot_paths, winner,
+        };
+        let paths = snapshot_paths();
+        let index = InMemoryVaultIndex::new(paths.clone());
+        for (target, source, expected) in DECISIVE_CASES {
+            let resolved = resolve_link(target, None, source, &index);
+            assert_eq!(winner(&resolved), *expected, "{target:?} from {source:?}");
+            assert_eq!(
+                resolve_by_full_offer(target, None, source, &paths),
+                resolved,
+                "{target:?} from {source:?}"
+            );
+        }
     }
 }

@@ -4797,7 +4797,7 @@ impl VaultSession {
             // target's candidate rows, read in this transaction, which
             // already holds the row the upsert above wrote — so a save's
             // cost tracks the note, not the vault. No snapshot of `files`.
-            let links = crate::links_db::LookupLinkResolver::default();
+            let links = crate::links_db::FoldedNameLookup;
             replace_headings(tx, file_id, contents)?;
             let crate::links_db::LinkReplaceResult {
                 rows,
@@ -10487,7 +10487,7 @@ fn index_file(
     parser_version: u32,
     now: i64,
     report: &mut ScanReport,
-    links: &dyn crate::links_db::LinkResolver,
+    links: &dyn crate::links_db::LinkCandidates,
     large_file_refuse_bytes: u64,
     mut file_meta_batch: Option<&mut crate::file_meta_db::FileMetaScanBatch>,
     graph_sink: &mut crate::graph::GraphOpSink,
@@ -10944,7 +10944,7 @@ fn index_markdown_derivatives(
     file_id: i64,
     path: &str,
     body_text: &str,
-    links: &dyn crate::links_db::LinkResolver,
+    links: &dyn crate::links_db::LinkCandidates,
     replacing_existing_file: bool,
     file_meta_batch: Option<&mut crate::file_meta_db::FileMetaScanBatch>,
     report: &mut ScanReport,
@@ -11051,7 +11051,7 @@ fn purge_markdown_derivatives(
     tx: &rusqlite::Transaction,
     file_id: i64,
     path: &str,
-    links: &dyn crate::links_db::LinkResolver,
+    links: &dyn crate::links_db::LinkCandidates,
     graph_sink: &mut crate::graph::GraphOpSink,
 ) -> Result<(), VaultError> {
     replace_headings(tx, file_id, "")?;
@@ -18377,7 +18377,7 @@ impl VaultSession {
         let tx = db::begin_fenced(&conn)?;
         // `index_file` upserts this path's row before resolving any link
         // of it, so the lookup sees the row in this transaction.
-        let links = crate::links_db::LookupLinkResolver::default();
+        let links = crate::links_db::FoldedNameLookup;
         let mut report = ScanReport::default();
         let (name, _, _) = classify_path(path);
         let mut graph_sink = self.graph_sink();
