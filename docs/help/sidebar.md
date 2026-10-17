@@ -186,6 +186,10 @@ The filter field stays topmost in both layouts; in dual-pane a committed query *
 
 Typing letters in the tree performs type-select on the effective name. Every announcement in this guide comes through one announcement seam, so repeated operations speak once each, in order; every action surface (menus, palette, keyboard, rotor) reads the same selection and speaks the same availability reasons.
 
+## Files changed outside Slate
+
+Slate notices a file another app or a sync service adds, changes or removes in the vault when it rescans: when you come back to Slate after at least two seconds in another app, and whenever you choose **Files: Refresh** (the palette, or View ▸ Refresh Files). A rescan you asked for always says what it found ("Files refreshed. 2 new or changed, 1 removed." or "Files refreshed. No changes."); the one on your return says something only when something changed or a file could not be read. The tree, Quick Open and your open notes follow it: a note open in a tab reloads if you have no unsaved edits in it, and a tab with unsaved edits keeps them. Refresh waits while Slate is still scanning the vault it just opened, or while an import or a move to the Trash runs, and says so.
+
 ## Where things are stored
 
 **In the vault** (`.slate/sidebar.json` — versioned, written atomically, unknown keys preserved): the vault-default sort and grouping, per-folder overrides (sort, grouping, preview lines, density, Include Subfolders), pins, and shortcuts. These describe the vault and travel with it. If the file is unreadable, malformed, or from a newer Slate, the sidebar runs read-only on defaults and says so — it never overwrites what it can't parse.
