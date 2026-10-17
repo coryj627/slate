@@ -1445,6 +1445,7 @@ final class SidebarWriteApplyRecorder: @unchecked Sendable {
   private let lock = NSLock()
   private var prunedPins = 0
   private var refusals: [String] = []
+  private var refused: Set<UInt64> = []
 
   func recordPrunedPins(_ count: Int) {
     lock.withLock { prunedPins = count }
@@ -1452,11 +1453,17 @@ final class SidebarWriteApplyRecorder: @unchecked Sendable {
 
   var prunedPinCount: Int { lock.withLock { prunedPins } }
 
-  func recordRefusal(_ reason: String) {
-    lock.withLock { refusals.append(reason) }
+  /// A replayed entry (by its replay position) was finally refused.
+  func recordRefusal(_ reason: String, position: UInt64) {
+    lock.withLock {
+      refusals.append(reason)
+      refused.insert(position)
+    }
   }
 
   var refusalReasons: [String] { lock.withLock { refusals } }
+
+  var refusedPositions: Set<UInt64> { lock.withLock { refused } }
 }
 
 /// Where an intent applies: the captured vault root and its admitted

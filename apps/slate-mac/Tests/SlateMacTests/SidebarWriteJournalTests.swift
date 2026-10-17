@@ -128,6 +128,28 @@ final class SidebarWriteJournalTests: XCTestCase {
         creationParent: folder))
   }
 
+  /// No selection: organization commands target the vault default.
+  private func selectNothing(_ state: AppState) throws {
+    let session = try XCTUnwrap(state.currentSession)
+    _ = state.publishSidebarSelectionSnapshot(
+      SidebarSelectionSnapshot(
+        sessionIdentity: ObjectIdentifier(session), items: [], focusedPath: nil,
+        creationParent: ""))
+  }
+
+  private func sidebarFile(_ vault: URL) -> [String: Any]? {
+    guard
+      let data = try? Data(contentsOf: vault.appendingPathComponent(".slate/sidebar.json"))
+    else { return nil }
+    return try? JSONSerialization.jsonObject(with: data) as? [String: Any]
+  }
+
+  private func writeSidebarFile(_ vault: URL, _ json: String) throws {
+    let slate = vault.appendingPathComponent(".slate", isDirectory: true)
+    try FileManager.default.createDirectory(at: slate, withIntermediateDirectories: true)
+    try Data(json.utf8).write(to: slate.appendingPathComponent("sidebar.json"))
+  }
+
   private func pinsOnDisk(_ vault: URL, folder: String) -> [String]? {
     guard
       let data = try? Data(contentsOf: vault.appendingPathComponent(".slate/sidebar.json")),
@@ -168,21 +190,36 @@ final class SidebarWriteJournalTests: XCTestCase {
     named name: String, paths: [String], folder: String,
     folders: [String] = []
   ) async throws -> (vault: URL, identity: AppState.SidebarVaultRootIdentity) {
-    let vault = try makeVault(named: name, files: paths, folders: folders)
+    try await parkAcknowledged(
+      named: name, files: paths, folders: folders,
+      acknowledgements: Array(repeating: "Pinned.", count: paths.count)
+    ) { state in
+      for path in paths {
+        try self.select(state, path, folder: folder)
+        _ = try state.dispatchSidebarAction(id: SlateCommandID.sidebarPinNote)
+        await state.sidebarOrganizationAcknowledgementTaskForTesting?.value
+      }
+    }
+  }
+
+  /// `dispatch` runs acknowledged commands behind a gated writer; their
+  /// writes then fail after the vault closed, as above.
+  private func parkAcknowledged(
+    named name: String, files: [String], folders: [String] = [],
+    acknowledgements: [String],
+    dispatch: (AppState) async throws -> Void
+  ) async throws -> (vault: URL, identity: AppState.SidebarVaultRootIdentity) {
+    let vault = try makeVault(named: name, files: files, folders: folders)
     let announcer = RecordingAnnouncer()
     let state = try open(vault, announcer: announcer)
     let identity = try XCTUnwrap(state.sidebarVaultRootIdentity)
     let gate = GateBox()
-    // Hold the chain so the pins' writes run after the close.
+    // Hold the chain so the commands' writes run after the close.
     state.enqueueSidebarOrganizationWriteForTesting { _ in gate.wait() }
-    for path in paths {
-      try select(state, path, folder: folder)
-      _ = try state.dispatchSidebarAction(id: SlateCommandID.sidebarPinNote)
-      await state.sidebarOrganizationAcknowledgementTaskForTesting?.value
-    }
+    try await dispatch(state)
     XCTAssertEqual(
-      announcer.messages.filter { $0 == "Pinned." }.count, paths.count,
-      "each pin was acknowledged")
+      announcer.messages.filter { acknowledgements.contains($0) }.count,
+      acknowledgements.count, "each command was acknowledged")
     let queued = state.sidebarOrganizationPersistTaskForTesting
     state.closeVault()
     let slate = vault.appendingPathComponent(".slate", isDirectory: true)
@@ -708,6 +745,144 @@ final class SidebarWriteJournalTests: XCTestCase {
     await journal.waitUntilIdle()
     XCTAssertEqual(pinsOnDisk(vault, folder: "Projects"), ["Projects/note.md"])
     XCTAssertTrue(journalEntries(identity).isEmpty, "the verified-away entry is settled")
+  }
+
+  func testAReplayRefusedWhenItLandsIsSurfacedAndTheRestStillLand() async throws {
+    let sortAcknowledgement = SidebarOrganizationChoice(
+      sort: .init(field: .created, direction: .asc), grouping: .none
+    ).sortAnnouncement
+    let (vault, identity) = try await parkAcknowledged(
+      named: "refused-on-replay", files: ["Projects/note.md"], folders: ["Projects"],
+      acknowledgements: [sortAcknowledgement, "Pinned."]
+    ) { state in
+      try self.selectNothing(state)
+      _ = try state.dispatchSidebarAction(id: SlateCommandID.sidebarSortCreatedAsc)
+      await state.sidebarOrganizationAcknowledgementTaskForTesting?.value
+      try self.select(state, "Projects/note.md", folder: "Projects")
+      _ = try state.dispatchSidebarAction(id: SlateCommandID.sidebarPinNote)
+      await state.sidebarOrganizationAcknowledgementTaskForTesting?.value
+    }
+    // While Slate was closed the vault gained date grouping: the parked
+    // oldest-first sort can no longer take effect.
+    try writeSidebarFile(vault, #"{"version": 1, "grouping": "dateBuckets"}"#)
+    await AppState.simulateRelaunchForTesting()
+
+    let announcer = RecordingAnnouncer()
+    let state = try open(vault, announcer: announcer)
+    let landed = await eventually {
+      self.pinsOnDisk(vault, folder: "Projects") == ["Projects/note.md"]
+    }
+    XCTAssertTrue(landed, "the pin parked behind the refused sort still lands")
+    await state.sidebarOrganizationPersistTaskForTesting?.value
+    let expected = AppState.sidebarRefusedReplayReason(
+      AppState.sidebarGroupedSortInertReason)
+    XCTAssertEqual(state.sidebarActionBackgroundFailure, expected)
+    XCTAssertTrue(announcer.messages.contains(expected), "the refusal is spoken, not dropped")
+    XCTAssertTrue(announcer.messages.contains("Pinned."), "the replayed pin speaks")
+    XCTAssertFalse(announcer.messages.contains(sortAcknowledgement))
+    XCTAssertNil(sidebarFile(vault)?["sort"], "the refused sort is not applied")
+    await journal.waitUntilIdle()
+    XCTAssertTrue(journalEntries(identity).isEmpty, "both entries settled")
+  }
+
+  func testARefusalNobodyHeardIsSurfacedAtTheNextOpen() async throws {
+    let vault = try makeVault(named: "unheard-refusal", files: ["note.md"])
+    let identity: AppState.SidebarVaultRootIdentity
+    do {
+      let state = try open(vault, announcer: RecordingAnnouncer())
+      identity = try XCTUnwrap(state.sidebarVaultRootIdentity)
+      let gate = GateBox()
+      state.enqueueSidebarOrganizationWriteForTesting { _ in gate.wait() }
+      try selectNothing(state)
+      _ = try state.dispatchSidebarAction(id: SlateCommandID.sidebarSortCreatedAsc)
+      await state.sidebarOrganizationAcknowledgementTaskForTesting?.value
+      let queued = state.sidebarOrganizationPersistTaskForTesting
+      state.closeVault()
+      // Another device turned on date grouping before the queued sort
+      // reached the file: its first attempt is refused with nobody to tell.
+      try writeSidebarFile(vault, #"{"version": 1, "grouping": "dateBuckets"}"#)
+      gate.open()
+      await queued?.value
+    }
+    XCTAssertEqual(journalEntries(identity).count, 1, "the refusal is kept, not dropped")
+    await AppState.simulateRelaunchForTesting()
+
+    let announcer = RecordingAnnouncer()
+    let state = try open(vault, announcer: announcer)
+    let expected = AppState.sidebarRefusedReplayReason(
+      AppState.sidebarGroupedSortInertReason)
+    let surfaced = await eventually { state.sidebarActionBackgroundFailure == expected }
+    XCTAssertTrue(surfaced, "the next open says why the change did not happen")
+    XCTAssertTrue(announcer.messages.contains(expected))
+    await state.sidebarOrganizationPersistTaskForTesting?.value
+    XCTAssertNil(sidebarFile(vault)?["sort"])
+    await journal.waitUntilIdle()
+    XCTAssertTrue(journalEntries(identity).isEmpty, "once said, it is settled")
+  }
+
+  func testAPendingBatchReplaysOnlyTheRenamesThatStood() async throws {
+    // A crash after one of two renames committed: the entry is pending, so
+    // each rename is verified against the disk on its own.
+    let vault = try makeVault(named: "partial-batch", files: ["a.md", "b.md"])
+    let identity: AppState.SidebarVaultRootIdentity
+    do {
+      let state = try open(vault, announcer: RecordingAnnouncer())
+      identity = try XCTUnwrap(state.sidebarVaultRootIdentity)
+      for path in ["a.md", "b.md"] {
+        try select(state, path, folder: "")
+        _ = try state.dispatchSidebarAction(id: SlateCommandID.sidebarPinNote)
+        await state.sidebarOrganizationPersistTaskForTesting?.value
+      }
+      let pending = SidebarStructuralTransform(
+        renames: [
+          .init(oldPath: "a.md", newPath: "a2.md", isDirectory: false),
+          .init(oldPath: "b.md", newPath: "b2.md", isDirectory: false),
+        ])
+      let append = try XCTUnwrap(
+        journal.appendPendingStructural(pending, for: identity, vaultRoot: vault))
+      _ = await append.durable.value
+      state.closeVault()
+    }
+    try FileManager.default.moveItem(
+      at: vault.appendingPathComponent("a.md"), to: vault.appendingPathComponent("a2.md"))
+    await AppState.simulateRelaunchForTesting()
+
+    let relaunched = try open(vault, announcer: RecordingAnnouncer())
+    let replayed = await eventually { self.pinsOnDisk(vault, folder: "") == ["a2.md", "b.md"] }
+    XCTAssertTrue(replayed, "only the rename whose source is gone replays")
+    await relaunched.sidebarOrganizationPersistTaskForTesting?.value
+    await journal.waitUntilIdle()
+    XCTAssertTrue(journalEntries(identity).isEmpty)
+  }
+
+  func testAFolderRenameWithItsNoteSettlesItsEntryWhenTheFixUpCommits() async throws {
+    let announcer = RecordingAnnouncer()
+    let vault = try makeVault(
+      named: "folder-note", files: ["Projects/Projects.md", "Projects/plan.md"],
+      folders: ["Projects"])
+    let state = try open(vault, announcer: announcer)
+    let identity = try XCTUnwrap(state.sidebarVaultRootIdentity)
+    try select(state, "Projects/Projects.md", folder: "Projects")
+    _ = try state.dispatchSidebarAction(id: SlateCommandID.sidebarPinNote)
+    await state.sidebarOrganizationPersistTaskForTesting?.value
+
+    // The compound rename moves the folder and renames its note to the
+    // new stem: two transforms, and the journal entry rides the second.
+    let rename = try XCTUnwrap(
+      state.renameEntry(path: "Projects", isDirectory: true, to: "Work"))
+    await rename.value
+    await state.sidebarOrganizationPersistTaskForTesting?.value
+    XCTAssertEqual(pinsOnDisk(vault, folder: "Work"), ["Work/Work.md"])
+    XCTAssertNil(pinsOnDisk(vault, folder: "Projects"))
+    // The rename's own sentence is the last thing said (its sidebar writes
+    // are silent), and the pin is not spoken again.
+    XCTAssertEqual(
+      state.lastMutationAnnouncement.map { $0.hasPrefix("Renamed Projects to Work") },
+      true)
+    XCTAssertEqual(announcer.messages.filter { $0 == "Pinned." }.count, 1)
+    await journal.waitUntilIdle()
+    XCTAssertTrue(
+      journalEntries(identity).isEmpty, "the entry settled with the fix-up's commit")
   }
 
   /// The PR's timing figures: what the write-ahead fsync costs a rename,

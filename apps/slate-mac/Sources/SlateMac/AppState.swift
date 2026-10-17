@@ -5576,15 +5576,14 @@ final class AppState: ObservableObject {
         + "so they were not applied."
 
     /// One run of the retained-write drain (main actor only): the snapshot it
-    /// replays, taken when it runs, and the acknowledgements it speaks again
-    /// when that replay commits.
+    /// replays, taken when it runs. When the replay commits, each entry that
+    /// landed speaks its acknowledgement again.
     private final class SidebarRetainedDrain {
         let identity: SidebarVaultRootIdentity
         /// Journal entries recorded after this drain was scheduled belong to
         /// writes queued behind it; the drain never adopts them.
         let position: UInt64
         var entries: [SidebarUnflushedWrite] = []
-        var announcements: [String] = []
 
         init(identity: SidebarVaultRootIdentity, position: UInt64) {
             self.identity = identity
@@ -5844,7 +5843,7 @@ final class AppState: ObservableObject {
                                         as SidebarOrganizationConflictError
                                     {
                                         applyContext.recorder.recordRefusal(
-                                            refusal.reason)
+                                            refusal.reason, position: entry.position)
                                     }
                                 }
                             } else {
@@ -5913,10 +5912,16 @@ final class AppState: ObservableObject {
                 acknowledge?(recorder)
                 if let retainedDrain {
                     // PR 23: replay outcomes speak through the existing
-                    // announcements — each replayed change's own
+                    // announcements — each change that landed says its own
                     // acknowledgement once — and a refused one through the
                     // typed dispatch failure, never silently.
-                    for announcement in retainedDrain.announcements {
+                    let refused = recorder.refusedPositions
+                    let landed = retainedDrain.entries.filter {
+                        !refused.contains($0.position)
+                    }
+                    for announcement in Self.orderedUnique(
+                        landed.compactMap(\.acknowledgement))
+                    {
                         self.postSidebarOrganizationAnnouncement(announcement)
                     }
                     for reason in Self.orderedUnique(recorder.refusalReasons) {
@@ -6179,8 +6184,6 @@ final class AppState: ObservableObject {
             Self.sidebarUnflushedWriteRetries[identity] = entries
         }
         drain.entries = Self.sidebarUnflushedWriteRetries[identity] ?? []
-        drain.announcements = Self.orderedUnique(
-            drain.entries.compactMap(\.acknowledgement))
         guard surfacing else { return }
         for notice in adoption.notices {
             switch notice {
