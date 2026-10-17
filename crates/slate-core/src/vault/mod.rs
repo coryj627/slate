@@ -21,7 +21,10 @@
 //!   directory entry with a regular file rather than writing through
 //!   the link to its target. Mutators (`delete`, `rename`) treat the
 //!   directory entry itself — they use lstat-style existence checks
-//!   so a broken symlink can still be cleaned up or moved. Recursive
+//!   so a broken symlink can still be cleaned up or moved. On Unix
+//!   `rename` resolves both paths beneath the vault root without
+//!   following a symlink among their ancestors, and refuses one (#1449);
+//!   the root itself may be a symlink. Recursive
 //!   enumeration — handled at the `VaultSession` layer, not here —
 //!   will need cycle detection, but `FsVaultProvider`'s per-call API
 //!   is symlink-safe by virtue of not recursing.
