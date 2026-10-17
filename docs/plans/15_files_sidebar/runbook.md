@@ -72,6 +72,7 @@ cargo test -p slate-core --release -- session::tests::dir_tree    # perf guards 
 | Dual-pane list truncated | The drain caps at 10,000 files and the header says "first 10,000 files". Scope down (or filter); the cap is a deliberate ceiling, not a failure. |
 | Layout/divider/recents didn't follow the vault | They're device-local by design. Vault-owned state is exactly what's in `.slate/sidebar.json` (sort/grouping/folder overrides incl. preview/density/descendants, pins, shortcuts). |
 | Perf guard failed in a local run | Was the box busy? The guards sample best-of-3 but a saturated machine still fails falsely; re-run idle. CI's isolated runner is authoritative. |
+| A change announced before a quit or crash is missing after relaunch | The sidebar write journal (`~/Library/Application Support/Slate/sidebar-write-journal/<device>-<inode>.journal`, see below). An entry still there replays on the next open of the SAME vault (same device, inode and birth time); one older than 30 days, refused, or in a damaged file is announced instead. No file means every entry settled. |
 
 ## Persistence boundaries
 
@@ -85,12 +86,41 @@ cargo test -p slate-core --release -- session::tests::dir_tree    # perf guards 
   density — `SidebarPreferences`), sidebar layout (tree/dual-pane),
   divider fraction, Recents (per vault, keyed by device+inode identity),
   section expansion, and the filter's committed-query restore.
+- **Device (Application Support), until saved**: the sidebar write journal
+  (plan 43 PR 23, #944; `Sidebar/SidebarWriteJournal.swift`). FL-06 keys
+  its writer chains, committed-transform ledger and retained-write
+  registry by the vault root's physical identity (device, inode); the
+  journal is the durable half of that registry, keyed the same way — one
+  append-only file per identity, whose header also records the root's
+  birth time (a replacement vault that reuses the inode never matches)
+  and its volume UUID (a drive mounted again under another device number
+  finds its file by volume, inode and birth time, and the file moves under
+  the new key).
+  Every acknowledged organization write is a typed `SidebarWriteIntent`
+  line, fsync'd off the main actor before it is spoken; every rename or
+  move journals its anticipated transform before the filesystem operation
+  can commit. Lines are `<crc32> <json>` (format version 1); a torn last
+  line is dropped and reported. An entry is settled when its change
+  commits to `.slate/sidebar.json`, or when its failure, refusal or age
+  was told to the user — never evicted. The registry, its drain and the
+  quit fence are in `AppState.swift` (`sidebarUnflushedWriteRetries`,
+  `scheduleSidebarRetainedWriteDrain`, `settleSidebarWriterChainsForTermination`).
 
 ## Failure / recovery procedures
 
 - **Read-only `.slate/sidebar.json`**: organization commands disable with
   the notice's reason; fix permissions and re-run the command — no state is
   lost (mutations replay through the locked-write funnel).
+- **A write that failed after its vault closed, or Slate quit or crashed
+  first** (FL-06 rounds 29–32, #944): the change was announced, so it is
+  kept — in memory (the retained-write registry) and on disk (the sidebar
+  write journal above). The next open of the same vault, in this launch or
+  a later one, replays it through the chained drain and announces it again
+  as it lands. Up to 64 such changes wait per vault; past that, new changes
+  are refused with "earlier changes are still waiting to retry" until Retry
+  or a reopen lands them. A failure Slate could tell you about while the
+  vault was open is not kept: it was announced and the sidebar shows what
+  the file holds, so re-run the command.
 - **Stale pins/shortcuts after external file moves**: pins/shortcuts follow
   structural transforms only for in-app operations; externally-moved paths
   are pruned lazily on the next level fetch (announced once per session).
