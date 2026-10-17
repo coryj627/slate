@@ -853,3 +853,17 @@ Interlocks:
 - **Q7.** Rely on the mac host's integration fact for FSEvents
   (recommended), or add a filtered `cargo test` of the watcher module
   to the mac lane at the cost of a test build there?
+
+## 11. Owner decisions (2026-10-17)
+
+The owner answered §10 in a decision interview on 2026-10-17. Every answer below is the recommendation except where marked.
+
+- **Q1.** The unresolved-link cost is filed as #1429, and PR 20.0 closes it.
+- **Q2.** One leading watcher sentence per 60 s; no trailing summary.
+- **Q3.** AR-7 stays accepted; no forced re-reads of watched paths.
+- **Q4.** Watcher runs speak the shared "Files refreshed. …" sentence; no watcher-specific copy.
+- **Q5.** §8's amendment of locked 05 §4.4 is approved, together with PR 21's (#1444, Q6).
+- **Q6.** `notify` is pinned at `=9.0.0-rc.5` now, moving to 9.0.0 when it ships.
+- **Q7.** FSEvents is exercised in CI by the mac host's integration fact only; no core watcher test on the mac lane.
+- **Plan.** §7's split is accepted and queued in order: 20.0, then 20a, then 20b and 20c (20c after PR 19, merged as #1447).
+- **From PR 21's Q2 (not the recommendation there).** Other sessions' changes are spoken only on an explicit Refresh. So a burst caused by `slate-cli` stays silent on watcher runs, as §4.5 says.
