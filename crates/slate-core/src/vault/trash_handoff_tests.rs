@@ -69,9 +69,20 @@ impl Fixture {
     }
 }
 
-fn is_refusal(error: &VaultError) -> bool {
-    matches!(error, VaultError::TrashConfirmationChanged { message } if message == &moved().to_string())
+/// The typed refusal for `sub/…` (the #1449 shape): `InvalidPath` for that
+/// path, with core's reason containing `needle`.
+fn assert_refused(error: &VaultError, path: &str, needle: &str) {
+    assert!(
+        matches!(error, VaultError::InvalidPath { path: refused, reason }
+            if refused == path && reason.contains(needle)),
+        "expected the refusal of {path:?} saying {needle:?}, got {error:?}"
+    );
 }
+
+/// The derivation's refusal: a pinned folder moved after the walk.
+#[cfg(unix)]
+const MOVED: &str = "a folder in this path moved after it was checked, so nothing was moved to the \
+                     Trash";
 
 #[test]
 fn an_ordinary_trash_hands_over_the_pinned_parents_current_path() {
@@ -131,7 +142,7 @@ fn delete_refuses_a_folder_replaced_by_a_link_after_the_inventory() {
     assert!(!inventory.is_directory);
     f.replace_sub_with_a_link();
     let error = f.provider.delete("sub/note.md").unwrap_err();
-    assert!(is_refusal(&error), "{error:?}");
+    assert_refused(&error, "sub/note.md", "\"sub\" is a symbolic link");
     f.assert_nothing_moved();
 }
 
@@ -142,7 +153,7 @@ fn delete_refuses_a_folder_replaced_by_a_file() {
     std::fs::rename(f.vault.path().join("sub"), f.vault.path().join("sub.real")).unwrap();
     std::fs::write(f.vault.path().join("sub"), b"not a folder").unwrap();
     let error = f.provider.delete("sub/note.md").unwrap_err();
-    assert!(is_refusal(&error), "{error:?}");
+    assert_refused(&error, "sub/note.md", "\"sub\" is not a folder");
     f.assert_nothing_moved();
 }
 
@@ -165,7 +176,7 @@ fn delete_never_unlinks_a_dangling_link_outside_the_vault_through_a_swapped_fold
     .unwrap();
     f.replace_sub_with_a_link();
     let error = f.provider.delete("sub/dangling.md").unwrap_err();
-    assert!(is_refusal(&error), "{error:?}");
+    assert_refused(&error, "sub/dangling.md", "\"sub\" is a symbolic link");
     assert!(
         f.outside
             .path()
@@ -246,8 +257,8 @@ fn a_pinned_folder_moved_out_of_the_vault_is_refused() {
     let parent = std::fs::File::open(f.vault.path().join("sub")).unwrap();
     std::fs::rename(f.vault.path().join("sub"), elsewhere.path().join("sub")).unwrap();
     std::os::unix::fs::symlink(f.outside.path(), f.vault.path().join("sub")).unwrap();
-    let error = pinned_path(&root, &parent, c"note.md").unwrap_err();
-    assert!(is_refusal(&error), "{error:?}");
+    let error = pinned_path(&root, &parent, c"note.md", "sub/note.md").unwrap_err();
+    assert_refused(&error, "sub/note.md", MOVED);
 }
 
 /// A pinned folder moved within the vault is still the confirmed object: the
@@ -261,7 +272,7 @@ fn a_pinned_folder_moved_within_the_vault_hands_over_its_new_location() {
     let parent = std::fs::File::open(f.vault.path().join("sub")).unwrap();
     std::fs::rename(f.vault.path().join("sub"), f.vault.path().join("moved")).unwrap();
     std::os::unix::fs::symlink(f.outside.path(), f.vault.path().join("sub")).unwrap();
-    let handed = pinned_path(&root, &parent, c"note.md").unwrap();
+    let handed = pinned_path(&root, &parent, c"note.md", "sub/note.md").unwrap();
     let vault = std::fs::canonicalize(f.vault.path()).unwrap();
     assert_eq!(handed, vault.join("moved").join("note.md"));
 }
@@ -274,9 +285,13 @@ fn a_pinned_folder_removed_after_the_walk_is_refused() {
     let root = std::fs::File::open(f.vault.path()).unwrap();
     let parent = std::fs::File::open(f.vault.path().join("empty")).unwrap();
     std::fs::remove_dir(f.vault.path().join("empty")).unwrap();
-    let error = pinned_path(&root, &parent, c"note.md").unwrap_err();
+    let error = pinned_path(&root, &parent, c"note.md", "empty/note.md").unwrap_err();
+    // `F_GETPATH` may still report the removed folder's last path (then it
+    // no longer names the descriptor) or fail (then nothing can be checked).
     assert!(
-        matches!(error, VaultError::TrashConfirmationChanged { .. }),
+        matches!(&error, VaultError::InvalidPath { path, reason }
+            if path == "empty/note.md"
+                && (reason == MOVED || reason.contains("could not confirm"))),
         "{error:?}"
     );
 }
@@ -308,7 +323,11 @@ fn delete_refuses_a_folder_turned_into_a_junction_after_the_inventory() {
     std::fs::create_dir(f.vault.path().join("sub")).unwrap();
     crate::vault::windows_entry::tests::junction(&f.vault.path().join("sub"), f.outside.path());
     let error = f.provider.delete("sub/note.md").unwrap_err();
-    assert!(is_refusal(&error), "{error:?}");
+    assert_refused(
+        &error,
+        "sub/note.md",
+        "\"sub\" is a junction or symbolic link",
+    );
     f.assert_nothing_moved();
     std::fs::remove_dir(f.vault.path().join("sub")).unwrap();
 }

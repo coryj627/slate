@@ -32,6 +32,10 @@
 //! final component is still a name, and binding its identity is an open
 //! #1125 decision (#1430, Decision 2 option C).
 //!
+//! The Trash handoff (#1450, `delete`) pins the item's parent with the same
+//! [`PinnedRoot::end`] and the same refusal, then derives the path it hands
+//! the system Trash from that parent's descriptor (`trash_handoff`).
+//!
 //! PR 22's design (#1441) gives the session an `FsRoot` that holds the root
 //! descriptor for the session's lifetime. Until it lands, the provider opens
 //! one [`PinnedRoot`] per rename; `FsRoot` adopts this type by handing it
@@ -90,6 +94,12 @@ impl PinnedRoot {
             .open(root)
             .map_err(VaultError::Io)?;
         Ok(Self { dir })
+    }
+
+    /// The root descriptor itself: the Trash handoff takes the vault root's
+    /// current path from it (#1450).
+    pub(super) fn descriptor(&self) -> &fs::File {
+        &self.dir
     }
 
     /// Pin the directory that holds `relative`'s final component. A missing
@@ -287,6 +297,48 @@ impl RenameEnd<'_> {
             Err(error) if error.kind() == io::ErrorKind::NotFound => Ok(false),
             Err(error) => Err(error),
         }
+    }
+
+    /// The pinned directory that holds this end's final component.
+    pub(super) fn parent(&self) -> &fs::File {
+        &self.parent
+    }
+
+    /// This end's final component.
+    pub(super) fn leaf(&self) -> &CStr {
+        &self.leaf
+    }
+
+    /// Whether the entry here is a symbolic link whose target does not
+    /// resolve. Its own look never follows the leaf, so a missing entry is
+    /// `NotFound` and a broken link still counts as present (#1450).
+    pub(super) fn is_dangling_link(&self) -> io::Result<bool> {
+        use std::os::fd::AsRawFd as _;
+
+        if (lstat_mode(&self.parent, &self.leaf)? & libc::S_IFMT) != libc::S_IFLNK {
+            return Ok(false);
+        }
+        let mut stat = std::mem::MaybeUninit::<libc::stat>::uninit();
+        // SAFETY: as in `lstat_mode`, but following the leaf to its target,
+        // resolved relative to the pinned parent.
+        let result = unsafe {
+            libc::fstatat(
+                self.parent.as_raw_fd(),
+                self.leaf.as_ptr(),
+                stat.as_mut_ptr(),
+                0,
+            )
+        };
+        Ok(result != 0)
+    }
+
+    /// Remove the (non-folder) entry here from its pinned parent.
+    pub(super) fn unlink(&self) -> io::Result<()> {
+        use std::os::fd::AsRawFd as _;
+        // SAFETY: the parent is an open directory and the leaf a
+        // NUL-terminated single component that outlives the call; flags 0
+        // removes a non-directory entry only.
+        os_result(unsafe { libc::unlinkat(self.parent.as_raw_fd(), self.leaf.as_ptr(), 0) })
     }
 }
 

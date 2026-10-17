@@ -259,11 +259,19 @@ impl Fixture {
     }
 }
 
+/// Core's reason when `sub` is a link: the #1449 walk's refusal, which the
+/// Trash handoff shares.
 #[cfg(unix)]
-fn refusal_message() -> String {
-    "A folder in this item's path was replaced or moved, so it was not moved to the Trash. \
-     Request deletion again"
-        .to_string()
+const SUB_IS_A_LINK: &str =
+    "\"sub\" is a symbolic link, not a folder in this vault, so nothing was moved";
+
+#[cfg(unix)]
+fn assert_link_refusal(error: &VaultError, refused: &str) {
+    assert!(
+        matches!(error, VaultError::InvalidPath { path, reason }
+            if path == refused && reason == SUB_IS_A_LINK),
+        "expected the refusal of {refused:?} naming \"sub\", got {error:?}"
+    );
 }
 
 #[test]
@@ -295,10 +303,7 @@ fn staged_trash_refuses_an_item_whose_folder_became_a_link_after_the_last_check(
         .session
         .delete_file_staged("sub/note.md", staged.token)
         .unwrap_err();
-    assert!(
-        matches!(&error, VaultError::TrashConfirmationChanged { message } if *message == refusal_message()),
-        "{error:?}"
-    );
+    assert_link_refusal(&error, "sub/note.md");
     f.assert_decoys_and_vault_items_untouched();
     assert!(f.trash.handed().is_empty(), "{:?}", f.trash.handed());
     assert!(
@@ -320,10 +325,7 @@ fn staged_folder_trash_refuses_when_its_parent_became_a_link_after_the_last_chec
         .session
         .delete_folder_staged("sub/inner", staged.token)
         .unwrap_err();
-    assert!(
-        matches!(&error, VaultError::TrashConfirmationChanged { message } if *message == refusal_message()),
-        "{error:?}"
-    );
+    assert_link_refusal(&error, "sub/inner");
     f.assert_decoys_and_vault_items_untouched();
     assert!(f.trash.handed().is_empty(), "{:?}", f.trash.handed());
     assert!(f.indexed("sub/inner/deep.md"));
@@ -369,7 +371,11 @@ fn batch_trash_reports_a_refused_item_untrashed_and_trashes_the_rest() {
         let refused = &report.untrashed[0];
         assert_eq!(refused.item, item("sub/note.md", false));
         assert_eq!(refused.failure.stage, BatchFailureStage::Trash);
-        assert_eq!(refused.failure.message, refusal_message());
+        assert!(
+            refused.failure.message.contains(SUB_IS_A_LINK),
+            "{:?}",
+            refused.failure.message
+        );
         assert!(report.unknown.is_empty(), "{:?}", report.unknown);
         assert!(
             report.bookkeeping_failures.is_empty(),
@@ -417,7 +423,11 @@ fn batch_trash_never_counts_a_refused_item_trashed_when_the_substitute_lacks_it(
     assert_eq!(report.trashed, vec![item("keep.md", false)]);
     assert_eq!(report.untrashed.len(), 1, "{:?}", report.untrashed);
     assert_eq!(report.untrashed[0].item, item("sub/unique.md", false));
-    assert_eq!(report.untrashed[0].failure.message, refusal_message());
+    assert!(
+        report.untrashed[0].failure.message.contains(SUB_IS_A_LINK),
+        "{:?}",
+        report.untrashed[0].failure.message
+    );
     assert!(
         report.bookkeeping_failures.is_empty(),
         "{:?}",

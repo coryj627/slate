@@ -442,6 +442,7 @@ impl PinnedMutationTarget {
         create_missing_parents: bool,
     ) -> Result<Self, VaultError> {
         use std::os::unix::ffi::OsStrExt as _;
+        use std::os::unix::fs::OpenOptionsExt as _;
 
         let leaf = vault_relative
             .file_name()
@@ -458,7 +459,11 @@ impl PinnedMutationTarget {
         // Following the configured vault root itself preserves support for an
         // intentionally symlinked vault. Every component *beneath* that root
         // is opened relative to the preceding descriptor with O_NOFOLLOW.
-        let mut parent = open_vault_root(root).map_err(VaultError::Io)?;
+        let mut parent = fs::OpenOptions::new()
+            .read(true)
+            .custom_flags(directory_open_flags(false))
+            .open(root)
+            .map_err(VaultError::Io)?;
         let parent_path = vault_relative.parent().unwrap_or_else(|| Path::new(""));
         for component in parent_path.components() {
             let Component::Normal(name) = component else {
@@ -493,41 +498,6 @@ impl PinnedMutationTarget {
 
     fn create_dir_if_absent(&self) -> io::Result<()> {
         create_directory_at(&self.parent, &self.leaf)
-    }
-
-    /// `fstatat` of the leaf relative to the pinned parent; `flags` is
-    /// `AT_SYMLINK_NOFOLLOW` to inspect the entry itself, `0` to follow it.
-    fn leaf_stat(&self, flags: libc::c_int) -> io::Result<libc::stat> {
-        use std::os::fd::AsRawFd as _;
-
-        let mut stat = std::mem::MaybeUninit::uninit();
-        // SAFETY: the parent descriptor and the NUL-terminated leaf stay live
-        // for the call, and `stat` has the syscall's size and alignment.
-        if unsafe {
-            libc::fstatat(
-                self.parent.as_raw_fd(),
-                self.leaf.as_ptr(),
-                stat.as_mut_ptr(),
-                flags,
-            )
-        } != 0
-        {
-            return Err(io::Error::last_os_error());
-        }
-        // SAFETY: a successful fstatat initialized `stat`.
-        Ok(unsafe { stat.assume_init() })
-    }
-
-    /// Remove the leaf's directory entry relative to the pinned parent.
-    fn unlink_leaf(&self) -> io::Result<()> {
-        use std::os::fd::AsRawFd as _;
-
-        // SAFETY: the parent descriptor and the NUL-terminated leaf stay live
-        // for the call; flags 0 removes a non-directory entry only.
-        if unsafe { libc::unlinkat(self.parent.as_raw_fd(), self.leaf.as_ptr(), 0) } != 0 {
-            return Err(io::Error::last_os_error());
-        }
-        Ok(())
     }
 
     fn publish_staged_no_replace(&self, staged: &Path) -> io::Result<()> {
@@ -588,18 +558,6 @@ impl PinnedMutationTarget {
     fn publish_staged_no_replace(&self, staged: &Path) -> io::Result<()> {
         rename_no_replace(staged, &self.path)
     }
-}
-
-/// Open the configured vault root, following it if it is a symlink (a
-/// symlinked vault is supported); everything beneath it is walked without
-/// following links.
-#[cfg(unix)]
-fn open_vault_root(root: &Path) -> io::Result<fs::File> {
-    use std::os::unix::fs::OpenOptionsExt as _;
-    fs::OpenOptions::new()
-        .read(true)
-        .custom_flags(directory_open_flags(false))
-        .open(root)
 }
 
 #[cfg(unix)]
@@ -934,35 +892,37 @@ impl VaultProvider for FsVaultProvider {
 
     /// Move an entry to the system Trash. The path handed to the Trash is
     /// derived from the pinned parent of a no-follow walk, never rebuilt
-    /// lexically (#1450): a folder on the path that was replaced by a link,
-    /// or moved out of the vault, since the last check refuses here with
-    /// `TrashConfirmationChanged` instead of redirecting the Trash to an
-    /// object outside the vault. `trash_handoff` records what remains.
+    /// lexically (#1450): a folder on the path that is a link or a file, or
+    /// that moved out of the vault since the last check, refuses here with
+    /// `InvalidPath` instead of redirecting the Trash to an object outside the
+    /// vault. Nothing is mutated by a refusal. `trash_handoff` records what
+    /// remains.
     fn delete(&self, relative: &str) -> Result<(), VaultError> {
         #[cfg(unix)]
         {
-            // The walk refuses the vault root and invalid spellings first.
-            let target = self
-                .pin_mutation_target(relative, false)
-                .map_err(super::trash_handoff::walk_refusal)?;
-            let root = open_vault_root(&self.root).map_err(VaultError::Io)?;
-            // lstat through the pinned parent: it does not follow the leaf,
-            // so a broken symlink (a real entry whose target is gone) still
-            // passes, and the raw io::Error keeps permission-denied (etc.)
-            // from being masked as NotFound.
-            let entry = target
-                .leaf_stat(libc::AT_SYMLINK_NOFOLLOW)
-                .map_err(VaultError::Io)?;
+            let path = self.resolve_for_mutation(relative)?;
+            // The structural rename's pinned walk (#1449): a link or a
+            // non-folder among the item's ancestors is its typed refusal.
+            let root = pinned_root::PinnedRoot::open(&self.root)?;
+            let item = root.end(self.vault_relative(&path, relative)?, relative, false)?;
 
             // Broken symlinks: some `trash` backends reject dangling links.
             // The target is already gone, so there is nothing recoverable to
-            // send to the Trash — unlink the dangling entry directly, through
-            // the pinned parent, so a swapped folder cannot redirect it.
-            if (entry.st_mode & libc::S_IFMT) == libc::S_IFLNK && target.leaf_stat(0).is_err() {
-                return target.unlink_leaf().map_err(VaultError::Io);
+            // send to the Trash — unlink the dangling entry directly, inside
+            // its pinned parent, so a swapped folder cannot redirect it. The
+            // look does not follow the leaf, so a broken symlink still counts
+            // as present, and its io::Error keeps permission-denied (etc.)
+            // from being masked as NotFound.
+            if item.is_dangling_link().map_err(VaultError::Io)? {
+                return item.unlink().map_err(VaultError::Io);
             }
 
-            let handed = super::trash_handoff::pinned_path(&root, &target.parent, &target.leaf)?;
+            let handed = super::trash_handoff::pinned_path(
+                root.descriptor(),
+                item.parent(),
+                item.leaf(),
+                relative,
+            )?;
             self.trash.trash(&handed)
         }
 
@@ -975,7 +935,7 @@ impl VaultProvider for FsVaultProvider {
                         path: relative.to_string(),
                         reason: "mutation destination is not beneath the vault root".into(),
                     })?;
-            let handed = super::trash_handoff::pinned_path(&self.root, vault_relative)?;
+            let handed = super::trash_handoff::pinned_path(&self.root, vault_relative, relative)?;
             // `symlink_metadata` does not follow the leaf, so a broken symlink
             // still passes; the raw io::Error keeps its kind.
             let meta = handed.symlink_metadata().map_err(VaultError::Io)?;
@@ -1305,7 +1265,7 @@ fn open_nofollow(path: &Path) -> io::Result<fs::File> {
 }
 
 /// Remove a dangling symlink entry on Windows. (Unix unlinks it relative to
-/// the pinned parent: `PinnedMutationTarget::unlink_leaf`.)
+/// its pinned parent: `pinned_root::RenameEnd::unlink`.)
 ///
 /// Symlinks carry a type flag at creation time. A symlink declared as a
 /// directory symlink must be removed with `RemoveDirectory`

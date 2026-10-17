@@ -434,20 +434,22 @@ enforced by construction, not by review.
   parent handle/descriptor without following links. Windows sharing flags alone
   cannot prevent an attribute writer from converting a pinned directory into a
   junction; no path-based enumeration fallback is used.
-  **Trash handoff (#1450, the plan 43 PR 24 memo's T0+).** The provider walks
-  to the item's parent again without following links and hands the system
-  Trash that pinned parent's own current path joined with the item's name
-  (`F_GETPATH` on macOS, `/proc/self/fd` on Linux, `GetFinalPathNameByHandleW`
-  on Windows), never the lexical vault path. It refuses unless that path still
-  names the pinned parent and lies beneath the vault root's current path,
-  taken the same way, so a symlinked vault root still works. A folder on the
-  item's path replaced by a link, a junction or a file, or moved out of the
-  vault, after the final observation refuses with `TrashConfirmationChanged`
-  ("A folder in this item's path was replaced or moved, so it was not moved to
-  the Trash. Request deletion again") before any mutation; a batch reports
-  that item untrashed with the reason, keeps its recovery markers, requires a
-  rescan and still trashes the rest. A dangling link is unlinked relative to
-  the pinned parent. macOS hands the path to `NSFileManager
+  **Trash handoff (#1450, the plan 43 PR 24 memo's T0+).** The provider pins
+  the item's parent again without following links (on macOS and Linux with
+  FR-10's #1449 pinned-root walk, on Windows through handles opened with
+  `FILE_OPEN_REPARSE_POINT`) and hands the system Trash that pinned parent's
+  own current path joined with the item's name (`F_GETPATH` on macOS,
+  `/proc/self/fd` on Linux, `GetFinalPathNameByHandleW` on Windows), never the
+  lexical vault path. It refuses unless that path still names the pinned
+  parent and lies beneath the vault root's current path, taken the same way,
+  so a symlinked vault root still works. A folder on the item's path that is
+  a link, a junction or a file, or that moved, after the final observation
+  refuses with `InvalidPath` before any mutation; the reason names the folder
+  as the rename refusal does (`"sub" is a symbolic link, not a folder in this
+  vault, so nothing was moved`), or says a folder in the path moved after it
+  was checked. A batch reports that item untrashed with the reason, keeps its
+  recovery markers, requires a rescan and still trashes the rest. A dangling
+  link is unlinked relative to the pinned parent. macOS hands the path to `NSFileManager
   trashItemAtURL:resultingItemURL:error:` as a file reference URL instead of
   trash-rs's Finder script: no Apple event or Automation grant, and Finder's
   Put Back still restores the item (verified on a scratch APFS volume).

@@ -8,19 +8,20 @@
 //! a path (or a URL made from one) and resolves it again, following links,
 //! in code Slate does not control: trash-rs canonicalizes the parent, and
 //! Finder, `NSFileManager` and the Windows Shell resolve what they are
-//! handed. Until
-//! #1450 the provider handed over the lexical vault path, so a folder
-//! replaced by a link after the last check redirected the Trash to an object
-//! outside the vault (#1430's probes P12.6 and P16).
+//! handed. Until #1450 the provider handed over the lexical vault path, so a
+//! folder replaced by a link after the last check redirected the Trash to an
+//! object outside the vault (#1430's probes P12.6 and P16).
 //!
-//! The path handed over is now derived from the pinned parent: the
-//! no-follow walk's parent descriptor (handle, on Windows) reports its own
-//! current path, which must still name that descriptor and lie beneath the
-//! vault root's current path, taken the same way. A folder replaced by a link
-//! refuses at the walk; a pinned folder moved out of the vault refuses at the
-//! derivation. Both refusals are [`moved`], typed as the checked-Trash
-//! refusal the hosts already render, and happen before any filesystem
-//! mutation.
+//! The path handed over is now derived from the pinned parent. On Unix the
+//! provider pins the item's parent with the structural rename's walk
+//! (`fs::pinned_root`, #1449), which refuses a link or a non-folder among the
+//! ancestors; on Windows [`pinned_path`] walks handles itself. The parent's
+//! descriptor (handle) then reports its own current path, which must still
+//! name that descriptor and lie beneath the vault root's current path, taken
+//! the same way, or the handoff refuses: a pinned folder that moved out of
+//! the vault is caught here. Every refusal is `VaultError::InvalidPath` with
+//! a reason core writes, the shape the rename refusal uses, and happens
+//! before any filesystem mutation.
 //!
 //! What remains is the race between this derivation and the Trash call's own
 //! resolution of the path. Only a handle-bound Trash API could close it, and
@@ -65,68 +66,55 @@ impl SystemTrash for PlatformTrash {
     }
 }
 
-/// The refusal when the item's checked location no longer holds: a folder on
-/// its path is now a link, a junction or not a folder, or a pinned folder now
-/// sits elsewhere (out of the vault, or no longer at the path it reports).
-/// Nothing was mutated; the host speaks the message as it speaks every
-/// checked-Trash refusal.
-fn moved() -> VaultError {
-    VaultError::TrashConfirmationChanged {
-        message: "A folder in this item's path was replaced or moved, so it was not moved to the \
-                  Trash. Request deletion again"
-            .into(),
+/// The refusal: `original` is not handed to the Trash, for `reason`, which
+/// core writes and both hosts render ("Invalid path …: …").
+fn refused(original: &str, reason: impl Into<String>) -> VaultError {
+    VaultError::InvalidPath {
+        path: original.to_string(),
+        reason: reason.into(),
     }
 }
 
-/// The refusal when this platform cannot report a pinned folder's current
-/// path (Linux without `/proc`, or an unsupported Unix): the handoff could
-/// not be checked, so nothing is handed to the Trash.
-#[cfg(unix)]
-fn unverifiable() -> VaultError {
-    VaultError::TrashConfirmationChanged {
-        message: "Slate could not confirm where this item is, so it was not moved to the Trash"
-            .into(),
-    }
-}
-
-/// Map a failure of the no-follow walk to the parent: an ancestor that is now
-/// a link (`ELOOP`, or `ENOTDIR` where the walk also demands a directory) or
-/// no longer a folder (`ENOTDIR`) is the substitution this handoff refuses.
-/// Anything else, such as a missing ancestor, keeps its own error.
-#[cfg(unix)]
-pub(super) fn walk_refusal(error: VaultError) -> VaultError {
-    match &error {
-        VaultError::Io(io)
-            if matches!(io.raw_os_error(), Some(libc::ELOOP) | Some(libc::ENOTDIR)) =>
-        {
-            moved()
-        }
-        _ => error,
-    }
+/// A folder pinned by the walk moved, here or out of the vault, or was
+/// removed, before the Trash call: its location no longer holds.
+fn moved(original: &str) -> VaultError {
+    refused(
+        original,
+        "a folder in this path moved after it was checked, so nothing was moved to the Trash",
+    )
 }
 
 /// The path to hand the system Trash for `leaf` inside the pinned `parent`:
 /// the parent's current path joined with the leaf, refused unless that path
 /// still names the pinned parent and lies beneath the vault root's current
 /// path (both taken from their descriptors, so a symlinked vault root, which
-/// the root descriptor followed when it was opened, keeps working).
+/// the root descriptor followed when it was opened, keeps working). A
+/// platform that cannot report a descriptor's path (Linux without `/proc`)
+/// refuses rather than trust the spelling.
 #[cfg(unix)]
 pub(super) fn pinned_path(
     root: &fs::File,
     parent: &fs::File,
     leaf: &CStr,
+    original: &str,
 ) -> Result<PathBuf, VaultError> {
     use std::os::unix::ffi::OsStrExt as _;
 
-    let root_now = current_path(root).map_err(|_| unverifiable())?;
-    let parent_now = current_path(parent).map_err(|_| unverifiable())?;
+    let unverifiable = |_| {
+        refused(
+            original,
+            "Slate could not confirm where this path is now, so nothing was moved to the Trash",
+        )
+    };
+    let root_now = current_path(root).map_err(unverifiable)?;
+    let parent_now = current_path(parent).map_err(unverifiable)?;
     // A reported path that no longer names its descriptor (a folder removed
     // or moved since, or Linux's "(deleted)" suffix) is not a location.
     if !names(&root_now, root) || !names(&parent_now, parent) {
-        return Err(moved());
+        return Err(moved(original));
     }
     if !parent_now.starts_with(&root_now) {
-        return Err(moved());
+        return Err(moved(original));
     }
     Ok(parent_now.join(std::ffi::OsStr::from_bytes(leaf.to_bytes())))
 }
@@ -191,9 +179,15 @@ fn current_path(_descriptor: &fs::File) -> io::Result<PathBuf> {
 /// relative to its parent's handle without following a reparse point, the way
 /// the Trash inventory walks (`trash_snapshot::windows`). The handed path is
 /// the parent handle's final path joined with the leaf, refused unless it lies
-/// beneath the root handle's final path.
+/// beneath the root handle's final path. A reparse point (junction or
+/// symbolic link) or a non-folder among the ancestors refuses naming that
+/// folder, as the Unix walk's refusal does.
 #[cfg(windows)]
-pub(super) fn pinned_path(root: &Path, vault_relative: &Path) -> Result<PathBuf, VaultError> {
+pub(super) fn pinned_path(
+    root: &Path,
+    vault_relative: &Path,
+    original: &str,
+) -> Result<PathBuf, VaultError> {
     use std::os::windows::fs::{MetadataExt as _, OpenOptionsExt as _};
     use std::path::Component;
     use windows_sys::Win32::Storage::FileSystem::{
@@ -201,29 +195,46 @@ pub(super) fn pinned_path(root: &Path, vault_relative: &Path) -> Result<PathBuf,
         FILE_READ_ATTRIBUTES, FILE_SHARE_READ, FILE_SHARE_WRITE,
     };
 
-    let leaf = vault_relative.file_name().ok_or_else(moved)?;
+    let leaf = vault_relative
+        .file_name()
+        .ok_or_else(|| refused(original, "the path has no final component"))?;
     let root_directory = std::fs::OpenOptions::new()
         .access_mode(FILE_READ_ATTRIBUTES | FILE_LIST_DIRECTORY)
         .share_mode(FILE_SHARE_READ | FILE_SHARE_WRITE)
         .custom_flags(FILE_FLAG_BACKUP_SEMANTICS)
         .open(root)?;
     let mut parent: Option<std::fs::File> = None;
+    let mut prefix = PathBuf::new();
     for component in vault_relative
         .parent()
         .unwrap_or_else(|| Path::new(""))
         .components()
     {
         let Component::Normal(name) = component else {
-            return Err(moved());
+            return Err(refused(original, "the path is not vault-relative"));
         };
+        prefix.push(name);
         let child = super::windows_entry::open_relative(
             parent.as_ref().unwrap_or(&root_directory),
             name,
             FILE_READ_ATTRIBUTES | FILE_LIST_DIRECTORY,
         )?;
         let metadata = child.metadata()?;
-        if !metadata.is_dir() || metadata.file_attributes() & FILE_ATTRIBUTE_REPARSE_POINT != 0 {
-            return Err(moved());
+        let folder = prefix.to_string_lossy().replace('\\', "/");
+        if metadata.file_attributes() & FILE_ATTRIBUTE_REPARSE_POINT != 0 {
+            return Err(refused(
+                original,
+                format!(
+                    "\"{folder}\" is a junction or symbolic link, not a folder in this vault, so \
+                     nothing was moved"
+                ),
+            ));
+        }
+        if !metadata.is_dir() {
+            return Err(refused(
+                original,
+                format!("\"{folder}\" is not a folder, so nothing was moved"),
+            ));
         }
         parent = Some(child);
     }
@@ -233,7 +244,7 @@ pub(super) fn pinned_path(root: &Path, vault_relative: &Path) -> Result<PathBuf,
         None => root_now.clone(),
     };
     if !parent_now.starts_with(&root_now) {
-        return Err(moved());
+        return Err(moved(original));
     }
     Ok(parent_now.join(leaf))
 }
