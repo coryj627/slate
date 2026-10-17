@@ -2993,11 +2993,11 @@ final class AppState: ObservableObject {
 
     // MARK: Graph tab, Table mode (Milestone P, P1-2 #555)
 
-    /// The Graph tab's Table-mode publication (contract 35 A-2, adopted
-    /// for the mac by the owner's D1 — TGC-19; #1189, #1190): ONE immutable
-    /// record — the authority, the rows it answers, their sort and request —
-    /// installed in ONE assignment by the two receivers alone. The fields
-    /// below with the old names are read-only views of it.
+    /// The Graph tab's Table-mode publication (contract 35 A-2, D1, TGC-19;
+    /// #1189, #1190): ONE immutable record (authority, rows, sort, request)
+    /// installed in ONE assignment by the two receivers alone. The old-name
+    /// fields below are read-only views with no publishers of their own:
+    /// observe `$graphTablePublication`, never a per-field publisher.
     @Published var graphTablePublication = GraphTablePublication.initial()
     /// The whole-graph snapshot backing the Graph tab's Table mode — the
     /// publication's authority; nil before the first pair and after a pair
