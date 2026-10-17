@@ -3003,17 +3003,24 @@ final class AppState: ObservableObject {
 
     // MARK: Graph tab, Table mode (Milestone P, P1-2 #555)
 
-    /// The whole-graph snapshot backing the Graph tab's Table mode,
-    /// fetched once per generation and sorted/filtered client-side.
-    @Published var graphTableSnapshot: GraphSnapshot?
+    /// The Graph tab's Table-mode publication (contract 35 A-2, D1, TGC-19;
+    /// #1189, #1190): ONE immutable record (authority, rows, sort, request)
+    /// installed in ONE assignment by the two receivers alone. The old-name
+    /// fields below are read-only views with no publishers of their own:
+    /// observe `$graphTablePublication`, never a per-field publisher.
+    @Published var graphTablePublication = GraphTablePublication.initial()
+    /// The whole-graph snapshot backing the Graph tab's Table mode — the
+    /// publication's authority; nil before the first pair and after a pair
+    /// failure.
+    var graphTableSnapshot: GraphSnapshot? { graphTablePublication.snapshot }
     /// The table rows core formats and orders for the accepted request
     /// (W6-2 PR 0b, 0b-7); the grid shows them as given.
-    @Published var graphTableRows: [GraphTableRow] = []
+    var graphTableRows: [GraphTableRow] { graphTablePublication.rows }
     /// The node count under the backend filter alone (the count's total).
-    @Published var graphTableTotal: UInt64 = 0
+    var graphTableTotal: UInt64 { graphTablePublication.total }
     /// The table's ACCEPTED sort — published with the rows it ordered
     /// (design A); the default hubs-first (Links in descending).
-    @Published var graphTableSort = graphTableDefaultSort()
+    var graphTableSort: GraphTableSort { graphTablePublication.sort }
     /// The table's REQUESTED sort while a load is in flight, nil at rest.
     @Published var graphTableRequestedSort: GraphTableSort?
     /// The table's load sequence — every input change advances it, and a
@@ -3023,7 +3030,7 @@ final class AppState: ObservableObject {
     var graphTableRequest: GraphTableRequest?
     /// The backend filter the held snapshot was fetched under — half of
     /// the snapshot's identity (design A): `GraphSnapshot` carries none.
-    var graphTableSnapshotFilter: GraphFilter?
+    var graphTableSnapshotFilter: GraphFilter? { graphTablePublication.filter }
     /// Backend filter (a snapshot re-fetch on change): Attachments /
     /// Unresolved (= ghosts) / Orphans-only toggles — exactly
     /// `GraphFilter` semantics (spec §P1-2). Defaults: attachments off,
@@ -3064,9 +3071,9 @@ final class AppState: ObservableObject {
     /// summary, a count — over the newer generation. Nil at rest.
     var graphTableInFlightAnnounce: GraphTableLoadAnnounce?
     /// The request the shown rows were received under (W6-2 PR C, C-8):
-    /// the table's Where-am-I answers only while it equals the newest
-    /// request and no load is in flight — the publication is CURRENT.
-    var graphTablePublishedRequest: GraphTableRequest?
+    /// the table's Where-am-I answers only while its query is the live one
+    /// and nothing is in flight (rule Q, Term Q7).
+    var graphTablePublishedRequest: GraphTableRequest? { graphTablePublication.request }
     /// Test seam (W6-2 PR C, C-2 (ii)): a pair whose fetch fails with this
     /// error instead of crossing, so the failure arm is pinned on a real
     /// session. Nil in production.
@@ -3079,14 +3086,16 @@ final class AppState: ObservableObject {
     @Published var graphTableLoading: Bool = false
     @Published var graphTableError: String?
     var graphTableLoadSeq: UInt64 = 0
+    /// The generation the probe compares with: the held authority's, moved
+    /// ONLY when a pair installs (D1, TGC-19) — a pair that was dropped
+    /// leaves it where the probe can still repair from.
     var graphTableSeenGraphGeneration: UInt64 = 0
 
     /// The seq of the last token to reach a TERMINAL state — published or
     /// failed (W6-2 PR C, IPG-29). `graphTablePublishedRequest` cannot
     /// answer that question: a request that FAILED never publishes, so it
-    /// stayed indistinguishable from one still in flight and a superseded
-    /// pair could install its authority after it.
-    var graphTableAnsweredSeq: UInt64 = 0
+    /// stays behind the current one while nothing is in flight.
+    var graphTableAnsweredSeq: UInt64 { graphTablePublication.answeredSeq }
     /// Race-test seams (post-compute, pre-guard), handed the token whose
     /// result is about to publish so a test can hold ONE load: the pair's
     /// and the rows request's (W6-2 PR C, C-2 (iii)'s completion orders).

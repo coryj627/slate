@@ -12,11 +12,17 @@ import XCTest
 /// fact can assert on them after the walk.
 struct AXElementSnapshot: CustomStringConvertible {
     let role: String?
+    /// `AXSubrole`: what refines the role for VoiceOver, e.g. a list's
+    /// `AXContentList`, which VoiceOver speaks as "content list".
+    let subrole: String?
     let title: String?
     /// `AXDescription`: the accessible name `.accessibilityLabel` sets.
     let name: String?
     /// `AXValue` as text: a static text's string, a control's value.
     let value: String?
+    /// `AXValueDescription`: where SwiftUI publishes `.accessibilityValue`
+    /// on an element with no value of its own, such as a group.
+    let valueDescription: String?
     let children: [AXElementSnapshot]
 
     /// This element and every descendant, depth first.
@@ -36,9 +42,11 @@ struct AXElementSnapshot: CustomStringConvertible {
     private func lines(depth: Int) -> [String] {
         let fields = [
             role ?? "?",
+            subrole.map { "subrole=\($0)" },
             title.map { "title=\($0)" },
             name.map { "name=\($0)" },
             value.map { "value=\($0)" },
+            valueDescription.map { "valueDescription=\($0)" },
         ].compactMap { $0 }
         return [String(repeating: "  ", count: depth) + fields.joined(separator: " ")]
             + children.flatMap { $0.lines(depth: depth + 1) }
@@ -188,9 +196,11 @@ enum HostedAccessibilityTree {
     ) -> AXElementSnapshot {
         AXElementSnapshot(
             role: text(attribute(element, kAXRoleAttribute)),
+            subrole: text(attribute(element, kAXSubroleAttribute)),
             title: text(attribute(element, kAXTitleAttribute)),
             name: text(attribute(element, kAXDescriptionAttribute)),
             value: text(attribute(element, kAXValueAttribute)),
+            valueDescription: text(attribute(element, "AXValueDescription")),
             children: children)
     }
 

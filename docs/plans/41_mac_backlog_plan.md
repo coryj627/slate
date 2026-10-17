@@ -442,7 +442,12 @@ D4: test more and build the matrix before any policy call.
   the policy choice waits for that doc (PR 24).
 - D5 (#1048): **complete the spike, then research how other macOS apps
   expose nested lists to VoiceOver** before choosing the container shape;
-  PR 16 carries both steps ahead of its implementation.
+  PR 16 carries both steps ahead of its implementation. Delivered
+  2026-10-16 by plan 43 PR 16 (#1048): the spike (list, outline and
+  SwiftUI-group shapes under VoiceOver) and the research (TextEdit's
+  `NSTextView`, WebKit) are in the PR and in G20; each list is one
+  content-list element whose items are its child groups, with nested
+  lists inside their owning item.
 
 ## 6. Housekeeping (done 2026-10-09)
 

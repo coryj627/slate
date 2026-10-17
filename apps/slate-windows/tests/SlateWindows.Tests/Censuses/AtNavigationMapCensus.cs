@@ -32,9 +32,10 @@ public sealed class AtNavigationMapCensus
     ];
 
     // The adjustable action is an action too: VoiceOver's increment/decrement
-    // on a divider, whose Windows twin is a focusable split handle.
+    // on a divider, whose Windows twin is a focusable split handle. An AppKit
+    // custom rotor is a rotor too: the editor's Links rotor (#1224).
     private static readonly Regex Construction = new(
-        @"(?<rotor>\.accessibilityRotor\s*\()|(?<action>\.accessibilityAction\s*(?:\(|\{)|\.accessibilityActions\s*(?:\(|\{)|\.accessibilityAdjustableAction\s*(?:\(|\{)|\bNSAccessibilityCustomAction\s*\()|(?<content>\.accessibilityCustomContent\s*\(|\bAXCustomContent\s*\()",
+        @"(?<rotor>\.accessibilityRotor\s*\(|\bNSAccessibilityCustomRotor\s*\()|(?<action>\.accessibilityAction\s*(?:\(|\{)|\.accessibilityActions\s*(?:\(|\{)|\.accessibilityAdjustableAction\s*(?:\(|\{)|\bNSAccessibilityCustomAction\s*\()|(?<content>\.accessibilityCustomContent\s*\(|\bAXCustomContent\s*\()",
         RegexOptions.CultureInvariant);
 
     // Parsed once per path for the test process: the sources are immutable
@@ -405,10 +406,11 @@ public sealed class AtNavigationMapCensus
             .accessibilityAdjustableAction { direction in }
             .accessibilityCustomContent("Source", value)
             AXCustomContent(label: "Connects to", value: value)
+            NSAccessibilityCustomRotor(rotorType: .link, itemSearchDelegate: search)
             // .accessibilityActions { }
             """;
-        Assert.Equal(new[] { "rotor", "action", "action", "action", "action", "action", "content", "content" }, Sites("View.swift", source).Select(site => site.Group));
-        Assert.Equal(Enumerable.Range(4, 8).Select(line => "View.swift:" + line), Sites("View.swift", source).Select(site => site.Source));
+        Assert.Equal(new[] { "rotor", "action", "action", "action", "action", "action", "content", "content", "rotor" }, Sites("View.swift", source).Select(site => site.Group));
+        Assert.Equal(Enumerable.Range(4, 9).Select(line => "View.swift:" + line), Sites("View.swift", source).Select(site => site.Source));
     }
 
     /// <summary>A constructed type that does not bind in the shell compilation

@@ -49,6 +49,10 @@ struct AccessibleDataGrid<Row: Identifiable>: View {
         let header: String
         let cell: (Row) -> String
         let sort: ((Row, Row, Bool) -> Bool)?
+        /// Whether a header interaction sorts by this column: through the
+        /// local comparator, or — `externallySortable` — through the owner,
+        /// which orders the rows itself (with `sortsRowsLocally` false).
+        let isSortable: Bool
         let accessibilityHint: ((Row) -> String?)?
 
         init(
@@ -56,6 +60,7 @@ struct AccessibleDataGrid<Row: Identifiable>: View {
             cell: @escaping (Row) -> String,
             sort: ((Row, Row) -> Bool)? = nil,
             directionalSort: ((Row, Row, Bool) -> Bool)? = nil,
+            externallySortable: Bool = false,
             accessibilityHint: ((Row) -> String?)? = nil
         ) {
             self.header = header
@@ -69,6 +74,7 @@ struct AccessibleDataGrid<Row: Identifiable>: View {
             } else {
                 self.sort = nil
             }
+            self.isSortable = self.sort != nil || externallySortable
             self.accessibilityHint = accessibilityHint
         }
     }
@@ -185,6 +191,11 @@ struct AccessibleDataGrid<Row: Identifiable>: View {
     /// Header interaction still updates `sortState`, but the grid does not
     /// re-sort the stale row snapshot before that owner publishes its result.
     var sortsRowsLocally: Bool
+    /// When false, the OWNER announces a sort's adoption itself — it alone
+    /// knows which publication answered the request (the graph table's,
+    /// plan 43 PR 13) — and the grid says nothing at the request, the
+    /// reload, a cancellation or a no-op.
+    var announcesSortAdoption: Bool
     var onActivate: ((Row) -> Void)?
     /// Alternate activation (⌘Return / ⌘-double-click) — e.g. "open in a
     /// new tab" vs `onActivate`'s "open here". Opt-in: when nil, a
@@ -224,6 +235,7 @@ struct AccessibleDataGrid<Row: Identifiable>: View {
         sortState: Binding<DataGridSortState?>? = nil,
         cellNavigation: Bool = false,
         sortsRowsLocally: Bool = true,
+        announcesSortAdoption: Bool = true,
         onActivate: ((Row) -> Void)? = nil,
         onActivateModified: ((Row) -> Void)? = nil,
         showsRowContextMenu: Bool = false,
@@ -248,6 +260,7 @@ struct AccessibleDataGrid<Row: Identifiable>: View {
         self.sortState = sortState
         self.cellNavigation = cellNavigation
         self.sortsRowsLocally = sortsRowsLocally
+        self.announcesSortAdoption = announcesSortAdoption
         self.onActivate = onActivate
         self.onActivateModified = onActivateModified
         self.showsRowContextMenu = showsRowContextMenu
@@ -311,7 +324,7 @@ private struct GridTable<Row: Identifiable>: NSViewRepresentable {
                 identifier: NSUserInterfaceItemIdentifier("col\(index)"))
             tableColumn.title = column.header
             tableColumn.resizingMask = [.autoresizingMask, .userResizingMask]
-            if column.sort != nil {
+            if column.isSortable {
                 // The descriptor's key is our column index; the
                 // coordinator interprets it (comparison happens through
                 // the typed comparator, never KVC).
@@ -447,7 +460,7 @@ final class GridCoordinator<Row: Identifiable>: NSObject, NSTableViewDelegate,
     private func invalidateUnavailableSort() {
         guard let activeSort,
             (!grid.columns.indices.contains(activeSort.columnIndex)
-                || grid.columns[activeSort.columnIndex].sort == nil)
+                || !grid.columns[activeSort.columnIndex].isSortable)
         else { return }
         self.activeSort = nil
         if grid.sortState?.wrappedValue != nil {
@@ -474,9 +487,9 @@ final class GridCoordinator<Row: Identifiable>: NSObject, NSTableViewDelegate,
             tableColumn.identifier = NSUserInterfaceItemIdentifier("col\(index)")
             tableColumn.title = column.header
             tableColumn.resizingMask = [.autoresizingMask, .userResizingMask]
-            tableColumn.sortDescriptorPrototype = column.sort == nil
-                ? nil
-                : NSSortDescriptor(key: "\(index)", ascending: true)
+            tableColumn.sortDescriptorPrototype = column.isSortable
+                ? NSSortDescriptor(key: "\(index)", ascending: true)
+                : nil
         }
     }
 
@@ -567,7 +580,7 @@ final class GridCoordinator<Row: Identifiable>: NSObject, NSTableViewDelegate,
         for (columnIndex, tableColumn) in table.tableColumns.enumerated() {
             guard grid.columns.indices.contains(columnIndex) else { continue }
             let column = grid.columns[columnIndex]
-            guard column.sort != nil else {
+            guard column.isSortable else {
                 tableColumn.headerCell.setAccessibilityLabel(column.header)
                 continue
             }
@@ -587,7 +600,7 @@ final class GridCoordinator<Row: Identifiable>: NSObject, NSTableViewDelegate,
     @discardableResult
     func applySort(column columnIndex: Int, ascending: Bool) -> String? {
         guard grid.columns.indices.contains(columnIndex),
-            grid.columns[columnIndex].sort != nil
+            grid.columns[columnIndex].isSortable
         else { return nil }
         let sort = DataGridSortState(columnIndex: columnIndex, ascending: ascending)
         if let sortState = grid.sortState {
@@ -627,6 +640,8 @@ final class GridCoordinator<Row: Identifiable>: NSObject, NSTableViewDelegate,
         syncHeaderAccessibilityToTable()
         table?.reloadData()
         restoreSelectionAfterDisplayMutation(nativeSelectedID: nativeSelectedID)
+        // The owner speaks for its own adoption (`announcesSortAdoption`).
+        guard grid.announcesSortAdoption else { return nil }
         let event = A11yEvent.gridSorted(
             column: grid.columns[columnIndex].header, ascending: ascending)
         if grid.sortState != nil, !grid.sortsRowsLocally {

@@ -16,13 +16,15 @@ import SwiftUI
 /// behavior — character-by-character read, word/line nav, the text
 /// rotor, selection announcements. Per issue #63 we keep those
 /// untouched ("no custom AX overrides unless a tester reports a
-/// missing affordance"). The trade-off: the in-pane heading rotor
-/// that `NoteContentView`'s read-only shape supported (one
-/// `.accessibilityAddTraits(.isHeader)` per heading) doesn't carry
-/// into the editor — `NSTextView` exposes the buffer as one text
-/// element. Heading navigation is still available through the
-/// **Outline sidebar** (cmd+3 to focus the column), which lists the
-/// headings as a navigable list and scrolls the editor when
+/// missing affordance"). #1224 (G29) is that affordance: the
+/// canonical spans' meaning is ADDED to the native reading —
+/// `SlateEditorTextView` overrides only the attributed string for a
+/// range (AXLink on wikilinks, links, embeds and images; the heading
+/// level and style names as custom text) and vends a Links rotor
+/// (see `EditorAccessibilityAttributes`). `NSTextView` still exposes
+/// the buffer as one text element, so heading navigation stays with
+/// the **Outline sidebar** (cmd+3 to focus the column), which lists
+/// the headings as a navigable list and scrolls the editor when
 /// activated via `scrollAnchorRequest`.
 ///
 /// Scrolling.
@@ -499,6 +501,12 @@ struct NoteEditorView: NSViewRepresentable {
         /// mis-colouring.
         private var documentBuffer: DocumentBuffer?
 
+        /// The spans' VoiceOver semantics (#1224), stamped by every highlight
+        /// pass and read by `SlateEditorTextView`'s accessibility overrides.
+        /// It rides the attached text view's storage (`attach`), so AppKit
+        /// shifts its runs through every edit, as it does the colour's.
+        let semanticStore = EditorSemanticStore()
+
         init(
             text: Binding<String>,
             onSave: @escaping () -> Void,
@@ -547,6 +555,9 @@ struct NoteEditorView: NSViewRepresentable {
             // (#404). The new buffer is highlighted whole-document by the
             // `scheduleHighlight(debounced: false)` that follows every attach.
             documentBuffer = DocumentBuffer(text: textView.string)
+            // The VoiceOver semantics follow the new storage (#1224); the
+            // same whole-document pass stamps them.
+            semanticStore.attach(to: textView.textStorage)
 
             // Reset typing attributes + any inherited foreground
             // color so the view starts in a known state. Uses
@@ -900,14 +911,27 @@ struct NoteEditorView: NSViewRepresentable {
         }
 
         /// A computed highlight ready to stamp: the UTF-16 foreground spans,
-        /// the embed underline spans, and the UTF-16 range the foreground
+        /// the embed underline spans, the UTF-16 range the foreground
         /// spans authoritatively cover (`appliedUTF16` == the whole document
-        /// on a whole-doc or fallback pass).
+        /// on a whole-doc or fallback pass), and the same spans' VoiceOver
+        /// semantics planned off-main (#1224, `EditorAccessibilityAttributes`).
         struct PreparedHighlight {
             let mapped: [(range: NSRange, kind: EditorSpanKind)]
             let embeds: [EditorEmbedSpan]
             let appliedUTF16: NSRange
             let isWholeDocument: Bool
+            let semantics: [EditorAccessibilityAttributes.Run]
+
+            init(
+                mapped: [(range: NSRange, kind: EditorSpanKind)], embeds: [EditorEmbedSpan],
+                appliedUTF16: NSRange, isWholeDocument: Bool
+            ) {
+                self.mapped = mapped
+                self.embeds = embeds
+                self.appliedUTF16 = appliedUTF16
+                self.isWholeDocument = isWholeDocument
+                self.semantics = EditorAccessibilityAttributes.plan(mapped)
+            }
         }
 
         /// Off-main span computation. `dirty == nil` (immediate pass)
@@ -974,9 +998,11 @@ struct NoteEditorView: NSViewRepresentable {
         /// the full range, as before.
         ///
         /// VoiceOver doesn't read colour/underline attributes; the highlight
-        /// is purely a sighted-user affordance and AT users hear the raw
-        /// text — so windowing changes only *which ranges repaint when*, not
-        /// the AX tree.
+        /// is purely a sighted-user affordance. #1224: step 3 stamps the
+        /// same spans' meaning (heading level, link, style names) into
+        /// `semanticStore`, windowed the same way, and
+        /// `SlateEditorTextView.accessibilityAttributedString(for:)` adds it
+        /// to the native reading of whatever range VoiceOver reads.
         private func applyHighlight(_ prepared: PreparedHighlight) {
             guard let textView, let layoutManager = textView.layoutManager else { return }
 
@@ -997,8 +1023,8 @@ struct NoteEditorView: NSViewRepresentable {
             layoutManager.removeTemporaryAttribute(.underlineColor, forCharacterRange: removeRange)
 
             // 1. Foreground per canonical kind. `nil` kinds (emphasis /
-            //    strong / strikethrough, plus the never-emitted link /
-            //    image / blockQuote) are skipped so they stay in body
+            //    strong / strikethrough, plus the link / image / blockQuote
+            //    overlays emitted since W7-1) are skipped so they stay in body
             //    colour. `code(token:)` spans nest inside their `codeFence`
             //    — both resolve to `codeColor`, so the overlap paints the
             //    same colour. Spans are ⊆ `removeRange`; clamp to fullRange
@@ -1031,6 +1057,17 @@ struct NoteEditorView: NSViewRepresentable {
                 layoutManager.addTemporaryAttribute(
                     .underlineColor, value: underlineColor, forCharacterRange: clamped
                 )
+            }
+
+            // 3. VoiceOver semantics (#1224): the plan `computeHighlight`
+            //    built off-main from these same spans, over the same window,
+            //    into their own run storage (`EditorSemanticStore` says why
+            //    not this layout manager's). It rides this text view's
+            //    storage, so the lengths agree once `attach` has run.
+            if semanticStore.length == fullRange.length {
+                semanticStore.stamp(
+                    prepared.semantics, window: prepared.appliedUTF16,
+                    wholeDocument: prepared.isWholeDocument)
             }
 
             highlightApplyCount &+= 1
@@ -1390,7 +1427,8 @@ struct NoteEditorView: NSViewRepresentable {
 /// coordinator; everything else (typing, selection, VoiceOver,
 /// drag-and-drop, etc.) falls through to NSTextView's native
 /// handling — the rich AT behaviour the editor inherits stays
-/// untouched.
+/// untouched, with the span semantics added to its accessible
+/// text and a Links rotor beside it (#1224).
 ///
 /// Held by the scroll view's `documentView`; the wrapper sets
 /// `coordinator` after construction so the keyDown handler has
@@ -1398,6 +1436,38 @@ struct NoteEditorView: NSViewRepresentable {
 final class SlateEditorTextView: NSTextView {
     weak var coordinator: NoteEditorView.Coordinator?
     var readOnlyReason: String?
+
+    /// #1224 (plan 43 PR 17): the canonical spans' meaning, added to the
+    /// native reading of `range` — heading level and style names as custom
+    /// text attributes, links as `AXLink` runs (see
+    /// `EditorAccessibilityAttributes`). Issue #63's rule stands: the text,
+    /// units, selection and native attributes are AppKit's; this adds the
+    /// attributes the colorizer's windowed pass stamped inside `range`, the
+    /// "tester reports a missing affordance" exception G29 records.
+    override func accessibilityAttributedString(for range: NSRange) -> NSAttributedString? {
+        let native = super.accessibilityAttributedString(for: range)
+        guard let native, let store = coordinator?.semanticStore, store.rides(textStorage)
+        else { return native }
+        return EditorAccessibilityAttributes.annotate(native, range: range, store: store, textView: self)
+    }
+
+    /// The Links rotor (VO-U) and VO-Command-L: AppKit lists no rotor for
+    /// an `NSTextView`'s links, even its own storage links (the PR 17
+    /// spike), so the editor vends one over the stamped link runs.
+    private lazy var linkRotorSearch = EditorLinkRotorSearch(textView: self)
+    private lazy var linkRotor = NSAccessibilityCustomRotor(
+        rotorType: .link, itemSearchDelegate: linkRotorSearch)
+
+    override func accessibilityCustomRotors() -> [NSAccessibilityCustomRotor] {
+        super.accessibilityCustomRotors() + [linkRotor]
+    }
+
+    #if DEBUG
+    /// The native reading, for the facts that prove it is kept.
+    func nativeAccessibilityAttributedStringForTesting(for range: NSRange) -> NSAttributedString? {
+        super.accessibilityAttributedString(for: range)
+    }
+    #endif
 
     /// The NATIVE context menu retains AppKit's Spelling and Grammar ▸
     /// Check Spelling While Typing item; unrouted, it flips the view
