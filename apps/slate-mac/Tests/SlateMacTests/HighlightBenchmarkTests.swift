@@ -1,6 +1,7 @@
 // Copyright (C) 2026 Cory Joseph
 // SPDX-License-Identifier: AGPL-3.0-or-later
 
+import SwiftUI
 import XCTest
 
 @testable import SlateMac
@@ -59,6 +60,114 @@ final class HighlightBenchmarkTests: XCTestCase {
                 String(
                     format: "%-8@ %10.1f ms %10.1f ms %14.1f ms",
                     c.label as NSString, syntax, embed, syntax + embed))
+        }
+    }
+
+    /// #1224 (plan 43 PR 17): what the VoiceOver semantics add, through the
+    /// real entry points. `plan` runs off-main with the span computation;
+    /// `stamp` runs on main in `applyHighlight`, for a whole-document pass
+    /// and for one keystroke's window, beside the colour pass's own stamping
+    /// for scale; `edit` is one keystroke mirrored into the store; `read` is
+    /// `accessibilityAttributedString(for:)` on one prose line and on the
+    /// whole document, against AppKit's native read of the same range.
+    @MainActor
+    func testAccessibilitySemanticsThroughput() throws {
+        try XCTSkipUnless(
+            ProcessInfo.processInfo.environment["SLATE_BENCH"] == "1",
+            "highlight benchmark is gated; set SLATE_BENCH=1 to run it"
+        )
+        let cases: [(label: String, bytes: Int, iters: Int)] = [
+            ("100 KB", 100 * 1024, 20),
+            ("1 MB", 1024 * 1024, 6),
+            ("2 MB", 2 * 1024 * 1024, 4),
+            ("8 MB", 8 * 1024 * 1024, 2),
+        ]
+        print("\n#1224 VoiceOver semantics, ms (build with -c release for -O numbers)")
+        print(
+            "size      plan  colour-doc  stamp-doc  colour-win  stamp-win  edit-plain   edit  line-native  line-ax  doc-native  doc-ax"
+        )
+        for c in cases {
+            let doc = Self.representativeMarkdown(targetBytes: c.bytes)
+            let ns = doc as NSString
+            let full = NSRange(location: 0, length: ns.length)
+            let mapped = EditorSpanMapping.utf16Spans(from: editorHighlightSpans(text: doc), in: doc)
+            let runs = EditorAccessibilityAttributes.plan(mapped)
+            let textView = SlateEditorTextView(frame: NSRect(x: 0, y: 0, width: 640, height: 480))
+            textView.string = doc
+            let binding = Binding<String>(get: { doc }, set: { _ in })
+            let coordinator = NoteEditorView.Coordinator(text: binding, onSave: {}, previewEmbedAtCursor: nil)
+            textView.coordinator = coordinator
+            coordinator.attach(textView: textView)
+            let store = coordinator.semanticStore
+            let layoutManager = try XCTUnwrap(textView.layoutManager)
+            // One keystroke's window: the section around the middle.
+            let middle = ns.range(
+                of: "## Section", options: [], range: NSRange(location: full.length / 2, length: full.length / 2))
+            let next = ns.range(
+                of: "## Section", options: [],
+                range: NSRange(location: NSMaxRange(middle), length: full.length - NSMaxRange(middle)))
+            let window = NSRange(location: middle.location, length: next.location - middle.location)
+            let windowSpans = mapped.filter { NSIntersectionRange($0.range, window).length == $0.range.length }
+            let windowRuns = EditorAccessibilityAttributes.plan(windowSpans)
+            let line = ns.lineRange(
+                for: NSRange(location: ns.range(of: "Prose with", options: [], range: window).location, length: 0))
+
+            // The colour pass's own stamping (what applyHighlight already does).
+            func colour(_ spans: [(range: NSRange, kind: EditorSpanKind)], _ clear: NSRange) -> Int {
+                layoutManager.removeTemporaryAttribute(.foregroundColor, forCharacterRange: clear)
+                for (range, kind) in spans {
+                    guard let color = EditorSyntaxPalette.color(for: kind, increaseContrast: false) else { continue }
+                    layoutManager.addTemporaryAttribute(.foregroundColor, value: color, forCharacterRange: range)
+                }
+                return spans.count
+            }
+            let plan = Self.bench(c.iters) { EditorAccessibilityAttributes.plan(mapped).count }
+            let colourDoc = Self.bench(c.iters) { colour(mapped, full) }
+            let stampDoc = Self.bench(c.iters) {
+                store.stamp(runs, window: full, wholeDocument: true)
+                return runs.count
+            }
+            let colourWindow = Self.bench(c.iters * 10) { colour(windowSpans, window) }
+            let stampWindow = Self.bench(c.iters * 10) {
+                store.stamp(windowRuns, window: window, wholeDocument: false)
+                return windowRuns.count
+            }
+            // A keystroke and its undo through the text storage: the editor's
+            // (its second layout manager carrying the semantics) against a
+            // plain text view's, both coloured, the coordinator's own
+            // per-edit work left out.
+            let plain = NSTextView(frame: NSRect(x: 0, y: 0, width: 640, height: 480))
+            plain.string = doc
+            if let plainLayout = plain.layoutManager {
+                for (range, kind) in mapped {
+                    guard let color = EditorSyntaxPalette.color(for: kind, increaseContrast: false) else { continue }
+                    plainLayout.addTemporaryAttribute(.foregroundColor, value: color, forCharacterRange: range)
+                }
+            }
+            func keystroke(_ storage: NSTextStorage?) -> Int {
+                storage?.replaceCharacters(in: NSRange(location: line.location, length: 0), with: "x")
+                storage?.replaceCharacters(in: NSRange(location: line.location, length: 1), with: "")
+                return storage?.length ?? 0
+            }
+            store.stamp(runs, window: full, wholeDocument: true)
+            textView.textStorage?.delegate = nil
+            let editPlain = Self.bench(c.iters * 10) { keystroke(plain.textStorage) } / 2
+            let edit = Self.bench(c.iters * 10) { keystroke(textView.textStorage) } / 2
+            textView.textStorage?.delegate = coordinator
+            let lineNative = Self.bench(c.iters * 10) {
+                textView.nativeAccessibilityAttributedStringForTesting(for: line)?.length ?? 0
+            }
+            let lineAX = Self.bench(c.iters * 10) { textView.accessibilityAttributedString(for: line)?.length ?? 0 }
+            let docNative = Self.bench(c.iters) {
+                textView.nativeAccessibilityAttributedStringForTesting(for: full)?.length ?? 0
+            }
+            let docAX = Self.bench(c.iters) { textView.accessibilityAttributedString(for: full)?.length ?? 0 }
+            print(
+                String(
+                    format: "%-8@ %5.1f %11.1f %10.1f %11.3f %10.3f %11.3f %6.3f %12.3f %8.3f %11.1f %7.1f",
+                    c.label as NSString, plan, colourDoc, stampDoc, colourWindow, stampWindow, editPlain, edit,
+                    lineNative, lineAX, docNative, docAX))
+            withExtendedLifetime(coordinator) {}
         }
     }
 

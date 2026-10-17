@@ -262,14 +262,15 @@ def _first_clause(head_line: str) -> str:
     return clause[:140] + ("…" if len(clause) > 140 else "")
 
 
-# Divergences a later PR closed on the host that diverged, by id: the index
-# row carries the closure after where the divergence is recorded, so the
-# register reads closed without re-writing the owner-recorded record itself
-# (the canvas index's convention, plan 43 PR 2).
+# Divergences a later PR closed (or narrowed) on the host that diverged, by
+# id: the index row carries the closure after where the divergence is
+# recorded, so the register reads closed without re-writing the
+# owner-recorded record itself (the canvas index's convention, plan 43 PR 2).
 CLOSED = {
     "B-D11": "**closed on mac** by #1217 (plan 43 PR 5): the mac's mounted leaf loads on a rail switch to a STALE publication too",
     "C-D7": "**retired** by #1218 (plan 43 PR 5): the mac persists by field too, and its save aggregate no longer reads the live filter",
     "C-D9": "**retired** by #1219 and #1216 (plan 43 PR 4): the mac has the items too, in its View ▸ Graph submenu (owner decision D8), each bound to its registry id",
+    "C-D17": "**closed on mac** by #1190 and #1424 (plan 43 PR 13): both replacing pairs, the needle, a filter change and the activation carry the pending sort, and its install speaks GridSorted",
     "D-D12": "**closed on mac** by #1220 (plan 43 PR 5): the mac's restore of a persisted Diagram speaks no mode line either",
 }
 
