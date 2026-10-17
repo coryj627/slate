@@ -196,11 +196,62 @@ same-path reload machinery. Identity is fixed at the boundary where a
 path enters the host's state, re-asserted when the filesystem changes
 under it, and never re-litigated per comparison.
 
+*Mac half delivered by #1147 (plan 43 PR 10).* `AppState.reseatMissingTabs()`
+(`AppState+CanonicalIdentity.swift`) runs inside `publishTreeMutation` after
+every publication that creates or renames a path: a created note, a rename
+or a move (one path or a batch) and an import
+(`TreeMutation.Kind.publishesCreatedOrRenamedPaths`, exhaustive over the
+kinds). It is also the sweep the mac rescan reuses (#1333). Its candidates
+are the Markdown tabs whose note is missing: the active tab whose path
+failed to load, a parked document the Trash flip kept for recovery, and a
+parked tab with no document (a clean tab of a deleted note, or one never
+activated). It asks core once per path, and the rule is Windows'
+`KeepsBufferOnReseat`. A spelling that differs retargets every tab on the
+path by a rename's own steps: path-owned drafts and recovery first, then
+item, title and parked identity, then the active document's fields. A tab
+there that holds unsaved text keeps it and is never reloaded. It is no
+longer missing, as Windows' `RetargetPath` clears the flag, so mac lifts the
+recovery state that blocks editing and saving, and the buffer's next save
+names an existing file, which I8 makes the conflict. Under its own spelling
+such a tab stays in recovery, as it stays missing on Windows: there is no
+identity to correct, and its save stays refused (mac's recovery gate also
+refuses an in-app create or rename onto that exact path). A clean active tab
+reloads through the same-path reload under either spelling, its error kept
+on screen until the read lands; a parked tab with no document reads its path
+when activated. A tab whose save is in flight is left to the next
+publication: mac's save is single-flight and blocks navigation, and a
+retarget under it would retire the save's publication. Every comparator
+stays exact (`BaseExactIdentity`). Facts (`CanonicalIdentityTests`, the
+Windows twins' names first):
+`testAMissingTabReseatsWhenItsFileComesBackUnderAnotherSpelling` and
+`testADirtyMissingTabIsRetargetedButNeverReloaded` (both volume-probed:
+create `Probe.md`, ask for `probe.md`; skipped, saying so, on a
+case-sensitive volume);
+`testTheLifecycleReseatsMissingTabsOnCreatedAndRenamedPublications`, which
+is a runtime fact rather than Windows' source pin (New Note, Duplicate, a
+rename, a move and a batch move each re-seat a missing tab whose note came
+back under its own spelling); `testOnlyCreatedAndRenamedPublicationsReseatMissingTabs`;
+`testAParkedMissingTabTakesTheStoredSpellingAndLoadsItWhenActivated`
+(volume-probed);
+`testTabsInTwoPanesOnOneMissingNoteReseatTogetherOnOneProbe` (one probe per
+path, not per tab); and
+`testADirtyMissingTabWhoseNoteCameBackUnderItsOwnSpellingStaysInRecovery`.
+Not on mac yet: re-seating a missing Canvas or Base tab, which Windows'
+sweep also does (#1416).
+
 **I7 — Failure is honest and closed.** A provider that cannot answer
 canonicalization returns the requested spelling (I1's default), never a
 guess. A canonicalization that fails with an IO error fails the
 mutation rather than silently proceeding on the unresolved spelling —
 proceeding is precisely how the second index row appears.
+
+*Mac half (#1147):* the re-seat fails closed too. A stored-spelling probe
+that throws leaves the tab missing and untouched, never reloaded on a guess
+that the requested spelling still holds, and a nil answer leaves it missing
+as well (`testAStoredSpellingThatCannotBeReadLeavesTheTabMissing`: the note
+is back on disk, so only the failed answer keeps the tab missing; it runs
+through the `canonicalPathProbe` seam, the twin of Windows' rescan seam
+`CanonicalPathForTests`).
 
 **I8 — A hashless save never lands on an existing file (host-side,
 owner-decided).** A tab with no content hash has never loaded bytes
@@ -213,6 +264,35 @@ None` → unconditional save is unchanged. It closes the finding-6
 scenario even if the I6 re-resolution has not yet run — an external
 recreate between the sweep and the save (the TOCTOU I6 cannot cover)
 meets the same refusal.
+
+*Mac half delivered by #1147 (plan 43 PR 10).* `AppState.writeNoteSave` is
+the one core write of a note save. A buffer with a content hash saves through
+`save_composed` as before. A buffer with none is an exclusive create through
+PR 9's reporting funnel (`createReportingLanding`) of the note core composes
+from the split buffer: `compose_note`, the composer `save_composed` runs,
+exported over FFI for this, so mac never writes a second composer's bytes.
+It is never `save_composed` with a nil hash. `Committed` completes the save
+with the new hash. `PublishedUnindexed` completes it and speaks core's
+`CreatePublishedUnindexed` caveat after the saved sentence. `DestinationExists`
+is the existing save conflict (the File Changed Externally resolver), carrying
+the occupant's own hash so that Keep Mine is a compare-and-swap over the bytes
+the conflict is about; Windows reports the same refusal as "Save blocked". A
+hashless save that fills a free path is a structural create, so it takes the
+structural gate, the recovery admission (`admitStructuralRecoveryRecreation`),
+the shared refresh and the undo barrier exactly as the missing-file Keep Mine
+does. Facts: `testAHashlessSaveNeverLandsOnAnExistingFile` (not
+volume-dependent: the `canonicalPathProbe` seam stands in for an aliasing
+volume, because mac has no hashless editable buffer without one; Windows'
+twin opens a path that never loaded, which mac shows as an error, not an
+editor), `testADirtyMissingTabIsRetargetedButNeverReloaded`,
+`testAHashlessSaveThatLandsUnindexedCompletesWithCoresCaveat` and
+`testAHashlessSaveThatCreatesAwaitsTheSharedRefreshOnce` (the refresh runs
+once, under the gate, before the save publishes; a conflict runs none); Rust
+`compose_note_is_the_composed_saves_own_bytes`. Mutation-checked: with I8 off
+(the hashless save unconditional) and the re-seat a no-op, all four twin
+facts fail, the lifecycle fact among them because mac's runs the
+publications rather than reading source; I8 off alone fails the three I8
+facts, and the re-seat a no-op alone fails every re-seat fact.
 
 ## Divergence register (owner-recorded; off-limits for re-litigation)
 
@@ -328,6 +408,7 @@ scenario as an end-to-end regression that FAILS without Phase 4 and
 passes with it (Windows: `CanonicalIdentityTests.cs`, mutation-verified);
 mac's half (re-resolution + I8) is #1147, since Swift is not verifiable
 from the Windows side — core's `canonical_path` is already on the FFI.
+*Delivered by plan 43 PR 10 (#1147):* the mac notes under I6, I7 and I8.
 
 ## Explicitly not in this document
 
