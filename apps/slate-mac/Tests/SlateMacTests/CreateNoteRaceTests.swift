@@ -1,6 +1,7 @@
 // Copyright (C) 2026 Cory Joseph
 // SPDX-License-Identifier: AGPL-3.0-or-later
 
+import Combine
 import XCTest
 
 @testable import SlateMac
@@ -212,5 +213,312 @@ extension CreateNoteRaceTests {
         state.openVault(at: dir)
         await state.scanTask?.value
         return (state, dir)
+    }
+}
+
+// MARK: - The landed-but-unindexed create (#1140)
+
+/// #1140 (#1123 follow-up; contract 30 TR-5): a create-if-absent write that
+/// LANDS and then fails to index is a create. Each funnel finishes it as
+/// one: its ordinary created sentence, then core's `CreatePublishedUnindexed`
+/// caveat, the note open (Duplicate selects its copy instead, as it always
+/// has), and never a failure presentation or a retry under another name.
+/// Driven by core's `SLATE_TEST_FAULT_AFTER_WRITE` seam the way `save_text`'s
+/// facts are (`AfterWriteFault`). Before #1140 every funnel caught the
+/// landed arm as a failure (the "Could not create …" sentence, the error
+/// alert, the template's name sheet) while the bytes sat on disk.
+extension CreateNoteRaceTests {
+    final class PostedAnnouncements: AnnouncementPosting, @unchecked Sendable {
+        var posts: [(message: String, priority: AnnouncementPriority)] = []
+        func post(_ message: String, priority: AnnouncementPriority) {
+            posts.append((message, priority))
+        }
+    }
+
+    /// Every structural-mutation sentence a funnel speaks, in order:
+    /// `lastMutationAnnouncement` records each one as it is posted.
+    private func recordMutationSentences(
+        _ state: AppState
+    ) -> (subscription: AnyCancellable, sentences: () -> [String]) {
+        var sentences: [String] = []
+        let subscription = state.$lastMutationAnnouncement
+            .dropFirst()
+            .compactMap { $0 }
+            .sink { sentences.append($0) }
+        return (subscription, { sentences })
+    }
+
+    /// A directory's visible entries (the `.slate` cache excluded), sorted.
+    private func entries(of directory: URL) throws -> [String] {
+        try FileManager.default.contentsOfDirectory(atPath: directory.path)
+            .filter { !$0.hasPrefix(".") }
+            .sorted()
+    }
+
+    /// The folder-note create runs on an untracked task; it is settled
+    /// once the funnel releases its structural owner.
+    private func waitUntilStructuralMutationEnds(_ state: AppState) async throws {
+        var attempts = 0
+        while state.isMutatingStructure, attempts < 1_000 {
+            try await Task.sleep(nanoseconds: 10_000_000)
+            attempts += 1
+        }
+        XCTAssertFalse(
+            state.isMutatingStructure, "the funnel never released its structural owner")
+    }
+
+    private func openTemplatesVault(
+        announcer: AnnouncementPosting
+    ) async throws -> (AppState, URL) {
+        let dir = FileManager.default.temporaryDirectory
+            .appendingPathComponent("create-landed-template-\(UUID().uuidString)")
+        let templates = dir.appendingPathComponent("Templates")
+        try FileManager.default.createDirectory(
+            at: templates, withIntermediateDirectories: true)
+        addTempDir(dir)
+        try "template body\n".write(
+            to: templates.appendingPathComponent("Note.md"),
+            atomically: true, encoding: .utf8)
+        let state = AppState(
+            recentsStore: nil,
+            externalOpener: { _ in true },
+            preferencesStore: PreferencesStore(
+                defaults: UserDefaults(suiteName: UUID().uuidString)!),
+            announcer: announcer
+        )
+        state.openVault(at: dir)
+        await state.scanTask?.value
+        return (state, dir)
+    }
+
+    /// Open the picker and choose its one template, so the name sheet is up.
+    private func presentTheNameSheet(_ state: AppState) async throws {
+        state.openTemplatePicker()
+        await state.templatePickerTask?.value
+        state.selectTemplate(try XCTUnwrap(state.availableTemplates.first))
+        await state.templateSelectionTask?.value
+        guard case .needsName = state.pendingTemplateFlow else {
+            return XCTFail("expected the name sheet, got \(state.pendingTemplateFlow)")
+        }
+    }
+
+    /// ⌘N's untitled note: `createNote(in:)`, named by `uniqueUntitledName`.
+    func testAnUnindexedUntitledCreateFinishesAsACreate() async throws {
+        let folder = "landed-\(UUID().uuidString)"
+        let (state, dir) = try await openVault { dir in
+            try FileManager.default.createDirectory(
+                at: dir.appendingPathComponent(folder), withIntermediateDirectories: true)
+        }
+        let path = "\(folder)/Untitled.md"
+        let (subscription, sentences) = recordMutationSentences(state)
+        defer { subscription.cancel() }
+
+        await AfterWriteFault.during(folder) {
+            await state.createNote(in: folder)?.value
+        }
+        await state.noteLoadTask?.value
+
+        // The note exists: the landed bytes, on disk and through core.
+        XCTAssertTrue(
+            FileManager.default.fileExists(atPath: dir.appendingPathComponent(path).path))
+        XCTAssertEqual(try state.currentSession?.readText(path: path), "")
+        // The created sentence, then the caveat: in that order, nothing else.
+        XCTAssertEqual(
+            sentences(),
+            ["Created note Untitled.md.", AfterWriteFault.caveat(for: "Untitled.md")])
+        // The note is open, and the flow finished as a committed create
+        // does: the funnel's own scan indexed it, the inline rename is up.
+        XCTAssertEqual(state.selectedFilePath, path)
+        XCTAssertEqual(state.loadedFilePath, path)
+        XCTAssertTrue(state.files.contains { $0.path == path })
+        XCTAssertEqual(state.renamingNode?.path, path)
+        // No second create: the folder holds the one landed note.
+        XCTAssertEqual(try entries(of: dir.appendingPathComponent(folder)), ["Untitled.md"])
+        // Never presented as a failure (the error alert stays down).
+        XCTAssertNil(state.lastError)
+    }
+
+    /// When the funnel's refresh does not index the landed note either (a
+    /// persistent index failure, here a refresh that does nothing), the
+    /// create still finishes as one, but the rename hand-off waits: a rename
+    /// owner with no row to render on would strand invisibly and switch off
+    /// the tree's keys.
+    func testAnUnindexedUntitledCreateTheRefreshCannotIndexStagesNoRename() async throws {
+        let folder = "landed-\(UUID().uuidString)"
+        let (state, dir) = try await openVault { dir in
+            try FileManager.default.createDirectory(
+                at: dir.appendingPathComponent(folder), withIntermediateDirectories: true)
+        }
+        state.structuralBatchRefreshRunner = { _ in }
+        let path = "\(folder)/Untitled.md"
+        let (subscription, sentences) = recordMutationSentences(state)
+        defer { subscription.cancel() }
+
+        await AfterWriteFault.during(folder) {
+            await state.createNote(in: folder)?.value
+        }
+
+        XCTAssertTrue(
+            FileManager.default.fileExists(atPath: dir.appendingPathComponent(path).path))
+        XCTAssertEqual(
+            sentences(),
+            ["Created note Untitled.md.", AfterWriteFault.caveat(for: "Untitled.md")])
+        XCTAssertEqual(state.selectedFilePath, path)
+        XCTAssertFalse(state.files.contains { $0.path == path }, "the index never learned it")
+        XCTAssertNil(state.renamingNode, "no rename owner without a row to render on")
+        XCTAssertNil(state.lastError)
+    }
+
+    /// The folder note (`createFolderNote(at:)`, FL6-1 rule 4).
+    func testAnUnindexedFolderNoteCreateFinishesAsACreate() async throws {
+        let folder = "Project-\(UUID().uuidString)"
+        let leaf = "\(folder).md"
+        let path = "\(folder)/\(leaf)"
+        let (state, dir) = try await openVault { dir in
+            try FileManager.default.createDirectory(
+                at: dir.appendingPathComponent(folder), withIntermediateDirectories: true)
+        }
+        let (subscription, sentences) = recordMutationSentences(state)
+        defer { subscription.cancel() }
+
+        try await AfterWriteFault.during(leaf) {
+            XCTAssertTrue(state.createFolderNote(at: path))
+            try await waitUntilStructuralMutationEnds(state)
+        }
+        await state.noteLoadTask?.value
+
+        XCTAssertTrue(
+            FileManager.default.fileExists(atPath: dir.appendingPathComponent(path).path))
+        XCTAssertEqual(try state.currentSession?.readText(path: path), "")
+        XCTAssertEqual(
+            sentences(), ["Created note \(leaf).", AfterWriteFault.caveat(for: leaf)])
+        XCTAssertEqual(state.selectedFilePath, path)
+        XCTAssertEqual(state.loadedFilePath, path)
+        XCTAssertEqual(try entries(of: dir.appendingPathComponent(folder)), [leaf])
+        XCTAssertNil(state.lastError)
+    }
+
+    /// Duplicate's candidate loop (`duplicateEntry(path:)`): the landed copy
+    /// ends the loop — it is never the namer's advance signal.
+    func testAnUnindexedDuplicateFinishesAsACreate() async throws {
+        let stem = "Dup-\(UUID().uuidString)"
+        let source = "\(stem).md"
+        let copy = "\(stem) copy.md"
+        let (state, dir) = try await openVault { dir in
+            try "original\n".write(
+                to: dir.appendingPathComponent(source), atomically: true, encoding: .utf8)
+        }
+        let (subscription, sentences) = recordMutationSentences(state)
+        defer { subscription.cancel() }
+
+        await AfterWriteFault.during("\(stem) copy") {
+            await state.duplicateEntry(path: source)?.value
+        }
+
+        XCTAssertEqual(
+            try String(contentsOf: dir.appendingPathComponent(copy), encoding: .utf8),
+            "original\n")
+        XCTAssertEqual(try state.currentSession?.readText(path: copy), "original\n")
+        XCTAssertEqual(
+            sentences(),
+            ["Duplicated \(source) as \(copy).", AfterWriteFault.caveat(for: copy)])
+        // The copy is the selection's landing, as for a committed duplicate,
+        // and the funnel's refresh indexed it.
+        XCTAssertEqual(state.treeMutation?.kind, .createNote(path: copy))
+        XCTAssertTrue(state.files.contains { $0.path == copy })
+        // No second create: no "copy 2" was written.
+        XCTAssertEqual(try entries(of: dir), [source, copy].sorted())
+        XCTAssertNil(state.lastError)
+    }
+
+    /// The template flow (`performCreateNoteFromTemplate`).
+    func testAnUnindexedTemplateCreateFinishesAsACreate() async throws {
+        let announcer = PostedAnnouncements()
+        let (state, dir) = try await openTemplatesVault(announcer: announcer)
+        try await presentTheNameSheet(state)
+        let leaf = "Landed-\(UUID().uuidString).md"
+        announcer.posts.removeAll()
+
+        await AfterWriteFault.during(leaf) {
+            state.submitTemplateNoteName(leaf)
+            await state.templateCreateTask?.value
+        }
+        await state.noteLoadTask?.value
+
+        XCTAssertEqual(
+            try String(contentsOf: dir.appendingPathComponent(leaf), encoding: .utf8),
+            "template body\n")
+        // The created sentence (High: it wins the tab-switch race), then
+        // the caveat (Medium, after it, never instead of it).
+        XCTAssertEqual(
+            announcer.posts.map(\.message),
+            ["Created \(leaf) from Note.", AfterWriteFault.caveat(for: leaf)])
+        XCTAssertEqual(announcer.posts.map(\.priority), [.high, .medium])
+        XCTAssertEqual(state.selectedFilePath, leaf)
+        XCTAssertEqual(state.loadedFilePath, leaf)
+        XCTAssertEqual(try entries(of: dir), [leaf, "Templates"].sorted())
+        // The name sheet is not re-presented.
+        XCTAssertEqual(state.pendingTemplateFlow, .idle)
+        XCTAssertNil(state.templateNoteNameError)
+        XCTAssertNil(state.templateRetryNoteName)
+    }
+
+    /// The regression the helper must not break: a REFUSAL rethrows, so
+    /// `DestinationExists` still drives the auto-suffix (Duplicate advances
+    /// past a raced candidate) and still presents on the name sheet (the
+    /// template flow re-presents it with the refusal's words). Neither
+    /// speaks a created sentence or the caveat for the refused name.
+    func testARefusedCreateStillPresentsDestinationExists() async throws {
+        // The auto-suffix: a copy raced onto disk after the scan.
+        let stem = "Raced-\(UUID().uuidString)"
+        let (state, dir) = try await openVault { dir in
+            try "original\n".write(
+                to: dir.appendingPathComponent("\(stem).md"), atomically: true,
+                encoding: .utf8)
+        }
+        try "precious\n".write(
+            to: dir.appendingPathComponent("\(stem) copy.md"), atomically: true,
+            encoding: .utf8)
+        let (subscription, sentences) = recordMutationSentences(state)
+        defer { subscription.cancel() }
+
+        await state.duplicateEntry(path: "\(stem).md")?.value
+
+        XCTAssertEqual(
+            try String(
+                contentsOf: dir.appendingPathComponent("\(stem) copy.md"), encoding: .utf8),
+            "precious\n", "the raced candidate's bytes survive")
+        XCTAssertEqual(
+            try String(
+                contentsOf: dir.appendingPathComponent("\(stem) copy 2.md"), encoding: .utf8),
+            "original\n", "the refusal advanced the suffix")
+        XCTAssertEqual(sentences(), ["Duplicated \(stem).md as \(stem) copy 2.md."])
+        XCTAssertNil(state.lastError)
+
+        // The name sheet: a note raced onto disk under the chosen name.
+        let announcer = PostedAnnouncements()
+        let (templated, vault) = try await openTemplatesVault(announcer: announcer)
+        try await presentTheNameSheet(templated)
+        let leaf = "Taken-\(UUID().uuidString).md"
+        try "precious\n".write(
+            to: vault.appendingPathComponent(leaf), atomically: true, encoding: .utf8)
+        announcer.posts.removeAll()
+
+        templated.submitTemplateNoteName(leaf)
+        await templated.templateCreateTask?.value
+
+        XCTAssertEqual(
+            try String(contentsOf: vault.appendingPathComponent(leaf), encoding: .utf8),
+            "precious\n", "nothing was written over the raced note")
+        guard case .needsName = templated.pendingTemplateFlow else {
+            return XCTFail(
+                "the refusal must re-present the name sheet, got \(templated.pendingTemplateFlow)")
+        }
+        XCTAssertTrue(
+            templated.templateNoteNameError?.contains("already exists") == true,
+            "the DestinationExists words: \(templated.templateNoteNameError ?? "nil")")
+        XCTAssertEqual(templated.templateRetryNoteName, leaf)
+        XCTAssertTrue(
+            announcer.posts.isEmpty, "a refusal speaks nothing: \(announcer.posts)")
     }
 }

@@ -62,6 +62,40 @@ public sealed class CreateOutcomeTests
             () => CreateOutcomes.CreateReporting(session, "landed-outcome.md", "retry\n", "x"));
     }
 
+    /// <summary>#1140 (owner decision D9): the caveat is core's
+    /// <c>CreatePublishedUnindexed</c> event, rendered: the same bytes the
+    /// shell composed before (so the facts above did not move), core's
+    /// medium priority, and no shell source spells the sentence any more.
+    /// The mac twin is <c>A11yCorpusCensusTests
+    /// .testTheUnindexedCreateCaveatRowIsConsumedByMacAndWindows</c>.</summary>
+    [Fact]
+    public void TheCaveatIsCoresRenderedCreatePublishedUnindexedEvent()
+    {
+        RenderedAnnouncement rendered = SlateUniffiMethods.A11yRender(
+            new A11yEvent.CreatePublishedUnindexed(Name: "landed.md", Reason: "the index is locked."));
+        Assert.Equal(
+            "landed.md was written but not indexed: the index is locked. "
+            + "It will appear in listings after the next scan; do not recreate it.",
+            rendered.Text);
+        Assert.Equal(A11yPriority.Medium, rendered.Priority);
+        Assert.Equal(
+            rendered.Text,
+            CreateOutcomes.PublishedUnindexedCaveat("landed.md", "the index is locked."));
+
+        string root = SourceText.ShellSourceRoot();
+        string[] spelling = Directory.GetFiles(root, "*.cs", SearchOption.AllDirectories)
+            .Where(file => !file.Contains(
+                $"{Path.DirectorySeparatorChar}obj{Path.DirectorySeparatorChar}",
+                StringComparison.Ordinal))
+            .Where(file => File.ReadAllText(file).Contains(
+                "was written but not indexed", StringComparison.Ordinal))
+            .Select(file => Path.GetFileName(file))
+            .ToArray();
+        Assert.True(
+            spelling.Length == 0,
+            "the caveat is core's; these shell sources spell it: " + string.Join(", ", spelling));
+    }
+
     /// <summary>Every funnel names the LEAF in its caveat, never a
     /// vault-relative path (codoki on #1123): the folder-note flow is
     /// the one whose natural handle is a path, so it is the one that

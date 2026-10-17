@@ -571,22 +571,26 @@ extension AppState {
             historyRestoreAsPrompt = nil
         }
         let task = Task { @MainActor [weak self] in
-            let result: Result<Void, VaultError> =
+            // The landed-but-unindexed caveat (#1140), when a version's
+            // copy lands and is not indexed: the restore happened.
+            let result: Result<A11yEvent?, VaultError> =
                 await Task.detached(priority: .userInitiated) {
                 do {
                     switch prompt.source {
                     case .deletedFile(let path):
                         _ = try session.recoverDeletedFileAs(
                             path: path, destination: trimmed)
+                        return .success(nil)
                     case .version(let path, let hash, _):
                         // versionContent is integrity-verified — wrong
                         // bytes are never served, so never written.
                         let content = try session.versionContent(
                             path: path, versionHash: hash)
-                        _ = try session.createExclusive(
-                            path: trimmed, content: content)
+                        return .success(
+                            try AppState.createReporting(
+                                session: session, path: trimmed, content: content,
+                                displayName: (trimmed as NSString).lastPathComponent))
                     }
-                    return .success(())
                 } catch let error as VaultError {
                     return .failure(error)
                 } catch {
@@ -600,7 +604,7 @@ extension AppState {
             else { return }
 
             switch result {
-            case .success:
+            case .success(let caveat):
                 await refresher(self)
                 guard !Task.isCancelled,
                     self.ownsStructuralMutation(token, session: session)
@@ -619,6 +623,9 @@ extension AppState {
                     .restoredFileAs(
                         sourceName: sourceName,
                         filename: self.filename(of: trimmed)))
+                // Core's caveat, after the restored sentence and before the
+                // open; the prompt stays down (the copy is real).
+                if let caveat { self.announcer.post(caveat) }
                 // #871 Codex round 2: Restore As creates a file outside the
                 // `publishTreeMutation` barrier — clear the structural undo history
                 // so a stale inverse can't target the restored path.

@@ -10,10 +10,12 @@
 // goldens — both lanes green proves cross-platform byte-identity
 // transitively. Windows is the regen authority.
 //
-// The fault env vars are process-global; XCTest runs the methods of
-// one class serially, and no other Swift test touches
-// SLATE_TEST_FAULT_*, so this file is its own serialization domain —
-// revisit if a second fault-seam Swift test ever appears.
+// The fault env vars are process-global; XCTest runs one test at a time
+// per process. The only other Swift user of the seam is `AfterWriteFault`
+// (#1140), which arms SLATE_TEST_FAULT_AFTER_WRITE with a UUID-bearing
+// trigger around a single funnel and clears it before its test ends, so
+// neither can trip the other's writes — revisit if a fault-seam test
+// ever leaves a fault armed past its own test.
 
 import CryptoKit
 import Foundation

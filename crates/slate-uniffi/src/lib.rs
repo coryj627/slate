@@ -8759,6 +8759,14 @@ pub enum A11yEvent {
     NoteSaveConflict {
         filename: String,
     },
+    /// #1140 (D9): the landed-but-unindexed create caveat a host speaks
+    /// after its created sentence when `create_exclusive_reporting`
+    /// returns `PublishedUnindexed` — `name` the leaf, `reason` that
+    /// arm's `error_message`.
+    CreatePublishedUnindexed {
+        name: String,
+        reason: String,
+    },
     RestoredVersionFrom {
         formatted_date: String,
     },
@@ -10611,6 +10619,9 @@ impl From<A11yEvent> for core::a11y::A11yEvent {
             F::SaveConflict { filename } => C::SaveConflict { filename },
             F::NoteSaveBlocked { filename, detail } => C::NoteSaveBlocked { filename, detail },
             F::NoteSaveConflict { filename } => C::NoteSaveConflict { filename },
+            F::CreatePublishedUnindexed { name, reason } => {
+                C::CreatePublishedUnindexed { name, reason }
+            }
             F::RestoredVersionFrom { formatted_date } => C::RestoredVersionFrom { formatted_date },
             F::RestoredFile { filename } => C::RestoredFile { filename },
             F::RestoredFileAs {

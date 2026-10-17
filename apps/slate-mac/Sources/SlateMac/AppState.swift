@@ -16517,12 +16517,16 @@ final class AppState: ObservableObject {
             recoveryReservation: recoveryReservation)
         let refresher = structuralBatchRefreshRunner
         Task { [weak self] in
-            let outcome: Result<Void, VaultError> = await Task.detached(
+            // #1140: a create that landed but was not indexed is a create;
+            // its caveat (core's) follows the created sentence.
+            let outcome: Result<A11yEvent?, VaultError> = await Task.detached(
                 priority: .userInitiated
             ) {
                 do {
-                    _ = try session.createExclusive(path: notePath, content: "")
-                    return .success(())
+                    return .success(
+                        try AppState.createReporting(
+                            session: session, path: notePath, content: "",
+                            displayName: (notePath as NSString).lastPathComponent))
                 } catch let e as VaultError { return .failure(e) }
                 catch { return .failure(.Io(message: error.localizedDescription)) }
             }.value
@@ -16532,7 +16536,7 @@ final class AppState: ObservableObject {
                 self.ownsStructuralMutation(token, session: session)
             else { return }
             switch outcome {
-            case .success:
+            case .success(let caveat):
                 await refresher(self)
                 guard !Task.isCancelled,
                     self.ownsStructuralMutation(token, session: session)
@@ -16545,6 +16549,7 @@ final class AppState: ObservableObject {
                     advancesSidebarSelectionRevision: false)
                 self.postMutationAnnouncement(
                     "Created note \((notePath as NSString).lastPathComponent).")
+                if let caveat { self.postMutationAnnouncement(caveat) }
             case .failure(let error):
                 self.lastError = self.humanReadable(error)
                 self.announceMutationFailure(
@@ -16570,7 +16575,7 @@ final class AppState: ObservableObject {
             recoveryReservation: recoveryReservation)
         let refresher = structuralBatchRefreshRunner
         let task = Task { [weak self] in
-            let outcome: Result<StructuralReport, VaultError> = await Task.detached(
+            let outcome: Result<A11yEvent?, VaultError> = await Task.detached(
                 priority: .userInitiated
             ) {
                 do {
@@ -16579,12 +16584,12 @@ final class AppState: ObservableObject {
                     // the index hasn't seen yet (external create between
                     // scan and click) surfaces DestinationExists instead of
                     // truncating it — save_text would silently overwrite
-                    // (#796).
-                    _ = try session.createExclusive(path: path, content: "")
+                    // (#796). Its reporting form (#1140) separates a create
+                    // that landed but was not indexed from that refusal.
                     return .success(
-                        StructuralReport(
-                            opId: 0, undoOpIds: [0], moved: [],
-                            rewritten: [], failed: []))
+                        try AppState.createReporting(
+                            session: session, path: path, content: "",
+                            displayName: (path as NSString).lastPathComponent))
                 } catch let e as VaultError { return .failure(e) }
                 catch { return .failure(.Io(message: error.localizedDescription)) }
             }.value
@@ -16594,7 +16599,10 @@ final class AppState: ObservableObject {
                 self.ownsStructuralMutation(token, session: session)
             else { return }
             switch outcome {
-            case .success:
+            case .success(let caveat):
+                // The landed arm finishes as a committed create, its caveat
+                // after the sentence. The refresh is a scan, which normally
+                // indexes the landed note, so its row and the rename land.
                 await refresher(self)
                 guard !Task.isCancelled,
                     self.ownsStructuralMutation(token, session: session)
@@ -16604,11 +16612,18 @@ final class AppState: ObservableObject {
                     path,
                     target: .currentTab,
                     advancesSidebarSelectionRevision: false)
-                // Drop the user straight into renaming the fresh note's title.
-                self.installRenameForCreatedEntry(
-                    path: path, isDirectory: false, session: session)
+                // Drop the user straight into renaming the fresh note's title
+                // — on the landed arm only once the refresh indexed it: a
+                // rename owner with no row to render on would strand
+                // invisibly and switch off the tree's key handling until
+                // something cleared it.
+                if caveat == nil || self.files.contains(where: { $0.path == path }) {
+                    self.installRenameForCreatedEntry(
+                        path: path, isDirectory: false, session: session)
+                }
                 self.postMutationAnnouncement(
                     "Created note \((path as NSString).lastPathComponent).")
+                if let caveat { self.postMutationAnnouncement(caveat) }
             case .failure(let error):
                 self.lastError = self.humanReadable(error)
                 self.announceMutationFailure(
@@ -16700,14 +16715,18 @@ final class AppState: ObservableObject {
                         guard self.ownsStructuralMutation(token, session: session)
                         else { return }
                     }
-                    let create: Result<Void, VaultError> = await Task.detached(
+                    // #1140: a copy that landed but was not indexed ends the
+                    // loop as a create — never the namer's advance signal.
+                    let create: Result<A11yEvent?, VaultError> = await Task.detached(
                         priority: .userInitiated
                     ) {
                         do {
-                            _ = try session.createExclusive(
-                                path: candidatePath,
-                                content: content)
-                            return .success(())
+                            return .success(
+                                try AppState.createReporting(
+                                    session: session,
+                                    path: candidatePath,
+                                    content: content,
+                                    displayName: candidate))
                         } catch let error as VaultError {
                             return .failure(error)
                         } catch {
@@ -16718,12 +16737,13 @@ final class AppState: ObservableObject {
                         return
                     }
                     switch create {
-                    case .success:
+                    case .success(let caveat):
                         self.publishTreeMutation(
                             .createNote(path: candidatePath),
                             rewrittenCount: 0)
                         self.postMutationAnnouncement(
                             "Duplicated \(sourceName) as \(candidate).")
+                        if let caveat { self.postMutationAnnouncement(caveat) }
                         await self.loadFiles()
                         guard self.ownsStructuralMutation(token, session: session) else {
                             return
@@ -23634,7 +23654,8 @@ final class AppState: ObservableObject {
         // file write don't pin the UI thread. Match the
         // `performSave` shape so the threading story stays uniform
         // across editor-save and template-create paths.
-        let outcome: Result<RenderedTemplate, VaultError> = await Task.detached(
+        typealias Created = (rendered: RenderedTemplate, caveat: A11yEvent?)
+        let outcome: Result<Created, VaultError> = await Task.detached(
             priority: .userInitiated
         ) {
             do {
@@ -23643,12 +23664,17 @@ final class AppState: ObservableObject {
                     context: context
                 )
                 // Same no-clobber discipline as createNote (#796): the
-                // template flow races external creates identically.
-                _ = try session.createExclusive(
+                // template flow races external creates identically. A note
+                // that landed but was not indexed is a create (#1140,
+                // contract 30 TR-5): it finishes the flow with core's
+                // caveat and never re-presents the name sheet.
+                let caveat = try AppState.createReporting(
+                    session: session,
                     path: relativePath,
-                    content: rendered.body
+                    content: rendered.body,
+                    displayName: (relativePath as NSString).lastPathComponent
                 )
-                return .success(rendered)
+                return .success((rendered, caveat))
             } catch let error as VaultError {
                 return .failure(error)
             } catch {
@@ -23661,7 +23687,7 @@ final class AppState: ObservableObject {
         guard !Task.isCancelled else { return }
 
         switch outcome {
-        case .success(let rendered):
+        case .success(let (rendered, caveat)):
             await refresher(self)
             // A vault switch invalidates this token before the refresh can
             // resume. Do not dismiss, select, announce, or release a newer
@@ -23693,6 +23719,9 @@ final class AppState: ObservableObject {
             announceTemplate(
                 .templateNoteCreated(name: filename(of: relativePath), template: template.name)
             )
+            // The landed-but-unindexed caveat (#1140) is core's Medium event:
+            // queued after the High created sentence, before the open.
+            if let caveat { announceTemplate(caveat) }
             // Open the new file. SwiftUI propagates the binding
             // change → `handleSelectionChange` kicks off a fresh
             // note load. After the load resolves, we send the
