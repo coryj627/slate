@@ -1284,3 +1284,21 @@ Points that depend on PR 20's open questions:
 - PR 20 decisions this design relies on: the echo ledger, one callback
   per burst, `RescanReason::Watcher`, no watcher run while the app is
   inactive, and the watcher test switch.
+
+## 11. Owner decisions (2026-10-17)
+
+The owner answered §10 in a decision interview on 2026-10-17. Every answer below is the recommendation except where marked.
+
+- **Q1.** The uncounted wording is approved as proposed.
+- **Q2. Not the recommendation.** Other sessions' changes are counted and spoken **only on an explicit Refresh**.
+  - Foreground and watcher runs apply the window silently: the tree, Quick Open and tabs update.
+  - Those runs speak only their own scan's changes, on the foreground policy, so a `slate write` while Slate is active is not announced.
+  - PR 20 §4.5's silent CLI burst stands.
+  - Consequence for 21a: the per-run counts derived from other writers are used for Refresh's sentence only. No second per-session mark is needed, because PR 20's Q2 kept the leading one-a-minute window.
+- **Q3.** A tab holding a file another Slate session renamed is retargeted, as for this session's own renames. Only tabs whose baseline matches move, and a dirty tab keeps its buffer. AR-8 is amended for renames another Slate session made.
+- **Q4.** A known rename counts as "1 new or changed, 1 removed"; no copy change.
+- **Q5.** The constants are accepted: a cursor is live for 24 hours, the feed holds at most 100,000 rows, a window over 10,000 rows takes the uncounted full re-sync, and a run makes at most three passes.
+- **Q6.** The locked 05 §4.4 and §4.5 amendment is approved, together with PR 20's (#1420, Q5).
+- **Q7.** AR-30 is retired when 21a lands. 21b rewrites `AnotherSessionsChangesAreShownButNotCounted` first (TGC-17). Under Q2, the exact cross-session count is spoken on Refresh.
+- **Q8.** Explicit Refresh keeps its recovery set: it reloads Quick Open's whole list and re-checks every failed surface, even with an empty window.
+- **Plan.** §7's split is queued after 20a: 21a, then 21b and 21c.
