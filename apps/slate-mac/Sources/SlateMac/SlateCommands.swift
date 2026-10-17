@@ -271,6 +271,25 @@ enum SlateCommandID {
     /// owned by the one routed "Where Am I?" menu item.
     static let graphWhereAmI = "slate.graph.whereAmI"
 
+    /// The graph verbosity switch (#1216, plan 43 PR 4): one palette row per
+    /// level of core's vector, each running `setGraphVerbosity(_:)`, and the
+    /// ids the View ▸ Graph ▸ Verbosity items run. Tag-true, the closed set
+    /// the Windows chord table records as `windows.graph.setVerbosity*`
+    /// (contract 35 C-9). Chordless, as every graph row but the viewport's.
+    static let graphSetVerbosityTerse = "slate.graph.setVerbosityTerse"
+    static let graphSetVerbosityStandard = "slate.graph.setVerbosityStandard"
+    static let graphSetVerbosityVerbose = "slate.graph.setVerbosityVerbose"
+
+    /// A level's row id. Exhaustive over core's enum, so a level core adds
+    /// does not compile until it has an id (ids are a stability contract).
+    static func graphSetVerbosity(_ level: GraphVerbosity) -> String {
+        switch level {
+        case .terse: return graphSetVerbosityTerse
+        case .standard: return graphSetVerbosityStandard
+        case .verbose: return graphSetVerbosityVerbose
+        }
+    }
+
     // Canvas (Milestone T, #369). Registered under the FFI
     // CommandSection.canvas (landed cross-language with this issue).
     // Program rule R1: every canvas action is a registry command; these
@@ -510,6 +529,9 @@ enum SlateCommandID {
         graphActualSize,
         graphFitGraph,
         graphWhereAmI,
+        graphSetVerbosityTerse,
+        graphSetVerbosityStandard,
+        graphSetVerbosityVerbose,
         canvasShowOutline,
         canvasShowTable,
         canvasShowVisual,
@@ -1634,6 +1656,31 @@ func registerCoreCommands(into registry: CommandRegistry, appState: AppState) {
         hint: "Read the selected node's row copy, its component, the zoom level, and the active filters."
     ) { [weak appState] in appState?.graphDiagramWhereAmI() }
 
+    // The graph verbosity switch (#1216, plan 43 PR 4): one row per level
+    // of core's vector, the label core's title ("Graph Verbosity: {Title}",
+    // pinned against `GraphVerbosity.specs`), each running the one setter
+    // the View ▸ Graph ▸ Verbosity items reach through these same ids.
+    register(
+        SlateCommandID.graphSetVerbosityTerse,
+        label: "Graph Verbosity: Terse",
+        section: .graph,
+        hint: "Set the graph announcement verbosity to Terse for this vault."
+    ) { [weak appState] in appState?.setGraphVerbosity(.terse) }
+
+    register(
+        SlateCommandID.graphSetVerbosityStandard,
+        label: "Graph Verbosity: Standard",
+        section: .graph,
+        hint: "Set the graph announcement verbosity to Standard for this vault."
+    ) { [weak appState] in appState?.setGraphVerbosity(.standard) }
+
+    register(
+        SlateCommandID.graphSetVerbosityVerbose,
+        label: "Graph Verbosity: Verbose",
+        section: .graph,
+        hint: "Set the graph announcement verbosity to Verbose for this vault."
+    ) { [weak appState] in appState?.setGraphVerbosity(.verbose) }
+
     // ----- Workspace tabs (U1-2, #454) -----
 
     register(
@@ -1988,4 +2035,25 @@ func registerCoreCommands(into registry: CommandRegistry, appState: AppState) {
         // (no longer a modal sheet).
         hint: "Open the vault-wide Tasks Review leaf in the right pane."
     ) { [weak appState] in appState?.openTasksReview() }
+}
+
+extension AppState {
+    /// The one path a menu item takes to its command (plan 43 PR 4, owner
+    /// decision D8; the View ▸ Graph items): the registry closure the
+    /// palette row runs for the same id, so the menu, the palette and the
+    /// chord table cannot drift into two code paths. A failure is never
+    /// silent: it speaks the palette's core copy for the same error, and is
+    /// returned so a fact can read what was spoken (nil when the command ran).
+    @discardableResult
+    func invokeRegisteredCommand(_ id: String) -> A11yEvent? {
+        do {
+            try commandRegistry.invokeById(id: id)
+            return nil
+        } catch {
+            let failure = CommandPaletteModel.failureAnnouncement(
+                for: error, label: commandRegistry.findById(id: id)?.label ?? id)
+            postAccessibilityAnnouncement(failure)
+            return failure
+        }
+    }
 }

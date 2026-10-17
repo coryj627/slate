@@ -1441,3 +1441,213 @@ extension SlateCommandsTests {
         }
     }
 }
+
+// MARK: - View ▸ Graph (plan 43 PR 4; owner decision D8)
+
+/// The menu census for the mac's Graph menu, the twin of Windows'
+/// `GraphMenuTests` (contract 35 C-12, C-9). D8 gives Windows' Graph menu
+/// one mac home, a View-menu submenu: Open Graph, a divider, the three
+/// presets, a divider and the Verbosity submenu built from core's vector.
+/// The facts read the items the submenu renders (`GraphMenu.commandItems`,
+/// `GraphMenu.levelItems`) and bind each to its registry id by replacing
+/// that id's closure with a counting one and running the item's path.
+@MainActor
+extension SlateCommandsTests {
+    /// Counts its runs: stands in for a registry closure in the binding check.
+    private final class CountingMenuAction: CommandAction, @unchecked Sendable {
+        private let lock = NSLock()
+        private var runs = 0
+
+        var count: Int {
+            lock.lock()
+            defer { lock.unlock() }
+            return runs
+        }
+
+        func invoke() throws {
+            lock.lock()
+            runs += 1
+            lock.unlock()
+        }
+    }
+
+    /// Fails with a message, as a refusing closure does.
+    private final class FailingMenuAction: CommandAction, @unchecked Sendable {
+        func invoke() throws { throw CommandError.ActionFailed(message: "Boom") }
+    }
+
+    private static func macAppSource() throws -> String {
+        try String(
+            contentsOf: projectRoot.appendingPathComponent(
+                "apps/slate-mac/Sources/SlateMac/SlateMacApp.swift"),
+            encoding: .utf8)
+    }
+
+    /// The `GraphMenu` declaration, comment lines dropped so its own doc
+    /// prose can neither satisfy nor trip a check.
+    private static func graphMenuSource() throws -> String {
+        let app = try macAppSource()
+        let start = try XCTUnwrap(app.range(of: "struct GraphMenu: View {"), "no GraphMenu")
+        let end = try XCTUnwrap(
+            app.range(of: "\n}\n", range: start.upperBound..<app.endIndex),
+            "GraphMenu never closes")
+        return app[start.lowerBound..<end.upperBound]
+            .split(separator: "\n", omittingEmptySubsequences: false)
+            .filter { !$0.trimmingCharacters(in: .whitespaces).hasPrefix("//") }
+            .joined(separator: "\n")
+    }
+
+    func testTheGraphMenusIdsCommandsAndAccelerator() throws {
+        let state = AppState()
+        let groups = GraphMenu.commandItems(state)
+        XCTAssertEqual(
+            groups.map { $0.map(\.id) },
+            [
+                [SlateCommandID.openGraphTab],
+                [
+                    SlateCommandID.graphOrphans, SlateCommandID.graphUnresolved,
+                    SlateCommandID.graphMostLinked,
+                ],
+            ],
+            "Open Graph, a divider, the three presets (C-12's order)")
+        // The registry's labels less the palette's "Graph: " prefix:
+        // Windows' Graph-menu headers without their access keys.
+        XCTAssertEqual(
+            groups.map { $0.map(\.title) },
+            [["Open Graph"], ["Orphaned Notes", "Unresolved Links", "Most Linked Notes"]])
+        for item in groups.joined() {
+            let command = try XCTUnwrap(state.commandRegistry.findById(id: item.id))
+            XCTAssertEqual(item.hint, command.accessibilityHint, "the registry's hint")
+            XCTAssertFalse(item.hint.isEmpty)
+            XCTAssertNil(command.hotkeyHint, "\(item.id): no accelerator, as on Windows")
+            XCTAssertFalse(item.isChecked, "a command item carries no checkmark")
+        }
+
+        // Each item is bound to its registry id: the path a click takes runs
+        // that id's closure once and no other's.
+        let items = Array(groups.joined()) + GraphMenu.levelItems(state)
+        var counters: [String: CountingMenuAction] = [:]
+        for item in items {
+            let command = try XCTUnwrap(state.commandRegistry.findById(id: item.id))
+            let counter = CountingMenuAction()
+            XCTAssertTrue(
+                state.commandRegistry.register(command: command, action: counter),
+                "\(item.id) is a registered id")
+            counters[item.id] = counter
+        }
+        for (index, item) in items.enumerated() {
+            XCTAssertNil(state.invokeRegisteredCommand(item.id), "\(item.id) ran cleanly")
+            for (seen, other) in items.enumerated() {
+                XCTAssertEqual(
+                    counters[other.id]?.count, seen <= index ? 1 : 0,
+                    "running \(item.id) ran \(other.id)'s closure")
+            }
+        }
+
+        // That path is the submenu's every action: no accelerator, and no
+        // graph verb called beside the registry (never a second code path).
+        let menu = try Self.graphMenuSource()
+        XCTAssertEqual(
+            menu.components(separatedBy: "appState.invokeRegisteredCommand(item.id)").count - 1, 2,
+            "the command items and the level items both run through the registry")
+        XCTAssertFalse(menu.contains(".keyboardShortcut("))
+        for verb in ["openGraphTab(", "openGraphPreset(", "setGraphVerbosity("] {
+            XCTAssertFalse(menu.contains(verb), "the menu calls \(verb) beside the registry")
+        }
+    }
+
+    func testTheBuiltMenuEqualsTheVectorInOrder() throws {
+        let state = AppState()
+        let specs = GraphVerbosity.specs
+        var levels = GraphMenu.levelItems(state)
+        XCTAssertEqual(levels.map(\.title), specs.map(\.title), "core's titles, in core's order")
+        XCTAssertEqual(levels.map(\.title), ["Terse", "Standard", "Verbose"])
+        XCTAssertEqual(
+            levels.map(\.id), specs.map { SlateCommandID.graphSetVerbosity($0.verbosity) })
+        for item in levels {
+            XCTAssertEqual(
+                item.hint, state.commandRegistry.findById(id: item.id)?.accessibilityHint,
+                "the palette row's hint")
+        }
+        XCTAssertEqual(levels.map(\.isChecked), [false, true, false], "Standard by default")
+
+        // The check follows a level change, and a click is the setter,
+        // reached through the registry.
+        state.setGraphVerbosity(.verbose)
+        XCTAssertEqual(GraphMenu.levelItems(state).map(\.isChecked), [false, false, true])
+        let terse = try XCTUnwrap(levels.first, "the Terse item")
+        XCTAssertNil(state.invokeRegisteredCommand(terse.id))
+        XCTAssertEqual(state.graphAnnouncer.verbosity, .terse)
+        XCTAssertEqual(state.graphConfig.verbosity, .terse)
+        levels = GraphMenu.levelItems(state)
+        XCTAssertEqual(levels.map(\.isChecked), [true, false, false])
+        // m1's rule: a re-selection keeps the level and its one check.
+        XCTAssertNil(state.invokeRegisteredCommand(terse.id))
+        XCTAssertEqual(GraphMenu.levelItems(state).map(\.isChecked), [true, false, false])
+        XCTAssertEqual(state.graphAnnouncer.verbosity, .terse)
+    }
+
+    func testTheSubmenuDeclaresNoLiteralLevel() throws {
+        let menu = try Self.graphMenuSource()
+        XCTAssertTrue(menu.contains("GraphVerbosity.specs"), "the levels are core's vector")
+        for spec in GraphVerbosity.specs {
+            XCTAssertFalse(menu.contains("\"\(spec.title)\""), "a literal \(spec.title)")
+            XCTAssertFalse(menu.contains("\"\(spec.tag)\""), "a literal \(spec.tag)")
+            XCTAssertFalse(menu.contains(".\(spec.tag)"), "a literal .\(spec.tag) level")
+        }
+    }
+
+    /// D8 and the binding rule's gate: the submenu is View ▸ Graph — mac has
+    /// no top-level menu of its own — and its one gate is a vault, which is
+    /// the registry's availability for these ids: the palette exists only
+    /// with a vault open, and its one resolver gates none of them.
+    func testTheGraphMenuIsAViewSubmenuGatedOnAVaultAsThePaletteIs() throws {
+        let app = try Self.macAppSource()
+        XCTAssertFalse(app.contains("CommandMenu("), "D8: no top-level Graph menu")
+        let start = try XCTUnwrap(app.range(of: "CommandGroup(after: .toolbar)"))
+        let rest = app[start.upperBound...]
+        let viewGroup = rest.range(of: "CommandGroup(").map { rest[..<$0.lowerBound] } ?? rest
+        XCTAssertTrue(
+            viewGroup.contains("GraphMenu(appState: appState)"), "the submenu is in the View menu")
+        let menu = try Self.graphMenuSource()
+        XCTAssertTrue(menu.contains("Menu(\"Graph\")"))
+        XCTAssertTrue(menu.contains("Menu(\"Verbosity\")"))
+        XCTAssertTrue(menu.contains(".disabled(!appState.isVaultOpen)"))
+
+        let state = AppState()
+        let ids =
+            GraphMenu.commandItems(state).joined().map(\.id) + GraphMenu.levelItems(state).map(\.id)
+        XCTAssertEqual(ids.count, 7)
+        for id in ids {
+            let command = try XCTUnwrap(state.commandRegistry.findById(id: id))
+            XCTAssertNil(
+                CommandPaletteView.disabledReason(
+                    for: command,
+                    structuralMutationDisabledReason: "busy",
+                    importCancellationDisabledReason: "busy",
+                    canvasMutationDisabledReason: "busy",
+                    noteAuthoringDisabledReason: "busy",
+                    baseInteractionDisabledReason: "busy",
+                    baseDefinitionEditingDisabledReason: "busy",
+                    baseRefreshDisabledReason: "busy"),
+                "the palette gates \(id), so the menu must follow it")
+        }
+    }
+
+    /// Never silent: a closure that refuses, or an id the registry lacks,
+    /// speaks the registry's own core copy from a menu item, as from the
+    /// palette.
+    func testARegistryFailureFromAMenuItemSpeaksThePalettesCopy() throws {
+        let state = AppState()
+        XCTAssertEqual(
+            state.invokeRegisteredCommand("slate.graph.notACommand"),
+            .paletteCommandNotFound(id: "slate.graph.notACommand"))
+        let command = try XCTUnwrap(state.commandRegistry.findById(id: SlateCommandID.graphOrphans))
+        XCTAssertTrue(
+            state.commandRegistry.register(command: command, action: FailingMenuAction()),
+            "the orphans closure is replaced with a refusing one")
+        XCTAssertEqual(
+            state.invokeRegisteredCommand(SlateCommandID.graphOrphans),
+            .paletteCommandFailed(label: "Graph: Orphaned Notes", detail: "Boom"))
+    }
+}

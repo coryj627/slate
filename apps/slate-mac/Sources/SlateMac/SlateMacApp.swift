@@ -139,6 +139,115 @@ struct SidebarNavigationMenuItems: View {
   }
 }
 
+/// View ▸ Graph (plan 43 PR 4, #1219 and #1216; owner decision D8,
+/// 2026-10-16): Windows' Graph menu (contract 35 C-12) given its mac home,
+/// one View-menu submenu, since mac builds no top-level menu of its own —
+/// Open Graph, a divider, the three presets, a divider and the Verbosity
+/// submenu built from core's vector. Every item runs the registry closure
+/// for its id (`invokeRegisteredCommand`), never a second code path, so the
+/// palette, the chord table and the menu cannot drift; titles and hints are
+/// the registry's, the levels' titles core's. "Fit Graph" and "Where Am I?"
+/// keep their places: chord parity, not placement, is the invariant. The
+/// submenu needs a vault, the palette's own precondition; the palette gates
+/// none of these ids beyond it, and a closure that cannot act says why.
+struct GraphMenu: View {
+    /// One item as the submenu renders it: the registry id it runs, its
+    /// title and hint, and — for a level — whether it is the one in force.
+    struct Item: Equatable {
+        let id: String
+        let title: String
+        let hint: String
+        let isChecked: Bool
+    }
+
+    /// Open Graph, then the three presets: Windows' order, a divider
+    /// between the two groups.
+    static let commandGroups: [[String]] = [
+        [SlateCommandID.openGraphTab],
+        [
+            SlateCommandID.graphOrphans, SlateCommandID.graphUnresolved,
+            SlateCommandID.graphMostLinked,
+        ],
+    ]
+
+    /// The palette's section prefix, which a Graph submenu does not repeat.
+    private static let sectionPrefix = "Graph: "
+
+    @ObservedObject private var appState: AppState
+    /// Observed directly so a level change re-renders the checkmarks.
+    @ObservedObject private var graphAnnouncer: GraphAnnouncer
+
+    init(appState: AppState) {
+        self.appState = appState
+        self.graphAnnouncer = appState.graphAnnouncer
+    }
+
+    /// The command items, grouped: each the registry's command for its id,
+    /// titled by its label less the section prefix.
+    static func commandItems(_ appState: AppState) -> [[Item]] {
+        commandGroups.map { group in
+            group.compactMap { id in
+                appState.commandRegistry.findById(id: id).map { command in
+                    Item(
+                        id: id,
+                        title: command.label.hasPrefix(sectionPrefix)
+                            ? String(command.label.dropFirst(sectionPrefix.count)) : command.label,
+                        hint: command.accessibilityHint ?? "",
+                        isChecked: false)
+                }
+            }
+        }
+    }
+
+    /// The Verbosity submenu: one item per level of core's vector, in its
+    /// order, titled by core, checked when the announcer speaks at it.
+    static func levelItems(_ appState: AppState) -> [Item] {
+        GraphVerbosity.specs.map { spec in
+            let id = SlateCommandID.graphSetVerbosity(spec.verbosity)
+            return Item(
+                id: id,
+                title: spec.title,
+                hint: appState.commandRegistry.findById(id: id)?.accessibilityHint ?? "",
+                isChecked: appState.graphAnnouncer.verbosity == spec.verbosity)
+        }
+    }
+
+    var body: some View {
+        Menu("Graph") {
+            let groups = Self.commandItems(appState)
+            ForEach(groups.indices, id: \.self) { index in
+                if index > 0 {
+                    Divider()
+                }
+                ForEach(groups[index], id: \.id) { item in
+                    Button(item.title) {
+                        _ = appState.invokeRegisteredCommand(item.id)
+                    }
+                    .accessibilityHint(item.hint)
+                    .help(item.hint)
+                }
+            }
+            Divider()
+            Menu("Verbosity") {
+                // The checkmark is the level in force; choosing an item is
+                // its palette row's setter (re-choosing stores nothing).
+                ForEach(Self.levelItems(appState), id: \.id) { item in
+                    Toggle(
+                        isOn: Binding(
+                            get: { item.isChecked },
+                            set: { _ in _ = appState.invokeRegisteredCommand(item.id) })
+                    ) {
+                        Text(item.title)
+                    }
+                    .accessibilityHint(item.hint)
+                    .help(item.hint)
+                }
+            }
+        }
+        .disabled(!appState.isVaultOpen)
+    }
+}
+
 @main
 struct SlateMacApp: App {
     @NSApplicationDelegateAdaptor(SlateAppDelegate.self)
@@ -636,6 +745,12 @@ struct SlateMacApp: App {
                 }
                 .keyboardShortcut("j", modifiers: .command)
                 .disabled(appState.expandedCitation == nil)
+
+                // View ▸ Graph (plan 43 PR 4, D8): Open Graph, the presets
+                // and the Verbosity submenu — Windows' Graph menu (C-12) —
+                // every item its registry id's closure. Fit Graph and Where
+                // Am I? keep their places below (chord parity, not placement).
+                GraphMenu(appState: appState)
 
                 Divider()
 

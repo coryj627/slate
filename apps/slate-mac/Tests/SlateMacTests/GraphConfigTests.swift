@@ -252,13 +252,22 @@ final class GraphConfigTests: XCTestCase {
         XCTAssertFalse(state.graphConfigWritable)
     }
 
-    /// The live verbosity is what a save persists.
+    /// The level a save persists is the one the switch wrote to its field
+    /// (#1216; Term W7): the aggregate is `graphConfig` with the depth
+    /// folded in and nothing else, so the announcer's level is no longer
+    /// read back into it. (This fact pinned the fold until plan 43 PR 4
+    /// gave the level its setter, as PR 5 recorded it would.)
     @MainActor
-    func testSaveAggregateCarriesTheLiveVerbosity() throws {
+    func testSaveAggregateCarriesTheSettersVerbosityNotTheAnnouncers() throws {
         let state = AppState()
         state.applyLoadedGraphConfig(.default, vaultURL: tempDir)
         state.graphAnnouncer.verbosity = .verbose
-        XCTAssertEqual(state.graphConfigSaveAggregate().verbosity, .verbose)
+        XCTAssertEqual(
+            state.graphConfigSaveAggregate().verbosity, .standard,
+            "the announcer's level is not folded into the save")
+        state.setGraphVerbosity(.terse)
+        XCTAssertEqual(state.graphConfigSaveAggregate().verbosity, .terse, "the setter's field")
+        XCTAssertEqual(state.graphAnnouncer.verbosity, .terse, "and the announcer's level")
     }
 
     // MARK: - Persist by field (#1218; contract 35 Term W7, C-D7)
@@ -359,10 +368,10 @@ final class GraphConfigTests: XCTestCase {
     }
 
     /// A trigger publishes `graphConfig` once (#1218's per-field rule). The
-    /// trigger writes its field, and the save folds in only the depth and
-    /// the verbosity, so the save republishes only when one of those moved.
-    /// The diagram rebuilds and re-settles on every publish of the config,
-    /// so a needle keystroke that published twice rebuilt it twice.
+    /// trigger writes its field, and the save folds in only the depth, so
+    /// the save republishes only when the depth moved. The diagram rebuilds
+    /// and re-settles on every publish of the config, so a needle keystroke
+    /// that published twice rebuilt it twice.
     @MainActor
     func testATriggerPublishesTheConfigOnce() async throws {
         let state = try await makeVaultState()
@@ -376,12 +385,72 @@ final class GraphConfigTests: XCTestCase {
         XCTAssertEqual(publishes, 2, "a flag change publishes it once")
         state.setConnectionsDepth(2)
         XCTAssertEqual(publishes, 3, "a depth change publishes the fold once")
-        // The verbosity is folded from the announcer until its setter writes
-        // the field (#1216).
-        state.graphAnnouncer.verbosity = .verbose
-        state.scheduleGraphConfigSave()
-        XCTAssertEqual(publishes, 4, "a verbosity change publishes the fold once")
+        // The verbosity switch writes its own field (#1216): one publish,
+        // and the save it schedules folds nothing new.
+        state.setGraphVerbosity(.verbose)
+        XCTAssertEqual(publishes, 4, "a verbosity change publishes the config once")
         state.scheduleGraphConfigSave()
         XCTAssertEqual(publishes, 4, "a save with nothing new to fold publishes nothing")
+        // The announcer's level alone is not a trigger and is not folded.
+        state.graphAnnouncer.verbosity = .terse
+        state.scheduleGraphConfigSave()
+        XCTAssertEqual(publishes, 4, "the announcer's level is not read back into the config")
+    }
+
+    // MARK: - The verbosity switch (#1216, plan 43 PR 4)
+
+    /// #1216: the switch's level reaches `.slate/graph.json`, and a fresh
+    /// AppState over the same vault — a relaunch — starts its announcer at
+    /// it (0bD-7's restore).
+    @MainActor
+    func testSettingTheVerbosityPersistsToGraphJsonAndRestores() async throws {
+        let state = try await makeVaultState()
+        XCTAssertEqual(state.graphAnnouncer.verbosity, .standard, "the default level")
+        state.setGraphVerbosity(.terse)
+        XCTAssertEqual(state.graphAnnouncer.verbosity, .terse, "the announcer takes it at once")
+        XCTAssertEqual(state.graphConfig.verbosity, .terse, "the config's field (Term W7)")
+        let written = try await persistedConfig(state)
+        XCTAssertEqual(written.verbosity, .terse, "graph.json carries the level")
+
+        let vault = try XCTUnwrap(state.currentVaultURL)
+        let relaunched = AppState(
+            recentsStore: RecentVaultsStore(
+                fileURL: tempDir.appendingPathComponent("recents-relaunch.json")),
+            externalOpener: { _ in true })
+        relaunched.openVault(at: vault)
+        await relaunched.scanTask?.value
+        XCTAssertEqual(relaunched.graphAnnouncer.verbosity, .terse, "the level is restored")
+        XCTAssertEqual(relaunched.graphConfig.verbosity, .terse)
+    }
+
+    /// m1's rule (Windows' `SetVerbosity`): re-selecting the level in force
+    /// stores nothing — no publish of the config, no save scheduled.
+    @MainActor
+    func testReSelectingTheCurrentLevelStoresNothing() async throws {
+        let state = try await makeVaultState()
+        let vault = try XCTUnwrap(state.currentVaultURL)
+        var publishes = 0
+        let watch = state.$graphConfig.dropFirst().sink { _ in publishes += 1 }
+        defer { watch.cancel() }
+        state.setGraphVerbosity(.standard)
+        XCTAssertEqual(publishes, 0, "the level in force is not re-stored")
+        XCTAssertNil(state.graphConfigSaveTasks[vault], "and no save is scheduled")
+        XCTAssertEqual(state.graphAnnouncer.verbosity, .standard)
+    }
+
+    /// A config that failed to load is read-only (Term W7's decode arms):
+    /// the switch still changes the level this session speaks at, and the
+    /// file it could not read is never written.
+    @MainActor
+    func testTheSwitchOverAReadOnlyConfigChangesTheLevelAndWritesNothing() async throws {
+        let state = try await makeVaultState(graphJSON: "not json {{{")
+        let vault = try XCTUnwrap(state.currentVaultURL)
+        XCTAssertFalse(state.graphConfigWritable, "the unreadable file is read-only")
+        state.setGraphVerbosity(.verbose)
+        XCTAssertEqual(state.graphAnnouncer.verbosity, .verbose, "the session speaks at it")
+        XCTAssertNil(state.graphConfigSaveTasks[vault], "no save over a read-only config")
+        XCTAssertEqual(
+            try String(contentsOf: vault.appendingPathComponent(".slate/graph.json"), encoding: .utf8),
+            "not json {{{", "the file is untouched")
     }
 }
