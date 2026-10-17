@@ -4792,23 +4792,17 @@ impl VaultSession {
             |row| row.get(0),
         )?;
         if is_markdown {
-            // Build a fresh path index from SQLite so link
-            // resolution sees every currently-known file (including
-            // any rows the upsert above just added). This is one
-            // O(N) query per save — N is the indexed-file count,
-            // which is bounded by the vault size. Acceptable for
-            // V1.F; can become an incrementally-maintained snapshot
-            // if save_text ever shows up in profiles.
-            let vault_index = crate::InMemoryVaultIndex::new(
-                tx.prepare("SELECT path FROM files")?
-                    .query_map([], |row| row.get::<_, String>(0))?
-                    .collect::<Result<Vec<_>, _>>()?,
-            );
+            // #1295 (locked decision 05 §4 and §9.3.1): the note's links
+            // resolve through the folded-name lookup — each distinct
+            // target's candidate rows, read in this transaction, which
+            // already holds the row the upsert above wrote — so a save's
+            // cost tracks the note, not the vault. No snapshot of `files`.
+            let links = crate::links_db::FoldedNameLookup;
             replace_headings(tx, file_id, contents)?;
             let crate::links_db::LinkReplaceResult {
                 rows,
                 file_meta_artifact,
-            } = crate::links_db::replace_links_for_file(tx, file_id, path, contents, &vault_index)?;
+            } = crate::links_db::replace_links_for_file(tx, file_id, path, contents, &links)?;
             graph_sink.stage(|| crate::graph::GraphOp::LinksetChanged {
                 source_path: path.to_string(),
                 rows,
@@ -10493,7 +10487,7 @@ fn index_file(
     parser_version: u32,
     now: i64,
     report: &mut ScanReport,
-    vault_index: &crate::InMemoryVaultIndex,
+    links: &dyn crate::links_db::LinkCandidates,
     large_file_refuse_bytes: u64,
     mut file_meta_batch: Option<&mut crate::file_meta_db::FileMetaScanBatch>,
     graph_sink: &mut crate::graph::GraphOpSink,
@@ -10718,7 +10712,7 @@ fn index_file(
             rusqlite::params![path],
             |row| row.get(0),
         )?;
-        purge_markdown_derivatives(tx, file_id, path, vault_index, graph_sink)?;
+        purge_markdown_derivatives(tx, file_id, path, links, graph_sink)?;
         purge_canvas_rows(tx, file_id)?;
         crate::bases_db::delete_base_file_for_file(tx, file_id)?;
         // Index epoch (adversarial rounds 31-32): the oversized
@@ -10808,7 +10802,7 @@ fn index_file(
             file_id,
             path,
             body_text.as_str(),
-            vault_index,
+            links,
             replacing_existing_file,
             file_meta_batch.as_deref_mut(),
             report,
@@ -10950,7 +10944,7 @@ fn index_markdown_derivatives(
     file_id: i64,
     path: &str,
     body_text: &str,
-    vault_index: &crate::InMemoryVaultIndex,
+    links: &dyn crate::links_db::LinkCandidates,
     replacing_existing_file: bool,
     file_meta_batch: Option<&mut crate::file_meta_db::FileMetaScanBatch>,
     report: &mut ScanReport,
@@ -10960,7 +10954,7 @@ fn index_markdown_derivatives(
     let crate::links_db::LinkReplaceResult {
         rows,
         file_meta_artifact,
-    } = crate::links_db::replace_links_for_file(tx, file_id, path, body_text, vault_index)?;
+    } = crate::links_db::replace_links_for_file(tx, file_id, path, body_text, links)?;
     graph_sink.stage(|| crate::graph::GraphOp::LinksetChanged {
         source_path: path.to_string(),
         rows,
@@ -11057,12 +11051,12 @@ fn purge_markdown_derivatives(
     tx: &rusqlite::Transaction,
     file_id: i64,
     path: &str,
-    vault_index: &crate::InMemoryVaultIndex,
+    links: &dyn crate::links_db::LinkCandidates,
     graph_sink: &mut crate::graph::GraphOpSink,
 ) -> Result<(), VaultError> {
     replace_headings(tx, file_id, "")?;
     let crate::links_db::LinkReplaceResult { rows, .. } =
-        crate::links_db::replace_links_for_file(tx, file_id, path, "", vault_index)?;
+        crate::links_db::replace_links_for_file(tx, file_id, path, "", links)?;
     graph_sink.stage(|| crate::graph::GraphOp::LinksetChanged {
         source_path: path.to_string(),
         rows,
@@ -18360,7 +18354,9 @@ impl VaultSession {
     /// handle therefore needs its own path represented there before the handle
     /// records that path as its default context. Complete existing rows stay
     /// on the scanner fast path; a missing files row or file_meta projection
-    /// pays the targeted read and Bases-index update below.
+    /// pays the targeted read and Bases-index update below — and only that:
+    /// any link it indexes resolves through the save path's lookup, never a
+    /// snapshot of every `files` row (#1295).
     fn ensure_open_base_indexed(&self, path: &str) -> Result<(), VaultError> {
         let conn = self.conn.lock().expect("session connection mutex");
         let indexed_with_meta = conn
@@ -18379,12 +18375,9 @@ impl VaultSession {
         }
 
         let tx = db::begin_fenced(&conn)?;
-        let mut indexed_paths = tx
-            .prepare("SELECT path FROM files")?
-            .query_map([], |row| row.get::<_, String>(0))?
-            .collect::<Result<Vec<_>, _>>()?;
-        indexed_paths.push(path.to_string());
-        let vault_index = crate::InMemoryVaultIndex::new(indexed_paths);
+        // `index_file` upserts this path's row before resolving any link
+        // of it, so the lookup sees the row in this transaction.
+        let links = crate::links_db::FoldedNameLookup;
         let mut report = ScanReport::default();
         let (name, _, _) = classify_path(path);
         let mut graph_sink = self.graph_sink();
@@ -18396,7 +18389,7 @@ impl VaultSession {
             self.config.parser_version,
             now_ms(),
             &mut report,
-            &vault_index,
+            &links,
             self.config.large_file_refuse_bytes,
             None,
             &mut graph_sink,
@@ -21865,6 +21858,8 @@ mod tests {
 
     #[path = "links_embeds.rs"]
     mod links_embeds;
+
+    mod save_link_lookup;
 
     #[path = "properties.rs"]
     mod properties;
