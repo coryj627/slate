@@ -18,6 +18,18 @@ import Foundation
 /// and the listing's token.
 typealias CanvasMediaListingPageGate = @Sendable (_ page: Int, _ cancel: CancelToken) async -> Void
 
+/// Test seam for the canvas media listing: an error returned for a page
+/// stands in for that `list_files` page failing in core.
+typealias CanvasMediaListingPageFault = @Sendable (_ page: Int) -> Error?
+
+/// What a canvas media listing answers its picker (plan 43 PR 12, #1324,
+/// #1437): the complete listed set, or why the listing failed. A cancelled
+/// listing answers nothing.
+enum CanvasMediaListingOutcome {
+    case listed([String])
+    case failed(detail: String)
+}
+
 /// An open text-card edit session (sheet presented by the container).
 struct CanvasCardEditorRequest: Identifiable, Equatable {
     let nodeId: String
@@ -154,30 +166,25 @@ extension AppState {
     ///
     /// Runs off the main actor (locked 05 §4, principle 2) under the ONE
     /// token of its listing: a cancelled token ends it `.Cancelled` at its
-    /// next page. Any other page failure keeps the set listed so far, as the
-    /// synchronous listing did (contract 34 IG2-37 records that divergence
-    /// from Windows, which refuses audibly; #1437).
+    /// next page. Any other page failure ends it with that error, so a
+    /// partial set is never presented as the vault's (contract 34 TG2-3 and
+    /// IG2-20, Windows' arm; #1437 closes IG2-37's mac half).
     nonisolated static func listCanvasMediaPaths(
         session: VaultSession,
         cancel: CancelToken,
         pageLimit: UInt32,
-        pageGate: CanvasMediaListingPageGate?
+        pageGate: CanvasMediaListingPageGate?,
+        pageFault: CanvasMediaListingPageFault? = nil
     ) async throws -> [String] {
         var media: [String] = []
         var cursor: String? = nil
         var page = 0
         repeat {
             await pageGate?(page, cancel)
-            let listed: FileSummaryPage
-            do {
-                listed = try session.listFiles(
-                    filter: .all, paging: Paging(cursor: cursor, limit: pageLimit),
-                    cancel: cancel)
-            } catch VaultError.Cancelled {
-                throw VaultError.Cancelled
-            } catch {
-                break
-            }
+            if let fault = pageFault?(page) { throw fault }
+            let listed = try session.listFiles(
+                filter: .all, paging: Paging(cursor: cursor, limit: pageLimit),
+                cancel: cancel)
             media.append(
                 contentsOf: listed.items.map(\.path).filter {
                     let lower = $0.lowercased()
@@ -191,8 +198,8 @@ extension AppState {
     }
 
     /// Present `loadingPrompt` — the picker on its loading row — and list the
-    /// vault's media for it off the main actor, then hand the list to `land`
-    /// on the main actor. The listing is the picker's: one token, cancelled
+    /// vault's media for it off the main actor, then hand `land` the outcome
+    /// on the main actor: the complete list, or why a page failed. The listing is the picker's: one token, cancelled
     /// when the picker closes or is replaced (`canvasPrompt`'s observer),
     /// when a newer listing starts (here) and when the vault closes
     /// (`releaseAllCanvasDocuments`). A cancelled or superseded listing, or
@@ -200,11 +207,11 @@ extension AppState {
     private func startCanvasMediaListing(
         for document: CanvasDocument,
         presenting loadingPrompt: CanvasPrompt,
-        land: @escaping (AppState, [String]) -> Void
+        land: @escaping (AppState, CanvasMediaListingOutcome) -> Void
     ) {
         cancelCanvasMediaListing()
         guard let session = currentSession else {
-            land(self, [])
+            land(self, .listed([]))
             return
         }
         canvasMediaListingGeneration &+= 1
@@ -215,26 +222,35 @@ extension AppState {
         presentCanvasPrompt(loadingPrompt)
         let pageLimit = canvasMediaListingPageLimit
         let pageGate = canvasMediaListingPageGateForTesting
+        let pageFault = canvasMediaListingPageFaultForTesting
         canvasMediaListingTask = Task { @MainActor [weak self, weak document] in
-            let media: [String]?
+            let outcome: CanvasMediaListingOutcome?
             do {
-                media = try await withTaskCancellationHandler {
-                    try await Task.detached(priority: .userInitiated) {
-                        try await Self.listCanvasMediaPaths(
-                            session: session, cancel: cancel,
-                            pageLimit: pageLimit, pageGate: pageGate)
-                    }.value
-                } onCancel: {
-                    cancel.cancel()
-                }
+                outcome = .listed(
+                    try await withTaskCancellationHandler {
+                        try await Task.detached(priority: .userInitiated) {
+                            try await Self.listCanvasMediaPaths(
+                                session: session, cancel: cancel,
+                                pageLimit: pageLimit, pageGate: pageGate,
+                                pageFault: pageFault)
+                        }.value
+                    } onCancel: {
+                        cancel.cancel()
+                    })
+            } catch VaultError.Cancelled {
+                outcome = nil
+            } catch is CancellationError {
+                outcome = nil
+            } catch let error as VaultError {
+                outcome = .failed(detail: Self.humanReadableVaultError(error))
             } catch {
-                media = nil
+                outcome = .failed(detail: error.localizedDescription)
             }
             guard let self, self.canvasMediaListingGeneration == generation else { return }
             self.canvasMediaListingTask = nil
             self.canvasMediaListingCancelToken = nil
             self.canvasMediaListingPromptID = nil
-            guard let media, !cancel.isCancelled(), self.currentSession === session,
+            guard let outcome, !cancel.isCancelled(), self.currentSession === session,
                 let document, self.activeCanvasDocument === document,
                 self.canvasPrompt?.id == loadingPrompt.id
             else {
@@ -243,7 +259,7 @@ extension AppState {
                 if self.canvasPrompt?.id == loadingPrompt.id { self.dismissCanvasPrompt() }
                 return
             }
-            land(self, media)
+            land(self, outcome)
         }
     }
 
@@ -286,13 +302,22 @@ extension AppState {
             admitCanvasMutation(for: document)
         else { return }
         startCanvasMediaListing(for: document, presenting: .addMedia(files: nil)) {
-            state, media in
-            guard !media.isEmpty else {
+            state, outcome in
+            switch outcome {
+            case .failed(let detail):
+                // #1437 (contract 34 IG2-37, Windows' TG2-3 arm): a failed
+                // page presents nothing and says why.
                 state.dismissCanvasPrompt()
-                state.canvasAnnouncer.announce(.canvasStatus(note: .noMediaInVault))
-                return
+                state.canvasAnnouncer.announce(
+                    .canvasActionFailed(action: .create, detail: detail))
+            case .listed(let media):
+                guard !media.isEmpty else {
+                    state.dismissCanvasPrompt()
+                    state.canvasAnnouncer.announce(.canvasStatus(note: .noMediaInVault))
+                    return
+                }
+                state.canvasPrompt = .addMedia(files: media)
             }
-            state.canvasPrompt = .addMedia(files: media)
         }
     }
 
@@ -393,14 +418,22 @@ extension AppState {
         let title = row.title
         startCanvasMediaListing(
             for: doc, presenting: .locate(nodeId: selected, title: title, files: nil)
-        ) { state, media in
-            let candidates = notes + media
-            guard !candidates.isEmpty else {
+        ) { state, outcome in
+            switch outcome {
+            case .failed(let detail):
+                // #1437, as for Add Media: Locate's verb arm is CanvasAction.
                 state.dismissCanvasPrompt()
-                state.canvasAnnouncer.announce(.canvasStatus(note: .noFilesToPointAt))
-                return
+                state.canvasAnnouncer.announce(
+                    .canvasActionFailed(action: .canvasAction, detail: detail))
+            case .listed(let media):
+                let candidates = notes + media
+                guard !candidates.isEmpty else {
+                    state.dismissCanvasPrompt()
+                    state.canvasAnnouncer.announce(.canvasStatus(note: .noFilesToPointAt))
+                    return
+                }
+                state.canvasPrompt = .locate(nodeId: selected, title: title, files: candidates)
             }
-            state.canvasPrompt = .locate(nodeId: selected, title: title, files: candidates)
         }
     }
 

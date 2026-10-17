@@ -3642,11 +3642,11 @@ where a platform never fires the key.
 | `CanvasActionFailed/MoveIntoGroup` | `AppState+CanvasActions.swift#canvasMoveIntoGroup`, `AppState+CanvasActions.swift#id` | `CanvasDocumentViewModel.cs#CanvasMoveIntoGroup` | `A11yCorpusCensus.cs#Corpus` |  |
 | `CanvasActionFailed/Placement` | `AppState+CanvasActions.swift#canvasPlaceRelative` | `CanvasDocumentViewModel.cs#CanvasPlaceRelative`, `CanvasDocumentViewModel.cs#OpenCardPicker` | `A11yCorpusCensus.cs#Corpus` |  |
 | `CanvasActionFailed/Align` | `AppState+CanvasActions.swift#canvasAlignWith` | `CanvasDocumentViewModel.cs#CanvasAlignWith` | `A11yCorpusCensus.cs#Corpus` |  |
-| `CanvasActionFailed/Create` | `AppState+CanvasActions.swift#canvasNewCanvasFile`, `AppState+CanvasCreate.swift#canvasCreatePlaced` | `CanvasDocumentViewModel.cs#CanvasAddFileCard`, `CanvasDocumentViewModel.cs#CanvasAddLinkCard`, `CanvasDocumentViewModel.cs#RequestVaultPick` | `A11yCorpusCensus.cs#Corpus` |  |
+| `CanvasActionFailed/Create` | `AppState+CanvasActions.swift#canvasNewCanvasFile`, `AppState+CanvasCreate.swift#canvasCreatePlaced`, `AppState+CanvasCreate.swift#canvasOpenAddMedia` | `CanvasDocumentViewModel.cs#CanvasAddFileCard`, `CanvasDocumentViewModel.cs#CanvasAddLinkCard`, `CanvasDocumentViewModel.cs#RequestVaultPick` | `A11yCorpusCensus.cs#Corpus` |  |
 | `CanvasActionFailed/RemoveFromGroup` | `AppState+CanvasCreate.swift#canvasRemoveFromGroup` | `CanvasDocumentViewModel.cs#CanvasRemoveFromGroup` | `A11yCorpusCensus.cs#Corpus` |  |
 | `CanvasActionFailed/Duplicate` | `AppState+CanvasExtras.swift#canvasDuplicate` | `CanvasDocumentViewModel.cs#CanvasDuplicate` | `A11yCorpusCensus.cs#Corpus` |  |
 | `CanvasActionFailed/CreateConnectedCard` | `AppState+CanvasExtras.swift#canvasCreateConnectedCard` | `CanvasDocumentViewModel.cs#CanvasCreateConnectedCard` | `A11yCorpusCensus.cs#Corpus` |  |
-| `CanvasActionFailed/CanvasAction` | `AppState+Canvas.swift#canvasApply`, `AppState+CanvasExtras.swift#canvasActivateFileCard` | `CanvasDocumentViewModel.cs#ActivateFileCard`, `CanvasDocumentViewModel.cs#PrepareConnectAction`, `CanvasDocumentViewModel.cs#RequestVaultPick` (+7) | `A11yCorpusCensus.cs#Corpus`, `CanvasDocumentTests.cs#AMediaFileThatExistsButCannotBeOpenedRefusesRatherThanClaimingItIsMissing` |  |
+| `CanvasActionFailed/CanvasAction` | `AppState+Canvas.swift#canvasApply`, `AppState+CanvasExtras.swift#canvasActivateFileCard`, `AppState+CanvasCreate.swift#canvasOpenLocate` | `CanvasDocumentViewModel.cs#ActivateFileCard`, `CanvasDocumentViewModel.cs#PrepareConnectAction`, `CanvasDocumentViewModel.cs#RequestVaultPick` (+7) | `A11yCorpusCensus.cs#Corpus`, `CanvasDocumentTests.cs#AMediaFileThatExistsButCannotBeOpenedRefusesRatherThanClaimingItIsMissing` |  |
 | `CanvasActionFailed/WhereAmI` | `AppState+Canvas.swift#canvasWhereAmI` | `CanvasNavigator.cs#WhereAmI` | `A11yCorpusCensus.cs#Corpus` |  |
 | `CanvasSaveConflict` | `AppState+Canvas.swift#canvasApply` | `CanvasCardEditorViewModel.cs#CommitOnEscape`, `CanvasMutationFunnel.cs#AnnounceAdmission`, `CanvasMutationFunnel.cs#Transact` | `A11yCorpusCensus.cs#Corpus`, `CanvasAnnouncerTests.cs#AnAnnouncementFromAForeignThreadMarshalsHome`, `CanvasAnnouncerTests.cs#AnErrorIsAssertiveAndDropsPendingNavigationRatherThanFlushingIt` (+1) |  |
 | `CanvasFileNotFound` | `AppState+CanvasExtras.swift#canvasActivateFileCard` | `CanvasDocumentViewModel.cs#ActivateFileCard` | `A11yCorpusCensus.cs#Corpus`, `CanvasDocumentTests.cs#AFileCardWithNoVaultTargetSaysSoAndStaysNavigable`, `CanvasDocumentTests.cs#AMediaFileThatExistsButCannotBeOpenedRefusesRatherThanClaimingItIsMissing` |  |
@@ -11292,7 +11292,7 @@ dispatch that never seats (IG2-59, IG2-60).
 | IG2-34 | BLOCKER | G2-2 | survived round 1 | Every operation carries the invoking tab as owner — while the navigator chord discards its presenter and `DocumentCommand` passes only the document. | TG2-0 |
 | IG2-35 | BLOCKER | G2-2/G2-5/G2-6 | survived round 1 | Staged verbs preserve their invocation context — with one typed request defined, and none for Move, the connection flows, the directional create, New Group, Add Link or Convert. | TG2-2 |
 | IG2-36 | MAJOR | G2-3 | survived round 1 | The not-ready sentence precedes every opener refusal while each row "mirrors" mac's order. | TG2-0 |
-| IG2-37 | MAJOR | G2-3/G2-6 | created by revision 2 | Any vault paging failure aborts audibly and presents nothing — where mac keeps the partial set silently. | TG2-3 |
+| IG2-37 | MAJOR | G2-3/G2-6 | created by revision 2 | Any vault paging failure aborts audibly and presents nothing — where mac keeps the partial set silently. **Mac half closed 2026-10-17 (#1437, plan 43 PR 12):** mac aborts audibly too — a failed page dismisses the loading picker, presents nothing and speaks `CanvasActionFailed` with the message. | TG2-3 |
 | IG2-38 | BLOCKER | G2-3/G2-10 | created by revision 2 | A non-empty store whose projection is empty refuses `NoMarks` at the OPENER — before admission, outside the gate. | TG2-5 |
 | IG2-39 | BLOCKER | G2-10/G2-14 | survived round 1 | Duplicate is all-or-nothing — while `CanvasOrderNodes` drops unknown ids silently and no set equality is required. | TG2-5 |
 | IG2-40 | MAJOR | G2-3/G2-8 | survived round 1 | Remove from Group maps a thrown parent query — and nothing for a null or unresolved parent. | TG2-4 |
@@ -11588,7 +11588,16 @@ presents nothing; an empty classified set answers `NoNotesInVault`,
 mac (IG2-37, G2D-13's sibling): mac keeps a silently partial set when
 a page fails; Windows refuses audibly and presents nothing — a
 divergence of policy, chosen because a list with silent holes is the
-never-silent rule's opposite. The admission predicate is the
+never-silent rule's opposite. **Closed on mac, 2026-10-17 (#1437, plan
+43 PR 12):** mac's vault-file picker now lists off the main actor under
+one token the picker owns and takes Windows' arm. A page that fails for
+any reason but cancellation dismisses the loading picker, presents
+nothing, and speaks `CanvasActionFailed` with the message, `Create` for
+Add Media and `CanvasAction` for Locate File. "This vault has no media
+files." is spoken only for a listing that completed with no media, and a
+cancelled listing presents and says nothing. Mac's Add Note pages
+nothing (its notes are the sidebar's index list), so it has no paging
+arm to fail. The admission predicate is the
 purpose's (G2D-6): notes are markdown, media is core's
 `CanvasMediaClass` over the path, Locate admits the union; Locate is
 offered on every file or image card (G2D-8, IG2-52 owed to the owner

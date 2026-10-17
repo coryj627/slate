@@ -3215,6 +3215,8 @@ final class AppState: ObservableObject {
     var canvasMediaListingPageLimit: UInt32 = 1_000
     /// Nil in production: awaited off the main actor before each page.
     var canvasMediaListingPageGateForTesting: CanvasMediaListingPageGate?
+    /// Nil in production: an error it returns fails that page.
+    var canvasMediaListingPageFaultForTesting: CanvasMediaListingPageFault?
     /// User-authored prompt text lives with the prompt owner instead of the
     /// ephemeral sheet. A quarantine or other failed commit therefore cannot
     /// destroy the only copy when SwiftUI re-renders the sheet.

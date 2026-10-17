@@ -206,6 +206,73 @@ final class CanvasMediaListingCancellationTests: XCTestCase {
         XCTAssertEqual(posted, [])
     }
 
+    // MARK: - A failed page refuses audibly (contract 34 IG2-37, #1437)
+
+    /// Windows' arm (TG2-3, IG2-20): a page that fails for any reason but
+    /// cancellation dismisses the loading picker, presents nothing, and
+    /// speaks `CanvasActionFailed` with the message — `Create` for Add Media,
+    /// `CanvasAction` for Locate File. Mac used to keep the set listed so
+    /// far without a word, and a first page that failed made Add Media say
+    /// "This vault has no media files.", which was false.
+    private func failPage(_ failing: Int, on state: AppState) {
+        state.canvasMediaListingPageFaultForTesting = { page in
+            page == failing ? VaultError.Db(message: "page \(page) could not be read") : nil
+        }
+    }
+
+    private func failure(_ action: CanvasFailedAction, _ detail: String) -> String {
+        a11yRender(event: .canvas(event: .canvasActionFailed(action: action, detail: detail))).text
+    }
+
+    private func status(_ note: CanvasStatusNote) -> String {
+        a11yRender(event: .canvas(event: .canvasStatus(note: note))).text
+    }
+
+    func testAFailedFirstPageDismissesAddMediaAndSaysWhy() async throws {
+        let state = try await makeState(media: ["media/a.png", "media/b.mp3"])
+        failPage(0, on: state)
+        state.canvasOpenAddMedia()
+        let listing = try XCTUnwrap(state.canvasMediaListingTask)
+        await listing.value
+        state.canvasAnnouncer.flushForTests()
+
+        XCTAssertNil(state.canvasPrompt, "a failed listing dismisses its picker and presents nothing")
+        XCTAssertEqual(posted, [failure(.create, "page 0 could not be read")])
+        XCTAssertFalse(
+            posted.contains(status(.noMediaInVault)),
+            "a listing that failed never says the vault has no media files")
+    }
+
+    func testAFailedLaterPageDismissesAddMediaWithoutAPartialSet() async throws {
+        let state = try await makeState(media: (1...5).map { "media/clip-\($0).png" })
+        state.canvasMediaListingPageLimit = 2
+        failPage(2, on: state)
+        state.canvasOpenAddMedia()
+        let listing = try XCTUnwrap(state.canvasMediaListingTask)
+        await listing.value
+        state.canvasAnnouncer.flushForTests()
+
+        XCTAssertNil(
+            state.canvasPrompt,
+            "the pages listed before the failure are never presented as the set")
+        XCTAssertEqual(posted, [failure(.create, "page 2 could not be read")])
+    }
+
+    func testAFailedPageDismissesLocateAndSaysWhy() async throws {
+        let state = try await makeState(media: ["media/a.png"], notes: ["notes/first.md"])
+        let doc = try XCTUnwrap(state.activeCanvasDocument)
+        state.canvasSelect(nodeId: "f", in: doc, announce: false)
+        failPage(0, on: state)
+        state.canvasOpenLocate()
+        let listing = try XCTUnwrap(state.canvasMediaListingTask)
+        await listing.value
+        state.canvasAnnouncer.flushForTests()
+
+        XCTAssertNil(state.canvasPrompt, "Locate presents no list built from a failed listing")
+        XCTAssertEqual(posted, [failure(.canvasAction, "page 0 could not be read")])
+        XCTAssertFalse(posted.contains(status(.noFilesToPointAt)))
+    }
+
     // MARK: - What the picker shows once the listing answers
 
     func testAddMediaListsTheVaultsMediaAfterItsLoadingRow() async throws {
