@@ -347,7 +347,10 @@ plain rename — the case change the filesystem makes to ONE entry. Between
 that proof and the rename, an attacker with write access to the parent
 could swap the destination for a different file: the same privilege as
 dropping a file directly, the residual class the read path already
-records. Windows and Linux never take the fallback.
+records. Windows and Linux never take the fallback. Since #1449 the
+fallback, like the no-replace rename before it, runs beneath the vault
+root and refuses a symbolic link in either path (`RENAME_NOFOLLOW_ANY`),
+so the race is on the leaf alone (contract 31 FR-10).
 
 ## Owner calls
 
