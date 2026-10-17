@@ -108,10 +108,17 @@ struct SidebarNavigationMenuItems: View {
     appState.sidebarActionProjection(surface: .menuBar).first { $0.id == id }
   }
 
+  /// A menu title that differs from the palette row (the registry's
+  /// invariant is chord parity, not label parity): Refresh reads as a verb in
+  /// the flat View menu, where the palette's section prefix would not.
+  static func menuTitle(for evaluation: SidebarActionEvaluation) -> String {
+    evaluation.id == SlateCommandID.sidebarRefresh ? "Refresh Files" : evaluation.label
+  }
+
   private func item(_ id: String) -> some View {
     Group {
       if let evaluation = evaluation(id) {
-        Button(evaluation.label) {
+        Button(Self.menuTitle(for: evaluation)) {
           guard let intent = evaluation.intent else { return }
           do {
             _ = try appState.dispatchSidebarAction(intent)
@@ -128,6 +135,9 @@ struct SidebarNavigationMenuItems: View {
   var body: some View {
     item(SlateCommandID.sidebarCollapseAll)
     item(SlateCommandID.sidebarExpandLoaded)
+    // Plan 43 PR 19 (#1333): Files Sidebar Refresh's menu home. No chord, as
+    // on Windows.
+    item(SlateCommandID.sidebarRefresh)
     item(SlateCommandID.sidebarHistoryBack)
       .keyboardShortcut("[", modifiers: [.command, .control])
     item(SlateCommandID.sidebarHistoryForward)
@@ -1211,6 +1221,19 @@ struct RootView: View {
                 for: NSApplication.didBecomeActiveNotification)
         ) { _ in
             appState.scheduleTemplateAvailabilityRefresh()
+            // Plan 43 PR 19 (#1333, R-9): the foreground rescan route. A
+            // return after at least two seconds away, with no modal surface
+            // open, rescans; silent unless something changed.
+            appState.applicationDidBecomeActive()
+        }
+        .onReceive(
+            NotificationCenter.default.publisher(
+                for: NSApplication.didResignActiveNotification)
+        ) { _ in
+            appState.applicationDidResignActive()
+        }
+        .onAppear {
+            appState.beginForegroundRescanObservation(appIsActive: NSApp.isActive)
         }
         .onReceive(
             NotificationCenter.default.publisher(

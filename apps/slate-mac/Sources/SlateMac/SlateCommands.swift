@@ -32,6 +32,10 @@ enum SlateCommandID {
     static let sidebarClearRecents = "slate.sidebar.clearRecents"
     static let sidebarCollapseAll = "slate.sidebar.collapseAll"
     static let sidebarExpandLoaded = "slate.sidebar.expandLoaded"
+    /// Plan 43 PR 19 (#1333; contract 40 R-9): Files Sidebar Refresh, the
+    /// explicit rescan. Windows' id (`ChordTable.Ids.SidebarRefresh`), so the
+    /// capability is shared and its label is mac's (contract P3).
+    static let sidebarRefresh = "slate.sidebar.refresh"
     static let sidebarHistoryBack = "slate.sidebar.historyBack"
     static let sidebarHistoryForward = "slate.sidebar.historyForward"
     static func sidebarOpenShortcut(_ slot: Int) -> String {
@@ -491,6 +495,7 @@ enum SlateCommandID {
         sidebarClearRecents,
         sidebarCollapseAll,
         sidebarExpandLoaded,
+        sidebarRefresh,
         sidebarHistoryBack,
         sidebarHistoryForward,
         sidebarOpenShortcut(1),

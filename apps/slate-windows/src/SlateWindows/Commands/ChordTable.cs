@@ -433,7 +433,8 @@ internal static class ChordTable
         public const string CreateFolderNote = "slate.sidebar.createFolderNote";
         public const string DeleteFolderNote = "slate.sidebar.deleteFolderNote";
 
-        // Windows-only sidebar capabilities.
+        // Windows-first sidebar capabilities. Refresh is shared with mac
+        // since plan 43 PR 19 (#1333); the other three stay Windows-only.
         public const string SidebarRefresh = "slate.sidebar.refresh";
         public const string SidebarClearFilter = "slate.sidebar.clearFilter";
         public const string SidebarToggleTags = "slate.sidebar.toggleTags";
@@ -1529,11 +1530,14 @@ internal static class ChordTable
             Reg(Ids.DeleteFolderNote, "Delete Folder Note", CommandSection.Sidebar,
                 "Move this folder's note to the Recycle Bin."),
 
-            // Windows-only sidebar capabilities. Refresh and Clear Filter are
+            // Windows-first sidebar capabilities. Refresh and Clear Filter are
             // menu/UI-homed; Toggle Tags is a PR-4 orphan with no binding at
-            // all, registered so the palette becomes its surface.
-            Reg(Ids.SidebarRefresh, "Refresh File Tree", CommandSection.Sidebar,
-                "Re-read the vault's file tree and report the visible count."),
+            // all, registered so the palette becomes its surface. Refresh is
+            // shared with mac since plan 43 PR 19 (#1333), so its label and
+            // hint are mac's (contract P3: "Files: Refresh", the palette row
+            // beside "Bases: Refresh").
+            Reg(Ids.SidebarRefresh, "Files: Refresh", CommandSection.Sidebar,
+                "Rescan the vault for files added, changed or removed outside Slate."),
             Reg(Ids.SidebarClearFilter, "Clear Sidebar Filter", CommandSection.Sidebar,
                 "Clear the sidebar filter field and show every file again."),
             Reg(Ids.SidebarToggleTags, "Toggle Tag Column", CommandSection.Sidebar,

@@ -375,6 +375,15 @@ enum SidebarActionCatalog {
             SlateCommandID.sidebarExpandLoaded, "Expand Loaded Folders",
             .sortOrder, .anySelection,
             "Expand already-loaded folders, fetching at most one level deeper."),
+        // Plan 43 PR 19 (#1333; contract 40 R-9): the explicit rescan, shared
+        // with Windows by id and label (P3). It acts on the vault, never on
+        // the selection; AppState gives its availability (the open scan, an
+        // import or a Trash operation in flight). Never undoable: it writes
+        // only the index.
+        action(
+            SlateCommandID.sidebarRefresh, "Files: Refresh", .refresh,
+            .anySelection,
+            "Rescan the vault for files added, changed or removed outside Slate."),
         action(
             SlateCommandID.sidebarHistoryBack, "Back in Sidebar History",
             .sortOrder, .anySelection,
