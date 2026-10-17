@@ -14,8 +14,9 @@ import SwiftUI
 ///
 /// VoiceOver story:
 ///   - Field announces its label, "Search vault", on focus.
-///   - Result count fires through the polite live region on every
-///     state transition into `.results`.
+///   - The result summary ("Search returned N results.") is announced
+///     when it changes, never on a re-render (#1412: see the
+///     `.onChange(of: appState.searchSummary)` below).
 ///   - Each row's accessibility label is `"<filename>: <snippet>"`.
 ///     The line number was dropped from the row label in #92 item
 ///     1 — full_text_search no longer fetches body_text per hit, so
@@ -23,9 +24,13 @@ import SwiftUI
 ///     post-activation announcement still says
 ///     "Opened <filename>, line N: <snippet>" using the loaded
 ///     note's body).
-///   - A row that takes focus, by Tab or an arrow, speaks its
-///     filename (a recent row, its query): `announceFocusedResult`
-///     (#418 F-A1).
+///   - A row that takes keyboard focus, by Tab or an arrow, is read by
+///     VoiceOver itself, once per move: the row's label (a recent row's
+///     "Recent search: <query>"). The overlay posts nothing of its own
+///     on a focus move — an announcement as well spoke the row twice or
+///     cut VoiceOver's read short (#1412, VoiceOver pass 2026-10-16;
+///     contract 29 SD-1). Windows keeps focus in its field, so there
+///     `RowSelected` speaks each move instead.
 ///
 /// Keyboard:
 ///   - ⇧⌘F (Edit ▸ Search Vault…) toggles the overlay.
@@ -38,9 +43,9 @@ import SwiftUI
 ///     moves back, and from the first row to the field (SD-1). The
 ///     list does not wrap. Tab reaches the rows too, after the field's
 ///     Clear and Close buttons. Both need Keyboard navigation (Full
-///     Keyboard Access) on: a plain button takes keyboard focus only
-///     then, so with it off the arrows keep their field meaning
-///     (#1377).
+///     Keyboard Access) on, which VoiceOver also turns on for the app
+///     while it runs: a plain button takes keyboard focus only then, so
+///     with it off the arrows keep their field meaning (#1377).
 ///   - Return or keypad Enter on a focused row opens it (a recent row
 ///     re-runs its search); ⌘Return opens a result row in a new tab
 ///     (plan 41 D2). ⌘Return anywhere else is not the overlay's.
@@ -63,7 +68,8 @@ struct SearchOverlay: View {
         // focus scaffolding the result rows have, or a keyboard-only
         // user (no VoiceOver, no Full Keyboard Access) can't Tab to a
         // recent or Return-run it. (Measured in #1113: a plain button
-        // takes keyboard focus only with Keyboard navigation on, so the
+        // takes keyboard focus only with Keyboard navigation on, or
+        // while VoiceOver runs, which turns it on for the app; so the
         // scaffolding reaches these rows only then — #1377.)
         case recent(Int)
     }
@@ -131,18 +137,23 @@ struct SearchOverlay: View {
         .onDisappear {
             removeKeyMonitor()
         }
-        // Polite live region — but only when the summary string
-        // actually differs from the last announcement. Subscribing to
-        // the publisher with `removeDuplicates()` (rather than
-        // `.onChange(of:)`) dedupes re-assignments of an identical
-        // string at the source. Fast typing produces
-        // `searching → results → searching → results` cycles where
-        // the same "Search returned N results" string can land
-        // multiple times; without dedup VoiceOver re-announces on
-        // every keystroke past the 150ms debounce (#91 item 1).
-        .onReceive(appState.$searchSummary.removeDuplicates()) { summary in
+        // Polite live region, announced only when the summary string
+        // changes. Fast typing re-assigns an identical "Search returned
+        // N results" string on every search; `.onChange` compares
+        // values, so a repeat does not re-announce (#91 item 1).
+        //
+        // #1412: this was `.onReceive($searchSummary.removeDuplicates())`.
+        // In the running app SwiftUI re-subscribed that publisher on every
+        // key and focus event, and `@Published` hands each new subscriber
+        // its current value, so every arrow or Tab move re-announced the
+        // summary (traced 2026-10-16, with and without VoiceOver: two
+        // posts per move), which drowned VoiceOver's read of the newly
+        // focused row. `.onChange` keys the announcement to the value
+        // changing, not to a subscription. Posted through
+        // `appState.announcer`, so a fact can count the posts.
+        .onChange(of: appState.searchSummary) { _, summary in
             if !summary.isEmpty, let event = appState.searchAnnouncement {
-                postAccessibilityAnnouncement(event)
+                appState.announcer.post(event)
             }
         }
     }
@@ -161,11 +172,6 @@ struct SearchOverlay: View {
                         + "Return activates the top result. "
                         + "Tab moves to the results list."
                 )
-                // #418 (F-A1): tabbing/arrowing through result rows
-                // is silent — announce the focused row (hoisted to a
-                // method; an inline closure here tripped the Swift
-                // type-checker budget, the PR #263 failure mode).
-                .onChange(of: focus) { _, newFocus in announceFocusedResult(newFocus) }
                 .onChange(of: appState.searchQuery) {
                     appState.bumpSearchQuery()
                 }
@@ -545,50 +551,26 @@ struct SearchOverlay: View {
         // since #92 item 1 (the post-activation announcement carries
         // it). The STX/ETX hit markers are stripped for the audio
         // side; they drive the visual emphasis only.
-        .accessibilityLabel(rowAccessibilityLabel(for: hit))
+        .accessibilityLabel(Self.rowAccessibilityLabel(for: hit))
         .help(hit.path)
     }
 
-    private func rowAccessibilityLabel(for hit: QueryHit) -> String {
+    /// What VoiceOver reads when a result row takes keyboard focus:
+    /// `"<filename>: <snippet>"`, the STX/ETX hit markers stripped. The
+    /// row's only voice on a focus move (#1412): the overlay posts no
+    /// announcement of its own then. Static so a fact can pin it.
+    static func rowAccessibilityLabel(for hit: QueryHit) -> String {
         let cleanSnippet = hit.snippet
             .replacingOccurrences(of: "\u{2}", with: "")
             .replacingOccurrences(of: "\u{3}", with: "")
-        return "\(filename(for: hit.path)): \(cleanSnippet)"
-    }
-
-    /// #418 (F-A1): speak the focused result row. The focus engine
-    /// moves through these custom .plain buttons silently; announce
-    /// the filename — the full row label (with snippet) stays on the
-    /// element for VO-cursor interaction without forcing every focus
-    /// hop through a paragraph of snippet speech.
-    ///
-    /// #876 red-team: the idle-state recent rows reuse the identical
-    /// silent `.plain`-button `.focused(...)` scaffolding, so they need
-    /// the same on-focus announcement — without it a VoiceOver user
-    /// Tabbing through recents hears nothing (unlike the result rows they
-    /// mirror). Announce the query itself.
-    private func announceFocusedResult(_ newFocus: FocusTarget?) {
-        if case .result(let idx) = newFocus {
-            guard case .results(let rows, _) = appState.searchState,
-                rows.indices.contains(idx)
-            else { return }
-            postAccessibilityAnnouncement(
-                .rowSelected(name: filename(for: rows[idx].path)))
-            return
-        }
-        if case .recent(let idx) = newFocus,
-            appState.searchRecents.indices.contains(idx)
-        {
-            postAccessibilityAnnouncement(
-                .recentSearchFocused(query: appState.searchRecents[idx]))
-        }
+        return "\((hit.path as NSString).lastPathComponent): \(cleanSnippet)"
     }
 
     /// The key monitor (#422 F-E2, #1113). Every decision is
     /// `Self.route(...)`; this closure only gathers what the monitor
-    /// knows and applies the route. A moved focus speaks through
-    /// `announceFocusedResult` (the field's `.onChange(of: focus)`), so
-    /// each arrow move announces its row — the S8 rule.
+    /// knows and applies the route. A moved focus is spoken by
+    /// VoiceOver itself, which reads the newly focused row once per
+    /// move (#1412; the S8 rule's "a move must speak").
     private func installKeyMonitor() {
         guard keyMonitor == nil else { return }
         keyMonitor = NSEvent.addLocalMonitorForEvents(matching: .keyDown) { event in
@@ -659,8 +641,8 @@ extension SearchOverlay {
     enum KeyRoute: Equatable {
         /// Not the overlay's key: the event continues untouched.
         case passThrough
-        /// Consume the key and move keyboard focus (SD-1). The focus
-        /// change is what speaks (`announceFocusedResult`).
+        /// Consume the key and move keyboard focus (SD-1). VoiceOver
+        /// reads the newly focused row; the overlay posts nothing (#1412).
         case moveFocus(FocusTarget)
         /// Consume the key and leave focus where it is: Down on the
         /// last row (the list does not wrap).

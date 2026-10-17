@@ -181,7 +181,9 @@ suppressed with the palette's P10 pattern so a result set never
 double-speaks its top row over the summary announcement, and re-selecting
 the same index does not re-announce. (Round-1 correction: this contract's
 first draft listed `RowSelected` but nothing posted it — arrows moved the
-selection silently.)
+selection silently.) *Note (#1412, 2026-10-16):* mac no longer makes that
+on-focus announcement. VoiceOver's read of the focused row is its voice
+(SD-1's voice note); Windows' `RowSelected` stays basename-only.
 
 **S9 — Activation closes the overlay and is the only thing that records a
 recent.** Enter on a row (or on the field, which activates the top result)
@@ -416,7 +418,8 @@ A new surface joins ALL SIX or fails a named gate.
   results too. Down moves keyboard focus from the field to the first
   row and on down the list. Up moves back, and from the first row to
   the field. The idle state's recent rows take the same walk. Each move
-  announces its row through `announceFocusedResult` (`RowSelected`, S8).
+  is spoken once: keyboard focus lands on the row, and VoiceOver reads
+  the row's own label (the voice note below).
   The arrows are bare only, handled in the overlay's key monitor beside
   Return (`SearchOverlay.route`), so Control-Option-arrows pass through.
   Two differences remain, recorded here rather than hidden. (1) Mac moves
@@ -424,9 +427,33 @@ A new surface joins ALL SIX or fails a named gate.
   selection. So mac's list does not wrap: Down holds on the last row,
   and Up on the field keeps its caret meaning. (2) Focus can reach the
   rows only with Keyboard navigation on, the system setting a plain
-  button needs before it takes focus. With it off, the arrows stay the
+  button needs before it takes focus. VoiceOver turns it on for the app
+  while it runs. With it off, the arrows stay the
   field's ([#1377](https://github.com/coryj627/slate/issues/1377)).
   Facts: `SearchOverlayKeyRoutingTests`.
+  *Voice (#1412, VoiceOver pass 2026-10-16):* mac posts no announcement
+  of its own on a focus move.
+  - **Why Windows differs.** Windows' voice is `RowSelected` because its
+    focus never leaves the field. On mac, keyboard focus moves onto the
+    row, and VoiceOver reads it: "<file>.md: <snippet> button", or for a
+    recent row "Recent search: <query> button". Each arrow, Tab and
+    Shift-Tab move was heard exactly once.
+  - **Why mac posts nothing.** Posting `RowSelected` or
+    `RecentSearchFocused` as well spoke the row twice, or cut
+    VoiceOver's read short.
+  - **What the silence was.** The silence #1412 recorded was the result
+    summary's re-announcement on every key and focus event, which drowned
+    both voices. The summary was announced from a `.onReceive`
+    subscription that SwiftUI rebuilt on each event, and each rebuild
+    replayed `@Published`'s current value. It is now announced only when
+    it changes (`.onChange`).
+  - **Parity.** Both hosts speak each move exactly once. The words
+    differ: Windows says the basename (S8), and mac reads the row's
+    full label, which carries the snippet.
+
+  Facts: `SearchOverlayVoiceTests`. The trigger ledger (contract 38 D-7)
+  records mac's `RecentSearchFocused` designation and its `RowSelected`
+  site change.
 - **SD-2 — Windows restores focus on Esc; mac does not.** The W5-1 palette
   restores to the pre-open element and skips the restore when the invoked
   command claimed focus elsewhere (`MainWindow.Palette.cs:302-355`). The
