@@ -24,7 +24,9 @@
 //!
 //! What remains is the race between this derivation and the Trash call's own
 //! resolution of the path. Only a handle-bound Trash API could close it, and
-//! no platform has one (#1430 T1).
+//! no platform has one (#1430 T1). On macOS the path becomes a file reference
+//! URL before `trashItemAtURL:`, so a substitution after that point no longer
+//! redirects the call (P12.2); P13 measured the race left inside the call.
 
 use std::fmt;
 use std::path::Path;
@@ -42,16 +44,24 @@ pub(crate) trait SystemTrash: fmt::Debug + Send + Sync {
     fn trash(&self, path: &Path) -> Result<(), VaultError>;
 }
 
-/// The platform's system Trash through trash-rs: Finder on macOS, the
-/// Recycle Bin on Windows, the freedesktop Trash on Linux.
+/// The platform's system Trash: `NSFileManager` on macOS (a file reference
+/// URL, no Finder script, no Automation grant), trash-rs elsewhere (the
+/// Recycle Bin on Windows, the freedesktop Trash on Linux).
 #[derive(Debug, Default)]
 pub(crate) struct PlatformTrash;
 
 impl SystemTrash for PlatformTrash {
     fn trash(&self, path: &Path) -> Result<(), VaultError> {
-        trash::delete(path).map_err(|error| VaultError::Trash {
-            message: error.to_string(),
-        })
+        #[cfg(target_os = "macos")]
+        {
+            macos::trash_item(path)
+        }
+        #[cfg(not(target_os = "macos"))]
+        {
+            trash::delete(path).map_err(|error| VaultError::Trash {
+                message: error.to_string(),
+            })
+        }
     }
 }
 
@@ -259,6 +269,37 @@ fn final_path(file: &std::fs::File) -> std::io::Result<PathBuf> {
             return Ok(PathBuf::from(std::ffi::OsString::from_wide(&buffer)));
         }
         buffer.resize(length, 0);
+    }
+}
+
+#[cfg(target_os = "macos")]
+mod macos {
+    use std::path::Path;
+
+    use objc2_foundation::{NSFileManager, NSURL};
+
+    use crate::VaultError;
+
+    /// `NSFileManager trashItemAtURL:resultingItemURL:error:` for the derived
+    /// path, as a file reference URL minted from it at once. Unlike the Finder
+    /// script trash-rs runs by default, this needs no Automation grant, sends
+    /// no Apple event (so a busy Finder cannot stall it for AppleScript's two
+    /// minutes, #1448), still writes the volume's Put Back records from a
+    /// long-lived process (#1430 P15), and references a symbolic link itself,
+    /// never its target. A volume that cannot mint a reference URL keeps the
+    /// path URL, which is still the pinned parent's.
+    pub(super) fn trash_item(path: &Path) -> Result<(), VaultError> {
+        objc2::rc::autoreleasepool(|_| {
+            let url = NSURL::from_file_path(path).ok_or_else(|| VaultError::Trash {
+                message: "The item's location cannot be expressed as a file URL".into(),
+            })?;
+            let url = url.fileReferenceURL().unwrap_or(url);
+            NSFileManager::defaultManager()
+                .trashItemAtURL_resultingItemURL_error(&url, None)
+                .map_err(|error| VaultError::Trash {
+                    message: error.to_string(),
+                })
+        })
     }
 }
 

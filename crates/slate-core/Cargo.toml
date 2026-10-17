@@ -13,7 +13,6 @@ pulldown-cmark = { workspace = true }
 thiserror = { workspace = true }
 rusqlite = { workspace = true }
 blake3 = { workspace = true }
-trash = { workspace = true }
 tempfile = { workspace = true }
 yaml-rust2 = { workspace = true }
 serde_json = { workspace = true }
@@ -83,6 +82,28 @@ hayagriva = { version = "0.10", default-features = false, features = ["biblatex"
 # defence if/when that target lands.
 [target.'cfg(unix)'.dependencies]
 libc = "0.2"
+
+# The system Trash outside macOS: the Recycle Bin on Windows, the
+# freedesktop Trash on Linux. macOS calls NSFileManager itself (below).
+[target.'cfg(not(target_os = "macos"))'.dependencies]
+trash = { workspace = true }
+
+# #1450: the macOS Trash handoff calls `NSFileManager trashItemAtURL:` with a
+# file reference URL, instead of trash-rs's default Finder script (osascript,
+# Automation grant, AppleScript's two-minute stall, #1448). trash-rs already
+# resolved these exact crates for its own macOS back end (objc2 0.6.4,
+# objc2-foundation 0.3.2 with these features), so pinning them direct adds no
+# crate to the lock and compiles no new code. MIT — compatible inbound for
+# AGPL-3.0-or-later.
+[target.'cfg(target_os = "macos")'.dependencies]
+objc2 = "0.6.2"
+objc2-foundation = { version = "0.3.2", default-features = false, features = [
+    "std",
+    "NSError",
+    "NSFileManager",
+    "NSString",
+    "NSURL",
+] }
 
 [target.'cfg(windows)'.dependencies]
 windows-sys = { workspace = true, features = ["Wdk_Foundation", "Wdk_Storage_FileSystem", "Win32_Security", "Win32_System_IO"] }

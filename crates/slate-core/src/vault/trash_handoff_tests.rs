@@ -331,3 +331,123 @@ fn a_junction_vault_root_still_trashes_beneath_its_target() {
     assert!(!real.path().join("sub/note.md").exists());
     std::fs::remove_dir(&root).unwrap();
 }
+
+/// The real macOS back end, on a scratch volume only: never a developer's
+/// or a runner's own Trash. Create and attach one first:
+///
+/// ```text
+/// hdiutil create -size 40m -fs APFS -volname SlateTrashProbe probe.dmg
+/// hdiutil attach -nobrowse -mountpoint "$PWD/mnt" probe.dmg
+/// SLATE_TRASH_PROBE_VOLUME="$PWD/mnt" cargo test -p slate-core -- --ignored \
+///     real_trash_on_a_scratch_volume
+/// hdiutil detach "$PWD/mnt"
+/// ```
+///
+/// Each item must land in the volume's own `.Trashes/<uid>` as the same object
+/// (a reference URL to the confirmed item; a link as the link), and Finder's
+/// Put Back records (`ptbL`, the original parent; `ptbN`, the original name)
+/// must appear in that folder's `.DS_Store` while this process stays alive
+/// (#1430 P15). The record format is private; the check reads only those two.
+#[cfg(target_os = "macos")]
+#[test]
+#[ignore = "needs a scratch volume in SLATE_TRASH_PROBE_VOLUME; never a real user's Trash"]
+fn real_trash_on_a_scratch_volume_lands_in_its_trashes_with_put_back_records() {
+    use std::os::unix::fs::MetadataExt as _;
+
+    let volume = std::path::PathBuf::from(
+        std::env::var_os("SLATE_TRASH_PROBE_VOLUME")
+            .expect("set SLATE_TRASH_PROBE_VOLUME to a scratch volume's mount point"),
+    );
+    let volume = std::fs::canonicalize(volume).unwrap();
+    // SAFETY: getuid has no preconditions.
+    let trashes = volume
+        .join(".Trashes")
+        .join(unsafe { libc::getuid() }.to_string());
+    let name = format!("vault-{}", std::process::id());
+    let vault = volume.join(&name);
+    std::fs::create_dir_all(vault.join("sub/folder")).unwrap();
+    std::fs::write(vault.join("sub/note.md"), b"note").unwrap();
+    std::fs::write(vault.join("sub/folder/inner.md"), b"inner").unwrap();
+    std::fs::write(vault.join("target.md"), b"target").unwrap();
+    std::os::unix::fs::symlink(vault.join("target.md"), vault.join("sub/link.md")).unwrap();
+    let identity = |path: &Path| {
+        let metadata = path.symlink_metadata().unwrap();
+        (metadata.dev(), metadata.ino())
+    };
+    let items = ["sub/note.md", "sub/folder", "sub/link.md"];
+    let identities: Vec<_> = items
+        .iter()
+        .map(|item| identity(&vault.join(item)))
+        .collect();
+
+    let provider = FsVaultProvider::new(vault.clone());
+    for item in items {
+        provider.delete(item).unwrap();
+        assert!(
+            vault.join(item).symlink_metadata().is_err(),
+            "{item} left the vault"
+        );
+    }
+    assert_eq!(std::fs::read(vault.join("target.md")).unwrap(), b"target");
+
+    let landed: Vec<String> = identities
+        .iter()
+        .map(|wanted| {
+            std::fs::read_dir(&trashes)
+                .unwrap()
+                .map(|entry| entry.unwrap().path())
+                .find(|path| identity(path) == *wanted)
+                .unwrap_or_else(|| panic!("no entry in {trashes:?} is the trashed object"))
+                .file_name()
+                .unwrap()
+                .to_string_lossy()
+                .into_owned()
+        })
+        .collect();
+
+    let utf16 =
+        |text: &str| -> Vec<u8> { text.encode_utf16().flat_map(u16::to_be_bytes).collect() };
+    let record = |entry: &str, code: &[u8; 4], value: &str| -> Vec<u8> {
+        let mut bytes = (entry.encode_utf16().count() as u32).to_be_bytes().to_vec();
+        bytes.extend(utf16(entry));
+        bytes.extend(code);
+        bytes.extend(b"ustr");
+        bytes.extend((value.encode_utf16().count() as u32).to_be_bytes());
+        bytes.extend(utf16(value));
+        bytes
+    };
+    let parent = format!("/{name}/sub/");
+    let wanted: Vec<Vec<u8>> = landed
+        .iter()
+        .zip(items)
+        .flat_map(|(entry, item)| {
+            let original = item.rsplit('/').next().unwrap();
+            [
+                record(entry, b"ptbL", &parent),
+                record(entry, b"ptbN", original),
+            ]
+        })
+        .collect();
+    let deadline = std::time::Instant::now() + std::time::Duration::from_secs(60);
+    loop {
+        let store = std::fs::read(trashes.join(".DS_Store")).unwrap_or_default();
+        let missing: Vec<_> = wanted
+            .iter()
+            .filter(|record| {
+                !store
+                    .windows(record.len())
+                    .any(|window| window == record.as_slice())
+            })
+            .collect();
+        if missing.is_empty() {
+            break;
+        }
+        assert!(
+            std::time::Instant::now() < deadline,
+            "{} of {} Put Back records never appeared for {landed:?}",
+            missing.len(),
+            wanted.len()
+        );
+        std::thread::sleep(std::time::Duration::from_millis(500));
+    }
+}

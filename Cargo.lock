@@ -2009,6 +2009,8 @@ dependencies = [
  "mathcat",
  "memchr",
  "mermaid-rs-renderer",
+ "objc2",
+ "objc2-foundation",
  "petgraph",
  "proptest",
  "pulldown-cmark",
