@@ -30,7 +30,8 @@ import Foundation
 /// Record format, version 1. Every line is `<crc32> <json>\n` — eight
 /// lowercase hex digits of the CRC-32 (IEEE) of the JSON bytes, one space,
 /// one JSON object (JSON never holds a raw newline). The first line is the
-/// header (format name, version, device, inode, birth time, volume). A file with a
+/// header (format name, version, device, inode, birth time, volume; a reader
+/// skips damaged lines before it, like any other). A file with a
 /// newer version is left untouched and never appended to. Later lines are
 /// `put` (an entry, or a structural entry's committed form, which takes its
 /// place in the replay order), `refuse` (a final refusal nobody heard) and
@@ -661,16 +662,16 @@ final class SidebarWriteJournal {
     return data
   }
 
-  /// Split, verify and decode. The first readable line must be the header;
-  /// any line that fails — the unterminated last one included — is counted
-  /// and skipped.
+  /// Split, verify and decode. Any line that fails — the unterminated last
+  /// one included — is counted and skipped, so damaged lines ahead of the
+  /// header are skipped too; the first line that verifies must be the
+  /// header, or the file has none.
   nonisolated static func parse(_ data: Data) -> Parsed {
     var parsed = Parsed()
     let bytes = [UInt8](data)
     let decoder = JSONDecoder()
-    var sawFirstLine = false
+    var sawReadableLine = false
     func take(_ range: Range<Int>) {
-      defer { sawFirstLine = true }
       guard range.count > 9, bytes[range.lowerBound + 8] == 0x20,
         let crc = UInt32(
           String(decoding: bytes[range.lowerBound..<range.lowerBound + 8], as: UTF8.self),
@@ -686,7 +687,8 @@ final class SidebarWriteJournal {
         parsed.unreadableLines += 1
         return
       }
-      if !sawFirstLine {
+      if !sawReadableLine {
+        sawReadableLine = true
         if line.op == .header { parsed.header = line } else { parsed.unreadableLines += 1 }
         return
       }

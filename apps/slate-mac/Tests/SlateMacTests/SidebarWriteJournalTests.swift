@@ -611,6 +611,15 @@ final class SidebarWriteJournalTests: XCTestCase {
     XCTAssertEqual(parsed.lines.map(\.op), [.put, .settle])
     XCTAssertEqual(parsed.lines.first?.content, entry.content)
 
+    // A damaged line ahead of the header is skipped like any other: the
+    // first line that verifies is the header, and the entries still load.
+    let skipped = SidebarWriteJournal.parse(damaged + header + put)
+    XCTAssertEqual(skipped.header?.op, .header)
+    XCTAssertEqual(skipped.unreadableLines, 1)
+    XCTAssertEqual(skipped.lines.map(\.op), [.put])
+    // …but a file whose first verified line is not a header has none.
+    XCTAssertNil(SidebarWriteJournal.parse(put + header).header)
+
     // A newer format is never replayed and never touched.
     let vaultRoot = root.appendingPathComponent("newer", isDirectory: true)
     try FileManager.default.createDirectory(at: vaultRoot, withIntermediateDirectories: true)
