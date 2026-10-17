@@ -2,6 +2,7 @@
 // SPDX-License-Identifier: AGPL-3.0-or-later
 
 import AppKit
+import Combine
 import SwiftUI
 import XCTest
 
@@ -48,6 +49,14 @@ final class SearchOverlayVoiceTests: XCTestCase {
             ],
             announcer: recorder)
         defer { try? FileManager.default.removeItem(at: root) }
+        // Every publication of a non-empty summary, identical ones included
+        // (`@Published` emits on each assignment): the waits below key off
+        // these, not off fixed delays.
+        var summaryPublications = 0
+        let watcher = state.$searchSummary.dropFirst().sink { summary in
+            if !summary.isEmpty { summaryPublications += 1 }
+        }
+        defer { watcher.cancel() }
         var hosted = host(state)
         defer { hosted.close() }
 
@@ -72,9 +81,11 @@ final class SearchOverlayVoiceTests: XCTestCase {
         // A new subscription over the same, unchanged summary: a fresh
         // overlay mounted while the results stay up (its appear re-arms the
         // search, which publishes the same summary again).
+        let publicationsBefore = summaryPublications
         hosted.close()
         hosted = host(state)
-        await pump(0.6)
+        await waitUntil { summaryPublications > publicationsBefore }
+        await pump(0.2)
         XCTAssertEqual(
             summaryPosts(recorder), ["Search returned 3 results."],
             "a re-render, a focus change or a new subscription must not re-announce "

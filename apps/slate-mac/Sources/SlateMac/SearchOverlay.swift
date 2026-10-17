@@ -523,7 +523,7 @@ struct SearchOverlay: View {
             appState.openSearchResult(hit)
         } label: {
             VStack(alignment: .leading, spacing: 2) {
-                Text(filename(for: hit.path))
+                Text(Self.filename(for: hit.path))
                     .font(.callout.weight(.semibold))
                     .foregroundStyle(.primary)
                 // No lineLimit: at large Dynamic Type the snippet was
@@ -563,7 +563,7 @@ struct SearchOverlay: View {
         let cleanSnippet = hit.snippet
             .replacingOccurrences(of: "\u{2}", with: "")
             .replacingOccurrences(of: "\u{3}", with: "")
-        return "\((hit.path as NSString).lastPathComponent): \(cleanSnippet)"
+        return "\(filename(for: hit.path)): \(cleanSnippet)"
     }
 
     /// The key monitor (#422 F-E2, #1113). Every decision is
@@ -629,7 +629,9 @@ struct SearchOverlay: View {
         }
     }
 
-    private func filename(for path: String) -> String {
+    /// The row's file name: the last path component, the one helper the
+    /// visible row and its accessibility label share.
+    private static func filename(for path: String) -> String {
         (path as NSString).lastPathComponent
     }
 }
