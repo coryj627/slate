@@ -1224,7 +1224,7 @@ def main() -> int:
     a(f"| Accessible canvas (T parity) | `Canvas/` | #745 (W6-1) | {issue_delivery_status('#745 (W6-1)', delivery_evidence)} |")
     a(f"| Graph view (P parity, canonical textual representation) | `Graph/` | #746 (W6-2) | {issue_delivery_status('#746 (W6-2)', delivery_evidence)} |")
     for surface, source, issue in [
-        ("Editor TextPattern semantic attributes and events", "Windows-first; mac convergence #1224", "#747 (W7-1)"),
+        ("Editor TextPattern semantic attributes and events", "`EditorAccessibilityAttributes.swift` (mac converged in #1224)", "#747 (W7-1)"),
         ("Notification priority, etiquette and whole-corpus trigger ledger", "canonical A11yEvent consumers", "#748 (W7-2)"),
         ("Spoken chords and AT navigation map", "chords.json + mac accessibility affordances", "#749 (W7-3)"),
         ("UIA conformance matrix and per-surface AT checklists", "w_c_matrix.md + reports/", "#750 (W7-4)"),

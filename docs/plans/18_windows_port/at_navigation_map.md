@@ -45,6 +45,7 @@ without them. Windows has no native rotor equivalent.
 | rotor | Canvas Cards | Canvas/CanvasOutlineView.swift:158 | Outline tree with text filter and next/previous card commands | Canvas/CanvasOutlineView.cs#class:CanvasOutlineView; Canvas/CanvasOutlineView.cs#class:CanvasOutlineTree; Canvas/CanvasOutlineView.cs#class:CanvasOutlineRowDataPeer; Canvas/CanvasSurfaceView.cs#class:CanvasSurfaceView | `SelectionItem`, `ExpandCollapse`, `Invoke` | `CanvasOutlineTree`, `CanvasFilterField` | `slate.canvas.nextCard`, `slate.canvas.previousCard`, `slate.canvas.filterCards` | verified | `CanvasSurfaces_OutlineTreeSelectionAndActivation_AreClean`, `CanvasNavigatorTests` | reports/w6_1_canvas_at_checklist.md#4 |
 | rotor | Canvas Groups | Canvas/CanvasOutlineView.swift:163 | Tree levels; enter/exit group commands | Canvas/CanvasOutlineView.cs#class:CanvasOutlineView; Canvas/CanvasOutlineView.cs#class:CanvasOutlineTree; Canvas/CanvasOutlineView.cs#class:CanvasOutlineRowDataPeer | `SelectionItem`, `ExpandCollapse`, `Invoke` | `CanvasOutlineTree` | `slate.canvas.enterGroup`, `slate.canvas.exitGroup` | verified | `CanvasNavigatorTests` | reports/w6_1_canvas_at_checklist.md#4 |
 | rotor | Canvas Connections | Canvas/CanvasOutlineView.swift:168 | Connection rows under cards; forward/back follow commands | Canvas/CanvasOutlineView.cs#class:CanvasOutlineView; Canvas/CanvasOutlineView.cs#class:CanvasOutlineTree; Canvas/CanvasOutlineView.cs#class:CanvasOutlineRowDataPeer | `SelectionItem`, `Invoke` | `CanvasOutlineTree` | `slate.canvas.followConnectionForward`, `slate.canvas.followConnectionBack` | verified | `CanvasNavigatorTests`, `CanvasSurfaces_OutlineTreeSelectionAndActivation_AreClean` | reports/w6_1_canvas_at_checklist.md#4 |
+| rotor | Editor links | NoteEditorView.swift:1458 | Native Hyperlink descendants of the editor text (E-9), with Invoke and a read-only Value | SlateTextEditor.cs#class:SlateTextEditorAutomationPeer; WorkspaceTemplates.xaml#id:MarkdownEditor | `Text` | `MarkdownEditor` | - | verified | `EditorTextPattern_SemanticAttributesUnitsAndEvents_AreClean` | reports/w2_editor_at_checklist.md#6 |
 | action | Shared grid row-action factory | AccessibleDataGrid.swift:714 | Row context menu, Shift+F10/Application key | Grids/AccessibleDataGrid.cs#class:AccessibleDataGrid | `Invoke` | - | - | verified | `AccessibleDataGridTests`, `GridConformanceTests` | reports/w4_panels_at_checklist.md#1 |
 | action | Bases list row-action factory | Bases/BaseListRenderer.swift:514 | Shared substrate row-action menu | Grids/AccessibleDataGrid.cs#class:AccessibleDataGrid | `Invoke` | - | - | verified | `BasesDocumentTests`, `AccessibleDataGridTests` | reports/w4_panels_at_checklist.md#6 |
 | action | Builder Select Row | Bases/BaseQueryBuilderSheet.swift:1042 | Focus the condition's expression field or Remove button directly; no row SelectionItem claim | MainWindow.xaml#id:BuilderConditions | `Value`, `Invoke` | `BuilderConditions` | - | verified | `BasesBuilderTests`, `BasesSurfaces_GridBuilderAndLeaves_AreClean` | reports/w4_panels_at_checklist.md#6 |
@@ -77,8 +78,9 @@ The canvas checklist's item 4 records the accepted rotor equivalence:
 UIA tree levels, rows and keyboard commands supply navigation. The filter
 matches text, including type/group/target; it is not a separate kind picker.
 All 32 reading navigator rows are enumerated above, including list and
-diagram aliases. Native editor semantics are Windows-first (#1224 is the
-Mac convergence issue). The map's automatic verification is implemented
+diagram aliases. Native editor semantics were Windows-first; the Mac
+converged in #1224 (plan 43 PR 17: the Editor links rotor row, and the span
+attributes G29 records). The map's automatic verification is implemented
 after this contract-only commit; none of its status cells claims a new
 human run.
 
