@@ -4,13 +4,19 @@
 import SwiftUI
 
 /// Vault-search overlay (⇧⌘F since #874 — bare ⌘F is now find-in-note).
-/// Sits above the `MainSplitView` content area while open; Esc closes
-/// and returns focus to whatever element the user came from.
+/// Sits above the `MainSplitView` content area while open. It is laid
+/// inline, not presented as a sheet, so AppKit restores nothing when it
+/// closes; Esc (the close button, and ⇧⌘F while open) gives keyboard
+/// focus back to the element that had it when the overlay opened, if
+/// that element is still in the window (`AppState.dismissSearchOverlay`,
+/// contract 29 SD-2). Opening a result does not, and neither does a
+/// close while the command palette or a sheet owns focus.
 ///
 /// VoiceOver story:
-///   - Field announces "Search vault." on focus.
-///   - Result count fires through the polite live region on every
-///     state transition into `.results`.
+///   - Field announces its label, "Search vault", on focus.
+///   - The result summary ("Search returned N results.") is announced
+///     when it changes, never on a re-render (#1412: see the
+///     `.onChange(of: appState.searchSummary)` below).
 ///   - Each row's accessibility label is `"<filename>: <snippet>"`.
 ///     The line number was dropped from the row label in #92 item
 ///     1 — full_text_search no longer fetches body_text per hit, so
@@ -18,6 +24,13 @@ import SwiftUI
 ///     post-activation announcement still says
 ///     "Opened <filename>, line N: <snippet>" using the loaded
 ///     note's body).
+///   - A row that takes keyboard focus, by Tab or an arrow, is read by
+///     VoiceOver itself, once per move: the row's label (a recent row's
+///     "Recent search: <query>"). The overlay posts nothing of its own
+///     on a focus move — an announcement as well spoke the row twice or
+///     cut VoiceOver's read short (#1412, VoiceOver pass 2026-10-16;
+///     contract 29 SD-1). Windows keeps focus in its field, so there
+///     `RowSelected` speaks each move instead.
 ///
 /// Keyboard:
 ///   - ⇧⌘F (Edit ▸ Search Vault…) toggles the overlay.
@@ -25,37 +38,57 @@ import SwiftUI
 ///   - Before typing, the idle state offers recent vault searches
 ///     (#876) as re-runnable rows, with a Clear affordance.
 ///   - Return on the field activates the top-ranked result.
-///   - Tab moves focus from the field into the first result row;
-///     arrow keys cycle within results.
-///   - Esc closes the overlay (shortcut bound to the container, not
-///     the close button — keeps the dismiss path working no matter
-///     which child has focus).
+///   - Down moves focus from the field to the first row (a result, or
+///     a recent search in the idle state) and on down the list; Up
+///     moves back, and from the first row to the field (SD-1). The
+///     list does not wrap. Tab reaches the rows too, after the field's
+///     Clear and Close buttons. Both need Keyboard navigation (Full
+///     Keyboard Access) on, which VoiceOver also turns on for the app
+///     while it runs: a plain button takes keyboard focus only then, so
+///     with it off the arrows keep their field meaning (#1377).
+///   - Return or keypad Enter on a focused row opens it (a recent row
+///     re-runs its search); ⌘Return opens a result row in a new tab
+///     (plan 41 D2). ⌘Return anywhere else is not the overlay's.
+///   - Esc closes the overlay: a window-scoped shortcut on the close
+///     button, so it fires whichever child has focus.
 struct SearchOverlay: View {
     @EnvironmentObject private var appState: AppState
 
-    /// Focus target. `.field` while typing, `.result(idx)` once the
-    /// user Tabs into the results list or hits Return on the field.
-    /// `nil` means "no overlay element has focus" (briefly true on
-    /// open before the .onAppear closure assigns the field).
+    /// Focus target. `.field` while typing, `.result(idx)` (or, in the
+    /// idle state, `.recent(idx)`) once Tab or an arrow moves into the
+    /// list. `nil` means "no element with a focus binding has focus":
+    /// briefly on open, before the .onAppear closure assigns the
+    /// field, and while one of the field's buttons has it.
     @FocusState private var focus: FocusTarget?
 
-    private enum FocusTarget: Hashable {
+    enum FocusTarget: Hashable {
         case field
         case result(Int)
         // #876 red-team: the idle-state recent rows need the same
         // focus scaffolding the result rows have, or a keyboard-only
         // user (no VoiceOver, no Full Keyboard Access) can't Tab to a
-        // recent or Return-run it.
+        // recent or Return-run it. (Measured in #1113: a plain button
+        // takes keyboard focus only with Keyboard navigation on, or
+        // while VoiceOver runs, which turns it on for the app; so the
+        // scaffolding reaches these rows only then — #1377.)
         case recent(Int)
     }
 
-    /// #422 (F-E2): local keyDown monitor for Return-on-row. SwiftUI
-    /// .plain Buttons on macOS activate with Space but not Return —
-    /// the runbook's most surprising no-op ("Return on a focused
-    /// result row is a no-op; Space activates"). Same local-monitor
-    /// idiom as CommandPaletteView; installed on appear, removed on
-    /// disappear so it can't leak past the overlay's lifetime.
-    @State private var returnKeyMonitor: Any? = nil
+    /// The overlay's local keyDown monitor: Return on a focused row
+    /// (#422 F-E2 — SwiftUI .plain Buttons on macOS activate with
+    /// Space but not Return, the runbook's most surprising no-op),
+    /// ⌘Return on a focused row (D2), and the Up/Down walk (SD-1,
+    /// #1113). Same local-monitor idiom as CommandPaletteView;
+    /// installed on appear, removed on disappear so it can't leak past
+    /// the overlay's lifetime. Its decisions are `Self.route(...)`.
+    @State private var keyMonitor: Any? = nil
+
+    /// The window the overlay is laid in. A local monitor sees every
+    /// window's keys, so it claims a key only when the key arrived in
+    /// this one — not in a sheet over it (the palette, Quick Open, a
+    /// dialog) or in another window, where the overlay's focus still
+    /// reads as the field or a row.
+    @State private var overlayWindow = OverlayWindowRef()
 
     var body: some View {
         VStack(spacing: 0) {
@@ -78,11 +111,16 @@ struct SearchOverlay: View {
         )
         .padding(.top, 12)
         .shadow(radius: 8, y: 4)
+        .background {
+            OverlayWindowReader(ref: overlayWindow)
+                .frame(width: 0, height: 0)
+                .accessibilityHidden(true)
+        }
         .onAppear {
             // Defer focus until the next runloop tick so the
             // .focused binding has been wired up by SwiftUI.
             DispatchQueue.main.async { focus = .field }
-            installReturnKeyMonitor()
+            installKeyMonitor()
             // #422 (F-E1 adjacent): closeSearchOverlay keeps
             // searchQuery (so ⇧⌘F → Esc → ⇧⌘F lands back where
             // the user was) but resets searchState to .idle — on
@@ -97,20 +135,25 @@ struct SearchOverlay: View {
             }
         }
         .onDisappear {
-            removeReturnKeyMonitor()
+            removeKeyMonitor()
         }
-        // Polite live region — but only when the summary string
-        // actually differs from the last announcement. Subscribing to
-        // the publisher with `removeDuplicates()` (rather than
-        // `.onChange(of:)`) dedupes re-assignments of an identical
-        // string at the source. Fast typing produces
-        // `searching → results → searching → results` cycles where
-        // the same "Search returned N results" string can land
-        // multiple times; without dedup VoiceOver re-announces on
-        // every keystroke past the 150ms debounce (#91 item 1).
-        .onReceive(appState.$searchSummary.removeDuplicates()) { summary in
+        // Polite live region, announced only when the summary string
+        // changes. Fast typing re-assigns an identical "Search returned
+        // N results" string on every search; `.onChange` compares
+        // values, so a repeat does not re-announce (#91 item 1).
+        //
+        // #1412: this was `.onReceive($searchSummary.removeDuplicates())`.
+        // In the running app SwiftUI re-subscribed that publisher on every
+        // key and focus event, and `@Published` hands each new subscriber
+        // its current value, so every arrow or Tab move re-announced the
+        // summary (traced 2026-10-16, with and without VoiceOver: two
+        // posts per move), which drowned VoiceOver's read of the newly
+        // focused row. `.onChange` keys the announcement to the value
+        // changing, not to a subscription. Posted through
+        // `appState.announcer`, so a fact can count the posts.
+        .onChange(of: appState.searchSummary) { _, summary in
             if !summary.isEmpty, let event = appState.searchAnnouncement {
-                postAccessibilityAnnouncement(event)
+                appState.announcer.post(event)
             }
         }
     }
@@ -129,11 +172,6 @@ struct SearchOverlay: View {
                         + "Return activates the top result. "
                         + "Tab moves to the results list."
                 )
-                // #418 (F-A1): tabbing/arrowing through result rows
-                // is silent — announce the focused row (hoisted to a
-                // method; an inline closure here tripped the Swift
-                // type-checker budget, the PR #263 failure mode).
-                .onChange(of: focus) { _, newFocus in announceFocusedResult(newFocus) }
                 .onChange(of: appState.searchQuery) {
                     appState.bumpSearchQuery()
                 }
@@ -141,10 +179,9 @@ struct SearchOverlay: View {
                     // Return on the field activates the top result
                     // if there is one — matches the acceptance
                     // criteria of "Return activates" + "Tab cycles
-                    // into the results list."
-                    if let first = firstResultHit() {
-                        appState.openSearchResult(first)
-                    }
+                    // into the results list." The key monitor leaves
+                    // Return on the field to this submit.
+                    appState.openTopSearchResult()
                 }
             // Clear-text affordance — core search-field anatomy
             // (search-fields.md: "Search icon, Clear button,
@@ -167,7 +204,9 @@ struct SearchOverlay: View {
                 .accessibilityHint("Empties the search field and keeps focus in it.")
             }
             Button {
-                appState.closeSearchOverlay()
+                // The user's close (this button and its Esc shortcut):
+                // close, then give focus back to where it was at open.
+                appState.dismissSearchOverlay()
             } label: {
                 // Plain xmark (the closeTab dismiss glyph), NOT the
                 // circle-fill clearSearch glyph the clear button now
@@ -484,7 +523,7 @@ struct SearchOverlay: View {
             appState.openSearchResult(hit)
         } label: {
             VStack(alignment: .leading, spacing: 2) {
-                Text(filename(for: hit.path))
+                Text(Self.filename(for: hit.path))
                     .font(.callout.weight(.semibold))
                     .foregroundStyle(.primary)
                 // No lineLimit: at large Dynamic Type the snippet was
@@ -503,120 +542,320 @@ struct SearchOverlay: View {
             .contentShape(Rectangle())
         }
         .buttonStyle(.plain)
-        // Per-row focus binding so Tab from the field cycles into
-        // the result list. The first Tab press lands on `.result(0)`;
-        // subsequent Tabs walk via the system focus-traversal logic
-        // (Return activates the focused row's button action).
+        // Per-row focus binding: Tab from the field reaches the rows
+        // (after the field's Clear and Close buttons), and Down / Up
+        // set it directly (SD-1, the key monitor). Return on the
+        // focused row opens it through the key monitor (#422 F-E2).
         .focused($focus, equals: .result(index))
-        // VoiceOver row label per spec: "<filename>, line <N>: <snippet>".
-        // We strip the STX/ETX hit markers from the snippet for the
-        // audio side — they're useful for visual emphasis but a
-        // screen reader doesn't need them.
-        .accessibilityLabel(rowAccessibilityLabel(for: hit))
+        // VoiceOver row label: "<filename>: <snippet>". No line number
+        // since #92 item 1 (the post-activation announcement carries
+        // it). The STX/ETX hit markers are stripped for the audio
+        // side; they drive the visual emphasis only.
+        .accessibilityLabel(Self.rowAccessibilityLabel(for: hit))
         .help(hit.path)
     }
 
-    private func rowAccessibilityLabel(for hit: QueryHit) -> String {
+    /// What VoiceOver reads when a result row takes keyboard focus:
+    /// `"<filename>: <snippet>"`, the STX/ETX hit markers stripped. The
+    /// row's only voice on a focus move (#1412): the overlay posts no
+    /// announcement of its own then. Static so a fact can pin it.
+    static func rowAccessibilityLabel(for hit: QueryHit) -> String {
         let cleanSnippet = hit.snippet
             .replacingOccurrences(of: "\u{2}", with: "")
             .replacingOccurrences(of: "\u{3}", with: "")
         return "\(filename(for: hit.path)): \(cleanSnippet)"
     }
 
-    /// #418 (F-A1): speak the focused result row. The focus engine
-    /// moves through these custom .plain buttons silently; announce
-    /// the filename — the full row label (with snippet) stays on the
-    /// element for VO-cursor interaction without forcing every focus
-    /// hop through a paragraph of snippet speech.
-    ///
-    /// #876 red-team: the idle-state recent rows reuse the identical
-    /// silent `.plain`-button `.focused(...)` scaffolding, so they need
-    /// the same on-focus announcement — without it a VoiceOver user
-    /// Tabbing through recents hears nothing (unlike the result rows they
-    /// mirror). Announce the query itself.
-    private func announceFocusedResult(_ newFocus: FocusTarget?) {
-        if case .result(let idx) = newFocus {
-            guard case .results(let rows, _) = appState.searchState,
-                rows.indices.contains(idx)
-            else { return }
-            postAccessibilityAnnouncement(
-                .rowSelected(name: filename(for: rows[idx].path)))
-            return
-        }
-        if case .recent(let idx) = newFocus,
-            appState.searchRecents.indices.contains(idx)
-        {
-            postAccessibilityAnnouncement(
-                .recentSearchFocused(query: appState.searchRecents[idx]))
-        }
-    }
-
-    /// #422 (F-E2): Return activates the focused result row, with
-    /// parity to Space and to Return-on-the-field. Only intercepts
-    /// the bare Return key while a result row has focus — the field
-    /// keeps its native onSubmit, IME composition passes through
-    /// untouched (same guard as the palette monitor), and every
-    /// other key falls through.
-    private func installReturnKeyMonitor() {
-        guard returnKeyMonitor == nil else { return }
-        returnKeyMonitor = NSEvent.addLocalMonitorForEvents(matching: .keyDown) { event in
-            if let editor = event.window?.firstResponder as? NSTextView,
-                editor.hasMarkedText()
+    /// The key monitor (#422 F-E2, #1113). Every decision is
+    /// `Self.route(...)`; this closure only gathers what the monitor
+    /// knows and applies the route. A moved focus is spoken by
+    /// VoiceOver itself, which reads the newly focused row once per
+    /// move (#1412; the S8 rule's "a move must speak").
+    private func installKeyMonitor() {
+        guard keyMonitor == nil else { return }
+        keyMonitor = NSEvent.addLocalMonitorForEvents(matching: .keyDown) { event in
+            let hostWindow = overlayWindow.window
+            let context = KeyContext(
+                focus: focus,
+                rows: rowList,
+                rowsTakeFocus: NSApp.isFullKeyboardAccessEnabled,
+                isInOverlayWindow: hostWindow != nil && event.window === hostWindow,
+                isCommandPaletteOpen: appState.isCommandPaletteOpen,
+                hasMarkedText: (event.window?.firstResponder as? NSTextView)?
+                    .hasMarkedText() == true)
+            switch Self.route(
+                keyCode: event.keyCode, modifierFlags: event.modifierFlags, in: context)
             {
+            case .passThrough:
                 return event
-            }
-            // 36 = Return, 76 = keypad Enter (field onSubmit accepts
-            // both; row parity should too — red-team F5).
-            guard event.keyCode == 36 || event.keyCode == 76,
-                event.modifierFlags.intersection(.deviceIndependentFlagsMask).isEmpty,
-                // Red-team F2: the monitor is app-wide; with the
-                // command palette sheet up over an open search
-                // overlay, a Return meant for the palette field
-                // would otherwise be hijacked into a result
-                // activation (the parent window keeps its
-                // firstResponder during sheets).
-                !appState.isCommandPaletteOpen
-            else { return event }
-            // A focused RESULT row → activate it (the #422 F-E2 path).
-            if case .result(let idx) = focus,
-                case .results(let rows, _) = appState.searchState,
-                rows.indices.contains(idx)
-            {
-                appState.openSearchResult(rows[idx])
+            case .moveFocus(let target):
+                focus = target
                 return nil
-            }
-            // #876 red-team: a focused RECENT row → re-run that query.
-            if case .recent(let idx) = focus,
-                appState.searchRecents.indices.contains(idx)
-            {
-                let query = appState.searchRecents[idx]
-                appState.runRecentSearch(query)
+            case .hold:
+                return nil
+            case .openResult(let index):
+                // The #422 F-E2 path, and D2's ⌘Return: the open target
+                // comes from the live event (`openTargetFromCurrentEvent`).
+                guard case .results(let rows, _) = appState.searchState,
+                    rows.indices.contains(index)
+                else { return event }
+                appState.openSearchResult(rows[index])
+                return nil
+            case .runRecent(let index):
+                // #876 red-team: a focused RECENT row re-runs its query.
+                guard appState.searchRecents.indices.contains(index) else { return event }
+                appState.runRecentSearch(appState.searchRecents[index])
                 focus = .field
                 return nil
             }
-            return event
         }
     }
 
-    private func removeReturnKeyMonitor() {
-        if let monitor = returnKeyMonitor {
+    private func removeKeyMonitor() {
+        if let monitor = keyMonitor {
             NSEvent.removeMonitor(monitor)
-            returnKeyMonitor = nil
+            keyMonitor = nil
         }
     }
 
-    private func filename(for path: String) -> String {
+    /// The rows on screen, as the key monitor sees them: the result
+    /// rows, the idle state's recent rows (`idleState` lists them
+    /// whenever there are any), or none while searching or on an error.
+    private var rowList: RowList {
+        switch appState.searchState {
+        case .results(let rows, _): return .results(count: rows.count)
+        case .idle: return .recents(count: appState.searchRecents.count)
+        case .searching, .error: return .none
+        }
+    }
+
+    /// The row's file name: the last path component, the one helper the
+    /// visible row and its accessibility label share.
+    private static func filename(for path: String) -> String {
         (path as NSString).lastPathComponent
     }
+}
 
-    /// First hit in the current results list, if any. Used to wire
-    /// the field's Return-key submit action to the top-ranked
-    /// result without duplicating the row's openSearchResult call
-    /// site.
-    private func firstResultHit() -> QueryHit? {
-        if case .results(let rows, _) = appState.searchState {
-            return rows.first
+// MARK: - Key routing (#1113)
+
+extension SearchOverlay {
+    /// What the key monitor does with one keyDown.
+    enum KeyRoute: Equatable {
+        /// Not the overlay's key: the event continues untouched.
+        case passThrough
+        /// Consume the key and move keyboard focus (SD-1). VoiceOver
+        /// reads the newly focused row; the overlay posts nothing (#1412).
+        case moveFocus(FocusTarget)
+        /// Consume the key and leave focus where it is: Down on the
+        /// last row (the list does not wrap).
+        case hold
+        /// Open the result row at this index: Return, keypad Enter, or
+        /// ⌘Return (D2) on a focused result row.
+        case openResult(Int)
+        /// Re-run the recent search at this index: Return, keypad
+        /// Enter, or ⌘Return on a focused recent row.
+        case runRecent(Int)
+    }
+
+    /// The list below the field.
+    enum RowList: Equatable {
+        /// The results panel with this many rows (zero is "No results.").
+        case results(count: Int)
+        /// The idle state's recent searches (zero is "Type to search.").
+        case recents(count: Int)
+        /// Searching, or an error: no rows on screen.
+        case none
+    }
+
+    /// What the monitor knows when a key arrives.
+    struct KeyContext: Equatable {
+        var focus: FocusTarget?
+        var rows: RowList
+        /// A plain button takes keyboard focus only with Keyboard
+        /// navigation (Full Keyboard Access) on —
+        /// `NSApp.isFullKeyboardAccessEnabled`. Without it the rows
+        /// cannot take focus, so the arrows stay the field's.
+        var rowsTakeFocus: Bool
+        /// The key arrived in the overlay's own window (not a sheet
+        /// over it, not another window).
+        var isInOverlayWindow: Bool
+        var isCommandPaletteOpen: Bool
+        /// An input method is composing in the key's window.
+        var hasMarkedText: Bool
+    }
+
+    /// Carbon virtual key codes (`kVK_Return`, `kVK_ANSI_KeypadEnter`,
+    /// `kVK_DownArrow`, `kVK_UpArrow`), stable since OS X 10.0. The
+    /// field's onSubmit accepts both Return and keypad Enter, and row
+    /// activation matches it (red-team F5).
+    nonisolated static let returnKeyCode: UInt16 = 36
+    nonisolated static let keypadEnterKeyCode: UInt16 = 76
+    nonisolated static let downArrowKeyCode: UInt16 = 125
+    nonisolated static let upArrowKeyCode: UInt16 = 126
+
+    /// Flags that never change what a key means: Caps Lock, and the
+    /// function and numeric-pad bits AppKit sets on the arrow keys and
+    /// keypad Enter themselves (the sidebar's `TreeOpenSelectedKey`
+    /// strips the same three).
+    nonisolated static let modifierNoise: NSEvent.ModifierFlags = [
+        .capsLock, .function, .numericPad,
+    ]
+
+    /// Decide what the monitor does with a keyDown. Pure, so
+    /// `SearchOverlayKeyRoutingTests` pins every decision.
+    ///
+    /// - An input method composing owns every key (checked first: the
+    ///   candidate window takes Return and the arrows). A key typed in
+    ///   another window or in a sheet is not the overlay's: the parent
+    ///   window keeps its first responder while a sheet is up, so the
+    ///   overlay's focus can still read as the field or a row. And while
+    ///   the command palette is up nothing is claimed (red-team F2). The
+    ///   window check already covers keys typed in the palette's sheet;
+    ///   the palette flag stays for keys typed between the palette's
+    ///   request and its sheet becoming key, which still arrive in the
+    ///   overlay's window. It is not redundant: keep it.
+    /// - Return and keypad Enter: bare, or exactly ⌘ (D2), and only on
+    ///   a focused row. Return on the field stays the field's (its
+    ///   onSubmit opens the top result); ⌘Return anywhere else passes
+    ///   through untouched.
+    /// - Down and Up: bare only, so Control-Option-arrows (VoiceOver),
+    ///   Shift (extend a selection) and ⌘ (move the caret) pass
+    ///   through; and only where rows can take focus. Down from the
+    ///   field to the first row and down the list, holding on the last
+    ///   row; Up back, from the first row to the field. Up on the field
+    ///   passes through (the caret moves to the start).
+    nonisolated static func route(
+        keyCode: UInt16,
+        modifierFlags: NSEvent.ModifierFlags,
+        in context: KeyContext
+    ) -> KeyRoute {
+        guard !context.hasMarkedText, context.isInOverlayWindow,
+            !context.isCommandPaletteOpen
+        else { return .passThrough }
+        let modifiers = modifierFlags
+            .intersection(.deviceIndependentFlagsMask)
+            .subtracting(modifierNoise)
+        switch keyCode {
+        case returnKeyCode, keypadEnterKeyCode:
+            guard modifiers.isEmpty || modifiers == .command else { return .passThrough }
+            switch (context.focus, context.rows) {
+            case (.result(let index)?, .results(let count)) where (0..<count).contains(index):
+                return .openResult(index)
+            case (.recent(let index)?, .recents(let count)) where (0..<count).contains(index):
+                return .runRecent(index)
+            default:
+                return .passThrough
+            }
+        case downArrowKeyCode, upArrowKeyCode:
+            guard modifiers.isEmpty, context.rowsTakeFocus else { return .passThrough }
+            return arrowRoute(down: keyCode == downArrowKeyCode, in: context)
+        default:
+            return .passThrough
         }
-        return nil
+    }
+
+    private nonisolated static func arrowRoute(down: Bool, in context: KeyContext) -> KeyRoute {
+        let count: Int
+        let row: (Int) -> FocusTarget
+        // The focused row's index; nil while the field has focus.
+        let current: Int?
+        switch (context.rows, context.focus) {
+        case (.results(let rows), .field?) where rows > 0:
+            (count, row, current) = (rows, FocusTarget.result, nil)
+        case (.results(let rows), .result(let index)?) where (0..<rows).contains(index):
+            (count, row, current) = (rows, FocusTarget.result, index)
+        case (.recents(let rows), .field?) where rows > 0:
+            (count, row, current) = (rows, FocusTarget.recent, nil)
+        case (.recents(let rows), .recent(let index)?) where (0..<rows).contains(index):
+            (count, row, current) = (rows, FocusTarget.recent, index)
+        default:
+            return .passThrough
+        }
+        guard let current else {
+            return down ? .moveFocus(row(0)) : .passThrough
+        }
+        if down {
+            return current + 1 < count ? .moveFocus(row(current + 1)) : .hold
+        }
+        return current == 0 ? .moveFocus(.field) : .moveFocus(row(current - 1))
+    }
+}
+
+/// The window the search overlay is laid in, held weakly.
+final class OverlayWindowRef {
+    weak var window: NSWindow?
+}
+
+/// A zero-size view that reports the window it is placed in, so the
+/// overlay's app-wide key monitor can tell its own window's keys from a
+/// sheet's or another window's.
+private struct OverlayWindowReader: NSViewRepresentable {
+    let ref: OverlayWindowRef
+
+    func makeNSView(context: Context) -> ReaderView {
+        let view = ReaderView()
+        view.ref = ref
+        return view
+    }
+
+    func updateNSView(_ view: ReaderView, context: Context) {
+        view.ref = ref
+        ref.window = view.window
+    }
+
+    final class ReaderView: NSView {
+        var ref: OverlayWindowRef?
+
+        override var intrinsicContentSize: NSSize { .zero }
+
+        override func viewDidMoveToWindow() {
+            super.viewDidMoveToWindow()
+            ref?.window = window
+        }
+    }
+}
+
+// MARK: - Focus restore (SD-2, #1113)
+
+/// Where keyboard focus was when the search overlay opened: the window
+/// and its first responder, both held weakly so the overlay never keeps
+/// a closed window or a removed view alive. `AppState` captures it at
+/// open and restores it on the user's close (`dismissSearchOverlay`).
+struct SearchOverlayFocusOrigin {
+    private(set) weak var window: NSWindow?
+    private(set) weak var responder: NSView?
+
+    /// Capture from the key window at open. When the key window is a
+    /// sheet (Search Vault run from the command palette), the overlay is
+    /// laid in the window the sheet is attached to, and that window
+    /// keeps its first responder while the sheet is up: capture there.
+    /// A field editor stands for the text field it is editing. The
+    /// window itself (focus nowhere) is no origin: there is nothing to
+    /// give back.
+    @MainActor static func capture(keyWindow: NSWindow?) -> SearchOverlayFocusOrigin? {
+        guard let keyWindow else { return nil }
+        let window = keyWindow.sheetParent ?? keyWindow
+        var responder = window.firstResponder
+        if let editor = responder as? NSTextView, editor.isFieldEditor,
+            let field = editor.delegate as? NSView
+        {
+            responder = field
+        }
+        guard let view = responder as? NSView, view.window === window else { return nil }
+        return SearchOverlayFocusOrigin(window: window, responder: view)
+    }
+
+    /// Whether the captured element can take focus back: it is still
+    /// in the window it was captured in.
+    @MainActor var isRestorable: Bool {
+        guard let window, let responder else { return false }
+        return responder.window === window
+    }
+
+    /// Give focus back to the captured element, and only to it: an
+    /// element that has left its window is not replaced with another.
+    @MainActor @discardableResult func restore() -> Bool {
+        guard isRestorable, let window, let responder else { return false }
+        return window.makeFirstResponder(responder)
     }
 }

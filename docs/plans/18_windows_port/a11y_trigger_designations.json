@@ -203,6 +203,11 @@
         "decision": "docs/plans/18_windows_port/specs/gap_analysis.md",
         "status": "recorded"
       },
+      "RecentSearchFocused": {
+        "reason": "#1412: on Mac, keyboard focus moves onto the recent-search row and VoiceOver reads the row's own label (Recent search: {query}) on every move; posting RecentSearchFocused as well spoke the row twice or cut the read short (VoiceOver pass 2026-10-16).",
+        "decision": "docs/plans/29_search_overlay_contracts.md",
+        "status": "recorded"
+      },
       "NoteSaveBlocked": {
         "reason": "D-10 owner-approved Windows inline save-failure notification. Mac retains SaveConflict with its dialog and the existing save-error UI; no change to Mac recovery behavior is claimed.",
         "decision": "docs/plans/38_notification_dispatcher_contracts.md",
