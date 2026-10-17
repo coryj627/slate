@@ -92,6 +92,22 @@ final class CodeBlockViewTests: XCTestCase {
         XCTAssertEqual(view.preambleLabel, "Code block, rust, 3 lines.")
     }
 
+    /// #1053: the preamble is core's rendering (`code_block_preamble`, W3-4),
+    /// not a Swift composition, including the two rules core owns: no
+    /// language reads "plain text", and a trailing newline ends the last line
+    /// rather than starting another. The CRLF row is where the deleted Swift
+    /// count disagreed with core: it walked Characters, and "\r\n" is one
+    /// Character that is not "\n", so a two-line CRLF block was "1 line".
+    func testPreambleIsCoresRenderingForAnUntaggedBlockEndingInANewline() {
+        for source in ["raw\nstuff\n", "raw\r\nstuff\r\n"] {
+            let view = CodeBlockView(block: makeBlock(source: source, language: nil))
+            XCTAssertEqual(
+                view.preambleLabel, codeBlockPreamble(language: nil, source: source),
+                "the label is core's preamble for \(source.debugDescription)")
+            XCTAssertEqual(view.preambleLabel, "Code block, plain text, 2 lines.")
+        }
+    }
+
     // MARK: - Attributed string
 
     /// Every token in the input is materialized in the attributed

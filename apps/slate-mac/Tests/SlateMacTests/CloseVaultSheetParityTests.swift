@@ -135,6 +135,60 @@ final class CloseVaultSheetParityTests: XCTestCase {
         XCTAssertNil(state.templateAvailabilityRefreshTaskForTesting)
     }
 
+    // MARK: - Quit (#784)
+
+    /// ⌘Q with unsaved edits waits on this same prompt (PR 15b). A Close
+    /// Vault started while the quit waits takes the prompt over and answers
+    /// the quit first — false, the app stays running — so AppKit's pending
+    /// reply is never dropped, and the prompt then closes the vault as
+    /// Close Vault does. `closeVault()` itself answers a waiting quit before
+    /// any teardown, so no future caller can close the vault under it.
+    /// `TerminationFlowTests` holds the rest of the quit's facts.
+    func testCloseVaultStartedWhileAQuitWaitsAnswersTheQuitFirst() async throws {
+        let dir = FileManager.default.temporaryDirectory
+            .appendingPathComponent("close-vault-quit-\(UUID().uuidString)")
+        let vault = dir.appendingPathComponent("vault")
+        try FileManager.default.createDirectory(
+            at: vault, withIntermediateDirectories: true)
+        defer { try? FileManager.default.removeItem(at: dir) }
+        try "# note\n".write(
+            to: vault.appendingPathComponent("note.md"),
+            atomically: true, encoding: .utf8)
+        let state = AppState(
+            recentsStore: RecentVaultsStore(
+                fileURL: dir.appendingPathComponent("recents.json")),
+            externalOpener: { _ in true })
+        state.openVault(at: vault)
+        await state.scanTask?.value
+        state.selectedFilePath = "note.md"
+        await state.noteLoadTask?.value
+        state.updateEditorText("# note\n\nunsaved.\n")
+        var replies: [Bool] = []
+        XCTAssertEqual(
+            SlateAppDelegate.terminationDecision(appState: state) {
+                replies.append($0)
+            },
+            .terminateLater)
+        XCTAssertEqual(state.pendingNavigation, .closeVault)
+
+        state.closeVaultFromUserAction()
+
+        XCTAssertEqual(
+            replies, [false],
+            "the quit is answered before Close Vault takes the prompt over")
+        XCTAssertFalse(state.isTerminationPending)
+        XCTAssertEqual(state.pendingNavigation, .closeVault, "Close Vault's own prompt")
+        state.resolvePendingNavigationDiscard()
+        XCTAssertNil(state.currentSession, "the prompt now closes the vault")
+        XCTAssertEqual(replies, [false], "the quit was answered exactly once")
+
+        let source = try String(contentsOf: try locateAppStateSwift(), encoding: .utf8)
+        let closeVaultBody = try extractCloseVaultBody(source)
+        XCTAssertTrue(
+            closeVaultBody.contains("supersedePendingTermination()"),
+            "closeVault() must answer a waiting quit before it tears the vault down")
+    }
+
     // MARK: - Structural drift test
 
     /// Scrapes `AppState.swift` for the source of truth and asserts

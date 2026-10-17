@@ -431,7 +431,7 @@
         "status": "recorded"
       },
       "MainWindow.Templates.cs#MainWindow.TryClearTheWayForTemplates@1": {
-        "engine": "Template availability/modal-admission and landed-create caveat builder",
+        "engine": "Template availability/modal-admission builder and core landed-create caveat adapter",
         "decision": "docs/plans/38_notification_dispatcher_contracts.md",
         "status": "recorded"
       },
@@ -506,12 +506,12 @@
         "status": "recorded"
       },
       "Templates/TemplatePickerViewModel.cs#TemplatePickerViewModel.Load@1": {
-        "engine": "Template availability/modal-admission and landed-create caveat builder",
+        "engine": "Template availability/modal-admission builder and core landed-create caveat adapter",
         "decision": "docs/plans/38_notification_dispatcher_contracts.md",
         "status": "recorded"
       },
       "Templates/TemplatePickerViewModel.cs#TemplatePickerViewModel.Load@2": {
-        "engine": "Template availability/modal-admission and landed-create caveat builder",
+        "engine": "Template availability/modal-admission builder and core landed-create caveat adapter",
         "decision": "docs/plans/38_notification_dispatcher_contracts.md",
         "status": "recorded"
       },
@@ -591,7 +591,7 @@
         "status": "recorded"
       },
       "WorkspaceViewModel.Templates.cs#WorkspaceViewModel.CreateFromTemplate@1": {
-        "engine": "Template availability/modal-admission and landed-create caveat builder",
+        "engine": "Template availability/modal-admission builder and core landed-create caveat adapter",
         "decision": "docs/plans/38_notification_dispatcher_contracts.md",
         "status": "recorded"
       },

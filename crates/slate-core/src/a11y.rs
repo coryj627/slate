@@ -879,6 +879,20 @@ pub enum A11yEvent {
     NoteSaveConflict {
         filename: String,
     },
+    /// A create-if-absent write that LANDED but was not indexed (#1123's
+    /// `CreateExclusiveOutcome::PublishedUnindexed`; #1140, owner decision
+    /// D9): the create twin of the save path's `SavedButUnindexed` detail.
+    /// Spoken after the create's own sentence, never instead of it — the
+    /// file is real and opens, only the index lags, and the one thing the
+    /// user must not do is recreate it. `name` is the created file's leaf
+    /// name; `reason` is the post-publish failure core reported, spliced
+    /// verbatim (a blank one drops the colon instead). The wording is
+    /// Windows' `CreateOutcomes.PublishedUnindexedCaveat` moved here byte
+    /// for byte, so both hosts render it from core.
+    CreatePublishedUnindexed {
+        name: String,
+        reason: String,
+    },
 
     // --- History restore (O-3) ---
     RestoredVersionFrom {
@@ -2088,6 +2102,18 @@ impl A11yEvent {
             }
             NoteSaveConflict { filename } => format!(
                 "Save blocked. {filename} was modified externally. Your edits remain in the editor."
+            ),
+            // A blank reason drops the colon rather than leave "indexed:  It
+            // will …" (`NoteSaveBlocked`'s rule for a missing detail).
+            CreatePublishedUnindexed { name, reason } if reason.trim().is_empty() => format!(
+                "{name} was written but not indexed. It will appear in listings after the \
+                 next scan; do not recreate it."
+            ),
+            // Otherwise the reason is spliced verbatim, as the save twin's
+            // detail is (`SavedButUnindexed`): Windows' bytes before #1140.
+            CreatePublishedUnindexed { name, reason } => format!(
+                "{name} was written but not indexed: {reason} It will appear in listings \
+                 after the next scan; do not recreate it."
             ),
 
             RestoredVersionFrom { formatted_date } => {
@@ -4224,6 +4250,11 @@ pub fn corpus() -> Vec<A11yEvent> {
         },
         NoteSaveConflict {
             filename: "notes.md".into(),
+        },
+        // The save twin's witness detail, so the two read side by side.
+        CreatePublishedUnindexed {
+            name: "notes.md".into(),
+            reason: "the index is locked.".into(),
         },
         RestoredVersionFrom {
             formatted_date: "July 19, 2026 at 9:41 AM".into(),
@@ -6432,6 +6463,73 @@ mod tests {
         );
     }
 
+    /// #1140 (owner decision D9, plan 43 PR 9): the landed-but-unindexed
+    /// create caveat is core's, byte for byte the sentence Windows'
+    /// `CreateOutcomes.PublishedUnindexedCaveat` composed before it moved
+    /// here, so both hosts speak one sentence and no Windows fact that
+    /// pins it moves. The reason is spliced verbatim, as the save twin's
+    /// detail is (`SavedButUnindexed` in `vault_error_detail`). Medium:
+    /// it follows the create's own sentence and never replaces it, so
+    /// the template flow's High created sentence still wins the
+    /// tab-switch race.
+    #[test]
+    fn the_unindexed_create_caveat_is_the_windows_sentence_byte_for_byte() {
+        let name = "landed-outcome.md";
+        let reason = "invalid argument: test fault: injected failure after write, \
+                      before index commit";
+        let event = A11yEvent::CreatePublishedUnindexed {
+            name: name.into(),
+            reason: reason.into(),
+        };
+        // Windows' composition before #1140, verbatim:
+        // `$"{name} was written but not indexed: {reason} "
+        //  + "It will appear in listings after the next scan; do not recreate it."`
+        let windows = format!("{name} was written but not indexed: {reason} ")
+            + "It will appear in listings after the next scan; do not recreate it.";
+        assert_eq!(event.render(), windows);
+        assert_eq!(
+            event.render(),
+            "landed-outcome.md was written but not indexed: invalid argument: test fault: \
+             injected failure after write, before index commit It will appear in listings \
+             after the next scan; do not recreate it."
+        );
+        assert_eq!(event.priority(), A11yPriority::Medium);
+    }
+
+    /// #1140 review (codoki on #1396): an empty or blank reason leaves no
+    /// dangling separator. The colon goes and the clause closes, which is
+    /// `NoteSaveBlocked`'s rule for a missing detail
+    /// (`an_empty_detail_leaves_no_dangling_separator`), rather than
+    /// "indexed:  It will …". A non-empty reason is still spliced verbatim,
+    /// Windows' bytes before #1140 (the byte-for-byte fact above). Closing the
+    /// sentence of a reason that has no terminal punctuation is #1395.
+    #[test]
+    fn an_empty_create_reason_leaves_no_dangling_separator() {
+        for reason in ["", " ", "   ", "\n", "\t \n"] {
+            let event = A11yEvent::CreatePublishedUnindexed {
+                name: "notes.md".into(),
+                reason: reason.into(),
+            };
+            assert_eq!(
+                event.render(),
+                "notes.md was written but not indexed. It will appear in listings after \
+                 the next scan; do not recreate it.",
+                "{reason:?}"
+            );
+            assert_eq!(event.priority(), A11yPriority::Medium, "{reason:?}");
+        }
+        assert_eq!(
+            A11yEvent::CreatePublishedUnindexed {
+                name: "notes.md".into(),
+                reason: "database error: disk I/O error".into(),
+            }
+            .render(),
+            "notes.md was written but not indexed: database error: disk I/O error It will \
+             appear in listings after the next scan; do not recreate it.",
+            "a non-empty reason keeps Windows' bytes"
+        );
+    }
+
     /// W7-7 (#1249, #1251): an empty or blank carried detail never leaves
     /// a dangling separator. A read error with no message (an exception
     /// whose message is empty) is core's own sentence, and a save failure
@@ -6765,6 +6863,11 @@ mod tests {
             (
                 High,
                 "Save blocked. notes.md was modified externally. Your edits remain in the editor.",
+            ),
+            (
+                Medium,
+                "notes.md was written but not indexed: the index is locked. It will appear \
+                 in listings after the next scan; do not recreate it.",
             ),
             (High, "Restored version from July 19, 2026 at 9:41 AM."),
             (High, "Restored notes.md."),
@@ -8107,8 +8210,10 @@ mod tests {
             // added SidebarFilterCleared, 214; W7-7 PR 7 (#1252):
             // VaultRescanFinished and VaultRescanIncomplete, 214 → 216;
             // W7-7 PR 4b (#1247) the keyboard sidebar resize,
-            // SidebarResized, 217.
-            217,
+            // SidebarResized, 217; plan 43 PR 9 (#1140, D9) the
+            // landed-but-unindexed create caveat,
+            // CreatePublishedUnindexed, 218.
+            218,
             "A11yEvent's top-level variant count moved; uniffi caps an enum at 256"
         );
     }

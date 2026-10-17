@@ -170,8 +170,6 @@ final class GraphDiagramNSView: NSView {
     /// this many visible nodes, ranked by in-links — the topology entry's
     /// `labeled` flag is the decision.
     static let labelCap = Int(AppState.graphConstantsOnce.labelCap)
-    /// Labels only draw at or above this zoom (text-fade parity).
-    static let labelFadeZoom: CGFloat = 0.55
 
     override var acceptsFirstResponder: Bool { true }
     override var isFlipped: Bool { true }

@@ -42,6 +42,23 @@ double-duty availability copy. mac's call sites are NOT converted here
 (mac keeps its marker; its conversion is a mac follow-up in the #1113
 mold).
 
+**Consumed on mac, 2026-10-16 (#1122, plan 43 PR 8).** The template event
+family's mac column is core's: the picker-open site
+(`startTemplateAvailabilityLoad`) posts `TemplatePickerOpened { count }`
+and the created site (`performCreateNoteFromTemplate`) posts
+`TemplateNoteCreated { name, template }`. W7-2 (#1229) converted both
+sites; this PR audits them and closes #1122. What stays host-composed is
+the residue T10 names: the availability and busy reasons, through
+`announceTemplate`'s string overload under its one `// W0.5-3 residue:`
+marker, which now names only those reasons. Mac's residue census stays at
+27, because no `.hostComposed` site was converted: that one site serves
+the reasons. The exact-wording proof is the corpus mirror's three
+`TemplatePickerOpened` arms and its `TemplateNoteCreated` row
+(`A11yCorpusCensusTests`), with
+`AppStateTests.testOpenTemplatePickerPopulatesAndAnnounces` at the site.
+`CoreRenderedCopyCensusTests.testNoHostSourceSpellsTheTemplatePickerOpenedSentence`
+keeps the sentence out of Swift.
+
 **3. No new FFI, and the Windows model is synchronous.**
 `render_template`, `list_templates`, `extract_template_metadata` are
 bound, `public`, and CLI-exercised in `windows.yml` since W0-3. On
@@ -476,7 +493,25 @@ both discarded with the workspace.
   as a create — the created sentence, then a caveat, then the open —
   and never retries under another name; the
   `SLATE_TEST_FAULT_AFTER_WRITE` seam drives the arm. mac's adoption
-  is #1140.
+  is #1140. *Mac half retired by #1140 (plan 43 PR 9):* the five mac
+  create funnels — this flow (`performCreateNoteFromTemplate`), the
+  untitled note (`createNote(in:)`), the folder note
+  (`createFolderNote(at:)`), Duplicate's candidate loop
+  (`duplicateEntry(path:)`) and Restore As… from a version
+  (`commitRestoreAs`) — call `createExclusiveReporting` through
+  `AppState.createReporting`, the twin of Windows'
+  `CreateOutcomes.CreateReporting`. On the landed arm each speaks its
+  created sentence, then the caveat, then opens the note (Duplicate
+  selects its copy, as it always has). It shows no name sheet or alert
+  and never retries. A refusal still throws, so `DestinationExists`
+  keeps driving Duplicate's auto-suffix and the name sheet. Owner
+  decision D9 moved the caveat into core as
+  `A11yEvent::CreatePublishedUnindexed { name, reason }` (medium),
+  byte-identical to the Windows string, which
+  `CreateOutcomes.PublishedUnindexedCaveat` now renders, so its W0.5-3
+  residue is gone. Out of scope, as before: the file-drop import
+  funnels, which keep their own batch report. The two mac creates the
+  spec did not list, New Canvas and the ghost-row note, are #1394.
 - **TR-6 — Case-alias identity is #1077's, inherited not forked**
   (codex round 2). A parked tab of a deleted `Ghost.md` plus a
   create of `ghost.md` addresses one physical file under two ordinal
@@ -510,3 +545,6 @@ both discarded with the workspace.
   makes the whole template family host-composed; conversion to the T10
   events is a mac follow-up candidate (file in the #1113 mold when the
   events exist).
+  **Resolved on mac, 2026-10-16 (#1122, plan 43 PR 8):** both sites
+  post the T10 events, and the marker covers only the availability and
+  busy reasons. The note under finding 2 has the detail.

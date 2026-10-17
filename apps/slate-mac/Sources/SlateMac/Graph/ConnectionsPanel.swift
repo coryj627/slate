@@ -35,6 +35,17 @@ struct ConnectionsPanel: View {
                 appState.loadConnections()
             }
         }
+        // A rail switch to the MOUNTED leaf (#1217; contract 35 Term 3(b),
+        // B-D11). The retained panel's `onAppear` does not re-fire, so a
+        // leaf whose note changed while it was inactive loads — audibly —
+        // when it becomes active again; a CURRENT publication loads
+        // nothing. The follower above keeps its re-root guard; this needs
+        // none, because a re-rooted leaf's effective path is its root.
+        .onChange(of: appState.connectionsLeafActiveForView) { _, active in
+            if active, appState.connectionsEffectivePath != nil, !isPayloadCurrent {
+                appState.loadConnections()
+            }
+        }
     }
 
     @ViewBuilder
@@ -87,9 +98,43 @@ struct ConnectionsPanel: View {
         }
     }
 
-    private var isPayloadCurrent: Bool {
+    private var isPayloadCurrent: Bool { Self.isPayloadCurrent(appState) }
+
+    /// The published neighbourhood describes the note the leaf is on —
+    /// contract 35 Term 7's CURRENT; otherwise it is STALE.
+    static func isPayloadCurrent(_ appState: AppState) -> Bool {
         appState.connectionsLoadedPath != nil
             && appState.connectionsLoadedPath == appState.connectionsEffectivePath
+    }
+
+    /// What the content area shows (#1217). The loading row is rendered from
+    /// `connectionsLoading`: it shows only while a load is in flight for a
+    /// note the published payload does not describe. With none in flight
+    /// and no current rows the leaf shows its empty state, so the loading
+    /// text can never stand over a load nobody started. A load for the SAME
+    /// note keeps what is published, rows or error, with no indicator
+    /// (contract 35 Term 7).
+    enum ContentState: Equatable {
+        case loading
+        case error(String)
+        case rows
+        case empty
+    }
+
+    static func contentState(
+        payloadCurrent: Bool, loading: Bool, error: String?, hasTree: Bool
+    ) -> ContentState {
+        guard payloadCurrent else { return loading ? .loading : .empty }
+        if let error { return .error(error) }
+        return hasTree ? .rows : .empty
+    }
+
+    /// The state `content` renders for `appState` — the one decision the
+    /// view switches over.
+    static func contentState(for appState: AppState) -> ContentState {
+        contentState(
+            payloadCurrent: isPayloadCurrent(appState), loading: appState.connectionsLoading,
+            error: appState.connectionsError, hasTree: appState.connectionsTree != nil)
     }
 
     private var depthControl: some View {
@@ -112,20 +157,24 @@ struct ConnectionsPanel: View {
 
     @ViewBuilder
     private var content: some View {
-        if !isPayloadCurrent {
-            // The published payload is for a different note (mid-load
-            // after a switch) or absent — show loading, never stale rows.
+        switch Self.contentState(for: appState) {
+        case .loading:
+            // A load is in flight for a note the published payload does not
+            // describe (mid-load after a switch) — show loading, never stale
+            // rows.
             loadingRow
-        } else if let error = appState.connectionsError {
+        case .error(let error):
             Text(error)
                 .font(Tokens.Typography.callout)
                 .foregroundStyle(Tokens.ColorRole.warningText)
                 .padding(Tokens.Spacing.sm)
                 .frame(maxWidth: .infinity, alignment: .leading)
                 .accessibilityLabel("Connections error: \(error)")
-        } else if let model {
-            connectionsList(model)
-        } else {
+        case .rows:
+            if let model {
+                connectionsList(model)
+            }
+        case .empty:
             Text("This note has no connections.")
                 .font(Tokens.Typography.callout)
                 .foregroundStyle(Tokens.ColorRole.textSecondary)

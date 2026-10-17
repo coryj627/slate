@@ -2965,6 +2965,9 @@ final class AppState: ObservableObject {
     /// path, so a note switch never shows B's header over A's rows
     /// (review round 1 finding 9).
     @Published var connectionsLoadedPath: String?
+    /// A load is in flight: set when one is issued, cleared when the newest
+    /// lands, whether or not it publishes. The panel renders its loading
+    /// row from it (#1217).
     @Published var connectionsLoading: Bool = false
     @Published var connectionsError: String?
     /// Last graph generation the leaf refreshed against — the P0-3
@@ -3118,11 +3121,13 @@ final class AppState: ObservableObject {
     @Published var graphDiagramLoading = false
     @Published var graphDiagramError: String?
 
-    /// Persisted graph-tab config (P2-4 #560): the LIVE holder for the
-    /// inspector's Groups / Display / Forces; filters, mode, and depth
-    /// are synced from their existing live state at the load/save
-    /// boundaries. Written to `.slate/graph.json` (debounced) via
-    /// `graphConfigSaveTask`.
+    /// Persisted graph-tab config (P2-4 #560): the ONE mutable config
+    /// (contract 35 Term W7; #1218). Each trigger writes its own field —
+    /// the inspector's Groups / Display / Forces, the mode switch, the
+    /// needle, the reader's backend flags — and the save folds in only the
+    /// depth and the verbosity; the live Table filter is never folded in, so
+    /// a transient preset never persists. Written to `.slate/graph.json`
+    /// (debounced) via `graphConfigSaveTasks`.
     @Published var graphConfig = GraphConfig.default
     /// Pending debounced saves keyed BY VAULT — genuine per-vault
     /// bookkeeping (P2-4 review finding 3). A same-vault edit cancels only
@@ -4873,6 +4878,25 @@ final class AppState: ObservableObject {
     /// Handle on the in-flight embed-resolution task so tests can
     /// `await state.embedsLoadTask?.value` for a settled state.
     private(set) var embedsLoadTask: Task<Void, Never>?
+    /// The in-flight embed batch's token (#1287, locked 05 §4; contract 40
+    /// AR-24). Owner: the `loadCurrentNoteEmbedResolutions` call that
+    /// created it — one token for the whole batch. Kept here so a selection
+    /// change (`cancelNoteScopedWork`), the next batch and `closeVault` can
+    /// cancel it; the batch's own task cancels it through its cancellation
+    /// handler, and the batch clears it when it ends.
+    private(set) var embedsLoadCancelToken: CancelToken?
+    /// The in-flight single-embed requests' tokens (#1287), keyed by token
+    /// identity. Owner: each `requestReadingEmbedResolution` call — one token
+    /// per request, cancelled by the requesting task's cancellation handler,
+    /// by a selection change (`cancelNoteScopedWork`) and by `closeVault`;
+    /// each request removes its own when it ends.
+    private(set) var readingEmbedRequestCancelTokens: [ObjectIdentifier: CancelToken] = [:]
+    /// #1287 deterministic seam. Always nil in production. Both embed walks
+    /// await it on their worker immediately before every `resolveEmbed`,
+    /// with the walk's host path, cache key and token, so a test can park a
+    /// walk mid-batch and cancel it there.
+    var embedResolveGateForTesting:
+        (@Sendable (_ hostPath: String, _ target: String, _ cancel: CancelToken) async -> Void)?
 
     /// Discriminated state for the editor's Cmd+E embed-preview
     /// popover. The editor's keyDown handler computes the embed
@@ -5058,11 +5082,20 @@ final class AppState: ObservableObject {
     struct SidebarOrganizationState: Equatable {
         var prefs = SidebarOrganizationPrefs()
         var pins = SidebarPins()
+        /// #1332 (D6): the shortcut SLOTS, in authored order — one target
+        /// may fill several — up to the decode cap.
         var shortcuts: [SidebarShortcut] = []
         /// FL-07 review: the RAW authored entry count (reserved kinds and
         /// duplicates included) — the shape guard's 200-entry ceiling
         /// applies to this, so capacity refusal must too.
         var shortcutRawEntryCount = 0
+        /// #1332: slots the file holds past the decode cap — not shown,
+        /// counted on the Shortcuts section's status line.
+        var shortcutOverflowCount = 0
+
+        /// Every slot the file holds, shown or not: what the 64-slot cap
+        /// gates Add on.
+        var shortcutSlotCount: Int { shortcuts.count + shortcutOverflowCount }
     }
 
     @Published private(set) var sidebarOrganization = SidebarOrganizationState()
@@ -5148,6 +5181,19 @@ final class AppState: ObservableObject {
             await Task.detached(priority: .utility) {
                 try? await Task.sleep(for: .milliseconds(50))
             }.value
+        }
+    }
+
+    /// The fence as a quit's last wait (#784): settle, then reply true. Nil
+    /// when nothing is pending — the caller terminates now or replies itself.
+    @MainActor
+    static func settleSidebarFenceThenReply(
+        _ reply: @escaping @MainActor (Bool) -> Void
+    ) -> Task<Void, Never>? {
+        guard hasPendingSidebarWorkAtTermination else { return nil }
+        return Task { @MainActor in
+            await settleSidebarWriterChainsForTermination()
+            reply(true)
         }
     }
 
@@ -5251,11 +5297,7 @@ final class AppState: ObservableObject {
         }
         let organization: SidebarOrganizationState
         if notice == nil {
-            let decoded = SidebarOrganizationSchema.decode(root: recovered.root)
-            organization = SidebarOrganizationState(
-                prefs: decoded.prefs, pins: decoded.pins,
-                shortcuts: decoded.shortcuts,
-                shortcutRawEntryCount: decoded.shortcutRawCount)
+            organization = SidebarOrganizationState(decoding: recovered.root)
         } else {
             organization = SidebarOrganizationState()
         }
@@ -5425,6 +5467,13 @@ final class AppState: ObservableObject {
 
     static let sidebarGroupedSortInertReason =
         "Date grouping sorts newest first. Turn off Group by Date to use this order."
+
+    /// Add's refusal at a shortcut ceiling: the 64-slot decode cap
+    /// (#1332 — a slot past it would never show) or the shape guard's
+    /// 200-entry raw ceiling.
+    static func sidebarShortcutCapacityReason(limit: Int) -> String {
+        "Shortcut limit reached (\(limit)). Remove one to add another."
+    }
 
     private func mutateSidebarOrganization(
         announce announcement: String?,
@@ -5675,11 +5724,7 @@ final class AppState: ObservableObject {
                 // not just this window's optimistic reflect (round-4
                 // finding 1). Queued optimistic successors are preserved
                 // because only the tail publishes.
-                let decoded = SidebarOrganizationSchema.decode(root: finalRoot)
-                let organization = SidebarOrganizationState(
-                    prefs: decoded.prefs, pins: decoded.pins,
-                    shortcuts: decoded.shortcuts,
-                    shortcutRawEntryCount: decoded.shortcutRawCount)
+                let organization = SidebarOrganizationState(decoding: finalRoot)
                 if organization != self.sidebarOrganization {
                     self.sidebarOrganization = organization
                 }
@@ -6077,19 +6122,33 @@ final class AppState: ObservableObject {
             else {
                 throw sidebarActionFailure("Already in Shortcuts.")
             }
+            // #1332: a slot past the decode cap would never show.
+            let slotCap = Self.sidebarShortcutCapacityReason(
+                limit: SidebarOrganizationSchema.maxDecodedShortcuts)
+            guard
+                sidebarOrganization.shortcutSlotCount
+                    < SidebarOrganizationSchema.maxDecodedShortcuts
+            else {
+                throw sidebarActionFailure(slotCap)
+            }
             guard
                 sidebarOrganization.shortcutRawEntryCount
                     < SidebarOrganizationSchema.maxShortcuts
             else {
                 throw sidebarActionFailure(
-                    "Shortcut limit reached "
-                        + "(\(SidebarOrganizationSchema.maxShortcuts)). "
-                        + "Remove one to add another.")
+                    Self.sidebarShortcutCapacityReason(
+                        limit: SidebarOrganizationSchema.maxShortcuts))
             }
             try mutateSidebarOrganization(announce: "Added to Shortcuts.") {
                 root in
-                SidebarOrganizationSchema.addShortcut(
-                    &root, kind: kind.rawValue, path: target)
+                // The cap holds under the lock too: another writer's
+                // slots count.
+                guard
+                    SidebarOrganizationSchema.addShortcutWithinCap(
+                        &root, kind: kind.rawValue, path: target)
+                else {
+                    throw SidebarOrganizationConflictError(reason: slotCap)
+                }
             } reflect: { state in
                 let shortcut = SidebarShortcut(kind: kind, path: target)
                 if !state.shortcuts.contains(shortcut) {
@@ -6111,16 +6170,19 @@ final class AppState: ObservableObject {
             else {
                 throw sidebarActionFailure("Not in Shortcuts.")
             }
+            // Membership: the tree row's target leaves Shortcuts, so every
+            // slot it fills goes (#1332: a target can fill several).
             try mutateSidebarOrganization(announce: "Removed from Shortcuts.") {
                 root in
                 SidebarOrganizationSchema.removeShortcut(
                     &root, kind: kind.rawValue, path: target)
             } reflect: { state in
                 let shortcut = SidebarShortcut(kind: kind, path: target)
-                if state.shortcuts.contains(shortcut) {
+                let slots = state.shortcuts.filter { $0 == shortcut }.count
+                if slots > 0 {
                     state.shortcuts.removeAll { $0 == shortcut }
                     state.shortcutRawEntryCount =
-                        max(0, state.shortcutRawEntryCount - 1)
+                        max(0, state.shortcutRawEntryCount - slots)
                 }
             }
 
@@ -6798,21 +6860,34 @@ final class AppState: ObservableObject {
             postMutationAnnouncement("Already in Shortcuts.")
             return
         }
+        // #1332: the catalog add's decode cap, here too.
+        let slotCap = Self.sidebarShortcutCapacityReason(
+            limit: SidebarOrganizationSchema.maxDecodedShortcuts)
+        guard
+            sidebarOrganization.shortcutSlotCount
+                < SidebarOrganizationSchema.maxDecodedShortcuts
+        else {
+            postMutationAnnouncement(slotCap)
+            return
+        }
         guard
             sidebarOrganization.shortcutRawEntryCount
                 < SidebarOrganizationSchema.maxShortcuts
         else {
             postMutationAnnouncement(
-                "Shortcut limit reached "
-                    + "(\(SidebarOrganizationSchema.maxShortcuts)). "
-                    + "Remove one to add another.")
+                Self.sidebarShortcutCapacityReason(
+                    limit: SidebarOrganizationSchema.maxShortcuts))
             return
         }
         do {
             try mutateSidebarOrganization(announce: "Added to Shortcuts.") {
                 root in
-                SidebarOrganizationSchema.addShortcut(
-                    &root, kind: kind.rawValue, path: path)
+                guard
+                    SidebarOrganizationSchema.addShortcutWithinCap(
+                        &root, kind: kind.rawValue, path: path)
+                else {
+                    throw SidebarOrganizationConflictError(reason: slotCap)
+                }
             } reflect: { state in
                 if !state.shortcuts.contains(shortcut) {
                     state.shortcuts.append(shortcut)
@@ -7046,39 +7121,66 @@ final class AppState: ObservableObject {
 
     /// Section-row Remove (the catalog's remove command targets the TREE
     /// selection; section rows carry their own identity).
-    func removeSidebarShortcutDirect(_ shortcut: SidebarShortcut) throws {
-        try mutateSidebarOrganization(announce: "Removed from Shortcuts.") {
-            root in
-            SidebarOrganizationSchema.removeShortcut(
-                &root, kind: shortcut.kind.rawValue, path: shortcut.path)
+    /// #1332 (D6): a row is its SLOT, so this removes that one slot — never
+    /// the first slot its target fills, never every one — and announces
+    /// the name its row was read by, captured BEFORE it leaves: once the
+    /// second of two slots on one note goes, the first reads bare, and a
+    /// name composed afterwards would name the wrong row (AR-58's mac half).
+    func removeSidebarShortcutDirect(slot: Int) throws {
+        let shortcuts = sidebarOrganization.shortcuts
+        guard
+            let occurrence = SidebarShortcut.occurrence(
+                ofSlot: slot, in: shortcuts)
+        else {
+            throw sidebarActionFailure("No shortcut \(slot).")
+        }
+        let target = shortcuts[slot - 1]
+        let name = SidebarShortcutRow.rows(for: shortcuts)[slot - 1].spokenName
+        try mutateSidebarOrganization(
+            announce: "Removed from Shortcuts: \(name).") { root in
+            SidebarOrganizationSchema.removeShortcutSlot(
+                &root, kind: target.kind.rawValue, path: target.path,
+                occurrence: occurrence)
         } reflect: { state in
-            if state.shortcuts.contains(shortcut) {
-                state.shortcuts.removeAll { $0 == shortcut }
-                state.shortcutRawEntryCount =
-                    max(0, state.shortcutRawEntryCount - 1)
-            }
+            let index = slot - 1
+            guard state.shortcuts.indices.contains(index),
+                state.shortcuts[index] == target
+            else { return }
+            state.shortcuts.remove(at: index)
+            state.shortcutRawEntryCount =
+                max(0, state.shortcutRawEntryCount - 1)
+            // The first slot past the decode cap moves into view; the
+            // tail publish reads it from the file.
+            state.shortcutOverflowCount = max(0, state.shortcutOverflowCount - 1)
         }
     }
 
     /// FL3-3.2 keyboard-parity reorder (decision 15): swap the shortcut
     /// with its visible neighbor. The raw write hops reserved entries the
     /// same way, so authored order stays coherent for both views.
-    func moveSidebarShortcut(_ shortcut: SidebarShortcut, delta: Int) {
+    /// #1332: by SLOT — moving the second of two slots on one note moves
+    /// the second; a target-keyed move found the first.
+    func moveSidebarShortcut(slot: Int, delta: Int) {
+        let shortcuts = sidebarOrganization.shortcuts
         guard delta == 1 || delta == -1,
-            let index = sidebarOrganization.shortcuts.firstIndex(of: shortcut),
-            sidebarOrganization.shortcuts.indices.contains(index + delta)
+            let occurrence = SidebarShortcut.occurrence(
+                ofSlot: slot, in: shortcuts),
+            shortcuts.indices.contains(slot - 1 + delta)
         else { return }
+        let target = shortcuts[slot - 1]
         try? mutateSidebarOrganization(
             announce: delta == -1 ? "Moved up." : "Moved down."
         ) { root in
             SidebarOrganizationSchema.moveShortcut(
-                &root, kind: shortcut.kind.rawValue, path: shortcut.path,
-                delta: delta)
+                &root, kind: target.kind.rawValue, path: target.path,
+                occurrence: occurrence, delta: delta)
         } reflect: { state in
-            guard let liveIndex = state.shortcuts.firstIndex(of: shortcut),
-                state.shortcuts.indices.contains(liveIndex + delta)
+            let index = slot - 1
+            guard state.shortcuts.indices.contains(index),
+                state.shortcuts[index] == target,
+                state.shortcuts.indices.contains(index + delta)
             else { return }
-            state.shortcuts.swapAt(liveIndex, liveIndex + delta)
+            state.shortcuts.swapAt(index, index + delta)
         }
     }
 
@@ -9261,6 +9363,9 @@ final class AppState: ObservableObject {
             !BaseExactIdentity.matches(path, loadedFilePath),
             !dirtyBufferSurvivesElsewhere
         {
+            // #784: the newer request owns the prompt; a waiting quit is
+            // answered first.
+            supersedePendingTermination()
             pendingNavigation = .selectFile(path)
             // Roll the selection back so the file list re-highlights
             // the dirty file while the alert is up. The async hop is
@@ -9396,6 +9501,10 @@ final class AppState: ObservableObject {
         // is what this cancellation arms.)
         embedsLoadTask?.cancel()
         embedsLoadTask = nil
+        // #1287: and stop the embed walks themselves — the batch's and every
+        // single request's — at their next node, rather than letting them run
+        // on under the session mutex after their results are discarded.
+        cancelEmbedWalkTokens()
         citationsLoadTask?.cancel()
         citationsLoadTask = nil
         tasksLoadTask?.cancel()
@@ -9859,6 +9968,7 @@ final class AppState: ObservableObject {
             switchToRecent(RecentVault(url: url))
             return
         }
+        supersedePendingTermination()
         cancelPendingNavigationSave()
         // MainSplitView posts the initial open announcement when the newly
         // mounted interface is ready. It stays mounted during a direct A→B
@@ -10355,12 +10465,8 @@ final class AppState: ObservableObject {
                 }
                 let organization: SidebarOrganizationState
                 if notice == nil {
-                    let decoded = SidebarOrganizationSchema.decode(
-                        root: refreshed.root)
                     organization = SidebarOrganizationState(
-                        prefs: decoded.prefs, pins: decoded.pins,
-                        shortcuts: decoded.shortcuts,
-                        shortcutRawEntryCount: decoded.shortcutRawCount)
+                        decoding: refreshed.root)
                 } else {
                     organization = SidebarOrganizationState()
                 }
@@ -10377,11 +10483,7 @@ final class AppState: ObservableObject {
         sidebarPinPruneLedger.reset()
         let organization: SidebarOrganizationState
         if sidebarVaultPrefsNotice == nil {
-            let decoded = SidebarOrganizationSchema.decode(root: result.root)
-            organization = SidebarOrganizationState(
-                prefs: decoded.prefs, pins: decoded.pins,
-                shortcuts: decoded.shortcuts,
-                shortcutRawEntryCount: decoded.shortcutRawCount)
+            organization = SidebarOrganizationState(decoding: result.root)
         } else {
             organization = SidebarOrganizationState()
         }
@@ -10594,11 +10696,7 @@ final class AppState: ObservableObject {
             // misrepresent it (round-8 finding 2).
             let organization: SidebarOrganizationState
             if adoptedNotice == nil {
-                let decoded = SidebarOrganizationSchema.decode(root: adoptedRoot)
-                organization = SidebarOrganizationState(
-                    prefs: decoded.prefs, pins: decoded.pins,
-                    shortcuts: decoded.shortcuts,
-                    shortcutRawEntryCount: decoded.shortcutRawCount)
+                organization = SidebarOrganizationState(decoding: adoptedRoot)
             } else {
                 organization = SidebarOrganizationState()
             }
@@ -10701,6 +10799,7 @@ final class AppState: ObservableObject {
             return
         }
         supersedePendingTabCloseForVaultTransition()
+        supersedePendingTermination()
         pendingVaultSwitchTarget = entry
         let parkedDirty = workspace.dirtyParkedDocuments()
         let recoveryPaths = uncommittedNoteDraftPaths()
@@ -10928,6 +11027,7 @@ final class AppState: ObservableObject {
             return
         }
         supersedePendingTabCloseForVaultTransition()
+        supersedePendingTermination()
         // U1-2: the dirty check aggregates over every tab. With no parked
         // dirty documents the flow is exactly the pre-tabs behavior (the
         // active document routes through the existing single-file alert).
@@ -10995,11 +11095,13 @@ final class AppState: ObservableObject {
     /// "Save All": save every dirty tab through the STANDARD save path
     /// (activate → saveCurrentNote → await), sequentially. Aborts on the
     /// first conflict/error, leaving the user on that tab with the standard
-    /// resolution dialog up; the vault stays open. Closes on full success.
+    /// resolution dialog up; the vault stays open. Closes on full success —
+    /// or, for a quit (#784), lets the quit go ahead with the vault open.
     func resolveVaultCloseSaveAll() {
         guard pendingVaultClose != nil, let session = currentSession else { return }
         guard !rejectVaultTransitionDuringNativeImport() else { return }
         if let reason = authoredPropertyPublicationRecoveryReason {
+            finishPendingTermination(proceed: false)
             pendingVaultClose = nil
             postMutationAnnouncement(reason)
             return
@@ -11029,6 +11131,9 @@ final class AppState: ObservableObject {
                     // re-present the prompt and stop on a nil admission.
                     guard let save = self.saveCurrentNote() else {
                         let dirtyCount = self.dirtyVaultClosePaths().count
+                        if dirtyCount == 0 {
+                            self.finishPendingTermination(proceed: false)
+                        }
                         self.pendingVaultClose = dirtyCount > 0 ? dirtyCount : nil
                         return
                     }
@@ -11047,6 +11152,8 @@ final class AppState: ObservableObject {
                         // surprise-open the other vault (the same leak class
                         // as the U1-2 save-then-close scope).
                         self.pendingVaultSwitchTarget = nil
+                        // #784: a quit stops here too; the app keeps running.
+                        self.finishPendingTermination(proceed: false)
                         return  // standard dialog owns recovery; vault stays open
                     }
                 }
@@ -11070,6 +11177,11 @@ final class AppState: ObservableObject {
                 generation: generation, session: session)
             else { return }
             self.pendingVaultClose = nil
+            if self.isTerminationPending {
+                // #784: every note is saved; the quit goes ahead.
+                self.finishPendingTermination(proceed: true)
+                return
+            }
             let completesVaultSwitch = self.pendingVaultSwitchTarget != nil
             if self.closeVault(), !completesVaultSwitch {
                 self.announcer.post(.vaultClosedAllSaved)
@@ -11079,16 +11191,22 @@ final class AppState: ObservableObject {
     }
 
     /// "Discard All": close without saving any tab. The per-tab buffers are
-    /// dropped by `closeVault`'s workspace reset.
+    /// dropped by `closeVault`'s workspace reset — or, for a quit (#784),
+    /// with the process.
     func resolveVaultCloseDiscardAll() {
         guard !rejectVaultTransitionDuringNativeImport() else { return }
         if let reason = authoredPropertyPublicationRecoveryReason {
+            finishPendingTermination(proceed: false)
             pendingVaultClose = nil
             postMutationAnnouncement(reason)
             return
         }
         if let reason = inFlightDraftDiscardDisabledReason {
             postMutationAnnouncement(reason)
+            return
+        }
+        if isTerminationPending {
+            finishPendingTermination(proceed: true)
             return
         }
         pendingVaultClose = nil
@@ -11100,10 +11218,172 @@ final class AppState: ObservableObject {
     }
 
     func resolveVaultCloseCancel() {
+        finishPendingTermination(proceed: false)
         pendingVaultClose = nil
         // U4-3: same as the single-dirty cancel — a cancelled multi-tab close
         // cancels the switch and drops the parked target.
         pendingVaultSwitchTarget = nil
+    }
+
+    // MARK: - Quit (#784, PR 15b)
+    //
+    // ⌘Q with unsaved edits goes through the Close Vault flow: its refusals,
+    // its dirty aggregation and its prompts (the single note's "Save
+    // changes?" alert, or Save All / Discard All / Cancel). While a quit
+    // waits on that prompt (termination mode) the resolvers answer the quit
+    // instead of closing the vault: true once Save All or Discard All (or the
+    // note's Save or Discard) succeeds and the sidebar fence has settled;
+    // false on Cancel, or on a save conflict or error, where the standard
+    // dialog owns recovery and the app keeps running. A newer request that
+    // takes the prompt over answers the quit false first. A quit adds no line
+    // of its own: the Close Vault lines end "Returned to the welcome screen",
+    // which a quit never reaches, and the Windows application-close route is
+    // silent for the same reason (`VaultLifecycleViewModel.AnnounceTeardown`).
+
+    /// The reply `admitTermination` owes AppKit while the prompt is up. Set
+    /// only there; called exactly once, by `finishPendingTermination`. Nil
+    /// while a quit waits on the sidebar fence alone: the fence is not a
+    /// prompt, so nothing supersedes it, and it always ends with true.
+    private var pendingTerminationReply: (@MainActor (Bool) -> Void)?
+
+    /// True from a `.terminateLater` until its reply is sent: through the
+    /// prompt and the sidebar fence after it, and through a clean quit that
+    /// waits on the fence alone. A second ⌘Q in that window is refused, so
+    /// AppKit never waits on two replies.
+    private var isTerminationReplyOutstanding = false
+
+    /// Test hook: the sidebar-fence wait that ends a quit (rounds 31–32).
+    private(set) var terminationFenceTaskForTesting: Task<Void, Never>?
+
+    /// True while ⌘Q waits on the Close Vault prompt (termination mode).
+    var isTerminationPending: Bool { pendingTerminationReply != nil }
+
+    /// The window that hosts the vault's prompts (the root view's), so a
+    /// quit can bring its prompt to the front.
+    var promptHostWindow: NSWindow? { templateShortcutHostWindow }
+
+    /// ⌘Q's admission, through `SlateAppDelegate.terminationDecision`:
+    /// `.terminateNow` only when nothing is dirty and the sidebar fence is
+    /// clear; `.terminateLater` while the prompt, then the fence, holds the
+    /// quit; `.terminateCancel` when Close Vault would refuse (its reason is
+    /// spoken) or a quit is already waiting.
+    func admitTermination(
+        reply: @escaping @MainActor (Bool) -> Void
+    ) -> NSApplication.TerminateReply {
+        guard !isTerminationReplyOutstanding else { return .terminateCancel }
+        if isVaultOpen {
+            switch presentTerminationPrompt() {
+            case .refused:
+                return .terminateCancel
+            case .presented:
+                isTerminationReplyOutstanding = true
+                pendingTerminationReply = reply
+                return .terminateLater
+            case .clean:
+                break
+            }
+        }
+        guard let fence = Self.settleSidebarFenceThenReply(
+            terminationAnswer(reply))
+        else { return .terminateNow }
+        isTerminationReplyOutstanding = true
+        terminationFenceTaskForTesting = fence
+        return .terminateLater
+    }
+
+    private enum TerminationPrompt { case clean, presented, refused }
+
+    /// Close Vault's front half for a quit. The quit supersedes a narrower
+    /// prompt (a tab close, a file switch) and a vault switch in progress,
+    /// so exactly one prompt owns the answer.
+    private func presentTerminationPrompt() -> TerminationPrompt {
+        if let reason = authoredPropertyPublicationRecoveryReason {
+            postMutationAnnouncement(reason)
+            return .refused
+        }
+        if let reason = inFlightDraftDiscardDisabledReason {
+            postMutationAnnouncement(reason)
+            return .refused
+        }
+        let parkedDirty = workspace.dirtyParkedDocuments()
+        let recoveryPaths = uncommittedNoteDraftPaths()
+        guard hasUnsavedChanges || !parkedDirty.isEmpty || !recoveryPaths.isEmpty
+        else { return .clean }
+        supersedePendingTabCloseForVaultTransition()
+        if case .selectFile? = pendingNavigation {
+            resolvePendingNavigationCancel()
+        }
+        pendingVaultSwitchTarget = nil
+        if parkedDirty.isEmpty, recoveryPaths.isEmpty {
+            pendingVaultClose = nil
+            pendingNavigation = .closeVault
+        } else {
+            if case .closeVault? = pendingNavigation {
+                pendingNavigation = nil
+            }
+            pendingVaultClose = dirtyVaultClosePaths().count
+        }
+        return .presented
+    }
+
+    /// Clears the outstanding mark as the reply goes out.
+    private func terminationAnswer(
+        _ reply: @escaping @MainActor (Bool) -> Void
+    ) -> @MainActor (Bool) -> Void {
+        { [weak self] proceed in
+            self?.isTerminationReplyOutstanding = false
+            reply(proceed)
+        }
+    }
+
+    /// Answers a waiting quit exactly once and retires its prompt, so the
+    /// prompt can never turn into a plain Close Vault. `proceed` runs the
+    /// sidebar fence (rounds 31–32) before it replies true — dirty tabs
+    /// first, then the fence; otherwise the app keeps running. A no-op when
+    /// no quit is waiting.
+    private func finishPendingTermination(proceed: Bool) {
+        guard let reply = pendingTerminationReply else { return }
+        pendingTerminationReply = nil
+        pendingVaultClose = nil
+        if case .closeVault? = pendingNavigation {
+            pendingNavigation = nil
+        }
+        let answer = terminationAnswer(reply)
+        guard proceed else {
+            answer(false)
+            return
+        }
+        pendingVaultSwitchTarget = nil
+        if let fence = Self.settleSidebarFenceThenReply(answer) {
+            terminationFenceTaskForTesting = fence
+        } else {
+            answer(true)
+        }
+    }
+
+    /// A newer request that takes the prompt over — a vault close, switch
+    /// or open, or a file switch — answers a waiting quit first (false: the
+    /// app keeps running), so AppKit's pending reply is never dropped. A quit
+    /// already past its prompt, or a clean one waiting on the sidebar fence
+    /// alone, has no prompt to take over: this is a no-op for it, and the
+    /// fence's reply (true) stands, as it did before the prompt existed.
+    private func supersedePendingTermination() {
+        finishPendingTermination(proceed: false)
+    }
+
+    /// The quit's single-note Save ended without completing: a conflict, an
+    /// error, a refused admission, or a note that changed owner meanwhile.
+    /// Unless a newer request took the prompt over (it then owns the
+    /// answer), the app keeps running and the standard dialog owns recovery.
+    private func refuseTerminationAfterNavigationSave(
+        _ pending: PendingNavigation,
+        generation: UInt64
+    ) {
+        guard case .closeVault = pending,
+            pendingNavigationSaveGeneration == generation,
+            pendingNavigation == pending
+        else { return }
+        finishPendingTermination(proceed: false)
     }
 
     /// Property/source recovery identities are vault-owned even though their
@@ -11126,6 +11406,10 @@ final class AppState: ObservableObject {
     @discardableResult
     func closeVault() -> Bool {
         guard !rejectVaultTransitionDuringNativeImport() else { return false }
+        // #784: a quit never closes the vault; a close that reaches here while
+        // a quit waits answers it first, whether the close is refused below or
+        // tears the vault down.
+        supersedePendingTermination()
         if let reason = authoredPropertyPublicationRecoveryReason {
             pendingVaultSwitchTarget = nil
             pendingVaultClose = nil
@@ -11191,6 +11475,7 @@ final class AppState: ObservableObject {
         // session-deallocation.
         embedsLoadTask?.cancel()
         embedsLoadTask = nil
+        cancelEmbedWalkTokens()  // #1287: the walks stop at their next node
         isLoadingEmbeds = false
         baseQueryBuilderPreviewTask?.cancel()
         baseQueryBuilderPreviewTask = nil
@@ -12086,6 +12371,12 @@ final class AppState: ObservableObject {
     /// problems (no session, etc.) — per-embed errors land in the
     /// resolution itself where the UI's `EmbedView` already
     /// renders them with the right shape.
+    ///
+    /// Cancellation (#1287, contract 40 AR-24) is the exception: the
+    /// batch walks under one `CancelToken`, and a `.Cancelled` from any
+    /// embed ends the whole batch without publishing — a walk told to
+    /// stop is not an unresolved embed, and its rows would belong to a
+    /// note the user already left.
     func loadCurrentNoteEmbedResolutions(path: String) async {
         guard let session = currentSession else { return }
         // Snapshot the embed targets from the just-loaded links.
@@ -12130,17 +12421,40 @@ final class AppState: ObservableObject {
         }
         isLoadingEmbeds = true
 
-        let resolutions: [String: EmbedResolution] =
+        // One token per batch (#1287, locked 05 §4; contract 40 AR-24).
+        // Token owner: this batch. It is cancelled by this task's
+        // cancellation (the handler below), by a selection change
+        // (`cancelNoteScopedWork`), by the next batch (the line below, for
+        // the previous one) and by `closeVault`; the walk then stops at its
+        // next node with `.Cancelled`.
+        embedsLoadCancelToken?.cancel()
+        let cancel = CancelToken()
+        embedsLoadCancelToken = cancel
+        defer {
+            if embedsLoadCancelToken === cancel { embedsLoadCancelToken = nil }
+        }
+        let resolveGate = embedResolveGateForTesting
+
+        // `nil` is a cancelled batch: it publishes nothing.
+        let resolutions: [String: EmbedResolution]? = await withTaskCancellationHandler {
             await Task.detached(priority: .userInitiated) {
+                () async -> [String: EmbedResolution]? in
                 var out: [String: EmbedResolution] = [:]
                 for target in embedTargets {
                     let resolution: EmbedResolution
                     do {
+                        await resolveGate?(path, target.key, cancel)
                         resolution = try session.resolveEmbed(
                             hostPath: path,
                             target: target.key,
-                            alt: target.alt
+                            alt: target.alt,
+                            cancel: cancel
                         )
+                    } catch VaultError.Cancelled {
+                        // The batch was cancelled (#1287): end it here and
+                        // drop every row — never an `.unresolved(.readError)`
+                        // card for a walk that was told to stop.
+                        return nil
                     } catch let error as VaultError {
                         // Per-embed failure: synthesize an
                         // Unresolved entry instead of bailing out
@@ -12170,14 +12484,20 @@ final class AppState: ObservableObject {
                 return out
             }
             .value
+        } onCancel: {
+            cancel.cancel()
+        }
 
         // Audit #201: clearing the spinner via `defer` made an old
         // cancelled task's late-firing deferred clear race the new
         // task's `isLoadingEmbeds = true`, briefly exposing the
         // panel to "not yet resolved" placeholders. Set explicitly
         // at the end, gated on the selection-change check below —
-        // same pattern `loadCurrentLinks` uses.
-        guard !Task.isCancelled,
+        // same pattern `loadCurrentLinks` uses. A cancelled batch
+        // (#1287) returns here too, whether its walk saw the cancel
+        // or finished just before it: whoever cancelled it owns the
+        // state now.
+        guard let resolutions, !cancel.isCancelled(), !Task.isCancelled,
             BaseExactIdentity.matches(selectedFilePath, path)
         else { return }
 
@@ -12204,17 +12524,37 @@ final class AppState: ObservableObject {
     /// that writes nothing — the reading view's own request-once guard keeps
     /// the key marked, and its state machine falls back to the inline link-run
     /// (deterministic, no re-request).
+    ///
+    /// A cancelled request (#1287, contract 40 AR-24) writes nothing too: it
+    /// walks under its own `CancelToken`, cancelled when the requesting task
+    /// is (the reading view's placeholder went away) or the selection changes,
+    /// and a `.Cancelled` is a dropped result, never an `.unresolved` row.
     func requestReadingEmbedResolution(target: String) async {
         guard let session = currentSession, let path = selectedFilePath else { return }
         // Already landed (a racing batch, or a duplicate request the view's
         // guard didn't cover across a re-init): don't re-resolve.
         if currentNoteEmbedResolutions[target] != nil { return }
 
-        let resolution: EmbedResolution =
-            await Task.detached(priority: .userInitiated) {
+        // One token per request (#1287, locked 05 §4; contract 40 AR-24).
+        // Token owner: this request. It is cancelled by the requesting task's
+        // cancellation (the handler below), by a selection change
+        // (`cancelNoteScopedWork`) and by `closeVault`; the walk then stops
+        // at its next node with `.Cancelled`.
+        let cancel = CancelToken()
+        let requestID = ObjectIdentifier(cancel)
+        readingEmbedRequestCancelTokens[requestID] = cancel
+        defer { readingEmbedRequestCancelTokens[requestID] = nil }
+        let resolveGate = embedResolveGateForTesting
+
+        // `nil` is a cancelled request: it writes nothing.
+        let resolution: EmbedResolution? = await withTaskCancellationHandler {
+            await Task.detached(priority: .userInitiated) { () async -> EmbedResolution? in
                 do {
+                    await resolveGate?(path, target, cancel)
                     return try session.resolveEmbed(
-                        hostPath: path, target: target, alt: nil)
+                        hostPath: path, target: target, alt: nil, cancel: cancel)
+                } catch VaultError.Cancelled {
+                    return nil
                 } catch let error as VaultError {
                     return .unresolved(
                         reason: .readError(message: Self.humanReadableVaultError(error)))
@@ -12224,13 +12564,32 @@ final class AppState: ObservableObject {
                 }
             }
             .value
+        } onCancel: {
+            cancel.cancel()
+        }
 
-        // Drop the write if the user navigated away mid-resolve — same
-        // stale-guard the batch path uses.
-        guard BaseExactIdentity.matches(selectedFilePath, path) else { return }
+        // Drop the write if the request was cancelled or the user navigated
+        // away mid-resolve — same stale-guard the batch path uses.
+        guard let resolution, !cancel.isCancelled(),
+            BaseExactIdentity.matches(selectedFilePath, path)
+        else { return }
         // Merge (never replace): the batch may have populated other keys while
         // this single resolve was in flight.
         currentNoteEmbedResolutions[target] = resolution
+    }
+
+    /// Cancel every in-flight embed walk's token (#1287): the batch's and each
+    /// single request's. Their results would be dropped by the stale guards
+    /// anyway; cancelling stops the walks at their next node instead of
+    /// letting them run on under the session mutex. Called on a selection
+    /// change (`cancelNoteScopedWork`) and by `closeVault`.
+    private func cancelEmbedWalkTokens() {
+        embedsLoadCancelToken?.cancel()
+        embedsLoadCancelToken = nil
+        for token in readingEmbedRequestCancelTokens.values {
+            token.cancel()
+        }
+        readingEmbedRequestCancelTokens.removeAll()
     }
 
     // MARK: - Content pipelines (#223)
@@ -12721,8 +13080,9 @@ final class AppState: ObservableObject {
     /// Off-actor mirror of `humanReadable(_:)` — used inside the
     /// detached resolver loop where `self` isn't available. Keeps
     /// the per-embed `ReadError` message shape consistent with
-    /// what the main-actor error surface produces.
-    private nonisolated static func humanReadableVaultError(_ error: VaultError) -> String {
+    /// what the main-actor error surface produces. Bases failures
+    /// route their detail through it too (`BaseDocument.failureDetail`).
+    nonisolated static func humanReadableVaultError(_ error: VaultError) -> String {
         switch error {
         case .Io(let m), .Db(let m), .Trash(let m), .InvalidQuery(let m),
             .InvalidArgument(let m), .TrashConfirmationChanged(let m):
@@ -16583,12 +16943,16 @@ final class AppState: ObservableObject {
             recoveryReservation: recoveryReservation)
         let refresher = structuralBatchRefreshRunner
         Task { [weak self] in
-            let outcome: Result<Void, VaultError> = await Task.detached(
+            // #1140: a create that landed but was not indexed is a create;
+            // its caveat (core's) follows the created sentence.
+            let outcome: Result<A11yEvent?, VaultError> = await Task.detached(
                 priority: .userInitiated
             ) {
                 do {
-                    _ = try session.createExclusive(path: notePath, content: "")
-                    return .success(())
+                    return .success(
+                        try AppState.createReporting(
+                            session: session, path: notePath, content: "",
+                            displayName: (notePath as NSString).lastPathComponent))
                 } catch let e as VaultError { return .failure(e) }
                 catch { return .failure(.Io(message: error.localizedDescription)) }
             }.value
@@ -16598,7 +16962,7 @@ final class AppState: ObservableObject {
                 self.ownsStructuralMutation(token, session: session)
             else { return }
             switch outcome {
-            case .success:
+            case .success(let caveat):
                 await refresher(self)
                 guard !Task.isCancelled,
                     self.ownsStructuralMutation(token, session: session)
@@ -16611,6 +16975,7 @@ final class AppState: ObservableObject {
                     advancesSidebarSelectionRevision: false)
                 self.postMutationAnnouncement(
                     "Created note \((notePath as NSString).lastPathComponent).")
+                if let caveat { self.postMutationAnnouncement(caveat) }
             case .failure(let error):
                 self.lastError = self.humanReadable(error)
                 self.announceMutationFailure(
@@ -16636,7 +17001,7 @@ final class AppState: ObservableObject {
             recoveryReservation: recoveryReservation)
         let refresher = structuralBatchRefreshRunner
         let task = Task { [weak self] in
-            let outcome: Result<StructuralReport, VaultError> = await Task.detached(
+            let outcome: Result<A11yEvent?, VaultError> = await Task.detached(
                 priority: .userInitiated
             ) {
                 do {
@@ -16645,12 +17010,12 @@ final class AppState: ObservableObject {
                     // the index hasn't seen yet (external create between
                     // scan and click) surfaces DestinationExists instead of
                     // truncating it — save_text would silently overwrite
-                    // (#796).
-                    _ = try session.createExclusive(path: path, content: "")
+                    // (#796). Its reporting form (#1140) separates a create
+                    // that landed but was not indexed from that refusal.
                     return .success(
-                        StructuralReport(
-                            opId: 0, undoOpIds: [0], moved: [],
-                            rewritten: [], failed: []))
+                        try AppState.createReporting(
+                            session: session, path: path, content: "",
+                            displayName: (path as NSString).lastPathComponent))
                 } catch let e as VaultError { return .failure(e) }
                 catch { return .failure(.Io(message: error.localizedDescription)) }
             }.value
@@ -16660,7 +17025,10 @@ final class AppState: ObservableObject {
                 self.ownsStructuralMutation(token, session: session)
             else { return }
             switch outcome {
-            case .success:
+            case .success(let caveat):
+                // The landed arm finishes as a committed create, its caveat
+                // after the sentence. The refresh is a scan, which normally
+                // indexes the landed note, so its row and the rename land.
                 await refresher(self)
                 guard !Task.isCancelled,
                     self.ownsStructuralMutation(token, session: session)
@@ -16670,11 +17038,18 @@ final class AppState: ObservableObject {
                     path,
                     target: .currentTab,
                     advancesSidebarSelectionRevision: false)
-                // Drop the user straight into renaming the fresh note's title.
-                self.installRenameForCreatedEntry(
-                    path: path, isDirectory: false, session: session)
+                // Drop the user straight into renaming the fresh note's title
+                // — on the landed arm only once the refresh indexed it: a
+                // rename owner with no row to render on would strand
+                // invisibly and switch off the tree's key handling until
+                // something cleared it.
+                if caveat == nil || self.files.contains(where: { $0.path == path }) {
+                    self.installRenameForCreatedEntry(
+                        path: path, isDirectory: false, session: session)
+                }
                 self.postMutationAnnouncement(
                     "Created note \((path as NSString).lastPathComponent).")
+                if let caveat { self.postMutationAnnouncement(caveat) }
             case .failure(let error):
                 self.lastError = self.humanReadable(error)
                 self.announceMutationFailure(
@@ -16766,14 +17141,18 @@ final class AppState: ObservableObject {
                         guard self.ownsStructuralMutation(token, session: session)
                         else { return }
                     }
-                    let create: Result<Void, VaultError> = await Task.detached(
+                    // #1140: a copy that landed but was not indexed ends the
+                    // loop as a create — never the namer's advance signal.
+                    let create: Result<A11yEvent?, VaultError> = await Task.detached(
                         priority: .userInitiated
                     ) {
                         do {
-                            _ = try session.createExclusive(
-                                path: candidatePath,
-                                content: content)
-                            return .success(())
+                            return .success(
+                                try AppState.createReporting(
+                                    session: session,
+                                    path: candidatePath,
+                                    content: content,
+                                    displayName: candidate))
                         } catch let error as VaultError {
                             return .failure(error)
                         } catch {
@@ -16784,12 +17163,13 @@ final class AppState: ObservableObject {
                         return
                     }
                     switch create {
-                    case .success:
+                    case .success(let caveat):
                         self.publishTreeMutation(
                             .createNote(path: candidatePath),
                             rewrittenCount: 0)
                         self.postMutationAnnouncement(
                             "Duplicated \(sourceName) as \(candidate).")
+                        if let caveat { self.postMutationAnnouncement(caveat) }
                         await self.loadFiles()
                         guard self.ownsStructuralMutation(token, session: session) else {
                             return
@@ -23030,8 +23410,14 @@ final class AppState: ObservableObject {
             session: session,
             pending: pending,
             noteOwner: noteOwner)
-        else { return }
-        guard let save = saveCurrentNote() else { return }
+        else {
+            refuseTerminationAfterNavigationSave(pending, generation: generation)
+            return
+        }
+        guard let save = saveCurrentNote() else {
+            refuseTerminationAfterNavigationSave(pending, generation: generation)
+            return
+        }
         await save.value
         // Save can complete in one of three states; only proceed
         // with the navigation when the save genuinely succeeded
@@ -23046,6 +23432,7 @@ final class AppState: ObservableObject {
             saveError == nil,
             loadedFilePath.map({ !hasDirtyNoteRecovery(for: $0) }) ?? true
         else {
+            refuseTerminationAfterNavigationSave(pending, generation: generation)
             return
         }
         applyPendingNavigation(pending)
@@ -23063,6 +23450,7 @@ final class AppState: ObservableObject {
         if case .closeVault = pending,
             let reason = authoredPropertyPublicationRecoveryReason
         {
+            finishPendingTermination(proceed: false)
             pendingNavigation = nil
             pendingVaultSwitchTarget = nil
             postMutationAnnouncement(reason)
@@ -23096,6 +23484,9 @@ final class AppState: ObservableObject {
     /// "Save changes?" prompt: Cancel → clear the pending
     /// navigation without saving. The dirty buffer stays.
     func resolvePendingNavigationCancel() {
+        if case .closeVault? = pendingNavigation {
+            finishPendingTermination(proceed: false)
+        }
         cancelPendingNavigationSave()
         if case .selectFile(let path) = pendingNavigation,
             deferredTemplateCursorLanding?.path == path
@@ -23114,6 +23505,12 @@ final class AppState: ObservableObject {
     /// navigation.
     private func applyPendingNavigation(_ pending: PendingNavigation) {
         cancelPendingNavigationSave()
+        if case .closeVault = pending, isTerminationPending {
+            // #784: the quit's prompt resolved; the quit goes ahead with the
+            // vault open, as a clean quit does.
+            finishPendingTermination(proceed: true)
+            return
+        }
         pendingNavigation = nil
         switch pending {
         case .closeVault:
@@ -23178,6 +23575,7 @@ final class AppState: ObservableObject {
             return
         }
         supersedePendingTabCloseForVaultTransition()
+        supersedePendingTermination()
         let recoveryPaths = uncommittedNoteDraftPaths()
         if !recoveryPaths.isEmpty {
             pendingVaultClose = dirtyVaultClosePaths().count
@@ -23700,7 +24098,8 @@ final class AppState: ObservableObject {
         // file write don't pin the UI thread. Match the
         // `performSave` shape so the threading story stays uniform
         // across editor-save and template-create paths.
-        let outcome: Result<RenderedTemplate, VaultError> = await Task.detached(
+        typealias Created = (rendered: RenderedTemplate, caveat: A11yEvent?)
+        let outcome: Result<Created, VaultError> = await Task.detached(
             priority: .userInitiated
         ) {
             do {
@@ -23709,12 +24108,17 @@ final class AppState: ObservableObject {
                     context: context
                 )
                 // Same no-clobber discipline as createNote (#796): the
-                // template flow races external creates identically.
-                _ = try session.createExclusive(
+                // template flow races external creates identically. A note
+                // that landed but was not indexed is a create (#1140,
+                // contract 30 TR-5): it finishes the flow with core's
+                // caveat and never re-presents the name sheet.
+                let caveat = try AppState.createReporting(
+                    session: session,
                     path: relativePath,
-                    content: rendered.body
+                    content: rendered.body,
+                    displayName: (relativePath as NSString).lastPathComponent
                 )
-                return .success(rendered)
+                return .success((rendered, caveat))
             } catch let error as VaultError {
                 return .failure(error)
             } catch {
@@ -23727,7 +24131,7 @@ final class AppState: ObservableObject {
         guard !Task.isCancelled else { return }
 
         switch outcome {
-        case .success(let rendered):
+        case .success(let (rendered, caveat)):
             await refresher(self)
             // A vault switch invalidates this token before the refresh can
             // resume. Do not dismiss, select, announce, or release a newer
@@ -23759,6 +24163,9 @@ final class AppState: ObservableObject {
             announceTemplate(
                 .templateNoteCreated(name: filename(of: relativePath), template: template.name)
             )
+            // The landed-but-unindexed caveat (#1140) is core's Medium event:
+            // queued after the High created sentence, before the open.
+            if let caveat { announceTemplate(caveat) }
             // Open the new file. SwiftUI propagates the binding
             // change → `handleSelectionChange` kicks off a fresh
             // note load. After the load resolves, we send the
@@ -23993,15 +24400,16 @@ final class AppState: ObservableObject {
         return !next.isLetter && !next.isNumber
     }
 
-    /// Post a polite announcement through AppKit's accessibility
-    /// bus and capture it for the test target. Same shape as
-    /// `announceScan` but without the per-second rate guard —
-    /// template events are user-driven and never rapid-fire.
+    /// Post a template announcement and capture its text for the test
+    /// target (no rate guard: template events are user-driven). This
+    /// string overload carries only the availability and admission
+    /// reasons; the picker-open and created announcements are core's
+    /// typed events (#1122), posted through the overload below.
     private func announceTemplate(
         _ message: String,
         priority: AnnouncementPriority = .medium
     ) {
-        // W0.5-3 residue: template-flow announcement builders (via announceTemplate)
+        // W0.5-3 residue: template availability and admission reasons (a11y.rs double-duty carve-out)
         announceTemplate(
             .hostComposed(
                 text: message, priority: priority == .high ? .high : .medium))

@@ -41,13 +41,12 @@ struct GraphInspectorView: View {
         }
     }
 
+    /// The needle and the flags persist by field through their setters
+    /// (contract 35 Term W7; #1218).
     private var nameBinding: Binding<String> {
         Binding(
             get: { appState.graphTableTextFilter },
-            set: {
-                appState.graphTableTextFilter = $0
-                appState.scheduleGraphConfigSave()
-            })
+            set: { appState.setGraphTableNameQuery($0) })
     }
 
     private func backendToggle(_ key: WritableKeyPath<GraphFilter, Bool>) -> Binding<Bool> {
@@ -57,7 +56,6 @@ struct GraphInspectorView: View {
                 var f = appState.graphTableFilter
                 f[keyPath: key] = newValue
                 appState.setGraphTableFilter(f)
-                appState.scheduleGraphConfigSave()
             })
     }
 

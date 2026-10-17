@@ -703,6 +703,12 @@ struct SidebarPinPruneLedger {
 /// FL3-3 (#660): one vault-local shortcut. Storage keeps `kind` as a raw
 /// string — FL3-3 ships `file` and `folder`; `tag`/`untagged` are reserved
 /// for FL5-2 and must survive every rewrite untouched and in place.
+///
+/// #1332 (plan 43 PR 25, owner decision D6): this value is a slot's
+/// TARGET. The published list is the slots, in authored order, and one
+/// target may fill several of them — two slots on one note are two rows
+/// (`SidebarShortcutRow`, identified by its slot), as on Windows. Never
+/// look a slot up by this value; resolve it by position.
 struct SidebarShortcut: Hashable, Sendable {
   enum Kind: String, Sendable {
     case file
@@ -717,6 +723,17 @@ struct SidebarShortcut: Hashable, Sendable {
 
   let kind: Kind
   let path: String
+
+  /// #1332: which of its target's slots slot `slot` (1-based) is — 2 for
+  /// the second of two slots on one note. Exact ops find THAT slot again
+  /// in the raw authored array by this rank, which survives reserved
+  /// entries between the visible ones and another writer's insertions
+  /// elsewhere in the list. Nil for a slot the list does not have.
+  static func occurrence(ofSlot slot: Int, in shortcuts: [SidebarShortcut]) -> Int? {
+    guard shortcuts.indices.contains(slot - 1) else { return nil }
+    let target = shortcuts[slot - 1]
+    return shortcuts.prefix(slot).filter { $0 == target }.count
+  }
 }
 
 struct SidebarStructuralTransform: Equatable, Sendable, Identifiable {
@@ -796,15 +813,17 @@ struct SidebarStructuralTransform: Equatable, Sendable, Identifiable {
   }
 
   /// FL3-3: retarget/remove file|folder shortcut entries in the RAW
-  /// authored array. Reserved kinds keep their bytes and positions;
-  /// entries that converge on an existing target drop (source-wins,
-  /// like pins).
+  /// authored array. Reserved kinds keep their bytes and positions.
+  /// #1332 (D6): an entry that converges on another slot's target keeps
+  /// its place and its keys — after `a.md` → `b.md` with `b.md` already
+  /// in slot 2, slots 1 and 2 both open `b.md`. (The old source-wins drop
+  /// deleted a slot and shifted every later ⌃-number binding down one.)
   private func applyRawShortcuts(to root: inout [String: Any]) {
     guard let raw = root[SidebarOrganizationSchema.shortcutsKey] as? [Any]
     else { return }
     var changed = false
-    var seen: Set<String> = []
     var result: [Any] = []
+    result.reserveCapacity(raw.count)
     for entry in raw {
       guard var object = entry as? [String: Any],
         let kindRaw = object["kind"] as? String,
@@ -824,23 +843,20 @@ struct SidebarStructuralTransform: Equatable, Sendable, Identifiable {
       }
       if updated != path { changed = true }
       object["path"] = updated
-      if seen.insert("\(kindRaw)\u{0}\(updated)").inserted {
-        result.append(object)
-      } else {
-        changed = true
-      }
+      result.append(object)
     }
     if changed {
       root[SidebarOrganizationSchema.shortcutsKey] = result
     }
   }
 
-  /// In-memory counterpart of `applyRawShortcuts` for published state.
+  /// In-memory counterpart of `applyRawShortcuts` for published state:
+  /// every slot follows its target in place, converging ones included.
   @discardableResult
   func apply(to shortcuts: inout [SidebarShortcut]) -> Bool {
     var changed = false
-    var seen: Set<String> = []
     var result: [SidebarShortcut] = []
+    result.reserveCapacity(shortcuts.count)
     for shortcut in shortcuts {
       guard
         let updated = Self.transformedShortcutPath(
@@ -851,12 +867,7 @@ struct SidebarStructuralTransform: Equatable, Sendable, Identifiable {
         continue
       }
       if updated != shortcut.path { changed = true }
-      let next = SidebarShortcut(kind: shortcut.kind, path: updated)
-      if seen.insert("\(next.kind.rawValue)\u{0}\(next.path)").inserted {
-        result.append(next)
-      } else {
-        changed = true
-      }
+      result.append(SidebarShortcut(kind: shortcut.kind, path: updated))
     }
     if changed { shortcuts = result }
     return changed
@@ -936,6 +947,15 @@ enum SidebarOrganizationSchema {
   static let maxAuthoredEntries = 10_000
   static let maxAuthoredPathLength = 4_096
   static let maxShortcuts = 200
+  /// #1332 (D6): the adversarial-repetition bound on shortcut SLOTS. Every
+  /// decodable entry is a slot, kept in authored order with no collapse,
+  /// and decode shows the first 64 — the sidebar's retained-writes bound
+  /// (`AppState.sidebarUnflushedWriteRetriesCap`). Slots past it stay in
+  /// the file, untouched by every rewrite; decode counts them and the
+  /// Shortcuts section says how many are not shown, so none vanish
+  /// silently. Add refuses at the cap. `maxShortcuts` still bounds the raw
+  /// array (reserved kinds included) through the shape guard.
+  static let maxDecodedShortcuts = 64
 
   static func knownSectionShapesAreValid(root: [String: Any]) -> Bool {
     if let sort = root[sortKey], !(sort is [String: Any]) { return false }
@@ -995,7 +1015,8 @@ enum SidebarOrganizationSchema {
     root: [String: Any]
   ) -> (
     prefs: SidebarOrganizationPrefs, pins: SidebarPins,
-    shortcuts: [SidebarShortcut], shortcutRawCount: Int
+    shortcuts: [SidebarShortcut], shortcutRawCount: Int,
+    shortcutOverflowCount: Int
   ) {
     var prefs = SidebarOrganizationPrefs()
     if let sort = decodeSort(root[sortKey]) {
@@ -1039,30 +1060,62 @@ enum SidebarOrganizationSchema {
         pins.replacePaths(deduped, forFolder: folder)
       }
     }
+    let shortcuts = decodeShortcutSlots(root: root)
     return (
-      prefs, pins, decodeShortcuts(root: root),
-      (root[shortcutsKey] as? [Any])?.count ?? 0
+      prefs, pins, shortcuts.slots,
+      (root[shortcutsKey] as? [Any])?.count ?? 0,
+      shortcuts.overflowCount
     )
   }
 
-  /// FL3-3: decode the file|folder shortcuts the UI ships now. Reserved
-  /// kinds stay only in the raw array (rewrites preserve them); duplicates
-  /// collapse first-occurrence-wins, like pins.
+  /// FL3-3: decode the shortcuts the UI ships now. Reserved kinds stay
+  /// only in the raw array (rewrites preserve them).
+  /// #1332 (D6): every decodable entry is a SLOT, kept in authored order —
+  /// a repeated target is a second slot, not a duplicate to collapse (pins
+  /// still collapse: a pin set is a set). Decode stops at
+  /// `maxDecodedShortcuts`; see `decodeShortcutSlots` for the overflow.
   static func decodeShortcuts(root: [String: Any]) -> [SidebarShortcut] {
-    guard let raw = root[shortcutsKey] as? [Any] else { return [] }
-    var seen: Set<String> = []
-    var result: [SidebarShortcut] = []
+    decodeShortcutSlots(root: root).slots
+  }
+
+  /// The slots decode shows (the first `maxDecodedShortcuts` decodable
+  /// entries, in authored order) and how many decodable entries lie past
+  /// them — reported on the Shortcuts section's status line, never
+  /// dropped silently. Reserved kinds count toward neither.
+  static func decodeShortcutSlots(
+    root: [String: Any]
+  ) -> (slots: [SidebarShortcut], overflowCount: Int) {
+    guard let raw = root[shortcutsKey] as? [Any] else { return ([], 0) }
+    var slots: [SidebarShortcut] = []
+    var overflowCount = 0
     for entry in raw {
-      guard let entry = entry as? [String: Any],
-        let kindRaw = entry["kind"] as? String,
-        let kind = SidebarShortcut.Kind(rawValue: kindRaw),
-        let path = entry["path"] as? String
-      else { continue }
-      if seen.insert("\(kindRaw)\u{0}\(path)").inserted {
-        result.append(SidebarShortcut(kind: kind, path: path))
+      guard let shortcut = decodedShortcut(entry) else { continue }
+      if slots.count < maxDecodedShortcuts {
+        slots.append(shortcut)
+      } else {
+        overflowCount += 1
       }
     }
-    return result
+    return (slots, overflowCount)
+  }
+
+  /// How many entries in the authored array are slots (decodable kinds),
+  /// the ones past the decode cap included — what Add's under-lock cap
+  /// check reads, so another writer's slots count too.
+  static func shortcutSlotCount(root: [String: Any]) -> Int {
+    guard let raw = root[shortcutsKey] as? [Any] else { return 0 }
+    return raw.reduce(0) { $0 + (decodedShortcut($1) == nil ? 0 : 1) }
+  }
+
+  /// The slot one authored entry is, or nil for a reserved kind or an
+  /// entry this build cannot read.
+  private static func decodedShortcut(_ entry: Any) -> SidebarShortcut? {
+    guard let entry = entry as? [String: Any],
+      let kindRaw = entry["kind"] as? String,
+      let kind = SidebarShortcut.Kind(rawValue: kindRaw),
+      let path = entry["path"] as? String
+    else { return nil }
+    return SidebarShortcut(kind: kind, path: path)
   }
 
   private static func shortcutEntryMatches(
@@ -1070,6 +1123,22 @@ enum SidebarOrganizationSchema {
   ) -> Bool {
     guard let entry = entry as? [String: Any] else { return false }
     return entry["kind"] as? String == kind && entry["path"] as? String == path
+  }
+
+  /// #1332: the raw index of the `occurrence`-th (1-based, authored order)
+  /// entry targeting `kind`/`path` — one SLOT, where `firstIndex` would
+  /// always find the first of a note's slots.
+  private static func rawShortcutIndex(
+    ofOccurrence occurrence: Int, kind: String, path: String, in raw: [Any]
+  ) -> Int? {
+    guard occurrence >= 1 else { return nil }
+    var seen = 0
+    for (index, entry) in raw.enumerated()
+    where shortcutEntryMatches(entry, kind: kind, path: path) {
+      seen += 1
+      if seen == occurrence { return index }
+    }
+    return nil
   }
 
   /// Exact-op shortcut mutations operate on the RAW authored array so
@@ -1086,6 +1155,8 @@ enum SidebarOrganizationSchema {
     root[shortcutsKey] = raw
   }
 
+  /// Membership removal (the tree row's Remove from Shortcuts): the target
+  /// leaves Shortcuts, so EVERY slot it fills goes.
   static func removeShortcut(
     _ root: inout [String: Any], kind: String, path: String
   ) {
@@ -1094,17 +1165,34 @@ enum SidebarOrganizationSchema {
     root[shortcutsKey] = raw
   }
 
+  /// #1332 (D6): remove ONE slot — the `occurrence`-th entry with this
+  /// target — so removing the second of two slots on one note removes the
+  /// second, and the first keeps its place and its unknown keys. An
+  /// occurrence the file no longer holds (another writer removed it)
+  /// removes nothing.
+  static func removeShortcutSlot(
+    _ root: inout [String: Any], kind: String, path: String, occurrence: Int
+  ) {
+    guard var raw = root[shortcutsKey] as? [Any],
+      let index = rawShortcutIndex(
+        ofOccurrence: occurrence, kind: kind, path: path, in: raw)
+    else { return }
+    raw.remove(at: index)
+    root[shortcutsKey] = raw
+  }
+
   /// Move a VISIBLE (file|folder) shortcut one visible slot: the swap
   /// partner is the nearest decodable neighbor, skipping reserved
   /// entries, and the two RAW positions exchange. Edges clamp to no-ops.
+  /// #1332: `occurrence` picks WHICH of the target's slots moves.
   static func moveShortcut(
-    _ root: inout [String: Any], kind: String, path: String, delta: Int
+    _ root: inout [String: Any], kind: String, path: String,
+    occurrence: Int = 1, delta: Int
   ) {
     guard delta == 1 || delta == -1,
       var raw = root[shortcutsKey] as? [Any],
-      let index = raw.firstIndex(where: {
-        shortcutEntryMatches($0, kind: kind, path: path)
-      })
+      let index = rawShortcutIndex(
+        ofOccurrence: occurrence, kind: kind, path: path, in: raw)
     else { return }
     var partner = index + delta
     while partner >= 0, partner < raw.count {
@@ -1278,5 +1366,39 @@ enum SidebarOrganizationSchema {
     var pins = root[pinsKey] as? [String: Any] ?? [:]
     pins[folder] = paths.isEmpty ? nil : paths
     root[pinsKey] = pins.isEmpty ? nil : pins
+  }
+
+  /// #1332 (D6): an Add that stays inside the decode cap, for the locked
+  /// write. A target already in the file is a no-op (Add is membership,
+  /// as on Windows); otherwise the append happens only while the file —
+  /// another writer's slots included — holds fewer than
+  /// `maxDecodedShortcuts` slots, since a slot past the cap would never
+  /// show. Returns false when the cap refused it and nothing was written.
+  static func addShortcutWithinCap(
+    _ root: inout [String: Any], kind: String, path: String
+  ) -> Bool {
+    let raw = (root[shortcutsKey] as? [Any]) ?? []
+    if raw.contains(where: { shortcutEntryMatches($0, kind: kind, path: path) }) {
+      return true
+    }
+    guard shortcutSlotCount(root: root) < maxDecodedShortcuts else {
+      return false
+    }
+    addShortcut(&root, kind: kind, path: path)
+    return true
+  }
+}
+
+extension AppState.SidebarOrganizationState {
+  /// The published organization one authored root decodes to — every
+  /// shortcut slot in order up to the decode cap, the rest counted
+  /// (#1332). Every disk-truth publish builds its state here.
+  init(decoding root: [String: Any]) {
+    let decoded = SidebarOrganizationSchema.decode(root: root)
+    self.init(
+      prefs: decoded.prefs, pins: decoded.pins,
+      shortcuts: decoded.shortcuts,
+      shortcutRawEntryCount: decoded.shortcutRawCount,
+      shortcutOverflowCount: decoded.shortcutOverflowCount)
   }
 }

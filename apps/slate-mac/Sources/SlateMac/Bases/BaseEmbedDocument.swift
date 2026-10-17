@@ -144,12 +144,16 @@ struct BaseEmbedRequest: Equatable, Hashable {
         return nil
     }
 
+    /// The card's title, its visible header and its placeholder's label. A
+    /// `.base` file is a resolved embed, titled by core
+    /// (`resolvedEmbedTitle(resolved: .base(...))`, #1286) and followed by the
+    /// host's view locator when the embed names a view. The query-block cards
+    /// have no core kind yet and keep host words (#1388).
     var accessibilityLabel: String {
         let label: String
         switch source {
         case .file(let path, let viewName):
-            let name = ((path as NSString).lastPathComponent as NSString).deletingPathExtension
-            label = "Embedded base: \(name)" + viewSuffix(viewName)
+            label = resolvedEmbedTitle(resolved: .base(targetPath: path)) + viewSuffix(viewName)
         case .inlineBase:
             label = "Embedded base: inline base"
         case .savedQuery(let reference, let viewName):

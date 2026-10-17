@@ -28,7 +28,12 @@ final class A11yResidueCensusTests: XCTestCase {
     /// engine-level announcer vocabulary remains outstanding. W7-2 moves
     /// scan progress to three typed events, reducing 28 to 27. The shared
     /// structural-mutation site stays: it serves every authoring
-    /// surface, and both admission ladders merely left it.
+    /// surface, and both admission ladders merely left it. Plan 43 PR 8
+    /// (#1122) converts nothing here: the template picker-open and
+    /// created sites already post `.templatePickerOpened` and
+    /// `.templateNoteCreated` (W7-2, #1229), and `announceTemplate`'s one
+    /// site stays for the availability and admission reasons (the
+    /// a11y.rs double-duty carve-out).
     private static let pinnedResidueSites = 27
 
     private struct SwiftSource {

@@ -1040,6 +1040,65 @@ extension HistoryPanelTests {
             try session.readText(path: "taken.md"), "occupied\n", "nothing written")
     }
 
+    /// #1140 (#1123 follow-up; contract 30 TR-5): a version's Restore As…
+    /// whose write LANDS and then fails to index is a restore. It speaks
+    /// the restored sentence, then core's `CreatePublishedUnindexed` caveat,
+    /// opens the copy, and neither re-raises the prompt nor shows "Can't
+    /// restore" while the copy sits on disk (the pre-#1140 behaviour).
+    /// Driven by core's `SLATE_TEST_FAULT_AFTER_WRITE` seam
+    /// (`AfterWriteFault`).
+    func testAnUnindexedRestoreAsFinishesAsACreate() async throws {
+        let announcer = RecordingAnnouncer()
+        let (state, dir) = try await openVault(announcer: announcer) {
+            try self.write("v1 content\n", to: $0, name: "n.md")
+        }
+        guard let session = state.currentSession else {
+            return XCTFail("no session")
+        }
+        let r = try session.saveText(
+            path: "n.md", contents: "v1 content\n", expectedContentHash: nil)
+        _ = try session.saveText(
+            path: "n.md", contents: "v2 content\n",
+            expectedContentHash: r.newContentHash)
+        state.selectedFilePath = "n.md"
+        await state.noteLoadTask?.value
+        await state.historyLoadTask?.value
+        state.requestRestoreAs(
+            versionHash: r.newContentHash, formattedDate: "test date")
+        let prompt = try XCTUnwrap(state.historyRestoreAsPrompt)
+        let destination = "Restored-\(UUID().uuidString).md"
+        announcer.posts.removeAll()
+
+        await AfterWriteFault.during(destination) {
+            await state.commitRestoreAs(prompt, destination: destination)?.value
+        }
+        await state.noteLoadTask?.value
+
+        // The copy exists: the version's bytes, on disk and through core.
+        XCTAssertEqual(
+            try String(contentsOf: dir.appendingPathComponent(destination), encoding: .utf8),
+            "v1 content\n")
+        XCTAssertEqual(try session.readText(path: destination), "v1 content\n")
+        // The restored sentence, then the caveat: in that order, nothing else.
+        XCTAssertEqual(
+            announcer.posts.map(\.message),
+            [
+                "Restored version from test date as \(destination).",
+                AfterWriteFault.caveat(for: destination),
+            ])
+        XCTAssertEqual(announcer.posts.map(\.priority), [.high, .medium])
+        // The copy is open.
+        XCTAssertEqual(state.selectedFilePath, destination)
+        XCTAssertEqual(state.loadedFilePath, destination)
+        // No second create, and never presented as a failure.
+        XCTAssertEqual(
+            try FileManager.default.contentsOfDirectory(atPath: dir.path)
+                .filter { !$0.hasPrefix(".") }.sorted(),
+            [destination, "n.md"].sorted())
+        XCTAssertNil(state.historyRestoreAsPrompt, "the prompt is not re-raised")
+        XCTAssertNil(state.historyAlert, "a landed restore is not \"Can't restore\"")
+    }
+
     /// Adversarial review: a prompt staged in vault A and confirmed
     /// after switching to vault B must do NOTHING — a matching deleted
     /// path in B would otherwise recover B's unrelated remnant to the

@@ -480,6 +480,11 @@
     "text": "Save blocked. notes.md was modified externally. Your edits remain in the editor."
   },
   {
+    "event": "CreatePublishedUnindexed { name: \"notes.md\", reason: \"the index is locked.\" }",
+    "priority": "medium",
+    "text": "notes.md was written but not indexed: the index is locked. It will appear in listings after the next scan; do not recreate it."
+  },
+  {
     "event": "RestoredVersionFrom { formatted_date: \"July 19, 2026 at 9:41 AM\" }",
     "priority": "high",
     "text": "Restored version from July 19, 2026 at 9:41 AM."
