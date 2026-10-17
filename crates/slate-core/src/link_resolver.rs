@@ -270,34 +270,53 @@ pub fn resolve_link(
     source_path: &str,
     index: &dyn VaultIndex,
 ) -> ResolvedLink {
+    // One rule for every caller (#1279): the index is offered to the same
+    // incremental selector a streaming caller feeds row by row, so a
+    // resolution over a whole snapshot and one over streamed candidate rows
+    // cannot disagree.
+    let Ok(resolved) = resolve_link_through(target_raw, anchor, source_path, |mut selector| {
+        for path in index.all_paths() {
+            selector.offer(path);
+        }
+        Ok::<_, std::convert::Infallible>(selector.into_winner())
+    });
+    resolved
+}
+
+/// [`resolve_link`] with the candidate paths supplied by `choose` (#1295):
+/// the same trimming, the same empty and external short-circuits and the
+/// same [`LinkCandidateSelector`], so a caller that offers only the rows a
+/// target could match — a save reading them through the index's folded-name
+/// lookup — answers exactly as a resolution over the whole index. `choose`
+/// runs only for a target that can name an indexed path: it offers its
+/// candidates to the selector it is handed and returns the winner, and its
+/// error is the resolution's.
+pub(crate) fn resolve_link_through<E>(
+    target_raw: &str,
+    anchor: Option<LinkAnchor>,
+    source_path: &str,
+    choose: impl FnOnce(LinkCandidateSelector) -> Result<Option<String>, E>,
+) -> Result<ResolvedLink, E> {
     let trimmed = target_raw.trim();
     if trimmed.is_empty() {
         // Defensive: an empty target shouldn't have made it through
         // `links::extract_links`, but if a downstream caller hands us
         // one, treat as unresolved rather than panicking.
-        return ResolvedLink::Unresolved {
+        return Ok(ResolvedLink::Unresolved {
             target_raw: target_raw.to_string(),
             anchor,
-        };
+        });
     }
     if looks_external_for_resolver(trimmed) {
-        return ResolvedLink::External;
+        return Ok(ResolvedLink::External);
     }
-
-    // One rule for every caller (#1279): the index is offered to the same
-    // incremental selector a streaming caller feeds row by row, so a
-    // resolution over a whole snapshot and one over streamed candidate rows
-    // cannot disagree.
-    let Some(mut selector) = LinkCandidateSelector::new(target_raw, source_path) else {
-        return ResolvedLink::Unresolved {
+    let Some(selector) = LinkCandidateSelector::new(target_raw, source_path) else {
+        return Ok(ResolvedLink::Unresolved {
             target_raw: target_raw.to_string(),
             anchor,
-        };
+        });
     };
-    for path in index.all_paths() {
-        selector.offer(path);
-    }
-    match selector.into_winner() {
+    Ok(match choose(selector)? {
         Some(target_path) => ResolvedLink::Resolved {
             target_path,
             anchor,
@@ -306,7 +325,7 @@ pub fn resolve_link(
             target_raw: target_raw.to_string(),
             anchor,
         },
-    }
+    })
 }
 
 /// [`resolve_link`]'s choice among candidate paths, made one path at a time
