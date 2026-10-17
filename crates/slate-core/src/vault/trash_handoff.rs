@@ -274,7 +274,9 @@ fn final_path(file: &std::fs::File) -> std::io::Result<PathBuf> {
 
 #[cfg(target_os = "macos")]
 mod macos {
-    use std::path::Path;
+    use std::path::{Path, PathBuf};
+    use std::time::{Duration, Instant};
+    use std::{fs, io};
 
     use objc2_foundation::{NSFileManager, NSURL};
 
@@ -287,8 +289,10 @@ mod macos {
     /// minutes, #1448), still writes the volume's Put Back records from a
     /// long-lived process (#1430 P15), and references a symbolic link itself,
     /// never its target. A volume that cannot mint a reference URL keeps the
-    /// path URL, which is still the pinned parent's.
+    /// path URL, which is still the pinned parent's. Calls are serialized
+    /// across Slate's processes ([`SerializedTrash`]).
     pub(super) fn trash_item(path: &Path) -> Result<(), VaultError> {
+        let _serialized = SerializedTrash::acquire();
         objc2::rc::autoreleasepool(|_| {
             let url = NSURL::from_file_path(path).ok_or_else(|| VaultError::Trash {
                 message: "The item's location cannot be expressed as a file URL".into(),
@@ -300,6 +304,89 @@ mod macos {
                     message: error.to_string(),
                 })
         })
+    }
+
+    /// One Trash call at a time across every Slate process of this user.
+    ///
+    /// `NSFileManager` picks the item's name in the Trash and then moves it
+    /// without excluding another process doing the same. Measured on a
+    /// scratch APFS volume: 24 processes trashing same-named items at one
+    /// instant all reported success, yet only 11 and 12 of the 24 items
+    /// remained in the Trash; the rest were overwritten there and lost. On the
+    /// boot volume, concurrent calls from the mac suite's parallel workers
+    /// failed instead ("couldn't be moved to the trash because you don't have
+    /// permission to access it"). Threads of one process did not race (24 of
+    /// 24 landed), Finder serializes its own deletes (12 concurrent Finder
+    /// deletes all landed), and under this lock 24 of 24 landed.
+    ///
+    /// The lock is an exclusive `flock` on a file in the per-user temporary
+    /// directory from `confstr`, not `$TMPDIR`, so every process of the user
+    /// agrees on it. It cannot exclude another application's concurrent Trash
+    /// call. It never blocks a Trash for long: if the lock cannot be opened,
+    /// or another holder keeps it past the wait below, the call goes ahead
+    /// unserialized, which is how every call behaved before the lock.
+    pub(super) struct SerializedTrash {
+        /// Held (and so locked) until the guard drops after the call.
+        _lock: Option<fs::File>,
+    }
+
+    const WAIT: Duration = Duration::from_secs(10);
+
+    impl SerializedTrash {
+        pub(super) fn acquire() -> Self {
+            Self {
+                _lock: Self::lock().ok(),
+            }
+        }
+
+        fn lock() -> io::Result<fs::File> {
+            use std::os::unix::fs::OpenOptionsExt as _;
+
+            let file = fs::OpenOptions::new()
+                .create(true)
+                .truncate(false)
+                .read(true)
+                .write(true)
+                .mode(0o600)
+                .custom_flags(libc::O_NOFOLLOW | libc::O_CLOEXEC)
+                .open(user_temp_dir()?.join("com.startingblind.slate.trash.lock"))?;
+            let deadline = Instant::now() + WAIT;
+            loop {
+                match file.try_lock() {
+                    Ok(()) => return Ok(file),
+                    Err(fs::TryLockError::WouldBlock) if Instant::now() < deadline => {
+                        std::thread::sleep(Duration::from_millis(5));
+                    }
+                    Err(fs::TryLockError::WouldBlock) => {
+                        return Err(io::Error::from(io::ErrorKind::TimedOut));
+                    }
+                    Err(fs::TryLockError::Error(error)) => return Err(error),
+                }
+            }
+        }
+    }
+
+    /// `confstr(_CS_DARWIN_USER_TEMP_DIR)`: the user's own temporary
+    /// directory, the same for every process the user runs (`$TMPDIR` can
+    /// differ per process).
+    fn user_temp_dir() -> io::Result<PathBuf> {
+        use std::os::unix::ffi::OsStringExt as _;
+
+        let mut buffer = vec![0u8; libc::PATH_MAX as usize];
+        // SAFETY: the buffer is writable for its whole length; confstr writes
+        // at most that many bytes, NUL included, and returns the length needed.
+        let needed = unsafe {
+            libc::confstr(
+                libc::_CS_DARWIN_USER_TEMP_DIR,
+                buffer.as_mut_ptr().cast(),
+                buffer.len(),
+            )
+        };
+        if needed == 0 || needed > buffer.len() {
+            return Err(io::Error::other("no per-user temporary directory"));
+        }
+        buffer.truncate(needed - 1);
+        Ok(PathBuf::from(std::ffi::OsString::from_vec(buffer)))
     }
 }
 

@@ -92,9 +92,9 @@ trash = { workspace = true }
 # file reference URL, instead of trash-rs's default Finder script (osascript,
 # Automation grant, AppleScript's two-minute stall, #1448). trash-rs already
 # resolved these exact crates for its own macOS back end (objc2 0.6.4,
-# objc2-foundation 0.3.2 with these features), so pinning them direct adds no
-# crate to the lock and compiles no new code. MIT — compatible inbound for
-# AGPL-3.0-or-later.
+# objc2-foundation 0.3.2 with these features), so naming them directly adds
+# no crate to the lock and no feature to their build. MIT — compatible
+# inbound for AGPL-3.0-or-later.
 [target.'cfg(target_os = "macos")'.dependencies]
 objc2 = "0.6.2"
 objc2-foundation = { version = "0.3.2", default-features = false, features = [

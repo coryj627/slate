@@ -451,3 +451,105 @@ fn real_trash_on_a_scratch_volume_lands_in_its_trashes_with_put_back_records() {
         std::thread::sleep(std::time::Duration::from_millis(500));
     }
 }
+
+/// The child half of `real_trash_from_many_processes_at_once_loses_nothing`:
+/// at the instant in `SLATE_TRASH_RACE_START` (Unix milliseconds) it trashes
+/// `Ghost.md` from the vault in `SLATE_TRASH_RACE_VAULT`. Without those it
+/// does nothing.
+#[cfg(target_os = "macos")]
+#[test]
+fn real_trash_race_child() {
+    let Some(vault) = std::env::var_os("SLATE_TRASH_RACE_VAULT") else {
+        return;
+    };
+    let start: u128 = std::env::var("SLATE_TRASH_RACE_START")
+        .unwrap()
+        .parse()
+        .unwrap();
+    let provider = FsVaultProvider::new(vault.into());
+    while std::time::SystemTime::now()
+        .duration_since(std::time::UNIX_EPOCH)
+        .unwrap()
+        .as_millis()
+        < start
+    {
+        std::thread::sleep(std::time::Duration::from_micros(200));
+    }
+    provider.delete("Ghost.md").unwrap();
+}
+
+/// Many Slate processes trashing same-named items at one instant, on a
+/// scratch volume (made as for the fact above). `NSFileManager` alone lost
+/// about half of such items in the Trash; `SerializedTrash` must keep every
+/// one.
+#[cfg(target_os = "macos")]
+#[test]
+#[ignore = "needs a scratch volume in SLATE_TRASH_PROBE_VOLUME; never a real user's Trash"]
+fn real_trash_from_many_processes_at_once_loses_nothing() {
+    use std::os::unix::fs::MetadataExt as _;
+
+    const PROCESSES: usize = 16;
+    let volume = std::fs::canonicalize(
+        std::env::var_os("SLATE_TRASH_PROBE_VOLUME")
+            .expect("set SLATE_TRASH_PROBE_VOLUME to a scratch volume's mount point"),
+    )
+    .unwrap();
+    // SAFETY: getuid has no preconditions.
+    let trashes = volume
+        .join(".Trashes")
+        .join(unsafe { libc::getuid() }.to_string());
+    let identity = |path: &Path| {
+        let metadata = path.symlink_metadata().unwrap();
+        (metadata.dev(), metadata.ino())
+    };
+    let vaults: Vec<_> = (0..PROCESSES)
+        .map(|index| {
+            let vault = volume.join(format!("race-{}-{index}", std::process::id()));
+            std::fs::create_dir_all(&vault).unwrap();
+            std::fs::write(vault.join("Ghost.md"), format!("ghost {index}")).unwrap();
+            vault
+        })
+        .collect();
+    let identities: Vec<_> = vaults
+        .iter()
+        .map(|vault| identity(&vault.join("Ghost.md")))
+        .collect();
+    let start = std::time::SystemTime::now()
+        .duration_since(std::time::UNIX_EPOCH)
+        .unwrap()
+        .as_millis()
+        + 2_000;
+    let children: Vec<_> = vaults
+        .iter()
+        .map(|vault| {
+            std::process::Command::new(std::env::current_exe().unwrap())
+                .args([
+                    "vault::trash_handoff::tests::real_trash_race_child",
+                    "--exact",
+                    "--nocapture",
+                ])
+                .env("SLATE_TRASH_RACE_VAULT", vault)
+                .env("SLATE_TRASH_RACE_START", start.to_string())
+                .spawn()
+                .unwrap()
+        })
+        .collect();
+    for mut child in children {
+        assert!(child.wait().unwrap().success(), "a child's Trash failed");
+    }
+    for vault in &vaults {
+        assert!(!vault.join("Ghost.md").exists(), "{vault:?} kept its item");
+    }
+    let in_trash: std::collections::HashSet<_> = std::fs::read_dir(&trashes)
+        .unwrap()
+        .map(|entry| identity(&entry.unwrap().path()))
+        .collect();
+    let lost = identities
+        .iter()
+        .filter(|wanted| !in_trash.contains(wanted))
+        .count();
+    assert_eq!(
+        lost, 0,
+        "{lost} of {PROCESSES} trashed items are no longer in the Trash"
+    );
+}
