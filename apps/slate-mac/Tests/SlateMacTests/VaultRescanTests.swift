@@ -689,6 +689,96 @@ final class VaultRescanTests: XCTestCase {
             "a run closed while it held its sentence says nothing")
     }
 
+    /// The modal mark is the run's (Codoki on #1447): a request the
+    /// coalescer refuses or skips with a sheet up starts and joins nothing,
+    /// so it marks nothing, and the next run's sentence never waits out a
+    /// settle no sheet asked for.
+    func testARefusedOrSkippedRequestWithASheetUpDoesNotDelayTheNextSentence() async throws {
+        let h = try await open(["alpha.md": "# Alpha\n"])
+        // Long enough that a leaked wait cannot pass for the run's own time.
+        h.state.rescanRun.sentenceSettle = 5
+        let first = try XCTUnwrap(h.state.requestRescan(.explicit))
+        await first.value
+        XCTAssertEqual(h.spoken.lines, ["Files refreshed. No changes."])
+        h.spoken.lines.removeAll()
+
+        h.state.isCommandPaletteOpen = true
+        XCTAssertNil(h.state.requestRescan(.foreground), "skipped: inside the cooldown, from idle")
+        let provider = NSItemProvider()
+        provider.registerDataRepresentation(
+            forTypeIdentifier: FileTreeSidebar.fileURLUTType, visibility: .all
+        ) { _ in nil }
+        let importBatch = try XCTUnwrap(
+            h.state.beginImportBatch(providers: [provider], destinationFolder: ""))
+        XCTAssertNil(h.state.requestRescan(.explicit), "refused: an import runs")
+        h.state.cancelImportBatch(importBatch)
+        h.state.isCommandPaletteOpen = false
+        XCTAssertFalse(
+            h.state.rescanRun.sentenceFollowsModal,
+            "a request that neither started nor joined a run marked one")
+
+        try h.write("late.md", "# Late\n")
+        let started = ProcessInfo.processInfo.systemUptime
+        let run = try XCTUnwrap(h.state.requestRescan(.explicit))
+        await run.value
+        XCTAssertLessThan(
+            ProcessInfo.processInfo.systemUptime - started, 2.5,
+            "the sentence waited out a settle no sheet asked for")
+        XCTAssertEqual(
+            h.spoken.lines.filter { $0.hasPrefix("Files refreshed") },
+            ["Files refreshed. 1 new or changed, 0 removed."])
+    }
+
+    /// A run that started with a sheet up and ended silent takes its mark
+    /// with it (Codoki on #1447): the next run's sentence does not wait for a
+    /// sheet that is gone.
+    func testASilentRunStartedWithASheetUpDoesNotLeakIntoTheNextRun() async throws {
+        let h = try await open(["alpha.md": "# Alpha\n"])
+        h.state.rescanRun.sentenceSettle = 5
+        h.state.isCommandPaletteOpen = true
+        let silent = try XCTUnwrap(h.state.requestRescan(.foreground))
+        await silent.value
+        h.state.isCommandPaletteOpen = false
+        XCTAssertEqual(h.spoken.lines, [], "nothing changed: the foreground run is silent")
+        XCTAssertFalse(
+            h.state.rescanRun.sentenceFollowsModal, "the run ended and kept its mark")
+
+        try h.write("late.md", "# Late\n")
+        let started = ProcessInfo.processInfo.systemUptime
+        let run = try XCTUnwrap(h.state.requestRescan(.explicit))
+        await run.value
+        XCTAssertLessThan(
+            ProcessInfo.processInfo.systemUptime - started, 2.5,
+            "the sentence waited out a settle no sheet asked for")
+        XCTAssertEqual(h.spoken.lines, ["Files refreshed. 1 new or changed, 0 removed."])
+    }
+
+    /// The mark is the run's, not one pass's: a Refresh that joins a running
+    /// rescan from the palette holds the follow-up's sentence for the palette
+    /// even when the pass it joined ends silent.
+    func testARefreshJoinedFromThePaletteHoldsTheFollowUpsSentence() async throws {
+        let h = try await open(["alpha.md": "# Alpha\n"])
+        h.state.rescanRun.sentenceSettle = 0.2
+        let gate = Gate()
+        h.state.rescanRun.afterScanHook = { await gate.park() }
+        let run = try XCTUnwrap(h.state.requestRescan(.foreground))
+        await gate.untilParked()
+        try h.write("late.md", "# Late\n")
+        h.state.isCommandPaletteOpen = true
+        _ = try h.state.dispatchSidebarAction(id: SlateCommandID.sidebarRefresh)
+        XCTAssertEqual(h.state.rescanRun.pendingReason, .explicit, "the Refresh joined")
+        await gate.release()
+        try await Task.sleep(nanoseconds: 400_000_000)
+        XCTAssertEqual(
+            h.spoken.lines, [],
+            "the joined pass was silent and the follow-up holds its sentence for the palette")
+        h.state.isCommandPaletteOpen = false
+        let closed = ProcessInfo.processInfo.systemUptime
+        await run.value
+        XCTAssertGreaterThanOrEqual(ProcessInfo.processInfo.systemUptime - closed, 0.15)
+        XCTAssertEqual(h.spoken.lines, ["Files refreshed. 1 new or changed, 0 removed."])
+    }
+
     /// Windows' `RefreshIsUnavailableDuringAnImportAndSaysWhy` and
     /// `RefreshIsUnavailableDuringATrashAndSaysWhy`: while an import or a
     /// Trash operation runs (or the open scan does) a rescan would be refused,

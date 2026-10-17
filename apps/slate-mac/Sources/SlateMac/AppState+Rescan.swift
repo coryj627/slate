@@ -84,9 +84,11 @@ struct ForegroundRescanRoute {
         resignedAt = now
     }
 
-    /// The app became active. Whether to request a foreground rescan.
+    /// The app became active. Whether to request a foreground rescan. The
+    /// modal check reads AppKit's windows, so it runs on the main actor.
+    @MainActor
     mutating func onBecomeActive(
-        at now: Date, modalSurfaceOpen: @autoclosure () -> Bool
+        at now: Date, modalSurfaceOpen: @autoclosure @MainActor () -> Bool
     ) -> Bool {
         let resigned = resignedAt
         resignedAt = nil
@@ -133,8 +135,10 @@ final class VaultRescanRun {
     /// When the app last became active (`ProcessInfo.systemUptime`):
     /// VoiceOver reads the returning window and focus then.
     fileprivate(set) var lastActivationUptime: TimeInterval?
-    /// A request arrived with a sheet up (the palette a Refresh was chosen
-    /// from): the run's sentence waits for the sheet to end.
+    /// The running rescan was started, or joined, with a sheet up (the
+    /// palette a Refresh was chosen from): its sentence waits for the sheet
+    /// to end. The run's own: set only by a request that starts or joins it,
+    /// cleared when its sentence posts and when it ends, spoken or not.
     fileprivate(set) var sentenceFollowsModal = false
     fileprivate var generation: UInt64 = 0
     /// Waits for the blockers of a pending follow-up to settle.
@@ -217,9 +221,11 @@ extension AppState {
     @discardableResult
     func requestRescan(_ reason: RescanReason) -> Task<Void, Never>? {
         guard let session = currentSession else { return nil }
-        if rescanModalSheetIsUp { rescanRun.sentenceFollowsModal = true }
         if rescanRun.isActive {
             rescanRun.pendingReason = RescanReason.joined(rescanRun.pendingReason, reason)
+            // Joined from a sheet: the run's sentence waits for it too. A
+            // request refused or skipped below joins nothing and marks nothing.
+            if rescanModalSheetIsUp { rescanRun.sentenceFollowsModal = true }
             return rescanRun.task
         }
         guard rescanBlockedReason == nil else { return nil }
@@ -260,6 +266,8 @@ extension AppState {
 
     /// The palette, Quick Open and the search overlay, or any sheet or
     /// app-modal window: a modal surface the foreground route waits behind.
+    /// Main-actor state, as `AppState` is: read synchronously in
+    /// `applicationDidBecomeActive`, through the route's main-actor check.
     var foregroundRescanModalSurfaceOpen: Bool {
         if isCommandPaletteOpen || isQuickSwitcherOpen || isSearchOpen { return true }
         guard let app = NSApp else { return false }
@@ -267,7 +275,10 @@ extension AppState {
     }
 
     /// A sheet or modal window up, or the palette or Quick Open open: what
-    /// the run's sentence waits to end.
+    /// the run's sentence waits to end. Main-actor state, as `AppState` is:
+    /// its readers (`requestRescan`, `startRescanRun` and the sentence's poll,
+    /// which resumes on the main actor after each sleep) are all isolated
+    /// members, and no detached or worker path reads it.
     private var rescanModalSheetIsUp: Bool {
         if isCommandPaletteOpen || isQuickSwitcherOpen { return true }
         guard let app = NSApp else { return false }
@@ -296,6 +307,9 @@ extension AppState {
     private func startRescanRun(_ reason: RescanReason, session: VaultSession) -> Task<Void, Never> {
         rescanRun.isActive = true
         rescanRun.deferredFollowUp = nil
+        // The run's modal mark starts from the sheet up now (the palette a
+        // Refresh was chosen from), never from an earlier request's.
+        rescanRun.sentenceFollowsModal = rescanModalSheetIsUp
         rescanRun.generation &+= 1
         let generation = rescanRun.generation
         let task = Task { [weak self] in
@@ -330,6 +344,9 @@ extension AppState {
         }
         guard rescanRun.generation == generation else { return }
         rescanRun.isActive = false
+        // Spoken or silent, the run's mark ends with it. A follow-up still
+        // pending for its blockers starts a run of its own, marked afresh.
+        rescanRun.sentenceFollowsModal = false
         rescanRun.lastScanEndedAt = scanClock()
     }
 
