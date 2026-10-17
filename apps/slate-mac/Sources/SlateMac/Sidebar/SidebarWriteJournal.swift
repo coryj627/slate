@@ -52,9 +52,11 @@ final class SidebarWriteJournal {
 
   nonisolated static let formatName = "slate-sidebar-write-journal"
   nonisolated static let formatVersion = 1
-  /// Bounded read at open: a legitimate journal holds a few entries.
-  nonisolated static let maxReadBytes = 4 * 1_024 * 1_024
-  /// A file grown past this with settled lines is rewritten live-only.
+  /// Bounded read at open. A journal usually holds a few entries; a
+  /// pending batch Move of thousands of items is one large line, so the
+  /// bound leaves room for several.
+  nonisolated static let maxReadBytes = 32 * 1_024 * 1_024
+  /// Once settled lines outweigh this, the file is rewritten live-only.
   nonisolated static let compactionThresholdBytes = 256 * 1_024
 
   /// One live entry.
@@ -128,9 +130,17 @@ final class SidebarWriteJournal {
     var awaitingAdoption: Set<UUID> = []
     var notices: [Notice] = []
     var header = Data()
+    /// Everything appended to the file since it was last (re)written.
     var approximateBytes = 0
+    /// What each live entry's lines weigh: the rest of the file is
+    /// settled or superseded, and compaction reclaims it.
+    var entryBytes: [UUID: Int] = [:]
     /// A newer-format file this build must not touch.
     var isReadOnly = false
+
+    var deadBytes: Int {
+      approximateBytes - header.count - entryBytes.values.reduce(0, +)
+    }
   }
 
   let directory: URL
@@ -288,13 +298,15 @@ final class SidebarWriteJournal {
     if unreadable > 0 { log.notices.append(.unreadable) }
     log.awaitingAdoption = Set(log.entries.keys)
     let live = Self.liveLines(log)
-    log.approximateBytes = live.count
+    log.approximateBytes = live.data.count
+    log.entryBytes = live.entryBytes
     if log.entries.isEmpty {
       io.enqueue { _ in SidebarWriteJournalIO.remove(url) }
-    } else if unreadable > 0 || live.count != data.count {
+    } else if unreadable > 0 || live.data.count != data.count {
       // Drop the damage and the settled lines before the next append, so a
       // torn tail never fuses with the line written after it.
-      io.enqueue { _ in SidebarWriteJournalIO.rewrite(live, at: url) }
+      let rewritten = live.data
+      io.enqueue { _ in SidebarWriteJournalIO.rewrite(rewritten, at: url) }
     }
     if let relocatedFrom {
       // Only once the new key's file is durable does the old one go.
@@ -370,7 +382,10 @@ final class SidebarWriteJournal {
     entry.content = .structural(committed, committed: true)
     entry.position = takePosition()
     log.entries[id] = entry
-    write(.put(entry), to: &log, identity: identity, sync: false)
+    // The committed put supersedes the pending one.
+    let weight = write(.put(entry), to: &log, identity: identity, sync: false)
+    log.entryBytes[id] = weight
+    compactIfWasteful(&log, identity: identity)
     logs[identity] = log
   }
 
@@ -380,7 +395,9 @@ final class SidebarWriteJournal {
     guard var log = logs[identity], log.entries[id] != nil, !log.isReadOnly
     else { return }
     log.entries[id]?.refusal = reason
-    write(.refuse(id: id, reason: reason), to: &log, identity: identity, sync: false)
+    let weight = write(
+      .refuse(id: id, reason: reason), to: &log, identity: identity, sync: false)
+    log.entryBytes[id, default: 0] += weight
     logs[identity] = log
   }
 
@@ -392,6 +409,7 @@ final class SidebarWriteJournal {
     guard !live.isEmpty else { return }
     for id in live {
       log.entries[id] = nil
+      log.entryBytes[id] = nil
       log.awaitingAdoption.remove(id)
     }
     let url = fileURL(for: identity)
@@ -399,14 +417,10 @@ final class SidebarWriteJournal {
       log.approximateBytes = 0
       io.enqueue { _ in SidebarWriteJournalIO.remove(url) }
     } else {
-      write(
+      _ = write(
         .settle(ids: live.sorted { $0.uuidString < $1.uuidString }),
         to: &log, identity: identity, sync: false)
-      if log.approximateBytes > Self.compactionThresholdBytes {
-        let compacted = Self.liveLines(log)
-        log.approximateBytes = compacted.count
-        io.enqueue { _ in SidebarWriteJournalIO.rewrite(compacted, at: url) }
-      }
+      compactIfWasteful(&log, identity: identity)
     }
     logs[identity] = log
   }
@@ -423,10 +437,6 @@ final class SidebarWriteJournal {
 
   func liveEntryCount(for identity: Identity) -> Int {
     logs[identity]?.entries.count ?? 0
-  }
-
-  func entry(_ id: UUID, for identity: Identity) -> Entry? {
-    logs[identity]?.entries[id]
   }
 
   /// True when a drain has something to adopt or to say.
@@ -518,6 +528,7 @@ final class SidebarWriteJournal {
     else { return nil }
     log.entries[entry.id] = entry
     log.approximateBytes += line.count
+    log.entryBytes[entry.id] = line.count
     let header = log.header
     logs[identity] = log
     let url = fileURL(for: identity)
@@ -527,25 +538,47 @@ final class SidebarWriteJournal {
     return Append(id: entry.id, position: entry.position, durable: durable)
   }
 
-  private func write(_ line: Line, to log: inout VaultLog, identity: Identity, sync: Bool) {
-    guard let bytes = Self.encode(line) else { return }
+  /// Queue one line; returns what it weighs.
+  @discardableResult
+  private func write(
+    _ line: Line, to log: inout VaultLog, identity: Identity, sync: Bool
+  ) -> Int {
+    guard let bytes = Self.encode(line) else { return 0 }
     log.approximateBytes += bytes.count
     let header = log.header
     let url = fileURL(for: identity)
     io.enqueue { io in
       _ = io.appendLine(bytes, to: url, header: header, sync: sync)
     }
+    return bytes.count
   }
 
-  private static func liveLines(_ log: VaultLog) -> Data {
+  /// The file as only its live entries: the header, then each entry's put
+  /// (and refusal) in replay order — and what each entry's lines weigh.
+  private static func liveLines(_ log: VaultLog) -> (data: Data, entryBytes: [UUID: Int]) {
     var data = log.header
+    var entryBytes: [UUID: Int] = [:]
     for entry in log.entries.values.sorted(by: { $0.position < $1.position }) {
+      let before = data.count
       if let line = encode(.put(entry)) { data.append(line) }
       if let reason = entry.refusal, let line = encode(.refuse(id: entry.id, reason: reason)) {
         data.append(line)
       }
+      entryBytes[entry.id] = data.count - before
     }
-    return data
+    return (data, entryBytes)
+  }
+
+  /// Rewrite the file live-only once settled lines outweigh the threshold —
+  /// a large live entry (a big pending batch) never forces a rewrite alone.
+  private func compactIfWasteful(_ log: inout VaultLog, identity: Identity) {
+    guard log.deadBytes > Self.compactionThresholdBytes else { return }
+    let live = Self.liveLines(log)
+    log.approximateBytes = live.data.count
+    log.entryBytes = live.entryBytes
+    let url = fileURL(for: identity)
+    let data = live.data
+    io.enqueue { _ in SidebarWriteJournalIO.rewrite(data, at: url) }
   }
 
   /// What identifies the root beyond its device and inode: its birth time

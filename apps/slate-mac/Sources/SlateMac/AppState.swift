@@ -5532,7 +5532,7 @@ final class AppState: ObservableObject {
     // `SidebarOrganizationConflictError` (a final, user-facing refusal) now
     // lives beside the typed intents in `SidebarOrganization.swift`.
 
-    static let sidebarPinCapacityReason =
+    nonisolated static let sidebarPinCapacityReason =
         "Pinned-note limit reached (\(SidebarOrganizationSchema.maxPinsPerFolder) "
         + "per folder, \(SidebarOrganizationSchema.maxTotalPins) per vault). "
         + "Unpin something to pin more."

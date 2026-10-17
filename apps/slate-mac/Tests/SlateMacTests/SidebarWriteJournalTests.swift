@@ -593,6 +593,43 @@ final class SidebarWriteJournalTests: XCTestCase {
     XCTAssertEqual(try Data(contentsOf: journal.fileURL(for: identity)), newerFile)
   }
 
+  func testSettledLinesAreReclaimedAndOnlyLiveEntriesStay() async throws {
+    let vaultRoot = root.appendingPathComponent("compaction", isDirectory: true)
+    try FileManager.default.createDirectory(at: vaultRoot, withIntermediateDirectories: true)
+    let identity = AppState.SidebarVaultRootIdentity(device: 11, inode: 1_234)
+    let padding = String(repeating: "p", count: 1_000)
+    var ids: [UUID] = []
+    for index in 0..<300 {
+      let append = try XCTUnwrap(
+        journal.appendIntent(
+          .pin(path: "n\(index).md", folder: ""), acknowledgement: padding,
+          for: identity, vaultRoot: vaultRoot))
+      ids.append(append.id)
+    }
+    await journal.waitUntilIdle()
+    let url = journal.fileURL(for: identity)
+    let grown = try XCTUnwrap(
+      try FileManager.default.attributesOfItem(atPath: url.path)[.size] as? Int)
+    XCTAssertGreaterThan(grown, SidebarWriteJournal.compactionThresholdBytes)
+
+    // Settling all but the last makes the file mostly dead lines: it is
+    // rewritten with the header and the one live entry.
+    journal.settle(ids.dropLast(), for: identity)
+    await journal.waitUntilIdle()
+    let compacted = try XCTUnwrap(
+      try FileManager.default.attributesOfItem(atPath: url.path)[.size] as? Int)
+    XCTAssertLessThan(compacted, 4 * 1_024, "settled lines are reclaimed")
+    let onDisk = try XCTUnwrap(SidebarWriteJournal.entriesOnDiskForTesting(at: url))
+    XCTAssertEqual(Array(onDisk.entries.keys), [ids[ids.count - 1]])
+    XCTAssertEqual(onDisk.unreadableLines, 0)
+    XCTAssertEqual(journal.liveEntryCount(for: identity), 1)
+
+    journal.settle([ids[ids.count - 1]], for: identity)
+    await journal.waitUntilIdle()
+    XCTAssertFalse(
+      FileManager.default.fileExists(atPath: url.path), "an all-settled journal is removed")
+  }
+
   func testARenameThatCommitsAfterItsVaultClosedReplaysOnTheNextLaunch() async throws {
     let vault = try makeVault(
       named: "late-rename", files: ["Projects/note.md"], folders: ["Projects"])
