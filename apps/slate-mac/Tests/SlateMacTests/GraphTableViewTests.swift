@@ -2,6 +2,7 @@
 // SPDX-License-Identifier: AGPL-3.0-or-later
 
 import AppKit
+import Combine
 import SwiftUI
 import XCTest
 
@@ -155,13 +156,41 @@ final class GraphTableViewTests: XCTestCase {
             rows: labels.enumerated().map { row(UInt64($0.offset + 1), $0.element, path: "\($0.element).md") })
     }
 
+    private func snapshot(generation: UInt64 = 0) -> GraphSnapshot {
+        GraphSnapshot(
+            nodes: [], edges: [], generation: generation, audioSummary: "",
+            summaryCounts: GraphSnapshotCounts(notes: 0, links: 0, orphans: 0, unresolved: 0, filtered: false))
+    }
+
+    /// The authority a rows result needs (D1, contract 35 TGC-19; A-2's
+    /// rows-only arm): a HELD pair publication under the live backend filter
+    /// at `generation`, installed the only way one installs — a token issued
+    /// and answered as a PAIR. The token facts below seed one before they
+    /// drive rows; they used to drive the receiver on a bare state with no
+    /// snapshot and require it to publish (#1190).
+    @MainActor
+    @discardableResult
+    private func seedHeldPair(
+        _ state: AppState, rows labels: [String] = [], generation: UInt64 = 0
+    ) -> GraphTablePublication {
+        let pair = state.issueGraphTableToken(sort: state.graphTableSort)
+        XCTAssertTrue(
+            state.receiveGraphTablePair(
+                token: pair, snapshot: snapshot(generation: generation),
+                rows: rows(labels, generation: generation)),
+            "the seed pair publishes")
+        XCTAssertNotNil(state.graphTableSnapshot, "an authority is held")
+        return state.graphTablePublication
+    }
+
     /// A sort request records the REQUESTED sort and leaves the accepted
     /// one alone until rows arrive; the rows and the accepted sort then
-    /// publish together, rows first.
+    /// publish together, in one record over the held pair publication (D1).
     @MainActor
     func testSortRequestPublishesRowsAndAcceptedSortTogether() {
         let state = AppState()
         XCTAssertEqual(state.graphTableSort, GraphTableSort(column: .linksIn, ascending: false))
+        seedHeldPair(state)
         let token = state.issueGraphTableToken(sort: GraphTableSort(column: .note, ascending: true))
         XCTAssertEqual(state.graphTableRequestedSort, GraphTableSort(column: .note, ascending: true))
         XCTAssertEqual(state.graphTableSort.column, .linksIn, "not accepted before the rows exist")
@@ -169,6 +198,7 @@ final class GraphTableViewTests: XCTestCase {
         XCTAssertEqual(state.graphTableRows.map(\.label), ["Alpha", "Beta"])
         XCTAssertEqual(state.graphTableSort, GraphTableSort(column: .note, ascending: true), "accepted with the rows")
         XCTAssertNil(state.graphTableRequestedSort, "the request is discharged")
+        XCTAssertEqual(state.graphTablePublishedRequest, token.request, "the rows answer the sort's request")
     }
 
     /// A result whose token was superseded is dropped whole: neither its
@@ -176,12 +206,15 @@ final class GraphTableViewTests: XCTestCase {
     @MainActor
     func testSupersededTokenIsDroppedWhole() {
         let state = AppState()
+        seedHeldPair(state)
         let first = state.issueGraphTableToken(sort: GraphTableSort(column: .note, ascending: true))
         let second = state.issueGraphTableToken(sort: GraphTableSort(column: .folder, ascending: false))
         XCTAssertTrue(state.receiveGraphTableRows(token: second, result: rows(["Second"])))
+        let published = state.graphTablePublication
         XCTAssertFalse(state.receiveGraphTableRows(token: first, result: rows(["First"])), "the late first result never lands")
         XCTAssertEqual(state.graphTableRows.map(\.label), ["Second"])
         XCTAssertEqual(state.graphTableSort, GraphTableSort(column: .folder, ascending: false))
+        XCTAssertEqual(state.graphTablePublication, published, "the dropped result changed nothing")
     }
 
     /// Two same-generation answers under DIFFERENT needles: the token
@@ -190,6 +223,7 @@ final class GraphTableViewTests: XCTestCase {
     @MainActor
     func testReorderedSameGenerationAnswersUnderDifferentNeedlesAreDropped() {
         let state = AppState()
+        seedHeldPair(state)
         state.graphTableTextFilter = "al"
         let older = state.issueGraphTableToken(sort: state.graphTableSort)
         state.graphTableTextFilter = "alp"
@@ -200,44 +234,52 @@ final class GraphTableViewTests: XCTestCase {
         XCTAssertEqual(state.graphTableRows.map(\.label), ["Alpine"])
     }
 
-    /// A failed query rolls the requested sort back to the accepted one.
+    /// A failed query rolls the requested sort back to the accepted one, and
+    /// the held publication stands WHOLE (A-2's rows-only failure arm): only
+    /// the lineage's terminal mark moves.
     @MainActor
     func testFailedQueryRollsBackTheRequest() {
         let state = AppState()
+        let held = seedHeldPair(state, rows: ["Held"])
         let token = state.issueGraphTableToken(sort: GraphTableSort(column: .kind, ascending: true))
         state.failGraphTableRows(token: token)
         XCTAssertNil(state.graphTableRequestedSort)
         XCTAssertEqual(state.graphTableSort, GraphTableSort(column: .linksIn, ascending: false), "the accepted sort stands")
+        XCTAssertEqual(state.graphTableSnapshot, held.snapshot, "the authority stands")
+        XCTAssertEqual(state.graphTableRows.map(\.label), ["Held"], "the held rows stand")
+        XCTAssertEqual(state.graphTablePublishedRequest, held.request, "and the request they answer")
+        XCTAssertEqual(state.graphTableAnsweredSeq, token.seq, "the failure answered the token")
     }
 
     /// Filter-B rows never land on a held filter-A snapshot (design A):
     /// the snapshot's identity is the filter it was fetched under AND its
-    /// generation.
+    /// generation. The held publication stands whole — the receiver's pair
+    /// under the rows' own request has no session to run on here.
     @MainActor
     func testRowsUnderAnotherFilterThanTheHeldSnapshotAreDropped() {
         let state = AppState()
-        state.graphTableSnapshot = GraphSnapshot(
-            nodes: [], edges: [], generation: 0, audioSummary: "",
-            summaryCounts: GraphSnapshotCounts(notes: 0, links: 0, orphans: 0, unresolved: 0, filtered: false))
-        state.graphTableSnapshotFilter = GraphFilter(includeAttachments: false, includeGhosts: true, orphansOnly: false)
+        let filterA = GraphFilter(includeAttachments: false, includeGhosts: true, orphansOnly: false)
+        XCTAssertEqual(state.graphTableFilter, filterA)
+        let held = seedHeldPair(state, rows: ["A"])
+        XCTAssertEqual(state.graphTableSnapshotFilter, filterA, "the authority is filter A's")
         state.graphTableFilter = GraphFilter(includeAttachments: true, includeGhosts: true, orphansOnly: false)
         let token = state.issueGraphTableToken(sort: state.graphTableSort)
         XCTAssertFalse(state.receiveGraphTableRows(token: token, result: rows(["B"])), "rows under filter B against a filter-A snapshot")
-        XCTAssertTrue(state.graphTableRows.isEmpty)
+        XCTAssertEqual(state.graphTableRows.map(\.label), ["A"], "the filter-B rows never landed")
+        XCTAssertEqual(state.graphTablePublication, held, "the held publication stands whole")
     }
 
     /// A result from a generation the held snapshot does not match is
-    /// discarded (0b-2b), never applied.
+    /// discarded (0b-2b), never applied: the held publication stands whole.
     @MainActor
     func testStaleGenerationResultIsDiscarded() {
         let state = AppState()
-        state.graphTableSnapshot = GraphSnapshot(
-            nodes: [], edges: [], generation: 5, audioSummary: "",
-            summaryCounts: GraphSnapshotCounts(notes: 0, links: 0, orphans: 0, unresolved: 0, filtered: false))
+        let held = seedHeldPair(state, rows: ["Held"], generation: 5)
         let token = state.issueGraphTableToken(sort: GraphTableSort(column: .note, ascending: true))
         XCTAssertFalse(state.receiveGraphTableRows(token: token, result: rows(["Stale"], generation: 4)))
-        XCTAssertTrue(state.graphTableRows.isEmpty, "a stale generation never lands")
+        XCTAssertEqual(state.graphTableRows.map(\.label), ["Held"], "a stale generation never lands")
         XCTAssertEqual(state.graphTableSort.column, .linksIn)
+        XCTAssertEqual(state.graphTablePublication, held, "the held publication stands whole")
     }
 
     /// A preset after a Folder sort: the preset's token carries the DEFAULT
@@ -246,6 +288,7 @@ final class GraphTableViewTests: XCTestCase {
     @MainActor
     func testPresetAfterFolderSortPublishesDefaultSortAndHeadlineTogether() {
         let state = AppState()
+        seedHeldPair(state)
         let folder = state.issueGraphTableToken(sort: GraphTableSort(column: .folder, ascending: true))
         XCTAssertTrue(state.receiveGraphTableRows(token: folder, result: rows(["a", "b"])))
         XCTAssertEqual(state.graphTableSort.column, .folder)
@@ -258,6 +301,69 @@ final class GraphTableViewTests: XCTestCase {
         XCTAssertEqual(
             state.graphPresetEvent(.mostLinked, rows: hubsFirst),
             .graphPreset(outcome: .mostLinked(label: "hub", inLinks: 9)))
+    }
+
+    /// D1 (contract 35 TGC-19; A-2's ONE record in ONE swap): a pair and a
+    /// rows result each install the table's publication in ONE assignment.
+    /// The record's publisher sees exactly one value per install — the whole
+    /// record, every field from the one token — and so never an
+    /// intermediate (a new snapshot over old rows, new rows under an old
+    /// request); a result that cannot publish assigns nothing.
+    @MainActor
+    func testThePublicationInstallsInOneAssignment() {
+        let state = AppState()
+        var installs: [GraphTablePublication] = []
+        let watch = state.$graphTablePublication.dropFirst().sink { installs.append($0) }
+        defer { watch.cancel() }
+
+        let pair = state.issueGraphTableToken(sort: state.graphTableSort)
+        let authority = snapshot(generation: 3)
+        XCTAssertTrue(
+            state.receiveGraphTablePair(
+                token: pair, snapshot: authority, rows: rows(["Alpha", "Beta"], generation: 3)))
+        XCTAssertEqual(installs.count, 1, "the pair installed in one assignment: \(installs)")
+        let first = installs.first
+        XCTAssertEqual(first, state.graphTablePublication, "the one value observed is the record that stands")
+        XCTAssertEqual(first?.snapshot, authority)
+        XCTAssertEqual(first?.filter, pair.request.query.filter)
+        XCTAssertEqual(first?.generation, 3)
+        XCTAssertEqual(first?.rows.map(\.label), ["Alpha", "Beta"])
+        XCTAssertEqual(first?.total, 2)
+        XCTAssertEqual(first?.sort, pair.request.sort)
+        XCTAssertEqual(first?.request, pair.request)
+        XCTAssertEqual(first?.answeredSeq, pair.seq)
+        XCTAssertEqual(state.graphTableSeenGraphGeneration, 3, "the seen mark moves with the install")
+
+        // A rows result over it: the held authority with the new rows, their
+        // accepted sort and their request — again ONE record.
+        let byNote = GraphTableSort(column: .note, ascending: true)
+        let token = state.issueGraphTableToken(sort: byNote)
+        XCTAssertTrue(state.receiveGraphTableRows(token: token, result: rows(["Beta"], generation: 3)))
+        XCTAssertEqual(installs.count, 2, "the rows installed in one assignment: \(installs)")
+        let second = installs.last
+        XCTAssertEqual(second, state.graphTablePublication)
+        XCTAssertEqual(second?.snapshot, authority, "the held authority")
+        XCTAssertEqual(second?.filter, first?.filter)
+        XCTAssertEqual(second?.generation, 3)
+        XCTAssertEqual(second?.rows.map(\.label), ["Beta"])
+        XCTAssertEqual(second?.total, 1)
+        XCTAssertEqual(second?.sort, byNote, "the accepted sort, with its rows")
+        XCTAssertEqual(second?.request, token.request)
+        XCTAssertEqual(second?.answeredSeq, token.seq)
+
+        // Results that cannot publish assign nothing at all.
+        let stale = state.issueGraphTableToken(sort: byNote)
+        let newer = state.issueGraphTableToken(sort: byNote)
+        XCTAssertFalse(
+            state.receiveGraphTablePair(
+                token: stale, snapshot: snapshot(generation: 4), rows: rows(["Gamma"], generation: 4)),
+            "a superseded pair")
+        XCTAssertFalse(state.receiveGraphTableRows(token: stale, result: rows(["Gamma"], generation: 3)), "superseded rows")
+        XCTAssertFalse(
+            state.receiveGraphTableRows(token: newer, result: rows(["Gamma"], generation: 4)),
+            "rows at another generation")
+        XCTAssertEqual(installs.count, 2, "a dropped result assigned the record: \(installs)")
+        XCTAssertEqual(state.graphTableSeenGraphGeneration, 3, "a dropped result moved the seen mark")
     }
 
     // MARK: - The mode line (#1220; contract 35 DD-18, Term M1)
@@ -346,6 +452,81 @@ final class GraphTableViewTests: XCTestCase {
 
     private static func modeLine(_ mode: GraphSurfaceMode) -> String {
         a11yRender(event: .graph(event: .graphMode(mode: mode))).text
+    }
+
+    // MARK: - The header sort (A-5; rule Q, Terms Q4 and Q5)
+
+    /// The graph table's header sort (Windows twin
+    /// AHeaderSortIssuesARowsOnlyTokenAndGridSortedSpeaksOnceOnAdoption): the
+    /// grid DELEGATES — a rows-only token, nothing reordered, nothing spoken
+    /// — and the install that adopts the sort speaks core's `GridSorted`
+    /// once, then the count, while the indicator follows the ACCEPTED sort.
+    /// The same sort again is a no-op; another sort asked for and then the
+    /// accepted one asked back is cancelled with no line. Since W6-2 PR 0b
+    /// the mac's columns carried no sort, so no header could sort the graph
+    /// table and `GridSorted` was never spoken.
+    @MainActor
+    func testAHeaderSortIssuesARowsOnlyTokenAndGridSortedSpeaksOnceOnAdoption() async throws {
+        let state = try await makeGraphState()
+        try await mountGraphTab(state)
+        try await waitFor("the first publication") {
+            state.graphTableSnapshot != nil && !state.graphTableLoading
+                && state.graphTablePublishedRequest == state.graphTableRequest
+        }
+        var posts: [String] = []
+        state.graphAnnouncer = GraphAnnouncer(post: { text, _ in posts.append(text) })
+        let content = try XCTUnwrap(hostWindow?.contentView, "the tab body is mounted")
+        let table = try XCTUnwrap(Self.firstSubview(of: NSTableView.self, in: content), "the grid is mounted")
+        let grid = try XCTUnwrap(table.delegate as? GridCoordinator<GraphTableRow>, "the grid's coordinator")
+        let note = GraphTableColumns.index(of: .note)
+        let header = GraphTableColumns.specs[note].header
+        let byNote = GraphTableSort(column: .note, ascending: true)
+        XCTAssertEqual(
+            table.tableColumns[note].headerCell.accessibilityLabel(),
+            "Column: \(header), sortable, current sort: none", "the header is sortable")
+
+        // The grid delegates: a rows-only token, nothing reordered, nothing spoken.
+        XCTAssertNil(grid.applySort(column: note, ascending: true))
+        XCTAssertEqual(state.graphTableRequestedSort, byNote, "the request reached the table")
+        XCTAssertFalse(state.graphTableLoading, "a rows-only token")
+        XCTAssertEqual(posts, [], "spoken before adoption")
+        try await waitFor("the sort's adoption") {
+            state.graphTableSort == byNote && state.graphTableAnsweredSeq == state.graphTableSeq
+        }
+        try await waitFor("the indicator to follow the accepted sort") {
+            table.sortDescriptors.first?.key == "\(note)" && table.sortDescriptors.first?.ascending == true
+        }
+        state.graphAnnouncer.flushForTests()
+        let sorted = a11yRender(event: .gridSorted(column: header, ascending: true)).text
+        let count = a11yRender(
+            event: .graph(
+                event: .graphFilterCount(
+                    shown: UInt32(state.graphTableRows.count), total: UInt32(state.graphTableTotal)))
+        ).text
+        XCTAssertEqual(posts, [sorted, count], "GridSorted once on adoption, then the count")
+        XCTAssertEqual(
+            table.tableColumns[note].headerCell.accessibilityLabel(),
+            "Column: \(header), sortable, current sort: asc")
+
+        // The same sort again: a no-op.
+        let seq = state.graphTableSeq
+        XCTAssertNil(grid.applySort(column: note, ascending: true))
+        XCTAssertEqual(state.graphTableSeq, seq, "the accepted sort asked again issued a token")
+
+        // Another sort, then the accepted one asked back while it is pending:
+        // cancelled at issue, with no line (Term Q5 (c)).
+        XCTAssertNil(grid.applySort(column: GraphTableColumns.index(of: .linksIn), ascending: true))
+        XCTAssertNil(grid.applySort(column: note, ascending: true))
+        XCTAssertNil(state.graphTableRequestedSort, "the pending sort was cancelled")
+        try await waitFor("the cancellation's answer") { state.graphTableAnsweredSeq == state.graphTableSeq }
+        var turns = 0
+        try await waitFor("the grid's reload") {
+            turns += 1
+            return turns > 5
+        }
+        state.graphAnnouncer.flushForTests()
+        XCTAssertEqual(state.graphTableSort, byNote)
+        XCTAssertEqual(posts, [sorted, count], "the reversal spoke: \(posts)")
     }
 
     /// #1220 (contract 35 DD-18; Term M1): a persisted Diagram mode is

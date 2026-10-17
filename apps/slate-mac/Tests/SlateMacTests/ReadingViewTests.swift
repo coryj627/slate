@@ -1749,4 +1749,351 @@ final class ReadingViewTests: XCTestCase {
         await appState.requestReadingEmbedResolution(target: "anything")
         XCTAssertNil(appState.currentNoteEmbedResolutions["anything"])
     }
+
+    // MARK: - List structure (G20, #1048)
+    //
+    // Core flattens list items into document order with their depth; the
+    // reading view rebuilds the tree with the Windows builder's rule
+    // (`ReadingDocumentBuilder.AppendListItem`), so both hosts expose the
+    // same lists. The Windows twins are named in each fact.
+
+    /// The shape of `ReadingListStructure.units` as text: `u[...]` is an
+    /// unordered list and `o[...]` an ordered one, each item names its
+    /// block index with its nested lists in parentheses after it, and a
+    /// bare number is a block outside every list.
+    private static func outline(_ source: String) -> String {
+        func describe(_ list: ReadingList) -> String {
+            let items = list.items.map { item in
+                item.nested.isEmpty
+                    ? "\(item.blockIndex)"
+                    : "\(item.blockIndex)(" + item.nested.map(describe).joined(separator: " ") + ")"
+            }
+            return (list.ordered ? "o[" : "u[") + items.joined(separator: " ") + "]"
+        }
+        return ReadingListStructure.units(for: readingBlocksSource(source: source))
+            .map { unit in
+                switch unit {
+                case .block(let index): return "\(index)"
+                case .list(let list): return describe(list)
+                }
+            }
+            .joined(separator: " ")
+    }
+
+    /// Twin of Windows `CoreReportsOrderednessPerListItem`: the core
+    /// contract the list-splitting rule depends on.
+    func testCoreReportsOrderednessPerListItem() {
+        let flags = readingBlocksSource(source: "- a\n- b\n\n1. one\n2. two\n\n- [ ] t\n")
+            .compactMap { block -> String? in
+                guard case .listItem(_, let ordered, let task) = block.kind else { return nil }
+                return (ordered ? "ordered" : "unordered") + (task == nil ? "" : " task")
+            }
+        XCTAssertEqual(
+            flags, ["unordered", "unordered", "ordered", "ordered", "unordered task"])
+    }
+
+    /// Twin of Windows `NestedListsKeepTheirAuthoredDepthAndMarkers`: an
+    /// ordered sublist nests inside its bullet parent without resetting
+    /// it, and three levels chain instead of flattening to one.
+    func testNestedListsKeepTheirAuthoredDepthAndMarkers() {
+        XCTAssertEqual(
+            Self.outline("- alpha\n  1. beta\n  2. gamma\n- delta\n"), "u[0(o[1 2]) 3]")
+        XCTAssertEqual(Self.outline("- one\n  - two\n    - three\n"), "u[0(u[1(u[2])])]")
+    }
+
+    /// One unit per top-level list: a run of items is one list, and any
+    /// other block closes every open list.
+    func testEachTopLevelListIsOneUnitAndOtherBlocksCloseIt() {
+        XCTAssertEqual(
+            Self.outline("Intro\n\n- a\n- b\n\nMiddle\n\n- c\n"), "0 u[1 2] 3 u[4]")
+        XCTAssertEqual(Self.outline("# Title\n\nPlain prose.\n"), "0 1")
+    }
+
+    /// A change between ordered and unordered closes and replaces that
+    /// level only: two lists at the top level, two nested lists under one
+    /// item, and the outer list goes on.
+    func testAMarkerChangeReplacesOnlyItsOwnLevel() {
+        XCTAssertEqual(Self.outline("- a\n- b\n\n3. c\n4. d\n"), "u[0 1] o[2 3]")
+        XCTAssertEqual(Self.outline("- a\n  - b\n  1. c\n- d\n"), "u[0(u[1] o[2]) 3]")
+    }
+
+    // MARK: - List semantics for VoiceOver (G20, #1048)
+    //
+    // What an AT client is handed (XCTest proves attributes, not speech;
+    // the VoiceOver phrases are in the PR's field pass): each top-level
+    // list is one `AXList` (subrole `AXContentList`, which VoiceOver speaks
+    // as "content list" and counts "(2 of 3)" over), its items are `AXGroup`
+    // children in document order, and a nested list sits inside the item
+    // that owns it — the shape WebKit gives `<ul>`/`<ol>`.
+
+    /// The field-pass fixture: a three-level nested list, an ordered list
+    /// starting at 3, and a task list, between two paragraphs.
+    static let listFixture = """
+        Intro paragraph.
+
+        - Alpha
+          - Alpha one
+            - Alpha one deep
+          - Alpha two
+        - Bravo
+
+        3. Third
+        4. Fourth
+        5. Fifth
+
+        - [ ] Open task
+        - [x] Done task
+
+        Closing paragraph.
+        """
+
+    /// The fixture's two tasks as the tasks pipeline reports them, matched
+    /// to their rows by 1-based line, so the rows render the toggle button.
+    /// Each line is found by its exact authored text; a line that is missing
+    /// or authored twice fails the fact instead of matching the wrong row.
+    private static func listFixtureTasks() -> [TaskItem] {
+        let lines = listFixture.components(separatedBy: "\n")
+        func task(_ authored: String, text: String, completed: Bool, ordinal: UInt32) -> TaskItem {
+            let matches = lines.indices.filter { lines[$0] == authored }
+            if matches.count != 1 {
+                XCTFail("the list fixture must author \"\(authored)\" exactly once")
+            }
+            return TaskItem(
+                ordinal: ordinal, text: text, statusChar: completed ? "x" : " ",
+                completed: completed, dueMs: nil, scheduledMs: nil, priority: nil,
+                recurrence: nil, line: UInt32((matches.first ?? 0) + 1), byteOffset: 0,
+                checkboxStartByte: 0, checkboxEndByte: 0)
+        }
+        return [
+            task("- [ ] Open task", text: "Open task", completed: false, ordinal: 0),
+            task("- [x] Done task", text: "Done task", completed: true, ordinal: 1),
+        ]
+    }
+
+    /// The reading view's tree once the `awaited` texts (by default the
+    /// fixture's last paragraph and its deepest and last items) have
+    /// published.
+    @MainActor
+    private func hostedListTree(
+        _ text: String = ReadingViewTests.listFixture,
+        awaiting awaited: Set<String> = ["Closing paragraph.", "Alpha one deep", "Done task"],
+        file: StaticString = #filePath, line: UInt = #line
+    ) async throws -> AXElementSnapshot {
+        let window = HostedAccessibilityTree.host(
+            ReadingView(
+                text: text, pathLabel: "Lists.md",
+                context: ReadingView.ReadingBlockContext(tasks: Self.listFixtureTasks())),
+            size: NSSize(width: 640, height: 900))
+        defer { window.close() }
+        return try await HostedAccessibilityTree.snapshot(of: window, file: file, line: line) {
+            tree in awaited.isSubset(of: Set(tree.staticTexts))
+        }
+    }
+
+    func testEachTopLevelListIsOneListContainer() async throws {
+        let tree = try await hostedListTree()
+        let lists = tree.topLevelLists
+        XCTAssertEqual(lists.count, 3, "one list container per top-level list:\n\(tree)")
+        XCTAssertEqual(
+            lists.map(\.subrole), ["AXContentList", "AXContentList", "AXContentList"],
+            "a content list, the subrole VoiceOver speaks as \"content list\":\n\(tree)")
+    }
+
+    func testListItemsAreTheListChildrenInDocumentOrder() async throws {
+        let tree = try await hostedListTree()
+        let lists = tree.topLevelLists
+        guard lists.count == 3 else { return XCTFail("expected three lists:\n\(tree)") }
+        for list in lists {
+            XCTAssertEqual(
+                list.children.map(\.role), Array(repeating: "AXGroup", count: list.children.count),
+                "every child of a list is an item group:\n\(list)")
+        }
+        XCTAssertEqual(lists[0].children.map(\.ownTexts), [["Alpha"], ["Bravo"]])
+        XCTAssertEqual(
+            lists[1].children.map(\.ownTexts), [["3.", "Third"], ["4.", "Fourth"], ["5.", "Fifth"]])
+        XCTAssertEqual(lists[2].children.map(\.ownTexts), [["Open task"], ["Done task"]])
+    }
+
+    func testANestedListIsReachableUnderItsOwningItem() async throws {
+        let tree = try await hostedListTree()
+        guard let alpha = tree.topLevelLists.first?.children.first else {
+            return XCTFail("expected the first list's first item:\n\(tree)")
+        }
+        let second = alpha.children.filter { $0.role == "AXList" }
+        XCTAssertEqual(second.count, 1, "Alpha owns the second level:\n\(alpha)")
+        XCTAssertEqual(second.first?.children.map(\.ownTexts), [["Alpha one"], ["Alpha two"]])
+        let third = second.first?.children.first?.children.filter { $0.role == "AXList" } ?? []
+        XCTAssertEqual(third.count, 1, "Alpha one owns the third level:\n\(alpha)")
+        XCTAssertEqual(third.first?.children.map(\.ownTexts), [["Alpha one deep"]])
+        XCTAssertEqual(third.first?.subrole, "AXContentList")
+    }
+
+    /// The authored ordinal is what VoiceOver reads ("4. Fourth group (2 of
+    /// 3)"): core's `list_marker`, never renumbered, while a bullet stays
+    /// visual only.
+    func testOrderedItemsCarryTheAuthoredMarker() async throws {
+        let tree = try await hostedListTree(
+            "Before.\n\n12) twelve\n13) thirteen\n\n- plain\n",
+            awaiting: ["twelve", "thirteen", "plain"])
+        let lists = tree.topLevelLists
+        guard lists.count == 2 else { return XCTFail("expected two lists:\n\(tree)") }
+        XCTAssertEqual(
+            lists[0].children.map(\.ownTexts), [["12)", "twelve"], ["13)", "thirteen"]])
+        XCTAssertEqual(lists[1].children.map(\.ownTexts), [["plain"]], "no spoken bullet")
+    }
+
+    func testTaskRowsKeepTheirCheckboxInsideTheItem() async throws {
+        let tree = try await hostedListTree()
+        guard let tasks = tree.topLevelLists.last else { return XCTFail("no lists:\n\(tree)") }
+        XCTAssertEqual(
+            tasks.children.map { item in
+                item.children.filter { $0.role == "AXButton" }.compactMap(\.name)
+            },
+            [["Mark complete"], ["Mark incomplete"]],
+            "each task item keeps its toggle as a child control:\n\(tasks)")
+    }
+
+    /// The "list item, level N" value is retired, not kept as a supplement:
+    /// SwiftUI publishes a group's value as its `AXValueDescription`, and
+    /// VoiceOver reads that in place of the item's content (the PR 16 field
+    /// pass heard "list item, level 1 group (2 of 2)" for "Bravo"). Depth
+    /// and position come from the structure, at every level.
+    func testListItemsCarryNoLevelValueThatWouldHideTheirText() async throws {
+        let tree = try await hostedListTree()
+        var items: [AXElementSnapshot] = []
+        func collect(_ list: AXElementSnapshot) {
+            for item in list.children {
+                items.append(item)
+                item.children.filter { $0.role == "AXList" }.forEach(collect)
+            }
+        }
+        tree.topLevelLists.forEach(collect)
+        XCTAssertEqual(items.count, 10, "every item of the fixture:\n\(tree)")
+        XCTAssertEqual(
+            items.compactMap { $0.valueDescription ?? $0.value }, [],
+            "an item's value would replace its text in VoiceOver's read:\n\(tree)")
+    }
+
+    /// A list's rows render in a hosting view of their own, and SwiftUI
+    /// carries the reading view's environment into it, so nothing is
+    /// bridged by hand (`ReadingListRows`' doc). Pinned for the three kinds
+    /// of value the rows read, an action (the link router), a scheme and a
+    /// size, at two nesting levels, with values that differ from the hosting
+    /// view's own defaults, and again after a change made once the rows have
+    /// rendered. The probe calls the `openURL` it reads, as a link's
+    /// activation does. If this fails on a new SDK, the values the rows read
+    /// have to be passed across in `ReadingListRows` explicitly.
+    @MainActor
+    func testAListsRowsInheritTheReadingViewsEnvironment() async throws {
+        struct Seen: Equatable {
+            let url: URL
+            let colorScheme: ColorScheme
+            let dynamicTypeSize: DynamicTypeSize
+        }
+        final class Recorder { var seen: [Seen] = []; var opened: [URL] = [] }
+        final class Model: ObservableObject { @Published var dark = true }
+        struct Probe: View {
+            let url: URL
+            let recorder: Recorder
+            @Environment(\.openURL) private var openURL
+            @Environment(\.colorScheme) private var colorScheme
+            @Environment(\.dynamicTypeSize) private var dynamicTypeSize
+            var body: some View {
+                Text(url.absoluteString)
+                    .onAppear {
+                        record()
+                        openURL(url)
+                    }
+                    .onChange(of: colorScheme) { record() }
+            }
+            private func record() {
+                recorder.seen.append(
+                    Seen(url: url, colorScheme: colorScheme, dynamicTypeSize: dynamicTypeSize))
+            }
+        }
+        struct Host: View {
+            @ObservedObject var model: Model
+            let recorder: Recorder
+            let outer: URL
+            let nested: URL
+            var body: some View {
+                ReadingListContainer(
+                    rows: AnyView(
+                        VStack {
+                            Probe(url: outer, recorder: recorder)
+                            ReadingListContainer(
+                                rows: AnyView(Probe(url: nested, recorder: recorder)))
+                        }))
+                    .environment(
+                        \.openURL,
+                        OpenURLAction { url in
+                            recorder.opened.append(url)
+                            return .handled
+                        })
+                    .environment(\.colorScheme, model.dark ? .dark : .light)
+                    .environment(\.dynamicTypeSize, .accessibility2)
+            }
+        }
+        let recorder = Recorder()
+        let model = Model()
+        let outer = URL(string: "slate-wiki://Item")!
+        let nested = URL(string: "slate-wiki://Nested")!
+        let window = HostedAccessibilityTree.host(
+            Host(model: model, recorder: recorder, outer: outer, nested: nested))
+        defer { window.close() }
+        // Waits on what has arrived, not on how many times: a probe that
+        // appears more than once records again, which must not stall this.
+        func latest(_ url: URL) -> Seen? { recorder.seen.last { $0.url == url } }
+        _ = try await HostedAccessibilityTree.snapshot(of: window) { _ in
+            Set(recorder.opened) == [outer, nested] && latest(outer) != nil
+                && latest(nested) != nil
+        }
+        XCTAssertEqual(Set(recorder.opened), [outer, nested], "links route through the router")
+        for url in [outer, nested] {
+            XCTAssertEqual(
+                latest(url), Seen(url: url, colorScheme: .dark, dynamicTypeSize: .accessibility2),
+                "the rows at \(url) see the reading view's colour scheme and type size")
+        }
+
+        model.dark = false
+        _ = try await HostedAccessibilityTree.snapshot(of: window) { _ in
+            latest(outer)?.colorScheme == .light && latest(nested)?.colorScheme == .light
+        }
+        for url in [outer, nested] {
+            XCTAssertEqual(
+                latest(url), Seen(url: url, colorScheme: .light, dynamicTypeSize: .accessibility2),
+                "a change above the list reaches the rows at \(url)")
+        }
+    }
+
+    /// A unit's scroll identity (#856) is its first block, so the eager
+    /// stack's positional ids stay block indices.
+    func testAListUnitIsIdentifiedByItsFirstBlock() {
+        let units = ReadingListStructure.units(
+            for: readingBlocksSource(source: "Intro\n\n- a\n  - b\n- c\n\nEnd\n"))
+        XCTAssertEqual(units.map(\.firstBlockIndex), [0, 1, 4])
+        guard case .list(let list) = units[1] else { return XCTFail("expected the list unit") }
+        XCTAssertEqual(list.blockIndices, [1, 2, 3])
+    }
+}
+
+extension AXElementSnapshot {
+    /// Every `AXList` that sits inside no other list, in document order.
+    fileprivate var topLevelLists: [AXElementSnapshot] {
+        role == "AXList" ? [self] : children.flatMap(\.topLevelLists)
+    }
+
+    /// The texts this element itself reads, in order: its static texts,
+    /// without descending into a nested list (that list's items read
+    /// their own) or into a static text (a selectable text answers with
+    /// a copy of its own string as its child).
+    fileprivate var ownTexts: [String] {
+        children.flatMap { child -> [String] in
+            switch child.role {
+            case "AXList": return []
+            case "AXStaticText": return child.value.map { [$0] } ?? []
+            default: return child.ownTexts
+            }
+        }
+    }
 }

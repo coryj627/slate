@@ -1189,3 +1189,43 @@ Line-read flatness is **0.99x** (8 MiB / 1 MiB), within the 4.00x ceiling.
 Allocations are managed allocations, including dispatcher marshaling. The
 post-edit measurements include the two bounded edits and current-revision
 canonical validation; full inventory is deliberately a separate operation.
+
+## Plan 43 PR 17 — mac editor span semantics for VoiceOver (#1224, the W7-1 twin)
+
+`HighlightBenchmarkTests.testAccessibilitySemanticsThroughput` (`SLATE_BENCH`-gated),
+2026-10-17, Apple M5 Max (18 cores, 36 GB), macOS 27.0.1, Swift 6.4 / Xcode
+27A266a, release dylib and `swift test -c release`. The documented release
+command no longer compiles because of DEBUG-only test seams (#1432), so this
+run adds `-Xswiftc -DDEBUG` (optimisation is unchanged):
+
+```sh
+PROFILE=release ./scripts/build-mac-app.sh --skip-a11y-check
+cd apps/slate-mac && SLATE_LINK_PROFILE=release SLATE_BENCH=1 DYLD_LIBRARY_PATH="$PWD/../../target/release" \
+  swift test -c release -Xswiftc -DDEBUG --filter HighlightBenchmarkTests
+```
+
+Same `representativeMarkdown` fixture as the #375 row. `plan` runs off-main
+with the span computation; `stamp` is the semantics' share of `applyHighlight`
+on main, beside the colour pass's own stamping (`colour`), for a whole-document
+pass and for one keystroke's window; `edit` is one keystroke through the
+editor's storage (which carries the semantics' second layout manager) against
+a plain coloured text view's; `read` is `accessibilityAttributedString(for:)`
+on one prose line and on the whole document, against AppKit's native read.
+All figures in ms.
+
+| size | plan | colour, doc | stamp, doc | colour, window | stamp, window | edit, plain | edit | read line, native | read line | read doc, native | read doc |
+|---|---|---|---|---|---|---|---|---|---|---|---|
+| 100 KB | 0.7 | 1.7 | 2.5 | 0.008 | 0.008 | 0.015 | 0.015 | 0.013 | 0.016 | 0.4 | 8.8 |
+| 1 MB | 6.8 | 14.5 | 24.0 | 0.010 | 0.009 | 0.024 | 0.044 | 0.007 | 0.019 | 4.6 | 90.4 |
+| 2 MB | 14.0 | 26.7 | 45.8 | 0.003 | 0.008 | 0.039 | 0.076 | 0.007 | 0.028 | 8.6 | 192.1 |
+| 8 MB | 54.4 | 86.4 | 149.5 | 0.021 | 0.013 | 0.144 | 0.273 | 0.009 | 0.020 | 34.8 | 762.6 |
+
+The keystroke paths are flat: a window's stamp stays at 0.01 ms from 100 KB to
+8 MB, and a line read at 0.02 ms (8 MB / 1 MB **1.05x**; the Windows twin's
+ceilings are 0.5 ms and 4.00x). A keystroke costs 0.13 ms more at 8 MB for the
+second layout manager. A whole-document pass (load, swap, appearance, or core's
+whole-document fallback) stamps in about 1.7x the colour's own time. A read of
+the whole document is ~22x the native read (one attribute run per styled
+stretch, about 2.4 µs each in Foundation), but VoiceOver does not make that
+request on a large note: over a 3.3 MB text, focus, line moves, typing and the
+rotor asked for 24 ranges, the longest one line (measured for this PR).

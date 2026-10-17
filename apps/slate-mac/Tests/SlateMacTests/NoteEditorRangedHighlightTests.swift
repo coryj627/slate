@@ -44,6 +44,22 @@ final class NoteEditorRangedHighlightTests: XCTestCase {
         }
     }
 
+    /// #1224: the VoiceOver semantics stamped beside the colour, per
+    /// character and key. A link value is a per-pass identity, so it is
+    /// compared by the whole run it marks (one span, one run).
+    private func semanticMap(_ coordinator: NoteEditorView.Coordinator, _ length: Int) -> [String] {
+        let store = coordinator.semanticStore
+        XCTAssertEqual(store.length, length, "the semantic store tracks the text")
+        let links = [EditorAccessibilityAttributes.Key.link, EditorAccessibilityAttributes.Key.nestedLink]
+        return (0..<min(length, store.length)).map { index in
+            EditorAccessibilityAttributes.Key.all.compactMap { key -> String? in
+                let found = store.segment(key, at: index)
+                guard let value = found.value else { return nil }
+                return links.contains(key) ? "\(key.rawValue)\(found.range)" : "\(key.rawValue)=\(value)"
+            }.joined(separator: " ")
+        }
+    }
+
     /// Settle the highlighter and require that a recolor actually reached the
     /// layout manager.
     ///
@@ -99,12 +115,17 @@ final class NoteEditorRangedHighlightTests: XCTestCase {
         let len = storage.length
         let windowedFg = foregroundMap(lm, len)
         let windowedUl = underlineMap(lm, len)
+        let windowedSemantics = semanticMap(coordinator, len)
 
         // Force a clean whole-doc apply on the identical final buffer.
         coordinator.scheduleHighlight(debounced: false)
         await assertRecolorLanded(coordinator, "whole-doc reference", file: file, line: line)
         let wholeFg = foregroundMap(lm, len)
         let wholeUl = underlineMap(lm, len)
+        XCTAssertEqual(
+            windowedSemantics, semanticMap(coordinator, len),
+            "windowed VoiceOver semantics != whole-doc for \(storage.string.debugDescription)",
+            file: file, line: line)
 
         XCTAssertEqual(
             windowedFg, wholeFg, "windowed foreground != whole-doc for \(storage.string.debugDescription)",
@@ -230,6 +251,51 @@ final class NoteEditorRangedHighlightTests: XCTestCase {
             ])
     }
 
+    // MARK: - VoiceOver semantics through windowed passes (#1224)
+
+    func testQuoteSplitByABlankLineMatchesWholeDoc() async {
+        // One quote becomes two; the second keeps its link.
+        let doc = "> first quote line\n> second [[Link]] line\n\nafter para\n"
+        await assertWindowedMatchesWholeDoc(
+            initial: doc,
+            editGroups: [
+                [(NSRange(location: doc.utf16Offset(of: "> second"), length: 0), "\n")]
+            ])
+    }
+
+    func testLazyContinuationJoiningAQuoteMatchesWholeDoc() async {
+        // Deleting the blank line makes the paragraph a lazy continuation of
+        // the quote above it.
+        let doc = "> quoted\n\nlazy [[Link]] line\n\ntail\n"
+        await assertWindowedMatchesWholeDoc(
+            initial: doc,
+            editGroups: [
+                [(NSRange(location: doc.utf16Offset(of: "\n\nlazy"), length: 1), "")]
+            ])
+    }
+
+    func testHeadingLevelChangeMatchesWholeDoc() async {
+        let doc = "## Title [[Inside]]\n\nbody [[L]]\n\n# Other\n"
+        await assertWindowedMatchesWholeDoc(
+            initial: doc,
+            editGroups: [
+                [(NSRange(location: 0, length: 0), "#")],
+                [(NSRange(location: doc.utf16Offset(of: "# Other") + 1, length: 1), "")],
+            ])
+    }
+
+    func testImageInsideALinkMatchesWholeDoc() async {
+        // A nested link (an image in a link's text), edited, then the outer
+        // link broken so the image stands alone.
+        let doc = "intro\n\n[![alt](img.png)](https://x.example) after\n\noutro\n"
+        await assertWindowedMatchesWholeDoc(
+            initial: doc,
+            editGroups: [
+                [(NSRange(location: doc.utf16Offset(of: "alt"), length: 0), "big ")],
+                [(NSRange(location: doc.utf16Offset(of: "[!["), length: 1), "")],
+            ])
+    }
+
     // MARK: - Stateful buffer lifecycle (#404)
 
     /// A programmatic whole-document swap (the file-reload path) must rebuild
@@ -264,10 +330,12 @@ final class NoteEditorRangedHighlightTests: XCTestCase {
         let len = storage.length
         let windowedFg = foregroundMap(lm, len)
         let windowedUl = underlineMap(lm, len)
+        let windowedSemantics = semanticMap(coordinator, len)
         coordinator.scheduleHighlight(debounced: false)
         await assertRecolorLanded(coordinator, "whole-doc reference")
         XCTAssertEqual(windowedFg, foregroundMap(lm, len), "windowed != whole-doc after reload")
         XCTAssertEqual(windowedUl, underlineMap(lm, len), "underline windowed != whole-doc after reload")
+        XCTAssertEqual(windowedSemantics, semanticMap(coordinator, len), "semantics windowed != whole-doc after reload")
     }
 
     /// A missed delta (the mirror buffer not fed an edit the text store got)
@@ -299,9 +367,11 @@ final class NoteEditorRangedHighlightTests: XCTestCase {
 
         let len = storage.length
         let healedFg = foregroundMap(lm, len)
+        let healedSemantics = semanticMap(coordinator, len)
         coordinator.scheduleHighlight(debounced: false)
         await assertRecolorLanded(coordinator, "whole-doc reference")
         XCTAssertEqual(healedFg, foregroundMap(lm, len), "drift guard must rebuild + repaint correctly")
+        XCTAssertEqual(healedSemantics, semanticMap(coordinator, len), "drift guard must re-stamp the semantics too")
     }
 
     // MARK: - Coalescing / subtract math (unit)
