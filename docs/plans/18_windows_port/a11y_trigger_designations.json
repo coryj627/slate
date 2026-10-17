@@ -717,7 +717,7 @@
         "decision": "docs/plans/38_notification_dispatcher_contracts.md",
         "status": "recorded"
       },
-      "AppState.swift#mutateSidebarOrganization@1": {
+      "AppState.swift#postSidebarOrganizationAnnouncement@1": {
         "engine": "Sidebar action-validation, organization persistence, filter summary and structural-admission guidance",
         "decision": "docs/plans/38_notification_dispatcher_contracts.md",
         "status": "recorded"
