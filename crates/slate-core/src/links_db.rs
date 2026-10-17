@@ -4,21 +4,28 @@
 //! SQLite storage + query surface for note-to-note links.
 //!
 //! Schema lives in `migrations/004_links.sql`. Bulk rows are written
-//! by [`replace_links_for_file`] (save path, scan slow path, purge);
-//! two narrower mutations exist beside it: [`re_resolve_unresolved_links`]
-//! flips NULL `target_path`s to resolved, and the move flow's bulk
-//! inbound repoint (`finish_structural_move`) rewrites `target_path`
-//! old → new. FK CASCADE additionally erases a deleted file's rows.
-//! The query side serves the backlinks panel, outgoing-links panel,
-//! unresolved-links audit (issues #51, #52), and the graph mirror's
-//! replay hooks (Milestone P #550).
+//! by [`replace_links_for_file`] (save path, scan slow path, purge),
+//! which draws each target's candidate paths from a [`LinkCandidates`]:
+//! the scan's and rename's snapshot, or a save's [`FoldedNameLookup`]
+//! (#1295); two narrower mutations exist beside it:
+//! [`re_resolve_unresolved_links`] flips NULL `target_path`s to resolved,
+//! and the move flow's bulk inbound repoint (`finish_structural_move`)
+//! rewrites `target_path` old → new. FK CASCADE additionally erases a
+//! deleted file's rows. The query side serves the backlinks panel,
+//! outgoing-links panel, unresolved-links audit (issues #51, #52), and the
+//! graph mirror's replay hooks (Milestone P #550).
+
+use std::collections::HashMap;
 
 use rusqlite::{Connection, Transaction, params};
 
 use crate::VaultError;
 use crate::file_meta_db::{FileMetaParseArtifact, FileMetaPreviewObserver};
 use crate::graph::{GraphLinkRow, InboundRow};
-use crate::link_resolver::{InMemoryVaultIndex, ResolvedLink, resolve_link};
+use crate::link_resolver::{
+    CandidateProbe, InMemoryVaultIndex, LinkCandidateSelector, ResolvedLink, VaultIndex,
+    resolve_link, resolve_link_through,
+};
 use crate::links::{LinkAnchor, LinkKind, extract_links_with_event_sink};
 use crate::session::{Page, Paging};
 
@@ -77,9 +84,166 @@ pub(crate) struct LinkReplaceResult {
     pub(crate) file_meta_artifact: FileMetaParseArtifact,
 }
 
+#[cfg(test)]
+thread_local! {
+    /// #1295 test seam: the paths [`replace_links_for_file`]'s own link
+    /// resolution offered to its selectors on this thread — the rows a
+    /// save's resolution visits, apart from any other resolution the same
+    /// operation runs (a create's ghost-link heal).
+    pub(crate) static RESOLUTION_ROWS_VISITED: std::cell::Cell<usize> =
+        const { std::cell::Cell::new(0) };
+    /// #1295 test seam: while set, the save lookup's statement fails to
+    /// prepare on this thread — a genuine SQLite error on the lookup's own
+    /// path, so a fact can show it surfaces instead of dropping a link.
+    pub(crate) static LOOKUP_FAULT: std::cell::Cell<bool> =
+        const { std::cell::Cell::new(false) };
+}
+
+/// Where [`replace_links_for_file`] draws a target's candidate paths from
+/// (#1295): the one thing its callers differ by. The rule is
+/// [`resolve_link`]'s for all of them — the same normalization, the same
+/// [`LinkCandidateSelector`] and its tiebreaks, each distinct target of a
+/// note resolved once ([`resolve_remembered`]). Scan and rename draw on the
+/// snapshot of `files` they captured ([`InMemoryVaultIndex`]); a save, a
+/// create and the `open_base` repair draw on [`FoldedNameLookup`], which
+/// reads only the rows a target's probe names.
+pub(crate) trait LinkCandidates {
+    /// Offer `selector` the indexed paths its target could match: at least
+    /// every path its probe ([`LinkCandidateSelector::probe`]) names — an
+    /// extra path never changes the winner — and, among paths equal under
+    /// lowercase, in a whole-table snapshot's order (path order), which
+    /// decides a tie between them. An error is the caller's to propagate:
+    /// a link whose candidates could not be read is never dropped, and
+    /// never written unresolved.
+    fn offer_to(
+        &self,
+        conn: &Connection,
+        selector: &mut LinkCandidateSelector,
+    ) -> Result<(), VaultError>;
+}
+
+/// Scan and rename keep their snapshot: every path it captured, in its
+/// order (the scan's at its start, healed after the walk).
+impl LinkCandidates for InMemoryVaultIndex {
+    fn offer_to(
+        &self,
+        _conn: &Connection,
+        selector: &mut LinkCandidateSelector,
+    ) -> Result<(), VaultError> {
+        for path in self.all_paths() {
+            selector.offer(path);
+        }
+        Ok(())
+    }
+}
+
+/// The folded-name lookup a save, a create and the `open_base` repair draw
+/// candidates from (#1295; locked decision 05 §4 and §9.3.1): the rows a
+/// target's probe names, looked up by the registered Unicode fold through
+/// `idx_files_path_fold` or `idx_files_name_fold` — the lookup #1279 gave
+/// the embed resolver — so a save reads its own targets' candidate rows,
+/// never the whole `files` table. The rows are read on the caller's
+/// connection: the save's own transaction, which already holds the saved
+/// file's row.
+///
+/// The answer is the whole-index answer. The fold (NFC + full-Unicode
+/// lowercase) is a superset of the selector's lowercase comparison, so no
+/// row the selector would take is left out, and the selector still decides.
+/// A path target's rows arrive in path order, the order a whole-table
+/// snapshot offers them in (it reads the covering index on `path`), because
+/// between two paths equal under lowercase — case twins a case-sensitive
+/// volume can hold — the first offered wins; a basename's rank is total
+/// (distance, then path), so its rows need no order.
+#[derive(Debug, Clone, Copy, Default)]
+pub(crate) struct FoldedNameLookup;
+
+impl LinkCandidates for FoldedNameLookup {
+    fn offer_to(
+        &self,
+        conn: &Connection,
+        selector: &mut LinkCandidateSelector,
+    ) -> Result<(), VaultError> {
+        let (column, keys) = match selector.probe() {
+            CandidateProbe::None => return Ok(()),
+            CandidateProbe::Paths(keys) => (CandidateColumn::Path, keys),
+            CandidateProbe::Names(keys) => (CandidateColumn::Name, keys),
+        };
+        #[cfg(test)]
+        if LOOKUP_FAULT.with(std::cell::Cell::get) {
+            conn.prepare("SELECT path FROM slate_test_lookup_fault")?;
+        }
+        let folded: Vec<String> = keys
+            .iter()
+            .map(|key| crate::db::tree_sort_key(key))
+            .collect();
+        let mut statement = conn.prepare_cached(&candidate_rows_sql(column, folded.len()))?;
+        let mut rows = statement.query(rusqlite::params_from_iter(folded.iter()))?;
+        while let Some(row) = rows.next()? {
+            let path: String = row.get(0)?;
+            selector.offer(&path);
+        }
+        Ok(())
+    }
+}
+
+/// `target_raw`, authored in `source_path`, resolved under [`resolve_link`]'s
+/// rule from the paths `candidates` offers — and a target already in
+/// `winners` answered from it, so each distinct target resolves once.
+/// `winners` holds what one source's targets resolved to against one state
+/// of the index (a basename's winner depends on the source's directory): a
+/// caller keeps one per note, as [`replace_links_for_file`] does.
+pub(crate) fn resolve_remembered(
+    candidates: &dyn LinkCandidates,
+    winners: &mut HashMap<String, Option<String>>,
+    conn: &Connection,
+    target_raw: &str,
+    anchor: Option<LinkAnchor>,
+    source_path: &str,
+) -> Result<ResolvedLink, VaultError> {
+    resolve_link_through(target_raw, anchor, source_path, |mut selector| {
+        if let Some(winner) = winners.get(target_raw) {
+            return Ok(winner.clone());
+        }
+        candidates.offer_to(conn, &mut selector)?;
+        let winner = selector.into_winner();
+        winners.insert(target_raw.to_string(), winner.clone());
+        Ok(winner)
+    })
+}
+
+/// The fold index a [`CandidateProbe`] reads.
+#[derive(Debug, Clone, Copy)]
+pub(crate) enum CandidateColumn {
+    /// `idx_files_path_fold`: a qualified or rooted target's exact paths.
+    Path,
+    /// `idx_files_name_fold`: a basename target's file names.
+    Name,
+}
+
+/// The candidate-row statement for `keys` folded keys: one IN lookup on the
+/// fold of the probe's column, the keys bound, never interpolated; a path
+/// lookup in path order ([`FoldedNameLookup`] says why).
+pub(crate) fn candidate_rows_sql(column: CandidateColumn, keys: usize) -> String {
+    let placeholders = (1..=keys)
+        .map(|index| format!("?{index}"))
+        .collect::<Vec<_>>()
+        .join(", ");
+    match column {
+        CandidateColumn::Path => format!(
+            "SELECT path FROM files WHERE slate_tree_sort_key(path) IN ({placeholders}) \
+             ORDER BY path"
+        ),
+        CandidateColumn::Name => {
+            format!("SELECT path FROM files WHERE slate_tree_sort_key(name) IN ({placeholders})")
+        }
+    }
+}
+
 /// Atomically replace every row for `source_file_id` with links
-/// extracted from `markdown_source`. Resolution runs against
-/// `index` (the snapshot of vault paths captured at scan start).
+/// extracted from `markdown_source`, each distinct target resolved once
+/// from the paths `candidates` offers: the scan's snapshot (captured at
+/// scan start) or a save's lookup ([`LinkCandidates`]). A candidate read
+/// that fails fails the replacement, and with it the caller's transaction.
 ///
 /// Called by the scanner's slow path and the save/purge paths; the
 /// scan fast path never touches this table so unchanged files don't
@@ -102,7 +266,7 @@ pub(crate) fn replace_links_for_file(
     source_file_id: i64,
     source_path: &str,
     markdown_source: &str,
-    index: &InMemoryVaultIndex,
+    candidates: &dyn LinkCandidates,
 ) -> Result<LinkReplaceResult, VaultError> {
     tx.execute(
         "DELETE FROM links WHERE source_file_id = ?1",
@@ -125,8 +289,22 @@ pub(crate) fn replace_links_for_file(
         ) VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11, ?12)",
     )?;
     let mut written = Vec::with_capacity(parsed.len());
+    // One note, one source, one state of the index: a target's winner holds
+    // for every link that repeats it (#1295, memoized per save).
+    let mut winners = HashMap::new();
     for (ordinal, link) in parsed.into_iter().enumerate() {
-        let resolved = resolve_link(&link.target_raw, link.anchor.clone(), source_path, index);
+        #[cfg(test)]
+        let offered_before = crate::link_resolver::PATHS_OFFERED.with(std::cell::Cell::get);
+        let resolved = resolve_remembered(
+            candidates,
+            &mut winners,
+            tx,
+            &link.target_raw,
+            link.anchor.clone(),
+            source_path,
+        )?;
+        #[cfg(test)]
+        record_resolution_rows(offered_before);
         let (target_path, is_external) = match &resolved {
             ResolvedLink::Resolved { target_path, .. } => (Some(target_path.clone()), false),
             ResolvedLink::Unresolved { .. } => (None, false),
@@ -160,6 +338,14 @@ pub(crate) fn replace_links_for_file(
         rows: written,
         file_meta_artifact,
     })
+}
+
+/// #1295 test seam: add the paths offered since `offered_before` to
+/// [`RESOLUTION_ROWS_VISITED`].
+#[cfg(test)]
+fn record_resolution_rows(offered_before: usize) {
+    let offered = crate::link_resolver::PATHS_OFFERED.with(std::cell::Cell::get) - offered_before;
+    RESOLUTION_ROWS_VISITED.with(|rows| rows.set(rows.get() + offered));
 }
 
 /// The graph-relevant projection of one source's current rows, in
@@ -710,5 +896,75 @@ mod tests {
         let (path, ord) = decode_backlink_cursor("no-separator-here");
         assert!(path.is_none());
         assert!(ord.is_none());
+    }
+
+    fn migrated_db() -> Connection {
+        let mut conn = crate::db::open_in_memory(512).expect("open in-memory db");
+        crate::db::migrate(&mut conn).expect("migrate");
+        conn
+    }
+
+    /// #1295: the save lookup's statements read through the fold indexes —
+    /// an index search, never a scan of `files` — for both probe columns
+    /// and both key counts a probe binds (a target with an extension, one
+    /// without).
+    #[test]
+    fn the_save_lookup_searches_the_fold_indexes() {
+        let conn = migrated_db();
+        for (column, index) in [
+            (CandidateColumn::Path, "idx_files_path_fold"),
+            (CandidateColumn::Name, "idx_files_name_fold"),
+        ] {
+            for keys in [1, 5] {
+                let plan: Vec<String> = conn
+                    .prepare(&format!(
+                        "EXPLAIN QUERY PLAN {}",
+                        candidate_rows_sql(column, keys)
+                    ))
+                    .unwrap()
+                    .query_map(
+                        rusqlite::params_from_iter((0..keys).map(|n| format!("key{n}"))),
+                        |row| row.get::<_, String>(3),
+                    )
+                    .unwrap()
+                    .map(|step| step.unwrap())
+                    .collect();
+                assert!(
+                    plan.iter().any(|step| step.contains(index)),
+                    "{column:?} with {keys} keys must use {index}: {plan:?}"
+                );
+                assert!(
+                    !plan.iter().any(|step| step.starts_with("SCAN files")),
+                    "{column:?} with {keys} keys must not scan files: {plan:?}"
+                );
+            }
+        }
+    }
+
+    /// #1295: the whole-table snapshot that scan and rename resolve over
+    /// reads `files` in path order, whatever order the rows were written in
+    /// — the order the save lookup gives a path target's rows, so the two
+    /// break a tie between case twins alike.
+    #[test]
+    fn the_whole_table_snapshot_reads_in_path_order() {
+        let conn = migrated_db();
+        for path in ["b.md", "a.md", "B.md", "notes/a.md", "A.md"] {
+            conn.execute(
+                "INSERT INTO files
+                    (path, name, extension, size_bytes, mtime_ms, ctime_ms, birthtime_ms,
+                     content_hash, parser_version, indexed_at_ms, is_markdown, body_text)
+                 VALUES (?1, ?1, 'md', 0, 0, 0, 0, '', 1, 1, 1, '')",
+                [path],
+            )
+            .unwrap();
+        }
+        let snapshot: Vec<String> = conn
+            .prepare("SELECT path FROM files")
+            .unwrap()
+            .query_map([], |row| row.get(0))
+            .unwrap()
+            .map(|row| row.unwrap())
+            .collect();
+        assert_eq!(snapshot, ["A.md", "B.md", "a.md", "b.md", "notes/a.md"]);
     }
 }
