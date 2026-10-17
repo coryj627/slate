@@ -12010,7 +12010,16 @@ fact); the grid announcing a sort itself (the owner-announced grid fact
 and the header fact); sortability ignoring the external flag (both grid
 facts and the header fact). C-D17 is closed in its record, in PR C's mac
 details and in the index; the AT navigation map's shared-grid anchor
-follows the substrate's file (`AccessibleDataGrid.swift`, 714 → 729).
+follows the substrate's file (`AccessibleDataGrid.swift`, 714 → 729), and
+contract 38's trigger ledger lists the new `GridSorted` site beside the
+grid's, as the Windows row lists the surface's install handler beside its
+grid. A VoiceOver field pass on a three-note scratch vault (2026-10-17,
+under the shared UI lock): the Note header reads "Column: Note, sortable,
+current sort: none"; pressing it, as a header click does, is followed in
+VoiceOver's last phrase by "Sorted by Note, ascending" (111 ms) and then
+"3 of 3 shown" (302 ms), and the header then reads "current sort: asc".
+Whether VoiceOver lets the count cut the sort's line short is not settled
+by its last phrase, and is left to a listening check.
 
 ### Tests that pin PR C (revision 6's list; the task loop records what lands)
 
