@@ -299,8 +299,10 @@ extension AppState {
             session: session)
     }
 
-    /// Vault close: release every canvas handle.
+    /// Vault close: release every canvas handle, and end a media listing
+    /// with the picker waiting on it (plan 43 PR 12, #1324).
     func releaseAllCanvasDocuments() {
+        endCanvasMediaListingForVaultTransition()
         if let session = currentSession {
             for doc in canvasDocuments.values {
                 doc.close(session: session)

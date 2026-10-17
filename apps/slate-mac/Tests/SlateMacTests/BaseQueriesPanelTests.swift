@@ -1045,10 +1045,10 @@ final class BaseQueriesPanelTests: XCTestCase {
 
         _ = try session.createExclusive(path: "Projects/Delta.md", content: "# Delta\n")
         let barrier = PreparedLoadBarrier()
-        state.baseRetargetPreloadRunner = { session, request, observer in
+        state.baseRetargetPreloadRunner = { session, request, observer, cancel in
             barrier.run {
                 BasePreparedLoader.prepare(
-                    session: session, request: request, observer: observer)
+                    session: session, request: request, observer: observer, cancel: cancel)
             }
         }
         let refresh = try XCTUnwrap(
@@ -1117,10 +1117,10 @@ final class BaseQueriesPanelTests: XCTestCase {
 
         _ = try session.createExclusive(path: "Projects/Delta.md", content: "# Delta\n")
         let barrier = PreparedLoadBarrier()
-        state.baseRetargetPreloadRunner = { session, request, observer in
+        state.baseRetargetPreloadRunner = { session, request, observer, cancel in
             barrier.run {
                 BasePreparedLoader.prepare(
-                    session: session, request: request, observer: observer)
+                    session: session, request: request, observer: observer, cancel: cancel)
             }
         }
         let refresh = try XCTUnwrap(
@@ -1193,10 +1193,10 @@ final class BaseQueriesPanelTests: XCTestCase {
 
         _ = try session.createExclusive(path: "Projects/Delta.md", content: "# Delta\n")
         let barrier = PreparedLoadBarrier()
-        state.baseRetargetPreloadRunner = { session, request, observer in
+        state.baseRetargetPreloadRunner = { session, request, observer, cancel in
             barrier.run {
                 BasePreparedLoader.prepare(
-                    session: session, request: request, observer: observer)
+                    session: session, request: request, observer: observer, cancel: cancel)
             }
         }
         let refresh = try XCTUnwrap(

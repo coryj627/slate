@@ -2860,11 +2860,12 @@ final class AppState: ObservableObject {
     var baseRetargetNativeExecutionObserverForTesting:
         BaseRetargetNativeExecutionObserver?
     var baseRetargetPreloadRunner: BaseRetargetPreloadRunner = {
-        session, request, observer in
+        session, request, observer, cancel in
         BasePreparedLoader.prepare(
             session: session,
             request: request,
-            observer: observer)
+            observer: observer,
+            cancel: cancel)
     }
     let nativeDocumentPreparationLimiter = NativeDocumentPreparationLimiter()
     /// Cumulative scheduler tail, retained for lifecycle and deterministic
@@ -3184,7 +3185,27 @@ final class AppState: ObservableObject {
 
     /// The pending canvas input prompt (#368): non-nil presents the
     /// matching sheet in the canvas container (M6 visible controls).
-    @Published var canvasPrompt: CanvasPrompt?
+    /// A vault-file picker's media listing belongs to the prompt it feeds
+    /// (plan 43 PR 12, #1324): closing that prompt — the sheet's binding
+    /// sets it to nil — or replacing it ends the listing.
+    @Published var canvasPrompt: CanvasPrompt? {
+        didSet {
+            if let listing = canvasMediaListingPromptID, canvasPrompt?.id != listing {
+                cancelCanvasMediaListing()
+            }
+        }
+    }
+    /// The canvas media listing in flight (plan 43 PR 12, #1324;
+    /// `startCanvasMediaListing`): its task, its one token, the prompt it
+    /// feeds, and a generation that drops a superseded answer.
+    var canvasMediaListingTask: Task<Void, Never>?
+    var canvasMediaListingCancelToken: CancelToken?
+    var canvasMediaListingPromptID: String?
+    var canvasMediaListingGeneration: UInt64 = 0
+    /// The media listing's page size; a test lowers it to page a small vault.
+    var canvasMediaListingPageLimit: UInt32 = 1_000
+    /// Nil in production: awaited off the main actor before each page.
+    var canvasMediaListingPageGateForTesting: CanvasMediaListingPageGate?
     /// User-authored prompt text lives with the prompt owner instead of the
     /// ephemeral sheet. A quarantine or other failed commit therefore cannot
     /// destroy the only copy when SwiftUI re-renders the sheet.
@@ -10117,13 +10138,15 @@ final class AppState: ObservableObject {
                         }
                         return try session.untaggedFiles(paging: paging)
                     },
-                    listLevel: { [weak session] parent, paging in
+                    listLevel: { [weak session] parent, paging, cancel in
                         guard let session else {
                             throw SidebarFilterSessionClosedError()
                         }
+                        // The drain's token (plan 43 PR 12, #1324): one per
+                        // drain, cancelled when the pane supersedes it.
                         return try session.listDirFilesPage(
                             parentPath: parent, paging: paging,
-                            cancel: CancelToken()).asTreeListing()
+                            cancel: cancel).asTreeListing()
                     }),
                 organization: { [weak self] in
                     self?.sidebarOrganizationContext()
@@ -11860,20 +11883,31 @@ final class AppState: ObservableObject {
     /// calls and exclusive creates update the index themselves, so a clean
     /// import/move landing must not pay for or expose a vault scan. Directory
     /// rows resolve through the aggregate tree invalidation that follows.
+    ///
+    /// One token for the whole listing (plan 43 PR 12, #1324; locked 05 §4):
+    /// every page carries it, and the import phase task awaiting this reload
+    /// cancels it through the handler (a detached task inherits nothing), so
+    /// a cancelled reload ends `.Cancelled` at its next page and publishes
+    /// nothing.
     private func reloadImportInventoryOnly(for session: VaultSession) async throws {
-        let loaded = try await Task.detached(priority: .userInitiated) {
-            var all: [FileSummary] = []
-            var cursor: String? = nil
-            repeat {
-                let page = try session.listFiles(
-                    filter: .openableDocuments,
-                    paging: Paging(cursor: cursor, limit: 1_000),
-                    cancel: CancelToken())
-                all.append(contentsOf: page.items)
-                cursor = page.nextCursor
-            } while cursor != nil
-            return all
-        }.value
+        let cancel = CancelToken()
+        let loaded = try await withTaskCancellationHandler {
+            try await Task.detached(priority: .userInitiated) {
+                var all: [FileSummary] = []
+                var cursor: String? = nil
+                repeat {
+                    let page = try session.listFiles(
+                        filter: .openableDocuments,
+                        paging: Paging(cursor: cursor, limit: 1_000),
+                        cancel: cancel)
+                    all.append(contentsOf: page.items)
+                    cursor = page.nextCursor
+                } while cursor != nil
+                return all
+            }.value
+        } onCancel: {
+            cancel.cancel()
+        }
         guard currentSession === session else { return }
         files = loaded.sorted {
             $0.path.localizedCaseInsensitiveCompare($1.path) == .orderedAscending
@@ -16613,37 +16647,47 @@ final class AppState: ObservableObject {
     /// directory listing. This observes both `dirs` and `files`, so an empty
     /// folder can materialize even though openable-file inventory cannot prove
     /// its existence.
+    ///
+    /// One token for every parent and page (plan 43 PR 12, #1324; locked 05
+    /// §4), cancelled through the handler when the import task awaiting the
+    /// reconciliation is, so a cancelled one ends `.Cancelled` and
+    /// materializes nothing.
     nonisolated static func resolveImportMaterialization(
         _ candidates: [SidebarImportMaterializedResult],
         session: VaultSession
     ) async throws -> [SidebarImportMaterializedResult] {
-        try await Task.detached(priority: .userInitiated) {
-            let grouped = Dictionary(grouping: candidates) {
-                guard let slash = $0.path.lastIndex(of: "/") else { return "" }
-                return String($0.path[$0.path.startIndex..<slash])
-            }
-            var materialized: [SidebarImportMaterializedResult] = []
-            for (parent, values) in grouped {
-                var directoryPaths = Set<String>()
-                var filePaths = Set<String>()
-                var cursor: String? = nil
-                repeat {
-                    let listing = try session.listDirChildrenPage(
-                        parentPath: parent,
-                        paging: Paging(cursor: cursor, limit: 1_000),
-                        cancel: CancelToken())
-                    directoryPaths.formUnion(listing.dirs.map(\.path))
-                    filePaths.formUnion(listing.files.map(\.path))
-                    cursor = listing.nextCursor
-                } while cursor != nil
-                materialized.append(contentsOf: values.filter {
-                    $0.isDirectory
-                        ? directoryPaths.contains($0.path)
-                        : filePaths.contains($0.path)
-                })
-            }
-            return providerOrderedImportResults(materialized)
-        }.value
+        let cancel = CancelToken()
+        return try await withTaskCancellationHandler {
+            try await Task.detached(priority: .userInitiated) {
+                let grouped = Dictionary(grouping: candidates) {
+                    guard let slash = $0.path.lastIndex(of: "/") else { return "" }
+                    return String($0.path[$0.path.startIndex..<slash])
+                }
+                var materialized: [SidebarImportMaterializedResult] = []
+                for (parent, values) in grouped {
+                    var directoryPaths = Set<String>()
+                    var filePaths = Set<String>()
+                    var cursor: String? = nil
+                    repeat {
+                        let listing = try session.listDirChildrenPage(
+                            parentPath: parent,
+                            paging: Paging(cursor: cursor, limit: 1_000),
+                            cancel: cancel)
+                        directoryPaths.formUnion(listing.dirs.map(\.path))
+                        filePaths.formUnion(listing.files.map(\.path))
+                        cursor = listing.nextCursor
+                    } while cursor != nil
+                    materialized.append(contentsOf: values.filter {
+                        $0.isDirectory
+                            ? directoryPaths.contains($0.path)
+                            : filePaths.contains($0.path)
+                    })
+                }
+                return providerOrderedImportResults(materialized)
+            }.value
+        } onCancel: {
+            cancel.cancel()
+        }
     }
 
     private static func importBatchAnnouncement(
@@ -20080,6 +20124,13 @@ final class AppState: ObservableObject {
     /// Run detached-handle cleanup first, then prepare at most two visible
     /// native documents concurrently. Batch result/history/announcement
     /// landing never awaits this task.
+    ///
+    /// One token per run (plan 43 PR 12, #1324; locked 05 §4): every Base
+    /// preparation in the run carries it, and cancelling the run's task
+    /// cancels it through the handler; a cancelled run applies nothing and
+    /// releases what it prepared. No owner ends a run early today — a closed
+    /// vault or a superseded document still releases the prepared handle
+    /// through the session and generation guards.
     func scheduleNativeDocumentRetargets(
         _ plans: [NativeDocumentRetargetPlan],
         session explicitSession: VaultSession? = nil
@@ -20092,8 +20143,10 @@ final class AppState: ObservableObject {
         let baseObserver = baseRetargetNativeExecutionObserverForTesting
         let baseRunner = baseRetargetPreloadRunner
         let preparationLimiter = nativeDocumentPreparationLimiter
+        let cancel = CancelToken()
 
         let workTask = Task { @MainActor [weak self] in
+          await withTaskCancellationHandler {
             await Task.detached(priority: .userInitiated) {
                 for plan in plans {
                     Self.closeReplacedNativeHandle(
@@ -20123,7 +20176,8 @@ final class AppState: ObservableObject {
                                     canvasRunner: canvasRunner,
                                     canvasObserver: canvasObserver,
                                     baseRunner: baseRunner,
-                                    baseObserver: baseObserver)
+                                    baseObserver: baseObserver,
+                                    cancel: cancel)
                             }.value
                             await preparationLimiter.release()
                             return result
@@ -20136,7 +20190,7 @@ final class AppState: ObservableObject {
                     return prepared
                 }
 
-                guard let self else {
+                guard let self, !Task.isCancelled else {
                     for result in results {
                         Self.releaseStaleNativeRetargetResult(
                             result,
@@ -20155,6 +20209,9 @@ final class AppState: ObservableObject {
                 }
                 offset = end
             }
+          } onCancel: {
+            cancel.cancel()
+          }
         }
         let predecessor = nativeDocumentRetargetTask
         let aggregateTask = Task { @MainActor in
@@ -20194,7 +20251,8 @@ final class AppState: ObservableObject {
         canvasRunner: CanvasNewFilePreloadRunner,
         canvasObserver: CanvasNewFileNativeExecutionObserver?,
         baseRunner: BaseRetargetPreloadRunner,
-        baseObserver: BaseRetargetNativeExecutionObserver?
+        baseObserver: BaseRetargetNativeExecutionObserver?,
+        cancel: CancelToken
     ) -> NativeDocumentRetargetResult? {
         switch plan {
         case .canvas(let path, let generation, _, let prepare):
@@ -20209,7 +20267,7 @@ final class AppState: ObservableObject {
                 owner: owner,
                 source: source,
                 generation: generation,
-                prepared: baseRunner(session, request, baseObserver))
+                prepared: baseRunner(session, request, baseObserver, cancel))
         }
     }
 

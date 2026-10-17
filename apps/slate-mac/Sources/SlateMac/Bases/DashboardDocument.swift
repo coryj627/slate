@@ -267,6 +267,15 @@ final class DashboardSectionDocument: ObservableObject, Identifiable {
     private var activeViewIndex = 0
     private var contentRefreshGeneration: UInt64 = 0
 
+    /// The token of this section's current execute (plan 43 PR 12, #1324):
+    /// one per execute, the previous cancelled by the next, and cancelled by
+    /// the section's teardown (`close`, which every load runs first). The
+    /// execute runs synchronously on the main actor (#1436), so it ends with
+    /// its owner rather than interrupting a running query.
+    private var executeCancelToken: CancelToken?
+
+    var executeCancelTokenForTesting: CancelToken? { executeCancelToken }
+
     init(index: Int, status: DashboardSectionStatus) {
         self.index = index
         self.status = status
@@ -352,6 +361,8 @@ final class DashboardSectionDocument: ObservableObject, Identifiable {
 
     func close(session: VaultSession) {
         contentRefreshGeneration &+= 1
+        executeCancelToken?.cancel()
+        executeCancelToken = nil
         if let handle {
             session.closeBase(handle: handle)
         }
@@ -376,13 +387,16 @@ final class DashboardSectionDocument: ObservableObject, Identifiable {
             state = .failed("Section has no open query.")
             return
         }
+        executeCancelToken?.cancel()
+        let cancel = CancelToken()
+        executeCancelToken = cancel
         do {
             let executed = try session.baseExecute(
                 handle: handle,
                 view: UInt32(activeViewIndex),
                 thisPath: thisPath,
                 quickFilter: nil,
-                cancel: CancelToken())
+                cancel: cancel)
             result = executed
             if let message = executed.viewError,
                 !message.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty

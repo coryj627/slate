@@ -20,9 +20,19 @@ struct CanvasPromptSheet: View {
         case dismiss
     }
 
+    /// The prompt as it stands now. `prompt` is the value the sheet was
+    /// presented with, and `CanvasPrompt` compares by identity, so SwiftUI
+    /// does not re-render the sheet when a vault-file picker's list lands
+    /// in place of its loading row (plan 43 PR 12, #1324): read the owner's
+    /// current value for the same prompt instead.
+    private var livePrompt: CanvasPrompt {
+        guard let current = appState.canvasPrompt, current.id == prompt.id else { return prompt }
+        return current
+    }
+
     var body: some View {
         VStack(alignment: .leading, spacing: Tokens.Spacing.md) {
-            switch prompt {
+            switch livePrompt {
             case .newGroup:
                 Text("New Group").font(Tokens.Typography.body.weight(.semibold))
                 TextField("Group label", text: $appState.canvasPromptDraft)
@@ -355,18 +365,14 @@ struct CanvasPromptSheet: View {
 
     /// #368 R5: the shared quick-open-style vault-file picker — filter
     /// field + list, one activation commits. Used by Add Note, Add
-    /// Media, and Locate….
+    /// Media, and Locate…. `files` is nil while the media listing runs
+    /// off the main actor (plan 43 PR 12, #1324): the loading row stands
+    /// where the list will be, so the wait is never silent.
     @ViewBuilder
     private func filePickBody(
-        heading: String, prompt: String, files: [String],
+        heading: String, prompt: String, files: [String]?,
         commit: @escaping (String) -> Void
     ) -> some View {
-        let filtered =
-            appState.canvasPromptDraft.isEmpty
-            ? files
-            : files.filter {
-                $0.localizedCaseInsensitiveContains(appState.canvasPromptDraft)
-            }
         Text(heading)
             .font(Tokens.Typography.body.weight(.semibold))
         Text(prompt)
@@ -376,6 +382,42 @@ struct CanvasPromptSheet: View {
             .textFieldStyle(.roundedBorder)
             .textContentType(.none)
             .accessibilityLabel("Filter files")
+        if let files {
+            fileList(heading: heading, files: files, commit: commit)
+        } else {
+            loadingRow
+            HStack {
+                Spacer()
+                dismissButton
+            }
+        }
+    }
+
+    /// The list's place while the media listing runs. Its words are the
+    /// list pane's own loading row's (`SidebarDualPaneView`): no new copy.
+    private var loadingRow: some View {
+        HStack(spacing: Tokens.Spacing.sm) {
+            ProgressView()
+                .controlSize(.small)
+            Text("Loading…")
+                .font(Tokens.Typography.caption)
+                .foregroundStyle(Tokens.ColorRole.textSecondary)
+            Spacer(minLength: 0)
+        }
+        .frame(maxWidth: .infinity, minHeight: 180, maxHeight: 280, alignment: .topLeading)
+        .accessibilityElement(children: .combine)
+    }
+
+    @ViewBuilder
+    private func fileList(
+        heading: String, files: [String], commit: @escaping (String) -> Void
+    ) -> some View {
+        let filtered =
+            appState.canvasPromptDraft.isEmpty
+            ? files
+            : files.filter {
+                $0.localizedCaseInsensitiveContains(appState.canvasPromptDraft)
+            }
         List(filtered.prefix(200), id: \.self) { path in
             Button {
                 commitMutation { commit(path) }

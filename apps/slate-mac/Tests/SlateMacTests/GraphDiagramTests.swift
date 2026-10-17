@@ -297,7 +297,8 @@ final class GraphDiagramTests: XCTestCase {
         let session = try makeSession()
         let model = try makeModel(session)
         let (_, view) = makeView(model, session: session, reduceMotion: true)
-        let frame = try XCTUnwrap(view.settleReduceMotionForTesting())
+        let cancel = CancelToken()
+        let frame = try XCTUnwrap(view.settleReduceMotionForTesting(cancel: cancel))
         XCTAssertGreaterThan(frame.iteration, 0)
         XCTAssertEqual(view.axChildCountForTesting(), model.nodeCount)
     }

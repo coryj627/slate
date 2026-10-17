@@ -431,10 +431,15 @@ enum BaseEmbedRefreshApplication: Sendable {
 }
 
 enum BaseEmbedPreparedLoader {
+    /// `cancel` is the token of the refresh that runs this preparation (plan
+    /// 43 PR 12, #1324): a cancelled refresh ends the whole preparation — no
+    /// embed is left with a failure it never had — and the opened handle is
+    /// closed here.
     nonisolated static func prepare(
         session: VaultSession,
         reservation: BaseEmbedHandleRefreshReservation,
-        observer: BaseRetargetNativeExecutionObserver?
+        observer: BaseRetargetNativeExecutionObserver?,
+        cancel: CancelToken
     ) -> BaseEmbedPreparedRefresh {
         var openedHandle: UInt64?
         var transferred = false
@@ -503,7 +508,7 @@ enum BaseEmbedPreparedLoader {
                         view: UInt32(activeViewIndex),
                         thisPath: reservation.thisPath,
                         quickFilter: snapshot.quickFilter,
-                        cancel: CancelToken())
+                        cancel: cancel)
                     let survivingSort = snapshot.sortSelection.flatMap {
                         $0.sortState(in: result) == nil ? nil : $0
                     }
@@ -516,6 +521,8 @@ enum BaseEmbedPreparedLoader {
                             appliedQuickFilter: snapshot.quickFilter,
                             sortSelection: survivingSort,
                             failure: nil))
+                } catch VaultError.Cancelled {
+                    throw VaultError.Cancelled
                 } catch {
                     preparedDocuments.append(
                         BaseEmbedPreparedDocument(
@@ -829,6 +836,14 @@ final class BaseEmbedDocument: ObservableObject {
     @Published private(set) var sortSelection: BaseGridSortSelection?
     private var appliedQuickFilterText: String?
     private var contentRefreshGeneration: UInt64 = 0
+    /// The token of this embed's current execute (plan 43 PR 12, #1324):
+    /// one per execute, the previous cancelled by the next, and cancelled by
+    /// the embed's teardown (a load, close, a move to Trash). The execute
+    /// runs synchronously on the main actor (#1436), so it ends with its
+    /// owner rather than interrupting a running query.
+    private var executeCancelToken: CancelToken?
+
+    var executeCancelTokenForTesting: CancelToken? { executeCancelToken }
 
     var handle: UInt64? { sharedHandle.handle }
 
@@ -893,6 +908,7 @@ final class BaseEmbedDocument: ObservableObject {
 
     func load(session: VaultSession) {
         contentRefreshGeneration &+= 1
+        endExecuteOperation()
         state = .loading
         result = nil
         views = []
@@ -959,7 +975,7 @@ final class BaseEmbedDocument: ObservableObject {
                 view: UInt32(activeViewIndex),
                 thisPath: thisPath,
                 quickFilter: quickFilterArgument,
-                cancel: CancelToken())
+                cancel: beginExecuteOperation())
             result = executed
             appliedQuickFilterText = appliedFilter
             if stagedSortSelection == nil, sortSelection?.sortState(in: executed) == nil {
@@ -1049,6 +1065,7 @@ final class BaseEmbedDocument: ObservableObject {
 
     func invalidateMovedToTrash() {
         contentRefreshGeneration &+= 1
+        endExecuteOperation()
         let name = ((request.targetPath ?? "Base") as NSString).lastPathComponent
         fail("\(name) was moved to Trash and is no longer available.")
     }
@@ -1108,7 +1125,23 @@ final class BaseEmbedDocument: ObservableObject {
 
     func close(session: VaultSession) {
         contentRefreshGeneration &+= 1
+        endExecuteOperation()
         sharedHandle.close(session: session)
+    }
+
+    /// Start an execute: cancel the previous execute's token and hold a new
+    /// one for this execute (one token per operation).
+    private func beginExecuteOperation() -> CancelToken {
+        executeCancelToken?.cancel()
+        let token = CancelToken()
+        executeCancelToken = token
+        return token
+    }
+
+    /// The embed's teardown ends its current execute's operation.
+    private func endExecuteOperation() {
+        executeCancelToken?.cancel()
+        executeCancelToken = nil
     }
 
     func beginContentRefresh() -> BaseEmbedDocumentRefreshSnapshot {

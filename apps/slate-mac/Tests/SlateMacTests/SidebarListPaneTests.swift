@@ -161,7 +161,7 @@ final class SidebarListPaneTests: XCTestCase {
             SidebarListPaneModel.Dependencies(
                 performQuery: { _, _, _, _ in throw StubError() },
                 performUntagged: { _ in throw StubError() },
-                listLevel: { _, paging in
+                listLevel: { _, paging, _ in
                     let index = paging.cursor.flatMap(Int.init) ?? 0
                     let page = pages(index)
                     return DirListing(
@@ -258,7 +258,7 @@ final class SidebarListPaneTests: XCTestCase {
             SidebarListPaneModel.Dependencies(
                 performQuery: { _, _, _, _ in throw StubError() },
                 performUntagged: { _ in throw StubError() },
-                listLevel: { _, _ in throw StubError() }),
+                listLevel: { _, _, _ in throw StubError() }),
             organization: { FileTreeViewModel.OrganizationContext() },
             deviceDefaults: { (2, .standard) })
         model.show(.folder(path: "f"))

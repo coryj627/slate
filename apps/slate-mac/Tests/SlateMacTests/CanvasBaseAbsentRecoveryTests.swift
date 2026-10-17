@@ -387,9 +387,9 @@ final class CanvasBaseAbsentRecoveryTests: XCTestCase {
         preparationEntered.assertForOverFulfill = false
         let gate = NativePreparationGate { preparationEntered.fulfill() }
         let realPreloader = state.baseRetargetPreloadRunner
-        state.baseRetargetPreloadRunner = { session, request, observer in
+        state.baseRetargetPreloadRunner = { session, request, observer, cancel in
             gate.run {
-                realPreloader(session, request, observer)
+                realPreloader(session, request, observer, cancel)
             }
         }
 

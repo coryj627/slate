@@ -642,10 +642,10 @@ final class BatchRetargetPerformanceTests: XCTestCase {
                     session: session, path: path, observer: observer)
             }
         }
-        state.baseRetargetPreloadRunner = { session, request, observer in
+        state.baseRetargetPreloadRunner = { session, request, observer, cancel in
             gate.run {
                 BasePreparedLoader.prepare(
-                    session: session, request: request, observer: observer)
+                    session: session, request: request, observer: observer, cancel: cancel)
             }
         }
 
@@ -824,10 +824,10 @@ final class BatchRetargetPerformanceTests: XCTestCase {
         state.baseRetargetNativeExecutionObserverForTesting = { event in
             recorder.recordBaseEvent(event)
         }
-        state.baseRetargetPreloadRunner = { session, request, observer in
+        state.baseRetargetPreloadRunner = { session, request, observer, cancel in
             gate.run {
                 BasePreparedLoader.prepare(
-                    session: session, request: request, observer: observer)
+                    session: session, request: request, observer: observer, cancel: cancel)
             }
         }
 
@@ -879,10 +879,10 @@ final class BatchRetargetPerformanceTests: XCTestCase {
         state.baseRetargetNativeExecutionObserverForTesting = { event in
             recorder.recordBaseEvent(event)
         }
-        state.baseRetargetPreloadRunner = { session, request, observer in
+        state.baseRetargetPreloadRunner = { session, request, observer, cancel in
             gate.run {
                 BasePreparedLoader.prepare(
-                    session: session, request: request, observer: observer)
+                    session: session, request: request, observer: observer, cancel: cancel)
             }
         }
 
@@ -977,10 +977,10 @@ final class BatchRetargetPerformanceTests: XCTestCase {
             contents: "# Beta\n",
             expectedContentHash: nil)
         let gate = NativeConcurrencyGate()
-        state.baseRetargetPreloadRunner = { session, request, observer in
+        state.baseRetargetPreloadRunner = { session, request, observer, cancel in
             gate.run {
                 BasePreparedLoader.prepare(
-                    session: session, request: request, observer: observer)
+                    session: session, request: request, observer: observer, cancel: cancel)
             }
         }
 
