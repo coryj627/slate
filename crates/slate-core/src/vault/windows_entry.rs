@@ -258,4 +258,4 @@ fn rename_opened(source: &fs::File, parent: &fs::File, name: &OsStr) -> Result<(
 
 #[cfg(test)]
 #[path = "windows_entry_tests.rs"]
-mod tests;
+pub(super) mod tests;

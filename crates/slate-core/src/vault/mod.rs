@@ -34,13 +34,19 @@
 //!   across overwrite; new files take the tempfile crate's default
 //!   (0600 on POSIX).
 //! - **Delete.** `delete` uses the `trash` crate to move-to-trash on
-//!   macOS and Windows (Slate's target platforms). On platforms without
-//!   trash support the call returns `VaultError::Trash`; the engine does
-//!   not silently fall back to permanent deletion.
+//!   macOS and Windows (Slate's target platforms). The path it hands
+//!   over is derived from the pinned parent of a no-follow walk and must
+//!   lie beneath the vault root (`trash_handoff`, #1450). On platforms
+//!   without trash support the call returns `VaultError::Trash`; the
+//!   engine does not silently fall back to permanent deletion.
 
 mod fs;
 mod provider;
+mod trash_handoff;
 mod trash_snapshot;
+
+#[cfg(test)]
+pub(crate) use trash_handoff::ScratchTrash;
 
 pub use trash_snapshot::TrashSnapshot;
 

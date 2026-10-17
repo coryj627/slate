@@ -3,7 +3,9 @@
 
 use super::*;
 
-fn junction(path: &Path, target: &Path) {
+/// Convert the empty directory `path` into a junction to `target` (also used
+/// by the Trash handoff facts, `trash_handoff_tests.rs`).
+pub(in crate::vault) fn junction(path: &Path, target: &Path) {
     let file = fs::OpenOptions::new()
         // WRITE_ATTRIBUTES bypasses sharing arbitration: this is the concrete
         // race that defeated the original path-based walk's directory pins.
