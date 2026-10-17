@@ -17,7 +17,7 @@ use std::sync::Mutex;
 
 /// Every entry beneath `dir` except the vault's own `.slate` cache, never
 /// following a link: the kind, and the bytes or the link target.
-fn tree(dir: &Path) -> BTreeMap<String, String> {
+pub(super) fn tree(dir: &Path) -> BTreeMap<String, String> {
     fn visit(base: &Path, dir: &Path, out: &mut BTreeMap<String, String>) {
         for entry in std::fs::read_dir(dir).unwrap() {
             let path = entry.unwrap().path();
@@ -46,13 +46,13 @@ fn tree(dir: &Path) -> BTreeMap<String, String> {
     out
 }
 
-fn write(root: &Path, path: &str, contents: &str) {
+pub(super) fn write(root: &Path, path: &str, contents: &str) {
     let full = root.join(path);
     std::fs::create_dir_all(full.parent().unwrap()).unwrap();
     std::fs::write(full, contents).unwrap();
 }
 
-fn indexed_vault(files: &[(&str, &str)]) -> (tempfile::TempDir, VaultSession) {
+pub(super) fn indexed_vault(files: &[(&str, &str)]) -> (tempfile::TempDir, VaultSession) {
     let tmp = tempfile::tempdir().unwrap();
     for (path, contents) in files {
         write(tmp.path(), path, contents);
@@ -64,7 +64,7 @@ fn indexed_vault(files: &[(&str, &str)]) -> (tempfile::TempDir, VaultSession) {
 
 /// The external writer: park the real folder inside the vault, then put a
 /// symlink to `target` (outside the vault) in its place.
-fn swap_for_link(vault: &Path, folder: &str, target: &Path) {
+pub(super) fn swap_for_link(vault: &Path, folder: &str, target: &Path) {
     std::fs::rename(vault.join(folder), vault.join(format!("{folder}-parked"))).unwrap();
     std::os::unix::fs::symlink(target, vault.join(folder)).unwrap();
 }

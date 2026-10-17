@@ -2913,4 +2913,278 @@ mod tests {
         assert_eq!(names, vec![expected.to_string()]);
         assert_eq!(p.read_file(nfd).unwrap(), b"cafe");
     }
+
+    /// #1452: the typed refusal a save or a creation gives for a folder on its
+    /// path that is a symbolic link or not a folder: `InvalidPath` for the
+    /// caller's path, naming the folder, ending with what did not happen.
+    #[cfg(unix)]
+    fn assert_refused(error: &VaultError, refused: &str, names: &str, outcome: &str) {
+        assert!(
+            matches!(error, VaultError::InvalidPath { path, reason }
+                if path == refused && reason.contains(names) && reason.ends_with(outcome)),
+            "expected the refusal of {refused:?} naming {names:?} ({outcome:?}), got {error:?}"
+        );
+    }
+
+    /// The vault's own `sub` folder, parked inside the vault, and a symlink
+    /// to `outside` in its place: the external writer of #1449 and #1452.
+    #[cfg(unix)]
+    fn swap_sub_for_a_link(vault: &Path, outside: &Path) {
+        std::fs::rename(vault.join("sub"), vault.join("parked")).unwrap();
+        std::os::unix::fs::symlink(outside, vault.join("sub")).unwrap();
+    }
+
+    /// #1452: a vault folder replaced by a symlink to a directory outside the
+    /// vault, after Slate saw it, must not redirect a save. Before the fix
+    /// `write_file` made the parent with `create_dir_all` and published with a
+    /// path-addressed rename, and both followed the link: the save replaced a
+    /// same-named file outside the vault, or made a new one there, and a
+    /// missing folder was made outside too, while the save reported success.
+    #[cfg(unix)]
+    #[test]
+    fn write_file_refuses_a_save_through_a_folder_swapped_for_a_symlink() {
+        let (tmp, p) = vault();
+        let outside = tempfile::tempdir().unwrap();
+        std::fs::write(outside.path().join("note.md"), b"outside note").unwrap();
+        p.write_file("sub/note.md", b"vault note").unwrap();
+        swap_sub_for_a_link(tmp.path(), outside.path());
+        let outside_before = tree(outside.path());
+        let vault_before = tree(tmp.path());
+
+        // An overwrite of a name the link's target holds, a new name, and a
+        // new name in a folder that does not exist yet.
+        for relative in ["sub/note.md", "sub/new-note.md", "sub/new/deeper.md"] {
+            let error = p.write_file(relative, b"saved bytes").unwrap_err();
+            assert_refused(
+                &error,
+                relative,
+                "\"sub\" is a symbolic link, not a folder in this vault",
+                "so nothing was saved",
+            );
+        }
+
+        assert_eq!(tree(outside.path()), outside_before, "outside changed");
+        assert_eq!(tree(tmp.path()), vault_before, "vault changed");
+    }
+
+    /// #1452: `create_dir` (`create_folder`'s only route to disk) made the
+    /// folder with `create_dir_all` from the absolute path, so a folder
+    /// swapped for a symlink put the new folder outside the vault.
+    #[cfg(unix)]
+    #[test]
+    fn create_dir_refuses_a_new_folder_through_a_folder_swapped_for_a_symlink() {
+        let (tmp, p) = vault();
+        let outside = tempfile::tempdir().unwrap();
+        p.create_dir("sub").unwrap();
+        swap_sub_for_a_link(tmp.path(), outside.path());
+        let outside_before = tree(outside.path());
+        let vault_before = tree(tmp.path());
+
+        for relative in ["sub/new-folder", "sub/new/deeper"] {
+            let error = p.create_dir(relative).unwrap_err();
+            assert_refused(
+                &error,
+                relative,
+                "\"sub\" is a symbolic link, not a folder in this vault",
+                "so no folder was created",
+            );
+        }
+
+        assert_eq!(tree(outside.path()), outside_before, "outside changed");
+        assert_eq!(tree(tmp.path()), vault_before, "vault changed");
+    }
+
+    /// #1452: the exclusive creates already refused a symlinked ancestor,
+    /// because they pin the parent with the no-follow walk, but reported the
+    /// kernel's `ENOTDIR` as an untyped IO error ("Not a directory (os error
+    /// 20)"). They now give the typed refusal, and a refused create changes
+    /// nothing, not even the staging folder.
+    #[cfg(unix)]
+    #[test]
+    fn exclusive_creates_through_a_symlinked_folder_give_the_typed_refusal() {
+        let (tmp, p) = vault();
+        let outside = tempfile::tempdir().unwrap();
+        std::os::unix::fs::symlink(outside.path(), tmp.path().join("sub")).unwrap();
+        let vault_before = tree(tmp.path());
+
+        let create = p.write_file_if_absent("sub/new.md", b"new").unwrap_err();
+        assert_refused(
+            &create,
+            "sub/new.md",
+            "\"sub\" is a symbolic link, not a folder in this vault",
+            "so nothing was created",
+        );
+        let folder = p.create_dir_if_absent("sub/new").unwrap_err();
+        assert_refused(
+            &folder,
+            "sub/new",
+            "\"sub\" is a symbolic link, not a folder in this vault",
+            "so no folder was created",
+        );
+
+        assert!(tree(outside.path()).is_empty(), "outside changed");
+        assert_eq!(tree(tmp.path()), vault_before, "vault changed");
+    }
+
+    /// #1452: a folder on the path that is a file refuses every save and
+    /// creation with its own reason, naming the vault-relative prefix, where
+    /// each used to fail with an untyped IO error.
+    #[cfg(unix)]
+    #[test]
+    fn saves_and_creations_name_an_ancestor_that_is_not_a_folder() {
+        let (tmp, p) = vault();
+        p.write_file("notes/plain.md", b"a file, not a folder")
+            .unwrap();
+        let vault_before = tree(tmp.path());
+        let names = "\"notes/plain.md\" is not a folder";
+
+        let save = p.write_file("notes/plain.md/x.md", b"x").unwrap_err();
+        assert_refused(&save, "notes/plain.md/x.md", names, "so nothing was saved");
+        let folder = p.create_dir("notes/plain.md/x/y").unwrap_err();
+        assert_refused(
+            &folder,
+            "notes/plain.md/x/y",
+            names,
+            "so no folder was created",
+        );
+        let create = p
+            .write_file_if_absent("notes/plain.md/x.md", b"x")
+            .unwrap_err();
+        assert_refused(
+            &create,
+            "notes/plain.md/x.md",
+            names,
+            "so nothing was created",
+        );
+        let exclusive = p.create_dir_if_absent("notes/plain.md/x").unwrap_err();
+        assert_refused(
+            &exclusive,
+            "notes/plain.md/x",
+            names,
+            "so no folder was created",
+        );
+
+        assert_eq!(tree(tmp.path()), vault_before, "vault changed");
+    }
+
+    /// #1452: a folder's own name that is a symbolic link (to a folder or to
+    /// nothing), or a file, is not a folder in this vault. Before the fix
+    /// `create_dir` followed a link to a folder and reported success, so
+    /// `create_folder` recorded a folder (whose undo would trash the link),
+    /// and a file was an untyped `AlreadyExists`. Each is now the typed
+    /// refusal, naming the entry, and nothing is followed or created.
+    #[cfg(unix)]
+    #[test]
+    fn create_dir_refuses_a_final_component_that_is_a_link_or_a_file() {
+        let (tmp, p) = vault();
+        let outside = tempfile::tempdir().unwrap();
+        std::os::unix::fs::symlink(outside.path(), tmp.path().join("link")).unwrap();
+        std::os::unix::fs::symlink(tmp.path().join("missing"), tmp.path().join("dangling"))
+            .unwrap();
+        p.write_file("plain.md", b"a file").unwrap();
+        let vault_before = tree(tmp.path());
+
+        for (relative, names) in [
+            ("link", "\"link\" is a symbolic link"),
+            ("dangling", "\"dangling\" is a symbolic link"),
+            ("plain.md", "\"plain.md\" is not a folder"),
+        ] {
+            let error = p.create_dir(relative).unwrap_err();
+            assert_refused(&error, relative, names, "so no folder was created");
+        }
+
+        assert!(tree(outside.path()).is_empty(), "outside changed");
+        assert_eq!(tree(tmp.path()), vault_before, "vault changed");
+    }
+
+    /// #1452 keeps what a save and a new folder do in real folders: missing
+    /// folders are made, each with `mkdirat` inside its pinned parent, and are
+    /// real folders in the vault; an overwrite replaces the bytes; and
+    /// `create_dir` stays idempotent, an existing folder being `Ok` even when
+    /// it cannot be searched (the look at it does not open it).
+    #[cfg(unix)]
+    #[test]
+    fn saves_and_new_folders_still_make_missing_folders_beneath_the_root() {
+        use std::os::unix::fs::PermissionsExt as _;
+
+        let (tmp, p) = vault();
+        p.write_file("a/b/c.md", b"deep").unwrap();
+        p.write_file("a/b/c.md", b"deeper").unwrap();
+        p.create_dir("x/y/z").unwrap();
+        p.create_dir("x/y/z").unwrap();
+        p.create_dir("a/b").unwrap();
+        p.write_file_if_absent("x/y/fresh.md", b"fresh").unwrap();
+        p.create_dir_if_absent("x/y/fresh").unwrap();
+        let locked = tmp.path().join("locked");
+        std::fs::create_dir(&locked).unwrap();
+        std::fs::set_permissions(&locked, fs::Permissions::from_mode(0o000)).unwrap();
+        let idempotent = p.create_dir("locked");
+        std::fs::set_permissions(&locked, fs::Permissions::from_mode(0o700)).unwrap();
+        idempotent.expect("an existing folder is Ok, whatever its permissions");
+
+        for folder in ["a", "a/b", "x", "x/y", "x/y/z", "x/y/fresh"] {
+            let meta = tmp.path().join(folder).symlink_metadata().unwrap();
+            assert!(meta.is_dir() && !meta.file_type().is_symlink(), "{folder}");
+        }
+        assert_eq!(p.read_file("a/b/c.md").unwrap(), b"deeper");
+        assert_eq!(p.read_file("x/y/fresh.md").unwrap(), b"fresh");
+        assert_eq!(
+            std::fs::read_dir(tmp.path().join(".slate/tmp"))
+                .unwrap()
+                .count(),
+            0,
+            "no staged file is left behind"
+        );
+    }
+
+    /// #1452: the root is the descriptor, not a path component, so a vault
+    /// opened through a symlinked root keeps saving and creating folders.
+    #[cfg(unix)]
+    #[test]
+    fn saves_and_new_folders_through_a_symlinked_vault_root_still_land() {
+        let tmp = tempfile::tempdir().unwrap();
+        let real = tmp.path().join("real-vault");
+        std::fs::create_dir(&real).unwrap();
+        let link = tmp.path().join("vault-link");
+        std::os::unix::fs::symlink(&real, &link).unwrap();
+        let p = FsVaultProvider::new(link);
+
+        p.write_file("a.md", b"a").unwrap();
+        p.write_file("a.md", b"a again").unwrap();
+        p.write_file("n/b.md", b"b").unwrap();
+        p.create_dir("f/g").unwrap();
+        p.write_file_if_absent("c.md", b"c").unwrap();
+        p.create_dir_if_absent("h").unwrap();
+
+        assert_eq!(std::fs::read(real.join("a.md")).unwrap(), b"a again");
+        assert_eq!(std::fs::read(real.join("n/b.md")).unwrap(), b"b");
+        assert_eq!(std::fs::read(real.join("c.md")).unwrap(), b"c");
+        assert!(real.join("f/g").is_dir() && real.join("h").is_dir());
+    }
+
+    /// The final component is still a name (#1449, #1452): a save to a path
+    /// that is itself a symbolic link replaces the link with the saved file,
+    /// as `write_file` always has (the vault module's symlink decisions), and
+    /// never writes through it. The file keeps the permissions of what the
+    /// link pointed at, as an overwrite keeps a regular file's own.
+    #[cfg(unix)]
+    #[test]
+    fn a_save_to_a_link_replaces_the_link_and_never_writes_through_it() {
+        use std::os::unix::fs::PermissionsExt as _;
+
+        let (tmp, p) = vault();
+        let outside = tempfile::tempdir().unwrap();
+        let target = outside.path().join("target.md");
+        std::fs::write(&target, b"outside target").unwrap();
+        std::fs::set_permissions(&target, fs::Permissions::from_mode(0o640)).unwrap();
+        std::os::unix::fs::symlink(&target, tmp.path().join("link.md")).unwrap();
+
+        p.write_file("link.md", b"saved").unwrap();
+
+        let meta = tmp.path().join("link.md").symlink_metadata().unwrap();
+        assert!(meta.is_file(), "the link was not replaced: {meta:?}");
+        assert_eq!(meta.permissions().mode() & 0o777, 0o640);
+        assert_eq!(std::fs::read(tmp.path().join("link.md")).unwrap(), b"saved");
+        assert_eq!(std::fs::read(&target).unwrap(), b"outside target");
+    }
 }

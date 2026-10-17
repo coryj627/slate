@@ -21852,6 +21852,9 @@ mod tests {
     #[cfg(windows)]
     #[path = "windows_long_paths.rs"]
     mod windows_long_paths;
+    #[cfg(unix)]
+    #[path = "write_ancestor_links.rs"]
+    mod write_ancestor_links;
 
     #[path = "link_integrity.rs"]
     mod link_integrity;
