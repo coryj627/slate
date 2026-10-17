@@ -1563,12 +1563,14 @@ extension AppState {
     /// two-wide detached scheduler prepares replacement native handles. Only
     /// the latest generation in the exact committing vault may publish.
     ///
-    /// One token per refresh (plan 43 PR 12, #1324; locked 05 §4): every
-    /// Base, dashboard-section and embed preparation of this generation
-    /// carries it, and cancelling the refresh's task cancels it through the
-    /// handler — the vault closing (`resetBaseRefreshTasksForVaultTransition`)
-    /// or the next refresh, which supersedes this one (only the latest
-    /// generation publishes, so the older one's native work has no reader).
+    /// One token per preparation (plan 43 PR 12, #1324; locked 05 §4), each
+    /// owned by the document, dashboard section or embed handle that
+    /// reserved it: its reservation carries the token into the preparation,
+    /// and the owner's teardown or next reservation cancels it. The refresh's
+    /// task cancels every token it holds through the handler — when the vault
+    /// closes (`resetBaseRefreshTasksForVaultTransition`) or when the next
+    /// refresh supersedes it (only the latest generation publishes, so the
+    /// older one's native work has no reader).
     @discardableResult
     func refreshVisibleBasesAfterInAppWrite(
         session: VaultSession,
@@ -1580,7 +1582,6 @@ extension AppState {
         visibleBasesRefreshTask?.cancel()
         visibleBasesRefreshGeneration &+= 1
         let generation = visibleBasesRefreshGeneration
-        let cancel = CancelToken()
         let selectedPath = activeBaseSelectionPath
         let selectedIdentity = activeBaseSelectedRow.map {
             BaseRowMembership.Identity(path: $0.filePath, taskOrdinal: $0.taskOrdinal)
@@ -1736,6 +1737,9 @@ extension AppState {
             uniqueKeysWithValues: dashboardPlans.map { ($0.workIndex, $0) })
         let embedPlansByIndex = Dictionary(
             uniqueKeysWithValues: embedPlans.map { ($0.workIndex, $0) })
+        let preparationTokens = basePlans.map(\.reservation.cancel)
+            + dashboardPlans.map(\.reservation.cancel)
+            + embedPlans.map(\.reservation.cancel)
 
         let task: Task<[String], Never> = Task { @MainActor [weak self] in
             let results = await withTaskCancellationHandler {
@@ -1761,13 +1765,13 @@ extension AppState {
                                             index,
                                             runner(
                                                 session, reservation.request, observer,
-                                                cancel))
+                                                reservation.cancel))
                                     case .dashboard(let index, let reservation):
                                         return .dashboard(
                                             index,
                                             runner(
                                                 session, reservation.request, observer,
-                                                cancel))
+                                                reservation.cancel))
                                     case .embed(let index, let reservation):
                                         return .embed(
                                             index,
@@ -1775,7 +1779,7 @@ extension AppState {
                                                 session: session,
                                                 reservation: reservation,
                                                 observer: observer,
-                                                cancel: cancel))
+                                                cancel: reservation.cancel))
                                     }
                                 }.value
                                 await preparationLimiter.release()
@@ -1792,7 +1796,7 @@ extension AppState {
                 return preparedResults.sorted { $0.index < $1.index }
               }.value
             } onCancel: {
-                cancel.cancel()
+                for token in preparationTokens { token.cancel() }
             }
 
             guard !Task.isCancelled,

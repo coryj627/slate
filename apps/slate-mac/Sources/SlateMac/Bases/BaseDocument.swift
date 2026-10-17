@@ -180,6 +180,9 @@ struct BaseContentRefreshReservation: Sendable {
     let generation: UInt64
     let replacedHandle: UInt64?
     let request: BasePreparedLoadRequest
+    /// The prepared refresh's token, owned by the document that reserved it
+    /// (plan 43 PR 12, #1324): its teardown and its next reservation cancel it.
+    let cancel: CancelToken
 }
 
 enum BaseContentRefreshApplication: Sendable {
@@ -379,15 +382,22 @@ final class BaseDocument: ObservableObject {
     @Published private var retargetPreparationInFlight = false
     private var pendingRetargetRequest: BasePreparedLoadRequest?
     private var contentRefreshGeneration: UInt64 = 0
-    /// The token of this document's current execute (plan 43 PR 12, #1324;
-    /// locked 05 §4): one per execute, replaced — and the previous one
-    /// cancelled — by the next, and cancelled by the document's teardown
-    /// (a load, a retarget, close, a move to Trash). The execute still runs
-    /// synchronously on the main actor (#1436), so the token cannot stop one
-    /// already running; it ends with the operation's owner.
+    /// The token of this document's execute while it runs (plan 43 PR 12,
+    /// #1324; locked 05 §4): one per execute, held only for the call. The
+    /// execute runs synchronously on the main actor, so nothing can cancel
+    /// it while it runs (#1436 moves it off the main actor); the document's
+    /// teardown cancels an execute only if one is in flight.
     private var executeCancelToken: CancelToken?
+    /// The token of this document's prepared refresh while it runs off the
+    /// main actor (plan 43 PR 12, #1324): minted with its reservation, which
+    /// carries it into the preparation. The next reservation and the
+    /// document's teardown (a load, close, a retarget, a move to Trash)
+    /// cancel it, so a refresh the document can no longer apply stops its
+    /// query; the apply ends it.
+    private var contentRefreshCancelToken: CancelToken?
 
     var executeCancelTokenForTesting: CancelToken? { executeCancelToken }
+    var contentRefreshCancelTokenForTesting: CancelToken? { contentRefreshCancelToken }
 
     init(path: String) {
         self.source = .file(path: path)
@@ -425,7 +435,7 @@ final class BaseDocument: ObservableObject {
     func load(session: VaultSession, thisPath: String? = nil) {
         contentRefreshGeneration &+= 1
         invalidateRetargetPreparation()
-        endExecuteOperation()
+        cancelOwnedOperations()
         let previousViewName = activeViewName
         if let stale = handle {
             session.closeBase(handle: stale)
@@ -532,12 +542,14 @@ final class BaseDocument: ObservableObject {
                 throw fault
             }
             let appliedFilter = quickFilterArgument
+            let cancel = beginExecuteOperation()
+            defer { finishExecuteOperation(cancel) }
             let executed = try session.baseExecute(
                 handle: handle,
                 view: UInt32(activeViewIndex),
                 thisPath: thisPath,
                 quickFilter: quickFilterArgument,
-                cancel: beginExecuteOperation())
+                cancel: cancel)
             result = executed
             appliedQuickFilterText = appliedFilter
             let view = views[activeViewIndex]
@@ -748,7 +760,7 @@ final class BaseDocument: ObservableObject {
     func close(session: VaultSession) {
         contentRefreshGeneration &+= 1
         invalidateRetargetPreparation()
-        endExecuteOperation()
+        cancelOwnedOperations()
         if let handle {
             session.closeBase(handle: handle)
         }
@@ -761,7 +773,7 @@ final class BaseDocument: ObservableObject {
     func markMovedToTrash(session: VaultSession?) {
         contentRefreshGeneration &+= 1
         invalidateRetargetPreparation()
-        endExecuteOperation()
+        cancelOwnedOperations()
         if let handle, let session {
             session.closeBase(handle: handle)
         }
@@ -775,7 +787,7 @@ final class BaseDocument: ObservableObject {
     func retarget(to newPath: String, session: VaultSession?) {
         contentRefreshGeneration &+= 1
         invalidateRetargetPreparation()
-        endExecuteOperation()
+        cancelOwnedOperations()
         if let session {
             close(session: session)
         } else {
@@ -791,7 +803,7 @@ final class BaseDocument: ObservableObject {
     func retarget(to newSource: BaseDocumentSource, session: VaultSession?) {
         contentRefreshGeneration &+= 1
         invalidateRetargetPreparation()
-        endExecuteOperation()
+        cancelOwnedOperations()
         if let session {
             close(session: session)
         } else {
@@ -832,7 +844,7 @@ final class BaseDocument: ObservableObject {
                 thisPath: thisPath))
         pendingRetargetRequest = reservation.request
         handle = nil
-        endExecuteOperation()
+        cancelOwnedOperations()
         hasReadDefinition = false
         source = newSource
         retargetPreparationPending = true
@@ -924,6 +936,9 @@ final class BaseDocument: ObservableObject {
     func beginContentRefresh(thisPath: String?) -> BaseContentRefreshReservation {
         contentRefreshGeneration &+= 1
         let generation = contentRefreshGeneration
+        contentRefreshCancelToken?.cancel()
+        let cancel = CancelToken()
+        contentRefreshCancelToken = cancel
         return BaseContentRefreshReservation(
             generation: generation,
             replacedHandle: handle,
@@ -934,7 +949,8 @@ final class BaseDocument: ObservableObject {
                 quickFilter: editedQuickFilterArgument ?? appliedQuickFilterText,
                 sortColumnID: currentSortColumnID,
                 sortAscending: sortState?.ascending ?? true,
-                thisPath: thisPath))
+                thisPath: thisPath),
+            cancel: cancel)
     }
 
     /// Every conjunct here answers one question: would this invalidate the rows
@@ -962,6 +978,7 @@ final class BaseDocument: ObservableObject {
         _ prepared: BasePreparedLoad,
         reservation: BaseContentRefreshReservation
     ) -> BaseContentRefreshApplication {
+        if contentRefreshCancelToken === reservation.cancel { contentRefreshCancelToken = nil }
         guard ownsContentRefresh(reservation) else { return .stale }
         switch prepared {
         case .ready(
@@ -1082,8 +1099,7 @@ final class BaseDocument: ObservableObject {
         pendingRetargetRequest = nil
     }
 
-    /// Start an execute: cancel the previous execute's token and hold a new
-    /// one for this execute (one token per operation).
+    /// Hold a token for the execute about to run (one per execute).
     private func beginExecuteOperation() -> CancelToken {
         executeCancelToken?.cancel()
         let token = CancelToken()
@@ -1091,10 +1107,19 @@ final class BaseDocument: ObservableObject {
         return token
     }
 
-    /// The document's teardown ends its current execute's operation.
-    private func endExecuteOperation() {
+    /// The execute returned: release its token, unless a newer one holds the
+    /// slot.
+    private func finishExecuteOperation(_ token: CancelToken) {
+        if executeCancelToken === token { executeCancelToken = nil }
+    }
+
+    /// The document's teardown ends what it has in flight: an execute (none
+    /// while executes run on the main actor, #1436) and a prepared refresh.
+    private func cancelOwnedOperations() {
         executeCancelToken?.cancel()
         executeCancelToken = nil
+        contentRefreshCancelToken?.cancel()
+        contentRefreshCancelToken = nil
     }
 
     private func preparedState(

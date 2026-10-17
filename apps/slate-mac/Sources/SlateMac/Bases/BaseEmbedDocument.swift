@@ -397,6 +397,9 @@ struct BaseEmbedHandleRefreshReservation: @unchecked Sendable {
     let thisPath: String?
     let resolvedSavedQueryID: String?
     let documents: [BaseEmbedDocumentRefreshSnapshot]
+    /// The prepared refresh's token, owned by the shared handle that reserved
+    /// it (plan 43 PR 12, #1324): its close and its next reservation cancel it.
+    let cancel: CancelToken
 }
 
 struct BaseEmbedPreparedDocument: @unchecked Sendable {
@@ -650,6 +653,12 @@ final class BaseEmbedHandle {
     private var documents: [ObjectIdentifier: WeakBaseEmbedDocument] = [:]
     private var mountedLeaseCount = 0
     private var contentRefreshGeneration: UInt64 = 0
+    /// The token of this handle's prepared refresh while it runs off the main
+    /// actor (plan 43 PR 12, #1324): minted with its reservation, cancelled
+    /// by the next reservation and by `close`; the apply ends it.
+    private var contentRefreshCancelToken: CancelToken?
+
+    var contentRefreshCancelTokenForTesting: CancelToken? { contentRefreshCancelToken }
 
     init(request: BaseEmbedRequest, thisPath: String?) {
         self.request = request
@@ -723,6 +732,8 @@ final class BaseEmbedHandle {
 
     func close(session: VaultSession) {
         contentRefreshGeneration &+= 1
+        contentRefreshCancelToken?.cancel()
+        contentRefreshCancelToken = nil
         if let handle {
             session.closeBase(handle: handle)
         }
@@ -742,13 +753,17 @@ final class BaseEmbedHandle {
             .filter { !$0.needsInitialLoad }
         guard !liveDocuments.isEmpty else { return nil }
         contentRefreshGeneration &+= 1
+        contentRefreshCancelToken?.cancel()
+        let cancel = CancelToken()
+        contentRefreshCancelToken = cancel
         return BaseEmbedHandleRefreshReservation(
             generation: contentRefreshGeneration,
             replacedHandle: handle,
             request: request,
             thisPath: thisPath,
             resolvedSavedQueryID: resolvedSavedQueryID,
-            documents: liveDocuments.map { $0.beginContentRefresh() })
+            documents: liveDocuments.map { $0.beginContentRefresh() },
+            cancel: cancel)
     }
 
     func applyContentRefresh(
@@ -756,6 +771,7 @@ final class BaseEmbedHandle {
         reservation: BaseEmbedHandleRefreshReservation,
         session: VaultSession
     ) -> BaseEmbedRefreshApplication {
+        if contentRefreshCancelToken === reservation.cancel { contentRefreshCancelToken = nil }
         pruneDocuments()
         let liveByID = Dictionary(
             uniqueKeysWithValues: documents.values.compactMap(\.document).map {
@@ -836,11 +852,11 @@ final class BaseEmbedDocument: ObservableObject {
     @Published private(set) var sortSelection: BaseGridSortSelection?
     private var appliedQuickFilterText: String?
     private var contentRefreshGeneration: UInt64 = 0
-    /// The token of this embed's current execute (plan 43 PR 12, #1324):
-    /// one per execute, the previous cancelled by the next, and cancelled by
-    /// the embed's teardown (a load, close, a move to Trash). The execute
-    /// runs synchronously on the main actor (#1436), so it ends with its
-    /// owner rather than interrupting a running query.
+    /// The token of this embed's execute while it runs (plan 43 PR 12,
+    /// #1324): one per execute, held only for the call. The execute runs
+    /// synchronously on the main actor, so nothing can cancel it while it
+    /// runs (#1436); the embed's teardown cancels one only if it is in
+    /// flight. The shared handle owns the embed's prepared refresh.
     private var executeCancelToken: CancelToken?
 
     var executeCancelTokenForTesting: CancelToken? { executeCancelToken }
@@ -970,12 +986,14 @@ final class BaseEmbedDocument: ObservableObject {
                 columnId: effectiveSort?.columnID,
                 ascending: effectiveSort?.ascending ?? true)
             let appliedFilter = quickFilterArgument
+            let cancel = beginExecuteOperation()
+            defer { finishExecuteOperation(cancel) }
             let executed = try session.baseExecute(
                 handle: handle,
                 view: UInt32(activeViewIndex),
                 thisPath: thisPath,
                 quickFilter: quickFilterArgument,
-                cancel: beginExecuteOperation())
+                cancel: cancel)
             result = executed
             appliedQuickFilterText = appliedFilter
             if stagedSortSelection == nil, sortSelection?.sortState(in: executed) == nil {
@@ -1129,8 +1147,7 @@ final class BaseEmbedDocument: ObservableObject {
         sharedHandle.close(session: session)
     }
 
-    /// Start an execute: cancel the previous execute's token and hold a new
-    /// one for this execute (one token per operation).
+    /// Hold a token for the execute about to run (one per execute).
     private func beginExecuteOperation() -> CancelToken {
         executeCancelToken?.cancel()
         let token = CancelToken()
@@ -1138,7 +1155,14 @@ final class BaseEmbedDocument: ObservableObject {
         return token
     }
 
-    /// The embed's teardown ends its current execute's operation.
+    /// The execute returned: release its token, unless a newer one holds the
+    /// slot.
+    private func finishExecuteOperation(_ token: CancelToken) {
+        if executeCancelToken === token { executeCancelToken = nil }
+    }
+
+    /// The embed's teardown ends an execute in flight (none while executes
+    /// run on the main actor, #1436).
     private func endExecuteOperation() {
         executeCancelToken?.cancel()
         executeCancelToken = nil
