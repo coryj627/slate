@@ -1110,8 +1110,9 @@ internal static class ChordTable
         // W6-2 PR C (C-9): the three verbosity levels, one disposition each
         // — the canvas's twin (PR-4's math-verbosity reason): selected by
         // one parameterised setter the Graph menu binds with the tag as
-        // its CommandParameter; unregistered because a palette row cannot
-        // supply the parameter; the mac declares no ids for them either.
+        // its CommandParameter; unregistered here. Since plan 43 PR 4
+        // (#1216) the mac registers a palette row per level
+        // (slate.graph.setVerbosity*, these labels); Windows' rows are #1415.
         Unreg("windows.graph.setVerbosityTerse", "Graph Verbosity: Terse",
             CommandSection.Graph, GraphVerbosityReason),
         Unreg("windows.graph.setVerbosityStandard", "Graph Verbosity: Standard",
@@ -1125,8 +1126,10 @@ internal static class ChordTable
         + "levels — core's vector, persisted in the vault's graph.json (0b-12) — are "
         + "selected by one parameterized setter the Graph menu binds with the level's "
         + "tag as its CommandParameter. Each level is a row so the catalog records the "
-        + "closed set, and none is registered because a palette row cannot supply the "
-        + "parameter. mac declares no SlateCommandID for these either.";
+        + "closed set, and none is registered on Windows yet. Since plan 43 PR 4 (#1216) "
+        + "mac registers one palette row per level, slate.graph.setVerbosityTerse, "
+        + "slate.graph.setVerbosityStandard and slate.graph.setVerbosityVerbose, with "
+        + "these labels; Windows' twin rows are #1415.";
 
     private static IEnumerable<ChordTableEntry> CanvasRows() =>
     [

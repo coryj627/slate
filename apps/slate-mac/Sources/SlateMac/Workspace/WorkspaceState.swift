@@ -522,6 +522,18 @@ final class WorkspaceState: ObservableObject {
         }
     }
 
+    /// #1147 (contract 32 I6): the file these parked documents name is back
+    /// on disk, so they stop being missing. Each keeps its buffer, hash and
+    /// dirty state: an activation restores the buffer into the editor rather
+    /// than the missing-file state, and its next save names an existing file.
+    func markDocumentsBackOnDisk(forPath path: String) {
+        for document in documents.values
+        where document.isMissingFromDisk && BaseExactIdentity.matches(document.path, path)
+        {
+            document.isMissingFromDisk = false
+        }
+    }
+
     /// Explicit recovery discard. Tabs remain open, but their missing parked
     /// buffers are removed so a later activation shows the ordinary disk-load
     /// error rather than resurrecting discarded text.

@@ -92,6 +92,11 @@ final class StructuralRecoveryDestinationCensusTests: XCTestCase {
                 file: appState,
                 declaration: "func resolveSaveConflictKeepMine(",
                 requiredCode: [recreationGate, reservation]),
+            // #1147 (contract 32 I8): a hashless save is an exclusive create.
+            Funnel(
+                file: appState,
+                declaration: "func saveCurrentNote(",
+                requiredCode: [recreationGate, reservation]),
             Funnel(
                 file: appState,
                 declaration: "func performSave(",

@@ -269,6 +269,7 @@ def _first_clause(head_line: str) -> str:
 CLOSED = {
     "B-D11": "**closed on mac** by #1217 (plan 43 PR 5): the mac's mounted leaf loads on a rail switch to a STALE publication too",
     "C-D7": "**retired** by #1218 (plan 43 PR 5): the mac persists by field too, and its save aggregate no longer reads the live filter",
+    "C-D9": "**retired** by #1219 and #1216 (plan 43 PR 4): the mac has the items too, in its View ▸ Graph submenu (owner decision D8), each bound to its registry id",
     "D-D12": "**closed on mac** by #1220 (plan 43 PR 5): the mac's restore of a persisted Diagram speaks no mode line either",
 }
 

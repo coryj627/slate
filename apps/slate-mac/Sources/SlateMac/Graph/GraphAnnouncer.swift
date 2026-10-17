@@ -8,10 +8,10 @@ import Foundation
 
 // `GraphVerbosity` is core's since W6-2 PR 0a (`slate_core::a11y`). This
 // extension gives the generated enum what a store and a settings picker
-// need — the canvas extension's shape (`CanvasAnnouncer.swift`). Nothing
-// persists the level YET: mac never did (P2-4's intention never landed),
-// and 0b adds the `verbosity` key to `.slate/graph.json`'s schema; until
-// then every announcer starts at `.standard`.
+// need — the canvas extension's shape (`CanvasAnnouncer.swift`). The level
+// persists in `.slate/graph.json`'s `verbosity` key (0b) and is set by the
+// View ▸ Graph ▸ Verbosity items and their palette rows through
+// `setGraphVerbosity` (#1216); a vault with no saved level is `.standard`.
 //
 // **Persistence-tag stability — DO NOT RENAME.** The literals in
 // `persistenceTag` are the strings 0b's store writes into the vault
@@ -92,7 +92,7 @@ extension GraphSurfaceMode: CaseIterable {
 @MainActor
 final class GraphAnnouncer: ObservableObject {
     /// Live-switchable verbosity, passed per row event (core holds no
-    /// "current verbosity"). Default-only until 0b's store lands.
+    /// "current verbosity"). Written by `setGraphVerbosity` and the load.
     @Published var verbosity: GraphVerbosity
 
     /// Event classes for coalescing: same-class events within the window

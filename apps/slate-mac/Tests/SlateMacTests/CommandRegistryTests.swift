@@ -340,3 +340,76 @@ extension CommandRegistryTests {
         return try String(contentsOf: url, encoding: .utf8)
     }
 }
+
+// MARK: - The Slate catalog: the graph verbosity rows and the presets (#1216, #1219)
+
+/// Plan 43 PR 4: the graph verbosity level gets the front door its store
+/// has had since W6-2 PR 0b — one palette row per level of core's vector,
+/// "Graph Verbosity: {Title}", in the graph section, each running
+/// `setGraphVerbosity(_:)` — and the three presets keep the ids, labels and
+/// section the View ▸ Graph items bind to. The rows are the closed set the
+/// Windows chord table records as `windows.graph.setVerbosity*` (C-9).
+@MainActor
+extension CommandRegistryTests {
+    func testTheVerbosityRowsAreRegisteredInTheGraphSectionWithHints() throws {
+        let appState = AppState()
+        let byID = Dictionary(
+            uniqueKeysWithValues: appState.commandRegistry.list().map { ($0.id, $0) })
+        let specs = GraphVerbosity.specs
+        XCTAssertEqual(specs.map(\.tag), ["terse", "standard", "verbose"], "core's vector")
+        for spec in specs {
+            let id = SlateCommandID.graphSetVerbosity(spec.verbosity)
+            // Tag-true, as Windows' rows are: the id names the level's tag.
+            XCTAssertEqual(
+                id,
+                "slate.graph.setVerbosity" + spec.tag.prefix(1).uppercased() + spec.tag.dropFirst())
+            let command = try XCTUnwrap(byID[id], "\(spec.title) has no palette row")
+            XCTAssertEqual(command.label, "Graph Verbosity: \(spec.title)", "the title is core's")
+            XCTAssertEqual(command.section, .graph)
+            XCTAssertFalse((command.accessibilityHint ?? "").isEmpty, "\(id) needs a hint")
+            XCTAssertNil(command.hotkeyHint, "the graph's zero-new-chords rule (P1 R1)")
+            XCTAssertTrue(SlateCommandID.all.contains(id))
+        }
+        // The closed set: one row per level, no more.
+        XCTAssertEqual(
+            byID.keys.filter { $0.hasPrefix("slate.graph.setVerbosity") }.sorted(),
+            specs.map { SlateCommandID.graphSetVerbosity($0.verbosity) }.sorted())
+    }
+
+    func testThePresetIdsAreUnchanged() throws {
+        let appState = AppState()
+        let expected: [(id: String, label: String)] = [
+            ("slate.graph.openTab", "Open Graph"),
+            ("slate.graph.orphans", "Graph: Orphaned Notes"),
+            ("slate.graph.unresolved", "Graph: Unresolved Links"),
+            ("slate.graph.mostLinked", "Graph: Most Linked Notes"),
+        ]
+        XCTAssertEqual(
+            [
+                SlateCommandID.openGraphTab, SlateCommandID.graphOrphans,
+                SlateCommandID.graphUnresolved, SlateCommandID.graphMostLinked,
+            ],
+            expected.map(\.id))
+        for (id, label) in expected {
+            let command = try XCTUnwrap(
+                appState.commandRegistry.findById(id: id), "\(id) left the registry")
+            XCTAssertEqual(command.label, label)
+            XCTAssertEqual(command.section, .graph)
+            XCTAssertFalse((command.accessibilityHint ?? "").isEmpty)
+            XCTAssertNil(command.hotkeyHint)
+        }
+    }
+
+    func testInvokingAVerbosityRowSetsTheLevel() throws {
+        let appState = AppState()
+        XCTAssertEqual(appState.graphAnnouncer.verbosity, .standard)
+        for spec in GraphVerbosity.specs.reversed() {
+            try appState.commandRegistry.invokeById(
+                id: SlateCommandID.graphSetVerbosity(spec.verbosity))
+            XCTAssertEqual(
+                appState.graphAnnouncer.verbosity, spec.verbosity, "the row lines render at it")
+            XCTAssertEqual(
+                appState.graphConfig.verbosity, spec.verbosity, "the config's field (Term W7)")
+        }
+    }
+}
