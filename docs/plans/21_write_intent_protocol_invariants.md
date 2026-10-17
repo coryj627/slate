@@ -211,7 +211,10 @@ Six classes, all resolved in code plus one register entry:
 13. `VaultProvider::write_file` returning `InvalidPath` is treated as
     pre-mutation by contract; the shipping filesystem provider satisfies this,
     and any future provider must preserve it or the marker-clearing rule must
-    be revisited.
+    be revisited. Since #1452 the filesystem provider on macOS and Linux also
+    refuses with `InvalidPath` when a folder on the path is a symbolic link or
+    not a folder; its pinned walk refuses before anything is staged, so the
+    rule holds (`write_ancestor_links.rs` pins the cleared marker).
 
 ## Rules for future changes
 

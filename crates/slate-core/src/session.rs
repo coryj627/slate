@@ -4259,17 +4259,19 @@ impl VaultSession {
         // index, and the next scan picks it up via mtime/size/ctime.
         // (The write happens INSIDE the IMMEDIATE transaction so the
         // check-to-rename window above stays exclusive; a failed commit
-        // still leaves a fully-written file, never a partial one —
-        // `atomic_write` is temp-file + rename.)
+        // still leaves a fully-written file, never a partial one — the
+        // provider's save is temp-file + rename.)
         //
         // Error typing (re-confirmation review): `InvalidPath` from
         // the provider is its mutation-path validation refusing the
         // spelling BEFORE touching disk — a Windows reserved name
         // like `CON.md` passes vault-level validation but can never
-        // be written. That is a PROVABLE no-mutation, so it clears
-        // its registration like every pre-write exit; leaving the
-        // marker would poison every vault-wide query once aged,
-        // since its repair stats the same impossible path forever.
+        // be written, and since #1452 a folder on the path that is a
+        // symbolic link or not a folder refuses in the pinned walk,
+        // before anything is staged. That is a PROVABLE no-mutation,
+        // so it clears its registration like every pre-write exit;
+        // leaving the marker would poison every vault-wide query once
+        // aged, since its repair stats the same impossible path forever.
         // All other write errors keep the marker: an atomic publish
         // can fail AFTER mutating disk.
         if let Err(write_error) = self.provider.write_file(path, contents.as_bytes()) {

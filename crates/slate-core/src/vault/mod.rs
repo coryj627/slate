@@ -24,13 +24,17 @@
 //!   so a broken symlink can still be cleaned up or moved. On Unix
 //!   `rename` resolves both paths beneath the vault root without
 //!   following a symlink among their ancestors, and refuses one (#1449);
-//!   the root itself may be a symlink. Recursive
-//!   enumeration — handled at the `VaultSession` layer, not here —
-//!   will need cycle detection, but `FsVaultProvider`'s per-call API
-//!   is symlink-safe by virtue of not recursing.
+//!   so do `write_file`, `write_file_if_absent`, `create_dir` and
+//!   `create_dir_if_absent` for their one path, and `create_dir` also
+//!   refuses a final component that is a link (#1452). The root itself
+//!   may be a symlink. Recursive enumeration — handled at the
+//!   `VaultSession` layer, not here — will need cycle detection, but
+//!   `FsVaultProvider`'s per-call API is symlink-safe by virtue of not
+//!   recursing.
 //! - **Atomic writes.** `write_file` writes a temp file under the
 //!   vault's hidden `.slate/tmp/` directory, then renames it onto the
-//!   target. Same filesystem → atomic rename. Parking the temp inside
+//!   target (on Unix into its folder, pinned beneath the root: #1452).
+//!   Same filesystem → atomic rename. Parking the temp inside
 //!   `.slate/` keeps half-written files out of `list_dir` results for
 //!   the target's directory and means a crash-leak doesn't surface as
 //!   a visible vault entry. Existing-file permissions are preserved

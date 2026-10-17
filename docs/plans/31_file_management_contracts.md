@@ -514,6 +514,41 @@ enforced by construction, not by review.
   Cooperative cancellation cannot promise an interruption deadline for arbitrary
   drivers and does not abandon active mutation bookkeeping. Move/rename
   cancellation remains FR-2; Windows destination loading is tracked by FR-9.
+- **FR-12 — Saves and creations stay beneath the vault root (#1452).** On
+  macOS and Linux every save and every create pins the folder that will hold
+  its final component with FR-10's #1449 no-follow walk from the vault root:
+  `write_file` (every overwrite core performs through `save_text_locked`:
+  saves, link rewrites, task toggles, property edits), `write_file_if_absent`
+  (`CreateExclusive`, F1), `create_dir` (`CreateFolder`, F2) and
+  `create_dir_if_absent` (`create_folder_exclusive`, Finder import). A missing
+  folder is made with `mkdirat` inside its pinned parent. The bytes are still
+  staged in `.slate/tmp`, then renamed into the pinned folder by descriptor
+  (`renameat`, replacing, for a save; the no-replace rename for a create), and
+  that folder is synced after a save as before; a new folder is made in it
+  with `mkdirat`. Before, `write_file` and `create_dir` resolved the absolute
+  path (`create_dir_all`, then a path-addressed rename), so a folder swapped
+  for a symbolic link put a save's bytes or a new folder outside the vault
+  while the call reported success. A folder on the path that is a symbolic
+  link or not a folder now refuses with `InvalidPath` before anything is
+  staged, so a refused save clears its write intent (contract 21, register
+  entry 13). The reason names the folder and ends with what did not happen
+  (`"sub" is a symbolic link, not a folder in this vault, so nothing was
+  saved`; "so nothing was created"; "so no folder was created"), and both
+  hosts render it as they render FR-10's rename refusal. The exclusive creates
+  already refused such a folder, as an untyped `ENOTDIR`; they give the same
+  typed refusal, as does Move to Trash's inventory ("so nothing was moved").
+  `create_dir` also refuses a final component that is a link or a file, where
+  it followed a link to a folder and reported success (so `create_folder`
+  journaled a folder whose undo would trash the link); an existing folder is
+  still `Ok`. A vault whose root is a symlink still saves and creates.
+  **Residual:** the final component is still a name: a save to a link
+  replaces the link, as `write_file` always has. The publish lands in the
+  folder pinned a moment earlier, so a real folder moved out of the vault in
+  that moment is followed (no link involved), on macOS as well as on Linux
+  (FR-10's Linux moment). The staging folder `.slate/tmp` is reached by path,
+  like the rest of `.slate` (#940, PR 22's `FsRoot`). Reads still resolve by
+  path. Windows still saves and creates by path, so a junction swapped in as
+  an ancestor redirects a save or a new folder (#1451).
 
 ## Phase plan
 

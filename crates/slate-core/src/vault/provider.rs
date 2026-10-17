@@ -66,6 +66,12 @@ pub trait VaultProvider: Send + Sync {
 
     /// Write a vault file. Implementations should be atomic where
     /// possible (write to a temp file, then rename).
+    ///
+    /// A refusal of the path itself (an invalid spelling, or, in the
+    /// filesystem provider on Unix, a folder on the path that is a symbolic
+    /// link or not a folder: #1452) is `VaultError::InvalidPath` and must
+    /// change nothing: `save_text_locked` clears the save's write intent on
+    /// it, as for any provable no-write (contract 21, register entry 13).
     fn write_file(&self, relative: &str, contents: &[u8]) -> Result<(), VaultError>;
 
     /// Create a vault file that must not already exist (O-3 #541 —
@@ -195,7 +201,10 @@ pub trait VaultProvider: Send + Sync {
     /// path. Idempotent: an already-existing directory is Ok — the caller
     /// (U2-2 `create_folder`) enforces its own collision policy against
     /// the index, where case-insensitivity is decided; the provider only
-    /// guarantees the directory exists afterwards.
+    /// guarantees the directory exists afterwards. A symbolic link is not
+    /// an existing directory: the filesystem provider on Unix refuses a link
+    /// or a non-folder anywhere on the path, the final component included,
+    /// with `VaultError::InvalidPath` and creates nothing through it (#1452).
     fn create_dir(&self, relative: &str) -> Result<(), VaultError>;
 
     /// Create a directory only when its final path component is absent.
