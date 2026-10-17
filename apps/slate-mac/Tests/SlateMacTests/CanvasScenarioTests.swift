@@ -1,6 +1,7 @@
 // Copyright (C) 2026 Cory Joseph
 // SPDX-License-Identifier: AGPL-3.0-or-later
 
+import AppKit
 import CryptoKit
 import Foundation
 import XCTest
@@ -111,6 +112,250 @@ final class CanvasScenarioTests: XCTestCase {
         for (a, b) in zip(first, second) {
             XCTAssertEqual(a.artifact, b.artifact, "artifact \(a.name) differs between runs")
         }
+    }
+}
+
+// MARK: - File-card activation (plan 43 PR 2: #1169, CD-38)
+
+/// The Swift twins of `CanvasDocumentTests.TheProductionMediaSeamOpensMediaAndRefusesEverythingElse`
+/// and `CanvasDocumentTests.AMediaFileThatExistsButCannotBeOpenedRefusesRatherThanClaimingItIsMissing`.
+/// A canvas is untrusted input — it arrives over sync, from a shared
+/// vault, from Obsidian — so a file card reaches the default-app opener
+/// only when core classifies its target as media (`canvasMediaClass`),
+/// and every other outcome is a corpus sentence core renders, spoken
+/// through the canvas announcer. Each fact drives the one activation
+/// the outline and the table share, through a real `AppState`, a real
+/// vault and the real FFI session; only the opener is injected.
+@MainActor
+extension CanvasScenarioTests {
+    /// The corpus row (`tests/fixtures/a11y/corpus.json`), verbatim.
+    private static let setupExeRefusal =
+        "setup.exe is not a note or media file, so it was not opened from the canvas."
+
+    func testASetupExeFileCardIsRefusedAndNeverReachesTheOpener() async throws {
+        let fixture = try await CanvasActivationFixture(
+            card: #"{"id":"exe","type":"file","file":"setup.exe","x":0,"y":0,"width":200,"height":100}"#,
+            files: ["setup.exe": Data("MZ".utf8)],
+            opener: { url in
+                XCTFail("a non-media file card reached the default-app opener: \(url.path)")
+                return true
+            })
+        defer { fixture.tearDown() }
+        // The premise: the target is genuinely THERE and is not media, so
+        // neither "missing" nor an opener call can be right by accident.
+        XCTAssertTrue(
+            FileManager.default.fileExists(
+                atPath: fixture.vault.appendingPathComponent("setup.exe").path))
+        XCTAssertNil(canvasMediaClass(path: "setup.exe"))
+
+        try fixture.activate("exe")
+
+        XCTAssertEqual(fixture.posted.map(\.text), [Self.setupExeRefusal])
+        XCTAssertEqual(fixture.posted.first?.priority, .high, "a refusal is assertive")
+        // Core's sentence, not a host composition of it.
+        XCTAssertEqual(
+            Self.setupExeRefusal,
+            a11yRender(
+                event: .canvas(
+                    event: .canvasBlocked(reason: .fileTypeNotOpenable(target: "setup.exe")))
+            ).text)
+    }
+
+    func testAMediaCardWhoseOpenFailsSpeaksAFailedActionNotFileNotFound() async throws {
+        var handed: [URL] = []
+        let fixture = try await CanvasActivationFixture(
+            card: #"{"id":"clip","type":"file","file":"media/clip.mp4","x":0,"y":0,"width":200,"height":100}"#,
+            files: ["media/clip.mp4": Data([0, 0, 0, 24])],
+            opener: { url in
+                handed.append(url)
+                return false
+            })
+        defer { fixture.tearDown() }
+        XCTAssertEqual(canvasMediaClass(path: "media/clip.mp4"), .video)
+
+        try fixture.activate("clip")
+
+        // The opener WAS asked — the file exists and is media — and declined.
+        XCTAssertEqual(
+            handed.map(\.path), [fixture.vault.appendingPathComponent("media/clip.mp4").path])
+        let failed = a11yRender(
+            event: .canvas(
+                event: .canvasActionFailed(action: .canvasAction, detail: "media/clip.mp4"))
+        ).text
+        XCTAssertEqual(failed, "Canvas action failed: media/clip.mp4")
+        XCTAssertEqual(fixture.posted.map(\.text), [failed])
+        XCTAssertEqual(fixture.posted.first?.priority, .high)
+        // Never the absence sentence: the file is there, and Locate File
+        // would send the user to repoint a card that is fine.
+        let missing = a11yRender(
+            event: .canvas(event: .canvasFileNotFound(target: "media/clip.mp4"))
+        ).text
+        XCTAssertFalse(fixture.posted.contains { $0.text == missing }, "\(fixture.posted)")
+    }
+
+    /// Media opens as before: the default app is handed the in-vault file
+    /// and the sentence says so.
+    func testAMediaCardOpensInItsDefaultAppAndSaysSo() async throws {
+        var handed: [URL] = []
+        let fixture = try await CanvasActivationFixture(
+            card: #"{"id":"pic","type":"file","file":"diagram.png","x":0,"y":0,"width":200,"height":100}"#,
+            files: ["diagram.png": Data([0x89, 0x50, 0x4E, 0x47])],
+            opener: { url in
+                handed.append(url)
+                return true
+            })
+        defer { fixture.tearDown() }
+        let row = try XCTUnwrap(fixture.document.outline.first { $0.nodeId == "pic" })
+        XCTAssertEqual(row.kind, "image")
+
+        try fixture.activate("pic")
+
+        XCTAssertEqual(
+            handed.map(\.path), [fixture.vault.appendingPathComponent("diagram.png").path])
+        XCTAssertEqual(
+            fixture.posted.map(\.text),
+            [
+                a11yRender(
+                    event: .canvas(event: .canvasOpened(title: row.title, target: .defaultApp))
+                ).text
+            ])
+    }
+
+    func testAMarkdownCardStillOpensInTheTab() async throws {
+        let fixture = try await CanvasActivationFixture(
+            card: #"{"id":"note","type":"file","file":"notes/target.md","x":0,"y":0,"width":200,"height":100}"#,
+            files: ["notes/target.md": Data("# Target\n".utf8)],
+            opener: { url in
+                XCTFail("a Markdown card is a note, never a default-app open: \(url.path)")
+                return true
+            })
+        defer { fixture.tearDown() }
+
+        try fixture.activate("note")
+        await fixture.state.noteLoadTask?.value
+
+        XCTAssertEqual(fixture.state.selectedFilePath, "notes/target.md")
+        guard case .markdown(let path) = fixture.state.workspace.activeTab?.item else {
+            return XCTFail(
+                "expected a note tab, got \(String(describing: fixture.state.workspace.activeTab))")
+        }
+        XCTAssertEqual(path, "notes/target.md")
+        XCTAssertTrue(fixture.posted.isEmpty, "a note opening is not a refusal: \(fixture.posted)")
+    }
+}
+
+/// One vault holding `board.canvas` with a single card, the card's
+/// target files written beside it BEFORE the scan, opened in a canvas
+/// tab, with a capturing announcer installed after the open so only the
+/// activation's own sentences land in `posted`.
+@MainActor
+private final class CanvasActivationFixture {
+    let root: URL
+    let vault: URL
+    let state: AppState
+    let document: CanvasDocument
+    var posted: [(text: String, priority: NSAccessibilityPriorityLevel)] = []
+
+    init(card: String, files: [String: Data], opener: @escaping (URL) -> Bool) async throws {
+        let fm = FileManager.default
+        root = fm.temporaryDirectory
+            .appendingPathComponent("canvas-activation-\(UUID().uuidString)")
+            .resolvingSymlinksInPath()
+        vault = root.appendingPathComponent("vault")
+        try fm.createDirectory(at: vault, withIntermediateDirectories: true)
+        for (path, data) in files {
+            let url = vault.appendingPathComponent(path)
+            try fm.createDirectory(
+                at: url.deletingLastPathComponent(), withIntermediateDirectories: true)
+            try data.write(to: url)
+        }
+        try Data(#"{"nodes":[\#(card)],"edges":[]}"#.utf8)
+            .write(to: vault.appendingPathComponent("board.canvas"))
+        let store = RecentVaultsStore(fileURL: root.appendingPathComponent("recents.json"))
+        state = AppState(recentsStore: store, externalOpener: opener)
+        state.openVault(at: vault)
+        await state.scanTask?.value
+        state.openFile("board.canvas", target: .currentTab)
+        document = state.canvasDocument(for: "board.canvas")
+        state.canvasAnnouncer = CanvasAnnouncer(verbosity: .standard, coalesceWindow: 60) {
+            [weak self] text, priority in
+            self?.posted.append((text, priority))
+        }
+    }
+
+    /// Activate the card the way the container's activation switch does.
+    func activate(_ nodeId: String) throws {
+        let row = try XCTUnwrap(document.outline.first { $0.nodeId == nodeId })
+        state.canvasActivateFileCard(nodeId: nodeId, title: row.title, in: document)
+        state.canvasAnnouncer.flushForTests()
+    }
+
+    func tearDown() {
+        try? FileManager.default.removeItem(at: root)
+    }
+}
+
+/// #1166 (contract 34, "A stale selection survives undo"): a mutation's
+/// reload never leaves the shared selection naming a node the refreshed
+/// outline no longer holds. This scenario runs through the real verbs
+/// and the real funnel rather than the harness's bare applies, because
+/// the defect is the HOST's: core's undo removes the card correctly, and
+/// it was the selection the host kept afterwards that let a verb whose
+/// guard tests the raw selection act on nothing.
+extension CanvasScenarioTests {
+    @MainActor
+    func testUndoingACreateDropsTheSelectionAndDuplicateRefuses() async throws {
+        let tmp = FileManager.default.temporaryDirectory
+            .appendingPathComponent("canvas-undo-create-\(UUID().uuidString)")
+        let vault = tmp.appendingPathComponent("vault")
+        try FileManager.default.createDirectory(at: vault, withIntermediateDirectories: true)
+        defer { try? FileManager.default.removeItem(at: tmp) }
+        try Data(
+            #"{"nodes":[{"id":"a","type":"text","text":"Alpha","x":0,"y":0,"width":200,"height":100}],"edges":[]}"#
+                .utf8
+        ).write(to: vault.appendingPathComponent("board.canvas"))
+        let state = AppState(
+            recentsStore: RecentVaultsStore(fileURL: tmp.appendingPathComponent("recents.json")),
+            externalOpener: { _ in true })
+        state.openVault(at: vault)
+        await state.scanTask?.value
+        state.openFile("board.canvas", target: .currentTab)
+        var heard: [String] = []
+        state.canvasAnnouncer = CanvasAnnouncer(verbosity: .standard, coalesceWindow: 60) {
+            text, _ in heard.append(text)
+        }
+        let doc = try XCTUnwrap(state.activeCanvasDocument)
+
+        // Create a card: the verb selects it and opens its editor, which
+        // the user then closes.
+        state.canvasNewCard()
+        let created = try XCTUnwrap(doc.selection.selected, "a new card is selected")
+        XCTAssertTrue(doc.outline.contains { $0.nodeId == created })
+        state.dismissCanvasCardEditor()
+
+        // Undo it: the card is gone, and so is the selection that named it.
+        state.canvasUndo()
+        XCTAssertFalse(doc.outline.contains { $0.nodeId == created }, "the undo removed the card")
+        XCTAssertNil(
+            doc.selection.selected,
+            "the reload dropped a selection the refreshed outline cannot resolve")
+        XCTAssertEqual(doc.undoStack.map(\.name), [], "the create was the only entry")
+        state.canvasAnnouncer.flushForTests()
+
+        // Duplicate now has nothing selected, and says so with the arm
+        // every selection verb already speaks.
+        let beforeDuplicate = heard.count
+        state.canvasDuplicate()
+        state.canvasAnnouncer.flushForTests()
+        XCTAssertEqual(
+            Array(heard[beforeDuplicate...]),
+            [a11yRender(event: .canvas(event: .canvasStatus(note: .nothingSelected))).text])
+        XCTAssertEqual(Array(heard[beforeDuplicate...]), ["Nothing selected."])
+        XCTAssertEqual(doc.undoStack.map(\.name), [], "a refused duplicate writes no undo entry")
+        XCTAssertFalse(doc.undoStack.contains { $0.name == "duplicate 0 cards" })
+        XCTAssertFalse(
+            heard.contains { $0.contains("Duplicated 0 cards") },
+            "a zero count is never spoken: \(heard)")
     }
 }
 

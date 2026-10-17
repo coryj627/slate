@@ -1248,8 +1248,9 @@ internal static class ChordTable
                 "Wrap the marked cards in a new labeled group - one action, one undo."),
             Reg(Ids.CanvasDeleteMarked, "Canvas: Delete Marked Cards", CommandSection.Canvas,
                 "Delete every marked card and its connections - one summary, one undo."),
-            // §G TG-4 (GD-5): mac's verb has no front door; this row is
-            // Windows' — a recorded divergence assigned to the mac lane.
+            // §G TG-4 (GD-5): Windows landed this front door first; mac
+            // registered the same id and label with #1165, so the row is
+            // shared and its label byte-identical to mac (P3).
             Reg(Ids.CanvasColorMarked, "Canvas: Color Marked Cards…", CommandSection.Canvas,
                 "Set every marked card's color at once - one action, one undo."),
             Reg(Ids.CanvasClearMarks, "Canvas: Clear All Marks", CommandSection.Canvas,

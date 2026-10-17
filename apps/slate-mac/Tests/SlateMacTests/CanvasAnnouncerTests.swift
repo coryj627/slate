@@ -93,6 +93,50 @@ final class CanvasAnnouncerTests: XCTestCase {
         XCTAssertEqual(posted.count, 1, "stale navigation never resurfaces")
     }
 
+    /// CD-46 (#1167): every sentence Next and Previous Card can now say
+    /// is a row the corpus already carries, spoken through this announcer
+    /// byte for byte with the corpus's priority — the state arms the read
+    /// mapping answers outside `.ready`, the empty canvas's arm, and the
+    /// three the verbs always had. No host copy: the residue census is
+    /// unchanged.
+    func testNextCardSentencesAreTheCorpusRows() throws {
+        struct CorpusRow: Decodable {
+            let event: String
+            let priority: String
+            let text: String
+        }
+        let corpusURL = URL(fileURLWithPath: #filePath)
+            .deletingLastPathComponent()  // SlateMacTests
+            .deletingLastPathComponent()  // Tests
+            .deletingLastPathComponent()  // slate-mac
+            .deletingLastPathComponent()  // apps
+            .deletingLastPathComponent()  // repo root
+            .appendingPathComponent("tests/fixtures/a11y/corpus.json")
+        let rows = try JSONDecoder().decode(
+            [CorpusRow].self, from: Data(contentsOf: corpusURL))
+        let arms: [(CanvasStatusNote, String)] = [
+            (.loading, "This canvas is loading. Try again in a moment."),
+            (.notReadable, "Canvas is not readable."),
+            (.empty, "Canvas is empty."),
+            (.noCardsMatchFilter, "No cards match the filter."),
+            (.endOfCanvas, "End of canvas."),
+            (.startOfCanvas, "Start of canvas."),
+        ]
+        for (note, sentence) in arms {
+            let identity = a11yEventIdentity(event: .canvas(event: .canvasStatus(note: note)))
+            let row = try XCTUnwrap(
+                rows.first { $0.event == identity }, "the corpus has no row for \(identity)")
+            XCTAssertEqual(row.text, sentence, identity)
+            let announcer = makeAnnouncer(verbosity: .standard)
+            announcer.announce(.canvasStatus(note: note))
+            announcer.flushForTests()
+            XCTAssertEqual(posted.map(\.text), [row.text], identity)
+            XCTAssertEqual(
+                posted.map { $0.priority == .high ? "high" : "medium" }, [row.priority],
+                identity)
+        }
+    }
+
     /// The canvas table hands the shared data grid's OWN events to the
     /// funnel. Both the text and the priority must come from the
     /// render: unwrapping the text and re-wrapping it as a status

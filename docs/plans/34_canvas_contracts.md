@@ -436,7 +436,8 @@ cancel first.` — Canvas 553/591/621, Extras 266–269 — four copies) ·
 `ReopenFailed { message }` (`CanvasContainerView.swift:449–451`) ·
 `UndoQuarantined` / `RedoQuarantined` (§E TE-2: Windows's basis
 quarantine; no mac site) · `FileTypeNotOpenable { target }` (PR E13:
-Windows's shell-execution gate, CD-38; no mac site — #1169).
+Windows's shell-execution gate, CD-38; mac's since #1169, the same gate
+on mac's file-card activation, `AppState+CanvasExtras.swift`).
 
 ### Tests that pin PR 0a
 
@@ -3590,7 +3591,7 @@ where a platform never fires the key.
 | `CanvasUndoMenuTitle` | `AppState.swift#canvasUndoRedoMenuTitle` | — | `A11yCorpusCensus.cs#Corpus` | designated: no Edit menu on Windows (HD-D3); the history verbs' palette rows carry the registry's static labels |
 | `CanvasHistoryQuarantinedTitle` | — | — | `A11yCorpusCensus.cs#Corpus` | designated: no Edit menu on Windows (HD-D3); mac designated: mac's undo stack has no basis quarantine (TE-2/TE-4 are Windows's mechanism) — with no Edit menu on Windows either, an orphaned label arm, owed to an owner decision |
 | `CanvasStatus/NothingSelected` | `AppState+CanvasActions.swift#canvasOpenCardPicker`, `AppState+CanvasActions.swift#canvasPromptMoveIntoGroup`, `AppState+CanvasActions.swift#canvasPromptSetColor` (+14) | `CanvasDocumentViewModel.cs#AnnounceSelectionUnresolvable`, `CanvasDocumentViewModel.cs#CanvasConnect`, `CanvasDocumentViewModel.cs#CanvasConvertToNote` (+24) | `A11yCorpusCensus.cs#Corpus`, `CanvasAnnouncerTests.cs#AnOrdinaryImmediateEventRetiresNothing`, `CanvasContextMenuTests.cs#AKeyboardRequestOnTheBoardOpensTheSeatedCardsMenu` (+2) |  |
-| `CanvasStatus/NoMarks` | `AppState+CanvasActions.swift#canvasColorMarked`, `AppState+CanvasActions.swift#canvasDeleteMarked`, `AppState+CanvasActions.swift#canvasGroupMarked` (+2) | `CanvasDocumentViewModel.cs#CanvasDuplicate`, `CanvasDocumentViewModel.cs#OpenMarksList`, `CanvasDocumentViewModel.cs#RequestColorMarked` (+3) | `A11yCorpusCensus.cs#Corpus`, `CanvasDocumentTests.cs#NothingSpeaksAfterTheLastTabClosed`, `CanvasNavigatorTests.cs#AShutdownDuringACommitDrainsTheHeldDepartureThenSilences` (+1) |  |
+| `CanvasStatus/NoMarks` | `AppState+CanvasActions.swift#canvasColorMarked`, `AppState+CanvasActions.swift#canvasDeleteMarked`, `AppState+CanvasActions.swift#canvasGroupMarked` (+3) | `CanvasDocumentViewModel.cs#CanvasDuplicate`, `CanvasDocumentViewModel.cs#OpenMarksList`, `CanvasDocumentViewModel.cs#RequestColorMarked` (+3) | `A11yCorpusCensus.cs#Corpus`, `CanvasDocumentTests.cs#NothingSpeaksAfterTheLastTabClosed`, `CanvasNavigatorTests.cs#AShutdownDuringACommitDrainsTheHeldDepartureThenSilences` (+1) |  |
 | `CanvasStatus/NotAGroup` | `AppState+CanvasActions.swift#canvasPromptRenameGroup`, `AppState+CanvasActions.swift#canvasRenameGroup`, `AppState+CanvasNavigation.swift#canvasEnterGroup` | `CanvasDocumentViewModel.cs#CanvasMoveIntoGroup`, `CanvasDocumentViewModel.cs#CanvasUngroup`, `CanvasDocumentViewModel.cs#RequestGroupRenameForSelection` (+1) | `A11yCorpusCensus.cs#Corpus`, `CanvasNavigatorTests.cs#AnEmptyGroupAndANonGroupEachSayWhatTheyAre` |  |
 | `CanvasStatus/NotATextCard` | `AppState+CanvasCreate.swift#canvasEditCard` | `CanvasDocumentViewModel.cs#NodeTextOf`, `CanvasDocumentViewModel.cs#OpenCardEditor` | `A11yCorpusCensus.cs#Corpus` |  |
 | `CanvasStatus/NotAFileCard` | `AppState+CanvasCreate.swift#canvasOpenLocate` | `CanvasDocumentViewModel.cs#RequestVaultPick` | `A11yCorpusCensus.cs#Corpus` |  |
@@ -3604,7 +3605,7 @@ where a platform never fires the key.
 | `CanvasStatus/PickDifferentTarget` | `AppState+CanvasConnect.swift#canvasConnect` | `CanvasDocumentViewModel.cs#CanvasAlignWith`, `CanvasDocumentViewModel.cs#CanvasPlaceRelative`, `CanvasDocumentViewModel.cs#HandleCardPick` (+3) | `A11yCorpusCensus.cs#Corpus` |  |
 | `CanvasStatus/NoChanges` | `AppState+CanvasCreate.swift#canvasCommitCardEdit` | `CanvasCardEditorViewModel.cs#CommitOnEscape`, `CanvasDocumentViewModel.cs#CanvasAlignWith` | `A11yCorpusCensus.cs#Corpus` |  |
 | `CanvasStatus/NotReadable` | `AppState+Canvas.swift#canvasWhereAmI`, `AppState+CanvasNavigation.swift#activeCanvasDocumentAnyState`, `AppState+CanvasNavigation.swift#canvasReadRefusal` | `CanvasDocumentViewModel.cs#NodeTextOf`, `CanvasDocumentViewModel.cs#ProjectMarkedRows`, `CanvasDocumentViewModel.cs#ReadRefusalFor` (+1) | `A11yCorpusCensus.cs#Corpus`, `CanvasNavigatorTests.cs#TheReadMappingAnswersEveryLoadState` |  |
-| `CanvasStatus/Empty` | `AppState+Canvas.swift#canvasWhereAmI` | `CanvasNavigator.cs#AnnounceNothingToMoveThrough`, `CanvasNavigator.cs#MoveThroughTheScene`, `CanvasNavigator.cs#WhereAmI` | `A11yCorpusCensus.cs#Corpus`, `CanvasContextMenuTests.cs#AKeyboardRequestOnAnEmptyOutlineSaysWhyThereIsNoMenu`, `CanvasNavigatorTests.cs#AnEmptyCanvasAnswersRatherThanMovingNowhere` (+2) |  |
+| `CanvasStatus/Empty` | `AppState+Canvas.swift#canvasWhereAmI`, `AppState+CanvasNavigation.swift#canvasSelectAdjacent` | `CanvasNavigator.cs#AnnounceNothingToMoveThrough`, `CanvasNavigator.cs#MoveThroughTheScene`, `CanvasNavigator.cs#WhereAmI` | `A11yCorpusCensus.cs#Corpus`, `CanvasContextMenuTests.cs#AKeyboardRequestOnAnEmptyOutlineSaysWhyThereIsNoMenu`, `CanvasNavigatorTests.cs#AnEmptyCanvasAnswersRatherThanMovingNowhere` (+2) |  |
 | `CanvasStatus/EndOfCanvas` | `AppState+CanvasNavigation.swift#canvasSelectAdjacent` | `CanvasNavigator.cs#ArrowMove`, `CanvasNavigator.cs#StepThrough` | `A11yCorpusCensus.cs#Corpus`, `CanvasNavigatorTests.cs#AFilteredOutSeatStepsThroughTheSceneOnTheBoardAndIntoTheFilteredSetByTheVerbs`, `CanvasNavigatorTests.cs#MovementCrossesTheWholeLargeCanvasWithoutRederivingOrder` (+5) |  |
 | `CanvasStatus/StartOfCanvas` | `AppState+CanvasNavigation.swift#canvasSelectAdjacent` | `CanvasNavigator.cs#ArrowMove`, `CanvasNavigator.cs#StepThrough` | `A11yCorpusCensus.cs#Corpus`, `CanvasNavigatorTests.cs#AFilteredOutSeatStepsThroughTheSceneOnTheBoardAndIntoTheFilteredSetByTheVerbs`, `CanvasNavigatorTests.cs#TheBoardsArrowsAnswerAtTheEndsAndWithNothingToMoveThrough` (+1) |  |
 | `CanvasStatus/AtCanvasLevel` | `AppState+CanvasNavigation.swift#canvasExitGroup` | `CanvasNavigator.cs#ExitGroup` | `A11yCorpusCensus.cs#Corpus`, `CanvasNavigatorTests.cs#AnUnresolvableSelectionIsNeverReportedAsAnEmptyAnswer`, `CanvasNavigatorTests.cs#GroupBoundariesUseCoresParentAndChildrenNeverADepthWalk` |  |
@@ -3634,7 +3635,7 @@ where a platform never fires the key.
 | `CanvasBlocked/NoteRetargetFailed` | `AppState+CanvasExtras.swift#canvasConvertToNote` | `CanvasDocumentViewModel.cs#SpeakNoteRetargetFailed` | `A11yCorpusCensus.cs#Corpus` |  |
 | `CanvasBlocked/HeadingNotFound` | `AppState+CanvasExtras.swift#canvasOpenFileAtHeading` | `WorkspaceViewModel.Canvas.cs#RouteCanvasAnchorAnnouncement` | `A11yCorpusCensus.cs#Corpus`, `CanvasDocumentTests.cs#ACanvasOriginHeadingMissSpeaksTheCanvasReasonOnce`, `CanvasDocumentTests.cs#AFileCardAnchorMissThroughTheWorkspaceSpeaksTheCanvasReasonOnce` |  |
 | `CanvasBlocked/ReopenFailed` | `CanvasContainerView.swift#announceCanvasRetargetFailure` | `CanvasDocumentViewModel.cs#RetargetAbsent` | `A11yCorpusCensus.cs#Corpus`, `CanvasDocumentTests.cs#TheReopenFailureBannerIsCoresSentence` |  |
-| `CanvasBlocked/FileTypeNotOpenable` | — | `CanvasDocumentViewModel.cs#ActivateFileCard` | `A11yCorpusCensus.cs#Corpus`, `CanvasDocumentTests.cs#TheProductionMediaSeamOpensMediaAndRefusesEverythingElse`, `CanvasTableTests.cs#ActivationRunsTheSameSeamTheOutlineDoesIncludingTheMediaGate` | mac designated: Windows-only (CD-38): mac attempts any existing non-Markdown target through its default-app opener and speaks CanvasFileNotFound when it declines — #1169; consumed on mac when #1169 adopts the gate (E13D-2) |
+| `CanvasBlocked/FileTypeNotOpenable` | `AppState+CanvasExtras.swift#canvasActivateFileCard` | `CanvasDocumentViewModel.cs#ActivateFileCard` | `A11yCorpusCensus.cs#Corpus`, `CanvasDocumentTests.cs#TheProductionMediaSeamOpensMediaAndRefusesEverythingElse`, `CanvasTableTests.cs#ActivationRunsTheSameSeamTheOutlineDoesIncludingTheMediaGate` |  |
 | `CanvasActionFailed/NewCard` | `AppState+CanvasActions.swift#canvasNewCard` | `CanvasDocumentViewModel.cs#CanvasNewCard` | `A11yCorpusCensus.cs#Corpus` |  |
 | `CanvasActionFailed/NewGroup` | `AppState+CanvasActions.swift#canvasNewGroup`, `AppState+CanvasActions.swift#canvasPromptNewGroup`, `AppState+CanvasActions.swift#id` | `CanvasDocumentViewModel.cs#CanvasNewGroup`, `CanvasDocumentViewModel.cs#SubmitGroupMarked` | `A11yCorpusCensus.cs#Corpus` |  |
 | `CanvasActionFailed/NewCanvas` | `AppState+CanvasActions.swift#canvasNewCanvasFile` | `FilesSidebarViewModel.cs#CanvasCreateFailure` | `A11yCorpusCensus.cs#Corpus`, `FileManagementTests.cs#AFailedCanvasCreationIsCoresSentence` |  |
@@ -3645,11 +3646,11 @@ where a platform never fires the key.
 | `CanvasActionFailed/RemoveFromGroup` | `AppState+CanvasCreate.swift#canvasRemoveFromGroup` | `CanvasDocumentViewModel.cs#CanvasRemoveFromGroup` | `A11yCorpusCensus.cs#Corpus` |  |
 | `CanvasActionFailed/Duplicate` | `AppState+CanvasExtras.swift#canvasDuplicate` | `CanvasDocumentViewModel.cs#CanvasDuplicate` | `A11yCorpusCensus.cs#Corpus` |  |
 | `CanvasActionFailed/CreateConnectedCard` | `AppState+CanvasExtras.swift#canvasCreateConnectedCard` | `CanvasDocumentViewModel.cs#CanvasCreateConnectedCard` | `A11yCorpusCensus.cs#Corpus` |  |
-| `CanvasActionFailed/CanvasAction` | `AppState+Canvas.swift#canvasApply` | `CanvasDocumentViewModel.cs#ActivateFileCard`, `CanvasDocumentViewModel.cs#PrepareConnectAction`, `CanvasDocumentViewModel.cs#RequestVaultPick` (+7) | `A11yCorpusCensus.cs#Corpus`, `CanvasDocumentTests.cs#AMediaFileThatExistsButCannotBeOpenedRefusesRatherThanClaimingItIsMissing` |  |
+| `CanvasActionFailed/CanvasAction` | `AppState+Canvas.swift#canvasApply`, `AppState+CanvasExtras.swift#canvasActivateFileCard` | `CanvasDocumentViewModel.cs#ActivateFileCard`, `CanvasDocumentViewModel.cs#PrepareConnectAction`, `CanvasDocumentViewModel.cs#RequestVaultPick` (+7) | `A11yCorpusCensus.cs#Corpus`, `CanvasDocumentTests.cs#AMediaFileThatExistsButCannotBeOpenedRefusesRatherThanClaimingItIsMissing` |  |
 | `CanvasActionFailed/WhereAmI` | `AppState+Canvas.swift#canvasWhereAmI` | `CanvasNavigator.cs#WhereAmI` | `A11yCorpusCensus.cs#Corpus` |  |
 | `CanvasSaveConflict` | `AppState+Canvas.swift#canvasApply` | `CanvasCardEditorViewModel.cs#CommitOnEscape`, `CanvasMutationFunnel.cs#AnnounceAdmission`, `CanvasMutationFunnel.cs#Transact` | `A11yCorpusCensus.cs#Corpus`, `CanvasAnnouncerTests.cs#AnAnnouncementFromAForeignThreadMarshalsHome`, `CanvasAnnouncerTests.cs#AnErrorIsAssertiveAndDropsPendingNavigationRatherThanFlushingIt` (+1) |  |
-| `CanvasFileNotFound` | `CanvasContainerView.swift#activate` | `CanvasDocumentViewModel.cs#ActivateFileCard` | `A11yCorpusCensus.cs#Corpus`, `CanvasDocumentTests.cs#AFileCardWithNoVaultTargetSaysSoAndStaysNavigable`, `CanvasDocumentTests.cs#AMediaFileThatExistsButCannotBeOpenedRefusesRatherThanClaimingItIsMissing` |  |
-| `CanvasOpened` | `CanvasContainerView.swift#activate` | `CanvasDocumentViewModel.cs#ActivateFileCard`, `CanvasDocumentViewModel.cs#ActivateLinkCard` | `A11yCorpusCensus.cs#Corpus`, `CanvasDocumentTests.cs#ActivatingALinkCardGoesThroughTheAllowlistAndSpeaksTheVocabulary`, `CanvasDocumentTests.cs#ActivatingAnImageCardOpensItInTheDefaultAppNotAnEditorTab` (+1) |  |
+| `CanvasFileNotFound` | `AppState+CanvasExtras.swift#canvasActivateFileCard` | `CanvasDocumentViewModel.cs#ActivateFileCard` | `A11yCorpusCensus.cs#Corpus`, `CanvasDocumentTests.cs#AFileCardWithNoVaultTargetSaysSoAndStaysNavigable`, `CanvasDocumentTests.cs#AMediaFileThatExistsButCannotBeOpenedRefusesRatherThanClaimingItIsMissing` |  |
+| `CanvasOpened` | `AppState+CanvasExtras.swift#canvasActivateFileCard`, `CanvasContainerView.swift#activate` | `CanvasDocumentViewModel.cs#ActivateFileCard`, `CanvasDocumentViewModel.cs#ActivateLinkCard` | `A11yCorpusCensus.cs#Corpus`, `CanvasDocumentTests.cs#ActivatingALinkCardGoesThroughTheAllowlistAndSpeaksTheVocabulary`, `CanvasDocumentTests.cs#ActivatingAnImageCardOpensItInTheDefaultAppNotAnEditorTab` (+1) |  |
 | `CanvasMutationRefused/Opening` | `AppState+Canvas.swift#canvasMutationRefusal` | `CanvasMutationFunnel.cs#NotReadyReason` | `A11yCorpusCensus.cs#Corpus`, `CanvasMutationFunnelTests.cs#ANotReadyAdmissionSpeaksTheTypedRefusal` |  |
 | `CanvasMutationRefused/Reopening` | `AppState+Canvas.swift#canvasMutationRefusal`, `AppState+CanvasNavigation.swift#activeCanvasDocumentAnyState`, `AppState+CanvasNavigation.swift#canvasFollowConnection` (+1) | — | `A11yCorpusCensus.cs#Corpus` | designated: Windows retargets synchronously (§A): no pending-preparation window exists for the refusal to arise in; the read-side Reopening status carries the state |
 | `CanvasMutationRefused/RetargetFailed` | `AppState+Canvas.swift#canvasMutationRefusal`, `AppState+CanvasNavigation.swift#activeCanvasDocumentAnyState`, `AppState+CanvasNavigation.swift#canvasReadRefusal` (+1) | `CanvasMutationFunnel.cs#NotReadyReason` | `A11yCorpusCensus.cs#Corpus` |  |
@@ -15467,6 +15468,24 @@ onboarding region already renders, so again no vocabulary work. Both
 halves go upstream together: the state gap and the empty-canvas gap are
 the same never-silent hole seen from two sides.
 
+**Closed on mac, 2026-10-16 (#1167, plan 43 PR 3).** Both halves.
+`canvasSelectAdjacent` now discovers its document in any state and asks
+`canvasReadRefusal(for:)` before it walks, so `.loading` answers
+`.loading` and `.degraded`, `.failed` and `.retargetFailed` answer
+`.notReadable` — the sentences the other read verbs already speak in
+those states, and the arms `AdmitStructuralRead` speaks on Windows. With
+nothing to walk, a canvas with no cards answers `Canvas is empty.` and a
+filter that matches nothing keeps `No cards match the filter.`, the two
+facts Windows' `AnnounceNothingToMoveThrough` keeps apart. One answer of
+the mapping does not stop the walk: `.reopening`. That window is
+`.ready`, its rows stay on screen, and walking them asks core nothing
+`FilterView` cannot answer from what is displayed — the decision VA-2
+records for this verb and VA-1's filter test drives. Windows has no such
+window to reach (CD-32), so the hosts agree wherever both can be. No new
+copy. Pinned by `CanvasNavigatorTests.testNextCardSpeaksTheDocumentStateOutsideReady`,
+`CanvasNavigatorTests.testNextCardOnAnEmptyCanvasSpeaksTheEmptyArm` and
+`CanvasAnnouncerTests.testNextCardSentencesAreTheCorpusRows`.
+
 **CD-47 — Escape inside the Where-am-I panel is the PANEL's, not the
 ladder's; t0 §2 M5 has no clause for a focused transient region.**
 Ruled panel-first, on mac parity and on the spec's own build text.
@@ -15637,6 +15656,12 @@ adding a residue site of its own — the count is 29, not 30.
   is implemented and tested but has no command id, palette row, or menu
   item. Windows matches the registry, not the hidden verb (D-4); file
   the mac issue.
+  **Done (#1165, plan 43 PR 2):** registered as `slate.canvas.colorMarked`
+  — *Canvas: Color Marked Cards…*, a hint, a palette row, and a View-menu
+  item beside *Toggle Mark*. The command opens the color sheet over the
+  marked set (Windows' `RequestColorMarked`), whose choice is
+  `canvasColorMarked(preset:)`, and says *No marks.* when nothing is
+  marked, as Group Marked Cards… does.
 - **The renderer's auto-side rule is duplicated** —
   `AppState+CanvasConnect.swift:24–33` vs `CanvasRendererView.swift:582–600`
   (`anchorPoint`'s `case nil` arm). PR 0b deletes it.
@@ -15677,6 +15702,18 @@ adding a residue site of its own — the count is 29, not 30.
   mutation is a host fix — file the mac issue. Windows must not copy it:
   PR E's mutation funnel should drop a selection its reload cannot
   resolve.
+  **Resolved on mac, 2026-10-16 (#1166, plan 43 PR 3):**
+  `reloadAfterMutation` now ends by dropping a selection the refreshed
+  outline cannot resolve, as the Windows funnel does (a kept selection
+  over a deleted node resolves to no seat). Undo a create, then
+  Duplicate: it answers `Nothing selected.` and writes no undo entry.
+  By the time of the fix the zero count itself was no longer reachable:
+  Duplicate sent the stale id to core's children query, which refused
+  it, and the user heard a raw "not found in this canvas" failure — the
+  sentence the fix replaces. Only an id the outline no longer holds is
+  dropped, a verb that seats a node after its own apply runs after the
+  reload, and marks are not reconciled here. Pinned by
+  `CanvasScenarioTests.testUndoingACreateDropsTheSelectionAndDuplicateRefuses`.
 - **`Deleted connection ` with a trailing space** is reachable on mac
   when the edge lookup misses (`AppState+CanvasConnect.swift:149`'s
   `?? ""`). The typed event cannot express it. **0a-2's resolution:**
@@ -15800,6 +15837,10 @@ close-out**:
   there). Windows routes both verbs through its state mapping (CD-46)
   using arms already in the corpus, so closing it upstream needs no
   vocabulary work.
+  **Resolved on mac, 2026-10-16 (#1167, plan 43 PR 3):** CD-46's closing
+  note has the detail. The verb asks the read mapping in every state, an
+  empty canvas answers `Canvas is empty.`, and the reopening window keeps
+  walking its displayed rows, as VA-2 records.
 
 ---
 
@@ -15814,6 +15855,14 @@ close-out**:
 | D-5 | Resize → Fit to Content placeholder formula | **Both hosts use the identical formula**, host-designated and recorded; a real text-measure API is a future core query. 0a owns only the spoken label. |
 | D-6 | Canvas undo/redo chords | **Ctrl+Z / Ctrl+Y** (decision 12 + the structural-undo precedent); `Ctrl+Shift+Z` only if the editor already aliases it. |
 | D-7 | Voice Control twin for the AT checklist | **Windows Voice Access** ("show numbers") as the recorded tool; Narrator smoke only. |
+
+*D-4, the mac half (2026-10-16, #1165, plan 43 PR 2):* mac registers the
+command — `slate.canvas.colorMarked`, *Canvas: Color Marked Cards…*, a
+palette row and a View-menu item beside *Toggle Mark*, opening the color
+sheet over the marked set — so the id Windows minted with §G's front
+door (GD-5) is a shared registry row, and Windows may ship Color Marked
+as parity rather than as a recorded divergence. `MacCatalogParityTests`
+no longer dispositions the id Windows-only.
 
 ---
 
@@ -19364,15 +19413,15 @@ not keyed is not claimed as keyed.
 | CD-27 | Duplicate's group expansion answers from the tree, not from "centre inside a picked group". | Recorded divergences, line 14711 |
 | CD-28 | `CanvasOpenInfo.degraded` is the PARSE-ERROR state, not the "unsupported items" banner. | Recorded divergences, line 14742 |
 | CD-29 | The degraded announcement is once per DOCUMENT on Windows and once per CONTAINER on mac. | Recorded divergences, line 14759 |
-| CD-30 | The outline row's Name spells `speakable_name`; mac's spells `title`. | Recorded divergences, line 14771 |
+| CD-30 | The outline row's Name spells `speakable_name`; mac's spells `title`. | Recorded divergences, line 14771; **closed on mac** by #1168 (plan 43 PR 2): mac's outline row Name spells `speakable_name` too |
 | CD-31 | The surface view is a code-built `UserControl`, not a `.xaml(.cs)` pair. | Recorded divergences, line 14787 |
 | CD-32 | A retarget re-keys the registry; it does not mutate the document's path. | Recorded divergences, line 14799 |
 | CD-33 | The Windows outline NESTS; mac's is flat with indentation. | Recorded divergences, line 14815 |
 | CD-34 | `CanvasPhrase.CardReference` capitalises with .NET's SIMPLE mapping where core uses Rust's FULL one. | Recorded divergences, line 14830 |
 | CD-35 | The canvas link card has no confirmation step, and neither does the policy it reuses. | Recorded divergences, line 14863 |
-| CD-36 | The media activation hint is corrected on Windows; mac's is stale. | Recorded divergences, line 14886 |
+| CD-36 | The media activation hint is corrected on Windows; mac's is stale. | Recorded divergences, line 14886; **closed on mac** by #1170 (plan 43 PR 2): mac's image hint is Windows' sentence, "Opens the media file in its default app." |
 | CD-37 | The empty canvas renders `CanvasStatus{Empty}`, not `CanvasEmptyOnboarding`. | Recorded divergences, line 14899 |
-| CD-38 | Windows will not shell-execute a non-media file card; mac will | Recorded divergences, line 14915 |
+| CD-38 | Windows will not shell-execute a non-media file card; mac will | Recorded divergences, line 14915; **closed on mac** by #1169 (plan 43 PR 2): mac opens a non-Markdown file card only when core classifies it as media, and refuses the rest with `CanvasBlocked/FileTypeNotOpenable`, never reaching the opener |
 | CD-39 | The canvas table's ordinal columns sort differently from mac's on a mixed-normalization vault | Recorded divergences, line 15218 |
 | CD-40 | Focus delivery seats the shared selection SILENTLY; "lands focus only" is not reachable. | Recorded divergences, line 15253 |
 | CD-41 | M4 does not cancel on a shell overlay; t0 §2 M4's palette clause is superseded. | Recorded divergences, line 15286 |
@@ -19380,7 +19429,7 @@ not keyed is not claimed as keyed.
 | CD-43 | Clear Filter always answers; mac stays silent when nothing is filtered. | Recorded divergences, line 15323 |
 | CD-44 | `nextCard` the CHORD and `nextCard` the COMMAND visit different rows, deliberately. | Recorded divergences, line 15341 |
 | CD-45 | A survivor whose containing group was filtered out is promoted to a ROOT; the intermediate "nests under a surviving GRANDparent" case cannot… | Recorded divergences, line 15357 |
-| CD-46 | Next/previous card route through the read mapping; mac returns silently outside `.ready`. | Recorded divergences, line 15436 |
+| CD-46 | Next/previous card route through the read mapping; mac returns silently outside `.ready`. | Recorded divergences, line 15436; closed on mac 2026-10-16 (#1167, plan 43 PR 3) |
 | CD-47 | Escape inside the Where-am-I panel is the PANEL's, not the ladder's; t0 §2 M5 has no clause for a focused transient region. | Recorded divergences, line 15459 |
 | CD-48 | Right/Left FOLLOW unconditionally; the spec's "as mac does" premise was false. | Recorded divergences, line 15517 |
 
@@ -19399,7 +19448,7 @@ not keyed is not claimed as keyed.
 | D-1 | §2 tiering (Tier 1+2 move to core with mac consumption; Tier 3 host-by-designation) | **Accepted as listed.** Any demotion of a Tier-2 row is a recorded divergence naming the duplicated rule. | Held: §W-G's register closed in PR H (TH-7) — no reading-order, containment, placement or phrasing math in the Windows canvas; the two demotions recorded as divergences (HD-D3). |
 | D-2 | Chord collisions | **`whereAmI` = Ctrl+Alt+Shift+I** (G18 precedent, `Divergence` recorded on the row); **`connectTo` keeps Ctrl+Alt+C** in `ChordScope.Canvas` (disjoint delivery … | Held: `whereAmI` = Ctrl+Alt+Shift+I and `connectTo` = Ctrl+Alt+C in `chords.json` with delivery evidence; `ChordsJson_IsExactlyTheTablesProjection` pins the projection (TH-9). |
 | D-3 | `speakable_name` session stickiness (T R21) | **Core deterministic by document order**; R21 stickiness preserved by the same mechanism core uses for untitled ordinals if it is session-held, else "ordinals m… | Settled in 0b-1's second branch: ordinals renumber on delete identically on both hosts (CD-20). |
-| D-4 | `canvasColorMarked` unregistered on mac | **File the mac issue; Windows ships Color Marked only if mac registers it** (parity = the registry). | Action performed: the mac issue is filed (the mac list below, item 1); Windows offers no Color Marked row — the registry is the parity. |
+| D-4 | `canvasColorMarked` unregistered on mac | **File the mac issue; Windows ships Color Marked only if mac registers it** (parity = the registry). | Action performed: the mac issue is filed (the mac list below, item 1). Windows' Color Marked row landed with §G (GD-5); mac registered the same id, `slate.canvas.colorMarked`, with #1165 (plan 43 PR 2) — a shared registry row now, so Windows ships it as parity. The registry is the parity. |
 | D-5 | Resize → Fit to Content placeholder formula | **Both hosts use the identical formula**, host-designated and recorded; a real text-measure API is a future core query. 0a owns only the spoken label. | Held: the identical placeholder formula on both hosts, host-designated (PR F's resize preset facts). |
 | D-6 | Canvas undo/redo chords | **Ctrl+Z / Ctrl+Y** (decision 12 + the structural-undo precedent); `Ctrl+Shift+Z` only if the editor already aliases it. | Held: Ctrl+Z / Ctrl+Y on the canvas domain (`CanvasUndo` / `CanvasRedo` rows in `chords.json`; the E2E undo chain, TH-0). |
 | D-7 | Voice Control twin for the AT checklist | **Windows Voice Access** ("show numbers") as the recorded tool; Narrator smoke only. | Held: Windows Voice Access ("show numbers") is the recorded twin in the AT checklist's row 6, Narrator smoke only (TH-10). |

@@ -22,6 +22,15 @@ import AppKit
 ///    fills → plain `controlBackgroundColor`, borders/edges →
 ///    label colors. The color's MEANING stays available as text.
 enum CanvasColorPalette {
+    /// The JSON Canvas preset ids, "1"…"6" — core's
+    /// `CanvasColor::Preset(1..=6)`. Core exports each preset's NAME
+    /// (`canvasColorName`) but not the set, which the spec fixes at six,
+    /// so this is the one Swift spelling of the range: the color sheets
+    /// iterate it (Windows' `CanvasPromptViewModel.BuildChoices` loops the
+    /// same six), and `CanvasColorPaletteTests` pins it against core's
+    /// naming so a seventh preset cannot arrive unnoticed.
+    static let presetIDs: ClosedRange<Int> = 1...6
+
     /// How much of the tint survives compositing into a card fill.
     /// Low enough that textColor keeps Lc > 75 on every preset in both
     /// appearances; high enough to read as the color it names.

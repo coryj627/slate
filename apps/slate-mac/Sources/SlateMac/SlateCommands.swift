@@ -166,6 +166,7 @@ enum SlateCommandID {
         canvasLocateFile,
         canvasGroupMarked,
         canvasDeleteMarked,
+        canvasColorMarked,
     ]
 
     /// Note-local authoring commands whose current destination can become an
@@ -331,6 +332,9 @@ enum SlateCommandID {
     static let canvasClearMarks = "slate.canvas.clearMarks"
     static let canvasGroupMarked = "slate.canvas.groupMarked"
     static let canvasDeleteMarked = "slate.canvas.deleteMarked"
+    /// #1165 (W6-1 owner decision D-4): the bulk color verb's front door —
+    /// the id Windows' chord table already mints, so the two hosts share it.
+    static let canvasColorMarked = "slate.canvas.colorMarked"
 
     // Bases (Milestone N, #702). Registered under CommandSection.bases
     // with no global chords; the view owns local table/header keys.
@@ -563,6 +567,7 @@ enum SlateCommandID {
         canvasClearMarks,
         canvasGroupMarked,
         canvasDeleteMarked,
+        canvasColorMarked,
         basesOpenViewSwitcher,
         basesNextView,
         basesPreviousView,
@@ -1268,6 +1273,17 @@ func registerCoreCommands(into registry: CommandRegistry, appState: AppState) {
         section: .canvas,
         hint: "Delete every marked card and its connections — one summary, one undo."
     ) { [weak appState] in appState?.canvasDeleteMarked() }
+
+    // #1165 (W6-1 D-4): Color Marked's front door. The per-card Set
+    // Color… opens the color sheet over the selection; this opens the
+    // same sheet over the marked set (Windows' RequestColorMarked), and
+    // the sheet's choice is the bulk verb — one action, one summary.
+    register(
+        SlateCommandID.canvasColorMarked,
+        label: "Canvas: Color Marked Cards…",
+        section: .canvas,
+        hint: "Set every marked card's color at once — one action, one undo."
+    ) { [weak appState] in appState?.canvasPromptColorMarked() }
 
     registerStructural(
         SlateCommandID.newCanvas,
