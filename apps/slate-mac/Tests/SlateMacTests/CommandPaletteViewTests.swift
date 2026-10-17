@@ -23,7 +23,8 @@ import XCTest
 /// 5. **Fuzzy matcher** (#315) — subsequence + boundary + prefix +
 ///    consecutive scoring.
 /// 6. **Selection navigation** (#315) — arrow wrap via the model's
-///    `selectNext`/`selectPrevious`.
+///    `selectNext`/`selectPrevious`; Home, End, Page Up and Page Down
+///    (#1105) via `selectFirst`/`selectLast`/`movePage`, clamped.
 /// 7. **Enter dispatch + ActionFailed announcement** (#315) — model
 ///    `invoke` returns the right `InvocationOutcome` and stores the
 ///    pending announcement on error.
@@ -209,7 +210,8 @@ final class CommandPaletteViewTests: XCTestCase {
     /// unconsumed. This is load-bearing for screen-reader users
     /// (Ctrl+Option+↓ is VoiceOver Quick Nav) and for text-field
     /// editing inside the search field (Shift+↓ extends, Cmd+↓
-    /// jumps caret, Fn+↓ is Page Down). A regression here would
+    /// jumps caret). Fn+↓ is Page Down, a page move since #1105
+    /// (`testFnArrowIsAPageMove`). A regression here would
     /// silently break a11y; the test exists so the modifier mask
     /// can't drift without CI flagging it.
 
@@ -233,21 +235,46 @@ final class CommandPaletteViewTests: XCTestCase {
         )
     }
 
-    func testFnArrowPassesThroughForPageNav() {
-        // macOS treats Fn+↓ / Fn+↑ as Page Down / Page Up.
-        XCTAssertTrue(
-            CommandPaletteView.shouldPassThroughArrow(
-                keyCode: CommandPaletteView.ArrowKey.down,
-                modifierFlags: .function
+    /// Flipped by #1105 (was `testFnArrowPassesThroughForPageNav`):
+    /// Fn+↓ / Fn+↑ are Page Down / Page Up, and the palette pages.
+    /// Apple's keyboard drivers rewrite fn+arrow to the page key
+    /// before any event exists (`FnKeyboardUsageMap` in
+    /// AppleHIDKeyboard.kext and the built-in keyboard's driver:
+    /// ↑ → Page Up, ↓ → Page Down, ← → Home, → → End), so the monitor
+    /// receives the page key's code carrying `.function`, the same
+    /// event a dedicated Page Down / Page Up key sends.
+    func testFnArrowIsAPageMove() {
+        XCTAssertEqual(
+            CommandPaletteView.pageNavigation(
+                keyCode: CommandPaletteView.PageKey.pageDown,
+                modifierFlags: Self.systemPageKeyFlags
             ),
-            "Fn+↓ (macOS Page Down) must pass through unconsumed"
+            .pageDown,
+            "Fn+↓ (macOS Page Down) must move the selection down a page"
         )
-        XCTAssertTrue(
-            CommandPaletteView.shouldPassThroughArrow(
-                keyCode: CommandPaletteView.ArrowKey.up,
-                modifierFlags: .function
+        XCTAssertEqual(
+            CommandPaletteView.pageNavigation(
+                keyCode: CommandPaletteView.PageKey.pageUp,
+                modifierFlags: Self.systemPageKeyFlags
             ),
-            "Fn+↑ (macOS Page Up) must pass through unconsumed"
+            .pageUp,
+            "Fn+↑ (macOS Page Up) must move the selection up a page"
+        )
+        XCTAssertEqual(
+            CommandPaletteView.pageNavigation(
+                keyCode: CommandPaletteView.PageKey.home,
+                modifierFlags: Self.systemPageKeyFlags
+            ),
+            .first,
+            "Fn+← (macOS Home) must select the first row"
+        )
+        XCTAssertEqual(
+            CommandPaletteView.pageNavigation(
+                keyCode: CommandPaletteView.PageKey.end,
+                modifierFlags: Self.systemPageKeyFlags
+            ),
+            .last,
+            "Fn+→ (macOS End) must select the last row"
         )
     }
 
@@ -299,7 +326,7 @@ final class CommandPaletteViewTests: XCTestCase {
 
     /// #325 follow-up: device-dependent flags like `.capsLock`
     /// and `.numericPad` shouldn't affect chord routing. The
-    /// `arrowModifierMask` is deliberately narrow — it doesn't
+    /// `chordModifierMask` is deliberately narrow — it doesn't
     /// contain `.capsLock` or `.numericPad`, so the intersection
     /// is empty for those flags alone. (We initially tried
     /// `.deviceIndependentFlagsMask` normalization but the mask is
@@ -313,20 +340,53 @@ final class CommandPaletteViewTests: XCTestCase {
                 keyCode: CommandPaletteView.ArrowKey.down,
                 modifierFlags: .capsLock
             ),
-            "Caps Lock isn't in arrowModifierMask; bare ↓ with caps lock still navigates the palette"
+            "Caps Lock isn't in chordModifierMask; bare ↓ with caps lock still navigates the palette"
         )
     }
 
     func testNumericPadFlagOnBareArrowIsStillConsumed() {
-        // Arrow keys are sometimes flagged .numericPad on extended
-        // keyboards. Doesn't change semantics — still a bare arrow.
+        // macOS flags arrow keys .numericPad (with .function, see
+        // the next fact). Doesn't change semantics — still a bare arrow.
         XCTAssertFalse(
             CommandPaletteView.shouldPassThroughArrow(
                 keyCode: CommandPaletteView.ArrowKey.up,
                 modifierFlags: .numericPad
             ),
-            ".numericPad isn't in arrowModifierMask; bare ↑ with it set still navigates"
+            ".numericPad isn't in chordModifierMask; bare ↑ with it set still navigates"
         )
+    }
+
+    /// #1105: macOS puts `.function` on every bare arrow itself. The
+    /// system's own key events for ↑ / ↓ carry `[.numericPad,
+    /// .function]` (`systemArrowFlags`), so `.function` is no chord: a
+    /// bare arrow carrying it still moves one row, and an arrow is
+    /// never a page move (fn+arrow arrives as a page key,
+    /// `testFnArrowIsAPageMove`). Before #1105 the mask held
+    /// `.function`, which passed these events through to the field.
+    func testFunctionFlagOnBareArrowIsStillConsumed() {
+        for keyCode in [CommandPaletteView.ArrowKey.up, CommandPaletteView.ArrowKey.down] {
+            XCTAssertFalse(
+                CommandPaletteView.shouldPassThroughArrow(
+                    keyCode: keyCode,
+                    modifierFlags: Self.systemArrowFlags
+                ),
+                "a bare arrow as macOS sends it (key \(keyCode)) must move the palette selection"
+            )
+            XCTAssertFalse(
+                CommandPaletteView.shouldPassThroughArrow(
+                    keyCode: keyCode,
+                    modifierFlags: .function
+                ),
+                ".function alone on key \(keyCode) is not a chord"
+            )
+            XCTAssertNil(
+                CommandPaletteView.pageNavigation(
+                    keyCode: keyCode,
+                    modifierFlags: Self.systemArrowFlags
+                ),
+                "an arrow (key \(keyCode)) is never a page move"
+            )
+        }
     }
 
     func testCapsLockPlusShiftArrowStillPassesThrough() {
@@ -337,7 +397,7 @@ final class CommandPaletteViewTests: XCTestCase {
                 keyCode: CommandPaletteView.ArrowKey.down,
                 modifierFlags: [.capsLock, .shift]
             ),
-            "Caps + Shift + ↓ — Shift IS in arrowModifierMask; chord passes through"
+            "Caps + Shift + ↓ — Shift IS in chordModifierMask; chord passes through"
         )
     }
 
@@ -386,6 +446,149 @@ final class CommandPaletteViewTests: XCTestCase {
             CommandPaletteView.shouldPassThroughArrow(keyCode: 124, modifierFlags: []),
             "bare → isn't navigable today; must pass through"
         )
+    }
+
+    // MARK: - Page navigation keys (#1105)
+    //
+    // `pageNavigation(keyCode:modifierFlags:)`: Home, End, Page Up and
+    // Page Down are selection moves only bare, with no chord modifier
+    // held (Windows' `ModifierKeys.None` rule, contract 28 P7), so the
+    // search field keeps its Shift and Command chords and VoiceOver's
+    // Control+Option keys reach the AT.
+
+    func testBarePageKeysMapToTheirMoves() {
+        let keys: [(UInt16, CommandPaletteView.PageMove, String)] = [
+            (CommandPaletteView.PageKey.home, .first, "Home"),
+            (CommandPaletteView.PageKey.end, .last, "End"),
+            (CommandPaletteView.PageKey.pageUp, .pageUp, "Page Up"),
+            (CommandPaletteView.PageKey.pageDown, .pageDown, "Page Down"),
+        ]
+        for (keyCode, move, name) in keys {
+            // As macOS sends it: the key carries `.function` itself.
+            XCTAssertEqual(
+                CommandPaletteView.pageNavigation(
+                    keyCode: keyCode, modifierFlags: Self.systemPageKeyFlags),
+                move, "bare \(name)")
+            // A synthesized event without the flag is the same key.
+            XCTAssertEqual(
+                CommandPaletteView.pageNavigation(keyCode: keyCode, modifierFlags: []),
+                move, "\(name) without .function")
+            // Device state is not a chord, as for the arrows.
+            XCTAssertEqual(
+                CommandPaletteView.pageNavigation(
+                    keyCode: keyCode, modifierFlags: Self.systemPageKeyFlags.union(.capsLock)),
+                move, "\(name) with Caps Lock on")
+        }
+        XCTAssertNil(CommandPaletteView.pageNavigation(keyCode: 0 /* 'a' */, modifierFlags: []))
+        XCTAssertNil(CommandPaletteView.pageNavigation(keyCode: 36 /* Return */, modifierFlags: []))
+        XCTAssertNil(
+            CommandPaletteView.pageNavigation(
+                keyCode: 123 /* kVK_LeftArrow */, modifierFlags: Self.systemArrowFlags))
+    }
+
+    func testShiftHomeAndCommandEndPassThrough() {
+        let shiftHome = Self.systemPageKeyFlags.union(.shift)
+        let commandEnd = Self.systemPageKeyFlags.union(.command)
+        XCTAssertNil(
+            CommandPaletteView.pageNavigation(
+                keyCode: CommandPaletteView.PageKey.home, modifierFlags: shiftHome),
+            "Shift+Home is the search field's, not a selection move")
+        XCTAssertEqual(
+            CommandPaletteView.keyRoute(
+                keyCode: CommandPaletteView.PageKey.home, modifierFlags: shiftHome,
+                hasMarkedText: false),
+            .passThrough)
+        XCTAssertNil(
+            CommandPaletteView.pageNavigation(
+                keyCode: CommandPaletteView.PageKey.end, modifierFlags: commandEnd),
+            "Cmd+End is the search field's, not a selection move")
+        XCTAssertEqual(
+            CommandPaletteView.keyRoute(
+                keyCode: CommandPaletteView.PageKey.end, modifierFlags: commandEnd,
+                hasMarkedText: false),
+            .passThrough)
+    }
+
+    /// Every chord passes every page key through, VoiceOver's
+    /// Control+Option keys included. Only `.function` (which the keys
+    /// carry themselves) and device state are not chords.
+    func testAnyChordModifierPassesAPageKeyThrough() {
+        let chords: [(NSEvent.ModifierFlags, String)] = [
+            (.shift, "Shift"), (.control, "Control"), (.option, "Option"),
+            (.command, "Command"), ([.control, .option], "Control+Option"),
+            ([.control, .option, .shift], "Control+Option+Shift"),
+        ]
+        let keys: [UInt16] = [
+            CommandPaletteView.PageKey.home, CommandPaletteView.PageKey.end,
+            CommandPaletteView.PageKey.pageUp, CommandPaletteView.PageKey.pageDown,
+        ]
+        for keyCode in keys {
+            for (chord, name) in chords {
+                XCTAssertNil(
+                    CommandPaletteView.pageNavigation(
+                        keyCode: keyCode, modifierFlags: Self.systemPageKeyFlags.union(chord)),
+                    "\(name) with key \(keyCode) must pass through")
+                XCTAssertNil(
+                    CommandPaletteView.pageNavigation(keyCode: keyCode, modifierFlags: chord),
+                    "\(name) with key \(keyCode) and no .function must pass through")
+            }
+        }
+    }
+
+    // MARK: - Key route (#1105)
+    //
+    // `keyRoute(keyCode:modifierFlags:hasMarkedText:)` is the keyDown
+    // monitor's whole decision, in its order of checks: marked text
+    // passes everything through, then bare Escape dismisses, then a
+    // page key moves by page, then a bare arrow moves one row; anything
+    // else reaches the search field.
+
+    func testKeyRouteSendsEachKeyToItsHandler() {
+        let cases: [(UInt16, NSEvent.ModifierFlags, CommandPaletteView.KeyRoute, String)] = [
+            (CommandPaletteView.escapeKeyCode, [], .dismiss, "bare Escape"),
+            (CommandPaletteView.PageKey.home, Self.systemPageKeyFlags, .page(.first), "Home"),
+            (CommandPaletteView.PageKey.end, Self.systemPageKeyFlags, .page(.last), "End"),
+            (CommandPaletteView.PageKey.pageUp, Self.systemPageKeyFlags, .page(.pageUp), "Page Up"),
+            (CommandPaletteView.PageKey.pageDown, Self.systemPageKeyFlags, .page(.pageDown), "Page Down"),
+            (CommandPaletteView.ArrowKey.up, Self.systemArrowFlags, .arrow(.up), "bare ↑"),
+            (CommandPaletteView.ArrowKey.down, Self.systemArrowFlags, .arrow(.down), "bare ↓"),
+            (
+                CommandPaletteView.ArrowKey.down, Self.systemArrowFlags.union([.control, .option]),
+                .passThrough, "Ctrl+Option+↓ (VoiceOver Quick Nav)"
+            ),
+            (CommandPaletteView.ArrowKey.down, Self.systemArrowFlags.union(.shift), .passThrough, "Shift+↓"),
+            (CommandPaletteView.escapeKeyCode, [.command], .passThrough, "Cmd+Escape"),
+            (0 /* 'a' */, [], .passThrough, "a typed letter"),
+            (36 /* Return */, [], .passThrough, "Return (the field's onSubmit runs it)"),
+        ]
+        for (keyCode, flags, expected, name) in cases {
+            XCTAssertEqual(
+                CommandPaletteView.keyRoute(
+                    keyCode: keyCode, modifierFlags: flags, hasMarkedText: false),
+                expected, "\(name) routed wrong")
+        }
+    }
+
+    /// The IME guard comes first (#393's red team): while an input
+    /// method is composing, Escape must reach it to cancel the
+    /// composition and the arrow and page keys drive its candidate
+    /// window, so the monitor intercepts nothing.
+    func testMarkedTextPassesEveryKeyThrough() {
+        let keys: [(UInt16, NSEvent.ModifierFlags)] = [
+            (CommandPaletteView.escapeKeyCode, []),
+            (CommandPaletteView.ArrowKey.up, Self.systemArrowFlags),
+            (CommandPaletteView.ArrowKey.down, Self.systemArrowFlags),
+            (CommandPaletteView.PageKey.home, Self.systemPageKeyFlags),
+            (CommandPaletteView.PageKey.end, Self.systemPageKeyFlags),
+            (CommandPaletteView.PageKey.pageUp, Self.systemPageKeyFlags),
+            (CommandPaletteView.PageKey.pageDown, Self.systemPageKeyFlags),
+        ]
+        for (keyCode, flags) in keys {
+            XCTAssertEqual(
+                CommandPaletteView.keyRoute(
+                    keyCode: keyCode, modifierFlags: flags, hasMarkedText: true),
+                .passThrough, "key \(keyCode) must reach the input method while it composes")
+        }
     }
 
     // MARK: - Escape-to-dismiss (live-debugging fix)
@@ -439,7 +642,7 @@ final class CommandPaletteViewTests: XCTestCase {
 
     func testIsDismissKeyIgnoresDeviceDependentFlags() {
         // Caps Lock / numeric-pad / fn aren't "real" chord modifiers
-        // (same philosophy as arrowModifierMask) — Escape with them
+        // (same philosophy as chordModifierMask) — Escape with them
         // set still dismisses.
         XCTAssertTrue(
             CommandPaletteView.isDismissKey(
@@ -504,6 +707,172 @@ final class CommandPaletteViewTests: XCTestCase {
         model.query = "zzznonematch"
         model.handleQueryChange()
         XCTAssertNil(model.selectedID, "no matches → no selection")
+    }
+
+    // MARK: - Home / End / Page Up / Page Down (#1105)
+    //
+    // Windows' `SelectFirst` / `SelectLast` / `MovePage` twins
+    // (`CommandPaletteViewModel.cs`, contract 28 P7; PD-1 retired by
+    // #1105): over `displayOrder`, a page move clamps and never wraps,
+    // and from no selection Page Down lands on the first row and Page
+    // Up on the last.
+
+    @MainActor
+    func testHomeSelectsTheFirstVisibleRow() async {
+        let model = CommandPaletteModel()
+        // A Recent row heads the display order, so the first VISIBLE
+        // row is not the registry's first command.
+        model.loadCommands(fixturePageCommands(), recents: ["test.page.17"])
+        model.selectedID = "test.page.09"
+        model.selectFirst()
+        XCTAssertEqual(model.selectedID, "test.page.17", "Home selects the first row the user sees")
+        model.selectFirst()
+        XCTAssertEqual(model.selectedID, "test.page.17", "Home on the first row stays there")
+    }
+
+    @MainActor
+    func testEndSelectsTheLastVisibleRow() async {
+        let model = CommandPaletteModel()
+        // The Tasks row is the registry's first command, but its section
+        // renders after Editor, so it is the last VISIBLE row.
+        let tasks = Command(
+            id: "test.tasks.review", label: "Review Tasks",
+            accessibilityHint: nil, hotkeyHint: nil, section: .tasks)
+        model.loadCommands([tasks] + fixturePageCommands())
+        XCTAssertEqual(model.selectedID, "test.page.00")
+        model.selectLast()
+        XCTAssertEqual(model.selectedID, "test.tasks.review", "End selects the last row the user sees")
+        model.selectLast()
+        XCTAssertEqual(model.selectedID, "test.tasks.review", "End on the last row stays there")
+    }
+
+    @MainActor
+    func testPageDownMovesTenAndClampsAtTheEnd() async {
+        let model = CommandPaletteModel()
+        model.loadCommands(fixturePageCommands())  // 25 rows; selection on the first
+        XCTAssertEqual(model.pageSize, 10, "a page is ten rows, Windows' PageSize default")
+        model.movePage(1)
+        XCTAssertEqual(model.selectedID, "test.page.10")
+        model.movePage(1)
+        XCTAssertEqual(model.selectedID, "test.page.20")
+        model.movePage(1)
+        XCTAssertEqual(model.selectedID, "test.page.24", "a short last page stops on the last row")
+        model.movePage(1)
+        XCTAssertEqual(model.selectedID, "test.page.24", "Page Down on the last row stays there; it never wraps")
+    }
+
+    @MainActor
+    func testPageUpMovesTenAndClampsAtTheStart() async {
+        let model = CommandPaletteModel()
+        model.loadCommands(fixturePageCommands())
+        model.selectedID = "test.page.24"
+        model.movePage(-1)
+        XCTAssertEqual(model.selectedID, "test.page.14")
+        model.movePage(-1)
+        XCTAssertEqual(model.selectedID, "test.page.04")
+        model.movePage(-1)
+        XCTAssertEqual(model.selectedID, "test.page.00", "a short first page stops on the first row")
+        model.movePage(-1)
+        XCTAssertEqual(model.selectedID, "test.page.00", "Page Up on the first row stays there; it never wraps")
+    }
+
+    @MainActor
+    func testPageDownWithNoSelectionStartsAtTheFirstRow() async {
+        let model = CommandPaletteModel()
+        model.loadCommands(fixturePageCommands())
+        model.selectedID = nil
+        model.movePage(1)
+        XCTAssertEqual(
+            model.selectedID, "test.page.00",
+            "from no selection Page Down lands on the first row, not a page in")
+        // A selection that is no longer a visible row counts as none.
+        model.selectedID = "slate.removed.command"
+        model.movePage(1)
+        XCTAssertEqual(model.selectedID, "test.page.00")
+    }
+
+    @MainActor
+    func testPageUpWithNoSelectionStartsAtTheLastRow() async {
+        let model = CommandPaletteModel()
+        model.loadCommands(fixturePageCommands())
+        model.selectedID = nil
+        model.movePage(-1)
+        XCTAssertEqual(model.selectedID, "test.page.24", "from no selection Page Up lands on the last row")
+        model.selectedID = "slate.removed.command"
+        model.movePage(-1)
+        XCTAssertEqual(model.selectedID, "test.page.24")
+    }
+
+    /// The flat cross-section cycle (contract 28 P7): Home, End and the
+    /// page keys walk `displayOrder` (Recent first, then the native
+    /// sections in declared order) straight across section boundaries,
+    /// as Windows' `HomeEndAndPageKeysNavigateTheFlatCycleAndClampAtTheEnds`
+    /// does with a page of two.
+    @MainActor
+    func testPageMovesCrossSectionsInDisplayOrder() async {
+        let model = CommandPaletteModel()
+        model.loadCommands(fixturePageAcrossSections(), recents: ["test.editor.bold"])
+        model.pageSize = 2
+        XCTAssertEqual(
+            model.displayOrder.map(\.id),
+            [
+                "test.editor.bold", "test.file.alpha", "test.file.beta",
+                "test.editor.save", "test.tasks.review",
+            ],
+            "Recent, then File, Editor and Tasks in declared order, the Recent row not repeated")
+
+        model.selectLast()
+        XCTAssertEqual(model.selectedID, "test.tasks.review")
+        model.selectFirst()
+        XCTAssertEqual(model.selectedID, "test.editor.bold")
+
+        model.movePage(1)
+        XCTAssertEqual(model.selectedID, "test.file.beta", "from Recent into File")
+        model.movePage(1)
+        XCTAssertEqual(model.selectedID, "test.tasks.review", "from File past Editor into Tasks")
+        model.movePage(1)
+        XCTAssertEqual(model.selectedID, "test.tasks.review", "stops on the last row; never wraps to Recent")
+        model.movePage(-1)
+        XCTAssertEqual(model.selectedID, "test.file.beta")
+        model.movePage(-1)
+        XCTAssertEqual(model.selectedID, "test.editor.bold")
+        model.movePage(-1)
+        XCTAssertEqual(model.selectedID, "test.editor.bold", "stops on the first row; never wraps to Tasks")
+    }
+
+    @MainActor
+    func testPageKeysWithNoRowsOrNoDeltaDoNothing() async {
+        let model = CommandPaletteModel()
+        model.loadCommands(fixturePageCommands())
+        model.query = "zzznonematch"
+        model.handleQueryChange()
+        XCTAssertNil(model.selectedID)
+        model.selectFirst()
+        model.selectLast()
+        model.movePage(1)
+        model.movePage(-1)
+        XCTAssertNil(model.selectedID, "with no rows every page key is a no-op")
+
+        model.query = ""
+        model.handleQueryChange()
+        model.selectedID = nil
+        model.movePage(0)
+        XCTAssertNil(model.selectedID, "a zero page move moves nothing, even from no selection")
+    }
+
+    /// Windows' `PageSize` setter floors at one row; so does mac's.
+    @MainActor
+    func testPageSizeNeverDropsBelowOneRow() async {
+        let model = CommandPaletteModel()
+        model.loadCommands(fixturePageCommands())
+        model.pageSize = 0
+        XCTAssertEqual(model.pageSize, 1, "a page is at least one row")
+        model.movePage(1)
+        XCTAssertEqual(model.selectedID, "test.page.01")
+        model.pageSize = -3
+        XCTAssertEqual(model.pageSize, 1)
+        model.movePage(1)
+        XCTAssertEqual(model.selectedID, "test.page.02", "a negative page size never reverses Page Down")
     }
 
     // MARK: - Section grouping + Recent (#316)
@@ -846,6 +1215,40 @@ final class CommandPaletteViewTests: XCTestCase {
             Command(id: "test.editor.save", label: "Save", accessibilityHint: nil, hotkeyHint: nil, section: .editor),
         ]
     }
+
+    /// Twenty-five Editor rows (#1105): two full pages of ten and a
+    /// short third. One section, so display order is input order.
+    @MainActor
+    private func fixturePageCommands() -> [Command] {
+        (0..<25).map { index in
+            let suffix = String(format: "%02d", index)
+            return Command(
+                id: "test.page.\(suffix)", label: "Page Row \(suffix)",
+                accessibilityHint: nil, hotkeyHint: nil, section: .editor)
+        }
+    }
+
+    /// Five rows over three sections, given in an order unlike the
+    /// display order (#1105), for the flat cross-section page cycle.
+    @MainActor
+    private func fixturePageAcrossSections() -> [Command] {
+        [
+            Command(id: "test.tasks.review", label: "Review Tasks", accessibilityHint: nil, hotkeyHint: nil, section: .tasks),
+            Command(id: "test.editor.save", label: "Save", accessibilityHint: nil, hotkeyHint: nil, section: .editor),
+            Command(id: "test.file.alpha", label: "Alpha", accessibilityHint: nil, hotkeyHint: nil, section: .file),
+            Command(id: "test.editor.bold", label: "Bold", accessibilityHint: nil, hotkeyHint: nil, section: .editor),
+            Command(id: "test.file.beta", label: "Beta", accessibilityHint: nil, hotkeyHint: nil, section: .file),
+        ]
+    }
+
+    /// The modifier flags macOS itself puts on these keys (#1105),
+    /// measured through the system's own key events
+    /// (`CGEvent(keyboardEventSource:virtualKey:keyDown:)` to
+    /// `NSEvent(cgEvent:)`, every event-source state, macOS 27): a bare
+    /// ↑ / ↓ carries `.numericPad` and `.function`; Home, End, Page Up
+    /// and Page Down carry `.function`.
+    private static let systemArrowFlags: NSEvent.ModifierFlags = [.numericPad, .function]
+    private static let systemPageKeyFlags: NSEvent.ModifierFlags = [.function]
 
     /// Swift-side `CommandAction` for tests. `@unchecked Sendable`
     /// matches the project contract for FFI callbacks (see

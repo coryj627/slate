@@ -104,16 +104,7 @@ struct BulkRenameSheet: View {
             }
 
             if let report = appState.pendingRenameReport {
-                AccessibleDataGrid<RenameGridRow>(
-                    columns: [
-                        .init("Path") { $0.path },
-                        .init("Status") { $0.status },
-                        .init("Before") { $0.before },
-                        .init("After") { $0.after },
-                    ],
-                    rows: gridRows(from: report),
-                    summary: summary(from: report)
-                )
+                Self.previewGrid(rows: gridRows(from: report), summary: summary(from: report))
             } else {
                 // WCAG 2.5.3: the AX label must begin with the
                 // visible text so speech-control activation matches
@@ -196,6 +187,24 @@ struct BulkRenameSheet: View {
         // Apply button so they can't apply against stale preview
         // data after retyping.
         previewLoaded = false
+    }
+
+    /// The preview grid's one construction, static so a fact drives the
+    /// production call (the Windows `BindBulkRenamePreview` shape). The grid
+    /// takes no default name (#446); this sheet passes its own.
+    static func previewGrid(
+        rows: [RenameGridRow], summary: String
+    ) -> AccessibleDataGrid<RenameGridRow> {
+        AccessibleDataGrid<RenameGridRow>(
+            columns: [
+                .init("Path") { $0.path },
+                .init("Status") { $0.status },
+                .init("Before") { $0.before },
+                .init("After") { $0.after },
+            ],
+            rows: rows,
+            summary: summary,
+            accessibilityLabel: "Property rename preview, data grid")
     }
 
     private func gridRows(from report: RenameReport) -> [RenameGridRow] {

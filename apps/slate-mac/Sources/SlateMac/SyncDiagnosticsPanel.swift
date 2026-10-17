@@ -177,7 +177,7 @@ struct SyncDiagnosticsPanel: View {
                 "\(provider.displayName): \(riskText(provider.riskLevel)). \(provider.recommendation)"
             )
 
-            DisclosureGroup("Evidence") {
+            DisclosureGroup {
                 VStack(alignment: .leading, spacing: Tokens.Spacing.xxs) {
                     ForEach(provider.evidencePaths, id: \.self) { path in
                         Text(verbatim: path)
@@ -186,6 +186,12 @@ struct SyncDiagnosticsPanel: View {
                     }
                 }
                 .padding(.leading, Tokens.Spacing.sm)
+            } label: {
+                // Named for its provider, so two providers' disclosures
+                // are not identical "Evidence" siblings (#1103, SDD-4).
+                Text("Evidence")
+                    .accessibilityLabel(
+                        Self.evidenceAccessibilityLabel(for: provider.displayName))
             }
             .font(Tokens.Typography.caption)
         }
@@ -214,6 +220,17 @@ struct SyncDiagnosticsPanel: View {
                 .font(Tokens.Typography.caption)
                 .foregroundStyle(riskColor(risk))
         }
+    }
+
+    /// The Evidence disclosure's accessible name (#1103, contract 27
+    /// SDD-4): the visible "Evidence" plus the provider it belongs to, so
+    /// two providers' disclosures are not identical focusable siblings. The
+    /// visible text stays a contiguous prefix of the name (WCAG 2.5.3, the
+    /// Refresh-button shape). LOCK-STEP twin: `SyncPhrase.EvidenceFor`
+    /// (apps/slate-windows/src/SlateWindows/Panels/SyncPhrase.cs); the two
+    /// change in the same commit (SD10).
+    static func evidenceAccessibilityLabel(for displayName: String) -> String {
+        "Evidence, \(displayName)"
     }
 
     private func riskText(_ risk: RiskLevel) -> String {

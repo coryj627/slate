@@ -187,7 +187,8 @@ Each path: steps → expected utterance (quote what VO must speak) → probe. Ad
 ### Q — Command palette (M17)
 1. `keys p cmd shift` → VO lands in **"Search commands edit text"** with hint **"Arrow up and down to move selection. Return runs the selected command."**
 2. Type a filter → live region **"N command(s) matching \"<filter>\""**; rows (via VO cursor) speak **"<command>, <hotkey> … button"** with per-command hints; section headings ("Navigation").
-3. Return invokes the selection (observable effect, e.g. **"N tasks shown"**); Esc closes and announces focus restore to the prior responder.
+3. Home / End (`key 115` / `key 119`) move the selection to the first / last row and Page Up / Page Down (`key 116` / `key 121`; fn+↑ / fn+↓ on an Apple keyboard) move it ten rows, stopping at the ends; each move speaks **"Selected: <command>"** (#1105).
+4. Return invokes the selection (observable effect, e.g. **"N tasks shown"**); Esc closes and announces focus restore to the prior responder.
 
 ### U — Workspace shell: tabs, splits, modes, properties, leaves, file management (Milestones U1–U5)
 

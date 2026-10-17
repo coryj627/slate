@@ -114,7 +114,8 @@ the last. Enter invokes; bare Escape closes; modified arrows pass through
 first row only when it vanished or was null, and becomes **null** on zero
 matches. WPF's `ListBox` defaults — no wrap, focusable group headers,
 reset-to-index-0 on `ItemsSource` change — are all wrong here and must be
-overridden. See PD-1 for Home/End/Page keys.
+overridden. Home/End/Page keys: see PD-1, retired by #1105 (PR #1383),
+so both hosts handle them alike.
 
 **P8 — Unavailable commands are shown, selectable, and refused at the
 gate.** An unavailable command keeps its row, keeps its place in the
@@ -300,6 +301,18 @@ auto-presents an empty palette.
   that they are useful in a long list on any platform even though they are
   not a macOS palette convention. **This entry retires when #1105 lands** —
   until then it is a convergence-pending divergence, not an accepted one.
+  **Retired by #1105 (PR #1383, 2026-10-16).** Mac now handles the
+  same four keys by the same rules: bare Home and End select the first and
+  last row; bare Page Up and Page Down move ten rows (`pageSize`, never
+  below one), clamped and never wrapping; from no selection Page Down
+  lands on the first row and Page Up on the last; any chord passes through
+  (`CommandPaletteModel.selectFirst` / `selectLast` / `movePage`,
+  `CommandPaletteView.pageNavigation`). fn+↑ / fn+↓ reach the palette as
+  Page Up / Page Down (Apple's keyboard drivers rewrite fn+arrow to the
+  page key), so they page too. The same change took `.function` out of
+  mac's chord mask: macOS sets it on every arrow and page key itself, so
+  the mask had been passing system-made bare arrows through to the field.
+  The two hosts no longer diverge here.
 - **PD-2 — The palette chord is Ctrl+Shift+P**, the direct ⇧⌘P map and the
   Windows convention. Verified unbound across every chord surface in the
   app. Non-toggling, matching mac: pressing it while open re-opens rather
