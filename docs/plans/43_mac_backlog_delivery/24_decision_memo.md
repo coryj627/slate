@@ -178,3 +178,29 @@ First estimates, to be sized properly in each follow-up's spec:
 
 Each would get its own delivery spec under `specs/`, as every PR in this
 program has, before any code.
+
+## Owner decisions (2026-10-17)
+
+The owner decided all five in a decision interview on 2026-10-17. Every one is this memo's recommendation.
+
+1. **Guarantee scope: B**, worded as the contract text under Decision 1.
+   - Objects and tree membership are reported truthfully.
+   - Where IDs are not identities, Slate says "verified by name and metadata only" and offers no inverse.
+   - Exact bytes and writers holding open descriptors are out of scope.
+2. **Unsupported-platform policy:**
+   - **H**, delivered as #1449 (PR #1453, merged 2026-10-17).
+   - **C** next, an identity-checked inverse under its own capability name where IDs are meaningful.
+   - **B**, a history barrier, where they are not.
+   - It is never described as Windows-equivalent, and `/.vol` (D) is rejected.
+3. **Trash semantics:**
+   - **T0+** now, as #1450 (in progress).
+   - **T2** next, verifying what arrived. Before committing to it, run the `~/.Trash` access check from a Slate build.
+   - **T3** is rejected, and **T4** is deferred with the Linux host.
+4. **Identity lifetime: A.** Identity is filesystem-object identity keyed on a persistent volume ID: the volume UUID on macOS, not `st_dev`. A replacement, including an atomic save, invalidates it. The per-filesystem reuse residual is recorded. A+ is deferred, and B and C are rejected.
+5. **Closure: D.**
+   - Record these decisions.
+   - Rewrite contract 31's FR-8 and FR-10 with the accepted limits, after #1450 merges.
+   - Open one issue per follow-up: T2; the checked inverse and its barrier; the side findings, of which #1434 (exFAT) is filed and SMB, FAT32 `RENAME_SWAP` and Linux NFS remain.
+   - Then close #1125.
+
+#1452, the boundary escape for saves and new folders that #1449's work found, is also being fixed now.
