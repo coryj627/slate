@@ -672,8 +672,8 @@
                  Am I? (the shared chord, advertised from the table) and the
                  Verbosity submenu BUILT FROM CORE'S VECTOR in code-behind
                  (MainWindow.Graph.cs): the XAML declares the empty submenu and
-                 no literal level (0b-1, 0b-12). Mac has no graph menu items
-                 but the routed Where Am I? (C-D9). -->
+                 no literal level (0b-1, 0b-12). Mac's twin is its View ▸ Graph
+                 submenu (plan 43 PR 4, owner decision D8; C-D9 retired). -->
             <MenuItem Header="_Graph"
                       AutomationProperties.AutomationId="GraphMenu">
                 <MenuItem Header="_Open Graph"

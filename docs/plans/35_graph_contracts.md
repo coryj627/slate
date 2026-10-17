@@ -736,6 +736,15 @@ edit is unrun on this box (0aR-1).
   95`), `GraphConfig` carries no field, and no menu sets it; P2-4's
   "persisted alongside the other graph settings" never landed. Filed at
   close-out; 0b adds the key, PR C the Windows menu.
+  **Resolved (#1216, plan 43 PR 4):** 0b's `verbosity` key is the store,
+  and the switch is View ▸ Graph ▸ Verbosity — one checkmark item per
+  level of core's vector, titled by core — with a palette row per level,
+  "Graph Verbosity: {Title}". Both run `setGraphVerbosity(_:)`, which
+  writes the announcer's level and the config's own field and schedules
+  the save; the save aggregate no longer folds the announcer's level in
+  (Term W7). It speaks nothing, as the canvas switch and Windows' do not
+  (`GraphConfigTests.testSettingTheVerbosityPersistsToGraphJsonAndRestores`,
+  `GraphAnnouncerTests.testARowEventRendersDifferentlyUnderTwoLevelsOfTheSwitch`).
 
 ### Accepted risks
 
@@ -9905,9 +9914,18 @@ TheStateHostHasAGroupPeerNamedByTheState.
   three backend flags, a preset only the live filter; the save aggregate is
   `graphConfig` with the depth and the verbosity folded in, and it no
   longer reads the live filter — so the two hosts agree.
+  *Plan 43 PR 4 (#1216):* the verbosity is now its switch's own field
+  too, so the aggregate folds the depth alone.
 - **C-D8 — A restored graph tab shows the persisted filter** (C-10);
   the mac's restore shows the defaults until the next plain open.
 - **C-D9 — Menu items for Open Graph and the presets** (C-12).
+  *Retired 2026-10-16 (#1219, #1216, plan 43 PR 4; owner decision D8):*
+  the mac has the items too, in one View ▸ Graph submenu rather than a
+  top-level menu — Open Graph, the three presets and the Verbosity
+  submenu built from core's vector, each item running the registry
+  closure for its id. Where Am I? and the four viewport verbs stay where
+  the View menu already offers them (chord parity, not placement, is the
+  invariant).
 - **C-D10 — The count region and Clear** (C-5): the mac's filter bar has
   neither.
 - **C-D11 — withdrawn at revision 6** (CD-Q3's alternative; CD-25):
@@ -10019,6 +10037,11 @@ TheStateHostHasAGroupPeerNamedByTheState.
   them as core's design — C-2 moves them.
 - P1-3's "registry + palette + menu" for the presets shipped with no
   menu item (`SlateMacApp.swift` names none).
+  **Resolved (#1219, plan 43 PR 4; owner decision D8):** the View ▸
+  Graph submenu carries Open Graph, a divider and the three presets
+  (Orphaned Notes, Unresolved Links, Most Linked Notes), each running the
+  registry closure for its id, as C-12's items do on Windows; C-D9 is
+  retired (`SlateCommandsTests.testTheGraphMenusIdsCommandsAndAccelerator`).
 
 ### Round 1 — twenty-eight findings (IGM-1..28), dispositions
 
@@ -18350,7 +18373,7 @@ that exists and is not keyed is not claimed as keyed.
 | C-D6 | A persisted `diagram` mode seeds Table in this PR | §C, line 9836 |
 | C-D7 | A needle under a transient preset does NOT persist the preset's backend filter | §C, line 9839; **retired** by #1218 (plan 43 PR 5): the mac persists by field too, and its save aggregate no longer reads the live filter |
 | C-D8 | A restored graph tab shows the persisted filter | §C, line 9843 |
-| C-D9 | Menu items for Open Graph and the presets | §C, line 9845 |
+| C-D9 | Menu items for Open Graph and the presets | §C, line 9845; **retired** by #1219 and #1216 (plan 43 PR 4): the mac has the items too, in its View ▸ Graph submenu (owner decision D8), each bound to its registry id |
 | C-D10 | The count region and Clear | §C, line 9846 |
 | C-D11 | withdrawn at revision 6 | §C, line 9848 |
 | C-D12 | No first-row landing after a preset | §C, line 9852 |
@@ -18440,7 +18463,7 @@ recorded:
 | D-3 | `.slate/graph.json` in core | Accepted: `graph_config_decode` / `graph_config_encode` and the generation rules in core (§0b 0b-6, 0b-6b); the writer's I/O host (`GraphConfigWriter`); the mac's store a consumer |
 | D-4 | the name filter's fold | Core's fold on both hosts; the divergence recorded (0b-D3) |
 | D-5 | the constants | Accepted: `graph_constants` (§0b 0b-9), read by the shell (`GraphCoreConstants`) |
-| D-6 | the graph's verbosity | Its own `GraphVerbosity` (§0a); the `verbosity` key in the schema (§0b); PR C's Verbosity submenu (§C C-12); the mac's missing switch filed here (mac-1 below) |
+| D-6 | the graph's verbosity | Its own `GraphVerbosity` (§0a); the `verbosity` key in the schema (§0b); PR C's Verbosity submenu (§C C-12); the mac's missing switch filed here (mac-1 below), delivered on mac by plan 43 PR 4 (2026-10-16): View ▸ Graph ▸ Verbosity and one palette row per level |
 | D-7 | the Voice Control twin | Windows Voice Access ("show numbers"), Narrator smoke only — the checklist's row 6 (F8) |
 | D-8 | the leaf's follow rule | Follow mac, pinned by a fact (§B2 B2-6) |
 
@@ -18475,10 +18498,10 @@ Five survive; every body quotes its register line and cites #746.
 
 | Key | Issue | Target | Input from the registers | Verified at filing |
 |---|---|---|---|---|
-| mac-1 | #1216 | mac | the graph verbosity has no SWITCH (§0a's register; D-6) — the store half closed by 0b's `verbosity` key | `SlateMacApp.swift` names no verbosity item; `graphConfigSaveAggregate` writes `cfg.verbosity` |
+| mac-1 | #1216 | mac | the graph verbosity has no SWITCH (§0a's register; D-6) — the store half closed by 0b's `verbosity` key | `SlateMacApp.swift` names no verbosity item; `graphConfigSaveAggregate` writes `cfg.verbosity`. **Closed** by plan 43 PR 4 (2026-10-16): View ▸ Graph ▸ Verbosity, built from core's vector, and a "Graph Verbosity: {Title}" palette row per level run one setter that writes the config's field and the announcer's level; the aggregate no longer folds the announcer's level, and the level persists and restores through `.slate/graph.json` |
 | mac-2 | #1217 | mac | a mounted rail switch to the Connections leaf after the note changed shows the loading text and starts no load; `connectionsLoading` is written and never read (§B's register) | `ConnectionsPanel.swift:31–36` (`onAppear`); `connectionsLoading` four writes, no read. **Closed** by plan 43 PR 5 (2026-10-16): a rail switch to a STALE leaf loads (Term 3(b); B-D11 closed on the mac), and the loading row renders from `connectionsLoading` |
 | mac-3 | #1218 | mac | a needle typed under a transient preset persists the preset's backend filter (§C's register, C-D7) | `graphConfigSaveAggregate` saves `graphTableFilter`. **Closed** by plan 43 PR 5 (2026-10-16): the graph filters persist by field (Term W7) and the aggregate no longer reads the live filter; C-D7 retired |
-| mac-4 | #1219 | mac | the presets shipped with no menu item (§C's register; P1-3's "registry + palette + menu") | `SlateMacApp.swift` names none |
+| mac-4 | #1219 | mac | the presets shipped with no menu item (§C's register; P1-3's "registry + palette + menu") | `SlateMacApp.swift` names none. **Closed** by plan 43 PR 4 (2026-10-16): the View ▸ Graph submenu (owner decision D8) carries Open Graph and the three presets, each running the registry closure for its id; C-D9 retired |
 | mac-5 | #1220 | mac | the restore-driven `onChange(of: mode)` speaks the mode line on a persisted Diagram (§D's register); the dead `labelFadeZoom` constant noted in the body | `GraphTableView.swift:104–105`; `GraphDiagramView.swift:174`. **Closed** by plan 43 PR 5 (2026-10-16): a restored Diagram speaks no mode line (DD-18; D-D12 closed on the mac), and `labelFadeZoom` is deleted |
 
 Not filed, with the reason: `openGraphTab` speaking Opened past the
