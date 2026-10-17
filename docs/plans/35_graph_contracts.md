@@ -9956,15 +9956,15 @@ TheStateHostHasAGroupPeerNamedByTheState.
   Q9): the replacing pair inherits and adopts it; the mac drops it on a
   generation mismatch (`AppState+GraphTable.swift:297`, `:301`) — C-2
   (iv) inherits the announce and the preset there, not the sort.
-  *Narrowed 2026-10-16 (D1, TGC-19; #1190, plan 43 PR 13):* the mac's
-  receiver re-fetches as a pair under the rows' own request with its
-  sort on a generation mismatch, as on a filter mismatch or with no
-  authority held, so a pending user sort survives that arm and is
-  adopted at the pair's install
-  (`GraphTabRoutingTests.testAGenerationMismatchRefetchesAsAPair`). What
-  remains is the generation probe's replacing pair
-  (`refreshGraphTableIfGraphChanged`), which still re-issues under the
-  accepted sort.
+  *Closed on the mac 2026-10-17 (D1, TGC-19; #1190, #1424, plan 43 PR
+  13):* both replacing pairs inherit the pending sort with the request.
+  The receiver's re-fetch carries its token's sort and whether it is the
+  reader's (`GraphTabRoutingTests.testAGenerationMismatchRefetchesAsAPair`),
+  and the generation probe's pair (`refreshGraphTableIfGraphChanged`)
+  carries the pending sort through `loadGraphTable`
+  (`GraphTabRoutingTests.testAProbesPairInheritsThePendingSortAndAdoptsItWithGridSortedThenTheCount`);
+  the install adopts it and speaks `GridSorted` before its own line, as
+  on Windows.
 - **C-D18 — A preset lands the reader on the graph's projection in
   every case** (Term P5): the shell's open requests editor focus for an
   existing graph too (`Layout.cs:217`); the mac's palette returns focus
@@ -10040,9 +10040,9 @@ TheStateHostHasAGroupPeerNamedByTheState.
   FIXED on the mac lane by C-2's migration.
 - A generation mismatch drops a pending user sort (`:297`, `:301`) —
   C-D17; Windows inherits it (Term Q9).
-  **Narrowed (#1190, plan 43 PR 13):** the receiver's re-fetch carries
-  the token's sort now (D1, TGC-19); the probe's replacing pair still
-  drops a pending one.
+  **Resolved (#1190, #1424, plan 43 PR 13):** every replacing pair — the
+  receiver's re-fetch and the probe's — carries the pending sort, and its
+  install adopts it with `GridSorted` (D1, TGC-19; C-D17 closed).
 - A restored graph tab mounts on the reset defaults, not the persisted
   filter (`GraphTableView.swift:53–65`; `:106–108`) — C-D8.
 - A needle typed under a transient preset persists the preset's backend
@@ -11955,6 +11955,62 @@ GraphActionParityTests, GraphCommandsTests, GraphConfigTests and
 GraphDiagramTests, 143 facts — run green in about six seconds; the whole
 Swift suite ran in CI's shape (`swift test --parallel`) before the push:
 3,134 facts, green in three minutes and nineteen seconds.
+
+THE SORT, closed with the authority (2026-10-17; #1424). Before this PR
+merged, the owner's standing rule — no merge into a feature area that
+still has a known defect, pre-existing or not — brought C-D17's
+remaining half onto this branch. A sort the reader had asked for was
+still in flight when the vault moved, and the generation probe's
+replacing pair re-issued under the ACCEPTED sort: the reader's sort was
+cancelled in silence, and the count then described rows in the old
+order. Closing it found three more defects of the same lineage. The
+needle, a filter change and the activation load each issued under the
+accepted sort too (Term Q5's carriers and IGP-4, never recorded on the
+mac). No install ever spoke `GridSorted`: the grid arms that line only
+when its owner reads the requested sort back at once, and the table
+adopts at the publish. And since W6-2 PR 0b no header could sort the
+mac's table at all — its columns came from core's vector with no
+comparator, so the grid treated every one as unsortable. All of it was
+filed as #1424 and is closed here. THE RULE ON THE MAC is Windows'. A
+token says whether it carries the reader's sort (`userSort` on the
+mac's token, Windows' UserSort). Every pair, and every rows request with
+no sort of its own, carries the pending sort; the probe's replacing pair
+and the receiver's re-fetches inherit it with the request; a preset's
+default sort replaces it silently (Term Q5 (d)); a cancellation or a
+no-op carries none. The install that answers the reader's sort relays
+core's `GridSorted` before its own line — the count, or the summary
+(Term Q5's combined lines) — through `announceGraphTableSortAdoption`.
+The grid's columns are externally sortable — the header requests, core
+orders — and the grid announces no sort of its own (its new
+`announcesSortAdoption` option), so the owner's line is the only one.
+FACTS, each named for its Windows twin and each failing first unless
+called a guard: testASortSpeaksGridSortedThenTheCoalescedCountAndNothingElse;
+testANeedleKeepsThePendingSortAndGridSortedSpeaksOnAdoption;
+testGridSortedPrecedesTheReceiversLineAtEveryAdoptingInstall (a filter's
+pair); testTheActivationCarriesThePendingSortAndAdoptsItBeforeTheSummary;
+testAProbesPairInheritsThePendingSortAndAdoptsItWithGridSortedThenTheCount,
+C-D17's own fact, whose replacing pair is held at the publish gate so the
+fact reads it carrying the sort; and the mounted
+testAHeaderSortIssuesARowsOnlyTokenAndGridSortedSpeaksOnceOnAdoption,
+which sorts through the real grid. testAPresetReplacesThePendingSortSilently
+and testAPresetOverAFolderSortResetsSilentlyWithNoGridSorted are guards,
+true before and after. T1's sort twin, the generation fact and
+testCancellingAPendingSortSaysNothing now pin their complete line lists,
+as their Windows twins do. Two grid facts pin the substrate's options:
+testAnExternallySortableColumnIsSortableWithoutAComparator and
+testAGridWhoseOwnerAnnouncesSortsAnnouncesNoSortOfItsOwn. Mutations
+(nine), each restored byte for byte, each caught: the probe re-issuing
+under the accepted sort (C-D17's fact alone); every pair dropping the
+pending sort (the probe's, the filter's and the activation's facts); the
+needle dropping it (the needle's fact); no `GridSorted` at an adoption
+(eight facts); a preset's default sort adopted as the reader's (the
+Folder guard); a re-fetch forgetting whose sort it carries (T1's sort
+twin and the generation fact); the columns unsortable again (the header
+fact); the grid announcing a sort itself (the owner-announced grid fact
+and the header fact); sortability ignoring the external flag (both grid
+facts and the header fact). C-D17 is closed in its record, in PR C's mac
+details and in the index; the AT navigation map's shared-grid anchor
+follows the substrate's file (`AccessibleDataGrid.swift`, 714 → 729).
 
 ### Tests that pin PR C (revision 6's list; the task loop records what lands)
 
@@ -18529,7 +18585,7 @@ that exists and is not keyed is not claimed as keyed.
 | C-D14 | No sidebar-navigation intent on a preset | §C, line 9856 |
 | C-D15 | The field, the count region and Clear stay in the header in both modes | §C, line 9859 |
 | C-D16 | A Where-am-I panel on the graph | §C, line 9862 |
-| C-D17 | A pending user sort survives a replacing pair | §C, line 9864; **narrowed on mac** by #1190 (plan 43 PR 13): the receiver's generation arm carries the pending sort into its pair; the probe's replacing pair still drops it |
+| C-D17 | A pending user sort survives a replacing pair | §C, line 9864; **closed on mac** by #1190 and #1424 (plan 43 PR 13): both replacing pairs, the needle, a filter change and the activation carry the pending sort, and its install speaks GridSorted |
 | C-D18 | A preset lands the reader on the graph's projection in every case | §C, line 9868 |
 | C-D19 | A sort during an Orphans pair adopts with `GridSorted` alone on Windows | §C, line 9872 |
 | C-D20 | Withdrawn | §C, line 9877 |

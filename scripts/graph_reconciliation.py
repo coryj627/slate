@@ -270,7 +270,7 @@ CLOSED = {
     "B-D11": "**closed on mac** by #1217 (plan 43 PR 5): the mac's mounted leaf loads on a rail switch to a STALE publication too",
     "C-D7": "**retired** by #1218 (plan 43 PR 5): the mac persists by field too, and its save aggregate no longer reads the live filter",
     "C-D9": "**retired** by #1219 and #1216 (plan 43 PR 4): the mac has the items too, in its View ▸ Graph submenu (owner decision D8), each bound to its registry id",
-    "C-D17": "**narrowed on mac** by #1190 (plan 43 PR 13): the receiver's generation arm carries the pending sort into its pair; the probe's replacing pair still drops it",
+    "C-D17": "**closed on mac** by #1190 and #1424 (plan 43 PR 13): both replacing pairs, the needle, a filter change and the activation carry the pending sort, and its install speaks GridSorted",
     "D-D12": "**closed on mac** by #1220 (plan 43 PR 5): the mac's restore of a persisted Diagram speaks no mode line either",
 }
 
