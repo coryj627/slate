@@ -23,9 +23,9 @@ struct DataGridSortState: Equatable, Hashable {
 /// `NSAccessibilitySortDirection`, full-keyboard row model, row-reuse
 /// virtualization at the 2,000-row §K budget).
 ///
-/// The v1 API is a strict subset: existing call sites (BulkRenameSheet,
-/// reading-view tables) compile unchanged via defaults. v2 adds, all
-/// optional:
+/// The v1 API is a strict subset, but the container name has no default
+/// (#446: a generic grid cannot know its own name; Windows' `Bind`
+/// requires it too). v2 adds, all optional:
 ///
 /// - per-column **sort comparators** → click-to-sort with an
 ///   ascending/descending toggle, announced through the injectable
@@ -217,7 +217,7 @@ struct AccessibleDataGrid<Row: Identifiable>: View {
         columns: [Column],
         rows: [Row],
         summary: String,
-        accessibilityLabel: String = "Property rename preview, data grid",
+        accessibilityLabel: String,
         groups: [Group] = [],
         selection: Binding<Row.ID?>? = nil,
         cellSelection: Binding<CellPosition?>? = nil,

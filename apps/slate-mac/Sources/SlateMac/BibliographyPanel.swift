@@ -353,9 +353,19 @@ struct BibliographyPanel: View {
 /// action. Lists every file that contains at least one `[@key]`
 /// reference to the entry's key, ordered by vault path. Empty list
 /// is announced as a friendly state rather than a blank sheet.
+///
+/// The count is a traversable line of its own under the heading, never
+/// the container's name (#447, WCAG 4.1.2): a name on a `.contain`
+/// container competes with child traversal, so the count was heard twice
+/// or not at all depending on how the reader moved through the sheet.
 struct FilesCitingSheet: View {
     let paths: [String]
     let onClose: () -> Void
+
+    /// "3 files citing this entry." The plural rides `CountCopy`.
+    static func countLine(_ count: Int) -> String {
+        "\(CountCopy.counted(count, "file", "files")) citing this entry."
+    }
 
     var body: some View {
         VStack(alignment: .leading, spacing: Tokens.Spacing.md) {
@@ -370,6 +380,10 @@ struct FilesCitingSheet: View {
                     .frame(maxWidth: .infinity, alignment: .leading)
                     .accessibilityLabel("No files in this vault cite this entry.")
             } else {
+                Text(Self.countLine(paths.count))
+                    .font(Tokens.Typography.body)
+                    .foregroundStyle(Tokens.ColorRole.textSecondary)
+                    .frame(maxWidth: .infinity, alignment: .leading)
                 List(paths, id: \.self) { path in
                     Text(path)
                         .accessibilityLabel(path)
@@ -387,8 +401,5 @@ struct FilesCitingSheet: View {
         .padding(Tokens.Spacing.lg)
         .frame(minWidth: 380, idealWidth: 460, maxWidth: 600, minHeight: 200, maxHeight: 500)
         .accessibilityElement(children: .contain)
-        .accessibilityLabel(
-            "Files citing this entry. \(CountCopy.counted(paths.count, "file", "files"))."
-        )
     }
 }

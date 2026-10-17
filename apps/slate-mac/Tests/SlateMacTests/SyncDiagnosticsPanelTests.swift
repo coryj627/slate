@@ -385,6 +385,42 @@ final class SyncDiagnosticsPanelTests: XCTestCase {
         assertPanelRenders(noConfig)
     }
 
+    // MARK: - Evidence disclosure names (#1103, contract 27 SDD-4)
+
+    /// Every provider's Evidence disclosure is named for its provider, so
+    /// a report with two providers no longer exposes identical focusable
+    /// "Evidence" siblings. The visible text stays "Evidence", a contiguous
+    /// prefix of the name (WCAG 2.5.3, the Refresh-button shape).
+    ///
+    /// LOCK-STEP golden (contract 27 SD10): the Windows twin is
+    /// `SyncPhrase.EvidenceFor`
+    /// (apps/slate-windows/src/SlateWindows/Panels/SyncPhrase.cs), pinned by
+    /// `SyncPhraseTests.TheStateLabelsAndPrefixesArePinned` ("Evidence,
+    /// Git"). Both platforms carry the identical string; a change to either
+    /// without the other is drift.
+    func testEvidenceDisclosureIsNamedForItsProvider() async throws {
+        XCTAssertEqual(
+            SyncDiagnosticsPanel.evidenceAccessibilityLabel(for: "Dropbox"), "Evidence, Dropbox")
+
+        // The rendered panel: Dropbox and Git planted, so the report carries
+        // two providers and two disclosures, as a client reads them.
+        let announcer = RecordingAnnouncer()
+        let state = try await openVault(named: "evidence-names", announcer: announcer) {
+            try Data("".utf8).write(to: $0.appendingPathComponent(".dropbox"))
+            try self.plantGit($0)
+        }
+        XCTAssertEqual(state.syncReport?.providers.map(\.displayName), ["Dropbox", "Git"])
+        let window = HostedAccessibilityTree.host(SyncDiagnosticsPanel().environmentObject(state))
+        defer { window.close() }
+        let tree = try await HostedAccessibilityTree.snapshot(of: window) { tree in
+            tree.elements(role: "AXDisclosureTriangle").count == 2
+        }
+        XCTAssertEqual(
+            tree.elements(role: "AXDisclosureTriangle").map(\.name),
+            ["Evidence, Dropbox", "Evidence, Git"],
+            "each disclosure is named for its provider:\n\(tree)")
+    }
+
     // MARK: - Badge contrast (§D — measured, both appearances)
 
     /// The three risk-badge text roles ride APCA-gated tokens; assert

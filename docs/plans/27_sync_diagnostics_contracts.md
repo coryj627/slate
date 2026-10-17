@@ -218,7 +218,16 @@ with settle, and `AssertAxeClean(process, "sync-diagnostics")`.
   (SyncDiagnosticsPanel.swift:180) carries the SAME defect, so this is a shared
   flaw fixed on Windows first, not drift; `SyncPhrase.EvidenceFor` is a
   Windows-only golden until the tracked mac follow-up lands, after which the
-  lock-step rule resumes for it.
+  lock-step rule resumes for it. *Closed by #1103 (2026-10-16, plan 43 PR 1):*
+  mac names each disclosure "Evidence, {DisplayName}" through
+  `SyncDiagnosticsPanel.evidenceAccessibilityLabel(for:)` on the
+  `DisclosureGroup`'s label view, its visible text still "Evidence";
+  `SyncDiagnosticsPanelTests.testEvidenceDisclosureIsNamedForItsProvider`
+  pins the string and the rendered names ("Evidence, Dropbox" / "Evidence,
+  Git"). `SyncPhrase.EvidenceFor` returns to the SD10 lock-step rule: both
+  platforms pin the identical string and change it together. The doc
+  comments on `SyncPhrase.EvidenceFor` and in `SyncPhraseTests` that call it
+  Windows-only predate this closure.
 
 ## Risks / accepted
 

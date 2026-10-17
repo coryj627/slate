@@ -37,8 +37,11 @@ struct AddPropertySheet: View {
                 .accessibilityAddTraits(.isHeader)
 
             VStack(alignment: .leading, spacing: 4) {
+                // Visual caption only: the field carries its own name
+                // ("Property key"), so AT would read the caption twice (#446).
                 Text("Key")
                     .font(.caption)
+                    .accessibilityHidden(true)
                 TextField("e.g. author", text: $key)
                     .textFieldStyle(.roundedBorder)
                     .accessibilityLabel("Property key")
@@ -55,8 +58,10 @@ struct AddPropertySheet: View {
             }
 
             VStack(alignment: .leading, spacing: 4) {
+                // Visual caption only, as above: the picker is "Property type".
                 Text("Type")
                     .font(.caption)
+                    .accessibilityHidden(true)
                 Picker("Property type", selection: $selectedKind) {
                     ForEach(AddPropertyKind.allCases, id: \.self) { kind in
                         Text(kind.displayName).tag(kind)
