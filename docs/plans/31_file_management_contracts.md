@@ -472,14 +472,16 @@ enforced by construction, not by review.
   it still took the wrong object 3.4-4.0% of the time (P13). Another
   application that trashes a same-named item at the same instant is outside
   Slate's lock and can still collide inside `NSFileManager`. Verifying what
-  arrived in the Trash (the memo's T2) is an open #1125 decision, as are
-  staging (T3, rejected by the memo) and Linux's own freedesktop move (T4,
-  deferred with Linux); trash-rs's Linux cross-device fallback still copies
-  and then recursively deletes the source path. The new token closes the
-  separated host-probe contract and coordinates Slate writers; it does not
-  claim atomic exclusion of sync clients. Keep #1125 open for that remaining
-  boundary and FR-10's leaf binding (since #1449 an ancestor no longer
-  redirects a structural rename on macOS or Linux).
+  arrived in the Trash (the memo's T2) is the owner's next step for #1125
+  (decided 2026-10-17, `43_mac_backlog_delivery/24_decision_memo.md`), after
+  the `~/.Trash` access check from a Slate build; staging (T3) is rejected,
+  and Linux's own freedesktop move (T4) is deferred with the Linux host, so
+  trash-rs's Linux cross-device fallback still copies and then recursively
+  deletes the source path. The new token closes the separated host-probe
+  contract and coordinates Slate writers; it does not claim atomic exclusion
+  of sync clients. Keep #1125 open for that remaining boundary and FR-10's
+  leaf binding (since #1449 an ancestor no longer redirects a structural
+  rename on macOS or Linux).
 - **FR-9 — Windows Move-To destination loading is asynchronous (#1126).**
   The admitted picker opens immediately with Loading/Cancel, then receives
   bounded 1,000-row pages from a cancellable worker, up to 50,000 folders.
