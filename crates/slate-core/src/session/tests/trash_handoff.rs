@@ -9,9 +9,10 @@
 
 use super::*;
 use crate::vault::{ScratchTrash, TrashSnapshot};
+#[cfg(unix)]
+use crate::{BatchFailureStage, BatchTrashState};
 use crate::{
-    BatchFailureStage, BatchTrashRequest, BatchTrashState, DirEntry, FileEventSink, FileStat,
-    StructuralBatchItem, WatchHandle,
+    BatchTrashRequest, DirEntry, FileEventSink, FileStat, StructuralBatchItem, WatchHandle,
 };
 use std::sync::Mutex;
 
