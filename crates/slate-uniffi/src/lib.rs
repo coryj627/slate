@@ -261,6 +261,19 @@ pub fn parse_frontmatter_properties(fm_source: String) -> Vec<Property> {
         .collect()
 }
 
+/// The whole-file text a composed save writes for `fm_source ⊕ body`:
+/// core's own composer, the one `save_composed` runs before it writes.
+///
+/// #1147 (contract 32 I8): a host whose editor holds a note as a body plus
+/// its frontmatter source, and must write it through another primitive —
+/// mac's hashless save is an exclusive create (`create_exclusive_reporting`)
+/// of exactly this text — asks for the bytes here rather than composing a
+/// second copy of the rule (empty `fm_source` → `body` unchanged).
+#[uniffi::export]
+pub fn compose_note(fm_source: String, body: String) -> String {
+    core::compose_note(&fm_source, &body)
+}
+
 /// The TOP-LEVEL keys of a frontmatter block, in document order.
 ///
 /// Add-property surfaces must collision-check against THIS, not against
@@ -13729,6 +13742,29 @@ mod tests {
         assert_eq!(properties[2].key, "tags");
         assert_eq!(properties[2].kind, "tag_list");
         assert_eq!(properties[2].value_json, "[\"one\",\"two\"]");
+    }
+
+    /// #1147 (contract 32 I8): the composer a host reaches is the one the
+    /// composed save writes with, so a note created from its split buffer
+    /// holds the same bytes a `save_composed` of it would.
+    #[test]
+    fn compose_note_is_the_composed_saves_own_bytes() {
+        for (fm, body) in [
+            ("", "Body only\n"),
+            ("title: Ghost\n", "Body\n"),
+            ("title: Ghost\n\n\n", "Body\n"),
+            ("a: 1\r\n", "line one\r\nline two"),
+        ] {
+            assert_eq!(
+                compose_note(fm.to_string(), body.to_string()),
+                core::compose_note(fm, body)
+            );
+        }
+        assert_eq!(compose_note(String::new(), "x".to_string()), "x");
+        assert_eq!(
+            compose_note("title: Ghost\n".to_string(), "Body\n".to_string()),
+            "---\ntitle: Ghost\n---\nBody\n"
+        );
     }
 
     /// W7-7 (#1249): the error detail a host gets through the FFI is the

@@ -23,11 +23,32 @@ extension AppState {
     nonisolated static func createReporting(
         session: VaultSession, path: String, content: String, displayName: String
     ) throws -> A11yEvent? {
+        try createReportingLanding(
+            session: session, path: path, content: content, displayName: displayName
+        ).caveat
+    }
+
+    /// What a create that landed leaves behind: the content hash of its
+    /// bytes, from either landed arm, and the caveat `createReporting`
+    /// returns. A save that is a create (#1147, contract 32 I8) adopts the
+    /// hash, so its next save is a compare-and-swap on exactly those bytes.
+    struct CreateLanding {
+        let contentHash: String
+        let caveat: A11yEvent?
+    }
+
+    /// `createReporting` with the landed hash kept. A refusal rethrows its
+    /// `VaultError` unchanged, as `createReporting`'s does.
+    nonisolated static func createReportingLanding(
+        session: VaultSession, path: String, content: String, displayName: String
+    ) throws -> CreateLanding {
         switch try session.createExclusiveReporting(path: path, content: content) {
-        case .committed:
-            return nil
-        case .publishedUnindexed(_, _, let errorMessage):
-            return .createPublishedUnindexed(name: displayName, reason: errorMessage)
+        case .committed(let report):
+            return CreateLanding(contentHash: report.newContentHash, caveat: nil)
+        case .publishedUnindexed(_, let contentHash, let errorMessage):
+            return CreateLanding(
+                contentHash: contentHash,
+                caveat: .createPublishedUnindexed(name: displayName, reason: errorMessage))
         }
     }
 
