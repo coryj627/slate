@@ -454,6 +454,81 @@ final class GraphTableViewTests: XCTestCase {
         a11yRender(event: .graph(event: .graphMode(mode: mode))).text
     }
 
+    // MARK: - The header sort (A-5; rule Q, Terms Q4 and Q5)
+
+    /// The graph table's header sort (Windows twin
+    /// AHeaderSortIssuesARowsOnlyTokenAndGridSortedSpeaksOnceOnAdoption): the
+    /// grid DELEGATES — a rows-only token, nothing reordered, nothing spoken
+    /// — and the install that adopts the sort speaks core's `GridSorted`
+    /// once, then the count, while the indicator follows the ACCEPTED sort.
+    /// The same sort again is a no-op; another sort asked for and then the
+    /// accepted one asked back is cancelled with no line. Since W6-2 PR 0b
+    /// the mac's columns carried no sort, so no header could sort the graph
+    /// table and `GridSorted` was never spoken.
+    @MainActor
+    func testAHeaderSortIssuesARowsOnlyTokenAndGridSortedSpeaksOnceOnAdoption() async throws {
+        let state = try await makeGraphState()
+        try await mountGraphTab(state)
+        try await waitFor("the first publication") {
+            state.graphTableSnapshot != nil && !state.graphTableLoading
+                && state.graphTablePublishedRequest == state.graphTableRequest
+        }
+        var posts: [String] = []
+        state.graphAnnouncer = GraphAnnouncer(post: { text, _ in posts.append(text) })
+        let content = try XCTUnwrap(hostWindow?.contentView, "the tab body is mounted")
+        let table = try XCTUnwrap(Self.firstSubview(of: NSTableView.self, in: content), "the grid is mounted")
+        let grid = try XCTUnwrap(table.delegate as? GridCoordinator<GraphTableRow>, "the grid's coordinator")
+        let note = GraphTableColumns.index(of: .note)
+        let header = GraphTableColumns.specs[note].header
+        let byNote = GraphTableSort(column: .note, ascending: true)
+        XCTAssertEqual(
+            table.tableColumns[note].headerCell.accessibilityLabel(),
+            "Column: \(header), sortable, current sort: none", "the header is sortable")
+
+        // The grid delegates: a rows-only token, nothing reordered, nothing spoken.
+        XCTAssertNil(grid.applySort(column: note, ascending: true))
+        XCTAssertEqual(state.graphTableRequestedSort, byNote, "the request reached the table")
+        XCTAssertFalse(state.graphTableLoading, "a rows-only token")
+        XCTAssertEqual(posts, [], "spoken before adoption")
+        try await waitFor("the sort's adoption") {
+            state.graphTableSort == byNote && state.graphTableAnsweredSeq == state.graphTableSeq
+        }
+        try await waitFor("the indicator to follow the accepted sort") {
+            table.sortDescriptors.first?.key == "\(note)" && table.sortDescriptors.first?.ascending == true
+        }
+        state.graphAnnouncer.flushForTests()
+        let sorted = a11yRender(event: .gridSorted(column: header, ascending: true)).text
+        let count = a11yRender(
+            event: .graph(
+                event: .graphFilterCount(
+                    shown: UInt32(state.graphTableRows.count), total: UInt32(state.graphTableTotal)))
+        ).text
+        XCTAssertEqual(posts, [sorted, count], "GridSorted once on adoption, then the count")
+        XCTAssertEqual(
+            table.tableColumns[note].headerCell.accessibilityLabel(),
+            "Column: \(header), sortable, current sort: asc")
+
+        // The same sort again: a no-op.
+        let seq = state.graphTableSeq
+        XCTAssertNil(grid.applySort(column: note, ascending: true))
+        XCTAssertEqual(state.graphTableSeq, seq, "the accepted sort asked again issued a token")
+
+        // Another sort, then the accepted one asked back while it is pending:
+        // cancelled at issue, with no line (Term Q5 (c)).
+        XCTAssertNil(grid.applySort(column: GraphTableColumns.index(of: .linksIn), ascending: true))
+        XCTAssertNil(grid.applySort(column: note, ascending: true))
+        XCTAssertNil(state.graphTableRequestedSort, "the pending sort was cancelled")
+        try await waitFor("the cancellation's answer") { state.graphTableAnsweredSeq == state.graphTableSeq }
+        var turns = 0
+        try await waitFor("the grid's reload") {
+            turns += 1
+            return turns > 5
+        }
+        state.graphAnnouncer.flushForTests()
+        XCTAssertEqual(state.graphTableSort, byNote)
+        XCTAssertEqual(posts, [sorted, count], "the reversal spoke: \(posts)")
+    }
+
     /// #1220 (contract 35 DD-18; Term M1): a persisted Diagram mode is
     /// RESTORED at the seat and speaks no mode line — `GraphMode` is the
     /// switch's line. The restore-driven `onChange(of: mode)` used to skip

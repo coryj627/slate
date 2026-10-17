@@ -21,6 +21,18 @@ struct GraphTableRequest: Equatable {
 struct GraphTableToken: Equatable {
     let request: GraphTableRequest
     let seq: UInt64
+    /// Whether the token carries the READER's pending sort — one they asked
+    /// for that is not the accepted sort (rule Q, Term Q5; Windows'
+    /// `UserSort`). Its install ADOPTS the sort and says so with core's
+    /// `GridSorted` (A-5); a preset's default sort and a cancellation are
+    /// never one.
+    let userSort: Bool
+
+    init(request: GraphTableRequest, seq: UInt64, userSort: Bool = false) {
+        self.request = request
+        self.seq = seq
+        self.userSort = userSort
+    }
 }
 
 /// The table's ONE publication (contract 35 A-2, adopted for the mac by the
@@ -231,10 +243,16 @@ extension AppState {
     /// (if any) is decided AFTER the fresh snapshot publishes and is
     /// gated on a live, on-screen graph tab.
     ///
-    /// `sort` is the request's sort when a REPLACING load re-fetches under
-    /// its own request (W6-2 PR C, C-2 (iii)); otherwise the accepted sort,
-    /// or the default under a pending preset (design A).
-    func loadGraphTable(announce: GraphTableLoadAnnounce = .summary, sort: GraphTableSort? = nil) {
+    /// `sort` and `userSort` are the replaced token's when a REPLACING load
+    /// re-fetches under its own request (W6-2 PR C, C-2 (iii); rule Q, Term
+    /// Q9). Otherwise a pending preset's pair takes the DEFAULT sort, which
+    /// replaces a pending sort silently (design A; Term Q5 (d)), and every
+    /// other pair — the activation's, a filter change's, the generation
+    /// probe's — CARRIES the reader's pending sort when one rides (Term Q5;
+    /// IGP-4; C-D17), else the accepted one.
+    func loadGraphTable(
+        announce: GraphTableLoadAnnounce = .summary, sort: GraphTableSort? = nil, userSort: Bool? = nil
+    ) {
         guard let session = currentSession else {
             // No session, nothing to fetch: nothing is installed either (D1,
             // TGC-19 — only a current result installs), so a receiver's
@@ -248,10 +266,15 @@ extension AppState {
         let seq = graphTableLoadSeq
         // A preset is a request like any other (design A): it sets the
         // DEFAULT sort in the same token as its filter, kind and needle.
-        let token = issueGraphTableToken(
-            sort: sort
-                ?? (graphTablePendingPreset != nil
-                    ? graphTableDefaultSort() : graphTableSort))
+        let token: GraphTableToken
+        if let sort {
+            token = issueGraphTableToken(sort: sort, userSort: userSort)
+        } else if graphTablePendingPreset != nil {
+            token = issueGraphTableToken(sort: graphTableDefaultSort(), userSort: false)
+        } else {
+            token = issueGraphTableToken(
+                sort: graphTableRequestedSort ?? graphTableSort, userSort: graphTableRequestedSort != nil)
+        }
         graphTableLoading = true
         // (iv) The announce a replacing load inherits while this one is in
         // flight (contracts doc §PR C C-2 (iv); rule Q, Term Q9).
@@ -369,15 +392,18 @@ extension AppState {
     // MARK: - The load token (W6-2 PR 0b, design A)
 
     /// Issue the next token: every input change advances the sequence and
-    /// records the request; `sort` is the requested sort until its rows
-    /// publish.
+    /// records the request. The token carries the reader's sort (`userSort`)
+    /// when its sort is not the accepted one and it is not a preset's (`false`)
+    /// — an explicit request's own (`nil`) or a carried pending one (`true`) —
+    /// and that sort is the PENDING one until it publishes (rule Q, Term Q5).
     @discardableResult
-    func issueGraphTableToken(sort: GraphTableSort) -> GraphTableToken {
+    func issueGraphTableToken(sort: GraphTableSort, userSort: Bool? = nil) -> GraphTableToken {
         graphTableSeq += 1
         let request = GraphTableRequest(query: graphVisibilityQuery, sort: sort)
         graphTableRequest = request
-        graphTableRequestedSort = sort == graphTableSort ? nil : sort
-        return GraphTableToken(request: request, seq: graphTableSeq)
+        let carriesUserSort = sort != graphTableSort && (userSort ?? true)
+        graphTableRequestedSort = carriesUserSort ? sort : nil
+        return GraphTableToken(request: request, seq: graphTableSeq, userSort: carriesUserSort)
     }
 
     /// Publish a PAIR result under its token (contract 35 A-2; D1, TGC-19 —
@@ -398,7 +424,9 @@ extension AppState {
     ) -> Bool {
         guard token.seq == graphTableSeq, token.request == graphTableRequest else { return false }
         guard rows.generation == snapshot.generation else {
-            loadGraphTable(announce: graphTableInFlightAnnounce ?? .silent, sort: token.request.sort)
+            loadGraphTable(
+                announce: graphTableInFlightAnnounce ?? .silent, sort: token.request.sort,
+                userSort: token.userSort)
             return false
         }
         graphTableRequestedSort = nil
@@ -407,6 +435,7 @@ extension AppState {
         graphTableError = nil
         graphTablePublication = .fromPair(token, snapshot: snapshot, rows: rows)
         graphTableSeenGraphGeneration = snapshot.generation
+        if token.userSort { announceGraphTableSortAdoption(token.request.sort) }
         return true
     }
 
@@ -428,12 +457,29 @@ extension AppState {
         guard token.seq == graphTableSeq, token.request == graphTableRequest else { return false }
         let held = graphTablePublication
         guard held.holdsAuthority(filter: token.request.query.filter, generation: result.generation) else {
-            loadGraphTable(announce: graphTableInFlightAnnounce ?? .silent, sort: token.request.sort)
+            loadGraphTable(
+                announce: graphTableInFlightAnnounce ?? .silent, sort: token.request.sort,
+                userSort: token.userSort)
             return false
         }
         graphTableRequestedSort = nil
         graphTablePublication = held.withRows(token, rows: result)
+        if token.userSort { announceGraphTableSortAdoption(token.request.sort) }
         return true
+    }
+
+    /// The sort's ONE line, on ADOPTION (A-5; rule Q, Term Q5 (a)): an install
+    /// that answered the reader's sort relays core's `GridSorted` for it —
+    /// after the record installed, so the rows already stand in that order,
+    /// and before the install's own line (Term Q5's combined lines, IGP-19:
+    /// the count, the summary). A cancellation, a preset's default sort, a
+    /// failure and a superseded token adopt nothing and say nothing. The grid
+    /// announces no sort of its own (`announcesSortAdoption: false`): this
+    /// owner alone knows which install answered the request.
+    func announceGraphTableSortAdoption(_ sort: GraphTableSort) {
+        guard graphTabActive else { return }
+        let header = GraphTableColumns.specs[GraphTableColumns.index(of: sort.column)].header
+        graphAnnouncer.relay(.gridSorted(column: header, ascending: sort.ascending))
     }
 
     /// A failed query rolls the request back to the accepted state; the held
@@ -486,7 +532,13 @@ extension AppState {
     func requestGraphTableRows(
         sort: GraphTableSort? = nil, announce: GraphTableLoadAnnounce = .filterCount
     ) {
-        let token = issueGraphTableToken(sort: sort ?? graphTableSort)
+        // A needle — any rows request with no sort of its own — CARRIES the
+        // reader's pending sort (rule Q, Term Q5), so typing while a sort is
+        // in flight no longer cancels it in silence.
+        let token =
+            sort.map { issueGraphTableToken(sort: $0) }
+            ?? issueGraphTableToken(
+                sort: graphTableRequestedSort ?? graphTableSort, userSort: graphTableRequestedSort != nil)
         // A needle or a sort typed during a preset's pair replaces its
         // headline with the count (rule Q, Term Q4 — the order the pair's
         // continuation kept, now kept when a re-fetch drops that
@@ -713,7 +765,9 @@ extension AppState {
             // (iv) The replacing load inherits the announce of the load it
             // supersedes (contracts doc §PR C C-2 (iv); rule Q, Term Q9): a
             // preset's headline, an open's summary or a needle's count is
-            // spoken over the NEWER generation, never lost to the refresh.
+            // spoken over the NEWER generation, never lost to the refresh —
+            // and, through `loadGraphTable`'s carry, the reader's pending
+            // sort with it, adopted at the install (C-D17, closed).
             self.loadGraphTable(announce: self.graphTableInFlightAnnounce ?? .silent)
         }
     }

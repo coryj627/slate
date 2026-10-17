@@ -948,7 +948,8 @@ final class GraphTabRoutingTests: XCTestCase {
         state.setGraphTableSort(byNote)
         try await awaitEntrance(gate, "the sort's rows")
         state.graphTableRowsPublishGate = nil
-        let token = GraphTableToken(request: try XCTUnwrap(state.graphTableRequest), seq: state.graphTableSeq)
+        let token = GraphTableToken(
+            request: try XCTUnwrap(state.graphTableRequest), seq: state.graphTableSeq, userSort: true)
         XCTAssertEqual(token.request.sort, byNote)
         var installs: [GraphTablePublication] = []
         let watch = state.$graphTablePublication.dropFirst().sink { installs.append($0) }
@@ -971,7 +972,7 @@ final class GraphTabRoutingTests: XCTestCase {
         XCTAssertEqual(installs.first?.generation, held.generation, "the authority at the vault's generation")
         XCTAssertEqual(state.graphTableSort, byNote, "the pair adopted the sort")
         XCTAssertNil(state.graphTableRequestedSort)
-        XCTAssertEqual(posts.filter { $0.contains("shown") }.count, 1, "the count once: \(posts)")
+        XCTAssertEqual(posts, [Self.gridSortedLine(byNote), Self.countLine(state)], "\(posts)")
     }
 
     /// IPG-38 (rule Q, Term Q2): the rows ROLLBACK belongs to the current
@@ -1022,9 +1023,7 @@ final class GraphTabRoutingTests: XCTestCase {
         state.graphAnnouncer.flushForTests()
         XCTAssertEqual(state.graphTableSort, accepted)
         XCTAssertNotNil(state.graphDiagramWhereAmIEvent(), "readback resumes when cancellation publishes")
-        XCTAssertFalse(
-            posts.contains { $0.contains("shown") },
-            "the cancellation spoke a count: \(posts)")
+        XCTAssertEqual(posts, [], "the cancellation spoke — a count or a GridSorted: \(posts)")
     }
 
     /// IPG-32 (C-8): the table readback answers only while the shown rows
@@ -1224,8 +1223,10 @@ final class GraphTabRoutingTests: XCTestCase {
             XCTAssertNil(state.graphTableRequestedSort, order)
             XCTAssertEqual(state.graphTableSnapshotFilter?.orphansOnly, true, order)
             XCTAssertNil(state.graphTablePendingPreset, order)
-            XCTAssertEqual(posts.filter { $0.contains("shown") }.count, 1, "\(order): the count once: \(posts)")
-            XCTAssertFalse(posts.contains { $0.contains("orphaned") }, "\(order): no headline: \(posts)")
+            // The adoption's lines (Windows twin
+            // ASortDuringAPairOverAStaleSnapshotRefetchesAndAdoptsWithGridSortedThenTheCount):
+            // `GridSorted`, then the count once, and no headline.
+            XCTAssertEqual(posts, [Self.gridSortedLine(byNote), Self.countLine(state)], "\(order): \(posts)")
         }
     }
 
@@ -1258,6 +1259,242 @@ final class GraphTabRoutingTests: XCTestCase {
         state.graphAnnouncer.flushForTests()
         XCTAssertEqual(posts, ["0 orphaned notes."], "the replacing load spoke the headline once, no summary")
         XCTAssertNil(state.graphTableInFlightAnnounce)
+    }
+
+    // MARK: - The pending sort (rule Q, Terms Q5 and Q9; C-D17; IGP-4)
+
+    /// Core's `GridSorted` line for `sort` on the graph table (A-5): the
+    /// header from core's column vector, the line core renders.
+    private static func gridSortedLine(_ sort: GraphTableSort) -> String {
+        let header = GraphTableColumns.specs[GraphTableColumns.index(of: sort.column)].header
+        return a11yRender(event: .gridSorted(column: header, ascending: sort.ascending)).text
+    }
+
+    /// Core's count line for what the table publishes now.
+    private static func countLine(_ state: AppState) -> String {
+        a11yRender(
+            event: .graph(
+                event: .graphFilterCount(
+                    shown: UInt32(state.graphTableRows.count), total: UInt32(state.graphTableTotal)))
+        ).text
+    }
+
+    /// Term Q4's sort lines (Windows twin
+    /// ASortSpeaksGridSortedThenTheCoalescedCountAndNothingElse): a sort's
+    /// install ADOPTS it and speaks core's `GridSorted`, then the coalesced
+    /// count, and nothing else. The mac's table spoke the count alone: its
+    /// grid announces no sort of its own, and nothing else did.
+    func testASortSpeaksGridSortedThenTheCoalescedCountAndNothingElse() async throws {
+        let state = try await makeAppState()
+        try await openQuiescentGraph(state)
+        var posts: [String] = []
+        state.graphAnnouncer = GraphAnnouncer(post: { text, _ in posts.append(text) })
+        let byNote = GraphTableSort(column: .note, ascending: true)
+        state.setGraphTableSort(byNote)
+        try await pollUntil { state.graphTableAnsweredSeq == state.graphTableSeq }
+        state.graphAnnouncer.flushForTests()
+        XCTAssertEqual(state.graphTableSort, byNote)
+        XCTAssertEqual(posts, [Self.gridSortedLine(byNote), Self.countLine(state)])
+    }
+
+    /// Term Q5 (Windows twin ANeedleKeepsThePendingSortAndGridSortedSpeaksOnAdoption):
+    /// a needle typed while a sort is pending CARRIES it. The mac's needle
+    /// was issued under the accepted sort and cancelled the reader's sort in
+    /// silence.
+    func testANeedleKeepsThePendingSortAndGridSortedSpeaksOnAdoption() async throws {
+        let state = try await makeAppState()
+        try await openQuiescentGraph(state)
+        var posts: [String] = []
+        state.graphAnnouncer = GraphAnnouncer(post: { text, _ in posts.append(text) })
+        let byNote = GraphTableSort(column: .note, ascending: true)
+        let gate = AsyncGate()
+        state.graphTableRowsPublishGate = { _ in await gate.suspend() }
+        state.setGraphTableSort(byNote)
+        try await awaitEntrance(gate, "the sort's rows")
+        state.graphTableRowsPublishGate = nil
+        state.graphTableTextFilter = "a"
+        state.requestGraphTableRowsIfQueryChanged()
+        XCTAssertEqual(state.graphTableRequest?.query.nameQuery, "a", "the needle issued its token")
+        XCTAssertEqual(state.graphTableRequest?.sort, byNote, "the needle carries the reader's sort")
+        XCTAssertEqual(state.graphTableRequestedSort, byNote, "and leaves it pending")
+        await gate.release()
+        try await pollUntil {
+            state.graphTableAnsweredSeq == state.graphTableSeq
+                && state.graphTablePublishedRequest == state.graphTableRequest
+        }
+        state.graphAnnouncer.flushForTests()
+        XCTAssertEqual(state.graphTableSort, byNote, "adopted at the needle's install")
+        XCTAssertNil(state.graphTableRequestedSort)
+        XCTAssertEqual(posts, [Self.gridSortedLine(byNote), Self.countLine(state)])
+    }
+
+    /// Term Q5's combined lines (Windows twin
+    /// GridSortedPrecedesTheReceiversLineAtEveryAdoptingInstall): a FILTER's
+    /// pair carries the pending sort, and its install speaks `GridSorted`
+    /// before its count. The mac's filter pair was issued under the accepted
+    /// sort and dropped the reader's.
+    func testGridSortedPrecedesTheReceiversLineAtEveryAdoptingInstall() async throws {
+        let state = try await makeAppState()
+        try await openQuiescentGraph(state)
+        var posts: [String] = []
+        state.graphAnnouncer = GraphAnnouncer(post: { text, _ in posts.append(text) })
+        let byNote = GraphTableSort(column: .note, ascending: true)
+        let gate = AsyncGate()
+        state.graphTableRowsPublishGate = { _ in await gate.suspend() }
+        state.setGraphTableSort(byNote)
+        try await awaitEntrance(gate, "the sort's rows")
+        state.graphTableRowsPublishGate = nil
+        state.setGraphTableFilter(GraphFilter(includeAttachments: true, includeGhosts: true, orphansOnly: false))
+        XCTAssertTrue(state.graphTableLoading, "the filter issued its pair")
+        XCTAssertEqual(state.graphTableRequest?.sort, byNote, "the filter's pair carries the reader's sort")
+        XCTAssertEqual(state.graphTableRequestedSort, byNote)
+        await gate.release()
+        try await pollUntil { !state.graphTableLoading && state.graphTableAnsweredSeq == state.graphTableSeq }
+        state.graphAnnouncer.flushForTests()
+        XCTAssertEqual(state.graphTableSort, byNote)
+        XCTAssertTrue(state.graphTableSnapshotFilter?.includeAttachments == true)
+        XCTAssertEqual(posts, [Self.gridSortedLine(byNote), Self.countLine(state)])
+    }
+
+    /// Term Q5, IGP-4 (Windows twin
+    /// TheActivationCarriesThePendingSortAndAdoptsItBeforeTheSummary): a sort
+    /// pending when the reader leaves the graph tab survives the return —
+    /// the activation's pair carries it and its install speaks `GridSorted`
+    /// before the summary. The mac's activation reloaded under the accepted
+    /// sort.
+    func testTheActivationCarriesThePendingSortAndAdoptsItBeforeTheSummary() async throws {
+        let state = try await makeAppState()
+        try await openQuiescentGraph(state)
+        let graphTab = try XCTUnwrap(state.workspace.activeTab?.id)
+        state.openFile("a.md", target: .newTab)
+        await state.noteLoadTask?.value
+        XCTAssertNotEqual(state.workspace.activeTab?.id, graphTab, "a note is in front")
+        state.activateTab(graphTab)
+        try await pollUntil { !state.graphTableLoading && state.graphTableAnsweredSeq == state.graphTableSeq }
+        var posts: [String] = []
+        state.graphAnnouncer = GraphAnnouncer(post: { text, _ in posts.append(text) })
+        let byNote = GraphTableSort(column: .note, ascending: true)
+        let gate = AsyncGate()
+        state.graphTableRowsPublishGate = { _ in await gate.suspend() }
+        state.setGraphTableSort(byNote)
+        try await awaitEntrance(gate, "the sort's rows")
+        state.graphTableRowsPublishGate = nil
+        // Leave, then return by tab: the activation's pair carries the sort.
+        let noteTab = try XCTUnwrap(
+            state.workspace.model.allTabs.first { $0.item != .graph }?.id, "the note's tab")
+        state.activateTab(noteTab)
+        state.activateTab(graphTab)
+        XCTAssertTrue(state.graphTableLoading, "the activation issued its pair")
+        XCTAssertEqual(state.graphTableRequest?.sort, byNote, "the activation carries the reader's sort")
+        XCTAssertEqual(state.graphTableRequestedSort, byNote)
+        await gate.release()
+        try await pollUntil { !state.graphTableLoading && state.graphTableAnsweredSeq == state.graphTableSeq }
+        state.graphAnnouncer.flushForTests()
+        XCTAssertEqual(state.graphTableSort, byNote)
+        let summary = a11yRender(
+            event: .graph(
+                event: .graphSnapshotSummary(counts: try XCTUnwrap(state.graphTableSnapshot).summaryCounts))
+        ).text
+        XCTAssertEqual(posts, [Self.gridSortedLine(byNote), summary])
+    }
+
+    /// Term Q5 (d) (Windows twin APresetReplacesThePendingSortSilently): a
+    /// preset's DEFAULT sort replaces a pending sort silently — no
+    /// `GridSorted`, the headline alone.
+    func testAPresetReplacesThePendingSortSilently() async throws {
+        let state = try await makeAppState()
+        try await openQuiescentGraph(state)
+        var posts: [String] = []
+        state.graphAnnouncer = GraphAnnouncer(post: { text, _ in posts.append(text) })
+        let byNote = GraphTableSort(column: .note, ascending: true)
+        let gate = AsyncGate()
+        state.graphTableRowsPublishGate = { _ in await gate.suspend() }
+        state.setGraphTableSort(byNote)
+        try await awaitEntrance(gate, "the sort's rows")
+        state.graphTableRowsPublishGate = nil
+        state.openGraphPreset(.mostLinked)
+        XCTAssertNil(state.graphTableRequestedSort, "the preset replaced the pending sort")
+        XCTAssertEqual(state.graphTableRequest?.sort, graphTableDefaultSort(), "under its default sort")
+        await gate.release()
+        try await pollUntil {
+            !state.graphTableLoading && state.graphTablePendingPreset == nil
+                && state.graphTableAnsweredSeq == state.graphTableSeq
+        }
+        state.graphAnnouncer.flushForTests()
+        XCTAssertEqual(state.graphTableSort, graphTableDefaultSort())
+        XCTAssertEqual(posts.count, 1, "the headline alone: \(posts)")
+        XCTAssertTrue(posts.first?.hasPrefix("Most linked:") == true, "\(posts)")
+    }
+
+    /// Term P4, Term Q5 (d) (Windows twin
+    /// APresetOverAFolderSortResetsSilentlyWithNoGridSorted): a preset over an
+    /// ACCEPTED Folder sort resets the table to the default sort silently —
+    /// its token carries no sort of the reader's, so its install speaks the
+    /// headline alone, no `GridSorted`.
+    func testAPresetOverAFolderSortResetsSilentlyWithNoGridSorted() async throws {
+        let state = try await makeAppState()
+        try await openQuiescentGraph(state)
+        let byFolder = GraphTableSort(column: .folder, ascending: true)
+        state.setGraphTableSort(byFolder)
+        try await pollUntil { state.graphTableSort == byFolder && state.graphTableAnsweredSeq == state.graphTableSeq }
+        var posts: [String] = []
+        state.graphAnnouncer = GraphAnnouncer(post: { text, _ in posts.append(text) })
+        state.openGraphPreset(.mostLinked)
+        XCTAssertNil(state.graphTableRequestedSort, "the preset's default sort is not the reader's")
+        try await pollUntil {
+            !state.graphTableLoading && state.graphTablePendingPreset == nil
+                && state.graphTableAnsweredSeq == state.graphTableSeq
+        }
+        state.graphAnnouncer.flushForTests()
+        XCTAssertEqual(state.graphTableSort, graphTableDefaultSort())
+        XCTAssertEqual(posts.count, 1, "the headline alone: \(posts)")
+        XCTAssertTrue(posts.first?.hasPrefix("Most linked:") == true, "\(posts)")
+    }
+
+    /// C-D17, closed (D1; Terms Q5 and Q9; Windows twin
+    /// AProbesPairInheritsThePendingSortAndAdoptsItWithGridSortedThenTheCount):
+    /// the reader asks for a sort and the vault moves while it is in flight.
+    /// The generation probe's replacing pair inherits the sort — its request
+    /// carries it, it stays pending, the sort's announce rides — and the
+    /// pair's install adopts it, speaking `GridSorted` then the count. The
+    /// mac's probe re-issued under the ACCEPTED sort: the reader's sort was
+    /// lost in silence and the count was spoken over rows in the old order.
+    func testAProbesPairInheritsThePendingSortAndAdoptsItWithGridSortedThenTheCount() async throws {
+        let state = try await makeAppState()
+        try await openQuiescentGraph(state)
+        var posts: [String] = []
+        state.graphAnnouncer = GraphAnnouncer(post: { text, _ in posts.append(text) })
+        let accepted = state.graphTableSort
+        let byNote = GraphTableSort(column: .note, ascending: true)
+        XCTAssertNotEqual(byNote, accepted)
+        let rowsGate = AsyncGate()
+        state.graphTableRowsPublishGate = { _ in await rowsGate.suspend() }
+        state.setGraphTableSort(byNote)
+        let sortSeq = state.graphTableSeq
+        try await awaitEntrance(rowsGate, "the sort's rows")
+        state.graphTableRowsPublishGate = nil
+        // The vault moved: the probe finds a generation the authority lacks.
+        let pairGate = AsyncGate()
+        state.graphTablePublishGate = { _ in await pairGate.suspend() }
+        state.graphTableSeenGraphGeneration = state.graphTableSeenGraphGeneration &+ 1
+        state.refreshGraphTableIfGraphChanged()
+        try await awaitEntrance(pairGate, "the probe's replacing pair")
+        state.graphTablePublishGate = nil
+        XCTAssertGreaterThan(state.graphTableSeq, sortSeq, "the probe superseded the sort's token")
+        XCTAssertTrue(state.graphTableLoading, "as a PAIR")
+        XCTAssertEqual(state.graphTableRequest?.sort, byNote, "the replacing pair carries the reader's sort")
+        XCTAssertEqual(state.graphTableRequestedSort, byNote, "which stays pending")
+        XCTAssertEqual(state.graphTableInFlightAnnounce, .filterCount, "and the sort's announce rides")
+        // The sort's own rows land superseded and are dropped.
+        await rowsGate.release()
+        await pairGate.release()
+        try await pollUntil { !state.graphTableLoading && state.graphTableAnsweredSeq == state.graphTableSeq }
+        state.graphAnnouncer.flushForTests()
+        XCTAssertEqual(state.graphTableSort, byNote, "adopted at the replacing pair's install")
+        XCTAssertNil(state.graphTableRequestedSort)
+        XCTAssertEqual(
+            state.graphTablePublishedRequest?.sort, byNote, "the rows are in the reader's sort, not the accepted one")
+        XCTAssertEqual(posts, [Self.gridSortedLine(byNote), Self.countLine(state)])
     }
 
     /// C-8: ⌃⌘I routes to the graph in Table mode too — the table's

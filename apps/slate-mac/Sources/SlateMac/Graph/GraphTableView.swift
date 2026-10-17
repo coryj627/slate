@@ -350,6 +350,9 @@ struct GraphTableView: View {
             sortState: sortState,
             // Core orders the rows (0b-7); the grid never re-sorts them.
             sortsRowsLocally: false,
+            // The table speaks the sort's adoption itself, at the install that
+            // answered it (A-5; `announceGraphTableSortAdoption`).
+            announcesSortAdoption: false,
             onActivate: { row in activate(row) },
             onActivateModified: { row in activateInNewTab(row) },
             showsRowContextMenu: true,
@@ -491,6 +494,9 @@ enum GraphTableColumns {
             AccessibleDataGrid<GraphTableRow>.Column(
                 spec.header,
                 cell: { row in row.cells.indices.contains(index) ? row.cells[index] : "" },
+                // Core orders the rows (0b-7): the header requests the sort
+                // and the grid never applies one itself.
+                externallySortable: true,
                 accessibilityHint: { row in
                     row.isGhost ? ghostCreationDisabledReason : nil
                 })
