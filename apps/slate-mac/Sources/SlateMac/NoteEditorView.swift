@@ -407,6 +407,15 @@ struct NoteEditorView: NSViewRepresentable {
             context.coordinator.withSuppressedDirtyTracking {
                 textView.string = text
             }
+            // Plan 43 PR 19: the swapped-in bytes are a new baseline (a load,
+            // a reload from disk, a rescan's reload of a clean note), but the
+            // text view's typing undo stays registered against its storage at
+            // the old ranges, so Undo would replay an earlier edit into the
+            // new bytes. That history ends here, as a reload's does on
+            // Windows; other targets on the window's undo manager are kept.
+            if let storage = textView.textStorage {
+                textView.undoManager?.removeAllActions(withTarget: storage)
+            }
             // Re-establish the dynamic body colour on the freshly-swapped
             // storage. The highlight overlay is now display-only
             // (temporary attributes), so it no longer re-stamps the
