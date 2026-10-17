@@ -522,6 +522,27 @@ final class WorkspaceState: ObservableObject {
         }
     }
 
+    /// Plan 43 PR 19 (#1333, contract 40 R-9): a rescan found that the note
+    /// these clean parked documents show changed outside Slate. Each takes
+    /// the bytes of one read of the note, which the index vouches for: its
+    /// body, its frontmatter source and offsets, its content hash, and a
+    /// clean state. An unfocused pane that renders one repaints it live. A
+    /// document with unsaved text is never passed here.
+    func reloadCleanDocuments(_ reloading: [NoteDocument], with parts: NotePartsBundle) {
+        guard !reloading.isEmpty else { return }
+        for document in reloading {
+            document.text = parts.body
+            document.savedBaselineText = parts.body
+            document.contentHash = parts.contentHash
+            document.fmSource = parts.fmSource
+            document.bodyByteOffset = Int(parts.bodyByteOffset)
+            document.bodyLineOffset = Int(parts.bodyLineOffset)
+            document.hasUnsavedChanges = false
+            document.saveError = nil
+        }
+        loadedBaselineRevision &+= 1
+    }
+
     /// #1147 (contract 32 I6): the file these parked documents name is back
     /// on disk, so they stop being missing. Each keeps its buffer, hash and
     /// dirty state: an activation restores the buffer into the editor rather

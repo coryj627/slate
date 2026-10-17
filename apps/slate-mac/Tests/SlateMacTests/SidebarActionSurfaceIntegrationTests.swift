@@ -134,6 +134,10 @@ final class SidebarActionSurfaceIntegrationTests: XCTestCase {
             hint: "Expand already-loaded folders, fetching at most one level deeper.",
             section: .sidebar, hotkey: nil),
         .init(
+            id: "slate.sidebar.refresh", label: "Files: Refresh",
+            hint: "Rescan the vault for files added, changed or removed outside Slate.",
+            section: .sidebar, hotkey: nil),
+        .init(
             id: "slate.sidebar.historyBack", label: "Back in Sidebar History",
             hint: "Select the previous sidebar selection from this window's history.",
             section: .sidebar, hotkey: "⌃⌘["),
@@ -356,6 +360,7 @@ final class SidebarActionSurfaceIntegrationTests: XCTestCase {
                     SlateCommandID.sidebarClearRecents,
                     SlateCommandID.sidebarCollapseAll,
                     SlateCommandID.sidebarExpandLoaded,
+                    SlateCommandID.sidebarRefresh,
                     SlateCommandID.sidebarHistoryBack,
                     SlateCommandID.sidebarHistoryForward,
                 ] + SlateCommandID.sidebarOpenShortcutSlots
@@ -1234,6 +1239,9 @@ final class SidebarActionSurfaceIntegrationTests: XCTestCase {
         let viewMenuNavigationIDs: Set<String> = [
             SlateCommandID.sidebarCollapseAll,
             SlateCommandID.sidebarExpandLoaded,
+            // Plan 43 PR 19: Files Sidebar Refresh, beside the other tree
+            // view controls ("Refresh Files" in the menu).
+            SlateCommandID.sidebarRefresh,
             SlateCommandID.sidebarHistoryBack,
             SlateCommandID.sidebarHistoryForward,
             // FL-09: the filter-focus chord (⌥⌘F) lives beside the other

@@ -4892,6 +4892,7 @@ struct FileTreeSidebar: View {
         .onChange(of: tree.expanded) { _, _ in
             Self.mirrorExpandedPaths(tree: tree, appState: appState)
         }
+        .modifier(FileTreeRescanRegistration(appState: appState) { await refreshTreeForRescan() })
         .onChange(of: appState.isScanning) { _, scanning in
             // Announce once the scan finishes — at that point `files` has been
             // populated and N items is the count VoiceOver should hear.
@@ -8903,6 +8904,140 @@ private struct TreeFocusBridge: View {
             .accessibilityHidden(true)
             .onChange(of: workspace.treeFocusRequest) {
                 focused.wrappedValue = true
+            }
+    }
+}
+
+// MARK: - The rescan's tree refetch (plan 43 PR 19, #1333; contract 40 R-9)
+
+extension FileTreeViewModel {
+    /// A rescan's refetch of the tree, the twin of Windows'
+    /// `FilesSidebarViewModel.RefreshForRescanAsync`: the authoritative
+    /// whole-tree invalidation every scan's end already runs, awaited until
+    /// every level it reloads (the root, then each loaded folder it
+    /// re-expands, one at a time) has published. Silent: a level that cannot
+    /// be listed shows its own Retry row and comes back counted, for the
+    /// rescan's one sentence. A cancelled waiter stops waiting and counts
+    /// nothing; the levels themselves are this model's, which a rebind or
+    /// the next invalidation revokes.
+    func refreshForRescan() async -> UInt64 {
+        authoritativeTreeInvalidation()
+        await settleRescanRefetch()
+        guard !Task.isCancelled else { return 0 }
+        return failedLevelCountForRescan
+    }
+
+    /// Every level load, materialization pump and live reorganization the
+    /// refetch set off, awaited until none is left (each task once).
+    private func settleRescanRefetch() async {
+        var awaited = Set<Task<Void, Never>>()
+        while !Task.isCancelled {
+            let running: [Task<Void, Never>] =
+                Array(levelDrainTasksForTesting.values)
+                + [materializationPumpTask, liveReorganizationPumpTask].compactMap { $0 }
+                + Array(liveReorganizationTasks.values)
+            guard let next = running.first(where: { !awaited.contains($0) }) else { return }
+            awaited.insert(next)
+            await next.value
+        }
+    }
+
+    /// The refetched levels that failed: the root, and each expanded folder
+    /// whose listing failed.
+    private var failedLevelCountForRescan: UInt64 {
+        var failed: UInt64 = 0
+        for (key, state) in fetchState {
+            guard case .failed = state,
+                key == Self.rootFetchKey || expanded.contains(key)
+            else { continue }
+            failed += 1
+        }
+        return failed
+    }
+}
+
+extension FileTreeSidebar {
+    /// The rescan's refetch as AppState's run awaits it, then the keys'
+    /// landing when the row they were on is gone.
+    @MainActor
+    fileprivate func refreshTreeForRescan() async -> UInt64 {
+        let before = visibleSelectionRows
+        let failures = await tree.refreshForRescan()
+        if let landed = Self.rescanLanding(
+            model: selectionModel, before: before, after: visibleSelectionRows)
+        {
+            mutateSelectionAndPublish { $0 = landed }
+            // The List carrier follows, with the open and the selection
+            // announcement suppressed: the note in the editor stays, and
+            // nothing but VoiceOver's own focus reading speaks.
+            let target = selectionModel.focused
+            if listSelection != target {
+                suppressOpenForSelectionChange = true
+                selectionAnnouncementGate.arm()
+                selectionRevisionGate.arm(for: target)
+                listSelection = target
+            }
+        }
+        return failures
+    }
+
+    private struct RescanRowKey: Hashable {
+        let identity: RowID
+        let path: String
+    }
+
+    /// R-9 (a): a selected row the rescan's publication removed lands the
+    /// keys on the nearest row that survived, through the tree's own removal
+    /// landing (the one an in-app Trash uses: a surviving selected row, else
+    /// the removed row's nearest neighbour, else its parent). On mac a list's
+    /// keyboard cursor is its selection, so the survivor takes the highlight;
+    /// the caller suppresses its open, which is what Windows' "focused without
+    /// selecting it" protects. Nil when no row the keys or the selection were
+    /// on was removed: keys on a row that survived never move. Pure.
+    static func rescanLanding(
+        model: SelectionModel,
+        before: [SelectionRow],
+        after: [SelectionRow]
+    ) -> SelectionModel? {
+        let survivors = Set(after.map { RescanRowKey(identity: $0.identity, path: $0.path) })
+        let removed = before.filter {
+            !survivors.contains(RescanRowKey(identity: $0.identity, path: $0.path))
+        }
+        guard !removed.isEmpty else { return nil }
+        let removedIdentities = Set(removed.map(\.identity))
+        let keysWereRemoved = model.focused.map { removedIdentities.contains($0) } ?? false
+        guard keysWereRemoved || !model.selected.isDisjoint(with: removedIdentities) else {
+            return nil
+        }
+        var landed = model
+        var componentVisits = 0
+        landed.removeKnownItems(
+            using: SelectionModel.KnownRemovalIndex(
+                removed.map { .init(path: $0.path, isDirectory: $0.isDirectory) }),
+            preferredFocusPath: nil,
+            visibleRows: before,
+            componentVisits: &componentVisits)
+        return landed
+    }
+}
+
+/// Registers the mounted tree's rescan refetch with AppState's run while the
+/// sidebar is on screen (plan 43 PR 19): a run with no tree mounted has none
+/// to await.
+struct FileTreeRescanRegistration: ViewModifier {
+    let appState: AppState
+    let refresh: @MainActor () async -> UInt64
+    @State private var registration: UUID?
+
+    func body(content: Content) -> some View {
+        content
+            .onAppear {
+                if let registration { appState.rescanRun.unregisterTreeRefresher(registration) }
+                registration = appState.rescanRun.registerTreeRefresher(refresh)
+            }
+            .onDisappear {
+                if let registration { appState.rescanRun.unregisterTreeRefresher(registration) }
+                registration = nil
             }
     }
 }

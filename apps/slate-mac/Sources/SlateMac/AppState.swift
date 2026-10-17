@@ -1933,6 +1933,9 @@ final class AppState: ObservableObject {
                     filesystemAlreadyValidated
                     || stagesOpenConfirmation
                     || offloadsLargeStructuralValidation
+                    // Plan 43 PR 19: Refresh acts on the vault, never on the
+                    // selection, whose file may be exactly what changed.
+                    || intent.actionID == SlateCommandID.sidebarRefresh
                     ? false : true)
         } catch let error as SidebarActionValidationError {
             throw sidebarActionFailure(error.reason)
@@ -2266,6 +2269,13 @@ final class AppState: ObservableObject {
             try dispatchSidebarNavigationAction(intent, rejected: rejected)
             return .completed(actionID: intent.actionID)
 
+        case SlateCommandID.sidebarRefresh:
+            // Plan 43 PR 19 (#1333, R-9): the explicit rescan. A request
+            // while one runs joins its lattice and is served by its
+            // follow-up, so it never fails here.
+            requestRescan(.explicit)
+            return .completed(actionID: intent.actionID)
+
         default:
             throw sidebarActionFailure(Self.sidebarSelectionChangedReason)
         }
@@ -2549,6 +2559,11 @@ final class AppState: ObservableObject {
         if isCopyingSidebarWikilink {
             reasons[SlateCommandID.sidebarCopyWikilink] =
                 Self.sidebarWikilinkCopyPendingReason
+        }
+        // Plan 43 PR 19 (R-9): Refresh is unavailable exactly while a rescan
+        // request would be refused, and says why.
+        if let reason = rescanBlockedReason {
+            reasons[SlateCommandID.sidebarRefresh] = reason
         }
         // FL-06 organization availability follows the published selection's
         // single target (nil covers both empty and multi selections; multi is
@@ -8588,6 +8603,10 @@ final class AppState: ObservableObject {
     /// post-scan state.
     private(set) var scanTask: Task<Void, Never>?
 
+    /// Plan 43 PR 19 (#1333; contract 40 R-9): the rescan's run state, its
+    /// one cancel token and the foreground route (`AppState+Rescan.swift`).
+    let rescanRun = VaultRescanRun()
+
     /// Handle on the in-flight note-load task. Same shape as
     /// `scanTask` so tests can await deterministically.
     private(set) var noteLoadTask: Task<Void, Never>?
@@ -9945,7 +9964,16 @@ final class AppState: ObservableObject {
     /// The per-note collection fan-out (links → embeds chain, tasks, math,
     /// code, diagrams, citations). Shared by the selection funnel and
     /// `activateTab`; every loader carries its own race guard.
-    private func fireCollectionLoads(path: String) {
+    /// What one fan-out reloads: every leaf, or (a rescan of a note whose own
+    /// bytes did not change, plan 43 PR 19) only the leaves other files feed,
+    /// the backlinks and outgoing links and then the embeds, with the
+    /// note's properties left as they are.
+    enum CollectionLoadScope: Equatable {
+        case all
+        case linkedFromOtherFiles
+    }
+
+    private func fireCollectionLoads(path: String, scope: CollectionLoadScope = .all) {
         // Codex round 5: cancel the previous fan-out before replacing
         // it. The per-loader race guards drop stale RESULTS, but a
         // dropped chain still had side effects — the old links leg
@@ -9958,13 +9986,15 @@ final class AppState: ObservableObject {
         // serializes itself and is left alone.
         linksLoadTask?.cancel()
         embedsLoadTask?.cancel()
-        tasksLoadTask?.cancel()
-        mathBlocksLoadTask?.cancel()
-        codeBlocksLoadTask?.cancel()
-        diagramBlocksLoadTask?.cancel()
-        citationsLoadTask?.cancel()
+        if scope == .all {
+            tasksLoadTask?.cancel()
+            mathBlocksLoadTask?.cancel()
+            codeBlocksLoadTask?.cancel()
+            diagramBlocksLoadTask?.cancel()
+            citationsLoadTask?.cancel()
+        }
         linksLoadTask = Task { [weak self] in
-            await self?.loadCurrentLinks(path: path)
+            await self?.loadCurrentLinks(path: path, publishProperties: scope == .all)
             // Codex round 5: a cancelled links leg must not chain an
             // embeds leg — its result was dropped, and the chain it
             // would spawn is exactly the orphan described above.
@@ -9984,6 +10014,7 @@ final class AppState: ObservableObject {
             }
             await embedsTask.value
         }
+        guard scope == .all else { return }
         tasksLoadTask = Task { [weak self] in
             await self?.loadCurrentNoteTasks(path: path)
         }
@@ -10553,6 +10584,10 @@ final class AppState: ObservableObject {
             // load-error state rather than being dropped.
             restoreWorkspaceLayout()
             refreshBaseQueries()
+            // Plan 43 PR 19: the previous vault's rescan (its token, its
+            // pending follow-up) ends here; a late continuation of it is
+            // stale and publishes nothing into this vault.
+            cancelRescanForVaultTransition()
             scanTask?.cancel()
             scanTask = Task { [weak self] in
                 await self?.loadFiles()
@@ -10634,6 +10669,7 @@ final class AppState: ObservableObject {
     private func tearDownVaultScopedStateForAbortedOpen() {
         scanTask?.cancel()
         scanTask = nil
+        cancelRescanForVaultTransition()
         files = []
         scanError = nil
         stopSyncMarkerWatcher()
@@ -11810,6 +11846,9 @@ final class AppState: ObservableObject {
         baseQueryBuilderPreviewGeneration += 1
         scanTask?.cancel()
         scanTask = nil
+        // Plan 43 PR 19: a close cancels the rescan's one token; the run
+        // stops where it is and says nothing.
+        cancelRescanForVaultTransition()
         noteLoadTask?.cancel()
         noteLoadTask = nil
         linksLoadTask?.cancel()
@@ -12232,6 +12271,18 @@ final class AppState: ObservableObject {
         files = loaded.sorted {
             $0.path.localizedCaseInsensitiveCompare($1.path) == .orderedAscending
         }
+    }
+
+    /// Plan 43 PR 19 (R-9): a rescan's re-sync publishes the index's openable
+    /// documents as the inventory Quick Open lists, sorted as the open scan
+    /// sorts them, and only when it differs. Whether the set of paths changed.
+    func publishRescanInventory(_ loaded: [FileSummary]) -> Bool {
+        let sorted = loaded.sorted {
+            $0.path.localizedCaseInsensitiveCompare($1.path) == .orderedAscending
+        }
+        let pathsChanged = sorted.map(\.path) != files.map(\.path)
+        if sorted != files { files = sorted }
+        return pathsChanged
     }
 
     /// Import-owned authoritative scan. Unlike `loadFiles`, errors and
@@ -22981,6 +23032,93 @@ final class AppState: ObservableObject {
         noteLoadTask = task
     }
 
+    // MARK: Rescan re-sync of the active note (plan 43 PR 19, R-9)
+
+    /// Whether the active tab shows `path`'s clean, loaded note with nothing
+    /// in flight on it and no draft beside it: the only state a rescan may
+    /// reload or mark missing. A dirty buffer, a save, a load, a conflict, a
+    /// property write, an uncertain property publication, the properties
+    /// source editor or any property draft keeps the note as it is.
+    func activeNoteIsCleanForRescan(at path: String) -> Bool {
+        guard case .markdown(let activePath)? = workspace.activeTab?.item,
+            BaseExactIdentity.matches(activePath, path),
+            BaseExactIdentity.matches(loadedFilePath, path),
+            currentNoteText != nil,
+            noteLoadError == nil,
+            !hasUnsavedChanges,
+            !isSaving,
+            !isLoadingNote,
+            currentSaveConflict == nil,
+            !isEditingProperty,
+            !propertiesSourceShowing,
+            propertyPublicationUncertainties.isEmpty,
+            !hasRecoverablePropertyDrafts(
+                for: path, frontmatterSource: currentNoteFMSource)
+        else { return false }
+        return true
+    }
+
+    /// A rescan's reload of the active note, in place: never through the
+    /// loading state (which unmounts the editor and would move the keys), so
+    /// the caret stays where the editor's external swap keeps it. Applied
+    /// only to a note still clean and untouched since the read, and only with
+    /// bytes whose hash is the one the index vouches for; the headings come
+    /// from the same read, rebased to the body as a load rebases them.
+    func reloadActiveNoteInPlaceForRescan(
+        session: VaultSession, path: String, indexHash: String
+    ) async -> RescanActiveNoteReload {
+        guard activeNoteIsCleanForRescan(at: path),
+            !BaseExactIdentity.matches(currentNoteContentHash, indexHash)
+        else { return .unchanged }
+        let baselineHash = currentNoteContentHash
+        let bodyAtRead = currentNoteText
+        let read: (parts: NotePartsBundle, headings: [Heading])? =
+            await Task.detached(priority: .userInitiated) {
+                guard let parts = try? session.readNoteParts(path: path) else { return nil }
+                let metadata = (try? session.getFileMetadata(path: path)) ?? nil
+                return (parts, metadata?.headings ?? [])
+            }.value
+        guard currentSession === session,
+            activeNoteIsCleanForRescan(at: path),
+            BaseExactIdentity.matches(currentNoteContentHash, baselineHash),
+            BaseExactIdentity.matches(currentNoteText, bodyAtRead)
+        else { return .unchanged }
+        guard let read, BaseExactIdentity.matches(read.parts.contentHash, indexHash) else {
+            return .unvouched
+        }
+        let parts = read.parts
+        currentNoteText = parts.body
+        savedBaselineText = parts.body
+        currentNoteContentHash = parts.contentHash
+        currentNoteFMSource = parts.fmSource
+        bodyByteOffset = Int(parts.bodyByteOffset)
+        bodyLineOffset = Int(parts.bodyLineOffset)
+        currentNoteHeadings = Self.rebasedToBody(
+            read.headings, prefixBytes: Int(parts.bodyByteOffset))
+        hasUnsavedChanges = false
+        return .reloaded
+    }
+
+    /// A rescan's dependents of the active note, through the note's own
+    /// fan-out, every leg awaited to its publication. A note whose own bytes
+    /// changed reloads every leaf; otherwise only the leaves other files feed.
+    func refreshActiveNoteLeavesForRescan(contentChanged: Bool) async {
+        guard case .markdown(let path)? = workspace.activeTab?.item,
+            BaseExactIdentity.matches(loadedFilePath, path),
+            noteLoadError == nil
+        else { return }
+        fireCollectionLoads(path: path, scope: contentChanged ? .all : .linkedFromOtherFiles)
+        await linksLoadTask?.value
+        await embedsLoadTask?.value
+        guard contentChanged else { return }
+        await tasksLoadTask?.value
+        await mathBlocksLoadTask?.value
+        await codeBlocksLoadTask?.value
+        await diagramBlocksLoadTask?.value
+        await citationsLoadTask?.value
+        await historyLoadTask?.value
+    }
+
     /// The widget's single-writer seam for the mirror above — the view
     /// remains the owner of the real state; AppState only reflects it.
     /// The equality guard makes the `.onAppear` resync publish-free on
@@ -24335,6 +24473,18 @@ final class AppState: ObservableObject {
             // `scanError` (the existing path); cancelled is silent
             // because closeVault / next-vault flow is already
             // visible.
+            scanProgress = nil
+        }
+    }
+
+    /// Plan 43 PR 19 (R-9's reason-aware progress policy): an explicit
+    /// Refresh moves the scan strip, and nothing it hears speaks or touches
+    /// the open scan's announcement guard. `nil` clears the strip.
+    func handleRescanProgress(_ event: ScanProgress?) {
+        switch event {
+        case .started?, .fileIndexed?:
+            scanProgress = event
+        case .finished?, .cancelled?, .failed?, nil:
             scanProgress = nil
         }
     }
