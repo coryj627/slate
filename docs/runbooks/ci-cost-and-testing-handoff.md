@@ -654,6 +654,14 @@ send Apple Events to Finder, or another image with Xcode 27.0 (27A266a)
 that does. Skipping the Trash tests or changing Finder Put Back is not a
 fix. No runner, cache or provider setting was changed.
 
+October 17 (#1450, which also closes #1448): core's macOS Trash no longer
+asks Finder. It calls `NSFileManager trashItemAtURL:` with a file reference
+URL, so it sends no Apple event and needs no Automation grant, and the
+AppleScript two-minute wait above no longer applies to it. Put Back is
+unchanged: on a scratch APFS image Finder's own Put Back returned items
+trashed this way, and the volume's Put Back records were written for each.
+Golden Gate was not rerun; whether it now passes is unverified.
+
 The owner chose Namespace's Tahoe slim image instead, and `1ba80997` added
 it as candidate `namespace-tahoeslim6x14` on the direct label
 `nscloud-macos-tahoe-slim-arm64-6x14`. The `mac-actions` profile was not

@@ -434,12 +434,40 @@ enforced by construction, not by review.
   parent handle/descriptor without following links. Windows sharing flags alone
   cannot prevent an attribute writer from converting a pinned directory into a
   junction; no path-based enumeration fallback is used.
+  **Trash handoff (#1450, the plan 43 PR 24 memo's T0+).** The provider walks
+  to the item's parent again without following links and hands the system
+  Trash that pinned parent's own current path joined with the item's name
+  (`F_GETPATH` on macOS, `/proc/self/fd` on Linux, `GetFinalPathNameByHandleW`
+  on Windows), never the lexical vault path. It refuses unless that path still
+  names the pinned parent and lies beneath the vault root's current path,
+  taken the same way, so a symlinked vault root still works. A folder on the
+  item's path replaced by a link, a junction or a file, or moved out of the
+  vault, after the final observation refuses with `TrashConfirmationChanged`
+  ("A folder in this item's path was replaced or moved, so it was not moved to
+  the Trash. Request deletion again") before any mutation; a batch reports
+  that item untrashed with the reason, keeps its recovery markers, requires a
+  rescan and still trashes the rest. A dangling link is unlinked relative to
+  the pinned parent. macOS hands the path to `NSFileManager
+  trashItemAtURL:resultingItemURL:error:` as a file reference URL instead of
+  trash-rs's Finder script: no Apple event or Automation grant, and Finder's
+  Put Back still restores the item (verified on a scratch APFS volume).
+  Windows and Linux still call trash-rs with the derived path.
   **Residual:** metadata inventories are observations, not filesystem
   transactions. They cannot detect every content edit on every filesystem, nor
   exclude an arbitrary external writer between the final observation and the
-  path-based system Trash call. The new token closes the separated host-probe
-  contract and coordinates Slate writers; it does not claim atomic exclusion of
-  sync clients. Keep #1125 open for that remaining boundary and FR-10.
+  system Trash call. A substituted ancestor no longer redirects the Trash
+  outside the vault deterministically (#1430 P12.6, P16); what remains is the
+  race between deriving the path and the Trash call's own resolution of it (no
+  platform's Trash accepts a handle, #1430 T1). On macOS the reference URL
+  narrows that race but does not bind the object: under an adversarial racer
+  it still took the wrong object 3.4-4.0% of the time (P13). Verifying what
+  arrived in the Trash (the memo's T2) is an open #1125 decision, as are
+  staging (T3, rejected by the memo) and Linux's own freedesktop move (T4,
+  deferred with Linux); trash-rs's Linux cross-device fallback still copies
+  and then recursively deletes the source path. The new token closes the
+  separated host-probe contract and coordinates Slate writers; it does not
+  claim atomic exclusion of sync clients. Keep #1125 open for that remaining
+  boundary and FR-10.
 - **FR-9 — Windows Move-To destination loading is asynchronous (#1126).**
   The admitted picker opens immediately with Loading/Cancel, then receives
   bounded 1,000-row pages from a cancellable worker, up to 50,000 folders.
