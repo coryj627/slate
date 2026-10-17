@@ -1636,18 +1636,33 @@ extension SlateCommandsTests {
 
     /// Never silent: a closure that refuses, or an id the registry lacks,
     /// speaks the registry's own core copy from a menu item, as from the
-    /// palette.
+    /// palette, through the announcement seam.
     func testARegistryFailureFromAMenuItemSpeaksThePalettesCopy() throws {
-        let state = AppState()
-        XCTAssertEqual(
-            state.invokeRegisteredCommand("slate.graph.notACommand"),
-            .paletteCommandNotFound(id: "slate.graph.notACommand"))
+        let spoken = SpokenLines()
+        let state = AppState(announcer: spoken)
+        let notFound = A11yEvent.paletteCommandNotFound(id: "slate.graph.notACommand")
+        XCTAssertEqual(state.invokeRegisteredCommand("slate.graph.notACommand"), notFound)
         let command = try XCTUnwrap(state.commandRegistry.findById(id: SlateCommandID.graphOrphans))
         XCTAssertTrue(
             state.commandRegistry.register(command: command, action: FailingMenuAction()),
             "the orphans closure is replaced with a refusing one")
+        let failed = A11yEvent.paletteCommandFailed(label: "Graph: Orphaned Notes", detail: "Boom")
+        XCTAssertEqual(state.invokeRegisteredCommand(SlateCommandID.graphOrphans), failed)
         XCTAssertEqual(
-            state.invokeRegisteredCommand(SlateCommandID.graphOrphans),
-            .paletteCommandFailed(label: "Graph: Orphaned Notes", detail: "Boom"))
+            spoken.lines, [a11yRender(event: notFound).text, a11yRender(event: failed).text],
+            "each failure is spoken once, in core's words")
+        let quiet = try XCTUnwrap(state.commandRegistry.findById(id: SlateCommandID.graphUnresolved))
+        XCTAssertTrue(state.commandRegistry.register(command: quiet, action: CountingMenuAction()))
+        XCTAssertNil(state.invokeRegisteredCommand(SlateCommandID.graphUnresolved))
+        XCTAssertEqual(spoken.lines.count, 2, "a command that ran speaks nothing here")
+    }
+
+    /// Records what reached the announcement seam.
+    private final class SpokenLines: AnnouncementPosting {
+        private(set) var lines: [String] = []
+
+        func post(_ message: String, priority: AnnouncementPriority) {
+            lines.append(message)
+        }
     }
 }

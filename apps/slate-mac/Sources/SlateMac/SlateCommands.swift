@@ -2042,8 +2042,8 @@ extension AppState {
     /// decision D8; the View ▸ Graph items): the registry closure the
     /// palette row runs for the same id, so the menu, the palette and the
     /// chord table cannot drift into two code paths. A failure is never
-    /// silent: it speaks the palette's core copy for the same error, and is
-    /// returned so a fact can read what was spoken (nil when the command ran).
+    /// silent: it speaks the palette's core copy for the same error through
+    /// the announcement seam, and is returned (nil when the command ran).
     @discardableResult
     func invokeRegisteredCommand(_ id: String) -> A11yEvent? {
         do {
@@ -2052,7 +2052,7 @@ extension AppState {
         } catch {
             let failure = CommandPaletteModel.failureAnnouncement(
                 for: error, label: commandRegistry.findById(id: id)?.label ?? id)
-            postAccessibilityAnnouncement(failure)
+            announcer.post(failure)
             return failure
         }
     }
