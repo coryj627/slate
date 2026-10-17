@@ -22,8 +22,11 @@ struct GraphContainerView: View {
     /// focus off the picker.
     @State private var focusToken = 0
     /// Set in `onAppear` when restoring a persisted NON-default mode, so the
-    /// restore-driven `onChange(mode)` doesn't count as a user switch and
-    /// bump `focusToken` (P2-5 review round-2 finding 3). Consumed once.
+    /// restore-driven `onChange(mode)` doesn't count as a user switch: it
+    /// neither bumps `focusToken` (P2-5 review round-2 finding 3) nor speaks
+    /// the mode line (#1220; contract 35 DD-18 — a persisted Diagram is
+    /// restored at the seat in silence, `GraphMode` being the switch's
+    /// line). Consumed once, so the reader's next switch speaks.
     @State private var suppressFocusBumpOnce = false
 
     var body: some View {
@@ -72,7 +75,8 @@ struct GraphContainerView: View {
             // (P2-4 #560); `activateGraphTab` loaded it before this mount.
             // A non-default restore changes `mode`, which fires the
             // `onChange` below — mark it so it isn't treated as a user
-            // switch that steals focus (review round-2 finding 3).
+            // switch that steals focus (review round-2 finding 3) or speaks
+            // the mode line (#1220).
             if appState.graphConfig.mode != mode { suppressFocusBumpOnce = true }
             mode = appState.graphConfig.mode
             if appState.graphTableSnapshot == nil && !appState.graphTableLoading {
@@ -86,6 +90,10 @@ struct GraphContainerView: View {
         // The chosen mode persists to graph.json (restored on next open).
         .onChange(of: mode) { _, newMode in
             appState.setGraphMode(newMode)
+            // The restore (onAppear's write of the persisted mode) is not a
+            // switch: it lands no focus and speaks no mode line (#1220, DD-18).
+            let restoring = suppressFocusBumpOnce
+            suppressFocusBumpOnce = false
             // Land VoiceOver focus on the shared-selected node in the new
             // projection (finding 3). The bump is a ONE-SHOT decided HERE,
             // at switch time: only on a genuine USER switch (not the restore,
@@ -94,18 +102,16 @@ struct GraphContainerView: View {
             // `selection != nil ? token : 0` — means a LATER selection change
             // can't retroactively unmask a stale token and steal focus from
             // another split (round-3 finding c).
-            if suppressFocusBumpOnce {
-                suppressFocusBumpOnce = false
-            } else if appState.graphSelectedNodeKey != nil {
+            if !restoring, appState.graphSelectedNodeKey != nil {
                 focusToken += 1
             }
             switch newMode {
             case .diagram:
                 appState.ensureGraphDiagram()
-                appState.graphAnnouncer.announce(.graphMode(mode: .diagram))
+                if !restoring { appState.graphAnnouncer.announce(.graphMode(mode: .diagram)) }
             case .table:
                 appState.resetGraphDiagramState()
-                appState.graphAnnouncer.announce(.graphMode(mode: .table))
+                if !restoring { appState.graphAnnouncer.announce(.graphMode(mode: .table)) }
             }
         }
         // A backend-filter change rebuilds the diagram's layout too, so
@@ -194,10 +200,8 @@ struct GraphContainerView: View {
     private var appStateTextFilterBinding: Binding<String> {
         Binding(
             get: { appState.graphTableTextFilter },
-            set: {
-                appState.graphTableTextFilter = $0
-                appState.scheduleGraphConfigSave()  // persist the name filter (P2-4)
-            })
+            // The needle's setter persists its own field (#1218).
+            set: { appState.setGraphTableNameQuery($0) })
     }
 
     /// A toggle bound to one field of the backend `GraphFilter`; setting

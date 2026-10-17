@@ -109,11 +109,18 @@ extension AppState {
             if let gate = self?.connectionsPublishGate { await gate() }
 
             guard let self else { return }
+            // Only the NEWEST load owns the loading flag: a superseded one
+            // changes nothing, and its successor clears the flag on landing.
             guard !Task.isCancelled, self.currentSession === session,
-                self.connectionsEffectivePath == path, seq == self.connectionsLoadSeq
+                seq == self.connectionsLoadSeq
             else { return }
-
+            // The newest load has landed, so none is in flight. The panel
+            // renders its loading row from this flag (#1217), so it clears
+            // whether or not the result publishes.
             self.connectionsLoading = false
+            // A result for a note the leaf has since left publishes nothing.
+            guard self.connectionsEffectivePath == path else { return }
+
             // Re-check leaf activity at the PUBLISH point, not capture
             // time: the user may have switched leaves during the load,
             // and a hidden panel must stay silent (review round 2

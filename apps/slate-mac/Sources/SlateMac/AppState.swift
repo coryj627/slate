@@ -2965,6 +2965,9 @@ final class AppState: ObservableObject {
     /// path, so a note switch never shows B's header over A's rows
     /// (review round 1 finding 9).
     @Published var connectionsLoadedPath: String?
+    /// A load is in flight: set when one is issued, cleared when the newest
+    /// lands, whether or not it publishes. The panel renders its loading
+    /// row from it (#1217).
     @Published var connectionsLoading: Bool = false
     @Published var connectionsError: String?
     /// Last graph generation the leaf refreshed against — the P0-3
@@ -3118,11 +3121,13 @@ final class AppState: ObservableObject {
     @Published var graphDiagramLoading = false
     @Published var graphDiagramError: String?
 
-    /// Persisted graph-tab config (P2-4 #560): the LIVE holder for the
-    /// inspector's Groups / Display / Forces; filters, mode, and depth
-    /// are synced from their existing live state at the load/save
-    /// boundaries. Written to `.slate/graph.json` (debounced) via
-    /// `graphConfigSaveTask`.
+    /// Persisted graph-tab config (P2-4 #560): the ONE mutable config
+    /// (contract 35 Term W7; #1218). Each trigger writes its own field —
+    /// the inspector's Groups / Display / Forces, the mode switch, the
+    /// needle, the reader's backend flags — and the save folds in only the
+    /// depth and the verbosity; the live Table filter is never folded in, so
+    /// a transient preset never persists. Written to `.slate/graph.json`
+    /// (debounced) via `graphConfigSaveTasks`.
     @Published var graphConfig = GraphConfig.default
     /// Pending debounced saves keyed BY VAULT — genuine per-vault
     /// bookkeeping (P2-4 review finding 3). A same-vault edit cancels only

@@ -506,11 +506,16 @@ extension AppState {
         }
     }
 
-    /// Change the backend filter (Attachments / Unresolved / Orphans)
-    /// and re-fetch. The re-fetch is async, so the resulting count is
-    /// announced when the fresh snapshot publishes — not now, against the
-    /// stale one. The client-side text filter changes without a re-fetch
-    /// (bound directly) and announces synchronously in the view.
+    /// The reader's flag change (Attachments / Unresolved / Orphans), from
+    /// the filter bar or the inspector, and re-fetch. The re-fetch is
+    /// async, so the resulting count is announced when the fresh snapshot
+    /// publishes — not now, against the stale one.
+    ///
+    /// Persists by field (contract 35 Term W7; #1218): the three backend
+    /// flags of `graphConfig.filters` take the filter handed in — the
+    /// reader's own, the changed flag among them — and nothing else does;
+    /// the needle keeps its field (Windows' `SetFilters`). It schedules the
+    /// save itself, so a caller adds none.
     func setGraphTableFilter(_ filter: GraphFilter) {
         // A manual filter-bar toggle is the user overriding any preset: drop
         // the preset kind filter so it can't linger as hidden state the
@@ -522,9 +527,31 @@ extension AppState {
         guard filter != graphTableFilter else { return }
         graphTableFilter = filter
         loadGraphTable(announce: .filterCount)
-        // Persist the backend filter to graph.json (P2-4 #560). The
-        // diagram rebuild on a filter change is driven by the container's
+        // Persist the backend flags to graph.json (P2-4 #560) — a no-op
+        // when they are the persisted ones already. The diagram rebuild on a
+        // filter change is driven by the container's
         // `onChange(of: graphTableFilter)`, so it's not repeated here.
+        guard filter != graphConfig.filters.backend else { return }
+        var filters = graphConfig.filters
+        filters.includeAttachments = filter.includeAttachments
+        filters.includeGhosts = filter.includeGhosts
+        filters.orphansOnly = filter.orphansOnly
+        graphConfig.filters = filters
+        scheduleGraphConfigSave()
+    }
+
+    /// The reader's needle: the filter bar's field (Table mode) and the
+    /// inspector's (both modes) are two views of it. Writes the live needle
+    /// — the container's composed-query observer issues its rows request —
+    /// and persists ITS field, `graphConfig.filters.nameQuery`, and no other
+    /// (contract 35 Term W7, Windows' `SetNameQuery`; #1218), so a needle
+    /// typed under a transient preset never carries the preset's flags to
+    /// graph.json. A no-op for the needle already live. It schedules the
+    /// save itself, so a caller adds none.
+    func setGraphTableNameQuery(_ raw: String) {
+        guard raw != graphTableTextFilter else { return }
+        graphTableTextFilter = raw
+        graphConfig.filters.nameQuery = raw
         scheduleGraphConfigSave()
     }
 
@@ -547,7 +574,10 @@ extension AppState {
             recordExplicitSidebarNavigationIntent()
         }
         // The query is core's rule (W6-2 PR C, C-2): ONE record, written
-        // field by field into the live state both projections read.
+        // field by field into the live state both projections read — and
+        // ONLY there. A preset is transient: it writes nothing of
+        // `graphConfig`, so graph.json keeps the reader's own filters
+        // (contract 35 Term W7; #1218).
         let query = graphPresetQuery(preset: preset)
         graphTableTextFilter = query.nameQuery
         graphTableKindFilter = query.kindOnly

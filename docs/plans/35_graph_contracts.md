@@ -5515,8 +5515,18 @@ the axe label; a census asserts both rows exist with those statuses.
   while it was inactive shows "Loading connections…" and starts no load
   (`ConnectionsPanel.swift:31–36`; `onAppear` does not re-fire on a
   mounted view). Windows loads (B-D11).
+  **Resolved (#1217, plan 43 PR 5):** the panel observes the active leaf
+  (`onChange(of: connectionsLeafActiveForView)`); a switch to a leaf whose
+  publication is STALE loads audibly, as Term 3(b) does, and a switch to a
+  CURRENT one loads nothing
+  (`ConnectionsPanelTests.testAMountedRailSwitchToAStaleLeafLoads`).
 - `connectionsLoading` is written (`AppState+Connections.swift:78`,
   `:109`) and never read by the panel.
+  **Resolved (#1217, plan 43 PR 5):** the loading row is rendered from it —
+  shown only while a load is in flight for a note the published payload
+  does not describe, the empty state when none is — and the newest load
+  clears it when it lands, whether or not it publishes
+  (`ConnectionsPanelTests.testTheLoadingRowFollowsConnectionsLoading`).
 - PR A's Windows relay gated the filter count at enqueue and fired it
   unconditionally (`GraphDocumentViewModel.cs:511`, `GraphAnnouncer.cs:
   151–162`), where 0a-9 names the mac's stored, fire-time gate
@@ -9890,6 +9900,11 @@ TheStateHostHasAGroupPeerNamedByTheState.
   preset's backend filter** (Term W7): the mac's aggregate reads its live
   filter (`:63–67`) and persists the transient filter on any later save;
   Windows persists only the field a trigger changed.
+  *Retired 2026-10-16 (#1218, plan 43 PR 5):* the mac persists by field
+  too. The needle writes `filters.nameQuery`, the reader's flag change the
+  three backend flags, a preset only the live filter; the save aggregate is
+  `graphConfig` with the depth and the verbosity folded in, and it no
+  longer reads the live filter — so the two hosts agree.
 - **C-D8 — A restored graph tab shows the persisted filter** (C-10);
   the mac's restore shows the defaults until the next plain open.
 - **C-D9 — Menu items for Open Graph and the presets** (C-12).
@@ -13319,11 +13334,17 @@ before every push; CI's shell accessibility lane arbitrates.
 
 - `labelFadeZoom = 0.55` (`GraphDiagramView.swift:174`) is declared and
   unused; the label decision reads `display.textFadeZoom` (`:527`).
+  **Resolved (#1220, plan 43 PR 5):** the constant is deleted.
 - The picker's accessibility label "Graph view mode" and hint (`GraphTableView.swift:
   157–158`) name a segmented control; Windows's switcher is A-11's named
   group and RadioButtons — the names are not carried.
 - The restore-driven `onChange(of: mode)` speaks the mode line on a
   persisted Diagram (`:104–105`); only the focus bump is suppressed.
+  **Resolved (#1220, plan 43 PR 5):** the restore suppresses the mode line
+  with the focus bump, so a persisted Diagram is restored in silence
+  (DD-18; D-D12 closed on the mac) and the reader's own switch still speaks
+  (`GraphTableViewTests.testARestoredDiagramSpeaksNoModeLine`,
+  `GraphTableViewTests.testAUserSwitchToDiagramSpeaksTheModeLine`).
 - `rebuildTierB` tints no group and draws no labels; a pointer user in
   tier B keeps the hit test and the ring (`:601–659`, `:968–987`).
 - `spatialMove` with no selection selects the first VISIBLE id
@@ -18308,7 +18329,7 @@ that exists and is not keyed is not claimed as keyed.
 | B-D8 | Selection, expansion and pending focus clear on a root change and are pruned on a same-root refresh or depth change | §B, line 5440 |
 | B-D9 | `RightPaneShown` on every pane reveal | §B, line 5445 |
 | B-D10 | The ghost create's open is suppressed when the leaf's root or epoch moved | §B, line 5451 |
-| B-D11 | A mounted rail switch to a STALE leaf loads | §B, line 5455 |
+| B-D11 | A mounted rail switch to a STALE leaf loads | §B, line 5455; **closed on mac** by #1217 (plan 43 PR 5): the mac's mounted leaf loads on a rail switch to a STALE publication too |
 | B-D12 | The probe defers to a load IN FLIGHT | §B, line 5458 |
 | B2-D1 | The leaf's row selection does not write the shared key | §B2, line 7168 |
 | B2-D2 | No navigation-intent seam. | §B2, line 7171 |
@@ -18327,7 +18348,7 @@ that exists and is not keyed is not claimed as keyed.
 | C-D4 | withdrawn at revision 6 | §C, line 9831 |
 | C-D5 | The palette matches labels alone | §C, line 9833 |
 | C-D6 | A persisted `diagram` mode seeds Table in this PR | §C, line 9836 |
-| C-D7 | A needle under a transient preset does NOT persist the preset's backend filter | §C, line 9839 |
+| C-D7 | A needle under a transient preset does NOT persist the preset's backend filter | §C, line 9839; **retired** by #1218 (plan 43 PR 5): the mac persists by field too, and its save aggregate no longer reads the live filter |
 | C-D8 | A restored graph tab shows the persisted filter | §C, line 9843 |
 | C-D9 | Menu items for Open Graph and the presets | §C, line 9845 |
 | C-D10 | The count region and Clear | §C, line 9846 |
@@ -18353,7 +18374,7 @@ that exists and is not keyed is not claimed as keyed.
 | D-D9 | The diagram's peers are complete, the canvas's windowed | §D, line 13222 |
 | D-D10 | The Where-am-I panel shows the diagram's readback too | §D, line 13225 |
 | D-D11 | The drag pans | §D, line 13227 |
-| D-D12 | A persisted Diagram mode's seat speaks no mode line | §D, line 13228 |
+| D-D12 | A persisted Diagram mode's seat speaks no mode line | §D, line 13228; **closed on mac** by #1220 (plan 43 PR 5): the mac's restore of a persisted Diagram speaks no mode line either |
 | E-D1 | The pane is a leaf, the mac's is a trailing panel inside the graph tab | §E, line 15057 |
 | E-D2 | The accessible value of a slider is numeric | §E, line 15062 |
 | E-D3 | The forces edit restarts the driver's run | §E, line 15064 |
@@ -18455,10 +18476,10 @@ Five survive; every body quotes its register line and cites #746.
 | Key | Issue | Target | Input from the registers | Verified at filing |
 |---|---|---|---|---|
 | mac-1 | #1216 | mac | the graph verbosity has no SWITCH (§0a's register; D-6) — the store half closed by 0b's `verbosity` key | `SlateMacApp.swift` names no verbosity item; `graphConfigSaveAggregate` writes `cfg.verbosity` |
-| mac-2 | #1217 | mac | a mounted rail switch to the Connections leaf after the note changed shows the loading text and starts no load; `connectionsLoading` is written and never read (§B's register) | `ConnectionsPanel.swift:31–36` (`onAppear`); `connectionsLoading` four writes, no read |
-| mac-3 | #1218 | mac | a needle typed under a transient preset persists the preset's backend filter (§C's register, C-D7) | `graphConfigSaveAggregate` saves `graphTableFilter` |
+| mac-2 | #1217 | mac | a mounted rail switch to the Connections leaf after the note changed shows the loading text and starts no load; `connectionsLoading` is written and never read (§B's register) | `ConnectionsPanel.swift:31–36` (`onAppear`); `connectionsLoading` four writes, no read. **Closed** by plan 43 PR 5 (2026-10-16): a rail switch to a STALE leaf loads (Term 3(b); B-D11 closed on the mac), and the loading row renders from `connectionsLoading` |
+| mac-3 | #1218 | mac | a needle typed under a transient preset persists the preset's backend filter (§C's register, C-D7) | `graphConfigSaveAggregate` saves `graphTableFilter`. **Closed** by plan 43 PR 5 (2026-10-16): the graph filters persist by field (Term W7) and the aggregate no longer reads the live filter; C-D7 retired |
 | mac-4 | #1219 | mac | the presets shipped with no menu item (§C's register; P1-3's "registry + palette + menu") | `SlateMacApp.swift` names none |
-| mac-5 | #1220 | mac | the restore-driven `onChange(of: mode)` speaks the mode line on a persisted Diagram (§D's register); the dead `labelFadeZoom` constant noted in the body | `GraphTableView.swift:104–105`; `GraphDiagramView.swift:174` |
+| mac-5 | #1220 | mac | the restore-driven `onChange(of: mode)` speaks the mode line on a persisted Diagram (§D's register); the dead `labelFadeZoom` constant noted in the body | `GraphTableView.swift:104–105`; `GraphDiagramView.swift:174`. **Closed** by plan 43 PR 5 (2026-10-16): a restored Diagram speaks no mode line (DD-18; D-D12 closed on the mac), and `labelFadeZoom` is deleted |
 
 Not filed, with the reason: `openGraphTab` speaking Opened past the
 same-tab guard (§A's register) — Windows FOLLOWS it by rule L, a shared
