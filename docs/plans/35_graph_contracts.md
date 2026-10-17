@@ -11785,6 +11785,68 @@ high-water recovery issued after the install; the census ignoring the
 handler. CI-shaped regression green at 2460; the model family and the
 three journeys re-run.
 
+**TGC-19 — The owner's call on IPG-15 (#1189) and on the rows
+receiver's admission (#1190): D1, CONVERGE — the mac's table takes
+A-2's publication model, and the facts that froze its split design are
+rewritten first.** Decided 2026-10-09 (`docs/plans/41_mac_backlog_plan.md`
+§5, D1) and adopted with the mac backlog delivery program on 2026-10-16;
+delivered by plan 43 PR 13
+(`docs/plans/43_mac_backlog_delivery/specs/pr13_graph_authority_model.md`).
+TGC-13 put IPG-15 to the owner with the mac's split publication as the
+thing under review, and TGC-17 recorded the rows receiver's admission of
+a result with no authority behind it as a divergence awaiting the same
+call. The call is to converge. THE RULE ON THE MAC is A-2's, in three
+parts. (1) ONE immutable publication record — the snapshot, the backend
+filter it was fetched under, its generation, the rows, their total, the
+accepted sort, the request the rows answer and the sequence of the last
+token to reach a terminal state — installed in ONE assignment; the
+separately published fields become read-only views of it, and
+`graphTableSeenGraphGeneration` moves only when a pair installs. (2) A
+PAIR publishes only when its sequence and its request are the current
+ones (A-2 (i)); otherwise it is dropped WHOLE — no snapshot, no filter,
+no seen generation — and a current pair whose two crossings disagree on
+the generation re-fetches as its own replacement (A-2 (ii)). This
+retires the pair-first install C-2 (iii) relied on (IPG-9, as IPG-29
+amended it) and IPG-15 with it: nothing partial is ever installed, so no
+failure can leave old rows under a new authority. (3) A ROWS result
+publishes only when it is current AND a held publication carries its
+backend filter and its generation (A-2's rows-only arm); with no
+authority held (#1190), another filter's (C-2 (iii)) or a stale one, it
+re-fetches as a PAIR under its own request, its sort included and its
+announce inherited (C-2 (iv); Term Q9). The receiver's authority-less
+arm goes: TGC-17's clear of the error under it and TGC-18's request for
+the authority back (IPG-36) both answered a state that can no longer
+arise. The failure arms stay as they are — a pair failure installs the
+error and drops the authority, a rows failure rolls back the pending
+sort and the announce — and Where-am-I reads the held publication:
+quiescent, a snapshot held, its rows the live query's (Term Q7, the
+Windows readback's test). THE FACTS THAT FROZE THE SPLIT DESIGN, named
+here before any receiver changes (the TGC-17 rule), each rewritten and
+none deleted: GraphTableViewTests' seven token facts —
+testSortRequestPublishesRowsAndAcceptedSortTogether,
+testSupersededTokenIsDroppedWhole,
+testReorderedSameGenerationAnswersUnderDifferentNeedlesAreDropped,
+testFailedQueryRollsBackTheRequest,
+testRowsUnderAnotherFilterThanTheHeldSnapshotAreDropped,
+testStaleGenerationResultIsDiscarded and
+testPresetAfterFolderSortPublishesDefaultSortAndHeadlineTogether — drove
+the rows receiver on a bare state with no snapshot and required it to
+publish; each seeds a held pair publication first, through the pair
+receiver, as production does. T1's
+testANeedleDuringAnOrphansPairRefetchesUnderItsOwnRequest and its sort
+twin testASortDuringAnOrphansPairRefetchesUnderItsOwnRequest waited, in
+the pair-first order, for the superseded pair's snapshot to install
+while the rows gate held — the install this call removes; they await
+that pair's DROP and then the needle's (the sort's) PAIR publish, and
+every gate entrance they wait on is bounded, so a gate the design never
+reaches fails the fact in seconds rather than holding the lane for
+hours (TGC-17's five). testASupersededPairInstallsOnlyWhileTheNewerRequestIsUnanswered
+(IPG-9, IPG-29) pinned the exception this call retires; its three
+arrangements stay and assert the converse under the name the rule now
+has, testASupersededPairInstallsNothing — a name that states the retired
+exception over a body asserting its removal is the defect TGC-16 had to
+correct in a fact of its own (IPG-33).
+
 ### Tests that pin PR C (revision 6's list; the task loop records what lands)
 
 - `graph_queries.rs`: `preset_query_is_the_mac_mapping`,
