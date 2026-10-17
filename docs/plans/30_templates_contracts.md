@@ -42,6 +42,23 @@ double-duty availability copy. mac's call sites are NOT converted here
 (mac keeps its marker; its conversion is a mac follow-up in the #1113
 mold).
 
+**Consumed on mac, 2026-10-16 (#1122, plan 43 PR 8).** The template event
+family's mac column is core's: the picker-open site
+(`startTemplateAvailabilityLoad`) posts `TemplatePickerOpened { count }`
+and the created site (`performCreateNoteFromTemplate`) posts
+`TemplateNoteCreated { name, template }`. W7-2 (#1229) converted both
+sites; this PR audits them and closes #1122. What stays host-composed is
+the residue T10 names: the availability and busy reasons, through
+`announceTemplate`'s string overload under its one `// W0.5-3 residue:`
+marker, which now names only those reasons. Mac's residue census stays at
+27, because no `.hostComposed` site was converted: that one site serves
+the reasons. The exact-wording proof is the corpus mirror's three
+`TemplatePickerOpened` arms and its `TemplateNoteCreated` row
+(`A11yCorpusCensusTests`), with
+`AppStateTests.testOpenTemplatePickerPopulatesAndAnnounces` at the site.
+`CoreRenderedCopyCensusTests.testNoHostSourceSpellsTheTemplatePickerOpenedSentence`
+keeps the sentence out of Swift.
+
 **3. No new FFI, and the Windows model is synchronous.**
 `render_template`, `list_templates`, `extract_template_metadata` are
 bound, `public`, and CLI-exercised in `windows.yml` since W0-3. On
@@ -528,3 +545,6 @@ both discarded with the workspace.
   makes the whole template family host-composed; conversion to the T10
   events is a mac follow-up candidate (file in the #1113 mold when the
   events exist).
+  **Resolved on mac, 2026-10-16 (#1122, plan 43 PR 8):** both sites
+  post the T10 events, and the marker covers only the availability and
+  busy reasons. The note under finding 2 has the detail.
