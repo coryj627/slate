@@ -64,8 +64,22 @@ pub struct InMemoryVaultIndex {
 
 impl InMemoryVaultIndex {
     pub fn new(paths: Vec<String>) -> Self {
+        #[cfg(test)]
+        SNAPSHOT_PATHS.with(|count| count.set(count.get() + paths.len()));
         Self { paths }
     }
+}
+
+#[cfg(test)]
+thread_local! {
+    /// #1295 test seam: paths materialized into an [`InMemoryVaultIndex`]
+    /// on this thread — what a whole-`files` snapshot costs a caller.
+    pub(crate) static SNAPSHOT_PATHS: std::cell::Cell<usize> =
+        const { std::cell::Cell::new(0) };
+    /// #1295 test seam: paths offered to a [`LinkCandidateSelector`] on
+    /// this thread, matching or not — the rows a resolution visits.
+    pub(crate) static PATHS_OFFERED: std::cell::Cell<usize> =
+        const { std::cell::Cell::new(0) };
 }
 
 impl VaultIndex for InMemoryVaultIndex {
@@ -400,6 +414,8 @@ impl LinkCandidateSelector {
 
     /// Consider one indexed path; a path that cannot match is ignored.
     pub fn offer(&mut self, path: &str) {
+        #[cfg(test)]
+        PATHS_OFFERED.with(|count| count.set(count.get() + 1));
         let rank = match &self.mode {
             SelectorMode::Exact { keys } => {
                 let lower = path.to_lowercase();

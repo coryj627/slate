@@ -77,6 +77,21 @@ pub(crate) struct LinkReplaceResult {
     pub(crate) file_meta_artifact: FileMetaParseArtifact,
 }
 
+#[cfg(test)]
+thread_local! {
+    /// #1295 test seam: the paths [`replace_links_for_file`]'s own link
+    /// resolution offered to its selectors on this thread — the rows a
+    /// save's resolution visits, apart from any other resolution the same
+    /// operation runs (a create's ghost-link heal).
+    pub(crate) static RESOLUTION_ROWS_VISITED: std::cell::Cell<usize> =
+        const { std::cell::Cell::new(0) };
+    /// #1295 test seam: while set, the save lookup's statement fails to
+    /// prepare on this thread — a genuine SQLite error on the lookup's own
+    /// path, so a fact can show it surfaces instead of dropping a link.
+    pub(crate) static LOOKUP_FAULT: std::cell::Cell<bool> =
+        const { std::cell::Cell::new(false) };
+}
+
 /// Atomically replace every row for `source_file_id` with links
 /// extracted from `markdown_source`. Resolution runs against
 /// `index` (the snapshot of vault paths captured at scan start).
@@ -126,7 +141,11 @@ pub(crate) fn replace_links_for_file(
     )?;
     let mut written = Vec::with_capacity(parsed.len());
     for (ordinal, link) in parsed.into_iter().enumerate() {
+        #[cfg(test)]
+        let offered_before = crate::link_resolver::PATHS_OFFERED.with(std::cell::Cell::get);
         let resolved = resolve_link(&link.target_raw, link.anchor.clone(), source_path, index);
+        #[cfg(test)]
+        record_resolution_rows(offered_before);
         let (target_path, is_external) = match &resolved {
             ResolvedLink::Resolved { target_path, .. } => (Some(target_path.clone()), false),
             ResolvedLink::Unresolved { .. } => (None, false),
@@ -160,6 +179,14 @@ pub(crate) fn replace_links_for_file(
         rows: written,
         file_meta_artifact,
     })
+}
+
+/// #1295 test seam: add the paths offered since `offered_before` to
+/// [`RESOLUTION_ROWS_VISITED`].
+#[cfg(test)]
+fn record_resolution_rows(offered_before: usize) {
+    let offered = crate::link_resolver::PATHS_OFFERED.with(std::cell::Cell::get) - offered_before;
+    RESOLUTION_ROWS_VISITED.with(|rows| rows.set(rows.get() + offered));
 }
 
 /// The graph-relevant projection of one source's current rows, in

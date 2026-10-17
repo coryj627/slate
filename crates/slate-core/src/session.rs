@@ -21866,6 +21866,8 @@ mod tests {
     #[path = "links_embeds.rs"]
     mod links_embeds;
 
+    mod save_link_lookup;
+
     #[path = "properties.rs"]
     mod properties;
     mod typed_property_keys;
