@@ -54,6 +54,14 @@ import SwiftUI
 /// VStack, and `.textSelection(.enabled)` is applied per leaf `Text`, never
 /// on a container (memory: container-scoped selection breaks VoiceOver
 /// continuous read).
+///
+/// **Lists are lists (G20, #1048).** A run of list items renders as ONE
+/// unit of the stack: a `ReadingListContainer`, whose element VoiceOver
+/// reads as a "content list" with an "(n of m)" position on every item and
+/// whose nested lists sit inside their owning item
+/// (`ReadingListAccessibility.swift`). Inside it every item keeps its own
+/// text leaf, rendered by the same `inlineLeaf` as every other block, and
+/// the stack stays eager.
 struct ReadingView: View {
 
     /// Specialized-block models + task machinery from the owning document.
@@ -315,17 +323,22 @@ struct ReadingView: View {
             // laziness; >2k-block perf note logged by the cache;
             // virtualization is the recorded U5-4-gated follow-up).
             VStack(alignment: .leading, spacing: Tokens.Spacing.md) {
-                ForEach(Array(parsed.blocks.enumerated()), id: \.offset) { index, block in
-                    blockView(
-                        block, index: index,
-                        inline: parsed.inline(at: index),
-                        lineStarts: parsed.lineStarts,
-                        tableCells: parsed.tableCells[index])
+                ForEach(parsed.units, id: \.firstBlockIndex) { unit in
+                    switch unit {
+                    case .block(let index):
+                        blockView(
+                            parsed.blocks[index], index: index,
+                            inline: parsed.inline(at: index),
+                            lineStarts: parsed.lineStarts,
+                            tableCells: parsed.tableCells[index])
+                    case .list(let list):
+                        listView(list, parsed: parsed)
+                    }
                 }
             }
-            // #856: the ForEach's positional ids (the block indices)
-            // become scroll targets, so `scrollPosition(id:)` below
-            // tracks the topmost visible block continuously.
+            // #856: the ForEach's positional ids (each unit's first block
+            // index) become scroll targets, so `scrollPosition(id:)` below
+            // tracks the topmost visible unit continuously.
             .scrollTargetLayout()
             .padding(Tokens.Spacing.lg)
             // Measure cap (WCAG 1.4.8 / typographic 45–90ch band): the
@@ -354,7 +367,10 @@ struct ReadingView: View {
             // path-validated by the host, but a live-buffer edit can
             // still shrink the block count between parks.
             guard let initial = initialScrollBlockIndex, initial > 0 else { return }
-            scrolledBlockIndex = min(initial, max(parsed.blocks.count - 1, 0))
+            // A park inside a list lands on its list: list items are not
+            // scroll targets of their own.
+            scrolledBlockIndex = ReadingListStructure.scrollIdentity(
+                forBlock: min(initial, max(parsed.blocks.count - 1, 0)), in: parsed.units)
         }
         .background(Tokens.ColorRole.surface)
         .accessibilityElement(children: .contain)
@@ -390,12 +406,11 @@ struct ReadingView: View {
             } else {
                 inlineLeaf(inline)
             }
-        case .listItem(let depth, let ordered, _):
-            if inline.segments.first?.taskCompleted != nil {
-                taskRow(block, inline: inline, depth: depth, lineStarts: lineStarts)
-            } else {
-                listItemRow(inline, depth: depth, ordered: ordered)
-            }
+        case .listItem:
+            // Unreachable: every list item renders inside its list's unit
+            // (`ReadingListStructure.units`). Kept as the item's own row so
+            // a future unit split can never drop text.
+            listItemContent(block, inline: inline, lineStarts: lineStarts)
         case .blockQuote(let depth):
             quoteRow(inline, depth: depth)
         case .codeFence(let language, let interior):
@@ -587,13 +602,68 @@ struct ReadingView: View {
         }
     }
 
-    /// Non-task list item: authored ordered markers verbatim (the source
-    /// carries the real ordinal — no renumbering), `•` for unordered.
-    /// Depth is visual indent + the AX VALUE "list item, level N" (VoiceOver
-    /// reads linearly; nesting is value-conveyed, not view-nested — spec).
-    private func listItemRow(
-        _ inline: ReadingBlockInlines, depth: UInt8, ordered: Bool
+    // MARK: - Lists (G20, #1048)
+
+    /// One list, top-level or nested: its items are the rows of one
+    /// `ReadingListContainer`, the element VoiceOver reads as a "content
+    /// list" and counts "(n of m)" over.
+    private func listView(
+        _ list: ReadingList, parsed: ReadingParseCache.Parsed
+    ) -> ReadingListContainer {
+        ReadingListContainer(
+            rows: AnyView(
+                VStack(alignment: .leading, spacing: Tokens.Spacing.md) {
+                    ForEach(list.items, id: \.blockIndex) { item in
+                        listItem(item, parsed: parsed)
+                    }
+                }))
+    }
+
+    /// One item: its own content row, then the lists nested under it
+    /// (indented one step), all inside the item's group, so a nested list
+    /// is reached from the item that owns it.
+    ///
+    /// The group carries no value. The old "list item, level N" string is
+    /// retired rather than kept as a supplement: SwiftUI publishes a
+    /// group's value as its value description, and VoiceOver reads that
+    /// INSTEAD of the item's content ("list item, level 1 group (2 of 2)"
+    /// for "Bravo", in the PR 16 field pass). The structure carries depth
+    /// and position now.
+    private func listItem(
+        _ item: ReadingListItem, parsed: ReadingParseCache.Parsed
     ) -> some View {
+        VStack(alignment: .leading, spacing: Tokens.Spacing.md) {
+            listItemContent(
+                parsed.blocks[item.blockIndex], inline: parsed.inline(at: item.blockIndex),
+                lineStarts: parsed.lineStarts)
+            ForEach(Array(item.nested.enumerated()), id: \.offset) { _, nested in
+                listView(nested, parsed: parsed)
+                    .padding(.leading, Tokens.Spacing.lg)
+            }
+        }
+        .accessibilityElement(children: .contain)
+    }
+
+    /// An item's own row: a task's toggle, or the authored marker, beside
+    /// the item's text leaf.
+    @ViewBuilder
+    private func listItemContent(
+        _ block: ReadingBlock, inline: ReadingBlockInlines, lineStarts: [Int]
+    ) -> some View {
+        if inline.segments.first?.taskCompleted != nil {
+            taskRow(block, inline: inline, lineStarts: lineStarts)
+        } else if case .listItem(_, let ordered, _) = block.kind {
+            listItemRow(inline, ordered: ordered)
+        } else {
+            inlineLeaf(inline)
+        }
+    }
+
+    /// Non-task list item: authored ordered markers verbatim (the source
+    /// carries the real ordinal — no renumbering), `•` for unordered. The
+    /// ordinal is part of what VoiceOver reads for the item ("4. Fourth
+    /// group (2 of 3)"); a bullet is visual only.
+    private func listItemRow(_ inline: ReadingBlockInlines, ordered: Bool) -> some View {
         // The authored marker comes from core (#967) — the source carries
         // the real ordinal, so no re-derivation and no wrong renumbering
         // is possible on either host.
@@ -602,22 +672,19 @@ struct ReadingView: View {
             Text(verbatim: marker)
                 .font(Tokens.Typography.body)
                 .foregroundStyle(Tokens.ColorRole.textSecondary)
-                .accessibilityHidden(true)  // the value carries "list item"
+                .accessibilityHidden(!ordered)
             inlineLeaf(inline)
         }
-        .padding(.leading, CGFloat(depth) * Tokens.Spacing.lg)
-        .accessibilityElement(children: .contain)
-        .accessibilityValue("list item, level \(Int(depth) + 1)")
     }
 
     /// Task list item: checkbox row reusing TasksPanel's toggle semantics —
     /// `onToggleTask` routes to `AppState.toggleCurrentTask` (U3-2 wiring),
     /// disabled while the document is dirty with the panel's exact
     /// explanation. The `TaskItem` is matched by 1-based source line (both
-    /// sides derive from the same whole-source text).
+    /// sides derive from the same whole-source text). The toggle stays a
+    /// child control of the item.
     private func taskRow(
-        _ block: ReadingBlock, inline: ReadingBlockInlines, depth: UInt8,
-        lineStarts: [Int]
+        _ block: ReadingBlock, inline: ReadingBlockInlines, lineStarts: [Int]
     ) -> some View {
         // Content (checkbox stripped) and completion both come from core
         // (#967) — the Swift `taskChar.lowercased() == "x"` fallback and
@@ -634,9 +701,6 @@ struct ReadingView: View {
             taskCheckbox(item: item, completed: completed)
             inlineLeaf(inline, strikethrough: completed)
         }
-        .padding(.leading, CGFloat(depth) * Tokens.Spacing.lg)
-        .accessibilityElement(children: .contain)
-        .accessibilityValue("list item, level \(Int(depth) + 1)")
     }
 
     @ViewBuilder
@@ -858,6 +922,10 @@ final class ReadingParseCache {
         /// A missing key (Rust returned nil) means the renderer falls back to
         /// the raw-source block.
         var tableCells: [Int: ReadingTableCells]
+        /// What the eager stack renders, in document order: single blocks
+        /// and whole lists (G20, #1048). Computed EAGERLY here, once per
+        /// parse, from the blocks alone.
+        var units: [ReadingUnit]
 
         /// The inline result for `index`, or an empty one if the arrays
         /// ever disagree (they can't — core pins 1:1 — but a renderer
@@ -936,7 +1004,8 @@ final class ReadingParseCache {
             blocks: blocks,
             inlines: inlines,
             lineStarts: ReadingBlockSource.lineStartOffsets(of: text),
-            tableCells: tableCells)
+            tableCells: tableCells,
+            units: ReadingListStructure.units(for: blocks))
         cachedText = text
         cachedInlineInputs = inlineInputs
         cached = parsed

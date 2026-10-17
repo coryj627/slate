@@ -26,14 +26,17 @@
 //! ## Flattening (the linear-reading rationale)
 //!
 //! List items and blockquote children are **flattened into document
-//! order**, each carrying a `depth`. VoiceOver reads linearly; nesting
-//! is conveyed by the AX value ("list item, level 2"), not by view
-//! nesting. So `- a\n  - b` yields two `ListItem` blocks (depth 0, then
-//! depth 1), not one nested tree. A list item that is *also* inside a
-//! quote is a `ListItem` (innermost container names the leaf) whose
-//! `depth` counts list nesting; the quote nesting it sits in is not lost
-//! to the reader because the quote's own leaf paragraphs still emit
-//! `BlockQuote` blocks around it in document order.
+//! order**, each carrying a `depth`, so both hosts walk one linear
+//! sequence. Each host rebuilds list nesting from `depth` with the same
+//! depth-stack rule: Windows into `List`/`ListItem` peers
+//! (`ReadingDocumentBuilder.AppendListItem`), mac into one content-list
+//! element per list with nested lists inside their item
+//! (`ReadingListStructure`, G20). So `- a\n  - b` yields two `ListItem`
+//! blocks (depth 0, then depth 1), not one nested tree. A list item that
+//! is *also* inside a quote is a `ListItem` (innermost container names
+//! the leaf) whose `depth` counts list nesting; the quote nesting it sits
+//! in is not lost to the reader because the quote's own leaf paragraphs
+//! still emit `BlockQuote` blocks around it in document order.
 //!
 //! ## No second classifier
 //!
