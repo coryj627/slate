@@ -617,6 +617,17 @@ final class SidebarWriteJournalTests: XCTestCase {
     XCTAssertEqual(skipped.header?.op, .header)
     XCTAssertEqual(skipped.unreadableLines, 1)
     XCTAssertEqual(skipped.lines.map(\.op), [.put])
+    // …and so are several in a row, each counted once.
+    let garbage = Data("not a journal line\n".utf8)
+    let several = SidebarWriteJournal.parse(garbage + damaged + garbage + header + put)
+    XCTAssertEqual(several.header?.op, .header)
+    XCTAssertEqual(several.unreadableLines, 3)
+    XCTAssertEqual(several.lines.map(\.op), [.put])
+    // A file of damaged lines only has no header, and every line counts.
+    let onlyDamaged = SidebarWriteJournal.parse(garbage + damaged + Data("0badf00d {".utf8))
+    XCTAssertNil(onlyDamaged.header)
+    XCTAssertEqual(onlyDamaged.unreadableLines, 3)
+    XCTAssertTrue(onlyDamaged.lines.isEmpty)
     // …but a file whose first verified line is not a header has none.
     XCTAssertNil(SidebarWriteJournal.parse(put + header).header)
 
