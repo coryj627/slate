@@ -63,3 +63,6 @@ pub use provider::{
 
 #[cfg(windows)]
 mod windows_entry;
+
+#[cfg(all(test, windows))]
+mod test_support;

@@ -321,7 +321,7 @@ fn delete_refuses_a_folder_turned_into_a_junction_after_the_inventory() {
     assert!(!inventory.is_directory);
     std::fs::rename(f.vault.path().join("sub"), f.vault.path().join("sub.real")).unwrap();
     std::fs::create_dir(f.vault.path().join("sub")).unwrap();
-    crate::vault::windows_entry::tests::junction(&f.vault.path().join("sub"), f.outside.path());
+    crate::vault::test_support::junction(&f.vault.path().join("sub"), f.outside.path());
     let error = f.provider.delete("sub/note.md").unwrap_err();
     assert_refused(
         &error,
@@ -341,7 +341,7 @@ fn a_junction_vault_root_still_trashes_beneath_its_target() {
     std::fs::write(real.path().join("sub/note.md"), b"note").unwrap();
     let root = links.path().join("vault");
     std::fs::create_dir(&root).unwrap();
-    crate::vault::windows_entry::tests::junction(&root, real.path());
+    crate::vault::test_support::junction(&root, real.path());
     let trash = ScratchTrash::new();
     let provider = FsVaultProvider::with_system_trash(root.clone(), trash.clone());
     provider.delete("sub/note.md").unwrap();
