@@ -1191,12 +1191,12 @@ final class FileTreeViewModel: ObservableObject {
         parentPath: String,
         depth: Int,
         firstPage: DirListing,
+        nativeCancel: CancelToken,
         targetedRootPredecessor: [NodeID: TreeNode]? = nil
     ) {
         guard let fetcher else { return }
         let token = UUID()
         levelDrainTokens[parentKey] = token
-        let nativeCancel = CancelToken()
         levelDrainNativeCancels[parentKey] = nativeCancel
         levelDrainParentPathByToken[token] = parentPath
         let capturedSession = sessionIdentity
@@ -1876,8 +1876,11 @@ final class FileTreeViewModel: ObservableObject {
         // a stale continuation publish over the reload.
         revokeLevelDrain(Self.rootFetchKey)
         fetchState[Self.rootFetchKey] = .loading
+        // One level load, one token (plan 43 PR 12, #1324): the first page and
+        // every continuation share it, and the level's revocation cancels it.
+        let levelCancel = CancelToken()
         do {
-            let firstPage = try fetcher("", nil, CancelToken())
+            let firstPage = try fetcher("", nil, levelCancel)
             let isComplete = firstPage.files.nextCursor == nil
             replaceRootLevel(
                 with: Self.nodes(from: firstPage, depth: 0),
@@ -1885,7 +1888,7 @@ final class FileTreeViewModel: ObservableObject {
             if !isComplete {
                 scheduleContinuationDrain(
                     parentKey: Self.rootFetchKey, parentPath: "", depth: 0,
-                    firstPage: firstPage,
+                    firstPage: firstPage, nativeCancel: levelCancel,
                     targetedRootPredecessor: targetedRootPredecessor)
             }
             fetchState[Self.rootFetchKey] = nil
@@ -1929,8 +1932,9 @@ final class FileTreeViewModel: ObservableObject {
         }
         revokeLevelDrain(node.nodeID)
         fetchState[node.nodeID] = .loading
+        let levelCancel = CancelToken()
         do {
-            let firstPage = try fetcher(node.path, nil, CancelToken())
+            let firstPage = try fetcher(node.path, nil, levelCancel)
             let isComplete = firstPage.files.nextCursor == nil
             let level = Self.nodes(from: firstPage, depth: node.depth + 1)
             replaceChildLevel(
@@ -1939,7 +1943,8 @@ final class FileTreeViewModel: ObservableObject {
             if !isComplete {
                 scheduleContinuationDrain(
                     parentKey: node.nodeID, parentPath: node.path,
-                    depth: node.depth + 1, firstPage: firstPage)
+                    depth: node.depth + 1, firstPage: firstPage,
+                    nativeCancel: levelCancel)
             }
             fetchState[node.nodeID] = nil
             adoptPendingExpansions(in: level)

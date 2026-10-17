@@ -30,12 +30,15 @@ enum CanvasPrompt: Identifiable, Equatable {
     case colorMarked
     /// #368 R5: vault-note picker for Add Note to Canvas….
     case addNote(files: [String])
-    /// #368 R5: vault-media picker for Add Media….
-    case addMedia(files: [String])
+    /// #368 R5: vault-media picker for Add Media…. `files` is nil while
+    /// the media listing runs: the picker shows its loading row (plan 43
+    /// PR 12, #1324).
+    case addMedia(files: [String]?)
     /// #368 R5: URL prompt for Add Link Card.
     case addLink
-    /// #368 t0 §5: repoint a file card at a new vault path.
-    case locate(nodeId: String, title: String, files: [String])
+    /// #368 t0 §5: repoint a file card at a new vault path. `files` is nil
+    /// while the media listing runs, as for Add Media.
+    case locate(nodeId: String, title: String, files: [String]?)
     /// #525: direction chooser for Create Connected Card.
     case connectedDirection
     /// #525: path prompt for Convert Card to Note.

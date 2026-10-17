@@ -1344,10 +1344,12 @@ final class GraphDiagramNSView: NSView {
         applyFrame(session.tick(iterations: 20))
     }
 
+    /// The test owns the convergence's token (plan 43 PR 12, #1324): the
+    /// production settle holds `settleCancel`, cancelled by `stopSettling`.
     @discardableResult
-    func settleReduceMotionForTesting() -> LayoutFrame? {
+    func settleReduceMotionForTesting(cancel: CancelToken) -> LayoutFrame? {
         guard let session = model?.session else { return nil }
-        let frame = session.runToConvergence(cancel: CancelToken())
+        let frame = session.runToConvergence(cancel: cancel)
         applyFrame(frame)
         return frame
     }

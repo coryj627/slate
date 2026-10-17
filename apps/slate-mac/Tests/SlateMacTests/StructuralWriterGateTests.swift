@@ -572,10 +572,10 @@ final class StructuralWriterGateTests: XCTestCase {
         state.openFile("Queries/Existing.base", target: .currentTab)
         state.activeBaseQueryBuilder = BaseQueryBuilderModel()
         let gate = BlockingNativeGate()
-        state.baseRetargetPreloadRunner = { session, request, observer in
+        state.baseRetargetPreloadRunner = { session, request, observer, cancel in
             gate.run {
                 BasePreparedLoader.prepare(
-                    session: session, request: request, observer: observer)
+                    session: session, request: request, observer: observer, cancel: cancel)
             }
         }
 

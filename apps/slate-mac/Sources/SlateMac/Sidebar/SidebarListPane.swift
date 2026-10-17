@@ -12,18 +12,22 @@ import SwiftUI
 /// same engine, same overrides storage, one more projection).
 @MainActor
 final class SidebarListPaneModel: ObservableObject {
-  struct Dependencies {
+  /// The core listings a drain pages. They run off the main actor (locked 05
+  /// §4, principle 2), so each is `@Sendable`.
+  struct Dependencies: Sendable {
     /// FL4-1 scoped/queried listing (descendants + tags).
     var performQuery:
-      (
+      @Sendable (
         _ query: String, _ scopeDir: String?, _ scopeTag: String?,
         _ paging: Paging
       ) throws
         -> SidebarFilterPage
-    var performUntagged: (_ paging: Paging) throws -> SidebarFilterPage
-    /// One-level listing (the non-descendant folder default).
+    var performUntagged: @Sendable (_ paging: Paging) throws -> SidebarFilterPage
+    /// One-level listing (the non-descendant folder default). `cancel` is
+    /// the drain's token: every page of one drain carries the same one.
     var listLevel:
-      (_ parentPath: String, _ paging: Paging) throws -> DirListing
+      @Sendable (_ parentPath: String, _ paging: Paging, _ cancel: CancelToken) throws
+        -> DirListing
   }
 
   enum Row: Equatable, Identifiable {
@@ -38,10 +42,10 @@ final class SidebarListPaneModel: ObservableObject {
     }
   }
 
-  static let pageSize: UInt32 = 500
+  nonisolated static let pageSize: UInt32 = 500
   /// The FL budget scale: a scope past this drains no further and the
   /// truncation is announced in the header — never silent (§FL rules).
-  static let drainCap = 10_000
+  nonisolated static let drainCap = 10_000
 
   @Published private(set) var container: SidebarContainer?
   @Published private(set) var rows: [Row] = []
@@ -103,13 +107,14 @@ final class SidebarListPaneModel: ObservableObject {
   }
 
   /// Select (or clear) the container: supersedes any pending drain,
-  /// then drains the scope to completion as an awaitable main-actor
-  /// task — the filter model's pattern — and organizes wholesale (VO
-  /// stability — one replacement per settle). The drain yields between
-  /// pages (review round), so a superseding `show` cancels it
-  /// MID-drain — not just before it starts — and the main actor stays
-  /// responsive while large scopes page; any stale result that still
-  /// completes is dropped by the generation guard.
+  /// then drains the scope to completion as an awaitable task — the
+  /// filter model's pattern — and organizes wholesale on the main actor
+  /// (VO stability — one replacement per settle). The pages run off the
+  /// main actor under the drain's one token (plan 43 PR 12, #1324), so a
+  /// superseding `show` cancels it MID-drain — even while a page is in
+  /// core — and the main actor stays responsive while large scopes page;
+  /// any stale result that still completes is dropped by the generation
+  /// guard.
   func show(_ container: SidebarContainer?) {
     generation += 1
     let myGeneration = generation
@@ -193,19 +198,45 @@ final class SidebarListPaneModel: ObservableObject {
 
   // MARK: - Pipeline
 
+  /// One drain, one token (plan 43 PR 12, #1324; locked 05 §4): the pages
+  /// run detached, off the main actor, and every `list_dir_files` page
+  /// carries the drain's token. Cancelling the drain task (a superseding
+  /// `show`, the vault closing) cancels that token through the handler, so a
+  /// page in core returns `.Cancelled` and no further page is requested.
   private static func drain(
     _ container: SidebarContainer,
     descendants: Bool,
     dependencies: Dependencies
   ) async throws -> (files: [FileSummary], truncated: Bool) {
+    let cancel = CancelToken()
+    return try await withTaskCancellationHandler {
+      try await Task.detached(priority: .userInitiated) {
+        try drainPages(
+          container, descendants: descendants, dependencies: dependencies,
+          cancel: cancel)
+      }.value
+    } onCancel: {
+      cancel.cancel()
+    }
+  }
+
+  private nonisolated static func drainPages(
+    _ container: SidebarContainer,
+    descendants: Bool,
+    dependencies: Dependencies,
+    cancel: CancelToken
+  ) throws -> (files: [FileSummary], truncated: Bool) {
     var files: [FileSummary] = []
     var cursor: String?
     while files.count < drainCap {
+      // A superseding show() cancelled the drain while the last page was
+      // read: request no further page.
+      if cancel.isCancelled() { throw CancellationError() }
       let paging = Paging(cursor: cursor, limit: pageSize)
       let (page, next): ([FileSummary], String?)
       switch container {
       case .folder(let path) where !descendants:
-        let listing = try dependencies.listLevel(path, paging)
+        let listing = try dependencies.listLevel(path, paging, cancel)
         (page, next) = (listing.files.items, listing.files.nextCursor)
       case .folder(let path):
         let result = try dependencies.performQuery("", path, nil, paging)
@@ -230,11 +261,6 @@ final class SidebarListPaneModel: ObservableObject {
         return (files, false)
       }
       cursor = nextCursor
-      // The yield is what makes cancellation land MID-drain: a
-      // superseding show() runs during it, and checkCancellation
-      // throws before the next page is requested.
-      await Task.yield()
-      try Task.checkCancellation()
     }
     return (files, true)
   }

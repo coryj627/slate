@@ -41,6 +41,9 @@ struct DashboardSectionRefreshReservation: Sendable {
     let generation: UInt64
     let replacedHandle: UInt64?
     let request: BasePreparedLoadRequest
+    /// The prepared refresh's token, owned by the section that reserved it
+    /// (plan 43 PR 12, #1324): its teardown and its next reservation cancel it.
+    let cancel: CancelToken
 }
 
 enum DashboardSectionRefreshApplication: Sendable {
@@ -267,6 +270,20 @@ final class DashboardSectionDocument: ObservableObject, Identifiable {
     private var activeViewIndex = 0
     private var contentRefreshGeneration: UInt64 = 0
 
+    /// The token of this section's execute while it runs (plan 43 PR 12,
+    /// #1324): one per execute, held only for the call. The execute runs
+    /// synchronously on the main actor, so nothing can cancel it while it
+    /// runs (#1436); `close` cancels one only if it is in flight.
+    private var executeCancelToken: CancelToken?
+    /// The token of this section's prepared refresh while it runs off the
+    /// main actor (plan 43 PR 12, #1324): minted with its reservation, and
+    /// cancelled by the next reservation and by `close` (which every load
+    /// runs first); the apply ends it.
+    private var contentRefreshCancelToken: CancelToken?
+
+    var executeCancelTokenForTesting: CancelToken? { executeCancelToken }
+    var contentRefreshCancelTokenForTesting: CancelToken? { contentRefreshCancelToken }
+
     init(index: Int, status: DashboardSectionStatus) {
         self.index = index
         self.status = status
@@ -352,6 +369,10 @@ final class DashboardSectionDocument: ObservableObject, Identifiable {
 
     func close(session: VaultSession) {
         contentRefreshGeneration &+= 1
+        executeCancelToken?.cancel()
+        executeCancelToken = nil
+        contentRefreshCancelToken?.cancel()
+        contentRefreshCancelToken = nil
         if let handle {
             session.closeBase(handle: handle)
         }
@@ -376,13 +397,17 @@ final class DashboardSectionDocument: ObservableObject, Identifiable {
             state = .failed("Section has no open query.")
             return
         }
+        executeCancelToken?.cancel()
+        let cancel = CancelToken()
+        executeCancelToken = cancel
+        defer { if executeCancelToken === cancel { executeCancelToken = nil } }
         do {
             let executed = try session.baseExecute(
                 handle: handle,
                 view: UInt32(activeViewIndex),
                 thisPath: thisPath,
                 quickFilter: nil,
-                cancel: CancelToken())
+                cancel: cancel)
             result = executed
             if let message = executed.viewError,
                 !message.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty
@@ -404,6 +429,9 @@ final class DashboardSectionDocument: ObservableObject, Identifiable {
             return nil
         }
         contentRefreshGeneration &+= 1
+        contentRefreshCancelToken?.cancel()
+        let cancel = CancelToken()
+        contentRefreshCancelToken = cancel
         return DashboardSectionRefreshReservation(
             generation: contentRefreshGeneration,
             replacedHandle: handle,
@@ -416,13 +444,15 @@ final class DashboardSectionDocument: ObservableObject, Identifiable {
                 quickFilter: nil,
                 sortColumnID: nil,
                 sortAscending: true,
-                thisPath: thisPath))
+                thisPath: thisPath),
+            cancel: cancel)
     }
 
     func applyContentRefresh(
         _ prepared: BasePreparedLoad,
         reservation: DashboardSectionRefreshReservation
     ) -> DashboardSectionRefreshApplication {
+        if contentRefreshCancelToken === reservation.cancel { contentRefreshCancelToken = nil }
         guard contentRefreshGeneration == reservation.generation,
             handle == reservation.replacedHandle,
             status.savedQueryId == {

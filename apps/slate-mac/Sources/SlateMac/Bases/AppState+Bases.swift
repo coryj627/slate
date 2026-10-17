@@ -1562,6 +1562,15 @@ extension AppState {
     /// The single N3-07 post-write funnel. UI snapshots stay visible while a
     /// two-wide detached scheduler prepares replacement native handles. Only
     /// the latest generation in the exact committing vault may publish.
+    ///
+    /// One token per preparation (plan 43 PR 12, #1324; locked 05 §4), each
+    /// owned by the document, dashboard section or embed handle that
+    /// reserved it: its reservation carries the token into the preparation,
+    /// and the owner's teardown or next reservation cancels it. The refresh's
+    /// task cancels every token it holds through the handler — when the vault
+    /// closes (`resetBaseRefreshTasksForVaultTransition`) or when the next
+    /// refresh supersedes it (only the latest generation publishes, so the
+    /// older one's native work has no reader).
     @discardableResult
     func refreshVisibleBasesAfterInAppWrite(
         session: VaultSession,
@@ -1570,6 +1579,7 @@ extension AppState {
     ) -> Task<[String], Never>? {
         guard currentSession === session else { return nil }
 
+        visibleBasesRefreshTask?.cancel()
         visibleBasesRefreshGeneration &+= 1
         let generation = visibleBasesRefreshGeneration
         let selectedPath = activeBaseSelectionPath
@@ -1727,9 +1737,13 @@ extension AppState {
             uniqueKeysWithValues: dashboardPlans.map { ($0.workIndex, $0) })
         let embedPlansByIndex = Dictionary(
             uniqueKeysWithValues: embedPlans.map { ($0.workIndex, $0) })
+        let preparationTokens = basePlans.map(\.reservation.cancel)
+            + dashboardPlans.map(\.reservation.cancel)
+            + embedPlans.map(\.reservation.cancel)
 
         let task: Task<[String], Never> = Task { @MainActor [weak self] in
-            let results = await Task.detached(priority: .userInitiated) {
+            let results = await withTaskCancellationHandler {
+              await Task.detached(priority: .userInitiated) {
                 var preparedResults: [VisibleBasesNativeResult] = []
                 var offset = 0
                 while offset < nativeWork.count {
@@ -1749,18 +1763,23 @@ extension AppState {
                                     case .base(let index, let reservation):
                                         return .base(
                                             index,
-                                            runner(session, reservation.request, observer))
+                                            runner(
+                                                session, reservation.request, observer,
+                                                reservation.cancel))
                                     case .dashboard(let index, let reservation):
                                         return .dashboard(
                                             index,
-                                            runner(session, reservation.request, observer))
+                                            runner(
+                                                session, reservation.request, observer,
+                                                reservation.cancel))
                                     case .embed(let index, let reservation):
                                         return .embed(
                                             index,
                                             BaseEmbedPreparedLoader.prepare(
                                                 session: session,
                                                 reservation: reservation,
-                                                observer: observer))
+                                                observer: observer,
+                                                cancel: reservation.cancel))
                                     }
                                 }.value
                                 await preparationLimiter.release()
@@ -1775,7 +1794,10 @@ extension AppState {
                     offset = end
                 }
                 return preparedResults.sorted { $0.index < $1.index }
-            }.value
+              }.value
+            } onCancel: {
+                for token in preparationTokens { token.cancel() }
+            }
 
             guard !Task.isCancelled,
                 let self,

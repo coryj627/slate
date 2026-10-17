@@ -13,6 +13,23 @@ import Foundation
 /// Every commit is ONE `canvas_apply` action → one announcement → one
 /// undo step, through the t4 pipeline like all canvas mutations.
 
+/// Test seam for the canvas media listing (plan 43 PR 12, #1324): awaited
+/// off the main actor before each `list_files` page, with the page's index
+/// and the listing's token.
+typealias CanvasMediaListingPageGate = @Sendable (_ page: Int, _ cancel: CancelToken) async -> Void
+
+/// Test seam for the canvas media listing: an error returned for a page
+/// stands in for that `list_files` page failing in core.
+typealias CanvasMediaListingPageFault = @Sendable (_ page: Int) -> Error?
+
+/// What a canvas media listing answers its picker (plan 43 PR 12, #1324,
+/// #1437): the complete listed set, or why the listing failed. A cancelled
+/// listing answers nothing.
+enum CanvasMediaListingOutcome {
+    case listed([String])
+    case failed(detail: String)
+}
+
 /// An open text-card edit session (sheet presented by the container).
 struct CanvasCardEditorRequest: Identifiable, Equatable {
     let nodeId: String
@@ -139,30 +156,130 @@ extension AppState {
         }
     }
 
+    // MARK: The media listing (plan 43 PR 12, #1324)
+
     /// Media files: everything in the vault that isn't a note/canvas.
     /// Listed fresh (the sidebar list is markdown+canvas only). Filter
     /// PER PAGE (Codoki #622): on a large vault, accumulating every
     /// path before filtering spikes peak memory for a set the UI
     /// truncates to 200 anyway.
-    private var canvasMediaPaths: [String] {
-        guard let session = currentSession else { return [] }
+    ///
+    /// Runs off the main actor (locked 05 §4, principle 2) under the ONE
+    /// token of its listing: a cancelled token ends it `.Cancelled` at its
+    /// next page. Any other page failure ends it with that error, so a
+    /// partial set is never presented as the vault's (contract 34 TG2-3 and
+    /// IG2-20, Windows' arm; #1437 closes IG2-37's mac half).
+    nonisolated static func listCanvasMediaPaths(
+        session: VaultSession,
+        cancel: CancelToken,
+        pageLimit: UInt32,
+        pageGate: CanvasMediaListingPageGate?,
+        pageFault: CanvasMediaListingPageFault? = nil
+    ) async throws -> [String] {
         var media: [String] = []
         var cursor: String? = nil
+        var page = 0
         repeat {
-            guard
-                let page = try? session.listFiles(
-                    filter: .all, paging: Paging(cursor: cursor, limit: 1_000),
-                    cancel: CancelToken())
-            else { break }
+            await pageGate?(page, cancel)
+            if let fault = pageFault?(page) { throw fault }
+            let listed = try session.listFiles(
+                filter: .all, paging: Paging(cursor: cursor, limit: pageLimit),
+                cancel: cancel)
             media.append(
-                contentsOf: page.items.map(\.path).filter {
+                contentsOf: listed.items.map(\.path).filter {
                     let lower = $0.lowercased()
                     return !lower.hasSuffix(".md") && !lower.hasSuffix(".markdown")
                         && !lower.hasSuffix(".canvas")
                 })
-            cursor = page.nextCursor
+            cursor = listed.nextCursor
+            page += 1
         } while cursor != nil
         return media
+    }
+
+    /// Present `loadingPrompt` — the picker on its loading row — and list the
+    /// vault's media for it off the main actor, then hand `land` the outcome
+    /// on the main actor: the complete list, or why a page failed. The listing is the picker's: one token, cancelled
+    /// when the picker closes or is replaced (`canvasPrompt`'s observer),
+    /// when a newer listing starts (here) and when the vault closes
+    /// (`releaseAllCanvasDocuments`). A cancelled or superseded listing, or
+    /// one whose canvas is no longer the active one, publishes nothing.
+    private func startCanvasMediaListing(
+        for document: CanvasDocument,
+        presenting loadingPrompt: CanvasPrompt,
+        land: @escaping (AppState, CanvasMediaListingOutcome) -> Void
+    ) {
+        cancelCanvasMediaListing()
+        guard let session = currentSession else {
+            land(self, .listed([]))
+            return
+        }
+        canvasMediaListingGeneration &+= 1
+        let generation = canvasMediaListingGeneration
+        let cancel = CancelToken()
+        canvasMediaListingCancelToken = cancel
+        canvasMediaListingPromptID = loadingPrompt.id
+        presentCanvasPrompt(loadingPrompt)
+        let pageLimit = canvasMediaListingPageLimit
+        let pageGate = canvasMediaListingPageGateForTesting
+        let pageFault = canvasMediaListingPageFaultForTesting
+        canvasMediaListingTask = Task { @MainActor [weak self, weak document] in
+            let outcome: CanvasMediaListingOutcome?
+            do {
+                outcome = .listed(
+                    try await withTaskCancellationHandler {
+                        try await Task.detached(priority: .userInitiated) {
+                            try await Self.listCanvasMediaPaths(
+                                session: session, cancel: cancel,
+                                pageLimit: pageLimit, pageGate: pageGate,
+                                pageFault: pageFault)
+                        }.value
+                    } onCancel: {
+                        cancel.cancel()
+                    })
+            } catch VaultError.Cancelled {
+                outcome = nil
+            } catch is CancellationError {
+                outcome = nil
+            } catch let error as VaultError {
+                outcome = .failed(detail: Self.humanReadableVaultError(error))
+            } catch {
+                outcome = .failed(detail: error.localizedDescription)
+            }
+            guard let self, self.canvasMediaListingGeneration == generation else { return }
+            self.canvasMediaListingTask = nil
+            self.canvasMediaListingCancelToken = nil
+            self.canvasMediaListingPromptID = nil
+            guard let outcome, !cancel.isCancelled(), self.currentSession === session,
+                let document, self.activeCanvasDocument === document,
+                self.canvasPrompt?.id == loadingPrompt.id
+            else {
+                // The canvas this picker served is gone: take the loading
+                // picker down with it rather than leave it waiting.
+                if self.canvasPrompt?.id == loadingPrompt.id { self.dismissCanvasPrompt() }
+                return
+            }
+            land(self, outcome)
+        }
+    }
+
+    /// End the media listing in flight, if any: cancel its token and task
+    /// and drop its answer.
+    func cancelCanvasMediaListing() {
+        canvasMediaListingGeneration &+= 1
+        canvasMediaListingCancelToken?.cancel()
+        canvasMediaListingCancelToken = nil
+        canvasMediaListingTask?.cancel()
+        canvasMediaListingTask = nil
+        canvasMediaListingPromptID = nil
+    }
+
+    /// The vault is closing: end the listing, and with it the picker still
+    /// waiting on it, so nothing is left behind.
+    func endCanvasMediaListingForVaultTransition() {
+        guard let listing = canvasMediaListingPromptID else { return }
+        cancelCanvasMediaListing()
+        if canvasPrompt?.id == listing { dismissCanvasPrompt() }
     }
 
     func canvasOpenAddNote() {
@@ -177,16 +294,31 @@ extension AppState {
         presentCanvasPrompt(.addNote(files: notes))
     }
 
+    /// The picker opens at once on its loading row while the media listing
+    /// runs off the main actor (plan 43 PR 12, #1324); an empty vault still
+    /// refuses, once the listing has answered.
     func canvasOpenAddMedia() {
         guard let document = activeCanvasDocument,
             admitCanvasMutation(for: document)
         else { return }
-        let media = canvasMediaPaths
-        guard !media.isEmpty else {
-            canvasAnnouncer.announce(.canvasStatus(note: .noMediaInVault))
-            return
+        startCanvasMediaListing(for: document, presenting: .addMedia(files: nil)) {
+            state, outcome in
+            switch outcome {
+            case .failed(let detail):
+                // #1437 (contract 34 IG2-37, Windows' TG2-3 arm): a failed
+                // page presents nothing and says why.
+                state.dismissCanvasPrompt()
+                state.canvasAnnouncer.announce(
+                    .canvasActionFailed(action: .create, detail: detail))
+            case .listed(let media):
+                guard !media.isEmpty else {
+                    state.dismissCanvasPrompt()
+                    state.canvasAnnouncer.announce(.canvasStatus(note: .noMediaInVault))
+                    return
+                }
+                state.canvasPrompt = .addMedia(files: media)
+            }
         }
-        presentCanvasPrompt(.addMedia(files: media))
     }
 
     func canvasOpenAddLink() {
@@ -279,14 +411,30 @@ extension AppState {
             canvasAnnouncer.announce(.canvasStatus(note: .notAFileCard))
             return
         }
-        var candidates = canvasNotePaths
-        candidates.append(contentsOf: canvasMediaPaths)
-        guard !candidates.isEmpty else {
-            canvasAnnouncer.announce(.canvasStatus(note: .noFilesToPointAt))
-            return
+        // Notes come from the sidebar's list; media from the listing, which
+        // runs off the main actor while the picker shows its loading row
+        // (plan 43 PR 12, #1324).
+        let notes = canvasNotePaths
+        let title = row.title
+        startCanvasMediaListing(
+            for: doc, presenting: .locate(nodeId: selected, title: title, files: nil)
+        ) { state, outcome in
+            switch outcome {
+            case .failed(let detail):
+                // #1437, as for Add Media: Locate's verb arm is CanvasAction.
+                state.dismissCanvasPrompt()
+                state.canvasAnnouncer.announce(
+                    .canvasActionFailed(action: .canvasAction, detail: detail))
+            case .listed(let media):
+                let candidates = notes + media
+                guard !candidates.isEmpty else {
+                    state.dismissCanvasPrompt()
+                    state.canvasAnnouncer.announce(.canvasStatus(note: .noFilesToPointAt))
+                    return
+                }
+                state.canvasPrompt = .locate(nodeId: selected, title: title, files: candidates)
+            }
         }
-        presentCanvasPrompt(
-            .locate(nodeId: selected, title: row.title, files: candidates))
     }
 
     /// Repoint a file card at a new vault path — one action, one undo.
