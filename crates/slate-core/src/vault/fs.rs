@@ -2480,4 +2480,195 @@ mod tests {
         assert!(!names.contains(&"Docs".to_string()), "{names:?}");
         assert_eq!(p.read_file("docs/Note.md").unwrap(), b"n");
     }
+
+    /// Every entry beneath `dir`, never following a link: the kind, and the
+    /// bytes or the link target. Two equal snapshots mean nothing under `dir`
+    /// was created, removed, moved or rewritten.
+    #[cfg(unix)]
+    fn tree(dir: &Path) -> std::collections::BTreeMap<String, String> {
+        fn visit(base: &Path, dir: &Path, out: &mut std::collections::BTreeMap<String, String>) {
+            for entry in std::fs::read_dir(dir).unwrap() {
+                let path = entry.unwrap().path();
+                let name = path
+                    .strip_prefix(base)
+                    .unwrap()
+                    .to_string_lossy()
+                    .into_owned();
+                let meta = path.symlink_metadata().unwrap();
+                if meta.file_type().is_symlink() {
+                    let target = std::fs::read_link(&path).unwrap();
+                    out.insert(name, format!("link -> {}", target.display()));
+                } else if meta.is_dir() {
+                    out.insert(name, "folder".into());
+                    visit(base, &path, out);
+                } else {
+                    let bytes = std::fs::read(&path).unwrap();
+                    out.insert(name, format!("file {}", content_hash(&bytes)));
+                }
+            }
+        }
+        let mut out = std::collections::BTreeMap::new();
+        visit(dir, dir, &mut out);
+        out
+    }
+
+    /// #1449, probe P1b: a vault folder replaced by a symlink to a directory
+    /// outside the vault, after Slate saw it, must not redirect a structural
+    /// rename in either direction. Before the fix the absolute-path rename
+    /// followed the link: the first rename pulled the outside file into the
+    /// vault and the second pushed a vault file out of it.
+    #[cfg(unix)]
+    #[test]
+    fn rename_refuses_both_directions_through_a_folder_swapped_for_a_symlink() {
+        let (tmp, p) = vault();
+        let outside = tempfile::tempdir().unwrap();
+        std::fs::write(outside.path().join("a.md"), b"outside a").unwrap();
+        p.write_file("sub/a.md", b"vault a").unwrap();
+        p.write_file("c.md", b"vault c").unwrap();
+        std::fs::rename(tmp.path().join("sub"), tmp.path().join("parked")).unwrap();
+        std::os::unix::fs::symlink(outside.path(), tmp.path().join("sub")).unwrap();
+        let outside_before = tree(outside.path());
+        let vault_before = tree(tmp.path());
+
+        for (from, to, refused) in [
+            ("sub/a.md", "b.md", "sub/a.md"),
+            ("c.md", "sub/c.md", "sub/c.md"),
+        ] {
+            let error = p.rename(from, to).unwrap_err();
+            assert!(
+                matches!(
+                    &error,
+                    VaultError::InvalidPath { path, reason }
+                        if path == refused && reason.contains("\"sub\" is a symbolic link")
+                ),
+                "{from} -> {to}: {error:?}"
+            );
+        }
+
+        assert_eq!(tree(outside.path()), outside_before, "outside changed");
+        assert_eq!(tree(tmp.path()), vault_before, "vault changed");
+    }
+
+    /// #1449: a missing destination folder is created one component at a time
+    /// beneath the vault root, never through a link. Before the fix
+    /// `create_dir_all` followed `sub` and made `new/deeper` outside the vault.
+    #[cfg(unix)]
+    #[test]
+    fn rename_never_creates_destination_folders_through_a_symlinked_folder() {
+        let (tmp, p) = vault();
+        let outside = tempfile::tempdir().unwrap();
+        p.write_file("c.md", b"vault c").unwrap();
+        std::os::unix::fs::symlink(outside.path(), tmp.path().join("sub")).unwrap();
+        let outside_before = tree(outside.path());
+        let vault_before = tree(tmp.path());
+
+        let error = p.rename("c.md", "sub/new/deeper/c.md").unwrap_err();
+
+        assert!(
+            matches!(&error, VaultError::InvalidPath { path, reason }
+                if path == "sub/new/deeper/c.md" && reason.contains("\"sub\" is a symbolic link")),
+            "{error:?}"
+        );
+        assert_eq!(tree(outside.path()), outside_before, "outside changed");
+        assert_eq!(tree(tmp.path()), vault_before, "vault changed");
+    }
+
+    /// #1449: the batch preflight refuses the same substituted ancestors, so a
+    /// batch is rejected before its first item moves.
+    #[cfg(unix)]
+    #[test]
+    fn preflight_rename_refuses_a_symlinked_folder_on_either_side() {
+        let (tmp, p) = vault();
+        let outside = tempfile::tempdir().unwrap();
+        std::fs::write(outside.path().join("a.md"), b"outside a").unwrap();
+        p.write_file("c.md", b"vault c").unwrap();
+        std::os::unix::fs::symlink(outside.path(), tmp.path().join("sub")).unwrap();
+
+        for (from, to, refused) in [
+            ("sub/a.md", "b.md", "sub/a.md"),
+            ("c.md", "sub/c.md", "sub/c.md"),
+        ] {
+            let error = p.preflight_rename(from, to).unwrap_err();
+            assert!(
+                matches!(&error, VaultError::InvalidPath { path, reason }
+                    if path == refused && reason.contains("\"sub\" is a symbolic link")),
+                "{from} -> {to}: {error:?}"
+            );
+        }
+    }
+
+    /// #1449: a folder deeper in the path that is not a folder at all refuses
+    /// with its own reason, naming the vault-relative prefix.
+    #[cfg(unix)]
+    #[test]
+    fn rename_names_a_nested_ancestor_that_is_not_a_folder() {
+        let (_tmp, p) = vault();
+        p.write_file("c.md", b"vault c").unwrap();
+        p.write_file("notes/plain.md", b"a file, not a folder")
+            .unwrap();
+
+        let error = p.rename("c.md", "notes/plain.md/c.md").unwrap_err();
+
+        assert!(
+            matches!(&error, VaultError::InvalidPath { path, reason }
+                if path == "notes/plain.md/c.md"
+                    && reason.contains("\"notes/plain.md\" is not a folder")),
+            "{error:?}"
+        );
+        assert_eq!(p.read_file("c.md").unwrap(), b"vault c");
+    }
+
+    /// #1449: the root is the descriptor, not a path component, so a vault
+    /// opened through a symlinked root keeps renaming files and folders.
+    #[cfg(unix)]
+    #[test]
+    fn rename_through_a_symlinked_vault_root_still_moves() {
+        let tmp = tempfile::tempdir().unwrap();
+        let real = tmp.path().join("real-vault");
+        std::fs::create_dir(&real).unwrap();
+        let link = tmp.path().join("vault-link");
+        std::os::unix::fs::symlink(&real, &link).unwrap();
+        let p = FsVaultProvider::new(link);
+        p.write_file("a.md", b"a").unwrap();
+        p.create_dir("sub").unwrap();
+
+        p.rename("a.md", "sub/a.md").unwrap();
+        p.rename("sub/a.md", "b.md").unwrap();
+        p.rename("sub", "moved/sub").unwrap();
+        p.preflight_rename("b.md", "moved/sub/b.md").unwrap();
+
+        assert_eq!(std::fs::read(real.join("b.md")).unwrap(), b"a");
+        assert!(real.join("moved/sub").is_dir());
+        assert!(!real.join("sub").exists());
+    }
+
+    /// #1449 must keep matrix §6 (#1430): a normalization-only rename
+    /// (`café` NFC → NFD) stores NFD where the volume accepts it as the
+    /// same entry or as a new name, and stays a no-op on a volume that
+    /// aliases normalization but reports itself case-sensitive.
+    #[test]
+    fn rename_keeps_normalization_only_renames_as_matrix_section_6_records() {
+        let (tmp, p) = vault();
+        let nfc = "caf\u{00e9}.md";
+        let nfd = "cafe\u{0301}.md";
+        p.write_file(nfc, b"cafe").unwrap();
+        p.write_file("Probe.md", b"case probe").unwrap();
+        let aliases_normalization = p.stat(nfd).is_ok();
+        let case_insensitive = p.stat("probe.md").is_ok();
+
+        p.rename(nfc, nfd).unwrap();
+
+        let names: Vec<String> = std::fs::read_dir(tmp.path())
+            .unwrap()
+            .map(|entry| entry.unwrap().file_name().to_string_lossy().into_owned())
+            .filter(|name| name.starts_with("caf"))
+            .collect();
+        let expected = if aliases_normalization && !case_insensitive {
+            nfc
+        } else {
+            nfd
+        };
+        assert_eq!(names, vec![expected.to_string()]);
+        assert_eq!(p.read_file(nfd).unwrap(), b"cafe");
+    }
 }

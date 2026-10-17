@@ -21840,6 +21840,9 @@ mod tests {
     #[path = "structural.rs"]
     mod structural;
 
+    #[cfg(unix)]
+    #[path = "structural_ancestor_links.rs"]
+    mod structural_ancestor_links;
     #[path = "structural_batch.rs"]
     mod structural_batch;
     #[cfg(windows)]
