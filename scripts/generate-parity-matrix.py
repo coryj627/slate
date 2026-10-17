@@ -92,6 +92,13 @@ ID_ISSUE_OVERRIDES = {
     # docs/plans/29_search_overlay_contracts.md "Find-in-note is not in
     # this issue".
     "slate.editor.findInNote": "#1112 (find-in-note, split from #742)",
+    # Plan 43 PR 4 (#1216): mac's three graph verbosity palette rows. Windows
+    # selects the level through its Graph menu's one parameterized setter
+    # (W6-2 PR C, C-9) and registers no row per level; its twin rows are
+    # #1415, split from #746 rather than reopening the close-out's burn-down.
+    "slate.graph.setVerbosityTerse": "#1415 (graph verbosity palette rows, split from #746)",
+    "slate.graph.setVerbosityStandard": "#1415 (graph verbosity palette rows, split from #746)",
+    "slate.graph.setVerbosityVerbose": "#1415 (graph verbosity palette rows, split from #746)",
     "slate.editor.save": "#724 (W2-1)",
     "slate.editor.toggleViewMode": "#728 (W3-1)",
     "slate.editor.addProperty": "#736 (W4-4)",

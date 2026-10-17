@@ -2939,8 +2939,8 @@ final class AppState: ObservableObject {
     /// The one graph announcement funnel (Milestone P; mirrors
     /// `canvasAnnouncer`). Connections leaf, graph table, and diagram
     /// surfaces phrase through it — no graph code posts directly
-    /// (enforced by `GraphAnnouncerTests`). Verbosity persistence
-    /// moves into `.slate/graph.json` with P2-4; `.standard` until then.
+    /// (enforced by `GraphAnnouncerTests`). Its level is the vault's
+    /// `.slate/graph.json` verbosity, set by `setGraphVerbosity` (#1216).
     lazy var graphAnnouncer = GraphAnnouncer()
 
     // MARK: Connections leaf (Milestone P, P1-1 #554)
@@ -3124,10 +3124,10 @@ final class AppState: ObservableObject {
     /// Persisted graph-tab config (P2-4 #560): the ONE mutable config
     /// (contract 35 Term W7; #1218). Each trigger writes its own field —
     /// the inspector's Groups / Display / Forces, the mode switch, the
-    /// needle, the reader's backend flags — and the save folds in only the
-    /// depth and the verbosity; the live Table filter is never folded in, so
-    /// a transient preset never persists. Written to `.slate/graph.json`
-    /// (debounced) via `graphConfigSaveTasks`.
+    /// needle, the reader's backend flags, the verbosity switch — and the
+    /// save folds in only the depth; the live Table filter is never folded
+    /// in, so a transient preset never persists. Written to
+    /// `.slate/graph.json` (debounced) via `graphConfigSaveTasks`.
     @Published var graphConfig = GraphConfig.default
     /// Pending debounced saves keyed BY VAULT — genuine per-vault
     /// bookkeeping (P2-4 review finding 3). A same-vault edit cancels only

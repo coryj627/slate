@@ -250,24 +250,39 @@ final class CommandPaletteModel: ObservableObject {
         do {
             try registry.invokeById(id: command.id)
             return .success
-        } catch let CommandError.ActionFailed(message) {
+        } catch {
+            pendingAnnouncement = Self.failureAnnouncement(for: error, label: command.label)
+            switch error {
+            case let CommandError.ActionFailed(message):
+                return .actionFailed(label: command.label, message: message)
+            case let CommandError.UnknownId(id):
+                return .unknownId(id: id)
+            default:
+                return .actionFailed(label: command.label, message: "")
+            }
+        }
+    }
+
+    /// What a failed registry invocation speaks, from whichever front door
+    /// ran it — this palette, or a menu item through
+    /// `AppState.invokeRegisteredCommand` (plan 43 PR 4) — so a failure
+    /// reads the same from both. The copy is core's.
+    static func failureAnnouncement(for error: Error, label: String) -> A11yEvent {
+        switch error {
+        case let CommandError.ActionFailed(message):
             // Structural busy is an availability rejection, not an operation
             // failure. The row already exposes this exact reason; announce it
             // verbatim so VoiceOver does not hear a misleading second prefix.
-            pendingAnnouncement =
-                message == AppState.structuralMutationBusyReason
+            return message == AppState.structuralMutationBusyReason
                 ? .paletteCommandUnavailable(reason: message)
-                : .paletteCommandFailed(label: command.label, detail: message)
-            return .actionFailed(label: command.label, message: message)
-        } catch let CommandError.UnknownId(id) {
-            pendingAnnouncement = .paletteCommandNotFound(id: id)
-            return .unknownId(id: id)
-        } catch {
+                : .paletteCommandFailed(label: label, detail: message)
+        case let CommandError.UnknownId(id):
+            return .paletteCommandNotFound(id: id)
+        default:
             // CommandError is the only declared throwing type from
             // the registry; this branch is defensive for future
             // additions to the FFI error surface.
-            pendingAnnouncement = .paletteCommandFailed(label: command.label, detail: nil)
-            return .actionFailed(label: command.label, message: "")
+            return .paletteCommandFailed(label: label, detail: nil)
         }
     }
 

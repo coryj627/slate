@@ -7,7 +7,7 @@ import Foundation
 /// graph.json` when the vault activates, apply the persisted filter on
 /// each plain Graph-tab open, and persist changes (debounced, off-main,
 /// per-vault serialized) as the inspector edits Filters / Groups /
-/// Display / Forces.
+/// Display / Forces and the verbosity switch sets its level (#1216).
 extension AppState {
     /// Load the config OBJECT once per vault (idempotent). The eager load
     /// at vault activation normally beats every caller here, so this is a
@@ -60,14 +60,13 @@ extension AppState {
     /// #1218). Every trigger writes ITS field of `graphConfig` before it
     /// schedules — the needle `filters.nameQuery`, a flag change the three
     /// backend flags, the mode switch `mode`, the inspector its groups,
-    /// display and forces — and the live Table filter and needle are NOT
-    /// folded in, so a transient preset never reaches graph.json. Two fields
-    /// are still folded from their live holders: the Connections depth, and
-    /// the announcer's verbosity until its setter writes the field (#1216).
+    /// display and forces, the verbosity switch `verbosity` (#1216) — and
+    /// the live Table filter and needle are NOT folded in, so a transient
+    /// preset never reaches graph.json. One field is still folded from its
+    /// live holder: the Connections depth.
     func graphConfigSaveAggregate() -> GraphConfig {
         var cfg = graphConfig
         cfg.connectionsDepth = UInt32(Self.clampConnectionsDepth(connectionsDepth))
-        cfg.verbosity = graphAnnouncer.verbosity
         return cfg
     }
 
@@ -84,11 +83,11 @@ extension AppState {
         graphTableKindFilter = nil
     }
 
-    /// Fold the depth and the verbosity into `graphConfig` — every other
-    /// field its trigger already wrote — and persist the whole aggregate,
-    /// debounced (rapid slider drags coalesce to one write) and off the
-    /// main actor via the serializing `GraphConfigWriter` (so overlapping
-    /// saves can't lose an update — finding 3).
+    /// Fold the depth into `graphConfig` — every other field its trigger
+    /// already wrote — and persist the whole aggregate, debounced (rapid
+    /// slider drags coalesce to one write) and off the main actor via the
+    /// serializing `GraphConfigWriter` (so overlapping saves can't lose an
+    /// update — finding 3).
     ///
     /// Refuses to save unless the current vault's config is actually loaded
     /// (`graphConfigVaultURL == currentVaultURL`) and writable — this is
@@ -98,8 +97,8 @@ extension AppState {
         guard let root = currentVaultURL, graphConfigVaultURL == root, graphConfigWritable
         else { return }
         // The trigger already wrote its field, so the fold changes the
-        // config only when the depth or the verbosity moved — and only then
-        // is it republished (the diagram rebuilds on every publish).
+        // config only when the depth moved — and only then is it
+        // republished (the diagram rebuilds on every publish).
         let snapshot = graphConfigSaveAggregate()
         if snapshot != graphConfig { graphConfig = snapshot }
         // Coalesce ONLY this vault's still-pending save (per-vault keyed);
@@ -197,6 +196,29 @@ extension AppState {
     /// Persist the last-used projection mode (restored on the next open).
     func setGraphMode(_ mode: GraphSurfaceMode) {
         graphConfig.mode = mode
+        scheduleGraphConfigSave()
+    }
+
+    // MARK: The verbosity switch (#1216)
+
+    /// Set the level every graph row line renders at (W6-2 D-6; plan 43
+    /// PR 4): the one setter the View ▸ Graph ▸ Verbosity items and the
+    /// "Graph Verbosity: {Title}" palette rows run. It writes the
+    /// announcer's level — the next row event renders at it (0a-11) — and
+    /// ITS field of the config, then schedules the save (Term W7), which
+    /// persists the level to `.slate/graph.json` unless the config is
+    /// read-only; the vault's next load restores it (0bD-7).
+    ///
+    /// It speaks nothing of its own, as the canvas's switch does not
+    /// (`setCanvasVerbosity`) and as Windows' `SetVerbosity` does not: the
+    /// menu's checkmark says the level, and the next graph event renders at
+    /// it. Re-selecting the level in force stores nothing (Windows' m1).
+    func setGraphVerbosity(_ level: GraphVerbosity) {
+        if graphAnnouncer.verbosity != level {
+            graphAnnouncer.verbosity = level
+        }
+        guard graphConfig.verbosity != level else { return }
+        graphConfig.verbosity = level
         scheduleGraphConfigSave()
     }
 }
