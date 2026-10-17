@@ -232,7 +232,9 @@ is a runtime fact rather than Windows' source pin (New Note, Duplicate, a
 rename, a move and a batch move each re-seat a missing tab whose note came
 back under its own spelling); `testOnlyCreatedAndRenamedPublicationsReseatMissingTabs`;
 `testAParkedMissingTabTakesTheStoredSpellingAndLoadsItWhenActivated`
-(volume-probed); and
+(volume-probed);
+`testTabsInTwoPanesOnOneMissingNoteReseatTogetherOnOneProbe` (one probe per
+path, not per tab); and
 `testADirtyMissingTabWhoseNoteCameBackUnderItsOwnSpellingStaysInRecovery`.
 Not on mac yet: re-seating a missing Canvas or Base tab, which Windows'
 sweep also does (#1416).
@@ -282,8 +284,10 @@ does. Facts: `testAHashlessSaveNeverLandsOnAnExistingFile` (not
 volume-dependent: the `canonicalPathProbe` seam stands in for an aliasing
 volume, because mac has no hashless editable buffer without one; Windows'
 twin opens a path that never loaded, which mac shows as an error, not an
-editor), `testADirtyMissingTabIsRetargetedButNeverReloaded` and
-`testAHashlessSaveThatLandsUnindexedCompletesWithCoresCaveat`; Rust
+editor), `testADirtyMissingTabIsRetargetedButNeverReloaded`,
+`testAHashlessSaveThatLandsUnindexedCompletesWithCoresCaveat` and
+`testAHashlessSaveThatCreatesAwaitsTheSharedRefreshOnce` (the refresh runs
+once, under the gate, before the save publishes; a conflict runs none); Rust
 `compose_note_is_the_composed_saves_own_bytes`. Mutation-checked: with I8 off
 (the hashless save unconditional) and the re-seat a no-op, all four twin
 facts fail, the lifecycle fact among them because mac's runs the

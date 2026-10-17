@@ -188,7 +188,9 @@ final class CanonicalIdentityTests: XCTestCase {
     /// mac shows as an error, not an editor), so the stored-spelling seam
     /// answers for the volume and the fact runs on every volume.
     func testAHashlessSaveNeverLandsOnAnExistingFile() async throws {
-        let (state, vault) = try await makeVault(["Late.md": "---\ntitle: Late\n---\nlate\n"])
+        let (state, vault) = try await makeVault([
+            "Late.md": "---\ntitle: Late\n---\nlate\n", "other.md": "other\n",
+        ])
         let session = try XCTUnwrap(state.currentSession)
         _ = try await open(state, "Late.md")
         XCTAssertEqual(state.currentNoteText, "late\n")
@@ -218,15 +220,23 @@ final class CanonicalIdentityTests: XCTestCase {
         XCTAssertEqual(try read(vault, "LATE.md"), "theirs\n")
 
         // A free path: the ordinary first save of the tab still creates,
-        // with its frontmatter, in core's composition.
+        // with its frontmatter, in core's composition. Filling a path is a
+        // structural create: the shared refresh indexes the note, the
+        // structural undo history is a barrier, and the gate is released.
         state.resolveSaveConflictCancel()
         try FileManager.default.removeItem(at: vault.appendingPathComponent("LATE.md"))
+        await state.renameEntry(path: "other.md", isDirectory: false, to: "renamed.md")?.value
+        XCTAssertEqual(state.structuralUndoStack.count, 1)
         await state.saveCurrentNote()?.value
         XCTAssertNil(state.currentSaveConflict)
         XCTAssertNil(state.saveError)
         XCTAssertEqual(try read(vault, "LATE.md"), "---\ntitle: Late\n---\nmine\n")
         XCTAssertEqual(
             try read(vault, "LATE.md"), composeNote(fmSource: "title: Late\n", body: "mine\n"))
+        XCTAssertTrue(
+            state.files.contains { $0.path == "LATE.md" }, "the create's refresh indexed it")
+        XCTAssertEqual(state.structuralUndoStack.count, 0, "a create is an undo barrier")
+        XCTAssertFalse(state.isMutatingStructure)
 
         // And the tab now carries a hash: its NEXT save is a CAS save.
         state.updateEditorText("mine\nmore\n")
@@ -410,6 +420,96 @@ final class CanonicalIdentityTests: XCTestCase {
 
         XCTAssertNil(state.saveCurrentNote(), "its save stays refused")
         XCTAssertEqual(try read(vault, "Ghost.md"), "back\n")
+    }
+
+    /// Tabs in two panes on one missing note re-seat in one sweep: core is
+    /// asked once for the path, not once per tab, and both tabs take the
+    /// stored spelling. The focused tab reloads at once; the other pane's
+    /// tab holds no document (the Trash flip dropped its clean one), so it
+    /// reads the same spelling, and the same bytes, when it is focused.
+    func testTabsInTwoPanesOnOneMissingNoteReseatTogetherOnOneProbe() async throws {
+        let (state, vault) = try await makeVault(["Ghost.md": "ghost\n"])
+        let left = try await open(state, "Ghost.md")
+        state.splitActivePane(axis: .horizontal)
+        let right = try XCTUnwrap(state.workspace.model.activeGroup.activeTabID)
+        XCTAssertNotEqual(left, right)
+        XCTAssertEqual(state.workspace.model.tab(right)?.item, .markdown(path: "Ghost.md"))
+        await state.deleteEntry(path: "Ghost.md", isDirectory: false)?.value
+        XCTAssertNotNil(state.noteLoadError)
+        XCTAssertNil(state.workspace.document(for: left))
+
+        try "back\n".write(
+            to: vault.appendingPathComponent("GHOST.md"), atomically: true, encoding: .utf8)
+        let probes = Probes()
+        state.canonicalPathProbe = { session, path in
+            probes.paths.append(path)
+            if BaseExactIdentity.matches(path, "Ghost.md") { return "GHOST.md" }
+            return try session.canonicalPath(path: path)
+        }
+        state.reseatMissingTabs()
+        await state.noteLoadTask?.value
+
+        XCTAssertEqual(probes.paths, ["Ghost.md"], "one probe for the path, not one per tab")
+        XCTAssertEqual(state.workspace.model.tab(left)?.item, .markdown(path: "GHOST.md"))
+        XCTAssertEqual(state.workspace.model.tab(right)?.item, .markdown(path: "GHOST.md"))
+        XCTAssertEqual(state.workspace.model.activeGroup.activeTabID, right)
+        XCTAssertEqual(state.loadedFilePath, "GHOST.md")
+        XCTAssertEqual(state.currentNoteText, "back\n")
+        XCTAssertNil(state.noteLoadError)
+
+        state.focusPane(.left)
+        await state.noteLoadTask?.value
+        XCTAssertEqual(state.workspace.model.activeGroup.activeTabID, left)
+        XCTAssertEqual(state.loadedFilePath, "GHOST.md")
+        XCTAssertEqual(state.currentNoteText, "back\n")
+        XCTAssertNil(state.noteLoadError)
+    }
+
+    /// I8's create is structural: a hashless save that fills a free path
+    /// awaits the shared refresh (`structuralBatchRefreshRunner`) exactly
+    /// once, with the structural gate held and before the save publishes,
+    /// as the missing-file Keep Mine does (`performSave`'s structural
+    /// branch). A hashless save that meets an occupant conflicts and runs no
+    /// refresh, and either way the gate is released.
+    func testAHashlessSaveThatCreatesAwaitsTheSharedRefreshOnce() async throws {
+        let (state, vault) = try await makeVault(["Late.md": "late\n"])
+        _ = try await open(state, "Late.md")
+        state.updateEditorText("mine\n")
+        await state.deleteEntry(path: "Late.md", isDirectory: false)?.value
+        try "theirs\n".write(
+            to: vault.appendingPathComponent("LATE.md"), atomically: true, encoding: .utf8)
+        answerStoredSpelling("LATE.md", for: "Late.md", on: state)
+        state.reseatMissingTabs()
+        XCTAssertEqual(state.loadedFilePath, "LATE.md")
+
+        @MainActor final class Refreshes {
+            var gateHeld: [Bool] = []
+            var publishedBefore: [Bool] = []
+        }
+        let refreshes = Refreshes()
+        state.structuralBatchRefreshRunner = { state in
+            refreshes.gateHeld.append(state.isMutatingStructure)
+            refreshes.publishedBefore.append(state.currentNoteContentHash != nil)
+            await state.loadFiles()
+        }
+
+        // An occupied path: the conflict, and no refresh.
+        await state.saveCurrentNote()?.value
+        XCTAssertNotNil(state.currentSaveConflict)
+        XCTAssertEqual(refreshes.gateHeld.count, 0)
+        XCTAssertFalse(state.isMutatingStructure)
+
+        // A free path: one refresh, under the gate, before the save lands.
+        state.resolveSaveConflictCancel()
+        try FileManager.default.removeItem(at: vault.appendingPathComponent("LATE.md"))
+        await state.saveCurrentNote()?.value
+        XCTAssertNil(state.currentSaveConflict)
+        XCTAssertNil(state.saveError)
+        XCTAssertEqual(refreshes.gateHeld, [true], "awaited once, with the gate held")
+        XCTAssertEqual(refreshes.publishedBefore, [false], "before the save publishes")
+        XCTAssertNotNil(state.currentNoteContentHash)
+        XCTAssertTrue(state.files.contains { $0.path == "LATE.md" })
+        XCTAssertFalse(state.isMutatingStructure)
     }
 
     /// I8's landed arm: a hashless save whose create lands but is not
