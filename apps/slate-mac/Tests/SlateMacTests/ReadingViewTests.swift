@@ -2041,9 +2041,12 @@ final class ReadingViewTests: XCTestCase {
         let window = HostedAccessibilityTree.host(
             Host(model: model, recorder: recorder, outer: outer, nested: nested))
         defer { window.close() }
+        // Waits on what has arrived, not on how many times: a probe that
+        // appears more than once records again, which must not stall this.
         func latest(_ url: URL) -> Seen? { recorder.seen.last { $0.url == url } }
         _ = try await HostedAccessibilityTree.snapshot(of: window) { _ in
-            recorder.opened.count == 2 && latest(outer) != nil && latest(nested) != nil
+            Set(recorder.opened) == [outer, nested] && latest(outer) != nil
+                && latest(nested) != nil
         }
         XCTAssertEqual(Set(recorder.opened), [outer, nested], "links route through the router")
         for url in [outer, nested] {
