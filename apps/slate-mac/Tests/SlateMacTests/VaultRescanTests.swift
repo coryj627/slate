@@ -182,6 +182,8 @@ final class VaultRescanTests: XCTestCase {
                 defaults: UserDefaults(suiteName: UUID().uuidString)!),
             announcer: spoken)
         state.scanClock = { clock.now }
+        // The facts hear the sentence at once; the settle has its own fact.
+        state.rescanRun.sentenceSettle = 0
         state.openVault(at: dir)
         await state.scanTask?.value
         spoken.lines.removeAll()
@@ -638,6 +640,54 @@ final class VaultRescanTests: XCTestCase {
     }
 
     // MARK: - Supporting facts
+
+    /// VoiceOver drops an announcement posted while a sheet closes or while
+    /// it reads the window a return to Slate brings back (found in this PR's
+    /// VoiceOver check: a palette Refresh of an unchanged vault and a
+    /// foreground rescan were both silent). A Refresh chosen from the palette
+    /// holds its sentence until the palette is gone and the settle has
+    /// passed; a foreground rescan's sentence follows the activation by the
+    /// settle. A close meanwhile still silences the run.
+    func testTheSentenceWaitsForThePaletteItWasChosenFromAndForTheReturnsReading() async throws {
+        let h = try await open(["alpha.md": "# Alpha\n"])
+        h.state.rescanRun.sentenceSettle = 0.2
+        h.state.isCommandPaletteOpen = true
+        try h.write("late.md", "# Late\n")
+        _ = try h.state.dispatchSidebarAction(id: SlateCommandID.sidebarRefresh)
+        let run = try XCTUnwrap(h.state.vaultRescanTask)
+        try await Task.sleep(nanoseconds: 400_000_000)
+        XCTAssertEqual(h.spoken.lines, [], "nothing is said while the palette is still up")
+        XCTAssertTrue(h.state.isRescanning, "the run holds its sentence")
+        h.state.isCommandPaletteOpen = false
+        let closed = ProcessInfo.processInfo.systemUptime
+        await run.value
+        XCTAssertGreaterThanOrEqual(ProcessInfo.processInfo.systemUptime - closed, 0.15)
+        XCTAssertEqual(h.spoken.lines, ["Files refreshed. 1 new or changed, 0 removed."])
+
+        h.spoken.lines.removeAll()
+        h.state.beginForegroundRescanObservation(appIsActive: true)
+        h.state.applicationDidResignActive()
+        h.clock.now += 10
+        try h.write("later.md", "# Later\n")
+        let returned = ProcessInfo.processInfo.systemUptime
+        let foreground = try XCTUnwrap(h.state.applicationDidBecomeActive())
+        await foreground.value
+        XCTAssertGreaterThanOrEqual(ProcessInfo.processInfo.systemUptime - returned, 0.15)
+        XCTAssertEqual(h.spoken.lines, ["Files refreshed. 1 new or changed, 0 removed."])
+
+        h.spoken.lines.removeAll()
+        h.state.isCommandPaletteOpen = true
+        try h.write("lost.md", "# Lost\n")
+        _ = try h.state.dispatchSidebarAction(id: SlateCommandID.sidebarRefresh)
+        let closing = try XCTUnwrap(h.state.vaultRescanTask)
+        try await Task.sleep(nanoseconds: 300_000_000)
+        h.state.isCommandPaletteOpen = false
+        XCTAssertTrue(h.state.closeVault())
+        await closing.value
+        XCTAssertFalse(
+            h.spoken.lines.contains { $0.hasPrefix("Files refreshed") },
+            "a run closed while it held its sentence says nothing")
+    }
 
     /// Windows' `RefreshIsUnavailableDuringAnImportAndSaysWhy` and
     /// `RefreshIsUnavailableDuringATrashAndSaysWhy`: while an import or a

@@ -24,7 +24,10 @@ import Foundation
 /// only when something was new, changed or removed. Nothing speaks before it:
 /// the progress an explicit Refresh shows on the scan strip never speaks (the
 /// reason-aware progress policy), the re-sync publishes silently, and the keys
-/// never move unless the row they were on is gone.
+/// never move unless the row they were on is gone. The sentence itself follows
+/// VoiceOver's own reading of a return to Slate or of the palette a Refresh
+/// was chosen from closing (`sentenceSettle`): posted under that reading, it
+/// was dropped (this PR's VoiceOver check).
 ///
 /// One run at a time. A request that arrives while a run is active joins the
 /// pending-reason lattice and is served by ONE follow-up run: never dropped,
@@ -127,6 +130,12 @@ final class VaultRescanRun {
     fileprivate(set) var lastScanEndedAt: Date?
     /// True while an explicit run's scan may still move the scan strip.
     fileprivate(set) var showsProgress = false
+    /// When the app last became active (`ProcessInfo.systemUptime`):
+    /// VoiceOver reads the returning window and focus then.
+    fileprivate(set) var lastActivationUptime: TimeInterval?
+    /// A request arrived with a sheet up (the palette a Refresh was chosen
+    /// from): the run's sentence waits for the sheet to end.
+    fileprivate(set) var sentenceFollowsModal = false
     fileprivate var generation: UInt64 = 0
     /// Waits for the blockers of a pending follow-up to settle.
     fileprivate var deferredFollowUp: AnyCancellable?
@@ -165,6 +174,12 @@ final class VaultRescanRun {
     var inventoryPageLimit: UInt32 = 1_000
     /// The indexed-hash chunk; core's bound (`maxIndexedHashPaths()`) when nil.
     var indexedHashChunkLimit: Int?
+    /// How long the sentence waits after the app becomes active, or after the
+    /// sheet a request came from ends: VoiceOver drops an announcement posted
+    /// while it starts reading the returning window or focus ("Closing
+    /// dialog", the focused row), so the sentence follows that reading. The
+    /// facts shorten it.
+    var sentenceSettle: TimeInterval = 1.0
 }
 
 extension AppState {
@@ -202,6 +217,7 @@ extension AppState {
     @discardableResult
     func requestRescan(_ reason: RescanReason) -> Task<Void, Never>? {
         guard let session = currentSession else { return nil }
+        if rescanModalSheetIsUp { rescanRun.sentenceFollowsModal = true }
         if rescanRun.isActive {
             rescanRun.pendingReason = RescanReason.joined(rescanRun.pendingReason, reason)
             return rescanRun.task
@@ -234,6 +250,7 @@ extension AppState {
     /// one, or nil.
     @discardableResult
     func applicationDidBecomeActive() -> Task<Void, Never>? {
+        rescanRun.lastActivationUptime = ProcessInfo.processInfo.systemUptime
         guard
             rescanRun.foregroundRoute.onBecomeActive(
                 at: scanClock(), modalSurfaceOpen: foregroundRescanModalSurfaceOpen)
@@ -245,6 +262,14 @@ extension AppState {
     /// app-modal window: a modal surface the foreground route waits behind.
     var foregroundRescanModalSurfaceOpen: Bool {
         if isCommandPaletteOpen || isQuickSwitcherOpen || isSearchOpen { return true }
+        guard let app = NSApp else { return false }
+        return app.modalWindow != nil || app.windows.contains { $0.attachedSheet != nil }
+    }
+
+    /// A sheet or modal window up, or the palette or Quick Open open: what
+    /// the run's sentence waits to end.
+    private var rescanModalSheetIsUp: Bool {
+        if isCommandPaletteOpen || isQuickSwitcherOpen { return true }
         guard let app = NSApp else { return false }
         return app.modalWindow != nil || app.windows.contains { $0.attachedSheet != nil }
     }
@@ -263,6 +288,7 @@ extension AppState {
         rescanRun.lastScanEndedAt = nil
         rescanRun.deferredFollowUp = nil
         rescanRun.showsProgress = false
+        rescanRun.sentenceFollowsModal = false
     }
 
     // MARK: - The run
@@ -380,7 +406,9 @@ extension AppState {
             if case VaultError.Cancelled = error { return }
             // The call threw before any report existed: an honest "results
             // may be incomplete", never silence and never "No changes".
-            postRescanSentence(.vaultRescanIncomplete(errors: 1))
+            await postRescanSentence(
+                .vaultRescanIncomplete(errors: 1), session: session, generation: generation,
+                cancel: cancel)
             return
         }
         guard isCurrentRescan(session, generation), !cancel.isCancelled() else { return }
@@ -396,14 +424,17 @@ extension AppState {
 
         // The one sentence. The scan's error count crosses the FFI in full;
         // each failed re-sync operation adds one.
+        let sentence: A11yEvent
         if !report.complete || failed > 0 {
             let (sum, overflow) = report.errorCount.addingReportingOverflow(failed)
-            postRescanSentence(.vaultRescanIncomplete(errors: max(1, overflow ? .max : sum)))
+            sentence = .vaultRescanIncomplete(errors: max(1, overflow ? .max : sum))
         } else if reason == .explicit || report.filesChanged + report.filesRemoved > 0 {
-            postRescanSentence(
-                .vaultRescanFinished(
-                    reason: reason, changed: report.filesChanged, removed: report.filesRemoved))
+            sentence = .vaultRescanFinished(
+                reason: reason, changed: report.filesChanged, removed: report.filesRemoved)
+        } else {
+            return
         }
+        await postRescanSentence(sentence, session: session, generation: generation, cancel: cancel)
     }
 
     /// The scan returned: the strip it moved goes, and a straggler event
@@ -414,8 +445,34 @@ extension AppState {
         handleRescanProgress(nil)
     }
 
-    /// The run's one completion sentence, rendered by core.
-    private func postRescanSentence(_ event: A11yEvent) {
+    /// The run's one completion sentence, rendered by core. It follows
+    /// VoiceOver's own reading of a return to Slate or of a closing sheet
+    /// (`sentenceSettle`), so that reading never drops it, and a run
+    /// cancelled meanwhile says nothing.
+    private func postRescanSentence(
+        _ event: A11yEvent, session: VaultSession, generation: UInt64, cancel: CancelToken
+    ) async {
+        let settle = rescanRun.sentenceSettle
+        if settle > 0 {
+            var since = rescanRun.lastActivationUptime
+            if rescanRun.sentenceFollowsModal {
+                // The sheet the request came from may still be closing.
+                var polls = 0
+                while rescanModalSheetIsUp, polls < 100 {
+                    try? await Task.sleep(nanoseconds: 50_000_000)
+                    polls += 1
+                }
+                since = ProcessInfo.processInfo.systemUptime
+            }
+            if let since {
+                let remaining = settle - (ProcessInfo.processInfo.systemUptime - since)
+                if remaining > 0 {
+                    try? await Task.sleep(nanoseconds: UInt64(remaining * 1_000_000_000))
+                }
+            }
+        }
+        guard isCurrentRescan(session, generation), !cancel.isCancelled() else { return }
+        rescanRun.sentenceFollowsModal = false
         announcer.post(event)
     }
 
