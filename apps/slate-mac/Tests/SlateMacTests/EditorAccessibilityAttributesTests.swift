@@ -315,7 +315,7 @@ final class EditorAccessibilityAttributesTests: XCTestCase {
         XCTAssertEqual(custom("[[Target]]"), ["Wikilink"])
         XCTAssertEqual(custom("![[Target]]"), ["Embed"])
         XCTAssertEqual(custom("[Website]"), ["Link"])
-        XCTAssertEqual(custom("Picture"), ["Image"], "the image inside the link markup wins its run")
+        XCTAssertEqual(custom("Picture"), ["Image"], "an image is a link of its own kind")
         XCTAssertEqual(custom("[quoted link]"), ["Quote", "Link"], "a link in a quote keeps the quote")
         XCTAssertFalse(isLink("#project"))
         XCTAssertFalse(isLink("[@smith2020]"))

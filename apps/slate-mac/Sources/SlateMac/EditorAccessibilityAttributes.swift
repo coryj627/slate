@@ -516,7 +516,7 @@ final class EditorAccessibilityLink: NSObject {
 /// parent is the editor. VoiceOver resolves the run to it (the spike: VO-Space
 /// on a word inside a link pressed it). It carries no press action — the
 /// mac editor activates no span (Windows' Ctrl+Enter and Invoke have no mac
-/// counterpart yet) — so VoiceOver offers none.
+/// counterpart yet, #1431) — so VoiceOver offers none.
 final class EditorLinkAccessibilityElement: NSAccessibilityElement {
     weak var textView: NSTextView?
     /// The link's range at its last read; the store shifts the run through
