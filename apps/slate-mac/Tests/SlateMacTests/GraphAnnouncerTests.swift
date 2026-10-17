@@ -180,6 +180,50 @@ final class GraphAnnouncerTests: XCTestCase {
         XCTAssertEqual(posts().map(\.0), ["Alpha"])
     }
 
+    /// #1216: the switch reaches rendering. A row event a production site
+    /// raises — the diagram's selection move, which reads the level from
+    /// the announcer at the event (0a-11) — speaks the bare label at Terse
+    /// and the full row copy at Standard once `setGraphVerbosity(_:)` has
+    /// set each, the two lines differing as core's matrix says they do.
+    func testARowEventRendersDifferentlyUnderTwoLevelsOfTheSwitch() async throws {
+        let root = FileManager.default.temporaryDirectory
+            .appendingPathComponent("graph-announcer-level-\(UUID().uuidString)")
+        defer { try? FileManager.default.removeItem(at: root) }
+        let vault = root.appendingPathComponent("vault")
+        try FileManager.default.createDirectory(at: vault, withIntermediateDirectories: true)
+        try Data("[[b]]".utf8).write(to: vault.appendingPathComponent("a.md"))
+        try Data("[[a]]".utf8).write(to: vault.appendingPathComponent("b.md"))
+        let state = AppState(
+            recentsStore: RecentVaultsStore(fileURL: root.appendingPathComponent("recents.json")),
+            externalOpener: { _ in true })
+        state.openVault(at: vault)
+        await state.scanTask?.value
+        let session = try XCTUnwrap(state.currentSession)
+        let filter = GraphFilter(includeAttachments: false, includeGhosts: true, orphansOnly: false)
+        let snapshot = try session.graphSnapshot(filter: filter)
+        let layout = try session.startGraphLayout(
+            filter: filter, forces: LayoutForces(), config: LayoutConfig())
+        state.graphDiagramModel = GraphDiagramModel(
+            session: layout, filter: filter, nodeIDs: layout.nodeIds(),
+            nodesByID: Dictionary(uniqueKeysWithValues: snapshot.nodes.map { ($0.id, $0) }),
+            edges: layout.edges(), generation: layout.tick(iterations: 0).generation)
+        let ids = Dictionary(uniqueKeysWithValues: snapshot.nodes.map { ($0.label, $0.id) })
+        var posts: [String] = []
+        state.graphAnnouncer = GraphAnnouncer(
+            verbosity: .standard, coalesceWindow: 60, post: { text, _ in posts.append(text) })
+
+        state.setGraphVerbosity(.terse)
+        state.graphDiagramSelect(try XCTUnwrap(ids["a"]))
+        state.graphAnnouncer.flushForTests()
+        state.setGraphVerbosity(.standard)
+        state.graphDiagramSelect(try XCTUnwrap(ids["b"]))
+        state.graphAnnouncer.flushForTests()
+
+        XCTAssertEqual(posts, ["a", "b, 1 links in, 1 links out"])
+        // The save the switch scheduled lands before the vault goes.
+        if let opened = state.currentVaultURL { await state.graphConfigSaveTasks[opened]?.value }
+    }
+
     /// An event that renders to nothing (a node with no visible
     /// neighbours) is not posted.
     func testEmptyRenderIsNotPosted() {

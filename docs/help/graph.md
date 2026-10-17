@@ -26,7 +26,7 @@ The **Table and Diagram** are two views of the *same* graph under the *same* bac
 ## Filters, presets, groups
 
 - **Filters** — a name query (case/diacritic-insensitive substring) plus **Attachments** (include attachment nodes), **Unresolved** (include ghosts), and **Orphans only** (notes with no links either way). They live in the **filter bar** and in the Diagram **inspector** (the panel toggle at the trailing edge, available in both modes). Both the Table and the Diagram apply the same name predicate and backend toggles, so they always show the same node set.
-- **Presets** — one-command answers to the questions people actually ask a graph: **Orphaned notes**, **Unresolved links**, **Most linked**. They're **Command-Palette commands** (search "Graph:"), each of which parameterizes the same Table/Diagram — not a separate surface.
+- **Presets** — one-command answers to the questions people actually ask a graph: **Orphaned notes**, **Unresolved links**, **Most linked**. They're in **View ▸ Graph**, beside **Open Graph**, and in the Command Palette (search "Graph:"); each parameterizes the same Table/Diagram — not a separate surface.
 - **Groups** — colour rules in the inspector that tint matching nodes **in the Diagram**: a query → a palette colour **plus a ring style** (solid / dashed / double / dotted). **First match wins** (Obsidian parity). Colour is never the *only* signal — a grouped node's ring is heavier than an ungrouped one, distinguished by a dash pattern (dashed / dotted) or extra width (double), so membership reads without relying on colour (WCAG 1.4.1). The palette's eight slots each clear APCA contrast against the graph background in both light and dark.
 
 ## Display and forces (Diagram)
@@ -68,6 +68,10 @@ A pure-VoiceOver pass across the projections:
 
 Every graph announcement routes through one graph announcer.
 
+## Announcement verbosity
+
+**View ▸ Graph ▸ Verbosity** sets how much a graph row says when VoiceOver reads it on the Diagram and in the Connections leaf (the Table reads its cells): **Terse** reads the note's name alone, while **Standard** and **Verbose** read the full row — the name, its links in and out, or an unresolved link's references. The checked item is the level in force, and the Command Palette offers the same three (search "Graph Verbosity"). Changing the level announces nothing itself; the next row you move to is read at the new level. The level is saved per vault in `.slate/graph.json` and restored when the vault opens. **⌃⌘I "Where am I?"** always reads the full row, whatever the level.
+
 ## Reduce Motion
 
 With Reduce Motion on, the Diagram skips the settle animation entirely: the layout is computed to completion and drawn in a single step, with no drift.
@@ -84,7 +88,8 @@ Your graph-tab settings persist per vault in `.slate/graph.json` (schema v1):
   "display": { "arrows": false, "textFadeZoom": 0.55, "nodeSizeMultiplier": 1.0, "linkThickness": 1.0 },
   "forces": { "center": 0.5, "repel": 0.5, "link": 0.5, "linkDistance": 0.5 },
   "mode": "table",
-  "connectionsDepth": 1
+  "connectionsDepth": 1,
+  "verbosity": "standard"
 }
 ```
 
