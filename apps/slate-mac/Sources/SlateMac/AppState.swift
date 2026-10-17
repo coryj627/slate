@@ -5082,11 +5082,20 @@ final class AppState: ObservableObject {
     struct SidebarOrganizationState: Equatable {
         var prefs = SidebarOrganizationPrefs()
         var pins = SidebarPins()
+        /// #1332 (D6): the shortcut SLOTS, in authored order — one target
+        /// may fill several — up to the decode cap.
         var shortcuts: [SidebarShortcut] = []
         /// FL-07 review: the RAW authored entry count (reserved kinds and
         /// duplicates included) — the shape guard's 200-entry ceiling
         /// applies to this, so capacity refusal must too.
         var shortcutRawEntryCount = 0
+        /// #1332: slots the file holds past the decode cap — not shown,
+        /// counted on the Shortcuts section's status line.
+        var shortcutOverflowCount = 0
+
+        /// Every slot the file holds, shown or not: what the 64-slot cap
+        /// gates Add on.
+        var shortcutSlotCount: Int { shortcuts.count + shortcutOverflowCount }
     }
 
     @Published private(set) var sidebarOrganization = SidebarOrganizationState()
@@ -5288,11 +5297,7 @@ final class AppState: ObservableObject {
         }
         let organization: SidebarOrganizationState
         if notice == nil {
-            let decoded = SidebarOrganizationSchema.decode(root: recovered.root)
-            organization = SidebarOrganizationState(
-                prefs: decoded.prefs, pins: decoded.pins,
-                shortcuts: decoded.shortcuts,
-                shortcutRawEntryCount: decoded.shortcutRawCount)
+            organization = SidebarOrganizationState(decoding: recovered.root)
         } else {
             organization = SidebarOrganizationState()
         }
@@ -5462,6 +5467,13 @@ final class AppState: ObservableObject {
 
     static let sidebarGroupedSortInertReason =
         "Date grouping sorts newest first. Turn off Group by Date to use this order."
+
+    /// Add's refusal at a shortcut ceiling: the 64-slot decode cap
+    /// (#1332 — a slot past it would never show) or the shape guard's
+    /// 200-entry raw ceiling.
+    static func sidebarShortcutCapacityReason(limit: Int) -> String {
+        "Shortcut limit reached (\(limit)). Remove one to add another."
+    }
 
     private func mutateSidebarOrganization(
         announce announcement: String?,
@@ -5712,11 +5724,7 @@ final class AppState: ObservableObject {
                 // not just this window's optimistic reflect (round-4
                 // finding 1). Queued optimistic successors are preserved
                 // because only the tail publishes.
-                let decoded = SidebarOrganizationSchema.decode(root: finalRoot)
-                let organization = SidebarOrganizationState(
-                    prefs: decoded.prefs, pins: decoded.pins,
-                    shortcuts: decoded.shortcuts,
-                    shortcutRawEntryCount: decoded.shortcutRawCount)
+                let organization = SidebarOrganizationState(decoding: finalRoot)
                 if organization != self.sidebarOrganization {
                     self.sidebarOrganization = organization
                 }
@@ -6114,19 +6122,33 @@ final class AppState: ObservableObject {
             else {
                 throw sidebarActionFailure("Already in Shortcuts.")
             }
+            // #1332: a slot past the decode cap would never show.
+            let slotCap = Self.sidebarShortcutCapacityReason(
+                limit: SidebarOrganizationSchema.maxDecodedShortcuts)
+            guard
+                sidebarOrganization.shortcutSlotCount
+                    < SidebarOrganizationSchema.maxDecodedShortcuts
+            else {
+                throw sidebarActionFailure(slotCap)
+            }
             guard
                 sidebarOrganization.shortcutRawEntryCount
                     < SidebarOrganizationSchema.maxShortcuts
             else {
                 throw sidebarActionFailure(
-                    "Shortcut limit reached "
-                        + "(\(SidebarOrganizationSchema.maxShortcuts)). "
-                        + "Remove one to add another.")
+                    Self.sidebarShortcutCapacityReason(
+                        limit: SidebarOrganizationSchema.maxShortcuts))
             }
             try mutateSidebarOrganization(announce: "Added to Shortcuts.") {
                 root in
-                SidebarOrganizationSchema.addShortcut(
-                    &root, kind: kind.rawValue, path: target)
+                // The cap holds under the lock too: another writer's
+                // slots count.
+                guard
+                    SidebarOrganizationSchema.addShortcutWithinCap(
+                        &root, kind: kind.rawValue, path: target)
+                else {
+                    throw SidebarOrganizationConflictError(reason: slotCap)
+                }
             } reflect: { state in
                 let shortcut = SidebarShortcut(kind: kind, path: target)
                 if !state.shortcuts.contains(shortcut) {
@@ -6148,16 +6170,19 @@ final class AppState: ObservableObject {
             else {
                 throw sidebarActionFailure("Not in Shortcuts.")
             }
+            // Membership: the tree row's target leaves Shortcuts, so every
+            // slot it fills goes (#1332: a target can fill several).
             try mutateSidebarOrganization(announce: "Removed from Shortcuts.") {
                 root in
                 SidebarOrganizationSchema.removeShortcut(
                     &root, kind: kind.rawValue, path: target)
             } reflect: { state in
                 let shortcut = SidebarShortcut(kind: kind, path: target)
-                if state.shortcuts.contains(shortcut) {
+                let slots = state.shortcuts.filter { $0 == shortcut }.count
+                if slots > 0 {
                     state.shortcuts.removeAll { $0 == shortcut }
                     state.shortcutRawEntryCount =
-                        max(0, state.shortcutRawEntryCount - 1)
+                        max(0, state.shortcutRawEntryCount - slots)
                 }
             }
 
@@ -6835,21 +6860,34 @@ final class AppState: ObservableObject {
             postMutationAnnouncement("Already in Shortcuts.")
             return
         }
+        // #1332: the catalog add's decode cap, here too.
+        let slotCap = Self.sidebarShortcutCapacityReason(
+            limit: SidebarOrganizationSchema.maxDecodedShortcuts)
+        guard
+            sidebarOrganization.shortcutSlotCount
+                < SidebarOrganizationSchema.maxDecodedShortcuts
+        else {
+            postMutationAnnouncement(slotCap)
+            return
+        }
         guard
             sidebarOrganization.shortcutRawEntryCount
                 < SidebarOrganizationSchema.maxShortcuts
         else {
             postMutationAnnouncement(
-                "Shortcut limit reached "
-                    + "(\(SidebarOrganizationSchema.maxShortcuts)). "
-                    + "Remove one to add another.")
+                Self.sidebarShortcutCapacityReason(
+                    limit: SidebarOrganizationSchema.maxShortcuts))
             return
         }
         do {
             try mutateSidebarOrganization(announce: "Added to Shortcuts.") {
                 root in
-                SidebarOrganizationSchema.addShortcut(
-                    &root, kind: kind.rawValue, path: path)
+                guard
+                    SidebarOrganizationSchema.addShortcutWithinCap(
+                        &root, kind: kind.rawValue, path: path)
+                else {
+                    throw SidebarOrganizationConflictError(reason: slotCap)
+                }
             } reflect: { state in
                 if !state.shortcuts.contains(shortcut) {
                     state.shortcuts.append(shortcut)
@@ -7083,39 +7121,66 @@ final class AppState: ObservableObject {
 
     /// Section-row Remove (the catalog's remove command targets the TREE
     /// selection; section rows carry their own identity).
-    func removeSidebarShortcutDirect(_ shortcut: SidebarShortcut) throws {
-        try mutateSidebarOrganization(announce: "Removed from Shortcuts.") {
-            root in
-            SidebarOrganizationSchema.removeShortcut(
-                &root, kind: shortcut.kind.rawValue, path: shortcut.path)
+    /// #1332 (D6): a row is its SLOT, so this removes that one slot — never
+    /// the first slot its target fills, never every one — and announces
+    /// the name its row was read by, captured BEFORE it leaves: once the
+    /// second of two slots on one note goes, the first reads bare, and a
+    /// name composed afterwards would name the wrong row (AR-58's mac half).
+    func removeSidebarShortcutDirect(slot: Int) throws {
+        let shortcuts = sidebarOrganization.shortcuts
+        guard
+            let occurrence = SidebarShortcut.occurrence(
+                ofSlot: slot, in: shortcuts)
+        else {
+            throw sidebarActionFailure("No shortcut \(slot).")
+        }
+        let target = shortcuts[slot - 1]
+        let name = SidebarShortcutRow.rows(for: shortcuts)[slot - 1].spokenName
+        try mutateSidebarOrganization(
+            announce: "Removed from Shortcuts: \(name).") { root in
+            SidebarOrganizationSchema.removeShortcutSlot(
+                &root, kind: target.kind.rawValue, path: target.path,
+                occurrence: occurrence)
         } reflect: { state in
-            if state.shortcuts.contains(shortcut) {
-                state.shortcuts.removeAll { $0 == shortcut }
-                state.shortcutRawEntryCount =
-                    max(0, state.shortcutRawEntryCount - 1)
-            }
+            let index = slot - 1
+            guard state.shortcuts.indices.contains(index),
+                state.shortcuts[index] == target
+            else { return }
+            state.shortcuts.remove(at: index)
+            state.shortcutRawEntryCount =
+                max(0, state.shortcutRawEntryCount - 1)
+            // The first slot past the decode cap moves into view; the
+            // tail publish reads it from the file.
+            state.shortcutOverflowCount = max(0, state.shortcutOverflowCount - 1)
         }
     }
 
     /// FL3-3.2 keyboard-parity reorder (decision 15): swap the shortcut
     /// with its visible neighbor. The raw write hops reserved entries the
     /// same way, so authored order stays coherent for both views.
-    func moveSidebarShortcut(_ shortcut: SidebarShortcut, delta: Int) {
+    /// #1332: by SLOT — moving the second of two slots on one note moves
+    /// the second; a target-keyed move found the first.
+    func moveSidebarShortcut(slot: Int, delta: Int) {
+        let shortcuts = sidebarOrganization.shortcuts
         guard delta == 1 || delta == -1,
-            let index = sidebarOrganization.shortcuts.firstIndex(of: shortcut),
-            sidebarOrganization.shortcuts.indices.contains(index + delta)
+            let occurrence = SidebarShortcut.occurrence(
+                ofSlot: slot, in: shortcuts),
+            shortcuts.indices.contains(slot - 1 + delta)
         else { return }
+        let target = shortcuts[slot - 1]
         try? mutateSidebarOrganization(
             announce: delta == -1 ? "Moved up." : "Moved down."
         ) { root in
             SidebarOrganizationSchema.moveShortcut(
-                &root, kind: shortcut.kind.rawValue, path: shortcut.path,
-                delta: delta)
+                &root, kind: target.kind.rawValue, path: target.path,
+                occurrence: occurrence, delta: delta)
         } reflect: { state in
-            guard let liveIndex = state.shortcuts.firstIndex(of: shortcut),
-                state.shortcuts.indices.contains(liveIndex + delta)
+            let index = slot - 1
+            guard state.shortcuts.indices.contains(index),
+                state.shortcuts[index] == target,
+                state.shortcuts.indices.contains(index + delta)
             else { return }
-            state.shortcuts.swapAt(liveIndex, liveIndex + delta)
+            state.shortcuts.swapAt(index, index + delta)
         }
     }
 
@@ -10329,12 +10394,8 @@ final class AppState: ObservableObject {
                 }
                 let organization: SidebarOrganizationState
                 if notice == nil {
-                    let decoded = SidebarOrganizationSchema.decode(
-                        root: refreshed.root)
                     organization = SidebarOrganizationState(
-                        prefs: decoded.prefs, pins: decoded.pins,
-                        shortcuts: decoded.shortcuts,
-                        shortcutRawEntryCount: decoded.shortcutRawCount)
+                        decoding: refreshed.root)
                 } else {
                     organization = SidebarOrganizationState()
                 }
@@ -10351,11 +10412,7 @@ final class AppState: ObservableObject {
         sidebarPinPruneLedger.reset()
         let organization: SidebarOrganizationState
         if sidebarVaultPrefsNotice == nil {
-            let decoded = SidebarOrganizationSchema.decode(root: result.root)
-            organization = SidebarOrganizationState(
-                prefs: decoded.prefs, pins: decoded.pins,
-                shortcuts: decoded.shortcuts,
-                shortcutRawEntryCount: decoded.shortcutRawCount)
+            organization = SidebarOrganizationState(decoding: result.root)
         } else {
             organization = SidebarOrganizationState()
         }
@@ -10568,11 +10625,7 @@ final class AppState: ObservableObject {
             // misrepresent it (round-8 finding 2).
             let organization: SidebarOrganizationState
             if adoptedNotice == nil {
-                let decoded = SidebarOrganizationSchema.decode(root: adoptedRoot)
-                organization = SidebarOrganizationState(
-                    prefs: decoded.prefs, pins: decoded.pins,
-                    shortcuts: decoded.shortcuts,
-                    shortcutRawEntryCount: decoded.shortcutRawCount)
+                organization = SidebarOrganizationState(decoding: adoptedRoot)
             } else {
                 organization = SidebarOrganizationState()
             }
