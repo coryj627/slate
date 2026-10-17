@@ -25,8 +25,10 @@ matched by both trigger lists. It reads:
 * `docs/...` literals in the scripts the workflow runs.
 
 A directory path (no file extension) requires the whole folder to be covered.
-A chain the check cannot resolve fails the check, naming the file, so a new
-kind of dynamic read is reviewed rather than silently missed.
+A path built from a helper's parameter is resolved through every call of
+that helper in the same file; a call whose argument is not a string literal
+or same-file constant, or a helper with no call, fails the check, naming the
+file, so a new kind of dynamic read is reviewed rather than silently missed.
 
 Exit 0 when every path is covered and both trigger lists agree; exit 1 with
 the uncovered paths otherwise.
@@ -56,6 +58,68 @@ _PLAN_RELATIVE = re.compile(r'"(\d\d_[A-Za-z0-9_-]+(?:\.md|/[^"\\\s]+))"')
 _MAP_LINK = re.compile(r'(?<![\w/.])((?:\.\./)?(?:reports|specs)/[A-Za-z0-9_./-]+\.md|\.\./\d\d_[A-Za-z0-9_-]+\.md)')
 _SCRIPT_RUN = re.compile(r'python3\s+(scripts/[A-Za-z0-9_./-]+\.py)')
 _SCRIPT_DOCS = re.compile(r'["\'](docs/(?:plans|help)(?:/[^"\'\s]*)?)["\']')
+
+
+_METHOD = re.compile(r"(\w+)\s*\(([^()]*)\)\s*(?:=>|\{)")
+
+
+def _call_arguments(text: str, open_paren: int) -> list[str] | None:
+    """Split a call's arguments at top-level commas, from just after `(`."""
+    depth, quote, current, out = 0, False, [], []
+    for i in range(open_paren, len(text)):
+        ch = text[i]
+        if quote:
+            current.append(ch)
+            if ch == '"' and text[i - 1] != "\\":
+                quote = False
+            continue
+        if ch == '"':
+            quote = True
+            current.append(ch)
+        elif ch in "([{":
+            depth += 1
+            current.append(ch)
+        elif ch in ")]}":
+            if depth == 0:
+                out.append("".join(current).strip())
+                return [a for a in out if a] if out != [""] else []
+            depth -= 1
+            current.append(ch)
+        elif ch == "," and depth == 0:
+            out.append("".join(current).strip())
+            current = []
+        else:
+            current.append(ch)
+    return None
+
+
+def _helper_arguments(text: str, chain_at: int, parameter: str, consts: dict[str, str]) -> list[str] | None:
+    """Resolve every argument passed for `parameter` to the helper that
+    builds a docs path from it, or None if any cannot be resolved."""
+    helper = None
+    for method in _METHOD.finditer(text, 0, chain_at):
+        params = [p.strip() for p in method.group(2).split(",") if p.strip()]
+        for index, param in enumerate(params):
+            if re.fullmatch(r"(?:\w+\s+)*string\??\s+" + re.escape(parameter), param):
+                helper = (method.group(1), index, method.start(), method.end())
+    if helper is None:
+        return None
+    name, index, start, end = helper
+    values: list[str] = []
+    for call in re.finditer(r"\b" + re.escape(name) + r"\s*\(", text):
+        if start <= call.start() < end:
+            continue
+        args = _call_arguments(text, call.end())
+        if args is None or index >= len(args):
+            return None
+        literal = re.fullmatch(r'"([^"\\]*)"', args[index])
+        if literal:
+            values.append(literal.group(1))
+        elif args[index] in consts:
+            values.append(consts[args[index]])
+        else:
+            return None
+    return values or None
 
 
 def trigger_lists(workflow_text: str) -> dict[str, list[str]]:
@@ -152,25 +216,32 @@ def source_reads(repo: Path) -> tuple[dict[str, set[str]], list[str]]:
         consts = dict(_CONST.findall(text))
         for match in _CHAIN.finditer(text):
             parts = ["docs", match.group(1)]
+            args = _CHAIN_ARG.findall(match.group(2))
             dynamic = None
-            for literal, name in _CHAIN_ARG.findall(match.group(2)):
+            for position, (literal, name) in enumerate(args):
                 value = literal if literal else consts.get(name)
                 if value is None:
-                    dynamic = name
+                    dynamic = (name, position == len(args) - 1)
                     break
                 parts.extend(segment for segment in value.split("/") if segment)
             if dynamic is None:
                 reads.setdefault("/".join(parts), set()).add(rel)
-            elif not _PLAN_RELATIVE.search(text) and not _DOCS_LITERAL.search(text):
-                # A helper such as ReadPlan(string relative) builds the rest
-                # at run time. Its callers pass plan-relative literals or
-                # constants (`SpecDoc = "18_windows_port/specs/..."`), which
-                # the literal scan below collects. A file with no such
-                # literal reads something this check cannot see.
+                continue
+            # The rest of the path is a helper's parameter, as in
+            # ReadPlan(string relative) => Path.Combine(..., "docs", "plans",
+            # relative). Every call of that helper in this file must pass a
+            # literal or a same-file constant; each one is a read.
+            name, last = dynamic
+            values = _helper_arguments(text, match.start(), name, consts) if last else None
+            if values is None:
                 unresolved.append(
-                    f"{rel}: a docs path is built from `{dynamic}` at run time and the file names no "
-                    "plan-relative path; give the helper's argument a plan-relative constant"
+                    f"{rel}: a docs path is built from `{name}` at run time and not every call of its helper "
+                    "in this file passes a string literal or constant; resolve it, or read the document by name"
                 )
+                continue
+            for value in values:
+                path = parts + [segment for segment in value.split("/") if segment]
+                reads.setdefault("/".join(path), set()).add(rel)
         for path in _DOCS_LITERAL.findall(text):
             reads.setdefault(path.split("#", 1)[0], set()).add(rel)
         for relative in _PLAN_RELATIVE.findall(text):

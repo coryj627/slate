@@ -875,7 +875,9 @@ jobs:
   # This proves the list is complete: every docs path the lane reads (in
   # the Windows sources, the trigger ledger's decisions, the AT navigation
   # map's links and the scripts this workflow runs) must start the lane, so
-  # a docs-only change to one of them can never skip it.
+  # a docs-only change to one of them can never skip it. It stands on its
+  # own: its red check is the signal, and the gate's needs stay as the
+  # runner tests pin them (ci/windows-runner/tests/Workflows.Tests.ps1).
   docs-trigger:
     name: windows docs trigger census
     runs-on: ubuntu-latest
@@ -892,7 +894,7 @@ jobs:
 
   gate:
     name: build + test (windows x64)
-    needs: [route, docs-trigger, rust-tests, windows, windows-model, flaui]
+    needs: [route, rust-tests, windows, windows-model, flaui]
     if: ${{ always() }}
     runs-on: ubuntu-latest
     timeout-minutes: 5
@@ -908,7 +910,7 @@ jobs:
           MODEL_0_POOL: ${{ needs.route.outputs.model-0-pool }}
           MODEL_1_POOL: ${{ needs.route.outputs.model-1-pool }}
         run: |
-          if [ "${{ needs.docs-trigger.result }}" != "success" ] || [ "${{ needs.rust-tests.result }}" != "success" ] || [ "${{ needs.windows.result }}" != "success" ] || [ "${{ needs.windows-model.result }}" != "success" ] || [ "${{ needs.flaui.result }}" != "success" ]; then
-            echo "::error::docs-trigger=${{ needs.docs-trigger.result }} rust-tests=${{ needs.rust-tests.result }} app=${{ needs.windows.result }} model=${{ needs.windows-model.result }} flaui=${{ needs.flaui.result }} route=$ROUTE_RESULT router-attempt='$ROUTER_ATTEMPT' attempt=${{ github.run_attempt }} pools: rust=$RUST_POOL app=$APP_POOL model-0=$MODEL_0_POOL model-1=$MODEL_1_POOL"
+          if [ "${{ needs.rust-tests.result }}" != "success" ] || [ "${{ needs.windows.result }}" != "success" ] || [ "${{ needs.windows-model.result }}" != "success" ] || [ "${{ needs.flaui.result }}" != "success" ]; then
+            echo "::error::rust-tests=${{ needs.rust-tests.result }} app=${{ needs.windows.result }} model=${{ needs.windows-model.result }} flaui=${{ needs.flaui.result }} route=$ROUTE_RESULT router-attempt='$ROUTER_ATTEMPT' attempt=${{ github.run_attempt }} pools: rust=$RUST_POOL app=$APP_POOL model-0=$MODEL_0_POOL model-1=$MODEL_1_POOL"
             exit 1
           fi

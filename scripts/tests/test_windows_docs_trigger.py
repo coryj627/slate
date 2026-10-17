@@ -122,6 +122,48 @@ class CheckFacts(unittest.TestCase):
             problems = trigger.check(make_repo(Path(tmp), source=source))
         self.assertTrue(any("built from `r` at run time" in p for p in problems), problems)
 
+    def test_a_dynamic_read_beside_an_unrelated_plan_literal_still_fails(self):
+        # Codoki on #1459: an unrelated plan-relative literal in the same file
+        # must not hide a read the check cannot resolve.
+        source = textwrap.dedent(
+            """\
+            private const string Other = "35_graph_contracts.md";
+            string Read(string r) => File.ReadAllText(Path.Combine(Root, "docs", "plans", r));
+            """
+        )
+        with tempfile.TemporaryDirectory() as tmp:
+            problems = trigger.check(make_repo(Path(tmp), source=source))
+        self.assertTrue(any("built from `r` at run time" in p for p in problems), problems)
+
+    def test_a_helper_called_with_an_unresolvable_argument_fails(self):
+        source = textwrap.dedent(
+            """\
+            private const string SpecDoc = "18_windows_port/specs/w1_spec.md";
+            static string ReadPlan(string relative) =>
+                File.ReadAllText(Path.Combine(Root, "docs", "plans", relative));
+            string a = ReadPlan(SpecDoc);
+            string b = ReadPlan(Compute());
+            """
+        )
+        with tempfile.TemporaryDirectory() as tmp:
+            problems = trigger.check(make_repo(Path(tmp), source=source))
+        self.assertTrue(any("built from `relative` at run time" in p for p in problems), problems)
+
+    def test_every_resolved_call_of_a_helper_is_a_read(self):
+        source = textwrap.dedent(
+            """\
+            private const string SpecDoc = "18_windows_port/specs/w1_spec.md";
+            static string ReadPlan(string relative) =>
+                File.ReadAllText(Path.Combine(Root, "docs", "plans", relative));
+            string a = ReadPlan(SpecDoc);
+            string b = ReadPlan("44_new_plan/notes.md");
+            """
+        )
+        with tempfile.TemporaryDirectory() as tmp:
+            problems = trigger.check(make_repo(Path(tmp), source=source))
+        self.assertTrue(any("docs/plans/44_new_plan/notes.md" in p for p in problems), problems)
+        self.assertFalse(any("w1_spec.md" in p for p in problems), problems)
+
     def test_ledger_decisions_and_map_links_must_be_covered(self):
         with tempfile.TemporaryDirectory() as tmp:
             problems = trigger.check(make_repo(Path(tmp)))
