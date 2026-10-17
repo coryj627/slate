@@ -276,8 +276,6 @@ public sealed class MacCatalogParityTests
                 "A Windows history preference with no mac command id.",
             ["slate.editor.reloadBibliography"] =
                 "Windows exposes an explicit bibliography reload; mac reloads implicitly.",
-            ["slate.sidebar.refresh"] =
-                "Windows exposes an explicit sidebar refresh; mac refreshes implicitly.",
             ["slate.sidebar.clearFilter"] =
                 "Windows exposes clearing the filter as its own verb.",
             ["slate.sidebar.toggleTags"] =
