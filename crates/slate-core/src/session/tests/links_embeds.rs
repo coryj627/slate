@@ -653,7 +653,9 @@ fn resolve_embed_returns_full_note_with_body_only() {
     });
     session.scan_initial(&CancelToken::new()).unwrap();
 
-    let resolution = session.resolve_embed("host.md", "target", None).unwrap();
+    let resolution = session
+        .resolve_embed("host.md", "target", None, &CancelToken::new())
+        .unwrap();
     match resolution {
         crate::EmbedResolution::FullNote {
             target_path,
@@ -682,7 +684,9 @@ fn resolve_embed_section_runs_until_next_same_level_heading() {
     });
     session.scan_initial(&CancelToken::new()).unwrap();
 
-    let resolution = session.resolve_embed("host.md", "target#H2", None).unwrap();
+    let resolution = session
+        .resolve_embed("host.md", "target#H2", None, &CancelToken::new())
+        .unwrap();
     match resolution {
         crate::EmbedResolution::Section { heading, text, .. } => {
             assert_eq!(heading, "H2");
@@ -709,7 +713,7 @@ fn resolve_embed_block_returns_anchored_byte_range() {
     session.scan_initial(&CancelToken::new()).unwrap();
 
     let resolution = session
-        .resolve_embed("host.md", "target^my-block", None)
+        .resolve_embed("host.md", "target^my-block", None, &CancelToken::new())
         .unwrap();
     match resolution {
         crate::EmbedResolution::Block { block_id, text, .. } => {
@@ -738,7 +742,7 @@ fn resolve_embed_obsidian_block_ref_returns_anchored_byte_range() {
     session.scan_initial(&CancelToken::new()).unwrap();
 
     let resolution = session
-        .resolve_embed("host.md", "target#^my-block", None)
+        .resolve_embed("host.md", "target#^my-block", None, &CancelToken::new())
         .unwrap();
     match resolution {
         crate::EmbedResolution::Block { block_id, text, .. } => {
@@ -761,7 +765,9 @@ fn resolve_embed_image_returns_bytes_and_mime() {
     });
     session.scan_initial(&CancelToken::new()).unwrap();
 
-    let resolution = session.resolve_embed("host.md", "cover.png", None).unwrap();
+    let resolution = session
+        .resolve_embed("host.md", "cover.png", None, &CancelToken::new())
+        .unwrap();
     match resolution {
         crate::EmbedResolution::Image {
             target_path,
@@ -783,7 +789,9 @@ fn resolve_embed_target_not_found_surfaces_unresolved() {
         p.write_file("host.md", b"![[missing]]\n").unwrap();
     });
     session.scan_initial(&CancelToken::new()).unwrap();
-    let r = session.resolve_embed("host.md", "missing", None).unwrap();
+    let r = session
+        .resolve_embed("host.md", "missing", None, &CancelToken::new())
+        .unwrap();
     assert!(matches!(
         r,
         crate::EmbedResolution::Unresolved {
@@ -801,7 +809,7 @@ fn resolve_embed_heading_not_found_carries_target_path() {
     });
     session.scan_initial(&CancelToken::new()).unwrap();
     let r = session
-        .resolve_embed("host.md", "target#Missing", None)
+        .resolve_embed("host.md", "target#Missing", None, &CancelToken::new())
         .unwrap();
     match r {
         crate::EmbedResolution::Unresolved {
@@ -842,6 +850,7 @@ fn resolve_embed_markdown_image_carries_alt_text() {
             "host.md",
             "attachments/pie.png",
             Some("A simple line drawing of a pie".to_string()),
+            &CancelToken::new(),
         )
         .unwrap();
     match resolution {
@@ -886,7 +895,12 @@ fn wikilink_image_alias_becomes_alt_when_threaded() {
     assert_eq!(img.display_text.as_deref(), Some("A captioned photo"));
 
     let resolution = session
-        .resolve_embed("host.md", "photo.png", img.display_text.clone())
+        .resolve_embed(
+            "host.md",
+            "photo.png",
+            img.display_text.clone(),
+            &CancelToken::new(),
+        )
         .unwrap();
     match resolution {
         crate::EmbedResolution::Image { alt, .. } => {
@@ -916,7 +930,9 @@ fn nested_image_embeds_carry_per_occurrence_alt() {
     });
     session.scan_initial(&CancelToken::new()).unwrap();
 
-    let resolution = session.resolve_embed("host.md", "inner", None).unwrap();
+    let resolution = session
+        .resolve_embed("host.md", "inner", None, &CancelToken::new())
+        .unwrap();
     let crate::EmbedResolution::FullNote { nested, .. } = resolution else {
         panic!("expected FullNote");
     };
@@ -949,7 +965,10 @@ fn resolve_embed_wikilink_image_without_alt_has_none() {
         p.write_file("host.md", b"![[cover.png]]\n").unwrap();
     });
     session.scan_initial(&CancelToken::new()).unwrap();
-    match session.resolve_embed("host.md", "cover.png", None).unwrap() {
+    match session
+        .resolve_embed("host.md", "cover.png", None, &CancelToken::new())
+        .unwrap()
+    {
         crate::EmbedResolution::Image { alt, .. } => assert_eq!(alt, None),
         other => panic!("expected Image, got {other:?}"),
     }
@@ -963,7 +982,7 @@ fn resolve_embed_block_not_found_carries_block_id() {
     });
     session.scan_initial(&CancelToken::new()).unwrap();
     let r = session
-        .resolve_embed("host.md", "target^missing", None)
+        .resolve_embed("host.md", "target^missing", None, &CancelToken::new())
         .unwrap();
     match r {
         crate::EmbedResolution::Unresolved {
@@ -987,7 +1006,9 @@ fn resolve_embed_recursion_bottoms_out_at_depth_three() {
     });
     session.scan_initial(&CancelToken::new()).unwrap();
 
-    let r = session.resolve_embed("host.md", "a", None).unwrap();
+    let r = session
+        .resolve_embed("host.md", "a", None, &CancelToken::new())
+        .unwrap();
     // a (depth 0) → FullNote with nested b (depth 1) →
     // FullNote with nested c (depth 2) → FullNote with nested
     // d (depth 3) → DepthLimitReached.
@@ -1047,7 +1068,9 @@ fn nested_embed_byte_offset_lands_inside_parent_text() {
     });
     session.scan_initial(&CancelToken::new()).unwrap();
 
-    let r = session.resolve_embed("host.md", "a", None).unwrap();
+    let r = session
+        .resolve_embed("host.md", "a", None, &CancelToken::new())
+        .unwrap();
     let (text, nested) = match r {
         crate::EmbedResolution::FullNote { text, nested, .. } => (text, nested),
         other => panic!("expected FullNote, got {other:?}"),
@@ -1112,7 +1135,10 @@ fn preview_text_budget_preserves_utf8_boundaries_and_full_resolver_is_lossless()
         crate::EmbedResolution::FullNote { text, .. } => assert_eq!(text, prefix),
         other => panic!("expected bounded FullNote, got {other:?}"),
     }
-    match session.resolve_embed("host.md", "target", None).unwrap() {
+    match session
+        .resolve_embed("host.md", "target", None, &CancelToken::new())
+        .unwrap()
+    {
         crate::EmbedResolution::FullNote { text, .. } => assert_eq!(text, expected),
         other => panic!("expected lossless FullNote, got {other:?}"),
     }
@@ -1160,7 +1186,9 @@ fn preview_text_budget_is_cumulative_across_nested_siblings() {
     assert!(preview.truncated);
     assert!(resolved_text_bytes(&preview.resolution) <= crate::MAX_EMBED_PREVIEW_TEXT_BYTES);
 
-    let full = session.resolve_embed("host.md", "root", None).unwrap();
+    let full = session
+        .resolve_embed("host.md", "root", None, &CancelToken::new())
+        .unwrap();
     assert!(resolved_text_bytes(&full) > crate::MAX_EMBED_PREVIEW_TEXT_BYTES);
 }
 
@@ -1185,7 +1213,9 @@ fn preview_image_budget_is_cumulative_across_nested_siblings() {
         resolved_image_bytes(&preview.resolution) <= crate::MAX_EMBED_PREVIEW_IMAGE_BYTES as usize
     );
 
-    let full = session.resolve_embed("host.md", "root", None).unwrap();
+    let full = session
+        .resolve_embed("host.md", "root", None, &CancelToken::new())
+        .unwrap();
     assert_eq!(resolved_image_bytes(&full), image.len() * 2);
 }
 
@@ -1252,7 +1282,9 @@ fn nested_embed_spans_cover_exact_authored_aliases_unicode_and_markdown_images()
     });
     session.scan_initial(&CancelToken::new()).unwrap();
 
-    let resolved = session.resolve_embed("host.md", "parent", None).unwrap();
+    let resolved = session
+        .resolve_embed("host.md", "parent", None, &CancelToken::new())
+        .unwrap();
     let (text, nested) = match resolved {
         crate::EmbedResolution::FullNote { text, nested, .. } => (text, nested),
         other => panic!("expected FullNote, got {other:?}"),
@@ -1785,4 +1817,145 @@ fn a_pre_cancelled_preview_touches_nothing() {
         other => panic!("expected Cancelled, got {other:?}"),
     }
     assert_eq!(provider.reads.load(std::sync::atomic::Ordering::SeqCst), 0);
+}
+
+/// #1287 (AR-24): `resolve_embed` — the unbounded resolver mac's two embed
+/// walks call — takes the caller's token like its preview siblings. A token
+/// already cancelled (a batch or request retired before its worker ran)
+/// returns `Cancelled` before the walk reads the target: no index lookup,
+/// no read.
+#[test]
+fn a_pre_cancelled_resolve_embed_returns_cancelled_before_reading_the_target() {
+    let never = CancelToken::new();
+    let (_tmp, session, provider) = nested_preview_vault(&never, u32::MAX);
+    let cancelled = CancelToken::new();
+    cancelled.cancel();
+
+    crate::session::EMBED_CANDIDATE_ROWS_VISITED.with(|rows| rows.set(0));
+    for target in ["root", "root#Part", "root^blk", "leaf0", "pic.png"] {
+        match session.resolve_embed("host.md", target, None, &cancelled) {
+            Err(VaultError::Cancelled) => {}
+            other => panic!("{target}: expected Cancelled, got {other:?}"),
+        }
+    }
+    assert_eq!(
+        provider.reads.load(std::sync::atomic::Ordering::SeqCst),
+        0,
+        "a pre-cancelled resolve read its target"
+    );
+    assert_eq!(
+        crate::session::EMBED_CANDIDATE_ROWS_VISITED.with(std::cell::Cell::get),
+        0,
+        "a pre-cancelled resolve looked its target up in the index"
+    );
+}
+
+/// #1287: a live token resolves exactly as the tokenless resolver did —
+/// the whole tree, unbounded, every nested note read once.
+#[test]
+fn a_resolve_embed_with_a_live_token_resolves_as_before() {
+    let never = CancelToken::new();
+    let (_tmp, session, provider) = nested_preview_vault(&never, u32::MAX);
+
+    let resolution = session
+        .resolve_embed("host.md", "root", None, &CancelToken::new())
+        .unwrap();
+    let crate::EmbedResolution::FullNote {
+        target_path,
+        nested,
+        ..
+    } = &resolution
+    else {
+        panic!("expected FullNote, got {resolution:?}");
+    };
+    assert_eq!(target_path, "root.md");
+    assert_eq!(nested.len(), 20);
+    for (n, item) in nested.iter().enumerate() {
+        assert_eq!(item.raw_target, format!("leaf{n}"));
+        match &item.resolution {
+            crate::EmbedResolution::FullNote { text, .. } => {
+                assert_eq!(text, &format!("leaf {n}"));
+            }
+            other => panic!("leaf{n}: expected FullNote, got {other:?}"),
+        }
+    }
+    assert_eq!(
+        provider.reads.load(std::sync::atomic::Ordering::SeqCst),
+        21,
+        "the root and each of its twenty nested notes, read once"
+    );
+}
+
+/// #1287: the walk polls the CALLER's token, not one of its own. Cancelled
+/// mid-walk — here during the third read, after the root and one nested
+/// note — `resolve_embed` stops at its next node and returns `Cancelled`,
+/// never a partial card, and reads nothing more.
+#[test]
+fn a_resolve_embed_cancelled_mid_walk_stops_at_the_next_node() {
+    let cancel = CancelToken::new();
+    let (_tmp, session, provider) = nested_preview_vault(&cancel, 3);
+
+    match session.resolve_embed("host.md", "root", None, &cancel) {
+        Err(VaultError::Cancelled) => {}
+        other => panic!("expected Cancelled, got {other:?}"),
+    }
+    assert_eq!(
+        provider.reads.load(std::sync::atomic::Ordering::SeqCst),
+        3,
+        "the walk read past its cancellation"
+    );
+}
+
+/// #1287: a cancel that lands DURING the walk's last read is still
+/// `Cancelled` — never the card — for every read kind the unbounded walk
+/// makes: a whole note, a section and a block (range reads) and an image
+/// (the attachment read).
+#[test]
+fn a_resolve_embed_cancelled_during_its_last_read_is_still_cancelled() {
+    for target in ["root", "root#Part", "root^blk", "pic.png"] {
+        let cancel = CancelToken::new();
+        let tmp = tempfile::tempdir().unwrap();
+        let inner = FsVaultProvider::new(tmp.path().to_path_buf());
+        inner.write_file("host.md", b"![[root]]").unwrap();
+        inner
+            .write_file("root.md", b"# Part\n\nPlain text. ^blk\n")
+            .unwrap();
+        inner.write_file("pic.png", b"\x89PNG\r\n\x1a\n").unwrap();
+        let provider = Arc::new(CancelOnReadProvider {
+            inner,
+            cancel: cancel.clone(),
+            armed: std::sync::atomic::AtomicBool::new(false),
+            reads: std::sync::atomic::AtomicU32::new(0),
+            cancel_after: 1,
+        });
+        let session = VaultSession::open(
+            provider.clone(),
+            SessionConfig::new(tmp.path().join(".slate")),
+        )
+        .unwrap();
+        session.scan_initial(&CancelToken::new()).unwrap();
+        provider
+            .armed
+            .store(true, std::sync::atomic::Ordering::SeqCst);
+
+        match session.resolve_embed("host.md", target, None, &cancel) {
+            Err(VaultError::Cancelled) => {}
+            other => panic!("{target}: expected Cancelled, got {other:?}"),
+        }
+        assert_eq!(
+            provider.reads.load(std::sync::atomic::Ordering::SeqCst),
+            1,
+            "{target}: the only read was the one the cancel landed in"
+        );
+        // A live token resolves the same target in full.
+        assert!(
+            !matches!(
+                session
+                    .resolve_embed("host.md", target, None, &CancelToken::new())
+                    .unwrap(),
+                crate::EmbedResolution::Unresolved { .. }
+            ),
+            "{target}: the fixture itself must resolve"
+        );
+    }
 }

@@ -2048,17 +2048,25 @@ impl VaultSession {
     /// Resolve one `![[…]]` embed into the text or bytes the UI
     /// needs to render. Note targets recurse up to depth 3; deeper
     /// embeds surface as `Unresolved { DepthLimitReached }`.
+    ///
+    /// `cancel` (#1287, locked decision 05 §4) is the caller's batch or
+    /// request token: the host cancels it when the walk's task is cancelled
+    /// or its note's selection changes, and the walk stops at its next node
+    /// with `VaultError::Cancelled`.
     pub fn resolve_embed(
         &self,
         host_path: String,
         target: String,
         alt: Option<String>,
+        cancel: Arc<CancelToken>,
     ) -> Result<EmbedResolution, VaultError> {
         // #433: `alt` is the authored display text of the link being
         // resolved (image embeds: the alt text). Threading it from
         // the caller's OutgoingLink replaces the per-image host
         // re-read #419 shipped with.
-        let resolution = self.inner.resolve_embed(&host_path, &target, alt)?;
+        let resolution = self
+            .inner
+            .resolve_embed(&host_path, &target, alt, &cancel.inner)?;
         Ok(resolution.into())
     }
 

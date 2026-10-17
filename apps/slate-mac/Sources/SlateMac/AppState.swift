@@ -4878,6 +4878,25 @@ final class AppState: ObservableObject {
     /// Handle on the in-flight embed-resolution task so tests can
     /// `await state.embedsLoadTask?.value` for a settled state.
     private(set) var embedsLoadTask: Task<Void, Never>?
+    /// The in-flight embed batch's token (#1287, locked 05 §4; contract 40
+    /// AR-24). Owner: the `loadCurrentNoteEmbedResolutions` call that
+    /// created it — one token for the whole batch. Kept here so a selection
+    /// change (`cancelNoteScopedWork`), the next batch and `closeVault` can
+    /// cancel it; the batch's own task cancels it through its cancellation
+    /// handler, and the batch clears it when it ends.
+    private(set) var embedsLoadCancelToken: CancelToken?
+    /// The in-flight single-embed requests' tokens (#1287), keyed by token
+    /// identity. Owner: each `requestReadingEmbedResolution` call — one token
+    /// per request, cancelled by the requesting task's cancellation handler,
+    /// by a selection change (`cancelNoteScopedWork`) and by `closeVault`;
+    /// each request removes its own when it ends.
+    private(set) var readingEmbedRequestCancelTokens: [ObjectIdentifier: CancelToken] = [:]
+    /// #1287 deterministic seam. Always nil in production. Both embed walks
+    /// await it on their worker immediately before every `resolveEmbed`,
+    /// with the walk's host path, cache key and token, so a test can park a
+    /// walk mid-batch and cancel it there.
+    var embedResolveGateForTesting:
+        (@Sendable (_ hostPath: String, _ target: String, _ cancel: CancelToken) async -> Void)?
 
     /// Discriminated state for the editor's Cmd+E embed-preview
     /// popover. The editor's keyDown handler computes the embed
@@ -9342,6 +9361,10 @@ final class AppState: ObservableObject {
         // is what this cancellation arms.)
         embedsLoadTask?.cancel()
         embedsLoadTask = nil
+        // #1287: and stop the embed walks themselves — the batch's and every
+        // single request's — at their next node, rather than letting them run
+        // on under the session mutex after their results are discarded.
+        cancelEmbedWalkTokens()
         citationsLoadTask?.cancel()
         citationsLoadTask = nil
         tasksLoadTask?.cancel()
@@ -11125,6 +11148,7 @@ final class AppState: ObservableObject {
         // session-deallocation.
         embedsLoadTask?.cancel()
         embedsLoadTask = nil
+        cancelEmbedWalkTokens()  // #1287: the walks stop at their next node
         isLoadingEmbeds = false
         baseQueryBuilderPreviewTask?.cancel()
         baseQueryBuilderPreviewTask = nil
@@ -12020,6 +12044,12 @@ final class AppState: ObservableObject {
     /// problems (no session, etc.) — per-embed errors land in the
     /// resolution itself where the UI's `EmbedView` already
     /// renders them with the right shape.
+    ///
+    /// Cancellation (#1287, contract 40 AR-24) is the exception: the
+    /// batch walks under one `CancelToken`, and a `.Cancelled` from any
+    /// embed ends the whole batch without publishing — a walk told to
+    /// stop is not an unresolved embed, and its rows would belong to a
+    /// note the user already left.
     func loadCurrentNoteEmbedResolutions(path: String) async {
         guard let session = currentSession else { return }
         // Snapshot the embed targets from the just-loaded links.
@@ -12064,17 +12094,40 @@ final class AppState: ObservableObject {
         }
         isLoadingEmbeds = true
 
-        let resolutions: [String: EmbedResolution] =
+        // One token per batch (#1287, locked 05 §4; contract 40 AR-24).
+        // Token owner: this batch. It is cancelled by this task's
+        // cancellation (the handler below), by a selection change
+        // (`cancelNoteScopedWork`), by the next batch (the line below, for
+        // the previous one) and by `closeVault`; the walk then stops at its
+        // next node with `.Cancelled`.
+        embedsLoadCancelToken?.cancel()
+        let cancel = CancelToken()
+        embedsLoadCancelToken = cancel
+        defer {
+            if embedsLoadCancelToken === cancel { embedsLoadCancelToken = nil }
+        }
+        let resolveGate = embedResolveGateForTesting
+
+        // `nil` is a cancelled batch: it publishes nothing.
+        let resolutions: [String: EmbedResolution]? = await withTaskCancellationHandler {
             await Task.detached(priority: .userInitiated) {
+                () async -> [String: EmbedResolution]? in
                 var out: [String: EmbedResolution] = [:]
                 for target in embedTargets {
                     let resolution: EmbedResolution
                     do {
+                        await resolveGate?(path, target.key, cancel)
                         resolution = try session.resolveEmbed(
                             hostPath: path,
                             target: target.key,
-                            alt: target.alt
+                            alt: target.alt,
+                            cancel: cancel
                         )
+                    } catch VaultError.Cancelled {
+                        // The batch was cancelled (#1287): end it here and
+                        // drop every row — never an `.unresolved(.readError)`
+                        // card for a walk that was told to stop.
+                        return nil
                     } catch let error as VaultError {
                         // Per-embed failure: synthesize an
                         // Unresolved entry instead of bailing out
@@ -12104,14 +12157,20 @@ final class AppState: ObservableObject {
                 return out
             }
             .value
+        } onCancel: {
+            cancel.cancel()
+        }
 
         // Audit #201: clearing the spinner via `defer` made an old
         // cancelled task's late-firing deferred clear race the new
         // task's `isLoadingEmbeds = true`, briefly exposing the
         // panel to "not yet resolved" placeholders. Set explicitly
         // at the end, gated on the selection-change check below —
-        // same pattern `loadCurrentLinks` uses.
-        guard !Task.isCancelled,
+        // same pattern `loadCurrentLinks` uses. A cancelled batch
+        // (#1287) returns here too, whether its walk saw the cancel
+        // or finished just before it: whoever cancelled it owns the
+        // state now.
+        guard let resolutions, !cancel.isCancelled(), !Task.isCancelled,
             BaseExactIdentity.matches(selectedFilePath, path)
         else { return }
 
@@ -12138,17 +12197,37 @@ final class AppState: ObservableObject {
     /// that writes nothing — the reading view's own request-once guard keeps
     /// the key marked, and its state machine falls back to the inline link-run
     /// (deterministic, no re-request).
+    ///
+    /// A cancelled request (#1287, contract 40 AR-24) writes nothing too: it
+    /// walks under its own `CancelToken`, cancelled when the requesting task
+    /// is (the reading view's placeholder went away) or the selection changes,
+    /// and a `.Cancelled` is a dropped result, never an `.unresolved` row.
     func requestReadingEmbedResolution(target: String) async {
         guard let session = currentSession, let path = selectedFilePath else { return }
         // Already landed (a racing batch, or a duplicate request the view's
         // guard didn't cover across a re-init): don't re-resolve.
         if currentNoteEmbedResolutions[target] != nil { return }
 
-        let resolution: EmbedResolution =
-            await Task.detached(priority: .userInitiated) {
+        // One token per request (#1287, locked 05 §4; contract 40 AR-24).
+        // Token owner: this request. It is cancelled by the requesting task's
+        // cancellation (the handler below), by a selection change
+        // (`cancelNoteScopedWork`) and by `closeVault`; the walk then stops
+        // at its next node with `.Cancelled`.
+        let cancel = CancelToken()
+        let requestID = ObjectIdentifier(cancel)
+        readingEmbedRequestCancelTokens[requestID] = cancel
+        defer { readingEmbedRequestCancelTokens[requestID] = nil }
+        let resolveGate = embedResolveGateForTesting
+
+        // `nil` is a cancelled request: it writes nothing.
+        let resolution: EmbedResolution? = await withTaskCancellationHandler {
+            await Task.detached(priority: .userInitiated) { () async -> EmbedResolution? in
                 do {
+                    await resolveGate?(path, target, cancel)
                     return try session.resolveEmbed(
-                        hostPath: path, target: target, alt: nil)
+                        hostPath: path, target: target, alt: nil, cancel: cancel)
+                } catch VaultError.Cancelled {
+                    return nil
                 } catch let error as VaultError {
                     return .unresolved(
                         reason: .readError(message: Self.humanReadableVaultError(error)))
@@ -12158,13 +12237,32 @@ final class AppState: ObservableObject {
                 }
             }
             .value
+        } onCancel: {
+            cancel.cancel()
+        }
 
-        // Drop the write if the user navigated away mid-resolve — same
-        // stale-guard the batch path uses.
-        guard BaseExactIdentity.matches(selectedFilePath, path) else { return }
+        // Drop the write if the request was cancelled or the user navigated
+        // away mid-resolve — same stale-guard the batch path uses.
+        guard let resolution, !cancel.isCancelled(),
+            BaseExactIdentity.matches(selectedFilePath, path)
+        else { return }
         // Merge (never replace): the batch may have populated other keys while
         // this single resolve was in flight.
         currentNoteEmbedResolutions[target] = resolution
+    }
+
+    /// Cancel every in-flight embed walk's token (#1287): the batch's and each
+    /// single request's. Their results would be dropped by the stale guards
+    /// anyway; cancelling stops the walks at their next node instead of
+    /// letting them run on under the session mutex. Called on a selection
+    /// change (`cancelNoteScopedWork`) and by `closeVault`.
+    private func cancelEmbedWalkTokens() {
+        embedsLoadCancelToken?.cancel()
+        embedsLoadCancelToken = nil
+        for token in readingEmbedRequestCancelTokens.values {
+            token.cancel()
+        }
+        readingEmbedRequestCancelTokens.removeAll()
     }
 
     // MARK: - Content pipelines (#223)
