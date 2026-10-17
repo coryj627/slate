@@ -87,6 +87,13 @@ Not mac, or no action (5):
   `Bases/BaseEmbedDocument.swift`, `Bases/DashboardDocument.swift`,
   `Canvas/AppState+CanvasCreate.swift`. `FileTreeSidebar.swift` no longer
   has one; `GraphDiagramView.swift` was not in the issue's list.
+  Correction (plan 43 PR 12): `FileTreeSidebar.swift` kept the issue's two,
+  in the positional spelling a `cancel:` search misses (`fetcher(path, nil,
+  CancelToken())`, the synchronous seam's first page), so twelve sites were
+  converted. Delivered 2026-10-17 by plan 43 PR 12: each operation holds one
+  token tied to its task or owner, the canvas media listing runs off the
+  main actor, and `CancelTokenCensusTests` fails on a fresh token in any
+  spelling outside an empty, self-checking allowlist.
 - #1113 item 7: the `AppState` comment is now at `:9577`.
 - #1170: the stale hint lives in `Canvas/CanvasOutlineView.swift:478`, not
   the container view.
