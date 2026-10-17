@@ -361,6 +361,12 @@ final class BaseDocument: ObservableObject {
     @Published private(set) var focusedColumnIndex: Int = 0
 
     private(set) var handle: UInt64?
+    /// #786: whether core has read this document's definition since its last
+    /// open or retarget. A load that failed after the read (a view that cannot
+    /// execute, a definition without an executable view, the C6 rollback
+    /// detach) leaves the definition present, so it stays editable; an open
+    /// that could not read the file, or a file moved to Trash, does not.
+    @Published private(set) var hasReadDefinition = false
     private var appliedQuickFilterText: String?
     private var retargetGeneration: UInt64 = 0
     @Published private var retargetPreparationPending = false
@@ -410,6 +416,7 @@ final class BaseDocument: ObservableObject {
             handle = nil
         }
         state = .loading
+        hasReadDefinition = false
         clearQuickFilterState()
         do {
             let opened: UInt64
@@ -420,6 +427,7 @@ final class BaseDocument: ObservableObject {
                 opened = try session.openSavedQuery(id: id)
             }
             handle = opened
+            hasReadDefinition = true
             views = try session.baseViews(handle: opened)
             if let previousViewName,
                 let matchingIndex = views.firstIndex(where: {
@@ -435,6 +443,7 @@ final class BaseDocument: ObservableObject {
             executeActiveView(session: session, thisPath: thisPath)
         } catch {
             handle = nil
+            hasReadDefinition = false
             views = []
             result = nil
             state = .failed(friendlyMessage(for: error))
@@ -495,8 +504,11 @@ final class BaseDocument: ObservableObject {
         // the disabled UI.
         guard let handle else { return }
         guard views.indices.contains(activeViewIndex) else {
+            // #786: a saved empty or incomplete definition has nothing to
+            // render — it fails, so the surface explains it and offers the
+            // edit that repairs it (the definition itself stays open).
             result = nil
-            state = .degraded("No executable base views were found.")
+            state = .failed(Self.noExecutableViewsMessage)
             return
         }
         do {
@@ -736,6 +748,7 @@ final class BaseDocument: ObservableObject {
             session.closeBase(handle: handle)
         }
         handle = nil
+        hasReadDefinition = false
         state = .failed(
             "\(displayName) was moved to Trash and is no longer available. "
                 + "Choose Refresh if the file is restored.")
@@ -749,6 +762,7 @@ final class BaseDocument: ObservableObject {
         } else {
             handle = nil
         }
+        hasReadDefinition = false
         source = .file(path: newPath)
         if let session {
             load(session: session)
@@ -763,6 +777,7 @@ final class BaseDocument: ObservableObject {
         } else {
             handle = nil
         }
+        hasReadDefinition = false
         source = newSource
         if let session {
             load(session: session)
@@ -797,6 +812,7 @@ final class BaseDocument: ObservableObject {
                 thisPath: thisPath))
         pendingRetargetRequest = reservation.request
         handle = nil
+        hasReadDefinition = false
         source = newSource
         retargetPreparationPending = true
         retargetPreparationInFlight = false
@@ -860,6 +876,7 @@ final class BaseDocument: ObservableObject {
         case .ready(let preparedHandle, let preparedViews, let preparedResult,
             let preparedActiveViewIndex, let preparedFilter):
             handle = preparedHandle
+            hasReadDefinition = true
             views = preparedViews
             result = preparedResult
             activeViewIndex = preparedActiveViewIndex
@@ -935,6 +952,7 @@ final class BaseDocument: ObservableObject {
         ):
             let replacedHandle = handle
             handle = preparedHandle
+            hasReadDefinition = true
             views = preparedViews
             result = preparedResult
             activeViewIndex = preparedActiveViewIndex
@@ -1049,7 +1067,7 @@ final class BaseDocument: ObservableObject {
         activeViewIndex: Int
     ) -> LoadState {
         guard views.indices.contains(activeViewIndex) else {
-            return .degraded("No executable base views were found.")
+            return .failed(Self.noExecutableViewsMessage)
         }
         let view = views[activeViewIndex]
         if view.status == .fallback {
@@ -1115,7 +1133,21 @@ final class BaseDocument: ObservableObject {
                 break
             }
         }
-        return "\(displayName) could not be opened: \(error.localizedDescription)"
+        return "\(displayName) could not be opened: \(failureDetail(for: error))"
+    }
+
+    /// The message a definition with no executable view loads with (C4
+    /// wording, shared verbatim with the Windows twin's banner).
+    static let noExecutableViewsMessage = "No executable base views were found."
+
+    /// The detail a Base failure shows and speaks: core's message for a
+    /// `VaultError` (through `humanReadableVaultError`), never the error's
+    /// Swift debug description (#786, the #1364 finding).
+    nonisolated static func failureDetail(for error: Error) -> String {
+        if let vaultError = error as? VaultError {
+            return AppState.humanReadableVaultError(vaultError)
+        }
+        return error.localizedDescription
     }
 
     private func friendlyMessage(for error: Error) -> String {

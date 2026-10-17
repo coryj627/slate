@@ -51,6 +51,14 @@ private enum BaseExportOutcome: Sendable {
     case failure(String)
 }
 
+/// A detached Base definition that could not be reopened for an edit
+/// (#786); its detail is the document's own failure message.
+private struct BaseDefinitionReopenFailure: LocalizedError {
+    let message: String
+
+    var errorDescription: String? { message }
+}
+
 private enum VisibleBaseRefreshOwner: @unchecked Sendable {
     case registry(String)
     case dock(BasesDockTarget)
@@ -161,18 +169,43 @@ extension AppState {
         }
     }
 
+    /// Definition half of Base admission (#786). Data interactions (the view
+    /// picker, quick filter, sorting, cell edits) need the attached handle;
+    /// editing the definition needs only the definition. A Base whose view
+    /// cannot execute, or whose saved definition has no executable view yet,
+    /// stays editable so the user can repair it, and one detached after core
+    /// read it reopens for the edit. A definition the app cannot reach keeps
+    /// the data interactions' reasons: still opening, reopening or failed to
+    /// reopen, missing or unreadable.
+    func baseDefinitionAvailabilityDisabledReason(
+        for document: BaseDocument
+    ) -> String? {
+        if case .failed = document.state,
+            document.hasReadDefinition,
+            !document.hasPendingRetargetPreparation
+        {
+            return nil
+        }
+        return baseDocumentAvailabilityDisabledReason(for: document)
+    }
+
+    /// Path half of Base admission: an outcome-unknown Trash keeps the
+    /// definition read-only, and an invalid path is never writable.
+    private func baseDocumentPathDisabledReason(for document: BaseDocument) -> String? {
+        guard let path = document.source.filePath else { return nil }
+        switch batchTrashPathCapability(for: path) {
+        case .writable:
+            return nil
+        case .readOnly(let reason), .invalid(let reason):
+            return reason
+        }
+    }
+
     func baseDocumentInteractionDisabledReason(
         for document: BaseDocument
     ) -> String? {
-        if let path = document.source.filePath {
-            switch batchTrashPathCapability(for: path) {
-            case .writable:
-                break
-            case .readOnly(let reason), .invalid(let reason):
-                return reason
-            }
-        }
-        return baseDocumentAvailabilityDisabledReason(for: document)
+        baseDocumentPathDisabledReason(for: document)
+            ?? baseDocumentAvailabilityDisabledReason(for: document)
     }
 
     /// Shared admission backstop for Base interactions that can also arrive
@@ -194,12 +227,23 @@ extension AppState {
 
     func baseDefinitionEditingDisabledReason(for document: BaseDocument) -> String? {
         if case .savedQuery = document.source { return nil }
-        return baseDocumentInteractionDisabledReason(for: document)
+        return baseDocumentPathDisabledReason(for: document)
+            ?? baseDefinitionAvailabilityDisabledReason(for: document)
     }
 
     var activeBaseDefinitionEditingDisabledReason: String? {
         guard let document = activeBaseDocument else { return nil }
         return baseDefinitionEditingDisabledReason(for: document)
+    }
+
+    /// What a failed Base's content area shows (#786): core's message, and
+    /// whether its Edit button can open the definition. Nil while the
+    /// document is loading or has a result to render.
+    func baseLoadFailure(for document: BaseDocument) -> BaseLoadFailure? {
+        guard case .failed(let message) = document.state else { return nil }
+        return BaseLoadFailure(
+            message: message,
+            editDisabledReason: baseDefinitionEditingDisabledReason(for: document))
     }
 
     /// Refresh remains the recovery route for a terminal unavailable Base, but
@@ -2034,31 +2078,56 @@ extension AppState {
             editSavedQueryInBuilder(id: id)
             return
         }
-        if let reason = baseDocumentInteractionDisabledReason(for: doc) {
+        if let reason = baseDefinitionEditingDisabledReason(for: doc) {
             postMutationAnnouncement(reason)
             return
         }
-        guard let handle = doc.handle else { return }
         do {
-            let effectiveQueryJSON = try session.baseViewQueryJson(
-                handle: handle,
-                view: UInt32(doc.activeViewIndex))
-            let localQueryJSON = try session.baseViewEditQueryJson(
-                handle: handle,
-                view: UInt32(doc.activeViewIndex))
-            activeBaseQueryBuilder = try BaseQueryBuilderModel(
-                draft: BaseQueryBuilderDraft(
-                    effectiveQueryJSON: effectiveQueryJSON,
-                    localQueryJSON: localQueryJSON),
-                editingBaseView: EditingBaseView(
-                    source: doc.source,
-                    viewIndex: UInt32(doc.activeViewIndex)))
+            activeBaseQueryBuilder = try baseDefinitionBuilder(for: doc, session: session)
             let viewName = doc.activeViewName ?? "active view"
-            postAccessibilityAnnouncement(.basesEditingFilters(viewName: viewName))
+            postBaseActionEvent(.basesEditingFilters(viewName: viewName))
         } catch {
-            postAccessibilityAnnouncement(
-                .basesFiltersOpenFailed(detail: error.localizedDescription))
+            postBaseActionEvent(
+                .basesFiltersOpenFailed(detail: BaseDocument.failureDetail(for: error)))
         }
+    }
+
+    /// The builder Edit filters opens on a file-backed Base (#786). A
+    /// definition detached after core read it reopens first; one without an
+    /// executable view (a saved empty or incomplete `.base`) opens a new
+    /// draft, which Save to View writes as the definition's first view.
+    private func baseDefinitionBuilder(
+        for doc: BaseDocument,
+        session: VaultSession
+    ) throws -> BaseQueryBuilderModel {
+        if doc.handle == nil {
+            loadBaseDocumentIfAllowed(doc, session: session)
+        }
+        guard let handle = doc.handle else {
+            if case .failed(let message) = doc.state {
+                throw BaseDefinitionReopenFailure(message: message)
+            }
+            throw BaseDefinitionReopenFailure(
+                message: Self.baseDocumentUnavailableDisabledReason)
+        }
+        guard doc.views.indices.contains(doc.activeViewIndex) else {
+            return BaseQueryBuilderModel(
+                editingBaseView: EditingBaseView(source: doc.source, viewIndex: 0))
+        }
+        let editingView = EditingBaseView(
+            source: doc.source,
+            viewIndex: UInt32(doc.activeViewIndex))
+        let effectiveQueryJSON = try session.baseViewQueryJson(
+            handle: handle,
+            view: editingView.viewIndex)
+        let localQueryJSON = try session.baseViewEditQueryJson(
+            handle: handle,
+            view: editingView.viewIndex)
+        return try BaseQueryBuilderModel(
+            draft: BaseQueryBuilderDraft(
+                effectiveQueryJSON: effectiveQueryJSON,
+                localQueryJSON: localQueryJSON),
+            editingBaseView: editingView)
     }
 
     func basesCloseQueryBuilder() {
@@ -2333,17 +2402,34 @@ extension AppState {
             return
         }
         do {
-            let edits = try model.baseEditsForView(editingView.viewIndex)
+            let edits = try baseBuilderSaveEdits(
+                model, view: editingView.viewIndex, handle: handle, session: session)
             try session.baseApplyEdits(handle: handle, edits: edits)
             model.rebaseAfterSuccessfulSave()
             refreshVisibleBasesAfterInAppWrite(
                 session: session,
                 changedPath: editingView.source.filePath ?? doc.selectionKey)
-            postAccessibilityAnnouncement(.basesBuilderSaved)
+            postBaseActionEvent(.basesBuilderSaved)
         } catch {
-            postAccessibilityAnnouncement(
-                .basesViewSaveFailed(detail: error.localizedDescription))
+            postBaseActionEvent(
+                .basesViewSaveFailed(detail: BaseDocument.failureDetail(for: error)))
         }
+    }
+
+    /// The edits Save to View applies. A definition without a view yet (a
+    /// saved empty or incomplete `.base`, #786) gains the builder's view as
+    /// its first, every key written; otherwise only what changed since the
+    /// builder opened.
+    private func baseBuilderSaveEdits(
+        _ model: BaseQueryBuilderModel,
+        view: UInt32,
+        handle: UInt64,
+        session: VaultSession
+    ) throws -> [BaseEdit] {
+        guard try session.baseViews(handle: handle).isEmpty else {
+            return try model.baseEditsForView(view)
+        }
+        return [.addView(yaml: "type: table")] + (try model.draft.baseEditsForView(0))
     }
 
     var baseQueryBuilderRecoveryActionLabel: String? {
