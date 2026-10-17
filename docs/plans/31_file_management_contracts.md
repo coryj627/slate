@@ -449,10 +449,11 @@ enforced by construction, not by review.
   vault, so nothing was moved`), or says a folder in the path moved after it
   was checked. A batch reports that item untrashed with the reason, keeps its
   recovery markers, requires a rescan and still trashes the rest. A dangling
-  link is unlinked relative to the pinned parent. macOS hands the path to `NSFileManager
-  trashItemAtURL:resultingItemURL:error:` as a file reference URL instead of
-  trash-rs's Finder script: no Apple event or Automation grant, and Finder's
-  Put Back still restores the item (verified on a scratch APFS volume).
+  link is unlinked relative to the pinned parent. macOS hands the path to
+  `NSFileManager trashItemAtURL:resultingItemURL:error:` as a file reference
+  URL instead of trash-rs's Finder script: no Apple event or Automation
+  grant, and Finder's Put Back still restores the item (verified on a scratch
+  APFS volume).
   `NSFileManager` does not exclude a concurrent caller from another process
   when it names the item in the Trash. Of 24 same-named items trashed at one
   instant from 24 processes, only 11–12 remained, and parallel test workers
