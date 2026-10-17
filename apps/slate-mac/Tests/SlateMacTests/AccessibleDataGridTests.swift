@@ -1556,4 +1556,84 @@ final class AccessibleDataGridTests: XCTestCase {
             isARepeat: false,
             keyCode: 36)!
     }
+
+    /// Plan 43 PR 13: an EXTERNALLY sortable column is sortable with no
+    /// comparator — its owner orders the rows (the graph table's are core's,
+    /// `graph_table_rows`) — so its header reads as sortable and carries a
+    /// sort prototype, a sort request reaches the owner's binding, and the
+    /// grid re-orders nothing itself. A column with neither stays unsortable.
+    @MainActor
+    func testAnExternallySortableColumnIsSortableWithoutAComparator() {
+        var writes: [DataGridSortState?] = []
+        var sortState: DataGridSortState?
+        let binding = Binding<DataGridSortState?>(
+            get: { sortState },
+            set: {
+                writes.append($0)
+                sortState = $0
+            })
+        let grid = AccessibleDataGrid(
+            columns: [
+                .init("Name", cell: { $0.a }, externallySortable: true),
+                .init("Role", cell: { $0.b }),
+            ],
+            rows: Self.people,
+            summary: "Table: 3 rows, 2 columns.",
+            accessibilityLabel: "Table",
+            sortState: binding,
+            sortsRowsLocally: false)
+        let coordinator = GridCoordinator(grid: grid)
+        let table = NSTableView()
+        table.addTableColumn(NSTableColumn(identifier: .init("col0")))
+        table.addTableColumn(NSTableColumn(identifier: .init("col1")))
+        table.delegate = coordinator
+        table.dataSource = coordinator
+        coordinator.table = table
+        coordinator.reload(grid: grid)
+        XCTAssertNotNil(table.tableColumns[0].sortDescriptorPrototype, "the header sorts on a click")
+        XCTAssertNil(table.tableColumns[1].sortDescriptorPrototype, "a plain column's does not")
+        XCTAssertEqual(
+            table.tableColumns[0].headerCell.accessibilityLabel(),
+            "Column: Name, sortable, current sort: none")
+
+        XCTAssertEqual(coordinator.applySort(column: 0, ascending: true), "Sorted by Name, ascending")
+        XCTAssertEqual(
+            writes, [DataGridSortState(columnIndex: 0, ascending: true)], "the request reached the owner")
+        XCTAssertEqual(
+            coordinator.displayRows.map(\.a), Self.people.map(\.a), "the grid re-ordered the owner's rows")
+        XCTAssertNil(coordinator.applySort(column: 1, ascending: true), "a plain column stays unsortable")
+        XCTAssertEqual(writes.count, 1)
+    }
+
+    /// Plan 43 PR 13: a grid whose OWNER announces sort adoption
+    /// (`announcesSortAdoption: false` — the graph table's, whose owner alone
+    /// knows which publication answered the request) says nothing of its
+    /// own: not at the request, not at the reload that renders the owner's
+    /// rows, not for the same sort asked again.
+    @MainActor
+    func testAGridWhoseOwnerAnnouncesSortsAnnouncesNoSortOfItsOwn() {
+        var announced: [String] = []
+        var sortState: DataGridSortState?
+        let binding = Binding<DataGridSortState?>(get: { sortState }, set: { sortState = $0 })
+        func grid(_ rows: [Row]) -> AccessibleDataGrid<Row> {
+            AccessibleDataGrid(
+                columns: [.init("Name", cell: { $0.a }, externallySortable: true)],
+                rows: rows,
+                summary: "Table: 3 rows, 1 column.",
+                accessibilityLabel: "Table",
+                sortState: binding,
+                sortsRowsLocally: false,
+                announcesSortAdoption: false,
+                announce: { announced.append(a11yRender(event: $0).text) })
+        }
+        let committed = [Self.people[1], Self.people[2], Self.people[0]]
+        let coordinator = GridCoordinator(grid: grid(Self.people))
+        XCTAssertNil(coordinator.applySort(column: 0, ascending: true), "the grid routed a line")
+        XCTAssertEqual(
+            sortState, DataGridSortState(columnIndex: 0, ascending: true), "the request reached the owner")
+        coordinator.reload(grid: grid(committed))
+        XCTAssertNil(coordinator.applySort(column: 0, ascending: true), "the same sort again routed a line")
+        coordinator.reload(grid: grid(committed))
+        XCTAssertEqual(announced, [], "the grid announced a sort its owner speaks for")
+    }
 }

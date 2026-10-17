@@ -285,11 +285,12 @@ extension AppState {
     /// while Table mode is active
     /// (W6-2 PR C, contracts doc §PR C C-8; 0a-2b as amended — the zoom
     /// clause is the diagram's alone): the shared key's row among the
-    /// SHOWN rows, rendered the diagram's way, answered only while the
-    /// publication is CURRENT — no load in flight and the shown rows
-    /// received under the newest request — so an old node is never read
-    /// under new filter prose (rule Q, Term Q7); nil otherwise, and the
-    /// chord stays a no-op.
+    /// SHOWN rows, rendered the diagram's way, answered from the HELD
+    /// publication (D1, contract 35 TGC-19) only while it is CURRENT —
+    /// nothing in flight, an authority held, and its rows the live query's
+    /// — so an old node is never read under new filter prose (rule Q, Term
+    /// Q7, the Windows readback's test); nil otherwise, and the chord stays
+    /// a no-op.
     func graphDiagramWhereAmIEvent() -> GraphA11yEvent? {
         let selection: GraphWhereAmISelection
         let backend: GraphFilter
@@ -308,27 +309,29 @@ extension AppState {
         } else {
             // A missing diagram model can also mean its build is pending
             // or failed. Neither state should read the cached table.
+            let publication = graphTablePublication
             guard graphConfig.mode == .table,
-                graphTableSnapshot != nil, !graphTableLoading,
-                // Returning to the accepted query or sort still issues a
-                // new rows request, even though its values match the rows
-                // already shown. Wait for that request to finish too.
-                graphTableAnsweredSeq == graphTableSeq,
-                graphTablePublishedRequest == graphTableRequest,
-                // …and the request the rows answer IS the live query (C-8,
-                // IPG-32): the published request can equal the current one
-                // while both trail the view state, and the readback would
-                // then describe old rows under new filter prose.
-                graphTableRequest?.query == graphVisibilityQuery
+                publication.snapshot != nil, !graphTableLoading,
+                // Nothing in flight: the newest token reached a terminal
+                // state, published or failed. Returning to the accepted query
+                // or sort still issues a new rows request, even though its
+                // values match the rows already shown — wait for it too.
+                publication.answeredSeq == graphTableSeq,
+                // …and the rows the publication holds answer the LIVE query
+                // (C-8, IPG-32): a query that moved on — typed in Diagram
+                // mode, or a needle whose request failed — never reads the
+                // rows of the one before it under its filter prose. A failed
+                // sort leaves the query, so the standing rows still answer.
+                publication.request?.query == graphVisibilityQuery
             else { return nil }
             let row: GraphTableRow?
             if let key = graphSelectedNodeKey {
                 // A present but hidden/missing shared key never falls back (IPG-3).
-                row = graphTableRows.first { $0.stableKey == key }
+                row = publication.rows.first { $0.stableKey == key }
             } else {
                 // The Mac grid deselects when its bound key is absent; it has no
                 // independent current seat. Only a sole shown row is unambiguous.
-                row = graphTableRows.count == 1 ? graphTableRows.first : nil
+                row = publication.rows.count == 1 ? publication.rows.first : nil
             }
             if let row {
                 // A SHOWN row obeys the query by construction (0a-2b's
@@ -342,7 +345,7 @@ extension AppState {
             } else {
                 selection = .noSelection
             }
-            backend = graphTableSnapshotFilter ?? graphTableFilter
+            backend = publication.filter ?? graphTableFilter
             zoomPercent = nil
         }
         // The filter clause is the closed set of reachable states
