@@ -660,6 +660,13 @@ URL, so it sends no Apple event and needs no Automation grant, and the
 AppleScript two-minute wait above no longer applies to it. Put Back is
 unchanged: on a scratch APFS image Finder's own Put Back returned items
 trashed this way, and the volume's Put Back records were written for each.
+
+The parallel XCTest workers trash same-named fixtures (`Ghost.md`) at the
+same moment. `NSFileManager` on its own lost some of those items in the
+Trash and refused others; `CanonicalIdentityTests` failed in 3 of 6
+parallel runs. Core therefore serializes its Trash calls across processes,
+and with that it passed 8 of 8.
+
 Golden Gate was not rerun; whether it now passes is unverified.
 
 The owner chose Namespace's Tahoe slim image instead, and `1ba80997` added

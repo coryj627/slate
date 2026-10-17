@@ -451,7 +451,13 @@ enforced by construction, not by review.
   trashItemAtURL:resultingItemURL:error:` as a file reference URL instead of
   trash-rs's Finder script: no Apple event or Automation grant, and Finder's
   Put Back still restores the item (verified on a scratch APFS volume).
-  Windows and Linux still call trash-rs with the derived path.
+  `NSFileManager` does not exclude a concurrent caller from another process
+  when it names the item in the Trash. Of 24 same-named items trashed at one
+  instant from 24 processes, only 11–12 remained, and parallel test workers
+  on the boot volume failed with a permission error. So every Slate process
+  takes one per-user lock around the call; with it, 24 of 24 remained. The
+  wait for that lock is bounded, and a call that cannot get it goes ahead
+  unserialized. Windows and Linux still call trash-rs with the derived path.
   **Residual:** metadata inventories are observations, not filesystem
   transactions. They cannot detect every content edit on every filesystem, nor
   exclude an arbitrary external writer between the final observation and the
@@ -460,7 +466,9 @@ enforced by construction, not by review.
   race between deriving the path and the Trash call's own resolution of it (no
   platform's Trash accepts a handle, #1430 T1). On macOS the reference URL
   narrows that race but does not bind the object: under an adversarial racer
-  it still took the wrong object 3.4-4.0% of the time (P13). Verifying what
+  it still took the wrong object 3.4-4.0% of the time (P13). Another
+  application that trashes a same-named item at the same instant is outside
+  Slate's lock and can still collide inside `NSFileManager`. Verifying what
   arrived in the Trash (the memo's T2) is an open #1125 decision, as are
   staging (T3, rejected by the memo) and Linux's own freedesktop move (T4,
   deferred with Linux); trash-rs's Linux cross-device fallback still copies
