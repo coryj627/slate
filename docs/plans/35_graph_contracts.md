@@ -3245,7 +3245,15 @@ every observer binds from that record, so no `PropertyChanged` handler
 can see a candidate snapshot with old rows or new rows with an old
 total, and the surface re-binds from the record it is handed. A
 replacement is never validated against the authority it replaces (the
-mac installs the candidate at `:219–222` before `:226`). Failure has
+mac installs the candidate at `:219–222` before `:226`). **Amended by
+the owner on 2026-10-09 (D1, converge; §PR C, TGC-19; #1189, #1190),
+delivered by plan 43 PR 13 on 2026-10-16:** the parenthesis no longer
+describes the mac. Its table holds ONE immutable publication record
+installed in ONE assignment as well; a pair publishes only when its
+sequence and request are the current ones, else it is dropped whole,
+and a rows result only over a held publication with its filter and its
+generation, else it re-fetches as a pair under its own request — so the
+rule of this paragraph is both hosts'. Failure has
 two arms: a PAIR failure installs an ERROR record with the message and
 NO snapshot (the mac's `:257–265`: the row buffer is kept in the record,
 hidden under the error, so the next pair shows LOADING, not a coherent
@@ -9948,6 +9956,15 @@ TheStateHostHasAGroupPeerNamedByTheState.
   Q9): the replacing pair inherits and adopts it; the mac drops it on a
   generation mismatch (`AppState+GraphTable.swift:297`, `:301`) — C-2
   (iv) inherits the announce and the preset there, not the sort.
+  *Closed on the mac 2026-10-17 (D1, TGC-19; #1190, #1424, plan 43 PR
+  13):* both replacing pairs inherit the pending sort with the request.
+  The receiver's re-fetch carries its token's sort and whether it is the
+  reader's (`GraphTabRoutingTests.testAGenerationMismatchRefetchesAsAPair`),
+  and the generation probe's pair (`refreshGraphTableIfGraphChanged`)
+  carries the pending sort through `loadGraphTable`
+  (`GraphTabRoutingTests.testAProbesPairInheritsThePendingSortAndAdoptsItWithGridSortedThenTheCount`);
+  the install adopts it and speaks `GridSorted` before its own line, as
+  on Windows.
 - **C-D18 — A preset lands the reader on the graph's projection in
   every case** (Term P5): the shell's open requests editor focus for an
   existing graph too (`Layout.cs:217`); the mac's palette returns focus
@@ -10023,6 +10040,9 @@ TheStateHostHasAGroupPeerNamedByTheState.
   FIXED on the mac lane by C-2's migration.
 - A generation mismatch drops a pending user sort (`:297`, `:301`) —
   C-D17; Windows inherits it (Term Q9).
+  **Resolved (#1190, #1424, plan 43 PR 13):** every replacing pair — the
+  receiver's re-fetch and the probe's — carries the pending sort, and its
+  install adopts it with `GridSorted` (D1, TGC-19; C-D17 closed).
 - A restored graph tab mounts on the reset defaults, not the persisted
   filter (`GraphTableView.swift:53–65`; `:106–108`) — C-D8.
 - A needle typed under a transient preset persists the preset's backend
@@ -11489,7 +11509,14 @@ for it; the narrower alternatives (re-fetch on the failure; hold the
 seen mark back) each buy the repair with a new rule no term states — a
 re-fetch loop on a persistent failure, or a generation the probe
 re-reads forever. The owner's call, with the mac's split publication as
-the thing under review — filed 2026-09-11 as #1189. Mutations (three), each restored byte for byte,
+the thing under review — filed 2026-09-11 as #1189. **Closed
+2026-10-16 by the owner's call (D1, converge; TGC-19), delivered by plan
+43 PR 13:** the mac installs ONE publication record in ONE assignment
+and drops a superseded pair whole, so a failing rows request leaves the
+old publication standing — its authority, its rows, its request and the
+seen mark — and Where-am-I answers over it
+(testARowsFailureAfterASupersededPairLeavesTheOldPublicationWholeAndWhereAmIAnswers).
+Mutations (three), each restored byte for byte,
 each caught: the surface subscribing off-tree; the table subscribing
 off-tree; the window's focus edge unhooked (caught by the census now,
 not only by a desktop that opens menus). CI-shaped regression green.
@@ -11723,7 +11750,12 @@ refusing in `receiveGraphTableRows`, and PR A's frozen token facts
 (GraphTableViewTests: the sort's acceptance, the superseded token, the
 two-needle answers) drive that receiver on a BARE `AppState` with no
 snapshot and require it to publish — so the alignment would rewrite
-frozen text and is the owner's call — filed 2026-09-11 as #1190. PROCESS, recorded because it cost
+frozen text and is the owner's call — filed 2026-09-11 as #1190.
+**Closed 2026-10-16 (D1, converge; TGC-19), plan 43 PR 13:** the call
+was to align; PR A's token facts were rewritten to seed a held pair
+publication before they drive rows, and the mac's receiver now refuses
+a rows result with no held snapshot and re-fetches as a pair, as
+Windows does (testARowsResultWithNoHeldSnapshotRefetchesAsAPair). PROCESS, recorded because it cost
 five hours of CI: a mac change cannot be run on this box, so before
 pushing one, every frozen fact that touches the changed member is read
 and simulated. The two other mac changes of TGC-16 were checked that way
@@ -11807,6 +11839,187 @@ byte for byte, each caught: the failed write staying outstanding; the
 high-water recovery issued after the install; the census ignoring the
 handler. CI-shaped regression green at 2460; the model family and the
 three journeys re-run.
+
+**TGC-19 — The owner's call on IPG-15 (#1189) and on the rows
+receiver's admission (#1190): D1, CONVERGE — the mac's table takes
+A-2's publication model, and the facts that froze its split design are
+rewritten first.** Decided 2026-10-09 (`docs/plans/41_mac_backlog_plan.md`
+§5, D1) and adopted with the mac backlog delivery program on 2026-10-16;
+delivered by plan 43 PR 13
+(`docs/plans/43_mac_backlog_delivery/specs/pr13_graph_authority_model.md`).
+TGC-13 put IPG-15 to the owner with the mac's split publication as the
+thing under review, and TGC-17 recorded the rows receiver's admission of
+a result with no authority behind it as a divergence awaiting the same
+call. The call is to converge. THE RULE ON THE MAC is A-2's, in three
+parts. (1) ONE immutable publication record — the snapshot, the backend
+filter it was fetched under, its generation, the rows, their total, the
+accepted sort, the request the rows answer and the sequence of the last
+token to reach a terminal state — installed in ONE assignment; the
+separately published fields become read-only views of it, and
+`graphTableSeenGraphGeneration` moves only when a pair installs. (2) A
+PAIR publishes only when its sequence and its request are the current
+ones (A-2 (i)); otherwise it is dropped WHOLE — no snapshot, no filter,
+no seen generation — and a current pair whose two crossings disagree on
+the generation re-fetches as its own replacement (A-2 (ii)). This
+retires the pair-first install C-2 (iii) relied on (IPG-9, as IPG-29
+amended it) and IPG-15 with it: nothing partial is ever installed, so no
+failure can leave old rows under a new authority. (3) A ROWS result
+publishes only when it is current AND a held publication carries its
+backend filter and its generation (A-2's rows-only arm); with no
+authority held (#1190), another filter's (C-2 (iii)) or a stale one, it
+re-fetches as a PAIR under its own request, its sort included and its
+announce inherited (C-2 (iv); Term Q9). The receiver's authority-less
+arm goes: TGC-17's clear of the error under it and TGC-18's request for
+the authority back (IPG-36) both answered a state that can no longer
+arise. The failure arms stay as they are — a pair failure installs the
+error and drops the authority, a rows failure rolls back the pending
+sort and the announce — and Where-am-I reads the held publication:
+quiescent, a snapshot held, its rows the live query's (Term Q7, the
+Windows readback's test). THE FACTS THAT FROZE THE SPLIT DESIGN, named
+here before any receiver changes (the TGC-17 rule), each rewritten and
+none deleted: GraphTableViewTests' seven token facts —
+testSortRequestPublishesRowsAndAcceptedSortTogether,
+testSupersededTokenIsDroppedWhole,
+testReorderedSameGenerationAnswersUnderDifferentNeedlesAreDropped,
+testFailedQueryRollsBackTheRequest,
+testRowsUnderAnotherFilterThanTheHeldSnapshotAreDropped,
+testStaleGenerationResultIsDiscarded and
+testPresetAfterFolderSortPublishesDefaultSortAndHeadlineTogether — drove
+the rows receiver on a bare state with no snapshot and required it to
+publish; each seeds a held pair publication first, through the pair
+receiver, as production does. T1's
+testANeedleDuringAnOrphansPairRefetchesUnderItsOwnRequest and its sort
+twin testASortDuringAnOrphansPairRefetchesUnderItsOwnRequest waited, in
+the pair-first order, for the superseded pair's snapshot to install
+while the rows gate held — the install this call removes; they await
+that pair's DROP and then the needle's (the sort's) PAIR publish, and
+every gate entrance they wait on is bounded, so a gate the design never
+reaches fails the fact in seconds rather than holding the lane for
+hours (TGC-17's five). testASupersededPairInstallsOnlyWhileTheNewerRequestIsUnanswered
+(IPG-9, IPG-29) pinned the exception this call retires; its three
+arrangements stay and assert the converse under the name the rule now
+has, testASupersededPairInstallsNothing — a name that states the retired
+exception over a body asserting its removal is the defect TGC-16 had to
+correct in a fact of its own (IPG-33).
+
+DELIVERED by plan 43 PR 13 (2026-10-16), in the order the TGC-17 rule
+sets: this record of the call first, then the facts above rewritten and
+the five new ones written, then the receivers. THE CODE: the mac's record
+(its Swift type GraphTablePublication, built only by `initial`,
+`fromPair`, `withRows`, `failingPair` and `failingRows`) is the one
+published value; `receiveGraphTablePair` is the pair's receiver, a
+synchronous seam the facts drive as the Windows facts drive the
+document's receiver directly; `receiveGraphTableRows` refuses without a
+held authority; `pairResultInstalls`, the predicate of the retired
+exception, is deleted with it; the failure arms are
+`failGraphTableRows` and `failGraphTablePair`; and the table's readback
+reads the held publication — quiescent, an authority held, its request's
+query the live one — so a failed SORT answers over the rows that still
+stand, while a failed NEEDLE, whose live query moved on, still does not
+(testTheSoleCachedRowCannotAnswerAChangedLiveQueryOrFailedRequest,
+unchanged). THE CHOICES THE SPEC LEFT, each taken as recorded here: the
+terminal sequence lives in the record, so a rows failure re-assigns it
+with nothing else changed — no rows, authority or request installed, A-2's
+rows-only failure arm; a load with no session installs nothing, where it
+used to drop the snapshot alone (a no-op in production, where a vault
+close resets the publication, and the reason PR A's bare-state facts
+could publish); and a current pair whose two crossings straddle a
+rebuild re-fetches with its token's sort, as the rows arms do and as
+Windows' replacing pair does. With the rows arm's sort that narrows
+C-D17: what remains of it on the mac is the generation probe's replacing
+pair, which re-issues under the accepted sort — recorded at C-D17 and not
+changed here. NEW FACTS: testASupersededPairInstallsNothing;
+testARowsFailureAfterASupersededPairLeavesTheOldPublicationWholeAndWhereAmIAnswers
+(IPG-15); testARowsResultWithNoHeldSnapshotRefetchesAsAPair (#1190,
+before the first pair and after a failed one);
+testAGenerationMismatchRefetchesAsAPair; and
+testThePublicationInstallsInOneAssignment, which reads the record's own
+publisher. GraphAnnouncerTests and GraphActionParityTests run unchanged:
+only what published speaks. REGISTERS: TGC-13's IPG-15 and TGC-17's
+divergence closed in place; A-2's parenthesis amended; C-D17 narrowed in
+its record, in PR C's mac details and in the index (the generator's
+`CLOSED` map); the reconciliation's #1189 and #1190 rows and its
+residuals closed. Mutations (seven), each restored byte for byte, each
+caught: the pair-first install restored (five facts, T1 and its twin
+among them); rows admitted with no authority (the #1190 fact); the
+generation arm dropping the sort (the generation fact); the readback
+requiring the published request to be the current one (the IPG-15 fact);
+a pair installed in two assignments (the one-assignment fact and both
+re-fetch facts' install counts); a rows failure dropping the authority
+(the IPG-15 fact and testFailedQueryRollsBackTheRequest); a dropped pair
+moving the seen mark (testASupersededPairInstallsNothing and the
+one-assignment fact). Every fact that touches a changed member was read
+and simulated before the push, and the seven graph classes it found —
+GraphTableViewTests, GraphTabRoutingTests, GraphAnnouncerTests,
+GraphActionParityTests, GraphCommandsTests, GraphConfigTests and
+GraphDiagramTests, 143 facts — run green in about six seconds; the whole
+Swift suite ran in CI's shape (`swift test --parallel`) before the push:
+3,134 facts, green in three minutes and nineteen seconds.
+
+THE SORT, closed with the authority (2026-10-17; #1424). Before this PR
+merged, the owner's standing rule — no merge into a feature area that
+still has a known defect, pre-existing or not — brought C-D17's
+remaining half onto this branch. A sort the reader had asked for was
+still in flight when the vault moved, and the generation probe's
+replacing pair re-issued under the ACCEPTED sort: the reader's sort was
+cancelled in silence, and the count then described rows in the old
+order. Closing it found three more defects of the same lineage. The
+needle, a filter change and the activation load each issued under the
+accepted sort too (Term Q5's carriers and IGP-4, never recorded on the
+mac). No install ever spoke `GridSorted`: the grid arms that line only
+when its owner reads the requested sort back at once, and the table
+adopts at the publish. And since W6-2 PR 0b no header could sort the
+mac's table at all — its columns came from core's vector with no
+comparator, so the grid treated every one as unsortable. All of it was
+filed as #1424 and is closed here. THE RULE ON THE MAC is Windows'. A
+token says whether it carries the reader's sort (`userSort` on the
+mac's token, Windows' UserSort). Every pair, and every rows request with
+no sort of its own, carries the pending sort; the probe's replacing pair
+and the receiver's re-fetches inherit it with the request; a preset's
+default sort replaces it silently (Term Q5 (d)); a cancellation or a
+no-op carries none. The install that answers the reader's sort relays
+core's `GridSorted` before its own line — the count, or the summary
+(Term Q5's combined lines) — through `announceGraphTableSortAdoption`.
+The grid's columns are externally sortable — the header requests, core
+orders — and the grid announces no sort of its own (its new
+`announcesSortAdoption` option), so the owner's line is the only one.
+FACTS, each named for its Windows twin and each failing first unless
+called a guard: testASortSpeaksGridSortedThenTheCoalescedCountAndNothingElse;
+testANeedleKeepsThePendingSortAndGridSortedSpeaksOnAdoption;
+testGridSortedPrecedesTheReceiversLineAtEveryAdoptingInstall (a filter's
+pair); testTheActivationCarriesThePendingSortAndAdoptsItBeforeTheSummary;
+testAProbesPairInheritsThePendingSortAndAdoptsItWithGridSortedThenTheCount,
+C-D17's own fact, whose replacing pair is held at the publish gate so the
+fact reads it carrying the sort; and the mounted
+testAHeaderSortIssuesARowsOnlyTokenAndGridSortedSpeaksOnceOnAdoption,
+which sorts through the real grid. testAPresetReplacesThePendingSortSilently
+and testAPresetOverAFolderSortResetsSilentlyWithNoGridSorted are guards,
+true before and after. T1's sort twin, the generation fact and
+testCancellingAPendingSortSaysNothing now pin their complete line lists,
+as their Windows twins do. Two grid facts pin the substrate's options:
+testAnExternallySortableColumnIsSortableWithoutAComparator and
+testAGridWhoseOwnerAnnouncesSortsAnnouncesNoSortOfItsOwn. Mutations
+(nine), each restored byte for byte, each caught: the probe re-issuing
+under the accepted sort (C-D17's fact alone); every pair dropping the
+pending sort (the probe's, the filter's and the activation's facts); the
+needle dropping it (the needle's fact); no `GridSorted` at an adoption
+(eight facts); a preset's default sort adopted as the reader's (the
+Folder guard); a re-fetch forgetting whose sort it carries (T1's sort
+twin and the generation fact); the columns unsortable again (the header
+fact); the grid announcing a sort itself (the owner-announced grid fact
+and the header fact); sortability ignoring the external flag (both grid
+facts and the header fact). C-D17 is closed in its record, in PR C's mac
+details and in the index; the AT navigation map's shared-grid anchor
+follows the substrate's file (`AccessibleDataGrid.swift`, 714 → 729), and
+contract 38's trigger ledger lists the new `GridSorted` site beside the
+grid's, as the Windows row lists the surface's install handler beside its
+grid. A VoiceOver field pass on a three-note scratch vault (2026-10-17,
+under the shared UI lock): the Note header reads "Column: Note, sortable,
+current sort: none"; pressing it, as a header click does, is followed in
+VoiceOver's last phrase by "Sorted by Note, ascending" (111 ms) and then
+"3 of 3 shown" (302 ms), and the header then reads "current sort: asc".
+Whether VoiceOver lets the count cut the sort's line short is not settled
+by its last phrase, and is left to a listening check.
 
 ### Tests that pin PR C (revision 6's list; the task loop records what lands)
 
@@ -18109,7 +18322,7 @@ that exists and is not keyed is not claimed as keyed.
 | §C | divergence | C-D14 | unevidenced by id — §C's pinning list is not keyed per id | — |
 | §C | divergence | C-D15 | unevidenced by id — §C's pinning list is not keyed per id | — |
 | §C | divergence | C-D16 | unevidenced by id — §C's pinning list is not keyed per id | — |
-| §C | divergence | C-D17 | unevidenced by id — §C's pinning list is not keyed per id | — |
+| §C | divergence | C-D17 | Task loop | — |
 | §C | divergence | C-D18 | unevidenced by id — §C's pinning list is not keyed per id | — |
 | §C | divergence | C-D19 | unevidenced by id — §C's pinning list is not keyed per id | — |
 | §C | divergence | C-D20 | unevidenced by id — §C's pinning list is not keyed per id | — |
@@ -18381,7 +18594,7 @@ that exists and is not keyed is not claimed as keyed.
 | C-D14 | No sidebar-navigation intent on a preset | §C, line 9856 |
 | C-D15 | The field, the count region and Clear stay in the header in both modes | §C, line 9859 |
 | C-D16 | A Where-am-I panel on the graph | §C, line 9862 |
-| C-D17 | A pending user sort survives a replacing pair | §C, line 9864 |
+| C-D17 | A pending user sort survives a replacing pair | §C, line 9864; **closed on mac** by #1190 and #1424 (plan 43 PR 13): both replacing pairs, the needle, a filter change and the activation carry the pending sort, and its install speaks GridSorted |
 | C-D18 | A preset lands the reader on the graph's projection in every case | §C, line 9868 |
 | C-D19 | A sort during an Orphans pair adopts with `GridSorted` alone on Windows | §C, line 9872 |
 | C-D20 | Withdrawn | §C, line 9877 |
@@ -18520,8 +18733,8 @@ PR C's seven residue issues, as they stand:
 
 | Issue | State | Resolution |
 |---|---|---|
-| #1189 | open | mac: a failing rows request leaves a mixed publication (IPG-15) — mac's, filed by PR C |
-| #1190 | open | mac: the rows receiver publishes with no held snapshot — mac's, filed by PR C |
+| #1189 | closed | mac: a failing rows request leaves a mixed publication (IPG-15) — filed by PR C; closed by plan 43 PR 13 (2026-10-16; D1, converge, TGC-19): one publication record in one assignment, a superseded pair dropped whole |
+| #1190 | closed | mac: the rows receiver publishes with no held snapshot — filed by PR C; closed by plan 43 PR 13 (2026-10-16; D1, converge, TGC-19): rows publish only over a held publication with their filter and generation, else re-fetch as a pair |
 | #1191 | closed | the graph writer census across the shell — PR #1209 |
 | #1192 | closed | the matrix evidence bound to runnable tests — PR #1208 |
 | #1193 | closed | a one-row result's keyboard route to a selection — PR #1213 |
@@ -18548,7 +18761,8 @@ PR C's seven residue issues, as they stand:
   (0a-D3) — designated with the reason, owed to an owner decision.
 - The eleven pending owner questions (DD-Q1…5, ED-Q1…6) stand at their
   defaults until the owner answers.
-- The two open mac residue issues (#1189, #1190).
+- The two mac residue issues (#1189, #1190) — closed by plan 43 PR 13
+  (2026-10-16) under the owner's call D1 (TGC-19).
 - Anything a gate above left Pending is Pending here too; nothing is
   green by omission.
 
