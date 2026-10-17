@@ -15,25 +15,27 @@ struct SidebarOrganizerFile: Equatable {
   let mtimeMs: Int64
 }
 
-enum SidebarSortField: String, CaseIterable, Equatable {
+// PR 23 (#944): the sort and grouping values are Codable so a journaled
+// `SidebarWriteIntent` carrying them survives a relaunch.
+enum SidebarSortField: String, CaseIterable, Codable, Equatable, Sendable {
   case name
   case created
   case modified
 }
 
-enum SidebarSortDirection: String, CaseIterable, Equatable {
+enum SidebarSortDirection: String, CaseIterable, Codable, Equatable, Sendable {
   case asc
   case desc
 }
 
-struct SidebarSortOption: Equatable {
+struct SidebarSortOption: Codable, Equatable, Sendable {
   var field: SidebarSortField
   var direction: SidebarSortDirection
 
   static let defaults = SidebarSortOption(field: .name, direction: .asc)
 }
 
-enum SidebarGroupingOption: String, CaseIterable, Equatable {
+enum SidebarGroupingOption: String, CaseIterable, Codable, Equatable, Sendable {
   case none
   case dateBuckets
 }
@@ -709,8 +711,8 @@ struct SidebarPinPruneLedger {
 /// target may fill several of them — two slots on one note are two rows
 /// (`SidebarShortcutRow`, identified by its slot), as on Windows. Never
 /// look a slot up by this value; resolve it by position.
-struct SidebarShortcut: Hashable, Sendable {
-  enum Kind: String, Sendable {
+struct SidebarShortcut: Codable, Hashable, Sendable {
+  enum Kind: String, Codable, Sendable {
     case file
     case folder
     /// FL5-2 (#665): a tag container — `path` carries the normalized
@@ -736,12 +738,16 @@ struct SidebarShortcut: Hashable, Sendable {
   }
 }
 
-struct SidebarStructuralTransform: Equatable, Sendable, Identifiable {
+struct SidebarStructuralTransform: Codable, Equatable, Sendable, Identifiable {
   /// Journal identity: pending transforms are acknowledged (removed) only
-  /// after their locked replay commits (round-6 finding 1).
-  let id = UUID()
+  /// after their locked replay commits (round-6 finding 1). PR 23 (#944):
+  /// a rename or move journals its anticipated transform durably BEFORE the
+  /// filesystem operation can commit, and the transform the landing then
+  /// publishes carries that record's id, so the commit that drains it also
+  /// settles the durable record.
+  var id = UUID()
 
-  struct Rename: Equatable, Sendable {
+  struct Rename: Codable, Equatable, Sendable {
     let oldPath: String
     let newPath: String
     /// nil when the mutation cannot say (single rename/move): the pin and
@@ -1400,5 +1406,305 @@ extension AppState.SidebarOrganizationState {
       shortcuts: decoded.shortcuts,
       shortcutRawEntryCount: decoded.shortcutRawCount,
       shortcutOverflowCount: decoded.shortcutOverflowCount)
+  }
+}
+
+// MARK: - Typed write intents (PR 23, #944)
+
+/// Thrown from inside the locked update when the file's CURRENT state makes
+/// the requested change semantically inert or would cross a ceiling (FL-06
+/// round-7 finding 2, round-35): the write is refused, and the reason is a
+/// user-facing rule, not a save failure. A refusal is final — never retried.
+struct SidebarOrganizationConflictError: LocalizedError, Sendable {
+  let reason: String
+  var errorDescription: String? { reason }
+}
+
+/// The value one FL7-2 per-folder display key takes (preview lines,
+/// density, include subfolders), in a form a journaled intent can encode.
+enum SidebarFolderOverrideValue: Codable, Equatable, Sendable {
+  case int(Int)
+  case string(String)
+  case bool(Bool)
+
+  /// What the schema mutator stores under the key.
+  var raw: Any {
+    switch self {
+    case .int(let value): return value
+    case .string(let value): return value
+    case .bool(let value): return value
+    }
+  }
+}
+
+/// What an exact-op applier reports from inside the locked update: how many
+/// pins a stale prune removed (its once-per-session slot is consumed only by
+/// a prune that removed one) and the reasons replayed intents were finally
+/// refused for (the drain surfaces them; it never drops one silently).
+final class SidebarWriteApplyRecorder: @unchecked Sendable {
+  private let lock = NSLock()
+  private var prunedPins = 0
+  private var refusals: [String] = []
+  private var refused: Set<UInt64> = []
+
+  func recordPrunedPins(_ count: Int) {
+    lock.withLock { prunedPins = count }
+  }
+
+  var prunedPinCount: Int { lock.withLock { prunedPins } }
+
+  /// A replayed entry (by its replay position) was finally refused.
+  func recordRefusal(_ reason: String, position: UInt64) {
+    lock.withLock {
+      refusals.append(reason)
+      refused.insert(position)
+    }
+  }
+
+  var refusalReasons: [String] { lock.withLock { refusals } }
+
+  var refusedPositions: Set<UInt64> { lock.withLock { refused } }
+}
+
+/// Where an intent applies: the captured vault root and its admitted
+/// identity (filesystem checks bind to both), whether this is a replay of a
+/// parked or journaled intent, and the recorder.
+struct SidebarWriteApplyContext: Sendable {
+  let vaultRoot: URL
+  let identity: SidebarVaultPrefsStore.RootIdentity
+  /// True while the retained-write drain replays an intent that was parked
+  /// in memory or adopted from the durable journal. The two slot-positional
+  /// shortcut ops check here whether their effect already landed — a crash
+  /// between the `.slate/sidebar.json` commit and the journal's settle line
+  /// replays the last write once more, and every other op is idempotent.
+  let isReplay: Bool
+  let recorder: SidebarWriteApplyRecorder
+}
+
+/// One sidebar-organization write as data (FL-06 round 31; issue #944): the
+/// thirteen organization commands, the FL7-2 display overrides, the
+/// section-row shortcut ops, and the internal writes (stale-pin prune,
+/// structural-backlog drain, a journaled structural transform's replay).
+/// The retained-write registry and the durable journal hold these values,
+/// never closures; the first attempt and every replay run the same
+/// exact-op applier against the locked, decoded on-disk root.
+enum SidebarWriteIntent: Codable, Equatable, Sendable {
+  /// The six sort commands. An empty container is the vault default.
+  case setSort(container: String, sort: SidebarSortOption)
+  /// Toggle Date Grouping, carrying the value it chose. A folder whose
+  /// choice matches the vault's returns to inheritance.
+  case setGrouping(container: String, grouping: SidebarGroupingOption)
+  /// Use Vault Default Sort.
+  case clearFolderSort(folder: String)
+  case pin(path: String, folder: String)
+  case unpin(path: String, folder: String)
+  case unpinAll(folder: String)
+  /// Add to Shortcuts (tree rows and tag rows): membership, under the
+  /// 64-slot decode cap.
+  case addShortcut(kind: SidebarShortcut.Kind, path: String)
+  /// Remove from Shortcuts on a tree row: every slot the target fills.
+  case removeShortcut(kind: SidebarShortcut.Kind, path: String)
+  /// A section row's Remove: one slot (#1332). `slotsBefore` is how many
+  /// slots the target filled when the user asked.
+  case removeShortcutSlot(
+    kind: SidebarShortcut.Kind, path: String, occurrence: Int, slotsBefore: Int)
+  /// Move Up / Move Down on a section row (#1332). `slotsBefore` is the
+  /// visible slot list the user moved within.
+  case moveShortcutSlot(
+    slot: Int, delta: Int, occurrence: Int, slotsBefore: [SidebarShortcut])
+  /// FL7-2 per-folder display override; nil clears the key.
+  case setFolderOverride(folder: String, key: String, value: SidebarFolderOverrideValue?)
+  /// Lazy stale-pin maintenance (never acknowledged, never journaled).
+  case pruneStalePins(folder: String, candidates: [String])
+  /// A persist whose only content is the structural backlog it drains.
+  case drainStructuralBacklog
+  /// A structural transform adopted from the durable journal. A transform
+  /// recorded before its filesystem operation was known to commit replays
+  /// only the renames whose source is definitely gone.
+  case replayStructuralTransform(SidebarStructuralTransform, verifyAgainstDisk: Bool)
+  /// Test seam: a raw write registered with `SidebarWriteTestProbes`.
+  /// Never journaled.
+  case testProbe(UUID)
+
+  /// An acknowledged user write: journaled before its acknowledgement.
+  /// Maintenance, drains, replays and probes are not.
+  var isDurable: Bool {
+    switch self {
+    case .setSort, .setGrouping, .clearFolderSort, .pin, .unpin, .unpinAll,
+      .addShortcut, .removeShortcut, .removeShortcutSlot, .moveShortcutSlot,
+      .setFolderOverride:
+      return true
+    case .pruneStalePins, .drainStructuralBacklog, .replayStructuralTransform,
+      .testProbe:
+      return false
+    }
+  }
+
+  /// The exact operation against the decoded on-disk root, under the store
+  /// lock and off the main actor. Field-specific mutators touch only their
+  /// own keys, so a concurrent writer's changes and unknown data survive.
+  func apply(to root: inout [String: Any], context: SidebarWriteApplyContext) throws {
+    switch self {
+    case .setSort(let container, let sort):
+      // Authoritative recheck under the lock: a concurrent writer may have
+      // enabled grouping since the dispatch-side guard (round-7 finding 2).
+      let grouping = SidebarOrganizationSchema.decode(root: root)
+        .prefs.effectiveChoice(forFolder: container).grouping
+      if grouping == .dateBuckets, sort.direction == .asc || sort.field == .name {
+        throw SidebarOrganizationConflictError(
+          reason: AppState.sidebarGroupedSortInertReason)
+      }
+      if container.isEmpty {
+        SidebarOrganizationSchema.setVaultSort(&root, sort)
+      } else {
+        SidebarOrganizationSchema.setFolderSort(&root, folder: container, sort)
+      }
+
+    case .setGrouping(let container, let grouping):
+      if container.isEmpty {
+        SidebarOrganizationSchema.setVaultGrouping(&root, grouping)
+        return
+      }
+      // The clear-vs-set decision compares against the ON-DISK vault
+      // grouping, so a concurrent vault change cannot turn the toggle into
+      // a wrong-way no-op (round-7 finding 3).
+      let vaultGrouping = SidebarOrganizationSchema.decode(root: root)
+        .prefs.vaultChoice.grouping
+      if grouping == vaultGrouping {
+        SidebarOrganizationSchema.clearFolderGroupingOverride(
+          &root, folder: container)
+      } else {
+        SidebarOrganizationSchema.setFolderGrouping(
+          &root, folder: container, grouping)
+      }
+
+    case .clearFolderSort(let folder):
+      SidebarOrganizationSchema.clearFolderSortOverride(&root, folder: folder)
+
+    case .pin(let path, let folder):
+      // Exact op against the decoded on-disk pins: a concurrent writer's
+      // pin in the same folder survives (round-3 finding 4).
+      var stored = SidebarOrganizationSchema.decode(root: root).pins
+      stored.pin(path, inFolder: folder)
+      SidebarOrganizationSchema.setPins(
+        &root, folder: folder, paths: stored.paths(forFolder: folder))
+
+    case .unpin(let path, let folder):
+      var stored = SidebarOrganizationSchema.decode(root: root).pins
+      stored.unpin(path, inFolder: folder)
+      SidebarOrganizationSchema.setPins(
+        &root, folder: folder, paths: stored.paths(forFolder: folder))
+
+    case .unpinAll(let folder):
+      SidebarOrganizationSchema.setPins(&root, folder: folder, paths: [])
+
+    case .addShortcut(let kind, let path):
+      // The cap holds under the lock too: another writer's slots count.
+      guard
+        SidebarOrganizationSchema.addShortcutWithinCap(
+          &root, kind: kind.rawValue, path: path)
+      else {
+        throw SidebarOrganizationConflictError(
+          reason: AppState.sidebarShortcutCapacityReason(
+            limit: SidebarOrganizationSchema.maxDecodedShortcuts))
+      }
+
+    case .removeShortcut(let kind, let path):
+      SidebarOrganizationSchema.removeShortcut(
+        &root, kind: kind.rawValue, path: path)
+
+    case .removeShortcutSlot(let kind, let path, let occurrence, let slotsBefore):
+      if context.isReplay {
+        let target = SidebarShortcut(kind: kind, path: path)
+        let slots = SidebarOrganizationSchema.decodeShortcuts(root: root)
+          .filter { $0 == target }.count
+        // Fewer slots than when the user asked: this removal already landed.
+        guard slots >= slotsBefore else { return }
+      }
+      SidebarOrganizationSchema.removeShortcutSlot(
+        &root, kind: kind.rawValue, path: path, occurrence: occurrence)
+
+    case .moveShortcutSlot(let slot, let delta, let occurrence, let slotsBefore):
+      let index = slot - 1
+      guard slotsBefore.indices.contains(index),
+        slotsBefore.indices.contains(index + delta)
+      else { return }
+      let target = slotsBefore[index]
+      if context.isReplay {
+        var moved = slotsBefore
+        moved.swapAt(index, index + delta)
+        // The file already shows the moved order: this move landed.
+        guard SidebarOrganizationSchema.decodeShortcuts(root: root) != moved
+        else { return }
+      }
+      SidebarOrganizationSchema.moveShortcut(
+        &root, kind: target.kind.rawValue, path: target.path,
+        occurrence: occurrence, delta: delta)
+
+    case .setFolderOverride(let folder, let key, let value):
+      SidebarOrganizationSchema.setFolderOverrideValue(
+        &root, folder: folder, key: key, value: value?.raw)
+
+    case .pruneStalePins(let folder, let candidates):
+      // All validation happens here, under the store lock and off the main
+      // actor (round-11 finding 3): prune only candidates that are STILL a
+      // definite ENOENT at mutation time (round-12 finding 2).
+      let staleSet = Set(candidates)
+      let storedPaths = SidebarOrganizationSchema.decode(root: root)
+        .pins.paths(forFolder: folder)
+      let definitelyMissing = AppState.sidebarDefinitelyMissingPaths(
+        vaultRoot: context.vaultRoot,
+        expectedIdentity: context.identity,
+        candidates: storedPaths.filter { staleSet.contains($0) })
+      let remaining = storedPaths.filter { !definitelyMissing.contains($0) }
+      context.recorder.recordPrunedPins(storedPaths.count - remaining.count)
+      guard remaining.count != storedPaths.count else { return }
+      SidebarOrganizationSchema.setPins(&root, folder: folder, paths: remaining)
+
+    case .drainStructuralBacklog:
+      return
+
+    case .replayStructuralTransform(let transform, let verifyAgainstDisk):
+      var replayed = transform
+      if verifyAgainstDisk {
+        // Recorded before its filesystem operation was known to commit: a
+        // rename whose source still exists never happened (round-32 (1)).
+        // Sources are checked byte-exactly, so a case-only rename on a
+        // case-insensitive volume reads correctly.
+        let missing = AppState.sidebarDefinitelyMissingPaths(
+          vaultRoot: context.vaultRoot,
+          expectedIdentity: context.identity,
+          candidates: transform.renames.map(\.oldPath))
+        replayed.renames = transform.renames.filter {
+          missing.contains($0.oldPath)
+        }
+      }
+      replayed.applyRaw(to: &root)
+
+    case .testProbe(let id):
+      guard let probe = SidebarWriteTestProbes.probe(id) else {
+        throw SidebarOrganizationConflictError(reason: "Unregistered test probe.")
+      }
+      try probe(&root)
+    }
+  }
+}
+
+/// Test seam behind `SidebarWriteIntent.testProbe`: a raw write registered
+/// by id, so a parked probe is still a value in the registry.
+enum SidebarWriteTestProbes {
+  typealias Probe = @Sendable (inout [String: Any]) throws -> Void
+
+  private static let lock = NSLock()
+  nonisolated(unsafe) private static var probes: [UUID: Probe] = [:]
+
+  static func register(_ probe: @escaping Probe) -> UUID {
+    let id = UUID()
+    lock.withLock { probes[id] = probe }
+    return id
+  }
+
+  static func probe(_ id: UUID) -> Probe? {
+    lock.withLock { probes[id] }
   }
 }

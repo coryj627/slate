@@ -227,6 +227,8 @@ final class SidebarShortcutsTests: XCTestCase {
       ])
 
     try state.removeSidebarShortcutDirect(slot: 2)
+    // PR 23 (#944): spoken once its journal line is durable.
+    await state.sidebarOrganizationAcknowledgementTaskForTesting?.value
     XCTAssertEqual(
       state.lastMutationAnnouncement,
       "Removed from Shortcuts: note.md, file shortcut, note.md, shortcut 2.")

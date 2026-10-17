@@ -31,8 +31,10 @@ extension CancelImportCommandContract {
 /// normal termination waits for sidebar writes for up to five seconds,
 /// after any unsaved edits have been answered for.
 /// Admitted Trash work is cancelled cooperatively and drained without a
-/// deadline, because an OS operation may still be changing files. Durable cross-launch
-/// recovery of writes that already FAILED is tracked in #944.
+/// deadline, because an OS operation may still be changing files. PR 23
+/// (#944): the five-second bound is safe, not lossy — a write that already
+/// failed, or is still wedged when the bound expires, was journaled before it
+/// was acknowledged, and the next launch's same-vault open replays it.
 final class SlateAppDelegate: NSObject, NSApplicationDelegate {
     /// The window's state, handed over when the root view appears (#784).
     /// Weak: the App's `@StateObject` owns it.
@@ -335,6 +337,15 @@ struct SlateMacApp: App {
         // two tab metaphors in one window frame. Revisit if a real
         // multi-window story lands (Milestone W parity work).
         NSWindow.allowsAutomaticWindowTabbing = false
+
+        // PR 23 (#944): acknowledged sidebar writes, and every rename or
+        // move's sidebar transform, are journaled under Application Support
+        // so a quit or a crash cannot lose them. Only the app installs the
+        // real location; XCTest and previews journal into a private
+        // temporary directory.
+        MainActor.assumeIsolated {
+            AppState.installProductionSidebarWriteJournal()
+        }
     }
 
     var body: some Scene {
