@@ -8008,6 +8008,14 @@ final class AppState: ObservableObject {
     /// True while the search overlay is visible. ⇧⌘F toggles it
     /// (since #874; bare ⌘F is now find-in-note); Esc clears.
     @Published var isSearchOpen: Bool = false
+    /// Where keyboard focus was when the overlay opened (SD-2, #1113),
+    /// held weakly; the user's close gives it back
+    /// (`dismissSearchOverlay`), every other close drops it.
+    private var searchFocusOrigin: SearchOverlayFocusOrigin?
+    /// The key window the overlay opens over. Injectable only so the
+    /// focus capture and restore can be tested against a test window
+    /// without changing the process-wide AppKit key window.
+    var searchOverlayKeyWindowProvider: () -> NSWindow? = { NSApp?.keyWindow }
     /// Live search query — bound to the overlay's TextField. Every
     /// edit feeds the debouncer; the actual search fires ~150 ms
     /// after the user stops typing.
@@ -8994,12 +9002,59 @@ final class AppState: ObservableObject {
             && currentNoteText != nil
     }
 
+    /// ⇧⌘F, the toolbar button, the palette's Search Vault, and the
+    /// reading view's tag activation. Opening captures where keyboard
+    /// focus is (SD-2, #1113): the overlay is laid inline, not as a
+    /// sheet, so AppKit restores nothing when it closes. Closing an open
+    /// overlay is the user's close, the same as Esc
+    /// (`dismissSearchOverlay`).
     func toggleSearchOverlay() {
         if isSearchOpen {
-            closeSearchOverlay()
+            dismissSearchOverlay()
         } else {
+            searchFocusOrigin = SearchOverlayFocusOrigin.capture(
+                keyWindow: searchOverlayKeyWindowProvider())
             isSearchOpen = true
         }
+    }
+
+    /// The user's close: Esc and the close button, and the toggle while
+    /// open. Closes the overlay, then gives keyboard focus back to the
+    /// element that had it when the overlay opened (contract 29 SD-2,
+    /// the Windows `RestoreFocusAfterSearch`):
+    ///
+    /// - after the overlay has left the view tree — on the next
+    ///   main-queue turn, as Windows queues its restore with
+    ///   `Dispatcher.InvokeAsync`;
+    /// - not when the command palette, Quick Open, or a sheet owns
+    ///   focus at close time or by then (Windows' stand-down: that
+    ///   surface owns the moment), nor when the overlay has opened
+    ///   again meanwhile;
+    /// - only onto the captured element: one that has left its window
+    ///   is not replaced with something else.
+    ///
+    /// Every other close drops the capture: opening a result
+    /// (`openSearchResult`), a vault close or switch.
+    func dismissSearchOverlay() {
+        let origin = searchFocusOrigin
+        let superseded = searchFocusIsSuperseded(in: origin?.window)
+        closeSearchOverlay()
+        guard let origin, !superseded else { return }
+        DispatchQueue.main.async { [weak self] in
+            guard let self, !self.isSearchOpen,
+                !self.searchFocusIsSuperseded(in: origin.window)
+            else { return }
+            origin.restore()
+        }
+    }
+
+    /// Whether another surface owns keyboard focus, so a closing search
+    /// overlay must not take it back: the command palette or Quick Open
+    /// (both sheets), any sheet on the overlay's window, or an app-modal
+    /// window.
+    private func searchFocusIsSuperseded(in window: NSWindow?) -> Bool {
+        isCommandPaletteOpen || isQuickSwitcherOpen
+            || window?.attachedSheet != nil || NSApp?.modalWindow != nil
     }
 
     /// Toggle the right pane's visibility (#882 — View ▸ Hide/Show Right Pane
@@ -9041,8 +9096,12 @@ final class AppState: ObservableObject {
     /// invisible filter, and leaving it armed would silently scope the
     /// next ⌘F search to a tag the user can't see. `closeVault()`
     /// routes through here too, so this covers vault close as well.
+    /// Gives no focus back: the user's close is `dismissSearchOverlay()`,
+    /// which restores around this teardown; every other caller (a result
+    /// opening, a vault close or switch) drops the captured focus.
     func closeSearchOverlay() {
         isSearchOpen = false
+        searchFocusOrigin = nil
         cancelInFlightSearch()
         searchScope = .vault
         searchState = .idle
@@ -9639,11 +9698,19 @@ final class AppState: ObservableObject {
         scrollAnchorRequest.send(anchor)
     }
 
+    /// Return on the overlay's field: open the top-ranked result, if the
+    /// results panel has one. The field's onSubmit; the key monitor
+    /// leaves Return on the field to it.
+    func openTopSearchResult() {
+        guard case .results(let rows, _) = searchState, let top = rows.first else { return }
+        openSearchResult(top)
+    }
+
     /// Activate a search result row from `SearchOverlay`.
     ///
     /// 1. Set `selectedFilePath` (which kicks off the regular note-
     ///    load observer).
-    /// 2. Close the overlay so the content area gets focus.
+    /// 2. Close the overlay, giving no focus back (SD-2; see below).
     /// 3. Await the in-flight note-load so the per-line anchors are
     ///    in the rendered tree before we ask `ScrollViewReader` to
     ///    target one.
@@ -9679,12 +9746,16 @@ final class AppState: ObservableObject {
         // (`queryForRow`), not the live field (Codex round 1).
         recordSearchRecent(queryForRow)
 
-        // Close the overlay first so focus moves cleanly back to
-        // the content area before the file load completes.
+        // Close the overlay before the open. Activation gives no focus
+        // back to where the user was (SD-2): `closeSearchOverlay` drops
+        // what the overlay captured at open. The overlay's focused
+        // element leaves the window with it, so AppKit leaves keyboard
+        // focus on the window; the editor does not claim it (#1378).
         closeSearchOverlay()
 
-        // U1-5: honor a live ⌘ modifier (row ⌘-click or ⌘Return through
-        // the overlay's key monitor — both leave NSApp.currentEvent set).
+        // U1-5: honor a live ⌘ modifier — a row ⌘-click, or ⌘Return on a
+        // focused row through the overlay's key monitor (D2). Both leave
+        // their event in NSApp.currentEvent while this runs.
         let target = openTargetFromCurrentEvent()
         let wasAlreadyOpen =
             BaseExactIdentity.matches(selectedFilePath, hit.path)
