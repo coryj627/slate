@@ -2665,6 +2665,97 @@ mod tests {
         assert_eq!(tree(tmp.path()), vault_before, "vault changed");
     }
 
+    /// #1449 keeps `rename`'s creation of missing destination folders: each
+    /// missing component is made with `mkdirat` inside the last pinned folder
+    /// and then opened with `O_NOFOLLOW`, so a move into folders that do not
+    /// exist yet still works and they are real folders in the vault. An
+    /// EXISTING ancestor on either side that is a link or a file still
+    /// refuses, and a refused move creates no folder at all, even on the
+    /// destination side of a refused source.
+    #[cfg(unix)]
+    #[test]
+    fn rename_into_missing_nested_folders_creates_them_beneath_the_root() {
+        let (tmp, p) = vault();
+        let outside = tempfile::tempdir().unwrap();
+        std::fs::write(outside.path().join("x.md"), b"outside x").unwrap();
+        p.write_file("a.md", b"vault a").unwrap();
+        p.write_file("notes/plain.md", b"a file, not a folder")
+            .unwrap();
+        std::os::unix::fs::symlink(outside.path(), tmp.path().join("link")).unwrap();
+
+        p.rename("a.md", "new/deeper/a.md").unwrap();
+
+        for folder in ["new", "new/deeper"] {
+            let meta = tmp.path().join(folder).symlink_metadata().unwrap();
+            assert!(meta.is_dir() && !meta.file_type().is_symlink(), "{folder}");
+        }
+        assert_eq!(p.read_file("new/deeper/a.md").unwrap(), b"vault a");
+
+        let outside_before = tree(outside.path());
+        let vault_before = tree(tmp.path());
+        for (from, to, refused, reason) in [
+            (
+                "new/deeper/a.md",
+                "link/fresh/a.md",
+                "link/fresh/a.md",
+                "\"link\" is a symbolic link",
+            ),
+            (
+                "new/deeper/a.md",
+                "notes/plain.md/fresh/a.md",
+                "notes/plain.md/fresh/a.md",
+                "\"notes/plain.md\" is not a folder",
+            ),
+            (
+                "link/x.md",
+                "fresh/x.md",
+                "link/x.md",
+                "\"link\" is a symbolic link",
+            ),
+            (
+                "notes/plain.md/x.md",
+                "fresh/x.md",
+                "notes/plain.md/x.md",
+                "\"notes/plain.md\" is not a folder",
+            ),
+        ] {
+            let error = p.rename(from, to).unwrap_err();
+            assert!(
+                matches!(&error, VaultError::InvalidPath { path, reason: why }
+                    if path == refused && why.contains(reason)),
+                "{from} -> {to}: {error:?}"
+            );
+        }
+        assert_eq!(tree(outside.path()), outside_before, "outside changed");
+        assert_eq!(
+            tree(tmp.path()),
+            vault_before,
+            "a refused move created or moved something"
+        );
+    }
+
+    /// `preflight_rename` still requires the destination folder to exist, as
+    /// it did before #1449 (`require_mutation_parent_access` stats it). The
+    /// batch planners only target indexed folders, and `rename` itself still
+    /// creates a missing one (the fact above).
+    #[cfg(unix)]
+    #[test]
+    fn preflight_rename_still_requires_an_existing_destination_folder() {
+        let (tmp, p) = vault();
+        p.write_file("a.md", b"vault a").unwrap();
+
+        let error = p.preflight_rename("a.md", "new/deeper/a.md").unwrap_err();
+
+        assert!(
+            matches!(&error, VaultError::Io(error) if error.kind() == io::ErrorKind::NotFound),
+            "{error:?}"
+        );
+        assert!(
+            !tmp.path().join("new").exists(),
+            "preflight creates nothing"
+        );
+    }
+
     /// #1449: the swap lands after every check, just before the kernel call.
     /// macOS renames from the root with `RENAME_NOFOLLOW_ANY`, so the call
     /// itself refuses (`ELOOP`) and the refusal names the folder. Linux renames

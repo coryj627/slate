@@ -112,6 +112,76 @@ fn move_and_rename_refuse_a_folder_swapped_for_a_link_in_either_direction() {
     assert_eq!(tree(tmp.path()), vault_before, "vault changed");
 }
 
+fn assert_real_folders(root: &Path, folders: &[&str]) {
+    for folder in folders {
+        let meta = root.join(folder).symlink_metadata().unwrap();
+        assert!(
+            meta.is_dir() && !meta.file_type().is_symlink(),
+            "{folder} is not a real folder in the vault"
+        );
+    }
+}
+
+/// #1449 keeps today's move into folders that do not exist yet: `move_file`
+/// creates them inside the vault (each with `mkdirat` in its pinned parent),
+/// and the undo, the redo and the hosts' inverse move the file back and
+/// forth while the created folders stay, as on main. When an EXISTING
+/// ancestor on either side is a symbolic link or a file, the same move
+/// refuses and creates nothing, anywhere.
+#[test]
+fn a_move_into_missing_folders_creates_them_and_its_undo_keeps_them() {
+    let (tmp, session) = indexed_vault(&[
+        ("a.md", "vault a"),
+        ("plain.md", "a file, not a folder"),
+        ("sub/b.md", "vault b"),
+    ]);
+
+    let forward = session.move_file("a.md", "new/deeper").unwrap();
+    assert_real_folders(tmp.path(), &["new", "new/deeper"]);
+    assert_eq!(
+        std::fs::read(tmp.path().join("new/deeper/a.md")).unwrap(),
+        b"vault a"
+    );
+
+    let undo = session.undo_structural(forward.op_id).unwrap();
+    assert_eq!(std::fs::read(tmp.path().join("a.md")).unwrap(), b"vault a");
+    assert!(!tmp.path().join("new/deeper/a.md").exists());
+    assert_real_folders(tmp.path(), &["new", "new/deeper"]);
+    session.undo_structural(undo.op_id).unwrap();
+    assert!(tmp.path().join("new/deeper/a.md").is_file(), "redo");
+    session.move_file("new/deeper/a.md", "").unwrap();
+    assert_eq!(std::fs::read(tmp.path().join("a.md")).unwrap(), b"vault a");
+    assert_real_folders(tmp.path(), &["new", "new/deeper"]);
+
+    let outside = tempfile::tempdir().unwrap();
+    write(outside.path(), "b.md", "outside b");
+    swap_for_link(tmp.path(), "sub", outside.path());
+    let outside_before = tree(outside.path());
+    let vault_before = tree(tmp.path());
+
+    // Destination through an existing link: the provider's refusal.
+    let through_link = session.move_file("a.md", "sub/fresh").unwrap_err();
+    assert_link_refusal(&through_link, "sub/fresh/a.md", "sub");
+    // Destination beneath an existing file, and a source beneath the link:
+    // refused (binding to the stored spelling may refuse first, typed).
+    for error in [
+        session.move_file("a.md", "plain.md/fresh").unwrap_err(),
+        session.move_file("sub/b.md", "fresh").unwrap_err(),
+    ] {
+        assert!(
+            matches!(error, VaultError::InvalidPath { .. } | VaultError::Io(_)),
+            "{error:?}"
+        );
+    }
+
+    assert_eq!(tree(outside.path()), outside_before, "outside changed");
+    assert_eq!(
+        tree(tmp.path()),
+        vault_before,
+        "a refused move created or moved something"
+    );
+}
+
 #[test]
 fn undo_of_a_move_refuses_to_move_a_file_out_through_a_swapped_folder() {
     let (tmp, session) = indexed_vault(&[("sub/a.md", "vault a"), ("sub/keep.md", "keep")]);
