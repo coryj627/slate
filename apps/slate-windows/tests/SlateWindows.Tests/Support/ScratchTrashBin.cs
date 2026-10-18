@@ -1,6 +1,7 @@
 // Copyright (C) 2026 Cory Joseph
 // SPDX-License-Identifier: AGPL-3.0-or-later
 
+using System.Diagnostics.CodeAnalysis;
 using System.Runtime.CompilerServices;
 using uniffi.slate_uniffi;
 
@@ -32,10 +33,9 @@ internal static class ScratchTrashBin
     /// process's Trash into it through core. If core refuses, the load fails
     /// rather than let a fact trash into the Recycle Bin.
     /// </summary>
-#pragma warning disable CA2255 // The test assembly's one load hook: the routing must precede every fact.
     [ModuleInitializer]
+    [SuppressMessage("Usage", "CA2255", Justification = "The test assembly's one load hook: the routing must precede every fact.")]
     internal static void RouteThisProcessIntoAScratchBin()
-#pragma warning restore CA2255
     {
         string bin = Path.Combine(
             Path.GetTempPath(),
