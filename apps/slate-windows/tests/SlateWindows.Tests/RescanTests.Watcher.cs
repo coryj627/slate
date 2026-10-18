@@ -280,13 +280,39 @@ public sealed partial class RescanTests
         }
     });
 
-    /// <summary>§4.2 item 3: a watcher request made while an import or a
-    /// trash operation runs is recorded, not refused, and runs — as a Watcher
-    /// run — once they settle. (The open's own blocker, before the workspace
-    /// exists, is <see cref="AWatcherRequestBeforeTheWorkspaceRunsAfterTheOpen"/>.)</summary>
+    /// <summary>§4.2 item 3: a watcher request made while the initial open
+    /// scan, an import or a trash operation runs is recorded, not refused,
+    /// and runs once they settle. The open's request is served by the end of
+    /// the open — the open parked before its walk here, after it in
+    /// <see cref="AWatcherRequestBeforeTheWorkspaceRunsAfterTheOpen"/> — and
+    /// the import's and the trash's, as a Watcher run, when they end.</summary>
     [Fact]
     public void AWatcherRequestWhileBlockedRunsWhenTheBlockersSettle() => RunSta(() =>
     {
+        int scansWhileOpening = -1;
+        bool busyWhileOpening = false;
+        using (var h = Harness.WhileOpeningBeforeItsScan(
+            "watcher-open-scan",
+            opening =>
+            {
+                opening.SignalExternalChange();
+                opening.Context.Drain();
+                scansWhileOpening = opening.ScanCalls;
+                busyWhileOpening = opening.Lifecycle.IsBusy;
+                opening.ParkAfterCall = 2;
+            },
+            ("alpha.md", "# Alpha\n")))
+        {
+            h.Context.RunUntil(() => h.Parked.IsSet, "the recorded watcher run's scan");
+            Assert.Equal(1, scansWhileOpening);
+            Assert.True(busyWhileOpening, "the open was not busy before its scan");
+            Assert.Equal(2, h.ScanCalls);
+            h.Release.Set();
+            h.Context.RunUntil(() => !h.Lifecycle.IsRescanActive, "the recorded watcher run");
+            h.Context.Await(h.Lifecycle.RescanCompletion);
+            Assert.Empty(h.Events);
+        }
+
         var picker = new TaskCompletionSource<IReadOnlyList<string>>();
         using (var h = new Harness("watcher-import", pickImportSources: () => picker.Task, files: [("alpha.md", "# Alpha\n")]))
         {
@@ -312,7 +338,7 @@ public sealed partial class RescanTests
         {
             using var parked = new ManualResetEventSlim(false);
             using var release = new ManualResetEventSlim(false);
-            h.Sidebar.TrashWorkerStartingForTesting = _ =>
+            h.Sidebar.TrashWorkerStartingForTesting = token =>
             {
                 parked.Set();
                 _ = release.Wait(TimeSpan.FromSeconds(30));

@@ -2050,10 +2050,12 @@ public sealed partial class RescanTests
             (string Path, string Text)[] files,
             Func<Task<IReadOnlyList<string>>>? pickImportSources,
             bool asyncTree = false,
-            Action<Harness>? whileOpening = null)
+            Action<Harness>? whileOpening = null,
+            bool parkBeforeTheScan = false)
         {
             Root = root;
             Seed(root, files);
+            _parkBeforeTheScan = parkBeforeTheScan;
             _previous = SynchronizationContext.Current;
             SynchronizationContext.SetSynchronizationContext(Context);
             Lifecycle = new VaultLifecycleViewModel(
@@ -2178,6 +2180,14 @@ public sealed partial class RescanTests
             params (string Path, string Text)[] files) =>
             new(NewRoot(label), files, null, whileOpening: whileOpening);
 
+        /// <summary>Plan 43 PR 20b: <see cref="WhileOpening"/>, parked before
+        /// the open's scan instead — the open busy, its walk not begun.</summary>
+        public static Harness WhileOpeningBeforeItsScan(
+            string label,
+            Action<Harness> whileOpening,
+            params (string Path, string Text)[] files) =>
+            new(NewRoot(label), files, null, whileOpening: whileOpening, parkBeforeTheScan: true);
+
         /// <summary>Plan 43 PR 20b: whether the fact's window is active — the
         /// lifecycle's inactive rule reads it. Active, as a lifecycle with no
         /// window reads it, unless a fact says otherwise.</summary>
@@ -2195,6 +2205,7 @@ public sealed partial class RescanTests
         public ManualResetEventSlim OpenRelease { get; } = new(false);
 
         private bool _parkTheOpen;
+        private readonly bool _parkBeforeTheScan;
 
         /// <summary>Plan 43 PR 20b: the call core's vault watcher makes when a
         /// burst closes — on the open vault's real listener, from a thread of
@@ -2451,9 +2462,19 @@ public sealed partial class RescanTests
             {
                 return Task.Run(() =>
                 {
+                    if (_parkBeforeTheScan)
+                    {
+                        OpenParked.Set();
+                        _ = OpenRelease.Wait(TimeSpan.FromSeconds(30));
+                    }
+
                     T loaded = work();
-                    OpenParked.Set();
-                    _ = OpenRelease.Wait(TimeSpan.FromSeconds(30));
+                    if (!_parkBeforeTheScan)
+                    {
+                        OpenParked.Set();
+                        _ = OpenRelease.Wait(TimeSpan.FromSeconds(30));
+                    }
+
                     return loaded;
                 });
             }
