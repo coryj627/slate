@@ -1398,21 +1398,22 @@ function Invoke-StartupSweep {
     foreach ($name in @($Journal.Vms.Keys)) {
         if (-not $kept.ContainsKey($name)) { $Journal.Vms.Remove($name) }
     }
-    if ($kept.Count -eq 0) {
-        $Journal.Retries = @{}
-        $Journal.SeenJobs = @{}
-    }
-    $Journal['LogsPrunedOn'] = $null
     # The breaker: a restart is what follows a repair, so the failures in a
     # row are forgotten and the next state says serving. After a trip the
     # retry strikes go too, whatever their lanes, even with a VM kept (the
-    # table is otherwise cleared only when nothing is kept): the jobs the
-    # host gave up on must not wait on a half-open that a reset never brings.
+    # table is otherwise cleared only when nothing is kept, below): the jobs
+    # the host gave up on must not wait on a half-open that a reset never
+    # brings. Weighed before that clearing, so the log names the lanes.
     $health = Get-HostHealth -Journal $Journal
     $failures = [int]$health['Failures']
     if ($failures -gt 0) { & $Adapters.Log 'info' "health: $failures failures in a row forgotten at start" }
     if ($null -ne $health['TrippedAt']) { Clear-JobRetries -Journal $Journal -Adapters $Adapters -Reason 'at start' -Force }
     Reset-HostHealth -Journal $Journal
+    if ($kept.Count -eq 0) {
+        $Journal.Retries = @{}
+        $Journal.SeenJobs = @{}
+    }
+    $Journal['LogsPrunedOn'] = $null
 }
 
 function Select-SlateKvpItems {
