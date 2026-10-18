@@ -123,9 +123,13 @@ impl EchoLedger {
 /// `/`, `.` components and empty segments dropped — the shape the watcher
 /// builds from an event path (`super::watch`). `None` for the vault root or a
 /// spelling with a parent-directory component, which no mutation records.
+/// A backslash separates components only on Windows: elsewhere it is a legal
+/// character of a name, and splitting there would record (and stat) another
+/// path than the one mutated.
 pub(crate) fn ledger_key(relative: &str) -> Option<String> {
+    let separator = |c: char| c == '/' || (cfg!(windows) && c == '\\');
     let mut key = String::with_capacity(relative.len());
-    for part in relative.split(['/', '\\']) {
+    for part in relative.split(separator) {
         match part {
             "" | "." => continue,
             ".." => return None,
@@ -223,7 +227,9 @@ mod tests {
         assert_eq!(ledger_key("a.md").as_deref(), Some("a.md"));
         assert_eq!(ledger_key("./a/b.md").as_deref(), Some("a/b.md"));
         assert_eq!(ledger_key("a//b.md/").as_deref(), Some("a/b.md"));
-        assert_eq!(ledger_key(r"a\b.md").as_deref(), Some("a/b.md"));
+        // A backslash is a separator only where the platform says so.
+        let backslashed = if cfg!(windows) { "a/b.md" } else { r"a\b.md" };
+        assert_eq!(ledger_key(r"a\b.md").as_deref(), Some(backslashed));
         assert_eq!(ledger_key(""), None);
         assert_eq!(ledger_key("."), None);
         assert_eq!(ledger_key("a/../b.md"), None);

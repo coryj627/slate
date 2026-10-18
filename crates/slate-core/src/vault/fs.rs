@@ -2359,6 +2359,20 @@ mod tests {
         assert!(!p.is_own_echo(""), "the root is never an echo");
     }
 
+    /// Plan 43 PR 20a: a backslash is part of a name on Unix, so Slate's
+    /// write of `a\b.md` is that file's echo and never claims an external
+    /// write to the nested `a/b.md`.
+    #[cfg(unix)]
+    #[test]
+    fn a_backslash_in_a_unix_name_never_claims_another_path() {
+        let (tmp, p) = vault();
+        std::fs::create_dir(tmp.path().join("a")).unwrap();
+        std::fs::write(tmp.path().join("a").join("b.md"), b"written outside").unwrap();
+        p.write_file(r"a\b.md", b"written by slate").unwrap();
+        assert!(p.is_own_echo(r"a\b.md"));
+        assert!(!p.is_own_echo("a/b.md"), "the nested file is not Slate's");
+    }
+
     #[cfg(unix)]
     #[test]
     fn list_dir_reports_symlink_as_symlink() {
