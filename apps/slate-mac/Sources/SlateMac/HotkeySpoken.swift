@@ -103,5 +103,7 @@ enum HotkeySpoken {
         "↓": "Down Arrow",
         "←": "Left Arrow",
         "→": "Right Arrow",
+        // #1431: Activate at Cursor's ⌘↩; the glyph alone reads as nothing.
+        "↩": "Return",
     ]
 }

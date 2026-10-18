@@ -1058,6 +1058,24 @@ struct SlateMacApp: App {
 
                 Divider()
 
+                // #1431: the editor's activate-at-cursor verb, the menu home
+                // of `slate.editor.activateAtCaret` (Windows' Editor ▸
+                // Activate at Cursor, Ctrl+Enter). Enabled only while the
+                // note editor holds keyboard focus: a disabled item lets ⌘↩
+                // through to the focused view, so a grid's or a list's ⌘↩
+                // (open in a new tab) keeps working everywhere else. The
+                // editor's own key handling takes the chord first while it
+                // is focused; the palette row works from anywhere.
+                Button("Activate at Cursor") {
+                    appState.invokeRegisteredCommand(SlateCommandID.activateAtCaret)
+                }
+                .keyboardShortcut(.return, modifiers: [.command])
+                .disabled(!appState.isNoteEditorFocused)
+                .accessibilityHint(
+                    "Activate the link, tag, citation, embed, or task under the cursor.")
+
+                Divider()
+
                 // ⇧⌘R migrated from NotePropertiesHeader's hidden
                 // opacity-0 button (the #422 dead-zone pattern, plus
                 // the chord silently vanished whenever the properties

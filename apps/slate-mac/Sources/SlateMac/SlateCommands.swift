@@ -449,6 +449,13 @@ enum SlateCommandID {
     /// Opt-in live spell checking (#855). No chord — menu (Edit ▸
     /// Check Spelling While Typing, live checkmark) + palette only.
     static let toggleSpellCheck = "slate.editor.toggleSpellCheck"
+    /// #1431: activate the link, tag, citation, embed or task under the
+    /// cursor — Windows' id (`ChordTable.Ids.ActivateAtCaret`), so the
+    /// capability is shared and its label is byte-identical (contract P3).
+    /// ⌘↩ (decision 12's Command for Control over Windows' Ctrl+Enter):
+    /// the editor takes it while focused, and Edit ▸ Activate at Cursor
+    /// carries it, enabled only then, so ⌘↩ elsewhere stays its surface's.
+    static let activateAtCaret = "slate.editor.activateAtCaret"
 
     // Settings
     static let openSettings = "slate.settings.open"
@@ -648,6 +655,7 @@ enum SlateCommandID {
         editorZoomOut,
         editorActualSize,
         toggleSpellCheck,
+        activateAtCaret,
         toggleViewMode,
         togglePropertiesSource,
         openSettings,
@@ -1974,6 +1982,15 @@ func registerCoreCommands(into registry: CommandRegistry, appState: AppState) {
         section: .editor,
         hint: "Toggle live spell checking in the note editor. Off by default for Markdown source."
     ) { [weak appState] in appState?.toggleEditorSpellCheck() }
+
+    register(
+        SlateCommandID.activateAtCaret,
+        // Windows' label and hint verbatim (contract P3).
+        label: "Activate at Cursor",
+        section: .editor,
+        hotkey: "⌘↩",
+        hint: "Activate the link, tag, citation, embed, or task under the cursor."
+    ) { [weak appState] in appState?.activateAtCursor() }
 
     // ----- Settings -----
 

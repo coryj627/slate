@@ -837,12 +837,15 @@ internal static class ChordTable
         Reg(Ids.ToggleSpellCheck, "Check Spelling While Typing", CommandSection.Editor,
             "Toggle live spell checking in the note editor. Off by default for Markdown source."),
 
-        // Windows-only editor capabilities. Both chords are delivered by the
+        // Editor-scoped verbs. Both Windows chords are delivered by the
         // Avalon control itself (SlateTextEditor.OnPreviewKeyDown:170,177) and
-        // only advertised by the Editor menu's InputGestureText.
+        // only advertised by the Editor menu's InputGestureText. Activate at
+        // Cursor is shared since #1431: mac registers the same id with ⌘↩,
+        // which the rule maps to Ctrl+Enter (Edit ▸ Activate at Cursor, enabled
+        // while the note editor has focus). Preview Embed stays Windows-only.
         Reg(Ids.ActivateAtCaret, "Activate at Cursor", CommandSection.Editor,
             "Activate the link, tag, citation, embed, or task under the cursor.",
-            win: "Ctrl+Enter", scope: ChordScope.Editor),
+            mac: "⌘↩", win: "Ctrl+Enter", scope: ChordScope.Editor),
         Reg(Ids.PreviewEmbed, "Preview Embed", CommandSection.Editor,
             "Open the embed under the cursor in the interaction popover.",
             win: "Ctrl+E", scope: ChordScope.Editor),

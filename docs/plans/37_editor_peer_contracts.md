@@ -141,6 +141,15 @@ the existing interaction policy. Tags/citations expose their action without
 invented URIs. All six kinds must exercise the real production activation path,
 including ordinary Markdown links/images. No new editor navigation chords.
 
+Mac (#1431, gap G29): the same six kinds are `AXLink` elements in the native
+`NSTextView` reading, and each element's press activates its link. VoiceOver's
+VO-Space after VO-Command-L presses the text area instead, so the text area
+offers the same press while the insertion point is inside a link. Both run
+`slate.editor.activateAtCaret`'s resolution, which is this rule
+(`TryGetActionableSpan`, ported as `EditorActivation`) over the same canonical
+spans. ⌘↩, the mac form of Ctrl+Enter under decision 12, runs it at the caret.
+No new chord: the command and its Windows chord already exist.
+
 **E-10 — Evidence is executable.** Tests:
 `EditorSemanticTextRangeTests` exercises all kinds through a real session,
 mixed/plain/degenerate ranges, overlapping attributes, both-direction

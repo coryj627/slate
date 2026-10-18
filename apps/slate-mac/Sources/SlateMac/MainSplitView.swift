@@ -840,8 +840,12 @@ struct MainSplitView: View {
                 },
                 set: { presented in
                     if !presented {
-                        appState.expandedCitation = nil
-                        alertFocusReturn = .editor
+                        // #1472: a citation the editor expanded returns
+                        // keyboard focus to the editor at its caret; send
+                        // VoiceOver to the content pane only otherwise.
+                        if !appState.closeExpandedCitation() {
+                            alertFocusReturn = .editor
+                        }
                     }
                 }
             )
@@ -850,8 +854,9 @@ struct MainSplitView: View {
                 CitationPopover(
                     citation: citation,
                     onClose: {
-                        appState.expandedCitation = nil
-                        alertFocusReturn = .editor
+                        if !appState.closeExpandedCitation() {
+                            alertFocusReturn = .editor
+                        }
                     }
                 )
                 .environmentObject(appState)

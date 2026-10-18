@@ -474,10 +474,11 @@ A new surface joins ALL SIX or fails a named gate.
   close time or by the time of the restore. One difference remains.
   Where Windows falls back to the editor when the restore fails, mac
   restores nothing rather than focus something else. After an
-  activation, Windows' editor claims focus, and mac's does not: focus
-  stays on the window, as before
-  ([#1378](https://github.com/coryj627/slate/issues/1378)). The two mac
-  comments now describe the code. Facts: `SearchOverlayKeyRoutingTests`.
+  activation the opened note's editor claims focus on both. On mac this
+  is the editor focus claim of #1472, with the hit's line scroll placing
+  the caret ([#1378](https://github.com/coryj627/slate/issues/1378);
+  `EditorFocusReturnTests`). Before, focus stayed on the window. Facts:
+  `SearchOverlayKeyRoutingTests`.
 - **SD-3 — No scope selector, matching mac.** The spec's "scope selector"
   is NOT built. Mac has none, Folder scope is constructed nowhere in
   either app, and inventing a picker would ship a Windows-only affordance
