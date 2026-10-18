@@ -6,7 +6,9 @@
 #   2. uniffi-bindgen generate (Swift)
 #   3. copy generated headers + Swift into apps/slate-mac/Sources/
 #   4. swift build inside apps/slate-mac/
-#   5. (optional, with --run) launch the resulting binary
+#   5. check the SDK the SlateMac binary records (scripts/check_mac_sdk.py,
+#      the #1460 tripwire), and the .app bundle's copy with --bundle
+#   6. (optional, with --run) launch the resulting binary
 
 set -euo pipefail
 
@@ -109,6 +111,16 @@ swift build $SWIFT_CONFIG_FLAG
 
 BINARY=".build/$PROFILE/SlateMac"
 ABS_BINARY="$WORKSPACE_ROOT/$APP_DIR/$BINARY"
+
+# #1460 tripwire, for every profile. SwiftUI picks the reading view's
+# selectable text by the SDK this executable records (LC_BUILD_VERSION):
+# below 27, AppKit's text field, whose link press the #1421 guard routes;
+# from 27, SwiftUI's own text, whose links have no press, so VO-Space on a
+# reading link would do nothing. Fails the build at SDK 27 or later, and
+# when the SDK cannot be read. It only reads the binary.
+echo
+echo "==> Checking the SDK SlateMac records (#1460)"
+python3 -I "$WORKSPACE_ROOT/scripts/check_mac_sdk.py" "$ABS_BINARY"
 
 echo
 echo "Built: $ABS_BINARY"
@@ -220,6 +232,11 @@ PLIST
     codesign --force --sign - "$APP_BUNDLE/Contents/Frameworks/libslate_uniffi.dylib"
     codesign --force --sign - "$APP_BUNDLE/Contents/MacOS/SlateMac"
     codesign --force --sign - "$APP_BUNDLE"
+
+    # #1460 tripwire again, on the executable the bundle's Info.plist names,
+    # as install_name_tool and codesign left it, before LaunchServices
+    # registers the bundle.
+    python3 -I "$WORKSPACE_ROOT/scripts/check_mac_sdk.py" "$APP_BUNDLE"
 
     # Re-register with LaunchServices so the AX system sees the new
     # bundle right away (Spotlight/LS sometimes caches the previous

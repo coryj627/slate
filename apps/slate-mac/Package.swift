@@ -9,6 +9,15 @@ import Foundation
 // the `slate-uniffi` FFI wrapper. Built as a SwiftPM executable while we
 // bootstrap; this will graduate to an Xcode project once it needs a
 // real .app bundle, entitlements, and code signing.
+//
+// Before that move, read #1460. SwiftUI picks the reading view's
+// selectable text by the SDK the executable records: from SDK 27 it draws
+// its own, whose links VoiceOver cannot press. SwiftPM's default build
+// records the deployment target (15.0) as that SDK, but its native build
+// system records the SDK it builds with (27.0 with Xcode 27), and an Xcode
+// project would too. scripts/check_mac_sdk.py, run by build-mac-app.sh
+// after every swift build, fails the build at SDK 27 or later while #1460
+// is open, so the move must carry that check into the project's build.
 
 // Link against the Cargo target dir matching the active build profile.
 // build-mac-app.sh exports SLATE_LINK_PROFILE (debug|release) so a
