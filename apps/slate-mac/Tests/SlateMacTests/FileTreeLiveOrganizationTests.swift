@@ -555,6 +555,98 @@ final class FileTreeLiveOrganizationTests: XCTestCase {
             "crossing local midnight re-buckets the loaded level at once")
     }
 
+    // MARK: - A save that overtakes a queued re-sort
+
+    nonisolated private static func summary(_ path: String, mtimeMs: Int64) -> FileSummary {
+        FileSummary(
+            path: path, name: (path as NSString).lastPathComponent, mtimeMs: mtimeMs,
+            sizeBytes: 0, isMarkdown: true, displayName: nil, createdDate: nil,
+            createdMs: nil, wordCount: nil, preview: nil, taskTotal: 0, taskOpen: 0)
+    }
+
+    /// The re-sort's revision check still does its job under the accessors:
+    /// a sort-relevant save that lands while a level's re-sort waits on the
+    /// worker, in a level that had no save before (its revision goes from
+    /// absent to 1), makes that pass stale. It is redone once, and only the
+    /// redo publishes: two passes admitted, one accepted pass's row visits,
+    /// one reorder, and the order the save implies. A guard that let the
+    /// overtaken pass publish would read two accepted passes' rows; the
+    /// self-requeue loop #1438 fixed would never settle.
+    func testASaveThatOvertakesAQueuedReSortRedoesItOnceAndOnlyTheRedoPublishes() async throws {
+        let folderEntered = expectation(description: "the folder's fetch holds the worker")
+        let releaseFolder = DispatchSemaphore(value: 0)
+        let calls = LevelFetches()
+        let tree = FileTreeViewModel()
+        defer {
+            tree.cancelPendingLoads()
+            releaseFolder.signal()
+        }
+        tree.applyOrganization(FileTreeViewModel.OrganizationContext())
+        tree.bindAsynchronouslyForTesting { parent, _, _ in
+            calls.record(parent)
+            guard parent == "folder" else {
+                return DirListing(
+                    dirs: [
+                        DirNodeSummary(
+                            id: 1, path: "folder", name: "folder", childDirCount: 0,
+                            childFileCount: 1, hasFolderNote: false)
+                    ],
+                    files: FileSummaryPage(
+                        items: [
+                            Self.summary("a.md", mtimeMs: 1),
+                            Self.summary("b.md", mtimeMs: 2),
+                            Self.summary("c.md", mtimeMs: 3),
+                        ],
+                        nextCursor: nil, totalFiltered: 3))
+            }
+            if calls.count == 2 {
+                folderEntered.fulfill()
+                _ = releaseFolder.wait(timeout: .now() + 20)
+            }
+            return DirListing(
+                dirs: [],
+                files: FileSummaryPage(
+                    items: [Self.summary("folder/x.md", mtimeMs: 1)],
+                    nextCursor: nil, totalFiltered: 1))
+        }
+        await settle(tree)
+        XCTAssertEqual(tree.rootLevel.map(\.path), ["folder", "a.md", "b.md", "c.md"])
+        let folder = try XCTUnwrap(tree.rootLevel.first { $0.path == "folder" })
+        let passesBefore = tree.liveReorganizationPassCountForTesting
+        let visitsBefore = tree.liveReorganizationRowVisitCountForTesting
+        let reordersBefore = tree.levelReorganizeCountForTesting
+
+        // The folder's fetch holds the serial worker, so the root's re-sort
+        // parks behind it once the pump has admitted it (capturing the
+        // root's revision, still absent: 0).
+        tree.expand(folder)
+        await fulfillment(of: [folderEntered], timeout: 5)
+        var prefs = SidebarOrganizationPrefs()
+        prefs.vaultChoice = SidebarOrganizationChoice(
+            sort: SidebarSortOption(field: .modified, direction: .desc), grouping: .none)
+        tree.applyOrganization(FileTreeViewModel.OrganizationContext(prefs: prefs))
+        try await waitUntil("the pump admits the root's re-sort") {
+            tree.liveReorganizationPassCountForTesting == passesBefore + 1
+        }
+        // The save lands mid-re-sort: the root's revision goes from absent
+        // to 1, and the root is queued again.
+        XCTAssertTrue(tree.replaceFileSummary(Self.summary("b.md", mtimeMs: 4)))
+        releaseFolder.signal()
+        await settle(tree)
+
+        XCTAssertEqual(
+            tree.rootLevel.map(\.path), ["folder", "b.md", "c.md", "a.md"],
+            "the redo publishes the order the save implies")
+        XCTAssertEqual(tree.children[folder.nodeID]?.map(\.path), ["folder/x.md"])
+        XCTAssertEqual(
+            tree.liveReorganizationPassCountForTesting - passesBefore, 2,
+            "the overtaken pass and its one redo: no self-requeue loop")
+        XCTAssertEqual(
+            tree.liveReorganizationRowVisitCountForTesting - visitsBefore, 7,
+            "one accepted pass (four rows read, three ordered): the overtaken one never published")
+        XCTAssertEqual(tree.levelReorganizeCountForTesting - reordersBefore, 1)
+    }
+
     // MARK: - The hosted tree under the keys
 
     /// The Windows twin is `FilesRegionLandingTests.PinNoteRebuildsTheTreeUnderTheKeysAndTheyStayOnTheRow`:
@@ -577,21 +669,19 @@ final class FileTreeLiveOrganizationTests: XCTestCase {
         XCTAssertEqual(
             Self.filesTreeRows(in: loaded).map(\.label), ["note", "other", "zulu"], "\(loaded)")
 
-        // The reader moves onto `other`, as an AT client does. Where the
-        // runner's table does not take an AX selection, the editor's mirror
-        // selects the row instead (a search open's route): the fact is about
-        // where the selection stays, not how it arrived.
+        // The reader moves onto `other`, as an AT client does, and the client
+        // reads the selection back before anything is asserted: a runner
+        // window that is not focused can take a moment to apply it.
         try HostedAccessibilityTree.selectRow(
             in: window,
             table: { Self.rows(of: $0).contains { $0.label == "zulu" } },
             row: { Self.label(of: $0) == "other" })
-        let selectedThroughAX = await eventually(timeout: .seconds(5)) {
-            state.sidebarSelectionSnapshot?.focusedPath == "other.md"
+        let selected = try await HostedAccessibilityTree.snapshot(of: window) { tree in
+            Self.filesTreeRows(in: tree).filter(\.selected).map(\.label) == ["other"]
         }
-        if !selectedThroughAX {
-            print("FileTreeLiveOrganizationTests: AX selection did not land; mirroring instead")
-            state.selectedFilePath = "other.md"
-        }
+        XCTAssertEqual(
+            Self.filesTreeRows(in: selected).map(\.label), ["note", "other", "zulu"],
+            "\(selected)")
         try await waitUntil("the tree publishes the reader's row") {
             state.sidebarSelectionSnapshot?.focusedPath == "other.md"
         }

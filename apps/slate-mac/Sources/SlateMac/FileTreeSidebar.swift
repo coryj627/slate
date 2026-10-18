@@ -358,6 +358,7 @@ final class FileTreeViewModel: ObservableObject {
     @Published private(set) var incompleteLevelMessageByKey: [NodeID: String] = [:]
     private(set) var levelReorganizeCountForTesting = 0
     private(set) var liveReorganizationRowVisitCountForTesting = 0
+    private(set) var liveReorganizationPassCountForTesting = 0
     private var liveReorganizationTokens: [NodeID: UUID] = [:]
     private var liveReorganizationTasks: [NodeID: Task<Void, Never>] = [:]
     private var liveReorganizationCancels: [NodeID: CancelToken] = [:]
@@ -605,6 +606,7 @@ final class FileTreeViewModel: ObservableObject {
             let oldPresentation = presentationByParent[key]
         else { return }
 
+        liveReorganizationPassCountForTesting += 1
         let token = UUID()
         let nativeCancel = CancelToken()
         let capturedBindingGeneration = bindingGeneration
