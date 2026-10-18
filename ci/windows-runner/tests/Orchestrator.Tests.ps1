@@ -1596,6 +1596,17 @@ Context 'health breaker' {
         # Both slots are busy, so job 1 is published as queued, no longer hidden by its cap.
         $journal.PublishedState | Should -Match '"queued":\[\{"lane":"model"'
     }
+    It 'leaves unmarked strikes alone when a runner of their own lane takes its job on a host that never tripped' {
+        # Two app strikes, no trip, then an app claim: only strikes the lane
+        # rule kept are forgiven by a claim, so a job-specific fault on a
+        # busy lane still reaches its cap.
+        $null = & $script:twoFailuresThenAVm 'app'
+        $world.Runner = [pscustomobject]@{ status = 'online'; busy = $true }
+        Invoke-OrchestratorTick -Config $config -Journal $journal -Adapters $adapters -Now $t0.AddSeconds(20 + 310)
+        $journal.Retries['1'].Count | Should -Be 1
+        $journal.Retries['2'].Count | Should -Be 1
+        ($logs -join "`n") | Should -Not -Match 'retry strikes'
+    }
     It 'does not hold strikes whose lanes are no longer known against the one-lane rule' {
         # The seen-job records of the struck jobs were pruned: an unknown
         # lane is not "one lane", so the half-open forgives them.
