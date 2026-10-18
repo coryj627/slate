@@ -33,6 +33,10 @@ petgraph = { workspace = true }
 # sink. See the "Diagnostics & the logging facade" note in lib.rs for the
 # privacy rule (warn-level messages must not carry vault paths / note names).
 log = { workspace = true }
+# The vault watcher (plan 43 PR 20a, #1267): one recursive watch on the
+# vault root behind `FsVaultProvider::watch` (`vault/watch.rs`). The exact
+# pin and the license notes live in the workspace manifest.
+notify = { workspace = true }
 
 # --- Milestone K content pipelines (#217 / #218 / #219) ---------------
 # Math: LaTeX → MathML → MathCAT speech + braille. `include-zip`

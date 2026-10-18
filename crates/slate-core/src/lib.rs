@@ -175,7 +175,8 @@ pub use session::{
 };
 pub use session::{
     MARKDOWN_DOCUMENT_EXTENSIONS, MAX_INDEXED_HASH_PATHS, OPENABLE_DOCUMENT_EXTENSIONS,
-    SCAN_ERROR_SAMPLES, SkippedFile, TagCount, TagEditReport, is_openable_document,
+    SCAN_ERROR_SAMPLES, SkippedFile, TagCount, TagEditReport, WATCHER_SENTENCE_SPACING_MS,
+    is_openable_document,
 };
 pub use sidebar_filter::{
     FilterParseError, SidebarFilterDateWindow, SidebarFilterNamedWindow, SidebarFilterQueryTerm,
@@ -186,7 +187,8 @@ pub use sidebar_filter::{
 pub use tag_tree::{TagTree, TagTreeNode};
 pub use vault::{
     DirEntry, EntryKind, FileEvent, FileEventSink, FileStat, FsVaultProvider, VaultProvider,
-    WatchHandle, content_hash, route_trash_to_scratch_bin_for_tests, scratch_trash_bin_for_tests,
+    WatchEnd, WatchHandle, content_hash, route_trash_to_scratch_bin_for_tests,
+    scratch_trash_bin_for_tests,
 };
 
 use std::path::Path;

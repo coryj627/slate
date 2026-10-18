@@ -231,10 +231,30 @@ pub trait VaultProvider: Send + Sync {
     /// Cheap metadata: size, mtime, kind.
     fn stat(&self, relative: &str) -> Result<FileStat, VaultError>;
 
-    /// Best-effort change subscription. Returns `Ok(None)` if the
-    /// platform doesn't support filesystem events for this vault — the
-    /// engine falls back to refresh-on-foreground in that case.
+    /// Best-effort change subscription (plan 43 PR 20a, #1267). Returns
+    /// `Ok(None)` if the platform or the provider has no filesystem events
+    /// for this vault, and an error when the platform refuses the watch;
+    /// either way the hosts' Refresh and foreground rescan stay the
+    /// reconciliation, as they do while a watch is live (design
+    /// `docs/plans/43_mac_backlog_delivery/20_vault_watcher_design.md`
+    /// §4.6). Nothing calls this but `VaultSession::start_watching`.
+    ///
+    /// The sink is called on the platform's own thread and must only record:
+    /// see [`FileEventSink`]. Dropping the returned handle stops delivery.
     fn watch(&self, sink: Arc<dyn FileEventSink>) -> Result<Option<WatchHandle>, VaultError>;
+
+    /// Whether `relative`'s current state is the one this provider's own
+    /// latest mutation of it left behind — the watcher's echo test (plan 43
+    /// PR 20a, design §4.2), asked at burst close for each touched path so
+    /// Slate's own writes start no rescan. Must be cheap and must never take
+    /// a session lock (it runs on the watch coalescer's thread).
+    ///
+    /// The default records nothing and claims nothing: every event such a
+    /// provider reports calls back, which costs a silent rescan, never a
+    /// wrong result.
+    fn is_own_echo(&self, _relative: &str) -> bool {
+        false
+    }
 
     /// Atomically check + read a vault file: canonicalize-and-
     /// verify-in-scope as one indivisible step with the open that
@@ -322,33 +342,112 @@ pub enum EntryKind {
 /// Sink for filesystem-watch events. The `watch` API hands the engine
 /// a stream of file-change events; the sink is how those events are
 /// delivered.
+///
+/// Called on the platform watcher's own thread (FSEvents' run loop,
+/// ReadDirectoryChangesW's completion routine, inotify's event loop). An
+/// implementation only records the event — the session's sink takes the
+/// watch coalescer's burst lock to insert into a bounded set and signals it —
+/// and never waits on SQLite, the session or the host: a blocked platform
+/// thread is what makes FSEvents drop events (plan 43 PR 20 design §4.3).
 pub trait FileEventSink: Send + Sync {
     fn on_event(&self, event: FileEvent);
 }
 
-/// A single filesystem change event.
-#[derive(Debug, Clone)]
+/// A single filesystem change event, vault-relative and already filtered by
+/// the scanner's hidden-path rule. The kinds are informational: a watch's
+/// events are hints that only ask the host to rescan, never content (plan 43
+/// PR 20 design §4.1, §4.4).
+#[derive(Debug, Clone, PartialEq, Eq)]
 pub enum FileEvent {
-    Created { relative: String },
-    Modified { relative: String },
-    Deleted { relative: String },
-    Renamed { from: String, to: String },
+    Created {
+        relative: String,
+    },
+    Modified {
+        relative: String,
+    },
+    Deleted {
+        relative: String,
+    },
+    Renamed {
+        from: String,
+        to: String,
+    },
+    /// The platform dropped events (beneath `relative`; anywhere when `None`)
+    /// or named a path that cannot be spelled as UTF-8: the touched-path set
+    /// is incomplete, so the burst calls back without an echo test.
+    Rescan {
+        relative: Option<String>,
+    },
+    /// The watch ended. `RootChanged` ends it without a callback; `Failed`
+    /// makes one catch-up callback first (design §4.6).
+    Ended {
+        cause: WatchEnd,
+    },
 }
 
-/// Opaque handle returned by `watch`. Dropping the handle unsubscribes.
-/// Reserved for the real watcher implementation (V1.A ships with
-/// `watch` returning `Ok(None)`).
-#[derive(Debug)]
+/// Why a watch ended (plan 43 PR 20 design §4.4, §4.6). A watch that ends is
+/// not re-armed in PR 20; Refresh and the foreground rescan carry on until
+/// the next open (PR 22 decides the re-arm after a legitimate root rename).
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum WatchEnd {
+    /// The root was renamed, removed or replaced: no longer the session's.
+    RootChanged,
+    /// The platform watcher reported an error (a failed re-arm, a watch limit
+    /// reached for a new folder): its path set can no longer be trusted.
+    Failed,
+}
+
+/// Opaque handle returned by `watch`. Dropping the handle unsubscribes:
+/// it owns the platform watch, and the root anchor the watch is verified
+/// against (plan 43 PR 20a; design §4.4). Not constructible from outside the
+/// crate, so a handle always comes from a provider's `watch` call.
 pub struct WatchHandle {
-    _private: (),
+    /// The platform watch (notify's watcher). Dropping it stops delivery.
+    backend: Option<Box<dyn std::any::Any + Send>>,
+    /// What this watch is anchored to — the seam PR 22 replaces with the
+    /// session's held root descriptor (`super::watch::RootAnchor`).
+    anchor: super::watch::RootAnchor,
 }
 
 impl WatchHandle {
-    /// Reserved for the future watcher implementation. Not constructible
-    /// from outside the crate to ensure handles always come from a
-    /// provider's `watch` call.
-    #[allow(dead_code)]
-    pub(crate) fn new() -> Self {
-        Self { _private: () }
+    pub(crate) fn new(
+        backend: Box<dyn std::any::Any + Send>,
+        anchor: super::watch::RootAnchor,
+    ) -> Self {
+        Self {
+            backend: Some(backend),
+            anchor,
+        }
+    }
+
+    /// A handle with no platform watch behind it: a test provider's, whose
+    /// events the fact injects through the sink it was given.
+    #[cfg(test)]
+    pub(crate) fn scripted(anchor: super::watch::RootAnchor) -> Self {
+        Self {
+            backend: None,
+            anchor,
+        }
+    }
+
+    /// The root identity observed right after arming (design §4.4 step 1),
+    /// which the session compares with its own anchor.
+    pub(crate) fn arm_identity(&self) -> Option<super::watch::RootIdentity> {
+        self.anchor.identity()
+    }
+
+    /// Whether the root path still names the anchored directory (design §4.4
+    /// step 2), asked before every callback.
+    pub(crate) fn root_still_anchored(&self) -> bool {
+        self.anchor.still_anchored()
+    }
+}
+
+impl std::fmt::Debug for WatchHandle {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.debug_struct("WatchHandle")
+            .field("platform_watch", &self.backend.is_some())
+            .field("anchor", &self.anchor)
+            .finish()
     }
 }

@@ -1385,6 +1385,29 @@ impl VaultSession {
         Ok(self.inner.indexed_content_hashes(&paths, &cancel.inner)?)
     }
 
+    /// Plan 43 PR 20a (#1267): arm the vault watcher. While it is live,
+    /// files changed outside this session reach every registered
+    /// listener's `on_external_change` — at most once per coalesced burst,
+    /// from the watcher's own thread, with no session lock held — and the
+    /// host answers with a Watcher-reason rescan. Slate's own writes are
+    /// echoes and call nothing. Call it on the open worker right before
+    /// the initial scan; idempotent while live. Returns false — and
+    /// changes nothing the user hears or sees — when no watch can start
+    /// (an unsupported volume, a platform limit, a root that no longer
+    /// names the opened folder, a watch that already ended, or
+    /// `SLATE_TEST_DISABLE_VAULT_WATCHER` set). Refresh and the
+    /// foreground rescan stay the baseline either way.
+    pub fn start_watching(&self) -> bool {
+        self.inner.start_watching()
+    }
+
+    /// Plan 43 PR 20a (#1267): disarm the vault watcher; no
+    /// `on_external_change` call runs after this returns. Call it first
+    /// when closing a vault. Idempotent.
+    pub fn stop_watching(&self) {
+        self.inner.stop_watching();
+    }
+
     /// Register a session-event listener (O-2 #540). Returns an opaque
     /// token for `unregister_event_listener`. Events arrive on
     /// background worker threads — marshal to the main actor inside
@@ -5407,20 +5430,29 @@ impl From<core::IndexPhase> for IndexPhase {
 }
 
 /// Session events: errors (O-2 #540) plus, since #802, file-change and
-/// index-phase deliveries. Invoked on a background worker thread — and
+/// index-phase deliveries, and since plan 43 PR 20a the vault watcher's
+/// `on_external_change`. Invoked on a background worker thread — and
 /// the #802 methods may arrive with session locks held — so
 /// implementations must be cheap and non-blocking, marshal to their
 /// main actor themselves, and NEVER call session APIs synchronously
 /// from a callback (the `ScanProgressListener` contract). `message` is
 /// user-facing copy and may name the vault path.
 ///
-/// The filesystem watcher is a stub: file-change events cover Slate's
-/// own write paths; external edits surface at the next scan.
+/// File-change events cover Slate's own write paths only. External
+/// edits never arrive as file-change events: the vault watcher, while
+/// a host keeps it live (`start_watching`), only asks the host to
+/// reconcile through `on_external_change`, and the reconciliation is
+/// the rescan (locked 05 §4.4).
 #[uniffi::export(with_foreign)]
 pub trait VaultEventListener: Send + Sync {
     fn on_error(&self, code: EventErrorCode, path: String, message: String);
     fn on_file_change(&self, event: FileChangeEvent);
     fn on_index_phase(&self, phase: IndexPhase, files_seen: u64);
+    /// Plan 43 PR 20a (#1267): files changed outside this session — one
+    /// call per coalesced burst, from the watcher's thread, no session
+    /// lock held, no paths. Answer with a Watcher-reason rescan (PRs 20b
+    /// and 20c wire it; until then a no-op).
+    fn on_external_change(&self);
 }
 
 /// Bridges core::VaultEventListener calls into the foreign-implemented
@@ -5438,6 +5470,9 @@ impl core::VaultEventListener for VaultEventListenerAdapter {
     }
     fn on_index_phase(&self, phase: core::IndexPhase, files_seen: u64) {
         self.foreign.on_index_phase(phase.into(), files_seen);
+    }
+    fn on_external_change(&self) {
+        self.foreign.on_external_change();
     }
 }
 
@@ -6515,6 +6550,16 @@ pub fn markdown_document_extensions() -> Vec<String> {
 #[uniffi::export]
 pub fn max_indexed_hash_paths() -> u32 {
     core::MAX_INDEXED_HASH_PATHS as u32
+}
+
+/// Plan 43 PR 20 (#1267, design §4.5; owner decision Q2): at most one
+/// watcher sentence per this many milliseconds per vault. A Watcher run
+/// whose sentence would fall inside the window posts nothing, and its
+/// counts are not carried. Core's one number, so both hosts' speech
+/// policies agree.
+#[uniffi::export]
+pub fn watcher_sentence_spacing_ms() -> u64 {
+    core::WATCHER_SENTENCE_SPACING_MS
 }
 
 // =====================================================================
@@ -8613,11 +8658,13 @@ impl From<ShellRegion> for core::a11y::ShellRegion {
     }
 }
 
-/// 1:1 mirror of `slate_core::a11y::RescanReason` (W7-7 PR 7, R-9).
+/// 1:1 mirror of `slate_core::a11y::RescanReason` (W7-7 PR 7, R-9; plan 43
+/// PR 20a added `Watcher`).
 #[derive(Debug, Clone, Copy, PartialEq, Eq, uniffi::Enum)]
 pub enum RescanReason {
     Explicit,
     Foreground,
+    Watcher,
 }
 
 impl From<RescanReason> for core::a11y::RescanReason {
@@ -8625,6 +8672,7 @@ impl From<RescanReason> for core::a11y::RescanReason {
         match r {
             RescanReason::Explicit => Self::Explicit,
             RescanReason::Foreground => Self::Foreground,
+            RescanReason::Watcher => Self::Watcher,
         }
     }
 }
@@ -13554,6 +13602,73 @@ mod tests {
             session.indexed_content_hashes(vec!["a.md".into()], cancelled),
             Err(VaultError::Cancelled)
         ));
+    }
+
+    /// Plan 43 PR 20a (#1267): the watcher crosses the FFI — a foreign
+    /// listener's `on_external_change` is called once for an external
+    /// write, on the watcher's thread, and never after `stop_watching`;
+    /// the Watcher reason renders the shared sentence; the sentence window
+    /// is core's one number.
+    #[test]
+    fn the_vault_watcher_reaches_a_foreign_listener_across_the_ffi() {
+        use std::sync::atomic::{AtomicUsize, Ordering};
+
+        #[derive(Default)]
+        struct Foreign {
+            external: AtomicUsize,
+            threads: std::sync::Mutex<Vec<String>>,
+        }
+        impl VaultEventListener for Foreign {
+            fn on_error(&self, _code: EventErrorCode, _path: String, _message: String) {}
+            fn on_file_change(&self, _event: FileChangeEvent) {}
+            fn on_index_phase(&self, _phase: IndexPhase, _files_seen: u64) {}
+            fn on_external_change(&self) {
+                let name = std::thread::current().name().unwrap_or_default().to_owned();
+                self.threads.lock().unwrap().push(name);
+                self.external.fetch_add(1, Ordering::SeqCst);
+            }
+        }
+
+        let tmp = tempfile::tempdir().expect("tempdir");
+        let session = VaultSession::open_filesystem(tmp.path().to_string_lossy().into_owned())
+            .expect("open vault");
+        let foreign = Arc::new(Foreign::default());
+        session.register_event_listener(foreign.clone());
+        // Scanned before arming, so the burst below waits for no spacing.
+        session.scan_initial(CancelToken::new()).unwrap();
+        assert!(session.start_watching(), "a local vault arms its watch");
+        assert!(session.start_watching(), "idempotent");
+
+        std::fs::write(tmp.path().join("outside.md"), "# Made outside Slate\n").unwrap();
+        let deadline = std::time::Instant::now() + std::time::Duration::from_secs(15);
+        while foreign.external.load(Ordering::SeqCst) == 0 {
+            assert!(
+                std::time::Instant::now() < deadline,
+                "no on_external_change"
+            );
+            std::thread::sleep(std::time::Duration::from_millis(20));
+        }
+        assert_eq!(
+            foreign.threads.lock().unwrap().first().map(String::as_str),
+            Some("slate-watch")
+        );
+
+        session.stop_watching();
+        let after_stop = foreign.external.load(Ordering::SeqCst);
+        std::fs::write(tmp.path().join("after.md"), "# After the stop\n").unwrap();
+        std::thread::sleep(std::time::Duration::from_millis(1500));
+        assert_eq!(foreign.external.load(Ordering::SeqCst), after_stop);
+
+        assert_eq!(watcher_sentence_spacing_ms(), 60_000);
+        let watcher = a11y_render(A11yEvent::VaultRescanFinished {
+            reason: RescanReason::Watcher,
+            changed: 1,
+            removed: 0,
+        });
+        assert_eq!(
+            watcher.text,
+            "Files refreshed. 1 new or changed, 0 removed."
+        );
     }
 
     /// W7-7 PR 7 (codex PR 7 round 3, finding 7): the files page's bound

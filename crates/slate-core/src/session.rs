@@ -40,6 +40,11 @@ use trash_cancellation::{begin_fenced_cancellable, lock_cancellable};
 mod directory_page;
 pub use directory_page::DirListingPage;
 
+// Plan 43 PR 20a (#1267): the vault watcher's coalescer and
+// `start_watching` / `stop_watching`.
+mod watch;
+pub use watch::WATCHER_SENTENCE_SPACING_MS;
+
 static NEXT_DIRECTORY_CURSOR_NONCE: AtomicU64 = AtomicU64::new(1);
 
 fn next_directory_cursor_nonce() -> u64 {
@@ -863,11 +868,12 @@ pub trait VaultEventListener: Send + Sync {
     /// AND index row in one transaction). Dispatch is strictly
     /// post-commit: at callback time the new state is visible to any
     /// external reader of the index (Codoki on #846). Default no-op —
-    /// O-2 registrations stay valid unchanged. The filesystem watcher is a
-    /// stub (`provider.watch` yields nothing), so external edits
-    /// surface at the next scan, never here: this event covers the
-    /// app's own write paths. Do not call session APIs synchronously
-    /// from the callback — it may arrive with session locks held (the
+    /// O-2 registrations stay valid unchanged. This event covers the
+    /// app's own write paths only: external edits never surface here
+    /// (locked 05 §4.4) — the vault watcher asks the host to reconcile
+    /// through [`Self::on_external_change`], and the reconciliation is
+    /// the rescan. Do not call session APIs synchronously from the
+    /// callback — it may arrive with session locks held (the
     /// `ScanProgressListener` discipline); marshal first.
     fn on_file_change(&self, _event: FileChangeEvent) {}
 
@@ -875,6 +881,18 @@ pub trait VaultEventListener: Send + Sync {
     /// [`IndexPhase::ScanFinished`]. Default no-op; same
     /// no-synchronous-reentry rule as [`Self::on_file_change`].
     fn on_index_phase(&self, _phase: IndexPhase, _files_seen: u64) {}
+
+    /// Plan 43 PR 20a (#1267): files changed outside this session. One
+    /// call per coalesced burst, from the vault watcher's coalescer thread
+    /// ("slate-watch"), with no session lock held, and only while a watch
+    /// is live (`VaultSession::start_watching`). It carries no paths:
+    /// answer with a Watcher-reason rescan (`RescanReason::Watcher`), which
+    /// re-synchronizes the surfaces as Refresh does. Slate's own writes
+    /// through this session never call it (the provider's echo ledger).
+    /// Default no-op, so existing registrations stay valid. The same host
+    /// contract as the other methods: cheap, non-blocking, marshal to the
+    /// UI thread, never call the session synchronously.
+    fn on_external_change(&self) {}
 }
 
 /// One Slate-originated file mutation (#802).
@@ -1338,6 +1356,10 @@ pub struct VaultSession {
     /// (FL-06 round-27). `None` for non-filesystem providers or
     /// platforms without a stable observation.
     root_identity: Option<VaultRootIdentity>,
+    /// Plan 43 PR 20a (#1267): the vault watch, when the host armed one
+    /// (`start_watching`). Its coalescer thread holds `Arc`s to the
+    /// provider and `event_listeners`, never to the session.
+    watch: Mutex<watch::WatchSeat>,
 }
 
 /// One annotation on a version row (O-3 #541): `kind` is the stable
@@ -1815,6 +1837,10 @@ fn compaction_worker_loop(
 
 impl Drop for VaultSession {
     fn drop(&mut self) {
+        // Plan 43 PR 20a: stop the vault watch first — its platform watch,
+        // then its coalescer, signalled and joined — so no
+        // `on_external_change` runs once the session is gone.
+        self.stop_watching();
         // Stop the compaction worker: flag first (checked between
         // files), then a wake-up message, then join — a mid-file
         // compaction completes, everything queued behind it is
@@ -2611,6 +2637,7 @@ impl VaultSession {
             trash_confirmation: Mutex::new(None),
             trash_stage_generation: AtomicU64::new(0),
             root_identity: None,
+            watch: Mutex::new(watch::WatchSeat::default()),
         };
         session.recover_structural_batch_inflight_on_open()?;
         drop(vault_structural_lock);
@@ -3135,12 +3162,13 @@ impl VaultSession {
 
     /// W7-7 PR 7 (#1252, R-9): rescan the OPEN session — the same
     /// incremental walk as [`Self::scan_initial_with_progress`], named for
-    /// the host's Refresh and foreground rescans. It retains nothing: the
-    /// host re-synchronizes every surface from the index afterwards
-    /// (contract R-9, AR-18's fallback), so a change another session
-    /// already indexed is shown too. No file-change event is emitted
-    /// (locked decision 05: external edits surface at a scan, never as
-    /// events).
+    /// the host's Refresh and foreground rescans, and since plan 43 PR 20a
+    /// for the rescan a vault watcher's `on_external_change` asks for. It
+    /// retains nothing: the host re-synchronizes every surface from the
+    /// index afterwards (contract R-9, AR-18's fallback), so a change
+    /// another session already indexed is shown too. No file-change event
+    /// is emitted (locked decision 05 §4.4: external edits never surface as
+    /// file-change events; the reconciliation is the rescan).
     pub fn rescan_with_progress(
         &self,
         cancel: &CancelToken,
@@ -3195,6 +3223,11 @@ impl VaultSession {
         // reenter synchronously).
         self.notify_index_phase(IndexPhase::ScanStarted, 0);
         let mut conn = self.conn.lock().expect("session connection mutex");
+        // Plan 43 PR 20a (design §4.3): the vault watcher learns this scan's
+        // start, end and outcome, for its spacing and its duty factor, and
+        // drops a closed burst a complete walk has seen. Every exit below
+        // ends it, a failed or cancelled scan included.
+        let mut watch_scan = watch::WatchScan::begin(self);
         // O-6 (#544): observe a parser bump BEFORE the scan runs — the
         // scan stamps every row with the new version, erasing the
         // evidence — and convert it straight into the DURABLE
@@ -3230,6 +3263,7 @@ impl VaultSession {
             listener.as_deref(),
             &mut graph_sink,
         )?;
+        watch_scan.committed(report.complete);
         // W7-7 PR 7 (rounds 25-27): each error was logged in full as it
         // happened (ScanReport::record_error); the report holds a count.
         if report.error_count > 0 {
@@ -3245,6 +3279,7 @@ impl VaultSession {
         scan_point("maintenance");
         if cancel.is_cancelled() {
             drop(conn);
+            drop(watch_scan);
             self.notify_index_phase(IndexPhase::ScanFinished, report.files_seen);
             return Ok(report);
         }
@@ -3295,6 +3330,7 @@ impl VaultSession {
         // log reads.
         self.sweep_oversized_logs(&conn);
         drop(conn);
+        drop(watch_scan);
         self.notify_index_phase(IndexPhase::ScanFinished, report.files_seen);
         Ok(report)
     }
@@ -21944,6 +21980,8 @@ mod tests {
 
     #[path = "graph.rs"]
     mod graph;
+
+    mod watch;
 }
 
 /// FL5-3a: one refused file in a batch tag edit — deliberate skips

@@ -58,11 +58,22 @@
 //!   engine does not silently fall back to permanent deletion. Tests
 //!   trash into scratch bins, never the Trash of whoever runs them
 //!   (`trash_handoff`, #1455).
+//! - **Watch (plan 43 PR 20a, #1267).** `watch` arms one recursive
+//!   `notify` watch on the root (FSEvents, ReadDirectoryChangesW, inotify),
+//!   filtered by the scanner's hidden-path rule and anchored to the root's
+//!   identity (`watch`). Every mutation the provider completes records its
+//!   post-state in an echo ledger (`echo_ledger`), so `is_own_echo` can tell
+//!   Slate's own writes from external ones. The session's coalescer turns a
+//!   burst into one `VaultEventListener::on_external_change` call; the
+//!   events never carry content, and Refresh and the foreground rescan stay
+//!   the baseline whether or not a watch is live.
 
+mod echo_ledger;
 mod fs;
 mod provider;
 mod trash_handoff;
 mod trash_snapshot;
+mod watch;
 
 #[cfg(test)]
 pub(crate) use trash_handoff::ScratchTrash;
@@ -74,8 +85,11 @@ pub use trash_snapshot::TrashSnapshot;
 pub(crate) use fs::windows_extended_path;
 pub use fs::{FsVaultProvider, content_hash};
 pub use provider::{
-    DirEntry, EntryKind, FileEvent, FileEventSink, FileStat, VaultProvider, WatchHandle,
+    DirEntry, EntryKind, FileEvent, FileEventSink, FileStat, VaultProvider, WatchEnd, WatchHandle,
 };
+#[cfg(test)]
+pub(crate) use watch::RootAnchor;
+pub(crate) use watch::RootIdentity;
 
 #[cfg(windows)]
 mod windows_entry;

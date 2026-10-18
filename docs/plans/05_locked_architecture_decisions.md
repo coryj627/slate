@@ -317,13 +317,14 @@ pub struct CodeBlock {
 
 Shipped shape (O-2 #540 shipped `on_error`; #802 broadened additively —
 new methods carry default no-op impls so existing registrations never
-break):
+break; plan 43 PR 20a, #1267, added `on_external_change`):
 
 ```rust
 pub trait VaultEventListener: Send + Sync {
     fn on_error(&self, code: EventErrorCode, path: String, message: String);
     fn on_file_change(&self, _event: FileChangeEvent) {}          // #802
     fn on_index_phase(&self, _phase: IndexPhase, _files_seen: u64) {} // #802
+    fn on_external_change(&self) {}                               // PR 20 (#1267)
 }
 
 pub struct FileChangeEvent {
@@ -338,13 +339,28 @@ pub enum IndexPhase { ScanStarted, ReconcileStarted, ReconcileFinished, ScanFini
 Semantics (normative): file-change events cover **Slate's own write
 paths** (save, create-exclusive, structural move/rename/delete —
 per-file for folder operations — canvas apply, deleted-file recovery;
-restores ride the save seam). The filesystem watcher is a stub, so
-external edits surface at the next scan, never as events. Events are
-emitted after the write and index commit; callbacks may arrive with
-session locks held (the `ScanProgressListener` discipline) — listeners
-marshal, never reenter synchronously. All enums additive-only; hosts
-tolerate unknown variants. First non-error consumers land with
-Milestone PD (OCR label refresh, failure counts, GC prompts).
+restores ride the save seam). External edits never surface as
+file-change events: the filesystem watcher only asks the host to
+reconcile (`on_external_change`), and the reconciliation is the
+rescan. Events are emitted after the write and index commit; callbacks
+may arrive with session locks held (the `ScanProgressListener`
+discipline) — listeners marshal, never reenter synchronously. All enums
+additive-only; hosts tolerate unknown variants. First non-error
+consumers land with Milestone PD (OCR label refresh, failure counts, GC
+prompts).
+
+*Amendment (2026-10-18, plan 43 PR 20a, #1267):* the sentence on
+external edits replaces "The filesystem watcher is a stub, so external
+edits surface at the next scan, never as events", on the owner's call
+of 2026-10-17 (`43_mac_backlog_delivery/20_vault_watcher_design.md`
+§8, §11 Q5, approved together with PR 21's amendment of this
+paragraph, which lands with PR 21a). `on_external_change` is called at
+most once per coalesced burst, from the session's watch coalescer
+thread with no core lock held, and carries no paths; Slate's own
+writes are filtered by the provider's echo ledger. §4.1's fallback
+promise stands: with no watch, or a watch that overflows or ends,
+Refresh and the foreground rescan reconcile, as they also do while a
+watch is live.
 
 ### 4.5 SQLite schema (V0)
 

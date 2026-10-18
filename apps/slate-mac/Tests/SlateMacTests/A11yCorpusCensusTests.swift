@@ -92,6 +92,8 @@ final class A11yCorpusCensusTests: XCTestCase {
             .vaultRescanFinished(reason: .explicit, changed: 1, removed: 0),
             .vaultRescanFinished(reason: .explicit, changed: 0, removed: 0),
             .vaultRescanFinished(reason: .foreground, changed: 2, removed: 1),
+            .vaultRescanFinished(reason: .watcher, changed: 1, removed: 0),
+            .vaultRescanFinished(reason: .watcher, changed: 0, removed: 2),
             .vaultRescanIncomplete(errors: 1),
             .vaultRescanIncomplete(errors: 3),
             .searchResultsSummary(count: 0),
