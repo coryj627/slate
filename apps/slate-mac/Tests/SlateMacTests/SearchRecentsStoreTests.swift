@@ -25,7 +25,8 @@ final class SearchRecentsStoreTests: XCTestCase {
     }
 
     private func makeStore() -> SearchRecentsStore {
-        SearchRecentsStore(vaultRoot: vaultRoot)
+        SearchRecentsStore(
+            vaultRoot: vaultRoot, rootIdentity: AppState.vaultRootIdentity(of: vaultRoot))
     }
 
     // MARK: - Path shape

@@ -23,6 +23,12 @@ final class WorkspaceStoreTests: XCTestCase {
         try? FileManager.default.removeItem(at: tempDir)
     }
 
+    /// A store anchored to the temp vault as it is now — the identity an
+    /// open would have admitted (#1442).
+    private func makeStore() -> WorkspaceStore {
+        WorkspaceStore(vaultRoot: tempDir, rootIdentity: AppState.vaultRootIdentity(of: tempDir))
+    }
+
     /// Depth-3 fixture: [A(2 tabs) | V[B, C]] with adjusted weights.
     private func depthThreeModel() -> WorkspaceModel {
         var model = WorkspaceModel()
@@ -46,7 +52,7 @@ final class WorkspaceStoreTests: XCTestCase {
     }
 
     func testDiskRoundTrip() throws {
-        let store = WorkspaceStore(vaultRoot: tempDir)
+        let store = makeStore()
         let model = depthThreeModel()
         try store.save(WorkspaceStore.snapshot(of: model))
         let loaded = try XCTUnwrap(store.load())
@@ -56,7 +62,7 @@ final class WorkspaceStoreTests: XCTestCase {
     /// U4-1 (#470): the active right-pane leaf persists in the same snapshot
     /// and survives the disk round-trip.
     func testDiskRoundTripCarriesActiveLeaf() throws {
-        let store = WorkspaceStore(vaultRoot: tempDir)
+        let store = makeStore()
         let model = depthThreeModel()
         try store.save(WorkspaceStore.snapshot(of: model, activeLeaf: "bibliography"))
         let loaded = try XCTUnwrap(store.load())
@@ -112,7 +118,7 @@ final class WorkspaceStoreTests: XCTestCase {
     /// reusable rowids) rides the snapshot and survives the disk
     /// round-trip, layout untouched.
     func testExpandedDirPathsRoundTripThroughDisk() throws {
-        let store = WorkspaceStore(vaultRoot: tempDir)
+        let store = makeStore()
         let model = depthThreeModel()
         try store.save(
             WorkspaceStore.snapshot(
@@ -193,7 +199,7 @@ final class WorkspaceStoreTests: XCTestCase {
     // MARK: Degradations
 
     func testUnknownVersionYieldsNil() throws {
-        let store = WorkspaceStore(vaultRoot: tempDir)
+        let store = makeStore()
         try FileManager.default.createDirectory(
             at: store.fileURL.deletingLastPathComponent(),
             withIntermediateDirectories: true)
@@ -203,7 +209,7 @@ final class WorkspaceStoreTests: XCTestCase {
     }
 
     func testCorruptFileYieldsNil() throws {
-        let store = WorkspaceStore(vaultRoot: tempDir)
+        let store = makeStore()
         try FileManager.default.createDirectory(
             at: store.fileURL.deletingLastPathComponent(),
             withIntermediateDirectories: true)
@@ -212,7 +218,7 @@ final class WorkspaceStoreTests: XCTestCase {
     }
 
     func testOversizeFileYieldsNil() throws {
-        let store = WorkspaceStore(vaultRoot: tempDir)
+        let store = makeStore()
         try FileManager.default.createDirectory(
             at: store.fileURL.deletingLastPathComponent(),
             withIntermediateDirectories: true)

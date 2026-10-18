@@ -132,6 +132,12 @@ final class AppStateTests: XCTestCase {
         return PreferencesStore(defaults: UserDefaults(suiteName: name)!)
     }
 
+    /// A vault's search-recents store anchored to the folder at `vault` as
+    /// it is now — the identity an open would admit (#1442).
+    private func anchoredSearchRecents(_ vault: URL) -> SearchRecentsStore {
+        SearchRecentsStore(vaultRoot: vault, rootIdentity: AppState.vaultRootIdentity(of: vault))
+    }
+
     /// A vault directory that actually exists on disk, for the
     /// launch-restore integration tests.
     private func makeRealVault(_ name: String) throws -> RecentVault {
@@ -236,7 +242,8 @@ final class AppStateTests: XCTestCase {
         let dest = AppState.launchDestination(
             recents: [recentAlpha, recentBeta],
             optionHeld: false,
-            vaultExists: { _ in true }
+            vaultExists: { _ in true },
+            mismatch: { _ in nil }
         )
         // Decides on `recents.first` (the LRU-front, most-recent entry).
         XCTAssertEqual(dest, .restore(recentAlpha))
@@ -246,7 +253,8 @@ final class AppStateTests: XCTestCase {
         let dest = AppState.launchDestination(
             recents: [recentAlpha],
             optionHeld: true,
-            vaultExists: { _ in true }
+            vaultExists: { _ in true },
+            mismatch: { _ in nil }
         )
         XCTAssertEqual(dest, .welcome, "holding ⌥ forces the picker/Welcome")
     }
@@ -255,7 +263,8 @@ final class AppStateTests: XCTestCase {
         let dest = AppState.launchDestination(
             recents: [recentAlpha, recentBeta],
             optionHeld: false,
-            vaultExists: { _ in false }
+            vaultExists: { _ in false },
+            mismatch: { _ in nil }
         )
         // A gone most-recent lands on Welcome via the not-found flow.
         XCTAssertEqual(dest, .notFound(recentAlpha))
@@ -265,7 +274,8 @@ final class AppStateTests: XCTestCase {
         let dest = AppState.launchDestination(
             recents: [],
             optionHeld: false,
-            vaultExists: { _ in true }
+            vaultExists: { _ in true },
+            mismatch: { _ in nil }
         )
         XCTAssertEqual(dest, .welcome, "nothing to restore → Welcome")
     }
@@ -275,6 +285,7 @@ final class AppStateTests: XCTestCase {
             recents: [recentAlpha],
             optionHeld: false,
             vaultExists: { _ in true },
+            mismatch: { _ in nil },
             restoreEnabled: false
         )
         XCTAssertEqual(dest, .welcome, "the General toggle off → Welcome")
@@ -1856,7 +1867,7 @@ final class AppStateTests: XCTestCase {
 
         XCTAssertEqual(state.searchRecents, [], "in-memory list cleared")
         XCTAssertEqual(
-            SearchRecentsStore(vaultRoot: vault).load(), [],
+            anchoredSearchRecents(vault).load(), [],
             "disk file cleared too — no resurrection on reopen")
     }
 
@@ -2282,7 +2293,7 @@ final class AppStateTests: XCTestCase {
             state.searchRecents, ["beta"],
             "activating a result records the committed query")
         // Persisted per vault — a fresh store at the same path reloads it.
-        XCTAssertEqual(SearchRecentsStore(vaultRoot: vault).load(), ["beta"])
+        XCTAssertEqual(anchoredSearchRecents(vault).load(), ["beta"])
     }
 
     /// `recordSearchRecent` is LRU + deduped + most-recent-first, and
@@ -2341,7 +2352,7 @@ final class AppStateTests: XCTestCase {
         state.clearSearchRecents()
         XCTAssertTrue(state.searchRecents.isEmpty, "clear empties the session list")
         XCTAssertEqual(
-            SearchRecentsStore(vaultRoot: vault).load(), [],
+            anchoredSearchRecents(vault).load(), [],
             "clear persists the empty list")
     }
 
@@ -2350,7 +2361,7 @@ final class AppStateTests: XCTestCase {
     func testSearchRecentsAreLoadedOnOpenAndClearedOnClose() async throws {
         let vault = tempDir.appendingPathComponent("search-recents-perVault")
         try FileManager.default.createDirectory(at: vault, withIntermediateDirectories: true)
-        try SearchRecentsStore(vaultRoot: vault).save(["seeded"])
+        try anchoredSearchRecents(vault).save(["seeded"])
 
         let state = try makeAppState()
         state.openVault(at: vault)
