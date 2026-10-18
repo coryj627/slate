@@ -70,6 +70,32 @@ final class HotkeySpokenTests: XCTestCase {
         XCTAssertEqual(HotkeySpoken.spoken(for: "⌘↩"), "Command Return")
     }
 
+    /// The census over the LIVE registry (Codoki on #1473): every registered
+    /// command with a chord speaks it in words, with no modifier or key glyph
+    /// left for VoiceOver to read as a bare symbol or skip at its
+    /// punctuation level. Activate at Cursor's ⌘↩ is in the registry, as
+    /// "Command Return", and no other command carries it.
+    @MainActor
+    func testEveryRegistryChordSpeaksWithNoRawGlyphAndCommandReturnIsActivateAtCursorsAlone() {
+        let glyphs: Set<Character> = [
+            "⌘", "⌥", "⌃", "⇧", "↩", "⏎", "⌅", "⌤", "⌫", "⌦", "←", "→", "↑", "↓",
+            "⇥", "⇤", "⎋", "⇞", "⇟", "↖", "↘", "⏏", "␣", "⇪",
+        ]
+        let chorded = AppState().commandRegistry.list().filter { $0.hotkeyHint?.isEmpty == false }
+        XCTAssertFalse(chorded.isEmpty, "the registry carries chords")
+        for command in chorded {
+            let hint = command.hotkeyHint ?? ""
+            let spoken = HotkeySpoken.spoken(for: hint)
+            let leaked = String(spoken.filter { glyphs.contains($0) })
+            XCTAssertTrue(
+                leaked.isEmpty,
+                "\(command.id) (\(hint)) speaks \"\(spoken)\", leaving \(leaked) for VoiceOver")
+        }
+        let commandReturn = chorded.filter { $0.hotkeyHint == "⌘↩" }
+        XCTAssertEqual(commandReturn.map(\.id), [SlateCommandID.activateAtCaret])
+        XCTAssertEqual(commandReturn.first.map { HotkeySpoken.spoken(for: $0.hotkeyHint ?? "") }, "Command Return")
+    }
+
     /// Every arrow-carrying hotkeyHint in the LIVE registry must speak
     /// with no raw glyph surviving — the drift-shaped guard that keeps
     /// a future arrow chord from re-opening the elision gap.
