@@ -73,6 +73,8 @@ cargo test -p slate-core --release -- session::tests::dir_tree    # perf guards 
 | Layout/divider/recents didn't follow the vault | They're device-local by design. Vault-owned state is exactly what's in `.slate/sidebar.json` (sort/grouping/folder overrides incl. preview/density/descendants, pins, shortcuts). |
 | Perf guard failed in a local run | Was the box busy? The guards sample best-of-3 but a saturated machine still fails falsely; re-run idle. CI's isolated runner is authoritative. |
 | A change announced before a quit or crash is missing after relaunch | The sidebar write journal (`~/Library/Application Support/Slate/sidebar-write-journal/<device>-<inode>.journal`, see below). An entry still there replays on the next open of the SAME vault (same device, inode and birth time); one older than 30 days, refused, or in a damaged file is announced instead. No file means every entry settled. |
+| The log says "The vault folder is no longer at …" or "… is no longer the vault Slate opened", or Settings ▸ Bibliography shows it | The open vault's folder was renamed, moved or replaced while it was open (#1442). The four host stores in `.slate/` refuse instead of recreating the old path; reopen the vault from where it is now. Nothing was written at the old path. |
+| Launch did not reopen the last vault: "Vault Not Found" says the folder holds only `.slate`, or that Slate can't confirm it is the one it last opened | Launch-restore compared the folder at the remembered path with the recents entry (#1442, see below) and refused it. Open Anyway opens it and remembers it; Remove from Recent Vaults drops only the entry. Slate never deletes the folder: a `.slate`-only folder there is usually what a save left at the old path after a rename (the host stores did before #1442; core's own writers still can until #1474). |
 
 ## Persistence boundaries
 
@@ -86,6 +88,24 @@ cargo test -p slate-core --release -- session::tests::dir_tree    # perf guards 
   density — `SidebarPreferences`), sidebar layout (tree/dual-pane),
   divider fraction, Recents (per vault, keyed by device+inode identity),
   section expansion, and the filter's committed-query restore.
+- **Vault, host stores beside it (#1442)**: `.slate/workspace.json`,
+  `.slate/search-recents.json`, the bibliography section of
+  `.slate/prefs.json` and `.slate/graph.json` write through one helper,
+  `VaultStoreDirectory.prepare`. It opens the root once, compares its
+  `fstat` identity (device, inode) with the identity the open admitted —
+  the one FL-06 keys by, which the open proves equal to the core session's
+  anchor — and makes at most `.slate`, with `mkdirat` inside that verified
+  descriptor. A renamed, moved or replaced root refuses the write (logged;
+  the bibliography's refusal shows in Settings) and is never recreated.
+  The write itself still names its file by pathname; PR 22's shared
+  `fs_root` convention replaces this one helper (PR 22 design §5.4, Q8).
+- **Device (Application Support), recent vaults (#1442)**:
+  `recent-vaults.json` records, per entry, the opened root's device and
+  inode plus the journal's fingerprint below (birth time, volume UUID).
+  Launch-restore reopens the most recent vault only when the folder at its
+  path is that root by the journal's rule; otherwise, or when an entry
+  written before #1442 finds a folder holding nothing but `.slate`, it
+  lands on Welcome and the "Vault Not Found" alert says what it found.
 - **Device (Application Support), until saved**: the sidebar write journal
   (plan 43 PR 23, #944; `Sidebar/SidebarWriteJournal.swift`). FL-06 keys
   its writer chains, committed-transform ledger and retained-write
