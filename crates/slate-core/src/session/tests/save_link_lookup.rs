@@ -428,13 +428,7 @@ fn the_save_lookup_resolves_exactly_as_the_whole_index_does() {
     }
     // The whole index as a whole-table snapshot reads it — what scan and
     // rename resolve over, and saves did — in path order.
-    let whole: Vec<String> = conn
-        .prepare("SELECT path FROM files")
-        .unwrap()
-        .query_map([], |row| row.get(0))
-        .unwrap()
-        .map(|row| row.unwrap())
-        .collect();
+    let whole = crate::links_db::indexed_paths_in_path_order(&conn).unwrap();
     let mut in_path_order = whole.clone();
     in_path_order.sort();
     assert_eq!(whole, in_path_order, "the snapshot reads in path order");

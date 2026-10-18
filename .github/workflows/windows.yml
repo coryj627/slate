@@ -337,6 +337,7 @@ jobs:
           cargo test -p slate-core --profile ci --locked
           -- --skip census_
           --skip perf_guard_root_listing_under_100ms_on_10k_files
+          --skip perf_guard_unresolved_link_rescan_within_twice_the_link_free_one
 
       # Program decision 19 / w0_spec §W0-3 item 3: the CLI builds and its
       # suite runs on the Windows runner — the full extent of Windows CLI

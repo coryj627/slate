@@ -97,6 +97,17 @@ thread_local! {
     /// path, so a fact can show it surfaces instead of dropping a link.
     pub(crate) static LOOKUP_FAULT: std::cell::Cell<bool> =
         const { std::cell::Cell::new(false) };
+    /// #1429 test seam: while set, the whole-index snapshot's statement
+    /// ([`indexed_paths_in_path_order`]) fails to prepare on this thread —
+    /// a genuine SQLite error on the read a snapshot lookup is built from.
+    pub(crate) static SNAPSHOT_FAULT: std::cell::Cell<bool> =
+        const { std::cell::Cell::new(false) };
+    /// #1429 test seam: paths [`indexed_paths_in_path_order`] returned on
+    /// this thread, beside `link_resolver::SNAPSHOT_PATHS` (every path a
+    /// snapshot materialized), so a fact can show a snapshot was read
+    /// through the path-order helper and through nothing else.
+    pub(crate) static PATH_ORDER_SNAPSHOT_PATHS: std::cell::Cell<usize> =
+        const { std::cell::Cell::new(0) };
 }
 
 /// Where [`replace_links_for_file`] draws a target's candidate paths from
@@ -106,7 +117,8 @@ thread_local! {
 /// note resolved once ([`resolve_remembered`]). Scan and rename draw on the
 /// snapshot of `files` they captured ([`InMemoryVaultIndex`]); a save, a
 /// create and the `open_base` repair draw on [`FoldedNameLookup`], which
-/// reads only the rows a target's probe names.
+/// reads only the rows a target's probe names. Both offer only those rows
+/// (#1429), so a link costs its own candidates, not the vault.
 pub(crate) trait LinkCandidates {
     /// Offer `selector` the indexed paths its target could match: at least
     /// every path its probe ([`LinkCandidateSelector::probe`]) names — an
@@ -122,20 +134,48 @@ pub(crate) trait LinkCandidates {
     ) -> Result<(), VaultError>;
 }
 
-/// Scan and rename keep their snapshot: every path it captured, in its
-/// order (the scan's at its start, healed after the walk).
+/// Scan and rename keep their snapshot (the scan's at its start, healed
+/// after the walk): of the paths it captured, the ones a target's probe
+/// names, looked up in the snapshot's own table and offered in its order
+/// (#1429; [`VaultIndex::offer_candidates`]). The lookup is in memory and
+/// cannot fail.
 impl LinkCandidates for InMemoryVaultIndex {
     fn offer_to(
         &self,
         _conn: &Connection,
         selector: &mut LinkCandidateSelector,
     ) -> Result<(), VaultError> {
-        for path in self.all_paths() {
-            selector.offer(path);
-        }
+        self.offer_candidates(selector);
         Ok(())
     }
 }
+
+/// Every indexed path, in path order: the snapshot scan, rename and the
+/// dangling-link pass resolve over (#1429). Path order is byte order — the
+/// `path` column's default `BINARY` collation, so `Twin/Case.md` sorts
+/// before `twin/case.md` — and it is the order the save lookup gives a path
+/// target's rows ([`candidate_rows_sql`]), so between two paths equal under
+/// lowercase — case twins a case-sensitive volume can hold — a snapshot and
+/// a save pick the same one. The `ORDER BY` makes that the query's promise
+/// rather than the planner's; the covering index on `path` (its `UNIQUE`
+/// constraint) serves it without a sort, which
+/// `the_whole_table_snapshot_reads_in_path_order` pins.
+pub(crate) fn indexed_paths_in_path_order(conn: &Connection) -> Result<Vec<String>, VaultError> {
+    #[cfg(test)]
+    if SNAPSHOT_FAULT.with(std::cell::Cell::get) {
+        conn.prepare("SELECT path FROM slate_test_snapshot_fault")?;
+    }
+    let mut statement = conn.prepare_cached(INDEXED_PATHS_SQL)?;
+    let paths = statement
+        .query_map([], |row| row.get::<_, String>(0))?
+        .collect::<Result<Vec<_>, _>>()?;
+    #[cfg(test)]
+    PATH_ORDER_SNAPSHOT_PATHS.with(|count| count.set(count.get() + paths.len()));
+    Ok(paths)
+}
+
+/// [`indexed_paths_in_path_order`]'s statement.
+const INDEXED_PATHS_SQL: &str = "SELECT path FROM files ORDER BY path";
 
 /// The folded-name lookup a save, a create and the `open_base` repair draw
 /// candidates from (#1295; locked decision 05 §4 and §9.3.1): the rows a
@@ -150,7 +190,7 @@ impl LinkCandidates for InMemoryVaultIndex {
 /// lowercase) is a superset of the selector's lowercase comparison, so no
 /// row the selector would take is left out, and the selector still decides.
 /// A path target's rows arrive in path order, the order a whole-table
-/// snapshot offers them in (it reads the covering index on `path`), because
+/// snapshot offers them in ([`indexed_paths_in_path_order`]), because
 /// between two paths equal under lowercase — case twins a case-sensitive
 /// volume can hold — the first offered wins; a basename's rank is total
 /// (distance, then path), so its rows need no order.
@@ -407,7 +447,10 @@ pub(crate) fn graph_inbound_rows(
 ///
 /// Pure SQL pass — reads every unresolved internal link, runs the
 /// resolver against the now-complete vault index, and updates rows
-/// that newly resolve.
+/// that newly resolve. Each link is offered only the paths its target
+/// could name, looked up in a snapshot of `files` taken once, when some
+/// link dangles (#1429): the pass costs per unresolved link, not
+/// unresolved links × files.
 ///
 /// Returns the sorted, distinct source paths whose rows actually
 /// changed, so the graph hook can replay each affected linkset
@@ -423,12 +466,6 @@ pub(crate) fn re_resolve_unresolved_links_under(
     tx: &Transaction,
     cancel: &crate::CancelToken,
 ) -> Result<Vec<String>, VaultError> {
-    let paths: Vec<String> = tx
-        .prepare("SELECT path FROM files")?
-        .query_map([], |row| row.get::<_, String>(0))?
-        .collect::<Result<Vec<_>, _>>()?;
-    let index = InMemoryVaultIndex::new(paths);
-
     let mut select = tx.prepare(
         "SELECT links.rowid, files.path, links.target_raw, links.target_anchor
          FROM links
@@ -449,6 +486,9 @@ pub(crate) fn re_resolve_unresolved_links_under(
     if rows.is_empty() {
         return Ok(Vec::new());
     }
+    // The index as this transaction holds it now (after a scan's walk and
+    // prunes), in path order.
+    let index = InMemoryVaultIndex::new(indexed_paths_in_path_order(tx)?);
 
     let mut affected: Vec<String> = Vec::new();
     let mut update = tx.prepare("UPDATE links SET target_path = ?1 WHERE rowid = ?2")?;
@@ -941,10 +981,12 @@ mod tests {
         }
     }
 
-    /// #1295: the whole-table snapshot that scan and rename resolve over
-    /// reads `files` in path order, whatever order the rows were written in
-    /// — the order the save lookup gives a path target's rows, so the two
-    /// break a tie between case twins alike.
+    /// #1295, #1429: the whole-table snapshot that scan, rename and the
+    /// dangling-link pass resolve over reads `files` in path order,
+    /// whatever order the rows were written in — the order the save lookup
+    /// gives a path target's rows, so the two break a tie between case twins
+    /// alike — by its own `ORDER BY`, served by the covering index on
+    /// `path` without a sort.
     #[test]
     fn the_whole_table_snapshot_reads_in_path_order() {
         let conn = migrated_db();
@@ -958,13 +1000,24 @@ mod tests {
             )
             .unwrap();
         }
-        let snapshot: Vec<String> = conn
-            .prepare("SELECT path FROM files")
+        assert_eq!(
+            indexed_paths_in_path_order(&conn).unwrap(),
+            ["A.md", "B.md", "a.md", "b.md", "notes/a.md"]
+        );
+        let plan: Vec<String> = conn
+            .prepare(&format!("EXPLAIN QUERY PLAN {INDEXED_PATHS_SQL}"))
             .unwrap()
-            .query_map([], |row| row.get(0))
+            .query_map([], |row| row.get::<_, String>(3))
             .unwrap()
-            .map(|row| row.unwrap())
+            .map(|step| step.unwrap())
             .collect();
-        assert_eq!(snapshot, ["A.md", "B.md", "a.md", "b.md", "notes/a.md"]);
+        assert!(
+            plan.iter().any(|step| step.contains("COVERING INDEX")),
+            "the snapshot must read the covering index on path: {plan:?}"
+        );
+        assert!(
+            !plan.iter().any(|step| step.contains("TEMP B-TREE")),
+            "the snapshot must not sort: {plan:?}"
+        );
     }
 }

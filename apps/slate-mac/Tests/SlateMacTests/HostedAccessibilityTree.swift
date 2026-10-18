@@ -23,6 +23,8 @@ struct AXElementSnapshot: CustomStringConvertible {
     /// `AXValueDescription`: where SwiftUI publishes `.accessibilityValue`
     /// on an element with no value of its own, such as a group.
     let valueDescription: String?
+    /// `AXSelected`: a table or outline row the client reads as selected.
+    let selected: Bool
     let children: [AXElementSnapshot]
 
     /// This element and every descendant, depth first.
@@ -47,6 +49,7 @@ struct AXElementSnapshot: CustomStringConvertible {
             name.map { "name=\($0)" },
             value.map { "value=\($0)" },
             valueDescription.map { "valueDescription=\($0)" },
+            selected ? "selected" : nil,
         ].compactMap { $0 }
         return [String(repeating: "  ", count: depth) + fields.joined(separator: " ")]
             + children.flatMap { $0.lines(depth: depth + 1) }
@@ -162,6 +165,44 @@ enum HostedAccessibilityTree {
         throw failure
     }
 
+    /// Moves a reader onto a row the way an assistive-technology client
+    /// does: keyboard focus to the first table or outline `table` accepts
+    /// (`AXFocused`), then its first row `row` accepts as the selection
+    /// (`AXSelectedRows`). Fails only when no row matches; a fact judges the
+    /// move by its effect, as `press` does.
+    static func selectRow(
+        in window: NSWindow,
+        file: StaticString = #filePath,
+        line: UInt = #line,
+        table: (AXElementSnapshot) -> Bool,
+        row: (AXElementSnapshot) -> Bool
+    ) throws {
+        let root = clientWindow(of: window)
+        var pending = root.map { [$0] } ?? []
+        var budget = 2_000
+        while !pending.isEmpty, budget > 0 {
+            budget -= 1
+            let element = pending.removeFirst()
+            let role = text(attribute(element, kAXRoleAttribute))
+            if role == "AXOutline" || role == "AXTable", table(tree(of: element)) {
+                let rows = (attribute(element, kAXRowsAttribute) as? [AXUIElement]) ?? []
+                if let match = rows.first(where: { row(tree(of: $0)) }) {
+                    _ = AXUIElementSetAttributeValue(
+                        element, kAXFocusedAttribute as CFString, kCFBooleanTrue)
+                    _ = AXUIElementSetAttributeValue(
+                        element, kAXSelectedRowsAttribute as CFString, [match] as CFArray)
+                    return
+                }
+            }
+            pending += (attribute(element, kAXChildrenAttribute) as? [AXUIElement]) ?? []
+        }
+        let failure = NotReady(
+            description: "no table row in the hosted tree accepts the selection; client read:\n"
+                + (root.map { tree(of: $0).description } ?? "(no window answered)"))
+        XCTFail(failure.description, file: file, line: line)
+        throw failure
+    }
+
     // MARK: - Client reads
 
     private static func clientWindow(of window: NSWindow) -> AXUIElement? {
@@ -201,6 +242,8 @@ enum HostedAccessibilityTree {
             name: text(attribute(element, kAXDescriptionAttribute)),
             value: text(attribute(element, kAXValueAttribute)),
             valueDescription: text(attribute(element, "AXValueDescription")),
+            selected: (attribute(element, kAXSelectedAttribute) as? NSNumber)?.boolValue
+                ?? false,
             children: children)
     }
 

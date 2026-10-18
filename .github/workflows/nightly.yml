@@ -59,6 +59,7 @@ jobs:
       contents: read
     env:
       ROOT_LISTING_PERF_GUARD: session::tests::dir_tree::perf_guard_root_listing_under_100ms_on_10k_files
+      UNRESOLVED_LINK_PERF_GUARD: session::tests::link_pass::perf_guard_unresolved_link_rescan_within_twice_the_link_free_one
     steps:
       - name: Checkout
         uses: actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0  # v7
@@ -133,15 +134,15 @@ jobs:
         # Census half of the sweep with the 400-seed tier switched on
         # (the dir-tree chunks are fixed at 500 seeds regardless of
         # tier). Mirrors the PR test lane: tmpfs applies to the census
-        # subset ONLY; the perf guard is excluded (it runs isolated on
-        # every PR and has no census dimension).
+        # subset ONLY; the perf guards are excluded (they run isolated on
+        # every PR and have no census dimension).
         env:
           SLATE_CENSUS_FULL: '1'
           TMPDIR: /dev/shm
         run: >-
           cargo nextest run --workspace --cargo-profile ci --locked
           --no-fail-fast --no-tests=fail
-          -E "test(census_) and not test(${ROOT_LISTING_PERF_GUARD})"
+          -E "test(census_) and not test(${ROOT_LISTING_PERF_GUARD}) and not test(${UNRESOLVED_LINK_PERF_GUARD})"
 
       - name: cargo nextest run — non-census suite (real fs)
         # Durability/persistence contracts and the rest of the suite on
@@ -150,7 +151,7 @@ jobs:
         run: >-
           cargo nextest run --workspace --cargo-profile ci --locked
           --no-fail-fast --no-tests=fail
-          -E "not test(census_) and not test(${ROOT_LISTING_PERF_GUARD})"
+          -E "not test(census_) and not test(${ROOT_LISTING_PERF_GUARD}) and not test(${UNRESOLVED_LINK_PERF_GUARD})"
 
       - name: cargo bench --no-run (full committed profile)
         # Thin-LTO bench compile — the rot class PR lanes skip.

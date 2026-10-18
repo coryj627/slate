@@ -3641,15 +3641,9 @@ impl SqlVaultLookup<'_> {
             return resolved.clone();
         }
         if self.link_index.borrow().is_none() {
-            let mut stmt = self
-                .conn
-                .prepare("SELECT path FROM files ORDER BY path")
-                .ok()?;
-            let paths = stmt
-                .query_map([], |row| row.get::<_, String>(0))
-                .ok()?
-                .collect::<Result<Vec<_>, _>>()
-                .ok()?;
+            // The snapshot every resolution reads, in path order (#1429). A
+            // failed read still reads as unresolved here: #1486.
+            let paths = crate::links_db::indexed_paths_in_path_order(self.conn).ok()?;
             *self.link_index.borrow_mut() = Some(crate::InMemoryVaultIndex::new(paths));
         }
         let index = self.link_index.borrow();

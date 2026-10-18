@@ -156,6 +156,7 @@ jobs:
       contents: read
     env:
       ROOT_LISTING_PERF_GUARD: session::tests::dir_tree::perf_guard_root_listing_under_100ms_on_10k_files
+      UNRESOLVED_LINK_PERF_GUARD: session::tests::link_pass::perf_guard_unresolved_link_rescan_within_twice_the_link_free_one
     steps:
       - name: Checkout
         uses: actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0  # v7
@@ -231,13 +232,13 @@ jobs:
           tool: cargo-nextest@0.9.140
 
       - name: cargo nextest run — censuses (ci profile, tmpfs)
-        # The wall-clock perf guard is excluded from both sweep halves and
+        # The wall-clock perf guards are excluded from both sweep halves and
         # run in isolation below — beside the long dir-tree censuses,
         # scheduler contention is indistinguishable from a
-        # list_dir_children regression. If the guard is ever renamed, the
-        # isolated step's exact-match filter + --no-tests=fail turns the
-        # rename into a loud CI failure, preserving the old
-        # `--list | grep` protection.
+        # list_dir_children (or dangling-link pass, #1429) regression. If a
+        # guard is ever renamed, its isolated step's exact-match filter +
+        # --no-tests=fail turns the rename into a loud CI failure,
+        # preserving the old `--list | grep` protection.
         #
         # TMPDIR on tmpfs for the CENSUS SUBSET ONLY (adversarial-review
         # fix): censuses assert logical equivalences and spend their time
@@ -252,7 +253,7 @@ jobs:
         run: >-
           cargo nextest run --workspace --cargo-profile ci --locked
           --no-fail-fast --no-tests=fail
-          -E "test(census_) and not test(${ROOT_LISTING_PERF_GUARD})"
+          -E "test(census_) and not test(${ROOT_LISTING_PERF_GUARD}) and not test(${UNRESOLVED_LINK_PERF_GUARD})"
 
       - name: cargo nextest run — non-census suite (ci profile, real fs)
         # Everything that isn't a census (and isn't the isolated guard):
@@ -263,7 +264,7 @@ jobs:
         run: >-
           cargo nextest run --workspace --cargo-profile ci --locked
           --no-fail-fast --no-tests=fail
-          -E "not test(census_) and not test(${ROOT_LISTING_PERF_GUARD})"
+          -E "not test(census_) and not test(${ROOT_LISTING_PERF_GUARD}) and not test(${UNRESOLVED_LINK_PERF_GUARD})"
 
       - name: root-listing performance guard (isolated)
         # Same workspace-level package selection as the sweep above, so
@@ -274,6 +275,18 @@ jobs:
           cargo nextest run --workspace --cargo-profile ci --locked
           --no-tests=fail --test-threads 1
           -E "test(=${ROOT_LISTING_PERF_GUARD})"
+
+      - name: unresolved-link rescan performance guard (isolated)
+        # #1429: a no-change rescan of 10k notes with 20,000 links to
+        # notes not yet written stays within twice the link-free one, so
+        # the scan's dangling-link pass cannot slip back to unresolved
+        # links x files. Isolated like the root-listing guard (its own
+        # step, one thread, exact match + --no-tests=fail), with the same
+        # package selection so nothing recompiles.
+        run: >-
+          cargo nextest run --workspace --cargo-profile ci --locked
+          --no-tests=fail --test-threads 1
+          -E "test(=${UNRESOLVED_LINK_PERF_GUARD})"
 
       - name: Doc-tests
         # nextest doesn't run doctests; keep them via libtest. Edition

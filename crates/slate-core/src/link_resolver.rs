@@ -27,7 +27,7 @@
 //!    look for an exact match, trying the literal string first and
 //!    then the same string with each candidate Markdown extension
 //!    appended.
-//! 2. **Basename** (`bar`, `bar.md`): scan every index entry whose
+//! 2. **Basename** (`bar`, `bar.md`): every index entry whose
 //!    final path component case-insensitively equals the target's
 //!    basename (with the same `.md` / `.markdown` / `.mdown` / `.mkd`
 //!    extension-implied / extension-allowed rules).
@@ -45,6 +45,9 @@
 //! Keeping the dependency at the trait boundary lets us write hermetic
 //! tests against an in-memory vec without spinning up a session.
 
+use std::hash::{BuildHasher, BuildHasherDefault, DefaultHasher};
+use std::sync::OnceLock;
+
 use crate::links::{LinkAnchor, looks_external_for_resolver};
 
 /// Vault-relative paths the resolver can match against. Paths use
@@ -54,20 +57,104 @@ pub trait VaultIndex {
     /// can choose any concrete iterator type as long as it yields
     /// `&str` slices.
     fn all_paths(&self) -> Box<dyn Iterator<Item = &str> + '_>;
+
+    /// Offer `selector` the indexed paths its target could match (#1429):
+    /// at least every path its probe ([`LinkCandidateSelector::probe`])
+    /// names, and paths equal under lowercase in index order, which decides
+    /// a tie between them. An extra path never changes the winner. The
+    /// default offers every path, in index order; [`InMemoryVaultIndex`]
+    /// looks its candidates up instead.
+    fn offer_candidates(&self, selector: &mut LinkCandidateSelector) {
+        for path in self.all_paths() {
+            selector.offer(path);
+        }
+    }
 }
 
 /// Trivial in-memory `VaultIndex` over an owned `Vec<String>`.
 /// Useful in tests and as a snapshot view of a session's file list.
+///
+/// A resolution offers only the paths its target's probe names (#1429),
+/// looked up in a [`CandidateTable`] built from the paths on the first
+/// resolution, once per snapshot. Its winner is the one offering every path
+/// in the snapshot's order would give, whatever that order is.
 pub struct InMemoryVaultIndex {
     paths: Vec<String>,
+    candidates: OnceLock<CandidateTable>,
 }
 
 impl InMemoryVaultIndex {
     pub fn new(paths: Vec<String>) -> Self {
         #[cfg(test)]
         SNAPSHOT_PATHS.with(|count| count.set(count.get() + paths.len()));
-        Self { paths }
+        Self {
+            paths,
+            candidates: OnceLock::new(),
+        }
     }
+}
+
+/// [`InMemoryVaultIndex`]'s lookup by the keys a [`CandidateProbe`] names
+/// (#1429): every path's position under the hash of its lowercased whole
+/// path, and again under the hash of its lowercased final component —
+/// each computed exactly as [`LinkCandidateSelector::offer`] compares —
+/// sorted, so one key's candidates are one run, in index order. Two keys
+/// that share a hash share a run: that adds only paths the selector
+/// rejects, and keeps every key's own paths in index order.
+struct CandidateTable {
+    /// `(hash of path.to_lowercase(), position)`, sorted.
+    by_path: Vec<(u64, usize)>,
+    /// `(hash of final_component(path).to_lowercase(), position)`, sorted.
+    by_name: Vec<(u64, usize)>,
+}
+
+impl CandidateTable {
+    fn build(paths: &[String]) -> Self {
+        #[cfg(test)]
+        CANDIDATE_TABLES_BUILT.with(|count| count.set(count.get() + 1));
+        let mut by_path = Vec::with_capacity(paths.len());
+        let mut by_name = Vec::with_capacity(paths.len());
+        for (position, path) in paths.iter().enumerate() {
+            by_path.push((key_hash(&path.to_lowercase()), position));
+            by_name.push((key_hash(&final_component(path).to_lowercase()), position));
+        }
+        // The pairs are distinct (each position once), so the order is
+        // total: by hash, then by position — index order within a run.
+        by_path.sort_unstable();
+        by_name.sort_unstable();
+        Self { by_path, by_name }
+    }
+
+    /// Offer `selector` the run of each key its probe names. The order
+    /// across keys does not matter: an exact rank is its key's position in
+    /// the probe, so only paths under one key can tie, and they arrive in
+    /// index order within its run; a basename's rank (distance, then path)
+    /// is total.
+    fn offer(&self, paths: &[String], selector: &mut LinkCandidateSelector) {
+        let (table, keys) = match selector.probe() {
+            CandidateProbe::None => return,
+            CandidateProbe::Paths(keys) => (&self.by_path, keys),
+            CandidateProbe::Names(keys) => (&self.by_name, keys),
+        };
+        let mut hashes: Vec<u64> = keys.iter().map(|key| key_hash(key)).collect();
+        hashes.sort_unstable();
+        hashes.dedup();
+        for hash in hashes {
+            let start = table.partition_point(|&(entry, _)| entry < hash);
+            for &(_, position) in table[start..]
+                .iter()
+                .take_while(|(entry, _)| *entry == hash)
+            {
+                selector.offer(&paths[position]);
+            }
+        }
+    }
+}
+
+/// One fixed hasher for a [`CandidateTable`]'s keys and its probes, so a
+/// table answers the same in every run.
+fn key_hash(key: &str) -> u64 {
+    BuildHasherDefault::<DefaultHasher>::default().hash_one(key)
 }
 
 #[cfg(test)]
@@ -80,11 +167,21 @@ thread_local! {
     /// this thread, matching or not — the rows a resolution visits.
     pub(crate) static PATHS_OFFERED: std::cell::Cell<usize> =
         const { std::cell::Cell::new(0) };
+    /// #1429 test seam: [`CandidateTable`]s built on this thread — one per
+    /// snapshot that resolves anything.
+    pub(crate) static CANDIDATE_TABLES_BUILT: std::cell::Cell<usize> =
+        const { std::cell::Cell::new(0) };
 }
 
 impl VaultIndex for InMemoryVaultIndex {
     fn all_paths(&self) -> Box<dyn Iterator<Item = &str> + '_> {
         Box::new(self.paths.iter().map(String::as_str))
+    }
+
+    fn offer_candidates(&self, selector: &mut LinkCandidateSelector) {
+        self.candidates
+            .get_or_init(|| CandidateTable::build(&self.paths))
+            .offer(&self.paths, selector);
     }
 }
 
@@ -270,14 +367,12 @@ pub fn resolve_link(
     source_path: &str,
     index: &dyn VaultIndex,
 ) -> ResolvedLink {
-    // One rule for every caller (#1279): the index is offered to the same
-    // incremental selector a streaming caller feeds row by row, so a
-    // resolution over a whole snapshot and one over streamed candidate rows
-    // cannot disagree.
+    // One rule for every caller (#1279): the index offers its candidates to
+    // the same incremental selector a streaming caller feeds row by row, so
+    // a resolution over a whole snapshot and one over streamed candidate
+    // rows cannot disagree; a snapshot offers only its target's (#1429).
     let Ok(resolved) = resolve_link_through(target_raw, anchor, source_path, |mut selector| {
-        for path in index.all_paths() {
-            selector.offer(path);
-        }
+        index.offer_candidates(&mut selector);
         Ok::<_, std::convert::Infallible>(selector.into_winner())
     });
     resolved
@@ -1211,5 +1306,111 @@ mod tests {
                 "{target:?} from {source:?}"
             );
         }
+    }
+
+    /// The paths of `paths` that `target_raw`'s probe names: those whose
+    /// lowercased whole path (a path target) or final component (a basename)
+    /// is one of its keys — the candidates and nothing else.
+    fn probe_candidates(target_raw: &str, paths: &[String]) -> usize {
+        match candidate_probe(target_raw) {
+            CandidateProbe::None => 0,
+            CandidateProbe::Paths(keys) => paths
+                .iter()
+                .filter(|path| keys.contains(&path.to_lowercase()))
+                .count(),
+            CandidateProbe::Names(keys) => paths
+                .iter()
+                .filter(|path| keys.contains(&final_component(path).to_lowercase()))
+                .count(),
+        }
+    }
+
+    /// #1429 (#1279's equivalence): a snapshot that looks its candidates up
+    /// resolves every target as offering it every path does — over the
+    /// shared fixtures (bare names, folder and vault-root paths, `../`,
+    /// implied extensions, attachments, a name three folders carry, case and
+    /// Unicode forms, and the index-only case, normalization and Kelvin-sign
+    /// twins), from six sources, anchors carried through, with the paths in
+    /// path order, reversed, and as written (each twin pair against path
+    /// order). Each resolution offers exactly its probe's candidates, from a
+    /// table built once per snapshot.
+    #[test]
+    fn candidate_lookup_resolves_like_the_full_offer() {
+        use super::census_fixtures::{
+            INDEX_ONLY_TWINS, INDEXED_PATHS, SOURCES, TARGETS, resolve_by_full_offer,
+            snapshot_paths, winner,
+        };
+        use std::cell::Cell;
+
+        let in_path_order = snapshot_paths();
+        let reversed: Vec<String> = in_path_order.iter().rev().cloned().collect();
+        let as_written: Vec<String> = INDEX_ONLY_TWINS
+            .iter()
+            .chain(INDEXED_PATHS)
+            .map(|path| path.to_string())
+            .collect();
+        let orders = [&in_path_order, &reversed, &as_written];
+        let anchors = [
+            None,
+            Some(LinkAnchor::Heading("Intro".into())),
+            Some(LinkAnchor::Block("blk".into())),
+        ];
+        for order in orders {
+            let index = InMemoryVaultIndex::new(order.clone());
+            let built_before = CANDIDATE_TABLES_BUILT.with(Cell::get);
+            for source in SOURCES {
+                for (n, target) in TARGETS.iter().enumerate() {
+                    let anchor = anchors[n % anchors.len()].clone();
+                    let expected = resolve_by_full_offer(target, anchor.clone(), source, order);
+                    let offered_before = PATHS_OFFERED.with(Cell::get);
+                    let resolved = resolve_link(target, anchor, source, &index);
+                    let offered = PATHS_OFFERED.with(Cell::get) - offered_before;
+                    assert_eq!(resolved, expected, "{target:?} from {source:?}");
+                    assert_eq!(
+                        offered,
+                        probe_candidates(target, order),
+                        "{target:?} from {source:?}: the paths offered are not its candidates"
+                    );
+                }
+            }
+            assert_eq!(
+                CANDIDATE_TABLES_BUILT.with(Cell::get) - built_before,
+                1,
+                "one candidate table per snapshot"
+            );
+        }
+
+        // The orders differ where order decides: a case-twin tie goes to the
+        // twin first in the snapshot, so a lookup that reordered a key's
+        // paths could not pass the census above.
+        let twin_winners: Vec<Option<String>> = orders
+            .iter()
+            .map(|order| {
+                let index = InMemoryVaultIndex::new((*order).clone());
+                winner(&resolve_link("twin/case", None, "", &index)).map(str::to_string)
+            })
+            .collect();
+        assert_eq!(
+            twin_winners,
+            [
+                Some("Twin/Case.md".to_string()),
+                Some("twin/case.md".to_string()),
+                Some("twin/case.md".to_string())
+            ]
+        );
+    }
+
+    /// #1429: a snapshot nothing resolves against builds no table.
+    #[test]
+    fn a_snapshot_that_resolves_nothing_builds_no_candidate_table() {
+        use std::cell::Cell;
+        let built_before = CANDIDATE_TABLES_BUILT.with(Cell::get);
+        let index = idx(&["notes/foo.md", "notes/bar.md"]);
+        assert_eq!(index.all_paths().count(), 2);
+        assert!(matches!(
+            resolve_link("https://example.com", None, "", &index),
+            ResolvedLink::External
+        ));
+        assert_eq!(CANDIDATE_TABLES_BUILT.with(Cell::get), built_before);
     }
 }

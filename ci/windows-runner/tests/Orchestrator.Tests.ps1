@@ -1445,6 +1445,197 @@ Context 'health breaker' {
         Invoke-OrchestratorTick -Config $config -Journal $journal -Adapters $adapters -Now $t0.AddSeconds(20)
         $journal.PublishedState | Should -Match '"serving":true'
     }
+    It 'forgets every job''s retry strikes when the breaker half-opens, and admits the jobs it gave up on as the probes' {
+        # Three jobs strike three times each while the host fails (each
+        # strike restarts the cool-down), so all three reach the cap.
+        & $script:tripNow
+        Invoke-OrchestratorTick -Config $config -Journal $journal -Adapters $adapters -Now $t0.AddSeconds(610)
+        Invoke-OrchestratorTick -Config $config -Journal $journal -Adapters $adapters -Now $t0.AddSeconds(620)
+        Invoke-OrchestratorTick -Config $config -Journal $journal -Adapters $adapters -Now $t0.AddSeconds(1220)
+        Invoke-OrchestratorTick -Config $config -Journal $journal -Adapters $adapters -Now $t0.AddSeconds(1230)
+        foreach ($id in '1', '2', '3') { $journal.Retries[$id].Count | Should -Be 3 -Because "job $id" }
+        (Get-Calls 'NewVm').Count | Should -Be 9
+        # Capped: nothing admitted and nothing published as queued, even
+        # though the host works again and GitHub still lists the jobs.
+        $adapters.NewVm = $workingNewVm
+        Invoke-OrchestratorTick -Config $config -Journal $journal -Adapters $adapters -Now $t0.AddSeconds(1240)
+        (Get-Calls 'NewVm').Count | Should -Be 9
+        $journal.PublishedState | Should -Match '"serving":false,"slots":2,"running":\[\],"queued":\[\]'
+        # The cool-down from the last failure passes: the strikes are
+        # forgotten in the same tick, two jobs start and the third is queued.
+        Invoke-OrchestratorTick -Config $config -Journal $journal -Adapters $adapters -Now $t0.AddSeconds(1230 + 900)
+        ($logs -join "`n") | Should -Match '\[info\] health: serving again after 15 min without a failure'
+        ($logs -join "`n") | Should -Match '\[info\] health: retry strikes of 3 jobs forgotten \(lanes app, model, rust\) after the cool-down; they are admitted again'
+        $journal.Retries.Count | Should -Be 0
+        (Get-Calls 'NewVm').Count | Should -Be 11
+        $journal.Vms.Count | Should -Be 2
+        $journal.PublishedState | Should -Match '"serving":true,"slots":2,"running":\[\{"lane":"app","since":"[^"]+"\},\{"lane":"rust","since":"[^"]+"\}\],"queued":\[\{"lane":"model"'
+    }
+    It 'forgets the strikes when a runner takes its job after a trip, so a struck job is admitted again at once' {
+        & $script:tripNow
+        $adapters.NewVm = $workingNewVm
+        $world.Queued = @((New-QueuedJob 1 10 'app'), (New-QueuedJob 2 11 'rust'), (New-QueuedJob 3 12 'model'), (New-QueuedJob 4 13 'app'))
+        Invoke-OrchestratorTick -Config $config -Journal $journal -Adapters $adapters -Now $t0.AddSeconds(20)     # job 4 provisioned (1-3 in back-off)
+        Invoke-OrchestratorTick -Config $config -Journal $journal -Adapters $adapters -Now $t0.AddSeconds(30)     # handed off
+        (Get-Calls 'NewVm').Count | Should -Be 4
+        $world.Runner = [pscustomobject]@{ status = 'online'; busy = $true }
+        Invoke-OrchestratorTick -Config $config -Journal $journal -Adapters $adapters -Now $t0.AddSeconds(30 + 310)
+        ($logs -join "`n") | Should -Match 'health: a runner took its job; 3 failures in a row forgotten'
+        ($logs -join "`n") | Should -Match 'health: retry strikes of 3 jobs forgotten \(lanes app, model, rust\) because a runner took its job; they are admitted again'
+        $journal.Retries.Count | Should -Be 0
+        # Job 1 was in back-off until t0+600; it starts in this very tick.
+        (Get-Calls 'NewVm').Count | Should -Be 5
+        $journal.Vms.Count | Should -Be 2
+    }
+    It 'keeps a job''s strikes when a runner takes its job on a host that never tripped' {
+        # Two strikes do not trip the breaker; a claim then says nothing
+        # about those jobs, which keep their back-off and their cap.
+        $null = & $script:twoFailuresThenAVm
+        $world.Runner = [pscustomobject]@{ status = 'online'; busy = $true }
+        Invoke-OrchestratorTick -Config $config -Journal $journal -Adapters $adapters -Now $t0.AddSeconds(20 + 310)
+        $journal.Health.Failures | Should -Be 0
+        $journal.Retries['1'].Count | Should -Be 1
+        $journal.Retries['2'].Count | Should -Be 1
+        ($logs -join "`n") | Should -Not -Match 'retry strikes'
+    }
+    It 'keeps the strikes when they all fall on one lane, so one broken lane does not hold the host' {
+        # The model lane's cache parent is unreadable; the other lanes work.
+        # On an idle host the one model job trips the breaker by itself.
+        $adapters.NewVm = { param($n, $l); if ($l -eq 'model') { & $script:record 'NewVm' @($n, $l); throw 'cache parent unreadable' }; & $script:workingNewVm $n $l }
+        $world.Queued = @((New-QueuedJob 1 10 'model'))
+        foreach ($s in 0, 610, 1220) { Invoke-OrchestratorTick -Config $config -Journal $journal -Adapters $adapters -Now $t0.AddSeconds($s) }
+        $journal.Retries['1'].Count | Should -Be 3
+        $journal.Health.Failures | Should -Be 3
+        $journal.PublishedState | Should -Match '"serving":false'
+        # Half-open: the strikes are weighed and kept, nothing is admitted,
+        # and the state says serving for the lanes that work.
+        Invoke-OrchestratorTick -Config $config -Journal $journal -Adapters $adapters -Now $t0.AddSeconds(1220 + 900)
+        ($logs -join "`n") | Should -Match "health: retry strikes of 1 job kept: all on lane model, which looks like that lane's fault, not the host's"
+        ($logs -join "`n") | Should -Not -Match 'forgotten \(lanes'
+        $journal.Retries['1'].Count | Should -Be 3
+        (Get-Calls 'NewVm').Count | Should -Be 3
+        $journal.PublishedState | Should -Match '"serving":true,"slots":2,"running":\[\],"queued":\[\]'
+        Invoke-OrchestratorTick -Config $config -Journal $journal -Adapters $adapters -Now $t0.AddSeconds(1220 + 910)
+        $journal.PublishedState | Should -Match '"serving":true'
+        ([regex]::Matches(($logs -join "`n"), 'not serving')).Count | Should -Be 1
+    }
+    It 'forgets the strikes at a restart after a trip, whatever their lanes, even with a VM kept' {
+        & $script:tripNow
+        # A handed-off VM Hyper-V still reports Running survives the sweep,
+        # which otherwise leaves the retry table alone.
+        & $script:breakerVm 'slate-win-app-kept0000' $t0
+        $world.Vms = @('slate-win-app-kept0000')
+        $world.VmStates['slate-win-app-kept0000'] = 'Running'
+        Invoke-StartupSweep -Config $config -Journal $journal -Adapters $adapters
+        $journal.Vms.ContainsKey('slate-win-app-kept0000') | Should -BeTrue
+        ($logs -join "`n") | Should -Match 'health: retry strikes of 3 jobs forgotten \(lanes app, model, rust\) at start; they are admitted again'
+        $journal.Retries.Count | Should -Be 0
+        $journal.Health.TrippedAt | Should -Be $null
+        # The jobs are still queued; the free slot takes the first at once.
+        $adapters.NewVm = $workingNewVm
+        Invoke-OrchestratorTick -Config $config -Journal $journal -Adapters $adapters -Now $t0.AddSeconds(20)
+        (Get-Calls 'NewVm').Count | Should -Be 4
+        $journal.Vms.Count | Should -Be 2
+    }
+    It 'forgets a lane''s strikes when a runner of that lane takes its job after a trip' {
+        # The model lane failed, tripped the breaker alone, and was repaired
+        # (the cache parent restored): the next model job's claim proves it.
+        $adapters.NewVm = { param($n, $l); if ($l -eq 'model') { & $script:record 'NewVm' @($n, $l); throw 'cache parent unreadable' }; & $script:workingNewVm $n $l }
+        $world.Queued = @((New-QueuedJob 1 10 'model'))
+        foreach ($s in 0, 610, 1220) { Invoke-OrchestratorTick -Config $config -Journal $journal -Adapters $adapters -Now $t0.AddSeconds($s) }
+        $journal.Retries['1'].Count | Should -Be 3
+        $adapters.NewVm = $workingNewVm
+        $world.Queued = @((New-QueuedJob 1 10 'model'), (New-QueuedJob 2 11 'model' '2026-10-10T12:30:00Z'))
+        Invoke-OrchestratorTick -Config $config -Journal $journal -Adapters $adapters -Now $t0.AddSeconds(1230)     # job 2 provisioned (job 1 capped)
+        Invoke-OrchestratorTick -Config $config -Journal $journal -Adapters $adapters -Now $t0.AddSeconds(1240)     # handed off
+        $world.Runner = [pscustomobject]@{ status = 'online'; busy = $true }
+        Invoke-OrchestratorTick -Config $config -Journal $journal -Adapters $adapters -Now $t0.AddSeconds(1240 + 310)
+        ($logs -join "`n") | Should -Match 'health: retry strikes of 1 job forgotten \(lanes model\) because a runner took its job; they are admitted again'
+        $journal.Retries.Count | Should -Be 0
+        # Job 1 takes the free slot in that tick.
+        (Get-Calls 'NewVm').Count | Should -Be 5
+        $journal.Vms.Count | Should -Be 2
+    }
+    It 'keeps a lane''s strikes when a runner of another lane takes its job after a trip' {
+        $adapters.NewVm = { param($n, $l); if ($l -eq 'model') { & $script:record 'NewVm' @($n, $l); throw 'cache parent unreadable' }; & $script:workingNewVm $n $l }
+        $world.Queued = @((New-QueuedJob 1 10 'model'))
+        foreach ($s in 0, 610, 1220) { Invoke-OrchestratorTick -Config $config -Journal $journal -Adapters $adapters -Now $t0.AddSeconds($s) }
+        $world.Queued = @((New-QueuedJob 1 10 'model'), (New-QueuedJob 2 11 'app' '2026-10-10T12:30:00Z'))
+        Invoke-OrchestratorTick -Config $config -Journal $journal -Adapters $adapters -Now $t0.AddSeconds(1230)
+        Invoke-OrchestratorTick -Config $config -Journal $journal -Adapters $adapters -Now $t0.AddSeconds(1240)
+        $world.Runner = [pscustomobject]@{ status = 'online'; busy = $true }
+        Invoke-OrchestratorTick -Config $config -Journal $journal -Adapters $adapters -Now $t0.AddSeconds(1240 + 310)
+        ($logs -join "`n") | Should -Match 'health: a runner took its job; 3 failures in a row forgotten'
+        ($logs -join "`n") | Should -Match "health: retry strikes of 1 job kept: all on lane model, which looks like that lane's fault, not the host's"
+        $journal.Retries['1'].Count | Should -Be 3
+        (Get-Calls 'NewVm').Count | Should -Be 4
+    }
+    It 'forgets kept strikes when their lane''s runner takes its job, even after another lane''s claim reset the breaker' {
+        # A single-lane trip, kept at the half-open; a run then brings an
+        # app job and a model job home, and the app runner is claimed first.
+        $adapters.NewVm = { param($n, $l); if ($l -eq 'model') { & $script:record 'NewVm' @($n, $l); throw 'cache parent unreadable' }; & $script:workingNewVm $n $l }
+        $world.Queued = @((New-QueuedJob 1 10 'model'))
+        foreach ($s in 0, 610, 1220) { Invoke-OrchestratorTick -Config $config -Journal $journal -Adapters $adapters -Now $t0.AddSeconds($s) }
+        $adapters.NewVm = $workingNewVm
+        Invoke-OrchestratorTick -Config $config -Journal $journal -Adapters $adapters -Now $t0.AddSeconds(1220 + 900)   # half-open keeps
+        $journal.Retries['1'].Kept | Should -BeTrue
+        $world.Queued = @((New-QueuedJob 1 10 'model'), (New-QueuedJob 2 11 'app' '2026-10-10T12:30:00Z'))
+        Invoke-OrchestratorTick -Config $config -Journal $journal -Adapters $adapters -Now $t0.AddSeconds(2130)   # app provisioned
+        Invoke-OrchestratorTick -Config $config -Journal $journal -Adapters $adapters -Now $t0.AddSeconds(2140)   # app handed off
+        $world.Queued += (New-QueuedJob 3 12 'model' '2026-10-10T12:31:00Z')
+        Invoke-OrchestratorTick -Config $config -Journal $journal -Adapters $adapters -Now $t0.AddSeconds(2150)   # model provisioned
+        Invoke-OrchestratorTick -Config $config -Journal $journal -Adapters $adapters -Now $t0.AddSeconds(2160)   # model handed off
+        $world.Runner = [pscustomobject]@{ status = 'online'; busy = $true }
+        Invoke-OrchestratorTick -Config $config -Journal $journal -Adapters $adapters -Now $t0.AddSeconds(2140 + 310)   # app claimed first
+        ([regex]::Matches(($logs -join "`n"), 'kept: all on lane model')).Count | Should -Be 2
+        $journal.Health.TrippedAt | Should -Be $null
+        $journal.Retries['1'].Count | Should -Be 3
+        Invoke-OrchestratorTick -Config $config -Journal $journal -Adapters $adapters -Now $t0.AddSeconds(2160 + 310)   # model claimed
+        ($logs -join "`n") | Should -Match 'health: retry strikes of 1 job on lane model forgotten because a runner of that lane took its job; they are admitted again'
+        $journal.Retries.Count | Should -Be 0
+        # Both slots are busy, so job 1 is published as queued, no longer hidden by its cap.
+        $journal.PublishedState | Should -Match '"queued":\[\{"lane":"model"'
+    }
+    It 'leaves unmarked strikes alone when a runner of their own lane takes its job on a host that never tripped' {
+        # Two app strikes, no trip, then an app claim: only strikes the lane
+        # rule kept are forgiven by a claim, so a job-specific fault on a
+        # busy lane still reaches its cap.
+        $null = & $script:twoFailuresThenAVm 'app'
+        $world.Runner = [pscustomobject]@{ status = 'online'; busy = $true }
+        Invoke-OrchestratorTick -Config $config -Journal $journal -Adapters $adapters -Now $t0.AddSeconds(20 + 310)
+        $journal.Retries['1'].Count | Should -Be 1
+        $journal.Retries['2'].Count | Should -Be 1
+        ($logs -join "`n") | Should -Not -Match 'retry strikes'
+    }
+    It 'does not hold strikes whose lanes are no longer known against the one-lane rule' {
+        # The seen-job records of the struck jobs were pruned: an unknown
+        # lane is not "one lane", so the half-open forgives them.
+        $adapters.NewVm = { param($n, $l); if ($l -eq 'model') { & $script:record 'NewVm' @($n, $l); throw 'cache parent unreadable' }; & $script:workingNewVm $n $l }
+        $world.Queued = @((New-QueuedJob 1 10 'model'))
+        foreach ($s in 0, 610, 1220) { Invoke-OrchestratorTick -Config $config -Journal $journal -Adapters $adapters -Now $t0.AddSeconds($s) }
+        $journal.Retries['1'].Count | Should -Be 3
+        $journal.SeenJobs.Clear()
+        $adapters.NewVm = $workingNewVm
+        $world.Queued = @()
+        Invoke-OrchestratorTick -Config $config -Journal $journal -Adapters $adapters -Now $t0.AddSeconds(1220 + 900)
+        ($logs -join "`n") | Should -Match 'health: retry strikes of 1 job forgotten \(lanes \?\) after the cool-down; they are admitted again'
+        $journal.Retries.Count | Should -Be 0
+    }
+    It 'forgets even one lane''s strikes at a restart after a trip: the restart is the repair' {
+        # The same single-lane fault the half-open keeps; the operator fixed
+        # the cache parent and restarted the loop, so the job runs again.
+        $adapters.NewVm = { param($n, $l); if ($l -eq 'model') { & $script:record 'NewVm' @($n, $l); throw 'cache parent unreadable' }; & $script:workingNewVm $n $l }
+        $world.Queued = @((New-QueuedJob 1 10 'model'))
+        foreach ($s in 0, 610, 1220) { Invoke-OrchestratorTick -Config $config -Journal $journal -Adapters $adapters -Now $t0.AddSeconds($s) }
+        $journal.Retries['1'].Count | Should -Be 3
+        Invoke-StartupSweep -Config $config -Journal $journal -Adapters $adapters
+        ($logs -join "`n") | Should -Match 'health: retry strikes of 1 job forgotten \(lanes model\) at start; they are admitted again'
+        $journal.Retries.Count | Should -Be 0
+        $adapters.NewVm = $workingNewVm
+        Invoke-OrchestratorTick -Config $config -Journal $journal -Adapters $adapters -Now $t0.AddSeconds(1230)
+        (Get-Calls 'NewVm').Count | Should -Be 4
+        $journal.Vms.Count | Should -Be 1
+    }
     It 'reads an older journal without a health record as healthy, and leaves it alone' {
         $journal.Remove('Health')
         Invoke-OrchestratorTick -Config $config -Journal $journal -Adapters $adapters -Now $t0
@@ -1465,6 +1656,8 @@ Context 'health breaker' {
         Invoke-OrchestratorTick -Config $config -Journal $journal -Adapters $adapters -Now $t0.AddSeconds(20)
         $journal.Health.Failures | Should -Be 1
         ($logs -join "`n") | Should -Not -Match '\[error\] health:'
+        # An empty retry table at the half-open is nothing to say.
+        ($logs -join "`n") | Should -Not -Match 'retry strikes'
         # The startup sweep reads the same record: a bad count must not stop the loop from starting.
         $journal.Health = @{ Failures = 'many'; TrippedAt = 'not a time' }
         { Invoke-StartupSweep -Config $config -Journal $journal -Adapters $adapters } | Should -Not -Throw
