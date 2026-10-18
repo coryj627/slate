@@ -64,22 +64,51 @@ struct WelcomeView: View {
         .alert(
             "Vault Not Found",
             isPresented: missingVaultAlertPresented,
-            presenting: appState.missingRecentVault
-        ) { entry in
+            presenting: appState.missingRecentVaultAlert
+        ) { alert in
             Button("Remove from Recent Vaults", role: .destructive) {
-                appState.removeRecent(path: entry.path)
+                appState.removeRecent(path: alert.entry.path)
                 appState.missingRecentVault = nil
                 postAccessibilityAnnouncement(
-                    .removedRecentVault(displayName: entry.displayName))
+                    .removedRecentVault(displayName: alert.entry.displayName))
+            }
+            // #1442: a folder IS at the path, but launch-restore could not
+            // confirm it is the remembered vault; the user may know better.
+            // Placed after the existing first button, so the alert's default
+            // stays what it was.
+            if alert.mismatch != nil {
+                Button("Open Anyway") {
+                    appState.missingRecentVault = nil
+                    appState.openRecent(alert.entry)
+                }
             }
             Button("Keep in List", role: .cancel) {
                 appState.missingRecentVault = nil
             }
-        } message: { entry in
-            Text(
-                "\(entry.displayName) is no longer at \(entry.path). "
-                    + "Remove it from your recent vaults?"
-            )
+        } message: { alert in
+            Text(Self.missingVaultMessage(for: alert.entry, mismatch: alert.mismatch))
+        }
+    }
+
+    /// The "Vault Not Found" alert's message. With no mismatch it is the
+    /// original sentence: nothing is at the path. #1442 adds what
+    /// launch-restore found when a folder IS there but is not the
+    /// remembered vault. Removing the entry never touches the folder.
+    nonisolated static func missingVaultMessage(
+        for entry: RecentVault, mismatch: RecentVaultMismatch?
+    ) -> String {
+        let question = "Remove it from your recent vaults?"
+        switch mismatch {
+        case nil:
+            return "\(entry.displayName) is no longer at \(entry.path). " + question
+        case .onlySlateFolder?:
+            return "Slate didn’t reopen \(entry.displayName). The folder at \(entry.path) "
+                + "holds only Slate’s .slate settings folder, which can be left behind "
+                + "when a vault is renamed or moved. " + question
+        case .differentFolder?:
+            return "Slate didn’t reopen \(entry.displayName), because it can’t confirm "
+                + "that the folder at \(entry.path) is the one it last opened. The "
+                + "folder may have been replaced, or its drive reconnected. " + question
         }
     }
 

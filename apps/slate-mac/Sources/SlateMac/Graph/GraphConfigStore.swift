@@ -18,6 +18,9 @@ import Foundation
 /// `prefs.json` precisely to avoid contending on its `.lock`.
 struct GraphConfigStore {
     let vaultRoot: URL
+    /// The identity the vault's open admitted (#1442). `write` goes only into
+    /// a root that still has it; `read` does not need it.
+    let rootIdentity: VaultStoreDirectory.RootIdentity?
 
     var configURL: URL {
         vaultRoot.appendingPathComponent(".slate", isDirectory: true)
@@ -59,7 +62,7 @@ struct GraphConfigStore {
     /// Write the config, preserving unknown top-level keys and refusing
     /// to clobber an unparseable existing file. Atomic via temp+rename.
     func write(_ config: GraphConfig) throws {
-        try ensureSlateDirExists()
+        try prepareSlateDirectory()
         let url = configURL
 
         var existing: String?
@@ -96,13 +99,14 @@ struct GraphConfigStore {
         }
     }
 
-    private func ensureSlateDirExists() throws {
-        let dir = vaultRoot.appendingPathComponent(".slate", isDirectory: true)
-        guard !FileManager.default.fileExists(atPath: dir.path) else { return }
+    /// `.slate` inside the root the open admitted, made only there (#1442).
+    private func prepareSlateDirectory() throws {
         do {
-            try FileManager.default.createDirectory(at: dir, withIntermediateDirectories: true)
-        } catch {
-            throw PrefsJsonStoreError.writeFailed(path: dir.path, reason: error.localizedDescription)
+            try VaultStoreDirectory.prepare(
+                vaultRoot: vaultRoot, expectedRootIdentity: rootIdentity)
+        } catch let refusal as VaultStoreDirectory.Refusal {
+            throw PrefsJsonStoreError.writeFailed(
+                path: configURL.path, reason: refusal.localizedDescription)
         }
     }
 
@@ -136,7 +140,10 @@ actor GraphConfigWriter {
     /// Newest generation actually written per vault (monotonic gate).
     private var written: [URL: Int] = [:]
 
-    func write(vault: URL, config: GraphConfig, generation: Int) {
+    func write(
+        vault: URL, rootIdentity: VaultStoreDirectory.RootIdentity?,
+        config: GraphConfig, generation: Int
+    ) {
         // Reject a superseded snapshot regardless of delivery order.
         if let seen = written[vault], generation < seen { return }
         written[vault] = generation
@@ -146,7 +153,7 @@ actor GraphConfigWriter {
         // gate is the authoritative protection), yet a silent drop makes a
         // field "my graph settings won't save" report undiagnosable.
         do {
-            try GraphConfigStore(vaultRoot: vault).write(config)
+            try GraphConfigStore(vaultRoot: vault, rootIdentity: rootIdentity).write(config)
         } catch {
             // Log the FULL vault path so the failing vault is uniquely
             // identifiable (two vaults can share a folder name) — matching

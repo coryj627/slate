@@ -634,25 +634,47 @@ final class HistoryPanelTests: XCTestCase {
         guard let session = state.currentSession else {
             return XCTFail("no session")
         }
-        let store = PrefsJsonStore(vaultRoot: dir)
+        // The store the open would hand the Settings writer: anchored to the
+        // vault's admitted identity (#1442), shared by every round below.
+        let store = PrefsJsonStore(
+            vaultRoot: dir, rootIdentity: AppState.vaultRootIdentity(of: dir))
         try store.writeBibliographyPrefs(
             BibliographyPrefs(
                 sources: [], defaultStyle: "style.csl", additionalStyles: []))
 
         for round in 1...12 {
             let days = UInt32(30 + round)
-            async let history: Void = Task.detached {
-                try? session.setHistoryPrefs(
-                    prefs: HistoryPrefs(retentionDays: days))
+            // Each writer hands its failure back instead of swallowing it, so
+            // a refused or failed write fails this round rather than passing
+            // on the sections an earlier write left behind.
+            async let history: (any Error)? = Task.detached {
+                do {
+                    try session.setHistoryPrefs(
+                        prefs: HistoryPrefs(retentionDays: days))
+                    return nil
+                } catch {
+                    return error
+                }
             }.value
-            async let bibliography: Void = Task.detached {
-                try? PrefsJsonStore(vaultRoot: dir)
-                    .writeBibliographyPrefs(
+            async let bibliography: (any Error)? = Task.detached {
+                do {
+                    try store.writeBibliographyPrefs(
                         BibliographyPrefs(
                             sources: [], defaultStyle: "style.csl",
                             additionalStyles: ["round\(round).csl"]))
+                    return nil
+                } catch {
+                    return error
+                }
             }.value
-            _ = await (history, bibliography)
+            let (historyError, bibliographyError) = await (history, bibliography)
+            XCTAssertNil(
+                historyError,
+                "round \(round): the history write failed: \(String(describing: historyError))")
+            XCTAssertNil(
+                bibliographyError,
+                "round \(round): the bibliography write failed: "
+                    + String(describing: bibliographyError))
 
             let data = try Data(
                 contentsOf: dir.appendingPathComponent(".slate/prefs.json"))
@@ -660,9 +682,13 @@ final class HistoryPanelTests: XCTestCase {
                 try JSONSerialization.jsonObject(with: data) as? [String: Any]
             XCTAssertNotNil(
                 root?["history"], "round \(round): history section lost")
+            let bibliographySection = root?["bibliography"] as? [String: Any]
             XCTAssertNotNil(
-                root?["bibliography"],
-                "round \(round): bibliography section lost")
+                bibliographySection, "round \(round): bibliography section lost")
+            XCTAssertEqual(
+                bibliographySection?["additional_styles"] as? [String],
+                ["round\(round).csl"],
+                "round \(round): this round's bibliography write did not land")
         }
     }
 
