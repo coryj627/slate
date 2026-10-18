@@ -448,22 +448,27 @@ enforced by construction, not by review.
   as the rename refusal does (`"sub" is a symbolic link, not a folder in this
   vault, so nothing was moved`), or says a folder in the path moved after it
   was checked. A batch reports that item untrashed with the reason, keeps its
-  recovery markers, requires a rescan and still trashes the rest. A symbolic
-  link is unlinked relative to the pinned parent only when its target is
-  truly absent: following it fails with `ENOENT` or `ENOTDIR` (on Windows
-  `ERROR_FILE_NOT_FOUND`, `ERROR_PATH_NOT_FOUND` or `ERROR_DIRECTORY`).
-  Every other link goes to the Trash, which moves the link itself, so Put
-  Back can restore it (#1477): one whose target Slate cannot reach (`EACCES`,
-  `EPERM`; `ERROR_ACCESS_DENIED`), a name too long, an I/O or network
-  failure, and `ELOOP` (`ERROR_CANT_RESOLVE_FILENAME`), which a cycle reports
-  but so does a chain longer than the kernel follows that ends at a real
-  file. Until #1477 any failure counted as dangling, so those links were
-  unlinked for good with no error. On a scratch APFS volume `NSFileManager`
-  moved every kind (`EACCES`, `ELOOP` for a cycle and for a 50-link chain,
-  `ENAMETOOLONG`, and `ENOENT`/`ENOTDIR` too) as the link, with its Put Back
-  records; trash-rs renames the link itself into the freedesktop Trash. A
-  batch counts an unlinked dangling link among the trashed items: it left
-  the vault, with nothing to put back. macOS hands the path to
+  recovery markers, requires a rescan and still trashes the rest. On macOS
+  and Linux every symbolic link goes to the Trash, which moves the link
+  itself, so Put Back can restore it: Move to Trash never deletes for good
+  (#1477, #1495). That holds whatever following the link reports: a target
+  Slate cannot reach (`EACCES`, `EPERM`), a name too long, an I/O or network
+  failure, `ELOOP` (a cycle, but also a chain longer than the kernel follows
+  that ends at a real file), and a dangling link (`ENOENT`, or `ENOTDIR` when
+  the target's path runs through a file), whose target may be only out of
+  reach, such as a file on a volume that is not mounted now. Until #1477 any
+  such failure, and until #1495 a dangling link, meant the link was unlinked
+  for good with no error. On a scratch APFS volume `NSFileManager` moved
+  every kind as the link, with its Put Back records; trash-rs renames the
+  link itself into the freedesktop Trash, with the `.trashinfo` that restores
+  it (a gated fact runs that on every Linux run). Windows still unlinks a
+  link whose target is truly absent (`ERROR_FILE_NOT_FOUND`,
+  `ERROR_PATH_NOT_FOUND` or `ERROR_DIRECTORY`) until the Recycle Bin is
+  checked with one on a scratch VM (#1499); every other Windows link goes to
+  the Recycle Bin as the link (`ERROR_ACCESS_DENIED`,
+  `ERROR_CANT_RESOLVE_FILENAME`, …). So on macOS and Linux every item a batch
+  reports trashed is in the Trash; on Windows a batch still counts an
+  unlinked dangling link among the trashed items. macOS hands the path to
   `NSFileManager trashItemAtURL:resultingItemURL:error:` as a file reference
   URL instead of trash-rs's Finder script: no Apple event or Automation
   grant, and Finder's Put Back still restores the item (verified on a scratch
