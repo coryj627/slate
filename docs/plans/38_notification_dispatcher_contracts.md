@@ -663,8 +663,13 @@ Facts in `SidebarWriteJournalTests`:
 - a torn tail is dropped and surfaced, and earlier records still replay;
 - a replaced vault never matches its journal;
 - a failed pins write after a rename replays on the next open;
+- a failed write is carried until the next pins and shortcuts writes land;
+- a committed rename replays where its source is back, and a pending one
+  does not;
 - a pending batch replays only the renames that stood;
 - a batch move records its standing and replays only what stood;
+- a folder rename with its note journals its fix-up and replays it;
+- a journal that cannot write never stops a rename;
 - an aged-out rename is surfaced, not replayed;
 - a retry after repair replays what waited for a readable file;
 - the record format is checksummed, line-delimited and versioned;

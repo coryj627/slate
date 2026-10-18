@@ -283,6 +283,134 @@ public sealed class SidebarWriteJournalTests : IDisposable
     }
 
     [Fact]
+    public void AFailedWriteIsCarriedUntilTheNextPinsAndShortcutsWritesLand()
+    {
+        using FixtureVault fixture = FixtureVault.Create(2, "journal-carried");
+        string journalFile = JournalFile(fixture);
+        using VaultSession session = OpenScanned(fixture.Root);
+        FilesSidebarViewModel sidebar = NewSidebar(session, fixture, []);
+        Pin(sidebar, "note0.md");
+        AddShortcut(sidebar, "note0.md");
+        string lockPath = Path.Combine(fixture.Root, ".slate", "sidebar.json.lock");
+        using (new FileStream(lockPath, FileMode.OpenOrCreate, FileAccess.ReadWrite, FileShare.None))
+        {
+            Assert.True(Rename(sidebar, "note0.md", "renamed.md"));
+        }
+
+        Idle();
+        _ = Assert.Single(EntriesOnDisk(journalFile));
+
+        // The next pins write lands every pin in memory, the rename's among
+        // them, and the entry still waits for its shortcuts...
+        Pin(sidebar, "note1.md");
+        Idle();
+        Assert.Equal(["note1.md", "renamed.md"], PinsOnDisk(fixture));
+        _ = Assert.Single(EntriesOnDisk(journalFile));
+
+        // ...which the next shortcuts write that lands carries.
+        AddShortcut(sidebar, "note1.md");
+        Assert.Equal(["renamed.md", "note1.md"], ShortcutsOnDisk(fixture));
+        Idle();
+        Assert.False(File.Exists(journalFile), "settled once both sections carried it");
+    }
+
+    [Fact]
+    public void ACommittedRenameReplaysWhereItsSourceIsBackAndAPendingOneDoesNot()
+    {
+        // Both sources exist at the next open: note0.md is a new note at the
+        // old path of a rename core reported committed, and note1.md's rename
+        // never ran. A committed entry needs no verification and replays; a
+        // pending one is verified against the disk and skipped.
+        using FixtureVault fixture = FixtureVault.Create(2, "journal-sources-back");
+        File.WriteAllText(Path.Combine(fixture.Root, "renamed0.md"), "# Renamed 0\n");
+        string journalFile = JournalFile(fixture);
+        using (VaultSession session = OpenScanned(fixture.Root))
+        {
+            FilesSidebarViewModel sidebar = NewSidebar(session, fixture, []);
+            Pin(sidebar, "note0.md");
+            Pin(sidebar, "note1.md");
+            SidebarJournalRename committed = new("note0.md", "renamed0.md", IsDirectory: false);
+            Guid id = AppendDurablePending(fixture, [committed]);
+            _journal.ResolveCommitted(Identity(fixture), id, [committed]);
+            _ = AppendDurablePending(fixture, [new("note1.md", "renamed1.md", IsDirectory: false)]);
+        }
+
+        Relaunch();
+        using (VaultSession session = OpenScanned(fixture.Root))
+        {
+            _ = NewSidebar(session, fixture, []);
+        }
+
+        Assert.Equal(["note1.md", "renamed0.md"], PinsOnDisk(fixture));
+        Idle();
+        Assert.False(File.Exists(journalFile));
+    }
+
+    [Fact]
+    public void AFolderRenameWithItsNoteJournalsItsFixUpAndReplaysIt()
+    {
+        // The compound rename moves the folder and renames its note to the
+        // new stem. The pending entry anticipates both renames, the committed
+        // entry holds the report's fix-up, and the replay lands the note's pin
+        // at guide/guide.md — not the prefix image guide/docs.md.
+        using FixtureVault fixture = FixtureVault.Create(0, "journal-folder-note");
+        Directory.CreateDirectory(Path.Combine(fixture.Root, "docs"));
+        File.WriteAllText(Path.Combine(fixture.Root, "docs", "docs.md"), "# docs\n");
+        File.WriteAllText(Path.Combine(fixture.Root, "docs", "other.md"), "O\n");
+        string journalFile = JournalFile(fixture);
+        SidebarJournalRename[] folderRenames =
+        [
+            new("docs", "guide", IsDirectory: true),
+            new("guide/docs.md", "guide/guide.md", IsDirectory: false),
+        ];
+        using (VaultSession session = OpenScanned(fixture.Root))
+        {
+            FilesSidebarViewModel sidebar = NewSidebar(session, fixture, []);
+            FileTreeNodeViewModel docs = Node(sidebar, "docs");
+            sidebar.LoadChildren(docs);
+            foreach (string path in new[] { "docs/docs.md", "docs/other.md" })
+            {
+                sidebar.SelectedNode = Assert.Single(docs.Children, node => node.Path == path);
+                sidebar.PinCommand.Execute(null);
+            }
+
+            SidebarJournalEntry[] beforeCore = [];
+            SidebarJournalEntry[] afterCore = [];
+            sidebar.BeforeStructuralCommitForTesting = () => beforeCore = [.. EntriesOnDisk(journalFile)];
+            sidebar.StructuralCommitLandedForTesting = () =>
+            {
+                Idle();
+                afterCore = [.. EntriesOnDisk(journalFile)];
+                throw new SimulatedCrashException();
+            };
+
+            Assert.Throws<SimulatedCrashException>(() =>
+            {
+                _ = Rename(sidebar, "docs", "guide");
+            });
+
+            SidebarJournalRename[] planned = [.. Assert.Single(beforeCore).Renames];
+            Assert.Equal(folderRenames, planned);
+            SidebarJournalEntry committed = Assert.Single(afterCore);
+            Assert.True(committed.Committed);
+            SidebarJournalRename[] landed = [.. committed.Renames];
+            Assert.Equal(folderRenames, landed);
+            Assert.True(File.Exists(Path.Combine(fixture.Root, "guide", "guide.md")));
+            Assert.Equal(["docs/docs.md", "docs/other.md"], PinsOnDisk(fixture));
+        }
+
+        Relaunch();
+        using (VaultSession session = OpenScanned(fixture.Root))
+        {
+            _ = NewSidebar(session, fixture, []);
+        }
+
+        Assert.Equal(["guide/guide.md", "guide/other.md"], PinsOnDisk(fixture));
+        Idle();
+        Assert.False(File.Exists(journalFile));
+    }
+
+    [Fact]
     public void APendingBatchReplaysOnlyTheRenamesThatStood()
     {
         // A crash after one of two renames committed: the entry is pending,
@@ -549,6 +677,26 @@ public sealed class SidebarWriteJournalTests : IDisposable
     }
 
     [Fact]
+    public void AJournalThatCannotWriteNeverStopsARename()
+    {
+        // A file where the journal's folder belongs: no line can land (the
+        // lane answers false), and the rename and its pins write still go on.
+        Directory.CreateDirectory(_scratch);
+        File.WriteAllText(JournalDirectory, "not a folder");
+        using FixtureVault fixture = FixtureVault.Create(2, "journal-cannot-write");
+        using VaultSession session = OpenScanned(fixture.Root);
+        FilesSidebarViewModel sidebar = NewSidebar(session, fixture, []);
+        Pin(sidebar, "note0.md");
+
+        Assert.True(Rename(sidebar, "note0.md", "renamed.md"));
+
+        Assert.True(File.Exists(Path.Combine(fixture.Root, "renamed.md")));
+        Assert.Equal(["renamed.md"], PinsOnDisk(fixture));
+        Idle();
+        Assert.False(Directory.Exists(JournalDirectory));
+    }
+
+    [Fact]
     public void ATestProcessNeverJournalsIntoTheUsersAppData()
     {
         // Only the app installs the production location (App.OnStartup); a
@@ -605,11 +753,12 @@ public sealed class SidebarWriteJournalTests : IDisposable
         Assert.Equal([path], PinsOnDisk(fixture));
     }
 
-    private void AppendDurablePending(FixtureVault fixture, IReadOnlyList<SidebarJournalRename> renames)
+    private Guid AppendDurablePending(FixtureVault fixture, IReadOnlyList<SidebarJournalRename> renames)
     {
         SidebarJournalAppend append = _journal.AppendPending(Identity(fixture), fixture.Root, renames)
             ?? throw new Xunit.Sdk.XunitException("the renames were journaled");
         Assert.True(append.Durable.Wait(TimeSpan.FromSeconds(10)) && append.Durable.Result);
+        return append.Id;
     }
 
     private FilesSidebarViewModel NewSidebar(
