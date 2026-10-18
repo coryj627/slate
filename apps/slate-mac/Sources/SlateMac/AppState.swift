@@ -8809,6 +8809,15 @@ final class AppState: ObservableObject {
     /// one cancel token and the foreground route (`AppState+Rescan.swift`).
     let rescanRun = VaultRescanRun()
 
+    /// Plan 43 PR 20c test seam: whether the open's `startWatching()` armed
+    /// core's vault watcher, reported on the open's worker.
+    var vaultWatchArmObserver: (@Sendable (Bool) -> Void)?
+
+    /// Test seam: every progress event of a `loadFiles` scan, on the scanner
+    /// thread, before it hops to the main actor (a fact acts inside the open
+    /// scan: after its walk, or with it parked).
+    var scanProgressHookForTesting: (@Sendable (ScanProgress) -> Void)?
+
     /// Handle on the in-flight note-load task. Same shape as
     /// `scanTask` so tests can await deterministically.
     private(set) var noteLoadTask: Task<Void, Never>?
@@ -10569,6 +10578,10 @@ final class AppState: ObservableObject {
         // be cancelled first in every case.
         cancelCurrentImportBatchForVaultTransition()
         cancelStructuralMutationOwnership()
+        // Plan 43 PR 20c (#1267): a direct A→B open bypasses `closeVault`,
+        // and A is gone whether or not B opens (a failed open clears
+        // `currentSession` below), so A's vault watch stops here, first.
+        currentSession?.stopWatching()
         do {
             let session = try VaultSession.openFilesystem(rootPath: url.path)
             // Audit #259: push the persisted math prefs into the
@@ -10814,7 +10827,9 @@ final class AppState: ObservableObject {
             cancelRescanForVaultTransition()
             scanTask?.cancel()
             scanTask = Task { [weak self] in
-                await self?.loadFiles()
+                // Plan 43 PR 20c (#1267): the open scan arms core's vault
+                // watcher right before its walk.
+                await self?.loadFiles(armingVaultWatch: true)
                 guard !Task.isCancelled else { return }
                 self?.refreshBaseQueries()
                 // M-3 (#534): sync diagnostics, once per vault open —
@@ -12096,6 +12111,12 @@ final class AppState: ObservableObject {
         baseQueryBuilderPreviewGeneration += 1
         scanTask?.cancel()
         scanTask = nil
+        // Plan 43 PR 20c (#1267): core's vault watcher stops first, before
+        // the rescan state resets and before the event listener goes. Once
+        // `stopWatching` returns no `onExternalChange` runs, so the teardown
+        // asks for no Watcher run; a signal already queued for the main
+        // actor finds no open vault and is dropped (`VaultEventAdapter`).
+        currentSession?.stopWatching()
         // Plan 43 PR 19: a close cancels the rescan's one token; the run
         // stops where it is and says nothing.
         cancelRescanForVaultTransition()
@@ -12392,7 +12413,14 @@ final class AppState: ObservableObject {
     /// bails at the next per-entry cancel check, and (b) suppresses
     /// the post-scan publish so a late completion can't repopulate
     /// `files` after the user has already moved on.
-    func loadFiles() async {
+    ///
+    /// `armingVaultWatch` (plan 43 PR 20c, #1267; the open funnel's call
+    /// only): arm core's vault watcher on the worker right before the scan
+    /// — #638's arm-then-probe rule, so a change made during the open scan
+    /// is either seen by its walk or arrives as a burst. No watch is a
+    /// diagnostic in the unified log, never spoken; Refresh and the
+    /// foreground rescan stay the baseline either way (design §4.6).
+    func loadFiles(armingVaultWatch: Bool = false) async {
         guard let session = currentSession else { return }
         isScanning = true
         scanError = nil
@@ -12418,7 +12446,9 @@ final class AppState: ObservableObject {
         // — without it, the implicit re-capture of `self?` from the
         // outer closure trips a "reference to captured var 'self' in
         // concurrently-executing code" diagnostic on the CI toolchain.
+        let progressHook = scanProgressHookForTesting
         let adapter = ScanProgressAdapter { [weak self] event in
+            progressHook?(event)
             Task { @MainActor [weak self] in
                 // #871 Codex round 3: drop a late progress event whose vault is
                 // no longer current — it must not publish vault A's scan
@@ -12427,6 +12457,7 @@ final class AppState: ObservableObject {
                 self.handleScanProgress(event)
             }
         }
+        let armObserver = armingVaultWatch ? vaultWatchArmObserver : nil
 
         do {
             let loaded: [FileSummary] = try await withTaskCancellationHandler {
@@ -12435,6 +12466,13 @@ final class AppState: ObservableObject {
                 // dispatching off the main actor keeps the UI responsive
                 // on multi-thousand-file vaults.
                 return try await Task.detached(priority: .userInitiated) {
+                    if armingVaultWatch {
+                        // Plan 43 PR 20c (#1267, design §4.3): the watch arms
+                        // BEFORE the walk (arm-then-probe).
+                        let armed = session.startWatching()
+                        armObserver?(armed)
+                        if !armed { Self.logVaultWatchUnavailable() }
+                    }
                     _ = try session.scanInitialWithProgress(
                         cancel: cancel,
                         listener: adapter
