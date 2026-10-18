@@ -412,6 +412,38 @@ pub fn init_host_logging(verbose: bool) {
     host_logging::init(verbose);
 }
 
+/// **Test processes only (#1455).** Route the Trash of every vault this
+/// process opens afterwards into `bin_path` instead of the system Trash, so a
+/// host's test suite never moves its fixtures into the `~/.Trash`, Trash or
+/// Recycle Bin of whoever runs it. `bin_path` is an existing folder the test
+/// process made and keeps, on the volume that holds its test vaults; each
+/// deleted entry lands in it under its own name (a same-named one with a
+/// number added).
+///
+/// A host's test bundle calls this once as it loads, before any test runs:
+/// the mac suite's `SlateMacTestBootstrap` and the Windows suite's module
+/// initializer. Shipping code never calls it; a source census in each host
+/// fails if one does. The routing cannot be undone or moved: a second call
+/// naming the same folder changes nothing, one naming another is refused, and
+/// a session opened before the first call keeps the system Trash. Not a
+/// product surface.
+///
+/// Exposed as `routeTrashToScratchBinForTests(binPath:)` in Swift and
+/// `SlateUniffiMethods.RouteTrashToScratchBinForTests` in C#.
+#[uniffi::export]
+pub fn route_trash_to_scratch_bin_for_tests(bin_path: String) -> Result<(), VaultError> {
+    core::route_trash_to_scratch_bin_for_tests(std::path::Path::new(&bin_path))
+        .map_err(VaultError::from)
+}
+
+/// **Test processes only (#1455).** The folder this process routed its Trash
+/// into ([`route_trash_to_scratch_bin_for_tests`]), or nil while it uses the
+/// system Trash. The hosts' test censuses ask before they trash anything.
+#[uniffi::export]
+pub fn scratch_trash_bin_for_tests() -> Option<String> {
+    core::scratch_trash_bin_for_tests().map(|bin| bin.to_string_lossy().into_owned())
+}
+
 /// Census support (w0_spec §W0-3 item 2, #715): deterministically raise
 /// any `VaultError` arm so foreign-binding censuses can prove every
 /// discriminant's mapping end-to-end — native raise → typed foreign
@@ -16810,6 +16842,81 @@ mod tests {
         assert_eq!(
             rendered.cursor_byte_offset,
             Some("# Meeting: Q1 sync\n\n".len() as u64)
+        );
+    }
+
+    /// #1455: the child half of
+    /// `routing_the_trash_sends_every_later_vaults_deletions_to_the_scratch_bin`.
+    /// It routes its own process into the bin in `SLATE_UNIFFI_SCRATCH_BIN`,
+    /// then trashes `doomed.md` from the vault in `SLATE_UNIFFI_SCRATCH_VAULT`
+    /// through a session opened the way a host opens one. Without those
+    /// variables it does nothing.
+    #[test]
+    fn routed_trash_child() {
+        let (Some(bin), Some(vault)) = (
+            std::env::var_os("SLATE_UNIFFI_SCRATCH_BIN"),
+            std::env::var_os("SLATE_UNIFFI_SCRATCH_VAULT"),
+        ) else {
+            return;
+        };
+        let bin = bin.to_string_lossy().into_owned();
+        let vault = vault.to_string_lossy().into_owned();
+        assert_eq!(scratch_trash_bin_for_tests(), None, "not routed yet");
+        assert!(matches!(
+            route_trash_to_scratch_bin_for_tests("relative/bin".into()),
+            Err(VaultError::InvalidPath { .. })
+        ));
+        route_trash_to_scratch_bin_for_tests(bin.clone()).unwrap();
+        route_trash_to_scratch_bin_for_tests(bin.clone()).unwrap();
+        assert!(matches!(
+            route_trash_to_scratch_bin_for_tests(vault.clone()),
+            Err(VaultError::InvalidArgument { .. })
+        ));
+        assert_eq!(scratch_trash_bin_for_tests().as_deref(), Some(bin.as_str()));
+        // Before anything is trashed: a provider built now holds the bin, so
+        // a broken routing fails here and never reaches the system Trash.
+        let provider = core::FsVaultProvider::new(std::path::PathBuf::from(&vault));
+        assert!(
+            format!("{provider:?}").contains("ScratchTrash"),
+            "{provider:?}"
+        );
+
+        let session = VaultSession::open_filesystem(vault).unwrap();
+        session.scan_initial(CancelToken::new()).unwrap();
+        session.delete_file("doomed.md".into()).unwrap();
+    }
+
+    /// #1455: once a process calls `route_trash_to_scratch_bin_for_tests`,
+    /// every vault it opens trashes into that bin, not the system Trash. The
+    /// routing is for the whole process and cannot be undone, so the routed
+    /// half runs in a child of this test binary and this process keeps the
+    /// shipping default.
+    #[test]
+    fn routing_the_trash_sends_every_later_vaults_deletions_to_the_scratch_bin() {
+        let scratch = tempfile::tempdir().expect("tempdir");
+        let bin = scratch.path().join("bin");
+        let vault = scratch.path().join("vault");
+        std::fs::create_dir(&bin).unwrap();
+        std::fs::create_dir(&vault).unwrap();
+        std::fs::write(vault.join("doomed.md"), "doomed\n").unwrap();
+
+        let status = std::process::Command::new(std::env::current_exe().unwrap())
+            .args(["tests::routed_trash_child", "--exact", "--nocapture"])
+            .env("SLATE_UNIFFI_SCRATCH_BIN", &bin)
+            .env("SLATE_UNIFFI_SCRATCH_VAULT", &vault)
+            .status()
+            .unwrap();
+        assert!(status.success(), "the routed child failed");
+
+        assert!(!vault.join("doomed.md").exists(), "the note left the vault");
+        assert_eq!(
+            std::fs::read_to_string(bin.join("doomed.md")).unwrap(),
+            "doomed\n"
+        );
+        assert_eq!(
+            scratch_trash_bin_for_tests(),
+            None,
+            "this process was never routed"
         );
     }
 }
