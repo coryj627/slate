@@ -18,12 +18,18 @@ final class PrefsJsonStoreTests: XCTestCase {
         return dir
     }
 
+    /// A store anchored to `vault` as it is now — the identity an open would
+    /// have admitted (#1442).
+    private func anchoredStore(_ vault: URL) -> PrefsJsonStore {
+        PrefsJsonStore(vaultRoot: vault, rootIdentity: AppState.vaultRootIdentity(of: vault))
+    }
+
     // MARK: - Read
 
     func testReadMissingFileReturnsEmptyPrefs() throws {
         let vault = tempVault()
         defer { try? FileManager.default.removeItem(at: vault) }
-        let store = PrefsJsonStore(vaultRoot: vault)
+        let store = anchoredStore(vault)
         let prefs = try store.readBibliographyPrefs()
         XCTAssertEqual(prefs, .empty)
     }
@@ -35,7 +41,7 @@ final class PrefsJsonStoreTests: XCTestCase {
             in: vault,
             contents: #"{ "ui": { "theme": "dark" } }"#
         )
-        let store = PrefsJsonStore(vaultRoot: vault)
+        let store = anchoredStore(vault)
         let prefs = try store.readBibliographyPrefs()
         XCTAssertEqual(prefs, .empty)
     }
@@ -58,7 +64,7 @@ final class PrefsJsonStoreTests: XCTestCase {
                 }
                 """
         )
-        let store = PrefsJsonStore(vaultRoot: vault)
+        let store = anchoredStore(vault)
         let prefs = try store.readBibliographyPrefs()
         XCTAssertEqual(prefs.sources.count, 2)
         XCTAssertEqual(prefs.sources[0].path, "library.bib")
@@ -74,7 +80,7 @@ final class PrefsJsonStoreTests: XCTestCase {
         let vault = tempVault()
         defer { try? FileManager.default.removeItem(at: vault) }
         try writePrefsJson(in: vault, contents: "{ not valid json")
-        let store = PrefsJsonStore(vaultRoot: vault)
+        let store = anchoredStore(vault)
         XCTAssertThrowsError(try store.readBibliographyPrefs()) { error in
             guard case PrefsJsonStoreError.parseFailed = error else {
                 XCTFail("expected parseFailed, got \(error)")
@@ -88,7 +94,7 @@ final class PrefsJsonStoreTests: XCTestCase {
     func testWriteRoundTripsAllFields() throws {
         let vault = tempVault()
         defer { try? FileManager.default.removeItem(at: vault) }
-        let store = PrefsJsonStore(vaultRoot: vault)
+        let store = anchoredStore(vault)
         let original = BibliographyPrefs(
             sources: [
                 BibliographySource(path: "library.bib", format: .bibLaTeX, watch: true),
@@ -114,7 +120,7 @@ final class PrefsJsonStoreTests: XCTestCase {
                 }
                 """
         )
-        let store = PrefsJsonStore(vaultRoot: vault)
+        let store = anchoredStore(vault)
         let newPrefs = BibliographyPrefs(
             sources: [
                 BibliographySource(path: "lib.bib", format: .bibTeX, watch: false)
@@ -136,7 +142,7 @@ final class PrefsJsonStoreTests: XCTestCase {
         let vault = tempVault()
         defer { try? FileManager.default.removeItem(at: vault) }
         // No .slate dir exists yet — writer should create it.
-        let store = PrefsJsonStore(vaultRoot: vault)
+        let store = anchoredStore(vault)
         let prefs = BibliographyPrefs(
             sources: [], defaultStyle: nil, additionalStyles: []
         )

@@ -634,7 +634,8 @@ final class HistoryPanelTests: XCTestCase {
         guard let session = state.currentSession else {
             return XCTFail("no session")
         }
-        let store = PrefsJsonStore(vaultRoot: dir)
+        let store = PrefsJsonStore(
+            vaultRoot: dir, rootIdentity: AppState.vaultRootIdentity(of: dir))
         try store.writeBibliographyPrefs(
             BibliographyPrefs(
                 sources: [], defaultStyle: "style.csl", additionalStyles: []))
@@ -646,7 +647,8 @@ final class HistoryPanelTests: XCTestCase {
                     prefs: HistoryPrefs(retentionDays: days))
             }.value
             async let bibliography: Void = Task.detached {
-                try? PrefsJsonStore(vaultRoot: dir)
+                try? PrefsJsonStore(
+            vaultRoot: dir, rootIdentity: AppState.vaultRootIdentity(of: dir))
                     .writeBibliographyPrefs(
                         BibliographyPrefs(
                             sources: [], defaultStyle: "style.csl",

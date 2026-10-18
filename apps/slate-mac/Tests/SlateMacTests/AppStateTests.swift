@@ -1856,7 +1856,8 @@ final class AppStateTests: XCTestCase {
 
         XCTAssertEqual(state.searchRecents, [], "in-memory list cleared")
         XCTAssertEqual(
-            SearchRecentsStore(vaultRoot: vault).load(), [],
+            SearchRecentsStore(
+                vaultRoot: vault, rootIdentity: AppState.vaultRootIdentity(of: vault)).load(), [],
             "disk file cleared too — no resurrection on reopen")
     }
 
@@ -2282,7 +2283,8 @@ final class AppStateTests: XCTestCase {
             state.searchRecents, ["beta"],
             "activating a result records the committed query")
         // Persisted per vault — a fresh store at the same path reloads it.
-        XCTAssertEqual(SearchRecentsStore(vaultRoot: vault).load(), ["beta"])
+        XCTAssertEqual(SearchRecentsStore(
+                vaultRoot: vault, rootIdentity: AppState.vaultRootIdentity(of: vault)).load(), ["beta"])
     }
 
     /// `recordSearchRecent` is LRU + deduped + most-recent-first, and
@@ -2341,7 +2343,8 @@ final class AppStateTests: XCTestCase {
         state.clearSearchRecents()
         XCTAssertTrue(state.searchRecents.isEmpty, "clear empties the session list")
         XCTAssertEqual(
-            SearchRecentsStore(vaultRoot: vault).load(), [],
+            SearchRecentsStore(
+                vaultRoot: vault, rootIdentity: AppState.vaultRootIdentity(of: vault)).load(), [],
             "clear persists the empty list")
     }
 
@@ -2350,7 +2353,8 @@ final class AppStateTests: XCTestCase {
     func testSearchRecentsAreLoadedOnOpenAndClearedOnClose() async throws {
         let vault = tempDir.appendingPathComponent("search-recents-perVault")
         try FileManager.default.createDirectory(at: vault, withIntermediateDirectories: true)
-        try SearchRecentsStore(vaultRoot: vault).save(["seeded"])
+        try SearchRecentsStore(
+                vaultRoot: vault, rootIdentity: AppState.vaultRootIdentity(of: vault)).save(["seeded"])
 
         let state = try makeAppState()
         state.openVault(at: vault)
