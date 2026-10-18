@@ -178,28 +178,11 @@ internal sealed partial class FilesSidebarViewModel
     private void CorrectStoredPathsFromReport(
         StructuralReport report, string oldPath, string newPath)
     {
-        foreach (MovedPath moved in report.Moved)
+        // #1435: the same fix-ups the journal records as committed.
+        foreach (SidebarJournalRename fixUp in StoredPathFixUps(report, oldPath, newPath))
         {
-            string prefixImage;
-            if (moved.OldPath == oldPath)
-            {
-                prefixImage = newPath;
-            }
-            else if (moved.OldPath.StartsWith(
-                oldPath + "/", StringComparison.Ordinal))
-            {
-                prefixImage = newPath + moved.OldPath[oldPath.Length..];
-            }
-            else
-            {
-                continue;
-            }
-
-            if (prefixImage != moved.NewPath)
-            {
-                TransformStoredPaths(
-                    prefixImage, moved.NewPath, isDirectory: false, deleted: false);
-            }
+            TransformStoredPaths(
+                fixUp.OldPath, fixUp.NewPath, isDirectory: false, deleted: false);
         }
     }
 
@@ -240,12 +223,18 @@ internal sealed partial class FilesSidebarViewModel
         // window where a replacement's identity got recorded as the
         // mutated object's.
         StructuralIdentity? identity = null;
+        // #1435: the renames this implies — the entry and, for a folder,
+        // its note under the new name — are journaled durably before core
+        // can commit them.
+        Guid? journalEntry = null;
         try
         {
             StructuralReport? report = null;
             if (!TryRunSessionWork(() =>
             {
                 identity = TryCaptureStructuralIdentity(oldPath, node.IsDirectory);
+                journalEntry = JournalBeforeStructuralCommit(
+                    PlannedRename(oldPath, newPath, node.IsDirectory));
                 report = node.IsDirectory
                     ? _session.RenameFolderWithNote(oldPath, newName)
                     : _session.RenameFile(oldPath, newName);
@@ -254,9 +243,12 @@ internal sealed partial class FilesSidebarViewModel
                 return false;
             }
 
+            JournalStructuralCommitted(
+                journalEntry, CommittedMove(report, oldPath, newPath, node.IsDirectory));
             int rewritten = ConsumeStructuralReport(report);
             TransformStoredPaths(oldPath, newPath, node.IsDirectory, deleted: false);
             CorrectStoredPathsFromReport(report, oldPath, newPath);
+            CarryJournalEntry(journalEntry);
             PushIdentityCheckedStep(new StructuralUndoStep(
                 StructuralUndoKind.Rename,
                 Path: newPath,
@@ -277,6 +269,7 @@ internal sealed partial class FilesSidebarViewModel
         }
         catch (VaultException exception)
         {
+            JournalStructuralFailed(journalEntry, exception);
             // F3: the field stays open with the reason inline — core's
             // message relayed, MutationName untouched.
             ReportFailure($"Rename failed: {exception.Message}");
@@ -367,6 +360,9 @@ internal sealed partial class FilesSidebarViewModel
             return;
         }
 
+        // #1435: the inverse's renames are journaled durably before core
+        // can commit them, as a fresh rename's or move's are.
+        Guid? journalEntry = null;
         try
         {
             StructuralUndoStep? inverse = null;
@@ -380,9 +376,13 @@ internal sealed partial class FilesSidebarViewModel
                             System.IO.Path.GetFileName(step.Path);
                         string restoredPath = CombineVaultPath(
                             ParentPath(step.Path), step.Argument);
+                        journalEntry = JournalBeforeStructuralCommit(
+                            PlannedRename(step.Path, restoredPath, step.IsDirectory));
                         StructuralReport renamed = step.IsDirectory
                             ? _session.RenameFolderWithNoteIfIdentity(step.Path, step.Argument, step.Identity!)
                             : _session.RenameFileIfIdentity(step.Path, step.Argument, step.Identity!.Entry);
+                        JournalStructuralCommitted(
+                            journalEntry, CommittedMove(renamed, step.Path, restoredPath, step.IsDirectory));
                         _ = ConsumeStructuralReport(renamed);
                         TransformStoredPaths(
                             step.Path, restoredPath, step.IsDirectory, deleted: false);
@@ -398,9 +398,13 @@ internal sealed partial class FilesSidebarViewModel
                         string leaf = System.IO.Path.GetFileName(step.Path);
                         string previousParent = ParentPath(step.Path);
                         string movedPath = CombineVaultPath(step.Argument, leaf);
+                        journalEntry = JournalBeforeStructuralCommit(
+                            [new SidebarJournalRename(step.Path, movedPath, step.IsDirectory)]);
                         StructuralReport movedReport = step.IsDirectory
                             ? _session.MoveFolderIfIdentity(step.Path, step.Argument, step.Identity!.Entry)
                             : _session.MoveFileIfIdentity(step.Path, step.Argument, step.Identity!.Entry);
+                        JournalStructuralCommitted(
+                            journalEntry, CommittedMove(movedReport, step.Path, movedPath, step.IsDirectory));
                         _ = ConsumeStructuralReport(movedReport);
                         TransformStoredPaths(
                             step.Path, movedPath, step.IsDirectory, deleted: false);
@@ -412,7 +416,11 @@ internal sealed partial class FilesSidebarViewModel
                         };
                         break;
                     case StructuralUndoKind.BatchMove:
+                        // The edge moves every recorded change back from its
+                        // new path.
+                        journalEntry = JournalBeforeStructuralCommit(BatchInverse(step.BatchChanges));
                         batchReport = _session.UndoBatchMoveIfIdentities(step.BatchOpId, step.BatchIdentities!);
+                        JournalStructuralCommitted(journalEntry, BatchStanding(batchReport.Standing));
                         foreach (BatchPathChange change in batchReport.Standing)
                         {
                             RetargetRequested?.Invoke(change.OldPath, change.NewPath);
@@ -437,6 +445,7 @@ internal sealed partial class FilesSidebarViewModel
                                     change => change.NewPath,
                                     change => step.BatchIdentities![change.OldPath],
                                     StringComparer.Ordinal),
+                                BatchChanges = batchReport.Standing,
                             };
                         }
 
@@ -449,6 +458,8 @@ internal sealed partial class FilesSidebarViewModel
                 // the vault is closing — nothing to restore.
                 return;
             }
+
+            CarryJournalEntry(journalEntry);
 
             if (inverse is null)
             {
@@ -510,13 +521,25 @@ internal sealed partial class FilesSidebarViewModel
         }
         catch (VaultException.StructuralMutationIncomplete exception)
         {
+            JournalStructuralOutcomeUnknown(journalEntry);
             _structuralUndo.DropForChangedFiles();
             RequestSelectionAt(exception.path);
             Refresh();
             ReportMutationResult($"{(redo ? "Redo" : "Undo")} stopped. {exception.message}");
         }
-        catch (VaultException)
+        catch (VaultException exception)
         {
+            // #1435: a single inverse that refused committed nothing; a
+            // batch edge that threw says nothing of what committed.
+            if (step.Kind == StructuralUndoKind.BatchMove)
+            {
+                JournalStructuralOutcomeUnknown(journalEntry);
+            }
+            else
+            {
+                JournalStructuralFailed(journalEntry, exception);
+            }
+
             // The inverse no longer applies (a stale batch handle, an
             // occupied destination, changed files): drop the suspect
             // history wholesale — mac's rule.
@@ -899,14 +922,19 @@ internal sealed partial class FilesSidebarViewModel
         {
             StructuralBatchItem single = items[0];
             string leaf = System.IO.Path.GetFileName(single.Path);
+            string movedPath = CombineVaultPath(destination, leaf);
             // Identity captured BEFORE the forward op (codex round 3).
             StructuralIdentity? identity = null;
+            // #1435: journaled durably before core can commit the move.
+            Guid? journalEntry = null;
             try
             {
                 StructuralReport? report = null;
                 if (!TryRunSessionWork(() =>
                 {
                     identity = TryCaptureStructuralIdentity(single.Path, includeFolderNote: false);
+                    journalEntry = JournalBeforeStructuralCommit(
+                        [new SidebarJournalRename(single.Path, movedPath, single.IsDirectory)]);
                     report = single.IsDirectory
                         ? _session.MoveFolder(single.Path, destination)
                         : _session.MoveFile(single.Path, destination);
@@ -915,10 +943,12 @@ internal sealed partial class FilesSidebarViewModel
                     return;
                 }
 
+                JournalStructuralCommitted(
+                    journalEntry, CommittedMove(report, single.Path, movedPath, single.IsDirectory));
                 int rewritten = ConsumeStructuralReport(report);
-                string movedPath = CombineVaultPath(destination, leaf);
                 TransformStoredPaths(single.Path, movedPath, single.IsDirectory, deleted: false);
                 CorrectStoredPathsFromReport(report, single.Path, movedPath);
+                CarryJournalEntry(journalEntry);
                 PushIdentityCheckedStep(new StructuralUndoStep(
                     StructuralUndoKind.Move,
                     Path: movedPath,
@@ -936,6 +966,7 @@ internal sealed partial class FilesSidebarViewModel
             }
             catch (VaultException exception)
             {
+                JournalStructuralFailed(journalEntry, exception);
                 // A create-then-move whose move half refused must not
                 // leave the created folder invisible until the next
                 // organic refresh (red team, correctness 4) — and the

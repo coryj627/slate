@@ -29,6 +29,9 @@ internal enum StructuralUndoKind
 /// operation and checked by core on the same handles used for inverse renames.
 /// Missing/unsupported identities never authorize an inverse. Filesystem IDs can
 /// eventually be reused after deletion; they are not permanent incarnation IDs.
+/// <c>BatchChanges</c> (#1435) is the batch's standing changes as the step
+/// recorded them: re-running the edge moves every one back from its new path,
+/// which the sidebar write journal records before core can commit it.
 /// </summary>
 internal sealed record StructuralUndoStep(
     StructuralUndoKind Kind,
@@ -38,7 +41,8 @@ internal sealed record StructuralUndoStep(
     string Noun,
     long BatchOpId = 0,
     StructuralIdentity? Identity = null,
-    Dictionary<string, string>? BatchIdentities = null);
+    Dictionary<string, string>? BatchIdentities = null,
+    IReadOnlyList<BatchPathChange>? BatchChanges = null);
 
 /// <summary>
 /// The per-vault structural undo/redo journal (W5-4 F10) — mac's

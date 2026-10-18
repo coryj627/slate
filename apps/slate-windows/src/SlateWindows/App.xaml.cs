@@ -132,6 +132,10 @@ public partial class App : Application
             return;
         }
 
+        // #1435: the sidebar write journal journals into the user's local app
+        // data only here, before any vault opens; any other process (a test
+        // host) keeps a private temporary folder.
+        SidebarWriteJournal.InstallProductionLocation();
         base.OnStartup(e);
         _mainWindow = new MainWindow();
         _singleInstanceCoordinator.StartListening(QueueActivation);
@@ -146,6 +150,10 @@ public partial class App : Application
 
     protected override void OnExit(ExitEventArgs e)
     {
+        // #1435: let the sidebar write journal's queued lines land (bounded).
+        // Every pending line was already on disk before its rename ran; one
+        // lost here only replays an entry once more.
+        _ = SidebarWriteJournal.Shared.WhenIdle().Wait(TimeSpan.FromSeconds(2));
         _singleInstanceCoordinator?.Dispose();
         _themeManager?.Dispose();
         base.OnExit(e);
