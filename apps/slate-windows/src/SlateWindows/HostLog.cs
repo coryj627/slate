@@ -74,6 +74,7 @@ internal enum HostDiagnosticEvent
     SidebarOrganizationPersistFailed,
     SidebarPinsPersistFailed,
     SidebarShortcutsPersistFailed,
+    SidebarWriteJournalFailed,
     SingleInstanceActivationFailed,
     SingleInstanceActivationTimedOut,
     VaultCommandFailed,
