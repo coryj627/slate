@@ -375,6 +375,19 @@ final class FileTreeViewModel: ObservableObject {
     private var summaryOrganizationRevisionByParent: [NodeID: UInt64] = [:]
     private var levelStructuralRevisionByParent: [NodeID: UInt64] = [:]
 
+    /// A level's revisions read 0 until their first bump: the summary map
+    /// has no entry until a sort-relevant save lands in the level. The live
+    /// re-sort captures and checks both through these, never the raw map: a
+    /// raw `nil` never equals a captured 0, which made every level that had
+    /// not seen such a save reject its own re-sort forever (#1438).
+    private func summaryOrganizationRevision(of key: NodeID) -> UInt64 {
+        summaryOrganizationRevisionByParent[key] ?? 0
+    }
+
+    private func levelStructuralRevision(of key: NodeID) -> UInt64 {
+        levelStructuralRevisionByParent[key] ?? 0
+    }
+
     func incompleteLevelMessage(for parent: NodeID) -> String? {
         incompleteLevelMessageByKey[parent]
     }
@@ -573,10 +586,11 @@ final class FileTreeViewModel: ObservableObject {
         liveReorganizationPumpTask = pump
     }
 
-    /// Live saves under date/title organization re-sort on the same serial
-    /// non-main owner as initial level preparation. A token-local metadata
-    /// revision rejects a mixed snapshot when another key save arrives while
-    /// the worker is traversing or sorting.
+    /// Live saves under date/title organization, and every organization
+    /// change (`applyOrganization`), re-sort on the same serial non-main
+    /// owner as initial level preparation. A token-local metadata revision
+    /// rejects a mixed snapshot when another key save arrives while the
+    /// worker is traversing or sorting.
     private func scheduleLiveReorganizationNow(_ key: NodeID) {
         revokeLiveReorganization(key)
         let nodes: [TreeNode]
@@ -595,10 +609,8 @@ final class FileTreeViewModel: ObservableObject {
         let nativeCancel = CancelToken()
         let capturedBindingGeneration = bindingGeneration
         let capturedOrganizationGeneration = organizationGeneration
-        let capturedStructuralRevision =
-            levelStructuralRevisionByParent[key] ?? 0
-        let capturedSummaryRevision =
-            summaryOrganizationRevisionByParent[key] ?? 0
+        let capturedStructuralRevision = levelStructuralRevision(of: key)
+        let capturedSummaryRevision = summaryOrganizationRevision(of: key)
         let input = FileTreeOrganizationInput(organization)
         let isComplete = completeLevelByKey[key] == true
         let depth = nodes.first?.depth ?? 0
@@ -630,8 +642,7 @@ final class FileTreeViewModel: ObservableObject {
             guard self.liveReorganizationTokens[key] == token,
                 self.bindingGeneration == capturedBindingGeneration,
                 self.organizationGeneration == capturedOrganizationGeneration,
-                self.levelStructuralRevisionByParent[key]
-                    == capturedStructuralRevision
+                self.levelStructuralRevision(of: key) == capturedStructuralRevision
             else {
                 if case .success(let reorganized) = outcome {
                     worker.retire(reorganized)
@@ -641,8 +652,7 @@ final class FileTreeViewModel: ObservableObject {
             self.liveReorganizationTokens[key] = nil
             self.liveReorganizationCancels[key] = nil
             self.liveReorganizationTasks[key] = nil
-            guard self.summaryOrganizationRevisionByParent[key]
-                    == capturedSummaryRevision
+            guard self.summaryOrganizationRevision(of: key) == capturedSummaryRevision
             else {
                 if case .success(let reorganized) = outcome {
                     worker.retire(reorganized)
