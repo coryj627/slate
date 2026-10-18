@@ -42,15 +42,18 @@ test:
 # doc-test pass keeps parity with what CI runs. Needs cargo-nextest
 # (`brew install cargo-nextest` or `cargo install cargo-nextest --locked`).
 # Mirrors CI exactly (adversarial-review fix): --locked like the CI
-# lanes, and the wall-clock perf guard is excluded from the sweep and
-# run isolated afterward so census contention can't fail its 100ms
-# bound locally either.
+# lanes, and the wall-clock perf guards are excluded from the sweep and
+# run isolated afterward so census contention can't fail their bounds
+# locally either.
 ROOT_LISTING_PERF_GUARD := session::tests::dir_tree::perf_guard_root_listing_under_100ms_on_10k_files
+UNRESOLVED_LINK_PERF_GUARD := session::tests::link_pass::perf_guard_unresolved_link_rescan_within_twice_the_link_free_one
 test-fast:
 	cargo nextest run --workspace --cargo-profile ci --locked --no-fail-fast \
-		-E "not test($(ROOT_LISTING_PERF_GUARD))"
+		-E "not test($(ROOT_LISTING_PERF_GUARD)) and not test($(UNRESOLVED_LINK_PERF_GUARD))"
 	cargo nextest run --workspace --cargo-profile ci --locked --no-tests=fail --test-threads 1 \
 		-E "test(=$(ROOT_LISTING_PERF_GUARD))"
+	cargo nextest run --workspace --cargo-profile ci --locked --no-tests=fail --test-threads 1 \
+		-E "test(=$(UNRESOLVED_LINK_PERF_GUARD))"
 	cargo test --workspace --doc --profile ci --locked
 
 fmt:

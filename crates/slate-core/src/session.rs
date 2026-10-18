@@ -7983,10 +7983,7 @@ impl VaultSession {
             "UPDATE files SET mtime_ms = -1, size_bytes = -1, ctime_ms = -1 WHERE path = ?1",
             rusqlite::params![path],
         )?;
-        let mut indexed_paths = tx
-            .prepare("SELECT path FROM files")?
-            .query_map([], |row| row.get::<_, String>(0))?
-            .collect::<Result<Vec<_>, _>>()?;
+        let mut indexed_paths = crate::links_db::indexed_paths_in_path_order(&tx)?;
         indexed_paths.push(path.to_string());
         let vault_index = crate::InMemoryVaultIndex::new(indexed_paths);
         let mut report = ScanReport::default();
@@ -10034,12 +10031,10 @@ fn scan_vault(
     // best-effort — links to files first seen in this scan run start
     // out Unresolved and get fixed up by the post-scan re-resolve
     // pass below. That trade-off keeps per-file work O(scanner) not
-    // O(scanner * vault).
-    let vault_index = crate::InMemoryVaultIndex::new(
-        tx.prepare("SELECT path FROM files")?
-            .query_map([], |row| row.get::<_, String>(0))?
-            .collect::<Result<Vec<_>, _>>()?,
-    );
+    // O(scanner * vault); each link looks its candidates up in the
+    // snapshot (#1429), so it costs its own target, not the vault.
+    let vault_index =
+        crate::InMemoryVaultIndex::new(crate::links_db::indexed_paths_in_path_order(&tx)?);
     if let Some(l) = listener {
         l.on_progress(ScanProgress::Started { total_files });
     }
@@ -12197,11 +12192,8 @@ fn refresh_text_derived_indexes_after_reclassification(
     large_file_refuse_bytes: u64,
     graph_sink: &mut crate::graph::GraphOpSink,
 ) -> Result<(), VaultError> {
-    let vault_index = crate::InMemoryVaultIndex::new(
-        tx.prepare("SELECT path FROM files")?
-            .query_map([], |row| row.get::<_, String>(0))?
-            .collect::<Result<Vec<_>, _>>()?,
-    );
+    let vault_index =
+        crate::InMemoryVaultIndex::new(crate::links_db::indexed_paths_in_path_order(tx)?);
     let is_base = extension == Some("base");
     let write_body = |tx: &rusqlite::Transaction, body_text: &str| -> Result<(), VaultError> {
         tx.execute(
@@ -17546,11 +17538,7 @@ fn collect_rewrite_candidates(
     ),
     VaultError,
 > {
-    let all_paths: Vec<String> = {
-        let mut stmt = conn.prepare("SELECT path FROM files")?;
-        let rows = stmt.query_map([], |row| row.get::<_, String>(0))?;
-        rows.collect::<Result<Vec<_>, _>>()?
-    };
+    let all_paths = crate::links_db::indexed_paths_in_path_order(conn)?;
     let stem_of = |s: &str| -> String {
         let name = s.rsplit('/').next().unwrap_or(s);
         let mut stem = name;
@@ -21889,6 +21877,8 @@ mod tests {
     mod links_embeds;
 
     mod save_link_lookup;
+
+    mod link_pass;
 
     #[path = "properties.rs"]
     mod properties;
