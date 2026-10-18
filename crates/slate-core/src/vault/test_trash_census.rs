@@ -28,16 +28,18 @@ use crate::{CancelToken, VaultSession};
 
 /// The gated real-Trash set (`trash_handoff_tests.rs`): the only facts that
 /// hand their items to the real system Trash, each on a scratch volume.
-const GATED_REAL_TRASH_FACTS: [&str; 5] = [
+const GATED_REAL_TRASH_FACTS: [&str; 7] = [
     // macOS, ignored: need SLATE_TRASH_PROBE_VOLUME, an attached scratch
     // APFS image whose Trash is its own `.Trashes/<uid>`.
     "real_trash_on_a_scratch_volume_lands_in_its_trashes_with_put_back_records",
+    "real_trash_on_a_scratch_volume_takes_each_unresolvable_link_as_the_link",
     "real_trash_from_many_processes_at_once_loses_nothing",
     // Its child processes, which act only with the parent's variables.
     "real_trash_race_child",
     // Linux, every run: a child whose XDG_DATA_HOME, and so whose home
     // Trash, is inside a scratch directory.
     "real_trash_on_linux_lands_in_a_scratch_home_trash",
+    "real_trash_on_linux_takes_each_unresolvable_link_as_the_link",
     "real_trash_linux_child",
 ];
 

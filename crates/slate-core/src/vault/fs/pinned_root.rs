@@ -382,9 +382,13 @@ impl RenameEnd<'_> {
         &self.leaf
     }
 
-    /// Whether the entry here is a symbolic link whose target does not
-    /// resolve. Its own look never follows the leaf, so a missing entry is
-    /// `NotFound` and a broken link still counts as present (#1450).
+    /// Whether the entry here is a symbolic link whose target is truly
+    /// absent: following it fails with `ENOENT` or `ENOTDIR`
+    /// (`trash_handoff::link_target_is_absent`, #1477). A link whose target
+    /// fails to resolve any other way (`EACCES`, `ELOOP`, …) is not dangling:
+    /// `delete` hands it to the Trash. Its own look never follows the leaf, so
+    /// a missing entry is `NotFound` and a broken link still counts as
+    /// present (#1450).
     pub(super) fn is_dangling_link(&self) -> io::Result<bool> {
         use std::os::fd::AsRawFd as _;
 
@@ -402,7 +406,8 @@ impl RenameEnd<'_> {
                 0,
             )
         };
-        Ok(result != 0)
+        Ok(os_result(result)
+            .is_err_and(|error| crate::vault::trash_handoff::link_target_is_absent(&error)))
     }
 
     /// Remove the (non-folder) entry here from its pinned parent.
