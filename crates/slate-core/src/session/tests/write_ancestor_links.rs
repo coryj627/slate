@@ -9,17 +9,25 @@
 //! `FsVaultProvider::write_file` and `create_dir` resolved the absolute path
 //! and followed the link, so a note's bytes or a new folder landed outside
 //! the vault while the save or the create reported success.
+//!
+//! #1451: the same facts run on Windows with a junction in the folder's
+//! place, where `write_file` published with `tempfile`'s `persist`
+//! (`MoveFileExW`) after `create_dir_all`, and `create_dir` called
+//! `create_dir_all`, both by absolute path.
 
-use super::structural_ancestor_links::{indexed_vault, swap_for_link, tree, write};
+use super::structural_ancestor_links::{
+    indexed_vault, link_folder, linked, swap_for_link, tree, write,
+};
 use super::*;
 
-/// #1452's refusal: `InvalidPath` for the caller's path, naming the folder
-/// that is a link, ending with what did not happen.
+/// #1452's refusal (#1451's on Windows): `InvalidPath` for the caller's
+/// path, naming the folder that is a link, ending with what did not happen.
 fn assert_refused(error: &VaultError, refused: &str, outcome: &str) {
+    let named = format!("{}, not a folder in this vault", linked("sub"));
     assert!(
         matches!(error, VaultError::InvalidPath { path, reason }
             if path == refused
-                && reason.starts_with("\"sub\" is a symbolic link, not a folder in this vault")
+                && reason.starts_with(&named)
                 && reason.ends_with(outcome)),
         "expected the #1452 refusal of {refused:?} ({outcome:?}), got {error:?}"
     );
@@ -60,10 +68,11 @@ fn a_save_under_a_folder_swapped_for_a_link_refuses_and_writes_nothing() {
 /// The edits that rewrite a note read it through the swapped folder, here
 /// from a copy of it outside the vault, and save it through the same write:
 /// a save with the host's content hash, a task toggle and a property edit.
-/// Each refuses, typed, and the copy outside is untouched. macOS refuses one
-/// step earlier, when binding the note to its stored spelling finds it
-/// outside the vault (#1077 I7); elsewhere the provider's write is the
-/// refusal, where on main each of them overwrote the copy outside.
+/// Each refuses, typed, and the copy outside is untouched. macOS and Windows
+/// refuse one step earlier, when binding the note to its stored spelling
+/// finds it outside the vault (#1077 I7, `canonical_path`); Linux's refusal
+/// is the provider's write, where on main each of them overwrote the copy
+/// outside.
 #[test]
 fn edits_under_a_swapped_folder_refuse_and_leave_the_outside_copy_alone() {
     let text = "---\nstatus: draft\n---\n- [ ] a task\n";
@@ -92,7 +101,7 @@ fn edits_under_a_swapped_folder_refuse_and_leave_the_outside_copy_alone() {
             .unwrap_err(),
     ] {
         assert!(matches!(error, VaultError::InvalidPath { .. }), "{error:?}");
-        #[cfg(not(target_os = "macos"))]
+        #[cfg(not(any(target_os = "macos", windows)))]
         assert_refused(&error, "sub/note.md", "so nothing was saved");
     }
 
@@ -211,16 +220,17 @@ fn saves_and_creates_in_real_folders_still_land() {
     }
 }
 
-/// A vault opened through a symlinked root still saves and creates: the
-/// root is followed once, as the descriptor, and only what lies beneath it
-/// is resolved without following a link.
+/// A vault opened through a linked root (a symbolic link, or a junction on
+/// Windows) still saves and creates: the root is followed once, as the
+/// descriptor or the handle, and only what lies beneath it is resolved
+/// without following a link.
 #[test]
-fn a_vault_opened_through_a_symlinked_root_still_saves_and_creates() {
+fn a_vault_opened_through_a_linked_root_still_saves_and_creates() {
     let tmp = tempfile::tempdir().unwrap();
     let real = tmp.path().join("real-vault");
     write(&real, "note.md", "vault note");
     let link = tmp.path().join("vault-link");
-    std::os::unix::fs::symlink(&real, &link).unwrap();
+    link_folder(&link, &real);
     let session = VaultSession::from_filesystem(link).unwrap();
     session.scan_initial(&CancelToken::new()).unwrap();
     let hash = crate::vault::content_hash(b"vault note");
