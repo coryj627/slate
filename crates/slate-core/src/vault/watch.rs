@@ -305,11 +305,20 @@ pub(super) fn translate(root: &Path, result: notify::Result<notify::Event>) -> V
     };
 
     if event.need_rescan() {
-        // The platform dropped events. A rescan confined to a hidden folder
-        // (FSEvents may name `.slate/oplog`) drops nothing the scanner reads.
-        let relative = match event.paths.first().map(|path| classify(root, path)) {
-            Some(Classified::Hidden) => return Vec::new(),
-            Some(Classified::Visible(relative)) => Some(relative),
+        // The platform dropped events. Only a rescan confined to hidden
+        // folders (FSEvents may name `.slate/oplog`) drops nothing the
+        // scanner reads, so it is dropped only when every path it names is
+        // hidden. It keeps a `relative` only when exactly one visible path
+        // remains; anything else (no path, the root, an unnamed or a second
+        // path) is a rescan anywhere.
+        let mut named = event
+            .paths
+            .iter()
+            .map(|path| classify(root, path))
+            .filter(|classified| *classified != Classified::Hidden);
+        let relative = match (named.next(), named.next()) {
+            (None, _) if !event.paths.is_empty() => return Vec::new(),
+            (Some(Classified::Visible(relative)), None) => Some(relative),
             _ => None,
         };
         return vec![FileEvent::Rescan { relative }];
@@ -494,6 +503,27 @@ mod tests {
             }]
         );
         assert_eq!(rescan(&[at(".slate/oplog")]), Vec::new());
+        assert_eq!(
+            rescan(&[at(".slate/oplog"), at(".obsidian")]),
+            Vec::new(),
+            "every named path hidden"
+        );
+        // Codoki on #1496: a hidden first path must not hide a visible one.
+        assert_eq!(
+            rescan(&[at(".slate/oplog"), at("notes")]),
+            vec![FileEvent::Rescan {
+                relative: Some("notes".into())
+            }]
+        );
+        assert_eq!(
+            rescan(&[at("notes"), at("journal")]),
+            vec![FileEvent::Rescan { relative: None }],
+            "two visible paths: anywhere"
+        );
+        assert_eq!(
+            rescan(&[at(".slate/oplog"), root.clone()]),
+            vec![FileEvent::Rescan { relative: None }]
+        );
         assert_eq!(
             translate(&root, Err(notify::Error::generic("re-arm failed"))),
             vec![FileEvent::Ended {
