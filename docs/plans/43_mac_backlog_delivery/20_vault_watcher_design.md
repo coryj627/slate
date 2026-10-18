@@ -1,8 +1,8 @@
 # PR 20 — A real vault watcher in core: design
 
 Status: design, 2026-10-16, with the owner's decisions of 2026-10-17
-in §11. PR 20.0 (§7, #1429) and PR 20a (§7, the core watcher)
-are delivered; PRs 20b and 20c, the hosts, are not. Issue #1267 (OD-1's
+in §11. PR 20.0 (§7, #1429), PR 20a (§7, the core watcher) and PR 20b
+(§7, the Windows host) are delivered; PR 20c, the mac host, is not. Issue #1267 (OD-1's
 follow-up; AR-3, AR-7). Spec:
 `specs/pr20_vault_watcher.md`. Baseline: `main` at 13624900; every
 file:line reference below was read at that commit (several mac lines
@@ -758,7 +758,7 @@ design.
 |---|---|---|---|---|
 | 20.0 | Core: link resolution looks candidates up by final component instead of offering every path, which bounds the unresolved-link pass (§4.2). **Delivered 2026-10-18 (#1429):** a snapshot keys each path by the hash of its lowercased path and of its lowercased final component, built on its first resolution; the pass snapshots `files` only when a link dangles; every resolution snapshot reads `ORDER BY path`. Before and after: `BENCHMARKS.md`, "Plan 43 PR 20.0" | S–M | rust, swift, windows | — |
 | 20a | Core watcher, echo ledger, coalescer, root anchor, `on_external_change`, `start_watching` / `stop_watching`, `RescanReason::Watcher` and corpus rows, the test switch; bindings regenerated with no-op host adapters. **Delivered 2026-10-18:** `vault/watch.rs` (backend, filter, `RootAnchor`), `vault/echo_ledger.rs`, `session/watch.rs` (the coalescer and its "slate-watch" thread); the ledger also records the folders above each mutated path, because ReadDirectoryChangesW reports a folder's last-write change and a create or a move can make missing folders; a closed burst is dropped only by a scan that committed with a complete walk; callbacks are also spaced 5 s from the previous callback; facts in `vault/watch.rs`, `vault/echo_ledger.rs`, `vault/fs.rs` and `session/tests/watch.rs` | L (about 1,500 to 2,000 lines with facts) | rust, swift, windows, audit | 20.0 |
-| 20b | Windows host: lattice, never-dropped Watcher requests, listener wiring, start and stop, the sentence gate, facts, FlaUI journey | M (about 600 to 900) | windows | 20a |
+| 20b | Windows host: lattice, never-dropped Watcher requests, listener wiring, start and stop, the sentence gate, facts, FlaUI journey. **Delivered 2026-10-18:** `VaultLifecycleViewModel.Rescan.cs` (the three-way join, Watcher requests recorded before the workspace and while blocked, deferred while the window is away, the sentence gate), `VaultLifecycleViewModel.cs` (`OnExternalChange` → `HandleExternalChange`, `StartWatching` before the open scan, `StopWatching` first in `CloseSession`), `ForegroundRescanRoute.cs` (every activation serves a deferred request after its own decision); the activation join, a Watcher follow-up whose window went away deferred too, and a gated sentence that posts nothing on the status line either; #1498 settled on the Windows lane — a session's own cache writes arrive as `.slate`, a write through `SLATE~1` arrives as `SLATE~1` — and core reads an 8.3 alias by its long spelling; facts in `RescanTests.Watcher.cs`, `ForegroundRescanRouteTests.cs`, FlaUI `ExternalFiles_AppearWithoutRefresh`, and core's `vault/watch.rs` and `session/tests/watch.rs` | M (about 600 to 900) | windows | 20a |
 | 20c | Mac host: the same on PR 19's rescan, plus a VoiceOver check | M (about 600 to 900) | swift, a11y, windows | 20a, PR 19 |
 
 Facts by PR:

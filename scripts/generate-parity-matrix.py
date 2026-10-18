@@ -550,6 +550,14 @@ W3_IMPLEMENTED_STATUS = (
     "implemented; local gates green 2026-07-27; interactive CI + human AT pending"
 )
 
+# Plan 43 PR 20b (#1267): the vault lifecycle, the Files sidebar and the quick
+# switcher on Windows reconcile changes made outside Slate through core's vault
+# watcher, with no Refresh; mac gains it with PR 20c.
+WATCHER_20B_NOTE = (
+    "; plan 43 PR 20b (#1267): on Windows, changes made outside Slate reach "
+    "it through core's vault watcher, with no Refresh (mac: PR 20c)"
+)
+
 # W3 delivery is tracked per COMMAND, not per issue prefix: #728 also
 # owns waived rows (printNote), and a prefix rule would demand evidence
 # for a command the owner explicitly waived out of the wave.
@@ -1204,10 +1212,10 @@ def main() -> int:
     a("")
     a("| surface | source | consuming W issue | status |")
     a("|---|---|---|---|")
-    a(f"| App shell, window chrome, vault lifecycle | `SlateMacApp.swift` | #720 (W1-1) | {issue_delivery_status('#720 (W1-1)', delivery_evidence)} |")
-    a(f"| Files sidebar (tree CRUD, filter, tags, pins, shortcuts, folder notes) | `FileTreeSidebar.swift` + FL program | #721 (W1-2) | {issue_delivery_status('#721 (W1-2)', delivery_evidence)} |")
+    a(f"| App shell, window chrome, vault lifecycle | `SlateMacApp.swift` | #720 (W1-1) | {issue_delivery_status('#720 (W1-1)', delivery_evidence)}{WATCHER_20B_NOTE} |")
+    a(f"| Files sidebar (tree CRUD, filter, tags, pins, shortcuts, folder notes) | `FileTreeSidebar.swift` + FL program | #721 (W1-2) | {issue_delivery_status('#721 (W1-2)', delivery_evidence)}{WATCHER_20B_NOTE} |")
     a(f"| Workspace: tabs, splits, leaves, persistence, focus routing | `Workspace/` | #722 (W1-3) | {issue_delivery_status('#722 (W1-3)', delivery_evidence)} |")
-    a(f"| Quick switcher | `QuickSwitcherModel.swift` (core ranking, W0.5-2) | #723 (W1-4) | {issue_delivery_status('#723 (W1-4)', delivery_evidence)} |")
+    a(f"| Quick switcher | `QuickSwitcherModel.swift` (core ranking, W0.5-2) | #723 (W1-4) | {issue_delivery_status('#723 (W1-4)', delivery_evidence)}{WATCHER_20B_NOTE} |")
     a(f"| Editor host (AvalonEdit ⇄ DocumentBuffer, undo, save, IME) | `NoteEditorView.swift` | #724 (W2-1) | {issue_delivery_status('#724 (W2-1)', delivery_evidence)} |")
     a(f"| Editor canonical spans | #381 span API consumers | #381 (W2-2) | {issue_delivery_status('#381 (W2-2)', delivery_evidence)} |")
     a(f"| In-editor interactions (links, tags, citations, embeds, checkboxes) | `NoteEditorView.swift` | #725 (W2-3) | {issue_delivery_status('#725 (W2-3)', delivery_evidence)} |")
