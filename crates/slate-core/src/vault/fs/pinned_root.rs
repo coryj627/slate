@@ -486,30 +486,6 @@ fn changed_during(original: &str, mutation: Mutation) -> VaultError {
     }
 }
 
-/// Core's words for a refusal (#1452): the hosts show and speak them after
-/// the path (`vault_error_detail`).
-impl Mutation {
-    /// What did not happen: the end of every refusal's reason.
-    fn nothing_done(self) -> &'static str {
-        match self {
-            Self::Move => "so nothing was moved",
-            Self::Save => "so nothing was saved",
-            Self::Create => "so nothing was created",
-            Self::CreateFolder => "so no folder was created",
-        }
-    }
-
-    /// When a folder that had passed the walk changed under it.
-    fn during(self) -> &'static str {
-        match self {
-            Self::Move => "during the move",
-            Self::Save => "during the save",
-            Self::Create => "while the file was being created",
-            Self::CreateFolder => "while the folder was being created",
-        }
-    }
-}
-
 fn invalid(original: &str, reason: &str) -> VaultError {
     VaultError::InvalidPath {
         path: original.to_string(),

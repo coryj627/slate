@@ -568,8 +568,39 @@ enforced by construction, not by review.
   described as Windows-equivalent, and `rename_if_identity` stays the
   Windows-only bound primitive. Tracked as #1469. Linux renames inside parents pinned a
   moment earlier, so a real folder moved out of the vault in that moment is
-  followed (no link involved). Windows forward moves still use path-addressed
-  `MoveFileExW`, which a junction swapped in as an ancestor redirects (#1451).
+  followed (no link involved).
+  *Amended by #1451 (2026-10-18):* Windows forward moves no longer use
+  path-addressed `MoveFileExW`, which a junction swapped in as an ancestor
+  redirected (creating a junction needs no privilege). Every forward path
+  that moves an existing entry reaches `VaultProvider::rename`: single and
+  batch moves and renames, the folder-note rename, batch rollback and the
+  replay of a version-1 (path-only) batch record. It now takes the shape
+  `rename_if_identity` already had, without the identity comparison: the
+  vault root is opened as one directory handle that follows the root's own
+  reparse point (a junction-rooted vault keeps working), and every folder of
+  either end beneath it is opened relative to the one before with
+  `FILE_OPEN_REPARSE_POINT` (`windows_entry::PinnedRoot`, the walk #1450's
+  Trash handoff built, now shared). A folder that is a junction, a symbolic
+  link or another name-surrogate reparse point, or that is not a folder,
+  refuses with `InvalidPath`; the reason names it and says nothing was
+  moved, in #1449's words (`"sub" is a junction, not a folder in this
+  vault, so nothing was moved`). A folder that is a reparse point whose tag
+  is not a name surrogate redirects nothing and is a folder: every OneDrive
+  Files On-Demand folder is such a Cloud Files placeholder. The source is
+  opened as itself (a link or a junction is moved, never followed), a
+  missing destination folder is created in its pinned parent (`NtCreateFile`,
+  `FILE_CREATE`), and the rename is `FileRenameInformation` on the source
+  handle with the pinned destination folder as `RootDirectory` and
+  `ReplaceIfExists` false. Batch preflight runs the same walk. Every folder
+  on either path stays open, shared for reading and writing but not for
+  deletion, until the rename returns, so none of them can be renamed or
+  removed in that moment; an empty one converted into a junction in place
+  (attribute-only access passes every sharing check) makes the rename fail,
+  and that failure is the same typed refusal. The source is opened shared for
+  deletion, as `MoveFileExW` opened it, so another process holding the entry
+  open for deletion does not newly fail a forward move; the identity inverse
+  keeps refusing that handle. **Still open:** the final component is still a
+  name (#1469).
 - **FR-11 — Cooperative Trash cancellation (#1126).** Both hosts run
   preparation and execution off the UI thread with an accessible Cancel control.
   Core checks cancellation during bounded inventory, lock waits and final
@@ -618,8 +649,31 @@ enforced by construction, not by review.
   that moment is followed (no link involved), on macOS as well as on Linux
   (FR-10's Linux moment). The staging folder `.slate/tmp` is reached by path,
   like the rest of `.slate` (#940, PR 22's `FsRoot`). Reads still resolve by
-  path. Windows still saves and creates by path, so a junction swapped in as
-  an ancestor redirects a save or a new folder (#1451).
+  path.
+  *Amended by #1451 (2026-10-18):* Windows saves and creates beneath the
+  vault root too, with FR-10's #1451 handle walk. `write_file` (saves, link
+  rewrites, task toggles, property edits), `write_file_if_absent`,
+  `create_dir` and `create_dir_if_absent` pin the folder that will hold their
+  final component, a missing folder made in its pinned parent with
+  `NtCreateFile` (`FILE_CREATE`, `FILE_DIRECTORY_FILE`). The staged file is
+  renamed into that folder by `FileRenameInformation`, `RootDirectory` set to
+  the pinned folder (`ReplaceIfExists` true for a save, false for a create),
+  with the save's retry on `ERROR_ACCESS_DENIED` and
+  `ERROR_SHARING_VIOLATION` kept, and its attributes reset to
+  `FILE_ATTRIBUTE_NORMAL` first as `tempfile`'s `persist` did (a created note
+  no longer keeps the staging file's `FILE_ATTRIBUTE_TEMPORARY`). A new
+  folder is made in the pinned folder; one already there is `Ok`, and a
+  junction, a symbolic link or a file there refuses. Before, `write_file`
+  ran `create_dir_all` and `persist` (`MoveFileExW`) by absolute path, and
+  `create_dir` ran `create_dir_all`, so a junction swapped in as an ancestor
+  put a save's bytes or a new folder outside the vault while the call
+  reported success. A junction, a symbolic link or a non-folder on the path
+  now refuses with `InvalidPath` before anything is staged, in this
+  contract's words (`"sub" is a junction, not a folder in this vault, so
+  nothing was saved`; "so nothing was created"; "so no folder was
+  created"). A vault whose root is a junction still saves and creates.
+  **Residual:** as on Unix, the final component is still a name and the
+  staged file is named by its path in `.slate/tmp` (#940).
 
 ## Phase plan
 

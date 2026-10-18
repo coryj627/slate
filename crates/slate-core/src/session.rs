@@ -21867,7 +21867,7 @@ mod tests {
     #[path = "structural.rs"]
     mod structural;
 
-    #[cfg(unix)]
+    #[cfg(any(unix, windows))]
     #[path = "structural_ancestor_links.rs"]
     mod structural_ancestor_links;
     #[path = "structural_batch.rs"]
@@ -21880,7 +21880,7 @@ mod tests {
     #[cfg(windows)]
     #[path = "windows_long_paths.rs"]
     mod windows_long_paths;
-    #[cfg(unix)]
+    #[cfg(any(unix, windows))]
     #[path = "write_ancestor_links.rs"]
     mod write_ancestor_links;
 
