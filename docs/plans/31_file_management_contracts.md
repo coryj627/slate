@@ -434,14 +434,54 @@ enforced by construction, not by review.
   parent handle/descriptor without following links. Windows sharing flags alone
   cannot prevent an attribute writer from converting a pinned directory into a
   junction; no path-based enumeration fallback is used.
+  **Trash handoff (#1450, the plan 43 PR 24 memo's T0+).** The provider pins
+  the item's parent again without following links (on macOS and Linux with
+  FR-10's #1449 pinned-root walk, on Windows through handles opened with
+  `FILE_OPEN_REPARSE_POINT`) and hands the system Trash that pinned parent's
+  own current path joined with the item's name (`F_GETPATH` on macOS,
+  `/proc/self/fd` on Linux, `GetFinalPathNameByHandleW` on Windows), never the
+  lexical vault path. It refuses unless that path still names the pinned
+  parent and lies beneath the vault root's current path, taken the same way,
+  so a symlinked vault root still works. A folder on the item's path that is
+  a link, a junction or a file, or that moved, after the final observation
+  refuses with `InvalidPath` before any mutation; the reason names the folder
+  as the rename refusal does (`"sub" is a symbolic link, not a folder in this
+  vault, so nothing was moved`), or says a folder in the path moved after it
+  was checked. A batch reports that item untrashed with the reason, keeps its
+  recovery markers, requires a rescan and still trashes the rest. A dangling
+  link is unlinked relative to the pinned parent. macOS hands the path to
+  `NSFileManager trashItemAtURL:resultingItemURL:error:` as a file reference
+  URL instead of trash-rs's Finder script: no Apple event or Automation
+  grant, and Finder's Put Back still restores the item (verified on a scratch
+  APFS volume).
+  `NSFileManager` does not exclude a concurrent caller from another process
+  when it names the item in the Trash. Of 24 same-named items trashed at one
+  instant from 24 processes, only 11–12 remained, and parallel test workers
+  on the boot volume failed with a permission error. So every Slate process
+  takes one per-user lock around the call; with it, 24 of 24 remained. The
+  wait for that lock is bounded, and a call that cannot get it goes ahead
+  unserialized. Windows and Linux still call trash-rs with the derived path.
   **Residual:** metadata inventories are observations, not filesystem
   transactions. They cannot detect every content edit on every filesystem, nor
   exclude an arbitrary external writer between the final observation and the
-  path-based system Trash call. The new token closes the separated host-probe
-  contract and coordinates Slate writers; it does not claim atomic exclusion of
-  sync clients. Keep #1125 open for that remaining boundary and FR-10's leaf
-  binding (since #1449 an ancestor no longer redirects a structural rename on
-  macOS or Linux).
+  system Trash call. A substituted ancestor no longer redirects the Trash
+  outside the vault deterministically (#1430 P12.6, P16); what remains is the
+  race between deriving the path and the Trash call's own resolution of it (no
+  platform's Trash accepts a handle, #1430 T1). On macOS the reference URL
+  narrows that race but does not bind the object: under an adversarial racer
+  it still took the wrong object 3.4-4.0% of the time (P13). Another
+  application that trashes a same-named item at the same instant is outside
+  Slate's lock and can still collide inside `NSFileManager`. Verifying what
+  arrived in the Trash (the memo's T2) is the owner's next step for #1125
+  (decided 2026-10-17, `43_mac_backlog_delivery/24_decision_memo.md`), after
+  the `~/.Trash` access check from a Slate build; staging (T3) is rejected,
+  and Linux's own freedesktop move (T4) is deferred with the Linux host, so
+  trash-rs's Linux cross-device fallback still copies and then recursively
+  deletes the source path. The new token closes the separated host-probe
+  contract and coordinates Slate writers; it does not claim atomic exclusion
+  of sync clients. Keep #1125 open for that remaining boundary and FR-10's
+  leaf binding (since #1449 an ancestor no longer redirects a structural
+  rename on macOS or Linux).
 - **FR-9 — Windows Move-To destination loading is asynchronous (#1126).**
   The admitted picker opens immediately with Loading/Cancel, then receives
   bounded 1,000-row pages from a cancellable worker, up to 50,000 folders.
