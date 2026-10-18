@@ -145,12 +145,15 @@ impl LinkCandidates for InMemoryVaultIndex {
 }
 
 /// Every indexed path, in path order: the snapshot scan, rename and the
-/// dangling-link pass resolve over (#1429). Path order is the order the
-/// save lookup gives a path target's rows ([`candidate_rows_sql`]), so
-/// between two paths equal under lowercase — case twins a case-sensitive
-/// volume can hold — a snapshot and a save pick the same one; the `ORDER
-/// BY` makes that the query's promise rather than the planner's (the
-/// covering index on `path` serves it without a sort).
+/// dangling-link pass resolve over (#1429). Path order is byte order — the
+/// `path` column's default `BINARY` collation, so `Twin/Case.md` sorts
+/// before `twin/case.md` — and it is the order the save lookup gives a path
+/// target's rows ([`candidate_rows_sql`]), so between two paths equal under
+/// lowercase — case twins a case-sensitive volume can hold — a snapshot and
+/// a save pick the same one. The `ORDER BY` makes that the query's promise
+/// rather than the planner's; the covering index on `path` (its `UNIQUE`
+/// constraint) serves it without a sort, which
+/// `the_whole_table_snapshot_reads_in_path_order` pins.
 pub(crate) fn indexed_paths_in_path_order(conn: &Connection) -> Result<Vec<String>, VaultError> {
     #[cfg(test)]
     if SNAPSHOT_FAULT.with(std::cell::Cell::get) {
