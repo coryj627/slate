@@ -489,6 +489,10 @@ internal sealed partial class VaultLifecycleViewModel
 
             _session = openedSession;
             openedSession = null;
+            // Plan 43 PR 20b (#1267): the fourth arm is core's vault
+            // watcher's burst signal, marshalled like the others; the
+            // lifecycle answers it with a Watcher rescan
+            // (HandleExternalChange).
             _eventListener = new UiVaultEventListener(
                 (code, eventPath, message) => _enqueueUi(
                     () => HandleVaultError(generation, code, eventPath, message)),
@@ -504,7 +508,8 @@ internal sealed partial class VaultLifecycleViewModel
                 {
                     bool duringRescan = Volatile.Read(ref _rescanActive);
                     _enqueueUi(() => HandleIndexPhase(generation, phase, filesSeen, duringRescan));
-                });
+                },
+                () => _enqueueUi(() => HandleExternalChange(generation)));
             _eventListenerToken = _session.RegisterEventListener(_eventListener);
 
             IsVaultOpen = true;
@@ -523,6 +528,11 @@ internal sealed partial class VaultLifecycleViewModel
             Action<CancelToken>? switcherPageHook = SwitcherPageLoadingForTests;
             Task<(ScanReport Report, SwitcherFile[] SwitcherFiles)> loadTask = _runSessionLoad(() =>
             {
+                // Plan 43 PR 20b (#1267, design §4.3): the vault watcher arms
+                // right before the open scan — #638's arm-then-probe rule: a
+                // change made during the scan is either seen by its walk or
+                // arrives as a burst.
+                StartVaultWatch(activeSession);
                 ScanReport report = activeSession.ScanInitialWithProgress(activeCancel, activeProgressListener);
                 // W7-7 PR 7: Quick Open's listing honours the open's token
                 // too, so a close stops it mid-listing, not after it.
@@ -578,6 +588,9 @@ internal sealed partial class VaultLifecycleViewModel
                 _progressListener = null;
                 IsBusy = false;
                 IsProgressIndeterminate = false;
+                // Plan 43 PR 20b: a watcher request recorded while the
+                // open ran — before the workspace existed — runs now.
+                ServeRecordedRescan();
             }
         }
     }
@@ -938,6 +951,12 @@ internal sealed partial class VaultLifecycleViewModel
         _syncMarkerWatcher?.Dispose();
         _syncMarkerWatcher = null;
 
+        // Plan 43 PR 20b (#1267): core's vault watcher stops before the
+        // rescan admission closes. Once StopWatching returns no
+        // OnExternalChange runs, so the teardown asks for no Watcher run;
+        // a signal already queued is dropped by its generation.
+        StopVaultWatch();
+
         // W7-7 PR 7 (codex AR-18 review round 2, finding 3): the rescan's
         // core-call admission closes FIRST, then the run is cancelled — its
         // managed twin (host-side checks, F5), then its native token through
@@ -1106,6 +1125,54 @@ internal sealed partial class VaultLifecycleViewModel
         _session = null;
         ReopenRescanCoreAdmission();
     }
+
+    /// <summary>
+    /// Plan 43 PR 20b (#1267, design §4.6): arm core's vault watcher — ON
+    /// THE WORKER, right before the open scan. No watch (an unsupported
+    /// volume, a platform limit, a root that no longer names the opened
+    /// folder, the test switch) is a diagnostic, never spoken: nothing the
+    /// user hears or sees changes, and Refresh and the foreground rescan stay
+    /// the baseline either way.
+    /// </summary>
+    private static void StartVaultWatch(VaultSession session)
+    {
+        try
+        {
+            if (!session.StartWatching())
+            {
+                HostLog.Write(HostDiagnosticEvent.VaultWatchUnavailable);
+            }
+        }
+        catch (Exception exception) when (exception is not OutOfMemoryException)
+        {
+            HostLog.Write(HostDiagnosticEvent.VaultWatchUnavailable, exception);
+        }
+    }
+
+    /// <summary>Plan 43 PR 20b (#1267): disarm the vault watcher, first in
+    /// the teardown. Idempotent; a session that never armed one stops
+    /// nothing.</summary>
+    private void StopVaultWatch()
+    {
+        if (_session is not VaultSession session)
+        {
+            return;
+        }
+
+        try
+        {
+            session.StopWatching();
+        }
+        catch (Exception exception) when (exception is not OutOfMemoryException)
+        {
+            HostLog.Write(HostDiagnosticEvent.VaultCommandFailed, exception);
+        }
+    }
+
+    /// <summary>Plan 43 PR 20b test seam: the open vault's event listener,
+    /// so a fact can make the call core's watcher makes — from its own
+    /// thread, through the real marshalling.</summary>
+    internal VaultEventListener? EventListenerForTests => _eventListener;
 
     private void InitializeWorkspace(
         VaultSession session,
@@ -2016,15 +2083,18 @@ internal sealed class UiVaultEventListener : VaultEventListener
     private readonly Action<EventErrorCode, string, string> _onError;
     private readonly Action<FileChangeEvent> _onFileChange;
     private readonly Action<IndexPhase, ulong> _onIndexPhase;
+    private readonly Action _onExternalChange;
 
     public UiVaultEventListener(
         Action<EventErrorCode, string, string> onError,
         Action<FileChangeEvent> onFileChange,
-        Action<IndexPhase, ulong> onIndexPhase)
+        Action<IndexPhase, ulong> onIndexPhase,
+        Action onExternalChange)
     {
         _onError = onError;
         _onFileChange = onFileChange;
         _onIndexPhase = onIndexPhase;
+        _onExternalChange = onExternalChange;
     }
 
     public void OnError(EventErrorCode code, string path, string message) =>
@@ -2033,11 +2103,10 @@ internal sealed class UiVaultEventListener : VaultEventListener
     public void OnIndexPhase(IndexPhase phase, ulong filesSeen) =>
         _onIndexPhase(phase, filesSeen);
 
-    /// <summary>Plan 43 PR 20a (#1267): the core vault watcher's burst
-    /// signal. A no-op until PR 20b wires it to a Watcher-reason rescan; the
-    /// host does not call <c>StartWatching</c> before then, so core never
-    /// calls this.</summary>
-    public void OnExternalChange()
-    {
-    }
+    /// <summary>Plan 43 PR 20b (#1267): core's vault watcher saw files
+    /// change outside this session — one call per coalesced burst, from
+    /// its own thread ("slate-watch"), no session lock held, no paths. Like
+    /// the other arms it only marshals to the UI thread, where the
+    /// lifecycle asks for a Watcher rescan.</summary>
+    public void OnExternalChange() => _onExternalChange();
 }
