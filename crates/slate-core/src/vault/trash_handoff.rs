@@ -28,11 +28,18 @@
 //! no platform has one (#1430 T1). On macOS the path becomes a file reference
 //! URL before `trashItemAtURL:`, so a substitution after that point no longer
 //! redirects the call (P12.2); P13 measured the race left inside the call.
+//!
+//! Tests never reach the system Trash of whoever runs them (#1455). In core's
+//! own test build every `FsVaultProvider::new` hands its deletions to a
+//! [`ScratchTrash`] with a bin of its own ([`default_trash`]), and the system
+//! Trash refuses any path off the scratch volume of the gated real-Trash
+//! facts. A host's test process routes every session it opens into a scratch
+//! bin of its own ([`route_trash_to_scratch_bin_for_tests`]). A shipping
+//! build hands every deletion to the system Trash, as before.
 
 use std::fmt;
-use std::path::Path;
-#[cfg(any(unix, windows))]
-use std::path::PathBuf;
+use std::path::{Path, PathBuf};
+use std::sync::{Arc, Mutex, PoisonError};
 #[cfg(unix)]
 use std::{ffi::CStr, fs, io};
 
@@ -40,7 +47,7 @@ use crate::VaultError;
 
 /// The one step of a Trash Slate does not control: the platform's own Trash
 /// call, handed the absolute path derived from the pinned parent an instant
-/// earlier. Production uses [`PlatformTrash`]; tests use `ScratchTrash`.
+/// earlier. Shipping builds use [`PlatformTrash`]; tests use [`ScratchTrash`].
 pub(crate) trait SystemTrash: fmt::Debug + Send + Sync {
     fn trash(&self, path: &Path) -> Result<(), VaultError>;
 }
@@ -53,6 +60,8 @@ pub(crate) struct PlatformTrash;
 
 impl SystemTrash for PlatformTrash {
     fn trash(&self, path: &Path) -> Result<(), VaultError> {
+        #[cfg(test)]
+        refuse_a_trash_that_is_not_scratch(path);
         #[cfg(target_os = "macos")]
         {
             macos::trash_item(path)
@@ -64,6 +73,67 @@ impl SystemTrash for PlatformTrash {
             })
         }
     }
+}
+
+/// The environment variable that names the scratch volume of the gated
+/// real-Trash facts (`trash_handoff_tests`). Only a path on it, whose Trash
+/// is that volume's own, may reach the system Trash from a test build.
+#[cfg(test)]
+pub(crate) const PROBE_VOLUME: &str = "SLATE_TRASH_PROBE_VOLUME";
+
+/// #1455: core's tests reach the system Trash only from the gated real-Trash
+/// facts, and only for a path on the scratch volume they name in
+/// [`PROBE_VOLUME`], whose Trash belongs to that volume and not to whoever
+/// runs the suite. Any other path is a test about to move its fixture into a
+/// developer's `~/.Trash` or a runner's Trash or Recycle Bin, so the test
+/// panics here, before the call. Every other test trashes into a
+/// [`ScratchTrash`].
+#[cfg(test)]
+fn refuse_a_trash_that_is_not_scratch(path: &Path) {
+    let refusal = |why: String| -> ! {
+        panic!(
+            "#1455: a test handed {path:?} to the system Trash ({why}). Core's tests trash \
+             into a ScratchTrash bin; only the gated real-Trash facts reach the system Trash, \
+             for a path on the scratch volume named in {PROBE_VOLUME}."
+        )
+    };
+    let Some(volume) = std::env::var_os(PROBE_VOLUME) else {
+        refusal(format!("{PROBE_VOLUME} is not set"));
+    };
+    let volume = std::fs::canonicalize(&volume)
+        .unwrap_or_else(|error| refusal(format!("{PROBE_VOLUME} cannot be resolved: {error}")));
+    if !path.starts_with(&volume) {
+        refusal(format!("the path is not on {}", volume.display()));
+    }
+    // On the home volume, macOS's Trash for the item is the user's own
+    // `~/.Trash`; on a scratch volume it is that volume's `.Trashes/<uid>`.
+    #[cfg(target_os = "macos")]
+    {
+        use std::os::unix::fs::MetadataExt as _;
+        let device = |at: &Path| std::fs::metadata(at).map(|metadata| metadata.dev());
+        let home = std::env::var_os("HOME").unwrap_or_default();
+        match (device(&volume), device(Path::new(&home))) {
+            (Ok(scratch), Ok(home)) if scratch != home => {}
+            _ => refusal(format!(
+                "{} is not a volume of its own, so its Trash is ~/.Trash",
+                volume.display()
+            )),
+        }
+    }
+    // trash-rs moves an item on the home Trash's own mount into
+    // `$XDG_DATA_HOME/Trash`, so that must be scratch too.
+    #[cfg(any(target_os = "linux", target_os = "android"))]
+    {
+        let scratch_home = std::env::var_os("XDG_DATA_HOME")
+            .and_then(|home| std::fs::canonicalize(home).ok())
+            .is_some_and(|home| home.starts_with(&volume));
+        if !scratch_home {
+            refusal(format!("XDG_DATA_HOME is not on {}", volume.display()));
+        }
+    }
+    // No real-Trash fact runs on Windows: the Recycle Bin is never a test's.
+    #[cfg(windows)]
+    refusal("Windows has no gated real-Trash fact".into());
 }
 
 /// The refusal: `original` is not handed to the Trash, for `reason`, which
@@ -401,67 +471,197 @@ mod macos {
     }
 }
 
-/// Test double for the system Trash. It moves the entry into a scratch bin the
-/// way a path-addressed Trash call acts, resolving every folder on `path`
-/// with links followed (the leaf itself is moved, not its target), so a
-/// handoff that passes a substituted path moves the substitute. It records
+/// A Trash that moves each entry into a scratch bin, a folder of its own,
+/// instead of the system Trash: what every test trashes into (#1455). It
+/// acts on its path the way a path-addressed system Trash does, resolving
+/// every folder on `path` with links followed (the leaf itself is moved, not
+/// its target), so a handoff that passes a substituted path moves the
+/// substitute. A same-named entry gains a number (`note.md 1`). It records
 /// every path it was handed and never touches a real Trash.
-#[cfg(test)]
+///
+/// Core's own tests give each provider one with a bin of its own
+/// ([`default_trash`]); a host's test process routes every session it opens
+/// into one ([`route_trash_to_scratch_bin_for_tests`]). Shipping code never
+/// builds one.
 #[derive(Debug)]
 pub(crate) struct ScratchTrash {
-    bin: tempfile::TempDir,
-    handed: std::sync::Mutex<Vec<std::path::PathBuf>>,
+    bin: ScratchBin,
+    /// Every path this bin was handed, in order. Its lock also covers the
+    /// name check and the move, so same-named entries trashed at one moment
+    /// from two threads both stay in the bin.
+    handed: Mutex<Vec<PathBuf>>,
 }
 
-#[cfg(test)]
+#[derive(Debug)]
+enum ScratchBin {
+    /// A temporary folder of the bin's own, made when the first entry
+    /// arrives and removed with the bin: a core test's provider.
+    #[cfg(test)]
+    Owned(std::sync::OnceLock<tempfile::TempDir>),
+    /// A folder the test process made and keeps: a host's test bootstrap.
+    Given(PathBuf),
+}
+
 impl ScratchTrash {
-    pub(crate) fn new() -> std::sync::Arc<Self> {
-        std::sync::Arc::new(Self {
-            bin: tempfile::tempdir().expect("scratch Trash bin"),
-            handed: std::sync::Mutex::new(Vec::new()),
-        })
+    /// A bin of its own in the temporary directory, made when the first
+    /// entry arrives.
+    #[cfg(test)]
+    pub(crate) fn new() -> Arc<Self> {
+        Arc::new(Self::with_bin(
+            ScratchBin::Owned(std::sync::OnceLock::new()),
+        ))
+    }
+
+    fn in_folder(folder: PathBuf) -> Self {
+        Self::with_bin(ScratchBin::Given(folder))
+    }
+
+    fn with_bin(bin: ScratchBin) -> Self {
+        Self {
+            bin,
+            handed: Mutex::new(Vec::new()),
+        }
+    }
+
+    /// The bin's folder.
+    pub(crate) fn bin(&self) -> &Path {
+        match &self.bin {
+            #[cfg(test)]
+            ScratchBin::Owned(folder) => folder
+                .get_or_init(|| tempfile::tempdir().expect("scratch Trash bin"))
+                .path(),
+            ScratchBin::Given(folder) => folder,
+        }
     }
 
     /// Every path the provider handed to the Trash, in order.
-    pub(crate) fn handed(&self) -> Vec<std::path::PathBuf> {
-        self.handed.lock().unwrap().clone()
+    #[cfg(test)]
+    pub(crate) fn handed(&self) -> Vec<PathBuf> {
+        self.handed
+            .lock()
+            .unwrap_or_else(PoisonError::into_inner)
+            .clone()
     }
 
     /// The bin's entry names, sorted.
+    #[cfg(test)]
     pub(crate) fn contents(&self) -> Vec<String> {
-        let mut names: Vec<String> = std::fs::read_dir(self.bin.path())
+        let mut names: Vec<String> = std::fs::read_dir(self.bin())
             .unwrap()
             .map(|entry| entry.unwrap().file_name().to_string_lossy().into_owned())
             .collect();
         names.sort();
         names
     }
-
-    pub(crate) fn bin(&self) -> &Path {
-        self.bin.path()
-    }
 }
 
-#[cfg(test)]
 impl SystemTrash for ScratchTrash {
     fn trash(&self, path: &Path) -> Result<(), VaultError> {
-        self.handed.lock().unwrap().push(path.to_path_buf());
+        #[cfg(test)]
+        SCRATCH_HANDOFFS
+            .lock()
+            .unwrap_or_else(PoisonError::into_inner)
+            .push(path.to_path_buf());
+        let mut handed = self.handed.lock().unwrap_or_else(PoisonError::into_inner);
+        handed.push(path.to_path_buf());
         let name = path.file_name().ok_or_else(|| VaultError::Trash {
             message: "nothing to trash".into(),
         })?;
-        let mut destination = self.bin.path().join(name);
+        let bin = self.bin();
+        let mut destination = bin.join(name);
         let mut collision = 1;
         while destination.symlink_metadata().is_ok() {
-            destination = self
-                .bin
-                .path()
-                .join(format!("{} {collision}", name.to_string_lossy()));
+            destination = bin.join(format!("{} {collision}", name.to_string_lossy()));
             collision += 1;
         }
         std::fs::rename(path, &destination).map_err(|error| VaultError::Trash {
-            message: error.to_string(),
+            message: format!(
+                "could not move the item into the scratch Trash bin {}: {error}",
+                bin.display()
+            ),
         })
     }
+}
+
+/// Every path any [`ScratchTrash`] in this test process was handed, so a fact
+/// can show that a provider it did not build (a session's own) trashed into
+/// a scratch bin (#1455).
+#[cfg(test)]
+static SCRATCH_HANDOFFS: Mutex<Vec<PathBuf>> = Mutex::new(Vec::new());
+
+/// The paths every [`ScratchTrash`] in this process was handed, in order.
+#[cfg(test)]
+pub(crate) fn scratch_handoffs() -> Vec<PathBuf> {
+    SCRATCH_HANDOFFS
+        .lock()
+        .unwrap_or_else(PoisonError::into_inner)
+        .clone()
+}
+
+/// The Trash a provider built by `FsVaultProvider::new` hands its deletions
+/// to (#1455). A shipping build hands them to the system Trash, unless the
+/// process routed its Trash into a scratch bin, which only a host's test
+/// process does ([`route_trash_to_scratch_bin_for_tests`]). Core's own test
+/// build gives every provider a [`ScratchTrash`] with a bin of its own, so no
+/// test moves a fixture into the Trash of whoever runs the suite.
+pub(crate) fn default_trash() -> Arc<dyn SystemTrash> {
+    #[cfg(test)]
+    {
+        ScratchTrash::new()
+    }
+    #[cfg(not(test))]
+    {
+        match ROUTED.get() {
+            Some(scratch) => scratch.clone(),
+            None => Arc::new(PlatformTrash),
+        }
+    }
+}
+
+/// The scratch bin this process routed its Trash into, once it has.
+static ROUTED: std::sync::OnceLock<Arc<ScratchTrash>> = std::sync::OnceLock::new();
+
+/// **Test processes only (#1455).** Routes the Trash of every filesystem
+/// provider this process builds afterwards into `bin` instead of the system
+/// Trash: every `VaultSession::from_filesystem` session, and so every session
+/// a host opens. `bin` is a folder the caller made and keeps, on the volume
+/// that holds its test vaults (an entry moves there with `rename`). Each
+/// deleted entry lands in it under its own name, a same-named one with a
+/// number added.
+///
+/// A host's test bundle calls this once, as it loads and before any test
+/// runs: the mac suite's `SlateMacTestBootstrap`, the Windows suite's module
+/// initializer. Shipping code never calls it, and a source census in core and
+/// in each host fails if any does. The routing cannot be undone or moved: a
+/// second call naming the same folder changes nothing, one naming another is
+/// refused, and a provider built before the first call keeps the system
+/// Trash.
+pub fn route_trash_to_scratch_bin_for_tests(bin: &Path) -> Result<(), VaultError> {
+    if !bin.is_absolute() || !bin.is_dir() {
+        return Err(VaultError::InvalidPath {
+            path: bin.display().to_string(),
+            reason: "a scratch Trash bin must be an existing folder named by an absolute path"
+                .into(),
+        });
+    }
+    let routed = ROUTED.get_or_init(|| Arc::new(ScratchTrash::in_folder(bin.to_path_buf())));
+    if routed.bin() == bin {
+        Ok(())
+    } else {
+        Err(VaultError::InvalidArgument {
+            message: format!(
+                "this process already routes its Trash into {}",
+                routed.bin().display()
+            ),
+        })
+    }
+}
+
+/// The folder this process routed its Trash into
+/// ([`route_trash_to_scratch_bin_for_tests`]), or `None` while it uses the
+/// system Trash. The hosts' test censuses ask before they trash anything.
+pub fn scratch_trash_bin_for_tests() -> Option<PathBuf> {
+    ROUTED.get().map(|routed| routed.bin().to_path_buf())
 }
 
 #[cfg(test)]

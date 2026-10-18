@@ -669,6 +669,25 @@ and with that it passed 8 of 8.
 
 Golden Gate was not rerun; whether it now passes is unverified.
 
+October 17, later (#1455): the suites no longer use a real Trash. Core's
+test build gives every provider a scratch bin of its own, and each host's
+test process routes all of its sessions into one scratch bin of its own as
+it loads: the mac suite through a C constructor in `SlateMacTestBootstrap`,
+the Windows suite through a module initializer. Before this, one local
+`cargo test -p slate-core` moved about 920 fixtures, from 48 tests, into
+the running user's Trash, and one `swift test --parallel` moved 50 more
+(the scratch bins' count on this branch). Now neither moves any: on
+October 18 the entry count and modification time of `~/.Trash` were the
+same before and after each full run. Parallel workers no longer meet in
+one Trash, and pointing `TMPDIR` at a scratch volume is no longer needed.
+
+The real back ends run only in the gated facts. On macOS, attach a scratch
+APFS image and run `SLATE_TRASH_PROBE_VOLUME=<mount> cargo test -p
+slate-core -- --ignored real_trash` (the steps are in
+`trash_handoff_tests.rs`). On Linux,
+`real_trash_on_linux_lands_in_a_scratch_home_trash` runs in every run, with
+a scratch `XDG_DATA_HOME`. No test reaches the Windows Recycle Bin.
+
 The owner chose Namespace's Tahoe slim image instead, and `1ba80997` added
 it as candidate `namespace-tahoeslim6x14` on the direct label
 `nscloud-macos-tahoe-slim-arm64-6x14`. The `mac-actions` profile was not

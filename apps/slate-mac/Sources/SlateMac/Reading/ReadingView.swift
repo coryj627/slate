@@ -221,6 +221,20 @@ struct ReadingView: View {
     /// reported outward via `onScrollBlockChange`.
     @State private var scrolledBlockIndex: Int?
 
+    /// #1421: this view's claim on the slate-scheme opens VoiceOver's press
+    /// makes (`ReadingLinkSystemOpen`), held while the populated state is
+    /// mounted.
+    @State private var systemOpenRegistration: ReadingLinkSystemOpen.Registration?
+
+    /// #1421: the router a caught open is handed to, the one this view last
+    /// rendered with (as the click path's `\.openURL` action is). A reference
+    /// box, so the registration made on mount follows later renders.
+    @State private var systemOpenRoute = SystemOpenRoute()
+
+    final class SystemOpenRoute {
+        var router: ReadingLinkRouter = .inert
+    }
+
     init(
         text: String,
         pathLabel: String,
@@ -318,7 +332,8 @@ struct ReadingView: View {
     // MARK: - Populated
 
     private func populated(_ parsed: ReadingParseCache.Parsed) -> some View {
-        ScrollView {
+        systemOpenRoute.router = router
+        return ScrollView {
             // EAGER VStack — see the type doc (VoiceOver enumerability over
             // laziness; >2k-block perf note logged by the cache;
             // virtualization is the recorded U5-4-gated follow-up).
@@ -377,7 +392,24 @@ struct ReadingView: View {
         .accessibilityLabel("Reading view for \(pathLabel).")
         // Every inline link in every leaf routes through the one router —
         // slate schemes to their closures, http(s)/mailto to the system.
+        // A click arrives here...
         .environment(\.openURL, OpenURLAction { url in router.route(url) })
+        // ...and VoiceOver's press on the same link arrives through the
+        // system-open guard (#1421), which hands every slate-scheme open to
+        // the reading view on screen instead of LaunchServices.
+        .onAppear {
+            guard systemOpenRegistration == nil else { return }
+            let route = systemOpenRoute
+            systemOpenRegistration = ReadingLinkSystemOpen.register { url in
+                _ = route.router.route(url)
+            }
+        }
+        .onDisappear {
+            if let systemOpenRegistration {
+                ReadingLinkSystemOpen.unregister(systemOpenRegistration)
+            }
+            systemOpenRegistration = nil
+        }
     }
 
     // MARK: - Block dispatch

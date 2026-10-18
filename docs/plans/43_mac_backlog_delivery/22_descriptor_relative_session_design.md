@@ -1064,4 +1064,5 @@ The owner answered §10 in a decision interview on 2026-10-17. Every answer belo
 - **Q6.** macOS and Linux ship now (22a, 22b), and the Windows `FsRoot` body (22W) follows under Milestone W.
 - **Q7.** Settled by PR 20's Q6 (rc.5 pinned) and Q7 (the mac host's integration fact), so the re-arm fact rides that witness.
 - **Q8.** #1442 (four mac stores recreate a renamed vault's old path) is fixed now with that issue's small change. The shared `fs_root` convention is then carried into the host stores once core has it.
+  - *Delivered (#1442):* the four stores write through one helper, `VaultStoreDirectory.prepare` (`apps/slate-mac/Sources/SlateMac/VaultStoreDirectory.swift`), which refuses a root whose identity is no longer the open's and makes at most `.slate` inside it; recents entries record the root's identity and launch-restore refuses a folder that is not it. That helper is the one place the `fs_root` convention replaces. Core's own pathname writers that still recreate the old path are #1474; the Windows twin is #1475.
 - **Plan.** §8's split is queued after 20a: 22a, then 22b; 22W waits for Milestone W.

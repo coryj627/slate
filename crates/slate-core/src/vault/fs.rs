@@ -19,7 +19,7 @@ use std::{fs, io};
 use crate::VaultError;
 
 use super::provider::{DirEntry, EntryKind, FileEventSink, FileStat, VaultProvider, WatchHandle};
-use super::trash_handoff::{PlatformTrash, SystemTrash};
+use super::trash_handoff::SystemTrash;
 
 #[cfg(unix)]
 mod pinned_root;
@@ -77,17 +77,24 @@ impl FsVaultProvider {
     /// will fail with `VaultError::Io` for non-existent paths. This is
     /// intentional — the provider doesn't enforce vault-existence
     /// semantics, the calling `VaultSession::open` does.
+    ///
+    /// `delete` hands entries to the system Trash. Tests are the exception
+    /// (#1455): in core's own test build each provider gets a scratch bin of
+    /// its own, and a host's test process routes every provider into its
+    /// scratch bin (`route_trash_to_scratch_bin_for_tests`), so no test moves
+    /// a fixture into the Trash of whoever runs it.
     pub fn new(root: PathBuf) -> Self {
         #[cfg(windows)]
         let root = windows_extended_path(&root);
         Self {
             root,
-            trash: Arc::new(PlatformTrash),
+            trash: super::trash_handoff::default_trash(),
         }
     }
 
-    /// A provider whose Trash handoff goes to `trash` instead of the system
-    /// Trash, so facts about the handoff never touch a real Trash.
+    /// A provider whose Trash handoff goes to `trash`: a `ScratchTrash` a
+    /// fact inspects, or `PlatformTrash` for the gated real-Trash facts
+    /// alone (`real_system_trash_provider`, #1455).
     #[cfg(test)]
     pub(crate) fn with_system_trash(root: PathBuf, trash: Arc<dyn SystemTrash>) -> Self {
         Self {

@@ -45,6 +45,9 @@ struct SearchRecentsStore {
     static let maxFileBytes: Int = 1 << 16  // 64 KiB
 
     let vaultRoot: URL
+    /// The identity the vault's open admitted (#1442). `save` (and so `add`
+    /// and `clear`) writes only into a root that still has it.
+    let rootIdentity: VaultStoreDirectory.RootIdentity?
 
     /// `<vault>/.slate/search-recents.json` — same `.slate/` directory
     /// WorkspaceStore uses for `workspace.json`.
@@ -89,10 +92,11 @@ struct SearchRecentsStore {
 
     /// Atomically overwrite the on-disk list. Temp-file-then-rename in
     /// `.slate/` (same volume ⇒ atomic) — the WorkspaceStore write
-    /// discipline `FileRecentsStore` uses.
+    /// discipline `FileRecentsStore` uses. A root that was renamed, moved or
+    /// replaced since the open refuses the write (#1442).
     func save(_ queries: [String]) throws {
-        let dir = fileURL.deletingLastPathComponent()
-        try FileManager.default.createDirectory(at: dir, withIntermediateDirectories: true)
+        let dir = try VaultStoreDirectory.prepare(
+            vaultRoot: vaultRoot, expectedRootIdentity: rootIdentity)
         let encoder = JSONEncoder()
         encoder.outputFormatting = [.prettyPrinted, .sortedKeys]
         let data = try encoder.encode(queries)
