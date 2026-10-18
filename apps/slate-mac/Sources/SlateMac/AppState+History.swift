@@ -81,6 +81,9 @@ struct CompactionFailure: Identifiable, Equatable {
 /// closed vault's straggler events go nowhere.
 final class VaultEventAdapter: VaultEventListener, @unchecked Sendable {
     private weak var appState: AppState?
+    /// The session this adapter listens to (plan 43 PR 20c): the watcher's
+    /// signal is answered only while it is still the open vault's.
+    private weak var session: VaultSession?
     /// #802 observation seams. Milestone P (#554) wired the first real
     /// production consumer here — the Connections leaf's graph-generation
     /// refresh (see `registerVaultEventListener`); PD (OCR label refresh,
@@ -91,10 +94,12 @@ final class VaultEventAdapter: VaultEventListener, @unchecked Sendable {
 
     init(
         appState: AppState,
+        session: VaultSession? = nil,
         onFileChangeHook: (@Sendable (FileChangeEvent) -> Void)? = nil,
         onIndexPhaseHook: (@Sendable (IndexPhase, UInt64) -> Void)? = nil
     ) {
         self.appState = appState
+        self.session = session
         self.onFileChangeHook = onFileChangeHook
         self.onIndexPhaseHook = onIndexPhaseHook
     }
@@ -113,10 +118,19 @@ final class VaultEventAdapter: VaultEventListener, @unchecked Sendable {
         onIndexPhaseHook?(phase, filesSeen)
     }
 
-    /// Plan 43 PR 20a (#1267): the core vault watcher's burst signal. A no-op
-    /// until PR 20c wires it to a Watcher-reason rescan; mac does not call
-    /// `startWatching()` before then, so core never calls this.
-    func onExternalChange() {}
+    /// Plan 43 PR 20c (#1267): core's vault watcher saw files change outside
+    /// this session — one call per coalesced burst, from its own thread
+    /// ("slate-watch"), with no session lock held and no paths. Like the
+    /// other arms it only hops to the main actor, where AppState asks for a
+    /// Watcher rescan (`handleExternalChange`) while this adapter's session
+    /// is still the open vault's: a closed or replaced vault's straggler
+    /// signal starts nothing. Never calls the session synchronously.
+    func onExternalChange() {
+        Task { @MainActor [weak appState, weak session] in
+            guard let appState, let session, appState.currentSession === session else { return }
+            appState.handleExternalChange()
+        }
+    }
 }
 
 extension AppState {
@@ -743,9 +757,13 @@ extension AppState {
         // off the session's thread — they MUST NOT call the session
         // synchronously (the documented contract); marshal to the main
         // actor, where refreshConnectionsIfGraphChanged dispatches the
-        // generation probe off-main again.
+        // generation probe off-main again. Plan 43 PR 20c (#1267): the
+        // adapter knows its session, so the vault watcher's burst signal
+        // (`onExternalChange`) asks for a Watcher rescan only while this
+        // session is the open vault's.
         let adapter = VaultEventAdapter(
             appState: self,
+            session: session,
             onFileChangeHook: { [weak self, weak session] event in
                 Task { @MainActor [weak self, weak session] in
                     guard let self, let session else { return }
