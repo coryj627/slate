@@ -1,6 +1,7 @@
 # PR 20 — A real vault watcher in core: design
 
-Status: design for owner review, 2026-10-16. Nothing here is
+Status: design, 2026-10-16, with the owner's decisions of 2026-10-17
+in §11. PR 20.0 is delivered (§7, #1429); nothing else here is
 implemented. Issue #1267 (OD-1's follow-up; AR-3, AR-7). Spec:
 `specs/pr20_vault_watcher.md`. Baseline: `main` at 13624900; every
 file:line reference below was read at that commit (several mac lines
@@ -754,7 +755,7 @@ design.
 
 | PR | Scope | Size | Lanes | After |
 |---|---|---|---|---|
-| 20.0 | Core: link resolution looks candidates up by final component instead of offering every path, which bounds the unresolved-link pass (§4.2) | S–M | rust, swift, windows | — |
+| 20.0 | Core: link resolution looks candidates up by final component instead of offering every path, which bounds the unresolved-link pass (§4.2). **Delivered 2026-10-18 (#1429):** a snapshot keys each path by the hash of its lowercased path and of its lowercased final component, built on its first resolution; the pass snapshots `files` only when a link dangles; every resolution snapshot reads `ORDER BY path`. Before and after: `BENCHMARKS.md`, "Plan 43 PR 20.0" | S–M | rust, swift, windows | — |
 | 20a | Core watcher, echo ledger, coalescer, root anchor, `on_external_change`, `start_watching` / `stop_watching`, `RescanReason::Watcher` and corpus rows, the test switch; bindings regenerated with no-op host adapters | L (about 1,500 to 2,000 lines with facts) | rust, swift, windows, audit | 20.0 |
 | 20b | Windows host: lattice, never-dropped Watcher requests, listener wiring, start and stop, the sentence gate, facts, FlaUI journey | M (about 600 to 900) | windows | 20a |
 | 20c | Mac host: the same on PR 19's rescan, plus a VoiceOver check | M (about 600 to 900) | swift, a11y, windows | 20a, PR 19 |
@@ -767,7 +768,11 @@ Facts by PR:
   and an isolated perf guard like the root-listing guard
   (`rust.yml:268-276`): a 10k-note, 20,000-unresolved-link no-change
   rescan within twice the link-free one. `BENCHMARKS.md` records
-  before and after.
+  before and after. Delivered with these names in `link_resolver.rs`
+  and `session/tests/link_pass.rs`, the guard as
+  `perf_guard_unresolved_link_rescan_within_twice_the_link_free_one`
+  in its own rust-lane step, plus
+  `a_failed_snapshot_read_leaves_the_rescan_incomplete_and_resolves_nothing`.
 - **20a.** §4.7's core facts.
 - **20b and 20c.** §4.7's host facts.
 
