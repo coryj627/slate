@@ -295,75 +295,39 @@ fn current_path(_descriptor: &fs::File) -> io::Result<PathBuf> {
     ))
 }
 
-/// Windows: the same derivation through handles. The configured root is
-/// followed (a linked vault keeps working); every folder beneath it is opened
-/// relative to its parent's handle without following a reparse point, the way
-/// the Trash inventory walks (`trash_snapshot::windows`). The handed path is
-/// the parent handle's final path joined with the leaf, refused unless it lies
-/// beneath the root handle's final path. A reparse point (junction or
-/// symbolic link) or a non-folder among the ancestors refuses naming that
-/// folder, as the Unix walk's refusal does.
+/// Windows: the same derivation through handles. The parent is pinned with
+/// the handle walk forward moves, saves and creations take
+/// (`windows_entry::PinnedRoot`, #1451): the configured root is followed (a
+/// linked vault keeps working), and every folder beneath it is opened
+/// relative to its parent's handle without following a reparse point. The
+/// handed path is the parent handle's final path joined with the leaf,
+/// refused unless it lies beneath the root handle's final path. A junction, a
+/// symbolic link, any other reparse point or a non-folder among the ancestors
+/// refuses naming that folder, as the Unix walk's refusal does; the Trash
+/// keeps #1450's rule of refusing every reparse point
+/// (`Folders::PlainOnly`).
 #[cfg(windows)]
 pub(super) fn pinned_path(
     root: &Path,
     vault_relative: &Path,
     original: &str,
 ) -> Result<PathBuf, VaultError> {
-    use std::os::windows::fs::{MetadataExt as _, OpenOptionsExt as _};
-    use std::path::Component;
-    use windows_sys::Win32::Storage::FileSystem::{
-        FILE_ATTRIBUTE_REPARSE_POINT, FILE_FLAG_BACKUP_SEMANTICS, FILE_LIST_DIRECTORY,
-        FILE_READ_ATTRIBUTES, FILE_SHARE_READ, FILE_SHARE_WRITE,
-    };
+    use super::fs::Mutation;
+    use super::windows_entry::{Folders, PinnedRoot};
 
     let leaf = vault_relative
         .file_name()
         .ok_or_else(|| refused(original, "the path has no final component"))?;
-    let root_directory = std::fs::OpenOptions::new()
-        .access_mode(FILE_READ_ATTRIBUTES | FILE_LIST_DIRECTORY)
-        .share_mode(FILE_SHARE_READ | FILE_SHARE_WRITE)
-        .custom_flags(FILE_FLAG_BACKUP_SEMANTICS)
-        .open(root)?;
-    let mut parent: Option<std::fs::File> = None;
-    let mut prefix = PathBuf::new();
-    for component in vault_relative
-        .parent()
-        .unwrap_or_else(|| Path::new(""))
-        .components()
-    {
-        let Component::Normal(name) = component else {
-            return Err(refused(original, "the path is not vault-relative"));
-        };
-        prefix.push(name);
-        let child = super::windows_entry::open_relative(
-            parent.as_ref().unwrap_or(&root_directory),
-            name,
-            FILE_READ_ATTRIBUTES | FILE_LIST_DIRECTORY,
-        )?;
-        let metadata = child.metadata()?;
-        let folder = prefix.to_string_lossy().replace('\\', "/");
-        if metadata.file_attributes() & FILE_ATTRIBUTE_REPARSE_POINT != 0 {
-            return Err(refused(
-                original,
-                format!(
-                    "\"{folder}\" is a junction or symbolic link, not a folder in this vault, so \
-                     nothing was moved"
-                ),
-            ));
-        }
-        if !metadata.is_dir() {
-            return Err(refused(
-                original,
-                format!("\"{folder}\" is not a folder, so nothing was moved"),
-            ));
-        }
-        parent = Some(child);
-    }
-    let root_now = final_path(&root_directory)?;
-    let parent_now = match &parent {
-        Some(parent) => final_path(parent)?,
-        None => root_now.clone(),
-    };
+    let root = PinnedRoot::open(root)?;
+    let parent = root.folder(
+        vault_relative.parent().unwrap_or_else(|| Path::new("")),
+        original,
+        false,
+        Mutation::Move,
+        Folders::PlainOnly,
+    )?;
+    let root_now = final_path(root.handle())?;
+    let parent_now = final_path(parent.handle())?;
     if !parent_now.starts_with(&root_now) {
         return Err(moved(original));
     }
