@@ -15,10 +15,13 @@ import XCTest
 /// their indexed hashes with PR 10's re-seat, and the active note's leaves.
 /// Nothing speaks during the re-sync; one core sentence follows it, on
 /// Windows' policy. The names mirror Windows' `RescanTests` where a twin
-/// exists.
+/// exists. Plan 43 PR 20c's facts, the vault watcher's Watcher runs, are in
+/// `VaultRescanTests+Watcher.swift`.
 @MainActor
 final class VaultRescanTests: XCTestCase {
-    private var tempDirs: [URL] = []
+    /// Removed in `tearDown`; the watcher facts (`VaultRescanTests+Watcher`)
+    /// add theirs too.
+    var tempDirs: [URL] = []
 
     override func tearDown() {
         for dir in tempDirs {
@@ -73,6 +76,12 @@ final class VaultRescanTests: XCTestCase {
         var now = Date(timeIntervalSince1970: 2_000_000_000)
     }
 
+    /// Each rescan pass's reason as it starts (plan 43 PR 20c): which route
+    /// ran.
+    final class Runs {
+        var reasons: [RescanReason] = []
+    }
+
     /// Parks a rescan inside its `afterScanHook` until released. Only the
     /// first run that reaches it parks; the follow-ups run through.
     actor Gate {
@@ -106,12 +115,48 @@ final class VaultRescanTests: XCTestCase {
         }
     }
 
+    /// What the open itself said, kept before the facts' lines.
+    final class OpenRecord {
+        var lines: [String] = []
+    }
+
     @MainActor
     struct Harness {
         let state: AppState
         let vault: URL
         let spoken: Spoken
         let clock: Clock
+        let runs: Runs
+        let record: OpenRecord
+        /// What the open's `startWatching()` returned, once per open.
+        let watchArms: Locked<[Bool]>
+
+        /// What the open itself said.
+        var openLines: [String] { record.lines }
+
+        /// Open the prepared vault through AppState's own open and await its
+        /// scan task. `watching` lifts the vault watcher's test switch for
+        /// this open only and requires that the open armed the real watcher
+        /// (plan 43 PR 20c); `clearing` sets the open's lines and runs aside
+        /// (a fact whose Watcher run may start before the open's task ends
+        /// keeps them).
+        func openVault(watching: Bool = false, clearing: Bool = true) async {
+            if watching { VaultWatcherSwitch.lift() }
+            state.openVault(at: vault)
+            await state.scanTask?.value
+            if watching {
+                // The open armed (or not) before its scan; nothing else reads
+                // the switch for this vault.
+                VaultWatcherSwitch.restore()
+                XCTAssertEqual(
+                    watchArms.value, [true], "the open armed core's vault watcher (FSEvents)")
+            }
+            record.lines = spoken.lines
+            if clearing {
+                spoken.lines.removeAll()
+                runs.reasons.removeAll()
+            }
+        }
 
         func write(_ relative: String, _ text: String) throws {
             let url = vault.appendingPathComponent(relative)
@@ -159,9 +204,54 @@ final class VaultRescanTests: XCTestCase {
             let cancel = CancelToken()
             return try session.indexedContentHashes(paths: [path], cancel: cancel).first ?? nil
         }
+
+        /// Plan 43 PR 20c: the call core's watcher makes, through the open
+        /// vault's real adapter and from a thread of its own, awaited until
+        /// the adapter's hop has reached AppState.
+        func signalExternalChange() async {
+            guard let adapter = state.vaultEventAdapter else {
+                return XCTFail("the open vault has no event listener")
+            }
+            let before = state.rescanRun.watcherSignalsHandled
+            DispatchQueue.global(qos: .utility).async { adapter.onExternalChange() }
+            await until("the watcher's signal reaching AppState") {
+                state.rescanRun.watcherSignalsHandled > before
+            }
+        }
+
+        /// The watcher's call, and the Watcher run it starts, to its end.
+        func signalAndAwaitTheWatcherRun() async {
+            let before = runs.reasons.count
+            await signalExternalChange()
+            await until("the watcher's run") { runs.reasons.count > before && !state.isRescanning }
+            await state.vaultRescanTask?.value
+        }
+
+        /// Suspend (so the main actor's queued work runs) until `condition`
+        /// holds, or fail after `timeout`: a bounded wait that ends early.
+        func until(
+            _ what: String, timeout: TimeInterval = 15, _ condition: () -> Bool
+        ) async {
+            let deadline = Date(timeIntervalSinceNow: timeout)
+            while !condition(), Date() < deadline {
+                try? await Task.sleep(nanoseconds: 20_000_000)
+            }
+            XCTAssertTrue(condition(), "timed out after \(Int(timeout)) s waiting for \(what)")
+        }
     }
 
-    private func open(_ files: [String: String]) async throws -> Harness {
+    /// Open `files` as a vault through AppState's own open (`prepare`, then
+    /// `Harness.openVault`). `watching` runs the real vault watcher on it
+    /// (plan 43 PR 20c).
+    func open(_ files: [String: String], watching: Bool = false) async throws -> Harness {
+        let h = try prepare(files)
+        await h.openVault(watching: watching)
+        return h
+    }
+
+    /// A vault folder holding `files` and the AppState that will open it,
+    /// not opened yet: a fact can install its seams first.
+    func prepare(_ files: [String: String]) throws -> Harness {
         let dir = FileManager.default.temporaryDirectory
             .appendingPathComponent("vault-rescan-\(UUID().uuidString)")
         try FileManager.default.createDirectory(at: dir, withIntermediateDirectories: true)
@@ -174,6 +264,8 @@ final class VaultRescanTests: XCTestCase {
         }
         let spoken = Spoken()
         let clock = Clock()
+        let runs = Runs()
+        let watchArms = Locked<[Bool]>([])
         let state = AppState(
             recentsStore: RecentVaultsStore(
                 fileURL: dir.appendingPathComponent(".recents-for-test.json")),
@@ -184,10 +276,11 @@ final class VaultRescanTests: XCTestCase {
         state.scanClock = { clock.now }
         // The facts hear the sentence at once; the settle has its own fact.
         state.rescanRun.sentenceSettle = 0
-        state.openVault(at: dir)
-        await state.scanTask?.value
-        spoken.lines.removeAll()
-        return Harness(state: state, vault: dir, spoken: spoken, clock: clock)
+        state.rescanRun.runStartObserver = { runs.reasons.append($0) }
+        state.vaultWatchArmObserver = { armed in watchArms.mutate { $0.append(armed) } }
+        return Harness(
+            state: state, vault: dir, spoken: spoken, clock: clock, runs: runs,
+            record: OpenRecord(), watchArms: watchArms)
     }
 
     /// The Windows fact's probe for a volume that aliases spellings.
