@@ -262,6 +262,10 @@ public sealed partial class ShellAccessibilityTests
                 runs.Contains("SlateWindows.VaultRescanStarted (Watcher)") && !runs.Any(run => run.EndsWith("(Explicit)", StringComparison.Ordinal)),
                 "the file must arrive through a Watcher run, with no Refresh; the log names: " + string.Join(" | ", runs));
             AssertQuickOpenFinds(window, automation, "late", "late");
+            // W7-7 PR 3 (#1246, R-4): the rows the Watcher run republished —
+            // the tree's and every list's — are named speakably, as after a
+            // Refresh.
+            AssertItemNamesAreSpeakable(process, "rescan-watcher-files");
 
             // --- leg 2: the OPEN note changed outside Slate, inside the minute -
             int leg2 = QuietMark(heard, process.Id);
