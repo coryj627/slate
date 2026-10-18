@@ -70,7 +70,8 @@ use super::{Mutation, create_directory_at, directory_open_flags, open_directory_
 pub(super) const RENAME_NOFOLLOW_ANY: libc::c_uint = 0x0000_0010;
 
 /// The vault root, held open as one directory descriptor for a structural
-/// rename. Everything beneath it is resolved without following a link.
+/// rename, a save or a creation. Everything beneath it is resolved without
+/// following a link.
 #[derive(Debug)]
 pub(super) struct PinnedRoot {
     dir: fs::File,
