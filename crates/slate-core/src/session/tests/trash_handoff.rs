@@ -467,17 +467,16 @@ impl Drop for Locked {
     }
 }
 
-/// #1477: a batch whose items became links of each kind after the session's
-/// last check, just before the provider's own look, reports each item as it
-/// ended and leaves it where the report says. `keep.md` is still a file.
-/// `other.md` became a link to a file behind a folder Slate cannot search,
-/// and `sub/note.md` a link to itself; neither target is proven absent, so
-/// both reach the Trash as the links they are. `sub/unique.md` became a link
-/// to a missing file, the one truly dangling kind, and is unlinked. All four
-/// left the vault and are reported trashed, none untrashed or unknown, and
-/// the Trash holds exactly the three it was handed. Before #1477 the
-/// unreachable link and the cycle were unlinked as well, for good, under the
-/// same report.
+/// #1477, #1495: a batch whose items became links of each kind after the
+/// session's last check, just before the provider's own look, reports each
+/// item as it ended and leaves it where the report says. `keep.md` is still a
+/// file. `other.md` became a link to a file behind a folder Slate cannot
+/// search, `sub/note.md` a link to itself, and `sub/unique.md` a link to a
+/// missing file. All four left the vault and are reported trashed, none
+/// untrashed or unknown, and the Trash holds all four, each link as the link,
+/// so every item the report calls trashed can be put back. Before #1477 the
+/// unreachable link and the cycle were unlinked for good under the same
+/// report, and before #1495 so was the link to the missing file.
 #[cfg(unix)]
 #[test]
 fn batch_trash_reports_each_kind_of_unresolvable_link_truthfully() {
@@ -543,13 +542,13 @@ fn batch_trash_reports_each_kind_of_unresolvable_link_truthfully() {
         assert!(!report.requires_rescan);
         assert_eq!(
             f.trash.contents(),
-            vec!["keep.md", "note.md", "other.md"],
-            "staged {staged}: the Trash holds the file and both unresolvable links; the \
-             dangling link was unlinked"
+            vec!["keep.md", "note.md", "other.md", "unique.md"],
+            "staged {staged}: the Trash holds the file and all three links"
         );
         for (name, target) in [
             ("other.md", locked.join("target.md")),
             ("note.md", "note.md".into()),
+            ("unique.md", "gone.md".into()),
         ] {
             let landed = f.trash.bin().join(name);
             assert!(

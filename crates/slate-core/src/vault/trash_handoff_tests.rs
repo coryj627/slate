@@ -157,12 +157,14 @@ fn delete_refuses_a_folder_replaced_by_a_file() {
     f.assert_nothing_moved();
 }
 
-/// A dangling link is unlinked, not trashed. Before #1450 that unlink went
-/// through the lexical path too, so a substituted folder made it delete, for
-/// good, an entry outside the vault.
+/// A dangling link behind a folder swapped for a link refuses like any other
+/// item, and nothing outside the vault is trashed or removed. Before #1450 a
+/// dangling link was unlinked through the lexical path, so a substituted
+/// folder made it delete, for good, an entry outside the vault. Since #1495 it
+/// goes to the Trash through the same pinned walk as every item.
 #[cfg(unix)]
 #[test]
-fn delete_never_unlinks_a_dangling_link_outside_the_vault_through_a_swapped_folder() {
+fn delete_never_reaches_a_dangling_link_outside_the_vault_through_a_swapped_folder() {
     let f = fixture();
     std::os::unix::fs::symlink(
         f.vault.path().join("gone"),
@@ -183,7 +185,7 @@ fn delete_never_unlinks_a_dangling_link_outside_the_vault_through_a_swapped_fold
             .join("dangling.md")
             .symlink_metadata()
             .is_ok(),
-        "the outside link must not be unlinked"
+        "the outside link stays where it is"
     );
     assert!(
         f.vault
@@ -193,29 +195,6 @@ fn delete_never_unlinks_a_dangling_link_outside_the_vault_through_a_swapped_fold
             .is_ok()
     );
     f.assert_nothing_moved();
-}
-
-#[cfg(unix)]
-#[test]
-fn a_dangling_link_inside_the_vault_is_unlinked_through_the_pinned_parent() {
-    let f = fixture();
-    std::os::unix::fs::symlink(
-        f.vault.path().join("gone"),
-        f.vault.path().join("sub/dangling.md"),
-    )
-    .unwrap();
-    f.provider.delete("sub/dangling.md").unwrap();
-    assert!(
-        f.vault
-            .path()
-            .join("sub/dangling.md")
-            .symlink_metadata()
-            .is_err()
-    );
-    assert!(
-        f.trash.handed().is_empty(),
-        "a dangling link is unlinked, not trashed"
-    );
 }
 
 #[cfg(unix)]
@@ -245,9 +224,9 @@ fn a_live_link_leaf_is_handed_over_as_the_link_and_its_target_stays() {
     );
 }
 
-/// #1477: what following `link` reports, the look `delete` takes before it
-/// decides between unlinking a link and trashing it (`fstatat` on the link
-/// in its pinned parent, following it).
+/// What following `link` reports, so each fact's fixture is the kind it
+/// names. Before #1495, `delete` took this look on macOS and Linux to decide
+/// between unlinking a link and trashing it; now it trashes every link.
 #[cfg(unix)]
 fn follow_errno(link: &Path) -> Option<i32> {
     std::fs::metadata(link)
@@ -350,18 +329,23 @@ fn a_link_whose_target_cannot_be_searched_goes_to_the_trash_as_the_link() {
     assert!(to_folder.is_dir());
 }
 
-/// #1477: only a target that is truly absent makes a link dangling.
-/// Following it fails with `ENOENT` (nothing is there) or `ENOTDIR` (its
-/// path runs through a file). Such a link is still unlinked inside its
-/// pinned parent, as before, and nothing reaches the Trash.
+/// #1495: Move to Trash never deletes for good on macOS or Linux. A link
+/// whose target is truly absent (following it fails with `ENOENT`, nothing is
+/// there, or `ENOTDIR`, its path runs through a file) used to be unlinked
+/// inside its pinned parent (#1450, #1477), with nothing for Put Back to
+/// restore, although a missing target can be only out of reach, a file on a
+/// volume that is not mounted now. It now goes to the Trash like every other
+/// item, handed over as the pinned parent's own current path with its name,
+/// and lands there as the link.
 #[cfg(unix)]
 #[test]
-fn a_link_whose_target_is_truly_absent_is_still_unlinked() {
+fn a_link_whose_target_is_truly_absent_goes_to_the_trash_as_the_link() {
     let f = fixture();
     let vault = f.vault.path();
-    std::os::unix::fs::symlink(vault.join("gone.md"), vault.join("sub/missing.md")).unwrap();
-    std::os::unix::fs::symlink(vault.join("sub/note.md/x"), vault.join("through-a-file.md"))
-        .unwrap();
+    let missing = vault.join("gone.md");
+    let through_a_file = vault.join("sub/note.md/x");
+    std::os::unix::fs::symlink(&missing, vault.join("sub/missing.md")).unwrap();
+    std::os::unix::fs::symlink(&through_a_file, vault.join("through-a-file.md")).unwrap();
     assert_eq!(
         follow_errno(&vault.join("sub/missing.md")),
         Some(libc::ENOENT)
@@ -375,11 +359,21 @@ fn a_link_whose_target_is_truly_absent_is_still_unlinked() {
         f.provider.delete(link).unwrap();
         assert!(
             vault.join(link).symlink_metadata().is_err(),
-            "{link} is unlinked"
+            "{link} left the vault"
         );
     }
-    assert!(f.trash.handed().is_empty(), "{:?}", f.trash.handed());
-    assert!(f.trash.contents().is_empty(), "{:?}", f.trash.contents());
+
+    let root = std::fs::canonicalize(vault).unwrap();
+    assert_eq!(
+        f.trash.handed(),
+        vec![
+            root.join("sub").join("missing.md"),
+            root.join("through-a-file.md")
+        ],
+        "both links are handed to the Trash through their pinned parent, never unlinked"
+    );
+    assert_in_the_bin_as_the_link(&f.trash, "missing.md", &missing);
+    assert_in_the_bin_as_the_link(&f.trash, "through-a-file.md", &through_a_file);
     assert_eq!(
         std::fs::read(vault.join("sub/note.md")).unwrap(),
         b"vault note"
@@ -449,10 +443,10 @@ fn a_link_cycle_or_a_chain_too_long_to_follow_goes_to_the_trash_as_the_link() {
 
 /// #1477: any other failure to follow a link leaves its target unproven
 /// absent, so the link goes to the Trash too. A target whose name is longer
-/// than a filesystem allows fails with `ENAMETOOLONG`. An I/O or network
-/// failure (`EIO`, `ESTALE`, `ETIMEDOUT`), which a fixture cannot provoke,
-/// takes the same branch, error by error in
-/// `only_a_target_the_system_reports_absent_makes_a_link_dangling`.
+/// than a filesystem allows fails with `ENAMETOOLONG`. Since #1495 macOS and
+/// Linux do not follow a link at all before the Trash: every link goes there,
+/// whatever following it would report (`EIO`, `ESTALE`, `ETIMEDOUT`, which no
+/// fixture can provoke, included).
 #[cfg(unix)]
 #[test]
 fn a_link_that_fails_to_resolve_for_any_other_reason_goes_to_the_trash_as_the_link() {
@@ -577,56 +571,37 @@ fn a_junction_vault_root_still_trashes_beneath_its_target() {
     std::fs::remove_dir(&root).unwrap();
 }
 
-/// #1477's rule, error by error: only the codes for an absent target make a
-/// link dangling, so it is unlinked. Every other failure to follow a link,
-/// including the I/O and network failures no fixture can provoke, leaves its
-/// target unproven absent, and the link goes to the Trash.
-#[cfg(any(unix, windows))]
+/// Windows' rule (#1477), error by error: only the codes for an absent target
+/// make a link dangling, so Windows unlinks it until the Recycle Bin is
+/// checked with one (#1499). Every other failure to follow a link, including
+/// the I/O and network failures no fixture can provoke, leaves its target
+/// unproven absent, and the link goes to the Recycle Bin. macOS and Linux
+/// trash every link (#1495).
+#[cfg(windows)]
 #[test]
-fn only_a_target_the_system_reports_absent_makes_a_link_dangling() {
-    #[cfg(unix)]
-    let (absent, unproven) = (
-        [libc::ENOENT, libc::ENOTDIR],
-        [
-            libc::EACCES,
-            libc::EPERM,
-            libc::ELOOP,
-            libc::ENAMETOOLONG,
-            libc::EIO,
-            libc::ENXIO,
-            libc::ESTALE,
-            libc::ETIMEDOUT,
-            libc::EHOSTDOWN,
-            libc::EOVERFLOW,
-        ],
-    );
-    #[cfg(windows)]
-    let (absent, unproven) = {
-        use windows_sys::Win32::Foundation::{
-            ERROR_ACCESS_DENIED, ERROR_BAD_NET_NAME, ERROR_BAD_NETPATH,
-            ERROR_CANT_RESOLVE_FILENAME, ERROR_DIRECTORY, ERROR_FILE_NOT_FOUND,
-            ERROR_INVALID_DRIVE, ERROR_INVALID_NAME, ERROR_NOT_READY, ERROR_PATH_NOT_FOUND,
-            ERROR_SHARING_VIOLATION, ERROR_SYMLINK_CLASS_DISABLED,
-        };
-        (
-            [
-                ERROR_FILE_NOT_FOUND as i32,
-                ERROR_PATH_NOT_FOUND as i32,
-                ERROR_DIRECTORY as i32,
-            ],
-            [
-                ERROR_ACCESS_DENIED as i32,
-                ERROR_SHARING_VIOLATION as i32,
-                ERROR_CANT_RESOLVE_FILENAME as i32,
-                ERROR_INVALID_NAME as i32,
-                ERROR_INVALID_DRIVE as i32,
-                ERROR_BAD_NETPATH as i32,
-                ERROR_BAD_NET_NAME as i32,
-                ERROR_NOT_READY as i32,
-                ERROR_SYMLINK_CLASS_DISABLED as i32,
-            ],
-        )
+fn only_a_target_windows_reports_absent_makes_a_link_dangling() {
+    use windows_sys::Win32::Foundation::{
+        ERROR_ACCESS_DENIED, ERROR_BAD_NET_NAME, ERROR_BAD_NETPATH, ERROR_CANT_RESOLVE_FILENAME,
+        ERROR_DIRECTORY, ERROR_FILE_NOT_FOUND, ERROR_INVALID_DRIVE, ERROR_INVALID_NAME,
+        ERROR_NOT_READY, ERROR_PATH_NOT_FOUND, ERROR_SHARING_VIOLATION,
+        ERROR_SYMLINK_CLASS_DISABLED,
     };
+    let absent = [
+        ERROR_FILE_NOT_FOUND as i32,
+        ERROR_PATH_NOT_FOUND as i32,
+        ERROR_DIRECTORY as i32,
+    ];
+    let unproven = [
+        ERROR_ACCESS_DENIED as i32,
+        ERROR_SHARING_VIOLATION as i32,
+        ERROR_CANT_RESOLVE_FILENAME as i32,
+        ERROR_INVALID_NAME as i32,
+        ERROR_INVALID_DRIVE as i32,
+        ERROR_BAD_NETPATH as i32,
+        ERROR_BAD_NET_NAME as i32,
+        ERROR_NOT_READY as i32,
+        ERROR_SYMLINK_CLASS_DISABLED as i32,
+    ];
     for code in absent {
         let error = std::io::Error::from_raw_os_error(code);
         assert!(link_target_is_absent(&error), "{error}: an absent target");
@@ -682,7 +657,9 @@ impl Drop for Denied {
 
 /// #1477 on Windows: a link whose target is missing is still unlinked, a
 /// file link with `DeleteFile` and a folder link with `RemoveDirectory`, and
-/// nothing reaches the Recycle Bin.
+/// nothing reaches the Recycle Bin. macOS and Linux trash such a link (#1495);
+/// Windows keeps unlinking it until the Recycle Bin is checked with one on a
+/// scratch VM (#1499).
 #[cfg(windows)]
 #[test]
 fn windows_a_link_whose_target_is_missing_is_still_unlinked() {
@@ -932,10 +909,12 @@ fn await_put_back_records(trashes: &Path, parent: &str, landed: &[String], items
     }
 }
 
-/// The links #1477 hands to the Trash, planted in `folder`: one to a file in
+/// One link of each unresolvable kind, planted in `folder`: one to a file in
 /// `locked`, which the caller locks (`EACCES`); one to itself and the head of
-/// a chain of 50 links that ends at a real file (`ELOOP`); and one whose
-/// target's name is too long (`ENAMETOOLONG`). Each name, with its text.
+/// a chain of 50 links that ends at a real file (`ELOOP`); one whose target's
+/// name is too long (`ENAMETOOLONG`); one to a missing file (`ENOENT`); and
+/// one whose target's path runs through a file (`ENOTDIR`). macOS and Linux
+/// trash every one as the link (#1477, #1495). Each name, with its text.
 #[cfg(any(target_os = "macos", target_os = "linux"))]
 fn plant_unresolvable_links(folder: &Path, locked: &Path) -> Vec<(&'static str, PathBuf)> {
     std::fs::create_dir_all(locked).unwrap();
@@ -945,21 +924,30 @@ fn plant_unresolvable_links(folder: &Path, locked: &Path) -> Vec<(&'static str, 
     std::fs::write(folder.join("end.md"), b"the chain's end").unwrap();
     link_chain(folder, 50, "end.md");
     std::os::unix::fs::symlink("x".repeat(300), folder.join("overlong.md")).unwrap();
-    ["unreachable.md", "cycle.md", "chain0.md", "overlong.md"]
-        .into_iter()
-        .map(|name| (name, std::fs::read_link(folder.join(name)).unwrap()))
-        .collect()
+    std::os::unix::fs::symlink("gone.md", folder.join("dangling.md")).unwrap();
+    std::os::unix::fs::symlink("end.md/x", folder.join("through-a-file.md")).unwrap();
+    [
+        "unreachable.md",
+        "cycle.md",
+        "chain0.md",
+        "overlong.md",
+        "dangling.md",
+        "through-a-file.md",
+    ]
+    .into_iter()
+    .map(|name| (name, std::fs::read_link(folder.join(name)).unwrap()))
+    .collect()
 }
 
 /// #1477 on the real macOS back end, on a scratch volume only (made and
 /// attached as for
 /// `real_trash_on_a_scratch_volume_lands_in_its_trashes_with_put_back_records`,
 /// and run by the same filter). `delete` hands `NSFileManager` each link
-/// whose target is not proven absent (`plant_unresolvable_links`): each lands
-/// in the volume's `.Trashes/<uid>` as the same object, a link whose text is
-/// unchanged, with its Put Back records, and the target behind the locked
-/// folder is untouched. The link to a missing file is unlinked and never
-/// reaches the Trash.
+/// of every unresolvable kind (`plant_unresolvable_links`), the truly
+/// dangling ones included since #1495: each lands in the volume's
+/// `.Trashes/<uid>` as the same object, a link whose text is unchanged, with
+/// its Put Back records, and the target behind the locked folder is
+/// untouched.
 #[cfg(target_os = "macos")]
 #[test]
 #[ignore = "needs a scratch volume in SLATE_TRASH_PROBE_VOLUME; never a real user's Trash"]
@@ -971,12 +959,14 @@ fn real_trash_on_a_scratch_volume_takes_each_unresolvable_link_as_the_link() {
     std::fs::create_dir_all(&sub).unwrap();
     let locked = volume.join(format!("locked-{}", std::process::id()));
     let links = plant_unresolvable_links(&sub, &locked);
-    std::os::unix::fs::symlink("gone.md", sub.join("dangling.md")).unwrap();
     let lock = Locked::new(&locked);
-    assert_eq!(
-        follow_errno(&sub.join("unreachable.md")),
-        Some(libc::EACCES)
-    );
+    for (link, errno) in [
+        ("unreachable.md", libc::EACCES),
+        ("dangling.md", libc::ENOENT),
+        ("through-a-file.md", libc::ENOTDIR),
+    ] {
+        assert_eq!(follow_errno(&sub.join(link)), Some(errno), "{link}");
+    }
     let items: Vec<String> = links
         .iter()
         .map(|(link, _)| format!("sub/{link}"))
@@ -986,10 +976,9 @@ fn real_trash_on_a_scratch_volume_takes_each_unresolvable_link_as_the_link() {
         .iter()
         .map(|item| identity(&vault.join(item)))
         .collect();
-    let dangling = identity(&sub.join("dangling.md"));
 
     let provider = real_system_trash_provider(vault.clone());
-    for item in items.iter().copied().chain(["sub/dangling.md"]) {
+    for item in items.iter().copied() {
         provider.delete(item).unwrap();
         assert!(
             vault.join(item).symlink_metadata().is_err(),
@@ -1006,12 +995,6 @@ fn real_trash_on_a_scratch_volume_takes_each_unresolvable_link_as_the_link() {
         );
         assert_eq!(&std::fs::read_link(&path).unwrap(), text, "{link}");
     }
-    assert!(
-        std::fs::read_dir(&trashes)
-            .unwrap()
-            .all(|entry| identity(&entry.unwrap().path()) != dangling),
-        "the dangling link is unlinked, never trashed"
-    );
     await_put_back_records(&trashes, &format!("/{name}/sub/"), &landed, &items);
     drop(lock);
     assert_eq!(
@@ -1186,9 +1169,10 @@ fn real_trash_on_linux_lands_in_a_scratch_home_trash() {
 
 /// #1477 on the real Linux back end, trash-rs's freedesktop Trash, through
 /// `real_trash_linux_child` with a scratch home Trash, on every Linux run.
-/// Each link whose target is not proven absent (`plant_unresolvable_links`)
-/// lands in that Trash's `files` as the link, its text unchanged, with its
-/// `.trashinfo` record, and the target behind the locked folder is untouched.
+/// A link of every unresolvable kind (`plant_unresolvable_links`), the truly
+/// dangling ones included since #1495, lands in that Trash's `files` as the
+/// link, its text unchanged, with the `.trashinfo` record that restores it,
+/// and the target behind the locked folder is untouched.
 #[cfg(target_os = "linux")]
 #[test]
 fn real_trash_on_linux_takes_each_unresolvable_link_as_the_link() {
@@ -1201,10 +1185,13 @@ fn real_trash_on_linux_takes_each_unresolvable_link_as_the_link() {
     let data_home = scratch_path.join("data");
     std::fs::create_dir(&data_home).unwrap();
     let lock = Locked::new(&locked);
-    assert_eq!(
-        follow_errno(&sub.join("unreachable.md")),
-        Some(libc::EACCES)
-    );
+    for (link, errno) in [
+        ("unreachable.md", libc::EACCES),
+        ("dangling.md", libc::ENOENT),
+        ("through-a-file.md", libc::ENOTDIR),
+    ] {
+        assert_eq!(follow_errno(&sub.join(link)), Some(errno), "{link}");
+    }
     let items: Vec<String> = links
         .iter()
         .map(|(link, _)| format!("sub/{link}"))
