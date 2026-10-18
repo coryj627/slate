@@ -772,7 +772,8 @@ Facts by PR:
   and `session/tests/link_pass.rs`, the guard as
   `perf_guard_unresolved_link_rescan_within_twice_the_link_free_one`
   in its own rust-lane step, plus
-  `a_failed_snapshot_read_leaves_the_rescan_incomplete_and_resolves_nothing`.
+  `a_failed_snapshot_read_leaves_the_rescan_incomplete_and_resolves_nothing`
+  and `every_resolution_snapshot_is_read_through_the_path_order_helper`.
 - **20a.** §4.7's core facts.
 - **20b and 20c.** §4.7's host facts.
 
