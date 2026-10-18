@@ -369,6 +369,38 @@ pub(super) fn translate(root: &Path, result: notify::Result<notify::Event>) -> V
     out
 }
 
+/// #1498 (plan 43 PR 20b): `path`'s final component as its volume's 8.3
+/// short name, when the volume made one that differs from the long name
+/// (`.slate` is `SLATE~1`). `None` where the volume makes no 8.3 names, or
+/// the path cannot be read.
+#[cfg(all(test, windows))]
+pub(crate) fn short_name_for_tests(path: &Path) -> Option<std::ffi::OsString> {
+    use std::os::windows::ffi::{OsStrExt as _, OsStringExt as _};
+    use windows_sys::Win32::Storage::FileSystem::GetShortPathNameW;
+    let wide: Vec<u16> = path.as_os_str().encode_wide().chain(Some(0)).collect();
+    let mut buffer = vec![0u16; 32 * 1024];
+    let capacity = u32::try_from(buffer.len()).ok()?;
+    // SAFETY: `wide` is NUL-terminated, and `buffer` is writable for the
+    // `capacity` UTF-16 units passed with it.
+    let written = unsafe { GetShortPathNameW(wide.as_ptr(), buffer.as_mut_ptr(), capacity) };
+    let written = usize::try_from(written).ok()?;
+    if written == 0 || written >= buffer.len() {
+        return None;
+    }
+    let short = PathBuf::from(std::ffi::OsString::from_wide(&buffer[..written]));
+    let name = short.file_name()?.to_os_string();
+    (Some(name.as_os_str()) != path.file_name()).then_some(name)
+}
+
+/// #1498: a line of evidence for the Windows lane's log, written past
+/// libtest's capture (which takes only the `print!` family) so it shows for a
+/// passing fact too.
+#[cfg(all(test, windows))]
+pub(crate) fn report_evidence_for_tests(line: &str) {
+    use std::io::Write as _;
+    let _ = writeln!(std::io::stderr(), "{line}");
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -753,6 +785,63 @@ mod tests {
                 assert!(
                     ["sub", "visible.md"].contains(&name),
                     "only the visible writes may reach the sink: {event:?}"
+                );
+            }
+        }
+    }
+
+    /// #1498 (plan 43 PR 20b): ReadDirectoryChangesW names an entry by its
+    /// long name or by its 8.3 short name ("it is unspecified which one"),
+    /// and the cache folder's short name (`SLATE~1`) has no leading dot.
+    /// Writes into the cache through that spelling — creates, a rewrite, a
+    /// rename and deletes — never reach the sink: the sentinel written last
+    /// proves they were reported and dropped. A volume that makes no 8.3
+    /// names gives no writer that spelling, and the fact records so.
+    #[cfg(windows)]
+    #[test]
+    fn the_slate_cache_is_hidden_under_its_short_name_too() {
+        let (tmp, sink, _handle) =
+            watched_after(|root| std::fs::create_dir_all(root.join(".slate").join("tmp")).unwrap());
+        let root = tmp.path();
+        let short = short_name_for_tests(&root.join(".slate"));
+        report_evidence_for_tests(&format!(
+            "#1498 evidence: the cache folder's 8.3 name on this volume: {short:?} (vault {root:?})"
+        ));
+        let Some(short) = short else {
+            return;
+        };
+        let cache = root.join(&short);
+        std::fs::write(cache.join("probe-1498.tmp"), b"by the short name").unwrap();
+        std::fs::write(
+            cache.join("probe-1498.tmp"),
+            b"by the short name, again and longer",
+        )
+        .unwrap();
+        std::fs::write(cache.join("tmp").join("staged-1498.tmp"), b"staged").unwrap();
+        std::fs::rename(
+            cache.join("tmp").join("staged-1498.tmp"),
+            cache.join("renamed-1498.tmp"),
+        )
+        .unwrap();
+        std::fs::remove_file(cache.join("probe-1498.tmp")).unwrap();
+        std::fs::remove_file(cache.join("renamed-1498.tmp")).unwrap();
+        std::fs::write(root.join("visible.md"), b"seen").unwrap();
+
+        assert!(
+            sink.wait_for("visible.md", DELIVERY),
+            "{:?}",
+            sink.snapshot()
+        );
+        std::thread::sleep(Duration::from_millis(300));
+        let events = sink.snapshot();
+        report_evidence_for_tests(&format!(
+            "#1498 evidence: what reached the sink after the short-name writes: {events:?}"
+        ));
+        for event in &events {
+            for name in RecordingSink::names(event) {
+                assert_eq!(
+                    name, "visible.md",
+                    "a write into the cache by its short name reached the sink: {event:?}"
                 );
             }
         }

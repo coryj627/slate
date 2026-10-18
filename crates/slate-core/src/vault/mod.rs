@@ -90,6 +90,8 @@ pub use provider::{
 #[cfg(test)]
 pub(crate) use watch::RootAnchor;
 pub(crate) use watch::RootIdentity;
+#[cfg(all(test, windows))]
+pub(crate) use watch::{report_evidence_for_tests, short_name_for_tests};
 
 #[cfg(windows)]
 mod windows_entry;
