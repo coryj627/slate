@@ -266,30 +266,48 @@ function Register-HostFailure {
 function Register-HostSuccess {
     # A runner took its job: provisioning, boot, handoff, network and
     # registration all worked, so the failures before it are forgotten,
-    # and so are the retry strikes of every job if the breaker had tripped:
-    # those strikes were the host's doing, and the jobs it gave up on must
-    # not stay stranded once it serves again (#1482). A host that never
-    # tripped keeps a job's strikes: with other lanes claiming, three
-    # strikes mean that job or its lane, not the host.
+    # and so are the retry strikes if the breaker had tripped (under the
+    # lane rule of Clear-JobRetries): the jobs the host gave up on must not
+    # stay stranded once it serves again (#1482). A host that never tripped
+    # keeps a job's strikes: with other lanes claiming, three strikes mean
+    # that job or its lane, not the host.
     [CmdletBinding()]
     param([Parameter(Mandatory)]$Journal, [Parameter(Mandatory)][hashtable]$Adapters)
     $health = Get-HostHealth -Journal $Journal
     $failures = [int]$health['Failures']
     if ($failures -gt 0) { & $Adapters.Log 'info' "health: a runner took its job; $failures failures in a row forgotten" }
-    if ($null -ne $health['TrippedAt']) { Clear-JobRetries -Journal $Journal -Adapters $Adapters }
+    if ($null -ne $health['TrippedAt']) { Clear-JobRetries -Journal $Journal -Adapters $Adapters -Reason 'because a runner took its job' }
     Reset-HostHealth -Journal $Journal
 }
 
 function Clear-JobRetries {
     # Every job's retry strikes forgotten, so the jobs the host gave up on
     # (at the cap, or still in back-off) are admitted again and count in
-    # the published queue. Logged when there was something to forget.
+    # the published queue. Only when the strikes span more than one lane:
+    # strikes that all fall on one lane, with the breaker tripped by them
+    # alone on an idle host, look like that lane's fault (a bad cache
+    # parent, a lane-specific bootstrap failure), and forgiving them would
+    # trip the breaker again at every half-open and hold the whole host
+    # not serving. That lane's job stays capped as before, until its run is
+    # cancelled or GitHub drops it. -Force skips the rule: a loop restart
+    # is the repair. Logged either way, when there was something to weigh.
     [CmdletBinding()]
-    param([Parameter(Mandatory)]$Journal, [Parameter(Mandatory)][hashtable]$Adapters)
-    $struck = @($Journal.Retries.Keys).Count
-    if ($struck -eq 0) { return }
+    param([Parameter(Mandatory)]$Journal, [Parameter(Mandatory)][hashtable]$Adapters, [string]$Reason = '', [switch]$Force)
+    if (-not ($Journal['Retries'] -is [System.Collections.IDictionary])) { return }
+    $keys = @($Journal.Retries.Keys)
+    if ($keys.Count -eq 0) { return }
+    $lanes = @($keys | ForEach-Object {
+        $seen = $null
+        if ($Journal['SeenJobs'] -is [System.Collections.IDictionary] -and $Journal.SeenJobs.Contains($_)) { $seen = $Journal.SeenJobs[$_] }
+        if ($null -ne $seen -and $seen['Lane']) { [string]$seen['Lane'] } else { '?' }
+    } | Sort-Object -Unique)
+    $jobs = '{0} {1}' -f $keys.Count, $(if ($keys.Count -eq 1) { 'job' } else { 'jobs' })
+    if (-not $Force -and $lanes.Count -lt 2) {
+        & $Adapters.Log 'info' ("health: retry strikes of {0} kept: all on lane {1}, which looks like that lane's fault, not the host's" -f $jobs, $lanes[0])
+        return
+    }
     $Journal.Retries.Clear()
-    & $Adapters.Log 'info' "health: retry strikes of $struck jobs forgotten; they are admitted again"
+    & $Adapters.Log 'info' ("health: retry strikes of {0} forgotten (lanes {1}){2}; they are admitted again" -f $jobs, ($lanes -join ', '), $(if ($Reason) { " $Reason" } else { '' }))
 }
 
 function Reset-HostHealth {
@@ -314,7 +332,7 @@ function Update-HostHealth {
     if (-not (Test-HostCooledDown -Config $Config -Health $health -Now $Now)) { return }
     $health['HalfOpenAt'] = $Now.ToString('o')
     & $Adapters.Log 'info' "health: serving again after $(Format-BreakerCooldown -Config $Config) without a failure; the next failure trips it at once"
-    Clear-JobRetries -Journal $Journal -Adapters $Adapters
+    Clear-JobRetries -Journal $Journal -Adapters $Adapters -Reason 'after the cool-down'
 }
 
 function Test-VmExpired {
@@ -1386,9 +1404,14 @@ function Invoke-StartupSweep {
     }
     $Journal['LogsPrunedOn'] = $null
     # The breaker: a restart is what follows a repair, so the failures in a
-    # row are forgotten and the next state says serving.
-    $failures = [int](Get-HostHealth -Journal $Journal)['Failures']
+    # row are forgotten and the next state says serving. After a trip the
+    # retry strikes go too, whatever their lanes, even with a VM kept (the
+    # table is otherwise cleared only when nothing is kept): the jobs the
+    # host gave up on must not wait on a half-open that a reset never brings.
+    $health = Get-HostHealth -Journal $Journal
+    $failures = [int]$health['Failures']
     if ($failures -gt 0) { & $Adapters.Log 'info' "health: $failures failures in a row forgotten at start" }
+    if ($null -ne $health['TrippedAt']) { Clear-JobRetries -Journal $Journal -Adapters $Adapters -Reason 'at start' -Force }
     Reset-HostHealth -Journal $Journal
 }
 
