@@ -46,7 +46,9 @@
 //!   over is derived from the pinned parent of a no-follow walk and must
 //!   lie beneath the vault root (`trash_handoff`, #1450). On platforms
 //!   without trash support the call returns `VaultError::Trash`; the
-//!   engine does not silently fall back to permanent deletion.
+//!   engine does not silently fall back to permanent deletion. Tests
+//!   trash into scratch bins, never the Trash of whoever runs them
+//!   (`trash_handoff`, #1455).
 
 mod fs;
 mod provider;
@@ -55,6 +57,7 @@ mod trash_snapshot;
 
 #[cfg(test)]
 pub(crate) use trash_handoff::ScratchTrash;
+pub use trash_handoff::{route_trash_to_scratch_bin_for_tests, scratch_trash_bin_for_tests};
 
 pub use trash_snapshot::TrashSnapshot;
 
@@ -70,3 +73,6 @@ mod windows_entry;
 
 #[cfg(all(test, windows))]
 mod test_support;
+
+#[cfg(test)]
+mod test_trash_census;

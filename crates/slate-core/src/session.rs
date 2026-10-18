@@ -2987,6 +2987,11 @@ impl VaultSession {
     /// The vault root must already exist as a directory. A typo'd path
     /// would otherwise `create_dir_all` its way into existence under
     /// `open`, silently materializing a fresh empty vault on disk.
+    ///
+    /// Its Trash is the system Trash. Only a test process differs (#1455):
+    /// core's test build trashes into a scratch bin per provider, and a host's
+    /// test process that called `route_trash_to_scratch_bin_for_tests`
+    /// trashes into that bin.
     pub fn from_filesystem(root: PathBuf) -> Result<Self, VaultError> {
         // The desktop/host default is the single-user `"local"` actor
         // (`SessionConfig::new`). The op-log attribution plumbing lives
