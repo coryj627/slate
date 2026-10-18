@@ -112,6 +112,11 @@ final class VaultEventAdapter: VaultEventListener, @unchecked Sendable {
     func onIndexPhase(phase: IndexPhase, filesSeen: UInt64) {
         onIndexPhaseHook?(phase, filesSeen)
     }
+
+    /// Plan 43 PR 20a (#1267): the core vault watcher's burst signal. A no-op
+    /// until PR 20c wires it to a Watcher-reason rescan; mac does not call
+    /// `startWatching()` before then, so core never calls this.
+    func onExternalChange() {}
 }
 
 extension AppState {

@@ -12,12 +12,13 @@
 
 use std::io::Write;
 use std::path::{Component, Path, PathBuf};
-use std::sync::Arc;
-use std::time::UNIX_EPOCH;
+use std::sync::{Arc, Mutex, PoisonError};
+use std::time::{Instant, UNIX_EPOCH};
 use std::{fs, io};
 
 use crate::VaultError;
 
+use super::echo_ledger::{EchoLedger, EchoState, ancestor_keys, ledger_key};
 use super::provider::{DirEntry, EntryKind, FileEventSink, FileStat, VaultProvider, WatchHandle};
 use super::trash_handoff::SystemTrash;
 
@@ -30,6 +31,9 @@ pub struct FsVaultProvider {
     root: PathBuf,
     /// The system Trash call `delete` hands the pinned path to (#1450).
     trash: Arc<dyn SystemTrash>,
+    /// What this provider's own mutations left behind, for the vault
+    /// watcher's echo test (plan 43 PR 20a, #1267; `super::echo_ledger`).
+    echo: Mutex<EchoLedger>,
 }
 
 /// A mutation destination whose containing directory is held open for the
@@ -129,6 +133,7 @@ impl FsVaultProvider {
         Self {
             root,
             trash: super::trash_handoff::default_trash(),
+            echo: Mutex::new(EchoLedger::default()),
         }
     }
 
@@ -154,6 +159,76 @@ impl FsVaultProvider {
 
     fn resolve(&self, relative: &str) -> Result<PathBuf, VaultError> {
         resolve_relative(&self.root, relative)
+    }
+
+    /// Plan 43 PR 20a (#1267; design §4.2): a completed mutation's post-state
+    /// goes in the echo ledger, so the watcher's coalescer drops the events it
+    /// caused. Every Slate write into the vault reaches one of the seven
+    /// mutators that call this — saves, link rewrites, creates (imports and
+    /// attachments too), folders, moves, undo and redo, Trash — so the ledger
+    /// is complete by construction; a failed mutation records nothing.
+    fn recorded(
+        &self,
+        relatives: &[&str],
+        result: Result<(), VaultError>,
+    ) -> Result<(), VaultError> {
+        if result.is_ok() {
+            self.record_echoes(relatives);
+        }
+        result
+    }
+
+    /// Observe and record `relatives` and every folder above them, right
+    /// after the mutation. The folders are recorded because a mutation
+    /// changes the folder that holds its entry (ReadDirectoryChangesW reports
+    /// that folder's last-write change) and a create or a move can make
+    /// missing folders. The stats run outside the ledger's lock.
+    fn record_echoes(&self, relatives: &[&str]) {
+        let mut keys: Vec<String> = Vec::new();
+        for relative in relatives {
+            let Some(key) = ledger_key(relative) else {
+                continue;
+            };
+            for folder in ancestor_keys(&key) {
+                if !keys.iter().any(|known| known == folder) {
+                    keys.push(folder.to_string());
+                }
+            }
+            if !keys.contains(&key) {
+                keys.push(key);
+            }
+        }
+        let observed: Vec<(String, Option<EchoState>)> = keys
+            .into_iter()
+            .map(|key| {
+                let state = self.echo_state(&key);
+                (key, state)
+            })
+            .collect();
+        let mut ledger = self.echo.lock().unwrap_or_else(PoisonError::into_inner);
+        let now = Instant::now();
+        for (key, state) in observed {
+            ledger.record(now, key, state);
+        }
+    }
+
+    /// A path's state as the echo test compares it, through the same `stat`
+    /// at record time and at test time. `None` when it cannot be observed
+    /// (permission denied, an invalid spelling): such a path is never an
+    /// echo.
+    fn echo_state(&self, key: &str) -> Option<EchoState> {
+        match self.stat(key) {
+            Ok(stat) => Some(EchoState::Present {
+                size_bytes: stat.size_bytes,
+                mtime_ms: stat.mtime_ms,
+                ctime_ms: stat.ctime_ms,
+                kind: stat.kind,
+            }),
+            Err(VaultError::Io(error)) if error.kind() == io::ErrorKind::NotFound => {
+                Some(EchoState::Absent)
+            }
+            Err(_) => None,
+        }
     }
 
     /// Like `resolve`, but rejects paths that resolve to the vault root.
@@ -1433,25 +1508,23 @@ impl VaultProvider for FsVaultProvider {
         // Beneath the pinned root, so a folder swapped for a link (#1452) or
         // a junction (#1451) refuses instead of redirecting the save.
         #[cfg(any(unix, windows))]
-        {
-            self.write_file_beneath_root(relative, contents, || Ok(()))
-        }
+        let written = self.write_file_beneath_root(relative, contents, || Ok(()));
         #[cfg(not(any(unix, windows)))]
-        {
-            let path = self.resolve_for_mutation(relative)?;
-            atomic_write(&path, &self.tmp_dir(), contents)?;
-            Ok(())
-        }
+        let written = self.resolve_for_mutation(relative).and_then(|path| {
+            atomic_write(&path, &self.tmp_dir(), contents).map_err(VaultError::from)
+        });
+        self.recorded(&[relative], written)
     }
 
     fn write_file_if_absent(&self, relative: &str, contents: &[u8]) -> Result<(), VaultError> {
-        self.write_file_if_absent_with_staging(
+        let created = self.write_file_if_absent_with_staging(
             relative,
             contents,
             |file, contents| file.write_all(contents),
             fs::File::sync_data,
             publish_staged_no_replace,
-        )
+        );
+        self.recorded(&[relative], created)
     }
 
     /// Move an entry to the system Trash. The path handed to the Trash is
@@ -1462,67 +1535,8 @@ impl VaultProvider for FsVaultProvider {
     /// vault. Nothing is mutated by a refusal. `trash_handoff` records what
     /// remains.
     fn delete(&self, relative: &str) -> Result<(), VaultError> {
-        #[cfg(unix)]
-        {
-            let path = self.resolve_for_mutation(relative)?;
-            // The structural rename's pinned walk (#1449): a link or a
-            // non-folder among the item's ancestors is its typed refusal.
-            let root = pinned_root::PinnedRoot::open(&self.root)?;
-            let item = root.end(self.vault_relative(&path, relative)?, relative, false)?;
-
-            // Every entry goes to the Trash, and a symbolic link goes as the
-            // link itself whether or not its target resolves, so Move to Trash
-            // never deletes for good (#1495; NSFileManager and trash-rs both
-            // move a dangling link as the link, and Put Back restores it). The
-            // look does not follow the leaf, so a missing entry is NotFound
-            // and never reaches the Trash, a broken symlink still counts as
-            // present, and its io::Error keeps permission-denied (etc.) from
-            // being masked as NotFound.
-            item.require_present().map_err(VaultError::Io)?;
-
-            let handed = super::trash_handoff::pinned_path(
-                root.descriptor(),
-                item.parent(),
-                item.leaf(),
-                relative,
-            )?;
-            self.trash.trash(&handed)
-        }
-
-        #[cfg(windows)]
-        {
-            let path = self.resolve_for_mutation(relative)?;
-            let vault_relative =
-                path.strip_prefix(&self.root)
-                    .map_err(|_| VaultError::InvalidPath {
-                        path: relative.to_string(),
-                        reason: "mutation destination is not beneath the vault root".into(),
-                    })?;
-            let handed = super::trash_handoff::pinned_path(&self.root, vault_relative, relative)?;
-            // `symlink_metadata` does not follow the leaf, so a broken symlink
-            // still passes; the raw io::Error keeps its kind.
-            let meta = handed.symlink_metadata().map_err(VaultError::Io)?;
-            // Windows alone still unlinks a link whose target the system
-            // reports absent: the Recycle Bin may reject one, and nobody has
-            // checked (#1499; macOS and Linux trash it, #1495). A link whose
-            // target Slate cannot open, a loop, or any other failure goes to
-            // the Recycle Bin as the link (#1477).
-            if meta.file_type().is_symlink()
-                && fs::metadata(&handed)
-                    .is_err_and(|error| super::trash_handoff::link_target_is_absent(&error))
-            {
-                return unlink_dangling_symlink(&handed, &meta).map_err(VaultError::Io);
-            }
-            self.trash.trash(&handed)
-        }
-
-        #[cfg(not(any(unix, windows)))]
-        {
-            self.resolve_for_mutation(relative)?;
-            Err(VaultError::Trash {
-                message: "Moving items to the Trash is unavailable on this platform".into(),
-            })
-        }
+        let trashed = self.trash_entry(relative);
+        self.recorded(&[relative], trashed)
     }
 
     fn create_dir(&self, relative: &str) -> Result<(), VaultError> {
@@ -1532,27 +1546,27 @@ impl VaultProvider for FsVaultProvider {
         // #1451: Windows makes each in its pinned parent's handle, and a
         // junction, a symbolic link or a non-folder is (`windows_entry`).
         #[cfg(any(unix, windows))]
-        {
-            self.create_dir_beneath_root(relative, || Ok(()))
-        }
+        let created = self.create_dir_beneath_root(relative, || Ok(()));
         #[cfg(not(any(unix, windows)))]
-        {
-            let path = self.resolve_for_mutation(relative)?;
-            std::fs::create_dir_all(&path).map_err(VaultError::from)
-        }
+        let created = self
+            .resolve_for_mutation(relative)
+            .and_then(|path| std::fs::create_dir_all(&path).map_err(VaultError::from));
+        self.recorded(&[relative], created)
     }
 
     fn create_dir_if_absent(&self, relative: &str) -> Result<(), VaultError> {
-        let destination = self.pin_mutation_target(relative, false, Mutation::CreateFolder)?;
-        match destination.create_dir_if_absent() {
-            Ok(()) => Ok(()),
-            Err(error) if error.kind() == io::ErrorKind::AlreadyExists => {
-                Err(VaultError::DestinationExists {
-                    path: relative.to_string(),
-                })
-            }
-            Err(error) => Err(destination.failure(error)),
-        }
+        let created = self
+            .pin_mutation_target(relative, false, Mutation::CreateFolder)
+            .and_then(|destination| match destination.create_dir_if_absent() {
+                Ok(()) => Ok(()),
+                Err(error) if error.kind() == io::ErrorKind::AlreadyExists => {
+                    Err(VaultError::DestinationExists {
+                        path: relative.to_string(),
+                    })
+                }
+                Err(error) => Err(destination.failure(error)),
+            });
+        self.recorded(&[relative], created)
     }
 
     #[cfg(windows)]
@@ -1568,29 +1582,13 @@ impl VaultProvider for FsVaultProvider {
 
     #[cfg(windows)]
     fn rename_if_identity(&self, from: &str, to: &str, expected: &str) -> Result<(), VaultError> {
-        let from = self.resolve_for_mutation(from)?;
-        let to = self.resolve_for_mutation(to)?;
-        let relative = |path: &std::path::Path| {
-            path.strip_prefix(&self.root)
-                .map(std::path::Path::to_path_buf)
-                .map_err(|_| VaultError::InvalidArgument {
-                    message: "Mutation path is outside the vault".into(),
-                })
-        };
-        super::windows_entry::rename(&self.root, &relative(&from)?, &relative(&to)?, expected)
+        let renamed = self.rename_if_identity_unrecorded(from, to, expected);
+        self.recorded(&[from, to], renamed)
     }
 
     fn rename(&self, from: &str, to: &str) -> Result<(), VaultError> {
-        let from_path = self.resolve_for_mutation(from)?;
-        let to_path = self.resolve_for_mutation(to)?;
-        #[cfg(any(unix, windows))]
-        {
-            self.rename_beneath_root(from, &from_path, to, &to_path, || Ok(()))
-        }
-        #[cfg(not(any(unix, windows)))]
-        {
-            self.rename_by_path(from, &from_path, to, &to_path)
-        }
+        let renamed = self.rename_unrecorded(from, to);
+        self.recorded(&[from, to], renamed)
     }
 
     fn preflight_rename(&self, from: &str, to: &str) -> Result<(), VaultError> {
@@ -1749,11 +1747,30 @@ impl VaultProvider for FsVaultProvider {
         })
     }
 
-    fn watch(&self, _sink: Arc<dyn FileEventSink>) -> Result<Option<WatchHandle>, VaultError> {
-        // Real watcher is a follow-up issue. For Milestone A, returning
-        // None tells the session to fall back to refresh-on-foreground
-        // semantics, which works for the tester build.
-        Ok(None)
+    /// Plan 43 PR 20a (#1267): one recursive watch on the exact root this
+    /// provider resolves against (on Windows its extended-length form),
+    /// filtered by the scanner's hidden-path rule and anchored to the root's
+    /// identity (`super::watch`).
+    fn watch(&self, sink: Arc<dyn FileEventSink>) -> Result<Option<WatchHandle>, VaultError> {
+        super::watch::watch_root(&self.root, sink)
+    }
+
+    /// Plan 43 PR 20a (design §4.2): `relative` is an echo when its current
+    /// state equals the newest post-state this provider recorded for it
+    /// within the ledger's 60 s.
+    fn is_own_echo(&self, relative: &str) -> bool {
+        let Some(key) = ledger_key(relative) else {
+            return false;
+        };
+        let expected = {
+            let ledger = self.echo.lock().unwrap_or_else(PoisonError::into_inner);
+            match ledger.expected(Instant::now(), &key) {
+                Some(state) => state.clone(),
+                None => return false,
+            }
+        };
+        self.echo_state(&key)
+            .is_some_and(|current| current == expected)
     }
 
     fn read_in_vault_with_cap(
@@ -1819,6 +1836,106 @@ impl VaultProvider for FsVaultProvider {
         let mut buf: Vec<u8> = Vec::with_capacity(cap.min(64 * 1024) as usize);
         handle.read_to_end(&mut buf)?;
         Ok(buf)
+    }
+}
+
+impl FsVaultProvider {
+    /// [`VaultProvider::delete`]'s body; the trait method records its echo.
+    fn trash_entry(&self, relative: &str) -> Result<(), VaultError> {
+        #[cfg(unix)]
+        {
+            let path = self.resolve_for_mutation(relative)?;
+            // The structural rename's pinned walk (#1449): a link or a
+            // non-folder among the item's ancestors is its typed refusal.
+            let root = pinned_root::PinnedRoot::open(&self.root)?;
+            let item = root.end(self.vault_relative(&path, relative)?, relative, false)?;
+
+            // Every entry goes to the Trash, and a symbolic link goes as the
+            // link itself whether or not its target resolves, so Move to Trash
+            // never deletes for good (#1495; NSFileManager and trash-rs both
+            // move a dangling link as the link, and Put Back restores it). The
+            // look does not follow the leaf, so a missing entry is NotFound
+            // and never reaches the Trash, a broken symlink still counts as
+            // present, and its io::Error keeps permission-denied (etc.) from
+            // being masked as NotFound.
+            item.require_present().map_err(VaultError::Io)?;
+
+            let handed = super::trash_handoff::pinned_path(
+                root.descriptor(),
+                item.parent(),
+                item.leaf(),
+                relative,
+            )?;
+            self.trash.trash(&handed)
+        }
+
+        #[cfg(windows)]
+        {
+            let path = self.resolve_for_mutation(relative)?;
+            let vault_relative =
+                path.strip_prefix(&self.root)
+                    .map_err(|_| VaultError::InvalidPath {
+                        path: relative.to_string(),
+                        reason: "mutation destination is not beneath the vault root".into(),
+                    })?;
+            let handed = super::trash_handoff::pinned_path(&self.root, vault_relative, relative)?;
+            // `symlink_metadata` does not follow the leaf, so a broken symlink
+            // still passes; the raw io::Error keeps its kind.
+            let meta = handed.symlink_metadata().map_err(VaultError::Io)?;
+            // Windows alone still unlinks a link whose target the system
+            // reports absent: the Recycle Bin may reject one, and nobody has
+            // checked (#1499; macOS and Linux trash it, #1495). A link whose
+            // target Slate cannot open, a loop, or any other failure goes to
+            // the Recycle Bin as the link (#1477).
+            if meta.file_type().is_symlink()
+                && fs::metadata(&handed)
+                    .is_err_and(|error| super::trash_handoff::link_target_is_absent(&error))
+            {
+                return unlink_dangling_symlink(&handed, &meta).map_err(VaultError::Io);
+            }
+            self.trash.trash(&handed)
+        }
+
+        #[cfg(not(any(unix, windows)))]
+        {
+            self.resolve_for_mutation(relative)?;
+            Err(VaultError::Trash {
+                message: "Moving items to the Trash is unavailable on this platform".into(),
+            })
+        }
+    }
+
+    #[cfg(windows)]
+    fn rename_if_identity_unrecorded(
+        &self,
+        from: &str,
+        to: &str,
+        expected: &str,
+    ) -> Result<(), VaultError> {
+        let from = self.resolve_for_mutation(from)?;
+        let to = self.resolve_for_mutation(to)?;
+        let relative = |path: &std::path::Path| {
+            path.strip_prefix(&self.root)
+                .map(std::path::Path::to_path_buf)
+                .map_err(|_| VaultError::InvalidArgument {
+                    message: "Mutation path is outside the vault".into(),
+                })
+        };
+        super::windows_entry::rename(&self.root, &relative(&from)?, &relative(&to)?, expected)
+    }
+
+    /// [`VaultProvider::rename`]'s body; the trait method records its echo.
+    fn rename_unrecorded(&self, from: &str, to: &str) -> Result<(), VaultError> {
+        let from_path = self.resolve_for_mutation(from)?;
+        let to_path = self.resolve_for_mutation(to)?;
+        #[cfg(any(unix, windows))]
+        {
+            self.rename_beneath_root(from, &from_path, to, &to_path, || Ok(()))
+        }
+        #[cfg(not(any(unix, windows)))]
+        {
+            self.rename_by_path(from, &from_path, to, &to_path)
+        }
     }
 }
 
@@ -2523,16 +2640,120 @@ mod tests {
         assert_eq!(h, content_hash(b"abc"));
     }
 
+    /// Plan 43 PR 20a (#1267) replaces `watch_returns_none_in_milestone_a`
+    /// on the owner's recorded call (2026-10-17, design §11: the watcher
+    /// lands in core behind `watch`; the TGC-17 rule rewrites the frozen fact
+    /// before the code changes): a local vault's watch is a live handle,
+    /// anchored to its root, and an external write reaches its sink.
     #[test]
-    fn watch_returns_none_in_milestone_a() {
-        let (_tmp, p) = vault();
-        struct NullSink;
-        impl FileEventSink for NullSink {
-            fn on_event(&self, _event: super::super::provider::FileEvent) {}
+    fn watch_returns_a_live_handle_on_a_local_vault() {
+        use super::super::provider::FileEvent;
+        use std::sync::{Condvar, Mutex};
+        use std::time::{Duration, Instant};
+
+        #[derive(Default)]
+        struct Recording(Mutex<Vec<FileEvent>>, Condvar);
+        impl FileEventSink for Recording {
+            fn on_event(&self, event: FileEvent) {
+                self.0.lock().unwrap().push(event);
+                self.1.notify_all();
+            }
         }
-        let sink: Arc<dyn FileEventSink> = Arc::new(NullSink);
-        let result = p.watch(sink).unwrap();
-        assert!(result.is_none());
+
+        let (tmp, p) = vault();
+        let sink = Arc::new(Recording::default());
+        let handle = p
+            .watch(sink.clone())
+            .unwrap()
+            .expect("a live watch on a local vault");
+        assert!(handle.arm_identity().is_some(), "anchored at arm time");
+        assert!(handle.root_still_anchored());
+
+        std::fs::write(tmp.path().join("external.md"), b"x").unwrap();
+        let deadline = Instant::now() + Duration::from_secs(10);
+        let mut events = sink.0.lock().unwrap();
+        while !events.iter().any(|event| {
+            matches!(event,
+                FileEvent::Created { relative } | FileEvent::Modified { relative }
+                    if relative == "external.md")
+        }) {
+            let now = Instant::now();
+            assert!(
+                now < deadline,
+                "the external write never arrived: {events:?}"
+            );
+            events = sink.1.wait_timeout(events, deadline - now).unwrap().0;
+        }
+        drop(events);
+        drop(handle);
+    }
+
+    /// Plan 43 PR 20a (design §4.2): every mutation the provider completes
+    /// records its post-state, and the folders above it, so the watcher's echo
+    /// test claims the events it caused; an external change after it, or a
+    /// path the provider never touched, is no echo.
+    #[test]
+    fn every_provider_mutation_records_its_post_state_as_an_echo() {
+        let (tmp, p) = vault();
+        let disk = |relative: &str| tmp.path().join(relative);
+
+        // A save into new folders, then an overwrite.
+        p.write_file("a/b/note.md", b"one").unwrap();
+        for echo in ["a/b/note.md", "a/b", "a"] {
+            assert!(p.is_own_echo(echo), "{echo}");
+        }
+        p.write_file("a/b/note.md", b"two!").unwrap();
+        assert!(p.is_own_echo("a/b/note.md"));
+        std::fs::write(disk("a/b/note.md"), b"an external edit").unwrap();
+        assert!(
+            !p.is_own_echo("a/b/note.md"),
+            "an external write is no echo"
+        );
+
+        // An exclusive create and two folder creates.
+        p.write_file_if_absent("c/new.md", b"new").unwrap();
+        assert!(p.is_own_echo("c/new.md") && p.is_own_echo("c"));
+        p.create_dir("d/e").unwrap();
+        assert!(p.is_own_echo("d/e") && p.is_own_echo("d"));
+        p.create_dir_if_absent("f").unwrap();
+        assert!(p.is_own_echo("f"));
+
+        // A move: the old path's absence and the new path are both echoes.
+        p.rename("c/new.md", "g/moved.md").unwrap();
+        for echo in ["c/new.md", "c", "g/moved.md", "g"] {
+            assert!(p.is_own_echo(echo), "{echo}");
+        }
+        std::fs::write(disk("c/new.md"), b"back").unwrap();
+        assert!(!p.is_own_echo("c/new.md"), "a file recreated outside Slate");
+
+        // Trash: the entry's absence is the echo.
+        p.delete("g/moved.md").unwrap();
+        assert!(p.is_own_echo("g/moved.md") && p.is_own_echo("g"));
+
+        // Paths the provider never wrote, and refusals, record nothing.
+        std::fs::write(disk("untouched.md"), b"x").unwrap();
+        assert!(!p.is_own_echo("untouched.md"));
+        assert!(!p.is_own_echo("never-existed.md"));
+        assert!(p.write_file_if_absent("untouched.md", b"y").is_err());
+        assert!(
+            !p.is_own_echo("untouched.md"),
+            "a refused create is no echo"
+        );
+        assert!(!p.is_own_echo(""), "the root is never an echo");
+    }
+
+    /// Plan 43 PR 20a: a backslash is part of a name on Unix, so Slate's
+    /// write of `a\b.md` is that file's echo and never claims an external
+    /// write to the nested `a/b.md`.
+    #[cfg(unix)]
+    #[test]
+    fn a_backslash_in_a_unix_name_never_claims_another_path() {
+        let (tmp, p) = vault();
+        std::fs::create_dir(tmp.path().join("a")).unwrap();
+        std::fs::write(tmp.path().join("a").join("b.md"), b"written outside").unwrap();
+        p.write_file(r"a\b.md", b"written by slate").unwrap();
+        assert!(p.is_own_echo(r"a\b.md"));
+        assert!(!p.is_own_echo("a/b.md"), "the nested file is not Slate's");
     }
 
     #[cfg(unix)]
