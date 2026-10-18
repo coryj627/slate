@@ -1537,6 +1537,20 @@ Context 'health breaker' {
         (Get-Calls 'NewVm').Count | Should -Be 4
         $journal.Vms.Count | Should -Be 2
     }
+    It 'does not hold strikes whose lanes are no longer known against the one-lane rule' {
+        # The seen-job records of the struck jobs were pruned: an unknown
+        # lane is not "one lane", so the half-open forgives them.
+        $adapters.NewVm = { param($n, $l); if ($l -eq 'model') { & $script:record 'NewVm' @($n, $l); throw 'cache parent unreadable' }; & $script:workingNewVm $n $l }
+        $world.Queued = @((New-QueuedJob 1 10 'model'))
+        foreach ($s in 0, 610, 1220) { Invoke-OrchestratorTick -Config $config -Journal $journal -Adapters $adapters -Now $t0.AddSeconds($s) }
+        $journal.Retries['1'].Count | Should -Be 3
+        $journal.SeenJobs.Clear()
+        $adapters.NewVm = $workingNewVm
+        $world.Queued = @()
+        Invoke-OrchestratorTick -Config $config -Journal $journal -Adapters $adapters -Now $t0.AddSeconds(1220 + 900)
+        ($logs -join "`n") | Should -Match 'health: retry strikes of 1 job forgotten \(lanes \?\) after the cool-down; they are admitted again'
+        $journal.Retries.Count | Should -Be 0
+    }
     It 'forgets even one lane''s strikes at a restart after a trip: the restart is the repair' {
         # The same single-lane fault the half-open keeps; the operator fixed
         # the cache parent and restarted the loop, so the job runs again.

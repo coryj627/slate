@@ -289,8 +289,10 @@ function Clear-JobRetries {
     # parent, a lane-specific bootstrap failure), and forgiving them would
     # trip the breaker again at every half-open and hold the whole host
     # not serving. That lane's job stays capped as before, until its run is
-    # cancelled or GitHub drops it. -Force skips the rule: a loop restart
-    # is the repair. Logged either way, when there was something to weigh.
+    # cancelled or GitHub drops it. A job whose lane is no longer known
+    # (its seen-job record pruned) is not held against the rule: unknown
+    # is not "one lane". -Force skips the rule: a loop restart is the
+    # repair. Logged either way, when there was something to weigh.
     [CmdletBinding()]
     param([Parameter(Mandatory)]$Journal, [Parameter(Mandatory)][hashtable]$Adapters, [string]$Reason = '', [switch]$Force)
     if (-not ($Journal['Retries'] -is [System.Collections.IDictionary])) { return }
@@ -302,7 +304,7 @@ function Clear-JobRetries {
         if ($null -ne $seen -and $seen['Lane']) { [string]$seen['Lane'] } else { '?' }
     } | Sort-Object -Unique)
     $jobs = '{0} {1}' -f $keys.Count, $(if ($keys.Count -eq 1) { 'job' } else { 'jobs' })
-    if (-not $Force -and $lanes.Count -lt 2) {
+    if (-not $Force -and $lanes.Count -lt 2 -and -not ($lanes -contains '?')) {
         & $Adapters.Log 'info' ("health: retry strikes of {0} kept: all on lane {1}, which looks like that lane's fault, not the host's" -f $jobs, $lanes[0])
         return
     }
