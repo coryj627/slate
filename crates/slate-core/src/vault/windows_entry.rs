@@ -227,8 +227,14 @@ pub(super) fn entry_exists(parent: &fs::File, name: &OsStr) -> io::Result<bool> 
     }
 }
 
-/// Make the folder `name` in `parent` (`FILE_CREATE`, so an existing entry is
-/// `AlreadyExists` and is never opened), and return it open as a walk handle.
+/// Make the folder `name` in `parent` and return it open as a walk handle.
+/// `FILE_CREATE` makes an entry already there `AlreadyExists`, never opened.
+/// `FILE_OPEN_REPARSE_POINT` is load-bearing: without it, an existing
+/// reparse point at `name` (a junction or a symbolic link) would make the
+/// Object Manager reparse to the target and create a directory THERE, outside
+/// the vault; with it, the reparse point is the existing object the collision
+/// names, and the walk refuses it. A fresh name has no reparse data, so the
+/// flag is a no-op for the directory actually created.
 pub(super) fn create_folder_in(parent: &fs::File, name: &OsStr) -> io::Result<fs::File> {
     create_relative(
         parent,
@@ -236,7 +242,7 @@ pub(super) fn create_folder_in(parent: &fs::File, name: &OsStr) -> io::Result<fs
         FILE_READ_ATTRIBUTES | FILE_LIST_DIRECTORY,
         FILE_SHARE_READ | FILE_SHARE_WRITE,
         FILE_CREATE,
-        FILE_DIRECTORY_FILE,
+        FILE_DIRECTORY_FILE | FILE_OPEN_REPARSE_POINT,
     )
 }
 

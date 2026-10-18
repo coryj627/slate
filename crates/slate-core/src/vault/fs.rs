@@ -978,29 +978,36 @@ impl PinnedMutationTarget {
     fn create_folder(&self, vault_relative: &Path, original: &str) -> Result<(), VaultError> {
         use super::windows_entry::{self, Folders};
 
-        match windows_entry::create_folder_in(self.parent.handle(), &self.leaf) {
-            Ok(_) => Ok(()),
-            Err(error) if error.kind() == io::ErrorKind::AlreadyExists => {
-                match windows_entry::open_relative(
-                    self.parent.handle(),
-                    &self.leaf,
-                    windows_sys::Win32::Storage::FileSystem::FILE_READ_ATTRIBUTES,
-                )
-                .and_then(|entry| windows_entry::found(&entry))
-                {
-                    Ok(found) => windows_entry::check(
-                        found,
-                        Folders::NotLinks,
-                        vault_relative,
-                        original,
-                        Mutation::CreateFolder,
-                    ),
-                    // It vanished between the create and the look: report
-                    // what the create met.
-                    Err(_) => Err(VaultError::Io(error)),
-                }
-            }
-            Err(error) => Err(self.failure(error)),
+        let Err(error) = windows_entry::create_folder_in(self.parent.handle(), &self.leaf) else {
+            return Ok(());
+        };
+        // The leaf is already there: `FILE_CREATE` meets it as an
+        // `AlreadyExists` collision for a plain name, but a leaf that is a
+        // reparse point (a live junction to a folder, or a dangling one) can
+        // instead surface as the kernel's reparse or not-found error, since
+        // `FILE_CREATE` does not open the reparse point. So on any create
+        // error, look at the leaf itself (no-follow); only a leaf that is
+        // genuinely absent keeps the create's own error.
+        match windows_entry::open_relative(
+            self.parent.handle(),
+            &self.leaf,
+            windows_sys::Win32::Storage::FileSystem::FILE_READ_ATTRIBUTES,
+        )
+        .and_then(|entry| windows_entry::found(&entry))
+        {
+            // A folder already there is idempotent `Ok`; a junction, a
+            // symbolic link or a non-folder is the typed refusal.
+            Ok(found) => windows_entry::check(
+                found,
+                Folders::NotLinks,
+                vault_relative,
+                original,
+                Mutation::CreateFolder,
+            ),
+            // Nothing to look at (gone, or unreadable): a pinned folder
+            // converted after the walk is the typed refusal (`failure`
+            // checks the chain), else the create's own error.
+            Err(_) => Err(self.failure(error)),
         }
     }
 
