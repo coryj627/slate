@@ -479,9 +479,21 @@ enforced by construction, not by review.
   trash-rs's Linux cross-device fallback still copies and then recursively
   deletes the source path. The new token closes the separated host-probe
   contract and coordinates Slate writers; it does not claim atomic exclusion
-  of sync clients. Keep #1125 open for that remaining boundary and FR-10's
-  leaf binding (since #1449 an ancestor no longer redirects a structural
-  rename on macOS or Linux).
+  of sync clients.
+  *Decided 2026-10-17 (#1125 closed; `43_mac_backlog_delivery/24_decision_memo.md`):*
+  the guarantee is objects and tree membership, reported truthfully — Slate
+  never reports a Trash as confirmed unless the object that moved is the
+  confirmed object and its tree matched the confirmed inventory when
+  re-observed at its destination; where a volume's file IDs are not object
+  identities, a Trash is reported as verified by name and metadata only; when
+  an external writer defeats the check, Slate reports what happened and where
+  the item went and does not claim to have prevented it. Exact bytes and
+  writers holding open descriptors are out of scope (no OS revokes them;
+  #1430 P10.2, P12.4). Identity is the filesystem object's, keyed on a
+  persistent volume ID (the volume UUID on macOS, never `st_dev`) and
+  invalidated by replacement, including atomic saves. The remaining
+  boundary is tracked on its own: verifying what arrived (T2) is #1468;
+  the platform side findings are #1434 (exFAT) and #1470 (SMB, NFS, FAT32).
 - **FR-9 — Windows Move-To destination loading is asynchronous (#1126).**
   The admitted picker opens immediately with Loading/Cancel, then receives
   bounded 1,000-row pages from a cancellable worker, up to 50,000 folders.
@@ -516,8 +528,7 @@ enforced by construction, not by review.
   replacing a file (including an atomic-save replacement) invalidates its inverse.
   This closes the Windows validation-to-path-rename window. macOS/Linux public
   rename APIs still resolve source names and do not offer the same conditional
-  primitive; their existing undo behavior remains. Keep #1125 open for those
-  platform limits and FR-8's final observation-to-Trash boundary.
+  primitive; their existing undo behavior remains (see the amendments below).
   *Amended by #1449 (2026-10-17; #1430 Decision 2, option H):* on macOS and
   Linux an ancestor can no longer redirect a structural rename. Every path
   that moves an existing entry reaches `VaultProvider::rename`: single and
@@ -533,9 +544,16 @@ enforced by construction, not by review.
   link or a file refuses with `InvalidPath`; the reason names that folder and
   says nothing was moved. The refusal changes nothing and is never retried by
   path. The vault root itself is the descriptor, so a symlinked root keeps
-  working. **Still open:** the final component is still a name. Binding the
-  leaf's identity (option C) and the history barrier on weak-identity volumes
-  (option B) remain #1125 decisions. Linux renames inside parents pinned a
+  working. **Still open:** the final component is still a name.
+  *Decided 2026-10-17 (#1125 closed; #1430 Decision 2):* where file IDs are
+  meaningful, an identity-checked inverse under its own capability name
+  (option C: record the identity at the forward operation, check it under the
+  structural lock just before the hardened rename, verify what arrived, move
+  back and invalidate history on a mismatch); where they are not (smbfs
+  without server file IDs, FAT32, exFAT, Linux NFS), a history barrier that
+  refuses structural undo, as the Windows rule above (option B). It is never
+  described as Windows-equivalent, and `rename_if_identity` stays the
+  Windows-only bound primitive. Tracked as #1469. Linux renames inside parents pinned a
   moment earlier, so a real folder moved out of the vault in that moment is
   followed (no link involved). Windows forward moves still use path-addressed
   `MoveFileExW`, which a junction swapped in as an ancestor redirects (#1451).
