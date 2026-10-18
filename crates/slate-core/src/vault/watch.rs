@@ -724,7 +724,10 @@ mod tests {
 
     /// §4.7: `.slate/`, `.obsidian/` and dot files never reach the sink. The
     /// sentinel written last arrives after anything written before it, so
-    /// its arrival proves the hidden writes were seen and dropped.
+    /// its arrival proves the hidden writes were seen and dropped. Only the
+    /// two visible paths written may arrive at all, so a hidden folder
+    /// reported by another spelling (ReadDirectoryChangesW may report an
+    /// 8.3 short name, `SLATE~1`) fails this too.
     #[test]
     fn the_slate_cache_and_hidden_paths_never_reach_the_sink() {
         let (tmp, sink, _handle) = watched();
@@ -748,8 +751,8 @@ mod tests {
         for event in sink.snapshot() {
             for name in RecordingSink::names(&event) {
                 assert!(
-                    !name.split('/').any(|part| part.starts_with('.')),
-                    "a hidden path reached the sink: {event:?}"
+                    ["sub", "visible.md"].contains(&name),
+                    "only the visible writes may reach the sink: {event:?}"
                 );
             }
         }
