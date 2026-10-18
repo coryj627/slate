@@ -70,3 +70,6 @@ mod windows_entry;
 
 #[cfg(all(test, windows))]
 mod test_support;
+
+#[cfg(test)]
+mod test_trash_census;

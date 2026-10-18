@@ -351,6 +351,18 @@ fn a_junction_vault_root_still_trashes_beneath_its_target() {
     std::fs::remove_dir(&root).unwrap();
 }
 
+/// The one way a test builds a provider whose Trash is the real system Trash
+/// (#1455), for the gated real-Trash set below and nowhere else
+/// (`vault::test_trash_census` names the set and fails on any other caller).
+/// Every other fact in core trashes into a `ScratchTrash`, which
+/// `FsVaultProvider::new` gives every provider in a test build. These facts
+/// run only on the scratch volume they name in `SLATE_TRASH_PROBE_VOLUME`,
+/// and in a test build the system Trash refuses any path off it.
+#[cfg(any(target_os = "macos", target_os = "linux"))]
+fn real_system_trash_provider(root: std::path::PathBuf) -> FsVaultProvider {
+    FsVaultProvider::with_system_trash(root, Arc::new(PlatformTrash))
+}
+
 /// The real macOS back end, on a scratch volume only: never a developer's
 /// or a runner's own Trash. Create and attach one first:
 ///
@@ -399,7 +411,7 @@ fn real_trash_on_a_scratch_volume_lands_in_its_trashes_with_put_back_records() {
         .map(|item| identity(&vault.join(item)))
         .collect();
 
-    let provider = FsVaultProvider::new(vault.clone());
+    let provider = real_system_trash_provider(vault.clone());
     for item in items {
         provider.delete(item).unwrap();
         assert!(
@@ -485,7 +497,7 @@ fn real_trash_race_child() {
         .unwrap()
         .parse()
         .unwrap();
-    let provider = FsVaultProvider::new(vault.into());
+    let provider = real_system_trash_provider(vault.into());
     while std::time::SystemTime::now()
         .duration_since(std::time::UNIX_EPOCH)
         .unwrap()
@@ -571,4 +583,62 @@ fn real_trash_from_many_processes_at_once_loses_nothing() {
         lost, 0,
         "{lost} of {PROCESSES} trashed items are no longer in the Trash"
     );
+}
+
+/// The child half of `real_trash_on_linux_lands_in_a_scratch_home_trash`: it
+/// trashes `sub/note.md` from the vault in `SLATE_TRASH_LINUX_VAULT` through
+/// the real system Trash, with the environment its parent set. Without that
+/// variable it does nothing.
+#[cfg(target_os = "linux")]
+#[test]
+fn real_trash_linux_child() {
+    let Some(vault) = std::env::var_os("SLATE_TRASH_LINUX_VAULT") else {
+        return;
+    };
+    real_system_trash_provider(vault.into())
+        .delete("sub/note.md")
+        .unwrap();
+}
+
+/// The real Linux back end, trash-rs's freedesktop Trash, on every Linux run
+/// and still never a runner's own Trash (#1455). A child process trashes with
+/// `XDG_DATA_HOME` inside a scratch directory on the vault's own mount, so
+/// trash-rs takes that directory's `Trash` for the home Trash: the item lands
+/// in its `files` and its record in its `info`, not in `~/.local/share/Trash`.
+#[cfg(target_os = "linux")]
+#[test]
+fn real_trash_on_linux_lands_in_a_scratch_home_trash() {
+    let scratch = tempfile::tempdir().unwrap();
+    let scratch_path = std::fs::canonicalize(scratch.path()).unwrap();
+    let vault = scratch_path.join("vault");
+    std::fs::create_dir_all(vault.join("sub")).unwrap();
+    std::fs::write(vault.join("sub/note.md"), b"linux note").unwrap();
+    let data_home = scratch_path.join("data");
+    std::fs::create_dir(&data_home).unwrap();
+
+    let status = std::process::Command::new(std::env::current_exe().unwrap())
+        .args([
+            "vault::trash_handoff::tests::real_trash_linux_child",
+            "--exact",
+            "--nocapture",
+        ])
+        .env("SLATE_TRASH_LINUX_VAULT", &vault)
+        .env("XDG_DATA_HOME", &data_home)
+        .env(PROBE_VOLUME, &scratch_path)
+        .status()
+        .unwrap();
+    assert!(status.success(), "the child's Trash failed");
+
+    assert!(
+        vault.join("sub/note.md").symlink_metadata().is_err(),
+        "the note left the vault"
+    );
+    let trash = data_home.join("Trash");
+    assert_eq!(
+        std::fs::read(trash.join("files/note.md")).unwrap(),
+        b"linux note"
+    );
+    let record = std::fs::read_to_string(trash.join("info/note.md.trashinfo")).unwrap();
+    assert!(record.starts_with("[Trash Info]"), "{record}");
+    assert!(record.contains("/vault/sub/note.md"), "{record}");
 }

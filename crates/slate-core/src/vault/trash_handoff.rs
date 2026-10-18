@@ -53,6 +53,8 @@ pub(crate) struct PlatformTrash;
 
 impl SystemTrash for PlatformTrash {
     fn trash(&self, path: &Path) -> Result<(), VaultError> {
+        #[cfg(test)]
+        refuse_a_trash_that_is_not_scratch(path);
         #[cfg(target_os = "macos")]
         {
             macos::trash_item(path)
@@ -64,6 +66,67 @@ impl SystemTrash for PlatformTrash {
             })
         }
     }
+}
+
+/// The environment variable that names the scratch volume of the gated
+/// real-Trash facts (`trash_handoff_tests`). Only a path on it, whose Trash
+/// is that volume's own, may reach the system Trash from a test build.
+#[cfg(test)]
+pub(crate) const PROBE_VOLUME: &str = "SLATE_TRASH_PROBE_VOLUME";
+
+/// #1455: core's tests reach the system Trash only from the gated real-Trash
+/// facts, and only for a path on the scratch volume they name in
+/// [`PROBE_VOLUME`], whose Trash belongs to that volume and not to whoever
+/// runs the suite. Any other path is a test about to move its fixture into a
+/// developer's `~/.Trash` or a runner's Trash or Recycle Bin, so the test
+/// panics here, before the call. Every other test trashes into a
+/// [`ScratchTrash`].
+#[cfg(test)]
+fn refuse_a_trash_that_is_not_scratch(path: &Path) {
+    let refusal = |why: String| -> ! {
+        panic!(
+            "#1455: a test handed {path:?} to the system Trash ({why}). Core's tests trash \
+             into a ScratchTrash bin; only the gated real-Trash facts reach the system Trash, \
+             for a path on the scratch volume named in {PROBE_VOLUME}."
+        )
+    };
+    let Some(volume) = std::env::var_os(PROBE_VOLUME) else {
+        refusal(format!("{PROBE_VOLUME} is not set"));
+    };
+    let volume = std::fs::canonicalize(&volume)
+        .unwrap_or_else(|error| refusal(format!("{PROBE_VOLUME} cannot be resolved: {error}")));
+    if !path.starts_with(&volume) {
+        refusal(format!("the path is not on {}", volume.display()));
+    }
+    // On the home volume, macOS's Trash for the item is the user's own
+    // `~/.Trash`; on a scratch volume it is that volume's `.Trashes/<uid>`.
+    #[cfg(target_os = "macos")]
+    {
+        use std::os::unix::fs::MetadataExt as _;
+        let device = |at: &Path| std::fs::metadata(at).map(|metadata| metadata.dev());
+        let home = std::env::var_os("HOME").unwrap_or_default();
+        match (device(&volume), device(Path::new(&home))) {
+            (Ok(scratch), Ok(home)) if scratch != home => {}
+            _ => refusal(format!(
+                "{} is not a volume of its own, so its Trash is ~/.Trash",
+                volume.display()
+            )),
+        }
+    }
+    // trash-rs moves an item on the home Trash's own mount into
+    // `$XDG_DATA_HOME/Trash`, so that must be scratch too.
+    #[cfg(any(target_os = "linux", target_os = "android"))]
+    {
+        let scratch_home = std::env::var_os("XDG_DATA_HOME")
+            .and_then(|home| std::fs::canonicalize(home).ok())
+            .is_some_and(|home| home.starts_with(&volume));
+        if !scratch_home {
+            refusal(format!("XDG_DATA_HOME is not on {}", volume.display()));
+        }
+    }
+    // No real-Trash fact runs on Windows: the Recycle Bin is never a test's.
+    #[cfg(windows)]
+    refusal("Windows has no gated real-Trash fact".into());
 }
 
 /// The refusal: `original` is not handed to the Trash, for `reason`, which
@@ -442,9 +505,29 @@ impl ScratchTrash {
     }
 }
 
+/// Every path any [`ScratchTrash`] in this test process was handed, so a fact
+/// can show that a provider it did not build (a session's own) trashed into
+/// a scratch bin (#1455).
+#[cfg(test)]
+static SCRATCH_HANDOFFS: std::sync::Mutex<Vec<std::path::PathBuf>> =
+    std::sync::Mutex::new(Vec::new());
+
+/// The paths every [`ScratchTrash`] in this process was handed, in order.
+#[cfg(test)]
+pub(crate) fn scratch_handoffs() -> Vec<std::path::PathBuf> {
+    SCRATCH_HANDOFFS
+        .lock()
+        .unwrap_or_else(std::sync::PoisonError::into_inner)
+        .clone()
+}
+
 #[cfg(test)]
 impl SystemTrash for ScratchTrash {
     fn trash(&self, path: &Path) -> Result<(), VaultError> {
+        SCRATCH_HANDOFFS
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner)
+            .push(path.to_path_buf());
         self.handed.lock().unwrap().push(path.to_path_buf());
         let name = path.file_name().ok_or_else(|| VaultError::Trash {
             message: "nothing to trash".into(),
