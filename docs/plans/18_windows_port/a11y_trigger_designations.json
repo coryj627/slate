@@ -400,6 +400,11 @@
         "decision": "docs/plans/38_notification_dispatcher_contracts.md",
         "status": "recorded"
       },
+      "FilesSidebarViewModel.WriteJournal.cs#FilesSidebarViewModel.AnnounceWriteJournalNotice@1": {
+        "engine": "Sidebar write-journal replay notices (mac's journal copy)",
+        "decision": "docs/plans/38_notification_dispatcher_contracts.md",
+        "status": "recorded"
+      },
       "FilesSidebarViewModel.cs#FilesSidebarViewModel.AnnounceSort@1": {
         "engine": "Sidebar sort/result/failure and core tag-edit report adapter",
         "decision": "docs/plans/38_notification_dispatcher_contracts.md",
