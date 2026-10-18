@@ -497,6 +497,64 @@ final class FileTreeLiveOrganizationTests: XCTestCase {
         await persisted(state, tree: tree)
     }
 
+    // MARK: - The civil-day rollover
+
+    /// The sidebar clock's midnight tick takes the same live re-sort as a
+    /// command: under date grouping a loaded level re-buckets at once
+    /// ("Today" becomes "Yesterday"), and a same-day tick changes nothing.
+    /// The asynchronous twin of `SidebarOrganizationTreeTests`'
+    /// `testSameDayTickDoesNotReorganizeButRolloverDoes`.
+    func testAMidnightRolloverReBucketsTheLoadedLevelLive() async throws {
+        var calendar = Calendar(identifier: .gregorian)
+        calendar.timeZone = try XCTUnwrap(TimeZone(identifier: "UTC"))
+        let utc = calendar
+        func instant(day: Int, hour: Int) throws -> Date {
+            try XCTUnwrap(
+                utc.date(from: DateComponents(year: 2026, month: 7, day: day, hour: hour)))
+        }
+        var prefs = SidebarOrganizationPrefs()
+        prefs.vaultChoice = SidebarOrganizationChoice(
+            sort: SidebarSortOption(field: .modified, direction: .desc),
+            grouping: .dateBuckets)
+        let grouped = prefs
+        func context(_ now: Date) -> FileTreeViewModel.OrganizationContext {
+            FileTreeViewModel.OrganizationContext(
+                prefs: grouped, now: now, calendar: utc, locale: Locale(identifier: "en_US"))
+        }
+        let modifiedMs = Int64(try instant(day: 18, hour: 8).timeIntervalSince1970 * 1_000)
+        let tree = FileTreeViewModel()
+        defer { tree.cancelPendingLoads() }
+        tree.applyOrganization(context(try instant(day: 18, hour: 9)))
+        tree.bindAsynchronouslyForTesting { _, _, _ in
+            DirListing(
+                dirs: [],
+                files: FileSummaryPage(
+                    items: [
+                        FileSummary(
+                            path: "a.md", name: "a.md", mtimeMs: modifiedMs, sizeBytes: 0,
+                            isMarkdown: true, displayName: nil, createdDate: nil,
+                            createdMs: nil, wordCount: nil, preview: nil, taskTotal: 0,
+                            taskOpen: 0)
+                    ],
+                    nextCursor: nil,
+                    totalFiltered: 1))
+        }
+        await settle(tree)
+        XCTAssertEqual(tree.headerRow(before: .file(path: "a.md"))?.label, "Today")
+
+        tree.applyOrganization(context(try instant(day: 18, hour: 10)))
+        await settle(tree)
+        XCTAssertEqual(
+            tree.headerRow(before: .file(path: "a.md"))?.label, "Today",
+            "a same-day tick changes nothing")
+
+        tree.applyOrganization(context(try instant(day: 19, hour: 0)))
+        await settle(tree)
+        XCTAssertEqual(
+            tree.headerRow(before: .file(path: "a.md"))?.label, "Yesterday",
+            "crossing local midnight re-buckets the loaded level at once")
+    }
+
     // MARK: - The hosted tree under the keys
 
     /// The Windows twin is `FilesRegionLandingTests.PinNoteRebuildsTheTreeUnderTheKeysAndTheyStayOnTheRow`:
@@ -595,8 +653,13 @@ final class FileTreeLiveOrganizationTests: XCTestCase {
         row.subtree.first { !($0.name ?? "").isEmpty }?.name
     }
 
+    /// The table's rows in order: its own row children, or, where the client
+    /// nests them deeper, every row beneath it.
     private static func rows(of table: AXElementSnapshot) -> [TreeRow] {
-        table.children.filter { $0.role == "AXRow" }.compactMap { row in
+        let direct = table.children.filter { $0.role == "AXRow" }
+        let rowElements =
+            direct.isEmpty ? table.subtree.dropFirst().filter { $0.role == "AXRow" } : direct
+        return rowElements.compactMap { row in
             guard let named = row.subtree.first(where: { !($0.name ?? "").isEmpty })
             else { return nil }
             return TreeRow(
