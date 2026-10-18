@@ -73,6 +73,7 @@ cargo test -p slate-core --release -- session::tests::dir_tree    # perf guards 
 | Layout/divider/recents didn't follow the vault | They're device-local by design. Vault-owned state is exactly what's in `.slate/sidebar.json` (sort/grouping/folder overrides incl. preview/density/descendants, pins, shortcuts). |
 | Perf guard failed in a local run | Was the box busy? The guards sample best-of-3 but a saturated machine still fails falsely; re-run idle. CI's isolated runner is authoritative. |
 | A change announced before a quit or crash is missing after relaunch | The sidebar write journal (`~/Library/Application Support/Slate/sidebar-write-journal/<device>-<inode>.journal`, see below). An entry still there replays on the next open of the SAME vault (same device, inode and birth time); one older than 30 days, refused, or in a damaged file is announced instead. No file means every entry settled. |
+| Windows: pins or shortcuts still name a note's old path after a crash, or after "Sidebar pins and shortcuts could not be saved." | The Windows sidebar write journal (`%LOCALAPPDATA%\Slate\sidebar-write-journal\<volume serial>-<file id>.journal`, see below; #1435). An entry still there replays on the next open of the SAME vault (same volume serial, 128-bit file id and birth time); one older than 30 days, or in a damaged file, is announced instead, and a read-only `.slate/sidebar.json` makes it wait for Retry. No file means every entry settled. |
 | The log says "The vault folder is no longer at …" or "… is no longer the vault Slate opened", or Settings ▸ Bibliography shows it | The open vault's folder was renamed, moved or replaced while it was open (#1442). The four host stores in `.slate/` refuse instead of recreating the old path; reopen the vault from where it is now. Nothing was written at the old path. |
 | Launch did not reopen the last vault: "Vault Not Found" says the folder holds only `.slate`, or that Slate can't confirm it is the one it last opened | Launch-restore compared the folder at the remembered path with the recents entry (#1442, see below) and refused it. Open Anyway opens it and remembers it; Remove from Recent Vaults drops only the entry. Slate never deletes the folder: a `.slate`-only folder there is usually what a save left at the old path after a rename (the host stores did before #1442; core's own writers still can until #1474). |
 
@@ -125,6 +126,21 @@ cargo test -p slate-core --release -- session::tests::dir_tree    # perf guards 
   was told to the user — never evicted. The registry, its drain and the
   quit fence are in `AppState.swift` (`sidebarUnflushedWriteRetries`,
   `scheduleSidebarRetainedWriteDrain`, `settleSidebarWriterChainsForTermination`).
+- **Windows: device (`%LOCALAPPDATA%\Slate`), until saved**: the structural
+  half of the same journal (#1435; `SidebarWriteJournal.cs`,
+  `FilesSidebarViewModel.WriteJournal.cs`). Windows saves an organization
+  command before it speaks, so there are no intents to keep. Every rename
+  or move (Rename, Move To, batch moves, structural undo and redo) appends
+  its renames, flushed to disk before core is called (the UI thread waits
+  up to 5 s on the journal's lane), records what committed when core
+  reports, and settles once the pins and shortcuts writes that carry it
+  land. The file is keyed by the root's volume serial and 128-bit file id
+  (`FILE_ID_INFO`; core observes no root identity on Windows), and its
+  header records the root's birth time. Same record format as mac's. The
+  constructor replays every unsettled entry before it adopts the file's
+  pins and shortcuts; an entry core never confirmed replays only the
+  renames whose source is definitely gone. Only `App.OnStartup` installs
+  this location; a test process journals into a private temporary folder.
 
 ## Failure / recovery procedures
 
@@ -141,6 +157,15 @@ cargo test -p slate-core --release -- session::tests::dir_tree    # perf guards 
   or a reopen lands them. A failure Slate could tell you about while the
   vault was open is not kept: it was announced and the sidebar shows what
   the file holds, so re-run the command.
+- **Windows: a rename or move whose pins and shortcuts did not follow**
+  (#1435): a crash between core's commit and the sidebar's write, or a
+  write that failed ("Sidebar pins and shortcuts could not be saved."),
+  leaves the rename in the Windows journal above. In the same session the
+  next pins or shortcuts write that lands carries it; otherwise the next
+  open of the same vault replays it, silently. If `.slate/sidebar.json` is
+  read-only at that open, the entry waits, and Retry replays it onto the
+  repaired file; the changes made in memory during the outage itself go
+  with the wholesale adoption, as #1230's stale-references outcome says.
 - **Stale pins/shortcuts after external file moves**: pins/shortcuts follow
   structural transforms only for in-app operations; externally-moved paths
   are pruned lazily on the next level fetch (announced once per session).

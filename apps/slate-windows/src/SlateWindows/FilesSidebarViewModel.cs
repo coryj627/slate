@@ -436,7 +436,8 @@ internal sealed partial class FilesSidebarViewModel : BindableBase
         Func<Action, CancellationToken, Task>? filterWorker = null,
         Func<Action, CancellationToken, Task>? importWorker = null,
         Func<Action, CancellationToken, Task>? moveToWorker = null,
-        Func<CancellationToken, Task>? filterDelay = null)
+        Func<CancellationToken, Task>? filterDelay = null,
+        SidebarWriteJournal? writeJournal = null)
     {
         _session = session;
         _announce = announce;
@@ -453,20 +454,29 @@ internal sealed partial class FilesSidebarViewModel : BindableBase
         _runImportWorker = importWorker ?? ((work, token) => Task.Run(work, token));
         _runMoveToWorker = moveToWorker ?? ((work, token) => Task.Run(work, token));
         _vaultRoot = vaultRoot;
+        JournalReplay? journalReplay = null;
         if (vaultRoot is not null)
         {
             _settingsStore = new SidebarSettingsStore(vaultRoot);
             _recentsStore = new FileRecentsStore(vaultRoot, session.RootIdentity(), localAppDataRoot);
             SidebarSettingsSnapshot settings = _settingsStore.Load();
+            // #1435: a rename or move the last session journaled but never
+            // carried into the file — a crash after core committed, or a
+            // pins or shortcuts write that failed — replays before the
+            // file's pins and shortcuts are adopted. Its writes land once
+            // the commands exist (LandWriteJournalReplay below).
+            _writeJournal = writeJournal ?? SidebarWriteJournal.Shared;
+            _journalIdentity = SidebarJournalIdentity.Observe(vaultRoot);
+            journalReplay = ReplayWriteJournal(settings, _recentsStore.Load());
             _sortMode = settings.SortMode;
             _groupByDate = settings.GroupByDate;
-            _pinned.UnionWith(settings.Pins);
-            foreach (SidebarShortcutState shortcut in settings.Shortcuts)
+            _pinned.UnionWith(journalReplay.Pins);
+            foreach (SidebarShortcutState shortcut in journalReplay.Shortcuts)
             {
                 Shortcuts.Add(new SidebarShortcutViewModel(shortcut.Kind, shortcut.Path));
             }
 
-            _recents.AddRange(_recentsStore.Load());
+            _recents.AddRange(journalReplay.Recents);
             if (settings.ReadOnlyReason is not null)
             {
                 _settingsNotice = settings.ReadOnlyReason;
@@ -554,7 +564,13 @@ internal sealed partial class FilesSidebarViewModel : BindableBase
             () => true);
         HistoryBackCommand = new RelayCommand(_ => History(-1), _ => _historyIndex > 0);
         HistoryForwardCommand = new RelayCommand(_ => History(1), _ => _historyIndex >= 0 && _historyIndex < _history.Count - 1);
+        if (journalReplay is not null)
+        {
+            LandWriteJournalReplay(journalReplay);
+        }
+
         Refresh(reportCount: true);
+        AnnounceWriteJournalOutcome();
     }
 
     /// <summary>An open for the workspace. W7-7 (R-2): <c>FocusEditor</c>
@@ -2006,6 +2022,10 @@ internal sealed partial class FilesSidebarViewModel : BindableBase
         }
 
         BeginStructuralResult();
+        // #1435: every item's rename is journaled durably before core can
+        // commit the batch; the report's standing changes are what the
+        // entry then records.
+        Guid? journalEntry = null;
         try
         {
             Dictionary<string, string>? identities = null;
@@ -2014,6 +2034,7 @@ internal sealed partial class FilesSidebarViewModel : BindableBase
                 {
                     try { identities = _session.CaptureBatchMoveIdentities(items); }
                     catch (VaultException) { /* The move may proceed without undo support. */ }
+                    journalEntry = JournalBeforeStructuralCommit(PlannedBatchMove(items, destination));
                     return _session.BatchMove(new BatchMoveRequest(items, destination));
                 },
                 out BatchMoveReport report))
@@ -2021,11 +2042,14 @@ internal sealed partial class FilesSidebarViewModel : BindableBase
                 return;
             }
 
+            JournalStructuralCommitted(journalEntry, BatchStanding(report.Standing));
             foreach (BatchPathChange change in report.Standing)
             {
                 RetargetRequested?.Invoke(change.OldPath, change.NewPath);
                 TransformStoredPaths(change.OldPath, change.NewPath, change.IsDirectory, deleted: false);
             }
+
+            CarryJournalEntry(journalEntry);
 
             // W5-4 F10: a SUCCEEDED batch move is undoable through the
             // dedicated endpoint; anything less than Succeeded is not a
@@ -2042,7 +2066,8 @@ internal sealed partial class FilesSidebarViewModel : BindableBase
                         + (report.Standing.Length == 1 ? "item" : "items"),
                     BatchOpId: opId,
                     BatchIdentities: report.Standing.ToDictionary(
-                        change => change.NewPath, change => identities[change.OldPath], StringComparer.Ordinal)));
+                        change => change.NewPath, change => identities[change.OldPath], StringComparer.Ordinal),
+                    BatchChanges: report.Standing));
             }
             else if (report.State == BatchMoveState.Succeeded)
             {
@@ -2055,6 +2080,9 @@ internal sealed partial class FilesSidebarViewModel : BindableBase
         }
         catch (VaultException exception)
         {
+            // No report: what committed is unknown, so the entry stays as
+            // anticipated for the next open to verify.
+            JournalStructuralOutcomeUnknown(journalEntry);
             ReportFailure($"Move failed: {exception.Message}");
         }
     }
@@ -2401,12 +2429,26 @@ internal sealed partial class FilesSidebarViewModel : BindableBase
         }
         else
         {
-            AdoptSettings(settings);
+            // #1435: the transforms this outage kept only in memory go with
+            // the memory the adoption replaces (their entries settle; the
+            // stale-references outcome says so). What the journal held from
+            // before this sidebar opened waited for a readable file: it
+            // replays onto this one, as an open's replay would.
+            SettleJournalEntriesTheFileDiscards();
+            JournalReplay replay = ReplayWriteJournal(settings, [.. _recents]);
+            AdoptSettings(settings with { Pins = replay.Pins, Shortcuts = replay.Shortcuts });
+            if (replay.RecentsChanged)
+            {
+                _recents.Clear();
+                _recents.AddRange(replay.Recents);
+            }
+
             SettingsNotice = null;
             outcome = _storedPathsDivergedFromFile
                 ? new A11yEvent.SidebarSettingsReloadedStaleRefs()
                 : new A11yEvent.SidebarSettingsReloaded();
             _storedPathsDivergedFromFile = false;
+            LandWriteJournalReplay(replay);
             Refresh();
         }
 
@@ -2417,6 +2459,7 @@ internal sealed partial class FilesSidebarViewModel : BindableBase
 
         _announce(outcome);
         RaiseCommandStates();
+        AnnounceWriteJournalOutcome();
     }
 
     private void AdoptSettings(SidebarSettingsSnapshot settings)
@@ -2524,39 +2567,93 @@ internal sealed partial class FilesSidebarViewModel : BindableBase
         _announce(new A11yEvent.HostComposed(message, A11yPriority.Medium));
     }
 
-    private bool PersistPins()
+    /// <summary>Write every pin in memory. #1435: a write that lands carries
+    /// every rename memory holds, so the journal entries waiting on it
+    /// settle; <paramref name="reportFailure"/> lets the constructor's replay
+    /// hold its failure until the first publication.</summary>
+    private bool PersistPins(Action<string>? reportFailure = null)
     {
         try
         {
             _settingsStore?.ReplacePins(_pinned);
-            return true;
         }
         catch (Exception exception) when (
             exception is IOException or UnauthorizedAccessException or InvalidOperationException)
         {
-            ReportFailure($"Could not save pins: {exception.Message}");
+            _pinsBehindFile = true;
+            string message = $"Could not save pins: {exception.Message}";
+            if (reportFailure is null)
+            {
+                ReportFailure(message);
+            }
+            else
+            {
+                reportFailure(message);
+            }
+
             HostLog.Write(HostDiagnosticEvent.SidebarPinsPersistFailed, exception);
             NoteSettingsBlocked();
             return false;
         }
+
+        PinsLandedInFile();
+        return true;
     }
 
-    private bool PersistShortcuts()
+    private bool PersistShortcuts(Action<string>? reportFailure = null)
     {
         try
         {
             _settingsStore?.SetShortcuts(
                 Shortcuts.Select(item => new SidebarShortcutState(item.Kind, item.Path)));
-            return true;
         }
         catch (Exception exception) when (
             exception is IOException or UnauthorizedAccessException or InvalidOperationException)
         {
-            ReportFailure($"Could not save shortcuts: {exception.Message}");
+            _shortcutsBehindFile = true;
+            string message = $"Could not save shortcuts: {exception.Message}";
+            if (reportFailure is null)
+            {
+                ReportFailure(message);
+            }
+            else
+            {
+                reportFailure(message);
+            }
+
             HostLog.Write(HostDiagnosticEvent.SidebarShortcutsPersistFailed, exception);
             NoteSettingsBlocked();
             return false;
         }
+
+        ShortcutsLandedInFile();
+        return true;
+    }
+
+    /// <summary>Where a rename or move of <paramref name="oldPath"/> to
+    /// <paramref name="newPath"/> (or its deletion) leaves a stored
+    /// <paramref name="path"/>: the entry itself and, for a folder,
+    /// everything beneath it; null when deleted. One rule for the live
+    /// transform and the journal's replay (#1435).</summary>
+    internal static string? TransformedStoredPath(
+        string path,
+        string oldPath,
+        string newPath,
+        bool isDirectory,
+        bool deleted)
+    {
+        if (string.Equals(path, oldPath, StringComparison.Ordinal))
+        {
+            return deleted ? null : newPath;
+        }
+
+        string prefix = oldPath + "/";
+        if (isDirectory && path.StartsWith(prefix, StringComparison.Ordinal))
+        {
+            return deleted ? null : newPath + "/" + path[prefix.Length..];
+        }
+
+        return path;
     }
 
     private void TransformStoredPaths(
@@ -2565,21 +2662,8 @@ internal sealed partial class FilesSidebarViewModel : BindableBase
         bool isDirectory,
         bool deleted)
     {
-        string? Transform(string path)
-        {
-            if (string.Equals(path, oldPath, StringComparison.Ordinal))
-            {
-                return deleted ? null : newPath;
-            }
-
-            string prefix = oldPath + "/";
-            if (isDirectory && path.StartsWith(prefix, StringComparison.Ordinal))
-            {
-                return deleted ? null : newPath + "/" + path[prefix.Length..];
-            }
-
-            return path;
-        }
+        string? Transform(string path) =>
+            TransformedStoredPath(path, oldPath, newPath, isDirectory, deleted);
 
         string[] transformedPins = _pinned
             .Select(Transform)
