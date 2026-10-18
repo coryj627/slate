@@ -454,6 +454,11 @@ struct NoteEditorView: NSViewRepresentable {
             let clampedLocation = min(previousRange.location, text.utf16.count)
             textView.setSelectedRange(NSRange(location: clampedLocation, length: 0))
             context.coordinator.scheduleHighlight(debounced: false)
+            // #1472: a programmatic `string =` posts no value change, so
+            // VoiceOver kept reading the swapped-out bytes. The field pass
+            // heard the previous note's line after the opened note's editor
+            // was announced. Say the value changed.
+            NSAccessibility.post(element: textView, notification: .valueChanged)
         }
         // U3-2 (Codoki #515): after any restamp/update pass, re-report the
         // caret so the parked value can never lag a programmatic content
