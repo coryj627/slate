@@ -122,8 +122,16 @@ on:
       - 'scripts/tests/test_windows_model_shards.py'
       # W6-2 PR F (IPJ-5-1): the lane's censuses read the plan documents,
       # the generators read the scripts, the help catalog and the mac
-      # sources — a change to any of them must run the lane.
-      - 'docs/plans/**'
+      # sources — a change to any of them must run the lane. Only the plan
+      # documents the censuses read are listed: the top-level contracts,
+      # the Windows port folder, and one spec a ledger decision cites.
+      # Planning folders no Windows check reads (plan 43's design docs,
+      # for example) do not start the lane. scripts/
+      # check_windows_docs_trigger.py fails the lane if a check reads a
+      # docs path this list misses; keep both lists identical.
+      - 'docs/plans/*.md'
+      - 'docs/plans/18_windows_port/**'
+      - 'docs/plans/15_files_sidebar/specs/fl4_spec.md'
       - 'docs/help/**'
       - 'scripts/**'
       - 'apps/slate-mac/**'
@@ -145,8 +153,16 @@ on:
       - 'scripts/tests/test_windows_model_shards.py'
       # W6-2 PR F (IPJ-5-1): the lane's censuses read the plan documents,
       # the generators read the scripts, the help catalog and the mac
-      # sources — a change to any of them must run the lane.
-      - 'docs/plans/**'
+      # sources — a change to any of them must run the lane. Only the plan
+      # documents the censuses read are listed: the top-level contracts,
+      # the Windows port folder, and one spec a ledger decision cites.
+      # Planning folders no Windows check reads (plan 43's design docs,
+      # for example) do not start the lane. scripts/
+      # check_windows_docs_trigger.py fails the lane if a check reads a
+      # docs path this list misses; keep both lists identical.
+      - 'docs/plans/*.md'
+      - 'docs/plans/18_windows_port/**'
+      - 'docs/plans/15_files_sidebar/specs/fl4_spec.md'
       - 'docs/help/**'
       - 'scripts/**'
       - 'apps/slate-mac/**'
@@ -855,6 +871,27 @@ jobs:
   # succeed, so "build + test (windows x64)" green still means what it
   # meant when the lanes were one serial job. It evaluates the lane
   # results on a standard hosted runner without an attached paid cache.
+  # The path trigger above lists only the plan documents the censuses read.
+  # This proves the list is complete: every docs path the lane reads (in
+  # the Windows sources, the trigger ledger's decisions, the AT navigation
+  # map's links and the scripts this workflow runs) must start the lane, so
+  # a docs-only change to one of them can never skip it. It stands on its
+  # own: its red check is the signal, and the gate's needs stay as the
+  # runner tests pin them (ci/windows-runner/tests/Workflows.Tests.ps1).
+  docs-trigger:
+    name: windows docs trigger census
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    steps:
+      - name: Checkout
+        uses: actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0  # v7
+
+      - name: Test the docs trigger check
+        run: python3 -m unittest discover -s scripts/tests -p test_windows_docs_trigger.py
+
+      - name: Every docs path the lane reads starts the lane
+        run: python3 scripts/check_windows_docs_trigger.py
+
   gate:
     name: build + test (windows x64)
     needs: [route, rust-tests, windows, windows-model, flaui]
