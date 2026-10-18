@@ -2,8 +2,10 @@
 // SPDX-License-Identifier: AGPL-3.0-or-later
 
 //! Test-only helpers the vault's Windows facts share: the entry walk
-//! (`windows_entry`), the Trash inventory (`trash_snapshot::windows`) and the
-//! Trash handoff (`trash_handoff`) all substitute a junction for a folder.
+//! (`windows_entry`), the Trash inventory (`trash_snapshot::windows`), the
+//! Trash handoff (`trash_handoff`), the provider's moves, saves and creations
+//! (`fs`, #1451) and the session's (`session::tests`) all substitute a
+//! junction for a folder.
 
 use std::ffi::OsStr;
 use std::os::windows::{ffi::OsStrExt as _, fs::OpenOptionsExt as _, io::AsRawHandle as _};
@@ -24,10 +26,9 @@ const IO_REPARSE_TAG_MOUNT_POINT: u32 = 0xA000_0003;
 /// the reparse buffer.
 const FSCTL_SET_REPARSE_POINT: u32 = 0x0009_00A4;
 
-/// Convert the empty directory `path` into a junction (a mount-point reparse
-/// point) to `target`, through a handle that holds only attribute access, as
-/// an unprivileged writer can.
-pub(super) fn junction(path: &Path, target: &Path) {
+/// Write `buffer`, a reparse buffer, onto the empty directory `path` through a
+/// handle that holds only attribute access, as an unprivileged writer can.
+fn set_reparse_point(path: &Path, buffer: &[u8]) {
     let file = fs::OpenOptions::new()
         // WRITE_ATTRIBUTES bypasses sharing arbitration: this is the concrete
         // race that defeated the original path-based walk's directory pins.
@@ -36,6 +37,29 @@ pub(super) fn junction(path: &Path, target: &Path) {
         .custom_flags(FILE_FLAG_BACKUP_SEMANTICS | FILE_FLAG_OPEN_REPARSE_POINT)
         .open(path)
         .unwrap();
+    let mut returned = 0;
+    // SAFETY: live handle, initialized reparse buffer, synchronous call, no
+    // output buffer.
+    let result = unsafe {
+        windows_sys::Win32::System::IO::DeviceIoControl(
+            file.as_raw_handle(),
+            FSCTL_SET_REPARSE_POINT,
+            buffer.as_ptr().cast(),
+            buffer.len() as u32,
+            std::ptr::null_mut(),
+            0,
+            &mut returned,
+            std::ptr::null_mut(),
+        )
+    };
+    assert_ne!(result, 0, "{}", io::Error::last_os_error());
+}
+
+/// Convert the empty directory `path` into a junction (a mount-point reparse
+/// point) to `target`, through a handle that holds only attribute access, as
+/// an unprivileged writer can. `target` need not exist: a junction to a
+/// missing folder dangles.
+pub(crate) fn junction(path: &Path, target: &Path) {
     let printable: Vec<u16> = target.as_os_str().encode_wide().collect();
     let substitute: Vec<u16> = OsStr::new(r"\??\")
         .encode_wide()
@@ -58,20 +82,28 @@ pub(super) fn junction(path: &Path, target: &Path) {
     {
         buffer[16 + index * 2..18 + index * 2].copy_from_slice(&value.to_le_bytes());
     }
-    let mut returned = 0;
-    // SAFETY: live handle, initialized mount-point reparse buffer, synchronous
-    // call, no output buffer.
-    let result = unsafe {
-        windows_sys::Win32::System::IO::DeviceIoControl(
-            file.as_raw_handle(),
-            FSCTL_SET_REPARSE_POINT,
-            buffer.as_ptr().cast(),
-            buffer.len() as u32,
-            std::ptr::null_mut(),
-            0,
-            &mut returned,
-            std::ptr::null_mut(),
-        )
-    };
-    assert_ne!(result, 0, "{}", io::Error::last_os_error());
+    set_reparse_point(path, &buffer);
+}
+
+/// A third-party reparse tag (MS-FSCC 2.1.2.1: the Microsoft bit clear, the
+/// name-surrogate bit clear, no reserved bit set) that no filter on a test
+/// machine owns.
+pub(crate) const OPAQUE_REPARSE_TAG: u32 = 0x0000_1451;
+
+/// Make the empty directory `path` a reparse point that redirects nothing:
+/// [`OPAQUE_REPARSE_TAG`], whose name-surrogate bit is clear, in a
+/// `REPARSE_GUID_DATA_BUFFER` (a third-party tag carries its owner's GUID).
+/// To the walk this is what a Cloud Files placeholder (a OneDrive Files
+/// On-Demand folder) is: a folder, not a link (#1451).
+pub(crate) fn opaque_reparse_point(path: &Path) {
+    // An owner GUID of this test's own; any non-zero value serves.
+    const OWNER: [u8; 16] = *b"slate-1451-tests";
+    let data = *b"1451";
+    let mut buffer = Vec::with_capacity(24 + data.len());
+    buffer.extend_from_slice(&OPAQUE_REPARSE_TAG.to_le_bytes());
+    buffer.extend_from_slice(&(data.len() as u16).to_le_bytes());
+    buffer.extend_from_slice(&0u16.to_le_bytes());
+    buffer.extend_from_slice(&OWNER);
+    buffer.extend_from_slice(&data);
+    set_reparse_point(path, &buffer);
 }

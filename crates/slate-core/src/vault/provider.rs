@@ -68,8 +68,9 @@ pub trait VaultProvider: Send + Sync {
     /// possible (write to a temp file, then rename).
     ///
     /// A refusal of the path itself (an invalid spelling, or, in the
-    /// filesystem provider on Unix, a folder on the path that is a symbolic
-    /// link or not a folder: #1452) is `VaultError::InvalidPath` and must
+    /// filesystem provider, a folder on the path that is a symbolic link or
+    /// not a folder on Unix, #1452, or a junction, a symbolic link or not a
+    /// folder on Windows, #1451) is `VaultError::InvalidPath` and must
     /// change nothing: `save_text_locked` clears the save's write intent on
     /// it, as for any provable no-write (contract 21, register entry 13).
     fn write_file(&self, relative: &str, contents: &[u8]) -> Result<(), VaultError>;

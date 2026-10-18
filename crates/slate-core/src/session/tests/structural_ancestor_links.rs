@@ -8,6 +8,9 @@
 //! them reached `FsVaultProvider::rename`, which renamed by absolute path
 //! and followed the link (#1430, probe P1b): files outside the vault moved
 //! into it, and vault files moved out of it.
+//!
+//! #1451: the same facts run on Windows with a junction in the folder's
+//! place (making one needs no privilege), where `MoveFileExW` followed it.
 
 use super::*;
 use crate::structural_batch::{BatchMoveRequest, BatchMoveState, StructuralBatchItem};
@@ -63,14 +66,37 @@ pub(super) fn indexed_vault(files: &[(&str, &str)]) -> (tempfile::TempDir, Vault
 }
 
 /// The external writer: park the real folder inside the vault, then put a
-/// symlink to `target` (outside the vault) in its place.
+/// link to `target` (outside the vault) in its place: a symbolic link on
+/// Unix, a junction on Windows (#1451).
 pub(super) fn swap_for_link(vault: &Path, folder: &str, target: &Path) {
     std::fs::rename(vault.join(folder), vault.join(format!("{folder}-parked"))).unwrap();
-    std::os::unix::fs::symlink(target, vault.join(folder)).unwrap();
+    link_folder(&vault.join(folder), target);
+}
+
+/// Put a link to the folder `target` at `at`: a symbolic link on Unix, a
+/// junction on Windows.
+pub(super) fn link_folder(at: &Path, target: &Path) {
+    #[cfg(unix)]
+    std::os::unix::fs::symlink(target, at).unwrap();
+    #[cfg(windows)]
+    {
+        std::fs::create_dir(at).unwrap();
+        crate::vault::test_support::junction(at, target);
+    }
+}
+
+/// How a refusal names a linked folder: `"<folder>" is a symbolic link` on
+/// Unix, `"<folder>" is a junction` on Windows.
+pub(super) fn linked(folder: &str) -> String {
+    #[cfg(unix)]
+    let kind = "a symbolic link";
+    #[cfg(windows)]
+    let kind = "a junction";
+    format!("\"{folder}\" is {kind}")
 }
 
 fn assert_link_refusal(error: &VaultError, refused: &str, link: &str) {
-    let needle = format!("\"{link}\" is a symbolic link");
+    let needle = linked(link);
     assert!(
         matches!(error, VaultError::InvalidPath { path, reason }
             if path == refused && reason.contains(&needle)),
@@ -191,8 +217,10 @@ fn undo_of_a_move_refuses_to_move_a_file_out_through_a_swapped_folder() {
     let outside_before = tree(outside.path());
     let vault_before = tree(tmp.path());
 
-    // Core's undo endpoint, and the hosts' inverse (mac and Windows re-run
-    // the forward move with the inverse arguments).
+    // Core's undo endpoint, and a forward move back: the mac host's inverse
+    // re-runs the forward move with the inverse arguments, and on Windows,
+    // whose host undoes through the identity inverse, the same move back is
+    // the user's own forward move (#1451's "host's forward move-back").
     let undo = session.undo_structural(forward.op_id).unwrap_err();
     assert_link_refusal(&undo, "sub/a.md", "sub");
     let inverse = session.move_file("a.md", "sub").unwrap_err();
@@ -240,7 +268,7 @@ fn batch_move_into_a_swapped_folder_is_rejected_before_anything_moves() {
         .envelope
         .preflight_failures
         .iter()
-        .filter(|failure| failure.message.contains("\"sub\" is a symbolic link"))
+        .filter(|failure| failure.message.contains(&linked("sub")))
         .filter_map(|failure| failure.item.as_ref().map(|item| item.path.as_str()))
         .collect();
     assert_eq!(refused, vec!["c.md", "x.md"], "{report:?}");
@@ -274,7 +302,7 @@ fn undo_of_a_batch_move_refuses_through_a_swapped_folder() {
         .envelope
         .preflight_failures
         .iter()
-        .filter(|failure| failure.message.contains("\"sub\" is a symbolic link"))
+        .filter(|failure| failure.message.contains(&linked("sub")))
         .filter_map(|failure| failure.item.as_ref().map(|item| item.path.as_str()))
         .collect();
     assert_eq!(refused, vec!["dest/a.md", "dest/b.md"], "{undo:?}");
@@ -471,10 +499,7 @@ fn batch_move_whose_folder_is_swapped_after_preflight_moves_nothing_through_it()
         .failure
         .as_ref()
         .expect("the refused item is reported");
-    assert!(
-        failure.message.contains("\"sub\" is a symbolic link"),
-        "{failure:?}"
-    );
+    assert!(failure.message.contains(&linked("sub")), "{failure:?}");
     assert!(report.rollback_failures.is_empty(), "{report:?}");
     assert_eq!(tree(outside.path()), outside_before, "outside changed");
     assert_eq!(std::fs::read(tmp.path().join("c.md")).unwrap(), b"vault c");
@@ -517,10 +542,7 @@ fn crash_recovery_replay_refuses_to_move_through_a_swapped_folder() {
     );
 
     let error = reopened.err().expect("recovery must fail closed");
-    assert!(
-        error.to_string().contains("\"dest\" is a symbolic link"),
-        "{error:?}"
-    );
+    assert!(error.to_string().contains(&linked("dest")), "{error:?}");
     assert_eq!(tree(outside.path()), outside_before, "outside changed");
     assert_eq!(tree(tmp.path()), vault_before, "vault changed");
     assert!(!tmp.path().join("a.md").exists());

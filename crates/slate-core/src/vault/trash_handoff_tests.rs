@@ -546,7 +546,7 @@ fn delete_refuses_a_folder_turned_into_a_junction_after_the_inventory() {
     assert_refused(
         &error,
         "sub/note.md",
-        "\"sub\" is a junction or symbolic link",
+        "\"sub\" is a junction, not a folder in this vault, so nothing was moved",
     );
     f.assert_nothing_moved();
     std::fs::remove_dir(f.vault.path().join("sub")).unwrap();
