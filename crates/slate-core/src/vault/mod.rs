@@ -44,7 +44,11 @@
 //!   `NSFileManager` on macOS, the `trash` crate elsewhere (the Recycle
 //!   Bin on Windows, the freedesktop Trash on Linux). The path it hands
 //!   over is derived from the pinned parent of a no-follow walk and must
-//!   lie beneath the vault root (`trash_handoff`, #1450). On platforms
+//!   lie beneath the vault root (`trash_handoff`, #1450). A symbolic
+//!   link whose target is truly absent (following it fails with `ENOENT`
+//!   or `ENOTDIR`, or Windows' not-found codes) is unlinked instead; every
+//!   other link, one whose target Slate cannot reach or a cycle included,
+//!   goes to the Trash as the link (#1477). On platforms
 //!   without trash support the call returns `VaultError::Trash`; the
 //!   engine does not silently fall back to permanent deletion. Tests
 //!   trash into scratch bins, never the Trash of whoever runs them

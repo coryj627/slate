@@ -23,6 +23,11 @@
 //! a reason core writes, the shape the rename refusal uses, and happens
 //! before any filesystem mutation.
 //!
+//! One kind of item never reaches the Trash: a symbolic link whose target is
+//! truly absent, which `delete` unlinks inside its pinned parent instead
+//! ([`link_target_is_absent`]). Every other link, including one whose target
+//! Slate cannot reach and a cycle, is handed over as the link (#1477).
+//!
 //! What remains is the race between this derivation and the Trash call's own
 //! resolution of the path. Only a handle-bound Trash API could close it, and
 //! no platform has one (#1430 T1). On macOS the path becomes a file reference
@@ -152,6 +157,52 @@ fn moved(original: &str) -> VaultError {
         original,
         "a folder in this path moved after it was checked, so nothing was moved to the Trash",
     )
+}
+
+/// Whether following a symbolic link failed because its target is truly
+/// absent (#1477). Only then does `delete` unlink the link (inside its pinned
+/// parent on Unix) rather than hand it to the Trash: nothing but the link
+/// would reach the Trash. Absent means the system reports nothing there:
+/// `ENOENT`, or `ENOTDIR` (the target's path runs through a file); on Windows
+/// `ERROR_FILE_NOT_FOUND`, `ERROR_PATH_NOT_FOUND`, or `ERROR_DIRECTORY`
+/// (`ENOTDIR`'s counterpart; std maps both to `NotADirectory`).
+///
+/// Every other failure leaves the target unproven absent, so the link goes to
+/// the Trash, which moves the link itself and keeps it restorable: a target
+/// Slate cannot reach (`EACCES`, or `EPERM` from macOS's privacy protection;
+/// `ERROR_ACCESS_DENIED`), a name too long (`ENAMETOOLONG`), an I/O or network
+/// failure, a drive or share that is missing or unreachable now
+/// (`ERROR_INVALID_DRIVE`, `ERROR_BAD_NETPATH`, `ERROR_BAD_NET_NAME`, which
+/// std also calls `NotFound`), and `ELOOP` (`ERROR_CANT_RESOLVE_FILENAME`).
+/// `ELOOP` is a cycle, which never resolves, but also a chain of more links
+/// than the kernel follows (32 on macOS, 40 on Linux), which can end at a real
+/// file. Before #1477 every failure counted as absent, so each such link was
+/// unlinked for good, with no error. On a scratch APFS volume `NSFileManager`
+/// moved every kind, cycle and over-long chain included, into the Trash as
+/// the link, with its Put Back records; trash-rs renames the link itself into
+/// the freedesktop Trash.
+pub(super) fn link_target_is_absent(error: &std::io::Error) -> bool {
+    #[cfg(unix)]
+    {
+        matches!(error.raw_os_error(), Some(libc::ENOENT | libc::ENOTDIR))
+    }
+    #[cfg(windows)]
+    {
+        use windows_sys::Win32::Foundation::{
+            ERROR_DIRECTORY, ERROR_FILE_NOT_FOUND, ERROR_PATH_NOT_FOUND,
+        };
+        error.raw_os_error().is_some_and(|code| {
+            matches!(
+                u32::try_from(code),
+                Ok(ERROR_FILE_NOT_FOUND | ERROR_PATH_NOT_FOUND | ERROR_DIRECTORY)
+            )
+        })
+    }
+    #[cfg(not(any(unix, windows)))]
+    {
+        let _ = error;
+        false
+    }
 }
 
 /// The path to hand the system Trash for `leaf` inside the pinned `parent`:
