@@ -29,6 +29,9 @@ import Foundation
 struct PrefsJsonStore {
     /// Vault root — `prefs.json` lives at `<root>/.slate/prefs.json`.
     let vaultRoot: URL
+    /// The identity the vault's open admitted (#1442). A write goes only
+    /// into a root that still has it; a read does not need it.
+    let rootIdentity: VaultStoreDirectory.RootIdentity?
 
     /// Read the bibliography section. Missing file or missing
     /// section returns `.empty`. Throws `PrefsJsonStoreError` on
@@ -82,7 +85,7 @@ struct PrefsJsonStore {
     /// level keys from the existing file so prefs added by future
     /// Slate versions aren't dropped. Atomic via temp-file rename.
     func writeBibliographyPrefs(_ prefs: BibliographyPrefs) throws {
-        try ensureSlateDirExists()
+        try prepareSlateDirectory()
         let url = prefsURL
 
         // Cross-writer serialization (O-5 adversarial review): the
@@ -150,20 +153,17 @@ struct PrefsJsonStore {
             .appendingPathComponent("prefs.json", isDirectory: false)
     }
 
-    private func ensureSlateDirExists() throws {
-        let slateDir = vaultRoot.appendingPathComponent(".slate", isDirectory: true)
-        if FileManager.default.fileExists(atPath: slateDir.path) {
-            return
-        }
+    /// `.slate` inside the root the open admitted, made only there (#1442):
+    /// a renamed, moved or replaced root refuses the write with the reason
+    /// the Settings error shows.
+    private func prepareSlateDirectory() throws {
         do {
-            try FileManager.default.createDirectory(
-                at: slateDir,
-                withIntermediateDirectories: true
-            )
-        } catch {
+            try VaultStoreDirectory.prepare(
+                vaultRoot: vaultRoot, expectedRootIdentity: rootIdentity)
+        } catch let refusal as VaultStoreDirectory.Refusal {
             throw PrefsJsonStoreError.writeFailed(
-                path: slateDir.path,
-                reason: error.localizedDescription
+                path: prefsURL.path,
+                reason: refusal.localizedDescription
             )
         }
     }

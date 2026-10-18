@@ -29,6 +29,12 @@ final class GraphConfigTests: XCTestCase {
         try super.tearDownWithError()
     }
 
+    /// A store anchored to `vault` as it is now — the identity an open would
+    /// have admitted (#1442).
+    private func anchoredStore(_ vault: URL) -> GraphConfigStore {
+        GraphConfigStore(vaultRoot: vault, rootIdentity: AppState.vaultRootIdentity(of: vault))
+    }
+
     private func writeGraphJson(_ text: String) throws -> URL {
         let slate = tempDir.appendingPathComponent(".slate")
         try FileManager.default.createDirectory(at: slate, withIntermediateDirectories: true)
@@ -38,7 +44,7 @@ final class GraphConfigTests: XCTestCase {
     }
 
     func testRoundTripsAllSections() throws {
-        let store = GraphConfigStore(vaultRoot: tempDir)
+        let store = anchoredStore(tempDir)
         var cfg = GraphConfig.default
         cfg.filters = GraphFilterConfig(
             includeAttachments: true, includeGhosts: false, orphansOnly: true, nameQuery: "café")
@@ -60,7 +66,7 @@ final class GraphConfigTests: XCTestCase {
     }
 
     func testMissingFileReadsDefault() throws {
-        XCTAssertEqual(try GraphConfigStore(vaultRoot: tempDir).read(), .default)
+        XCTAssertEqual(try anchoredStore(tempDir).read(), .default)
         XCTAssertEqual(GraphConfig.default, graphConfigDefault(), "the default is core's")
         XCTAssertEqual(GraphConfig.default.verbosity, .standard)
     }
@@ -68,7 +74,7 @@ final class GraphConfigTests: XCTestCase {
     func testPreservesUnknownTopLevelKeys() throws {
         // A future Slate wrote a key we don't know; our rewrite must keep it.
         let url = try writeGraphJson(#"{"version":1,"futureThing":{"keep":true},"mode":"table"}"#)
-        let store = GraphConfigStore(vaultRoot: tempDir)
+        let store = anchoredStore(tempDir)
         var cfg = try store.read()
         cfg.mode = .diagram
         try store.write(cfg)
@@ -85,7 +91,7 @@ final class GraphConfigTests: XCTestCase {
 
     func testRefusesToClobberUnparseableFile() throws {
         let url = try writeGraphJson("this is not json {{{")
-        XCTAssertThrowsError(try GraphConfigStore(vaultRoot: tempDir).write(.default))
+        XCTAssertThrowsError(try anchoredStore(tempDir).write(.default))
         // The garbage is left intact, not overwritten.
         XCTAssertEqual(try String(contentsOf: url, encoding: .utf8), "this is not json {{{")
     }
@@ -97,7 +103,7 @@ final class GraphConfigTests: XCTestCase {
         // (review finding 2).
         let future = #"{"version":999,"mode":"diagram","futureSection":{"x":1}}"#
         let url = try writeGraphJson(future)
-        let store = GraphConfigStore(vaultRoot: tempDir)
+        let store = anchoredStore(tempDir)
         XCTAssertThrowsError(try store.read(), "a newer version is not downgraded on read")
         XCTAssertThrowsError(try store.write(.default), "a newer version is not clobbered on write")
         XCTAssertEqual(try String(contentsOf: url, encoding: .utf8), future)
@@ -135,10 +141,14 @@ final class GraphConfigTests: XCTestCase {
         newer.mode = .diagram
         var older = GraphConfig.default
         older.mode = .table
-        await writer.write(vault: tempDir, config: newer, generation: 2)
-        await writer.write(vault: tempDir, config: older, generation: 1)  // superseded ⇒ dropped
+        await writer.write(
+            vault: tempDir, rootIdentity: AppState.vaultRootIdentity(of: tempDir),
+            config: newer, generation: 2)
+        await writer.write(
+            vault: tempDir, rootIdentity: AppState.vaultRootIdentity(of: tempDir),
+            config: older, generation: 1)  // superseded ⇒ dropped
         XCTAssertEqual(
-            try GraphConfigStore(vaultRoot: tempDir).read().mode, .diagram,
+            try anchoredStore(tempDir).read().mode, .diagram,
             "an older generation must not overwrite the newer one")
     }
 
@@ -146,7 +156,7 @@ final class GraphConfigTests: XCTestCase {
     func testClampsOutOfRangeValues() throws {
         _ = try writeGraphJson(
             #"{"forces":{"repel":9.0,"center":-3},"connectionsDepth":99,"display":{"nodeSizeMultiplier":100}}"#)
-        let cfg = try GraphConfigStore(vaultRoot: tempDir).read()
+        let cfg = try anchoredStore(tempDir).read()
         XCTAssertEqual(cfg.forces.repel, 1.0)
         XCTAssertEqual(cfg.forces.center, 0.0)
         XCTAssertEqual(cfg.connectionsDepth, 3)
@@ -235,7 +245,7 @@ final class GraphConfigTests: XCTestCase {
     func testLoadedConfigAppliesVerbosityToTheAnnouncer() throws {
         _ = try writeGraphJson(#"{"version":1,"verbosity":"terse"}"#)
         let state = AppState()
-        state.applyLoadedGraphConfig(try GraphConfigStore(vaultRoot: tempDir).read(), vaultURL: tempDir)
+        state.applyLoadedGraphConfig(try anchoredStore(tempDir).read(), vaultURL: tempDir)
         XCTAssertEqual(state.graphAnnouncer.verbosity, .terse)
         XCTAssertTrue(state.graphConfigWritable)
     }
@@ -300,7 +310,7 @@ final class GraphConfigTests: XCTestCase {
         let vault = try XCTUnwrap(state.currentVaultURL)
         let save = try XCTUnwrap(state.graphConfigSaveTasks[vault], "the trigger scheduled a save")
         await save.value
-        return try GraphConfigStore(vaultRoot: vault).read()
+        return try anchoredStore(vault).read()
     }
 
     /// #1218 (Term W7; C-D7): the needle typed under a transient preset

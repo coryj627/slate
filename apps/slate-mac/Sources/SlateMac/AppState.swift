@@ -494,7 +494,43 @@ final class AppState: ObservableObject {
     /// Set when an attempt to open a recent-vaults entry fails because
     /// the path no longer exists. WelcomeView reads this to drive the
     /// "missing vault, remove from recent?" confirmation alert.
-    @Published var missingRecentVault: RecentVault?
+    ///
+    /// #1442: launch-restore also sets it when a folder IS at the path but
+    /// is not the remembered vault; `missingRecentVaultMismatch` then says
+    /// what it found. Clearing the entry clears the finding with it.
+    @Published var missingRecentVault: RecentVault? {
+        didSet {
+            if missingRecentVault == nil, missingRecentVaultMismatch != nil {
+                missingRecentVaultMismatch = nil
+            }
+        }
+    }
+    /// What launch-restore found at `missingRecentVault`'s path (#1442);
+    /// nil when nothing is there, the original not-found case.
+    @Published private(set) var missingRecentVaultMismatch: RecentVaultMismatch?
+
+    /// The "Vault Not Found" alert's one presented value: the entry and what
+    /// was found at its path, read together so the message cannot pair one
+    /// entry with another's finding.
+    struct MissingRecentVaultAlert: Equatable {
+        let entry: RecentVault
+        let mismatch: RecentVaultMismatch?
+    }
+
+    var missingRecentVaultAlert: MissingRecentVaultAlert? {
+        missingRecentVault.map {
+            MissingRecentVaultAlert(entry: $0, mismatch: missingRecentVaultMismatch)
+        }
+    }
+
+    /// The one way an entry reaches the "Vault Not Found" alert. The finding
+    /// is set first so the alert never renders an entry with a stale one.
+    private func flagMissingRecentVault(
+        _ entry: RecentVault, mismatch: RecentVaultMismatch? = nil
+    ) {
+        missingRecentVaultMismatch = mismatch
+        missingRecentVault = entry
+    }
     /// Markdown files in the currently-open vault, sorted by relative
     /// path (case-insensitive). Populated by `loadFiles()` after the
     /// scanner finishes; empty while no vault is open or while the
@@ -4251,7 +4287,8 @@ final class AppState: ObservableObject {
 
     func saveWorkspaceLayout() {
         guard let vaultURL = currentVaultURL else { return }
-        let store = WorkspaceStore(vaultRoot: vaultURL)
+        let store = WorkspaceStore(
+            vaultRoot: vaultURL, rootIdentity: sidebarVaultRootIdentity)
         do {
             try store.save(
                 WorkspaceStore.snapshot(
@@ -4262,14 +4299,19 @@ final class AppState: ObservableObject {
                     expandedDirPaths: treeExpandedDirPaths))
         } catch {
             // Layout persistence must never interrupt the user; the next
-            // clean save wins.
-            fputs("Slate: workspace.json save failed: \(error)\n", stderr)
+            // clean save wins. NSLog, not stderr (#1442): this save runs at
+            // quit, so a refusal for a renamed vault folder has to reach the
+            // unified log a Finder-launched app keeps. Fixed format string:
+            // the path in the error can contain `%`.
+            let message = "Slate: workspace.json save failed: \(error)"
+            NSLog("%@", message)
         }
     }
 
     func restoreWorkspaceLayout() {
         guard let vaultURL = currentVaultURL else { return }
-        let store = WorkspaceStore(vaultRoot: vaultURL)
+        let store = WorkspaceStore(
+            vaultRoot: vaultURL, rootIdentity: sidebarVaultRootIdentity)
         guard let snapshot = store.load() else { return }
         // Restore the active leaf independently of the tab model: an unknown or
         // absent token (or a leaf not yet registered) falls back to `.outline`
@@ -8849,7 +8891,9 @@ final class AppState: ObservableObject {
     /// open — the `fileRecentsStore` shape (vault-relative path, so a
     /// computed value, repopulated on every vault switch).
     private var searchRecentsStore: SearchRecentsStore? {
-        currentVaultURL.map { SearchRecentsStore(vaultRoot: $0) }
+        currentVaultURL.map {
+            SearchRecentsStore(vaultRoot: $0, rootIdentity: sidebarVaultRootIdentity)
+        }
     }
 
     /// Accessibility-announcement seam (M-3, #534; shared with O-5).
@@ -11203,7 +11247,7 @@ final class AppState: ObservableObject {
         // performs this check, but direct switch callers need the same
         // preservation guarantee before the close half of the transition.
         guard Self.vaultDirectoryExists(entry) else {
-            missingRecentVault = entry
+            flagMissingRecentVault(entry)
             return
         }
         supersedePendingTabCloseForVaultTransition()
@@ -11244,7 +11288,7 @@ final class AppState: ObservableObject {
         // manual recent-list click.
         hasAttemptedLaunchRestore = true
         guard Self.vaultDirectoryExists(entry) else {
-            missingRecentVault = entry
+            flagMissingRecentVault(entry)
             return
         }
         if isVaultOpen {
@@ -11330,6 +11374,12 @@ final class AppState: ObservableObject {
         /// caller routes this through `openRecent`, which sets
         /// `missingRecentVault` and never opens a session.
         case notFound(RecentVault)
+        /// A folder is at the most-recent entry's path, but it is not the
+        /// vault the entry remembers (#1442): it holds nothing but `.slate`,
+        /// or its identity is another folder's. Never opened silently: land
+        /// on Welcome with the same "Vault Not Found" alert, which says what
+        /// was found and offers Open Anyway.
+        case notRestored(RecentVault, RecentVaultMismatch)
         /// Show the picker / Welcome with no auto-restore: the ⌥ escape
         /// hatch is held, the "Reopen last vault" setting is off, or
         /// there is no recent vault to restore.
@@ -11340,18 +11390,25 @@ final class AppState: ObservableObject {
     /// whole matrix is unit-testable without an event queue or the
     /// filesystem. `optionHeld` is the ⌥-at-launch escape hatch;
     /// `restoreEnabled` is the Settings ▸ General toggle; `vaultExists`
-    /// decides restore vs. the not-found flow for the most-recent entry.
+    /// decides restore vs. the not-found flow for the most-recent entry;
+    /// `mismatch` (#1442) says whether the folder that IS there is
+    /// something other than the remembered vault.
     static func launchDestination(
         recents: [RecentVault],
         optionHeld: Bool,
         vaultExists: (RecentVault) -> Bool,
+        mismatch: (RecentVault) -> RecentVaultMismatch?,
         restoreEnabled: Bool = true
     ) -> LaunchDestination {
         // ⌥ held, toggle off, or nothing to restore → a clean Welcome.
         guard restoreEnabled, !optionHeld, let mostRecent = recents.first else {
             return .welcome
         }
-        return vaultExists(mostRecent) ? .restore(mostRecent) : .notFound(mostRecent)
+        guard vaultExists(mostRecent) else { return .notFound(mostRecent) }
+        if let found = mismatch(mostRecent) {
+            return .notRestored(mostRecent, found)
+        }
+        return .restore(mostRecent)
     }
 
     /// True once `restoreMostRecentVaultOnLaunch()` has run, so the
@@ -11372,7 +11429,8 @@ final class AppState: ObservableObject {
     /// unit-testable.
     func restoreMostRecentVaultOnLaunch(
         optionHeld: Bool = NSEvent.modifierFlags.contains(.option),
-        vaultExists: (RecentVault) -> Bool = AppState.vaultDirectoryExists
+        vaultExists: (RecentVault) -> Bool = AppState.vaultDirectoryExists,
+        mismatch: (RecentVault) -> RecentVaultMismatch? = RecentVault.launchRestoreMismatch
     ) {
         guard !hasAttemptedLaunchRestore else { return }
         hasAttemptedLaunchRestore = true
@@ -11381,6 +11439,7 @@ final class AppState: ObservableObject {
             recents: recentVaults,
             optionHeld: optionHeld,
             vaultExists: vaultExists,
+            mismatch: mismatch,
             restoreEnabled: restoreVaultOnLaunch
         ) {
         case .restore(let entry), .notFound(let entry):
@@ -11390,6 +11449,16 @@ final class AppState: ObservableObject {
             // alert — the "reuse the existing missing-vault handling"
             // requirement, no new error path.
             openRecent(entry)
+        case .notRestored(let entry, let found):
+            // #1442: the folder at the path is not the remembered vault.
+            // Open nothing and delete nothing (it may be the user's): the
+            // not-found alert says what was found and lets the user open it
+            // anyway, remove the entry, or keep it. Logged for diagnostics;
+            // fixed format string, a path can contain `%`.
+            let message =
+                "Slate: launch restore did not reopen '\(entry.path)': \(found)"
+            NSLog("%@", message)
+            flagMissingRecentVault(entry, mismatch: found)
         case .welcome:
             break
         }
@@ -11407,10 +11476,11 @@ final class AppState: ObservableObject {
             recents: recentVaults,
             optionHeld: NSEvent.modifierFlags.contains(.option),
             vaultExists: AppState.vaultDirectoryExists,
+            mismatch: RecentVault.launchRestoreMismatch,
             restoreEnabled: restoreVaultOnLaunch
         ) {
         case .restore: return true
-        case .notFound, .welcome: return false
+        case .notFound, .notRestored, .welcome: return false
         }
     }
 
@@ -13182,7 +13252,7 @@ final class AppState: ObservableObject {
             bibliographyPrefs = .empty
             return
         }
-        let store = PrefsJsonStore(vaultRoot: vault)
+        let store = PrefsJsonStore(vaultRoot: vault, rootIdentity: sidebarVaultRootIdentity)
         do {
             let prefs = try store.readBibliographyPrefs()
             bibliographyPrefs = prefs
@@ -13275,7 +13345,7 @@ final class AppState: ObservableObject {
     /// style, etc.
     func applyBibliographyPrefs(_ newPrefs: BibliographyPrefs) async {
         guard let vault = currentVaultURL else { return }
-        let store = PrefsJsonStore(vaultRoot: vault)
+        let store = PrefsJsonStore(vaultRoot: vault, rootIdentity: sidebarVaultRootIdentity)
         do {
             try store.writeBibliographyPrefs(newPrefs)
         } catch {
@@ -25311,7 +25381,11 @@ final class AppState: ObservableObject {
     // MARK: - Private
 
     private func recordOpened(url: URL) {
-        let entry = RecentVault(url: url)
+        // #1442: remember WHICH folder opened, so a later launch can tell it
+        // from a folder that appears at the same path after a rename or move.
+        let entry = RecentVault(
+            url: url,
+            rootIdentity: .recorded(at: url, admitted: sidebarVaultRootIdentity))
         do {
             recentVaults = try recentsStore.add(entry)
         } catch {

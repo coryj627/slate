@@ -30,7 +30,10 @@ extension AppState {
     func loadGraphConfig() {
         guard let root = currentVaultURL else { return }
         do {
-            applyLoadedGraphConfig(try GraphConfigStore(vaultRoot: root).read(), vaultURL: root)
+            applyLoadedGraphConfig(
+                try GraphConfigStore(vaultRoot: root, rootIdentity: sidebarVaultRootIdentity)
+                    .read(),
+                vaultURL: root)
         } catch {
             applyGraphConfigLoadFailure(vaultURL: root)
         }
@@ -113,10 +116,15 @@ extension AppState {
         // queued writes; finding 3 round-3).
         let gen = (graphConfigSaveGen[root] ?? 0) + 1
         graphConfigSaveGen[root] = gen
+        // The identity is captured with the root (#1442): a save still pending
+        // after a switch writes to the vault it was scheduled for, and only
+        // while that folder is still the one its open admitted.
+        let rootIdentity = sidebarVaultRootIdentity
         graphConfigSaveTasks[root] = Task { [weak self] in
             try? await Task.sleep(nanoseconds: 400_000_000)
             guard !Task.isCancelled else { return }
-            await GraphConfigWriter.shared.write(vault: root, config: snapshot, generation: gen)
+            await GraphConfigWriter.shared.write(
+                vault: root, rootIdentity: rootIdentity, config: snapshot, generation: gen)
             // Clear only the TASK entry, only if a newer same-vault save
             // hasn't replaced us (a task past its sleep can't be cancelled,
             // so it must not drop its successor's entry). `graphConfigSaveGen`

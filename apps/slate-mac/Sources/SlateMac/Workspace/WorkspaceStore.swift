@@ -30,6 +30,9 @@ struct WorkspaceStore {
     static let maxExpandedDirs = 500
 
     let vaultRoot: URL
+    /// The identity the vault's open admitted (#1442). `save` writes only
+    /// into a root that still has it; `load` does not need it.
+    let rootIdentity: VaultStoreDirectory.RootIdentity?
 
     var fileURL: URL {
         vaultRoot.appendingPathComponent(".slate/workspace.json")
@@ -162,10 +165,11 @@ struct WorkspaceStore {
 
     /// Atomic temp+rename in `.slate/` (same volume ⇒ atomic). Errors are
     /// reported to the caller for logging; layout persistence must never
-    /// interrupt the user.
+    /// interrupt the user. A root that was renamed, moved or replaced since
+    /// the open refuses the save rather than recreating it (#1442).
     func save(_ snapshot: Snapshot) throws {
-        let dir = fileURL.deletingLastPathComponent()
-        try FileManager.default.createDirectory(at: dir, withIntermediateDirectories: true)
+        let dir = try VaultStoreDirectory.prepare(
+            vaultRoot: vaultRoot, expectedRootIdentity: rootIdentity)
         let encoder = JSONEncoder()
         encoder.outputFormatting = [.prettyPrinted, .sortedKeys]
         let data = try encoder.encode(snapshot)
