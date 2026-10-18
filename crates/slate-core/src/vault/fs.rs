@@ -458,7 +458,8 @@ impl FsVaultProvider {
     /// refuses with `InvalidPath` before anything is staged, so the refusal is
     /// the provable no-write `save_text_locked` clears its intent for. The
     /// staged bytes are then renamed into that folder by descriptor, so the
-    /// path is never resolved again. `before_publish` is a test seam that runs
+    /// target's path is never resolved again (the staged file's own, in
+    /// `.slate`, still is: #940). `before_publish` is a test seam that runs
     /// after the bytes are staged, just before the publish.
     #[cfg(unix)]
     fn write_file_beneath_root(
@@ -480,7 +481,8 @@ impl FsVaultProvider {
         path_guard.disable_cleanup(true);
         drop(path_guard);
         drop(file);
-        target.sync_parent();
+        // Best effort, as before: the published bytes stand either way.
+        let _ = target.sync_parent();
         Ok(())
     }
 }
@@ -621,13 +623,12 @@ impl PinnedMutationTarget {
     /// so the marker-clearing index commit can never outlive the publication
     /// it vouches for (W4-3; contract 21). The pinned descriptor is opened for
     /// search only (`O_SEARCH`, or `O_PATH`, which cannot be synced), so the
-    /// folder is reopened through it for reading. A best effort, as before:
-    /// the published bytes stand either way.
-    fn sync_parent(&self) {
+    /// folder is reopened through it for reading. The save treats it as a
+    /// best effort, as before: the published bytes stand either way.
+    fn sync_parent(&self) -> io::Result<()> {
         use std::os::fd::{AsRawFd as _, FromRawFd as _};
 
-        // SAFETY: `parent` is an open directory and "." is NUL-terminated; a
-        // successful descriptor is owned by the `File` made from it.
+        // SAFETY: `parent` is an open directory and "." is NUL-terminated.
         let descriptor = unsafe {
             libc::openat(
                 self.parent.as_raw_fd(),
@@ -635,10 +636,11 @@ impl PinnedMutationTarget {
                 libc::O_RDONLY | libc::O_DIRECTORY | libc::O_CLOEXEC,
             )
         };
-        if descriptor >= 0 {
-            // SAFETY: as above.
-            let _ = unsafe { fs::File::from_raw_fd(descriptor) }.sync_all();
+        if descriptor < 0 {
+            return Err(io::Error::last_os_error());
         }
+        // SAFETY: a successful openat returned a new descriptor we now own.
+        unsafe { fs::File::from_raw_fd(descriptor) }.sync_all()
     }
 }
 
@@ -3362,5 +3364,25 @@ mod tests {
         assert_eq!(meta.permissions().mode() & 0o777, 0o640);
         assert_eq!(std::fs::read(tmp.path().join("link.md")).unwrap(), b"saved");
         assert_eq!(std::fs::read(&target).unwrap(), b"outside target");
+    }
+
+    /// W4-3's durable publication (contract 21) survives #1452: the folder a
+    /// save publishes into is synced after the rename. The pinned descriptor
+    /// is search-only (`O_SEARCH` on macOS, `O_PATH` on Linux, which cannot be
+    /// synced), so the folder is reopened through it; a sync that failed every
+    /// time would lose the guarantee without a visible error, since the save
+    /// treats the sync as a best effort.
+    #[cfg(unix)]
+    #[test]
+    fn the_folder_a_save_publishes_into_can_be_synced() {
+        let (_tmp, p) = vault();
+        p.write_file("notes/a.md", b"a").unwrap();
+
+        for relative in ["notes/a.md", "top.md", "notes/new.md"] {
+            p.pin_mutation_target(relative, false, Mutation::Save)
+                .unwrap()
+                .sync_parent()
+                .unwrap_or_else(|error| panic!("{relative}: {error}"));
+        }
     }
 }
