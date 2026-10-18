@@ -42,7 +42,7 @@ import plistlib
 import re
 import subprocess
 import sys
-from typing import Callable, Dict, List, NamedTuple, Optional, TextIO, Tuple
+from typing import Callable, Dict, List, NamedTuple, Optional, TextIO
 
 ISSUE = "https://github.com/coryj627/slate/issues/1460"
 
@@ -57,7 +57,10 @@ _MACOS = {"1", "macos"}
 
 # `otool -arch all -l` names the file before its load commands: `path:` for a
 # thin binary, `path (architecture arm64):` for each slice of a universal one.
-_HEADER = re.compile(r"^.*?(?: \(architecture (?P<arch>[^)]+)\))?:$")
+# Any other flush-left line ending in `:` also opens a slice, named by its
+# text in messages; one that breaks the structure leaves a slice without a
+# build version, which fails closed.
+_ARCH = re.compile(r" \(architecture (?P<arch>[^)]+)\):$")
 _FIELD = re.compile(r"^\s+(?P<key>[a-z_]+)\s+(?P<value>\S.*?)\s*$")
 _VERSION = re.compile(r"^(?P<major>\d+)(?:\.\d+){0,2}$")
 
@@ -75,13 +78,23 @@ class Reading(NamedTuple):
     major: int
 
 
-def slices(output: str) -> List[Tuple[str, List[Dict[str, str]]]]:
-    """Split `otool -arch all -l` output into (architecture, load commands).
+class Slice(NamedTuple):
+    header: str  # the line otool named it with
+    arch: str  # "" for a thin binary, or when the header names none
+    commands: List[Dict[str, str]]
+
+
+def _began(output: str) -> str:
+    first = next((line for line in output.splitlines() if line.strip()), None)
+    return f"its output began {first!r}" if first is not None else "it printed nothing"
+
+
+def slices(output: str) -> List[Slice]:
+    """Split `otool -arch all -l` output into slices and their load commands.
 
     Each load command is the dict of its `key value` lines, first value kept.
-    A thin binary's one slice has the architecture "".
     """
-    found: List[Tuple[str, List[Dict[str, str]]]] = []
+    found: List[Slice] = []
     commands: Optional[List[Dict[str, str]]] = None
     fields: Optional[Dict[str, str]] = None
     for line in output.splitlines():
@@ -90,13 +103,14 @@ def slices(output: str) -> List[Tuple[str, List[Dict[str, str]]]]:
         if not line[0].isspace():
             if line.startswith("Load command "):
                 if commands is None:
-                    raise Unreadable("otool printed a load command before naming the file")
+                    raise Unreadable(f"otool printed a load command before naming the file; {_began(output)}")
                 fields = {}
                 commands.append(fields)
             elif line.endswith(":"):
+                arch = _ARCH.search(line)
                 commands = []
                 fields = None
-                found.append((_HEADER.match(line).group("arch") or "", commands))
+                found.append(Slice(line, arch.group("arch") if arch else "", commands))
             else:
                 # "Section" opens a segment's section; its fields are not the
                 # command's. Other flush-left lines (a dylib's "compatibility
@@ -111,41 +125,51 @@ def slices(output: str) -> List[Tuple[str, List[Dict[str, str]]]]:
     return found
 
 
-def _slice_name(arch: str) -> str:
-    return f"the {arch} slice" if arch else "the executable"
+def _slice_name(piece: Slice, executable: Optional[str]) -> str:
+    if piece.arch:
+        return f"the {piece.arch} slice"
+    if executable is not None and piece.header == f"{executable}:":
+        return "the executable"
+    return f"the slice otool headed {piece.header!r}"
 
 
-def read_sdks(output: str) -> List[Reading]:
-    """Every macOS SDK the slices record; raise Unreadable when one cannot be read."""
+def read_sdks(output: str, executable: Optional[str] = None) -> List[Reading]:
+    """Every macOS SDK the slices record; raise Unreadable when one cannot be read.
+
+    `executable` is the path otool was given, so a thin binary's header
+    reads as "the executable" in messages.
+    """
     found = slices(output)
     if not found:
-        raise Unreadable("otool named no file or architecture slice (is it a Mach-O executable?)")
+        raise Unreadable(f"otool named no file or architecture slice (is it a Mach-O executable?); {_began(output)}")
     readings: List[Reading] = []
-    for arch, commands in found:
+    for piece in found:
+        name = _slice_name(piece, executable)
+        # Every macOS build-version command is judged. ld writes one or the
+        # other, and if a slice ever carried both, judging both means neither
+        # can pass a 27 that the other hides.
         records = []
-        for fields in commands:
+        for fields in piece.commands:
             command = fields.get("cmd", "")
             if command == "LC_BUILD_VERSION":
                 platform = fields.get("platform", "")
                 if platform.lower() not in _MACOS:
-                    raise Unreadable(
-                        f"{_slice_name(arch)} records LC_BUILD_VERSION for platform {platform or '(none)'}, not macOS"
-                    )
+                    raise Unreadable(f"{name} records LC_BUILD_VERSION for platform {platform or '(none)'}, not macOS")
                 records.append((command, fields))
             elif command == "LC_VERSION_MIN_MACOSX":
                 records.append((command, fields))
             elif command.startswith("LC_VERSION_MIN_"):
-                raise Unreadable(f"{_slice_name(arch)} records {command}, not a macOS version")
+                raise Unreadable(f"{name} records {command}, not a macOS version")
         if not records:
-            raise Unreadable(f"{_slice_name(arch)} has no LC_BUILD_VERSION or LC_VERSION_MIN_MACOSX load command")
+            raise Unreadable(f"{name} has no LC_BUILD_VERSION or LC_VERSION_MIN_MACOSX load command")
         for command, fields in records:
             sdk = fields.get("sdk")
             if sdk is None:
-                raise Unreadable(f"{_slice_name(arch)}'s {command} has no sdk line")
+                raise Unreadable(f"{name}'s {command} has no sdk line")
             version = _VERSION.match(sdk)
             if version is None:
-                raise Unreadable(f"{_slice_name(arch)}'s {command} sdk is {sdk!r}, not a version")
-            readings.append(Reading(arch, command, sdk, int(version.group("major"))))
+                raise Unreadable(f"{name}'s {command} sdk is {sdk!r}, not a version")
+            readings.append(Reading(piece.arch, command, sdk, int(version.group("major"))))
     return readings
 
 
@@ -225,7 +249,8 @@ def check(
     status = 0
     for given in paths:
         try:
-            readings = read_sdks(otool_load_commands(executable_of(Path(given)), run))
+            executable = executable_of(Path(given))
+            readings = read_sdks(otool_load_commands(executable, run), str(executable))
         except Unreadable as problem:
             status = 1
             summary = f"cannot read the SDK {given} records: {problem}"

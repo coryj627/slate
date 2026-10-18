@@ -128,13 +128,18 @@ class Judged:
 
 
 def judge(output, returncode=0, stderr="", annotate=False):
-    """Run check() on a real temporary file, with otool faked."""
+    """Run check() on a real temporary file, with otool faked.
+
+    The canned output names PATH; otool names the file it was given, so PATH
+    becomes the temporary file's path.
+    """
     with tempfile.TemporaryDirectory() as tmp:
         executable = Path(tmp) / "SlateMac"
         executable.write_bytes(b"\xcf\xfa\xed\xfe")
         out, err = io.StringIO(), io.StringIO()
+        canned = output.replace(PATH, str(executable))
         status = tripwire.check(
-            [str(executable)], run=otool(output, returncode, stderr), out=out, err=err, annotate=annotate
+            [str(executable)], run=otool(canned, returncode, stderr), out=out, err=err, annotate=annotate
         )
     return Judged(status, out.getvalue(), err.getvalue())
 
@@ -179,6 +184,21 @@ class TwentySevenOrLaterFails(unittest.TestCase):
                 self.assertEqual(1, judged.status)
                 self.assertIn(f"records macOS SDK {sdk}.", judged.err)
 
+    def test_both_build_version_commands_in_one_slice_are_judged(self):
+        # ld writes one or the other; if a slice carried both, neither may
+        # hide a 27 from the check.
+        def both(build, minimum):
+            return BUILD_VERSION.format(platform="1", sdk=build) + VERSION_MIN.format(
+                command="LC_VERSION_MIN_MACOSX", sdk=minimum
+            )
+
+        self.assertEqual(
+            ["15.0", "14.0"], [r.sdk for r in tripwire.read_sdks(thin(version=both("15.0", "14.0")))]
+        )
+        for build, minimum in (("27.0", "15.0"), ("15.0", "27.0")):
+            with self.subTest(build=build, minimum=minimum):
+                self.assertEqual(1, judge(thin(version=both(build, minimum))).status)
+
     def test_one_slice_at_27_fails_a_universal_binary(self):
         # Xcode's xctest runner records 27.0 in both slices; one is enough.
         judged = judge(universal(("x86_64", "15.0"), ("arm64", "27.0")))
@@ -213,13 +233,36 @@ class AnythingUnreadableFails(unittest.TestCase):
 
     def test_empty_output_fails(self):
         self.assertUnreadable(judge(""), "otool named no file")
+        self.assertIn("it printed nothing", judge("").err)
 
     def test_a_file_otool_cannot_read_fails_although_otool_exits_0(self):
         # Measured: otool prints this for a text file and exits 0.
-        self.assertUnreadable(judge(f"{PATH}: is not an object file\n"), "otool named no file")
+        judged = judge(f"{PATH}: is not an object file\n")
+        self.assertUnreadable(judged, "otool named no file")
+        self.assertIn(": is not an object file'", judged.err)
 
     def test_a_binary_without_a_build_version_fails(self):
-        self.assertUnreadable(judge(thin(version="")), "no LC_BUILD_VERSION or LC_VERSION_MIN_MACOSX")
+        self.assertUnreadable(
+            judge(thin(version="")), "the executable has no LC_BUILD_VERSION or LC_VERSION_MIN_MACOSX"
+        )
+
+    def test_a_header_shaped_line_that_breaks_the_structure_fails_closed_and_is_quoted(self):
+        # A line otool has never printed, flush left and ending in ':', after
+        # the commands: it opens a slice with no build version.
+        judged = judge(thin("15.0") + "Load commands of the next object:\n")
+        self.assertUnreadable(judged, "the slice otool headed 'Load commands of the next object:' has no LC_BUILD_VERSION")
+        # The same line between the header and the commands takes them, and
+        # leaves the file's own slice without a build version.
+        judged = judge(thin("15.0").replace(f"{PATH}:\n", f"{PATH}:\nLoad commands:\n"))
+        self.assertUnreadable(judged, "the executable has no LC_BUILD_VERSION")
+
+    def test_a_reworded_architecture_header_is_named_and_its_slices_still_judged(self):
+        reworded = universal(("x86_64", "15.0"), ("arm64", "27.0")).replace(" (architecture ", " (for architecture ")
+        judged = judge(reworded)
+        self.assertEqual(1, judged.status)
+        self.assertIn("records macOS SDK 15.0, 27.0.", judged.err)
+        missing = universal(("x86_64", "15.0"), ("arm64", None)).replace(" (architecture ", " (for architecture ")
+        self.assertUnreadable(judge(missing), "(for architecture arm64):' has no LC_BUILD_VERSION")
 
     def test_a_universal_slice_without_a_build_version_fails(self):
         self.assertUnreadable(
@@ -248,7 +291,10 @@ class AnythingUnreadableFails(unittest.TestCase):
         self.assertUnreadable(judge(thin(version=version)), "LC_VERSION_MIN_IPHONEOS, not a macOS version")
 
     def test_a_load_command_before_any_file_header_fails(self):
-        self.assertUnreadable(judge(body("15.0")), "before naming the file")
+        # As if otool stopped ending its header with ':'.
+        reworded = thin("15.0").replace(f"{PATH}:\n", f"{PATH}\n")
+        self.assertUnreadable(judge(reworded), "before naming the file; its output began '")
+        self.assertUnreadable(judge(body("15.0")), "before naming the file; its output began 'Load command 1'")
 
     def test_otool_failing_fails(self):
         judged = judge("", returncode=1, stderr="error: otool-classic: can't open file: SlateMac\n")
