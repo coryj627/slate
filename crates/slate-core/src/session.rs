@@ -6033,11 +6033,11 @@ impl VaultSession {
             return Ok(None);
         }
 
-        let mut stmt = conn.prepare("SELECT path FROM files ORDER BY id ASC")?;
-        let paths = stmt
-            .query_map([], |row| row.get::<_, String>(0))?
-            .collect::<Result<Vec<_>, _>>()?;
-        let index = crate::InMemoryVaultIndex::new(paths);
+        // The snapshot every resolution reads (#1429): path order, though
+        // the formatter's answer depends on no order — it refuses a target
+        // with a case twin, the only tie order could break.
+        let index =
+            crate::InMemoryVaultIndex::new(crate::links_db::indexed_paths_in_path_order(&conn)?);
         Ok(crate::format_wikilink_for_path(path, &index))
     }
 

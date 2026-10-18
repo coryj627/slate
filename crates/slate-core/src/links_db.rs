@@ -102,6 +102,12 @@ thread_local! {
     /// a genuine SQLite error on the read a snapshot lookup is built from.
     pub(crate) static SNAPSHOT_FAULT: std::cell::Cell<bool> =
         const { std::cell::Cell::new(false) };
+    /// #1429 test seam: paths [`indexed_paths_in_path_order`] returned on
+    /// this thread, beside `link_resolver::SNAPSHOT_PATHS` (every path a
+    /// snapshot materialized), so a fact can show a snapshot was read
+    /// through the path-order helper and through nothing else.
+    pub(crate) static PATH_ORDER_SNAPSHOT_PATHS: std::cell::Cell<usize> =
+        const { std::cell::Cell::new(0) };
 }
 
 /// Where [`replace_links_for_file`] draws a target's candidate paths from
@@ -163,6 +169,8 @@ pub(crate) fn indexed_paths_in_path_order(conn: &Connection) -> Result<Vec<Strin
     let paths = statement
         .query_map([], |row| row.get::<_, String>(0))?
         .collect::<Result<Vec<_>, _>>()?;
+    #[cfg(test)]
+    PATH_ORDER_SNAPSHOT_PATHS.with(|count| count.set(count.get() + paths.len()));
     Ok(paths)
 }
 

@@ -235,6 +235,135 @@ fn a_failed_snapshot_read_leaves_the_rescan_incomplete_and_resolves_nothing() {
     );
 }
 
+/// The paths `operation` materialized into snapshots on this thread
+/// (`link_resolver::SNAPSHOT_PATHS`), and how many of them the path-order
+/// helper read (`links_db::PATH_ORDER_SNAPSHOT_PATHS`).
+fn snapshot_reads(operation: impl FnOnce()) -> (usize, usize) {
+    let counters = || {
+        (
+            crate::link_resolver::SNAPSHOT_PATHS.with(std::cell::Cell::get),
+            crate::links_db::PATH_ORDER_SNAPSHOT_PATHS.with(std::cell::Cell::get),
+        )
+    };
+    let (materialized_before, helper_before) = counters();
+    operation();
+    let (materialized_after, helper_after) = counters();
+    (
+        materialized_after - materialized_before,
+        helper_after - helper_before,
+    )
+}
+
+/// #1429: every snapshot a link resolution reads comes through
+/// `links_db::indexed_paths_in_path_order` — the one statement whose path
+/// order `links_db::tests::the_whole_table_snapshot_reads_in_path_order`
+/// pins — and through nothing else: a cold scan and its dangling-link pass,
+/// a rescan with a changed linked note, the one-path repair (which adds its
+/// own path), `wikilink_for_path`, a Bases query whose rows carry a
+/// link-valued property, a rename's heal and link rewrite, and a rename
+/// that reclassifies a note. The save lookup reads a path target's rows in
+/// the same order through its own statement (`links_db::candidate_rows_sql`);
+/// the embed lookup's unordered rows are #1428.
+#[test]
+fn every_resolution_snapshot_is_read_through_the_path_order_helper() {
+    let (tmp, session) = make_vault(|provider| {
+        provider
+            .write_file("Projects/Target.md", b"# Target\n")
+            .unwrap();
+        provider
+            .write_file(
+                "Projects/Note.md",
+                b"---\nauthor: \"[[Target]]\"\n---\n# Note\n\nSee [[Target]] and [[later]].\n",
+            )
+            .unwrap();
+        provider
+            .write_file("Elsewhere/Host.md", b"# Host\n\n[[Note]]\n")
+            .unwrap();
+    });
+    let read_through_the_helper = |what: &str, (materialized, helper): (usize, usize), extra| {
+        assert!(helper > 0, "{what}: read no snapshot through the helper");
+        assert_eq!(
+            materialized,
+            helper + extra,
+            "{what}: a snapshot came from somewhere else"
+        );
+    };
+
+    read_through_the_helper(
+        "a cold scan",
+        snapshot_reads(|| {
+            session.scan_initial(&CancelToken::new()).unwrap();
+        }),
+        0,
+    );
+    std::fs::write(
+        tmp.path().join("Elsewhere/Host.md"),
+        "# Host\n\n[[Note]] [[Target]]\n",
+    )
+    .unwrap();
+    read_through_the_helper(
+        "a rescan",
+        snapshot_reads(|| {
+            let report = session
+                .rescan_with_progress(&CancelToken::new(), None)
+                .unwrap();
+            assert!(report.complete, "{report:?}");
+        }),
+        0,
+    );
+    read_through_the_helper(
+        "the one-path repair",
+        snapshot_reads(|| session.reindex_path("Projects/Note.md").unwrap()),
+        1,
+    );
+    read_through_the_helper(
+        "wikilink_for_path",
+        snapshot_reads(|| {
+            assert_eq!(
+                session.wikilink_for_path("Projects/Target.md").unwrap(),
+                Some("[[Target]]".to_string())
+            );
+        }),
+        0,
+    );
+    let handle = session
+        .open_base_inline(
+            "views:\n  - type: table\n    name: All\n    order:\n      - file.path\n      - author\n",
+            None,
+        )
+        .unwrap();
+    read_through_the_helper(
+        "a Bases query",
+        snapshot_reads(|| {
+            let result = session
+                .base_execute(handle, 0, None, None, &CancelToken::new())
+                .unwrap();
+            assert_eq!(result.view_error, None, "{result:?}");
+        }),
+        0,
+    );
+    read_through_the_helper(
+        "a rename",
+        snapshot_reads(|| {
+            let report = session
+                .rename_file("Projects/Target.md", "Renamed.md")
+                .unwrap();
+            assert!(report.failed.is_empty(), "{:?}", report.failed);
+        }),
+        0,
+    );
+    read_through_the_helper(
+        "a reclassifying rename",
+        snapshot_reads(|| {
+            let report = session
+                .rename_file("Elsewhere/Host.md", "Host.txt")
+                .unwrap();
+            assert!(report.failed.is_empty(), "{:?}", report.failed);
+        }),
+        0,
+    );
+}
+
 /// Notes in each perf-guard vault.
 const GUARD_NOTES: usize = 10_000;
 
