@@ -38,10 +38,13 @@ import Foundation
 extension RescanReason: Comparable {
     /// The pending-reason lattice's order. Core's `RescanReason` is the
     /// sentence's payload; the order is the host's, explicit here so another
-    /// reason takes its rank where the join reads it (PR 20's design, #1420,
-    /// adds a watcher reason below `.foreground`).
+    /// reason takes its rank where the join reads it. `.watcher` (plan 43 PR
+    /// 20a, #1267) sits below `.foreground`, the join PR 20's design fixes
+    /// (Explicit > Foreground > Watcher); mac requests no watcher rescan
+    /// until PR 20c.
     var latticeRank: Int {
         switch self {
+        case .watcher: return 0
         case .foreground: return 1
         case .explicit: return 2
         }

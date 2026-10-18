@@ -2032,4 +2032,12 @@ internal sealed class UiVaultEventListener : VaultEventListener
     public void OnFileChange(FileChangeEvent @event) => _onFileChange(@event);
     public void OnIndexPhase(IndexPhase phase, ulong filesSeen) =>
         _onIndexPhase(phase, filesSeen);
+
+    /// <summary>Plan 43 PR 20a (#1267): the core vault watcher's burst
+    /// signal. A no-op until PR 20b wires it to a Watcher-reason rescan; the
+    /// host does not call <c>StartWatching</c> before then, so core never
+    /// calls this.</summary>
+    public void OnExternalChange()
+    {
+    }
 }

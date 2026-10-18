@@ -97,6 +97,12 @@ internal sealed class EventRecorder : VaultEventListener
         }
     }
 
+    /// <summary>Plan 43 PR 20a (#1267): no fact here starts the vault
+    /// watcher, so this never fires; PR 20b records it.</summary>
+    public void OnExternalChange()
+    {
+    }
+
     public T Locked<T>(Func<EventRecorder, T> read)
     {
         lock (_lock)

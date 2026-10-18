@@ -118,6 +118,19 @@ petgraph = { version = "0.8", default-features = false, features = [
 # MOVEFILE_REPLACE_EXISTING for an atomic no-clobber rename. Keep the API
 # surface narrow rather than taking the full Win32 feature set.
 windows-sys = { version = "0.61", features = ["Win32_Storage_FileSystem"] }
+# Plan 43 PR 20a (#1267): the vault watcher behind `VaultProvider::watch`
+# (FSEvents on macOS, ReadDirectoryChangesW on Windows, inotify on Linux).
+# Pinned EXACTLY at the release candidate the owner chose on 2026-10-17
+# (`docs/plans/43_mac_backlog_delivery/20_vault_watcher_design.md` §3.1,
+# §11 Q6): 8.2.0, the latest stable, parses an overflowed Windows buffer as
+# empty and loses it silently, while rc.5 reports it as `Flag::Rescan` and
+# re-arms. Move the pin to 9.0.0 in a one-line follow-up when it ships.
+# Default features only (`macos_fsevent`): no `macos_kqueue`, no debouncer
+# crate. CC0-1.0 (notify), MIT OR Apache-2.0 (notify-types), Zlib OR
+# Apache-2.0 OR MIT (objc2-core-*), BSL-1.0 (xxhash-rust), ISC (inotify),
+# MIT (mio; kqueue and kqueue-sys, locked for the BSD targets only) — all
+# compatible inbound for AGPL-3.0-or-later.
+notify = "=9.0.0-rc.5"
 
 # --- Diagnostics facade (#507) ----------------------------------------
 # `log` is the crate-wide logging facade slate-core routes its non-fatal

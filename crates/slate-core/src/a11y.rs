@@ -586,17 +586,23 @@ pub enum SidebarWidthLimit {
     Widest,
 }
 
-/// Why a rescan of the open vault ran (W7-7 PR 7, #1252; R-9). Hosts
-/// own the trigger and the gate — an explicit Refresh always speaks its
-/// outcome, a foreground rescan only when something changed or the scan
-/// was incomplete — and core owns the sentence, which is the same for
-/// both.
+/// Why a rescan of the open vault ran (W7-7 PR 7, #1252; R-9; plan 43
+/// PR 20a, #1267). Hosts own the trigger and the gate — an explicit
+/// Refresh always speaks its outcome, a foreground or watcher rescan only
+/// when something changed or the scan was incomplete, and a watcher
+/// rescan at most once a minute (`WATCHER_SENTENCE_SPACING_MS`) — and core
+/// owns the sentence, which is the same for every reason (the owner's
+/// decision Q4 of 2026-10-17: no watcher-specific copy). Joined as
+/// Explicit > Foreground > Watcher when a request meets a pending one.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum RescanReason {
     /// Files Sidebar → Refresh (the button, the menu item, the command).
     Explicit,
     /// The main window came back to the foreground after being away.
     Foreground,
+    /// The vault watcher saw files change outside Slate
+    /// (`VaultEventListener::on_external_change`).
+    Watcher,
 }
 
 /// The shell regions F6 cycling names that carry no other event.
@@ -4061,6 +4067,16 @@ pub fn corpus() -> Vec<A11yEvent> {
             changed: 2,
             removed: 1,
         },
+        VaultRescanFinished {
+            reason: RescanReason::Watcher,
+            changed: 1,
+            removed: 0,
+        },
+        VaultRescanFinished {
+            reason: RescanReason::Watcher,
+            changed: 0,
+            removed: 2,
+        },
         VaultRescanIncomplete { errors: 1 },
         VaultRescanIncomplete { errors: 3 },
         SearchResultsSummary { count: 0 },
@@ -6626,13 +6642,18 @@ mod tests {
         assert_eq!(render(0, 0), "Scan complete. 0 files, 0 new or changed.");
     }
 
-    /// R-9: one completion sentence per rescan, the same for both
-    /// reasons (hosts own the foreground gate); "No changes" only for a
+    /// R-9: one completion sentence per rescan, the same for every reason
+    /// (hosts own the foreground and watcher gates; plan 43 PR 20's Q4:
+    /// the watcher speaks the shared sentence); "No changes" only for a
     /// complete scan with nothing new, changed or removed — a partial one
     /// speaks its honest error count instead.
     #[test]
     fn a_rescan_speaks_one_sentence_and_a_partial_one_never_says_no_changes() {
-        for reason in [RescanReason::Explicit, RescanReason::Foreground] {
+        for reason in [
+            RescanReason::Explicit,
+            RescanReason::Foreground,
+            RescanReason::Watcher,
+        ] {
             let finished = |changed, removed| A11yEvent::VaultRescanFinished {
                 reason,
                 changed,
@@ -6739,6 +6760,8 @@ mod tests {
             (Medium, "Files refreshed. 1 new or changed, 0 removed."),
             (Medium, "Files refreshed. No changes."),
             (Medium, "Files refreshed. 2 new or changed, 1 removed."),
+            (Medium, "Files refreshed. 1 new or changed, 0 removed."),
+            (Medium, "Files refreshed. 0 new or changed, 2 removed."),
             (
                 Medium,
                 "Files refreshed with errors. 1 error; results may be incomplete.",
