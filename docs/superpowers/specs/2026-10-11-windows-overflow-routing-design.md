@@ -526,12 +526,14 @@ optional API reads; nothing in `namespace` mode.
   span more than one lane their retry strikes are forgotten (the host's
   doing, not one lane's) and they are admitted in that tick as the first
   probes, so the state says serving again only if they get through; when
-  every strike falls on one lane they are kept, that lane's job stays
-  capped as before, and the state says serving again for the lanes that
-  work. The next run routes as usual and its home lanes probe too; a
-  failure trips the breaker at once. A runner taking its job after a trip
-  forgets the strikes under the same lane rule; a loop restart after a
-  trip forgets them unconditionally, since the restart is the repair. On
+  every strike falls on one lane they are kept and that lane's job stays
+  capped as before; the state says serving again, which is host-wide, so
+  that lane's new jobs still come home and strand at their cap in turn
+  until a runner of that lane takes its job. The next run routes as usual
+  and its home lanes probe too; a failure trips the breaker at once. A
+  runner taking its job after a trip forgets the strikes under the same
+  lane rule, its own lane's strikes always; a loop restart after a trip
+  forgets them unconditionally, since the restart is the repair. On
   a host that keeps failing the struck jobs retry in cycles of about 35
   minutes, three failed provisionings per job per cycle, instead of
   stranding.

@@ -272,11 +272,11 @@ function Register-HostSuccess {
     # keeps a job's strikes: with other lanes claiming, three strikes mean
     # that job or its lane, not the host.
     [CmdletBinding()]
-    param([Parameter(Mandatory)]$Journal, [Parameter(Mandatory)][hashtable]$Adapters)
+    param([Parameter(Mandatory)]$Journal, [Parameter(Mandatory)][hashtable]$Adapters, [string]$Lane = '')
     $health = Get-HostHealth -Journal $Journal
     $failures = [int]$health['Failures']
     if ($failures -gt 0) { & $Adapters.Log 'info' "health: a runner took its job; $failures failures in a row forgotten" }
-    if ($null -ne $health['TrippedAt']) { Clear-JobRetries -Journal $Journal -Adapters $Adapters -Reason 'because a runner took its job' }
+    if ($null -ne $health['TrippedAt']) { Clear-JobRetries -Journal $Journal -Adapters $Adapters -Reason 'because a runner took its job' -ClaimedLane $Lane }
     Reset-HostHealth -Journal $Journal
 }
 
@@ -290,11 +290,13 @@ function Clear-JobRetries {
     # trip the breaker again at every half-open and hold the whole host
     # not serving. That lane's job stays capped as before, until its run is
     # cancelled or GitHub drops it. A job whose lane is no longer known
-    # (its seen-job record pruned) is not held against the rule: unknown
-    # is not "one lane". -Force skips the rule: a loop restart is the
+    # (its seen-job record gone with the job's completion, or pruned) is
+    # not held against the rule: unknown is not "one lane". Nor are
+    # strikes on the lane whose runner just took its job: that claim
+    # proves that lane. -Force skips the rule: a loop restart is the
     # repair. Logged either way, when there was something to weigh.
     [CmdletBinding()]
-    param([Parameter(Mandatory)]$Journal, [Parameter(Mandatory)][hashtable]$Adapters, [string]$Reason = '', [switch]$Force)
+    param([Parameter(Mandatory)]$Journal, [Parameter(Mandatory)][hashtable]$Adapters, [string]$Reason = '', [switch]$Force, [string]$ClaimedLane = '')
     if (-not ($Journal['Retries'] -is [System.Collections.IDictionary])) { return }
     $keys = @($Journal.Retries.Keys)
     if ($keys.Count -eq 0) { return }
@@ -304,7 +306,7 @@ function Clear-JobRetries {
         if ($null -ne $seen -and $seen['Lane']) { [string]$seen['Lane'] } else { '?' }
     } | Sort-Object -Unique)
     $jobs = '{0} {1}' -f $keys.Count, $(if ($keys.Count -eq 1) { 'job' } else { 'jobs' })
-    if (-not $Force -and $lanes.Count -lt 2 -and -not ($lanes -contains '?')) {
+    if (-not $Force -and $lanes.Count -lt 2 -and -not ($lanes -contains '?') -and -not ($ClaimedLane -and ($lanes -contains $ClaimedLane))) {
         & $Adapters.Log 'info' ("health: retry strikes of {0} kept: all on lane {1}, which looks like that lane's fault, not the host's" -f $jobs, $lanes[0])
         return
     }
@@ -992,7 +994,7 @@ function Complete-ActiveVm {
     # every tick, and that must not keep forgetting the failures beside it.
     if (-not [bool]$vm['Claimed']) {
         $vm['Claimed'] = $true
-        Register-HostSuccess -Journal $Journal -Adapters $Adapters
+        Register-HostSuccess -Journal $Journal -Adapters $Adapters -Lane ([string]$vm['Lane'])
     }
     if ($null -ne $job -and [string]$job.conclusion -eq 'success') {
         try { Register-GoldenAcceptance -Journal $Journal -Adapters $Adapters -Vm $vm } catch { & $Adapters.Log 'warn' "golden: $_" }
@@ -1137,7 +1139,7 @@ function Update-ActiveVm {
             if ($null -ne $runner -and $runner.busy) {
                 $vm.Claimed = $true
                 & $Adapters.Log 'info' "${Name}: claimed"
-                Register-HostSuccess -Journal $Journal -Adapters $Adapters
+                Register-HostSuccess -Journal $Journal -Adapters $Adapters -Lane ([string]$vm['Lane'])
                 return
             }
             $job = & $Adapters.GetJob ([int64]$vm.JobId)
@@ -1147,7 +1149,7 @@ function Update-ActiveVm {
                 # runner is already deleted and would otherwise look unclaimed).
                 $vm.Claimed = $true
                 & $Adapters.Log 'info' "${Name}: claimed (job $($job.status) on this runner)"
-                Register-HostSuccess -Journal $Journal -Adapters $Adapters
+                Register-HostSuccess -Journal $Journal -Adapters $Adapters -Lane ([string]$vm['Lane'])
                 return
             }
             if ($null -eq $job -or $job.status -ne 'queued') {
@@ -1267,7 +1269,7 @@ function Invoke-Admission {
             }
             if ($evict) {
                 & $Adapters.Log 'warn' "handoff: ${name} runs job $($job.JobId) of $repo ($why); forcing it off"
-                Register-HostSuccess -Journal $Journal -Adapters $Adapters
+                Register-HostSuccess -Journal $Journal -Adapters $Adapters -Lane ([string]$vm['Lane'])
                 Remove-ActiveVm -Config $Config -Journal $Journal -Adapters $Adapters -Name $name -Reason "runner taken by job $($job.JobId) of $repo ($why)" -Retry $false -Now $Now
                 continue
             }
@@ -1278,7 +1280,7 @@ function Invoke-Admission {
         if (-not $vm.Claimed) {
             $vm.Claimed = $true
             & $Adapters.Log 'info' "${name}: claimed (job $($job.JobId) in progress)"
-            Register-HostSuccess -Journal $Journal -Adapters $Adapters
+            Register-HostSuccess -Journal $Journal -Adapters $Adapters -Lane ([string]$vm['Lane'])
         }
     }
     foreach ($key in @($Journal.SeenJobs.Keys)) {

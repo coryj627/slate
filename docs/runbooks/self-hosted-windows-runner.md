@@ -1725,8 +1725,11 @@ and `"status": "401"`. Rotate it before then.
   jobs forgotten (lanes …) …; they are admitted again`) and the jobs the
   host gave up on run first, as the probes; strikes that all fall on one
   lane are kept (`… kept: all on lane X, which looks like that lane's
-  fault`), that job stays capped as before (cancel its run and re-run it),
-  and the host serves the other lanes. On a host that keeps failing the
+  fault`) and that job stays capped as before (cancel its run and re-run
+  it); the host says serving again, which is host-wide, so new jobs of
+  that lane still come home and each strands at its cap in turn until a
+  runner of that lane takes its job, which forgets them. On a host that
+  keeps failing the
   struck jobs retry in cycles of about 35 minutes, three failed
   provisionings per job per cycle. The cause is in the lines
   just before it (Hyper-V, the golden or cache disks, the NAT, the PAT's
