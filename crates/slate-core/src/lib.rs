@@ -40,6 +40,7 @@ pub mod blocks;
 pub mod blocks_db;
 pub mod canvas;
 pub mod canvas_db;
+pub mod change_feed;
 pub mod citations;
 pub mod citations_db;
 pub mod code;
@@ -107,6 +108,11 @@ pub use structural_batch::{
 
 pub use blocks::{BlockAnchor, BlockKind, extract_blocks};
 pub use canvas::CanvasLoadDisposition;
+pub use change_feed::{
+    CHANGE_FEED_CURSOR_LIVENESS_MS, CHANGE_FEED_MAX_PASSES, CHANGE_FEED_MAX_ROWS,
+    CHANGE_FEED_WINDOW_ROW_LIMIT, ChangeCount, ChangeEffect, ChangeEntry, ChangeFeedGap,
+    ChangeFeedPage, ChangeFeedStatus, ChangeFeedWindow, ChangeRecord, MAX_CHANGE_FEED_PAGE_LIMIT,
+};
 pub use citations::bibliography::{
     Author, BibEntry, BibFormat, BibIndex, BibLoadWarning, BibliographyChangeSink,
     BibliographySource, DEFAULT_DEBOUNCE, KeyCollision, LoadResult,

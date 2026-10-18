@@ -691,6 +691,70 @@ fn stdin_non_utf8_refuses_and_leaves_file_unchanged() {
     );
 }
 
+// --- 7. The change feed (plan 43 PR 21a, #1293) -----------------------
+
+/// Design 21 §4.9: `slate-cli` never registers a change-feed cursor, but
+/// while the app's session holds one, every index change a CLI process
+/// makes is in the app's window, counted exactly — `slate write --create`,
+/// `slate write`, and an external delete the CLI's `slate open` scan prunes.
+#[test]
+fn slate_cli_writes_are_counted_by_a_registered_host() {
+    use slate_core::{ChangeCount, ChangeEffect, ChangeFeedStatus};
+
+    let vault = seed_vault_with_note("note.md", "before\n");
+    fs::write(vault.path().join("gone.md"), "gone\n").unwrap();
+    let app = open_app_session(vault.path());
+    app.register_change_feed()
+        .expect("the app registers its cursor");
+
+    slate()
+        .arg("write")
+        .arg(vault.path())
+        .arg("new.md")
+        .arg("--create")
+        .write_stdin("written by the cli\n")
+        .assert()
+        .success();
+    slate()
+        .arg("write")
+        .arg(vault.path())
+        .arg("note.md")
+        .write_stdin("after, from the cli\n")
+        .assert()
+        .success();
+    fs::remove_file(vault.path().join("gone.md")).unwrap();
+    slate().arg("open").arg(vault.path()).assert().success();
+
+    let window = app
+        .change_feed_window(None, &CancelToken::new())
+        .expect("the app opens its window");
+    assert_eq!(window.status, ChangeFeedStatus::Exact);
+    assert!(window.counted);
+    assert_eq!((window.changed, window.removed), (2, 1));
+    let page = app
+        .change_feed_page(&window.token, None, 10, &CancelToken::new())
+        .unwrap();
+    assert_eq!(page.next_cursor, None);
+    let shape: Vec<(ChangeEffect, &str, ChangeCount)> = page
+        .records
+        .iter()
+        .map(|record| (record.effect, record.path.as_str(), record.counted))
+        .collect();
+    assert_eq!(
+        shape,
+        [
+            (ChangeEffect::Removed, "gone.md", ChangeCount::Removed),
+            (ChangeEffect::Present, "new.md", ChangeCount::Created),
+            (ChangeEffect::Present, "note.md", ChangeCount::Modified),
+        ]
+    );
+    let note = &page.records[2];
+    assert_eq!(
+        note.content_hash.as_deref(),
+        Some(content_hash(b"after, from the cli\n").as_str())
+    );
+}
+
 // --- small predicate helper ------------------------------------------
 
 /// `predicates::str::contains` wrapper, kept local so the test file

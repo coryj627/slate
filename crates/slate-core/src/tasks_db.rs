@@ -190,14 +190,26 @@ pub(crate) fn note_tasks_bounded(
         && let Some(db_path) = conn.path()
         && let Ok(other) = Connection::open(db_path)
     {
-        let _ = other.execute(
-            "UPDATE files SET content_hash = 'torn-by-second-connection' WHERE path = ?1",
-            params![path],
-        );
-        let _ = other.execute(
-            "DELETE FROM tasks WHERE file_id = (SELECT id FROM files WHERE path = ?1)",
-            params![path],
-        );
+        // Plan 43 PR 21a (design §3.5): migration 040's change-feed
+        // triggers call Slate's feed functions, so a connection without
+        // them cannot change `content_hash`. The seam registers them, and
+        // asserts that its racing commit landed — a seam whose write fails
+        // silently would leave the fact it serves passing without its race.
+        crate::db::register_connection_functions(&other)
+            .expect("torn-read seam: Slate's SQL functions register");
+        let torn = other
+            .execute(
+                "UPDATE files SET content_hash = 'torn-by-second-connection' WHERE path = ?1",
+                params![path],
+            )
+            .expect("torn-read seam: the second connection's hash rewrite lands");
+        assert_eq!(torn, 1, "torn-read seam: the hash rewrite names the file");
+        other
+            .execute(
+                "DELETE FROM tasks WHERE file_id = (SELECT id FROM files WHERE path = ?1)",
+                params![path],
+            )
+            .expect("torn-read seam: the second connection's task deletion lands");
     }
     let mut stmt = tx.prepare_cached(
         "SELECT ordinal, text, status_char, completed,
