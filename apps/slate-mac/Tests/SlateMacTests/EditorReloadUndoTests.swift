@@ -61,17 +61,29 @@ final class EditorReloadUndoTests: XCTestCase {
         super.tearDown()
     }
 
+    /// Mount the editor and wait for its first highlight, which an editor
+    /// in the app has painted long before anyone types (#1500). Until then
+    /// the text view is still on TextKit 2 (the highlight's `layoutManager`
+    /// read moves it to TextKit 1), and there AppKit's Undo reverts the
+    /// storage without telling the delegate: the binding never hears the
+    /// undo, and SwiftUI's next pass writes the undone typing back. A busy
+    /// CI machine reached the typing before that first highlight.
     private func mountEditor(_ buffer: Buffer) throws -> SlateEditorTextView {
         let hosting = NSHostingView(rootView: Host(buffer: buffer))
         hosting.frame = NSRect(x: 0, y: 0, width: 800, height: 600)
         window.contentView = hosting
         window.makeKeyAndOrderFront(nil)
-        for _ in 0..<40 {
-            if let textView = Self.findTextView(in: hosting) { return textView }
-            RunLoop.main.run(until: Date(timeIntervalSinceNow: 0.05))
+        pump { Self.findTextView(in: hosting) != nil }
+        guard let textView = Self.findTextView(in: hosting) else {
+            throw XCTSkip("SlateEditorTextView never materialized in the hosting hierarchy")
         }
-        if let textView = Self.findTextView(in: hosting) { return textView }
-        throw XCTSkip("SlateEditorTextView never materialized in the hosting hierarchy")
+        let coordinator = try XCTUnwrap(textView.coordinator)
+        guard pump(until: { coordinator.highlightApplyCount > 0 }) else {
+            let failure = "the editor never painted its first highlight"
+            XCTFail(failure)
+            throw HostedAccessibilityTree.NotReady(description: failure)
+        }
+        return textView
     }
 
     private static func findTextView(in view: NSView) -> SlateEditorTextView? {
@@ -82,12 +94,18 @@ final class EditorReloadUndoTests: XCTestCase {
         return nil
     }
 
-    /// Pump the run loop until `condition` holds (SwiftUI's update pass),
-    /// or for two seconds.
-    private func pump(until condition: () -> Bool) {
-        for _ in 0..<40 where !condition() {
+    /// Pump the run loop until `condition` holds (SwiftUI's update pass and
+    /// the highlighter's apply run there) or `timeout` passes, and report
+    /// whether it held. The bound allows for a loaded CI machine; a
+    /// condition that holds returns at once.
+    @discardableResult
+    private func pump(timeout: TimeInterval = 10, until condition: () -> Bool) -> Bool {
+        let deadline = Date(timeIntervalSinceNow: timeout)
+        while !condition() {
+            guard Date() < deadline else { return false }
             RunLoop.main.run(until: Date(timeIntervalSinceNow: 0.05))
         }
+        return true
     }
 
     /// Type through the text view itself, as a keystroke does, and close
@@ -113,7 +131,9 @@ final class EditorReloadUndoTests: XCTestCase {
         XCTAssertEqual(textView.string, fromDisk, "the editor took the reloaded bytes")
 
         textView.undoManager?.undo()
-        pump { buffer.text != fromDisk }
+        // A negative wait: a correct Undo changes nothing, so this runs its
+        // short bound out, giving a wrong replay time to reach the binding.
+        pump(timeout: 2) { buffer.text != fromDisk }
         XCTAssertEqual(
             textView.string, fromDisk,
             "Undo replayed typing from before the reload into the new bytes")
@@ -128,12 +148,15 @@ final class EditorReloadUndoTests: XCTestCase {
         let fromDisk = "second version\n"
         buffer.text = fromDisk
         pump { textView.string == fromDisk }
+        XCTAssertEqual(textView.string, fromDisk, "the editor took the reloaded bytes")
 
         type("y", at: 0, into: textView)
         XCTAssertEqual(textView.string, "ysecond version\n")
         XCTAssertEqual(buffer.text, "ysecond version\n")
         textView.undoManager?.undo()
-        pump { buffer.text == fromDisk }
+        // Until the binding holds the undone bytes. A view that no longer
+        // shows them (SwiftUI wrote the typing back) is already wrong.
+        pump { buffer.text == fromDisk || textView.string != fromDisk }
         XCTAssertEqual(textView.string, fromDisk, "the edit made after the reload undoes")
         XCTAssertEqual(buffer.text, fromDisk)
     }
