@@ -19,22 +19,21 @@ use std::sync::Mutex;
 type Substitution = Box<dyn FnOnce() + Send>;
 
 /// Forwards to an `FsVaultProvider` that trashes into a scratch bin. Right
-/// before the provider's `delete` of one chosen path it runs that path's
-/// substitution: after the session's last validation, before the walk.
+/// before the provider's `delete` of each chosen path it runs that path's
+/// substitution once: after the session's last validation, before the walk.
 struct SubstitutingProvider {
     inner: FsVaultProvider,
-    before_delete: Mutex<Option<(String, Substitution)>>,
+    before_delete: Mutex<Vec<(String, Substitution)>>,
 }
 
 impl crate::VaultProvider for SubstitutingProvider {
     fn delete(&self, relative: &str) -> Result<(), VaultError> {
         let substitution = {
-            let mut slot = self.before_delete.lock().unwrap();
-            if slot.as_ref().is_some_and(|(path, _)| path == relative) {
-                slot.take().map(|(_, run)| run)
-            } else {
-                None
-            }
+            let mut armed = self.before_delete.lock().unwrap();
+            armed
+                .iter()
+                .position(|(path, _)| path == relative)
+                .map(|at| armed.remove(at).1)
         };
         if let Some(run) = substitution {
             run();
@@ -151,7 +150,7 @@ fn fixture_at(vault: tempfile::TempDir, root: std::path::PathBuf) -> Fixture {
     let trash = ScratchTrash::new();
     let provider = Arc::new(SubstitutingProvider {
         inner: FsVaultProvider::with_system_trash(root.clone(), trash.clone()),
-        before_delete: Mutex::new(None),
+        before_delete: Mutex::new(Vec::new()),
     });
     let session = VaultSession::open(provider.clone(), SessionConfig::new(root.join(".slate")))
         .expect("open fixture");
@@ -191,7 +190,11 @@ impl Fixture {
     /// Arm `substitution` to run right before the provider deletes `path`.
     #[cfg(unix)]
     fn before_delete_of(&self, path: &str, substitution: Substitution) {
-        *self.provider.before_delete.lock().unwrap() = Some((path.into(), substitution));
+        self.provider
+            .before_delete
+            .lock()
+            .unwrap()
+            .push((path.into(), substitution));
     }
 
     /// #1430 P12.6: `sub` becomes a symlink to the outside folder; the real
@@ -440,6 +443,138 @@ fn batch_trash_never_counts_a_refused_item_trashed_when_the_substitute_lacks_it(
     );
     assert_eq!(f.trash.contents(), vec!["keep.md"]);
     f.assert_decoys_and_vault_items_untouched();
+}
+
+/// A folder locked to mode 000 until this drops, so a fact that fails still
+/// leaves a temporary directory its cleanup can remove.
+#[cfg(unix)]
+struct Locked(std::path::PathBuf);
+
+#[cfg(unix)]
+impl Locked {
+    fn new(folder: &std::path::Path) -> Self {
+        use std::os::unix::fs::PermissionsExt as _;
+        std::fs::set_permissions(folder, std::fs::Permissions::from_mode(0o000)).unwrap();
+        Self(folder.to_path_buf())
+    }
+}
+
+#[cfg(unix)]
+impl Drop for Locked {
+    fn drop(&mut self) {
+        use std::os::unix::fs::PermissionsExt as _;
+        let _ = std::fs::set_permissions(&self.0, std::fs::Permissions::from_mode(0o700));
+    }
+}
+
+/// #1477: a batch whose items became links of each kind after the session's
+/// last check, just before the provider's own look, reports each item as it
+/// ended and leaves it where the report says. `keep.md` is still a file.
+/// `other.md` became a link to a file behind a folder Slate cannot search,
+/// and `sub/note.md` a link to itself; neither target is proven absent, so
+/// both reach the Trash as the links they are. `sub/unique.md` became a link
+/// to a missing file, the one truly dangling kind, and is unlinked. All four
+/// left the vault and are reported trashed, none untrashed or unknown, and
+/// the Trash holds exactly the three it was handed. Before #1477 the
+/// unreachable link and the cycle were unlinked as well, for good, under the
+/// same report.
+#[cfg(unix)]
+#[test]
+fn batch_trash_reports_each_kind_of_unresolvable_link_truthfully() {
+    for staged in [true, false] {
+        let f = fixture();
+        let locked = f.outside.path().join("locked");
+        std::fs::create_dir(&locked).unwrap();
+        std::fs::write(locked.join("target.md"), "behind a locked folder").unwrap();
+        let lock = Locked::new(&locked);
+        let vault = f.vault.path().to_path_buf();
+        let relink = |path: &str, target: std::path::PathBuf| -> Substitution {
+            let at = vault.join(path);
+            Box::new(move || {
+                std::fs::remove_file(&at).unwrap();
+                std::os::unix::fs::symlink(&target, &at).unwrap();
+            })
+        };
+        let arm = |f: &Fixture| {
+            f.before_delete_of("other.md", relink("other.md", locked.join("target.md")));
+            f.before_delete_of("sub/note.md", relink("sub/note.md", "note.md".into()));
+            f.before_delete_of("sub/unique.md", relink("sub/unique.md", "gone.md".into()));
+        };
+        let items = [
+            ("keep.md", false),
+            ("other.md", false),
+            ("sub/note.md", false),
+            ("sub/unique.md", false),
+        ];
+        let report = if staged {
+            let staged = f.session.stage_trash(request(&items)).unwrap();
+            let request = BatchTrashRequest {
+                items: staged
+                    .items
+                    .iter()
+                    .map(|staged| staged.item.clone())
+                    .collect(),
+            };
+            arm(&f);
+            f.session.batch_trash_staged(request, staged.token)
+        } else {
+            arm(&f);
+            f.session.batch_trash(request(&items))
+        }
+        .unwrap();
+
+        assert_eq!(report.state, BatchTrashState::Succeeded, "staged {staged}");
+        let mut trashed = report.trashed.clone();
+        trashed.sort_by(|a, b| a.path.cmp(&b.path));
+        assert_eq!(
+            trashed,
+            items
+                .iter()
+                .map(|(path, is_directory)| item(path, *is_directory))
+                .collect::<Vec<_>>()
+        );
+        assert!(report.untrashed.is_empty(), "{:?}", report.untrashed);
+        assert!(report.unknown.is_empty(), "{:?}", report.unknown);
+        assert!(
+            report.bookkeeping_failures.is_empty(),
+            "{:?}",
+            report.bookkeeping_failures
+        );
+        assert!(!report.requires_rescan);
+        assert_eq!(
+            f.trash.contents(),
+            vec!["keep.md", "note.md", "other.md"],
+            "staged {staged}: the Trash holds the file and both unresolvable links; the \
+             dangling link was unlinked"
+        );
+        for (name, target) in [
+            ("other.md", locked.join("target.md")),
+            ("note.md", "note.md".into()),
+        ] {
+            let landed = f.trash.bin().join(name);
+            assert!(
+                landed.symlink_metadata().unwrap().file_type().is_symlink(),
+                "{name} reached the Trash as the link"
+            );
+            assert_eq!(std::fs::read_link(&landed).unwrap(), target);
+        }
+        assert_eq!(
+            std::fs::read_to_string(f.trash.bin().join("keep.md")).unwrap(),
+            "keep"
+        );
+        for (path, _) in items {
+            assert!(
+                vault.join(path).symlink_metadata().is_err(),
+                "{path} left the vault"
+            );
+            assert!(!f.indexed(path), "{path} is no longer indexed");
+        }
+        drop(lock);
+        assert_eq!(
+            std::fs::read_to_string(locked.join("target.md")).unwrap(),
+            "behind a locked folder"
+        );
+    }
 }
 
 #[cfg(unix)]
