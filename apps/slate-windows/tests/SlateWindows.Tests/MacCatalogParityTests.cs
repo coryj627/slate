@@ -265,9 +265,6 @@ public sealed class MacCatalogParityTests
                 "Windows-only shell region cycling (F6 / Shift+F6, W7-6); mac navigates panes directionally only.",
             ["slate.workspace.focusPreviousPane"] =
                 "Windows-only shell region cycling (F6 / Shift+F6, W7-6); mac navigates panes directionally only.",
-            ["slate.editor.activateAtCaret"] =
-                "The Windows editor's explicit activate verb; mac activates through "
-                + "its own responder chain and registers no command.",
             ["slate.editor.previewEmbed"] =
                 "The Windows editor's embed-preview verb; mac has no registered twin.",
             ["slate.editor.toggleReadingLinkTarget"] =

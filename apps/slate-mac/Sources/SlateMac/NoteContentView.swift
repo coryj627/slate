@@ -74,9 +74,12 @@ struct NoteContentView: View {
         Group {
             if let error = appState.noteLoadError {
                 errorState(error)
-            } else if appState.isLoadingNote {
+            } else if appState.isLoadingNote && !keepsEditorThroughLoad {
                 loadingState
-            } else if let text = appState.currentNoteText {
+            } else if let text = appState.currentNoteText ?? (keepsEditorThroughLoad ? "" : nil) {
+                // #1472: a claimed load stays in this branch, so the editor
+                // (empty and read-only meanwhile) is the same text view
+                // before, during and after it, and focus never leaves it.
                 contentState(text)
             } else if appState.selectedFilePath != nil {
                 // selectedFilePath set but currentNoteText not yet
@@ -388,7 +391,9 @@ struct NoteContentView: View {
             text: appState.noteTextBinding(),
             headings: appState.currentNoteHeadings,
             accessibilityLabel: accessibilityLabelForContent,
-            isEditable: appState.activeNoteAuthoringDisabledReason == nil,
+            // #1472: nothing is typed into the kept editor while its note
+            // loads; the bytes it would land on are not that note's yet.
+            isEditable: appState.activeNoteAuthoringDisabledReason == nil && !keepsEditorThroughLoad,
             readOnlyReason: appState.activeNoteAuthoringDisabledReason,
             onSave: { [appState] in appState.saveCurrentNote() },
             scrollAnchorRequest: appState.scrollAnchorRequest.eraseToAnyPublisher(),
@@ -404,6 +409,20 @@ struct NoteContentView: View {
             // #874: only the ACTIVE editor gets the real find-in-note
             // publisher (inactive-pane previews keep the default Empty).
             findInNoteRequest: appState.findInNoteRequest.eraseToAnyPublisher(),
+            // #1431: activate at cursor (⌘↩, the palette row, VoiceOver's
+            // press on a link), for the active editor only.
+            activateAtCursorRequest: appState.activateAtCursorRequest.eraseToAnyPublisher(),
+            onActivate: { [appState] request in
+                appState.performEditorActivation(request)
+            },
+            onEditorFocusChange: { [appState] focused in
+                appState.noteEditorFocusChanged(focused)
+            },
+            // #1472: the pending focus claim, once its note is loaded here.
+            focusClaim: focusClaimForEditor,
+            onFocusClaimTaken: { [appState] token in
+                appState.editorTookFocusClaim(token)
+            },
             previewEmbedAtCursor: { [appState] target, line in
                 appState.requestEmbedPreview(target: target, sourceLine: line)
             },
@@ -560,6 +579,29 @@ struct NoteContentView: View {
     private var displayName: String {
         guard let path = appState.selectedFilePath else { return "" }
         return (path as NSString).lastPathComponent
+    }
+
+    /// #1472: the selected note is loading under a focus claim that keeps
+    /// the editor (an activation in the editor followed a link into this
+    /// tab). The loading shell would take the focused text view out of the
+    /// window; VoiceOver then recovers onto the content pane and the tab
+    /// strip, cutting the activation's announcement off, before the new
+    /// editor exists to take focus back.
+    private var keepsEditorThroughLoad: Bool {
+        guard workspace.activeViewMode == .editing,
+            let claim = appState.editorFocusClaim, claim.keepsEditorThroughLoad,
+            BaseExactIdentity.matches(claim.path, appState.selectedFilePath)
+        else { return false }
+        return appState.isLoadingNote || appState.currentNoteText == nil
+    }
+
+    /// The pending focus claim, once its note is the one in the editor.
+    private var focusClaimForEditor: AppState.EditorFocusClaim? {
+        guard let claim = appState.editorFocusClaim, !appState.isLoadingNote,
+            appState.currentNoteText != nil,
+            BaseExactIdentity.matches(claim.path, appState.loadedFilePath)
+        else { return nil }
+        return claim
     }
 
     private var loadingMessage: String {

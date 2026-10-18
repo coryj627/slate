@@ -8793,6 +8793,7 @@ pub enum A11yEvent {
     CitationNotLoaded,
     NoResolvedEmbedAtCursor,
     NoEmbedAtCursor,
+    NothingToActivateAtCursor,
     HeadingNotFound,
     HeadingScrollFailed {
         heading: String,
@@ -8840,6 +8841,12 @@ pub enum A11yEvent {
     },
     TaskToggleConflict {
         filename: String,
+    },
+    TaskToggled {
+        completed: bool,
+    },
+    TaskToggleFailed {
+        detail: String,
     },
     TasksReviewShown {
         filter_name: String,
@@ -10691,6 +10698,7 @@ impl From<A11yEvent> for core::a11y::A11yEvent {
             F::CitationNotLoaded => C::CitationNotLoaded,
             F::NoResolvedEmbedAtCursor => C::NoResolvedEmbedAtCursor,
             F::NoEmbedAtCursor => C::NoEmbedAtCursor,
+            F::NothingToActivateAtCursor => C::NothingToActivateAtCursor,
             F::HeadingNotFound => C::HeadingNotFound,
             F::HeadingScrollFailed { heading } => C::HeadingScrollFailed { heading },
             F::ScrolledToHeading { heading } => C::ScrolledToHeading { heading },
@@ -10714,6 +10722,8 @@ impl From<A11yEvent> for core::a11y::A11yEvent {
             F::CitationDetailsUnresolved { key } => C::CitationDetailsUnresolved { key },
             F::TaskToggleUnsaved { filename } => C::TaskToggleUnsaved { filename },
             F::TaskToggleConflict { filename } => C::TaskToggleConflict { filename },
+            F::TaskToggled { completed } => C::TaskToggled { completed },
+            F::TaskToggleFailed { detail } => C::TaskToggleFailed { detail },
             F::TasksReviewShown { filter_name } => C::TasksReviewShown { filter_name },
             F::TasksFilterSet { filter_name } => C::TasksFilterSet { filter_name },
             F::NoteSaved { filename } => C::NoteSaved { filename },

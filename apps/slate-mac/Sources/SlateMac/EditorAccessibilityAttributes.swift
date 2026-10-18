@@ -15,19 +15,19 @@ import AppKit
 /// | Kind | Windows (E-4, E-9) | mac |
 /// |---|---|---|
 /// | heading(level) | StyleId 70000+N; StyleName "Heading N" | custom text "Heading N" |
-/// | wikilink, link, embed, image | Hyperlink; StyleName | AXLink (a link element); custom text name; the Links rotor |
-/// | tag, citation | Hyperlink; StyleName | custom text name |
+/// | wikilink, link, embed, image, tag, citation | Hyperlink; StyleName | AXLink (a link element whose press activates it); custom text name; the Links rotor |
 /// | inlineCode, codeFence, code | StyleName "Code" | custom text "Code" |
 /// | blockQuote | StyleId 70014; StyleName "Quote" | custom text "Quote" |
 /// | emphasis, strong, strikethrough | IsItalic, FontWeight 700, StrikethroughStyle | AXFontItalic, AXFontBold (macOS 26), AXStrikethrough |
 /// | comment, frontmatter | StyleName | custom text name |
 ///
-/// Tags and citations are links on Windows because they activate there
-/// (Ctrl+Enter, W2-3); the mac editor activates no span, and the PR 17 spec
-/// maps them as styles. Heading level has no AppKit text attribute (macOS 26
-/// added a heading role and level for elements, not for text ranges), so it
-/// travels as the custom text "Heading N" — the platform limit recorded in
-/// gap analysis G29.
+/// Tags and citations are links on both hosts because they activate: E-9
+/// makes them Hyperlinks on Windows for Ctrl+Enter (W2-3), and since #1431
+/// the mac editor activates the same six kinds (⌘↩, the palette row, and
+/// VoiceOver's VO-Space on a link; `EditorActivation`). Heading level
+/// has no AppKit text attribute (macOS 26 added a heading role and level for
+/// elements, not for text ranges), so it travels as the custom text
+/// "Heading N" — the platform limit recorded in gap analysis G29.
 ///
 /// **Copy.** The style names are accessibility attribute values, not
 /// announcements: the twin of the Windows `StyleName` values, host-side by
@@ -92,8 +92,8 @@ enum EditorAccessibilityAttributes {
         case .link: return Facets(styleName: "Link", isLink: true)
         case .embed: return Facets(styleName: "Embed", isLink: true)
         case .image: return Facets(styleName: "Image", isLink: true)
-        case .tag: return Facets(styleName: "Tag")
-        case .citation: return Facets(styleName: "Citation")
+        case .tag: return Facets(styleName: "Tag", isLink: true)
+        case .citation: return Facets(styleName: "Citation", isLink: true)
         case .inlineCode, .codeFence, .code: return Facets(styleName: "Code")
         case .blockQuote: return Facets(isQuote: true, styleName: "Quote")
         case .emphasis: return Facets(isItalic: true)
@@ -513,10 +513,14 @@ final class EditorAccessibilityLink: NSObject {
 }
 
 /// The value of an `AXLink` run: a link named by its source text, whose
-/// parent is the editor. VoiceOver resolves the run to it (the spike: VO-Space
-/// on a word inside a link pressed it). It carries no press action — the
-/// mac editor activates no span (Windows' Ctrl+Enter and Invoke have no mac
-/// counterpart yet, #1431) — so VoiceOver offers none.
+/// parent is the editor, and whose press activates the link (#1431):
+/// `EditorActivation` at the link's start, the same resolution as ⌘↩ at the
+/// caret — the twin of Windows' Hyperlink peer Invoke (E-9) — for an
+/// assistive client that presses the element (an out-of-process `AXPress`
+/// on it, the 2026-10-17 field pass). VoiceOver's VO-Space after Find Next
+/// Link presses the text area instead, which offers the same press while
+/// the insertion point is on a link (`SlateEditorTextView`). An editor with
+/// no activation (an inactive pane) refuses the press.
 final class EditorLinkAccessibilityElement: NSAccessibilityElement {
     weak var textView: NSTextView?
     /// The link's range at its last read; the store shifts the run through
@@ -539,6 +543,18 @@ final class EditorLinkAccessibilityElement: NSAccessibilityElement {
     override func accessibilityParent() -> Any? { textView }
 
     override func isAccessibilityElement() -> Bool { true }
+
+    /// VO-Space on the link: activate it. AppKit asks on the main thread.
+    override func accessibilityPerformPress() -> Bool {
+        let location = range.location
+        return MainActor.assumeIsolated {
+            guard let coordinator = (textView as? SlateEditorTextView)?.coordinator,
+                coordinator.canActivate
+            else { return false }
+            coordinator.activate(at: location, origin: .press)
+            return true
+        }
+    }
 
     override func accessibilityFrame() -> NSRect {
         guard let textView, let layoutManager = textView.layoutManager,

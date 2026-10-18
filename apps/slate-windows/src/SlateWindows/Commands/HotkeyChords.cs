@@ -33,7 +33,7 @@ internal static class MacHotkeySpoken
     };
 
     /// <summary>Punctuation and arrow keys → spoken names. Mirror of
-    /// <c>HotkeySpoken.keyWord</c> (HotkeySpoken.swift:84-106).</summary>
+    /// <c>HotkeySpoken.keyWord</c> (HotkeySpoken.swift:84-108).</summary>
     private static readonly Dictionary<char, string> KeyWord = new()
     {
         [','] = "Comma",
@@ -52,6 +52,7 @@ internal static class MacHotkeySpoken
         ['↓'] = "Down Arrow",
         ['←'] = "Left Arrow",
         ['→'] = "Right Arrow",
+        ['↩'] = "Return",
         ['⌫'] = "Delete",
     };
 
@@ -247,6 +248,7 @@ internal static class MacToWindowsChordRule
         ['↓'] = "Down",
         ['←'] = "Left",
         ['→'] = "Right",
+        ['↩'] = "Enter",
         ['⌫'] = "Backspace",
     };
 
