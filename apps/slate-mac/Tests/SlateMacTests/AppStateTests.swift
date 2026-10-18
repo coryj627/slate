@@ -236,7 +236,8 @@ final class AppStateTests: XCTestCase {
         let dest = AppState.launchDestination(
             recents: [recentAlpha, recentBeta],
             optionHeld: false,
-            vaultExists: { _ in true }
+            vaultExists: { _ in true },
+            mismatch: { _ in nil }
         )
         // Decides on `recents.first` (the LRU-front, most-recent entry).
         XCTAssertEqual(dest, .restore(recentAlpha))
@@ -246,7 +247,8 @@ final class AppStateTests: XCTestCase {
         let dest = AppState.launchDestination(
             recents: [recentAlpha],
             optionHeld: true,
-            vaultExists: { _ in true }
+            vaultExists: { _ in true },
+            mismatch: { _ in nil }
         )
         XCTAssertEqual(dest, .welcome, "holding ⌥ forces the picker/Welcome")
     }
@@ -255,7 +257,8 @@ final class AppStateTests: XCTestCase {
         let dest = AppState.launchDestination(
             recents: [recentAlpha, recentBeta],
             optionHeld: false,
-            vaultExists: { _ in false }
+            vaultExists: { _ in false },
+            mismatch: { _ in nil }
         )
         // A gone most-recent lands on Welcome via the not-found flow.
         XCTAssertEqual(dest, .notFound(recentAlpha))
@@ -265,7 +268,8 @@ final class AppStateTests: XCTestCase {
         let dest = AppState.launchDestination(
             recents: [],
             optionHeld: false,
-            vaultExists: { _ in true }
+            vaultExists: { _ in true },
+            mismatch: { _ in nil }
         )
         XCTAssertEqual(dest, .welcome, "nothing to restore → Welcome")
     }
@@ -275,6 +279,7 @@ final class AppStateTests: XCTestCase {
             recents: [recentAlpha],
             optionHeld: false,
             vaultExists: { _ in true },
+            mismatch: { _ in nil },
             restoreEnabled: false
         )
         XCTAssertEqual(dest, .welcome, "the General toggle off → Welcome")
