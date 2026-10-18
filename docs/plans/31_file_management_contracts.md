@@ -448,8 +448,22 @@ enforced by construction, not by review.
   as the rename refusal does (`"sub" is a symbolic link, not a folder in this
   vault, so nothing was moved`), or says a folder in the path moved after it
   was checked. A batch reports that item untrashed with the reason, keeps its
-  recovery markers, requires a rescan and still trashes the rest. A dangling
-  link is unlinked relative to the pinned parent. macOS hands the path to
+  recovery markers, requires a rescan and still trashes the rest. A symbolic
+  link is unlinked relative to the pinned parent only when its target is
+  truly absent: following it fails with `ENOENT` or `ENOTDIR` (on Windows
+  `ERROR_FILE_NOT_FOUND`, `ERROR_PATH_NOT_FOUND` or `ERROR_DIRECTORY`).
+  Every other link goes to the Trash, which moves the link itself, so Put
+  Back can restore it (#1477): one whose target Slate cannot reach (`EACCES`,
+  `EPERM`; `ERROR_ACCESS_DENIED`), a name too long, an I/O or network
+  failure, and `ELOOP` (`ERROR_CANT_RESOLVE_FILENAME`), which a cycle reports
+  but so does a chain longer than the kernel follows that ends at a real
+  file. Until #1477 any failure counted as dangling, so those links were
+  unlinked for good with no error. On a scratch APFS volume `NSFileManager`
+  moved every kind (`EACCES`, `ELOOP` for a cycle and for a 50-link chain,
+  `ENAMETOOLONG`, and `ENOENT`/`ENOTDIR` too) as the link, with its Put Back
+  records; trash-rs renames the link itself into the freedesktop Trash. A
+  batch counts an unlinked dangling link among the trashed items: it left
+  the vault, with nothing to put back. macOS hands the path to
   `NSFileManager trashItemAtURL:resultingItemURL:error:` as a file reference
   URL instead of trash-rs's Finder script: no Apple event or Automation
   grant, and Finder's Put Back still restores the item (verified on a scratch
@@ -468,12 +482,12 @@ enforced by construction, not by review.
   routes every session it opens into a scratch bin of its own before its first
   test, through the test-only `route_trash_to_scratch_bin_for_tests` (mac: a
   load-time constructor in `SlateMacTestBootstrap`; Windows: a module
-  initializer). Only the gated facts reach the real back ends: two macOS facts
-  on an attached scratch APFS volume (`SLATE_TRASH_PROBE_VOLUME`, run by hand)
-  and one Linux fact, run on every Linux run, whose trash-rs home Trash is a
-  scratch `XDG_DATA_HOME`. No test reaches the Windows Recycle Bin. Censuses in
-  core and in each host keep this, and shipping builds still hand every
-  deletion to the system Trash.
+  initializer). Only the gated facts reach the real back ends: three macOS
+  facts on an attached scratch APFS volume (`SLATE_TRASH_PROBE_VOLUME`, run by
+  hand) and two Linux facts, run on every Linux run, whose trash-rs home Trash
+  is a scratch `XDG_DATA_HOME`. No test reaches the Windows Recycle Bin.
+  Censuses in core and in each host keep this, and shipping builds still hand
+  every deletion to the system Trash.
   **Residual:** metadata inventories are observations, not filesystem
   transactions. They cannot detect every content edit on every filesystem, nor
   exclude an arbitrary external writer between the final observation and the
