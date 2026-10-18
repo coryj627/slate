@@ -88,6 +88,11 @@ struct NoteEditorView: NSViewRepresentable {
     /// #1431: the editor's keyboard focus, for the Edit-menu item's
     /// enablement (`AppState.isNoteEditorFocused`).
     var onEditorFocusChange: ((Bool) -> Void)?
+    /// #1472: a claim on keyboard focus for the note this editor shows
+    /// (`AppState.editorFocusClaim`, handed over once its note is loaded
+    /// here): applied once, then reported through `onFocusClaimTaken`.
+    var focusClaim: AppState.EditorFocusClaim?
+    var onFocusClaimTaken: ((UInt64) -> Void)?
     /// Cmd+E handler (#188): receives the `target` of the embed
     /// the cursor is currently inside, plus the 1-based source
     /// line number for the popover header's spatial-bearing cue
@@ -338,6 +343,8 @@ struct NoteEditorView: NSViewRepresentable {
             cursorByteOffsetRequest: cursorByteOffsetRequest,
             activateAtCursorRequest: activateAtCursorRequest
         )
+        context.coordinator.onFocusClaimTaken = onFocusClaimTaken
+        context.coordinator.apply(focusClaim)
         return scrollView
     }
 
@@ -452,6 +459,9 @@ struct NoteEditorView: NSViewRepresentable {
         // caret so the parked value can never lag a programmatic content
         // swap (cheap: a raw Int handoff).
         context.coordinator.reportCaretLocation()
+        // #1472: after the swap, so the claim's caret lands in its note.
+        context.coordinator.onFocusClaimTaken = onFocusClaimTaken
+        context.coordinator.apply(focusClaim)
     }
 
     @MainActor
@@ -1247,6 +1257,51 @@ struct NoteEditorView: NSViewRepresentable {
             onEditorFocusChange?(focused)
         }
 
+        // MARK: - Focus claims (#1472)
+
+        var onFocusClaimTaken: ((UInt64) -> Void)?
+        /// The last claim applied, so an update pass never re-applies it.
+        private var appliedFocusClaim: UInt64?
+        /// A claim that arrived before the text view joined its window.
+        private var pendingFocusClaim: AppState.EditorFocusClaim?
+
+        /// Take keyboard focus for `claim`: the caret goes to its byte, as
+        /// `placeCursorAtByteOffset` parks it for the template flow, and the
+        /// text view becomes first responder. A text view not yet in its
+        /// window applies the claim when it joins one.
+        func apply(_ claim: AppState.EditorFocusClaim?) {
+            guard let claim, claim.token != appliedFocusClaim else { return }
+            guard let textView, let window = textView.window else {
+                pendingFocusClaim = claim
+                return
+            }
+            pendingFocusClaim = nil
+            appliedFocusClaim = claim.token
+            if let byte = claim.caretByte {
+                let location = EditorTextConversions.utf16LocationForByteOffset(
+                    byte, in: textView.string)
+                let range = NSRange(location: location, length: 0)
+                textView.setSelectedRange(range)
+                scrollRangeToVisibleRespectingReduceMotion(range)
+            }
+            if window.firstResponder === textView {
+                // Kept through the load (`keepsEditorThroughLoad`): focus
+                // never moved, so VoiceOver has not read the note the editor
+                // now holds. Tell it the focused element is this one, as the
+                // graph diagram does for its nodes.
+                NSAccessibility.post(element: textView, notification: .focusedUIElementChanged)
+            } else {
+                window.makeFirstResponder(textView)
+            }
+            let token = claim.token
+            DispatchQueue.main.async { [weak self] in self?.onFocusClaimTaken?(token) }
+        }
+
+        /// The text view joined a window: apply a claim that was waiting.
+        func textViewJoinedWindow() {
+            if let claim = pendingFocusClaim { apply(claim) }
+        }
+
         /// The link, tag, citation or embed the insertion point is inside, by
         /// a press's rule (strictly inside; no task): what the text area's
         /// VoiceOver press acts on (`SlateEditorTextView.accessibilityPerformPress`).
@@ -1769,6 +1824,11 @@ final class SlateEditorTextView: NSTextView {
 
     override func viewDidMoveToWindow() {
         super.viewDidMoveToWindow()
-        if window == nil { coordinator?.editorFocusChanged(false) }
+        if window == nil {
+            coordinator?.editorFocusChanged(false)
+        } else {
+            coordinator?.textViewJoinedWindow()
+        }
     }
 }
+

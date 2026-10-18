@@ -44,7 +44,7 @@ extension AppState {
             }
             activateSidebarTagScope(full: String(request.spanText.dropFirst()))
         case .citation:
-            openEditorCitation(raw: request.spanText)
+            openEditorCitation(raw: request.spanText, caretByte: request.byteOffset)
         case .task(_, let origin):
             toggleEditorTask(request, origin: origin)
         case .nothing:
@@ -92,10 +92,34 @@ extension AppState {
     /// either way), whatever modifier the chord carried.
     private func followEditorLink(_ request: EditorActivationRequest, embed: Bool) {
         if let record = editorLinkRecord(for: request, embed: embed) {
-            openLink(record, target: .currentTab)
+            openEditorLink(record)
             return
         }
         followEditorLinkByTarget(request)
+    }
+
+    /// `openLink` in the current tab. When it navigates into a note, the
+    /// opened note's editor takes keyboard focus with the caret at its
+    /// start (#1472), and the editor stays on screen while that note loads,
+    /// so focus never leaves it.
+    private func openEditorLink(_ record: OutgoingLink) {
+        guard !record.isExternal, !record.isUnresolved, let path = record.targetPath else {
+            openLink(record, target: .currentTab)
+            return
+        }
+        claimEditorFocus(for: path, caretByte: 0, keepsEditorThroughLoad: true)
+        openLink(record, target: .currentTab)
+        dropEditorFocusClaimUnlessOpened(path)
+    }
+
+    /// A navigation the funnel refused (a property edit in flight, say)
+    /// opened nothing, so its claim goes.
+    private func dropEditorFocusClaimUnlessOpened(_ path: String) {
+        if let claim = editorFocusClaim, BaseExactIdentity.matches(claim.path, path),
+            !BaseExactIdentity.matches(selectedFilePath, path)
+        {
+            editorTookFocusClaim(claim.token)
+        }
     }
 
     /// A link the saved records do not place here (an unsaved edit moved or
@@ -119,7 +143,7 @@ extension AppState {
                 target: target, grammar: grammar, embed: false, records: records),
                 Int(index) < records.count
             {
-                openLink(records[Int(index)], target: .currentTab)
+                openEditorLink(records[Int(index)])
             } else {
                 announcer.post(.linkUnresolved(target: target))
             }
@@ -129,7 +153,9 @@ extension AppState {
                 Int(index) < records.count,
                 let path = records[Int(index)].targetPath
             {
+                claimEditorFocus(for: path, caretByte: 0, keepsEditorThroughLoad: true)
                 openEmbedTarget(path)
+                dropEditorFocusClaimUnlessOpened(path)
             } else {
                 announcer.post(.linkUnresolved(target: key))
             }
@@ -156,13 +182,18 @@ extension AppState {
     /// A citation's popover, as the reading view opens it: the note's
     /// rendered citation for this raw source, detached (an editor span has
     /// no SwiftUI anchor), or core's refusal while citations are loading.
-    private func openEditorCitation(raw: String) {
+    /// Its close returns keyboard focus to the editor, with the caret where
+    /// the activation found it (`closeExpandedCitation`, #1472).
+    private func openEditorCitation(raw: String, caretByte: Int) {
         guard let citation = currentNoteCitations.first(where: { $0.raw == raw }) else {
             announcer.post(.citationNotLoaded)
             return
         }
         expandedCitationRowAnchored = false
         expandedCitation = citation
+        if let path = loadedFilePath {
+            expandedCitationEditorReturn = (citation, path, caretByte)
+        }
     }
 
     /// The task under the activation: on the caret's line from the keyboard,
