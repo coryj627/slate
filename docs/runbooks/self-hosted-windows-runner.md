@@ -1728,7 +1728,9 @@ and `"status": "401"`. Rotate it before then.
   fault`) and that job stays capped as before (cancel its run and re-run
   it); the host says serving again, which is host-wide, so new jobs of
   that lane still come home and each strands at its cap in turn until a
-  runner of that lane takes its job, which forgets them. On a host that
+  runner of that lane takes its job, which forgets the kept strikes of
+  that lane whenever it comes (`health: retry strikes of N jobs on lane X
+  forgotten because a runner of that lane took its job`). On a host that
   keeps failing the
   struck jobs retry in cycles of about 35 minutes, three failed
   provisionings per job per cycle. The cause is in the lines

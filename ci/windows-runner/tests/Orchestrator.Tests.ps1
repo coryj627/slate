@@ -1570,6 +1570,32 @@ Context 'health breaker' {
         $journal.Retries['1'].Count | Should -Be 3
         (Get-Calls 'NewVm').Count | Should -Be 4
     }
+    It 'forgets kept strikes when their lane''s runner takes its job, even after another lane''s claim reset the breaker' {
+        # A single-lane trip, kept at the half-open; a run then brings an
+        # app job and a model job home, and the app runner is claimed first.
+        $adapters.NewVm = { param($n, $l); if ($l -eq 'model') { & $script:record 'NewVm' @($n, $l); throw 'cache parent unreadable' }; & $script:workingNewVm $n $l }
+        $world.Queued = @((New-QueuedJob 1 10 'model'))
+        foreach ($s in 0, 610, 1220) { Invoke-OrchestratorTick -Config $config -Journal $journal -Adapters $adapters -Now $t0.AddSeconds($s) }
+        $adapters.NewVm = $workingNewVm
+        Invoke-OrchestratorTick -Config $config -Journal $journal -Adapters $adapters -Now $t0.AddSeconds(1220 + 900)   # half-open keeps
+        $journal.Retries['1'].Kept | Should -BeTrue
+        $world.Queued = @((New-QueuedJob 1 10 'model'), (New-QueuedJob 2 11 'app' '2026-10-10T12:30:00Z'))
+        Invoke-OrchestratorTick -Config $config -Journal $journal -Adapters $adapters -Now $t0.AddSeconds(2130)   # app provisioned
+        Invoke-OrchestratorTick -Config $config -Journal $journal -Adapters $adapters -Now $t0.AddSeconds(2140)   # app handed off
+        $world.Queued += (New-QueuedJob 3 12 'model' '2026-10-10T12:31:00Z')
+        Invoke-OrchestratorTick -Config $config -Journal $journal -Adapters $adapters -Now $t0.AddSeconds(2150)   # model provisioned
+        Invoke-OrchestratorTick -Config $config -Journal $journal -Adapters $adapters -Now $t0.AddSeconds(2160)   # model handed off
+        $world.Runner = [pscustomobject]@{ status = 'online'; busy = $true }
+        Invoke-OrchestratorTick -Config $config -Journal $journal -Adapters $adapters -Now $t0.AddSeconds(2140 + 310)   # app claimed first
+        ([regex]::Matches(($logs -join "`n"), 'kept: all on lane model')).Count | Should -Be 2
+        $journal.Health.TrippedAt | Should -Be $null
+        $journal.Retries['1'].Count | Should -Be 3
+        Invoke-OrchestratorTick -Config $config -Journal $journal -Adapters $adapters -Now $t0.AddSeconds(2160 + 310)   # model claimed
+        ($logs -join "`n") | Should -Match 'health: retry strikes of 1 job on lane model forgotten because a runner of that lane took its job; they are admitted again'
+        $journal.Retries.Count | Should -Be 0
+        # Both slots are busy, so job 1 is published as queued, no longer hidden by its cap.
+        $journal.PublishedState | Should -Match '"queued":\[\{"lane":"model"'
+    }
     It 'does not hold strikes whose lanes are no longer known against the one-lane rule' {
         # The seen-job records of the struck jobs were pruned: an unknown
         # lane is not "one lane", so the half-open forgives them.

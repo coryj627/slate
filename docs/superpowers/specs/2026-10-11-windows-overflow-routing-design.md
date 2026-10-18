@@ -532,7 +532,8 @@ optional API reads; nothing in `namespace` mode.
   until a runner of that lane takes its job. The next run routes as usual
   and its home lanes probe too; a failure trips the breaker at once. A
   runner taking its job after a trip forgets the strikes under the same
-  lane rule, its own lane's strikes always; a loop restart after a trip
+  lane rule, and its own lane's kept strikes whenever it comes, even once
+  another lane's claim has reset the breaker; a loop restart after a trip
   forgets them unconditionally, since the restart is the repair. On
   a host that keeps failing the struck jobs retry in cycles of about 35
   minutes, three failed provisionings per job per cycle, instead of

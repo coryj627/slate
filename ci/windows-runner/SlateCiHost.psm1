@@ -277,7 +277,33 @@ function Register-HostSuccess {
     $failures = [int]$health['Failures']
     if ($failures -gt 0) { & $Adapters.Log 'info' "health: a runner took its job; $failures failures in a row forgotten" }
     if ($null -ne $health['TrippedAt']) { Clear-JobRetries -Journal $Journal -Adapters $Adapters -Reason 'because a runner took its job' -ClaimedLane $Lane }
+    # Strikes the lane rule kept earlier (marked Kept) belong to a lane
+    # this claim may just have proven, whether or not the breaker is still
+    # tripped: the first claim after a half-open resets it, and a claim
+    # by the struck lane can come later.
+    if ($Lane) { Clear-KeptRetries -Journal $Journal -Adapters $Adapters -Lane $Lane }
     Reset-HostHealth -Journal $Journal
+}
+
+function Clear-KeptRetries {
+    # The strikes the lane rule kept for this lane, forgotten: a runner of
+    # that lane took its job. Entries whose lane is no longer known go too.
+    [CmdletBinding()]
+    param([Parameter(Mandatory)]$Journal, [Parameter(Mandatory)][hashtable]$Adapters, [Parameter(Mandatory)][string]$Lane)
+    if (-not ($Journal['Retries'] -is [System.Collections.IDictionary])) { return }
+    $forgiven = @()
+    foreach ($key in @($Journal.Retries.Keys)) {
+        $entry = $Journal.Retries[$key]
+        if (-not ($entry -is [System.Collections.IDictionary]) -or -not $entry.Contains('Kept') -or -not $entry['Kept']) { continue }
+        # Not $lane: PowerShell names ignore case, so it would be $Lane, the parameter.
+        $entryLane = '?'
+        if ($Journal['SeenJobs'] -is [System.Collections.IDictionary] -and $Journal.SeenJobs.Contains($key) -and $null -ne $Journal.SeenJobs[$key] -and $Journal.SeenJobs[$key]['Lane']) { $entryLane = [string]$Journal.SeenJobs[$key]['Lane'] }
+        if ($entryLane -eq $Lane -or $entryLane -eq '?') { $forgiven += $key }
+    }
+    if ($forgiven.Count -eq 0) { return }
+    foreach ($key in $forgiven) { $Journal.Retries.Remove($key) }
+    $jobs = '{0} {1}' -f $forgiven.Count, $(if ($forgiven.Count -eq 1) { 'job' } else { 'jobs' })
+    & $Adapters.Log 'info' "health: retry strikes of $jobs on lane $Lane forgotten because a runner of that lane took its job; they are admitted again"
 }
 
 function Clear-JobRetries {
@@ -307,6 +333,8 @@ function Clear-JobRetries {
     } | Sort-Object -Unique)
     $jobs = '{0} {1}' -f $keys.Count, $(if ($keys.Count -eq 1) { 'job' } else { 'jobs' })
     if (-not $Force -and $lanes.Count -lt 2 -and -not ($lanes -contains '?') -and -not ($ClaimedLane -and ($lanes -contains $ClaimedLane))) {
+        # Marked, so a later claim by that lane can forgive them (Clear-KeptRetries).
+        foreach ($key in $keys) { if ($Journal.Retries[$key] -is [System.Collections.IDictionary]) { $Journal.Retries[$key]['Kept'] = $true } }
         & $Adapters.Log 'info' ("health: retry strikes of {0} kept: all on lane {1}, which looks like that lane's fault, not the host's" -f $jobs, $lanes[0])
         return
     }
@@ -1540,7 +1568,7 @@ function Set-LocalUserRights {
 }
 
 Export-ModuleMember -Function Get-LaneFromLabels, New-RunnerName, Split-KvpChunks, Join-KvpChunks,
-    ConvertTo-DateTimeOffset, Select-QueuedLaneJobs, Select-HostRunnerJobs, Select-JobsToAdmit, Register-JobRetry, Get-HostHealth, Test-HostServing, Register-HostFailure, Register-HostSuccess, Reset-HostHealth, Update-HostHealth, Clear-JobRetries, Test-VmExpired, Get-StaleRunnerNames, Test-CommitEligible, Resolve-RunnerJob, Test-IPv4InPrefix, Get-CiHostConfig, New-Journal, Read-Journal, Write-Journal, Write-CiLog,
+    ConvertTo-DateTimeOffset, Select-QueuedLaneJobs, Select-HostRunnerJobs, Select-JobsToAdmit, Register-JobRetry, Get-HostHealth, Test-HostServing, Register-HostFailure, Register-HostSuccess, Reset-HostHealth, Update-HostHealth, Clear-JobRetries, Clear-KeptRetries, Test-VmExpired, Get-StaleRunnerNames, Test-CommitEligible, Resolve-RunnerJob, Test-IPv4InPrefix, Get-CiHostConfig, New-Journal, Read-Journal, Write-Journal, Write-CiLog,
     Get-FreeSlots, Remove-ActiveVm, Test-SiblingRunning, Complete-ActiveVm, Update-ActiveVm, Invoke-Admission, Invoke-OrchestratorTick, Invoke-StartupSweep, Select-SlateKvpItems,
     Get-PublishedState, Publish-HomeState, Get-RunRepository, Test-TrustedRun, Get-OrchestratorLogDate, Get-OrchestratorLogName, Get-ExpiredLogNames, Invoke-LogPrune, Register-GoldenAcceptance, Test-GoldenPrevRemovable,
     Get-CiHostPaths, Read-JournalSnapshot, Remove-SealedFile,
