@@ -261,4 +261,132 @@ final class EditorFocusReturnTests: XCTestCase {
         }
         XCTAssertEqual(source.selectedRange(), caret, "the caret is back at the citation")
     }
+
+    // MARK: - The opened note's editor speaks for the navigation (#1472)
+
+    // The owner's call (2026-10-18): when the opened note's editor takes
+    // keyboard focus, mac posts no "Opened …". VoiceOver stops the phrase in
+    // progress for every read it makes, and the editor's own read names the
+    // note: the field pass's speech-queue log shows the outcome stopped 9 to
+    // 14 ms in, every run.
+
+    private static func rendered(_ event: A11yEvent) -> String { a11yRender(event: event).text }
+
+    private var openedPosts: [String] { announcer.posts.filter { $0.hasPrefix("Opened ") } }
+
+    private func targetRecord(_ state: AppState) throws -> OutgoingLink {
+        try XCTUnwrap(state.currentOutgoingLinks.first { $0.targetPath == "target.md" })
+    }
+
+    /// ⌘↩ on a link, and the opened note's editor takes focus: no "Opened".
+    func testAFollowedLinkWhoseEditorTakesFocusPostsNoOpenedOutcome() async throws {
+        let state = try await openSource()
+        let hosting = host(state)
+        let maybeSource = await editor(in: hosting, showing: "See [[target]]")
+        let source = try XCTUnwrap(maybeSource)
+        XCTAssertTrue(window.makeFirstResponder(source))
+        let link = (source.string as NSString).range(of: "[[target]]")
+        source.setSelectedRange(NSRange(location: link.location + 2, length: 0))
+        announcer.posts.removeAll()
+
+        XCTAssertTrue(window.performKeyEquivalent(with: commandReturn()))
+        let maybeLanded = await editor(in: hosting, showing: "Target body.")
+        let landed = try XCTUnwrap(maybeLanded)
+        await waitUntil("the opened editor to hold keyboard focus") {
+            self.window.firstResponder === landed
+        }
+        await waitUntil("the claim to be spent") { state.editorFocusClaim == nil }
+        XCTAssertEqual(state.lastActivatedLinkOutcome, .openedInternal("target.md"))
+        XCTAssertEqual(openedPosts, [], "posted: \(announcer.posts)")
+    }
+
+    /// #1378: a search result whose editor takes focus at the hit's line
+    /// posts no "Opened …, line N: …"; the editor's read says the line.
+    func testASearchResultWhoseEditorTakesFocusPostsNoOpenedOutcome() async throws {
+        let state = try await openSource()
+        let hosting = host(state)
+        let maybeSource = await editor(in: hosting, showing: "See [[target]]")
+        _ = try XCTUnwrap(maybeSource)
+        window.makeFirstResponder(nil)  // the overlay held the keyboard
+        announcer.posts.removeAll()
+        state.searchQuery = "More"
+        state.openSearchResult(QueryHit(path: "target.md", snippet: "\u{2}More\u{3}.", score: 0))
+
+        let maybeLanded = await editor(in: hosting, showing: "Target body.")
+        let landed = try XCTUnwrap(maybeLanded)
+        await waitUntil("the hit's line scroll") { state.lastActivatedSearchResultPath == "target.md" }
+        await waitUntil("the editor to hold keyboard focus") {
+            self.window.firstResponder === landed
+        }
+        await waitUntil("the claim to be spent") { state.editorFocusClaim == nil }
+        XCTAssertEqual(openedPosts, [], "posted: \(announcer.posts)")
+    }
+
+    /// An open no editor claims still says "Opened …": a panel row keeps its
+    /// own focus, and nothing else would speak.
+    func testAnOpenThatNoEditorClaimsStillPostsItsOpenedOutcome() async throws {
+        let state = try await openSource()
+        let record = try targetRecord(state)
+        announcer.posts.removeAll()
+
+        state.openLink(record, target: .currentTab)
+
+        XCTAssertNil(state.editorFocusClaim)
+        XCTAssertEqual(
+            openedPosts, [Self.rendered(.internalNavigated(kind: "Opened", filename: "target.md"))])
+    }
+
+    /// A search result opened in reading mode has no editor to take focus,
+    /// so it says "Opened …, line N: …" as before.
+    func testASearchResultOpenedInReadingModeStillPostsItsOpenedOutcome() async throws {
+        let state = try await openSource()
+        state.setViewMode(.reading)
+        XCTAssertEqual(state.activeViewMode, .reading)
+        announcer.posts.removeAll()
+
+        state.searchQuery = "More"
+        state.openSearchResult(QueryHit(path: "target.md", snippet: "\u{2}More\u{3}.", score: 0))
+
+        await waitUntil("the result's open") { state.lastActivatedSearchResultPath == "target.md" }
+        XCTAssertEqual(openedPosts.count, 1, "posted: \(announcer.posts)")
+        XCTAssertTrue(
+            openedPosts.first?.hasPrefix("Opened target.md, line ") == true,
+            "posted: \(announcer.posts)")
+    }
+
+    /// A claim that ends before its editor takes it falls back to the
+    /// outcome: here no editor is mounted, and another note is chosen.
+    func testAClaimThatEndsBeforeLandingFallsBackToPostingTheOpenedOutcome() async throws {
+        let state = try await openSource()
+        let record = try targetRecord(state)
+        announcer.posts.removeAll()
+        state.claimEditorFocus(for: "target.md", caretByte: 0, keepsEditorThroughLoad: true)
+
+        state.openLink(record, target: .currentTab)
+        XCTAssertEqual(openedPosts, [], "held while the claim waits for the editor")
+
+        state.selectedFilePath = "other.md"
+        XCTAssertNil(state.editorFocusClaim)
+        XCTAssertEqual(
+            openedPosts, [Self.rendered(.internalNavigated(kind: "Opened", filename: "target.md"))])
+    }
+
+    /// A claimed note that fails to load ends its claim, and the outcome is
+    /// posted as before (the content pane shows the load error).
+    func testAClaimedNoteThatFailsToLoadPostsTheOpenedOutcome() async throws {
+        let state = try await openSource()
+        let record = try targetRecord(state)
+        let vault = try XCTUnwrap(tempDirs.last).appendingPathComponent("vault")
+        try FileManager.default.removeItem(at: vault.appendingPathComponent("target.md"))
+        announcer.posts.removeAll()
+        state.claimEditorFocus(for: "target.md", caretByte: 0, keepsEditorThroughLoad: true)
+
+        state.openLink(record, target: .currentTab)
+        await state.noteLoadTask?.value
+
+        XCTAssertNotNil(state.noteLoadError)
+        XCTAssertNil(state.editorFocusClaim)
+        XCTAssertEqual(
+            openedPosts, [Self.rendered(.internalNavigated(kind: "Opened", filename: "target.md"))])
+    }
 }

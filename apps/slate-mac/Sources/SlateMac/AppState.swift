@@ -4025,6 +4025,8 @@ final class AppState: ObservableObject {
             // AppState's fields — reading renders from it.
             editorCaretReturn[tabID] = EditorTextConversions.byteOffsetForUTF16Location(
                 liveEditorCaretUTF16, in: currentNoteText ?? "")
+            // #1472: the editor a pending claim waits for is leaving.
+            endEditorFocusClaim()
         }
         workspace.setViewMode(target, for: tabID)
         if isActiveTab, target == .editing {
@@ -8683,6 +8685,9 @@ final class AppState: ObservableObject {
         /// sets it: the loading shell would take the focused text view out
         /// of the window, and VoiceOver's own recovery from that lands on
         /// the content pane and the tab strip before the new editor exists.
+        /// Every navigation's claim keeps the editor (a followed link or
+        /// embed, a search result), so it also marks the claim whose landing
+        /// settles that navigation's outcome (`postNavigationOutcome`).
         let keepsEditorThroughLoad: Bool
         let token: UInt64
     }
@@ -8693,22 +8698,87 @@ final class AppState: ObservableObject {
     private var editorFocusClaimSerial: UInt64 = 0
 
     func claimEditorFocus(for path: String, caretByte: Int?, keepsEditorThroughLoad: Bool) {
+        endEditorFocusClaim()
         editorFocusClaimSerial &+= 1
         editorFocusClaim = EditorFocusClaim(
             path: path, caretByte: caretByte,
             keepsEditorThroughLoad: keepsEditorThroughLoad, token: editorFocusClaimSerial)
     }
 
-    /// The editor applied claim `token`: it is spent.
+    /// The editor applied claim `token`: it is spent. The navigation
+    /// outcome it held is dropped (`postNavigationOutcome`).
     func editorTookFocusClaim(_ token: UInt64) {
-        if editorFocusClaim?.token == token { editorFocusClaim = nil }
+        guard let claim = editorFocusClaim, claim.token == token else { return }
+        editorFocusClaim = nil
+        if heldNavigationOutcome?.token == token {
+            heldNavigationOutcome = nil
+        } else if claim.keepsEditorThroughLoad {
+            landedNavigationClaim = token
+        }
+    }
+
+    /// The pending claim ends with no editor taking it: another note or tab
+    /// was chosen, the navigation was refused, the note failed to load, the
+    /// tab left editing, or a new claim replaced it. The navigation outcome
+    /// it held is posted, as it was before claims held it.
+    func endEditorFocusClaim() {
+        guard let claim = editorFocusClaim else { return }
+        editorFocusClaim = nil
+        if let held = heldNavigationOutcome, held.token == claim.token {
+            heldNavigationOutcome = nil
+            announcer.post(held.event)
+        }
     }
 
     /// A navigation to another note (or to none) ends a pending claim.
     private func dropEditorFocusClaim(unlessFor path: String?) {
         if let claim = editorFocusClaim, !BaseExactIdentity.matches(claim.path, path) {
-            editorFocusClaim = nil
+            endEditorFocusClaim()
         }
+    }
+
+    /// The outcome of a navigation whose claim is pending, until the claim
+    /// lands (dropped) or ends (posted).
+    private var heldNavigationOutcome: (token: UInt64, event: A11yEvent)?
+    /// The last navigation claim that landed before its outcome arrived.
+    private var landedNavigationClaim: UInt64?
+
+    /// #1472, the owner's call (2026-10-18): a navigation's outcome ("Opened
+    /// <file>.", a search result's "Opened <file>, line N: …") is not posted
+    /// when the opened note's editor takes keyboard focus. VoiceOver stops
+    /// the phrase in progress for every read it makes, so the outcome posted
+    /// beside the editor's read was cut off (the field pass's speech-queue
+    /// log: 9 to 14 ms in, every run), and that read names the note, and the
+    /// line, at once. Windows posts it: NVDA queues it.
+    ///
+    /// While the claim that puts focus in that editor is pending, the outcome
+    /// is held on it: the claim's landing drops it, any other end posts it.
+    /// An outcome that arrives after its claim landed is dropped (a search
+    /// result announces once its note has loaded; `claimToken` names its
+    /// claim). With no claim, or one no editor can take (reading mode, a
+    /// canvas or a base), it is posted as before.
+    func postNavigationOutcome(_ event: A11yEvent, for path: String, claimToken: UInt64? = nil) {
+        if let claim = editorFocusClaim, claim.keepsEditorThroughLoad,
+            BaseExactIdentity.matches(claim.path, path),
+            claimToken == nil || claimToken == claim.token,
+            editorCanTakeFocusClaim(for: path)
+        {
+            heldNavigationOutcome = (claim.token, event)
+            return
+        }
+        if let claimToken, claimToken == landedNavigationClaim {
+            landedNavigationClaim = nil
+            return
+        }
+        announcer.post(event)
+    }
+
+    /// Whether a note editor shows `path` once it opens: the active tab is in
+    /// editing mode and the path takes the note arm of `openFile`.
+    private func editorCanTakeFocusClaim(for path: String) -> Bool {
+        let lowered = path.lowercased()
+        return activeViewMode == .editing
+            && !lowered.hasSuffix(".canvas") && !lowered.hasSuffix(".base")
     }
 
     /// One-shot channel for "scroll to line N." Search-result
@@ -10255,6 +10325,7 @@ final class AppState: ObservableObject {
         // not stay on the window; the line scroll below places its caret.
         // The editor stays on screen while the note loads (#1472's claim).
         claimEditorFocus(for: hit.path, caretByte: nil, keepsEditorThroughLoad: true)
+        let claimToken = editorFocusClaim?.token
 
         // U1-5: honor a live ⌘ modifier — a row ⌘-click, or ⌘Return on a
         // focused row through the overlay's key monitor (D2). Both leave
@@ -10306,11 +10377,12 @@ final class AppState: ObservableObject {
             self.lineScrollRequest.send(line)
             // U3-3: the buffer (and thus `line`) is body-space; humans and
             // on-disk tooling count whole-file lines — announce THOSE.
-            postAccessibilityAnnouncement(
+            self.postNavigationOutcome(
                 .searchResultOpened(
                     filename: filename,
                     line: UInt32(self.fileLine(fromBodyLine: line)),
-                    snippet: cleanSnippet))
+                    snippet: cleanSnippet),
+                for: hit.path, claimToken: claimToken)
             self.lastActivatedSearchResultLine = line
             self.lastActivatedSearchResultPath = hit.path
         }
@@ -10435,7 +10507,7 @@ final class AppState: ObservableObject {
         // outline cue. High priority makes the activation
         // confirmation win; the outline count then follows with the
         // structure info.
-        postAccessibilityAnnouncement(.internalNavigated(kind: kind, filename: filename))
+        postNavigationOutcome(.internalNavigated(kind: kind, filename: filename), for: path)
         lastActivatedLinkOutcome = .openedInternal(path)
     }
 
@@ -12865,6 +12937,10 @@ final class AppState: ObservableObject {
             propertiesSourceShowing = false
             propertiesSourceError = nil
             noteLoadError = humanReadable(error)
+            // #1472: no editor shows this note, so a claim on one ends.
+            if let claim = editorFocusClaim, BaseExactIdentity.matches(claim.path, path) {
+                endEditorFocusClaim()
+            }
         }
         isLoadingNote = false
     }

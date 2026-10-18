@@ -184,6 +184,7 @@ not a human listening result. Braille is owner-deferred; Narrator is W8.
 | Quick Open | QuickSwitcherModel | QuickSwitcherViewModel.RankAsync / ApplyRanked | 60 ms ranking window; publish count once initially and once for latest query | `RankingWindowCollapsesKeystrokesAndPublishesTheInitialCountOnce` |
 | Bases | AppState+Bases refresh funnel | WorkspaceViewModel.Bases.OnBaseMembershipChanged / CompleteBasesWrite | Summary-text dedup within one funnel; cleared for next funnel | `FunnelRefreshesEveryDocumentAndAnnouncesMembershipOnce` |
 | Sync marker | SyncMarkerWatcher | SyncMarkerWatcher | 2.5 s quiet period, 4x ceiling; refresh timing, outside announcement coalescing | Existing `SyncMarkerWatcherTests` (not a new notification claim) |
+| Editor-focus navigation outcome (#1472) | AppState.postNavigationOutcome, from navigate and openSearchResult | WorkspaceViewModel.OpenEditorNavigation; VaultLifecycleViewModel.Search_OpenRequested | Mac posts no `InternalNavigated` / `SearchResultOpened` when the opened note's editor takes keyboard focus (its focus claim lands); held while that claim is pending, posted when the claim ends unlanded or no editor can take it; Windows posts both | `EditorFocusReturnTests` (six outcome facts); the 2026-10-18 speech-queue field log (below) |
 
 The new Sidebar and Quick Open facts run the production asynchronous path
 with cancellation-aware injected delays. Safety timeouts bound a hung test;
@@ -532,6 +533,68 @@ raises the notice). Journey:
 keyboard reachability, both status sentences, the row leaving the tree,
 axe clean). Human NVDA/JAWS listening for the three sentences joins the
 release residual with the rest of W7.
+
+## Editor-focus navigation outcome (#1472, owner decision 2026-10-18)
+
+When a link or embed followed from the editor, or a search result (#1378),
+puts keyboard focus in the opened note's editor, the mac host does not post
+core's outcome: `InternalNavigated` ("Opened <file>.") or
+`SearchResultOpened` ("Opened <file>, line N: …"). The editor's own read
+names the note, and the line, at once. Windows keeps posting both; the
+owner's call records that NVDA queues them.
+
+Evidence: the #1473 field pass, 2026-10-18, on the dev bundle with a
+scratch vault. VoiceOver's `last phrase` records what VoiceOver was given,
+not what it said. A low-priority announcement posted 60 ms into a
+high-priority one showed there 48 ms later, but was spoken only when the
+first had finished, about 5 s later. So the pass read VoiceOver's speech
+queue from the unified log (the `CoreSynthesizer`, `TTSSpeechQueue` and
+`AudioQueue` categories; runbook §3, gotcha 7). Every read VoiceOver makes
+stops the phrase in progress. With the outcome posted:
+
+- **A followed link.** "Opened Target note.md." was stopped 9 to 14 ms in,
+  in 5 of 5 logged runs. The editor's "Note content for Target note.md.
+  edit text Line 1 …" finished in all five.
+- **A search result.** "Opened Target note.md, line 3: …" was stopped
+  before any audio played, in 2 of 2 logged runs. The editor's "… Line 3
+  …" finished.
+
+None of these kept the outcome:
+
+- posting the editor's focused-element notification 600 or 1500 ms later;
+- cycling first responder;
+- holding the editor's text, label and editability through the load;
+- giving up first responder before the swap;
+- posting the outcome only after the claim landed.
+
+VoiceOver re-reads the kept editor itself when its text is swapped.
+
+Rule, in `AppState.postNavigationOutcome`:
+
+- While the editor focus claim for the navigated note is pending, the
+  outcome is held on it.
+- The claim's landing (the editor applies it) drops the outcome.
+- Any other end posts it: another note or tab is chosen, the navigation is
+  refused, the note fails to load, the tab leaves editing, or a new claim
+  replaces it.
+- An outcome that arrives after its claim landed is dropped. A search
+  result announces once its note has loaded.
+- With no claim, or one no editor can take (reading mode, a canvas, a
+  base), the outcome is posted as before, so nothing goes silent.
+
+The construction sites are unchanged (`AppState.swift#navigate@1`,
+`AppState.swift#openSearchResult@1`), so the ledger rows and the trigger
+census inputs stay as they are. A designation records a platform with no
+construction, and this is not one.
+
+Facts in `EditorFocusReturnTests`:
+
+- a followed link whose editor takes focus posts no outcome;
+- a search result whose editor takes focus posts none;
+- an open no editor claims still posts it;
+- a search result in reading mode still posts it;
+- a claim that ends before landing posts it;
+- a claimed note that fails to load posts it.
 
 <!-- a11y-trigger-ledger:start -->
 

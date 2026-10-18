@@ -113,12 +113,12 @@ extension AppState {
     }
 
     /// A navigation the funnel refused (a property edit in flight, say)
-    /// opened nothing, so its claim goes.
+    /// opened nothing, so its claim ends, and the outcome it held is posted.
     private func dropEditorFocusClaimUnlessOpened(_ path: String) {
         if let claim = editorFocusClaim, BaseExactIdentity.matches(claim.path, path),
             !BaseExactIdentity.matches(selectedFilePath, path)
         {
-            editorTookFocusClaim(claim.token)
+            endEditorFocusClaim()
         }
     }
 
