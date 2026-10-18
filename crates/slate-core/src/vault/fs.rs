@@ -1061,13 +1061,15 @@ impl VaultProvider for FsVaultProvider {
             let root = pinned_root::PinnedRoot::open(&self.root)?;
             let item = root.end(self.vault_relative(&path, relative)?, relative, false)?;
 
-            // Broken symlinks: some `trash` backends reject dangling links.
-            // The target is already gone, so there is nothing recoverable to
-            // send to the Trash — unlink the dangling entry directly, inside
-            // its pinned parent, so a swapped folder cannot redirect it. The
-            // look does not follow the leaf, so a broken symlink still counts
-            // as present, and its io::Error keeps permission-denied (etc.)
-            // from being masked as NotFound.
+            // A link whose target is truly absent (following it fails with
+            // ENOENT or ENOTDIR) leaves nothing recoverable but the link, so
+            // it is unlinked inside its pinned parent, where a swapped folder
+            // cannot redirect it. Every other link goes to the Trash below,
+            // which moves the link itself: one whose target Slate cannot
+            // reach, a cycle, any failure that does not prove the target
+            // absent (#1477). The look does not follow the leaf, so a broken
+            // symlink still counts as present, and its io::Error keeps
+            // permission-denied (etc.) from being masked as NotFound.
             if item.is_dangling_link().map_err(VaultError::Io)? {
                 return item.unlink().map_err(VaultError::Io);
             }
@@ -1094,9 +1096,15 @@ impl VaultProvider for FsVaultProvider {
             // `symlink_metadata` does not follow the leaf, so a broken symlink
             // still passes; the raw io::Error keeps its kind.
             let meta = handed.symlink_metadata().map_err(VaultError::Io)?;
-            // Broken symlinks: the Recycle Bin may reject a dangling link and
-            // its target is already gone — unlink the dangling entry directly.
-            if meta.file_type().is_symlink() && !handed.exists() {
+            // The Unix arm's rule (#1477): only a link whose target the
+            // system reports absent is unlinked (the Recycle Bin may reject
+            // one, and nothing but the link would reach it). A link whose
+            // target Slate cannot open, a loop, or any other failure goes to
+            // the Recycle Bin as the link.
+            if meta.file_type().is_symlink()
+                && fs::metadata(&handed)
+                    .is_err_and(|error| super::trash_handoff::link_target_is_absent(&error))
+            {
                 return unlink_dangling_symlink(&handed, &meta).map_err(VaultError::Io);
             }
             self.trash.trash(&handed)
