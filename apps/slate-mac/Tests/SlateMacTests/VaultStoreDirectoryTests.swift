@@ -297,6 +297,33 @@ final class VaultRootRenameAppStateTests: XCTestCase {
         XCTAssertTrue(shown.contains("is no longer the vault Slate opened"), shown)
     }
 
+    /// The one deferred write: a graph save scheduled in vault A runs after
+    /// the switch to B, so it must carry A's identity with A's root. Paired
+    /// with B's (from the open), A's root would refuse and the edit would be
+    /// lost.
+    func testAGraphSaveScheduledBeforeASwitchStillLandsInItsOwnVault() async throws {
+        let (state, vaultA) = try await openVault("graph-switch-a")
+        state.setGraphMode(.diagram)
+        let pending = try XCTUnwrap(state.graphConfigSaveTasks[vaultA], "premise: a save is pending")
+        let vaultB = tempDir.appendingPathComponent("graph-switch-b", isDirectory: true)
+        try FileManager.default.createDirectory(at: vaultB, withIntermediateDirectories: false)
+        try Data("# B\n".utf8).write(to: vaultB.appendingPathComponent("b.md"))
+
+        state.openVault(at: vaultB)
+        XCTAssertEqual(state.currentVaultURL?.path, vaultB.path, "premise: switched before the save ran")
+        await state.scanTask?.value
+        await pending.value
+
+        let saved = try GraphConfigStore(
+            vaultRoot: vaultA, rootIdentity: AppState.vaultRootIdentity(of: vaultA)
+        ).read()
+        XCTAssertEqual(saved.mode, .diagram, "A's edit landed in A")
+        XCTAssertFalse(
+            FileManager.default.fileExists(
+                atPath: vaultB.appendingPathComponent(".slate/graph.json").path),
+            "B received nothing from A's save")
+    }
+
     /// The regression guard for the call sites: an open vault that stays put
     /// still gets every store's file, so each site passes a real identity.
     func testAnOpenVaultThatStaysPutStillGetsEveryStoresFile() async throws {
