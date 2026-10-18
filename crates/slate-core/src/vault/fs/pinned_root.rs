@@ -322,10 +322,17 @@ impl PinnedRoot {
     /// is already there is `Ok`; it is looked at, never opened, so its own
     /// permissions do not matter. A link or anything but a folder, at the end
     /// as anywhere on the way, is the typed refusal, and nothing is made
-    /// through it.
-    pub(super) fn create_folder(&self, relative: &Path, original: &str) -> Result<(), VaultError> {
+    /// through it. `before_create` is a test seam that runs after the parent
+    /// is pinned, just before the `mkdirat`.
+    pub(super) fn create_folder(
+        &self,
+        relative: &Path,
+        original: &str,
+        before_create: impl FnOnce() -> io::Result<()>,
+    ) -> Result<(), VaultError> {
         let mutation = Mutation::CreateFolder;
         let (parent, leaf) = self.parent_and_leaf(relative, original, true, mutation)?;
+        before_create().map_err(VaultError::Io)?;
         match create_directory_at(&parent, &leaf) {
             Ok(()) => Ok(()),
             Err(error) if error.kind() == io::ErrorKind::AlreadyExists => {

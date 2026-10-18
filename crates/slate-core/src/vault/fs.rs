@@ -485,6 +485,26 @@ impl FsVaultProvider {
         let _ = target.sync_parent();
         Ok(())
     }
+
+    /// #1452: a new folder beneath the pinned vault root, `create_folder`'s
+    /// only route to disk ([`VaultProvider::create_dir`]). The folder that
+    /// will hold it is pinned with the no-follow walk, and it is made with
+    /// `mkdirat` in that folder's descriptor (`PinnedRoot::create_folder`).
+    /// `before_create` is a test seam that runs after the pin, just before
+    /// the `mkdirat`.
+    #[cfg(unix)]
+    fn create_dir_beneath_root(
+        &self,
+        relative: &str,
+        before_create: impl FnOnce() -> io::Result<()>,
+    ) -> Result<(), VaultError> {
+        let path = self.resolve_for_mutation(relative)?;
+        pinned_root::PinnedRoot::open(&self.root)?.create_folder(
+            self.vault_relative(&path, relative)?,
+            relative,
+            before_create,
+        )
+    }
 }
 
 #[cfg(unix)]
@@ -1028,18 +1048,17 @@ impl VaultProvider for FsVaultProvider {
     }
 
     fn create_dir(&self, relative: &str) -> Result<(), VaultError> {
-        let path = self.resolve_for_mutation(relative)?;
         // #1452: on Unix every missing folder is made with `mkdirat` inside
         // its pinned parent, and a link or a non-folder on the path, the
         // folder's own name included, is the typed refusal (`pinned_root`).
         // Windows still creates by path (#1451).
         #[cfg(unix)]
         {
-            pinned_root::PinnedRoot::open(&self.root)?
-                .create_folder(self.vault_relative(&path, relative)?, relative)
+            self.create_dir_beneath_root(relative, || Ok(()))
         }
         #[cfg(not(unix))]
         {
+            let path = self.resolve_for_mutation(relative)?;
             std::fs::create_dir_all(&path).map_err(VaultError::from)
         }
     }
@@ -3288,38 +3307,178 @@ mod tests {
         );
     }
 
-    /// #1452: the swap lands after the parent is pinned and the bytes are
-    /// staged, just before the publish. The publish is relative to the pinned
-    /// folder, so the save lands in the vault's own folder (now parked), never
-    /// through the link: the pinned-parent moment #1449 records for Linux
-    /// renames, here on macOS and Linux alike.
+    /// `.slate/tmp` holds no staged file: every save either published its
+    /// staged file or removed it.
+    #[cfg(unix)]
+    fn assert_no_staged_file(vault: &Path) {
+        let staged: Vec<_> = std::fs::read_dir(vault.join(".slate/tmp"))
+            .unwrap()
+            .map(|entry| entry.unwrap().file_name())
+            .collect();
+        assert!(staged.is_empty(), "staged files left behind: {staged:?}");
+    }
+
+    /// #1452's race, for a save: the folder is swapped for a link to a
+    /// directory outside the vault after it is pinned and the bytes are
+    /// staged, immediately before the publish's `renameat`. The publish is
+    /// relative to the pinned descriptor, so the save lands in the vault's
+    /// own folder (now parked), never through the link, for an overwrite of
+    /// a name the link's target also holds, a new name, and a name in a
+    /// folder the walk has just made. Nothing outside changes and no staged
+    /// file is left. (#1449 records this pinned-parent moment for Linux
+    /// renames; for saves it holds on macOS and Linux alike.)
     #[cfg(unix)]
     #[test]
-    fn a_folder_swapped_after_the_pin_cannot_redirect_the_publish() {
+    fn a_folder_swapped_just_before_the_publish_cannot_redirect_a_save() {
+        for (relative, parked) in [
+            ("sub/note.md", "parked/note.md"),
+            ("sub/new-note.md", "parked/new-note.md"),
+            ("sub/new/deeper.md", "parked/new/deeper.md"),
+        ] {
+            let (tmp, p) = vault();
+            let outside = tempfile::tempdir().unwrap();
+            std::fs::write(outside.path().join("note.md"), b"outside note").unwrap();
+            p.write_file("sub/note.md", b"vault note").unwrap();
+            let outside_before = tree(outside.path());
+
+            p.write_file_beneath_root(relative, b"saved bytes", || {
+                swap_sub_for_a_link(tmp.path(), outside.path());
+                Ok(())
+            })
+            .unwrap_or_else(|error| panic!("{relative}: {error:?}"));
+
+            assert_eq!(
+                tree(outside.path()),
+                outside_before,
+                "{relative}: outside changed"
+            );
+            assert_eq!(
+                std::fs::read(tmp.path().join(parked)).unwrap(),
+                b"saved bytes",
+                "{relative}"
+            );
+            assert_no_staged_file(tmp.path());
+        }
+    }
+
+    /// #1452's race, for a new folder: the same swap, immediately before the
+    /// `mkdirat`. The folder is made in the pinned descriptor, so it lands in
+    /// the vault's own folder (now parked), whether its parent was there or
+    /// the walk has just made it, and nothing appears outside.
+    #[cfg(unix)]
+    #[test]
+    fn a_folder_swapped_just_before_the_mkdirat_cannot_redirect_a_new_folder() {
+        for (relative, parked) in [
+            ("sub/new-folder", "parked/new-folder"),
+            ("sub/new/deeper", "parked/new/deeper"),
+        ] {
+            let (tmp, p) = vault();
+            let outside = tempfile::tempdir().unwrap();
+            p.create_dir("sub").unwrap();
+
+            p.create_dir_beneath_root(relative, || {
+                swap_sub_for_a_link(tmp.path(), outside.path());
+                Ok(())
+            })
+            .unwrap_or_else(|error| panic!("{relative}: {error:?}"));
+
+            assert!(
+                tree(outside.path()).is_empty(),
+                "{relative}: outside changed"
+            );
+            let meta = tmp.path().join(parked).symlink_metadata().unwrap();
+            assert!(
+                meta.is_dir() && !meta.file_type().is_symlink(),
+                "{relative}"
+            );
+        }
+    }
+
+    /// #1452's race, where the pinned folder itself goes: the folder the walk
+    /// has just made is removed, and a link to a directory outside the vault
+    /// put in its place, immediately before the publish or the `mkdirat`. The
+    /// pinned descriptor then names a removed folder, so the call fails with
+    /// the kernel's own error, `ENOENT` as `Io(NotFound)`, not flattened into
+    /// a refusal, and nothing is written anywhere: not through the link, and
+    /// no staged file is left.
+    #[cfg(unix)]
+    #[test]
+    fn a_pinned_folder_removed_just_before_the_publish_fails_with_its_errno() {
+        fn swap_fresh(vault: &Path, outside: &Path) -> io::Result<()> {
+            std::fs::remove_dir(vault.join("fresh"))?;
+            std::os::unix::fs::symlink(outside, vault.join("fresh"))
+        }
+        fn assert_enoent(relative: &str, error: &VaultError) {
+            assert!(
+                matches!(error, VaultError::Io(io)
+                    if io.kind() == io::ErrorKind::NotFound
+                        && io.raw_os_error() == Some(libc::ENOENT)),
+                "{relative}: {error:?}"
+            );
+        }
+
         let (tmp, p) = vault();
         let outside = tempfile::tempdir().unwrap();
-        std::fs::write(outside.path().join("note.md"), b"outside note").unwrap();
-        p.write_file("sub/note.md", b"vault note").unwrap();
-        let outside_before = tree(outside.path());
+        let save = p
+            .write_file_beneath_root("fresh/x.md", b"saved bytes", || {
+                swap_fresh(tmp.path(), outside.path())
+            })
+            .unwrap_err();
+        assert_enoent("fresh/x.md", &save);
+        assert!(tree(outside.path()).is_empty(), "the save wrote outside");
+        assert_no_staged_file(tmp.path());
 
-        p.write_file_beneath_root("sub/note.md", b"saved bytes", || {
-            swap_sub_for_a_link(tmp.path(), outside.path());
-            Ok(())
-        })
-        .unwrap();
+        let (tmp, p) = vault();
+        let outside = tempfile::tempdir().unwrap();
+        let folder = p
+            .create_dir_beneath_root("fresh/new", || swap_fresh(tmp.path(), outside.path()))
+            .unwrap_err();
+        assert_enoent("fresh/new", &folder);
+        assert!(
+            tree(outside.path()).is_empty(),
+            "the folder was made outside"
+        );
+    }
 
-        assert_eq!(tree(outside.path()), outside_before, "outside changed");
-        assert_eq!(
-            std::fs::read(tmp.path().join("parked/note.md")).unwrap(),
-            b"saved bytes"
+    /// The other failures keep the kernel's error (#1452): only a folder on
+    /// the path that is a link or not a folder becomes the typed refusal. A
+    /// save and a new folder in a folder Slate may not write keep `EACCES` as
+    /// `Io(PermissionDenied)`, and the detail the hosts show still carries its
+    /// `os error` number. The refused save leaves no staged file.
+    #[cfg(unix)]
+    #[test]
+    fn failures_other_than_the_boundary_keep_their_io_error() {
+        use std::os::unix::fs::PermissionsExt as _;
+
+        let (tmp, p) = vault();
+        p.create_dir("locked").unwrap();
+        let locked = tmp.path().join("locked");
+        std::fs::set_permissions(&locked, fs::Permissions::from_mode(0o500)).unwrap();
+        let save = p.write_file("locked/x.md", b"x");
+        let folder = p.create_dir("locked/new");
+        // Restore owner access before asserting, so TempDir cleanup stays
+        // reliable even when the fact fails.
+        std::fs::set_permissions(&locked, fs::Permissions::from_mode(0o700)).unwrap();
+
+        for (call, outcome) in [("write_file", save), ("create_dir", folder)] {
+            let error = outcome.unwrap_err();
+            assert!(
+                matches!(&error, VaultError::Io(io)
+                    if io.kind() == io::ErrorKind::PermissionDenied
+                        && io.raw_os_error() == Some(libc::EACCES)),
+                "{call}: {error:?}"
+            );
+            let detail = crate::a11y::vault_error_detail(&error);
+            assert!(
+                detail.contains(&format!("(os error {})", libc::EACCES)),
+                "{call}: {detail}"
+            );
+        }
+        assert!(
+            std::fs::read_dir(&locked).unwrap().next().is_none(),
+            "something was written in the locked folder"
         );
-        assert_eq!(
-            std::fs::read_dir(tmp.path().join(".slate/tmp"))
-                .unwrap()
-                .count(),
-            0,
-            "no staged file is left behind"
-        );
+        assert_no_staged_file(tmp.path());
     }
 
     /// #1452: the root is the descriptor, not a path component, so a vault
