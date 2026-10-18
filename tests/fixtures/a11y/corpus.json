@@ -300,6 +300,11 @@
     "text": "No embed at cursor."
   },
   {
+    "event": "NothingToActivateAtCursor",
+    "priority": "medium",
+    "text": "Nothing to activate at cursor."
+  },
+  {
     "event": "HeadingNotFound",
     "priority": "medium",
     "text": "Could not find that heading."
@@ -443,6 +448,26 @@
     "event": "TaskToggleConflict { filename: \"notes.md\" }",
     "priority": "medium",
     "text": "Toggle blocked. notes.md was modified externally. Resolve in the dialog."
+  },
+  {
+    "event": "TaskToggled { completed: true }",
+    "priority": "medium",
+    "text": "Task completed."
+  },
+  {
+    "event": "TaskToggled { completed: false }",
+    "priority": "medium",
+    "text": "Task reopened."
+  },
+  {
+    "event": "TaskToggleFailed { detail: \"The disk is full\" }",
+    "priority": "high",
+    "text": "Task could not be toggled: The disk is full."
+  },
+  {
+    "event": "TaskToggleFailed { detail: \"\" }",
+    "priority": "high",
+    "text": "Task could not be toggled."
   },
   {
     "event": "TasksReviewShown { filter_name: \"Open tasks\" }",

@@ -8579,6 +8579,24 @@ final class AppState: ObservableObject {
     /// the editor).
     let findInNoteRequest = PassthroughSubject<Void, Never>()
 
+    /// #1431: one-shot channel for "activate at the caret" — the
+    /// `slate.editor.activateAtCaret` command (`activateAtCursor`) sends it
+    /// while the note editor is mounted; the active `NoteEditorView`
+    /// resolves the span under its caret and hands the activation back
+    /// through `performEditorActivation`.
+    let activateAtCursorRequest = PassthroughSubject<Void, Never>()
+
+    /// #1431: whether the active note editor holds keyboard focus. Edit ▸
+    /// Activate at Cursor carries ⌘↩ and is enabled only while this is
+    /// true, so ⌘↩ everywhere else (a grid's or a list's open-in-new-tab)
+    /// reaches its own surface: a disabled menu item lets its key
+    /// equivalent through to the focused view.
+    @Published private(set) var isNoteEditorFocused = false
+
+    func noteEditorFocusChanged(_ focused: Bool) {
+        if isNoteEditorFocused != focused { isNoteEditorFocused = focused }
+    }
+
     /// One-shot channel for "scroll to line N." Search-result
     /// activation (#59) sends a 1-based line number; the content
     /// pane's `.onReceive` resolves to the `line-<N>` anchor.
@@ -10183,7 +10201,11 @@ final class AppState: ObservableObject {
     /// The branch chosen is also reflected in `lastActivatedLinkOutcome`
     /// so tests can verify behaviour without observing UIKit/AppKit
     /// side effects.
-    func openLink(_ link: OutgoingLink) {
+    ///
+    /// `target` nil honours a live ⌘ (a ⌘-click opens a new tab); the
+    /// editor's activation passes `.currentTab` (#1431), since its own
+    /// chord is ⌘↩.
+    func openLink(_ link: OutgoingLink, target: OpenTarget? = nil) {
         if link.isExternal {
             // Allowlist the schemes we hand to LaunchServices. The
             // link parser flags `file:`, `javascript:`, and custom
@@ -10229,7 +10251,7 @@ final class AppState: ObservableObject {
             lastActivatedLinkOutcome = .unresolved(link.targetRaw)
             return
         }
-        navigate(to: path, kind: "Opened", target: openTargetFromCurrentEvent())
+        navigate(to: path, kind: "Opened", target: target ?? openTargetFromCurrentEvent())
     }
 
     /// The repository README URL the Help utility opens (gap G13). Small,
@@ -13756,8 +13778,16 @@ final class AppState: ObservableObject {
     /// cancelled) are normalised to one of those two by the
     /// completion check — the panel doesn't expose a way to
     /// author custom status chars (#113 scope).
+    ///
+    /// `announcesOutcome` (#1431): the editor's activate-at-cursor verb
+    /// toggles a task with no checkbox on screen, so it also speaks what
+    /// the write did (core's `TaskToggled` / `TaskToggleFailed`). The
+    /// Tasks panel and the reading view toggle a checkbox VoiceOver reads,
+    /// and stay quiet.
     @discardableResult
-    func toggleCurrentTask(_ task: TaskItem) -> Task<Void, Never>? {
+    func toggleCurrentTask(
+        _ task: TaskItem, announcesOutcome: Bool = false
+    ) -> Task<Void, Never>? {
         guard let session = currentSession else { return nil }
         guard let path = loadedFilePath else { return nil }
         guard admitBatchTrashWrite(to: [path]) else { return nil }
@@ -13783,7 +13813,8 @@ final class AppState: ObservableObject {
                 path: path,
                 ordinal: task.ordinal,
                 newChar: newChar,
-                expectedHash: expected
+                expectedHash: expected,
+                announcesOutcome: announcesOutcome
             )
             return
         }
@@ -13796,7 +13827,8 @@ final class AppState: ObservableObject {
         path: String,
         ordinal: UInt32,
         newChar: String,
-        expectedHash: String?
+        expectedHash: String?,
+        announcesOutcome: Bool = false
     ) async {
         guard admitBatchTrashWrite(to: [path]) else { return }
         let outcome: Result<SaveReport, VaultError> = await Task.detached(
@@ -13853,6 +13885,9 @@ final class AppState: ObservableObject {
             editorReloadTask = reload
             await refresh.value
             await reload.value
+            if announcesOutcome, BaseExactIdentity.matches(loadedFilePath, path) {
+                announcer.post(.taskToggled(completed: newChar != " "))
+            }
         case .failure(.WriteConflict(let currentHash, let expected, let currentMtimeMs)):
             // Same surface as the editor save's WriteConflict
             // path. The attemptedContents is the toggled file
@@ -13873,6 +13908,9 @@ final class AppState: ObservableObject {
                 .taskToggleConflict(filename: filename(of: path)))
         case .failure(let error):
             tasksLoadError = humanReadable(error)
+            if announcesOutcome {
+                announcer.post(.taskToggleFailed(detail: humanReadable(error)))
+            }
         }
     }
 

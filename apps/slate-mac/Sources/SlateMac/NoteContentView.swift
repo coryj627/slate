@@ -404,6 +404,15 @@ struct NoteContentView: View {
             // #874: only the ACTIVE editor gets the real find-in-note
             // publisher (inactive-pane previews keep the default Empty).
             findInNoteRequest: appState.findInNoteRequest.eraseToAnyPublisher(),
+            // #1431: activate at cursor (⌘↩, the palette row, VoiceOver's
+            // press on a link), for the active editor only.
+            activateAtCursorRequest: appState.activateAtCursorRequest.eraseToAnyPublisher(),
+            onActivate: { [appState] request in
+                appState.performEditorActivation(request)
+            },
+            onEditorFocusChange: { [appState] focused in
+                appState.noteEditorFocusChanged(focused)
+            },
             previewEmbedAtCursor: { [appState] target, line in
                 appState.requestEmbedPreview(target: target, sourceLine: line)
             },

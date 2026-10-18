@@ -64,6 +64,12 @@ final class HotkeySpokenTests: XCTestCase {
             HotkeySpoken.spoken(for: "⌃⌘→"), "Control Command Right Arrow")
     }
 
+    /// Activate at Cursor's ⌘↩ (#1431). Without the entry the walk passed
+    /// the return glyph through and VoiceOver read "Command" and nothing.
+    func testCommandReturnSpeaksReturn() {
+        XCTAssertEqual(HotkeySpoken.spoken(for: "⌘↩"), "Command Return")
+    }
+
     /// Every arrow-carrying hotkeyHint in the LIVE registry must speak
     /// with no raw glyph surviving — the drift-shaped guard that keeps
     /// a future arrow chord from re-opening the elision gap.

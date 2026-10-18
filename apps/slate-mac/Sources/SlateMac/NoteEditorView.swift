@@ -75,6 +75,19 @@ struct NoteEditorView: NSViewRepresentable {
     /// publisher; inactive-pane previews + the canvas card editor keep
     /// the default `Empty` so a find request never steals focus to them.
     var findInNoteRequest: AnyPublisher<Void, Never> = Empty().eraseToAnyPublisher()
+    /// #1431: "activate at the caret" requests (`slate.editor.activateAtCaret`
+    /// from the palette or the Edit menu). Only the ACTIVE note editor is
+    /// wired to the real publisher, like `findInNoteRequest`.
+    var activateAtCursorRequest: AnyPublisher<Void, Never> = Empty().eraseToAnyPublisher()
+    /// #1431: receives every activation this editor resolves (⌘↩, the
+    /// palette row, a press on a link) and acts on it:
+    /// `AppState.performEditorActivation`. Nil (inactive panes, the canvas
+    /// card editor) leaves the editor with no activation and its link
+    /// elements with no press.
+    var onActivate: ((EditorActivationRequest) -> Void)?
+    /// #1431: the editor's keyboard focus, for the Edit-menu item's
+    /// enablement (`AppState.isNoteEditorFocused`).
+    var onEditorFocusChange: ((Bool) -> Void)?
     /// Cmd+E handler (#188): receives the `target` of the embed
     /// the cursor is currently inside, plus the 1-based source
     /// line number for the popover header's spatial-bearing cue
@@ -316,11 +329,14 @@ struct NoteEditorView: NSViewRepresentable {
         context.coordinator.reduceMotion = reduceMotion
         context.coordinator.attach(textView: textView)
         context.coordinator.scheduleHighlight(debounced: false)
+        context.coordinator.onActivate = onActivate
+        context.coordinator.onEditorFocusChange = onEditorFocusChange
         context.coordinator.subscribe(
             scrollAnchorRequest: scrollAnchorRequest,
             lineScrollRequest: lineScrollRequest,
             findInNoteRequest: findInNoteRequest,
-            cursorByteOffsetRequest: cursorByteOffsetRequest
+            cursorByteOffsetRequest: cursorByteOffsetRequest,
+            activateAtCursorRequest: activateAtCursorRequest
         )
         return scrollView
     }
@@ -348,6 +364,8 @@ struct NoteEditorView: NSViewRepresentable {
         context.coordinator.reduceMotion = reduceMotion
         context.coordinator.onCaretUTF16Change = onCaretUTF16Change
         context.coordinator.onToggleSpellCheckFromNativeMenu = onToggleSpellCheckFromNativeMenu
+        context.coordinator.onActivate = onActivate
+        context.coordinator.onEditorFocusChange = onEditorFocusChange
         textView.setAccessibilityLabel(accessibilityLabel)
         textView.setAccessibilityHelp(readOnlyReason)
         textView.isSelectable = true
@@ -447,6 +465,13 @@ struct NoteEditorView: NSViewRepresentable {
         var onCaretUTF16Change: ((Int) -> Void)?
         /// Native Spelling-menu route (see SlateEditorTextView override).
         var onToggleSpellCheckFromNativeMenu: (() -> Void)?
+        /// #1431: where resolved activations go (see the view property).
+        var onActivate: ((EditorActivationRequest) -> Void)?
+        /// #1431: keyboard-focus reports (see the view property).
+        var onEditorFocusChange: ((Bool) -> Void)?
+        /// #1431: the in-flight activation's resolution (spans and math
+        /// ranges are read off-main); a newer activation replaces it.
+        private var activationTask: Task<Void, Never>?
         /// Mirror of `@Environment(\.accessibilityReduceMotion)` from
         /// the SwiftUI parent. Refreshed by `updateNSView` so the
         /// scroll-routing methods always see the current value (WCAG
@@ -701,6 +726,7 @@ struct NoteEditorView: NSViewRepresentable {
             // not touch it.
             NSWorkspace.shared.notificationCenter.removeObserver(self)
             highlightTask?.cancel()
+            activationTask?.cancel()
         }
 
         /// Underline color for the embed highlight, picked per the
@@ -1163,11 +1189,145 @@ struct NoteEditorView: NSViewRepresentable {
             return false
         }
 
+        // MARK: - Activate at cursor (#1431)
+
+        /// Whether this editor activates spans at all: only the active note
+        /// editor is wired to act on them (`onActivate`).
+        var canActivate: Bool { onActivate != nil && textView != nil }
+
+        /// ⌘↩ and the palette row: activate at the caret.
+        func activateAtCaret() {
+            guard let textView else { return }
+            activate(at: textView.selectedRange().location, origin: .keyboard)
+        }
+
+        /// Resolve the activation at `location` (UTF-16, live buffer) and
+        /// hand it to `onActivate`. Core's spans around the location and the
+        /// document's display-math ranges are read off-main from the mirror
+        /// buffer, as the highlighter reads its spans; a result computed
+        /// against text that changed meanwhile is recomputed, never applied
+        /// to the wrong bytes. From the keyboard each attempt reads the caret
+        /// afresh, since an edit moves it with the text.
+        func activate(at location: Int, origin: EditorActivation.Origin) {
+            guard canActivate else { return }
+            activationTask?.cancel()
+            activationTask = Task { @MainActor [weak self] in
+                for attempt in 0..<3 {
+                    guard let self, let textView = self.textView, let buffer = self.documentBuffer
+                    else { return }
+                    let snapshot = textView.string
+                    let at = origin == .keyboard ? textView.selectedRange().location : location
+                    if Int(buffer.lenUtf16()) != (snapshot as NSString).length {
+                        buffer.reset(text: snapshot)
+                    }
+                    if attempt == 2 {
+                        // Two off-main resolutions each raced an edit. The
+                        // last one runs here, where no edit can land between
+                        // the read and the hand-off, so the activation is
+                        // never dropped in silence.
+                        self.onActivate?(
+                            Self.resolveActivation(
+                                at: at, origin: origin, buffer: buffer, snapshot: snapshot))
+                        return
+                    }
+                    let request = await Task.detached(priority: .userInitiated) {
+                        Self.resolveActivation(
+                            at: at, origin: origin, buffer: buffer, snapshot: snapshot)
+                    }.value
+                    if Task.isCancelled { return }
+                    guard self.textView?.string == snapshot else { continue }
+                    self.onActivate?(request)
+                    return
+                }
+            }
+        }
+
+        /// The keyboard-focus report the Edit-menu item's enablement follows.
+        func editorFocusChanged(_ focused: Bool) {
+            onEditorFocusChange?(focused)
+        }
+
+        /// The link, tag, citation or embed the insertion point is inside, by
+        /// a press's rule (strictly inside; no task): what the text area's
+        /// VoiceOver press acts on (`SlateEditorTextView.accessibilityPerformPress`).
+        /// Read synchronously from the mirror buffer, which the storage
+        /// delegate keeps level with the text on the main actor; nil while it
+        /// is not. Display math is left to the press's own resolution, which
+        /// says there is nothing to activate there.
+        func actionableSpanAtInsertionPoint() -> (range: NSRange, kind: EditorSpanKind)? {
+            guard canActivate, let textView, let buffer = documentBuffer else { return nil }
+            let length = (textView.string as NSString).length
+            guard Int(buffer.lenUtf16()) == length else { return nil }
+            let location = textView.selectedRange().location
+            return EditorActivation.actionableSpan(
+                at: location, origin: .press,
+                in: Self.spans(around: location, length: length, buffer: buffer))
+        }
+
+        /// Core's spans around `location` (the highlighter's windowed query,
+        /// one character either side), in UTF-16 ranges of the buffer.
+        nonisolated static func spans(
+            around location: Int, length: Int, buffer: DocumentBuffer
+        ) -> [(range: NSRange, kind: EditorSpanKind)] {
+            let window = buffer.highlightInRange(
+                dirtyStartUtf16: UInt32(clamping: max(0, location - 1)),
+                dirtyEndUtf16: UInt32(clamping: min(length, location + 1)))
+            return window.spans.map { span in
+                let lower = Int(buffer.byteToUtf16(byte: span.startByte))
+                let upper = Int(buffer.byteToUtf16(byte: span.endByte))
+                return (range: NSRange(location: lower, length: max(0, upper - lower)), kind: span.kind)
+            }
+        }
+
+        /// One activation, resolved against `snapshot` and its mirror
+        /// buffer: core's spans windowed around the location (the
+        /// highlighter's own query) and the display-math ranges, mapped to
+        /// UTF-16 on the rope, then `EditorActivation.target`'s rule. Pure
+        /// but for the buffer reads, so it runs off-main.
+        nonisolated static func resolveActivation(
+            at location: Int, origin: EditorActivation.Origin, buffer: DocumentBuffer,
+            snapshot: String
+        ) -> EditorActivationRequest {
+            let text = snapshot as NSString
+            let clamped = max(0, min(location, text.length))
+            func utf16(_ byte: UInt32) -> Int { Int(buffer.byteToUtf16(byte: byte)) }
+            func byte(_ utf16: Int) -> Int { Int(buffer.utf16ToByte(utf16: UInt32(clamping: utf16))) }
+            func range(_ start: UInt32, _ end: UInt32) -> NSRange {
+                let lower = utf16(start)
+                return NSRange(location: lower, length: max(0, utf16(end) - lower))
+            }
+            let spans = Self.spans(around: clamped, length: text.length, buffer: buffer)
+            let math = buffer.editorInteractionMathRanges().map { range($0.startByte, $0.endByte) }
+            let target = EditorActivation.target(
+                at: clamped, origin: origin, spans: spans, mathRanges: math)
+            var spanText = ""
+            var spanBytes: Range<Int>?
+            var embedTarget: String?
+            switch target {
+            case .link(range: let span, kind: _), .embed(range: let span), .tag(range: let span),
+                .citation(range: let span):
+                spanText = text.substring(with: span)
+                let lower = byte(span.location)
+                spanBytes = lower..<max(lower, byte(NSMaxRange(span)))
+                if case .embed = target {
+                    embedTarget = embedSpanContaining(
+                        cursor: span.location, in: findEditorEmbedSpans(in: snapshot))?.target
+                }
+            case .task, .nothing:
+                break
+            }
+            return EditorActivationRequest(
+                target: target, spanText: spanText, spanBytes: spanBytes,
+                line: EditorTextConversions.lineForUTF16Offset(clamped, in: snapshot),
+                byteOffset: byte(clamped), embedTarget: embedTarget)
+        }
+
         func subscribe(
             scrollAnchorRequest: AnyPublisher<String, Never>,
             lineScrollRequest: AnyPublisher<Int, Never>,
             findInNoteRequest: AnyPublisher<Void, Never>,
-            cursorByteOffsetRequest: AnyPublisher<Int, Never>
+            cursorByteOffsetRequest: AnyPublisher<Int, Never>,
+            activateAtCursorRequest: AnyPublisher<Void, Never> = Empty().eraseToAnyPublisher()
         ) {
             // Cancel and re-subscribe on every makeNSView pass so a
             // recycled coordinator doesn't accumulate duplicate
@@ -1191,6 +1351,11 @@ struct NoteEditorView: NSViewRepresentable {
             findInNoteRequest
                 .sink { [weak self] in
                     self?.showFindBar()
+                }
+                .store(in: &subscriptions)
+            activateAtCursorRequest
+                .sink { [weak self] in
+                    self?.activateAtCaret()
                 }
                 .store(in: &subscriptions)
         }
@@ -1545,6 +1710,65 @@ final class SlateEditorTextView: NSTextView {
             coordinator?.openEmbedPreviewAtCursor()
             return true
         }
+        // #1431: ⌘↩ activates the link, tag, citation, embed or task under
+        // the caret (`slate.editor.activateAtCaret`, Windows' Ctrl+Enter).
+        // Only while this editor has keyboard focus: every view in the
+        // window is offered a key equivalent, and ⌘↩ elsewhere belongs to
+        // that surface (a grid's or a list's open-in-new-tab). The Edit
+        // menu's item carries the same chord, enabled only while the editor
+        // is focused, so this handler takes it first.
+        // Caps Lock, and the keypad's or fn's flags on Enter (key code 76),
+        // do not change the chord.
+        if modifiers.subtracting([.capsLock, .function, .numericPad]) == .command,
+            event.keyCode == 36 || event.keyCode == 76,
+            window?.firstResponder === self, let coordinator, coordinator.canActivate
+        {
+            coordinator.activateAtCaret()
+            return true
+        }
         return super.performKeyEquivalent(with: event)
+    }
+
+    // #1431: VoiceOver's press in the editor. VO-Space presses the element
+    // under VoiceOver's cursor, and in the editor that element is this text
+    // area, not the link run: VO-Command-L (Find Next Link) moves the
+    // insertion point onto a link, and VO-Space then presses the text area.
+    // With no press of its own the text area's first action ran instead
+    // (Show Writing Tools; the 2026-10-17 field pass). So the text area
+    // offers a press exactly while the insertion point is inside a link,
+    // tag, citation or embed, and the press activates there, as the link
+    // element's own press does. Anywhere else VO-Space keeps the text
+    // view's own actions.
+    override func accessibilityPerformPress() -> Bool {
+        guard let coordinator, coordinator.actionableSpanAtInsertionPoint() != nil else {
+            return false
+        }
+        coordinator.activate(at: selectedRange().location, origin: .press)
+        return true
+    }
+
+    override func isAccessibilitySelectorAllowed(_ selector: Selector) -> Bool {
+        if selector == #selector(accessibilityPerformPress) {
+            return coordinator?.actionableSpanAtInsertionPoint() != nil
+        }
+        return super.isAccessibilitySelectorAllowed(selector)
+    }
+
+    // #1431: keyboard focus, for the Edit-menu item's enablement.
+    override func becomeFirstResponder() -> Bool {
+        let became = super.becomeFirstResponder()
+        if became { coordinator?.editorFocusChanged(true) }
+        return became
+    }
+
+    override func resignFirstResponder() -> Bool {
+        let resigned = super.resignFirstResponder()
+        if resigned { coordinator?.editorFocusChanged(false) }
+        return resigned
+    }
+
+    override func viewDidMoveToWindow() {
+        super.viewDidMoveToWindow()
+        if window == nil { coordinator?.editorFocusChanged(false) }
     }
 }

@@ -768,6 +768,10 @@ pub enum A11yEvent {
     CitationNotLoaded,
     NoResolvedEmbedAtCursor,
     NoEmbedAtCursor,
+    /// The editor's activate-at-cursor verb (`slate.editor.activateAtCaret`,
+    /// #1431) found no link, tag, citation, embed or task under the
+    /// cursor: the refusal, so the verb is never silent.
+    NothingToActivateAtCursor,
     HeadingNotFound,
     HeadingScrollFailed {
         heading: String,
@@ -851,6 +855,18 @@ pub enum A11yEvent {
     },
     TaskToggleConflict {
         filename: String,
+    },
+    /// A task the editor's activate-at-cursor verb toggled (#1431): its
+    /// new state, in the words Windows' editor toggle speaks
+    /// (`WorkspaceTabViewModel.PublishTaskToggleThroughTab`). The editor
+    /// has no checkbox whose state VoiceOver could read instead.
+    TaskToggled {
+        completed: bool,
+    },
+    /// That toggle's write failed for a reason other than a conflict
+    /// (`TaskToggleConflict`): the error's own detail.
+    TaskToggleFailed {
+        detail: String,
     },
     TasksReviewShown {
         filter_name: String,
@@ -1844,6 +1860,7 @@ impl A11yEvent {
             | PaletteCommandUnavailable { .. }
             | InternalNavigated { .. }
             | TaskToggleUnsaved { .. }
+            | TaskToggleFailed { .. }
             | PropertiesSourceRejected { .. }
             | PropertyEditFailed { .. }
             | PropertiesReloadedBodyChanged
@@ -2035,6 +2052,7 @@ impl A11yEvent {
             CitationNotLoaded => "Citation is not loaded yet.".to_owned(),
             NoResolvedEmbedAtCursor => "No resolved embed at cursor.".to_owned(),
             NoEmbedAtCursor => "No embed at cursor.".to_owned(),
+            NothingToActivateAtCursor => "Nothing to activate at cursor.".to_owned(),
             HeadingNotFound => "Could not find that heading.".to_owned(),
             HeadingScrollFailed { heading } => format!("Could not scroll to {heading}."),
             ScrolledToHeading { heading } => format!("Scrolled to {heading}."),
@@ -2082,6 +2100,12 @@ impl A11yEvent {
             TaskToggleConflict { filename } => format!(
                 "Toggle blocked. {filename} was modified externally. Resolve in the dialog."
             ),
+            TaskToggled { completed: true } => "Task completed.".to_owned(),
+            TaskToggled { completed: false } => "Task reopened.".to_owned(),
+            TaskToggleFailed { detail } if detail.trim().is_empty() => {
+                "Task could not be toggled.".to_owned()
+            }
+            TaskToggleFailed { detail } => lead_then_sentence("Task could not be toggled:", detail),
             TasksReviewShown { filter_name } => format!("Tasks review. {filter_name}."),
             TasksFilterSet { filter_name } => format!("Filter set to {filter_name}."),
 
@@ -4093,6 +4117,7 @@ pub fn corpus() -> Vec<A11yEvent> {
         CitationNotLoaded,
         NoResolvedEmbedAtCursor,
         NoEmbedAtCursor,
+        NothingToActivateAtCursor,
         HeadingNotFound,
         HeadingScrollFailed {
             heading: "Roadmap".into(),
@@ -4229,6 +4254,15 @@ pub fn corpus() -> Vec<A11yEvent> {
         },
         TaskToggleConflict {
             filename: "notes.md".into(),
+        },
+        TaskToggled { completed: true },
+        TaskToggled { completed: false },
+        TaskToggleFailed {
+            detail: "The disk is full".into(),
+        },
+        // No detail drops the colon.
+        TaskToggleFailed {
+            detail: String::new(),
         },
         TasksReviewShown {
             filter_name: "Open tasks".into(),
@@ -6765,6 +6799,7 @@ mod tests {
             (Medium, "Citation is not loaded yet."),
             (Medium, "No resolved embed at cursor."),
             (Medium, "No embed at cursor."),
+            (Medium, "Nothing to activate at cursor."),
             (Medium, "Could not find that heading."),
             (Medium, "Could not scroll to Roadmap."),
             (Medium, "Scrolled to Roadmap."),
@@ -6845,6 +6880,10 @@ mod tests {
                 Medium,
                 "Toggle blocked. notes.md was modified externally. Resolve in the dialog.",
             ),
+            (Medium, "Task completed."),
+            (Medium, "Task reopened."),
+            (High, "Task could not be toggled: The disk is full."),
+            (High, "Task could not be toggled."),
             (Medium, "Tasks review. Open tasks."),
             (Medium, "Filter set to All tasks."),
             (Medium, "Saved notes.md."),
@@ -8212,8 +8251,10 @@ mod tests {
             // W7-7 PR 4b (#1247) the keyboard sidebar resize,
             // SidebarResized, 217; plan 43 PR 9 (#1140, D9) the
             // landed-but-unindexed create caveat,
-            // CreatePublishedUnindexed, 218.
-            218,
+            // CreatePublishedUnindexed, 218; plan 43 #1431 the editor's
+            // activate-at-cursor refusal, NothingToActivateAtCursor, and its
+            // task outcomes, TaskToggled and TaskToggleFailed, 221.
+            221,
             "A11yEvent's top-level variant count moved; uniffi caps an enum at 256"
         );
     }

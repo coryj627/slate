@@ -287,16 +287,10 @@ final class SlateCommandsTests: XCTestCase {
         // context-dependence (which stack fires depends on focus, and
         // the palette steals focus).
         "⌘Z", "⇧⌘Z",
-        // NotePropertiesHeader.swift's source-mode "Apply" binding
-        // (⌘↩ commits the YAML draft). In-sheet submission action,
-        // structurally identical to a global chord but scoped to the
-        // view's responder chain by SwiftUI. Not a menu / palette-
-        // worthy command. Picked up by the broader scraper (#322) —
-        // earlier scrapers missed `.return` entirely because it
-        // isn't a quoted single char. (TemplatePromptSheet's former
-        // ⌘↩ moved to `.defaultAction` — bare Return + the visually-
-        // primary default treatment — in the HIG-conformance pass.)
-        "⌘↩",
+        // (⌘↩ left this list with #1431: it is now registered, as
+        // Activate at Cursor's chord, and declared in the Edit menu.
+        // NotePropertiesHeader.swift's source-mode "Apply" keeps its own
+        // view-scoped ⌘↩ beside it while the YAML source is shown.)
         // PropertyEditorRow.swift's per-row Delete button. Row-
         // scoped action — deletes one property of the focused
         // row, not a global "delete property" verb. Picked up by
