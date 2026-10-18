@@ -31,6 +31,10 @@ internal sealed partial class FilesSidebarViewModel
     internal const string ReplacedVaultJournalReason =
         "The vault at this location changed, so a queued sidebar settings write was discarded.";
 
+    // MUTATION PROBE for #1506 (never merged): journaling and replay are off.
+    private static readonly bool MutationNeverJournals = true;
+    private static readonly bool MutationNeverReplays = true;
+
     private readonly SidebarWriteJournal? _writeJournal;
     private readonly SidebarJournalIdentity? _journalIdentity;
 
@@ -85,6 +89,12 @@ internal sealed partial class FilesSidebarViewModel
             || _vaultRoot is not string vaultRoot
             || planned.Count == 0)
         {
+            return null;
+        }
+
+        if (MutationNeverJournals)
+        {
+            BeforeStructuralCommitForTesting?.Invoke();
             return null;
         }
 
@@ -253,6 +263,7 @@ internal sealed partial class FilesSidebarViewModel
         IReadOnlyList<string> recents)
     {
         if (settings.ReadOnlyReason is not null
+            || MutationNeverReplays
             || _writeJournal is not SidebarWriteJournal journal
             || _journalIdentity is not SidebarJournalIdentity identity
             || _vaultRoot is not string vaultRoot)
