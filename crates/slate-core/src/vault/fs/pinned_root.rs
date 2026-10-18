@@ -1,7 +1,8 @@
 // Copyright (C) 2026 Cory Joseph
 // SPDX-License-Identifier: AGPL-3.0-or-later
 
-//! Structural renames beneath a pinned vault-root descriptor (#1449).
+//! Structural renames (#1449), and saves and creations (#1452), beneath a
+//! pinned vault-root descriptor.
 //!
 //! A structural rename, move or undo used to name both ends by absolute
 //! path. The kernel resolved every ancestor again at the call and followed
@@ -27,6 +28,18 @@
 //! or reported by the kernel is a typed refusal ([`VaultError::InvalidPath`],
 //! whose reason core renders for both hosts) that changes nothing.
 //!
+//! Saves and creations take the same walk (#1452). `write_file` and
+//! `create_dir` used to name their target by absolute path as well
+//! (`create_dir_all`, then a path-addressed rename of the staged file), so a
+//! folder swapped for a link put a save's bytes or a new folder outside the
+//! vault. Now `write_file`, `write_file_if_absent`, `create_dir` and
+//! `create_dir_if_absent` pin the folder that holds their final component
+//! with the walk, making a missing folder with `mkdirat` inside its pinned
+//! parent, and act relative to that folder only: the staged file is renamed
+//! into it (replacing for a save, no-replace for a create) and a new folder
+//! is made in it. The refusal is the same, ending with what did not happen
+//! ([`Mutation`]).
+//!
 //! The root itself is the descriptor, not a component, so a vault whose root
 //! is a symlink keeps working. This hardens the ancestors, not the leaf: the
 //! final component is still a name, and binding its identity is an open
@@ -38,8 +51,8 @@
 //!
 //! PR 22's design (#1441) gives the session an `FsRoot` that holds the root
 //! descriptor for the session's lifetime. Until it lands, the provider opens
-//! one [`PinnedRoot`] per rename; `FsRoot` adopts this type by handing it
-//! the descriptor it already holds.
+//! one [`PinnedRoot`] per rename, save or creation; `FsRoot` adopts this type
+//! by handing it the descriptor it already holds.
 
 use std::ffi::{CStr, CString};
 use std::os::unix::ffi::OsStrExt as _;
@@ -48,7 +61,7 @@ use std::{fs, io};
 
 use crate::VaultError;
 
-use super::{create_directory_at, directory_open_flags, open_directory_at};
+use super::{Mutation, create_directory_at, directory_open_flags, open_directory_at};
 
 /// `RENAME_NOFOLLOW_ANY` from the macOS SDK's `<sys/stdio.h>` (`0x00000010`).
 /// The `libc` crate (0.2.186) does not export it. With it, a symbolic link
@@ -61,7 +74,8 @@ use super::{create_directory_at, directory_open_flags, open_directory_at};
 pub(super) const RENAME_NOFOLLOW_ANY: libc::c_uint = 0x0000_0010;
 
 /// The vault root, held open as one directory descriptor for a structural
-/// rename. Everything beneath it is resolved without following a link.
+/// rename, a save or a creation. Everything beneath it is resolved without
+/// following a link.
 #[derive(Debug)]
 pub(super) struct PinnedRoot {
     dir: fs::File,
@@ -118,7 +132,12 @@ impl PinnedRoot {
         let leaf = c_string(leaf.as_bytes(), original)?;
         #[cfg(target_os = "macos")]
         let relative_c = c_string(relative.as_os_str().as_bytes(), original)?;
-        let parent = self.pin(parent_of(relative), original, create_missing)?;
+        let parent = self.pin(
+            parent_of(relative),
+            original,
+            create_missing,
+            Mutation::Move,
+        )?;
         Ok(RenameEnd {
             original,
             relative,
@@ -194,12 +213,12 @@ impl PinnedRoot {
         }
         for end in [from, to] {
             if let Err(refusal @ VaultError::InvalidPath { .. }) =
-                self.walk(parent_of(end.relative), end.original, false)
+                self.walk(parent_of(end.relative), end.original, false, Mutation::Move)
             {
                 return refusal;
             }
         }
-        changed_during_rename(from.original)
+        changed_during(from.original, Mutation::Move)
     }
 
     #[cfg(target_os = "macos")]
@@ -220,12 +239,13 @@ impl PinnedRoot {
     }
 
     /// The directory at `parent` beneath the root, reached without following
-    /// a link.
+    /// a link. A refusal ends with what `mutation` did not do.
     fn pin(
         &self,
         parent: &Path,
         original: &str,
         create_missing: bool,
+        mutation: Mutation,
     ) -> Result<fs::File, VaultError> {
         #[cfg(target_os = "linux")]
         {
@@ -239,27 +259,27 @@ impl PinnedRoot {
                 Err(error)
                     if is_substitution(&error) || error.raw_os_error() == Some(libc::EXDEV) =>
                 {
-                    return Err(match self.walk(parent, original, false) {
+                    return Err(match self.walk(parent, original, false, mutation) {
                         Err(refusal @ VaultError::InvalidPath { .. }) => refusal,
-                        _ => changed_during_rename(original),
+                        _ => changed_during(original, mutation),
                     });
                 }
                 Err(error) => return Err(VaultError::Io(error)),
             }
         }
-        self.walk(parent, original, create_missing)
+        self.walk(parent, original, create_missing, mutation)
     }
 
     /// Open `parent` one component at a time, each relative to the one
     /// before and with `O_NOFOLLOW`, creating a missing folder in place when
-    /// `create_missing`. The same descent `PinnedMutationTarget` uses for
-    /// creation; kept separate so the creation and Trash paths stay as they
-    /// are until `FsRoot` (#1441) serves both.
+    /// `create_missing`. Renames, saves, creations and the Trash inventory
+    /// all descend this way (#1449, #1452).
     fn walk(
         &self,
         parent: &Path,
         original: &str,
         create_missing: bool,
+        mutation: Mutation,
     ) -> Result<fs::File, VaultError> {
         let mut dir = self.dir.try_clone().map_err(VaultError::Io)?;
         let mut prefix = PathBuf::new();
@@ -269,6 +289,9 @@ impl PinnedRoot {
             };
             prefix.push(name);
             let name = c_string(name.as_bytes(), original)?;
+            let refuse = |dir: &fs::File, error| {
+                refusal_or_io(dir, &name, &prefix, original, error, mutation)
+            };
             let next = match open_directory_at(&dir, &name) {
                 Ok(next) => next,
                 Err(error) if create_missing && error.kind() == io::ErrorKind::NotFound => {
@@ -277,14 +300,64 @@ impl PinnedRoot {
                         Err(error) if error.kind() == io::ErrorKind::AlreadyExists => {}
                         Err(error) => return Err(VaultError::Io(error)),
                     }
-                    open_directory_at(&dir, &name)
-                        .map_err(|error| refusal_or_io(&dir, &name, &prefix, original, error))?
+                    open_directory_at(&dir, &name).map_err(|error| refuse(&dir, error))?
                 }
-                Err(error) => return Err(refusal_or_io(&dir, &name, &prefix, original, error)),
+                Err(error) => return Err(refuse(&dir, error)),
             };
             dir = next;
         }
         Ok(dir)
+    }
+
+    /// The pinned folder that holds `relative`'s final component, and that
+    /// component, for a save, a creation or the Trash inventory (#1452):
+    /// [`Self::end`]'s walk, refusing in `mutation`'s words.
+    pub(super) fn parent_and_leaf(
+        &self,
+        relative: &Path,
+        original: &str,
+        create_missing: bool,
+        mutation: Mutation,
+    ) -> Result<(fs::File, CString), VaultError> {
+        let leaf = relative
+            .file_name()
+            .ok_or_else(|| invalid(original, "the path has no final component"))?;
+        let leaf = c_string(leaf.as_bytes(), original)?;
+        let parent = self.pin(parent_of(relative), original, create_missing, mutation)?;
+        Ok((parent, leaf))
+    }
+
+    /// `create_dir` (#1452): every missing folder on `relative`, the last one
+    /// included, made with `mkdirat` inside its pinned parent. A folder that
+    /// is already there is `Ok`; it is looked at, never opened, so its own
+    /// permissions do not matter. A link or anything but a folder, at the end
+    /// as anywhere on the way, is the typed refusal, and nothing is made
+    /// through it. `before_create` is a test seam that runs after the parent
+    /// is pinned, just before the `mkdirat`.
+    pub(super) fn create_folder(
+        &self,
+        relative: &Path,
+        original: &str,
+        before_create: impl FnOnce() -> io::Result<()>,
+    ) -> Result<(), VaultError> {
+        let mutation = Mutation::CreateFolder;
+        let (parent, leaf) = self.parent_and_leaf(relative, original, true, mutation)?;
+        before_create().map_err(VaultError::Io)?;
+        match create_directory_at(&parent, &leaf) {
+            Ok(()) => Ok(()),
+            Err(error) if error.kind() == io::ErrorKind::AlreadyExists => {
+                match lstat_mode(&parent, &leaf) {
+                    Ok(mode) => match refusal_for(mode, relative, original, mutation) {
+                        Some(refusal) => Err(refusal),
+                        None => Ok(()),
+                    },
+                    // It vanished between the create and the look: report
+                    // what the create met.
+                    Err(_) => Err(VaultError::Io(error)),
+                }
+            }
+            Err(error) => Err(VaultError::Io(error)),
+        }
     }
 }
 
@@ -364,35 +437,77 @@ fn refusal_or_io(
     prefix: &Path,
     original: &str,
     error: io::Error,
+    mutation: Mutation,
 ) -> VaultError {
     if !is_substitution(&error) {
         return VaultError::Io(error);
     }
-    let folder = prefix.to_string_lossy();
-    let reason = match lstat_mode(dir, name) {
-        Ok(mode) if (mode & libc::S_IFMT) == libc::S_IFLNK => {
-            format!(
-                "\"{folder}\" is a symbolic link, not a folder in this vault, so nothing was moved"
-            )
-        }
-        Ok(mode) if (mode & libc::S_IFMT) != libc::S_IFDIR => {
-            format!("\"{folder}\" is not a folder, so nothing was moved")
-        }
-        // It changed back, or vanished, between the open and the look.
-        _ => return changed_during_rename(original),
-    };
-    VaultError::InvalidPath {
-        path: original.to_string(),
-        reason,
+    match lstat_mode(dir, name) {
+        Ok(mode) => refusal_for(mode, prefix, original, mutation)
+            // It changed back into a folder between the open and the look.
+            .unwrap_or_else(|| changed_during(original, mutation)),
+        // It vanished between the open and the look.
+        Err(_) => changed_during(original, mutation),
     }
 }
 
-fn changed_during_rename(original: &str) -> VaultError {
-    invalid(
-        original,
-        "a folder in this path changed into a symbolic link or a file during the move, so \
-         nothing was moved",
-    )
+/// The typed refusal for the entry at `prefix`, by its kind, or `None` when
+/// it is a folder: a symbolic link is not a folder in this vault, and
+/// neither is anything else.
+fn refusal_for(
+    mode: libc::mode_t,
+    prefix: &Path,
+    original: &str,
+    mutation: Mutation,
+) -> Option<VaultError> {
+    let folder = prefix.to_string_lossy();
+    let nothing = mutation.nothing_done();
+    let reason = match mode & libc::S_IFMT {
+        libc::S_IFDIR => return None,
+        libc::S_IFLNK => {
+            format!("\"{folder}\" is a symbolic link, not a folder in this vault, {nothing}")
+        }
+        _ => format!("\"{folder}\" is not a folder, {nothing}"),
+    };
+    Some(VaultError::InvalidPath {
+        path: original.to_string(),
+        reason,
+    })
+}
+
+fn changed_during(original: &str, mutation: Mutation) -> VaultError {
+    VaultError::InvalidPath {
+        path: original.to_string(),
+        reason: format!(
+            "a folder in this path changed into a symbolic link or a file {}, {}",
+            mutation.during(),
+            mutation.nothing_done()
+        ),
+    }
+}
+
+/// Core's words for a refusal (#1452): the hosts show and speak them after
+/// the path (`vault_error_detail`).
+impl Mutation {
+    /// What did not happen: the end of every refusal's reason.
+    fn nothing_done(self) -> &'static str {
+        match self {
+            Self::Move => "so nothing was moved",
+            Self::Save => "so nothing was saved",
+            Self::Create => "so nothing was created",
+            Self::CreateFolder => "so no folder was created",
+        }
+    }
+
+    /// When a folder that had passed the walk changed under it.
+    fn during(self) -> &'static str {
+        match self {
+            Self::Move => "during the move",
+            Self::Save => "during the save",
+            Self::Create => "while the file was being created",
+            Self::CreateFolder => "while the folder was being created",
+        }
+    }
 }
 
 fn invalid(original: &str, reason: &str) -> VaultError {
@@ -588,8 +703,9 @@ mod tests {
     }
 
     /// The fallback pin for kernels without `openat2` refuses a symlinked
-    /// folder and a file standing where a folder should be, naming each;
-    /// `openat2` itself, where present, refuses the same link.
+    /// folder and a file standing where a folder should be, naming each and
+    /// ending with what did not happen (#1452); `openat2` itself, where
+    /// present, refuses the same link.
     #[cfg(target_os = "linux")]
     #[test]
     fn the_no_follow_walk_refuses_what_openat2_refuses() {
@@ -601,24 +717,38 @@ mod tests {
         let pinned = PinnedRoot::open(root.path()).unwrap();
 
         let link = pinned
-            .walk(Path::new("real/sub/deeper"), "real/sub/deeper/x.md", true)
+            .walk(
+                Path::new("real/sub/deeper"),
+                "real/sub/deeper/x.md",
+                true,
+                Mutation::Save,
+            )
             .unwrap_err();
         assert!(
             matches!(&link, VaultError::InvalidPath { path, reason }
                 if path == "real/sub/deeper/x.md"
-                    && reason.contains("\"real/sub\" is a symbolic link")),
+                    && reason.contains("\"real/sub\" is a symbolic link")
+                    && reason.ends_with("so nothing was saved")),
             "{link:?}"
         );
         assert!(!elsewhere.path().join("deeper").exists());
         let file = pinned
-            .walk(Path::new("real/plain.md"), "real/plain.md/x.md", false)
+            .walk(
+                Path::new("real/plain.md"),
+                "real/plain.md/x",
+                false,
+                Mutation::CreateFolder,
+            )
             .unwrap_err();
         assert!(
             matches!(&file, VaultError::InvalidPath { reason, .. }
-                if reason.contains("\"real/plain.md\" is not a folder")),
+                if reason.contains("\"real/plain.md\" is not a folder")
+                    && reason.ends_with("so no folder was created")),
             "{file:?}"
         );
-        pinned.walk(Path::new("real"), "real/x.md", false).unwrap();
+        pinned
+            .walk(Path::new("real"), "real/x.md", false, Mutation::Move)
+            .unwrap();
 
         match openat2_beneath(&pinned.dir, Path::new("real/sub"), "real/sub/x.md").unwrap() {
             Err(error) if openat2_unavailable(&error) => {}
