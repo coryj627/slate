@@ -461,6 +461,19 @@ enforced by construction, not by review.
   takes one per-user lock around the call; with it, 24 of 24 remained. The
   wait for that lock is bounded, and a call that cannot get it goes ahead
   unserialized. Windows and Linux still call trash-rs with the derived path.
+  **Tests (#1455).** No test moves a fixture into the Trash of whoever runs
+  it. In core's own test build every `FsVaultProvider::new` trashes into a
+  scratch bin of its own, and the system Trash refuses any path off the
+  scratch volume of the gated real-Trash facts. Each host's test process
+  routes every session it opens into a scratch bin of its own before its first
+  test, through the test-only `route_trash_to_scratch_bin_for_tests` (mac: a
+  load-time constructor in `SlateMacTestBootstrap`; Windows: a module
+  initializer). Only the gated facts reach the real back ends: two macOS facts
+  on an attached scratch APFS volume (`SLATE_TRASH_PROBE_VOLUME`, run by hand)
+  and one Linux fact, run on every Linux run, whose trash-rs home Trash is a
+  scratch `XDG_DATA_HOME`. No test reaches the Windows Recycle Bin. Censuses in
+  core and in each host keep this, and shipping builds still hand every
+  deletion to the system Trash.
   **Residual:** metadata inventories are observations, not filesystem
   transactions. They cannot detect every content edit on every filesystem, nor
   exclude an arbitrary external writer between the final observation and the

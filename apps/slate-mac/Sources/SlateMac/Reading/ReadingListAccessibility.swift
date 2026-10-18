@@ -179,7 +179,9 @@ final class ReadingListHostingView: NSHostingView<ReadingListRows> {
 /// **The environment needs no bridge.** The hosting view sits in the
 /// reading view's SwiftUI graph through `ReadingListContainer`, and SwiftUI
 /// carries that graph's environment into it. That covers everything the
-/// rows read: the link router every link run calls (`openURL`), a
+/// rows read: the link router every link run's click calls (`openURL`;
+/// VoiceOver's press on the same run reaches the router through
+/// `ReadingLinkSystemOpen`, which needs no environment), a
 /// colour-scheme or type-size override above the reading view, and any
 /// value a row reads later. It arrives on first render and on every change.
 /// Measured while building PR 16: with nothing passed across, the hosted

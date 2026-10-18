@@ -41,6 +41,13 @@ import SwiftUI
 /// would hand control to whatever app registered the scheme). Non-allowlisted
 /// URLs are discarded — and core already emits those labels as plain `Text`
 /// runs, so nothing renders as activatable and then dead-clicks.
+///
+/// **Two triggers, one router (#1421).** A click on a run reaches `route(_:)`
+/// through `\.openURL`. VoiceOver's VO-Space presses the run's accessibility
+/// link element instead, and AppKit opens that element's URL with
+/// `NSWorkspace` directly; `ReadingLinkSystemOpen` catches every slate-scheme
+/// open there (`isSlateURL`) and hands it to the router of the reading view on
+/// screen, so both triggers land here and no slate URL reaches LaunchServices.
 struct ReadingLinkRouter {
 
     static let wikiScheme = "slate-wiki"
@@ -149,6 +156,17 @@ struct ReadingLinkRouter {
         case Self.citeScheme: return .citation(Self.decodedTarget(from: url))
         case "http", "https", "mailto": return .external
         default: return .discard
+        }
+    }
+
+    /// Whether `url` rides one of the router's own schemes: the URLs that
+    /// must never reach LaunchServices, from either trigger
+    /// (`ReadingLinkSystemOpen`). Read off the dispatch table, so a scheme
+    /// added there is covered here too.
+    static func isSlateURL(_ url: URL) -> Bool {
+        switch disposition(for: url) {
+        case .wiki, .embed, .tag, .citation: return true
+        case .external, .discard: return false
         }
     }
 

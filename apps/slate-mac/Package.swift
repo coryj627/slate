@@ -78,9 +78,17 @@ let package = Package(
                 ]),
             ]
         ),
+        // #1455: runs once as the test bundle loads, before any test, and
+        // routes every vault the test process opens into a scratch Trash bin
+        // (Tests/SlateMacTestBootstrap/bootstrap.c). Test bundle only: the
+        // SlateMac executable never links it.
+        .target(
+            name: "SlateMacTestBootstrap",
+            path: "Tests/SlateMacTestBootstrap"
+        ),
         .testTarget(
             name: "SlateMacTests",
-            dependencies: ["SlateMac"],
+            dependencies: ["SlateMac", "SlateMacTestBootstrap"],
             linkerSettings: [
                 // The test binary transitively links slate_uniffi via
                 // SlateMac. Reuse the same -L flag so swift test can
