@@ -50,6 +50,26 @@ struct PinnedMutationTarget {
     path: PathBuf,
 }
 
+/// The call a refused path stopped, for the end of its `InvalidPath` reason
+/// (`pinned_root` words each one). On Unix a folder on the path that is a
+/// symbolic link or not a folder refuses every mutation (#1449, #1452);
+/// elsewhere the value only travels with the path.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+#[cfg_attr(not(unix), allow(dead_code))]
+enum Mutation {
+    /// A structural rename or move, and Move to Trash's inventory: "so
+    /// nothing was moved".
+    Move,
+    /// A save, or any other overwrite of a file (`write_file`): "so nothing
+    /// was saved".
+    Save,
+    /// A new file (`write_file_if_absent`): "so nothing was created".
+    Create,
+    /// A new folder (`create_dir`, `create_dir_if_absent`): "so no folder
+    /// was created".
+    CreateFolder,
+}
+
 impl FsVaultProvider {
     /// Wrap an on-disk directory as a vault provider.
     ///
@@ -106,10 +126,14 @@ impl FsVaultProvider {
         Ok(path)
     }
 
+    /// The folder that holds `relative`'s final component, held open, for a
+    /// save, a creation or the Trash inventory. On Unix a folder on the way
+    /// that is a link or a file is `mutation`'s typed refusal (#1452).
     fn pin_mutation_target(
         &self,
         relative: &str,
         create_missing_parents: bool,
+        mutation: Mutation,
     ) -> Result<PinnedMutationTarget, VaultError> {
         let path = self.resolve_for_mutation(relative)?;
 
@@ -121,11 +145,18 @@ impl FsVaultProvider {
                         path: relative.to_string(),
                         reason: "mutation destination is not beneath the vault root".into(),
                     })?;
-            PinnedMutationTarget::open(&self.root, vault_relative, relative, create_missing_parents)
+            PinnedMutationTarget::open(
+                &self.root,
+                vault_relative,
+                relative,
+                create_missing_parents,
+                mutation,
+            )
         }
 
         #[cfg(not(unix))]
         {
+            let _ = mutation;
             if create_missing_parents && let Some(parent) = path.parent() {
                 fs::create_dir_all(parent).map_err(VaultError::Io)?;
             }
@@ -304,10 +335,12 @@ impl FsVaultProvider {
         }
     }
 
-    /// Directory where `atomic_write` parks tempfiles. Lives under the
-    /// vault's hidden `.slate/` subtree so a crash-leak doesn't surface
-    /// as a visible entry and concurrent `list_dir` callers can't see
-    /// half-written files alongside their targets.
+    /// Directory where saves and creates stage their bytes (`stage_contents`,
+    /// `write_file_if_absent_with_staging`). Lives under the vault's hidden
+    /// `.slate/` subtree so a crash-leak doesn't surface as a visible entry
+    /// and concurrent `list_dir` callers can't see half-written files
+    /// alongside their targets. It is reached by path, like the rest of
+    /// `.slate` (#940): the publish into the vault is what is pinned.
     fn tmp_dir(&self) -> PathBuf {
         self.root.join(".slate").join("tmp")
     }
@@ -369,9 +402,10 @@ impl FsVaultProvider {
         SyncContents: FnOnce(&fs::File) -> io::Result<()>,
         Publish: FnOnce(&Path, &PinnedMutationTarget) -> io::Result<()>,
     {
+        // Pin first, so a refused path stages nothing (#1452).
+        let destination = self.pin_mutation_target(relative, true, Mutation::Create)?;
         let tmp_dir = self.tmp_dir();
         fs::create_dir_all(&tmp_dir).map_err(VaultError::Io)?;
-        let destination = self.pin_mutation_target(relative, true)?;
 
         // A managed temp path is the failure guard: every exit before publish,
         // including partial writes and sync failures, still unlinks the staged
@@ -431,68 +465,86 @@ impl FsVaultProvider {
             }
         }
     }
+
+    /// #1452: a save beneath the pinned vault root. Every overwrite core
+    /// performs (saves, link rewrites, task toggles, property edits) reaches
+    /// it through [`VaultProvider::write_file`]. The folder that will hold the
+    /// file is pinned first with the no-follow walk, a missing one made with
+    /// `mkdirat` inside its pinned parent; a link or a non-folder on the way
+    /// refuses with `InvalidPath` before anything is staged, so the refusal is
+    /// the provable no-write `save_text_locked` clears its intent for. The
+    /// staged bytes are then renamed into that folder by descriptor, so the
+    /// target's path is never resolved again (the staged file's own, in
+    /// `.slate`, still is: #940). `before_publish` is a test seam that runs
+    /// after the bytes are staged, just before the publish.
+    #[cfg(unix)]
+    fn write_file_beneath_root(
+        &self,
+        relative: &str,
+        contents: &[u8],
+        before_publish: impl FnOnce() -> io::Result<()>,
+    ) -> Result<(), VaultError> {
+        let target = self.pin_mutation_target(relative, true, Mutation::Save)?;
+        let tmp_dir = self.tmp_dir();
+        fs::create_dir_all(&tmp_dir)?;
+        let staged = stage_contents(&tmp_dir, contents, target.existing_permissions())?;
+        before_publish()?;
+        // A failed publish drops `staged`, which removes the staged file.
+        target.publish_staged_replacing(staged.path())?;
+        // The staged name is consumed: disarm its cleanup, so a new file that
+        // races into the old random name is never removed by the guard.
+        let (file, mut path_guard) = staged.into_parts();
+        path_guard.disable_cleanup(true);
+        drop(path_guard);
+        drop(file);
+        // Best effort, as before: the published bytes stand either way.
+        let _ = target.sync_parent();
+        Ok(())
+    }
+
+    /// #1452: a new folder beneath the pinned vault root, `create_folder`'s
+    /// only route to disk ([`VaultProvider::create_dir`]). The folder that
+    /// will hold it is pinned with the no-follow walk, and it is made with
+    /// `mkdirat` in that folder's descriptor (`PinnedRoot::create_folder`).
+    /// `before_create` is a test seam that runs after the pin, just before
+    /// the `mkdirat`.
+    #[cfg(unix)]
+    fn create_dir_beneath_root(
+        &self,
+        relative: &str,
+        before_create: impl FnOnce() -> io::Result<()>,
+    ) -> Result<(), VaultError> {
+        let path = self.resolve_for_mutation(relative)?;
+        pinned_root::PinnedRoot::open(&self.root)?.create_folder(
+            self.vault_relative(&path, relative)?,
+            relative,
+            before_create,
+        )
+    }
 }
 
 #[cfg(unix)]
 impl PinnedMutationTarget {
+    /// Pin the folder that holds `vault_relative`'s final component with
+    /// `pinned_root`'s no-follow walk, the one the structural rename takes
+    /// (#1449): the vault root itself is followed, so a symlinked vault keeps
+    /// working, and every folder beneath it is opened relative to the one
+    /// before with `O_NOFOLLOW`. Since #1452 a link or a non-folder on the way
+    /// is `mutation`'s typed refusal rather than the kernel's untyped
+    /// `ENOTDIR`.
     fn open(
         root: &Path,
         vault_relative: &Path,
         original: &str,
         create_missing_parents: bool,
+        mutation: Mutation,
     ) -> Result<Self, VaultError> {
-        use std::os::unix::ffi::OsStrExt as _;
-        use std::os::unix::fs::OpenOptionsExt as _;
-
-        let leaf = vault_relative
-            .file_name()
-            .ok_or_else(|| VaultError::InvalidPath {
-                path: original.to_string(),
-                reason: "mutation destination has no final component".into(),
-            })?;
-        let leaf =
-            std::ffi::CString::new(leaf.as_bytes()).map_err(|_| VaultError::InvalidPath {
-                path: original.to_string(),
-                reason: "mutation destination contains an embedded NUL".into(),
-            })?;
-
-        // Following the configured vault root itself preserves support for an
-        // intentionally symlinked vault. Every component *beneath* that root
-        // is opened relative to the preceding descriptor with O_NOFOLLOW.
-        let mut parent = fs::OpenOptions::new()
-            .read(true)
-            .custom_flags(directory_open_flags(false))
-            .open(root)
-            .map_err(VaultError::Io)?;
-        let parent_path = vault_relative.parent().unwrap_or_else(|| Path::new(""));
-        for component in parent_path.components() {
-            let Component::Normal(name) = component else {
-                return Err(VaultError::InvalidPath {
-                    path: original.to_string(),
-                    reason: "mutation parent is not vault-relative".into(),
-                });
-            };
-            let name =
-                std::ffi::CString::new(name.as_bytes()).map_err(|_| VaultError::InvalidPath {
-                    path: original.to_string(),
-                    reason: "mutation parent contains an embedded NUL".into(),
-                })?;
-
-            let next = match open_directory_at(&parent, &name) {
-                Ok(next) => next,
-                Err(error) if create_missing_parents && error.kind() == io::ErrorKind::NotFound => {
-                    match create_directory_at(&parent, &name) {
-                        Ok(()) => {}
-                        Err(error) if error.kind() == io::ErrorKind::AlreadyExists => {}
-                        Err(error) => return Err(VaultError::Io(error)),
-                    }
-                    open_directory_at(&parent, &name).map_err(VaultError::Io)?
-                }
-                Err(error) => return Err(VaultError::Io(error)),
-            };
-            parent = next;
-        }
-
+        let (parent, leaf) = pinned_root::PinnedRoot::open(root)?.parent_and_leaf(
+            vault_relative,
+            original,
+            create_missing_parents,
+            mutation,
+        )?;
         Ok(Self { parent, leaf })
     }
 
@@ -546,6 +598,92 @@ impl PinnedMutationTarget {
             return Err(io::Error::last_os_error());
         }
         Ok(())
+    }
+
+    /// A save's publish (#1452): the staged file renamed onto the leaf inside
+    /// the pinned folder, replacing what is there, as `rename(2)` always has
+    /// for a save. A leaf that is a symbolic link is replaced, never followed.
+    ///
+    /// The source is still named by its path (`AT_FDCWD`), under the random
+    /// name `tempfile` gave it in `.slate/tmp` a moment before. A swap there,
+    /// between the staging and this call, can change which bytes arrive or
+    /// fail the rename, never where they land: the destination is the pinned
+    /// folder. `.slate` itself is reached by path throughout, which is #940's
+    /// descriptor-relative interior (PR 22's `FsRoot`).
+    fn publish_staged_replacing(&self, staged: &Path) -> io::Result<()> {
+        use std::os::fd::AsRawFd as _;
+        use std::os::unix::ffi::OsStrExt as _;
+
+        let staged_c = std::ffi::CString::new(staged.as_os_str().as_bytes())
+            .map_err(|error| io::Error::new(io::ErrorKind::InvalidInput, error))?;
+        // SAFETY: the staged path and the leaf are NUL-terminated and outlive
+        // the call, and `parent` is an open directory descriptor.
+        let result = unsafe {
+            libc::renameat(
+                libc::AT_FDCWD,
+                staged_c.as_ptr(),
+                self.parent.as_raw_fd(),
+                self.leaf.as_ptr(),
+            )
+        };
+        if result != 0 {
+            return Err(io::Error::last_os_error());
+        }
+        Ok(())
+    }
+
+    /// The permissions an overwrite keeps: the mode of what the save replaces,
+    /// looked up in the pinned folder and following a final link, as
+    /// `fs::metadata` did. `None` for a new file, or when the mode cannot be
+    /// read: a best effort, as before.
+    fn existing_permissions(&self) -> Option<fs::Permissions> {
+        use std::os::fd::AsRawFd as _;
+        use std::os::unix::fs::PermissionsExt as _;
+
+        let mut stat = std::mem::MaybeUninit::<libc::stat>::uninit();
+        // SAFETY: `parent` is an open directory, the leaf is NUL-terminated,
+        // and `stat` has the size and alignment fstatat writes.
+        let result = unsafe {
+            libc::fstatat(
+                self.parent.as_raw_fd(),
+                self.leaf.as_ptr(),
+                stat.as_mut_ptr(),
+                0,
+            )
+        };
+        if result != 0 {
+            return None;
+        }
+        // SAFETY: a successful fstatat initialized `stat`.
+        let mode = unsafe { stat.assume_init() }.st_mode;
+        // `mode_t` is `u16` on macOS and `u32` on Linux.
+        #[allow(clippy::useless_conversion)]
+        let mode = u32::from(mode);
+        Some(fs::Permissions::from_mode(mode))
+    }
+
+    /// Durable publication: sync the pinned folder's entries after the rename,
+    /// so the marker-clearing index commit can never outlive the publication
+    /// it vouches for (W4-3; contract 21). The pinned descriptor is opened for
+    /// search only (`O_SEARCH`, or `O_PATH`, which cannot be synced), so the
+    /// folder is reopened through it for reading. The save treats it as a
+    /// best effort, as before: the published bytes stand either way.
+    fn sync_parent(&self) -> io::Result<()> {
+        use std::os::fd::{AsRawFd as _, FromRawFd as _};
+
+        // SAFETY: `parent` is an open directory and "." is NUL-terminated.
+        let descriptor = unsafe {
+            libc::openat(
+                self.parent.as_raw_fd(),
+                c".".as_ptr(),
+                libc::O_RDONLY | libc::O_DIRECTORY | libc::O_CLOEXEC,
+            )
+        };
+        if descriptor < 0 {
+            return Err(io::Error::last_os_error());
+        }
+        // SAFETY: a successful openat returned a new descriptor we now own.
+        unsafe { fs::File::from_raw_fd(descriptor) }.sync_all()
     }
 }
 
@@ -794,7 +932,7 @@ impl VaultProvider for FsVaultProvider {
         cancel.check()?;
         #[cfg(unix)]
         {
-            let target = self.pin_mutation_target(relative, false)?;
+            let target = self.pin_mutation_target(relative, false, Mutation::Move)?;
             super::trash_snapshot::snapshot_at(&target.parent, &target.leaf, cancel)
         }
         #[cfg(not(unix))]
@@ -875,9 +1013,19 @@ impl VaultProvider for FsVaultProvider {
     }
 
     fn write_file(&self, relative: &str, contents: &[u8]) -> Result<(), VaultError> {
-        let path = self.resolve_for_mutation(relative)?;
-        atomic_write(&path, &self.tmp_dir(), contents)?;
-        Ok(())
+        // #1452: beneath the pinned root on Unix, so a folder swapped for a
+        // link refuses instead of redirecting the save. Windows still writes
+        // by path (#1451).
+        #[cfg(unix)]
+        {
+            self.write_file_beneath_root(relative, contents, || Ok(()))
+        }
+        #[cfg(not(unix))]
+        {
+            let path = self.resolve_for_mutation(relative)?;
+            atomic_write(&path, &self.tmp_dir(), contents)?;
+            Ok(())
+        }
     }
 
     fn write_file_if_absent(&self, relative: &str, contents: &[u8]) -> Result<(), VaultError> {
@@ -957,12 +1105,23 @@ impl VaultProvider for FsVaultProvider {
     }
 
     fn create_dir(&self, relative: &str) -> Result<(), VaultError> {
-        let path = self.resolve_for_mutation(relative)?;
-        std::fs::create_dir_all(&path).map_err(VaultError::from)
+        // #1452: on Unix every missing folder is made with `mkdirat` inside
+        // its pinned parent, and a link or a non-folder on the path, the
+        // folder's own name included, is the typed refusal (`pinned_root`).
+        // Windows still creates by path (#1451).
+        #[cfg(unix)]
+        {
+            self.create_dir_beneath_root(relative, || Ok(()))
+        }
+        #[cfg(not(unix))]
+        {
+            let path = self.resolve_for_mutation(relative)?;
+            std::fs::create_dir_all(&path).map_err(VaultError::from)
+        }
     }
 
     fn create_dir_if_absent(&self, relative: &str) -> Result<(), VaultError> {
-        let destination = self.pin_mutation_target(relative, false)?;
+        let destination = self.pin_mutation_target(relative, false, Mutation::CreateFolder)?;
         match destination.create_dir_if_absent() {
             Ok(()) => Ok(()),
             Err(error) if error.kind() == io::ErrorKind::AlreadyExists => {
@@ -1364,24 +1523,48 @@ fn birthtime_ms_of(meta: &fs::Metadata) -> i64 {
         .unwrap_or(0)
 }
 
-/// Atomically replace the contents of `target` by writing into a temp
-/// file under `tmp_dir` and renaming it into place.
+/// Stage `contents` for an atomic replace: a new temp file under `tmp_dir`,
+/// written, flushed and synced, carrying `existing_perms` when the save
+/// replaces a file. The caller renames it into place.
 ///
-/// `tmp_dir` must live on the same filesystem as `target` so the final
+/// `tmp_dir` must live on the same filesystem as the target so the final
 /// rename is atomic — the caller passes `<vault_root>/.slate/tmp/` for
 /// that reason. Parking temps under `.slate/` (a) keeps the partial
 /// state invisible to `list_dir` callers reading the target's directory
 /// during the write, and (b) means a crash-leak doesn't surface as a
 /// visible vault entry.
 ///
-/// If `target` already exists, its filesystem permissions are copied to
+/// If the target already exists, its filesystem permissions are copied to
 /// the temp before rename so a 0644 file isn't silently downgraded to
 /// the temp's stricter default. New files keep the temp's permissions.
+fn stage_contents(
+    tmp_dir: &Path,
+    contents: &[u8],
+    existing_perms: Option<fs::Permissions>,
+) -> io::Result<tempfile::NamedTempFile> {
+    let mut temp = tempfile::NamedTempFile::new_in(tmp_dir)?;
+    temp.write_all(contents)?;
+    temp.flush()?;
+    temp.as_file().sync_data()?;
+    if let Some(perms) = existing_perms {
+        // Ignore failure: a successful overwrite with the temp's mode
+        // is still better than aborting the write on a perms snag.
+        let _ = temp.as_file().set_permissions(perms);
+    }
+    Ok(temp)
+}
+
+/// Atomically replace the contents of `target` by path: the save where the
+/// provider has no descriptor-relative one (Windows; Unix saves beneath the
+/// pinned root, `write_file_beneath_root`, #1452). The parent is made with
+/// `create_dir_all` and the staged file renamed onto the path, so a folder
+/// on it swapped for a junction redirects the save (#1451).
 ///
-/// Note on symlinks: if `target` is a symlink, `rename(2)` replaces the
+/// Note on symlinks: if `target` is a symlink, the rename replaces the
 /// symlink directory entry with the regular temp file. `write_file`
 /// does not transparently follow symlinks to write through to their
 /// target — see the vault module docs.
+#[cfg(not(unix))]
 fn atomic_write(target: &Path, tmp_dir: &Path, contents: &[u8]) -> io::Result<()> {
     let parent = target.parent().ok_or_else(|| {
         io::Error::new(
@@ -1397,15 +1580,7 @@ fn atomic_write(target: &Path, tmp_dir: &Path, contents: &[u8]) -> io::Result<()
     // valid file, just with the temp's default permissions.
     let existing_perms = fs::metadata(target).ok().map(|m| m.permissions());
 
-    let mut temp = tempfile::NamedTempFile::new_in(tmp_dir)?;
-    temp.write_all(contents)?;
-    temp.flush()?;
-    temp.as_file().sync_data()?;
-    if let Some(perms) = existing_perms {
-        // Ignore failure: a successful overwrite with the temp's mode
-        // is still better than aborting the write on a perms snag.
-        let _ = temp.as_file().set_permissions(perms);
-    }
+    let temp = stage_contents(tmp_dir, contents, existing_perms)?;
     // Windows can transiently refuse the final rename with
     // ACCESS_DENIED (os error 5) or ERROR_SHARING_VIOLATION (32)
     // while an antivirus or indexer briefly holds the target or the
@@ -1422,22 +1597,15 @@ fn atomic_write(target: &Path, tmp_dir: &Path, contents: &[u8]) -> io::Result<()
         match temp.persist(target) {
             Ok(_) => {
                 // Durable PUBLICATION, not just durable bytes (W4-3
-                // final-confirmation review): on POSIX the rename
-                // lives in the parent directory's entries, and an
-                // unsynced directory can lose the rename to a power
-                // cut while a LATER SQLite commit (which fsyncs)
-                // survives — new index, old bytes, marker already
-                // cleared. Sync the parent so the write-intent
-                // protocol's marker-clearing commit can never
-                // out-live the publication it vouches for. Windows
-                // has no directory handle sync through std; NTFS
-                // metadata journaling orders the rename with the
-                // synced file data — recorded in the protocol's
-                // accepted-risk register.
-                #[cfg(unix)]
-                {
-                    let _ = fs::File::open(parent).and_then(|dir| dir.sync_all());
-                }
+                // final-confirmation review): the rename lives in the
+                // parent directory's entries, and an unsynced directory
+                // can lose it to a power cut while a LATER SQLite commit
+                // (which fsyncs) survives — new index, old bytes, marker
+                // already cleared. POSIX syncs the parent for that
+                // (`PinnedMutationTarget::sync_parent`). Windows has no
+                // directory handle sync through std; NTFS metadata
+                // journaling orders the rename with the synced file data
+                // — recorded in the protocol's accepted-risk register.
                 return Ok(());
             }
             Err(persist_error) => {
@@ -1669,7 +1837,9 @@ mod tests {
         // Pin the vault-relative destination, then replace an ancestor before
         // the final create. The descriptor-relative mkdir must stay with the
         // directory we opened rather than following the replacement symlink.
-        let destination = provider.pin_mutation_target("parent/fresh", false).unwrap();
+        let destination = provider
+            .pin_mutation_target("parent/fresh", false, Mutation::CreateFolder)
+            .unwrap();
         std::fs::rename(&parent, &pinned_parent).unwrap();
         std::os::unix::fs::symlink(outside.path(), &parent).unwrap();
 
@@ -2961,5 +3131,473 @@ mod tests {
         };
         assert_eq!(names, vec![expected.to_string()]);
         assert_eq!(p.read_file(nfd).unwrap(), b"cafe");
+    }
+
+    /// #1452: the typed refusal a save or a creation gives for a folder on its
+    /// path that is a symbolic link or not a folder: `InvalidPath` for the
+    /// caller's path, naming the folder, ending with what did not happen.
+    #[cfg(unix)]
+    fn assert_refused(error: &VaultError, refused: &str, names: &str, outcome: &str) {
+        assert!(
+            matches!(error, VaultError::InvalidPath { path, reason }
+                if path == refused && reason.contains(names) && reason.ends_with(outcome)),
+            "expected the refusal of {refused:?} naming {names:?} ({outcome:?}), got {error:?}"
+        );
+    }
+
+    /// The vault's own `sub` folder, parked inside the vault, and a symlink
+    /// to `outside` in its place: the external writer of #1449 and #1452.
+    #[cfg(unix)]
+    fn swap_sub_for_a_link(vault: &Path, outside: &Path) {
+        std::fs::rename(vault.join("sub"), vault.join("parked")).unwrap();
+        std::os::unix::fs::symlink(outside, vault.join("sub")).unwrap();
+    }
+
+    /// #1452: a vault folder replaced by a symlink to a directory outside the
+    /// vault, after Slate saw it, must not redirect a save. Before the fix
+    /// `write_file` made the parent with `create_dir_all` and published with a
+    /// path-addressed rename, and both followed the link: the save replaced a
+    /// same-named file outside the vault, or made a new one there, and a
+    /// missing folder was made outside too, while the save reported success.
+    #[cfg(unix)]
+    #[test]
+    fn write_file_refuses_a_save_through_a_folder_swapped_for_a_symlink() {
+        let (tmp, p) = vault();
+        let outside = tempfile::tempdir().unwrap();
+        std::fs::write(outside.path().join("note.md"), b"outside note").unwrap();
+        p.write_file("sub/note.md", b"vault note").unwrap();
+        swap_sub_for_a_link(tmp.path(), outside.path());
+        let outside_before = tree(outside.path());
+        let vault_before = tree(tmp.path());
+
+        // An overwrite of a name the link's target holds, a new name, and a
+        // new name in a folder that does not exist yet.
+        for relative in ["sub/note.md", "sub/new-note.md", "sub/new/deeper.md"] {
+            let error = p.write_file(relative, b"saved bytes").unwrap_err();
+            assert_refused(
+                &error,
+                relative,
+                "\"sub\" is a symbolic link, not a folder in this vault",
+                "so nothing was saved",
+            );
+        }
+
+        assert_eq!(tree(outside.path()), outside_before, "outside changed");
+        assert_eq!(tree(tmp.path()), vault_before, "vault changed");
+    }
+
+    /// #1452: `create_dir` (`create_folder`'s only route to disk) made the
+    /// folder with `create_dir_all` from the absolute path, so a folder
+    /// swapped for a symlink put the new folder outside the vault.
+    #[cfg(unix)]
+    #[test]
+    fn create_dir_refuses_a_new_folder_through_a_folder_swapped_for_a_symlink() {
+        let (tmp, p) = vault();
+        let outside = tempfile::tempdir().unwrap();
+        p.create_dir("sub").unwrap();
+        swap_sub_for_a_link(tmp.path(), outside.path());
+        let outside_before = tree(outside.path());
+        let vault_before = tree(tmp.path());
+
+        for relative in ["sub/new-folder", "sub/new/deeper"] {
+            let error = p.create_dir(relative).unwrap_err();
+            assert_refused(
+                &error,
+                relative,
+                "\"sub\" is a symbolic link, not a folder in this vault",
+                "so no folder was created",
+            );
+        }
+
+        assert_eq!(tree(outside.path()), outside_before, "outside changed");
+        assert_eq!(tree(tmp.path()), vault_before, "vault changed");
+    }
+
+    /// #1452: the exclusive creates already refused a symlinked ancestor,
+    /// because they pin the parent with the no-follow walk, but reported the
+    /// kernel's `ENOTDIR` as an untyped IO error ("Not a directory (os error
+    /// 20)"). They now give the typed refusal, and a refused create changes
+    /// nothing, not even the staging folder.
+    #[cfg(unix)]
+    #[test]
+    fn exclusive_creates_through_a_symlinked_folder_give_the_typed_refusal() {
+        let (tmp, p) = vault();
+        let outside = tempfile::tempdir().unwrap();
+        std::os::unix::fs::symlink(outside.path(), tmp.path().join("sub")).unwrap();
+        let vault_before = tree(tmp.path());
+
+        let create = p.write_file_if_absent("sub/new.md", b"new").unwrap_err();
+        assert_refused(
+            &create,
+            "sub/new.md",
+            "\"sub\" is a symbolic link, not a folder in this vault",
+            "so nothing was created",
+        );
+        let folder = p.create_dir_if_absent("sub/new").unwrap_err();
+        assert_refused(
+            &folder,
+            "sub/new",
+            "\"sub\" is a symbolic link, not a folder in this vault",
+            "so no folder was created",
+        );
+
+        assert!(tree(outside.path()).is_empty(), "outside changed");
+        assert_eq!(tree(tmp.path()), vault_before, "vault changed");
+    }
+
+    /// #1452: a folder on the path that is a file refuses every save and
+    /// creation with its own reason, naming the vault-relative prefix, where
+    /// each used to fail with an untyped IO error.
+    #[cfg(unix)]
+    #[test]
+    fn saves_and_creations_name_an_ancestor_that_is_not_a_folder() {
+        let (tmp, p) = vault();
+        p.write_file("notes/plain.md", b"a file, not a folder")
+            .unwrap();
+        let vault_before = tree(tmp.path());
+        let names = "\"notes/plain.md\" is not a folder";
+
+        let save = p.write_file("notes/plain.md/x.md", b"x").unwrap_err();
+        assert_refused(&save, "notes/plain.md/x.md", names, "so nothing was saved");
+        let folder = p.create_dir("notes/plain.md/x/y").unwrap_err();
+        assert_refused(
+            &folder,
+            "notes/plain.md/x/y",
+            names,
+            "so no folder was created",
+        );
+        let create = p
+            .write_file_if_absent("notes/plain.md/x.md", b"x")
+            .unwrap_err();
+        assert_refused(
+            &create,
+            "notes/plain.md/x.md",
+            names,
+            "so nothing was created",
+        );
+        let exclusive = p.create_dir_if_absent("notes/plain.md/x").unwrap_err();
+        assert_refused(
+            &exclusive,
+            "notes/plain.md/x",
+            names,
+            "so no folder was created",
+        );
+
+        assert_eq!(tree(tmp.path()), vault_before, "vault changed");
+    }
+
+    /// #1452: a folder's own name that is a symbolic link (to a folder or to
+    /// nothing), or a file, is not a folder in this vault. Before the fix
+    /// `create_dir` followed a link to a folder and reported success, so
+    /// `create_folder` recorded a folder (whose undo would trash the link),
+    /// and a file was an untyped `AlreadyExists`. Each is now the typed
+    /// refusal, naming the entry, and nothing is followed or created.
+    #[cfg(unix)]
+    #[test]
+    fn create_dir_refuses_a_final_component_that_is_a_link_or_a_file() {
+        let (tmp, p) = vault();
+        let outside = tempfile::tempdir().unwrap();
+        std::os::unix::fs::symlink(outside.path(), tmp.path().join("link")).unwrap();
+        std::os::unix::fs::symlink(tmp.path().join("missing"), tmp.path().join("dangling"))
+            .unwrap();
+        p.write_file("plain.md", b"a file").unwrap();
+        let vault_before = tree(tmp.path());
+
+        for (relative, names) in [
+            ("link", "\"link\" is a symbolic link"),
+            ("dangling", "\"dangling\" is a symbolic link"),
+            ("plain.md", "\"plain.md\" is not a folder"),
+        ] {
+            let error = p.create_dir(relative).unwrap_err();
+            assert_refused(&error, relative, names, "so no folder was created");
+        }
+
+        assert!(tree(outside.path()).is_empty(), "outside changed");
+        assert_eq!(tree(tmp.path()), vault_before, "vault changed");
+    }
+
+    /// #1452 keeps what a save and a new folder do in real folders: missing
+    /// folders are made, each with `mkdirat` inside its pinned parent, and are
+    /// real folders in the vault; an overwrite replaces the bytes; and
+    /// `create_dir` stays idempotent, an existing folder being `Ok` even when
+    /// it cannot be searched (the look at it does not open it).
+    #[cfg(unix)]
+    #[test]
+    fn saves_and_new_folders_still_make_missing_folders_beneath_the_root() {
+        use std::os::unix::fs::PermissionsExt as _;
+
+        let (tmp, p) = vault();
+        p.write_file("a/b/c.md", b"deep").unwrap();
+        p.write_file("a/b/c.md", b"deeper").unwrap();
+        p.create_dir("x/y/z").unwrap();
+        p.create_dir("x/y/z").unwrap();
+        p.create_dir("a/b").unwrap();
+        p.write_file_if_absent("x/y/fresh.md", b"fresh").unwrap();
+        p.create_dir_if_absent("x/y/fresh").unwrap();
+        let locked = tmp.path().join("locked");
+        std::fs::create_dir(&locked).unwrap();
+        std::fs::set_permissions(&locked, fs::Permissions::from_mode(0o000)).unwrap();
+        let idempotent = p.create_dir("locked");
+        std::fs::set_permissions(&locked, fs::Permissions::from_mode(0o700)).unwrap();
+        idempotent.expect("an existing folder is Ok, whatever its permissions");
+
+        for folder in ["a", "a/b", "x", "x/y", "x/y/z", "x/y/fresh"] {
+            let meta = tmp.path().join(folder).symlink_metadata().unwrap();
+            assert!(meta.is_dir() && !meta.file_type().is_symlink(), "{folder}");
+        }
+        assert_eq!(p.read_file("a/b/c.md").unwrap(), b"deeper");
+        assert_eq!(p.read_file("x/y/fresh.md").unwrap(), b"fresh");
+        assert_eq!(
+            std::fs::read_dir(tmp.path().join(".slate/tmp"))
+                .unwrap()
+                .count(),
+            0,
+            "no staged file is left behind"
+        );
+    }
+
+    /// `.slate/tmp` holds no staged file: every save either published its
+    /// staged file or removed it.
+    #[cfg(unix)]
+    fn assert_no_staged_file(vault: &Path) {
+        let staged: Vec<_> = std::fs::read_dir(vault.join(".slate/tmp"))
+            .unwrap()
+            .map(|entry| entry.unwrap().file_name())
+            .collect();
+        assert!(staged.is_empty(), "staged files left behind: {staged:?}");
+    }
+
+    /// #1452's race, for a save: the folder is swapped for a link to a
+    /// directory outside the vault after it is pinned and the bytes are
+    /// staged, immediately before the publish's `renameat`. The publish is
+    /// relative to the pinned descriptor, so the save lands in the vault's
+    /// own folder (now parked), never through the link, for an overwrite of
+    /// a name the link's target also holds, a new name, and a name in a
+    /// folder the walk has just made. Nothing outside changes and no staged
+    /// file is left. (#1449 records this pinned-parent moment for Linux
+    /// renames; for saves it holds on macOS and Linux alike.)
+    #[cfg(unix)]
+    #[test]
+    fn a_folder_swapped_just_before_the_publish_cannot_redirect_a_save() {
+        for (relative, parked) in [
+            ("sub/note.md", "parked/note.md"),
+            ("sub/new-note.md", "parked/new-note.md"),
+            ("sub/new/deeper.md", "parked/new/deeper.md"),
+        ] {
+            let (tmp, p) = vault();
+            let outside = tempfile::tempdir().unwrap();
+            std::fs::write(outside.path().join("note.md"), b"outside note").unwrap();
+            p.write_file("sub/note.md", b"vault note").unwrap();
+            let outside_before = tree(outside.path());
+
+            p.write_file_beneath_root(relative, b"saved bytes", || {
+                swap_sub_for_a_link(tmp.path(), outside.path());
+                Ok(())
+            })
+            .unwrap_or_else(|error| panic!("{relative}: {error:?}"));
+
+            assert_eq!(
+                tree(outside.path()),
+                outside_before,
+                "{relative}: outside changed"
+            );
+            assert_eq!(
+                std::fs::read(tmp.path().join(parked)).unwrap(),
+                b"saved bytes",
+                "{relative}"
+            );
+            assert_no_staged_file(tmp.path());
+        }
+    }
+
+    /// #1452's race, for a new folder: the same swap, immediately before the
+    /// `mkdirat`. The folder is made in the pinned descriptor, so it lands in
+    /// the vault's own folder (now parked), whether its parent was there or
+    /// the walk has just made it, and nothing appears outside.
+    #[cfg(unix)]
+    #[test]
+    fn a_folder_swapped_just_before_the_mkdirat_cannot_redirect_a_new_folder() {
+        for (relative, parked) in [
+            ("sub/new-folder", "parked/new-folder"),
+            ("sub/new/deeper", "parked/new/deeper"),
+        ] {
+            let (tmp, p) = vault();
+            let outside = tempfile::tempdir().unwrap();
+            p.create_dir("sub").unwrap();
+
+            p.create_dir_beneath_root(relative, || {
+                swap_sub_for_a_link(tmp.path(), outside.path());
+                Ok(())
+            })
+            .unwrap_or_else(|error| panic!("{relative}: {error:?}"));
+
+            assert!(
+                tree(outside.path()).is_empty(),
+                "{relative}: outside changed"
+            );
+            let meta = tmp.path().join(parked).symlink_metadata().unwrap();
+            assert!(
+                meta.is_dir() && !meta.file_type().is_symlink(),
+                "{relative}"
+            );
+        }
+    }
+
+    /// #1452's race, where the pinned folder itself goes: the folder the walk
+    /// has just made is removed, and a link to a directory outside the vault
+    /// put in its place, immediately before the publish or the `mkdirat`. The
+    /// pinned descriptor then names a removed folder, so the call fails with
+    /// the kernel's own error, `ENOENT` as `Io(NotFound)`, not flattened into
+    /// a refusal, and nothing is written anywhere: not through the link, and
+    /// no staged file is left.
+    #[cfg(unix)]
+    #[test]
+    fn a_pinned_folder_removed_just_before_the_publish_fails_with_its_errno() {
+        fn swap_fresh(vault: &Path, outside: &Path) -> io::Result<()> {
+            std::fs::remove_dir(vault.join("fresh"))?;
+            std::os::unix::fs::symlink(outside, vault.join("fresh"))
+        }
+        fn assert_enoent(relative: &str, error: &VaultError) {
+            assert!(
+                matches!(error, VaultError::Io(io)
+                    if io.kind() == io::ErrorKind::NotFound
+                        && io.raw_os_error() == Some(libc::ENOENT)),
+                "{relative}: {error:?}"
+            );
+        }
+
+        let (tmp, p) = vault();
+        let outside = tempfile::tempdir().unwrap();
+        let save = p
+            .write_file_beneath_root("fresh/x.md", b"saved bytes", || {
+                swap_fresh(tmp.path(), outside.path())
+            })
+            .unwrap_err();
+        assert_enoent("fresh/x.md", &save);
+        assert!(tree(outside.path()).is_empty(), "the save wrote outside");
+        assert_no_staged_file(tmp.path());
+
+        let (tmp, p) = vault();
+        let outside = tempfile::tempdir().unwrap();
+        let folder = p
+            .create_dir_beneath_root("fresh/new", || swap_fresh(tmp.path(), outside.path()))
+            .unwrap_err();
+        assert_enoent("fresh/new", &folder);
+        assert!(
+            tree(outside.path()).is_empty(),
+            "the folder was made outside"
+        );
+    }
+
+    /// The other failures keep the kernel's error (#1452): only a folder on
+    /// the path that is a link or not a folder becomes the typed refusal. A
+    /// save and a new folder in a folder Slate may not write keep `EACCES` as
+    /// `Io(PermissionDenied)`, and the detail the hosts show still carries its
+    /// `os error` number. The refused save leaves no staged file.
+    #[cfg(unix)]
+    #[test]
+    fn failures_other_than_the_boundary_keep_their_io_error() {
+        use std::os::unix::fs::PermissionsExt as _;
+
+        let (tmp, p) = vault();
+        p.create_dir("locked").unwrap();
+        let locked = tmp.path().join("locked");
+        std::fs::set_permissions(&locked, fs::Permissions::from_mode(0o500)).unwrap();
+        let save = p.write_file("locked/x.md", b"x");
+        let folder = p.create_dir("locked/new");
+        // Restore owner access before asserting, so TempDir cleanup stays
+        // reliable even when the fact fails.
+        std::fs::set_permissions(&locked, fs::Permissions::from_mode(0o700)).unwrap();
+
+        for (call, outcome) in [("write_file", save), ("create_dir", folder)] {
+            let error = outcome.unwrap_err();
+            assert!(
+                matches!(&error, VaultError::Io(io)
+                    if io.kind() == io::ErrorKind::PermissionDenied
+                        && io.raw_os_error() == Some(libc::EACCES)),
+                "{call}: {error:?}"
+            );
+            let detail = crate::a11y::vault_error_detail(&error);
+            assert!(
+                detail.contains(&format!("(os error {})", libc::EACCES)),
+                "{call}: {detail}"
+            );
+        }
+        assert!(
+            std::fs::read_dir(&locked).unwrap().next().is_none(),
+            "something was written in the locked folder"
+        );
+        assert_no_staged_file(tmp.path());
+    }
+
+    /// #1452: the root is the descriptor, not a path component, so a vault
+    /// opened through a symlinked root keeps saving and creating folders.
+    #[cfg(unix)]
+    #[test]
+    fn saves_and_new_folders_through_a_symlinked_vault_root_still_land() {
+        let tmp = tempfile::tempdir().unwrap();
+        let real = tmp.path().join("real-vault");
+        std::fs::create_dir(&real).unwrap();
+        let link = tmp.path().join("vault-link");
+        std::os::unix::fs::symlink(&real, &link).unwrap();
+        let p = FsVaultProvider::new(link);
+
+        p.write_file("a.md", b"a").unwrap();
+        p.write_file("a.md", b"a again").unwrap();
+        p.write_file("n/b.md", b"b").unwrap();
+        p.create_dir("f/g").unwrap();
+        p.write_file_if_absent("c.md", b"c").unwrap();
+        p.create_dir_if_absent("h").unwrap();
+
+        assert_eq!(std::fs::read(real.join("a.md")).unwrap(), b"a again");
+        assert_eq!(std::fs::read(real.join("n/b.md")).unwrap(), b"b");
+        assert_eq!(std::fs::read(real.join("c.md")).unwrap(), b"c");
+        assert!(real.join("f/g").is_dir() && real.join("h").is_dir());
+    }
+
+    /// The final component is still a name (#1449, #1452): a save to a path
+    /// that is itself a symbolic link replaces the link with the saved file,
+    /// as `write_file` always has (the vault module's symlink decisions), and
+    /// never writes through it. The file keeps the permissions of what the
+    /// link pointed at, as an overwrite keeps a regular file's own.
+    #[cfg(unix)]
+    #[test]
+    fn a_save_to_a_link_replaces_the_link_and_never_writes_through_it() {
+        use std::os::unix::fs::PermissionsExt as _;
+
+        let (tmp, p) = vault();
+        let outside = tempfile::tempdir().unwrap();
+        let target = outside.path().join("target.md");
+        std::fs::write(&target, b"outside target").unwrap();
+        std::fs::set_permissions(&target, fs::Permissions::from_mode(0o640)).unwrap();
+        std::os::unix::fs::symlink(&target, tmp.path().join("link.md")).unwrap();
+
+        p.write_file("link.md", b"saved").unwrap();
+
+        let meta = tmp.path().join("link.md").symlink_metadata().unwrap();
+        assert!(meta.is_file(), "the link was not replaced: {meta:?}");
+        assert_eq!(meta.permissions().mode() & 0o777, 0o640);
+        assert_eq!(std::fs::read(tmp.path().join("link.md")).unwrap(), b"saved");
+        assert_eq!(std::fs::read(&target).unwrap(), b"outside target");
+    }
+
+    /// W4-3's durable publication (contract 21) survives #1452: the folder a
+    /// save publishes into is synced after the rename. The pinned descriptor
+    /// is search-only (`O_SEARCH` on macOS, `O_PATH` on Linux, which cannot be
+    /// synced), so the folder is reopened through it; a sync that failed every
+    /// time would lose the guarantee without a visible error, since the save
+    /// treats the sync as a best effort.
+    #[cfg(unix)]
+    #[test]
+    fn the_folder_a_save_publishes_into_can_be_synced() {
+        let (_tmp, p) = vault();
+        p.write_file("notes/a.md", b"a").unwrap();
+
+        for relative in ["notes/a.md", "top.md", "notes/new.md"] {
+            p.pin_mutation_target(relative, false, Mutation::Save)
+                .unwrap()
+                .sync_parent()
+                .unwrap_or_else(|error| panic!("{relative}: {error}"));
+        }
     }
 }
