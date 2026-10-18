@@ -265,13 +265,81 @@ function Register-HostFailure {
 
 function Register-HostSuccess {
     # A runner took its job: provisioning, boot, handoff, network and
-    # registration all worked, so the failures before it are forgotten.
+    # registration all worked, so the failures before it are forgotten,
+    # and so are the retry strikes if the breaker had tripped (under the
+    # lane rule of Clear-JobRetries): the jobs the host gave up on must not
+    # stay stranded once it serves again (#1482). A host that never tripped
+    # keeps a job's strikes: with other lanes claiming, three strikes mean
+    # that job or its lane, not the host.
     [CmdletBinding()]
-    param([Parameter(Mandatory)]$Journal, [Parameter(Mandatory)][hashtable]$Adapters)
+    param([Parameter(Mandatory)]$Journal, [Parameter(Mandatory)][hashtable]$Adapters, [string]$Lane = '')
     $health = Get-HostHealth -Journal $Journal
     $failures = [int]$health['Failures']
     if ($failures -gt 0) { & $Adapters.Log 'info' "health: a runner took its job; $failures failures in a row forgotten" }
+    if ($null -ne $health['TrippedAt']) { Clear-JobRetries -Journal $Journal -Adapters $Adapters -Reason 'because a runner took its job' -ClaimedLane $Lane }
+    # Strikes the lane rule kept earlier (marked Kept) belong to a lane
+    # this claim may just have proven, whether or not the breaker is still
+    # tripped: the first claim after a half-open resets it, and a claim
+    # by the struck lane can come later.
+    if ($Lane) { Clear-KeptRetries -Journal $Journal -Adapters $Adapters -Lane $Lane }
     Reset-HostHealth -Journal $Journal
+}
+
+function Clear-KeptRetries {
+    # The strikes the lane rule kept for this lane, forgotten: a runner of
+    # that lane took its job. Entries whose lane is no longer known go too.
+    [CmdletBinding()]
+    param([Parameter(Mandatory)]$Journal, [Parameter(Mandatory)][hashtable]$Adapters, [Parameter(Mandatory)][string]$Lane)
+    if (-not ($Journal['Retries'] -is [System.Collections.IDictionary])) { return }
+    $forgiven = @()
+    foreach ($key in @($Journal.Retries.Keys)) {
+        $entry = $Journal.Retries[$key]
+        if (-not ($entry -is [System.Collections.IDictionary]) -or -not $entry.Contains('Kept') -or -not $entry['Kept']) { continue }
+        # Not $lane: PowerShell names ignore case, so it would be $Lane, the parameter.
+        $entryLane = '?'
+        if ($Journal['SeenJobs'] -is [System.Collections.IDictionary] -and $Journal.SeenJobs.Contains($key) -and $null -ne $Journal.SeenJobs[$key] -and $Journal.SeenJobs[$key]['Lane']) { $entryLane = [string]$Journal.SeenJobs[$key]['Lane'] }
+        if ($entryLane -eq $Lane -or $entryLane -eq '?') { $forgiven += $key }
+    }
+    if ($forgiven.Count -eq 0) { return }
+    foreach ($key in $forgiven) { $Journal.Retries.Remove($key) }
+    $jobs = '{0} {1}' -f $forgiven.Count, $(if ($forgiven.Count -eq 1) { 'job' } else { 'jobs' })
+    & $Adapters.Log 'info' "health: retry strikes of $jobs on lane $Lane forgotten because a runner of that lane took its job; they are admitted again"
+}
+
+function Clear-JobRetries {
+    # Every job's retry strikes forgotten, so the jobs the host gave up on
+    # (at the cap, or still in back-off) are admitted again and count in
+    # the published queue. Only when the strikes span more than one lane:
+    # strikes that all fall on one lane, with the breaker tripped by them
+    # alone on an idle host, look like that lane's fault (a bad cache
+    # parent, a lane-specific bootstrap failure), and forgiving them would
+    # trip the breaker again at every half-open and hold the whole host
+    # not serving. That lane's job stays capped as before, until its run is
+    # cancelled or GitHub drops it. A job whose lane is no longer known
+    # (its seen-job record gone with the job's completion, or pruned) is
+    # not held against the rule: unknown is not "one lane". Nor are
+    # strikes on the lane whose runner just took its job: that claim
+    # proves that lane. -Force skips the rule: a loop restart is the
+    # repair. Logged either way, when there was something to weigh.
+    [CmdletBinding()]
+    param([Parameter(Mandatory)]$Journal, [Parameter(Mandatory)][hashtable]$Adapters, [string]$Reason = '', [switch]$Force, [string]$ClaimedLane = '')
+    if (-not ($Journal['Retries'] -is [System.Collections.IDictionary])) { return }
+    $keys = @($Journal.Retries.Keys)
+    if ($keys.Count -eq 0) { return }
+    $lanes = @($keys | ForEach-Object {
+        $seen = $null
+        if ($Journal['SeenJobs'] -is [System.Collections.IDictionary] -and $Journal.SeenJobs.Contains($_)) { $seen = $Journal.SeenJobs[$_] }
+        if ($null -ne $seen -and $seen['Lane']) { [string]$seen['Lane'] } else { '?' }
+    } | Sort-Object -Unique)
+    $jobs = '{0} {1}' -f $keys.Count, $(if ($keys.Count -eq 1) { 'job' } else { 'jobs' })
+    if (-not $Force -and $lanes.Count -lt 2 -and -not ($lanes -contains '?') -and -not ($ClaimedLane -and ($lanes -contains $ClaimedLane))) {
+        # Marked, so a later claim by that lane can forgive them (Clear-KeptRetries).
+        foreach ($key in $keys) { if ($Journal.Retries[$key] -is [System.Collections.IDictionary]) { $Journal.Retries[$key]['Kept'] = $true } }
+        & $Adapters.Log 'info' ("health: retry strikes of {0} kept: all on lane {1}, which looks like that lane's fault, not the host's" -f $jobs, $lanes[0])
+        return
+    }
+    $Journal.Retries.Clear()
+    & $Adapters.Log 'info' ("health: retry strikes of {0} forgotten (lanes {1}){2}; they are admitted again" -f $jobs, ($lanes -join ', '), $(if ($Reason) { " $Reason" } else { '' }))
 }
 
 function Reset-HostHealth {
@@ -283,8 +351,10 @@ function Reset-HostHealth {
 }
 
 function Update-HostHealth {
-    # Once a tick: the moment the cool-down passes is logged, once, so the
-    # log explains why the router started sending work home again.
+    # Once a tick, before admission: the moment the cool-down passes is
+    # logged, once, so the log explains why the router started sending
+    # work home again, and every job's retry strikes are forgotten so the
+    # jobs the host gave up on are the first probes (#1482).
     [CmdletBinding()]
     param([Parameter(Mandatory)]$Config, [Parameter(Mandatory)]$Journal, [Parameter(Mandatory)][hashtable]$Adapters, [Parameter(Mandatory)][datetimeoffset]$Now)
     # Read without creating the record: a journal that never tripped is left as it is.
@@ -294,6 +364,7 @@ function Update-HostHealth {
     if (-not (Test-HostCooledDown -Config $Config -Health $health -Now $Now)) { return }
     $health['HalfOpenAt'] = $Now.ToString('o')
     & $Adapters.Log 'info' "health: serving again after $(Format-BreakerCooldown -Config $Config) without a failure; the next failure trips it at once"
+    Clear-JobRetries -Journal $Journal -Adapters $Adapters -Reason 'after the cool-down'
 }
 
 function Test-VmExpired {
@@ -951,7 +1022,7 @@ function Complete-ActiveVm {
     # every tick, and that must not keep forgetting the failures beside it.
     if (-not [bool]$vm['Claimed']) {
         $vm['Claimed'] = $true
-        Register-HostSuccess -Journal $Journal -Adapters $Adapters
+        Register-HostSuccess -Journal $Journal -Adapters $Adapters -Lane ([string]$vm['Lane'])
     }
     if ($null -ne $job -and [string]$job.conclusion -eq 'success') {
         try { Register-GoldenAcceptance -Journal $Journal -Adapters $Adapters -Vm $vm } catch { & $Adapters.Log 'warn' "golden: $_" }
@@ -1096,7 +1167,7 @@ function Update-ActiveVm {
             if ($null -ne $runner -and $runner.busy) {
                 $vm.Claimed = $true
                 & $Adapters.Log 'info' "${Name}: claimed"
-                Register-HostSuccess -Journal $Journal -Adapters $Adapters
+                Register-HostSuccess -Journal $Journal -Adapters $Adapters -Lane ([string]$vm['Lane'])
                 return
             }
             $job = & $Adapters.GetJob ([int64]$vm.JobId)
@@ -1106,7 +1177,7 @@ function Update-ActiveVm {
                 # runner is already deleted and would otherwise look unclaimed).
                 $vm.Claimed = $true
                 & $Adapters.Log 'info' "${Name}: claimed (job $($job.status) on this runner)"
-                Register-HostSuccess -Journal $Journal -Adapters $Adapters
+                Register-HostSuccess -Journal $Journal -Adapters $Adapters -Lane ([string]$vm['Lane'])
                 return
             }
             if ($null -eq $job -or $job.status -ne 'queued') {
@@ -1226,7 +1297,7 @@ function Invoke-Admission {
             }
             if ($evict) {
                 & $Adapters.Log 'warn' "handoff: ${name} runs job $($job.JobId) of $repo ($why); forcing it off"
-                Register-HostSuccess -Journal $Journal -Adapters $Adapters
+                Register-HostSuccess -Journal $Journal -Adapters $Adapters -Lane ([string]$vm['Lane'])
                 Remove-ActiveVm -Config $Config -Journal $Journal -Adapters $Adapters -Name $name -Reason "runner taken by job $($job.JobId) of $repo ($why)" -Retry $false -Now $Now
                 continue
             }
@@ -1237,7 +1308,7 @@ function Invoke-Admission {
         if (-not $vm.Claimed) {
             $vm.Claimed = $true
             & $Adapters.Log 'info' "${name}: claimed (job $($job.JobId) in progress)"
-            Register-HostSuccess -Journal $Journal -Adapters $Adapters
+            Register-HostSuccess -Journal $Journal -Adapters $Adapters -Lane ([string]$vm['Lane'])
         }
     }
     foreach ($key in @($Journal.SeenJobs.Keys)) {
@@ -1304,11 +1375,13 @@ function Invoke-OrchestratorTick {
         try { Update-ActiveVm -Config $Config -Journal $Journal -Adapters $Adapters -Name $name -Now $Now }
         catch { & $Adapters.Log 'error' "${name}: $_" }
     }
+    # The breaker's half-open comes before admission: the jobs it gave up
+    # on are admitted in the same tick.
+    try { Update-HostHealth -Config $Config -Journal $Journal -Adapters $Adapters -Now $Now }
+    catch { & $Adapters.Log 'error' "health: $_" }
     $queued = $null
     try { $queued = @(Invoke-Admission -Config $Config -Journal $Journal -Adapters $Adapters -Now $Now) }
     catch { & $Adapters.Log 'error' "admission: $_" }
-    try { Update-HostHealth -Config $Config -Journal $Journal -Adapters $Adapters -Now $Now }
-    catch { & $Adapters.Log 'error' "health: $_" }
     if ($null -ne $queued) {
         try { Publish-HomeState -Journal $Journal -Adapters $Adapters -State (Get-PublishedState -Config $Config -Journal $Journal -Queued $queued -Now $Now) -Now $Now }
         catch { Write-PublishFailure -Journal $Journal -Adapters $Adapters -Now $Now -Level 'error' -Failure $_ }
@@ -1357,16 +1430,22 @@ function Invoke-StartupSweep {
     foreach ($name in @($Journal.Vms.Keys)) {
         if (-not $kept.ContainsKey($name)) { $Journal.Vms.Remove($name) }
     }
+    # The breaker: a restart is what follows a repair, so the failures in a
+    # row are forgotten and the next state says serving. After a trip the
+    # retry strikes go too, whatever their lanes, even with a VM kept (the
+    # table is otherwise cleared only when nothing is kept, below): the jobs
+    # the host gave up on must not wait on a half-open that a reset never
+    # brings. Weighed before that clearing, so the log names the lanes.
+    $health = Get-HostHealth -Journal $Journal
+    $failures = [int]$health['Failures']
+    if ($failures -gt 0) { & $Adapters.Log 'info' "health: $failures failures in a row forgotten at start" }
+    if ($null -ne $health['TrippedAt']) { Clear-JobRetries -Journal $Journal -Adapters $Adapters -Reason 'at start' -Force }
+    Reset-HostHealth -Journal $Journal
     if ($kept.Count -eq 0) {
         $Journal.Retries = @{}
         $Journal.SeenJobs = @{}
     }
     $Journal['LogsPrunedOn'] = $null
-    # The breaker: a restart is what follows a repair, so the failures in a
-    # row are forgotten and the next state says serving.
-    $failures = [int](Get-HostHealth -Journal $Journal)['Failures']
-    if ($failures -gt 0) { & $Adapters.Log 'info' "health: $failures failures in a row forgotten at start" }
-    Reset-HostHealth -Journal $Journal
 }
 
 function Select-SlateKvpItems {
@@ -1489,7 +1568,7 @@ function Set-LocalUserRights {
 }
 
 Export-ModuleMember -Function Get-LaneFromLabels, New-RunnerName, Split-KvpChunks, Join-KvpChunks,
-    ConvertTo-DateTimeOffset, Select-QueuedLaneJobs, Select-HostRunnerJobs, Select-JobsToAdmit, Register-JobRetry, Get-HostHealth, Test-HostServing, Register-HostFailure, Register-HostSuccess, Reset-HostHealth, Update-HostHealth, Test-VmExpired, Get-StaleRunnerNames, Test-CommitEligible, Resolve-RunnerJob, Test-IPv4InPrefix, Get-CiHostConfig, New-Journal, Read-Journal, Write-Journal, Write-CiLog,
+    ConvertTo-DateTimeOffset, Select-QueuedLaneJobs, Select-HostRunnerJobs, Select-JobsToAdmit, Register-JobRetry, Get-HostHealth, Test-HostServing, Register-HostFailure, Register-HostSuccess, Reset-HostHealth, Update-HostHealth, Clear-JobRetries, Clear-KeptRetries, Test-VmExpired, Get-StaleRunnerNames, Test-CommitEligible, Resolve-RunnerJob, Test-IPv4InPrefix, Get-CiHostConfig, New-Journal, Read-Journal, Write-Journal, Write-CiLog,
     Get-FreeSlots, Remove-ActiveVm, Test-SiblingRunning, Complete-ActiveVm, Update-ActiveVm, Invoke-Admission, Invoke-OrchestratorTick, Invoke-StartupSweep, Select-SlateKvpItems,
     Get-PublishedState, Publish-HomeState, Get-RunRepository, Test-TrustedRun, Get-OrchestratorLogDate, Get-OrchestratorLogName, Get-ExpiredLogNames, Invoke-LogPrune, Register-GoldenAcceptance, Test-GoldenPrevRemovable,
     Get-CiHostPaths, Read-JournalSnapshot, Remove-SealedFile,
