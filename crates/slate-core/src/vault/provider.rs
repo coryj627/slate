@@ -87,7 +87,10 @@ pub trait VaultProvider: Send + Sync {
     }
 
     /// Delete a file or directory. Implementations should move-to-trash
-    /// where the platform supports it.
+    /// where the platform supports it. A refusal of the path itself (an
+    /// invalid spelling, or a folder on it that is a link or a file, or that
+    /// moved, since it was checked) is `VaultError::InvalidPath` and moves
+    /// nothing; the batch Trash reports such an item untrashed (#1450).
     fn delete(&self, relative: &str) -> Result<(), VaultError>;
 
     /// Snapshot the entry and all descendants for later Trash confirmation.
