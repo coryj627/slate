@@ -1470,18 +1470,15 @@ impl VaultProvider for FsVaultProvider {
             let root = pinned_root::PinnedRoot::open(&self.root)?;
             let item = root.end(self.vault_relative(&path, relative)?, relative, false)?;
 
-            // A link whose target is truly absent (following it fails with
-            // ENOENT or ENOTDIR) leaves nothing recoverable but the link, so
-            // it is unlinked inside its pinned parent, where a swapped folder
-            // cannot redirect it. Every other link goes to the Trash below,
-            // which moves the link itself: one whose target Slate cannot
-            // reach, a cycle, any failure that does not prove the target
-            // absent (#1477). The look does not follow the leaf, so a broken
-            // symlink still counts as present, and its io::Error keeps
-            // permission-denied (etc.) from being masked as NotFound.
-            if item.is_dangling_link().map_err(VaultError::Io)? {
-                return item.unlink().map_err(VaultError::Io);
-            }
+            // Every entry goes to the Trash, and a symbolic link goes as the
+            // link itself whether or not its target resolves, so Move to Trash
+            // never deletes for good (#1495; NSFileManager and trash-rs both
+            // move a dangling link as the link, and Put Back restores it). The
+            // look does not follow the leaf, so a missing entry is NotFound
+            // and never reaches the Trash, a broken symlink still counts as
+            // present, and its io::Error keeps permission-denied (etc.) from
+            // being masked as NotFound.
+            item.require_present().map_err(VaultError::Io)?;
 
             let handed = super::trash_handoff::pinned_path(
                 root.descriptor(),
@@ -1505,11 +1502,11 @@ impl VaultProvider for FsVaultProvider {
             // `symlink_metadata` does not follow the leaf, so a broken symlink
             // still passes; the raw io::Error keeps its kind.
             let meta = handed.symlink_metadata().map_err(VaultError::Io)?;
-            // The Unix arm's rule (#1477): only a link whose target the
-            // system reports absent is unlinked (the Recycle Bin may reject
-            // one, and nothing but the link would reach it). A link whose
+            // Windows alone still unlinks a link whose target the system
+            // reports absent: the Recycle Bin may reject one, and nobody has
+            // checked (#1499; macOS and Linux trash it, #1495). A link whose
             // target Slate cannot open, a loop, or any other failure goes to
-            // the Recycle Bin as the link.
+            // the Recycle Bin as the link (#1477).
             if meta.file_type().is_symlink()
                 && fs::metadata(&handed)
                     .is_err_and(|error| super::trash_handoff::link_target_is_absent(&error))

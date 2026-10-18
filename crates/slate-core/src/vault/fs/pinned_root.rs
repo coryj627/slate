@@ -382,41 +382,12 @@ impl RenameEnd<'_> {
         &self.leaf
     }
 
-    /// Whether the entry here is a symbolic link whose target is truly
-    /// absent: following it fails with `ENOENT` or `ENOTDIR`
-    /// (`trash_handoff::link_target_is_absent`, #1477). A link whose target
-    /// fails to resolve any other way (`EACCES`, `ELOOP`, …) is not dangling:
-    /// `delete` hands it to the Trash. Its own look never follows the leaf, so
-    /// a missing entry is `NotFound` and a broken link still counts as
-    /// present (#1450).
-    pub(super) fn is_dangling_link(&self) -> io::Result<bool> {
-        use std::os::fd::AsRawFd as _;
-
-        if (lstat_mode(&self.parent, &self.leaf)? & libc::S_IFMT) != libc::S_IFLNK {
-            return Ok(false);
-        }
-        let mut stat = std::mem::MaybeUninit::<libc::stat>::uninit();
-        // SAFETY: as in `lstat_mode`, but following the leaf to its target,
-        // resolved relative to the pinned parent.
-        let result = unsafe {
-            libc::fstatat(
-                self.parent.as_raw_fd(),
-                self.leaf.as_ptr(),
-                stat.as_mut_ptr(),
-                0,
-            )
-        };
-        Ok(os_result(result)
-            .is_err_and(|error| crate::vault::trash_handoff::link_target_is_absent(&error)))
-    }
-
-    /// Remove the (non-folder) entry here from its pinned parent.
-    pub(super) fn unlink(&self) -> io::Result<()> {
-        use std::os::fd::AsRawFd as _;
-        // SAFETY: the parent is an open directory and the leaf a
-        // NUL-terminated single component that outlives the call; flags 0
-        // removes a non-directory entry only.
-        os_result(unsafe { libc::unlinkat(self.parent.as_raw_fd(), self.leaf.as_ptr(), 0) })
+    /// That an entry of any kind is here, looked at without following a final
+    /// link: `NotFound`, with the system's own error, when nothing is, so
+    /// `delete` never hands the Trash a missing item. A symbolic link counts
+    /// as present whether or not its target resolves (#1450, #1495).
+    pub(super) fn require_present(&self) -> io::Result<()> {
+        lstat_mode(&self.parent, &self.leaf).map(|_| ())
     }
 }
 

@@ -50,10 +50,10 @@
 //!   Bin on Windows, the freedesktop Trash on Linux). The path it hands
 //!   over is derived from the pinned parent of a no-follow walk and must
 //!   lie beneath the vault root (`trash_handoff`, #1450). A symbolic
-//!   link whose target is truly absent (following it fails with `ENOENT`
-//!   or `ENOTDIR`, or Windows' not-found codes) is unlinked instead; every
-//!   other link, one whose target Slate cannot reach or a cycle included,
-//!   goes to the Trash as the link (#1477). On platforms
+//!   link goes to the Trash as the link itself, whether or not its target
+//!   resolves (#1477, #1495), except that Windows still unlinks a link whose
+//!   target is truly absent until the Recycle Bin is checked with one
+//!   (#1499). On platforms
 //!   without trash support the call returns `VaultError::Trash`; the
 //!   engine does not silently fall back to permanent deletion. Tests
 //!   trash into scratch bins, never the Trash of whoever runs them
