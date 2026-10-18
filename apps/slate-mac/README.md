@@ -24,8 +24,9 @@ The script:
 2. Runs `uniffi-bindgen` to emit Swift bindings into `target/generated/swift/`.
 3. Copies the generated `slate_uniffi.swift` and `slate_uniffiFFI.h` into this package's `Sources/` directories.
 4. Runs `swift build` against this package, linking the executable to the Rust dylib.
-5. Runs `a11y-check` (if installed) over `Sources/SlateMac` so accessibility regressions surface locally rather than waiting for CI.
-6. Optionally launches the resulting binary with `DYLD_LIBRARY_PATH` set (pass `--run`).
+5. Fails the build if the `SlateMac` executable records macOS SDK 27 or later (`scripts/check_mac_sdk.py`; with `--bundle`, the bundle's copy too). From SDK 27 SwiftUI draws the reading view's text itself and VoiceOver can no longer press its links; [#1460](https://github.com/coryj627/slate/issues/1460) tracks the fix that must land first. CI's Swift Tests lane runs this step.
+6. Runs `a11y-check` (if installed) over `Sources/SlateMac` so accessibility regressions surface locally rather than waiting for CI.
+7. Optionally launches the resulting binary with `DYLD_LIBRARY_PATH` set (pass `--run`).
 
 After the script succeeds, the executable lives at `.build/debug/SlateMac` inside this package. Launch it from the script or directly:
 
@@ -59,7 +60,7 @@ brew install --HEAD cvs-health/ios-swiftui-accessibility-techniques/a11y-check
 
 ## Why a SwiftPM executable and not an Xcode project
 
-Bootstrap simplicity. SwiftPM with a single `executableTarget` + `@main App` gives a real SwiftUI window without `.xcodeproj` bookkeeping. When the project needs proper distribution — code signing, sandbox entitlements, `.app` bundle metadata, Info.plist — it'll graduate to an Xcode project alongside this one (or replacing it).
+Bootstrap simplicity. SwiftPM with a single `executableTarget` + `@main App` gives a real SwiftUI window without `.xcodeproj` bookkeeping. When the project needs proper distribution — code signing, sandbox entitlements, `.app` bundle metadata, Info.plist — it'll graduate to an Xcode project alongside this one (or replacing it). Read [#1460](https://github.com/coryj627/slate/issues/1460) first: an Xcode project would record the SDK it builds with, and the SDK tripwire above fails the build at SDK 27 or later until #1460's fix lands, so the move carries that check with it.
 
 ## Consuming the FFI from Swift
 

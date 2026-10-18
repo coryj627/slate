@@ -156,6 +156,16 @@ fails if the image's `a11y-check.ref` disagrees), and the warm image's
 `https://github.com/coryj627/slate` or actions/checkout discards the warm
 build products on every job.
 
+An Xcode bump can change the SDK the SlateMac executable records, and from
+SDK 27 VoiceOver can no longer press a reading-view link (#1460).
+`scripts/build-mac-app.sh` runs the SDK tripwire (`scripts/check_mac_sdk.py`)
+after every `swift build`, so the swift-tests build step, and the warm image
+build, fail when SlateMac records SDK 27 or later or when its SDK cannot be
+read. On 2026-10-18 Xcode 27.1 (27A9275) recorded `sdk 15.0`: SwiftPM's
+default build records the deployment target, while `--build-system native`
+records the real SDK (`sdk 27.0`). A red tripwire after a bump is not an image
+fault; its message says what must land first.
+
 Proving the fallback: `runnerctl pause`, push to a PR, watch its mac jobs run
 and pass on Namespace; `runnerctl resume`, push again, watch them run on the
 Studio (the route job's log names the side). The a11y workflow's analysis
