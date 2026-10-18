@@ -185,6 +185,21 @@
         "reason": "The Mac sentence promises Command-O and Open Vault focus. Windows uses native welcome controls and their focus/name semantics; do not post the platform-specific Mac sentence.",
         "decision": "docs/plans/38_notification_dispatcher_contracts.md",
         "status": "recorded"
+      },
+      "NothingToActivateAtCursor": {
+        "reason": "#1465: Windows' Ctrl+Enter with nothing actionable under the caret returns false from EditorInteractionCoordinator.ActivateAt and speaks nothing. The mac activate-at-cursor verb (#1431) speaks this core sentence instead; adopting it for the Windows keyboard origin is proposed there.",
+        "decision": "docs/plans/38_notification_dispatcher_contracts.md",
+        "status": "proposed"
+      },
+      "TaskToggled": {
+        "reason": "#1467: Windows composes these words host-side (WorkspaceTabViewModel.PublishTaskToggleThroughTab, WorkspaceViewModel.TaskToggleCompletion, TasksReviewViewModel), as HostComposed residue. The mac editor's activate-at-cursor verb (#1431) posts these core events; moving the Windows sites onto them is proposed there.",
+        "decision": "docs/plans/38_notification_dispatcher_contracts.md",
+        "status": "proposed"
+      },
+      "TaskToggleFailed": {
+        "reason": "#1467: Windows composes these words host-side (WorkspaceTabViewModel.PublishTaskToggleThroughTab, WorkspaceViewModel.TaskToggleCompletion, TasksReviewViewModel), as HostComposed residue. The mac editor's activate-at-cursor verb (#1431) posts these core events; moving the Windows sites onto them is proposed there.",
+        "decision": "docs/plans/38_notification_dispatcher_contracts.md",
+        "status": "proposed"
       }
     },
     "Mac": {

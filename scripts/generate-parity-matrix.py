@@ -263,6 +263,7 @@ KEY_WORD = {
     "]": "Right Bracket", "-": "Minus", "=": "Equals", "`": "Backtick",
     " ": "Space",
     "↑": "Up Arrow", "↓": "Down Arrow", "←": "Left Arrow", "→": "Right Arrow",
+    "↩": "Return",
 }
 
 

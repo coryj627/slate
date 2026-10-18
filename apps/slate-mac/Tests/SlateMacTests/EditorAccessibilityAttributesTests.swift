@@ -53,15 +53,17 @@ final class EditorAccessibilityAttributesTests: XCTestCase {
         XCTAssertEqual(facets(.image), Facets(styleName: "Image", isLink: true))
     }
 
-    /// The spec's map (PR 17): a tag is a style, not a link. The Windows
-    /// peer also projects tags and citations as Hyperlinks (E-9) because
-    /// they activate there; the mac editor has no activation for any span.
-    func testTagIsStyledTagWithoutALink() {
-        XCTAssertEqual(facets(.tag), Facets(styleName: "Tag"))
+    /// Tags and citations are links (#1431): E-9 projects them as
+    /// Hyperlinks on Windows because Ctrl+Enter activates them, and the mac
+    /// editor now activates the same six kinds (⌘↩, the palette row, and
+    /// VoiceOver's press). PR 17 mapped them as styles while nothing
+    /// activated them.
+    func testTagIsALinkStyledTag() {
+        XCTAssertEqual(facets(.tag), Facets(styleName: "Tag", isLink: true))
     }
 
-    func testCitationIsStyledCitationWithoutALink() {
-        XCTAssertEqual(facets(.citation), Facets(styleName: "Citation"))
+    func testCitationIsALinkStyledCitation() {
+        XCTAssertEqual(facets(.citation), Facets(styleName: "Citation", isLink: true))
     }
 
     func testInlineCodeIsStyledCode() {
@@ -309,7 +311,10 @@ final class EditorAccessibilityAttributesTests: XCTestCase {
         XCTAssertEqual(custom("Heading two"), ["Heading 2"])
         XCTAssertEqual(custom("Quoted heading"), ["Heading 2"], "a heading inside a quote keeps its level")
         XCTAssertEqual(custom("Quoted text"), ["Quote"])
-        for marker in ["[[Target]]", "![[Target]]", "[Website]", "![Picture]", "[quoted link]"] {
+        for marker in [
+            "[[Target]]", "![[Target]]", "#project", "[@smith2020]", "[Website]", "![Picture]",
+            "[quoted link]",
+        ] {
             XCTAssertTrue(isLink(marker), "\(marker) is a link")
         }
         XCTAssertEqual(custom("[[Target]]"), ["Wikilink"])
@@ -317,8 +322,6 @@ final class EditorAccessibilityAttributesTests: XCTestCase {
         XCTAssertEqual(custom("[Website]"), ["Link"])
         XCTAssertEqual(custom("Picture"), ["Image"], "an image is a link of its own kind")
         XCTAssertEqual(custom("[quoted link]"), ["Quote", "Link"], "a link in a quote keeps the quote")
-        XCTAssertFalse(isLink("#project"))
-        XCTAssertFalse(isLink("[@smith2020]"))
         XCTAssertEqual(custom("#project"), ["Tag"])
         XCTAssertEqual(custom("[@smith2020]"), ["Citation"])
         XCTAssertEqual(custom("inline code"), ["Code"])
@@ -465,8 +468,8 @@ final class EditorAccessibilityAttributesTests: XCTestCase {
         XCTAssertEqual(
             labels,
             [
-                "[[Target]]", "![[Target]]", "[Website](https://example.org)", "![Picture](picture.png)",
-                "[quoted link](https://example.org/quote)",
+                "[[Target]]", "![[Target]]", "#project", "[@smith2020]", "[Website](https://example.org)",
+                "![Picture](picture.png)", "[quoted link](https://example.org/quote)",
             ])
         XCTAssertEqual(search(.previous, from: nil)?.customLabel, "[quoted link](https://example.org/quote)")
         XCTAssertEqual(search(.next, from: nil, filter: "website")?.customLabel, "[Website](https://example.org)")
