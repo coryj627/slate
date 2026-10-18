@@ -2458,6 +2458,12 @@ public sealed partial class RescanTests
                 return Task.FromException<T>(fault);
             }
 
+            // Plan 43 PR 20b: the open's own park (WhileOpening), at one of two
+            // timings — before its work, so the open is busy and its walk has
+            // not begun (WhileOpeningBeforeItsScan), or after the work, so the
+            // scan and the listing are done and the workspace is not yet
+            // built. Either way the fact's callback runs on its own thread
+            // while the open waits.
             if (call == 1 && _parkTheOpen)
             {
                 return Task.Run(() =>
