@@ -265,13 +265,31 @@ function Register-HostFailure {
 
 function Register-HostSuccess {
     # A runner took its job: provisioning, boot, handoff, network and
-    # registration all worked, so the failures before it are forgotten.
+    # registration all worked, so the failures before it are forgotten,
+    # and so are the retry strikes of every job if the breaker had tripped:
+    # those strikes were the host's doing, and the jobs it gave up on must
+    # not stay stranded once it serves again (#1482). A host that never
+    # tripped keeps a job's strikes: with other lanes claiming, three
+    # strikes mean that job or its lane, not the host.
     [CmdletBinding()]
     param([Parameter(Mandatory)]$Journal, [Parameter(Mandatory)][hashtable]$Adapters)
     $health = Get-HostHealth -Journal $Journal
     $failures = [int]$health['Failures']
     if ($failures -gt 0) { & $Adapters.Log 'info' "health: a runner took its job; $failures failures in a row forgotten" }
+    if ($null -ne $health['TrippedAt']) { Clear-JobRetries -Journal $Journal -Adapters $Adapters }
     Reset-HostHealth -Journal $Journal
+}
+
+function Clear-JobRetries {
+    # Every job's retry strikes forgotten, so the jobs the host gave up on
+    # (at the cap, or still in back-off) are admitted again and count in
+    # the published queue. Logged when there was something to forget.
+    [CmdletBinding()]
+    param([Parameter(Mandatory)]$Journal, [Parameter(Mandatory)][hashtable]$Adapters)
+    $struck = @($Journal.Retries.Keys).Count
+    if ($struck -eq 0) { return }
+    $Journal.Retries.Clear()
+    & $Adapters.Log 'info' "health: retry strikes of $struck jobs forgotten; they are admitted again"
 }
 
 function Reset-HostHealth {
@@ -283,8 +301,10 @@ function Reset-HostHealth {
 }
 
 function Update-HostHealth {
-    # Once a tick: the moment the cool-down passes is logged, once, so the
-    # log explains why the router started sending work home again.
+    # Once a tick, before admission: the moment the cool-down passes is
+    # logged, once, so the log explains why the router started sending
+    # work home again, and every job's retry strikes are forgotten so the
+    # jobs the host gave up on are the first probes (#1482).
     [CmdletBinding()]
     param([Parameter(Mandatory)]$Config, [Parameter(Mandatory)]$Journal, [Parameter(Mandatory)][hashtable]$Adapters, [Parameter(Mandatory)][datetimeoffset]$Now)
     # Read without creating the record: a journal that never tripped is left as it is.
@@ -294,6 +314,7 @@ function Update-HostHealth {
     if (-not (Test-HostCooledDown -Config $Config -Health $health -Now $Now)) { return }
     $health['HalfOpenAt'] = $Now.ToString('o')
     & $Adapters.Log 'info' "health: serving again after $(Format-BreakerCooldown -Config $Config) without a failure; the next failure trips it at once"
+    Clear-JobRetries -Journal $Journal -Adapters $Adapters
 }
 
 function Test-VmExpired {
@@ -1304,11 +1325,13 @@ function Invoke-OrchestratorTick {
         try { Update-ActiveVm -Config $Config -Journal $Journal -Adapters $Adapters -Name $name -Now $Now }
         catch { & $Adapters.Log 'error' "${name}: $_" }
     }
+    # The breaker's half-open comes before admission: the jobs it gave up
+    # on are admitted in the same tick.
+    try { Update-HostHealth -Config $Config -Journal $Journal -Adapters $Adapters -Now $Now }
+    catch { & $Adapters.Log 'error' "health: $_" }
     $queued = $null
     try { $queued = @(Invoke-Admission -Config $Config -Journal $Journal -Adapters $Adapters -Now $Now) }
     catch { & $Adapters.Log 'error' "admission: $_" }
-    try { Update-HostHealth -Config $Config -Journal $Journal -Adapters $Adapters -Now $Now }
-    catch { & $Adapters.Log 'error' "health: $_" }
     if ($null -ne $queued) {
         try { Publish-HomeState -Journal $Journal -Adapters $Adapters -State (Get-PublishedState -Config $Config -Journal $Journal -Queued $queued -Now $Now) -Now $Now }
         catch { Write-PublishFailure -Journal $Journal -Adapters $Adapters -Now $Now -Level 'error' -Failure $_ }
@@ -1489,7 +1512,7 @@ function Set-LocalUserRights {
 }
 
 Export-ModuleMember -Function Get-LaneFromLabels, New-RunnerName, Split-KvpChunks, Join-KvpChunks,
-    ConvertTo-DateTimeOffset, Select-QueuedLaneJobs, Select-HostRunnerJobs, Select-JobsToAdmit, Register-JobRetry, Get-HostHealth, Test-HostServing, Register-HostFailure, Register-HostSuccess, Reset-HostHealth, Update-HostHealth, Test-VmExpired, Get-StaleRunnerNames, Test-CommitEligible, Resolve-RunnerJob, Test-IPv4InPrefix, Get-CiHostConfig, New-Journal, Read-Journal, Write-Journal, Write-CiLog,
+    ConvertTo-DateTimeOffset, Select-QueuedLaneJobs, Select-HostRunnerJobs, Select-JobsToAdmit, Register-JobRetry, Get-HostHealth, Test-HostServing, Register-HostFailure, Register-HostSuccess, Reset-HostHealth, Update-HostHealth, Clear-JobRetries, Test-VmExpired, Get-StaleRunnerNames, Test-CommitEligible, Resolve-RunnerJob, Test-IPv4InPrefix, Get-CiHostConfig, New-Journal, Read-Journal, Write-Journal, Write-CiLog,
     Get-FreeSlots, Remove-ActiveVm, Test-SiblingRunning, Complete-ActiveVm, Update-ActiveVm, Invoke-Admission, Invoke-OrchestratorTick, Invoke-StartupSweep, Select-SlateKvpItems,
     Get-PublishedState, Publish-HomeState, Get-RunRepository, Test-TrustedRun, Get-OrchestratorLogDate, Get-OrchestratorLogName, Get-ExpiredLogNames, Invoke-LogPrune, Register-GoldenAcceptance, Test-GoldenPrevRemovable,
     Get-CiHostPaths, Read-JournalSnapshot, Remove-SealedFile,

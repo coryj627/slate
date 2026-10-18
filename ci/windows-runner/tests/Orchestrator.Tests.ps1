@@ -1445,6 +1445,59 @@ Context 'health breaker' {
         Invoke-OrchestratorTick -Config $config -Journal $journal -Adapters $adapters -Now $t0.AddSeconds(20)
         $journal.PublishedState | Should -Match '"serving":true'
     }
+    It 'forgets every job''s retry strikes when the breaker half-opens, and admits the jobs it gave up on as the probes' {
+        # Three jobs strike three times each while the host fails (each
+        # strike restarts the cool-down), so all three reach the cap.
+        & $script:tripNow
+        Invoke-OrchestratorTick -Config $config -Journal $journal -Adapters $adapters -Now $t0.AddSeconds(610)
+        Invoke-OrchestratorTick -Config $config -Journal $journal -Adapters $adapters -Now $t0.AddSeconds(620)
+        Invoke-OrchestratorTick -Config $config -Journal $journal -Adapters $adapters -Now $t0.AddSeconds(1220)
+        Invoke-OrchestratorTick -Config $config -Journal $journal -Adapters $adapters -Now $t0.AddSeconds(1230)
+        foreach ($id in '1', '2', '3') { $journal.Retries[$id].Count | Should -Be 3 -Because "job $id" }
+        (Get-Calls 'NewVm').Count | Should -Be 9
+        # Capped: nothing admitted and nothing published as queued, even
+        # though the host works again and GitHub still lists the jobs.
+        $adapters.NewVm = $workingNewVm
+        Invoke-OrchestratorTick -Config $config -Journal $journal -Adapters $adapters -Now $t0.AddSeconds(1240)
+        (Get-Calls 'NewVm').Count | Should -Be 9
+        $journal.PublishedState | Should -Match '"serving":false,"slots":2,"running":\[\],"queued":\[\]'
+        # The cool-down from the last failure passes: the strikes are
+        # forgotten in the same tick, two jobs start and the third is queued.
+        Invoke-OrchestratorTick -Config $config -Journal $journal -Adapters $adapters -Now $t0.AddSeconds(1230 + 900)
+        ($logs -join "`n") | Should -Match '\[info\] health: serving again after 15 min without a failure'
+        ($logs -join "`n") | Should -Match '\[info\] health: retry strikes of 3 jobs forgotten; they are admitted again'
+        $journal.Retries.Count | Should -Be 0
+        (Get-Calls 'NewVm').Count | Should -Be 11
+        $journal.Vms.Count | Should -Be 2
+        $journal.PublishedState | Should -Match '"serving":true,"slots":2,"running":\[\{"lane":"app","since":"[^"]+"\},\{"lane":"rust","since":"[^"]+"\}\],"queued":\[\{"lane":"model"'
+    }
+    It 'forgets the strikes when a runner takes its job after a trip, so a struck job is admitted again at once' {
+        & $script:tripNow
+        $adapters.NewVm = $workingNewVm
+        $world.Queued = @((New-QueuedJob 1 10 'app'), (New-QueuedJob 2 11 'rust'), (New-QueuedJob 3 12 'model'), (New-QueuedJob 4 13 'app'))
+        Invoke-OrchestratorTick -Config $config -Journal $journal -Adapters $adapters -Now $t0.AddSeconds(20)     # job 4 provisioned (1-3 in back-off)
+        Invoke-OrchestratorTick -Config $config -Journal $journal -Adapters $adapters -Now $t0.AddSeconds(30)     # handed off
+        (Get-Calls 'NewVm').Count | Should -Be 4
+        $world.Runner = [pscustomobject]@{ status = 'online'; busy = $true }
+        Invoke-OrchestratorTick -Config $config -Journal $journal -Adapters $adapters -Now $t0.AddSeconds(30 + 310)
+        ($logs -join "`n") | Should -Match 'health: a runner took its job; 3 failures in a row forgotten'
+        ($logs -join "`n") | Should -Match 'health: retry strikes of 3 jobs forgotten; they are admitted again'
+        $journal.Retries.Count | Should -Be 0
+        # Job 1 was in back-off until t0+600; it starts in this very tick.
+        (Get-Calls 'NewVm').Count | Should -Be 5
+        $journal.Vms.Count | Should -Be 2
+    }
+    It 'keeps a job''s strikes when a runner takes its job on a host that never tripped' {
+        # Two strikes do not trip the breaker; a claim then says nothing
+        # about those jobs, which keep their back-off and their cap.
+        $null = & $script:twoFailuresThenAVm
+        $world.Runner = [pscustomobject]@{ status = 'online'; busy = $true }
+        Invoke-OrchestratorTick -Config $config -Journal $journal -Adapters $adapters -Now $t0.AddSeconds(20 + 310)
+        $journal.Health.Failures | Should -Be 0
+        $journal.Retries['1'].Count | Should -Be 1
+        $journal.Retries['2'].Count | Should -Be 1
+        ($logs -join "`n") | Should -Not -Match 'retry strikes'
+    }
     It 'reads an older journal without a health record as healthy, and leaves it alone' {
         $journal.Remove('Health')
         Invoke-OrchestratorTick -Config $config -Journal $journal -Adapters $adapters -Now $t0

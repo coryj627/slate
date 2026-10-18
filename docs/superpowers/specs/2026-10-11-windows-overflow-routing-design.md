@@ -522,9 +522,12 @@ optional API reads; nothing in `namespace` mode.
   row trips the breaker; the next state says not serving and the log
   says why once; the jobs already queued home keep their retries, and a
   failure among them restarts the cool-down quietly. Fifteen minutes
-  after the last failure the state says serving again and the next run
-  routes as usual: its home lanes are the probe, and a failure trips the
-  breaker at once. A loop restart resets it.
+  after the last failure the state says serving again, every job's retry
+  strikes are forgotten (they were the host's doing), and the jobs the
+  host gave up on are admitted first; the next run routes as usual and
+  its home lanes probe too, and a failure trips the breaker at once. A
+  runner taking its job after a trip forgets the strikes the same way. A
+  loop restart resets it.
 - **Pool size**: published by the host, so there is nothing to keep in
   step; the router only clamps absurd values.
 - **Partial re-runs** always take the vendor (OR-D6); the runbook states

@@ -1521,6 +1521,18 @@ and `"status": "401"`. Rotate it before then.
   window's name in the message is a new one: turn it off beside OneDrive
   (the offline edit in `build-golden.ps1`, or phase 2 for a per-user
   switch), add it to the build's checks, and rebuild.
+- **`<vm>: provisioning failed: 'MicrosoftWindows' matches none of the secure boot templates.`**
+  Hyper-V's management service answered the firmware step's template
+  lookup with an empty list. Seen on 2026-10-17 from 18:09 to 04:38 local
+  the next day: every VM failed the same way, 72 in a row, with no loop
+  restart, no host reboot and no Hyper-V event on either side, and it
+  cleared by itself. The breaker routes every lane away meanwhile and the
+  jobs resume once it serves again. In the elevated window,
+  `(Get-VMHost).SecureBootTemplates` should list `MicrosoftWindows`,
+  `MicrosoftUEFICertificateAuthority` and `OpenSourceShieldedVM`; if it
+  lists nothing, restart the Hyper-V Virtual Machine Management service
+  (`Restart-Service vmms`, which does not stop running VMs) and look at
+  the `Microsoft-Windows-Hyper-V-VMMS-Admin` log around the first failure.
 - **`startup: No such host is known` every 30 s.** The host cannot
   resolve `api.github.com`: no network, most often after a reboot while
   the LAN adapter has no link yet. The loop exits and is relaunched each
@@ -1702,7 +1714,13 @@ and `"status": "401"`. Rotate it before then.
   The host publishes `serving: false`, so in `home` mode the router sends
   every lane to Namespace (`home-only` ignores the state); the jobs
   already queued home keep their retries, and a failure among them
-  restarts the cool-down without another line. The cause is in the lines
+  restarts the cool-down without another line. A job that reaches its
+  retry cap while the host fails is not stranded: once the state says
+  serving again, or a runner takes its job, every job's retry strikes are
+  forgotten (`health: retry strikes of N jobs forgotten; they are admitted
+  again`) and the jobs the host gave up on run first; on a host that
+  keeps failing they retry in cycles of about three quarters of an hour.
+  The cause is in the lines
   just before it (Hyper-V, the golden or cache disks, the NAT, the PAT's
   runner permission). Fix it and restart the loop (Disable, Stop,
   Enable): the restart forgets the failures and logs
