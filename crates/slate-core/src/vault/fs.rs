@@ -19,6 +19,7 @@ use std::{fs, io};
 use crate::VaultError;
 
 use super::provider::{DirEntry, EntryKind, FileEventSink, FileStat, VaultProvider, WatchHandle};
+use super::trash_handoff::{PlatformTrash, SystemTrash};
 
 #[cfg(unix)]
 mod pinned_root;
@@ -27,6 +28,8 @@ mod pinned_root;
 #[derive(Debug)]
 pub struct FsVaultProvider {
     root: PathBuf,
+    /// The system Trash call `delete` hands the pinned path to (#1450).
+    trash: Arc<dyn SystemTrash>,
 }
 
 /// A mutation destination whose containing directory is held open for the
@@ -77,7 +80,20 @@ impl FsVaultProvider {
     pub fn new(root: PathBuf) -> Self {
         #[cfg(windows)]
         let root = windows_extended_path(&root);
-        Self { root }
+        Self {
+            root,
+            trash: Arc::new(PlatformTrash),
+        }
+    }
+
+    /// A provider whose Trash handoff goes to `trash` instead of the system
+    /// Trash, so facts about the handoff never touch a real Trash.
+    #[cfg(test)]
+    pub(crate) fn with_system_trash(root: PathBuf, trash: Arc<dyn SystemTrash>) -> Self {
+        Self {
+            trash,
+            ..Self::new(root)
+        }
     }
 
     /// Read the file at `relative` and return its canonical content
@@ -1022,28 +1038,69 @@ impl VaultProvider for FsVaultProvider {
         )
     }
 
+    /// Move an entry to the system Trash. The path handed to the Trash is
+    /// derived from the pinned parent of a no-follow walk, never rebuilt
+    /// lexically (#1450): a folder on the path that is a link or a file, or
+    /// that moved out of the vault since the last check, refuses here with
+    /// `InvalidPath` instead of redirecting the Trash to an object outside the
+    /// vault. Nothing is mutated by a refusal. `trash_handoff` records what
+    /// remains.
     fn delete(&self, relative: &str) -> Result<(), VaultError> {
-        let path = self.resolve_for_mutation(relative)?;
-        // `symlink_metadata` uses lstat and does not follow symlinks, so
-        // a broken symlink (a real directory entry whose target is gone)
-        // still passes this guard. `path.exists()` would have hidden it.
-        // Propagate the raw io::Error so permission-denied (etc.)
-        // doesn't get masked as NotFound.
-        let meta = path.symlink_metadata().map_err(VaultError::Io)?;
+        #[cfg(unix)]
+        {
+            let path = self.resolve_for_mutation(relative)?;
+            // The structural rename's pinned walk (#1449): a link or a
+            // non-folder among the item's ancestors is its typed refusal.
+            let root = pinned_root::PinnedRoot::open(&self.root)?;
+            let item = root.end(self.vault_relative(&path, relative)?, relative, false)?;
 
-        // Broken symlinks: some `trash` backends reject dangling links
-        // (macOS routes through Finder, which refuses). The target file
-        // is already gone so there's nothing recoverable to send to the
-        // trash anyway — unlink the dangling entry directly.
-        if meta.file_type().is_symlink() && !path.exists() {
-            return unlink_dangling_symlink(&path, &meta).map_err(VaultError::Io);
+            // Broken symlinks: some `trash` backends reject dangling links.
+            // The target is already gone, so there is nothing recoverable to
+            // send to the Trash — unlink the dangling entry directly, inside
+            // its pinned parent, so a swapped folder cannot redirect it. The
+            // look does not follow the leaf, so a broken symlink still counts
+            // as present, and its io::Error keeps permission-denied (etc.)
+            // from being masked as NotFound.
+            if item.is_dangling_link().map_err(VaultError::Io)? {
+                return item.unlink().map_err(VaultError::Io);
+            }
+
+            let handed = super::trash_handoff::pinned_path(
+                root.descriptor(),
+                item.parent(),
+                item.leaf(),
+                relative,
+            )?;
+            self.trash.trash(&handed)
         }
 
-        match trash::delete(&path) {
-            Ok(()) => Ok(()),
-            Err(e) => Err(VaultError::Trash {
-                message: e.to_string(),
-            }),
+        #[cfg(windows)]
+        {
+            let path = self.resolve_for_mutation(relative)?;
+            let vault_relative =
+                path.strip_prefix(&self.root)
+                    .map_err(|_| VaultError::InvalidPath {
+                        path: relative.to_string(),
+                        reason: "mutation destination is not beneath the vault root".into(),
+                    })?;
+            let handed = super::trash_handoff::pinned_path(&self.root, vault_relative, relative)?;
+            // `symlink_metadata` does not follow the leaf, so a broken symlink
+            // still passes; the raw io::Error keeps its kind.
+            let meta = handed.symlink_metadata().map_err(VaultError::Io)?;
+            // Broken symlinks: the Recycle Bin may reject a dangling link and
+            // its target is already gone — unlink the dangling entry directly.
+            if meta.file_type().is_symlink() && !handed.exists() {
+                return unlink_dangling_symlink(&handed, &meta).map_err(VaultError::Io);
+            }
+            self.trash.trash(&handed)
+        }
+
+        #[cfg(not(any(unix, windows)))]
+        {
+            self.resolve_for_mutation(relative)?;
+            Err(VaultError::Trash {
+                message: "Moving items to the Trash is unavailable on this platform".into(),
+            })
         }
     }
 
@@ -1366,14 +1423,11 @@ fn open_nofollow(path: &Path) -> io::Result<fs::File> {
     fs::File::open(path)
 }
 
-/// Remove a dangling symlink entry. Pulled out as a helper so the
-/// Windows-specific dir-vs-file branch lives in one place.
+/// Remove a dangling symlink entry on Windows. (Unix unlinks it relative to
+/// its pinned parent: `pinned_root::RenameEnd::unlink`.)
 ///
-/// Unix: `unlink(2)` (which `fs::remove_file` calls) removes the
-/// directory entry of any symlink regardless of what it pointed at.
-///
-/// Windows: symlinks carry a type flag at creation time. A symlink
-/// declared as a directory symlink must be removed with `RemoveDirectory`
+/// Symlinks carry a type flag at creation time. A symlink declared as a
+/// directory symlink must be removed with `RemoveDirectory`
 /// (`fs::remove_dir`); calling `DeleteFile` (`fs::remove_file`) on it
 /// fails with `ERROR_ACCESS_DENIED`. The flag is exposed via
 /// `FileTypeExt::is_symlink_dir`.
@@ -1385,11 +1439,6 @@ fn unlink_dangling_symlink(path: &Path, meta: &fs::Metadata) -> io::Result<()> {
     } else {
         fs::remove_file(path)
     }
-}
-
-#[cfg(not(windows))]
-fn unlink_dangling_symlink(path: &Path, _meta: &fs::Metadata) -> io::Result<()> {
-    fs::remove_file(path)
 }
 
 /// Atomically rename `from` → `to` by path, FAILING with `EEXIST` if `to`

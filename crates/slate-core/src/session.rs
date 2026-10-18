@@ -14776,6 +14776,26 @@ impl VaultSession {
                 attempted += 1;
                 self.provider.delete(&plan.item.path)
             };
+            // #1450: the provider refused the path before its system Trash
+            // call (`VaultProvider::delete`'s `InvalidPath`: a folder on this
+            // item's path is a link or a file, or moved, since the last
+            // check). Nothing moved, so the probe below, which resolves the
+            // lexical path through whatever now sits on it, must not decide
+            // this item: it would count it trashed when the substitute has no
+            // entry of that name. Report it untrashed and keep its markers.
+            if let Err(error @ VaultError::InvalidPath { .. }) = &provider_result {
+                untrashed.push(crate::BatchTrashRemainder {
+                    item: plan.item.clone(),
+                    failure: structural_batch_failure(
+                        Some(plan.item.clone()),
+                        BatchFailureStage::Trash,
+                        error.to_string(),
+                    ),
+                });
+                requires_rescan = true;
+                refused_before_provider.insert(plan.item.path.clone());
+                continue;
+            }
             let expected_kind = if plan.item.is_directory {
                 EntryKind::Directory
             } else {
@@ -21851,6 +21871,7 @@ mod tests {
     #[path = "structural_identity.rs"]
     mod structural_identity;
     mod trash_confirmation;
+    mod trash_handoff;
     #[cfg(windows)]
     #[path = "windows_long_paths.rs"]
     mod windows_long_paths;
