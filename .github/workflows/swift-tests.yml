@@ -5,6 +5,11 @@
 # target imports SlateMac which depends on the slate_uniffi dylib, so we
 # need cargo build + uniffi-bindgen before `swift test`.
 #
+# The build step is also the #1460 SDK tripwire's gate: build-mac-app.sh
+# fails it when the SlateMac executable records SDK 27 or later, where
+# VoiceOver could no longer activate a reading-view link. XCTest cannot
+# notice that flip (its runner records SDK 27), so the build must.
+#
 # Where it runs (docs/plans/42_self_hosted_mac_runner_plan.md §6): a short
 # route job on hosted Linux picks the self-hosted Mac Studio runner
 # (label slate-mac-tart) while its controller's heartbeat is fresh, and
@@ -31,6 +36,9 @@ on:
       - 'docs/help/**'
       - 'tests/fixtures/**'
       - 'scripts/build-mac-app.sh'
+      # The #1460 SDK tripwire build-mac-app.sh runs, and its facts.
+      - 'scripts/check_mac_sdk.py'
+      - 'scripts/tests/test_mac_sdk.py'
       - 'scripts/build-swift-cli.sh'
       - 'Makefile'
   push:
@@ -49,6 +57,8 @@ on:
       - 'docs/help/**'
       - 'tests/fixtures/**'
       - 'scripts/build-mac-app.sh'
+      - 'scripts/check_mac_sdk.py'
+      - 'scripts/tests/test_mac_sdk.py'
       - 'scripts/build-swift-cli.sh'
       - 'Makefile'
 
@@ -142,6 +152,10 @@ jobs:
         #   uniffi-bindgen generate (Swift)
         #   stage bindings into apps/slate-mac/Sources/
         #   swift build inside apps/slate-mac/
+        #   the #1460 SDK tripwire (scripts/check_mac_sdk.py): this step
+        #   fails if the SlateMac executable records SDK 27 or later, or if
+        #   its SDK cannot be read. It reads SlateMac only, never the xctest
+        #   runner, which records SDK 27 by design.
         # `--skip-a11y-check` keeps a11y enforcement isolated to the
         # dedicated Accessibility Check workflow; a regression there
         # shouldn't also break this run.
@@ -165,3 +179,21 @@ jobs:
         # that isn't handled fails to compile. Building it here turns that
         # into a red CI run instead of a silently-rotting example (#390).
         run: make swift-cli
+
+  # The #1460 tripwire's facts feed it canned otool output, so they need no
+  # Mac: hosted Linux runs them. The check itself runs on the mac runner,
+  # inside the build step above.
+  sdk-tripwire-facts:
+    name: SDK tripwire facts (#1460)
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    permissions:
+      contents: read
+    steps:
+      - name: Checkout
+        uses: actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0  # v7
+        with:
+          persist-credentials: false
+
+      - name: Test the SDK tripwire against canned otool output
+        run: python3 -I -m unittest discover -v -s scripts/tests -p test_mac_sdk.py
