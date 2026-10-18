@@ -1521,6 +1521,21 @@ and `"status": "401"`. Rotate it before then.
   window's name in the message is a new one: turn it off beside OneDrive
   (the offline edit in `build-golden.ps1`, or phase 2 for a per-user
   switch), add it to the build's checks, and rebuild.
+- **`<vm>: provisioning failed: 'MicrosoftWindows' matches none of the secure boot templates.`**
+  Hyper-V's management service answered the firmware step's template
+  lookup with an empty list. Seen on 2026-10-17 from 18:09 to 04:38 local
+  the next day: every VM failed the same way, 72 in a row, with no loop
+  restart, no host reboot, and nothing in the System log at the moment it
+  began or the moment it ended; it cleared by itself. The breaker routes
+  every lane away meanwhile and the jobs resume once it serves again. In
+  the elevated window, `(Get-VMHost).SecureBootTemplates` should list
+  `MicrosoftWindows`, `MicrosoftUEFICertificateAuthority` and
+  `OpenSourceShieldedVM`. If it lists nothing: disable the loop first (its
+  Hyper-V calls fail during the restart, and a VM mid-handoff would be
+  discarded with a strike), restart the management service
+  (`Restart-Service vmms`, which leaves running VMs alone), enable the
+  loop, and look at the `Microsoft-Windows-Hyper-V-VMMS-Admin` log around
+  the first failure.
 - **`startup: No such host is known` every 30 s.** The host cannot
   resolve `api.github.com`: no network, most often after a reboot while
   the LAN adapter has no link yet. The loop exits and is relaunched each
@@ -1647,7 +1662,8 @@ and `"status": "401"`. Rotate it before then.
   loop reads no other workflow's jobs. Then the retry cap: after three
   failed attempts the loop stops admitting that job without a log line.
   Cancel the run and re-run it; to the loop its jobs are then new. A restart
-  also clears the retry table.
+  clears the retry table when no VM is kept, and after a breaker trip in
+  any case.
 - **`journal: …` every tick.** The journal cannot be written. A leftover
   `C:\slate-ci\state\journal.json.tmp` that cannot be replaced, for example
   one made read-only, blocks every write. After a restart the same fault
@@ -1702,15 +1718,32 @@ and `"status": "401"`. Rotate it before then.
   The host publishes `serving: false`, so in `home` mode the router sends
   every lane to Namespace (`home-only` ignores the state); the jobs
   already queued home keep their retries, and a failure among them
-  restarts the cool-down without another line. The cause is in the lines
+  restarts the cool-down without another line. A job that reaches its
+  retry cap while the host fails is not stranded: at the half-open, and
+  when a runner takes its job after a trip, the retry strikes are
+  forgotten if they span more than one lane (`health: retry strikes of N
+  jobs forgotten (lanes …) …; they are admitted again`) and the jobs the
+  host gave up on run first, as the probes; strikes that all fall on one
+  lane are kept (`… kept: all on lane X, which looks like that lane's
+  fault`) and that job stays capped as before (cancel its run and re-run
+  it); the host says serving again, which is host-wide, so new jobs of
+  that lane still come home and each strands at its cap in turn until a
+  runner of that lane takes its job, which forgets the kept strikes of
+  that lane whenever it comes (`health: retry strikes of N jobs on lane X
+  forgotten because a runner of that lane took its job`). On a host that
+  keeps failing the
+  struck jobs retry in cycles of about 35 minutes, three failed
+  provisionings per job per cycle. The cause is in the lines
   just before it (Hyper-V, the golden or cache disks, the NAT, the PAT's
   runner permission). Fix it and restart the loop (Disable, Stop,
   Enable): the restart forgets the failures and logs
-  `health: N failures in a row forgotten at start`. Left alone, fifteen
-  minutes after its last failure the host logs `health: serving again
-  after 15 min without a failure; the next failure trips it at once`, the
-  state looks healthy again, and the next run's home lanes are the probe:
-  they strand through their retries if the host still fails.
+  `health: N failures in a row forgotten at start`, and after a trip
+  forgets the retry strikes too, whatever their lanes. Left alone,
+  fifteen minutes after its last failure the host logs `health: serving
+  again after 15 min without a failure; the next failure trips it at
+  once`; if the forgiven jobs fail in that same tick the state never says
+  serving and the log shows the pair of lines every cycle, otherwise the
+  state looks healthy again and the next run's home lanes probe as well.
   `health: a runner took its job; N failures in a row forgotten` means it
   recovered by itself. `BreakerFailures` (3) and `BreakerCooldownSeconds`
   (900) in `config.json`.

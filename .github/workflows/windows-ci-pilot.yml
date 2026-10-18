@@ -132,6 +132,7 @@ jobs:
           cargo test -p slate-core --profile ci --locked
           -- --skip census_
           --skip perf_guard_root_listing_under_100ms_on_10k_files
+          --skip perf_guard_unresolved_link_rescan_within_twice_the_link_free_one
       - name: Windows CLI witnesses
         run: cargo test -p slate-cli --profile ci --locked
       - name: Model verifier and parity contracts

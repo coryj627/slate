@@ -522,9 +522,22 @@ optional API reads; nothing in `namespace` mode.
   row trips the breaker; the next state says not serving and the log
   says why once; the jobs already queued home keep their retries, and a
   failure among them restarts the cool-down quietly. Fifteen minutes
-  after the last failure the state says serving again and the next run
-  routes as usual: its home lanes are the probe, and a failure trips the
-  breaker at once. A loop restart resets it.
+  after the last failure the breaker half-opens: when the struck jobs
+  span more than one lane their retry strikes are forgotten (the host's
+  doing, not one lane's) and they are admitted in that tick as the first
+  probes, so the state says serving again only if they get through; when
+  every strike falls on one lane they are kept and that lane's job stays
+  capped as before; the state says serving again, which is host-wide, so
+  that lane's new jobs still come home and strand at their cap in turn
+  until a runner of that lane takes its job. The next run routes as usual
+  and its home lanes probe too; a failure trips the breaker at once. A
+  runner taking its job after a trip forgets the strikes under the same
+  lane rule, and its own lane's kept strikes whenever it comes, even once
+  another lane's claim has reset the breaker; a loop restart after a trip
+  forgets them unconditionally, since the restart is the repair. On
+  a host that keeps failing the struck jobs retry in cycles of about 35
+  minutes, three failed provisionings per job per cycle, instead of
+  stranding.
 - **Pool size**: published by the host, so there is nothing to keep in
   step; the router only clamps absurd values.
 - **Partial re-runs** always take the vendor (OR-D6); the runbook states

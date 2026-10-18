@@ -1229,3 +1229,67 @@ the whole document is ~22x the native read (one attribute run per styled
 stretch, about 2.4 µs each in Foundation), but VoiceOver does not make that
 request on a large note: over a 3.3 MB text, focus, line moves, typing and the
 rotor asked for 24 ranges, the longest one line (measured for this PR).
+
+## Plan 43 PR 20.0 — the dangling-link pass looks candidates up (#1429)
+
+Every scan re-resolves the vault's unresolved links
+(`links_db::re_resolve_unresolved_links_under`). Before this change a
+snapshot of `files` offered each link every indexed path, so the pass cost
+unresolved links × files. A cold scan, where every link is unresolved
+until the pass runs, paid that for every link in the vault. A snapshot now
+offers a link only the paths its target could name, from a table keyed by
+the lowercased path and final component and built once per snapshot.
+
+Recorded 2026-10-18 on the Mac Studio (Apple M5 Max, 18 cores, 36 GB,
+macOS 27.0.1) with rustc 1.97.1, release profile without LTO. The harness
+is a scratch binary depending on slate-core by path, in the shape of the
+vault watcher design's §3.4 spike: notes of about 1 KiB with frontmatter
+across 50 folders. "Cold" opens a fresh vault and scans it. "Rescan" is the
+median of seven no-change `rescan_with_progress` calls on the open
+session. "main" is 8e4a1fa8. The two builds ran alternately, twice per
+fixture, at a load average of 7 to 12 on a shared machine; each cell gives
+both runs.
+
+| Fixture | Cold, main | Cold, this PR | Rescan, main | Rescan, this PR |
+|---|---:|---:|---:|---:|
+| 10k notes, no links | 0.90 s, 0.90 s | 0.91 s, 0.91 s | 95.8 ms, 96.2 ms | 97.2 ms, 95.9 ms |
+| 10k notes, 7 resolvable links each (70,000) | 19.2 s, 19.4 s | 1.34 s, 1.40 s | 101.9 ms, 101.9 ms | 100.1 ms, 105.4 ms |
+| 10k notes, 2 dangling links each (20,000) | 6.02 s, 6.06 s | 1.11 s, 0.92 s | 5,074 ms, 4,697 ms | 118.4 ms, 102.1 ms |
+| 50k notes, no links | 4.29 s, 4.14 s | 4.25 s, 4.21 s | 470.7 ms, 459.2 ms | 454.7 ms, 455.1 ms |
+| 50k notes, 2 dangling links each (100,000) | 119.2 s ¹ | 4.85 s, 4.78 s | 115,097 ms ¹ | 542.7 ms, 545.5 ms |
+| 50k notes, 7 resolvable links each (350,000) | not run ² | 6.26 s | not run ² | 475.0 ms ³ |
+
+¹ One earlier run of main at a load average of 9, three rescans. It was not
+repeated because each rescan takes two minutes.
+² Not run on main. Its pass would offer about 1.75 × 10¹⁰ paths, about
+400 s at the measured cost of an offer (about 23 ns). The design's sample
+of such a scan was stopped after six minutes.
+³ Three rescans.
+
+- **Dangling links.** A no-change rescan of 10k notes with 20,000
+  dangling links fell from about 4.9 s to about 110 ms, within 6 to 22 ms
+  of the link-free vault. At 50k notes with 100,000 dangling links it fell
+  from 115 s to 0.54 s, 88 ms over the link-free vault. The pass now costs
+  about 1 µs a dangling link, the row read included, where it cost about
+  240 µs at 10k (one offer for each of 10,000 paths) and about 1.15 ms at
+  50k.
+- **The first-open gate.** A cold scan of 10k notes whose 70,000 links all
+  resolve fell from 19.3 s, over the 15 s first-open gate (locked 05 §9.5),
+  to 1.4 s. At 50k with 350,000 links it takes 6.3 s, against the 60 s
+  gate.
+- **Unchanged.** Link-free vaults are unchanged within noise: when no link
+  dangles, the pass returns before it snapshots `files`. A rescan of a vault
+  whose links all resolve was never slow, because nothing is left for the
+  pass.
+
+**The guard.** `session::tests::link_pass::perf_guard_unresolved_link_rescan_within_twice_the_link_free_one`
+runs in its own rust-lane step, like the root-listing guard. It requires a
+no-change rescan of 10k notes with 20,000 dangling links to stay within
+twice the link-free vault's, best of eight in four alternating rounds.
+While it was written, it read 1.16 to 1.28 in the `ci` profile and about
+1.5 in the dev profile. With every path offered again (the mutation
+check), it read 5.40 s against 97 ms and failed. It opens one session at a
+time. With a second session open in the process, the older one's rescans
+lose their SQLite page cache and run about 1.8× slower (#1484), so a
+comparison of two open vaults would read 0.67 or 1.89 depending on which
+opened first.
