@@ -567,6 +567,13 @@ impl PinnedMutationTarget {
     /// A save's publish (#1452): the staged file renamed onto the leaf inside
     /// the pinned folder, replacing what is there, as `rename(2)` always has
     /// for a save. A leaf that is a symbolic link is replaced, never followed.
+    ///
+    /// The source is still named by its path (`AT_FDCWD`), under the random
+    /// name `tempfile` gave it in `.slate/tmp` a moment before. A swap there,
+    /// between the staging and this call, can change which bytes arrive or
+    /// fail the rename, never where they land: the destination is the pinned
+    /// folder. `.slate` itself is reached by path throughout, which is #940's
+    /// descriptor-relative interior (PR 22's `FsRoot`).
     fn publish_staged_replacing(&self, staged: &Path) -> io::Result<()> {
         use std::os::fd::AsRawFd as _;
         use std::os::unix::ffi::OsStrExt as _;
