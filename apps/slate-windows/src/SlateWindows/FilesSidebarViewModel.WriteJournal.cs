@@ -15,8 +15,10 @@ namespace SlateWindows;
 /// have succeeded. A failed pins or shortcuts write leaves the entry
 /// unsettled, so the divergence survives a quit. The next open of the same
 /// vault replays every unsettled entry before the settings file's pins and
-/// shortcuts are adopted; an entry recorded before core was known to have
-/// committed replays only the renames whose source is definitely gone.
+/// shortcuts are adopted, and so does the sidebar-settings retry when the
+/// file is readable again (#1514: the outage's own renames and moves
+/// included); an entry recorded before core was known to have committed
+/// replays only the renames whose source is definitely gone.
 /// </summary>
 internal sealed partial class FilesSidebarViewModel
 {
@@ -150,13 +152,28 @@ internal sealed partial class FilesSidebarViewModel
         }
     }
 
-    /// <summary>Every transform the operation implies is in memory now: its
-    /// entry is settled when the pins and shortcuts writes that carry it
-    /// have landed, and otherwise waits for the next writes that
-    /// do.</summary>
-    private void CarryJournalEntry(Guid? entry)
+    /// <summary>Every stored-path rewrite the operation implies is in memory
+    /// now. Its journal entry, when it has one, is settled when the pins and
+    /// shortcuts writes that carry it have landed, and otherwise waits for
+    /// the next writes that do — or for the retry's replay (#1514). A
+    /// rewrite no entry carries — a delete's, or a rename's or move's the
+    /// journal could not record — whose write did not land is #1230's
+    /// divergence memory: nothing can replay it, so the retry's adoption
+    /// speaks the stale-references outcome. A rewrite that lands both
+    /// sections writes the whole current sets, so it clears the
+    /// memory.</summary>
+    private void StoredPathsFollowed(Guid? journalEntry)
     {
-        if (entry is Guid id)
+        if (!_pinsBehindFile && !_shortcutsBehindFile)
+        {
+            _storedPathsDivergedFromFile = false;
+        }
+        else if (journalEntry is null)
+        {
+            _storedPathsDivergedFromFile = true;
+        }
+
+        if (journalEntry is Guid id)
         {
             CarryJournalEntries([id]);
         }
@@ -224,23 +241,18 @@ internal sealed partial class FilesSidebarViewModel
         }
     }
 
-    /// <summary>#1230's retry adopts the file wholesale: the transforms that
-    /// lived only in memory go with it — the stale-references outcome says
-    /// so — and their entries are settled, never replayed over the file the
-    /// user just repaired.</summary>
-    private void SettleJournalEntriesTheFileDiscards()
+    /// <summary>The retry adopts the file: memory's pins and shortcuts become
+    /// the file's with the journal replayed over them, so no write of the
+    /// outage is behind the file any more, and the entries that waited on
+    /// those writes are the replay's to settle once its own writes land
+    /// (#1514) — they are among the entries the replay adopted, and a
+    /// replay write that fails puts them back to waiting.</summary>
+    private void ForgetWritesTheFileReplaces()
     {
         _pinsBehindFile = false;
         _shortcutsBehindFile = false;
-        Guid[] discarded = [.. _journalAwaitingPins.Union(_journalAwaitingShortcuts)];
         _journalAwaitingPins.Clear();
         _journalAwaitingShortcuts.Clear();
-        if (discarded.Length > 0
-            && _writeJournal is SidebarWriteJournal journal
-            && _journalIdentity is SidebarJournalIdentity identity)
-        {
-            journal.Settle(identity, discarded);
-        }
     }
 
     /// <summary>What the settings file holds, with every unsettled journal
@@ -318,10 +330,11 @@ internal sealed partial class FilesSidebarViewModel
     }
 
     /// <summary>Write what a replay changed, then settle its entries — or,
-    /// when a write fails, keep them for the next writes that land (and
-    /// remember the divergence, #1230's memory). Runs once the commands
-    /// exist: a write that finds the file blocked raises the notice.</summary>
-    private void LandWriteJournalReplay(JournalReplay replay)
+    /// when a write fails, keep them for the next writes that land, or for
+    /// the next retry's replay. Runs once the commands exist: a write that
+    /// finds the file blocked raises the notice. True when every changed
+    /// section reached the file.</summary>
+    private bool LandWriteJournalReplay(JournalReplay replay)
     {
         bool pinsSaved = !replay.PinsChanged || PersistPins(_pendingJournalFailures.Add);
         bool shortcutsSaved = !replay.ShortcutsChanged || PersistShortcuts(_pendingJournalFailures.Add);
@@ -330,13 +343,9 @@ internal sealed partial class FilesSidebarViewModel
             _recentsStore?.Replace(_recents);
         }
 
-        if (!pinsSaved || !shortcutsSaved)
-        {
-            _storedPathsDivergedFromFile = true;
-        }
-
         _pendingJournalNotices.AddRange(replay.Notices);
         CarryJournalEntries(replay.Entries);
+        return pinsSaved && shortcutsSaved;
     }
 
     /// <summary>Say what the journal's replay found, after the first

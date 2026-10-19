@@ -97,11 +97,14 @@ internal sealed class EventRecorder : VaultEventListener
         }
     }
 
-    /// <summary>Plan 43 PR 20a (#1267): no fact here starts the vault
-    /// watcher, so this never fires; PR 20b records it.</summary>
-    public void OnExternalChange()
-    {
-    }
+    /// <summary>Plan 43 PR 20b (#1267): how many times core's vault watcher
+    /// called this listener. Kept out of <see cref="TotalCount"/>, which
+    /// counts the three kinds every other fact asserts on.</summary>
+    public int ExternalChanges => Volatile.Read(ref _externalChanges);
+
+    private int _externalChanges;
+
+    public void OnExternalChange() => Interlocked.Increment(ref _externalChanges);
 
     public T Locked<T>(Func<EventRecorder, T> read)
     {

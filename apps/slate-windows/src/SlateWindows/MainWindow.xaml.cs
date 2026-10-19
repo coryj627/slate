@@ -139,10 +139,17 @@ public partial class MainWindow : Window
         RecentVaultJumpList.Apply(_viewModel.RecentVaults);
         // W7-7 PR 7 (#1252, OD-1, R-9): coming back to the window rescans —
         // no modal in the way, not on the first activation — and the
-        // lifecycle coalescer decides the rest.
+        // lifecycle coalescer decides the rest. Plan 43 PR 20b (#1267): the
+        // route also serves a watcher request the window's absence deferred,
+        // and the lifecycle reads the same activation and modal state for the
+        // watcher's runs and its sentence.
+        Func<bool> modalSurfaceOpen = () => OpenModalSurface is not null || ComponentDispatcher.IsThreadModal;
         _foregroundRescan = new ForegroundRescanRoute(
             _viewModel.RescanAsync,
-            () => OpenModalSurface is not null || ComponentDispatcher.IsThreadModal);
+            modalSurfaceOpen,
+            serveDeferredWatcher: _viewModel.ServeWatcherRequestOnActivation);
+        _viewModel.WindowIsActive = () => IsActive;
+        _viewModel.ModalSurfaceOpen = modalSurfaceOpen;
         Activated += (_, _) => _ = _foregroundRescan.OnActivated();
         Deactivated += (_, _) => _foregroundRescan.OnDeactivated();
     }

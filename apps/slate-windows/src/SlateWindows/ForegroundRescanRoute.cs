@@ -7,9 +7,11 @@ namespace SlateWindows;
 
 /// <summary>
 /// W7-7 PR 7 (#1252, OD-1, R-9): the main window's foreground rescan route.
-/// With no live watcher, a window that comes back after being away rescans
-/// — silently unless something changed — so a file made in another app is
-/// there when the user returns.
+/// A window that comes back after being away rescans — silently unless
+/// something changed — so a file made in another app is there when the user
+/// returns. Since plan 43 PR 20b (#1267) core's vault watcher reconciles
+/// while the window is active; the route stays the baseline for the time it
+/// was away, for network volumes and for lost events (design §4.6).
 /// </summary>
 /// <remarks>
 /// <para>
@@ -17,6 +19,13 @@ namespace SlateWindows;
 /// forwards a <see cref="RescanReason.Foreground"/> request when the window
 /// was away at least <see cref="MinimumAway"/> and no modal surface is
 /// open. The very first activation never forwards: the open scan just ran.
+/// </para>
+/// <para>
+/// Plan 43 PR 20b (§4.5 item 4): after its own decision, every activation
+/// serves a watcher request the window's absence deferred
+/// (<see cref="VaultLifecycleViewModel.ServeWatcherRequestOnActivation"/>):
+/// the foreground request just forwarded has already taken it (one run,
+/// Foreground reason), and otherwise it runs on its own, as a Watcher run.
 /// </para>
 /// <para>
 /// Everything else is the lifecycle coalescer's
@@ -37,25 +46,36 @@ internal sealed class ForegroundRescanRoute
     private readonly Func<RescanReason, Task> _rescan;
     private readonly Func<bool> _modalSurfaceOpen;
     private readonly Func<DateTimeOffset> _clock;
+    private readonly Func<Task?>? _serveDeferredWatcher;
     private bool _activatedBefore;
     private DateTimeOffset? _deactivatedAt;
 
     public ForegroundRescanRoute(
         Func<RescanReason, Task> rescan,
         Func<bool> modalSurfaceOpen,
-        Func<DateTimeOffset>? clock = null)
+        Func<DateTimeOffset>? clock = null,
+        Func<Task?>? serveDeferredWatcher = null)
     {
         _rescan = rescan;
         _modalSurfaceOpen = modalSurfaceOpen;
         _clock = clock ?? (() => DateTimeOffset.UtcNow);
+        _serveDeferredWatcher = serveDeferredWatcher;
     }
 
     /// <summary>The window lost activation: the away time starts.</summary>
     public void OnDeactivated() => _deactivatedAt = _clock();
 
-    /// <summary>The window was activated. Returns the forwarded rescan, or
-    /// null when the route did not forward one.</summary>
+    /// <summary>The window was activated. Returns the forwarded rescan — or
+    /// the deferred watcher request's run when the route forwarded none —
+    /// or null when neither ran.</summary>
     public Task? OnActivated()
+    {
+        Task? forwarded = ForwardForeground();
+        Task? deferred = _serveDeferredWatcher?.Invoke();
+        return forwarded ?? deferred;
+    }
+
+    private Task? ForwardForeground()
     {
         DateTimeOffset? deactivatedAt = _deactivatedAt;
         _deactivatedAt = null;

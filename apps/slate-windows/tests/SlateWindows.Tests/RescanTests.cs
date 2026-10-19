@@ -2049,10 +2049,13 @@ public sealed partial class RescanTests
             string root,
             (string Path, string Text)[] files,
             Func<Task<IReadOnlyList<string>>>? pickImportSources,
-            bool asyncTree = false)
+            bool asyncTree = false,
+            Action<Harness>? whileOpening = null,
+            bool parkBeforeTheScan = false)
         {
             Root = root;
             Seed(root, files);
+            _parkBeforeTheScan = parkBeforeTheScan;
             _previous = SynchronizationContext.Current;
             SynchronizationContext.SetSynchronizationContext(Context);
             Lifecycle = new VaultLifecycleViewModel(
@@ -2066,7 +2069,29 @@ public sealed partial class RescanTests
                 rescanWorker: new RecordingRescanWorker(this),
                 treeUiContext: asyncTree ? Context : null,
                 treeWorker: asyncTree ? RunTreeWorker : null);
-            Context.Await(Lifecycle.OpenVaultAsync(Root), "the vault open");
+            Lifecycle.WindowIsActive = () => WindowActive;
+            Lifecycle.ModalSurfaceOpen = () => ModalOpen;
+            if (whileOpening is null)
+            {
+                Context.Await(Lifecycle.OpenVaultAsync(Root), "the vault open");
+            }
+            else
+            {
+                _parkTheOpen = true;
+                Task open = Lifecycle.OpenVaultAsync(Root);
+                Context.RunUntil(() => OpenParked.IsSet, "the open parking");
+                try
+                {
+                    whileOpening(this);
+                }
+                finally
+                {
+                    OpenRelease.Set();
+                }
+
+                Context.Await(open, "the vault open");
+            }
+
             OpenEvents = [.. Events];
             OpenStatusText = Lifecycle.StatusText;
             Events.Clear();
@@ -2144,6 +2169,54 @@ public sealed partial class RescanTests
 
         public static Harness OpenExisting(string root) =>
             new(root, [], null);
+
+        /// <summary>Plan 43 PR 20b: a harness whose open parks after its scan
+        /// and its Quick Open listing — the open still busy, no workspace yet
+        /// — while <paramref name="whileOpening"/> runs on the fact's
+        /// thread; then the open completes.</summary>
+        public static Harness WhileOpening(
+            string label,
+            Action<Harness> whileOpening,
+            params (string Path, string Text)[] files) =>
+            new(NewRoot(label), files, null, whileOpening: whileOpening);
+
+        /// <summary>Plan 43 PR 20b: <see cref="WhileOpening"/>, parked before
+        /// the open's scan instead — the open busy, its walk not begun.</summary>
+        public static Harness WhileOpeningBeforeItsScan(
+            string label,
+            Action<Harness> whileOpening,
+            params (string Path, string Text)[] files) =>
+            new(NewRoot(label), files, null, whileOpening: whileOpening, parkBeforeTheScan: true);
+
+        /// <summary>Plan 43 PR 20b: whether the fact's window is active — the
+        /// lifecycle's inactive rule reads it. Active, as a lifecycle with no
+        /// window reads it, unless a fact says otherwise.</summary>
+        public bool WindowActive { get; set; } = true;
+
+        /// <summary>Plan 43 PR 20b: whether a modal surface is open — the
+        /// watcher's sentence gate reads it.</summary>
+        public bool ModalOpen { get; set; }
+
+        /// <summary>Set once the parked open (<see cref="WhileOpening"/>) has
+        /// finished its scan and its listing.</summary>
+        public ManualResetEventSlim OpenParked { get; } = new(false);
+
+        /// <summary>Releases the parked open.</summary>
+        public ManualResetEventSlim OpenRelease { get; } = new(false);
+
+        private bool _parkTheOpen;
+        private readonly bool _parkBeforeTheScan;
+
+        /// <summary>Plan 43 PR 20b: the call core's vault watcher makes when a
+        /// burst closes — on the open vault's real listener, from a thread of
+        /// its own, as "slate-watch" makes it. What it posts waits on this
+        /// fact's queue until the fact drains it.</summary>
+        public void SignalExternalChange()
+        {
+            VaultEventListener listener = Lifecycle.EventListenerForTests
+                ?? throw new InvalidOperationException("No vault is open.");
+            Task.Run(() => listener.OnExternalChange()).GetAwaiter().GetResult();
+        }
 
         /// <summary>A harness whose sidebar refreshes its tree the way the
         /// shell does — on a worker (<see cref="TreeWorker"/>, the pool by
@@ -2385,6 +2458,33 @@ public sealed partial class RescanTests
                 return Task.FromException<T>(fault);
             }
 
+            // Plan 43 PR 20b: the open's own park (WhileOpening), at one of two
+            // timings — before its work, so the open is busy and its walk has
+            // not begun (WhileOpeningBeforeItsScan), or after the work, so the
+            // scan and the listing are done and the workspace is not yet
+            // built. Either way the fact's callback runs on its own thread
+            // while the open waits.
+            if (call == 1 && _parkTheOpen)
+            {
+                return Task.Run(() =>
+                {
+                    if (_parkBeforeTheScan)
+                    {
+                        OpenParked.Set();
+                        _ = OpenRelease.Wait(TimeSpan.FromSeconds(30));
+                    }
+
+                    T loaded = work();
+                    if (!_parkBeforeTheScan)
+                    {
+                        OpenParked.Set();
+                        _ = OpenRelease.Wait(TimeSpan.FromSeconds(30));
+                    }
+
+                    return loaded;
+                });
+            }
+
             if (ParkAfterCall == call)
             {
                 return Task.Run(() =>
@@ -2402,6 +2502,7 @@ public sealed partial class RescanTests
         public void Dispose()
         {
             Release.Set();
+            OpenRelease.Set();
             try
             {
                 Lifecycle.Dispose();

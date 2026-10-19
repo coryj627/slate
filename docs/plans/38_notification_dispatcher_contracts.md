@@ -496,9 +496,14 @@ Human NVDA/JAWS/IME acceptance remains a release residual; braille is deferred.
 ## Sidebar-settings retry amendment (#1230, 2026-09-20)
 
 Supersedes the deferral recorded in the 2026-09-19 amendment above. The
-owner approved the design in chat before implementation.
+owner approved the design in chat before implementation. Amended
+2026-10-18 by the owner's decision in #1514: the retry replays the
+outage's renames and moves onto the repaired file before adopting it;
+until then it adopted the file wholesale and spoke the stale-references
+outcome for any rewrite the outage had kept only in memory.
 
-**D-13 — Sidebar-settings retry is a synchronous, wholesale re-adoption.**
+**D-13 — Sidebar-settings retry is a synchronous re-adoption, with the
+outage's renames and moves replayed first.**
 A read-only `.slate/sidebar.json` stands in the Files pane as a notice
 (`SidebarSettingsNotice`, the store's reason verbatim) with a Retry button
 beside it (`SidebarSettingsRetry`, "Retry sidebar settings", mac's help
@@ -518,27 +523,42 @@ Outcomes, all Medium and all core vocabulary:
 - Still blocked (malformed, newer version, over the cap, unreadable): the
   notice carries the new reason, in-memory state is untouched, the store
   stays read-only. Post `SidebarSettingsStillDefaults(detail: reason)`.
-- Readable: adopt the file's sort, grouping, pins and shortcuts wholesale,
-  discarding in-memory edits made during the outage (each was reported as
-  a failed save when made, and the file is the authority — the mac round-8
-  rule against partial salvage). Republish the tree. Post
-  `SidebarSettingsReloaded`, or `SidebarSettingsReloadedStaleRefs` when the
-  divergence memory is set.
+- Readable: replay the renames and moves made during the outage — the
+  entries the sidebar write journal (the #1435 amendment below) holds for
+  this session, with any an earlier launch left waiting for a readable
+  file — onto the file's pins, shortcuts and Recents, in recorded order
+  and by the rule an open's replay uses (#1514; mac's Retry replays its
+  structural journal the same way, FL-06). Then adopt the file's sort,
+  grouping, pins and shortcuts, discarding the pin, unpin and shortcut
+  edits made during the outage (each was reported as a failed save when
+  made, and the file is the authority — the mac round-8 rule against
+  partial salvage), and write what the replay changed, which settles its
+  entries. Republish the tree. Post `SidebarSettingsReloaded`, or
+  `SidebarSettingsReloadedStaleRefs` when a rewrite could not be carried
+  over: the divergence memory is set, or a replay write failed (the
+  failure is reported after the outcome, and the entries wait for the next
+  write that lands, or the next retry).
 - The divergence memory is Windows' twin of mac's journal-overflow arm: it
-  is set when a rename, move or delete rewrote the stored paths in memory
-  but the pins or shortcuts write did not land, and cleared when a later
-  structural transform lands both sections or a retry adopts the file. No
-  existence probing of pins or shortcuts: that would be a host rule with
-  no mac twin.
+  is set when a rewrite no journal entry carries — a trash's (#1505), or a
+  rename's or move's the journal could not record — did not reach the
+  file, and cleared when a later structural transform lands both sections
+  or a retry adopts the file. A journaled rename or move whose write
+  failed is not a divergence: its entry carries it to the next write that
+  lands, or to the retry's replay. No existence probing of pins or
+  shortcuts: that would be a host rule with no mac twin.
 
 The three events become both-host rows in the ledger; their Windows
 designations are removed. The construction sites are the three arms of
 `FilesSidebarViewModel.RetrySettings@1`; the residue register is unchanged.
 Facts: `SidebarSettingsRetryTests` (blocked read stands as a notice; repair
 then retry adopts and speaks Reloaded; still-blocked keeps defaults and
-speaks the reason; newer version until downgraded; stale references after
-a rename during the outage; the memory clears with a successful retry;
-retry unavailable and silent while writable; a mid-life blocked write
+speaks the reason; newer version until downgraded; a rename during the
+outage is carried over — the pin follows the note, a pin made then is
+discarded — and speaks Reloaded; a move during the outage carries the
+shortcut in its slot; a rename the journal could not record speaks stale
+references; a replay write that fails speaks stale references and keeps
+the entry for the next write; the memory belongs to the outage that made
+it; retry unavailable and silent while writable; a mid-life blocked write
 raises the notice). Journey:
 `SidebarSettings_RetryRecoversAReadOnlyFileReachably` (notice text, Invoke,
 keyboard reachability, both status sentences, the row leaving the tree,
@@ -626,11 +646,12 @@ batch that threw, or a mutation core reports incomplete, stays as
 anticipated. The entry is settled once a pins write and a shortcuts write
 that carry it have landed. A failed write leaves it unsettled, so the
 divergence survives a quit, and the next pins or shortcuts write that lands
-carries it. D-13's retry still adopts the file wholesale: the transforms
-the outage kept only in memory are discarded with that memory and their
-entries settle (`SidebarSettingsReloadedStaleRefs` says so). Entries an
-earlier launch left, which waited because the file was read-only at open,
-replay onto the repaired file as an open's replay would.
+carries it. D-13's retry replays the outage's entries onto the repaired
+file before adopting it (#1514, 2026-10-18; until then it adopted the file
+wholesale, discarded the transforms the outage had kept only in memory,
+and `SidebarSettingsReloadedStaleRefs` said so), together with the entries
+an earlier launch left, which waited because the file was read-only at
+open, as an open's replay would; the replay's writes settle them.
 
 **Replay.** The next open of the same vault replays every unsettled entry
 onto the settings file's pins, shortcuts and Recents before they are
