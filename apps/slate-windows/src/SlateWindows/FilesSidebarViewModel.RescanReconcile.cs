@@ -26,13 +26,20 @@ namespace SlateWindows;
 /// So a rescan's publication reconciles the root level in place. A root row
 /// the fresh listing shows unchanged — the same path, name, kind, summary,
 /// folder note and expansion, and, for an open folder, every row it shows
-/// kept the same way — stays the same node, so its row, its container and its
-/// UI Automation element stay. Rows that are new, changed or gone are
-/// inserted, replaced or removed; nothing else moves. A kept collapsed folder
-/// takes the fresh listing's state (<see cref="FileTreeNodeViewModel.AdoptChildStateOf"/>),
-/// and an open folder that anything below changed is replaced whole, as
-/// before. When no root row is kept, the publication replaces the tree as it
-/// always did.
+/// kept the same way — stays the same node, so its row stays and so does its
+/// UI Automation element, which the tree's peer keys by item. Rows that are
+/// new, changed or gone are inserted, replaced or removed; nothing else
+/// moves. A kept collapsed folder takes the fresh listing's state
+/// (<see cref="FileTreeNodeViewModel.AdoptChildStateOf"/>), and an open
+/// folder that anything below changed is replaced whole, as before. When no
+/// root row is kept, the publication replaces the tree as it always did.
+/// </para>
+/// <para>
+/// A kept open folder's own rows keep their nodes, but their elements are its
+/// container's peer's, and WPF's recycling panel may give the kept folder a
+/// new container: on the Windows lane a row inserted at the top of the tree
+/// did (the scratch run of 2026-10-19). Those rows then read fully under new
+/// elements — #1515 keeps them, with the cases below.
 /// </para>
 /// <para>
 /// A publication that changes or removes the selected row — the reader's —
@@ -41,7 +48,8 @@ namespace SlateWindows;
 /// no window shows, which a replaced tree's rows are at once and a row
 /// removed in place is not: on the Windows lane the keys fell to the first
 /// row instead of the next survivor or the selected row's new one (the
-/// scratch run of 2026-10-19).
+/// scratch run of 2026-10-19). An organic publication — after Slate's own
+/// mutation — still replaces the tree too (#1515).
 /// </para>
 /// </remarks>
 internal sealed partial class FilesSidebarViewModel

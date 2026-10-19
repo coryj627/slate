@@ -20,15 +20,18 @@ namespace SlateWindows.Tests;
 /// </summary>
 public sealed partial class FilesRegionLandingTests
 {
-    /// <summary>A note created outside Slate, a note edited outside it and a
-    /// note added to a folder that was opened and closed again, then one
-    /// rescan: every other row the tree shows — an open folder's row among
-    /// them — is the element held before it, on screen, with its rectangle,
-    /// its place in its set and its own name. The edited note's row is a new
-    /// row and reads as fully, and so does the new note's; the closed
+    /// <summary>A note created outside Slate at the top of the tree, a note
+    /// edited outside it and a note added to a folder that was opened and
+    /// closed again, then one rescan. Every other root row is the element held
+    /// before it: on screen, with its rectangle, its place in its set and its
+    /// own name. The open folder's row keeps its node, and so does every row
+    /// it shows; those read as fully, and their elements are their folder
+    /// container's, which WPF's recycling panel replaced on this insertion at
+    /// the top (measured on the Windows lane; #1515). The edited note's row is
+    /// a new row and reads as fully, and so does the new note's. The closed
     /// folder, opened, lists the note added to it.</summary>
     [Fact]
-    public void ARescansReconcileKeepsTheElementOfEveryRowItDidNotChange() => RunSta(() =>
+    public void ARescansReconcileKeepsEveryRowItDidNotChange() => RunSta(() =>
     {
         using var host = new Host();
         Directory.CreateDirectory(Path.Combine(host.Root, "open"));
@@ -56,10 +59,19 @@ public sealed partial class FilesRegionLandingTests
         Dictionary<string, AutomationPeer> shown = ShownRowElements(tree);
         foreach ((string path, AutomationPeer row) in held.Where(pair => pair.Key != "note2.md"))
         {
-            Assert.True(
-                shown.TryGetValue(path, out AutomationPeer? now) && ReferenceEquals(now, row),
-                $"the rescan replaced {path}'s row, which it did not change");
-            AssertReadsAsAShownRow(row, path);
+            var node = Assert.IsType<FileTreeNodeViewModel>(Assert.IsAssignableFrom<ItemAutomationPeer>(row).Item);
+            Assert.True(shown.TryGetValue(path, out AutomationPeer? now), $"the rescan dropped {path}'s row");
+            ItemAutomationPeer current = Assert.IsAssignableFrom<ItemAutomationPeer>(now);
+            Assert.Same(node, current.Item);
+            if (node.Level == 1)
+            {
+                Assert.True(ReferenceEquals(current, row), $"the rescan replaced {path}'s row, which it did not change");
+                AssertReadsAsAShownRow(row, path);
+            }
+            else
+            {
+                AssertReadsAsAShownRow(current, path);
+            }
         }
 
         Assert.NotSame(held["note2.md"], shown["note2.md"]);
