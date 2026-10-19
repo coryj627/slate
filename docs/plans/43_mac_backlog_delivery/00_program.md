@@ -2,6 +2,9 @@
 
 Status: adopted 2026-10-16. The owner approved the plan, its assumptions
 and decisions D6, D8 and D9 as recommended (recorded in §3).
+Reassessed 2026-10-19 (§11). The owner paused the queue; §11 records what
+was delivered and plans the remaining mac issues with no milestone as
+PR 26 onward, plus 21b, 22b and 22c.
 Baseline: `main` at 709ba8a2. Every file-and-line reference in this
 directory was re-verified against that commit. No file under `apps/` or
 `crates/` has changed since plan 41's baseline (c247b865), so plan 41's
@@ -176,8 +179,8 @@ expected inside a wave because many touch `AppState.swift`).
 | 18 | `specs/pr18_save_resolves_own_links.md` | #1295 | S–M | rust, swift, windows | — | any |
 | 19 | `specs/pr19_mac_rescan_baseline.md` | #1333 | M–L | swift, a11y, windows | 10, 12 | 18, 23, 24 |
 | 20 | `specs/pr20_vault_watcher.md`; split by its design (`20_vault_watcher_design.md` §7) into 20.0 (core link pass, #1429, delivered), 20a (core watcher and FFI, delivered), 20b (Windows host, delivered) and 20c (mac host, delivered) | #1267 | L (design first) | rust, swift, windows | 19 | 24 |
-| 21 | `specs/pr21_change_feed.md`; split by its design (`21_change_feed_design.md` §7) into 21a (core and FFI, delivered), 21b (Windows, after 20b) and 21c (mac host, delivered) | #1293 | L (design first) | rust, swift, windows | 20 | 24 |
-| 22 | `specs/pr22_descriptor_relative_session.md`; split by its design (`22_descriptor_relative_session_design.md` §7) into 22a (core interior, macOS and Linux, delivered), 22b (mac host) and 22W (Windows, Milestone W) | #940 | L (design first) | rust, swift, windows | 20 | — |
+| 21 | `specs/pr21_change_feed.md`; split by its design (`21_change_feed_design.md` §7) into 21a (core and FFI, delivered), 21b (Windows; the next wave, §11.4) and 21c (mac host, delivered) | #1293 | L (design first) | rust, swift, windows | 20 | 24 |
+| 22 | `specs/pr22_descriptor_relative_session.md`; split by its design (`22_descriptor_relative_session_design.md` §7) into 22a (core interior, macOS and Linux, delivered; its watcher re-arm is built and switched off until #1513), 22c (the provider's reads beneath the held root, #1513, which switches the re-arm on; added by §11), 22b (mac host, after 22c) and 22W (Windows, Milestone W) | #940 | L (design first) | rust, swift, windows | 20 | — |
 | 23 | `specs/pr23_durable_sidebar_journal.md` | #944 | M–L | swift, a11y, windows | 15b | 18, 19, 24 |
 | 24 | `specs/pr24_structural_identity_tracks.md` | #1125 | docs S, then sized | windows (docs) | — | any |
 
@@ -275,3 +278,260 @@ needs, together with this section.
   a comment naming its spec. This program creates no issues.
 - Delivery: one implementing session per PR, from the spec's "Brief"
   and §8, in the §6 order.
+- 2026-10-19: the owner paused the queue once the in-flight PRs had
+  merged, for a reassessment. §11 records the delivery, the lessons
+  (now rules), the remaining scope and the next wave, and lists the
+  owner decisions that wave needs (RD1 to RD19).
+
+## 11. Delivery record and reassessment (2026-10-19)
+
+The owner paused the queue on 2026-10-19 once the in-flight PRs had
+merged, to take stock of what this program delivered and to plan the
+remaining mac issues that have no milestone. The per-issue evidence
+behind this section (every candidate read in full and checked against
+`main`) is in `90_reassessment_2026-10-19.md`.
+
+### 11.1 What was delivered
+
+- **The original scope.** Of the 40 issues in §1, 37 are closed. Three
+  remain open, each for a known reason:
+  - #445, the a11y-inspect summary. Its findings, #446 and #447, closed
+    through #1374, but no scan has run since June to reconcile the
+    summary. RD16 recommends closing it by hand.
+  - #940, the descriptor-relative session. Its core landed in 22a
+    (#1518); the mac host half is 22b, and the Windows body (22W) waits
+    for Milestone W.
+  - #1293, the change feed. Its core landed in 21a (#1512) and its mac
+    host in 21c (#1520); only the Windows host, 21b, remains.
+- **About 53 PRs merged** from adoption (2026-10-16) to the pause. That
+  covers PRs 1 to 19, 23, 24 and 25, and the design series:
+  - 20.0, 20a, 20b and 20c, the vault watcher (#1267 closed);
+  - 21a and 21c, the change feed;
+  - 22a, the descriptor-relative session.
+  The pinned-root boundary fixes (#1449, #1450, #1451, #1452, #1477 and
+  #1495) and the test and tooling fixes (#1442, #1455, #1460's
+  tripwire, #1500, the Windows docs trigger) also merged.
+- **Every merge was pinned.** Each used `--match-head-commit`, and
+  `main`'s tree was compared with the tested tree, or with a clean merge
+  of it when `main` had only moved in disjoint files.
+- **Rule 8 worked, and the backlog grew.** Defects found on the way
+  were filed, not fixed in passing: about 105 issues have been opened
+  since adoption, 79 of them still open (many Windows-only). So the mac
+  backlog with no milestone went from 40 issues to 67.
+
+### 11.2 Lessons, recorded as rules for the next wave
+
+These extend §4, and every brief in the next wave carries them.
+
+1. **Facts that cannot run locally get a mutation probe.** This Mac has
+   no Windows toolchain, so a Windows fact is never seen to fail before
+   it merges. Before merging such a PR, push the change with its
+   behaviour switched off to a throwaway draft PR or a scratch branch,
+   show that the new facts fail, then delete the probe. #1509 did this
+   for #1506: 13 of 17 facts failed and every other test passed.
+2. **No accidental closing keywords.** GitHub closes an issue when a
+   closing word (close, fix or resolve, in any form) stands before its
+   number, even mid-sentence. #1460 closed by accident this way and was
+   reopened. A PR that only references an issue keeps every such word
+   away from the number. Before merging, check `gh pr view N --json
+   closingIssuesReferences`.
+3. **What publishes on its own is scanned right after it publishes.**
+   The watcher made the Windows tree's wholesale row replacement visible:
+   a screen reader could hear a row named after its class (20b). A
+   surface that a watcher, a feed or a timer can republish carries a
+   fact that the reader's element and focus survive the publication,
+   plus an accessibility scan right after it (#1507, #1523).
+4. **A known defect in a PR's own feature** is fixed on its branch first
+   (the owner's rule). The owner may choose otherwise case by case, and
+   two precedents are recorded:
+   - switch the defective part off behind one switch and merge the rest
+     (22a's re-arm, off until #1513);
+   - merge with a filed follow-up that runs next (20b, then #1515).
+5. **Back-to-back merges that touch the same files** were never tested
+   together. Wait for `main`'s own CI on the combined head before
+   building on it. #1517 and #1507 merged two minutes apart; `main` went
+   green at d5128eb5.
+6. **Windows lanes and the home runner.** If a Windows job sits queued
+   for more than 20 minutes on a `slate-win-*` label, cancel the run and
+   use "Re-run failed jobs", which routes to Namespace.
+   - A stuck older run on `main` holds the workflow's concurrency group,
+     because push runs don't cancel each other. On 2026-10-19 one did,
+     for 4 hours 20 minutes; cancelling it freed `main`'s run.
+   - The infrastructure side is #1482.
+7. **VoiceOver passes need the owner's unlocked screen.** Run the owed
+   passes back to back while it stays unlocked, under the shared UI
+   lock.
+   - Read what VoiceOver actually spoke from its speech-queue log, not
+     `last phrase`.
+   - A PR whose feature changes what VoiceOver says stays a draft until
+     its pass is recorded.
+8. **Sizes run large.** 21a was about 4,900 lines against an estimate
+   of 2,000 to 2,600, and 20a was about 4,000. An L chunk is planned as
+   a full slot for its whole wave.
+
+### 11.3 The remaining scope
+
+There are 75 open issues with no milestone that are not obviously
+Windows-only. Each was read in full and checked against `main` at
+b63f6dbb, and 67 of them are mac-relevant:
+
+| Scope | Count |
+|---|---|
+| mac-only | 32 |
+| both hosts | 7 |
+| core with mac impact | 12 |
+| process, docs, deps or test infrastructure | 16 |
+
+The other eight leave the mac plan:
+- **Windows-only**, to Milestone W or the Windows backlog: #1051,
+  #1480, #1492 and #1516.
+- **Core-only, with no mac impact today:** #640, which is already
+  delivered (close it), and #1484, which goes to the core performance
+  backlog.
+- **No action:** #445 (close it) and #642 (an l10n tracking umbrella;
+  it stays open and unscheduled).
+
+Of the 67:
+- **#1474 can close now that #1518 has merged (RD18).** Its leftovers
+  are #1513 on macOS and Linux, and 22W and #1475 on Windows.
+- **Four go on a watch list**, because each is blocked by an upstream
+  release:
+  - #480: a registry release of citationberg;
+  - #998: a uniffi-bindgen-cs build for uniffi 0.32;
+  - #1457: MathCAT taking zip 9. The audit exception's review-by date
+    is **2026-11-17**, so it needs renewing or upgrading before then;
+  - #1493: notify 9.0.0.
+- **One is a feature:** #1414 (copy a canvas media card). It goes to a
+  milestone (RD14).
+- **The other 61 fall into the 31 PRs below.** They close 59 issues;
+  #940 moves to Milestone W after 22b, and #1323 is narrowed to its
+  Windows items.
+
+What matters most:
+- **Security:** canvas link and file cards hand untrusted targets to the
+  system opener (#1367, #1368).
+- **Data integrity:**
+  - an undo before the editor's first highlight is lost and clears the
+    history (#1503);
+  - closing the main window leaves unsaved edits behind no window
+    (#1402);
+  - the two decided #1125 tracks, identity-checked undo (#1469) and
+    Trash verification (#1468).
+- **An accessibility blocker:** Quick Open's bare arrow keys don't move
+  its selection (#1379).
+
+### 11.4 The next wave
+
+The numbering continues from §5 (PR 26 onward). The three remaining
+design-series PRs keep their names. 22c is new: PR 22's follow-up for
+#1513. Each PR gets its spec under `specs/` when its wave starts, as the
+first waves did. Sizes use the triage's scale: S is under about 150
+changed lines with facts, M is 150 to 1,000, and L is over 1,000 or
+design-first.
+
+| PR | Title | Issues | Size | Lanes | Wave |
+|---|---|---|---|---|---|
+| 26 | Canvas: untrusted link and file targets (one link allowlist shared with notes and the reading view; containment that resolves symlinks against the vault root) | #1367 #1368 #1369 | M | swift, a11y | W1 |
+| 27 | Editor: an undo or redo before the first highlight reaches the buffer | #1503 | S–M | swift, a11y/VO | W1 |
+| 28 | Tests stop writing the developer's files; two flakes; the benchmark command | #1423 #1408 #1432 (Refs #1323) | S–M | swift | W1, slot 3 first |
+| 29 | Closing the main window with unsaved edits; Close Vault's close line | #1402 #1403 | M | swift, a11y/VO | W1, slot 3 after 28; needs RD1 |
+| 22c | The provider's reads beneath the held root; the re-arm switched on; the FFI doc | #1513 #1510 | L | rust, swift, windows | W2, first |
+| 30 | Palette and Quick Open keyboard (bare arrows, the key monitors' window gate, hover on open, the field hint) | #1379 #1380 #1413 #1382 | M | swift, a11y/VO (+ rust, windows with RD7) | W2 |
+| 21b | Windows host of the change feed | #1293 | L | windows | W2 (Windows files only) |
+| 22b | Mac host half of the descriptor-relative session | #940 (Refs) | S–M | swift, a11y | W3, after 22c |
+| 31 | Core: another session's link changes reach the graph | #1519 | S–M | rust, swift, windows | W3, after 22b in its slot; ideally before 21b's graph facts |
+| 32 | Canvas outline: VoiceOver's press, and the file-card hint by target | #1411 #1370 | S–M | swift, a11y/VO (+ rust, windows with RD7) | W3 |
+| 33 | Canvas: failure speech through core, reload selection, connection paint order | #1364 #1363 #1365 | M | swift, a11y/VO | W3, after 26; needs RD2, RD3, RD8 |
+| 34 | Identity-checked structural undo (#1125 decision 2) | #1469 | L | rust, swift, windows | W4, after 22c |
+| 35 | Bases: failure speech, pane targeting, unreadable YAML | #1399 #1400 #1398 | M | rust, swift, a11y/VO, windows | W4; needs RD5, RD8 |
+| 36 | Sidebar: selection after mutations, shortcut verbs never silent, a race-safe lock | #1407 #1409 #1405 #1521 | M | swift, a11y/VO | W4 |
+| 37 | Core test infrastructure: the real-Trash facts in the mac lane, a poison-proof fault guard | #1479 #1481 (Refs #1323) | S–M | rust (mac lane) | W5, slot 1 first |
+| 38 | No-replace renames on weak volumes (exFAT, SMB, NFS, FAT32) | #1434 #1470 | M | rust, swift | W5, slot 1 after 37 and 34; needs RD9 |
+| 39 | Landed-but-unindexed creates, and the caveat's punctuation | #1394 #1395 | S–M | rust, swift, a11y, windows | W5, after 33 |
+| 40 | Open-scan and rescan follow-ups | #1462 #1446 | M | swift, a11y | W5 (diagnose #1462 with one fact first) |
+| 41 | Trash: verify what arrived (T2) | #1468 | L | rust, swift, windows | W6, after 37 and 34; needs the `~/.Trash` read check on the owner's unlocked Mac |
+| 42 | R-9 re-sync, complete on mac (canvas and base tabs, Bases, dashboards, an open Quick Open, the filter, feed renames of every tab kind) | #1445 #1416 | L | swift, a11y | W6, after 30, 33, 35, 36 and 40 |
+| 43 | Search overlay: the selection model, and the stray phrase | #1377 #1497 | M | swift, a11y/VO | W6; needs RD4 |
+| 44 | Core: bounded link resolution, the rest | #1427 #1485 #1486 | M | rust, swift | W7, slot 1 |
+| 45 | Core: the create heal without whole-table reads | #1426 | M | rust, swift, windows | W7, slot 1 after 44 |
+| 46 | Embeds: live-buffer keys survive; base-card titles from core | #1393 #1388 #1390 | M | rust, swift, a11y/VO, windows | W7, after 35, 42 and 39 |
+| 47 | Generated register tables back in step, and checked in CI | #1376 #1386 | S | windows | W7 (docs; any free slot) |
+| 48 | Bases: queries off the main actor | #1436 | M–L | swift, a11y/VO | W8, after 35 and 42; needs RD10 |
+| 49 | Static accessibility: a11y-check 0.7.0, and doubled names | #1371 #1372 | M | swift, a11y/VO (spot) | W8; needs RD11 |
+| 50 | Organization facts on the async seam | #1490 | M | swift | W8, after 36 and 42 |
+| 51 | Reading-view links VoiceOver can press on any SDK | #1460 | L (spike first) | swift, a11y/VO on both builds | W9, and before any move to an Xcode project or `--build-system native`; needs RD12 |
+| 52 | Code preamble verbosity | #1389 | S (remove) or M (build) | swift, a11y/VO, windows | W9; needs RD6 |
+| 53 | Editor ⌘-click | #1466 | M | swift, a11y | W9, after 27; needs RD13 |
+
+**Waves.** At most three delivery agents run at once
+(`subagent-parallelism`). PRs in one wave share no files, except
+`AppState.swift` (different functions; a merge of `main` is expected)
+and core's `a11y.rs` and corpus (independent variants).
+
+| Wave | Slot 1 | Slot 2 | Slot 3 |
+|---|---|---|---|
+| W1 | 26 | 27 | 28, then 29 |
+| W2 | 22c | 30 | 21b |
+| W3 | 22b, then 31 | 32 | 33 |
+| W4 | 34 | 35 | 36 |
+| W5 | 37, then 38 | 39 | 40 |
+| W6 | 41 | 42 | 43 |
+| W7 | 44, then 45 | 46 | 47 |
+| W8 | 48 | 49 | 50 |
+| W9 | 51 | 52 | 53 |
+
+**Some PRs are sequenced on purpose** because they share files:
+
+| Shared code | Order |
+|---|---|
+| Canvas action and document files | 26, then 33, then 39 and 42 |
+| Bases files | 35, then 42, then 46, then 48 |
+| `AppState+Rescan.swift` | 40, then 42 |
+| `FileTreeSidebarTests` | 36, then 50 |
+| `vault/fs.rs` | 22c, then 34, then 38 |
+| The real-Trash lane, and a shared identity primitive | 37 and 34, then 41 |
+| Contract 38's generated ledger | 39 and 46 kept apart |
+
+When an S PR frees its slot early, the next PR in the same row takes
+it, or 47 does.
+
+**VoiceOver passes run one at a time,** under the shared UI lock on the
+owner's unlocked Mac. W1 has three (26, 27 and 29); plan for them to
+run back to back.
+
+### 11.5 Owner decisions for the next wave
+
+Each has a recommended answer; the evidence is in
+`90_reassessment_2026-10-19.md` (f). Only RD1 blocks W1. The rest are
+needed by the wave named.
+
+| Id | Issues | Question | Recommended | Needed by |
+|---|---|---|---|---|
+| RD1 | #1402 | Should closing the main window with unsaved edits ask? | Yes: run the Close Vault prompt (Save All, Discard All, Cancel); Cancel keeps the window. With nothing dirty, keep today's behaviour. This matches Windows and U1-2. | W1 (29) |
+| RD2 | #1363 | When a ready publish loses the selected card, drop the selection or re-seat it? | Re-seat, as Windows' `PublishReady` does (contract A12), with no announcement. | W3 (33) |
+| RD3 | #1365 | Should coloured connections paint beneath the cards, like plain ones, with label chips above? | Yes to both. | W3 (33) |
+| RD4 | #1377 | Search overlay: rows focusable whatever Full Keyboard Access says, or the palette's selection model? | The selection model. Focus stays in the field; the arrows move a spoken selection; Return opens it; ⌘Return opens it in a new tab. Rewrite #1113's facts first. | W6 (43) |
+| RD5 | #1398 | How should a `.base` whose YAML doesn't parse be repaired? | Now: core-owned failed-state copy that says the YAML could not be read, on both hosts. Later, as features: a raw-definition editor. | W4 (35) |
+| RD6 | #1389 | The code-preamble verbosity modes do nothing: remove them, or build them? | Remove them on both hosts now. File the real modes as a core enhancement. | W9 (52) |
+| RD7 | #1382, #1370 | New hint copy: core-owned, or a host residue? | Core-owned, consumed by both hosts in the same PR. | W2 (30), W3 (32) |
+| RD8 | #1364, #1399 | Failure details: core's `vault_error_detail`, or mac's own humanizer? | Core's. Add a mac twin of `VaultErrorDetailCensus`, and file the rest of the host (about 90 `localizedDescription` uses) as a follow-up issue. | W3 (33) |
+| RD9 | #1434, #1470 | On a volume without `RENAME_EXCL`, refuse or fall back? | Probe first, then refuse truthfully with core copy. Never fall back to a replacing rename. | W5 (38) |
+| RD10 | #1436 | Accept that Base executes become asynchronous? | Yes, as Windows does and locked 05 §4 principle 2 requires. | W8 (48) |
+| RD11 | #1371 | a11y-check 0.7.0: fix and bump, or pin local installs to CI's ref? | Fix the real findings, waive the false positives with a record, then bump CI and the runner image to 0.7.0. | W8 (49) |
+| RD12 | #1460 | When should the SDK 27 reading-link fix be scheduled? | W9, and before any build-system move. The tripwire keeps shipping builds safe until then. | W9 (51) |
+| RD13 | #1466 | Does ⌘-click in the editor act in the current tab or open a new one? | The current tab, matching ⌘↩ and G22. | W9 (53) |
+| RD14 | #1414 | Schedule canvas copy now, or move it to a milestone? | Move it to a feature milestone. | housekeeping |
+| RD15 | #940 | After 22b, close #940, or keep it for 22W? | Keep it, and move it to Milestone W with a comment. | after 22b |
+| RD16 | #445 | Close the stale a11y-inspect summary by hand? | Yes. | housekeeping |
+| RD17 | #1323 | Keep #1323 as a mixed-host list? | No. Fix its mac and Rust facts in 28 and 37 (Refs), then retitle it as the Windows flakes list. | W1, W5 |
+| RD18 | #1474 | Close it at #1518's merge, or keep it until #1513? | Close it at the merge, pointing to #1513, 22W and #1475. | at #1518's merge |
+| RD19 | plan docs | Where does this wave live? | Here (§11), with a spec per PR written when its wave starts. | this PR |
+
+### 11.6 Status
+
+- **The queue stays paused** until the owner answers RD1 (or chooses to
+  start W1 without PR 29). 26, 27 and 28 need no decision.
+- **Two things happen before W1:**
+  - the close candidates: #640 (delivered in #771) and #445 (RD16);
+  - the watch list's dated item: renew or upgrade the zip exception
+    (#1457) before 2026-11-17.
