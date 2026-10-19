@@ -815,11 +815,62 @@ pub(crate) mod sys {
         // SAFETY: `dir` is an open directory and `name` is NUL-terminated;
         // both outlive the call. A successful descriptor is uniquely owned by
         // the returned `File`.
-        let descriptor = unsafe { libc::openat(dir.as_raw_fd(), name.as_ptr(), flags, mode) };
+        let descriptor = unsafe { raw_open_at(dir.as_raw_fd(), name.as_ptr(), flags, mode) };
         if descriptor < 0 {
             return Err(io::Error::last_os_error());
         }
         Ok(unsafe { fs::File::from_raw_fd(descriptor) })
+    }
+
+    /// How many times a create beneath a directory descriptor goes round
+    /// before it gives up. Each extra round needs another opener to have made
+    /// and removed the name in between.
+    const CREATE_ROUNDS: usize = 16;
+
+    /// `openat`, with a create that cannot lose a race. macOS's `openat`
+    /// with `O_CREAT` and no `O_EXCL`, relative to a directory descriptor,
+    /// can fail with `ENOENT` when another opener makes the same name at
+    /// that moment. On Darwin 27, about one open in four failed in a
+    /// two-process race, while `open` by an absolute path never did. Two
+    /// `slate write` processes on a fresh vault met it at `structural.lock`,
+    /// and SQLite meets it as a quiet read-only retry.
+    ///
+    /// So such a create opens the name without `O_CREAT` first, and makes it
+    /// with `O_EXCL` only when it is missing. An opener that loses that race
+    /// opens what the winner made. The result is what `O_CREAT` promises:
+    /// the one file, made if it was missing. Any other open is one `openat`.
+    /// It returns the descriptor, or -1 with `errno` set, so the SQLite hook
+    /// can call it as it would call `openat`.
+    ///
+    /// # Safety
+    ///
+    /// `dir` is an open directory descriptor and `name` a NUL-terminated
+    /// string, both valid for the call, as `openat` requires.
+    pub(crate) unsafe fn raw_open_at(
+        dir: libc::c_int,
+        name: *const libc::c_char,
+        flags: libc::c_int,
+        mode: libc::c_uint,
+    ) -> libc::c_int {
+        if flags & libc::O_CREAT == 0 || flags & libc::O_EXCL != 0 {
+            // SAFETY: the caller's contract.
+            return unsafe { libc::openat(dir, name, flags, mode) };
+        }
+        let errno = || io::Error::last_os_error().raw_os_error();
+        let mut descriptor = -1;
+        for _ in 0..CREATE_ROUNDS {
+            // SAFETY: the caller's contract.
+            descriptor = unsafe { libc::openat(dir, name, flags & !libc::O_CREAT) };
+            if descriptor >= 0 || errno() != Some(libc::ENOENT) {
+                return descriptor;
+            }
+            // SAFETY: the caller's contract.
+            descriptor = unsafe { libc::openat(dir, name, flags | libc::O_EXCL, mode) };
+            if descriptor >= 0 || errno() != Some(libc::EEXIST) {
+                return descriptor;
+            }
+        }
+        descriptor
     }
 
     /// Make the folder `name` in `dir` if it is missing; one that is there
@@ -1064,5 +1115,55 @@ mod tests {
         refused(held.open_file("prefs.json", FileOptions::new().read(true)));
         assert!(held.read_child_dir("oplog").is_err());
         assert_eq!(std::fs::read_dir(elsewhere.path()).unwrap().count(), 1);
+    }
+
+    /// macOS's `openat` with `O_CREAT` and no `O_EXCL`, relative to a
+    /// directory descriptor, can fail with `ENOENT` when another opener makes
+    /// the same name at that moment. On this Mac (Darwin 27) about one open in
+    /// four failed in a two-process race, while `open` and
+    /// `openat(AT_FDCWD)` by an absolute path never did. Two `slate write`
+    /// processes on a fresh vault met it at `structural.lock`. So a create
+    /// beneath a held directory opens the name first and makes it with
+    /// `O_EXCL` only when it is missing: racing openers all open the one
+    /// file.
+    #[cfg(all(
+        any(target_os = "macos", target_os = "linux"),
+        target_pointer_width = "64"
+    ))]
+    #[test]
+    fn racing_creates_beneath_a_held_directory_all_open_the_one_file() {
+        use std::os::unix::fs::MetadataExt as _;
+        let tmp = tempfile::tempdir().unwrap();
+        for round in 0..200 {
+            let held = CacheDir::configured(&tmp.path().join(format!("d{round}"))).unwrap();
+            let start = Arc::new(std::sync::Barrier::new(4));
+            let openers: Vec<_> = (0..4)
+                .map(|_| {
+                    let held = held.clone();
+                    let start = Arc::clone(&start);
+                    std::thread::spawn(move || {
+                        start.wait();
+                        held.open_file(
+                            "structural.lock",
+                            FileOptions::new().read(true).write(true).create(true),
+                        )
+                    })
+                })
+                .collect();
+            let inodes: Vec<u64> = openers
+                .into_iter()
+                .map(|opener| {
+                    let file = opener
+                        .join()
+                        .unwrap()
+                        .unwrap_or_else(|error| panic!("round {round}: {error:?}"));
+                    file.metadata().unwrap().ino()
+                })
+                .collect();
+            assert!(
+                inodes.windows(2).all(|pair| pair[0] == pair[1]),
+                "round {round}: {inodes:?}"
+            );
+        }
     }
 }

@@ -265,9 +265,11 @@ unsafe extern "C" fn anchored_open(path: *const c_char, flags: c_int, mode: c_in
                 )
             }
         }
-        // SAFETY: as above; `leaf` points into SQLite's string.
+        // SAFETY: as above; `leaf` points into SQLite's string. A create
+        // goes through `raw_open_at`, so a racing opener never sends SQLite
+        // to its read-only retry (`racing_first_opens_of_an_anchored_database_all_succeed`).
         Target::Leaf(registered, leaf) => unsafe {
-            libc::openat(
+            crate::vault::fs_root::sys::raw_open_at(
                 registered.dir.as_raw_fd(),
                 leaf,
                 flags | crate::vault::fs_root::sys::NO_FOLLOW | libc::O_CLOEXEC,
@@ -650,5 +652,58 @@ mod tests {
             "a retired token is missing, not a pathname"
         );
         assert_eq!(display_path(&synthetic), synthetic);
+    }
+
+    /// The create race of `vault::fs_root`'s
+    /// `racing_creates_beneath_a_held_directory_all_open_the_one_file`,
+    /// through the hook. SQLite opens the database, its WAL and its shared
+    /// memory with `O_CREAT` and no `O_EXCL`, and when that open fails it
+    /// quietly retries read-only. So connections opening one fresh anchored
+    /// database at once must all be writable, and so must connections that
+    /// then open its WAL and shared memory at once.
+    #[test]
+    fn racing_first_opens_of_an_anchored_database_all_succeed() {
+        use std::sync::{Arc, Barrier};
+        let tmp = tempfile::tempdir().unwrap();
+        let race = |path: &std::path::Path, round: usize, write: bool| {
+            let start = Arc::new(Barrier::new(4));
+            let openers: Vec<_> = (0..4)
+                .map(|_| {
+                    let path = path.to_path_buf();
+                    let start = Arc::clone(&start);
+                    std::thread::spawn(move || {
+                        start.wait();
+                        let conn = crate::db::open_connection(&path)?;
+                        let readonly = conn.is_readonly(rusqlite::MAIN_DB)?;
+                        let wrote = if write {
+                            conn.execute("INSERT INTO t VALUES (1)", [])?
+                        } else {
+                            1
+                        };
+                        Ok::<_, rusqlite::Error>((readonly, wrote))
+                    })
+                })
+                .collect();
+            for opener in openers {
+                let outcome = opener
+                    .join()
+                    .unwrap()
+                    .unwrap_or_else(|error| panic!("round {round}, write {write}: {error}"));
+                assert_eq!(outcome, (false, 1), "round {round}, write {write}");
+            }
+        };
+        for round in 0..100 {
+            let held =
+                crate::vault::fs_root::CacheDir::configured(&tmp.path().join(format!("d{round}")))
+                    .unwrap();
+            let path = held.sqlite_path("cache.sqlite").unwrap();
+            race(&path, round, false);
+            {
+                let conn = crate::db::open_connection(&path).unwrap();
+                conn.execute_batch("PRAGMA journal_mode=WAL; CREATE TABLE t(x);")
+                    .unwrap();
+            }
+            race(&path, round, true);
+        }
     }
 }
