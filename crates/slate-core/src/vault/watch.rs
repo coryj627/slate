@@ -102,9 +102,10 @@ pub(crate) enum Relocation {
 /// What a watch is anchored to (design §4.4; plan 43 PR 22a, #940, §4.3).
 /// On macOS and Linux it is the root descriptor the session holds open
 /// (`FsRoot`): verification is `fstat` of that descriptor against `stat` of
-/// the watched path, and a legitimate rename re-arms at the descriptor's
-/// verified current path (`session/watch.rs` `WatchCoalescer::relocate` is
-/// the one policy point). Windows keeps the root path and its arm-time
+/// the watched path. A legitimate rename can re-arm at the descriptor's
+/// verified current path; `session/watch.rs` `WatchCoalescer::relocate` is
+/// the one policy point, and the re-arm is off until #1513
+/// (`WATCH_REARM_ENABLED`). Windows keeps the root path and its arm-time
 /// identity until 22W.
 #[derive(Debug, Clone)]
 pub(crate) enum RootAnchor {

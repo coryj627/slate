@@ -24,9 +24,10 @@ import XCTest
 /// `testAChangeMadeDuringTheOpenScanArrivesAsABurst`,
 /// `testCloseStopsTheWatchAndDropsALateSignal`,
 /// `testTheBaselineIsUnchangedWhileTheWatcherIsLive` and plan 43 PR 22a's
-/// `testARenamedVaultFolderRearmsTheWatcherAtItsNewPath`. Their waits are bounded
-/// (30 s for a call that must come, 12 s for one that must not) and end
-/// early. Two more arm a real watch without waiting on it: the comparison
+/// `testARenamedVaultFolderRearmsTheWatcherAtItsNewPath`. That last one
+/// follows core's re-arm switch, `vaultWatchRearmEnabled()`, and is skipped
+/// while the re-arm is off (until #1513). Their waits are bounded (30 s for a
+/// call that must come, 12 s for one that must not) and end early. Two more arm a real watch without waiting on it: the comparison
 /// open in `testAnUnavailableWatcherLeavesTheBaselineUnchanged` and
 /// `testTheTestSwitchKeepsTheWatcherOffForTheWholeRun`. The names are the
 /// Windows twins' (`RescanTests.Watcher.cs`, PR 20b) in Swift form. The
@@ -592,7 +593,15 @@ extension VaultRescanTests {
     /// watcher's calls are asserted: the Watcher runs they start still read
     /// the vault by the path it was opened at (core's reads follow the held
     /// root in a follow-up; the host half is PR 22b).
+    ///
+    /// Gated by core's one switch, read through the FFI: the re-arm is off
+    /// until #1513 (the owner's decision on #1518), so this fact is skipped,
+    /// and core's `a_legitimate_root_rename_ends_the_watch_while_the_rearm_is_off`
+    /// holds instead. Turning the switch on brings this fact back unchanged.
     func testARenamedVaultFolderRearmsTheWatcherAtItsNewPath() async throws {
+        try XCTSkipUnless(
+            vaultWatchRearmEnabled(),
+            "Core's vault watch re-arm is off until #1513: a renamed vault folder ends the watch.")
         let h = try await open(["alpha.md": "# Alpha\n"], watching: true)
         let session = try XCTUnwrap(h.state.currentSession)
         let outside = ExternalChangeRecorder()

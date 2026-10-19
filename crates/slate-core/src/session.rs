@@ -44,7 +44,7 @@ pub use directory_page::DirListingPage;
 // Plan 43 PR 20a (#1267): the vault watcher's coalescer and
 // `start_watching` / `stop_watching`.
 mod watch;
-pub use watch::WATCHER_SENTENCE_SPACING_MS;
+pub use watch::{WATCH_REARM_ENABLED, WATCHER_SENTENCE_SPACING_MS};
 
 static NEXT_DIRECTORY_CURSOR_NONCE: AtomicU64 = AtomicU64::new(1);
 

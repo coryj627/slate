@@ -6848,6 +6848,16 @@ pub fn watcher_sentence_spacing_ms() -> u64 {
     core::WATCHER_SENTENCE_SPACING_MS
 }
 
+/// Plan 43 PR 22a (#940; design §4.3): whether core's vault watch re-arms
+/// after a legitimate rename of the vault folder. It is off until #1513 (the
+/// owner's decision on #1518): a renamed vault folder ends the watch, as PR
+/// 20 decided, and Refresh and the foreground rescan remain. This is core's
+/// one switch, so the hosts' re-arm witnesses follow it.
+#[uniffi::export]
+pub fn vault_watch_rearm_enabled() -> bool {
+    core::WATCH_REARM_ENABLED
+}
+
 // =====================================================================
 // Templates FFI surface (Milestone H)
 // =====================================================================
