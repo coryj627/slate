@@ -250,8 +250,15 @@ final class VaultRescanRun {
 
     // MARK: Test seams
 
+    // Every seam is this run state's own, so it lives as long as its
+    // `AppState`: a fact builds its own, and nothing a seam holds outlives the
+    // fact. A seam is deliberately not cleared after a run, because a fact
+    // keeps one across several runs (the windows it records, a fault it lifts
+    // between them). Production never sets one.
+
     /// Each core call that carries the run's token: its operation ("scan",
-    /// "inventory", "hashes") and the token. Called on the worker.
+    /// "inventory", "hashes", and since PR 21c "window", "page", "head",
+    /// "acknowledge", "summary") and the token. Called on the worker.
     var coreCallObserver: (@Sendable (String, CancelToken) -> Void)?
     /// Awaited after the scan returns, before the re-sync (a fact parks a run
     /// here to send requests while it is active).
@@ -777,14 +784,26 @@ extension AppState {
 
     // MARK: - The change feed (plan 43 PR 21c, #1293)
 
-    /// What a run's consumption of the change feed did, for its one sentence.
+    /// What a run's consumption of the change feed did, for its one sentence
+    /// (`runOneRescan`, design §4.7). The sentence reads it in this order:
+    /// `failed > 0` (or a partial scan) is `VaultRescanIncomplete`, whatever
+    /// else holds; otherwise `counted` picks `VaultRescanFinished`, whose
+    /// counts are `changed` and `removed` for an explicit Refresh and the
+    /// scan's own for a foreground or Watcher run (the owner's decision Q2);
+    /// otherwise the feed answered with a gap, an oversized window or an
+    /// uncounted one, and the sentence is `VaultRescanFinishedUncounted` with
+    /// the scan's own counts.
     struct ChangeFeedOutcome {
         /// Failed re-sync operations, feed reads and acknowledgments: one
         /// error each.
         var failed: UInt64 = 0
-        /// The run's last window was exact and counted, and the feed
-        /// answered every read the run made: `changed` and `removed` are
-        /// exact, from this session's cursor.
+        /// The run's last window was exact and counted, every feed read the
+        /// run made answered, and its acknowledgment landed: `changed` and
+        /// `removed` are exact, from this session's cursor. A failed window,
+        /// page or head read, or a failed acknowledgment, leaves it false and
+        /// counts one error in `failed`. A failed re-sync operation counts
+        /// there too but leaves it as it was; the sentence reads `failed`
+        /// first.
         var counted = false
         var changed: UInt64 = 0
         var removed: UInt64 = 0

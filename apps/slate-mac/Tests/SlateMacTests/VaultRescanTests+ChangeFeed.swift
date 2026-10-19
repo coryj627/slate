@@ -640,9 +640,16 @@ extension VaultRescanTests {
     /// Design §4.2: a failed acknowledgment is one error for its run, and the
     /// next run reads the window again, so its counts are spoken once, by the
     /// run that acknowledges them. A failed feed read is one error too, and
-    /// the run falls back to the full re-sync.
+    /// the run acknowledges nothing: a window that cannot be read falls back
+    /// to the full re-sync, and a head that cannot be read after an exact
+    /// window's publication leaves that window to the next run. Either way
+    /// the sentence is the incomplete one (design §4.7's first row), never
+    /// the uncounted one, which is for a feed that answered with a gap or an
+    /// oversized window.
     func testAFailedAcknowledgmentOrFeedReadIsOneErrorAndTheWindowIsReadAgain() async throws {
         let h = try await open(["alpha.md": "# Alpha\n"])
+        let calls = h.recordCoreCalls()
+        let windows = h.recordWindows()
         let other = try h.anotherSession()
         _ = try other.createExclusive(path: "new.md", content: "# New\n")
         let failing = Locked<Set<String>>(["acknowledge"])
@@ -657,6 +664,19 @@ extension VaultRescanTests {
         try await h.refresh()
         XCTAssertEqual(h.spoken.lines, [Self.oneError], "a feed read that fails")
         XCTAssertTrue(h.state.files.contains { $0.path == "new.md" }, "the full re-sync showed it")
+
+        // The head read fails after an exact window was applied.
+        failing.mutate { $0 = ["head"] }
+        h.spoken.lines.removeAll()
+        windows.all.removeAll()
+        let acknowledgments = calls.count("acknowledge")
+        let heads = calls.count("head")
+        try await h.refresh()
+        XCTAssertEqual(windows.statuses, [.exact], "the window was read and applied")
+        XCTAssertEqual(calls.count("head"), heads + 1, "the head was read once, and failed")
+        XCTAssertEqual(
+            calls.count("acknowledge"), acknowledgments, "a failed head read acknowledges nothing")
+        XCTAssertEqual(h.spoken.lines, [Self.oneError], "incomplete, never uncounted")
 
         failing.mutate { $0 = [] }
         h.spoken.lines.removeAll()
