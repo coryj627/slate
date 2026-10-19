@@ -545,6 +545,70 @@ mod tests {
         }
     }
 
+    /// The anchored directory's own name is opened only for reading (SQLite
+    /// syncs it after a WAL commit), never written (`EISDIR`) or unlinked
+    /// (`EPERM`); no anchored name is ever resolved as a link (`readlink` is
+    /// `EINVAL`, so SQLite's own link resolution cannot leave the held
+    /// directory); and a leaf that is a link is refused (`ELOOP`) while a
+    /// plain one unlinks beneath the directory (Codoki on #1518).
+    #[test]
+    fn the_anchored_directory_is_never_written_unlinked_or_resolved_as_a_link() {
+        use std::ffi::CString;
+        install().unwrap();
+        let tmp = tempfile::tempdir().unwrap();
+        std::fs::write(tmp.path().join("cache.sqlite"), b"x").unwrap();
+        std::os::unix::fs::symlink(tmp.path().join("cache.sqlite"), tmp.path().join("linked"))
+            .unwrap();
+        let anchor =
+            SqliteAnchor::register(&std::fs::File::open(tmp.path()).unwrap(), tmp.path()).unwrap();
+        let c_path = |path: PathBuf| CString::new(path.to_str().unwrap()).unwrap();
+        let dir = c_path(anchor.database_path("x").parent().unwrap().to_path_buf());
+        let leaf = c_path(anchor.database_path("cache.sqlite"));
+        let linked = c_path(anchor.database_path("linked"));
+        let errno = || io::Error::last_os_error().raw_os_error();
+
+        for flags in [libc::O_WRONLY, libc::O_RDWR, libc::O_RDONLY | libc::O_CREAT] {
+            // SAFETY: NUL-terminated paths, as SQLite passes them.
+            assert_eq!(unsafe { anchored_open(dir.as_ptr(), flags, 0o644) }, -1);
+            assert_eq!(errno(), Some(libc::EISDIR), "flags {flags:#x}");
+        }
+        // SAFETY: as above.
+        let read = unsafe { anchored_open(dir.as_ptr(), libc::O_RDONLY, 0) };
+        assert!(read >= 0, "the directory opens for its sync");
+        // SAFETY: `read` is a descriptor this fact owns.
+        unsafe { libc::close(read) };
+        // SAFETY: as above.
+        assert_eq!(unsafe { anchored_unlink(dir.as_ptr()) }, -1);
+        assert_eq!(errno(), Some(libc::EPERM));
+
+        let mut buffer = [0 as c_char; 64];
+        for name in [&leaf, &linked, &dir] {
+            // SAFETY: a NUL-terminated path and a writable buffer of its
+            // stated size.
+            let got =
+                unsafe { anchored_readlink(name.as_ptr(), buffer.as_mut_ptr(), buffer.len()) };
+            assert_eq!(got, -1, "{name:?}");
+            assert_eq!(errno(), Some(libc::EINVAL), "{name:?}");
+        }
+
+        // SAFETY: as above.
+        assert_eq!(
+            unsafe { anchored_open(linked.as_ptr(), libc::O_RDONLY, 0) },
+            -1
+        );
+        assert_eq!(
+            errno(),
+            Some(libc::ELOOP),
+            "a linked leaf is never opened through"
+        );
+        // SAFETY: as above.
+        assert_eq!(unsafe { anchored_access(linked.as_ptr(), libc::R_OK) }, -1);
+        assert_eq!(errno(), Some(libc::ELOOP));
+        // SAFETY: as above.
+        assert_eq!(unsafe { anchored_unlink(leaf.as_ptr()) }, 0);
+        assert!(!tmp.path().join("cache.sqlite").exists());
+    }
+
     /// The overrides pass every path that is not ours to the call SQLite
     /// had before, and answer `ENOENT` for a retired or unknown token, never
     /// a pathname lookup.
