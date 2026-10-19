@@ -248,7 +248,7 @@ internal sealed partial class FilesSidebarViewModel
             int rewritten = ConsumeStructuralReport(report);
             TransformStoredPaths(oldPath, newPath, node.IsDirectory, deleted: false);
             CorrectStoredPathsFromReport(report, oldPath, newPath);
-            CarryJournalEntry(journalEntry);
+            StoredPathsFollowed(journalEntry);
             PushIdentityCheckedStep(new StructuralUndoStep(
                 StructuralUndoKind.Rename,
                 Path: newPath,
@@ -459,7 +459,7 @@ internal sealed partial class FilesSidebarViewModel
                 return;
             }
 
-            CarryJournalEntry(journalEntry);
+            StoredPathsFollowed(journalEntry);
 
             if (inverse is null)
             {
@@ -948,7 +948,7 @@ internal sealed partial class FilesSidebarViewModel
                 int rewritten = ConsumeStructuralReport(report);
                 TransformStoredPaths(single.Path, movedPath, single.IsDirectory, deleted: false);
                 CorrectStoredPathsFromReport(report, single.Path, movedPath);
-                CarryJournalEntry(journalEntry);
+                StoredPathsFollowed(journalEntry);
                 PushIdentityCheckedStep(new StructuralUndoStep(
                     StructuralUndoKind.Move,
                     Path: movedPath,

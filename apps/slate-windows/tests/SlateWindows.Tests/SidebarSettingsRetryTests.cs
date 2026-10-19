@@ -9,15 +9,50 @@ namespace SlateWindows.Tests;
 /// <summary>
 /// #1230: the Windows sidebar-settings retry. A blocked read stands as
 /// a notice with a Retry action; retry rereads the same file and adopts
-/// it wholesale on success, keeps defaults and the notice otherwise,
-/// and speaks core's three sidebar-settings events. Contracts:
-/// docs/plans/38_notification_dispatcher_contracts.md (the #1230
-/// amendment).
+/// it on success — with the renames and moves made during the outage
+/// replayed onto it first from the sidebar write journal (#1514, as mac's
+/// Retry replays its journal), while pin, unpin and shortcut edits made
+/// then are discarded — keeps defaults and the notice otherwise, and
+/// speaks core's three sidebar-settings events. The stale-references
+/// outcome is reserved for a rewrite that could not be carried over.
+/// Contracts: docs/plans/38_notification_dispatcher_contracts.md (D-13,
+/// amended by #1514).
 /// </summary>
-public sealed class SidebarSettingsRetryTests
+/// <remarks>Each fact journals into its own temporary folder, as
+/// <see cref="SidebarWriteJournalTests"/> do, so a fact can read what the
+/// retry left live.</remarks>
+public sealed class SidebarSettingsRetryTests : IDisposable
 {
     private const string MalformedReason = "Sidebar settings are malformed and are read-only.";
     private const string Malformed = "{\"version\":1,\"sort\":\"bogus\"}";
+
+    private readonly string _scratch = Path.Combine(
+        Path.GetTempPath(),
+        $"slate-sidebar-settings-retry-tests-{Guid.NewGuid():N}");
+
+    private readonly SidebarWriteJournal _journal;
+
+    public SidebarSettingsRetryTests()
+    {
+        _journal = new SidebarWriteJournal(JournalDirectory);
+    }
+
+    private string JournalDirectory => Path.Combine(_scratch, "journal");
+
+    public void Dispose()
+    {
+        _ = _journal.WhenIdle().Wait(TimeSpan.FromSeconds(10));
+        try
+        {
+            Directory.Delete(_scratch, recursive: true);
+        }
+        catch (IOException)
+        {
+        }
+        catch (UnauthorizedAccessException)
+        {
+        }
+    }
 
     [Fact]
     public void ABlockedReadStandsAsANoticeWithRetryAvailable()
@@ -63,7 +98,7 @@ public sealed class SidebarSettingsRetryTests
         Assert.Null(sidebar.SettingsNotice);
         Assert.False(sidebar.HasSettingsNotice);
         Assert.False(sidebar.RetrySettingsCommand.CanExecute(null));
-        // The file's authored sections are adopted wholesale.
+        // The file's authored sections are adopted as written.
         Assert.Equal(SidebarSortMode.CreatedOldest, sidebar.SortMode);
         Assert.False(sidebar.GroupByDate);
         Assert.Equal("note2.md", sidebar.RootNodes[0].Path);
@@ -130,16 +165,99 @@ public sealed class SidebarSettingsRetryTests
     }
 
     [Fact]
-    public void RetryAfterAStructuralChangeDuringTheOutageSpeaksStaleReferences()
+    public void RetryAfterARenameDuringTheOutageCarriesThePinAndDiscardsThePinMadeThen()
     {
-        using FixtureVault fixture = FixtureVault.Create(2, "settings-retry-stale");
+        using FixtureVault fixture = FixtureVault.Create(3, "settings-retry-rename");
         WriteSettings(fixture, Malformed);
         var announced = new List<A11yEvent>();
         using VaultSession session = OpenScanned(fixture.Root);
         FilesSidebarViewModel sidebar = NewSidebar(session, fixture, announced);
 
         // A rename while the file is read-only rewrites the stored paths
-        // in memory but cannot land them; the sidebar says so at once.
+        // in memory and journals the rename, but cannot land it; the
+        // sidebar says so at once.
+        sidebar.SelectedNode = Node(sidebar, "note0.md");
+        sidebar.MutationName = "renamed.md";
+        Assert.True(sidebar.TryRenameSelected());
+        Assert.Contains(
+            "Sidebar pins and shortcuts could not be saved.",
+            sidebar.Status,
+            StringComparison.Ordinal);
+        // A pin made during the outage is a failed save.
+        sidebar.SelectedNode = Node(sidebar, "note1.md");
+        sidebar.PinCommand.Execute(null);
+        Assert.StartsWith("Could not save pins:", sidebar.Status, StringComparison.Ordinal);
+        announced.Clear();
+
+        // The repaired file still pins the OLD name: the rename replays
+        // onto it before it is adopted, so the pin follows the note (#1514),
+        // while the pin made during the outage is discarded — the file is
+        // the authority for those.
+        WriteSettings(fixture, "{\"version\":1,\"pins\":{\"\":[\"note0.md\"]}}");
+        sidebar.RetrySettingsCommand.Execute(null);
+
+        Assert.Null(sidebar.SettingsNotice);
+        A11yEvent spoken = Assert.Single(announced);
+        Assert.IsType<A11yEvent.SidebarSettingsReloaded>(spoken);
+        Assert.Equal(SlateUniffiMethods.A11yRender(spoken).Text, sidebar.Status);
+        Assert.Equal("renamed.md", sidebar.RootNodes[0].Path);
+        Assert.Equal(["renamed.md"], RootPins(fixture));
+        // The replay's write carried the outage's entry.
+        Idle();
+        Assert.Equal(0, _journal.LiveEntryCount(Identity(fixture)));
+    }
+
+    [Fact]
+    public void RetryAfterAMoveDuringTheOutageCarriesTheShortcutInItsSlot()
+    {
+        using FixtureVault fixture = FixtureVault.Create(3, "settings-retry-move");
+        Directory.CreateDirectory(Path.Combine(fixture.Root, "Destination"));
+        WriteSettings(fixture, Malformed);
+        var announced = new List<A11yEvent>();
+        using VaultSession session = OpenScanned(fixture.Root);
+        FilesSidebarViewModel sidebar = NewSidebar(session, fixture, announced);
+
+        // A move while the file is read-only: journaled, not landed.
+        Node(sidebar, "note1.md").IsBatchSelected = true;
+        sidebar.MoveDestination = "Destination";
+        sidebar.BatchMoveCommand.Execute(null);
+        Assert.True(File.Exists(Path.Combine(fixture.Root, "Destination", "note1.md")));
+        announced.Clear();
+
+        // The repaired file's middle slot still names the old path: the
+        // move replays onto it, and the slot keeps its place.
+        WriteSettings(fixture, """
+            {
+              "version": 1,
+              "shortcuts": [
+                { "kind": "file", "path": "note0.md" },
+                { "kind": "file", "path": "note1.md" },
+                { "kind": "file", "path": "note2.md" }
+              ]
+            }
+            """);
+        sidebar.RetrySettingsCommand.Execute(null);
+
+        Assert.Null(sidebar.SettingsNotice);
+        Assert.IsType<A11yEvent.SidebarSettingsReloaded>(Assert.Single(announced));
+        string[] slots = [.. sidebar.Shortcuts.Select(slot => slot.Path)];
+        Assert.Equal(["note0.md", "Destination/note1.md", "note2.md"], slots);
+        Assert.Equal(["note0.md", "Destination/note1.md", "note2.md"], ShortcutsOnDisk(fixture));
+        Idle();
+        Assert.Equal(0, _journal.LiveEntryCount(Identity(fixture)));
+    }
+
+    [Fact]
+    public void RetryAfterARenameTheJournalCouldNotRecordSpeaksStaleReferences()
+    {
+        using FixtureVault fixture = FixtureVault.Create(2, "settings-retry-unrecorded");
+        WriteSettings(fixture, Malformed);
+        // A journal file of a newer format: this build never touches it,
+        // so the outage's rename is kept nowhere but memory.
+        WriteNewerFormatJournal(fixture);
+        var announced = new List<A11yEvent>();
+        using VaultSession session = OpenScanned(fixture.Root);
+        FilesSidebarViewModel sidebar = NewSidebar(session, fixture, announced);
         sidebar.SelectedNode = Node(sidebar, "note0.md");
         sidebar.MutationName = "renamed.md";
         Assert.True(sidebar.TryRenameSelected());
@@ -149,23 +267,67 @@ public sealed class SidebarSettingsRetryTests
             StringComparison.Ordinal);
         announced.Clear();
 
-        // The repaired file still pins the OLD name: adopted as authored,
-        // and the outcome says references may be stale.
+        // The repaired file still pins the OLD name, and nothing can carry
+        // the rename over: adopted as authored, and the outcome says the
+        // references may be stale.
         WriteSettings(fixture, "{\"version\":1,\"pins\":{\"\":[\"note0.md\"]}}");
         sidebar.RetrySettingsCommand.Execute(null);
 
         Assert.Null(sidebar.SettingsNotice);
-        A11yEvent spoken = Assert.Single(announced);
-        Assert.IsType<A11yEvent.SidebarSettingsReloadedStaleRefs>(spoken);
-        Assert.Equal(SlateUniffiMethods.A11yRender(spoken).Text, sidebar.Status);
+        Assert.IsType<A11yEvent.SidebarSettingsReloadedStaleRefs>(announced[0]);
         Assert.Equal(["note0.md"], RootPins(fixture));
+        // The journal that could not record is said after the outcome.
+        Assert.Contains(FilesSidebarViewModel.UnreadableJournalReason, Spoken(announced));
     }
 
     [Fact]
-    public void TheStaleReferencesMemoryClearsWithASuccessfulRetry()
+    public void RetryWhoseReplayWriteFailsSpeaksStaleReferencesAndKeepsTheEntryForTheNextWrite()
+    {
+        using FixtureVault fixture = FixtureVault.Create(2, "settings-retry-replay-fails");
+        WriteSettings(fixture, Malformed);
+        var announced = new List<A11yEvent>();
+        using VaultSession session = OpenScanned(fixture.Root);
+        FilesSidebarViewModel sidebar = NewSidebar(session, fixture, announced);
+        sidebar.SelectedNode = Node(sidebar, "note0.md");
+        sidebar.MutationName = "renamed.md";
+        Assert.True(sidebar.TryRenameSelected());
+        announced.Clear();
+
+        // The file is readable again, but another process holds the
+        // settings lock while Retry runs: the replay's write cannot land.
+        WriteSettings(fixture, "{\"version\":1,\"pins\":{\"\":[\"note0.md\"]}}");
+        string lockPath = Path.Combine(fixture.Root, ".slate", "sidebar.json.lock");
+        using (new FileStream(lockPath, FileMode.OpenOrCreate, FileAccess.ReadWrite, FileShare.None))
+        {
+            sidebar.RetrySettingsCommand.Execute(null);
+        }
+
+        // Adopted with the rename replayed in memory; the file still names
+        // the old path, the outcome says so, and the failure is reported.
+        Assert.Null(sidebar.SettingsNotice);
+        Assert.IsType<A11yEvent.SidebarSettingsReloadedStaleRefs>(announced[0]);
+        Assert.Contains(
+            Spoken(announced),
+            text => text.StartsWith("Could not save pins:", StringComparison.Ordinal));
+        Assert.Equal("renamed.md", sidebar.RootNodes[0].Path);
+        Assert.Equal(["note0.md"], RootPins(fixture));
+        Assert.Equal(1, _journal.LiveEntryCount(Identity(fixture)));
+
+        // The next pins write that lands carries the entry.
+        sidebar.SelectedNode = Node(sidebar, "note1.md");
+        sidebar.PinCommand.Execute(null);
+        Assert.Equal("Pinned note1.md.", sidebar.Status);
+        Assert.Equal(["note1.md", "renamed.md"], RootPins(fixture));
+        Idle();
+        Assert.Equal(0, _journal.LiveEntryCount(Identity(fixture)));
+    }
+
+    [Fact]
+    public void TheStaleReferencesMemoryBelongsToTheOutageThatMadeIt()
     {
         using FixtureVault fixture = FixtureVault.Create(2, "settings-retry-stale-clears");
         WriteSettings(fixture, Malformed);
+        WriteNewerFormatJournal(fixture);
         var announced = new List<A11yEvent>();
         using VaultSession session = OpenScanned(fixture.Root);
         FilesSidebarViewModel sidebar = NewSidebar(session, fixture, announced);
@@ -175,7 +337,7 @@ public sealed class SidebarSettingsRetryTests
         WriteSettings(fixture, "{\"version\":1}");
         announced.Clear();
         sidebar.RetrySettingsCommand.Execute(null);
-        Assert.IsType<A11yEvent.SidebarSettingsReloadedStaleRefs>(Assert.Single(announced));
+        Assert.IsType<A11yEvent.SidebarSettingsReloadedStaleRefs>(announced[0]);
 
         // A second outage with no structural change in between recovers
         // as a plain reload: the memory belonged to the first outage.
@@ -253,6 +415,19 @@ public sealed class SidebarSettingsRetryTests
         File.WriteAllText(SettingsPath(fixture), json);
     }
 
+    /// <summary>A journal file for the fixture's vault in a format newer
+    /// than this build's: it is never replayed and never written, so a
+    /// rename made with it in place is journaled nowhere.</summary>
+    private void WriteNewerFormatJournal(FixtureVault fixture)
+    {
+        (SidebarJournalIdentity? identity, long? birth) = SidebarJournalIdentity.Fingerprint(fixture.Root);
+        Assert.NotNull(identity);
+        Directory.CreateDirectory(JournalDirectory);
+        File.WriteAllBytes(
+            _journal.FilePath(identity),
+            SidebarWriteJournal.EncodeHeader(identity, birth, version: SidebarWriteJournal.FormatVersion + 1));
+    }
+
     private static string[] RootPins(FixtureVault fixture)
     {
         using JsonDocument document = JsonDocument.Parse(File.ReadAllBytes(SettingsPath(fixture)));
@@ -269,10 +444,36 @@ public sealed class SidebarSettingsRetryTests
             .ToArray();
     }
 
+    private static string[] ShortcutsOnDisk(FixtureVault fixture)
+    {
+        using JsonDocument document = JsonDocument.Parse(File.ReadAllBytes(SettingsPath(fixture)));
+        if (!document.RootElement.TryGetProperty("shortcuts", out JsonElement shortcuts))
+        {
+            return [];
+        }
+
+        return [.. shortcuts.EnumerateArray().Select(item => item.GetProperty("path").GetString()!)];
+    }
+
+    private static string[] Spoken(List<A11yEvent> announced)
+    {
+        lock (announced)
+        {
+            return [.. announced.OfType<A11yEvent.HostComposed>().Select(item => item.Text)];
+        }
+    }
+
+    private static SidebarJournalIdentity Identity(FixtureVault fixture) =>
+        SidebarJournalIdentity.Observe(fixture.Root)
+            ?? throw new Xunit.Sdk.XunitException("the fixture's volume answers FileIdInfo");
+
+    private void Idle() =>
+        Assert.True(_journal.WhenIdle().Wait(TimeSpan.FromSeconds(10)), "the journal's lane went idle");
+
     private static FileTreeNodeViewModel Node(FilesSidebarViewModel sidebar, string path) =>
         Assert.Single(sidebar.RootNodes, node => node.Path == path);
 
-    private static FilesSidebarViewModel NewSidebar(
+    private FilesSidebarViewModel NewSidebar(
         VaultSession session,
         FixtureVault fixture,
         List<A11yEvent> announced) => new(
@@ -285,7 +486,8 @@ public sealed class SidebarSettingsRetryTests
                 }
             },
             vaultRoot: fixture.Root,
-            localAppDataRoot: Path.Combine(fixture.Root, "device-state"));
+            localAppDataRoot: Path.Combine(fixture.Root, "device-state"),
+            writeJournal: _journal);
 
     private static VaultSession OpenScanned(string root)
     {

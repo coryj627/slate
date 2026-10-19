@@ -115,6 +115,14 @@ internal sealed class FileTreeNodeViewModel : BindableBase
     public string AutomationName => IsPlaceholder
         ? Name
         : $"{DisplayName}, {KindLabel}{(HasFolderNote ? ", has folder note" : string.Empty)}";
+
+    /// <summary>Plan 43 PR 20b (#1267): what a name that falls back to the
+    /// item reads — the row's own name, never this type's (the shortcut
+    /// slot's rule, below). UI Automation names a row the tree has let go of
+    /// through its item: the shell gate's scan, holding a row a watcher run's
+    /// publication removed, read "SlateWindows.FileTreeNodeViewModel".</summary>
+    public override string ToString() => AutomationName;
+
     public string MetadataText
     {
         get
@@ -286,6 +294,32 @@ internal sealed class FileTreeNodeViewModel : BindableBase
         }
     }
 
+    /// <summary>Plan 43 PR 20b (#1267): a rescan's reconcile keeps this
+    /// COLLAPSED folder's row and gives it <paramref name="fresh"/>'s
+    /// listing state — what the replaced row would have had: its next
+    /// expansion lists the folder as it is now, not as it was when it was
+    /// last open. Nothing is shown below a collapsed row, so nothing the
+    /// reader is on goes; the rows it held join
+    /// <paramref name="releasedIdentity"/>, so none of them loads again.</summary>
+    internal void AdoptChildStateOf(FileTreeNodeViewModel fresh, object releasedIdentity)
+    {
+        foreach (FileTreeNodeViewModel child in _children)
+        {
+            child.AttachToTree(releasedIdentity);
+        }
+
+        _childLoadState = fresh._childLoadState;
+        if (_treeIdentity is object treeIdentity)
+        {
+            foreach (FileTreeNodeViewModel child in fresh._children)
+            {
+                child.AttachToTree(treeIdentity);
+            }
+        }
+
+        ReplaceChildrenCore(fresh._children);
+    }
+
     internal void ReplaceChildren(IEnumerable<FileTreeNodeViewModel> children)
     {
         var replacement = new ObservableCollection<FileTreeNodeViewModel>();
@@ -403,6 +437,14 @@ internal sealed partial class FilesSidebarViewModel : BindableBase
     private readonly SidebarSettingsStore? _settingsStore;
     private readonly FileRecentsStore? _recentsStore;
     private string? _settingsNotice;
+
+    /// <summary>#1230's divergence memory, Windows' twin of mac's
+    /// journal-overflow arm: a stored-path rewrite that no journal entry
+    /// carries — a delete's, or a rename's or move's the journal could not
+    /// record — did not reach <c>.slate/sidebar.json</c>. The retry cannot
+    /// replay it, so its adoption of the file speaks the stale-references
+    /// outcome (#1514). Cleared when a later transform lands both sections
+    /// or a retry adopts the file.</summary>
     private bool _storedPathsDivergedFromFile;
     private readonly HashSet<string> _pinned = new(StringComparer.Ordinal);
     private readonly List<string> _recents = [];
@@ -1754,6 +1796,9 @@ internal sealed partial class FilesSidebarViewModel : BindableBase
             if (SessionShutdownStarted) { return; }
 
             TransformStoredPaths(node.Path, node.Path, node.IsDirectory, deleted: true);
+            // A trash is not journaled (#1505): a rewrite its write could
+            // not land is the divergence memory.
+            StoredPathsFollowed(journalEntry: null);
             // W5-4 F10: trash is not undoable AND a history barrier
             // (mac's rule — the bytes are in the Recycle Bin).
             StructuralHistoryBarrier();
@@ -2049,7 +2094,7 @@ internal sealed partial class FilesSidebarViewModel : BindableBase
                 TransformStoredPaths(change.OldPath, change.NewPath, change.IsDirectory, deleted: false);
             }
 
-            CarryJournalEntry(journalEntry);
+            StoredPathsFollowed(journalEntry);
 
             // W5-4 F10: a SUCCEEDED batch move is undoable through the
             // dedicated endpoint; anything less than Succeeded is not a
@@ -2115,6 +2160,13 @@ internal sealed partial class FilesSidebarViewModel : BindableBase
             foreach (StructuralBatchItem item in report.Trashed)
             {
                 TransformStoredPaths(item.Path, item.Path, item.IsDirectory, deleted: true);
+            }
+
+            if (report.Trashed.Length > 0)
+            {
+                // A trash is not journaled (#1505): a rewrite its write
+                // could not land is the divergence memory.
+                StoredPathsFollowed(journalEntry: null);
             }
 
             // A clean pre-attempt cancellation leaves structural history intact.
@@ -2406,13 +2458,14 @@ internal sealed partial class FilesSidebarViewModel : BindableBase
     /// store's 2 MiB read cap — the same call the constructor made — so
     /// there is no pending state for a vault close or replacement to
     /// race. A still-blocked read keeps every in-memory default and the
-    /// notice; a readable file is adopted WHOLESALE (its sort, grouping,
-    /// pins and shortcuts replace whatever the outage accumulated in
-    /// memory — those edits were reported as failed saves when made),
-    /// and the tree republishes under the adopted ordering. The outcome
-    /// speaks core's vocabulary: StillDefaults carrying the reason,
-    /// ReloadedStaleRefs when a structural change rewrote stored paths
-    /// that never landed, Reloaded otherwise.</summary>
+    /// notice; a readable file is adopted (its sort, grouping, pins and
+    /// shortcuts replace whatever the outage accumulated in memory — those
+    /// edits were reported as failed saves when made) with the outage's
+    /// renames and moves replayed onto it first (#1514), and the tree
+    /// republishes under the adopted ordering. The outcome speaks core's
+    /// vocabulary: StillDefaults carrying the reason, ReloadedStaleRefs
+    /// when a stored-path rewrite could not be carried over, Reloaded
+    /// otherwise.</summary>
     internal void RetrySettings()
     {
         if (_settingsStore is null || _settingsNotice is null)
@@ -2429,13 +2482,22 @@ internal sealed partial class FilesSidebarViewModel : BindableBase
         }
         else
         {
-            // #1435: the transforms this outage kept only in memory go with
-            // the memory the adoption replaces (their entries settle; the
-            // stale-references outcome says so). What the journal held from
-            // before this sidebar opened waited for a readable file: it
-            // replays onto this one, as an open's replay would.
-            SettleJournalEntriesTheFileDiscards();
+            // #1514: the renames and moves made during the outage — the
+            // entries #1435's journal holds for this session — replay onto
+            // the repaired file's pins, shortcuts and Recents in recorded
+            // order, with what earlier launches left waiting for a readable
+            // file, before the file is adopted (mac's Retry, FL-06). Pin,
+            // unpin and shortcut edits made during the outage are discarded:
+            // the file is the authority for those (mac's round-8 rule
+            // against partial salvage). A rewrite no entry carries — a
+            // delete's, or one the journal could not record — is lost with
+            // the memory the adoption replaces, and a replay write that
+            // fails leaves the file naming the old paths: either is the
+            // stale-references outcome.
             JournalReplay replay = ReplayWriteJournal(settings, [.. _recents]);
+            bool lost = _storedPathsDivergedFromFile;
+            _storedPathsDivergedFromFile = false;
+            ForgetWritesTheFileReplaces();
             AdoptSettings(settings with { Pins = replay.Pins, Shortcuts = replay.Shortcuts });
             if (replay.RecentsChanged)
             {
@@ -2444,11 +2506,10 @@ internal sealed partial class FilesSidebarViewModel : BindableBase
             }
 
             SettingsNotice = null;
-            outcome = _storedPathsDivergedFromFile
+            bool landed = LandWriteJournalReplay(replay);
+            outcome = lost || !landed
                 ? new A11yEvent.SidebarSettingsReloadedStaleRefs()
                 : new A11yEvent.SidebarSettingsReloaded();
-            _storedPathsDivergedFromFile = false;
-            LandWriteJournalReplay(replay);
             Refresh();
         }
 
@@ -2761,12 +2822,11 @@ internal sealed partial class FilesSidebarViewModel : BindableBase
             RecordStoredPathPersistFailure();
         }
 
-        // #1230: the file carries the rewritten paths only once BOTH
-        // sections landed — until then a later retry that adopts the
-        // file adopts references this transform moved, and says so
-        // (mac's journal-overflow arm). A later transform that lands
-        // fully writes the whole current sets, so it clears the memory.
-        _storedPathsDivergedFromFile = !pinsPersisted || !shortcutsPersisted;
+        // Whether the file carries the rewrite is the operation's to weigh
+        // once every transform it implies is in memory
+        // (StoredPathsFollowed): a journaled rename waits in the journal
+        // for the next write that lands or the retry's replay, and only a
+        // rewrite no entry carries is #1230's divergence memory.
     }
 
     private void RaiseCommandStates()

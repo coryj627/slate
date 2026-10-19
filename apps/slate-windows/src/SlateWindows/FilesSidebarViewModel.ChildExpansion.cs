@@ -353,10 +353,14 @@ internal sealed partial class FilesSidebarViewModel
         ObservableCollection<FileTreeNodeViewModel> rootNodes,
         CancellationToken token)
     {
+        // Plan 43 PR 20b: a rescan's reconcile keeps the published collection
+        // and lets go of the rows it replaced, so a row's own attachment is
+        // checked as well as the collection's.
         if (token.IsCancellationRequested
             || SessionShutdownStarted
             || generation != _treeGeneration
             || !ReferenceEquals(rootNodes, RootNodes)
+            || !node.IsAttachedToTree(RootNodes)
             || !node.IsExpanded)
         {
             return false;

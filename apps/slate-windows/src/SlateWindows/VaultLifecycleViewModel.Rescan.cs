@@ -8,12 +8,14 @@ using uniffi.slate_uniffi;
 namespace SlateWindows;
 
 /// <summary>
-/// W7-7 PR 7 (#1252, contract R-9): the rescan — the only reconciliation a
-/// file created, changed or deleted outside Slate gets on Windows (OD-1: no
-/// live watcher). Files Sidebar → Refresh runs it <see
-/// cref="RescanReason.Explicit"/>; the main window coming back to the
-/// foreground runs it <see cref="RescanReason.Foreground"/>
-/// (<see cref="ForegroundRescanRoute"/>).
+/// W7-7 PR 7 (#1252, contract R-9): the rescan — the reconciliation a file
+/// created, changed or deleted outside Slate gets on Windows. Files Sidebar →
+/// Refresh runs it <see cref="RescanReason.Explicit"/>; the main window coming
+/// back to the foreground runs it <see cref="RescanReason.Foreground"/>
+/// (<see cref="ForegroundRescanRoute"/>); and since plan 43 PR 20b (#1267)
+/// core's vault watcher asks for it <see cref="RescanReason.Watcher"/>, once
+/// per coalesced burst of changes made outside this session
+/// (<see cref="HandleExternalChange"/>).
 /// </summary>
 /// <remarks>
 /// <para>
@@ -28,10 +30,25 @@ namespace SlateWindows;
 /// </para>
 /// <para>
 /// One run at a time. A request that arrives while one runs joins the
-/// pending-reason lattice (Explicit ⊔ Foreground = Explicit, Foreground ⊔
-/// Foreground = Foreground) and is served by ONE follow-up run — never
-/// dropped, and never subject to the foreground cooldown, which applies
-/// only to STARTING a run from idle.
+/// pending-reason lattice, Explicit &gt; Foreground &gt; Watcher (Explicit ⊔
+/// anything = Explicit, Foreground ⊔ Foreground = Foreground ⊔ Watcher =
+/// Foreground, Watcher ⊔ Watcher = Watcher), and is served by ONE follow-up
+/// run — never dropped, and never subject to the foreground cooldown, which
+/// applies only to STARTING a foreground run from idle.
+/// </para>
+/// <para>
+/// Plan 43 PR 20b (design §4.2 item 3, §4.5): a Watcher request is never
+/// dropped. Before the workspace exists (the open's own scan and listing) and
+/// while an import or a trash operation runs it is recorded in the lattice,
+/// and the end of the open and the blockers settling serve it; while the
+/// window is away it waits for the next activation, where it joins the
+/// foreground route's request (one run, Foreground reason, so the return
+/// still says what changed while the user was away) or, when the route
+/// forwards none, runs on its own. Core already spaced it, so the cooldown
+/// never applies. Its sentence is the foreground policy's, gated: at most one
+/// per <c>watcher_sentence_spacing_ms()</c> per open vault, and none while a
+/// modal surface is open — a run inside the window posts nothing, and its
+/// counts are not carried to a later one.
 /// </para>
 /// </remarks>
 internal sealed partial class VaultLifecycleViewModel
@@ -45,6 +62,12 @@ internal sealed partial class VaultLifecycleViewModel
     private RescanReason? _pendingRescanReason;
     private DateTimeOffset? _lastScanEndedAt;
     private Task _rescanCompletion = Task.CompletedTask;
+
+    // Plan 43 PR 20b (#1267, design §4.5): when this vault's last watcher
+    // sentence was posted, and a watcher request the window's absence
+    // deferred until its next activation.
+    private DateTimeOffset? _lastWatcherSentenceAt;
+    private bool _watcherRequestWhileAway;
 
     // The running rescan's cancel token (CloseSession cancels it through
     // the seam and then owns it).
@@ -70,24 +93,70 @@ internal sealed partial class VaultLifecycleViewModel
 
     internal bool IsRescanActive => _rescanActive;
 
+    /// <summary>Plan 43 PR 20b (design §4.5 item 2): at most one watcher
+    /// sentence per this long per open vault — core's one number
+    /// (<c>watcher_sentence_spacing_ms</c>), so both hosts agree.</summary>
+    internal static TimeSpan WatcherSentenceSpacing { get; } =
+        TimeSpan.FromMilliseconds(SlateUniffiMethods.WatcherSentenceSpacingMs());
+
+    /// <summary>Plan 43 PR 20b (§4.5 item 4): whether the main window is
+    /// active. <c>MainWindow</c> installs <c>Window.IsActive</c>; null (a
+    /// headless fact, no window) reads active.</summary>
+    internal Func<bool>? WindowIsActive { get; set; }
+
+    /// <summary>Plan 43 PR 20b (§4.5 item 3): whether a modal surface is
+    /// open. <c>MainWindow</c> installs the foreground route's predicate;
+    /// null reads none. No watcher sentence is posted while one is.</summary>
+    internal Func<bool>? ModalSurfaceOpen { get; set; }
+
+    private bool IsWindowActive => WindowIsActive?.Invoke() ?? true;
+
     /// <summary>
     /// Run a rescan of the open vault for <paramref name="reason"/>.
     /// Refused — silently, nothing to reconcile yet — with no vault or a
     /// closing one, while the initial open scan runs, or while an import or
     /// a trash operation is in flight; joined to the running rescan's
     /// pending-reason lattice when one is running; skipped for a foreground
-    /// request inside the cooldown. Never faults.
+    /// request inside the cooldown. A Watcher request is recorded where the
+    /// others are refused (plan 43 PR 20b). Never faults.
     /// </summary>
     internal Task RescanAsync(RescanReason reason) => RequestRescan(reason, honorCooldown: true);
 
-    /// <summary>The coalescer. <paramref name="honorCooldown"/> is false only
-    /// for a pending request that an import or trash deferred: it was
-    /// recorded while a rescan ran, and the cooldown never applies to a
-    /// recorded request.</summary>
+    /// <summary>The coalescer. <paramref name="honorCooldown"/> is false for
+    /// a recorded request — one an import or trash deferred, one the end of
+    /// the open or an activation serves — and for every Watcher request: the
+    /// cooldown never applies to a recorded request, and core already spaced
+    /// a watcher's (design §4.2 item 3).</summary>
     private Task RequestRescan(RescanReason reason, bool honorCooldown)
     {
-        if (_session is not VaultSession session || !IsVaultOpen || Workspace is null)
+        if (_session is not VaultSession session || !IsVaultOpen)
         {
+            return Task.CompletedTask;
+        }
+
+        // Plan 43 PR 20b (§4.5 item 4): a watcher request the window's
+        // absence deferred joins the foreground route's request on
+        // activation — one run, Foreground reason — and carries the watcher
+        // request's guarantees: never dropped, never subject to the cooldown.
+        bool carriesWatcher = reason == RescanReason.Watcher;
+        if (reason == RescanReason.Foreground && _watcherRequestWhileAway)
+        {
+            _watcherRequestWhileAway = false;
+            carriesWatcher = true;
+            honorCooldown = false;
+        }
+
+        if (DeferWatcherWhileAway(reason))
+        {
+            return Task.CompletedTask;
+        }
+
+        if (Workspace is null)
+        {
+            // Before the workspace exists — the open's own scan and listing
+            // — a watcher request is recorded, and the end of the open
+            // serves it (ServeRecordedRescan).
+            RecordWatcherRequest(reason, carriesWatcher);
             return Task.CompletedTask;
         }
 
@@ -102,6 +171,10 @@ internal sealed partial class VaultLifecycleViewModel
 
         if (RescanIsBlocked())
         {
+            // An import or a trash operation in flight: a watcher request
+            // waits for it in the lattice (FileSidebar_RescanBlockersChanged
+            // serves it); Explicit and Foreground are refused, as before.
+            RecordWatcherRequest(reason, carriesWatcher);
             return Task.CompletedTask;
         }
 
@@ -119,11 +192,94 @@ internal sealed partial class VaultLifecycleViewModel
         return _rescanCompletion;
     }
 
-    /// <summary>The pending-reason lattice's join: Explicit dominates.</summary>
+    /// <summary>The pending-reason lattice's join, Explicit &gt; Foreground
+    /// &gt; Watcher (plan 43 PR 20b, design §4.2 item 2): Explicit dominates,
+    /// Foreground with Watcher is Foreground, Watcher with Watcher stays
+    /// Watcher.</summary>
     internal static RescanReason JoinRescanReasons(RescanReason? pending, RescanReason arriving) =>
         pending == RescanReason.Explicit || arriving == RescanReason.Explicit
             ? RescanReason.Explicit
-            : RescanReason.Foreground;
+            : pending == RescanReason.Foreground || arriving == RescanReason.Foreground
+                ? RescanReason.Foreground
+                : RescanReason.Watcher;
+
+    /// <summary>Plan 43 PR 20b (§4.5 item 4): no Watcher run starts while the
+    /// window is away. The request waits for the next activation
+    /// (<see cref="ServeWatcherRequestOnActivation"/>), where it joins the
+    /// foreground route's request. True when it was deferred.</summary>
+    private bool DeferWatcherWhileAway(RescanReason reason)
+    {
+        if (reason != RescanReason.Watcher || IsWindowActive)
+        {
+            return false;
+        }
+
+        _watcherRequestWhileAway = true;
+        return true;
+    }
+
+    /// <summary>Plan 43 PR 20b (design §4.2 item 3): a request that carries
+    /// a watcher request is recorded in the lattice, never refused.</summary>
+    private void RecordWatcherRequest(RescanReason reason, bool carriesWatcher)
+    {
+        if (carriesWatcher)
+        {
+            _pendingRescanReason = JoinRescanReasons(_pendingRescanReason, reason);
+        }
+    }
+
+    /// <summary>
+    /// Plan 43 PR 20b (#1267): core's vault watcher saw a burst of changes
+    /// made outside this session — one <c>OnExternalChange</c> per coalesced
+    /// burst, marshalled here by the listener. It asks for a Watcher rescan:
+    /// run now when the window is active; recorded while it is away (the
+    /// next activation serves it, joined into the foreground route's
+    /// request), before the workspace exists or while an import or a trash
+    /// operation runs; joined to a running rescan's lattice — never dropped.
+    /// A signal from a closed vault's session is ignored.
+    /// </summary>
+    private void HandleExternalChange(int generation)
+    {
+        if (generation != _generation)
+        {
+            return;
+        }
+
+        _ = RequestRescan(RescanReason.Watcher, honorCooldown: false);
+    }
+
+    /// <summary>
+    /// Plan 43 PR 20b (§4.5 item 4): the main window was activated
+    /// (<see cref="ForegroundRescanRoute.OnActivated"/>, after its own
+    /// decision). A watcher request the window's absence deferred runs now —
+    /// unless the foreground request the route forwarded first already took
+    /// it (one run, Foreground reason). Returns the run, or null when nothing
+    /// was deferred.
+    /// </summary>
+    internal Task? ServeWatcherRequestOnActivation()
+    {
+        if (!_watcherRequestWhileAway)
+        {
+            return null;
+        }
+
+        _watcherRequestWhileAway = false;
+        return RequestRescan(RescanReason.Watcher, honorCooldown: false);
+    }
+
+    /// <summary>Plan 43 PR 20b: the end of the open serves a request the
+    /// lattice recorded before the workspace existed — no blocker settles
+    /// then, so nothing else would.</summary>
+    private void ServeRecordedRescan()
+    {
+        if (_rescanActive || _pendingRescanReason is not RescanReason pending || RescanIsBlocked())
+        {
+            return;
+        }
+
+        _pendingRescanReason = null;
+        _ = RequestRescan(pending, honorCooldown: false);
+    }
 
     /// <summary>The initial open scan, an import or a trash operation in
     /// flight — the only blockers (a running rescan is joined, not
@@ -179,6 +335,13 @@ internal sealed partial class VaultLifecycleViewModel
                 }
 
                 _pendingRescanReason = null;
+                if (DeferWatcherWhileAway(next))
+                {
+                    // Plan 43 PR 20b (§4.5 item 4): the window went away
+                    // meanwhile; the Watcher follow-up waits for its return.
+                    return;
+                }
+
                 current = next;
             }
         }
@@ -199,6 +362,11 @@ internal sealed partial class VaultLifecycleViewModel
 
     private async Task RunOneRescanAsync(int generation, VaultSession session, RescanReason reason)
     {
+        // Plan 43 PR 20b: which route ran, for the shell gate's journeys
+        // (logged only under SLATE_UIA_DIAGNOSTICS=1; the reason's name is
+        // the whole detail).
+        HostLog.WriteUiAutomationDiagnostic(HostDiagnosticEvent.VaultRescanStarted, reason.ToString());
+
         // ONE cancel token for the whole run: the resume, the scan and every
         // page read take it (locked decision 05). It is made, cancelled and
         // disposed through the rescan core seam, like every other rescan core
@@ -215,7 +383,7 @@ internal sealed partial class VaultLifecycleViewModel
             HostLog.Write(HostDiagnosticEvent.VaultRescanFailed, exception);
             if (generation == _generation)
             {
-                PostRescanIncomplete(1);
+                PostRescanIncomplete(reason, 1);
             }
 
             return;
@@ -304,7 +472,7 @@ internal sealed partial class VaultLifecycleViewModel
                 // "results may be incomplete", never silence and never
                 // "No changes".
                 HostLog.Write(HostDiagnosticEvent.VaultRescanFailed, exception);
-                PostRescanIncomplete(1);
+                PostRescanIncomplete(reason, 1);
             }
 
             return;
@@ -332,17 +500,19 @@ internal sealed partial class VaultLifecycleViewModel
         }
 
         // (3) The one sentence. The error COUNT crosses the FFI in full; its
-        // messages only as samples (rounds 25-26).
+        // messages only as samples (rounds 25-26). A Watcher run speaks on
+        // the foreground policy, through the watcher's gate (plan 43 PR 20b,
+        // PostRescanOutcome).
         if (!report.Complete || failedOperations > 0)
         {
             ulong errors = report.ErrorCount > ulong.MaxValue - failedOperations
                 ? ulong.MaxValue
                 : report.ErrorCount + failedOperations;
-            PostRescanIncomplete(Math.Max(1UL, errors));
+            PostRescanIncomplete(reason, Math.Max(1UL, errors));
         }
         else if (reason == RescanReason.Explicit || report.FilesChanged + report.FilesRemoved > 0)
         {
-            PostRescanOutcome(new A11yEvent.VaultRescanFinished(
+            PostRescanOutcome(reason, new A11yEvent.VaultRescanFinished(
                 reason, report.FilesChanged, report.FilesRemoved));
         }
     }
@@ -891,15 +1061,48 @@ internal sealed partial class VaultLifecycleViewModel
     internal static string ScanFinishedStatus(ScanReport report) =>
         $"Scan finished: {report.FilesSeen} files, {report.FilesChanged} new or changed.";
 
-    private void PostRescanIncomplete(ulong errors) =>
-        PostRescanOutcome(new A11yEvent.VaultRescanIncomplete(Math.Max(1UL, errors)));
+    private void PostRescanIncomplete(RescanReason reason, ulong errors) =>
+        PostRescanOutcome(reason, new A11yEvent.VaultRescanIncomplete(Math.Max(1UL, errors)));
 
     /// <summary>The status line shows what was spoken — core's rendering,
-    /// the <c>RemoveRecentVault</c> shape.</summary>
-    private void PostRescanOutcome(A11yEvent outcome)
+    /// the <c>RemoveRecentVault</c> shape. A Watcher run's sentence passes
+    /// the watcher's gate first; one the gate holds back posts nothing, the
+    /// status line included.</summary>
+    private void PostRescanOutcome(RescanReason reason, A11yEvent outcome)
     {
+        if (reason == RescanReason.Watcher && !AdmitWatcherSentence())
+        {
+            return;
+        }
+
         StatusText = SlateUniffiMethods.A11yRender(outcome).Text;
         _announce(outcome);
+    }
+
+    /// <summary>
+    /// Plan 43 PR 20b (design §4.5 items 2-3): a watcher sentence never
+    /// floods a screen reader. None is posted while a modal surface is open,
+    /// and at most one per <see cref="WatcherSentenceSpacing"/> per open
+    /// vault: a run whose sentence would fall inside the window posts
+    /// nothing, and its counts are not carried to a later one — the tree and
+    /// Quick Open are current, and Refresh speaks its own scan's counts. A
+    /// sentence the modal check holds back does not start the window.
+    /// </summary>
+    private bool AdmitWatcherSentence()
+    {
+        if (ModalSurfaceOpen?.Invoke() == true)
+        {
+            return false;
+        }
+
+        DateTimeOffset now = _scanClock();
+        if (_lastWatcherSentenceAt is DateTimeOffset last && now - last < WatcherSentenceSpacing)
+        {
+            return false;
+        }
+
+        _lastWatcherSentenceAt = now;
+        return true;
     }
 
     /// <summary>A follow-up that an import or trash blocked runs when they
@@ -923,12 +1126,15 @@ internal sealed partial class VaultLifecycleViewModel
 
     /// <summary>Teardown: a closing vault forgets its rescans (their
     /// continuations are generation-guarded; the scan task is drained with
-    /// the session load).</summary>
+    /// the session load), its deferred watcher request and its watcher
+    /// sentence window.</summary>
     private void ResetRescanState()
     {
         _rescanActive = false;
         _pendingRescanReason = null;
         _lastScanEndedAt = null;
         _rescanCompletion = Task.CompletedTask;
+        _watcherRequestWhileAway = false;
+        _lastWatcherSentenceAt = null;
     }
 }

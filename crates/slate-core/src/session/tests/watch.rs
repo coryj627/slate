@@ -256,6 +256,87 @@ fn slate_own_writes_are_echoes_and_never_call_back() {
     );
 }
 
+/// #1498 (plan 43 PR 20b): before Windows arms the watch. ReadDirectoryChangesW
+/// may name an entry by its 8.3 short name, and the cache folder's
+/// (`SLATE~1`) has no leading dot, so the hidden rule would miss it and the
+/// cache's own writes would start a silent rescan every few seconds. On a
+/// real watch with the cache busy as a session makes it busy — a rescan
+/// (the index, its WAL and journal), saves through the staging folder, a
+/// create in a new folder, the template flow's create at the root (its
+/// `create_exclusive_reporting`; the shell gate's Templates journey), a
+/// rename and a Trash (the op-log), then writes under `.slate` by the long
+/// name Slate always uses — nothing calls back, and no touched path names a
+/// folder by an 8.3 spelling. No rescan follows the saves, because a
+/// complete scan would drop their bursts unseen.
+#[cfg(windows)]
+#[test]
+fn the_cache_a_busy_session_writes_never_calls_back() {
+    let live = live(&[("a.md", "# A\n"), ("Folder/b.md", "# B\n")]);
+    let session = &live.session;
+    let root = live.tmp.path().to_path_buf();
+    crate::vault::report_evidence_for_tests(&format!(
+        "#1498 evidence: the cache folder's 8.3 name on this volume: {:?} (vault {root:?})",
+        crate::vault::short_name_for_tests(&root.join(".slate"))
+    ));
+
+    session
+        .rescan_with_progress(&CancelToken::new(), None)
+        .unwrap();
+    session
+        .save_text("a.md", "# A\n\nSaved by Slate.\n", None)
+        .unwrap();
+    session
+        .save_text("a.md", "# A\n\nSaved by Slate again, longer.\n", None)
+        .unwrap();
+    session.create_exclusive("New/c.md", "# C\n").unwrap();
+    session
+        .create_exclusive_reporting("Journey Note.md", "# Journey Note\n")
+        .unwrap();
+    session.rename_file("Folder/b.md", "d.md").unwrap();
+    session.delete_file("New/c.md").unwrap();
+    write(&root, ".slate/probe-1498.tmp", "by the long name");
+    write(
+        &root,
+        ".slate/tmp/probe-1498.tmp",
+        "staged by the long name",
+    );
+    std::fs::remove_file(root.join(".slate").join("probe-1498.tmp")).unwrap();
+    std::fs::remove_file(root.join(".slate").join("tmp").join("probe-1498.tmp")).unwrap();
+
+    let dropped_d_md = || {
+        session.watch_decisions_for_tests().iter().any(|decision| {
+            matches!(decision, WatchDecision::DroppedAsEchoes { paths }
+                    if paths.iter().any(|path| path == "Folder/d.md"))
+        })
+    };
+    assert!(
+        eventually(DELIVERY, || dropped_d_md()
+            && session.watch_is_idle_for_tests()),
+        "{:?}",
+        session.watch_decisions_for_tests()
+    );
+    // Stragglers, and SQLite's own late writes, settle too.
+    std::thread::sleep(FAST.quiet * 4);
+    assert!(eventually(DELIVERY, || session.watch_is_idle_for_tests()));
+    let decisions = session.watch_decisions_for_tests();
+    crate::vault::report_evidence_for_tests(&format!(
+        "#1498 evidence: the coalescer's decisions for a busy cache: {decisions:?}"
+    ));
+    assert_eq!(live.recorder.count(), 0, "{decisions:?}");
+    for decision in &decisions {
+        let paths = match decision {
+            WatchDecision::CalledBack { paths, .. } | WatchDecision::DroppedAsEchoes { paths } => {
+                paths.as_slice()
+            }
+            _ => &[],
+        };
+        assert!(
+            paths.iter().all(|path| !path.contains('~')),
+            "a path reached the coalescer under an 8.3 spelling: {decision:?}"
+        );
+    }
+}
+
 /// §4.2: the echo test is "this session wrote this state", so an external
 /// write right after Slate's own save of the same note still calls back.
 #[test]

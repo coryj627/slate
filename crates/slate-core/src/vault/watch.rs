@@ -462,6 +462,11 @@ fn classify(root: &Path, path: &Path) -> Classified {
     let Ok(rest) = path.strip_prefix(root) else {
         return Classified::Outside;
     };
+    // #1498: an 8.3 alias is read by its long name before the hidden rule.
+    #[cfg(windows)]
+    let long = long_spelling(root, rest);
+    #[cfg(windows)]
+    let rest = long.as_deref().unwrap_or(rest);
     let mut parts = Vec::new();
     for component in rest.components() {
         match component {
@@ -493,6 +498,87 @@ fn classify(root: &Path, path: &Path) -> Classified {
         relative.push_str(part);
     }
     Classified::Visible(relative)
+}
+
+/// #1498 (plan 43 PR 20b): ReadDirectoryChangesW names an entry by the
+/// spelling its writer opened it with — on the Windows lane a write through
+/// the cache folder's 8.3 name arrived as `SLATE~1/…`, and Microsoft
+/// documents either name as possible ("it is unspecified which one") — and an
+/// 8.3 name has no leading dot, so the hidden rule would let a hidden
+/// folder's writes through. A relative path one of whose components may be
+/// an 8.3 alias (it holds `~`) is read by its long spelling first: the
+/// longest prefix of it that still exists and covers its first alias is
+/// expanded with `GetLongPathNameW`, so a deleted file's folders still
+/// resolve, and each alias in that prefix takes its long name. A path that
+/// cannot be resolved keeps its reported spelling — a visible change, which
+/// costs one silent rescan, never a missed one — and a path with no `~` is
+/// never looked up, so the ordinary event pays nothing. Slate itself always
+/// names the cache `.slate`, and its own writes were reported so.
+#[cfg(windows)]
+fn long_spelling(root: &Path, rest: &Path) -> Option<PathBuf> {
+    use std::ffi::OsStr;
+    use std::os::windows::ffi::OsStrExt as _;
+
+    let may_be_alias = |name: &OsStr| name.encode_wide().any(|unit| unit == u16::from(b'~'));
+    let mut names = Vec::new();
+    for component in rest.components() {
+        match component {
+            Component::Normal(name) => names.push(name),
+            // classify's own rules decide anything else.
+            _ => return None,
+        }
+    }
+    let first_alias = names.iter().position(|name| may_be_alias(name))?;
+    (first_alias + 1..=names.len()).rev().find_map(|end| {
+        let prefix: PathBuf = names[..end].iter().collect();
+        let long = long_path_name(&root.join(prefix))?;
+        let long_names: Vec<&OsStr> = long
+            .components()
+            .filter_map(|component| match component {
+                Component::Normal(name) => Some(name),
+                _ => None,
+            })
+            .collect();
+        let tail = long_names.get(long_names.len().checked_sub(end)?..)?;
+        Some(
+            names
+                .iter()
+                .enumerate()
+                .map(|(index, name)| match tail.get(index) {
+                    Some(long_name) if may_be_alias(name) => *long_name,
+                    _ => *name,
+                })
+                .collect(),
+        )
+    })
+}
+
+/// `path` with every 8.3 alias in it expanded (`GetLongPathNameW`), or
+/// `None` when it does not exist or cannot be read.
+#[cfg(windows)]
+fn long_path_name(path: &Path) -> Option<PathBuf> {
+    use std::os::windows::ffi::{OsStrExt as _, OsStringExt as _};
+    use windows_sys::Win32::Storage::FileSystem::GetLongPathNameW;
+
+    let wide: Vec<u16> = path.as_os_str().encode_wide().chain(Some(0)).collect();
+    let mut buffer = vec![0u16; 1024];
+    for _ in 0..2 {
+        let capacity = u32::try_from(buffer.len()).ok()?;
+        // SAFETY: `wide` is NUL-terminated, and `buffer` is writable for the
+        // `capacity` UTF-16 units passed with it.
+        let written = unsafe { GetLongPathNameW(wide.as_ptr(), buffer.as_mut_ptr(), capacity) };
+        let written = usize::try_from(written).ok()?;
+        if written == 0 {
+            return None;
+        }
+        if written < buffer.len() {
+            buffer.truncate(written);
+            return Some(PathBuf::from(std::ffi::OsString::from_wide(&buffer)));
+        }
+        // Too small: `written` is the size needed, its NUL included.
+        buffer.resize(written, 0);
+    }
+    None
 }
 
 /// Whether an event on the root itself means the root went away or moved.
@@ -581,6 +667,38 @@ pub(super) fn translate(root: &Path, result: notify::Result<notify::Event>) -> V
         }
     }
     out
+}
+
+/// #1498 (plan 43 PR 20b): `path`'s final component as its volume's 8.3
+/// short name, when the volume made one that differs from the long name
+/// (`.slate` is `SLATE~1`). `None` where the volume makes no 8.3 names, or
+/// the path cannot be read.
+#[cfg(all(test, windows))]
+pub(crate) fn short_name_for_tests(path: &Path) -> Option<std::ffi::OsString> {
+    use std::os::windows::ffi::{OsStrExt as _, OsStringExt as _};
+    use windows_sys::Win32::Storage::FileSystem::GetShortPathNameW;
+    let wide: Vec<u16> = path.as_os_str().encode_wide().chain(Some(0)).collect();
+    let mut buffer = vec![0u16; 32 * 1024];
+    let capacity = u32::try_from(buffer.len()).ok()?;
+    // SAFETY: `wide` is NUL-terminated, and `buffer` is writable for the
+    // `capacity` UTF-16 units passed with it.
+    let written = unsafe { GetShortPathNameW(wide.as_ptr(), buffer.as_mut_ptr(), capacity) };
+    let written = usize::try_from(written).ok()?;
+    if written == 0 || written >= buffer.len() {
+        return None;
+    }
+    let short = PathBuf::from(std::ffi::OsString::from_wide(&buffer[..written]));
+    let name = short.file_name()?.to_os_string();
+    (Some(name.as_os_str()) != path.file_name()).then_some(name)
+}
+
+/// #1498: a line of evidence for the Windows lane's log, written past
+/// libtest's capture (which takes only the `print!` family) so it shows for a
+/// passing fact too.
+#[cfg(all(test, windows))]
+pub(crate) fn report_evidence_for_tests(line: &str) {
+    use std::io::Write as _;
+    let _ = writeln!(std::io::stderr(), "{line}");
 }
 
 #[cfg(test)]
@@ -967,6 +1085,112 @@ mod tests {
                 assert!(
                     ["sub", "visible.md"].contains(&name),
                     "only the visible writes may reach the sink: {event:?}"
+                );
+            }
+        }
+    }
+
+    /// #1498: a path named by an 8.3 alias is classified by its long
+    /// spelling. The cache folder's alias is hidden — the folder itself, a
+    /// file still in it and one already deleted, whose folder still
+    /// resolves — and a visible folder's alias becomes the long,
+    /// vault-relative path the scanner and the echo ledger use. A `~` name
+    /// that is no alias, and an alias that resolves to nothing, keep their
+    /// reported spelling.
+    #[cfg(windows)]
+    #[test]
+    fn an_8_3_alias_is_classified_by_its_long_spelling() {
+        let tmp = tempfile::tempdir().unwrap();
+        let root = tmp.path();
+        std::fs::create_dir_all(root.join(".slate").join("tmp")).unwrap();
+        std::fs::write(root.join(".slate").join("tmp").join("staged.tmp"), b"x").unwrap();
+        std::fs::create_dir(root.join("A long folder name")).unwrap();
+        std::fs::write(root.join("A long folder name").join("note.md"), b"x").unwrap();
+        std::fs::write(root.join("draft~2.md"), b"x").unwrap();
+        let Some(cache) = short_name_for_tests(&root.join(".slate")) else {
+            report_evidence_for_tests(
+                "#1498 evidence: this volume makes no 8.3 names, so there is no alias to classify",
+            );
+            return;
+        };
+        let folder = short_name_for_tests(&root.join("A long folder name"))
+            .expect("a volume that aliases the cache folder aliases a long folder name too");
+
+        assert_eq!(classify(root, &root.join(&cache)), Classified::Hidden);
+        assert_eq!(
+            classify(root, &root.join(&cache).join("tmp").join("staged.tmp")),
+            Classified::Hidden
+        );
+        assert_eq!(
+            classify(root, &root.join(&cache).join("tmp").join("gone.tmp")),
+            Classified::Hidden
+        );
+        assert_eq!(
+            classify(root, &root.join(&folder).join("note.md")),
+            Classified::Visible("A long folder name/note.md".into())
+        );
+        assert_eq!(
+            classify(root, &root.join("draft~2.md")),
+            Classified::Visible("draft~2.md".into())
+        );
+        assert_eq!(
+            classify(root, &root.join("NOSUCH~1").join("x.md")),
+            Classified::Visible("NOSUCH~1/x.md".into())
+        );
+    }
+
+    /// #1498 (plan 43 PR 20b): ReadDirectoryChangesW names an entry by its
+    /// long name or by its 8.3 short name ("it is unspecified which one"),
+    /// and the cache folder's short name (`SLATE~1`) has no leading dot.
+    /// Writes into the cache through that spelling — creates, a rewrite, a
+    /// rename and deletes — never reach the sink: the sentinel written last
+    /// proves they were reported and dropped. A volume that makes no 8.3
+    /// names gives no writer that spelling, and the fact records so.
+    #[cfg(windows)]
+    #[test]
+    fn the_slate_cache_is_hidden_under_its_short_name_too() {
+        let (tmp, sink, _handle) =
+            watched_after(|root| std::fs::create_dir_all(root.join(".slate").join("tmp")).unwrap());
+        let root = tmp.path();
+        let short = short_name_for_tests(&root.join(".slate"));
+        report_evidence_for_tests(&format!(
+            "#1498 evidence: the cache folder's 8.3 name on this volume: {short:?} (vault {root:?})"
+        ));
+        let Some(short) = short else {
+            return;
+        };
+        let cache = root.join(&short);
+        std::fs::write(cache.join("probe-1498.tmp"), b"by the short name").unwrap();
+        std::fs::write(
+            cache.join("probe-1498.tmp"),
+            b"by the short name, again and longer",
+        )
+        .unwrap();
+        std::fs::write(cache.join("tmp").join("staged-1498.tmp"), b"staged").unwrap();
+        std::fs::rename(
+            cache.join("tmp").join("staged-1498.tmp"),
+            cache.join("renamed-1498.tmp"),
+        )
+        .unwrap();
+        std::fs::remove_file(cache.join("probe-1498.tmp")).unwrap();
+        std::fs::remove_file(cache.join("renamed-1498.tmp")).unwrap();
+        std::fs::write(root.join("visible.md"), b"seen").unwrap();
+
+        assert!(
+            sink.wait_for("visible.md", DELIVERY),
+            "{:?}",
+            sink.snapshot()
+        );
+        std::thread::sleep(Duration::from_millis(300));
+        let events = sink.snapshot();
+        report_evidence_for_tests(&format!(
+            "#1498 evidence: what reached the sink after the short-name writes: {events:?}"
+        ));
+        for event in &events {
+            for name in RecordingSink::names(event) {
+                assert_eq!(
+                    name, "visible.md",
+                    "a write into the cache by its short name reached the sink: {event:?}"
                 );
             }
         }
