@@ -319,49 +319,33 @@ impl std::fmt::Debug for CacheDir {
 }
 
 impl CacheDir {
+    /// The configured spelling, for messages and logs.
+    pub(crate) fn display(&self) -> &Path {
+        &self.0.display
+    }
+}
+
+/// The held form: macOS and Linux.
+#[cfg(all(
+    any(target_os = "macos", target_os = "linux"),
+    target_pointer_width = "64"
+))]
+impl CacheDir {
     /// `VaultSession::open`'s cache directory: made by its configured path if
     /// missing (as `open` always has), then held. The configured path is the
     /// caller's own spelling, so it is followed; everything beneath it is
     /// not.
     pub(crate) fn configured(path: &Path) -> io::Result<Self> {
+        use std::os::unix::fs::OpenOptionsExt as _;
         fs::create_dir_all(path)?;
-        #[cfg(all(
-            any(target_os = "macos", target_os = "linux"),
-            target_pointer_width = "64"
-        ))]
-        {
-            use std::os::unix::fs::OpenOptionsExt as _;
-            let dir = fs::OpenOptions::new()
-                .read(true)
-                .custom_flags(super::fs::directory_open_flags(false))
-                .open(path)?;
-            Self::held(dir, path.to_path_buf())
-        }
-        #[cfg(not(all(
-            any(target_os = "macos", target_os = "linux"),
-            target_pointer_width = "64"
-        )))]
-        {
-            Ok(Self(Arc::new(CacheDirInner {
-                display: path.to_path_buf(),
-            })))
-        }
-    }
-
-    /// A filesystem session's `.slate`, by its pathname (Windows until 22W).
-    #[cfg(not(all(
-        any(target_os = "macos", target_os = "linux"),
-        target_pointer_width = "64"
-    )))]
-    fn by_path(path: PathBuf) -> Self {
-        Self(Arc::new(CacheDirInner { display: path }))
+        let dir = fs::OpenOptions::new()
+            .read(true)
+            .custom_flags(super::fs::directory_open_flags(false))
+            .open(path)?;
+        Self::held(dir, path.to_path_buf())
     }
 
     /// Hold `dir`, already open, as the cache directory spelled `display`.
-    #[cfg(all(
-        any(target_os = "macos", target_os = "linux"),
-        target_pointer_width = "64"
-    ))]
     fn held(dir: fs::File, display: PathBuf) -> io::Result<Self> {
         let identity = sys::identity(&dir)?;
         Ok(Self(Arc::new(CacheDirInner {
@@ -374,228 +358,166 @@ impl CacheDir {
         })))
     }
 
-    /// The configured spelling, for messages and logs.
-    pub(crate) fn display(&self) -> &Path {
-        &self.0.display
-    }
-
-    /// The held directory's `(device, inode)`; `None` where the interior is
-    /// still pathname-based.
+    /// The held directory's `(device, inode)`.
     pub(crate) fn identity(&self) -> Option<(u64, u64)> {
-        #[cfg(all(
-            any(target_os = "macos", target_os = "linux"),
-            target_pointer_width = "64"
-        ))]
-        {
-            Some(self.0.held.identity)
-        }
-        #[cfg(not(all(
-            any(target_os = "macos", target_os = "linux"),
-            target_pointer_width = "64"
-        )))]
-        {
-            None
-        }
+        Some(self.0.held.identity)
     }
 
-    /// The held directory itself, for the provider's staging folder.
-    #[cfg(all(
-        any(target_os = "macos", target_os = "linux"),
-        target_pointer_width = "64"
-    ))]
+    /// The held directory itself: the provider stages beneath it.
     pub(crate) fn descriptor(&self) -> &fs::File {
         &self.0.held.dir
     }
 
-    /// The path SQLite opens `leaf` by: on macOS and Linux the synthetic
+    /// The path SQLite opens `leaf` by: the synthetic
     /// `/.slate-fd/<token>/<leaf>` the VFS hook resolves against the held
-    /// directory (registered on first use), elsewhere the real path.
+    /// directory, registered on first use.
     pub(crate) fn sqlite_path(&self, leaf: &str) -> io::Result<PathBuf> {
-        #[cfg(all(
-            any(target_os = "macos", target_os = "linux"),
-            target_pointer_width = "64"
-        ))]
-        {
-            let held = &self.0.held;
-            if let Some(anchor) = held.sqlite.get() {
-                return Ok(anchor.database_path(leaf));
-            }
-            let anchor = crate::db::anchored::SqliteAnchor::register(&held.dir, &self.0.display)?;
-            // A racing registration of the same directory keeps whichever
-            // landed first; the other unregisters as it drops.
-            let anchor = held.sqlite.get_or_init(|| anchor);
-            Ok(anchor.database_path(leaf))
+        let held = &self.0.held;
+        if let Some(anchor) = held.sqlite.get() {
+            return Ok(anchor.database_path(leaf));
         }
-        #[cfg(not(all(
-            any(target_os = "macos", target_os = "linux"),
-            target_pointer_width = "64"
-        )))]
-        {
-            Ok(self.0.display.join(leaf))
-        }
+        let anchor = crate::db::anchored::SqliteAnchor::register(&held.dir, &self.0.display)?;
+        // A racing registration keeps whichever landed first; the other
+        // unregisters as it drops.
+        Ok(held.sqlite.get_or_init(|| anchor).database_path(leaf))
     }
 }
 
+/// The pathname form (Windows until 22W): every call is the one the interior
+/// made before.
+#[cfg(not(all(
+    any(target_os = "macos", target_os = "linux"),
+    target_pointer_width = "64"
+)))]
+impl CacheDir {
+    /// `VaultSession::open`'s cache directory, made by its configured path if
+    /// missing, as `open` always has.
+    pub(crate) fn configured(path: &Path) -> io::Result<Self> {
+        fs::create_dir_all(path)?;
+        Ok(Self::by_path(path.to_path_buf()))
+    }
+
+    /// A filesystem session's `.slate`, by its pathname.
+    fn by_path(path: PathBuf) -> Self {
+        Self(Arc::new(CacheDirInner { display: path }))
+    }
+
+    /// No held directory, so no identity: the registry keys the pathname.
+    pub(crate) fn identity(&self) -> Option<(u64, u64)> {
+        None
+    }
+
+    /// The real path.
+    pub(crate) fn sqlite_path(&self, leaf: &str) -> io::Result<PathBuf> {
+        Ok(self.0.display.join(leaf))
+    }
+}
+
+/// Beneath the held directory: one component at a time, never following a
+/// link, never making anything but a child folder inside it.
+#[cfg(all(
+    any(target_os = "macos", target_os = "linux"),
+    target_pointer_width = "64"
+))]
 impl InteriorDir for CacheDir {
     fn display_dir(&self) -> Cow<'_, Path> {
         Cow::Borrowed(&self.0.display)
     }
 
     fn ensure_self(&self) -> io::Result<()> {
-        #[cfg(all(
-            any(target_os = "macos", target_os = "linux"),
-            target_pointer_width = "64"
-        ))]
-        {
-            Ok(())
-        }
-        #[cfg(not(all(
-            any(target_os = "macos", target_os = "linux"),
-            target_pointer_width = "64"
-        )))]
-        {
-            self.0.display.ensure_self()
-        }
+        // It is held open: it exists, wherever it is now.
+        Ok(())
     }
 
     fn ensure_child_dir(&self, name: &str) -> io::Result<()> {
-        #[cfg(all(
-            any(target_os = "macos", target_os = "linux"),
-            target_pointer_width = "64"
-        ))]
-        {
-            sys::ensure_dir_at(&self.0.held.dir, &sys::component(name)?)
-        }
-        #[cfg(not(all(
-            any(target_os = "macos", target_os = "linux"),
-            target_pointer_width = "64"
-        )))]
-        {
-            self.0.display.ensure_child_dir(name)
-        }
+        sys::ensure_dir_at(self.descriptor(), &sys::component(name)?)
     }
 
     fn open_file(&self, relative: &str, options: FileOptions) -> io::Result<fs::File> {
-        #[cfg(all(
-            any(target_os = "macos", target_os = "linux"),
-            target_pointer_width = "64"
-        ))]
-        {
-            let (parent, leaf) = sys::parent_and_leaf(&self.0.held.dir, relative)?;
-            sys::open_at(parent.get(&self.0.held.dir), &leaf, options.flags(), 0o666)
-        }
-        #[cfg(not(all(
-            any(target_os = "macos", target_os = "linux"),
-            target_pointer_width = "64"
-        )))]
-        {
-            self.0.display.open_file(relative, options)
-        }
+        let held = self.descriptor();
+        let (parent, leaf) = sys::parent_and_leaf(held, relative)?;
+        sys::open_at(parent.get(held), &leaf, options.flags(), 0o666)
     }
 
     fn rename_file(&self, from: &str, to: &str) -> io::Result<()> {
-        #[cfg(all(
-            any(target_os = "macos", target_os = "linux"),
-            target_pointer_width = "64"
-        ))]
-        {
-            let dir = &self.0.held.dir;
-            let (from_parent, from_leaf) = sys::parent_and_leaf(dir, from)?;
-            let (to_parent, to_leaf) = sys::parent_and_leaf(dir, to)?;
-            sys::rename_at(
-                from_parent.get(dir),
-                &from_leaf,
-                to_parent.get(dir),
-                &to_leaf,
-            )
-        }
-        #[cfg(not(all(
-            any(target_os = "macos", target_os = "linux"),
-            target_pointer_width = "64"
-        )))]
-        {
-            self.0.display.rename_file(from, to)
-        }
+        let held = self.descriptor();
+        let (from_parent, from_leaf) = sys::parent_and_leaf(held, from)?;
+        let (to_parent, to_leaf) = sys::parent_and_leaf(held, to)?;
+        sys::rename_at(
+            from_parent.get(held),
+            &from_leaf,
+            to_parent.get(held),
+            &to_leaf,
+        )
     }
 
     fn remove_file(&self, relative: &str) -> io::Result<()> {
-        #[cfg(all(
-            any(target_os = "macos", target_os = "linux"),
-            target_pointer_width = "64"
-        ))]
-        {
-            let (parent, leaf) = sys::parent_and_leaf(&self.0.held.dir, relative)?;
-            sys::unlink_at(parent.get(&self.0.held.dir), &leaf)
-        }
-        #[cfg(not(all(
-            any(target_os = "macos", target_os = "linux"),
-            target_pointer_width = "64"
-        )))]
-        {
-            self.0.display.remove_file(relative)
-        }
+        let held = self.descriptor();
+        let (parent, leaf) = sys::parent_and_leaf(held, relative)?;
+        sys::unlink_at(parent.get(held), &leaf)
     }
 
     fn file_len(&self, relative: &str) -> io::Result<u64> {
-        #[cfg(all(
-            any(target_os = "macos", target_os = "linux"),
-            target_pointer_width = "64"
-        ))]
-        {
-            let (parent, leaf) = sys::parent_and_leaf(&self.0.held.dir, relative)?;
-            let stat = sys::stat_at(
-                parent.get(&self.0.held.dir),
-                &leaf,
-                libc::AT_SYMLINK_NOFOLLOW,
-            )?;
-            if stat.st_mode & libc::S_IFMT == libc::S_IFLNK {
-                return Err(io::Error::from_raw_os_error(libc::ELOOP));
-            }
-            Ok(u64::try_from(stat.st_size).unwrap_or_default())
+        let held = self.descriptor();
+        let (parent, leaf) = sys::parent_and_leaf(held, relative)?;
+        let stat = sys::stat_at(parent.get(held), &leaf, libc::AT_SYMLINK_NOFOLLOW)?;
+        if stat.st_mode & libc::S_IFMT == libc::S_IFLNK {
+            return Err(io::Error::from_raw_os_error(libc::ELOOP));
         }
-        #[cfg(not(all(
-            any(target_os = "macos", target_os = "linux"),
-            target_pointer_width = "64"
-        )))]
-        {
-            self.0.display.file_len(relative)
-        }
+        Ok(u64::try_from(stat.st_size).unwrap_or_default())
     }
 
     fn read_child_dir(&self, name: &str) -> io::Result<Vec<OsString>> {
-        #[cfg(all(
-            any(target_os = "macos", target_os = "linux"),
-            target_pointer_width = "64"
-        ))]
-        {
-            let child = super::fs::open_directory_at(&self.0.held.dir, &sys::component(name)?)?;
-            sys::read_dir_names(&child)
-        }
-        #[cfg(not(all(
-            any(target_os = "macos", target_os = "linux"),
-            target_pointer_width = "64"
-        )))]
-        {
-            self.0.display.read_child_dir(name)
-        }
+        let child = super::fs::open_directory_at(self.descriptor(), &sys::component(name)?)?;
+        sys::read_dir_names(&child)
     }
 
     fn sync_child_dir(&self, name: &str) -> io::Result<()> {
-        #[cfg(all(
-            any(target_os = "macos", target_os = "linux"),
-            target_pointer_width = "64"
-        ))]
-        {
-            let child = super::fs::open_directory_at(&self.0.held.dir, &sys::component(name)?)?;
-            sys::sync_dir(&child)
-        }
-        #[cfg(not(all(
-            any(target_os = "macos", target_os = "linux"),
-            target_pointer_width = "64"
-        )))]
-        {
-            self.0.display.sync_child_dir(name)
-        }
+        let child = super::fs::open_directory_at(self.descriptor(), &sys::component(name)?)?;
+        sys::sync_dir(&child)
+    }
+}
+
+/// By the configured pathname, exactly as before.
+#[cfg(not(all(
+    any(target_os = "macos", target_os = "linux"),
+    target_pointer_width = "64"
+)))]
+impl InteriorDir for CacheDir {
+    fn display_dir(&self) -> Cow<'_, Path> {
+        Cow::Borrowed(&self.0.display)
+    }
+
+    fn ensure_self(&self) -> io::Result<()> {
+        self.0.display.ensure_self()
+    }
+
+    fn ensure_child_dir(&self, name: &str) -> io::Result<()> {
+        self.0.display.ensure_child_dir(name)
+    }
+
+    fn open_file(&self, relative: &str, options: FileOptions) -> io::Result<fs::File> {
+        self.0.display.open_file(relative, options)
+    }
+
+    fn rename_file(&self, from: &str, to: &str) -> io::Result<()> {
+        self.0.display.rename_file(from, to)
+    }
+
+    fn remove_file(&self, relative: &str) -> io::Result<()> {
+        self.0.display.remove_file(relative)
+    }
+
+    fn file_len(&self, relative: &str) -> io::Result<u64> {
+        self.0.display.file_len(relative)
+    }
+
+    fn read_child_dir(&self, name: &str) -> io::Result<Vec<OsString>> {
+        self.0.display.read_child_dir(name)
+    }
+
+    fn sync_child_dir(&self, name: &str) -> io::Result<()> {
+        self.0.display.sync_child_dir(name)
     }
 }
 
@@ -630,47 +552,6 @@ impl std::fmt::Debug for FsRoot {
 }
 
 impl FsRoot {
-    /// Open and hold the vault root at `root` and its `.slate`, making
-    /// `.slate` beneath the held root when it is missing. A `.slate` that is
-    /// a symbolic link, or anything but a folder, is refused: the interior
-    /// never follows a link (design §3.6(b)).
-    pub(crate) fn open(root: &Path) -> Result<Self, VaultError> {
-        #[cfg(all(
-            any(target_os = "macos", target_os = "linux"),
-            target_pointer_width = "64"
-        ))]
-        {
-            use std::os::unix::fs::OpenOptionsExt as _;
-            let held = fs::OpenOptions::new()
-                .read(true)
-                .custom_flags(super::fs::directory_open_flags(false))
-                .open(root)
-                .map_err(VaultError::Io)?;
-            let identity = sys::identity(&held).map_err(VaultError::Io)?;
-            let slate_display = root.join(".slate");
-            let slate = sys::open_or_make_slate(&held)
-                .map_err(|error| slate_refusal(&held, &slate_display, error))?;
-            let cache = CacheDir::held(slate, slate_display).map_err(VaultError::Io)?;
-            Ok(Self {
-                opened_as: root.to_path_buf(),
-                identity: Some(identity),
-                root: held,
-                cache,
-            })
-        }
-        #[cfg(not(all(
-            any(target_os = "macos", target_os = "linux"),
-            target_pointer_width = "64"
-        )))]
-        {
-            Ok(Self {
-                opened_as: root.to_path_buf(),
-                identity: observed_identity(root),
-                cache: CacheDir::by_path(root.join(".slate")),
-            })
-        }
-    }
-
     /// The held root's `(device, inode)` — the identity the interior bound.
     pub(crate) fn identity(&self) -> Option<(u64, u64)> {
         self.identity
@@ -686,13 +567,47 @@ impl FsRoot {
         &self.cache
     }
 
+    /// The one display spelling of the root (design §4.2, owner decision
+    /// Q4): its verified current path, else the spelling the session opened.
+    pub(crate) fn display_path(&self) -> PathBuf {
+        self.verified_current_path()
+            .unwrap_or_else(|| self.opened_as.clone())
+    }
+}
+
+/// The held form: macOS and Linux.
+#[cfg(all(
+    any(target_os = "macos", target_os = "linux"),
+    target_pointer_width = "64"
+))]
+impl FsRoot {
+    /// Open and hold the vault root at `root` and its `.slate`, making
+    /// `.slate` beneath the held root when it is missing. A `.slate` that is
+    /// a symbolic link, or anything but a folder, is refused: the interior
+    /// never follows a link (design §3.6(b)).
+    pub(crate) fn open(root: &Path) -> Result<Self, VaultError> {
+        use std::os::unix::fs::OpenOptionsExt as _;
+        let held = fs::OpenOptions::new()
+            .read(true)
+            .custom_flags(super::fs::directory_open_flags(false))
+            .open(root)
+            .map_err(VaultError::Io)?;
+        let identity = sys::identity(&held).map_err(VaultError::Io)?;
+        let slate_display = root.join(".slate");
+        let slate = sys::open_or_make_slate(&held)
+            .map_err(|error| slate_refusal(&held, &slate_display, error))?;
+        let cache = CacheDir::held(slate, slate_display).map_err(VaultError::Io)?;
+        Ok(Self {
+            opened_as: root.to_path_buf(),
+            identity: Some(identity),
+            root: held,
+            cache,
+        })
+    }
+
     /// The held root descriptor: the structural rename, the saves, the
     /// creations and the Trash handoff resolve beneath it (#1449, #1450,
     /// #1452), and the watch is anchored to it.
-    #[cfg(all(
-        any(target_os = "macos", target_os = "linux"),
-        target_pointer_width = "64"
-    ))]
     pub(crate) fn descriptor(&self) -> &fs::File {
         &self.root
     }
@@ -700,57 +615,24 @@ impl FsRoot {
     /// The held root's current path, from the kernel (`F_GETPATH`, or
     /// `/proc/self/fd` on Linux), accepted only when that path still names
     /// the held root (§3.6(a), the rule PR 24's matrix §4 records); `None`
-    /// when it cannot be verified, or where the root is not held.
+    /// when it cannot be verified.
     pub(crate) fn verified_current_path(&self) -> Option<PathBuf> {
-        #[cfg(all(
-            any(target_os = "macos", target_os = "linux"),
-            target_pointer_width = "64"
-        ))]
-        {
-            verified_current_path(&self.root)
-        }
-        #[cfg(not(all(
-            any(target_os = "macos", target_os = "linux"),
-            target_pointer_width = "64"
-        )))]
-        {
-            None
-        }
-    }
-
-    /// The one display spelling of the root (design §4.2, owner decision
-    /// Q4): its verified current path, else the spelling the session opened.
-    pub(crate) fn display_path(&self) -> PathBuf {
-        self.verified_current_path()
-            .unwrap_or_else(|| self.opened_as.clone())
+        verified_current_path(&self.root)
     }
 
     /// The bytes of `name` in the root (`slate.json`), opened beneath the
     /// held root without following a link.
     pub(crate) fn read_root_file(&self, name: &str) -> io::Result<Vec<u8>> {
-        #[cfg(all(
-            any(target_os = "macos", target_os = "linux"),
-            target_pointer_width = "64"
-        ))]
-        {
-            use std::io::Read as _;
-            let mut file = sys::open_at(
-                &self.root,
-                &sys::component(name)?,
-                FileOptions::new().read(true).flags(),
-                0,
-            )?;
-            let mut bytes = Vec::new();
-            file.read_to_end(&mut bytes)?;
-            Ok(bytes)
-        }
-        #[cfg(not(all(
-            any(target_os = "macos", target_os = "linux"),
-            target_pointer_width = "64"
-        )))]
-        {
-            fs::read(self.opened_as.join(name))
-        }
+        use std::io::Read as _;
+        let mut file = sys::open_at(
+            &self.root,
+            &sys::component(name)?,
+            FileOptions::new().read(true).flags(),
+            0,
+        )?;
+        let mut bytes = Vec::new();
+        file.read_to_end(&mut bytes)?;
+        Ok(bytes)
     }
 
     /// Whether `relative` (vault-relative, `/`-separated) names a folder,
@@ -758,24 +640,44 @@ impl FsRoot {
     /// detects. Links are followed, as `Path::is_dir` follows them; only the
     /// starting point is anchored.
     pub(crate) fn is_dir(&self, relative: &str) -> bool {
-        #[cfg(all(
-            any(target_os = "macos", target_os = "linux"),
-            target_pointer_width = "64"
-        ))]
-        {
-            let Ok(relative) = std::ffi::CString::new(relative) else {
-                return false;
-            };
-            sys::stat_at(&self.root, &relative, 0)
-                .is_ok_and(|stat| stat.st_mode & libc::S_IFMT == libc::S_IFDIR)
-        }
-        #[cfg(not(all(
-            any(target_os = "macos", target_os = "linux"),
-            target_pointer_width = "64"
-        )))]
-        {
-            self.opened_as.join(relative).is_dir()
-        }
+        let Ok(relative) = std::ffi::CString::new(relative) else {
+            return false;
+        };
+        sys::stat_at(&self.root, &relative, 0)
+            .is_ok_and(|stat| stat.st_mode & libc::S_IFMT == libc::S_IFDIR)
+    }
+}
+
+/// The pathname form (Windows until 22W): every read is the one the open
+/// made before.
+#[cfg(not(all(
+    any(target_os = "macos", target_os = "linux"),
+    target_pointer_width = "64"
+)))]
+impl FsRoot {
+    /// Record the root by its pathname; `.slate` is made by
+    /// `VaultSession::open`, as before.
+    pub(crate) fn open(root: &Path) -> Result<Self, VaultError> {
+        Ok(Self {
+            opened_as: root.to_path_buf(),
+            identity: observed_identity(root),
+            cache: CacheDir::by_path(root.join(".slate")),
+        })
+    }
+
+    /// Nothing is held, so nothing can be verified.
+    pub(crate) fn verified_current_path(&self) -> Option<PathBuf> {
+        None
+    }
+
+    /// `name` in the root, by path.
+    pub(crate) fn read_root_file(&self, name: &str) -> io::Result<Vec<u8>> {
+        fs::read(self.opened_as.join(name))
+    }
+
+    /// Whether `relative` names a folder, by path.
+    pub(crate) fn is_dir(&self, relative: &str) -> bool {
+        self.opened_as.join(relative).is_dir()
     }
 }
 
