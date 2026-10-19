@@ -52,6 +52,26 @@ import os
 /// per `watcherSentenceSpacingMs()` per open vault, and none while a modal
 /// surface is open; a run the gate holds back posts nothing, and its counts
 /// are not carried to a later one.
+///
+/// Plan 43 PR 21c (#1293; design `21_change_feed_design.md` §4.3–§4.7, §6):
+/// the run consumes core's change feed, which records every index change with
+/// its writer, so another Slate session's changes (another window,
+/// `slate-cli`) are applied exactly and counted. After its scan a run retries
+/// its retry set (and an explicit Refresh runs its recovery set), then opens a
+/// window from its cursor to the feed's head: an exact window's records,
+/// read in bounded pages under the run's token, are applied by path (the
+/// inventory in one pass, the tree's summaries in place and its silent
+/// refetch for a structural record, the tabs a rename moved), every open tab
+/// is compared with the index, the active note's leaves follow the window's
+/// paths, and the Slate writes journaled since the run began are re-read; a
+/// gap or an oversized window takes the full re-sync instead (`resyncFromIndex`,
+/// PR 19's), with the uncounted sentence. Then the head: while another
+/// session committed meanwhile, a further window, at most
+/// `changeFeedMaxPasses()` in all (AR-31). The last window is acknowledged
+/// unless the run was cancelled or a feed read failed. Other sessions'
+/// changes are spoken only by an explicit Refresh (the owner's decision Q2):
+/// a foreground or Watcher run applies them silently and speaks its own
+/// scan's.
 extension RescanReason: Comparable {
     /// The pending-reason lattice's order. Core's `RescanReason` is the
     /// sentence's payload; the order is the host's, explicit here so each
@@ -177,19 +197,40 @@ final class VaultRescanRun {
     /// the start of the sentence window (design §4.5 item 2). A close and a
     /// reopen start a new one.
     fileprivate(set) var lastWatcherSentenceAt: Date?
+    /// Plan 43 PR 21c (#1293, design §4.3): the Slate-write journal, open from
+    /// a run's start to its end (nil otherwise): the paths every Slate-owned
+    /// file-change event named meanwhile, a rename's both. Re-read from the
+    /// index for Quick Open's list after each change-feed window and once
+    /// more at the run's end, so an own write that commits while a window is
+    /// applied is never reverted by it.
+    fileprivate(set) var slateWriteJournal: Set<RescanPathKey>?
+    /// Plan 43 PR 21c (design §4.3): the surfaces whose re-sync operation
+    /// failed. The next run, whatever its reason, retries each by its full
+    /// reload before it opens its window; tabs need no entry, since every
+    /// run compares them. A close or a switch forgets it.
+    fileprivate(set) var retrySet: Set<RescanSurface> = []
     fileprivate var generation: UInt64 = 0
     /// Waits for the blockers of a pending follow-up to settle.
     fileprivate var deferredFollowUp: AnyCancellable?
     fileprivate var foregroundRoute = ForegroundRescanRoute()
-    private var treeRefreshers: [(id: UUID, refresh: @MainActor () async -> UInt64)] = []
+    private var treeRefreshers:
+        [(
+            id: UUID, refresh: @MainActor () async -> UInt64,
+            showsFailure: @MainActor () -> Bool
+        )] = []
 
     /// The mounted files tree's silent refetch, registered while the tree is
     /// mounted (`FileTreeSidebar`). It returns how many levels failed: shown
-    /// in the tree, counted in the sentence, never spoken.
+    /// in the tree, counted in the sentence, never spoken. `showsFailure`
+    /// says whether the tree shows a level it could not list, which an
+    /// explicit Refresh's recovery set re-checks (plan 43 PR 21c).
     @discardableResult
-    func registerTreeRefresher(_ refresh: @escaping @MainActor () async -> UInt64) -> UUID {
+    func registerTreeRefresher(
+        showsFailure: @escaping @MainActor () -> Bool = { false },
+        _ refresh: @escaping @MainActor () async -> UInt64
+    ) -> UUID {
         let id = UUID()
-        treeRefreshers.append((id, refresh))
+        treeRefreshers.append((id, refresh, showsFailure))
         return id
     }
 
@@ -200,6 +241,11 @@ final class VaultRescanRun {
     /// The most recently mounted tree's refetch.
     fileprivate var treeRefresher: (@MainActor () async -> UInt64)? {
         treeRefreshers.last?.refresh
+    }
+
+    /// Whether the most recently mounted tree shows a failed level.
+    fileprivate var treeShowsFailure: Bool {
+        treeRefreshers.last?.showsFailure() ?? false
     }
 
     // MARK: Test seams
@@ -227,6 +273,47 @@ final class VaultRescanRun {
     /// How many watcher signals reached `handleExternalChange`: the facts'
     /// handle on the adapter's hop to the main actor. Never reset.
     fileprivate(set) var watcherSignalsHandled: UInt64 = 0
+    /// Plan 43 PR 21c: the change feed's page size, clamped to 1 through
+    /// core's `maxChangeFeedPageLimit()` (a fact makes it small to prove a
+    /// window spanning several pages is applied whole).
+    var changeFeedPageLimit: UInt32 = 1_000
+    /// Plan 43 PR 21c: a fact's fault. When it returns true for an operation
+    /// ("window", "page", "head", "acknowledge", "inventory", "summary"),
+    /// that core call fails as a busy cache's would, on the worker, before it
+    /// is made.
+    var coreCallFault: (@Sendable (String) -> Bool)?
+    /// Plan 43 PR 21c: awaited after each change-feed window opens, before
+    /// its records are read (a fact parks a run here to write, as another
+    /// session or as Slate, while the window is applied).
+    var afterWindowOpenedHook: (@MainActor (ChangeFeedWindow) async -> Void)?
+    /// Plan 43 PR 21c: each change-feed window a run opened, in order.
+    var windowObserver: (@MainActor (ChangeFeedWindow) -> Void)?
+}
+
+/// A surface the rescan's retry set owns (plan 43 PR 21c, design §4.3).
+enum RescanSurface: Hashable {
+    /// Quick Open's list, the openable-document inventory: retried by its
+    /// full reload.
+    case quickOpen
+    /// The files tree: retried by its silent refetch.
+    case tree
+}
+
+/// A vault path compared byte for byte (`BaseExactIdentity`), as the index
+/// keys it: the change feed's records and the Slate-write journal key the
+/// inventory by it (plan 43 PR 21c).
+struct RescanPathKey: Hashable {
+    let path: String
+
+    init(_ path: String) { self.path = path }
+
+    static func == (lhs: Self, rhs: Self) -> Bool {
+        BaseExactIdentity.matches(lhs.path, rhs.path)
+    }
+
+    func hash(into hasher: inout Hasher) {
+        BaseExactIdentity.hash(path, into: &hasher)
+    }
 }
 
 extension AppState {
@@ -456,6 +543,8 @@ extension AppState {
         rescanRun.sentenceFollowsModal = false
         rescanRun.watcherRequestWhileInactive = false
         rescanRun.lastWatcherSentenceAt = nil
+        rescanRun.slateWriteJournal = nil
+        rescanRun.retrySet = []
     }
 
     // MARK: - The run
@@ -548,8 +637,12 @@ extension AppState {
         // or a vault switch cancels it directly.
         let cancel = CancelToken()
         rescanRun.cancelToken = cancel
+        // Plan 43 PR 21c (design §4.3): the Slate-write journal opens with the
+        // run, before its first window, and stays open to its end.
+        rescanRun.slateWriteJournal = []
         defer {
             if rescanRun.cancelToken === cancel { rescanRun.cancelToken = nil }
+            if rescanRun.generation == generation { rescanRun.slateWriteJournal = nil }
         }
         let observer = rescanRun.coreCallObserver
         // Only an explicit Refresh shows progress, on the scan strip; nothing
@@ -597,24 +690,38 @@ extension AppState {
         if let hook = rescanRun.afterScanHook { await hook() }
         guard isCurrentRescan(session, generation), !cancel.isCancelled() else { return }
 
-        let failed = await resyncFromIndex(
-            session: session, cancel: cancel, reason: reason, report: report,
-            generation: generation)
+        guard
+            let feed = await consumeChangeFeed(
+                session: session, cancel: cancel, reason: reason, report: report,
+                generation: generation)
+        else { return }
         guard isCurrentRescan(session, generation), !cancel.isCancelled() else { return }
 
-        // The one sentence. The scan's error count crosses the FFI in full;
-        // each failed re-sync operation adds one. A Watcher run speaks on the
-        // foreground policy, through the watcher's gate (plan 43 PR 20c,
-        // `postRescanSentence`).
+        // The one sentence (design §4.7). The scan's error count crosses the
+        // FFI in full; each failed re-sync operation, feed read or
+        // acknowledgment adds one. An explicit Refresh speaks its last
+        // window's counts, which include other sessions' changes; under the
+        // owner's decision Q2 a foreground or Watcher run speaks only its own
+        // scan's, on the foreground policy, and a Watcher run through the
+        // watcher's gate (plan 43 PR 20c, `postRescanSentence`). A gap, an
+        // oversized window or an uncounted run says other sessions' changes
+        // were not counted, with this scan's own counts (AR-76).
+        let failed = feed.failed
         let sentence: A11yEvent
         if !report.complete || failed > 0 {
             let (sum, overflow) = report.errorCount.addingReportingOverflow(failed)
             sentence = .vaultRescanIncomplete(errors: max(1, overflow ? .max : sum))
-        } else if reason == .explicit || report.filesChanged + report.filesRemoved > 0 {
-            sentence = .vaultRescanFinished(
-                reason: reason, changed: report.filesChanged, removed: report.filesRemoved)
+        } else if feed.counted {
+            let changed = reason == .explicit ? feed.changed : report.filesChanged
+            let removed = reason == .explicit ? feed.removed : report.filesRemoved
+            guard reason == .explicit || changed + removed > 0 else { return }
+            sentence = .vaultRescanFinished(reason: reason, changed: changed, removed: removed)
         } else {
-            return
+            guard reason == .explicit || report.filesChanged + report.filesRemoved > 0 else {
+                return
+            }
+            sentence = .vaultRescanFinishedUncounted(
+                reason: reason, changed: report.filesChanged, removed: report.filesRemoved)
         }
         await postRescanSentence(
             sentence, reason: reason, session: session, generation: generation, cancel: cancel)
@@ -668,14 +775,464 @@ extension AppState {
         announcer.post(event)
     }
 
+    // MARK: - The change feed (plan 43 PR 21c, #1293)
+
+    /// What a run's consumption of the change feed did, for its one sentence.
+    struct ChangeFeedOutcome {
+        /// Failed re-sync operations, feed reads and acknowledgments: one
+        /// error each.
+        var failed: UInt64 = 0
+        /// The run's last window was exact and counted, and the feed
+        /// answered every read the run made: `changed` and `removed` are
+        /// exact, from this session's cursor.
+        var counted = false
+        var changed: UInt64 = 0
+        var removed: UInt64 = 0
+    }
+
+    /// One exact window's application.
+    private struct WindowApplication {
+        var failed: UInt64 = 0
+        /// Every page of the window was read.
+        var answered = true
+        /// Every leaf of the active note was refreshed.
+        var refreshedEveryLeaf = false
+    }
+
+    /// The run after its scan (design §4.3, §4.6). First the retry set,
+    /// whatever the reason, and an explicit Refresh's recovery set (the
+    /// owner's decision Q8): Quick Open's whole list reloads, and a tree
+    /// showing a level it could not list refetches, even when the window is
+    /// empty. Then at most `changeFeedMaxPasses()` windows, the first from
+    /// this session's cursor and each further one from the last target: an
+    /// exact window through its records (`applyChangeFeedWindow`), a gap or
+    /// an oversized one through PR 19's full re-sync (`resyncFromIndex`), each
+    /// followed by the journal's re-read and then the feed's head, which says
+    /// whether another session committed after the window opened (AR-31).
+    /// Then the last window's acknowledgment, unless a feed read failed, and
+    /// the journal once more. Nil when the run was cancelled or its vault
+    /// closed: nothing is acknowledged, and the next run reads the same
+    /// window again.
+    private func consumeChangeFeed(
+        session: VaultSession, cancel: CancelToken, reason: RescanReason,
+        report: ScanReport, generation: UInt64
+    ) async -> ChangeFeedOutcome? {
+        func current() -> Bool {
+            isCurrentRescan(session, generation) && !cancel.isCancelled()
+        }
+        var outcome = ChangeFeedOutcome()
+
+        let retry = rescanRun.retrySet
+        rescanRun.retrySet = []
+        if retry.contains(.quickOpen) || reason == .explicit {
+            outcome.failed += await resyncFileInventory(
+                session: session, cancel: cancel, generation: generation
+            ).failed
+            guard current() else { return nil }
+        }
+        if retry.contains(.tree) || (reason == .explicit && rescanRun.treeShowsFailure) {
+            outcome.failed += await refetchTreeForRescan(
+                session: session, cancel: cancel, generation: generation)
+            guard current() else { return nil }
+        }
+
+        var after: UInt64?
+        var last: ChangeFeedWindow?
+        var answered = true
+        var refreshedEveryLeaf = false
+        let passes = max(1, Int(changeFeedMaxPasses()))
+        for pass in 1...passes {
+            let window: ChangeFeedWindow
+            let from = after
+            do {
+                window = try await changeFeedCall("window", cancel: cancel) {
+                    try session.changeFeedWindow(after: from, cancel: cancel)
+                }
+            } catch {
+                guard current(), !Self.isCancellation(error) else { return nil }
+                // The feed cannot answer: one error, nothing acknowledged,
+                // and the full re-sync, PR 19's baseline.
+                outcome.failed += 1
+                answered = false
+                outcome.failed += await resyncFromIndex(
+                    session: session, cancel: cancel, generation: generation)
+                guard current() else { return nil }
+                break
+            }
+            guard current() else { return nil }
+            rescanRun.windowObserver?(window)
+            last = window
+            if let hook = rescanRun.afterWindowOpenedHook {
+                await hook(window)
+                guard current() else { return nil }
+            }
+            switch window.status {
+            case .exact:
+                guard
+                    let applied = await applyChangeFeedWindow(
+                        window, session: session, cancel: cancel, generation: generation)
+                else { return nil }
+                outcome.failed += applied.failed
+                refreshedEveryLeaf = refreshedEveryLeaf || applied.refreshedEveryLeaf
+                if !applied.answered { answered = false }
+            case .tooLarge, .gap:
+                // More than 10,000 rows, or rows the feed no longer holds:
+                // nothing was read, and the full re-sync shows the index.
+                outcome.failed += await resyncFromIndex(
+                    session: session, cancel: cancel, generation: generation)
+                guard current() else { return nil }
+            }
+            guard
+                let reread = await rereadSlateWriteJournal(
+                    session: session, cancel: cancel, generation: generation)
+            else { return nil }
+            outcome.failed += reread
+            guard answered, pass < passes else { break }
+            let head: UInt64
+            do {
+                head = try await changeFeedCall("head", cancel: cancel) {
+                    try session.changeFeedHead(cancel: cancel)
+                }
+            } catch {
+                guard current(), !Self.isCancellation(error) else { return nil }
+                outcome.failed += 1
+                answered = false
+                break
+            }
+            guard current() else { return nil }
+            // A head past the target: another session committed after the
+            // window opened, and a further window applies the rest.
+            guard head > window.toSeq else { break }
+            after = window.toSeq
+        }
+
+        // The recovery set's last surface: the active note's leaves, when one
+        // shows a failure and no window refreshed them all.
+        if reason == .explicit, !refreshedEveryLeaf, activeNoteLeafShowsFailure {
+            await refreshActiveNoteLeavesForRescan(contentChanged: true)
+            guard current() else { return nil }
+        }
+
+        // The last window's acknowledgment moves the cursor to its target,
+        // including after a failed re-sync operation, which the retry set
+        // owns. A failed acknowledgment is one error, and the next run reads
+        // the window again: its counts are spoken once, by the run that
+        // acknowledges them.
+        if answered, let last {
+            do {
+                try await changeFeedCall("acknowledge", cancel: cancel) {
+                    try session.acknowledgeChangeFeed(window: last.token, cancel: cancel)
+                }
+            } catch {
+                guard current(), !Self.isCancellation(error) else { return nil }
+                outcome.failed += 1
+                answered = false
+            }
+            guard current() else { return nil }
+        }
+
+        guard
+            let reread = await rereadSlateWriteJournal(
+                session: session, cancel: cancel, generation: generation)
+        else { return nil }
+        outcome.failed += reread
+
+        if answered, let last, last.status == .exact, last.counted {
+            outcome.counted = true
+            outcome.changed = last.changed
+            outcome.removed = last.removed
+        }
+        return outcome
+    }
+
+    /// The record path (design §4.3, §6). An exact window's records, read
+    /// whole in bounded pages under the run's token, applied silently in the
+    /// pages' order: renames, then removals, then the rest. A tab that held a
+    /// file another session renamed moves (`retargetTabsForFeedRename`, the
+    /// owner's decision Q3); the inventory takes the removals and the
+    /// openable `Present` files in one pass; the tree takes the `Present`
+    /// summaries in place and refetches once when a record changes its shape
+    /// (a creation, a removal, a rename, a folder). Then, whatever the window
+    /// holds, every open tab is compared with the index (PR 19's step), and
+    /// the active note's leaves follow the window's paths: every leaf when a
+    /// record names the note or its tab reloaded, the leaves other files feed
+    /// when any file record exists, none otherwise. Nil when cancelled.
+    private func applyChangeFeedWindow(
+        _ window: ChangeFeedWindow, session: VaultSession, cancel: CancelToken,
+        generation: UInt64
+    ) async -> WindowApplication? {
+        func current() -> Bool {
+            isCurrentRescan(session, generation) && !cancel.isCancelled()
+        }
+        var application = WindowApplication()
+        var anyFileRecord = false
+        var paths = Set<RescanPathKey>()
+        if window.recordCount > 0 {
+            let records: [ChangeRecord]
+            do {
+                records = try await readChangeFeedRecords(window, cancel: cancel, session: session)
+            } catch {
+                guard current(), !Self.isCancellation(error) else { return nil }
+                // A page that cannot be read leaves the window unknown: one
+                // error, nothing acknowledged, and the full re-sync.
+                application.failed += 1
+                application.answered = false
+                application.failed += await resyncFromIndex(
+                    session: session, cancel: cancel, generation: generation)
+                guard current() else { return nil }
+                return application
+            }
+            guard current() else { return nil }
+
+            // A path absent at the window's target: a tab never loaded may
+            // follow a rename away from it.
+            var gone = Set<RescanPathKey>()
+            for record in records where record.entry == .file && record.effect == .removed {
+                gone.insert(RescanPathKey(record.path))
+            }
+            var upserts: [RescanPathKey: FileSummary] = [:]
+            var removals = Set<RescanPathKey>()
+            var summaries: [FileSummary] = []
+            var structural = false
+            for record in records {
+                let key = RescanPathKey(record.path)
+                paths.insert(key)
+                if let from = record.renamedFrom { paths.insert(RescanPathKey(from)) }
+                guard record.entry == .file else {
+                    // A folder created, removed or renamed.
+                    structural = true
+                    continue
+                }
+                anyFileRecord = true
+                switch record.effect {
+                case .renamed:
+                    structural = true
+                    if let from = record.renamedFrom {
+                        retargetTabsForFeedRename(
+                            from: from, to: record.path, fromHash: record.fromHash,
+                            oldIsGone: gone.contains(RescanPathKey(from)))
+                    }
+                case .removed:
+                    structural = true
+                    removals.insert(key)
+                case .present:
+                    if record.counted == .created { structural = true }
+                    if let summary = record.summary {
+                        summaries.append(summary)
+                        if record.openable {
+                            upserts[key] = summary
+                        } else {
+                            removals.insert(key)
+                        }
+                    } else {
+                        structural = true
+                    }
+                }
+            }
+            applyChangeFeedInventory(upserts: upserts, removals: removals)
+            if !summaries.isEmpty { publishSidebarFileSummaries(summaries) }
+            if structural {
+                application.failed += await refetchTreeForRescan(
+                    session: session, cancel: cancel, generation: generation)
+                guard current() else { return nil }
+            } else if anyFileRecord {
+                refreshSidebarTagTree()
+            }
+        }
+
+        // Every open tab, every run.
+        let tabs = await resyncOpenTabsFromIndex(
+            session: session, cancel: cancel, generation: generation)
+        guard current() else { return nil }
+        application.failed += tabs.failed
+
+        // The leaves, narrowed to the window's paths.
+        var activePath: String?
+        if case .markdown(let path)? = workspace.activeTab?.item { activePath = path }
+        let namesActiveNote = activePath.map { paths.contains(RescanPathKey($0)) } ?? false
+        if tabs.reloadedActiveNote || namesActiveNote {
+            await refreshActiveNoteLeavesForRescan(contentChanged: true)
+            application.refreshedEveryLeaf = true
+        } else if anyFileRecord {
+            await refreshActiveNoteLeavesForRescan(contentChanged: false)
+        }
+        guard current() else { return nil }
+        return application
+    }
+
+    /// Every record of a window, page after page (at most
+    /// `changeFeedPageLimit`, within core's bound), each page under the run's
+    /// token on the worker.
+    private func readChangeFeedRecords(
+        _ window: ChangeFeedWindow, cancel: CancelToken, session: VaultSession
+    ) async throws -> [ChangeRecord] {
+        let observer = rescanRun.coreCallObserver
+        let fault = rescanRun.coreCallFault
+        let limit = min(max(1, rescanRun.changeFeedPageLimit), maxChangeFeedPageLimit())
+        let token = window.token
+        return try await withTaskCancellationHandler {
+            try await Task.detached(priority: .userInitiated) {
+                var records: [ChangeRecord] = []
+                var cursor: String?
+                repeat {
+                    observer?("page", cancel)
+                    try AppState.injectRescanFault(fault, "page")
+                    let page = try session.changeFeedPage(
+                        window: token, cursor: cursor, limit: limit, cancel: cancel)
+                    records.append(contentsOf: page.records)
+                    cursor = page.nextCursor
+                } while cursor != nil
+                return records
+            }.value
+        } onCancel: {
+            cancel.cancel()
+        }
+    }
+
+    /// One change-feed core call on the rescan worker under the run's token
+    /// (locked decision 05 §4), cancelled through the task's handler.
+    private func changeFeedCall<T: Sendable>(
+        _ operation: String, cancel: CancelToken, _ call: @escaping @Sendable () throws -> T
+    ) async throws -> T {
+        let observer = rescanRun.coreCallObserver
+        let fault = rescanRun.coreCallFault
+        return try await withTaskCancellationHandler {
+            try await Task.detached(priority: .userInitiated) {
+                observer?(operation, cancel)
+                try AppState.injectRescanFault(fault, operation)
+                return try call()
+            }.value
+        } onCancel: {
+            cancel.cancel()
+        }
+    }
+
+    /// A fact's injected failure of `operation` (`coreCallFault`): what a
+    /// busy cache would throw.
+    nonisolated static func injectRescanFault(
+        _ fault: (@Sendable (String) -> Bool)?, _ operation: String
+    ) throws {
+        if fault?(operation) == true {
+            throw VaultError.Db(message: "test fault: \(operation)")
+        }
+    }
+
+    private static func isCancellation(_ error: Error) -> Bool {
+        if case VaultError.Cancelled = error { return true }
+        return error is CancellationError
+    }
+
+    /// Plan 43 PR 21c: the open's `registerChangeFeed()` failed (a busy
+    /// cache, a schema skew). A notice in the unified log, with no path
+    /// (#507), and never spoken; the first rescan's window is then a gap,
+    /// whose full re-sync re-creates the cursor.
+    nonisolated static func logChangeFeedUnregistered() {
+        Logger(subsystem: "com.startingblind.slate", category: "change-feed").notice(
+            "Slate: the change feed could not register this vault's cursor; the first rescan re-syncs in full"
+        )
+    }
+
+    // MARK: - The Slate-write journal (plan 43 PR 21c, design §4.3)
+
+    /// A Slate-owned file-change event: while a rescan runs, the paths it
+    /// names (a rename's both) join the run's journal.
+    func journalSlateWriteForRescan(_ event: FileChangeEvent, from session: VaultSession) {
+        guard currentSession === session, rescanRun.slateWriteJournal != nil else { return }
+        rescanRun.slateWriteJournal?.insert(RescanPathKey(event.path))
+        if let previous = event.previousPath {
+            rescanRun.slateWriteJournal?.insert(RescanPathKey(previous))
+        }
+    }
+
+    /// Every journaled path re-read from the index for Quick Open's list,
+    /// its presence and its summary, never its event replayed: an own write
+    /// that committed after the window opened is newer than the window's
+    /// records and wins over them, and one that committed before it is
+    /// already in them. The reads run on the worker and check the run's
+    /// token between paths. Returns the failed operations (one, and Quick
+    /// Open enters the retry set), or nil when cancelled.
+    private func rereadSlateWriteJournal(
+        session: VaultSession, cancel: CancelToken, generation: UInt64
+    ) async -> UInt64? {
+        guard let journal = rescanRun.slateWriteJournal, !journal.isEmpty else { return 0 }
+        let paths = journal.map(\.path).sorted()
+        let observer = rescanRun.coreCallObserver
+        let fault = rescanRun.coreCallFault
+        let read: Result<[JournalRead], Error> = await Task.detached(priority: .userInitiated) {
+            do {
+                var found: [JournalRead] = []
+                for path in paths {
+                    if cancel.isCancelled() { throw VaultError.Cancelled }
+                    observer?("summary", cancel)
+                    try AppState.injectRescanFault(fault, "summary")
+                    do {
+                        found.append(JournalRead(path: path, summary: try session.getFileSummary(path: path)))
+                    } catch VaultError.InvalidPath {
+                        // A path the index can never hold.
+                        found.append(JournalRead(path: path, summary: nil))
+                    }
+                }
+                return .success(found)
+            } catch {
+                return .failure(error)
+            }
+        }.value
+        guard isCurrentRescan(session, generation), !cancel.isCancelled() else { return nil }
+        switch read {
+        case .failure(let error):
+            if Self.isCancellation(error) { return nil }
+            rescanRun.retrySet.insert(.quickOpen)
+            return 1
+        case .success(let found):
+            var upserts: [RescanPathKey: FileSummary] = [:]
+            var removals = Set<RescanPathKey>()
+            for entry in found {
+                let key = RescanPathKey(entry.path)
+                if let summary = entry.summary, Self.isOpenableDocument(summary.path) {
+                    upserts[key] = summary
+                } else {
+                    removals.insert(key)
+                }
+            }
+            applyChangeFeedInventory(upserts: upserts, removals: removals)
+            return 0
+        }
+    }
+
+    /// One journaled path's re-read: its index row's summary, or nil.
+    private struct JournalRead: Sendable {
+        let path: String
+        let summary: FileSummary?
+    }
+
+    /// Core's openable-document set, exported so hosts classify exactly as
+    /// core does (`openable_document_extensions`, W7-7 PR 7 round 26).
+    private static let openableDocumentExtensionSet = Set(openableDocumentExtensions())
+
+    /// Core's classification of a path as an openable document: its
+    /// extension, case-folded (a dotfile has none, as for core).
+    static func isOpenableDocument(_ path: String) -> Bool {
+        openableDocumentExtensionSet.contains((path as NSString).pathExtension.lowercased())
+    }
+
+    /// Whether a leaf of the active note shows a load failure: what an
+    /// explicit Refresh's recovery set re-checks.
+    var activeNoteLeafShowsFailure: Bool {
+        linksLoadError != nil || embedsLoadError != nil || tasksLoadError != nil
+            || mathBlocksLoadError != nil || codeBlocksLoadError != nil
+            || diagramBlocksLoadError != nil || citationsLoadError != nil
+            || historyLoadError != nil
+    }
+
     // MARK: - The re-sync from the index
 
-    /// R-9's re-sync (AR-18's fallback): every surface the host shows is
-    /// re-synchronized from what the index holds now, whoever indexed it, and
-    /// each step is awaited to its publication. Nothing speaks and nothing is
-    /// retained between runs. Returns how many operations failed (each counts
-    /// one error in the sentence). The one function PR 21's change feed
-    /// narrows (#1444), with this full re-sync as its fallback.
+    /// R-9's full re-sync, since plan 43 PR 21c the change feed's fallback: a
+    /// window that is a gap or too large, or a feed read that failed (design
+    /// §4.3). Every surface the host shows is re-synchronized from what the
+    /// index holds now, whoever indexed it, each step awaited to its
+    /// publication. Nothing speaks. Returns how many operations failed (each
+    /// counts one error in the sentence; a failed surface enters the retry
+    /// set).
     ///
     /// (a) The files inventory, the openable documents Quick Open lists, read
     /// in pages under the run's token. (b) The files tree's silent refetch and
@@ -685,16 +1242,13 @@ extension AppState {
     /// spelling, a gone one marks its clean tabs missing, a clean tab whose
     /// hash changed reloads in place, a dirty one never does, and every
     /// missing tab whose note is back re-seats (PR 10). (d) The active note's
-    /// leaves. A foreground or Watcher run that found nothing new, changed or
-    /// removed, in an inventory that did not change either, leaves (b) and
-    /// (d) as they are: their refetch is visible (the tree collapses and
-    /// re-expands its loaded folders) and would flicker on every return to
-    /// Slate and every burst another app's writes make.
+    /// leaves. The feed could not say what changed, so every surface
+    /// refreshes; PR 19's skip of (b) and (d) for a foreground run that found
+    /// nothing (their refetch is visible) belongs to the record path now,
+    /// where a window with no records touches nothing but the tabs.
     func resyncFromIndex(
         session: VaultSession,
         cancel: CancelToken,
-        reason: RescanReason,
-        report: ScanReport,
         generation: UInt64
     ) async -> UInt64 {
         var failed: UInt64 = 0
@@ -704,20 +1258,11 @@ extension AppState {
             session: session, cancel: cancel, generation: generation)
         guard isCurrentRescan(session, generation), !cancel.isCancelled() else { return 0 }
         failed += inventory.failed
-        let surfacesMayHaveChanged =
-            reason == .explicit
-            || !report.complete
-            || report.filesChanged + report.filesRemoved > 0
-            || inventory.changed
 
         // (b) The files tree, silently.
-        if surfacesMayHaveChanged {
-            refreshSidebarTagTree()
-            if let refresh = rescanRun.treeRefresher {
-                failed += await refresh()
-            }
-            guard isCurrentRescan(session, generation), !cancel.isCancelled() else { return 0 }
-        }
+        failed += await refetchTreeForRescan(
+            session: session, cancel: cancel, generation: generation)
+        guard isCurrentRescan(session, generation), !cancel.isCancelled() else { return 0 }
 
         // (c) The open tabs.
         let tabs = await resyncOpenTabsFromIndex(
@@ -726,9 +1271,20 @@ extension AppState {
         failed += tabs.failed
 
         // (d) The active note's leaves.
-        if surfacesMayHaveChanged || tabs.reloadedActiveNote {
-            await refreshActiveNoteLeavesForRescan(contentChanged: tabs.reloadedActiveNote)
-        }
+        await refreshActiveNoteLeavesForRescan(contentChanged: tabs.reloadedActiveNote)
+        return failed
+    }
+
+    /// The Tags section and the mounted tree's silent refetch. Its failed
+    /// levels are counted, and the tree enters the retry set when any failed.
+    private func refetchTreeForRescan(
+        session: VaultSession, cancel: CancelToken, generation: UInt64
+    ) async -> UInt64 {
+        refreshSidebarTagTree()
+        guard let refresh = rescanRun.treeRefresher else { return 0 }
+        let failed = await refresh()
+        guard isCurrentRescan(session, generation), !cancel.isCancelled() else { return 0 }
+        if failed > 0 { rescanRun.retrySet.insert(.tree) }
         return failed
     }
 
@@ -736,6 +1292,7 @@ extension AppState {
         session: VaultSession, cancel: CancelToken, generation: UInt64
     ) async -> (failed: UInt64, changed: Bool) {
         let observer = rescanRun.coreCallObserver
+        let fault = rescanRun.coreCallFault
         let limit = max(1, rescanRun.inventoryPageLimit)
         do {
             let loaded: [FileSummary] = try await withTaskCancellationHandler {
@@ -744,6 +1301,7 @@ extension AppState {
                     var cursor: String?
                     repeat {
                         observer?("inventory", cancel)
+                        try AppState.injectRescanFault(fault, "inventory")
                         let page = try session.listFiles(
                             filter: .openableDocuments,
                             paging: Paging(cursor: cursor, limit: limit),
@@ -762,10 +1320,12 @@ extension AppState {
             return (0, publishRescanInventory(loaded))
         } catch {
             // A cancelled run says nothing; a failed listing keeps the list
-            // Quick Open has and counts one error.
+            // Quick Open has, counts one error, and is retried by the next
+            // run.
             guard isCurrentRescan(session, generation), !cancel.isCancelled() else {
                 return (0, false)
             }
+            rescanRun.retrySet.insert(.quickOpen)
             return (1, false)
         }
     }

@@ -522,6 +522,15 @@ struct WorkspaceModel: Hashable {
     mutating func retargetFileBackedItems(
         _ transform: (EditorItem) -> EditorItem?
     ) -> [FileTabRetarget] {
+        retargetFileBackedItems { _, item in transform(item) }
+    }
+
+    /// The same traversal, deciding per tab (plan 43 PR 21c: a rename another
+    /// Slate session made moves only the tabs that held the renamed file).
+    @discardableResult
+    mutating func retargetFileBackedItems(
+        _ transform: (TabID, EditorItem) -> EditorItem?
+    ) -> [FileTabRetarget] {
         var changed: [FileTabRetarget] = []
         root = Self.mapAllGroups(root) { group in
             for index in group.tabs.indices {
@@ -532,7 +541,7 @@ struct WorkspaceModel: Hashable {
                 case .savedQuery, .dashboard, .graph:
                     continue
                 }
-                guard let newItem = transform(oldItem),
+                guard let newItem = transform(group.tabs[index].id, oldItem),
                     !Self.fileBackedItemsMatchExactly(oldItem, newItem)
                 else { continue }
                 switch newItem {

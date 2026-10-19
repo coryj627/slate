@@ -432,10 +432,13 @@ final class VaultRescanTests: XCTestCase {
             "a foreground rescan speaks an incomplete run although nothing changed")
 
         // A clean scan whose re-sync fails twice says so, with both counted.
+        // The tree shows the levels it could not list, as a real tree does:
+        // since plan 43 PR 21c an unchanged Refresh refetches a tree only when
+        // it shows a failure (the recovery set, the owner's decision Q8).
         try FileManager.default.setAttributes([.posixPermissions: 0o644], ofItemAtPath: locked)
         try await h.refresh()
         h.spoken.lines.removeAll()
-        let failing = h.state.rescanRun.registerTreeRefresher { 2 }
+        let failing = h.state.rescanRun.registerTreeRefresher(showsFailure: { true }) { 2 }
         defer { h.state.rescanRun.unregisterTreeRefresher(failing) }
         try await h.refresh()
         XCTAssertEqual(
