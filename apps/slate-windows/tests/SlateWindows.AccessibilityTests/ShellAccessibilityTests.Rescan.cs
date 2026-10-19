@@ -3,6 +3,7 @@
 
 using System.Collections.Concurrent;
 using System.Diagnostics;
+using System.Runtime.InteropServices;
 using FlaUI.Core.AutomationElements;
 using FlaUI.Core.Definitions;
 using FlaUI.Core.Input;
@@ -182,9 +183,12 @@ public sealed partial class ShellAccessibilityTests
     /// outside Slate appears in the tree and in Quick Open, heard as exactly
     /// one line, core's rendering of a Watcher run's
     /// <c>VaultRescanFinished</c> (the shared "Files refreshed. 1 new or
-    /// changed, 0 removed."), and the app's log names the run's route. Then
-    /// the open note changed outside Slate shows its new content, and nothing
-    /// is said: a second watcher sentence inside the minute is silent.
+    /// changed, 0 removed."), and the app's log names the run's route. The
+    /// run's reconcile keeps every row it did not change — the note's row,
+    /// held since before the change, is still one the tree shows — and the
+    /// window scans clean right after it. Then the open note changed outside
+    /// Slate shows its new content, and nothing is said: a second watcher
+    /// sentence inside the minute is silent.
     /// </summary>
     /// <remarks>
     /// The window is brought forward once, at the start, and never again
@@ -243,9 +247,10 @@ public sealed partial class ShellAccessibilityTests
             window.SetForeground();
             WaitForVaultOpen(window);
             AutomationElement filesTree = WaitForElement(window, "FilesTree", TimeSpan.FromSeconds(10));
-            _ = SelectTreeItem(window, automation, "note");
+            AutomationElement noteRow = SelectTreeItem(window, automation, "note");
             _ = WaitForEditor(window, automation, "note.md editor", TimeSpan.FromSeconds(10));
             WaitForEditorText(window, automation, "note.md editor", "Original body.");
+            string noteRowName = noteRow.Name;
 
             // --- leg 1: a file created outside Slate, and no Refresh ----------
             int leg1 = LaunchSettledMark(heard, process.Id, logFile);
@@ -261,11 +266,14 @@ public sealed partial class ShellAccessibilityTests
             Assert.True(
                 runs.Contains("SlateWindows.VaultRescanStarted (Watcher)") && !runs.Any(run => run.EndsWith("(Explicit)", StringComparison.Ordinal)),
                 "the file must arrive through a Watcher run, with no Refresh; the log names: " + string.Join(" | ", runs));
+            // Plan 43 PR 20b (the shell gate, 2026-10-18): the reconcile kept
+            // the note's row — a reconcile that replaced it left this element
+            // dark, as the Templates journey's scan and the shell journey's
+            // SetFocus met it — and right after the reconcile the window scans
+            // clean, the item-name census (W7-7 PR 3, R-4) included.
+            AssertHeldRowStillShown(noteRow, noteRowName);
+            AssertAxeClean(process, "rescan-watcher-files");
             AssertQuickOpenFinds(window, automation, "late", "late");
-            // W7-7 PR 3 (#1246, R-4): the rows the Watcher run republished —
-            // the tree's and every list's — are named speakably, as after a
-            // Refresh.
-            AssertItemNamesAreSpeakable(process, "rescan-watcher-files");
 
             // --- leg 2: the OPEN note changed outside Slate, inside the minute -
             int leg2 = QuietMark(heard, process.Id);
@@ -320,7 +328,40 @@ public sealed partial class ShellAccessibilityTests
     /// <summary>Plan 43 PR 20b: core's test switch for the vault watcher
     /// (<c>SLATE_TEST_DISABLE_VAULT_WATCHER</c>), which a journey that counts
     /// a Refresh's findings sets and the watcher's journey clears.</summary>
+    /// <remarks>
+    /// Only the Refresh journey (<see cref="ExternalFiles_AppearAfterRefresh"/>)
+    /// sets it: it is the one journey that counts what a rescan found (design
+    /// §4.7). Every other journey runs the real watcher, decided on 2026-10-18
+    /// from what they do: only two others change the vault outside Slate
+    /// after the launch — this one, and the Templates journey's template file,
+    /// whose Watcher run reconciles the tree under its open picker — and none
+    /// counts a rescan's findings, while a reconcile under a journey's rows is
+    /// exactly what the watcher makes ordinary.
+    /// </remarks>
     private const string VaultWatcherSwitch = "SLATE_TEST_DISABLE_VAULT_WATCHER";
+
+    /// <summary>A Files row held since before a Watcher run is still a row
+    /// the tree shows: on screen, with a rectangle and the same name. A row a
+    /// publication let go of answers UIA_E_ELEMENTNOTAVAILABLE
+    /// (0x80040201) instead — the shell journey's SetFocus on its held note
+    /// row, 2026-10-18.</summary>
+    private static void AssertHeldRowStillShown(AutomationElement row, string name)
+    {
+        try
+        {
+            Assert.False(row.Properties.IsOffscreen.Value, $"the held row '{name}' reads off-screen after the Watcher run");
+            Assert.False(
+                row.Properties.BoundingRectangle.Value.IsEmpty,
+                $"the held row '{name}' has no rectangle after the Watcher run");
+            Assert.Equal(name, row.Properties.Name.Value);
+        }
+        catch (Exception exception) when (exception is COMException or FlaUI.Core.Exceptions.ElementNotAvailableException)
+        {
+            Assert.Fail(
+                $"the Watcher run's reconcile let go of the held row '{name}': "
+                + $"{exception.GetType().Name} 0x{exception.HResult:X8}");
+        }
+    }
 
     /// <summary>Whether the tree lists a row starting with
     /// <paramref name="prefix"/> now; a transient UIA fault reads as not

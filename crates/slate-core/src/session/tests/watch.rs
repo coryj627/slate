@@ -262,10 +262,12 @@ fn slate_own_writes_are_echoes_and_never_call_back() {
 /// cache's own writes would start a silent rescan every few seconds. On a
 /// real watch with the cache busy as a session makes it busy — a rescan
 /// (the index, its WAL and journal), saves through the staging folder, a
-/// create in a new folder, a rename and a Trash (the op-log), then writes
-/// under `.slate` by the long name Slate always uses — nothing calls back,
-/// and no touched path names a folder by an 8.3 spelling. No rescan follows
-/// the saves, because a complete scan would drop their bursts unseen.
+/// create in a new folder, the template flow's create at the root (its
+/// `create_exclusive_reporting`; the shell gate's Templates journey), a
+/// rename and a Trash (the op-log), then writes under `.slate` by the long
+/// name Slate always uses — nothing calls back, and no touched path names a
+/// folder by an 8.3 spelling. No rescan follows the saves, because a
+/// complete scan would drop their bursts unseen.
 #[cfg(windows)]
 #[test]
 fn the_cache_a_busy_session_writes_never_calls_back() {
@@ -287,6 +289,9 @@ fn the_cache_a_busy_session_writes_never_calls_back() {
         .save_text("a.md", "# A\n\nSaved by Slate again, longer.\n", None)
         .unwrap();
     session.create_exclusive("New/c.md", "# C\n").unwrap();
+    session
+        .create_exclusive_reporting("Journey Note.md", "# Journey Note\n")
+        .unwrap();
     session.rename_file("Folder/b.md", "d.md").unwrap();
     session.delete_file("New/c.md").unwrap();
     write(&root, ".slate/probe-1498.tmp", "by the long name");
