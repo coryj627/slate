@@ -1105,6 +1105,76 @@ fn pin_root_identity(
     (None, None)
 }
 
+/// Plan 43 PR 22a (#940; design `22_descriptor_relative_session_design.md`
+/// §4.4): where the deterministic A→B→A seam fires inside an open. A fact
+/// installs a callback on its own thread ([`install_open_swap_seam`]) and
+/// swaps the vault's pathname at these points, the exact schedule #940
+/// names: replace the root after the anchor is captured, restore it after
+/// the interior has opened, before anything re-checks the pathname. Release
+/// builds compile the points to nothing.
+#[cfg(test)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub(crate) enum OpenSwapPoint {
+    /// `from_filesystem_with_actor`: the root anchor is captured and no
+    /// interior path has been resolved yet.
+    RootAnchored,
+    /// `from_filesystem_with_actor`: the interior is open; the pathname
+    /// re-verification has not run.
+    InteriorOpened,
+    /// `VaultSession::open`: the cache directory exists and is anchored;
+    /// neither the structural lock nor SQLite has opened.
+    CacheDirAnchored,
+    /// `VaultSession::open`: SQLite, migration and recovery are done; the
+    /// session has not returned.
+    CacheOpened,
+}
+
+#[cfg(test)]
+type OpenSwapSeam = Box<dyn FnMut(OpenSwapPoint)>;
+
+#[cfg(test)]
+thread_local! {
+    static OPEN_SWAP_SEAM: std::cell::RefCell<Option<OpenSwapSeam>> =
+        const { std::cell::RefCell::new(None) };
+}
+
+/// Uninstalls the seam when the fact's guard drops, on success or panic.
+#[cfg(test)]
+pub(crate) struct OpenSwapSeamGuard;
+
+#[cfg(test)]
+impl Drop for OpenSwapSeamGuard {
+    fn drop(&mut self) {
+        OPEN_SWAP_SEAM.with(|seam| seam.borrow_mut().take());
+    }
+}
+
+/// Install `seam` for opens on THIS thread only, so parallel facts never
+/// see each other's swaps.
+#[cfg(test)]
+pub(crate) fn install_open_swap_seam(
+    seam: impl FnMut(OpenSwapPoint) + 'static,
+) -> OpenSwapSeamGuard {
+    OPEN_SWAP_SEAM.with(|slot| *slot.borrow_mut() = Some(Box::new(seam)));
+    OpenSwapSeamGuard
+}
+
+#[cfg(test)]
+fn fire_open_swap_seam(point: OpenSwapPoint) {
+    // Taken out for the call, so a seam that opens a session itself does
+    // not re-enter its own borrow.
+    let taken = OPEN_SWAP_SEAM.with(|slot| slot.borrow_mut().take());
+    if let Some(mut seam) = taken {
+        seam(point);
+        OPEN_SWAP_SEAM.with(|slot| {
+            let mut slot = slot.borrow_mut();
+            if slot.is_none() {
+                *slot = Some(seam);
+            }
+        });
+    }
+}
+
 /// One in-flight diagram render (W3-3 rounds 2–3): waiters attach to
 /// the flight for THEIR key and receive that flight's completed
 /// result, so traffic on other keys can never detach them (the
@@ -2513,6 +2583,8 @@ impl VaultSession {
         config: SessionConfig,
     ) -> Result<Self, VaultError> {
         std::fs::create_dir_all(&config.cache_dir)?;
+        #[cfg(test)]
+        fire_open_swap_seam(OpenSwapPoint::CacheDirAnchored);
         // Reopen recovery and every live structural writer share this exact
         // sidecar. Acquire it before SQLite so a second process cannot plan
         // against a half-renamed vault or race migration/recovery.
@@ -2641,6 +2713,8 @@ impl VaultSession {
         };
         session.recover_structural_batch_inflight_on_open()?;
         drop(vault_structural_lock);
+        #[cfg(test)]
+        fire_open_swap_seam(OpenSwapPoint::CacheOpened);
         Ok(session)
     }
 
@@ -3060,6 +3134,8 @@ impl VaultSession {
         // re-verified against the anchor and any divergence fails the
         // open: a root swapped during the open cannot yield a session.
         let (pinned_root, root_identity) = pin_root_identity(&root);
+        #[cfg(test)]
+        fire_open_swap_seam(OpenSwapPoint::RootAnchored);
         let root_for_reverify = root.clone();
         let cache_dir = root.join(".slate");
         let mut config = SessionConfig::new(cache_dir);
@@ -3107,6 +3183,8 @@ impl VaultSession {
         }
         let provider = Arc::new(FsVaultProvider::new(root));
         let mut session = Self::open(provider, config)?;
+        #[cfg(test)]
+        fire_open_swap_seam(OpenSwapPoint::InteriorOpened);
         // Round-28: the interior open resolved paths while the anchor was
         // pinned — require the pathname to STILL resolve to the anchored
         // root, so a swap-and-stay during the open fails loudly instead
@@ -21982,6 +22060,8 @@ mod tests {
     mod graph;
 
     mod watch;
+
+    mod descriptor_interior;
 }
 
 /// FL5-3a: one refused file in a batch tag edit — deliberate skips
