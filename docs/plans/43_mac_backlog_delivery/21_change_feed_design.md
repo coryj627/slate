@@ -2,10 +2,10 @@
 
 Status: design, 2026-10-17, with the owner's decisions of 2026-10-17
 in §11. PR 21a (§7, the core feed and its FFI) is delivered, on
-migration 040 as designed; PRs 21b and 21c, the hosts, are not. The
-file:line references below were read at 71231296 and many have drifted
-since (PRs 19, 20.0 and 20a merged); 21a worked from the function names
-they cite, at 55c72798. Issue #1293 (contract 40 AR-30, AR-31). Spec:
+migration 040 as designed, against `main` at 55c72798: PRs 19, 20.0 and
+20a had moved many of the lines cited below, so it worked from the
+function names they cite. PRs 21b and 21c, the hosts, are not
+delivered. Issue #1293 (contract 40 AR-30, AR-31). Spec:
 `specs/pr21_change_feed.md`. Baseline: `main` at 71231296; every
 file:line reference below was read at that commit (PRs 13, 16 and 17
 merged since beed82e1, where this design started, and moved only the mac
