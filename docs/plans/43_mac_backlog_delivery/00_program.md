@@ -434,7 +434,8 @@ design-first.
 | 26 | Canvas: untrusted link and file targets (one link allowlist shared with notes and the reading view; containment that resolves symlinks against the vault root) | #1367 #1368 #1369 | M | swift, a11y | W1 |
 | 27 | Editor: an undo or redo before the first highlight reaches the buffer | #1503 | S–M | swift, a11y/VO | W1 |
 | 28 | Tests stop writing the developer's files; two flakes; the benchmark command | #1423 #1408 #1432 (Refs #1323) | S–M | swift | W1, slot 3 first |
-| 29 | Closing the main window with unsaved edits; Close Vault's close line | #1402 #1403 | M | swift, a11y/VO | W1, slot 3 after 28; needs RD1 |
+| 29 | Unsaved buffers survive closing the window, quitting and a crash, and come back unsaved when the vault reopens (hot exit; explicit save stands; design first, both hosts in scope) | #1525 #1402 | L (design first) | rust, swift, a11y/VO, windows | W1, slot 3 after 29a (design), then sized by its design (RD1) |
+| 29a | Close Vault with one dirty note speaks its close line | #1403 | S | swift, a11y/VO | W1, slot 3 after 28 |
 | 22c | The provider's reads beneath the held root; the re-arm switched on; the FFI doc | #1513 #1510 | L | rust, swift, windows | W2, first |
 | 30 | Palette and Quick Open keyboard (bare arrows, the key monitors' window gate, hover on open, the field hint) | #1379 #1380 #1413 #1382 | M | swift, a11y/VO (+ rust, windows with RD7) | W2 |
 | 21b | Windows host of the change feed | #1293 | L | windows | W2 (Windows files only) |
@@ -460,8 +461,8 @@ design-first.
 | 49 | Static accessibility: a11y-check 0.7.0, and doubled names | #1371 #1372 | M | swift, a11y/VO (spot) | W8; needs RD11 |
 | 50 | Organization facts on the async seam | #1490 | M | swift | W8, after 36 and 42 |
 | 51 | Reading-view links VoiceOver can press on any SDK | #1460 | L (spike first) | swift, a11y/VO on both builds | W9, and before any move to an Xcode project or `--build-system native`; needs RD12 |
-| 52 | Code preamble verbosity | #1389 | S (remove) or M (build) | swift, a11y/VO, windows | W9; needs RD6 |
-| 53 | Editor ⌘-click | #1466 | M | swift, a11y | W9, after 27; needs RD13 |
+| 52 | Code preamble verbosity: remove the two modes that do nothing, on both hosts (the real modes are #1526) | #1389 | S | swift, a11y/VO, windows | W9 (RD6) |
+| 53 | Editor ⌘-click activates in the current tab by default, with a setting for a new tab, honoured by Windows' Ctrl+click too | #1466 | M | swift, a11y, windows | W9, after 27 (RD13) |
 
 **Waves.** At most three delivery agents run at once
 (`subagent-parallelism`). PRs in one wave share no files, except
@@ -470,7 +471,7 @@ and core's `a11y.rs` and corpus (independent variants).
 
 | Wave | Slot 1 | Slot 2 | Slot 3 |
 |---|---|---|---|
-| W1 | 26 | 27 | 28, then 29 |
+| W1 | 26 | 27 | 28, then 29a, then 29 (design) |
 | W2 | 22c | 30 | 21b |
 | W3 | 22b, then 31 | 32 | 33 |
 | W4 | 34 | 35 | 36 |
@@ -496,10 +497,13 @@ When an S PR frees its slot early, the next PR in the same row takes
 it, or 47 does.
 
 **VoiceOver passes run one at a time,** under the shared UI lock on the
-owner's unlocked Mac. W1 has three (26, 27 and 29); plan for them to
+owner's unlocked Mac. W1 has three (26, 27 and 29a); plan for them to
 run back to back.
 
 ### 11.5 Owner decisions for the next wave
+
+The owner answered all nineteen on 2026-10-19; §11.7 records the
+answers, which supersede the recommendations below where they differ.
 
 Each has a recommended answer; the evidence is in
 `90_reassessment_2026-10-19.md` (f). Only RD1 blocks W1. The rest are
@@ -529,9 +533,43 @@ needed by the wave named.
 
 ### 11.6 Status
 
-- **The queue stays paused** until the owner answers RD1 (or chooses to
-  start W1 without PR 29). 26, 27 and 28 need no decision.
-- **Two things happen before W1:**
-  - the close candidates: #640 (delivered in #771) and #445 (RD16);
-  - the watch list's dated item: renew or upgrade the zip exception
-    (#1457) before 2026-11-17.
+- **All nineteen decisions are answered** (§11.7). The issues each one
+  touches carry a comment recording its answer.
+- **Done the same day:**
+  - #445, #640 and #1474 are closed (RD16 and RD18);
+  - #1414 has moved to the new Milestone CV, Canvas follow-up features
+    (RD14);
+  - the follow-ups the answers call for are filed: #1525 (hot exit,
+    RD1), #1526 (core preamble verbosity, RD6) and #1527 (the rest of
+    the host's failure text, RD8).
+- **The queue stays paused** until the owner says to start W1, which
+  is 26, 27, 28, 29a, then 29's design.
+- **Dated item:** the zip exception (#1457) must be renewed or upgraded
+  before 2026-11-17.
+
+### 11.7 Owner answers (2026-10-19)
+
+The answers came from a decision interview. Two differ from the
+recommendation and widen the plan: RD1 and RD13.
+
+| Id | Answer | What it changes |
+|---|---|---|
+| RD1 | **Unsaved buffers are restored ("hot exit"),** not the recommended close prompt. Closing the window or quitting never asks and never writes the notes. Unsaved buffers are kept outside the vault, written as you type so a crash keeps them too, and come back still marked unsaved when the vault reopens, as in other text editors. Explicit save (#877) stands, with its conflict checks and per-save history. Close Vault still asks. | PR 29 becomes design-first (#1525, closing #1402); the design decides whether core owns the store and whether Windows adopts hot exit too. #1403 moves to PR 29a. #877 carries the amendment. |
+| RD2 | Re-seat, as Windows does (contract A12). | PR 33 |
+| RD3 | Yes to both: coloured connections paint beneath the cards, and chips stay above. | PR 33 |
+| RD4 | The selection model, matching the palette, Quick Open and Windows. | PR 43 rewrites #1113's facts first |
+| RD5 | Explain now, with core-owned copy on both hosts; edit later. | PR 35 |
+| RD6 | Remove the dead modes on both hosts now. | PR 52; #1526 keeps the real modes |
+| RD7 | Core-owned hint copy, consumed by both hosts in one PR. | PRs 30 and 32 |
+| RD8 | Core's `vault_error_detail`, with mac censuses for `Canvas/` and `Bases/`. | PRs 33 and 35; #1527 covers the rest of the host |
+| RD9 | Probe, then refuse truthfully; never fall back to a replacing rename. | PR 38 |
+| RD10 | Yes: Base queries go asynchronous. | PR 48 |
+| RD11 | Fix and bump a11y-check to 0.7.0, with recorded waivers. | PR 49 |
+| RD12 | W9, and before any move to an Xcode project or `--build-system native`. | PR 51 |
+| RD13 | **The current tab by default, plus a setting** to open a new tab instead. | PR 53 adds the setting; for mac/Windows consistency it also covers Windows' Ctrl+click |
+| RD14 | Move it to a feature milestone. | #1414 is in Milestone CV |
+| RD15 | Keep #940; move it to Milestone W after 22b. | after 22b |
+| RD16 | Close #445 and #640. | done 2026-10-19 |
+| RD17 | Split #1323. | PRs 28 and 37 fix its mac and Rust facts; then it is retitled for Windows |
+| RD18 | Close #1474 now. | done 2026-10-19 |
+| RD19 | Keep the plan in §11, with a spec per PR written when its wave starts. | — |
