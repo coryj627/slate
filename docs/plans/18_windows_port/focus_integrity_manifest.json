@@ -14,7 +14,7 @@
     "collection SlateWindows.FilesSidebarViewModel.ApplyTags Tags": "FilesRegionLandingTests.ANestedTagsRefreshUnderTheKeysKeepsTheAppliedTagsRow",
     "collection SlateWindows.FilesSidebarViewModel.AssignShortcut Shortcuts": "guard: FilesPaneBorder",
     "collection SlateWindows.FilesSidebarViewModel.LoadDualPane DualPaneFiles": "guard: FilesPaneBorder",
-    "collection SlateWindows.FilesSidebarViewModel.PublishKeepingUnchangedRows RootNodes": "FilesRegionLandingTests.ARescansTreePublicationMovesTheKeysOnceBesideTheGuard",
+    "collection SlateWindows.FilesSidebarViewModel.ReconcileLevel rows": "FilesRegionLandingTests.AReadersRowWhoseTitleMovesItStaysWhileTheOtherRowsMove",
     "collection SlateWindows.FilesSidebarViewModel.RemoveShortcut Shortcuts": "guard: FilesPaneBorder",
     "collection SlateWindows.FilesSidebarViewModel.Resort collection": "FilesRegionLandingTests.PinNoteRebuildsTheTreeUnderTheKeysAndTheyStayOnTheRow",
     "collection SlateWindows.FilesSidebarViewModel.ScheduleFilter FilterResults": "guard: FilesPaneBorder",

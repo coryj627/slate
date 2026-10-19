@@ -49,6 +49,8 @@ internal class LandingTreeView : TreeView
 
     private bool _landingAfterPublication;
 
+    static LandingTreeView() => RealizedRowHold.Register(typeof(LandingTreeView));
+
     protected override DependencyObject GetContainerForItemOverride() => new LandingTreeViewItem();
 
     protected override AutomationPeer OnCreateAutomationPeer() => new LandingTreeViewAutomationPeer(this);
@@ -75,6 +77,7 @@ internal class LandingTreeView : TreeView
     protected override void OnItemsChanged(NotifyCollectionChangedEventArgs e)
     {
         base.OnItemsChanged(e);
+        RealizedRowHold.HoldThroughTheNextLayout(this, e);
         if (!IsKeyboardFocused || !HasItems || _landingAfterPublication)
         {
             return;
@@ -164,6 +167,8 @@ internal class LandingTreeViewItem : TreeViewItem
     [ThreadStatic]
     private static TreeViewItem? _focusingUnselected;
 
+    static LandingTreeViewItem() => RealizedRowHold.Register(typeof(LandingTreeViewItem));
+
     /// <summary>
     /// Focus <paramref name="row"/> without selecting it — a landing's
     /// focus. A row that is not a <see cref="LandingTreeViewItem"/> (a tree
@@ -185,6 +190,12 @@ internal class LandingTreeViewItem : TreeViewItem
     }
 
     protected override DependencyObject GetContainerForItemOverride() => new LandingTreeViewItem();
+
+    protected override void OnItemsChanged(NotifyCollectionChangedEventArgs e)
+    {
+        base.OnItemsChanged(e);
+        RealizedRowHold.HoldThroughTheNextLayout(this, e);
+    }
 
     protected override void OnGotFocus(RoutedEventArgs e)
     {
@@ -273,4 +284,77 @@ internal class LandingTreeViewItem : TreeViewItem
 
     private static TreeViewItem? ParentRow(TreeViewItem row) =>
         ItemsControl.ItemsControlFromItemContainer(row) as TreeViewItem;
+}
+
+/// <summary>
+/// #1515: a landing tree, or one of its rows, keeps every container its
+/// panel has realized through the first layout pass after its own rows
+/// change, so a row a publication kept keeps its container — and the rows
+/// under a kept open folder keep theirs, and their UI Automation elements.
+/// </summary>
+/// <remarks>
+/// <para>
+/// A recycling <see cref="VirtualizingStackPanel"/> recycles, BEFORE it
+/// generates and measures, every realized container outside the range its
+/// previous pass covered: its first item and that pass's count of items, kept
+/// as the estimate (dotnet/wpf <c>MeasureOverrideImpl</c> calls
+/// <c>CleanupContainers</c> with <c>_itemsInExtendedViewportCount</c>). A row
+/// inserted above the rows it realized pushes the last of them out of that
+/// stale range, so the panel recycles them and realizes them again at once,
+/// in other containers. A row whose container changed keeps its node and, at
+/// the root, its element, which the tree's peer keys by item, but an open
+/// folder's rows belong to its container's peer, so every row under a
+/// recycled open folder got a new element. 20b's scratch run of 2026-10-19 measured that
+/// (<c>ScratchNestedRowProbe</c>, arm <c>insert-first</c>: the last root row,
+/// an open folder, came back in a new container, and its note with a new
+/// element). A removal, or a row inserted after the last realized one, leaves
+/// the range whole.
+/// </para>
+/// <para>
+/// So a change to a landing tree's or a row's own rows — an Add, Remove, Move
+/// or Replace; a Reset regenerates every container anyway — holds that items
+/// control's realized containers through its next layout pass. The panel asks
+/// the items control before it recycles one (<c>CleanUpVirtualizedItem</c>,
+/// raised on the tree or on the row whose rows those are), and a holding one
+/// declines. The panel cleans up with its new range on the pass after; a
+/// container then outside the viewport stays one pass longer, as the one the
+/// keys are in always does (the panel never recycles it). The hold ends at
+/// <see cref="DispatcherPriority.Loaded"/>, after the layout the change
+/// queued.
+/// </para>
+/// </remarks>
+internal static class RealizedRowHold
+{
+    private static readonly DependencyProperty IsHoldingProperty = DependencyProperty.RegisterAttached(
+        "IsHolding", typeof(bool), typeof(RealizedRowHold), new PropertyMetadata(false));
+
+    /// <summary>Have <paramref name="owner"/>'s instances decline their
+    /// panel's cleanup while they hold.</summary>
+    internal static void Register(Type owner) =>
+        EventManager.RegisterClassHandler(
+            owner,
+            VirtualizingStackPanel.CleanUpVirtualizedItemEvent,
+            new CleanUpVirtualizedItemEventHandler(OnCleanUpVirtualizedItem));
+
+    /// <summary><paramref name="owner"/>'s own rows changed: hold its
+    /// realized containers through the layout pass the change
+    /// queued.</summary>
+    internal static void HoldThroughTheNextLayout(ItemsControl owner, NotifyCollectionChangedEventArgs e)
+    {
+        if (e.Action == NotifyCollectionChangedAction.Reset || (bool)owner.GetValue(IsHoldingProperty))
+        {
+            return;
+        }
+
+        owner.SetValue(IsHoldingProperty, true);
+        _ = owner.Dispatcher.InvokeAsync(() => owner.ClearValue(IsHoldingProperty), DispatcherPriority.Loaded);
+    }
+
+    private static void OnCleanUpVirtualizedItem(object sender, CleanUpVirtualizedItemEventArgs e)
+    {
+        if (sender is DependencyObject owner && (bool)owner.GetValue(IsHoldingProperty))
+        {
+            e.Cancel = true;
+        }
+    }
 }

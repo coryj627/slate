@@ -6,9 +6,9 @@ using System.Collections.ObjectModel;
 namespace SlateWindows;
 
 /// <summary>
-/// Plan 43 PR 20b (#1267): a rescan's publication — every watcher run's, every
-/// Refresh's and every foreground rescan's — keeps every row it did not
-/// change.
+/// Plan 43 PR 20b (#1267) and #1515: a rescan's publication — every watcher
+/// run's, every Refresh's and every foreground rescan's — keeps every row
+/// whose file or folder is still there, at every level the tree shows.
 /// </summary>
 /// <remarks>
 /// <para>
@@ -23,33 +23,42 @@ namespace SlateWindows;
 /// open dialog.
 /// </para>
 /// <para>
-/// So a rescan's publication reconciles the root level in place. A root row
-/// the fresh listing shows unchanged — the same path, name, kind, summary,
-/// folder note and expansion, and, for an open folder, every row it shows
-/// kept the same way — stays the same node, so its row stays and so does its
-/// UI Automation element, which the tree's peer keys by item. Rows that are
-/// new, changed or gone are inserted, replaced or removed; nothing else
-/// moves. A kept collapsed folder takes the fresh listing's state
-/// (<see cref="FileTreeNodeViewModel.AdoptChildStateOf"/>), and an open
-/// folder that anything below changed is replaced whole, as before. When no
-/// root row is kept, the publication replaces the tree as it always did.
+/// So a rescan's publication reconciles the tree in place, level by level. A
+/// row the fresh listing still shows — the same path, name, kind, level and
+/// expansion — stays the same node, so its row stays and so does its UI
+/// Automation element, which the tree's peer, and an open folder's, key by
+/// item. A row whose file changed outside Slate is updated in place: it takes
+/// the fresh summary and folder-note state, with a change for each property
+/// that reads them (<see cref="FileTreeNodeViewModel.TakeRowStateOf"/>). An
+/// open folder's rows are reconciled the same way, recursively, so one note
+/// changed inside an open folder no longer replaces the folder's subtree; a
+/// kept collapsed folder takes the fresh listing's state
+/// (<see cref="FileTreeNodeViewModel.AdoptChildStateOf"/>), since nothing
+/// below it is shown. Rows that are new or gone are inserted or removed; a
+/// placeholder (the loading, error and overflow rows) and a date group's
+/// header are never kept. A kept row moves only when its place in the fresh
+/// order changed — a title or a modified time it sorts by — and the rows
+/// that stay are the longest run already in that order, through the selected
+/// row and the folders it is in: a row that moves gets a new container,
+/// which the keys would not follow, so the reader's row never moves.
 /// </para>
 /// <para>
-/// A kept open folder's own rows keep their nodes, but their elements are its
-/// container's peer's, and WPF's recycling panel may give the kept folder a
-/// new container: on the Windows lane a row inserted at the top of the tree
-/// did (the scratch run of 2026-10-19). Those rows then read fully under new
-/// elements — #1515 keeps them, with the cases below.
+/// The tree keeps a kept row's container through the publication's first
+/// layout pass too: its recycling panel used to recycle the last rows it had
+/// realized when a row was inserted above them, and an open folder recycled
+/// that way gave every row under it a new element (#1515; see
+/// <see cref="RealizedRowHold"/>).
 /// </para>
 /// <para>
-/// A publication that changes or removes the selected row — the reader's —
-/// also replaces the tree as before. The restore that then lands the keys
-/// (the selection's reconcile and the window's restore) finds them on a row
-/// no window shows, which a replaced tree's rows are at once and a row
-/// removed in place is not: on the Windows lane the keys fell to the first
-/// row instead of the next survivor or the selected row's new one (the
-/// scratch run of 2026-10-19). An organic publication — after Slate's own
-/// mutation — still replaces the tree too (#1515).
+/// When no root row is kept, or when the publication removes the selected row
+/// — the reader's — the publication replaces the tree as it always did. WPF's
+/// tree selects its first row when the selected row's container leaves the
+/// tree in place (<c>TreeView.OnItemsChanged</c>), and a selection opens its
+/// note; the selection's reconcile and the window's restore land the keys only
+/// when every old row has gone at once (on the Windows lane in 20b's scratch
+/// run of 2026-10-19 the keys fell to the first row). An organic publication
+/// — after Slate's own mutation — still replaces the tree too: its pending
+/// selection and focus restores are built on the replaced rows (#1515).
 /// </para>
 /// </remarks>
 internal sealed partial class FilesSidebarViewModel
@@ -58,148 +67,289 @@ internal sealed partial class FilesSidebarViewModel
     /// load starts for it, as for a node of a replaced tree.</summary>
     private static readonly object ReleasedRow = new();
 
-    /// <summary>Publish <paramref name="fresh"/> over the published root level,
-    /// keeping every row it did not change (see the remarks).</summary>
+    /// <summary>Publish <paramref name="fresh"/> over the published tree,
+    /// keeping every row it still shows (see the remarks).</summary>
     private void PublishKeepingUnchangedRows(ObservableCollection<FileTreeNodeViewModel> fresh)
     {
-        var byPath = new Dictionary<string, FileTreeNodeViewModel>(StringComparer.Ordinal);
-        foreach (FileTreeNodeViewModel row in RootNodes)
-        {
-            if (row is { IsPlaceholder: false, IsGroupHeader: false })
-            {
-                _ = byPath.TryAdd(row.Path, row);
-            }
-        }
-
         // Decided before anything moves: the replacing path must find the
         // published tree as it was.
-        var desired = new List<FileTreeNodeViewModel>(fresh.Count);
         var kept = new Dictionary<FileTreeNodeViewModel, FileTreeNodeViewModel>(ReferenceEqualityComparer.Instance);
-        foreach (FileTreeNodeViewModel candidate in fresh)
-        {
-            if (byPath.Remove(candidate.Path, out FileTreeNodeViewModel? row) && CanKeep(row, candidate))
-            {
-                kept[row] = candidate;
-                desired.Add(row);
-            }
-            else
-            {
-                desired.Add(candidate);
-            }
-        }
-
-        if (kept.Count == 0
-            || (SelectedNode is { } selected
-                && !kept.Keys.Any(row => Flatten([row]).Any(node => ReferenceEquals(node, selected)))))
+        PlanLevel(RootNodes, fresh, kept);
+        if (kept.Count == 0 || (SelectedNode is { } selected && !kept.ContainsKey(selected)))
         {
             RootNodes = fresh;
             return;
         }
 
-        foreach ((FileTreeNodeViewModel row, FileTreeNodeViewModel candidate) in kept)
+        bool? selectedHadFolderNote = SelectedNode?.HasFolderNote;
+        ReconcileLevel(RootNodes, fresh, kept, ReaderRows(), RootNodes);
+        if (SelectedNode?.HasFolderNote != selectedHadFolderNote)
         {
-            Keep(row, candidate);
+            // The folder-note verbs read the selected row's state.
+            RaiseCommandStates();
+        }
+    }
+
+    /// <summary>Find each row of the published level <paramref name="rows"/>
+    /// that the fresh level <paramref name="fresh"/> still shows, and recurse
+    /// into each kept open folder: <paramref name="kept"/> maps every kept row,
+    /// at any level, to its fresh row.</summary>
+    private static void PlanLevel(
+        IEnumerable<FileTreeNodeViewModel> rows,
+        IEnumerable<FileTreeNodeViewModel> fresh,
+        Dictionary<FileTreeNodeViewModel, FileTreeNodeViewModel> kept)
+    {
+        var byPath = new Dictionary<string, FileTreeNodeViewModel>(StringComparer.Ordinal);
+        foreach (FileTreeNodeViewModel row in rows)
+        {
+            if (IsKeyedRow(row))
+            {
+                _ = byPath.TryAdd(row.Path, row);
+            }
         }
 
-        for (int index = RootNodes.Count - 1; index >= 0; index--)
+        foreach (FileTreeNodeViewModel candidate in fresh)
         {
-            FileTreeNodeViewModel row = RootNodes[index];
+            if (IsKeyedRow(candidate)
+                && byPath.Remove(candidate.Path, out FileTreeNodeViewModel? row)
+                && IsTheSameRow(row, candidate))
+            {
+                kept[row] = candidate;
+                if (ListsItsRowsAgain(row))
+                {
+                    PlanLevel(row.Children, candidate.Children, kept);
+                }
+            }
+        }
+    }
+
+    /// <summary>A row the reconcile keys by its path: a file's or a folder's,
+    /// never a placeholder or a date group's header.</summary>
+    private static bool IsKeyedRow(FileTreeNodeViewModel row) =>
+        row is { IsPlaceholder: false, IsGroupHeader: false };
+
+    /// <summary>Whether the published <paramref name="row"/> is
+    /// <paramref name="candidate"/>'s row: the same path (its key), name,
+    /// kind, level and expansion, and, open, a fresh folder that listed its
+    /// rows. Its summary and folder note are taken in place.</summary>
+    private static bool IsTheSameRow(FileTreeNodeViewModel row, FileTreeNodeViewModel candidate) =>
+        string.Equals(row.Name, candidate.Name, StringComparison.Ordinal)
+        && row.IsDirectory == candidate.IsDirectory
+        && row.Level == candidate.Level
+        && row.IsExpanded == candidate.IsExpanded
+        && (!row.IsDirectory || !row.IsExpanded || candidate.ChildLoadState == FileTreeChildLoadState.Loaded);
+
+    /// <summary>A kept open folder whose rows the reconcile lists again: not
+    /// one whose own load is still running, which publishes them
+    /// itself.</summary>
+    private static bool ListsItsRowsAgain(FileTreeNodeViewModel row) =>
+        row is { IsDirectory: true, IsExpanded: true }
+        && row.ChildLoadState != FileTreeChildLoadState.Loading;
+
+    /// <summary>Make the published level <paramref name="rows"/> the fresh
+    /// level <paramref name="fresh"/>: every kept row stays, updated in place
+    /// and, an open folder, reconciled in turn; the rest leave (released) or
+    /// arrive (attached to <paramref name="tree"/>); and a kept row moves only
+    /// when its place changed — never one of <paramref name="readerRows"/>.</summary>
+    private static void ReconcileLevel(
+        ObservableCollection<FileTreeNodeViewModel> rows,
+        IReadOnlyList<FileTreeNodeViewModel> fresh,
+        Dictionary<FileTreeNodeViewModel, FileTreeNodeViewModel> kept,
+        HashSet<FileTreeNodeViewModel> readerRows,
+        object tree)
+    {
+        var rowFor = new Dictionary<FileTreeNodeViewModel, FileTreeNodeViewModel>(ReferenceEqualityComparer.Instance);
+        foreach (FileTreeNodeViewModel row in rows)
+        {
+            if (kept.TryGetValue(row, out FileTreeNodeViewModel? candidate))
+            {
+                rowFor[candidate] = row;
+            }
+        }
+
+        // The fresh order, each kept row in its fresh row's place.
+        List<FileTreeNodeViewModel> desired =
+        [
+            .. fresh.Select(candidate => rowFor.TryGetValue(candidate, out FileTreeNodeViewModel? row) ? row : candidate),
+        ];
+        foreach ((FileTreeNodeViewModel candidate, FileTreeNodeViewModel row) in rowFor)
+        {
+            row.TakeRowStateOf(candidate);
+            if (!row.IsDirectory)
+            {
+                continue;
+            }
+
+            if (!row.IsExpanded)
+            {
+                if (!HasTheSameUnopenedListing(row, candidate))
+                {
+                    row.AdoptChildStateOf(candidate, ReleasedRow);
+                }
+            }
+            else if (ListsItsRowsAgain(row))
+            {
+                ReconcileLevel(row.Children, candidate.Children, kept, readerRows, tree);
+                row.TakeChildLoadStateOf(candidate);
+            }
+        }
+
+        for (int index = rows.Count - 1; index >= 0; index--)
+        {
+            FileTreeNodeViewModel row = rows[index];
             if (!kept.ContainsKey(row))
             {
-                RootNodes.RemoveAt(index);
+                rows.RemoveAt(index);
                 row.AttachToTree(ReleasedRow);
+            }
+        }
+
+        // A kept row whose place changed leaves here and is put back below:
+        // either way WPF gives it a new container.
+        HashSet<FileTreeNodeViewModel> staying = RowsThatStay(rows, desired, readerRows);
+        for (int index = rows.Count - 1; index >= 0; index--)
+        {
+            if (!staying.Contains(rows[index]))
+            {
+                rows.RemoveAt(index);
             }
         }
 
         for (int index = 0; index < desired.Count; index++)
         {
             FileTreeNodeViewModel row = desired[index];
-            if (index < RootNodes.Count && ReferenceEquals(RootNodes[index], row))
+            if (index < rows.Count && ReferenceEquals(rows[index], row))
             {
                 continue;
             }
 
-            if (kept.ContainsKey(row))
+            if (!kept.ContainsKey(row))
             {
-                // A kept row further down: the fresh listing ordered it
-                // earlier (a pin, a sort key).
-                RootNodes.Move(IndexOf(RootNodes, row, index + 1), index);
+                row.AttachToTree(tree);
+            }
+
+            rows.Insert(index, row);
+        }
+    }
+
+    /// <summary>The kept rows of one level that need not move: the longest
+    /// run of them already in the fresh order — through the reader's row, or
+    /// the folder it is in, when that is one of them.</summary>
+    /// <param name="rows">The level's kept rows, in their published order.</param>
+    /// <param name="desired">The level in its fresh order.</param>
+    /// <param name="readerRows">The selected row and every folder it is in.</param>
+    private static HashSet<FileTreeNodeViewModel> RowsThatStay(
+        IReadOnlyList<FileTreeNodeViewModel> rows,
+        IReadOnlyList<FileTreeNodeViewModel> desired,
+        HashSet<FileTreeNodeViewModel> readerRows)
+    {
+        var place = new Dictionary<FileTreeNodeViewModel, int>(ReferenceEqualityComparer.Instance);
+        for (int index = 0; index < desired.Count; index++)
+        {
+            place[desired[index]] = index;
+        }
+
+        int anchor = -1;
+        for (int index = 0; index < rows.Count && anchor < 0; index++)
+        {
+            if (readerRows.Contains(rows[index]))
+            {
+                anchor = index;
+            }
+        }
+
+        if (anchor < 0)
+        {
+            return LongestRisingRun(rows, place, int.MinValue, int.MaxValue);
+        }
+
+        int pivot = place[rows[anchor]];
+        HashSet<FileTreeNodeViewModel> staying = LongestRisingRun(rows.Take(anchor), place, int.MinValue, pivot);
+        staying.UnionWith(LongestRisingRun(rows.Skip(anchor + 1), place, pivot, int.MaxValue));
+        _ = staying.Add(rows[anchor]);
+        return staying;
+    }
+
+    /// <summary>The longest run of <paramref name="rows"/>, in their order,
+    /// whose places rise — among the rows placed strictly between
+    /// <paramref name="after"/> and <paramref name="before"/>.</summary>
+    private static HashSet<FileTreeNodeViewModel> LongestRisingRun(
+        IEnumerable<FileTreeNodeViewModel> rows,
+        Dictionary<FileTreeNodeViewModel, int> place,
+        int after,
+        int before)
+    {
+        FileTreeNodeViewModel[] candidates = [.. rows.Where(row => place[row] > after && place[row] < before)];
+        // ends[length - 1]: the candidate ending the run of that length whose
+        // last place is lowest so far; previous[i]: the candidate before i in
+        // its run.
+        var ends = new List<int>();
+        int[] previous = new int[candidates.Length];
+        for (int index = 0; index < candidates.Length; index++)
+        {
+            int value = place[candidates[index]];
+            int low = 0;
+            int high = ends.Count;
+            while (low < high)
+            {
+                int middle = (low + high) / 2;
+                if (place[candidates[ends[middle]]] < value)
+                {
+                    low = middle + 1;
+                }
+                else
+                {
+                    high = middle;
+                }
+            }
+
+            previous[index] = low > 0 ? ends[low - 1] : -1;
+            if (low == ends.Count)
+            {
+                ends.Add(index);
             }
             else
             {
-                row.AttachToTree(RootNodes);
-                RootNodes.Insert(index, row);
+                ends[low] = index;
             }
         }
+
+        var run = new HashSet<FileTreeNodeViewModel>(ReferenceEqualityComparer.Instance);
+        for (int index = ends.Count > 0 ? ends[^1] : -1; index >= 0; index = previous[index])
+        {
+            _ = run.Add(candidates[index]);
+        }
+
+        return run;
     }
 
-    /// <summary>Whether the published <paramref name="row"/> is
-    /// <paramref name="candidate"/>'s row unchanged: the same row fields and
-    /// expansion and, for an open folder, both listings complete and every row
-    /// they show kept in the same order.</summary>
-    private static bool CanKeep(FileTreeNodeViewModel row, FileTreeNodeViewModel candidate)
+    /// <summary>The selected row and every folder it is in, in the published
+    /// tree; empty with nothing selected.</summary>
+    private HashSet<FileTreeNodeViewModel> ReaderRows()
     {
-        if (row.IsPlaceholder
-            || row.IsGroupHeader
-            || candidate.IsPlaceholder
-            || candidate.IsGroupHeader
-            || !string.Equals(row.Path, candidate.Path, StringComparison.Ordinal)
-            || !string.Equals(row.Name, candidate.Name, StringComparison.Ordinal)
-            || row.IsDirectory != candidate.IsDirectory
-            || row.Level != candidate.Level
-            || row.HasFolderNote != candidate.HasFolderNote
-            || row.IsExpanded != candidate.IsExpanded
-            || !Equals(row.Summary, candidate.Summary))
+        var rows = new HashSet<FileTreeNodeViewModel>(ReferenceEqualityComparer.Instance);
+        if (SelectedNode is { } selected)
         {
-            return false;
+            _ = Collect(RootNodes, selected, rows);
         }
 
-        if (!row.IsDirectory || !row.IsExpanded)
-        {
-            return true;
-        }
+        return rows;
 
-        if (!row.HasLoadedChildren
-            || !candidate.HasLoadedChildren
-            || row.Children.Count != candidate.Children.Count)
+        static bool Collect(
+            IEnumerable<FileTreeNodeViewModel> level,
+            FileTreeNodeViewModel target,
+            HashSet<FileTreeNodeViewModel> rows)
         {
-            return false;
-        }
-
-        for (int index = 0; index < row.Children.Count; index++)
-        {
-            if (!CanKeep(row.Children[index], candidate.Children[index]))
+            foreach (FileTreeNodeViewModel row in level)
             {
-                return false;
-            }
-        }
-
-        return true;
-    }
-
-    /// <summary>Keep <paramref name="row"/> for <paramref name="candidate"/>
-    /// (<see cref="CanKeep"/> held): every collapsed folder in it takes the
-    /// fresh listing's state where that differs.</summary>
-    private static void Keep(FileTreeNodeViewModel row, FileTreeNodeViewModel candidate)
-    {
-        if (!row.IsDirectory)
-        {
-            return;
-        }
-
-        if (!row.IsExpanded)
-        {
-            if (!HasTheSameUnopenedListing(row, candidate))
-            {
-                row.AdoptChildStateOf(candidate, ReleasedRow);
+                if (ReferenceEquals(row, target) || Collect(row.Children, target, rows))
+                {
+                    _ = rows.Add(row);
+                    return true;
+                }
             }
 
-            return;
-        }
-
-        for (int index = 0; index < row.Children.Count; index++)
-        {
-            Keep(row.Children[index], candidate.Children[index]);
+            return false;
         }
     }
 
@@ -211,17 +361,4 @@ internal sealed partial class FilesSidebarViewModel
         && row.Children.Count == candidate.Children.Count
         && row.Children.All(child => child.IsPlaceholder)
         && candidate.Children.All(child => child.IsPlaceholder);
-
-    private static int IndexOf(IList<FileTreeNodeViewModel> rows, FileTreeNodeViewModel row, int start)
-    {
-        for (int index = start; index < rows.Count; index++)
-        {
-            if (ReferenceEquals(rows[index], row))
-            {
-                return index;
-            }
-        }
-
-        throw new InvalidOperationException("A kept row is not in the published tree.");
-    }
 }

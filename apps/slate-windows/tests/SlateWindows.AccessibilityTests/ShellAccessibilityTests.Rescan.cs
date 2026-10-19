@@ -325,6 +325,273 @@ public sealed partial class ShellAccessibilityTests
         }
     }
 
+    /// <summary>
+    /// #1515 (a change under an open folder): the reader on a note inside an
+    /// open folder, and a watcher run — no Refresh — for the note beside it,
+    /// retitled and rewritten outside Slate. The reader's row is the element
+    /// held before the run, with the keys and no focus change; the changed
+    /// note's row is the same element too, renamed in place, and so is every
+    /// other row; and the window scans clean right after the run.
+    /// </summary>
+    /// <remarks>Until #1515 a change anywhere under an open folder replaced
+    /// the folder's rows, and the reader's with them: with the selected row
+    /// among them the whole tree was replaced, the held element answered
+    /// UIA_E_ELEMENTNOTAVAILABLE, and the keys went to the new row.</remarks>
+    [Fact]
+    public void ExternalFiles_AChangeInsideTheReadersOpenFolderKeepsTheirRow() =>
+        AssertAWatcherRunKeepsTheReadersRow(
+            journey: "watched-open-folder",
+            seed: vault =>
+            {
+                Directory.CreateDirectory(Path.Combine(vault, "Folder"));
+                File.WriteAllText(Path.Combine(vault, "alpha.md"), "# Alpha\n");
+                File.WriteAllText(Path.Combine(vault, "note.md"), "# Note\n");
+                File.WriteAllText(Path.Combine(vault, "Folder", "child.md"), "# Child note\n");
+                File.WriteAllText(Path.Combine(vault, "Folder", "sibling.md"), "# Sibling\n");
+            },
+            openFolders: ["Folder"],
+            reader: "child.md",
+            held: [("alpha.md", "alpha.md"), ("Folder", "Folder"), ("sibling.md", "sibling retitled"), ("note.md", "note.md")],
+            change: vault => File.WriteAllText(
+                Path.Combine(vault, "Folder", "sibling.md"),
+                "---\ntitle: sibling retitled\n---\n\n# Sibling\n\nChanged outside Slate, beside the reader's note.\n"),
+            arrival: "sibling retitled",
+            surface: "rescan-watcher-open-folder");
+
+    /// <summary>
+    /// #1515 (a kept open folder's recycled container): the reader on a note
+    /// inside an open folder, another open folder last in the tree, and a
+    /// watcher run for a note created outside Slate that sorts first. Every
+    /// row is the element held before the run — the last folder's rows
+    /// included, whose container WPF's recycling panel used to recycle on an
+    /// insertion above it — and the reader's row keeps the keys, with no focus
+    /// change; the window scans clean right after the run.
+    /// </summary>
+    [Fact]
+    public void ExternalFiles_ARowCreatedAtTheTopKeepsEveryOpenFoldersRows() =>
+        AssertAWatcherRunKeepsTheReadersRow(
+            journey: "watched-row-at-top",
+            seed: vault =>
+            {
+                Directory.CreateDirectory(Path.Combine(vault, "Folder"));
+                Directory.CreateDirectory(Path.Combine(vault, "Zebra"));
+                File.WriteAllText(Path.Combine(vault, "alpha.md"), "# Alpha\n");
+                File.WriteAllText(Path.Combine(vault, "note.md"), "# Note\n");
+                File.WriteAllText(Path.Combine(vault, "Folder", "child.md"), "# Child note\n");
+                File.WriteAllText(Path.Combine(vault, "Folder", "sibling.md"), "# Sibling\n");
+                File.WriteAllText(Path.Combine(vault, "Zebra", "spot.md"), "# Spot\n");
+                File.WriteAllText(Path.Combine(vault, "Zebra", "stripe.md"), "# Stripe\n");
+            },
+            openFolders: ["Folder", "Zebra"],
+            reader: "child.md",
+            held:
+            [
+                ("alpha.md", "alpha.md"),
+                ("Folder", "Folder"),
+                ("sibling.md", "sibling.md"),
+                ("note.md", "note.md"),
+                ("Zebra", "Zebra"),
+                ("spot.md", "spot.md"),
+                ("stripe.md", "stripe.md"),
+            ],
+            change: vault => File.WriteAllText(Path.Combine(vault, "0-top.md"), "# Top\n"),
+            arrival: "0-top.md",
+            surface: "rescan-watcher-row-at-top");
+
+    /// <summary>#1515: launch the vault <paramref name="seed"/> writes, open
+    /// <paramref name="openFolders"/>, put the keys on
+    /// <paramref name="reader"/>'s row and hold its element and each
+    /// <paramref name="held"/> row's (found by its name before the run, and
+    /// after it). Then make <paramref name="change"/> outside Slate and, once
+    /// <paramref name="arrival"/>'s row shows the watcher run's publication,
+    /// require every held element to be the one the tree shows, the reader's
+    /// with the keys and no focus change since the change, and scan the
+    /// window as <paramref name="surface"/>.</summary>
+    private static void AssertAWatcherRunKeepsTheReadersRow(
+        string journey,
+        Action<string> seed,
+        string[] openFolders,
+        string reader,
+        (string Before, string After)[] held,
+        Action<string> change,
+        string arrival,
+        string surface)
+    {
+        string testRoot = Path.Combine(Path.GetTempPath(), $"slate-{journey}-{Guid.NewGuid():N}");
+        string vaultRoot = Path.Combine(testRoot, "Watched Vault");
+        string logDirectory = Path.Combine(testRoot, "logs");
+        Directory.CreateDirectory(vaultRoot);
+        seed(vaultRoot);
+        string logFile = Path.Combine(logDirectory, "slate-windows.log");
+
+        Process? process = null;
+        try
+        {
+            var startInfo = new ProcessStartInfo(SlateWindowsExe()) { UseShellExecute = false };
+            startInfo.ArgumentList.Add(vaultRoot);
+            startInfo.Environment["SLATE_CENSUS_INSTANCE_ID"] = $"slate-{journey}-{Guid.NewGuid():N}";
+            startInfo.Environment["SLATE_LOG_DIR"] = logDirectory;
+            // The rescan's route line.
+            startInfo.Environment["SLATE_UIA_DIAGNOSTICS"] = "1";
+            // The real watcher, whatever the runner's environment holds.
+            _ = startInfo.Environment.Remove(VaultWatcherSwitch);
+            process = Process.Start(startInfo)
+                ?? throw new Xunit.Sdk.XunitException("SlateWindows.exe did not start.");
+            if (!HasInteractiveDesktop(process, journey))
+            {
+                return;
+            }
+
+            using var automation = new UIA3Automation();
+            Window window = WaitForMainWindow(
+                process,
+                automation,
+                logFile,
+                TimeSpan.FromSeconds(30));
+            window.SetForeground();
+            WaitForVaultOpen(window);
+            AutomationElement tree = WaitForElement(window, "FilesTree", TimeSpan.FromSeconds(10));
+            // The launch lands the keys on the first row once the vault has
+            // published its rows (W7-5); a step before that races it. Each
+            // journey's vault sorts alpha.md first.
+            AssertFocusStaysOnRow(automation, tree, "alpha.md", "Opening the vault did not land the keys on the Files tree's first row.");
+            foreach (string folder in openFolders)
+            {
+                AutomationElement folderRow = WaitForTreeItemStartingWith(tree, automation, folder, requireItems: true);
+                folderRow.Patterns.ExpandCollapse.Pattern.Expand();
+                Assert.True(
+                    SpinWait.SpinUntil(
+                        () => folderRow.Patterns.ExpandCollapse.Pattern.ExpandCollapseState.Value == ExpandCollapseState.Expanded,
+                        TimeSpan.FromSeconds(10)),
+                    $"the {folder} row did not open.");
+            }
+
+            // The keys on the reader's row: its selection shows the note,
+            // and the keys stay on the row (W7-7 R-2).
+            WaitForTreeItemStartingWith(tree, automation, reader).Focus();
+            _ = WaitForEditor(window, automation, $"{reader} editor", TimeSpan.FromSeconds(10));
+            AssertFocusStaysOnRow(automation, tree, reader, $"The {reader} row did not keep the keys before the change.");
+            AutomationElement readerRow = WaitForTreeItemStartingWith(tree, automation, reader);
+            string readerName = readerRow.Name;
+            int[] readerId = readerRow.Properties.RuntimeId.Value;
+            var rows = new List<(string After, AutomationElement Row, int[] Id)>();
+            foreach ((string before, string after) in held)
+            {
+                AutomationElement element = WaitForTreeItemStartingWith(tree, automation, before);
+                rows.Add((after, element, element.Properties.RuntimeId.Value));
+            }
+
+            var focusMoves = new ConcurrentQueue<string>();
+            int slate = process.Id;
+            var recorder = automation.RegisterFocusChangedEvent(element =>
+            {
+                try
+                {
+                    if (element.Properties.ProcessId.ValueOrDefault == slate)
+                    {
+                        focusMoves.Enqueue($"{element.Properties.ControlType.ValueOrDefault} '{element.Properties.Name.ValueOrDefault}'");
+                    }
+                }
+                catch (Exception exception) when (IsTransientUiaFault(exception))
+                {
+                    focusMoves.Enqueue("<unreadable>");
+                }
+            });
+            try
+            {
+                // Registration settles; nothing before the change is the run's.
+                Thread.Sleep(TimeSpan.FromMilliseconds(500));
+                focusMoves.Clear();
+                change(vaultRoot);
+                Assert.True(
+                    SpinWait.SpinUntil(
+                        () => TreeListedItemStartingWith(tree, automation, arrival),
+                        TimeSpan.FromSeconds(30)),
+                    $"the change never reached the files tree without a Refresh ('{arrival}'). Rescans: "
+                    + string.Join(" | ", DiagnosticLines(logFile, "VaultRescanStarted")));
+                // Any focus event the publication raised arrives.
+                Thread.Sleep(FocusSettle);
+            }
+            finally
+            {
+                automation.UnregisterFocusChangedEvent(recorder);
+            }
+
+            string[] runs = DiagnosticLines(logFile, "VaultRescanStarted");
+            Assert.True(
+                runs.Contains("SlateWindows.VaultRescanStarted (Watcher)") && !runs.Any(run => run.EndsWith("(Explicit)", StringComparison.Ordinal)),
+                "the change must arrive through a Watcher run, with no Refresh; the log names: " + string.Join(" | ", runs));
+            AssertHeldRowStillShown(readerRow, readerName);
+            AssertTheTreeShowsTheHeldRow(tree, automation, readerRow, readerId, reader);
+            Assert.True(
+                focusMoves.IsEmpty,
+                $"the watcher run moved the keys: {string.Join(" → ", focusMoves)}");
+            Assert.True(
+                automation.FocusedElement() is { } focused && focused.Properties.RuntimeId.Value.SequenceEqual(readerId),
+                $"the keys left the {reader} row's element for {DescribeFocus(automation)}.");
+            foreach ((string after, AutomationElement row, int[] id) in rows)
+            {
+                AssertTheTreeShowsTheHeldRow(tree, automation, row, id, after);
+            }
+
+            // Right after the reconcile, the item-name census included.
+            AssertAxeClean(process, surface);
+        }
+        finally
+        {
+            if (process is not null && !process.HasExited)
+            {
+                process.CloseMainWindow();
+                if (!process.WaitForExit(5_000))
+                {
+                    process.Kill(entireProcessTree: true);
+                }
+            }
+
+            try
+            {
+                Directory.Delete(testRoot, recursive: true);
+            }
+            catch (IOException)
+            {
+            }
+            catch (UnauthorizedAccessException)
+            {
+            }
+        }
+    }
+
+    /// <summary>#1515: <paramref name="row"/>, held since before a watcher
+    /// run, is still the element the tree shows for the row named
+    /// <paramref name="prefix"/> — the same runtime id, not a let-go row that
+    /// still answers beside a new one — and it reads that row's name, with a
+    /// rectangle.</summary>
+    private static void AssertTheTreeShowsTheHeldRow(
+        AutomationElement tree,
+        UIA3Automation automation,
+        AutomationElement row,
+        int[] runtimeId,
+        string prefix)
+    {
+        AutomationElement shown = WaitForTreeItemStartingWith(tree, automation, prefix);
+        try
+        {
+            Assert.True(
+                shown.Properties.RuntimeId.Value.SequenceEqual(runtimeId),
+                $"the watcher run gave the '{prefix}' row a new UI Automation element.");
+            Assert.Equal(shown.Properties.Name.Value, row.Properties.Name.Value);
+            Assert.False(
+                row.Properties.BoundingRectangle.Value.IsEmpty,
+                $"the held '{prefix}' row has no rectangle after the watcher run.");
+        }
+        catch (Exception exception) when (exception is COMException or FlaUI.Core.Exceptions.ElementNotAvailableException)
+        {
+            Assert.Fail(
+                $"the watcher run's reconcile let go of the held '{prefix}' row: "
+                + $"{exception.GetType().Name} 0x{exception.HResult:X8}");
+        }
+    }
+
     /// <summary>Plan 43 PR 20b: core's test switch for the vault watcher
     /// (<c>SLATE_TEST_DISABLE_VAULT_WATCHER</c>), which a journey that counts
     /// a Refresh's findings sets and the watcher's journey clears.</summary>
