@@ -164,8 +164,12 @@ cargo test -p slate-core --release -- session::tests::dir_tree    # perf guards 
   next pins or shortcuts write that lands carries it; otherwise the next
   open of the same vault replays it, silently. If `.slate/sidebar.json` is
   read-only at that open, the entry waits, and Retry replays it onto the
-  repaired file; the changes made in memory during the outage itself go
-  with the wholesale adoption, as #1230's stale-references outcome says.
+  repaired file — as it replays the renames and moves made during the
+  outage itself (#1514); the pins and shortcuts edited in memory during
+  the outage go with the adoption, as their failed saves said. #1230's
+  stale-references outcome is reserved for a rewrite the journal does not
+  carry (a trash, or a rename the journal could not record) and for a
+  replay write that failed.
 - **Stale pins/shortcuts after external file moves**: pins/shortcuts follow
   structural transforms only for in-app operations; externally-moved paths
   are pruned lazily on the next level fetch (announced once per session).
