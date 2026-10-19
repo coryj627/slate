@@ -301,11 +301,10 @@ internal class LandingTreeViewItem : TreeViewItem
 /// <c>CleanupContainers</c> with <c>_itemsInExtendedViewportCount</c>). A row
 /// inserted above the rows it realized pushes the last of them out of that
 /// stale range, so the panel recycles them and realizes them again at once,
-/// in new containers; the first new row takes the last row's old one. A row
-/// whose container changed keeps its node and, at the root, its element,
-/// which the tree's peer keys by item, but an open folder's rows belong to its
-/// container's peer, so every row under a recycled open folder got a new
-/// element. 20b's scratch run of 2026-10-19 measured that
+/// in other containers. A row whose container changed keeps its node and, at
+/// the root, its element, which the tree's peer keys by item, but an open
+/// folder's rows belong to its container's peer, so every row under a
+/// recycled open folder got a new element. 20b's scratch run of 2026-10-19 measured that
 /// (<c>ScratchNestedRowProbe</c>, arm <c>insert-first</c>: the last root row,
 /// an open folder, came back in a new container, and its note with a new
 /// element). A removal, or a row inserted after the last realized one, leaves
