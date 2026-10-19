@@ -386,6 +386,14 @@ final class WorkspaceState: ObservableObject {
     func retargetFileBackedTabs(
         _ transform: (EditorItem) -> EditorItem?
     ) -> [WorkspaceModel.FileTabRetarget] {
+        retargetFileBackedTabs { _, item in transform(item) }
+    }
+
+    /// The same retarget, deciding per tab.
+    @discardableResult
+    func retargetFileBackedTabs(
+        _ transform: (TabID, EditorItem) -> EditorItem?
+    ) -> [WorkspaceModel.FileTabRetarget] {
         let changes = model.retargetFileBackedItems(transform)
         for change in changes {
             guard case .markdown = change.oldItem,
@@ -442,7 +450,7 @@ final class WorkspaceState: ObservableObject {
     @discardableResult
     func retarget(old: String, new: String) -> [TabID] {
         guard !BaseExactIdentity.matches(old, new) else { return [] }
-        return retargetFileBackedTabs { item in
+        return retargetFileBackedTabs { (item: EditorItem) -> EditorItem? in
             switch item {
             case .markdown(let path) where BaseExactIdentity.matches(path, old):
                 return .markdown(path: new)
@@ -453,6 +461,20 @@ final class WorkspaceState: ObservableObject {
             default:
                 return nil
             }
+        }.map(\.tabID)
+    }
+
+    /// Plan 43 PR 21c (#1293, design §4.3; owner decision Q3): only the
+    /// Markdown tabs in `tabs` on `old` move to `new`, each keeping its
+    /// buffer, dirty state and baseline, as `retarget(old:new:)` keeps them.
+    @discardableResult
+    func retargetMarkdownTabs(_ tabs: Set<TabID>, old: String, new: String) -> [TabID] {
+        guard !tabs.isEmpty, !BaseExactIdentity.matches(old, new) else { return [] }
+        return retargetFileBackedTabs { (id: TabID, item: EditorItem) -> EditorItem? in
+            guard tabs.contains(id), case .markdown(let path) = item,
+                BaseExactIdentity.matches(path, old)
+            else { return nil }
+            return .markdown(path: new)
         }.map(\.tabID)
     }
 

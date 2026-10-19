@@ -767,6 +767,10 @@ extension AppState {
             onFileChangeHook: { [weak self, weak session] event in
                 Task { @MainActor [weak self, weak session] in
                     guard let self, let session else { return }
+                    // Plan 43 PR 21c (#1293): a Slate-owned write while a
+                    // rescan runs joins its journal, re-read from the index
+                    // after each change-feed window.
+                    self.journalSlateWriteForRescan(event, from: session)
                     self.handleSidebarFileChange(event, from: session)
                     self.handleTemplateAvailabilityFileChange(event, from: session)
                     self.refreshConnectionsIfGraphChanged()
