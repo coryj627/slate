@@ -1,7 +1,9 @@
 # PR 22 — Descriptor-relative session interior: design
 
-Status: design for owner review, 2026-10-17. Nothing here is
-implemented. Issue #940 (FL-06 round 28, the A→B→A open race). Spec:
+Status: design, 2026-10-17, with the owner's decisions of 2026-10-17 in
+§11. PR 22a (§7, the core interior, macOS and Linux) is delivered; PR 22b,
+the mac host, and PR 22W, the Windows body under Milestone W, are not.
+Issue #940 (FL-06 round 28, the A→B→A open race). Spec:
 `specs/pr22_descriptor_relative_session.md`. Baseline: `main` at
 beed82e1; every file:line reference below was read at that commit (the
 spec's line numbers were taken at 709ba8a2 and the FL-06 interior lines
@@ -787,7 +789,7 @@ watcher; PR 20's watcher then takes its `RootAnchor` from `FsRoot`.
 
 | PR | Scope | Size | Lanes | After |
 |---|---|---|---|---|
-| 22a | Core `FsRoot`; descriptor-relative structural lock, `slate.json`, `.slate/prefs.json`, op-log dir and worker connection; the SQLite unix-VFS syscall hook with the per-session token; identity-keyed structural-lock registry; `canonical_path` relative to the root descriptor; `root_display_path()`; the A→B→A regression seam and facts (macOS + Linux) | L (about 1,500–2,000 with facts) | rust, swift, windows | PR 20a if it lands first; else independent and PR 20a rebases onto it |
+| 22a | Core `FsRoot`; descriptor-relative structural lock, `slate.json`, `.slate/prefs.json`, op-log dir and worker connection; the SQLite unix-VFS syscall hook with the per-session token; identity-keyed structural-lock registry; `canonical_path` relative to the root descriptor; `root_display_path()`; the A→B→A regression seam and facts (macOS + Linux). **Delivered 2026-10-18:** `vault/fs_root.rs` (`FsRoot`, the root and its `.slate` held open, `.slate` made with `mkdirat` and opened `O_NOFOLLOW`; `CacheDir`, the interior's `openat`-family IO; the display path gated by `fstat`, sharing the Trash handoff's check), `db/anchored.rs` (the hook overrides `open`, `stat`, `lstat`, `access`, `unlink` and `readlink`; tokens are never reused, and a retired one is `ENOENT`; on macOS anchored connections open through the `unix-posix` VFS, because the default `unix` VFS picks its locking by a `statfs` of the path, which the hook cannot reach), the registry keyed by the held `.slate`'s `(device, inode)`, the op-log and the history prefs written beneath the held `.slate`, the provider adopting the held root for renames, saves, creations and Move to Trash (option H's `pinned_root`) and staging in the held `.slate/tmp` (#940's comment of 2026-10-17), `canonical_path` walked beneath the root on macOS (a folder on the way that is a link answers `None`), the watch anchored to the held root and re-armed at its verified current path (at most four times a session; the root decision waits for the burst to close), and `root_display_path()` across the FFI. Provider reads stay pathname-based (#1513). Facts in `session/tests/descriptor_interior.rs`, `session/tests/watch.rs`, `vault/fs_root.rs`, `db/anchored.rs`, slate-uniffi and the mac host's `VaultRescanTests+Watcher.swift`; the open and the rescan of a 10k-note vault (`first_open_and_scan/10000`, `reopen_with_cache/10000`) are unchanged within noise, so `BENCHMARKS.md` is not | L (about 1,500–2,000 with facts) | rust, swift, windows | PR 20a if it lands first; else independent and PR 20a rebases onto it |
 | 22b | mac host display/canonicalisation audit: optional title/`currentVaultURL` refresh from `root_display_path()`; confirm the admission comparison and the drag/reveal path uses; a host fact that a swapped open is refused (already green) and that a renamed-open vault keeps working | S | swift, a11y, windows | 22a |
 | 22W | Windows `FsRoot` body (`NtCreateFile` RootDirectory-relative interior + the win-VFS SQLite hook), unifying `AnchoredVaultStore` with `FsRoot` | M, Milestone W | windows | 22a, Milestone W |
 

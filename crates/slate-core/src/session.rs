@@ -4228,7 +4228,7 @@ impl VaultSession {
         if let Some(trigger) = std::env::var_os("SLATE_TEST_COMMIT_AFTER_INTENT")
             && path.contains(trigger.to_string_lossy().as_ref())
             && let Some(db_path) = conn.path()
-            && let Ok(other) = Connection::open(db_path)
+            && let Ok(other) = crate::db::open_connection(std::path::Path::new(db_path))
         {
             let _ = other.execute_batch(&format!(
                 "BEGIN IMMEDIATE;
@@ -7971,7 +7971,7 @@ impl VaultSession {
         if let Some(trigger) = std::env::var_os("SLATE_TEST_SECOND_WRITER_BEFORE_QUARANTINE")
             && path.contains(trigger.to_string_lossy().as_ref())
             && let Some(db_path) = conn.path()
-            && let Ok(other) = Connection::open(db_path)
+            && let Ok(other) = crate::db::open_connection(std::path::Path::new(db_path))
         {
             let _ = other.execute(
                 "UPDATE files SET index_epoch = index_epoch + 1 WHERE path = ?1",

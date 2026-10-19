@@ -17,13 +17,14 @@ import XCTest
 ///
 /// Most facts make the watcher's call themselves, through the real adapter and
 /// from a thread of their own (`Harness.signalExternalChange`), so its timing
-/// is theirs. Five lift the test switch (`VaultWatcherSwitch`) and run the
+/// is theirs. Six lift the test switch (`VaultWatcherSwitch`) and run the
 /// real watcher end to end — FSEvents, core's coalescer and its "slate-watch"
 /// thread — and are CI's only FSEvents witnesses (owner decision Q7): the
 /// first fact below, `testSlateOwnSaveDoesNotStartAWatcherRun`,
 /// `testAChangeMadeDuringTheOpenScanArrivesAsABurst`,
-/// `testCloseStopsTheWatchAndDropsALateSignal` and
-/// `testTheBaselineIsUnchangedWhileTheWatcherIsLive`. Their waits are bounded
+/// `testCloseStopsTheWatchAndDropsALateSignal`,
+/// `testTheBaselineIsUnchangedWhileTheWatcherIsLive` and plan 43 PR 22a's
+/// `testARenamedVaultFolderRearmsTheWatcherAtItsNewPath`. Their waits are bounded
 /// (30 s for a call that must come, 12 s for one that must not) and end
 /// early. Two more arm a real watch without waiting on it: the comparison
 /// open in `testAnUnavailableWatcherLeavesTheBaselineUnchanged` and
@@ -580,6 +581,42 @@ extension VaultRescanTests {
             await h.signalAndAwaitTheWatcherRun()
             XCTAssertEqual(calls.count("scan"), 1, "the open vault's own signal is answered")
         }
+    }
+
+    /// Plan 43 PR 22a (#940; design `22_descriptor_relative_session_design.md`
+    /// §4.3, owner decisions Q3 and Q7): CI's FSEvents witness of core's
+    /// re-arm. The open vault's folder renamed outside Slate re-arms the real
+    /// watcher at the held root's verified current path: its catch-up call
+    /// reaches the session's listeners, and so does a file made in the renamed
+    /// folder afterwards, and nothing recreates the old path. Only the
+    /// watcher's calls are asserted: the Watcher runs they start still read
+    /// the vault by the path it was opened at (core's reads follow the held
+    /// root in a follow-up; the host half is PR 22b).
+    func testARenamedVaultFolderRearmsTheWatcherAtItsNewPath() async throws {
+        let h = try await open(["alpha.md": "# Alpha\n"], watching: true)
+        let session = try XCTUnwrap(h.state.currentSession)
+        let outside = ExternalChangeRecorder()
+        let token = session.registerEventListener(listener: outside)
+        defer { session.unregisterEventListener(token: token) }
+        let moved = h.vault.deletingLastPathComponent()
+            .appendingPathComponent(h.vault.lastPathComponent + "-moved")
+        tempDirs.append(moved)
+
+        try FileManager.default.moveItem(at: h.vault, to: moved)
+        await h.until("the re-armed watch's catch-up call", timeout: 30) {
+            outside.externalChanges >= 1
+        }
+        let caughtUp = outside.externalChanges
+        try "# Late\n".write(
+            to: moved.appendingPathComponent("late.md"), atomically: true, encoding: .utf8)
+        await h.until("a call for the file made in the renamed folder", timeout: 30) {
+            outside.externalChanges > caughtUp
+        }
+        XCTAssertFalse(
+            FileManager.default.fileExists(atPath: h.vault.path),
+            "nothing recreated the vault's old path")
+        await h.state.vaultRescanTask?.value
+        XCTAssertTrue(h.state.closeVault())
     }
 
     // MARK: - Slate's own writes, the open's arm, and the fallback
