@@ -640,9 +640,9 @@ extension VaultRescanTests {
     /// Design §4.2: a failed acknowledgment is one error for its run, and the
     /// next run reads the window again, so its counts are spoken once, by the
     /// run that acknowledges them. A failed feed read is one error too, and
-    /// the run acknowledges nothing: a window that cannot be read falls back
-    /// to the full re-sync, and a head that cannot be read after an exact
-    /// window's publication leaves that window to the next run. Either way
+    /// the run acknowledges nothing: a window or a page that cannot be read
+    /// falls back to the full re-sync, and a head that cannot be read after
+    /// an exact window's publication leaves that window to the next run. Either way
     /// the sentence is the incomplete one (design §4.7's first row), never
     /// the uncounted one, which is for a feed that answered with a gap or an
     /// oversized window.
@@ -677,6 +677,21 @@ extension VaultRescanTests {
         XCTAssertEqual(
             calls.count("acknowledge"), acknowledgments, "a failed head read acknowledges nothing")
         XCTAssertEqual(h.spoken.lines, [Self.oneError], "incomplete, never uncounted")
+
+        // A page of the exact window cannot be read: the full re-sync.
+        failing.mutate { $0 = ["page"] }
+        h.spoken.lines.removeAll()
+        windows.all.removeAll()
+        let inventories = calls.count("inventory")
+        try await h.refresh()
+        XCTAssertEqual(windows.statuses, [.exact])
+        XCTAssertGreaterThan(
+            calls.count("inventory"), inventories + 1,
+            "the recovery set's listing, then the full re-sync's")
+        XCTAssertEqual(
+            calls.count("acknowledge"), acknowledgments, "a failed page read acknowledges nothing")
+        XCTAssertEqual(h.spoken.lines, [Self.oneError])
+        XCTAssertTrue(h.state.files.contains { $0.path == "new.md" })
 
         failing.mutate { $0 = [] }
         h.spoken.lines.removeAll()
