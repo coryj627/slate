@@ -200,6 +200,11 @@
         "reason": "#1467: Windows composes these words host-side (WorkspaceTabViewModel.PublishTaskToggleThroughTab, WorkspaceViewModel.TaskToggleCompletion, TasksReviewViewModel), as HostComposed residue. The mac editor's activate-at-cursor verb (#1431) posts these core events; moving the Windows sites onto them is proposed there.",
         "decision": "docs/plans/38_notification_dispatcher_contracts.md",
         "status": "proposed"
+      },
+      "VaultRescanFinishedUncounted": {
+        "reason": "Plan 43 PR 21a (#1293, AR-76): core's uncounted rescan sentence ships with the change feed and no Windows rescan speaks it yet; PR 21b posts it from the Windows rescan when its change-feed window is a gap or too large.",
+        "decision": "docs/plans/40_nvda_matrix_remediation_contracts.md",
+        "status": "recorded"
       }
     },
     "Mac": {
@@ -287,6 +292,11 @@
         "reason": "W7-7 R-3 (#1250, codex PR 2 round 1): Windows keeps one always-visible sidebar status line, so a clear - Clear Sidebar Filter or the field emptied by the user - replaces the cleared filter's summary with this sentence and speaks it once. Mac's filter overlay, with its summary, disappears on Escape, which stays silent; no Mac construction site.",
         "decision": "docs/plans/15_files_sidebar/specs/fl4_spec.md",
         "status": "proposed"
+      },
+      "VaultRescanFinishedUncounted": {
+        "reason": "Plan 43 PR 21a (#1293, AR-76): core's uncounted rescan sentence ships with the change feed and no mac rescan speaks it yet; PR 21c posts it from the mac rescan when its change-feed window is a gap or too large.",
+        "decision": "docs/plans/40_nvda_matrix_remediation_contracts.md",
+        "status": "recorded"
       }
     }
   },
